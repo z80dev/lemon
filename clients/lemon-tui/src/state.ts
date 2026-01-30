@@ -26,6 +26,15 @@ export interface ToolExecution {
   endTime?: number;
 }
 
+/** Cumulative token and cost tracking */
+export interface CumulativeUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalCost: number;
+}
+
 export interface AppState {
   /** Connection ready state */
   ready: boolean;
@@ -47,6 +56,8 @@ export interface AppState {
   busy: boolean;
   /** Session stats */
   stats: SessionStats | null;
+  /** Cumulative token and cost usage */
+  cumulativeUsage: CumulativeUsage;
   /** Current status line values */
   status: Map<string, string | null>;
   /** Tool working message (e.g., "Running bash...") - set by tool lifecycle */
@@ -100,12 +111,20 @@ export interface NormalizedAssistantMessage {
   isStreaming: boolean;
 }
 
+/** Image data extracted from content blocks */
+export interface NormalizedImage {
+  data: string;     // Base64 encoded image data
+  mimeType: string; // e.g., 'image/png', 'image/jpeg'
+}
+
 export interface NormalizedToolResultMessage {
   id: string;
   type: 'tool_result';
   toolCallId: string;
   toolName: string;
   content: string;
+  /** Images from tool result content blocks */
+  images: NormalizedImage[];
   isError: boolean;
   timestamp: number;
 }
@@ -142,6 +161,13 @@ export class StateStore {
       toolExecutions: new Map(),
       busy: false,
       stats: null,
+      cumulativeUsage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalCost: 0,
+      },
       status: new Map(),
       toolWorkingMessage: null,
       agentWorkingMessage: null,
@@ -230,6 +256,10 @@ export class StateStore {
       status.set(key, value);
     }
     this.setState({ status });
+  }
+
+  setDebug(enabled: boolean): void {
+    this.setState({ debug: enabled });
   }
 
   setTitle(title: string): void {
@@ -403,9 +433,12 @@ export class StateStore {
         message as AssistantMessage,
         false
       );
+      // Update cumulative usage
+      const updatedUsage = this.updateCumulativeUsage(normalized);
       this.setState({
         messages: [...this.state.messages, normalized],
         streamingMessage: null,
+        cumulativeUsage: updatedUsage,
       });
     } else if (message.role === 'tool_result') {
       const normalized = this.normalizeToolResultMessage(
@@ -415,6 +448,23 @@ export class StateStore {
         messages: [...this.state.messages, normalized],
       });
     }
+  }
+
+  private updateCumulativeUsage(message: NormalizedAssistantMessage): CumulativeUsage {
+    const current = this.state.cumulativeUsage;
+    const usage = message.usage;
+
+    if (!usage) {
+      return current;
+    }
+
+    return {
+      inputTokens: current.inputTokens + (usage.inputTokens || 0),
+      outputTokens: current.outputTokens + (usage.outputTokens || 0),
+      cacheReadTokens: current.cacheReadTokens + (usage.cacheReadTokens || 0),
+      cacheWriteTokens: current.cacheWriteTokens + (usage.cacheWriteTokens || 0),
+      totalCost: current.totalCost + (usage.totalCost || 0),
+    };
   }
 
   private finishStreaming(): void {
@@ -560,12 +610,14 @@ export class StateStore {
   private normalizeToolResultMessage(
     message: ToolResultMessage
   ): NormalizedToolResultMessage {
+    const { text, images } = this.extractContentWithImages(message.content);
     return {
       id: message.tool_call_id,
       type: 'tool_result',
       toolCallId: message.tool_call_id,
       toolName: message.tool_name,
-      content: this.extractTextFromContent(message.content),
+      content: text,
+      images,
       isError: message.is_error,
       timestamp: message.timestamp,
     };
@@ -580,6 +632,31 @@ export class StateStore {
       .filter((b) => b.type === 'text')
       .map((b) => (b as { text: string }).text || '')
       .join('');
+  }
+
+  private extractContentWithImages(content: ContentBlock[]): { text: string; images: NormalizedImage[] } {
+    if (!content || !Array.isArray(content)) {
+      return { text: '', images: [] };
+    }
+
+    const textParts: string[] = [];
+    const images: NormalizedImage[] = [];
+
+    for (const block of content) {
+      if (block.type === 'text') {
+        textParts.push((block as { text: string }).text || '');
+      } else if (block.type === 'image') {
+        const imageBlock = block as { data: string; mime_type: string };
+        if (imageBlock.data && imageBlock.mime_type) {
+          images.push({
+            data: imageBlock.data,
+            mimeType: imageBlock.mime_type,
+          });
+        }
+      }
+    }
+
+    return { text: textParts.join(''), images };
   }
 
   private generateMessageId(): string {

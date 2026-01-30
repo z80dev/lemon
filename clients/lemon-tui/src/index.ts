@@ -13,22 +13,49 @@ import {
   Loader,
   Container,
   SelectList,
+  SettingsList,
+  Image,
   matchesKey,
+  CombinedAutocompleteProvider,
   type EditorTheme,
   type MarkdownTheme,
   type SelectListTheme,
+  type SettingsListTheme,
+  type ImageTheme,
+  type SettingItem,
   type Component,
   type SelectItem,
+  type SlashCommand,
 } from '@mariozechner/pi-tui';
 import { AgentConnection, type AgentConnectionOptions } from './agent-connection.js';
-import { StateStore, type AppState, type NormalizedMessage, type NormalizedAssistantMessage } from './state.js';
+import { StateStore, type AppState, type NormalizedMessage, type NormalizedAssistantMessage, type NormalizedToolResultMessage } from './state.js';
 import type { ServerMessage, UIRequestMessage, SelectParams, ConfirmParams, InputParams, EditorParams } from './types.js';
 
 // ============================================================================
 // Theme
 // ============================================================================
 
-const ansi = {
+/**
+ * Theme interface defining all color functions used throughout the TUI.
+ */
+interface Theme {
+  name: string;
+  primary: (s: string) => string;
+  secondary: (s: string) => string;
+  success: (s: string) => string;
+  warning: (s: string) => string;
+  error: (s: string) => string;
+  muted: (s: string) => string;
+  dim: (s: string) => string;
+  bold: (s: string) => string;
+  italic: (s: string) => string;
+}
+
+/**
+ * The lemon theme - warm yellow tones with citrus accents.
+ */
+const lemonTheme: Theme = {
+  name: 'lemon',
   primary: (s: string) => `\x1b[38;5;220m${s}\x1b[0m`,    // Lemon yellow
   secondary: (s: string) => `\x1b[38;5;228m${s}\x1b[0m`,  // Pale lemon
   success: (s: string) => `\x1b[38;5;114m${s}\x1b[0m`,    // Citrus green
@@ -38,6 +65,79 @@ const ansi = {
   dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
   bold: (s: string) => `\x1b[1m${s}\x1b[0m`,
   italic: (s: string) => `\x1b[3m${s}\x1b[0m`,
+};
+
+/**
+ * The lime theme - fresh green tones.
+ */
+const limeTheme: Theme = {
+  name: 'lime',
+  primary: (s: string) => `\x1b[38;5;118m${s}\x1b[0m`,    // Bright green
+  secondary: (s: string) => `\x1b[38;5;157m${s}\x1b[0m`,  // Pale green
+  success: (s: string) => `\x1b[38;5;114m${s}\x1b[0m`,    // Citrus green
+  warning: (s: string) => `\x1b[38;5;214m${s}\x1b[0m`,    // Orange
+  error: (s: string) => `\x1b[38;5;203m${s}\x1b[0m`,      // Red
+  muted: (s: string) => `\x1b[38;5;243m${s}\x1b[0m`,      // Gray
+  dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
+  bold: (s: string) => `\x1b[1m${s}\x1b[0m`,
+  italic: (s: string) => `\x1b[3m${s}\x1b[0m`,
+};
+
+/**
+ * Registry of available themes.
+ */
+const themes: Record<string, Theme> = {
+  lemon: lemonTheme,
+  lime: limeTheme,
+};
+
+/**
+ * The currently active theme.
+ */
+let currentTheme: Theme = themes.lemon;
+
+/**
+ * Switch to a different theme by name.
+ * @param name The name of the theme to switch to
+ * @returns true if the theme was found and switched, false otherwise
+ */
+function setTheme(name: string): boolean {
+  const theme = themes[name];
+  if (theme) {
+    currentTheme = theme;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Get the name of the current theme.
+ */
+function getThemeName(): string {
+  return currentTheme.name;
+}
+
+/**
+ * Get the list of available theme names.
+ */
+function getAvailableThemes(): string[] {
+  return Object.keys(themes);
+}
+
+/**
+ * Proxy object that delegates to the current theme.
+ * This allows existing code to use `ansi.primary(...)` without changes.
+ */
+const ansi = {
+  get primary() { return currentTheme.primary; },
+  get secondary() { return currentTheme.secondary; },
+  get success() { return currentTheme.success; },
+  get warning() { return currentTheme.warning; },
+  get error() { return currentTheme.error; },
+  get muted() { return currentTheme.muted; },
+  get dim() { return currentTheme.dim; },
+  get bold() { return currentTheme.bold; },
+  get italic() { return currentTheme.italic; },
 };
 
 const selectListTheme: SelectListTheme = {
@@ -70,6 +170,32 @@ const editorTheme: EditorTheme = {
   selectList: selectListTheme,
 };
 
+const settingsListTheme: SettingsListTheme = {
+  label: (text: string, selected: boolean) => selected ? ansi.bold(ansi.primary(text)) : text,
+  value: (text: string, selected: boolean) => selected ? ansi.secondary(text) : ansi.muted(text),
+  description: ansi.muted,
+  cursor: ansi.primary('>'),
+  hint: ansi.muted,
+};
+
+const imageTheme: ImageTheme = {
+  fallbackColor: ansi.muted,
+};
+
+const slashCommands: SlashCommand[] = [
+  { name: 'abort', description: 'Stop the current operation' },
+  { name: 'reset', description: 'Clear conversation and reset session' },
+  { name: 'save', description: 'Save the current session' },
+  { name: 'stats', description: 'Show session statistics' },
+  { name: 'search', description: 'Search for text in conversations' },
+  { name: 'settings', description: 'Open settings' },
+  { name: 'debug', description: 'Toggle debug mode (on/off)' },
+  { name: 'quit', description: 'Exit the application' },
+  { name: 'exit', description: 'Exit the application' },
+  { name: 'q', description: 'Exit the application' },
+  { name: 'help', description: 'Show help message' },
+];
+
 // ============================================================================
 // Main Application
 // ============================================================================
@@ -86,11 +212,13 @@ class LemonTUI {
   private toolExecutionBar: Text;
   private statusBar: Text;
   private inputEditor: Editor;
+  private toolHint: Text;
   private loader: Loader | null = null;
 
   private overlayHandle: { hide: () => void } | null = null;
   private streamingComponent: Component | null = null;
   private currentOverlayRequestId: string | null = null;
+  private toolPanelCollapsed = false;
 
   constructor(options: AgentConnectionOptions = {}) {
     this.tui = new TUI(new ProcessTerminal());
@@ -105,6 +233,8 @@ class LemonTUI {
     this.toolExecutionBar = new Text('', 1, 0);
     this.statusBar = new Text('', 1, 0);
     this.inputEditor = new Editor(this.tui, editorTheme);
+    this.toolHint = new Text('', 1, 0);
+    this.inputEditor.setAutocompleteProvider(new CombinedAutocompleteProvider(slashCommands, process.cwd()));
 
     this.setupUI();
     this.setupEventHandlers();
@@ -123,6 +253,7 @@ class LemonTUI {
     this.tui.addChild(this.messagesContainer);
     this.tui.addChild(this.statusBar);
     this.tui.addChild(this.inputEditor);
+    this.tui.addChild(this.toolHint);
 
     // Focus the editor
     this.tui.setFocus(this.inputEditor);
@@ -135,6 +266,17 @@ class LemonTUI {
       }
       this.handleInput(text);
       this.inputEditor.setText('');
+    };
+
+    const originalHandleInput = this.inputEditor.handleInput?.bind(this.inputEditor);
+    this.inputEditor.handleInput = (data: string) => {
+      if (matchesKey(data, 'ctrl+o')) {
+        if (this.hasToolOutputs()) {
+          this.toggleToolPanel();
+        }
+        return;
+      }
+      originalHandleInput?.(data);
     };
 
     // Subscribe to state changes
@@ -212,6 +354,15 @@ class LemonTUI {
       case 'ui_widget':
         this.handleUIWidget(msg.params as { key: string; content: string | string[] | null; opts?: Record<string, unknown> });
         break;
+
+      case 'debug':
+        // Display debug messages when debug mode is enabled
+        if (this.store.getState().debug) {
+          const debugMsg = msg as { message: string; argv?: string[] };
+          this.messagesContainer.addChild(new Text(ansi.muted(`[debug] ${debugMsg.message}`), 1, 1));
+          this.tui.requestRender();
+        }
+        break;
     }
   }
 
@@ -253,6 +404,34 @@ class LemonTUI {
         this.connection.stats();
         break;
 
+      case 'search':
+        this.showSearchResults(_args.join(' '));
+        break;
+
+      case 'settings':
+        this.showSettingsOverlay();
+        break;
+
+      case 'debug': {
+        // Toggle or set debug mode
+        const arg = _args[0]?.toLowerCase();
+        const state = this.store.getState();
+        let newDebug: boolean;
+        if (arg === 'on') {
+          newDebug = true;
+        } else if (arg === 'off') {
+          newDebug = false;
+        } else {
+          newDebug = !state.debug;
+        }
+        this.store.setDebug(newDebug);
+        this.messagesContainer.addChild(
+          new Text(ansi.muted(`[debug] Debug mode ${newDebug ? 'enabled' : 'disabled'}`), 1, 1)
+        );
+        this.tui.requestRender();
+        break;
+      }
+
       case 'quit':
       case 'exit':
       case 'q':
@@ -270,12 +449,15 @@ class LemonTUI {
 
   private showHelp(): void {
     const helpText = `${ansi.bold('Commands:')}
-  /abort  - Stop the current operation
-  /reset  - Clear conversation and reset session
-  /save   - Save the current session
-  /stats  - Show session statistics
-  /quit   - Exit the application
-  /help   - Show this help message
+  /abort    - Stop the current operation
+  /reset    - Clear conversation and reset session
+  /save     - Save the current session
+  /stats    - Show session statistics
+  /search   - Search for text in conversations
+  /settings - Open settings
+  /debug    - Toggle debug mode (on/off)
+  /quit     - Exit the application
+  /help     - Show this help message
 
 ${ansi.bold('Shortcuts:')}
   Enter         - Send message
@@ -289,6 +471,58 @@ ${ansi.bold('Shortcuts:')}
 
   private clearMessages(): void {
     this.messagesContainer.clear();
+    this.tui.requestRender();
+  }
+
+  private showSearchResults(query: string): void {
+    if (!query.trim()) {
+      this.store.setError('Usage: /search <term>');
+      return;
+    }
+
+    const messages = this.store.getState().messages;
+    const queryLower = query.toLowerCase();
+    const matches: { type: string; content: string; index: number }[] = [];
+
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      let content = '';
+
+      if (msg.type === 'user') {
+        content = msg.content;
+      } else if (msg.type === 'assistant') {
+        const assistant = msg as NormalizedAssistantMessage;
+        content = assistant.textContent || '';
+      } else if (msg.type === 'tool_result') {
+        content = msg.content;
+      }
+
+      if (content.toLowerCase().includes(queryLower)) {
+        matches.push({ type: msg.type, content, index: i });
+      }
+    }
+
+    if (matches.length === 0) {
+      this.messagesContainer.addChild(new Text(ansi.muted(`No results found for "${query}"`), 1, 1));
+    } else {
+      this.messagesContainer.addChild(new Text(ansi.bold(`Search results for "${query}" (${matches.length} matches):`), 1, 1));
+
+      for (const match of matches) {
+        const roleLabel = match.type === 'user' ? 'You' : match.type === 'assistant' ? 'Assistant' : 'Tool';
+        const preview = match.content.slice(0, 200).replace(/\n/g, ' ');
+
+        // Highlight the search term in the preview
+        const highlighted = preview.replace(
+          new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'),
+          (m) => ansi.warning(m)
+        );
+
+        this.messagesContainer.addChild(
+          new Text(`${ansi.muted(`[${match.index}]`)} ${ansi.primary(roleLabel)}: ${highlighted}${match.content.length > 200 ? '...' : ''}`, 1, 0)
+        );
+      }
+    }
+
     this.tui.requestRender();
   }
 
@@ -324,6 +558,18 @@ ${ansi.bold('Shortcuts:')}
       }
     }
 
+    // Token and cost display
+    const usage = state.cumulativeUsage;
+    if (usage.inputTokens > 0 || usage.outputTokens > 0) {
+      const inTokens = this.formatTokenCount(usage.inputTokens);
+      const outTokens = this.formatTokenCount(usage.outputTokens);
+      let tokenPart = `tokens: ${inTokens} in, ${outTokens} out`;
+      if (usage.totalCost > 0) {
+        tokenPart += ` | $${usage.totalCost.toFixed(2)}`;
+      }
+      parts.push(ansi.muted(tokenPart));
+    }
+
     // Stats
     if (state.stats) {
       parts.push(
@@ -337,6 +583,15 @@ ${ansi.bold('Shortcuts:')}
     }
 
     this.statusBar.setText(parts.length > 0 ? parts.join(' | ') : ' ');
+  }
+
+  private formatTokenCount(count: number): string {
+    if (count >= 1000000) {
+      return `${(count / 1000000).toFixed(1)}M`;
+    } else if (count >= 1000) {
+      return `${(count / 1000).toFixed(1)}k`;
+    }
+    return count.toString();
   }
 
   private updateToolExecutionBar(): void {
@@ -364,7 +619,7 @@ ${ansi.bold('Shortcuts:')}
 
     this.toolPanel.clear();
 
-    if (tools.length === 0) {
+    if (tools.length === 0 || this.toolPanelCollapsed) {
       return;
     }
 
@@ -405,6 +660,18 @@ ${ansi.bold('Shortcuts:')}
     }
   }
 
+  private updateToolHint(): void {
+    if (!this.hasToolOutputs()) {
+      this.toolHint.setText('');
+      return;
+    }
+
+    const hint = this.toolPanelCollapsed
+      ? 'Ctrl+O to show tool output'
+      : 'Ctrl+O to hide tool output';
+    this.toolHint.setText(ansi.muted(hint));
+  }
+
   private updateWidgets(): void {
     const state = this.store.getState();
 
@@ -423,6 +690,28 @@ ${ansi.bold('Shortcuts:')}
     this.tui.requestRender();
   }
 
+  private renderMessages(): void {
+    const state = this.store.getState();
+    const showToolResults = !this.toolPanelCollapsed;
+
+    this.messagesContainer.clear();
+
+    for (const msg of state.messages) {
+      if (msg.type === 'tool_result' && !showToolResults) {
+        continue;
+      }
+      const component = this.createMessageComponent(msg);
+      this.messagesContainer.addChild(component);
+    }
+
+    if (state.streamingMessage) {
+      this.streamingComponent = this.createMessageComponent(state.streamingMessage);
+      this.messagesContainer.addChild(this.streamingComponent);
+    } else {
+      this.streamingComponent = null;
+    }
+  }
+
   private onStateChange(state: AppState, prevState: AppState): void {
     // Update header
     if (state.ready !== prevState.ready || state.model !== prevState.model) {
@@ -436,6 +725,7 @@ ${ansi.bold('Shortcuts:')}
     if (state.toolExecutions !== prevState.toolExecutions) {
       this.updateToolExecutionBar();
       this.updateToolPanel();
+      this.updateToolHint();
     }
 
     // Update widgets
@@ -445,16 +735,8 @@ ${ansi.bold('Shortcuts:')}
 
     // Update messages
     if (state.messages.length !== prevState.messages.length) {
-      // Add new messages
-      for (let i = prevState.messages.length; i < state.messages.length; i++) {
-        const msg = state.messages[i];
-        const component = this.createMessageComponent(msg);
-        this.messagesContainer.addChild(component);
-      }
-    }
-
-    // Update streaming message
-    if (state.streamingMessage !== prevState.streamingMessage) {
+      this.renderMessages();
+    } else if (state.streamingMessage !== prevState.streamingMessage) {
       this.updateStreamingMessage(state.streamingMessage);
     }
 
@@ -513,15 +795,53 @@ ${ansi.bold('Shortcuts:')}
           lines.push(ansi.muted('...'));
         }
 
+        // Stop reason indicator (only for non-normal completions)
+        if (!assistant.isStreaming && assistant.stopReason) {
+          if (assistant.stopReason === 'length') {
+            lines.push(ansi.warning('[truncated]'));
+          } else if (assistant.stopReason === 'error') {
+            lines.push(ansi.error('[error]'));
+          } else if (assistant.stopReason === 'aborted') {
+            lines.push(ansi.error('[aborted]'));
+          }
+          // 'stop' and 'tool_use' are normal - don't show anything
+        }
+
         return new Markdown(lines.join('\n'), 1, 1, markdownTheme);
       }
 
       case 'tool_result': {
-        const colorFn = message.isError ? ansi.error : ansi.secondary;
-        const content = message.content.length > 500
-          ? message.content.slice(0, 500) + '...'
-          : message.content;
-        return new Text(colorFn(`[${message.toolName}] ${content}`), 1, 1);
+        const toolResult = message as NormalizedToolResultMessage;
+        const colorFn = toolResult.isError ? ansi.error : ansi.secondary;
+        const content = toolResult.content.length > 500
+          ? toolResult.content.slice(0, 500) + '...'
+          : toolResult.content;
+
+        // If there are no images, return a simple Text component
+        if (!toolResult.images || toolResult.images.length === 0) {
+          return new Text(colorFn(`[${toolResult.toolName}] ${content}`), 1, 1);
+        }
+
+        // Otherwise, use a Container to render text and images
+        const container = new Container();
+
+        // Add text content first
+        if (content) {
+          container.addChild(new Text(colorFn(`[${toolResult.toolName}] ${content}`), 1, 1));
+        } else {
+          container.addChild(new Text(colorFn(`[${toolResult.toolName}]`), 1, 0));
+        }
+
+        // Add each image
+        for (const img of toolResult.images) {
+          const imageComponent = new Image(img.data, img.mimeType, imageTheme, {
+            maxWidthCells: 80,
+            maxHeightCells: 40,
+          });
+          container.addChild(imageComponent);
+        }
+
+        return container;
       }
     }
   }
@@ -539,6 +859,18 @@ ${ansi.bold('Shortcuts:')}
         this.streamingComponent = null;
       }
     }
+  }
+
+  private hasToolOutputs(): boolean {
+    return this.store.getState().toolExecutions.size > 0;
+  }
+
+  private toggleToolPanel(): void {
+    this.toolPanelCollapsed = !this.toolPanelCollapsed;
+    this.updateToolPanel();
+    this.updateToolHint();
+    this.renderMessages();
+    this.tui.requestRender();
   }
 
   private formatToolArgs(args: Record<string, unknown>): string {
@@ -847,6 +1179,91 @@ ${ansi.bold('Shortcuts:')}
     if (!this.store.getCurrentUIRequest()) {
       this.tui.setFocus(this.inputEditor);
     }
+  }
+
+  private showSettingsOverlay(): void {
+    const state = this.store.getState();
+
+    // Get available themes and format them for display (capitalize first letter)
+    const availableThemeNames = getAvailableThemes();
+    const formatThemeName = (name: string) => name.charAt(0).toUpperCase() + name.slice(1);
+    const themeValues = availableThemeNames.map(formatThemeName);
+
+    const items: SettingItem[] = [
+      {
+        id: 'debug',
+        label: 'Debug Mode',
+        description: 'Enable debug logging and diagnostics',
+        currentValue: state.debug ? 'On' : 'Off',
+        values: ['On', 'Off'],
+      },
+      {
+        id: 'theme',
+        label: 'Theme',
+        description: 'Color theme for the TUI',
+        currentValue: formatThemeName(getThemeName()),
+        values: themeValues,
+      },
+      {
+        id: 'model',
+        label: 'Model',
+        description: 'Current AI model provider and ID',
+        currentValue: state.ready ? `${state.model.provider}:${state.model.id}` : 'Not connected',
+      },
+      {
+        id: 'cwd',
+        label: 'Working Directory',
+        description: 'Current working directory for the agent',
+        currentValue: state.cwd || process.cwd(),
+      },
+    ];
+
+    const titleText = new Text(ansi.bold('Settings'), 1, 0);
+    const settingsList = new SettingsList(
+      items,
+      Math.min(10, items.length + 2),
+      settingsListTheme,
+      (id: string, newValue: string) => {
+        // Handle setting changes
+        if (id === 'debug') {
+          const debugEnabled = newValue === 'On';
+          this.store.setDebug(debugEnabled);
+          settingsList.updateValue('debug', debugEnabled ? 'On' : 'Off');
+        } else if (id === 'theme') {
+          // Convert display name back to theme key (lowercase)
+          const themeName = newValue.toLowerCase();
+          if (setTheme(themeName)) {
+            settingsList.updateValue('theme', newValue);
+            // Request a full re-render to apply the new theme
+            this.tui.requestRender();
+          }
+        }
+        // Other settings are info-only for now
+      },
+      () => {
+        // onCancel
+        this.hideSettingsOverlay();
+      }
+    );
+
+    const container = new Container();
+    container.addChild(titleText);
+    container.addChild(settingsList);
+
+    this.overlayHandle = this.tui.showOverlay(container, {
+      width: '80%',
+      maxHeight: '60%',
+      anchor: 'center',
+    });
+    this.tui.setFocus(settingsList);
+  }
+
+  private hideSettingsOverlay(): void {
+    if (this.overlayHandle) {
+      this.overlayHandle.hide();
+      this.overlayHandle = null;
+    }
+    this.tui.setFocus(this.inputEditor);
   }
 
   private handleUINotify(params: { message: string; notify_type?: string; type?: string }): void {
