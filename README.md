@@ -1,6 +1,6 @@
 # Lemon 🍋
 
-An AI coding agent system built on the BEAM (Erlang/Elixir), designed from the ground up to leverage the unique capabilities of the Erlang Virtual Machine for robust, concurrent, and fault-tolerant agent coordination.
+An AI coding agent system built on the BEAM (Erlang/Elixir). It uses the Erlang Virtual Machine's process model for handling concurrent agent coordination and fault tolerance.
 
 ## Table of Contents
 
@@ -22,7 +22,7 @@ An AI coding agent system built on the BEAM (Erlang/Elixir), designed from the g
 
 ## What is Lemon?
 
-Lemon is a next-generation AI coding assistant that reimagines how agentic AI systems should be built. Unlike traditional coding agents that run as monolithic Python applications or stateless HTTP services, Lemon is architected as a **distributed system of concurrent, communicating processes** running on the BEAM.
+Lemon is an AI coding assistant built as a distributed system of concurrent processes running on the BEAM. Unlike traditional coding agents that run as monolithic Python applications or stateless HTTP services, Lemon uses independent processes that communicate via message passing.
 
 ### Core Philosophy
 
@@ -30,7 +30,7 @@ Lemon is a next-generation AI coding assistant that reimagines how agentic AI sy
 
 2. **Streaming as Events**: LLM streaming responses are modeled as event streams, enabling reactive UI updates, parallel processing, and backpressure handling.
 
-3. **Fault Tolerance**: Leveraging OTP supervision trees, agent failures are isolated and recoverable. A crashing tool execution doesn't bring down the entire session.
+3. **Fault Tolerance**: Using OTP supervision trees, agent failures are isolated and recoverable. A crashing tool execution doesn't bring down the entire session.
 
 4. **Live Steering**: Users can inject messages mid-execution to steer the agent, enabled by the BEAM's ability to send messages to any process at any time.
 
@@ -42,7 +42,7 @@ Lemon is a next-generation AI coding assistant that reimagines how agentic AI sy
 - **Real-time streaming** of LLM responses with fine-grained event notifications
 - **Session persistence** via JSONL with tree-structured conversation history
 - **Context compaction** and branch summarization for long conversations
-- **Pluggable UI** with a rich Terminal UI client
+- **Pluggable UI** with a Terminal UI client
 - **Extension system** for custom tools and hooks
 - **Concurrent tool execution** with abort signaling
 - **Multi-provider support** with seamless context handoffs
@@ -51,7 +51,7 @@ Lemon is a next-generation AI coding assistant that reimagines how agentic AI sy
 
 ## Why BEAM?
 
-The BEAM (Bogdan/Björn's Erlang Abstract Machine) provides unique capabilities that make it ideal for building agentic AI systems:
+The BEAM (Bogdan/Björn's Erlang Abstract Machine) provides capabilities that work well for building agentic AI systems:
 
 ### 1. Lightweight Concurrency
 
@@ -407,7 +407,7 @@ unsubscribe = CodingAgent.Session.subscribe(session)
 
 ### Lemon TUI
 
-The Terminal UI client provides a rich interface for interacting with the coding agent:
+The Terminal UI client provides an interface for interacting with the coding agent:
 
 ```bash
 # Start the TUI
@@ -634,7 +634,7 @@ MIT License - see LICENSE file for details.
 
 ### Special Thanks to [Mario Zechner](https://github.com/badlogic) and the [pi](https://github.com/badlogic/pi-mono) Project
 
-This codebase is **heavily inspired by [pi](https://github.com/badlogic/pi-mono)**—Mario Zechner's excellent agent framework. The pi project demonstrated the power of building agentic systems with:
+This codebase is **heavily inspired by [pi](https://github.com/badlogic/pi-mono)**—Mario Zechner's agent framework. The pi project demonstrated the power of building agentic systems with:
 
 - **Event-driven streaming** for real-time UI updates
 - **Composable tool abstractions** with streaming results
