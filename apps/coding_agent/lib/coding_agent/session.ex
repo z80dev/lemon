@@ -64,6 +64,7 @@ defmodule CodingAgent.Session do
     :steering_queue,
     :follow_up_queue,
     :turn_index,
+    :started_at,
     :session_file,
     :convert_to_llm,
     :extensions,
@@ -269,6 +270,22 @@ defmodule CodingAgent.Session do
   end
 
   @doc """
+  Perform a lightweight health check for the session.
+  """
+  @spec health_check(GenServer.server()) :: map()
+  def health_check(session) do
+    GenServer.call(session, :health_check)
+  end
+
+  @doc """
+  Return detailed diagnostics for the session.
+  """
+  @spec diagnostics(GenServer.server()) :: map()
+  def diagnostics(session) do
+    GenServer.call(session, :diagnostics)
+  end
+
+  @doc """
   Reset the session, clearing all messages and restarting.
   """
   @spec reset(GenServer.server()) :: :ok
@@ -363,6 +380,7 @@ defmodule CodingAgent.Session do
 
   @impl true
   def init(opts) do
+    Process.flag(:trap_exit, true)
     cwd = Keyword.fetch!(opts, :cwd)
     explicit_system_prompt = Keyword.get(opts, :system_prompt)
     prompt_template = Keyword.get(opts, :prompt_template)
@@ -478,6 +496,7 @@ defmodule CodingAgent.Session do
       steering_queue: :queue.new(),
       follow_up_queue: :queue.new(),
       turn_index: 0,
+      started_at: System.system_time(:millisecond),
       session_file: session_file,
       convert_to_llm: convert_to_llm,
       extensions: extensions,
@@ -601,6 +620,24 @@ defmodule CodingAgent.Session do
     {:reply, stats, state}
   end
 
+  def handle_call(:health_check, _from, state) do
+    diag = build_diagnostics(state)
+
+    health = %{
+      status: diag.status,
+      session_id: diag.session_id,
+      uptime_ms: diag.uptime_ms,
+      is_streaming: diag.is_streaming,
+      agent_alive: diag.agent_alive
+    }
+
+    {:reply, health, state}
+  end
+
+  def handle_call(:diagnostics, _from, state) do
+    {:reply, build_diagnostics(state), state}
+  end
+
   def handle_call(:reset, _from, state) do
     # Reset agent
     :ok = AgentCore.Agent.reset(state.agent)
@@ -613,6 +650,7 @@ defmodule CodingAgent.Session do
       | session_manager: new_session_manager,
         is_streaming: false,
         turn_index: 0,
+        started_at: System.system_time(:millisecond),
         steering_queue: :queue.new(),
         follow_up_queue: :queue.new()
     }
@@ -873,6 +911,11 @@ defmodule CodingAgent.Session do
     {:noreply, %{state | event_listeners: new_listeners, event_streams: Map.new(remaining_streams)}}
   end
 
+  def handle_info({:EXIT, pid, reason}, state) when pid == state.agent do
+    Logger.warning("Agent process exited: #{inspect(reason)}")
+    {:noreply, %{state | is_streaming: false}}
+  end
+
   def handle_info({:store_branch_summary, from_id, summary}, state) do
     # Store the branch summary entry (from async summarization)
     entry = SessionEntry.branch_summary(from_id, summary)
@@ -901,6 +944,73 @@ defmodule CodingAgent.Session do
   # ============================================================================
   # Private Functions
   # ============================================================================
+
+  defp build_diagnostics(state) do
+    {messages, message_count} =
+      if state.agent && Process.alive?(state.agent) do
+        agent_state = AgentCore.Agent.get_state(state.agent)
+        messages = agent_state.messages || []
+        {messages, length(messages)}
+      else
+        {[], 0}
+      end
+
+    {tool_call_count, error_count} = count_tool_results(messages)
+    error_rate = if tool_call_count == 0, do: 0.0, else: error_count / tool_call_count
+
+    now = System.system_time(:millisecond)
+    started_at = state.started_at || now
+    last_activity_at = latest_activity_timestamp(messages, started_at)
+    uptime_ms = max(now - started_at, 0)
+
+    agent_alive = state.agent && Process.alive?(state.agent)
+
+    %{
+      status: determine_health_status(agent_alive, error_rate, state),
+      session_id: state.session_manager.header.id,
+      uptime_ms: uptime_ms,
+      started_at: started_at,
+      last_activity_at: last_activity_at,
+      is_streaming: state.is_streaming,
+      agent_alive: agent_alive,
+      message_count: message_count,
+      turn_count: state.turn_index,
+      tool_call_count: tool_call_count,
+      error_count: error_count,
+      error_rate: error_rate,
+      subscriber_count: length(state.event_listeners),
+      stream_subscriber_count: map_size(state.event_streams),
+      steering_queue_size: :queue.len(state.steering_queue),
+      follow_up_queue_size: :queue.len(state.follow_up_queue),
+      model: %{provider: state.model.provider, id: state.model.id},
+      cwd: state.cwd,
+      thinking_level: state.thinking_level
+    }
+  end
+
+  defp count_tool_results(messages) do
+    results = Enum.filter(messages, &match?(%Ai.Types.ToolResultMessage{}, &1))
+    tool_call_count = length(results)
+    error_count = Enum.count(results, fn msg -> Map.get(msg, :is_error, false) end)
+    {tool_call_count, error_count}
+  end
+
+  defp latest_activity_timestamp(messages, fallback) do
+    Enum.reduce(messages, fallback, fn msg, acc ->
+      ts = Map.get(msg, :timestamp)
+
+      cond do
+        is_integer(ts) and ts > acc -> ts
+        true -> acc
+      end
+    end)
+  end
+
+  defp determine_health_status(false, _error_rate, _state), do: :unhealthy
+
+  defp determine_health_status(true, error_rate, _state) when error_rate > 0.2, do: :degraded
+
+  defp determine_health_status(true, _error_rate, _state), do: :healthy
 
   @spec resolve_default_model(CodingAgent.SettingsManager.t()) :: Ai.Types.Model.t()
   defp resolve_default_model(%CodingAgent.SettingsManager{default_model: nil}) do
@@ -1207,6 +1317,7 @@ defmodule CodingAgent.Session do
       "tool_call_id" => msg.tool_call_id,
       "tool_name" => msg.tool_name,
       "content" => Enum.map(msg.content, &serialize_content_block/1),
+      "details" => msg.details,
       "is_error" => msg.is_error,
       "timestamp" => msg.timestamp
     }
@@ -1291,6 +1402,7 @@ defmodule CodingAgent.Session do
       tool_call_id: msg["tool_call_id"] || msg["tool_use_id"] || "",
       tool_name: msg["tool_name"] || "",
       content: deserialize_content_blocks(msg["content"]),
+      details: msg["details"],
       is_error: msg["is_error"] || false,
       timestamp: msg["timestamp"] || 0
     }

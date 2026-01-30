@@ -1,5 +1,7 @@
 import type { Message } from '@lemon-web/shared';
+import { useMemo } from 'react';
 import { ContentBlockRenderer } from './ContentBlockRenderer';
+import { useLemonStore } from '../store/useLemonStore';
 
 interface MessageCardProps {
   message: Message;
@@ -12,6 +14,25 @@ export function MessageCard({ message }: MessageCardProps) {
     message.role === 'tool_result'
       ? `tool ${message.tool_name} (${message.tool_call_id})`
       : null;
+
+  const activeSessionId = useLemonStore((state) => state.sessions.activeSessionId);
+  const toolExecution = useLemonStore((state) => {
+    if (message.role !== 'tool_result') return null;
+    if (!activeSessionId) return null;
+    return state.toolExecutionsBySession[activeSessionId]?.[message.tool_call_id] ?? null;
+  });
+
+  const toolDuration = useMemo(() => {
+    if (!toolExecution?.startedAt) return null;
+    const effectiveEnd = toolExecution.endedAt ?? toolExecution.updatedAt ?? toolExecution.startedAt;
+    const durationMs = Math.max(0, effectiveEnd - toolExecution.startedAt);
+    if (durationMs < 1000) return `${durationMs}ms`;
+    const seconds = Math.round(durationMs / 100) / 10;
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    const remainder = Math.round((seconds % 60) * 10) / 10;
+    return `${minutes}m ${remainder}s`;
+  }, [toolExecution]);
 
   return (
     <article className={roleClass}>
@@ -28,7 +49,10 @@ export function MessageCard({ message }: MessageCardProps) {
       {message.role === 'tool_result' ? (
         <footer className="message-card__footer">
           <div>{message.is_error ? 'Error' : 'Success'}</div>
-          {message.details ? <div>details: {Object.keys(message.details).length}</div> : null}
+          <div className="message-card__meta">
+            {toolDuration ? <span>duration: {toolDuration}</span> : null}
+            {message.details ? <span>details: {Object.keys(message.details).length}</span> : null}
+          </div>
         </footer>
       ) : null}
       {'usage' in message && message.usage ? (

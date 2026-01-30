@@ -132,6 +132,72 @@ The BEAM was designed for distributed systems. Lemon is built to eventually supp
 | Live Steering | Complex state machines | Message passing |
 | Distribution | HTTP APIs, message queues | Native distribution |
 
+### How BEAM is Currently Leveraged in Lemon
+
+#### Process-per-Agent Architecture
+
+Each agent session runs as an independent GenServer process (`AgentCore.Agent`), providing:
+
+- **Isolated State**: Each agent maintains its own conversation context, tool registry, and configuration in process state, eliminating shared-state bugs
+- **Mailbox Queue**: The GenServer message box naturally queues incoming prompts, steering messages, and follow-ups
+- **Synchronous & Async Operations**: `GenServer.call/3` for operations needing confirmation, `GenServer.cast/2` for fire-and-forget
+
+```elixir
+# Each session is a separate process with isolated state
+{:ok, pid1} = CodingAgent.start_session(session_id: "session-1")
+{:ok, pid2} = CodingAgent.start_session(session_id: "session-2")
+
+# Crash one session, the other continues unaffected
+Process.exit(pid1, :kill)
+# pid2 still operational
+```
+
+#### ETS for High-Performance State
+
+Lemon uses ETS (Erlang Term Storage) tables for shared, read-heavy data:
+
+- **Provider Registry** (`Ai.ProviderRegistry`): Stores provider configurations in `:persistent_term` for O(1) lookups
+- **Abort Signals** (`AgentCore.AbortSignal`): Signal storage with `read_concurrency: true` for efficient concurrent checks
+- **Todo Store** (`CodingAgent.Tools.TodoStore`): Per-session todo lists with fast lookups
+
+```elixir
+# Abort signals use ETS for O(1) concurrent reads
+def aborted?(ref) do
+  case :ets.lookup(@table, ref) do
+    [{^ref, true}] -> true
+    _ -> false
+  end
+end
+```
+
+#### Links and Monitors for Lifecycle Management
+
+- **SessionRegistry**: Uses `Registry` (built on ETS) for process discovery
+- **SubagentSupervisor**: `DynamicSupervisor` with `:temporary` restart for subagent processes
+- **EventStream Owner Monitoring**: Streams auto-cancel when owner process dies
+
+```elixir
+# Stream monitors owner process and auto-cancels on death
+{:ok, stream} = EventStream.start_link(owner: self())
+# If calling process dies, stream automatically cleans up
+```
+
+#### Preemptive Scheduling for Responsive UI
+
+The BEAM's preemptive scheduler ensures:
+
+- **Non-blocking UI**: Long-running tool execution (bash commands) doesn't freeze the TUI
+- **Concurrent Streaming**: Multiple LLM streams can run simultaneously without blocking each other
+- **Responsive Steering**: User can send abort/steering messages even during heavy computation
+
+```elixir
+# Tool execution runs in separate Task process
+Task.async(fn ->
+  BashExecutor.execute(command, cwd, opts)
+end)
+# Main agent process remains responsive to messages
+```
+
 ---
 
 ## Architecture Overview

@@ -143,10 +143,55 @@ defmodule CodingAgent.Tools.Grep do
     {:error, "Pattern is required"}
   end
 
+  defp validate_pattern(nil) do
+    {:error, "Pattern is required"}
+  end
+
+  defp validate_pattern(pattern) when not is_binary(pattern) do
+    {:error, "Pattern must be a string, got: #{inspect(pattern)}"}
+  end
+
+  defp validate_pattern(pattern) when byte_size(pattern) > 10_000 do
+    {:error, "Pattern is too long (max 10000 bytes)"}
+  end
+
   defp validate_pattern(pattern) do
     case Regex.compile(pattern) do
-      {:ok, _} -> :ok
-      {:error, {reason, _}} -> {:error, "Invalid regex pattern: #{reason}"}
+      {:ok, _} ->
+        :ok
+
+      {:error, {reason, position}} ->
+        # Provide more helpful error message with position
+        hint = suggest_regex_fix(pattern, reason)
+
+        message =
+          if position > 0 do
+            "Invalid regex pattern at position #{position}: #{reason}#{hint}"
+          else
+            "Invalid regex pattern: #{reason}#{hint}"
+          end
+
+        {:error, message}
+    end
+  end
+
+  # Suggest common fixes for regex errors
+  defp suggest_regex_fix(pattern, _reason) do
+    cond do
+      String.contains?(pattern, "[") and not String.contains?(pattern, "]") ->
+        " (hint: missing closing bracket ']')"
+
+      String.contains?(pattern, "(") and not String.contains?(pattern, ")") ->
+        " (hint: missing closing parenthesis ')')"
+
+      String.contains?(pattern, "{") and not String.contains?(pattern, "}") ->
+        " (hint: missing closing brace '}')"
+
+      String.ends_with?(pattern, "\\") ->
+        " (hint: trailing backslash needs to be escaped as '\\\\')"
+
+      true ->
+        ""
     end
   end
 

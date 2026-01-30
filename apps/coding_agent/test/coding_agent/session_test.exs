@@ -124,6 +124,27 @@ defmodule CodingAgent.SessionTest do
     }
   end
 
+  defp echo_tool_with_details do
+    %AgentTool{
+      name: "echo_details",
+      description: "Echoes the input text back with details",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "text" => %{"type" => "string", "description" => "The text to echo"}
+        },
+        "required" => ["text"]
+      },
+      label: "Echo Details",
+      execute: fn _id, %{"text" => text}, _signal, _on_update ->
+        %AgentToolResult{
+          content: [%TextContent{type: :text, text: "Echo: #{text}"}],
+          details: %{length: String.length(text), category: "demo"}
+        }
+      end
+    }
+  end
+
   defp add_tool do
     %AgentTool{
       name: "add",
@@ -1260,6 +1281,316 @@ defmodule CodingAgent.SessionTest do
 
       # Verify it's the same agent as in the session state
       assert agent_pid == state.agent
+    end
+  end
+
+  # ============================================================================
+  # Health Monitoring Tests
+  # ============================================================================
+
+  describe "health_check/1" do
+    test "returns healthy status for new session" do
+      session = start_session()
+      health = Session.health_check(session)
+
+      assert health.status == :healthy
+      assert is_binary(health.session_id)
+      assert health.uptime_ms >= 0
+      assert health.is_streaming == false
+      assert health.agent_alive == true
+    end
+
+    test "includes session_id in health check" do
+      session = start_session()
+      state = Session.get_state(session)
+      health = Session.health_check(session)
+
+      assert health.session_id == state.session_manager.header.id
+    end
+
+    test "uptime increases over time" do
+      session = start_session()
+      health1 = Session.health_check(session)
+      Process.sleep(50)
+      health2 = Session.health_check(session)
+
+      assert health2.uptime_ms > health1.uptime_ms
+    end
+
+    test "is_streaming reflects current state" do
+      # Use a slow response to ensure we can check streaming state
+      slow_stream_fn = fn model, context, options ->
+        Process.sleep(200)
+        mock_stream_fn_single(assistant_message("Slow response")).(model, context, options)
+      end
+
+      session = start_session(stream_fn: slow_stream_fn)
+
+      health_before = Session.health_check(session)
+      assert health_before.is_streaming == false
+
+      :ok = Session.prompt(session, "Hello!")
+      Process.sleep(10)
+
+      health_during = Session.health_check(session)
+      assert health_during.is_streaming == true
+
+      wait_for_streaming_complete(session)
+
+      health_after = Session.health_check(session)
+      assert health_after.is_streaming == false
+    end
+  end
+
+  describe "diagnostics/1" do
+    test "returns comprehensive diagnostic info" do
+      session = start_session()
+      diag = Session.diagnostics(session)
+
+      # Basic fields
+      assert is_binary(diag.session_id)
+      assert diag.status in [:healthy, :degraded, :unhealthy]
+      assert is_integer(diag.uptime_ms)
+      assert is_integer(diag.started_at)
+      assert is_boolean(diag.is_streaming)
+      assert is_boolean(diag.agent_alive)
+
+      # Counter fields
+      assert is_integer(diag.message_count)
+      assert is_integer(diag.turn_count)
+      assert is_integer(diag.tool_call_count)
+      assert is_integer(diag.error_count)
+      assert is_float(diag.error_rate)
+
+      # Queue fields
+      assert is_integer(diag.subscriber_count)
+      assert is_integer(diag.stream_subscriber_count)
+      assert is_integer(diag.steering_queue_size)
+      assert is_integer(diag.follow_up_queue_size)
+
+      # Model info
+      assert is_map(diag.model)
+      assert Map.has_key?(diag.model, :provider)
+      assert Map.has_key?(diag.model, :id)
+
+      # Other fields
+      assert is_binary(diag.cwd)
+      assert diag.thinking_level in [:off, :minimal, :low, :medium, :high]
+    end
+
+    test "message_count increases after prompting" do
+      session = start_session()
+
+      diag_before = Session.diagnostics(session)
+      assert diag_before.message_count == 0
+
+      :ok = Session.prompt(session, "Hello!")
+      wait_for_streaming_complete(session)
+
+      diag_after = Session.diagnostics(session)
+      assert diag_after.message_count > 0
+    end
+
+    test "turn_count increases after prompting" do
+      session = start_session()
+
+      diag_before = Session.diagnostics(session)
+      assert diag_before.turn_count == 0
+
+      :ok = Session.prompt(session, "Hello!")
+      wait_for_streaming_complete(session)
+
+      diag_after = Session.diagnostics(session)
+      assert diag_after.turn_count == 1
+    end
+
+    test "subscriber_count reflects active subscriptions" do
+      session = start_session()
+
+      diag_before = Session.diagnostics(session)
+      assert diag_before.subscriber_count == 0
+
+      _unsub = Session.subscribe(session)
+
+      diag_after = Session.diagnostics(session)
+      assert diag_after.subscriber_count == 1
+    end
+
+    test "steering_queue_size reflects queued messages" do
+      session = start_session()
+
+      diag_before = Session.diagnostics(session)
+      assert diag_before.steering_queue_size == 0
+
+      :ok = Session.steer(session, "Steer message")
+
+      diag_after = Session.diagnostics(session)
+      assert diag_after.steering_queue_size == 1
+    end
+
+    test "follow_up_queue_size reflects queued messages" do
+      session = start_session()
+
+      diag_before = Session.diagnostics(session)
+      assert diag_before.follow_up_queue_size == 0
+
+      :ok = Session.follow_up(session, "Follow up message")
+
+      diag_after = Session.diagnostics(session)
+      assert diag_after.follow_up_queue_size == 1
+    end
+
+    test "error_rate is zero when no tool calls" do
+      session = start_session()
+      diag = Session.diagnostics(session)
+
+      assert diag.error_rate == 0.0
+      assert diag.tool_call_count == 0
+      assert diag.error_count == 0
+    end
+
+    test "last_activity_at is updated on prompt" do
+      session = start_session()
+
+      diag_before = Session.diagnostics(session)
+      initial_activity = diag_before.last_activity_at
+
+      Process.sleep(50)
+      :ok = Session.prompt(session, "Hello!")
+      wait_for_streaming_complete(session)
+
+      diag_after = Session.diagnostics(session)
+      assert diag_after.last_activity_at > initial_activity
+    end
+  end
+
+  describe "health status determination" do
+    test "new session is healthy" do
+      session = start_session()
+      health = Session.health_check(session)
+
+      assert health.status == :healthy
+    end
+
+    test "session with dead agent is unhealthy" do
+      session = start_session()
+      state = Session.get_state(session)
+
+      # Kill the agent
+      Process.exit(state.agent, :kill)
+      Process.sleep(50)
+
+      health = Session.health_check(session)
+      assert health.status == :unhealthy
+      assert health.agent_alive == false
+    end
+  end
+
+  describe "tool call tracking" do
+    test "tool_call_count increments on tool execution" do
+      # Create a response with a tool call
+      tool_call = %ToolCall{
+        type: :tool_call,
+        id: "call_123",
+        name: "echo",
+        arguments: %{"text" => "hello"}
+      }
+
+      response_with_tool = %AssistantMessage{
+        role: :assistant,
+        content: [tool_call],
+        api: :mock,
+        provider: :mock_provider,
+        model: "mock-model-1",
+        usage: mock_usage(),
+        stop_reason: :tool_use,
+        error_message: nil,
+        timestamp: System.system_time(:millisecond)
+      }
+
+      final_response = assistant_message("Done with tool!")
+
+      call_count = :counters.new(1, [:atomics])
+
+      multi_stream_fn = fn _model, _context, _options ->
+        count = :counters.get(call_count, 1)
+        :counters.add(call_count, 1, 1)
+
+        response =
+          if count == 0 do
+            response_with_tool
+          else
+            final_response
+          end
+
+        {:ok, response_to_event_stream(response)}
+      end
+
+      session = start_session(tools: [echo_tool()], stream_fn: multi_stream_fn)
+
+      diag_before = Session.diagnostics(session)
+      assert diag_before.tool_call_count == 0
+
+      :ok = Session.prompt(session, "Use echo to say hello")
+      wait_for_streaming_complete(session)
+
+      diag_after = Session.diagnostics(session)
+      assert diag_after.tool_call_count >= 1
+    end
+
+    test "tool result details are persisted in session entries" do
+      tool_call = %ToolCall{
+        type: :tool_call,
+        id: "call_details",
+        name: "echo_details",
+        arguments: %{"text" => "hello"}
+      }
+
+      response_with_tool = %AssistantMessage{
+        role: :assistant,
+        content: [tool_call],
+        api: :mock,
+        provider: :mock_provider,
+        model: "mock-model-1",
+        usage: mock_usage(),
+        stop_reason: :tool_use,
+        error_message: nil,
+        timestamp: System.system_time(:millisecond)
+      }
+
+      final_response = assistant_message("Done with tool!")
+
+      call_count = :counters.new(1, [:atomics])
+
+      multi_stream_fn = fn _model, _context, _options ->
+        count = :counters.get(call_count, 1)
+        :counters.add(call_count, 1, 1)
+
+        response =
+          if count == 0 do
+            response_with_tool
+          else
+            final_response
+          end
+
+        {:ok, response_to_event_stream(response)}
+      end
+
+      session = start_session(tools: [echo_tool_with_details()], stream_fn: multi_stream_fn)
+
+      :ok = Session.prompt(session, "Use echo_details")
+      wait_for_streaming_complete(session)
+
+      state = Session.get_state(session)
+
+      tool_entries =
+        Enum.filter(state.session_manager.entries, fn entry ->
+          entry.type == :message and entry.message["role"] == "tool_result"
+        end)
+
+      assert tool_entries != []
+      last_entry = List.last(tool_entries)
+      assert last_entry.message["details"] == %{category: "demo", length: 5}
     end
   end
 end

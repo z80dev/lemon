@@ -574,7 +574,8 @@ defmodule CodingAgent.UI.RPCTest do
       # Set editor text
       GenServer.cast(named_rpc, {:notify, "set_editor_text", %{text: "Hello World"}})
 
-      Process.sleep(50)
+      # Wait for output to be written (flaky sleep replaced with proper wait)
+      wait_for_output(output)
 
       # Verify notification was sent
       notification = MockIO.get_last_json(output)

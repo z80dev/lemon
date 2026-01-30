@@ -126,7 +126,7 @@ describe('StateStore', () => {
       const widgets = store.getState().widgets;
       expect(widgets.size).toBe(1);
       expect(widgets.get('spinner')).toEqual({
-        content: 'Loading...',
+        content: ['Loading...'],
         opts: { animated: true },
       });
     });
@@ -135,7 +135,7 @@ describe('StateStore', () => {
       store.setWidget('status', 'Initial');
       store.setWidget('status', 'Updated');
 
-      expect(store.getState().widgets.get('status')?.content).toBe('Updated');
+      expect(store.getState().widgets.get('status')?.content).toEqual(['Updated']);
     });
 
     it('should remove widget when content is null', () => {
@@ -195,9 +195,9 @@ describe('StateStore', () => {
           cache_write: 10,
           total_tokens: 175,
           cost: {
-            input_cost: 0.001,
-            output_cost: 0.002,
-            total_cost: 0.003,
+            input: 0.001,
+            output: 0.002,
+            total: 0.003,
           },
         },
         stop_reason: 'stop',
@@ -382,6 +382,34 @@ describe('StateStore', () => {
       const tool = store.getState().toolExecutions.get('tool-1');
       expect(tool?.isError).toBe(true);
     });
+
+    it('should show tool working message for multiple concurrent tools', () => {
+      store.handleEvent({
+        type: 'tool_execution_start',
+        data: ['tool-1', 'bash', {}],
+      });
+
+      store.handleEvent({
+        type: 'tool_execution_start',
+        data: ['tool-2', 'read_file', {}],
+      });
+
+      expect(store.getState().toolWorkingMessage).toBe('Running 2 tools...');
+
+      store.handleEvent({
+        type: 'tool_execution_end',
+        data: ['tool-1', 'bash', 'done', false],
+      });
+
+      expect(store.getState().toolWorkingMessage).toBe('Running read_file...');
+
+      store.handleEvent({
+        type: 'tool_execution_end',
+        data: ['tool-2', 'read_file', 'done', false],
+      });
+
+      expect(store.getState().toolWorkingMessage).toBeNull();
+    });
   });
 
   describe('state listeners', () => {
@@ -434,6 +462,224 @@ describe('StateStore', () => {
       expect(state.status.size).toBe(0);
       expect(state.widgets.size).toBe(0);
       expect(state.pendingUIRequests).toHaveLength(0);
+    });
+  });
+
+  describe('multi-session support', () => {
+    it('should initialize with setReady and create primary session', () => {
+      store.setReady(
+        '/test/cwd',
+        { provider: 'anthropic', id: 'claude-3' },
+        true,
+        false,
+        'session-1',
+        'session-1'
+      );
+
+      const state = store.getState();
+      expect(state.ready).toBe(true);
+      expect(state.primarySessionId).toBe('session-1');
+      expect(state.activeSessionId).toBe('session-1');
+      expect(state.sessions.has('session-1')).toBe(true);
+      expect(state.cwd).toBe('/test/cwd');
+    });
+
+    it('should handle session started event', () => {
+      store.setReady(
+        '/test/cwd',
+        { provider: 'anthropic', id: 'claude-3' },
+        true,
+        false,
+        'session-1',
+        'session-1'
+      );
+
+      store.handleSessionStarted('session-2', '/another/cwd', { provider: 'openai', id: 'gpt-4' });
+
+      const state = store.getState();
+      expect(state.sessions.size).toBe(2);
+      expect(state.sessions.has('session-2')).toBe(true);
+
+      const session2 = state.sessions.get('session-2');
+      expect(session2?.cwd).toBe('/another/cwd');
+      expect(session2?.model.id).toBe('gpt-4');
+    });
+
+    it('should handle session closed event', () => {
+      store.setReady(
+        '/test/cwd',
+        { provider: 'anthropic', id: 'claude-3' },
+        true,
+        false,
+        'session-1',
+        'session-1'
+      );
+      store.handleSessionStarted('session-2', '/another/cwd', { provider: 'openai', id: 'gpt-4' });
+
+      store.handleSessionClosed('session-2', 'normal');
+
+      const state = store.getState();
+      expect(state.sessions.size).toBe(1);
+      expect(state.sessions.has('session-2')).toBe(false);
+    });
+
+    it('should switch active session', () => {
+      store.setReady(
+        '/test/cwd',
+        { provider: 'anthropic', id: 'claude-3' },
+        true,
+        false,
+        'session-1',
+        'session-1'
+      );
+      store.handleSessionStarted('session-2', '/another/cwd', { provider: 'openai', id: 'gpt-4' });
+
+      store.setActiveSessionId('session-2');
+
+      const state = store.getState();
+      expect(state.activeSessionId).toBe('session-2');
+      expect(state.cwd).toBe('/another/cwd');
+      expect(state.model.id).toBe('gpt-4');
+    });
+
+    it('should reset active session state without affecting other sessions', () => {
+      store.setReady(
+        '/test/cwd',
+        { provider: 'anthropic', id: 'claude-3' },
+        true,
+        false,
+        'session-1',
+        'session-1'
+      );
+
+      // Add a message to the session
+      store.handleEvent({
+        type: 'message_end',
+        data: [{
+          __struct__: 'Elixir.Ai.Types.AssistantMessage',
+          role: 'assistant',
+          content: [],
+          provider: 'anthropic',
+          model: 'claude-3',
+          api: 'messages',
+          stop_reason: 'stop',
+          error_message: null,
+          timestamp: Date.now(),
+        }],
+      });
+
+      expect(store.getState().messages).toHaveLength(1);
+
+      store.resetActiveSession();
+
+      const state = store.getState();
+      expect(state.messages).toHaveLength(0);
+      expect(state.sessions.has('session-1')).toBe(true);
+      expect(state.activeSessionId).toBe('session-1');
+    });
+
+    it('should route events to specific sessions', () => {
+      store.setReady(
+        '/test/cwd',
+        { provider: 'anthropic', id: 'claude-3' },
+        true,
+        false,
+        'session-1',
+        'session-1'
+      );
+      store.handleSessionStarted('session-2', '/another/cwd', { provider: 'openai', id: 'gpt-4' });
+
+      // Send event to session-2 (not active)
+      store.handleEvent({
+        type: 'tool_execution_start',
+        data: ['tool-1', 'bash', { command: 'ls' }],
+      }, 'session-2');
+
+      // session-1 (active) should not have the tool execution
+      const state = store.getState();
+      expect(state.toolExecutions.size).toBe(0);
+
+      // session-2 should have it
+      const session2 = state.sessions.get('session-2');
+      expect(session2?.toolExecutions.size).toBe(1);
+    });
+  });
+
+  describe('cumulative usage', () => {
+    it('should accumulate usage across multiple messages', () => {
+      const createMessage = (usage: { input: number; output: number; cost?: { total: number } }): AssistantMessage => ({
+        __struct__: 'Elixir.Ai.Types.AssistantMessage',
+        role: 'assistant',
+        content: [],
+        provider: 'anthropic',
+        model: 'claude-3',
+        api: 'messages',
+        usage: {
+          input: usage.input,
+          output: usage.output,
+          cost: usage.cost,
+        },
+        stop_reason: 'stop',
+        error_message: null,
+        timestamp: Date.now(),
+      });
+
+      store.handleEvent({ type: 'message_end', data: [createMessage({ input: 100, output: 50, cost: { total: 0.01 } })] });
+      store.handleEvent({ type: 'message_end', data: [createMessage({ input: 200, output: 100, cost: { total: 0.02 } })] });
+      store.handleEvent({ type: 'message_end', data: [createMessage({ input: 50, output: 25 })] });
+
+      const usage = store.getState().cumulativeUsage;
+      expect(usage.inputTokens).toBe(350);
+      expect(usage.outputTokens).toBe(175);
+      expect(usage.totalCost).toBe(0.03);
+    });
+
+    it('should reset cumulative usage on resetActiveSession', () => {
+      store.setReady(
+        '/test/cwd',
+        { provider: 'anthropic', id: 'claude-3' },
+        true,
+        false,
+        'session-1',
+        'session-1'
+      );
+
+      store.handleEvent({
+        type: 'message_end',
+        data: [{
+          __struct__: 'Elixir.Ai.Types.AssistantMessage',
+          role: 'assistant',
+          content: [],
+          provider: 'anthropic',
+          model: 'claude-3',
+          api: 'messages',
+          usage: { input: 100, output: 50, cost: { total: 0.01 } },
+          stop_reason: 'stop',
+          error_message: null,
+          timestamp: Date.now(),
+        }],
+      });
+
+      expect(store.getState().cumulativeUsage.inputTokens).toBe(100);
+
+      store.resetActiveSession();
+
+      const usage = store.getState().cumulativeUsage;
+      expect(usage.inputTokens).toBe(0);
+      expect(usage.outputTokens).toBe(0);
+      expect(usage.totalCost).toBe(0);
+    });
+  });
+
+  describe('widget content normalization', () => {
+    it('should accept string content and normalize to array', () => {
+      store.setWidget('test', 'Single line');
+      expect(store.getState().widgets.get('test')?.content).toEqual(['Single line']);
+    });
+
+    it('should accept array content directly', () => {
+      store.setWidget('test', ['Line 1', 'Line 2', 'Line 3']);
+      expect(store.getState().widgets.get('test')?.content).toEqual(['Line 1', 'Line 2', 'Line 3']);
     });
   });
 });

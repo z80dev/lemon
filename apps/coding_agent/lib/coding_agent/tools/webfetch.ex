@@ -66,27 +66,32 @@ defmodule CodingAgent.Tools.WebFetch do
     timeout_ms = normalize_timeout(timeout_seconds)
 
     with :ok <- validate_url(url),
-         {:ok, response} <- fetch(url, timeout_ms),
+         {:ok, response} <- fetch_with_retry(url, timeout_ms, signal),
          :ok <- check_abort(signal) do
       case response do
-        %{status: status} when status < 200 or status >= 300 ->
-          {:error, "Request failed with status code: #{status}"}
+        %{status: status} when status >= 200 and status < 300 ->
+          process_success_response(response, url, format)
 
-        %{body: body, headers: headers} ->
-          content_type = header_value(headers, "content-type") || ""
-          body = ensure_binary(body)
-
-          if byte_size(body) > @max_response_size do
-            {:error, "Response too large (exceeds 5MB limit)"}
-          else
-            formatted = format_body(body, content_type, format)
-
-            %AgentToolResult{
-              content: [%TextContent{text: formatted}],
-              details: %{title: "#{url} (#{content_type})"}
-            }
-          end
+        %{status: status} ->
+          {:error, format_http_error(status, url)}
       end
+    end
+  end
+
+  defp process_success_response(%{body: body, headers: headers}, url, format) do
+    content_type = header_value(headers, "content-type") || ""
+    body = ensure_binary(body)
+
+    if byte_size(body) > @max_response_size do
+      {:error, "Response too large (exceeds #{div(@max_response_size, 1024 * 1024)}MB limit)"}
+    else
+      formatted = format_body(body, content_type, format)
+      content_type_display = content_type |> String.split(";") |> List.first() |> String.trim()
+
+      %AgentToolResult{
+        content: [%TextContent{text: formatted}],
+        details: %{title: "#{url} (#{content_type_display})"}
+      }
     end
   end
 
@@ -109,7 +114,45 @@ defmodule CodingAgent.Tools.WebFetch do
 
   defp normalize_timeout(_), do: @default_timeout_ms
 
-  defp fetch(url, timeout_ms) do
+  @max_retries 3
+  @retry_base_delay_ms 1000
+
+  defp fetch_with_retry(url, timeout_ms, signal, retries_left \\ @max_retries) do
+    case fetch(url, timeout_ms, signal) do
+      {:ok, response} ->
+        {:ok, response}
+
+      {:error, reason} ->
+        if retries_left > 0 and retryable_error?(reason) do
+          delay = @retry_base_delay_ms * (@max_retries - retries_left + 1)
+          Process.sleep(delay)
+          fetch_with_retry(url, timeout_ms, signal, retries_left - 1)
+        else
+          {:error, reason}
+        end
+    end
+  end
+
+  defp retryable_error?(reason) when is_atom(reason) do
+    reason in [:timeout, :connect_timeout, :closed, :econnrefused, :econnreset]
+  end
+
+  defp retryable_error?({:error, %{status: status}}) when is_integer(status) do
+    status in [429, 502, 503, 504]
+  end
+
+  defp retryable_error?(_), do: false
+
+  defp format_http_error(404, url), do: "Page not found (404): #{url}"
+  defp format_http_error(403, url), do: "Access forbidden (403): #{url}"
+  defp format_http_error(401, url), do: "Authentication required (401): #{url}"
+  defp format_http_error(429, url), do: "Rate limited (429): #{url}"
+  defp format_http_error(500, url), do: "Server error (500): #{url}"
+  defp format_http_error(502, url), do: "Bad gateway (502): #{url}"
+  defp format_http_error(503, url), do: "Service unavailable (503): #{url}"
+  defp format_http_error(status, url), do: "Request failed with status #{status}: #{url}"
+
+  defp fetch(url, timeout_ms, _signal) do
     headers = [
       {"user-agent",
        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},

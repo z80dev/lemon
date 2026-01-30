@@ -688,6 +688,478 @@ defmodule CodingAgent.MessagesTest do
     end
   end
 
+  describe "get_text/1 edge cases" do
+    test "returns nil for UserMessage with nil content" do
+      msg = %UserMessage{content: nil, timestamp: 0}
+      assert Messages.get_text(msg) == nil
+    end
+
+    test "returns empty string for UserMessage with empty string content" do
+      msg = %UserMessage{content: "", timestamp: 0}
+      assert Messages.get_text(msg) == ""
+    end
+
+    test "returns empty string for UserMessage with empty list content" do
+      msg = %UserMessage{content: [], timestamp: 0}
+      assert Messages.get_text(msg) == ""
+    end
+
+    test "returns empty string for AssistantMessage with empty content list" do
+      msg = %AssistantMessage{content: [], model: "test", timestamp: 0}
+      assert Messages.get_text(msg) == ""
+    end
+
+    test "returns empty string for ToolResultMessage with empty content list" do
+      msg = %ToolResultMessage{tool_use_id: "123", content: [], timestamp: 0}
+      assert Messages.get_text(msg) == ""
+    end
+
+    test "returns empty string for BashExecutionMessage with empty output" do
+      msg = %BashExecutionMessage{
+        command: "true",
+        output: "",
+        exit_code: 0,
+        cancelled: false,
+        truncated: false,
+        timestamp: 0
+      }
+
+      assert Messages.get_text(msg) == ""
+    end
+
+    test "returns empty string for CustomMessage with empty string content" do
+      msg = %CustomMessage{custom_type: "test", content: "", timestamp: 0}
+      assert Messages.get_text(msg) == ""
+    end
+
+    test "returns empty string for CustomMessage with empty list content" do
+      msg = %CustomMessage{custom_type: "test", content: [], timestamp: 0}
+      assert Messages.get_text(msg) == ""
+    end
+
+    test "filters out ImageContent from CustomMessage list" do
+      msg = %CustomMessage{
+        custom_type: "test",
+        content: [
+          %ImageContent{data: "abc", mime_type: "image/png"},
+          %TextContent{text: "visible text"}
+        ],
+        timestamp: 0
+      }
+
+      assert Messages.get_text(msg) == "visible text"
+    end
+
+    test "returns empty string for BranchSummaryMessage with empty summary" do
+      msg = %BranchSummaryMessage{summary: "", timestamp: 0}
+      assert Messages.get_text(msg) == ""
+    end
+
+    test "returns empty string for CompactionSummaryMessage with empty summary" do
+      msg = %CompactionSummaryMessage{summary: "", timestamp: 0}
+      assert Messages.get_text(msg) == ""
+    end
+
+    test "extracts text from Ai.Types.UserMessage with mixed content types" do
+      msg = %Ai.Types.UserMessage{
+        role: :user,
+        content: [
+          %Ai.Types.TextContent{text: "text1"},
+          %Ai.Types.ImageContent{data: "img", mime_type: "image/png"},
+          %Ai.Types.TextContent{text: "text2"}
+        ],
+        timestamp: 0
+      }
+
+      assert Messages.get_text(msg) == "text1\n[image]\ntext2"
+    end
+
+    test "handles unknown content block types in Ai.Types" do
+      # The extract_text_from_ai_content/1 returns "" for unknown types
+      msg = %Ai.Types.UserMessage{
+        role: :user,
+        content: [%Ai.Types.TextContent{text: "known"}],
+        timestamp: 0
+      }
+
+      assert Messages.get_text(msg) == "known"
+    end
+
+    test "extracts text from AssistantMessage with only thinking content" do
+      msg = %AssistantMessage{
+        content: [%ThinkingContent{thinking: "deep thoughts"}],
+        model: "test",
+        timestamp: 0
+      }
+
+      # ThinkingContent is not a TextContent, so get_text should return ""
+      assert Messages.get_text(msg) == ""
+    end
+
+    test "extracts text from AssistantMessage with only tool calls" do
+      msg = %AssistantMessage{
+        content: [%ToolCall{id: "1", name: "read", arguments: %{}}],
+        model: "test",
+        timestamp: 0
+      }
+
+      # ToolCall is not a TextContent, so get_text should return ""
+      assert Messages.get_text(msg) == ""
+    end
+  end
+
+  describe "to_llm/1 edge cases" do
+    test "BashExecutionMessage with empty output includes command" do
+      msg = %BashExecutionMessage{
+        command: "true",
+        output: "",
+        exit_code: 0,
+        cancelled: false,
+        truncated: false,
+        timestamp: 0
+      }
+
+      [result] = Messages.to_llm([msg])
+      assert result.content == "$ true"
+    end
+
+    test "BashExecutionMessage with all flags set" do
+      msg = %BashExecutionMessage{
+        command: "cat bigfile",
+        output: "partial",
+        exit_code: 1,
+        cancelled: true,
+        truncated: true,
+        timestamp: 0
+      }
+
+      [result] = Messages.to_llm([msg])
+      # cancelled takes precedence over truncated
+      assert result.content =~ "$ cat bigfile"
+      assert result.content =~ "partial"
+      assert result.content =~ "[cancelled]"
+      assert result.content =~ "[exit code: 1]"
+    end
+
+    test "AssistantMessage with usage containing float cost" do
+      msg = %AssistantMessage{
+        content: [%TextContent{text: "test"}],
+        model: "claude-3",
+        usage: %Usage{
+          input: 100,
+          output: 50,
+          cache_read: 0,
+          cache_write: 0,
+          total_tokens: 150,
+          cost: 0.00123
+        },
+        timestamp: 0
+      }
+
+      [result] = Messages.to_llm([msg])
+      assert result.usage.cost.total == 0.00123
+    end
+
+    test "AssistantMessage with usage containing nil cost" do
+      msg = %AssistantMessage{
+        content: [],
+        model: "test",
+        usage: %Usage{
+          input: 10,
+          output: 5,
+          cache_read: 0,
+          cache_write: 0,
+          total_tokens: 15,
+          cost: nil
+        },
+        timestamp: 0
+      }
+
+      [result] = Messages.to_llm([msg])
+      assert %Ai.Types.Cost{} = result.usage.cost
+    end
+
+    test "plain map with role: :user and missing timestamp" do
+      msg = %{role: :user, content: "hello"}
+      [result] = Messages.to_llm([msg])
+      assert result.timestamp == 0
+    end
+
+    test "plain map with role: :assistant and minimal fields" do
+      msg = %{role: :assistant, content: []}
+      [result] = Messages.to_llm([msg])
+      assert result.model == ""
+      assert result.provider == nil
+      assert result.api == nil
+      assert result.usage == nil
+      assert result.stop_reason == nil
+      assert result.timestamp == 0
+    end
+
+    test "plain map with role: :tool_result using tool_use_id field" do
+      msg = %{role: :tool_result, tool_use_id: "legacy_id", content: []}
+      [result] = Messages.to_llm([msg])
+      assert result.tool_call_id == "legacy_id"
+    end
+
+    test "plain map with role: :tool_result prefers tool_call_id over tool_use_id" do
+      msg = %{role: :tool_result, tool_call_id: "new_id", tool_use_id: "old_id", content: []}
+      [result] = Messages.to_llm([msg])
+      assert result.tool_call_id == "new_id"
+    end
+
+    test "UserMessage with only image content blocks" do
+      msg = %UserMessage{
+        content: [
+          %ImageContent{data: "img1", mime_type: "image/png"},
+          %ImageContent{data: "img2", mime_type: "image/jpeg"}
+        ],
+        timestamp: 0
+      }
+
+      [result] = Messages.to_llm([msg])
+      assert is_list(result.content)
+      assert length(result.content) == 2
+      assert %Ai.Types.ImageContent{data: "img1", mime_type: "image/png"} = hd(result.content)
+    end
+
+    test "preserves all stop_reason values" do
+      for stop_reason <- [:stop, :length, :tool_use, :error, :aborted] do
+        msg = %AssistantMessage{content: [], model: "test", stop_reason: stop_reason, timestamp: 0}
+        [result] = Messages.to_llm([msg])
+        assert result.stop_reason == stop_reason
+      end
+    end
+
+    test "CustomMessage with details field is ignored in conversion" do
+      msg = %CustomMessage{
+        custom_type: "test",
+        content: "content",
+        display: true,
+        details: %{some: "data"},
+        timestamp: 0
+      }
+
+      [result] = Messages.to_llm([msg])
+      # Details are not preserved in the Ai.Types.UserMessage
+      assert result.content == "content"
+    end
+
+    test "multiple excluded messages are all filtered" do
+      messages = [
+        %BashExecutionMessage{
+          command: "ls",
+          output: "",
+          exit_code: 0,
+          cancelled: false,
+          truncated: false,
+          exclude_from_context: true,
+          timestamp: 1
+        },
+        %BashExecutionMessage{
+          command: "pwd",
+          output: "",
+          exit_code: 0,
+          cancelled: false,
+          truncated: false,
+          exclude_from_context: true,
+          timestamp: 2
+        }
+      ]
+
+      assert Messages.to_llm(messages) == []
+    end
+
+    test "non-BashExecution messages are never excluded" do
+      # Only BashExecutionMessage checks exclude_from_context
+      messages = [
+        %UserMessage{content: "test", timestamp: 0},
+        %AssistantMessage{content: [], model: "test", timestamp: 0}
+      ]
+
+      result = Messages.to_llm(messages)
+      assert length(result) == 2
+    end
+  end
+
+  describe "get_tool_calls/1 edge cases" do
+    test "returns empty list for AssistantMessage with only text" do
+      msg = %AssistantMessage{
+        content: [%TextContent{text: "just text"}, %TextContent{text: "more text"}],
+        timestamp: 0
+      }
+
+      assert Messages.get_tool_calls(msg) == []
+    end
+
+    test "returns empty list for AssistantMessage with thinking content" do
+      msg = %AssistantMessage{
+        content: [
+          %ThinkingContent{thinking: "thinking..."},
+          %TextContent{text: "response"}
+        ],
+        timestamp: 0
+      }
+
+      assert Messages.get_tool_calls(msg) == []
+    end
+
+    test "extracts single tool call" do
+      tool = %ToolCall{id: "1", name: "read", arguments: %{"path" => "/test"}}
+      msg = %AssistantMessage{content: [tool], timestamp: 0}
+
+      result = Messages.get_tool_calls(msg)
+      assert length(result) == 1
+      assert hd(result) == tool
+    end
+
+    test "preserves tool call order" do
+      tool1 = %ToolCall{id: "1", name: "first", arguments: %{}}
+      tool2 = %ToolCall{id: "2", name: "second", arguments: %{}}
+      tool3 = %ToolCall{id: "3", name: "third", arguments: %{}}
+
+      msg = %AssistantMessage{content: [tool1, tool2, tool3], timestamp: 0}
+
+      result = Messages.get_tool_calls(msg)
+      assert Enum.map(result, & &1.name) == ["first", "second", "third"]
+    end
+  end
+
+  describe "Usage module" do
+    test "total_tokens adds all token fields" do
+      usage = %Usage{input: 1, output: 2, cache_read: 3, cache_write: 4}
+      assert Usage.total_tokens(usage) == 10
+    end
+
+    test "total_tokens with large values" do
+      usage = %Usage{
+        input: 100_000,
+        output: 50_000,
+        cache_read: 200_000,
+        cache_write: 10_000
+      }
+
+      assert Usage.total_tokens(usage) == 360_000
+    end
+  end
+
+  describe "content block creation" do
+    test "TextContent can be created with custom text" do
+      tc = %TextContent{text: "custom text"}
+      assert tc.type == :text
+      assert tc.text == "custom text"
+    end
+
+    test "ImageContent can be created with custom values" do
+      ic = %ImageContent{data: "base64data", mime_type: "image/jpeg"}
+      assert ic.type == :image
+      assert ic.data == "base64data"
+      assert ic.mime_type == "image/jpeg"
+    end
+
+    test "ThinkingContent can be created with custom thinking" do
+      tc = %ThinkingContent{thinking: "deep thoughts"}
+      assert tc.type == :thinking
+      assert tc.thinking == "deep thoughts"
+    end
+
+    test "ToolCall can be created with all fields" do
+      tc = %ToolCall{id: "tool_123", name: "read", arguments: %{"path" => "/file.txt"}}
+      assert tc.type == :tool_call
+      assert tc.id == "tool_123"
+      assert tc.name == "read"
+      assert tc.arguments == %{"path" => "/file.txt"}
+    end
+
+    test "ToolCall arguments can be complex nested maps" do
+      args = %{
+        "files" => ["/a.txt", "/b.txt"],
+        "options" => %{"recursive" => true, "depth" => 3}
+      }
+
+      tc = %ToolCall{id: "1", name: "batch_read", arguments: args}
+      assert tc.arguments == args
+    end
+  end
+
+  describe "message creation with all fields" do
+    test "UserMessage with list content" do
+      content = [
+        %TextContent{text: "hello"},
+        %ImageContent{data: "img", mime_type: "image/png"}
+      ]
+
+      msg = %UserMessage{content: content, timestamp: 12345}
+      assert msg.role == :user
+      assert msg.content == content
+      assert msg.timestamp == 12345
+    end
+
+    test "AssistantMessage with all fields populated" do
+      usage = %Usage{input: 10, output: 20, cache_read: 5, cache_write: 2, total_tokens: 37, cost: 0.001}
+
+      msg = %AssistantMessage{
+        content: [%TextContent{text: "response"}],
+        provider: "anthropic",
+        model: "claude-3-sonnet",
+        api: "messages",
+        usage: usage,
+        stop_reason: :stop,
+        timestamp: 99999
+      }
+
+      assert msg.role == :assistant
+      assert msg.provider == "anthropic"
+      assert msg.model == "claude-3-sonnet"
+      assert msg.api == "messages"
+      assert msg.usage == usage
+      assert msg.stop_reason == :stop
+      assert msg.timestamp == 99999
+    end
+
+    test "ToolResultMessage with error" do
+      msg = %ToolResultMessage{
+        tool_use_id: "tool_abc",
+        content: [%TextContent{text: "Error: file not found"}],
+        is_error: true,
+        timestamp: 54321
+      }
+
+      assert msg.role == :tool_result
+      assert msg.tool_use_id == "tool_abc"
+      assert msg.is_error == true
+      assert msg.timestamp == 54321
+    end
+
+    test "BashExecutionMessage with full_output_path" do
+      msg = %BashExecutionMessage{
+        command: "cat huge_file",
+        output: "truncated...",
+        exit_code: 0,
+        cancelled: false,
+        truncated: true,
+        full_output_path: "/tmp/output_12345.txt",
+        timestamp: 1000
+      }
+
+      assert msg.full_output_path == "/tmp/output_12345.txt"
+    end
+
+    test "CustomMessage with details" do
+      msg = %CustomMessage{
+        custom_type: "mcp_result",
+        content: "result content",
+        display: false,
+        details: %{tool: "some_mcp_tool", duration_ms: 150},
+        timestamp: 2000
+      }
+
+      assert msg.custom_type == "mcp_result"
+      assert msg.display == false
+      assert msg.details == %{tool: "some_mcp_tool", duration_ms: 150}
+    end
+  end
+
   describe "struct defaults" do
     test "TextContent has correct defaults" do
       tc = %TextContent{}

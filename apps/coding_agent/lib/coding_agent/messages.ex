@@ -255,8 +255,9 @@ defmodule CodingAgent.Messages do
   Returns the concatenated text from all text content blocks in the message.
   For simple string content, returns the string directly.
   """
-  @spec get_text(message()) :: String.t()
+  @spec get_text(message()) :: String.t() | nil
   def get_text(%UserMessage{content: content}) when is_binary(content), do: content
+  def get_text(%UserMessage{content: nil}), do: nil
 
   def get_text(%UserMessage{content: content}) when is_list(content) do
     content
@@ -295,6 +296,7 @@ defmodule CodingAgent.Messages do
 
   # Handle Ai.Types.UserMessage
   def get_text(%Ai.Types.UserMessage{content: content}) when is_binary(content), do: content
+  def get_text(%Ai.Types.UserMessage{content: nil}), do: nil
 
   def get_text(%Ai.Types.UserMessage{content: content}) when is_list(content) do
     content
