@@ -14,7 +14,8 @@ defmodule DebugAgentRPC do
           model: :string,
           system_prompt: :string,
           base_url: :string,
-          debug: :boolean
+          debug: :boolean,
+          no_ui: :boolean
         ]
       )
 
@@ -33,12 +34,22 @@ defmodule DebugAgentRPC do
       providers: Map.keys(settings.providers || %{})
     })
 
+    # UI is enabled by default; use --no-ui to disable
+    ui_enabled = opts[:no_ui] != true
+    ui_context =
+      if ui_enabled do
+        {:ok, _ui_pid} = CodingAgent.UI.DebugRPC.start_link(name: CodingAgent.UI.DebugRPC)
+        CodingAgent.UI.Context.new(CodingAgent.UI.DebugRPC)
+      else
+        nil
+      end
+
     {:ok, session} =
       CodingAgent.Session.start_link(
         cwd: cwd,
         model: model,
         system_prompt: opts[:system_prompt],
-        ui_context: nil
+        ui_context: ui_context
       )
 
     _unsub = CodingAgent.Session.subscribe(session)
@@ -47,7 +58,8 @@ defmodule DebugAgentRPC do
       type: "ready",
       cwd: cwd,
       model: %{provider: model.provider, id: model.id},
-      debug: debug_enabled
+      debug: debug_enabled,
+      ui: ui_enabled
     })
     debug_log("ready_sent", %{cwd: cwd})
 
@@ -140,6 +152,15 @@ defmodule DebugAgentRPC do
 
         {:ok, %{"type" => "quit"}} ->
           :quit
+
+        {:ok, %{"type" => "ui_response"} = response} ->
+          # Route ui_response to the DebugRPC UI adapter
+          if Process.whereis(CodingAgent.UI.DebugRPC) do
+            CodingAgent.UI.DebugRPC.handle_response(response)
+          else
+            debug_log("ui_response ignored", %{reason: "UI not enabled"})
+          end
+          :ok
 
         {:ok, _other} ->
           send_json(%{type: "error", message: "unknown command"})
