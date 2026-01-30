@@ -1,6 +1,8 @@
-# Lemon 🍋
+# lemon 🍋
 
-An AI coding agent system built on the BEAM (Erlang/Elixir). It uses the Erlang Virtual Machine's process model for handling concurrent agent coordination and fault tolerance.
+an AI coding agent system named after my cat :)
+
+built on the BEAM (Erlang/Elixir). It uses the Erlang Virtual Machine's process model for handling concurrent agent coordination and fault tolerance.
 
 ## Table of Contents
 
