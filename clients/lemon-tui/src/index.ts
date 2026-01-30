@@ -140,46 +140,50 @@ const ansi = {
   get italic() { return currentTheme.italic; },
 };
 
+// Theme objects use wrapper functions to ensure they always use the current theme
 const selectListTheme: SelectListTheme = {
-  selectedPrefix: ansi.primary,
-  selectedText: ansi.bold,
-  description: ansi.muted,
-  scrollInfo: ansi.muted,
-  noMatch: ansi.muted,
+  selectedPrefix: (s: string) => ansi.primary(s),
+  selectedText: (s: string) => ansi.bold(s),
+  description: (s: string) => ansi.muted(s),
+  scrollInfo: (s: string) => ansi.muted(s),
+  noMatch: (s: string) => ansi.muted(s),
 };
 
 const markdownTheme: MarkdownTheme = {
   heading: (s: string) => ansi.bold(ansi.primary(s)),
-  link: ansi.primary,
-  linkUrl: ansi.muted,
-  code: ansi.warning,
-  codeBlock: ansi.success,
-  codeBlockBorder: ansi.muted,
-  quote: ansi.italic,
-  quoteBorder: ansi.muted,
-  hr: ansi.muted,
-  listBullet: ansi.primary,
-  bold: ansi.bold,
-  italic: ansi.italic,
+  link: (s: string) => ansi.primary(s),
+  linkUrl: (s: string) => ansi.muted(s),
+  code: (s: string) => ansi.warning(s),
+  codeBlock: (s: string) => ansi.success(s),
+  codeBlockBorder: (s: string) => ansi.muted(s),
+  quote: (s: string) => ansi.italic(s),
+  quoteBorder: (s: string) => ansi.muted(s),
+  hr: (s: string) => ansi.muted(s),
+  listBullet: (s: string) => ansi.primary(s),
+  bold: (s: string) => ansi.bold(s),
+  italic: (s: string) => ansi.italic(s),
   strikethrough: (s: string) => `\x1b[9m${s}\x1b[0m`,
   underline: (s: string) => `\x1b[4m${s}\x1b[0m`,
 };
 
 const editorTheme: EditorTheme = {
-  borderColor: ansi.primary,
+  borderColor: (s: string) => ansi.primary(s),
   selectList: selectListTheme,
 };
 
-const settingsListTheme: SettingsListTheme = {
-  label: (text: string, selected: boolean) => selected ? ansi.bold(ansi.primary(text)) : text,
-  value: (text: string, selected: boolean) => selected ? ansi.secondary(text) : ansi.muted(text),
-  description: ansi.muted,
-  cursor: ansi.primary('>'),
-  hint: ansi.muted,
-};
+// Note: settingsListTheme is created dynamically to support theme switching
+function getSettingsListTheme(): SettingsListTheme {
+  return {
+    label: (text: string, selected: boolean) => selected ? ansi.bold(ansi.primary(text)) : text,
+    value: (text: string, selected: boolean) => selected ? ansi.secondary(text) : ansi.muted(text),
+    description: (s: string) => ansi.muted(s),
+    cursor: ansi.primary('>'),
+    hint: (s: string) => ansi.muted(s),
+  };
+}
 
 const imageTheme: ImageTheme = {
-  fallbackColor: ansi.muted,
+  fallbackColor: (s: string) => ansi.muted(s),
 };
 
 const slashCommands: SlashCommand[] = [
@@ -1222,7 +1226,7 @@ ${ansi.bold('Shortcuts:')}
     const settingsList = new SettingsList(
       items,
       Math.min(10, items.length + 2),
-      settingsListTheme,
+      getSettingsListTheme(),
       (id: string, newValue: string) => {
         // Handle setting changes
         if (id === 'debug') {
