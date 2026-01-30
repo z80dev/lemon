@@ -27,9 +27,11 @@ import {
   type SelectItem,
   type SlashCommand,
 } from '@mariozechner/pi-tui';
+import { execFile } from 'node:child_process';
 import { AgentConnection, type AgentConnectionOptions } from './agent-connection.js';
+import { loadConfigSync, saveConfigKey, type TUIConfig } from './config.js';
 import { StateStore, type AppState, type NormalizedMessage, type NormalizedAssistantMessage, type NormalizedToolResultMessage } from './state.js';
-import type { ServerMessage, UIRequestMessage, SelectParams, ConfirmParams, InputParams, EditorParams } from './types.js';
+import type { ServerMessage, UIRequestMessage, SelectParams, ConfirmParams, InputParams, EditorParams, SessionSummary } from './types.js';
 
 // ============================================================================
 // Theme
@@ -190,6 +192,8 @@ const slashCommands: SlashCommand[] = [
   { name: 'abort', description: 'Stop the current operation' },
   { name: 'reset', description: 'Clear conversation and reset session' },
   { name: 'save', description: 'Save the current session' },
+  { name: 'sessions', description: 'List saved sessions' },
+  { name: 'resume', description: 'Resume a saved session' },
   { name: 'stats', description: 'Show session statistics' },
   { name: 'search', description: 'Search for text in conversations' },
   { name: 'settings', description: 'Open settings' },
@@ -200,6 +204,90 @@ const slashCommands: SlashCommand[] = [
   { name: 'help', description: 'Show help message' },
 ];
 
+const MODELINE_PREFIXES = ['modeline:', 'modeline.'];
+const GIT_STATUS_TIMEOUT_MS = 2000;
+const GIT_REFRESH_INTERVAL_MS = 5000;
+
+async function getGitModeline(cwd: string): Promise<string | null> {
+  const output = await getGitStatusOutput(cwd);
+  if (!output) {
+    return null;
+  }
+
+  const lines = output.split(/\r?\n/);
+  let head: string | null = null;
+  let oid: string | null = null;
+  let ahead = 0;
+  let behind = 0;
+  let dirty = false;
+
+  for (const line of lines) {
+    if (!line) {
+      continue;
+    }
+    if (line.startsWith('# branch.head ')) {
+      head = line.slice('# branch.head '.length).trim();
+      continue;
+    }
+    if (line.startsWith('# branch.oid ')) {
+      oid = line.slice('# branch.oid '.length).trim();
+      continue;
+    }
+    if (line.startsWith('# branch.ab ')) {
+      const match = line.match(/\+(\d+)\s+-(\d+)/);
+      if (match) {
+        ahead = Number.parseInt(match[1] || '0', 10);
+        behind = Number.parseInt(match[2] || '0', 10);
+      }
+      continue;
+    }
+    if (!line.startsWith('#')) {
+      dirty = true;
+    }
+  }
+
+  if (!head && !oid) {
+    return null;
+  }
+
+  let branch = head;
+  if (branch === '(detached)' || branch === 'HEAD' || !branch) {
+    const shortOid = oid ? oid.slice(0, 7) : '';
+    branch = shortOid || 'detached';
+  }
+
+  let suffix = '';
+  if (ahead > 0) {
+    suffix += ` +${ahead}`;
+  }
+  if (behind > 0) {
+    suffix += ` -${behind}`;
+  }
+  if (dirty) {
+    suffix += ' *';
+  }
+
+  return `git: ${branch}${suffix}`;
+}
+
+function getGitStatusOutput(cwd: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(
+      'git',
+      ['status', '--porcelain=v2', '--branch'],
+      { cwd, timeout: GIT_STATUS_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
+      (err, stdout) => {
+        if (err) {
+          resolve(null);
+          return;
+        }
+        const trimmed = stdout.trim();
+        resolve(trimmed || null);
+      }
+    );
+  });
+}
+
 // ============================================================================
 // Main Application
 // ============================================================================
@@ -207,6 +295,7 @@ const slashCommands: SlashCommand[] = [
 class LemonTUI {
   private tui: TUI;
   private connection: AgentConnection;
+  private connectionOptions: AgentConnectionOptions;
   private store: StateStore;
 
   private header: Text;
@@ -215,6 +304,7 @@ class LemonTUI {
   private toolPanel: Container;
   private toolExecutionBar: Text;
   private statusBar: Text;
+  private modeline: Text;
   private inputEditor: Editor;
   private toolHint: Text;
   private loader: Loader | null = null;
@@ -223,9 +313,15 @@ class LemonTUI {
   private streamingComponent: Component | null = null;
   private currentOverlayRequestId: string | null = null;
   private toolPanelCollapsed = false;
+  private lastSessions: SessionSummary[] = [];
+  private processHandlersAttached = false;
+  private gitRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  private gitRefreshInFlight = false;
+  private gitCwd: string | null = null;
 
   constructor(options: AgentConnectionOptions = {}) {
     this.tui = new TUI(new ProcessTerminal());
+    this.connectionOptions = options;
     this.connection = new AgentConnection(options);
     this.store = new StateStore();
 
@@ -236,9 +332,15 @@ class LemonTUI {
     this.toolPanel = new Container();
     this.toolExecutionBar = new Text('', 1, 0);
     this.statusBar = new Text('', 1, 0);
+    this.modeline = new Text('', 1, 0);
     this.inputEditor = new Editor(this.tui, editorTheme);
     this.toolHint = new Text('', 1, 0);
     this.inputEditor.setAutocompleteProvider(new CombinedAutocompleteProvider(slashCommands, process.cwd()));
+
+    // Load saved config and apply settings
+    const savedConfig = loadConfigSync();
+    setTheme(savedConfig.theme);
+    this.store.setDebug(savedConfig.debug);
 
     this.setupUI();
     this.setupEventHandlers();
@@ -256,6 +358,7 @@ class LemonTUI {
     this.tui.addChild(this.toolExecutionBar);
     this.tui.addChild(this.messagesContainer);
     this.tui.addChild(this.statusBar);
+    this.tui.addChild(this.modeline);
     this.tui.addChild(this.inputEditor);
     this.tui.addChild(this.toolHint);
 
@@ -268,6 +371,7 @@ class LemonTUI {
         // Ignore input while agent is processing
         return;
       }
+      this.inputEditor.addToHistory?.(text);
       this.handleInput(text);
       this.inputEditor.setText('');
     };
@@ -307,14 +411,48 @@ class LemonTUI {
       this.store.setError(`Connection closed (code: ${code})`);
     });
 
-    // Handle Ctrl+C
-    process.on('SIGINT', () => {
-      if (this.store.getState().busy) {
-        this.connection.abort();
-      } else {
-        this.stop();
-      }
-    });
+    if (!this.processHandlersAttached) {
+      // Handle Ctrl+C
+      process.on('SIGINT', () => {
+        if (this.store.getState().busy) {
+          this.connection.abort();
+        } else {
+          this.stop();
+        }
+      });
+      this.processHandlersAttached = true;
+    }
+  }
+
+  private ensureGitModeline(): void {
+    if (this.gitRefreshTimer) {
+      return;
+    }
+    this.refreshGitModeline();
+    this.gitRefreshTimer = setInterval(() => {
+      this.refreshGitModeline();
+    }, GIT_REFRESH_INTERVAL_MS);
+  }
+
+  private async refreshGitModeline(): Promise<void> {
+    if (this.gitRefreshInFlight) {
+      return;
+    }
+    const cwd = this.store.getState().cwd || process.cwd();
+    if (!cwd) {
+      return;
+    }
+    if (this.gitCwd !== cwd) {
+      this.gitCwd = cwd;
+    }
+
+    this.gitRefreshInFlight = true;
+    try {
+      const modeline = await getGitModeline(cwd);
+      this.store.setStatus('modeline:git', modeline);
+    } finally {
+      this.gitRefreshInFlight = false;
+    }
   }
 
   private handleServerMessage(msg: ServerMessage): void {
@@ -359,6 +497,14 @@ class LemonTUI {
         this.handleUIWidget(msg.params as { key: string; content: string | string[] | null; opts?: Record<string, unknown> });
         break;
 
+      case 'save_result':
+        this.handleSaveResult(msg as { type: 'save_result'; ok: boolean; path?: string; error?: string });
+        break;
+
+      case 'sessions_list':
+        this.handleSessionsList(msg as { type: 'sessions_list'; sessions: SessionSummary[]; error?: string });
+        break;
+
       case 'debug':
         // Display debug messages when debug mode is enabled
         if (this.store.getState().debug) {
@@ -388,7 +534,7 @@ class LemonTUI {
     this.connection.prompt(trimmed);
   }
 
-  private handleCommand(cmd: string, _args: string[]): void {
+  private handleCommand(cmd: string, args: string[]): void {
     switch (cmd.toLowerCase()) {
       case 'abort':
         this.connection.abort();
@@ -404,12 +550,24 @@ class LemonTUI {
         this.connection.save();
         break;
 
+      case 'sessions':
+        this.connection.listSessions();
+        break;
+
+      case 'resume':
+        if (args.length > 0) {
+          this.resumeFromArg(args.join(' '));
+        } else {
+          this.connection.listSessions();
+        }
+        break;
+
       case 'stats':
         this.connection.stats();
         break;
 
       case 'search':
-        this.showSearchResults(_args.join(' '));
+        this.showSearchResults(args.join(' '));
         break;
 
       case 'settings':
@@ -418,7 +576,7 @@ class LemonTUI {
 
       case 'debug': {
         // Toggle or set debug mode
-        const arg = _args[0]?.toLowerCase();
+        const arg = args[0]?.toLowerCase();
         const state = this.store.getState();
         let newDebug: boolean;
         if (arg === 'on') {
@@ -456,6 +614,8 @@ class LemonTUI {
   /abort    - Stop the current operation
   /reset    - Clear conversation and reset session
   /save     - Save the current session
+  /sessions - List saved sessions
+  /resume   - Resume a saved session
   /stats    - Show session statistics
   /search   - Search for text in conversations
   /settings - Open settings
@@ -557,7 +717,7 @@ ${ansi.bold('Shortcuts:')}
 
     // UI status entries (from ui_status signals)
     for (const [key, value] of state.status) {
-      if (value) {
+      if (value && !this.isModelineKey(key)) {
         parts.push(ansi.secondary(`${key}: ${value}`));
       }
     }
@@ -587,6 +747,45 @@ ${ansi.bold('Shortcuts:')}
     }
 
     this.statusBar.setText(parts.length > 0 ? parts.join(' | ') : ' ');
+  }
+
+  private updateModeline(): void {
+    const state = this.store.getState();
+    const parts: string[] = [];
+
+    for (const [key, value] of state.status) {
+      if (!value) {
+        continue;
+      }
+      const formatted = this.formatModelineEntry(key, value);
+      if (formatted) {
+        parts.push(formatted);
+      }
+    }
+
+    this.modeline.setText(parts.length > 0 ? parts.join(' | ') : ' ');
+  }
+
+  private isModelineKey(key: string): boolean {
+    if (key === 'modeline') {
+      return true;
+    }
+    return MODELINE_PREFIXES.some((prefix) => key.startsWith(prefix));
+  }
+
+  private formatModelineEntry(key: string, value: string): string | null {
+    if (key === 'modeline') {
+      return ansi.secondary(value);
+    }
+    const prefix = MODELINE_PREFIXES.find((candidate) => key.startsWith(candidate));
+    if (!prefix) {
+      return null;
+    }
+    const label = key.slice(prefix.length).trim();
+    if (!label) {
+      return ansi.secondary(value);
+    }
+    return ansi.secondary(`${label}: ${value}`);
   }
 
   private formatTokenCount(count: number): string {
@@ -724,6 +923,7 @@ ${ansi.bold('Shortcuts:')}
 
     // Update status bar
     this.updateStatusBar();
+    this.updateModeline();
 
     // Update tool execution bar
     if (state.toolExecutions !== prevState.toolExecutions) {
@@ -752,6 +952,14 @@ ${ansi.bold('Shortcuts:')}
     // Update terminal title using pi-tui's terminal interface
     if (state.title !== prevState.title) {
       this.tui.terminal.setTitle(state.title);
+    }
+
+    if (state.ready && !prevState.ready) {
+      this.ensureGitModeline();
+    }
+
+    if (state.cwd !== prevState.cwd) {
+      this.refreshGitModeline();
     }
 
     // Handle pending UI request queue
@@ -1185,6 +1393,55 @@ ${ansi.bold('Shortcuts:')}
     }
   }
 
+  private showLocalSelectOverlay(
+    title: string,
+    items: SelectItem[],
+    onSelect: (item: SelectItem) => void
+  ): void {
+    if (this.overlayHandle) {
+      return;
+    }
+
+    const titleText = new Text(ansi.bold(title), 1, 0);
+    const selectList = new SelectList(items, Math.min(10, items.length), selectListTheme);
+
+    selectList.onSelect = (item: SelectItem) => {
+      onSelect(item);
+      this.hideLocalOverlay();
+    };
+
+    selectList.onCancel = () => {
+      this.hideLocalOverlay();
+    };
+
+    const container = new Container();
+    container.addChild(titleText);
+    container.addChild(selectList);
+
+    this.currentOverlayRequestId = '__local__';
+    this.overlayHandle = this.tui.showOverlay(container, {
+      width: '80%',
+      maxHeight: '60%',
+      anchor: 'center',
+    });
+    this.tui.setFocus(selectList);
+  }
+
+  private hideLocalOverlay(): void {
+    if (this.overlayHandle) {
+      this.overlayHandle.hide();
+      this.overlayHandle = null;
+    }
+    this.currentOverlayRequestId = null;
+
+    const currentRequest = this.store.getCurrentUIRequest();
+    if (currentRequest) {
+      this.showUIOverlay(currentRequest);
+    } else {
+      this.tui.setFocus(this.inputEditor);
+    }
+  }
+
   private showSettingsOverlay(): void {
     const state = this.store.getState();
 
@@ -1233,6 +1490,7 @@ ${ansi.bold('Shortcuts:')}
           const debugEnabled = newValue === 'On';
           this.store.setDebug(debugEnabled);
           settingsList.updateValue('debug', debugEnabled ? 'On' : 'Off');
+          saveConfigKey('debug', debugEnabled);  // Persist to config file
         } else if (id === 'theme') {
           // Convert display name back to theme key (lowercase)
           const themeName = newValue.toLowerCase();
@@ -1240,6 +1498,7 @@ ${ansi.bold('Shortcuts:')}
             settingsList.updateValue('theme', newValue);
             // Request a full re-render to apply the new theme
             this.tui.requestRender();
+            saveConfigKey('theme', themeName);  // Persist to config file
           }
         }
         // Other settings are info-only for now
@@ -1290,6 +1549,93 @@ ${ansi.bold('Shortcuts:')}
     this.store.setStatus(params.key, params.text);
   }
 
+  private handleSaveResult(msg: { ok: boolean; path?: string; error?: string }): void {
+    if (msg.ok && msg.path) {
+      this.handleUINotify({ message: `Saved session to ${msg.path}`, notify_type: 'success' });
+    } else if (msg.ok) {
+      this.handleUINotify({ message: 'Session saved', notify_type: 'success' });
+    } else {
+      this.handleUINotify({ message: `Save failed: ${msg.error || 'unknown error'}`, notify_type: 'error' });
+    }
+  }
+
+  private handleSessionsList(msg: { sessions: SessionSummary[]; error?: string }): void {
+    if (msg.error) {
+      this.handleUINotify({ message: `Failed to list sessions: ${msg.error}`, notify_type: 'error' });
+      return;
+    }
+
+    this.lastSessions = msg.sessions;
+
+    if (msg.sessions.length === 0) {
+      this.handleUINotify({ message: 'No saved sessions found', notify_type: 'info' });
+      return;
+    }
+
+    const items: SelectItem[] = msg.sessions.map((session) => {
+      const time = new Date(session.timestamp).toLocaleString();
+      return {
+        label: `${time} - ${session.id}`,
+        value: session.path,
+        description: session.cwd,
+      };
+    });
+
+    this.showLocalSelectOverlay('Resume session', items, (item) => {
+      this.resumeSession(item.value as string);
+    });
+  }
+
+  private resumeFromArg(arg: string): void {
+    const trimmed = arg.trim();
+    if (!trimmed) {
+      this.connection.listSessions();
+      return;
+    }
+
+    const match = this.lastSessions.find((session) => session.id === trimmed);
+    if (match) {
+      this.resumeSession(match.path);
+      return;
+    }
+
+    this.resumeSession(trimmed);
+  }
+
+  private async resumeSession(sessionFile: string): Promise<void> {
+    if (!sessionFile) {
+      return;
+    }
+
+    this.store.reset();
+    this.clearMessages();
+    this.toolPanelCollapsed = false;
+    this.updateToolHint();
+    this.toolPanel.clear();
+    this.toolExecutionBar.setText('');
+    this.widgetsContainer.clear();
+    this.statusBar.setText(' ');
+    this.modeline.setText(' ');
+    this.toolHint.setText('');
+    this.streamingComponent = null;
+
+    this.connection.removeAllListeners();
+    this.connection.stop();
+
+    this.connection = new AgentConnection({
+      ...this.connectionOptions,
+      sessionFile,
+    });
+    this.setupEventHandlers();
+
+    try {
+      await this.connection.start();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.store.setError(`Failed to resume session: ${message}`);
+    }
+  }
+
   // ============================================================================
   // Lifecycle
   // ============================================================================
@@ -1309,6 +1655,10 @@ ${ansi.bold('Shortcuts:')}
   stop(): void {
     if (this.loader) {
       this.loader.stop();
+    }
+    if (this.gitRefreshTimer) {
+      clearInterval(this.gitRefreshTimer);
+      this.gitRefreshTimer = null;
     }
     this.tui.stop();
     this.connection.stop();
@@ -1346,6 +1696,10 @@ function parseArgs(): AgentConnectionOptions {
         options.systemPrompt = args[++i];
         break;
 
+      case '--session-file':
+        options.sessionFile = args[++i];
+        break;
+
       case '--debug':
         options.debug = true;
         break;
@@ -1370,6 +1724,7 @@ Options:
   --model, -m <spec>     Model specification (provider:model_id)
   --base-url <url>       Base URL override for model provider
   --system-prompt <text> Custom system prompt
+  --session-file <path>  Resume session from file
   --debug                Enable debug mode
   --no-ui                Disable UI overlays
   --lemon-path <path>    Path to lemon project root
