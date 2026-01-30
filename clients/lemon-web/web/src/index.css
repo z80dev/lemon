@@ -1,0 +1,84 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap');
+
+:root {
+  --font-heading: 'Space Grotesk', sans-serif;
+  --font-body: 'IBM Plex Sans', sans-serif;
+  --font-mono: 'IBM Plex Mono', monospace;
+
+  --bg-start: #f7f4ef;
+  --bg-end: #efe8dd;
+  --surface: #ffffffcc;
+  --surface-strong: #ffffff;
+  --surface-contrast: #1f1f1f;
+  --accent: #8fdc3b;
+  --accent-strong: #145f60;
+  --accent-muted: #dff3c2;
+  --text: #1b1b1b;
+  --muted: #6b6b6b;
+  --danger: #c24a3d;
+  --warn: #f0a329;
+  --success: #4e9d5d;
+
+  --radius-lg: 20px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+
+  --shadow-soft: 0 20px 50px rgba(15, 15, 15, 0.1);
+  --shadow-card: 0 10px 30px rgba(15, 15, 15, 0.08);
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: var(--font-body);
+  color: var(--text);
+  background: radial-gradient(circle at top left, #ffffff 0%, transparent 35%),
+    linear-gradient(135deg, var(--bg-start) 0%, var(--bg-end) 100%);
+  background-attachment: fixed;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+a {
+  color: inherit;
+}
+
+button,
+input,
+textarea {
+  font-family: var(--font-body);
+}
+
+pre {
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-heading);
+  margin: 0;
+}
+
+p {
+  margin: 0 0 var(--space-2);
+}
+
+.muted {
+  color: var(--muted);
+}

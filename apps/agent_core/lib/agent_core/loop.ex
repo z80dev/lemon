@@ -92,20 +92,46 @@ defmodule AgentCore.Loop do
           AgentLoopConfig.stream_fn() | nil
         ) :: EventStream.t()
   def agent_loop(prompts, context, config, signal, stream_fn) do
-    {:ok, stream} = EventStream.start_link()
+    agent_loop(prompts, context, config, signal, stream_fn, nil)
+  end
 
-    # Run the loop in an async task
-    Task.start(fn ->
-      try do
-        run_agent_loop(prompts, context, config, signal, stream_fn, stream)
-      rescue
-        e ->
-          EventStream.error(stream, {:exception, Exception.message(e)}, nil)
-      catch
-        kind, value ->
-          EventStream.error(stream, {kind, value}, nil)
+  @spec agent_loop(
+          [AgentCore.Types.agent_message()],
+          AgentContext.t(),
+          AgentLoopConfig.t(),
+          reference() | nil,
+          AgentLoopConfig.stream_fn() | nil,
+          pid() | nil
+        ) :: EventStream.t()
+  def agent_loop(prompts, context, config, signal, stream_fn, owner) do
+    {:ok, stream} =
+      if owner do
+        EventStream.start_link(owner: owner, timeout: :infinity)
+      else
+        EventStream.start_link(timeout: :infinity)
       end
-    end)
+
+    # Run the loop in a supervised task
+    case Task.Supervisor.start_child(AgentCore.LoopTaskSupervisor, fn ->
+        try do
+          run_agent_loop(prompts, context, config, signal, stream_fn, stream)
+        rescue
+          e ->
+            EventStream.error(stream, {:exception, Exception.message(e)}, nil)
+        catch
+          kind, value ->
+            EventStream.error(stream, {kind, value}, nil)
+        end
+      end) do
+      {:ok, pid} ->
+        EventStream.attach_task(stream, pid)
+
+      {:ok, pid, _info} ->
+        EventStream.attach_task(stream, pid)
+
+      {:error, reason} ->
+        EventStream.error(stream, {:task_start_failed, reason}, nil)
+    end
 
     stream
   end
@@ -169,6 +195,17 @@ defmodule AgentCore.Loop do
           AgentLoopConfig.stream_fn() | nil
         ) :: EventStream.t()
   def agent_loop_continue(context, config, signal, stream_fn) do
+    agent_loop_continue(context, config, signal, stream_fn, nil)
+  end
+
+  @spec agent_loop_continue(
+          AgentContext.t(),
+          AgentLoopConfig.t(),
+          reference() | nil,
+          AgentLoopConfig.stream_fn() | nil,
+          pid() | nil
+        ) :: EventStream.t()
+  def agent_loop_continue(context, config, signal, stream_fn, owner) do
     # Validate context
     if context.messages == [] do
       raise ArgumentError, "Cannot continue: no messages in context"
@@ -180,19 +217,33 @@ defmodule AgentCore.Loop do
       raise ArgumentError, "Cannot continue from message role: assistant"
     end
 
-    {:ok, stream} = EventStream.start_link()
-
-    Task.start(fn ->
-      try do
-        run_continue_loop(context, config, signal, stream_fn, stream)
-      rescue
-        e ->
-          EventStream.error(stream, {:exception, Exception.message(e)}, nil)
-      catch
-        kind, value ->
-          EventStream.error(stream, {kind, value}, nil)
+    {:ok, stream} =
+      if owner do
+        EventStream.start_link(owner: owner, timeout: :infinity)
+      else
+        EventStream.start_link(timeout: :infinity)
       end
-    end)
+
+    case Task.Supervisor.start_child(AgentCore.LoopTaskSupervisor, fn ->
+        try do
+          run_continue_loop(context, config, signal, stream_fn, stream)
+        rescue
+          e ->
+            EventStream.error(stream, {:exception, Exception.message(e)}, nil)
+        catch
+          kind, value ->
+            EventStream.error(stream, {kind, value}, nil)
+        end
+      end) do
+      {:ok, pid} ->
+        EventStream.attach_task(stream, pid)
+
+      {:ok, pid, _info} ->
+        EventStream.attach_task(stream, pid)
+
+      {:error, reason} ->
+        EventStream.error(stream, {:task_start_failed, reason}, nil)
+    end
 
     stream
   end
@@ -228,6 +279,20 @@ defmodule AgentCore.Loop do
   # ============================================================================
 
   defp run_agent_loop(prompts, context, config, signal, stream_fn, stream) do
+    # Store start time for duration calculation in telemetry
+    Process.put(:agent_loop_start_time, System.monotonic_time())
+
+    :telemetry.execute(
+      [:agent_core, :loop, :start],
+      %{system_time: System.system_time()},
+      %{
+        prompt_count: length(prompts),
+        message_count: length(context.messages),
+        tool_count: length(context.tools),
+        model: get_model_id(config)
+      }
+    )
+
     new_messages = prompts
 
     current_context = %{
@@ -250,6 +315,20 @@ defmodule AgentCore.Loop do
   end
 
   defp run_continue_loop(context, config, signal, stream_fn, stream) do
+    # Store start time for duration calculation in telemetry
+    Process.put(:agent_loop_start_time, System.monotonic_time())
+
+    :telemetry.execute(
+      [:agent_core, :loop, :start],
+      %{system_time: System.system_time()},
+      %{
+        prompt_count: 0,
+        message_count: length(context.messages),
+        tool_count: length(context.tools),
+        model: get_model_id(config)
+      }
+    )
+
     new_messages = []
     current_context = context
 
@@ -296,11 +375,13 @@ defmodule AgentCore.Loop do
         do_run_loop(context, new_messages, config, signal, stream_fn, stream, follow_up_messages, false)
       else
         # No more messages, exit
+        emit_loop_end_telemetry(new_messages, config, :completed)
         EventStream.push(stream, {:agent_end, new_messages})
         EventStream.complete(stream, new_messages)
       end
     else
       # Inner loop signaled early exit (error/abort)
+      emit_loop_end_telemetry(new_messages, config, :early_exit)
       :ok
     end
   end
@@ -598,67 +679,189 @@ defmodule AgentCore.Loop do
   end
 
   defp execute_tool_calls(context, new_messages, tool_calls, config, signal, stream) do
-    do_execute_tool_calls(
-      context,
-      new_messages,
-      tool_calls,
-      0,
-      [],
-      nil,
-      config,
-      signal,
-      stream
-    )
+    {results, context, new_messages} =
+      execute_tool_calls_parallel(context, new_messages, tool_calls, signal, stream)
+
+    steering_messages = get_steering_messages(config)
+
+    {results, steering_messages, context, new_messages}
   end
 
-  defp do_execute_tool_calls(
-         context,
-         new_messages,
-         [],
-         _index,
-         results,
-         steering_messages,
-         _config,
-         _signal,
-         _stream
-       ) do
-    {Enum.reverse(results), steering_messages, context, new_messages}
+  defp execute_tool_calls_parallel(context, new_messages, tool_calls, signal, stream) do
+    parent = self()
+
+    {pending_by_ref, pending_by_mon} =
+      Enum.reduce(tool_calls, {%{}, %{}}, fn tool_call, {by_ref, by_mon} ->
+        tool = find_tool(context.tools, tool_call.name)
+
+        EventStream.push(stream, {:tool_execution_start, tool_call.id, tool_call.name, tool_call.arguments})
+
+        ref = make_ref()
+
+        # Emit telemetry for tool task start
+        :telemetry.execute(
+          [:agent_core, :tool_task, :start],
+          %{system_time: System.system_time()},
+          %{tool_name: tool_call.name, tool_call_id: tool_call.id}
+        )
+
+        {:ok, pid} =
+          Task.Supervisor.start_child(AgentCore.ToolTaskSupervisor, fn ->
+            {result, is_error} = execute_tool_call(tool, tool_call, signal, stream)
+            send(parent, {:tool_task_result, ref, tool_call, result, is_error})
+          end)
+
+        mon_ref = Process.monitor(pid)
+
+        {
+          Map.put(by_ref, ref, %{tool_call: tool_call, mon_ref: mon_ref, pid: pid}),
+          Map.put(by_mon, mon_ref, ref)
+        }
+      end)
+
+    collect_parallel_tool_results(context, new_messages, pending_by_ref, pending_by_mon, [], stream, signal)
   end
 
-  defp do_execute_tool_calls(
+  defp collect_parallel_tool_results(
          context,
          new_messages,
-         [tool_call | remaining],
-         index,
+         pending_by_ref,
+         pending_by_mon,
          results,
-         steering_messages,
-         config,
-         signal,
-         stream
+         stream,
+         signal
        ) do
-    # Find the tool
-    tool = find_tool(context.tools, tool_call.name)
+    if map_size(pending_by_ref) == 0 do
+      {Enum.reverse(results), context, new_messages}
+    else
+      # Check for abort before waiting
+      if aborted?(signal) do
+        # Terminate all pending tool tasks on abort
+        Enum.each(pending_by_ref, fn {_ref, %{mon_ref: mon_ref, pid: pid, tool_call: tool_call}} ->
+          Task.Supervisor.terminate_child(AgentCore.ToolTaskSupervisor, pid)
+          Process.demonitor(mon_ref, [:flush])
 
-    EventStream.push(stream, {:tool_execution_start, tool_call.id, tool_call.name, tool_call.arguments})
+          :telemetry.execute(
+            [:agent_core, :tool_task, :error],
+            %{system_time: System.system_time()},
+            %{tool_name: tool_call.name, tool_call_id: tool_call.id, reason: :aborted}
+          )
+        end)
 
-    # Execute tool or handle missing tool
-    {result, is_error} =
-      case tool do
-        nil ->
-          error_result = %AgentToolResult{
-            content: [%TextContent{type: :text, text: "Tool #{tool_call.name} not found"}],
-            details: nil
-          }
+        # Return aborted results for remaining tool calls
+        {aborted_results, context, new_messages} =
+          Enum.reduce(pending_by_ref, {results, context, new_messages}, fn {_ref, %{tool_call: tool_call}}, {acc_results, acc_ctx, acc_msgs} ->
+            aborted_result = error_to_result("Tool execution aborted")
 
-          {error_result, true}
+            {acc_ctx, acc_msgs, acc_results} =
+              emit_tool_result(tool_call, aborted_result, true, acc_ctx, acc_msgs, acc_results, stream)
 
-        tool ->
-          execute_single_tool(tool, tool_call, signal, stream)
+            {acc_results, acc_ctx, acc_msgs}
+          end)
+
+        {Enum.reverse(aborted_results), context, new_messages}
+      else
+        receive do
+          {:tool_task_result, ref, tool_call, result, is_error} ->
+            {pending_by_ref, pending_by_mon} = drop_pending_task(pending_by_ref, pending_by_mon, ref)
+
+            # Emit telemetry for tool task end
+            :telemetry.execute(
+              [:agent_core, :tool_task, :end],
+              %{system_time: System.system_time()},
+              %{tool_name: tool_call.name, tool_call_id: tool_call.id, is_error: is_error}
+            )
+
+            {context, new_messages, results} =
+              emit_tool_result(tool_call, result, is_error, context, new_messages, results, stream)
+
+            collect_parallel_tool_results(
+              context,
+              new_messages,
+              pending_by_ref,
+              pending_by_mon,
+              results,
+              stream,
+              signal
+            )
+
+          {:DOWN, mon_ref, :process, _pid, reason} ->
+            case Map.get(pending_by_mon, mon_ref) do
+              nil ->
+                collect_parallel_tool_results(
+                  context,
+                  new_messages,
+                  pending_by_ref,
+                  pending_by_mon,
+                  results,
+                  stream,
+                  signal
+                )
+
+              ref ->
+                %{tool_call: tool_call} = Map.fetch!(pending_by_ref, ref)
+                {pending_by_ref, pending_by_mon} = drop_pending_task(pending_by_ref, pending_by_mon, ref)
+
+                # Emit telemetry for tool task error (crash)
+                :telemetry.execute(
+                  [:agent_core, :tool_task, :error],
+                  %{system_time: System.system_time()},
+                  %{tool_name: tool_call.name, tool_call_id: tool_call.id, reason: reason}
+                )
+
+                {context, new_messages, results} =
+                  emit_tool_result(
+                    tool_call,
+                    error_to_result("Tool task crashed: #{inspect(reason)}"),
+                    true,
+                    context,
+                    new_messages,
+                    results,
+                    stream
+                  )
+
+                collect_parallel_tool_results(
+                  context,
+                  new_messages,
+                  pending_by_ref,
+                  pending_by_mon,
+                  results,
+                  stream,
+                  signal
+                )
+            end
+        after
+          100 ->
+            # Periodically check for abort
+            collect_parallel_tool_results(
+              context,
+              new_messages,
+              pending_by_ref,
+              pending_by_mon,
+              results,
+              stream,
+              signal
+            )
+        end
       end
+    end
+  end
 
+  defp drop_pending_task(pending_by_ref, pending_by_mon, ref) do
+    case Map.pop(pending_by_ref, ref) do
+      {nil, pending_by_ref} ->
+        {pending_by_ref, pending_by_mon}
+
+      {%{mon_ref: mon_ref}, pending_by_ref} ->
+        Process.demonitor(mon_ref, [:flush])
+        pending_by_mon = Map.delete(pending_by_mon, mon_ref)
+        {pending_by_ref, pending_by_mon}
+    end
+  end
+
+  defp emit_tool_result(tool_call, result, is_error, context, new_messages, results, stream) do
     EventStream.push(stream, {:tool_execution_end, tool_call.id, tool_call.name, result, is_error})
 
-    # Create tool result message
     tool_result_message = %ToolResultMessage{
       role: :tool_result,
       tool_call_id: tool_call.id,
@@ -669,7 +872,6 @@ defmodule AgentCore.Loop do
       timestamp: System.system_time(:millisecond)
     }
 
-    # Add to context and new_messages
     context = %{context | messages: context.messages ++ [tool_result_message]}
     new_messages = new_messages ++ [tool_result_message]
     results = [tool_result_message | results]
@@ -677,28 +879,20 @@ defmodule AgentCore.Loop do
     EventStream.push(stream, {:message_start, tool_result_message})
     EventStream.push(stream, {:message_end, tool_result_message})
 
-    # Check for steering messages - skip remaining tools if user interrupted
-    case get_steering_messages(config) do
-      messages when is_list(messages) and messages != [] ->
-        # Skip remaining tool calls
-        {skipped_results, context, new_messages} =
-          skip_remaining_tools(context, new_messages, remaining, stream)
+    {context, new_messages, results}
+  end
 
-        {Enum.reverse(results) ++ skipped_results, messages, context, new_messages}
+  defp execute_tool_call(nil, tool_call, _signal, _stream) do
+    error_result = %AgentToolResult{
+      content: [%TextContent{type: :text, text: "Tool #{tool_call.name} not found"}],
+      details: nil
+    }
 
-      _ ->
-        do_execute_tool_calls(
-          context,
-          new_messages,
-          remaining,
-          index + 1,
-          results,
-          steering_messages,
-          config,
-          signal,
-          stream
-        )
-    end
+    {error_result, true}
+  end
+
+  defp execute_tool_call(tool, tool_call, signal, stream) do
+    execute_single_tool(tool, tool_call, signal, stream)
   end
 
   defp execute_single_tool(tool, tool_call, signal, stream) do
@@ -959,4 +1153,26 @@ defmodule AgentCore.Loop do
   end
 
   defp copy_message(msg), do: msg
+
+  # ============================================================================
+  # Private: Telemetry Helpers
+  # ============================================================================
+
+  defp emit_loop_end_telemetry(new_messages, config, status) do
+    start_time = Process.get(:agent_loop_start_time)
+    duration = if start_time, do: System.monotonic_time() - start_time, else: nil
+
+    :telemetry.execute(
+      [:agent_core, :loop, :end],
+      %{duration: duration, system_time: System.system_time()},
+      %{
+        message_count: length(new_messages),
+        model: get_model_id(config),
+        status: status
+      }
+    )
+  end
+
+  defp get_model_id(%AgentLoopConfig{model: nil}), do: nil
+  defp get_model_id(%AgentLoopConfig{model: model}), do: Map.get(model, :id)
 end

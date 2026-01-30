@@ -428,7 +428,7 @@ defmodule AgentCore.LoopTest do
       assert error_text =~ "not found"
     end
 
-    test "executes multiple tool calls in sequence" do
+    test "executes multiple tool calls in parallel" do
       add_tool = Mocks.add_tool()
       context = simple_context(tools: [add_tool])
 
@@ -513,7 +513,7 @@ defmodule AgentCore.LoopTest do
       assert length(events) > 0
     end
 
-    test "skips remaining tool calls when steering messages arrive" do
+    test "does not skip tool calls when steering messages arrive" do
       echo_tool = Mocks.echo_tool()
       context = simple_context(tools: [echo_tool])
 
@@ -541,19 +541,12 @@ defmodule AgentCore.LoopTest do
 
       events = Loop.stream([user_message("Run tools")], context, config) |> Enum.to_list()
 
-      skipped =
-        Enum.find(events, fn
-          {:tool_execution_end, "call_2", _, result, true} ->
-            case result.content do
-              [%TextContent{text: text}] -> String.contains?(text, "Skipped due to queued user message.")
-              _ -> false
-            end
-
-          _ ->
-            false
+      tool_ends =
+        Enum.filter(events, fn e ->
+          match?({:tool_execution_end, _, _, _, _}, e)
         end)
 
-      assert skipped != nil
+      assert length(tool_ends) == 2
     end
   end
 

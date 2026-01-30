@@ -23,7 +23,7 @@ defmodule CodingAgent do
       # Send a prompt
       :ok = CodingAgent.Session.prompt(session, "Read the mix.exs file")
 
-      # Events will be sent as {:session_event, event} messages
+      # Events will be sent as {:session_event, session_id, event} messages
 
   ## Architecture
 
@@ -43,7 +43,9 @@ defmodule CodingAgent do
   @doc """
   Start a new coding session.
 
-  This is a convenience wrapper around `CodingAgent.Session.start_link/1`.
+  When the `:coding_agent` application is running, the session is started under
+  `CodingAgent.SessionSupervisor` so it is independent from the caller. If the
+  supervisor is not running, this falls back to `CodingAgent.Session.start_link/1`.
 
   ## Options
 
@@ -62,8 +64,32 @@ defmodule CodingAgent do
   """
   @spec start_session(keyword()) :: {:ok, pid()} | {:error, term()}
   def start_session(opts) do
-    CodingAgent.Session.start_link(opts)
+    if Process.whereis(CodingAgent.SessionSupervisor) do
+      CodingAgent.SessionSupervisor.start_session(opts)
+    else
+      CodingAgent.Session.start_link(opts)
+    end
   end
+
+  @doc """
+  Start a new coding session under the `CodingAgent.SessionSupervisor`.
+
+  Returns `{:error, :not_started}` if the supervisor is not running.
+  """
+  @spec start_supervised_session(keyword()) :: {:ok, pid()} | {:error, term()}
+  def start_supervised_session(opts) do
+    if Process.whereis(CodingAgent.SessionSupervisor) do
+      CodingAgent.SessionSupervisor.start_session(opts)
+    else
+      {:error, :not_started}
+    end
+  end
+
+  @doc """
+  Look up a supervised session by session ID.
+  """
+  @spec lookup_session(String.t()) :: {:ok, pid()} | :error
+  defdelegate lookup_session(session_id), to: CodingAgent.SessionRegistry, as: :lookup
 
   @doc """
   Get the default coding tools for a working directory.

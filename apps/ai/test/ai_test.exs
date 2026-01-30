@@ -312,6 +312,34 @@ defmodule AiTest do
     end
   end
 
+  describe "dispatcher integration" do
+    test "returns rate_limited when dispatcher blocks the request" do
+      ProviderRegistry.register(:stream_timeout_test, StreamTimeoutProvider)
+      on_exit(fn -> ProviderRegistry.unregister(:stream_timeout_test) end)
+
+      provider = :rate_limit_test
+
+      start_supervised!({Ai.RateLimiter, provider: provider, tokens_per_second: 0, max_tokens: 1})
+      start_supervised!({Ai.CircuitBreaker, provider: provider, failure_threshold: 5})
+
+      # Consume the single token so the next request is rate-limited.
+      assert :ok = Ai.RateLimiter.acquire(provider)
+
+      model = %Model{
+        id: "test",
+        name: "Test",
+        api: :stream_timeout_test,
+        provider: provider,
+        base_url: "https://example.com"
+      }
+
+      context = Context.new()
+
+      assert {:error, :rate_limited} = Ai.stream(model, context)
+      refute_receive {:received_opts, _opts}
+    end
+  end
+
   describe "unknown api handling" do
     test "returns unknown_api error for unregistered providers" do
       model = %Model{

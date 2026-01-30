@@ -1,0 +1,22 @@
+{
+  "name": "@lemon-web/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsup src/index.ts --format esm --clean",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lemon-web/shared": "file:../shared",
+    "ws": "^8.17.1"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0"
+  }
+}

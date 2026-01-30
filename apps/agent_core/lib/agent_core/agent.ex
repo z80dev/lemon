@@ -808,9 +808,9 @@ defmodule AgentCore.Agent do
     # Build config for the loop
     config = build_loop_config(state, abort_ref, agent_pid)
 
-    # Spawn the task to run the loop
+    # Spawn a supervised task to run the loop
     task =
-      Task.async(fn ->
+      Task.Supervisor.async_nolink(AgentCore.LoopTaskSupervisor, fn ->
         run_agent_loop(messages, context, config, abort_ref, agent_pid, state.stream_fn)
       end)
 
@@ -859,9 +859,9 @@ defmodule AgentCore.Agent do
       # Get the event stream from AgentCore.Loop with abort signal
       event_stream =
         if messages do
-          AgentCore.Loop.agent_loop(messages, context, config, abort_ref, stream_fn)
+          AgentCore.Loop.agent_loop(messages, context, config, abort_ref, stream_fn, agent_pid)
         else
-          AgentCore.Loop.agent_loop_continue(context, config, abort_ref, stream_fn)
+          AgentCore.Loop.agent_loop_continue(context, config, abort_ref, stream_fn, agent_pid)
         end
 
       # Consume the stream and forward events
@@ -935,9 +935,9 @@ defmodule AgentCore.Agent do
     %Ai.Types.AssistantMessage{
       role: :assistant,
       content: [%Ai.Types.TextContent{type: :text, text: ""}],
-      api: model[:api],
-      provider: model[:provider],
-      model: model[:id] || "",
+      api: Map.get(model, :api),
+      provider: Map.get(model, :provider),
+      model: Map.get(model, :id, ""),
       usage: %Ai.Types.Usage{
         input: 0,
         output: 0,

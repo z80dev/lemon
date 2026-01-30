@@ -212,7 +212,8 @@ defmodule CodingAgent.SessionTest do
     test "fails without model" do
       # Model is resolved from settings; if not in settings, it raises ArgumentError
       Process.flag(:trap_exit, true)
-      result = Session.start_link(cwd: System.tmp_dir!())
+      settings = %SettingsManager{default_model: nil}
+      result = Session.start_link(cwd: System.tmp_dir!(), settings_manager: settings)
 
       case result do
         {:error, _reason} ->
@@ -283,8 +284,8 @@ defmodule CodingAgent.SessionTest do
       session = start_session()
       state = Session.get_state(session)
 
-      # Default tools are read, write, edit, bash
-      assert length(state.tools) == 4
+      # Default tools include read/write/edit/bash (extensions may add more)
+      assert length(state.tools) >= 4
       tool_names = Enum.map(state.tools, & &1.name)
       assert "read" in tool_names
       assert "write" in tool_names
@@ -426,7 +427,7 @@ defmodule CodingAgent.SessionTest do
       :ok = Session.prompt(session, "Hello!")
 
       # Should receive at least one event
-      assert_receive {:session_event, _event}, 1000
+      assert_receive {:session_event, _session_id, _event}, 1000
     end
 
     test "multiple subscribers receive events" do
@@ -443,7 +444,7 @@ defmodule CodingAgent.SessionTest do
         send(parent, :subscribed)
 
         receive do
-          {:session_event, event} ->
+          {:session_event, _session_id, event} ->
             send(parent, {:other_received, event})
         after
           1000 -> send(parent, :timeout)
@@ -456,7 +457,7 @@ defmodule CodingAgent.SessionTest do
       :ok = Session.prompt(session, "Hello!")
 
       # Both should receive events
-      assert_receive {:session_event, _event}, 1000
+      assert_receive {:session_event, _session_id, _event}, 1000
       assert_receive {:other_received, _event}, 1000
     end
   end
@@ -547,7 +548,7 @@ defmodule CodingAgent.SessionTest do
       :ok = Session.prompt(session, "Hello!")
 
       # Should not receive events
-      refute_receive {:session_event, _event}, 100
+      refute_receive {:session_event, _session_id, _event}, 100
     end
 
     test "dead subscribers are cleaned up" do
@@ -1176,6 +1177,89 @@ defmodule CodingAgent.SessionTest do
 
       CodingAgent.Test.MockUI.clear_global_tracker()
       CodingAgent.Test.MockUI.stop_tracker(tracker)
+    end
+  end
+
+  # ============================================================================
+  # Main Agent Registry Tests
+  # ============================================================================
+
+  describe "main agent registration" do
+    test "main agent is registered in AgentRegistry on session start" do
+      session = start_session()
+      state = Session.get_state(session)
+      session_id = state.session_manager.header.id
+
+      # Verify main agent is registered with key {session_id, :main, 0}
+      assert {:ok, pid} = AgentCore.AgentRegistry.lookup({session_id, :main, 0})
+      assert is_pid(pid)
+      assert Process.alive?(pid)
+    end
+
+    test "main agent is unregistered when session stops" do
+      session = start_session()
+      state = Session.get_state(session)
+      session_id = state.session_manager.header.id
+
+      # Verify registered and get the agent pid
+      assert {:ok, agent_pid} = AgentCore.AgentRegistry.lookup({session_id, :main, 0})
+
+      # Monitor the agent so we can wait for it to exit
+      ref = Process.monitor(agent_pid)
+
+      # Stop session
+      GenServer.stop(session)
+
+      # Wait for the agent process to actually exit
+      assert_receive {:DOWN, ^ref, :process, ^agent_pid, _reason}, 1000
+
+      # Give the registry a moment to clean up
+      Process.sleep(10)
+
+      # Verify unregistered
+      assert :error = AgentCore.AgentRegistry.lookup({session_id, :main, 0})
+    end
+
+    test "list_by_session includes main agent" do
+      session = start_session()
+      state = Session.get_state(session)
+      session_id = state.session_manager.header.id
+
+      agents = AgentCore.AgentRegistry.list_by_session(session_id)
+
+      # Should have at least the main agent
+      assert length(agents) >= 1
+      assert Enum.any?(agents, fn {role, _index, _pid} -> role == :main end)
+    end
+
+    test "multiple sessions have separate main agents in registry" do
+      session1 = start_session()
+      session2 = start_session()
+
+      state1 = Session.get_state(session1)
+      state2 = Session.get_state(session2)
+
+      session_id1 = state1.session_manager.header.id
+      session_id2 = state2.session_manager.header.id
+
+      # Verify both sessions have their own main agent
+      assert {:ok, pid1} = AgentCore.AgentRegistry.lookup({session_id1, :main, 0})
+      assert {:ok, pid2} = AgentCore.AgentRegistry.lookup({session_id2, :main, 0})
+
+      # PIDs should be different
+      assert pid1 != pid2
+    end
+
+    test "main agent can be looked up by session id" do
+      session = start_session()
+      state = Session.get_state(session)
+      session_id = state.session_manager.header.id
+
+      # Find the main agent through the registry
+      {:ok, agent_pid} = AgentCore.AgentRegistry.lookup({session_id, :main, 0})
+
+      # Verify it's the same agent as in the session state
+      assert agent_pid == state.agent
     end
   end
 end

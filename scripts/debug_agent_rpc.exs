@@ -6,6 +6,30 @@ Application.ensure_all_started(:coding_agent_ui)
 
 
 defmodule DebugAgentRPC do
+  @moduledoc """
+  JSON-line RPC server for Lemon TUI with multi-session support.
+
+  Maintains a session manager state that tracks:
+  - sessions: %{session_id => pid}
+  - pid_to_session: %{pid => session_id}
+  - forwarders: %{session_id => pid}
+  - active_session_id: the default session for commands without session_id
+  - primary_session_id: optional session started at boot (for backwards compat)
+  """
+
+  defstruct [
+    :cwd,
+    :model,
+    :settings,
+    :ui_context,
+    :debug,
+    sessions: %{},
+    pid_to_session: %{},
+    forwarders: %{},
+    active_session_id: nil,
+    primary_session_id: nil
+  ]
+
   def run(args) do
     {opts, _rest, _invalid} =
       OptionParser.parse(args,
@@ -45,156 +69,563 @@ defmodule DebugAgentRPC do
         nil
       end
 
-    {:ok, session} =
-      CodingAgent.Session.start_link(
-        cwd: cwd,
-        model: model,
-        system_prompt: opts[:system_prompt],
-        session_file: opts[:session_file],
-        ui_context: ui_context
-      )
-
-    _unsub = CodingAgent.Session.subscribe(session)
+    # Initialize state (no sessions at startup)
+    state = %__MODULE__{
+      cwd: cwd,
+      model: model,
+      settings: settings,
+      ui_context: ui_context,
+      debug: debug_enabled,
+      sessions: %{},
+      pid_to_session: %{},
+      forwarders: %{},
+      active_session_id: nil,
+      primary_session_id: nil
+    }
 
     send_json(%{
       type: "ready",
       cwd: cwd,
       model: %{provider: model.provider, id: model.id},
       debug: debug_enabled,
-      ui: ui_enabled
+      ui: ui_enabled,
+      primary_session_id: nil,
+      active_session_id: nil
     })
-    debug_log("ready_sent", %{cwd: cwd})
+    debug_log("ready_sent", %{cwd: cwd, primary_session_id: nil})
 
     parent = self()
     Task.start(fn -> read_input_loop(parent) end)
     if Process.get(:debug, false) do
       send_json(%{type: "debug", message: "debug mode enabled", argv: System.argv()})
     end
-    loop(session, cwd)
+
+    loop(state)
   end
 
-  defp loop(session, cwd) do
+  defp loop(state) do
     receive do
-      {:session_event, event} ->
-        debug_log("session_event", %{type: event_type(event)})
-        send_json(%{type: "event", event: encode_event(event)})
-        loop(session, cwd)
+      {:session_event, session_id, event} ->
+        debug_log("session_event", %{type: event_type(event), session_id: session_id})
+        send_json(%{type: "event", session_id: session_id, event: encode_event(event)})
+        loop(state)
 
       {:stdin, :eof} ->
         send_json(%{type: "error", message: "stdin closed"})
         :ok
 
       {:stdin, line} ->
-        case handle_line(session, cwd, line) do
-          :quit ->
+        case handle_line(state, line) do
+          {:quit, _state} ->
             send_json(%{type: "event", event: %{type: "quit"}})
             :ok
 
-          :ok ->
-            loop(session, cwd)
+          {:ok, new_state} ->
+            loop(new_state)
         end
 
-      {:debug_stats, _ref} ->
-        stats = CodingAgent.Session.get_stats(session)
-        send_json(%{type: "stats", stats: stats})
-        loop(session, cwd)
+      {:debug_stats, _ref, session_id} ->
+        case get_session_pid(state, session_id) do
+          {:ok, pid} ->
+            stats = CodingAgent.Session.get_stats(pid)
+            send_json(%{type: "stats", session_id: session_id, stats: stats})
 
+          :error ->
+            :ok
+        end
+        loop(state)
+
+      {:DOWN, _ref, :process, pid, reason} ->
+        # A session process died
+        case Map.get(state.pid_to_session, pid) do
+          nil ->
+            loop(state)
+
+          session_id ->
+            debug_log("session_down", %{session_id: session_id, reason: inspect(reason)})
+
+            reason_str = if reason == :normal, do: "normal", else: "error"
+            send_json(%{type: "session_closed", session_id: session_id, reason: reason_str})
+
+            # Remove from state
+            forwarder_pid = Map.get(state.forwarders, session_id)
+            if is_pid(forwarder_pid) and Process.alive?(forwarder_pid) do
+              send(forwarder_pid, :stop_forwarder)
+            end
+
+            new_sessions = Map.delete(state.sessions, session_id)
+            new_pid_to_session = Map.delete(state.pid_to_session, pid)
+            new_forwarders = Map.delete(state.forwarders, session_id)
+
+            new_active =
+              if state.active_session_id == session_id do
+                nil
+              else
+                state.active_session_id
+              end
+
+            new_state = %{
+              state
+              | sessions: new_sessions,
+                pid_to_session: new_pid_to_session,
+                forwarders: new_forwarders,
+                active_session_id: new_active
+            }
+
+            if new_active != state.active_session_id do
+              send_json(%{type: "active_session", session_id: new_active})
+            end
+
+            loop(new_state)
+        end
     end
   end
 
-  defp handle_line(session, cwd, line) when is_binary(line) do
+  defp handle_line(state, line) when is_binary(line) do
     trimmed = String.trim(line)
 
     if trimmed == "" do
-      :ok
+      {:ok, state}
     else
       debug_log("stdin", %{line: trimmed})
 
       case Jason.decode(trimmed) do
-        {:ok, %{"type" => "prompt", "text" => text}} ->
-          result = CodingAgent.Session.prompt(session, text)
-          debug_log("prompt", %{text: text, result: result})
-
-          case result do
-            :ok ->
-              schedule_stats()
-              :ok
-
-            {:error, reason} ->
-              send_json(%{type: "error", message: inspect(reason)})
-              :ok
-          end
-
-          :ok
-
-        {:ok, %{"type" => "stats"}} ->
-          stats = CodingAgent.Session.get_stats(session)
-          send_json(%{type: "stats", stats: stats})
-          :ok
-
-        {:ok, %{"type" => "ping"}} ->
-          send_json(%{type: "pong"})
-          :ok
-
-        {:ok, %{"type" => "debug"}} ->
-          send_json(%{type: "debug", message: "debug command received"})
-          :ok
-
-        {:ok, %{"type" => "abort"}} ->
-          CodingAgent.Session.abort(session)
-          :ok
-
-        {:ok, %{"type" => "reset"}} ->
-          _ = CodingAgent.Session.reset(session)
-          :ok
-
-        {:ok, %{"type" => "save"}} ->
-          case CodingAgent.Session.save(session) do
-            :ok ->
-              state = CodingAgent.Session.get_state(session)
-              send_json(%{type: "save_result", ok: true, path: state.session_file})
-
-            {:error, reason} ->
-              send_json(%{type: "save_result", ok: false, error: inspect(reason)})
-          end
-          :ok
-
-        {:ok, %{"type" => "list_sessions"}} ->
-          case CodingAgent.SessionManager.list_sessions(cwd) do
-            {:ok, sessions} ->
-              send_json(%{type: "sessions_list", sessions: sessions})
-
-            {:error, reason} ->
-              send_json(%{type: "sessions_list", sessions: [], error: inspect(reason)})
-          end
-          :ok
-
-        {:ok, %{"type" => "quit"}} ->
-          :quit
-
-        {:ok, %{"type" => "ui_response"} = response} ->
-          # Route ui_response to the DebugRPC UI adapter
-          if Process.whereis(CodingAgent.UI.DebugRPC) do
-            CodingAgent.UI.DebugRPC.handle_response(response)
-          else
-            debug_log("ui_response ignored", %{reason: "UI not enabled"})
-          end
-          :ok
-
-        {:ok, _other} ->
-          send_json(%{type: "error", message: "unknown command"})
-          :ok
+        {:ok, cmd} ->
+          handle_command(state, cmd)
 
         {:error, _} ->
-          case CodingAgent.Session.prompt(session, trimmed) do
-            :ok -> :ok
-            {:error, reason} -> send_json(%{type: "error", message: inspect(reason)})
-          end
+          # Fallback: treat as plain text prompt to active session
+          case get_active_session(state) do
+            {:ok, pid, session_id} ->
+              case CodingAgent.Session.prompt(pid, trimmed) do
+                :ok ->
+                  schedule_stats(session_id)
+                  {:ok, state}
 
-          :ok
+                {:error, reason} ->
+                  send_json(%{type: "error", message: inspect(reason), session_id: session_id})
+                  {:ok, state}
+              end
+
+            :error ->
+              send_json(%{type: "error", message: "no active session"})
+              {:ok, state}
+          end
       end
     end
   end
+
+  # ============================================================================
+  # Command Handlers
+  # ============================================================================
+
+  defp handle_command(state, %{"type" => "prompt", "text" => text} = cmd) do
+    session_id = cmd["session_id"]
+
+    case resolve_session(state, session_id) do
+      {:ok, pid, resolved_id} ->
+        result = CodingAgent.Session.prompt(pid, text)
+        debug_log("prompt", %{text: text, session_id: resolved_id, result: result})
+
+        case result do
+          :ok ->
+            schedule_stats(resolved_id)
+            {:ok, state}
+
+          {:error, reason} ->
+            send_json(%{type: "error", message: inspect(reason), session_id: resolved_id})
+            {:ok, state}
+        end
+
+      :error ->
+        send_not_found_error(session_id)
+        {:ok, state}
+    end
+  end
+
+  defp handle_command(state, %{"type" => "stats"} = cmd) do
+    session_id = cmd["session_id"]
+
+    case resolve_session(state, session_id) do
+      {:ok, pid, resolved_id} ->
+        stats = CodingAgent.Session.get_stats(pid)
+        send_json(%{type: "stats", session_id: resolved_id, stats: stats})
+
+      :error ->
+        send_not_found_error(session_id)
+    end
+
+    {:ok, state}
+  end
+
+  defp handle_command(state, %{"type" => "ping"}) do
+    send_json(%{type: "pong"})
+    {:ok, state}
+  end
+
+  defp handle_command(state, %{"type" => "debug"}) do
+    send_json(%{type: "debug", message: "debug command received"})
+    {:ok, state}
+  end
+
+  defp handle_command(state, %{"type" => "abort"} = cmd) do
+    session_id = cmd["session_id"]
+
+    case resolve_session(state, session_id) do
+      {:ok, pid, _resolved_id} ->
+        CodingAgent.Session.abort(pid)
+
+      :error ->
+        send_not_found_error(session_id)
+    end
+
+    {:ok, state}
+  end
+
+  defp handle_command(state, %{"type" => "reset"} = cmd) do
+    session_id = cmd["session_id"]
+
+    case resolve_session(state, session_id) do
+      {:ok, pid, _resolved_id} ->
+        _ = CodingAgent.Session.reset(pid)
+
+      :error ->
+        send_not_found_error(session_id)
+    end
+
+    {:ok, state}
+  end
+
+  defp handle_command(state, %{"type" => "save"} = cmd) do
+    session_id = cmd["session_id"]
+
+    case resolve_session(state, session_id) do
+      {:ok, pid, resolved_id} ->
+        case CodingAgent.Session.save(pid) do
+          :ok ->
+            sess_state = CodingAgent.Session.get_state(pid)
+            send_json(%{type: "save_result", ok: true, path: sess_state.session_file, session_id: resolved_id})
+
+          {:error, reason} ->
+            send_json(%{type: "save_result", ok: false, error: inspect(reason), session_id: resolved_id})
+        end
+
+      :error ->
+        send_not_found_error(session_id)
+    end
+
+    {:ok, state}
+  end
+
+  defp handle_command(state, %{"type" => "list_sessions"}) do
+    # List persisted sessions on disk (existing behavior)
+    case CodingAgent.SessionManager.list_sessions(state.cwd) do
+      {:ok, sessions} ->
+        send_json(%{type: "sessions_list", sessions: sessions})
+
+      {:error, reason} ->
+        send_json(%{type: "sessions_list", sessions: [], error: inspect(reason)})
+    end
+
+    {:ok, state}
+  end
+
+  defp handle_command(state, %{"type" => "list_models"}) do
+    providers =
+      Ai.Models.get_providers()
+      |> Enum.map(fn provider ->
+        models =
+          provider
+          |> Ai.Models.get_models()
+          |> Enum.sort_by(& &1.id)
+          |> Enum.map(fn model ->
+            %{id: model.id, name: model.name}
+          end)
+
+        %{id: Atom.to_string(provider), models: models}
+      end)
+      |> Enum.sort_by(& &1.id)
+
+    send_json(%{type: "models_list", providers: providers})
+    {:ok, state}
+  end
+
+  defp handle_command(state, %{"type" => "list_running_sessions"}) do
+    # List currently running sessions
+    sessions =
+      state.sessions
+      |> Enum.map(fn {session_id, pid} ->
+        try do
+          stats = CodingAgent.Session.get_stats(pid)
+          %{
+            session_id: session_id,
+            cwd: stats.cwd,
+            is_streaming: stats.is_streaming
+          }
+        rescue
+          _ -> nil
+        catch
+          :exit, _ -> nil
+        end
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    send_json(%{type: "running_sessions", sessions: sessions, error: nil})
+    {:ok, state}
+  end
+
+  defp handle_command(state, %{"type" => "start_session"} = cmd) do
+    # Start a new session
+    cwd = cmd["cwd"] || state.cwd
+    model_spec = cmd["model"]
+    system_prompt = cmd["system_prompt"]
+    session_file = cmd["session_file"]
+    parent_session = cmd["parent_session"]
+
+    # Resolve model
+    model_result =
+      if model_spec do
+        try do
+          {:ok, resolve_model(model_spec, state.settings)}
+        rescue
+          error -> {:error, "invalid model: #{Exception.message(error)}"}
+        end
+      else
+        {:ok, state.model}
+      end
+
+    case model_result do
+      {:error, message} ->
+        send_json(%{type: "error", message: message})
+        {:ok, state}
+
+      {:ok, model} ->
+        # Build session options
+        opts = [
+          cwd: cwd,
+          model: model,
+          ui_context: state.ui_context,
+          register: true
+        ]
+
+        opts = if system_prompt, do: Keyword.put(opts, :system_prompt, system_prompt), else: opts
+        opts = if session_file, do: Keyword.put(opts, :session_file, session_file), else: opts
+        opts = if parent_session, do: Keyword.put(opts, :parent_session, parent_session), else: opts
+
+        case start_session_process(opts) do
+          {:ok, pid} ->
+            # Get session_id
+            stats = CodingAgent.Session.get_stats(pid)
+            new_session_id = stats.session_id
+
+            # Start event forwarder
+            forwarder_pid = start_session_forwarder(new_session_id, pid, self())
+
+            # Monitor the process
+            Process.monitor(pid)
+
+            # Update state
+            new_state = %{state |
+              sessions: Map.put(state.sessions, new_session_id, pid),
+              pid_to_session: Map.put(state.pid_to_session, pid, new_session_id),
+              forwarders: Map.put(state.forwarders, new_session_id, forwarder_pid)
+            }
+
+            # If there is no active session, make this one active
+            new_state =
+              if is_nil(state.active_session_id) do
+                send_json(%{type: "active_session", session_id: new_session_id})
+                %{new_state | active_session_id: new_session_id}
+              else
+                new_state
+              end
+
+            send_json(%{
+              type: "session_started",
+              session_id: new_session_id,
+              cwd: cwd,
+              model: %{provider: model.provider, id: model.id}
+            })
+
+            debug_log("session_started", %{session_id: new_session_id, cwd: cwd})
+            {:ok, new_state}
+
+          {:error, reason} ->
+            send_json(%{type: "error", message: "failed to start session: #{inspect(reason)}"})
+            {:ok, state}
+        end
+    end
+  end
+
+  defp handle_command(state, %{"type" => "close_session", "session_id" => session_id}) do
+    case Map.get(state.sessions, session_id) do
+      nil ->
+        send_json(%{type: "session_closed", session_id: session_id, reason: "not_found"})
+        {:ok, state}
+
+      pid ->
+        case stop_session_process(pid) do
+          :ok ->
+            # State update will happen in :DOWN handler
+            {:ok, state}
+
+          {:error, reason} ->
+            send_json(%{type: "error", message: "failed to close session: #{inspect(reason)}", session_id: session_id})
+            {:ok, state}
+        end
+    end
+  end
+
+  defp handle_command(state, %{"type" => "close_session"}) do
+    send_json(%{type: "error", message: "session_id required for close_session"})
+    {:ok, state}
+  end
+
+  defp handle_command(state, %{"type" => "set_active_session", "session_id" => session_id}) do
+    if Map.has_key?(state.sessions, session_id) do
+      new_state = %{state | active_session_id: session_id}
+      send_json(%{type: "active_session", session_id: session_id})
+      {:ok, new_state}
+    else
+      send_json(%{type: "error", message: "session not found", session_id: session_id})
+      {:ok, state}
+    end
+  end
+
+  defp handle_command(state, %{"type" => "set_active_session"}) do
+    send_json(%{type: "error", message: "session_id required for set_active_session"})
+    {:ok, state}
+  end
+
+  defp handle_command(state, %{"type" => "quit"}) do
+    {:quit, state}
+  end
+
+  defp handle_command(state, %{"type" => "ui_response"} = response) do
+    # Route ui_response to the DebugRPC UI adapter
+    if Process.whereis(CodingAgent.UI.DebugRPC) do
+      CodingAgent.UI.DebugRPC.handle_response(response)
+    else
+      debug_log("ui_response ignored", %{reason: "UI not enabled"})
+    end
+
+    {:ok, state}
+  end
+
+  defp handle_command(state, _cmd) do
+    send_json(%{type: "error", message: "unknown command"})
+    {:ok, state}
+  end
+
+  # ============================================================================
+  # Session Process Helpers
+  # ============================================================================
+
+  defp start_session_process(opts) do
+    case CodingAgent.start_supervised_session(opts) do
+      {:ok, pid} ->
+        {:ok, pid}
+
+      {:error, :not_started} ->
+        CodingAgent.Session.start_link(opts)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp stop_session_process(pid) when is_pid(pid) do
+    if Process.whereis(CodingAgent.SessionSupervisor) do
+      case CodingAgent.SessionSupervisor.stop_session(pid) do
+        :ok -> :ok
+        {:error, _} -> GenServer.stop(pid, :normal)
+      end
+    else
+      GenServer.stop(pid, :normal)
+    end
+  end
+
+  defp start_session_forwarder(session_id, session_pid, parent) do
+    spawn(fn ->
+      unsubscribe = CodingAgent.Session.subscribe(session_pid)
+      session_ref = Process.monitor(session_pid)
+      parent_ref = Process.monitor(parent)
+
+      receive_loop = fn receive_loop ->
+        receive do
+          {:session_event, ^session_id, event} ->
+            send(parent, {:session_event, session_id, event})
+            receive_loop.(receive_loop)
+
+          {:session_event, event} ->
+            send(parent, {:session_event, session_id, event})
+            receive_loop.(receive_loop)
+
+          {:DOWN, ^session_ref, :process, _pid, _reason} ->
+            unsubscribe.()
+            :ok
+
+          {:DOWN, ^parent_ref, :process, _pid, _reason} ->
+            unsubscribe.()
+            :ok
+
+          :stop_forwarder ->
+            unsubscribe.()
+            :ok
+
+          _ ->
+            receive_loop.(receive_loop)
+        end
+      end
+
+      receive_loop.(receive_loop)
+    end)
+  end
+
+  # ============================================================================
+  # Session Resolution Helpers
+  # ============================================================================
+
+  defp resolve_session(state, nil) do
+    get_active_session(state)
+  end
+
+  defp resolve_session(state, session_id) do
+    case Map.get(state.sessions, session_id) do
+      nil -> :error
+      pid -> {:ok, pid, session_id}
+    end
+  end
+
+  defp get_active_session(state) do
+    case state.active_session_id do
+      nil -> :error
+      id ->
+        case Map.get(state.sessions, id) do
+          nil -> :error
+          pid -> {:ok, pid, id}
+        end
+    end
+  end
+
+  defp get_session_pid(state, session_id) do
+    case Map.get(state.sessions, session_id) do
+      nil -> :error
+      pid -> {:ok, pid}
+    end
+  end
+
+  defp send_not_found_error(nil) do
+    send_json(%{type: "error", message: "no active session"})
+  end
+
+  defp send_not_found_error(session_id) do
+    send_json(%{type: "error", message: "session not found", session_id: session_id})
+  end
+
+  # ============================================================================
+  # Input Reading
+  # ============================================================================
 
   defp read_input_loop(parent) do
     # Use :file.read_line(:standard_io) instead of IO.read for compatibility
@@ -214,16 +645,19 @@ defmodule DebugAgentRPC do
     end
   end
 
-  defp schedule_stats do
+  defp schedule_stats(session_id) do
     if Process.get(:debug, false) do
       ref = make_ref()
-      Process.send_after(self(), {:debug_stats, ref}, 2_000)
+      Process.send_after(self(), {:debug_stats, ref, session_id}, 2_000)
       ref
     else
       nil
     end
   end
 
+  # ============================================================================
+  # Logging and Encoding
+  # ============================================================================
 
   defp debug_log(label, payload) do
     if Process.get(:debug, false) do

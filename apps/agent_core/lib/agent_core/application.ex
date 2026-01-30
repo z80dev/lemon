@@ -1,19 +1,40 @@
 defmodule AgentCore.Application do
-  # See https://hexdocs.pm/elixir/Application.html
-  # for more information on OTP Applications
-  @moduledoc false
+  @moduledoc """
+  OTP Application for AgentCore.
+
+  This application starts the core BEAM infrastructure for agent management:
+
+  - `AgentCore.AgentRegistry` - Registry for agent process lookup
+  - `AgentCore.SubagentSupervisor` - DynamicSupervisor for subagent processes
+  - `AgentCore.LoopTaskSupervisor` - Task.Supervisor for agent loop tasks
+  - `AgentCore.ToolTaskSupervisor` - Task.Supervisor for tool execution tasks
+
+  ## Supervision Tree
+
+  ```
+  AgentCore.Supervisor (:one_for_one)
+  ├── AgentCore.AgentRegistry (Registry)
+  ├── AgentCore.SubagentSupervisor (DynamicSupervisor)
+  ├── AgentCore.LoopTaskSupervisor (Task.Supervisor)
+  └── AgentCore.ToolTaskSupervisor (Task.Supervisor)
+  ```
+  """
 
   use Application
 
   @impl true
   def start(_type, _args) do
     children = [
-      # Starts a worker by calling: AgentCore.Worker.start_link(arg)
-      # {AgentCore.Worker, arg}
+      # Registry for agent process lookup and discovery
+      {Registry, keys: :unique, name: AgentCore.AgentRegistry},
+      # DynamicSupervisor for subagent processes
+      {AgentCore.SubagentSupervisor, name: AgentCore.SubagentSupervisor},
+      # Task.Supervisor for agent loop tasks
+      {Task.Supervisor, name: AgentCore.LoopTaskSupervisor},
+      # Task.Supervisor for tool execution tasks
+      {Task.Supervisor, name: AgentCore.ToolTaskSupervisor}
     ]
 
-    # See https://hexdocs.pm/elixir/Supervisor.html
-    # for other strategies and supported options
     opts = [strategy: :one_for_one, name: AgentCore.Supervisor]
     Supervisor.start_link(children, opts)
   end

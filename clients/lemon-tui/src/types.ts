@@ -18,18 +18,22 @@ export interface ReadyMessage {
   };
   debug: boolean;
   ui: boolean;
+  primary_session_id: string | null;
+  active_session_id: string | null;
 }
 
 /** Event wrapper for session events */
 export interface EventMessage {
   type: 'event';
   event: SessionEvent;
+  session_id: string;
 }
 
 /** Stats response */
 export interface StatsMessage {
   type: 'stats';
   stats: SessionStats;
+  session_id: string;
 }
 
 /** Pong response to ping */
@@ -48,6 +52,7 @@ export interface DebugMessage {
 export interface ErrorMessage {
   type: 'error';
   message: string;
+  session_id?: string;
 }
 
 /** Save result message */
@@ -79,6 +84,57 @@ export interface UISignalMessage {
   params: Record<string, unknown>;
 }
 
+/** Running session info */
+export interface RunningSessionInfo {
+  session_id: string;
+  cwd: string;
+  is_streaming: boolean;
+}
+
+/** Running sessions list response */
+export interface RunningSessionsMessage {
+  type: 'running_sessions';
+  sessions: RunningSessionInfo[];
+  error?: string | null;
+}
+
+/** Models list response */
+export interface ModelsListMessage {
+  type: 'models_list';
+  providers: Array<{
+    id: string;
+    models: Array<{
+      id: string;
+      name?: string;
+    }>;
+  }>;
+  error?: string | null;
+}
+
+/** Session started notification */
+export interface SessionStartedMessage {
+  type: 'session_started';
+  session_id: string;
+  cwd: string;
+  model: {
+    provider: string;
+    id: string;
+  };
+}
+
+/** Session closed notification */
+export interface SessionClosedMessage {
+  type: 'session_closed';
+  session_id: string;
+  reason: 'normal' | 'not_found' | 'error';
+}
+
+/** Active session changed notification */
+export interface ActiveSessionMessage {
+  type: 'active_session';
+  session_id: string | null;
+}
+
 export type ServerMessage =
   | ReadyMessage
   | EventMessage
@@ -89,7 +145,12 @@ export type ServerMessage =
   | SaveResultMessage
   | SessionsListMessage
   | UIRequestMessage
-  | UISignalMessage;
+  | UISignalMessage
+  | RunningSessionsMessage
+  | ModelsListMessage
+  | SessionStartedMessage
+  | SessionClosedMessage
+  | ActiveSessionMessage;
 
 // ============================================================================
 // Client Commands
@@ -98,10 +159,12 @@ export type ServerMessage =
 export interface PromptCommand {
   type: 'prompt';
   text: string;
+  session_id?: string;
 }
 
 export interface StatsCommand {
   type: 'stats';
+  session_id?: string;
 }
 
 export interface PingCommand {
@@ -114,14 +177,17 @@ export interface DebugCommand {
 
 export interface AbortCommand {
   type: 'abort';
+  session_id?: string;
 }
 
 export interface ResetCommand {
   type: 'reset';
+  session_id?: string;
 }
 
 export interface SaveCommand {
   type: 'save';
+  session_id?: string;
 }
 
 export interface ListSessionsCommand {
@@ -139,6 +205,38 @@ export interface UIResponseCommand {
   error: string | null;
 }
 
+/** Start a new session */
+export interface StartSessionCommand {
+  type: 'start_session';
+  cwd?: string;
+  model?: string;
+  system_prompt?: string;
+  session_file?: string;
+  parent_session?: string;
+}
+
+/** Close a running session */
+export interface CloseSessionCommand {
+  type: 'close_session';
+  session_id: string;
+}
+
+/** List running sessions */
+export interface ListRunningSessionsCommand {
+  type: 'list_running_sessions';
+}
+
+/** List known models/providers */
+export interface ListModelsCommand {
+  type: 'list_models';
+}
+
+/** Set the active session */
+export interface SetActiveSessionCommand {
+  type: 'set_active_session';
+  session_id: string;
+}
+
 export type ClientCommand =
   | PromptCommand
   | StatsCommand
@@ -149,7 +247,12 @@ export type ClientCommand =
   | SaveCommand
   | ListSessionsCommand
   | QuitCommand
-  | UIResponseCommand;
+  | UIResponseCommand
+  | StartSessionCommand
+  | CloseSessionCommand
+  | ListRunningSessionsCommand
+  | ListModelsCommand
+  | SetActiveSessionCommand;
 
 // ============================================================================
 // Session Events

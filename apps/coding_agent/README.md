@@ -1,6 +1,16 @@
 # CodingAgent
 
-**TODO: Add description**
+Full coding agent built on top of `AgentCore`. This app adds session
+management, tool execution, persistence, UI integration, and extensions for
+building coding workflows.
+
+## Features
+
+- Session GenServer with JSONL persistence and branching
+- Built-in tools (read/write/edit/bash) plus extension loading
+- Steering and follow-up message queues
+- UI integration and event subscription streams
+- Coordinator for running subagent sessions
 
 ## Installation
 
@@ -18,4 +28,3 @@ end
 Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
 and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
 be found at <https://hexdocs.pm/coding_agent>.
-

@@ -400,7 +400,7 @@ unsubscribe = CodingAgent.Session.subscribe(session)
 
 **Key Features:**
 - Session persistence (JSONL with tree structure)
-- Built-in coding tools (read, write, edit, bash, grep, find, ls)
+- Built-in coding tools (read, write, edit, multiedit, patch, bash, grep, find, glob, ls, webfetch, websearch, todoread, todowrite, task)
 - Context compaction and branch summarization
 - Extension system for custom tools
 - Settings management (global + project-level)

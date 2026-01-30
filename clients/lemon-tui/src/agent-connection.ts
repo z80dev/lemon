@@ -7,7 +7,15 @@ import { createInterface, type Interface as ReadlineInterface } from 'node:readl
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { ServerMessage, ClientCommand, ReadyMessage } from './types.js';
+import type {
+  ServerMessage,
+  ClientCommand,
+  ReadyMessage,
+  SessionStartedMessage,
+  SessionClosedMessage,
+  RunningSessionsMessage,
+  ActiveSessionMessage,
+} from './types.js';
 
 export interface AgentConnectionOptions {
   /** Working directory for the agent */
@@ -42,6 +50,8 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
   private readyPromise: Promise<ReadyMessage> | null = null;
   private readyResolve: ((msg: ReadyMessage) => void) | null = null;
   private readyReject: ((err: Error) => void) | null = null;
+  private primarySessionId: string | null = null;
+  private activeSessionId: string | null = null;
 
   constructor(private options: AgentConnectionOptions = {}) {
     super();
@@ -156,29 +166,29 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
   /**
    * Sends a prompt to the agent.
    */
-  prompt(text: string): void {
-    this.send({ type: 'prompt', text });
+  prompt(text: string, sessionId?: string): void {
+    this.send({ type: 'prompt', text, session_id: sessionId });
   }
 
   /**
    * Sends an abort command to stop the current operation.
    */
-  abort(): void {
-    this.send({ type: 'abort' });
+  abort(sessionId?: string): void {
+    this.send({ type: 'abort', session_id: sessionId });
   }
 
   /**
    * Sends a reset command to clear the session.
    */
-  reset(): void {
-    this.send({ type: 'reset' });
+  reset(sessionId?: string): void {
+    this.send({ type: 'reset', session_id: sessionId });
   }
 
   /**
    * Sends a save command to persist the session.
    */
-  save(): void {
-    this.send({ type: 'save' });
+  save(sessionId?: string): void {
+    this.send({ type: 'save', session_id: sessionId });
   }
 
   /**
@@ -191,8 +201,8 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
   /**
    * Requests session stats.
    */
-  stats(): void {
-    this.send({ type: 'stats' });
+  stats(sessionId?: string): void {
+    this.send({ type: 'stats', session_id: sessionId });
   }
 
   /**
@@ -212,6 +222,68 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
       result,
       error,
     });
+  }
+
+  /**
+   * Starts a new session.
+   */
+  startSession(opts?: {
+    cwd?: string;
+    model?: string;
+    systemPrompt?: string;
+    sessionFile?: string;
+    parentSession?: string;
+  }): void {
+    this.send({
+      type: 'start_session',
+      cwd: opts?.cwd,
+      model: opts?.model,
+      system_prompt: opts?.systemPrompt,
+      session_file: opts?.sessionFile,
+      parent_session: opts?.parentSession,
+    });
+  }
+
+  /**
+   * Closes a running session.
+   */
+  closeSession(sessionId: string): void {
+    this.send({ type: 'close_session', session_id: sessionId });
+  }
+
+  /**
+   * Requests the list of currently running sessions.
+   */
+  listRunningSessions(): void {
+    this.send({ type: 'list_running_sessions' });
+  }
+
+  /**
+   * Requests the list of known model providers and models.
+   */
+  listModels(): void {
+    this.send({ type: 'list_models' });
+  }
+
+  /**
+   * Sets the active session (default session for commands without session_id).
+   */
+  setActiveSession(sessionId: string): void {
+    this.send({ type: 'set_active_session', session_id: sessionId });
+  }
+
+  /**
+   * Returns the primary session ID from the ready message.
+   */
+  getPrimarySessionId(): string | null {
+    return this.primarySessionId;
+  }
+
+  /**
+   * Returns the active session ID.
+   */
+  getActiveSessionId(): string | null {
+    return this.activeSessionId;
   }
 
   /**
@@ -252,18 +324,40 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
     try {
       message = JSON.parse(line) as ServerMessage;
     } catch (err) {
-      this.emit('error', new Error(`Failed to parse JSON: ${line}`));
+      if (this.options.debug) {
+        process.stderr.write(`[rpc] Non-JSON line: ${line}\n`);
+      }
       return;
     }
 
     // Handle ready message specially
     if (message.type === 'ready') {
+      this.primarySessionId = message.primary_session_id;
+      this.activeSessionId = message.active_session_id;
       if (this.readyResolve) {
         this.readyResolve(message);
         this.readyResolve = null;
         this.readyReject = null;
       }
       this.emit('ready', message);
+    }
+
+    // Track active session changes
+    if (message.type === 'active_session') {
+      this.activeSessionId = message.session_id;
+    }
+
+    // Update active session tracking on session lifecycle events
+    if (message.type === 'session_started') {
+      // Optionally auto-switch to new session (configurable behavior)
+      // For now, just track that the session exists
+    }
+
+    if (message.type === 'session_closed') {
+      // Active session changes are driven by explicit active_session messages.
+      if (this.activeSessionId === message.session_id) {
+        this.activeSessionId = null;
+      }
     }
 
     this.emit('message', message);

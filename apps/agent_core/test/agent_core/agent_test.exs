@@ -429,7 +429,9 @@ defmodule AgentCore.AgentTest do
 
       Process.exit(listener, :kill)
 
-      _ = Agent.get_state(agent)
+      # Give GenServer time to process the DOWN message
+      Process.sleep(20)
+
       state = :sys.get_state(agent)
       refute Enum.any?(state.listeners, fn {pid, _ref} -> pid == listener end)
     end

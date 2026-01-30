@@ -123,7 +123,7 @@ defmodule HelloKimi do
 
   defp wait_for_response(timeout, debug) do
     receive do
-      {:session_event, {:message_end, %Ai.Types.AssistantMessage{} = msg}} ->
+      {:session_event, _session_id, {:message_end, %Ai.Types.AssistantMessage{} = msg}} ->
         text = Ai.get_text(msg)
         tool_calls = Ai.get_tool_calls(msg)
 
@@ -145,18 +145,18 @@ defmodule HelloKimi do
             {:error, {:empty_response, msg}}
         end
 
-      {:session_event, {:error, reason, _partial}} ->
+      {:session_event, _session_id, {:error, reason, _partial}} ->
         if debug do
           IO.puts(:stderr, "[debug] error event=#{inspect(reason)}")
         end
         {:error, reason}
 
-      {:session_event, {:agent_end, _messages}} ->
+      {:session_event, _session_id, {:agent_end, _messages}} ->
         if debug do
           IO.puts(:stderr, "[debug] agent_end without assistant message")
         end
         {:error, :no_assistant_message}
-      {:session_event, event} ->
+      {:session_event, _session_id, event} ->
         if debug do
           IO.puts(:stderr, "[debug] event=#{inspect(event)}")
         end

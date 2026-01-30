@@ -95,7 +95,7 @@ defmodule CodingAgent.SettingsManager do
   defstruct [
     # Model settings
     default_model: nil,
-    default_thinking_level: :off,
+    default_thinking_level: :medium,
     scoped_models: [],
 
     # Provider settings

@@ -25,7 +25,7 @@ defmodule CodingAgent.Session do
       :ok = CodingAgent.Session.prompt(session, "Help me write a function")
 
       receive do
-        {:session_event, event} -> IO.inspect(event)
+        {:session_event, session_id, event} -> IO.inspect({session_id, event})
       end
 
       # Unsubscribe when done
@@ -59,6 +59,7 @@ defmodule CodingAgent.Session do
     :system_prompt,
     :is_streaming,
     :event_listeners,
+    :event_streams,
     :abort_signal,
     :steering_queue,
     :follow_up_queue,
@@ -81,6 +82,7 @@ defmodule CodingAgent.Session do
           system_prompt: String.t(),
           is_streaming: boolean(),
           event_listeners: [{pid(), reference()}],
+          event_streams: %{reference() => %{pid: pid(), stream: pid()}},
           abort_signal: reference() | nil,
           steering_queue: :queue.queue(),
           follow_up_queue: :queue.queue(),
@@ -113,9 +115,13 @@ defmodule CodingAgent.Session do
       `~/.lemon/agent/prompts/`.
     * `:tools` - List of `AgentTool` structs (default: read, write, edit, bash)
     * `:session_file` - Path to existing session file to load
+    * `:session_id` - Explicit session ID for new sessions (ignored when loading from file)
+    * `:parent_session` - Parent session ID for fork lineage (ignored when loading from file)
     * `:ui_context` - UI context for dialogs and notifications
     * `:thinking_level` - Extended reasoning level. If not provided, uses
       `default_thinking_level` from SettingsManager.
+    * `:register` - When true, register the session under its ID in `CodingAgent.SessionRegistry`
+    * `:registry` - Registry module to use when registering (default: `CodingAgent.SessionRegistry`)
     * `:name` - GenServer name for registration
 
   ## System Prompt Composition
@@ -212,11 +218,38 @@ defmodule CodingAgent.Session do
   @doc """
   Subscribe to session events.
 
-  Returns an unsubscribe function. Events are sent as `{:session_event, event}`.
+  Events are sent as `{:session_event, session_id, event}`.
+
+  ## Options
+
+    * `:mode` - `:direct` (default, uses send/2) or `:stream` (uses EventStream with backpressure)
+    * `:max_queue` - Max queue size for stream mode (default 1000)
+    * `:drop_strategy` - How to handle overflow: `:drop_oldest`, `:drop_newest`, or `:error` (default :drop_oldest)
+
+  ## Returns
+
+    * For `:direct` mode: an unsubscribe function `(() -> :ok)`
+    * For `:stream` mode: `{:ok, stream_pid}` where `stream_pid` is an `AgentCore.EventStream`
+
+  ## Examples
+
+      # Direct mode (legacy behavior)
+      unsub = Session.subscribe(session)
+      receive do
+        {:session_event, _id, event} -> IO.inspect(event)
+      end
+      unsub.()
+
+      # Stream mode with backpressure
+      {:ok, stream} = Session.subscribe(session, mode: :stream)
+      stream
+      |> AgentCore.EventStream.events()
+      |> Enum.each(fn {:session_event, _id, event} -> IO.inspect(event) end)
   """
-  @spec subscribe(GenServer.server()) :: (() -> :ok)
-  def subscribe(session) do
-    GenServer.call(session, {:subscribe, self()})
+  @spec subscribe(GenServer.server(), keyword()) :: (() -> :ok) | {:ok, pid()}
+  def subscribe(session, opts \\ []) do
+    mode = Keyword.get(opts, :mode, :direct)
+    GenServer.call(session, {:subscribe, self(), mode, opts})
   end
 
   @doc """
@@ -334,6 +367,8 @@ defmodule CodingAgent.Session do
     explicit_system_prompt = Keyword.get(opts, :system_prompt)
     prompt_template = Keyword.get(opts, :prompt_template)
     session_file = Keyword.get(opts, :session_file)
+    session_id = Keyword.get(opts, :session_id)
+    parent_session = Keyword.get(opts, :parent_session)
     ui_context = Keyword.get(opts, :ui_context)
     custom_tools = Keyword.get(opts, :tools)
 
@@ -341,12 +376,12 @@ defmodule CodingAgent.Session do
     session_manager =
       case session_file do
         nil ->
-          SessionManager.new(cwd)
+          SessionManager.new(cwd, id: session_id, parent_session: parent_session)
 
         path ->
           case SessionManager.load_from_file(path) do
             {:ok, session} -> session
-            {:error, _reason} -> SessionManager.new(cwd)
+            {:error, _reason} -> SessionManager.new(cwd, id: session_id, parent_session: parent_session)
           end
       end
 
@@ -377,8 +412,17 @@ defmodule CodingAgent.Session do
     extension_tools = Extensions.get_tools(extensions, cwd)
     hooks = Extensions.get_hooks(extensions)
 
+    tool_opts =
+      opts
+      |> Keyword.put(:model, model)
+      |> Keyword.put(:thinking_level, thinking_level)
+      |> Keyword.put(:parent_session, session_manager.header.id)
+      |> Keyword.put(:session_id, session_manager.header.id)
+      |> Keyword.put(:settings_manager, settings_manager)
+      |> Keyword.put(:ui_context, ui_context)
+
     # Build tools list, merging extension tools
-    base_tools = custom_tools || build_tools(cwd, opts)
+    base_tools = custom_tools || build_tools(cwd, tool_opts)
     tools = base_tools ++ extension_tools
 
     # Create the convert_to_llm function
@@ -386,6 +430,9 @@ defmodule CodingAgent.Session do
 
     # Start the AgentCore.Agent
     get_api_key = Keyword.get(opts, :get_api_key) || build_get_api_key(settings_manager)
+
+    # Register main agent in AgentRegistry with key {session_id, :main, 0}
+    agent_registry_key = {session_manager.header.id, :main, 0}
 
     {:ok, agent} =
       AgentCore.Agent.start_link(
@@ -399,7 +446,9 @@ defmodule CodingAgent.Session do
         convert_to_llm: convert_to_llm,
         stream_fn: Keyword.get(opts, :stream_fn),
         stream_options: Keyword.get(opts, :stream_options),
-        get_api_key: get_api_key
+        get_api_key: get_api_key,
+        session_id: session_manager.header.id,
+        name: AgentCore.AgentRegistry.via(agent_registry_key)
       )
 
     # Subscribe to agent events
@@ -424,6 +473,7 @@ defmodule CodingAgent.Session do
       system_prompt: system_prompt,
       is_streaming: false,
       event_listeners: [],
+      event_streams: %{},
       abort_signal: nil,
       steering_queue: :queue.new(),
       follow_up_queue: :queue.new(),
@@ -433,6 +483,8 @@ defmodule CodingAgent.Session do
       extensions: extensions,
       hooks: hooks
     }
+
+    maybe_register_session(session_manager, cwd, opts)
 
     {:ok, state}
   end
@@ -483,6 +535,36 @@ defmodule CodingAgent.Session do
     end
   end
 
+  def handle_call({:subscribe, pid, :stream, opts}, _from, state) do
+    max_queue = Keyword.get(opts, :max_queue, 1000)
+    drop_strategy = Keyword.get(opts, :drop_strategy, :drop_oldest)
+
+    {:ok, stream} =
+      AgentCore.EventStream.start_link(
+        max_queue: max_queue,
+        drop_strategy: drop_strategy,
+        owner: pid
+      )
+
+    mon_ref = Process.monitor(pid)
+    event_streams = Map.put(state.event_streams, mon_ref, %{pid: pid, stream: stream})
+
+    {:reply, {:ok, stream}, %{state | event_streams: event_streams}}
+  end
+
+  def handle_call({:subscribe, pid, :direct, _opts}, _from, state) do
+    monitor_ref = Process.monitor(pid)
+    new_listeners = [{pid, monitor_ref} | state.event_listeners]
+    session_pid = self()
+
+    unsubscribe = fn ->
+      GenServer.cast(session_pid, {:unsubscribe, pid})
+    end
+
+    {:reply, unsubscribe, %{state | event_listeners: new_listeners}}
+  end
+
+  # Legacy subscribe call for backwards compatibility
   def handle_call({:subscribe, pid}, _from, state) do
     monitor_ref = Process.monitor(pid)
     new_listeners = [{pid, monitor_ref} | state.event_listeners]
@@ -761,23 +843,34 @@ defmodule CodingAgent.Session do
 
   @impl true
   def handle_info({:agent_event, event}, state) do
+    # Broadcast to listeners FIRST (before state changes that might clear streams)
+    broadcast_event(state, event)
+
     # Process the event and update state
     new_state = handle_agent_event(event, state)
-
-    # Broadcast to listeners
-    broadcast_event(new_state, event)
 
     {:noreply, new_state}
   end
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
-    # Subscriber died, remove from listeners
+    # Remove from direct listeners
     new_listeners =
       Enum.reject(state.event_listeners, fn {listener_pid, monitor_ref} ->
-        listener_pid == pid and monitor_ref == ref
+        listener_pid == pid or monitor_ref == ref
       end)
 
-    {:noreply, %{state | event_listeners: new_listeners}}
+    # Remove from stream subscribers and cancel their streams
+    {streams_for_pid, remaining_streams} =
+      Enum.split_with(state.event_streams, fn {_mon_ref, %{pid: stream_pid}} ->
+        stream_pid == pid
+      end)
+
+    Enum.each(streams_for_pid, fn {mon_ref, %{stream: stream}} ->
+      AgentCore.EventStream.cancel(stream, :subscriber_down)
+      Process.demonitor(mon_ref, [:flush])
+    end)
+
+    {:noreply, %{state | event_listeners: new_listeners, event_streams: Map.new(remaining_streams)}}
   end
 
   def handle_info({:store_branch_summary, from_id, summary}, state) do
@@ -793,6 +886,16 @@ defmodule CodingAgent.Session do
 
   def handle_info(_msg, state) do
     {:noreply, state}
+  end
+
+  @impl true
+  def terminate(_reason, state) do
+    # Stop the underlying agent when the session terminates
+    if state.agent && Process.alive?(state.agent) do
+      GenServer.stop(state.agent, :normal)
+    end
+
+    :ok
   end
 
   # ============================================================================
@@ -923,12 +1026,7 @@ defmodule CodingAgent.Session do
 
   @spec build_tools(String.t(), keyword()) :: [AgentTool.t()]
   defp build_tools(cwd, opts) do
-    [
-      CodingAgent.Tools.Read.tool(cwd, opts),
-      CodingAgent.Tools.Write.tool(cwd, opts),
-      CodingAgent.Tools.Edit.tool(cwd, opts),
-      CodingAgent.Tools.Bash.tool(cwd, opts)
-    ]
+    CodingAgent.Tools.coding_tools(cwd, opts)
   end
 
   @spec handle_agent_event(AgentCore.Types.agent_event(), t()) :: t()
@@ -1000,15 +1098,22 @@ defmodule CodingAgent.Session do
     # Clear working message and steering queue
     ui_set_working_message(state, nil)
 
+    # Complete all event streams with the final event
+    complete_event_streams(state, {:agent_end, messages})
+
     # Check if compaction is needed
-    new_state = %{state | is_streaming: false, steering_queue: :queue.new()}
+    new_state = %{state | is_streaming: false, steering_queue: :queue.new(), event_streams: %{}}
     maybe_trigger_compaction(new_state)
   end
 
-  defp handle_agent_event({:error, reason, _partial_state}, state) do
+  defp handle_agent_event({:error, reason, partial_state}, state) do
     ui_set_working_message(state, nil)
     ui_notify(state, "Agent error: #{inspect(reason)}", :error)
-    %{state | is_streaming: false}
+
+    # Complete all event streams with the error event
+    complete_event_streams(state, {:error, reason, partial_state})
+
+    %{state | is_streaming: false, event_streams: %{}}
   end
 
   defp handle_agent_event(_event, state) do
@@ -1017,10 +1122,30 @@ defmodule CodingAgent.Session do
 
   @spec broadcast_event(t(), AgentCore.Types.agent_event()) :: :ok
   defp broadcast_event(state, event) do
-    session_event = {:session_event, event}
+    session_event = {:session_event, state.session_manager.header.id, event}
 
+    # Direct subscribers (legacy)
     Enum.each(state.event_listeners, fn {pid, _ref} ->
       send(pid, session_event)
+    end)
+
+    # Stream subscribers (with backpressure)
+    Enum.each(state.event_streams, fn {_mon_ref, %{stream: stream}} ->
+      AgentCore.EventStream.push_async(stream, session_event)
+    end)
+
+    :ok
+  end
+
+  @spec complete_event_streams(t(), term()) :: :ok
+  defp complete_event_streams(state, _final_event) do
+    # Note: The final event was already pushed via broadcast_event before this is called.
+    # We just need to complete the streams to signal they're done.
+    Enum.each(state.event_streams, fn {mon_ref, %{stream: stream}} ->
+      # Complete the stream (this pushes {:agent_end, []} as the terminal event)
+      AgentCore.EventStream.complete(stream, [])
+      # Demonitor since we're completing normally
+      Process.demonitor(mon_ref, [:flush])
     end)
 
     :ok
@@ -1033,6 +1158,25 @@ defmodule CodingAgent.Session do
     context.messages
     |> Enum.map(&deserialize_message/1)
     |> Enum.reject(&is_nil/1)
+  end
+
+  defp maybe_register_session(session_manager, cwd, opts) do
+    if Keyword.get(opts, :register, false) do
+      registry = Keyword.get(opts, :registry, CodingAgent.SessionRegistry)
+
+      if Process.whereis(registry) do
+        case Registry.register(registry, session_manager.header.id, %{cwd: cwd}) do
+          {:ok, _} ->
+            :ok
+
+          {:error, {:already_registered, _pid}} ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning("Failed to register session: #{inspect(reason)}")
+        end
+      end
+    end
   end
 
   @spec serialize_message(map()) :: map()

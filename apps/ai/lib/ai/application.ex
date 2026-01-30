@@ -6,6 +6,10 @@ defmodule Ai.Application do
 
   - `Ai.Supervisor` (one_for_one)
     - `Ai.StreamTaskSupervisor` - Dynamic supervisor for streaming tasks
+    - `Ai.RateLimiterRegistry` - Registry for per-provider rate limiters
+    - `Ai.CircuitBreakerRegistry` - Registry for per-provider circuit breakers
+    - `Ai.CallDispatcher` - Central dispatcher for request coordination
+    - `Ai.ProviderSupervisor` - Dynamic supervisor for per-provider services
 
   ## Design Decisions
 
@@ -14,6 +18,10 @@ defmodule Ai.Application do
 
   - **StreamTaskSupervisor**: A `Task.Supervisor` that manages all provider
     streaming tasks. This ensures proper lifecycle management and crash isolation.
+
+  - **Rate Limiting & Circuit Breaking**: Per-provider GenServers registered
+    via `Ai.RateLimiterRegistry` and `Ai.CircuitBreakerRegistry`. Started
+    on-demand when providers are first used.
   """
 
   use Application
@@ -25,7 +33,15 @@ defmodule Ai.Application do
 
     children = [
       # Task supervisor for streaming operations
-      {Task.Supervisor, name: Ai.StreamTaskSupervisor}
+      {Task.Supervisor, name: Ai.StreamTaskSupervisor},
+      # Registry for per-provider rate limiters
+      {Registry, keys: :unique, name: Ai.RateLimiterRegistry},
+      # Registry for per-provider circuit breakers
+      {Registry, keys: :unique, name: Ai.CircuitBreakerRegistry},
+      # Dynamic supervisor for per-provider services
+      Ai.ProviderSupervisor,
+      # Central call dispatcher
+      {Ai.CallDispatcher, []}
     ]
 
     opts = [strategy: :one_for_one, name: Ai.Supervisor]
