@@ -22,6 +22,8 @@ export interface AgentConnectionOptions {
   debug?: boolean;
   /** Enable UI support (required for overlays) */
   ui?: boolean;
+  /** Session file to resume */
+  sessionFile?: string;
   /** Path to the lemon project root */
   lemonPath?: string;
 }
@@ -75,6 +77,9 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
     }
     if (this.options.systemPrompt) {
       args.push('--system_prompt', this.options.systemPrompt);
+    }
+    if (this.options.sessionFile) {
+      args.push('--session-file', this.options.sessionFile);
     }
     if (this.options.debug) {
       args.push('--debug');
@@ -174,6 +179,13 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
    */
   save(): void {
     this.send({ type: 'save' });
+  }
+
+  /**
+   * Requests the list of saved sessions for the current cwd.
+   */
+  listSessions(): void {
+    this.send({ type: 'list_sessions' });
   }
 
   /**
