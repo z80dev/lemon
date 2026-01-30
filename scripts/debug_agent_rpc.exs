@@ -14,6 +14,7 @@ defmodule DebugAgentRPC do
           model: :string,
           system_prompt: :string,
           base_url: :string,
+          session_file: :string,
           debug: :boolean,
           no_ui: :boolean
         ]
@@ -49,6 +50,7 @@ defmodule DebugAgentRPC do
         cwd: cwd,
         model: model,
         system_prompt: opts[:system_prompt],
+        session_file: opts[:session_file],
         ui_context: ui_context
       )
 
@@ -68,39 +70,39 @@ defmodule DebugAgentRPC do
     if Process.get(:debug, false) do
       send_json(%{type: "debug", message: "debug mode enabled", argv: System.argv()})
     end
-    loop(session)
+    loop(session, cwd)
   end
 
-  defp loop(session) do
+  defp loop(session, cwd) do
     receive do
       {:session_event, event} ->
         debug_log("session_event", %{type: event_type(event)})
         send_json(%{type: "event", event: encode_event(event)})
-        loop(session)
+        loop(session, cwd)
 
       {:stdin, :eof} ->
         send_json(%{type: "error", message: "stdin closed"})
         :ok
 
       {:stdin, line} ->
-        case handle_line(session, line) do
+        case handle_line(session, cwd, line) do
           :quit ->
             send_json(%{type: "event", event: %{type: "quit"}})
             :ok
 
           :ok ->
-            loop(session)
+            loop(session, cwd)
         end
 
       {:debug_stats, _ref} ->
         stats = CodingAgent.Session.get_stats(session)
         send_json(%{type: "stats", stats: stats})
-        loop(session)
+        loop(session, cwd)
 
     end
   end
 
-  defp handle_line(session, line) when is_binary(line) do
+  defp handle_line(session, cwd, line) when is_binary(line) do
     trimmed = String.trim(line)
 
     if trimmed == "" do
@@ -147,7 +149,24 @@ defmodule DebugAgentRPC do
           :ok
 
         {:ok, %{"type" => "save"}} ->
-          _ = CodingAgent.Session.save(session)
+          case CodingAgent.Session.save(session) do
+            :ok ->
+              state = CodingAgent.Session.get_state(session)
+              send_json(%{type: "save_result", ok: true, path: state.session_file})
+
+            {:error, reason} ->
+              send_json(%{type: "save_result", ok: false, error: inspect(reason)})
+          end
+          :ok
+
+        {:ok, %{"type" => "list_sessions"}} ->
+          case CodingAgent.SessionManager.list_sessions(cwd) do
+            {:ok, sessions} ->
+              send_json(%{type: "sessions_list", sessions: sessions})
+
+            {:error, reason} ->
+              send_json(%{type: "sessions_list", sessions: [], error: inspect(reason)})
+          end
           :ok
 
         {:ok, %{"type" => "quit"}} ->

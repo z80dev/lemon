@@ -50,6 +50,21 @@ export interface ErrorMessage {
   message: string;
 }
 
+/** Save result message */
+export interface SaveResultMessage {
+  type: 'save_result';
+  ok: boolean;
+  path?: string;
+  error?: string;
+}
+
+/** Sessions list response */
+export interface SessionsListMessage {
+  type: 'sessions_list';
+  sessions: SessionSummary[];
+  error?: string;
+}
+
 /** UI request from server - requires overlay response */
 export interface UIRequestMessage {
   type: 'ui_request';
@@ -71,6 +86,8 @@ export type ServerMessage =
   | PongMessage
   | DebugMessage
   | ErrorMessage
+  | SaveResultMessage
+  | SessionsListMessage
   | UIRequestMessage
   | UISignalMessage;
 
@@ -107,6 +124,10 @@ export interface SaveCommand {
   type: 'save';
 }
 
+export interface ListSessionsCommand {
+  type: 'list_sessions';
+}
+
 export interface QuitCommand {
   type: 'quit';
 }
@@ -126,6 +147,7 @@ export type ClientCommand =
   | AbortCommand
   | ResetCommand
   | SaveCommand
+  | ListSessionsCommand
   | QuitCommand
   | UIResponseCommand;
 
@@ -372,4 +394,15 @@ export interface SessionStats {
     id: string;
   };
   thinking_level: string | null;
+}
+
+// ============================================================================
+// Session Summary (for listing/resume)
+// ============================================================================
+
+export interface SessionSummary {
+  path: string;
+  id: string;
+  timestamp: number;
+  cwd: string;
 }
