@@ -1,0 +1,30 @@
+{
+  "name": "lemon-tui",
+  "version": "0.1.0",
+  "description": "TUI client for Lemon coding agent",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "lemon-tui": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --clean",
+    "dev": "tsup src/index.ts --format esm --watch",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@mariozechner/pi-tui": "^0.50.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^2.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
