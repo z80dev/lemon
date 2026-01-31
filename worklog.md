@@ -30,3 +30,8 @@
   - `mix test apps/agent_core/test/agent_core/proxy_test.exs` (pass)
 - Commit: c144e4a (branch: auto/lemon-20260131-1408)
 - Next: Run full umbrella `mix test` and pick the next single failure to knock down (lots currently failing on main).
+
+## 2026-01-31 14:35 ET
+- Change: AgentCore.EventStream now demonitors the previously attached task when re-attaching, stores task_ref, and clears task_pid/task_ref on cancel/termination. Added regression test ensuring old task crash doesn't terminate stream after re-attach.
+- Tests: mix test apps/agent_core (exit 0).
+- Next: consider adding telemetry events for stream overflow/cancel/complete or integrating EventStream stats into agent-level metrics.
