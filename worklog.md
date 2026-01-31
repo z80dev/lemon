@@ -17,3 +17,9 @@
   - `mix test apps/coding_agent/test/coding_agent/subagents_test.exs` (pass)
 - Commit: 6104417 (branch: auto/lemon-20260131-1346)
 - Next: run the full umbrella `mix test` and pick off the next single failure (there were many earlier; this removes one of the named failures from the worklog).
+
+## 2026-01-31 14:10 ET
+- Change: Fix WebFetch to use supported Req connect options and add explicit format/timeout validation (prevents Req option crash and matches tool schema). (apps/coding_agent/lib/coding_agent/tools/webfetch.ex)
+- Tests:
+  - `mix test apps/coding_agent/test/coding_agent/tools/webfetch_test.exs` (pass)
+- Commit: (see git log; branch: auto/lemon-20260131-1408)
