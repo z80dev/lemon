@@ -293,6 +293,11 @@ defmodule Ai.Error do
   end
 
   # Provider-specific error message extraction
+  # Google API format (prefer first entry in errors array when a top-level message is present)
+  defp extract_provider_message(%{"error" => %{"errors" => [%{"message" => message} | _], "message" => _top_message}})
+       when is_binary(message),
+       do: message
+
   # Anthropic format
   defp extract_provider_message(%{"error" => %{"message" => message}}) when is_binary(message), do: message
   defp extract_provider_message(%{"error" => %{"type" => type, "message" => message}}) when is_binary(type) and is_binary(message) do
@@ -323,7 +328,6 @@ defmodule Ai.Error do
   defp extract_provider_message(%{"Message" => message}) when is_binary(message), do: message
   defp extract_provider_message(%{"detail" => detail}) when is_binary(detail), do: detail
   # Google API format
-  defp extract_provider_message(%{"error" => %{"errors" => [%{"message" => message} | _]}}) when is_binary(message), do: message
   defp extract_provider_message(%{"error" => %{"status" => status, "message" => message}}) when is_binary(status) and is_binary(message) do
     "#{status}: #{message}"
   end
