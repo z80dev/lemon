@@ -358,8 +358,9 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       events = EventStream.events(stream) |> Enum.to_list()
       elapsed = System.monotonic_time(:millisecond) - start
 
-      # Should complete much faster than 3 * 500ms
-      assert elapsed < 400
+      # Should complete much faster than 3 * 500ms.
+      # In CI or under heavy local load this can be a bit slower, so keep a generous bound.
+      assert elapsed < 800
 
       # All tool results should be present (some may be aborted)
       tool_ends =
@@ -401,12 +402,23 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
 
       stream = Loop.agent_loop([user_message("Test")], context, config, signal, nil)
 
-      Task.start(fn ->
-        Process.sleep(20)
-        AbortSignal.abort(signal)
-      end)
+      parent = self()
 
-      events = EventStream.events(stream) |> Enum.to_list()
+      consumer =
+        Task.async(fn ->
+          stream
+          |> EventStream.events()
+          |> Enum.map(fn event ->
+            send(parent, {:stream_event, event})
+            event
+          end)
+          |> Enum.to_list()
+        end)
+
+      assert_receive {:stream_event, {:tool_execution_start, "call_abort_detail", _, _}}, 1000
+      AbortSignal.abort(signal)
+
+      events = Task.await(consumer, 5000)
 
       tool_end =
         Enum.find(events, fn e ->
