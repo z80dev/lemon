@@ -715,8 +715,9 @@ defmodule AgentCore.Proxy do
         _, acc -> acc
       end)
 
-    # Add closing characters
-    closing = String.duplicate("}", max(open_braces, 0)) <> String.duplicate("]", max(open_brackets, 0))
+    # Add closing characters.
+    # Close brackets before braces (e.g. `{ "items": [1,2` needs `]}` not `}]`).
+    closing = String.duplicate("]", max(open_brackets, 0)) <> String.duplicate("}", max(open_braces, 0))
     json <> closing
   end
 end
