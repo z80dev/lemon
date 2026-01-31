@@ -354,6 +354,7 @@ defmodule AgentCore.EventStream do
       owner: owner,
       owner_ref: owner_ref,
       task_pid: nil,
+      task_ref: nil,
       timeout_ref: timeout_ref
     }
 
@@ -416,9 +417,14 @@ defmodule AgentCore.EventStream do
 
   @impl true
   def handle_cast({:attach_task, task_pid}, state) do
-    # Monitor the task so we can detect if it crashes
-    Process.monitor(task_pid)
-    {:noreply, %{state | task_pid: task_pid}}
+    # Only one task can be attached at a time.
+    # Demonitor any previously-attached task to avoid leaking monitors.
+    if state.task_ref do
+      Process.demonitor(state.task_ref, [:flush])
+    end
+
+    task_ref = Process.monitor(task_pid)
+    {:noreply, %{state | task_pid: task_pid, task_ref: task_ref}}
   end
 
   def handle_cast({:push, event}, state) do
@@ -484,9 +490,11 @@ defmodule AgentCore.EventStream do
     {:stop, :normal, state}
   end
 
-  def handle_info({:DOWN, _ref, :process, pid, reason}, %{task_pid: pid} = state) do
+  def handle_info({:DOWN, ref, :process, pid, reason}, %{task_pid: pid, task_ref: ref} = state) do
     # Attached task died
     Logger.debug("AgentCore.EventStream task died: #{inspect(reason)}")
+
+    state = %{state | task_pid: nil, task_ref: nil}
 
     unless state.done or state.canceled do
       # Task crashed before completing - this is an error
@@ -495,9 +503,9 @@ defmodule AgentCore.EventStream do
       state = push_terminal(error_event, state)
       state = %{state | result: {:error, {:task_crashed, reason}, nil}, done: true}
       state = notify_result_waiters(state)
-      {:noreply, %{state | task_pid: nil}}
+      {:noreply, state}
     else
-      {:noreply, %{state | task_pid: nil}}
+      {:noreply, state}
     end
   end
 
@@ -521,6 +529,10 @@ defmodule AgentCore.EventStream do
     # Shutdown attached task if still running
     if state.task_pid && Process.alive?(state.task_pid) do
       Process.exit(state.task_pid, :shutdown)
+    end
+
+    if state.task_ref do
+      Process.demonitor(state.task_ref, [:flush])
     end
 
     :ok
@@ -644,6 +656,10 @@ defmodule AgentCore.EventStream do
       Process.exit(state.task_pid, :shutdown)
     end
 
+    if state.task_ref do
+      Process.demonitor(state.task_ref, [:flush])
+    end
+
     # Push a canceled event if not already done
     cancel_event = {:canceled, reason}
 
@@ -658,7 +674,7 @@ defmodule AgentCore.EventStream do
       end
 
     # Set canceled state
-    state = %{state | canceled: true, cancel_reason: reason, done: true}
+    state = %{state | canceled: true, cancel_reason: reason, done: true, task_pid: nil, task_ref: nil}
 
     # If no result set, set a cancel result
     state =
