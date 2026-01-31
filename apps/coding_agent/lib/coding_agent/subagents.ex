@@ -116,11 +116,20 @@ defmodule CodingAgent.Subagents do
 
   defp normalize_agent(%{"id" => id, "prompt" => prompt} = agent)
        when is_binary(id) and is_binary(prompt) do
-    %{
-      id: id,
-      description: agent["description"] || "",
-      prompt: prompt
-    }
+    id = String.trim(id)
+    prompt = String.trim(prompt)
+
+    if id == "" or prompt == "" do
+      nil
+    else
+      description = agent["description"]
+
+      %{
+        id: id,
+        description: if(is_binary(description), do: description, else: ""),
+        prompt: prompt
+      }
+    end
   end
 
   defp normalize_agent(_), do: nil
