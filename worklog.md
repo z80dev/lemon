@@ -45,3 +45,8 @@
   - `mix test apps/coding_agent/test/coding_agent/tools/todo_test.exs` (pass)
 - Commit: dec3437 (branch: auto/lemon-20260131-1458)
 - Next: Add `CodingAgent.Tools.WebSearch.reset_rate_limit/0` (no-op or ETS reset) to unbreak `WebSearchTest` setup, then tackle remaining `coding_agent` failures bucket-by-bucket.
+
+## 2026-01-31 15:31 ET
+- Change: Ai.Error.extract_provider_message/1 now prefers Google-style error.errors[0].message *only when* error.message is present (keeps legacy fallback when only errors[] exists).
+- Tests: mix test apps/ai/test/ai/error_edge_cases_test.exs (86 tests, 0 failures)
+- Next: Investigate remaining mix test failures in Ai.CircuitBreaker tests (timing/half-open transition) and AgentCore Loop tool telemetry ordering.
