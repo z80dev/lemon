@@ -35,3 +35,13 @@
 - Change: AgentCore.EventStream now demonitors the previously attached task when re-attaching, stores task_ref, and clears task_pid/task_ref on cancel/termination. Added regression test ensuring old task crash doesn't terminate stream after re-attach.
 - Tests: mix test apps/agent_core (exit 0).
 - Next: consider adding telemetry events for stream overflow/cancel/complete or integrating EventStream stats into agent-level metrics.
+
+## 2026-01-31 14:58 ET
+- Change: Harden Todo tools to match schema + tests:
+  - Added `CodingAgent.Tools.TodoStore.delete/1` and `clear/0` (safe no-op if ETS table is missing).
+  - `CodingAgent.Tools.TodoWrite` now validates todo entries (object shape, non-empty `id`/`content`, allowed `status`/`priority`, unique ids) before writing.
+  - Prevents crashes from non-map todo entries and returns helpful error tuples.
+- Tests:
+  - `mix test apps/coding_agent/test/coding_agent/tools/todo_test.exs` (pass)
+- Commit: dec3437 (branch: auto/lemon-20260131-1458)
+- Next: Add `CodingAgent.Tools.WebSearch.reset_rate_limit/0` (no-op or ETS reset) to unbreak `WebSearchTest` setup, then tackle remaining `coding_agent` failures bucket-by-bucket.
