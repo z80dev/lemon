@@ -342,8 +342,8 @@ defmodule CodingAgent.UI.DebugRPC do
   defp handle_response_internal(id, response, state) do
     case Map.pop(state.pending_requests, id) do
       {{from, timer_ref}, pending} ->
-        # Cancel timeout timer
-        Process.cancel_timer(timer_ref)
+        # Cancel timeout timer and flush any already-delivered timeout message
+        cancel_timeout(timer_ref, id)
 
         # Send reply
         result = parse_response(response)
@@ -380,11 +380,23 @@ defmodule CodingAgent.UI.DebugRPC do
   end
 
   defp fail_all_pending(state, reason) do
-    Enum.each(state.pending_requests, fn {_id, {from, timer_ref}} ->
-      Process.cancel_timer(timer_ref)
+    Enum.each(state.pending_requests, fn {id, {from, timer_ref}} ->
+      cancel_timeout(timer_ref, id)
       GenServer.reply(from, {:error, reason})
     end)
 
     %{state | pending_requests: %{}}
+  end
+
+  defp cancel_timeout(timer_ref, request_id) do
+    Process.cancel_timer(timer_ref)
+
+    # Even if cancel_timer/1 returns true, the message can already be in the mailbox.
+    # Flush it to avoid later :timeout noise.
+    receive do
+      {:timeout, ^request_id} -> :ok
+    after
+      0 -> :ok
+    end
   end
 end
