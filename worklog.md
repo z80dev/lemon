@@ -23,3 +23,10 @@
 - Tests:
   - `mix test apps/coding_agent/test/coding_agent/tools/webfetch_test.exs` (pass)
 - Commit: (see git log; branch: auto/lemon-20260131-1408)
+
+## 2026-01-31 14:12 ET
+- Change: Fix `AgentCore.Proxy.complete_json/1` to close `]` before `}` so partial JSON like `{ "items": [1,2` completes to `]}` (fixes `parse_streaming_json/1` for partial arrays). (apps/agent_core/lib/agent_core/proxy.ex)
+- Tests:
+  - `mix test apps/agent_core/test/agent_core/proxy_test.exs` (pass)
+- Commit: c144e4a (branch: auto/lemon-20260131-1408)
+- Next: Run full umbrella `mix test` and pick the next single failure to knock down (lots currently failing on main).
