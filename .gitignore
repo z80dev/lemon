@@ -16,6 +16,12 @@
 # If the VM crashes, it generates a dump, let's ignore it too.
 erl_crash.dump
 
+# Scratch artifacts accidentally created by automation
+'+CLAUDE_OUT+'
+
+# Agent loop run artifacts (timestamped logs/diffs)
+docs/agent-loop/runs/
+
 # Also ignore archive artifacts (built via "mix archive.build").
 *.ez
 

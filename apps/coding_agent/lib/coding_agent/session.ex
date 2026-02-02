@@ -41,6 +41,7 @@ defmodule CodingAgent.Session do
   alias CodingAgent.ResourceLoader
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.{Session, SessionEntry}
+  alias CodingAgent.ToolRegistry
   alias CodingAgent.UI.Context, as: UIContext
 
   # ============================================================================
@@ -68,7 +69,8 @@ defmodule CodingAgent.Session do
     :session_file,
     :convert_to_llm,
     :extensions,
-    :hooks
+    :hooks,
+    :extension_status_report
   ]
 
   @type t :: %__MODULE__{
@@ -91,7 +93,8 @@ defmodule CodingAgent.Session do
           session_file: String.t() | nil,
           convert_to_llm: (list() -> list()),
           extensions: [module()],
-          hooks: keyword([function()])
+          hooks: keyword([function()]),
+          extension_status_report: Extensions.extension_status_report() | nil
         }
 
   # ============================================================================
@@ -286,6 +289,21 @@ defmodule CodingAgent.Session do
   end
 
   @doc """
+  Get the extension status report from session startup.
+
+  Returns a structured report with loaded extensions, load errors,
+  and tool conflicts. This is also published as an event at startup.
+
+  ## Returns
+
+  An `Extensions.extension_status_report()` map.
+  """
+  @spec get_extension_status_report(GenServer.server()) :: Extensions.extension_status_report()
+  def get_extension_status_report(session) do
+    GenServer.call(session, :get_extension_status_report)
+  end
+
+  @doc """
   Reset the session, clearing all messages and restarting.
   """
   @spec reset(GenServer.server()) :: :ok
@@ -416,7 +434,7 @@ defmodule CodingAgent.Session do
     # Get thinking_level from opts, or fall back to settings_manager.default_thinking_level
     thinking_level = Keyword.get(opts, :thinking_level) || settings_manager.default_thinking_level
 
-    # Load extensions from multiple paths
+    # Load extensions from multiple paths (for hooks)
     extension_paths =
       (settings_manager.extension_paths || []) ++
         [
@@ -424,12 +442,12 @@ defmodule CodingAgent.Session do
           Config.project_extensions_dir(cwd)
         ]
 
-    {:ok, extensions} = Extensions.load_extensions(extension_paths)
+    {:ok, extensions, load_errors} = Extensions.load_extensions_with_errors(extension_paths)
 
-    # Get extension tools and hooks
-    extension_tools = Extensions.get_tools(extensions, cwd)
+    # Get hooks from extensions
     hooks = Extensions.get_hooks(extensions)
 
+    # Build tool options for ToolRegistry
     tool_opts =
       opts
       |> Keyword.put(:model, model)
@@ -438,10 +456,29 @@ defmodule CodingAgent.Session do
       |> Keyword.put(:session_id, session_manager.header.id)
       |> Keyword.put(:settings_manager, settings_manager)
       |> Keyword.put(:ui_context, ui_context)
+      |> Keyword.put(:extension_paths, extension_paths)
 
-    # Build tools list, merging extension tools
-    base_tools = custom_tools || build_tools(cwd, tool_opts)
-    tools = base_tools ++ extension_tools
+    # Build tools list via ToolRegistry (handles extension tools + conflict detection)
+    # When custom_tools is provided, extension tools are still added
+    tools =
+      case custom_tools do
+        nil ->
+          ToolRegistry.get_tools(cwd, tool_opts)
+
+        custom ->
+          # Extension tools are always loaded, even with custom base tools
+          extension_tools = Extensions.get_tools(extensions, cwd)
+          custom ++ extension_tools
+      end
+
+    # Build extension status report (tool conflicts computed from registry)
+    tool_conflict_report = ToolRegistry.tool_conflict_report(cwd, tool_opts)
+
+    extension_status_report =
+      Extensions.build_status_report(extensions, load_errors,
+        cwd: cwd,
+        tool_conflict_report: tool_conflict_report
+      )
 
     # Create the convert_to_llm function
     convert_to_llm = &CodingAgent.Messages.to_llm/1
@@ -500,10 +537,15 @@ defmodule CodingAgent.Session do
       session_file: session_file,
       convert_to_llm: convert_to_llm,
       extensions: extensions,
-      hooks: hooks
+      hooks: hooks,
+      extension_status_report: extension_status_report
     }
 
     maybe_register_session(session_manager, cwd, opts)
+
+    # Schedule the extension status report event to be published after init completes.
+    # This allows subscribers to receive the event after they subscribe.
+    send(self(), {:publish_extension_status_report, extension_status_report})
 
     {:ok, state}
   end
@@ -636,6 +678,10 @@ defmodule CodingAgent.Session do
 
   def handle_call(:diagnostics, _from, state) do
     {:reply, build_diagnostics(state), state}
+  end
+
+  def handle_call(:get_extension_status_report, _from, state) do
+    {:reply, state.extension_status_report, state}
   end
 
   def handle_call(:reset, _from, state) do
@@ -927,6 +973,12 @@ defmodule CodingAgent.Session do
     {:noreply, %{state | session_manager: session_manager}}
   end
 
+  def handle_info({:publish_extension_status_report, report}, state) do
+    # Publish the extension status report event for UI/CLI consumption
+    broadcast_event(state, {:extension_status_report, report})
+    {:noreply, state}
+  end
+
   def handle_info(_msg, state) do
     {:noreply, state}
   end
@@ -1134,12 +1186,25 @@ defmodule CodingAgent.Session do
     end
   end
 
-  @spec build_tools(String.t(), keyword()) :: [AgentTool.t()]
-  defp build_tools(cwd, opts) do
-    CodingAgent.Tools.coding_tools(cwd, opts)
+  @spec handle_agent_event(AgentCore.Types.agent_event(), t()) :: t()
+  defp handle_agent_event({:agent_start}, state) do
+    # Execute on_agent_start hooks
+    Extensions.execute_hooks(state.hooks, :on_agent_start, [])
+    state
   end
 
-  @spec handle_agent_event(AgentCore.Types.agent_event(), t()) :: t()
+  defp handle_agent_event({:turn_start}, state) do
+    # Execute on_turn_start hooks
+    Extensions.execute_hooks(state.hooks, :on_turn_start, [])
+    state
+  end
+
+  defp handle_agent_event({:turn_end, message, tool_results}, state) do
+    # Execute on_turn_end hooks
+    Extensions.execute_hooks(state.hooks, :on_turn_end, [message, tool_results])
+    state
+  end
+
   defp handle_agent_event({:message_start, message}, state) do
     # Execute on_message_start hooks
     Extensions.execute_hooks(state.hooks, :on_message_start, [message])

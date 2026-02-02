@@ -436,6 +436,84 @@ defmodule CodingAgent.SessionExtensionsTest do
 
       cleanup_module(module)
     end
+
+    test "on_agent_start hook is called when agent starts", %{tmp_dir: tmp_dir} do
+      # Use a named Agent to track hook calls
+      {:ok, tracker} = Agent.start_link(fn -> [] end, name: :test_agent_start_tracker)
+
+      hooks_code = """
+      [
+        on_agent_start: fn ->
+          Agent.update(:test_agent_start_tracker, &[:agent_started | &1])
+        end
+      ]
+      """
+
+      module = create_extension_file(tmp_dir, "TestAgentStartHookExtension", hooks: hooks_code)
+
+      session = start_session(cwd: tmp_dir)
+
+      :ok = Session.prompt(session, "Hello!")
+      wait_for_streaming_complete(session)
+
+      calls = Agent.get(tracker, & &1)
+      assert :agent_started in calls
+
+      Agent.stop(tracker)
+      cleanup_module(module)
+    end
+
+    test "on_turn_start hook is called when turn starts", %{tmp_dir: tmp_dir} do
+      {:ok, tracker} = Agent.start_link(fn -> [] end, name: :test_turn_start_tracker)
+
+      hooks_code = """
+      [
+        on_turn_start: fn ->
+          Agent.update(:test_turn_start_tracker, &[:turn_started | &1])
+        end
+      ]
+      """
+
+      module = create_extension_file(tmp_dir, "TestTurnStartHookExtension", hooks: hooks_code)
+
+      session = start_session(cwd: tmp_dir)
+
+      :ok = Session.prompt(session, "Hello!")
+      wait_for_streaming_complete(session)
+
+      calls = Agent.get(tracker, & &1)
+      assert :turn_started in calls
+
+      Agent.stop(tracker)
+      cleanup_module(module)
+    end
+
+    test "on_turn_end hook is called with message and tool results when turn ends", %{tmp_dir: tmp_dir} do
+      {:ok, tracker} = Agent.start_link(fn -> [] end, name: :test_turn_end_tracker)
+
+      hooks_code = """
+      [
+        on_turn_end: fn msg, tool_results ->
+          Agent.update(:test_turn_end_tracker, &[{:turn_ended, msg, tool_results} | &1])
+        end
+      ]
+      """
+
+      module = create_extension_file(tmp_dir, "TestTurnEndHookExtension", hooks: hooks_code)
+
+      session = start_session(cwd: tmp_dir)
+
+      :ok = Session.prompt(session, "Hello!")
+      wait_for_streaming_complete(session)
+
+      calls = Agent.get(tracker, & &1)
+      assert [{:turn_ended, msg, tool_results}] = calls
+      assert %Ai.Types.AssistantMessage{} = msg
+      assert is_list(tool_results)
+
+      Agent.stop(tracker)
+      cleanup_module(module)
+    end
   end
 
   # ============================================================================
@@ -473,6 +551,111 @@ defmodule CodingAgent.SessionExtensionsTest do
       assert CustomPathExtension in state.extensions
 
       cleanup_module(CustomPathExtension)
+    end
+  end
+
+  # ============================================================================
+  # Extension Status Report Tests
+  # ============================================================================
+
+  describe "extension status report" do
+    test "session state includes extension_status_report", %{tmp_dir: tmp_dir} do
+      module = create_extension_file(tmp_dir, "TestStatusReportExtension")
+
+      session = start_session(cwd: tmp_dir)
+      state = Session.get_state(session)
+
+      assert is_map(state.extension_status_report)
+      assert Map.has_key?(state.extension_status_report, :extensions)
+      assert Map.has_key?(state.extension_status_report, :load_errors)
+      assert Map.has_key?(state.extension_status_report, :tool_conflicts)
+      assert Map.has_key?(state.extension_status_report, :total_loaded)
+      assert Map.has_key?(state.extension_status_report, :total_errors)
+      assert Map.has_key?(state.extension_status_report, :loaded_at)
+
+      cleanup_module(module)
+    end
+
+    test "get_extension_status_report/1 returns the status report", %{tmp_dir: tmp_dir} do
+      module = create_extension_file(tmp_dir, "TestGetStatusReportExtension")
+
+      session = start_session(cwd: tmp_dir)
+      report = Session.get_extension_status_report(session)
+
+      assert is_map(report)
+      assert report.total_loaded >= 1
+      assert report.total_errors == 0
+
+      # Verify extension is in the report
+      ext_names = Enum.map(report.extensions, & &1.name)
+      assert "testgetstatusreportextension" in ext_names
+
+      cleanup_module(module)
+    end
+
+    test "extension_status_report is available via get_extension_status_report/1 at startup", %{tmp_dir: tmp_dir} do
+      # The event is sent after init completes. Since we can't easily subscribe before
+      # the session starts (GenServer.start_link is blocking), we verify the report
+      # is available via the API instead. The event mechanism is tested implicitly
+      # through the state storage.
+      module = create_extension_file(tmp_dir, "TestEventStatusReportExtension")
+
+      session = start_session(cwd: tmp_dir)
+      report = Session.get_extension_status_report(session)
+
+      # Verify the report has the expected structure
+      assert is_map(report)
+      assert is_list(report.extensions)
+      assert is_list(report.load_errors)
+      assert is_integer(report.loaded_at)
+
+      # The extension should be in the report
+      ext_names = Enum.map(report.extensions, & &1.name)
+      assert "testeventstatusreportextension" in ext_names
+
+      cleanup_module(module)
+    end
+
+    test "status report includes tool conflicts", %{tmp_dir: tmp_dir} do
+      # Create an extension that provides a tool with the same name as a built-in
+      tools_code = """
+      [
+        %AgentCore.Types.AgentTool{
+          name: "read",
+          description: "Conflicting read tool",
+          parameters: %{},
+          label: "Conflicting Read",
+          execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+        }
+      ]
+      """
+
+      module = create_extension_file(tmp_dir, "TestConflictingToolExtension", tools: tools_code)
+
+      session = start_session(cwd: tmp_dir)
+      report = Session.get_extension_status_report(session)
+
+      assert is_map(report.tool_conflicts)
+      assert Map.has_key?(report.tool_conflicts, :conflicts)
+
+      # Should have a conflict for 'read'
+      conflicts = report.tool_conflicts.conflicts
+      read_conflict = Enum.find(conflicts, fn c -> c.tool_name == "read" end)
+      assert read_conflict != nil
+      assert read_conflict.winner == :builtin
+
+      cleanup_module(module)
+    end
+
+    test "status report with no extensions has correct counts", %{tmp_dir: tmp_dir} do
+      # tmp_dir has no extensions
+      session = start_session(cwd: tmp_dir)
+      report = Session.get_extension_status_report(session)
+
+      assert report.total_loaded == 0
+      assert report.total_errors == 0
+      assert report.extensions == []
+      assert report.load_errors == []
     end
   end
 end
