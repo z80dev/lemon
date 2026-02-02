@@ -3,6 +3,7 @@ defmodule CodingAgent.Tools.TaskTest do
 
   alias CodingAgent.Tools.Task
   alias AgentCore.AbortSignal
+  alias AgentCore.CliRunners.Types.ResumeToken
 
   describe "tool/2" do
     test "returns an AgentTool struct with correct properties" do
@@ -22,7 +23,8 @@ defmodule CodingAgent.Tools.TaskTest do
 
       assert Map.has_key?(props, "description")
       assert Map.has_key?(props, "prompt")
-      assert Map.has_key?(props, "subagent")
+      assert Map.has_key?(props, "engine")
+      assert Map.has_key?(props, "role")
       assert props["description"]["description"] =~ "3-5 words"
     end
   end
@@ -130,14 +132,14 @@ defmodule CodingAgent.Tools.TaskTest do
       assert {:error, "Prompt must be a non-empty string"} = result
     end
 
-    test "returns error when subagent is not a string" do
+    test "returns error when role is not a string" do
       result =
         Task.execute(
           "call_1",
           %{
             "description" => "Test task",
             "prompt" => "do something",
-            "subagent" => 42
+            "role" => 42
           },
           nil,
           nil,
@@ -145,7 +147,62 @@ defmodule CodingAgent.Tools.TaskTest do
           []
         )
 
-      assert {:error, "Subagent must be a string"} = result
+      assert {:error, "Role must be a string"} = result
+    end
+
+    test "treats empty role as nil" do
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Test task",
+            "prompt" => "do something",
+            "role" => "   ",
+            "engine" => "unknown"
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
+
+      assert {:error, "Engine must be one of: internal, codex, claude"} = result
+    end
+
+    test "returns error when engine is not a string" do
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Test task",
+            "prompt" => "do something",
+            "engine" => 123
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
+
+      assert {:error, "Engine must be a string"} = result
+    end
+
+    test "returns error when engine is unknown" do
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Test task",
+            "prompt" => "do something",
+            "engine" => "unknown"
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
+
+      assert {:error, "Engine must be one of: internal, codex, claude"} = result
     end
   end
 
@@ -163,16 +220,16 @@ defmodule CodingAgent.Tools.TaskTest do
     end
   end
 
-  describe "execute/6 - unknown subagent" do
-    test "returns error for unknown subagent" do
+  describe "execute/6 - unknown role" do
+    test "returns error for unknown role" do
       result = Task.execute("call_1", %{
         "description" => "Test",
         "prompt" => "do something",
-        "subagent" => "nonexistent_subagent_xyz"
+        "role" => "nonexistent_role_xyz"
       }, nil, nil, "/tmp", [])
 
       assert {:error, msg} = result
-      assert msg =~ "Unknown subagent" or msg =~ "Failed to start"
+      assert msg =~ "Unknown role" or msg =~ "Failed to start"
     end
   end
 
@@ -191,6 +248,35 @@ defmodule CodingAgent.Tools.TaskTest do
     test "tool accepts parent_session option" do
       tool = Task.tool("/tmp", parent_session: "parent-123")
       assert tool.name == "task"
+    end
+  end
+
+  describe "reduce_cli_events/4" do
+    test "captures error from completed opts and preserves resume token" do
+      token = ResumeToken.new("codex", "thread_123")
+
+      events = [
+        {:started, token},
+        {:completed, "answer", [error: "cli failed", resume: token]}
+      ]
+
+      result = Task.reduce_cli_events(events, "desc", "codex", nil)
+
+      assert result.answer == "answer"
+      assert result.resume_token == token
+      assert result.error == "cli failed"
+    end
+
+    test "captures stderr warning action as error" do
+      events = [
+        {:action, %{title: "CLI stderr output", kind: :warning, detail: %{stderr: "oops"}}, :completed, []},
+        {:completed, "answer", []}
+      ]
+
+      result = Task.reduce_cli_events(events, "desc", "claude", nil)
+
+      assert result.answer == "answer"
+      assert result.error == "oops"
     end
   end
 end
