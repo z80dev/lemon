@@ -1872,9 +1872,12 @@ ${ansi.bold('Shortcuts:')}
       this.updateStreamingMessage(state.streamingMessage);
     }
 
-    // Update loader
+    // Update loader + input submit disabling
     if (state.busy !== prevState.busy) {
       this.updateLoader(state.busy);
+      // Prevent accidental submits while the agent is streaming/processing.
+      // (We still guard in onSubmit, but this improves UX by disabling submit at the component level.)
+      this.inputEditor.disableSubmit = state.busy;
     }
 
     // Update terminal title using pi-tui's terminal interface

@@ -346,6 +346,42 @@ defmodule AgentCore.EventStreamImprovementsTest do
   # Edge Cases
   # ============================================================================
 
+  describe "attached tasks" do
+    test "re-attaching task replaces the old monitor (old task crash does not terminate stream)" do
+      {:ok, stream} = EventStream.start_link()
+
+      task1 =
+        spawn(fn ->
+          receive do
+            :crash -> exit(:task1_boom)
+          end
+        end)
+
+      task2 =
+        spawn(fn ->
+          receive do
+            :crash -> exit(:task2_boom)
+          end
+        end)
+
+      :ok = EventStream.attach_task(stream, task1)
+      :ok = EventStream.attach_task(stream, task2)
+
+      # Crash the *old* task. Stream should ignore it and keep running.
+      send(task1, :crash)
+      Process.sleep(20)
+
+      # Ensure we didn't transition to a terminal error.
+      assert EventStream.result(stream, 10) == {:error, :timeout}
+
+      EventStream.complete(stream, ["ok"])
+      assert {:ok, ["ok"]} = EventStream.result(stream, 1000)
+
+      # Cleanup
+      if Process.alive?(task2), do: send(task2, :crash)
+    end
+  end
+
   describe "edge cases" do
     test "empty stream with immediate complete" do
       {:ok, stream} = EventStream.start_link()

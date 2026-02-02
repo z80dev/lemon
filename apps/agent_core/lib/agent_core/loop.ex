@@ -751,7 +751,10 @@ defmodule AgentCore.Loop do
         # Return aborted results for remaining tool calls
         {aborted_results, context, new_messages} =
           Enum.reduce(pending_by_ref, {results, context, new_messages}, fn {_ref, %{tool_call: tool_call}}, {acc_results, acc_ctx, acc_msgs} ->
-            aborted_result = error_to_result("Tool execution aborted")
+            aborted_result = %AgentToolResult{
+              content: [%TextContent{type: :text, text: "Tool execution aborted"}],
+              details: %{error_type: :aborted}
+            }
 
             {acc_ctx, acc_msgs, acc_results} =
               emit_tool_result(tool_call, aborted_result, true, acc_ctx, acc_msgs, acc_results, stream)

@@ -40,7 +40,9 @@ defmodule Ai.CallDispatcher do
   @type provider :: atom()
   @type state :: %{
           concurrency_caps: %{provider() => pos_integer()},
-          active_requests: %{provider() => non_neg_integer()}
+          active_requests: %{provider() => non_neg_integer()},
+          monitors: %{reference() => provider()},
+          owners: %{{pid(), provider()} => [reference()]}
         }
 
   @default_concurrency_cap 10
@@ -180,7 +182,9 @@ defmodule Ai.CallDispatcher do
   def init(_opts) do
     state = %{
       concurrency_caps: %{},
-      active_requests: %{}
+      active_requests: %{},
+      monitors: %{},
+      owners: %{}
     }
 
     Logger.debug("CallDispatcher started")
@@ -188,30 +192,58 @@ defmodule Ai.CallDispatcher do
     {:ok, state}
   end
 
-  @impl true
-  def handle_call({:acquire_slot, provider}, _from, state) do
+  def handle_call({:acquire_slot, provider}, {from_pid, _tag}, state) do
     cap = Map.get(state.concurrency_caps, provider, @default_concurrency_cap)
     active = Map.get(state.active_requests, provider, 0)
 
     if active < cap do
+      monitor_ref = Process.monitor(from_pid)
+
       new_active = Map.update(state.active_requests, provider, 1, &(&1 + 1))
-      {:reply, :ok, %{state | active_requests: new_active}}
+      new_monitors = Map.put(state.monitors, monitor_ref, provider)
+
+      new_owners =
+        Map.update(state.owners, {from_pid, provider}, [monitor_ref], fn refs ->
+          [monitor_ref | refs]
+        end)
+
+      {:reply, :ok,
+       %{state | active_requests: new_active, monitors: new_monitors, owners: new_owners}}
     else
       {:reply, {:error, :max_concurrency}, state}
     end
   end
 
   @impl true
-  def handle_call({:release_slot, provider}, _from, state) do
-    new_active =
-      Map.update(state.active_requests, provider, 0, fn count ->
-        max(0, count - 1)
-      end)
+  def handle_call({:release_slot, provider}, {from_pid, _tag}, state) do
+    key = {from_pid, provider}
 
-    {:reply, :ok, %{state | active_requests: new_active}}
+    case Map.get(state.owners, key, []) do
+      [monitor_ref | rest] ->
+        Process.demonitor(monitor_ref, [:flush])
+
+        new_active =
+          Map.update(state.active_requests, provider, 0, fn count ->
+            max(0, count - 1)
+          end)
+
+        new_monitors = Map.delete(state.monitors, monitor_ref)
+
+        new_owners =
+          case rest do
+            [] -> Map.delete(state.owners, key)
+            _ -> Map.put(state.owners, key, rest)
+          end
+
+        {:reply, :ok,
+         %{state | active_requests: new_active, monitors: new_monitors, owners: new_owners}}
+
+      [] ->
+        {:reply, :ok, state}
+    end
   end
 
-  @impl true
+    @impl true
   def handle_call({:set_concurrency_cap, provider, cap}, _from, state) do
     new_caps = Map.put(state.concurrency_caps, provider, cap)
     {:reply, :ok, %{state | concurrency_caps: new_caps}}
@@ -238,6 +270,31 @@ defmodule Ai.CallDispatcher do
     }
 
     {:reply, info, state}
+  end
+
+@impl true
+  def handle_info({:DOWN, monitor_ref, :process, _pid, _reason}, state) do
+    case Map.pop(state.monitors, monitor_ref) do
+      {nil, _monitors} ->
+        {:noreply, state}
+
+      {provider, new_monitors} ->
+        new_active =
+          Map.update(state.active_requests, provider, 0, fn count ->
+            max(0, count - 1)
+          end)
+
+        new_owners =
+          Enum.reduce(state.owners, %{}, fn {key, refs}, acc ->
+            case List.delete(refs, monitor_ref) do
+              [] -> acc
+              updated_refs -> Map.put(acc, key, updated_refs)
+            end
+          end)
+
+        {:noreply,
+         %{state | active_requests: new_active, monitors: new_monitors, owners: new_owners}}
+    end
   end
 
   # ============================================================================

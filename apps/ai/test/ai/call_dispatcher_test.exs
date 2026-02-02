@@ -88,6 +88,29 @@ defmodule Ai.CallDispatcherTest do
       Task.await(task)
     end
 
+    test "dispatcher releases slot if caller is killed", %{provider: provider} do
+      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100})
+      start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 5})
+
+      CallDispatcher.set_concurrency_cap(provider, 1)
+
+      pid =
+        spawn(fn ->
+          CallDispatcher.dispatch(provider, fn ->
+            Process.sleep(:infinity)
+          end)
+        end)
+
+      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 1 end)
+
+      # :kill ensures the caller's `after` cleanup does not run.
+      Process.exit(pid, :kill)
+
+      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 0 end)
+
+      assert {:ok, "ok"} = CallDispatcher.dispatch(provider, fn -> {:ok, "ok"} end)
+    end
+
     test "set_concurrency_cap works correctly", %{provider: provider} do
       # Default cap is 10
       assert 10 = CallDispatcher.get_concurrency_cap(provider)
@@ -180,20 +203,20 @@ defmodule Ai.CallDispatcherTest do
     end
 
     test "transitions to half_open after timeout", %{provider: provider} do
-      # Use a very short recovery timeout for testing
+      # Use a short (but not too short) recovery timeout to avoid timing flakes
       start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 2, recovery_timeout: 50}
+        {CircuitBreaker, provider: provider, failure_threshold: 2, recovery_timeout: 200}
       )
 
       # Open the circuit
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
+      Process.sleep(20)
 
       assert CircuitBreaker.is_open?(provider)
 
       # Wait for recovery timeout
-      Process.sleep(60)
+      Process.sleep(220)
 
       # Should transition to half_open (not open)
       refute CircuitBreaker.is_open?(provider)
@@ -204,18 +227,18 @@ defmodule Ai.CallDispatcherTest do
 
     test "closes after successful requests in half_open", %{provider: provider} do
       start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 2, recovery_timeout: 50}
+        {CircuitBreaker, provider: provider, failure_threshold: 2, recovery_timeout: 200}
       )
 
       # Open the circuit
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
+      Process.sleep(20)
 
       assert CircuitBreaker.is_open?(provider)
 
       # Wait for half_open
-      Process.sleep(60)
+      Process.sleep(220)
 
       refute CircuitBreaker.is_open?(provider)
       {:ok, state} = CircuitBreaker.get_state(provider)
@@ -234,6 +257,21 @@ defmodule Ai.CallDispatcherTest do
       # Should be closed now
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :closed
+    end
+  end
+
+  defp wait_until(fun, timeout_ms \\ 1_000, step_ms \\ 10) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+
+    if fun.() do
+      :ok
+    else
+      if System.monotonic_time(:millisecond) < deadline do
+        Process.sleep(step_ms)
+        wait_until(fun, timeout_ms, step_ms)
+      else
+        flunk("condition not met within #{timeout_ms}ms")
+      end
     end
   end
 end

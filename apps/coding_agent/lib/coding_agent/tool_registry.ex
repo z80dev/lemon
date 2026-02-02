@@ -7,6 +7,18 @@ defmodule CodingAgent.ToolRegistry do
   - Loading of extension tools
   - Enabling/disabling tools per session
   - Tool lookup by name
+  - Conflict detection with deterministic precedence
+
+  ## Tool Precedence
+
+  When multiple tools share the same name, the following precedence applies:
+
+  1. **Built-in tools always win** - Core tools take priority over extension tools
+  2. **Among extensions, first loaded wins** - Extensions are loaded in alphabetical
+     order by module name, so earlier modules take precedence
+
+  When a conflict is detected, a warning is logged with the tool name and the
+  module that was shadowed.
 
   ## Usage
 
@@ -19,6 +31,8 @@ defmodule CodingAgent.ToolRegistry do
       # Get a specific tool
       {:ok, tool} = ToolRegistry.get_tool(cwd, "read")
   """
+
+  require Logger
 
   alias CodingAgent.Extensions
   alias CodingAgent.Tools
@@ -42,7 +56,8 @@ defmodule CodingAgent.ToolRegistry do
     {:todoread, Tools.TodoRead},
     {:todowrite, Tools.TodoWrite},
     {:webfetch, Tools.WebFetch},
-    {:websearch, Tools.WebSearch}
+    {:websearch, Tools.WebSearch},
+    {:extensions_status, Tools.ExtensionsStatus}
   ]
 
   @doc """
@@ -57,6 +72,7 @@ defmodule CodingAgent.ToolRegistry do
       * `:disabled` - List of tool names to disable
       * `:enabled_only` - List of tool names to enable (disables all others)
       * `:include_extensions` - Whether to include extension tools (default: true)
+      * `:extension_paths` - List of paths to search for extensions (default: uses `Extensions.load_default_extensions/1`)
 
   ## Returns
 
@@ -67,21 +83,31 @@ defmodule CodingAgent.ToolRegistry do
     disabled = Keyword.get(opts, :disabled, [])
     enabled_only = Keyword.get(opts, :enabled_only, nil)
     include_extensions = Keyword.get(opts, :include_extensions, true)
+    extension_paths = Keyword.get(opts, :extension_paths)
 
-    # Get built-in tools
+    # Get built-in tools with source tracking
     builtin =
       @builtin_tools
       |> Enum.map(fn {name, module} ->
-        {Atom.to_string(name), module.tool(cwd, opts)}
+        {Atom.to_string(name), module.tool(cwd, opts), {:builtin, module}}
       end)
 
-    # Get extension tools
+    # Get extension tools with source tracking
     extension_tools =
       if include_extensions do
-        case Extensions.load_default_extensions(cwd) do
+        extensions_result =
+          if extension_paths do
+            Extensions.load_extensions(extension_paths)
+          else
+            Extensions.load_default_extensions(cwd)
+          end
+
+        case extensions_result do
           {:ok, extensions} ->
-            Extensions.get_tools(extensions, cwd)
-            |> Enum.map(fn tool -> {tool.name, tool} end)
+            Extensions.get_tools_with_source(extensions, cwd)
+            |> Enum.map(fn {tool, ext_module} ->
+              {tool.name, tool, {:extension, ext_module}}
+            end)
 
           _ ->
             []
@@ -90,13 +116,13 @@ defmodule CodingAgent.ToolRegistry do
         []
       end
 
-    # Combine all tools
-    all_tools = builtin ++ extension_tools
+    # Merge tools with conflict detection
+    all_tools = merge_tools_with_conflict_detection(builtin, extension_tools)
 
     # Filter based on enabled/disabled
     all_tools
     |> filter_tools(disabled, enabled_only)
-    |> Enum.map(fn {_name, tool} -> tool end)
+    |> Enum.map(fn {_name, tool, _source} -> tool end)
   end
 
   @doc """
@@ -195,15 +221,179 @@ defmodule CodingAgent.ToolRegistry do
     Enum.map(@builtin_tools, fn {name, _} -> name end)
   end
 
+  @typedoc """
+  A tool conflict report entry.
+
+  - `:tool_name` - The conflicting tool name
+  - `:winner` - Source that won (`:builtin` or `{:extension, module()}`)
+  - `:shadowed` - List of sources that were shadowed
+  """
+  @type conflict_entry :: %{
+          tool_name: String.t(),
+          winner: :builtin | {:extension, module()},
+          shadowed: [{:extension, module()}]
+        }
+
+  @typedoc """
+  Complete tool conflict report.
+
+  - `:conflicts` - List of conflict entries
+  - `:total_tools` - Total number of tools available after conflict resolution
+  - `:builtin_count` - Number of built-in tools
+  - `:extension_count` - Number of extension tools (after shadowing)
+  - `:shadowed_count` - Total number of shadowed tools
+  """
+  @type conflict_report :: %{
+          conflicts: [conflict_entry()],
+          total_tools: non_neg_integer(),
+          builtin_count: non_neg_integer(),
+          extension_count: non_neg_integer(),
+          shadowed_count: non_neg_integer()
+        }
+
+  @doc """
+  Get a report of tool name conflicts.
+
+  Returns a structured report showing which tools conflict and how they
+  are resolved. This is useful for plugin observability and debugging.
+
+  ## Parameters
+
+    * `cwd` - Current working directory
+    * `opts` - Options (same as `get_tools/2`)
+
+  ## Returns
+
+  A map with conflict information:
+
+    * `:conflicts` - List of conflict entries, each with:
+      * `:tool_name` - The conflicting tool name
+      * `:winner` - The source that won (`:builtin` or `{:extension, module}`)
+      * `:shadowed` - List of `{:extension, module}` tuples that were shadowed
+    * `:total_tools` - Total number of tools available
+    * `:builtin_count` - Number of built-in tools
+    * `:extension_count` - Number of extension tools (after shadowing)
+    * `:shadowed_count` - Total number of shadowed tools
+
+  ## Examples
+
+      report = ToolRegistry.tool_conflict_report(cwd)
+      # => %{
+      #   conflicts: [
+      #     %{tool_name: "read", winner: :builtin, shadowed: [{:extension, MyExtension}]}
+      #   ],
+      #   total_tools: 16,
+      #   builtin_count: 15,
+      #   extension_count: 1,
+      #   shadowed_count: 1
+      # }
+  """
+  @spec tool_conflict_report(String.t(), tool_opts()) :: conflict_report()
+  def tool_conflict_report(cwd, opts \\ []) do
+    include_extensions = Keyword.get(opts, :include_extensions, true)
+    extension_paths = Keyword.get(opts, :extension_paths)
+
+    # Get built-in tools with source tracking
+    builtin =
+      @builtin_tools
+      |> Enum.map(fn {name, module} ->
+        {Atom.to_string(name), module.tool(cwd, opts), {:builtin, module}}
+      end)
+
+    # Get extension tools with source tracking
+    extension_tools =
+      if include_extensions do
+        extensions_result =
+          if extension_paths do
+            Extensions.load_extensions(extension_paths)
+          else
+            Extensions.load_default_extensions(cwd)
+          end
+
+        case extensions_result do
+          {:ok, extensions} ->
+            Extensions.get_tools_with_source(extensions, cwd)
+            |> Enum.map(fn {tool, ext_module} ->
+              {tool.name, tool, {:extension, ext_module}}
+            end)
+
+          _ ->
+            []
+        end
+      else
+        []
+      end
+
+    # Analyze conflicts without logging
+    {resolved_tools, conflicts} = analyze_conflicts(builtin, extension_tools)
+
+    builtin_count = length(builtin)
+    extension_count = length(resolved_tools) - builtin_count
+    shadowed_count = Enum.reduce(conflicts, 0, fn c, acc -> acc + length(c.shadowed) end)
+
+    %{
+      conflicts: conflicts,
+      total_tools: length(resolved_tools),
+      builtin_count: builtin_count,
+      extension_count: extension_count,
+      shadowed_count: shadowed_count
+    }
+  end
+
   # ============================================================================
   # Private Functions
   # ============================================================================
+
+  # Merge builtin and extension tools, detecting and warning about conflicts.
+  # Builtin tools always take precedence over extension tools.
+  # Among extension tools, the first one loaded wins (alphabetical by module name).
+  @spec merge_tools_with_conflict_detection(
+          [{String.t(), AgentCore.Types.AgentTool.t(), {:builtin, module()}}],
+          [{String.t(), AgentCore.Types.AgentTool.t(), {:extension, module()}}]
+        ) :: [{String.t(), AgentCore.Types.AgentTool.t(), {:builtin | :extension, module()}}]
+  defp merge_tools_with_conflict_detection(builtin_tools, extension_tools) do
+    builtin_names =
+      builtin_tools
+      |> Enum.map(fn {name, _tool, _source} -> name end)
+      |> MapSet.new()
+
+    # Process extension tools, detecting conflicts
+    {valid_extension_tools, _seen} =
+      Enum.reduce(extension_tools, {[], builtin_names}, fn {name, tool, source}, {acc, seen} ->
+        cond do
+          # Conflict with builtin tool
+          MapSet.member?(builtin_names, name) ->
+            {:extension, ext_module} = source
+            Logger.warning(
+              "Tool name conflict: extension tool '#{name}' from #{inspect(ext_module)} " <>
+                "is shadowed by built-in tool"
+            )
+            {acc, seen}
+
+          # Conflict with another extension tool already processed
+          MapSet.member?(seen, name) ->
+            {:extension, ext_module} = source
+            Logger.warning(
+              "Tool name conflict: extension tool '#{name}' from #{inspect(ext_module)} " <>
+                "is shadowed by earlier extension"
+            )
+            {acc, seen}
+
+          # No conflict, add the tool
+          true ->
+            {[{name, tool, source} | acc], MapSet.put(seen, name)}
+        end
+      end)
+
+    # Return builtin tools followed by valid extension tools (in reverse to preserve order)
+    builtin_tools ++ Enum.reverse(valid_extension_tools)
+  end
 
   defp filter_tools(tools, disabled, nil) do
     # Filter out disabled tools
     disabled_set = MapSet.new(disabled, &to_string/1)
 
-    Enum.reject(tools, fn {name, _tool} ->
+    Enum.reject(tools, fn {name, _tool, _source} ->
       MapSet.member?(disabled_set, name)
     end)
   end
@@ -212,8 +402,104 @@ defmodule CodingAgent.ToolRegistry do
     # Only include explicitly enabled tools
     enabled_set = MapSet.new(enabled_only, &to_string/1)
 
-    Enum.filter(tools, fn {name, _tool} ->
+    Enum.filter(tools, fn {name, _tool, _source} ->
       MapSet.member?(enabled_set, name)
     end)
+  end
+
+  # Analyze conflicts and return {resolved_tools, conflicts} without logging.
+  # Used by tool_conflict_report/2 for structured conflict reporting.
+  @spec analyze_conflicts(
+          [{String.t(), AgentCore.Types.AgentTool.t(), {:builtin, module()}}],
+          [{String.t(), AgentCore.Types.AgentTool.t(), {:extension, module()}}]
+        ) :: {
+          [{String.t(), AgentCore.Types.AgentTool.t(), {:builtin | :extension, module()}}],
+          [conflict_entry()]
+        }
+  defp analyze_conflicts(builtin_tools, extension_tools) do
+    builtin_names =
+      builtin_tools
+      |> Enum.map(fn {name, _tool, _source} -> name end)
+      |> MapSet.new()
+
+    # Group extension tools by name for conflict tracking
+    ext_by_name =
+      Enum.group_by(extension_tools, fn {name, _tool, _source} -> name end)
+
+    # Process extension tools, tracking conflicts
+    {valid_extension_tools, conflicts, _seen} =
+      Enum.reduce(extension_tools, {[], [], builtin_names}, fn {name, tool, source}, {acc, conflicts, seen} ->
+        cond do
+          # Conflict with builtin tool
+          MapSet.member?(builtin_names, name) ->
+            existing_conflict = Enum.find(conflicts, fn c -> c.tool_name == name end)
+
+            if existing_conflict do
+              # Already recorded this builtin conflict, add to shadowed list
+              updated =
+                Enum.map(conflicts, fn c ->
+                  if c.tool_name == name do
+                    %{c | shadowed: [source | c.shadowed]}
+                  else
+                    c
+                  end
+                end)
+
+              {acc, updated, seen}
+            else
+              # First time seeing this builtin conflict
+              conflict = %{
+                tool_name: name,
+                winner: :builtin,
+                shadowed: [source]
+              }
+
+              {acc, [conflict | conflicts], seen}
+            end
+
+          # Conflict with another extension tool already processed
+          MapSet.member?(seen, name) ->
+            # Find the winner (first extension with this name)
+            {_winner_name, _winner_tool, winner_source} =
+              Enum.find(ext_by_name[name], fn {_, _, s} ->
+                {:extension, winner_mod} = s
+                {:extension, current_mod} = source
+                winner_mod != current_mod
+              end) || {name, tool, source}
+
+            existing_conflict = Enum.find(conflicts, fn c -> c.tool_name == name end)
+
+            if existing_conflict do
+              # Already recorded this extension conflict, add to shadowed list
+              updated =
+                Enum.map(conflicts, fn c ->
+                  if c.tool_name == name do
+                    %{c | shadowed: [source | c.shadowed]}
+                  else
+                    c
+                  end
+                end)
+
+              {acc, updated, seen}
+            else
+              # First time seeing this extension-vs-extension conflict
+              conflict = %{
+                tool_name: name,
+                winner: winner_source,
+                shadowed: [source]
+              }
+
+              {acc, [conflict | conflicts], seen}
+            end
+
+          # No conflict, add the tool
+          true ->
+            {[{name, tool, source} | acc], conflicts, MapSet.put(seen, name)}
+        end
+      end)
+
+    # Return builtin tools followed by valid extension tools (in reverse to preserve order)
+    resolved = builtin_tools ++ Enum.reverse(valid_extension_tools)
+    {resolved, Enum.reverse(conflicts)}
   end
 end

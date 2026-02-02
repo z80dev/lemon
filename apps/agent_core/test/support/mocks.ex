@@ -353,7 +353,7 @@ defmodule AgentCore.Test.Mocks do
   Generates a unique ID for tool calls.
   """
   def generate_id do
-    "call_" <> :crypto.strong_rand_bytes(12) |> Base.encode16(case: :lower)
+    "call_" <> Base.encode16(:crypto.strong_rand_bytes(12), case: :lower)
   end
 
   @doc """

@@ -63,9 +63,11 @@ defmodule CodingAgent.Tools.WebFetch do
     url = Map.get(params, "url", "")
     format = Map.get(params, "format", "text")
     timeout_seconds = Map.get(params, "timeout")
-    timeout_ms = normalize_timeout(timeout_seconds)
 
     with :ok <- validate_url(url),
+         :ok <- validate_format(format),
+         :ok <- validate_timeout(timeout_seconds),
+         timeout_ms <- normalize_timeout(timeout_seconds),
          {:ok, response} <- fetch_with_retry(url, timeout_ms, signal),
          :ok <- check_abort(signal) do
       case response do
@@ -103,13 +105,27 @@ defmodule CodingAgent.Tools.WebFetch do
     end
   end
 
+  defp validate_format(format) when format in ["text", "markdown", "html"], do: :ok
+  defp validate_format(_), do: {:error, "format must be one of: text, markdown, html"}
+
+  defp validate_timeout(nil), do: :ok
+
+  defp validate_timeout(timeout_seconds) when is_integer(timeout_seconds) and timeout_seconds > 0 do
+    :ok
+  end
+
+  defp validate_timeout(timeout_seconds) when is_integer(timeout_seconds) do
+    {:error, "timeout must be a positive integer"}
+  end
+
+  defp validate_timeout(_), do: {:error, "timeout must be an integer"}
+
   defp normalize_timeout(nil), do: @default_timeout_ms
 
   defp normalize_timeout(timeout_seconds) when is_integer(timeout_seconds) do
     timeout_seconds
-    |> max(0)
+    |> min(div(@max_timeout_ms, 1000))
     |> Kernel.*(1000)
-    |> min(@max_timeout_ms)
   end
 
   defp normalize_timeout(_), do: @default_timeout_ms
@@ -164,7 +180,7 @@ defmodule CodingAgent.Tools.WebFetch do
     Req.get(url,
       headers: headers,
       decode_body: false,
-      connect_timeout: timeout_ms,
+      connect_options: [timeout: timeout_ms],
       receive_timeout: timeout_ms
     )
   end

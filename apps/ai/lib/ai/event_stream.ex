@@ -283,6 +283,7 @@ defmodule Ai.EventStream do
       owner: owner,
       owner_ref: owner_ref,
       task_pid: nil,
+      task_ref: nil,
       timeout_ref: timeout_ref
     }
 
@@ -341,9 +342,13 @@ defmodule Ai.EventStream do
 
   @impl true
   def handle_cast({:attach_task, task_pid}, state) do
-    # Monitor the task so we can detect if it crashes
-    Process.monitor(task_pid)
-    {:noreply, %{state | task_pid: task_pid}}
+    # Monitor the task so we can detect if it crashes.
+    # If a task is re-attached, demonitor the previous task to avoid leaking monitors
+    # and to ensure we only react to the currently-attached task.
+    if state.task_ref, do: Process.demonitor(state.task_ref, [:flush])
+
+    task_ref = Process.monitor(task_pid)
+    {:noreply, %{state | task_pid: task_pid, task_ref: task_ref}}
   end
 
   def handle_cast({:push, event}, state) do
@@ -399,8 +404,8 @@ defmodule Ai.EventStream do
     {:stop, :normal, state}
   end
 
-  def handle_info({:DOWN, _ref, :process, pid, reason}, %{task_pid: pid} = state) do
-    # Streaming task died
+  def handle_info({:DOWN, ref, :process, pid, reason}, %{task_pid: pid, task_ref: ref} = state) do
+    # Currently-attached streaming task died
     Logger.debug("EventStream task died: #{inspect(reason)}")
 
     unless state.done or state.canceled do
@@ -423,9 +428,9 @@ defmodule Ai.EventStream do
 
       state = %{state | result: {:error, error_message}, done: true}
       state = notify_result_waiters(state)
-      {:noreply, %{state | task_pid: nil}}
+      {:noreply, %{state | task_pid: nil, task_ref: nil}}
     else
-      {:noreply, %{state | task_pid: nil}}
+      {:noreply, %{state | task_pid: nil, task_ref: nil}}
     end
   end
 

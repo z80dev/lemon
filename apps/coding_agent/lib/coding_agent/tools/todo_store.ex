@@ -59,6 +59,48 @@ defmodule CodingAgent.Tools.TodoStore do
     :ok
   end
 
+  @doc """
+  Deletes the todo list for a session.
+
+  Returns :ok even if the session has no stored todos.
+  """
+  @spec delete(String.t()) :: :ok
+  def delete(session_id) when is_binary(session_id) do
+    case :ets.whereis(@table) do
+      :undefined ->
+        :ok
+
+      _tid ->
+        :ets.delete(@table, session_id)
+        :ok
+    end
+  rescue
+    ArgumentError ->
+      :ok
+  end
+
+  @doc """
+  Clears all todos from the store.
+
+  Primarily used by tests to ensure isolation.
+
+  If the ETS table has not been created yet, this is a no-op.
+  """
+  @spec clear() :: :ok
+  def clear do
+    case :ets.whereis(@table) do
+      :undefined ->
+        :ok
+
+      _tid ->
+        :ets.delete_all_objects(@table)
+        :ok
+    end
+  rescue
+    ArgumentError ->
+      :ok
+  end
+
   defp ensure_table do
     case :ets.whereis(@table) do
       :undefined ->
