@@ -42,6 +42,7 @@ end
 | `hooks/0` | No | Returns a keyword list of event hooks |
 | `capabilities/0` | No | Returns a list of capability atoms (e.g., `[:tools, :hooks]`) |
 | `config_schema/0` | No | Returns a JSON Schema-like map for configuration options |
+| `providers/0` | No | Returns a list of provider specifications for registration |
 
 ## Providing Tools
 
@@ -191,6 +192,95 @@ The schema follows JSON Schema conventions with optional extensions:
 - `secret: true` - Indicates the field should be masked in UIs
 - `default` - Default value for the field
 
+## Registering Providers
+
+Extensions can register custom providers that integrate with the core system. Currently, `:model` type providers are supported, allowing extensions to add custom AI model backends.
+
+```elixir
+@impl true
+def providers do
+  [
+    %{
+      type: :model,
+      name: :my_custom_model,
+      module: MyExtension.CustomModelProvider,
+      config: %{api_key_env: "MY_API_KEY"}
+    }
+  ]
+end
+```
+
+### Provider Specification Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | atom | The provider type (currently only `:model` is supported) |
+| `name` | atom | Unique identifier for the provider |
+| `module` | module | The module implementing the provider behaviour |
+| `config` | map | Optional configuration passed to the provider |
+
+### Provider Registration Process
+
+1. **At session startup**: All extension providers are collected and registered into `Ai.ProviderRegistry`
+2. **On extension reload**: Old providers are unregistered, extensions are reloaded, and new providers are registered
+3. **Conflict detection**: When multiple extensions register the same provider name, the first (alphabetically by module name) wins
+
+### Provider Precedence
+
+Similar to tools, providers follow a precedence order:
+
+1. **Built-in providers always win** - Core providers (anthropic, openai, etc.) take priority
+2. **First loaded extension wins** - Extensions are sorted alphabetically by module name
+
+### Provider Conflicts in Status Report
+
+Provider registration conflicts are included in the extension status report:
+
+```elixir
+%{
+  # ... other fields ...
+  provider_registration: %{
+    registered: [
+      %{type: :model, name: :custom_model, module: MyProvider, extension: MyExtension}
+    ],
+    conflicts: [
+      %{
+        type: :model,
+        name: :conflicting_model,
+        winner: ExtensionA,          # or :builtin if shadowed by core
+        shadowed: [ExtensionB, ExtensionC]
+      }
+    ],
+    total_registered: 1,
+    total_conflicts: 1
+  }
+}
+```
+
+### Implementing a Model Provider
+
+Model providers must implement the `Ai.Provider` behaviour:
+
+```elixir
+defmodule MyExtension.CustomModelProvider do
+  @behaviour Ai.Provider
+
+  @impl true
+  def stream(model, context, opts) do
+    # Streaming implementation
+    {:ok, event_stream}
+  end
+
+  @impl true
+  def provider_id, do: :my_provider
+
+  @impl true
+  def api_id, do: :my_custom_model
+end
+```
+
+See the `Ai.Provider` module documentation for full details on implementing providers.
+
 ## Extension Discovery
 
 Extensions are discovered from:
@@ -305,7 +395,7 @@ Each extension metadata map includes:
 
 ## Tool Conflict Report API
 
-For plugin observability, the `ToolRegistry` provides a structured conflict report that shows how tool name conflicts are resolved:
+For plugin observability, the `ToolRegistry` provides a structured conflict report that shows how tool name conflicts are resolved and captures extension load failures:
 
 ```elixir
 report = CodingAgent.ToolRegistry.tool_conflict_report(cwd)
@@ -325,7 +415,14 @@ report = CodingAgent.ToolRegistry.tool_conflict_report(cwd)
 #   total_tools: 16,
 #   builtin_count: 15,
 #   extension_count: 1,
-#   shadowed_count: 2
+#   shadowed_count: 2,
+#   load_errors: [
+#     %{
+#       source_path: "/path/to/broken_extension.ex",
+#       error: %CompileError{...},
+#       error_message: "Compile error: unexpected token"
+#     }
+#   ]
 # }
 ```
 
@@ -338,11 +435,16 @@ The report includes:
 - `builtin_count` - Number of built-in tools
 - `extension_count` - Number of extension tools (after shadowing)
 - `shadowed_count` - Total number of shadowed tools
+- `load_errors` - List of extension load errors, each containing:
+  - `source_path` - Path to the file that failed to load
+  - `error` - The error exception/term
+  - `error_message` - Human-readable error message
 
 This is useful for:
 - Debugging why a custom tool isn't appearing
 - Building UIs that show plugin health/status
 - Detecting extension conflicts before they cause issues
+- Identifying broken extensions that failed to compile or load
 
 ## Extension Status Report
 
@@ -407,6 +509,16 @@ end
     shadowed_count: 0
   },
 
+  # Provider registration report
+  provider_registration: %{
+    registered: [
+      %{type: :model, name: :custom_model, module: CustomProvider, extension: MyExtension}
+    ],
+    conflicts: [],
+    total_registered: 1,
+    total_conflicts: 0
+  },
+
   # Summary counts
   total_loaded: 2,
   total_errors: 1,
@@ -419,13 +531,19 @@ end
 For programmatic use, you can load extensions and capture errors:
 
 ```elixir
-{:ok, extensions, errors} = CodingAgent.Extensions.load_extensions_with_errors([
+{:ok, extensions, load_errors, validation_errors} = CodingAgent.Extensions.load_extensions_with_errors([
   "~/.lemon/agent/extensions",
   "/path/to/project/.lemon/extensions"
 ])
 
+# Register extension providers
+provider_report = CodingAgent.Extensions.register_extension_providers(extensions)
+
 # Build a status report manually
-report = CodingAgent.Extensions.build_status_report(extensions, errors, cwd: "/project")
+report = CodingAgent.Extensions.build_status_report(extensions, load_errors,
+  cwd: "/project",
+  provider_registration: provider_report
+)
 ```
 
 This is useful for:
@@ -436,14 +554,15 @@ This is useful for:
 
 ## Extensions Status Tool
 
-The agent has access to a built-in `extensions_status` tool that allows it to self-diagnose plugin loading issues and conflicts during a session. This is useful for debugging when:
+The agent has access to a built-in `extensions_status` tool that allows it to self-diagnose plugin loading issues, conflicts, and reload extensions during a session. This is useful for debugging when:
 - An expected tool isn't available
 - Extensions fail to load with syntax or compile errors
 - Tool name conflicts prevent extension tools from being used
+- Extensions have been added, modified, or removed during the session
 
 ### Using the Tool
 
-The agent can call the tool with an optional `include_details` parameter:
+The agent can call the tool with optional `action` and `include_details` parameters:
 
 ```
 # Summary view (default)
@@ -451,7 +570,20 @@ extensions_status {}
 
 # Detailed view with source paths and modules
 extensions_status {"include_details": true}
+
+# Reload extensions (re-discover and refresh tool registry)
+extensions_status {"action": "reload"}
+
+# Reload with details
+extensions_status {"action": "reload", "include_details": true}
 ```
+
+### Actions
+
+| Action | Description |
+|--------|-------------|
+| `status` | Get the current extension status report (default) |
+| `reload` | Re-discover extensions from all paths, refresh the tool registry, and update the status report |
 
 ### Output Format
 
@@ -483,6 +615,52 @@ When `include_details: true`, extension entries also show:
 - Source file path
 - Module name
 - Whether the extension has a config schema
+
+### Reloading Extensions
+
+The `reload` action allows the agent to refresh the extension system without restarting the session. This is useful when:
+- New extension files have been added to the extensions directories
+- Existing extensions have been modified
+- Extensions have been removed and should no longer be loaded
+
+When reload is triggered:
+1. All currently loaded extension modules are purged from the code server
+2. Extensions are re-discovered from all configured paths
+3. The tool registry is rebuilt with conflict detection
+4. The session's tools and hooks are updated
+5. A new `{:extension_status_report, report}` event is broadcast
+
+```elixir
+# Reload via tool (from within agent)
+extensions_status {"action": "reload"}
+
+# Reload via Session API (from external code)
+{:ok, report} = CodingAgent.Session.reload_extensions(session)
+```
+
+### Fallback Mode and Cached Errors
+
+When the `extensions_status` tool is called without an active session context (e.g., no session_id or session not found), it operates in "fallback mode". In this mode, it retrieves:
+
+- **Loaded extensions** from the global extension registry
+- **Tool conflicts** computed for the current working directory
+- **Cached load errors** from the most recent `load_extensions_with_errors/1` call
+
+This allows observability into extension issues even when no session context exists. The cached errors include:
+- Source path of the failed extension
+- Error type and message
+- Timestamp of when extensions were last loaded
+
+```elixir
+# Retrieve cached errors programmatically
+{errors, loaded_at} = CodingAgent.Extensions.last_load_errors()
+# => {[%{source_path: "/path/to/bad.ex", error_message: "Syntax error..."}], 1706745600000}
+```
+
+The fallback title in the tool result also includes error counts:
+- `"2 loaded, 1 errors (no session context)"` - when there are load errors
+- `"2 loaded, 1 conflicts (session not found)"` - when there are tool conflicts
+- `"2 loaded, 1 errors, 1 conflicts (no session context)"` - when both exist
 
 ## Best Practices
 

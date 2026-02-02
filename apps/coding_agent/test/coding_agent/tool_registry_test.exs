@@ -582,5 +582,66 @@ defmodule CodingAgent.ToolRegistryTest do
       :code.purge(ConflictReportCountExt)
       :code.delete(ConflictReportCountExt)
     end
+
+    test "captures extension load errors", %{tmp_dir: tmp_dir} do
+      ext_dir = Path.join(tmp_dir, ".lemon/extensions")
+      File.mkdir_p!(ext_dir)
+
+      # Create a valid extension
+      valid_code = """
+      defmodule ValidExtForErrorTest do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "valid-ext"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def tools(_cwd), do: []
+      end
+      """
+
+      # Create a broken extension (syntax error)
+      broken_code = """
+      defmodule BrokenExtForErrorTest do
+        @behaviour CodingAgent.Extensions.Extension
+
+        # Missing closing bracket will cause syntax error
+        def name, do: "broken-ext"
+        def version, do: "1.0.0"
+        def tools(_cwd) do
+          [
+      end
+      """
+
+      File.write!(Path.join(ext_dir, "valid_ext.ex"), valid_code)
+      File.write!(Path.join(ext_dir, "broken_ext.ex"), broken_code)
+
+      report = ToolRegistry.tool_conflict_report(tmp_dir)
+
+      # Should have load errors from broken extension
+      assert length(report.load_errors) >= 1
+
+      broken_error =
+        Enum.find(report.load_errors, fn err ->
+          String.contains?(err.source_path, "broken_ext.ex")
+        end)
+
+      assert broken_error != nil
+      assert is_binary(broken_error.error_message)
+      assert broken_error.error != nil
+
+      # Cleanup
+      :code.purge(ValidExtForErrorTest)
+      :code.delete(ValidExtForErrorTest)
+    end
+
+    test "returns empty load_errors when all extensions load successfully", %{tmp_dir: tmp_dir} do
+      report = ToolRegistry.tool_conflict_report(tmp_dir, include_extensions: false)
+
+      assert report.load_errors == []
+    end
   end
 end

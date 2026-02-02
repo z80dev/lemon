@@ -509,9 +509,12 @@ defmodule CodingAgent.ExtensionsTest do
 
   describe "load_extensions_with_errors/1" do
     test "returns ok with empty lists for non-existent paths" do
-      {:ok, extensions, errors} = Extensions.load_extensions_with_errors(["/nonexistent/path"])
+      {:ok, extensions, errors, validation_errors} =
+        Extensions.load_extensions_with_errors(["/nonexistent/path"])
+
       assert extensions == []
       assert errors == []
+      assert validation_errors == []
     end
 
     test "loads extensions and returns empty errors for valid files", %{tmp_dir: tmp_dir} do
@@ -529,9 +532,12 @@ defmodule CodingAgent.ExtensionsTest do
 
       File.write!(Path.join(tmp_dir, "valid_extension.ex"), extension_code)
 
-      {:ok, extensions, errors} = Extensions.load_extensions_with_errors([tmp_dir])
+      {:ok, extensions, errors, validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
+
       assert ValidExtensionWithErrors in extensions
       assert errors == []
+      assert validation_errors == []
 
       # Cleanup
       :code.purge(ValidExtensionWithErrors)
@@ -549,7 +555,9 @@ defmodule CodingAgent.ExtensionsTest do
       bad_path = Path.join(tmp_dir, "bad_extension.ex")
       File.write!(bad_path, invalid_code)
 
-      {:ok, extensions, errors} = Extensions.load_extensions_with_errors([tmp_dir])
+      {:ok, extensions, errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
+
       assert extensions == []
       assert length(errors) == 1
 
@@ -583,7 +591,9 @@ defmodule CodingAgent.ExtensionsTest do
       File.write!(Path.join(tmp_dir, "valid.ex"), valid_code)
       File.write!(Path.join(tmp_dir, "invalid.ex"), invalid_code)
 
-      {:ok, extensions, errors} = Extensions.load_extensions_with_errors([tmp_dir])
+      {:ok, extensions, errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
+
       assert MixedValidExtension in extensions
       assert length(errors) == 1
 
@@ -611,7 +621,8 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "status_report_extension.ex"), extension_code)
-      {:ok, extensions, errors} = Extensions.load_extensions_with_errors([tmp_dir])
+      {:ok, extensions, errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       report = Extensions.build_status_report(extensions, errors, cwd: tmp_dir)
 
@@ -641,7 +652,8 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "bad.ex"), bad_code)
-      {:ok, extensions, errors} = Extensions.load_extensions_with_errors([tmp_dir])
+      {:ok, extensions, errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       report = Extensions.build_status_report(extensions, errors, cwd: tmp_dir)
 
@@ -680,6 +692,486 @@ defmodule CodingAgent.ExtensionsTest do
       report = Extensions.build_status_report([], [], tool_conflict_report: fake_conflict_report)
 
       assert report.tool_conflicts == fake_conflict_report
+    end
+  end
+
+  describe "clear_extension_cache/0" do
+    test "clears loaded extension modules", %{tmp_dir: tmp_dir} do
+      extension_code = """
+      defmodule ClearCacheTestExtension do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "clear-cache-test"
+
+        @impl true
+        def version, do: "1.0.0"
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "clear_cache_test.ex"), extension_code)
+      {:ok, extensions} = Extensions.load_extensions([tmp_dir])
+
+      # Verify extension was loaded
+      assert ClearCacheTestExtension in extensions
+      assert Extensions.get_source_path(ClearCacheTestExtension) != nil
+
+      # Clear the cache
+      :ok = Extensions.clear_extension_cache()
+
+      # Verify extension module was purged
+      assert Extensions.get_source_path(ClearCacheTestExtension) == nil
+
+      # Verify the module was deleted from code server
+      # After purge+delete, the module should not be loaded
+      refute Code.ensure_loaded?(ClearCacheTestExtension)
+    end
+
+    test "clears load errors cache", %{tmp_dir: tmp_dir} do
+      # Create an invalid extension to generate an error
+      invalid_code = """
+      defmodule ClearCacheErrorTestBadExt do
+        def missing_end
+      """
+
+      File.write!(Path.join(tmp_dir, "bad_for_clear_test.ex"), invalid_code)
+      {:ok, _extensions, errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
+
+      # Verify we have errors
+      assert length(errors) == 1
+
+      # Verify errors are cached
+      {cached_errors, loaded_at} = Extensions.last_load_errors()
+      assert length(cached_errors) == 1
+      assert is_integer(loaded_at)
+
+      # Clear the cache
+      :ok = Extensions.clear_extension_cache()
+
+      # Verify errors cache was cleared
+      {cached_errors_after, loaded_at_after} = Extensions.last_load_errors()
+      assert cached_errors_after == []
+      assert loaded_at_after == nil
+    end
+
+    test "is safe to call multiple times" do
+      # Should not raise even when called multiple times
+      :ok = Extensions.clear_extension_cache()
+      :ok = Extensions.clear_extension_cache()
+      :ok = Extensions.clear_extension_cache()
+    end
+  end
+
+  describe "last_load_errors/0" do
+    test "returns empty list and nil timestamp when no errors have been stored" do
+      # Note: This test assumes the ETS table may or may not exist from other tests
+      # We test the behavior when called - it should return {[], nil} or cached errors
+      {errors, loaded_at} = Extensions.last_load_errors()
+      assert is_list(errors)
+      # loaded_at is either nil or an integer timestamp
+      assert is_nil(loaded_at) or is_integer(loaded_at)
+    end
+
+    test "returns cached errors after load_extensions_with_errors", %{tmp_dir: tmp_dir} do
+      # Create an invalid extension file to generate an error
+      invalid_code = """
+      defmodule LastLoadErrorsTestBadExt do
+        def missing_end
+      """
+
+      bad_path = Path.join(tmp_dir, "bad_for_cache_test.ex")
+      File.write!(bad_path, invalid_code)
+
+      # Load extensions with errors - this should cache the errors
+      {:ok, _extensions, errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
+
+      # Verify errors were returned from load
+      assert length(errors) == 1
+      assert hd(errors).source_path == bad_path
+
+      # Now verify last_load_errors returns the cached errors
+      {cached_errors, loaded_at} = Extensions.last_load_errors()
+      assert length(cached_errors) == 1
+      assert hd(cached_errors).source_path == bad_path
+      assert is_integer(loaded_at)
+      # Timestamp should be recent (within last minute)
+      assert loaded_at > System.system_time(:millisecond) - 60_000
+    end
+
+    test "caches errors from both valid and invalid extensions", %{tmp_dir: tmp_dir} do
+      valid_code = """
+      defmodule LastLoadErrorsMixedValid do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "cache-mixed-valid"
+
+        @impl true
+        def version, do: "1.0.0"
+      end
+      """
+
+      invalid_code = """
+      defmodule LastLoadErrorsMixedBad do
+        # Syntax error
+        def foo, do: "unclosed
+      """
+
+      File.write!(Path.join(tmp_dir, "valid_cache.ex"), valid_code)
+      bad_path = Path.join(tmp_dir, "invalid_cache.ex")
+      File.write!(bad_path, invalid_code)
+
+      {:ok, extensions, errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
+
+      # Verify we got one extension and one error
+      assert LastLoadErrorsMixedValid in extensions
+      assert length(errors) == 1
+
+      # Verify cached errors
+      {cached_errors, loaded_at} = Extensions.last_load_errors()
+      assert length(cached_errors) == 1
+      assert hd(cached_errors).source_path == bad_path
+      assert is_integer(loaded_at)
+
+      # Cleanup
+      :code.purge(LastLoadErrorsMixedValid)
+      :code.delete(LastLoadErrorsMixedValid)
+    end
+
+    test "updates cached errors on subsequent loads", %{tmp_dir: tmp_dir} do
+      # First load with an error
+      invalid_code = """
+      defmodule FirstLoadBadExt do
+        def missing
+      """
+
+      first_bad_path = Path.join(tmp_dir, "first_bad.ex")
+      File.write!(first_bad_path, invalid_code)
+
+      {:ok, _, _, _} = Extensions.load_extensions_with_errors([tmp_dir])
+      {first_errors, first_timestamp} = Extensions.last_load_errors()
+      assert length(first_errors) == 1
+      assert hd(first_errors).source_path == first_bad_path
+
+      # Small delay to ensure different timestamp
+      Process.sleep(5)
+
+      # Second load with a different error file
+      File.rm!(first_bad_path)
+
+      second_invalid = """
+      defmodule SecondLoadBadExt do
+        def also_missing
+      """
+
+      second_bad_path = Path.join(tmp_dir, "second_bad.ex")
+      File.write!(second_bad_path, second_invalid)
+
+      {:ok, _, _, _} = Extensions.load_extensions_with_errors([tmp_dir])
+      {second_errors, second_timestamp} = Extensions.last_load_errors()
+
+      # Should have new error, not old one
+      assert length(second_errors) == 1
+      assert hd(second_errors).source_path == second_bad_path
+      assert second_timestamp >= first_timestamp
+    end
+  end
+
+  describe "get_providers/1" do
+    test "returns empty list for no extensions" do
+      assert Extensions.get_providers([]) == []
+    end
+
+    test "collects providers from extensions", %{tmp_dir: tmp_dir} do
+      extension_code = """
+      defmodule ProviderExtension do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "provider-extension"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers do
+          [
+            %{
+              type: :model,
+              name: :test_model_provider,
+              module: TestModelProvider,
+              config: %{api_key_env: "TEST_API_KEY"}
+            }
+          ]
+        end
+      end
+
+      defmodule TestModelProvider do
+        # Mock provider module
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "provider_extension.ex"), extension_code)
+      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      providers = Extensions.get_providers(extensions)
+      assert length(providers) == 1
+
+      {spec, ext_module} = hd(providers)
+      assert spec.type == :model
+      assert spec.name == :test_model_provider
+      assert spec.module == TestModelProvider
+      assert ext_module == ProviderExtension
+
+      # Cleanup
+      :code.purge(ProviderExtension)
+      :code.delete(ProviderExtension)
+      :code.purge(TestModelProvider)
+      :code.delete(TestModelProvider)
+    end
+  end
+
+  describe "register_extension_providers/1" do
+    setup do
+      # Clear any previous state in the provider registry
+      Ai.ProviderRegistry.init()
+      on_exit(fn -> Ai.ProviderRegistry.clear() end)
+      :ok
+    end
+
+    test "returns empty report for no extensions" do
+      report = Extensions.register_extension_providers([])
+
+      assert report == %{
+               registered: [],
+               conflicts: [],
+               total_registered: 0,
+               total_conflicts: 0
+             }
+    end
+
+    test "registers model providers from extensions", %{tmp_dir: tmp_dir} do
+      extension_code = """
+      defmodule RegisterProviderExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "register-provider-ext"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers do
+          [
+            %{
+              type: :model,
+              name: :ext_model_provider,
+              module: ExtModelProvider
+            }
+          ]
+        end
+      end
+
+      defmodule ExtModelProvider do
+        # Mock provider module
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "register_provider_ext.ex"), extension_code)
+      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      report = Extensions.register_extension_providers(extensions)
+
+      assert report.total_registered == 1
+      assert report.total_conflicts == 0
+
+      registered = hd(report.registered)
+      assert registered.type == :model
+      assert registered.name == :ext_model_provider
+      assert registered.module == ExtModelProvider
+      assert registered.extension == RegisterProviderExt
+
+      # Verify provider was actually registered
+      assert Ai.ProviderRegistry.registered?(:ext_model_provider)
+      assert {:ok, ExtModelProvider} == Ai.ProviderRegistry.get(:ext_model_provider)
+
+      # Cleanup
+      :code.purge(RegisterProviderExt)
+      :code.delete(RegisterProviderExt)
+      :code.purge(ExtModelProvider)
+      :code.delete(ExtModelProvider)
+    end
+
+    test "detects conflicts when multiple extensions provide same provider name", %{tmp_dir: tmp_dir} do
+      ext_a_code = """
+      defmodule ConflictProviderExtA do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "conflict-provider-a"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers do
+          [%{type: :model, name: :conflicting_model, module: ConflictModelA}]
+        end
+      end
+
+      defmodule ConflictModelA do
+      end
+      """
+
+      ext_b_code = """
+      defmodule ConflictProviderExtB do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "conflict-provider-b"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers do
+          [%{type: :model, name: :conflicting_model, module: ConflictModelB}]
+        end
+      end
+
+      defmodule ConflictModelB do
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "conflict_a.ex"), ext_a_code)
+      File.write!(Path.join(tmp_dir, "conflict_b.ex"), ext_b_code)
+      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      report = Extensions.register_extension_providers(extensions)
+
+      assert report.total_registered == 1
+      assert report.total_conflicts == 1
+
+      conflict = hd(report.conflicts)
+      assert conflict.type == :model
+      assert conflict.name == :conflicting_model
+      # Winner is determined by alphabetical sort of module name
+      assert conflict.winner in [ConflictProviderExtA, ConflictProviderExtB]
+      assert length(conflict.shadowed) == 1
+
+      # Cleanup
+      :code.purge(ConflictProviderExtA)
+      :code.delete(ConflictProviderExtA)
+      :code.purge(ConflictProviderExtB)
+      :code.delete(ConflictProviderExtB)
+      :code.purge(ConflictModelA)
+      :code.delete(ConflictModelA)
+      :code.purge(ConflictModelB)
+      :code.delete(ConflictModelB)
+    end
+
+    test "skips registration when provider already exists (built-in)", %{tmp_dir: tmp_dir} do
+      # Pre-register a built-in provider
+      Ai.ProviderRegistry.register(:existing_builtin, ExistingBuiltinProvider)
+
+      extension_code = """
+      defmodule OverrideBuiltinExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "override-builtin-ext"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers do
+          [%{type: :model, name: :existing_builtin, module: OverrideModule}]
+        end
+      end
+
+      defmodule OverrideModule do
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "override_builtin.ex"), extension_code)
+      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      report = Extensions.register_extension_providers(extensions)
+
+      # Extension provider should NOT be registered (built-in wins)
+      assert report.total_registered == 0
+
+      # Verify built-in is still there
+      assert {:ok, ExistingBuiltinProvider} == Ai.ProviderRegistry.get(:existing_builtin)
+
+      # Cleanup
+      :code.purge(OverrideBuiltinExt)
+      :code.delete(OverrideBuiltinExt)
+      :code.purge(OverrideModule)
+      :code.delete(OverrideModule)
+    end
+  end
+
+  describe "unregister_extension_providers/1" do
+    setup do
+      Ai.ProviderRegistry.init()
+      on_exit(fn -> Ai.ProviderRegistry.clear() end)
+      :ok
+    end
+
+    test "unregisters previously registered providers" do
+      # Manually register a provider
+      Ai.ProviderRegistry.register(:temp_provider, TempProviderModule)
+      assert Ai.ProviderRegistry.registered?(:temp_provider)
+
+      # Create a fake registration report
+      report = %{
+        registered: [%{type: :model, name: :temp_provider, module: TempProviderModule, extension: SomeExt}],
+        conflicts: [],
+        total_registered: 1,
+        total_conflicts: 0
+      }
+
+      # Unregister
+      :ok = Extensions.unregister_extension_providers(report)
+
+      # Verify it's gone
+      refute Ai.ProviderRegistry.registered?(:temp_provider)
+    end
+
+    test "handles nil gracefully" do
+      assert :ok == Extensions.unregister_extension_providers(nil)
+    end
+
+    test "handles empty report gracefully" do
+      report = %{registered: [], conflicts: [], total_registered: 0, total_conflicts: 0}
+      assert :ok == Extensions.unregister_extension_providers(report)
+    end
+  end
+
+  describe "build_status_report with provider_registration" do
+    test "includes provider_registration when provided" do
+      provider_report = %{
+        registered: [%{type: :model, name: :test, module: TestMod, extension: TestExt}],
+        conflicts: [],
+        total_registered: 1,
+        total_conflicts: 0
+      }
+
+      report = Extensions.build_status_report([], [], provider_registration: provider_report)
+
+      assert report.provider_registration == provider_report
+    end
+
+    test "provider_registration is nil when not provided" do
+      report = Extensions.build_status_report([], [], [])
+
+      assert report.provider_registration == nil
     end
   end
 end

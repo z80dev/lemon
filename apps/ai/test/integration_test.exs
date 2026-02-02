@@ -127,6 +127,24 @@ defmodule Ai.IntegrationTest do
        System.get_env("GOOGLE_GENERATIVE_AI_API_KEY")) not in [nil, ""]
   end
 
+  defp has_kimi_key?, do: System.get_env("ANTHROPIC_API_KEY") not in [nil, ""]
+
+  defp kimi_model do
+    %Model{
+      id: "kimi-for-coding",
+      name: "Kimi for Coding",
+      api: :anthropic_messages,
+      provider: :kimi,
+      base_url: "https://api.kimi.com/coding",
+      reasoning: false,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 256_000,
+      max_tokens: 64_000,
+      headers: %{}
+    }
+  end
+
   # ============================================================================
   # Test Setup
   # ============================================================================
@@ -542,6 +560,168 @@ defmodule Ai.IntegrationTest do
   end
 
   # ============================================================================
+  # Kimi Tests (Anthropic-compatible API)
+  # ============================================================================
+
+  describe "Kimi" do
+    @describetag provider: :kimi
+
+    @tag :kimi
+    test "completes a simple prompt" do
+      unless has_kimi_key?() do
+        IO.puts("Skipping Kimi test: ANTHROPIC_API_KEY not set")
+        assert true
+      else
+        model = kimi_model()
+
+        context =
+          Context.new(system_prompt: "You are a helpful assistant. Be very brief.")
+          |> Context.add_user_message("What is 2 + 2? Reply with just the number.")
+
+        {:ok, message} = Ai.complete(model, context, %{max_tokens: 50})
+
+        assert %AssistantMessage{} = message
+        assert message.stop_reason == :stop
+        assert message.model == model.id
+        assert message.api == :anthropic_messages
+        assert message.provider == :kimi
+
+        text = Ai.get_text(message)
+        assert text != ""
+        assert String.contains?(text, "4")
+
+        # Verify usage tracking
+        assert %Usage{} = message.usage
+        assert message.usage.input > 0
+      end
+    end
+
+    @tag :kimi
+    test "streams responses" do
+      unless has_kimi_key?() do
+        IO.puts("Skipping Kimi test: ANTHROPIC_API_KEY not set")
+        assert true
+      else
+        model = kimi_model()
+
+        context =
+          Context.new(system_prompt: "You are a helpful assistant. Be very brief.")
+          |> Context.add_user_message("Say 'hello world' and nothing else.")
+
+        {:ok, stream} = Ai.stream(model, context, %{max_tokens: 50})
+
+        events = EventStream.events(stream) |> Enum.to_list()
+
+        # Should have start, text events, and done
+        assert length(events) > 0
+
+        # Check for start event
+        start_events = Enum.filter(events, &match?({:start, _}, &1))
+        assert length(start_events) == 1
+
+        # Check for text deltas
+        text_deltas = Enum.filter(events, &match?({:text_delta, _, _, _}, &1))
+        assert length(text_deltas) > 0
+
+        # Check for done event
+        done_events = Enum.filter(events, &match?({:done, _, _}, &1))
+        assert length(done_events) == 1
+
+        # Collect text from deltas
+        collected_text =
+          text_deltas
+          |> Enum.map(fn {:text_delta, _idx, delta, _partial} -> delta end)
+          |> Enum.join("")
+
+        assert String.downcase(collected_text) =~ "hello"
+      end
+    end
+
+    @tag :kimi
+    test "handles tool calling" do
+      unless has_kimi_key?() do
+        IO.puts("Skipping Kimi test: ANTHROPIC_API_KEY not set")
+        assert true
+      else
+        model = kimi_model()
+        tool = get_weather_tool()
+
+        context =
+          Context.new(
+            system_prompt:
+              "You are a helpful assistant. Use the get_weather tool when asked about weather.",
+            tools: [tool]
+          )
+          |> Context.add_user_message("What's the weather in Berlin?")
+
+        {:ok, message} = Ai.complete(model, context, %{max_tokens: 200})
+
+        assert %AssistantMessage{} = message
+        assert message.stop_reason == :tool_use
+
+        tool_calls = Ai.get_tool_calls(message)
+        assert length(tool_calls) > 0
+
+        [tool_call | _] = tool_calls
+        assert %ToolCall{} = tool_call
+        assert tool_call.name == "get_weather"
+        assert is_map(tool_call.arguments)
+        assert Map.has_key?(tool_call.arguments, "location")
+      end
+    end
+
+    @tag :kimi
+    test "tracks usage/tokens" do
+      unless has_kimi_key?() do
+        IO.puts("Skipping Kimi test: ANTHROPIC_API_KEY not set")
+        assert true
+      else
+        model = kimi_model()
+
+        context =
+          Context.new(system_prompt: "Be brief.")
+          |> Context.add_user_message("Hi")
+
+        {:ok, message} = Ai.complete(model, context, %{max_tokens: 20})
+
+        assert %Usage{} = message.usage
+        assert message.usage.input > 0
+        assert message.usage.total_tokens > 0
+      end
+    end
+
+    @tag :kimi
+    test "handles multi-turn conversation" do
+      unless has_kimi_key?() do
+        IO.puts("Skipping Kimi test: ANTHROPIC_API_KEY not set")
+        assert true
+      else
+        model = kimi_model()
+
+        # First turn
+        context =
+          Context.new(system_prompt: "You are a helpful assistant. Be brief.")
+          |> Context.add_user_message("My name is Alice.")
+
+        {:ok, first_response} = Ai.complete(model, context, %{max_tokens: 100})
+        assert %AssistantMessage{} = first_response
+
+        # Second turn - model should remember the name
+        context =
+          context
+          |> Context.add_assistant_message(first_response)
+          |> Context.add_user_message("What is my name?")
+
+        {:ok, second_response} = Ai.complete(model, context, %{max_tokens: 100})
+        assert %AssistantMessage{} = second_response
+
+        text = Ai.get_text(second_response)
+        assert String.downcase(text) =~ "alice"
+      end
+    end
+  end
+
+  # ============================================================================
   # Cross-Provider Tests
   # ============================================================================
 
@@ -569,6 +749,13 @@ defmodule Ai.IntegrationTest do
       models =
         if has_google_key?() do
           [{:google, google_model()} | models]
+        else
+          models
+        end
+
+      models =
+        if has_kimi_key?() do
+          [{:kimi, kimi_model()} | models]
         else
           models
         end
@@ -629,6 +816,13 @@ defmodule Ai.IntegrationTest do
       models =
         if has_google_key?() do
           [{:google, google_model()} | models]
+        else
+          models
+        end
+
+      models =
+        if has_kimi_key?() do
+          [{:kimi, kimi_model()} | models]
         else
           models
         end
