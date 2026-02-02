@@ -1,3 +1,4 @@
+ExUnit.configure(exclude: [:integration])
 ExUnit.start()
 
 # Ensure consolidated protocol directory exists when using a custom build path
@@ -20,3 +21,9 @@ CodingAgent.Config.ensure_dirs!()
 
 # Compile test support files
 Code.require_file("support/mock_ui.ex", __DIR__)
+
+# Load shared test support from ai app (for integration tests)
+ai_support = Path.join([__DIR__, "..", "..", "ai", "test", "support", "integration_config.ex"])
+if File.exists?(ai_support) do
+  Code.compile_file(ai_support)
+end

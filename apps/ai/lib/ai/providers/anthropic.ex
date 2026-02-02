@@ -526,9 +526,9 @@ defmodule Ai.Providers.Anthropic do
       "stream" => true
     }
 
-    # Add system prompt
+    # Add system prompt (skip if empty to avoid API errors on some providers)
     body =
-      if context.system_prompt do
+      if context.system_prompt && String.trim(context.system_prompt) != "" do
         Map.put(body, "system", [
           %{
             "type" => "text",

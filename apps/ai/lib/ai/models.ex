@@ -234,19 +234,7 @@ defmodule Ai.Models do
       context_window: 200_000,
       max_tokens: 64_000
     },
-    "kimi-for-coding" => %Model{
-      id: "kimi-for-coding",
-      name: "Kimi for Coding",
-      api: :anthropic_messages,
-      provider: :anthropic,
-      base_url: "https://api.anthropic.com",
-      reasoning: true,
-      input: [:text, :image],
-      cost: %ModelCost{input: 5.0, output: 25.0, cache_read: 0.5, cache_write: 6.25},
-      context_window: 256_000,
-      max_tokens: 64_000
-    },
-    "claude-sonnet-4-0" => %Model{
+"claude-sonnet-4-0" => %Model{
       id: "claude-sonnet-4-0",
       name: "Claude Sonnet 4 (latest)",
       api: :anthropic_messages,
@@ -923,13 +911,33 @@ defmodule Ai.Models do
   }
 
   # ============================================================================
+  # Kimi Models (Anthropic-compatible API)
+  # ============================================================================
+
+  @kimi_models %{
+    "kimi-for-coding" => %Model{
+      id: "kimi-for-coding",
+      name: "Kimi for Coding",
+      api: :anthropic_messages,
+      provider: :kimi,
+      base_url: "https://api.kimi.com/coding",
+      reasoning: false,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 256_000,
+      max_tokens: 64_000
+    }
+  }
+
+  # ============================================================================
   # Combined Registry
   # ============================================================================
 
   @models %{
     anthropic: @anthropic_models,
     openai: @openai_models,
-    google: @google_models
+    google: @google_models,
+    kimi: @kimi_models
   }
 
   @providers Map.keys(@models)

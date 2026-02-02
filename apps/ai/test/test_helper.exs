@@ -30,5 +30,8 @@
 # Tests will be skipped automatically if the required API key is not set.
 # ============================================================================
 
+# Load support files
+Code.compile_file("support/integration_config.ex", __DIR__)
+
 ExUnit.configure(exclude: [:integration])
 ExUnit.start()

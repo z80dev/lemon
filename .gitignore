@@ -27,3 +27,7 @@ docs/agent-loop/runs/
 
 
 .agent/
+
+# Environment files with secrets
+.env*
+!.env.example
