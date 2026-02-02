@@ -92,26 +92,26 @@ defmodule CodingAgent.ToolRegistry do
         {Atom.to_string(name), module.tool(cwd, opts), {:builtin, module}}
       end)
 
-    # Get extension tools with source tracking
+    # Get extension tools with source tracking (using load_extensions_with_errors to capture failures)
     extension_tools =
       if include_extensions do
-        extensions_result =
+        paths =
           if extension_paths do
-            Extensions.load_extensions(extension_paths)
+            extension_paths
           else
-            Extensions.load_default_extensions(cwd)
+            [
+              CodingAgent.Config.extensions_dir(),
+              CodingAgent.Config.project_extensions_dir(cwd)
+            ]
           end
 
-        case extensions_result do
-          {:ok, extensions} ->
-            Extensions.get_tools_with_source(extensions, cwd)
-            |> Enum.map(fn {tool, ext_module} ->
-              {tool.name, tool, {:extension, ext_module}}
-            end)
+        {:ok, extensions, _load_errors, _validation_errors} =
+          Extensions.load_extensions_with_errors(paths)
 
-          _ ->
-            []
-        end
+        Extensions.get_tools_with_source(extensions, cwd)
+        |> Enum.map(fn {tool, ext_module} ->
+          {tool.name, tool, {:extension, ext_module}}
+        end)
       else
         []
       end
@@ -242,20 +242,23 @@ defmodule CodingAgent.ToolRegistry do
   - `:builtin_count` - Number of built-in tools
   - `:extension_count` - Number of extension tools (after shadowing)
   - `:shadowed_count` - Total number of shadowed tools
+  - `:load_errors` - List of extension load errors (files that failed to compile/load)
   """
   @type conflict_report :: %{
           conflicts: [conflict_entry()],
           total_tools: non_neg_integer(),
           builtin_count: non_neg_integer(),
           extension_count: non_neg_integer(),
-          shadowed_count: non_neg_integer()
+          shadowed_count: non_neg_integer(),
+          load_errors: [Extensions.load_error()]
         }
 
   @doc """
-  Get a report of tool name conflicts.
+  Get a report of tool name conflicts and extension load errors.
 
   Returns a structured report showing which tools conflict and how they
-  are resolved. This is useful for plugin observability and debugging.
+  are resolved, plus any extensions that failed to load. This is useful
+  for plugin observability and debugging.
 
   ## Parameters
 
@@ -274,6 +277,10 @@ defmodule CodingAgent.ToolRegistry do
     * `:builtin_count` - Number of built-in tools
     * `:extension_count` - Number of extension tools (after shadowing)
     * `:shadowed_count` - Total number of shadowed tools
+    * `:load_errors` - List of extension load errors, each with:
+      * `:source_path` - Path to the file that failed to load
+      * `:error` - The error reason
+      * `:error_message` - Human-readable error message
 
   ## Examples
 
@@ -285,7 +292,10 @@ defmodule CodingAgent.ToolRegistry do
       #   total_tools: 16,
       #   builtin_count: 15,
       #   extension_count: 1,
-      #   shadowed_count: 1
+      #   shadowed_count: 1,
+      #   load_errors: [
+      #     %{source_path: "/path/to/bad.ex", error: %CompileError{}, error_message: "..."}
+      #   ]
       # }
   """
   @spec tool_conflict_report(String.t(), tool_opts()) :: conflict_report()
@@ -300,28 +310,31 @@ defmodule CodingAgent.ToolRegistry do
         {Atom.to_string(name), module.tool(cwd, opts), {:builtin, module}}
       end)
 
-    # Get extension tools with source tracking
-    extension_tools =
+    # Get extension tools with source tracking (using load_extensions_with_errors to capture failures)
+    {extension_tools, load_errors} =
       if include_extensions do
-        extensions_result =
+        paths =
           if extension_paths do
-            Extensions.load_extensions(extension_paths)
+            extension_paths
           else
-            Extensions.load_default_extensions(cwd)
+            [
+              CodingAgent.Config.extensions_dir(),
+              CodingAgent.Config.project_extensions_dir(cwd)
+            ]
           end
 
-        case extensions_result do
-          {:ok, extensions} ->
-            Extensions.get_tools_with_source(extensions, cwd)
-            |> Enum.map(fn {tool, ext_module} ->
-              {tool.name, tool, {:extension, ext_module}}
-            end)
+        {:ok, extensions, errors, _validation_errors} =
+          Extensions.load_extensions_with_errors(paths)
 
-          _ ->
-            []
-        end
+        tools =
+          Extensions.get_tools_with_source(extensions, cwd)
+          |> Enum.map(fn {tool, ext_module} ->
+            {tool.name, tool, {:extension, ext_module}}
+          end)
+
+        {tools, errors}
       else
-        []
+        {[], []}
       end
 
     # Analyze conflicts without logging
@@ -336,7 +349,8 @@ defmodule CodingAgent.ToolRegistry do
       total_tools: length(resolved_tools),
       builtin_count: builtin_count,
       extension_count: extension_count,
-      shadowed_count: shadowed_count
+      shadowed_count: shadowed_count,
+      load_errors: load_errors
     }
   end
 

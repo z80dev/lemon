@@ -20,20 +20,29 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
     %AgentTool{
       name: "extensions_status",
       description: """
-      Get the extension status report for the current session.
+      Get the extension status report or reload extensions for the current session.
 
       Returns information about:
       - Loaded extensions (name, version, capabilities, source path)
       - Extension load errors (syntax errors, compile errors)
       - Tool conflicts (which tools were shadowed and by what)
 
-      Use this tool to diagnose plugin loading issues or understand which
-      extensions and tools are active in the current session.
+      Use this tool to:
+      - Diagnose plugin loading issues
+      - Understand which extensions and tools are active
+      - Reload extensions after adding, modifying, or removing extension files
       """,
       label: "Extensions Status",
       parameters: %{
         "type" => "object",
         "properties" => %{
+          "action" => %{
+            "type" => "string",
+            "description" =>
+              "Action to perform: 'status' to get the current report (default), 'reload' to re-discover and reload extensions.",
+            "enum" => ["status", "reload"],
+            "default" => "status"
+          },
           "include_details" => %{
             "type" => "boolean",
             "description" =>
@@ -59,8 +68,16 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
     if AbortSignal.aborted?(signal) do
       {:error, "Operation aborted"}
     else
+      action = Map.get(params, "action", "status")
       include_details = Map.get(params, "include_details", false)
-      get_status_report(session_id, include_details, cwd)
+
+      case action do
+        "reload" ->
+          reload_extensions(session_id, include_details, cwd)
+
+        _ ->
+          get_status_report(session_id, include_details, cwd)
+      end
     end
   end
 
@@ -70,15 +87,18 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
     # No session_id - fall back to listing all loaded extensions with tool conflicts
     extensions = CodingAgent.Extensions.list_extensions()
     tool_conflicts = CodingAgent.ToolRegistry.tool_conflict_report(cwd)
+    {load_errors, loaded_at} = CodingAgent.Extensions.last_load_errors()
 
-    output = format_fallback_report(extensions, tool_conflicts, include_details)
+    output = format_fallback_report(extensions, tool_conflicts, load_errors, loaded_at, include_details)
 
     %AgentToolResult{
       content: [%TextContent{text: output}],
       details: %{
-        title: format_fallback_title(extensions, tool_conflicts, "no session context"),
+        title: format_fallback_title(extensions, tool_conflicts, load_errors, "no session context"),
         extensions: extensions,
-        tool_conflicts: tool_conflicts
+        tool_conflicts: tool_conflicts,
+        load_errors: load_errors,
+        loaded_at: loaded_at
       }
     }
   end
@@ -94,15 +114,18 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
         # Fall back to listing all loaded extensions with tool conflicts
         extensions = CodingAgent.Extensions.list_extensions()
         tool_conflicts = CodingAgent.ToolRegistry.tool_conflict_report(cwd)
+        {load_errors, loaded_at} = CodingAgent.Extensions.last_load_errors()
 
-        output = format_fallback_report(extensions, tool_conflicts, include_details)
+        output = format_fallback_report(extensions, tool_conflicts, load_errors, loaded_at, include_details)
 
         %AgentToolResult{
           content: [%TextContent{text: output}],
           details: %{
-            title: format_fallback_title(extensions, tool_conflicts, "session not found"),
+            title: format_fallback_title(extensions, tool_conflicts, load_errors, "session not found"),
             extensions: extensions,
-            tool_conflicts: tool_conflicts
+            tool_conflicts: tool_conflicts,
+            load_errors: load_errors,
+            loaded_at: loaded_at
           }
         }
     end
@@ -120,6 +143,100 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
           [] -> {:error, :not_found}
         end
     end
+  end
+
+  @spec reload_extensions(String.t(), boolean(), String.t()) ::
+          AgentToolResult.t() | {:error, term()}
+  defp reload_extensions("", _include_details, _cwd) do
+    {:error,
+     "Cannot reload extensions: no session context available.\n\n" <>
+       "The reload action requires an active session to update the tool registry."}
+  end
+
+  defp reload_extensions(session_id, include_details, _cwd) do
+    case get_session_pid(session_id) do
+      {:ok, session_pid} ->
+        case CodingAgent.Session.reload_extensions(session_pid) do
+          {:ok, report} ->
+            format_reload_report(report, include_details)
+
+          {:error, :already_streaming} ->
+            {:error,
+             "Cannot reload extensions while the session is streaming.\n\n" <>
+               "Please wait for the current operation to complete and try again."}
+        end
+
+      {:error, :not_found} ->
+        {:error,
+         "Cannot reload extensions: session not found.\n\n" <>
+           "The session may have been terminated or the ID is invalid."}
+    end
+  end
+
+  @spec format_reload_report(map(), boolean()) :: AgentToolResult.t()
+  defp format_reload_report(report, include_details) do
+    sections = []
+
+    # Summary section with reload indicator
+    summary =
+      "# Extensions Reloaded\n\n" <>
+        "- **Extensions loaded:** #{report.total_loaded}\n" <>
+        "- **Load errors:** #{report.total_errors}\n" <>
+        "- **Reloaded at:** #{format_timestamp(report.loaded_at)}\n"
+
+    sections = [summary | sections]
+
+    # Extensions section
+    sections =
+      if report.total_loaded > 0 do
+        ext_section = format_extensions_section(report.extensions, include_details)
+        [ext_section | sections]
+      else
+        sections
+      end
+
+    # Load errors section
+    sections =
+      if report.total_errors > 0 do
+        error_section = format_errors_section(report.load_errors)
+        [error_section | sections]
+      else
+        sections
+      end
+
+    # Tool conflicts section
+    sections =
+      if report.tool_conflicts != nil do
+        conflict_section = format_conflicts_section(report.tool_conflicts)
+        [conflict_section | sections]
+      else
+        sections
+      end
+
+    output = sections |> Enum.reverse() |> Enum.join("\n")
+
+    title =
+      cond do
+        report.total_errors > 0 ->
+          "Reloaded: #{report.total_loaded} loaded, #{report.total_errors} errors"
+
+        report.tool_conflicts != nil and report.tool_conflicts.shadowed_count > 0 ->
+          "Reloaded: #{report.total_loaded} loaded, #{report.tool_conflicts.shadowed_count} conflicts"
+
+        true ->
+          "Reloaded: #{report.total_loaded} extensions"
+      end
+
+    %AgentToolResult{
+      content: [%TextContent{text: output}],
+      details: %{
+        title: title,
+        action: "reload",
+        total_loaded: report.total_loaded,
+        total_errors: report.total_errors,
+        tool_conflicts: report.tool_conflicts
+      }
+    }
   end
 
   @spec format_report(map() | nil, boolean()) :: AgentToolResult.t()
@@ -285,15 +402,17 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
     end
   end
 
-  @spec format_fallback_report([map()], map(), boolean()) :: String.t()
-  defp format_fallback_report(extensions, tool_conflicts, include_details) do
+  @spec format_fallback_report([map()], map(), [map()], integer() | nil, boolean()) :: String.t()
+  defp format_fallback_report(extensions, tool_conflicts, load_errors, loaded_at, include_details) do
     sections = []
 
     # Summary section
     summary =
       "# Extension Status Report\n\n" <>
         "- **Extensions loaded:** #{length(extensions)}\n" <>
-        "- **Total tools:** #{tool_conflicts.total_tools}\n"
+        "- **Load errors:** #{length(load_errors)}\n" <>
+        "- **Total tools:** #{tool_conflicts.total_tools}\n" <>
+        format_loaded_at(loaded_at)
 
     sections = [summary | sections]
 
@@ -315,16 +434,32 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
         sections
       end
 
+    sections =
+      if load_errors != [] do
+        error_section = format_errors_section(load_errors)
+        [error_section | sections]
+      else
+        sections
+      end
+
     sections |> Enum.reverse() |> Enum.join("\n")
   end
 
-  @spec format_fallback_title([map()], map(), String.t()) :: String.t()
-  defp format_fallback_title(extensions, tool_conflicts, context) do
+  @spec format_fallback_title([map()], map(), [map()], String.t()) :: String.t()
+  defp format_fallback_title(extensions, tool_conflicts, load_errors, context) do
     ext_count = length(extensions)
+    error_count = length(load_errors)
+    conflict_count = if tool_conflicts, do: tool_conflicts.shadowed_count, else: 0
 
     cond do
-      tool_conflicts != nil and tool_conflicts.shadowed_count > 0 ->
-        "#{ext_count} loaded, #{tool_conflicts.shadowed_count} conflicts (#{context})"
+      error_count > 0 and conflict_count > 0 ->
+        "#{ext_count} loaded, #{error_count} errors, #{conflict_count} conflicts (#{context})"
+
+      error_count > 0 ->
+        "#{ext_count} loaded, #{error_count} errors (#{context})"
+
+      conflict_count > 0 ->
+        "#{ext_count} loaded, #{conflict_count} conflicts (#{context})"
 
       true ->
         "#{ext_count} extensions loaded (#{context})"
@@ -338,4 +473,10 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
   end
 
   defp format_timestamp(_), do: "unknown"
+
+  defp format_loaded_at(nil), do: ""
+
+  defp format_loaded_at(ms) when is_integer(ms) do
+    "- **Last load:** #{format_timestamp(ms)}\n"
+  end
 end

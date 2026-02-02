@@ -304,6 +304,36 @@ defmodule CodingAgent.Session do
   end
 
   @doc """
+  Reload extensions without restarting the session.
+
+  This function re-runs extension discovery, refreshes the tool registry,
+  and updates the extension status report. Useful when extensions have been
+  added, modified, or removed while the session is running.
+
+  The reload process:
+  1. Clears the extension module cache (purges loaded extension modules)
+  2. Re-discovers and loads extensions from configured paths
+  3. Rebuilds the tool list with conflict detection
+  4. Updates the extension status report
+  5. Broadcasts an `{:extension_status_report, report}` event
+
+  ## Returns
+
+    * `{:ok, report}` - The new extension status report
+    * `{:error, :already_streaming}` - If the session is currently streaming
+
+  ## Examples
+
+      {:ok, report} = CodingAgent.Session.reload_extensions(session)
+      IO.puts("Loaded \#{report.total_loaded} extensions")
+  """
+  @spec reload_extensions(GenServer.server()) ::
+          {:ok, Extensions.extension_status_report()} | {:error, :already_streaming}
+  def reload_extensions(session) do
+    GenServer.call(session, :reload_extensions)
+  end
+
+  @doc """
   Reset the session, clearing all messages and restarting.
   """
   @spec reset(GenServer.server()) :: :ok
@@ -442,7 +472,8 @@ defmodule CodingAgent.Session do
           Config.project_extensions_dir(cwd)
         ]
 
-    {:ok, extensions, load_errors} = Extensions.load_extensions_with_errors(extension_paths)
+    {:ok, extensions, load_errors, _validation_errors} =
+      Extensions.load_extensions_with_errors(extension_paths)
 
     # Get hooks from extensions
     hooks = Extensions.get_hooks(extensions)
@@ -471,13 +502,17 @@ defmodule CodingAgent.Session do
           custom ++ extension_tools
       end
 
+    # Register extension-provided providers (e.g., model providers)
+    provider_registration = Extensions.register_extension_providers(extensions)
+
     # Build extension status report (tool conflicts computed from registry)
     tool_conflict_report = ToolRegistry.tool_conflict_report(cwd, tool_opts)
 
     extension_status_report =
       Extensions.build_status_report(extensions, load_errors,
         cwd: cwd,
-        tool_conflict_report: tool_conflict_report
+        tool_conflict_report: tool_conflict_report,
+        provider_registration: provider_registration
       )
 
     # Create the convert_to_llm function
@@ -682,6 +717,91 @@ defmodule CodingAgent.Session do
 
   def handle_call(:get_extension_status_report, _from, state) do
     {:reply, state.extension_status_report, state}
+  end
+
+  def handle_call(:reload_extensions, _from, state) do
+    if state.is_streaming do
+      {:reply, {:error, :already_streaming}, state}
+    else
+      # Show working message
+      ui_set_working_message(state, "Reloading extensions...")
+
+      # Unregister previously registered extension providers
+      old_provider_registration =
+        case state.extension_status_report do
+          %{provider_registration: reg} -> reg
+          _ -> nil
+        end
+
+      Extensions.unregister_extension_providers(old_provider_registration)
+
+      # Clear extension module cache
+      Extensions.clear_extension_cache()
+
+      # Build extension paths (same logic as init)
+      extension_paths =
+        (state.settings_manager.extension_paths || []) ++
+          [
+            Config.extensions_dir(),
+            Config.project_extensions_dir(state.cwd)
+          ]
+
+      # Reload extensions
+      {:ok, extensions, load_errors, _validation_errors} =
+        Extensions.load_extensions_with_errors(extension_paths)
+
+      # Get hooks from extensions
+      hooks = Extensions.get_hooks(extensions)
+
+      # Register extension-provided providers (e.g., model providers)
+      provider_registration = Extensions.register_extension_providers(extensions)
+
+      # Build tool options
+      tool_opts = [
+        model: state.model,
+        thinking_level: state.thinking_level,
+        parent_session: state.session_manager.header.id,
+        session_id: state.session_manager.header.id,
+        settings_manager: state.settings_manager,
+        ui_context: state.ui_context,
+        extension_paths: extension_paths
+      ]
+
+      # Rebuild tools via ToolRegistry
+      tools = ToolRegistry.get_tools(state.cwd, tool_opts)
+
+      # Build extension status report
+      tool_conflict_report = ToolRegistry.tool_conflict_report(state.cwd, tool_opts)
+
+      extension_status_report =
+        Extensions.build_status_report(extensions, load_errors,
+          cwd: state.cwd,
+          tool_conflict_report: tool_conflict_report,
+          provider_registration: provider_registration
+        )
+
+      # Update the agent's tools
+      :ok = AgentCore.Agent.set_tools(state.agent, tools)
+
+      # Clear working message
+      ui_set_working_message(state, nil)
+
+      # Broadcast the new extension status report
+      broadcast_event(state, {:extension_status_report, extension_status_report})
+
+      # Notify about the reload
+      ui_notify(state, "Extensions reloaded: #{extension_status_report.total_loaded} loaded", :info)
+
+      new_state = %{
+        state
+        | extensions: extensions,
+          hooks: hooks,
+          tools: tools,
+          extension_status_report: extension_status_report
+      }
+
+      {:reply, {:ok, extension_status_report}, new_state}
+    end
   end
 
   def handle_call(:reset, _from, state) do

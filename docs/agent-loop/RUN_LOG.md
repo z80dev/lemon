@@ -43,3 +43,33 @@ This is an append-only log of scheduled improvement runs.
 - Claude: docs/agent-loop/runs/2026-02-02T01-21-17Z-claude.md
 - Diff: docs/agent-loop/runs/2026-02-02T01-21-17Z-diff.patch
 
+## 2026-02-02T02-29-43Z
+- Codex: docs/agent-loop/runs/2026-02-02T02-29-43Z-codex.md
+- Claude: docs/agent-loop/runs/2026-02-02T02-29-43Z-claude.md
+- Diff: docs/agent-loop/runs/2026-02-02T02-29-43Z-diff.patch
+
+## 2026-02-02T03-03-35Z
+- Codex: docs/agent-loop/runs/2026-02-02T03-03-35Z-codex.md
+- Claude: docs/agent-loop/runs/2026-02-02T03-03-35Z-claude.md
+- Diff: docs/agent-loop/runs/2026-02-02T03-03-35Z-diff.patch
+
+## 2026-02-02T03-45-36Z
+- Codex: docs/agent-loop/runs/2026-02-02T03-45-36Z-codex.md
+- Claude: docs/agent-loop/runs/2026-02-02T03-45-36Z-claude.md
+- Diff: docs/agent-loop/runs/2026-02-02T03-45-36Z-diff.patch
+
+## 2026-02-02T04-18-17Z
+- Codex: docs/agent-loop/runs/2026-02-02T04-18-17Z-codex.md
+- Claude: docs/agent-loop/runs/2026-02-02T04-18-17Z-claude.md
+- Diff: docs/agent-loop/runs/2026-02-02T04-18-17Z-diff.patch
+
+## 2026-02-02T04-59-51Z
+- Codex: docs/agent-loop/runs/2026-02-02T04-59-51Z-codex.md
+- Claude: docs/agent-loop/runs/2026-02-02T04-59-51Z-claude.md
+- Diff: docs/agent-loop/runs/2026-02-02T04-59-51Z-diff.patch
+
+## 2026-02-02T06-28-20Z
+- Codex: docs/agent-loop/runs/2026-02-02T06-28-20Z-codex.md
+- Claude: docs/agent-loop/runs/2026-02-02T06-28-20Z-claude.md
+- Diff: docs/agent-loop/runs/2026-02-02T06-28-20Z-diff.patch
+
