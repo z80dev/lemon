@@ -266,95 +266,166 @@ lemon/
 ├── README.md                    # This file
 ├── mix.exs                      # Umbrella project configuration
 ├── mix.lock                     # Dependency lock file
+├── .formatter.exs               # Elixir formatter configuration
+├── .gitignore                   # Git ignore rules
+│
 ├── config/
 │   └── config.exs               # Application configuration
 │
 ├── apps/                        # Umbrella applications
-│   ├── ai/                      # Low-level LLM API abstraction
+│   ├── ai/                      # Low-level LLM API abstraction layer
 │   │   ├── lib/
 │   │   │   ├── ai.ex            # Main API (stream/complete)
-│   │   │   ├── ai/
-│   │   │   │   ├── provider.ex       # Provider behavior
-│   │   │   │   ├── provider_registry.ex  # Provider registration
-│   │   │   │   ├── event_stream.ex   # Streaming event handling
-│   │   │   │   ├── types.ex          # Core types (Model, Context, etc.)
-│   │   │   │   ├── models.ex         # Model definitions
-│   │   │   │   └── providers/        # Provider implementations
-│   │   │   │       ├── anthropic.ex
-│   │   │   │       ├── openai_responses.ex
-│   │   │   │       ├── openai_completions.ex
-│   │   │   │       ├── google.ex
-│   │   │   │       ├── google_vertex.ex
-│   │   │   │       ├── bedrock.ex
-│   │   │   │       └── azure_openai_responses.ex
-│   │   │   └── ai/application.ex
+│   │   │   └── ai/
+│   │   │       ├── application.ex
+│   │   │       ├── call_dispatcher.ex  # RPC call coordination
+│   │   │       ├── circuit_breaker.ex  # Circuit breaker for providers
+│   │   │       ├── error.ex            # Error types
+│   │   │       ├── event_stream.ex     # Streaming event handling
+│   │   │       ├── models.ex           # Model registry and definitions
+│   │   │       ├── provider.ex         # Provider behavior interface
+│   │   │       ├── provider_registry.ex # Provider registration and lookup
+│   │   │       ├── provider_supervisor.ex
+│   │   │       ├── rate_limiter.ex     # Rate limiting logic
+│   │   │       ├── types.ex            # Core types (Model, Context, etc.)
+│   │   │       └── providers/          # Provider implementations
+│   │   │           ├── anthropic.ex
+│   │   │           ├── azure_openai_responses.ex
+│   │   │           ├── bedrock.ex
+│   │   │           ├── google.ex
+│   │   │           ├── google_gemini_cli.ex
+│   │   │           ├── google_shared.ex
+│   │   │           ├── google_vertex.ex
+│   │   │           ├── openai_completions.ex
+│   │   │           ├── openai_codex_responses.ex
+│   │   │           ├── openai_responses.ex
+│   │   │           ├── openai_responses_shared.ex
+│   │   │           └── text_sanitizer.ex
 │   │   └── test/
 │   │
-│   ├── agent_core/              # Core agent framework
+│   ├── agent_core/              # Core agent framework (provider-agnostic)
 │   │   ├── lib/
 │   │   │   ├── agent_core.ex    # Main API
-│   │   │   ├── agent_core/
-│   │   │   │   ├── agent.ex          # GenServer implementation
-│   │   │   │   ├── loop.ex           # Stateless agent loop
-│   │   │   │   ├── types.ex          # Agent types (AgentTool, AgentState, etc.)
-│   │   │   │   ├── event_stream.ex   # Event stream handling
-│   │   │   │   ├── abort_signal.ex   # Abort signaling mechanism
-│   │   │   │   └── proxy.ex          # Stream proxy utilities
-│   │   │   └── agent_core/application.ex
+│   │   │   └── agent_core/
+│   │   │       ├── application.ex
+│   │   │       ├── abort_signal.ex       # Abort signaling mechanism
+│   │   │       ├── agent.ex              # GenServer implementation
+│   │   │       ├── agent_registry.ex     # Agent process registry
+│   │   │       ├── context.ex            # Context management
+│   │   │       ├── event_stream.ex       # Event stream handling
+│   │   │       ├── loop.ex               # Stateless agent loop
+│   │   │       ├── proxy.ex              # Stream proxy utilities
+│   │   │       ├── subagent_supervisor.ex # Dynamic supervisor for subagents
+│   │   │       └── types.ex              # Agent types (AgentTool, AgentState, etc.)
 │   │   └── test/
 │   │
-│   ├── coding_agent/            # Full coding agent implementation
+│   ├── coding_agent/            # Complete coding agent implementation
 │   │   ├── lib/
 │   │   │   ├── coding_agent.ex  # Main API
-│   │   │   ├── coding_agent/
-│   │   │   │   ├── session.ex        # Session GenServer
-│   │   │   │   ├── session_manager.ex # JSONL persistence
-│   │   │   │   ├── messages.ex       # Message types & conversion
-│   │   │   │   ├── tools.ex          # Tool registry
-│   │   │   │   ├── bash_executor.ex  # Shell execution
-│   │   │   │   ├── compaction.ex     # Context compaction
-│   │   │   │   ├── extensions.ex     # Extension system
-│   │   │   │   ├── resource_loader.ex # CLAUDE.md loading
-│   │   │   │   ├── settings_manager.ex # User settings
-│   │   │   │   └── tools/            # Individual tool implementations
-│   │   │   │       ├── read.ex
-│   │   │   │       ├── write.ex
-│   │   │   │       ├── edit.ex
-│   │   │   │       ├── bash.ex
-│   │   │   │       ├── grep.ex
-│   │   │   │       ├── find.ex
-│   │   │   │       └── ls.ex
-│   │   │   └── coding_agent/application.ex
+│   │   │   └── coding_agent/
+│   │   │       ├── application.ex
+│   │   │       ├── bash_executor.ex      # Shell command execution
+│   │   │       ├── commands.ex           # Project-level command system
+│   │   │       ├── compaction.ex         # Context compaction logic
+│   │   │       ├── config.ex             # Configuration loading
+│   │   │       ├── coordinator.ex        # Multi-session coordination
+│   │   │       ├── extensions.ex         # Extension system
+│   │   │       ├── extensions/
+│   │   │       │   └── extension.ex      # Extension behavior interface
+│   │   │       ├── layered_config.ex     # Hierarchical config system
+│   │   │       ├── mentions.ex           # Mention/reference system
+│   │   │       ├── messages.ex           # Message types & conversion
+│   │   │       ├── prompt_builder.ex     # Prompt generation utilities
+│   │   │       ├── resource_loader.ex    # CLAUDE.md and resource loading
+│   │   │       ├── session.ex            # Session GenServer
+│   │   │       ├── session_manager.ex    # JSONL persistence
+│   │   │       ├── session_registry.ex   # Session process registry
+│   │   │       ├── session_root_supervisor.ex
+│   │   │       ├── session_supervisor.ex # Session lifecycle management
+│   │   │       ├── settings_manager.ex   # User settings management
+│   │   │       ├── skills.ex             # Skill/tool generation
+│   │   │       ├── subagents.ex          # Subagent coordination
+│   │   │       ├── tool_registry.ex      # Tool registration and lookup
+│   │   │       ├── tools.ex              # Tool registration and wiring
+│   │   │       ├── ui.ex                 # UI abstraction
+│   │   │       ├── ui/
+│   │   │       │   └── context.ex        # UI context management
+│   │   │       └── tools/                # Individual tool implementations
+│   │   │           ├── bash.ex           # Bash execution tool
+│   │   │           ├── edit.ex           # File editing tool
+│   │   │           ├── extensions_status.ex # Extension status tool
+│   │   │           ├── find.ex           # File finding tool
+│   │   │           ├── glob.ex           # Glob pattern matching tool
+│   │   │           ├── grep.ex           # Pattern search tool
+│   │   │           ├── ls.ex             # Directory listing tool
+│   │   │           ├── multiedit.ex      # Multiple file editing tool
+│   │   │           ├── patch.ex          # Patch application tool
+│   │   │           ├── read.ex           # File reading tool
+│   │   │           ├── task.ex           # Task management tool
+│   │   │           ├── todo_store.ex     # Todo list storage (ETS-backed)
+│   │   │           ├── todoread.ex       # Read todo list tool
+│   │   │           ├── todowrite.ex      # Write todo list tool
+│   │   │           ├── truncate.ex       # Text truncation utility
+│   │   │           ├── webfetch.ex       # Web fetching tool
+│   │   │           ├── websearch.ex      # Web search tool
+│   │   │           └── write.ex          # File writing tool
 │   │   └── test/
 │   │
 │   └── coding_agent_ui/         # UI abstraction layer
 │       ├── lib/
-│       │   ├── coding_agent_ui.ex
+│       │   ├── coding_agent_ui/
+│       │   │   └── application.ex
 │       │   └── coding_agent/
 │       │       └── ui/
-│       │           ├── rpc.ex        # JSON-RPC interface
-│       │           ├── debug_rpc.ex  # Debug RPC interface
-│       │           └── headless.ex   # Headless mode
+│       │           ├── debug_rpc.ex     # Debug JSON-RPC interface
+│       │           ├── headless.ex      # Headless mode implementation
+│       │           └── rpc.ex           # JSON-RPC interface
 │       └── test/
 │
 ├── clients/                     # Client applications
-│   └── lemon-tui/               # Terminal UI (TypeScript/Node.js)
-│       ├── src/
-│       │   ├── index.ts         # Main TUI application
-│       │   ├── agent-connection.ts  # RPC client
-│       │   ├── state.ts         # State management
-│       │   └── types.ts         # TypeScript types
-│       ├── package.json
-│       └── tsconfig.json
+│   ├── lemon-tui/               # Terminal UI (TypeScript/Node.js)
+│   │   ├── src/
+│   │   │   ├── index.ts         # Main TUI application entry
+│   │   │   ├── agent-connection.ts  # RPC client and connection management
+│   │   │   ├── config.ts        # Configuration and argument parsing
+│   │   │   ├── state.ts         # State management and reducer logic
+│   │   │   ├── state.test.ts    # State management tests
+│   │   │   └── types.ts         # TypeScript type definitions
+│   │   ├── dist/
+│   │   │   └── index.js         # Compiled JavaScript output
+│   │   ├── package.json         # Node.js dependencies and scripts
+│   │   ├── package-lock.json    # Dependency lock file
+│   │   └── tsconfig.json        # TypeScript configuration
+│   │
+│   └── lemon-web/               # Web UI (placeholder)
+│       └── ...
 │
-├── tools/                       # Utility tools
+├── tools/                       # Utility tools and utilities
 │   └── debug_cli/               # Python debug CLI
-│       ├── debug_cli.py
-│       └── pyproject.toml
+│       ├── debug_cli.py         # CLI entry point
+│       ├── pyproject.toml       # Python project configuration
+│       └── README.md
 │
-└── scripts/                     # Elixir scripts
-    ├── debug_agent_rpc.exs
-    └── hello_kimi.exs
+├── scripts/                     # Elixir and shell scripts
+│   ├── debug_agent_rpc.exs      # Script for debugging agent RPC
+│   ├── hello_kimi.exs           # Example session script
+│   ├── run_kimi.sh              # Shell script to run Kimi agent
+│   ├── run_tui_kimi.sh          # Shell script to run TUI with Kimi
+│   └── cron_lemon_loop.sh       # Cron job script for agent loop
+│
+├── docs/                        # Documentation
+│   ├── beam_agents.md           # BEAM agents architecture documentation
+│   ├── benchmarks.md            # Performance benchmarks
+│   ├── context.md               # Context management documentation
+│   ├── extensions.md            # Extension system documentation
+│   ├── layered_config.md        # Layered configuration documentation
+│   ├── skills.md                # Skills system documentation
+│   ├── telemetry.md             # Telemetry and observability
+│   └── agent-loop/              # Agent loop documentation and runs
+│       └── ...
+│
+└── examples/                    # Example projects and demonstrations
+    └── extensions/              # Example extension implementations
 ```
 
 ---
@@ -367,8 +438,8 @@ The `Ai` library provides a unified interface for interacting with multiple LLM 
 
 ```elixir
 # Create a context
-context = Ai.Context.new(system_prompt: "You are a helpful assistant")
-context = Ai.Context.add_user_message(context, "Hello!")
+context = Ai.new_context(system_prompt: "You are a helpful assistant")
+context = Ai.Types.Context.add_user_message(context, "Hello!")
 
 # Get a model
 model = Ai.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
@@ -378,7 +449,7 @@ model = Ai.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
 
 for event <- Ai.EventStream.events(stream) do
   case event do
-    {:text_delta, _idx, delta, _partial} -> IO.write(delta)
+    {:text_delta, _idx, delta, _partial_message} -> IO.write(delta)
     {:done, _reason, message} -> IO.puts("\nDone!")
     _ -> :ok
   end
@@ -475,26 +546,106 @@ unsubscribe = CodingAgent.Session.subscribe(session)
 
 ### Lemon TUI
 
-The Terminal UI client provides an interface for interacting with the coding agent:
+The Terminal UI client provides a full-featured interactive interface for interacting with the Lemon coding agent. It supports real-time streaming, multi-session management, interactive overlays, keyboard shortcuts, and configurable settings.
+
+#### CLI Usage
 
 ```bash
-# Start the TUI
-lemon-tui --cwd /path/to/project --model anthropic:claude-sonnet-4-20250514
+# Start the TUI with default settings
+lemon-tui
 
-# Commands within TUI:
-#   /abort    - Stop current operation
-#   /reset    - Clear conversation
-#   /save     - Save session
-#   /stats    - Show statistics
-#   /quit     - Exit
+# Specify working directory
+lemon-tui --cwd /path/to/project
+lemon-tui -d /path/to/project
+
+# Specify AI model (provider:model_id)
+lemon-tui --model anthropic:claude-sonnet-4-20250514
+lemon-tui -m openai:gpt-4-turbo
+
+# Set custom base URL (for local/alternative providers)
+lemon-tui --base-url http://localhost:11434/v1
+
+# Use custom system prompt
+lemon-tui --system-prompt "You are a C++ expert"
+
+# Resume from a saved session file
+lemon-tui --session-file /path/to/session.jsonl
+
+# Enable debug mode
+lemon-tui --debug
+
+# Disable UI overlays (headless mode)
+lemon-tui --no-ui
+
+# Specify lemon project root
+lemon-tui --lemon-path /path/to/lemon
+
+# Show help
+lemon-tui --help
+lemon-tui -h
 ```
 
-**Key Features:**
-- Real-time streaming display
-- Tool execution visualization
-- Markdown rendering
-- Overlay dialogs (select, confirm, input, editor)
-- Keyboard shortcuts (Ctrl+C to abort, Ctrl+O for tool panel)
+#### Slash Commands
+
+All commands are prefixed with `/`. Type `/help` within the TUI to see this list:
+
+**Session Management:**
+- `/abort` — Stop the current operation
+- `/reset` — Clear conversation history and reset the current session
+- `/save` — Save the current session to a JSONL file
+- `/sessions` — List all saved sessions
+- `/resume [name]` — Resume a previously saved session by name
+- `/stats` — Show current session statistics (tokens used, cost, message count)
+- `/debug [on|off]` — Toggle debug mode
+
+**Search and Settings:**
+- `/search <term>` — Search conversation history for matching text
+- `/settings` — Open the settings overlay
+
+**Multi-Session Commands:**
+- `/running` — List all currently running sessions with their status
+- `/new-session [--cwd <path>] [--model <model>]` — Start a new session
+- `/switch [session_id]` — Switch to a different session
+- `/close-session [session_id]` — Close a session
+
+**Application:**
+- `/quit` or `/exit` or `/q` — Exit the application
+- `/help` — Display help message with all commands and shortcuts
+
+#### Keyboard Shortcuts
+
+**Message Input:**
+- **Enter** — Send message to the agent
+- **Shift+Enter** — Insert newline in editor
+
+**Session Management:**
+- **Ctrl+N** — Create new session
+- **Ctrl+Tab** — Cycle through open sessions
+
+**Tool Output:**
+- **Ctrl+O** — Toggle tool output panel visibility
+
+**Application Control:**
+- **Ctrl+C** (once, empty editor) — Show quit hint
+- **Ctrl+C** (twice) — Exit the application
+- **Esc** (once, during agent execution) — Show abort hint
+- **Esc** (twice) — Abort current agent operation
+- **Escape** — Cancel/close overlay dialogs
+
+#### Key Features
+
+- **Real-time Streaming**: Watch LLM responses appear character-by-character
+- **Tool Execution Visualization**: Dedicated panel showing tool execution with outputs and results
+- **Multi-Session Management**: Run multiple independent agent sessions, switch between them
+- **Markdown Rendering**: Responses rendered with syntax highlighting and formatting
+- **Overlay Dialogs**: Interactive select, confirm, input, and editor overlays
+- **Session Persistence**: Save and resume sessions with full conversation tree structure
+- **Search**: Search across entire conversation history
+- **Settings Management**: Configurable themes, debug mode, persisted to config file
+- **Git Integration**: Displays git branch and status in the status bar
+- **Token Tracking**: Real-time display of input/output tokens and running cost estimate
+- **Auto-Completion**: Smart completion for commands and paths
+- **Debug Mode**: Toggle debug output to see internal events and diagnostics
 
 ---
 
@@ -532,26 +683,52 @@ Create a settings file at `~/.lemon/agent/settings.json`:
 
 ```json
 {
-  "default_model": {
+  "defaultModel": {
     "provider": "anthropic",
-    "model_id": "claude-sonnet-4-20250514"
+    "modelId": "claude-sonnet-4-20250514"
   },
   "providers": {
     "anthropic": {
-      "api_key": "sk-ant-..."
+      "apiKey": "sk-ant-..."
     },
     "openai": {
-      "api_key": "sk-..."
+      "apiKey": "sk-..."
+    },
+    "google": {
+      "apiKey": "your-google-api-key"
+    },
+    "azure-openai-responses": {
+      "apiKey": "your-azure-key"
     }
   }
 }
 ```
 
-Or use environment variables:
+Alternatively, use environment variables:
 
 ```bash
+# Anthropic
 export ANTHROPIC_API_KEY="sk-ant-..."
+
+# OpenAI
 export OPENAI_API_KEY="sk-..."
+
+# Google Generative AI
+export GOOGLE_GENERATIVE_AI_API_KEY="your-api-key"
+# or
+export GOOGLE_API_KEY="your-api-key"
+export GEMINI_API_KEY="your-api-key"
+
+# AWS Bedrock
+export AWS_ACCESS_KEY_ID="..."
+export AWS_SECRET_ACCESS_KEY="..."
+export AWS_REGION="us-east-1"
+
+# Azure OpenAI
+export AZURE_OPENAI_API_KEY="your-api-key"
+export AZURE_OPENAI_BASE_URL="https://myresource.openai.azure.com/openai/v1"
+export AZURE_OPENAI_RESOURCE_NAME="myresource"
+export AZURE_OPENAI_API_VERSION="2024-12-01-preview"
 ```
 
 ---
@@ -586,9 +763,6 @@ mix test
 mix test apps/ai
 mix test apps/agent_core
 mix test apps/coding_agent
-
-# Run with coverage
-mix coveralls
 ```
 
 ### Interactive Development
@@ -597,10 +771,68 @@ mix coveralls
 # Start an IEx session with the project loaded
 iex -S mix
 
-# In IEx:
-{:ok, session} = CodingAgent.start_session(cwd: File.cwd!())
-CodingAgent.Session.prompt(session, "Hello!")
+# In IEx, start a session with required model parameter:
+{:ok, session} = CodingAgent.start_session(
+  cwd: File.cwd!(),
+  model: Ai.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+)
+
+# Subscribe to session events
+unsubscribe = CodingAgent.Session.subscribe(session)
+
+# Send a prompt to the session
+:ok = CodingAgent.Session.prompt(session, "Read the mix.exs file")
+
+# Receive and handle events
+receive do
+  {:session_event, session_id, event} ->
+    IO.inspect(event)
+end
 ```
+
+### Settings Configuration
+
+Settings support multiple formats and can be stored globally at `~/.lemon/agent/settings.json` or per-project at `.lemon/settings.json`. Project settings override global settings.
+
+#### Map Format (Recommended)
+
+```json
+{
+  "defaultModel": {
+    "provider": "anthropic",
+    "modelId": "claude-sonnet-4-20250514"
+  },
+  "providers": {
+    "anthropic": {
+      "apiKey": "sk-ant-..."
+    }
+  }
+}
+```
+
+#### Flat Style
+
+```json
+{
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-20250514",
+  "providers": {
+    "anthropic": {
+      "apiKey": "sk-ant-..."
+    }
+  }
+}
+```
+
+#### String Style
+
+```json
+{
+  "defaultModel": "anthropic:claude-sonnet-4-20250514"
+}
+```
+
+All three formats are equivalent and will be normalized to the internal representation.
 
 ---
 
