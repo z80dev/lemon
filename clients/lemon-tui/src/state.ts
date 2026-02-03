@@ -522,9 +522,10 @@ export class StateStore {
       return;
     }
 
+    // If session doesn't exist yet (race condition with session_started), create it
+    // This can happen when active_session message arrives before session_started
     if (!this.state.sessions.has(sessionId)) {
-      this.setState({ error: `Session not found: ${sessionId}` });
-      return;
+      this.getOrCreateSession(sessionId);
     }
 
     this.setState({ activeSessionId: sessionId });

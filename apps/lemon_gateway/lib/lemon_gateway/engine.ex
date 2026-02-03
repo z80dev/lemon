@@ -2,7 +2,6 @@ defmodule LemonGateway.Engine do
   @moduledoc false
 
   alias LemonGateway.Types.{Job, ResumeToken}
-  alias LemonGateway.Event
 
   @type run_opts :: %{
           optional(:cwd) => String.t(),

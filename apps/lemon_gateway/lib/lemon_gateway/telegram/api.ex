@@ -24,17 +24,28 @@ defmodule LemonGateway.Telegram.API do
     request(token, "sendMessage", params, @default_timeout)
   end
 
+  def edit_message_text(token, chat_id, message_id, text) do
+    params = %{
+      "chat_id" => chat_id,
+      "message_id" => message_id,
+      "text" => text,
+      "disable_web_page_preview" => true
+    }
+
+    request(token, "editMessageText", params, @default_timeout)
+  end
+
   defp request(token, method, params, timeout_ms) do
     url = "https://api.telegram.org/bot#{token}/#{method}"
     body = Jason.encode!(params)
 
     headers = [
-      {'content-type', 'application/json'}
+      {~c"content-type", ~c"application/json"}
     ]
 
     opts = [timeout: timeout_ms, connect_timeout: timeout_ms]
 
-    case :httpc.request(:post, {to_charlist(url), headers, 'application/json', body}, opts, body_format: :binary) do
+    case :httpc.request(:post, {to_charlist(url), headers, ~c"application/json", body}, opts, body_format: :binary) do
       {:ok, {{_, 200, _}, _headers, response_body}} ->
         Jason.decode(response_body)
 

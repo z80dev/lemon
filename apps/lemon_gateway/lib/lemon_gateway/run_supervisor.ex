@@ -12,7 +12,11 @@ defmodule LemonGateway.RunSupervisor do
   end
 
   def start_run(args) do
-    spec = {LemonGateway.Run, args}
+    spec =
+      Supervisor.child_spec({LemonGateway.Run, args},
+        restart: :temporary
+      )
+
     DynamicSupervisor.start_child(__MODULE__, spec)
   end
 end

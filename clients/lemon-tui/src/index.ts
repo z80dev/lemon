@@ -32,7 +32,7 @@ import {
 } from '@mariozechner/pi-tui';
 import { execFile } from 'node:child_process';
 import { AgentConnection, type AgentConnectionOptions } from './agent-connection.js';
-import { loadConfigSync, saveConfigKey, type TUIConfig } from './config.js';
+import { parseModelSpec, resolveConfig, saveTUIConfigKey, getModelString, type ResolvedConfig } from './config.js';
 import { StateStore, type AppState, type NormalizedMessage, type NormalizedAssistantMessage, type NormalizedToolResultMessage } from './state.js';
 import type { ServerMessage, UIRequestMessage, SelectParams, ConfirmParams, InputParams, EditorParams, SessionSummary } from './types.js';
 
@@ -571,10 +571,10 @@ class LemonTUI {
     const initialBasePath = options.cwd || process.cwd();
     this.updateAutocompleteProvider(initialBasePath);
 
-    // Load saved config and apply settings
-    const savedConfig = loadConfigSync();
-    setTheme(savedConfig.theme);
-    this.store.setDebug(savedConfig.debug);
+    // Apply debug setting from options (theme is set in main before constructing TUI)
+    if (options.debug) {
+      this.store.setDebug(true);
+    }
 
     this.setupUI();
     this.setupEventHandlers();
@@ -2553,7 +2553,7 @@ ${ansi.bold('Shortcuts:')}
           const debugEnabled = newValue === 'On';
           this.store.setDebug(debugEnabled);
           settingsList.updateValue('debug', debugEnabled ? 'On' : 'Off');
-          saveConfigKey('debug', debugEnabled);  // Persist to config file
+          saveTUIConfigKey('debug', debugEnabled);  // Persist to config file
         } else if (id === 'theme') {
           // Convert display name back to theme key (lowercase)
           const themeName = newValue.toLowerCase();
@@ -2561,7 +2561,7 @@ ${ansi.bold('Shortcuts:')}
             settingsList.updateValue('theme', newValue);
             // Request a full re-render to apply the new theme
             this.tui.requestRender();
-            saveConfigKey('theme', themeName);  // Persist to config file
+            saveTUIConfigKey('theme', themeName);  // Persist to config file
           }
         }
         // Other settings are info-only for now
@@ -2722,9 +2722,21 @@ ${ansi.bold('Shortcuts:')}
 // CLI Entry Point
 // ============================================================================
 
-function parseArgs(): AgentConnectionOptions {
+interface CLIArgs {
+  cwd?: string;
+  model?: string;
+  provider?: string;
+  baseUrl?: string;
+  systemPrompt?: string;
+  sessionFile?: string;
+  debug?: boolean;
+  ui?: boolean;
+  lemonPath?: string;
+}
+
+function parseArgs(): CLIArgs {
   const args = process.argv.slice(2);
-  const options: AgentConnectionOptions = {};
+  const options: CLIArgs = {};
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -2738,6 +2750,11 @@ function parseArgs(): AgentConnectionOptions {
       case '--model':
       case '-m':
         options.model = args[++i];
+        break;
+
+      case '--provider':
+      case '-p':
+        options.provider = args[++i];
         break;
 
       case '--base-url':
@@ -2773,7 +2790,8 @@ Usage: lemon-tui [options]
 
 Options:
   --cwd, -d <path>       Working directory for the agent
-  --model, -m <spec>     Model specification (provider:model_id)
+  --model, -m <spec>     Model specification (provider:model_id or just model_id)
+  --provider, -p <name>  Provider name (anthropic, openai, kimi, etc.)
   --base-url <url>       Base URL override for model provider
   --system-prompt <text> Custom system prompt
   --session-file <path>  Resume session from file
@@ -2781,6 +2799,11 @@ Options:
   --no-ui                Disable UI overlays
   --lemon-path <path>    Path to lemon project root
   --help, -h             Show this help message
+
+Configuration:
+  Config file: ~/.lemon/config.json
+  Environment variables override config file values.
+  CLI arguments override everything.
 `);
         process.exit(0);
         break;
@@ -2796,7 +2819,56 @@ Options:
   return options;
 }
 
+/**
+ * Build AgentConnectionOptions from CLI args and resolved config
+ */
+function buildOptions(cliArgs: CLIArgs, config: ResolvedConfig): AgentConnectionOptions {
+  const options: AgentConnectionOptions = {
+    cwd: cliArgs.cwd,
+    debug: config.debug,
+    ui: cliArgs.ui,
+    lemonPath: cliArgs.lemonPath,
+    systemPrompt: cliArgs.systemPrompt,
+    sessionFile: cliArgs.sessionFile,
+  };
+
+  // Build model string - if CLI provided full "provider:model", use that
+  // Otherwise, use resolved config
+  options.model = getModelString(config);
+
+  // Base URL from config (already resolved with precedence)
+  if (config.baseUrl) {
+    options.baseUrl = config.baseUrl;
+  }
+
+  return options;
+}
+
 // Main
-const options = parseArgs();
+const cliArgs = parseArgs();
+
+// If model includes provider prefix, parse and override provider/model for resolution
+const modelSpec = parseModelSpec(cliArgs.model);
+if (modelSpec.provider) {
+  cliArgs.provider = modelSpec.provider;
+}
+if (modelSpec.model) {
+  cliArgs.model = modelSpec.model;
+}
+
+// Resolve configuration: CLI args > env vars > config file
+const resolvedConfig = resolveConfig({
+  provider: cliArgs.provider,
+  model: cliArgs.model,
+  baseUrl: cliArgs.baseUrl,
+  debug: cliArgs.debug,
+});
+
+// Apply theme from resolved config
+setTheme(resolvedConfig.theme);
+
+// Build final options for the TUI
+const options = buildOptions(cliArgs, resolvedConfig);
+
 const app = new LemonTUI(options);
 app.start();

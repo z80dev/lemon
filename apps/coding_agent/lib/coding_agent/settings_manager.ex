@@ -47,6 +47,17 @@ defmodule CodingAgent.SettingsManager do
           }
         }
       }
+
+  ## Codex CLI Configuration
+
+  Configure Codex CLI behavior under a `codex` section:
+
+      {
+        "codex": {
+          "extraArgs": ["-c", "notify=[]"],
+          "autoApprove": true
+        }
+      }
   """
 
   alias CodingAgent.Config
@@ -89,7 +100,10 @@ defmodule CodingAgent.SettingsManager do
           extension_paths: [String.t()],
 
           # Display settings
-          theme: String.t()
+          theme: String.t(),
+
+          # Codex CLI settings
+          codex: map()
         }
 
   defstruct [
@@ -122,7 +136,10 @@ defmodule CodingAgent.SettingsManager do
     extension_paths: [],
 
     # Display settings
-    theme: "default"
+    theme: "default",
+
+    # Codex CLI settings
+    codex: %{}
   ]
 
   # Fields that should be concatenated when merging instead of replaced
@@ -444,14 +461,18 @@ defmodule CodingAgent.SettingsManager do
       # Compaction settings
       compaction_enabled:
         parse_boolean(
-          map["compactionEnabled"] || map["compaction_enabled"],
+          fetch_first(map, ["compactionEnabled", "compaction_enabled"]),
           true
         ),
       reserve_tokens: map["reserveTokens"] || map["reserve_tokens"] || 16384,
       keep_recent_tokens: map["keepRecentTokens"] || map["keep_recent_tokens"] || 20000,
 
       # Retry settings
-      retry_enabled: parse_boolean(map["retryEnabled"] || map["retry_enabled"], true),
+      retry_enabled:
+        parse_boolean(
+          fetch_first(map, ["retryEnabled", "retry_enabled"]),
+          true
+        ),
       max_retries: map["maxRetries"] || map["max_retries"] || 3,
       base_delay_ms: map["baseDelayMs"] || map["base_delay_ms"] || 1000,
 
@@ -462,7 +483,7 @@ defmodule CodingAgent.SettingsManager do
       # Tool settings
       auto_resize_images:
         parse_boolean(
-          map["autoResizeImages"] || map["auto_resize_images"],
+          fetch_first(map, ["autoResizeImages", "auto_resize_images"]),
           true
         ),
 
@@ -470,7 +491,10 @@ defmodule CodingAgent.SettingsManager do
       extension_paths: map["extensionPaths"] || map["extension_paths"] || [],
 
       # Display settings
-      theme: map["theme"] || "default"
+      theme: map["theme"] || "default",
+
+      # Codex CLI settings
+      codex: parse_codex_settings(map["codex"])
     }
   end
 
@@ -509,7 +533,10 @@ defmodule CodingAgent.SettingsManager do
       "extensionPaths" => settings.extension_paths,
 
       # Display settings
-      "theme" => settings.theme
+      "theme" => settings.theme,
+
+      # Codex CLI settings
+      "codex" => encode_codex_settings(settings.codex)
     }
     |> reject_nil_values()
   end
@@ -585,6 +612,38 @@ defmodule CodingAgent.SettingsManager do
     |> Map.new()
   end
 
+  defp parse_codex_settings(nil), do: %{}
+
+  defp parse_codex_settings(map) when is_map(map) do
+    extra_args =
+      case map["extraArgs"] || map["extra_args"] do
+        list when is_list(list) -> Enum.filter(list, &is_binary/1)
+        _ -> nil
+      end
+
+    auto_approve = parse_boolean(fetch_first(map, ["autoApprove", "auto_approve"]), nil)
+
+    %{}
+    |> maybe_put(:extra_args, extra_args)
+    |> maybe_put(:auto_approve, auto_approve)
+  end
+
+  defp parse_codex_settings(_), do: %{}
+
+  defp encode_codex_settings(%{} = codex) do
+    %{
+      "extraArgs" => Map.get(codex, :extra_args),
+      "autoApprove" => Map.get(codex, :auto_approve)
+    }
+    |> reject_nil_values()
+    |> case do
+      map when map == %{} -> nil
+      map -> map
+    end
+  end
+
+  defp encode_codex_settings(_), do: nil
+
   defp encode_provider_config(nil), do: %{}
 
   defp encode_provider_config(cfg) when is_map(cfg) do
@@ -658,7 +717,10 @@ defmodule CodingAgent.SettingsManager do
   defp parse_scoped_models(nil), do: []
   defp parse_scoped_models(models) when is_list(models) do
     models
-    |> Enum.map(&parse_model_config/1)
+    |> Enum.map(fn
+      item when is_map(item) -> parse_model_config(item)
+      _ -> nil
+    end)
     |> Enum.reject(&is_nil/1)
   end
 
@@ -688,6 +750,19 @@ defmodule CodingAgent.SettingsManager do
   defp parse_boolean("true", _default), do: true
   defp parse_boolean("false", _default), do: false
   defp parse_boolean(_, default), do: default
+
+  defp fetch_first(map, keys) when is_map(map) and is_list(keys) do
+    Enum.reduce_while(keys, nil, fn key, _acc ->
+      if Map.has_key?(map, key) do
+        {:halt, Map.get(map, key)}
+      else
+        {:cont, nil}
+      end
+    end)
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp reject_nil_values(map) do
     map

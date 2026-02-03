@@ -4,8 +4,14 @@ defmodule LemonGateway.Telegram.Dedupe do
   @table :lemon_gateway_telegram_dedupe
 
   def init do
-    _ = :ets.new(@table, [:set, :public, :named_table])
-    :ok
+    case :ets.info(@table) do
+      :undefined ->
+        _ = :ets.new(@table, [:set, :public, :named_table])
+        :ok
+
+      _info ->
+        :ok
+    end
   end
 
   def seen?(key, ttl_ms) do

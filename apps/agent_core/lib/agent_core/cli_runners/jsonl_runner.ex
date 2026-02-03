@@ -168,6 +168,11 @@ defmodule AgentCore.CliRunners.JsonlRunner do
       def stream(pid) do
         JsonlRunner.stream(pid)
       end
+
+      @doc "Cancel a running runner"
+      def cancel(pid, reason \\ :user_requested) do
+        JsonlRunner.cancel(pid, reason)
+      end
     end
   end
 
@@ -217,6 +222,12 @@ defmodule AgentCore.CliRunners.JsonlRunner do
   @spec stream(pid()) :: AgentCore.EventStream.t()
   def stream(pid) do
     GenServer.call(pid, :get_stream)
+  end
+
+  @doc "Cancel a running runner"
+  @spec cancel(pid(), term()) :: :ok
+  def cancel(pid, reason \\ :user_requested) do
+    GenServer.cast(pid, {:cancel, reason})
   end
 
   # ============================================================================
@@ -547,6 +558,14 @@ defmodule AgentCore.CliRunners.JsonlRunner do
 
   def handle_info(_msg, state) do
     {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast({:cancel, reason}, state) do
+    kill_subprocess(state)
+    AgentCore.EventStream.cancel(state.stream, reason)
+    cleanup(state)
+    {:stop, :normal, state}
   end
 
   @impl true
