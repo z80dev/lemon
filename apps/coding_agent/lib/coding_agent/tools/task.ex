@@ -341,6 +341,20 @@ defmodule CodingAgent.Tools.Task do
 
         {:cont, acc}
 
+      {:action, %{title: title, detail: detail, kind: kind} = _action, :updated, _opts}, acc ->
+        # Emit update for action progress with any available detail text
+        text = extract_action_detail_text(detail) || title
+
+        extra_details =
+          %{
+            current_action: %{title: title, kind: to_string(kind), phase: "updated"}
+          }
+          |> maybe_add_action_detail(detail)
+
+        maybe_emit_cli_update(on_update, description, engine_label, "running", text, extra_details)
+
+        {:cont, acc}
+
       {:action, %{title: title, detail: detail, kind: kind}, :completed, _opts}, acc ->
         maybe_emit_cli_update(
           on_update,
@@ -396,6 +410,30 @@ defmodule CodingAgent.Tools.Task do
       result
     end
   end
+
+  defp extract_action_detail_text(detail) when is_map(detail) do
+    cond do
+      is_binary(Map.get(detail, :message)) -> Map.get(detail, :message)
+      is_binary(Map.get(detail, "message")) -> Map.get(detail, "message")
+      is_binary(Map.get(detail, :output)) -> Map.get(detail, :output)
+      is_binary(Map.get(detail, "output")) -> Map.get(detail, "output")
+      is_binary(Map.get(detail, :stdout)) -> Map.get(detail, :stdout)
+      is_binary(Map.get(detail, "stdout")) -> Map.get(detail, "stdout")
+      is_binary(Map.get(detail, :stderr)) -> Map.get(detail, :stderr)
+      is_binary(Map.get(detail, "stderr")) -> Map.get(detail, "stderr")
+      is_binary(Map.get(detail, :result)) -> Map.get(detail, :result)
+      is_binary(Map.get(detail, "result")) -> Map.get(detail, "result")
+      true -> nil
+    end
+  end
+
+  defp extract_action_detail_text(_detail), do: nil
+
+  defp maybe_add_action_detail(details, detail) when is_map(detail) and map_size(detail) > 0 do
+    Map.put(details, :action_detail, detail)
+  end
+
+  defp maybe_add_action_detail(details, _detail), do: details
 
   defp abort_monitor_loop(signal, pid) do
     receive do
