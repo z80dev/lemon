@@ -17,7 +17,7 @@ function createNotification(overrides: Partial<Notification> = {}): Notification
 }
 
 /**
- * Helper to set up store state with notifications
+ * Helper to set up store state with notifications (wrapped in act)
  */
 function setupStore(notifications: Notification[] = []) {
   const mockDismiss = vi.fn((id: string) => {
@@ -26,9 +26,11 @@ function setupStore(notifications: Notification[] = []) {
     }));
   });
 
-  useLemonStore.setState({
-    notifications,
-    dismissNotification: mockDismiss,
+  act(() => {
+    useLemonStore.setState({
+      notifications,
+      dismissNotification: mockDismiss,
+    });
   });
 
   return { mockDismiss };
@@ -38,8 +40,19 @@ function setupStore(notifications: Notification[] = []) {
  * Helper to reset store to initial state
  */
 function resetStore() {
-  useLemonStore.setState({
-    notifications: [],
+  act(() => {
+    useLemonStore.setState({
+      notifications: [],
+    });
+  });
+}
+
+/**
+ * Helper to update store state (wrapped in act)
+ */
+function updateStore(updater: (state: ReturnType<typeof useLemonStore.getState>) => Partial<ReturnType<typeof useLemonStore.getState>>) {
+  act(() => {
+    useLemonStore.setState(updater);
   });
 }
 
@@ -356,7 +369,7 @@ describe('ToastStack', () => {
 
       // Add a new notification
       const newNotification = createNotification({ id: 'new', message: 'New' });
-      useLemonStore.setState((state) => ({
+      updateStore((state) => ({
         notifications: [...state.notifications, newNotification],
       }));
       rerender(<ToastStack />);
@@ -382,6 +395,39 @@ describe('ToastStack', () => {
       const toasts = document.querySelectorAll('.toast');
       expect(toasts.length).toBe(0);
     });
+
+    it('handles staggered notification additions with independent timers', () => {
+      const firstNotification = createNotification({ id: 'first', message: 'First' });
+      const { mockDismiss } = setupStore([firstNotification]);
+      const { rerender } = render(<ToastStack />);
+
+      // Advance 3 seconds
+      act(() => {
+        vi.advanceTimersByTime(3000);
+      });
+
+      // Add second notification
+      const secondNotification = createNotification({ id: 'second', message: 'Second' });
+      updateStore((state) => ({
+        notifications: [...state.notifications, secondNotification],
+      }));
+      rerender(<ToastStack />);
+
+      // Advance 3 more seconds (first should dismiss, second should remain)
+      act(() => {
+        vi.advanceTimersByTime(3000);
+      });
+
+      expect(mockDismiss).toHaveBeenCalledWith('first');
+      expect(mockDismiss).not.toHaveBeenCalledWith('second');
+
+      // Advance 3 more seconds (second should now dismiss)
+      act(() => {
+        vi.advanceTimersByTime(3000);
+      });
+
+      expect(mockDismiss).toHaveBeenCalledWith('second');
+    });
   });
 
   // =========================================================================
@@ -397,7 +443,7 @@ describe('ToastStack', () => {
 
       // Add notification via store
       const notification = createNotification({ message: 'Dynamically added' });
-      useLemonStore.setState((state) => ({
+      updateStore((state) => ({
         notifications: [...state.notifications, notification],
       }));
       rerender(<ToastStack />);
@@ -413,7 +459,7 @@ describe('ToastStack', () => {
       expect(screen.getByText('Will be removed')).toBeInTheDocument();
 
       // Remove from store
-      useLemonStore.setState({ notifications: [] });
+      updateStore(() => ({ notifications: [] }));
       rerender(<ToastStack />);
 
       expect(screen.queryByText('Will be removed')).not.toBeInTheDocument();
@@ -423,16 +469,31 @@ describe('ToastStack', () => {
       setupStore([]);
       const { rerender } = render(<ToastStack />);
 
-      // Rapidly add and remove notifications
+      // Rapidly add notifications
       for (let i = 0; i < 5; i++) {
         const note = createNotification({ id: `rapid-${i}`, message: `Rapid ${i}` });
-        useLemonStore.setState((state) => ({
+        updateStore((state) => ({
           notifications: [...state.notifications, note],
         }));
         rerender(<ToastStack />);
       }
 
       expect(document.querySelectorAll('.toast').length).toBe(5);
+    });
+
+    it('syncs with store dismissNotification action', () => {
+      const notification = createNotification({ id: 'sync-test', message: 'Sync test' });
+      setupStore([notification]);
+      render(<ToastStack />);
+
+      expect(screen.getByText('Sync test')).toBeInTheDocument();
+
+      // Directly call the store's dismiss
+      act(() => {
+        useLemonStore.getState().dismissNotification('sync-test');
+      });
+
+      expect(screen.queryByText('Sync test')).not.toBeInTheDocument();
     });
   });
 
@@ -507,7 +568,7 @@ describe('ToastStack', () => {
         createNotification({ id: 'new-2', message: 'New 2' }),
         createNotification({ id: 'new-3', message: 'New 3' }),
       ];
-      useLemonStore.setState({ notifications: newNotifications });
+      updateStore(() => ({ notifications: newNotifications }));
       rerender(<ToastStack />);
 
       expect(screen.queryByText('Old 1')).not.toBeInTheDocument();
@@ -515,6 +576,25 @@ describe('ToastStack', () => {
       expect(screen.getByText('New 1')).toBeInTheDocument();
       expect(screen.getByText('New 2')).toBeInTheDocument();
       expect(screen.getByText('New 3')).toBeInTheDocument();
+    });
+
+    it('handles notification with multiline message', () => {
+      const notification = createNotification({
+        message: 'Line 1\nLine 2\nLine 3',
+      });
+      setupStore([notification]);
+      render(<ToastStack />);
+
+      expect(screen.getByText('Line 1\nLine 2\nLine 3')).toBeInTheDocument();
+    });
+
+    it('handles notification with whitespace-only message', () => {
+      const notification = createNotification({ message: '   ' });
+      setupStore([notification]);
+      render(<ToastStack />);
+
+      const toast = document.querySelector('.toast');
+      expect(toast).toBeInTheDocument();
     });
   });
 
@@ -546,6 +626,22 @@ describe('ToastStack', () => {
       expect(toast).toHaveClass('toast');
       expect(toast).toHaveClass('toast--success');
     });
+
+    it('uses BEM naming convention for level modifiers', () => {
+      const levels: Array<'info' | 'success' | 'warn' | 'error'> = ['info', 'success', 'warn', 'error'];
+
+      for (const level of levels) {
+        resetStore();
+        const notification = createNotification({ id: `bem-${level}`, level });
+        setupStore([notification]);
+        const { unmount } = render(<ToastStack />);
+
+        const toast = document.querySelector('.toast');
+        expect(toast).toHaveClass(`toast--${level}`);
+
+        unmount();
+      }
+    });
   });
 
   // =========================================================================
@@ -565,6 +661,24 @@ describe('ToastStack', () => {
       // not cause second notification to lose state
       const toasts = document.querySelectorAll('.toast');
       expect(toasts.length).toBe(2);
+    });
+
+    it('maintains stable keys across re-renders', () => {
+      const notifications = [
+        createNotification({ id: 'stable-1', message: 'Stable 1' }),
+        createNotification({ id: 'stable-2', message: 'Stable 2' }),
+      ];
+      setupStore(notifications);
+      const { rerender } = render(<ToastStack />);
+
+      // Re-render multiple times
+      rerender(<ToastStack />);
+      rerender(<ToastStack />);
+
+      const toasts = document.querySelectorAll('.toast');
+      expect(toasts.length).toBe(2);
+      expect(within(toasts[0] as HTMLElement).getByText('Stable 1')).toBeInTheDocument();
+      expect(within(toasts[1] as HTMLElement).getByText('Stable 2')).toBeInTheDocument();
     });
   });
 
@@ -594,6 +708,21 @@ describe('ToastStack', () => {
       fireEvent.click(dismissButton);
 
       expect(mockDismiss).toHaveBeenCalledWith('keyboard-dismiss');
+    });
+
+    it('each toast has accessible dismiss button with text label', () => {
+      const notifications = [
+        createNotification({ id: 'a11y-1' }),
+        createNotification({ id: 'a11y-2' }),
+      ];
+      setupStore(notifications);
+      render(<ToastStack />);
+
+      const buttons = screen.getAllByRole('button', { name: 'Dismiss' });
+      expect(buttons.length).toBe(2);
+      buttons.forEach((button) => {
+        expect(button).toHaveTextContent('Dismiss');
+      });
     });
   });
 
@@ -632,6 +761,55 @@ describe('ToastStack', () => {
       expect(children?.length).toBe(2);
       expect(children?.[0].textContent).toBe('Sibling test');
       expect(children?.[1].textContent).toBe('Dismiss');
+    });
+
+    it('toasts are direct children of toast-stack', () => {
+      const notifications = [
+        createNotification({ id: 'direct-1' }),
+        createNotification({ id: 'direct-2' }),
+      ];
+      setupStore(notifications);
+      render(<ToastStack />);
+
+      const stack = document.querySelector('.toast-stack');
+      const directChildren = stack?.querySelectorAll(':scope > .toast');
+      expect(directChildren?.length).toBe(2);
+    });
+  });
+
+  // =========================================================================
+  // Cleanup and Unmounting Tests
+  // =========================================================================
+
+  describe('cleanup and unmounting', () => {
+    it('does not throw errors when unmounted with pending timeouts', () => {
+      const notification = createNotification({ id: 'unmount-test' });
+      setupStore([notification]);
+      const { unmount } = render(<ToastStack />);
+
+      // Unmount before timeout fires
+      expect(() => unmount()).not.toThrow();
+
+      // Advance time past the timeout
+      act(() => {
+        vi.advanceTimersByTime(10000);
+      });
+
+      // No errors should occur
+    });
+
+    it('handles unmount and remount correctly', () => {
+      const notification = createNotification({ id: 'remount-test', message: 'Remount me' });
+      setupStore([notification]);
+
+      const { unmount } = render(<ToastStack />);
+      expect(screen.getByText('Remount me')).toBeInTheDocument();
+
+      unmount();
+
+      // Remount
+      render(<ToastStack />);
+      expect(screen.getByText('Remount me')).toBeInTheDocument();
     });
   });
 });
