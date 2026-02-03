@@ -1035,7 +1035,13 @@ export class StateStore {
       return {};
     }
 
-    const result = partialResult as { details?: { engine?: string; current_action?: { title?: string; kind?: string; phase?: string } } };
+    const result = partialResult as {
+      details?: {
+        engine?: string;
+        current_action?: { title?: string; kind?: string; phase?: string };
+        action_detail?: Record<string, unknown>;
+      };
+    };
     const details = result.details;
     if (!details) {
       return {};
@@ -1050,15 +1056,38 @@ export class StateStore {
     if (details.current_action && typeof details.current_action === 'object') {
       const action = details.current_action;
       if (action.title && action.kind && action.phase) {
-        fields.taskCurrentAction = {
-          title: String(action.title),
-          kind: String(action.kind),
-          phase: String(action.phase),
-        };
+        let title = String(action.title);
+        const kind = String(action.kind);
+        const phase = String(action.phase);
+
+        const detailText = this.extractDetailText(details.action_detail);
+        if (detailText) {
+          title = `${title}: ${detailText}`;
+        }
+
+        fields.taskCurrentAction = { title, kind, phase };
       }
     }
 
     return fields;
+  }
+
+  private extractDetailText(detail: unknown): string | null {
+    if (!detail || typeof detail !== 'object') {
+      return null;
+    }
+
+    const record = detail as Record<string, unknown>;
+    const candidates = ['message', 'output', 'stdout', 'stderr', 'result'] as const;
+
+    for (const key of candidates) {
+      const value = record[key];
+      if (typeof value === 'string' && value.trim() !== '') {
+        return value.trim();
+      }
+    }
+
+    return null;
   }
 
   private handleToolEnd(
