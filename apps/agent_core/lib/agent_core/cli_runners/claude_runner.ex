@@ -111,13 +111,14 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
 
   @impl true
   def build_command(prompt, resume, _state) do
-    base_args = [
-      "-p",
-      "--output-format", "stream-json",
-      "--verbose",
-      # Intentionally keep --dangerously-skip-permissions in Lemon (explicitly desired).
-      "--dangerously-skip-permissions"
-    ]
+    base_args =
+      [
+        "-p",
+        "--output-format", "stream-json",
+        "--verbose"
+      ]
+      |> maybe_add_permissions()
+      |> maybe_add_allowed_tools()
 
     # Add resume flag if resuming
     args =
@@ -138,6 +139,35 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
   def stdin_payload(_prompt, _resume, _state) do
     # Claude takes prompt as command-line argument, not stdin
     nil
+  end
+
+  @impl true
+  def env(_state) do
+    config = get_claude_config()
+    scrub_env = scrub_env?(config)
+    overrides = normalize_env_overrides(config[:env_overrides])
+
+    env =
+      cond do
+        scrub_env ->
+          allowlist = config[:env_allowlist] || default_env_allowlist()
+          prefixes = config[:env_allow_prefixes] || []
+          build_scrubbed_env(allowlist, prefixes)
+
+        map_size(overrides) > 0 ->
+          System.get_env()
+
+        true ->
+          nil
+      end
+
+    if is_nil(env) do
+      nil
+    else
+      env
+      |> Map.merge(overrides)
+      |> Enum.to_list()
+    end
   end
 
   @impl true
@@ -177,8 +207,9 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
 
       # Assistant message - process content blocks
       %StreamAssistantMessage{message: message} ->
+        {warning_events, state} = maybe_permission_warning(message.error, state)
         {events, state} = process_assistant_content(message.content, state)
-        {events, state, []}
+        {warning_events ++ events, state, []}
 
       # User message (tool results) - complete pending actions
       %StreamUserMessage{message: message} ->
@@ -356,6 +387,13 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
   defp process_user_content(_, state), do: {[], state}
 
   defp process_tool_result(%ToolResultBlock{tool_use_id: tool_use_id, content: content, is_error: is_error}, state) do
+    {warning_events, state} =
+      if is_error do
+        maybe_permission_warning(normalize_tool_result(content), state)
+      else
+        {[], state}
+      end
+
     case Map.pop(state.pending_actions, tool_use_id) do
       {nil, _} ->
         ok = not is_error
@@ -377,7 +415,7 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
         )
 
         state = %{state | factory: factory}
-        {[event], state}
+        {[event | warning_events], state}
 
       {action, pending_actions} ->
         ok = not is_error
@@ -398,7 +436,7 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
         )
 
         state = %{state | factory: factory, pending_actions: pending_actions}
-        {[event], state}
+        {[event | warning_events], state}
     end
   end
 
@@ -483,4 +521,113 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
   end
 
   defp extract_error(_), do: nil
+
+  defp maybe_permission_warning(nil, state), do: {[], state}
+  defp maybe_permission_warning(error, state) when is_binary(error) do
+    if permission_denied?(error) do
+      message = "Permission denied: #{String.slice(error, 0, 200)}"
+      {event, factory} = EventFactory.note(state.factory, message, ok: false, level: :warning)
+      {[event], %{state | factory: factory}}
+    else
+      {[], state}
+    end
+  end
+  defp maybe_permission_warning(_error, state), do: {[], state}
+
+  defp permission_denied?(text) when is_binary(text) do
+    Regex.match?(~r/permission|not authorized|denied/i, text)
+  end
+
+  defp maybe_add_permissions(args) do
+    if skip_permissions?() do
+      args ++ ["--dangerously-skip-permissions"]
+    else
+      args
+    end
+  end
+
+  defp maybe_add_allowed_tools(args) do
+    case normalize_allowed_tools(get_claude_config(:allowed_tools, nil)) do
+      [] -> args
+      tools -> args ++ ["--allowedTools" | tools]
+    end
+  end
+
+  defp normalize_allowed_tools(nil), do: []
+  defp normalize_allowed_tools(list) when is_list(list), do: Enum.map(list, &to_string/1)
+  defp normalize_allowed_tools(value) when is_binary(value), do: String.split(value, ~r/\s*,\s*/, trim: true)
+  defp normalize_allowed_tools(_), do: []
+
+  defp skip_permissions? do
+    case get_claude_config(:dangerously_skip_permissions, nil) do
+      nil ->
+        case get_claude_config(:yolo, nil) do
+          nil ->
+            System.get_env("LEMON_CLAUDE_YOLO") in ["1", "true", "TRUE", "yes", "YES"]
+
+          value ->
+            value == true
+        end
+
+      value ->
+        value == true
+    end
+  end
+
+  defp scrub_env?(config) do
+    case Map.get(config, :scrub_env, :auto) do
+      :auto -> not skip_permissions?()
+      value -> value == true
+    end
+  end
+
+  defp build_scrubbed_env(allowlist, prefixes) do
+    System.get_env()
+    |> Enum.filter(fn {key, _value} ->
+      key in allowlist or Enum.any?(prefixes, &String.starts_with?(key, &1))
+    end)
+    |> Map.new()
+  end
+
+  defp default_env_allowlist do
+    [
+      "HOME",
+      "PATH",
+      "USER",
+      "LOGNAME",
+      "SHELL",
+      "TMPDIR",
+      "TMP",
+      "TEMP",
+      "LANG",
+      "LC_ALL",
+      "LC_CTYPE",
+      "TERM",
+      "XDG_CONFIG_HOME",
+      "XDG_CACHE_HOME"
+    ]
+  end
+
+  defp normalize_env_overrides(nil), do: %{}
+  defp normalize_env_overrides(env) when is_map(env), do: env
+  defp normalize_env_overrides(env) when is_list(env), do: Map.new(env)
+  defp normalize_env_overrides(_), do: %{}
+
+  defp get_claude_config, do: get_claude_config(:all, %{})
+
+  defp get_claude_config(:all, default) do
+    case Application.get_env(:agent_core, :claude, []) do
+      config when is_map(config) -> config
+      config when is_list(config) -> Map.new(config)
+      _ -> default
+    end
+  end
+
+  defp get_claude_config(key, default) do
+    case Application.get_env(:agent_core, :claude, []) do
+      config when is_map(config) -> Map.get(config, key, default)
+      config when is_list(config) -> Keyword.get(config, key, default)
+      _ -> default
+    end
+  end
 end

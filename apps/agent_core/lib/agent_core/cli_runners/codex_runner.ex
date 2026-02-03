@@ -276,29 +276,23 @@ defmodule AgentCore.CliRunners.CodexRunner do
 
   @impl true
   def handle_stream_end(state) do
-    if state.found_session == nil do
-      message = "codex exec finished but no session_id/thread_id was captured"
+    message =
+      if state.found_session == nil do
+        "codex exec finished but no session_id/thread_id was captured"
+      else
+        "codex exec ended without turn completion"
+      end
 
-      {event, factory} =
-        EventFactory.completed_error(
-          state.factory,
-          message,
-          answer: state.final_answer || ""
-        )
+    {event, factory} =
+      EventFactory.completed_error(
+        state.factory,
+        message,
+        answer: state.final_answer || "",
+        resume: state.found_session
+      )
 
-      state = %{state | factory: factory}
-      {[event], state}
-    else
-      {event, factory} =
-        EventFactory.completed_ok(
-          state.factory,
-          state.final_answer || "",
-          resume: state.found_session
-        )
-
-      state = %{state | factory: factory}
-      {[event], state}
-    end
+    state = %{state | factory: factory}
+    {[event], state}
   end
 
   # ============================================================================
