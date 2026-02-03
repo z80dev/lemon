@@ -1025,10 +1025,10 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
 
   describe "error handling" do
     test "handles invalid child specs gracefully" do
-      # Trying to start something that's not a valid child
-      result = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {NonExistentModule, []})
-
-      assert {:error, _reason} = result
+      # Trying to start something that's not a valid child raises an error
+      assert_raise ArgumentError, fn ->
+        DynamicSupervisor.start_child(ThreadWorkerSupervisor, {NonExistentModule, []})
+      end
     end
 
     test "supervisor handles terminate_child on non-existent pid" do
