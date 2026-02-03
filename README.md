@@ -618,7 +618,78 @@ end
 **Supported CLI Runners:**
 - **CodexRunner/CodexSubagent**: Wraps Codex CLI with JSONL streaming
 - **ClaudeRunner/ClaudeSubagent**: Wraps Claude CLI with stream-json output
+- **LemonRunner/LemonSubagent**: Wraps native CodingAgent.Session as CLI runner
 - **JsonlRunner**: Base infrastructure for building custom CLI runners
+
+#### Task Tool Integration
+
+The **Task tool** in CodingAgent uses CLI runners to delegate subtasks to different AI engines. This allows your agent to spawn Codex or Claude as subagents for specialized work:
+
+```elixir
+# When an agent uses the Task tool, it can specify which engine to use:
+%{
+  "description" => "Implement authentication",
+  "prompt" => "Add JWT authentication to the User controller",
+  "engine" => "codex"  # or "claude" or "internal" (default)
+}
+```
+
+**How it works:**
+
+1. **Internal engine** (default): Spawns a new `CodingAgent.Session` as a subprocess
+2. **Codex engine**: Uses `CodexSubagent` to spawn the Codex CLI (`codex exec`)
+3. **Claude engine**: Uses `ClaudeSubagent` to spawn Claude CLI (`claude -p`)
+
+All engines support:
+- **Streaming progress**: Events flow back to the parent agent
+- **Resume tokens**: Sessions can be continued later
+- **Role prompts**: Specialize the subagent (research, implement, review, test)
+- **Abort signals**: Cancel long-running subtasks
+
+**Example flow:**
+
+```
+Parent Agent                    Task Tool                     Codex CLI
+     │                              │                             │
+     │  tool_call: task             │                             │
+     │  engine: "codex"             │                             │
+     │  prompt: "Add tests"         │                             │
+     │─────────────────────────────►│                             │
+     │                              │  CodexSubagent.start()      │
+     │                              │────────────────────────────►│
+     │                              │                             │
+     │                              │  {:started, resume_token}   │
+     │                              │◄────────────────────────────│
+     │                              │                             │
+     │  on_update: "Running..."     │  {:action, "edit file"...}  │
+     │◄─────────────────────────────│◄────────────────────────────│
+     │                              │                             │
+     │                              │  {:completed, answer, ...}  │
+     │                              │◄────────────────────────────│
+     │  tool_result: answer         │                             │
+     │◄─────────────────────────────│                             │
+```
+
+**Configuration:**
+
+Configure Codex CLI behavior in settings (`~/.lemon/agent/settings.json`):
+
+```json
+{
+  "codex": {
+    "extraArgs": ["-c", "notify=[]"],
+    "autoApprove": false
+  }
+}
+```
+
+Or in `config/config.exs`:
+
+```elixir
+config :agent_core, :codex,
+  extra_args: ["-c", "notify=[]"],
+  auto_approve: false
+```
 
 ### CodingAgent
 
