@@ -634,6 +634,242 @@ defmodule AgentCore.AbortSignalTest do
   end
 
   # ============================================================================
+  # Process Isolation Tests
+  # ============================================================================
+
+  describe "process isolation" do
+    test "signal created in one process is accessible in another" do
+      parent = self()
+
+      spawn(fn ->
+        ref = AbortSignal.new()
+        send(parent, {:signal, ref})
+        # Keep process alive briefly to ensure signal persists
+        Process.sleep(100)
+      end)
+
+      assert_receive {:signal, ref}
+      # Signal should be accessible from parent process
+      assert AbortSignal.aborted?(ref) == false
+    end
+
+    test "signal aborted in child process is visible in parent" do
+      ref = AbortSignal.new()
+
+      Task.async(fn ->
+        AbortSignal.abort(ref)
+      end)
+      |> Task.await()
+
+      assert AbortSignal.aborted?(ref) == true
+    end
+
+    test "signal aborted in parent is visible in child" do
+      ref = AbortSignal.new()
+      AbortSignal.abort(ref)
+
+      result =
+        Task.async(fn ->
+          AbortSignal.aborted?(ref)
+        end)
+        |> Task.await()
+
+      assert result == true
+    end
+
+    test "signal survives creator process termination" do
+      ref = AbortSignal.new()
+
+      # Spawn and terminate a process that interacts with the signal
+      spawn(fn ->
+        AbortSignal.aborted?(ref)
+      end)
+
+      Process.sleep(50)
+
+      # Signal should still be usable
+      refute AbortSignal.aborted?(ref)
+      AbortSignal.abort(ref)
+      assert AbortSignal.aborted?(ref)
+    end
+
+    test "signals are independent across process hierarchies" do
+      ref1 = AbortSignal.new()
+      ref2 = AbortSignal.new()
+
+      # Child process aborts one signal
+      Task.async(fn ->
+        AbortSignal.abort(ref1)
+
+        # Nested task checks both
+        Task.async(fn ->
+          {AbortSignal.aborted?(ref1), AbortSignal.aborted?(ref2)}
+        end)
+        |> Task.await()
+      end)
+      |> Task.await()
+      |> then(fn {aborted1, aborted2} ->
+        assert aborted1 == true
+        assert aborted2 == false
+      end)
+    end
+
+    test "each process can create and manage its own signals independently" do
+      parent = self()
+
+      # Spawn multiple processes that each manage their own lifecycle
+      for i <- 1..10 do
+        spawn(fn ->
+          ref = AbortSignal.new()
+          refute AbortSignal.aborted?(ref)
+          AbortSignal.abort(ref)
+          assert AbortSignal.aborted?(ref)
+          AbortSignal.clear(ref)
+          refute AbortSignal.aborted?(ref)
+          send(parent, {:completed, i})
+        end)
+      end
+
+      # Wait for all to complete
+      for i <- 1..10 do
+        assert_receive {:completed, ^i}, 5000
+      end
+    end
+  end
+
+  # ============================================================================
+  # Clear and Re-abort Tests
+  # ============================================================================
+
+  describe "clear and re-abort behavior" do
+    test "signal can be aborted multiple times after clearing" do
+      ref = AbortSignal.new()
+
+      # First cycle
+      AbortSignal.abort(ref)
+      assert AbortSignal.aborted?(ref)
+      AbortSignal.clear(ref)
+      refute AbortSignal.aborted?(ref)
+
+      # Second cycle
+      AbortSignal.abort(ref)
+      assert AbortSignal.aborted?(ref)
+      AbortSignal.clear(ref)
+      refute AbortSignal.aborted?(ref)
+
+      # Third cycle
+      AbortSignal.abort(ref)
+      assert AbortSignal.aborted?(ref)
+    end
+
+    test "abort after clear without intermediate check works" do
+      ref = AbortSignal.new()
+
+      AbortSignal.abort(ref)
+      AbortSignal.clear(ref)
+      AbortSignal.abort(ref)
+
+      assert AbortSignal.aborted?(ref)
+    end
+
+    test "multiple clears followed by abort" do
+      ref = AbortSignal.new()
+      AbortSignal.abort(ref)
+
+      AbortSignal.clear(ref)
+      AbortSignal.clear(ref)
+      AbortSignal.clear(ref)
+
+      refute AbortSignal.aborted?(ref)
+
+      AbortSignal.abort(ref)
+      assert AbortSignal.aborted?(ref)
+    end
+
+    test "interleaved abort and clear operations" do
+      ref = AbortSignal.new()
+
+      for _ <- 1..50 do
+        AbortSignal.abort(ref)
+        AbortSignal.clear(ref)
+      end
+
+      # After clearing, should not be aborted
+      refute AbortSignal.aborted?(ref)
+
+      # But can still be aborted
+      AbortSignal.abort(ref)
+      assert AbortSignal.aborted?(ref)
+    end
+  end
+
+  # ============================================================================
+  # Guard Clause Tests
+  # ============================================================================
+
+  describe "guard clauses and type validation" do
+    test "abort/1 only accepts references" do
+      assert_raise FunctionClauseError, fn ->
+        AbortSignal.abort("not a reference")
+      end
+
+      assert_raise FunctionClauseError, fn ->
+        AbortSignal.abort(123)
+      end
+
+      assert_raise FunctionClauseError, fn ->
+        AbortSignal.abort(:an_atom)
+      end
+
+      assert_raise FunctionClauseError, fn ->
+        AbortSignal.abort(nil)
+      end
+    end
+
+    test "aborted?/1 accepts reference or nil" do
+      ref = AbortSignal.new()
+
+      # These should work
+      assert is_boolean(AbortSignal.aborted?(ref))
+      assert is_boolean(AbortSignal.aborted?(nil))
+
+      # These should raise
+      assert_raise FunctionClauseError, fn ->
+        AbortSignal.aborted?("not a reference")
+      end
+
+      assert_raise FunctionClauseError, fn ->
+        AbortSignal.aborted?(123)
+      end
+
+      assert_raise FunctionClauseError, fn ->
+        AbortSignal.aborted?(:an_atom)
+      end
+    end
+
+    test "clear/1 accepts reference or nil" do
+      ref = AbortSignal.new()
+
+      # These should work
+      assert :ok = AbortSignal.clear(ref)
+      assert :ok = AbortSignal.clear(nil)
+
+      # These should raise
+      assert_raise FunctionClauseError, fn ->
+        AbortSignal.clear("not a reference")
+      end
+
+      assert_raise FunctionClauseError, fn ->
+        AbortSignal.clear(123)
+      end
+
+      assert_raise FunctionClauseError, fn ->
+        AbortSignal.clear(:an_atom)
+      end
+    end
+  end
+
+  # ============================================================================
   # Integration-like Tests
   # ============================================================================
 

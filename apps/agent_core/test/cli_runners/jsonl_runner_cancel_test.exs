@@ -26,8 +26,10 @@ defmodule AgentCore.CliRunners.JsonlRunnerCancelTest do
   end
 
   test "cancel stops runner" do
-    {:ok, pid} = DummyRunner.start_link(prompt: "", cwd: File.cwd!(), timeout: 60_000)
+    Application.put_env(:agent_core, :cli_cancel_grace_ms, 500)
+    {:ok, pid} = DummyRunner.start_link(prompt: "", cwd: File.cwd!(), timeout: 60_000, owner: self())
     stream = DummyRunner.stream(pid)
+    ref = Process.monitor(pid)
 
     DummyRunner.cancel(pid, :test_cancel)
 
@@ -37,5 +39,8 @@ defmodule AgentCore.CliRunners.JsonlRunnerCancelTest do
              {:canceled, :test_cancel} -> true
              _ -> false
            end)
+
+    assert_receive {:cli_term, _os_pid}, 2_000
+    assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 2_000
   end
 end
