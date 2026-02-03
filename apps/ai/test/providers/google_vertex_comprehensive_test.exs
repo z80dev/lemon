@@ -14,7 +14,6 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
   alias Ai.Types.{
     AssistantMessage,
     Context,
-    ImageContent,
     Model,
     ModelCost,
     StreamOptions,
@@ -876,7 +875,7 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
   # ============================================================================
 
   describe "streaming events" do
-    test "emits start event" do
+    test "emits start event and completes successfully" do
       body =
         sse_body([
           %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Hi"}]}}]},
@@ -893,8 +892,8 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
 
       {:ok, stream} = GoogleVertex.stream(model, context, opts)
 
-      # Collect all events
-      events = EventStream.collect_events(stream, 1000)
+      # Collect events via the events stream
+      events = stream |> EventStream.events() |> Enum.to_list()
 
       assert Enum.any?(events, fn
                {:start, _} -> true
@@ -919,7 +918,7 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
 
       {:ok, stream} = GoogleVertex.stream(model, context, opts)
 
-      events = EventStream.collect_events(stream, 1000)
+      events = stream |> EventStream.events() |> Enum.to_list()
 
       has_text_start = Enum.any?(events, fn
         {:text_start, _idx, _output} -> true
@@ -953,7 +952,7 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
 
       {:ok, stream} = GoogleVertex.stream(model, context, opts)
 
-      events = EventStream.collect_events(stream, 1000)
+      events = stream |> EventStream.events() |> Enum.to_list()
 
       deltas =
         Enum.filter(events, fn
@@ -981,7 +980,7 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
 
       {:ok, stream} = GoogleVertex.stream(model, context, opts)
 
-      events = EventStream.collect_events(stream, 1000)
+      events = stream |> EventStream.events() |> Enum.to_list()
 
       has_tool_call_start = Enum.any?(events, fn
         {:tool_call_start, _idx, _output} -> true

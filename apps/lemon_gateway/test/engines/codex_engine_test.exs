@@ -20,14 +20,13 @@ defmodule LemonGateway.Engines.CodexEngineTest do
 
   alias LemonGateway.Engines.Codex
   alias LemonGateway.Engines.CliAdapter
-  alias LemonGateway.Types.{ChatScope, Job, ResumeToken}
+  alias LemonGateway.Types.{ChatScope, Job}
   alias LemonGateway.Event
 
   alias AgentCore.CliRunners.Types.{
     Action,
     ActionEvent,
     CompletedEvent,
-    ResumeToken,
     StartedEvent
   }
 
