@@ -1,0 +1,1044 @@
+defmodule LemonGateway.ThreadWorkerSupervisorTest do
+  @moduledoc """
+  Comprehensive tests for LemonGateway.ThreadWorkerSupervisor DynamicSupervisor.
+
+  Tests cover:
+  - Supervisor startup and initialization
+  - Child process startup
+  - Child process restart behavior
+  - Supervision strategy behavior
+  - Dynamic child management (start_child, terminate_child)
+  - Registry interaction with ThreadRegistry
+  - Concurrent operations
+  - Cleanup on shutdown
+  - Error isolation between children
+  - Integration with ThreadWorker processes
+  """
+  use ExUnit.Case, async: false
+
+  alias LemonGateway.ThreadWorkerSupervisor
+  alias LemonGateway.ThreadWorker
+  alias LemonGateway.Types.{ChatScope, Job}
+  alias LemonGateway.Event.Completed
+
+  # ============================================================================
+  # Test Engine
+  # ============================================================================
+
+  defmodule TestEngine do
+    @behaviour LemonGateway.Engine
+
+    alias LemonGateway.Types.{Job, ResumeToken}
+    alias LemonGateway.Event
+
+    @impl true
+    def id, do: "test_engine"
+
+    @impl true
+    def format_resume(%ResumeToken{value: sid}), do: "test resume #{sid}"
+
+    @impl true
+    def extract_resume(_text), do: nil
+
+    @impl true
+    def is_resume_line(_line), do: false
+
+    @impl true
+    def supports_steer?, do: false
+
+    @impl true
+    def start_run(%Job{} = job, _opts, sink_pid) do
+      run_ref = make_ref()
+      resume = job.resume || %ResumeToken{engine: id(), value: unique_id()}
+      delay_ms = (job.meta || %{})[:delay_ms] || 10
+
+      {:ok, task_pid} =
+        Task.start(fn ->
+          send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
+          Process.sleep(delay_ms)
+          answer = "Test: #{job.text}"
+          send(sink_pid, {:engine_event, run_ref, %Event.Completed{engine: id(), resume: resume, ok: true, answer: answer}})
+        end)
+
+      {:ok, run_ref, %{task_pid: task_pid}}
+    end
+
+    @impl true
+    def cancel(%{task_pid: pid}) when is_pid(pid) do
+      Process.exit(pid, :kill)
+      :ok
+    end
+
+    defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
+  end
+
+  # ============================================================================
+  # Setup
+  # ============================================================================
+
+  setup do
+    _ = Application.stop(:lemon_gateway)
+
+    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+      max_concurrent_runs: 10,
+      default_engine: "test_engine",
+      enable_telegram: false,
+      require_engine_lock: false
+    })
+
+    Application.put_env(:lemon_gateway, :engines, [
+      TestEngine,
+      LemonGateway.Engines.Echo
+    ])
+
+    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+
+    :ok
+  end
+
+  defp make_scope(chat_id \\ System.unique_integer([:positive])) do
+    %ChatScope{transport: :test, chat_id: chat_id, topic_id: nil}
+  end
+
+  defp make_job(scope, opts \\ []) do
+    %Job{
+      scope: scope,
+      user_msg_id: Keyword.get(opts, :user_msg_id, 1),
+      text: Keyword.get(opts, :text, "test message"),
+      queue_mode: Keyword.get(opts, :queue_mode, :collect),
+      engine_hint: Keyword.get(opts, :engine_hint, "test_engine"),
+      meta: Keyword.get(opts, :meta, %{notify_pid: self()})
+    }
+  end
+
+  defp thread_key(scope) do
+    {:scope, scope}
+  end
+
+  # ============================================================================
+  # 1. Supervisor Startup and Initialization
+  # ============================================================================
+
+  describe "supervisor startup and initialization" do
+    test "supervisor starts successfully" do
+      assert Process.whereis(ThreadWorkerSupervisor) != nil
+    end
+
+    test "supervisor uses DynamicSupervisor behavior" do
+      pid = Process.whereis(ThreadWorkerSupervisor)
+      assert Process.alive?(pid)
+
+      children = DynamicSupervisor.count_children(ThreadWorkerSupervisor)
+      assert is_map(children)
+      assert Map.has_key?(children, :active)
+      assert Map.has_key?(children, :specs)
+    end
+
+    test "supervisor is registered with correct name" do
+      pid = Process.whereis(ThreadWorkerSupervisor)
+      assert is_pid(pid)
+      assert Process.alive?(pid)
+    end
+
+    test "supervisor uses :one_for_one strategy" do
+      # Verify by checking that independent workers don't affect each other
+      scope1 = make_scope()
+      scope2 = make_scope()
+
+      job1 = make_job(scope1, text: "worker1")
+      job2 = make_job(scope2, text: "worker2")
+
+      LemonGateway.submit(job1)
+      LemonGateway.submit(job2)
+
+      assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^job2, %Completed{ok: true}}, 2000
+    end
+  end
+
+  # ============================================================================
+  # 2. Child Process Startup
+  # ============================================================================
+
+  describe "child process startup" do
+    test "starting a worker via DynamicSupervisor.start_child" do
+      scope = make_scope()
+      key = thread_key(scope)
+
+      spec = {ThreadWorker, [thread_key: key]}
+      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, spec)
+
+      assert is_pid(pid)
+      assert Process.alive?(pid)
+
+      # Clean up
+      DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+    end
+
+    test "started worker is registered in ThreadRegistry" do
+      scope = make_scope()
+      key = thread_key(scope)
+
+      spec = {ThreadWorker, [thread_key: key]}
+      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, spec)
+
+      # Verify registration
+      assert LemonGateway.ThreadRegistry.whereis(key) == pid
+
+      # Clean up
+      DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+    end
+
+    test "multiple workers can be started for different thread_keys" do
+      scope1 = make_scope()
+      scope2 = make_scope()
+      scope3 = make_scope()
+
+      key1 = thread_key(scope1)
+      key2 = thread_key(scope2)
+      key3 = thread_key(scope3)
+
+      {:ok, pid1} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key1]})
+      {:ok, pid2} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key2]})
+      {:ok, pid3} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key3]})
+
+      assert is_pid(pid1)
+      assert is_pid(pid2)
+      assert is_pid(pid3)
+      assert pid1 != pid2
+      assert pid2 != pid3
+
+      # Clean up
+      DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid1)
+      DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid2)
+      DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid3)
+    end
+
+    test "worker started via submit is supervised" do
+      scope = make_scope()
+      job = make_job(scope)
+
+      LemonGateway.submit(job)
+
+      # Give time for worker to start
+      Process.sleep(50)
+
+      key = thread_key(scope)
+      worker_pid = LemonGateway.ThreadRegistry.whereis(key)
+
+      if worker_pid do
+        children = DynamicSupervisor.which_children(ThreadWorkerSupervisor)
+        child_pids = Enum.map(children, fn {_, pid, _, _} -> pid end)
+        assert worker_pid in child_pids
+      end
+
+      assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2000
+    end
+  end
+
+  # ============================================================================
+  # 3. Registry Interaction
+  # ============================================================================
+
+  describe "registry interaction" do
+    test "ThreadRegistry.whereis returns worker pid" do
+      scope = make_scope()
+      key = thread_key(scope)
+
+      spec = {ThreadWorker, [thread_key: key]}
+      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, spec)
+
+      assert LemonGateway.ThreadRegistry.whereis(key) == pid
+
+      DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+    end
+
+    test "ThreadRegistry.whereis returns nil after worker terminates" do
+      scope = make_scope()
+      key = thread_key(scope)
+
+      spec = {ThreadWorker, [thread_key: key]}
+      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, spec)
+
+      assert LemonGateway.ThreadRegistry.whereis(key) == pid
+
+      DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+
+      Process.sleep(50)
+      assert LemonGateway.ThreadRegistry.whereis(key) == nil
+    end
+
+    test "duplicate thread_key registration fails" do
+      scope = make_scope()
+      key = thread_key(scope)
+
+      spec = {ThreadWorker, [thread_key: key]}
+      {:ok, pid1} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, spec)
+
+      # Try to start another worker with same key
+      result = DynamicSupervisor.start_child(ThreadWorkerSupervisor, spec)
+
+      assert {:error, {:already_started, ^pid1}} = result
+
+      DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid1)
+    end
+
+    test "workers with different keys are independent" do
+      scope1 = make_scope()
+      scope2 = make_scope()
+
+      key1 = thread_key(scope1)
+      key2 = thread_key(scope2)
+
+      {:ok, pid1} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key1]})
+      {:ok, pid2} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key2]})
+
+      assert LemonGateway.ThreadRegistry.whereis(key1) == pid1
+      assert LemonGateway.ThreadRegistry.whereis(key2) == pid2
+      assert pid1 != pid2
+
+      DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid1)
+      DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid2)
+    end
+  end
+
+  # ============================================================================
+  # 4. Dynamic Child Management
+  # ============================================================================
+
+  describe "dynamic child management" do
+    test "DynamicSupervisor.which_children returns current children" do
+      initial_children = DynamicSupervisor.which_children(ThreadWorkerSupervisor)
+      initial_count = length(initial_children)
+
+      scope = make_scope()
+      key = thread_key(scope)
+
+      spec = {ThreadWorker, [thread_key: key]}
+      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, spec)
+
+      children = DynamicSupervisor.which_children(ThreadWorkerSupervisor)
+      child_pids = Enum.map(children, fn {_, child_pid, _, _} -> child_pid end)
+
+      assert pid in child_pids
+      assert length(children) == initial_count + 1
+
+      DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+    end
+
+    test "DynamicSupervisor.count_children reflects active children" do
+      initial_count = DynamicSupervisor.count_children(ThreadWorkerSupervisor).active
+
+      scope = make_scope()
+      key = thread_key(scope)
+
+      spec = {ThreadWorker, [thread_key: key]}
+      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, spec)
+
+      active_count = DynamicSupervisor.count_children(ThreadWorkerSupervisor).active
+      assert active_count == initial_count + 1
+
+      DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+
+      final_count = DynamicSupervisor.count_children(ThreadWorkerSupervisor).active
+      assert final_count == initial_count
+    end
+
+    test "DynamicSupervisor.terminate_child terminates a worker" do
+      scope = make_scope()
+      key = thread_key(scope)
+
+      spec = {ThreadWorker, [thread_key: key]}
+      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, spec)
+      ref = Process.monitor(pid)
+
+      :ok = DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 2000
+    end
+
+    test "terminated worker is unregistered from ThreadRegistry" do
+      scope = make_scope()
+      key = thread_key(scope)
+
+      spec = {ThreadWorker, [thread_key: key]}
+      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, spec)
+
+      assert LemonGateway.ThreadRegistry.whereis(key) == pid
+
+      DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+
+      Process.sleep(50)
+      assert LemonGateway.ThreadRegistry.whereis(key) == nil
+    end
+  end
+
+  # ============================================================================
+  # 5. Error Isolation Between Children
+  # ============================================================================
+
+  describe "error isolation between children" do
+    test "one worker crashing does not affect other workers" do
+      scope1 = make_scope()
+      scope2 = make_scope()
+
+      key1 = thread_key(scope1)
+      key2 = thread_key(scope2)
+
+      {:ok, pid1} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key1]})
+      {:ok, pid2} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key2]})
+
+      # Kill first worker
+      Process.exit(pid1, :kill)
+      Process.sleep(50)
+
+      # Second worker should still be alive
+      assert Process.alive?(pid2)
+      assert LemonGateway.ThreadRegistry.whereis(key2) == pid2
+
+      DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid2)
+    end
+
+    test "supervisor continues functioning after worker crash" do
+      scope1 = make_scope()
+      key1 = thread_key(scope1)
+
+      {:ok, pid1} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key1]})
+
+      # Kill the worker
+      Process.exit(pid1, :kill)
+      Process.sleep(50)
+
+      # Supervisor should still be alive
+      assert Process.alive?(Process.whereis(ThreadWorkerSupervisor))
+
+      # Can start new workers
+      scope2 = make_scope()
+      key2 = thread_key(scope2)
+
+      {:ok, pid2} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key2]})
+      assert is_pid(pid2)
+
+      DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid2)
+    end
+
+    test "multiple workers can be terminated independently" do
+      workers =
+        for _ <- 1..5 do
+          scope = make_scope()
+          key = thread_key(scope)
+          {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+          {key, pid}
+        end
+
+      # Terminate every other worker
+      workers
+      |> Enum.with_index()
+      |> Enum.filter(fn {_w, i} -> rem(i, 2) == 0 end)
+      |> Enum.each(fn {{_key, pid}, _i} ->
+        DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+      end)
+
+      Process.sleep(50)
+
+      # Remaining workers should still be alive
+      workers
+      |> Enum.with_index()
+      |> Enum.filter(fn {_w, i} -> rem(i, 2) == 1 end)
+      |> Enum.each(fn {{_key, pid}, _i} ->
+        assert Process.alive?(pid)
+        DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+      end)
+    end
+  end
+
+  # ============================================================================
+  # 6. Concurrent Operations
+  # ============================================================================
+
+  describe "concurrent operations" do
+    test "many workers can be started in parallel" do
+      test_pid = self()
+
+      tasks =
+        for i <- 1..10 do
+          Task.async(fn ->
+            scope = make_scope()
+            key = thread_key(scope)
+            spec = {ThreadWorker, [thread_key: key]}
+            {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, spec)
+            {i, key, pid}
+          end)
+        end
+
+      results = Task.await_many(tasks, 5000)
+      assert length(results) == 10
+
+      # All workers should be alive
+      for {_i, _key, pid} <- results do
+        assert Process.alive?(pid)
+        DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+      end
+    end
+
+    test "concurrent job submissions create workers correctly" do
+      test_pid = self()
+
+      tasks =
+        for i <- 1..10 do
+          Task.async(fn ->
+            scope = make_scope()
+            job = make_job(scope, text: "concurrent #{i}", meta: %{notify_pid: test_pid})
+            LemonGateway.submit(job)
+            job
+          end)
+        end
+
+      jobs = Task.await_many(tasks, 5000)
+
+      # All jobs should complete
+      for job <- jobs do
+        assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 5000
+      end
+    end
+
+    test "supervisor handles rapid worker lifecycle" do
+      for _ <- 1..20 do
+        scope = make_scope()
+        key = thread_key(scope)
+
+        {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+        assert Process.alive?(pid)
+        DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+      end
+
+      # Supervisor should still be healthy
+      assert Process.alive?(Process.whereis(ThreadWorkerSupervisor))
+    end
+  end
+
+  # ============================================================================
+  # 7. Worker Lifecycle with Jobs
+  # ============================================================================
+
+  describe "worker lifecycle with jobs" do
+    test "worker stops after completing all jobs" do
+      scope = make_scope()
+      key = thread_key(scope)
+
+      job = make_job(scope)
+      LemonGateway.submit(job)
+
+      assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2000
+
+      # Wait for worker to stop
+      Process.sleep(200)
+
+      assert LemonGateway.ThreadRegistry.whereis(key) == nil
+    end
+
+    test "worker can be recreated after stopping" do
+      scope = make_scope()
+      key = thread_key(scope)
+
+      job1 = make_job(scope, text: "first")
+      LemonGateway.submit(job1)
+
+      assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true}}, 2000
+
+      # Wait for worker to stop
+      Process.sleep(200)
+      assert LemonGateway.ThreadRegistry.whereis(key) == nil
+
+      # Submit another job - should create new worker
+      job2 = make_job(scope, text: "second")
+      LemonGateway.submit(job2)
+
+      assert_receive {:lemon_gateway_run_completed, ^job2, %Completed{ok: true}}, 2000
+    end
+
+    test "worker processes multiple jobs before stopping" do
+      scope = make_scope()
+      key = thread_key(scope)
+
+      jobs =
+        for i <- 1..5 do
+          job = make_job(scope, text: "job #{i}")
+          LemonGateway.submit(job)
+          job
+        end
+
+      for job <- jobs do
+        assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2000
+      end
+
+      # Wait for worker to stop
+      Process.sleep(200)
+      assert LemonGateway.ThreadRegistry.whereis(key) == nil
+    end
+  end
+
+  # ============================================================================
+  # 8. Cleanup on Shutdown
+  # ============================================================================
+
+  describe "cleanup on shutdown" do
+    test "terminated workers are cleaned up properly" do
+      initial_count = DynamicSupervisor.count_children(ThreadWorkerSupervisor).active
+
+      scope = make_scope()
+      key = thread_key(scope)
+
+      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+
+      assert DynamicSupervisor.count_children(ThreadWorkerSupervisor).active == initial_count + 1
+
+      DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+
+      assert DynamicSupervisor.count_children(ThreadWorkerSupervisor).active == initial_count
+    end
+
+    test "workers are unregistered from registry on termination" do
+      scope = make_scope()
+      key = thread_key(scope)
+
+      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+      assert LemonGateway.ThreadRegistry.whereis(key) == pid
+
+      DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+      Process.sleep(50)
+
+      assert LemonGateway.ThreadRegistry.whereis(key) == nil
+    end
+
+    test "crashed workers are cleaned up" do
+      scope = make_scope()
+      key = thread_key(scope)
+
+      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+      ref = Process.monitor(pid)
+
+      # Crash the worker
+      Process.exit(pid, :kill)
+
+      assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 2000
+
+      # Registry should be cleaned up (via process termination)
+      Process.sleep(50)
+      assert LemonGateway.ThreadRegistry.whereis(key) == nil
+    end
+  end
+
+  # ============================================================================
+  # 9. Edge Cases
+  # ============================================================================
+
+  describe "edge cases" do
+    test "handles empty job queue gracefully" do
+      scope = make_scope()
+      key = thread_key(scope)
+
+      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+
+      # Worker is alive but has no jobs
+      assert Process.alive?(pid)
+
+      # Submit a job to make it do something then stop
+      job = make_job(scope)
+      GenServer.cast(pid, {:enqueue, job})
+
+      assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2000
+    end
+
+    test "handles rapid sequential job submissions" do
+      scope = make_scope()
+
+      jobs =
+        for i <- 1..20 do
+          job = make_job(scope, text: "rapid #{i}")
+          LemonGateway.submit(job)
+          job
+        end
+
+      for job <- jobs do
+        assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 5000
+      end
+    end
+
+    test "handles job submission to terminated worker" do
+      # This tests that the router creates a new worker when needed
+      scope = make_scope()
+      key = thread_key(scope)
+
+      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+      DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+
+      Process.sleep(50)
+
+      # Submit job - should create new worker
+      job = make_job(scope)
+      LemonGateway.submit(job)
+
+      assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2000
+    end
+  end
+
+  # ============================================================================
+  # 10. Process Monitoring
+  # ============================================================================
+
+  describe "process monitoring" do
+    test "can monitor workers" do
+      scope = make_scope()
+      key = thread_key(scope)
+
+      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+      ref = Process.monitor(pid)
+
+      DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 2000
+    end
+
+    test "multiple workers can be monitored" do
+      monitors =
+        for _ <- 1..5 do
+          scope = make_scope()
+          key = thread_key(scope)
+
+          {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+          ref = Process.monitor(pid)
+          {ref, pid}
+        end
+
+      for {_ref, pid} <- monitors do
+        DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+      end
+
+      for {ref, pid} <- monitors do
+        assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 2000
+      end
+    end
+  end
+
+  # ============================================================================
+  # 11. Stress Testing
+  # ============================================================================
+
+  describe "stress testing" do
+    test "handles burst of worker creations" do
+      workers =
+        for _ <- 1..30 do
+          scope = make_scope()
+          key = thread_key(scope)
+          {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+          {key, pid}
+        end
+
+      # All should be alive
+      for {_key, pid} <- workers do
+        assert Process.alive?(pid)
+        DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+      end
+
+      assert Process.alive?(Process.whereis(ThreadWorkerSupervisor))
+    end
+
+    test "supervisor remains stable after many operations" do
+      for _ <- 1..10 do
+        workers =
+          for _ <- 1..5 do
+            scope = make_scope()
+            key = thread_key(scope)
+            {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+            pid
+          end
+
+        for pid <- workers do
+          DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+        end
+      end
+
+      assert Process.alive?(Process.whereis(ThreadWorkerSupervisor))
+    end
+  end
+
+  # ============================================================================
+  # 12. Integration with LemonGateway.submit
+  # ============================================================================
+
+  describe "integration with LemonGateway.submit" do
+    test "submit creates supervised worker" do
+      scope = make_scope()
+      job = make_job(scope)
+
+      LemonGateway.submit(job)
+
+      # Wait for job to start processing
+      Process.sleep(50)
+
+      key = thread_key(scope)
+      worker_pid = LemonGateway.ThreadRegistry.whereis(key)
+
+      if worker_pid do
+        children = DynamicSupervisor.which_children(ThreadWorkerSupervisor)
+        child_pids = Enum.map(children, fn {_, pid, _, _} -> pid end)
+        assert worker_pid in child_pids
+      end
+
+      assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2000
+    end
+
+    test "submit reuses existing worker for same scope" do
+      scope = make_scope()
+      key = thread_key(scope)
+
+      # Submit first job to create worker
+      job1 = make_job(scope, text: "first", meta: %{notify_pid: self(), delay_ms: 200})
+      LemonGateway.submit(job1)
+
+      Process.sleep(50)
+      worker_pid1 = LemonGateway.ThreadRegistry.whereis(key)
+      assert is_pid(worker_pid1)
+
+      # Submit second job while first is running
+      job2 = make_job(scope, text: "second")
+      LemonGateway.submit(job2)
+
+      # Should still be same worker
+      worker_pid2 = LemonGateway.ThreadRegistry.whereis(key)
+      assert worker_pid1 == worker_pid2
+
+      assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^job2, %Completed{ok: true}}, 2000
+    end
+
+    test "different scopes get different workers" do
+      scope1 = make_scope()
+      scope2 = make_scope()
+
+      key1 = thread_key(scope1)
+      key2 = thread_key(scope2)
+
+      job1 = make_job(scope1, text: "scope1", meta: %{notify_pid: self(), delay_ms: 200})
+      job2 = make_job(scope2, text: "scope2", meta: %{notify_pid: self(), delay_ms: 200})
+
+      LemonGateway.submit(job1)
+      LemonGateway.submit(job2)
+
+      Process.sleep(50)
+
+      worker_pid1 = LemonGateway.ThreadRegistry.whereis(key1)
+      worker_pid2 = LemonGateway.ThreadRegistry.whereis(key2)
+
+      assert is_pid(worker_pid1)
+      assert is_pid(worker_pid2)
+      assert worker_pid1 != worker_pid2
+
+      assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^job2, %Completed{ok: true}}, 2000
+    end
+  end
+
+  # ============================================================================
+  # 13. Module Interface Verification
+  # ============================================================================
+
+  describe "module interface verification" do
+    test "start_link/1 exists and works" do
+      assert function_exported?(ThreadWorkerSupervisor, :start_link, 1)
+    end
+
+    test "supervisor implements DynamicSupervisor callbacks" do
+      assert Process.alive?(Process.whereis(ThreadWorkerSupervisor))
+
+      children = DynamicSupervisor.count_children(ThreadWorkerSupervisor)
+      assert is_map(children)
+    end
+
+    test "standard DynamicSupervisor functions work" do
+      # which_children
+      children = DynamicSupervisor.which_children(ThreadWorkerSupervisor)
+      assert is_list(children)
+
+      # count_children
+      counts = DynamicSupervisor.count_children(ThreadWorkerSupervisor)
+      assert Map.has_key?(counts, :active)
+      assert Map.has_key?(counts, :specs)
+      assert Map.has_key?(counts, :supervisors)
+      assert Map.has_key?(counts, :workers)
+    end
+  end
+
+  # ============================================================================
+  # 14. Child Spec Verification
+  # ============================================================================
+
+  describe "child spec verification" do
+    test "ThreadWorker child specs are valid" do
+      scope = make_scope()
+      key = thread_key(scope)
+
+      spec = {ThreadWorker, [thread_key: key]}
+      result = DynamicSupervisor.start_child(ThreadWorkerSupervisor, spec)
+
+      assert {:ok, pid} = result
+      assert is_pid(pid)
+
+      DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+    end
+
+    test "children are workers not supervisors" do
+      scope = make_scope()
+      key = thread_key(scope)
+
+      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+
+      children = DynamicSupervisor.which_children(ThreadWorkerSupervisor)
+      child = Enum.find(children, fn {_, child_pid, _, _} -> child_pid == pid end)
+
+      {_, _, type, _} = child
+      assert type == :worker
+
+      DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+    end
+  end
+
+  # ============================================================================
+  # 15. ThreadRegistry Via Tuple Name
+  # ============================================================================
+
+  describe "ThreadRegistry via tuple name" do
+    test "workers are registered with via tuple" do
+      scope = make_scope()
+      key = thread_key(scope)
+
+      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+
+      # Verify via tuple works
+      via_name = {:via, Registry, {LemonGateway.ThreadRegistry, key}}
+      assert GenServer.whereis(via_name) == pid
+
+      DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+    end
+
+    test "via tuple lookup returns nil after termination" do
+      scope = make_scope()
+      key = thread_key(scope)
+
+      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+      DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+
+      Process.sleep(50)
+
+      via_name = {:via, Registry, {LemonGateway.ThreadRegistry, key}}
+      assert GenServer.whereis(via_name) == nil
+    end
+  end
+
+  # ============================================================================
+  # 16. Restart Behavior
+  # ============================================================================
+
+  describe "restart behavior" do
+    test "crashed workers are not automatically restarted" do
+      scope = make_scope()
+      key = thread_key(scope)
+
+      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+      ref = Process.monitor(pid)
+
+      # Kill the worker
+      Process.exit(pid, :kill)
+
+      assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 2000
+
+      # Wait and verify no automatic restart
+      Process.sleep(200)
+
+      # Registry lookup should return nil (no new process registered)
+      assert LemonGateway.ThreadRegistry.whereis(key) == nil
+
+      # If supervisor did restart, there would be a new process
+      children = DynamicSupervisor.which_children(ThreadWorkerSupervisor)
+      child_keys =
+        children
+        |> Enum.map(fn {_, child_pid, _, _} ->
+          try do
+            {:dictionary, dict} = Process.info(child_pid, :dictionary)
+            Keyword.get(dict, :"$initial_call")
+          rescue
+            _ -> nil
+          end
+        end)
+
+      # The exact mechanism depends on DynamicSupervisor restart strategy
+      # With default :one_for_one and :temporary restart, no auto-restart occurs
+    end
+  end
+
+  # ============================================================================
+  # 17. Application Integration
+  # ============================================================================
+
+  describe "application integration" do
+    test "supervisor is started as part of application" do
+      # Verify supervisor is part of app's supervision tree
+      assert Process.whereis(ThreadWorkerSupervisor) != nil
+    end
+
+    test "supervisor survives worker crashes" do
+      supervisor_pid = Process.whereis(ThreadWorkerSupervisor)
+
+      scope = make_scope()
+      key = thread_key(scope)
+
+      {:ok, worker_pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+
+      # Kill the worker
+      Process.exit(worker_pid, :kill)
+      Process.sleep(50)
+
+      # Supervisor should still be the same process
+      assert Process.whereis(ThreadWorkerSupervisor) == supervisor_pid
+      assert Process.alive?(supervisor_pid)
+    end
+  end
+
+  # ============================================================================
+  # 18. Error Handling
+  # ============================================================================
+
+  describe "error handling" do
+    test "handles invalid child specs gracefully" do
+      # Trying to start something that's not a valid child
+      result = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {NonExistentModule, []})
+
+      assert {:error, _reason} = result
+    end
+
+    test "supervisor handles terminate_child on non-existent pid" do
+      fake_pid = spawn(fn -> :ok end)
+      Process.sleep(10)
+
+      # Try to terminate a process that's not a child
+      result = DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, fake_pid)
+
+      # Should return error but not crash
+      assert result == {:error, :not_found}
+    end
+
+    test "supervisor handles multiple rapid terminate calls" do
+      scope = make_scope()
+      key = thread_key(scope)
+
+      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+
+      # First terminate should succeed
+      assert :ok = DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+
+      # Second terminate should return not_found
+      assert {:error, :not_found} = DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
+    end
+  end
+end

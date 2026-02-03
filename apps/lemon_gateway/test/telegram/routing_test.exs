@@ -114,6 +114,94 @@ defmodule LemonGateway.Telegram.RoutingTest do
       assert %ResumeToken{engine: "codex", value: "my-session"} = resume
       assert engine_hint == "codex"
     end
+
+    test "resume token in reply text is extracted when message lacks one" do
+      {resume, engine_hint} =
+        Transport.parse_routing(
+          "continue from earlier",
+          "codex resume thread_999"
+        )
+
+      assert %ResumeToken{engine: "codex", value: "thread_999"} = resume
+      assert engine_hint == "codex"
+    end
+
+    test "message resume token overrides reply token" do
+      {resume, engine_hint} =
+        Transport.parse_routing(
+          "claude --resume sess_msg",
+          "codex resume thread_reply"
+        )
+
+      assert %ResumeToken{engine: "claude", value: "sess_msg"} = resume
+      assert engine_hint == "claude"
+    end
+  end
+
+  describe "strip_engine_directive/1" do
+    test "strips /claude directive and returns engine hint" do
+      assert {"claude", "What is the weather?"} =
+               Transport.strip_engine_directive("/claude\nWhat is the weather?")
+    end
+
+    test "strips /codex directive and returns engine hint" do
+      assert {"codex", "Do something"} =
+               Transport.strip_engine_directive("/codex\nDo something")
+    end
+
+    test "strips /lemon directive and returns engine hint" do
+      assert {"lemon", "Run a task"} =
+               Transport.strip_engine_directive("/lemon\nRun a task")
+    end
+
+    test "returns nil engine_hint for text without directive" do
+      assert {nil, "What is the weather?"} =
+               Transport.strip_engine_directive("What is the weather?")
+    end
+
+    test "returns empty string when only directive present" do
+      assert {"codex", ""} = Transport.strip_engine_directive("/codex")
+    end
+
+    test "handles directive with trailing whitespace only" do
+      assert {"claude", ""} = Transport.strip_engine_directive("/claude   ")
+    end
+
+    test "preserves multiline content after directive" do
+      input = "/claude\nLine 1\nLine 2\nLine 3"
+      assert {"claude", "Line 1\nLine 2\nLine 3"} = Transport.strip_engine_directive(input)
+    end
+
+    test "handles leading whitespace before directive" do
+      assert {"codex", "Task here"} =
+               Transport.strip_engine_directive("  /codex\nTask here")
+    end
+
+    test "is case-insensitive for directive" do
+      assert {"claude", "Test"} = Transport.strip_engine_directive("/Claude\nTest")
+      assert {"codex", "Test"} = Transport.strip_engine_directive("/CODEX\nTest")
+      assert {"lemon", "Test"} = Transport.strip_engine_directive("/LEMON\nTest")
+    end
+
+    test "does not strip non-engine directives" do
+      assert {nil, "/other\nSome text"} =
+               Transport.strip_engine_directive("/other\nSome text")
+    end
+
+    test "handles directive with content on same line" do
+      # When there's content after the directive on the same line, preserve it
+      assert {"claude", "inline content"} =
+               Transport.strip_engine_directive("/claude inline content")
+    end
+
+    test "handles nil input" do
+      assert {nil, nil} = Transport.strip_engine_directive(nil)
+    end
+
+    test "handles Windows-style line endings" do
+      assert {"claude", "Content"} =
+               Transport.strip_engine_directive("/claude\r\nContent")
+    end
   end
 
   describe "EngineRegistry.extract_resume/1" do

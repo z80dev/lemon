@@ -477,7 +477,7 @@ defmodule LemonGatewayTest do
     assert t_send - t2 >= 50
   end
 
-  test "telegram outbox sends final message and edits progress during run" do
+  test "telegram outbox edits progress message for final result" do
     {:ok, _} = start_supervised({TestTelegramAPI, [notify_pid: self()]})
     TestTelegramAPI.set_notify_pid(self())
     assert is_pid(Process.whereis(TestTelegramAPI))
@@ -517,22 +517,22 @@ defmodule LemonGatewayTest do
     wait_for(
       fn ->
         Enum.any?(TestTelegramAPI.calls(), fn
-          {:send, 1, _text, 10, _t_send} -> true
+          {:edit, 1, 99, text, _t} -> String.contains?(text, "Done.")
           _ -> false
         end)
       end,
-      "expected final send for chat 1 reply_to 10"
+      "expected final edit for progress_msg_id 99"
     )
 
     # Verify streaming edits occurred for the progress message during the run
     wait_for(
       fn ->
         Enum.any?(TestTelegramAPI.calls(), fn
-          {:edit, 1, 99, _text, _t} -> true
+          {:edit, 1, 99, text, _t} -> String.contains?(text, "Running")
           _ -> false
         end)
       end,
-      "expected edit for progress_msg_id 99"
+      "expected running edit for progress_msg_id 99"
     )
   end
 
@@ -570,15 +570,15 @@ defmodule LemonGatewayTest do
 
     assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2_000
 
-    # Wait for final send
+    # Wait for final edit
     wait_for(
       fn ->
         Enum.any?(TestTelegramAPI.calls(), fn
-          {:send, 10, _text, 100, _t_send} -> true
+          {:edit, 10, 200, text, _t_send} -> String.contains?(text, "Done.")
           _ -> false
         end)
       end,
-      "expected final send for chat 10 reply_to 100"
+      "expected final edit for chat 10 progress_msg_id 200"
     )
 
     # Verify edit operations were enqueued for the progress message
@@ -592,10 +592,12 @@ defmodule LemonGatewayTest do
     # Should have at least one edit for running updates
     assert length(edit_calls) >= 1, "Expected at least one edit call, got #{inspect(edit_calls)}"
 
-    # Verify edits contain running status text
-    Enum.each(edit_calls, fn {:edit, _chat, _msg_id, text, _t} ->
-      assert String.contains?(text, "Running"), "Edit text should contain 'Running': #{text}"
-    end)
+    running_edits =
+      Enum.filter(edit_calls, fn {:edit, _chat, _msg_id, text, _t} ->
+        String.contains?(text, "Running")
+      end)
+
+    assert length(running_edits) >= 1, "Expected at least one running edit, got #{inspect(edit_calls)}"
   end
 
   test "telegram streaming edits use stable key for coalescing" do
@@ -651,7 +653,7 @@ defmodule LemonGatewayTest do
            "Edits should be coalesced, got #{length(edit_calls)} calls"
   end
 
-  test "telegram sends error reply when engine start fails" do
+  test "telegram edits progress message when engine start fails" do
     {:ok, _} = start_supervised({TestTelegramAPI, [notify_pid: self()]})
     TestTelegramAPI.set_notify_pid(self())
     assert is_pid(Process.whereis(TestTelegramAPI))
@@ -691,13 +693,13 @@ defmodule LemonGatewayTest do
     wait_for(
       fn ->
         Enum.any?(TestTelegramAPI.calls(), fn
-          {:send, 3, _text, 70, _t_send} -> true
+          {:edit, 3, 100, _text, _t_send} -> true
           _ -> false
         end)
       end,
-      "expected error send for chat 3 reply_to 70"
+      "expected error edit for chat 3 message 100"
     )
-    refute_receive {:api_edit_message_text, _, _, _, _}, 200
+    refute_receive {:api_send_message, _, _, _, _}, 200
   end
 
   defp wait_for(predicate, message), do: wait_for(predicate, message, 2_000)
