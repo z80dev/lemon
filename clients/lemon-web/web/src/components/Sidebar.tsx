@@ -13,6 +13,8 @@ export function Sidebar() {
   const setAutoActivateNextSession = useLemonStore(
     (state) => state.setAutoActivateNextSession
   );
+  const config = useLemonStore((state) => state.config);
+  const setConfig = useLemonStore((state) => state.setConfig);
 
   const [showDebug, setShowDebug] = useState(false);
   const [showNewSession, setShowNewSession] = useState(false);
@@ -384,6 +386,41 @@ export function Sidebar() {
         </div>
         <div className="panel panel--editor">
           <pre>{editorText || 'No editor text set.'}</pre>
+        </div>
+      </div>
+
+      <div className="sidebar-section">
+        <div className="section-header">
+          <h2>Settings</h2>
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={() => send({ type: 'get_config' })}
+          >
+            Refresh
+          </button>
+        </div>
+        <div className="panel">
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={config.claude_skip_permissions}
+              onChange={(event) =>
+                setConfig('claude_skip_permissions', event.target.checked)
+              }
+            />
+            Claude: Skip Permissions
+          </label>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={config.codex_auto_approve}
+              onChange={(event) =>
+                setConfig('codex_auto_approve', event.target.checked)
+              }
+            />
+            Codex: Auto Approve
+          </label>
         </div>
       </div>
 

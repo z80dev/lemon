@@ -9,6 +9,7 @@ export function TopBar() {
     activeSessionId ? state.statsBySession[activeSessionId] : undefined
   );
   const send = useLemonStore((state) => state.send);
+  const queueState = useLemonStore((state) => state.queue);
 
   const connectionLabel = useMemo(() => {
     switch (connection.state) {
@@ -25,6 +26,25 @@ export function TopBar() {
     }
   }, [connection.state]);
 
+  /** Format the last server time as a relative or absolute string */
+  const lastServerTimeLabel = useMemo(() => {
+    if (!connection.lastServerTime) return null;
+    const now = Date.now();
+    const diff = now - connection.lastServerTime;
+    if (diff < 60000) {
+      // Less than 1 minute ago
+      return 'just now';
+    } else if (diff < 3600000) {
+      // Less than 1 hour ago
+      const mins = Math.floor(diff / 60000);
+      return `${mins}m ago`;
+    } else {
+      // Show time
+      const date = new Date(connection.lastServerTime);
+      return date.toLocaleTimeString();
+    }
+  }, [connection.lastServerTime]);
+
   return (
     <header className="top-bar">
       <div className="top-bar__left">
@@ -36,6 +56,20 @@ export function TopBar() {
           <span className="dot" />
           {connectionLabel}
         </div>
+        {/* Queue status indicator - shows when commands are queued */}
+        {queueState.count > 0 ? (
+          <span className="queue-indicator">Queued: {queueState.count}</span>
+        ) : null}
+        {/* Pending confirmations indicator */}
+        {queueState.pendingConfirmations.length > 0 ? (
+          <span className="queue-indicator queue-indicator--warning">
+            Pending: {queueState.pendingConfirmations.length}
+          </span>
+        ) : null}
+        {/* Last server event time indicator */}
+        {lastServerTimeLabel && connection.state === 'connected' ? (
+          <span className="server-time-indicator">Last event: {lastServerTimeLabel}</span>
+        ) : null}
         {connection.bridgeStatus ? (
           <span className="bridge-status">{connection.bridgeStatus}</span>
         ) : null}

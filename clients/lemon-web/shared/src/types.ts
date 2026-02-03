@@ -33,6 +33,8 @@ export interface EventMessage {
   type: 'event';
   event: SessionEvent;
   session_id: string;
+  /** Monotonic sequence number for stable ordering within a session */
+  event_seq?: number;
 }
 
 /** Stats response */
@@ -163,7 +165,8 @@ export type ServerMessage =
   | ModelsListMessage
   | SessionStartedMessage
   | SessionClosedMessage
-  | ActiveSessionMessage;
+  | ActiveSessionMessage
+  | ConfigStateMessage;
 
 // ============================================================================
 // Bridge Messages (local to web bridge)
@@ -277,6 +280,27 @@ export interface SetActiveSessionCommand {
   session_id: string;
 }
 
+/** Set a runtime configuration value */
+export interface SetConfigCommand {
+  type: 'set_config';
+  key: string;
+  value: unknown;
+}
+
+/** Get current configuration values */
+export interface GetConfigCommand {
+  type: 'get_config';
+}
+
+/** Config state response */
+export interface ConfigStateMessage {
+  type: 'config_state';
+  config: {
+    claude_skip_permissions: boolean;
+    codex_auto_approve: boolean;
+  };
+}
+
 export type ClientCommand =
   | PromptCommand
   | StatsCommand
@@ -292,7 +316,9 @@ export type ClientCommand =
   | CloseSessionCommand
   | ListRunningSessionsCommand
   | ListModelsCommand
-  | SetActiveSessionCommand;
+  | SetActiveSessionCommand
+  | SetConfigCommand
+  | GetConfigCommand;
 
 // ============================================================================
 // Session Events
