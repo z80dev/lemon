@@ -2,6 +2,8 @@ defmodule LemonGateway.ThreadWorker do
   @moduledoc false
   use GenServer
 
+  require Logger
+
   alias LemonGateway.Types.Job
 
   # Default window for merging consecutive followup jobs (milliseconds)
@@ -43,32 +45,37 @@ defmodule LemonGateway.ThreadWorker do
 
   # Insert job into queue based on queue_mode
   defp enqueue_by_mode(%Job{queue_mode: :collect} = job, state) do
-    %{state | jobs: :queue.in(job, state.jobs)}
+    apply_queue_cap(%{state | jobs: :queue.in(job, state.jobs)}, job)
   end
 
   defp enqueue_by_mode(%Job{queue_mode: :followup} = job, state) do
     now = System.monotonic_time(:millisecond)
     debounce_ms = followup_debounce_ms()
 
-    case state.last_followup_at do
-      nil ->
-        # No previous followup, just append
-        %{state | jobs: :queue.in(job, state.jobs), last_followup_at: now}
+    new_state =
+      case state.last_followup_at do
+        nil ->
+          # No previous followup, just append
+          %{state | jobs: :queue.in(job, state.jobs), last_followup_at: now}
 
-      last_time when now - last_time < debounce_ms ->
-        # Within debounce window, merge with last followup if possible
-        case merge_with_last_followup(state.jobs, job) do
-          {:merged, new_jobs} ->
-            %{state | jobs: new_jobs, last_followup_at: now}
+        last_time when now - last_time < debounce_ms ->
+          # Within debounce window, merge with last followup if possible
+          case merge_with_last_followup(state.jobs, job) do
+            {:merged, new_jobs} ->
+              # Merging doesn't increase queue size, no cap check needed
+              %{state | jobs: new_jobs, last_followup_at: now}
 
-          :no_merge ->
-            %{state | jobs: :queue.in(job, state.jobs), last_followup_at: now}
-        end
+            :no_merge ->
+              %{state | jobs: :queue.in(job, state.jobs), last_followup_at: now}
+          end
 
-      _last_time ->
-        # Outside debounce window, just append
-        %{state | jobs: :queue.in(job, state.jobs), last_followup_at: now}
-    end
+        _last_time ->
+          # Outside debounce window, just append
+          %{state | jobs: :queue.in(job, state.jobs), last_followup_at: now}
+      end
+
+    # Apply cap after adding (unless it was a merge which doesn't increase size)
+    apply_queue_cap(new_state, job)
   end
 
   defp enqueue_by_mode(%Job{queue_mode: :steer} = job, state) do
@@ -105,14 +112,82 @@ defmodule LemonGateway.ThreadWorker do
       nil ->
         # No active run - enqueue at back like :collect
         collect_job = %{job | queue_mode: :collect}
-        %{state | jobs: :queue.in(collect_job, state.jobs)}
+        apply_queue_cap(%{state | jobs: :queue.in(collect_job, state.jobs)}, collect_job)
     end
   end
 
   defp enqueue_by_mode(%Job{queue_mode: :interrupt} = job, state) do
     # Cancel current run if active, then insert at front
     state = maybe_cancel_current_run(state)
-    %{state | jobs: :queue.in_r(job, state.jobs)}
+    new_state = %{state | jobs: :queue.in_r(job, state.jobs)}
+    # Apply cap after insertion (will drop from back if needed)
+    apply_queue_cap(new_state, job)
+  end
+
+  # Apply queue cap and drop policy
+  # Returns the state with jobs trimmed to cap if configured
+  defp apply_queue_cap(state, job_added) do
+    queue_config = LemonGateway.Config.get_queue_config()
+    cap = queue_config[:cap]
+    drop = queue_config[:drop]
+
+    cond do
+      # No cap configured or cap is 0 - no enforcement
+      is_nil(cap) or cap <= 0 ->
+        state
+
+      # Queue is within cap - no action needed
+      :queue.len(state.jobs) <= cap ->
+        state
+
+      # Drop policy is :newest - remove the job we just added
+      drop == :newest ->
+        Logger.debug("Queue cap reached (#{cap}), dropping newest job")
+        # The job was just added, so we need to remove it
+        # For :collect/:followup it's at the back, for :interrupt it's at the front
+        case job_added.queue_mode do
+          :interrupt ->
+            # Job was added at front, remove from front
+            {{:value, _dropped}, trimmed_jobs} = :queue.out(state.jobs)
+            %{state | jobs: trimmed_jobs}
+
+          _ ->
+            # Job was added at back, remove from back
+            {{:value, _dropped}, trimmed_jobs} = :queue.out_r(state.jobs)
+            %{state | jobs: trimmed_jobs}
+        end
+
+      # Drop policy is :oldest (default) - remove oldest jobs until at cap
+      true ->
+        drop_oldest_until_cap(state, cap)
+    end
+  end
+
+  # Drop oldest jobs until queue is at or below cap
+  defp drop_oldest_until_cap(state, cap) do
+    queue_len = :queue.len(state.jobs)
+
+    if queue_len <= cap do
+      state
+    else
+      to_drop = queue_len - cap
+      Logger.debug("Queue cap reached (#{cap}), dropping #{to_drop} oldest job(s)")
+      trimmed_jobs = drop_n_oldest(state.jobs, to_drop)
+      %{state | jobs: trimmed_jobs}
+    end
+  end
+
+  # Drop n oldest jobs from the queue
+  defp drop_n_oldest(queue, 0), do: queue
+
+  defp drop_n_oldest(queue, n) when n > 0 do
+    case :queue.out(queue) do
+      {{:value, _dropped}, rest} ->
+        drop_n_oldest(rest, n - 1)
+
+      {:empty, _} ->
+        queue
+    end
   end
 
   # Try to merge a followup job with the last followup job in the queue
@@ -278,7 +353,7 @@ defmodule LemonGateway.ThreadWorker do
     # Remove from pending steers since the run explicitly rejected it
     state = remove_pending_steer(state, job)
     collect_job = %{job | queue_mode: :collect}
-    state = %{state | jobs: :queue.in(collect_job, state.jobs)}
+    state = apply_queue_cap(%{state | jobs: :queue.in(collect_job, state.jobs)}, collect_job)
     {:noreply, maybe_request_slot(state)}
   end
 
