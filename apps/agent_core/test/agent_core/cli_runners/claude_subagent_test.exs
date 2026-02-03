@@ -12,6 +12,11 @@ defmodule AgentCore.CliRunners.ClaudeSubagentTest do
   alias AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent, Action}
   alias AgentCore.EventStream
 
+  setup_all do
+    Code.ensure_loaded?(ClaudeSubagent)
+    :ok
+  end
+
   # ============================================================================
   # Test Helpers
   # ============================================================================

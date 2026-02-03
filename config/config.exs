@@ -23,6 +23,12 @@ config :agent_core, :claude,
   # This allows Claude subagents to run without permission prompts.
   dangerously_skip_permissions: true
 
+# Lane concurrency caps for CodingAgent.LaneQueue
+config :coding_agent, :lane_caps,
+  main: 4,
+  subagent: 8,
+  background_exec: 2
+
 # Sample configuration:
 #
 #     config :logger, :default_handler,

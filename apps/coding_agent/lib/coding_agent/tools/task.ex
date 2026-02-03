@@ -6,14 +6,21 @@ defmodule CodingAgent.Tools.Task do
   final assistant response.
   """
 
+  require Logger
+
   alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias AgentCore.CliRunners.{ClaudeSubagent, CodexSubagent}
+  alias AgentCore.CliRunners.{ClaudeSubagent, CodexSubagent, KimiSubagent}
   alias AgentCore.AbortSignal
   alias Ai.Types.TextContent
+  alias CodingAgent.BudgetEnforcer
   alias CodingAgent.Coordinator
+  alias CodingAgent.LaneQueue
+  alias CodingAgent.RunGraph
   alias CodingAgent.Session
   alias CodingAgent.SettingsManager
   alias CodingAgent.Subagents
+  alias CodingAgent.TaskStore
+  alias CodingAgent.ToolPolicy
 
   @doc """
   Returns the Task tool definition.
@@ -37,6 +44,11 @@ defmodule CodingAgent.Tools.Task do
       parameters: %{
         "type" => "object",
         "properties" => %{
+          "action" => %{
+            "type" => "string",
+            "description" => "Action to perform: run (default), poll, or join",
+            "enum" => ["run", "poll", "join"]
+          },
           "description" => %{
             "type" => "string",
             "description" => "Short (3-5 words) description of the task"
@@ -45,16 +57,38 @@ defmodule CodingAgent.Tools.Task do
             "type" => "string",
             "description" => "The task for the agent to perform"
           },
+          "task_id" => %{
+            "type" => "string",
+            "description" => "Task id to poll (when action=poll)"
+          },
+          "task_ids" => %{
+            "type" => "array",
+            "items" => %{"type" => "string"},
+            "description" => "Task ids to join (when action=join)"
+          },
+          "mode" => %{
+            "type" => "string",
+            "enum" => ["wait_all", "wait_any"],
+            "description" => "Join mode for action=join (default: wait_all)"
+          },
+          "timeout_ms" => %{
+            "type" => "integer",
+            "description" => "Join timeout in milliseconds (optional)"
+          },
           "engine" => %{
             "type" => "string",
-            "description" => "Execution engine: internal (default), codex, or claude"
+            "description" => "Execution engine: internal (default), codex, claude, or kimi"
           },
           "role" => %{
             "type" => "string",
             "description" => "Optional role to specialize the task (e.g., research, implement, review, test)"
+          },
+          "async" => %{
+            "type" => "boolean",
+            "description" => "When true, run task asynchronously and return a task_id"
           }
         },
-        "required" => ["description", "prompt"]
+        "required" => []
       },
       execute: &execute(&1, &2, &3, &4, cwd, opts)
     }
@@ -79,52 +113,183 @@ defmodule CodingAgent.Tools.Task do
     if AbortSignal.aborted?(signal) do
       {:error, "Operation aborted"}
     else
-      do_execute(params, signal, on_update, cwd, opts)
-    end
-  end
+      case normalize_action(Map.get(params, "action")) do
+        "poll" ->
+          do_poll(params)
 
-  defp do_execute(params, signal, on_update, cwd, opts) do
-    with {:ok, validated} <- validate_params(params, cwd) do
-      description = validated.description
-      prompt = validated.prompt
-      role_id = validated.role_id
-      engine = validated.engine
-      coordinator = Keyword.get(opts, :coordinator)
+        "join" ->
+          do_join(params)
 
-      cond do
-        engine in ["codex", "claude"] ->
-          apply_cli_settings(engine, cwd)
-          execute_via_cli_engine(engine, prompt, cwd, description, role_id, on_update, signal)
-
-        coordinator && coordinator_alive?(coordinator) && role_id ->
-          execute_via_coordinator(coordinator, prompt, description, role_id)
-
-        true ->
-          start_opts = build_session_opts(cwd, opts)
-
-          case maybe_apply_role_prompt(prompt, role_id, cwd) do
-            {:error, _} = err ->
-              err
-
-            prompt ->
-              start_session_with_prompt(
-                start_opts,
-                prompt,
-                description,
-                signal,
-                on_update,
-                role_id
-              )
-          end
+        _ ->
+          do_execute(params, signal, on_update, cwd, opts)
       end
     end
   end
 
-  defp validate_params(params, cwd) do
+  defp do_execute(params, signal, on_update, cwd, opts) do
+    with {:ok, validated} <- validate_run_params(params, cwd),
+         :ok <- check_budget_and_policy(validated, opts) do
+      description = validated.description
+      prompt = validated.prompt
+      role_id = validated.role_id
+      engine = validated.engine
+      async? = validated.async
+      coordinator = Keyword.get(opts, :coordinator)
+      parent_run_id = Keyword.get(opts, :parent_run_id)
+
+      # Create run and check budget
+      run_id =
+        if async? do
+          RunGraph.new_run(%{type: :task, description: description, parent: parent_run_id})
+        else
+          nil
+        end
+
+      task_id =
+        if async? do
+          TaskStore.new_task(%{description: description, run_id: run_id})
+        else
+          nil
+        end
+
+      # Set up budget tracking for this run
+      if run_id do
+        BudgetEnforcer.on_run_start(run_id, opts)
+      end
+
+      # Track parent-child relationship
+      if run_id && parent_run_id do
+        RunGraph.add_child(parent_run_id, run_id)
+
+        # Track budget for child
+        BudgetEnforcer.on_subagent_spawn(parent_run_id, run_id, opts)
+      end
+
+      run_fun = fn ->
+        on_update_safe = wrap_on_update(task_id, on_update)
+        run_override = Keyword.get(opts, :run_override)
+
+        cond do
+          is_function(run_override, 2) ->
+            run_override.(on_update_safe, signal)
+
+          engine in ["codex", "claude", "kimi"] ->
+            apply_cli_settings(engine, cwd)
+            execute_via_cli_engine(engine, prompt, cwd, description, role_id, on_update_safe, signal)
+
+          coordinator && coordinator_alive?(coordinator) && role_id ->
+            execute_via_coordinator(coordinator, prompt, description, role_id)
+
+          true ->
+            start_opts = build_session_opts(cwd, opts)
+
+            case maybe_apply_role_prompt(prompt, role_id, cwd) do
+              {:error, _} = err ->
+                err
+
+              prompt ->
+                start_session_with_prompt(
+                  start_opts,
+                  prompt,
+                  description,
+                  signal,
+                  on_update_safe,
+                  role_id
+                )
+            end
+        end
+      end
+
+      if async? do
+        run_async(task_id, run_id, run_fun)
+        build_async_result(task_id, description, run_id)
+      else
+        run_sync(run_fun)
+      end
+    end
+  end
+
+  defp do_poll(params) do
+    task_id = Map.get(params, "task_id") |> normalize_optional_string()
+
+    if is_binary(task_id) do
+      case TaskStore.get(task_id) do
+        {:ok, record, events} ->
+          build_poll_result(task_id, record, events)
+
+        {:error, :not_found} ->
+          {:error, "Unknown task_id: #{task_id}"}
+      end
+    else
+      {:error, "task_id is required for action=poll"}
+    end
+  end
+
+  defp do_join(params) do
+    with {:ok, task_ids} <- validate_join_task_ids(params),
+         {:ok, timeout_ms} <- validate_join_timeout(params),
+         {:ok, mode} <- validate_join_mode(params) do
+      with {:ok, run_ids} <- resolve_run_ids(task_ids),
+           {:ok, join_result} <- RunGraph.await(run_ids, mode, timeout_ms) do
+        build_join_result(task_ids, join_result)
+      else
+        {:error, reason} -> {:error, reason}
+        {:error, :timeout, snapshot} -> build_join_timeout(task_ids, snapshot)
+      end
+    end
+  end
+
+  defp validate_join_task_ids(params) do
+    task_ids = Map.get(params, "task_ids") || Map.get(params, "task_id")
+
+    task_ids =
+      cond do
+        is_binary(task_ids) -> [task_ids]
+        is_list(task_ids) -> task_ids
+        true -> []
+      end
+
+    cond do
+      task_ids == [] ->
+        {:error, "task_ids is required for action=join"}
+
+      not Enum.all?(task_ids, &is_binary/1) ->
+        {:error, "task_ids must be a list of strings"}
+
+      true ->
+        {:ok, task_ids}
+    end
+  end
+
+  defp validate_join_timeout(params) do
+    timeout_ms = Map.get(params, "timeout_ms", 30_000)
+
+    cond do
+      not is_integer(timeout_ms) ->
+        {:error, "timeout_ms must be an integer"}
+
+      timeout_ms < 0 ->
+        {:error, "timeout_ms must be non-negative"}
+
+      timeout_ms > 3_600_000 ->
+        {:error, "timeout_ms must not exceed 1 hour (3600000ms)"}
+
+      true ->
+        {:ok, timeout_ms}
+    end
+  end
+
+  defp validate_join_mode(params) do
+    mode = Map.get(params, "mode") |> normalize_join_mode()
+    {:ok, mode}
+  end
+
+  defp validate_run_params(params, cwd) do
     description = Map.get(params, "description")
     prompt = Map.get(params, "prompt")
     role_id = normalize_optional_string(Map.get(params, "role"))
     engine = Map.get(params, "engine")
+    async? = Map.get(params, "async", false)
 
     cond do
       not Map.has_key?(params, "description") ->
@@ -148,11 +313,14 @@ defmodule CodingAgent.Tools.Task do
       not is_nil(engine) and not is_binary(engine) ->
         {:error, "Engine must be a string"}
 
-      not is_nil(engine) and engine not in ["internal", "codex", "claude"] ->
-        {:error, "Engine must be one of: internal, codex, claude"}
+      not is_nil(engine) and engine not in ["internal", "codex", "claude", "kimi"] ->
+        {:error, "Engine must be one of: internal, codex, claude, kimi"}
 
       not is_nil(role_id) and Subagents.get(cwd, role_id) == nil ->
         {:error, "Unknown role: #{role_id}"}
+
+      not is_boolean(async?) ->
+        {:error, "Async must be a boolean"}
 
       true ->
         normalized_engine = if engine == "internal", do: nil, else: engine
@@ -162,7 +330,8 @@ defmodule CodingAgent.Tools.Task do
            description: description,
            prompt: prompt,
            role_id: role_id,
-           engine: normalized_engine
+           engine: normalized_engine,
+           async: async?
          }}
     end
   end
@@ -175,6 +344,41 @@ defmodule CodingAgent.Tools.Task do
   end
 
   defp normalize_optional_string(value), do: value
+
+  defp normalize_action(nil), do: "run"
+  defp normalize_action(action) when is_binary(action) do
+    action |> String.trim() |> String.downcase()
+  end
+  defp normalize_action(_), do: "run"
+
+  defp check_budget_and_policy(validated, opts) do
+    parent_run_id = Keyword.get(opts, :parent_run_id)
+    engine = validated.engine || "internal"
+
+    # Check budget if parent exists
+    budget_check =
+      if parent_run_id do
+        BudgetEnforcer.check_subagent_spawn(parent_run_id, opts)
+      else
+        :ok
+      end
+
+    case budget_check do
+      {:error, :budget_exceeded, details} ->
+        {:error, BudgetEnforcer.handle_budget_exceeded(parent_run_id || "unknown", details) |> elem(1)}
+
+      _ ->
+        # Check tool policy for engine
+        policy = ToolPolicy.subagent_policy(String.to_atom(engine), opts)
+
+        if ToolPolicy.no_reply?(policy) do
+          # Mark as NO_REPLY if policy requires
+          Logger.debug("Subagent #{engine} running in NO_REPLY mode")
+        end
+
+        :ok
+    end
+  end
 
   defp coordinator_alive?(coordinator) when is_pid(coordinator), do: Process.alive?(coordinator)
 
@@ -223,11 +427,304 @@ defmodule CodingAgent.Tools.Task do
     end
   end
 
+  defp run_async(task_id, run_id, run_fun) do
+    Task.start(fn ->
+      result = safe_run(task_id, run_id, run_fun)
+      finalize_async(task_id, run_id, result)
+    end)
+
+    :ok
+  end
+
+  defp safe_run(task_id, run_id, run_fun) do
+    wrapped = fn ->
+      maybe_mark_running(task_id, run_id)
+      run_fun.()
+    end
+
+    try do
+      if lane_queue_available?() do
+        LaneQueue.run(CodingAgent.LaneQueue, :subagent, wrapped, %{task_id: task_id, run_id: run_id})
+      else
+        {:ok, wrapped.()}
+      end
+    rescue
+      e -> {:error, {e, __STACKTRACE__}}
+    catch
+      kind, reason -> {:error, {kind, reason}}
+    end
+  end
+
+  defp finalize_async(task_id, run_id, result) do
+    case result do
+      {:ok, %AgentToolResult{} = tool_result} ->
+        TaskStore.finish(task_id, tool_result)
+        maybe_finish_run(run_id, tool_result)
+        maybe_record_budget_completion(run_id, tool_result)
+
+      {:ok, {:error, reason}} ->
+        TaskStore.fail(task_id, reason)
+        maybe_fail_run(run_id, reason)
+        maybe_record_budget_completion(run_id, %{error: reason})
+
+      {:error, reason} ->
+        TaskStore.fail(task_id, reason)
+        maybe_fail_run(run_id, reason)
+        maybe_record_budget_completion(run_id, %{error: reason})
+
+      {:ok, other} ->
+        TaskStore.finish(task_id, other)
+        maybe_finish_run(run_id, other)
+        maybe_record_budget_completion(run_id, other)
+
+      other ->
+        TaskStore.fail(task_id, other)
+        maybe_fail_run(run_id, other)
+        maybe_record_budget_completion(run_id, %{error: other})
+    end
+  end
+
+  defp maybe_record_budget_completion(nil, _result), do: :ok
+
+  defp maybe_record_budget_completion(run_id, result) do
+    BudgetEnforcer.on_run_complete(run_id, result)
+  rescue
+    _ -> :ok
+  end
+
+  defp run_sync(run_fun) do
+    result =
+      if lane_queue_available?() do
+        LaneQueue.run(CodingAgent.LaneQueue, :subagent, run_fun, %{})
+      else
+        {:ok, run_fun.()}
+      end
+
+    case result do
+      {:ok, %AgentToolResult{} = tool_result} -> tool_result
+      {:ok, {:error, reason}} -> {:error, reason}
+      {:error, reason} -> {:error, reason}
+      {:ok, other} -> other
+    end
+  end
+
+  defp wrap_on_update(nil, on_update), do: on_update
+
+  defp wrap_on_update(task_id, nil) do
+    fn result ->
+      TaskStore.append_event(task_id, result)
+      :ok
+    end
+  end
+
+  defp wrap_on_update(task_id, on_update) do
+    fn result ->
+      TaskStore.append_event(task_id, result)
+      on_update.(result)
+    end
+  end
+
+  defp lane_queue_available? do
+    case Process.whereis(CodingAgent.LaneQueue) do
+      nil -> false
+      _pid -> true
+    end
+  end
+
+  defp build_async_result(task_id, description, run_id) do
+    %AgentToolResult{
+      content: [%TextContent{text: "Task queued: #{description} (#{task_id})"}],
+      details: %{
+        task_id: task_id,
+        status: "queued",
+        description: description,
+        run_id: run_id
+      }
+    }
+  end
+
+  defp build_poll_result(task_id, record, events) do
+    status = Map.get(record, :status, :unknown)
+
+    {content, details} =
+      case status do
+        :completed ->
+          case Map.get(record, :result) do
+            %AgentToolResult{} = result ->
+              {result.content,
+               %{
+                 task_id: task_id,
+                 status: "completed",
+                 result: result,
+                 events: Enum.take(events, -5)
+               }}
+
+            other ->
+              {[%TextContent{text: "Task completed."}],
+               %{
+                 task_id: task_id,
+                 status: "completed",
+                 result: other,
+                 events: Enum.take(events, -5)
+               }}
+          end
+
+        :error ->
+          error = Map.get(record, :error)
+
+          {[%TextContent{text: "Task error: #{inspect(error)}"}],
+           %{
+             task_id: task_id,
+             status: "error",
+             error: error,
+             events: Enum.take(events, -5)
+           }}
+
+        _ ->
+          text = latest_event_text(events) || "Task status: #{status}"
+
+          {[%TextContent{text: text}],
+           %{
+             task_id: task_id,
+             status: to_string(status),
+             events: Enum.take(events, -5)
+           }}
+      end
+
+    details =
+      case Map.get(record, :run_id) do
+        nil -> details
+        run_id -> Map.put(details, :run_id, run_id)
+      end
+
+    %AgentToolResult{content: content, details: details}
+  end
+
+  defp latest_event_text(events) do
+    events
+    |> Enum.reverse()
+    |> Enum.find_value(fn
+      %AgentToolResult{content: content} -> extract_text(content)
+      %{content: content} -> extract_text(content)
+      _ -> nil
+    end)
+  end
+
+  defp extract_text(content) when is_list(content) do
+    content
+    |> Enum.filter(&match?(%TextContent{}, &1))
+    |> Enum.map(& &1.text)
+    |> Enum.join("")
+    |> case do
+      "" -> nil
+      text -> text
+    end
+  end
+
+  defp extract_text(_), do: nil
+
+  defp normalize_join_mode(nil), do: :wait_all
+  defp normalize_join_mode("wait_all"), do: :wait_all
+  defp normalize_join_mode("wait_any"), do: :wait_any
+  defp normalize_join_mode(:wait_all), do: :wait_all
+  defp normalize_join_mode(:wait_any), do: :wait_any
+  defp normalize_join_mode(_), do: :wait_all
+
+  defp resolve_run_ids(task_ids) do
+    run_ids =
+      Enum.reduce_while(task_ids, [], fn task_id, acc ->
+        case TaskStore.get(task_id) do
+          {:ok, record, _events} ->
+            run_id = Map.get(record, :run_id)
+
+            if is_binary(run_id) do
+              {:cont, [run_id | acc]}
+            else
+              {:halt, {:error, "Task #{task_id} is missing a run_id"}}
+            end
+
+          {:error, :not_found} ->
+            {:halt, {:error, "Unknown task_id: #{task_id}"}}
+        end
+      end)
+
+    case run_ids do
+      {:error, _} = err -> err
+      ids -> {:ok, Enum.reverse(ids)}
+    end
+  end
+
+  defp build_join_result(task_ids, %{mode: :wait_all, runs: runs}) do
+    details = %{
+      status: "completed",
+      mode: "wait_all",
+      task_ids: task_ids,
+      runs: runs
+    }
+
+    %AgentToolResult{
+      content: [%TextContent{text: "Joined #{length(task_ids)} task(s)."}],
+      details: details
+    }
+  end
+
+  defp build_join_result(task_ids, %{mode: :wait_any, run: run}) do
+    details = %{
+      status: "completed",
+      mode: "wait_any",
+      task_ids: task_ids,
+      run: run
+    }
+
+    %AgentToolResult{
+      content: [%TextContent{text: "One task completed."}],
+      details: details
+    }
+  end
+
+  defp build_join_timeout(task_ids, snapshot) do
+    details = %{
+      status: "timeout",
+      task_ids: task_ids,
+      snapshot: snapshot
+    }
+
+    %AgentToolResult{
+      content: [%TextContent{text: "Join timed out."}],
+      details: details
+    }
+  end
+
+  defp maybe_mark_running(nil, _run_id), do: :ok
+
+  defp maybe_mark_running(task_id, run_id) do
+    TaskStore.mark_running(task_id)
+
+    if run_id do
+      RunGraph.mark_running(run_id)
+    end
+
+    :ok
+  end
+
+  defp maybe_finish_run(nil, _result), do: :ok
+
+  defp maybe_finish_run(run_id, result) do
+    RunGraph.finish(run_id, result)
+  end
+
+  defp maybe_fail_run(nil, _reason), do: :ok
+
+  defp maybe_fail_run(run_id, reason) do
+    RunGraph.fail(run_id, reason)
+  end
+
   defp execute_via_cli_engine(engine, prompt, cwd, description, role_id, on_update, signal) do
     {module, engine_label} =
       case engine do
         "codex" -> {CodexSubagent, "codex"}
         "claude" -> {ClaudeSubagent, "claude"}
+        "kimi" -> {KimiSubagent, "kimi"}
       end
 
     # Get role prompt if role_id is specified
@@ -276,6 +773,14 @@ defmodule CodingAgent.Tools.Task do
 
     config = if is_map(codex), do: codex, else: %{}
     Application.put_env(:agent_core, :codex, config)
+  end
+
+  defp apply_cli_settings("kimi", cwd) do
+    settings = SettingsManager.load(cwd)
+    kimi = Map.get(settings, :kimi, %{})
+
+    config = if is_map(kimi), do: kimi, else: %{}
+    Application.put_env(:agent_core, :kimi, config)
   end
 
   defp apply_cli_settings(_engine, _cwd), do: :ok
@@ -521,10 +1026,17 @@ defmodule CodingAgent.Tools.Task do
     base =
       "Run a focused subtask and return the final response.\n\n" <>
         "Parameters:\n" <>
+        "- action: run (default), poll, or join\n" <>
+        "- async: when true, run in background and return task_id\n" <>
+        "- task_id: required when action=poll\n" <>
+        "- task_ids: required when action=join\n" <>
+        "- mode: join mode for action=join (wait_all or wait_any)\n" <>
+        "- timeout_ms: join timeout in milliseconds\n" <>
         "- engine: Which executor runs the task\n" <>
         "  - \"internal\" (default): Lemon's built-in agent\n" <>
         "  - \"codex\": OpenAI Codex CLI\n" <>
         "  - \"claude\": Claude Code CLI\n" <>
+        "  - \"kimi\": Kimi CLI\n" <>
         "- role: Optional specialization that applies to ANY engine\n\n" <>
         "The role prepends a system prompt to focus the executor on a specific type of work. " <>
         "You can combine any engine with any role."

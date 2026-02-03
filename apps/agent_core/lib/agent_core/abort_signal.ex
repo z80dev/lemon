@@ -42,7 +42,23 @@ defmodule AgentCore.AbortSignal do
   defp ensure_table do
     case :ets.whereis(@table) do
       :undefined ->
-        :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
+        heir = Process.whereis(:init)
+
+        opts =
+          [
+            :named_table,
+            :public,
+            :set,
+            read_concurrency: true,
+            write_concurrency: true
+          ] ++
+            if is_pid(heir) do
+              [{:heir, heir, :ok}]
+            else
+              []
+            end
+
+        :ets.new(@table, opts)
         :ok
 
       _ ->

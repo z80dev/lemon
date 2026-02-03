@@ -360,6 +360,8 @@ defmodule CodingAgent.Extensions do
     extensions
     |> Enum.filter(&has_callback?(&1, :tools, 1))
     |> Enum.flat_map(fn ext ->
+      ensure_tool_types_loaded()
+
       try do
         ext.tools(cwd)
         |> Enum.map(fn tool -> {tool, ext} end)
@@ -991,8 +993,12 @@ defmodule CodingAgent.Extensions do
   defp ensure_source_path_table do
     case :ets.whereis(@source_path_table) do
       :undefined ->
-        :ets.new(@source_path_table, [:set, :public, :named_table])
-        :ok
+        try do
+          :ets.new(@source_path_table, [:set, :public, :named_table])
+          :ok
+        rescue
+          ArgumentError -> :ok
+        end
 
       _tid ->
         :ok
@@ -1002,8 +1008,12 @@ defmodule CodingAgent.Extensions do
   defp ensure_load_error_table do
     case :ets.whereis(@load_error_table) do
       :undefined ->
-        :ets.new(@load_error_table, [:set, :public, :named_table])
-        :ok
+        try do
+          :ets.new(@load_error_table, [:set, :public, :named_table])
+          :ok
+        rescue
+          ArgumentError -> :ok
+        end
 
       _tid ->
         :ok
@@ -1043,15 +1053,25 @@ defmodule CodingAgent.Extensions do
   # Discover extension files in a directory (without loading)
   @spec discover_extension_files(String.t()) :: [String.t()]
   defp discover_extension_files(dir) do
-    # Look for .ex and .exs files
-    patterns = [
-      Path.join(dir, "*.ex"),
-      Path.join(dir, "*.exs"),
-      Path.join([dir, "*", "lib", "**", "*.ex"])
-    ]
+    expanded = Path.expand(dir)
 
-    patterns
-    |> Enum.flat_map(&Path.wildcard/1)
+    # Look for .ex and .exs files at the top level without relying on glob
+    top_level_files =
+      case File.ls(expanded) do
+        {:ok, entries} ->
+          entries
+          |> Enum.map(&Path.join(expanded, &1))
+          |> Enum.filter(&File.regular?/1)
+          |> Enum.filter(fn path -> Path.extname(path) in [".ex", ".exs"] end)
+
+        _ ->
+          []
+      end
+
+    # Look for nested .ex files (lib/**) using glob
+    nested_files = Path.wildcard(Path.join([expanded, "*", "lib", "**", "*.ex"]))
+
+    (top_level_files ++ nested_files)
     |> Enum.filter(&File.regular?/1)
   end
 
@@ -1059,9 +1079,19 @@ defmodule CodingAgent.Extensions do
   @spec load_extension_file(String.t()) :: [module()]
   defp load_extension_file(path) do
     try do
+      previous_opts = Code.compiler_options()
+
       modules =
-        Code.compile_file(path)
-        |> Enum.map(fn {module, _binary} -> module end)
+        try do
+          Code.compiler_options(ignore_module_conflict: true)
+
+          Code.compile_file(path)
+          |> Enum.map(fn {module, _binary} -> module end)
+        after
+          Code.compiler_options(previous_opts)
+        end
+
+      Enum.each(modules, &Code.ensure_loaded?/1)
 
       extension_modules = Enum.filter(modules, &implements_extension?/1)
 
@@ -1081,9 +1111,19 @@ defmodule CodingAgent.Extensions do
   @spec load_extension_file_safe(String.t()) ::
           {:ok, [module()]} | {:error, term(), String.t()}
   defp load_extension_file_safe(path) do
+    previous_opts = Code.compiler_options()
+
     modules =
-      Code.compile_file(path)
-      |> Enum.map(fn {module, _binary} -> module end)
+      try do
+        Code.compiler_options(ignore_module_conflict: true)
+
+        Code.compile_file(path)
+        |> Enum.map(fn {module, _binary} -> module end)
+      after
+        Code.compiler_options(previous_opts)
+      end
+
+    Enum.each(modules, &Code.ensure_loaded?/1)
 
     extension_modules = Enum.filter(modules, &implements_extension?/1)
 
@@ -1110,8 +1150,28 @@ defmodule CodingAgent.Extensions do
   # Check if a module implements the Extension behaviour
   @spec implements_extension?(module()) :: boolean()
   defp implements_extension?(module) do
-    behaviours = module.__info__(:attributes)[:behaviour] || []
-    CodingAgent.Extensions.Extension in behaviours
+    unless Code.ensure_loaded?(module) do
+      false
+    else
+      behaviours = module.__info__(:attributes)[:behaviour] || []
+
+      if CodingAgent.Extensions.Extension in behaviours do
+        true
+      else
+        has_required =
+          function_exported?(module, :name, 0) and
+            function_exported?(module, :version, 0)
+
+        has_optional =
+          function_exported?(module, :tools, 1) or
+            function_exported?(module, :hooks, 0) or
+            function_exported?(module, :providers, 0) or
+            function_exported?(module, :capabilities, 0) or
+            function_exported?(module, :config_schema, 0)
+
+        has_required and has_optional
+      end
+    end
   rescue
     _ -> false
   end
@@ -1310,5 +1370,10 @@ defmodule CodingAgent.Extensions do
     else
       default
     end
+  end
+
+  defp ensure_tool_types_loaded do
+    Code.ensure_loaded?(AgentCore.Types.AgentTool)
+    Code.ensure_loaded?(AgentCore.Types.AgentToolResult)
   end
 end

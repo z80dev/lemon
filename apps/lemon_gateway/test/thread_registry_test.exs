@@ -70,7 +70,7 @@ defmodule LemonGateway.ThreadRegistryTest do
       pid = spawn_registering_process(key)
       result = wait_for_registration(pid)
 
-      assert result == {:ok, self()}
+      assert result == {:ok, pid}
       send(pid, :stop)
     end
 

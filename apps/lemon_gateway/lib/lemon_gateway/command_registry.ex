@@ -16,7 +16,12 @@ defmodule LemonGateway.CommandRegistry do
   def list_commands, do: GenServer.call(__MODULE__, :list)
 
   @spec get_command!(command_name()) :: command_mod()
-  def get_command!(name), do: GenServer.call(__MODULE__, {:get, name})
+  def get_command!(name) do
+    case get_command(name) do
+      nil -> raise ArgumentError, "unknown command: #{inspect(name)}"
+      mod -> mod
+    end
+  end
 
   @spec get_command(command_name()) :: command_mod() | nil
   def get_command(name), do: GenServer.call(__MODULE__, {:get_or_nil, name})
@@ -48,10 +53,7 @@ defmodule LemonGateway.CommandRegistry do
   end
 
   def handle_call({:get, name}, _from, state) do
-    case Map.fetch(state, name) do
-      {:ok, mod} -> {:reply, mod, state}
-      :error -> raise ArgumentError, "unknown command: #{inspect(name)}"
-    end
+    {:reply, Map.get(state, name), state}
   end
 
   def handle_call({:get_or_nil, name}, _from, state) do

@@ -245,7 +245,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     end
 
     test "extract_resume/2 with specific engine" do
-      text = "Run lemon resume abc and claude --resume xyz"
+      text = "Run lemon resume abc and claude --resume xyz and kimi --session kimi_123"
 
       lemon_token = ResumeToken.extract_resume(text, "lemon")
       assert lemon_token.engine == "lemon"
@@ -254,6 +254,10 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
       claude_token = ResumeToken.extract_resume(text, "claude")
       assert claude_token.engine == "claude"
       assert claude_token.value == "xyz"
+
+      kimi_token = ResumeToken.extract_resume(text, "kimi")
+      assert kimi_token.engine == "kimi"
+      assert kimi_token.value == "kimi_123"
     end
 
     test "is_resume_line/1 recognizes lemon resume lines" do
@@ -266,6 +270,27 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     test "is_resume_line/2 with lemon engine" do
       assert ResumeToken.is_resume_line("lemon resume abc123", "lemon")
       refute ResumeToken.is_resume_line("claude --resume abc123", "lemon")
+    end
+  end
+
+  describe "ResumeToken for kimi engine" do
+    test "format/1 returns kimi resume command" do
+      token = ResumeToken.new("kimi", "session_987")
+      assert ResumeToken.format(token) == "`kimi --session session_987`"
+    end
+
+    test "extract_resume/1 extracts kimi token" do
+      text = "Continue with `kimi --session kimi_abc123`"
+      token = ResumeToken.extract_resume(text)
+
+      assert token.engine == "kimi"
+      assert token.value == "kimi_abc123"
+    end
+
+    test "is_resume_line/1 recognizes kimi resume lines" do
+      assert ResumeToken.is_resume_line("kimi --session abc123")
+      assert ResumeToken.is_resume_line("`kimi --session abc123`")
+      refute ResumeToken.is_resume_line("Please run kimi --session abc123")
     end
   end
 

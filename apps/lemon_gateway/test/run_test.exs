@@ -1957,10 +1957,9 @@ defmodule LemonGateway.RunTest do
       # Give time for Started event to update ChatState
       Process.sleep(100)
 
-      # Check ChatState after Started
+      # ChatState should not be updated on Started to avoid concurrent resumes
       chat_state1 = LemonGateway.Store.get_chat_state(scope)
-      assert chat_state1 != nil
-      _first_token = chat_state1.last_resume_token
+      assert chat_state1 == nil
 
       # Now complete with a different resume token
       _resume = %ResumeToken{engine: "controllable", value: "updated_token_#{System.unique_integer([:positive])}"}

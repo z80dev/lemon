@@ -237,7 +237,7 @@ defmodule LemonGatewayTest do
       {:ok, %{"ok" => true, "result" => %{"message_id" => 123}}}
     end
 
-    def edit_message_text(_token, chat_id, message_id, text) do
+    def edit_message_text(_token, chat_id, message_id, text, _parse_mode \\ nil) do
       now = System.monotonic_time(:millisecond)
 
       Agent.update(__MODULE__, fn state ->

@@ -91,6 +91,9 @@ defmodule AgentCore.CliRunners.JsonlRunner do
   @doc "Create initial runner state"
   @callback init_state(prompt :: String.t(), resume :: resume_option()) :: runner_state()
 
+  @doc "Create initial runner state with cwd context"
+  @callback init_state(prompt :: String.t(), resume :: resume_option(), cwd :: String.t()) :: runner_state()
+
   @doc "Return bytes to send to stdin (or nil for no input)"
   @callback stdin_payload(prompt :: String.t(), resume :: resume_option(), state :: runner_state()) ::
               binary() | nil
@@ -119,7 +122,7 @@ defmodule AgentCore.CliRunners.JsonlRunner do
   @doc "Optional environment variables"
   @callback env(state :: runner_state()) :: [{String.t(), String.t()}] | nil
 
-  @optional_callbacks [env: 1]
+  @optional_callbacks [env: 1, init_state: 3]
 
   # ============================================================================
   # Using Macro
@@ -323,7 +326,12 @@ defmodule AgentCore.CliRunners.JsonlRunner do
         {:ok, stream} = AgentCore.EventStream.start_link(owner: self(), timeout: :infinity)
 
         # Initialize runner state
-        runner_state = module.init_state(prompt, resume)
+        runner_state =
+          if function_exported?(module, :init_state, 3) do
+            module.init_state(prompt, resume, cwd)
+          else
+            module.init_state(prompt, resume)
+          end
 
         state = %State{
           module: module,
@@ -485,7 +493,11 @@ defmodule AgentCore.CliRunners.JsonlRunner do
 
   @impl true
   def handle_info({port, {:data, data}}, %{port: port} = state) do
-    state = process_data(data, state)
+    state =
+      state
+      |> maybe_reset_timeout(data)
+      |> process_data(data)
+
     {:noreply, state}
   end
 
@@ -585,7 +597,7 @@ defmodule AgentCore.CliRunners.JsonlRunner do
   # Private Helpers
   # ============================================================================
 
-  defp process_data(data, state) do
+  defp process_data(state, data) do
     # Append to buffer and process only complete lines
     buffer = state.buffer <> data
     lines = String.split(buffer, "\n", trim: false)
@@ -608,35 +620,43 @@ defmodule AgentCore.CliRunners.JsonlRunner do
   defp process_line(line, state) when byte_size(line) == 0, do: state
 
   defp process_line(line, state) do
-    if state.done do
-      state
+    line = String.trim_trailing(line, "\r")
+
+    if String.contains?(line, "\n") do
+      line
+      |> String.split("\n", trim: true)
+      |> Enum.reduce(state, &process_line/2)
     else
-      module = state.module
+      if state.done do
+        state
+      else
+        module = state.module
 
-      case module.decode_line(line) do
-        {:ok, data} ->
-          {events, runner_state, opts} = module.translate_event(data, state.runner_state)
+        case module.decode_line(line) do
+          {:ok, data} ->
+            {events, runner_state, opts} = module.translate_event(data, state.runner_state)
 
-          # Update found_session if present
-          found_session = Keyword.get(opts, :found_session, state.found_session)
-          done = Keyword.get(opts, :done, false)
+            # Update found_session if present
+            found_session = Keyword.get(opts, :found_session, state.found_session)
+            done = Keyword.get(opts, :done, false)
 
-          state = %{state | runner_state: runner_state, found_session: found_session, done: done}
+            state = %{state | runner_state: runner_state, found_session: found_session, done: done}
 
-          case handle_started_events(events, state) do
-            {:ok, state} ->
-              # Emit events
-              emit_events(events, state)
+            case handle_started_events(events, state) do
+              {:ok, state} ->
+                # Emit events
+                emit_events(events, state)
 
-              state
+                state
 
-            {:error, state} ->
-              state
-          end
+              {:error, state} ->
+                state
+            end
 
-        {:error, reason} ->
-          Logger.debug("Failed to decode JSONL line: #{inspect(reason)}, line: #{line}")
-          maybe_emit_decode_warning(reason, line, state)
+          {:error, reason} ->
+            Logger.debug("Failed to decode JSONL line: #{inspect(reason)}, line: #{line}")
+            maybe_emit_decode_warning(reason, line, state)
+        end
       end
     end
   end
@@ -815,6 +835,21 @@ defmodule AgentCore.CliRunners.JsonlRunner do
     :ok
   end
 
+  defp maybe_reset_timeout(%{timeout: :infinity} = state, _data), do: state
+
+  defp maybe_reset_timeout(state, data) when is_binary(data) do
+    if byte_size(data) == 0 do
+      state
+    else
+      if state.timeout_ref do
+        Process.cancel_timer(state.timeout_ref)
+      end
+
+      timeout_ref = Process.send_after(self(), :timeout, state.timeout)
+      %{state | timeout_ref: timeout_ref}
+    end
+  end
+
   defp schedule_cancel_kill(_state) do
     grace_ms = cancel_grace_ms()
     Process.send_after(self(), :cancel_kill, grace_ms)
@@ -906,7 +941,7 @@ defmodule AgentCore.CliRunners.JsonlRunner do
   if Mix.env() == :test do
     @doc false
     def ingest_data_for_test(state, data) do
-      process_data(data, state)
+      process_data(state, data)
     end
   end
 end

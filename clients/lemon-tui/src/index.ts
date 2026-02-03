@@ -554,7 +554,7 @@ class LemonTUI {
     this.tui = new TUI(new ProcessTerminal());
     this.connectionOptions = options;
     this.connection = new AgentConnection(options);
-    this.store = new StateStore();
+    this.store = new StateStore({ cwd: options.cwd });
 
     // Initialize components
     this.header = new Text('', 1, 0);
@@ -1168,7 +1168,8 @@ class LemonTUI {
 
   private showNewSessionModal(opts?: { cwd?: string; model?: string }): void {
     const recentDirs = this.getRecentDirectories();
-    const defaultCwd = opts?.cwd ?? '';
+    const defaultCwd =
+      opts?.cwd ?? this.store.getState().cwd ?? this.connectionOptions.cwd ?? '';
     const defaultModel = opts?.model;
 
     this.showLocalPathInputOverlay(

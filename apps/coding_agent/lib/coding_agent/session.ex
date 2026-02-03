@@ -438,6 +438,8 @@ defmodule CodingAgent.Session do
     ui_context = Keyword.get(opts, :ui_context)
     custom_tools = Keyword.get(opts, :tools)
 
+    maybe_register_ui_tracker(ui_context)
+
     # Load or create session
     session_manager =
       case session_file do
@@ -1305,6 +1307,17 @@ defmodule CodingAgent.Session do
       _ -> :ok
     end
   end
+
+  defp maybe_register_ui_tracker(%UIContext{module: mod, state: tracker})
+       when not is_nil(tracker) do
+    if function_exported?(mod, :register_tracker, 1) do
+      mod.register_tracker(tracker)
+    else
+      :ok
+    end
+  end
+
+  defp maybe_register_ui_tracker(_), do: :ok
 
   @spec handle_agent_event(AgentCore.Types.agent_event(), t()) :: t()
   defp handle_agent_event({:agent_start}, state) do

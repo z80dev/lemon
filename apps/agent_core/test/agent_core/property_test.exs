@@ -247,7 +247,7 @@ defmodule AgentCore.TypesPropertyTest do
 
   defp usage_gen do
     map(
-      {non_neg_integer(), non_neg_integer(), non_neg_integer(), non_neg_integer(), cost_gen()},
+      {non_negative_integer(), non_negative_integer(), non_negative_integer(), non_negative_integer(), cost_gen()},
       fn {input, output, cache_read, cache_write, cost} ->
         %Usage{
           input: input,
@@ -286,8 +286,8 @@ defmodule AgentCore.TypesPropertyTest do
   defp model_gen do
     map(
       {non_empty_string(), non_empty_string(), atom(:alphanumeric), atom(:alphanumeric),
-       string(:printable, max_length: 100), boolean(), model_cost_gen(), non_neg_integer(),
-       non_neg_integer()},
+      string(:printable, max_length: 100), boolean(), model_cost_gen(), non_negative_integer(),
+      non_negative_integer()},
       fn {id, name, api, provider, base_url, reasoning, cost, context_window, max_tokens} ->
         %Model{
           id: id,
@@ -461,7 +461,7 @@ defmodule AgentCore.TypesPropertyTest do
 
     property "AssistantMessage usage is Usage struct or nil" do
       check all msg <- assistant_message_gen() do
-        assert is_nil(msg.usage) or %Usage{} = msg.usage
+        assert is_nil(msg.usage) or match?(%Usage{}, msg.usage)
       end
     end
 
@@ -501,7 +501,7 @@ defmodule AgentCore.TypesPropertyTest do
         assert is_list(msg.content)
 
         Enum.each(msg.content, fn block ->
-          assert %TextContent{} = block or %ImageContent{} = block
+          assert match?(%TextContent{}, block) or match?(%ImageContent{}, block)
         end)
       end
     end
@@ -1167,7 +1167,7 @@ defmodule AgentCore.TypesPropertyTest do
       check all initial_count <- integer(0..5),
                 content <- non_empty_string() do
         initial_messages =
-          Enum.map(1..initial_count, fn i ->
+          Enum.map(1..initial_count//1, fn i ->
             %UserMessage{role: :user, content: "msg#{i}", timestamp: i}
           end)
 

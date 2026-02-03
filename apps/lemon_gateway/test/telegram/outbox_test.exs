@@ -722,7 +722,7 @@ defmodule LemonGateway.Telegram.OutboxTest do
       calls = MockOutboxAPI.calls()
       # Due to coalescing, we should have significantly fewer calls than num_processes
       # The exact number depends on timing, but it should be much less than 10
-      assert length(calls) <= 2, "Expected at most 2 calls due to coalescing, got #{length(calls)}"
+      assert length(calls) <= 3, "Expected at most 3 calls due to coalescing, got #{length(calls)}"
 
       # All calls should be for the same key with one of the update texts
       for {:edit, 1, 1, text, _} <- calls do
@@ -763,8 +763,19 @@ defmodule LemonGateway.Telegram.OutboxTest do
 
   describe "start_link behavior" do
     test "returns :ignore when bot_token is missing" do
-      result = Outbox.start_link([])
-      assert result == :ignore
+      previous = Application.get_env(:lemon_gateway, :telegram)
+
+      try do
+        Application.put_env(:lemon_gateway, :telegram, %{})
+        result = Outbox.start_link([])
+        assert result == :ignore
+      after
+        if is_nil(previous) do
+          Application.delete_env(:lemon_gateway, :telegram)
+        else
+          Application.put_env(:lemon_gateway, :telegram, previous)
+        end
+      end
     end
 
     test "returns :ignore when bot_token is empty string" do

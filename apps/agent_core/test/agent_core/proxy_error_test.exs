@@ -51,12 +51,16 @@ defmodule AgentCore.ProxyErrorTest do
         )
 
       unless close_early do
-        Enum.each(chunks, fn chunk ->
+        Enum.reduce_while(chunks, :ok, fn chunk, _acc ->
           if delay > 0, do: Process.sleep(delay)
-          send_chunk(socket, chunk)
+
+          case send_chunk(socket, chunk) do
+            :ok -> {:cont, :ok}
+            :closed -> {:halt, :closed}
+          end
         end)
 
-        :ok = :gen_tcp.send(socket, "0\r\n\r\n")
+        _ = :gen_tcp.send(socket, "0\r\n\r\n")
       end
 
       :gen_tcp.close(socket)
@@ -88,11 +92,11 @@ defmodule AgentCore.ProxyErrorTest do
 
       # Send body as a chunk
       size = byte_size(body)
-      :ok = :gen_tcp.send(socket, Integer.to_string(size, 16) <> "\r\n")
-      :ok = :gen_tcp.send(socket, body)
-      :ok = :gen_tcp.send(socket, "\r\n")
+      _ = :gen_tcp.send(socket, Integer.to_string(size, 16) <> "\r\n")
+      _ = :gen_tcp.send(socket, body)
+      _ = :gen_tcp.send(socket, "\r\n")
       # Final chunk
-      :ok = :gen_tcp.send(socket, "0\r\n\r\n")
+      _ = :gen_tcp.send(socket, "0\r\n\r\n")
 
       :gen_tcp.close(socket)
       :gen_tcp.close(listen)
@@ -124,9 +128,15 @@ defmodule AgentCore.ProxyErrorTest do
 
   defp send_chunk(socket, data) do
     size = byte_size(data)
-    :ok = :gen_tcp.send(socket, Integer.to_string(size, 16) <> "\r\n")
-    :ok = :gen_tcp.send(socket, data)
-    :ok = :gen_tcp.send(socket, "\r\n")
+
+    with :ok <- :gen_tcp.send(socket, Integer.to_string(size, 16) <> "\r\n"),
+         :ok <- :gen_tcp.send(socket, data),
+         :ok <- :gen_tcp.send(socket, "\r\n") do
+      :ok
+    else
+      {:error, :closed} -> :closed
+      {:error, _} -> :closed
+    end
   end
 
   defp sse_event(map) do

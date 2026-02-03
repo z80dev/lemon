@@ -63,13 +63,14 @@ defmodule CodingAgent.BashExecutor do
 
     {shell_path, shell_args} = get_shell_config()
 
+    command = wrap_command_with_cwd(command, cwd)
+
     port_opts = [
       :stream,
       :binary,
       :exit_status,
       :use_stdio,
       :stderr_to_stdout,
-      {:cd, cwd},
       {:args, shell_args ++ [command]}
     ]
 
@@ -194,6 +195,20 @@ defmodule CodingAgent.BashExecutor do
     catch
       :error, _ -> :ok
     end
+  end
+
+  defp wrap_command_with_cwd(command, cwd) when is_binary(cwd) and cwd != "" do
+    if String.trim(command) == "" do
+      "cd #{shell_escape(cwd)}"
+    else
+      "cd #{shell_escape(cwd)} && #{command}"
+    end
+  end
+
+  defp wrap_command_with_cwd(command, _cwd), do: command
+
+  defp shell_escape(path) do
+    "'" <> String.replace(path, "'", "'\"'\"'") <> "'"
   end
 
   defp finalize_result(state) do

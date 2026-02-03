@@ -876,6 +876,7 @@ defmodule CodingAgent.ExtensionsEdgeCasesTest do
           }
           """
         end
+        |> Enum.map(&String.trim/1)
         |> Enum.join(",\n")
 
       code = """

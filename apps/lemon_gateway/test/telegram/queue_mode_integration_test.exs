@@ -102,7 +102,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       {:ok, %{"ok" => true, "result" => %{"message_id" => msg_id}}}
     end
 
-    def edit_message_text(_token, chat_id, message_id, text) do
+    def edit_message_text(_token, chat_id, message_id, text, _parse_mode \\ nil) do
       record({:edit_message, chat_id, message_id, text})
       {:ok, %{"ok" => true}}
     end
@@ -223,6 +223,8 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       Application.delete_env(:lemon_gateway, LemonGateway.Config)
       Application.delete_env(:lemon_gateway, :config_path)
       Application.delete_env(:lemon_gateway, :telegram)
+      Application.delete_env(:lemon_gateway, :transports)
+      Application.delete_env(:lemon_gateway, :engines)
     end)
 
     :ok
@@ -247,6 +249,10 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
     Application.put_env(:lemon_gateway, :engines, [
       JobCapturingEngine,
       LemonGateway.Engines.Echo
+    ])
+
+    Application.put_env(:lemon_gateway, :transports, [
+      LemonGateway.Telegram.Transport
     ])
 
     Application.put_env(:lemon_gateway, :telegram, %{

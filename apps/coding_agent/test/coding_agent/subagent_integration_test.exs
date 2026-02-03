@@ -74,6 +74,7 @@ defmodule CodingAgent.SubagentIntegrationTest do
       case name do
         "codex" -> ["OPENAI_API_KEY", "CODEX_API_KEY"]
         "claude" -> ["ANTHROPIC_API_KEY", "CLAUDE_API_KEY"]
+        "kimi" -> ["MOONSHOT_API_KEY", "KIMI_API_KEY"]
         _ -> []
       end
 
@@ -330,6 +331,48 @@ defmodule CodingAgent.SubagentIntegrationTest do
 
             {:error, reason} ->
               flunk("Task tool (claude engine) failed: #{inspect(reason)}")
+          end
+      end
+    end
+
+    @tag :tmp_dir
+    test "task tool can run via kimi engine", %{tmp_dir: tmp_dir} do
+      case {skip_unless_cli_installed("kimi"), skip_unless_cli_configured("kimi")} do
+        {:skip, _} ->
+          assert true
+
+        {_, :skip} ->
+          assert true
+
+        _ ->
+          result = TaskTool.execute(
+            "test_call_kimi",
+            %{
+              "description" => "Kimi hello",
+              "prompt" => "Say 'hello from kimi' and nothing else.",
+              "engine" => "kimi"
+            },
+            nil,
+            nil,
+            tmp_dir,
+            [model: IntegrationConfig.model()]
+          )
+
+          case result do
+            %AgentCore.Types.AgentToolResult{content: content, details: details} ->
+              text =
+                content
+                |> Enum.filter(&match?(%TextContent{}, &1))
+                |> Enum.map(& &1.text)
+                |> Enum.join(" ")
+
+              assert text =~ "hello" or text =~ "Hello",
+                "Expected greeting in response, got: #{text}"
+
+              assert details[:engine] == "kimi"
+
+            {:error, reason} ->
+              flunk("Task tool (kimi engine) failed: #{inspect(reason)}")
           end
       end
     end

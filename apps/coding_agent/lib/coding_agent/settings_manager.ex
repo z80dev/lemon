@@ -58,6 +58,16 @@ defmodule CodingAgent.SettingsManager do
           "autoApprove": true
         }
       }
+
+  ## Kimi CLI Configuration
+
+  Configure Kimi CLI behavior under a `kimi` section:
+
+      {
+        "kimi": {
+          "extraArgs": ["--some-flag"]
+        }
+      }
   """
 
   alias CodingAgent.Config
@@ -103,7 +113,10 @@ defmodule CodingAgent.SettingsManager do
           theme: String.t(),
 
           # Codex CLI settings
-          codex: map()
+          codex: map(),
+
+          # Kimi CLI settings
+          kimi: map()
         }
 
   defstruct [
@@ -139,7 +152,10 @@ defmodule CodingAgent.SettingsManager do
     theme: "default",
 
     # Codex CLI settings
-    codex: %{}
+    codex: %{},
+
+    # Kimi CLI settings
+    kimi: %{}
   ]
 
   # Fields that should be concatenated when merging instead of replaced
@@ -494,7 +510,10 @@ defmodule CodingAgent.SettingsManager do
       theme: map["theme"] || "default",
 
       # Codex CLI settings
-      codex: parse_codex_settings(map["codex"])
+      codex: parse_codex_settings(map["codex"]),
+
+      # Kimi CLI settings
+      kimi: parse_kimi_settings(map["kimi"])
     }
   end
 
@@ -536,7 +555,10 @@ defmodule CodingAgent.SettingsManager do
       "theme" => settings.theme,
 
       # Codex CLI settings
-      "codex" => encode_codex_settings(settings.codex)
+      "codex" => encode_codex_settings(settings.codex),
+
+      # Kimi CLI settings
+      "kimi" => encode_kimi_settings(settings.kimi)
     }
     |> reject_nil_values()
   end
@@ -643,6 +665,34 @@ defmodule CodingAgent.SettingsManager do
   end
 
   defp encode_codex_settings(_), do: nil
+
+  defp parse_kimi_settings(nil), do: %{}
+
+  defp parse_kimi_settings(map) when is_map(map) do
+    extra_args =
+      case map["extraArgs"] || map["extra_args"] do
+        list when is_list(list) -> Enum.filter(list, &is_binary/1)
+        _ -> nil
+      end
+
+    %{}
+    |> maybe_put(:extra_args, extra_args)
+  end
+
+  defp parse_kimi_settings(_), do: %{}
+
+  defp encode_kimi_settings(%{} = kimi) do
+    %{
+      "extraArgs" => Map.get(kimi, :extra_args)
+    }
+    |> reject_nil_values()
+    |> case do
+      map when map == %{} -> nil
+      map -> map
+    end
+  end
+
+  defp encode_kimi_settings(_), do: nil
 
   defp encode_provider_config(nil), do: %{}
 

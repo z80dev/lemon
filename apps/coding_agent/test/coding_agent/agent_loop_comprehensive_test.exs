@@ -17,7 +17,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
 
   use ExUnit.Case, async: true
 
-  alias AgentCore.Agent
+  alias AgentCore.Agent, as: CoreAgent
   alias AgentCore.Test.Mocks
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.{AssistantMessage, TextContent, ToolCall, Usage, Cost}
@@ -69,7 +69,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
     ]
 
     merged_opts = Keyword.merge(default_opts, opts)
-    Agent.start_link(merged_opts)
+    CoreAgent.start_link(merged_opts)
   end
 
   defp subscribe_and_collect(session, timeout \\ 5000) do
@@ -77,19 +77,26 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
     collect_events([], timeout)
   end
 
-  defp collect_events(events, timeout) do
-    receive do
-      {:session_event, _session_id, {:agent_end, _messages}} ->
-        Enum.reverse(events ++ [{:agent_end, []}])
+  defp collect_events(events, timeout, deadline \\ nil) do
+    deadline = deadline || System.monotonic_time(:millisecond) + timeout
+    remaining = max(0, deadline - System.monotonic_time(:millisecond))
 
-      {:session_event, _session_id, {:error, reason, _partial}} ->
-        Enum.reverse(events ++ [{:error, reason}])
+    if remaining == 0 do
+      Enum.reverse(events ++ [{:timeout, timeout}])
+    else
+      receive do
+        {:session_event, _session_id, {:agent_end, _messages}} ->
+          Enum.reverse(events ++ [{:agent_end, []}])
 
-      {:session_event, _session_id, event} ->
-        collect_events(events ++ [event], timeout)
-    after
-      timeout ->
-        Enum.reverse(events ++ [{:timeout, timeout}])
+        {:session_event, _session_id, {:error, reason, _partial}} ->
+          Enum.reverse(events ++ [{:error, reason}])
+
+        {:session_event, _session_id, event} ->
+          collect_events(events ++ [event], timeout, deadline)
+      after
+        remaining ->
+          Enum.reverse(events ++ [{:timeout, timeout}])
+      end
     end
   end
 
@@ -98,6 +105,22 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
     |> Enum.filter(&match?(%TextContent{}, &1))
     |> Enum.map(& &1.text)
     |> Enum.join("\n")
+  end
+
+  defp wait_for_idle(session, timeout_ms \\ 5_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+
+    cond do
+      Session.get_state(session).is_streaming == false ->
+        :ok
+
+      System.monotonic_time(:millisecond) > deadline ->
+        {:error, :timeout}
+
+      true ->
+        Process.sleep(50)
+        wait_for_idle(session, timeout_ms)
+    end
   end
 
   defp delayed_stream_fn(response, delay_ms) do
@@ -116,10 +139,10 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
   end
 
   defp multi_response_stream_fn(responses) do
-    {:ok, agent} = Agent.start_link(fn -> responses end)
+    {:ok, agent} = Elixir.Agent.start_link(fn -> responses end)
 
     fn _model, _context, _options ->
-      case Agent.get_and_update(agent, fn
+      case Elixir.Agent.get_and_update(agent, fn
              [] -> {nil, []}
              [head | tail] -> {head, tail}
            end) do
@@ -173,7 +196,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       session = start_session(stream_fn: Mocks.mock_stream_fn_single(response))
 
       :ok = Session.prompt(session, "Hello")
-      events = subscribe_and_collect(session)
+      events = subscribe_and_collect(session, 10_000)
 
       assert Enum.any?(events, &match?({:agent_start}, &1))
       assert Enum.any?(events, &match?({:turn_start}, &1))
@@ -196,12 +219,12 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
 
       # Should have tool execution events
       assert Enum.any?(events, fn
-        {:tool_start, "call_1", "echo", _args} -> true
+        {:tool_execution_start, "call_1", "echo", _args} -> true
         _ -> false
       end)
 
       assert Enum.any?(events, fn
-        {:tool_end, "call_1", "echo", _result} -> true
+        {:tool_execution_end, "call_1", "echo", _result, _is_error} -> true
         _ -> false
       end)
 
@@ -227,7 +250,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       events = subscribe_and_collect(session)
 
       # Both tools should have been called
-      tool_starts = Enum.filter(events, &match?({:tool_start, _, _, _}, &1))
+      tool_starts = Enum.filter(events, &match?({:tool_execution_start, _, _, _}, &1))
       assert length(tool_starts) >= 2
     end
 
@@ -247,7 +270,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       events = subscribe_and_collect(session)
 
       # Both tool calls should be executed
-      tool_ends = Enum.filter(events, &match?({:tool_end, _, "add", _}, &1))
+      tool_ends = Enum.filter(events, &match?({:tool_execution_end, _, "add", _, _}, &1))
       assert length(tool_ends) == 2
     end
 
@@ -266,7 +289,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
 
       # Tool should end with error result
       tool_end = Enum.find(events, fn
-        {:tool_end, "call_err", "error_tool", result} -> true
+        {:tool_execution_end, "call_err", "error_tool", result, _is_error} -> true
         _ -> false
       end)
       assert tool_end != nil
@@ -361,7 +384,9 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
 
       for i <- 1..5 do
         :ok = Session.prompt(session, "Turn #{i}")
-        _events = subscribe_and_collect(session)
+        events = subscribe_and_collect(session, 10_000)
+        assert Enum.any?(events, &match?({:agent_end, _}, &1))
+        assert :ok = wait_for_idle(session, 5_000)
       end
 
       messages = Session.get_messages(session)
@@ -764,7 +789,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       events = subscribe_and_collect(session)
 
       tool_end = Enum.find(events, fn
-        {:tool_end, "call_complex", "complex_tool", _result} -> true
+        {:tool_execution_end, "call_complex", "complex_tool", _result, _is_error} -> true
         _ -> false
       end)
       assert tool_end != nil
@@ -906,10 +931,10 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       recovery_response = Mocks.assistant_message("Recovered")
 
       # Create session that will error first, then work
-      {:ok, attempt_agent} = Agent.start_link(fn -> 0 end)
+      {:ok, attempt_agent} = Elixir.Agent.start_link(fn -> 0 end)
 
       dynamic_stream_fn = fn model, context, options ->
-        attempt = Agent.get_and_update(attempt_agent, fn n -> {n, n + 1} end)
+        attempt = Elixir.Agent.get_and_update(attempt_agent, fn n -> {n, n + 1} end)
 
         if attempt == 0 do
           {:error, :temporary_error}
@@ -946,7 +971,9 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
 
       for i <- 1..3 do
         :ok = Session.prompt(session, "Prompt #{i}")
-        _events = subscribe_and_collect(session)
+        events = subscribe_and_collect(session, 10_000)
+        assert Enum.any?(events, &match?({:agent_end, _}, &1))
+        assert :ok = wait_for_idle(session, 5_000)
       end
 
       messages = Session.get_messages(session)

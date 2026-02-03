@@ -86,8 +86,8 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
   defp get_status_report("", include_details, cwd) do
     # No session_id - fall back to listing all loaded extensions with tool conflicts
     extensions = CodingAgent.Extensions.list_extensions()
-    tool_conflicts = CodingAgent.ToolRegistry.tool_conflict_report(cwd)
     {load_errors, loaded_at} = CodingAgent.Extensions.last_load_errors()
+    tool_conflicts = CodingAgent.ToolRegistry.tool_conflict_report(cwd)
 
     output = format_fallback_report(extensions, tool_conflicts, load_errors, loaded_at, include_details)
 
@@ -113,8 +113,8 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
       {:error, :not_found} ->
         # Fall back to listing all loaded extensions with tool conflicts
         extensions = CodingAgent.Extensions.list_extensions()
-        tool_conflicts = CodingAgent.ToolRegistry.tool_conflict_report(cwd)
         {load_errors, loaded_at} = CodingAgent.Extensions.last_load_errors()
+        tool_conflicts = CodingAgent.ToolRegistry.tool_conflict_report(cwd)
 
         output = format_fallback_report(extensions, tool_conflicts, load_errors, loaded_at, include_details)
 

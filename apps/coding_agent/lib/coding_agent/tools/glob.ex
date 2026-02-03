@@ -70,7 +70,10 @@ defmodule CodingAgent.Tools.Glob do
     if pattern == "" do
       {:error, "Pattern is required"}
     else
-      base_dir = resolve_path(path || cwd, cwd)
+      if not (is_integer(max_results) and max_results > 0) do
+        {:error, "max_results must be a positive integer"}
+      else
+        base_dir = resolve_path(path || cwd, cwd)
 
       glob_pattern =
         if Path.type(pattern) == :absolute do
@@ -107,14 +110,15 @@ defmodule CodingAgent.Tools.Glob do
             end
         end
 
-      %AgentToolResult{
-        content: [%TextContent{text: Enum.join(output_lines, "\n")}],
-        details: %{
-          count: length(entries),
-          truncated: truncated,
-          base_path: base_dir
+        %AgentToolResult{
+          content: [%TextContent{text: Enum.join(output_lines, "\n")}],
+          details: %{
+            count: length(entries),
+            truncated: truncated,
+            base_path: base_dir
+          }
         }
-      }
+      end
     end
   end
 

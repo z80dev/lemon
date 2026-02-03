@@ -22,6 +22,12 @@ CodingAgent.Config.ensure_dirs!()
 # Compile test support files
 Code.require_file("support/mock_ui.ex", __DIR__)
 
+# Load shared test support from agent_core app
+agent_core_support = Path.join([__DIR__, "..", "..", "agent_core", "test", "support", "mocks.ex"])
+if File.exists?(agent_core_support) do
+  Code.compile_file(agent_core_support)
+end
+
 # Load shared test support from ai app (for integration tests)
 ai_support = Path.join([__DIR__, "..", "..", "ai", "test", "support", "integration_config.ex"])
 if File.exists?(ai_support) do

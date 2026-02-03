@@ -165,14 +165,18 @@ defmodule CodingAgent.Config do
       "--home-user-project--"
 
       iex> CodingAgent.Config.encode_cwd("/")
-      "----"
+      "------"
   """
   @spec encode_cwd(String.t()) :: String.t()
   def encode_cwd(cwd) do
-    cwd
-    |> String.replace(~r{^[/\\]}, "")
-    |> String.replace(~r{[/\\:]+}, "-")
-    |> then(&"--#{&1}--")
+    encoded =
+      cwd
+      |> String.replace(~r{^[/\\]}, "")
+      |> String.replace(~r{[/\\:]+}, "-")
+
+    encoded = if encoded == "", do: "--", else: encoded
+
+    "--#{encoded}--"
   end
 
   @doc """
@@ -191,11 +195,16 @@ defmodule CodingAgent.Config do
   """
   @spec decode_cwd(String.t()) :: String.t()
   def decode_cwd(encoded) do
-    encoded
-    |> String.trim_leading("--")
-    |> String.trim_trailing("--")
-    |> String.replace("-", "/")
-    |> then(&"/#{&1}")
+    inner =
+      encoded
+      |> String.trim_leading("--")
+      |> String.trim_trailing("--")
+
+    case inner do
+      "" -> "/"
+      "--" -> "/"
+      _ -> "/" <> String.replace(inner, "-", "/")
+    end
   end
 
   # ============================================================================

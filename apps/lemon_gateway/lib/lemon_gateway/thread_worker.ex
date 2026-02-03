@@ -288,9 +288,7 @@ defmodule LemonGateway.ThreadWorker do
           Process.demonitor(state.run_mon_ref, [:flush])
         end
 
-        # Coalesce consecutive :collect jobs at the front of the queue
-        coalesced_jobs = coalesce_collect_jobs(state.jobs)
-        %{state | current_run: nil, current_slot_ref: nil, run_mon_ref: nil, jobs: coalesced_jobs}
+        %{state | current_run: nil, current_slot_ref: nil, run_mon_ref: nil, jobs: state.jobs}
       else
         state
       end

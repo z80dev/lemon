@@ -27,7 +27,8 @@ defmodule LemonGateway.Run do
           renderer_state: nil,
           completed: false,
           sent_final: false,
-          lock_release_fn: release_fn
+          lock_release_fn: release_fn,
+          last_resume: job.resume
         }
 
         {:ok, state, {:continue, {:start_run, args}}}
@@ -67,10 +68,10 @@ defmodule LemonGateway.Run do
     end
   end
 
-  # Derive lock key from job - use resume token's engine+value if present, otherwise scope
-  defp lock_key_for(%Job{resume: %LemonGateway.Types.ResumeToken{engine: engine, value: value}})
-       when is_binary(value) and is_binary(engine) do
-    {:resume, engine, value}
+  # Derive lock key from job - use resume token value if present, otherwise scope
+  defp lock_key_for(%Job{resume: %LemonGateway.Types.ResumeToken{value: value}})
+       when is_binary(value) do
+    {:resume, value}
   end
 
   defp lock_key_for(%Job{scope: scope}) do
@@ -131,13 +132,14 @@ defmodule LemonGateway.Run do
       end
 
     case event do
-      %Event.Started{} ->
+      %Event.Started{resume: resume} ->
         # Note: Do NOT store chat state here. Storing on Started allows new messages
         # to auto-resume to this token while the run is still active, creating
         # concurrent runs. Chat state is stored in finalize/2 after Completed.
-        {:noreply, state}
+        {:noreply, %{state | last_resume: resume || state.last_resume}}
 
-      %Event.Completed{} = completed ->
+      %Event.Completed{resume: resume} = completed ->
+        state = %{state | last_resume: resume || state.last_resume}
         finalize(state, completed)
         {:stop, :normal, state}
 
@@ -224,7 +226,15 @@ defmodule LemonGateway.Run do
         _ = state.engine.cancel(state.cancel_ctx)
       end
 
-      completed = %Event.Completed{engine: engine_id_for(state.job), ok: false, error: reason, answer: ""}
+      resume = state.last_resume || state.job.resume
+
+      completed = %Event.Completed{
+        engine: engine_id_for(state.job),
+        resume: resume,
+        ok: false,
+        error: reason,
+        answer: ""
+      }
       finalize(state, completed)
       {:stop, :normal, %{state | completed: true}}
     end

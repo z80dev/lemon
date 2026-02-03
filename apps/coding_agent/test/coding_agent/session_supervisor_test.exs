@@ -125,6 +125,13 @@ defmodule CodingAgent.SessionSupervisorTest do
     end
 
     test "returns healthy when all sessions are healthy" do
+      # Stop any existing sessions to ensure a clean slate
+      for pid <- SessionSupervisor.list_sessions() do
+        SessionSupervisor.stop_session(pid)
+      end
+
+      Process.sleep(50)
+
       {:ok, _pid1} = SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model())
       {:ok, _pid2} = SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model(id: "mock-2"))
 

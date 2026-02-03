@@ -13,7 +13,7 @@ defmodule CodingAgent.Tools.TaskTest do
       assert tool.label == "Run Task"
       assert tool.description =~ "subtask"
       assert tool.parameters["type"] == "object"
-      assert tool.parameters["required"] == ["description", "prompt"]
+      assert tool.parameters["required"] == []
       assert is_function(tool.execute, 4)
     end
 
@@ -21,10 +21,13 @@ defmodule CodingAgent.Tools.TaskTest do
       tool = Task.tool("/tmp")
       props = tool.parameters["properties"]
 
+      assert Map.has_key?(props, "action")
       assert Map.has_key?(props, "description")
       assert Map.has_key?(props, "prompt")
+      assert Map.has_key?(props, "task_id")
       assert Map.has_key?(props, "engine")
       assert Map.has_key?(props, "role")
+      assert Map.has_key?(props, "async")
       assert props["description"]["description"] =~ "3-5 words"
     end
   end
@@ -166,7 +169,7 @@ defmodule CodingAgent.Tools.TaskTest do
           []
         )
 
-      assert {:error, "Engine must be one of: internal, codex, claude"} = result
+      assert {:error, "Engine must be one of: internal, codex, claude, kimi"} = result
     end
 
     test "returns error when engine is not a string" do
@@ -202,7 +205,7 @@ defmodule CodingAgent.Tools.TaskTest do
           []
         )
 
-      assert {:error, "Engine must be one of: internal, codex, claude"} = result
+      assert {:error, "Engine must be one of: internal, codex, claude, kimi"} = result
     end
   end
 
@@ -230,6 +233,13 @@ defmodule CodingAgent.Tools.TaskTest do
 
       assert {:error, msg} = result
       assert msg =~ "Unknown role" or msg =~ "Failed to start"
+    end
+  end
+
+  describe "execute/6 - poll action" do
+    test "returns error when task_id is missing" do
+      result = Task.execute("call_1", %{"action" => "poll"}, nil, nil, "/tmp", [])
+      assert {:error, "task_id is required for action=poll"} = result
     end
   end
 

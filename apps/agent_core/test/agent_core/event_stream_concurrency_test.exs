@@ -1095,27 +1095,26 @@ defmodule AgentCore.EventStreamConcurrencyTest do
     end
 
     test "rapid create/destroy cycle does not leak resources" do
-      initial_process_count = length(Process.list())
+      streams =
+        for _ <- 1..100 do
+          {:ok, stream} = EventStream.start_link()
 
-      for _ <- 1..100 do
-        {:ok, stream} = EventStream.start_link()
+          for i <- 1..10 do
+            EventStream.push(stream, {:event, i})
+          end
 
-        for i <- 1..10 do
-          EventStream.push(stream, {:event, i})
+          EventStream.cancel(stream, :rapid_cycle)
+          stream
         end
 
-        EventStream.cancel(stream, :rapid_cycle)
-        Process.sleep(5)
-      end
-
       # Give some time for cleanup
-      Process.sleep(100)
+      deadline = System.monotonic_time(:millisecond) + 1000
 
-      final_process_count = length(Process.list())
+      Enum.each(streams, fn pid ->
+        wait_until_dead(pid, deadline)
+      end)
 
-      # Should not have leaked many processes
-      # Allow some variance for test framework processes
-      assert final_process_count - initial_process_count < 20
+      assert Enum.all?(streams, fn pid -> not Process.alive?(pid) end)
     end
 
     test "stream with full queue cancels cleanly" do
@@ -1256,6 +1255,13 @@ defmodule AgentCore.EventStreamConcurrencyTest do
         expected = ["stream_#{idx}"]
         assert {:ok, ^expected} = result
       end
+    end
+  end
+
+  defp wait_until_dead(pid, deadline_ms) do
+    if Process.alive?(pid) and System.monotonic_time(:millisecond) < deadline_ms do
+      Process.sleep(10)
+      wait_until_dead(pid, deadline_ms)
     end
   end
 end

@@ -339,6 +339,18 @@ defmodule CodingAgent.SettingsManagerTest do
       assert settings.codex[:extra_args] == ["-c", "notify=[]"]
       assert settings.codex[:auto_approve] == true
     end
+
+    test "parses kimi settings section" do
+      map = %{
+        "kimi" => %{
+          "extraArgs" => ["--foo", "--bar"]
+        }
+      }
+
+      settings = SettingsManager.from_map(map)
+
+      assert settings.kimi[:extra_args] == ["--foo", "--bar"]
+    end
   end
 
   describe "from_map/1 scoped models parsing" do
@@ -456,6 +468,18 @@ defmodule CodingAgent.SettingsManagerTest do
 
       assert map["codex"]["extraArgs"] == ["-c", "notify=[]"]
       assert map["codex"]["autoApprove"] == true
+    end
+
+    test "encodes kimi settings section" do
+      settings = %SettingsManager{
+        kimi: %{
+          extra_args: ["--alpha", "--beta"]
+        }
+      }
+
+      map = SettingsManager.to_map(settings)
+
+      assert map["kimi"]["extraArgs"] == ["--alpha", "--beta"]
     end
   end
 

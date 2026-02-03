@@ -27,6 +27,7 @@ defmodule LemonGateway.ChatStateTest do
       assert state.last_engine == nil
       assert state.last_resume_token == nil
       assert state.updated_at == nil
+      assert state.expires_at == nil
     end
 
     test "returns a proper ChatState struct" do
@@ -34,12 +35,12 @@ defmodule LemonGateway.ChatStateTest do
       assert %ChatState{} = state
     end
 
-    test "struct has exactly three fields" do
+    test "struct has exactly four fields" do
       state = ChatState.new()
       # Map.from_struct returns all fields defined in defstruct
       fields = Map.from_struct(state)
-      assert map_size(fields) == 3
-      assert Map.keys(fields) |> Enum.sort() == [:last_engine, :last_resume_token, :updated_at]
+      assert map_size(fields) == 4
+      assert Map.keys(fields) |> Enum.sort() == [:expires_at, :last_engine, :last_resume_token, :updated_at]
     end
   end
 
@@ -48,12 +49,14 @@ defmodule LemonGateway.ChatStateTest do
       state = ChatState.new(%{
         last_engine: "claude",
         last_resume_token: "abc123",
-        updated_at: 1234567890
+        updated_at: 1234567890,
+        expires_at: 1234569999
       })
 
       assert state.last_engine == "claude"
       assert state.last_resume_token == "abc123"
       assert state.updated_at == 1234567890
+      assert state.expires_at == 1234569999
     end
 
     test "creates ChatState with partial atom keys" do
@@ -62,6 +65,7 @@ defmodule LemonGateway.ChatStateTest do
       assert state.last_engine == "codex"
       assert state.last_resume_token == nil
       assert state.updated_at == nil
+      assert state.expires_at == nil
     end
 
     test "creates ChatState with empty map" do
@@ -70,6 +74,7 @@ defmodule LemonGateway.ChatStateTest do
       assert state.last_engine == nil
       assert state.last_resume_token == nil
       assert state.updated_at == nil
+      assert state.expires_at == nil
     end
   end
 
@@ -78,12 +83,14 @@ defmodule LemonGateway.ChatStateTest do
       state = ChatState.new(%{
         "last_engine" => "gemini",
         "last_resume_token" => "xyz789",
-        "updated_at" => 9876543210
+        "updated_at" => 9876543210,
+        "expires_at" => 9876549999
       })
 
       assert state.last_engine == "gemini"
       assert state.last_resume_token == "xyz789"
       assert state.updated_at == 9876543210
+      assert state.expires_at == 9876549999
     end
 
     test "creates ChatState with partial string keys" do
@@ -92,6 +99,7 @@ defmodule LemonGateway.ChatStateTest do
       assert state.last_engine == nil
       assert state.last_resume_token == "partial_token"
       assert state.updated_at == nil
+      assert state.expires_at == nil
     end
   end
 
@@ -339,6 +347,7 @@ defmodule LemonGateway.ChatStateTest do
       map = Map.from_struct(state)
 
       assert map == %{
+               expires_at: nil,
                last_engine: "test_engine",
                last_resume_token: "test_token",
                updated_at: 1609459200000
@@ -347,7 +356,7 @@ defmodule LemonGateway.ChatStateTest do
 
     test "Map.keys/1 returns all field names", %{state: state} do
       keys = Map.keys(state) |> Enum.reject(&(&1 == :__struct__)) |> Enum.sort()
-      assert keys == [:last_engine, :last_resume_token, :updated_at]
+      assert keys == [:expires_at, :last_engine, :last_resume_token, :updated_at]
     end
 
     test "Map.values/1 returns all values plus struct module" do

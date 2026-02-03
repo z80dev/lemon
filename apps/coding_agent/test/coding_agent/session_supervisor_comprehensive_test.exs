@@ -135,6 +135,26 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
     assert_receive {:DOWN, ^ref, :process, ^pid, _}, timeout
   end
 
+  defp wait_for_registry_cleanup(session_id, timeout_ms \\ 1000) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_for_registry_cleanup(session_id, deadline)
+  end
+
+  defp do_wait_for_registry_cleanup(session_id, deadline) do
+    case SessionRegistry.lookup(session_id) do
+      :error ->
+        :ok
+
+      {:ok, _pid} ->
+        if System.monotonic_time(:millisecond) >= deadline do
+          {:error, :timeout}
+        else
+          Process.sleep(10)
+          do_wait_for_registry_cleanup(session_id, deadline)
+        end
+    end
+  end
+
   setup do
     # Ensure registry is started
     unless Process.whereis(SessionRegistry) do
@@ -628,7 +648,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       assert_receive {:DOWN, ^agent_ref, :process, ^agent_pid, _}, 1000
 
       # Registry should be cleaned up
-      assert :error = SessionRegistry.lookup(session_id)
+      assert :ok = wait_for_registry_cleanup(session_id)
     end
 
     test "session resources are cleaned up on crash" do
@@ -639,7 +659,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       Process.sleep(100)
 
       # Registry should be cleaned up
-      assert :error = SessionRegistry.lookup(session_id)
+      assert :ok = wait_for_registry_cleanup(session_id)
     end
 
     test "subscribers are cleaned up when session stops" do
@@ -669,7 +689,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       Process.sleep(50)
 
       # Session 1 should be cleaned up
-      assert :error = SessionRegistry.lookup(session_id1)
+      assert :ok = wait_for_registry_cleanup(session_id1)
 
       # Session 2 should still be registered
       assert {:ok, ^pid2} = SessionRegistry.lookup(session_id2)
