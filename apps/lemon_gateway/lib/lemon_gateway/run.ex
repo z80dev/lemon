@@ -170,12 +170,46 @@ defmodule LemonGateway.Run do
       true ->
         case state.engine.steer(state.cancel_ctx, job.text) do
           :ok ->
-            # Steering succeeded - no action needed
+            # Steering succeeded - notify worker so it can clear pending steer
+            send(worker_pid, {:steer_accepted, job})
             {:noreply, state}
 
           {:error, _reason} ->
             # Steering failed - reject so it can be re-enqueued as followup
             send(worker_pid, {:steer_rejected, job})
+            {:noreply, state}
+        end
+    end
+  end
+
+  def handle_cast({:steer_backlog, %Job{} = job, worker_pid}, state) do
+    cond do
+      # Run already completed - reject steer_backlog
+      state.completed ->
+        send(worker_pid, {:steer_backlog_rejected, job})
+        {:noreply, state}
+
+      # Engine not yet initialized - reject steer_backlog
+      is_nil(state.engine) or is_nil(state.cancel_ctx) ->
+        send(worker_pid, {:steer_backlog_rejected, job})
+        {:noreply, state}
+
+      # Engine doesn't support steering - reject steer_backlog
+      not state.engine.supports_steer?() ->
+        send(worker_pid, {:steer_backlog_rejected, job})
+        {:noreply, state}
+
+      # Engine supports steering - attempt to steer
+      true ->
+        case state.engine.steer(state.cancel_ctx, job.text) do
+          :ok ->
+            # Steering succeeded - notify worker so it can clear pending steer
+            send(worker_pid, {:steer_backlog_accepted, job})
+            {:noreply, state}
+
+          {:error, _reason} ->
+            # Steering failed - reject so it can be re-enqueued as collect
+            send(worker_pid, {:steer_backlog_rejected, job})
             {:noreply, state}
         end
     end

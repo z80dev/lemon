@@ -18,6 +18,10 @@ defmodule LemonGateway.Store do
   alias LemonGateway.Store.EtsBackend
 
   @default_backend EtsBackend
+  # Default TTL: 24 hours in milliseconds
+  @default_chat_state_ttl_ms 24 * 60 * 60 * 1000
+  # Sweep interval: 5 minutes in milliseconds
+  @sweep_interval_ms 5 * 60 * 1000
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -30,6 +34,9 @@ defmodule LemonGateway.Store do
 
   @spec get_chat_state(term()) :: map() | nil
   def get_chat_state(scope), do: GenServer.call(__MODULE__, {:get_chat_state, scope})
+
+  @spec delete_chat_state(term()) :: :ok
+  def delete_chat_state(scope), do: GenServer.cast(__MODULE__, {:delete_chat_state, scope})
 
   # Run Events API
 
@@ -87,20 +94,52 @@ defmodule LemonGateway.Store do
     config = Application.get_env(:lemon_gateway, __MODULE__, [])
     backend = Keyword.get(config, :backend, @default_backend)
     backend_opts = Keyword.get(config, :backend_opts, [])
+    chat_state_ttl_ms = Keyword.get(config, :chat_state_ttl_ms, @default_chat_state_ttl_ms)
 
     case backend.init(backend_opts) do
       {:ok, backend_state} ->
-        {:ok, %{backend: backend, backend_state: backend_state}}
+        # Schedule periodic sweep for expired chat states
+        schedule_sweep()
+
+        {:ok,
+         %{
+           backend: backend,
+           backend_state: backend_state,
+           chat_state_ttl_ms: chat_state_ttl_ms
+         }}
 
       {:error, reason} ->
         {:stop, {:backend_init_failed, reason}}
     end
   end
 
+  defp schedule_sweep do
+    Process.send_after(self(), :sweep_expired_chat_states, @sweep_interval_ms)
+  end
+
   @impl true
   def handle_call({:get_chat_state, scope}, _from, state) do
     {:ok, value, backend_state} = state.backend.get(state.backend_state, :chat, scope)
-    {:reply, value, %{state | backend_state: backend_state}}
+
+    # Check if chat state is expired (lazy expiry)
+    {result, backend_state} =
+      case value do
+        %{expires_at: expires_at} when is_integer(expires_at) ->
+          now = System.system_time(:millisecond)
+
+          if now > expires_at do
+            # Expired - delete and return nil
+            {:ok, backend_state} = state.backend.delete(backend_state, :chat, scope)
+            {nil, backend_state}
+          else
+            {value, backend_state}
+          end
+
+        _ ->
+          {value, backend_state}
+      end
+
+    {:reply, result, %{state | backend_state: backend_state}}
   end
 
   def handle_call({:get_run_by_progress, scope, progress_msg_id}, _from, state) do
@@ -132,7 +171,23 @@ defmodule LemonGateway.Store do
 
   @impl true
   def handle_cast({:put_chat_state, scope, value}, state) do
-    {:ok, backend_state} = state.backend.put(state.backend_state, :chat, scope, value)
+    # Calculate expires_at based on TTL
+    now = System.system_time(:millisecond)
+    expires_at = now + state.chat_state_ttl_ms
+
+    # Add expires_at to the value (works with both maps and ChatState structs)
+    value_with_expiry =
+      case value do
+        %{__struct__: _} = struct -> %{struct | expires_at: expires_at}
+        map when is_map(map) -> Map.put(map, :expires_at, expires_at)
+      end
+
+    {:ok, backend_state} = state.backend.put(state.backend_state, :chat, scope, value_with_expiry)
+    {:noreply, %{state | backend_state: backend_state}}
+  end
+
+  def handle_cast({:delete_chat_state, scope}, state) do
+    {:ok, backend_state} = state.backend.delete(state.backend_state, :chat, scope)
     {:noreply, %{state | backend_state: backend_state}}
   end
 
@@ -178,5 +233,29 @@ defmodule LemonGateway.Store do
     key = {scope, progress_msg_id}
     {:ok, backend_state} = state.backend.delete(state.backend_state, :progress, key)
     {:noreply, %{state | backend_state: backend_state}}
+  end
+
+  @impl true
+  def handle_info(:sweep_expired_chat_states, state) do
+    backend_state = sweep_expired_chat_states(state.backend, state.backend_state)
+    schedule_sweep()
+    {:noreply, %{state | backend_state: backend_state}}
+  end
+
+  defp sweep_expired_chat_states(backend, backend_state) do
+    {:ok, all_chat_states, backend_state} = backend.list(backend_state, :chat)
+    now = System.system_time(:millisecond)
+
+    # Find and delete expired entries
+    Enum.reduce(all_chat_states, backend_state, fn {scope, value}, acc_state ->
+      case value do
+        %{expires_at: expires_at} when is_integer(expires_at) and now > expires_at ->
+          {:ok, new_state} = backend.delete(acc_state, :chat, scope)
+          new_state
+
+        _ ->
+          acc_state
+      end
+    end)
   end
 end
