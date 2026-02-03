@@ -6,9 +6,24 @@ defmodule CodingAgent.Application do
 
   @impl true
   def start(_type, _args) do
+    lane_caps =
+      Application.get_env(:coding_agent, :lane_caps, %{
+        main: 4,
+        subagent: 8,
+        background_exec: 2
+      })
+
     children = [
       {Registry, keys: :unique, name: CodingAgent.SessionRegistry},
-      CodingAgent.SessionSupervisor
+      {Registry, keys: :unique, name: CodingAgent.ProcessRegistry},
+      CodingAgent.SessionSupervisor,
+      {Task.Supervisor, name: CodingAgent.TaskSupervisor},
+      {CodingAgent.TaskStoreServer, name: CodingAgent.TaskStoreServer},
+      {CodingAgent.RunGraphServer, name: CodingAgent.RunGraphServer},
+      {CodingAgent.ProcessStoreServer, name: CodingAgent.ProcessStoreServer},
+      {CodingAgent.ProcessManager, name: CodingAgent.ProcessManager},
+      {CodingAgent.LaneQueue, name: CodingAgent.LaneQueue, caps: lane_caps, task_supervisor: CodingAgent.TaskSupervisor},
+      {CodingAgent.CompactionHooks, name: CodingAgent.CompactionHooks}
     ]
 
     opts = [strategy: :one_for_one, name: CodingAgent.Supervisor]

@@ -202,7 +202,7 @@ defmodule CodingAgent.ConfigTest do
       result = Config.encode_cwd("/")
 
       # Leading slash stripped, then wrapped
-      assert result == "----"
+      assert result == "------"
     end
 
     test "handles multiple consecutive slashes" do
@@ -242,7 +242,7 @@ defmodule CodingAgent.ConfigTest do
     test "handles empty string" do
       result = Config.encode_cwd("")
 
-      assert result == "----"
+      assert result == "------"
     end
   end
 
@@ -266,7 +266,7 @@ defmodule CodingAgent.ConfigTest do
     end
 
     test "handles root path encoding" do
-      result = Config.decode_cwd("----")
+      result = Config.decode_cwd("------")
 
       assert result == "/"
     end

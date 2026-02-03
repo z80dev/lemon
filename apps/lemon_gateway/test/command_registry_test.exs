@@ -102,7 +102,9 @@ defmodule LemonGateway.CommandRegistryTest do
     Application.put_env(:lemon_gateway, :commands, [MockCommand])
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-    assert catch_exit(CommandRegistry.get_command!("unknown"))
+    assert_raise ArgumentError, fn ->
+      CommandRegistry.get_command!("unknown")
+    end
   end
 
   test "all_commands returns list of tuples" do

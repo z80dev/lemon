@@ -179,13 +179,11 @@ defmodule LemonGateway.Telegram.Outbox do
     truncated_text = truncate_text(text, engine)
     {formatted_text, parse_mode} = format_text(truncated_text, state.use_markdown)
 
-    case state.api_mod.edit_message_text(state.token, chat_id, message_id, formatted_text, parse_mode) do
-      {:ok, result} ->
-        {:ok, result}
-
-      {:error, reason} ->
-        handle_api_error(reason)
-    end
+    state
+    |> safe_api_call(fn ->
+      state.api_mod.edit_message_text(state.token, chat_id, message_id, formatted_text, parse_mode)
+    end)
+    |> handle_api_result()
   end
 
   defp execute_op(state, {:send, chat_id, payload}) do
@@ -195,24 +193,33 @@ defmodule LemonGateway.Telegram.Outbox do
     truncated_text = truncate_text(text, engine)
     {formatted_text, parse_mode} = format_text(truncated_text, state.use_markdown)
 
-    case state.api_mod.send_message(state.token, chat_id, formatted_text, reply_to, parse_mode) do
-      {:ok, result} ->
-        {:ok, result}
-
-      {:error, reason} ->
-        handle_api_error(reason)
-    end
+    state
+    |> safe_api_call(fn ->
+      state.api_mod.send_message(state.token, chat_id, formatted_text, reply_to, parse_mode)
+    end)
+    |> handle_api_result()
   end
 
   defp execute_op(state, {:delete, chat_id, message_id}) do
-    case state.api_mod.delete_message(state.token, chat_id, message_id) do
-      {:ok, result} ->
-        {:ok, result}
+    state
+    |> safe_api_call(fn ->
+      state.api_mod.delete_message(state.token, chat_id, message_id)
+    end)
+    |> handle_api_result()
+  end
 
-      {:error, reason} ->
-        handle_api_error(reason)
+  defp safe_api_call(_state, fun) do
+    try do
+      fun.()
+    rescue
+      error -> {:error, {:api_error, error}}
+    catch
+      :exit, reason -> {:error, {:api_exit, reason}}
     end
   end
+
+  defp handle_api_result({:ok, _} = ok), do: ok
+  defp handle_api_result({:error, reason}), do: handle_api_error(reason)
 
   defp handle_api_error({:http_error, 429, response_body}) do
     # Rate limited - check for retry_after in response
@@ -245,6 +252,14 @@ defmodule LemonGateway.Telegram.Outbox do
 
   defp handle_api_error({:failed_connect, _} = reason) do
     {:error, reason, @base_backoff_ms}
+  end
+
+  defp handle_api_error({:api_exit, reason}) do
+    {:error, {:api_exit, reason}, @base_backoff_ms}
+  end
+
+  defp handle_api_error({:api_error, reason}) do
+    {:error, {:api_error, reason}, @base_backoff_ms}
   end
 
   defp handle_api_error(reason) do

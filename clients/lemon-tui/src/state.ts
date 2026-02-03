@@ -210,16 +210,20 @@ export type NormalizedMessage =
 
 export type StateListener = (state: AppState, prevState: AppState) => void;
 
+export interface StateStoreOptions {
+  cwd?: string;
+}
+
 export class StateStore {
   private state: AppState;
   private listeners: Set<StateListener> = new Set();
   private messageIdCounter = 0;
 
-  constructor() {
-    this.state = this.createInitialState();
+  constructor(options: StateStoreOptions = {}) {
+    this.state = this.createInitialState(options.cwd);
   }
 
-  private createInitialState(): AppState {
+  private createInitialState(initialCwd?: string): AppState {
     return {
       ready: false,
       ui: false,
@@ -236,7 +240,7 @@ export class StateStore {
       runningSessions: [],
 
       // Active session convenience accessors (defaults for before ready)
-      cwd: process.cwd(),
+      cwd: initialCwd || process.cwd(),
       model: { provider: '', id: '' },
       messages: [],
       streamingMessage: null,

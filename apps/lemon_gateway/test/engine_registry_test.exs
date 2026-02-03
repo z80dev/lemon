@@ -459,8 +459,9 @@ defmodule LemonGateway.EngineRegistryTest do
       Application.put_env(:lemon_gateway, :engines, [AlphaEngine])
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-      # get_engine! raises inside GenServer, which causes an exit
-      assert catch_exit(EngineRegistry.get_engine!("nonexistent"))
+      assert_raise ArgumentError, fn ->
+        EngineRegistry.get_engine!("nonexistent")
+      end
     end
 
     test "get_engine returns nil for unknown engine ID" do
@@ -505,7 +506,9 @@ defmodule LemonGateway.EngineRegistryTest do
       Application.put_env(:lemon_gateway, :engines, [])
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-      assert catch_exit(EngineRegistry.get_engine!("anything"))
+      assert_raise ArgumentError, fn ->
+        EngineRegistry.get_engine!("anything")
+      end
     end
   end
 

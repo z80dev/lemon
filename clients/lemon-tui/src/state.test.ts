@@ -25,6 +25,12 @@ describe('StateStore', () => {
     it('should have empty status map', () => {
       expect(store.getState().status.size).toBe(0);
     });
+
+    it('should respect a provided initial cwd', () => {
+      const customCwd = '/test/cwd';
+      const customStore = new StateStore({ cwd: customCwd });
+      expect(customStore.getState().cwd).toBe(customCwd);
+    });
   });
 
   describe('UI request queue', () => {

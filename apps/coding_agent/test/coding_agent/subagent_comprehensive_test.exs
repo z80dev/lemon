@@ -331,7 +331,7 @@ defmodule CodingAgent.SubagentComprehensiveTest do
           []
         )
 
-      assert {:error, "Engine must be one of: internal, codex, claude"} = result
+      assert {:error, "Engine must be one of: internal, codex, claude, kimi"} = result
     end
 
     test "accepts valid role", %{tmp_dir: tmp_dir} do

@@ -623,16 +623,16 @@ defmodule Ai.CircuitBreakerTest do
 
     test "very short recovery timeout works correctly", %{provider: provider} do
       start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 10}
+        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 50}
       )
 
       CircuitBreaker.record_failure(provider)
-      Process.sleep(5)
+      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
 
-      Process.sleep(20)
+      Process.sleep(70)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open

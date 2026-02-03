@@ -96,16 +96,12 @@ defmodule LemonGateway.ApplicationTest do
     test "supervisor uses one_for_one strategy" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-      # Get supervisor info
-      {:status, _pid, {:module, Supervisor}, [_pdict, :running, _parent, _dbg, info]} =
-        :sys.get_status(LemonGateway.Supervisor)
+      state = :sys.get_state(LemonGateway.Supervisor)
 
-      # Extract strategy from supervisor state
-      {_header, state_data} = List.keyfind(info, :data, 0)
-      state_info = List.keyfind(state_data, "State", 0)
-
-      # Verify strategy (the supervisor state contains strategy info)
-      assert state_info != nil
+      # Supervisor state tuple shape: {:state, name, strategy, ...}
+      assert is_tuple(state)
+      assert elem(state, 0) == :state
+      assert elem(state, 2) == :one_for_one
     end
   end
 

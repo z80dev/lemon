@@ -16,7 +16,12 @@ defmodule LemonGateway.EngineRegistry do
   def list_engines, do: GenServer.call(__MODULE__, :list)
 
   @spec get_engine!(engine_id()) :: engine_mod()
-  def get_engine!(id), do: GenServer.call(__MODULE__, {:get, id})
+  def get_engine!(id) do
+    case get_engine(id) do
+      nil -> raise ArgumentError, "unknown engine id: #{inspect(id)}"
+      mod -> mod
+    end
+  end
 
   @spec get_engine(engine_id()) :: engine_mod() | nil
   def get_engine(id), do: GenServer.call(__MODULE__, {:get_or_nil, id})
@@ -57,10 +62,7 @@ defmodule LemonGateway.EngineRegistry do
   end
 
   def handle_call({:get, id}, _from, state) do
-    case Map.fetch(state.map, id) do
-      {:ok, mod} -> {:reply, mod, state}
-      :error -> raise ArgumentError, "unknown engine id: #{inspect(id)}"
-    end
+    {:reply, Map.get(state.map, id), state}
   end
 
   def handle_call({:get_or_nil, id}, _from, state) do

@@ -995,10 +995,9 @@ defmodule CodingAgent.SessionTest do
       # Start a mock UI tracker with unique name (for parallel test execution)
       tracker_name = :"ui_compact_#{:erlang.unique_integer()}"
       tracker = CodingAgent.Test.MockUI.start_tracker(tracker_name)
-      CodingAgent.Test.MockUI.set_global_tracker(tracker)
 
       # Create UI context with mock
-      ui_context = CodingAgent.UI.Context.new(CodingAgent.Test.MockUI)
+      ui_context = CodingAgent.UI.Context.new(CodingAgent.Test.MockUI, tracker)
 
       # Create a session with some messages first
       session_manager =
@@ -1040,8 +1039,6 @@ defmodule CodingAgent.SessionTest do
 
       # Should have called set_working_message with nil (to clear it)
       assert {:set_working_message, [nil]} in calls
-
-      CodingAgent.Test.MockUI.clear_global_tracker()
       CodingAgent.Test.MockUI.stop_tracker(tracker)
     end
 
@@ -1049,9 +1046,8 @@ defmodule CodingAgent.SessionTest do
     test "notifies on successful compaction", %{tmp_dir: tmp_dir} do
       tracker_name = :"ui_compact_notify_#{:erlang.unique_integer()}"
       tracker = CodingAgent.Test.MockUI.start_tracker(tracker_name)
-      CodingAgent.Test.MockUI.set_global_tracker(tracker)
 
-      ui_context = CodingAgent.UI.Context.new(CodingAgent.Test.MockUI)
+      ui_context = CodingAgent.UI.Context.new(CodingAgent.Test.MockUI, tracker)
 
       # Create a session with some messages
       session_manager =
@@ -1103,17 +1099,14 @@ defmodule CodingAgent.SessionTest do
           end)
           assert length(error_calls) > 0
       end
-
-      CodingAgent.Test.MockUI.clear_global_tracker()
       CodingAgent.Test.MockUI.stop_tracker(tracker)
     end
 
     test "clears working message when compaction fails (cannot compact)" do
       tracker_name = :"ui_compact_fail_#{:erlang.unique_integer()}"
       tracker = CodingAgent.Test.MockUI.start_tracker(tracker_name)
-      CodingAgent.Test.MockUI.set_global_tracker(tracker)
 
-      ui_context = CodingAgent.UI.Context.new(CodingAgent.Test.MockUI)
+      ui_context = CodingAgent.UI.Context.new(CodingAgent.Test.MockUI, tracker)
 
       # Fresh session with no messages - compaction will fail
       session = start_session(ui_context: ui_context)
@@ -1128,8 +1121,6 @@ defmodule CodingAgent.SessionTest do
 
       # Should have cleared working message
       assert {:set_working_message, [nil]} in calls
-
-      CodingAgent.Test.MockUI.clear_global_tracker()
       CodingAgent.Test.MockUI.stop_tracker(tracker)
     end
   end
@@ -1139,9 +1130,8 @@ defmodule CodingAgent.SessionTest do
     test "shows working message during branch summarization", %{tmp_dir: tmp_dir} do
       tracker_name = :"ui_summarize_#{:erlang.unique_integer()}"
       tracker = CodingAgent.Test.MockUI.start_tracker(tracker_name)
-      CodingAgent.Test.MockUI.set_global_tracker(tracker)
 
-      ui_context = CodingAgent.UI.Context.new(CodingAgent.Test.MockUI)
+      ui_context = CodingAgent.UI.Context.new(CodingAgent.Test.MockUI, tracker)
 
       # Create a session with messages to summarize
       session_manager =
@@ -1172,17 +1162,14 @@ defmodule CodingAgent.SessionTest do
 
       # Should have cleared working message (either on success or failure)
       assert {:set_working_message, [nil]} in calls
-
-      CodingAgent.Test.MockUI.clear_global_tracker()
       CodingAgent.Test.MockUI.stop_tracker(tracker)
     end
 
     test "returns error without UI notification for empty branch" do
       tracker_name = :"ui_summarize_empty_#{:erlang.unique_integer()}"
       tracker = CodingAgent.Test.MockUI.start_tracker(tracker_name)
-      CodingAgent.Test.MockUI.set_global_tracker(tracker)
 
-      ui_context = CodingAgent.UI.Context.new(CodingAgent.Test.MockUI)
+      ui_context = CodingAgent.UI.Context.new(CodingAgent.Test.MockUI, tracker)
 
       # Fresh session with no messages
       session = start_session(ui_context: ui_context)
@@ -1195,8 +1182,6 @@ defmodule CodingAgent.SessionTest do
       # Should NOT have shown working message for empty branch
       # (we return early before showing the message)
       refute {:set_working_message, ["Summarizing branch..."]} in calls
-
-      CodingAgent.Test.MockUI.clear_global_tracker()
       CodingAgent.Test.MockUI.stop_tracker(tracker)
     end
   end

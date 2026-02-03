@@ -18,6 +18,12 @@ built on the BEAM (Erlang/Elixir). It uses the Erlang Virtual Machine's process 
   - [LemonGateway](#lemongateway)
   - [Lemon TUI](#lemon-tui)
   - [Lemon Web](#lemon-web)
+- [Orchestration Runtime](#orchestration-runtime)
+  - [Lane-Aware Scheduling](#lane-aware-scheduling)
+  - [Async Subagent Semantics](#async-subagent-semantics)
+  - [Durable Background Processes](#durable-background-processes)
+  - [Budget Enforcement](#budget-enforcement)
+  - [Tool Policy](#tool-policy)
 - [Installation](#installation)
 - [Usage](#usage)
 - [Development](#development)
@@ -45,7 +51,7 @@ Lemon is an AI coding assistant built as a distributed system of concurrent proc
 
 ### Key Features
 
-- **Multi-turn conversations** with tool use (read, write, edit, multiedit, patch, bash, grep, find, glob, ls, webfetch, websearch, todoread, todowrite, task)
+- **Multi-turn conversations** with tool use (read, write, edit, multiedit, patch, bash, grep, find, glob, ls, webfetch, websearch, todoread, todowrite, task, exec, process)
 - **Real-time streaming** of LLM responses with fine-grained event notifications
 - **Session persistence** via JSONL with tree-structured conversation history
 - **Context compaction** and branch summarization for long conversations
@@ -56,6 +62,9 @@ Lemon is an AI coding assistant built as a distributed system of concurrent proc
 - **CLI runner infrastructure** for integrating Claude and Codex as subagents
 - **Resume tokens** for session persistence and continuation across restarts
 - **Telegram bot integration** for remote agent control
+- **Orchestration runtime** with lane-aware scheduling, async subagent spawn/join, and durable background processes
+- **Budget enforcement** with per-run token/cost tracking and concurrency limits
+- **Tool policy profiles** with per-engine restrictions and approval gates
 
 ---
 
@@ -112,9 +121,17 @@ Supervisor
 ├── Ai.Application
 │   └── Provider processes
 ├── CodingAgent.Application
-│   └── SessionManager processes
+│   ├── SessionManager processes
+│   ├── LaneQueue (lane-aware scheduling)
+│   ├── TaskStoreServer (async task persistence)
+│   ├── RunGraphServer (run DAG persistence)
+│   ├── ProcessStoreServer (background process persistence)
+│   ├── ProcessManager (DynamicSupervisor for OS processes)
+│   ├── Coordinator (multi-session coordination)
+│   └── CompactionHooks (pre-compaction flush)
 └── LemonGateway.Application
     ├── Scheduler (job concurrency)
+    ├── UnifiedScheduler (lane-aware routing)
     ├── ThreadWorkers (per-conversation)
     └── Telegram Transport (optional)
 ```
@@ -373,6 +390,22 @@ lemon/
 │   │   │       ├── cli_runners/          # Lemon CLI runner
 │   │   │       │   ├── lemon_runner.ex   # Wraps CodingAgent.Session as CLI runner
 │   │   │       │   └── lemon_subagent.ex # High-level Lemon subagent API
+│   │   │       │
+│   │   │       │   # Orchestration Runtime
+│   │   │       ├── lane_queue.ex         # Lane-aware FIFO queue with concurrency caps
+│   │   │       ├── run_graph.ex          # Run DAG with parent/child relationships
+│   │   │       ├── run_graph_server.ex   # GenServer owner for RunGraph ETS/DETS
+│   │   │       ├── task_store.ex         # Task event storage with persistence
+│   │   │       ├── task_store_server.ex  # GenServer owner for TaskStore ETS/DETS
+│   │   │       ├── process_manager.ex    # DynamicSupervisor for background processes
+│   │   │       ├── process_session.ex    # GenServer managing single OS process
+│   │   │       ├── process_store.ex      # Background process metadata storage
+│   │   │       ├── process_store_server.ex # GenServer owner for ProcessStore
+│   │   │       ├── budget_tracker.ex     # Per-run token/cost budget tracking
+│   │   │       ├── budget_enforcer.ex    # Budget validation and enforcement
+│   │   │       ├── tool_policy.ex        # Per-agent tool allow/deny policies
+│   │   │       ├── compaction_hooks.ex   # Pre-compaction flush hook system
+│   │   │       │
 │   │   │       └── tools/                # Individual tool implementations
 │   │   │           ├── bash.ex           # Bash execution tool
 │   │   │           ├── edit.ex           # File editing tool
@@ -391,7 +424,9 @@ lemon/
 │   │   │           ├── truncate.ex       # Text truncation utility
 │   │   │           ├── webfetch.ex       # Web fetching tool
 │   │   │           ├── websearch.ex      # Web search tool
-│   │   │           └── write.ex          # File writing tool
+│   │   │           ├── write.ex          # File writing tool
+│   │   │           ├── exec.ex           # Background process execution tool
+│   │   │           └── process.ex        # Background process management tool
 │   │   └── test/
 │   │
 │   ├── coding_agent_ui/         # UI abstraction layer
@@ -426,6 +461,7 @@ lemon/
 │       │       ├── thread_worker_supervisor.ex
 │       │       ├── transport_supervisor.ex
 │       │       ├── types.ex             # Core types (Job, ChatScope, ResumeToken)
+│       │       ├── unified_scheduler.ex # Lane-aware unified scheduler
 │       │       ├── engines/             # Execution engine implementations
 │       │       │   ├── lemon.ex         # Native Lemon engine (CodingAgent)
 │       │       │   ├── echo.ex          # Simple echo engine (testing)
@@ -612,11 +648,30 @@ end
 The **Task tool** in CodingAgent uses CLI runners to delegate subtasks to different AI engines. This allows your agent to spawn Codex or Claude as subagents for specialized work:
 
 ```elixir
-# When an agent uses the Task tool, it can specify which engine to use:
+# Synchronous task (default)
 %{
   "description" => "Implement authentication",
   "prompt" => "Add JWT authentication to the User controller",
-  "engine" => "codex"  # or "claude" or "internal" (default)
+  "engine" => "codex"  # or "claude", "kimi", or "internal" (default)
+}
+
+# Async task - returns immediately with task_id
+%{
+  "action" => "run",
+  "async" => true,
+  "prompt" => "Add tests for authentication",
+  "engine" => "internal"
+}
+
+# Poll task status
+%{"action" => "poll", "task_id" => "abc123"}
+
+# Join multiple tasks
+%{
+  "action" => "join",
+  "task_ids" => ["abc123", "def456"],
+  "mode" => "wait_all",  # or "wait_any"
+  "timeout_ms" => 30000
 }
 ```
 
@@ -625,12 +680,16 @@ The **Task tool** in CodingAgent uses CLI runners to delegate subtasks to differ
 1. **Internal engine** (default): Spawns a new `CodingAgent.Session` as a subprocess
 2. **Codex engine**: Uses `CodexSubagent` to spawn the Codex CLI (`codex exec`)
 3. **Claude engine**: Uses `ClaudeSubagent` to spawn Claude CLI (`claude -p`)
+4. **Kimi engine**: Uses Kimi API
 
 All engines support:
 - **Streaming progress**: Events flow back to the parent agent
 - **Resume tokens**: Sessions can be continued later
 - **Role prompts**: Specialize the subagent (research, implement, review, test)
 - **Abort signals**: Cancel long-running subtasks
+- **Async spawn/poll/join**: Coordinate multiple subagents concurrently
+- **Lane scheduling**: Subagents route through `:subagent` lane with concurrency caps
+- **Budget tracking**: Token/cost usage tracked per subagent run
 
 **Example flow:**
 
@@ -703,11 +762,14 @@ unsubscribe = CodingAgent.Session.subscribe(session)
 
 **Key Features:**
 - Session persistence (JSONL v3 format with tree structure)
-- Built-in coding tools (read, write, edit, multiedit, patch, bash, grep, find, glob, ls, webfetch, websearch, todoread, todowrite, task)
+- Built-in coding tools (read, write, edit, multiedit, patch, bash, grep, find, glob, ls, webfetch, websearch, todoread, todowrite, task, exec, process)
 - Context compaction and branch summarization
 - Extension system for custom tools
 - Settings management (global + project-level)
 - LemonRunner/LemonSubagent for using sessions as CLI runner backends
+- Orchestration runtime with lane scheduling, async subagents, and durable background processes
+- Budget tracking and enforcement for token/cost limits
+- Tool policy profiles with per-engine restrictions
 
 ### CodingAgent UI
 
@@ -738,8 +800,9 @@ LemonGateway.submit(job)
 ```
 
 **Key Features:**
-- **Multi-Engine Support**: Lemon (default), Codex CLI, Claude CLI, Echo
+- **Multi-Engine Support**: Lemon (default), Codex CLI, Claude CLI, Kimi, Echo
 - **Job Scheduling**: Configurable concurrency with slot-based allocation
+- **Lane-Aware Scheduling**: UnifiedScheduler routes work through LaneQueue with per-lane caps
 - **Thread Workers**: Per-conversation job queues with sequential execution
 - **Resume Tokens**: Persist and continue sessions across restarts
 - **Event Streaming**: Unified event format across all engines
@@ -752,6 +815,7 @@ LemonGateway.submit(job)
 | Lemon | `lemon` | Native CodingAgent.Session with full tool support and steering |
 | Claude | `claude` | Claude CLI via subprocess |
 | Codex | `codex` | Codex CLI via subprocess |
+| Kimi | `kimi` | Kimi API |
 | Echo | `echo` | Simple echo stub for testing |
 
 ### Lemon TUI
@@ -922,6 +986,237 @@ node clients/lemon-web/server/dist/index.js \
   --cwd /path/to/project \
   --model anthropic:claude-sonnet-4-20250514 \
   --port 3939
+```
+
+---
+
+## Orchestration Runtime
+
+Lemon includes a comprehensive orchestration runtime that coordinates subagents, background processes, and async work with unified scheduling, budget controls, and durability. This system was designed to exceed OpenClaw's orchestration capabilities.
+
+### Lane-Aware Scheduling
+
+All work in Lemon routes through a unified **LaneQueue** with per-lane concurrency caps:
+
+```elixir
+# Default lane configuration
+%{
+  main: 4,           # Main agent runs
+  subagent: 8,       # Task tool subagent spawns
+  background_exec: 2 # Background OS processes
+}
+```
+
+**Key Components:**
+
+- **LaneQueue** (`CodingAgent.LaneQueue`): FIFO queue with O(1) task lookups and configurable per-lane caps
+- **UnifiedScheduler** (`LemonGateway.UnifiedScheduler`): Integrates lane scheduling into LemonGateway
+- **RunGraph** (`CodingAgent.RunGraph`): Tracks parent/child relationships between runs with DETS persistence
+
+```elixir
+# Submit work to a specific lane
+LaneQueue.run(:lemon_lane_queue, :subagent, fn -> do_work() end, %{task_id: id})
+
+# All subagent spawns automatically route through :subagent lane
+# All background processes route through :background_exec lane
+```
+
+### Async Subagent Semantics
+
+The **Task tool** supports async spawn/poll/join patterns for coordinating multiple subagents:
+
+```elixir
+# Async spawn - returns immediately with task_id
+%{
+  "action" => "run",
+  "async" => true,
+  "prompt" => "Implement feature X",
+  "engine" => "internal"
+}
+# Returns: %{task_id: "abc123", run_id: "def456", status: "queued"}
+
+# Poll task status
+%{
+  "action" => "poll",
+  "task_id" => "abc123"
+}
+# Returns: %{status: :running, events: [...], result: nil}
+
+# Join multiple tasks with patterns
+%{
+  "action" => "join",
+  "task_ids" => ["abc123", "def456"],
+  "mode" => "wait_all",      # or "wait_any"
+  "timeout_ms" => 30000
+}
+# Returns: %{task_id => %{status, result, error}, ...}
+```
+
+**Join Patterns:**
+
+- **`wait_all`**: Wait for ALL tasks to complete (default)
+- **`wait_any`**: Return as soon as ANY task completes
+
+**Supported Engines:**
+
+- `internal`: Native CodingAgent.Session
+- `codex`: Codex CLI via subprocess
+- `claude`: Claude CLI via subprocess
+- `kimi`: Kimi API
+
+### Durable Background Processes
+
+Unlike OpenClaw (which loses background sessions on restart), Lemon persists all background process state to DETS:
+
+**Exec Tool** - Start background processes:
+
+```elixir
+%{
+  "command" => "npm test",
+  "timeout_sec" => 300,      # Auto-kill after timeout
+  "yield_ms" => 1000,        # Auto-background after 1 second
+  "background" => true       # Force background mode
+}
+# Returns: %{process_id: "hex123", status: :running}
+```
+
+**Process Tool** - Manage background processes:
+
+```elixir
+# List all processes
+%{"action" => "list", "status" => "running"}
+
+# Poll status and logs
+%{"action" => "poll", "process_id" => "hex123", "lines" => 50}
+
+# Write to stdin
+%{"action" => "write", "process_id" => "hex123", "data" => "y\n"}
+
+# Kill a process
+%{"action" => "kill", "process_id" => "hex123", "signal" => "SIGTERM"}
+
+# Clear completed process
+%{"action" => "clear", "process_id" => "hex123"}
+```
+
+**Durability Features:**
+
+- Process metadata persists across restarts (command, cwd, env, timestamps)
+- Rolling log buffer (default 1000 lines) preserved in DETS
+- Exit codes and completion status tracked
+- Processes marked as `:lost` on restart (OS PIDs can't be reattached)
+- TTL-based cleanup prevents unbounded growth (default 24 hours)
+
+### Budget Enforcement
+
+Per-run budget tracking with enforcement at spawn time:
+
+```elixir
+# BudgetTracker tracks per-run usage
+CodingAgent.BudgetTracker.record_usage(run_id, %{
+  tokens_in: 1000,
+  tokens_out: 500,
+  cost_usd: 0.05
+})
+
+# BudgetEnforcer validates before spawning
+case CodingAgent.BudgetEnforcer.check_subagent_spawn(parent_run_id, opts) do
+  :ok -> spawn_subagent()
+  {:error, :budget_exceeded} -> return_error()
+  {:error, :max_children_reached} -> return_error()
+end
+```
+
+**Budget Limits:**
+
+- Token limits (input + output)
+- Cost limits (USD)
+- Per-parent child concurrency caps
+- Budget inheritance from parent to child
+
+### Tool Policy
+
+Per-agent tool policies with allow/deny lists:
+
+```elixir
+# Predefined profiles
+:full_access        # All tools allowed
+:read_only          # Only read operations
+:safe_mode          # No bash, no write, no external
+:subagent_restricted # Limited tools for subagents
+:no_external        # No web fetch/search
+
+# Per-engine defaults
+%{
+  "codex" => :subagent_restricted,
+  "claude" => :subagent_restricted,
+  "kimi" => :subagent_restricted,
+  "internal" => :full_access
+}
+```
+
+**Policy Features:**
+
+- Allow/deny lists with precedence rules
+- Per-engine tool restrictions
+- Approval gates for dangerous operations
+- NO_REPLY silent turn support
+- Policy serialization for persistence
+
+### Compaction Hooks
+
+Pre-compaction flush hooks preserve state before context compaction:
+
+```elixir
+# Register a hook
+CodingAgent.CompactionHooks.register(:my_hook, fn ->
+  # Flush state before compaction
+  flush_important_state()
+end, priority: :high)
+
+# Hooks execute in priority order: :high -> :normal -> :low
+# Failed hooks don't block compaction
+```
+
+### Architecture Summary
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Orchestration Runtime                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
+│  │  LaneQueue   │  │   RunGraph   │  │  TaskStore   │          │
+│  │  (scheduling)│  │ (DAG + join) │  │  (events)    │          │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘          │
+│         │                 │                 │                   │
+│         └────────────┬────┴────────────────┘                   │
+│                      │                                          │
+│              ┌───────▼───────┐                                  │
+│              │   Task Tool   │                                  │
+│              │ (spawn/poll/  │                                  │
+│              │    join)      │                                  │
+│              └───────┬───────┘                                  │
+│                      │                                          │
+│    ┌─────────────────┼─────────────────┐                       │
+│    │                 │                 │                        │
+│    ▼                 ▼                 ▼                        │
+│ ┌──────┐        ┌──────┐        ┌──────────┐                   │
+│ │:main │        │:sub- │        │:background│                   │
+│ │ lane │        │agent │        │  _exec   │                   │
+│ │      │        │ lane │        │   lane   │                   │
+│ └──────┘        └──────┘        └──────────┘                   │
+│                                                                  │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
+│  │BudgetTracker │  │BudgetEnforcer│  │  ToolPolicy  │          │
+│  └──────────────┘  └──────────────┘  └──────────────┘          │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
+│  │ProcessManager│  │ProcessSession│  │ ProcessStore │          │
+│  │(DynamicSup)  │  │  (GenServer) │  │ (ETS+DETS)   │          │
+│  └──────────────┘  └──────────────┘  └──────────────┘          │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---

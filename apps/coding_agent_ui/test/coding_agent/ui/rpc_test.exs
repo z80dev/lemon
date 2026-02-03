@@ -228,7 +228,13 @@ defmodule CodingAgent.UI.RPCTest do
       )
 
     on_exit(fn ->
-      if Process.alive?(rpc), do: GenServer.stop(rpc)
+      if Process.alive?(rpc) do
+        try do
+          GenServer.stop(rpc)
+        catch
+          :exit, _ -> :ok
+        end
+      end
       if Process.alive?(input), do: MockIO.close(input)
       if Process.alive?(output), do: GenServer.stop(output)
     end)
@@ -1170,17 +1176,23 @@ defmodule CodingAgent.UI.RPCTest do
   end
 
   defp rapid_responder_loop(input, output, count) when count > 0 do
-    case wait_for_new_request(output, 500) do
-      nil ->
-        :ok
-
-      request ->
-        MockIO.put_input(input, Jason.encode!(%{id: request["id"], result: "rapid_#{count}"}))
-        rapid_responder_loop(input, output, count - 1)
-    end
+    rapid_responder_loop(input, output, count, 0)
   end
 
-  defp rapid_responder_loop(_input, _output, 0), do: :ok
+  defp rapid_responder_loop(_input, _output, 0, _last_index), do: :ok
+
+  defp rapid_responder_loop(input, output, count, last_index) do
+    output_lines = MockIO.get_output(output)
+
+    if length(output_lines) > last_index do
+      request = output_lines |> Enum.at(last_index) |> Jason.decode!()
+      MockIO.put_input(input, Jason.encode!(%{id: request["id"], result: "rapid_#{count}"}))
+      rapid_responder_loop(input, output, count - 1, last_index + 1)
+    else
+      Process.sleep(5)
+      rapid_responder_loop(input, output, count, last_index)
+    end
+  end
 
   defp wait_for_new_request(output, timeout) do
     initial_count = length(MockIO.get_output(output))

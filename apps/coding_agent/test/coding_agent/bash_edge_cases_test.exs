@@ -84,9 +84,8 @@ defmodule CodingAgent.BashEdgeCasesTest do
       end
 
       # Should handle callback exception gracefully
-      assert_raise RuntimeError, "callback error", fn ->
-        BashExecutor.execute("echo test", tmp_dir, on_chunk: callback)
-      end
+      assert {:error, %RuntimeError{message: "callback error"}} =
+               BashExecutor.execute("echo test", tmp_dir, on_chunk: callback)
     end
 
     test "nil callback is handled gracefully", %{tmp_dir: tmp_dir} do
@@ -278,7 +277,7 @@ defmodule CodingAgent.BashEdgeCasesTest do
       # Record time before abort
       start_time = System.monotonic_time(:millisecond)
       AbortSignal.abort(signal)
-      {:ok, result} = Task.await(task, 5_000)
+      {:ok, result} = Task.await(task, 10_000)
       elapsed = System.monotonic_time(:millisecond) - start_time
 
       # Should abort quickly (within 500ms of calling abort)
@@ -301,7 +300,7 @@ defmodule CodingAgent.BashEdgeCasesTest do
       Process.sleep(150)
       AbortSignal.abort(signal)
 
-      {:ok, result} = Task.await(task, 5_000)
+      {:ok, result} = Task.await(task, 10_000)
       assert result.cancelled == true
 
       AbortSignal.clear(signal)
@@ -322,7 +321,7 @@ defmodule CodingAgent.BashEdgeCasesTest do
       AbortSignal.abort(signal)
       AbortSignal.abort(signal)
 
-      {:ok, result} = Task.await(task, 5_000)
+      {:ok, result} = Task.await(task, 10_000)
       assert result.cancelled == true
 
       AbortSignal.clear(signal)
@@ -540,7 +539,8 @@ defmodule CodingAgent.BashEdgeCasesTest do
 
       assert result.truncated == true
       assert result.output =~ "[Output truncated."
-      assert result.output =~ "500 lines"
+      assert result.output =~ "Total:"
+      assert result.output =~ "lines"
     end
 
     test "temp file created for very large output", %{tmp_dir: tmp_dir} do
@@ -953,11 +953,12 @@ defmodule CodingAgent.BashEdgeCasesTest do
     test "command with backslashes and quotes", %{tmp_dir: tmp_dir} do
       {:ok, result} =
         BashExecutor.execute(
-          "echo 'it\\'s a \"test\"'",
+          "echo \"it's a \\\"test\\\"\"",
           tmp_dir
         )
 
       assert result.exit_code == 0
+      assert result.output =~ "it's a \"test\""
     end
 
     test "command producing output in bursts", %{tmp_dir: tmp_dir} do

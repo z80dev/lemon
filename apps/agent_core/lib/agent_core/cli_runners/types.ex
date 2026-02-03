@@ -40,6 +40,9 @@ defmodule AgentCore.CliRunners.Types do
         # Claude session
         %ResumeToken{engine: "claude", value: "session_xyz"}
 
+        # Kimi session
+        %ResumeToken{engine: "kimi", value: "session_kimi"}
+
     """
     @type t :: %__MODULE__{
             engine: String.t(),
@@ -59,6 +62,7 @@ defmodule AgentCore.CliRunners.Types do
       case engine do
         "codex" -> "`codex resume #{value}`"
         "claude" -> "`claude --resume #{value}`"
+        "kimi" -> "`kimi --session #{value}`"
         "lemon" -> "`lemon resume #{value}`"
         _ -> "`#{engine} resume #{value}`"
       end
@@ -83,6 +87,9 @@ defmodule AgentCore.CliRunners.Types do
         iex> ResumeToken.extract_resume("Continue with claude --resume session_xyz")
         %ResumeToken{engine: "claude", value: "session_xyz"}
 
+        iex> ResumeToken.extract_resume("Continue with kimi --session session_kimi")
+        %ResumeToken{engine: "kimi", value: "session_kimi"}
+
         iex> ResumeToken.extract_resume("lemon resume abc12345")
         %ResumeToken{engine: "lemon", value: "abc12345"}
 
@@ -98,6 +105,8 @@ defmodule AgentCore.CliRunners.Types do
         {~r/`?codex\s+resume\s+([a-zA-Z0-9_-]+)`?/i, "codex"},
         # Claude: `claude --resume <session_id>` or claude --resume <session_id>
         {~r/`?claude\s+--resume\s+([a-zA-Z0-9_-]+)`?/i, "claude"},
+        # Kimi: `kimi --session <session_id>` or kimi --session <session_id>
+        {~r/`?kimi\s+--session\s+([a-zA-Z0-9_-]+)`?/i, "kimi"},
         # Lemon: `lemon resume <session_id>` or lemon resume <session_id>
         {~r/`?lemon\s+resume\s+([a-zA-Z0-9_-]+)`?/i, "lemon"}
       ]
@@ -165,6 +174,8 @@ defmodule AgentCore.CliRunners.Types do
         ~r/^`?codex\s+resume\s+[a-zA-Z0-9_-]+`?$/i,
         # Claude
         ~r/^`?claude\s+--resume\s+[a-zA-Z0-9_-]+`?$/i,
+        # Kimi
+        ~r/^`?kimi\s+--session\s+[a-zA-Z0-9_-]+`?$/i,
         # Lemon
         ~r/^`?lemon\s+resume\s+[a-zA-Z0-9_-]+`?$/i
       ]
@@ -188,11 +199,13 @@ defmodule AgentCore.CliRunners.Types do
 
     defp resume_regex("codex"), do: ~r/`?codex\s+resume\s+([a-zA-Z0-9_-]+)`?/i
     defp resume_regex("claude"), do: ~r/`?claude\s+--resume\s+([a-zA-Z0-9_-]+)`?/i
+    defp resume_regex("kimi"), do: ~r/`?kimi\s+--session\s+([a-zA-Z0-9_-]+)`?/i
     defp resume_regex("lemon"), do: ~r/`?lemon\s+resume\s+([a-zA-Z0-9_-]+)`?/i
     defp resume_regex(engine), do: ~r/`?#{Regex.escape(engine)}\s+resume\s+([a-zA-Z0-9_-]+)`?/i
 
     defp strict_resume_regex("codex"), do: ~r/^`?codex\s+resume\s+[a-zA-Z0-9_-]+`?$/i
     defp strict_resume_regex("claude"), do: ~r/^`?claude\s+--resume\s+[a-zA-Z0-9_-]+`?$/i
+    defp strict_resume_regex("kimi"), do: ~r/^`?kimi\s+--session\s+[a-zA-Z0-9_-]+`?$/i
     defp strict_resume_regex("lemon"), do: ~r/^`?lemon\s+resume\s+[a-zA-Z0-9_-]+`?$/i
     defp strict_resume_regex(engine), do: ~r/^`?#{Regex.escape(engine)}\s+resume\s+[a-zA-Z0-9_-]+`?$/i
   end

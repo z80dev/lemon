@@ -108,6 +108,8 @@ defmodule CodingAgent.ToolRegistry do
         {:ok, extensions, _load_errors, _validation_errors} =
           Extensions.load_extensions_with_errors(paths)
 
+        extensions = sort_extensions(extensions)
+
         Extensions.get_tools_with_source(extensions, cwd)
         |> Enum.map(fn {tool, ext_module} ->
           {tool.name, tool, {:extension, ext_module}}
@@ -326,6 +328,8 @@ defmodule CodingAgent.ToolRegistry do
         {:ok, extensions, errors, _validation_errors} =
           Extensions.load_extensions_with_errors(paths)
 
+        extensions = sort_extensions(extensions)
+
         tools =
           Extensions.get_tools_with_source(extensions, cwd)
           |> Enum.map(fn {tool, ext_module} ->
@@ -419,6 +423,10 @@ defmodule CodingAgent.ToolRegistry do
     Enum.filter(tools, fn {name, _tool, _source} ->
       MapSet.member?(enabled_set, name)
     end)
+  end
+
+  defp sort_extensions(extensions) do
+    Enum.sort_by(extensions, fn module -> Atom.to_string(module) end)
   end
 
   # Analyze conflicts and return {resolved_tools, conflicts} without logging.

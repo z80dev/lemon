@@ -358,7 +358,7 @@ defmodule Ai.Providers.OpenAICodexResponses do
         {:ok, receive_sse_events()}
 
       {:ok, %Req.Response{status: status, body: error_body}} when retries_left > 0 ->
-        error_text = if is_binary(error_body), do: error_body, else: inspect(error_body)
+        error_text = normalize_error_body(error_body)
 
         if retryable_error?(status, error_text) do
           delay = @base_delay_ms * :math.pow(2, @max_retries - retries_left) |> round()
@@ -369,7 +369,7 @@ defmodule Ai.Providers.OpenAICodexResponses do
         end
 
       {:ok, %Req.Response{status: status, body: error_body}} ->
-        error_text = if is_binary(error_body), do: error_body, else: inspect(error_body)
+        error_text = normalize_error_body(error_body)
         {:error, parse_error_response(status, error_text)}
 
       {:error, reason} when retries_left > 0 ->
@@ -426,6 +426,32 @@ defmodule Ai.Providers.OpenAICodexResponses do
 
       _ ->
         "HTTP #{status}: #{raw}"
+    end
+  end
+
+  defp normalize_error_body(body) when is_binary(body), do: body
+
+  defp normalize_error_body(%Req.Response.Async{} = async) do
+    collect_async_body(async, "")
+  end
+
+  defp normalize_error_body(body) when is_map(body), do: Jason.encode!(body)
+
+  defp normalize_error_body(other), do: inspect(other)
+
+  defp collect_async_body(%Req.Response.Async{ref: ref, pid: pid}, acc) do
+    receive do
+      {^ref, {:data, chunk}} ->
+        collect_async_body(%Req.Response.Async{ref: ref, pid: pid}, acc <> chunk)
+
+      {^ref, :done} ->
+        acc
+
+      {:DOWN, ^ref, :process, ^pid, _reason} ->
+        acc
+    after
+      1_000 ->
+        acc
     end
   end
 

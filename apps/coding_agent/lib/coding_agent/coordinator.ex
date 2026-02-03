@@ -202,7 +202,8 @@ defmodule CodingAgent.Coordinator do
   """
   @spec abort_all(GenServer.server()) :: :ok
   def abort_all(coordinator) do
-    GenServer.call(coordinator, :abort_all)
+    send(coordinator, :abort_all)
+    :ok
   end
 
   # ============================================================================
@@ -313,6 +314,11 @@ defmodule CodingAgent.Coordinator do
       nil ->
         {:noreply, state}
     end
+  end
+
+  def handle_info(:abort_all, state) do
+    new_state = abort_all_subagents(state)
+    {:noreply, new_state}
   end
 
   def handle_info(_msg, state) do
@@ -479,6 +485,48 @@ defmodule CodingAgent.Coordinator do
       {timeout_results, new_state}
     else
       receive do
+        {:"$gen_call", from, :list_active} ->
+          GenServer.reply(from, Map.keys(state.active_subagents))
+          await_subagents(pending_ids, deadline, results, state)
+
+        {:"$gen_call", from, :abort_all} ->
+          GenServer.reply(from, :ok)
+
+          aborted_results =
+            Enum.reduce(pending_ids, results, fn id, acc ->
+              subagent = Map.get(state.active_subagents, id)
+              session_id = if subagent, do: subagent.session_id, else: nil
+
+              Map.put(acc, id, %{
+                id: id,
+                status: :aborted,
+                result: nil,
+                error: :aborted,
+                session_id: session_id
+              })
+            end)
+
+          new_state = abort_all_subagents(state)
+          {aborted_results, new_state}
+
+        :abort_all ->
+          aborted_results =
+            Enum.reduce(pending_ids, results, fn id, acc ->
+              subagent = Map.get(state.active_subagents, id)
+              session_id = if subagent, do: subagent.session_id, else: nil
+
+              Map.put(acc, id, %{
+                id: id,
+                status: :aborted,
+                result: nil,
+                error: :aborted,
+                session_id: session_id
+              })
+            end)
+
+          new_state = abort_all_subagents(state)
+          {aborted_results, new_state}
+
         {:session_event, session_id, {:agent_end, messages}} ->
           case find_subagent_by_session(state, session_id) do
             {id, _subagent_state} ->
@@ -604,14 +652,23 @@ defmodule CodingAgent.Coordinator do
           Process.demonitor(subagent_state.monitor_ref, [:flush])
         end
 
-        # Stop the session
+        # Stop the session asynchronously to avoid blocking the coordinator.
         if subagent_state.pid && Process.alive?(subagent_state.pid) do
-          try do
-            Session.abort(subagent_state.pid)
-            stop_session(subagent_state.pid)
-          rescue
-            _ -> :ok
-          end
+          pid = subagent_state.pid
+
+          spawn(fn ->
+            try do
+              Session.abort(pid)
+            rescue
+              _ -> :ok
+            end
+
+            try do
+              stop_session(pid)
+            rescue
+              _ -> :ok
+            end
+          end)
         end
 
         remove_subagent(id, state)

@@ -67,6 +67,7 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
     ToolUseBlock
   }
   alias AgentCore.CliRunners.Types.{EventFactory, ResumeToken}
+  alias AgentCore.CliRunners.ToolActionHelpers
 
   require Logger
 
@@ -359,17 +360,9 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
       input: input
     }
 
-    {event, factory} = EventFactory.action_started(state.factory, id, kind, title, detail: detail)
+    {event, factory, pending_actions} =
+      ToolActionHelpers.start_action(state.factory, state.pending_actions, id, kind, title, detail)
 
-    # Store pending action for later completion
-    pending_action = %{
-      id: id,
-      kind: kind,
-      title: title,
-      detail: detail
-    }
-
-    pending_actions = Map.put(state.pending_actions, id, pending_action)
     state = %{state | factory: factory, pending_actions: pending_actions}
 
     {[event], state}
@@ -389,55 +382,25 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
   defp process_tool_result(%ToolResultBlock{tool_use_id: tool_use_id, content: content, is_error: is_error}, state) do
     {warning_events, state} =
       if is_error do
-        maybe_permission_warning(normalize_tool_result(content), state)
+        maybe_permission_warning(ToolActionHelpers.normalize_tool_result(content), state)
       else
         {[], state}
       end
 
-    case Map.pop(state.pending_actions, tool_use_id) do
-      {nil, _} ->
-        ok = not is_error
-        result_preview = normalize_tool_result(content)
+    ok = not is_error
+    result_preview = ToolActionHelpers.normalize_tool_result(content)
 
-        detail = %{
-          tool_use_id: tool_use_id,
-          result_preview: result_preview,
-          is_error: is_error
-        }
+    detail = %{
+      tool_use_id: tool_use_id,
+      result_preview: result_preview,
+      is_error: is_error
+    }
 
-        {event, factory} = EventFactory.action_completed(
-          state.factory,
-          tool_use_id,
-          :tool,
-          "tool result",
-          ok,
-          detail: detail
-        )
+    {event, factory, pending_actions} =
+      ToolActionHelpers.complete_action(state.factory, state.pending_actions, tool_use_id, ok, detail)
 
-        state = %{state | factory: factory}
-        {[event | warning_events], state}
-
-      {action, pending_actions} ->
-        ok = not is_error
-        result_preview = normalize_tool_result(content)
-
-        detail = Map.merge(action.detail, %{
-          result_preview: result_preview,
-          is_error: is_error
-        })
-
-        {event, factory} = EventFactory.action_completed(
-          state.factory,
-          action.id,
-          action.kind,
-          action.title,
-          ok,
-          detail: detail
-        )
-
-        state = %{state | factory: factory, pending_actions: pending_actions}
-        {[event | warning_events], state}
-    end
+    state = %{state | factory: factory, pending_actions: pending_actions}
+    {[event | warning_events], state}
   end
 
   defp process_tool_result(_, state), do: {[], state}
@@ -490,27 +453,6 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
         {:tool, name}
     end
   end
-
-  defp normalize_tool_result(nil), do: ""
-  defp normalize_tool_result(content) when is_binary(content), do: String.slice(content, 0, 200)
-
-  defp normalize_tool_result(content) when is_list(content) do
-    content
-    |> Enum.map(fn
-      %{"text" => text} when is_binary(text) -> text
-      item when is_binary(item) -> item
-      _ -> ""
-    end)
-    |> Enum.join("\n")
-    |> String.slice(0, 200)
-  end
-
-  defp normalize_tool_result(content) when is_map(content) do
-    Map.get(content, "text", inspect(content))
-    |> String.slice(0, 200)
-  end
-
-  defp normalize_tool_result(content), do: inspect(content) |> String.slice(0, 200)
 
   defp extract_error(%StreamResultMessage{is_error: true, result: result}) when is_binary(result) do
     result
