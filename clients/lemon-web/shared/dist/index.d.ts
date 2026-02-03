@@ -26,6 +26,8 @@ interface EventMessage {
     type: 'event';
     event: SessionEvent;
     session_id: string;
+    /** Monotonic sequence number for stable ordering within a session */
+    event_seq?: number;
 }
 /** Stats response */
 interface StatsMessage {
@@ -120,7 +122,7 @@ interface ActiveSessionMessage {
     type: 'active_session';
     session_id: string | null;
 }
-type ServerMessage = ReadyMessage | EventMessage | StatsMessage | PongMessage | DebugMessage | ErrorMessage | SaveResultMessage | SessionsListMessage | UIRequestMessage | UISignalMessage | RunningSessionsMessage | ModelsListMessage | SessionStartedMessage | SessionClosedMessage | ActiveSessionMessage;
+type ServerMessage = ReadyMessage | EventMessage | StatsMessage | PongMessage | DebugMessage | ErrorMessage | SaveResultMessage | SessionsListMessage | UIRequestMessage | UISignalMessage | RunningSessionsMessage | ModelsListMessage | SessionStartedMessage | SessionClosedMessage | ActiveSessionMessage | ConfigStateMessage;
 interface BridgeStatusMessage {
     type: 'bridge_status';
     state: 'starting' | 'running' | 'stopped' | 'error';
@@ -205,7 +207,25 @@ interface SetActiveSessionCommand {
     type: 'set_active_session';
     session_id: string;
 }
-type ClientCommand = PromptCommand | StatsCommand | PingCommand | DebugCommand | AbortCommand | ResetCommand | SaveCommand | ListSessionsCommand | QuitCommand | UIResponseCommand | StartSessionCommand | CloseSessionCommand | ListRunningSessionsCommand | ListModelsCommand | SetActiveSessionCommand;
+/** Set a runtime configuration value */
+interface SetConfigCommand {
+    type: 'set_config';
+    key: string;
+    value: unknown;
+}
+/** Get current configuration values */
+interface GetConfigCommand {
+    type: 'get_config';
+}
+/** Config state response */
+interface ConfigStateMessage {
+    type: 'config_state';
+    config: {
+        claude_skip_permissions: boolean;
+        codex_auto_approve: boolean;
+    };
+}
+type ClientCommand = PromptCommand | StatsCommand | PingCommand | DebugCommand | AbortCommand | ResetCommand | SaveCommand | ListSessionsCommand | QuitCommand | UIResponseCommand | StartSessionCommand | CloseSessionCommand | ListRunningSessionsCommand | ListModelsCommand | SetActiveSessionCommand | SetConfigCommand | GetConfigCommand;
 interface SessionEvent {
     type: string;
     data?: unknown[];
@@ -404,4 +424,4 @@ declare class JsonLineDecoder {
 }
 declare function encodeJsonLine(payload: unknown): string;
 
-export { type AbortCommand, type ActiveSessionMessage, type AgentEndEvent, type AgentStartEvent, type AssistantEvent, type AssistantMessage, type BridgeErrorMessage, type BridgeMessage, type BridgeStatusMessage, type BridgeStderrMessage, type ClientCommand, type CloseSessionCommand, type ConfirmParams, type ContentBlock, type DebugCommand, type DebugMessage, type EditorParams, type ErrorMessage, type EventMessage, type ImageContent, type InputParams, JsonLineDecoder, type JsonLineParserOptions, type KnownSessionEvent, type ListModelsCommand, type ListRunningSessionsCommand, type ListSessionsCommand, type Message, type MessageEndEvent, type MessageStartEvent, type MessageUpdateEvent, type ModelsListMessage, type PingCommand, type PongMessage, type PromptCommand, type QuitCommand, type ReadyMessage, type ResetCommand, type RunningSessionInfo, type RunningSessionsMessage, type SaveCommand, type SaveResultMessage, type SelectOption, type SelectParams, type ServerMessage, type ServerTimeStamp, type SessionClosedMessage, type SessionErrorEvent, type SessionEvent, type SessionStartedMessage, type SessionStats, type SessionSummary, type SessionsListMessage, type SetActiveSessionCommand, type StartSessionCommand, type StatsCommand, type StatsMessage, type TextContent, type ThinkingContent, type ToolCall, type ToolExecutionEndEvent, type ToolExecutionStartEvent, type ToolExecutionUpdateEvent, type ToolResult, type ToolResultMessage, type TurnEndEvent, type TurnStartEvent, type UIRequestMessage, type UIRequestParams, type UIResponseCommand, type UISignalMessage, type UsageCost, type UserMessage, type WireServerMessage, encodeJsonLine };
+export { type AbortCommand, type ActiveSessionMessage, type AgentEndEvent, type AgentStartEvent, type AssistantEvent, type AssistantMessage, type BridgeErrorMessage, type BridgeMessage, type BridgeStatusMessage, type BridgeStderrMessage, type ClientCommand, type CloseSessionCommand, type ConfigStateMessage, type ConfirmParams, type ContentBlock, type DebugCommand, type DebugMessage, type EditorParams, type ErrorMessage, type EventMessage, type GetConfigCommand, type ImageContent, type InputParams, JsonLineDecoder, type JsonLineParserOptions, type KnownSessionEvent, type ListModelsCommand, type ListRunningSessionsCommand, type ListSessionsCommand, type Message, type MessageEndEvent, type MessageStartEvent, type MessageUpdateEvent, type ModelsListMessage, type PingCommand, type PongMessage, type PromptCommand, type QuitCommand, type ReadyMessage, type ResetCommand, type RunningSessionInfo, type RunningSessionsMessage, type SaveCommand, type SaveResultMessage, type SelectOption, type SelectParams, type ServerMessage, type ServerTimeStamp, type SessionClosedMessage, type SessionErrorEvent, type SessionEvent, type SessionStartedMessage, type SessionStats, type SessionSummary, type SessionsListMessage, type SetActiveSessionCommand, type SetConfigCommand, type StartSessionCommand, type StatsCommand, type StatsMessage, type TextContent, type ThinkingContent, type ToolCall, type ToolExecutionEndEvent, type ToolExecutionStartEvent, type ToolExecutionUpdateEvent, type ToolResult, type ToolResultMessage, type TurnEndEvent, type TurnStartEvent, type UIRequestMessage, type UIRequestParams, type UIResponseCommand, type UISignalMessage, type UsageCost, type UserMessage, type WireServerMessage, encodeJsonLine };

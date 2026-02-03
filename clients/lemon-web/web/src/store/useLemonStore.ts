@@ -10,7 +10,18 @@ import type {
   Message,
   SessionEvent,
   BridgeMessage,
+  EventMessage,
 } from '@lemon-web/shared';
+
+/**
+ * Extended message type with ordering metadata for stable display.
+ * event_seq: Monotonic sequence from server (if present)
+ * _insertionIndex: Local insertion order as fallback
+ */
+export type MessageWithMeta = Message & {
+  _event_seq?: number;
+  _insertionIndex: number;
+};
 
 export type ConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error';
 
@@ -39,6 +50,33 @@ export interface WidgetState {
   opts?: Record<string, unknown>;
 }
 
+/** Metadata for a queued command pending confirmation */
+export interface PendingCommandConfirmation {
+  /** Original command payload (JSON string) */
+  payload: string;
+  /** Timestamp when command was queued */
+  enqueuedAt: number;
+  /** TTL in milliseconds */
+  ttlMs: number;
+  /** Session ID that was active when command was queued */
+  sessionIdAtEnqueue: string | null;
+  /** Parsed command type for quick access */
+  commandType: string;
+}
+
+/** Queue state for UI display */
+export interface QueueState {
+  /** Number of commands currently queued */
+  count: number;
+  /** Commands pending user confirmation (destructive commands with session change) */
+  pendingConfirmations: PendingCommandConfirmation[];
+}
+
+export interface RuntimeConfig {
+  claude_skip_permissions: boolean;
+  codex_auto_approve: boolean;
+}
+
 export interface LemonState {
   connection: {
     state: ConnectionState;
@@ -50,6 +88,9 @@ export interface LemonState {
   setSendCommand: (fn: (cmd: ClientCommand) => void) => void;
   setConnectionState: (state: ConnectionState, error?: string | null) => void;
 
+  config: RuntimeConfig;
+  setConfig: (key: keyof RuntimeConfig, value: boolean) => void;
+
   sessions: {
     running: Record<string, RunningSessionInfo>;
     saved: SessionSummary[];
@@ -59,8 +100,10 @@ export interface LemonState {
   statsBySession: Record<string, SessionStats>;
   models: ModelsListMessage['providers'];
 
-  messagesBySession: Record<string, Message[]>;
+  messagesBySession: Record<string, MessageWithMeta[]>;
   toolExecutionsBySession: Record<string, Record<string, ToolExecution>>;
+  /** Tracks next insertion index per session for stable ordering fallback */
+  _insertionCounters: Record<string, number>;
 
   ui: {
     requestsQueue: UIRequestMessage[];
@@ -74,6 +117,9 @@ export interface LemonState {
   notifications: Notification[];
   debugLog: WireServerMessage[];
 
+  /** Queue state for offline command handling */
+  queue: QueueState;
+
   autoActivateNextSession: boolean;
   setAutoActivateNextSession: (value: boolean) => void;
 
@@ -82,6 +128,12 @@ export interface LemonState {
   dismissNotification: (id: string) => void;
   send: (cmd: ClientCommand) => void;
   dequeueUIRequest: () => void;
+
+  /** Queue management actions */
+  setQueueCount: (count: number) => void;
+  addPendingConfirmation: (meta: PendingCommandConfirmation) => void;
+  removePendingConfirmation: (meta: PendingCommandConfirmation) => void;
+  clearPendingConfirmations: () => void;
 }
 
 const MAX_DEBUG_LOG = 200;
@@ -104,6 +156,23 @@ export const useLemonStore = create<LemonState>((set, get) => ({
       },
     })),
 
+  config: {
+    claude_skip_permissions: true,
+    codex_auto_approve: false,
+  },
+  setConfig: (key, value) => {
+    const sendCommand = get().sendCommand;
+    if (sendCommand) {
+      sendCommand({ type: 'set_config', key, value });
+    }
+    set((current) => ({
+      config: {
+        ...current.config,
+        [key]: value,
+      },
+    }));
+  },
+
   sessions: {
     running: {},
     saved: [],
@@ -115,6 +184,7 @@ export const useLemonStore = create<LemonState>((set, get) => ({
 
   messagesBySession: {},
   toolExecutionsBySession: {},
+  _insertionCounters: {},
 
   ui: {
     requestsQueue: [],
@@ -127,6 +197,11 @@ export const useLemonStore = create<LemonState>((set, get) => ({
 
   notifications: [],
   debugLog: [],
+
+  queue: {
+    count: 0,
+    pendingConfirmations: [],
+  },
 
   autoActivateNextSession: false,
   setAutoActivateNextSession: (value) => set({ autoActivateNextSession: value }),
@@ -214,15 +289,18 @@ export const useLemonStore = create<LemonState>((set, get) => ({
           const messagesBySession = { ...state.messagesBySession };
           const toolExecutionsBySession = { ...state.toolExecutionsBySession };
           const statsBySession = { ...state.statsBySession };
+          const _insertionCounters = { ...state._insertionCounters };
           delete messagesBySession[message.session_id];
           delete toolExecutionsBySession[message.session_id];
           delete statsBySession[message.session_id];
+          delete _insertionCounters[message.session_id];
           return {
             ...state,
             debugLog,
             messagesBySession,
             toolExecutionsBySession,
             statsBySession,
+            _insertionCounters,
             sessions: {
               ...state.sessions,
               running,
@@ -256,6 +334,13 @@ export const useLemonStore = create<LemonState>((set, get) => ({
         }
         case 'models_list': {
           return { ...state, debugLog, models: message.providers };
+        }
+        case 'config_state': {
+          return {
+            ...state,
+            debugLog,
+            config: message.config,
+          };
         }
         case 'stats': {
           return {
@@ -434,7 +519,8 @@ export const useLemonStore = create<LemonState>((set, get) => ({
       }
 
       if (message.type === 'event') {
-        const updated = applySessionEvent(state, message.session_id, message.event);
+        const eventMsg = message as EventMessage;
+        const updated = applySessionEvent(state, eventMsg.session_id, eventMsg.event, eventMsg.event_seq);
         return {
           ...state,
           debugLog,
@@ -469,6 +555,40 @@ export const useLemonStore = create<LemonState>((set, get) => ({
         requestsQueue: state.ui.requestsQueue.slice(1),
       },
     })),
+
+  setQueueCount: (count) =>
+    set((state) => ({
+      queue: {
+        ...state.queue,
+        count,
+      },
+    })),
+
+  addPendingConfirmation: (meta) =>
+    set((state) => ({
+      queue: {
+        ...state.queue,
+        pendingConfirmations: [...state.queue.pendingConfirmations, meta],
+      },
+    })),
+
+  removePendingConfirmation: (meta) =>
+    set((state) => ({
+      queue: {
+        ...state.queue,
+        pendingConfirmations: state.queue.pendingConfirmations.filter(
+          (m) => m.payload !== meta.payload || m.enqueuedAt !== meta.enqueuedAt
+        ),
+      },
+    })),
+
+  clearPendingConfirmations: () =>
+    set((state) => ({
+      queue: {
+        ...state.queue,
+        pendingConfirmations: [],
+      },
+    })),
 }));
 
 function isBridgeMessage(message: WireServerMessage): message is BridgeMessage {
@@ -493,21 +613,34 @@ function normalizeLevel(level: string): Notification['level'] {
   }
 }
 
-function applySessionEvent(state: LemonState, sessionId: string, event: SessionEvent) {
+function applySessionEvent(state: LemonState, sessionId: string, event: SessionEvent, eventSeq?: number) {
   const messagesBySession = { ...state.messagesBySession };
   const toolExecutionsBySession = { ...state.toolExecutionsBySession };
   const statsBySession = { ...state.statsBySession };
+  const _insertionCounters = { ...state._insertionCounters };
 
-  const messages = [...(messagesBySession[sessionId] ?? [])];
+  const messages: MessageWithMeta[] = [...(messagesBySession[sessionId] ?? [])];
+
+  // Get next insertion index for this session
+  const getNextInsertionIndex = (): number => {
+    const current = _insertionCounters[sessionId] ?? 0;
+    _insertionCounters[sessionId] = current + 1;
+    return current;
+  };
 
   switch (event.type) {
     case 'agent_end': {
       const newMessages = (event.data?.[0] as Message[]) ?? [];
-      const merged = [...messages];
+      const merged: MessageWithMeta[] = [...messages];
       for (const msg of newMessages) {
-        upsertMessage(merged, msg);
+        const msgWithMeta: MessageWithMeta = {
+          ...msg,
+          _event_seq: eventSeq,
+          _insertionIndex: getNextInsertionIndex(),
+        };
+        upsertMessage(merged, msgWithMeta);
       }
-      messagesBySession[sessionId] = merged;
+      messagesBySession[sessionId] = sortMessages(merged);
       break;
     }
     case 'message_start':
@@ -515,16 +648,26 @@ function applySessionEvent(state: LemonState, sessionId: string, event: SessionE
     case 'message_end': {
       const msg = (event.data?.[0] as Message | undefined) ?? null;
       if (msg) {
-        upsertMessage(messages, msg);
-        messagesBySession[sessionId] = messages;
+        const msgWithMeta: MessageWithMeta = {
+          ...msg,
+          _event_seq: eventSeq,
+          _insertionIndex: getNextInsertionIndex(),
+        };
+        upsertMessage(messages, msgWithMeta);
+        messagesBySession[sessionId] = sortMessages(messages);
       }
       break;
     }
     case 'turn_end': {
       const msg = (event.data?.[0] as Message | undefined) ?? null;
       if (msg) {
-        upsertMessage(messages, msg);
-        messagesBySession[sessionId] = messages;
+        const msgWithMeta: MessageWithMeta = {
+          ...msg,
+          _event_seq: eventSeq,
+          _insertionIndex: getNextInsertionIndex(),
+        };
+        upsertMessage(messages, msgWithMeta);
+        messagesBySession[sessionId] = sortMessages(messages);
       }
       break;
     }
@@ -594,6 +737,7 @@ function applySessionEvent(state: LemonState, sessionId: string, event: SessionE
         messagesBySession,
         toolExecutionsBySession,
         statsBySession,
+        _insertionCounters,
         notifications: [...state.notifications, note],
       };
     }
@@ -601,22 +745,89 @@ function applySessionEvent(state: LemonState, sessionId: string, event: SessionE
       break;
   }
 
-  return { messagesBySession, toolExecutionsBySession, statsBySession };
+  return { messagesBySession, toolExecutionsBySession, statsBySession, _insertionCounters };
 }
 
-function upsertMessage(messages: Message[], msg: Message): void {
+function upsertMessage(messages: MessageWithMeta[], msg: MessageWithMeta): void {
   const key = messageKey(msg);
   const existingIndex = messages.findIndex((existing) => messageKey(existing) === key);
   if (existingIndex >= 0) {
-    messages[existingIndex] = msg;
+    // Preserve the original insertion index when updating
+    const existingMeta = messages[existingIndex];
+    messages[existingIndex] = {
+      ...msg,
+      _insertionIndex: existingMeta._insertionIndex,
+      // Keep earliest event_seq if we're updating an existing message
+      _event_seq: existingMeta._event_seq ?? msg._event_seq,
+    };
   } else {
     messages.push(msg);
   }
 }
 
-function messageKey(msg: Message): string {
+/**
+ * Generate a stable key for a message that combines:
+ * - event_seq (if present) for server-side ordering
+ * - role and tool_call_id for uniqueness
+ * - timestamp as fallback
+ */
+function messageKey(msg: MessageWithMeta): string {
+  const meta = msg as MessageWithMeta;
+  const seqPart = meta._event_seq !== undefined ? `seq:${meta._event_seq}:` : '';
+
   if (msg.role === 'tool_result') {
-    return `tool:${msg.tool_call_id}:${msg.timestamp}`;
+    // Tool results are uniquely identified by their tool_call_id
+    return `${seqPart}tool:${msg.tool_call_id}`;
   }
-  return `${msg.role}:${msg.timestamp}`;
+  // For user/assistant messages, use role + timestamp
+  // The timestamp should be unique per message from the server
+  return `${seqPart}${msg.role}:${msg.timestamp}`;
+}
+
+/**
+ * Sort messages for stable display ordering.
+ * Primary sort: event_seq (if present) - monotonic server order
+ * Secondary sort: timestamp
+ * Tertiary sort: insertion index (for messages with same timestamp)
+ */
+function sortMessages(messages: MessageWithMeta[]): MessageWithMeta[] {
+  return [...messages].sort((a, b) => {
+    // First, sort by event_seq if both have it
+    if (a._event_seq !== undefined && b._event_seq !== undefined) {
+      if (a._event_seq !== b._event_seq) {
+        return a._event_seq - b._event_seq;
+      }
+    }
+    // If only one has event_seq, it should come after messages without
+    // (messages without event_seq are likely from older protocol)
+    if (a._event_seq !== undefined && b._event_seq === undefined) {
+      return 1;
+    }
+    if (a._event_seq === undefined && b._event_seq !== undefined) {
+      return -1;
+    }
+
+    // Fall back to timestamp comparison
+    if (a.timestamp !== b.timestamp) {
+      return a.timestamp - b.timestamp;
+    }
+
+    // Finally, use insertion index for deterministic ordering
+    return a._insertionIndex - b._insertionIndex;
+  });
+}
+
+/**
+ * Generate a stable React key for a message.
+ * Uses event_seq + role + tool_call_id/timestamp to ensure uniqueness
+ * and avoid key collisions even when messages arrive out of order.
+ */
+export function getMessageKey(msg: MessageWithMeta): string {
+  const seqPart = msg._event_seq !== undefined ? `${msg._event_seq}-` : '';
+  const indexPart = `-${msg._insertionIndex}`;
+
+  if (msg.role === 'tool_result') {
+    return `${seqPart}tool-${msg.tool_call_id}${indexPart}`;
+  }
+  return `${seqPart}${msg.role}-${msg.timestamp}${indexPart}`;
 }
