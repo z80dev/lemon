@@ -295,16 +295,22 @@ defmodule CodingAgent.Tools.Task do
     :ok
   end
 
-  defp maybe_emit_cli_update(nil, _description, _engine, _status, _text), do: :ok
+  defp maybe_emit_cli_update(on_update, description, engine, status, text, extra_details \\ %{})
 
-  defp maybe_emit_cli_update(on_update, description, engine, status, text) do
-    on_update.(%AgentToolResult{
-      content: [%TextContent{text: text}],
-      details: %{
+  defp maybe_emit_cli_update(nil, _description, _engine, _status, _text, _extra_details), do: :ok
+
+  defp maybe_emit_cli_update(on_update, description, engine, status, text, extra_details) do
+    details =
+      %{
         description: description,
         status: status,
         engine: engine
       }
+      |> Map.merge(extra_details)
+
+    on_update.(%AgentToolResult{
+      content: [%TextContent{text: text}],
+      details: details
     })
   end
 
@@ -320,8 +326,32 @@ defmodule CodingAgent.Tools.Task do
         maybe_emit_cli_update(on_update, description, engine_label, "started", token.value)
         {:cont, %{acc | resume_token: token}}
 
+      {:action, %{title: title, kind: kind} = _action, :started, _opts}, acc ->
+        # Emit update for action started phase with rich details
+        maybe_emit_cli_update(
+          on_update,
+          description,
+          engine_label,
+          "running",
+          title,
+          %{
+            current_action: %{title: title, kind: to_string(kind), phase: "started"}
+          }
+        )
+
+        {:cont, acc}
+
       {:action, %{title: title, detail: detail, kind: kind}, :completed, _opts}, acc ->
-        maybe_emit_cli_update(on_update, description, engine_label, "running", "Completed: #{title}")
+        maybe_emit_cli_update(
+          on_update,
+          description,
+          engine_label,
+          "running",
+          "Completed: #{title}",
+          %{
+            current_action: %{title: title, kind: to_string(kind), phase: "completed"}
+          }
+        )
 
         acc =
           if kind == :warning and is_map(detail) do
