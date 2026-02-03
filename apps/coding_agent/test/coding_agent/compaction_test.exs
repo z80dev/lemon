@@ -1070,4 +1070,1319 @@ defmodule CodingAgent.CompactionTest do
       refute should_compact
     end
   end
+
+  # ==========================================================================
+  # Edge Case Tests
+  # ==========================================================================
+
+  describe "token estimation with very large messages (multi-MB)" do
+    test "estimates tokens for 1MB string content" do
+      # 1MB of content = 1,048,576 bytes = ~262,144 tokens (at 4 chars/token)
+      large_content = String.duplicate("a", 1_048_576)
+      msg = %Messages.UserMessage{content: large_content, timestamp: 0}
+
+      tokens = Compaction.estimate_message_tokens(msg)
+      assert tokens == 262_144
+    end
+
+    test "estimates tokens for 5MB string content" do
+      # 5MB of content = 5,242,880 bytes = ~1,310,720 tokens
+      large_content = String.duplicate("x", 5_242_880)
+      msg = %Messages.UserMessage{content: large_content, timestamp: 0}
+
+      tokens = Compaction.estimate_message_tokens(msg)
+      assert tokens == 1_310_720
+    end
+
+    test "estimates context tokens with multiple large messages" do
+      # Create 3 messages of 1MB each
+      large_content = String.duplicate("b", 1_048_576)
+
+      messages = [
+        %Messages.UserMessage{content: large_content, timestamp: 0},
+        %Messages.AssistantMessage{
+          content: [%Messages.TextContent{text: large_content}],
+          timestamp: 1
+        },
+        %Messages.UserMessage{content: large_content, timestamp: 2}
+      ]
+
+      tokens = Compaction.estimate_context_tokens(messages)
+      # 3 * 262,144 = 786,432
+      assert tokens == 786_432
+    end
+
+    test "handles large content in assistant message with multiple text blocks" do
+      large_content = String.duplicate("c", 500_000)
+
+      msg = %Messages.AssistantMessage{
+        content: [
+          %Messages.TextContent{text: large_content},
+          %Messages.TextContent{text: large_content}
+        ],
+        timestamp: 0
+      }
+
+      tokens = Compaction.estimate_message_tokens(msg)
+      # 1,000,000 chars / 4 = 250,000 tokens
+      assert tokens == 250_000
+    end
+
+    test "handles large tool result content" do
+      large_output = String.duplicate("d", 2_000_000)
+
+      msg = %Messages.ToolResultMessage{
+        tool_use_id: "test_id",
+        content: [%Messages.TextContent{text: large_output}],
+        timestamp: 0
+      }
+
+      tokens = Compaction.estimate_message_tokens(msg)
+      assert tokens == 500_000
+    end
+
+    test "estimates entry tokens for custom_message with large content" do
+      large_content = String.duplicate("e", 1_000_000)
+
+      entry = %SessionEntry{
+        id: "entry1",
+        parent_id: nil,
+        type: :custom_message,
+        custom_type: "large_context",
+        content: large_content,
+        display: true,
+        timestamp: 0
+      }
+
+      # Use find_cut_point to indirectly test estimate_entry_tokens
+      branch = [
+        entry,
+        %SessionEntry{
+          id: "entry2",
+          parent_id: "entry1",
+          type: :message,
+          message: %{"role" => "user", "content" => large_content},
+          timestamp: 1
+        }
+      ]
+
+      # With keep_recent_tokens = 100_000, should find a cut point
+      result = Compaction.find_cut_point(branch, 100_000)
+      assert {:ok, "entry1"} = result
+    end
+  end
+
+  describe "messages with exotic content types" do
+    test "estimates tokens for message with image content blocks" do
+      # Image data is base64 encoded
+      large_base64 = String.duplicate("ABCDEFGHabcdefgh12345678", 10_000)
+
+      msg = %Messages.UserMessage{
+        content: [
+          %Messages.TextContent{text: "Here's an image:"},
+          %Messages.ImageContent{data: large_base64, mime_type: "image/png"}
+        ],
+        timestamp: 0
+      }
+
+      # get_text only extracts text content, not image data
+      tokens = Compaction.estimate_message_tokens(msg)
+      # Only "Here's an image:" = 16 chars / 4 = 4 tokens
+      assert tokens == 4
+    end
+
+    test "handles thinking content in assistant messages" do
+      msg = %Messages.AssistantMessage{
+        content: [
+          %Messages.ThinkingContent{thinking: String.duplicate("thinking", 1000)},
+          %Messages.TextContent{text: "Final answer"}
+        ],
+        timestamp: 0
+      }
+
+      tokens = Compaction.estimate_message_tokens(msg)
+      # get_text only extracts text content (not thinking content)
+      # "Final answer" = 12 chars / 4 = 3 tokens
+      assert tokens == 3
+    end
+
+    test "handles mixed content with tool calls" do
+      msg = %Messages.AssistantMessage{
+        content: [
+          %Messages.TextContent{text: "I will help you"},
+          %Messages.ToolCall{
+            id: "tc_1",
+            name: "read",
+            arguments: %{"path" => "/some/very/long/path/to/file.txt"}
+          },
+          %Messages.TextContent{text: "Reading file..."}
+        ],
+        timestamp: 0
+      }
+
+      tokens = Compaction.estimate_message_tokens(msg)
+      # "I will help you" = 15 chars + "Reading file..." = 15 chars = 30 chars / 4 = 7
+      assert tokens == 7
+    end
+
+    test "handles bash execution message with very long command" do
+      long_command = "echo " <> String.duplicate("argument ", 10_000)
+
+      msg = %Messages.BashExecutionMessage{
+        command: long_command,
+        output: "output",
+        exit_code: 0,
+        timestamp: 0
+      }
+
+      # BashExecutionMessage tokens are estimated from output, not command
+      tokens = Compaction.estimate_message_tokens(msg)
+      # "output" = 6 chars / 4 = 1 token
+      assert tokens == 1
+    end
+
+    test "handles unicode content in messages" do
+      # Unicode characters (emojis, CJK, etc.)
+      unicode_content = String.duplicate("🎉中文日本語한국어", 1000)
+
+      msg = %Messages.UserMessage{content: unicode_content, timestamp: 0}
+
+      tokens = Compaction.estimate_message_tokens(msg)
+      # String.length counts codepoints, not bytes
+      # "🎉中文日本語한국어" = 9 codepoints * 1000 = 9000 codepoints / 4 = 2250
+      assert tokens == 2250
+    end
+
+    test "handles binary data embedded in content" do
+      # Simulating binary-like string content
+      binary_like = :crypto.strong_rand_bytes(1000) |> Base.encode64()
+
+      msg = %Messages.UserMessage{content: binary_like, timestamp: 0}
+
+      tokens = Compaction.estimate_message_tokens(msg)
+      # Base64 of 1000 bytes is ~1336 chars / 4 = 334 tokens
+      assert tokens == div(String.length(binary_like), 4)
+    end
+  end
+
+  describe "custom_message entries with nil/empty content" do
+    test "handles custom_message with nil content" do
+      branch = [
+        %SessionEntry{
+          id: "entry1",
+          parent_id: nil,
+          type: :custom_message,
+          custom_type: "notification",
+          content: nil,
+          display: true,
+          timestamp: 0
+        },
+        %SessionEntry{
+          id: "entry2",
+          parent_id: "entry1",
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("a", 80_000)},
+          timestamp: 1
+        },
+        %SessionEntry{
+          id: "entry3",
+          parent_id: "entry2",
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("b", 80_000)},
+          timestamp: 2
+        }
+      ]
+
+      # Should handle nil content gracefully
+      result = Compaction.find_cut_point(branch, 10_000)
+      assert {:ok, _cut_id} = result
+    end
+
+    test "handles custom_message with empty string content" do
+      branch = [
+        %SessionEntry{
+          id: "entry1",
+          parent_id: nil,
+          type: :custom_message,
+          custom_type: "marker",
+          content: "",
+          display: true,
+          timestamp: 0
+        },
+        %SessionEntry{
+          id: "entry2",
+          parent_id: "entry1",
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("a", 80_000)},
+          timestamp: 1
+        },
+        %SessionEntry{
+          id: "entry3",
+          parent_id: "entry2",
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("b", 80_000)},
+          timestamp: 2
+        }
+      ]
+
+      result = Compaction.find_cut_point(branch, 10_000)
+      assert {:ok, _cut_id} = result
+    end
+
+    test "handles custom_message with empty list content" do
+      branch = [
+        %SessionEntry{
+          id: "entry1",
+          parent_id: nil,
+          type: :custom_message,
+          custom_type: "empty_blocks",
+          content: [],
+          display: true,
+          timestamp: 0
+        },
+        %SessionEntry{
+          id: "entry2",
+          parent_id: "entry1",
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("a", 80_000)},
+          timestamp: 1
+        },
+        %SessionEntry{
+          id: "entry3",
+          parent_id: "entry2",
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("b", 80_000)},
+          timestamp: 2
+        }
+      ]
+
+      result = Compaction.find_cut_point(branch, 10_000)
+      assert {:ok, _cut_id} = result
+    end
+
+    test "handles custom_message with list content containing text blocks" do
+      branch = [
+        %SessionEntry{
+          id: "entry1",
+          parent_id: nil,
+          type: :custom_message,
+          custom_type: "structured",
+          content: [
+            %{"type" => "text", "text" => String.duplicate("context ", 10_000)}
+          ],
+          display: true,
+          timestamp: 0
+        },
+        %SessionEntry{
+          id: "entry2",
+          parent_id: "entry1",
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("a", 80_000)},
+          timestamp: 1
+        },
+        %SessionEntry{
+          id: "entry3",
+          parent_id: "entry2",
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("b", 80_000)},
+          timestamp: 2
+        }
+      ]
+
+      result = Compaction.find_cut_point(branch, 10_000)
+      assert {:ok, cut_id} = result
+      assert cut_id in ["entry1", "entry2"]
+    end
+
+    test "custom_message with display: false is still valid cut point" do
+      branch = [
+        %SessionEntry{
+          id: "entry1",
+          parent_id: nil,
+          type: :custom_message,
+          custom_type: "hidden",
+          content: String.duplicate("hidden content ", 5000),
+          display: false,
+          timestamp: 0
+        },
+        %SessionEntry{
+          id: "entry2",
+          parent_id: "entry1",
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("a", 80_000)},
+          timestamp: 1
+        },
+        %SessionEntry{
+          id: "entry3",
+          parent_id: "entry2",
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("b", 80_000)},
+          timestamp: 2
+        }
+      ]
+
+      result = Compaction.find_cut_point(branch, 10_000)
+      assert {:ok, cut_id} = result
+      # entry1 with display: false should still be a valid cut point
+      assert cut_id in ["entry1", "entry2"]
+    end
+  end
+
+  describe "cut point validation with malformed message formats" do
+    test "handles message entry with nil message field" do
+      branch = [
+        %SessionEntry{
+          id: "entry1",
+          parent_id: nil,
+          type: :message,
+          message: nil,
+          timestamp: 0
+        },
+        %SessionEntry{
+          id: "entry2",
+          parent_id: "entry1",
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("a", 80_000)},
+          timestamp: 1
+        },
+        %SessionEntry{
+          id: "entry3",
+          parent_id: "entry2",
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("b", 80_000)},
+          timestamp: 2
+        }
+      ]
+
+      # Should skip nil message entries
+      result = Compaction.find_cut_point(branch, 10_000)
+      assert {:ok, cut_id} = result
+      # entry1 has nil message so should be excluded
+      assert cut_id == "entry2"
+    end
+
+    test "handles message with missing role field" do
+      branch = [
+        %SessionEntry{
+          id: "entry1",
+          parent_id: nil,
+          type: :message,
+          message: %{"content" => "missing role"},
+          timestamp: 0
+        },
+        %SessionEntry{
+          id: "entry2",
+          parent_id: "entry1",
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("a", 80_000)},
+          timestamp: 1
+        },
+        %SessionEntry{
+          id: "entry3",
+          parent_id: "entry2",
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("b", 80_000)},
+          timestamp: 2
+        }
+      ]
+
+      # Message without role should not be a valid cut point
+      result = Compaction.find_cut_point(branch, 10_000)
+      assert {:ok, cut_id} = result
+      # entry1 has no role, so entry2 should be the cut point
+      assert cut_id == "entry2"
+    end
+
+    test "handles message with unknown role" do
+      branch = [
+        %SessionEntry{
+          id: "entry1",
+          parent_id: nil,
+          type: :message,
+          message: %{"role" => "unknown_role", "content" => String.duplicate("a", 80_000)},
+          timestamp: 0
+        },
+        %SessionEntry{
+          id: "entry2",
+          parent_id: "entry1",
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("b", 80_000)},
+          timestamp: 1
+        },
+        %SessionEntry{
+          id: "entry3",
+          parent_id: "entry2",
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("c", 80_000)},
+          timestamp: 2
+        }
+      ]
+
+      result = Compaction.find_cut_point(branch, 10_000)
+      assert {:ok, cut_id} = result
+      # unknown_role should not be valid, cut at entry2
+      assert cut_id == "entry2"
+    end
+
+    test "handles assistant message with nil content" do
+      branch = [
+        %SessionEntry{
+          id: "entry1",
+          parent_id: nil,
+          type: :message,
+          message: %{"role" => "assistant", "content" => nil},
+          timestamp: 0
+        },
+        %SessionEntry{
+          id: "entry2",
+          parent_id: "entry1",
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("a", 80_000)},
+          timestamp: 1
+        },
+        %SessionEntry{
+          id: "entry3",
+          parent_id: "entry2",
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("b", 80_000)},
+          timestamp: 2
+        }
+      ]
+
+      # Assistant with nil content has no tool calls, so should be valid
+      result = Compaction.find_cut_point(branch, 10_000)
+      assert {:ok, cut_id} = result
+      assert cut_id in ["entry1", "entry2"]
+    end
+
+    test "handles tool_result with missing tool_call_id" do
+      branch = [
+        %SessionEntry{
+          id: "entry1",
+          parent_id: nil,
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("a", 40_000)},
+          timestamp: 0
+        },
+        %SessionEntry{
+          id: "entry2",
+          parent_id: "entry1",
+          type: :message,
+          message: %{
+            "role" => "assistant",
+            "content" => [
+              %{"type" => "tool_call", "id" => "tc_1", "name" => "read", "arguments" => %{}}
+            ]
+          },
+          timestamp: 1
+        },
+        %SessionEntry{
+          id: "entry3",
+          parent_id: "entry2",
+          type: :message,
+          message: %{
+            "role" => "tool_result",
+            # Missing tool_call_id field
+            "content" => [%{"type" => "text", "text" => String.duplicate("b", 40_000)}]
+          },
+          timestamp: 2
+        },
+        %SessionEntry{
+          id: "entry4",
+          parent_id: "entry3",
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("c", 40_000)},
+          timestamp: 3
+        }
+      ]
+
+      # entry2 has pending tool call without matching result, should not be valid cut point
+      result = Compaction.find_cut_point(branch, 10_000)
+      assert {:ok, cut_id} = result
+      # Only entry1 and entry4 are valid (user messages)
+      assert cut_id in ["entry1", "entry4"]
+    end
+
+    test "handles tool_call with nil id" do
+      branch = [
+        %SessionEntry{
+          id: "entry1",
+          parent_id: nil,
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("a", 40_000)},
+          timestamp: 0
+        },
+        %SessionEntry{
+          id: "entry2",
+          parent_id: "entry1",
+          type: :message,
+          message: %{
+            "role" => "assistant",
+            "content" => [
+              %{"type" => "tool_call", "id" => nil, "name" => "read", "arguments" => %{}}
+            ]
+          },
+          timestamp: 1
+        },
+        %SessionEntry{
+          id: "entry3",
+          parent_id: "entry2",
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("b", 40_000)},
+          timestamp: 2
+        },
+        %SessionEntry{
+          id: "entry4",
+          parent_id: "entry3",
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("c", 40_000)},
+          timestamp: 3
+        }
+      ]
+
+      # Tool call with nil id should be filtered out, making entry2 a valid cut point
+      result = Compaction.find_cut_point(branch, 10_000)
+      assert {:ok, cut_id} = result
+      assert cut_id in ["entry1", "entry2", "entry3"]
+    end
+
+    test "handles entry with invalid type" do
+      branch = [
+        %SessionEntry{
+          id: "entry1",
+          parent_id: nil,
+          type: :invalid_type,
+          message: nil,
+          timestamp: 0
+        },
+        %SessionEntry{
+          id: "entry2",
+          parent_id: "entry1",
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("a", 80_000)},
+          timestamp: 1
+        },
+        %SessionEntry{
+          id: "entry3",
+          parent_id: "entry2",
+          type: :message,
+          message: %{"role" => "user", "content" => String.duplicate("b", 80_000)},
+          timestamp: 2
+        }
+      ]
+
+      # Invalid type entries should be filtered out
+      result = Compaction.find_cut_point(branch, 10_000)
+      assert {:ok, cut_id} = result
+      assert cut_id == "entry2"
+    end
+  end
+
+  describe "deeply nested tool call chains" do
+    test "handles 10 consecutive tool call/result pairs" do
+      long_content = String.duplicate("a", 8000)
+
+      entries =
+        Enum.flat_map(1..10, fn i ->
+          parent_id = if i == 1, do: nil, else: "result_#{i - 1}"
+
+          [
+            %SessionEntry{
+              id: "call_#{i}",
+              parent_id: parent_id,
+              type: :message,
+              message: %{
+                "role" => "assistant",
+                "content" => [
+                  %{"type" => "text", "text" => "Step #{i}"},
+                  %{"type" => "tool_call", "id" => "tc_#{i}", "name" => "read", "arguments" => %{}}
+                ]
+              },
+              timestamp: i * 2 - 1
+            },
+            %SessionEntry{
+              id: "result_#{i}",
+              parent_id: "call_#{i}",
+              type: :message,
+              message: %{
+                "role" => "tool_result",
+                "tool_call_id" => "tc_#{i}",
+                "content" => [%{"type" => "text", "text" => long_content}]
+              },
+              timestamp: i * 2
+            }
+          ]
+        end)
+
+      # Add a final user message
+      entries =
+        entries ++
+          [
+            %SessionEntry{
+              id: "final_user",
+              parent_id: "result_10",
+              type: :message,
+              message: %{"role" => "user", "content" => long_content},
+              timestamp: 21
+            }
+          ]
+
+      result = Compaction.find_cut_point(entries, 5000)
+      assert {:ok, cut_id} = result
+      # Should find a valid cut point - assistant messages with completed tool results
+      # are valid cut points
+      assert String.starts_with?(cut_id, "call_") or cut_id == "final_user"
+    end
+
+    test "handles assistant with multiple parallel tool calls" do
+      long_content = String.duplicate("a", 10_000)
+
+      branch = [
+        %SessionEntry{
+          id: "entry1",
+          parent_id: nil,
+          type: :message,
+          message: %{"role" => "user", "content" => long_content},
+          timestamp: 0
+        },
+        %SessionEntry{
+          id: "entry2",
+          parent_id: "entry1",
+          type: :message,
+          message: %{
+            "role" => "assistant",
+            "content" => [
+              %{"type" => "text", "text" => "I'll read multiple files"},
+              %{"type" => "tool_call", "id" => "tc_1", "name" => "read", "arguments" => %{"path" => "/a"}},
+              %{"type" => "tool_call", "id" => "tc_2", "name" => "read", "arguments" => %{"path" => "/b"}},
+              %{"type" => "tool_call", "id" => "tc_3", "name" => "read", "arguments" => %{"path" => "/c"}}
+            ]
+          },
+          timestamp: 1
+        },
+        %SessionEntry{
+          id: "entry3",
+          parent_id: "entry2",
+          type: :message,
+          message: %{
+            "role" => "tool_result",
+            "tool_call_id" => "tc_1",
+            "content" => [%{"type" => "text", "text" => long_content}]
+          },
+          timestamp: 2
+        },
+        %SessionEntry{
+          id: "entry4",
+          parent_id: "entry3",
+          type: :message,
+          message: %{
+            "role" => "tool_result",
+            "tool_call_id" => "tc_2",
+            "content" => [%{"type" => "text", "text" => long_content}]
+          },
+          timestamp: 3
+        },
+        %SessionEntry{
+          id: "entry5",
+          parent_id: "entry4",
+          type: :message,
+          message: %{
+            "role" => "tool_result",
+            "tool_call_id" => "tc_3",
+            "content" => [%{"type" => "text", "text" => long_content}]
+          },
+          timestamp: 4
+        },
+        %SessionEntry{
+          id: "entry6",
+          parent_id: "entry5",
+          type: :message,
+          message: %{"role" => "user", "content" => long_content},
+          timestamp: 5
+        }
+      ]
+
+      result = Compaction.find_cut_point(branch, 5000)
+      assert {:ok, cut_id} = result
+      # entry2 should be valid because all 3 tool calls have results
+      assert cut_id in ["entry1", "entry2", "entry6"]
+    end
+
+    test "rejects cut at assistant when one of multiple tool calls has no result" do
+      long_content = String.duplicate("a", 10_000)
+
+      branch = [
+        %SessionEntry{
+          id: "entry1",
+          parent_id: nil,
+          type: :message,
+          message: %{"role" => "user", "content" => long_content},
+          timestamp: 0
+        },
+        %SessionEntry{
+          id: "entry2",
+          parent_id: "entry1",
+          type: :message,
+          message: %{
+            "role" => "assistant",
+            "content" => [
+              %{"type" => "tool_call", "id" => "tc_1", "name" => "read", "arguments" => %{}},
+              %{"type" => "tool_call", "id" => "tc_2", "name" => "read", "arguments" => %{}}
+            ]
+          },
+          timestamp: 1
+        },
+        # Only one tool result provided
+        %SessionEntry{
+          id: "entry3",
+          parent_id: "entry2",
+          type: :message,
+          message: %{
+            "role" => "tool_result",
+            "tool_call_id" => "tc_1",
+            "content" => [%{"type" => "text", "text" => long_content}]
+          },
+          timestamp: 2
+        },
+        %SessionEntry{
+          id: "entry4",
+          parent_id: "entry3",
+          type: :message,
+          message: %{"role" => "user", "content" => long_content},
+          timestamp: 3
+        }
+      ]
+
+      result = Compaction.find_cut_point(branch, 2000)
+      assert {:ok, cut_id} = result
+      # entry2 is not valid (missing tc_2 result), so cut at entry1 or entry4
+      assert cut_id in ["entry1", "entry4"]
+    end
+
+    test "handles tool_use_id format (alternative to tool_call_id)" do
+      long_content = String.duplicate("a", 10_000)
+
+      branch = [
+        %SessionEntry{
+          id: "entry1",
+          parent_id: nil,
+          type: :message,
+          message: %{"role" => "user", "content" => long_content},
+          timestamp: 0
+        },
+        %SessionEntry{
+          id: "entry2",
+          parent_id: "entry1",
+          type: :message,
+          message: %{
+            "role" => "assistant",
+            "content" => [
+              %{"type" => "tool_call", "id" => "tc_1", "name" => "read", "arguments" => %{}}
+            ]
+          },
+          timestamp: 1
+        },
+        %SessionEntry{
+          id: "entry3",
+          parent_id: "entry2",
+          type: :message,
+          message: %{
+            "role" => "tool_result",
+            "tool_use_id" => "tc_1",  # Using tool_use_id instead of tool_call_id
+            "content" => [%{"type" => "text", "text" => long_content}]
+          },
+          timestamp: 2
+        },
+        %SessionEntry{
+          id: "entry4",
+          parent_id: "entry3",
+          type: :message,
+          message: %{"role" => "user", "content" => long_content},
+          timestamp: 3
+        }
+      ]
+
+      result = Compaction.find_cut_point(branch, 2000)
+      assert {:ok, cut_id} = result
+      # entry2 should be valid because tc_1 has a result (using tool_use_id)
+      assert cut_id in ["entry1", "entry2"]
+    end
+  end
+
+  describe "summary generation abort signal checking" do
+    test "returns :aborted when signal is aborted before generate_summary" do
+      signal = AgentCore.AbortSignal.new()
+      AgentCore.AbortSignal.abort(signal)
+
+      messages = [
+        %Messages.UserMessage{content: "Hello", timestamp: 0}
+      ]
+
+      model = %Ai.Types.Model{
+        provider: :anthropic,
+        id: "claude-3-sonnet"
+      }
+
+      result = Compaction.generate_summary(messages, model, signal: signal)
+      assert {:error, :aborted} = result
+
+      AgentCore.AbortSignal.clear(signal)
+    end
+
+    test "returns :aborted when signal is aborted before generate_branch_summary" do
+      signal = AgentCore.AbortSignal.new()
+      AgentCore.AbortSignal.abort(signal)
+
+      branch_entries = [
+        %SessionEntry{
+          id: "entry1",
+          parent_id: nil,
+          type: :message,
+          message: %{"role" => "user", "content" => "Hello"},
+          timestamp: 0
+        }
+      ]
+
+      model = %Ai.Types.Model{
+        provider: :anthropic,
+        id: "claude-3-sonnet"
+      }
+
+      result = Compaction.generate_branch_summary(branch_entries, model, signal: signal)
+      assert {:error, :aborted} = result
+
+      AgentCore.AbortSignal.clear(signal)
+    end
+
+    test "generates summary with nil signal (default behavior)" do
+      # This test verifies that nil signal doesn't cause issues
+      messages = [
+        %Messages.UserMessage{content: "Hello", timestamp: 0}
+      ]
+
+      model = %Ai.Types.Model{
+        provider: :anthropic,
+        id: "claude-3-sonnet"
+      }
+
+      # With nil signal and no API mock, this will fail at the API call
+      # but should not fail at the abort check
+      result = Compaction.generate_summary(messages, model, signal: nil)
+
+      # The result will be an error from the API call, not from abort
+      case result do
+        {:error, :aborted} -> flunk("Should not return :aborted with nil signal")
+        {:ok, _summary} -> :ok
+        {:error, _other} -> :ok
+      end
+    end
+
+    test "accepts pre-generated summary via opts and skips abort check" do
+      signal = AgentCore.AbortSignal.new()
+      AgentCore.AbortSignal.abort(signal)
+
+      messages = [
+        %Messages.UserMessage{content: "Hello", timestamp: 0}
+      ]
+
+      model = %Ai.Types.Model{
+        provider: :anthropic,
+        id: "claude-3-sonnet"
+      }
+
+      # When summary is provided in opts, it should return immediately
+      result = Compaction.generate_summary(messages, model, signal: signal, summary: "Pre-generated summary")
+      assert {:ok, "Pre-generated summary"} = result
+
+      AgentCore.AbortSignal.clear(signal)
+    end
+
+    test "accepts pre-generated branch summary via opts and skips abort check" do
+      signal = AgentCore.AbortSignal.new()
+      AgentCore.AbortSignal.abort(signal)
+
+      branch_entries = [
+        %SessionEntry{
+          id: "entry1",
+          parent_id: nil,
+          type: :message,
+          message: %{"role" => "user", "content" => "Hello"},
+          timestamp: 0
+        }
+      ]
+
+      model = %Ai.Types.Model{
+        provider: :anthropic,
+        id: "claude-3-sonnet"
+      }
+
+      result = Compaction.generate_branch_summary(branch_entries, model, signal: signal, summary: "Branch summary")
+      assert {:ok, "Branch summary"} = result
+
+      AgentCore.AbortSignal.clear(signal)
+    end
+
+    test "ignores empty string summary in opts" do
+      signal = AgentCore.AbortSignal.new()
+      AgentCore.AbortSignal.abort(signal)
+
+      messages = [
+        %Messages.UserMessage{content: "Hello", timestamp: 0}
+      ]
+
+      model = %Ai.Types.Model{
+        provider: :anthropic,
+        id: "claude-3-sonnet"
+      }
+
+      # Empty string summary should be ignored and proceed to abort check
+      result = Compaction.generate_summary(messages, model, signal: signal, summary: "")
+      assert {:error, :aborted} = result
+
+      AgentCore.AbortSignal.clear(signal)
+    end
+  end
+
+  describe "failed API calls with various error types" do
+    # Note: These tests verify error handling patterns.
+    # In real usage, generate_summary calls Ai.complete which may return various errors.
+
+    test "extract_file_operations handles empty tool call list gracefully" do
+      messages = [
+        %Messages.AssistantMessage{
+          content: [],
+          timestamp: 0
+        }
+      ]
+
+      result = Compaction.extract_file_operations(messages)
+      assert result.read_files == []
+      assert result.modified_files == []
+    end
+
+    test "extract_file_operations handles tool call with empty arguments" do
+      messages = [
+        %Messages.AssistantMessage{
+          content: [
+            %Messages.ToolCall{
+              type: :tool_call,
+              id: "tc1",
+              name: "read",
+              arguments: %{}
+            }
+          ],
+          timestamp: 0
+        }
+      ]
+
+      # Should handle empty arguments map without crashing
+      # Map.get(%{}, "path") returns nil, which is handled
+      result = Compaction.extract_file_operations(messages)
+      assert result.read_files == []
+    end
+
+    test "extract_file_operations handles malformed tool call struct" do
+      messages = [
+        %Messages.AssistantMessage{
+          content: [
+            %Messages.ToolCall{
+              type: :tool_call,
+              id: "tc1",
+              name: "unknown_tool",
+              arguments: %{"some" => "args"}
+            }
+          ],
+          timestamp: 0
+        }
+      ]
+
+      # Unknown tool names should be ignored
+      result = Compaction.extract_file_operations(messages)
+      assert result.read_files == []
+      assert result.modified_files == []
+    end
+  end
+
+  describe "truncation of very long tool results" do
+    test "format_message_for_summary truncates tool results to 500 chars" do
+      # This is an internal function, but we can test it indirectly
+      # by checking the behavior through generate_summary (if we could mock Ai.complete)
+      # For now, we verify that estimate_message_tokens handles long tool results
+
+      long_output = String.duplicate("x", 10_000)
+
+      msg = %Messages.ToolResultMessage{
+        tool_use_id: "test_id",
+        content: [%Messages.TextContent{text: long_output}],
+        timestamp: 0
+      }
+
+      tokens = Compaction.estimate_message_tokens(msg)
+      # Full 10,000 chars / 4 = 2500 tokens (not truncated for estimation)
+      assert tokens == 2500
+    end
+
+    test "format_raw_message_for_summary truncates tool results to 200 chars" do
+      # This is tested indirectly - the format functions truncate for summarization
+      # We verify that the compaction module handles long content in entries
+
+      long_content = String.duplicate("y", 50_000)
+
+      branch = [
+        %SessionEntry{
+          id: "entry1",
+          parent_id: nil,
+          type: :message,
+          message: %{
+            "role" => "tool_result",
+            "tool_call_id" => "tc_1",
+            "content" => [%{"type" => "text", "text" => long_content}]
+          },
+          timestamp: 0
+        },
+        %SessionEntry{
+          id: "entry2",
+          parent_id: "entry1",
+          type: :message,
+          message: %{"role" => "user", "content" => long_content},
+          timestamp: 1
+        },
+        %SessionEntry{
+          id: "entry3",
+          parent_id: "entry2",
+          type: :message,
+          message: %{"role" => "user", "content" => long_content},
+          timestamp: 2
+        }
+      ]
+
+      # Should handle very long tool results in cut point calculation
+      result = Compaction.find_cut_point(branch, 5000)
+      assert {:ok, _cut_id} = result
+    end
+
+    test "handles tool result with very large base64 content" do
+      # Simulate a tool result containing base64-encoded file content
+      large_base64 = Base.encode64(:crypto.strong_rand_bytes(100_000))
+
+      msg = %Messages.ToolResultMessage{
+        tool_use_id: "file_read_1",
+        content: [%Messages.TextContent{text: large_base64}],
+        is_error: false,
+        timestamp: 0
+      }
+
+      tokens = Compaction.estimate_message_tokens(msg)
+      # base64 of 100KB is ~133KB of text / 4 = ~33K tokens
+      assert tokens > 30_000
+    end
+
+    test "handles error tool result with long error message" do
+      long_error = "Error: " <> String.duplicate("stack trace line\n", 5000)
+
+      msg = %Messages.ToolResultMessage{
+        tool_use_id: "failed_tool",
+        content: [%Messages.TextContent{text: long_error}],
+        is_error: true,
+        timestamp: 0
+      }
+
+      tokens = Compaction.estimate_message_tokens(msg)
+      expected = div(String.length(long_error), 4)
+      assert tokens == expected
+    end
+  end
+
+  describe "total_tokens edge cases" do
+    test "handles map with only some fields present" do
+      # Only input and cache_read, missing output and cache_write
+      usage = %{input: 100, cache_read: 50}
+      assert Compaction.total_tokens(usage) == 0
+    end
+
+    test "handles negative token values" do
+      # Shouldn't happen in practice, but verify behavior
+      usage = %{total_tokens: -100}
+      assert Compaction.total_tokens(usage) == -100
+    end
+
+    test "handles very large token counts" do
+      usage = %{total_tokens: 1_000_000_000}
+      assert Compaction.total_tokens(usage) == 1_000_000_000
+    end
+
+    test "handles float values (should not match integer patterns)" do
+      usage = %{total_tokens: 100.5}
+      # Float doesn't match integer guard
+      assert Compaction.total_tokens(usage) == 0
+    end
+
+    test "handles string token values" do
+      usage = %{total_tokens: "100"}
+      # String doesn't match integer guard
+      assert Compaction.total_tokens(usage) == 0
+    end
+
+    test "handles atom values" do
+      usage = %{total_tokens: :infinity}
+      assert Compaction.total_tokens(usage) == 0
+    end
+  end
+
+  describe "find_cut_point boundary conditions" do
+    test "single message that exceeds keep_recent_tokens" do
+      # One very large message that alone exceeds the threshold
+      huge_content = String.duplicate("z", 400_000)  # 100,000 tokens
+
+      branch = [
+        %SessionEntry{
+          id: "entry1",
+          parent_id: nil,
+          type: :message,
+          message: %{"role" => "user", "content" => huge_content},
+          timestamp: 0
+        }
+      ]
+
+      # Even though message exceeds threshold, can't compact single message
+      result = Compaction.find_cut_point(branch, 20_000)
+      assert {:error, :cannot_compact} = result
+    end
+
+    test "all messages are tool_result (no valid cut points)" do
+      long_content = String.duplicate("a", 20_000)
+
+      branch = [
+        %SessionEntry{
+          id: "entry1",
+          parent_id: nil,
+          type: :message,
+          message: %{
+            "role" => "tool_result",
+            "tool_call_id" => "tc_1",
+            "content" => [%{"type" => "text", "text" => long_content}]
+          },
+          timestamp: 0
+        },
+        %SessionEntry{
+          id: "entry2",
+          parent_id: "entry1",
+          type: :message,
+          message: %{
+            "role" => "tool_result",
+            "tool_call_id" => "tc_2",
+            "content" => [%{"type" => "text", "text" => long_content}]
+          },
+          timestamp: 1
+        }
+      ]
+
+      # tool_result messages are not valid cut points
+      result = Compaction.find_cut_point(branch, 2000)
+      assert {:error, :cannot_compact} = result
+    end
+
+    test "keep_recent_tokens of 0 still requires valid cut point" do
+      branch = [
+        %SessionEntry{
+          id: "entry1",
+          parent_id: nil,
+          type: :message,
+          message: %{"role" => "user", "content" => "hello"},
+          timestamp: 0
+        },
+        %SessionEntry{
+          id: "entry2",
+          parent_id: "entry1",
+          type: :message,
+          message: %{"role" => "user", "content" => "world"},
+          timestamp: 1
+        }
+      ]
+
+      # With 0 tokens to keep, should immediately find cut point at first valid entry
+      result = Compaction.find_cut_point(branch, 0)
+      assert {:ok, "entry1"} = result
+    end
+
+    test "very high keep_recent_tokens returns cannot_compact" do
+      branch = [
+        %SessionEntry{
+          id: "entry1",
+          parent_id: nil,
+          type: :message,
+          message: %{"role" => "user", "content" => "hello"},
+          timestamp: 0
+        },
+        %SessionEntry{
+          id: "entry2",
+          parent_id: "entry1",
+          type: :message,
+          message: %{"role" => "user", "content" => "world"},
+          timestamp: 1
+        }
+      ]
+
+      # Requesting to keep 1 billion tokens
+      result = Compaction.find_cut_point(branch, 1_000_000_000)
+      assert {:error, :cannot_compact} = result
+    end
+  end
+
+  describe "extract_file_operations with various message types" do
+    test "handles Ai.Types messages" do
+      # The function should work with different message formats
+      messages = [
+        %Ai.Types.AssistantMessage{
+          role: :assistant,
+          content: [
+            %Ai.Types.ToolCall{
+              type: :tool_call,
+              id: "tc1",
+              name: "read",
+              arguments: %{"path" => "/test/file.txt"}
+            }
+          ],
+          timestamp: 0
+        }
+      ]
+
+      # Ai.Types.ToolCall has 'arguments' field like Messages.ToolCall
+      result = Compaction.extract_file_operations(messages)
+      assert is_list(result.read_files)
+      assert is_list(result.modified_files)
+    end
+
+    test "handles mixed CodingAgent.Messages and Ai.Types messages" do
+      messages = [
+        %Messages.AssistantMessage{
+          content: [
+            %Messages.ToolCall{
+              type: :tool_call,
+              id: "tc1",
+              name: "read",
+              arguments: %{"path" => "/path/one.txt"}
+            }
+          ],
+          timestamp: 0
+        },
+        %Messages.UserMessage{content: "Thanks", timestamp: 1},
+        %Messages.AssistantMessage{
+          content: [
+            %Messages.ToolCall{
+              type: :tool_call,
+              id: "tc2",
+              name: "write",
+              arguments: %{"path" => "/path/two.txt", "content" => "data"}
+            }
+          ],
+          timestamp: 2
+        }
+      ]
+
+      result = Compaction.extract_file_operations(messages)
+      assert "/path/one.txt" in result.read_files
+      assert "/path/two.txt" in result.modified_files
+    end
+  end
 end

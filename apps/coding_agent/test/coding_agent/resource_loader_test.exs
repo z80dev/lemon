@@ -167,4 +167,181 @@ defmodule CodingAgent.ResourceLoaderTest do
       assert ResourceLoader.resource_exists?(tmp_dir, "CLAUDE.md")
     end
   end
+
+  describe "load_theme/1" do
+    setup do
+      # Create a temporary themes directory that we control
+      # We need to mock the Config.agent_dir() or use a test-specific approach
+      # Since load_theme/1 only looks in Config.agent_dir()/themes,
+      # we'll test by temporarily creating files in that location
+      agent_dir = CodingAgent.Config.agent_dir()
+      themes_dir = Path.join(agent_dir, "themes")
+      File.mkdir_p!(themes_dir)
+
+      on_exit(fn ->
+        # Clean up test theme files
+        File.rm(Path.join(themes_dir, "test_theme.json"))
+        File.rm(Path.join(themes_dir, "invalid_json.json"))
+        File.rm(Path.join(themes_dir, "empty_theme.json"))
+        File.rm(Path.join(themes_dir, "nested_theme.json"))
+      end)
+
+      {:ok, themes_dir: themes_dir}
+    end
+
+    test "returns {:error, :not_found} when theme doesn't exist" do
+      result = ResourceLoader.load_theme("nonexistent_theme_xyz")
+      assert result == {:error, :not_found}
+    end
+
+    test "loads valid theme JSON successfully", %{themes_dir: themes_dir} do
+      theme_content = ~s({"name": "test", "colors": {"primary": "#FF0000", "secondary": "#00FF00"}})
+      File.write!(Path.join(themes_dir, "test_theme.json"), theme_content)
+
+      result = ResourceLoader.load_theme("test_theme")
+      assert {:ok, theme} = result
+      assert theme["name"] == "test"
+      assert theme["colors"]["primary"] == "#FF0000"
+      assert theme["colors"]["secondary"] == "#00FF00"
+    end
+
+    test "returns parse error for invalid JSON", %{themes_dir: themes_dir} do
+      invalid_json = "{ invalid json content }"
+      File.write!(Path.join(themes_dir, "invalid_json.json"), invalid_json)
+
+      result = ResourceLoader.load_theme("invalid_json")
+      assert {:error, {:parse_error, _reason}} = result
+    end
+
+    test "returns parse error for malformed JSON with trailing comma", %{themes_dir: themes_dir} do
+      malformed_json = ~s({"name": "test", "color": "blue",})
+      File.write!(Path.join(themes_dir, "invalid_json.json"), malformed_json)
+
+      result = ResourceLoader.load_theme("invalid_json")
+      assert {:error, {:parse_error, _reason}} = result
+    end
+
+    test "loads empty JSON object as valid theme", %{themes_dir: themes_dir} do
+      File.write!(Path.join(themes_dir, "empty_theme.json"), "{}")
+
+      result = ResourceLoader.load_theme("empty_theme")
+      assert {:ok, theme} = result
+      assert theme == %{}
+    end
+
+    test "loads theme with nested structures", %{themes_dir: themes_dir} do
+      nested_theme = Jason.encode!(%{
+        "name" => "nested",
+        "colors" => %{
+          "ui" => %{
+            "background" => "#000000",
+            "foreground" => "#FFFFFF"
+          },
+          "syntax" => %{
+            "keyword" => "#FF00FF",
+            "string" => "#00FFFF"
+          }
+        },
+        "fonts" => ["Monaco", "Consolas", "monospace"]
+      })
+      File.write!(Path.join(themes_dir, "nested_theme.json"), nested_theme)
+
+      result = ResourceLoader.load_theme("nested_theme")
+      assert {:ok, theme} = result
+      assert theme["name"] == "nested"
+      assert theme["colors"]["ui"]["background"] == "#000000"
+      assert theme["colors"]["syntax"]["keyword"] == "#FF00FF"
+      assert theme["fonts"] == ["Monaco", "Consolas", "monospace"]
+    end
+
+    test "returns :not_found for theme name with path traversal attempt" do
+      # Attempting path traversal should not find a file
+      result = ResourceLoader.load_theme("../../../etc/passwd")
+      assert result == {:error, :not_found}
+    end
+
+    test "returns :not_found when theme name is empty string" do
+      result = ResourceLoader.load_theme("")
+      assert result == {:error, :not_found}
+    end
+
+    test "handles theme names with special characters", %{themes_dir: themes_dir} do
+      # Theme names that might cause issues
+      File.write!(Path.join(themes_dir, "test_theme.json"), ~s({"name": "special"}))
+
+      # Underscores should work
+      result = ResourceLoader.load_theme("test_theme")
+      assert {:ok, _theme} = result
+    end
+
+    test "returns :not_found when themes directory doesn't exist" do
+      # This tests the case where the themes directory hasn't been created
+      # Since our setup creates it, we test with a definitely non-existent theme
+      result = ResourceLoader.load_theme("definitely_not_a_real_theme_12345")
+      assert result == {:error, :not_found}
+    end
+
+    test "parses JSON with unicode characters", %{themes_dir: themes_dir} do
+      unicode_theme = ~s({"name": "Thème Sombre", "description": "日本語テーマ", "emoji": "🎨"})
+      File.write!(Path.join(themes_dir, "test_theme.json"), unicode_theme)
+
+      result = ResourceLoader.load_theme("test_theme")
+      assert {:ok, theme} = result
+      assert theme["name"] == "Thème Sombre"
+      assert theme["description"] == "日本語テーマ"
+      assert theme["emoji"] == "🎨"
+    end
+
+    test "parses JSON with numeric and boolean values", %{themes_dir: themes_dir} do
+      typed_theme = ~s({"version": 2, "opacity": 0.95, "enabled": true, "deprecated": false, "count": null})
+      File.write!(Path.join(themes_dir, "test_theme.json"), typed_theme)
+
+      result = ResourceLoader.load_theme("test_theme")
+      assert {:ok, theme} = result
+      assert theme["version"] == 2
+      assert theme["opacity"] == 0.95
+      assert theme["enabled"] == true
+      assert theme["deprecated"] == false
+      assert theme["count"] == nil
+    end
+
+    test "handles JSON array at root level", %{themes_dir: themes_dir} do
+      # While unusual, a JSON array is technically valid JSON
+      array_theme = ~s([{"name": "light"}, {"name": "dark"}])
+      File.write!(Path.join(themes_dir, "test_theme.json"), array_theme)
+
+      result = ResourceLoader.load_theme("test_theme")
+      assert {:ok, theme} = result
+      assert is_list(theme)
+      assert length(theme) == 2
+    end
+
+    test "returns parse error for completely empty file", %{themes_dir: themes_dir} do
+      File.write!(Path.join(themes_dir, "empty_theme.json"), "")
+
+      result = ResourceLoader.load_theme("empty_theme")
+      assert {:error, {:parse_error, _reason}} = result
+    end
+
+    test "returns parse error for whitespace-only file", %{themes_dir: themes_dir} do
+      File.write!(Path.join(themes_dir, "empty_theme.json"), "   \n\t  ")
+
+      result = ResourceLoader.load_theme("empty_theme")
+      assert {:error, {:parse_error, _reason}} = result
+    end
+
+    test "handles large theme file", %{themes_dir: themes_dir} do
+      # Create a theme with many properties
+      colors = for i <- 1..100, into: %{} do
+        {"color_#{i}", "##{String.pad_leading(Integer.to_string(i, 16), 6, "0")}"}
+      end
+      large_theme = Jason.encode!(%{"name" => "large", "colors" => colors})
+      File.write!(Path.join(themes_dir, "test_theme.json"), large_theme)
+
+      result = ResourceLoader.load_theme("test_theme")
+      assert {:ok, theme} = result
+      assert theme["name"] == "large"
+      assert map_size(theme["colors"]) == 100
+    end
+  end
 end

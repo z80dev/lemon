@@ -1174,4 +1174,1357 @@ defmodule CodingAgent.ExtensionsTest do
       assert report.provider_registration == nil
     end
   end
+
+  # ============================================================================
+  # Provider Conflict Resolution Tests
+  # ============================================================================
+
+  describe "provider conflict detection" do
+    setup do
+      Ai.ProviderRegistry.init()
+      on_exit(fn -> Ai.ProviderRegistry.clear() end)
+      :ok
+    end
+
+    test "detects conflict when three extensions provide same provider name", %{tmp_dir: tmp_dir} do
+      ext_a_code = """
+      defmodule ThreeWayConflictExtA do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "three-way-a"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers do
+          [%{type: :model, name: :shared_provider, module: ThreeWayModuleA}]
+        end
+      end
+
+      defmodule ThreeWayModuleA do
+      end
+      """
+
+      ext_b_code = """
+      defmodule ThreeWayConflictExtB do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "three-way-b"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers do
+          [%{type: :model, name: :shared_provider, module: ThreeWayModuleB}]
+        end
+      end
+
+      defmodule ThreeWayModuleB do
+      end
+      """
+
+      ext_c_code = """
+      defmodule ThreeWayConflictExtC do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "three-way-c"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers do
+          [%{type: :model, name: :shared_provider, module: ThreeWayModuleC}]
+        end
+      end
+
+      defmodule ThreeWayModuleC do
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "three_way_a.ex"), ext_a_code)
+      File.write!(Path.join(tmp_dir, "three_way_b.ex"), ext_b_code)
+      File.write!(Path.join(tmp_dir, "three_way_c.ex"), ext_c_code)
+      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      report = Extensions.register_extension_providers(extensions)
+
+      # Only one should be registered, two should be shadowed
+      assert report.total_registered == 1
+      assert report.total_conflicts == 1
+
+      conflict = hd(report.conflicts)
+      assert conflict.name == :shared_provider
+      assert length(conflict.shadowed) == 2
+
+      # Cleanup
+      :code.purge(ThreeWayConflictExtA)
+      :code.delete(ThreeWayConflictExtA)
+      :code.purge(ThreeWayConflictExtB)
+      :code.delete(ThreeWayConflictExtB)
+      :code.purge(ThreeWayConflictExtC)
+      :code.delete(ThreeWayConflictExtC)
+      :code.purge(ThreeWayModuleA)
+      :code.delete(ThreeWayModuleA)
+      :code.purge(ThreeWayModuleB)
+      :code.delete(ThreeWayModuleB)
+      :code.purge(ThreeWayModuleC)
+      :code.delete(ThreeWayModuleC)
+    end
+
+    test "multiple independent provider names don't conflict", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule MultiProviderExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "multi-provider"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers do
+          [
+            %{type: :model, name: :provider_one, module: ProviderOne},
+            %{type: :model, name: :provider_two, module: ProviderTwo}
+          ]
+        end
+      end
+
+      defmodule ProviderOne do
+      end
+
+      defmodule ProviderTwo do
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "multi_provider.ex"), ext_code)
+      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      report = Extensions.register_extension_providers(extensions)
+
+      assert report.total_registered == 2
+      assert report.total_conflicts == 0
+      assert report.conflicts == []
+
+      # Cleanup
+      :code.purge(MultiProviderExt)
+      :code.delete(MultiProviderExt)
+      :code.purge(ProviderOne)
+      :code.delete(ProviderOne)
+      :code.purge(ProviderTwo)
+      :code.delete(ProviderTwo)
+    end
+  end
+
+  describe "built-in provider shadowing scenarios" do
+    setup do
+      Ai.ProviderRegistry.init()
+      on_exit(fn -> Ai.ProviderRegistry.clear() end)
+      :ok
+    end
+
+    test "built-in provider shadows single extension provider", %{tmp_dir: tmp_dir} do
+      # Pre-register a built-in provider
+      Ai.ProviderRegistry.register(:builtin_model, BuiltinModelModule)
+
+      ext_code = """
+      defmodule ShadowedByBuiltinExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "shadowed-by-builtin"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers do
+          [%{type: :model, name: :builtin_model, module: ExtensionModelModule}]
+        end
+      end
+
+      defmodule ExtensionModelModule do
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "shadowed_ext.ex"), ext_code)
+      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      report = Extensions.register_extension_providers(extensions)
+
+      # Extension provider should NOT be registered
+      assert report.total_registered == 0
+
+      # Built-in should still be there
+      assert {:ok, BuiltinModelModule} == Ai.ProviderRegistry.get(:builtin_model)
+
+      # Cleanup
+      :code.purge(ShadowedByBuiltinExt)
+      :code.delete(ShadowedByBuiltinExt)
+      :code.purge(ExtensionModelModule)
+      :code.delete(ExtensionModelModule)
+    end
+
+    test "built-in provider shadows multiple extension providers and creates conflict", %{tmp_dir: tmp_dir} do
+      # Pre-register a built-in provider
+      Ai.ProviderRegistry.register(:shared_builtin, SharedBuiltinModule)
+
+      ext_a_code = """
+      defmodule BuiltinShadowExtA do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "builtin-shadow-a"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers do
+          [%{type: :model, name: :shared_builtin, module: ShadowModuleA}]
+        end
+      end
+
+      defmodule ShadowModuleA do
+      end
+      """
+
+      ext_b_code = """
+      defmodule BuiltinShadowExtB do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "builtin-shadow-b"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers do
+          [%{type: :model, name: :shared_builtin, module: ShadowModuleB}]
+        end
+      end
+
+      defmodule ShadowModuleB do
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "builtin_shadow_a.ex"), ext_a_code)
+      File.write!(Path.join(tmp_dir, "builtin_shadow_b.ex"), ext_b_code)
+      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      report = Extensions.register_extension_providers(extensions)
+
+      # No extensions should be registered
+      assert report.total_registered == 0
+
+      # Should have one conflict with :builtin as winner
+      assert report.total_conflicts == 1
+      conflict = hd(report.conflicts)
+      assert conflict.winner == :builtin
+      assert length(conflict.shadowed) == 2
+
+      # Cleanup
+      :code.purge(BuiltinShadowExtA)
+      :code.delete(BuiltinShadowExtA)
+      :code.purge(BuiltinShadowExtB)
+      :code.delete(BuiltinShadowExtB)
+      :code.purge(ShadowModuleA)
+      :code.delete(ShadowModuleA)
+      :code.purge(ShadowModuleB)
+      :code.delete(ShadowModuleB)
+    end
+  end
+
+  describe "deterministic ordering for conflicts" do
+    setup do
+      Ai.ProviderRegistry.init()
+      on_exit(fn -> Ai.ProviderRegistry.clear() end)
+      :ok
+    end
+
+    test "winner is determined by alphabetical module name", %{tmp_dir: tmp_dir} do
+      # Create extensions with specific module names to test ordering
+      # "AAA" should come before "ZZZ" alphabetically
+      ext_z_code = """
+      defmodule ZZZConflictExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "zzz-ext"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers do
+          [%{type: :model, name: :ordered_provider, module: ZZZModule}]
+        end
+      end
+
+      defmodule ZZZModule do
+      end
+      """
+
+      ext_a_code = """
+      defmodule AAAConflictExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "aaa-ext"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers do
+          [%{type: :model, name: :ordered_provider, module: AAAModule}]
+        end
+      end
+
+      defmodule AAAModule do
+      end
+      """
+
+      # Write Z file first to ensure file order doesn't matter
+      File.write!(Path.join(tmp_dir, "zzz_ext.ex"), ext_z_code)
+      File.write!(Path.join(tmp_dir, "aaa_ext.ex"), ext_a_code)
+      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      report = Extensions.register_extension_providers(extensions)
+
+      assert report.total_registered == 1
+      assert report.total_conflicts == 1
+
+      # AAA should win because "Elixir.AAAConflictExt" < "Elixir.ZZZConflictExt"
+      conflict = hd(report.conflicts)
+      assert conflict.winner == AAAConflictExt
+      assert conflict.shadowed == [ZZZConflictExt]
+
+      # Verify AAA's module was registered
+      assert {:ok, AAAModule} == Ai.ProviderRegistry.get(:ordered_provider)
+
+      # Cleanup
+      :code.purge(AAAConflictExt)
+      :code.delete(AAAConflictExt)
+      :code.purge(ZZZConflictExt)
+      :code.delete(ZZZConflictExt)
+      :code.purge(AAAModule)
+      :code.delete(AAAModule)
+      :code.purge(ZZZModule)
+      :code.delete(ZZZModule)
+    end
+
+    test "ordering is consistent across multiple runs", %{tmp_dir: tmp_dir} do
+      ext_m_code = """
+      defmodule MMiddleConflictExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "m-ext"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers do
+          [%{type: :model, name: :consistent_provider, module: MMiddleModule}]
+        end
+      end
+
+      defmodule MMiddleModule do
+      end
+      """
+
+      ext_b_code = """
+      defmodule BBeforeConflictExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "b-ext"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers do
+          [%{type: :model, name: :consistent_provider, module: BBeforeModule}]
+        end
+      end
+
+      defmodule BBeforeModule do
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "m_ext.ex"), ext_m_code)
+      File.write!(Path.join(tmp_dir, "b_ext.ex"), ext_b_code)
+
+      # Run multiple times to ensure consistency
+      results =
+        for _ <- 1..5 do
+          Ai.ProviderRegistry.clear()
+          {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+          report = Extensions.register_extension_providers(extensions)
+          hd(report.conflicts).winner
+        end
+
+      # All runs should have the same winner
+      assert Enum.all?(results, fn winner -> winner == BBeforeConflictExt end)
+
+      # Cleanup
+      :code.purge(MMiddleConflictExt)
+      :code.delete(MMiddleConflictExt)
+      :code.purge(BBeforeConflictExt)
+      :code.delete(BBeforeConflictExt)
+      :code.purge(MMiddleModule)
+      :code.delete(MMiddleModule)
+      :code.purge(BBeforeModule)
+      :code.delete(BBeforeModule)
+    end
+  end
+
+  describe "non-:model provider type handling" do
+    setup do
+      Ai.ProviderRegistry.init()
+      on_exit(fn -> Ai.ProviderRegistry.clear() end)
+      :ok
+    end
+
+    test "skips :storage type providers", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule StorageProviderExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "storage-provider"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers do
+          [%{type: :storage, name: :custom_storage, module: CustomStorageModule}]
+        end
+      end
+
+      defmodule CustomStorageModule do
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "storage_ext.ex"), ext_code)
+      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      report = Extensions.register_extension_providers(extensions)
+
+      # Storage providers should be skipped (not registered)
+      assert report.total_registered == 0
+      assert report.total_conflicts == 0
+
+      # Provider should NOT be in the registry
+      refute Ai.ProviderRegistry.registered?(:custom_storage)
+
+      # Cleanup
+      :code.purge(StorageProviderExt)
+      :code.delete(StorageProviderExt)
+      :code.purge(CustomStorageModule)
+      :code.delete(CustomStorageModule)
+    end
+
+    test "skips :tool_executor type providers", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule ToolExecutorProviderExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "tool-executor-provider"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers do
+          [%{type: :tool_executor, name: :custom_executor, module: CustomExecutorModule}]
+        end
+      end
+
+      defmodule CustomExecutorModule do
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "tool_executor_ext.ex"), ext_code)
+      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      report = Extensions.register_extension_providers(extensions)
+
+      assert report.total_registered == 0
+      refute Ai.ProviderRegistry.registered?(:custom_executor)
+
+      # Cleanup
+      :code.purge(ToolExecutorProviderExt)
+      :code.delete(ToolExecutorProviderExt)
+      :code.purge(CustomExecutorModule)
+      :code.delete(CustomExecutorModule)
+    end
+
+    test "mixes model and non-model providers correctly", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule MixedTypeProviderExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "mixed-type-provider"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers do
+          [
+            %{type: :model, name: :my_model, module: MyModelModule},
+            %{type: :storage, name: :my_storage, module: MyStorageModule},
+            %{type: :tool_executor, name: :my_executor, module: MyExecutorModule}
+          ]
+        end
+      end
+
+      defmodule MyModelModule do
+      end
+
+      defmodule MyStorageModule do
+      end
+
+      defmodule MyExecutorModule do
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "mixed_type_ext.ex"), ext_code)
+      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      report = Extensions.register_extension_providers(extensions)
+
+      # Only model provider should be registered
+      assert report.total_registered == 1
+      assert hd(report.registered).name == :my_model
+      assert Ai.ProviderRegistry.registered?(:my_model)
+      refute Ai.ProviderRegistry.registered?(:my_storage)
+      refute Ai.ProviderRegistry.registered?(:my_executor)
+
+      # Cleanup
+      :code.purge(MixedTypeProviderExt)
+      :code.delete(MixedTypeProviderExt)
+      :code.purge(MyModelModule)
+      :code.delete(MyModelModule)
+      :code.purge(MyStorageModule)
+      :code.delete(MyStorageModule)
+      :code.purge(MyExecutorModule)
+      :code.delete(MyExecutorModule)
+    end
+
+    test "handles custom/unknown provider types", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule UnknownTypeProviderExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "unknown-type-provider"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers do
+          [%{type: :custom_type, name: :custom_provider, module: CustomTypeModule}]
+        end
+      end
+
+      defmodule CustomTypeModule do
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "unknown_type_ext.ex"), ext_code)
+      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      report = Extensions.register_extension_providers(extensions)
+
+      # Unknown types should be skipped
+      assert report.total_registered == 0
+      assert report.total_conflicts == 0
+
+      # Cleanup
+      :code.purge(UnknownTypeProviderExt)
+      :code.delete(UnknownTypeProviderExt)
+      :code.purge(CustomTypeModule)
+      :code.delete(CustomTypeModule)
+    end
+  end
+
+  describe "callbacks raising exceptions during validation" do
+    test "validates extension with providers/0 that raises", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule RaisingProvidersExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "raising-providers"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers do
+          raise "Providers callback crashed!"
+        end
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "raising_providers.ex"), ext_code)
+      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      # Extension should fail validation
+      assert extensions == []
+      assert length(validation_errors) == 1
+      assert hd(validation_errors).module == RaisingProvidersExt
+      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "providers/0 raised an error"))
+
+      # Cleanup
+      :code.purge(RaisingProvidersExt)
+      :code.delete(RaisingProvidersExt)
+    end
+
+    test "validates extension with name/0 that raises", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule RaisingNameValidationExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name do
+          raise "Name callback crashed!"
+        end
+
+        @impl true
+        def version, do: "1.0.0"
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "raising_name.ex"), ext_code)
+      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      assert extensions == []
+      assert length(validation_errors) == 1
+      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "name/0 raised an error"))
+
+      # Cleanup
+      :code.purge(RaisingNameValidationExt)
+      :code.delete(RaisingNameValidationExt)
+    end
+
+    test "validates extension with version/0 that raises", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule RaisingVersionValidationExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "raising-version"
+
+        @impl true
+        def version do
+          raise "Version callback crashed!"
+        end
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "raising_version.ex"), ext_code)
+      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      assert extensions == []
+      assert length(validation_errors) == 1
+      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "version/0 raised an error"))
+
+      # Cleanup
+      :code.purge(RaisingVersionValidationExt)
+      :code.delete(RaisingVersionValidationExt)
+    end
+
+    test "validates extension with capabilities/0 that raises", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule RaisingCapabilitiesExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "raising-capabilities"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def capabilities do
+          raise "Capabilities callback crashed!"
+        end
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "raising_capabilities.ex"), ext_code)
+      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      assert extensions == []
+      assert length(validation_errors) == 1
+      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "capabilities/0 raised an error"))
+
+      # Cleanup
+      :code.purge(RaisingCapabilitiesExt)
+      :code.delete(RaisingCapabilitiesExt)
+    end
+
+    test "validates extension with config_schema/0 that raises", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule RaisingConfigSchemaExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "raising-config-schema"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def config_schema do
+          raise "Config schema callback crashed!"
+        end
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "raising_config_schema.ex"), ext_code)
+      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      assert extensions == []
+      assert length(validation_errors) == 1
+      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "config_schema/0 raised an error"))
+
+      # Cleanup
+      :code.purge(RaisingConfigSchemaExt)
+      :code.delete(RaisingConfigSchemaExt)
+    end
+
+    test "validates extension with tools/1 that raises", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule RaisingToolsValidationExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "raising-tools-validation"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def tools(_cwd) do
+          raise "Tools callback crashed!"
+        end
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "raising_tools.ex"), ext_code)
+      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      assert extensions == []
+      assert length(validation_errors) == 1
+      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "tools/1 raised an error"))
+
+      # Cleanup
+      :code.purge(RaisingToolsValidationExt)
+      :code.delete(RaisingToolsValidationExt)
+    end
+
+    test "validates extension with hooks/0 that raises", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule RaisingHooksValidationExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "raising-hooks-validation"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def hooks do
+          raise "Hooks callback crashed!"
+        end
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "raising_hooks.ex"), ext_code)
+      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      assert extensions == []
+      assert length(validation_errors) == 1
+      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "hooks/0 raised an error"))
+
+      # Cleanup
+      :code.purge(RaisingHooksValidationExt)
+      :code.delete(RaisingHooksValidationExt)
+    end
+  end
+
+  describe "invalid return types from callbacks" do
+    test "rejects extension where name/0 returns non-string", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule InvalidNameTypeExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: :not_a_string
+
+        @impl true
+        def version, do: "1.0.0"
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "invalid_name_type.ex"), ext_code)
+      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      assert extensions == []
+      assert length(validation_errors) == 1
+      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "name/0 must return a string"))
+
+      # Cleanup
+      :code.purge(InvalidNameTypeExt)
+      :code.delete(InvalidNameTypeExt)
+    end
+
+    test "rejects extension where version/0 returns non-string", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule InvalidVersionTypeExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "invalid-version"
+
+        @impl true
+        def version, do: 100
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "invalid_version_type.ex"), ext_code)
+      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      assert extensions == []
+      assert length(validation_errors) == 1
+      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "version/0 must return a string"))
+
+      # Cleanup
+      :code.purge(InvalidVersionTypeExt)
+      :code.delete(InvalidVersionTypeExt)
+    end
+
+    test "rejects extension where tools/1 returns non-list", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule InvalidToolsTypeExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "invalid-tools"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def tools(_cwd), do: :not_a_list
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "invalid_tools_type.ex"), ext_code)
+      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      assert extensions == []
+      assert length(validation_errors) == 1
+      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "tools/1 must return a list"))
+
+      # Cleanup
+      :code.purge(InvalidToolsTypeExt)
+      :code.delete(InvalidToolsTypeExt)
+    end
+
+    test "rejects extension where hooks/0 returns non-keyword-list", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule InvalidHooksTypeExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "invalid-hooks"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def hooks, do: "not a keyword list"
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "invalid_hooks_type.ex"), ext_code)
+      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      assert extensions == []
+      assert length(validation_errors) == 1
+      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "hooks/0 must return a keyword list"))
+
+      # Cleanup
+      :code.purge(InvalidHooksTypeExt)
+      :code.delete(InvalidHooksTypeExt)
+    end
+
+    test "rejects extension where capabilities/0 returns non-list", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule InvalidCapabilitiesTypeExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "invalid-capabilities"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def capabilities, do: :not_a_list
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "invalid_capabilities_type.ex"), ext_code)
+      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      assert extensions == []
+      assert length(validation_errors) == 1
+      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "capabilities/0 must return a list"))
+
+      # Cleanup
+      :code.purge(InvalidCapabilitiesTypeExt)
+      :code.delete(InvalidCapabilitiesTypeExt)
+    end
+
+    test "rejects extension where config_schema/0 returns non-map", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule InvalidConfigSchemaTypeExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "invalid-config-schema"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def config_schema, do: []
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "invalid_config_schema_type.ex"), ext_code)
+      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      assert extensions == []
+      assert length(validation_errors) == 1
+      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "config_schema/0 must return a map"))
+
+      # Cleanup
+      :code.purge(InvalidConfigSchemaTypeExt)
+      :code.delete(InvalidConfigSchemaTypeExt)
+    end
+
+    test "rejects extension where providers/0 returns non-list", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule InvalidProvidersTypeExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "invalid-providers"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers, do: %{invalid: :structure}
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "invalid_providers_type.ex"), ext_code)
+      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      assert extensions == []
+      assert length(validation_errors) == 1
+      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "providers/0 must return a list"))
+
+      # Cleanup
+      :code.purge(InvalidProvidersTypeExt)
+      :code.delete(InvalidProvidersTypeExt)
+    end
+
+    test "collects multiple validation errors in single extension", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule MultipleInvalidExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: 123
+
+        @impl true
+        def version, do: :atom
+
+        @impl true
+        def tools(_cwd), do: "string"
+
+        @impl true
+        def hooks, do: :atom
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "multiple_invalid.ex"), ext_code)
+      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      assert extensions == []
+      assert length(validation_errors) == 1
+      errors = hd(validation_errors).errors
+
+      # Should have all four validation errors
+      assert length(errors) == 4
+      assert Enum.any?(errors, &String.contains?(&1, "name/0 must return a string"))
+      assert Enum.any?(errors, &String.contains?(&1, "version/0 must return a string"))
+      assert Enum.any?(errors, &String.contains?(&1, "tools/1 must return a list"))
+      assert Enum.any?(errors, &String.contains?(&1, "hooks/0 must return a keyword list"))
+
+      # Cleanup
+      :code.purge(MultipleInvalidExt)
+      :code.delete(MultipleInvalidExt)
+    end
+  end
+
+  describe "cache clearing and ETS table management" do
+    test "clear_extension_cache clears source path table", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule CacheSourcePathExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "cache-source-path"
+
+        @impl true
+        def version, do: "1.0.0"
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "cache_source_path.ex"), ext_code)
+      {:ok, _extensions} = Extensions.load_extensions([tmp_dir])
+
+      # Verify source path is tracked
+      assert Extensions.get_source_path(CacheSourcePathExt) != nil
+
+      # Clear cache
+      :ok = Extensions.clear_extension_cache()
+
+      # Source path should be gone
+      assert Extensions.get_source_path(CacheSourcePathExt) == nil
+    end
+
+    test "clear_extension_cache removes modules from code server", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule CacheCodeServerExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "cache-code-server"
+
+        @impl true
+        def version, do: "1.0.0"
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "cache_code_server.ex"), ext_code)
+      {:ok, _extensions} = Extensions.load_extensions([tmp_dir])
+
+      # Module should be loaded
+      assert Code.ensure_loaded?(CacheCodeServerExt)
+
+      # Clear cache
+      :ok = Extensions.clear_extension_cache()
+
+      # Module should be unloaded
+      refute Code.ensure_loaded?(CacheCodeServerExt)
+    end
+
+    test "clear_extension_cache clears load errors table", %{tmp_dir: tmp_dir} do
+      # Create an invalid file to generate errors
+      invalid_code = """
+      defmodule CacheLoadErrorsExt do
+        def missing_end
+      """
+
+      File.write!(Path.join(tmp_dir, "cache_load_errors.ex"), invalid_code)
+      {:ok, _extensions, errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      # Should have errors
+      assert length(errors) == 1
+
+      # Verify errors are cached
+      {cached_errors, timestamp} = Extensions.last_load_errors()
+      assert length(cached_errors) == 1
+      assert is_integer(timestamp)
+
+      # Clear cache
+      :ok = Extensions.clear_extension_cache()
+
+      # Errors should be cleared
+      {cleared_errors, cleared_timestamp} = Extensions.last_load_errors()
+      assert cleared_errors == []
+      assert cleared_timestamp == nil
+    end
+
+    test "ETS tables are recreated after clear and reload", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule ETSRecreateExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "ets-recreate"
+
+        @impl true
+        def version, do: "1.0.0"
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "ets_recreate.ex"), ext_code)
+
+      # First load
+      {:ok, extensions1} = Extensions.load_extensions([tmp_dir])
+      assert ETSRecreateExt in extensions1
+
+      # Clear
+      :ok = Extensions.clear_extension_cache()
+
+      # Reload (need to recompile the file)
+      {:ok, extensions2} = Extensions.load_extensions([tmp_dir])
+      assert ETSRecreateExt in extensions2
+
+      # Source path should be tracked again
+      assert Extensions.get_source_path(ETSRecreateExt) != nil
+
+      # Cleanup
+      :code.purge(ETSRecreateExt)
+      :code.delete(ETSRecreateExt)
+    end
+
+    test "list_extensions returns empty after clear", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule ListAfterClearExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "list-after-clear"
+
+        @impl true
+        def version, do: "1.0.0"
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "list_after_clear.ex"), ext_code)
+      {:ok, _extensions} = Extensions.load_extensions([tmp_dir])
+
+      # Should be in list
+      all = Extensions.list_extensions()
+      assert Enum.any?(all, &(&1.name == "list-after-clear"))
+
+      # Clear
+      :ok = Extensions.clear_extension_cache()
+
+      # Should not be in list anymore
+      all_after = Extensions.list_extensions()
+      refute Enum.any?(all_after, &(&1.name == "list-after-clear"))
+    end
+  end
+
+  describe "last_load_errors persistence" do
+    test "errors persist across multiple queries", %{tmp_dir: tmp_dir} do
+      invalid_code = """
+      defmodule PersistErrorExt do
+        def missing
+      """
+
+      File.write!(Path.join(tmp_dir, "persist_error.ex"), invalid_code)
+      {:ok, _extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      # Query multiple times
+      {errors1, ts1} = Extensions.last_load_errors()
+      {errors2, ts2} = Extensions.last_load_errors()
+      {errors3, ts3} = Extensions.last_load_errors()
+
+      # All should be the same
+      assert errors1 == errors2
+      assert errors2 == errors3
+      assert ts1 == ts2
+      assert ts2 == ts3
+    end
+
+    test "errors are replaced on subsequent load", %{tmp_dir: tmp_dir} do
+      # First error
+      invalid_code1 = """
+      defmodule FirstPersistExt do
+        def missing
+      """
+
+      File.write!(Path.join(tmp_dir, "first_persist.ex"), invalid_code1)
+      {:ok, _, _, _} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {errors1, _ts1} = Extensions.last_load_errors()
+      assert length(errors1) == 1
+      assert String.contains?(hd(errors1).source_path, "first_persist.ex")
+
+      # Delete first, create second error
+      File.rm!(Path.join(tmp_dir, "first_persist.ex"))
+
+      invalid_code2 = """
+      defmodule SecondPersistExt do
+        def also_missing
+      """
+
+      File.write!(Path.join(tmp_dir, "second_persist.ex"), invalid_code2)
+      {:ok, _, _, _} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {errors2, _ts2} = Extensions.last_load_errors()
+      assert length(errors2) == 1
+      assert String.contains?(hd(errors2).source_path, "second_persist.ex")
+    end
+
+    test "timestamp is updated on each load", %{tmp_dir: tmp_dir} do
+      valid_code = """
+      defmodule TimestampExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "timestamp-ext"
+
+        @impl true
+        def version, do: "1.0.0"
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "timestamp_ext.ex"), valid_code)
+
+      {:ok, _, _, _} = Extensions.load_extensions_with_errors([tmp_dir])
+      {_errors1, ts1} = Extensions.last_load_errors()
+
+      Process.sleep(10)
+
+      {:ok, _, _, _} = Extensions.load_extensions_with_errors([tmp_dir])
+      {_errors2, ts2} = Extensions.last_load_errors()
+
+      # Second timestamp should be later
+      assert ts2 > ts1
+
+      # Cleanup
+      :code.purge(TimestampExt)
+      :code.delete(TimestampExt)
+    end
+
+    test "empty errors list persists with timestamp", %{tmp_dir: tmp_dir} do
+      valid_code = """
+      defmodule EmptyErrorsExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "empty-errors"
+
+        @impl true
+        def version, do: "1.0.0"
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "empty_errors.ex"), valid_code)
+      {:ok, _extensions, errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      # No errors
+      assert errors == []
+
+      # But timestamp should still be set
+      {cached_errors, timestamp} = Extensions.last_load_errors()
+      assert cached_errors == []
+      assert is_integer(timestamp)
+
+      # Cleanup
+      :code.purge(EmptyErrorsExt)
+      :code.delete(EmptyErrorsExt)
+    end
+
+    test "get_providers handles exceptions gracefully during collection", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule GetProvidersRaisingExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "get-providers-raising"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def providers do
+          raise "Crash during get_providers!"
+        end
+      end
+      """
+
+      # Note: This extension would fail validation, but we can test get_providers directly
+      # by creating a module that implements providers/0 but raises
+      File.write!(Path.join(tmp_dir, "get_providers_raising.ex"), ext_code)
+
+      # Load without validation for this test
+      {:ok, _extensions} = Extensions.load_extensions([tmp_dir])
+
+      # get_providers should handle the exception gracefully
+      providers = Extensions.get_providers([GetProvidersRaisingExt])
+      assert providers == []
+
+      # Cleanup
+      :code.purge(GetProvidersRaisingExt)
+      :code.delete(GetProvidersRaisingExt)
+    end
+  end
+
+  describe "validation_errors persistence in last_load_errors" do
+    test "validation errors are stored separately from load errors", %{tmp_dir: tmp_dir} do
+      ext_code = """
+      defmodule ValidationErrorPersistExt do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: :not_a_string
+
+        @impl true
+        def version, do: "1.0.0"
+      end
+      """
+
+      File.write!(Path.join(tmp_dir, "validation_persist.ex"), ext_code)
+      {:ok, extensions, load_errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      # No load errors (file compiled fine)
+      assert load_errors == []
+
+      # But validation errors
+      assert length(validation_errors) == 1
+      assert extensions == []
+
+      # Check that last_load_errors returns load errors (not validation errors)
+      {cached_load_errors, timestamp} = Extensions.last_load_errors()
+      assert cached_load_errors == []
+      assert is_integer(timestamp)
+
+      # Cleanup
+      :code.purge(ValidationErrorPersistExt)
+      :code.delete(ValidationErrorPersistExt)
+    end
+  end
 end
