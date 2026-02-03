@@ -299,7 +299,8 @@ defmodule AgentCore.CliRunners.JsonlRunner do
       :done,
       :buffer,
       :new_session_locked,
-      :decode_error_count
+      :decode_error_count,
+      :cancel_kill_ref
     ]
   end
 
@@ -339,7 +340,8 @@ defmodule AgentCore.CliRunners.JsonlRunner do
           done: false,
           buffer: "",
           new_session_locked: false,
-          decode_error_count: 0
+          decode_error_count: 0,
+          cancel_kill_ref: nil
         }
 
         # Start the subprocess
@@ -538,7 +540,7 @@ defmodule AgentCore.CliRunners.JsonlRunner do
 
   def handle_info(:timeout, state) do
     Logger.warning("Subprocess timed out")
-    kill_subprocess(state)
+    terminate_subprocess(state, :kill)
     AgentCore.EventStream.error(state.stream, :timeout)
     cleanup(state)
     {:stop, :normal, state}
@@ -546,7 +548,7 @@ defmodule AgentCore.CliRunners.JsonlRunner do
 
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{owner_ref: ref} = state) do
     Logger.debug("Owner process died, stopping runner")
-    kill_subprocess(state)
+    terminate_subprocess(state, :kill)
     AgentCore.EventStream.cancel(state.stream, :owner_down)
     cleanup(state)
     {:stop, :normal, state}
@@ -556,16 +558,21 @@ defmodule AgentCore.CliRunners.JsonlRunner do
     {:noreply, %{state | found_session: resume}}
   end
 
+  def handle_info(:cancel_kill, state) do
+    terminate_subprocess(state, :kill)
+    {:noreply, state}
+  end
+
   def handle_info(_msg, state) do
     {:noreply, state}
   end
 
   @impl true
   def handle_cast({:cancel, reason}, state) do
-    kill_subprocess(state)
+    terminate_subprocess(state, :term)
+    cancel_kill_ref = schedule_cancel_kill(state)
     AgentCore.EventStream.cancel(state.stream, reason)
-    cleanup(state)
-    {:stop, :normal, state}
+    {:noreply, %{state | done: true, cancel_kill_ref: cancel_kill_ref}}
   end
 
   @impl true
@@ -641,13 +648,13 @@ defmodule AgentCore.CliRunners.JsonlRunner do
           acc.resume != nil and resume != acc.resume ->
             Logger.error("Resume session mismatch: expected #{inspect(acc.resume)}, got #{inspect(resume)}")
             AgentCore.EventStream.error(acc.stream, {:session_mismatch, %{expected: acc.resume, got: resume}})
-            kill_subprocess(acc)
+            terminate_subprocess(acc, :kill)
             {:halt, {:error, %{acc | done: true}}}
 
           acc.found_session != nil and resume != acc.found_session ->
             Logger.error("Session switched midstream: expected #{inspect(acc.found_session)}, got #{inspect(resume)}")
             AgentCore.EventStream.error(acc.stream, {:session_mismatch, %{expected: acc.found_session, got: resume}})
-            kill_subprocess(acc)
+            terminate_subprocess(acc, :kill)
             {:halt, {:error, %{acc | done: true}}}
 
           acc.resume == nil and not acc.new_session_locked ->
@@ -658,7 +665,7 @@ defmodule AgentCore.CliRunners.JsonlRunner do
               {:error, :session_locked} ->
                 Logger.error("Session already locked: #{inspect(resume)}")
                 AgentCore.EventStream.error(acc.stream, {:session_locked, resume})
-                kill_subprocess(acc)
+                terminate_subprocess(acc, :kill)
                 {:halt, {:error, %{acc | done: true}}}
             end
 
@@ -689,9 +696,9 @@ defmodule AgentCore.CliRunners.JsonlRunner do
     end)
   end
 
-  defp kill_subprocess(%{port: nil}), do: :ok
+  defp terminate_subprocess(%{port: nil}, _mode), do: :ok
 
-  defp kill_subprocess(%{port: port, os_pid: os_pid}) do
+  defp terminate_subprocess(%{port: port, os_pid: os_pid}, :kill) do
     # Try to close the port gracefully first
     try do
       Port.close(port)
@@ -703,6 +710,20 @@ defmodule AgentCore.CliRunners.JsonlRunner do
     if os_pid do
       kill_process_tree(os_pid)
     end
+
+    :ok
+  end
+
+  defp terminate_subprocess(%{os_pid: os_pid, owner: owner}, :term) do
+    if Mix.env() == :test and is_pid(owner) do
+      send(owner, {:cli_term, os_pid})
+    end
+
+    if os_pid do
+      term_process_tree(os_pid)
+    end
+
+    :ok
   end
 
   defp kill_process_tree(os_pid) when is_integer(os_pid) do
@@ -733,6 +754,32 @@ defmodule AgentCore.CliRunners.JsonlRunner do
     :ok
   end
 
+  defp term_process_tree(os_pid) when is_integer(os_pid) do
+    case :os.type() do
+      {:unix, _} ->
+        try do
+          :os.cmd(~c"kill -TERM -#{os_pid} 2>/dev/null")
+        catch
+          _, _ -> :ok
+        end
+
+        try do
+          :os.cmd(~c"kill -TERM #{os_pid} 2>/dev/null")
+        catch
+          _, _ -> :ok
+        end
+
+      {:win32, _} ->
+        try do
+          :os.cmd(~c"taskkill /T /PID #{os_pid}")
+        catch
+          _, _ -> :ok
+        end
+    end
+
+    :ok
+  end
+
   defp get_os_pid(port) do
     case Port.info(port, :os_pid) do
       {:os_pid, pid} -> pid
@@ -744,6 +791,10 @@ defmodule AgentCore.CliRunners.JsonlRunner do
     # Cancel timeout
     if state.timeout_ref do
       Process.cancel_timer(state.timeout_ref)
+    end
+
+    if state.cancel_kill_ref do
+      Process.cancel_timer(state.cancel_kill_ref)
     end
 
     # Release session lock(s). If a resumed session mismatched, we might have both.
@@ -762,6 +813,19 @@ defmodule AgentCore.CliRunners.JsonlRunner do
     end
 
     :ok
+  end
+
+  defp schedule_cancel_kill(_state) do
+    grace_ms = cancel_grace_ms()
+    Process.send_after(self(), :cancel_kill, grace_ms)
+  end
+
+  defp cancel_grace_ms do
+    case Application.get_env(:agent_core, :cli_cancel_grace_ms) do
+      nil -> 1_000
+      value when is_integer(value) and value > 0 -> value
+      _ -> 1_000
+    end
   end
 
   defp maybe_emit_stderr_warning(%State{stderr_path: nil} = state, _exit_code), do: state
