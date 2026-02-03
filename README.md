@@ -14,8 +14,10 @@ built on the BEAM (Erlang/Elixir). It uses the Erlang Virtual Machine's process 
   - [AI Library](#ai-library)
   - [AgentCore](#agentcore)
   - [CodingAgent](#codingagent)
+  - [CodingAgent UI](#codingagent-ui)
   - [LemonGateway](#lemongateway)
   - [Lemon TUI](#lemon-tui)
+  - [Lemon Web](#lemon-web)
 - [Installation](#installation)
 - [Usage](#usage)
 - [Development](#development)
@@ -43,11 +45,11 @@ Lemon is an AI coding assistant built as a distributed system of concurrent proc
 
 ### Key Features
 
-- **Multi-turn conversations** with tool use (read, write, edit, bash, grep, find, glob, ls, webfetch, websearch, todoread, todowrite, task)
+- **Multi-turn conversations** with tool use (read, write, edit, multiedit, patch, bash, grep, find, glob, ls, webfetch, websearch, todoread, todowrite, task)
 - **Real-time streaming** of LLM responses with fine-grained event notifications
 - **Session persistence** via JSONL with tree-structured conversation history
 - **Context compaction** and branch summarization for long conversations
-- **Pluggable UI** with a Terminal UI client
+- **Pluggable UI** with Terminal and Web clients over JSON-RPC
 - **Extension system** for custom tools and hooks
 - **Concurrent tool execution** with abort signaling
 - **Multi-provider support** with seamless context handoffs
@@ -217,69 +219,50 @@ end)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                              Client Layer                                    │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐             │
-│  │   Lemon TUI     │  │  Telegram Bot   │  │   Future: Web   │             │
-│  │  (TypeScript)   │  │   (Transport)   │  │      UI         │             │
-│  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘             │
-└───────────┼────────────────────┼────────────────────┼──────────────────────┘
-            │                    │                    │
-            │ JSON-RPC/stdio     │ Telegram API       │
-            ▼                    ▼                    │
+│                               Client Layer                                  │
+│  ┌─────────────────┐  ┌──────────────────────┐  ┌─────────────────┐        │
+│  │   Lemon TUI     │  │ Lemon Web (browser)  │  │  Telegram Bot   │        │
+│  │ (Node/TypeScript)│  │   + WebSocket UI    │  │   (Transport)   │        │
+│  └────────┬────────┘  └───────────┬──────────┘  └────────┬────────┘        │
+└───────────┼───────────────────────┼──────────────────────┼────────────────┘
+            │ JSON-RPC/stdio        │ WebSocket            │ Telegram API
+            ▼                       ▼                      ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           Gateway Layer                                      │
+│                           UI / Bridge Layer                                  │
 │                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                      LemonGateway                                    │   │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌────────────┐ │   │
-│  │  │  Scheduler  │  │   Thread    │  │   Engine    │  │  Telegram  │ │   │
-│  │  │ (Concurrency)│  │   Workers   │  │  Registry   │  │ Transport  │ │   │
-│  │  └─────────────┘  └─────────────┘  └─────────────┘  └────────────┘ │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
+│  ┌────────────────────────────┐   ┌──────────────────────────────┐          │
+│  │ debug_agent_rpc.exs        │◄──┤ lemon-web server (WS bridge) │          │
+│  │ (JSONL RPC over stdio)     │   │ spawns debug_agent_rpc.exs   │          │
+│  └─────────────┬──────────────┘   └──────────────────────────────┘          │
+│                │                                                           │
+│                ▼                                                           │
+│        coding_agent_ui (RPC + headless UI adapters)                        │
 └─────────────────────────────────────────────────────────────────────────────┘
                                  │
                                  ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           Application Layer                                  │
+│                          Core Agent Runtime                                  │
 │                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                      CodingAgent.Session                             │   │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌────────────┐ │   │
-│  │  │   Session   │  │   Tools     │  │  Compaction │  │   Hooks    │ │   │
-│  │  │   Manager   │  │  (Registry) │  │   (Branch)  │  │(Extensions)│ │   │
-│  │  └──────┬──────┘  └─────────────┘  └─────────────┘  └────────────┘ │   │
-│  │         │                                                          │   │
-│  │         ▼                                                          │   │
-│  │  ┌─────────────────────────────────────────────────────────────┐   │   │
-│  │  │                    AgentCore.Agent                           │   │   │
-│  │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │   │   │
-│  │  │  │    Loop     │  │   Events    │  │   Abort Signaling   │  │   │   │
-│  │  │  │  (Stateless)│  │   (Stream)  │  │   (Reference)       │  │   │   │
-│  │  │  └──────┬──────┘  └─────────────┘  └─────────────────────┘  │   │   │
-│  │  │         │                                                    │   │   │
-│  │  │         ├─────────────────────────────────────────────────┐  │   │   │
-│  │  │         ▼                                                 ▼  │   │   │
-│  │  │  ┌─────────────────────────────┐  ┌────────────────────────┐ │   │   │
-│  │  │  │       Ai Library            │  │     CLI Runners        │ │   │   │
-│  │  │  │  ┌────────┐ ┌────────┐     │  │  ┌────────┐ ┌────────┐ │ │   │   │
-│  │  │  │  │Anthropic│ │ OpenAI │     │  │  │ Codex  │ │ Claude │ │ │   │   │
-│  │  │  │  │Provider │ │Provider│ ... │  │  │ Runner │ │ Runner │ │ │   │   │
-│  │  │  │  └────────┘ └────────┘     │  │  └────────┘ └────────┘ │ │   │   │
-│  │  │  └─────────────────────────────┘  └────────────────────────┘ │   │   │
-│  │  └──────────────────────────────────────────────────────────────┘   │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
+│  CodingAgent.Session → AgentCore.Agent/Loop → Ai Providers → Tools            │
+│  (persistence, tools, compaction, extensions)                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                 ▲
+                                 │
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                               LemonGateway                                   │
+│  Transport → Scheduler → ThreadWorker → Run → Engine                          │
+│  Engines: Lemon (native), Codex CLI, Claude CLI, Echo                         │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Data Flow
 
-1. **User Input** → TUI/Telegram sends message to LemonGateway or CodingAgent.Session
-2. **Gateway** schedules job, assigns to ThreadWorker, selects execution engine
-3. **Engine** (Lemon native, Codex CLI, or Claude CLI) processes the request
-4. **Agent** spawns Loop process that streams from AI library or CLI subprocess
-5. **Events** flow back: LLM chunks → Agent events → Session/Gateway → UI
-6. **Tool Calls** are executed by the Loop, with results fed back into context
-7. **Persistence** happens via SessionManager writing to JSONL files
+1. **TUI/Web** send JSON-RPC to `debug_agent_rpc.exs` (via stdio or WS bridge)
+2. **coding_agent_ui** forwards requests into `CodingAgent.Session`
+3. **AgentCore** runs the loop, calling **Ai** providers and **Tools**
+4. **Events** stream back to clients; sessions persist to JSONL
+5. **Gateway path**: Telegram → LemonGateway → Scheduler → ThreadWorker → Run → Engine
+6. **Engines** either invoke the native Lemon runtime or spawn CLI runners (Codex/Claude)
 
 ---
 
@@ -344,7 +327,7 @@ lemon/
 │   │   │       ├── proxy.ex              # Stream proxy utilities
 │   │   │       ├── subagent_supervisor.ex # Dynamic supervisor for subagents
 │   │   │       ├── types.ex              # Agent types (AgentTool, AgentState, etc.)
-│   │   │       └── cli_runners/          # CLI runner infrastructure (NEW)
+│   │   │       └── cli_runners/          # CLI runner infrastructure
 │   │   │           ├── README.md         # CLI runners documentation
 │   │   │           ├── types.ex          # ResumeToken, Action, Event types
 │   │   │           ├── jsonl_runner.ex   # Base GenServer for JSONL subprocess runners
@@ -387,7 +370,7 @@ lemon/
 │   │   │       ├── ui.ex                 # UI abstraction
 │   │   │       ├── ui/
 │   │   │       │   └── context.ex        # UI context management
-│   │   │       ├── cli_runners/          # Lemon CLI runner (NEW)
+│   │   │       ├── cli_runners/          # Lemon CLI runner
 │   │   │       │   ├── lemon_runner.ex   # Wraps CodingAgent.Session as CLI runner
 │   │   │       │   └── lemon_subagent.ex # High-level Lemon subagent API
 │   │   │       └── tools/                # Individual tool implementations
@@ -422,7 +405,7 @@ lemon/
 │   │   │           └── rpc.ex           # JSON-RPC interface
 │   │   └── test/
 │   │
-│   └── lemon_gateway/           # Gateway and job orchestration (NEW)
+│   └── lemon_gateway/           # Gateway and job orchestration
 │       ├── lib/
 │       │   ├── lemon_gateway.ex         # Main API
 │       │   └── lemon_gateway/
@@ -444,7 +427,8 @@ lemon/
 │       │       ├── transport_supervisor.ex
 │       │       ├── types.ex             # Core types (Job, ChatScope, ResumeToken)
 │       │       ├── engines/             # Execution engine implementations
-│       │       │   ├── echo.ex          # Simple echo engine (default)
+│       │       │   ├── lemon.ex         # Native Lemon engine (CodingAgent)
+│       │       │   ├── echo.ex          # Simple echo engine (testing)
 │       │       │   ├── claude.ex        # Claude CLI engine
 │       │       │   ├── codex.ex         # Codex CLI engine
 │       │       │   └── cli_adapter.ex   # Bridge to AgentCore CLI runners
@@ -473,8 +457,10 @@ lemon/
 │   │   ├── package-lock.json    # Dependency lock file
 │   │   └── tsconfig.json        # TypeScript configuration
 │   │
-│   └── lemon-web/               # Web UI (placeholder)
-│       └── ...
+│   └── lemon-web/               # Web UI (React + WebSocket bridge)
+│       ├── shared/              # Shared types and JSONL helpers
+│       ├── server/              # Node WS bridge (spawns debug_agent_rpc)
+│       └── web/                 # Vite/React frontend
 │
 ├── tools/                       # Utility tools and utilities
 │   └── debug_cli/               # Python debug CLI
@@ -723,6 +709,16 @@ unsubscribe = CodingAgent.Session.subscribe(session)
 - Settings management (global + project-level)
 - LemonRunner/LemonSubagent for using sessions as CLI runner backends
 
+### CodingAgent UI
+
+`coding_agent_ui` keeps the core agent UI-agnostic and exposes UI adapters that speak JSON-RPC or run headless:
+
+- **RPC UI** (`CodingAgent.UI.RPC`): JSON-RPC over stdio for clients that want structured UI requests
+- **Debug RPC** (`CodingAgent.UI.DebugRPC`): JSONL protocol used by `scripts/debug_agent_rpc.exs`
+- **Headless UI** (`CodingAgent.UI.Headless`): No-op UI for automation and tests
+
+This layer is what the TUI and Web UI bridge talk to, while the core agent runtime remains pure Elixir.
+
 ### LemonGateway
 
 `LemonGateway` provides job orchestration and multi-engine execution:
@@ -742,12 +738,13 @@ LemonGateway.submit(job)
 ```
 
 **Key Features:**
-- **Multi-Engine Support**: Echo (default), Codex CLI, Claude CLI engines
+- **Multi-Engine Support**: Lemon (default), Codex CLI, Claude CLI, Echo
 - **Job Scheduling**: Configurable concurrency with slot-based allocation
 - **Thread Workers**: Per-conversation job queues with sequential execution
 - **Resume Tokens**: Persist and continue sessions across restarts
 - **Event Streaming**: Unified event format across all engines
 - **Telegram Integration**: Bot transport with debouncing and throttling
+- **Config Loader**: Supports `~/.lemon/gateway.toml` with projects, bindings, and queue modes
 
 **Supported Engines:**
 | Engine | ID | Description |
@@ -759,7 +756,7 @@ LemonGateway.submit(job)
 
 ### Lemon TUI
 
-The Terminal UI client provides a full-featured interactive interface for interacting with the Lemon coding agent. It supports real-time streaming, multi-session management, interactive overlays, keyboard shortcuts, and configurable settings.
+The Terminal UI client provides a full-featured interactive interface for interacting with the Lemon coding agent. It connects to `scripts/debug_agent_rpc.exs` over JSONL RPC (stdio) and supports real-time streaming, multi-session management, interactive overlays, keyboard shortcuts, and configurable settings.
 
 #### CLI Usage
 
@@ -886,6 +883,47 @@ All commands are prefixed with `/`. Type `/help` within the TUI to see this list
 - **Debug Mode**: Toggle debug output to see internal events and diagnostics
 - **Prompt Caching Metrics**: Track cache read/write tokens for efficient API usage
 
+### Lemon Web
+
+The Web UI is a React client with a small Node.js WebSocket bridge that spawns `scripts/debug_agent_rpc.exs`.
+
+#### Development
+
+```bash
+cd clients/lemon-web
+npm install
+npm run dev
+```
+
+By default this starts:
+- Web server (Vite) for the React UI
+- Node bridge that spawns `mix run scripts/debug_agent_rpc.exs --`
+
+If the server cannot find the Lemon repo root automatically, set `LEMON_PATH` or pass `--lemon-path` to the server.
+
+#### Bridge Server Options
+
+The server accepts these flags (see `clients/lemon-web/server/src/index.ts`):
+- `--cwd <path>`: Working directory for the agent session
+- `--model <provider:model>`: Override model
+- `--base-url <url>`: Override provider base URL
+- `--system-prompt <text>`: Set a system prompt
+- `--session-file <path>`: Resume a saved session
+- `--debug`: Enable RPC stderr forwarding
+- `--no-ui`: Disable UI signals
+- `--lemon-path <path>`: Set Lemon repo root
+- `--port <port>`: Server port (default `3939`)
+- `--static-dir <path>`: Serve prebuilt UI from a custom directory
+
+Example:
+
+```bash
+node clients/lemon-web/server/dist/index.js \
+  --cwd /path/to/project \
+  --model anthropic:claude-sonnet-4-20250514 \
+  --port 3939
+```
+
 ---
 
 ## Installation
@@ -893,7 +931,7 @@ All commands are prefixed with `/`. Type `/help` within the TUI to see this list
 ### Prerequisites
 
 - Elixir 1.19+ and Erlang/OTP 27+
-- Node.js 20+ (for TUI)
+- Node.js 20+ (for TUI/Web)
 - Python 3.10+ (for debug CLI, optional)
 
 ### Clone and Build
@@ -1026,6 +1064,16 @@ config :agent_core, :codex,
   --base-url http://localhost:11434/v1
 ```
 
+### Running the Web UI
+
+```bash
+cd clients/lemon-web
+npm install
+npm run dev
+```
+
+If the server can't locate the repo root, set `LEMON_PATH` or pass `--lemon-path` when starting the server.
+
 ### Running Tests
 
 ```bash
@@ -1040,6 +1088,34 @@ mix test apps/lemon_gateway
 
 # Run integration tests (require CLI tools)
 mix test --include integration
+```
+
+### Running LemonGateway
+
+LemonGateway is optional and typically used for Telegram or other transport-based workflows. Configure it via `~/.lemon/gateway.toml` and start it from IEx or your own supervision tree.
+
+Minimal `~/.lemon/gateway.toml` for Telegram:
+
+```toml
+[gateway]
+enable_telegram = true
+default_engine = "lemon"
+
+[telegram]
+bot_token = "your-telegram-bot-token"
+allowed_chat_ids = [123456789]
+
+[[bindings]]
+transport = "telegram"
+chat_id = 123456789
+project = "lemon"
+default_engine = "lemon"
+```
+
+Start in IEx:
+
+```elixir
+Application.ensure_all_started(:lemon_gateway)
 ```
 
 ### Interactive Development

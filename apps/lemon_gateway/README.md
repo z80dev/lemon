@@ -1,6 +1,6 @@
 # LemonGateway
 
-A multi-engine AI gateway for Elixir. Routes user requests through transports (Telegram, etc.) to AI engines (Claude, Codex, etc.) with concurrency control, thread isolation, and session resumption.
+A multi-engine AI gateway for Elixir. Routes user requests through transports (Telegram, etc.) to AI engines (Lemon/Codex/Claude, etc.) with concurrency control, thread isolation, and session resumption.
 
 ## Architecture
 
@@ -48,6 +48,55 @@ A multi-engine AI gateway for Elixir. Routes user requests through transports (T
 
 ## Configuration
 
+LemonGateway loads configuration from `~/.lemon/gateway.toml` by default (see `LemonGateway.ConfigLoader`). If the TOML file doesn't exist, it falls back to `config/config.exs` application env.
+
+### TOML (recommended)
+
+Create `~/.lemon/gateway.toml`:
+
+```toml
+[gateway]
+max_concurrent_runs = 2
+default_engine = "lemon"
+enable_telegram = false
+require_engine_lock = true
+
+[queue]
+mode = "followup"
+cap = 50
+drop = "oldest"
+
+[telegram]
+bot_token = "your-telegram-bot-token"
+allowed_chat_ids = [123456789, -100123456789]
+poll_interval_ms = 1000
+edit_throttle_ms = 1000
+
+[projects.lemon]
+root = "/path/to/lemon"
+default_engine = "lemon"
+
+[[bindings]]
+transport = "telegram"
+chat_id = 123456789
+project = "lemon"
+default_engine = "claude"
+queue_mode = "steer"
+
+[engines.lemon]
+enabled = true
+
+[engines.codex]
+enabled = true
+cli_path = "/usr/local/bin/codex"
+
+[engines.claude]
+enabled = true
+cli_path = "/usr/local/bin/claude"
+```
+
+### Application Env (fallback)
+
 Configure in `config/config.exs`:
 
 ```elixir
@@ -56,6 +105,7 @@ config :lemon_gateway, LemonGateway.Config,
   default_engine: "lemon"      # Fallback engine when none specified
 
 config :lemon_gateway, :engines, [
+  LemonGateway.Engines.Lemon,  # Native CodingAgent engine
   LemonGateway.Engines.Echo,   # Simple echo for testing
   LemonGateway.Engines.Codex,  # OpenAI Codex CLI
   LemonGateway.Engines.Claude  # Claude Code CLI
@@ -65,7 +115,7 @@ config :lemon_gateway, :telegram,
   bot_token: "your-telegram-bot-token",
   allowed_chat_ids: [123456789, -100123456789],  # nil = allow all
   poll_interval_ms: 1_000,
-  debounce_ms: 1_000
+  edit_throttle_ms: 1_000
 ```
 
 ### Configuration Options
@@ -83,15 +133,16 @@ config :lemon_gateway, :telegram,
 | `bot_token` | required | Telegram Bot API token |
 | `allowed_chat_ids` | `nil` | List of allowed chat IDs, `nil` allows all |
 | `poll_interval_ms` | `1000` | Polling interval for updates |
-| `debounce_ms` | `1000` | Debounce window for multi-message batching |
+| `edit_throttle_ms` | `1000` | Edit throttle window for Telegram updates |
 
 ## Available Engines
 
 | Engine ID | Module | Description |
 |-----------|--------|-------------|
-| `lemon` | `LemonGateway.Engines.Echo` | Echo engine for testing |
+| `lemon` | `LemonGateway.Engines.Lemon` | Native CodingAgent engine |
 | `codex` | `LemonGateway.Engines.Codex` | OpenAI Codex via CLI adapter |
 | `claude` | `LemonGateway.Engines.Claude` | Claude Code via CLI adapter |
+| `echo` | `LemonGateway.Engines.Echo` | Echo engine for testing |
 
 ## Adding a New Engine
 
