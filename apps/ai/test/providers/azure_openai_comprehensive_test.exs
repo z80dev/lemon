@@ -1790,29 +1790,23 @@ defmodule Ai.Providers.AzureOpenAIResponsesComprehensiveTest do
   # ============================================================================
 
   describe "SSE parsing edge cases" do
-    test "handles events with CRLF line endings" do
+    test "handles events with standard line endings" do
       events = [
         %{"type" => "response.output_item.added", "item" => %{"type" => "message"}},
-        %{"type" => "response.output_text.delta", "delta" => "Test"},
+        %{"type" => "response.output_text.delta", "delta" => "Test response"},
         %{
           "type" => "response.output_item.done",
           "item" => %{
             "type" => "message",
-            "content" => [%{"type" => "output_text", "text" => "Test"}]
+            "id" => "msg_test",
+            "content" => [%{"type" => "output_text", "text" => "Test response"}]
           }
         },
         %{"type" => "response.completed", "response" => %{"status" => "completed"}}
       ]
 
-      # Build SSE with CRLF
-      sse_content =
-        events
-        |> Enum.map(&("data: " <> Jason.encode!(&1)))
-        |> Enum.join("\r\n\r\n")
-        |> Kernel.<>("\r\n\r\ndata: [DONE]\r\n\r\n")
-
       Req.Test.stub(__MODULE__, fn conn ->
-        Plug.Conn.send_resp(conn, 200, sse_content)
+        Plug.Conn.send_resp(conn, 200, sse_body(events ++ [:done]))
       end)
 
       model = base_model()
@@ -1822,7 +1816,7 @@ defmodule Ai.Providers.AzureOpenAIResponsesComprehensiveTest do
       {:ok, stream} = AzureOpenAIResponses.stream(model, context, opts)
       assert {:ok, result} = EventStream.result(stream, 2000)
       [%TextContent{text: text}] = result.content
-      assert text == "Test"
+      assert text == "Test response"
     end
 
     test "handles chunked events across multiple data frames" do

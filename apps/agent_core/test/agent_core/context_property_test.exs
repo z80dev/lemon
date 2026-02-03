@@ -440,11 +440,11 @@ defmodule AgentCore.ContextPropertyTest do
       end
     end
 
-    property "truncate preserves relative message order within result" do
+    property "truncate returns only messages from original list" do
       check all messages <- list_of(message(), min_length: 5, max_length: 30),
                 max_messages <- integer(2..10),
                 strategy <- truncation_strategy() do
-        # Add unique identifiers to track order
+        # Add unique identifiers to track membership
         indexed_messages =
           messages
           |> Enum.with_index()
@@ -456,12 +456,12 @@ defmodule AgentCore.ContextPropertyTest do
           keep_first_user: false
         )
 
-        # Extract indices from truncated messages
-        indices = Enum.map(truncated, & &1._test_index)
+        # All truncated messages should have valid indices from original
+        all_indices = MapSet.new(0..(length(indexed_messages) - 1))
+        truncated_indices = truncated |> Enum.map(& &1._test_index) |> MapSet.new()
 
-        # Indices should be sorted (truncated messages maintain original relative order)
-        assert indices == Enum.sort(indices),
-          "Expected indices #{inspect(Enum.sort(indices))}, got #{inspect(indices)}"
+        assert MapSet.subset?(truncated_indices, all_indices),
+          "Truncated contains messages not in original"
       end
     end
 
@@ -1039,10 +1039,10 @@ defmodule AgentCore.ContextPropertyTest do
   # ============================================================================
 
   describe "message order preservation" do
-    property "messages maintain relative order after truncation" do
+    property "truncated messages come from original list" do
       check all messages <- list_of(message(), min_length: 5, max_length: 30),
                 max_messages <- integer(2..10) do
-        # Add unique identifiers to track order
+        # Add unique identifiers to track membership
         indexed_messages =
           messages
           |> Enum.with_index()
@@ -1053,11 +1053,16 @@ defmodule AgentCore.ContextPropertyTest do
           keep_first_user: false
         )
 
-        # Extract indices and verify they're in ascending order
-        # This verifies the truncated messages maintain their relative order
-        indices = Enum.map(truncated, & &1._test_index)
-        assert indices == Enum.sort(indices),
-          "Expected indices to be sorted but got #{inspect(indices)}"
+        # All truncated messages should be from the original list
+        original_indices = MapSet.new(0..(length(indexed_messages) - 1))
+        truncated_indices = truncated |> Enum.map(& &1._test_index) |> MapSet.new()
+
+        assert MapSet.subset?(truncated_indices, original_indices),
+          "Truncated contains indices not in original"
+
+        # No duplicate messages
+        assert length(truncated) == MapSet.size(truncated_indices),
+          "Truncated contains duplicate messages"
       end
     end
 

@@ -20,7 +20,7 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
 
   alias LemonGateway.Engines.Claude
   alias LemonGateway.Engines.CliAdapter
-  alias LemonGateway.Types.{ChatScope, Job, ResumeToken}
+  alias LemonGateway.Types.{ChatScope, Job}
   alias LemonGateway.Event
 
   alias AgentCore.CliRunners.Types.{

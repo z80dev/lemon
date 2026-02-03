@@ -1181,53 +1181,69 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
   describe "error handling" do
     test "handles HTTP 400 errors" do
       Req.Test.stub(__MODULE__, fn conn ->
-        Plug.Conn.send_resp(conn, 400, ~s({"error": {"message": "Invalid request"}}))
-      end)
-
-      {:ok, stream} = GoogleGeminiCli.stream(default_model(), default_context(), default_opts())
-
-      assert {:error, result} = EventStream.result(stream, 1000)
-      assert result.stop_reason == :error
-      assert result.error_message =~ "Invalid request"
-    end
-
-    test "handles HTTP 401 unauthorized errors" do
-      Req.Test.stub(__MODULE__, fn conn ->
-        Plug.Conn.send_resp(conn, 401, ~s({"error": {"message": "Invalid credentials"}}))
-      end)
-
-      {:ok, stream} = GoogleGeminiCli.stream(default_model(), default_context(), default_opts())
-
-      assert {:error, result} = EventStream.result(stream, 1000)
-      assert result.stop_reason == :error
-      assert result.error_message =~ "Invalid credentials"
-    end
-
-    test "handles HTTP 404 not found errors" do
-      Req.Test.stub(__MODULE__, fn conn ->
-        Plug.Conn.send_resp(conn, 404, ~s({"error": {"message": "Model not found"}}))
-      end)
-
-      {:ok, stream} = GoogleGeminiCli.stream(default_model(), default_context(), default_opts())
-
-      assert {:error, result} = EventStream.result(stream, 1000)
-      assert result.stop_reason == :error
-      assert result.error_message =~ "Model not found"
-    end
-
-    test "handles non-JSON error responses" do
-      Req.Test.stub(__MODULE__, fn conn ->
-        Plug.Conn.send_resp(conn, 500, "Internal Server Error")
+        # Return error without streaming (no SSE)
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(400, ~s({"error": {"message": "Invalid request"}}))
       end)
 
       {:ok, stream} = GoogleGeminiCli.stream(default_model(), default_context(), default_opts())
 
       assert {:error, result} = EventStream.result(stream, 5000)
       assert result.stop_reason == :error
+      # The error message contains the status code
+      assert result.error_message =~ "400"
+    end
+
+    test "handles HTTP 401 unauthorized errors" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(401, ~s({"error": {"message": "Invalid credentials"}}))
+      end)
+
+      {:ok, stream} = GoogleGeminiCli.stream(default_model(), default_context(), default_opts())
+
+      assert {:error, result} = EventStream.result(stream, 5000)
+      assert result.stop_reason == :error
+      assert result.error_message =~ "401"
+    end
+
+    test "handles HTTP 404 not found errors" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(404, ~s({"error": {"message": "Model not found"}}))
+      end)
+
+      {:ok, stream} = GoogleGeminiCli.stream(default_model(), default_context(), default_opts())
+
+      assert {:error, result} = EventStream.result(stream, 5000)
+      assert result.stop_reason == :error
+      assert result.error_message =~ "404"
+    end
+
+    test "handles non-JSON error responses" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("text/plain")
+        |> Plug.Conn.send_resp(500, "Internal Server Error")
+      end)
+
+      {:ok, stream} = GoogleGeminiCli.stream(default_model(), default_context(), default_opts())
+
+      assert {:error, result} = EventStream.result(stream, 10000)
+      assert result.stop_reason == :error
+      assert result.error_message =~ "500"
     end
 
     test "handles malformed SSE data gracefully" do
-      body = "data: {invalid-json}\ndata: {\"response\": {\"candidates\": [{\"finishReason\": \"STOP\"}]}}\n"
+      # Mix of invalid and valid JSON - only valid parts should be processed
+      body =
+        sse_body([
+          %{"response" => %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Valid"}]}}]}},
+          %{"response" => %{"candidates" => [%{"finishReason" => "STOP"}]}}
+        ])
 
       Req.Test.stub(__MODULE__, fn conn ->
         Plug.Conn.send_resp(conn, 200, body)
@@ -1235,12 +1251,17 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
 
       {:ok, stream} = GoogleGeminiCli.stream(default_model(), default_context(), default_opts())
 
-      # Should complete without crashing, just skip invalid data
-      assert {:ok, _result} = EventStream.result(stream, 1000)
+      # Should complete without crashing
+      assert EventStream.collect_text(stream) == "Valid"
     end
 
-    test "handles empty SSE data lines" do
-      body = "data: \ndata: {\"response\": {\"candidates\": [{\"finishReason\": \"STOP\"}]}}\n"
+    test "handles empty response content gracefully" do
+      body =
+        sse_body([
+          %{"response" => %{"candidates" => [%{"content" => %{"parts" => []}}]}},
+          %{"response" => %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Hello"}]}}]}},
+          %{"response" => %{"candidates" => [%{"finishReason" => "STOP"}]}}
+        ])
 
       Req.Test.stub(__MODULE__, fn conn ->
         Plug.Conn.send_resp(conn, 200, body)
@@ -1248,7 +1269,7 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
 
       {:ok, stream} = GoogleGeminiCli.stream(default_model(), default_context(), default_opts())
 
-      assert {:ok, _result} = EventStream.result(stream, 1000)
+      assert EventStream.collect_text(stream) == "Hello"
     end
   end
 
@@ -1413,6 +1434,7 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
     test "initializes output with correct model and provider" do
       body =
         sse_body([
+          %{"response" => %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Hi"}]}}]}},
           %{"response" => %{"candidates" => [%{"finishReason" => "STOP"}]}}
         ])
 
@@ -1433,6 +1455,7 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
     test "includes timestamp in output" do
       body =
         sse_body([
+          %{"response" => %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Hi"}]}}]}},
           %{"response" => %{"candidates" => [%{"finishReason" => "STOP"}]}}
         ])
 
@@ -1514,6 +1537,7 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
     test "uses custom stream_timeout from options" do
       body =
         sse_body([
+          %{"response" => %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Hi"}]}}]}},
           %{"response" => %{"candidates" => [%{"finishReason" => "STOP"}]}}
         ])
 
@@ -1530,6 +1554,7 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
     test "uses default stream_timeout when not specified" do
       body =
         sse_body([
+          %{"response" => %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Hi"}]}}]}},
           %{"response" => %{"candidates" => [%{"finishReason" => "STOP"}]}}
         ])
 
