@@ -29,6 +29,36 @@ defmodule LemonGateway.StoreTest do
       scope = %ChatScope{transport: :test, chat_id: unique_id(), topic_id: nil}
       assert Store.get_chat_state(scope) == nil
     end
+
+    test "delete_chat_state removes state" do
+      scope = %ChatScope{transport: :test, chat_id: unique_id(), topic_id: nil}
+      state = %{history: [], context: "test"}
+
+      Store.put_chat_state(scope, state)
+      Process.sleep(10)
+      assert Store.get_chat_state(scope) != nil
+
+      Store.delete_chat_state(scope)
+      Process.sleep(10)
+      assert Store.get_chat_state(scope) == nil
+    end
+
+    test "chat state expires_at is set to future timestamp" do
+      scope = %ChatScope{transport: :test, chat_id: unique_id(), topic_id: nil}
+      state = %{data: "test"}
+      now = System.system_time(:millisecond)
+
+      Store.put_chat_state(scope, state)
+      Process.sleep(10)
+
+      result = Store.get_chat_state(scope)
+      # expires_at should be in the future (default TTL is 24 hours)
+      assert result.expires_at > now
+      # Should be roughly 24 hours from now (within a few seconds tolerance)
+      expected_ttl_ms = 24 * 60 * 60 * 1000
+      assert result.expires_at >= now + expected_ttl_ms - 5000
+      assert result.expires_at <= now + expected_ttl_ms + 5000
+    end
   end
 
   describe "run events" do
