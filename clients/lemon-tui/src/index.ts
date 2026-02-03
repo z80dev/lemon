@@ -1706,7 +1706,20 @@ ${ansi.bold('Shortcuts:')}
       if (!tool.endTime) {
         // Tool is still running
         const elapsed = Math.floor((Date.now() - tool.startTime) / 1000);
-        activeTools.push(`${ansi.warning('▶')} ${tool.name} (${elapsed}s)`);
+
+        if (tool.name === 'task' && tool.taskEngine) {
+          // Enhanced display for Task tool with engine and current action
+          const engine = tool.taskEngine;
+          const actionInfo = tool.taskCurrentAction
+            ? ` → ${tool.taskCurrentAction.title}`
+            : '';
+          activeTools.push(
+            `${ansi.warning('▶')} task[${ansi.secondary(engine)}]${actionInfo} (${elapsed}s)`
+          );
+        } else {
+          // Standard display for other tools
+          activeTools.push(`${ansi.warning('▶')} ${tool.name} (${elapsed}s)`);
+        }
       }
     }
 
@@ -1762,6 +1775,28 @@ ${ansi.bold('Shortcuts:')}
 
       const title = `${statusIcon} ${ansi.bold(tool.name)} ${ansi.muted(`(${duration})`)}`;
       this.toolPanel.addChild(new Text(title, 1, 0));
+
+      // For Task tools, show enhanced info (engine and current action)
+      if (tool.name === 'task') {
+        if (tool.taskEngine) {
+          this.toolPanel.addChild(
+            new Text(ansi.muted(`  engine: ${tool.taskEngine}`), 1, 0)
+          );
+        }
+
+        if (tool.taskCurrentAction) {
+          const action = tool.taskCurrentAction;
+          const phaseIcon =
+            action.phase === 'started'
+              ? '▶'
+              : action.phase === 'completed'
+              ? '✓'
+              : '…';
+          this.toolPanel.addChild(
+            new Text(ansi.secondary(`  ${phaseIcon} ${action.title}`), 1, 0)
+          );
+        }
+      }
 
       const argsText = this.formatToolArgs(tool.args);
       if (argsText) {
