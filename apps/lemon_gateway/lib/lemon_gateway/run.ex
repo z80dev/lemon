@@ -2,8 +2,8 @@ defmodule LemonGateway.Run do
   @moduledoc false
   use GenServer
 
-  alias LemonGateway.Event
-  alias LemonGateway.Types.Job
+  alias LemonGateway.{BindingResolver, ChatState, Event, Store}
+  alias LemonGateway.Types.{Job, ResumeToken}
 
   def start_link(args) do
     GenServer.start_link(__MODULE__, args)
@@ -67,9 +67,10 @@ defmodule LemonGateway.Run do
     end
   end
 
-  # Derive lock key from job - use resume token's value if present, otherwise scope
-  defp lock_key_for(%Job{resume: %LemonGateway.Types.ResumeToken{value: value}}) when is_binary(value) do
-    {:resume, value}
+  # Derive lock key from job - use resume token's engine+value if present, otherwise scope
+  defp lock_key_for(%Job{resume: %LemonGateway.Types.ResumeToken{engine: engine, value: value}})
+       when is_binary(value) and is_binary(engine) do
+    {:resume, engine, value}
   end
 
   defp lock_key_for(%Job{scope: scope}) do
@@ -82,7 +83,13 @@ defmodule LemonGateway.Run do
     engine = LemonGateway.EngineRegistry.get_engine!(engine_id)
     renderer_state = state.renderer.init(%{engine: engine})
 
-    case engine.start_run(job, %{}, self()) do
+    opts =
+      case BindingResolver.resolve_cwd(job.scope) do
+        cwd when is_binary(cwd) -> %{cwd: cwd}
+        _ -> %{}
+      end
+
+    case engine.start_run(job, opts, self()) do
       {:ok, run_ref, cancel_ctx} ->
         register_progress_mapping(job, self())
         {:noreply,
@@ -124,6 +131,12 @@ defmodule LemonGateway.Run do
       end
 
     case event do
+      %Event.Started{} ->
+        # Note: Do NOT store chat state here. Storing on Started allows new messages
+        # to auto-resume to this token while the run is still active, creating
+        # concurrent runs. Chat state is stored in finalize/2 after Completed.
+        {:noreply, state}
+
       %Event.Completed{} = completed ->
         finalize(state, completed)
         {:stop, :normal, state}
@@ -134,6 +147,39 @@ defmodule LemonGateway.Run do
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
+
+  @impl true
+  def handle_cast({:steer, %Job{} = job, worker_pid}, state) do
+    cond do
+      # Run already completed - reject steer
+      state.completed ->
+        send(worker_pid, {:steer_rejected, job})
+        {:noreply, state}
+
+      # Engine not yet initialized - reject steer
+      is_nil(state.engine) or is_nil(state.cancel_ctx) ->
+        send(worker_pid, {:steer_rejected, job})
+        {:noreply, state}
+
+      # Engine doesn't support steering - reject steer
+      not state.engine.supports_steer?() ->
+        send(worker_pid, {:steer_rejected, job})
+        {:noreply, state}
+
+      # Engine supports steering - attempt to steer
+      true ->
+        case state.engine.steer(state.cancel_ctx, job.text) do
+          :ok ->
+            # Steering succeeded - no action needed
+            {:noreply, state}
+
+          {:error, _reason} ->
+            # Steering failed - reject so it can be re-enqueued as followup
+            send(worker_pid, {:steer_rejected, job})
+            {:noreply, state}
+        end
+    end
+  end
 
   @impl true
   def handle_cast({:cancel, reason}, state) do
@@ -150,11 +196,9 @@ defmodule LemonGateway.Run do
     end
   end
 
-  defp engine_id_for(%Job{resume: %LemonGateway.Types.ResumeToken{engine: engine}}), do: engine
-
-  defp engine_id_for(%Job{engine_hint: engine_hint}) when is_binary(engine_hint), do: engine_hint
-
-  defp engine_id_for(_job), do: LemonGateway.Config.get(:default_engine)
+  defp engine_id_for(%Job{} = job) do
+    BindingResolver.resolve_engine(job.scope, job.engine_hint, job.resume)
+  end
 
   defp finalize(state, %Event.Completed{} = completed) do
     state = %{state | completed: true}
@@ -165,7 +209,7 @@ defmodule LemonGateway.Run do
     end
 
     if state.run_ref do
-      LemonGateway.Store.finalize_run(state.run_ref, %{completed: completed})
+      LemonGateway.Store.finalize_run(state.run_ref, %{completed: completed, scope: state.job.scope})
     end
     LemonGateway.Scheduler.release_slot(state.slot_ref)
     send(state.worker_pid, {:run_complete, self(), completed})
@@ -180,8 +224,31 @@ defmodule LemonGateway.Run do
       _state = maybe_render_from_finalize(state, completed)
     end
 
+    maybe_store_chat_state(state.job, completed)
     unregister_progress_mapping(state.job)
   end
+
+  defp maybe_store_chat_state(%Job{scope: scope}, %Event.Started{resume: %ResumeToken{} = resume}) do
+    chat_state = %ChatState{
+      last_engine: resume.engine,
+      last_resume_token: resume.value,
+      updated_at: System.system_time(:millisecond)
+    }
+
+    Store.put_chat_state(scope, chat_state)
+  end
+
+  defp maybe_store_chat_state(%Job{scope: scope}, %Event.Completed{resume: %ResumeToken{} = resume}) do
+    chat_state = %ChatState{
+      last_engine: resume.engine,
+      last_resume_token: resume.value,
+      updated_at: System.system_time(:millisecond)
+    }
+
+    Store.put_chat_state(scope, chat_state)
+  end
+
+  defp maybe_store_chat_state(_job, _completed), do: :ok
 
   defp maybe_render(state, text, status) do
     meta = state.job.meta || %{}
@@ -190,7 +257,16 @@ defmodule LemonGateway.Run do
     progress_msg_id = meta[:progress_msg_id]
 
     cond do
-      status in [:done, :error] && chat_id ->
+      status in [:done, :error, :cancelled] && chat_id && progress_msg_id ->
+        LemonGateway.Telegram.Outbox.enqueue(
+          {chat_id, progress_msg_id, :edit},
+          0,
+          {:edit, chat_id, progress_msg_id, %{text: text, engine: state.engine}}
+        )
+
+        %{state | sent_final: true}
+
+      status in [:done, :error, :cancelled] && chat_id ->
         LemonGateway.Telegram.Outbox.enqueue(
           {chat_id, user_msg_id, :send},
           0,
@@ -241,7 +317,7 @@ defmodule LemonGateway.Run do
     text = Map.get(renderer_state, :last_text)
     status = Map.get(renderer_state, :last_status)
 
-    if is_binary(text) and status in [:done, :error] do
+    if is_binary(text) and status in [:done, :error, :cancelled] do
       maybe_render(state, text, status)
     else
       state

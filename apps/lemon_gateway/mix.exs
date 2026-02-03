@@ -27,6 +27,8 @@ defmodule LemonGateway.MixProject do
   defp deps do
     [
       {:jason, "~> 1.4"},
+      {:uuid, "~> 1.1"},
+      {:toml, "~> 0.7"},
       {:agent_core, in_umbrella: true},
       {:coding_agent, in_umbrella: true}
     ]

@@ -19,7 +19,7 @@ defmodule LemonGateway.Types do
     @type t :: %__MODULE__{transport: atom(), chat_id: integer(), topic_id: integer() | nil}
   end
 
-  @type queue_mode :: :collect | :followup | :steer | :interrupt
+  @type queue_mode :: :collect | :followup | :steer | :steer_backlog | :interrupt
 
   defmodule Job do
     @moduledoc false

@@ -69,8 +69,49 @@ defmodule LemonGateway.ThreadWorker do
   end
 
   defp enqueue_by_mode(%Job{queue_mode: :steer} = job, state) do
-    # Insert at front of queue (will be processed after current run completes)
-    %{state | jobs: :queue.in_r(job, state.jobs)}
+    # If there's an active run, attempt to steer it directly
+    case state.current_run do
+      pid when is_pid(pid) ->
+        # Check if the run process is still alive before casting
+        # This prevents losing steers if the run dies before we receive :DOWN
+        if Process.alive?(pid) do
+          # Ask the run to handle the steer; it will check engine support
+          GenServer.cast(pid, {:steer, job, self()})
+          # Return state unchanged - the run will notify us if steering fails
+          state
+        else
+          # Run died but we haven't received :DOWN yet - convert to followup
+          followup_job = %{job | queue_mode: :followup}
+          enqueue_by_mode(followup_job, state)
+        end
+
+      nil ->
+        # No active run - convert to followup and enqueue
+        followup_job = %{job | queue_mode: :followup}
+        enqueue_by_mode(followup_job, state)
+    end
+  end
+
+  defp enqueue_by_mode(%Job{queue_mode: :steer_backlog} = job, state) do
+    # Like :steer, but falls back to enqueuing at back (like :collect) instead of converting to followup
+    case state.current_run do
+      pid when is_pid(pid) ->
+        if Process.alive?(pid) do
+          # Ask the run to handle the steer; it will check engine support
+          # On rejection, we'll handle it as :collect in :steer_backlog_rejected
+          GenServer.cast(pid, {:steer_backlog, job, self()})
+          state
+        else
+          # Run died but we haven't received :DOWN yet - enqueue at back like :collect
+          collect_job = %{job | queue_mode: :collect}
+          %{state | jobs: :queue.in(collect_job, state.jobs)}
+        end
+
+      nil ->
+        # No active run - enqueue at back like :collect
+        collect_job = %{job | queue_mode: :collect}
+        %{state | jobs: :queue.in(collect_job, state.jobs)}
+    end
   end
 
   defp enqueue_by_mode(%Job{queue_mode: :interrupt} = job, state) do
@@ -148,7 +189,9 @@ defmodule LemonGateway.ThreadWorker do
           Process.demonitor(state.run_mon_ref, [:flush])
         end
 
-        %{state | current_run: nil, current_slot_ref: nil, run_mon_ref: nil}
+        # Coalesce consecutive :collect jobs at the front of the queue
+        coalesced_jobs = coalesce_collect_jobs(state.jobs)
+        %{state | current_run: nil, current_slot_ref: nil, run_mon_ref: nil, jobs: coalesced_jobs}
       else
         state
       end
@@ -182,6 +225,20 @@ defmodule LemonGateway.ThreadWorker do
     end
   end
 
+  # Handle steer rejection from Run - re-enqueue as followup
+  def handle_info({:steer_rejected, %Job{} = job}, state) do
+    followup_job = %{job | queue_mode: :followup}
+    state = enqueue_by_mode(followup_job, state)
+    {:noreply, maybe_request_slot(state)}
+  end
+
+  # Handle steer_backlog rejection from Run - enqueue at back like :collect
+  def handle_info({:steer_backlog_rejected, %Job{} = job}, state) do
+    collect_job = %{job | queue_mode: :collect}
+    state = %{state | jobs: :queue.in(collect_job, state.jobs)}
+    {:noreply, maybe_request_slot(state)}
+  end
+
   defp maybe_request_slot(state) do
     if state.current_run == nil and not state.slot_pending and not :queue.is_empty(state.jobs) do
       LemonGateway.Scheduler.request_slot(self(), state.thread_key)
@@ -189,5 +246,58 @@ defmodule LemonGateway.ThreadWorker do
     else
       state
     end
+  end
+
+  @doc """
+  Coalesces consecutive :collect jobs at the front of the queue into a single job.
+
+  Merges text with newline separator, keeps the scope from the first job,
+  and uses the user_msg_id from the last job.
+  """
+  def coalesce_collect_jobs(queue) do
+    case :queue.out(queue) do
+      {:empty, _} ->
+        queue
+
+      {{:value, %Job{queue_mode: :collect} = first_job}, rest} ->
+        # Extract all consecutive :collect jobs from the front
+        {collect_jobs, remaining} = extract_collect_jobs(rest, [first_job])
+
+        case collect_jobs do
+          [single_job] ->
+            # Only one :collect job, no merging needed
+            :queue.in_r(single_job, remaining)
+
+          [_ | _] ->
+            # Multiple :collect jobs to merge
+            merged_job = merge_collect_jobs(collect_jobs)
+            :queue.in_r(merged_job, remaining)
+        end
+
+      {{:value, _non_collect_job}, _rest} ->
+        # First job is not :collect, return queue unchanged
+        queue
+    end
+  end
+
+  # Extract consecutive :collect jobs from the front of the queue
+  defp extract_collect_jobs(queue, acc) do
+    case :queue.out(queue) do
+      {{:value, %Job{queue_mode: :collect} = job}, rest} ->
+        extract_collect_jobs(rest, acc ++ [job])
+
+      _ ->
+        # No more :collect jobs or queue is empty
+        {acc, queue}
+    end
+  end
+
+  # Merge multiple :collect jobs into one
+  # Keeps scope from first, user_msg_id from last, concatenates text
+  defp merge_collect_jobs([first | _] = jobs) do
+    last = List.last(jobs)
+    merged_text = jobs |> Enum.map(& &1.text) |> Enum.join("\n")
+
+    %{first | text: merged_text, user_msg_id: last.user_msg_id}
   end
 end

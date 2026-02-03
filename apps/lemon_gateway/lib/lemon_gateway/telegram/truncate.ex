@@ -85,9 +85,33 @@ defmodule LemonGateway.Telegram.Truncate do
 
   defp do_truncate(text, engine_module) do
     lines = String.split(text, "\n")
-
-    # Find trailing resume lines
     {content_lines, resume_lines} = split_trailing_resume_lines(lines, engine_module)
+
+    {content_lines, resume_lines} =
+      case resume_lines do
+        [] ->
+          case extract_trailing_resume_line(text) do
+            nil ->
+              {content_lines, resume_lines}
+
+            resume_line ->
+              content_text =
+                text
+                |> String.replace_suffix(resume_line, "")
+                |> String.trim_trailing("\n")
+
+              content_lines =
+                case content_text do
+                  "" -> []
+                  _ -> String.split(content_text, "\n")
+                end
+
+              {content_lines, [resume_line]}
+          end
+
+        _ ->
+          {content_lines, resume_lines}
+      end
 
     # Calculate space budget
     resume_text = Enum.join(resume_lines, "\n")
@@ -98,12 +122,10 @@ defmodule LemonGateway.Telegram.Truncate do
     ellipsis_len = String.length(ellipsis_with_sep)
 
     # Space available for content
-    available_for_content =
-      @telegram_max_length - resume_length - ellipsis_len -
-        if(resume_lines != [], do: 1, else: 0)
+    available_for_content = @telegram_max_length - resume_length - ellipsis_len
 
     # If resume lines alone exceed the limit, truncate them too
-    if available_for_content <= 0 do
+    if available_for_content < 0 do
       truncate_plain(text)
     else
       truncated_content = truncate_content(content_lines, available_for_content)
@@ -134,45 +156,56 @@ defmodule LemonGateway.Telegram.Truncate do
 
   # Split lines into content and trailing resume lines
   defp split_trailing_resume_lines(lines, engine_module) do
-    {resume_rev, content_rev} =
-      lines
-      |> Enum.reverse()
-      |> Enum.reduce({[], nil}, fn line, {resume_acc, content_acc} ->
-        cond do
-          # Already found non-resume content, everything else is content
-          content_acc != nil ->
-            {resume_acc, [line | content_acc]}
+    {resume_rev, content_rev} = split_resume_lines(Enum.reverse(lines), engine_module, [])
+    {Enum.reverse(content_rev), resume_rev}
+  end
 
-          # Empty lines at the end - could be part of resume section
-          String.trim(line) == "" && resume_acc != [] ->
-            {[line | resume_acc], content_acc}
+  defp split_resume_lines([], _engine_module, resume_acc), do: {resume_acc, []}
 
-          # Check if this is a resume line
-          is_resume_line?(line, engine_module) ->
-            {[line | resume_acc], content_acc}
+  defp split_resume_lines([line | rest], engine_module, resume_acc) do
+    trimmed = String.trim(line)
 
-          # First non-resume line found
-          true ->
-            {resume_acc, [line]}
-        end
-      end)
+    cond do
+      trimmed == "" && resume_acc != [] ->
+        split_resume_lines(rest, engine_module, [line | resume_acc])
 
-    content_lines =
-      case content_rev do
-        nil -> []
-        lines -> lines
-      end
+      is_resume_line?(line, engine_module) ->
+        split_resume_lines(rest, engine_module, [line | resume_acc])
 
-    {content_lines, resume_rev}
+      true ->
+        {resume_acc, [line | rest]}
+    end
   end
 
   defp is_resume_line?(line, nil) do
     # Use the generic detector from AgentCore when no engine specified
-    AgentCore.CliRunners.Types.ResumeToken.is_resume_line(line)
+    AgentCore.CliRunners.Types.ResumeToken.is_resume_line(line) ||
+      fallback_resume_prefix?(line)
   end
 
   defp is_resume_line?(line, engine_module) when is_atom(engine_module) do
-    engine_module.is_resume_line(line)
+    engine_module.is_resume_line(line) ||
+      AgentCore.CliRunners.Types.ResumeToken.is_resume_line(line) ||
+      fallback_resume_prefix?(line)
+  end
+
+  defp fallback_resume_prefix?(line) when is_binary(line) do
+    line = String.trim(String.downcase(line))
+
+    String.starts_with?(line, "codex resume ") ||
+      String.starts_with?(line, "lemon resume ") ||
+      String.starts_with?(line, "claude --resume ") ||
+      Regex.match?(~r/^[a-z0-9_-]+\s+resume\s+/i, line)
+  end
+
+  defp extract_trailing_resume_line(text) when is_binary(text) do
+    regex =
+      ~r/(?:^|\n)(`?(?:codex|lemon)\s+resume\s+[a-zA-Z0-9_-]+`?|`?claude\s+--resume\s+[a-zA-Z0-9_-]+`?)\s*$/i
+
+    case Regex.run(regex, text) do
+      [_, line] -> line
+      _ -> nil
+    end
   end
 
   # Truncate content lines to fit within the budget

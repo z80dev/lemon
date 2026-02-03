@@ -48,29 +48,28 @@ defmodule LemonGateway.EngineRegistry do
         Map.put(acc, id, mod)
       end)
 
-    {:ok, map}
+    {:ok, %{map: map, order: engines}}
   end
 
   @impl true
   def handle_call(:list, _from, state) do
-    {:reply, Map.keys(state), state}
+    {:reply, Enum.map(state.order, & &1.id()), state}
   end
 
   def handle_call({:get, id}, _from, state) do
-    case Map.fetch(state, id) do
+    case Map.fetch(state.map, id) do
       {:ok, mod} -> {:reply, mod, state}
       :error -> raise ArgumentError, "unknown engine id: #{inspect(id)}"
     end
   end
 
   def handle_call({:get_or_nil, id}, _from, state) do
-    {:reply, Map.get(state, id), state}
+    {:reply, Map.get(state.map, id), state}
   end
 
   def handle_call({:extract_resume, text}, _from, state) do
     result =
-      state
-      |> Map.values()
+      state.order
       |> Enum.find_value(:none, fn mod ->
         case mod.extract_resume(text) do
           %LemonGateway.Types.ResumeToken{} = token -> {:ok, token}

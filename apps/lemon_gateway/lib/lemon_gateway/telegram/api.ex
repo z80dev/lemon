@@ -12,7 +12,7 @@ defmodule LemonGateway.Telegram.API do
     request(token, "getUpdates", params, timeout_ms)
   end
 
-  def send_message(token, chat_id, text, reply_to_message_id \\ nil) do
+  def send_message(token, chat_id, text, reply_to_message_id \\ nil, parse_mode \\ nil) do
     params =
       %{
         "chat_id" => chat_id,
@@ -20,19 +20,31 @@ defmodule LemonGateway.Telegram.API do
         "disable_web_page_preview" => true
       }
       |> maybe_put("reply_to_message_id", reply_to_message_id)
+      |> maybe_put("parse_mode", parse_mode)
 
     request(token, "sendMessage", params, @default_timeout)
   end
 
-  def edit_message_text(token, chat_id, message_id, text) do
-    params = %{
-      "chat_id" => chat_id,
-      "message_id" => message_id,
-      "text" => text,
-      "disable_web_page_preview" => true
-    }
+  def edit_message_text(token, chat_id, message_id, text, parse_mode \\ nil) do
+    params =
+      %{
+        "chat_id" => chat_id,
+        "message_id" => message_id,
+        "text" => text,
+        "disable_web_page_preview" => true
+      }
+      |> maybe_put("parse_mode", parse_mode)
 
     request(token, "editMessageText", params, @default_timeout)
+  end
+
+  def delete_message(token, chat_id, message_id) do
+    params = %{
+      "chat_id" => chat_id,
+      "message_id" => message_id
+    }
+
+    request(token, "deleteMessage", params, @default_timeout)
   end
 
   defp request(token, method, params, timeout_ms) do

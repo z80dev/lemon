@@ -29,11 +29,19 @@ defmodule LemonGateway.Renderers.Basic do
     render(state, :running, nil)
   end
 
-  def apply_event(state, %Event.Completed{ok: true, answer: answer}) do
+  def apply_event(state, %Event.Completed{ok: true, answer: answer} = completed) do
+    state = maybe_apply_resume_from_completed(state, completed)
     render(state, :done, answer || "")
   end
 
-  def apply_event(state, %Event.Completed{ok: false, error: error}) do
+  def apply_event(state, %Event.Completed{ok: false, error: error} = completed)
+      when error in [:user_requested, :interrupted] do
+    state = maybe_apply_resume_from_completed(state, completed)
+    render(state, :cancelled, nil)
+  end
+
+  def apply_event(state, %Event.Completed{ok: false, error: error} = completed) do
+    state = maybe_apply_resume_from_completed(state, completed)
     render(state, :error, to_string(error || ""))
   end
 
@@ -66,6 +74,17 @@ defmodule LemonGateway.Renderers.Basic do
       [
         "Done.",
         answer,
+        state.resume_line
+      ]
+      |> Enum.reject(&(&1 in [nil, ""]))
+
+    Enum.join(parts, "\n\n")
+  end
+
+  defp build_text(state, :cancelled, _answer) do
+    parts =
+      [
+        "Cancelled.",
         state.resume_line
       ]
       |> Enum.reject(&(&1 in [nil, ""]))
@@ -120,4 +139,18 @@ defmodule LemonGateway.Renderers.Basic do
 
   defp format_resume(nil, _resume), do: nil
   defp format_resume(engine, resume), do: engine.format_resume(resume)
+
+  defp maybe_apply_resume_from_completed(state, %Event.Completed{resume: resume}) do
+    cond do
+      state.resume_line != nil ->
+        state
+
+      is_nil(resume) ->
+        state
+
+      true ->
+        resume_line = format_resume(state.engine, resume)
+        %{state | resume_line: resume_line}
+    end
+  end
 end

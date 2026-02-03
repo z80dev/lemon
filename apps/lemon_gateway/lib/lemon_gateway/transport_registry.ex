@@ -81,7 +81,12 @@ defmodule LemonGateway.TransportRegistry do
 
   defp transport_enabled?("telegram") do
     cfg = Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
-    Map.get(cfg, :enable_telegram, false)
+    # Handle both map and keyword list configs
+    if is_list(cfg) do
+      Keyword.get(cfg, :enable_telegram, false)
+    else
+      Map.get(cfg, :enable_telegram, false)
+    end
   end
 
   defp transport_enabled?(_id), do: true
