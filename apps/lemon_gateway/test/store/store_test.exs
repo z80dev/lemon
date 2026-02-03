@@ -18,7 +18,11 @@ defmodule LemonGateway.StoreTest do
       # Give cast time to process
       Process.sleep(10)
 
-      assert Store.get_chat_state(scope) == state
+      result = Store.get_chat_state(scope)
+      # expires_at is automatically added by the Store
+      assert result.history == state.history
+      assert result.context == state.context
+      assert is_integer(result.expires_at)
     end
 
     test "returns nil for missing scope" do
@@ -188,7 +192,9 @@ defmodule LemonGateway.Store.BackendConfigTest do
     Store.put_chat_state(scope, %{test: true})
     Process.sleep(10)
 
-    assert Store.get_chat_state(scope) == %{test: true}
+    result = Store.get_chat_state(scope)
+    assert result.test == true
+    assert is_integer(result.expires_at)
   end
 
   test "can use JSONL backend when configured" do
@@ -208,7 +214,9 @@ defmodule LemonGateway.Store.BackendConfigTest do
     Store.put_chat_state(scope, %{persistent: true})
     Process.sleep(10)
 
-    assert Store.get_chat_state(scope) == %{persistent: true}
+    result = Store.get_chat_state(scope)
+    assert result.persistent == true
+    assert is_integer(result.expires_at)
 
     # Verify file was created
     assert File.exists?(Path.join(tmp_dir, "chat.jsonl"))

@@ -6,12 +6,13 @@ defmodule LemonGateway.ChatState do
   so subsequent messages can automatically continue the conversation.
   """
 
-  defstruct [:last_engine, :last_resume_token, :updated_at]
+  defstruct [:last_engine, :last_resume_token, :updated_at, :expires_at]
 
   @type t :: %__MODULE__{
           last_engine: String.t() | nil,
           last_resume_token: String.t() | nil,
-          updated_at: integer() | nil
+          updated_at: integer() | nil,
+          expires_at: integer() | nil
         }
 
   @doc """
@@ -28,7 +29,8 @@ defmodule LemonGateway.ChatState do
     %__MODULE__{
       last_engine: attrs[:last_engine] || attrs["last_engine"],
       last_resume_token: attrs[:last_resume_token] || attrs["last_resume_token"],
-      updated_at: attrs[:updated_at] || attrs["updated_at"]
+      updated_at: attrs[:updated_at] || attrs["updated_at"],
+      expires_at: attrs[:expires_at] || attrs["expires_at"]
     }
   end
 end

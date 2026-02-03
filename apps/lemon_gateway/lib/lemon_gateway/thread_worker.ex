@@ -22,7 +22,10 @@ defmodule LemonGateway.ThreadWorker do
        current_slot_ref: nil,
        run_mon_ref: nil,
        slot_pending: false,
-       last_followup_at: nil
+       last_followup_at: nil,
+       # Track pending steer jobs sent to the run but not yet confirmed/rejected
+       # Maps run_pid -> list of {job, fallback_mode} tuples
+       pending_steers: %{}
      })}
   end
 
@@ -72,18 +75,13 @@ defmodule LemonGateway.ThreadWorker do
     # If there's an active run, attempt to steer it directly
     case state.current_run do
       pid when is_pid(pid) ->
-        # Check if the run process is still alive before casting
-        # This prevents losing steers if the run dies before we receive :DOWN
-        if Process.alive?(pid) do
-          # Ask the run to handle the steer; it will check engine support
-          GenServer.cast(pid, {:steer, job, self()})
-          # Return state unchanged - the run will notify us if steering fails
-          state
-        else
-          # Run died but we haven't received :DOWN yet - convert to followup
-          followup_job = %{job | queue_mode: :followup}
-          enqueue_by_mode(followup_job, state)
-        end
+        # Always cast to the run without checking Process.alive?
+        # This avoids a race where the run dies between the check and the cast.
+        # If the run dies before processing, we'll handle it in :DOWN by
+        # converting all pending steers for that run to followup.
+        GenServer.cast(pid, {:steer, job, self()})
+        # Track this pending steer so we can recover it if the run dies
+        add_pending_steer(state, pid, job, :followup)
 
       nil ->
         # No active run - convert to followup and enqueue
@@ -96,16 +94,13 @@ defmodule LemonGateway.ThreadWorker do
     # Like :steer, but falls back to enqueuing at back (like :collect) instead of converting to followup
     case state.current_run do
       pid when is_pid(pid) ->
-        if Process.alive?(pid) do
-          # Ask the run to handle the steer; it will check engine support
-          # On rejection, we'll handle it as :collect in :steer_backlog_rejected
-          GenServer.cast(pid, {:steer_backlog, job, self()})
-          state
-        else
-          # Run died but we haven't received :DOWN yet - enqueue at back like :collect
-          collect_job = %{job | queue_mode: :collect}
-          %{state | jobs: :queue.in(collect_job, state.jobs)}
-        end
+        # Always cast to the run without checking Process.alive?
+        # This avoids a race where the run dies between the check and the cast.
+        # If the run dies before processing, we'll handle it in :DOWN by
+        # converting all pending steers for that run to collect mode.
+        GenServer.cast(pid, {:steer_backlog, job, self()})
+        # Track this pending steer so we can recover it if the run dies
+        add_pending_steer(state, pid, job, :collect)
 
       nil ->
         # No active run - enqueue at back like :collect
@@ -143,6 +138,35 @@ defmodule LemonGateway.ThreadWorker do
 
   defp followup_debounce_ms do
     Application.get_env(:lemon_gateway, :followup_debounce_ms, @followup_debounce_ms)
+  end
+
+  # Add a job to the pending steers for a given run pid
+  defp add_pending_steer(state, run_pid, job, fallback_mode) do
+    pending = Map.get(state.pending_steers, run_pid, [])
+    %{state | pending_steers: Map.put(state.pending_steers, run_pid, [{job, fallback_mode} | pending])}
+  end
+
+  # Remove a specific job from pending steers (called when steer is rejected normally)
+  defp remove_pending_steer(state, job) do
+    # Find and remove the job from any run's pending list
+    new_pending =
+      Map.new(state.pending_steers, fn {pid, jobs} ->
+        {pid, Enum.reject(jobs, fn {j, _mode} -> j == job end)}
+      end)
+
+    %{state | pending_steers: new_pending}
+  end
+
+  # Convert all pending steers for a given run to their fallback modes and enqueue them
+  defp flush_pending_steers(state, run_pid) do
+    pending = Map.get(state.pending_steers, run_pid, [])
+    new_pending_steers = Map.delete(state.pending_steers, run_pid)
+
+    # Convert each pending steer to its fallback mode and enqueue
+    Enum.reduce(pending, %{state | pending_steers: new_pending_steers}, fn {job, fallback_mode}, acc_state ->
+      fallback_job = %{job | queue_mode: fallback_mode}
+      enqueue_by_mode(fallback_job, acc_state)
+    end)
   end
 
   @impl true
@@ -211,6 +235,9 @@ defmodule LemonGateway.ThreadWorker do
         LemonGateway.Scheduler.release_slot(state.current_slot_ref)
       end
 
+      # Flush any pending steers for this run - they were cast but never processed
+      state = flush_pending_steers(state, pid)
+
       state =
         %{state | current_run: nil, current_slot_ref: nil, run_mon_ref: nil}
         |> maybe_request_slot()
@@ -225,8 +252,22 @@ defmodule LemonGateway.ThreadWorker do
     end
   end
 
+  # Handle steer acceptance from Run - remove from pending steers
+  def handle_info({:steer_accepted, %Job{} = job}, state) do
+    state = remove_pending_steer(state, job)
+    {:noreply, state}
+  end
+
+  # Handle steer_backlog acceptance from Run - remove from pending steers
+  def handle_info({:steer_backlog_accepted, %Job{} = job}, state) do
+    state = remove_pending_steer(state, job)
+    {:noreply, state}
+  end
+
   # Handle steer rejection from Run - re-enqueue as followup
   def handle_info({:steer_rejected, %Job{} = job}, state) do
+    # Remove from pending steers since the run explicitly rejected it
+    state = remove_pending_steer(state, job)
     followup_job = %{job | queue_mode: :followup}
     state = enqueue_by_mode(followup_job, state)
     {:noreply, maybe_request_slot(state)}
@@ -234,6 +275,8 @@ defmodule LemonGateway.ThreadWorker do
 
   # Handle steer_backlog rejection from Run - enqueue at back like :collect
   def handle_info({:steer_backlog_rejected, %Job{} = job}, state) do
+    # Remove from pending steers since the run explicitly rejected it
+    state = remove_pending_steer(state, job)
     collect_job = %{job | queue_mode: :collect}
     state = %{state | jobs: :queue.in(collect_job, state.jobs)}
     {:noreply, maybe_request_slot(state)}
