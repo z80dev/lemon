@@ -19,10 +19,12 @@ defmodule LemonGateway.Types do
     @type t :: %__MODULE__{transport: atom(), chat_id: integer(), topic_id: integer() | nil}
   end
 
+  @type queue_mode :: :collect | :followup | :steer | :interrupt
+
   defmodule Job do
     @moduledoc false
     @enforce_keys [:scope, :user_msg_id, :text]
-    defstruct [:scope, :user_msg_id, :text, :resume, :engine_hint, :meta]
+    defstruct [:scope, :user_msg_id, :text, :resume, :engine_hint, :meta, queue_mode: :collect]
 
     @type t :: %__MODULE__{
             scope: ChatScope.t(),
@@ -30,7 +32,8 @@ defmodule LemonGateway.Types do
             text: String.t(),
             resume: LemonGateway.Types.ResumeToken.t() | nil,
             engine_hint: LemonGateway.Types.engine_id() | nil,
-            meta: map() | nil
+            meta: map() | nil,
+            queue_mode: LemonGateway.Types.queue_mode()
           }
   end
 end

@@ -26,7 +26,9 @@ defmodule LemonGateway.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+      {:agent_core, in_umbrella: true},
+      {:coding_agent, in_umbrella: true}
     ]
   end
 end

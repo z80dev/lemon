@@ -10,6 +10,8 @@ defmodule LemonGateway.Application do
     children = [
       LemonGateway.Config,
       LemonGateway.EngineRegistry,
+      LemonGateway.TransportRegistry,
+      LemonGateway.CommandRegistry,
       LemonGateway.EngineLock,
       LemonGateway.ThreadRegistry,
       LemonGateway.RunSupervisor,

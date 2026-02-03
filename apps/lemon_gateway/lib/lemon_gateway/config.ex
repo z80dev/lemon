@@ -4,7 +4,10 @@ defmodule LemonGateway.Config do
 
   @default %{
     max_concurrent_runs: 2,
-    default_engine: "lemon"
+    default_engine: "lemon",
+    enable_telegram: false,
+    require_engine_lock: true,
+    engine_lock_timeout_ms: 60_000
   }
 
   def start_link(_opts) do

@@ -6,14 +6,14 @@ defmodule LemonGateway.Engines.Echo do
   alias LemonGateway.Event
 
   @impl true
-  def id, do: "lemon"
+  def id, do: "echo"
 
   @impl true
-  def format_resume(%ResumeToken{value: sid}), do: "lemon resume #{sid}"
+  def format_resume(%ResumeToken{value: sid}), do: "echo resume #{sid}"
 
   @impl true
   def extract_resume(text) do
-    case Regex.run(~r/lemon\s+resume\s+([\w-]+)/i, text) do
+    case Regex.run(~r/echo\s+resume\s+([\w-]+)/i, text) do
       [_, value] -> %ResumeToken{engine: id(), value: value}
       _ -> nil
     end
@@ -21,7 +21,7 @@ defmodule LemonGateway.Engines.Echo do
 
   @impl true
   def is_resume_line(line) do
-    Regex.match?(~r/^\s*`?lemon\s+resume\s+[\w-]+`?\s*$/i, line)
+    Regex.match?(~r/^\s*`?echo\s+resume\s+[\w-]+`?\s*$/i, line)
   end
 
   @impl true

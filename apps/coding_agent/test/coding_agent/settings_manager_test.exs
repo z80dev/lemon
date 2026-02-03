@@ -325,6 +325,20 @@ defmodule CodingAgent.SettingsManagerTest do
 
       assert settings.default_model.base_url == "https://provider-specific.com"
     end
+
+    test "parses codex settings section" do
+      map = %{
+        "codex" => %{
+          "extraArgs" => ["-c", "notify=[]"],
+          "autoApprove" => true
+        }
+      }
+
+      settings = SettingsManager.from_map(map)
+
+      assert settings.codex[:extra_args] == ["-c", "notify=[]"]
+      assert settings.codex[:auto_approve] == true
+    end
   end
 
   describe "from_map/1 scoped models parsing" do
@@ -428,6 +442,20 @@ defmodule CodingAgent.SettingsManagerTest do
 
       assert map["providers"]["anthropic"]["apiKey"] == "key1"
       assert map["providers"]["anthropic"]["baseUrl"] == "url1"
+    end
+
+    test "encodes codex settings section" do
+      settings = %SettingsManager{
+        codex: %{
+          extra_args: ["-c", "notify=[]"],
+          auto_approve: true
+        }
+      }
+
+      map = SettingsManager.to_map(settings)
+
+      assert map["codex"]["extraArgs"] == ["-c", "notify=[]"]
+      assert map["codex"]["autoApprove"] == true
     end
   end
 
@@ -626,8 +654,7 @@ defmodule CodingAgent.SettingsManagerTest do
       assert roundtripped.theme == original.theme
     end
 
-    test "boolean false values have roundtrip limitation due to || operator" do
-      # This test documents the known limitation with false boolean values
+    test "boolean false values roundtrip correctly" do
       original = %SettingsManager{
         compaction_enabled: false,
         retry_enabled: false,
@@ -636,10 +663,9 @@ defmodule CodingAgent.SettingsManagerTest do
 
       roundtripped = original |> SettingsManager.to_map() |> SettingsManager.from_map()
 
-      # Due to false || nil = nil in from_map, false values become true (default)
-      assert roundtripped.compaction_enabled == true
-      assert roundtripped.retry_enabled == true
-      assert roundtripped.auto_resize_images == true
+      assert roundtripped.compaction_enabled == false
+      assert roundtripped.retry_enabled == false
+      assert roundtripped.auto_resize_images == false
     end
   end
 

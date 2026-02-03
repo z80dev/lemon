@@ -1,0 +1,23 @@
+{
+  "default_provider": "anthropic",
+  "default_model": "claude-sonnet-4-20250514",
+  "providers": {
+    "anthropic": {
+      "api_key": "sk-ant-your-api-key-here"
+    },
+    "openai": {
+      "api_key": "sk-your-openai-key-here"
+    },
+    "kimi": {
+      "api_key": "sk-kimi-your-kimi-key-here",
+      "base_url": "https://api.kimi.com/coding/"
+    },
+    "google": {
+      "api_key": "your-google-api-key-here"
+    }
+  },
+  "tui": {
+    "theme": "lemon",
+    "debug": false
+  }
+}

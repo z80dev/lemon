@@ -9,6 +9,14 @@
 # move said applications out of the umbrella.
 import Config
 
+# Codex CLI runner configuration (AgentCore)
+config :agent_core, :codex,
+  # Extra arguments passed to `codex` before `exec`.
+  # Defaults to ["-c", "notify=[]"] if not set.
+  extra_args: ["-c", "notify=[]"],
+  # When true, adds `--dangerously-bypass-approvals-and-sandbox` for full auto.
+  auto_approve: false
+
 # Sample configuration:
 #
 #     config :logger, :default_handler,

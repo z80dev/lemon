@@ -21,9 +21,24 @@ defmodule LemonGateway.EngineRegistry do
   @spec get_engine(engine_id()) :: engine_mod() | nil
   def get_engine(id), do: GenServer.call(__MODULE__, {:get_or_nil, id})
 
+  @doc """
+  Iterates all registered engines and calls extract_resume/1 on each until one returns
+  a non-nil ResumeToken. Returns `{:ok, token}` if found, `:none` otherwise.
+  """
+  @spec extract_resume(String.t()) :: {:ok, LemonGateway.Types.ResumeToken.t()} | :none
+  def extract_resume(text) do
+    GenServer.call(__MODULE__, {:extract_resume, text})
+  end
+
   @impl true
   def init(_opts) do
-    engines = [LemonGateway.Engines.Echo]
+    engines =
+      Application.get_env(:lemon_gateway, :engines, [
+        LemonGateway.Engines.Lemon,
+        LemonGateway.Engines.Echo,
+        LemonGateway.Engines.Codex,
+        LemonGateway.Engines.Claude
+      ])
 
     map =
       engines
@@ -50,6 +65,20 @@ defmodule LemonGateway.EngineRegistry do
 
   def handle_call({:get_or_nil, id}, _from, state) do
     {:reply, Map.get(state, id), state}
+  end
+
+  def handle_call({:extract_resume, text}, _from, state) do
+    result =
+      state
+      |> Map.values()
+      |> Enum.find_value(:none, fn mod ->
+        case mod.extract_resume(text) do
+          %LemonGateway.Types.ResumeToken{} = token -> {:ok, token}
+          _ -> nil
+        end
+      end)
+
+    {:reply, result, state}
   end
 
   defp validate_id!(id) when id in @reserved_ids do
