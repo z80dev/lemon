@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, act } from '@testing-library/react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { WorkingBanner } from './WorkingBanner';
 import { useLemonStore } from '../store/useLemonStore';
@@ -7,15 +7,17 @@ import { useLemonStore } from '../store/useLemonStore';
  * Helper to set up the store state for WorkingBanner tests
  */
 function setupStore(overrides: { workingMessage?: string | null } = {}) {
-  useLemonStore.setState({
-    ui: {
-      requestsQueue: [],
-      status: {},
-      widgets: {},
-      workingMessage: overrides.workingMessage ?? null,
-      title: null,
-      editorText: '',
-    },
+  act(() => {
+    useLemonStore.setState({
+      ui: {
+        requestsQueue: [],
+        status: {},
+        widgets: {},
+        workingMessage: overrides.workingMessage ?? null,
+        title: null,
+        editorText: '',
+      },
+    });
   });
 }
 
@@ -23,15 +25,17 @@ function setupStore(overrides: { workingMessage?: string | null } = {}) {
  * Helper to reset store to initial state
  */
 function resetStore() {
-  useLemonStore.setState({
-    ui: {
-      requestsQueue: [],
-      status: {},
-      widgets: {},
-      workingMessage: null,
-      title: null,
-      editorText: '',
-    },
+  act(() => {
+    useLemonStore.setState({
+      ui: {
+        requestsQueue: [],
+        status: {},
+        widgets: {},
+        workingMessage: null,
+        title: null,
+        editorText: '',
+      },
+    });
   });
 }
 
@@ -58,15 +62,17 @@ describe('WorkingBanner', () => {
 
     it('returns null when workingMessage is undefined (default store state)', () => {
       // Use setState with minimal override to test undefined scenario
-      useLemonStore.setState({
-        ui: {
-          requestsQueue: [],
-          status: {},
-          widgets: {},
-          workingMessage: null,
-          title: null,
-          editorText: '',
-        },
+      act(() => {
+        useLemonStore.setState({
+          ui: {
+            requestsQueue: [],
+            status: {},
+            widgets: {},
+            workingMessage: null,
+            title: null,
+            editorText: '',
+          },
+        });
       });
       const { container } = render(<WorkingBanner />);
 
@@ -93,9 +99,11 @@ describe('WorkingBanner', () => {
 
       expect(container.firstChild).toBeNull();
 
-      useLemonStore.setState((state) => ({
-        ui: { ...state.ui, workingMessage: 'Now working...' },
-      }));
+      act(() => {
+        useLemonStore.setState((state) => ({
+          ui: { ...state.ui, workingMessage: 'Now working...' },
+        }));
+      });
       rerender(<WorkingBanner />);
 
       expect(container.firstChild).not.toBeNull();
@@ -108,9 +116,11 @@ describe('WorkingBanner', () => {
 
       expect(screen.getByText('Working...')).toBeInTheDocument();
 
-      useLemonStore.setState((state) => ({
-        ui: { ...state.ui, workingMessage: null },
-      }));
+      act(() => {
+        useLemonStore.setState((state) => ({
+          ui: { ...state.ui, workingMessage: null },
+        }));
+      });
       rerender(<WorkingBanner />);
 
       expect(container.firstChild).toBeNull();
@@ -186,9 +196,11 @@ describe('WorkingBanner', () => {
 
       expect(screen.getByText('Step 1...')).toBeInTheDocument();
 
-      useLemonStore.setState((state) => ({
-        ui: { ...state.ui, workingMessage: 'Step 2...' },
-      }));
+      act(() => {
+        useLemonStore.setState((state) => ({
+          ui: { ...state.ui, workingMessage: 'Step 2...' },
+        }));
+      });
       rerender(<WorkingBanner />);
 
       expect(screen.getByText('Step 2...')).toBeInTheDocument();
@@ -200,9 +212,11 @@ describe('WorkingBanner', () => {
       const { rerender } = render(<WorkingBanner />);
 
       for (let i = 2; i <= 5; i++) {
-        useLemonStore.setState((state) => ({
-          ui: { ...state.ui, workingMessage: `Message ${i}` },
-        }));
+        act(() => {
+          useLemonStore.setState((state) => ({
+            ui: { ...state.ui, workingMessage: `Message ${i}` },
+          }));
+        });
         rerender(<WorkingBanner />);
       }
 
@@ -215,9 +229,11 @@ describe('WorkingBanner', () => {
 
       expect(screen.getByText('Working...')).toBeInTheDocument();
 
-      useLemonStore.setState((state) => ({
-        ui: { ...state.ui, workingMessage: '' },
-      }));
+      act(() => {
+        useLemonStore.setState((state) => ({
+          ui: { ...state.ui, workingMessage: '' },
+        }));
+      });
       rerender(<WorkingBanner />);
 
       expect(container.firstChild).toBeNull();
@@ -381,37 +397,45 @@ describe('WorkingBanner', () => {
       expect(container.firstChild).toBeNull();
 
       // Set message
-      useLemonStore.setState((state) => ({
-        ui: { ...state.ui, workingMessage: 'Loading...' },
-      }));
+      act(() => {
+        useLemonStore.setState((state) => ({
+          ui: { ...state.ui, workingMessage: 'Loading...' },
+        }));
+      });
       rerender(<WorkingBanner />);
       expect(screen.getByText('Loading...')).toBeInTheDocument();
 
       // Update message
-      useLemonStore.setState((state) => ({
-        ui: { ...state.ui, workingMessage: 'Almost done...' },
-      }));
+      act(() => {
+        useLemonStore.setState((state) => ({
+          ui: { ...state.ui, workingMessage: 'Almost done...' },
+        }));
+      });
       rerender(<WorkingBanner />);
       expect(screen.getByText('Almost done...')).toBeInTheDocument();
 
       // Clear message
-      useLemonStore.setState((state) => ({
-        ui: { ...state.ui, workingMessage: null },
-      }));
+      act(() => {
+        useLemonStore.setState((state) => ({
+          ui: { ...state.ui, workingMessage: null },
+        }));
+      });
       rerender(<WorkingBanner />);
       expect(container.firstChild).toBeNull();
     });
 
     it('does not affect other store state', () => {
-      useLemonStore.setState({
-        ui: {
-          requestsQueue: [],
-          status: { testKey: 'testValue' },
-          widgets: {},
-          workingMessage: 'Working...',
-          title: 'Custom Title',
-          editorText: 'Some text',
-        },
+      act(() => {
+        useLemonStore.setState({
+          ui: {
+            requestsQueue: [],
+            status: { testKey: 'testValue' },
+            widgets: {},
+            workingMessage: 'Working...',
+            title: 'Custom Title',
+            editorText: 'Some text',
+          },
+        });
       });
 
       render(<WorkingBanner />);
@@ -424,15 +448,17 @@ describe('WorkingBanner', () => {
     });
 
     it('correctly selects only workingMessage from store', () => {
-      useLemonStore.setState({
-        ui: {
-          requestsQueue: [],
-          status: {},
-          widgets: {},
-          workingMessage: 'Selected correctly',
-          title: 'Ignored title',
-          editorText: 'Ignored text',
-        },
+      act(() => {
+        useLemonStore.setState({
+          ui: {
+            requestsQueue: [],
+            status: {},
+            widgets: {},
+            workingMessage: 'Selected correctly',
+            title: 'Ignored title',
+            editorText: 'Ignored text',
+          },
+        });
       });
 
       render(<WorkingBanner />);
