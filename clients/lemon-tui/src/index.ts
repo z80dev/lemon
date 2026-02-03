@@ -35,6 +35,7 @@ import { AgentConnection, type AgentConnectionOptions } from './agent-connection
 import { parseModelSpec, resolveConfig, saveTUIConfigKey, getModelString, type ResolvedConfig } from './config.js';
 import { StateStore, type AppState, type NormalizedMessage, type NormalizedAssistantMessage, type NormalizedToolResultMessage } from './state.js';
 import type { ServerMessage, UIRequestMessage, SelectParams, ConfirmParams, InputParams, EditorParams, SessionSummary } from './types.js';
+import { defaultRegistry } from './formatters/index.js';
 
 // ============================================================================
 // Theme
@@ -1799,7 +1800,7 @@ ${ansi.bold('Shortcuts:')}
         }
       }
 
-      const argsText = this.formatToolArgs(tool.args);
+      const argsText = this.formatToolArgs(tool.args, tool.name);
       if (argsText) {
         this.toolPanel.addChild(new Text(ansi.muted(`  args: ${argsText}`), 1, 0));
       }
@@ -1807,7 +1808,7 @@ ${ansi.bold('Shortcuts:')}
       const resultPayload = tool.result ?? tool.partialResult;
       if (resultPayload !== undefined) {
         const label = tool.result ? '  result:' : '  partial:';
-        const resultText = this.formatToolResult(resultPayload);
+        const resultText = this.formatToolResult(resultPayload, tool.name, tool.args);
         if (resultText) {
           this.toolPanel.addChild(new Text(ansi.secondary(`${label} ${resultText}`), 1, 0));
         }
@@ -2068,7 +2069,12 @@ ${ansi.bold('Shortcuts:')}
     this.tui.requestRender();
   }
 
-  private formatToolArgs(args: Record<string, unknown>): string {
+  private formatToolArgs(args: Record<string, unknown>, toolName?: string): string {
+    if (toolName) {
+      const output = defaultRegistry.formatArgs(toolName, args);
+      return this.truncateInline(output.summary, 200);
+    }
+    // Fallback to existing logic
     if (!args || Object.keys(args).length === 0) {
       return '';
     }
@@ -2076,7 +2082,16 @@ ${ansi.bold('Shortcuts:')}
     return this.truncateInline(json, 200);
   }
 
-  private formatToolResult(result: unknown): string {
+  private formatToolResult(result: unknown, toolName?: string, args?: Record<string, unknown>): string {
+    if (toolName) {
+      const output = defaultRegistry.formatResult(toolName, result, args);
+      // Return details joined, or summary if no details
+      if (output.details.length > 0) {
+        return output.details.join('\n');
+      }
+      return output.summary;
+    }
+    // Fallback to existing logic
     const text = this.extractToolText(result);
     if (text) {
       return this.truncateMultiline(text, 6, 600);
