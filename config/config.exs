@@ -17,6 +17,12 @@ config :agent_core, :codex,
   # When true, adds `--dangerously-bypass-approvals-and-sandbox` for full auto.
   auto_approve: false
 
+# Claude CLI runner configuration (AgentCore)
+config :agent_core, :claude,
+  # When true, adds `--dangerously-skip-permissions` for full auto mode.
+  # This allows Claude subagents to run without permission prompts.
+  dangerously_skip_permissions: true
+
 # Sample configuration:
 #
 #     config :logger, :default_handler,

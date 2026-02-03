@@ -27,7 +27,9 @@ defmodule DebugAgentRPC do
     pid_to_session: %{},
     forwarders: %{},
     active_session_id: nil,
-    primary_session_id: nil
+    primary_session_id: nil,
+    # Monotonic event sequence counters per session for stable ordering
+    event_seqs: %{}
   ]
 
   def run(args) do
@@ -107,8 +109,10 @@ defmodule DebugAgentRPC do
     receive do
       {:session_event, session_id, event} ->
         debug_log("session_event", %{type: event_type(event), session_id: session_id})
-        send_json(%{type: "event", session_id: session_id, event: encode_event(event)})
-        loop(state)
+        # Get and increment monotonic event sequence for this session
+        {event_seq, new_event_seqs} = next_event_seq(state.event_seqs, session_id)
+        send_json(%{type: "event", session_id: session_id, event_seq: event_seq, event: encode_event(event)})
+        loop(%{state | event_seqs: new_event_seqs})
 
       {:stdin, :eof} ->
         send_json(%{type: "error", message: "stdin closed"})
@@ -156,6 +160,7 @@ defmodule DebugAgentRPC do
             new_sessions = Map.delete(state.sessions, session_id)
             new_pid_to_session = Map.delete(state.pid_to_session, pid)
             new_forwarders = Map.delete(state.forwarders, session_id)
+            new_event_seqs = Map.delete(state.event_seqs, session_id)
 
             new_active =
               if state.active_session_id == session_id do
@@ -169,7 +174,8 @@ defmodule DebugAgentRPC do
               | sessions: new_sessions,
                 pid_to_session: new_pid_to_session,
                 forwarders: new_forwarders,
-                active_session_id: new_active
+                active_session_id: new_active,
+                event_seqs: new_event_seqs
             }
 
             if new_active != state.active_session_id do
@@ -512,9 +518,65 @@ defmodule DebugAgentRPC do
     {:ok, state}
   end
 
+  defp handle_command(state, %{"type" => "get_config"}) do
+    send_config_state()
+    {:ok, state}
+  end
+
+  defp handle_command(state, %{"type" => "set_config", "key" => key, "value" => value}) do
+    case key do
+      "claude_skip_permissions" ->
+        current_config = Application.get_env(:agent_core, :claude, [])
+        new_config = Keyword.put(current_config, :dangerously_skip_permissions, value == true)
+        Application.put_env(:agent_core, :claude, new_config)
+        debug_log("config_updated", %{key: key, value: value})
+        send_config_state()
+
+      "codex_auto_approve" ->
+        current_config = Application.get_env(:agent_core, :codex, [])
+        new_config = Keyword.put(current_config, :auto_approve, value == true)
+        Application.put_env(:agent_core, :codex, new_config)
+        debug_log("config_updated", %{key: key, value: value})
+        send_config_state()
+
+      _ ->
+        send_json(%{type: "error", message: "unknown config key: #{key}"})
+    end
+
+    {:ok, state}
+  end
+
   defp handle_command(state, _cmd) do
     send_json(%{type: "error", message: "unknown command"})
     {:ok, state}
+  end
+
+  defp send_config_state do
+    claude_config = Application.get_env(:agent_core, :claude, [])
+    codex_config = Application.get_env(:agent_core, :codex, [])
+
+    claude_skip = Keyword.get(claude_config, :dangerously_skip_permissions, false) ||
+                  Keyword.get(claude_config, :yolo, false)
+    codex_auto = Keyword.get(codex_config, :auto_approve, false)
+
+    send_json(%{
+      type: "config_state",
+      config: %{
+        claude_skip_permissions: claude_skip,
+        codex_auto_approve: codex_auto
+      }
+    })
+  end
+
+  # ============================================================================
+  # Event Sequence Helpers
+  # ============================================================================
+
+  # Get the next monotonic event sequence number for a session.
+  # Returns {seq, updated_map} where seq is the current count (starting at 0).
+  defp next_event_seq(event_seqs, session_id) do
+    current = Map.get(event_seqs, session_id, 0)
+    {current, Map.put(event_seqs, session_id, current + 1)}
   end
 
   # ============================================================================
