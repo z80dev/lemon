@@ -25,6 +25,14 @@ export interface ToolExecution {
   isError?: boolean;
   startTime: number;
   endTime?: number;
+
+  // Task tool specific fields (parsed from partialResult details)
+  taskEngine?: string;
+  taskCurrentAction?: {
+    title: string;
+    kind: string;
+    phase: string;
+  };
 }
 
 /** Cumulative token and cost tracking */
@@ -988,18 +996,21 @@ export class StateStore {
 
   private handleToolUpdate(
     id: string,
-    _name: string,
+    name: string,
     _args: Record<string, unknown>,
     partialResult: unknown,
     sessionId: string | null
   ): void {
+    // Extract Task tool specific fields from partial result details
+    const taskFields = this.extractTaskFields(name, partialResult);
+
     if (sessionId) {
       const session = this.state.sessions.get(sessionId);
       if (session) {
         const toolExecutions = new Map(session.toolExecutions);
         const existing = toolExecutions.get(id);
         if (existing) {
-          toolExecutions.set(id, { ...existing, partialResult });
+          toolExecutions.set(id, { ...existing, partialResult, ...taskFields });
           this.updateSession(sessionId, { toolExecutions });
         }
       }
@@ -1007,10 +1018,47 @@ export class StateStore {
       const toolExecutions = new Map(this.state.toolExecutions);
       const existing = toolExecutions.get(id);
       if (existing) {
-        toolExecutions.set(id, { ...existing, partialResult });
+        toolExecutions.set(id, { ...existing, partialResult, ...taskFields });
         this.setState({ toolExecutions });
       }
     }
+  }
+
+  /**
+   * Extract Task tool specific fields from partial result details.
+   */
+  private extractTaskFields(
+    name: string,
+    partialResult: unknown
+  ): { taskEngine?: string; taskCurrentAction?: { title: string; kind: string; phase: string } } {
+    if (name !== 'task' || !partialResult || typeof partialResult !== 'object') {
+      return {};
+    }
+
+    const result = partialResult as { details?: { engine?: string; current_action?: { title?: string; kind?: string; phase?: string } } };
+    const details = result.details;
+    if (!details) {
+      return {};
+    }
+
+    const fields: { taskEngine?: string; taskCurrentAction?: { title: string; kind: string; phase: string } } = {};
+
+    if (details.engine && typeof details.engine === 'string') {
+      fields.taskEngine = details.engine;
+    }
+
+    if (details.current_action && typeof details.current_action === 'object') {
+      const action = details.current_action;
+      if (action.title && action.kind && action.phase) {
+        fields.taskCurrentAction = {
+          title: String(action.title),
+          kind: String(action.kind),
+          phase: String(action.phase),
+        };
+      }
+    }
+
+    return fields;
   }
 
   private handleToolEnd(
