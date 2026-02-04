@@ -90,7 +90,12 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     :accumulated_text,
     :pending_actions,
     :started_emitted,
-    :completed_emitted
+    :completed_emitted,
+    # Delta streaming support
+    :run_id,
+    :delta_seq,
+    :delta_callback,
+    :first_token_emitted
   ]
 
   # ============================================================================
@@ -191,6 +196,10 @@ defmodule CodingAgent.CliRunners.LemonRunner do
         timeout: timeout
       )
 
+    # Delta streaming configuration
+    run_id = Keyword.get(opts, :run_id)
+    delta_callback = Keyword.get(opts, :delta_callback)
+
     # Initialize state
     state = %__MODULE__{
       stream: stream,
@@ -201,14 +210,41 @@ defmodule CodingAgent.CliRunners.LemonRunner do
       accumulated_text: "",
       pending_actions: %{},
       started_emitted: false,
-      completed_emitted: false
+      completed_emitted: false,
+      # Delta streaming
+      run_id: run_id,
+      delta_seq: 0,
+      delta_callback: delta_callback,
+      first_token_emitted: false
     }
+
+    # Get tool policy and approval context from opts
+    tool_policy = Keyword.get(opts, :tool_policy)
+    session_key = Keyword.get(opts, :session_key)
+    agent_id = Keyword.get(opts, :agent_id)
+
+    # Build approval context if policy provided
+    approval_context =
+      if tool_policy do
+        %{
+          session_key: session_key || run_id,
+          agent_id: agent_id || "default",
+          run_id: run_id,
+          timeout_ms: timeout
+        }
+      else
+        nil
+      end
 
     # Build session options
     session_opts =
       [cwd: cwd]
       |> maybe_add_opt(:model, model)
       |> maybe_add_opt(:system_prompt, system_prompt)
+      |> maybe_add_opt(:tool_policy, tool_policy)
+      |> maybe_add_opt(:approval_context, approval_context)
+      |> maybe_add_opt(:session_key, session_key)
+      |> maybe_add_opt(:agent_id, agent_id)
 
     # Start or resume session
     case start_or_resume_session(resume, session_opts, state) do
@@ -429,6 +465,9 @@ defmodule CodingAgent.CliRunners.LemonRunner do
   end
 
   defp translate_and_emit({:message_update, _msg, delta}, state) when is_binary(delta) do
+    # Emit delta event for streaming
+    state = emit_delta(state, delta)
+
     # Accumulate text for final answer
     %{state | accumulated_text: state.accumulated_text <> delta}
   end
@@ -437,6 +476,44 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     # Non-string delta (could be structured content), skip
     state
   end
+
+  # Emit a delta event for streaming output
+  defp emit_delta(state, text) when is_binary(text) and byte_size(text) > 0 do
+    new_seq = state.delta_seq + 1
+
+    # Track first token for telemetry
+    state =
+      if not state.first_token_emitted do
+        # Optionally emit first token telemetry if we have a callback
+        if state.delta_callback do
+          state.delta_callback.(:first_token, %{run_id: state.run_id, seq: new_seq})
+        end
+        %{state | first_token_emitted: true}
+      else
+        state
+      end
+
+    # Create delta event
+    delta_event = %{
+      type: :delta,
+      run_id: state.run_id,
+      ts_ms: System.system_time(:millisecond),
+      seq: new_seq,
+      text: text
+    }
+
+    # Emit to stream as a delta event
+    emit_event(state.stream, {:delta, delta_event})
+
+    # Call delta callback if provided (for gateway integration)
+    if state.delta_callback do
+      state.delta_callback.(:delta, delta_event)
+    end
+
+    %{state | delta_seq: new_seq}
+  end
+
+  defp emit_delta(state, _text), do: state
 
   defp translate_and_emit({:agent_end, messages}, state) do
     # Extract final answer from messages
