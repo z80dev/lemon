@@ -1,6 +1,6 @@
 # Lemon Diagram Generator
 
-Generates SVG diagrams from Mermaid syntax for the Lemon documentation.
+Generates SVG diagrams from Excalidraw or Mermaid source files for the Lemon documentation.
 
 ## Prerequisites
 
@@ -15,8 +15,40 @@ npm install
 
 ## Usage
 
+### Excalidraw Diagrams (Primary - Hand-drawn style)
+
+The primary diagram source files are `.excalidraw` JSON files in `docs/diagrams/`.
+
+**Export with hand-drawn style (requires Node 20):**
+
 ```bash
-# Generate all diagrams
+cd docs/diagrams
+
+# Use Node 20 (excalidraw CLI has issues with Node 25+)
+nvm use 20
+
+# Export single diagram
+npx excalidraw-brute-export-cli -i supervision-tree.excalidraw --format svg -o supervision-tree.svg --scale 1
+
+# Export all diagrams
+for f in *.excalidraw; do
+  name="${f%.excalidraw}"
+  npx excalidraw-brute-export-cli -i "$f" --format svg -o "${name}.svg" --scale 1
+done
+
+# Switch back to default Node
+nvm use default
+```
+
+**Alternative: Manual export from excalidraw.com**
+1. Open `docs/diagrams/*.excalidraw` in https://excalidraw.com
+2. Export as SVG from the menu (Menu → Export → SVG)
+3. Save to `docs/diagrams/*.svg`
+
+### Mermaid Diagrams (Legacy)
+
+```bash
+# Generate all diagrams from Mermaid files
 node generate.js
 
 # Generate a specific diagram
@@ -24,9 +56,6 @@ node generate.js architecture
 
 # List available diagrams
 node generate.js --list
-
-# Show help
-node generate.js --help
 ```
 
 ## Adding New Diagrams

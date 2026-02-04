@@ -1,9 +1,11 @@
 {
   "name": "lemon-diagrams",
   "version": "1.0.0",
-  "description": "Generate diagrams from Mermaid for Lemon documentation",
+  "description": "Generate diagrams from Excalidraw/Mermaid for Lemon documentation",
   "type": "module",
   "scripts": {
+    "export": "node export-excalidraw.js",
+    "export:all": "node export-excalidraw.js",
     "generate": "node generate.js",
     "generate:all": "node generate.js --all"
   },
