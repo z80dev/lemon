@@ -1,0 +1,215 @@
+defmodule LemonRouter.RunProcess do
+  @moduledoc """
+  Process that owns a single run lifecycle.
+
+  Each RunProcess:
+  - Owns a run_id
+  - Manages abort state
+  - Subscribes to Bus for run events
+  - Maintains metadata snapshot
+  - Emits router-level events
+  """
+
+  use GenServer
+
+  require Logger
+
+  alias LemonCore.Bus
+
+  def start_link(opts) do
+    run_id = opts[:run_id]
+    GenServer.start_link(__MODULE__, opts, name: via_tuple(run_id))
+  end
+
+  def child_spec(opts) do
+    run_id = opts[:run_id]
+
+    %{
+      id: {__MODULE__, run_id},
+      start: {__MODULE__, :start_link, [opts]},
+      restart: :temporary,
+      shutdown: 5000
+    }
+  end
+
+  defp via_tuple(run_id) do
+    {:via, Registry, {LemonRouter.RunRegistry, run_id}}
+  end
+
+  @doc """
+  Abort this run process.
+  """
+  @spec abort(pid() | binary(), reason :: term()) :: :ok
+  def abort(pid, reason \\ :user_requested) when is_pid(pid) do
+    GenServer.cast(pid, {:abort, reason})
+  end
+
+  def abort(run_id, reason) when is_binary(run_id) do
+    case Registry.lookup(LemonRouter.RunRegistry, run_id) do
+      [{pid, _}] -> abort(pid, reason)
+      _ -> :ok
+    end
+  end
+
+  @impl true
+  def init(%{run_id: run_id, session_key: session_key, job: job}) do
+    # Subscribe to run events
+    Bus.subscribe(Bus.run_topic(run_id))
+
+    # Register in session registry
+    Registry.register(LemonRouter.SessionRegistry, session_key, %{run_id: run_id})
+
+    state = %{
+      run_id: run_id,
+      session_key: session_key,
+      job: job,
+      start_ts_ms: LemonCore.Clock.now_ms(),
+      aborted: false,
+      completed: false
+    }
+
+    # Submit to gateway
+    send(self(), :submit_to_gateway)
+
+    {:ok, state}
+  end
+
+  @impl true
+  def handle_info(:submit_to_gateway, state) do
+    # Submit job to gateway scheduler
+    LemonGateway.Scheduler.submit(state.job)
+    {:noreply, state}
+  end
+
+  # Handle run events from Bus
+  def handle_info(%LemonCore.Event{type: :run_completed} = event, state) do
+    Logger.debug("RunProcess #{state.run_id} completed")
+
+    # Emit router-level completion event
+    Bus.broadcast(Bus.session_topic(state.session_key), event)
+
+    {:stop, :normal, %{state | completed: true}}
+  end
+
+  def handle_info(%LemonCore.Event{type: :delta, payload: delta} = event, state) do
+    # Forward delta to session subscribers
+    Bus.broadcast(Bus.session_topic(state.session_key), event)
+
+    # Also ingest into StreamCoalescer for channel delivery
+    ingest_delta_to_coalescer(state, delta)
+
+    {:noreply, state}
+  end
+
+  def handle_info(%LemonCore.Event{} = event, state) do
+    # Forward other events to session subscribers
+    Bus.broadcast(Bus.session_topic(state.session_key), event)
+    {:noreply, state}
+  end
+
+  def handle_info(_msg, state) do
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast({:abort, reason}, state) do
+    if state.aborted or state.completed do
+      {:noreply, state}
+    else
+      Logger.debug("RunProcess #{state.run_id} aborting: #{inspect(reason)}")
+
+      # Signal abort to gateway
+      # Note: We rely on the gateway's abort mechanism
+      LemonRouter.Router.abort_run(state.run_id, reason)
+
+      {:noreply, %{state | aborted: true}}
+    end
+  end
+
+  @impl true
+  def terminate(reason, state) do
+    # Unregister from session registry
+    Registry.unregister(LemonRouter.SessionRegistry, state.session_key)
+
+    # If not completed normally, emit failure event and attempt abort
+    if reason != :normal and not state.completed do
+      Bus.broadcast(Bus.run_topic(state.run_id), %{
+        type: :run_failed,
+        run_id: state.run_id,
+        session_key: state.session_key,
+        reason: reason
+      })
+
+      # Best-effort abort of the gateway run on abnormal termination
+      try do
+        LemonGateway.Scheduler.abort(state.run_id, :run_process_terminated)
+      rescue
+        _ -> :ok
+      end
+    end
+
+    # Flush any pending coalescer output
+    flush_coalescer(state)
+
+    # Unsubscribe control-plane EventBridge from run events
+    unsubscribe_event_bridge(state.run_id)
+
+    :ok
+  end
+
+  # Ingest delta into StreamCoalescer for channel delivery
+  defp ingest_delta_to_coalescer(state, delta) do
+    # Extract channel_id from session_key using SessionKey parser
+    case LemonRouter.SessionKey.parse(state.session_key) do
+      %{kind: :channel_peer, channel_id: channel_id} when not is_nil(channel_id) ->
+        # Build meta from job for progress_msg_id
+        meta = extract_coalescer_meta(state.job)
+
+        LemonRouter.StreamCoalescer.ingest_delta(
+          state.session_key,
+          channel_id,
+          state.run_id,
+          delta.seq,
+          delta.text,
+          meta: meta
+        )
+
+      _ ->
+        # Not a channel session, no coalescing needed
+        :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  # Extract metadata relevant for coalescer (e.g., progress_msg_id for edit mode)
+  defp extract_coalescer_meta(%{meta: meta}) when is_map(meta) do
+    %{
+      progress_msg_id: meta[:progress_msg_id],
+      user_msg_id: meta[:user_msg_id]
+    }
+  end
+  defp extract_coalescer_meta(_), do: %{}
+
+  # Flush any pending coalesced output on termination
+  defp flush_coalescer(state) do
+    case LemonRouter.SessionKey.parse(state.session_key) do
+      %{kind: :channel_peer, channel_id: channel_id} when not is_nil(channel_id) ->
+        LemonRouter.StreamCoalescer.flush(state.session_key, channel_id)
+
+      _ ->
+        :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  # Unsubscribe control-plane EventBridge from run events
+  defp unsubscribe_event_bridge(run_id) do
+    if Code.ensure_loaded?(LemonControlPlane.EventBridge) do
+      LemonControlPlane.EventBridge.unsubscribe_run(run_id)
+    end
+  rescue
+    _ -> :ok
+  end
+end
