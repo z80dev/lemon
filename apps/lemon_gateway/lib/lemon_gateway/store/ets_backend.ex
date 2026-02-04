@@ -22,12 +22,14 @@ defmodule LemonGateway.Store.EtsBackend do
 
   @impl true
   def put(state, table, key, value) do
+    state = ensure_table(state, table)
     :ets.insert(state[table], {key, value})
     {:ok, state}
   end
 
   @impl true
   def get(state, table, key) do
+    state = ensure_table(state, table)
     value =
       case :ets.lookup(state[table], key) do
         [{^key, val}] -> val
@@ -39,13 +41,25 @@ defmodule LemonGateway.Store.EtsBackend do
 
   @impl true
   def delete(state, table, key) do
+    state = ensure_table(state, table)
     :ets.delete(state[table], key)
     {:ok, state}
   end
 
   @impl true
   def list(state, table) do
+    state = ensure_table(state, table)
     items = :ets.tab2list(state[table])
     {:ok, items, state}
+  end
+
+  # Ensure a table exists, creating it dynamically if needed
+  defp ensure_table(state, table) do
+    if Map.has_key?(state, table) do
+      state
+    else
+      ets_table = :ets.new(:"lemon_gateway_#{table}", [:set, :protected])
+      Map.put(state, table, ets_table)
+    end
   end
 end

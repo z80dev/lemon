@@ -30,7 +30,8 @@ defmodule LemonGateway.MixProject do
       {:uuid, "~> 1.1"},
       {:toml, "~> 0.7"},
       {:agent_core, in_umbrella: true},
-      {:coding_agent, in_umbrella: true}
+      {:coding_agent, in_umbrella: true},
+      {:lemon_core, in_umbrella: true}
     ]
   end
 end

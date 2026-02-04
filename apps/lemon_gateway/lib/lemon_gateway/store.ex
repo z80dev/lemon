@@ -63,6 +63,36 @@ defmodule LemonGateway.Store do
     GenServer.cast(__MODULE__, {:delete_progress_mapping, scope, progress_msg_id})
   end
 
+  # Generic Table API (for use by other lemon_* apps)
+
+  @doc """
+  Put a value into a named table.
+
+  This is a generic API for use by other apps (e.g., lemon_core, lemon_automation).
+  """
+  @spec put(table :: atom(), key :: term(), value :: term()) :: :ok
+  def put(table, key, value), do: GenServer.call(__MODULE__, {:generic_put, table, key, value})
+
+  @doc """
+  Get a value from a named table.
+
+  Returns `nil` if the key doesn't exist.
+  """
+  @spec get(table :: atom(), key :: term()) :: term() | nil
+  def get(table, key), do: GenServer.call(__MODULE__, {:generic_get, table, key})
+
+  @doc """
+  Delete a key from a named table.
+  """
+  @spec delete(table :: atom(), key :: term()) :: :ok
+  def delete(table, key), do: GenServer.call(__MODULE__, {:generic_delete, table, key})
+
+  @doc """
+  List all key-value pairs in a named table.
+  """
+  @spec list(table :: atom()) :: [{term(), term()}]
+  def list(table), do: GenServer.call(__MODULE__, {:generic_list, table})
+
   # Run History API
 
   @doc """
@@ -153,20 +183,55 @@ defmodule LemonGateway.Store do
     {:reply, value, %{state | backend_state: backend_state}}
   end
 
-  def handle_call({:get_run_history, scope, opts}, _from, state) do
+  def handle_call({:get_run_history, scope_or_session_key, opts}, _from, state) do
     limit = Keyword.get(opts, :limit, 10)
 
     {:ok, all_history, backend_state} = state.backend.list(state.backend_state, :run_history)
 
-    # Filter by scope and sort by timestamp (most recent first)
+    # Filter by scope OR session_key and sort by timestamp (most recent first)
+    # Support both legacy scope-based keys and new session_key-based keys
     history =
       all_history
-      |> Enum.filter(fn {{s, _ts, _run_id}, _data} -> s == scope end)
-      |> Enum.sort_by(fn {{_s, ts, _run_id}, _data} -> ts end, :desc)
+      |> Enum.filter(fn
+        # Legacy tuple key format: {scope, ts, run_id}
+        {{s, _ts, _run_id}, _data} -> s == scope_or_session_key
+        # New session_key based format
+        {key, data} when is_binary(key) -> key == scope_or_session_key or data[:session_key] == scope_or_session_key
+        {key, data} -> data[:session_key] == scope_or_session_key or data[:scope] == scope_or_session_key
+      end)
+      |> Enum.sort_by(fn
+        {{_s, ts, _run_id}, _data} -> ts
+        {_key, data} -> data[:started_at] || 0
+      end, :desc)
       |> Enum.take(limit)
-      |> Enum.map(fn {{_scope, _ts, run_id}, data} -> {run_id, data} end)
+      |> Enum.map(fn
+        {{_scope, _ts, run_id}, data} -> {run_id, data}
+        {_key, data} -> {data[:run_id], data}
+      end)
 
     {:reply, history, %{state | backend_state: backend_state}}
+  end
+
+  # Generic table handlers
+
+  def handle_call({:generic_put, table, key, value}, _from, state) do
+    {:ok, backend_state} = state.backend.put(state.backend_state, table, key, value)
+    {:reply, :ok, %{state | backend_state: backend_state}}
+  end
+
+  def handle_call({:generic_get, table, key}, _from, state) do
+    {:ok, value, backend_state} = state.backend.get(state.backend_state, table, key)
+    {:reply, value, %{state | backend_state: backend_state}}
+  end
+
+  def handle_call({:generic_delete, table, key}, _from, state) do
+    {:ok, backend_state} = state.backend.delete(state.backend_state, table, key)
+    {:reply, :ok, %{state | backend_state: backend_state}}
+  end
+
+  def handle_call({:generic_list, table}, _from, state) do
+    {:ok, entries, backend_state} = state.backend.list(state.backend_state, table)
+    {:reply, entries, %{state | backend_state: backend_state}}
   end
 
   @impl true
@@ -209,19 +274,83 @@ defmodule LemonGateway.Store do
 
     {:ok, backend_state} = state.backend.put(backend_state, :runs, run_id, record)
 
-    # Also add to run_history for efficient querying by scope
+    # Extract both scope and session_key for backward compatibility
     scope = Map.get(summary, :scope)
+    session_key = Map.get(summary, :session_key)
     started_at = record.started_at
 
-    if scope do
-      history_key = {scope, started_at, run_id}
-      history_data = %{events: record.events, summary: summary, scope: scope, started_at: started_at}
-      {:ok, backend_state} = state.backend.put(backend_state, :run_history, history_key, history_data)
-      {:noreply, %{state | backend_state: backend_state}}
-    else
-      {:noreply, %{state | backend_state: backend_state}}
+    # Store by session_key if available, otherwise fall back to scope
+    backend_state =
+      cond do
+        session_key ->
+          # Primary: Store by session_key
+          history_key = {session_key, started_at, run_id}
+          history_data = %{
+            events: record.events,
+            summary: summary,
+            session_key: session_key,
+            scope: scope,
+            run_id: run_id,
+            started_at: started_at
+          }
+          {:ok, bs} = state.backend.put(backend_state, :run_history, history_key, history_data)
+
+          # Update sessions_index for sessions.list
+          update_sessions_index(state.backend, bs, session_key, summary, started_at)
+
+        scope ->
+          # Legacy: Store by scope
+          history_key = {scope, started_at, run_id}
+          history_data = %{events: record.events, summary: summary, scope: scope, started_at: started_at}
+          {:ok, bs} = state.backend.put(backend_state, :run_history, history_key, history_data)
+          bs
+
+        true ->
+          backend_state
+      end
+
+    {:noreply, %{state | backend_state: backend_state}}
+  end
+
+  # Update sessions_index when a run is finalized
+  defp update_sessions_index(backend, backend_state, session_key, summary, timestamp) do
+    {:ok, existing, backend_state} = backend.get(backend_state, :sessions_index, session_key)
+
+    # Parse agent_id from session_key if not in summary
+    agent_id = Map.get(summary, :agent_id) || parse_agent_id(session_key)
+    origin = get_in(summary, [:meta, :origin]) || Map.get(summary, :origin) || :unknown
+
+    session_entry =
+      case existing do
+        nil ->
+          %{
+            session_key: session_key,
+            agent_id: agent_id,
+            origin: origin,
+            created_at_ms: timestamp,
+            updated_at_ms: timestamp,
+            run_count: 1
+          }
+
+        entry ->
+          %{entry |
+            updated_at_ms: timestamp,
+            run_count: (entry[:run_count] || 0) + 1
+          }
+      end
+
+    {:ok, backend_state} = backend.put(backend_state, :sessions_index, session_key, session_entry)
+    backend_state
+  end
+
+  defp parse_agent_id(nil), do: "default"
+  defp parse_agent_id(session_key) when is_binary(session_key) do
+    case String.split(session_key, ":") do
+      ["agent", agent_id | _] -> agent_id
+      _ -> "default"
     end
   end
+  defp parse_agent_id(_), do: "default"
 
   def handle_cast({:put_progress_mapping, scope, progress_msg_id, run_id}, state) do
     key = {scope, progress_msg_id}
