@@ -171,11 +171,16 @@ defmodule CodingAgent.ToolPolicy do
 
   @doc """
   Check if a tool requires approval.
+
+  Returns false for empty or incomplete policies that don't have
+  a `require_approval` key.
   """
-  @spec requires_approval?(policy(), String.t()) :: boolean()
-  def requires_approval?(%{require_approval: approval_list}, tool_name) do
+  @spec requires_approval?(policy() | map(), String.t()) :: boolean()
+  def requires_approval?(%{require_approval: approval_list}, tool_name) when is_list(approval_list) do
     tool_name in approval_list
   end
+
+  def requires_approval?(_, _tool_name), do: false
 
   @doc """
   Check if NO_REPLY mode is enabled.

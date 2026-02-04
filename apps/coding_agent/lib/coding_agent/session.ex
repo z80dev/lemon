@@ -480,6 +480,22 @@ defmodule CodingAgent.Session do
     # Get hooks from extensions
     hooks = Extensions.get_hooks(extensions)
 
+    # Get tool policy and approval context if provided
+    tool_policy = Keyword.get(opts, :tool_policy)
+    approval_context = Keyword.get(opts, :approval_context)
+
+    # Build approval context if policy requires approval but context not provided
+    approval_context =
+      if tool_policy && is_nil(approval_context) do
+        %{
+          session_key: Keyword.get(opts, :session_key, session_manager.header.id),
+          agent_id: Keyword.get(opts, :agent_id, "default"),
+          timeout_ms: Keyword.get(opts, :approval_timeout_ms, 300_000)
+        }
+      else
+        approval_context
+      end
+
     # Build tool options for ToolRegistry
     tool_opts =
       opts
@@ -490,8 +506,10 @@ defmodule CodingAgent.Session do
       |> Keyword.put(:settings_manager, settings_manager)
       |> Keyword.put(:ui_context, ui_context)
       |> Keyword.put(:extension_paths, extension_paths)
+      |> Keyword.put(:tool_policy, tool_policy)
+      |> Keyword.put(:approval_context, approval_context)
 
-    # Build tools list via ToolRegistry (handles extension tools + conflict detection)
+    # Build tools list via ToolRegistry (handles extension tools + conflict detection + approval wrapping)
     # When custom_tools is provided, extension tools are still added
     tools =
       case custom_tools do
@@ -501,7 +519,14 @@ defmodule CodingAgent.Session do
         custom ->
           # Extension tools are always loaded, even with custom base tools
           extension_tools = Extensions.get_tools(extensions, cwd)
-          custom ++ extension_tools
+          all_tools = custom ++ extension_tools
+
+          # Apply approval wrapping if policy and context provided
+          if tool_policy && approval_context do
+            CodingAgent.ToolExecutor.wrap_all_with_approval(all_tools, tool_policy, approval_context)
+          else
+            all_tools
+          end
       end
 
     # Register extension-provided providers (e.g., model providers)

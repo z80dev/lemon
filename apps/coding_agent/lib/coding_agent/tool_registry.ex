@@ -122,9 +122,20 @@ defmodule CodingAgent.ToolRegistry do
     all_tools = merge_tools_with_conflict_detection(builtin, extension_tools)
 
     # Filter based on enabled/disabled
-    all_tools
-    |> filter_tools(disabled, enabled_only)
-    |> Enum.map(fn {_name, tool, _source} -> tool end)
+    tools =
+      all_tools
+      |> filter_tools(disabled, enabled_only)
+      |> Enum.map(fn {_name, tool, _source} -> tool end)
+
+    # Apply approval wrapping if policy and context provided
+    tool_policy = Keyword.get(opts, :tool_policy)
+    approval_context = Keyword.get(opts, :approval_context)
+
+    if tool_policy && approval_context do
+      CodingAgent.ToolExecutor.wrap_all_with_approval(tools, tool_policy, approval_context)
+    else
+      tools
+    end
   end
 
   @doc """
