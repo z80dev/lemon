@@ -33,6 +33,7 @@ built on the BEAM (Erlang/Elixir). It uses the Erlang Virtual Machine's process 
 - [Installation](#installation)
 - [Usage](#usage)
 - [Development](#development)
+- [Documentation](#documentation)
 - [License](#license)
 
 ---
@@ -57,20 +58,37 @@ Lemon is an AI coding assistant built as a distributed system of concurrent proc
 
 ### Key Features
 
-- **Multi-turn conversations** with tool use (read, write, edit, multiedit, patch, bash, grep, find, glob, ls, webfetch, websearch, todoread, todowrite, task, exec, process)
+**Agent Capabilities:**
+- **Multi-turn conversations** with 20+ tools (read, write, edit, bash, grep, glob, webfetch, websearch, task, exec, process, etc.)
 - **Real-time streaming** of LLM responses with fine-grained event notifications
 - **Session persistence** via JSONL with tree-structured conversation history
 - **Context compaction** and branch summarization for long conversations
-- **Pluggable UI** with Terminal and Web clients over JSON-RPC
 - **Extension system** for custom tools and hooks
-- **Concurrent tool execution** with abort signaling
-- **Multi-provider support** with seamless context handoffs
-- **CLI runner infrastructure** for integrating Claude and Codex as subagents
-- **Resume tokens** for session persistence and continuation across restarts
-- **Telegram bot integration** for remote agent control
-- **Orchestration runtime** with lane-aware scheduling, async subagent spawn/join, and durable background processes
-- **Budget enforcement** with per-run token/cost tracking and concurrency limits
-- **Tool policy profiles** with per-engine restrictions and approval gates
+- **Skill system** for reusable knowledge modules with dependency verification
+
+**Execution & Orchestration:**
+- **Multi-engine support** with native Lemon, Claude CLI, and Codex CLI
+- **Lane-aware scheduling** with per-lane concurrency caps (main: 4, subagent: 8, background: 2)
+- **Async subagent semantics** with spawn/poll/join patterns
+- **Durable background processes** with persistent state across restarts
+- **Budget enforcement** with per-run token/cost tracking
+
+**Control & Routing:**
+- **Control plane server** with 81+ RPC methods over WebSocket
+- **Hierarchical policy system** with approval gates for sensitive operations
+- **Session routing** with canonical session keys and multi-channel support
+- **Stream coalescing** with smart buffering for efficient delivery
+
+**Infrastructure:**
+- **Pluggable channel adapters** (Telegram, with Discord/Slack extensibility)
+- **Cron scheduling** with timezone support, heartbeats, and on-demand wake
+- **Event-driven architecture** with pub/sub messaging across all components
+- **Comprehensive telemetry** for observability and monitoring
+
+**Clients:**
+- **Terminal UI** with themes, multi-session, real-time streaming
+- **Web UI** with React frontend and WebSocket bridge
+- **Resume tokens** for session continuation across restarts
 
 ---
 
@@ -120,26 +138,63 @@ OTP supervision trees ensure that:
 - Sessions can be restarted without losing state
 
 ```
-Supervisor
-├── AgentCore.Application
-│   ├── Agent GenServer (per session)
-│   └── CLI Runners (Codex, Claude subprocesses)
+Supervisor (Umbrella Root)
+│
 ├── Ai.Application
 │   └── Provider processes
+│
+├── AgentCore.Application
+│   ├── Agent GenServer (per session)
+│   ├── SubagentSupervisor (DynamicSupervisor)
+│   └── CLI Runners (Codex, Claude subprocesses)
+│
 ├── CodingAgent.Application
-│   ├── SessionManager processes
+│   ├── SessionSupervisor (DynamicSupervisor)
+│   ├── SessionRegistry
 │   ├── LaneQueue (lane-aware scheduling)
 │   ├── TaskStoreServer (async task persistence)
 │   ├── RunGraphServer (run DAG persistence)
 │   ├── ProcessStoreServer (background process persistence)
 │   ├── ProcessManager (DynamicSupervisor for OS processes)
-│   ├── Coordinator (multi-session coordination)
-│   └── CompactionHooks (pre-compaction flush)
-└── LemonGateway.Application
-    ├── Scheduler (job concurrency)
-    ├── UnifiedScheduler (lane-aware routing)
-    ├── ThreadWorkers (per-conversation)
-    └── Telegram Transport (optional)
+│   └── Coordinator (multi-session coordination)
+│
+├── LemonCore.Application
+│   └── Phoenix.PubSub (LemonCore.PubSub)
+│
+├── LemonGateway.Application
+│   ├── Config, EngineRegistry, EngineLock
+│   ├── Scheduler (global concurrency)
+│   ├── ThreadWorkerSupervisor (DynamicSupervisor)
+│   ├── RunSupervisor (DynamicSupervisor)
+│   ├── Store (ETS or JSONL backend)
+│   └── TransportSupervisor (optional)
+│
+├── LemonRouter.Application
+│   ├── RunOrchestrator
+│   ├── AgentProfiles
+│   ├── RunRegistry, SessionRegistry, CoalescerRegistry
+│   ├── RunSupervisor (DynamicSupervisor)
+│   └── CoalescerSupervisor (DynamicSupervisor)
+│
+├── LemonChannels.Application
+│   ├── Registry
+│   ├── Outbox, RateLimiter, Dedupe
+│   └── AdapterSupervisor (DynamicSupervisor)
+│       └── Telegram.Supervisor → Transport
+│
+├── LemonAutomation.Application
+│   ├── CronManager
+│   └── HeartbeatManager
+│
+├── LemonControlPlane.Application
+│   ├── Methods.Registry (ETS-backed)
+│   ├── Presence (connection tracking)
+│   ├── EventBridge (Bus → WebSocket)
+│   ├── ConnectionSupervisor, ConnectionRegistry
+│   └── Bandit HTTP Server (port 4040)
+│
+└── LemonSkills.Application
+    └── Registry (GenServer skill cache)
 ```
 
 ### 4. Hot Code Upgrades
@@ -163,12 +218,16 @@ The BEAM was designed for distributed systems. Lemon is built to eventually supp
 
 | Feature | Python/Node.js Agents | Lemon (BEAM) |
 |---------|----------------------|--------------|
-| Concurrency | Threads/asyncio | Millions of processes |
-| State Management | External (Redis, DB) | In-process (ETS, state) |
+| Concurrency | Threads/asyncio | Millions of lightweight processes |
+| State Management | External (Redis, DB) | In-process (ETS, GenServer state) |
 | Streaming | Callbacks/generators | Event streams with backpressure |
 | Fault Tolerance | Try/catch, restarts | OTP supervision trees |
-| Live Steering | Complex state machines | Message passing |
-| Distribution | HTTP APIs, message queues | Native distribution |
+| Live Steering | Complex state machines | Message passing to mailbox |
+| Distribution | HTTP APIs, message queues | Native Erlang distribution |
+| Hot Code Reload | Restart required | Hot code upgrades |
+| Process Isolation | Shared memory risks | Complete process isolation |
+| Scheduling | OS scheduler | Preemptive, fair BEAM scheduler |
+| Background Tasks | Celery, Bull, etc. | Native process spawning |
 
 ### How BEAM is Currently Leveraged in Lemon
 
@@ -244,48 +303,94 @@ end)
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                               Client Layer                                  │
 │  ┌─────────────────┐  ┌──────────────────────┐  ┌─────────────────┐        │
-│  │   Lemon TUI     │  │ Lemon Web (browser)  │  │  Telegram Bot   │        │
-│  │ (Node/TypeScript)│  │   + WebSocket UI    │  │   (Transport)   │        │
+│  │   Lemon TUI     │  │ Lemon Web (browser)  │  │   External      │        │
+│  │ (Node/TypeScript)│  │   + WebSocket UI    │  │   Clients       │        │
 │  └────────┬────────┘  └───────────┬──────────┘  └────────┬────────┘        │
 └───────────┼───────────────────────┼──────────────────────┼────────────────┘
-            │ JSON-RPC/stdio        │ WebSocket            │ Telegram API
+            │ JSON-RPC/stdio        │ WebSocket            │ WebSocket
             ▼                       ▼                      ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           UI / Bridge Layer                                  │
-│                                                                              │
+│                         Control Plane & Bridges                              │
 │  ┌────────────────────────────┐   ┌──────────────────────────────┐          │
-│  │ debug_agent_rpc.exs        │◄──┤ lemon-web server (WS bridge) │          │
-│  │ (JSONL RPC over stdio)     │   │ spawns debug_agent_rpc.exs   │          │
-│  └─────────────┬──────────────┘   └──────────────────────────────┘          │
-│                │                                                           │
-│                ▼                                                           │
-│        coding_agent_ui (RPC + headless UI adapters)                        │
+│  │ debug_agent_rpc.exs        │   │   LemonControlPlane          │          │
+│  │ (JSONL RPC over stdio)     │   │   (HTTP/WebSocket server)    │          │
+│  └─────────────┬──────────────┘   │   81+ methods, RBAC, events  │          │
+│                │                   └──────────────┬───────────────┘          │
+│                ▼                                  │                          │
+│        coding_agent_ui                            │                          │
 └─────────────────────────────────────────────────────────────────────────────┘
+                                 │                  │
+                                 ▼                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            Routing & Orchestration                           │
+│  ┌──────────────────────────────────────────────────────────────────┐       │
+│  │ LemonRouter: RunOrchestrator → Policy → ApprovalsBridge → Run    │       │
+│  │              SessionKey, StreamCoalescer, AgentProfiles          │       │
+│  └──────────────────────────────────────────────────────────────────┘       │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                 │
+        ┌────────────────────────┼────────────────────────┐
+        ▼                        ▼                        ▼
+┌───────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
+│  LemonChannels    │ │   LemonGateway      │ │  LemonAutomation    │
+│  (Adapters)       │ │   (Execution)       │ │  (Scheduling)       │
+│  ┌─────────────┐  │ │  ┌───────────────┐  │ │  ┌───────────────┐  │
+│  │ Telegram    │  │ │  │ Scheduler     │  │ │  │ CronManager   │  │
+│  │ (+ Discord, │  │ │  │ ThreadWorker  │  │ │  │ Heartbeats    │  │
+│  │  Slack...)  │  │ │  │ Run           │  │ │  │ Wake          │  │
+│  └─────────────┘  │ │  └───────────────┘  │ │  └───────────────┘  │
+│  Outbox, Chunker  │ │  Engines:           │ │  Cron expressions   │
+│  Dedupe, RateLim  │ │  Lemon,Claude,Codex │ │  Timezone support   │
+└───────────────────┘ └─────────────────────┘ └─────────────────────┘
                                  │
                                  ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                          Core Agent Runtime                                  │
-│                                                                              │
-│  CodingAgent.Session → AgentCore.Agent/Loop → Ai Providers → Tools            │
-│  (persistence, tools, compaction, extensions)                                │
+│  ┌──────────────────────────────────────────────────────────────────┐       │
+│  │ CodingAgent.Session → AgentCore.Agent/Loop → Ai Providers        │       │
+│  │ Tools (20+), Extensions, Compaction, LaneQueue, BudgetTracker    │       │
+│  │ ToolRegistry, ToolPolicy, ToolExecutor (approval gating)         │       │
+│  └──────────────────────────────────────────────────────────────────┘       │
 └─────────────────────────────────────────────────────────────────────────────┘
-                                 ▲
                                  │
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                               LemonGateway                                   │
-│  Transport → Scheduler → ThreadWorker → Run → Engine                          │
-│  Engines: Lemon (native), Codex CLI, Claude CLI, Echo                         │
-└─────────────────────────────────────────────────────────────────────────────┘
+        ┌────────────────────────┼────────────────────────┐
+        ▼                        ▼                        ▼
+┌───────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
+│    LemonCore      │ │    LemonSkills      │ │   Ai Providers      │
+│  (Shared Infra)   │ │  (Knowledge)        │ │                     │
+│  Bus (PubSub)     │ │  Registry           │ │  Anthropic, OpenAI  │
+│  Event, Store     │ │  Manifest parser    │ │  Google, Azure      │
+│  Telemetry, Id    │ │  Installer          │ │  AWS Bedrock        │
+│  Idempotency      │ │  Dependency check   │ │                     │
+└───────────────────┘ └─────────────────────┘ └─────────────────────┘
 ```
 
 ### Data Flow
 
+**Direct Path (TUI/Web via RPC):**
 1. **TUI/Web** send JSON-RPC to `debug_agent_rpc.exs` (via stdio or WS bridge)
 2. **coding_agent_ui** forwards requests into `CodingAgent.Session`
 3. **AgentCore** runs the loop, calling **Ai** providers and **Tools**
 4. **Events** stream back to clients; sessions persist to JSONL
-5. **Gateway path**: Telegram → LemonGateway → Scheduler → ThreadWorker → Run → Engine
-6. **Engines** either invoke the native Lemon runtime or spawn CLI runners (Codex/Claude)
+
+**Control Plane Path (External Clients):**
+1. **Clients** connect via WebSocket to `LemonControlPlane` (`/ws` on port 4040)
+2. **Methods** dispatch to `LemonRouter.RunOrchestrator`
+3. **Router** resolves agent config, merges policies, selects engine
+4. **Gateway** schedules and executes via `ThreadWorker` → `Run` → `Engine`
+5. **Events** broadcast via `LemonCore.Bus`, bridged to WebSocket by `EventBridge`
+
+**Channel Path (Telegram, etc.):**
+1. **Channels** receive inbound messages via adapters (e.g., Telegram polling)
+2. **LemonChannels** normalizes to `InboundMessage`, routes to `LemonRouter`
+3. **Router** creates session key, submits to orchestrator
+4. **StreamCoalescer** buffers output, delivers via **Outbox** with chunking/rate-limiting
+
+**Automation Path (Cron):**
+1. **CronManager** ticks every 60 seconds, identifies due jobs
+2. Jobs submitted to **LemonRouter** with `origin: :cron`
+3. **HeartbeatManager** suppresses healthy responses ("HEARTBEAT_OK")
+4. Events broadcast on `"cron"` topic
 
 ---
 
@@ -300,234 +405,177 @@ lemon/
 ├── .gitignore                   # Git ignore rules
 │
 ├── config/
-│   └── config.exs               # Application configuration (Codex CLI settings, etc.)
+│   └── config.exs               # Application configuration
 │
 ├── bin/                         # Executable scripts
 │   └── lemon-dev                # Development launcher script
 │
-├── apps/                        # Umbrella applications
-│   ├── ai/                      # Low-level LLM API abstraction layer
-│   │   ├── lib/
-│   │   │   ├── ai.ex            # Main API (stream/complete)
-│   │   │   └── ai/
-│   │   │       ├── application.ex
-│   │   │       ├── call_dispatcher.ex  # RPC call coordination
-│   │   │       ├── circuit_breaker.ex  # Circuit breaker for providers
-│   │   │       ├── error.ex            # Error types
-│   │   │       ├── event_stream.ex     # Streaming event handling
-│   │   │       ├── models.ex           # Model registry and definitions
-│   │   │       ├── provider.ex         # Provider behavior interface
-│   │   │       ├── provider_registry.ex # Provider registration and lookup
-│   │   │       ├── provider_supervisor.ex
-│   │   │       ├── rate_limiter.ex     # Rate limiting logic
-│   │   │       ├── types.ex            # Core types (Model, Context, etc.)
-│   │   │       └── providers/          # Provider implementations
-│   │   │           ├── anthropic.ex
-│   │   │           ├── azure_openai_responses.ex
-│   │   │           ├── bedrock.ex
-│   │   │           ├── google.ex
-│   │   │           ├── google_gemini_cli.ex
-│   │   │           ├── google_shared.ex
-│   │   │           ├── google_vertex.ex
-│   │   │           ├── openai_completions.ex
-│   │   │           ├── openai_codex_responses.ex
-│   │   │           ├── openai_responses.ex
-│   │   │           ├── openai_responses_shared.ex
-│   │   │           └── text_sanitizer.ex
-│   │   └── test/
+├── apps/                        # Umbrella applications (11 apps)
+│   │
+│   │  # ─── Core Foundation ───────────────────────────────────
+│   │
+│   ├── ai/                      # LLM provider abstraction layer
+│   │   └── lib/ai/
+│   │       ├── providers/       # Anthropic, OpenAI, Google, Azure, Bedrock
+│   │       ├── event_stream.ex  # Streaming with backpressure
+│   │       ├── models.ex        # Model registry and definitions
+│   │       └── types.ex         # Context, Message, Model types
 │   │
 │   ├── agent_core/              # Core agent framework (provider-agnostic)
-│   │   ├── lib/
-│   │   │   ├── agent_core.ex    # Main API
-│   │   │   └── agent_core/
-│   │   │       ├── application.ex
-│   │   │       ├── abort_signal.ex       # Abort signaling mechanism
-│   │   │       ├── agent.ex              # GenServer implementation
-│   │   │       ├── agent_registry.ex     # Agent process registry
-│   │   │       ├── context.ex            # Context management
-│   │   │       ├── event_stream.ex       # Event stream handling
-│   │   │       ├── loop.ex               # Stateless agent loop
-│   │   │       ├── proxy.ex              # Stream proxy utilities
-│   │   │       ├── subagent_supervisor.ex # Dynamic supervisor for subagents
-│   │   │       ├── types.ex              # Agent types (AgentTool, AgentState, etc.)
-│   │   │       └── cli_runners/          # CLI runner infrastructure
-│   │   │           ├── README.md         # CLI runners documentation
-│   │   │           ├── types.ex          # ResumeToken, Action, Event types
-│   │   │           ├── jsonl_runner.ex   # Base GenServer for JSONL subprocess runners
-│   │   │           ├── codex_runner.ex   # Codex CLI wrapper
-│   │   │           ├── codex_schema.ex   # Codex JSONL event parsing
-│   │   │           ├── codex_subagent.ex # High-level Codex subagent API
-│   │   │           ├── claude_runner.ex  # Claude CLI wrapper
-│   │   │           ├── claude_schema.ex  # Claude JSONL event parsing
-│   │   │           └── claude_subagent.ex # High-level Claude subagent API
-│   │   └── test/
+│   │   └── lib/agent_core/
+│   │       ├── agent.ex         # GenServer-based stateful agents
+│   │       ├── loop.ex          # Stateless agent execution loop
+│   │       ├── context.ex       # Context management and truncation
+│   │       ├── event_stream.ex  # Bounded event streams
+│   │       └── cli_runners/     # CLI runner infrastructure
+│   │           ├── codex_runner.ex   # Codex CLI wrapper
+│   │           ├── claude_runner.ex  # Claude CLI wrapper
+│   │           └── jsonl_runner.ex   # Base JSONL subprocess runner
+│   │
+│   │  # ─── Agent Execution ───────────────────────────────────
 │   │
 │   ├── coding_agent/            # Complete coding agent implementation
-│   │   ├── lib/
-│   │   │   ├── coding_agent.ex  # Main API
-│   │   │   └── coding_agent/
-│   │   │       ├── application.ex
-│   │   │       ├── bash_executor.ex      # Shell command execution
-│   │   │       ├── commands.ex           # Project-level command system
-│   │   │       ├── compaction.ex         # Context compaction logic
-│   │   │       ├── config.ex             # Configuration loading
-│   │   │       ├── coordinator.ex        # Multi-session coordination
-│   │   │       ├── extensions.ex         # Extension system
-│   │   │       ├── extensions/
-│   │   │       │   └── extension.ex      # Extension behavior interface
-│   │   │       ├── layered_config.ex     # Hierarchical config system
-│   │   │       ├── mentions.ex           # Mention/reference system
-│   │   │       ├── messages.ex           # Message types & conversion
-│   │   │       ├── prompt_builder.ex     # Prompt generation utilities
-│   │   │       ├── resource_loader.ex    # CLAUDE.md and resource loading
-│   │   │       ├── session.ex            # Session GenServer
-│   │   │       ├── session_manager.ex    # JSONL persistence (v3 format)
-│   │   │       ├── session_registry.ex   # Session process registry
-│   │   │       ├── session_root_supervisor.ex
-│   │   │       ├── session_supervisor.ex # Session lifecycle management
-│   │   │       ├── settings_manager.ex   # User settings management
-│   │   │       ├── skills.ex             # Skill/tool generation
-│   │   │       ├── subagents.ex          # Subagent coordination
-│   │   │       ├── tool_registry.ex      # Tool registration and lookup
-│   │   │       ├── tools.ex              # Tool registration and wiring
-│   │   │       ├── ui.ex                 # UI abstraction
-│   │   │       ├── ui/
-│   │   │       │   └── context.ex        # UI context management
-│   │   │       ├── cli_runners/          # Lemon CLI runner
-│   │   │       │   ├── lemon_runner.ex   # Wraps CodingAgent.Session as CLI runner
-│   │   │       │   └── lemon_subagent.ex # High-level Lemon subagent API
-│   │   │       │
-│   │   │       │   # Orchestration Runtime
-│   │   │       ├── lane_queue.ex         # Lane-aware FIFO queue with concurrency caps
-│   │   │       ├── run_graph.ex          # Run DAG with parent/child relationships
-│   │   │       ├── run_graph_server.ex   # GenServer owner for RunGraph ETS/DETS
-│   │   │       ├── task_store.ex         # Task event storage with persistence
-│   │   │       ├── task_store_server.ex  # GenServer owner for TaskStore ETS/DETS
-│   │   │       ├── process_manager.ex    # DynamicSupervisor for background processes
-│   │   │       ├── process_session.ex    # GenServer managing single OS process
-│   │   │       ├── process_store.ex      # Background process metadata storage
-│   │   │       ├── process_store_server.ex # GenServer owner for ProcessStore
-│   │   │       ├── budget_tracker.ex     # Per-run token/cost budget tracking
-│   │   │       ├── budget_enforcer.ex    # Budget validation and enforcement
-│   │   │       ├── tool_policy.ex        # Per-agent tool allow/deny policies
-│   │   │       ├── compaction_hooks.ex   # Pre-compaction flush hook system
-│   │   │       │
-│   │   │       └── tools/                # Individual tool implementations
-│   │   │           ├── bash.ex           # Bash execution tool
-│   │   │           ├── edit.ex           # File editing tool
-│   │   │           ├── extensions_status.ex # Extension status tool
-│   │   │           ├── find.ex           # File finding tool
-│   │   │           ├── glob.ex           # Glob pattern matching tool
-│   │   │           ├── grep.ex           # Pattern search tool
-│   │   │           ├── ls.ex             # Directory listing tool
-│   │   │           ├── multiedit.ex      # Multiple file editing tool
-│   │   │           ├── patch.ex          # Patch application tool
-│   │   │           ├── read.ex           # File reading tool
-│   │   │           ├── task.ex           # Task/subagent tool
-│   │   │           ├── todo_store.ex     # Todo list storage (ETS-backed)
-│   │   │           ├── todoread.ex       # Read todo list tool
-│   │   │           ├── todowrite.ex      # Write todo list tool
-│   │   │           ├── truncate.ex       # Text truncation utility
-│   │   │           ├── webfetch.ex       # Web fetching tool
-│   │   │           ├── websearch.ex      # Web search tool
-│   │   │           ├── write.ex          # File writing tool
-│   │   │           ├── exec.ex           # Background process execution tool
-│   │   │           └── process.ex        # Background process management tool
-│   │   └── test/
+│   │   └── lib/coding_agent/
+│   │       ├── session.ex       # Session GenServer
+│   │       ├── session_manager.ex    # JSONL persistence (v3 format)
+│   │       ├── tool_registry.ex      # Dynamic tool management
+│   │       ├── tool_policy.ex        # Per-agent tool allow/deny
+│   │       ├── tool_executor.ex      # Approval gating
+│   │       ├── extensions.ex         # Plugin system
+│   │       ├── compaction.ex         # Context compaction
+│   │       ├── lane_queue.ex         # Lane-aware scheduling
+│   │       ├── coordinator.ex        # Subagent coordination
+│   │       ├── process_manager.ex    # Background process supervision
+│   │       ├── budget_tracker.ex     # Token/cost tracking
+│   │       ├── cli_runners/          # Lemon CLI runner
+│   │       └── tools/                # 20+ tool implementations
+│   │           ├── bash.ex, edit.ex, read.ex, write.ex
+│   │           ├── glob.ex, grep.ex, find.ex, ls.ex
+│   │           ├── task.ex, exec.ex, process.ex
+│   │           └── webfetch.ex, websearch.ex
 │   │
 │   ├── coding_agent_ui/         # UI abstraction layer
-│   │   ├── lib/
-│   │   │   ├── coding_agent_ui/
-│   │   │   │   └── application.ex
-│   │   │   └── coding_agent/
-│   │   │       └── ui/
-│   │   │           ├── debug_rpc.ex     # Debug JSON-RPC interface
-│   │   │           ├── headless.ex      # Headless mode implementation
-│   │   │           └── rpc.ex           # JSON-RPC interface
-│   │   └── test/
+│   │   └── lib/coding_agent/ui/
+│   │       ├── rpc.ex           # JSON-RPC interface
+│   │       ├── debug_rpc.ex     # JSONL debug protocol
+│   │       └── headless.ex      # Headless mode
 │   │
-│   └── lemon_gateway/           # Gateway and job orchestration
-│       ├── lib/
-│       │   ├── lemon_gateway.ex         # Main API
-│       │   └── lemon_gateway/
-│       │       ├── application.ex       # OTP application and supervision tree
-│       │       ├── config.ex            # Gateway configuration
-│       │       ├── engine.ex            # Engine behavior definition
-│       │       ├── engine_lock.ex       # Per-thread mutual exclusion
-│       │       ├── engine_registry.ex   # Engine lookup and management
-│       │       ├── event.ex             # Event types (Started, Action, Completed)
-│       │       ├── renderer.ex          # Renderer behavior
-│       │       ├── run.ex               # Job execution GenServer
-│       │       ├── run_supervisor.ex    # DynamicSupervisor for runs
-│       │       ├── runtime.ex           # Public runtime API
-│       │       ├── scheduler.ex         # Job scheduling and concurrency
-│       │       ├── store.ex             # ETS-backed state storage
-│       │       ├── thread_registry.ex   # Thread worker registry
-│       │       ├── thread_worker.ex     # Per-conversation job queue
-│       │       ├── thread_worker_supervisor.ex
-│       │       ├── transport_supervisor.ex
-│       │       ├── types.ex             # Core types (Job, ChatScope, ResumeToken)
-│       │       ├── unified_scheduler.ex # Lane-aware unified scheduler
-│       │       ├── engines/             # Execution engine implementations
-│       │       │   ├── lemon.ex         # Native Lemon engine (CodingAgent)
-│       │       │   ├── echo.ex          # Simple echo engine (testing)
-│       │       │   ├── claude.ex        # Claude CLI engine
-│       │       │   ├── codex.ex         # Codex CLI engine
-│       │       │   └── cli_adapter.ex   # Bridge to AgentCore CLI runners
-│       │       ├── renderers/
-│       │       │   └── basic.ex         # Basic text renderer
-│       │       └── telegram/            # Telegram bot integration
-│       │           ├── api.ex           # Telegram Bot API wrapper
-│       │           ├── dedupe.ex        # Message deduplication
-│       │           ├── outbox.ex        # Message queue with throttling
-│       │           └── transport.ex     # Bidirectional Telegram bridge
-│       └── test/
+│   │  # ─── Infrastructure ────────────────────────────────────
+│   │
+│   ├── lemon_core/              # Shared primitives and utilities
+│   │   └── lib/lemon_core/
+│   │       ├── bus.ex           # Phoenix.PubSub wrapper for events
+│   │       ├── event.ex         # Canonical event envelope
+│   │       ├── store.ex         # Persistent key-value storage
+│   │       ├── id.ex            # Prefixed UUID generation
+│   │       ├── idempotency.ex   # At-most-once execution
+│   │       ├── telemetry.ex     # Observability events
+│   │       ├── clock.ex         # Time utilities
+│   │       └── config.ex        # Runtime configuration
+│   │
+│   ├── lemon_gateway/           # Multi-engine execution gateway
+│   │   └── lib/lemon_gateway/
+│   │       ├── run.ex           # Run lifecycle GenServer
+│   │       ├── scheduler.ex     # Global concurrency control
+│   │       ├── thread_worker.ex # Per-thread job queues
+│   │       ├── store.ex         # Pluggable storage (ETS/JSONL)
+│   │       ├── engines/         # Execution engines
+│   │       │   ├── lemon.ex     # Native CodingAgent engine
+│   │       │   ├── claude.ex    # Claude CLI engine
+│   │       │   ├── codex.ex     # Codex CLI engine
+│   │       │   └── cli_adapter.ex
+│   │       └── telegram/        # Telegram bot integration
+│   │
+│   ├── lemon_router/            # Run orchestration and routing
+│   │   └── lib/lemon_router/
+│   │       ├── router.ex        # Inbound message handling
+│   │       ├── run_orchestrator.ex   # Run submission lifecycle
+│   │       ├── run_process.ex        # Individual run management
+│   │       ├── session_key.ex        # Session key generation
+│   │       ├── policy.ex             # Hierarchical policy merging
+│   │       ├── approvals_bridge.ex   # Approval request/resolution
+│   │       ├── stream_coalescer.ex   # Output buffering
+│   │       └── agent_profiles.ex     # Agent configuration
+│   │
+│   ├── lemon_channels/          # Pluggable channel adapters
+│   │   └── lib/lemon_channels/
+│   │       ├── plugin.ex        # Channel adapter behaviour
+│   │       ├── registry.ex      # Adapter registration
+│   │       ├── outbox.ex        # Message delivery queue
+│   │       ├── outbox/
+│   │       │   ├── chunker.ex   # Smart message splitting
+│   │       │   ├── dedupe.ex    # Idempotency tracking
+│   │       │   └── rate_limiter.ex   # Token bucket limiting
+│   │       └── adapters/
+│   │           └── telegram/    # Telegram adapter
+│   │
+│   ├── lemon_automation/        # Scheduling and automation
+│   │   └── lib/lemon_automation/
+│   │       ├── cron_manager.ex  # Cron job orchestration
+│   │       ├── cron_schedule.ex # Cron expression parsing
+│   │       ├── cron_job.ex      # Job data structure
+│   │       ├── cron_run.ex      # Execution record
+│   │       ├── cron_store.ex    # Persistent storage
+│   │       ├── heartbeat_manager.ex  # Health monitoring
+│   │       ├── wake.ex          # On-demand triggering
+│   │       └── events.ex        # Event broadcasting
+│   │
+│   ├── lemon_control_plane/     # HTTP/WebSocket control server
+│   │   └── lib/lemon_control_plane/
+│   │       ├── http/router.ex   # HTTP routes (/healthz, /ws)
+│   │       ├── ws/connection.ex # WebSocket protocol handler
+│   │       ├── presence.ex      # Connection tracking
+│   │       ├── event_bridge.ex  # Bus → WebSocket events
+│   │       ├── auth/            # Token-based authentication
+│   │       ├── protocol/        # Frame encoding, schemas
+│   │       └── methods/         # 81+ RPC methods
+│   │           ├── agent.ex, sessions.ex, chat.ex
+│   │           ├── cron.ex, skills.ex, channels.ex
+│   │           ├── node.ex, device.ex, exec.ex
+│   │           └── ... (organized by domain)
+│   │
+│   └── lemon_skills/            # Skill registry and management
+│       └── lib/lemon_skills/
+│           ├── registry.ex      # In-memory skill cache
+│           ├── entry.ex         # Skill data structure
+│           ├── manifest.ex      # YAML/TOML frontmatter parsing
+│           ├── status.ex        # Dependency verification
+│           ├── config.ex        # Enable/disable, paths
+│           ├── installer.ex     # Install/update/uninstall
+│           └── tools/
+│               └── read_skill.ex # Agent tool for skill access
 │
 ├── clients/                     # Client applications
 │   ├── lemon-tui/               # Terminal UI (TypeScript/Node.js)
 │   │   ├── src/
-│   │   │   ├── index.ts         # Main TUI application (themes, rendering)
-│   │   │   ├── agent-connection.ts  # RPC client and connection management
-│   │   │   ├── config.ts        # Configuration and argument parsing
-│   │   │   ├── config.test.ts   # Configuration tests
-│   │   │   ├── state.ts         # State management with multi-session support
-│   │   │   ├── state.test.ts    # State management tests
-│   │   │   └── types.ts         # TypeScript type definitions
-│   │   ├── dist/
-│   │   │   └── index.js         # Compiled JavaScript output
-│   │   ├── package.json         # Node.js dependencies and scripts
-│   │   ├── package-lock.json    # Dependency lock file
-│   │   └── tsconfig.json        # TypeScript configuration
+│   │   │   ├── index.ts         # Main TUI application
+│   │   │   ├── agent-connection.ts
+│   │   │   ├── state.ts         # Multi-session state
+│   │   │   └── types.ts
+│   │   └── package.json
 │   │
-│   └── lemon-web/               # Web UI (React + WebSocket bridge)
-│       ├── shared/              # Shared types and JSONL helpers
-│       ├── server/              # Node WS bridge (spawns debug_agent_rpc)
-│       └── web/                 # Vite/React frontend
+│   └── lemon-web/               # Web UI (React + WebSocket)
+│       ├── web/                 # Vite/React frontend
+│       ├── server/              # Node WS bridge
+│       └── shared/              # Shared types
 │
-├── tools/                       # Utility tools and utilities
-│   └── debug_cli/               # Python debug CLI
-│       ├── debug_cli.py         # CLI entry point
-│       ├── pyproject.toml       # Python project configuration
-│       └── README.md
-│
-├── scripts/                     # Elixir and shell scripts
-│   ├── debug_agent_rpc.exs      # Script for debugging agent RPC
-│   └── cron_lemon_loop.sh       # Cron job script for agent loop
+├── scripts/
+│   ├── debug_agent_rpc.exs      # RPC debugging
+│   └── cron_lemon_loop.sh       # Scheduled execution
 │
 ├── docs/                        # Documentation
-│   ├── beam_agents.md           # BEAM agents architecture documentation
-│   ├── benchmarks.md            # Performance benchmarks
-│   ├── context.md               # Context management documentation
-│   ├── extensions.md            # Extension system documentation
-│   ├── layered_config.md        # Layered configuration documentation
-│   ├── skills.md                # Skills system documentation
-│   ├── telemetry.md             # Telemetry and observability
-│   └── agent-loop/              # Agent loop documentation and runs
-│       └── ...
+│   ├── beam_agents.md           # BEAM architecture
+│   ├── extensions.md            # Extension system
+│   ├── skills.md                # Skills system
+│   ├── telemetry.md             # Observability
+│   ├── benchmarks.md            # Performance
+│   ├── context.md               # Context management
+│   ├── layered_config.md        # Configuration
+│   └── openclaw_parity.md       # OpenClaw compatibility
 │
-└── examples/                    # Example projects and demonstrations
-    ├── config.example.json      # Example configuration file
-    └── extensions/              # Example extension implementations
+└── examples/
+    ├── config.example.json
+    └── extensions/
 ```
 
 ---
@@ -787,6 +835,50 @@ unsubscribe = CodingAgent.Session.subscribe(session)
 
 This layer is what the TUI and Web UI bridge talk to, while the core agent runtime remains pure Elixir.
 
+### LemonCore
+
+`LemonCore` provides shared primitives and utilities that all Lemon applications depend on:
+
+```elixir
+# Event-driven publish/subscribe
+LemonCore.Bus.subscribe("run:abc123")
+LemonCore.Bus.broadcast("run:abc123", event)
+
+# Canonical event envelope
+event = LemonCore.Event.new(:delta, %{text: "Hello"}, %{run_id: "run_123"})
+
+# Prefixed ID generation
+run_id = LemonCore.Id.run_id()      # "run_<uuid>"
+session_id = LemonCore.Id.session_id()  # "sess_<uuid>"
+
+# Idempotent operations
+LemonCore.Idempotency.execute("messages", "msg_123", fn ->
+  send_message()  # Only executes once
+end)
+```
+
+**Key Modules:**
+
+| Module | Purpose |
+|--------|---------|
+| `LemonCore.Bus` | Phoenix.PubSub wrapper for cross-app event distribution |
+| `LemonCore.Event` | Timestamped event envelope with type, payload, metadata |
+| `LemonCore.Store` | Thin wrapper over persistent key-value storage |
+| `LemonCore.Id` | Prefixed UUID generation (run_, sess_, appr_, cron_, skill_) |
+| `LemonCore.Idempotency` | At-most-once execution with 24-hour TTL |
+| `LemonCore.Telemetry` | Standardized telemetry event emission |
+| `LemonCore.Clock` | Consistent time handling (ms, sec, DateTime) |
+| `LemonCore.Config` | Runtime configuration access |
+
+**Standard Bus Topics:**
+- `run:<run_id>` - Events for a specific run
+- `session:<session_key>` - Events for a specific session
+- `channels` - Channel-related events
+- `cron` - Automation events
+- `exec_approvals` - Execution approval events
+- `nodes` - Node pairing/invoke events
+- `system` - System-wide events
+
 ### LemonGateway
 
 `LemonGateway` provides job orchestration and multi-engine execution:
@@ -823,6 +915,259 @@ LemonGateway.submit(job)
 | Codex | `codex` | Codex CLI via subprocess |
 | Kimi | `kimi` | Kimi API |
 | Echo | `echo` | Simple echo stub for testing |
+
+### LemonRouter
+
+`LemonRouter` provides run orchestration, session routing, and policy-driven execution gating:
+
+```elixir
+# Submit a run through the router
+LemonRouter.submit(%{
+  origin: :channel,
+  session_key: "agent:my-agent:main",
+  prompt: "Help me refactor this code",
+  agent_id: "my-agent"
+})
+
+# Abort an active run
+LemonRouter.abort("session:my-agent:main")
+```
+
+**Key Features:**
+
+- **Session Management**: Canonical session keys (`agent:<id>:main` or full channel format)
+- **Run Orchestration**: Agent config resolution, policy merging, engine selection
+- **Hierarchical Policies**: Agent → Channel → Session → Runtime policy merging
+- **Approval Workflow**: Four scopes (once, session, agent, global) with async blocking
+- **Stream Coalescing**: Buffered output delivery with configurable thresholds
+
+**Policy Structure:**
+```elixir
+%{
+  approvals: %{"bash" => :always, "write" => :dangerous},
+  blocked_tools: ["process_kill"],
+  allowed_commands: ["git", "npm"],
+  blocked_commands: ["rm -rf /"],
+  max_file_size: 1_048_576,
+  sandbox: true
+}
+```
+
+**Key Modules:**
+
+| Module | Purpose |
+|--------|---------|
+| `LemonRouter.Router` | Inbound message handling and normalization |
+| `LemonRouter.RunOrchestrator` | Run submission with lifecycle management |
+| `LemonRouter.RunProcess` | Individual run state and event forwarding |
+| `LemonRouter.SessionKey` | Session key generation and parsing |
+| `LemonRouter.Policy` | Hierarchical policy merging |
+| `LemonRouter.ApprovalsBridge` | Approval request/resolution with timeouts |
+| `LemonRouter.StreamCoalescer` | Output buffering (48 chars, 400ms idle, 1.2s max) |
+
+### LemonChannels
+
+`LemonChannels` provides pluggable channel adapters with intelligent message delivery:
+
+```elixir
+# Enqueue a message for delivery
+LemonChannels.enqueue(%LemonChannels.OutboundPayload{
+  channel_id: "telegram",
+  account_id: "bot_123",
+  peer: %{kind: :dm, id: "user_456"},
+  kind: :text,
+  content: "Hello from Lemon!"
+})
+```
+
+**Key Features:**
+
+- **Pluggable Adapters**: Standardized `Plugin` behaviour for any channel
+- **Smart Chunking**: Automatic message splitting at word/sentence boundaries
+- **Rate Limiting**: Token bucket algorithm (30 msgs/sec, 5 burst)
+- **Deduplication**: Idempotency key tracking with 1-hour TTL
+- **Retry Logic**: Exponential backoff (3 attempts: 1s, 2s, 4s)
+
+**Telegram Adapter:**
+- Long-polling transport for inbound messages
+- Normalized `InboundMessage` format
+- Edit/delete support for message updates
+- Peer kind detection (DM, group, supergroup, channel)
+
+**Adding Custom Adapters:**
+
+Implement the `LemonChannels.Plugin` behaviour:
+```elixir
+defmodule MyApp.Adapters.Discord do
+  @behaviour LemonChannels.Plugin
+
+  def id, do: "discord"
+  def meta, do: %{capabilities: [...]}
+  def deliver(payload), do: # send to Discord
+  def normalize_inbound(raw), do: # convert to InboundMessage
+end
+```
+
+### LemonAutomation
+
+`LemonAutomation` provides cron-based scheduling and automation for agent tasks:
+
+```elixir
+# Create a scheduled job
+{:ok, job} = LemonAutomation.add_job(%{
+  name: "Daily Report",
+  schedule: "0 9 * * *",  # 9 AM daily
+  agent_id: "analyst_bot",
+  session_key: "agent:analyst_bot:main",
+  prompt: "Generate today's status report",
+  timezone: "America/New_York"
+})
+
+# Trigger a job immediately
+{:ok, run} = LemonAutomation.wake(job.id)
+
+# List all jobs
+jobs = LemonAutomation.list_jobs()
+```
+
+**Cron Expression Format:**
+```
+* * * * *
+| | | | +-- Day of week (0-7, 0 and 7 = Sunday)
+| | | +---- Month (1-12)
+| | +------ Day of month (1-31)
+| +-------- Hour (0-23)
++---------- Minute (0-59)
+```
+
+**Key Features:**
+
+- **Cron Jobs**: Standard cron expressions with timezone support
+- **Heartbeats**: Health checks with smart response suppression ("HEARTBEAT_OK")
+- **Wake Triggers**: On-demand job execution
+- **Jitter**: Random delay for load spreading
+- **Run History**: Full execution tracking with status, duration, output
+
+**Key Modules:**
+
+| Module | Purpose |
+|--------|---------|
+| `CronManager` | Central job scheduling and execution |
+| `CronSchedule` | Cron expression parsing and next-run calculation |
+| `CronJob` | Job definition with metadata |
+| `CronRun` | Execution record (pending → running → completed/failed) |
+| `HeartbeatManager` | Health monitoring with suppression |
+| `Wake` | Manual/pattern-based triggering |
+| `Events` | Event broadcasting on `"cron"` topic |
+
+### LemonControlPlane
+
+`LemonControlPlane` is an OpenClaw-compatible WebSocket/HTTP server providing centralized control:
+
+```elixir
+# The control plane starts automatically and listens on port 4040
+# Clients connect via WebSocket to /ws
+
+# Example WebSocket request frame
+%{
+  "type" => "req",
+  "id" => "abc123",
+  "method" => "chat.send",
+  "params" => %{
+    "session_key" => "agent:my-agent:main",
+    "prompt" => "Hello!"
+  }
+}
+```
+
+**Key Features:**
+
+- **81+ RPC Methods**: Comprehensive API for all Lemon operations
+- **Role-Based Access**: Three roles (operator, node, device) with scoped permissions
+- **Real-Time Events**: Event bridge broadcasts system events to connected clients
+- **Token Authentication**: Secure pairing with challenge-response flow
+- **Health Endpoint**: `/healthz` for monitoring
+
+**Method Categories:**
+
+| Category | Methods | Description |
+|----------|---------|-------------|
+| Agent | `agent`, `agent.wait`, `agents.list` | Agent invocation and management |
+| Sessions | `sessions.list`, `sessions.patch`, `sessions.reset` | Session lifecycle |
+| Chat | `chat.send`, `chat.abort`, `chat.history` | Conversation operations |
+| Cron | `cron.add`, `cron.list`, `cron.run` | Scheduled job management |
+| Skills | `skills.status`, `skills.install`, `skills.update` | Skill management |
+| Exec | `exec.approval.request`, `exec.approval.resolve` | Approval workflow |
+| Nodes | `node.pair.*`, `node.invoke`, `node.list` | Node pairing and RPC |
+| Channels | `channels.status`, `channels.logout` | Channel management |
+| System | `health`, `status`, `system.presence` | System information |
+
+**Event Mapping (Bus → WebSocket):**
+
+| Bus Event | WebSocket Event |
+|-----------|-----------------|
+| `run_started/completed` | `agent` |
+| `delta` | `chat` |
+| `approval_requested/resolved` | `exec.approval.*` |
+| `cron_run_started/completed` | `cron` |
+| `node_pair_*` | `node.pair.*` |
+
+### LemonSkills
+
+`LemonSkills` provides a centralized skill registry for reusable knowledge modules:
+
+```elixir
+# List available skills
+skills = LemonSkills.list()
+skills = LemonSkills.list(cwd: "/path/to/project")
+
+# Get a specific skill
+{:ok, skill} = LemonSkills.get("git-workflow")
+
+# Check skill readiness (dependency verification)
+status = LemonSkills.status("kubectl-operations")
+# => %{ready: false, missing_bins: ["kubectl"], missing_config: ["KUBECONFIG"]}
+
+# Install a skill from Git
+{:ok, entry} = LemonSkills.install("https://github.com/user/skill-repo")
+```
+
+**Skill File Format (SKILL.md):**
+```markdown
+---
+name: git-workflow
+description: Git best practices and commands
+version: 1.0.0
+requires:
+  bins:
+    - git
+  config:
+    - GITHUB_TOKEN
+---
+
+# Git Workflow
+
+Instructions for the agent...
+```
+
+**Key Features:**
+
+- **Dual Scope**: Global (`~/.lemon/agent/skill/`) and project (`.lemon/skill/`)
+- **Manifest Parsing**: YAML or TOML frontmatter with metadata
+- **Dependency Verification**: Checks for required binaries and env vars
+- **Approval Gating**: Requires approval for install/update/uninstall
+- **Agent Integration**: `read_skill` tool for agents to access skill content
+
+**Key Modules:**
+
+| Module | Purpose |
+|--------|---------|
+| `Registry` | In-memory skill caching with lazy project loading |
+| `Entry` | Skill data structure with metadata |
+| `Manifest` | YAML/TOML frontmatter parsing |
+| `Status` | Binary and config availability checking |
+| `Installer` | Git clone or local copy with approval |
+| `Tools.ReadSkill` | Agent tool for skill lookup |
 
 ### Lemon TUI
 
@@ -1385,10 +1730,36 @@ mix test
 mix test apps/ai
 mix test apps/agent_core
 mix test apps/coding_agent
+mix test apps/coding_agent_ui
+mix test apps/lemon_core
 mix test apps/lemon_gateway
+mix test apps/lemon_router
+mix test apps/lemon_channels
+mix test apps/lemon_automation
+mix test apps/lemon_control_plane
+mix test apps/lemon_skills
 
 # Run integration tests (require CLI tools)
 mix test --include integration
+```
+
+### Running the Control Plane
+
+LemonControlPlane provides a WebSocket/HTTP server for external clients:
+
+```bash
+# Start in IEx (starts automatically with the umbrella)
+iex -S mix
+
+# The control plane listens on port 4040 by default
+# Health check: curl http://localhost:4040/healthz
+# WebSocket: ws://localhost:4040/ws
+```
+
+Configure the port in `config/config.exs`:
+
+```elixir
+config :lemon_control_plane, :port, 4040
 ```
 
 ### Running LemonGateway
@@ -1418,6 +1789,37 @@ Start in IEx:
 ```elixir
 Application.ensure_all_started(:lemon_gateway)
 ```
+
+### Running Cron Jobs (LemonAutomation)
+
+LemonAutomation provides scheduled task execution:
+
+```elixir
+# In IEx, create a cron job
+{:ok, job} = LemonAutomation.add_job(%{
+  name: "Daily Cleanup",
+  schedule: "0 3 * * *",  # 3 AM daily
+  agent_id: "maintenance_bot",
+  session_key: "agent:maintenance_bot:main",
+  prompt: "Run daily cleanup tasks",
+  timezone: "UTC"
+})
+
+# Trigger immediately (for testing)
+{:ok, run} = LemonAutomation.wake(job.id)
+
+# List all jobs
+LemonAutomation.list_jobs()
+
+# Get run history
+LemonAutomation.runs(job.id, limit: 10)
+```
+
+**Cron expression examples:**
+- `0 9 * * *` - Daily at 9 AM
+- `*/15 * * * *` - Every 15 minutes
+- `0 0 1 * *` - First of each month
+- `30 8 * * 1-5` - Weekdays at 8:30 AM
 
 ### Interactive Development
 
@@ -1498,16 +1900,28 @@ All three formats are equivalent and will be normalized to the internal represen
 
 The umbrella structure separates concerns while maintaining tight integration:
 
+**Core Foundation:**
 - **`ai`**: Pure LLM API abstraction, no agent logic
 - **`agent_core`**: Generic agent framework with CLI runner infrastructure
-- **`coding_agent`**: Complete coding agent, uses `agent_core`
+
+**Agent Execution:**
+- **`coding_agent`**: Complete coding agent with tools, persistence, orchestration
 - **`coding_agent_ui`**: UI abstractions, separate from core logic
-- **`lemon_gateway`**: Job orchestration and multi-engine execution
+
+**Infrastructure:**
+- **`lemon_core`**: Shared primitives (Bus, Event, Store, Telemetry, Id)
+- **`lemon_gateway`**: Multi-engine execution with scheduling
+- **`lemon_router`**: Run orchestration, session routing, policy enforcement
+- **`lemon_channels`**: Pluggable channel adapters with smart delivery
+- **`lemon_automation`**: Cron scheduling, heartbeats, wake triggers
+- **`lemon_control_plane`**: HTTP/WebSocket server with 81+ RPC methods
+- **`lemon_skills`**: Skill registry and lifecycle management
 
 This allows:
 - Independent testing and versioning
 - Potential extraction to separate libraries
 - Clear dependency boundaries
+- Selective deployment (not all apps required)
 
 #### Why GenServers for Agents?
 
@@ -1587,8 +2001,90 @@ See existing providers for examples.
    @callback cancel(cancel_ctx) :: :ok
    @callback format_resume(ResumeToken.t()) :: String.t()
    @callback extract_resume(String.t()) :: ResumeToken.t() | nil
+   @callback supports_steer?() :: boolean()
+   @callback steer(cancel_ctx, text) :: :ok | {:error, term()}
    ```
 3. Register in `LemonGateway.EngineRegistry`
+
+### Adding a New Channel Adapter
+
+1. Create an adapter module in `apps/lemon_channels/lib/lemon_channels/adapters/my_channel.ex`
+2. Implement the `LemonChannels.Plugin` behavior:
+   ```elixir
+   defmodule LemonChannels.Adapters.MyChannel do
+     @behaviour LemonChannels.Plugin
+
+     def id, do: "my_channel"
+
+     def meta do
+       %{
+         capabilities: %{
+           edit_support: true,
+           chunk_limit: 4096,
+           voice_support: false
+         }
+       }
+     end
+
+     def child_spec(opts), do: # OTP child spec
+     def normalize_inbound(raw), do: # Convert to InboundMessage
+     def deliver(payload), do: # Send OutboundPayload
+     def gateway_methods, do: []  # Control plane methods
+   end
+   ```
+3. Register in `LemonChannels.Application.register_and_start_adapters/0`
+
+### Adding a New Skill
+
+Create a skill directory with a `SKILL.md` file:
+
+```bash
+# Global skill
+mkdir -p ~/.lemon/agent/skill/my-skill
+
+# Project skill
+mkdir -p .lemon/skill/my-skill
+```
+
+Create `SKILL.md`:
+```markdown
+---
+name: my-skill
+description: My custom skill for agents
+version: 1.0.0
+requires:
+  bins:
+    - some-binary
+  config:
+    - SOME_API_KEY
+---
+
+# My Skill
+
+Instructions for the agent when this skill is loaded...
+```
+
+Or install from Git:
+```elixir
+LemonSkills.install("https://github.com/user/my-skill-repo")
+```
+
+---
+
+## Documentation
+
+Detailed documentation is available in the `docs/` directory:
+
+| Document | Description |
+|----------|-------------|
+| [beam_agents.md](docs/beam_agents.md) | BEAM/OTP architecture patterns, supervision trees, event flow |
+| [extensions.md](docs/extensions.md) | Extension system: behaviors, hooks, tool conflicts, capabilities |
+| [skills.md](docs/skills.md) | Skill system: SKILL.md format, APIs, project vs global |
+| [telemetry.md](docs/telemetry.md) | Telemetry events reference for monitoring and observability |
+| [benchmarks.md](docs/benchmarks.md) | Performance benchmarks and baselines |
+| [context.md](docs/context.md) | Context management, truncation strategies, token counting |
+| [layered_config.md](docs/layered_config.md) | Configuration system with global/project/session layers |
+| [openclaw_parity.md](docs/openclaw_parity.md) | OpenClaw protocol compatibility status |
 
 ---
 
