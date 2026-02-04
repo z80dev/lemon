@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""
+diag - Diagnostic utility for Lemon
+
+Usage:
+  diag ping <count>    Send ping messages via Codex CLI
+  diag status          Check system status
+  diag --help          Show this help
+
+Examples:
+  diag ping 3          Send 3 ping messages
+"""
+
+import argparse
+import asyncio
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+
+def get_repo_root() -> Path:
+    """Get the lemon repository root."""
+    return Path(__file__).resolve().parents[1]
+
+
+async def ping_via_codex(count: int) -> bool:
+    """
+    Send ping messages using Codex CLI.
+    
+    Args:
+        count: Number of ping messages to send
+        
+    Returns:
+        True if all pings succeeded, False otherwise
+    """
+    print(f"Sending {count} ping(s) via Codex...")
+    print("-" * 40)
+    
+    for i in range(1, count + 1):
+        print(f"Ping {i}/{count}: ", end="", flush=True)
+        
+        # Try to run codex exec with a simple prompt
+        try:
+            result = subprocess.run(
+                ["codex", "exec", "--full-auto", f"Run echo 'pong {i}' and report success"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd=str(get_repo_root())
+            )
+            
+            if result.returncode == 0:
+                output = result.stdout.strip()
+                # Codex exec outputs a lot of text, just check it ran
+                if output:
+                    print("OK")
+                else:
+                    print("OK (empty output)")
+            else:
+                print(f"FAILED (exit {result.returncode})")
+                if result.stderr:
+                    print(f"  Error: {result.stderr[:200]}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            print("TIMEOUT")
+            return False
+        except FileNotFoundError:
+            print("NOT FOUND (codex CLI not installed)")
+            return False
+        except Exception as e:
+            print(f"ERROR: {e}")
+            return False
+        
+        if i < count:
+            await asyncio.sleep(0.5)
+    
+    print("-" * 40)
+    print(f"All {count} ping(s) completed successfully!")
+    return True
+
+
+def check_status():
+    """Check system status."""
+    print("Lemon System Status")
+    print("-" * 40)
+    
+    # Check if we're in the lemon repo
+    root = get_repo_root()
+    print(f"Repository root: {root}")
+    
+    # Check for required directories
+    dirs_to_check = ["apps", "clients", "tools", "scripts"]
+    for dir_name in dirs_to_check:
+        path = root / dir_name
+        status = "✓" if path.exists() else "✗"
+        print(f"  {status} {dir_name}/")
+    
+    # Check for codex CLI
+    print("\nCLI Tools:")
+    tools = ["codex", "claude", "kimi"]
+    for tool in tools:
+        try:
+            result = subprocess.run([tool, "--version"], capture_output=True, timeout=5)
+            status = "✓" if result.returncode == 0 else "✗"
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            status = "✗"
+        print(f"  {status} {tool}")
+    
+    print("-" * 40)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Diagnostic utility for Lemon",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  diag ping 3          Send 3 ping messages via Codex
+  diag status          Check system status
+        """
+    )
+    
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+    
+    # ping command
+    ping_parser = subparsers.add_parser("ping", help="Send ping messages via Codex")
+    ping_parser.add_argument("count", type=int, nargs="?", default=3, 
+                            help="Number of pings to send (default: 3)")
+    
+    # status command
+    subparsers.add_parser("status", help="Check system status")
+    
+    args = parser.parse_args()
+    
+    if args.command == "ping":
+        result = asyncio.run(ping_via_codex(args.count))
+        return 0 if result else 1
+    elif args.command == "status":
+        check_status()
+        return 0
+    else:
+        parser.print_help()
+        return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -2,7 +2,8 @@ defmodule LemonGateway.Scheduler do
   @moduledoc false
   use GenServer
 
-  alias LemonGateway.Types.Job
+  alias LemonGateway.{ChatState, Config, Store}
+  alias LemonGateway.Types.{Job, ResumeToken}
 
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
@@ -48,6 +49,7 @@ defmodule LemonGateway.Scheduler do
 
   @impl true
   def handle_cast({:submit, job}, state) do
+    job = maybe_apply_auto_resume(job)
     thread_key = thread_key(job)
 
     :ok = enqueue_job(thread_key, job)
@@ -214,11 +216,57 @@ defmodule LemonGateway.Scheduler do
     {:queue.from_list(kept), length(removed)}
   end
 
-  defp thread_key(%Job{resume: %LemonGateway.Types.ResumeToken{engine: engine, value: value}}) do
+  defp thread_key(%Job{resume: %ResumeToken{engine: engine, value: value}}) do
     {engine, value}
   end
 
-  defp thread_key(%Job{scope: scope}), do: {:scope, scope}
+  defp thread_key(%Job{session_key: session_key}) when is_binary(session_key) do
+    {:session, session_key}
+  end
+
+  defp thread_key(%Job{scope: scope}) when not is_nil(scope), do: {:scope, scope}
+  defp thread_key(_), do: {:default, :global}
+
+  defp maybe_apply_auto_resume(%Job{resume: %ResumeToken{}} = job), do: job
+
+  defp maybe_apply_auto_resume(%Job{session_key: session_key} = job) when is_binary(session_key) do
+    if Config.get(:auto_resume) do
+      case Store.get_chat_state(session_key) do
+        %ChatState{last_engine: engine, last_resume_token: token}
+        when is_binary(engine) and is_binary(token) ->
+          apply_resume_if_compatible(job, engine, token)
+
+        %{} = map ->
+          engine = map.last_engine || map[:last_engine] || map["last_engine"]
+          token = map.last_resume_token || map[:last_resume_token] || map["last_resume_token"]
+
+          if is_binary(engine) and is_binary(token) do
+            apply_resume_if_compatible(job, engine, token)
+          else
+            job
+          end
+
+        _ ->
+          job
+      end
+    else
+      job
+    end
+  rescue
+    _ -> job
+  end
+
+  defp maybe_apply_auto_resume(job), do: job
+
+  defp apply_resume_if_compatible(%Job{} = job, engine, token) do
+    # Only apply auto-resume if engine matches (or no engine selected yet).
+    if is_nil(job.engine_id) or job.engine_id == engine do
+      resume = %ResumeToken{engine: engine, value: token}
+      %{job | resume: resume, engine_id: job.engine_id || engine}
+    else
+      job
+    end
+  end
 
   defp enqueue_job(thread_key, job) do
     case ensure_worker(thread_key) do
