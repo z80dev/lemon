@@ -612,7 +612,7 @@ The **Task tool** in CodingAgent uses CLI runners to delegate subtasks to differ
 1. **Internal engine** (default): Spawns a new `CodingAgent.Session` as a subprocess
 2. **Codex engine**: Uses `CodexSubagent` to spawn the Codex CLI (`codex exec`)
 3. **Claude engine**: Uses `ClaudeSubagent` to spawn Claude CLI (`claude -p`)
-4. **Kimi engine**: Uses Kimi API
+4. **Kimi engine**: Uses Kimi CLI (`kimi --print --output-format stream-json`)
 
 All engines support:
 - **Streaming progress**: Events flow back to the parent agent
@@ -793,7 +793,7 @@ LemonGateway.submit(job)
 | Lemon | `lemon` | Native CodingAgent.Session with full tool support and steering |
 | Claude | `claude` | Claude CLI via subprocess |
 | Codex | `codex` | Codex CLI via subprocess |
-| Kimi | `kimi` | Kimi API |
+| Kimi | `kimi` | Kimi CLI via subprocess |
 | Echo | `echo` | Simple echo stub for testing |
 
 ### LemonRouter
@@ -1295,7 +1295,7 @@ The **Task tool** supports async spawn/poll/join patterns for coordinating multi
 - `internal`: Native CodingAgent.Session
 - `codex`: Codex CLI via subprocess
 - `claude`: Claude CLI via subprocess
-- `kimi`: Kimi API
+- `kimi`: Kimi CLI via subprocess
 
 ### Durable Background Processes
 
