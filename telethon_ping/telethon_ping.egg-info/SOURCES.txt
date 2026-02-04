@@ -1,0 +1,9 @@
+README.md
+pyproject.toml
+telethon_ping/__init__.py
+telethon_ping.egg-info/PKG-INFO
+telethon_ping.egg-info/SOURCES.txt
+telethon_ping.egg-info/dependency_links.txt
+telethon_ping.egg-info/entry_points.txt
+telethon_ping.egg-info/requires.txt
+telethon_ping.egg-info/top_level.txt

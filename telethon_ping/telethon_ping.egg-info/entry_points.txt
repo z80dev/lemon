@@ -1,0 +1,3 @@
+[console_scripts]
+ping2 = telethon_ping:main
+ping4 = telethon_ping:ping4_entry

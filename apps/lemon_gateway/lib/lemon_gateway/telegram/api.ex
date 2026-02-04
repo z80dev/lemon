@@ -12,7 +12,26 @@ defmodule LemonGateway.Telegram.API do
     request(token, "getUpdates", params, timeout_ms)
   end
 
-  def send_message(token, chat_id, text, reply_to_message_id \\ nil, parse_mode \\ nil) do
+  def send_message(token, chat_id, text, reply_to_or_opts \\ nil, parse_mode \\ nil)
+
+  def send_message(token, chat_id, text, reply_to_or_opts, parse_mode)
+      when is_map(reply_to_or_opts) or is_list(reply_to_or_opts) do
+    opts = if is_map(reply_to_or_opts), do: reply_to_or_opts, else: Enum.into(reply_to_or_opts, %{})
+
+    params =
+      %{
+        "chat_id" => chat_id,
+        "text" => text,
+        "disable_web_page_preview" => true
+      }
+      |> maybe_put("reply_to_message_id", opts[:reply_to_message_id] || opts["reply_to_message_id"])
+      |> maybe_put("message_thread_id", opts[:message_thread_id] || opts["message_thread_id"])
+      |> maybe_put("parse_mode", opts[:parse_mode] || opts["parse_mode"] || parse_mode)
+
+    request(token, "sendMessage", params, @default_timeout)
+  end
+
+  def send_message(token, chat_id, text, reply_to_message_id, parse_mode) do
     params =
       %{
         "chat_id" => chat_id,

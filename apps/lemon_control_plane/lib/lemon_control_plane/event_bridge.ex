@@ -196,8 +196,8 @@ defmodule LemonControlPlane.EventBridge do
       "type" => "completed",
       "runId" => meta[:run_id],
       "sessionKey" => meta[:session_key],
-      "ok" => completed[:ok],
-      "answer" => truncate(completed[:answer], 500),
+      "ok" => get_field(completed, :ok),
+      "answer" => truncate(get_field(completed, :answer), 500),
       "durationMs" => payload[:duration_ms]
     }}
   end

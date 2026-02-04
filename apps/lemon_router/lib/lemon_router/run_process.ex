@@ -65,7 +65,8 @@ defmodule LemonRouter.RunProcess do
       job: job,
       start_ts_ms: LemonCore.Clock.now_ms(),
       aborted: false,
-      completed: false
+      completed: false,
+      saw_delta: false
     }
 
     # Submit to gateway
@@ -88,6 +89,9 @@ defmodule LemonRouter.RunProcess do
     # Emit router-level completion event
     Bus.broadcast(Bus.session_topic(state.session_key), event)
 
+    # If no streaming deltas were emitted, emit a final output chunk so channels respond.
+    maybe_emit_final_output(state, event)
+
     {:stop, :normal, %{state | completed: true}}
   end
 
@@ -98,7 +102,7 @@ defmodule LemonRouter.RunProcess do
     # Also ingest into StreamCoalescer for channel delivery
     ingest_delta_to_coalescer(state, delta)
 
-    {:noreply, state}
+    {:noreply, %{state | saw_delta: true}}
   end
 
   def handle_info(%LemonCore.Event{} = event, state) do
@@ -190,6 +194,33 @@ defmodule LemonRouter.RunProcess do
     }
   end
   defp extract_coalescer_meta(_), do: %{}
+
+  # If the run completed without streaming deltas, emit a single delta with the final answer.
+  defp maybe_emit_final_output(state, %LemonCore.Event{} = event) do
+    with false <- state.saw_delta,
+         answer when is_binary(answer) and answer != "" <- extract_completed_answer(event),
+         %{kind: :channel_peer, channel_id: channel_id} when not is_nil(channel_id) <-
+           LemonRouter.SessionKey.parse(state.session_key) do
+      meta = extract_coalescer_meta(state.job)
+      LemonRouter.StreamCoalescer.ingest_delta(
+        state.session_key,
+        channel_id,
+        state.run_id,
+        1,
+        answer,
+        meta: meta
+      )
+    else
+      _ -> :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp extract_completed_answer(%LemonCore.Event{payload: %{completed: %{answer: answer}}}), do: answer
+  defp extract_completed_answer(%LemonCore.Event{payload: %{answer: answer}}), do: answer
+  defp extract_completed_answer(%LemonCore.Event{payload: %LemonGateway.Event.Completed{answer: answer}}), do: answer
+  defp extract_completed_answer(_), do: nil
 
   # Flush any pending coalesced output on termination
   defp flush_coalescer(state) do

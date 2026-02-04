@@ -13,14 +13,18 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   @spec deliver(OutboundPayload.t()) :: {:ok, term()} | {:error, term()}
   def deliver(%OutboundPayload{kind: :text} = payload) do
     chat_id = String.to_integer(payload.peer.id)
-
     opts = build_send_opts(payload)
+    token = telegram_token()
 
     # Use existing Telegram API if available
     if Code.ensure_loaded?(LemonGateway.Telegram.API) do
-      case LemonGateway.Telegram.API.send_message(chat_id, payload.content, opts) do
-        {:ok, result} -> {:ok, result}
-        {:error, reason} -> {:error, reason}
+      with token when is_binary(token) and token != "" <- token do
+        case LemonGateway.Telegram.API.send_message(token, chat_id, payload.content, opts, nil) do
+          {:ok, result} -> {:ok, result}
+          {:error, reason} -> {:error, reason}
+        end
+      else
+        _ -> {:error, :telegram_not_configured}
       end
     else
       {:error, :telegram_api_not_available}
@@ -30,11 +34,16 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   def deliver(%OutboundPayload{kind: :edit, content: %{message_id: message_id, text: text}} = payload) do
     chat_id = String.to_integer(payload.peer.id)
     msg_id = parse_message_id(message_id)
+    token = telegram_token()
 
     if Code.ensure_loaded?(LemonGateway.Telegram.API) do
-      case LemonGateway.Telegram.API.edit_message_text(chat_id, msg_id, text, []) do
-        {:ok, result} -> {:ok, result}
-        {:error, reason} -> {:error, reason}
+      with token when is_binary(token) and token != "" <- token do
+        case LemonGateway.Telegram.API.edit_message_text(token, chat_id, msg_id, text, nil) do
+          {:ok, result} -> {:ok, result}
+          {:error, reason} -> {:error, reason}
+        end
+      else
+        _ -> {:error, :telegram_not_configured}
       end
     else
       {:error, :telegram_api_not_available}
@@ -44,11 +53,16 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   def deliver(%OutboundPayload{kind: :delete, content: %{message_id: message_id}} = payload) do
     chat_id = String.to_integer(payload.peer.id)
     msg_id = parse_message_id(message_id)
+    token = telegram_token()
 
     if Code.ensure_loaded?(LemonGateway.Telegram.API) do
-      case LemonGateway.Telegram.API.delete_message(chat_id, msg_id) do
-        {:ok, result} -> {:ok, result}
-        {:error, reason} -> {:error, reason}
+      with token when is_binary(token) and token != "" <- token do
+        case LemonGateway.Telegram.API.delete_message(token, chat_id, msg_id) do
+          {:ok, result} -> {:ok, result}
+          {:error, reason} -> {:error, reason}
+        end
+      else
+        _ -> {:error, :telegram_not_configured}
       end
     else
       {:error, :telegram_api_not_available}
@@ -81,4 +95,9 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
 
   defp parse_message_id(id) when is_binary(id), do: String.to_integer(id)
   defp parse_message_id(id) when is_integer(id), do: id
+
+  defp telegram_token do
+    config = Application.get_env(:lemon_gateway, :telegram, %{})
+    config[:bot_token] || config["bot_token"]
+  end
 end

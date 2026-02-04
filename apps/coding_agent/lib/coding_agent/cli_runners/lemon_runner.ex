@@ -393,7 +393,8 @@ defmodule CodingAgent.CliRunners.LemonRunner do
   end
 
   defp session_file_path(session_id, cwd) do
-    Path.join([cwd, ".lemon", "sessions", "#{session_id}.jsonl"])
+    dir = CodingAgent.Config.sessions_dir(cwd)
+    Path.join(dir, "#{session_id}.jsonl")
   end
 
   # ============================================================================
@@ -551,7 +552,8 @@ defmodule CodingAgent.CliRunners.LemonRunner do
       {event, factory} = EventFactory.completed_ok(state.factory, answer, resume: token, usage: usage)
       emit_event(state.stream, event)
       EventStream.complete(state.stream, [])
-      %{state | factory: factory, completed_emitted: true}
+      state = %{state | factory: factory, completed_emitted: true}
+      finalize_session(state)
     end
   end
 
@@ -564,8 +566,31 @@ defmodule CodingAgent.CliRunners.LemonRunner do
       {event, factory} = EventFactory.completed_error(state.factory, error_msg, resume: token, answer: answer)
       emit_event(state.stream, event)
       EventStream.complete(state.stream, [])
-      %{state | factory: factory, completed_emitted: true}
+      state = %{state | factory: factory, completed_emitted: true}
+      finalize_session(state)
     end
+  end
+
+  defp finalize_session(state) do
+    session = state.session
+
+    if is_pid(session) and Process.alive?(session) do
+      # Best-effort save so resume tokens remain usable across runs.
+      try do
+        _ = CodingAgent.Session.save(session)
+      rescue
+        _ -> :ok
+      end
+
+      # Stop the session to avoid "already_started" conflicts on resume.
+      try do
+        GenServer.stop(session, :normal)
+      rescue
+        _ -> :ok
+      end
+    end
+
+    state
   end
 
   # ============================================================================

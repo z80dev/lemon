@@ -465,27 +465,24 @@ defmodule LemonGateway.Run do
     emit_to_bus(state.run_id, event_type, event, build_event_meta(state))
   end
 
-  defp maybe_store_chat_state(%Job{scope: scope}, %Event.Started{resume: %ResumeToken{} = resume}) when not is_nil(scope) do
-    chat_state = %ChatState{
-      last_engine: resume.engine,
-      last_resume_token: resume.value,
-      updated_at: System.system_time(:millisecond)
-    }
-
-    Store.put_chat_state(scope, chat_state)
-  end
-
-  defp maybe_store_chat_state(%Job{scope: scope}, %Event.Completed{resume: %ResumeToken{} = resume}) when not is_nil(scope) do
-    chat_state = %ChatState{
-      last_engine: resume.engine,
-      last_resume_token: resume.value,
-      updated_at: System.system_time(:millisecond)
-    }
-
-    Store.put_chat_state(scope, chat_state)
+  defp maybe_store_chat_state(%Job{} = job, %Event.Completed{resume: %ResumeToken{} = resume}) do
+    store_chat_state(job.scope, resume)
+    store_chat_state(job.session_key, resume)
   end
 
   defp maybe_store_chat_state(_job, _completed), do: :ok
+
+  defp store_chat_state(nil, _resume), do: :ok
+
+  defp store_chat_state(key, %ResumeToken{} = resume) do
+    chat_state = %ChatState{
+      last_engine: resume.engine,
+      last_resume_token: resume.value,
+      updated_at: System.system_time(:millisecond)
+    }
+
+    Store.put_chat_state(key, chat_state)
+  end
 
   defp register_progress_mapping(%Job{meta: meta, scope: scope}, run_pid) when not is_nil(scope) do
     progress_msg_id = meta && meta[:progress_msg_id]
