@@ -521,7 +521,7 @@ describe('safeStringify', () => {
 
   it('should handle deeply nested circular references', () => {
     const obj: Record<string, unknown> = { a: { b: { c: {} } } };
-    (obj.a as Record<string, unknown>).b.c = obj;
+    ((obj.a as Record<string, unknown>).b as Record<string, unknown>).c = obj;
     const result = safeStringify(obj);
     expect(result).toContain('[Circular]');
   });

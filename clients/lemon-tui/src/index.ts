@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Lemon TUI - Terminal User Interface for the Lemon coding agent.
  */
@@ -8,500 +7,30 @@ import {
   ProcessTerminal,
   Text,
   Editor,
-  Input,
-  Markdown,
   Loader,
   Container,
   SelectList,
-  SettingsList,
-  Image,
   matchesKey,
   CombinedAutocompleteProvider,
-  visibleWidth,
-  type AutocompleteItem,
-  type AutocompleteProvider,
-  type EditorTheme,
-  type MarkdownTheme,
-  type SelectListTheme,
-  type SettingsListTheme,
-  type ImageTheme,
-  type SettingItem,
   type Component,
   type SelectItem,
-  type SlashCommand,
 } from '@mariozechner/pi-tui';
-import { execFile } from 'node:child_process';
 import { AgentConnection, type AgentConnectionOptions } from './agent-connection.js';
-import { parseModelSpec, resolveConfig, saveTUIConfigKey, getModelString, type ResolvedConfig } from './config.js';
-import { StateStore, type AppState, type NormalizedMessage, type NormalizedAssistantMessage, type NormalizedToolResultMessage } from './state.js';
-import type { ServerMessage, UIRequestMessage, SelectParams, ConfirmParams, InputParams, EditorParams, SessionSummary } from './types.js';
-import { defaultRegistry } from './formatters/index.js';
+import { StateStore, type AppState, type NormalizedAssistantMessage } from './state.js';
+import type { ServerMessage, UIRequestMessage, SessionSummary } from './types.js';
+import { slashCommands, MODELINE_PREFIXES, GIT_REFRESH_INTERVAL_MS } from './constants.js';
+import { getGitModeline } from './git-utils.js';
 
-// ============================================================================
-// Theme
-// ============================================================================
-
-/**
- * Theme interface defining all color functions used throughout the TUI.
- */
-interface Theme {
-  name: string;
-  primary: (s: string) => string;
-  secondary: (s: string) => string;
-  success: (s: string) => string;
-  warning: (s: string) => string;
-  error: (s: string) => string;
-  muted: (s: string) => string;
-  dim: (s: string) => string;
-  bold: (s: string) => string;
-  italic: (s: string) => string;
-  modelineBg: (s: string) => string;
-  overlayBg: (s: string) => string;
-  border: (s: string) => string;
-}
-
-/**
- * The lemon theme - warm yellow tones with citrus accents.
- */
-const lemonTheme: Theme = {
-  name: 'lemon',
-  primary: (s: string) => `\x1b[38;5;220m${s}\x1b[0m`,    // Lemon yellow
-  secondary: (s: string) => `\x1b[38;5;228m${s}\x1b[0m`,  // Pale lemon
-  success: (s: string) => `\x1b[38;5;114m${s}\x1b[0m`,    // Citrus green
-  warning: (s: string) => `\x1b[38;5;214m${s}\x1b[0m`,    // Orange
-  error: (s: string) => `\x1b[38;5;203m${s}\x1b[0m`,      // Red
-  muted: (s: string) => `\x1b[38;5;243m${s}\x1b[0m`,      // Gray
-  dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
-  bold: (s: string) => `\x1b[1m${s}\x1b[0m`,
-  italic: (s: string) => `\x1b[3m${s}\x1b[0m`,
-  modelineBg: (s: string) => `\x1b[48;5;58m${s}\x1b[0m`,  // Dark olive/yellow bg
-  overlayBg: (s: string) => `\x1b[48;5;236m${s}\x1b[0m`,  // Dark gray bg for overlays
-  border: (s: string) => `\x1b[38;5;243m${s}\x1b[0m`,     // Subtle gray border
-};
-
-/**
- * The lime theme - fresh green tones.
- */
-const limeTheme: Theme = {
-  name: 'lime',
-  primary: (s: string) => `\x1b[38;5;118m${s}\x1b[0m`,    // Bright green
-  secondary: (s: string) => `\x1b[38;5;157m${s}\x1b[0m`,  // Pale green
-  success: (s: string) => `\x1b[38;5;114m${s}\x1b[0m`,    // Citrus green
-  warning: (s: string) => `\x1b[38;5;214m${s}\x1b[0m`,    // Orange
-  error: (s: string) => `\x1b[38;5;203m${s}\x1b[0m`,      // Red
-  muted: (s: string) => `\x1b[38;5;243m${s}\x1b[0m`,      // Gray
-  dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
-  bold: (s: string) => `\x1b[1m${s}\x1b[0m`,
-  italic: (s: string) => `\x1b[3m${s}\x1b[0m`,
-  modelineBg: (s: string) => `\x1b[48;5;22m${s}\x1b[0m`,  // Dark green bg
-  overlayBg: (s: string) => `\x1b[48;5;236m${s}\x1b[0m`,  // Dark gray bg for overlays
-  border: (s: string) => `\x1b[38;5;243m${s}\x1b[0m`,     // Subtle gray border
-};
-
-/**
- * Registry of available themes.
- */
-const themes: Record<string, Theme> = {
-  lemon: lemonTheme,
-  lime: limeTheme,
-};
-
-/**
- * The currently active theme.
- */
-let currentTheme: Theme = themes.lemon;
-
-/**
- * Switch to a different theme by name.
- * @param name The name of the theme to switch to
- * @returns true if the theme was found and switched, false otherwise
- */
-function setTheme(name: string): boolean {
-  const theme = themes[name];
-  if (theme) {
-    currentTheme = theme;
-    return true;
-  }
-  return false;
-}
-
-/**
- * Get the name of the current theme.
- */
-function getThemeName(): string {
-  return currentTheme.name;
-}
-
-/**
- * Get the list of available theme names.
- */
-function getAvailableThemes(): string[] {
-  return Object.keys(themes);
-}
-
-// ============================================================================
-// Lemon Mascot ASCII Art
-// ============================================================================
-
-/**
- * Cute lemon mascot for the welcome screen.
- * Uses colorful block characters with theme colors.
- */
-function getLemonArt(): string {
-  // Colors for different parts
-  const y = ansi.primary;      // Yellow for lemon body
-  const g = ansi.success;      // Green for leaf
-  const d = ansi.primary;      // Darker yellow/orange for shading
-
-  return [
-    `       ${g('▄██▄')}`,
-    `      ${y('▄')}${g('████')}${y('▄')}`,
-    `     ${y('████████')}`,
-    `    ${y('██')} ${d('◠')}  ${d('◠')} ${y('██')}`,
-    `    ${y('██')}  ${d('‿')}   ${y('██')}`,
-    `     ${y('████████')}`,
-    `      ${y('▀████▀')}`,
-  ].join('\n');
-}
-
-/**
- * Proxy object that delegates to the current theme.
- * This allows existing code to use `ansi.primary(...)` without changes.
- */
-const ansi = {
-  get primary() { return currentTheme.primary; },
-  get secondary() { return currentTheme.secondary; },
-  get success() { return currentTheme.success; },
-  get warning() { return currentTheme.warning; },
-  get error() { return currentTheme.error; },
-  get muted() { return currentTheme.muted; },
-  get dim() { return currentTheme.dim; },
-  get bold() { return currentTheme.bold; },
-  get italic() { return currentTheme.italic; },
-  get modelineBg() { return currentTheme.modelineBg; },
-  get overlayBg() { return currentTheme.overlayBg; },
-  get border() { return currentTheme.border; },
-};
-
-// ============================================================================
-// BorderBox Component
-// ============================================================================
-
-/**
- * BorderBox - a container with a thin Unicode border around its children.
- * Uses box-drawing characters for a clean, modern look.
- */
-class BorderBox implements Component {
-  children: Component[] = [];
-  private borderFn: (s: string) => string;
-  private bgFn?: (s: string) => string;
-
-  constructor(borderFn: (s: string) => string, bgFn?: (s: string) => string) {
-    this.borderFn = borderFn;
-    this.bgFn = bgFn;
-  }
-
-  addChild(component: Component): void {
-    this.children.push(component);
-  }
-
-  removeChild(component: Component): void {
-    const index = this.children.indexOf(component);
-    if (index !== -1) {
-      this.children.splice(index, 1);
-    }
-  }
-
-  invalidate(): void {
-    for (const child of this.children) {
-      child.invalidate?.();
-    }
-  }
-
-  render(width: number): string[] {
-    if (this.children.length === 0) {
-      return [];
-    }
-
-    // Border characters (thin)
-    const topLeft = '┌';
-    const topRight = '┐';
-    const bottomLeft = '└';
-    const bottomRight = '┘';
-    const horizontal = '─';
-    const vertical = '│';
-
-    // Content width is width minus 2 for borders, minus 2 for padding (1 each side)
-    const contentWidth = Math.max(1, width - 4);
-    const innerWidth = width - 2; // width inside borders
-
-    // Render all children
-    const childLines: string[] = [];
-    for (const child of this.children) {
-      const lines = child.render(contentWidth);
-      for (const line of lines) {
-        childLines.push(line);
-      }
-    }
-
-    if (childLines.length === 0) {
-      return [];
-    }
-
-    const result: string[] = [];
-
-    // Top border
-    const topBorder = topLeft + horizontal.repeat(innerWidth) + topRight;
-    result.push(this.borderFn(topBorder));
-
-    // Empty line for top padding
-    result.push(this.renderPaddingLine(vertical, innerWidth));
-
-    // Content lines with side borders and padding
-    for (const line of childLines) {
-      const lineWidth = visibleWidth(line);
-      const padding = Math.max(0, contentWidth - lineWidth);
-      const paddedLine = ' ' + line + ' '.repeat(padding + 1);
-
-      // Apply background to content area if provided
-      const content = this.bgFn ? this.applyBgToLine(paddedLine, innerWidth) : paddedLine;
-      result.push(this.borderFn(vertical) + content + this.borderFn(vertical));
-    }
-
-    // Empty line for bottom padding
-    result.push(this.renderPaddingLine(vertical, innerWidth));
-
-    // Bottom border
-    const bottomBorder = bottomLeft + horizontal.repeat(innerWidth) + bottomRight;
-    result.push(this.borderFn(bottomBorder));
-
-    return result;
-  }
-
-  private renderPaddingLine(vertical: string, innerWidth: number): string {
-    const emptyContent = ' '.repeat(innerWidth);
-    const content = this.bgFn ? this.bgFn(emptyContent) : emptyContent;
-    return this.borderFn(vertical) + content + this.borderFn(vertical);
-  }
-
-  private applyBgToLine(line: string, targetWidth: number): string {
-    if (!this.bgFn) return line;
-    const lineWidth = visibleWidth(line);
-    const padding = Math.max(0, targetWidth - lineWidth);
-    return this.bgFn(line + ' '.repeat(padding));
-  }
-}
-
-// ============================================================================
-// Autocomplete Helpers
-// ============================================================================
-
-class RecentPathAutocompleteProvider implements AutocompleteProvider {
-  private baseProvider: CombinedAutocompleteProvider;
-  private recentItems: AutocompleteItem[];
-
-  constructor(basePath: string, recentDirectories: string[]) {
-    this.baseProvider = new CombinedAutocompleteProvider([], basePath);
-    this.recentItems = recentDirectories.map((dir) => ({
-      value: dir,
-      label: dir,
-      description: 'recent',
-    }));
-  }
-
-  getSuggestions(
-    lines: string[],
-    cursorLine: number,
-    cursorCol: number
-  ): { items: AutocompleteItem[]; prefix: string } | null {
-    const currentLine = lines[cursorLine] || '';
-    const textBeforeCursor = currentLine.slice(0, cursorCol);
-
-    if (textBeforeCursor.trim() === '') {
-      if (this.recentItems.length === 0) return null;
-      return { items: this.recentItems, prefix: '' };
-    }
-
-    return this.baseProvider.getSuggestions(lines, cursorLine, cursorCol);
-  }
-
-  applyCompletion(
-    lines: string[],
-    cursorLine: number,
-    cursorCol: number,
-    item: AutocompleteItem,
-    prefix: string
-  ): { lines: string[]; cursorLine: number; cursorCol: number } {
-    if (prefix === '') {
-      const nextLines = [...lines];
-      nextLines[cursorLine] = item.value;
-      return {
-        lines: nextLines,
-        cursorLine,
-        cursorCol: item.value.length,
-      };
-    }
-
-    return this.baseProvider.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
-  }
-}
-
-// Theme objects use wrapper functions to ensure they always use the current theme
-const selectListTheme: SelectListTheme = {
-  selectedPrefix: (s: string) => ansi.primary(s),
-  selectedText: (s: string) => ansi.bold(s),
-  description: (s: string) => ansi.muted(s),
-  scrollInfo: (s: string) => ansi.muted(s),
-  noMatch: (s: string) => ansi.muted(s),
-};
-
-const markdownTheme: MarkdownTheme = {
-  heading: (s: string) => ansi.bold(ansi.primary(s)),
-  link: (s: string) => ansi.primary(s),
-  linkUrl: (s: string) => ansi.muted(s),
-  code: (s: string) => ansi.warning(s),
-  codeBlock: (s: string) => ansi.success(s),
-  codeBlockBorder: (s: string) => ansi.muted(s),
-  quote: (s: string) => ansi.italic(s),
-  quoteBorder: (s: string) => ansi.muted(s),
-  hr: (s: string) => ansi.muted(s),
-  listBullet: (s: string) => ansi.primary(s),
-  bold: (s: string) => ansi.bold(s),
-  italic: (s: string) => ansi.italic(s),
-  strikethrough: (s: string) => `\x1b[9m${s}\x1b[0m`,
-  underline: (s: string) => `\x1b[4m${s}\x1b[0m`,
-};
-
-const editorTheme: EditorTheme = {
-  borderColor: (s: string) => ansi.primary(s),
-  selectList: selectListTheme,
-};
-
-// Note: settingsListTheme is created dynamically to support theme switching
-function getSettingsListTheme(): SettingsListTheme {
-  return {
-    label: (text: string, selected: boolean) => selected ? ansi.bold(ansi.primary(text)) : text,
-    value: (text: string, selected: boolean) => selected ? ansi.secondary(text) : ansi.muted(text),
-    description: (s: string) => ansi.muted(s),
-    cursor: ansi.primary('>'),
-    hint: (s: string) => ansi.muted(s),
-  };
-}
-
-const imageTheme: ImageTheme = {
-  fallbackColor: (s: string) => ansi.muted(s),
-};
-
-const slashCommands: SlashCommand[] = [
-  { name: 'abort', description: 'Stop the current operation' },
-  { name: 'reset', description: 'Clear conversation and reset session' },
-  { name: 'save', description: 'Save the current session' },
-  { name: 'sessions', description: 'List saved sessions' },
-  { name: 'resume', description: 'Resume a saved session' },
-  { name: 'stats', description: 'Show session statistics' },
-  { name: 'search', description: 'Search for text in conversations' },
-  { name: 'settings', description: 'Open settings' },
-  { name: 'debug', description: 'Toggle debug mode (on/off)' },
-  { name: 'quit', description: 'Exit the application' },
-  { name: 'exit', description: 'Exit the application' },
-  { name: 'q', description: 'Exit the application' },
-  { name: 'help', description: 'Show help message' },
-  // Multi-session commands
-  { name: 'running', description: 'List running sessions' },
-  { name: 'new-session', description: 'Start a new session' },
-  { name: 'switch', description: 'Switch to a different session' },
-  { name: 'close-session', description: 'Close the current session' },
-];
-
-const MODELINE_PREFIXES = ['modeline:', 'modeline.'];
-const GIT_STATUS_TIMEOUT_MS = 2000;
-const GIT_REFRESH_INTERVAL_MS = 5000;
-
-async function getGitModeline(cwd: string): Promise<string | null> {
-  const output = await getGitStatusOutput(cwd);
-  if (!output) {
-    return null;
-  }
-
-  const lines = output.split(/\r?\n/);
-  let head: string | null = null;
-  let oid: string | null = null;
-  let ahead = 0;
-  let behind = 0;
-  let dirty = false;
-
-  for (const line of lines) {
-    if (!line) {
-      continue;
-    }
-    if (line.startsWith('# branch.head ')) {
-      head = line.slice('# branch.head '.length).trim();
-      continue;
-    }
-    if (line.startsWith('# branch.oid ')) {
-      oid = line.slice('# branch.oid '.length).trim();
-      continue;
-    }
-    if (line.startsWith('# branch.ab ')) {
-      const match = line.match(/\+(\d+)\s+-(\d+)/);
-      if (match) {
-        ahead = Number.parseInt(match[1] || '0', 10);
-        behind = Number.parseInt(match[2] || '0', 10);
-      }
-      continue;
-    }
-    if (!line.startsWith('#')) {
-      dirty = true;
-    }
-  }
-
-  if (!head && !oid) {
-    return null;
-  }
-
-  let branch = head;
-  if (branch === '(detached)' || branch === 'HEAD' || !branch) {
-    const shortOid = oid ? oid.slice(0, 7) : '';
-    branch = shortOid || 'detached';
-  }
-
-  let suffix = '';
-  if (ahead > 0) {
-    suffix += ` +${ahead}`;
-  }
-  if (behind > 0) {
-    suffix += ` -${behind}`;
-  }
-  if (dirty) {
-    suffix += ' *';
-  }
-
-  return `${branch}${suffix}`;
-}
-
-function getGitStatusOutput(cwd: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    execFile(
-      'git',
-      ['status', '--porcelain=v2', '--branch'],
-      { cwd, timeout: GIT_STATUS_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
-      (err, stdout) => {
-        if (err) {
-          resolve(null);
-          return;
-        }
-        const trimmed = stdout.trim();
-        resolve(trimmed || null);
-      }
-    );
-  });
-}
+import { ansi, getLemonArt } from './theme.js';
+import { selectListTheme, editorTheme } from './component-themes.js';
+import { MessageRenderer } from './message-renderer.js';
+import { OverlayManager } from './overlay-manager.js';
 
 // ============================================================================
 // Main Application
 // ============================================================================
 
-class LemonTUI {
+export class LemonTUI {
   private tui: TUI;
   private connection: AgentConnection;
   private connectionOptions: AgentConnectionOptions;
@@ -540,6 +69,8 @@ class LemonTUI {
   }> | null = null;
   private pendingModelSelection: { cwd: string } | null = null;
   private toolExecutionTimer: ReturnType<typeof setInterval> | null = null;
+  private messageRenderer: MessageRenderer;
+  private overlayManager: OverlayManager;
 
   // Ctrl+C double-press handling
   private ctrlCHint: Text | null = null;
@@ -569,6 +100,27 @@ class LemonTUI {
     this.modeline = new Text('', 1, 0);
     this.inputEditor = new Editor(this.tui, editorTheme);
     this.toolHint = new Text('', 0, 0);
+    this.messageRenderer = new MessageRenderer({
+      isToolPanelCollapsed: () => this.toolPanelCollapsed,
+    });
+    this.overlayManager = new OverlayManager(
+      this.tui,
+      this.store,
+      this.connection,
+      {
+        getOverlayHandle: () => this.overlayHandle,
+        setOverlayHandle: (handle) => { this.overlayHandle = handle; },
+        getCurrentOverlayRequestId: () => this.currentOverlayRequestId,
+        setCurrentOverlayRequestId: (id) => { this.currentOverlayRequestId = id; },
+        getInputEditor: () => this.inputEditor,
+        getSessionsList: () => this.sessionsList,
+        onOverlayHidden: () => {
+          if (!this.store.getCurrentUIRequest()) {
+            this.tui.setFocus(this.inputEditor);
+          }
+        },
+      }
+    );
     const initialBasePath = options.cwd || process.cwd();
     this.updateAutocompleteProvider(initialBasePath);
 
@@ -1850,24 +1402,11 @@ ${ansi.bold('Shortcuts:')}
 
   private renderMessages(): void {
     const state = this.store.getState();
-    const showToolResults = !this.toolPanelCollapsed;
-
-    this.messagesContainer.clear();
-
-    for (const msg of state.messages) {
-      if (msg.type === 'tool_result' && !showToolResults) {
-        continue;
-      }
-      const component = this.createMessageComponent(msg);
-      this.messagesContainer.addChild(component);
-    }
-
-    if (state.streamingMessage) {
-      this.streamingComponent = this.createMessageComponent(state.streamingMessage);
-      this.messagesContainer.addChild(this.streamingComponent);
-    } else {
-      this.streamingComponent = null;
-    }
+    this.streamingComponent = this.messageRenderer.renderMessages(
+      this.messagesContainer,
+      state.messages,
+      state.streamingMessage
+    );
   }
 
   private onStateChange(state: AppState, prevState: AppState): void {
@@ -1958,103 +1497,12 @@ ${ansi.bold('Shortcuts:')}
     this.tui.requestRender();
   }
 
-  private createMessageComponent(message: NormalizedMessage): Component {
-    switch (message.type) {
-      case 'user':
-        return new Markdown(`${ansi.primary(ansi.bold('You:'))}\n${message.content}`, 1, 1, markdownTheme);
-
-      case 'assistant': {
-        const assistant = message as NormalizedAssistantMessage;
-        const lines: string[] = [];
-
-        lines.push(ansi.success(ansi.bold('Assistant:')));
-
-        // Thinking (if any, shown dimmed)
-        if (assistant.thinkingContent) {
-          lines.push(ansi.dim(ansi.italic('[thinking]')));
-          lines.push(ansi.muted(assistant.thinkingContent.slice(0, 200) + '...'));
-          lines.push('');
-        }
-
-        // Main content
-        if (assistant.textContent) {
-          lines.push(assistant.textContent);
-        }
-
-        // Tool calls
-        for (const tool of assistant.toolCalls) {
-          lines.push(`${ansi.warning('→')} ${tool.name}`);
-        }
-
-        // Streaming indicator
-        if (assistant.isStreaming) {
-          lines.push(ansi.muted('...'));
-        }
-
-        // Stop reason indicator (only for non-normal completions)
-        if (!assistant.isStreaming && assistant.stopReason) {
-          if (assistant.stopReason === 'length') {
-            lines.push(ansi.warning('[truncated]'));
-          } else if (assistant.stopReason === 'error') {
-            lines.push(ansi.error('[error]'));
-          } else if (assistant.stopReason === 'aborted') {
-            lines.push(ansi.error('[aborted]'));
-          }
-          // 'stop' and 'tool_use' are normal - don't show anything
-        }
-
-        return new Markdown(lines.join('\n'), 1, 1, markdownTheme);
-      }
-
-      case 'tool_result': {
-        const toolResult = message as NormalizedToolResultMessage;
-        const colorFn = toolResult.isError ? ansi.error : ansi.secondary;
-        const content = toolResult.content.length > 500
-          ? toolResult.content.slice(0, 500) + '...'
-          : toolResult.content;
-
-        // If there are no images, return a simple Text component
-        if (!toolResult.images || toolResult.images.length === 0) {
-          return new Text(colorFn(`[${toolResult.toolName}] ${content}`), 1, 1);
-        }
-
-        // Otherwise, use a Container to render text and images
-        const container = new Container();
-
-        // Add text content first
-        if (content) {
-          container.addChild(new Text(colorFn(`[${toolResult.toolName}] ${content}`), 1, 1));
-        } else {
-          container.addChild(new Text(colorFn(`[${toolResult.toolName}]`), 1, 0));
-        }
-
-        // Add each image
-        for (const img of toolResult.images) {
-          const imageComponent = new Image(img.data, img.mimeType, imageTheme, {
-            maxWidthCells: 80,
-            maxHeightCells: 40,
-          });
-          container.addChild(imageComponent);
-        }
-
-        return container;
-      }
-    }
-  }
-
   private updateStreamingMessage(message: NormalizedAssistantMessage | null): void {
-    if (message) {
-      if (this.streamingComponent) {
-        this.messagesContainer.removeChild(this.streamingComponent);
-      }
-      this.streamingComponent = this.createMessageComponent(message);
-      this.messagesContainer.addChild(this.streamingComponent);
-    } else {
-      if (this.streamingComponent) {
-        this.messagesContainer.removeChild(this.streamingComponent);
-        this.streamingComponent = null;
-      }
-    }
+    this.streamingComponent = this.messageRenderer.updateStreamingMessage(
+      this.messagesContainer,
+      this.streamingComponent,
+      message
+    );
   }
 
   private hasToolOutputs(): boolean {
@@ -2070,127 +1518,11 @@ ${ansi.bold('Shortcuts:')}
   }
 
   private formatToolArgs(args: Record<string, unknown>, toolName?: string): string {
-    if (toolName) {
-      const output = defaultRegistry.formatArgs(toolName, args);
-      return this.truncateInline(output.summary, 200);
-    }
-    // Fallback to existing logic
-    if (!args || Object.keys(args).length === 0) {
-      return '';
-    }
-    const json = this.safeStringify(args);
-    return this.truncateInline(json, 200);
+    return this.messageRenderer.formatToolArgs(args, toolName);
   }
 
   private formatToolResult(result: unknown, toolName?: string, args?: Record<string, unknown>): string {
-    if (toolName) {
-      const output = defaultRegistry.formatResult(toolName, result, args);
-      // Return details joined, or summary if no details
-      if (output.details.length > 0) {
-        return output.details.join('\n');
-      }
-      return output.summary;
-    }
-    // Fallback to existing logic
-    const text = this.extractToolText(result);
-    if (text) {
-      return this.truncateMultiline(text, 6, 600);
-    }
-    const json = this.safeStringify(result);
-    return this.truncateMultiline(json, 6, 600);
-  }
-
-  private extractToolText(result: unknown): string {
-    if (result === null || result === undefined) {
-      return '';
-    }
-    if (typeof result === 'string') {
-      return result;
-    }
-    if (typeof result === 'number' || typeof result === 'boolean') {
-      return String(result);
-    }
-    if (Array.isArray(result)) {
-      return this.extractTextFromContentBlocks(result);
-    }
-    if (typeof result === 'object') {
-      const record = result as { content?: unknown; details?: unknown };
-      const contentText = this.extractTextFromContentBlocks(record.content);
-      if (contentText) {
-        return contentText;
-      }
-      if (record.details !== undefined) {
-        const detailsText = this.safeStringify(record.details);
-        return detailsText ? `details: ${detailsText}` : '';
-      }
-    }
-    return '';
-  }
-
-  private extractTextFromContentBlocks(content: unknown): string {
-    if (!Array.isArray(content)) {
-      return '';
-    }
-    const parts: string[] = [];
-    let imageCount = 0;
-    for (const block of content) {
-      if (!block || typeof block !== 'object') {
-        continue;
-      }
-      const type = (block as { type?: string }).type;
-      if (type === 'text') {
-        const text = (block as { text?: string }).text ?? '';
-        if (text) parts.push(text);
-      } else if (type === 'image') {
-        imageCount += 1;
-      }
-    }
-    if (imageCount > 0) {
-      parts.push(`[${imageCount} image${imageCount === 1 ? '' : 's'}]`);
-    }
-    return parts.join('');
-  }
-
-  private safeStringify(value: unknown): string {
-    try {
-      const seen = new WeakSet();
-      return JSON.stringify(
-        value,
-        (_key, val) => {
-          if (typeof val === 'object' && val !== null) {
-            if (seen.has(val)) {
-              return '[Circular]';
-            }
-            seen.add(val);
-          }
-          return val;
-        },
-        0
-      );
-    } catch {
-      try {
-        return String(value);
-      } catch {
-        return '[unserializable]';
-      }
-    }
-  }
-
-  private truncateInline(text: string, maxChars: number): string {
-    if (text.length <= maxChars) {
-      return text;
-    }
-    return `${text.slice(0, maxChars)}...`;
-  }
-
-  private truncateMultiline(text: string, maxLines: number, maxChars: number): string {
-    const normalized = text.length > maxChars ? `${text.slice(0, maxChars)}...` : text;
-    const lines = normalized.split(/\r?\n/);
-    if (lines.length <= maxLines) {
-      return normalized;
-    }
-    const remaining = lines.length - maxLines;
-    return `${lines.slice(0, maxLines).join('\n')}\n... (${remaining} more lines)`;
+    return this.messageRenderer.formatToolResult(result, toolName, args);
   }
 
   private updateLoader(busy: boolean): void {
@@ -2222,185 +1554,11 @@ ${ansi.bold('Shortcuts:')}
   }
 
   private showUIOverlay(request: UIRequestMessage): void {
-    this.currentOverlayRequestId = request.id;
-
-    switch (request.method) {
-      case 'select':
-        this.showSelectOverlay(request.id, request.params as SelectParams);
-        break;
-
-      case 'confirm':
-        this.showConfirmOverlay(request.id, request.params as ConfirmParams);
-        break;
-
-      case 'input':
-        this.showInputOverlay(request.id, request.params as InputParams);
-        break;
-
-      case 'editor':
-        this.showEditorOverlay(request.id, request.params as EditorParams);
-        break;
-    }
-  }
-
-  private showSelectOverlay(id: string, params: SelectParams): void {
-    const items: SelectItem[] = params.options.map((opt) => ({
-      label: opt.label,
-      value: opt.value,
-      description: opt.description || undefined,
-    }));
-
-    const titleText = new Text(ansi.bold(params.title), 1, 0);
-    const selectList = new SelectList(items, Math.min(10, items.length), selectListTheme);
-
-    selectList.onSelect = (item: SelectItem) => {
-      this.connection.respondToUIRequest(id, item.value);
-      this.hideOverlay();
-    };
-
-    selectList.onCancel = () => {
-      this.connection.respondToUIRequest(id, null);
-      this.hideOverlay();
-    };
-
-    const contentContainer = new Container();
-    contentContainer.addChild(titleText);
-    contentContainer.addChild(selectList);
-
-    const box = new BorderBox(ansi.border, ansi.overlayBg);
-    box.addChild(contentContainer);
-
-    this.overlayHandle = this.tui.showOverlay(box, {
-      width: '80%',
-      maxHeight: '50%',
-      anchor: 'center',
-    });
-    this.tui.setFocus(selectList);
-  }
-
-  private showConfirmOverlay(id: string, params: ConfirmParams): void {
-    const items: SelectItem[] = [
-      { label: 'Yes', value: 'yes', description: 'Confirm' },
-      { label: 'No', value: 'no', description: 'Cancel' },
-    ];
-
-    const header = new Text(`${ansi.bold(params.title)}\n${params.message}`, 1, 1);
-    const selectList = new SelectList(items, 2, selectListTheme);
-
-    selectList.onSelect = (item: SelectItem) => {
-      this.connection.respondToUIRequest(id, item.value === 'yes');
-      this.hideOverlay();
-    };
-
-    selectList.onCancel = () => {
-      this.connection.respondToUIRequest(id, false);
-      this.hideOverlay();
-    };
-
-    const contentContainer = new Container();
-    contentContainer.addChild(header);
-    contentContainer.addChild(selectList);
-
-    const box = new BorderBox(ansi.border, ansi.overlayBg);
-    box.addChild(contentContainer);
-
-    this.overlayHandle = this.tui.showOverlay(box, {
-      width: 60,
-      anchor: 'center',
-    });
-    this.tui.setFocus(selectList);
-  }
-
-  private showInputOverlay(id: string, params: InputParams): void {
-    const header = new Text(ansi.bold(params.title), 1, 0);
-    const input = new Input();
-
-    // Note: pi-tui Input doesn't support placeholder, but we show it in the header
-    if (params.placeholder) {
-      header.setText(`${ansi.bold(params.title)}\n${ansi.muted(params.placeholder)}`);
-    }
-
-    input.onSubmit = (text: string) => {
-      this.connection.respondToUIRequest(id, text);
-      this.hideOverlay();
-    };
-
-    input.onEscape = () => {
-      this.connection.respondToUIRequest(id, null);
-      this.hideOverlay();
-    };
-
-    const contentContainer = new Container();
-    contentContainer.addChild(header);
-    contentContainer.addChild(input);
-
-    const box = new BorderBox(ansi.border, ansi.overlayBg);
-    box.addChild(contentContainer);
-
-    this.overlayHandle = this.tui.showOverlay(box, {
-      width: '80%',
-      anchor: 'center',
-    });
-    this.tui.setFocus(input);
-  }
-
-  private showEditorOverlay(id: string, params: EditorParams): void {
-    const header = new Text(
-      `${ansi.bold(params.title)}\n${ansi.muted('Enter to submit, Shift+Enter for newline, Escape to cancel')}`,
-      1,
-      0
-    );
-    const editorOverlay = new Editor(this.tui, editorTheme);
-
-    if (params.prefill) {
-      editorOverlay.setText(params.prefill);
-    }
-
-    editorOverlay.onSubmit = (text: string) => {
-      this.connection.respondToUIRequest(id, text);
-      this.hideOverlay();
-    };
-
-    // Store original handleInput for escape handling using matchesKey
-    const originalHandleInput = editorOverlay.handleInput?.bind(editorOverlay);
-    editorOverlay.handleInput = (data: string) => {
-      if (matchesKey(data, 'escape')) {
-        this.connection.respondToUIRequest(id, null);
-        this.hideOverlay();
-        return;
-      }
-      originalHandleInput?.(data);
-    };
-
-    const contentContainer = new Container();
-    contentContainer.addChild(header);
-    contentContainer.addChild(editorOverlay);
-
-    const box = new BorderBox(ansi.border, ansi.overlayBg);
-    box.addChild(contentContainer);
-
-    this.overlayHandle = this.tui.showOverlay(box, {
-      width: '90%',
-      maxHeight: '80%',
-      anchor: 'center',
-    });
-    this.tui.setFocus(editorOverlay);
+    this.overlayManager.showUIOverlay(request);
   }
 
   private hideOverlay(): void {
-    if (this.overlayHandle) {
-      this.overlayHandle.hide();
-      this.overlayHandle = null;
-    }
-    this.currentOverlayRequestId = null;
-
-    // Dequeue the current request
-    this.store.dequeueUIRequest();
-
-    // Let onStateChange show the next overlay if any
-    if (!this.store.getCurrentUIRequest()) {
-      this.tui.setFocus(this.inputEditor);
-    }
+    this.overlayManager.hideOverlay();
   }
 
   private showLocalSelectOverlay(
@@ -2408,36 +1566,7 @@ ${ansi.bold('Shortcuts:')}
     items: SelectItem[],
     onSelect: (item: SelectItem) => void
   ): void {
-    if (this.overlayHandle) {
-      return;
-    }
-
-    const titleText = new Text(ansi.bold(title), 1, 0);
-    const selectList = new SelectList(items, Math.min(10, items.length), selectListTheme);
-
-    selectList.onSelect = (item: SelectItem) => {
-      onSelect(item);
-      this.hideLocalOverlay();
-    };
-
-    selectList.onCancel = () => {
-      this.hideLocalOverlay();
-    };
-
-    const contentContainer = new Container();
-    contentContainer.addChild(titleText);
-    contentContainer.addChild(selectList);
-
-    const box = new BorderBox(ansi.border, ansi.overlayBg);
-    box.addChild(contentContainer);
-
-    this.currentOverlayRequestId = '__local__';
-    this.overlayHandle = this.tui.showOverlay(box, {
-      width: '80%',
-      maxHeight: '60%',
-      anchor: 'center',
-    });
-    this.tui.setFocus(selectList);
+    this.overlayManager.showLocalSelectOverlay(title, items, onSelect);
   }
 
   private showLocalInputOverlay(
@@ -2445,39 +1574,7 @@ ${ansi.bold('Shortcuts:')}
     prefill: string,
     onSubmit: (value: string) => void
   ): void {
-    if (this.overlayHandle) {
-      return;
-    }
-
-    const header = new Text(ansi.bold(title), 1, 0);
-    const input = new Input();
-
-    if (prefill) {
-      input.setValue(prefill);
-    }
-
-    input.onSubmit = (text: string) => {
-      this.hideLocalOverlay();
-      onSubmit(text);
-    };
-
-    input.onEscape = () => {
-      this.hideLocalOverlay();
-    };
-
-    const contentContainer = new Container();
-    contentContainer.addChild(header);
-    contentContainer.addChild(input);
-
-    const box = new BorderBox(ansi.border, ansi.overlayBg);
-    box.addChild(contentContainer);
-
-    this.currentOverlayRequestId = '__local__';
-    this.overlayHandle = this.tui.showOverlay(box, {
-      width: '80%',
-      anchor: 'center',
-    });
-    this.tui.setFocus(input);
+    this.overlayManager.showLocalInputOverlay(title, prefill, onSubmit);
   }
 
   private showLocalPathInputOverlay(
@@ -2486,164 +1583,19 @@ ${ansi.bold('Shortcuts:')}
     recentDirectories: string[],
     onSubmit: (value: string) => void
   ): void {
-    if (this.overlayHandle) {
-      return;
-    }
-
-    const header = new Text(
-      `${ansi.bold(title)}\n${ansi.muted('Enter to submit, Esc to cancel')}`,
-      1,
-      0
-    );
-    const editor = new Editor(this.tui, editorTheme);
-
-    if (prefill) {
-      editor.setText(prefill);
-    }
-
-    const basePath = this.store.getState().cwd || process.cwd();
-    editor.setAutocompleteProvider(
-      new RecentPathAutocompleteProvider(basePath, recentDirectories)
-    );
-
-    editor.onSubmit = (text: string) => {
-      this.hideLocalOverlay();
-      onSubmit(text.trim());
-    };
-
-    const originalHandleInput = editor.handleInput?.bind(editor);
-    editor.handleInput = (data: string) => {
-      if (matchesKey(data, 'escape')) {
-        this.hideLocalOverlay();
-        return;
-      }
-      originalHandleInput?.(data);
-    };
-
-    const contentContainer = new Container();
-    contentContainer.addChild(header);
-    contentContainer.addChild(editor);
-
-    const box = new BorderBox(ansi.border, ansi.overlayBg);
-    box.addChild(contentContainer);
-
-    this.currentOverlayRequestId = '__local__';
-    this.overlayHandle = this.tui.showOverlay(box, {
-      width: '90%',
-      maxHeight: '60%',
-      anchor: 'center',
-    });
-    this.tui.setFocus(editor);
+    this.overlayManager.showLocalPathInputOverlay(title, prefill, recentDirectories, onSubmit);
   }
 
   private hideLocalOverlay(): void {
-    if (this.overlayHandle) {
-      this.overlayHandle.hide();
-      this.overlayHandle = null;
-    }
-    this.currentOverlayRequestId = null;
-
-    const currentRequest = this.store.getCurrentUIRequest();
-    if (currentRequest) {
-      this.showUIOverlay(currentRequest);
-    } else {
-      const state = this.store.getState();
-      if (!state.activeSessionId && this.sessionsList) {
-        this.tui.setFocus(this.sessionsList);
-      } else {
-        this.tui.setFocus(this.inputEditor);
-      }
-    }
+    this.overlayManager.hideLocalOverlay();
   }
 
   private showSettingsOverlay(): void {
-    const state = this.store.getState();
-
-    // Get available themes and format them for display (capitalize first letter)
-    const availableThemeNames = getAvailableThemes();
-    const formatThemeName = (name: string) => name.charAt(0).toUpperCase() + name.slice(1);
-    const themeValues = availableThemeNames.map(formatThemeName);
-
-    const items: SettingItem[] = [
-      {
-        id: 'debug',
-        label: 'Debug Mode',
-        description: 'Enable debug logging and diagnostics',
-        currentValue: state.debug ? 'On' : 'Off',
-        values: ['On', 'Off'],
-      },
-      {
-        id: 'theme',
-        label: 'Theme',
-        description: 'Color theme for the TUI',
-        currentValue: formatThemeName(getThemeName()),
-        values: themeValues,
-      },
-      {
-        id: 'model',
-        label: 'Model',
-        description: 'Current AI model provider and ID',
-        currentValue: state.ready ? `${state.model.provider}:${state.model.id}` : 'Not connected',
-      },
-      {
-        id: 'cwd',
-        label: 'Working Directory',
-        description: 'Current working directory for the agent',
-        currentValue: state.cwd || process.cwd(),
-      },
-    ];
-
-    const titleText = new Text(ansi.bold('Settings'), 1, 0);
-    const settingsList = new SettingsList(
-      items,
-      Math.min(10, items.length + 2),
-      getSettingsListTheme(),
-      (id: string, newValue: string) => {
-        // Handle setting changes
-        if (id === 'debug') {
-          const debugEnabled = newValue === 'On';
-          this.store.setDebug(debugEnabled);
-          settingsList.updateValue('debug', debugEnabled ? 'On' : 'Off');
-          saveTUIConfigKey('debug', debugEnabled);  // Persist to config file
-        } else if (id === 'theme') {
-          // Convert display name back to theme key (lowercase)
-          const themeName = newValue.toLowerCase();
-          if (setTheme(themeName)) {
-            settingsList.updateValue('theme', newValue);
-            // Request a full re-render to apply the new theme
-            this.tui.requestRender();
-            saveTUIConfigKey('theme', themeName);  // Persist to config file
-          }
-        }
-        // Other settings are info-only for now
-      },
-      () => {
-        // onCancel
-        this.hideSettingsOverlay();
-      }
-    );
-
-    const contentContainer = new Container();
-    contentContainer.addChild(titleText);
-    contentContainer.addChild(settingsList);
-
-    const box = new BorderBox(ansi.border, ansi.overlayBg);
-    box.addChild(contentContainer);
-
-    this.overlayHandle = this.tui.showOverlay(box, {
-      width: '80%',
-      maxHeight: '60%',
-      anchor: 'center',
-    });
-    this.tui.setFocus(settingsList);
+    this.overlayManager.showSettingsOverlay();
   }
 
   private hideSettingsOverlay(): void {
-    if (this.overlayHandle) {
-      this.overlayHandle.hide();
-      this.overlayHandle = null;
-    }
-    this.tui.setFocus(this.inputEditor);
+    this.overlayManager.hideSettingsOverlay();
   }
 
   private handleUINotify(params: { message: string; notify_type?: string; type?: string }): void {
@@ -2769,157 +1721,3 @@ ${ansi.bold('Shortcuts:')}
   }
 }
 
-// ============================================================================
-// CLI Entry Point
-// ============================================================================
-
-interface CLIArgs {
-  cwd?: string;
-  model?: string;
-  provider?: string;
-  baseUrl?: string;
-  systemPrompt?: string;
-  sessionFile?: string;
-  debug?: boolean;
-  ui?: boolean;
-  lemonPath?: string;
-}
-
-function parseArgs(): CLIArgs {
-  const args = process.argv.slice(2);
-  const options: CLIArgs = {};
-
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-
-    switch (arg) {
-      case '--cwd':
-      case '-d':
-        options.cwd = args[++i];
-        break;
-
-      case '--model':
-      case '-m':
-        options.model = args[++i];
-        break;
-
-      case '--provider':
-      case '-p':
-        options.provider = args[++i];
-        break;
-
-      case '--base-url':
-        options.baseUrl = args[++i];
-        break;
-
-      case '--system-prompt':
-        options.systemPrompt = args[++i];
-        break;
-
-      case '--session-file':
-        options.sessionFile = args[++i];
-        break;
-
-      case '--debug':
-        options.debug = true;
-        break;
-
-      case '--no-ui':
-        options.ui = false;
-        break;
-
-      case '--lemon-path':
-        options.lemonPath = args[++i];
-        break;
-
-      case '--help':
-      case '-h':
-        console.log(`
-Lemon TUI - Terminal interface for Lemon coding agent
-
-Usage: lemon-tui [options]
-
-Options:
-  --cwd, -d <path>       Working directory for the agent
-  --model, -m <spec>     Model specification (provider:model_id or just model_id)
-  --provider, -p <name>  Provider name (anthropic, openai, kimi, etc.)
-  --base-url <url>       Base URL override for model provider
-  --system-prompt <text> Custom system prompt
-  --session-file <path>  Resume session from file
-  --debug                Enable debug mode
-  --no-ui                Disable UI overlays
-  --lemon-path <path>    Path to lemon project root
-  --help, -h             Show this help message
-
-Configuration:
-  Config file: ~/.lemon/config.json
-  Environment variables override config file values.
-  CLI arguments override everything.
-`);
-        process.exit(0);
-        break;
-
-      default:
-        if (arg.startsWith('-')) {
-          console.error(`Unknown option: ${arg}`);
-          process.exit(1);
-        }
-    }
-  }
-
-  return options;
-}
-
-/**
- * Build AgentConnectionOptions from CLI args and resolved config
- */
-function buildOptions(cliArgs: CLIArgs, config: ResolvedConfig): AgentConnectionOptions {
-  const options: AgentConnectionOptions = {
-    cwd: cliArgs.cwd,
-    debug: config.debug,
-    ui: cliArgs.ui,
-    lemonPath: cliArgs.lemonPath,
-    systemPrompt: cliArgs.systemPrompt,
-    sessionFile: cliArgs.sessionFile,
-  };
-
-  // Build model string - if CLI provided full "provider:model", use that
-  // Otherwise, use resolved config
-  options.model = getModelString(config);
-
-  // Base URL from config (already resolved with precedence)
-  if (config.baseUrl) {
-    options.baseUrl = config.baseUrl;
-  }
-
-  return options;
-}
-
-// Main
-const cliArgs = parseArgs();
-
-// If model includes provider prefix, parse and override provider/model for resolution
-const modelSpec = parseModelSpec(cliArgs.model);
-if (modelSpec.provider) {
-  cliArgs.provider = modelSpec.provider;
-}
-if (modelSpec.model) {
-  cliArgs.model = modelSpec.model;
-}
-
-// Resolve configuration: CLI args > env vars > config file
-const resolvedConfig = resolveConfig({
-  provider: cliArgs.provider,
-  model: cliArgs.model,
-  baseUrl: cliArgs.baseUrl,
-  debug: cliArgs.debug,
-});
-
-// Apply theme from resolved config
-setTheme(resolvedConfig.theme);
-
-// Build final options for the TUI
-const options = buildOptions(cliArgs, resolvedConfig);
-
-const app = new LemonTUI(options);
-app.start();
