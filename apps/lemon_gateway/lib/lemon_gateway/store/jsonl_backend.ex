@@ -1,6 +1,6 @@
 defmodule LemonGateway.Store.JsonlBackend do
   @moduledoc """
-  Persistent JSONL-based storage backend.
+  Persistent JSONL-based storage backend with dynamic table support.
 
   Stores all operations as append-only JSONL (JSON Lines) files.
   Each logical table is stored in a separate file within the configured directory.
@@ -16,13 +16,34 @@ defmodule LemonGateway.Store.JsonlBackend do
   {"op": "put"|"delete", "key": <key>, "value": <value>, "ts": <unix_ms>}
   ```
 
-  On init, files are replayed to reconstruct state. Only the latest value
-  for each key is kept in memory.
+  On init, all existing `*.jsonl` files in the store directory are loaded.
+  New tables are created on first write.
   """
 
   @behaviour LemonGateway.Store.Backend
 
-  @tables [:chat, :progress, :runs, :run_history]
+  # Core tables that are always loaded at startup
+  @core_tables [:chat, :progress, :runs, :run_history]
+
+  # Additional parity tables that will be loaded if they exist
+  @parity_tables [
+    :idempotency,
+    :agents,
+    :agent_files,
+    :sessions_index,
+    :skills_status_cache,
+    :skills_config,
+    :cron_jobs,
+    :cron_runs,
+    :exec_approvals_policy,
+    :exec_approvals_policy_agent,
+    :exec_approvals_policy_node,
+    :exec_approvals_pending,
+    :nodes_pairing,
+    :nodes_registry,
+    :voicewake_config,
+    :tts_config
+  ]
 
   @impl true
   def init(opts) do
@@ -33,7 +54,8 @@ defmodule LemonGateway.Store.JsonlBackend do
         state = %{
           path: path,
           data: %{},
-          file_handles: %{}
+          file_handles: %{},
+          loaded_tables: MapSet.new()
         }
 
         load_all_tables(state)
@@ -45,6 +67,9 @@ defmodule LemonGateway.Store.JsonlBackend do
 
   @impl true
   def put(state, table, key, value) do
+    # Ensure table is loaded (for dynamic tables)
+    state = ensure_table_loaded(state, table)
+
     entry = %{
       "op" => "put",
       "key" => encode_key(key),
@@ -59,12 +84,17 @@ defmodule LemonGateway.Store.JsonlBackend do
 
   @impl true
   def get(state, table, key) do
+    # Ensure table is loaded (for dynamic tables)
+    state = ensure_table_loaded(state, table)
     value = get_in(state.data, [table, key])
     {:ok, value, state}
   end
 
   @impl true
   def delete(state, table, key) do
+    # Ensure table is loaded (for dynamic tables)
+    state = ensure_table_loaded(state, table)
+
     entry = %{
       "op" => "delete",
       "key" => encode_key(key),
@@ -78,6 +108,9 @@ defmodule LemonGateway.Store.JsonlBackend do
 
   @impl true
   def list(state, table) do
+    # Ensure table is loaded (for dynamic tables)
+    state = ensure_table_loaded(state, table)
+
     items =
       state.data
       |> Map.get(table, %{})
@@ -86,20 +119,78 @@ defmodule LemonGateway.Store.JsonlBackend do
     {:ok, items, state}
   end
 
+  @doc """
+  List all loaded tables.
+  """
+  @spec list_tables(map()) :: [atom()]
+  def list_tables(state) do
+    MapSet.to_list(state.loaded_tables)
+  end
+
+  @doc """
+  Ensure a table is loaded into memory.
+
+  If the table file exists but hasn't been loaded, it will be loaded.
+  If the table doesn't exist, it will be marked as loaded (empty).
+  """
+  @spec ensure_table_loaded(map(), atom()) :: map()
+  def ensure_table_loaded(state, table) do
+    if MapSet.member?(state.loaded_tables, table) do
+      state
+    else
+      case load_table(state, table) do
+        {:ok, new_state} ->
+          %{new_state | loaded_tables: MapSet.put(new_state.loaded_tables, table)}
+
+        {:error, _reason} ->
+          # If loading fails, still mark as loaded to avoid repeated attempts
+          %{state | loaded_tables: MapSet.put(state.loaded_tables, table)}
+      end
+    end
+  end
+
   # Private functions
 
   defp load_all_tables(state) do
+    # First, discover all existing .jsonl files in the directory
+    discovered_tables = discover_tables(state.path)
+
+    # Combine core tables, parity tables, and discovered tables
+    all_tables =
+      (@core_tables ++ @parity_tables ++ discovered_tables)
+      |> Enum.uniq()
+
     result =
-      Enum.reduce_while(@tables, state, fn table, acc ->
+      Enum.reduce_while(all_tables, state, fn table, acc ->
         case load_table(acc, table) do
-          {:ok, new_state} -> {:cont, new_state}
-          {:error, reason} -> {:halt, {:error, reason}}
+          {:ok, new_state} ->
+            new_state = %{new_state | loaded_tables: MapSet.put(new_state.loaded_tables, table)}
+            {:cont, new_state}
+
+          {:error, reason} ->
+            # Log but continue - don't fail init for optional tables
+            require Logger
+            Logger.warning("Failed to load table #{table}: #{inspect(reason)}")
+            {:cont, acc}
         end
       end)
 
-    case result do
-      %{} = final_state -> {:ok, final_state}
-      {:error, _} = err -> err
+    {:ok, result}
+  end
+
+  defp discover_tables(path) do
+    case File.ls(path) do
+      {:ok, files} ->
+        files
+        |> Enum.filter(&String.ends_with?(&1, ".jsonl"))
+        |> Enum.map(fn filename ->
+          filename
+          |> String.replace_suffix(".jsonl", "")
+          |> String.to_atom()
+        end)
+
+      {:error, _} ->
+        []
     end
   end
 

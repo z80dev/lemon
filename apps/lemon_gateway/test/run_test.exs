@@ -219,6 +219,61 @@ defmodule LemonGateway.RunTest do
     defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
   end
 
+  # An engine that emits deltas for streaming tests
+  defmodule StreamingEngine do
+    @behaviour LemonGateway.Engine
+
+    alias LemonGateway.Types.{Job, ResumeToken}
+    alias LemonGateway.Event
+
+    @impl true
+    def id, do: "streaming"
+
+    @impl true
+    def format_resume(%ResumeToken{value: sid}), do: "streaming resume #{sid}"
+
+    @impl true
+    def extract_resume(_text), do: nil
+
+    @impl true
+    def is_resume_line(_line), do: false
+
+    @impl true
+    def supports_steer?, do: false
+
+    @impl true
+    def start_run(%Job{} = job, _opts, sink_pid) do
+      run_ref = make_ref()
+      resume = job.resume || %ResumeToken{engine: id(), value: unique_id()}
+      delay_ms = (job.meta || %{})[:delta_delay_ms] || 10
+
+      {:ok, task_pid} =
+        Task.start(fn ->
+          send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
+
+          # Emit some deltas with a small delay
+          Process.sleep(delay_ms)
+          send(sink_pid, {:engine_delta, run_ref, "Hello"})
+          Process.sleep(delay_ms)
+          send(sink_pid, {:engine_delta, run_ref, " "})
+          Process.sleep(delay_ms)
+          send(sink_pid, {:engine_delta, run_ref, "World"})
+
+          send(sink_pid, {:engine_event, run_ref, %Event.Completed{engine: id(), resume: resume, ok: true, answer: ""}})
+        end)
+
+      {:ok, run_ref, %{task_pid: task_pid}}
+    end
+
+    @impl true
+    def cancel(%{task_pid: pid}) when is_pid(pid) do
+      Process.exit(pid, :kill)
+      :ok
+    end
+
+    defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
+  end
+
   # An engine that fails on steer
   defmodule SteerFailEngine do
     @behaviour LemonGateway.Engine
@@ -297,6 +352,7 @@ defmodule LemonGateway.RunTest do
       FailingEngine,
       SteerableTestEngine,
       SteerFailEngine,
+      StreamingEngine,
       LemonGateway.Engines.Echo
     ])
 
@@ -846,6 +902,7 @@ defmodule LemonGateway.RunTest do
         FailingEngine,
         SteerableTestEngine,
         SteerFailEngine,
+        StreamingEngine,
         LemonGateway.Engines.Echo
       ])
 
@@ -963,6 +1020,7 @@ defmodule LemonGateway.RunTest do
         FailingEngine,
         SteerableTestEngine,
         SteerFailEngine,
+        StreamingEngine,
         LemonGateway.Engines.Echo
       ])
 
@@ -1395,6 +1453,7 @@ defmodule LemonGateway.RunTest do
         FailingEngine,
         SteerableTestEngine,
         SteerFailEngine,
+        StreamingEngine,
         LemonGateway.Engines.Echo
       ])
 
@@ -1792,6 +1851,7 @@ defmodule LemonGateway.RunTest do
         FailingEngine,
         SteerableTestEngine,
         SteerFailEngine,
+        StreamingEngine,
         LemonGateway.Engines.Echo
       ])
 
@@ -1920,6 +1980,7 @@ defmodule LemonGateway.RunTest do
         FailingEngine,
         SteerableTestEngine,
         SteerFailEngine,
+        StreamingEngine,
         LemonGateway.Engines.Echo
       ])
 
@@ -2063,7 +2124,211 @@ defmodule LemonGateway.RunTest do
   end
 
   # ============================================================================
-  # 20. Edge Cases and Boundary Conditions
+  # 20. Telemetry Events
+  # ============================================================================
+
+  describe "telemetry events" do
+    test "emits run_start telemetry on run initialization" do
+      scope = make_scope()
+      job = make_job(scope, meta: %{notify_pid: self()})
+
+      # Attach telemetry handler
+      test_pid = self()
+      ref = make_ref()
+
+      :telemetry.attach(
+        "test-run-start-#{inspect(ref)}",
+        [:lemon_gateway, :run, :start],
+        fn _event, measurements, metadata, _config ->
+          send(test_pid, {:telemetry_start, measurements, metadata})
+        end,
+        nil
+      )
+
+      {:ok, pid} = start_run_direct(job)
+
+      # Should receive telemetry event
+      assert_receive {:telemetry_start, measurements, metadata}, 2000
+      assert is_integer(measurements.system_time)
+      assert metadata.engine == "test"
+      assert is_binary(metadata.run_id)
+
+      # Wait for completion
+      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+
+      :telemetry.detach("test-run-start-#{inspect(ref)}")
+    end
+
+    test "emits run_stop telemetry on completion" do
+      scope = make_scope()
+      job = make_job(scope, meta: %{notify_pid: self()})
+
+      # Attach telemetry handler
+      test_pid = self()
+      ref = make_ref()
+
+      :telemetry.attach(
+        "test-run-stop-#{inspect(ref)}",
+        [:lemon_gateway, :run, :stop],
+        fn _event, measurements, metadata, _config ->
+          send(test_pid, {:telemetry_stop, measurements, metadata})
+        end,
+        nil
+      )
+
+      {:ok, pid} = start_run_direct(job)
+
+      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+
+      # Should receive telemetry event
+      assert_receive {:telemetry_stop, measurements, metadata}, 2000
+      assert is_integer(measurements.duration_ms)
+      assert measurements.duration_ms >= 0
+      assert metadata.engine == "test"
+      assert metadata.ok == true
+      assert is_binary(metadata.run_id)
+
+      :telemetry.detach("test-run-stop-#{inspect(ref)}")
+    end
+
+    test "emits run_stop with ok: false on error completion" do
+      scope = make_scope()
+      job = make_job(scope, engine_hint: "failing", meta: %{notify_pid: self(), error: :test_error})
+
+      # Attach telemetry handler
+      test_pid = self()
+      ref = make_ref()
+
+      :telemetry.attach(
+        "test-run-stop-error-#{inspect(ref)}",
+        [:lemon_gateway, :run, :stop],
+        fn _event, measurements, metadata, _config ->
+          send(test_pid, {:telemetry_stop, measurements, metadata})
+        end,
+        nil
+      )
+
+      {:ok, pid} = start_run_direct(job)
+
+      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false}}, 2000
+
+      # Should receive telemetry event with ok: false
+      assert_receive {:telemetry_stop, _measurements, metadata}, 2000
+      assert metadata.ok == false
+
+      :telemetry.detach("test-run-stop-error-#{inspect(ref)}")
+    end
+
+    test "run_stop duration_ms reflects actual execution time" do
+      scope = make_scope()
+      job = make_job(scope, engine_hint: "controllable", meta: %{notify_pid: self(), controller_pid: self()})
+
+      # Attach telemetry handler
+      test_pid = self()
+      ref = make_ref()
+
+      :telemetry.attach(
+        "test-run-duration-#{inspect(ref)}",
+        [:lemon_gateway, :run, :stop],
+        fn _event, measurements, _metadata, _config ->
+          send(test_pid, {:telemetry_stop_duration, measurements.duration_ms})
+        end,
+        nil
+      )
+
+      {:ok, pid} = start_run_direct(job)
+
+      assert_receive {:engine_started, run_ref}, 2000
+
+      # Wait a bit before completing
+      Process.sleep(100)
+
+      completed = %Event.Completed{engine: "controllable", ok: true, answer: "done"}
+      send(pid, {:engine_event, run_ref, completed})
+
+      assert_receive {:run_complete, ^pid, _}, 2000
+
+      # Duration should be at least 100ms
+      assert_receive {:telemetry_stop_duration, duration_ms}, 2000
+      assert duration_ms >= 100
+
+      :telemetry.detach("test-run-duration-#{inspect(ref)}")
+    end
+
+    test "emits first_token telemetry on first delta" do
+      scope = make_scope()
+      job = make_job(scope, engine_hint: "streaming", meta: %{notify_pid: self(), delta_delay_ms: 50})
+
+      # Attach telemetry handler
+      test_pid = self()
+      ref = make_ref()
+
+      :telemetry.attach(
+        "test-first-token-#{inspect(ref)}",
+        [:lemon_gateway, :run, :first_token],
+        fn _event, measurements, metadata, _config ->
+          send(test_pid, {:telemetry_first_token, measurements, metadata})
+        end,
+        nil
+      )
+
+      {:ok, pid} = start_run_direct(job)
+
+      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 5000
+
+      # Should have received first_token telemetry
+      assert_receive {:telemetry_first_token, measurements, metadata}, 2000
+      assert is_integer(measurements.latency_ms)
+      assert measurements.latency_ms >= 0
+      assert metadata.engine == "streaming"
+      assert is_binary(metadata.run_id)
+
+      :telemetry.detach("test-first-token-#{inspect(ref)}")
+    end
+
+    test "first_token telemetry is only emitted once" do
+      scope = make_scope()
+      job = make_job(scope, engine_hint: "streaming", meta: %{notify_pid: self(), delta_delay_ms: 10})
+
+      # Attach telemetry handler that counts calls
+      test_pid = self()
+      ref = make_ref()
+
+      :telemetry.attach(
+        "test-first-token-once-#{inspect(ref)}",
+        [:lemon_gateway, :run, :first_token],
+        fn _event, _measurements, _metadata, _config ->
+          send(test_pid, :first_token_emitted)
+        end,
+        nil
+      )
+
+      {:ok, pid} = start_run_direct(job)
+
+      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 5000
+
+      # Should only receive one first_token event despite multiple deltas
+      assert_receive :first_token_emitted, 1000
+      refute_receive :first_token_emitted, 200
+
+      :telemetry.detach("test-first-token-once-#{inspect(ref)}")
+    end
+
+    test "accumulated text from deltas appears in final answer" do
+      scope = make_scope()
+      job = make_job(scope, engine_hint: "streaming", meta: %{notify_pid: self(), delta_delay_ms: 10})
+
+      {:ok, pid} = start_run_direct(job)
+
+      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true, answer: answer}}, 5000
+
+      # Answer should contain accumulated delta text
+      assert answer == "Hello World"
+    end
+  end
+
+  # ============================================================================
+  # 21. Edge Cases and Boundary Conditions
   # ============================================================================
 
   describe "edge cases and boundary conditions" do

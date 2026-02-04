@@ -60,17 +60,30 @@ defmodule LemonGateway.Engines.CliAdapter do
         _ -> nil
       end
 
+    # Use Job.get_prompt/1 to get effective prompt (handles legacy text field)
+    prompt = LemonGateway.Types.Job.get_prompt(job)
+
     start_opts = [
-      prompt: job.text,
+      prompt: prompt,
       resume: resume,
       owner: self()
     ]
 
+    # Add run_id and delta callback for streaming support
     start_opts =
       start_opts
       |> maybe_put(:cwd, Map.get(opts, :cwd))
       |> maybe_put(:env, Map.get(opts, :env))
       |> maybe_put(:timeout, Map.get(opts, :timeout_ms))
+      |> maybe_put(:run_id, Map.get(opts, :run_id))
+
+    # Pass tool_policy, session_key, and agent_id for approval context
+    start_opts =
+      start_opts
+      |> maybe_put(:tool_policy, job.tool_policy)
+      |> maybe_put(:session_key, job.session_key)
+      |> maybe_put(:agent_id, get_in(job.meta || %{}, [:agent_id]))
+      |> maybe_put(:run_id, job.run_id || Map.get(opts, :run_id))
 
     runner_module.start_link(start_opts)
   end
@@ -85,6 +98,14 @@ defmodule LemonGateway.Engines.CliAdapter do
     end)
 
     :ok
+  end
+
+  # Handle delta events from LemonRunner for streaming
+  defp handle_stream_event({:cli_event, {:delta, delta_event}}, _engine_id, sink_pid, run_ref, acc) do
+    # Forward delta to sink as :engine_delta message
+    text = delta_event[:text] || delta_event.text
+    send(sink_pid, {:engine_delta, run_ref, text})
+    acc
   end
 
   defp handle_stream_event({:cli_event, %StartedEvent{} = ev}, _engine_id, sink_pid, run_ref, acc) do
