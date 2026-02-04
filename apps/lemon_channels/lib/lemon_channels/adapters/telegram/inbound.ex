@@ -1,0 +1,82 @@
+defmodule LemonChannels.Adapters.Telegram.Inbound do
+  @moduledoc """
+  Inbound message normalization for Telegram.
+  """
+
+  alias LemonRouter.InboundMessage
+
+  @doc """
+  Normalize a raw Telegram update to an InboundMessage.
+  """
+  @spec normalize(term()) :: {:ok, InboundMessage.t()} | {:error, term()}
+  def normalize(%{"message" => message} = update) do
+    normalize_message(message, update)
+  end
+
+  def normalize(%{"edited_message" => message} = update) do
+    normalize_message(message, update)
+  end
+
+  def normalize(%{"channel_post" => message} = update) do
+    normalize_message(message, update)
+  end
+
+  def normalize(_) do
+    {:error, :unsupported_update_type}
+  end
+
+  defp normalize_message(message, update) do
+    chat = message["chat"]
+    from = message["from"]
+
+    peer_kind =
+      case chat["type"] do
+        "private" -> :dm
+        "group" -> :group
+        "supergroup" -> :group
+        "channel" -> :channel
+        _ -> :dm
+      end
+
+    sender =
+      if from do
+        %{
+          id: to_string(from["id"]),
+          username: from["username"],
+          display_name: [from["first_name"], from["last_name"]]
+                        |> Enum.filter(& &1)
+                        |> Enum.join(" ")
+        }
+      else
+        nil
+      end
+
+    text = message["text"] || message["caption"] || ""
+
+    inbound = %InboundMessage{
+      channel_id: "telegram",
+      account_id: "default",  # Will be set by transport
+      peer: %{
+        kind: peer_kind,
+        id: to_string(chat["id"]),
+        thread_id: message["message_thread_id"] && to_string(message["message_thread_id"])
+      },
+      sender: sender,
+      message: %{
+        id: to_string(message["message_id"]),
+        text: text,
+        timestamp: message["date"],
+        reply_to_id: message["reply_to_message"] && to_string(message["reply_to_message"]["message_id"])
+      },
+      raw: update,
+      meta: %{
+        chat_id: chat["id"],
+        user_msg_id: message["message_id"],
+        chat_type: chat["type"],
+        chat_title: chat["title"]
+      }
+    }
+
+    {:ok, inbound}
+  end
+end
