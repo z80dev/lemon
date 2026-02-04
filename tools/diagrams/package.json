@@ -1,0 +1,13 @@
+{
+  "name": "lemon-diagrams",
+  "version": "1.0.0",
+  "description": "Generate diagrams from Mermaid for Lemon documentation",
+  "type": "module",
+  "scripts": {
+    "generate": "node generate.js",
+    "generate:all": "node generate.js --all"
+  },
+  "dependencies": {
+    "@mermaid-js/mermaid-cli": "^11.12.0"
+  }
+}

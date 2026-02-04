@@ -1,0 +1,65 @@
+flowchart TB
+    subgraph Clients["Client Layer"]
+        TUI["Lemon TUI<br/>(TypeScript)"]
+        Web["Lemon Web<br/>(React)"]
+        External["External Clients"]
+    end
+
+    subgraph ControlBridge["Control Plane & Bridges"]
+        RPC["debug_agent_rpc.exs<br/>(JSONL RPC)"]
+        CP["LemonControlPlane<br/>(HTTP/WebSocket)"]
+        UI["coding_agent_ui"]
+    end
+
+    subgraph Routing["Routing & Orchestration"]
+        Router["LemonRouter"]
+        Orch["RunOrchestrator"]
+        Policy["Policy Engine"]
+        Approvals["ApprovalsBridge"]
+    end
+
+    subgraph Infra["Infrastructure"]
+        Channels["LemonChannels<br/>(Adapters)"]
+        Gateway["LemonGateway<br/>(Execution)"]
+        Automation["LemonAutomation<br/>(Scheduling)"]
+    end
+
+    subgraph Core["Core Agent Runtime"]
+        Session["CodingAgent.Session"]
+        AgentCore["AgentCore.Agent"]
+        Tools["Tools (20+)"]
+        Extensions["Extensions"]
+    end
+
+    subgraph Foundation["Foundation"]
+        LemonCore["LemonCore<br/>(Bus, Store, Telemetry)"]
+        Skills["LemonSkills<br/>(Knowledge)"]
+        AI["Ai Providers<br/>(Anthropic, OpenAI, etc.)"]
+    end
+
+    TUI -->|JSON-RPC| RPC
+    Web -->|WebSocket| CP
+    External -->|WebSocket| CP
+
+    RPC --> UI
+    CP --> Router
+    UI --> Session
+
+    Router --> Orch
+    Orch --> Policy
+    Orch --> Approvals
+    Orch --> Gateway
+
+    Channels --> Router
+    Automation --> Router
+
+    Gateway --> Session
+    Session --> AgentCore
+    AgentCore --> Tools
+    AgentCore --> Extensions
+    AgentCore --> AI
+
+    Session --> LemonCore
+    Gateway --> LemonCore
+    Router --> LemonCore
+    Tools --> Skills

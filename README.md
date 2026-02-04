@@ -137,65 +137,14 @@ OTP supervision trees ensure that:
 - The UI remains responsive even during long-running operations
 - Sessions can be restarted without losing state
 
-```
-Supervisor (Umbrella Root)
-│
-├── Ai.Application
-│   └── Provider processes
-│
-├── AgentCore.Application
-│   ├── Agent GenServer (per session)
-│   ├── SubagentSupervisor (DynamicSupervisor)
-│   └── CLI Runners (Codex, Claude subprocesses)
-│
-├── CodingAgent.Application
-│   ├── SessionSupervisor (DynamicSupervisor)
-│   ├── SessionRegistry
-│   ├── LaneQueue (lane-aware scheduling)
-│   ├── TaskStoreServer (async task persistence)
-│   ├── RunGraphServer (run DAG persistence)
-│   ├── ProcessStoreServer (background process persistence)
-│   ├── ProcessManager (DynamicSupervisor for OS processes)
-│   └── Coordinator (multi-session coordination)
-│
-├── LemonCore.Application
-│   └── Phoenix.PubSub (LemonCore.PubSub)
-│
-├── LemonGateway.Application
-│   ├── Config, EngineRegistry, EngineLock
-│   ├── Scheduler (global concurrency)
-│   ├── ThreadWorkerSupervisor (DynamicSupervisor)
-│   ├── RunSupervisor (DynamicSupervisor)
-│   ├── Store (ETS or JSONL backend)
-│   └── TransportSupervisor (optional)
-│
-├── LemonRouter.Application
-│   ├── RunOrchestrator
-│   ├── AgentProfiles
-│   ├── RunRegistry, SessionRegistry, CoalescerRegistry
-│   ├── RunSupervisor (DynamicSupervisor)
-│   └── CoalescerSupervisor (DynamicSupervisor)
-│
-├── LemonChannels.Application
-│   ├── Registry
-│   ├── Outbox, RateLimiter, Dedupe
-│   └── AdapterSupervisor (DynamicSupervisor)
-│       └── Telegram.Supervisor → Transport
-│
-├── LemonAutomation.Application
-│   ├── CronManager
-│   └── HeartbeatManager
-│
-├── LemonControlPlane.Application
-│   ├── Methods.Registry (ETS-backed)
-│   ├── Presence (connection tracking)
-│   ├── EventBridge (Bus → WebSocket)
-│   ├── ConnectionSupervisor, ConnectionRegistry
-│   └── Bandit HTTP Server (port 4040)
-│
-└── LemonSkills.Application
-    └── Registry (GenServer skill cache)
-```
+![Supervision Tree](docs/diagrams/supervision-tree.svg)
+
+The supervision tree shows all 11 OTP applications and their supervised processes. Key points:
+
+- Each application has its own supervision subtree for fault isolation
+- DynamicSupervisors manage runtime-spawned processes (sessions, runs, workers)
+- Registries provide fast process lookup by ID
+- GenServers maintain stateful components (stores, managers, queues)
 
 ### 4. Hot Code Upgrades
 
@@ -299,98 +248,27 @@ end)
 
 ## Architecture Overview
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                               Client Layer                                  │
-│  ┌─────────────────┐  ┌──────────────────────┐  ┌─────────────────┐        │
-│  │   Lemon TUI     │  │ Lemon Web (browser)  │  │   External      │        │
-│  │ (Node/TypeScript)│  │   + WebSocket UI    │  │   Clients       │        │
-│  └────────┬────────┘  └───────────┬──────────┘  └────────┬────────┘        │
-└───────────┼───────────────────────┼──────────────────────┼────────────────┘
-            │ JSON-RPC/stdio        │ WebSocket            │ WebSocket
-            ▼                       ▼                      ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         Control Plane & Bridges                              │
-│  ┌────────────────────────────┐   ┌──────────────────────────────┐          │
-│  │ debug_agent_rpc.exs        │   │   LemonControlPlane          │          │
-│  │ (JSONL RPC over stdio)     │   │   (HTTP/WebSocket server)    │          │
-│  └─────────────┬──────────────┘   │   81+ methods, RBAC, events  │          │
-│                │                   └──────────────┬───────────────┘          │
-│                ▼                                  │                          │
-│        coding_agent_ui                            │                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                 │                  │
-                                 ▼                  ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                            Routing & Orchestration                           │
-│  ┌──────────────────────────────────────────────────────────────────┐       │
-│  │ LemonRouter: RunOrchestrator → Policy → ApprovalsBridge → Run    │       │
-│  │              SessionKey, StreamCoalescer, AgentProfiles          │       │
-│  └──────────────────────────────────────────────────────────────────┘       │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                 │
-        ┌────────────────────────┼────────────────────────┐
-        ▼                        ▼                        ▼
-┌───────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
-│  LemonChannels    │ │   LemonGateway      │ │  LemonAutomation    │
-│  (Adapters)       │ │   (Execution)       │ │  (Scheduling)       │
-│  ┌─────────────┐  │ │  ┌───────────────┐  │ │  ┌───────────────┐  │
-│  │ Telegram    │  │ │  │ Scheduler     │  │ │  │ CronManager   │  │
-│  │ (+ Discord, │  │ │  │ ThreadWorker  │  │ │  │ Heartbeats    │  │
-│  │  Slack...)  │  │ │  │ Run           │  │ │  │ Wake          │  │
-│  └─────────────┘  │ │  └───────────────┘  │ │  └───────────────┘  │
-│  Outbox, Chunker  │ │  Engines:           │ │  Cron expressions   │
-│  Dedupe, RateLim  │ │  Lemon,Claude,Codex │ │  Timezone support   │
-└───────────────────┘ └─────────────────────┘ └─────────────────────┘
-                                 │
-                                 ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                          Core Agent Runtime                                  │
-│  ┌──────────────────────────────────────────────────────────────────┐       │
-│  │ CodingAgent.Session → AgentCore.Agent/Loop → Ai Providers        │       │
-│  │ Tools (20+), Extensions, Compaction, LaneQueue, BudgetTracker    │       │
-│  │ ToolRegistry, ToolPolicy, ToolExecutor (approval gating)         │       │
-│  └──────────────────────────────────────────────────────────────────┘       │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                 │
-        ┌────────────────────────┼────────────────────────┐
-        ▼                        ▼                        ▼
-┌───────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
-│    LemonCore      │ │    LemonSkills      │ │   Ai Providers      │
-│  (Shared Infra)   │ │  (Knowledge)        │ │                     │
-│  Bus (PubSub)     │ │  Registry           │ │  Anthropic, OpenAI  │
-│  Event, Store     │ │  Manifest parser    │ │  Google, Azure      │
-│  Telemetry, Id    │ │  Installer          │ │  AWS Bedrock        │
-│  Idempotency      │ │  Dependency check   │ │                     │
-└───────────────────┘ └─────────────────────┘ └─────────────────────┘
-```
+![Lemon Architecture](docs/diagrams/architecture.svg)
+
+The diagram above shows the complete Lemon system architecture:
+
+- **Client Layer**: TUI (TypeScript), Web (React), and external clients connect via JSON-RPC or WebSocket
+- **Control Plane**: LemonControlPlane provides HTTP/WebSocket server with 81+ RPC methods
+- **Routing**: LemonRouter orchestrates runs with policy enforcement and approval gating
+- **Infrastructure**: LemonChannels (adapters), LemonGateway (execution), LemonAutomation (scheduling)
+- **Core Runtime**: CodingAgent.Session with 20+ tools, extensions, and compaction
+- **Foundation**: LemonCore (Bus, Store, Telemetry), LemonSkills (knowledge), Ai Providers
 
 ### Data Flow
 
-**Direct Path (TUI/Web via RPC):**
-1. **TUI/Web** send JSON-RPC to `debug_agent_rpc.exs` (via stdio or WS bridge)
-2. **coding_agent_ui** forwards requests into `CodingAgent.Session`
-3. **AgentCore** runs the loop, calling **Ai** providers and **Tools**
-4. **Events** stream back to clients; sessions persist to JSONL
+![Data Flow](docs/diagrams/data-flow.svg)
 
-**Control Plane Path (External Clients):**
-1. **Clients** connect via WebSocket to `LemonControlPlane` (`/ws` on port 4040)
-2. **Methods** dispatch to `LemonRouter.RunOrchestrator`
-3. **Router** resolves agent config, merges policies, selects engine
-4. **Gateway** schedules and executes via `ThreadWorker` → `Run` → `Engine`
-5. **Events** broadcast via `LemonCore.Bus`, bridged to WebSocket by `EventBridge`
+The diagram shows four main data paths through the system:
 
-**Channel Path (Telegram, etc.):**
-1. **Channels** receive inbound messages via adapters (e.g., Telegram polling)
-2. **LemonChannels** normalizes to `InboundMessage`, routes to `LemonRouter`
-3. **Router** creates session key, submits to orchestrator
-4. **StreamCoalescer** buffers output, delivers via **Outbox** with chunking/rate-limiting
-
-**Automation Path (Cron):**
-1. **CronManager** ticks every 60 seconds, identifies due jobs
-2. Jobs submitted to **LemonRouter** with `origin: :cron`
-3. **HeartbeatManager** suppresses healthy responses ("HEARTBEAT_OK")
-4. Events broadcast on `"cron"` topic
+1. **Direct Path** (TUI/Web): JSON-RPC → debug_agent_rpc → coding_agent_ui → Session → AgentCore → Tools/Ai
+2. **Control Plane Path**: WebSocket → ControlPlane → Router → Orchestrator → Gateway → Engine
+3. **Channel Path**: Telegram → LemonChannels → Router → StreamCoalescer → Outbox (with chunking/rate-limiting)
+4. **Automation Path**: CronManager tick → Due Jobs → Router → HeartbeatManager → Events on Bus
 
 ---
 
@@ -879,6 +757,8 @@ end)
 - `nodes` - Node pairing/invoke events
 - `system` - System-wide events
 
+![Event Bus Architecture](docs/diagrams/event-bus.svg)
+
 ### LemonGateway
 
 `LemonGateway` provides job orchestration and multi-engine execution:
@@ -1345,6 +1225,8 @@ node clients/lemon-web/server/dist/index.js \
 
 Lemon includes a comprehensive orchestration runtime that coordinates subagents, background processes, and async work with unified scheduling, budget controls, and durability. This system was designed to exceed OpenClaw's orchestration capabilities.
 
+![Orchestration Runtime](docs/diagrams/orchestration.svg)
+
 ### Lane-Aware Scheduling
 
 All work in Lemon routes through a unified **LaneQueue** with per-lane concurrency caps:
@@ -1487,6 +1369,8 @@ end
 
 ### Tool Policy
 
+![Tool Execution Flow](docs/diagrams/tool-execution.svg)
+
 Per-agent tool policies with allow/deny lists:
 
 ```elixir
@@ -1527,47 +1411,6 @@ end, priority: :high)
 
 # Hooks execute in priority order: :high -> :normal -> :low
 # Failed hooks don't block compaction
-```
-
-### Architecture Summary
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Orchestration Runtime                         │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │  LaneQueue   │  │   RunGraph   │  │  TaskStore   │          │
-│  │  (scheduling)│  │ (DAG + join) │  │  (events)    │          │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘          │
-│         │                 │                 │                   │
-│         └────────────┬────┴────────────────┘                   │
-│                      │                                          │
-│              ┌───────▼───────┐                                  │
-│              │   Task Tool   │                                  │
-│              │ (spawn/poll/  │                                  │
-│              │    join)      │                                  │
-│              └───────┬───────┘                                  │
-│                      │                                          │
-│    ┌─────────────────┼─────────────────┐                       │
-│    │                 │                 │                        │
-│    ▼                 ▼                 ▼                        │
-│ ┌──────┐        ┌──────┐        ┌──────────┐                   │
-│ │:main │        │:sub- │        │:background│                   │
-│ │ lane │        │agent │        │  _exec   │                   │
-│ │      │        │ lane │        │   lane   │                   │
-│ └──────┘        └──────┘        └──────────┘                   │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │BudgetTracker │  │BudgetEnforcer│  │  ToolPolicy  │          │
-│  └──────────────┘  └──────────────┘  └──────────────┘          │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │ProcessManager│  │ProcessSession│  │ ProcessStore │          │
-│  │(DynamicSup)  │  │  (GenServer) │  │ (ETS+DETS)   │          │
-│  └──────────────┘  └──────────────┘  └──────────────┘          │
-└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---

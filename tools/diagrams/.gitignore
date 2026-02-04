@@ -1,0 +1,4 @@
+node_modules/
+output/
+mermaid-config.json
+package-lock.json

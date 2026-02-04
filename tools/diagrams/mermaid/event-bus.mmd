@@ -1,0 +1,40 @@
+flowchart LR
+    subgraph Publishers["Event Publishers"]
+        Session["CodingAgent.Session"]
+        Gateway["LemonGateway.Run"]
+        Cron["CronManager"]
+        Channels["LemonChannels"]
+    end
+
+    Bus["LemonCore.Bus<br/>(Phoenix.PubSub)"]
+
+    subgraph Topics["Topics"]
+        RunTopic["run:&lt;run_id&gt;"]
+        SessionTopic["session:&lt;key&gt;"]
+        CronTopic["cron"]
+        SystemTopic["system"]
+        ApprovalTopic["exec_approvals"]
+    end
+
+    subgraph Subscribers["Event Subscribers"]
+        EventBridge["EventBridge"]
+        StreamCoalescer["StreamCoalescer"]
+        Telemetry["Telemetry"]
+        UI["UI Clients"]
+    end
+
+    Session --> Bus
+    Gateway --> Bus
+    Cron --> Bus
+    Channels --> Bus
+
+    Bus --> RunTopic
+    Bus --> SessionTopic
+    Bus --> CronTopic
+    Bus --> SystemTopic
+    Bus --> ApprovalTopic
+
+    RunTopic --> EventBridge
+    SessionTopic --> StreamCoalescer
+    CronTopic --> Telemetry
+    SystemTopic --> UI
