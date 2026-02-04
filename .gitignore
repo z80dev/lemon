@@ -31,3 +31,4 @@ docs/agent-loop/runs/
 # Environment files with secrets
 .env*
 !.env.example
+lemon.zip
