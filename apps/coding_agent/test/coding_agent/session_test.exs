@@ -258,6 +258,46 @@ defmodule CodingAgent.SessionTest do
     end
   end
 
+  describe "workspace bootstrap integration" do
+    @tag :tmp_dir
+    test "auto-initializes workspace bootstrap files", %{tmp_dir: tmp_dir} do
+      workspace_dir = Path.join(tmp_dir, "workspace")
+      session = start_session(cwd: tmp_dir, workspace_dir: workspace_dir)
+      state = Session.get_state(session)
+
+      assert state.workspace_dir == workspace_dir
+      assert File.exists?(Path.join(workspace_dir, "AGENTS.md"))
+      assert File.exists?(Path.join(workspace_dir, "SOUL.md"))
+      assert File.exists?(Path.join(workspace_dir, "MEMORY.md"))
+    end
+
+    @tag :tmp_dir
+    test "refreshes system prompt when MEMORY.md changes", %{tmp_dir: tmp_dir} do
+      workspace_dir = Path.join(tmp_dir, "workspace")
+      File.mkdir_p!(workspace_dir)
+      File.write!(Path.join(workspace_dir, "MEMORY.md"), "initial-memory-fact")
+
+      session =
+        start_session(
+          cwd: tmp_dir,
+          workspace_dir: workspace_dir,
+          stream_fn: mock_stream_fn_single(assistant_message("ack"))
+        )
+
+      state_before = Session.get_state(session)
+      assert String.contains?(state_before.system_prompt, "initial-memory-fact")
+
+      File.write!(Path.join(workspace_dir, "MEMORY.md"), "updated-memory-fact")
+
+      assert :ok == Session.prompt(session, "refresh memory context")
+      wait_for_streaming_complete(session)
+
+      state_after = Session.get_state(session)
+      assert String.contains?(state_after.system_prompt, "updated-memory-fact")
+      refute String.contains?(state_after.system_prompt, "initial-memory-fact")
+    end
+  end
+
   describe "start_link/1 with optional opts" do
     test "accepts custom system_prompt" do
       session = start_session(system_prompt: "You are a test assistant.")
@@ -321,7 +361,11 @@ defmodule CodingAgent.SessionTest do
       # Create and save a session with some messages
       session_manager =
         SessionManager.new(tmp_dir)
-        |> SessionManager.append_message(%{"role" => "user", "content" => "Hello", "timestamp" => 1})
+        |> SessionManager.append_message(%{
+          "role" => "user",
+          "content" => "Hello",
+          "timestamp" => 1
+        })
         |> SessionManager.append_message(%{
           "role" => "assistant",
           "content" => [%{"type" => "text", "text" => "Hi there!"}],
@@ -1093,12 +1137,18 @@ defmodule CodingAgent.SessionTest do
 
         {:error, _reason} ->
           # On other errors, should notify with error
-          error_calls = Enum.filter(calls, fn
-            {:notify, [msg, :error]} when is_binary(msg) -> String.contains?(msg, "Compaction failed")
-            _ -> false
-          end)
+          error_calls =
+            Enum.filter(calls, fn
+              {:notify, [msg, :error]} when is_binary(msg) ->
+                String.contains?(msg, "Compaction failed")
+
+              _ ->
+                false
+            end)
+
           assert length(error_calls) > 0
       end
+
       CodingAgent.Test.MockUI.stop_tracker(tracker)
     end
 

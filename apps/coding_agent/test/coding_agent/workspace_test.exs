@@ -47,16 +47,49 @@ defmodule CodingAgent.WorkspaceTest do
   end
 
   @tag :tmp_dir
-  test "loads memory.md when present", %{tmp_dir: tmp_dir} do
+  test "loads MEMORY.md when present", %{tmp_dir: tmp_dir} do
     workspace_dir = Path.join(tmp_dir, "workspace")
     File.mkdir_p!(workspace_dir)
-    File.write!(Path.join(workspace_dir, "memory.md"), "lowercase")
+    File.write!(Path.join(workspace_dir, "MEMORY.md"), "long-term memory")
 
     files = Workspace.load_bootstrap_files(workspace_dir: workspace_dir, max_chars: 10_000)
-    memory = Enum.find(files, &(&1.name == "memory.md"))
+    memory = Enum.find(files, &(&1.name == "MEMORY.md"))
 
     assert memory != nil
-    assert memory.content == "lowercase"
+    assert memory.content == "long-term memory"
+  end
+
+  @tag :tmp_dir
+  test "does not load lowercase memory.md", %{tmp_dir: tmp_dir} do
+    workspace_dir = Path.join(tmp_dir, "workspace")
+    File.mkdir_p!(workspace_dir)
+    File.write!(Path.join(workspace_dir, "memory.md"), "legacy")
+
+    files = Workspace.load_bootstrap_files(workspace_dir: workspace_dir, max_chars: 10_000)
+    memory = Enum.find(files, &(&1.name == "MEMORY.md"))
+
+    assert memory == nil
+  end
+
+  @tag :tmp_dir
+  test "subagent scope only keeps AGENTS.md and TOOLS.md", %{tmp_dir: tmp_dir} do
+    workspace_dir = Path.join(tmp_dir, "workspace")
+    File.mkdir_p!(workspace_dir)
+    File.write!(Path.join(workspace_dir, "AGENTS.md"), "agents")
+    File.write!(Path.join(workspace_dir, "TOOLS.md"), "tools")
+    File.write!(Path.join(workspace_dir, "SOUL.md"), "soul")
+    File.write!(Path.join(workspace_dir, "MEMORY.md"), "memory")
+
+    files =
+      Workspace.load_bootstrap_files(
+        workspace_dir: workspace_dir,
+        session_scope: :subagent,
+        max_chars: 10_000
+      )
+
+    names = Enum.map(files, & &1.name)
+
+    assert names == ["AGENTS.md", "TOOLS.md"]
   end
 
   @tag :tmp_dir
