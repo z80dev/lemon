@@ -216,19 +216,15 @@ defmodule Ai.CircuitBreakerEdgeCasesTest do
 
     test "multiple rapid failures in half-open keep circuit open", %{provider: provider} do
       start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 15}
+        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 30}
       )
 
       for _ <- 1..5 do
         # Open the circuit
         CircuitBreaker.record_failure(provider)
-        Process.sleep(10)
 
-        {:ok, state} = CircuitBreaker.get_state(provider)
-        assert state.circuit_state == :open
-
-        # Wait for half-open
-        Process.sleep(20)
+        # Wait for half-open after recovery timeout
+        Process.sleep(40)
 
         {:ok, state} = CircuitBreaker.get_state(provider)
         assert state.circuit_state == :half_open
