@@ -39,6 +39,7 @@ defmodule CodingAgent.Session do
   alias CodingAgent.Config
   alias CodingAgent.Extensions
   alias CodingAgent.ResourceLoader
+  alias CodingAgent.Workspace
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.{Session, SessionEntry}
   alias CodingAgent.ToolRegistry
@@ -58,6 +59,10 @@ defmodule CodingAgent.Session do
     :model,
     :thinking_level,
     :system_prompt,
+    :explicit_system_prompt,
+    :prompt_template,
+    :workspace_dir,
+    :session_scope,
     :is_streaming,
     :event_listeners,
     :event_streams,
@@ -83,6 +88,10 @@ defmodule CodingAgent.Session do
           model: Ai.Types.Model.t(),
           thinking_level: AgentCore.Types.thinking_level(),
           system_prompt: String.t(),
+          explicit_system_prompt: String.t() | nil,
+          prompt_template: String.t() | nil,
+          workspace_dir: String.t(),
+          session_scope: :main | :subagent,
           is_streaming: boolean(),
           event_listeners: [{pid(), reference()}],
           event_streams: %{reference() => %{pid: pid(), stream: pid()}},
@@ -117,6 +126,7 @@ defmodule CodingAgent.Session do
     * `:prompt_template` - Name of a prompt template to load via ResourceLoader.
       Templates are searched in `.lemon/prompts/`, `.claude/prompts/`, and
       `~/.lemon/agent/prompts/`.
+    * `:workspace_dir` - Workspace directory for bootstrap files (default: `~/.lemon/agent/workspace`)
     * `:tools` - List of `AgentTool` structs (default: read, write, edit, bash)
     * `:session_file` - Path to existing session file to load
     * `:session_id` - Explicit session ID for new sessions (ignored when loading from file)
@@ -135,9 +145,11 @@ defmodule CodingAgent.Session do
 
   1. Explicit `:system_prompt` option (if provided)
   2. Prompt template content loaded via `:prompt_template` (if provided)
-  3. CLAUDE.md/AGENTS.md content from ResourceLoader (auto-loaded from cwd)
+  3. Lemon base prompt (workspace bootstrap + skills)
+  4. CLAUDE.md/AGENTS.md content from ResourceLoader (auto-loaded from cwd)
 
   Empty strings are filtered out before joining.
+  The composed prompt is refreshed before each user prompt to pick up workspace/memory file edits.
 
   ## Examples
 
@@ -250,7 +262,7 @@ defmodule CodingAgent.Session do
       |> AgentCore.EventStream.events()
       |> Enum.each(fn {:session_event, _id, event} -> IO.inspect(event) end)
   """
-  @spec subscribe(GenServer.server(), keyword()) :: (() -> :ok) | {:ok, pid()}
+  @spec subscribe(GenServer.server(), keyword()) :: (-> :ok) | {:ok, pid()}
   def subscribe(session, opts \\ []) do
     mode = Keyword.get(opts, :mode, :direct)
     GenServer.call(session, {:subscribe, self(), mode, opts})
@@ -437,8 +449,15 @@ defmodule CodingAgent.Session do
     parent_session = Keyword.get(opts, :parent_session)
     ui_context = Keyword.get(opts, :ui_context)
     custom_tools = Keyword.get(opts, :tools)
+    workspace_dir = Keyword.get(opts, :workspace_dir, Config.workspace_dir())
+
+    session_scope =
+      if is_binary(parent_session) and String.trim(parent_session) != "",
+        do: :subagent,
+        else: :main
 
     maybe_register_ui_tracker(ui_context)
+    Workspace.ensure_workspace(workspace_dir: workspace_dir)
 
     # Load or create session
     session_manager =
@@ -448,8 +467,11 @@ defmodule CodingAgent.Session do
 
         path ->
           case SessionManager.load_from_file(path) do
-            {:ok, session} -> session
-            {:error, _reason} -> SessionManager.new(cwd, id: session_id, parent_session: parent_session)
+            {:ok, session} ->
+              session
+
+            {:error, _reason} ->
+              SessionManager.new(cwd, id: session_id, parent_session: parent_session)
           end
       end
 
@@ -458,7 +480,14 @@ defmodule CodingAgent.Session do
       Keyword.get(opts, :settings_manager) || CodingAgent.SettingsManager.load(cwd)
 
     # Compose system prompt from multiple sources
-    system_prompt = compose_system_prompt(cwd, explicit_system_prompt, prompt_template)
+    system_prompt =
+      compose_system_prompt(
+        cwd,
+        explicit_system_prompt,
+        prompt_template,
+        workspace_dir,
+        session_scope
+      )
 
     # Get model from opts, or fall back to settings_manager.default_model
     model = Keyword.get(opts, :model) || resolve_default_model(settings_manager)
@@ -523,7 +552,11 @@ defmodule CodingAgent.Session do
 
           # Apply approval wrapping if policy and context provided
           if tool_policy && approval_context do
-            CodingAgent.ToolExecutor.wrap_all_with_approval(all_tools, tool_policy, approval_context)
+            CodingAgent.ToolExecutor.wrap_all_with_approval(
+              all_tools,
+              tool_policy,
+              approval_context
+            )
           else
             all_tools
           end
@@ -588,6 +621,10 @@ defmodule CodingAgent.Session do
       model: model,
       thinking_level: thinking_level,
       system_prompt: system_prompt,
+      explicit_system_prompt: explicit_system_prompt,
+      prompt_template: prompt_template,
+      workspace_dir: workspace_dir,
+      session_scope: session_scope,
       is_streaming: false,
       event_listeners: [],
       event_streams: %{},
@@ -617,6 +654,8 @@ defmodule CodingAgent.Session do
     if state.is_streaming do
       {:reply, {:error, :already_streaming}, state}
     else
+      state = refresh_system_prompt(state)
+
       # Create user message
       images = Keyword.get(opts, :images, [])
 
@@ -817,7 +856,11 @@ defmodule CodingAgent.Session do
       broadcast_event(state, {:extension_status_report, extension_status_report})
 
       # Notify about the reload
-      ui_notify(state, "Extensions reloaded: #{extension_status_report.total_loaded} loaded", :info)
+      ui_notify(
+        state,
+        "Extensions reloaded: #{extension_status_report.total_loaded} loaded",
+        :info
+      )
 
       new_state = %{
         state
@@ -941,7 +984,8 @@ defmodule CodingAgent.Session do
         new_branch = SessionManager.get_branch(state.session_manager, entry_id)
 
         # Determine if this is a branch switch (not just moving within the same branch)
-        is_branch_switch = is_branch_switch?(current_branch, new_branch, current_leaf_id, entry_id)
+        is_branch_switch =
+          is_branch_switch?(current_branch, new_branch, current_leaf_id, entry_id)
 
         # Summarize abandoned branch if switching branches and option not disabled
         state =
@@ -1028,6 +1072,8 @@ defmodule CodingAgent.Session do
 
   @impl true
   def handle_cast({:steer, text}, state) do
+    state = refresh_system_prompt(state)
+
     message = %Ai.Types.UserMessage{
       role: :user,
       content: text,
@@ -1041,6 +1087,8 @@ defmodule CodingAgent.Session do
   end
 
   def handle_cast({:follow_up, text}, state) do
+    state = refresh_system_prompt(state)
+
     message = %Ai.Types.UserMessage{
       role: :user,
       content: text,
@@ -1101,7 +1149,8 @@ defmodule CodingAgent.Session do
       Process.demonitor(mon_ref, [:flush])
     end)
 
-    {:noreply, %{state | event_listeners: new_listeners, event_streams: Map.new(remaining_streams)}}
+    {:noreply,
+     %{state | event_listeners: new_listeners, event_streams: Map.new(remaining_streams)}}
   end
 
   def handle_info({:EXIT, pid, reason}, state) when pid == state.agent do
@@ -1214,7 +1263,8 @@ defmodule CodingAgent.Session do
   @spec resolve_default_model(CodingAgent.SettingsManager.t()) :: Ai.Types.Model.t()
   defp resolve_default_model(%CodingAgent.SettingsManager{default_model: nil}) do
     # No default model configured, raise an error
-    raise ArgumentError, "model is required: either pass :model option or configure default_model in settings"
+    raise ArgumentError,
+          "model is required: either pass :model option or configure default_model in settings"
   end
 
   defp resolve_default_model(%CodingAgent.SettingsManager{default_model: config} = settings)
@@ -1293,8 +1343,14 @@ defmodule CodingAgent.Session do
   # 2. Prompt template content (if prompt_template option provided)
   # 3. Lemon base prompt (skills + workspace context)
   # 4. CLAUDE.md/AGENTS.md content from ResourceLoader
-  @spec compose_system_prompt(String.t(), String.t() | nil, String.t() | nil) :: String.t()
-  defp compose_system_prompt(cwd, explicit_prompt, prompt_template) do
+  @spec compose_system_prompt(
+          String.t(),
+          String.t() | nil,
+          String.t() | nil,
+          String.t(),
+          :main | :subagent
+        ) :: String.t()
+  defp compose_system_prompt(cwd, explicit_prompt, prompt_template, workspace_dir, session_scope) do
     # Load prompt template if specified
     template_content =
       case prompt_template do
@@ -1309,7 +1365,11 @@ defmodule CodingAgent.Session do
       end
 
     # Build Lemon base prompt (skills + workspace context)
-    base_prompt = CodingAgent.SystemPrompt.build(cwd)
+    base_prompt =
+      CodingAgent.SystemPrompt.build(cwd, %{
+        workspace_dir: workspace_dir,
+        session_scope: session_scope
+      })
 
     # Load instructions (CLAUDE.md, AGENTS.md) from cwd and parent directories
     instructions = ResourceLoader.load_instructions(cwd)
@@ -1319,6 +1379,25 @@ defmodule CodingAgent.Session do
     |> Enum.reject(&is_nil/1)
     |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n\n")
+  end
+
+  @spec refresh_system_prompt(t()) :: t()
+  defp refresh_system_prompt(state) do
+    next_prompt =
+      compose_system_prompt(
+        state.cwd,
+        state.explicit_system_prompt,
+        state.prompt_template,
+        state.workspace_dir,
+        state.session_scope
+      )
+
+    if next_prompt == state.system_prompt do
+      state
+    else
+      :ok = AgentCore.Agent.set_system_prompt(state.agent, next_prompt)
+      %{state | system_prompt: next_prompt}
+    end
   end
 
   @spec ui_set_working_message(t(), String.t() | nil) :: :ok
@@ -1680,9 +1759,12 @@ defmodule CodingAgent.Session do
     %Ai.Types.ThinkingContent{type: :thinking, thinking: thinking}
   end
 
-  defp deserialize_content_block(
-         %{"type" => "tool_call", "id" => id, "name" => name, "arguments" => arguments}
-       ) do
+  defp deserialize_content_block(%{
+         "type" => "tool_call",
+         "id" => id,
+         "name" => name,
+         "arguments" => arguments
+       }) do
     %Ai.Types.ToolCall{type: :tool_call, id: id, name: name, arguments: arguments}
   end
 

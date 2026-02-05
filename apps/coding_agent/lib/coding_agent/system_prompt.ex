@@ -12,23 +12,28 @@ defmodule CodingAgent.SystemPrompt do
 
   @type opts :: %{
           optional(:workspace_dir) => String.t(),
-          optional(:bootstrap_max_chars) => pos_integer()
+          optional(:bootstrap_max_chars) => pos_integer(),
+          optional(:session_scope) => :main | :subagent | String.t()
         }
 
   @spec build(String.t(), opts()) :: String.t()
   def build(cwd, opts \\ %{}) do
     workspace_dir = Map.get(opts, :workspace_dir, Workspace.workspace_dir())
     max_chars = Map.get(opts, :bootstrap_max_chars, Workspace.default_max_chars())
+    session_scope = normalize_session_scope(Map.get(opts, :session_scope, :main))
 
     bootstrap_files =
       Workspace.load_bootstrap_files(
         workspace_dir: workspace_dir,
-        max_chars: max_chars
+        max_chars: max_chars,
+        session_scope: session_scope
       )
 
     sections = [
       "You are a personal assistant running inside Lemon.",
+      build_runtime_section(session_scope),
       build_skills_section(cwd),
+      build_memory_workflow_section(session_scope),
       build_workspace_section(workspace_dir),
       build_workspace_context_section(bootstrap_files)
     ]
@@ -86,6 +91,34 @@ defmodule CodingAgent.SystemPrompt do
     |> String.trim()
   end
 
+  defp build_runtime_section(session_scope) do
+    """
+    ## Runtime
+    Session scope: #{session_scope}
+    """
+    |> String.trim()
+  end
+
+  defp build_memory_workflow_section(:subagent) do
+    """
+    ## Memory Workflow
+    This is a subagent session. Do not read or modify MEMORY.md unless the parent task explicitly asks for it.
+    """
+    |> String.trim()
+  end
+
+  defp build_memory_workflow_section(:main) do
+    """
+    ## Memory Workflow
+    Before answering about prior decisions, preferences, people, dates, or todos, inspect memory files first.
+    - Use `read` to check `MEMORY.md` and relevant `memory/YYYY-MM-DD.md` files.
+    - Use `write` to create missing `memory/YYYY-MM-DD.md` files.
+    - Use `edit` to update `MEMORY.md` or daily memory files with durable facts.
+    - If confidence is still low after checking memory files, say so explicitly.
+    """
+    |> String.trim()
+  end
+
   defp build_workspace_context_section([]), do: ""
 
   defp build_workspace_context_section(files) do
@@ -103,9 +136,10 @@ defmodule CodingAgent.SystemPrompt do
 
     header =
       if has_soul do
-        header ++ [
-          "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it."
-        ]
+        header ++
+          [
+            "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it."
+          ]
       else
         header
       end
@@ -142,4 +176,8 @@ defmodule CodingAgent.SystemPrompt do
     |> String.replace("<", "&lt;")
     |> String.replace(">", "&gt;")
   end
+
+  defp normalize_session_scope(scope) when scope in [:main, "main"], do: :main
+  defp normalize_session_scope(scope) when scope in [:subagent, "subagent"], do: :subagent
+  defp normalize_session_scope(_), do: :main
 end
