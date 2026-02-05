@@ -111,6 +111,14 @@ defmodule CodingAgent.Config do
   def prompts_dir, do: Path.join(agent_dir(), "prompts")
 
   @doc """
+  Get the global workspace directory for agent identity/memory files.
+
+  Returns the path to `~/.lemon/agent/workspace`.
+  """
+  @spec workspace_dir() :: String.t()
+  def workspace_dir, do: Path.join(agent_dir(), "workspace")
+
+  @doc """
   Get project-local config directory.
 
   Each project can have its own `.lemon` directory for local configuration.
@@ -277,7 +285,14 @@ defmodule CodingAgent.Config do
   """
   @spec ensure_dirs!() :: :ok
   def ensure_dirs! do
-    for dir <- [agent_dir(), sessions_dir("."), extensions_dir(), skills_dir(), prompts_dir()] do
+    for dir <- [
+          agent_dir(),
+          sessions_dir("."),
+          extensions_dir(),
+          skills_dir(),
+          prompts_dir(),
+          workspace_dir()
+        ] do
       File.mkdir_p!(dir)
     end
 
