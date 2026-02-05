@@ -7,6 +7,8 @@ defmodule LemonGateway.Application do
 
   @impl true
   def start(_type, _args) do
+    web_port = Application.get_env(:lemon_gateway, :web_port, 3939)
+
     base_children = [
       LemonGateway.Config,
       LemonGateway.EngineRegistry,
@@ -22,7 +24,7 @@ defmodule LemonGateway.Application do
     
     # Start the Cowboy web server
     web_children = [
-      {Plug.Cowboy, scheme: :http, plug: LemonGateway.Web.Router, options: [port: 3939, dispatch: dispatch()]}
+      {Plug.Cowboy, scheme: :http, plug: LemonGateway.Web.Router, options: [port: web_port, dispatch: dispatch()]}
     ]
 
     # Only start legacy TransportSupervisor if lemon_channels is NOT active
@@ -51,14 +53,8 @@ defmodule LemonGateway.Application do
 
   # Check if lemon_channels application is running and has adapters enabled
   defp lemon_channels_active? do
-    # Check if the lemon_channels application is started
-    case Application.ensure_started(:lemon_channels) do
-      :ok -> true
-      {:error, {:already_started, :lemon_channels}} -> true
-      _ ->
-        # Also check if it's in the started applications
-        :lemon_channels in Enum.map(Application.started_applications(), fn {app, _, _} -> app end)
-    end
+    Application.get_env(:lemon_gateway, :use_lemon_channels, false) &&
+      :lemon_channels in Enum.map(Application.started_applications(), fn {app, _, _} -> app end)
   rescue
     # If lemon_channels doesn't exist, fall back to legacy
     _ -> false

@@ -193,11 +193,14 @@ defmodule LemonGateway.Store do
     history =
       all_history
       |> Enum.filter(fn
-        # Legacy tuple key format: {scope, ts, run_id}
-        {{s, _ts, _run_id}, _data} -> s == scope_or_session_key
-        # New session_key based format
-        {key, data} when is_binary(key) -> key == scope_or_session_key or data[:session_key] == scope_or_session_key
-        {key, data} -> data[:session_key] == scope_or_session_key or data[:scope] == scope_or_session_key
+        # Tuple key format: {scope_or_session_key, ts, run_id}
+        {{key, _ts, _run_id}, data} ->
+          key == scope_or_session_key or data[:session_key] == scope_or_session_key or data[:scope] == scope_or_session_key
+        # New session_key based format (string key)
+        {key, data} when is_binary(key) ->
+          key == scope_or_session_key or data[:session_key] == scope_or_session_key or data[:scope] == scope_or_session_key
+        {key, data} ->
+          data[:session_key] == scope_or_session_key or data[:scope] == scope_or_session_key or key == scope_or_session_key
       end)
       |> Enum.sort_by(fn
         {{_s, ts, _run_id}, _data} -> ts

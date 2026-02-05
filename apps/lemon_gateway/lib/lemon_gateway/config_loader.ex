@@ -1,117 +1,86 @@
 defmodule LemonGateway.ConfigLoader do
   @moduledoc """
-  Loads configuration from TOML file with fallback to Application env.
-
-  The TOML file should be at the path specified in `:lemon_gateway, :config_path`
-  (defaults to `~/.lemon/gateway.toml`).
-
-  If the file doesn't exist, falls back to Application env config.
+  Loads gateway configuration from the canonical Lemon TOML config.
   """
 
   alias LemonGateway.{Binding, Project}
+  alias LemonCore.Config, as: LemonConfig
 
-  @default_path "~/.lemon/gateway.toml"
-
-  @doc """
-  Loads configuration from TOML file or Application env.
-
-  Returns a map with:
-  - Gateway settings (max_concurrent_runs, default_engine, etc.)
-  - `:projects` - map of project_id => Project struct
-  - `:bindings` - list of Binding structs
-  """
   @spec load() :: map()
   def load do
-    config_path = Application.get_env(:lemon_gateway, :config_path, @default_path)
-    expanded_path = Path.expand(config_path)
+    case override_config() do
+      {:ok, config} ->
+        parse_gateway(config)
 
-    if File.exists?(expanded_path) do
-      load_from_toml(expanded_path)
-    else
-      load_from_app_env()
+      :error ->
+        gateway = load_from_path() || (LemonConfig.load().gateway || %{})
+        parse_gateway(gateway)
     end
   end
 
-  defp load_from_toml(path) do
-    case Toml.decode_file(path) do
-      {:ok, toml} ->
-        parse_toml(toml)
+  defp override_config do
+    case Application.get_env(:lemon_gateway, LemonGateway.Config) do
+      nil ->
+        :error
 
-      {:error, reason} ->
-        require Logger
-        Logger.warning("Failed to parse TOML config at #{path}: #{inspect(reason)}, falling back to Application env")
-        load_from_app_env()
+      config when is_map(config) ->
+        {:ok, config}
+
+      config when is_list(config) ->
+        if Keyword.keyword?(config) do
+          {:ok, Enum.into(config, %{})}
+        else
+          {:ok, %{bindings: config}}
+        end
+
+      _ ->
+        :error
     end
   end
 
-  defp parse_toml(toml) do
-    gateway = toml["gateway"] || %{}
+  defp load_from_path do
+    case Application.get_env(:lemon_gateway, :config_path) do
+      path when is_binary(path) and path != "" ->
+        if File.exists?(path) do
+          LemonConfig.load_file(path) |> Map.get("gateway")
+        else
+          nil
+        end
 
-    # Parse projects
-    projects_raw = toml["projects"] || %{}
+      _ ->
+        nil
+    end
+  end
 
-    projects =
-      for {name, config} <- projects_raw, into: %{} do
-        project = %Project{
-          id: name,
-          root: config["root"],
-          default_engine: config["default_engine"]
-        }
+  defp parse_gateway(gateway) when is_map(gateway) do
+    projects = parse_projects(fetch(gateway, :projects) || %{})
+    bindings = parse_bindings(fetch(gateway, :bindings) || [])
 
-        validate_project_root(project)
-        {name, project}
-      end
+    queue =
+      gateway
+      |> fetch(:queue)
+      |> parse_queue()
 
-    # Parse bindings
-    bindings_raw = toml["bindings"] || []
-
-    bindings =
-      Enum.map(bindings_raw, fn b ->
-        %Binding{
-          transport: parse_transport(b["transport"]),
-          chat_id: b["chat_id"],
-          topic_id: b["topic_id"],
-          project: b["project"],
-          default_engine: b["default_engine"],
-          queue_mode: parse_queue_mode(b["queue_mode"])
-        }
-      end)
-
-    # Parse queue config
-    queue_config = toml["queue"] || %{}
-
-    queue = %{
-      mode: parse_queue_mode(queue_config["mode"]),
-      cap: queue_config["cap"],
-      drop: parse_drop_policy(queue_config["drop"])
-    }
-
-    # Parse telegram config
-    telegram_config = toml["telegram"] || %{}
-
-    telegram = %{
-      bot_token: telegram_config["bot_token"],
-      allowed_chat_ids: telegram_config["allowed_chat_ids"],
-      poll_interval_ms: telegram_config["poll_interval_ms"],
-      edit_throttle_ms: telegram_config["edit_throttle_ms"]
-    }
-
-    # Parse engines config
-    engines_raw = toml["engines"] || %{}
+    telegram =
+      gateway
+      |> fetch(:telegram)
+      |> parse_telegram()
 
     engines =
-      for {name, config} <- engines_raw, into: %{} do
-        engine = %{
-          cli_path: config["cli_path"],
-          enabled: config["enabled"]
-        }
+      gateway
+      |> fetch(:engines)
+      |> parse_engines()
 
-        {String.to_atom(name), engine}
-      end
-
-    # Merge gateway settings with projects and bindings
-    gateway
-    |> Map.new(fn {k, v} -> {String.to_atom(k), v} end)
+    %{
+      max_concurrent_runs: fetch(gateway, :max_concurrent_runs),
+      default_engine: fetch(gateway, :default_engine),
+      auto_resume: fetch(gateway, :auto_resume),
+      enable_telegram: fetch(gateway, :enable_telegram),
+      require_engine_lock: fetch(gateway, :require_engine_lock),
+      engine_lock_timeout_ms: fetch(gateway, :engine_lock_timeout_ms)
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
     |> Map.put(:projects, projects)
     |> Map.put(:bindings, bindings)
     |> Map.put(:queue, queue)
@@ -119,43 +88,76 @@ defmodule LemonGateway.ConfigLoader do
     |> Map.put(:engines, engines)
   end
 
-  defp load_from_app_env do
-    config = Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
-    config_map = if is_list(config), do: Map.new(config), else: config
+  defp parse_gateway(_), do: %{}
 
-    # Parse projects from Application env
-    projects_raw = Map.get(config_map, :projects, %{})
+  defp parse_projects(projects) when is_map(projects) do
+    for {name, config} <- projects, into: %{} do
+      project = %Project{
+        id: to_string(name),
+        root: fetch(config, :root),
+        default_engine: fetch(config, :default_engine)
+      }
 
-    projects =
-      for {name, config} <- projects_raw, into: %{} do
-        project = %Project{
-          id: to_string(name),
-          root: config[:root] || config["root"],
-          default_engine: config[:default_engine] || config["default_engine"]
-        }
-
-        {to_string(name), project}
-      end
-
-    # Parse bindings from Application env
-    bindings_raw = Map.get(config_map, :bindings, [])
-
-    bindings =
-      Enum.map(bindings_raw, fn b ->
-        %Binding{
-          transport: b[:transport] || parse_transport(b["transport"]),
-          chat_id: b[:chat_id] || b["chat_id"],
-          topic_id: b[:topic_id] || b["topic_id"],
-          project: b[:project] || b["project"],
-          default_engine: b[:default_engine] || b["default_engine"],
-          queue_mode: b[:queue_mode] || parse_queue_mode(b["queue_mode"])
-        }
-      end)
-
-    config_map
-    |> Map.put(:projects, projects)
-    |> Map.put(:bindings, bindings)
+      validate_project_root(project)
+      {to_string(name), project}
+    end
   end
+
+  defp parse_projects(_), do: %{}
+
+  defp parse_bindings(bindings) when is_list(bindings) do
+    Enum.map(bindings, fn b ->
+      %Binding{
+        transport: parse_transport(fetch(b, :transport)),
+        chat_id: fetch(b, :chat_id),
+        topic_id: fetch(b, :topic_id),
+        project: fetch(b, :project),
+        default_engine: fetch(b, :default_engine),
+        queue_mode: parse_queue_mode(fetch(b, :queue_mode))
+      }
+    end)
+  end
+
+  defp parse_bindings(_), do: []
+
+  defp parse_queue(queue) when is_map(queue) do
+    %{
+      mode: parse_queue_mode(fetch(queue, :mode)),
+      cap: fetch(queue, :cap),
+      drop: parse_drop_policy(fetch(queue, :drop))
+    }
+  end
+
+  defp parse_queue(_), do: %{mode: nil, cap: nil, drop: nil}
+
+  defp parse_telegram(telegram) when is_map(telegram) do
+    %{
+      bot_token: fetch(telegram, :bot_token),
+      allowed_chat_ids: fetch(telegram, :allowed_chat_ids),
+      poll_interval_ms: fetch(telegram, :poll_interval_ms),
+      edit_throttle_ms: fetch(telegram, :edit_throttle_ms),
+      debounce_ms: fetch(telegram, :debounce_ms),
+      allow_queue_override: fetch(telegram, :allow_queue_override),
+      account_id: fetch(telegram, :account_id),
+      offset: fetch(telegram, :offset),
+      drop_pending_updates: fetch(telegram, :drop_pending_updates)
+    }
+  end
+
+  defp parse_telegram(_), do: %{}
+
+  defp parse_engines(engines) when is_map(engines) do
+    for {name, config} <- engines, into: %{} do
+      engine = %{
+        cli_path: fetch(config, :cli_path),
+        enabled: fetch(config, :enabled)
+      }
+
+      {String.to_atom(to_string(name)), engine}
+    end
+  end
+
+  defp parse_engines(_), do: %{}
 
   defp parse_transport(nil), do: nil
   defp parse_transport("telegram"), do: :telegram
@@ -186,4 +188,12 @@ defmodule LemonGateway.ConfigLoader do
   end
 
   defp validate_project_root(_), do: :ok
+
+  defp fetch(map, key) when is_map(map) do
+    Map.get(map, key) || Map.get(map, to_string(key))
+  end
+
+  defp fetch(list, key) when is_list(list) do
+    Keyword.get(list, key) || Keyword.get(list, to_string(key))
+  end
 end

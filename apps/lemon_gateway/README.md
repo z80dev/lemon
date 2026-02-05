@@ -48,11 +48,11 @@ A multi-engine AI gateway for Elixir. Routes user requests through transports (T
 
 ## Configuration
 
-LemonGateway loads configuration from `~/.lemon/gateway.toml` by default (see `LemonGateway.ConfigLoader`). If the TOML file doesn't exist, it falls back to `config/config.exs` application env.
+LemonGateway loads configuration from `~/.lemon/config.toml` (the `[gateway]` section) by default (see `LemonGateway.ConfigLoader`).
 
 ### TOML (recommended)
 
-Create `~/.lemon/gateway.toml`:
+Create `~/.lemon/config.toml`:
 
 ```toml
 [gateway]
@@ -61,61 +61,38 @@ default_engine = "lemon"
 enable_telegram = false
 require_engine_lock = true
 
-[queue]
+[gateway.queue]
 mode = "followup"
 cap = 50
 drop = "oldest"
 
-[telegram]
+[gateway.telegram]
 bot_token = "your-telegram-bot-token"
 allowed_chat_ids = [123456789, -100123456789]
 poll_interval_ms = 1000
 edit_throttle_ms = 1000
 
-[projects.lemon]
+[gateway.projects.lemon]
 root = "/path/to/lemon"
 default_engine = "lemon"
 
-[[bindings]]
+[[gateway.bindings]]
 transport = "telegram"
 chat_id = 123456789
 project = "lemon"
 default_engine = "claude"
 queue_mode = "steer"
 
-[engines.lemon]
+[gateway.engines.lemon]
 enabled = true
 
-[engines.codex]
+[gateway.engines.codex]
 enabled = true
 cli_path = "/usr/local/bin/codex"
 
-[engines.claude]
+[gateway.engines.claude]
 enabled = true
 cli_path = "/usr/local/bin/claude"
-```
-
-### Application Env (fallback)
-
-Configure in `config/config.exs`:
-
-```elixir
-config :lemon_gateway, LemonGateway.Config,
-  max_concurrent_runs: 2,      # Global concurrency limit
-  default_engine: "lemon"      # Fallback engine when none specified
-
-config :lemon_gateway, :engines, [
-  LemonGateway.Engines.Lemon,  # Native CodingAgent engine
-  LemonGateway.Engines.Echo,   # Simple echo for testing
-  LemonGateway.Engines.Codex,  # OpenAI Codex CLI
-  LemonGateway.Engines.Claude  # Claude Code CLI
-]
-
-config :lemon_gateway, :telegram,
-  bot_token: "your-telegram-bot-token",
-  allowed_chat_ids: [123456789, -100123456789],  # nil = allow all
-  poll_interval_ms: 1_000,
-  edit_throttle_ms: 1_000
 ```
 
 ### Configuration Options

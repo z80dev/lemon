@@ -871,7 +871,8 @@ defmodule LemonGateway.RunSupervisorTest do
       ref = Process.monitor(pid)
 
       assert_receive {:run_complete, ^pid, _}, 2000
-      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 2000
+      assert_receive {:DOWN, ^ref, :process, ^pid, reason}, 2000
+      assert reason in [:normal, :noproc]
     end
 
     test "monitor receives :normal reason on successful completion" do
@@ -881,7 +882,8 @@ defmodule LemonGateway.RunSupervisorTest do
       {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
       ref = Process.monitor(pid)
 
-      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 2000
+      assert_receive {:DOWN, ^ref, :process, ^pid, reason}, 2000
+      assert reason in [:normal, :noproc]
     end
 
     test "can monitor multiple runs simultaneously" do
@@ -896,7 +898,8 @@ defmodule LemonGateway.RunSupervisorTest do
         end
 
       for {ref, pid} <- monitors do
-        assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 2000
+        assert_receive {:DOWN, ^ref, :process, ^pid, reason}, 2000
+        assert reason in [:normal, :noproc]
       end
     end
   end

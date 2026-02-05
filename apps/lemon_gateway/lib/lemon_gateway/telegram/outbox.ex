@@ -16,8 +16,15 @@ defmodule LemonGateway.Telegram.Outbox do
   @priority_send 1
 
   def start_link(opts) do
+    base =
+      case Process.whereis(LemonGateway.Config) do
+        nil -> %{}
+        _ -> LemonGateway.Config.get(:telegram) || %{}
+      end
+
     config =
-      Application.get_env(:lemon_gateway, :telegram, %{})
+      base
+      |> merge_config(Application.get_env(:lemon_gateway, :telegram))
       |> merge_config(opts)
 
     token = config[:bot_token] || config["bot_token"]
@@ -288,11 +295,15 @@ defmodule LemonGateway.Telegram.Outbox do
     {text, nil}
   end
 
+  defp merge_config(config, nil), do: config
+
   defp merge_config(config, opts) when is_list(opts) do
     Enum.reduce(opts, config, fn {key, value}, acc ->
       Map.put(acc, key, value)
     end)
   end
+
+  defp merge_config(config, opts) when is_map(opts), do: Map.merge(config, opts)
 
   defp merge_config(config, _opts), do: config
 end

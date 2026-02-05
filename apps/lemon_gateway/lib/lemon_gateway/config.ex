@@ -2,7 +2,7 @@ defmodule LemonGateway.Config do
   @moduledoc """
   Centralized configuration for LemonGateway.
 
-  Loads configuration from TOML file (via ConfigLoader) with fallback to Application env.
+  Loads configuration from the canonical Lemon TOML config (via ConfigLoader).
   """
   use GenServer
 

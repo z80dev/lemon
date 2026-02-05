@@ -97,7 +97,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   defp parse_message_id(id) when is_integer(id), do: id
 
   defp telegram_token do
-    config = Application.get_env(:lemon_gateway, :telegram, %{})
+    config = LemonGateway.Config.get(:telegram) || %{}
     config[:bot_token] || config["bot_token"]
   end
 end

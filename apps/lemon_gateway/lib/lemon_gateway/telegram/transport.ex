@@ -3,7 +3,7 @@ defmodule LemonGateway.Telegram.Transport do
   use LemonGateway.Transport
   use GenServer
 
-  alias LemonGateway.Telegram.{API, Dedupe}
+  alias LemonGateway.Telegram.{API, Dedupe, OffsetStore}
   alias LemonGateway.Types.{ChatScope, Job, ResumeToken}
   alias LemonGateway.{BindingResolver, ChatState, Config, EngineRegistry, Store}
 
@@ -17,7 +17,10 @@ defmodule LemonGateway.Telegram.Transport do
   @default_debounce_ms 1_000
 
   def start_link(_opts) do
-    config = Application.get_env(:lemon_gateway, :telegram, %{})
+    config =
+      base_telegram_config()
+      |> merge_config(Application.get_env(:lemon_gateway, :telegram))
+
     token = config[:bot_token] || config["bot_token"]
 
     if is_binary(token) and token != "" do
@@ -32,6 +35,12 @@ defmodule LemonGateway.Telegram.Transport do
     :ok = Dedupe.init()
     :ok = ensure_httpc()
 
+    account_id = config[:account_id] || config["account_id"] || "default"
+    config_offset = config[:offset] || config["offset"]
+    stored_offset = OffsetStore.get(account_id, config[:bot_token] || config["bot_token"])
+    drop_pending_updates = config[:drop_pending_updates] || config["drop_pending_updates"] || false
+    drop_pending_updates = drop_pending_updates && is_nil(config_offset) && is_nil(stored_offset)
+
     state = %{
       token: config[:bot_token] || config["bot_token"],
       api_mod: config[:api_mod] || API,
@@ -40,7 +49,10 @@ defmodule LemonGateway.Telegram.Transport do
       debounce_ms: config[:debounce_ms] || @default_debounce_ms,
       allowed_chat_ids: Map.get(config, :allowed_chat_ids, nil),
       allow_queue_override: Map.get(config, :allow_queue_override, false),
-      offset: config[:offset] || 0,
+      account_id: account_id,
+      offset: initial_offset(config_offset, stored_offset),
+      drop_pending_updates?: drop_pending_updates,
+      drop_pending_done?: false,
       buffers: %{}
     }
 
@@ -79,8 +91,17 @@ defmodule LemonGateway.Telegram.Transport do
   defp poll_updates(state) do
     case state.api_mod.get_updates(state.token, state.offset, state.poll_interval_ms) do
       {:ok, %{"ok" => true, "result" => updates}} ->
-        {state, max_id} = handle_updates(state, updates)
-        %{state | offset: max(state.offset, max_id + 1)}
+        if state.drop_pending_updates? and not state.drop_pending_done? do
+          max_id = max_update_id(updates, state.offset)
+          new_offset = max(state.offset, max_id + 1)
+          persist_offset(state, new_offset)
+          %{state | offset: new_offset, drop_pending_done?: true}
+        else
+          {state, max_id} = handle_updates(state, updates)
+          new_offset = max(state.offset, max_id + 1)
+          persist_offset(state, new_offset)
+          %{state | offset: new_offset}
+        end
 
       _ ->
         state
@@ -93,6 +114,33 @@ defmodule LemonGateway.Telegram.Transport do
       state = handle_update(state, update)
       {state, max(max_id, id)}
     end)
+  end
+
+  defp initial_offset(config_offset, stored_offset) do
+    cond do
+      is_integer(config_offset) -> config_offset
+      is_integer(stored_offset) -> stored_offset
+      true -> 0
+    end
+  end
+
+  defp max_update_id([], offset), do: offset - 1
+
+  defp max_update_id(updates, offset) do
+    Enum.reduce(updates, offset - 1, fn update, acc ->
+      case update["update_id"] do
+        id when is_integer(id) -> max(acc, id)
+        _ -> acc
+      end
+    end)
+  end
+
+  defp persist_offset(state, new_offset) do
+    if new_offset != state.offset do
+      OffsetStore.put(state.account_id, state.token, new_offset)
+    end
+
+    :ok
   end
 
   defp handle_update(state, %{"message" => message} = _update) do
@@ -417,4 +465,23 @@ defmodule LemonGateway.Telegram.Transport do
   defp reply_text(nil), do: nil
   defp reply_text(%{"text" => text}) when is_binary(text), do: text
   defp reply_text(_), do: nil
+
+  defp base_telegram_config do
+    case Process.whereis(LemonGateway.Config) do
+      nil -> %{}
+      _ -> LemonGateway.Config.get(:telegram) || %{}
+    end
+  end
+
+  defp merge_config(config, nil), do: config
+
+  defp merge_config(config, opts) when is_list(opts) do
+    Enum.reduce(opts, config, fn {key, value}, acc ->
+      Map.put(acc, key, value)
+    end)
+  end
+
+  defp merge_config(config, opts) when is_map(opts), do: Map.merge(config, opts)
+
+  defp merge_config(config, _opts), do: config
 end

@@ -46,6 +46,7 @@ defmodule LemonGateway.Run do
         session_key = job.session_key || session_key_from_job(job)
 
         state = %{
+          submitted_job: job,
           job: %{job | run_id: run_id, session_key: session_key},
           run_id: run_id,
           session_key: session_key,
@@ -103,8 +104,13 @@ defmodule LemonGateway.Run do
   end
 
   defp session_key_from_job(%Job{session_key: key}) when is_binary(key), do: key
-  defp session_key_from_job(%Job{scope: scope}) when not is_nil(scope) do
+
+  defp session_key_from_job(%Job{scope: %LemonGateway.Types.ChatScope{} = scope}) do
     LemonGateway.Types.Job.Legacy.session_key_from_scope(scope)
+  end
+
+  defp session_key_from_job(%Job{scope: scope}) when not is_nil(scope) do
+    "scope:#{inspect(scope)}"
   end
   defp session_key_from_job(_), do: "default"
 
@@ -187,7 +193,8 @@ defmodule LemonGateway.Run do
           run_id: state.run_id,
           session_key: state.session_key
         }
-        {renderer_state, _render_action} = state.renderer.apply_event(renderer_state, completed)
+        {renderer_state, render_action} = state.renderer.apply_event(renderer_state, completed)
+        maybe_update_progress(state, render_action)
         state = %{state | engine: engine, renderer_state: renderer_state}
 
         finalize(state, completed)
@@ -203,8 +210,9 @@ defmodule LemonGateway.Run do
     emit_engine_event_to_bus(state, event)
 
     # Update renderer state for answer tracking (but no rendering)
-    {renderer_state, _render_action} = state.renderer.apply_event(state.renderer_state, event)
+    {renderer_state, render_action} = state.renderer.apply_event(state.renderer_state, event)
     state = %{state | renderer_state: renderer_state}
+    maybe_update_progress(state, render_action)
 
     case event do
       %Event.Started{resume: resume} ->
@@ -354,14 +362,14 @@ defmodule LemonGateway.Run do
       is_binary(job.engine_id) ->
         job.engine_id
 
-      is_binary(job.engine_hint) ->
-        job.engine_hint
-
       not is_nil(job.scope) ->
         BindingResolver.resolve_engine(job.scope, job.engine_hint, job.resume)
 
       not is_nil(job.resume) ->
         job.resume.engine
+
+      is_binary(job.engine_hint) ->
+        job.engine_hint
 
       true ->
         LemonGateway.Config.get(:default_engine) || "lemon"
@@ -417,7 +425,8 @@ defmodule LemonGateway.Run do
     notify_pid = state.job.meta && state.job.meta[:notify_pid]
 
     if is_pid(notify_pid) do
-      send(notify_pid, {:lemon_gateway_run_completed, state.job, completed})
+      notify_job = Map.get(state, :submitted_job, state.job)
+      send(notify_pid, {:lemon_gateway_run_completed, notify_job, completed})
     end
 
     maybe_store_chat_state(state.job, completed)
@@ -503,6 +512,21 @@ defmodule LemonGateway.Run do
   end
 
   defp unregister_progress_mapping(_), do: :ok
+
+  defp maybe_update_progress(%{job: %Job{} = job} = state, {:render, %{text: text}})
+       when is_binary(text) do
+    with %LemonGateway.Types.ChatScope{transport: :telegram, chat_id: chat_id} <- job.scope,
+         progress_msg_id when not is_nil(progress_msg_id) <- job.meta && job.meta[:progress_msg_id],
+         true <- is_pid(Process.whereis(LemonGateway.Telegram.Outbox)) do
+      engine = if is_atom(state.engine), do: state.engine, else: nil
+      key = {chat_id, progress_msg_id, :edit}
+      LemonGateway.Telegram.Outbox.enqueue(key, 0, {:edit, chat_id, progress_msg_id, %{text: text, engine: engine}})
+    else
+      _ -> :ok
+    end
+  end
+
+  defp maybe_update_progress(_state, _render_action), do: :ok
 
   # Telemetry emission helpers for run lifecycle events
   # Uses LemonCore.Telemetry for consistent event naming across the umbrella

@@ -37,7 +37,7 @@ defmodule LemonChannels.Application do
 
   defp register_and_start_adapters do
     # Register Telegram adapter if configured
-    if Application.get_env(:lemon_channels, :telegram_enabled, true) do
+    if LemonGateway.Config.get(:enable_telegram) == true do
       case register_and_start_adapter(LemonChannels.Adapters.Telegram) do
         :ok ->
           Logger.info("Telegram adapter registered and started")
@@ -81,12 +81,14 @@ defmodule LemonChannels.Application do
   def start_adapter(adapter_module, opts \\ []) do
     # Check if adapter is enabled
     adapter_id = adapter_module.id()
-    enabled_key = String.to_atom("#{adapter_id}_enabled")
+    enabled? =
+      case adapter_id do
+        :telegram -> LemonGateway.Config.get(:enable_telegram) == true
+        _ -> true
+      end
 
-    if Application.get_env(:lemon_channels, enabled_key, true) do
-      # Get adapter-specific options from config
-      adapter_opts = Application.get_env(:lemon_channels, adapter_module, [])
-      merged_opts = Keyword.merge(adapter_opts, opts)
+    if enabled? do
+      merged_opts = opts
 
       # Get the child spec from the adapter
       child_spec = adapter_module.child_spec(merged_opts)

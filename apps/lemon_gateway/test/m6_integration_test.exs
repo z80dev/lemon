@@ -7,12 +7,14 @@ defmodule LemonGateway.M6IntegrationTest do
   @test_toml_dir "/private/tmp/claude-501/-Users-z80-dev-lemon/m6_integration_test"
 
   setup do
+    original_home = System.get_env("HOME")
     # Stop the app to reset state
     _ = Application.stop(:lemon_gateway)
 
     # Set up test directories
     File.rm_rf!(@test_toml_dir)
     File.mkdir_p!(@test_toml_dir)
+    System.put_env("HOME", @test_toml_dir)
 
     # Clean up any existing config
     Application.delete_env(:lemon_gateway, LemonGateway.Config)
@@ -22,6 +24,7 @@ defmodule LemonGateway.M6IntegrationTest do
       Application.delete_env(:lemon_gateway, LemonGateway.Config)
       Application.delete_env(:lemon_gateway, :config_path)
       File.rm_rf!(@test_toml_dir)
+      if original_home, do: System.put_env("HOME", original_home), else: System.delete_env("HOME")
     end)
 
     :ok
@@ -37,11 +40,11 @@ defmodule LemonGateway.M6IntegrationTest do
       max_concurrent_runs = 8
       default_engine = "claude"
 
-      [projects.myproject]
+      [gateway.projects.myproject]
       root = "#{project_root}"
       default_engine = "codex"
 
-      [[bindings]]
+      [[gateway.bindings]]
       transport = "telegram"
       chat_id = 123456
       project = "myproject"
@@ -49,7 +52,9 @@ defmodule LemonGateway.M6IntegrationTest do
       queue_mode = "followup"
       """
 
-      toml_path = Path.join(@test_toml_dir, "gateway.toml")
+      config_dir = Path.join(@test_toml_dir, ".lemon")
+      File.mkdir_p!(config_dir)
+      toml_path = Path.join(config_dir, "config.toml")
       File.write!(toml_path, toml_content)
       Application.put_env(:lemon_gateway, :config_path, toml_path)
 
@@ -80,16 +85,26 @@ defmodule LemonGateway.M6IntegrationTest do
       project_root = Path.join(@test_toml_dir, "project2")
       File.mkdir_p!(project_root)
 
-      Application.put_env(:lemon_gateway, :config_path, "/nonexistent/path.toml")
-      Application.put_env(:lemon_gateway, Config,
-        default_engine: "global_default",
-        projects: %{
-          "myapp" => %{root: project_root, default_engine: "project_engine"}
-        },
-        bindings: [
-          %{transport: :telegram, chat_id: 555, project: "myapp", default_engine: "binding_engine", queue_mode: :collect}
-        ]
-      )
+      config_dir = Path.join(@test_toml_dir, ".lemon")
+      File.mkdir_p!(config_dir)
+      toml_path = Path.join(config_dir, "config.toml")
+
+      File.write!(toml_path, """
+      [gateway]
+      default_engine = "global_default"
+
+      [gateway.projects.myapp]
+      root = "#{project_root}"
+      default_engine = "project_engine"
+
+      [[gateway.bindings]]
+      transport = "telegram"
+      chat_id = 555
+      project = "myapp"
+      default_engine = "binding_engine"
+      queue_mode = "collect"
+      """)
+      Application.put_env(:lemon_gateway, :config_path, toml_path)
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       scope = %ChatScope{transport: :telegram, chat_id: 555}
@@ -113,14 +128,26 @@ defmodule LemonGateway.M6IntegrationTest do
     end
 
     test "topic binding overrides chat binding" do
-      Application.put_env(:lemon_gateway, :config_path, "/nonexistent/path.toml")
-      Application.put_env(:lemon_gateway, Config,
-        default_engine: "global_default",
-        bindings: [
-          %{transport: :telegram, chat_id: 777, default_engine: "chat_engine"},
-          %{transport: :telegram, chat_id: 777, topic_id: 123, default_engine: "topic_engine"}
-        ]
-      )
+      config_dir = Path.join(@test_toml_dir, ".lemon")
+      File.mkdir_p!(config_dir)
+      toml_path = Path.join(config_dir, "config.toml")
+
+      File.write!(toml_path, """
+      [gateway]
+      default_engine = "global_default"
+
+      [[gateway.bindings]]
+      transport = "telegram"
+      chat_id = 777
+      default_engine = "chat_engine"
+
+      [[gateway.bindings]]
+      transport = "telegram"
+      chat_id = 777
+      topic_id = 123
+      default_engine = "topic_engine"
+      """)
+      Application.put_env(:lemon_gateway, :config_path, toml_path)
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       chat_scope = %ChatScope{transport: :telegram, chat_id: 777}
@@ -137,16 +164,24 @@ defmodule LemonGateway.M6IntegrationTest do
       project_root = Path.join(@test_toml_dir, "project3")
       File.mkdir_p!(project_root)
 
-      Application.put_env(:lemon_gateway, :config_path, "/nonexistent/path.toml")
-      Application.put_env(:lemon_gateway, Config,
-        default_engine: "global",
-        projects: %{
-          "proj" => %{root: project_root, default_engine: "project"}
-        },
-        bindings: [
-          %{transport: :telegram, chat_id: 888, project: "proj"}
-        ]
-      )
+      config_dir = Path.join(@test_toml_dir, ".lemon")
+      File.mkdir_p!(config_dir)
+      toml_path = Path.join(config_dir, "config.toml")
+
+      File.write!(toml_path, """
+      [gateway]
+      default_engine = "global"
+
+      [gateway.projects.proj]
+      root = "#{project_root}"
+      default_engine = "project"
+
+      [[gateway.bindings]]
+      transport = "telegram"
+      chat_id = 888
+      project = "proj"
+      """)
+      Application.put_env(:lemon_gateway, :config_path, toml_path)
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       scope = %ChatScope{transport: :telegram, chat_id: 888}
@@ -166,7 +201,8 @@ defmodule LemonGateway.M6IntegrationTest do
       Application.put_env(:lemon_gateway, :config_path, "/nonexistent/path.toml")
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-      scope = %ChatScope{transport: :telegram, chat_id: 999}
+      chat_id = System.unique_integer([:positive, :monotonic]) + System.system_time(:millisecond)
+      scope = %ChatScope{transport: :telegram, chat_id: chat_id}
 
       # Initially no chat state
       assert Store.get_chat_state(scope) == nil

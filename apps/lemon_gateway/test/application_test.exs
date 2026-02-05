@@ -18,7 +18,8 @@ defmodule LemonGateway.ApplicationTest do
     LemonGateway.ThreadWorkerSupervisor,
     LemonGateway.Scheduler,
     LemonGateway.Store,
-    LemonGateway.TransportSupervisor
+    LemonGateway.TransportSupervisor,
+    {:ranch_embedded_sup, LemonGateway.Web.Router.HTTP}
   ]
 
   # ---------------------------------------------------------------------
@@ -134,11 +135,11 @@ defmodule LemonGateway.ApplicationTest do
       end
     end
 
-    test "supervision tree has exactly 11 children" do
+    test "supervision tree has expected child count" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       children = Supervisor.which_children(LemonGateway.Supervisor)
-      assert length(children) == 11
+      assert length(children) == length(@expected_children)
     end
 
     test "all child processes are running" do

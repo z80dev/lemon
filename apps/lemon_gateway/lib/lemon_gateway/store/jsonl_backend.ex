@@ -73,7 +73,7 @@ defmodule LemonGateway.Store.JsonlBackend do
     entry = %{
       "op" => "put",
       "key" => encode_key(key),
-      "value" => value,
+      "value" => encode_value(value),
       "ts" => System.system_time(:millisecond)
     }
 
@@ -212,7 +212,7 @@ defmodule LemonGateway.Store.JsonlBackend do
           |> Enum.reduce(Map.get(state.data, table, %{}), fn line, acc ->
             case Jason.decode(line) do
               {:ok, %{"op" => "put", "key" => key, "value" => value}} ->
-                Map.put(acc, decode_key(key), value)
+                Map.put(acc, decode_key(key), decode_value(value))
 
               {:ok, %{"op" => "delete", "key" => key}} ->
                 Map.delete(acc, decode_key(key))
@@ -245,6 +245,10 @@ defmodule LemonGateway.Store.JsonlBackend do
 
   # Key encoding for JSON compatibility
   # Tuples, structs, and other Elixir terms need special handling
+
+  defp encode_value(value), do: encode_key(value)
+
+  defp decode_value(value), do: decode_key(value)
 
   defp encode_key(key) when is_struct(key) do
     # Convert struct to map with module name marker

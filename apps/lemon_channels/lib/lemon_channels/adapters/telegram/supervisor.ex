@@ -14,7 +14,7 @@ defmodule LemonChannels.Adapters.Telegram.Supervisor do
   @impl true
   def init(opts) do
     # Check if Telegram is configured
-    config = Application.get_env(:lemon_gateway, :telegram, %{})
+    config = LemonGateway.Config.get(:telegram) || %{}
     token = config[:bot_token] || config["bot_token"]
 
     children =

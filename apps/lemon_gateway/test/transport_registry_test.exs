@@ -123,10 +123,18 @@ defmodule LemonGateway.TransportRegistryTest do
     def start_link(_opts), do: :ignore
   end
 
-  setup do
-    # Stop the app to reset state
-    _ = Application.stop(:lemon_gateway)
+  defp restart_registry do
+    supervisor = LemonGateway.Supervisor
 
+    case Supervisor.terminate_child(supervisor, TransportRegistry) do
+      :ok -> :ok
+      {:error, :not_found} -> :ok
+    end
+
+    Supervisor.restart_child(supervisor, TransportRegistry)
+  end
+
+  setup do
     Application.put_env(:lemon_gateway, LemonGateway.Config, %{
       max_concurrent_runs: 1,
       default_engine: "echo",
@@ -135,6 +143,9 @@ defmodule LemonGateway.TransportRegistryTest do
 
     Application.put_env(:lemon_gateway, :engines, [LemonGateway.Engines.Echo])
     Application.put_env(:lemon_gateway, :commands, [])
+    Application.put_env(:lemon_gateway, :transports, [])
+
+    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
     on_exit(fn ->
       Application.delete_env(:lemon_gateway, :transports)
@@ -145,7 +156,7 @@ defmodule LemonGateway.TransportRegistryTest do
 
   test "lists registered transports" do
     Application.put_env(:lemon_gateway, :transports, [MockTransport, AnotherTransport])
-    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+    {:ok, _} = restart_registry()
 
     ids = TransportRegistry.list_transports()
     assert "mock" in ids
@@ -154,21 +165,21 @@ defmodule LemonGateway.TransportRegistryTest do
 
   test "get_transport returns module for valid id" do
     Application.put_env(:lemon_gateway, :transports, [MockTransport])
-    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+    {:ok, _} = restart_registry()
 
     assert TransportRegistry.get_transport("mock") == MockTransport
   end
 
   test "get_transport returns nil for unknown id" do
     Application.put_env(:lemon_gateway, :transports, [MockTransport])
-    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+    {:ok, _} = restart_registry()
 
     assert TransportRegistry.get_transport("unknown") == nil
   end
 
   test "get_transport! raises for unknown id" do
     Application.put_env(:lemon_gateway, :transports, [MockTransport])
-    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+    {:ok, _} = restart_registry()
 
     assert catch_exit(TransportRegistry.get_transport!("unknown"))
   end
@@ -176,15 +187,15 @@ defmodule LemonGateway.TransportRegistryTest do
   test "rejects invalid transport id format" do
     Application.put_env(:lemon_gateway, :transports, [InvalidIdTransport])
 
-    # The error happens during registry init which fails app start
-    assert {:error, _} = Application.ensure_all_started(:lemon_gateway)
+    # The error happens during registry init which fails registry start
+    assert {:error, _} = restart_registry()
   end
 
   test "rejects reserved transport id" do
     Application.put_env(:lemon_gateway, :transports, [ReservedIdTransport])
 
-    # The error happens during registry init which fails app start
-    assert {:error, _} = Application.ensure_all_started(:lemon_gateway)
+    # The error happens during registry init which fails registry start
+    assert {:error, _} = restart_registry()
   end
 
   test "enabled_transports filters by config" do
@@ -199,7 +210,7 @@ defmodule LemonGateway.TransportRegistryTest do
       enable_telegram: false
     })
 
-    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+    {:ok, _} = restart_registry()
 
     enabled = TransportRegistry.enabled_transports()
     enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -221,7 +232,7 @@ defmodule LemonGateway.TransportRegistryTest do
       enable_telegram: true
     })
 
-    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+    {:ok, _} = restart_registry()
 
     enabled = TransportRegistry.enabled_transports()
     enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -243,7 +254,7 @@ defmodule LemonGateway.TransportRegistryTest do
         enable_telegram: false
       })
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -258,7 +269,7 @@ defmodule LemonGateway.TransportRegistryTest do
         default_engine: "echo"
       })
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -276,7 +287,7 @@ defmodule LemonGateway.TransportRegistryTest do
         enable_telegram: true
       ])
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -292,7 +303,7 @@ defmodule LemonGateway.TransportRegistryTest do
         enable_telegram: false
       ])
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -307,7 +318,7 @@ defmodule LemonGateway.TransportRegistryTest do
         default_engine: "echo"
       ])
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -321,7 +332,7 @@ defmodule LemonGateway.TransportRegistryTest do
       Application.put_env(:lemon_gateway, :transports, [LemonGateway.Telegram.Transport])
       Application.put_env(:lemon_gateway, LemonGateway.Config, %{})
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -333,7 +344,7 @@ defmodule LemonGateway.TransportRegistryTest do
       Application.put_env(:lemon_gateway, :transports, [LemonGateway.Telegram.Transport])
       Application.put_env(:lemon_gateway, LemonGateway.Config, [])
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -350,13 +361,13 @@ defmodule LemonGateway.TransportRegistryTest do
     test "rejects 'default' as reserved transport id" do
       Application.put_env(:lemon_gateway, :transports, [ReservedIdTransport])
 
-      assert {:error, _} = Application.ensure_all_started(:lemon_gateway)
+      assert {:error, _} = restart_registry()
     end
 
     test "rejects 'all' as reserved transport id" do
       Application.put_env(:lemon_gateway, :transports, [ReservedAllTransport])
 
-      assert {:error, _} = Application.ensure_all_started(:lemon_gateway)
+      assert {:error, _} = restart_registry()
     end
   end
 
@@ -368,37 +379,37 @@ defmodule LemonGateway.TransportRegistryTest do
     test "rejects ID with uppercase letters" do
       Application.put_env(:lemon_gateway, :transports, [InvalidIdTransport])
 
-      assert {:error, _} = Application.ensure_all_started(:lemon_gateway)
+      assert {:error, _} = restart_registry()
     end
 
     test "rejects ID starting with number" do
       Application.put_env(:lemon_gateway, :transports, [NumericStartTransport])
 
-      assert {:error, _} = Application.ensure_all_started(:lemon_gateway)
+      assert {:error, _} = restart_registry()
     end
 
     test "rejects ID with spaces" do
       Application.put_env(:lemon_gateway, :transports, [SpaceTransport])
 
-      assert {:error, _} = Application.ensure_all_started(:lemon_gateway)
+      assert {:error, _} = restart_registry()
     end
 
     test "rejects empty ID" do
       Application.put_env(:lemon_gateway, :transports, [EmptyIdTransport])
 
-      assert {:error, _} = Application.ensure_all_started(:lemon_gateway)
+      assert {:error, _} = restart_registry()
     end
 
     test "rejects ID with special characters" do
       Application.put_env(:lemon_gateway, :transports, [SpecialCharsTransport])
 
-      assert {:error, _} = Application.ensure_all_started(:lemon_gateway)
+      assert {:error, _} = restart_registry()
     end
 
     test "accepts ID with hyphens" do
       Application.put_env(:lemon_gateway, :transports, [ThirdTransport])
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       ids = TransportRegistry.list_transports()
       assert "third-transport" in ids
@@ -407,7 +418,7 @@ defmodule LemonGateway.TransportRegistryTest do
     test "accepts ID with underscores" do
       Application.put_env(:lemon_gateway, :transports, [UnderscoreTransport])
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       ids = TransportRegistry.list_transports()
       assert "my_transport" in ids
@@ -416,7 +427,7 @@ defmodule LemonGateway.TransportRegistryTest do
     test "accepts ID with numbers (not at start)" do
       Application.put_env(:lemon_gateway, :transports, [NumericTransport])
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       ids = TransportRegistry.list_transports()
       assert "transport123" in ids
@@ -431,7 +442,7 @@ defmodule LemonGateway.TransportRegistryTest do
     test "returns empty list when no transports registered" do
       Application.put_env(:lemon_gateway, :transports, [])
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       assert TransportRegistry.enabled_transports() == []
     end
@@ -446,7 +457,7 @@ defmodule LemonGateway.TransportRegistryTest do
         enable_telegram: false
       })
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -460,7 +471,7 @@ defmodule LemonGateway.TransportRegistryTest do
     test "returns tuples with {id, module}" do
       Application.put_env(:lemon_gateway, :transports, [MockTransport])
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       enabled = TransportRegistry.enabled_transports()
 
@@ -477,7 +488,7 @@ defmodule LemonGateway.TransportRegistryTest do
         enable_telegram: true
       })
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -498,7 +509,7 @@ defmodule LemonGateway.TransportRegistryTest do
       Application.put_env(:lemon_gateway, :transports, [MockTransport])
       Application.put_env(:lemon_gateway, LemonGateway.Config, %{})
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -514,7 +525,7 @@ defmodule LemonGateway.TransportRegistryTest do
       ])
       Application.put_env(:lemon_gateway, LemonGateway.Config, %{})
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -531,7 +542,7 @@ defmodule LemonGateway.TransportRegistryTest do
         enable_telegram: false
       })
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -548,7 +559,7 @@ defmodule LemonGateway.TransportRegistryTest do
     test "empty transport list results in empty registry" do
       Application.put_env(:lemon_gateway, :transports, [])
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       assert TransportRegistry.list_transports() == []
     end
@@ -556,7 +567,7 @@ defmodule LemonGateway.TransportRegistryTest do
     test "single transport registration works" do
       Application.put_env(:lemon_gateway, :transports, [MockTransport])
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       ids = TransportRegistry.list_transports()
       assert ids == ["mock"]
@@ -570,7 +581,7 @@ defmodule LemonGateway.TransportRegistryTest do
         UnderscoreTransport
       ])
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       ids = TransportRegistry.list_transports()
       assert length(ids) == 4
@@ -586,7 +597,7 @@ defmodule LemonGateway.TransportRegistryTest do
         AnotherTransport
       ])
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       assert TransportRegistry.get_transport("mock") == MockTransport
       assert TransportRegistry.get_transport("another") == AnotherTransport
@@ -595,7 +606,7 @@ defmodule LemonGateway.TransportRegistryTest do
     test "get_transport! returns correct module" do
       Application.put_env(:lemon_gateway, :transports, [MockTransport])
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       assert TransportRegistry.get_transport!("mock") == MockTransport
     end
@@ -603,7 +614,7 @@ defmodule LemonGateway.TransportRegistryTest do
     test "list_transports returns consistent results across calls" do
       Application.put_env(:lemon_gateway, :transports, [MockTransport, AnotherTransport])
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       ids1 = TransportRegistry.list_transports() |> Enum.sort()
       ids2 = TransportRegistry.list_transports() |> Enum.sort()
@@ -620,7 +631,7 @@ defmodule LemonGateway.TransportRegistryTest do
     test "uses telegram transport as default when no transports configured" do
       Application.delete_env(:lemon_gateway, :transports)
 
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      {:ok, _} = restart_registry()
 
       ids = TransportRegistry.list_transports()
       assert "telegram" in ids

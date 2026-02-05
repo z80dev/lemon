@@ -11,6 +11,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   require Logger
 
   alias LemonChannels.Adapters.Telegram.Inbound
+  alias LemonGateway.Telegram.OffsetStore
 
   @default_poll_interval 1_000
   @default_dedupe_ttl 600_000
@@ -21,20 +22,28 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   @impl true
   def init(opts) do
-    config = Keyword.get(opts, :config, Application.get_env(:lemon_gateway, :telegram, %{}))
+    config = Keyword.get(opts, :config, LemonGateway.Config.get(:telegram) || %{})
     token = config[:bot_token] || config["bot_token"]
 
     if is_binary(token) and token != "" do
       # Initialize dedupe ETS table
       ensure_dedupe_table()
 
+      account_id = config[:account_id] || config["account_id"] || "default"
+      config_offset = config[:offset] || config["offset"]
+      stored_offset = OffsetStore.get(account_id, token)
+      drop_pending_updates = config[:drop_pending_updates] || config["drop_pending_updates"] || false
+      drop_pending_updates = drop_pending_updates && is_nil(config_offset) && is_nil(stored_offset)
+
       state = %{
         token: token,
         api_mod: config[:api_mod] || LemonGateway.Telegram.API,
         poll_interval_ms: config[:poll_interval_ms] || @default_poll_interval,
         dedupe_ttl_ms: config[:dedupe_ttl_ms] || @default_dedupe_ttl,
-        account_id: config[:account_id] || "default",
-        offset: config[:offset] || 0
+        account_id: account_id,
+        offset: initial_offset(config_offset, stored_offset),
+        drop_pending_updates?: drop_pending_updates,
+        drop_pending_done?: false
       }
 
       send(self(), :poll)
@@ -56,8 +65,17 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp poll_updates(state) do
     case state.api_mod.get_updates(state.token, state.offset, state.poll_interval_ms) do
       {:ok, %{"ok" => true, "result" => updates}} ->
-        {state, max_id} = handle_updates(state, updates)
-        %{state | offset: max(state.offset, max_id + 1)}
+        if state.drop_pending_updates? and not state.drop_pending_done? do
+          max_id = max_update_id(updates, state.offset)
+          new_offset = max(state.offset, max_id + 1)
+          persist_offset(state, new_offset)
+          %{state | offset: new_offset, drop_pending_done?: true}
+        else
+          {state, max_id} = handle_updates(state, updates)
+          new_offset = max(state.offset, max_id + 1)
+          persist_offset(state, new_offset)
+          %{state | offset: new_offset}
+        end
 
       _ ->
         state
@@ -92,6 +110,33 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
       {acc_state, max(max_id, id)}
     end)
+  end
+
+  defp initial_offset(config_offset, stored_offset) do
+    cond do
+      is_integer(config_offset) -> config_offset
+      is_integer(stored_offset) -> stored_offset
+      true -> 0
+    end
+  end
+
+  defp max_update_id([], offset), do: offset - 1
+
+  defp max_update_id(updates, offset) do
+    Enum.reduce(updates, offset - 1, fn update, acc ->
+      case update["update_id"] do
+        id when is_integer(id) -> max(acc, id)
+        _ -> acc
+      end
+    end)
+  end
+
+  defp persist_offset(state, new_offset) do
+    if new_offset != state.offset do
+      OffsetStore.put(state.account_id, state.token, new_offset)
+    end
+
+    :ok
   end
 
   defp route_to_router(inbound) do

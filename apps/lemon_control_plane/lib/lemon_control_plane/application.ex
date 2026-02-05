@@ -25,11 +25,19 @@ defmodule LemonControlPlane.Application do
   end
 
   defp server_child_spec do
-    port = Application.get_env(:lemon_control_plane, :port, 4040)
+    port = Application.get_env(:lemon_control_plane, :port, default_port())
 
     {Bandit,
      plug: LemonControlPlane.HTTP.Router,
      port: port,
      scheme: :http}
+  end
+
+  defp default_port do
+    if Code.ensure_loaded?(Mix) and Mix.env() == :test do
+      0
+    else
+      4040
+    end
   end
 end
