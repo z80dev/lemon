@@ -10,8 +10,7 @@ defmodule CodingAgent.Workspace do
   - USER.md
   - HEARTBEAT.md
   - BOOTSTRAP.md
-  - memory.md (optional; only included if present)
-  - MEMORY.md (optional fallback if memory.md absent)
+  - MEMORY.md (optional; only included for main sessions)
   """
 
   alias CodingAgent.Config
@@ -30,7 +29,10 @@ defmodule CodingAgent.Workspace do
     "BOOTSTRAP.md"
   ]
 
-  @optional_memory_files ["memory.md", "MEMORY.md"]
+  @memory_file "MEMORY.md"
+  @subagent_bootstrap_allowlist MapSet.new(["AGENTS.md", "TOOLS.md"])
+
+  @type session_scope :: :main | :subagent
 
   @type bootstrap_file :: %{
           name: String.t(),
@@ -94,19 +96,24 @@ defmodule CodingAgent.Workspace do
   Options:
     - :workspace_dir (override default workspace)
     - :max_chars (truncate long files; default #{@default_max_chars})
+    - :session_scope (:main or :subagent; default inferred from :parent_session)
+    - :parent_session (when present, inferred as :subagent)
   """
   @spec load_bootstrap_files(keyword()) :: [bootstrap_file()]
   def load_bootstrap_files(opts \\ []) do
     dir = Keyword.get(opts, :workspace_dir, workspace_dir())
     max_chars = Keyword.get(opts, :max_chars, @default_max_chars)
+    session_scope = resolve_session_scope(opts)
 
     required =
       @required_files
       |> Enum.map(&load_required_file(dir, &1, max_chars))
 
     memory =
-      case find_first_existing(dir, @optional_memory_files) do
-        nil -> []
+      case find_first_existing_exact(dir, [@memory_file]) do
+        nil ->
+          []
+
         name ->
           case load_optional_file(dir, name, max_chars) do
             nil -> []
@@ -114,8 +121,31 @@ defmodule CodingAgent.Workspace do
           end
       end
 
-    required ++ memory
+    (required ++ memory)
+    |> filter_bootstrap_files_for_session(session_scope)
   end
+
+  @doc """
+  Filter bootstrap files for a session scope.
+
+  Main sessions receive full bootstrap context. Subagent sessions only receive
+  AGENTS.md and TOOLS.md to avoid leaking durable personal memory/context.
+  """
+  @spec filter_bootstrap_files_for_session([bootstrap_file()], session_scope() | String.t()) ::
+          [bootstrap_file()]
+  def filter_bootstrap_files_for_session(files, session_scope)
+      when session_scope in [:main, "main"] do
+    files
+  end
+
+  def filter_bootstrap_files_for_session(files, session_scope)
+      when session_scope in [:subagent, "subagent"] do
+    Enum.filter(files, fn file ->
+      MapSet.member?(@subagent_bootstrap_allowlist, file.name)
+    end)
+  end
+
+  def filter_bootstrap_files_for_session(files, _session_scope), do: files
 
   # ============================================================================
   # Internal helpers
@@ -165,10 +195,33 @@ defmodule CodingAgent.Workspace do
     end
   end
 
-  defp find_first_existing(dir, names) do
+  defp find_first_existing_exact(dir, names) do
+    entries =
+      case File.ls(dir) do
+        {:ok, files} -> MapSet.new(files)
+        {:error, _} -> MapSet.new()
+      end
+
     Enum.find(names, fn name ->
-      File.regular?(Path.join(dir, name))
+      MapSet.member?(entries, name) and File.regular?(Path.join(dir, name))
     end)
+  end
+
+  defp resolve_session_scope(opts) do
+    case Keyword.get(opts, :session_scope) do
+      scope when scope in [:main, "main"] ->
+        :main
+
+      scope when scope in [:subagent, "subagent"] ->
+        :subagent
+
+      _ ->
+        parent_session = Keyword.get(opts, :parent_session)
+
+        if is_binary(parent_session) and String.trim(parent_session) != "",
+          do: :subagent,
+          else: :main
+    end
   end
 
   defp list_template_files(dir) do
