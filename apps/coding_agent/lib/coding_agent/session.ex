@@ -1291,7 +1291,8 @@ defmodule CodingAgent.Session do
   # Compose system prompt from multiple sources:
   # 1. Explicit system_prompt option (highest priority)
   # 2. Prompt template content (if prompt_template option provided)
-  # 3. CLAUDE.md/AGENTS.md content from ResourceLoader
+  # 3. Lemon base prompt (skills + workspace context)
+  # 4. CLAUDE.md/AGENTS.md content from ResourceLoader
   @spec compose_system_prompt(String.t(), String.t() | nil, String.t() | nil) :: String.t()
   defp compose_system_prompt(cwd, explicit_prompt, prompt_template) do
     # Load prompt template if specified
@@ -1307,11 +1308,14 @@ defmodule CodingAgent.Session do
           end
       end
 
+    # Build Lemon base prompt (skills + workspace context)
+    base_prompt = CodingAgent.SystemPrompt.build(cwd)
+
     # Load instructions (CLAUDE.md, AGENTS.md) from cwd and parent directories
     instructions = ResourceLoader.load_instructions(cwd)
 
-    # Compose in order: explicit > template > instructions
-    [explicit_prompt, template_content, instructions]
+    # Compose in order: explicit > template > base > instructions
+    [explicit_prompt, template_content, base_prompt, instructions]
     |> Enum.reject(&is_nil/1)
     |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n\n")
