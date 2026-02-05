@@ -80,7 +80,8 @@ defmodule CodingAgent.Tools.Task do
           },
           "role" => %{
             "type" => "string",
-            "description" => "Optional role to specialize the task (e.g., research, implement, review, test)"
+            "description" =>
+              "Optional role to specialize the task (e.g., research, implement, review, test)"
           },
           "async" => %{
             "type" => "boolean",
@@ -173,7 +174,15 @@ defmodule CodingAgent.Tools.Task do
             run_override.(on_update_safe, signal)
 
           engine in ["codex", "claude", "kimi"] ->
-            execute_via_cli_engine(engine, prompt, cwd, description, role_id, on_update_safe, signal)
+            execute_via_cli_engine(
+              engine,
+              prompt,
+              cwd,
+              description,
+              role_id,
+              on_update_safe,
+              signal
+            )
 
           coordinator && coordinator_alive?(coordinator) && role_id ->
             execute_via_coordinator(coordinator, prompt, description, role_id)
@@ -344,9 +353,11 @@ defmodule CodingAgent.Tools.Task do
   defp normalize_optional_string(value), do: value
 
   defp normalize_action(nil), do: "run"
+
   defp normalize_action(action) when is_binary(action) do
     action |> String.trim() |> String.downcase()
   end
+
   defp normalize_action(_), do: "run"
 
   defp check_budget_and_policy(validated, opts) do
@@ -363,7 +374,8 @@ defmodule CodingAgent.Tools.Task do
 
     case budget_check do
       {:error, :budget_exceeded, details} ->
-        {:error, BudgetEnforcer.handle_budget_exceeded(parent_run_id || "unknown", details) |> elem(1)}
+        {:error,
+         BudgetEnforcer.handle_budget_exceeded(parent_run_id || "unknown", details) |> elem(1)}
 
       _ ->
         # Check tool policy for engine
@@ -442,7 +454,10 @@ defmodule CodingAgent.Tools.Task do
 
     try do
       if lane_queue_available?() do
-        LaneQueue.run(CodingAgent.LaneQueue, :subagent, wrapped, %{task_id: task_id, run_id: run_id})
+        LaneQueue.run(CodingAgent.LaneQueue, :subagent, wrapped, %{
+          task_id: task_id,
+          run_id: run_id
+        })
       else
         {:ok, wrapped.()}
       end
@@ -730,7 +745,10 @@ defmodule CodingAgent.Tools.Task do
 
     with {:ok, session} <- module.start(prompt: prompt, cwd: cwd, role_prompt: role_prompt) do
       abort_monitor = maybe_start_abort_monitor(signal, session.pid)
-      result = reduce_cli_events(module.events(session), description, engine_label, on_update, signal)
+
+      result =
+        reduce_cli_events(module.events(session), description, engine_label, on_update, signal)
+
       maybe_stop_abort_monitor(abort_monitor)
 
       details = %{
@@ -751,6 +769,7 @@ defmodule CodingAgent.Tools.Task do
       if result.error do
         # Include stderr in error message if available and different from error
         error_msg = format_cli_error(result.error)
+
         error_msg =
           if result[:stderr] && result[:stderr] != "" && result[:stderr] != result.error do
             "#{error_msg}\nstderr: #{result[:stderr]}"
@@ -836,7 +855,14 @@ defmodule CodingAgent.Tools.Task do
           }
           |> maybe_add_action_detail(detail)
 
-        maybe_emit_cli_update(on_update, description, engine_label, "running", text, extra_details)
+        maybe_emit_cli_update(
+          on_update,
+          description,
+          engine_label,
+          "running",
+          text,
+          extra_details
+        )
 
         {:cont, acc}
 
@@ -879,7 +905,14 @@ defmodule CodingAgent.Tools.Task do
         {:cont, %{acc | answer: answer, resume_token: resume, error: error}}
 
       {:error, reason}, acc ->
-        maybe_emit_cli_update(on_update, description, engine_label, "error", format_cli_error(reason))
+        maybe_emit_cli_update(
+          on_update,
+          description,
+          engine_label,
+          "error",
+          format_cli_error(reason)
+        )
+
         {:cont, %{acc | error: acc.error || reason}}
 
       _, acc ->
@@ -950,7 +983,16 @@ defmodule CodingAgent.Tools.Task do
       try do
         case Session.prompt(session, prompt) do
           :ok ->
-            case await_result(session, session_id, signal, on_update, description, "", "", role_id) do
+            case await_result(
+                   session,
+                   session_id,
+                   signal,
+                   on_update,
+                   description,
+                   "",
+                   "",
+                   role_id
+                 ) do
               {:ok, %{text: text, thinking: thinking}} ->
                 %AgentToolResult{
                   content: build_update_content(text, thinking),
@@ -1054,6 +1096,7 @@ defmodule CodingAgent.Tools.Task do
         :thinking_level,
         :system_prompt,
         :prompt_template,
+        :workspace_dir,
         :get_api_key,
         :stream_fn,
         :stream_options,
@@ -1080,6 +1123,7 @@ defmodule CodingAgent.Tools.Task do
       {:session_event, ^session_id, {:message_update, %Ai.Types.AssistantMessage{} = msg, _event}} ->
         text = Ai.get_text(msg)
         thinking = Ai.get_thinking(msg)
+
         {last_text, last_thinking} =
           maybe_emit_update(
             on_update,
@@ -1091,11 +1135,22 @@ defmodule CodingAgent.Tools.Task do
             session_id,
             role_id
           )
-        await_result(session, session_id, signal, on_update, description, last_text, last_thinking, role_id)
+
+        await_result(
+          session,
+          session_id,
+          signal,
+          on_update,
+          description,
+          last_text,
+          last_thinking,
+          role_id
+        )
 
       {:session_event, ^session_id, {:message_end, %Ai.Types.AssistantMessage{} = msg}} ->
         text = Ai.get_text(msg)
         thinking = Ai.get_thinking(msg)
+
         {last_text, last_thinking} =
           maybe_emit_update(
             on_update,
@@ -1107,7 +1162,17 @@ defmodule CodingAgent.Tools.Task do
             session_id,
             role_id
           )
-        await_result(session, session_id, signal, on_update, description, last_text, last_thinking, role_id)
+
+        await_result(
+          session,
+          session_id,
+          signal,
+          on_update,
+          description,
+          last_text,
+          last_thinking,
+          role_id
+        )
 
       {:session_event, ^session_id, {:agent_end, messages}} ->
         {:ok, extract_final_payload(messages, last_text, last_thinking)}
@@ -1116,14 +1181,32 @@ defmodule CodingAgent.Tools.Task do
         {:error, reason}
 
       {:session_event, ^session_id, _event} ->
-        await_result(session, session_id, signal, on_update, description, last_text, last_thinking, role_id)
+        await_result(
+          session,
+          session_id,
+          signal,
+          on_update,
+          description,
+          last_text,
+          last_thinking,
+          role_id
+        )
     after
       200 ->
         if AbortSignal.aborted?(signal) do
           Session.abort(session)
           {:error, "Task aborted"}
         else
-          await_result(session, session_id, signal, on_update, description, last_text, last_thinking, role_id)
+          await_result(
+            session,
+            session_id,
+            signal,
+            on_update,
+            description,
+            last_text,
+            last_thinking,
+            role_id
+          )
         end
     end
   end

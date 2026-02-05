@@ -69,14 +69,14 @@ defmodule CodingAgent.Tools.Write do
           cwd :: String.t(),
           opts :: keyword()
         ) :: AgentToolResult.t() | {:error, term()}
-  def execute(_tool_call_id, params, signal, _on_update, cwd, _opts) do
+  def execute(_tool_call_id, params, signal, _on_update, cwd, opts) do
     # Check for abort at start
     if AbortSignal.aborted?(signal) do
       {:error, :aborted}
     else
       with {:ok, path} <- get_path(params),
            {:ok, content} <- get_content(params) do
-        resolved_path = resolve_path(path, cwd)
+        resolved_path = resolve_path(path, cwd, opts)
         write_file(resolved_path, content, signal)
       end
     end
@@ -101,11 +101,11 @@ defmodule CodingAgent.Tools.Write do
   defp get_content(_), do: {:error, "missing required parameter: content"}
 
   @doc false
-  @spec resolve_path(path :: String.t(), cwd :: String.t()) :: String.t()
-  defp resolve_path(path, cwd) do
+  @spec resolve_path(path :: String.t(), cwd :: String.t(), opts :: keyword()) :: String.t()
+  defp resolve_path(path, cwd, opts) do
     path
     |> expand_home()
-    |> make_absolute(cwd)
+    |> make_absolute(cwd, opts)
   end
 
   defp expand_home("~" <> rest) do
@@ -114,12 +114,30 @@ defmodule CodingAgent.Tools.Write do
 
   defp expand_home(path), do: path
 
-  defp make_absolute(path, cwd) do
+  defp make_absolute(path, cwd, opts) do
     if Path.type(path) == :absolute do
       path
     else
-      Path.join(cwd, path)
+      workspace_dir = Keyword.get(opts, :workspace_dir)
+
+      if prefer_workspace_for_path?(path, workspace_dir) do
+        Path.join(workspace_dir, path)
+      else
+        Path.join(cwd, path)
+      end
     end
+  end
+
+  defp prefer_workspace_for_path?(path, workspace_dir) do
+    is_binary(workspace_dir) and String.trim(workspace_dir) != "" and
+      not explicit_relative?(path) and
+      (path == "MEMORY.md" or String.starts_with?(path, "memory/") or
+         String.starts_with?(path, "memory\\"))
+  end
+
+  defp explicit_relative?(path) when is_binary(path) do
+    String.starts_with?(path, "./") or String.starts_with?(path, "../") or
+      String.starts_with?(path, ".\\") or String.starts_with?(path, "..\\")
   end
 
   defp write_file(path, content, signal) do

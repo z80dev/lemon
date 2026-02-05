@@ -93,7 +93,7 @@ defmodule CodingAgent.Tools.Read do
     offset = Map.get(params, "offset")
     limit = Map.get(params, "limit")
 
-    with {:ok, resolved_path} <- resolve_path(path, cwd),
+    with {:ok, resolved_path} <- resolve_path(path, cwd, opts),
          {:ok, stat} <- check_file_access(resolved_path),
          :ok <- check_abort(signal) do
       case detect_mime_type(resolved_path) do
@@ -110,15 +110,15 @@ defmodule CodingAgent.Tools.Read do
   # Path Resolution
   # ============================================================================
 
-  defp resolve_path("", _cwd) do
+  defp resolve_path("", _cwd, _opts) do
     {:error, "Path is required"}
   end
 
-  defp resolve_path(path, cwd) do
+  defp resolve_path(path, cwd, opts) do
     expanded =
       path
       |> expand_home()
-      |> resolve_relative(cwd)
+      |> resolve_relative(cwd, opts)
 
     {:ok, expanded}
   end
@@ -129,12 +129,30 @@ defmodule CodingAgent.Tools.Read do
 
   defp expand_home(path), do: path
 
-  defp resolve_relative(path, cwd) do
+  defp resolve_relative(path, cwd, opts) do
     if Path.type(path) == :absolute do
       path
     else
-      Path.join(cwd, path) |> Path.expand()
+      workspace_dir = Keyword.get(opts, :workspace_dir)
+
+      if prefer_workspace_for_path?(path, workspace_dir) do
+        Path.join(workspace_dir, path) |> Path.expand()
+      else
+        Path.join(cwd, path) |> Path.expand()
+      end
     end
+  end
+
+  defp prefer_workspace_for_path?(path, workspace_dir) do
+    is_binary(workspace_dir) and String.trim(workspace_dir) != "" and
+      not explicit_relative?(path) and
+      (path == "MEMORY.md" or String.starts_with?(path, "memory/") or
+         String.starts_with?(path, "memory\\"))
+  end
+
+  defp explicit_relative?(path) when is_binary(path) do
+    String.starts_with?(path, "./") or String.starts_with?(path, "../") or
+      String.starts_with?(path, ".\\") or String.starts_with?(path, "..\\")
   end
 
   # ============================================================================

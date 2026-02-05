@@ -451,11 +451,6 @@ defmodule CodingAgent.Session do
     custom_tools = Keyword.get(opts, :tools)
     workspace_dir = Keyword.get(opts, :workspace_dir, Config.workspace_dir())
 
-    session_scope =
-      if is_binary(parent_session) and String.trim(parent_session) != "",
-        do: :subagent,
-        else: :main
-
     maybe_register_ui_tracker(ui_context)
     Workspace.ensure_workspace(workspace_dir: workspace_dir)
 
@@ -474,6 +469,11 @@ defmodule CodingAgent.Session do
               SessionManager.new(cwd, id: session_id, parent_session: parent_session)
           end
       end
+
+    # Derive scope from session lineage. This ensures that sessions loaded from disk
+    # keep their main/subagent scope even when start_link opts omit :parent_session.
+    session_scope =
+      resolve_session_scope(opts, parent_session, session_manager.header.parent_session)
 
     # Load settings FIRST so we can use defaults for model and thinking_level
     settings_manager =
@@ -533,6 +533,7 @@ defmodule CodingAgent.Session do
       |> Keyword.put(:parent_session, session_manager.header.id)
       |> Keyword.put(:session_id, session_manager.header.id)
       |> Keyword.put(:settings_manager, settings_manager)
+      |> Keyword.put(:workspace_dir, workspace_dir)
       |> Keyword.put(:ui_context, ui_context)
       |> Keyword.put(:extension_paths, extension_paths)
       |> Keyword.put(:tool_policy, tool_policy)
@@ -829,6 +830,7 @@ defmodule CodingAgent.Session do
         parent_session: state.session_manager.header.id,
         session_id: state.session_manager.header.id,
         settings_manager: state.settings_manager,
+        workspace_dir: state.workspace_dir,
         ui_context: state.ui_context,
         extension_paths: extension_paths
       ]
@@ -1379,6 +1381,30 @@ defmodule CodingAgent.Session do
     |> Enum.reject(&is_nil/1)
     |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n\n")
+  end
+
+  @spec resolve_session_scope(keyword(), String.t() | nil, String.t() | nil) :: :main | :subagent
+  defp resolve_session_scope(opts, parent_session_opt, parent_session_from_file) do
+    case Keyword.get(opts, :session_scope) do
+      scope when scope in [:main, "main"] ->
+        :main
+
+      scope when scope in [:subagent, "subagent"] ->
+        :subagent
+
+      _ ->
+        parent = first_non_empty_binary([parent_session_opt, parent_session_from_file])
+
+        if is_binary(parent) do
+          :subagent
+        else
+          :main
+        end
+    end
+  end
+
+  defp first_non_empty_binary(list) when is_list(list) do
+    Enum.find(list, fn v -> is_binary(v) and String.trim(v) != "" end)
   end
 
   @spec refresh_system_prompt(t()) :: t()

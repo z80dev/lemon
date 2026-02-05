@@ -63,7 +63,7 @@ defmodule CodingAgent.Tools.Edit do
           String.t(),
           keyword()
         ) :: AgentToolResult.t() | {:error, String.t()}
-  def execute(_tool_call_id, params, signal, _on_update, cwd, _opts) do
+  def execute(_tool_call_id, params, signal, _on_update, cwd, opts) do
     if AbortSignal.aborted?(signal) do
       {:error, "Operation aborted"}
     else
@@ -76,7 +76,7 @@ defmodule CodingAgent.Tools.Edit do
         with :ok <- validate_required_param(path, "path"),
              :ok <- validate_required_param(old_text, "old_text"),
              :ok <- validate_required_param(new_text, "new_text") do
-          do_execute(path, old_text, new_text, signal, cwd)
+          do_execute(path, old_text, new_text, signal, cwd, opts)
         end
 
       case result do
@@ -86,8 +86,8 @@ defmodule CodingAgent.Tools.Edit do
     end
   end
 
-  defp do_execute(path, old_text, new_text, signal, cwd) do
-    resolved_path = resolve_path(path, cwd)
+  defp do_execute(path, old_text, new_text, signal, cwd, opts) do
+    resolved_path = resolve_path(path, cwd, opts)
 
     with :ok <- check_aborted(signal),
          :ok <- check_file_access(resolved_path),
@@ -96,9 +96,12 @@ defmodule CodingAgent.Tools.Edit do
          line_ending <- detect_line_ending(content),
          normalized_content <- normalize_to_lf(content),
          normalized_old_text <- normalize_to_lf(old_text),
-         {:ok, match_index, match_length} <- fuzzy_find_text(normalized_content, normalized_old_text),
-         :ok <- check_uniqueness(normalized_content, normalized_old_text, match_index, match_length),
-         {:ok, new_content} <- perform_replacement(normalized_content, match_index, match_length, new_text),
+         {:ok, match_index, match_length} <-
+           fuzzy_find_text(normalized_content, normalized_old_text),
+         :ok <-
+           check_uniqueness(normalized_content, normalized_old_text, match_index, match_length),
+         {:ok, new_content} <-
+           perform_replacement(normalized_content, match_index, match_length, new_text),
          :ok <- check_content_changed(normalized_content, new_content),
          :ok <- check_aborted(signal),
          final_content <- finalize_content(new_content, line_ending, bom),
@@ -126,8 +129,7 @@ defmodule CodingAgent.Tools.Edit do
         {:error, "Could not find the exact text to replace. The text must match exactly."}
 
       {:error, {:multiple_occurrences, count}} ->
-        {:error,
-         "Found #{count} occurrences of the text. The text to replace must be unique."}
+        {:error, "Found #{count} occurrences of the text. The text to replace must be unique."}
 
       {:error, :no_change} ->
         {:error, "No changes made. The replacement produces identical content."}
@@ -175,13 +177,31 @@ defmodule CodingAgent.Tools.Edit do
   # Path Resolution
   # ============================================================================
 
-  @spec resolve_path(String.t(), String.t()) :: String.t()
-  defp resolve_path(path, cwd) do
+  @spec resolve_path(String.t(), String.t(), keyword()) :: String.t()
+  defp resolve_path(path, cwd, opts) do
     if Path.type(path) == :absolute do
       path
     else
-      Path.join(cwd, path) |> Path.expand()
+      workspace_dir = Keyword.get(opts, :workspace_dir)
+
+      if prefer_workspace_for_path?(path, workspace_dir) do
+        Path.join(workspace_dir, path) |> Path.expand()
+      else
+        Path.join(cwd, path) |> Path.expand()
+      end
     end
+  end
+
+  defp prefer_workspace_for_path?(path, workspace_dir) do
+    is_binary(workspace_dir) and String.trim(workspace_dir) != "" and
+      not explicit_relative?(path) and
+      (path == "MEMORY.md" or String.starts_with?(path, "memory/") or
+         String.starts_with?(path, "memory\\"))
+  end
+
+  defp explicit_relative?(path) when is_binary(path) do
+    String.starts_with?(path, "./") or String.starts_with?(path, "../") or
+      String.starts_with?(path, ".\\") or String.starts_with?(path, "..\\")
   end
 
   # ============================================================================
@@ -471,7 +491,13 @@ defmodule CodingAgent.Tools.Edit do
     normalized_new_text = normalize_to_lf(new_text)
 
     before = :binary.part(content, 0, match_index)
-    after_match = :binary.part(content, match_index + match_length, byte_size(content) - match_index - match_length)
+
+    after_match =
+      :binary.part(
+        content,
+        match_index + match_length,
+        byte_size(content) - match_index - match_length
+      )
 
     {:ok, before <> normalized_new_text <> after_match}
   end
@@ -513,14 +539,18 @@ defmodule CodingAgent.Tools.Edit do
     format_diff(old_lines, new_lines, changes, context_lines)
   end
 
-  @spec compute_line_changes([String.t()], [String.t()]) :: [{:same | :removed | :added, non_neg_integer(), String.t()}]
+  @spec compute_line_changes([String.t()], [String.t()]) :: [
+          {:same | :removed | :added, non_neg_integer(), String.t()}
+        ]
   defp compute_line_changes(old_lines, new_lines) do
     # Simple diff algorithm using longest common subsequence approach
     # For each line, mark as same, removed, or added
     lcs_diff(old_lines, new_lines)
   end
 
-  @spec lcs_diff([String.t()], [String.t()]) :: [{:same | :removed | :added, non_neg_integer(), String.t()}]
+  @spec lcs_diff([String.t()], [String.t()]) :: [
+          {:same | :removed | :added, non_neg_integer(), String.t()}
+        ]
   defp lcs_diff(old_lines, new_lines) do
     # Build LCS matrix
     m = length(old_lines)
@@ -537,7 +567,12 @@ defmodule CodingAgent.Tools.Edit do
     backtrack_diff(old_arr, new_arr, dp, m, n)
   end
 
-  @spec build_lcs_table(:array.array(String.t()), :array.array(String.t()), non_neg_integer(), non_neg_integer()) ::
+  @spec build_lcs_table(
+          :array.array(String.t()),
+          :array.array(String.t()),
+          non_neg_integer(),
+          non_neg_integer()
+        ) ::
           :array.array(:array.array(non_neg_integer()))
   defp build_lcs_table(old_arr, new_arr, m, n) do
     # Initialize (m+1) x (n+1) table with zeros
@@ -568,7 +603,13 @@ defmodule CodingAgent.Tools.Edit do
     end)
   end
 
-  @spec backtrack_diff(:array.array(String.t()), :array.array(String.t()), :array.array(:array.array(non_neg_integer())), non_neg_integer(), non_neg_integer()) ::
+  @spec backtrack_diff(
+          :array.array(String.t()),
+          :array.array(String.t()),
+          :array.array(:array.array(non_neg_integer())),
+          non_neg_integer(),
+          non_neg_integer()
+        ) ::
           [{:same | :removed | :added, non_neg_integer(), String.t()}]
   defp backtrack_diff(old_arr, new_arr, dp, m, n) do
     do_backtrack(old_arr, new_arr, dp, m, n, [])
@@ -617,7 +658,12 @@ defmodule CodingAgent.Tools.Edit do
     end
   end
 
-  @spec format_diff([String.t()], [String.t()], [{:same | :removed | :added, non_neg_integer(), String.t()}], non_neg_integer()) ::
+  @spec format_diff(
+          [String.t()],
+          [String.t()],
+          [{:same | :removed | :added, non_neg_integer(), String.t()}],
+          non_neg_integer()
+        ) ::
           String.t()
   defp format_diff(_old_lines, _new_lines, changes, context_lines) do
     # Find indices of changed lines
@@ -674,7 +720,9 @@ defmodule CodingAgent.Tools.Edit do
     |> Enum.reverse()
   end
 
-  @spec format_hunk([{:same | :removed | :added, non_neg_integer(), String.t()}], [non_neg_integer()]) :: String.t()
+  @spec format_hunk([{:same | :removed | :added, non_neg_integer(), String.t()}], [
+          non_neg_integer()
+        ]) :: String.t()
   defp format_hunk(changes, indices) do
     indices
     |> Enum.map(fn idx ->
@@ -700,7 +748,9 @@ defmodule CodingAgent.Tools.Edit do
     |> Enum.with_index(1)
     |> Enum.find(fn {{old_line, new_line}, _idx} -> old_line != new_line end)
     |> case do
-      {{_, _}, idx} -> idx
+      {{_, _}, idx} ->
+        idx
+
       nil ->
         # Lines match but lengths differ
         min(length(old_lines), length(new_lines)) + 1
