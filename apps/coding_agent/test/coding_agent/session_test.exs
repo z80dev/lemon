@@ -383,6 +383,28 @@ defmodule CodingAgent.SessionTest do
     end
 
     @tag :tmp_dir
+    test "restores subagent session_scope from loaded session header", %{tmp_dir: tmp_dir} do
+      session_manager = SessionManager.new(tmp_dir, parent_session: "parent-123")
+      session_file = Path.join(tmp_dir, "subagent_session.jsonl")
+      :ok = SessionManager.save_to_file(session_file, session_manager)
+
+      workspace_dir = Path.join(tmp_dir, "workspace")
+
+      session =
+        start_session(session_file: session_file, cwd: tmp_dir, workspace_dir: workspace_dir)
+
+      state = Session.get_state(session)
+
+      assert state.session_scope == :subagent
+      assert String.contains?(state.system_prompt, "Session scope: subagent")
+      assert String.contains?(state.system_prompt, "This is a subagent session")
+
+      # Subagent scope should not inject durable context like SOUL/MEMORY.
+      refute String.contains?(state.system_prompt, "## SOUL.md")
+      refute String.contains?(state.system_prompt, "## MEMORY.md")
+    end
+
+    @tag :tmp_dir
     test "creates new session if file doesn't exist", %{tmp_dir: tmp_dir} do
       non_existent_file = Path.join(tmp_dir, "non_existent.jsonl")
 
