@@ -3,6 +3,7 @@ import { promises as fs } from 'fs';
 import * as fsSync from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as toml from '@iarna/toml';
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -30,7 +31,21 @@ function resetEnv() {
 async function writeConfig(tmpDir: string, config: Record<string, unknown>) {
   const configDir = path.join(tmpDir, '.lemon');
   await fs.mkdir(configDir, { recursive: true });
-  await fs.writeFile(path.join(configDir, 'config.json'), JSON.stringify(config, null, 2), 'utf-8');
+  await fs.writeFile(
+    path.join(configDir, 'config.toml'),
+    toml.stringify(config as toml.JsonMap),
+    'utf-8'
+  );
+}
+
+async function writeProjectConfig(projectDir: string, config: Record<string, unknown>) {
+  const configDir = path.join(projectDir, '.lemon');
+  await fs.mkdir(configDir, { recursive: true });
+  await fs.writeFile(
+    path.join(configDir, 'config.toml'),
+    toml.stringify(config as toml.JsonMap),
+    'utf-8'
+  );
 }
 
 async function createTmpDir(): Promise<string> {
@@ -76,9 +91,8 @@ describe('config helpers', () => {
     });
 
     await writeConfig(tmpDir, {
-      default_provider: 'anthropic',
-      default_model: 'claude-sonnet-4-20250514',
       providers: {},
+      agent: { default_provider: 'anthropic', default_model: 'claude-sonnet-4-20250514' },
       tui: { theme: 'lemon', debug: true }
     });
 
@@ -97,8 +111,7 @@ describe('config helpers', () => {
     process.env.ANTHROPIC_BASE_URL = 'https://anthropic.example';
 
     await writeConfig(tmpDir, {
-      default_provider: 'openai',
-      default_model: 'gpt-4o',
+      agent: { default_provider: 'openai', default_model: 'gpt-4o' },
       providers: {
         openai: { base_url: 'https://openai.example' }
       },
@@ -121,8 +134,7 @@ describe('config helpers', () => {
     process.env.ANTHROPIC_BASE_URL = 'https://anthropic.example';
 
     await writeConfig(tmpDir, {
-      default_provider: 'anthropic',
-      default_model: 'claude-sonnet-4-20250514',
+      agent: { default_provider: 'anthropic', default_model: 'claude-sonnet-4-20250514' },
       providers: {},
       tui: { theme: 'lemon', debug: false }
     });
@@ -217,7 +229,7 @@ describe('getConfigPath', () => {
     vi.resetModules();
   });
 
-  it('returns config.json under config directory', async () => {
+  it('returns config.toml under config directory', async () => {
     const mockHome = '/mock/home';
     vi.doMock('os', async (importOriginal) => {
       const actual = await importOriginal<typeof os>();
@@ -225,12 +237,12 @@ describe('getConfigPath', () => {
     });
 
     const { getConfigPath } = await import('./config.js');
-    expect(getConfigPath()).toBe(path.join(mockHome, '.lemon', 'config.json'));
+    expect(getConfigPath()).toBe(path.join(mockHome, '.lemon', 'config.toml'));
   });
 
   it('returns path consistent with getConfigDir', async () => {
     const { getConfigDir, getConfigPath } = await import('./config.js');
-    expect(getConfigPath()).toBe(path.join(getConfigDir(), 'config.json'));
+    expect(getConfigPath()).toBe(path.join(getConfigDir(), 'config.toml'));
   });
 });
 
@@ -255,8 +267,8 @@ describe('loadConfig', () => {
     const { loadConfig } = await import('./config.js');
     const config = await loadConfig();
 
-    expect(config.default_provider).toBe('anthropic');
-    expect(config.default_model).toBe('claude-sonnet-4-20250514');
+    expect(config.agent?.default_provider).toBe('anthropic');
+    expect(config.agent?.default_model).toBe('claude-sonnet-4-20250514');
     expect(config.tui?.theme).toBe('lemon');
     expect(config.tui?.debug).toBe(false);
 
@@ -271,23 +283,51 @@ describe('loadConfig', () => {
     });
 
     await writeConfig(tmpDir, {
-      default_provider: 'openai',
-      default_model: 'gpt-4',
+      agent: { default_provider: 'openai', default_model: 'gpt-4' },
       tui: { theme: 'dark', debug: true }
     });
 
     const { loadConfig } = await import('./config.js');
     const config = await loadConfig();
 
-    expect(config.default_provider).toBe('openai');
-    expect(config.default_model).toBe('gpt-4');
+    expect(config.agent?.default_provider).toBe('openai');
+    expect(config.agent?.default_model).toBe('gpt-4');
     expect(config.tui?.theme).toBe('dark');
     expect(config.tui?.debug).toBe(true);
 
     await cleanupTmpDir(tmpDir);
   });
 
-  it('returns defaults when config file contains invalid JSON', async () => {
+  it('merges project config when cwd is provided', async () => {
+    const tmpDir = await createTmpDir();
+    vi.doMock('os', async (importOriginal) => {
+      const actual = await importOriginal<typeof os>();
+      return { ...actual, homedir: () => tmpDir };
+    });
+
+    await writeConfig(tmpDir, {
+      agent: { default_provider: 'anthropic', default_model: 'claude-sonnet-4-20250514' },
+      tui: { theme: 'lemon', debug: false }
+    });
+
+    const projectDir = path.join(tmpDir, 'project');
+    await writeProjectConfig(projectDir, {
+      agent: { default_model: 'claude-opus-4-20250514' },
+      tui: { theme: 'solarized', debug: true }
+    });
+
+    const { loadConfig } = await import('./config.js');
+    const config = await loadConfig(projectDir);
+
+    expect(config.agent?.default_provider).toBe('anthropic');
+    expect(config.agent?.default_model).toBe('claude-opus-4-20250514');
+    expect(config.tui?.theme).toBe('solarized');
+    expect(config.tui?.debug).toBe(true);
+
+    await cleanupTmpDir(tmpDir);
+  });
+
+  it('returns defaults when config file contains invalid TOML', async () => {
     const tmpDir = await createTmpDir();
     vi.doMock('os', async (importOriginal) => {
       const actual = await importOriginal<typeof os>();
@@ -296,13 +336,13 @@ describe('loadConfig', () => {
 
     const configDir = path.join(tmpDir, '.lemon');
     await fs.mkdir(configDir, { recursive: true });
-    await fs.writeFile(path.join(configDir, 'config.json'), 'not valid json {{{', 'utf-8');
+    await fs.writeFile(path.join(configDir, 'config.toml'), 'not valid toml {{{', 'utf-8');
 
     const { loadConfig } = await import('./config.js');
     const config = await loadConfig();
 
-    expect(config.default_provider).toBe('anthropic');
-    expect(config.default_model).toBe('claude-sonnet-4-20250514');
+    expect(config.agent?.default_provider).toBe('anthropic');
+    expect(config.agent?.default_model).toBe('claude-sonnet-4-20250514');
 
     await cleanupTmpDir(tmpDir);
   });
@@ -316,15 +356,15 @@ describe('loadConfig', () => {
 
     // Only specify some fields
     await writeConfig(tmpDir, {
-      default_provider: 'google'
+      agent: { default_provider: 'google' }
       // default_model and tui are not specified
     });
 
     const { loadConfig } = await import('./config.js');
     const config = await loadConfig();
 
-    expect(config.default_provider).toBe('google');
-    expect(config.default_model).toBe('claude-sonnet-4-20250514'); // Default
+    expect(config.agent?.default_provider).toBe('google');
+    expect(config.agent?.default_model).toBe('claude-sonnet-4-20250514'); // Default
     expect(config.tui?.theme).toBe('lemon'); // Default
 
     await cleanupTmpDir(tmpDir);
@@ -338,7 +378,7 @@ describe('loadConfig', () => {
     });
 
     await writeConfig(tmpDir, {
-      default_provider: 'anthropic',
+      agent: { default_provider: 'anthropic' },
       providers: {
         anthropic: { api_key: 'sk-ant-xxx', base_url: 'https://custom.anthropic.com' },
         openai: { api_key: 'sk-openai-xxx' }
@@ -364,13 +404,13 @@ describe('loadConfig', () => {
 
     const configDir = path.join(tmpDir, '.lemon');
     await fs.mkdir(configDir, { recursive: true });
-    await fs.writeFile(path.join(configDir, 'config.json'), '', 'utf-8');
+    await fs.writeFile(path.join(configDir, 'config.toml'), '', 'utf-8');
 
     const { loadConfig } = await import('./config.js');
     const config = await loadConfig();
 
-    // Empty file is invalid JSON, should return defaults
-    expect(config.default_provider).toBe('anthropic');
+    // Empty file is invalid TOML, should return defaults
+    expect(config.agent?.default_provider).toBe('anthropic');
 
     await cleanupTmpDir(tmpDir);
   });
@@ -388,8 +428,8 @@ describe('loadConfig', () => {
     const config = await loadConfig();
 
     // Empty object should be merged with defaults
-    expect(config.default_provider).toBe('anthropic');
-    expect(config.default_model).toBe('claude-sonnet-4-20250514');
+    expect(config.agent?.default_provider).toBe('anthropic');
+    expect(config.agent?.default_model).toBe('claude-sonnet-4-20250514');
 
     await cleanupTmpDir(tmpDir);
   });
@@ -416,8 +456,8 @@ describe('loadConfigSync', () => {
     const { loadConfigSync } = await import('./config.js');
     const config = loadConfigSync();
 
-    expect(config.default_provider).toBe('anthropic');
-    expect(config.default_model).toBe('claude-sonnet-4-20250514');
+    expect(config.agent?.default_provider).toBe('anthropic');
+    expect(config.agent?.default_model).toBe('claude-sonnet-4-20250514');
 
     await cleanupTmpDir(tmpDir);
   });
@@ -430,20 +470,19 @@ describe('loadConfigSync', () => {
     });
 
     await writeConfig(tmpDir, {
-      default_provider: 'kimi',
-      default_model: 'moonshot-v1'
+      agent: { default_provider: 'kimi', default_model: 'moonshot-v1' }
     });
 
     const { loadConfigSync } = await import('./config.js');
     const config = loadConfigSync();
 
-    expect(config.default_provider).toBe('kimi');
-    expect(config.default_model).toBe('moonshot-v1');
+    expect(config.agent?.default_provider).toBe('kimi');
+    expect(config.agent?.default_model).toBe('moonshot-v1');
 
     await cleanupTmpDir(tmpDir);
   });
 
-  it('returns defaults on invalid JSON', async () => {
+  it('returns defaults on invalid TOML', async () => {
     const tmpDir = await createTmpDir();
     vi.doMock('os', async (importOriginal) => {
       const actual = await importOriginal<typeof os>();
@@ -452,12 +491,12 @@ describe('loadConfigSync', () => {
 
     const configDir = path.join(tmpDir, '.lemon');
     await fs.mkdir(configDir, { recursive: true });
-    await fs.writeFile(path.join(configDir, 'config.json'), '{ broken json', 'utf-8');
+    await fs.writeFile(path.join(configDir, 'config.toml'), '{ broken toml', 'utf-8');
 
     const { loadConfigSync } = await import('./config.js');
     const config = loadConfigSync();
 
-    expect(config.default_provider).toBe('anthropic');
+    expect(config.agent?.default_provider).toBe('anthropic');
 
     await cleanupTmpDir(tmpDir);
   });
@@ -492,8 +531,7 @@ describe('saveConfig', () => {
     }
 
     await saveConfig({
-      default_provider: 'test',
-      default_model: 'test-model'
+      agent: { default_provider: 'test', default_model: 'test-model' }
     });
 
     const stat = await fs.stat(configDir);
@@ -512,8 +550,7 @@ describe('saveConfig', () => {
     const { saveConfig, getConfigPath } = await import('./config.js');
 
     const testConfig = {
-      default_provider: 'openai',
-      default_model: 'gpt-4-turbo',
+      agent: { default_provider: 'openai', default_model: 'gpt-4-turbo' },
       providers: {
         openai: { api_key: 'test-key' }
       },
@@ -524,10 +561,10 @@ describe('saveConfig', () => {
 
     const configPath = getConfigPath();
     const content = await fs.readFile(configPath, 'utf-8');
-    const parsed = JSON.parse(content);
+    const parsed = toml.parse(content) as any;
 
-    expect(parsed.default_provider).toBe('openai');
-    expect(parsed.default_model).toBe('gpt-4-turbo');
+    expect(parsed.agent.default_provider).toBe('openai');
+    expect(parsed.agent.default_model).toBe('gpt-4-turbo');
     expect(parsed.providers.openai.api_key).toBe('test-key');
     expect(parsed.tui.theme).toBe('custom');
 
@@ -542,28 +579,26 @@ describe('saveConfig', () => {
     });
 
     await writeConfig(tmpDir, {
-      default_provider: 'old',
-      default_model: 'old-model'
+      agent: { default_provider: 'old', default_model: 'old-model' }
     });
 
     const { saveConfig, getConfigPath } = await import('./config.js');
 
     await saveConfig({
-      default_provider: 'new',
-      default_model: 'new-model'
+      agent: { default_provider: 'new', default_model: 'new-model' }
     });
 
     const configPath = getConfigPath();
     const content = await fs.readFile(configPath, 'utf-8');
-    const parsed = JSON.parse(content);
+    const parsed = toml.parse(content) as any;
 
-    expect(parsed.default_provider).toBe('new');
-    expect(parsed.default_model).toBe('new-model');
+    expect(parsed.agent.default_provider).toBe('new');
+    expect(parsed.agent.default_model).toBe('new-model');
 
     await cleanupTmpDir(tmpDir);
   });
 
-  it('writes formatted JSON with indentation', async () => {
+  it('writes TOML content', async () => {
     const tmpDir = await createTmpDir();
     vi.doMock('os', async (importOriginal) => {
       const actual = await importOriginal<typeof os>();
@@ -573,15 +608,15 @@ describe('saveConfig', () => {
     const { saveConfig, getConfigPath } = await import('./config.js');
 
     await saveConfig({
-      default_provider: 'test'
+      agent: { default_provider: 'test' }
     });
 
     const configPath = getConfigPath();
     const content = await fs.readFile(configPath, 'utf-8');
 
-    // Check that JSON is formatted (has newlines and indentation)
-    expect(content).toContain('\n');
-    expect(content).toMatch(/^\{\n\s+"/); // Starts with formatted JSON
+    // Check that TOML is present
+    expect(content).toContain('[agent]');
+    expect(content).toContain('default_provider');
 
     await cleanupTmpDir(tmpDir);
   });
@@ -599,7 +634,7 @@ describe('saveConfig', () => {
 
     const configPath = getConfigPath();
     const content = await fs.readFile(configPath, 'utf-8');
-    const parsed = JSON.parse(content);
+    const parsed = content.trim() === '' ? {} : (toml.parse(content) as any);
 
     expect(parsed).toEqual({});
 
@@ -694,18 +729,17 @@ describe('saveConfigKey', () => {
     });
 
     await writeConfig(tmpDir, {
-      default_provider: 'anthropic',
-      default_model: 'claude-opus',
+      agent: { default_provider: 'anthropic', default_model: 'claude-opus' },
       tui: { theme: 'light', debug: false }
     });
 
     const { saveConfigKey, loadConfig } = await import('./config.js');
 
-    await saveConfigKey('default_model', 'claude-sonnet-4-20250514');
+    await saveConfigKey('agent', { default_model: 'claude-sonnet-4-20250514' });
 
     const config = await loadConfig();
-    expect(config.default_provider).toBe('anthropic'); // Preserved
-    expect(config.default_model).toBe('claude-sonnet-4-20250514'); // Updated
+    expect(config.agent?.default_provider).toBe('anthropic'); // Preserved
+    expect(config.agent?.default_model).toBe('claude-sonnet-4-20250514'); // Updated
     expect(config.tui?.theme).toBe('light'); // Preserved
 
     await cleanupTmpDir(tmpDir);
@@ -720,10 +754,10 @@ describe('saveConfigKey', () => {
 
     const { saveConfigKey, loadConfig } = await import('./config.js');
 
-    await saveConfigKey('default_provider', 'openai');
+    await saveConfigKey('agent', { default_provider: 'openai' });
 
     const config = await loadConfig();
-    expect(config.default_provider).toBe('openai');
+    expect(config.agent?.default_provider).toBe('openai');
 
     await cleanupTmpDir(tmpDir);
   });
@@ -736,7 +770,7 @@ describe('saveConfigKey', () => {
     });
 
     await writeConfig(tmpDir, {
-      default_provider: 'anthropic'
+      agent: { default_provider: 'anthropic' }
     });
 
     const { saveConfigKey, loadConfig } = await import('./config.js');
@@ -761,7 +795,7 @@ describe('saveConfigKey', () => {
     });
 
     await writeConfig(tmpDir, {
-      default_provider: 'anthropic',
+      agent: { default_provider: 'anthropic' },
       tui: { theme: 'light', debug: false }
     });
 
@@ -796,7 +830,7 @@ describe('saveTUIConfigKey', () => {
     });
 
     await writeConfig(tmpDir, {
-      default_provider: 'anthropic',
+      agent: { default_provider: 'anthropic' },
       tui: { theme: 'light', debug: false }
     });
 
@@ -819,7 +853,7 @@ describe('saveTUIConfigKey', () => {
     });
 
     await writeConfig(tmpDir, {
-      default_provider: 'anthropic'
+      agent: { default_provider: 'anthropic' }
       // No tui field
     });
 
@@ -858,8 +892,7 @@ describe('saveTUIConfigKey', () => {
     });
 
     await writeConfig(tmpDir, {
-      default_provider: 'openai',
-      default_model: 'gpt-4',
+      agent: { default_provider: 'openai', default_model: 'gpt-4' },
       providers: { openai: { api_key: 'test' } },
       tui: { theme: 'light' }
     });
@@ -869,8 +902,8 @@ describe('saveTUIConfigKey', () => {
     await saveTUIConfigKey('debug', true);
 
     const config = await loadConfig();
-    expect(config.default_provider).toBe('openai');
-    expect(config.default_model).toBe('gpt-4');
+    expect(config.agent?.default_provider).toBe('openai');
+    expect(config.agent?.default_model).toBe('gpt-4');
     expect(config.providers?.openai?.api_key).toBe('test');
     expect(config.tui?.theme).toBe('light');
     expect(config.tui?.debug).toBe(true);
@@ -908,6 +941,35 @@ describe('resolveConfig', () => {
     await cleanupTmpDir(tmpDir);
   });
 
+  it('uses project config when cwd is provided', async () => {
+    const tmpDir = await createTmpDir();
+    vi.doMock('os', async (importOriginal) => {
+      const actual = await importOriginal<typeof os>();
+      return { ...actual, homedir: () => tmpDir };
+    });
+
+    await writeConfig(tmpDir, {
+      agent: { default_provider: 'anthropic', default_model: 'claude-sonnet-4-20250514' },
+      tui: { theme: 'lemon', debug: false }
+    });
+
+    const projectDir = path.join(tmpDir, 'project');
+    await writeProjectConfig(projectDir, {
+      agent: { default_provider: 'openai', default_model: 'gpt-4o' },
+      tui: { theme: 'solarized', debug: true }
+    });
+
+    const { resolveConfig } = await import('./config.js');
+    const config = resolveConfig({ cwd: projectDir });
+
+    expect(config.provider).toBe('openai');
+    expect(config.model).toBe('gpt-4o');
+    expect(config.theme).toBe('solarized');
+    expect(config.debug).toBe(true);
+
+    await cleanupTmpDir(tmpDir);
+  });
+
   it('CLI args override environment variables', async () => {
     const tmpDir = await createTmpDir();
     vi.doMock('os', async (importOriginal) => {
@@ -938,8 +1000,10 @@ describe('resolveConfig', () => {
     });
 
     await writeConfig(tmpDir, {
-      default_provider: 'anthropic',
-      default_model: 'claude-sonnet-4-20250514'
+      agent: {
+        default_provider: 'anthropic',
+        default_model: 'claude-sonnet-4-20250514'
+      }
     });
 
     process.env.LEMON_DEFAULT_PROVIDER = 'google';
@@ -962,7 +1026,7 @@ describe('resolveConfig', () => {
     });
 
     await writeConfig(tmpDir, {
-      default_provider: 'openai',
+      agent: { default_provider: 'openai' },
       providers: {
         openai: { api_key: 'config-key' }
       }
@@ -986,7 +1050,7 @@ describe('resolveConfig', () => {
     });
 
     await writeConfig(tmpDir, {
-      default_provider: 'openai',
+      agent: { default_provider: 'openai' },
       providers: {
         openai: { base_url: 'https://config.example.com' }
       }
@@ -1182,7 +1246,7 @@ describe('resolveConfig', () => {
     });
 
     await writeConfig(tmpDir, {
-      default_provider: 'anthropic',
+      agent: { default_provider: 'anthropic' },
       providers: {
         anthropic: { api_key: 'config-api-key' }
       }
@@ -1204,7 +1268,7 @@ describe('resolveConfig', () => {
     });
 
     await writeConfig(tmpDir, {
-      default_provider: 'openai',
+      agent: { default_provider: 'openai' },
       providers: {
         openai: { base_url: 'https://config.example.com' }
       }
@@ -1282,67 +1346,18 @@ describe('config merging (via loadConfig)', () => {
     });
 
     await writeConfig(tmpDir, {
-      default_provider: 'google'
+      agent: { default_provider: 'google' }
     });
 
     const { loadConfig } = await import('./config.js');
     const config = await loadConfig();
 
-    expect(config.default_provider).toBe('google');
-    expect(config.default_model).toBe('claude-sonnet-4-20250514'); // Default
+    expect(config.agent?.default_provider).toBe('google');
+    expect(config.agent?.default_model).toBe('claude-sonnet-4-20250514'); // Default
 
     await cleanupTmpDir(tmpDir);
   });
 
-  it('handles null values in config', async () => {
-    const tmpDir = await createTmpDir();
-    vi.doMock('os', async (importOriginal) => {
-      const actual = await importOriginal<typeof os>();
-      return { ...actual, homedir: () => tmpDir };
-    });
-
-    const configDir = path.join(tmpDir, '.lemon');
-    await fs.mkdir(configDir, { recursive: true });
-    await fs.writeFile(
-      path.join(configDir, 'config.json'),
-      JSON.stringify({
-        default_provider: null,
-        default_model: 'test-model'
-      }),
-      'utf-8'
-    );
-
-    const { loadConfig } = await import('./config.js');
-    const config = await loadConfig();
-
-    // null is falsy, so default should be used
-    expect(config.default_provider).toBe('anthropic');
-    expect(config.default_model).toBe('test-model');
-
-    await cleanupTmpDir(tmpDir);
-  });
-
-  it('handles undefined values in config', async () => {
-    const tmpDir = await createTmpDir();
-    vi.doMock('os', async (importOriginal) => {
-      const actual = await importOriginal<typeof os>();
-      return { ...actual, homedir: () => tmpDir };
-    });
-
-    // JSON doesn't support undefined, but we can test with explicit undefined in JS
-    await writeConfig(tmpDir, {
-      default_model: 'test-model'
-      // default_provider is implicitly undefined
-    });
-
-    const { loadConfig } = await import('./config.js');
-    const config = await loadConfig();
-
-    expect(config.default_provider).toBe('anthropic'); // Default used
-    expect(config.default_model).toBe('test-model');
-
-    await cleanupTmpDir(tmpDir);
-  });
 });
 
 describe('edge cases and error handling', () => {
@@ -1354,77 +1369,6 @@ describe('edge cases and error handling', () => {
   afterEach(() => {
     resetEnv();
     vi.resetModules();
-  });
-
-  it('handles JSON with extra whitespace', async () => {
-    const tmpDir = await createTmpDir();
-    vi.doMock('os', async (importOriginal) => {
-      const actual = await importOriginal<typeof os>();
-      return { ...actual, homedir: () => tmpDir };
-    });
-
-    const configDir = path.join(tmpDir, '.lemon');
-    await fs.mkdir(configDir, { recursive: true });
-    await fs.writeFile(
-      path.join(configDir, 'config.json'),
-      '\n\n  {  "default_provider" :   "openai"  }  \n\n',
-      'utf-8'
-    );
-
-    const { loadConfig } = await import('./config.js');
-    const config = await loadConfig();
-
-    expect(config.default_provider).toBe('openai');
-
-    await cleanupTmpDir(tmpDir);
-  });
-
-  it('handles JSON with comments by returning defaults (invalid JSON)', async () => {
-    const tmpDir = await createTmpDir();
-    vi.doMock('os', async (importOriginal) => {
-      const actual = await importOriginal<typeof os>();
-      return { ...actual, homedir: () => tmpDir };
-    });
-
-    const configDir = path.join(tmpDir, '.lemon');
-    await fs.mkdir(configDir, { recursive: true });
-    await fs.writeFile(
-      path.join(configDir, 'config.json'),
-      '// This is a comment\n{ "default_provider": "openai" }',
-      'utf-8'
-    );
-
-    const { loadConfig } = await import('./config.js');
-    const config = await loadConfig();
-
-    // JSON with comments is invalid, should return defaults
-    expect(config.default_provider).toBe('anthropic');
-
-    await cleanupTmpDir(tmpDir);
-  });
-
-  it('handles JSON array instead of object by returning defaults', async () => {
-    const tmpDir = await createTmpDir();
-    vi.doMock('os', async (importOriginal) => {
-      const actual = await importOriginal<typeof os>();
-      return { ...actual, homedir: () => tmpDir };
-    });
-
-    const configDir = path.join(tmpDir, '.lemon');
-    await fs.mkdir(configDir, { recursive: true });
-    await fs.writeFile(
-      path.join(configDir, 'config.json'),
-      '["not", "an", "object"]',
-      'utf-8'
-    );
-
-    const { loadConfig } = await import('./config.js');
-    const config = await loadConfig();
-
-    // Array is not valid config, merged result will have default_provider
-    expect(config.default_provider).toBe('anthropic');
-
-    await cleanupTmpDir(tmpDir);
   });
 
   it('handles unicode in config values', async () => {
@@ -1455,14 +1399,14 @@ describe('edge cases and error handling', () => {
 
     const longValue = 'a'.repeat(10000);
     await writeConfig(tmpDir, {
-      default_model: longValue
+      agent: { default_model: longValue }
     });
 
     const { loadConfig } = await import('./config.js');
     const config = await loadConfig();
 
-    expect(config.default_model).toBe(longValue);
-    expect(config.default_model?.length).toBe(10000);
+    expect(config.agent?.default_model).toBe(longValue);
+    expect(config.agent?.default_model?.length).toBe(10000);
 
     await cleanupTmpDir(tmpDir);
   });
@@ -1475,13 +1419,13 @@ describe('edge cases and error handling', () => {
     });
 
     await writeConfig(tmpDir, {
-      default_model: 'model/with\\special"chars\nand\ttabs'
+      agent: { default_model: 'model/with\\special"chars\nand\ttabs' }
     });
 
     const { loadConfig } = await import('./config.js');
     const config = await loadConfig();
 
-    expect(config.default_model).toBe('model/with\\special"chars\nand\ttabs');
+    expect(config.agent?.default_model).toBe('model/with\\special"chars\nand\ttabs');
 
     await cleanupTmpDir(tmpDir);
   });
@@ -1603,8 +1547,7 @@ describe('concurrent config operations', () => {
     });
 
     await writeConfig(tmpDir, {
-      default_provider: 'test',
-      default_model: 'test-model'
+      agent: { default_provider: 'test', default_model: 'test-model' }
     });
 
     const { loadConfig } = await import('./config.js');
@@ -1618,8 +1561,8 @@ describe('concurrent config operations', () => {
     ]);
 
     for (const config of results) {
-      expect(config.default_provider).toBe('test');
-      expect(config.default_model).toBe('test-model');
+      expect(config.agent?.default_provider).toBe('test');
+      expect(config.agent?.default_model).toBe('test-model');
     }
 
     await cleanupTmpDir(tmpDir);
@@ -1634,11 +1577,11 @@ describe('concurrent config operations', () => {
 
     const { saveConfig, loadConfig } = await import('./config.js');
 
-    await saveConfig({ default_provider: 'saved', default_model: 'saved-model' });
+    await saveConfig({ agent: { default_provider: 'saved', default_model: 'saved-model' } });
     const config = await loadConfig();
 
-    expect(config.default_provider).toBe('saved');
-    expect(config.default_model).toBe('saved-model');
+    expect(config.agent?.default_provider).toBe('saved');
+    expect(config.agent?.default_model).toBe('saved-model');
 
     await cleanupTmpDir(tmpDir);
   });

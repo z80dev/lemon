@@ -45,21 +45,13 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
 
   describe "build_command/3" do
     setup do
-      prev_codex = Application.get_env(:agent_core, :codex)
       prev_env = System.get_env("LEMON_CODEX_EXTRA_ARGS")
       prev_auto = System.get_env("LEMON_CODEX_AUTO_APPROVE")
 
-      Application.delete_env(:agent_core, :codex)
       System.delete_env("LEMON_CODEX_EXTRA_ARGS")
       System.delete_env("LEMON_CODEX_AUTO_APPROVE")
 
       on_exit(fn ->
-        if is_nil(prev_codex) do
-          Application.delete_env(:agent_core, :codex)
-        else
-          Application.put_env(:agent_core, :codex, prev_codex)
-        end
-
         if prev_env, do: System.put_env("LEMON_CODEX_EXTRA_ARGS", prev_env)
         if prev_auto, do: System.put_env("LEMON_CODEX_AUTO_APPROVE", prev_auto)
       end)
@@ -103,8 +95,8 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
     end
 
     test "adds auto-approve flag when enabled via config" do
-      Application.put_env(:agent_core, :codex, auto_approve: true)
-      state = RunnerState.new()
+      config = %LemonCore.Config{agent: %{cli: %{codex: %{auto_approve: true}}}}
+      state = RunnerState.new(config)
       {_cmd, args} = CodexRunner.build_command("Hello", nil, state)
 
       assert "--dangerously-bypass-approvals-and-sandbox" in args
@@ -112,7 +104,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
 
     test "adds auto-approve flag when enabled via environment variable" do
       System.put_env("LEMON_CODEX_AUTO_APPROVE", "1")
-      state = RunnerState.new()
+      state = RunnerState.new(LemonCore.Config.load())
       {_cmd, args} = CodexRunner.build_command("Hello", nil, state)
 
       assert "--dangerously-bypass-approvals-and-sandbox" in args
@@ -120,7 +112,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
 
     test "respects extra args from environment variable" do
       System.put_env("LEMON_CODEX_EXTRA_ARGS", "--model o1 --provider openai")
-      state = RunnerState.new()
+      state = RunnerState.new(LemonCore.Config.load())
       {_cmd, args} = CodexRunner.build_command("Hello", nil, state)
 
       assert "--model" in args
@@ -130,8 +122,8 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
     end
 
     test "config takes precedence over default extra args" do
-      Application.put_env(:agent_core, :codex, extra_args: ["--custom", "value"])
-      state = RunnerState.new()
+      config = %LemonCore.Config{agent: %{cli: %{codex: %{extra_args: ["--custom", "value"]}}}}
+      state = RunnerState.new(config)
       {_cmd, args} = CodexRunner.build_command("Hello", nil, state)
 
       assert "--custom" in args

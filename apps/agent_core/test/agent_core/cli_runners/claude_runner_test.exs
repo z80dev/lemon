@@ -24,11 +24,9 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
   setup do
     # Clean up config between tests
-    Application.delete_env(:agent_core, :claude)
     System.delete_env("LEMON_CLAUDE_YOLO")
 
     on_exit(fn ->
-      Application.delete_env(:agent_core, :claude)
       System.delete_env("LEMON_CLAUDE_YOLO")
     end)
 
@@ -76,18 +74,14 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     end
 
     test "adds skip-permissions flag when yolo enabled via config" do
-      Application.put_env(:agent_core, :claude, yolo: true)
-
-      state = RunnerState.new()
+      state = RunnerState.new(%{yolo: true})
       {_cmd, args} = ClaudeRunner.build_command("Hello", nil, state)
 
       assert "--dangerously-skip-permissions" in args
     end
 
     test "adds skip-permissions flag when dangerously_skip_permissions enabled" do
-      Application.put_env(:agent_core, :claude, dangerously_skip_permissions: true)
-
-      state = RunnerState.new()
+      state = RunnerState.new(%{dangerously_skip_permissions: true})
       {_cmd, args} = ClaudeRunner.build_command("Hello", nil, state)
 
       assert "--dangerously-skip-permissions" in args
@@ -114,9 +108,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     end
 
     test "adds allowed tools when configured as list" do
-      Application.put_env(:agent_core, :claude, allowed_tools: ["Bash", "Read", "Write"])
-
-      state = RunnerState.new()
+      state = RunnerState.new(%{allowed_tools: ["Bash", "Read", "Write"]})
       {_cmd, args} = ClaudeRunner.build_command("Hello", nil, state)
 
       assert "--allowedTools" in args
@@ -126,9 +118,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     end
 
     test "adds allowed tools when configured as comma-separated string" do
-      Application.put_env(:agent_core, :claude, allowed_tools: "Bash,Read,Write")
-
-      state = RunnerState.new()
+      state = RunnerState.new(%{allowed_tools: "Bash,Read,Write"})
       {_cmd, args} = ClaudeRunner.build_command("Hello", nil, state)
 
       assert "--allowedTools" in args
@@ -136,9 +126,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     end
 
     test "handles empty allowed_tools list" do
-      Application.put_env(:agent_core, :claude, allowed_tools: [])
-
-      state = RunnerState.new()
+      state = RunnerState.new(%{allowed_tools: []})
       {_cmd, args} = ClaudeRunner.build_command("Hello", nil, state)
 
       refute "--allowedTools" in args
@@ -723,7 +711,6 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
         System.delete_env("LEMON_TEST_SECRET")
         System.delete_env("LEMON_TEST_PATH")
         System.delete_env("LEMON_CLAUDE_YOLO")
-        Application.delete_env(:agent_core, :claude)
 
         # Restore original env vars we care about
         for key <- ["HOME", "PATH", "USER", "SHELL", "TERM"] do
@@ -751,10 +738,9 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     end
 
     test "does not scrub when yolo mode enabled" do
-      Application.put_env(:agent_core, :claude, yolo: true)
       System.put_env("LEMON_TEST_SECRET", "shh")
 
-      env = ClaudeRunner.env(RunnerState.new())
+      env = ClaudeRunner.env(RunnerState.new(%{yolo: true}))
 
       # With yolo mode, scrub_env is auto-disabled
       assert env == nil or Enum.any?(env, fn {key, _} -> key == "LEMON_TEST_SECRET" end)
@@ -762,49 +748,36 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
     test "disables scrubbing when explicitly configured" do
       System.put_env("LEMON_TEST_SECRET", "shh")
-      Application.put_env(:agent_core, :claude, scrub_env: false)
 
-      env = ClaudeRunner.env(RunnerState.new())
+      env = ClaudeRunner.env(RunnerState.new(%{scrub_env: false}))
 
       assert env == nil
     end
 
     test "allows environment overrides when scrubbing" do
-      Application.put_env(:agent_core, :claude, scrub_env: true, env_overrides: %{"LEMON_TEST_SECRET" => "shh"})
-
-      env = ClaudeRunner.env(RunnerState.new())
+      env = ClaudeRunner.env(RunnerState.new(%{scrub_env: true, env_overrides: %{"LEMON_TEST_SECRET" => "shh"}}))
 
       assert Enum.any?(env, fn {key, value} -> key == "LEMON_TEST_SECRET" and value == "shh" end)
     end
 
     test "allows environment overrides as keyword list" do
-      Application.put_env(:agent_core, :claude, scrub_env: true, env_overrides: [{"CUSTOM_VAR", "value"}])
-
-      env = ClaudeRunner.env(RunnerState.new())
+      env = ClaudeRunner.env(RunnerState.new(%{scrub_env: true, env_overrides: [{"CUSTOM_VAR", "value"}]}))
 
       assert Enum.any?(env, fn {key, value} -> key == "CUSTOM_VAR" and value == "value" end)
     end
 
     test "includes env_allowlist variables" do
-      Application.put_env(:agent_core, :claude,
-        scrub_env: true,
-        env_allowlist: ["CUSTOM_ALLOWED"]
-      )
       System.put_env("CUSTOM_ALLOWED", "yes")
 
-      env = ClaudeRunner.env(RunnerState.new())
+      env = ClaudeRunner.env(RunnerState.new(%{scrub_env: true, env_allowlist: ["CUSTOM_ALLOWED"]}))
 
       assert Enum.any?(env, fn {key, _} -> key == "CUSTOM_ALLOWED" end)
     end
 
     test "includes variables matching env_allow_prefixes" do
-      Application.put_env(:agent_core, :claude,
-        scrub_env: true,
-        env_allow_prefixes: ["MY_PREFIX_"]
-      )
       System.put_env("MY_PREFIX_VAR", "value")
 
-      env = ClaudeRunner.env(RunnerState.new())
+      env = ClaudeRunner.env(RunnerState.new(%{scrub_env: true, env_allow_prefixes: ["MY_PREFIX_"]}))
 
       assert Enum.any?(env, fn {key, _} -> key == "MY_PREFIX_VAR" end)
     end

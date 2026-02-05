@@ -11,7 +11,6 @@ defmodule CodingAgent.Config do
   The agent uses a hierarchical directory structure:
 
       ~/.lemon/agent/
-      ├── settings.json      # Global settings
       ├── sessions/          # Session storage (encoded by cwd)
       │   └── --path-to-project--/
       ├── extensions/        # Global extensions
@@ -39,6 +38,19 @@ defmodule CodingAgent.Config do
   def agent_dir, do: Path.join(System.user_home!(), ".lemon/agent")
 
   @doc """
+  Get the global settings file path.
+
+  Returns the path to the agent settings file under `~/.lemon/agent`.
+
+  ## Examples
+
+      iex> CodingAgent.Config.settings_file()
+      "/home/user/.lemon/agent/settings.json"
+  """
+  @spec settings_file() :: String.t()
+  def settings_file, do: Path.join(agent_dir(), "settings.json")
+
+  @doc """
   Get the sessions directory for a working directory.
 
   Sessions are stored in an encoded directory name based on the working directory
@@ -58,19 +70,6 @@ defmodule CodingAgent.Config do
     encoded = encode_cwd(cwd)
     Path.join([agent_dir(), "sessions", encoded])
   end
-
-  @doc """
-  Get the settings file path.
-
-  Returns the path to the global settings JSON file.
-
-  ## Examples
-
-      iex> CodingAgent.Config.settings_file()
-      "/home/user/.lemon/agent/settings.json"
-  """
-  @spec settings_file() :: String.t()
-  def settings_file, do: Path.join(agent_dir(), "settings.json")
 
   @doc """
   Get the global extensions directory.

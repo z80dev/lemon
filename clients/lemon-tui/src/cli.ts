@@ -91,7 +91,7 @@ Options:
   --help, -h             Show this help message
 
 Configuration:
-  Config file: ~/.lemon/config.json
+  Config file: ~/.lemon/config.toml
   Environment variables override config file values.
   CLI arguments override everything.
 `);
@@ -152,6 +152,7 @@ const resolvedConfig = resolveConfig({
   model: cliArgs.model,
   baseUrl: cliArgs.baseUrl,
   debug: cliArgs.debug,
+  cwd: cliArgs.cwd,
 });
 
 // Apply theme from resolved config

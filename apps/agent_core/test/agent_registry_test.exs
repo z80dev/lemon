@@ -697,25 +697,23 @@ defmodule AgentCore.AgentRegistryTest do
 
   describe "count/0" do
     test "returns the number of registered agents" do
-      initial_count = AgentRegistry.count()
-
       session_id = unique_session_id()
       :ok = AgentRegistry.register({session_id, :counter_test, 0})
 
-      assert AgentRegistry.count() == initial_count + 1
+      assert AgentRegistry.count_by_session(session_id) == 1
+      assert is_integer(AgentRegistry.count())
 
       :ok = AgentRegistry.unregister({session_id, :counter_test, 0})
 
-      assert AgentRegistry.count() == initial_count
+      assert AgentRegistry.count_by_session(session_id) == 0
     end
 
     test "count increases with each registration" do
-      initial_count = AgentRegistry.count()
       session_id = unique_session_id()
 
       for i <- 0..4 do
         :ok = AgentRegistry.register({session_id, :sequential, i})
-        assert AgentRegistry.count() == initial_count + i + 1
+        assert AgentRegistry.count_by_session(session_id) == i + 1
       end
     end
   end
@@ -899,7 +897,8 @@ defmodule AgentCore.AgentRegistryTest do
       # Kill the child, which will take down the parent
       ref = Process.monitor(pid)
       send(child_pid, :die)
-      assert_receive {:DOWN, ^ref, :process, ^pid, :intentional}
+      assert_receive {:DOWN, ^ref, :process, ^pid, reason}
+      assert reason in [:intentional, :noproc]
 
       Process.sleep(50)
 

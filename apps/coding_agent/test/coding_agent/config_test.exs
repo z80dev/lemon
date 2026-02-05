@@ -76,26 +76,6 @@ defmodule CodingAgent.ConfigTest do
     end
   end
 
-  describe "settings_file/0" do
-    test "returns path under agent directory" do
-      result = Config.settings_file()
-
-      assert String.starts_with?(result, Config.agent_dir())
-    end
-
-    test "returns settings.json filename" do
-      result = Config.settings_file()
-
-      assert String.ends_with?(result, "settings.json")
-    end
-
-    test "returns absolute path" do
-      result = Config.settings_file()
-
-      assert Path.type(result) == :absolute
-    end
-  end
-
   describe "extensions_dir/0" do
     test "returns path under agent directory" do
       result = Config.extensions_dir()

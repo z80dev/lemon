@@ -81,6 +81,7 @@ defmodule AgentCore.CliRunners.CodexRunner do
     WebSearchItem
   }
   alias AgentCore.CliRunners.Types.{EventFactory, ResumeToken}
+  alias LemonCore.Config, as: LemonConfig
 
   require Logger
 
@@ -96,15 +97,17 @@ defmodule AgentCore.CliRunners.CodexRunner do
       :factory,
       :final_answer,
       :turn_index,
-      :found_session
+      :found_session,
+      :config
     ]
 
-    def new do
+    def new(config \\ nil) do
       %__MODULE__{
         factory: EventFactory.new("codex"),
         final_answer: nil,
         turn_index: 0,
-        found_session: nil
+        found_session: nil,
+        config: config
       }
     end
   end
@@ -122,7 +125,12 @@ defmodule AgentCore.CliRunners.CodexRunner do
   end
 
   @impl true
-  def build_command(_prompt, resume, _state) do
+  def init_state(_prompt, _resume, cwd) do
+    RunnerState.new(LemonConfig.load(cwd))
+  end
+
+  @impl true
+  def build_command(_prompt, resume, state) do
     base_args =
       [
         "exec",
@@ -130,9 +138,9 @@ defmodule AgentCore.CliRunners.CodexRunner do
         "--skip-git-repo-check",
         "--color=never"
       ]
-      |> maybe_add_auto_approve()
+      |> maybe_add_auto_approve(state)
 
-    extra_args = codex_extra_args()
+    extra_args = codex_extra_args(state)
 
     args =
       case resume do
@@ -592,31 +600,18 @@ defmodule AgentCore.CliRunners.CodexRunner do
     {done, total}
   end
 
-  defp codex_extra_args do
-    app_args = get_codex_config(:extra_args, ["-c", "notify=[]"])
-
-    env_args =
-      case System.get_env("LEMON_CODEX_EXTRA_ARGS") do
-        nil -> []
-        "" -> []
-        raw -> String.split(raw, ~r/\s+/, trim: true)
-      end
-
-    app_args ++ env_args
-  end
-
-  defp maybe_add_auto_approve(args) do
-    if codex_auto_approve?() do
+  defp maybe_add_auto_approve(args, state) do
+    if codex_auto_approve?(state) do
       args ++ ["--dangerously-bypass-approvals-and-sandbox"]
     else
       args
     end
   end
 
-  defp codex_auto_approve? do
-    case get_codex_config(:auto_approve, nil) do
+  defp codex_auto_approve?(state) do
+    case get_codex_config(state, :auto_approve, nil) do
       nil ->
-        System.get_env("LEMON_CODEX_AUTO_APPROVE") in ["1", "true", "TRUE", "yes", "YES"]
+        false
 
       value ->
         value == true
@@ -624,11 +619,20 @@ defmodule AgentCore.CliRunners.CodexRunner do
   end
 
   # Get codex config value, handling both keyword lists and maps
-  defp get_codex_config(key, default) do
-    case Application.get_env(:agent_core, :codex, []) do
-      config when is_map(config) -> Map.get(config, key, default)
-      config when is_list(config) -> Keyword.get(config, key, default)
-      _ -> default
+  defp get_codex_config(%RunnerState{config: %LemonConfig{agent: agent}}, key, default) do
+    case get_in(agent, [:cli, :codex, key]) do
+      nil -> default
+      value -> value
+    end
+  end
+
+  defp get_codex_config(_state, _key, default), do: default
+
+  defp codex_extra_args(state) do
+    case get_codex_config(state, :extra_args, ["-c", "notify=[]"]) do
+      list when is_list(list) -> Enum.map(list, &to_string/1)
+      value when is_binary(value) -> String.split(value, ~r/\s+/, trim: true)
+      _ -> ["-c", "notify=[]"]
     end
   end
 end

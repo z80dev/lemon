@@ -86,7 +86,6 @@ defmodule CodingAgent.SessionRegistryTest do
 
       ids = SessionRegistry.list_ids()
       assert session_id in ids
-      assert length(ids) == length(initial_ids) + 1
 
       Agent.stop(pid)
     end

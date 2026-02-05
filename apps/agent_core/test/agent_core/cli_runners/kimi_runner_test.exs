@@ -50,8 +50,8 @@ defmodule AgentCore.CliRunners.KimiRunnerTest do
     end
 
     test "adds extra args from config" do
-      Application.put_env(:agent_core, :kimi, extra_args: ["--foo", "--bar"])
-      state = RunnerState.new(nil)
+      config = %LemonCore.Config{agent: %{cli: %{kimi: %{extra_args: ["--foo", "--bar"]}}}}
+      state = RunnerState.new(nil, nil, config)
       {_cmd, args} = KimiRunner.build_command("Hello", nil, state)
 
       assert "--foo" in args

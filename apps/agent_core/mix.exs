@@ -27,6 +27,7 @@ defmodule AgentCore.MixProject do
   defp deps do
     [
       {:ai, in_umbrella: true},
+      {:lemon_core, in_umbrella: true},
       {:req, "~> 0.5"},
       {:jason, "~> 1.4"},
       {:stream_data, "~> 1.1", only: :test}

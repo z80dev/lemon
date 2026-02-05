@@ -17,7 +17,6 @@ defmodule CodingAgent.Tools.Task do
   alias CodingAgent.LaneQueue
   alias CodingAgent.RunGraph
   alias CodingAgent.Session
-  alias CodingAgent.SettingsManager
   alias CodingAgent.Subagents
   alias CodingAgent.TaskStore
   alias CodingAgent.ToolPolicy
@@ -174,7 +173,6 @@ defmodule CodingAgent.Tools.Task do
             run_override.(on_update_safe, signal)
 
           engine in ["codex", "claude", "kimi"] ->
-            apply_cli_settings(engine, cwd)
             execute_via_cli_engine(engine, prompt, cwd, description, role_id, on_update_safe, signal)
 
           coordinator && coordinator_alive?(coordinator) && role_id ->
@@ -766,24 +764,6 @@ defmodule CodingAgent.Tools.Task do
       end
     end
   end
-
-  defp apply_cli_settings("codex", cwd) do
-    settings = SettingsManager.load(cwd)
-    codex = Map.get(settings, :codex, %{})
-
-    config = if is_map(codex), do: codex, else: %{}
-    Application.put_env(:agent_core, :codex, config)
-  end
-
-  defp apply_cli_settings("kimi", cwd) do
-    settings = SettingsManager.load(cwd)
-    kimi = Map.get(settings, :kimi, %{})
-
-    config = if is_map(kimi), do: kimi, else: %{}
-    Application.put_env(:agent_core, :kimi, config)
-  end
-
-  defp apply_cli_settings(_engine, _cwd), do: :ok
 
   defp maybe_start_abort_monitor(nil, _pid), do: nil
 

@@ -285,11 +285,11 @@ defmodule CodingAgent.SessionTest do
       assert "add" in tool_names
     end
 
-    test "defaults thinking_level to :off" do
+    test "defaults thinking_level to :medium" do
       session = start_session()
       state = Session.get_state(session)
 
-      assert state.thinking_level == :off
+      assert state.thinking_level == :medium
     end
 
     test "system_prompt is a string (may include loaded CLAUDE.md)" do

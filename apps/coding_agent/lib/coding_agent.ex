@@ -36,7 +36,7 @@ defmodule CodingAgent do
   - `CodingAgent.BashExecutor` - Streaming shell execution
   - `CodingAgent.Compaction` - Context compaction and summarization
   - `CodingAgent.Config` - Path and environment configuration
-  - `CodingAgent.SettingsManager` - Global and project settings
+  - `CodingAgent.SettingsManager` - Canonical settings adapter (TOML)
   - `CodingAgent.UI` - Pluggable UI abstraction
   """
 
@@ -110,7 +110,8 @@ defmodule CodingAgent do
   @doc """
   Load settings for a working directory.
 
-  Merges global settings (~/.lemon/agent/settings.json) with project settings.
+  Merges global settings (`~/.lemon/config.toml`) with project settings
+  (`<project>/.lemon/config.toml`).
   """
   @spec load_settings(String.t()) :: CodingAgent.SettingsManager.t()
   defdelegate load_settings(cwd), to: CodingAgent.SettingsManager, as: :load

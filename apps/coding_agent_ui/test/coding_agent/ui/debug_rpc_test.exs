@@ -136,8 +136,21 @@ defmodule CodingAgent.UI.DebugRPCTest do
       )
 
     on_exit(fn ->
-      if Process.alive?(rpc), do: GenServer.stop(rpc)
-      if Process.alive?(output), do: GenServer.stop(output)
+      if is_pid(rpc) and Process.alive?(rpc) do
+        try do
+          GenServer.stop(rpc)
+        catch
+          :exit, _ -> :ok
+        end
+      end
+
+      if is_pid(output) and Process.alive?(output) do
+        try do
+          GenServer.stop(output)
+        catch
+          :exit, _ -> :ok
+        end
+      end
     end)
 
     %{rpc: rpc, output: output}

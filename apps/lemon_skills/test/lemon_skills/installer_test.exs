@@ -26,9 +26,11 @@ defmodule LemonSkills.InstallerTest do
 
     # Disable approval requirement for most tests
     Application.put_env(:lemon_skills, :require_approval, false)
+    Application.put_env(:lemon_skills, :approval_timeout_ms, 100)
 
     on_exit(fn ->
       Application.delete_env(:lemon_skills, :require_approval)
+      Application.delete_env(:lemon_skills, :approval_timeout_ms)
     end)
 
     {:ok, skill_dir: skill_dir, tmp_dir: tmp_dir}

@@ -68,6 +68,7 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
   }
   alias AgentCore.CliRunners.Types.{EventFactory, ResumeToken}
   alias AgentCore.CliRunners.ToolActionHelpers
+  alias LemonCore.Config, as: LemonConfig
 
   require Logger
 
@@ -84,16 +85,18 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
       :found_session,
       :last_assistant_text,
       :pending_actions,
-      :thinking_seq
+      :thinking_seq,
+      :claude_config
     ]
 
-    def new do
+    def new(claude_config \\ %{}) do
       %__MODULE__{
         factory: AgentCore.CliRunners.Types.EventFactory.new("claude"),
         found_session: nil,
         last_assistant_text: nil,
         pending_actions: %{},
-        thinking_seq: 0
+        thinking_seq: 0,
+        claude_config: claude_config
       }
     end
   end
@@ -111,15 +114,22 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
   end
 
   @impl true
-  def build_command(prompt, resume, _state) do
+  def init_state(_prompt, _resume, cwd) do
+    config = LemonConfig.load(cwd)
+    claude_config = get_in(config.agent, [:cli, :claude]) || %{}
+    RunnerState.new(claude_config)
+  end
+
+  @impl true
+  def build_command(prompt, resume, state) do
     base_args =
       [
         "-p",
         "--output-format", "stream-json",
         "--verbose"
       ]
-      |> maybe_add_permissions()
-      |> maybe_add_allowed_tools()
+      |> maybe_add_permissions(state)
+      |> maybe_add_allowed_tools(state)
 
     # Add resume flag if resuming
     args =
@@ -143,9 +153,9 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
   end
 
   @impl true
-  def env(_state) do
-    config = get_claude_config()
-    scrub_env = scrub_env?(config)
+  def env(state) do
+    config = get_claude_config(state)
+    scrub_env = scrub_env?(state, config)
     overrides = normalize_env_overrides(config[:env_overrides])
 
     env =
@@ -480,16 +490,16 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
     Regex.match?(~r/permission|not authorized|denied/i, text)
   end
 
-  defp maybe_add_permissions(args) do
-    if skip_permissions?() do
+  defp maybe_add_permissions(args, state) do
+    if skip_permissions?(state) do
       args ++ ["--dangerously-skip-permissions"]
     else
       args
     end
   end
 
-  defp maybe_add_allowed_tools(args) do
-    case normalize_allowed_tools(get_claude_config(:allowed_tools, nil)) do
+  defp maybe_add_allowed_tools(args, state) do
+    case normalize_allowed_tools(get_claude_config(state, :allowed_tools, nil)) do
       [] -> args
       tools -> args ++ ["--allowedTools" | tools]
     end
@@ -500,10 +510,10 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
   defp normalize_allowed_tools(value) when is_binary(value), do: String.split(value, ~r/\s*,\s*/, trim: true)
   defp normalize_allowed_tools(_), do: []
 
-  defp skip_permissions? do
-    case get_claude_config(:dangerously_skip_permissions, nil) do
+  defp skip_permissions?(state) do
+    case get_claude_config(state, :dangerously_skip_permissions, nil) do
       nil ->
-        case get_claude_config(:yolo, nil) do
+        case get_claude_config(state, :yolo, nil) do
           nil ->
             System.get_env("LEMON_CLAUDE_YOLO") in ["1", "true", "TRUE", "yes", "YES"]
 
@@ -516,9 +526,9 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
     end
   end
 
-  defp scrub_env?(config) do
+  defp scrub_env?(state, config) do
     case Map.get(config, :scrub_env, :auto) do
-      :auto -> not skip_permissions?()
+      :auto -> not skip_permissions?(state)
       value -> value == true
     end
   end
@@ -555,21 +565,10 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
   defp normalize_env_overrides(env) when is_list(env), do: Map.new(env)
   defp normalize_env_overrides(_), do: %{}
 
-  defp get_claude_config, do: get_claude_config(:all, %{})
+  defp get_claude_config(%RunnerState{claude_config: config}) when is_map(config), do: config
+  defp get_claude_config(_state), do: %{}
 
-  defp get_claude_config(:all, default) do
-    case Application.get_env(:agent_core, :claude, []) do
-      config when is_map(config) -> config
-      config when is_list(config) -> Map.new(config)
-      _ -> default
-    end
-  end
-
-  defp get_claude_config(key, default) do
-    case Application.get_env(:agent_core, :claude, []) do
-      config when is_map(config) -> Map.get(config, key, default)
-      config when is_list(config) -> Keyword.get(config, key, default)
-      _ -> default
-    end
+  defp get_claude_config(state, key, default) do
+    Map.get(get_claude_config(state), key, default)
   end
 end

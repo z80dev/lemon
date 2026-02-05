@@ -47,12 +47,13 @@ defmodule AgentCore.CliRunners.KimiRunner do
       :pending_actions,
       :started_emitted,
       :resume_token,
-      :cwd
+      :cwd,
+      :config
     ]
 
-    def new(resume_token), do: new(resume_token, nil)
+    def new(resume_token), do: new(resume_token, nil, nil)
 
-    def new(resume_token, cwd) do
+    def new(resume_token, cwd, config) do
       %__MODULE__{
         factory: EventFactory.new("kimi"),
         found_session: resume_token,
@@ -60,7 +61,8 @@ defmodule AgentCore.CliRunners.KimiRunner do
         pending_actions: %{},
         started_emitted: false,
         resume_token: resume_token,
-        cwd: cwd
+        cwd: cwd,
+        config: config
       }
     end
   end
@@ -74,19 +76,19 @@ defmodule AgentCore.CliRunners.KimiRunner do
 
   @impl true
   def init_state(_prompt, resume) do
-    RunnerState.new(resume, nil)
+    RunnerState.new(resume, nil, nil)
   end
 
   @impl true
   def init_state(_prompt, resume, cwd) do
-    RunnerState.new(resume, cwd)
+    RunnerState.new(resume, cwd, LemonCore.Config.load(cwd))
   end
 
   @impl true
-  def build_command(prompt, resume, _state) do
+  def build_command(prompt, resume, state) do
     base_args =
       ["--print", "--output-format", "stream-json"]
-      |> maybe_add_extra_args()
+      |> maybe_add_extra_args(state)
       |> maybe_add_config_file()
 
     args =
@@ -333,10 +335,17 @@ defmodule AgentCore.CliRunners.KimiRunner do
     end
   end
 
-  defp maybe_add_extra_args(args) do
-    extra = get_kimi_config(:extra_args, [])
+  defp maybe_add_extra_args(args, %RunnerState{config: %LemonCore.Config{agent: agent}}) do
+    extra =
+      case get_in(agent, [:cli, :kimi, :extra_args]) do
+        nil -> []
+        value -> value
+      end
+
     args ++ normalize_extra_args(extra)
   end
+
+  defp maybe_add_extra_args(args, _state), do: args
 
   defp maybe_add_config_file(args) do
     if has_config_flag?(args) do
@@ -443,11 +452,4 @@ defmodule AgentCore.CliRunners.KimiRunner do
   defp normalize_extra_args(value) when is_binary(value), do: String.split(value, ~r/\s+/, trim: true)
   defp normalize_extra_args(_), do: []
 
-  defp get_kimi_config(key, default) do
-    case Application.get_env(:agent_core, :kimi, []) do
-      config when is_map(config) -> Map.get(config, key, default)
-      config when is_list(config) -> Keyword.get(config, key, default)
-      _ -> default
-    end
-  end
 end

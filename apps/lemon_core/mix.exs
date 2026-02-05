@@ -25,6 +25,7 @@ defmodule LemonCore.MixProject do
   defp deps do
     [
       {:jason, "~> 1.4"},
+      {:toml, "~> 0.7"},
       {:uuid, "~> 1.1"},
       {:phoenix_pubsub, "~> 2.1"},
       {:telemetry, "~> 1.0"}

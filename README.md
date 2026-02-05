@@ -448,11 +448,11 @@ lemon/
 │   ├── telemetry.md             # Observability
 │   ├── benchmarks.md            # Performance
 │   ├── context.md               # Context management
-│   ├── layered_config.md        # Configuration
+│   ├── config.md                # Configuration
 │   └── openclaw_parity.md       # OpenClaw compatibility
 │
 └── examples/
-    ├── config.example.json
+    ├── config.example.toml
     └── extensions/
 ```
 
@@ -649,23 +649,12 @@ Parent Agent                    Task Tool                     Codex CLI
 
 **Configuration:**
 
-Configure Codex CLI behavior in settings (`~/.lemon/agent/settings.json`):
+Configure Codex CLI behavior in `~/.lemon/config.toml`:
 
-```json
-{
-  "codex": {
-    "extraArgs": ["-c", "notify=[]"],
-    "autoApprove": false
-  }
-}
-```
-
-Or in `config/config.exs`:
-
-```elixir
-config :agent_core, :codex,
-  extra_args: ["-c", "notify=[]"],
-  auto_approve: false
+```toml
+[agent.cli.codex]
+extra_args = ["-c", "notify=[]"]
+auto_approve = false
 ```
 
 ### CodingAgent
@@ -785,7 +774,7 @@ LemonGateway.submit(job)
 - **Resume Tokens**: Persist and continue sessions across restarts
 - **Event Streaming**: Unified event format across all engines
 - **Telegram Integration**: Bot transport with debouncing and throttling
-- **Config Loader**: Supports `~/.lemon/gateway.toml` with projects, bindings, and queue modes
+- **Config Loader**: Reads `~/.lemon/config.toml` (`[gateway]` section) with projects, bindings, and queue modes
 
 **Supported Engines:**
 | Engine | ID | Description |
@@ -1081,34 +1070,33 @@ The Terminal UI client provides a full-featured interactive interface for intera
 
 #### Configuration
 
-Lemon TUI reads settings from `~/.lemon/config.json`, then applies environment variables, then CLI args (highest priority).
+Lemon TUI reads settings from `~/.lemon/config.toml`, applies project overrides from
+`<project>/.lemon/config.toml` (when `--cwd` is set), then applies environment variables,
+then CLI args (highest priority).
 
-Example `~/.lemon/config.json`:
+Example `~/.lemon/config.toml`:
 
-```json
-{
-  "default_provider": "anthropic",
-  "default_model": "claude-sonnet-4-20250514",
-  "providers": {
-    "anthropic": {
-      "api_key": "sk-ant-..."
-    },
-    "openai": {
-      "api_key": "sk-..."
-    },
-    "kimi": {
-      "api_key": "sk-kimi-...",
-      "base_url": "https://api.kimi.com/coding/"
-    },
-    "google": {
-      "api_key": "your-google-api-key"
-    }
-  },
-  "tui": {
-    "theme": "lemon",
-    "debug": false
-  }
-}
+```toml
+[providers.anthropic]
+api_key = "sk-ant-..."
+
+[providers.openai]
+api_key = "sk-..."
+
+[providers.kimi]
+api_key = "sk-kimi-..."
+base_url = "https://api.kimi.com/coding/"
+
+[providers.google]
+api_key = "your-google-api-key"
+
+[agent]
+default_provider = "anthropic"
+default_model = "claude-sonnet-4-20250514"
+
+[tui]
+theme = "lemon"
+debug = false
 ```
 
 Environment overrides (examples):
@@ -1469,29 +1457,24 @@ The `lemon-dev` script automatically:
 
 ### Configuration
 
-Create a settings file at `~/.lemon/agent/settings.json`:
+Create a config file at `~/.lemon/config.toml`:
 
-```json
-{
-  "defaultModel": {
-    "provider": "anthropic",
-    "modelId": "claude-sonnet-4-20250514"
-  },
-  "providers": {
-    "anthropic": {
-      "apiKey": "sk-ant-..."
-    },
-    "openai": {
-      "apiKey": "sk-..."
-    },
-    "google": {
-      "apiKey": "your-google-api-key"
-    },
-    "azure-openai-responses": {
-      "apiKey": "your-azure-key"
-    }
-  }
-}
+```toml
+[agent]
+default_provider = "anthropic"
+default_model = "claude-sonnet-4-20250514"
+
+[providers.anthropic]
+api_key = "sk-ant-..."
+
+[providers.openai]
+api_key = "sk-..."
+
+[providers.google]
+api_key = "your-google-api-key"
+
+[providers.azure-openai-responses]
+api_key = "your-azure-key"
 ```
 
 Alternatively, use environment variables:
@@ -1607,20 +1590,20 @@ config :lemon_control_plane, :port, 4040
 
 ### Running LemonGateway
 
-LemonGateway is optional and typically used for Telegram or other transport-based workflows. Configure it via `~/.lemon/gateway.toml` and start it from IEx or your own supervision tree.
+LemonGateway is optional and typically used for Telegram or other transport-based workflows. Configure it via `~/.lemon/config.toml` under the `[gateway]` section and start it from IEx or your own supervision tree.
 
-Minimal `~/.lemon/gateway.toml` for Telegram:
+Minimal `~/.lemon/config.toml` for Telegram:
 
 ```toml
 [gateway]
 enable_telegram = true
 default_engine = "lemon"
 
-[telegram]
+[gateway.telegram]
 bot_token = "your-telegram-bot-token"
 allowed_chat_ids = [123456789]
 
-[[bindings]]
+[[gateway.bindings]]
 transport = "telegram"
 chat_id = 123456789
 project = "lemon"
@@ -1691,44 +1674,19 @@ end
 
 ### Settings Configuration
 
-Settings support multiple formats and can be stored globally at `~/.lemon/agent/settings.json` or per-project at `.lemon/settings.json`. Project settings override global settings.
+Configuration is stored as TOML:
+- Global: `~/.lemon/config.toml`
+- Project: `<project>/.lemon/config.toml` (overrides global)
 
-#### Map Format (Recommended)
+Example:
 
-```json
-{
-  "defaultModel": {
-    "provider": "anthropic",
-    "modelId": "claude-sonnet-4-20250514"
-  },
-  "providers": {
-    "anthropic": {
-      "apiKey": "sk-ant-..."
-    }
-  }
-}
-```
+```toml
+[agent]
+default_provider = "anthropic"
+default_model = "claude-sonnet-4-20250514"
 
-#### Flat Style
-
-```json
-{
-  "provider": "anthropic",
-  "model": "claude-sonnet-4-20250514",
-  "providers": {
-    "anthropic": {
-      "apiKey": "sk-ant-..."
-    }
-  }
-}
-```
-
-#### String Style
-
-```json
-{
-  "defaultModel": "anthropic:claude-sonnet-4-20250514"
-}
+[providers.anthropic]
+api_key = "sk-ant-..."
 ```
 
 All three formats are equivalent and will be normalized to the internal representation.
@@ -1926,7 +1884,7 @@ Detailed documentation is available in the `docs/` directory:
 | [telemetry.md](docs/telemetry.md) | Telemetry events reference for monitoring and observability |
 | [benchmarks.md](docs/benchmarks.md) | Performance benchmarks and baselines |
 | [context.md](docs/context.md) | Context management, truncation strategies, token counting |
-| [layered_config.md](docs/layered_config.md) | Configuration system with global/project/session layers |
+| [config.md](docs/config.md) | Canonical TOML configuration (global + project overrides) |
 | [openclaw_parity.md](docs/openclaw_parity.md) | OpenClaw protocol compatibility status |
 
 ---

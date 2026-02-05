@@ -739,7 +739,7 @@ defmodule DebugAgentRPC do
   defp resolve_model(nil, settings) do
     case settings.default_model do
       nil ->
-        raise "No default model configured. Set ~/.lemon/agent/settings.json or pass --model provider:model_id"
+        raise "No default model configured. Set ~/.lemon/config.toml or pass --model provider:model_id"
 
       %{provider: provider, model_id: model_id} ->
         if provider do

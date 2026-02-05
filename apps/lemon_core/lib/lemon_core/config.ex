@@ -1,51 +1,601 @@
 defmodule LemonCore.Config do
   @moduledoc """
-  Configuration access for Lemon.
+  Canonical Lemon configuration loader.
 
-  Provides a consistent interface for accessing configuration values
-  across the umbrella.
+  Loads TOML configuration from:
+  - Global: `~/.lemon/config.toml`
+  - Project: `<project>/.lemon/config.toml`
+
+  Project values override global values. Environment variables override both.
   """
+
+  require Logger
+
+  @global_config_path "~/.lemon/config.toml"
+
+  @default_agent %{
+    "default_provider" => "anthropic",
+    "default_model" => "claude-sonnet-4-20250514",
+    "default_thinking_level" => "medium",
+    "compaction" => %{
+      "enabled" => true,
+      "reserve_tokens" => 16_384,
+      "keep_recent_tokens" => 20_000
+    },
+    "retry" => %{
+      "enabled" => true,
+      "max_retries" => 3,
+      "base_delay_ms" => 1000
+    },
+    "shell" => %{
+      "path" => nil,
+      "command_prefix" => nil
+    },
+    "tools" => %{
+      "auto_resize_images" => true
+    },
+    "extension_paths" => [],
+    "theme" => "default",
+    "cli" => %{
+      "codex" => %{
+        "extra_args" => ["-c", "notify=[]"],
+        "auto_approve" => false
+      },
+      "kimi" => %{
+        "extra_args" => []
+      },
+      "claude" => %{
+        "dangerously_skip_permissions" => true,
+        "allowed_tools" => nil,
+        "scrub_env" => :auto,
+        "env_allowlist" => nil,
+        "env_allow_prefixes" => nil,
+        "env_overrides" => %{}
+      }
+    }
+  }
+
+  @default_tui %{
+    "theme" => "lemon",
+    "debug" => false
+  }
+
+  @default_gateway %{
+    "max_concurrent_runs" => 2,
+    "default_engine" => "lemon",
+    "auto_resume" => false,
+    "enable_telegram" => false,
+    "require_engine_lock" => true,
+    "engine_lock_timeout_ms" => 60_000,
+    "projects" => %{},
+    "bindings" => [],
+    "queue" => %{
+      "mode" => nil,
+      "cap" => nil,
+      "drop" => nil
+    },
+    "telegram" => %{},
+    "engines" => %{}
+  }
+
+  defstruct providers: %{}, agent: %{}, tui: %{}, gateway: %{}
+
+  @type provider_config :: %{api_key: String.t() | nil, base_url: String.t() | nil}
+  @type t :: %__MODULE__{
+          providers: %{optional(String.t()) => provider_config()},
+          agent: map(),
+          tui: map(),
+          gateway: map()
+        }
 
   @doc """
-  Get a configuration value.
+  Path to global config file.
   """
-  @spec get(key :: atom(), default :: term()) :: term()
-  def get(key, default \\ nil) do
-    Application.get_env(:lemon_core, key, default)
+  @spec global_path() :: String.t()
+  def global_path do
+    case System.get_env("HOME") do
+      nil -> Path.expand(@global_config_path)
+      home -> Path.join([home, ".lemon", "config.toml"])
+    end
   end
 
   @doc """
-  Get all configuration values.
+  Path to project config file for a given cwd.
   """
-  @spec all() :: keyword()
-  def all do
-    Application.get_all_env(:lemon_core)
+  @spec project_path(String.t()) :: String.t()
+  def project_path(cwd) do
+    Path.join([Path.expand(cwd), ".lemon", "config.toml"])
   end
 
   @doc """
-  Put a configuration value at runtime.
+  Load merged config (global + project) with environment overrides.
   """
-  @spec put(key :: atom(), value :: term()) :: :ok
-  def put(key, value) do
-    Application.put_env(:lemon_core, key, value)
+  @spec load(String.t() | nil, keyword()) :: t()
+  def load(cwd \\ nil, opts \\ []) do
+    global = load_file(global_path())
+    project = if is_binary(cwd), do: load_file(project_path(cwd)), else: %{}
+    merged = deep_merge(global, project)
+
+    merged
+    |> from_map()
+    |> apply_env_overrides()
+    |> apply_overrides(Keyword.get(opts, :overrides))
   end
 
   @doc """
-  Get a nested configuration value.
+  Load a single TOML file without environment overrides.
   """
-  @spec get_in(keys :: [atom()], default :: term()) :: term()
-  def get_in(keys, default \\ nil) do
-    case keys do
-      [key] ->
-        get(key, default)
+  @spec load_file(String.t()) :: map()
+  def load_file(path) do
+    expanded = Path.expand(path)
 
-      [key | rest] ->
-        case get(key) do
-          nil -> default
-          value when is_map(value) -> Map.get(value, hd(rest), default)
-          value when is_list(value) -> Kernel.get_in(value, rest) || default
-          _ -> default
-        end
+    if File.exists?(expanded) do
+      case Toml.decode_file(expanded) do
+        {:ok, map} -> stringify_keys(map)
+        {:error, reason} ->
+          Logger.warning("Failed to parse config TOML at #{expanded}: #{inspect(reason)}")
+          %{}
+      end
+    else
+      %{}
+    end
+  end
+
+  @doc """
+  Get a nested config value.
+  """
+  @spec get(t(), [atom()] | atom(), term()) :: term()
+  def get(%__MODULE__{} = config, key, default \\ nil) do
+    get_in_config(to_map(config), key, default)
+  end
+
+  @doc """
+  Return config as a plain map.
+  """
+  @spec to_map(t()) :: map()
+  def to_map(%__MODULE__{} = config) do
+    %{
+      providers: config.providers,
+      agent: config.agent,
+      tui: config.tui,
+      gateway: config.gateway
+    }
+  end
+
+  # ============================================================================
+  # Parsing
+  # ============================================================================
+
+  @spec from_map(map()) :: t()
+  defp from_map(map) when is_map(map) do
+    map = stringify_keys(map)
+
+    %__MODULE__{
+      providers: parse_providers(Map.get(map, "providers", %{})),
+      agent: parse_agent(Map.get(map, "agent", %{})),
+      tui: parse_tui(Map.get(map, "tui", %{})),
+      gateway: parse_gateway(Map.get(map, "gateway", %{}))
+    }
+  end
+
+  defp parse_providers(map) do
+    map
+    |> stringify_keys()
+    |> Enum.reduce(%{}, fn {name, cfg}, acc ->
+      case parse_provider_config(cfg) do
+        nil -> acc
+        parsed -> Map.put(acc, name, parsed)
+      end
+    end)
+  end
+
+  defp parse_provider_config(map) when is_map(map) do
+    map = stringify_keys(map)
+
+    %{
+      api_key: map["api_key"],
+      base_url: map["base_url"]
+    }
+    |> reject_nil_values()
+  end
+
+  defp parse_provider_config(_), do: nil
+
+  defp parse_agent(map) do
+    map = deep_merge(@default_agent, stringify_keys(map))
+
+    %{
+      default_provider: map["default_provider"],
+      default_model: map["default_model"],
+      default_thinking_level: parse_thinking_level(map["default_thinking_level"]),
+      compaction: parse_compaction(map["compaction"] || %{}),
+      retry: parse_retry(map["retry"] || %{}),
+      shell: parse_shell(map["shell"] || %{}),
+      tools: parse_tools(map["tools"] || %{}),
+      extension_paths: parse_string_list(map["extension_paths"]),
+      theme: map["theme"],
+      cli: parse_cli(map["cli"] || %{})
+    }
+  end
+
+  defp parse_tui(map) do
+    map = deep_merge(@default_tui, stringify_keys(map))
+
+    %{
+      theme: map["theme"],
+      debug: parse_boolean(map["debug"], false)
+    }
+  end
+
+  defp parse_gateway(map) do
+    map = deep_merge(@default_gateway, stringify_keys(map))
+
+    %{
+      max_concurrent_runs: map["max_concurrent_runs"],
+      default_engine: map["default_engine"],
+      auto_resume: parse_boolean(map["auto_resume"], false),
+      enable_telegram: parse_boolean(map["enable_telegram"], false),
+      require_engine_lock: parse_boolean(map["require_engine_lock"], true),
+      engine_lock_timeout_ms: map["engine_lock_timeout_ms"],
+      projects: parse_gateway_projects(map["projects"] || %{}),
+      bindings: parse_gateway_bindings(map["bindings"] || []),
+      queue: parse_gateway_queue(map["queue"] || %{}),
+      telegram: parse_gateway_telegram(map["telegram"] || %{}),
+      engines: parse_gateway_engines(map["engines"] || %{})
+    }
+  end
+
+  defp parse_gateway_projects(map) when is_map(map) do
+    map
+    |> stringify_keys()
+    |> Enum.reduce(%{}, fn {id, cfg}, acc ->
+      cfg = stringify_keys(cfg || %{})
+
+      Map.put(acc, id, %{
+        root: cfg["root"],
+        default_engine: cfg["default_engine"]
+      })
+    end)
+  end
+
+  defp parse_gateway_projects(_), do: %{}
+
+  defp parse_gateway_bindings(list) when is_list(list) do
+    Enum.map(list, fn item ->
+      cfg = stringify_keys(item || %{})
+
+      %{
+        transport: cfg["transport"],
+        chat_id: cfg["chat_id"],
+        topic_id: cfg["topic_id"],
+        project: cfg["project"],
+        default_engine: cfg["default_engine"],
+        queue_mode: cfg["queue_mode"]
+      }
+    end)
+  end
+
+  defp parse_gateway_bindings(_), do: []
+
+  defp parse_gateway_queue(map) do
+    map = stringify_keys(map)
+
+    %{
+      mode: map["mode"],
+      cap: map["cap"],
+      drop: map["drop"]
+    }
+  end
+
+  defp parse_gateway_telegram(map) do
+    map = stringify_keys(map)
+
+    %{
+      bot_token: map["bot_token"],
+      allowed_chat_ids: map["allowed_chat_ids"],
+      poll_interval_ms: map["poll_interval_ms"],
+      edit_throttle_ms: map["edit_throttle_ms"],
+      debounce_ms: map["debounce_ms"],
+      allow_queue_override: map["allow_queue_override"],
+      account_id: map["account_id"],
+      offset: map["offset"],
+      drop_pending_updates: map["drop_pending_updates"]
+    }
+    |> reject_nil_values()
+  end
+
+  defp parse_gateway_engines(map) when is_map(map) do
+    map
+    |> stringify_keys()
+    |> Enum.reduce(%{}, fn {name, cfg}, acc ->
+      cfg = stringify_keys(cfg || %{})
+
+      Map.put(acc, name, %{
+        cli_path: cfg["cli_path"],
+        enabled: cfg["enabled"]
+      })
+    end)
+  end
+
+  defp parse_gateway_engines(_), do: %{}
+
+  defp parse_compaction(map) do
+    map = stringify_keys(map)
+
+    %{
+      enabled: parse_boolean(map["enabled"], true),
+      reserve_tokens: map["reserve_tokens"] || 16_384,
+      keep_recent_tokens: map["keep_recent_tokens"] || 20_000
+    }
+  end
+
+  defp parse_retry(map) do
+    map = stringify_keys(map)
+
+    %{
+      enabled: parse_boolean(map["enabled"], true),
+      max_retries: map["max_retries"] || 3,
+      base_delay_ms: map["base_delay_ms"] || 1000
+    }
+  end
+
+  defp parse_shell(map) do
+    map = stringify_keys(map)
+
+    %{
+      path: map["path"],
+      command_prefix: map["command_prefix"]
+    }
+  end
+
+  defp parse_tools(map) do
+    map = stringify_keys(map)
+
+    %{
+      auto_resize_images: parse_boolean(map["auto_resize_images"], true)
+    }
+  end
+
+  defp parse_cli(map) do
+    map = stringify_keys(map)
+
+    %{
+      codex: parse_codex_cli(map["codex"] || %{}),
+      kimi: parse_kimi_cli(map["kimi"] || %{}),
+      claude: parse_claude_cli(map["claude"] || %{})
+    }
+  end
+
+  defp parse_codex_cli(map) do
+    map = stringify_keys(map)
+
+    %{
+      extra_args: parse_string_list(map["extra_args"]),
+      auto_approve: parse_boolean(map["auto_approve"], false)
+    }
+  end
+
+  defp parse_kimi_cli(map) do
+    map = stringify_keys(map)
+
+    %{
+      extra_args: parse_string_list(map["extra_args"])
+    }
+  end
+
+  defp parse_claude_cli(map) do
+    map = stringify_keys(map)
+
+    %{
+      dangerously_skip_permissions: parse_boolean(map["dangerously_skip_permissions"], true),
+      yolo: parse_boolean(map["yolo"], nil),
+      allowed_tools: parse_string_list(map["allowed_tools"]),
+      scrub_env: normalize_scrub_env(map["scrub_env"]),
+      env_allowlist: parse_string_list(map["env_allowlist"]),
+      env_allow_prefixes: parse_string_list(map["env_allow_prefixes"]),
+      env_overrides: normalize_env_overrides(map["env_overrides"])
+    }
+  end
+
+  # ============================================================================
+  # Overrides
+  # ============================================================================
+
+  defp apply_overrides(config, nil), do: config
+
+  defp apply_overrides(%__MODULE__{} = config, overrides) when is_map(overrides) do
+    overrides = stringify_keys(overrides)
+    merged = deep_merge(stringify_keys(to_map(config)), overrides)
+    from_map(merged)
+  end
+
+  defp apply_env_overrides(%__MODULE__{} = config) do
+    config
+    |> apply_env_provider_overrides()
+    |> apply_env_agent_overrides()
+    |> apply_env_tui_overrides()
+  end
+
+  defp apply_env_agent_overrides(%__MODULE__{} = config) do
+    agent = config.agent
+
+    agent =
+      agent
+      |> maybe_put("default_provider", System.get_env("LEMON_DEFAULT_PROVIDER"))
+      |> maybe_put("default_model", System.get_env("LEMON_DEFAULT_MODEL"))
+
+    agent =
+      case System.get_env("LEMON_CODEX_EXTRA_ARGS") do
+        nil -> agent
+        "" -> agent
+        raw ->
+          put_in(agent, [:cli, :codex, :extra_args], String.split(raw, ~r/\s+/, trim: true))
+      end
+
+    agent =
+      case System.get_env("LEMON_CODEX_AUTO_APPROVE") do
+        nil -> agent
+        value -> put_in(agent, [:cli, :codex, :auto_approve], parse_boolean(value, false))
+      end
+
+    agent =
+      case System.get_env("LEMON_CLAUDE_YOLO") do
+        nil -> agent
+        value -> put_in(agent, [:cli, :claude, :dangerously_skip_permissions], parse_boolean(value, true))
+      end
+
+    %{config | agent: agent}
+  end
+
+  defp apply_env_tui_overrides(%__MODULE__{} = config) do
+    tui = config.tui
+
+    tui =
+      tui
+      |> maybe_put("theme", System.get_env("LEMON_THEME"))
+
+    tui =
+      case System.get_env("LEMON_DEBUG") do
+        nil -> tui
+        value -> Map.put(tui, :debug, parse_boolean(value, false))
+      end
+
+    %{config | tui: tui}
+  end
+
+  defp apply_env_provider_overrides(%__MODULE__{} = config) do
+    providers =
+      config.providers
+      |> put_provider_env_override("anthropic",
+        api_key: env_first(["ANTHROPIC_API_KEY"]),
+        base_url: env_first(["ANTHROPIC_BASE_URL"])
+      )
+      |> put_provider_env_override("openai",
+        api_key: env_first(["OPENAI_API_KEY"]),
+        base_url: env_first(["OPENAI_BASE_URL"])
+      )
+      |> put_provider_env_override("openai-codex",
+        api_key: env_first(["OPENAI_CODEX_API_KEY", "CHATGPT_TOKEN"]),
+        base_url: env_first(["OPENAI_BASE_URL"])
+      )
+      |> put_provider_env_override("kimi",
+        api_key: env_first(["KIMI_API_KEY"]),
+        base_url: env_first(["KIMI_BASE_URL"])
+      )
+      |> put_provider_env_override("google",
+        api_key: env_first(["GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"]),
+        base_url: env_first(["GOOGLE_BASE_URL"])
+      )
+
+    %{config | providers: providers}
+  end
+
+  # ============================================================================
+  # Helpers
+  # ============================================================================
+
+  defp parse_thinking_level(nil), do: :medium
+  defp parse_thinking_level("off"), do: :off
+  defp parse_thinking_level("minimal"), do: :minimal
+  defp parse_thinking_level("low"), do: :low
+  defp parse_thinking_level("medium"), do: :medium
+  defp parse_thinking_level("high"), do: :high
+  defp parse_thinking_level("xhigh"), do: :xhigh
+  defp parse_thinking_level(level) when is_atom(level), do: level
+  defp parse_thinking_level(_), do: :medium
+
+  defp parse_boolean(nil, default), do: default
+  defp parse_boolean(true, _default), do: true
+  defp parse_boolean(false, _default), do: false
+  defp parse_boolean("true", _default), do: true
+  defp parse_boolean("false", _default), do: false
+  defp parse_boolean("1", _default), do: true
+  defp parse_boolean("0", _default), do: false
+  defp parse_boolean(_, default), do: default
+
+  defp parse_string_list(nil), do: []
+  defp parse_string_list(list) when is_list(list), do: Enum.map(list, &to_string/1)
+  defp parse_string_list(value) when is_binary(value), do: String.split(value, ~r/\s*,\s*/, trim: true)
+  defp parse_string_list(_), do: []
+
+  defp normalize_env_overrides(nil), do: %{}
+  defp normalize_env_overrides(env) when is_map(env), do: env
+  defp normalize_env_overrides(env) when is_list(env), do: Map.new(env)
+  defp normalize_env_overrides(_), do: %{}
+
+  defp normalize_scrub_env(nil), do: :auto
+  defp normalize_scrub_env(:auto), do: :auto
+  defp normalize_scrub_env("auto"), do: :auto
+  defp normalize_scrub_env(true), do: true
+  defp normalize_scrub_env(false), do: false
+  defp normalize_scrub_env("true"), do: true
+  defp normalize_scrub_env("false"), do: false
+  defp normalize_scrub_env(_), do: :auto
+
+  defp deep_merge(base, override) when is_map(base) and is_map(override) do
+    Map.merge(base, override, fn _key, base_val, override_val ->
+      if is_map(base_val) and is_map(override_val) do
+        deep_merge(base_val, override_val)
+      else
+        override_val
+      end
+    end)
+  end
+
+  defp deep_merge(_base, override), do: override
+
+  defp stringify_keys(map) when is_map(map) do
+    map
+    |> Enum.map(fn {k, v} -> {to_string(k), stringify_keys(v)} end)
+    |> Map.new()
+  end
+
+  defp stringify_keys(list) when is_list(list) do
+    Enum.map(list, &stringify_keys/1)
+  end
+
+  defp stringify_keys(value), do: value
+
+  defp reject_nil_values(map) do
+    map
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.new()
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value) when is_binary(key), do: Map.put(map, String.to_atom(key), value)
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp put_provider_env_override(providers, name, api_key: api_key, base_url: base_url) do
+    if api_key || base_url do
+      existing = Map.get(providers, name, %{})
+      merged = existing |> Map.merge(reject_nil_values(%{api_key: api_key, base_url: base_url}))
+      Map.put(providers, name, merged)
+    else
+      providers
+    end
+  end
+
+  defp env_first(names) do
+    Enum.find_value(names, fn name ->
+      case System.get_env(name) do
+        nil -> nil
+        "" -> nil
+        value -> value
+      end
+    end)
+  end
+
+  defp get_in_config(map, key, default) when is_atom(key) do
+    Map.get(map, key, default)
+  end
+
+  defp get_in_config(map, [key], default), do: get_in_config(map, key, default)
+
+  defp get_in_config(map, [key | rest], default) when is_map(map) do
+    case Map.get(map, key) do
+      nil -> default
+      nested -> get_in_config(nested, rest, default)
     end
   end
 end

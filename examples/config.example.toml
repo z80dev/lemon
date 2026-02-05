@@ -1,0 +1,83 @@
+[providers.anthropic]
+api_key = "sk-ant-your-api-key-here"
+
+[providers.openai]
+api_key = "sk-your-openai-key-here"
+
+[providers.kimi]
+api_key = "sk-kimi-your-kimi-key-here"
+base_url = "https://api.kimi.com/coding/"
+
+[providers.google]
+api_key = "your-google-api-key-here"
+
+[agent]
+default_provider = "anthropic"
+default_model = "claude-sonnet-4-20250514"
+default_thinking_level = "medium"
+theme = "default"
+extension_paths = []
+
+[agent.compaction]
+enabled = true
+reserve_tokens = 16384
+keep_recent_tokens = 20000
+
+[agent.retry]
+enabled = true
+max_retries = 3
+base_delay_ms = 1000
+
+[agent.cli.codex]
+extra_args = ["-c", "notify=[]"]
+auto_approve = false
+
+[agent.cli.claude]
+dangerously_skip_permissions = true
+
+[agent.cli.kimi]
+extra_args = []
+
+[tui]
+theme = "lemon"
+debug = false
+
+[gateway]
+max_concurrent_runs = 2
+default_engine = "lemon"
+auto_resume = false
+enable_telegram = false
+require_engine_lock = true
+engine_lock_timeout_ms = 60000
+
+[gateway.queue]
+mode = "collect"
+cap = 50
+drop = "oldest"
+
+[gateway.telegram]
+bot_token = "123456:token"
+allowed_chat_ids = [12345678]
+poll_interval_ms = 1000
+edit_throttle_ms = 1000
+debounce_ms = 1000
+allow_queue_override = false
+account_id = "default"
+offset = 0
+drop_pending_updates = false
+
+[gateway.projects.example]
+root = "/path/to/project"
+default_engine = "lemon"
+
+[[gateway.bindings]]
+transport = "telegram"
+chat_id = 12345678
+topic_id = 0
+project = "example"
+default_engine = "lemon"
+queue_mode = "collect"
+
+[gateway.engines.lemon]
+cli_path = "lemon"
+enabled = true

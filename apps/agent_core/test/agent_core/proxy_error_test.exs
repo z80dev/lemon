@@ -738,7 +738,7 @@ defmodule AgentCore.ProxyErrorTest do
         body = "Plain text error"
 
         # Use chunked transfer encoding
-        :ok =
+        _ =
           :gen_tcp.send(
             socket,
             "HTTP/1.1 500 Error\r\n" <>
@@ -749,10 +749,10 @@ defmodule AgentCore.ProxyErrorTest do
 
         # Send body as chunk
         size = byte_size(body)
-        :ok = :gen_tcp.send(socket, Integer.to_string(size, 16) <> "\r\n")
-        :ok = :gen_tcp.send(socket, body)
-        :ok = :gen_tcp.send(socket, "\r\n")
-        :ok = :gen_tcp.send(socket, "0\r\n\r\n")
+        _ = :gen_tcp.send(socket, Integer.to_string(size, 16) <> "\r\n")
+        _ = :gen_tcp.send(socket, body)
+        _ = :gen_tcp.send(socket, "\r\n")
+        _ = :gen_tcp.send(socket, "0\r\n\r\n")
 
         :gen_tcp.close(socket)
         :gen_tcp.close(listen)

@@ -15,7 +15,7 @@
 #   --help                     Show this help
 #
 # Configuration:
-#   Reads from ~/.lemon/config.json
+#   Reads from ~/.lemon/config.toml
 #   Environment variables override config file values
 #
 
@@ -72,7 +72,7 @@ Arguments:
   directory                  Working directory for the agent (default: current directory)
 
 Configuration:
-  Config file: ~/.lemon/config.json
+  Config file: ~/.lemon/config.toml
   Environment variables override config file values.
 
 Examples:
@@ -202,4 +202,4 @@ TUI_ARGS+=("--cwd" "$CWD")
 # Run the TUI
 info "Starting Lemon TUI..."
 info "Working directory: $CWD"
-exec node dist/index.js "${TUI_ARGS[@]}"
+exec node dist/cli.js "${TUI_ARGS[@]}"

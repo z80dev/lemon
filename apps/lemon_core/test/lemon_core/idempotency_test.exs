@@ -1,10 +1,13 @@
 defmodule LemonCore.IdempotencyTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.Idempotency
+  alias LemonCore.{Idempotency, Store}
 
   setup do
-    # Clean up any test keys
+    # Clear idempotency table to avoid cross-run collisions with persisted data.
+    Store.list(:idempotency)
+    |> Enum.each(fn {key, _value} -> Store.delete(:idempotency, key) end)
+
     :ok
   end
 

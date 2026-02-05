@@ -344,6 +344,8 @@ defmodule LemonSkills.Installer do
 
     rationale = build_rationale(operation, skill_name, source)
 
+    timeout_ms = Application.get_env(:lemon_skills, :approval_timeout_ms, 300_000)
+
     params = %{
       run_id: ctx[:run_id],
       session_key: ctx[:session_key],
@@ -351,7 +353,7 @@ defmodule LemonSkills.Installer do
       tool: tool,
       action: action,
       rationale: rationale,
-      expires_in_ms: 300_000
+      expires_in_ms: timeout_ms
     }
 
     Logger.info(

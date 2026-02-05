@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import { promises as fsPromises } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as toml from '@iarna/toml';
 
 /**
  * Provider configuration
@@ -20,12 +21,16 @@ export interface TUIConfig {
 }
 
 /**
- * Main Lemon configuration file structure (~/.lemon/config.json)
+ * Main Lemon configuration file structure (~/.lemon/config.toml)
  */
-export interface LemonConfig {
+export interface AgentConfig {
   default_provider?: string;
   default_model?: string;
+}
+
+export interface LemonConfig {
   providers?: Record<string, ProviderConfig>;
+  agent?: AgentConfig;
   tui?: TUIConfig;
 }
 
@@ -55,9 +60,11 @@ export function parseModelSpec(model?: string): { provider?: string; model?: str
 }
 
 const DEFAULT_CONFIG: LemonConfig = {
-  default_provider: 'anthropic',
-  default_model: 'claude-sonnet-4-20250514',
   providers: {},
+  agent: {
+    default_provider: 'anthropic',
+    default_model: 'claude-sonnet-4-20250514',
+  },
   tui: {
     theme: 'lemon',
     debug: false,
@@ -72,24 +79,57 @@ export function getConfigDir(): string {
 }
 
 /**
- * Get the config file path (~/.lemon/config.json)
+ * Get the config file path (~/.lemon/config.toml)
  */
 export function getConfigPath(): string {
-  return path.join(getConfigDir(), 'config.json');
+  return path.join(getConfigDir(), 'config.toml');
+}
+
+/**
+ * Get the project config path (<cwd>/.lemon/config.toml)
+ */
+export function getProjectConfigPath(cwd: string): string {
+  return path.join(cwd, '.lemon', 'config.toml');
+}
+
+async function loadProjectConfig(cwd: string): Promise<Partial<LemonConfig>> {
+  const configPath = getProjectConfigPath(cwd);
+
+  try {
+    const content = await fsPromises.readFile(configPath, 'utf-8');
+    return toml.parse(content) as LemonConfig;
+  } catch {
+    return {};
+  }
+}
+
+function loadProjectConfigSync(cwd: string): Partial<LemonConfig> {
+  const configPath = getProjectConfigPath(cwd);
+
+  try {
+    const content = fs.readFileSync(configPath, 'utf-8');
+    return toml.parse(content) as LemonConfig;
+  } catch {
+    return {};
+  }
 }
 
 /**
  * Load config from file, returns defaults if file doesn't exist
  */
-export async function loadConfig(): Promise<LemonConfig> {
+export async function loadConfig(cwd?: string): Promise<LemonConfig> {
   const configPath = getConfigPath();
 
   try {
     const content = await fsPromises.readFile(configPath, 'utf-8');
-    const parsed = JSON.parse(content);
-    return mergeConfig(DEFAULT_CONFIG, parsed);
+    const parsed = toml.parse(content) as LemonConfig;
+    const merged = mergeConfig(DEFAULT_CONFIG, parsed);
+    if (cwd) {
+      return mergeConfig(merged, await loadProjectConfig(cwd));
+    }
+    return merged;
   } catch {
-    // Return defaults if file doesn't exist or is invalid JSON
+    // Return defaults if file doesn't exist or is invalid TOML
     return { ...DEFAULT_CONFIG };
   }
 }
@@ -97,15 +137,19 @@ export async function loadConfig(): Promise<LemonConfig> {
 /**
  * Load config synchronously (for startup) - returns defaults on error
  */
-export function loadConfigSync(): LemonConfig {
+export function loadConfigSync(cwd?: string): LemonConfig {
   const configPath = getConfigPath();
 
   try {
     const content = fs.readFileSync(configPath, 'utf-8');
-    const parsed = JSON.parse(content);
-    return mergeConfig(DEFAULT_CONFIG, parsed);
+    const parsed = toml.parse(content) as LemonConfig;
+    const merged = mergeConfig(DEFAULT_CONFIG, parsed);
+    if (cwd) {
+      return mergeConfig(merged, loadProjectConfigSync(cwd));
+    }
+    return merged;
   } catch {
-    // Return defaults if file doesn't exist or is invalid JSON
+    // Return defaults if file doesn't exist or is invalid TOML
     return { ...DEFAULT_CONFIG };
   }
 }
@@ -121,17 +165,21 @@ export async function saveConfig(config: LemonConfig): Promise<void> {
   await fsPromises.mkdir(configDir, { recursive: true });
 
   // Write config file
-  await fsPromises.writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8');
+  await fsPromises.writeFile(configPath, toml.stringify(config as toml.JsonMap), 'utf-8');
 }
 
 /**
  * Deep merge two config objects
  */
 function mergeConfig(base: LemonConfig, override: Partial<LemonConfig>): LemonConfig {
+  const overrideAgent = override.agent ?? {};
+
   return {
-    default_provider: override.default_provider ?? base.default_provider,
-    default_model: override.default_model ?? base.default_model,
     providers: { ...base.providers, ...override.providers },
+    agent: {
+      ...base.agent,
+      ...overrideAgent,
+    },
     tui: { ...base.tui, ...override.tui },
   };
 }
@@ -162,19 +210,21 @@ export function resolveConfig(cliArgs?: {
   model?: string;
   baseUrl?: string;
   debug?: boolean;
+  cwd?: string;
 }): ResolvedConfig {
-  const config = loadConfigSync();
+  const config = loadConfigSync(cliArgs?.cwd);
+  const agentConfig = config.agent || {};
 
   // Determine provider (CLI > env > config)
   const provider = cliArgs?.provider
     || process.env.LEMON_DEFAULT_PROVIDER
-    || config.default_provider
+    || agentConfig.default_provider
     || 'anthropic';
 
   // Determine model (CLI > env > config)
   const model = cliArgs?.model
     || process.env.LEMON_DEFAULT_MODEL
-    || config.default_model
+    || agentConfig.default_model
     || 'claude-sonnet-4-20250514';
 
   // Get provider-specific config
@@ -188,7 +238,6 @@ export function resolveConfig(cliArgs?: {
   // Determine base URL (CLI > env > config)
   const baseUrl = cliArgs?.baseUrl
     || process.env[`${envPrefix}_BASE_URL`]
-    || (provider === 'anthropic' ? process.env.ANTHROPIC_BASE_URL : undefined) // Legacy support
     || providerConfig.base_url;
 
   // TUI config
@@ -227,7 +276,15 @@ export async function saveConfigKey<K extends keyof LemonConfig>(
   value: LemonConfig[K]
 ): Promise<void> {
   const config = await loadConfig();
-  (config as any)[key] = value;
+  if (key === 'agent' && typeof value === 'object' && value) {
+    config.agent = { ...(config.agent || {}), ...(value as AgentConfig) };
+  } else if (key === 'tui' && typeof value === 'object' && value) {
+    config.tui = { ...(config.tui || {}), ...(value as TUIConfig) };
+  } else if (key === 'providers' && typeof value === 'object' && value) {
+    config.providers = { ...(config.providers || {}), ...(value as Record<string, ProviderConfig>) };
+  } else {
+    (config as any)[key] = value;
+  }
   await saveConfig(config);
 }
 

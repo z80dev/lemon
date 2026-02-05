@@ -78,8 +78,13 @@ defmodule CodingAgent.ResourceLoaderTest do
   end
 
   describe "load_agents/1" do
-    test "returns empty string when no AGENTS.md exists", %{tmp_dir: tmp_dir} do
-      result = ResourceLoader.load_agents(tmp_dir)
+    test "returns empty string when no AGENTS.md exists" do
+      isolated_dir =
+        Path.join(System.tmp_dir!(), "resource_loader_agents_#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(isolated_dir)
+
+      result = ResourceLoader.load_agents(isolated_dir)
       assert result == ""
     end
 

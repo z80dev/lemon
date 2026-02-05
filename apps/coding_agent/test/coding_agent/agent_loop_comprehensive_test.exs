@@ -305,8 +305,10 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
         stream_fn: multi_response_stream_fn([tool_response, final_response])
       )
 
+      unsub = Session.subscribe(session)
       :ok = Session.prompt(session, "Use nonexistent tool")
-      events = subscribe_and_collect(session)
+      events = collect_events([], 5000)
+      unsub.()
 
       assert Enum.any?(events, &match?({:agent_end, _}, &1))
     end

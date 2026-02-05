@@ -6,7 +6,7 @@ if build_path = System.get_env("MIX_BUILD_PATH") do
   File.mkdir_p!(Path.join(build_path, "consolidated"))
 end
 
-# Isolate HOME to avoid leaking user-level config (CLAUDE.md, settings.json, extensions)
+# Isolate HOME to avoid leaking user-level config (CLAUDE.md, config.toml, extensions)
 home =
   Path.join(
     System.tmp_dir!(),
