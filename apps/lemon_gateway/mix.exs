@@ -31,7 +31,8 @@ defmodule LemonGateway.MixProject do
       {:toml, "~> 0.7"},
       {:agent_core, in_umbrella: true},
       {:coding_agent, in_umbrella: true},
-      {:lemon_core, in_umbrella: true}
+      {:lemon_core, in_umbrella: true},
+      {:plug_cowboy, "~> 2.6"}
     ]
   end
 end
