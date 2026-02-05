@@ -32,20 +32,20 @@ defmodule LemonRouter.PolicyTest do
       assert result[:nested] == %{a: 1, b: 3, c: 4}
     end
 
-    test "concatenates lists" do
+    test "uses more restrictive allowed lists when both present" do
       a = %{allowed: ["read", "write"]}
       b = %{allowed: ["exec"]}
 
       result = Policy.merge(a, b)
-      assert Enum.sort(result[:allowed]) == ["exec", "read", "write"]
+      assert Enum.sort(result[:allowed]) == ["exec"]
     end
 
-    test "deduplicates concatenated lists" do
-      a = %{allowed: ["read", "write"]}
-      b = %{allowed: ["write", "exec"]}
+    test "concatenates blocked lists with dedupe" do
+      a = %{blocked_tools: ["read", "write"]}
+      b = %{blocked_tools: ["write", "exec"]}
 
       result = Policy.merge(a, b)
-      assert Enum.sort(result[:allowed]) == ["exec", "read", "write"]
+      assert Enum.sort(result[:blocked_tools]) == ["exec", "read", "write"]
     end
   end
 
