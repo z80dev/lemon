@@ -82,14 +82,8 @@ defmodule CodingAgent.ToolExecutorTest do
 
   describe "execute_with_approval/4" do
     setup do
-      # Ensure LemonGateway.Store is running for approval tests
-      case Process.whereis(LemonGateway.Store) do
-        nil ->
-          {:ok, _} = LemonGateway.Store.start_link([])
-
-        _pid ->
-          :ok
-      end
+      # Keep the approvals policy table clean between tests.
+      CodingAgent.TestStore.reset()
 
       :ok
     end

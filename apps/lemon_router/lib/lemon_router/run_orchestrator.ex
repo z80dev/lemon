@@ -16,6 +16,8 @@ defmodule LemonRouter.RunOrchestrator do
   require Logger
 
   alias LemonRouter.{Policy, SessionKey, RunProcess}
+  alias LemonGateway.EngineRegistry
+  alias AgentCore.CliRunners.Types.ResumeToken, as: CliResume
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -94,9 +96,22 @@ defmodule LemonRouter.RunOrchestrator do
     # Resolve cwd: operator override > meta cwd > nil
     cwd = cwd_override || meta[:cwd]
 
+    # Extract explicit resume token from prompt or reply-to (Telegram) context.
+    # If a resume token is present, prefer its engine and strip strict resume lines
+    # from the prompt so we don't send `codex resume ...` as the user prompt.
+    {resume, prompt} = extract_resume_and_strip_prompt(prompt, meta)
+
     # Resolve engine_id: explicit param > session config model > nil
     # Session config can set model which maps to engine_id
-    resolved_engine_id = engine_id || resolve_engine_from_session(session_config)
+    resolved_engine_id =
+      cond do
+        match?(%LemonGateway.Types.ResumeToken{}, resume) ->
+          # Resume must win; otherwise scheduler won't apply the resume token.
+          resume.engine
+
+        true ->
+          engine_id || resolve_engine_from_session(session_config)
+      end
 
     # Resolve thinking_level from session config
     thinking_level = session_config[:thinking_level] || session_config["thinking_level"]
@@ -115,6 +130,7 @@ defmodule LemonRouter.RunOrchestrator do
       engine_id: resolved_engine_id,
       engine_hint: resolved_engine_id,
       cwd: cwd,
+      resume: resume,
       queue_mode: queue_mode,
       lane: meta[:lane] || :main,
       tool_policy: tool_policy,
@@ -270,4 +286,55 @@ defmodule LemonRouter.RunOrchestrator do
       :error -> nil
     end
   end
+
+  defp extract_resume_and_strip_prompt(prompt, meta) do
+    prompt = prompt || ""
+
+    reply_to_text =
+      meta[:reply_to_text] || meta["reply_to_text"] ||
+        get_in(meta, [:raw, "message", "reply_to_message", "text"]) ||
+        get_in(meta, [:raw, "message", "reply_to_message", "caption"])
+
+    resume =
+      cond do
+        Code.ensure_loaded?(EngineRegistry) ->
+          case EngineRegistry.extract_resume(prompt) do
+            {:ok, token} -> token
+            :none ->
+              if is_binary(reply_to_text) and reply_to_text != "" do
+                case EngineRegistry.extract_resume(reply_to_text) do
+                  {:ok, token} -> token
+                  :none -> nil
+                end
+              end
+          end
+
+        true ->
+          nil
+      end
+
+    stripped = strip_strict_resume_lines(prompt)
+
+    stripped =
+      if stripped == "" and not is_nil(resume) do
+        # Many CLIs require a prompt even when resuming.
+        "Continue."
+      else
+        stripped
+      end
+
+    {resume, stripped}
+  rescue
+    _ -> {nil, prompt}
+  end
+
+  defp strip_strict_resume_lines(text) when is_binary(text) do
+    text
+    |> String.split("\n")
+    |> Enum.reject(fn line -> CliResume.is_resume_line(line) end)
+    |> Enum.join("\n")
+    |> String.trim()
+  end
+
+  defp strip_strict_resume_lines(_), do: ""
 end

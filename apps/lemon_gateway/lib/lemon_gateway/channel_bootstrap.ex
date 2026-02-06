@@ -10,7 +10,11 @@ defmodule LemonGateway.ChannelBootstrap do
   # TransportSupervisor (Telegram polling + outbox) so Telegram can still work.
 
   @retry_ms 100
-  @max_attempts 100
+  @retry_after_legacy_ms 1_000
+  # If dependencies are still coming up (common in dev), avoid flipping on the legacy
+  # Telegram poller too early. If we do start legacy, keep retrying and shut it down
+  # once lemon_channels is available to prevent duplicate Telegram replies.
+  @legacy_after_attempts 100
 
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
@@ -19,45 +23,66 @@ defmodule LemonGateway.ChannelBootstrap do
   @impl true
   def init(state) do
     send(self(), :bootstrap)
-    {:ok, Map.put_new(state, :attempts, 0)}
+    state =
+      state
+      |> Map.put_new(:attempts, 0)
+      |> Map.put_new(:legacy_started?, false)
+
+    {:ok, state}
   end
 
   @impl true
   def handle_info(:bootstrap, state) do
     case ensure_channels_started() do
       :ok ->
+        if state.legacy_started? do
+          _ = stop_legacy_transport_supervisor()
+        end
+
         {:noreply, state}
 
       {:retry, reason} ->
-        attempts = Map.get(state, :attempts, 0) + 1
+        attempts = state.attempts + 1
 
-        if attempts >= @max_attempts do
+        state =
+          if attempts >= @legacy_after_attempts and not state.legacy_started? do
+            Logger.warning(
+              "lemon_channels still unavailable after #{attempts} attempts; starting legacy transport supervisor: #{inspect(reason)}"
+            )
+
+            _ = start_legacy_transport_supervisor()
+            %{state | legacy_started?: true}
+          else
+            state
+          end
+
+        delay = if state.legacy_started?, do: @retry_after_legacy_ms, else: @retry_ms
+        Process.send_after(self(), :bootstrap, delay)
+        {:noreply, %{state | attempts: attempts}}
+
+      {:fallback_to_legacy, reason} ->
+        if not state.legacy_started? do
           Logger.warning(
-            "lemon_channels still unavailable after #{attempts} attempts; starting legacy transport supervisor: #{inspect(reason)}"
+            "lemon_channels unavailable; starting legacy transport supervisor: #{inspect(reason)}"
           )
 
           _ = start_legacy_transport_supervisor()
-          {:noreply, %{state | attempts: attempts}}
-        else
-          Process.send_after(self(), :bootstrap, @retry_ms)
-          {:noreply, %{state | attempts: attempts}}
         end
 
-      {:fallback_to_legacy, reason} ->
-        Logger.warning(
-          "lemon_channels unavailable; starting legacy transport supervisor: #{inspect(reason)}"
-        )
-
-        _ = start_legacy_transport_supervisor()
-        {:noreply, state}
+        # Even if we have to fall back, keep retrying: transient startup ordering issues
+        # should converge to lemon_channels and then we can shut legacy down.
+        Process.send_after(self(), :bootstrap, @retry_after_legacy_ms)
+        {:noreply, %{state | legacy_started?: true, attempts: state.attempts + 1}}
     end
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
 
   defp ensure_channels_started do
-    case Application.ensure_started(:lemon_channels) do
-      :ok -> :ok
+    # Use ensure_all_started so we don't depend on external callers starting deps (notably :lemon_router).
+    # This avoids the "start legacy after 10s, then later also start lemon_channels" duplicate poller scenario.
+    case Application.ensure_all_started(:lemon_channels) do
+      {:ok, _apps} -> :ok
       {:error, {:already_started, :lemon_channels}} -> :ok
       {:error, {:not_started, _dep} = reason} -> {:retry, reason}
       {:error, reason} -> {:fallback_to_legacy, reason}
@@ -75,6 +100,16 @@ defmodule LemonGateway.ChannelBootstrap do
       {:error, {:already_present, _child}} -> :ok
       other -> other
     end
+  rescue
+    _ -> :ok
+  end
+
+  defp stop_legacy_transport_supervisor do
+    # If legacy is running as a child under LemonGateway.Supervisor, shut it down so
+    # we don't have two Telegram pollers producing "replayed" replies.
+    _ = Supervisor.terminate_child(LemonGateway.Supervisor, LemonGateway.TransportSupervisor)
+    _ = Supervisor.delete_child(LemonGateway.Supervisor, LemonGateway.TransportSupervisor)
+    :ok
   rescue
     _ -> :ok
   end

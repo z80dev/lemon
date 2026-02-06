@@ -29,6 +29,7 @@ defmodule LemonRouter.StreamCoalescer do
     :channel_id,
     :run_id,
     :buffer,
+    :full_text,
     :last_seq,
     :last_flush_ts,
     :first_delta_ts,
@@ -121,6 +122,7 @@ defmodule LemonRouter.StreamCoalescer do
       channel_id: channel_id,
       run_id: nil,
       buffer: "",
+      full_text: "",
       last_seq: 0,
       last_flush_ts: nil,
       first_delta_ts: nil,
@@ -144,6 +146,7 @@ defmodule LemonRouter.StreamCoalescer do
         %{state |
           run_id: run_id,
           buffer: "",
+          full_text: "",
           last_seq: 0,
           first_delta_ts: nil,
           flush_timer: nil,
@@ -158,10 +161,14 @@ defmodule LemonRouter.StreamCoalescer do
     if seq <= state.last_seq do
       {:noreply, state}
     else
-      state = %{state |
-        buffer: state.buffer <> text,
-        last_seq: seq,
-        first_delta_ts: state.first_delta_ts || now
+      new_full = cap_full_text(state.full_text <> text)
+
+      state = %{
+        state
+        | buffer: state.buffer <> text,
+          full_text: new_full,
+          last_seq: seq,
+          first_delta_ts: state.first_delta_ts || now
       }
 
       state = maybe_flush(state, now)
@@ -287,7 +294,7 @@ defmodule LemonRouter.StreamCoalescer do
     cond do
       supports_edit and progress_msg_id != nil ->
         # Edit mode requires message_id and text
-        {:edit, %{message_id: progress_msg_id, text: state.buffer}}
+        {:edit, %{message_id: progress_msg_id, text: truncate_for_channel(state.channel_id, state.full_text)}}
 
       supports_edit ->
         # Edit mode but no message_id yet - send as text first
@@ -404,4 +411,26 @@ defmodule LemonRouter.StreamCoalescer do
 
   defp cancel_timer(nil), do: :ok
   defp cancel_timer(timer), do: Process.cancel_timer(timer)
+
+  # Prevent unbounded memory growth for long streaming runs.
+  @max_full_text 100_000
+  defp cap_full_text(text) when is_binary(text) and byte_size(text) > @max_full_text do
+    # Keep the tail; Telegram edits are truncated anyway.
+    keep = @max_full_text
+    String.slice(text, String.length(text) - keep, keep)
+  end
+
+  defp cap_full_text(text), do: text
+
+  defp truncate_for_channel("telegram", text) when is_binary(text) do
+    if Code.ensure_loaded?(LemonGateway.Telegram.Truncate) do
+      LemonGateway.Telegram.Truncate.truncate_for_telegram(text)
+    else
+      text
+    end
+  rescue
+    _ -> text
+  end
+
+  defp truncate_for_channel(_channel_id, text), do: text
 end

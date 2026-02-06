@@ -18,6 +18,13 @@ defmodule LemonGateway.Telegram.Transport do
   @default_debounce_ms 1_000
 
   def start_link(_opts) do
+    # Defense-in-depth: never run the legacy Telegram poller if the lemon_channels-based
+    # Telegram transport is active. Having both will double-submit jobs and can surface
+    # as "out of nowhere" late replies (a second run finishing later).
+    if Code.ensure_loaded?(LemonChannels.Adapters.Telegram.Transport) and
+         is_pid(Process.whereis(LemonChannels.Adapters.Telegram.Transport)) do
+      :ignore
+    else
     config =
       base_telegram_config()
       |> merge_config(Application.get_env(:lemon_gateway, :telegram))
@@ -28,6 +35,7 @@ defmodule LemonGateway.Telegram.Transport do
       GenServer.start_link(__MODULE__, config, name: __MODULE__)
     else
       :ignore
+    end
     end
   end
 

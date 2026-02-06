@@ -125,9 +125,8 @@ defmodule CodingAgent.SessionRegistryTest do
 
       # Remove session
       Agent.stop(pid)
-      Process.sleep(10)
 
-      assert length(SessionRegistry.list_ids()) == initial_count
+      assert wait_until(fn -> length(SessionRegistry.list_ids()) == initial_count end, 1_000)
       refute session_id in SessionRegistry.list_ids()
     end
   end
@@ -223,6 +222,24 @@ defmodule CodingAgent.SessionRegistryTest do
       assert {:ok, ^pid} = SessionRegistry.lookup(session_id)
 
       GenServer.stop(pid)
+    end
+  end
+
+  defp wait_until(fun, timeout_ms) when is_function(fun, 0) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_until(fun, deadline)
+  end
+
+  defp do_wait_until(fun, deadline_ms) do
+    if fun.() do
+      true
+    else
+      if System.monotonic_time(:millisecond) >= deadline_ms do
+        false
+      else
+        Process.sleep(10)
+        do_wait_until(fun, deadline_ms)
+      end
     end
   end
 end

@@ -1,6 +1,10 @@
 ExUnit.configure(exclude: [:integration])
 ExUnit.start()
 
+# Use a test-local store backend so coding_agent tests don't depend on lemon_gateway.
+Code.require_file("support/test_store.ex", __DIR__)
+Application.put_env(:lemon_core, :store_mod, CodingAgent.TestStore)
+
 # Ensure consolidated protocol directory exists when using a custom build path
 if build_path = System.get_env("MIX_BUILD_PATH") do
   File.mkdir_p!(Path.join(build_path, "consolidated"))

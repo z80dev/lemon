@@ -98,8 +98,8 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       end)
     end
 
-    def send_message(_token, chat_id, text, reply_to_message_id \\ nil) do
-      record({:send_message, chat_id, text, reply_to_message_id})
+    def send_message(_token, chat_id, text, reply_to_or_opts \\ nil, parse_mode \\ nil) do
+      record({:send_message, chat_id, text, reply_to_or_opts, parse_mode})
       msg_id = System.unique_integer([:positive])
       {:ok, %{"ok" => true, "result" => %{"message_id" => msg_id}}}
     end
@@ -251,6 +251,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         dedupe_ttl_ms: 60_000,
         debounce_ms: 10,
         allowed_chat_ids: nil,
+        deny_unbound_chats: false,
         allow_queue_override: config_overrides[:allow_queue_override] || false
       }
     }
@@ -807,6 +808,82 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       assert_receive {:job_captured, %Job{} = job}, 2000
 
       assert job.queue_mode == :followup
+    end
+  end
+
+  describe "telegram transport parity (channels)" do
+    test "debounces and joins consecutive non-command messages into one job" do
+      start_gateway_with_config(%{
+        telegram: %{
+          bot_token: "test_token",
+          poll_interval_ms: 50,
+          dedupe_ttl_ms: 60_000,
+          debounce_ms: 30
+        }
+      })
+
+      MockTelegramAPI.enqueue_message(12345, "part one", message_id: 111)
+      MockTelegramAPI.enqueue_message(12345, "part two", message_id: 112)
+
+      assert_receive {:job_captured, %Job{} = job}, 2000
+      assert job.text == "part one\n\npart two"
+      assert job.user_msg_id == 112
+      assert is_integer(job.meta[:progress_msg_id])
+    end
+
+    test "allowed_chat_ids drops messages from disallowed chats" do
+      start_gateway_with_config(%{
+        telegram: %{
+          bot_token: "test_token",
+          poll_interval_ms: 50,
+          dedupe_ttl_ms: 60_000,
+          debounce_ms: 10,
+          allowed_chat_ids: [12345]
+        }
+      })
+
+      MockTelegramAPI.enqueue_message(99999, "should be dropped")
+
+      refute_receive {:job_captured, %Job{}}, 300
+      assert MockTelegramAPI.calls() == []
+    end
+
+    test "deny_unbound_chats drops messages when no binding exists" do
+      start_gateway_with_config(%{
+        telegram: %{
+          bot_token: "test_token",
+          poll_interval_ms: 50,
+          dedupe_ttl_ms: 60_000,
+          debounce_ms: 10,
+          deny_unbound_chats: true
+        },
+        bindings: []
+      })
+
+      MockTelegramAPI.enqueue_message(12345, "should be dropped (unbound)")
+
+      refute_receive {:job_captured, %Job{}}, 300
+      assert MockTelegramAPI.calls() == []
+    end
+
+    test "deny_unbound_chats allows messages when a chat binding exists" do
+      start_gateway_with_config(%{
+        telegram: %{
+          bot_token: "test_token",
+          poll_interval_ms: 50,
+          dedupe_ttl_ms: 60_000,
+          debounce_ms: 10,
+          deny_unbound_chats: true
+        },
+        bindings: [
+          %{transport: :telegram, chat_id: 12345, queue_mode: :collect}
+        ]
+      })
+
+      MockTelegramAPI.enqueue_message(12345, "allowed (bound)")
+
+      assert_receive {:job_captured, %Job{} = job}, 2000
+      assert job.text == "allowed (bound)"
     end
   end
 end

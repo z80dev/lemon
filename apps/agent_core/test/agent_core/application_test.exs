@@ -57,13 +57,14 @@ defmodule AgentCore.ApplicationTest do
     end
 
     test "supervisor has correct child count" do
-      # The application should have 4 children:
-      # 1. AgentCore.AgentRegistry (Registry)
-      # 2. AgentCore.SubagentSupervisor (DynamicSupervisor)
-      # 3. AgentCore.LoopTaskSupervisor (Task.Supervisor)
-      # 4. AgentCore.ToolTaskSupervisor (Task.Supervisor)
+      # The application should have 5 children:
+      # 1. AgentCore.AbortSignal.TableOwner
+      # 2. AgentCore.AgentRegistry (Registry)
+      # 3. AgentCore.SubagentSupervisor (DynamicSupervisor)
+      # 4. AgentCore.LoopTaskSupervisor (Task.Supervisor)
+      # 5. AgentCore.ToolTaskSupervisor (Task.Supervisor)
       children = Supervisor.which_children(AgentCore.Supervisor)
-      assert length(children) == 4
+      assert length(children) == 5
     end
 
     test "supervisor uses one_for_one strategy" do
@@ -88,8 +89,8 @@ defmodule AgentCore.ApplicationTest do
     test "supervisor counts children correctly" do
       counts = Supervisor.count_children(AgentCore.Supervisor)
 
-      assert counts.active == 4
-      assert counts.specs == 4
+      assert counts.active == 5
+      assert counts.specs == 5
       # SubagentSupervisor and Task.Supervisors
       assert counts.supervisors >= 2
       assert counts.workers >= 0
