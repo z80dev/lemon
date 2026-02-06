@@ -51,6 +51,7 @@ defmodule CodingAgent.ToolRegistry do
     {:find, Tools.Find},
     {:ls, Tools.Ls},
     {:bash, Tools.Bash},
+    {:restart, Tools.Restart},
     {:task, Tools.Task},
     {:patch, Tools.Patch},
     {:todoread, Tools.TodoRead},
