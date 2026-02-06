@@ -3,7 +3,10 @@ defmodule LemonGateway.Telegram.Transport do
   use LemonGateway.Transport
   use GenServer
 
+  require Logger
+
   alias LemonGateway.Telegram.{API, Dedupe, OffsetStore}
+  alias LemonGateway.Telegram.PollerLock
   alias LemonGateway.Types.{ChatScope, Job, ResumeToken}
   alias LemonGateway.{BindingResolver, ChatState, Config, EngineRegistry, Store}
   alias LemonCore.SessionKey
@@ -25,57 +28,72 @@ defmodule LemonGateway.Telegram.Transport do
          is_pid(Process.whereis(LemonChannels.Adapters.Telegram.Transport)) do
       :ignore
     else
-    config =
-      base_telegram_config()
-      |> merge_config(Application.get_env(:lemon_gateway, :telegram))
+      config =
+        base_telegram_config()
+        |> merge_config(Application.get_env(:lemon_gateway, :telegram))
 
-    token = config[:bot_token] || config["bot_token"]
+      token = config[:bot_token] || config["bot_token"]
 
-    if is_binary(token) and token != "" do
-      GenServer.start_link(__MODULE__, config, name: __MODULE__)
-    else
-      :ignore
-    end
+      if is_binary(token) and token != "" do
+        GenServer.start_link(__MODULE__, config, name: __MODULE__)
+      else
+        :ignore
+      end
     end
   end
 
   @impl true
   def init(config) do
-    :ok = Dedupe.init()
-    :ok = ensure_httpc()
-
     account_id = config[:account_id] || config["account_id"] || "default"
-    config_offset = config[:offset] || config["offset"]
-    stored_offset = OffsetStore.get(account_id, config[:bot_token] || config["bot_token"])
+    token = config[:bot_token] || config["bot_token"]
 
-    drop_pending_updates =
-      config[:drop_pending_updates] || config["drop_pending_updates"] || false
+    case PollerLock.acquire(account_id, token) do
+      :ok ->
+        :ok = Dedupe.init()
+        :ok = ensure_httpc()
 
-    # If enabled, drop any pending Telegram updates on every boot unless an explicit offset is set.
-    # This prevents the bot from replying to historical messages after downtime.
-    drop_pending_updates = drop_pending_updates && is_nil(config_offset)
+        config_offset = config[:offset] || config["offset"]
+        stored_offset = OffsetStore.get(account_id, token)
 
-    state = %{
-      token: config[:bot_token] || config["bot_token"],
-      api_mod: config[:api_mod] || API,
-      poll_interval_ms: config[:poll_interval_ms] || @default_poll_interval,
-      dedupe_ttl_ms: config[:dedupe_ttl_ms] || @default_dedupe_ttl,
-      debounce_ms: config[:debounce_ms] || @default_debounce_ms,
-      allowed_chat_ids: Map.get(config, :allowed_chat_ids, nil),
-      allow_queue_override: Map.get(config, :allow_queue_override, false),
-      account_id: account_id,
-      # If configured to drop pending updates on boot, start from 0 so we can
-      # advance to the live edge even if a stale stored offset is ahead.
-      offset: if(drop_pending_updates, do: 0, else: initial_offset(config_offset, stored_offset)),
-      drop_pending_updates?: drop_pending_updates,
-      drop_pending_done?: false,
-      buffers: %{},
-      approval_messages: %{}
-    }
+        drop_pending_updates =
+          config[:drop_pending_updates] || config["drop_pending_updates"] || false
 
-    maybe_subscribe_exec_approvals()
-    send(self(), :poll)
-    {:ok, state}
+        # If enabled, drop any pending Telegram updates on every boot unless an explicit offset is set.
+        # This prevents the bot from replying to historical messages after downtime.
+        drop_pending_updates = drop_pending_updates && is_nil(config_offset)
+
+        state = %{
+          token: token,
+          api_mod: config[:api_mod] || API,
+          poll_interval_ms: config[:poll_interval_ms] || @default_poll_interval,
+          dedupe_ttl_ms: config[:dedupe_ttl_ms] || @default_dedupe_ttl,
+          debounce_ms: config[:debounce_ms] || @default_debounce_ms,
+          allowed_chat_ids: Map.get(config, :allowed_chat_ids, nil),
+          allow_queue_override: Map.get(config, :allow_queue_override, false),
+          account_id: account_id,
+          # If configured to drop pending updates on boot, start from 0 so we can
+          # advance to the live edge even if a stale stored offset is ahead.
+          offset:
+            if(drop_pending_updates, do: 0, else: initial_offset(config_offset, stored_offset)),
+          drop_pending_updates?: drop_pending_updates,
+          drop_pending_done?: false,
+          buffers: %{},
+          approval_messages: %{},
+          # run_id => %{scope, session_key, message_id, peer_kind}
+          pending_new: %{}
+        }
+
+        maybe_subscribe_exec_approvals()
+        send(self(), :poll)
+        {:ok, state}
+
+      {:error, :locked} ->
+        Logger.warning(
+          "Telegram poller already running for account_id=#{inspect(account_id)}; refusing to start legacy transport"
+        )
+
+        :ignore
+    end
   end
 
   @impl true
@@ -134,7 +152,55 @@ defmodule LemonGateway.Telegram.Transport do
     {:noreply, state}
   end
 
+  # /new triggers an internal "memory reflection" run; clear auto-resume only after it completes.
+  def handle_info({:lemon_gateway_run_completed, job, completed}, state) do
+    run_id =
+      cond do
+        is_map(completed) and is_binary(completed.run_id) -> completed.run_id
+        is_map(job) and is_binary(job.run_id) -> job.run_id
+        true -> nil
+      end
+
+    case run_id && Map.get(state.pending_new, run_id) do
+      %{scope: %ChatScope{} = scope, session_key: session_key, message_id: message_id} ->
+        _ = safe_delete_chat_state(scope)
+        _ = safe_delete_chat_state(session_key)
+        # Store writes are async; do a second delete shortly after to win races.
+        Process.send_after(self(), {:new_session_cleanup, scope, session_key}, 50)
+
+        msg =
+          if is_map(completed) and completed[:ok] == false do
+            "Started a new session (memory recording failed)."
+          else
+            "Started a new session."
+          end
+
+        _ = send_system_message(state, scope.chat_id, scope.topic_id, message_id, msg)
+        {:noreply, %{state | pending_new: Map.delete(state.pending_new, run_id)}}
+
+      _ ->
+        {:noreply, state}
+    end
+  rescue
+    _ -> {:noreply, state}
+  end
+
+  # Best-effort second pass to clear chat state in case a late write races with the first delete.
+  def handle_info({:new_session_cleanup, %ChatScope{} = scope, session_key}, state) do
+    _ = safe_delete_chat_state(scope)
+    _ = safe_delete_chat_state(session_key)
+    {:noreply, state}
+  rescue
+    _ -> {:noreply, state}
+  end
+
   def handle_info(_msg, state), do: {:noreply, state}
+
+  @impl true
+  def terminate(_reason, state) do
+    _ = PollerLock.release(state.account_id, state.token)
+    :ok
+  end
 
   defp poll_updates(state) do
     case state.api_mod.get_updates(state.token, state.offset, state.poll_interval_ms) do
@@ -162,7 +228,8 @@ defmodule LemonGateway.Telegram.Transport do
   end
 
   defp handle_updates(state, updates) do
-    Enum.reduce(updates, {state, state.offset}, fn update, {state, max_id} ->
+    # If updates is empty, keep max_id at offset - 1 so we don't accidentally advance the offset.
+    Enum.reduce(updates, {state, state.offset - 1}, fn update, {state, max_id} ->
       id = update["update_id"] || max_id
       state = handle_update(state, update)
       {state, max(max_id, id)}
@@ -215,6 +282,12 @@ defmodule LemonGateway.Telegram.Transport do
 
           :new ->
             cond do
+              resume_command?(text) ->
+                handle_resume_command(state, scope, message_id, peer_kind, text)
+
+              new_command?(text) ->
+                handle_new_session(state, scope, message_id, peer_kind)
+
               cancel_command?(text) ->
                 handle_cancel(scope, message)
                 state
@@ -506,7 +579,30 @@ defmodule LemonGateway.Telegram.Transport do
   end
 
   defp cancel_command?(text) do
-    String.trim(String.downcase(text)) == "/cancel"
+    telegram_command?(text, "cancel")
+  end
+
+  defp new_command?(text) do
+    telegram_command?(text, "new")
+  end
+
+  defp resume_command?(text) do
+    telegram_command?(text, "resume")
+  end
+
+  # Telegram commands in groups may include a bot username suffix: /cmd@BotName
+  defp telegram_command?(text, cmd) when is_binary(cmd) do
+    trimmed = String.trim_leading(text || "")
+    Regex.match?(~r/^\/#{cmd}(?:@[\w_]+)?(?:\s|$)/i, trimmed)
+  end
+
+  defp telegram_command_args(text, cmd) when is_binary(cmd) do
+    trimmed = String.trim_leading(text || "")
+
+    case Regex.run(~r/^\/#{cmd}(?:@[\w_]+)?(?:\s+|$)(.*)$/is, trimmed) do
+      [_, rest] -> String.trim(rest || "")
+      _ -> nil
+    end
   end
 
   # Queue override commands: /steer, /followup, /interrupt
@@ -556,6 +652,368 @@ defmodule LemonGateway.Telegram.Transport do
     if replied_id do
       LemonGateway.Runtime.cancel_by_progress_msg(scope, replied_id)
     end
+  end
+
+  defp handle_resume_command(state, %ChatScope{} = scope, message_id, peer_kind, text) do
+    state = drop_buffer_for(state, scope)
+
+    agent_id = BindingResolver.resolve_agent_id(scope)
+    session_key = build_session_key(agent_id, state.account_id, peer_kind, scope)
+    args = telegram_command_args(text, "resume") || ""
+
+    cond do
+      args == "" ->
+        sessions = list_recent_sessions(scope, 20)
+
+        msg =
+          case sessions do
+            [] ->
+              "No sessions found yet."
+
+            list ->
+              header = "Available sessions (most recent first):"
+
+              body =
+                list
+                |> Enum.with_index(1)
+                |> Enum.map(fn {%ResumeToken{} = r, idx} ->
+                  "#{idx}. #{r.engine}: #{abbrev(r.value)}"
+                end)
+                |> Enum.join("\n")
+
+              usage = "Use /resume <number> to switch sessions."
+              Enum.join([header, body, usage], "\n\n")
+          end
+
+        _ = send_system_message(state, scope.chat_id, scope.topic_id, message_id, msg)
+        state
+
+      true ->
+        {selector, prompt_part} =
+          case String.split(args, ~r/\s+/, parts: 2) do
+            [a] -> {a, ""}
+            [a, rest] -> {a, String.trim(rest || "")}
+            _ -> {args, ""}
+          end
+
+        sessions = list_recent_sessions(scope, 50)
+        resume = resolve_resume_selector(selector, sessions)
+
+        if match?(%ResumeToken{}, resume) do
+          now = System.system_time(:millisecond)
+
+          payload = %{
+            last_engine: resume.engine,
+            last_resume_token: resume.value,
+            updated_at: now
+          }
+
+          Store.put_chat_state(scope, payload)
+          Store.put_chat_state(session_key, payload)
+
+          _ =
+            send_system_message(
+              state,
+              scope.chat_id,
+              scope.topic_id,
+              message_id,
+              "Resuming session: #{resume.engine}: #{abbrev(resume.value)}"
+            )
+
+          if prompt_part != "" do
+            resume_line = format_resume_line(resume)
+
+            submit_job_immediate(
+              state,
+              scope,
+              message_id,
+              String.trim("#{resume_line}\n#{prompt_part}"),
+              nil,
+              peer_kind
+            )
+          else
+            state
+          end
+        else
+          _ =
+            send_system_message(
+              state,
+              scope.chat_id,
+              scope.topic_id,
+              message_id,
+              "Couldn't find that session. Try /resume to list sessions."
+            )
+
+          state
+        end
+    end
+  rescue
+    _ -> state
+  end
+
+  defp list_recent_sessions(scope, limit) do
+    history = Store.get_run_history(scope, limit: limit * 5)
+
+    history
+    |> Enum.map(fn {_run_id, data} ->
+      summary = data[:summary] || %{}
+      completed = summary[:completed]
+      resume = completed && completed.resume
+      {resume, data[:started_at] || 0}
+    end)
+    |> Enum.filter(fn {r, _ts} -> match?(%ResumeToken{}, r) end)
+    |> Enum.sort_by(fn {_r, ts} -> ts end, :desc)
+    |> Enum.reduce([], fn {%ResumeToken{} = r, _ts}, acc ->
+      key = {r.engine, r.value}
+
+      if Enum.any?(acc, fn %ResumeToken{} = rr -> {rr.engine, rr.value} == key end),
+        do: acc,
+        else: acc ++ [r]
+    end)
+    |> Enum.take(limit)
+  rescue
+    _ -> []
+  end
+
+  defp resolve_resume_selector(selector, sessions) do
+    selector = String.trim(selector || "")
+
+    cond do
+      selector == "" ->
+        nil
+
+      Regex.match?(~r/^\d+$/, selector) ->
+        idx = String.to_integer(selector)
+        Enum.at(sessions, idx - 1)
+
+      true ->
+        case EngineRegistry.extract_resume(selector) do
+          {:ok, %ResumeToken{} = token} -> token
+          _ -> nil
+        end
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp format_resume_line(%ResumeToken{} = resume) do
+    case EngineRegistry.get_engine(resume.engine) do
+      nil -> "#{resume.engine} resume #{resume.value}"
+      mod -> mod.format_resume(resume)
+    end
+  rescue
+    _ -> "#{resume.engine} resume #{resume.value}"
+  end
+
+  defp abbrev(nil), do: ""
+
+  defp abbrev(token) when is_binary(token) do
+    if byte_size(token) > 40, do: String.slice(token, 0, 40) <> "…", else: token
+  end
+
+  defp handle_new_session(state, %ChatScope{} = scope, message_id, peer_kind) do
+    state = drop_buffer_for(state, scope)
+
+    agent_id = BindingResolver.resolve_agent_id(scope)
+    session_key = build_session_key(agent_id, state.account_id, peer_kind, scope)
+
+    history = fetch_run_history_for_memory(session_key, scope, limit: 8)
+    transcript = format_run_history_transcript(history, max_chars: 12_000)
+
+    if transcript == "" do
+      _ = safe_delete_chat_state(scope)
+      _ = safe_delete_chat_state(session_key)
+
+      _ =
+        send_system_message(
+          state,
+          scope.chat_id,
+          scope.topic_id,
+          message_id,
+          "Started a new session."
+        )
+
+      state
+    else
+      _ =
+        send_system_message(
+          state,
+          scope.chat_id,
+          scope.topic_id,
+          message_id,
+          "Recording memories, then starting a new session…"
+        )
+
+      prompt = memory_reflection_prompt(transcript)
+
+      run_id = LemonCore.Id.run_id()
+      engine_hint = last_engine_hint(scope, session_key)
+      cwd = BindingResolver.resolve_cwd(scope)
+      profile = get_profile(agent_id, cwd)
+
+      tool_policy = profile[:tool_policy] || profile["tool_policy"]
+      system_prompt = profile[:system_prompt] || profile["system_prompt"]
+      model = resolve_model(profile[:model] || profile["model"])
+
+      job = %Job{
+        run_id: run_id,
+        session_key: session_key,
+        prompt: prompt,
+        text: prompt,
+        scope: scope,
+        user_msg_id: message_id,
+        engine_hint: engine_hint,
+        queue_mode: :interrupt,
+        tool_policy: tool_policy,
+        meta: %{
+          notify_pid: self(),
+          origin: :telegram,
+          chat_id: scope.chat_id,
+          topic_id: scope.topic_id,
+          user_msg_id: message_id,
+          agent_id: agent_id,
+          system_prompt: system_prompt,
+          model: model,
+          command: :new,
+          record_memories: true
+        }
+      }
+
+      LemonGateway.submit(job)
+
+      pending = %{
+        scope: scope,
+        session_key: session_key,
+        message_id: message_id,
+        peer_kind: peer_kind
+      }
+
+      %{state | pending_new: Map.put(state.pending_new, run_id, pending)}
+    end
+  rescue
+    _ -> state
+  end
+
+  defp fetch_run_history_for_memory(session_key, %ChatScope{} = scope, opts) do
+    limit = Keyword.get(opts, :limit, 8)
+
+    if Code.ensure_loaded?(Store) and function_exported?(Store, :get_run_history, 2) do
+      history = Store.get_run_history(session_key, limit: limit)
+      if history == [], do: Store.get_run_history(scope, limit: limit), else: history
+    else
+      []
+    end
+  rescue
+    _ -> []
+  end
+
+  defp format_run_history_transcript(history, opts) when is_list(history) do
+    max_chars = Keyword.get(opts, :max_chars, 12_000)
+
+    text =
+      history
+      |> Enum.reverse()
+      |> Enum.map(&format_run_history_entry/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.join("\n\n")
+      |> String.trim()
+
+    if byte_size(text) > max_chars do
+      String.slice(text, byte_size(text) - max_chars, max_chars)
+    else
+      text
+    end
+  rescue
+    _ -> ""
+  end
+
+  defp format_run_history_transcript(_other, _opts), do: ""
+
+  defp format_run_history_entry({_run_id, data}) when is_map(data) do
+    summary = data[:summary] || data["summary"] || %{}
+    prompt = summary[:prompt] || summary["prompt"] || ""
+
+    completed = summary[:completed] || summary["completed"] || %{}
+
+    answer =
+      cond do
+        is_map(completed) -> completed[:answer] || completed["answer"] || ""
+        true -> ""
+      end
+
+    prompt = prompt |> to_string() |> String.trim()
+    answer = answer |> to_string() |> String.trim()
+
+    cond do
+      prompt == "" and answer == "" -> ""
+      answer == "" -> "User:\n#{prompt}"
+      true -> "User:\n#{prompt}\n\nAssistant:\n#{answer}"
+    end
+  rescue
+    _ -> ""
+  end
+
+  defp format_run_history_entry(_), do: ""
+
+  defp memory_reflection_prompt(transcript) when is_binary(transcript) do
+    """
+    Before we start a new session, review the recent conversation transcript below.
+
+    Task:
+    - Record any durable, re-usable memories or learnings (preferences, recurring context, decisions, project facts, ongoing tasks) using the available memory workflow/tools.
+    - If there is nothing worth saving, do not invent anything; just respond with "No memories to record."
+    - Do not include private/secret data in durable memory.
+    - In your final response, be brief (1-2 sentences) and do not paste the memories verbatim.
+
+    Transcript (most recent portion):
+    #{transcript}
+    """
+    |> String.trim()
+  end
+
+  defp last_engine_hint(%ChatScope{} = scope, session_key) do
+    s1 = Store.get_chat_state(session_key)
+    s2 = Store.get_chat_state(scope)
+
+    engine =
+      (s1 && (s1[:last_engine] || s1["last_engine"] || s1.last_engine)) ||
+        (s2 && (s2[:last_engine] || s2["last_engine"] || s2.last_engine))
+
+    if is_binary(engine) and engine != "", do: engine, else: nil
+  rescue
+    _ -> nil
+  end
+
+  defp drop_buffer_for(state, %ChatScope{} = scope) do
+    key = scope_key(scope)
+
+    case Map.pop(state.buffers, key) do
+      {nil, _buffers} ->
+        state
+
+      {buffer, buffers} ->
+        _ = Process.cancel_timer(buffer.timer_ref)
+        %{state | buffers: buffers}
+    end
+  end
+
+  defp safe_delete_chat_state(key) do
+    Store.delete_chat_state(key)
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp send_system_message(state, chat_id, topic_id, reply_to_message_id, text)
+       when is_integer(chat_id) and is_binary(text) do
+    opts =
+      %{}
+      |> maybe_put("reply_to_message_id", reply_to_message_id)
+      |> maybe_put("message_thread_id", topic_id)
+
+    state.api_mod.send_message(state.token, chat_id, text, opts, nil)
+  rescue
+    _ -> :ok
   end
 
   defp scope_key(%ChatScope{chat_id: chat_id, topic_id: topic_id}), do: {chat_id, topic_id}

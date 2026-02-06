@@ -312,7 +312,8 @@ defmodule LemonGateway.Store do
           {:ok, bs} = state.backend.put(backend_state, :run_history, history_key, history_data)
 
           # Update sessions_index for sessions.list
-          update_sessions_index(state.backend, bs, session_key, summary, started_at)
+          bs = update_sessions_index(state.backend, bs, session_key, summary, started_at)
+          maybe_index_telegram_message_resume(state.backend, bs, summary)
 
         scope ->
           # Legacy: Store by scope
@@ -326,7 +327,7 @@ defmodule LemonGateway.Store do
           }
 
           {:ok, bs} = state.backend.put(backend_state, :run_history, history_key, history_data)
-          bs
+          maybe_index_telegram_message_resume(state.backend, bs, summary)
 
         true ->
           backend_state
@@ -361,6 +362,94 @@ defmodule LemonGateway.Store do
 
     {:ok, backend_state} = backend.put(backend_state, :sessions_index, session_key, session_entry)
     backend_state
+  end
+
+  # Index Telegram message IDs to resume tokens so replying to an old message can
+  # explicitly switch sessions, even if the replied-to text doesn't include a resume line.
+  defp maybe_index_telegram_message_resume(backend, backend_state, summary)
+       when is_map(summary) do
+    completed = summary[:completed] || summary["completed"]
+    session_key = summary[:session_key] || summary["session_key"]
+    meta = summary[:meta] || summary["meta"] || %{}
+
+    resume =
+      cond do
+        is_map(completed) and is_struct(completed) and Map.has_key?(completed, :resume) ->
+          Map.get(completed, :resume)
+
+        is_map(completed) ->
+          completed[:resume] || completed["resume"]
+
+        true ->
+          nil
+      end
+
+    with %LemonGateway.Types.ResumeToken{} = resume <- resume,
+         %{kind: :channel_peer, channel_id: "telegram", account_id: account_id} <-
+           parse_session_key(session_key),
+         {chat_id, topic_id} <- telegram_scope_ids(summary),
+         true <- is_integer(chat_id) do
+      progress_msg_id = meta[:progress_msg_id] || meta["progress_msg_id"]
+      user_msg_id = meta[:user_msg_id] || meta["user_msg_id"]
+
+      msg_ids =
+        [progress_msg_id, user_msg_id]
+        |> Enum.map(&normalize_msg_id/1)
+        |> Enum.filter(&is_integer/1)
+        |> Enum.uniq()
+
+      Enum.reduce(msg_ids, backend_state, fn msg_id, bs ->
+        key = {account_id || "default", chat_id, topic_id, msg_id}
+
+        case backend.put(bs, :telegram_msg_resume, key, resume) do
+          {:ok, bs2} -> bs2
+          _ -> bs
+        end
+      end)
+    else
+      _ -> backend_state
+    end
+  rescue
+    _ -> backend_state
+  end
+
+  defp maybe_index_telegram_message_resume(_backend, backend_state, _summary), do: backend_state
+
+  defp normalize_msg_id(nil), do: nil
+  defp normalize_msg_id(i) when is_integer(i), do: i
+
+  defp normalize_msg_id(s) when is_binary(s) do
+    case Integer.parse(s) do
+      {i, _} -> i
+      :error -> nil
+    end
+  end
+
+  defp normalize_msg_id(_), do: nil
+
+  defp parse_session_key(session_key) when is_binary(session_key) do
+    case LemonCore.SessionKey.parse(session_key) do
+      {:error, _} -> :error
+      parsed -> parsed
+    end
+  rescue
+    _ -> :error
+  end
+
+  defp parse_session_key(_), do: :error
+
+  defp telegram_scope_ids(summary) when is_map(summary) do
+    scope = summary[:scope] || summary["scope"]
+
+    cond do
+      match?(%LemonGateway.Types.ChatScope{transport: :telegram}, scope) ->
+        {scope.chat_id, scope.topic_id}
+
+      true ->
+        {nil, nil}
+    end
+  rescue
+    _ -> {nil, nil}
   end
 
   defp parse_agent_id(nil), do: "default"
