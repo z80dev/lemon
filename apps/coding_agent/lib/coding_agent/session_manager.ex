@@ -829,6 +829,7 @@ defmodule CodingAgent.SessionManager do
       "parentSession" => header.parent_session
     }
     |> reject_nil_values()
+    |> json_safe()
     |> Jason.encode!()
   end
 
@@ -889,6 +890,7 @@ defmodule CodingAgent.SessionManager do
     base
     |> Map.merge(type_fields)
     |> reject_nil_values()
+    |> json_safe()
     |> Jason.encode!()
   end
 
@@ -915,6 +917,61 @@ defmodule CodingAgent.SessionManager do
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
     |> Map.new()
   end
+
+  # Jason can't encode arbitrary structs by default (it falls back to Jason.Encoder.Any which raises).
+  # Session persistence should never crash due to "details" containing richer runtime structs.
+  @json_safe_structs [
+    AgentCore.Types.AgentToolResult,
+    Ai.Types.TextContent,
+    Ai.Types.ThinkingContent,
+    Ai.Types.ImageContent,
+    Ai.Types.ToolCall,
+    Ai.Types.UserMessage,
+    Ai.Types.AssistantMessage,
+    Ai.Types.ToolResultMessage,
+    Ai.Types.Usage,
+    Ai.Types.Cost
+  ]
+
+  defp json_safe(%_{} = term) do
+    # If the protocol dispatch would go to Jason.Encoder.Any, it will raise; convert to map instead.
+    case Jason.Encoder.impl_for(term) do
+      Jason.Encoder.Any ->
+        # Only expand known-safe "data" structs. For everything else, store an inspect string
+        # so we don't accidentally persist secrets from unrelated structs.
+        if term.__struct__ in @json_safe_structs do
+          term
+          |> Map.from_struct()
+          |> Map.delete(:__struct__)
+          |> json_safe()
+        else
+          inspect(term)
+        end
+
+      _impl ->
+        term
+    end
+  end
+
+  defp json_safe(term) when is_map(term) do
+    term
+    |> Enum.map(fn {k, v} -> {json_safe_key(k), json_safe(v)} end)
+    |> Map.new()
+  end
+
+  defp json_safe(term) when is_list(term), do: Enum.map(term, &json_safe/1)
+  defp json_safe(term) when is_tuple(term), do: term |> Tuple.to_list() |> json_safe()
+  defp json_safe(%MapSet{} = term), do: term |> MapSet.to_list() |> json_safe()
+
+  defp json_safe(term)
+       when is_pid(term) or is_port(term) or is_reference(term) or is_function(term),
+       do: inspect(term)
+
+  defp json_safe(term), do: term
+
+  defp json_safe_key(key) when is_binary(key), do: key
+  defp json_safe_key(key) when is_atom(key), do: Atom.to_string(key)
+  defp json_safe_key(key), do: inspect(key)
 
   # Find the latest entry that has no children (a leaf node)
   defp find_latest_leaf([]), do: nil

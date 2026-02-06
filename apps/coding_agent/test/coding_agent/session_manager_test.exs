@@ -168,6 +168,45 @@ defmodule CodingAgent.SessionManagerTest do
   end
 
   # ============================================================================
+  # save_to_file/2
+  # ============================================================================
+
+  describe "save_to_file/2" do
+    @tag :tmp_dir
+    test "does not crash when entries contain non-JSON structs (e.g. tool results)", %{
+      tmp_dir: tmp_dir
+    } do
+      alias AgentCore.Types.AgentToolResult
+      alias Ai.Types.TextContent
+
+      tool_result = %AgentToolResult{
+        content: [%TextContent{type: :text, text: "Completed: 1 file changed"}],
+        details: %{
+          status: "running",
+          description: "Fix TG tool call formatting",
+          engine: "codex"
+        }
+      }
+
+      session =
+        SessionManager.new(tmp_dir)
+        |> SessionManager.append_entry(
+          SessionEntry.custom_message("tool_update", "ignored", details: tool_result)
+        )
+
+      session_file = Path.join(tmp_dir, "tool_result_details.jsonl")
+      assert :ok = SessionManager.save_to_file(session_file, session)
+
+      # Details should round-trip as a JSON map.
+      {:ok, loaded} = SessionManager.load_from_file(session_file)
+      [entry] = loaded.entries
+      assert entry.type == :custom_message
+      assert is_map(entry.details)
+      assert entry.details["details"]["status"] == "running"
+    end
+  end
+
+  # ============================================================================
   # build_session_context/2
   # ============================================================================
 
