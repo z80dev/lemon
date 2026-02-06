@@ -82,6 +82,23 @@ defmodule LemonRouter.ToolStatusCoalescer do
     end
   end
 
+  @doc """
+  Finalize the tool status for a run by marking any still-running actions as completed.
+
+  This is a best-effort safeguard for transports like Telegram where the status surface
+  is an editable message. If the engine emits `run_completed` before the final action
+  completion events arrive (or if they're dropped), the status message can otherwise
+  get stuck showing `[running]`.
+  """
+  def finalize_run(session_key, channel_id, run_id, ok?) when is_binary(run_id) do
+    case Registry.lookup(LemonRouter.ToolStatusRegistry, {session_key, channel_id}) do
+      [{pid, _}] -> GenServer.cast(pid, {:finalize_run, run_id, ok?})
+      _ -> :ok
+    end
+  end
+
+  def finalize_run(_session_key, _channel_id, _run_id, _ok?), do: :ok
+
   defp get_or_start_coalescer(session_key, channel_id, meta \\ %{}) do
     case Registry.lookup(LemonRouter.ToolStatusRegistry, {session_key, channel_id}) do
       [{pid, _}] ->
@@ -181,6 +198,19 @@ defmodule LemonRouter.ToolStatusCoalescer do
     {:noreply, state}
   end
 
+  def handle_cast({:finalize_run, run_id, ok?}, state) do
+    state =
+      if state.run_id == run_id do
+        state
+        |> finalize_running_actions(ok?)
+        |> do_flush()
+      else
+        state
+      end
+
+    {:noreply, state}
+  end
+
   @impl true
   def handle_info(:idle_timeout, state) do
     state = do_flush(state)
@@ -242,7 +272,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
   defp do_flush(state) do
     cancel_timer(state.flush_timer)
 
-    text = render_text(state.actions, state.order)
+    text = LemonRouter.ToolStatusRenderer.render(state.channel_id, state.actions, state.order)
 
     state =
       cond do
@@ -260,6 +290,24 @@ defmodule LemonRouter.ToolStatusCoalescer do
       end
 
     %{state | first_event_ts: nil, flush_timer: nil}
+  end
+
+  defp finalize_running_actions(state, ok?) do
+    actions =
+      Enum.reduce(state.order, state.actions, fn id, acc ->
+        case Map.get(acc, id) do
+          %{phase: phase} = action when phase in [:started, :updated] ->
+            Map.put(acc, id, %{action | phase: :completed, ok: ok?})
+
+          %{"phase" => phase} = action when phase in [:started, :updated] ->
+            Map.put(acc, id, Map.merge(action, %{"phase" => :completed, "ok" => ok?}))
+
+          _ ->
+            acc
+        end
+      end)
+
+    %{state | actions: actions}
   end
 
   defp emit_output(state, text) do
@@ -383,6 +431,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
         data = %{
           id: id,
           kind: kind,
+          caller_engine: ev.engine,
           title: action.title,
           phase: ev.phase,
           ok: ev.ok,
@@ -415,69 +464,6 @@ defmodule LemonRouter.ToolStatusCoalescer do
       {actions, order}
     end
   end
-
-  defp render_text(actions, order) do
-    if order == [] do
-      "Tool calls:\n- (none yet)"
-    else
-      lines =
-        Enum.map(order, fn id ->
-          case Map.get(actions, id) do
-            nil -> nil
-            action -> format_action_line(action)
-          end
-        end)
-        |> Enum.reject(&is_nil/1)
-
-      Enum.join(["Tool calls:" | lines], "\n")
-    end
-  end
-
-  defp format_action_line(action) do
-    title = truncate_one_line(action.title || "", 80)
-
-    case action.phase do
-      :started ->
-        "- [running] #{title}"
-
-      :updated ->
-        "- [running] #{title}"
-
-      :completed ->
-        label = if action.ok == true, do: "ok", else: "err"
-        preview = extract_result_preview(action.detail)
-
-        if preview in [nil, ""] do
-          "- [#{label}] #{title}"
-        else
-          prev = truncate_one_line(preview, 140)
-          "- [#{label}] #{title} -> #{prev}"
-        end
-
-      other ->
-        "- [#{other}] #{title}"
-    end
-  end
-
-  defp extract_result_preview(detail) when is_map(detail) do
-    detail[:result_preview] ||
-      detail["result_preview"] ||
-      detail[:result] ||
-      detail["result"]
-  rescue
-    _ -> nil
-  end
-
-  defp extract_result_preview(_), do: nil
-
-  defp truncate_one_line(text, max_len) when is_binary(text) do
-    text
-    |> String.replace(~r/\s+/, " ")
-    |> String.trim()
-    |> String.slice(0, max_len)
-  end
-
-  defp truncate_one_line(other, _max_len), do: to_string(other)
 
   defp parse_session_key(session_key) do
     if Code.ensure_loaded?(LemonRouter.SessionKey) do

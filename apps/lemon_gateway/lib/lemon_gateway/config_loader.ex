@@ -139,6 +139,8 @@ defmodule LemonGateway.ConfigLoader do
       poll_interval_ms: fetch(telegram, :poll_interval_ms),
       edit_throttle_ms: fetch(telegram, :edit_throttle_ms),
       debounce_ms: fetch(telegram, :debounce_ms),
+      # When enabled, outgoing text is treated as markdown and rendered using Telegram entities.
+      use_markdown: fetch(telegram, :use_markdown),
       allow_queue_override: fetch(telegram, :allow_queue_override),
       account_id: fetch(telegram, :account_id),
       offset: fetch(telegram, :offset),

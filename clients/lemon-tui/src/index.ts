@@ -15,7 +15,7 @@ import {
   type Component,
   type SelectItem,
 } from '@mariozechner/pi-tui';
-import { AgentConnection, type AgentConnectionOptions } from './agent-connection.js';
+import { AgentConnection, AGENT_RESTART_EXIT_CODE, type AgentConnectionOptions } from './agent-connection.js';
 import { StateStore, type AppState, type NormalizedAssistantMessage } from './state.js';
 import type { ServerMessage, UIRequestMessage, SessionSummary } from './types.js';
 import { slashCommands, MODELINE_PREFIXES, GIT_REFRESH_INTERVAL_MS } from './constants.js';
@@ -35,6 +35,7 @@ export class LemonTUI {
   private connection: AgentConnection;
   private connectionOptions: AgentConnectionOptions;
   private store: StateStore;
+  private agentRestartInFlight = false;
 
   private header: Text;
   private welcomeSection: Text;
@@ -366,6 +367,17 @@ export class LemonTUI {
     });
 
     this.connection.on('close', (code) => {
+      // If the agent intentionally exited to trigger a restart, transparently respawn it.
+      if (code === AGENT_RESTART_EXIT_CODE) {
+        void this.restartAgentConnection('Agent requested restart');
+        return;
+      }
+
+      // During user-triggered restarts, we may see a close before the restart completes.
+      if (this.agentRestartInFlight) {
+        return;
+      }
+
       this.store.setError(`Connection closed (code: ${code})`);
     });
 
@@ -938,6 +950,10 @@ export class LemonTUI {
         break;
       }
 
+      case 'restart':
+        void this.restartAgentConnection(args.join(' ') || 'User requested restart');
+        break;
+
       case 'quit':
       case 'exit':
       case 'q':
@@ -1007,6 +1023,7 @@ export class LemonTUI {
   /search        - Search for text in conversations
   /settings      - Open settings
   /debug         - Toggle debug mode (on/off)
+  /restart       - Restart the Lemon agent process (reload latest code)
   /quit          - Exit the application
   /help          - Show this help message
 
@@ -1027,6 +1044,32 @@ ${ansi.bold('Shortcuts:')}
 
     this.messagesContainer.addChild(new Text(helpText, 1, 1));
     this.tui.requestRender();
+  }
+
+  private async restartAgentConnection(reason: string): Promise<void> {
+    if (this.agentRestartInFlight) {
+      return;
+    }
+    this.agentRestartInFlight = true;
+
+    try {
+      // Cancel any overlay that might be waiting for a ui_response from a soon-to-die process.
+      this.hideOverlay();
+      this.store.setPendingUIRequest(null);
+
+      this.handleUINotify({ message: `Restarting agent: ${reason}`, notify_type: 'warning' });
+
+      // Clear state so we don't render stale sessions/messages while reconnecting.
+      this.store.reset();
+
+      await this.connection.restart();
+      this.handleUINotify({ message: 'Agent restarted', notify_type: 'success' });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.store.setError(`Failed to restart agent: ${msg}`);
+    } finally {
+      this.agentRestartInFlight = false;
+    }
   }
 
   private clearMessages(): void {
@@ -1720,4 +1763,3 @@ ${ansi.bold('Shortcuts:')}
     process.exit(0);
   }
 }
-

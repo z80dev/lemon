@@ -24,6 +24,7 @@ defmodule CodingAgent.Tools do
     TodoRead,
     TodoWrite,
     Truncate,
+    Restart,
     Task
   }
 
@@ -50,6 +51,7 @@ defmodule CodingAgent.Tools do
       WebSearch.tool(cwd, opts),
       TodoRead.tool(cwd, opts),
       TodoWrite.tool(cwd, opts),
+      Restart.tool(cwd, opts),
       Task.tool(cwd, opts)
     ]
   end
@@ -88,6 +90,7 @@ defmodule CodingAgent.Tools do
       "todoread" => TodoRead.tool(cwd, opts),
       "todowrite" => TodoWrite.tool(cwd, opts),
       "truncate" => Truncate.tool(opts),
+      "restart" => Restart.tool(cwd, opts),
       "task" => Task.tool(cwd, opts)
     }
   end

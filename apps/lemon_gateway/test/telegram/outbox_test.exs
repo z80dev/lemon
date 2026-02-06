@@ -765,12 +765,27 @@ defmodule LemonGateway.Telegram.OutboxTest do
   describe "start_link behavior" do
     test "returns :ignore when bot_token is missing" do
       previous = Application.get_env(:lemon_gateway, :telegram)
+      cfg_pid = Process.whereis(LemonGateway.Config)
+      cfg_state = if is_pid(cfg_pid), do: :sys.get_state(LemonGateway.Config), else: nil
 
       try do
         Application.put_env(:lemon_gateway, :telegram, %{})
+
+        # Ensure the base config (loaded from the user's local TOML) can't leak a bot token
+        # into this test. Outbox.start_link/1 consults LemonGateway.Config first.
+        if is_pid(cfg_pid) do
+          :sys.replace_state(LemonGateway.Config, fn state ->
+            Map.delete(state, :telegram)
+          end)
+        end
+
         result = Outbox.start_link([])
         assert result == :ignore
       after
+        if is_pid(cfg_pid) and is_map(cfg_state) do
+          :sys.replace_state(LemonGateway.Config, fn _ -> cfg_state end)
+        end
+
         if is_nil(previous) do
           Application.delete_env(:lemon_gateway, :telegram)
         else

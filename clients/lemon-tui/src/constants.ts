@@ -14,6 +14,7 @@ export const slashCommands: SlashCommand[] = [
   { name: 'search', description: 'Search for text in conversations' },
   { name: 'settings', description: 'Open settings' },
   { name: 'debug', description: 'Toggle debug mode (on/off)' },
+  { name: 'restart', description: 'Restart the Lemon agent process (reloads latest code)' },
   { name: 'quit', description: 'Exit the application' },
   { name: 'exit', description: 'Exit the application' },
   { name: 'q', description: 'Exit the application' },

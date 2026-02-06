@@ -3,6 +3,28 @@ defmodule LemonRouter.StreamCoalescerTest do
 
   alias LemonRouter.StreamCoalescer
 
+  defmodule TestTelegramPlugin do
+    @moduledoc false
+
+    def id, do: "telegram"
+
+    def meta do
+      %{
+        name: "Test Telegram",
+        capabilities: %{
+          edit_support: true,
+          chunk_limit: 4096
+        }
+      }
+    end
+
+    def deliver(payload) do
+      pid = :persistent_term.get({__MODULE__, :test_pid}, nil)
+      if is_pid(pid), do: send(pid, {:delivered, payload})
+      {:ok, :ok}
+    end
+  end
+
   setup do
     # Start the coalescer registry and supervisor if not running
     if is_nil(Process.whereis(LemonRouter.CoalescerRegistry)) do
@@ -16,6 +38,37 @@ defmodule LemonRouter.StreamCoalescerTest do
           name: LemonRouter.CoalescerSupervisor
         )
     end
+
+    if is_nil(Process.whereis(LemonChannels.Registry)) do
+      {:ok, _} = LemonChannels.Registry.start_link([])
+    end
+
+    if is_nil(Process.whereis(LemonChannels.Outbox)) do
+      {:ok, _} = LemonChannels.Outbox.start_link([])
+    end
+
+    if is_nil(Process.whereis(LemonChannels.Outbox.RateLimiter)) do
+      {:ok, _} = LemonChannels.Outbox.RateLimiter.start_link([])
+    end
+
+    if is_nil(Process.whereis(LemonChannels.Outbox.Dedupe)) do
+      {:ok, _} = LemonChannels.Outbox.Dedupe.start_link([])
+    end
+
+    :persistent_term.put({TestTelegramPlugin, :test_pid}, self())
+
+    existing = LemonChannels.Registry.get_plugin("telegram")
+    _ = LemonChannels.Registry.unregister("telegram")
+    :ok = LemonChannels.Registry.register(TestTelegramPlugin)
+
+    on_exit(fn ->
+      _ = :persistent_term.erase({TestTelegramPlugin, :test_pid})
+      _ = LemonChannels.Registry.unregister("telegram")
+
+      if is_atom(existing) do
+        _ = LemonChannels.Registry.register(existing)
+      end
+    end)
 
     :ok
   end
@@ -312,6 +365,36 @@ defmodule LemonRouter.StreamCoalescerTest do
 
     test "flush on non-existent coalescer succeeds" do
       assert :ok = StreamCoalescer.flush("non:existent:session", "channel")
+    end
+  end
+
+  describe "finalize_run/4 (telegram)" do
+    test "deletes progress message and sends final response as a new message" do
+      session_key = "agent:my-agent:telegram:bot123:dm:user456"
+      channel_id = "telegram"
+      run_id = "run_#{System.unique_integer()}"
+
+      # Simulate a run that streamed at least one delta and has a progress msg id.
+      StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 1, "Partial", meta: %{progress_msg_id: 111})
+
+      assert :ok =
+               StreamCoalescer.finalize_run(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 meta: %{progress_msg_id: 111, user_msg_id: 222},
+                 final_text: "Final answer"
+               )
+
+      assert_receive {:delivered, payload1}, 1_000
+      assert_receive {:delivered, payload2}, 1_000
+
+      assert payload1.kind == :delete
+      assert payload1.content == %{message_id: 111}
+
+      assert payload2.kind == :text
+      assert payload2.content == "Final answer"
+      assert payload2.reply_to == 222
     end
   end
 end
