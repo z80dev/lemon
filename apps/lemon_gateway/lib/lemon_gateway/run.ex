@@ -538,9 +538,14 @@ defmodule LemonGateway.Run do
   defp register_progress_mapping(%Job{meta: meta, scope: scope}, run_pid)
        when not is_nil(scope) do
     progress_msg_id = meta && meta[:progress_msg_id]
+    status_msg_id = meta && meta[:status_msg_id]
 
     if progress_msg_id do
       LemonGateway.Store.put_progress_mapping(scope, progress_msg_id, run_pid)
+    end
+
+    if status_msg_id do
+      LemonGateway.Store.put_progress_mapping(scope, status_msg_id, run_pid)
     end
   end
 
@@ -548,9 +553,14 @@ defmodule LemonGateway.Run do
 
   defp unregister_progress_mapping(%Job{meta: meta, scope: scope}) when not is_nil(scope) do
     progress_msg_id = meta && meta[:progress_msg_id]
+    status_msg_id = meta && meta[:status_msg_id]
 
     if progress_msg_id do
       LemonGateway.Store.delete_progress_mapping(scope, progress_msg_id)
+    end
+
+    if status_msg_id do
+      LemonGateway.Store.delete_progress_mapping(scope, status_msg_id)
     end
   end
 

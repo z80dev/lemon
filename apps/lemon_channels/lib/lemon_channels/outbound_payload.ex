@@ -6,7 +6,20 @@ defmodule LemonChannels.OutboundPayload do
   """
 
   @enforce_keys [:channel_id, :account_id, :peer, :kind, :content]
-  defstruct [:channel_id, :account_id, :peer, :kind, :content, :idempotency_key, :reply_to, :meta]
+  defstruct [
+    :channel_id,
+    :account_id,
+    :peer,
+    :kind,
+    :content,
+    :idempotency_key,
+    :reply_to,
+    :meta,
+    # Optional outbox delivery acknowledgment.
+    # When set, LemonChannels.Outbox will send `{tag, notify_ref, result}` to notify_pid.
+    :notify_pid,
+    :notify_ref
+  ]
 
   @type peer :: %{
           kind: :dm | :group | :channel,
@@ -26,7 +39,9 @@ defmodule LemonChannels.OutboundPayload do
           content: content(),
           idempotency_key: binary() | nil,
           reply_to: binary() | nil,
-          meta: map() | nil
+          meta: map() | nil,
+          notify_pid: pid() | nil,
+          notify_ref: reference() | nil
         }
 
   @doc """
@@ -50,7 +65,9 @@ defmodule LemonChannels.OutboundPayload do
       content: text,
       idempotency_key: opts[:idempotency_key],
       reply_to: opts[:reply_to],
-      meta: opts[:meta]
+      meta: opts[:meta],
+      notify_pid: opts[:notify_pid],
+      notify_ref: opts[:notify_ref]
     ])
   end
 
@@ -66,7 +83,9 @@ defmodule LemonChannels.OutboundPayload do
       kind: :edit,
       content: %{message_id: message_id, text: text},
       idempotency_key: opts[:idempotency_key],
-      meta: opts[:meta]
+      meta: opts[:meta],
+      notify_pid: opts[:notify_pid],
+      notify_ref: opts[:notify_ref]
     ])
   end
 end

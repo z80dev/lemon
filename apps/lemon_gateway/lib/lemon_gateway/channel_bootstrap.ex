@@ -23,6 +23,7 @@ defmodule LemonGateway.ChannelBootstrap do
   @impl true
   def init(state) do
     send(self(), :bootstrap)
+
     state =
       state
       |> Map.put_new(:attempts, 0)

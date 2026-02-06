@@ -13,7 +13,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonGateway.Types.{ChatScope, Job}
+  alias LemonGateway.Types.{ChatScope, Job, ResumeToken}
   alias LemonGateway.{Config, BindingResolver}
 
   # Mock Telegram API that records calls and can inject updates
@@ -162,10 +162,22 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
     def format_resume(%ResumeToken{value: v}), do: "capture resume #{v}"
 
     @impl true
-    def extract_resume(_text), do: nil
+    def extract_resume(text) when is_binary(text) do
+      # Minimal resume support for testing Telegram /resume flows.
+      case Regex.run(~r/\bcapture\s+resume\s+([^\s]+)/i, text) do
+        [_, token] -> %ResumeToken{engine: id(), value: token}
+        _ -> nil
+      end
+    end
+
+    def extract_resume(_), do: nil
 
     @impl true
-    def is_resume_line(_line), do: false
+    def is_resume_line(line) when is_binary(line) do
+      Regex.match?(~r/^\s*capture\s+resume\s+[^\s]+/i, line)
+    end
+
+    def is_resume_line(_), do: false
 
     @impl true
     def supports_steer?, do: false
@@ -225,6 +237,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       MockTelegramAPI.stop()
       JobCapturingEngine.stop()
       Application.delete_env(:lemon_gateway, LemonGateway.Config)
+      Application.delete_env(:lemon_gateway, LemonGateway.Store)
       Application.delete_env(:lemon_gateway, :config_path)
       Application.delete_env(:lemon_gateway, :telegram)
       Application.delete_env(:lemon_gateway, :transports)
@@ -270,6 +283,10 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
 
     Application.put_env(:lemon_gateway, :config_path, "/nonexistent/path.toml")
     Application.put_env(:lemon_gateway, Config, config)
+    # Avoid leaking state across tests via the default JsonlBackend (config/config.exs).
+    Application.put_env(:lemon_gateway, LemonGateway.Store,
+      backend: LemonGateway.Store.EtsBackend
+    )
 
     Application.put_env(:lemon_gateway, :engines, [
       JobCapturingEngine,
@@ -884,6 +901,189 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
 
       assert_receive {:job_captured, %Job{} = job}, 2000
       assert job.text == "allowed (bound)"
+    end
+
+    test "/new records memories (when history exists) and then clears auto-resume chat state" do
+      start_gateway_with_config(%{})
+
+      scope = %ChatScope{transport: :telegram, chat_id: 12345, topic_id: nil}
+
+      session_key =
+        LemonCore.SessionKey.channel_peer(%{
+          agent_id: "default",
+          channel_id: "telegram",
+          account_id: "default",
+          peer_kind: :dm,
+          peer_id: "12345",
+          thread_id: nil
+        })
+
+      LemonGateway.Store.put_chat_state(scope, %{
+        last_engine: "capture",
+        last_resume_token: "resume_1",
+        updated_at: System.system_time(:millisecond)
+      })
+
+      LemonGateway.Store.put_chat_state(session_key, %{
+        last_engine: "capture",
+        last_resume_token: "resume_1",
+        updated_at: System.system_time(:millisecond)
+      })
+
+      assert LemonGateway.Store.get_chat_state(scope) != nil
+      assert LemonGateway.Store.get_chat_state(session_key) != nil
+
+      # Seed minimal run history so /new has something to reflect on.
+      LemonGateway.Store.finalize_run("seed_run_1", %{
+        run_id: "seed_run_1",
+        scope: scope,
+        session_key: session_key,
+        prompt: "Earlier prompt",
+        completed: %{ok: true, answer: "Earlier answer"},
+        meta: %{origin: :telegram}
+      })
+
+      MockTelegramAPI.enqueue_message(12345, "/new", message_id: 500)
+
+      assert_receive {:job_captured, %Job{} = job}, 2000
+      assert is_binary(job.text)
+      assert String.contains?(job.text, "Transcript")
+
+      assert_receive {:telegram_api_call,
+                      {:send_message, 12345, "Recording memories, then starting a new session…",
+                       %{"reply_to_message_id" => 500}, _parse_mode}},
+                     2000
+
+      assert_receive {:telegram_api_call,
+                      {:send_message, 12345, "Started a new session.",
+                       %{"reply_to_message_id" => 500}, _parse_mode}},
+                     2000
+
+      assert eventually(fn -> LemonGateway.Store.get_chat_state(scope) == nil end)
+      assert eventually(fn -> LemonGateway.Store.get_chat_state(session_key) == nil end)
+    end
+
+    test "/resume lists prior sessions and /resume <n> selects one for subsequent messages" do
+      start_gateway_with_config(%{})
+
+      scope = %ChatScope{transport: :telegram, chat_id: 12345, topic_id: nil}
+
+      MockTelegramAPI.enqueue_message(12345, "first", message_id: 601)
+      assert_receive {:job_captured, %Job{} = _job1}, 2000
+
+      assert eventually(fn -> LemonGateway.Store.get_chat_state(scope) != nil end)
+      state1 = LemonGateway.Store.get_chat_state(scope)
+
+      token1 =
+        state1.last_resume_token || state1[:last_resume_token] || state1["last_resume_token"]
+
+      MockTelegramAPI.enqueue_message(12345, "/new", message_id: 602)
+      refute_receive {:job_captured, %Job{}}, 300
+
+      assert_receive {:telegram_api_call,
+                      {:send_message, 12345, "Started a new session.",
+                       %{"reply_to_message_id" => 602}, _parse_mode}},
+                     2000
+
+      MockTelegramAPI.enqueue_message(12345, "second", message_id: 603)
+      assert_receive {:job_captured, %Job{} = _job2}, 2000
+
+      assert eventually(fn ->
+               st = LemonGateway.Store.get_chat_state(scope)
+
+               st != nil and
+                 (st.last_resume_token || st[:last_resume_token] || st["last_resume_token"]) !=
+                   token1
+             end)
+
+      state2 = LemonGateway.Store.get_chat_state(scope)
+
+      token2 =
+        state2.last_resume_token || state2[:last_resume_token] || state2["last_resume_token"]
+
+      MockTelegramAPI.enqueue_message(12345, "/resume", message_id: 604)
+      refute_receive {:job_captured, %Job{}}, 300
+
+      assert_receive {:telegram_api_call,
+                      {:send_message, 12345, text, %{"reply_to_message_id" => 604}, _parse_mode}},
+                     2000
+
+      assert String.contains?(text, "Available sessions")
+      assert String.contains?(text, token2)
+      assert String.contains?(text, token1)
+
+      MockTelegramAPI.enqueue_message(12345, "/resume 2", message_id: 605)
+      refute_receive {:job_captured, %Job{}}, 300
+
+      assert_receive {:telegram_api_call,
+                      {:send_message, 12345, text2, %{"reply_to_message_id" => 605}, _parse_mode}},
+                     2000
+
+      assert String.contains?(text2, "Resuming session")
+      assert String.contains?(text2, token1)
+
+      MockTelegramAPI.enqueue_message(12345, "continue", message_id: 606)
+      assert_receive {:job_captured, %Job{} = job3}, 2000
+      assert %ResumeToken{engine: "capture", value: ^token1} = job3.resume
+    end
+
+    test "replying to a message from an older session switches and resumes that session" do
+      start_gateway_with_config(%{})
+
+      scope = %ChatScope{transport: :telegram, chat_id: 12345, topic_id: nil}
+
+      MockTelegramAPI.enqueue_message(12345, "first", message_id: 701)
+      assert_receive {:job_captured, %Job{} = _job1}, 2000
+
+      assert eventually(fn -> LemonGateway.Store.get_chat_state(scope) != nil end)
+      state1 = LemonGateway.Store.get_chat_state(scope)
+
+      token1 =
+        state1.last_resume_token || state1[:last_resume_token] || state1["last_resume_token"]
+
+      MockTelegramAPI.enqueue_message(12345, "/new", message_id: 702)
+      refute_receive {:job_captured, %Job{}}, 300
+
+      assert_receive {:telegram_api_call,
+                      {:send_message, 12345, "Started a new session.",
+                       %{"reply_to_message_id" => 702}, _parse_mode}},
+                     2000
+
+      MockTelegramAPI.enqueue_message(12345, "second", message_id: 703)
+      assert_receive {:job_captured, %Job{} = _job2}, 2000
+
+      # Reply to the old user message ID (701); reply text is empty, so the transport must
+      # use the persisted message->resume index.
+      MockTelegramAPI.enqueue_message(12345, "back to first", message_id: 704, reply_to: 701)
+
+      assert_receive {:job_captured, %Job{} = job3}, 2000
+      assert %ResumeToken{engine: "capture", value: ^token1} = job3.resume
+
+      # Explicit session switching should be acknowledged.
+      assert eventually(fn ->
+               Enum.any?(MockTelegramAPI.calls(), fn
+                 {:send_message, 12345, text, _opts, _parse_mode} ->
+                   String.contains?(text, "Resuming session") and String.contains?(text, token1)
+
+                 _ ->
+                   false
+               end)
+             end)
+    end
+  end
+
+  defp eventually(fun, attempts_left \\ 40)
+
+  defp eventually(fun, 0) when is_function(fun, 0) do
+    fun.()
+  end
+
+  defp eventually(fun, attempts_left) when is_function(fun, 0) and attempts_left > 0 do
+    if fun.() do
+      true
+    else
+      Process.sleep(10)
+      eventually(fun, attempts_left - 1)
     end
   end
 end

@@ -112,4 +112,3 @@ defmodule LemonGateway.ChannelBootstrapTest do
     end
   end
 end
-
