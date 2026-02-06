@@ -113,4 +113,3 @@ defmodule LemonGateway.Dev do
     System.convert_time_unit(elapsed, :native, :millisecond)
   end
 end
-

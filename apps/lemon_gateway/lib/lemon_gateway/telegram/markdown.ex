@@ -116,12 +116,23 @@ defmodule LemonGateway.Telegram.Markdown do
           render_nodes(children, acc)
         end
 
-      "h1" -> render_heading(children, acc)
-      "h2" -> render_heading(children, acc)
-      "h3" -> render_heading(children, acc)
-      "h4" -> render_heading(children, acc)
-      "h5" -> render_heading(children, acc)
-      "h6" -> render_heading(children, acc)
+      "h1" ->
+        render_heading(children, acc)
+
+      "h2" ->
+        render_heading(children, acc)
+
+      "h3" ->
+        render_heading(children, acc)
+
+      "h4" ->
+        render_heading(children, acc)
+
+      "h5" ->
+        render_heading(children, acc)
+
+      "h6" ->
+        render_heading(children, acc)
 
       "ul" ->
         render_ul(children, acc)
@@ -212,13 +223,19 @@ defmodule LemonGateway.Telegram.Markdown do
     if code_text == "" do
       acc
     else
-      ent_extra = if is_binary(language) and language != "", do: %{"language" => language}, else: %{}
+      ent_extra =
+        if is_binary(language) and language != "", do: %{"language" => language}, else: %{}
 
       acc =
-        with_entity(acc, "pre", fn a ->
-          # Preserve code verbatim. Telegram expects newlines to be part of the text.
-          emit(a, code_text)
-        end, ent_extra)
+        with_entity(
+          acc,
+          "pre",
+          fn a ->
+            # Preserve code verbatim. Telegram expects newlines to be part of the text.
+            emit(a, code_text)
+          end,
+          ent_extra
+        )
 
       if acc.mode == :list_item do
         acc
@@ -248,7 +265,9 @@ defmodule LemonGateway.Telegram.Markdown do
 
   defp language_from_class(class) when is_binary(class) do
     case Regex.run(~r/(?:^|\\s)language-([\\w#+.-]+)/, class) do
-      [_, lang] -> lang
+      [_, lang] ->
+        lang
+
       _ ->
         # EarmarkParser uses `class="elixir"` for fenced code blocks.
         if String.contains?(class, " ") do

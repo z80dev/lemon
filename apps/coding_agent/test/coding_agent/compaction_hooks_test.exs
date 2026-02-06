@@ -100,21 +100,27 @@ defmodule CodingAgent.CompactionHooksTest do
         fn ->
           send(test_pid, :low_priority)
           :ok
-        end, priority: :low)
+        end,
+        priority: :low
+      )
 
       CompactionHooks.register_hook(
         "test_session",
         fn ->
           send(test_pid, :high_priority)
           :ok
-        end, priority: :high)
+        end,
+        priority: :high
+      )
 
       CompactionHooks.register_hook(
         "test_session",
         fn ->
           send(test_pid, :normal_priority)
           :ok
-        end, priority: :normal)
+        end,
+        priority: :normal
+      )
 
       CompactionHooks.execute_hooks("test_session", [])
 
@@ -147,7 +153,9 @@ defmodule CodingAgent.CompactionHooksTest do
         fn ->
           Process.sleep(10_000)
           :ok
-        end, timeout_ms: 50)
+        end,
+        timeout_ms: 50
+      )
 
       result = CompactionHooks.execute_hooks("test_session", [])
 

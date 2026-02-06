@@ -253,6 +253,12 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
     _ = Application.stop(:lemon_router)
     _ = Application.stop(:lemon_channels)
 
+    # Isolate Telegram poller file locks from any locally running gateway process (and from other tests).
+    lock_dir =
+      Path.join(System.tmp_dir!(), "lemon_test_locks_#{System.unique_integer([:positive])}")
+
+    System.put_env("LEMON_LOCK_DIR", lock_dir)
+
     base_config = %{
       max_concurrent_runs: 10,
       default_engine: "capture",
@@ -961,6 +967,91 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
 
       assert eventually(fn -> LemonGateway.Store.get_chat_state(scope) == nil end)
       assert eventually(fn -> LemonGateway.Store.get_chat_state(session_key) == nil end)
+    end
+
+    test "/new <path> registers a dynamic project and uses it as cwd for subsequent jobs" do
+      start_gateway_with_config(%{})
+
+      scope = %ChatScope{transport: :telegram, chat_id: 12345, topic_id: nil}
+
+      base =
+        Path.join(System.tmp_dir!(), "lemon_new_project_#{System.unique_integer([:positive])}")
+
+      root = Path.join(base, "lemon")
+      File.mkdir_p!(root)
+
+      MockTelegramAPI.enqueue_message(12345, "/new #{root}", message_id: 801)
+      refute_receive {:job_captured, %Job{}}, 300
+
+      assert eventually(fn -> BindingResolver.resolve_cwd(scope) == root end)
+
+      assert eventually(fn ->
+               dyn = LemonGateway.Store.get(:gateway_projects_dynamic, "lemon")
+               (dyn && (dyn[:root] || dyn["root"])) == root
+             end)
+
+      assert eventually(fn ->
+               LemonGateway.Store.get(:gateway_project_overrides, scope) == "lemon"
+             end)
+
+      MockTelegramAPI.enqueue_message(12345, "hi", message_id: 802)
+      assert_receive {:job_captured, %Job{} = job}, 2000
+      assert job.cwd == root
+    end
+
+    test "/new <relative path> resolves relative to current bound project cwd" do
+      start_gateway_with_config(%{})
+
+      scope = %ChatScope{transport: :telegram, chat_id: 12345, topic_id: nil}
+
+      base =
+        Path.join(
+          System.tmp_dir!(),
+          "lemon_new_project_rel_#{System.unique_integer([:positive])}"
+        )
+
+      root1 = Path.join(base, "one")
+      root2 = Path.join(base, "two")
+      File.mkdir_p!(root1)
+      File.mkdir_p!(root2)
+
+      MockTelegramAPI.enqueue_message(12345, "/new #{root1}", message_id: 811)
+      refute_receive {:job_captured, %Job{}}, 300
+      assert eventually(fn -> BindingResolver.resolve_cwd(scope) == root1 end)
+
+      MockTelegramAPI.enqueue_message(12345, "/new ../two", message_id: 812)
+      refute_receive {:job_captured, %Job{}}, 300
+      assert eventually(fn -> BindingResolver.resolve_cwd(scope) == root2 end)
+
+      MockTelegramAPI.enqueue_message(12345, "yo", message_id: 813)
+      assert_receive {:job_captured, %Job{} = job}, 2000
+      assert job.cwd == root2
+    end
+
+    test "/new <project_id> selects a configured gateway project" do
+      base =
+        Path.join(
+          System.tmp_dir!(),
+          "lemon_new_project_cfg_#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(base)
+
+      start_gateway_with_config(%{
+        projects: %{
+          "myrepo" => %{root: base, default_engine: nil}
+        }
+      })
+
+      scope = %ChatScope{transport: :telegram, chat_id: 12345, topic_id: nil}
+
+      MockTelegramAPI.enqueue_message(12345, "/new myrepo", message_id: 821)
+      refute_receive {:job_captured, %Job{}}, 300
+      assert eventually(fn -> BindingResolver.resolve_cwd(scope) == base end)
+
+      MockTelegramAPI.enqueue_message(12345, "ok", message_id: 822)
+      assert_receive {:job_captured, %Job{} = job}, 2000
+      assert job.cwd == base
     end
 
     test "/resume lists prior sessions and /resume <n> selects one for subsequent messages" do
