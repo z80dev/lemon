@@ -285,6 +285,9 @@ defmodule LemonGateway.Telegram.Transport do
               resume_command?(text) ->
                 handle_resume_command(state, scope, message_id, peer_kind, text)
 
+              recompile_command?(text) ->
+                handle_recompile_command(state, scope, message_id, peer_kind, text)
+
               new_command?(text) ->
                 handle_new_session(state, scope, message_id, peer_kind)
 
@@ -590,6 +593,10 @@ defmodule LemonGateway.Telegram.Transport do
     telegram_command?(text, "resume")
   end
 
+  defp recompile_command?(text) do
+    telegram_command?(text, "recompile")
+  end
+
   # Telegram commands in groups may include a bot username suffix: /cmd@BotName
   defp telegram_command?(text, cmd) when is_binary(cmd) do
     trimmed = String.trim_leading(text || "")
@@ -749,6 +756,92 @@ defmodule LemonGateway.Telegram.Transport do
     end
   rescue
     _ -> state
+  end
+
+  defp handle_recompile_command(state, %ChatScope{} = scope, message_id, peer_kind, text) do
+    args = telegram_command_args(text, "recompile") || ""
+    force? = String.contains?(String.downcase(args), "force")
+
+    cond do
+      peer_kind != :dm ->
+        _ =
+          send_system_message(
+            state,
+            scope.chat_id,
+            scope.topic_id,
+            message_id,
+            "For safety, /recompile is only allowed in a private DM with the bot."
+          )
+
+        state
+
+      not Code.ensure_loaded?(Mix) ->
+        _ =
+          send_system_message(
+            state,
+            scope.chat_id,
+            scope.topic_id,
+            message_id,
+            "/recompile is not available in this runtime (Mix is not loaded). If this is a release, deploy a new release instead."
+          )
+
+        state
+
+      true ->
+        opts = %{}
+        opts = maybe_put(opts, "reply_to_message_id", message_id)
+        opts = maybe_put(opts, "message_thread_id", scope.topic_id)
+
+        progress_id =
+          case state.api_mod.send_message(state.token, scope.chat_id, "Recompiling...", opts, nil) do
+            {:ok, %{"ok" => true, "result" => %{"message_id" => msg_id}}} -> msg_id
+            _ -> nil
+          end
+
+        Task.start(fn ->
+          result =
+            case LemonGateway.Dev.recompile_and_reload(force: force?) do
+              {:ok, info} ->
+                err_count = length(info.errors)
+                apps = Enum.map(info.apps, &Atom.to_string/1) |> Enum.join(", ")
+
+                base =
+                  "Recompile complete in #{info.compile_ms}ms\n" <>
+                    "Apps: #{apps}\n" <>
+                    "Modules: #{info.modules}\n" <>
+                    "Reloaded: #{info.reloaded}\n" <>
+                    "Skipped: #{info.skipped}\n" <>
+                    "Errors: #{err_count}"
+
+                if err_count > 0 do
+                  # Keep this short; full error lists can be large.
+                  first =
+                    info.errors
+                    |> Enum.take(5)
+                    |> Enum.map(fn {m, r} -> "- #{inspect(m)}: #{inspect(r)}" end)
+                    |> Enum.join("\n")
+
+                  base <> "\n" <> first
+                else
+                  base
+                end
+
+              {:error, :mix_unavailable} ->
+                "/recompile failed: Mix is unavailable in this runtime."
+
+              {:error, other} ->
+                "/recompile failed: #{inspect(other)}"
+            end
+
+          if is_integer(progress_id) do
+            _ = state.api_mod.edit_message_text(state.token, scope.chat_id, progress_id, result, nil)
+          else
+            _ = send_system_message(state, scope.chat_id, scope.topic_id, message_id, result)
+          end
+        end)
+
+        state
+    end
   end
 
   defp list_recent_sessions(scope, limit) do
