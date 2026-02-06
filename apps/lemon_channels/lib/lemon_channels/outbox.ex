@@ -106,6 +106,8 @@ defmodule LemonChannels.Outbox do
       {entry, processing} ->
         state = %{state | processing: processing}
 
+        maybe_notify_delivery(entry.payload, result)
+
         case result do
           {:ok, _delivery_ref} ->
             # Mark as delivered for idempotency
@@ -137,6 +139,21 @@ defmodule LemonChannels.Outbox do
   def handle_info(_msg, state) do
     {:noreply, state}
   end
+
+  defp maybe_notify_delivery(%OutboundPayload{notify_pid: pid, notify_ref: ref} = payload, result)
+       when is_pid(pid) and is_reference(ref) do
+    tag = get_in(payload.meta || %{}, [:notify_tag]) || :outbox_delivered
+
+    try do
+      send(pid, {tag, ref, result})
+    rescue
+      _ -> :ok
+    end
+
+    :ok
+  end
+
+  defp maybe_notify_delivery(_payload, _result), do: :ok
 
   # Chunk a payload if its content exceeds the channel's chunk limit
   defp maybe_chunk_payload(%OutboundPayload{content: content, channel_id: channel_id} = payload)

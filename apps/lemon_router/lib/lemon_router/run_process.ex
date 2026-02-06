@@ -89,6 +89,12 @@ defmodule LemonRouter.RunProcess do
     # Emit router-level completion event
     Bus.broadcast(Bus.session_topic(state.session_key), event)
 
+    # If we never streamed deltas, make sure any tool-status output is flushed
+    # before we emit a single final answer chunk.
+    if state.saw_delta == false do
+      flush_tool_status(state)
+    end
+
     # If no streaming deltas were emitted, emit a final output chunk so channels respond.
     maybe_emit_final_output(state, event)
 
@@ -99,10 +105,25 @@ defmodule LemonRouter.RunProcess do
     # Forward delta to session subscribers
     Bus.broadcast(Bus.session_topic(state.session_key), event)
 
+    # Ensure any pending tool-status output is emitted before we start streaming the answer.
+    if state.saw_delta == false do
+      flush_tool_status(state)
+    end
+
     # Also ingest into StreamCoalescer for channel delivery
     ingest_delta_to_coalescer(state, delta)
 
     {:noreply, %{state | saw_delta: true}}
+  end
+
+  def handle_info(%LemonCore.Event{type: :engine_action, payload: action_ev} = event, state) do
+    # Forward engine action events to session subscribers
+    Bus.broadcast(Bus.session_topic(state.session_key), event)
+
+    # Also ingest into ToolStatusCoalescer for channel delivery
+    ingest_action_to_tool_status_coalescer(state, action_ev)
+
+    {:noreply, state}
   end
 
   def handle_info(%LemonCore.Event{} = event, state) do
@@ -190,6 +211,7 @@ defmodule LemonRouter.RunProcess do
   defp extract_coalescer_meta(%{meta: meta}) when is_map(meta) do
     %{
       progress_msg_id: meta[:progress_msg_id],
+      status_msg_id: meta[:status_msg_id],
       user_msg_id: meta[:user_msg_id]
     }
   end
@@ -222,11 +244,50 @@ defmodule LemonRouter.RunProcess do
   defp extract_completed_answer(%LemonCore.Event{payload: %LemonGateway.Event.Completed{answer: answer}}), do: answer
   defp extract_completed_answer(_), do: nil
 
+  defp ingest_action_to_tool_status_coalescer(state, action_ev) do
+    case LemonRouter.SessionKey.parse(state.session_key) do
+      %{kind: :channel_peer, channel_id: channel_id} when not is_nil(channel_id) ->
+        meta = extract_coalescer_meta(state.job)
+
+        if Code.ensure_loaded?(LemonRouter.ToolStatusCoalescer) do
+          LemonRouter.ToolStatusCoalescer.ingest_action(
+            state.session_key,
+            channel_id,
+            state.run_id,
+            action_ev,
+            meta: meta
+          )
+        end
+
+      _ ->
+        :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
   # Flush any pending coalesced output on termination
   defp flush_coalescer(state) do
     case LemonRouter.SessionKey.parse(state.session_key) do
       %{kind: :channel_peer, channel_id: channel_id} when not is_nil(channel_id) ->
         LemonRouter.StreamCoalescer.flush(state.session_key, channel_id)
+        if Code.ensure_loaded?(LemonRouter.ToolStatusCoalescer) do
+          LemonRouter.ToolStatusCoalescer.flush(state.session_key, channel_id)
+        end
+
+      _ ->
+        :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp flush_tool_status(state) do
+    case LemonRouter.SessionKey.parse(state.session_key) do
+      %{kind: :channel_peer, channel_id: channel_id} when not is_nil(channel_id) ->
+        if Code.ensure_loaded?(LemonRouter.ToolStatusCoalescer) do
+          LemonRouter.ToolStatusCoalescer.flush(state.session_key, channel_id)
+        end
 
       _ ->
         :ok
