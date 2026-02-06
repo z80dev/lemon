@@ -25,6 +25,8 @@ defmodule AgentCore.Application do
   @impl true
   def start(_type, _args) do
     children = [
+      # Owns the abort-signal ETS table so it doesn't get created by short-lived processes.
+      AgentCore.AbortSignal.TableOwner,
       # Registry for agent process lookup and discovery
       {Registry, keys: :unique, name: AgentCore.AgentRegistry},
       # DynamicSupervisor for subagent processes
