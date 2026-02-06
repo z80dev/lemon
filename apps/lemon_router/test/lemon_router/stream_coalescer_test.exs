@@ -386,8 +386,13 @@ defmodule LemonRouter.StreamCoalescerTest do
                  final_text: "Final answer"
                )
 
-      assert_receive {:delivered, payload1}, 1_000
-      assert_receive {:delivered, payload2}, 1_000
+      # Outbox can be shared across tests; filter by idempotency key so we don't
+      # accidentally assert against an unrelated pending delivery.
+      delete_key = "#{run_id}:final:delete"
+      send_key = "#{run_id}:final:send"
+
+      assert_receive {:delivered, %{idempotency_key: ^delete_key} = payload1}, 1_000
+      assert_receive {:delivered, %{idempotency_key: ^send_key} = payload2}, 1_000
 
       assert payload1.kind == :delete
       assert payload1.content == %{message_id: 111}
