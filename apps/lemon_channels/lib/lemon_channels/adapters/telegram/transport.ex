@@ -12,6 +12,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   alias LemonGateway.BindingResolver
   alias LemonGateway.EngineRegistry
+  alias LemonGateway.Store
   alias LemonGateway.Types.ChatScope
   alias LemonGateway.Types.ResumeToken
   alias LemonCore.SessionKey
@@ -141,7 +142,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   def handle_info(%LemonCore.Event{type: :approval_resolved}, state), do: {:noreply, state}
 
   # Best-effort second pass to clear chat state in case a late write races with the first delete.
-  def handle_info({:new_session_cleanup, %ChatScope{} = scope, session_key, chat_id, thread_id}, state) do
+  def handle_info(
+        {:new_session_cleanup, %ChatScope{} = scope, session_key, chat_id, thread_id},
+        state
+      ) do
     _ = safe_delete_chat_state(scope)
     _ = safe_delete_chat_state(session_key)
     _ = safe_delete_selected_resume(state, chat_id, thread_id)
@@ -161,13 +165,17 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         chat_id: chat_id,
         thread_id: thread_id,
         user_msg_id: user_msg_id
-      } ->
+      } = pending ->
         _ = safe_delete_chat_state(scope)
         _ = safe_delete_chat_state(session_key)
         _ = safe_delete_selected_resume(state, chat_id, thread_id)
 
         # Store writes are async; do a second delete shortly after to win races.
-        Process.send_after(self(), {:new_session_cleanup, scope, session_key, chat_id, thread_id}, 50)
+        Process.send_after(
+          self(),
+          {:new_session_cleanup, scope, session_key, chat_id, thread_id},
+          50
+        )
 
         topic = LemonCore.Bus.run_topic(run_id)
         _ = LemonCore.Bus.unsubscribe(topic)
@@ -179,11 +187,20 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             _ -> true
           end
 
-        msg =
+        msg0 =
           if ok? do
             "Started a new session."
           else
             "Started a new session (memory recording failed)."
+          end
+
+        msg =
+          case pending[:project] do
+            %{id: id, root: root} when is_binary(id) and is_binary(root) ->
+              msg0 <> "\nProject: #{id} (#{root})"
+
+            _ ->
+              msg0
           end
 
         _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
@@ -319,7 +336,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         handle_resume_command(state, inbound)
 
       new_command?(original_text) ->
-        handle_new_session(state, inbound)
+        args = telegram_command_args(original_text, "new")
+        handle_new_session(state, inbound, args)
 
       cancel_command?(original_text) ->
         maybe_cancel_by_reply(state, inbound)
@@ -347,7 +365,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     case Map.get(state.buffers, key) do
       nil ->
         debounce_ref = make_ref()
-        timer_ref = Process.send_after(self(), {:debounce_flush, key, debounce_ref}, state.debounce_ms)
+
+        timer_ref =
+          Process.send_after(self(), {:debounce_flush, key, debounce_ref}, state.debounce_ms)
 
         buffer = %{
           inbound: inbound,
@@ -361,7 +381,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       buffer ->
         _ = Process.cancel_timer(buffer.timer_ref)
         debounce_ref = make_ref()
-        timer_ref = Process.send_after(self(), {:debounce_flush, key, debounce_ref}, state.debounce_ms)
+
+        timer_ref =
+          Process.send_after(self(), {:debounce_flush, key, debounce_ref}, state.debounce_ms)
 
         messages = buffer.messages ++ [message_entry(inbound)]
         inbound_last = inbound
@@ -407,6 +429,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     meta =
       (inbound.meta || %{})
       |> Map.put(:progress_msg_id, progress_msg_id)
+      |> Map.put(:user_msg_id, user_msg_id)
       # Tool status messages are created lazily (only if tools/actions occur).
       |> Map.put(:status_msg_id, nil)
       |> Map.put(:topic_id, thread_id)
@@ -438,7 +461,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     if is_integer(chat_id) and reply_to_id do
       case Integer.parse(to_string(reply_to_id)) do
         {progress_msg_id, _} ->
-          scope = %LemonGateway.Types.ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
+          scope = %LemonGateway.Types.ChatScope{
+            transport: :telegram,
+            chat_id: chat_id,
+            topic_id: thread_id
+          }
 
           if Code.ensure_loaded?(LemonGateway.Runtime) and
                function_exported?(LemonGateway.Runtime, :cancel_by_progress_msg, 2) do
@@ -503,6 +530,71 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       [_, rest] -> String.trim(rest || "")
       _ -> nil
     end
+  end
+
+  defp maybe_select_project_for_scope(%ChatScope{} = scope, selector) when is_binary(selector) do
+    sel = String.trim(selector || "")
+
+    cond do
+      sel == "" ->
+        :noop
+
+      looks_like_path?(sel) ->
+        base =
+          case BindingResolver.resolve_cwd(scope) do
+            cwd when is_binary(cwd) and byte_size(cwd) > 0 -> cwd
+            _ -> File.cwd!()
+          end
+
+        expanded =
+          case Path.type(sel) do
+            :absolute -> Path.expand(sel)
+            :relative -> Path.expand(sel, base)
+            _ -> Path.expand(sel, base)
+          end
+
+        if File.dir?(expanded) do
+          id = Path.basename(expanded)
+          root = expanded
+
+          if Code.ensure_loaded?(Store) and function_exported?(Store, :put, 3) do
+            Store.put(:gateway_projects_dynamic, id, %{root: root, default_engine: nil})
+            Store.put(:gateway_project_overrides, scope, id)
+          end
+
+          {:ok, %{id: id, root: root}}
+        else
+          {:error, "Project path does not exist: #{expanded}"}
+        end
+
+      true ->
+        id = sel
+
+        case BindingResolver.lookup_project(id) do
+          %{root: root} when is_binary(root) and byte_size(root) > 0 ->
+            root = Path.expand(root)
+
+            if File.dir?(root) do
+              if Code.ensure_loaded?(Store) and function_exported?(Store, :put, 3) do
+                Store.put(:gateway_project_overrides, scope, id)
+              end
+
+              {:ok, %{id: id, root: root}}
+            else
+              {:error, "Configured project root does not exist: #{root}"}
+            end
+
+          _ ->
+            {:error, "Unknown project: #{id}"}
+        end
+    end
+  rescue
+    _ -> {:error, "Failed to select project."}
+  end
+
+  defp looks_like_path?(s) when is_binary(s) do
+    String.starts_with?(s, "/") or String.starts_with?(s, "~") or String.starts_with?(s, ".") or
+      String.contains?(s, "/")
   end
 
   defp command_message?(text) do
@@ -579,8 +671,20 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       true ->
         key = {state.account_id || "default", chat_id, thread_id, reply_to_id}
 
-        case CoreStore.get(:telegram_msg_resume, key) do
-          %ResumeToken{} = token -> {token, :msg_index}
+        token =
+          cond do
+            Code.ensure_loaded?(Store) and function_exported?(Store, :get, 2) ->
+              Store.get(:telegram_msg_resume, key)
+
+            Code.ensure_loaded?(CoreStore) and function_exported?(CoreStore, :get, 2) ->
+              CoreStore.get(:telegram_msg_resume, key)
+
+            true ->
+              nil
+          end
+
+        case token do
+          %ResumeToken{} = tok -> {tok, :msg_index}
           _ -> {nil, nil}
         end
     end
@@ -592,7 +696,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp switching_session?(%{} = chat_state, %ResumeToken{} = resume) do
     last_engine = chat_state[:last_engine] || chat_state["last_engine"] || chat_state.last_engine
-    last_token = chat_state[:last_resume_token] || chat_state["last_resume_token"] || chat_state.last_resume_token
+
+    last_token =
+      chat_state[:last_resume_token] || chat_state["last_resume_token"] ||
+        chat_state.last_resume_token
+
     last_engine != resume.engine or last_token != resume.value
   rescue
     _ -> true
@@ -603,7 +711,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp maybe_prefix_resume_to_prompt(inbound, %ResumeToken{} = resume) do
     if is_binary(inbound.message.text) and inbound.message.text != "" do
       resume_line = format_resume_line(resume)
-      message = Map.put(inbound.message, :text, String.trim("#{resume_line}\n#{inbound.message.text}"))
+
+      message =
+        Map.put(inbound.message, :text, String.trim("#{resume_line}\n#{inbound.message.text}"))
+
       %{inbound | message: message}
     else
       inbound
@@ -677,7 +788,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             if prompt_part != "" do
               inbound =
                 inbound
-                |> put_in([Access.key!(:message), :text], String.trim("#{format_resume_line(resume)}\n#{prompt_part}"))
+                |> put_in(
+                  [Access.key!(:message), :text],
+                  String.trim("#{format_resume_line(resume)}\n#{prompt_part}")
+                )
 
               submit_inbound_now(state, inbound)
             else
@@ -710,6 +824,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
       Regex.match?(~r/^\d+$/, selector) ->
         idx = String.to_integer(selector)
+
         case Enum.at(sessions, idx - 1) do
           %{resume: %ResumeToken{} = r} -> r
           _ -> nil
@@ -763,11 +878,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       end
 
     history
-    |> Enum.map(fn {_run_id, data} -> %{resume: extract_resume_from_history(data), started_at: data[:started_at] || 0} end)
+    |> Enum.map(fn {_run_id, data} ->
+      %{resume: extract_resume_from_history(data), started_at: data[:started_at] || 0}
+    end)
     |> Enum.filter(fn %{resume: r} -> match?(%ResumeToken{}, r) end)
     |> Enum.sort_by(& &1.started_at, :desc)
     |> Enum.reduce([], fn %{resume: r, started_at: ts}, acc ->
       key = {r.engine, r.value}
+
       if Enum.any?(acc, fn %{resume: rr} -> {rr.engine, rr.value} == key end) do
         acc
       else
@@ -805,59 +923,108 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp extract_resume_from_history(_), do: nil
 
-	  defp handle_new_session(state, inbound) do
-	    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
-	    thread_id = parse_int(inbound.peer.thread_id)
-	    user_msg_id = inbound.meta[:user_msg_id] || parse_int(inbound.message.id)
+  defp handle_new_session(state, inbound, raw_selector \\ nil) do
+    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
+    thread_id = parse_int(inbound.peer.thread_id)
+    user_msg_id = inbound.meta[:user_msg_id] || parse_int(inbound.message.id)
 
-	    state = drop_buffer_for(state, inbound)
+    state = drop_buffer_for(state, inbound)
 
-	    state =
-	      if is_integer(chat_id) do
-	        scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
-	        session_key = build_session_key(state, inbound, scope)
+    state =
+      if is_integer(chat_id) do
+        scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
+        session_key = build_session_key(state, inbound, scope)
 
-	        case submit_memory_reflection_before_new(state, inbound, scope, session_key, chat_id, thread_id, user_msg_id) do
-	          {:ok, run_id, state} when is_binary(run_id) ->
-	            if Code.ensure_loaded?(LemonCore.Bus) and function_exported?(LemonCore.Bus, :subscribe, 1) do
-	              topic = LemonCore.Bus.run_topic(run_id)
-	              _ = LemonCore.Bus.subscribe(topic)
-	            end
+        selector =
+          if is_binary(raw_selector) do
+            case String.trim(raw_selector || "") do
+              "" -> nil
+              other -> other
+            end
+          else
+            nil
+          end
 
-	            _ =
-	              send_system_message(
-	                state,
-	                chat_id,
-	                thread_id,
-	                user_msg_id,
-	                "Recording memories, then starting a new session…"
-	              )
+        project_result =
+          case selector do
+            nil -> :noop
+            sel -> maybe_select_project_for_scope(scope, sel)
+          end
 
-	            pending = %{
-	              scope: scope,
-	              session_key: session_key,
-	              chat_id: chat_id,
-	              thread_id: thread_id,
-	              user_msg_id: user_msg_id
-	            }
+        case project_result do
+          {:error, msg} when is_binary(msg) ->
+            _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
+            state
 
-	            %{state | pending_new: Map.put(state.pending_new, run_id, pending)}
+          _ ->
+            case submit_memory_reflection_before_new(
+                   state,
+                   inbound,
+                   scope,
+                   session_key,
+                   chat_id,
+                   thread_id,
+                   user_msg_id
+                 ) do
+              {:ok, run_id, state} when is_binary(run_id) ->
+                if Code.ensure_loaded?(LemonCore.Bus) and
+                     function_exported?(LemonCore.Bus, :subscribe, 1) do
+                  topic = LemonCore.Bus.run_topic(run_id)
+                  _ = LemonCore.Bus.subscribe(topic)
+                end
 
-	          _ ->
-	            safe_delete_chat_state(scope)
-	            safe_delete_chat_state(session_key)
-	            safe_delete_selected_resume(state, chat_id, thread_id)
-	            _ = send_system_message(state, chat_id, thread_id, user_msg_id, "Started a new session.")
-	            state
-	        end
-	      else
-	        state
-	      end
+                msg =
+                  case project_result do
+                    {:ok, %{id: id, root: root}} ->
+                      "Recording memories, then starting a new session…\nProject: #{id} (#{root})"
 
-	    state
-	  rescue
-	    _ -> state
-	  end
+                    _ ->
+                      "Recording memories, then starting a new session…"
+                  end
+
+                _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
+
+                pending = %{
+                  scope: scope,
+                  session_key: session_key,
+                  chat_id: chat_id,
+                  thread_id: thread_id,
+                  user_msg_id: user_msg_id,
+                  project:
+                    case project_result do
+                      {:ok, %{id: id, root: root}} -> %{id: id, root: root}
+                      _ -> nil
+                    end
+                }
+
+                %{state | pending_new: Map.put(state.pending_new, run_id, pending)}
+
+              _ ->
+                safe_delete_chat_state(scope)
+                safe_delete_chat_state(session_key)
+                safe_delete_selected_resume(state, chat_id, thread_id)
+
+                msg =
+                  case project_result do
+                    {:ok, %{id: id, root: root}} ->
+                      "Started a new session.\nProject: #{id} (#{root})"
+
+                    _ ->
+                      "Started a new session."
+                  end
+
+                _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
+                state
+            end
+        end
+      else
+        state
+      end
+
+    state
+  rescue
+    _ -> state
+  end
 
   defp submit_memory_reflection_before_new(
          state,
@@ -868,156 +1035,165 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
          thread_id,
          user_msg_id
        )
-	       when is_binary(session_key) do
-	    if not (Code.ensure_loaded?(LemonRouter.RunOrchestrator) and
-	              function_exported?(LemonRouter.RunOrchestrator, :submit, 1)) do
-	      :skip
-	    else
-	      history = fetch_run_history_for_memory(session_key, scope, limit: 8)
-	      transcript = format_run_history_transcript(history, max_chars: 12_000)
+       when is_binary(session_key) do
+    if not (Code.ensure_loaded?(LemonRouter.RunOrchestrator) and
+              function_exported?(LemonRouter.RunOrchestrator, :submit, 1)) do
+      :skip
+    else
+      history = fetch_run_history_for_memory(session_key, scope, limit: 8)
+      transcript = format_run_history_transcript(history, max_chars: 12_000)
 
-	      if transcript == "" do
-	        :skip
-		      else
-		        prompt = memory_reflection_prompt(transcript)
+      if transcript == "" do
+        :skip
+      else
+        prompt = memory_reflection_prompt(transcript)
 
-		        # Internal run: avoid creating "Running…" / tool status messages.
-		        progress_msg_id = nil
-		        status_msg_id = nil
+        # Internal run: avoid creating "Running…" / tool status messages.
+        progress_msg_id = nil
+        status_msg_id = nil
 
-		        engine_id = last_engine_hint(scope, session_key) || (inbound.meta || %{})[:engine_id]
-		        agent_id = (inbound.meta || %{})[:agent_id] || "default"
+        engine_id = last_engine_hint(scope, session_key) || (inbound.meta || %{})[:engine_id]
+        agent_id = (inbound.meta || %{})[:agent_id] || "default"
 
-	        meta =
-	          (inbound.meta || %{})
-	          |> Map.put(:progress_msg_id, progress_msg_id)
-	          |> Map.put(:status_msg_id, status_msg_id)
-	          |> Map.put(:topic_id, thread_id)
-	          |> Map.put(:user_msg_id, user_msg_id)
-	          |> Map.put(:command, :new)
-	          |> Map.put(:record_memories, true)
-	          |> Map.merge(%{
-	            channel_id: inbound.channel_id,
-	            account_id: inbound.account_id,
-	            peer: inbound.peer,
-	            sender: inbound.sender,
-	            raw: inbound.raw
-	          })
+        meta =
+          (inbound.meta || %{})
+          |> Map.put(:progress_msg_id, progress_msg_id)
+          |> Map.put(:status_msg_id, status_msg_id)
+          |> Map.put(:topic_id, thread_id)
+          |> Map.put(:user_msg_id, user_msg_id)
+          |> Map.put(:command, :new)
+          |> Map.put(:record_memories, true)
+          |> Map.merge(%{
+            channel_id: inbound.channel_id,
+            account_id: inbound.account_id,
+            peer: inbound.peer,
+            sender: inbound.sender,
+            raw: inbound.raw
+          })
 
-	        case LemonRouter.RunOrchestrator.submit(%{
-	               origin: :channel,
-	               session_key: session_key,
-	               agent_id: agent_id,
-	               prompt: prompt,
-	               queue_mode: :interrupt,
-	               engine_id: engine_id,
-	               meta: meta
-	             }) do
-	          {:ok, run_id} when is_binary(run_id) -> {:ok, run_id, state}
-	          _ -> :skip
-	        end
-	      end
-	    end
-	  rescue
-	    _ -> :skip
-	  end
+        case LemonRouter.RunOrchestrator.submit(%{
+               origin: :channel,
+               session_key: session_key,
+               agent_id: agent_id,
+               prompt: prompt,
+               queue_mode: :interrupt,
+               engine_id: engine_id,
+               meta: meta
+             }) do
+          {:ok, run_id} when is_binary(run_id) -> {:ok, run_id, state}
+          _ -> :skip
+        end
+      end
+    end
+  rescue
+    _ -> :skip
+  end
 
-	  defp submit_memory_reflection_before_new(_state, _inbound, _scope, _session_key, _chat_id, _thread_id, _user_msg_id),
-	    do: :skip
+  defp submit_memory_reflection_before_new(
+         _state,
+         _inbound,
+         _scope,
+         _session_key,
+         _chat_id,
+         _thread_id,
+         _user_msg_id
+       ),
+       do: :skip
 
-	  defp fetch_run_history_for_memory(session_key, %ChatScope{} = scope, opts) do
-	    limit = Keyword.get(opts, :limit, 8)
+  defp fetch_run_history_for_memory(session_key, %ChatScope{} = scope, opts) do
+    limit = Keyword.get(opts, :limit, 8)
 
-	    if Code.ensure_loaded?(LemonGateway.Store) and function_exported?(LemonGateway.Store, :get_run_history, 2) do
-	      history = LemonGateway.Store.get_run_history(session_key, limit: limit)
-	      if history == [], do: LemonGateway.Store.get_run_history(scope, limit: limit), else: history
-	    else
-	      []
-	    end
-	  rescue
-	    _ -> []
-	  end
+    if Code.ensure_loaded?(LemonGateway.Store) and
+         function_exported?(LemonGateway.Store, :get_run_history, 2) do
+      history = LemonGateway.Store.get_run_history(session_key, limit: limit)
+      if history == [], do: LemonGateway.Store.get_run_history(scope, limit: limit), else: history
+    else
+      []
+    end
+  rescue
+    _ -> []
+  end
 
-	  defp format_run_history_transcript(history, opts) when is_list(history) do
-	    max_chars = Keyword.get(opts, :max_chars, 12_000)
+  defp format_run_history_transcript(history, opts) when is_list(history) do
+    max_chars = Keyword.get(opts, :max_chars, 12_000)
 
-	    # `get_run_history/2` returns most-recent first; format oldest->newest for the model.
-	    text =
-	      history
-	      |> Enum.reverse()
-	      |> Enum.map(&format_run_history_entry/1)
-	      |> Enum.reject(&(&1 == ""))
-	      |> Enum.join("\n\n")
-	      |> String.trim()
+    # `get_run_history/2` returns most-recent first; format oldest->newest for the model.
+    text =
+      history
+      |> Enum.reverse()
+      |> Enum.map(&format_run_history_entry/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.join("\n\n")
+      |> String.trim()
 
-	    if byte_size(text) > max_chars do
-	      String.slice(text, byte_size(text) - max_chars, max_chars)
-	    else
-	      text
-	    end
-	  rescue
-	    _ -> ""
-	  end
+    if byte_size(text) > max_chars do
+      String.slice(text, byte_size(text) - max_chars, max_chars)
+    else
+      text
+    end
+  rescue
+    _ -> ""
+  end
 
-	  defp format_run_history_transcript(_other, _opts), do: ""
+  defp format_run_history_transcript(_other, _opts), do: ""
 
-	  defp format_run_history_entry({_run_id, data}) when is_map(data) do
-	    summary = data[:summary] || data["summary"] || %{}
-	    prompt = summary[:prompt] || summary["prompt"] || ""
+  defp format_run_history_entry({_run_id, data}) when is_map(data) do
+    summary = data[:summary] || data["summary"] || %{}
+    prompt = summary[:prompt] || summary["prompt"] || ""
 
-	    completed = summary[:completed] || summary["completed"] || %{}
+    completed = summary[:completed] || summary["completed"] || %{}
 
-	    answer =
-	      cond do
-	        is_map(completed) -> completed[:answer] || completed["answer"] || ""
-	        true -> ""
-	      end
+    answer =
+      cond do
+        is_map(completed) -> completed[:answer] || completed["answer"] || ""
+        true -> ""
+      end
 
-	    prompt = prompt |> to_string() |> String.trim()
-	    answer = answer |> to_string() |> String.trim()
+    prompt = prompt |> to_string() |> String.trim()
+    answer = answer |> to_string() |> String.trim()
 
-	    cond do
-	      prompt == "" and answer == "" -> ""
-	      answer == "" -> "User:\n#{prompt}"
-	      true -> "User:\n#{prompt}\n\nAssistant:\n#{answer}"
-	    end
-	  rescue
-	    _ -> ""
-	  end
+    cond do
+      prompt == "" and answer == "" -> ""
+      answer == "" -> "User:\n#{prompt}"
+      true -> "User:\n#{prompt}\n\nAssistant:\n#{answer}"
+    end
+  rescue
+    _ -> ""
+  end
 
-	  defp format_run_history_entry(_), do: ""
+  defp format_run_history_entry(_), do: ""
 
-	  defp memory_reflection_prompt(transcript) when is_binary(transcript) do
-	    """
-	    Before we start a new session, review the recent conversation transcript below.
+  defp memory_reflection_prompt(transcript) when is_binary(transcript) do
+    """
+    Before we start a new session, review the recent conversation transcript below.
 
-	    Task:
-	    - Record any durable, re-usable memories or learnings (preferences, recurring context, decisions, project facts, ongoing tasks) using the available memory workflow/tools.
-	    - If there is nothing worth saving, do not invent anything; just respond with "No memories to record."
-	    - Do not include private/secret data in durable memory.
-	    - In your final response, be brief (1-2 sentences) and do not paste the memories verbatim.
+    Task:
+    - Record any durable, re-usable memories or learnings (preferences, recurring context, decisions, project facts, ongoing tasks) using the available memory workflow/tools.
+    - If there is nothing worth saving, do not invent anything; just respond with "No memories to record."
+    - Do not include private/secret data in durable memory.
+    - In your final response, be brief (1-2 sentences) and do not paste the memories verbatim.
 
-	    Transcript (most recent portion):
-	    #{transcript}
-	    """
-	    |> String.trim()
-	  end
+    Transcript (most recent portion):
+    #{transcript}
+    """
+    |> String.trim()
+  end
 
-	  defp last_engine_hint(%ChatScope{} = scope, session_key) do
-	    s1 = safe_get_chat_state(session_key)
-	    s2 = safe_get_chat_state(scope)
+  defp last_engine_hint(%ChatScope{} = scope, session_key) do
+    s1 = safe_get_chat_state(session_key)
+    s2 = safe_get_chat_state(scope)
 
-	    engine =
-	      (s1 && (s1[:last_engine] || s1["last_engine"] || s1.last_engine)) ||
-	        (s2 && (s2[:last_engine] || s2["last_engine"] || s2.last_engine))
+    engine =
+      (s1 && (s1[:last_engine] || s1["last_engine"] || s1.last_engine)) ||
+        (s2 && (s2[:last_engine] || s2["last_engine"] || s2.last_engine))
 
-	    if is_binary(engine) and engine != "", do: engine, else: nil
-	  rescue
-	    _ -> nil
-	  end
+    if is_binary(engine) and engine != "", do: engine, else: nil
+  rescue
+    _ -> nil
+  end
 
-	  defp drop_buffer_for(state, inbound) do
-	    key = scope_key(inbound)
+  defp drop_buffer_for(state, inbound) do
+    key = scope_key(inbound)
 
     case Map.pop(state.buffers, key) do
       {nil, _buffers} ->
@@ -1079,7 +1255,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     # Persist the explicitly selected session for subsequent messages, even if
     # LemonGateway.Config.auto_resume is disabled.
     account_id = state_account_id_from_session_key(session_key)
-    _ = CoreStore.put(:telegram_selected_resume, {account_id, scope.chat_id, scope.topic_id}, resume)
+
+    _ =
+      CoreStore.put(
+        :telegram_selected_resume,
+        {account_id, scope.chat_id, scope.topic_id},
+        resume
+      )
 
     :ok
   rescue
@@ -1497,6 +1679,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         BindingResolver.resolve_queue_mode(scope)
       end
 
+    cwd =
+      if scope do
+        BindingResolver.resolve_cwd(scope)
+      end
+
     {override_mode, stripped_after_override} =
       parse_queue_override(inbound.message.text, state.allow_queue_override)
 
@@ -1519,6 +1706,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       |> Map.put(:queue_mode, queue_mode)
       |> Map.put(:engine_id, engine_id)
       |> Map.put(:topic_id, topic_id)
+      |> maybe_put(:cwd, cwd)
 
     message = Map.put(inbound.message, :text, text_after_directive)
 

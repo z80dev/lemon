@@ -21,7 +21,11 @@ defmodule LemonGateway.BindingResolver do
   """
 
   alias LemonGateway.{Binding, Config}
+  alias LemonGateway.Store
   alias LemonGateway.Types.ChatScope
+
+  @project_overrides_table :gateway_project_overrides
+  @dynamic_projects_table :gateway_projects_dynamic
 
   @doc """
   Resolves a binding for the given scope.
@@ -131,9 +135,11 @@ defmodule LemonGateway.BindingResolver do
         binding.default_engine
 
       true ->
+        project_id = project_id_for(scope, binding)
+
         project_engine =
-          if binding && binding.project do
-            resolve_project_engine(binding.project)
+          if is_binary(project_id) and byte_size(project_id) > 0 do
+            resolve_project_engine(project_id)
           else
             nil
           end
@@ -175,10 +181,8 @@ defmodule LemonGateway.BindingResolver do
   end
 
   defp resolve_project_engine(project_name) do
-    projects = Config.get(:projects) || %{}
-
-    case Map.get(projects, project_name) do
-      %{default_engine: engine} when is_binary(engine) -> engine
+    case lookup_project(project_name) do
+      %{default_engine: engine} when is_binary(engine) and byte_size(engine) > 0 -> engine
       _ -> nil
     end
   end
@@ -191,16 +195,23 @@ defmodule LemonGateway.BindingResolver do
   @spec resolve_cwd(ChatScope.t()) :: String.t() | nil
   def resolve_cwd(%ChatScope{} = scope) do
     binding = resolve_binding(scope)
+    override_id = get_project_override(scope)
 
-    if binding && binding.project do
-      projects = Config.get(:projects) || %{}
+    cond do
+      is_binary(override_id) and byte_size(override_id) > 0 ->
+        case lookup_project(override_id) do
+          %{root: root} when is_binary(root) and byte_size(root) > 0 -> Path.expand(root)
+          _ -> nil
+        end
 
-      case Map.get(projects, binding.project) do
-        %{root: root} when is_binary(root) -> Path.expand(root)
-        _ -> nil
-      end
-    else
-      nil
+      binding && is_binary(binding.project) && byte_size(binding.project) > 0 ->
+        case lookup_project(binding.project) do
+          %{root: root} when is_binary(root) and byte_size(root) > 0 -> Path.expand(root)
+          _ -> nil
+        end
+
+      true ->
+        nil
     end
   end
 
@@ -222,4 +233,66 @@ defmodule LemonGateway.BindingResolver do
       nil
     end
   end
+
+  defp project_id_for(%ChatScope{} = scope, %Binding{} = binding) do
+    override = get_project_override(scope)
+
+    cond do
+      is_binary(override) and byte_size(override) > 0 -> override
+      is_binary(binding.project) and byte_size(binding.project) > 0 -> binding.project
+      true -> nil
+    end
+  end
+
+  defp project_id_for(%ChatScope{} = scope, _binding) do
+    override = get_project_override(scope)
+    if is_binary(override) and byte_size(override) > 0, do: override, else: nil
+  end
+
+  @doc false
+  def get_project_override(%ChatScope{} = scope) do
+    if Code.ensure_loaded?(Store) and function_exported?(Store, :get, 2) do
+      Store.get(@project_overrides_table, scope)
+    else
+      nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  @doc false
+  def lookup_project(project_id) when is_binary(project_id) do
+    dynamic =
+      if Code.ensure_loaded?(Store) and function_exported?(Store, :get, 2) do
+        Store.get(@dynamic_projects_table, project_id)
+      else
+        nil
+      end
+
+    cond do
+      is_map(dynamic) and is_binary(dynamic[:root] || dynamic["root"]) ->
+        %{
+          root: dynamic[:root] || dynamic["root"],
+          default_engine: dynamic[:default_engine] || dynamic["default_engine"]
+        }
+
+      true ->
+        projects = Config.get(:projects) || %{}
+
+        case Map.get(projects, project_id) do
+          %{root: root} = proj when is_binary(root) ->
+            %{
+              root: root,
+              default_engine: Map.get(proj, :default_engine) || Map.get(proj, "default_engine")
+            }
+
+          _ ->
+            nil
+        end
+    end
+  rescue
+    _ -> nil
+  end
+
+  def lookup_project(_), do: nil
 end

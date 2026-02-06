@@ -584,7 +584,10 @@ defmodule AgentCore.CliRunners.CodexRunner do
       end
 
     if summary do
-      Map.put(detail, :result_preview, summary)
+      # Keep both keys for compatibility with older callers/tests.
+      detail
+      |> Map.put(:result_preview, summary)
+      |> Map.put(:result_summary, summary)
     else
       detail
     end

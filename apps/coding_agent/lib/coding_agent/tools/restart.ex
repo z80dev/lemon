@@ -81,31 +81,31 @@ defmodule CodingAgent.Tools.Restart do
         details: %{restarted: false, denied: true}
       }
     else
-    needs_confirm? =
-      case confirm? do
-        true -> true
-        false -> false
-        _ -> not is_nil(ui_context) and UIContext.has_ui?(ui_context)
-      end
-
-    if needs_confirm? and not is_nil(ui_context) and UIContext.has_ui?(ui_context) do
-      message =
-        case reason_text do
-          r when is_binary(r) ->
-            "Restart the Lemon agent now?\n\nReason: #{r}\n\nThis will stop all running sessions."
-
-          _nil ->
-            "Restart the Lemon agent now?\n\nThis will stop all running sessions."
+      needs_confirm? =
+        case confirm? do
+          true -> true
+          false -> false
+          _ -> not is_nil(ui_context) and UIContext.has_ui?(ui_context)
         end
 
-      case UIContext.confirm(ui_context, "Restart Agent", message) do
-        {:ok, true} -> do_restart(ui_context, reason_text)
-        {:ok, false} -> cancelled()
-        {:error, _} -> do_restart(ui_context, reason_text)
+      if needs_confirm? and not is_nil(ui_context) and UIContext.has_ui?(ui_context) do
+        message =
+          case reason_text do
+            r when is_binary(r) ->
+              "Restart the Lemon agent now?\n\nReason: #{r}\n\nThis will stop all running sessions."
+
+            _nil ->
+              "Restart the Lemon agent now?\n\nThis will stop all running sessions."
+          end
+
+        case UIContext.confirm(ui_context, "Restart Agent", message) do
+          {:ok, true} -> do_restart(ui_context, reason_text)
+          {:ok, false} -> cancelled()
+          {:error, _} -> do_restart(ui_context, reason_text)
+        end
+      else
+        do_restart(ui_context, reason_text)
       end
-    else
-      do_restart(ui_context, reason_text)
-    end
     end
   end
 

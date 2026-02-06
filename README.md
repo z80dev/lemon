@@ -106,6 +106,10 @@ If you plan to use Lemon in a group chat, also set bot privacy appropriately in 
 
 ### 3. Get your chat ID
 
+Methods to find your chat ID:
+
+**Using the Telegram Bot API (no third-party bots):**
+
 Send any message to your new bot, then fetch updates via the Telegram Bot API:
 
 ```bash
@@ -114,6 +118,12 @@ curl -s "https://api.telegram.org/bot${LEMON_TELEGRAM_BOT_TOKEN}/getUpdates" | p
 ```
 
 Look for `message.chat.id`. For groups/supergroups this is usually a negative number.
+
+**Using a bot (fastest method):**
+
+1. Search for `@RawDataBot` or `@userinfobot` in Telegram.
+2. Start the chat and it will return your numerical ID.
+3. For group IDs, add the bot to the group and it will display the chat ID (usually a negative number for groups/supergroups).
 
 ### 4. Configure Lemon
 
@@ -174,6 +184,8 @@ From this repo:
 
 - Engine override (put at the start of a message): `/lemon`, `/claude`, `/codex`
 - Queue mode override: `/steer`, `/followup`, `/interrupt`
+- Start a new session: `/new`
+  - Optional: bind this chat to a repo for subsequent runs: `/new <project_id|path>`
 - Cancel a running thread: `/cancel`
 - Approvals: when a tool needs approval, Telegram will show inline buttons (Once / Session / Agent / Global / Deny).
 
@@ -727,9 +739,9 @@ AgentCore includes a comprehensive CLI runner infrastructure for integrating ext
 )
 
 # Stream events
-for event <- AgentCore.CliRunners.CodexSubagent.stream(session) do
+for event <- AgentCore.CliRunners.CodexSubagent.events(session) do
   case event do
-    {:started, resume_token} -> IO.puts("Session started: #{resume_token}")
+    {:started, resume_token} -> IO.puts("Session started: #{resume_token.value}")
     {:action, action, :started, _opts} -> IO.puts("Starting: #{action.title}")
     {:action, action, :completed, _opts} -> IO.puts("Completed: #{action.title}")
     {:completed, answer, _opts} -> IO.puts("Answer: #{answer}")
@@ -743,11 +755,19 @@ end
 )
 ```
 
-**Supported CLI Runners:**
-- **CodexRunner/CodexSubagent**: Wraps Codex CLI with JSONL streaming
-- **ClaudeRunner/ClaudeSubagent**: Wraps Claude CLI with stream-json output
-- **LemonRunner/LemonSubagent**: Wraps native CodingAgent.Session as CLI runner
-- **JsonlRunner**: Base infrastructure for building custom CLI runners
+**Runner vs Subagent terminology:**
+- **Runner** (`*Runner` modules) are the low-level engine adapters. They own the execution (CLI subprocess or native session) and emit unified events (`StartedEvent`, `ActionEvent`, `CompletedEvent`) on an `AgentCore.EventStream`.
+- **Subagent** (`*Subagent` modules) are the high-level caller API. They wrap a runner, track the resume token, and expose an ergonomic interface (`start/resume/continue/events/collect_answer`) with normalized tuple events.
+
+**Supported integrations:**
+- **CodexRunner / CodexSubagent**: Codex CLI (`codex exec`) with JSONL streaming
+- **ClaudeRunner / ClaudeSubagent**: Claude Code CLI (`claude -p --output-format stream-json`)
+- **LemonRunner / LemonSubagent**: Native `CodingAgent.Session` as a runner backend (no subprocess)
+- **JsonlRunner**: Base infrastructure for implementing new CLI runners
+
+**Where they’re used:**
+- LemonGateway engines use the `*Runner` modules (via `LemonGateway.Engines.CliAdapter`) to stream engine events to clients.
+- The CodingAgent `task` tool uses the `*Subagent` modules to run delegated subtasks and surface progress/answers back to the parent session.
 
 #### Task Tool Integration
 
@@ -1819,6 +1839,7 @@ agent_id = "default"
 From Telegram:
 - Engine override: `/lemon`, `/claude`, `/codex` (at the start of a message)
 - Queue mode override: `/steer`, `/followup`, `/interrupt`
+- Start a new session: `/new` (optional: `/new <project_id|path>` to bind the chat to a repo)
 - Cancel a running thread: `/cancel`
 - Approvals: when a tool needs approval, you'll get inline approval buttons
 

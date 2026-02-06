@@ -20,11 +20,13 @@ defmodule LemonGateway.Telegram.Transport do
   @default_dedupe_ttl 600_000
   @default_debounce_ms 1_000
 
-  def start_link(_opts) do
+  def start_link(opts) do
     # Defense-in-depth: never run the legacy Telegram poller if the lemon_channels-based
     # Telegram transport is active. Having both will double-submit jobs and can surface
     # as "out of nowhere" late replies (a second run finishing later).
-    if Code.ensure_loaded?(LemonChannels.Adapters.Telegram.Transport) and
+    force = Keyword.get(opts || [], :force, false)
+
+    if not force and Code.ensure_loaded?(LemonChannels.Adapters.Telegram.Transport) and
          is_pid(Process.whereis(LemonChannels.Adapters.Telegram.Transport)) do
       :ignore
     else
@@ -162,17 +164,30 @@ defmodule LemonGateway.Telegram.Transport do
       end
 
     case run_id && Map.get(state.pending_new, run_id) do
-      %{scope: %ChatScope{} = scope, session_key: session_key, message_id: message_id} ->
+      %{
+        scope: %ChatScope{} = scope,
+        session_key: session_key,
+        message_id: message_id
+      } = pending ->
         _ = safe_delete_chat_state(scope)
         _ = safe_delete_chat_state(session_key)
         # Store writes are async; do a second delete shortly after to win races.
         Process.send_after(self(), {:new_session_cleanup, scope, session_key}, 50)
 
-        msg =
+        msg0 =
           if is_map(completed) and completed[:ok] == false do
             "Started a new session (memory recording failed)."
           else
             "Started a new session."
+          end
+
+        msg =
+          case pending[:project] do
+            %{id: id, root: root} when is_binary(id) and is_binary(root) ->
+              msg0 <> "\nProject: #{id} (#{root})"
+
+            _ ->
+              msg0
           end
 
         _ = send_system_message(state, scope.chat_id, scope.topic_id, message_id, msg)
@@ -289,7 +304,8 @@ defmodule LemonGateway.Telegram.Transport do
                 handle_recompile_command(state, scope, message_id, peer_kind, text)
 
               new_command?(text) ->
-                handle_new_session(state, scope, message_id, peer_kind)
+                args = telegram_command_args(text, "new")
+                handle_new_session(state, scope, message_id, peer_kind, args)
 
               cancel_command?(text) ->
                 handle_cancel(scope, message)
@@ -834,7 +850,14 @@ defmodule LemonGateway.Telegram.Transport do
             end
 
           if is_integer(progress_id) do
-            _ = state.api_mod.edit_message_text(state.token, scope.chat_id, progress_id, result, nil)
+            _ =
+              state.api_mod.edit_message_text(
+                state.token,
+                scope.chat_id,
+                progress_id,
+                result,
+                nil
+              )
           else
             _ = send_system_message(state, scope.chat_id, scope.topic_id, message_id, result)
           end
@@ -905,86 +928,198 @@ defmodule LemonGateway.Telegram.Transport do
   end
 
   defp handle_new_session(state, %ChatScope{} = scope, message_id, peer_kind) do
+    handle_new_session(state, scope, message_id, peer_kind, nil)
+  end
+
+  defp handle_new_session(state, %ChatScope{} = scope, message_id, peer_kind, raw_selector) do
     state = drop_buffer_for(state, scope)
 
     agent_id = BindingResolver.resolve_agent_id(scope)
     session_key = build_session_key(agent_id, state.account_id, peer_kind, scope)
 
-    history = fetch_run_history_for_memory(session_key, scope, limit: 8)
-    transcript = format_run_history_transcript(history, max_chars: 12_000)
+    selector =
+      if is_binary(raw_selector) do
+        raw_selector
+        |> String.trim()
+        |> case do
+          "" -> nil
+          other -> other
+        end
+      else
+        nil
+      end
 
-    if transcript == "" do
-      _ = safe_delete_chat_state(scope)
-      _ = safe_delete_chat_state(session_key)
+    project_result =
+      case selector do
+        nil ->
+          :noop
 
-      _ =
-        send_system_message(
-          state,
-          scope.chat_id,
-          scope.topic_id,
-          message_id,
-          "Started a new session."
-        )
+        sel ->
+          maybe_select_project_for_scope(scope, sel)
+      end
 
-      state
-    else
-      _ =
-        send_system_message(
-          state,
-          scope.chat_id,
-          scope.topic_id,
-          message_id,
-          "Recording memories, then starting a new session…"
-        )
+    case project_result do
+      {:error, msg} when is_binary(msg) ->
+        _ = send_system_message(state, scope.chat_id, scope.topic_id, message_id, msg)
+        state
 
-      prompt = memory_reflection_prompt(transcript)
+      _ ->
+        history = fetch_run_history_for_memory(session_key, scope, limit: 8)
+        transcript = format_run_history_transcript(history, max_chars: 12_000)
 
-      run_id = LemonCore.Id.run_id()
-      engine_hint = last_engine_hint(scope, session_key)
-      cwd = BindingResolver.resolve_cwd(scope)
-      profile = get_profile(agent_id, cwd)
+        if transcript == "" do
+          _ = safe_delete_chat_state(scope)
+          _ = safe_delete_chat_state(session_key)
 
-      tool_policy = profile[:tool_policy] || profile["tool_policy"]
-      system_prompt = profile[:system_prompt] || profile["system_prompt"]
-      model = resolve_model(profile[:model] || profile["model"])
+          msg =
+            case project_result do
+              {:ok, %{id: id, root: root}} ->
+                "Started a new session.\nProject: #{id} (#{root})"
 
-      job = %Job{
-        run_id: run_id,
-        session_key: session_key,
-        prompt: prompt,
-        text: prompt,
-        scope: scope,
-        user_msg_id: message_id,
-        engine_hint: engine_hint,
-        queue_mode: :interrupt,
-        tool_policy: tool_policy,
-        meta: %{
-          notify_pid: self(),
-          origin: :telegram,
-          chat_id: scope.chat_id,
-          topic_id: scope.topic_id,
-          user_msg_id: message_id,
-          agent_id: agent_id,
-          system_prompt: system_prompt,
-          model: model,
-          command: :new,
-          record_memories: true
-        }
-      }
+              _ ->
+                "Started a new session."
+            end
 
-      LemonGateway.submit(job)
+          _ = send_system_message(state, scope.chat_id, scope.topic_id, message_id, msg)
 
-      pending = %{
-        scope: scope,
-        session_key: session_key,
-        message_id: message_id,
-        peer_kind: peer_kind
-      }
+          state
+        else
+          msg =
+            case project_result do
+              {:ok, %{id: id, root: root}} ->
+                "Recording memories, then starting a new session…\nProject: #{id} (#{root})"
 
-      %{state | pending_new: Map.put(state.pending_new, run_id, pending)}
+              _ ->
+                "Recording memories, then starting a new session…"
+            end
+
+          _ = send_system_message(state, scope.chat_id, scope.topic_id, message_id, msg)
+
+          prompt = memory_reflection_prompt(transcript)
+
+          run_id = LemonCore.Id.run_id()
+          engine_hint = last_engine_hint(scope, session_key)
+          cwd = BindingResolver.resolve_cwd(scope)
+          profile = get_profile(agent_id, cwd)
+
+          tool_policy = profile[:tool_policy] || profile["tool_policy"]
+          system_prompt = profile[:system_prompt] || profile["system_prompt"]
+          model = resolve_model(profile[:model] || profile["model"])
+
+          job = %Job{
+            run_id: run_id,
+            session_key: session_key,
+            prompt: prompt,
+            text: prompt,
+            scope: scope,
+            user_msg_id: message_id,
+            engine_hint: engine_hint,
+            queue_mode: :interrupt,
+            tool_policy: tool_policy,
+            meta: %{
+              notify_pid: self(),
+              origin: :telegram,
+              chat_id: scope.chat_id,
+              topic_id: scope.topic_id,
+              user_msg_id: message_id,
+              agent_id: agent_id,
+              system_prompt: system_prompt,
+              model: model,
+              command: :new,
+              record_memories: true
+            }
+          }
+
+          LemonGateway.submit(job)
+
+          pending = %{
+            scope: scope,
+            session_key: session_key,
+            message_id: message_id,
+            peer_kind: peer_kind,
+            project:
+              case project_result do
+                {:ok, %{id: id, root: root}} -> %{id: id, root: root}
+                _ -> nil
+              end
+          }
+
+          %{state | pending_new: Map.put(state.pending_new, run_id, pending)}
+        end
     end
   rescue
     _ -> state
+  end
+
+  defp maybe_select_project_for_scope(%ChatScope{} = scope, selector) when is_binary(selector) do
+    sel = String.trim(selector || "")
+
+    cond do
+      sel == "" ->
+        :noop
+
+      looks_like_path?(sel) ->
+        base =
+          case BindingResolver.resolve_cwd(scope) do
+            cwd when is_binary(cwd) and byte_size(cwd) > 0 -> cwd
+            _ -> File.cwd!()
+          end
+
+        expanded =
+          case Path.type(sel) do
+            :absolute -> Path.expand(sel)
+            :relative -> Path.expand(sel, base)
+            _ -> Path.expand(sel, base)
+          end
+
+        if File.dir?(expanded) do
+          id = Path.basename(expanded)
+          root = expanded
+
+          # Register a dynamic project and bind this scope to it.
+          # This is intentionally runtime-configurable (persisted via the gateway store backend).
+          _ =
+            if Code.ensure_loaded?(Store) and function_exported?(Store, :put, 3) do
+              Store.put(:gateway_projects_dynamic, id, %{root: root, default_engine: nil})
+              Store.put(:gateway_project_overrides, scope, id)
+            else
+              :ok
+            end
+
+          {:ok, %{id: id, root: root}}
+        else
+          {:error, "Project path does not exist: #{expanded}"}
+        end
+
+      true ->
+        id = sel
+
+        case BindingResolver.lookup_project(id) do
+          %{root: root} when is_binary(root) and byte_size(root) > 0 ->
+            if File.dir?(Path.expand(root)) do
+              _ =
+                if Code.ensure_loaded?(Store) and function_exported?(Store, :put, 3) do
+                  Store.put(:gateway_project_overrides, scope, id)
+                else
+                  :ok
+                end
+
+              {:ok, %{id: id, root: Path.expand(root)}}
+            else
+              {:error, "Configured project root does not exist: #{Path.expand(root)}"}
+            end
+
+          _ ->
+            {:error, "Unknown project: #{id}"}
+        end
+    end
+  rescue
+    _ -> {:error, "Failed to select project."}
+  end
+
+  defp looks_like_path?(s) when is_binary(s) do
+    String.starts_with?(s, "/") or String.starts_with?(s, "~") or String.starts_with?(s, ".") or
+      String.contains?(s, "/")
   end
 
   defp fetch_run_history_for_memory(session_key, %ChatScope{} = scope, opts) do

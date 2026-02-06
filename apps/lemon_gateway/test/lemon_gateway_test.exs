@@ -4,6 +4,21 @@ defmodule LemonGatewayTest do
   alias LemonGateway.Event.Completed
   alias LemonGateway.Types.{ChatScope, Job}
 
+  setup do
+    # Isolate Telegram poller file locks from any locally running gateway process (and from other tests).
+    lock_dir =
+      Path.join(System.tmp_dir!(), "lemon_test_locks_#{System.unique_integer([:positive])}")
+
+    System.put_env("LEMON_LOCK_DIR", lock_dir)
+
+    on_exit(fn ->
+      System.delete_env("LEMON_LOCK_DIR")
+      _ = File.rm_rf(lock_dir)
+    end)
+
+    :ok
+  end
+
   defmodule CrashEngine do
     @behaviour LemonGateway.Engine
 
@@ -521,7 +536,7 @@ defmodule LemonGatewayTest do
       allowed_chat_ids: [1]
     })
 
-    {:ok, _} = start_supervised(LemonGateway.Telegram.Transport)
+    {:ok, _} = start_supervised({LemonGateway.Telegram.Transport, [force: true]})
 
     assert_receive {:api_get_updates, ^updates_a, _t1}, 500
     Process.sleep(60)
@@ -804,7 +819,7 @@ defmodule LemonGatewayTest do
       allowed_chat_ids: [1]
     })
 
-    {:ok, _} = start_supervised(LemonGateway.Telegram.Transport)
+    {:ok, _} = start_supervised({LemonGateway.Telegram.Transport, [force: true]})
 
     assert_receive {:api_get_updates, ^updates, _t1}, 500
     assert_receive {:api_get_updates, ^updates, _t2}, 500
@@ -834,7 +849,7 @@ defmodule LemonGatewayTest do
       allowed_chat_ids: [2]
     })
 
-    {:ok, _} = start_supervised(LemonGateway.Telegram.Transport)
+    {:ok, _} = start_supervised({LemonGateway.Telegram.Transport, [force: true]})
 
     assert_receive {:api_get_updates, ^updates, t_poll}, 500
     assert_receive {:api_send_message, 2, "Running…", 60, t_send}, 500
