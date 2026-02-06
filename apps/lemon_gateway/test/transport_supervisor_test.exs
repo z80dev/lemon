@@ -759,6 +759,8 @@ defmodule LemonGateway.TransportSupervisorTest do
 
   describe "module interface verification" do
     test "start_link/1 exists and works" do
+      # `function_exported?/3` does not auto-load modules.
+      assert Code.ensure_loaded?(TransportSupervisor)
       assert function_exported?(TransportSupervisor, :start_link, 1)
 
       setup_app([MockTransportA])

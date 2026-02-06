@@ -25,7 +25,8 @@ defmodule LemonGateway.Telegram.FormatterTest do
 
     bold =
       Enum.find(entities, fn e ->
-        e["type"] == "bold" and e["offset"] == utf16_len("Hi ") and e["length"] == utf16_len("bold")
+        e["type"] == "bold" and e["offset"] == utf16_len("Hi ") and
+          e["length"] == utf16_len("bold")
       end)
 
     assert is_map(bold), "expected a bold entity, got: #{inspect(entities)}"
@@ -76,4 +77,3 @@ defmodule LemonGateway.Telegram.FormatterTest do
     assert ent["length"] == 2
   end
 end
-
