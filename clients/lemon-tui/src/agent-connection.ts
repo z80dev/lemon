@@ -17,6 +17,8 @@ import type {
   ActiveSessionMessage,
 } from './types.js';
 
+export const AGENT_RESTART_EXIT_CODE = 75;
+
 export interface AgentConnectionOptions {
   /** Working directory for the agent */
   cwd?: string;
@@ -55,6 +57,18 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
 
   constructor(private options: AgentConnectionOptions = {}) {
     super();
+  }
+
+  private cleanupProcess(): void {
+    if (this.readline) {
+      try {
+        this.readline.close();
+      } catch {
+        // ignore
+      }
+      this.readline = null;
+    }
+    this.process = null;
   }
 
   /**
@@ -134,6 +148,13 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
     // Handle process close
     this.process.on('close', (code) => {
       this.ready = false;
+      // If we never got "ready", unblock start() callers.
+      if (!this.ready && this.readyReject) {
+        this.readyReject(new Error(`Agent exited before ready (code: ${code})`));
+        this.readyResolve = null;
+        this.readyReject = null;
+      }
+      this.cleanupProcess();
       this.emit('close', code);
     });
 
@@ -306,6 +327,44 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
         this.process.kill('SIGTERM');
       }
     }, 1000);
+  }
+
+  /**
+   * Stops the agent process and waits for it to exit.
+   */
+  stopAndWait(timeoutMs = 5000): Promise<number | null> {
+    if (!this.process) {
+      return Promise.resolve(null);
+    }
+
+    return new Promise((resolve) => {
+      const onClose = (code: number | null) => {
+        clearTimeout(timer);
+        this.off('close', onClose);
+        resolve(code);
+      };
+
+      const timer = setTimeout(() => {
+        this.off('close', onClose);
+        try {
+          this.process?.kill('SIGKILL');
+        } catch {
+          // ignore
+        }
+        resolve(null);
+      }, timeoutMs);
+
+      this.on('close', onClose);
+      this.stop();
+    });
+  }
+
+  /**
+   * Restarts the agent process (stop + start).
+   */
+  async restart(): Promise<ReadyMessage> {
+    await this.stopAndWait();
+    return await this.start();
   }
 
   /**
