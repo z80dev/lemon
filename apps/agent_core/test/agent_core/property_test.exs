@@ -129,8 +129,11 @@ defmodule AgentCore.TypesPropertyTest do
   defp arguments_gen do
     one_of([
       constant(%{}),
-      map({string(:alphanumeric, min_length: 1, max_length: 10), string(:printable, max_length: 50)},
-        fn {k, v} -> %{k => v} end),
+      map(
+        {string(:alphanumeric, min_length: 1, max_length: 10),
+         string(:printable, max_length: 50)},
+        fn {k, v} -> %{k => v} end
+      ),
       map(
         list_of(
           {string(:alphanumeric, min_length: 1, max_length: 10), simple_value()},
@@ -247,7 +250,8 @@ defmodule AgentCore.TypesPropertyTest do
 
   defp usage_gen do
     map(
-      {non_negative_integer(), non_negative_integer(), non_negative_integer(), non_negative_integer(), cost_gen()},
+      {non_negative_integer(), non_negative_integer(), non_negative_integer(),
+       non_negative_integer(), cost_gen()},
       fn {input, output, cache_read, cache_write, cost} ->
         %Usage{
           input: input,
@@ -286,8 +290,8 @@ defmodule AgentCore.TypesPropertyTest do
   defp model_gen do
     map(
       {non_empty_string(), non_empty_string(), atom(:alphanumeric), atom(:alphanumeric),
-      string(:printable, max_length: 100), boolean(), model_cost_gen(), non_negative_integer(),
-      non_negative_integer()},
+       string(:printable, max_length: 100), boolean(), model_cost_gen(), non_negative_integer(),
+       non_negative_integer()},
       fn {id, name, api, provider, base_url, reasoning, cost, context_window, max_tokens} ->
         %Model{
           id: id,
@@ -356,7 +360,8 @@ defmodule AgentCore.TypesPropertyTest do
 
   defp context_gen do
     map(
-      {maybe_string(), list_of(message_gen(), max_length: 10), list_of(tool_gen(), max_length: 5)},
+      {maybe_string(), list_of(message_gen(), max_length: 10),
+       list_of(tool_gen(), max_length: 5)},
       fn {prompt, messages, tools} ->
         %Context{system_prompt: prompt, messages: messages, tools: tools}
       end
@@ -394,8 +399,7 @@ defmodule AgentCore.TypesPropertyTest do
   defp stream_options_gen do
     map(
       {one_of([constant(nil), float(min: 0.0, max: 2.0)]),
-       one_of([constant(nil), integer(1..8192)]),
-       one_of([constant(nil), thinking_level()])},
+       one_of([constant(nil), integer(1..8192)]), one_of([constant(nil), thinking_level()])},
       fn {temp, max_tokens, reasoning} ->
         %StreamOptions{
           temperature: temp,
@@ -412,26 +416,26 @@ defmodule AgentCore.TypesPropertyTest do
 
   describe "UserMessage validation properties" do
     property "UserMessage always has role :user" do
-      check all msg <- user_message_gen() do
+      check all(msg <- user_message_gen()) do
         assert msg.role == :user
       end
     end
 
     property "UserMessage content is string or list of content blocks" do
-      check all msg <- user_message_gen() do
+      check all(msg <- user_message_gen()) do
         assert is_binary(msg.content) or is_list(msg.content)
       end
     end
 
     property "UserMessage timestamp is non-negative integer" do
-      check all msg <- user_message_gen() do
+      check all(msg <- user_message_gen()) do
         assert is_integer(msg.timestamp)
         assert msg.timestamp >= 0
       end
     end
 
     property "UserMessage struct keys are preserved" do
-      check all msg <- user_message_gen() do
+      check all(msg <- user_message_gen()) do
         assert Map.has_key?(msg, :role)
         assert Map.has_key?(msg, :content)
         assert Map.has_key?(msg, :timestamp)
@@ -442,31 +446,31 @@ defmodule AgentCore.TypesPropertyTest do
 
   describe "AssistantMessage validation properties" do
     property "AssistantMessage always has role :assistant" do
-      check all msg <- assistant_message_gen() do
+      check all(msg <- assistant_message_gen()) do
         assert msg.role == :assistant
       end
     end
 
     property "AssistantMessage content is always a list" do
-      check all msg <- assistant_message_gen() do
+      check all(msg <- assistant_message_gen()) do
         assert is_list(msg.content)
       end
     end
 
     property "AssistantMessage stop_reason is valid atom" do
-      check all msg <- assistant_message_gen() do
+      check all(msg <- assistant_message_gen()) do
         assert msg.stop_reason in [:stop, :length, :tool_use, :error, :aborted]
       end
     end
 
     property "AssistantMessage usage is Usage struct or nil" do
-      check all msg <- assistant_message_gen() do
+      check all(msg <- assistant_message_gen()) do
         assert is_nil(msg.usage) or match?(%Usage{}, msg.usage)
       end
     end
 
     property "AssistantMessage content blocks have valid types" do
-      check all msg <- assistant_message_gen() do
+      check all(msg <- assistant_message_gen()) do
         Enum.each(msg.content, fn block ->
           assert block.type in [:text, :thinking, :tool_call]
         end)
@@ -476,13 +480,13 @@ defmodule AgentCore.TypesPropertyTest do
 
   describe "ToolResultMessage validation properties" do
     property "ToolResultMessage always has role :tool_result" do
-      check all msg <- tool_result_message_gen() do
+      check all(msg <- tool_result_message_gen()) do
         assert msg.role == :tool_result
       end
     end
 
     property "ToolResultMessage has required identifiers" do
-      check all msg <- tool_result_message_gen() do
+      check all(msg <- tool_result_message_gen()) do
         assert is_binary(msg.tool_call_id)
         assert is_binary(msg.tool_name)
         assert String.length(msg.tool_call_id) > 0
@@ -491,13 +495,13 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "ToolResultMessage is_error is boolean" do
-      check all msg <- tool_result_message_gen() do
+      check all(msg <- tool_result_message_gen()) do
         assert is_boolean(msg.is_error)
       end
     end
 
     property "ToolResultMessage content is list of content blocks" do
-      check all msg <- tool_result_message_gen() do
+      check all(msg <- tool_result_message_gen()) do
         assert is_list(msg.content)
 
         Enum.each(msg.content, fn block ->
@@ -513,19 +517,19 @@ defmodule AgentCore.TypesPropertyTest do
 
   describe "TextContent validation properties" do
     property "TextContent has type :text" do
-      check all content <- text_content_gen() do
+      check all(content <- text_content_gen()) do
         assert content.type == :text
       end
     end
 
     property "TextContent text is always a string" do
-      check all content <- text_content_gen() do
+      check all(content <- text_content_gen()) do
         assert is_binary(content.text)
       end
     end
 
     property "TextContent signature is nil or string" do
-      check all content <- text_content_gen() do
+      check all(content <- text_content_gen()) do
         assert is_nil(content.text_signature) or is_binary(content.text_signature)
       end
     end
@@ -533,13 +537,13 @@ defmodule AgentCore.TypesPropertyTest do
 
   describe "ThinkingContent validation properties" do
     property "ThinkingContent has type :thinking" do
-      check all content <- thinking_content_gen() do
+      check all(content <- thinking_content_gen()) do
         assert content.type == :thinking
       end
     end
 
     property "ThinkingContent thinking is always a string" do
-      check all content <- thinking_content_gen() do
+      check all(content <- thinking_content_gen()) do
         assert is_binary(content.thinking)
       end
     end
@@ -547,19 +551,19 @@ defmodule AgentCore.TypesPropertyTest do
 
   describe "ImageContent validation properties" do
     property "ImageContent has type :image" do
-      check all content <- image_content_gen() do
+      check all(content <- image_content_gen()) do
         assert content.type == :image
       end
     end
 
     property "ImageContent data is always a string" do
-      check all content <- image_content_gen() do
+      check all(content <- image_content_gen()) do
         assert is_binary(content.data)
       end
     end
 
     property "ImageContent mime_type is valid" do
-      check all content <- image_content_gen() do
+      check all(content <- image_content_gen()) do
         assert content.mime_type in ["image/png", "image/jpeg", "image/gif", "image/webp"]
       end
     end
@@ -571,13 +575,13 @@ defmodule AgentCore.TypesPropertyTest do
 
   describe "ToolCall validation properties" do
     property "ToolCall has type :tool_call" do
-      check all tc <- tool_call_gen() do
+      check all(tc <- tool_call_gen()) do
         assert tc.type == :tool_call
       end
     end
 
     property "ToolCall has non-empty id and name" do
-      check all tc <- tool_call_gen() do
+      check all(tc <- tool_call_gen()) do
         assert is_binary(tc.id)
         assert is_binary(tc.name)
         assert String.length(tc.id) > 0
@@ -586,13 +590,13 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "ToolCall arguments is a map" do
-      check all tc <- tool_call_gen() do
+      check all(tc <- tool_call_gen()) do
         assert is_map(tc.arguments)
       end
     end
 
     property "ToolCall arguments keys are strings" do
-      check all tc <- tool_call_gen() do
+      check all(tc <- tool_call_gen()) do
         Enum.each(Map.keys(tc.arguments), fn key ->
           assert is_binary(key)
         end)
@@ -606,7 +610,7 @@ defmodule AgentCore.TypesPropertyTest do
 
   describe "Usage struct properties" do
     property "Usage token counts are non-negative integers" do
-      check all usage <- usage_gen() do
+      check all(usage <- usage_gen()) do
         assert is_integer(usage.input) and usage.input >= 0
         assert is_integer(usage.output) and usage.output >= 0
         assert is_integer(usage.cache_read) and usage.cache_read >= 0
@@ -616,19 +620,19 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "Usage total_tokens equals input + output" do
-      check all usage <- usage_gen() do
+      check all(usage <- usage_gen()) do
         assert usage.total_tokens == usage.input + usage.output
       end
     end
 
     property "Usage cost is a Cost struct" do
-      check all usage <- usage_gen() do
+      check all(usage <- usage_gen()) do
         assert %Cost{} = usage.cost
       end
     end
 
     property "Usage cost values are non-negative floats" do
-      check all usage <- usage_gen() do
+      check all(usage <- usage_gen()) do
         assert is_float(usage.cost.input) and usage.cost.input >= 0
         assert is_float(usage.cost.output) and usage.cost.output >= 0
         assert is_float(usage.cost.cache_read) and usage.cost.cache_read >= 0
@@ -638,7 +642,7 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "Usage cost total equals sum of components" do
-      check all usage <- usage_gen() do
+      check all(usage <- usage_gen()) do
         expected =
           usage.cost.input + usage.cost.output + usage.cost.cache_read + usage.cost.cache_write
 
@@ -649,7 +653,7 @@ defmodule AgentCore.TypesPropertyTest do
 
   describe "Cost struct properties" do
     property "Cost all fields are non-negative floats" do
-      check all cost <- cost_gen() do
+      check all(cost <- cost_gen()) do
         assert is_float(cost.input) and cost.input >= 0
         assert is_float(cost.output) and cost.output >= 0
         assert is_float(cost.cache_read) and cost.cache_read >= 0
@@ -659,7 +663,7 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "Cost total is consistent with component sum" do
-      check all cost <- cost_gen() do
+      check all(cost <- cost_gen()) do
         expected = cost.input + cost.output + cost.cache_read + cost.cache_write
         assert_in_delta cost.total, expected, 0.0001
       end
@@ -672,7 +676,7 @@ defmodule AgentCore.TypesPropertyTest do
 
   describe "serialization roundtrip properties" do
     property "TextContent survives map conversion roundtrip" do
-      check all content <- text_content_gen() do
+      check all(content <- text_content_gen()) do
         map = Map.from_struct(content)
         reconstructed = struct(TextContent, map)
         assert content == reconstructed
@@ -680,7 +684,7 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "ThinkingContent survives map conversion roundtrip" do
-      check all content <- thinking_content_gen() do
+      check all(content <- thinking_content_gen()) do
         map = Map.from_struct(content)
         reconstructed = struct(ThinkingContent, map)
         assert content == reconstructed
@@ -688,7 +692,7 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "ToolCall survives map conversion roundtrip" do
-      check all tc <- tool_call_gen() do
+      check all(tc <- tool_call_gen()) do
         map = Map.from_struct(tc)
         reconstructed = struct(ToolCall, map)
         assert tc == reconstructed
@@ -696,12 +700,15 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "UserMessage survives map conversion roundtrip" do
-      check all msg <- map(
-                        {string(:printable, max_length: 100), timestamp_gen()},
-                        fn {content, ts} ->
-                          %UserMessage{role: :user, content: content, timestamp: ts}
-                        end
-                      ) do
+      check all(
+              msg <-
+                map(
+                  {string(:printable, max_length: 100), timestamp_gen()},
+                  fn {content, ts} ->
+                    %UserMessage{role: :user, content: content, timestamp: ts}
+                  end
+                )
+            ) do
         map = Map.from_struct(msg)
         reconstructed = struct(UserMessage, map)
         assert msg == reconstructed
@@ -709,7 +716,7 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "Usage survives map conversion roundtrip" do
-      check all usage <- usage_gen() do
+      check all(usage <- usage_gen()) do
         map = Map.from_struct(usage)
         cost_map = Map.from_struct(usage.cost)
         map = %{map | cost: struct(Cost, cost_map)}
@@ -719,7 +726,7 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "Tool survives map conversion roundtrip" do
-      check all tool <- tool_gen() do
+      check all(tool <- tool_gen()) do
         map = Map.from_struct(tool)
         reconstructed = struct(Tool, map)
         assert tool == reconstructed
@@ -727,7 +734,7 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "Model survives map conversion roundtrip" do
-      check all model <- model_gen() do
+      check all(model <- model_gen()) do
         map = Map.from_struct(model)
         cost_map = Map.from_struct(model.cost)
         map = %{map | cost: struct(ModelCost, cost_map)}
@@ -739,20 +746,20 @@ defmodule AgentCore.TypesPropertyTest do
 
   describe "JSON encoding properties" do
     property "TextContent JSON encodes without error" do
-      check all content <- text_content_gen() do
+      check all(content <- text_content_gen()) do
         map = Map.from_struct(content)
         assert {:ok, _json} = Jason.encode(map)
       end
     end
 
     property "ToolCall arguments JSON encode without error" do
-      check all tc <- tool_call_gen() do
+      check all(tc <- tool_call_gen()) do
         assert {:ok, _json} = Jason.encode(tc.arguments)
       end
     end
 
     property "Usage JSON encodes without error" do
-      check all usage <- usage_gen() do
+      check all(usage <- usage_gen()) do
         map = Map.from_struct(usage)
         cost_map = Map.from_struct(usage.cost)
         map = %{map | cost: cost_map}
@@ -761,7 +768,7 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "Tool parameters JSON encode without error" do
-      check all tool <- tool_gen() do
+      check all(tool <- tool_gen()) do
         assert {:ok, _json} = Jason.encode(tool.parameters)
       end
     end
@@ -773,31 +780,33 @@ defmodule AgentCore.TypesPropertyTest do
 
   describe "type coercion properties" do
     property "thinking_level atom values are valid" do
-      check all level <- thinking_level() do
+      check all(level <- thinking_level()) do
         assert level in [:off, :minimal, :low, :medium, :high, :xhigh]
       end
     end
 
     property "stop_reason atom values are valid" do
-      check all reason <- stop_reason() do
+      check all(reason <- stop_reason()) do
         assert reason in [:stop, :length, :tool_use, :error, :aborted]
       end
     end
 
     property "role atom values are valid for messages" do
-      check all r <- role() do
+      check all(r <- role()) do
         assert r in [:user, :assistant, :tool_result]
       end
     end
 
     property "content block type atoms are valid" do
-      check all block <- content_block_gen() do
+      check all(block <- content_block_gen()) do
         assert block.type in [:text, :thinking, :tool_call]
       end
     end
 
     property "MapSet for pending_tool_calls handles string additions" do
-      check all ids <- list_of(string(:alphanumeric, min_length: 5, max_length: 20), max_length: 10) do
+      check all(
+              ids <- list_of(string(:alphanumeric, min_length: 5, max_length: 20), max_length: 10)
+            ) do
         set =
           Enum.reduce(ids, MapSet.new(), fn id, acc ->
             MapSet.put(acc, id)
@@ -829,7 +838,7 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "unicode strings in text content work correctly" do
-      check all text <- unicode_string() do
+      check all(text <- unicode_string()) do
         content = %TextContent{type: :text, text: text}
         assert content.text == text
         assert String.valid?(content.text)
@@ -837,7 +846,7 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "unicode strings in messages work correctly" do
-      check all text <- unicode_string() do
+      check all(text <- unicode_string()) do
         msg = %UserMessage{role: :user, content: text, timestamp: 0}
         assert msg.content == text
         assert String.valid?(msg.content)
@@ -845,7 +854,7 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "very long strings are handled" do
-      check all len <- integer(1000..5000) do
+      check all(len <- integer(1000..5000)) do
         long_text = String.duplicate("x", len)
         content = %TextContent{type: :text, text: long_text}
         assert String.length(content.text) == len
@@ -892,7 +901,7 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "deeply nested arguments work" do
-      check all key <- string(:alphanumeric, min_length: 1, max_length: 10) do
+      check all(key <- string(:alphanumeric, min_length: 1, max_length: 10)) do
         nested = %{key => %{"nested" => %{"deep" => "value"}}}
         tc = %ToolCall{type: :tool_call, id: "id", name: "name", arguments: nested}
         assert tc.arguments == nested
@@ -906,7 +915,7 @@ defmodule AgentCore.TypesPropertyTest do
 
   describe "AgentContext properties" do
     property "AgentContext.new creates valid struct" do
-      check all prompt <- maybe_string() do
+      check all(prompt <- maybe_string()) do
         ctx = AgentContext.new(system_prompt: prompt)
         assert %AgentContext{} = ctx
         assert ctx.system_prompt == prompt
@@ -916,7 +925,7 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "AgentContext fields are properly typed" do
-      check all ctx <- agent_context_gen() do
+      check all(ctx <- agent_context_gen()) do
         assert is_nil(ctx.system_prompt) or is_binary(ctx.system_prompt)
         assert is_list(ctx.messages)
         assert is_list(ctx.tools)
@@ -924,7 +933,7 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "AgentContext tools are AgentTool structs" do
-      check all ctx <- agent_context_gen() do
+      check all(ctx <- agent_context_gen()) do
         Enum.each(ctx.tools, fn tool ->
           assert %AgentTool{} = tool
         end)
@@ -951,19 +960,19 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "AgentState thinking_level is valid" do
-      check all state <- agent_state_gen() do
+      check all(state <- agent_state_gen()) do
         assert state.thinking_level in [:off, :minimal, :low, :medium, :high, :xhigh]
       end
     end
 
     property "AgentState is_streaming is boolean" do
-      check all state <- agent_state_gen() do
+      check all(state <- agent_state_gen()) do
         assert is_boolean(state.is_streaming)
       end
     end
 
     property "AgentState pending_tool_calls is MapSet" do
-      check all state <- agent_state_gen() do
+      check all(state <- agent_state_gen()) do
         assert %MapSet{} = state.pending_tool_calls
       end
     end
@@ -985,7 +994,7 @@ defmodule AgentCore.TypesPropertyTest do
       assert is_nil(config.model)
 
       # Can be set to a model
-      check all model <- model_gen() do
+      check all(model <- model_gen()) do
         config = %AgentLoopConfig{model: model}
         assert %Model{} = config.model
       end
@@ -1013,7 +1022,10 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "AgentToolResult content is list of content blocks" do
-      check all content_list <- list_of(one_of([text_content_gen(), image_content_gen()]), max_length: 5) do
+      check all(
+              content_list <-
+                list_of(one_of([text_content_gen(), image_content_gen()]), max_length: 5)
+            ) do
         result = %AgentToolResult{content: content_list}
         assert is_list(result.content)
 
@@ -1039,7 +1051,7 @@ defmodule AgentCore.TypesPropertyTest do
 
   describe "AgentTool properties" do
     property "AgentTool has required string fields" do
-      check all tool <- agent_tool_gen() do
+      check all(tool <- agent_tool_gen()) do
         assert is_binary(tool.name)
         assert is_binary(tool.description)
         assert is_binary(tool.label)
@@ -1047,19 +1059,19 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "AgentTool parameters is a map" do
-      check all tool <- agent_tool_gen() do
+      check all(tool <- agent_tool_gen()) do
         assert is_map(tool.parameters)
       end
     end
 
     property "AgentTool execute is a function" do
-      check all tool <- agent_tool_gen() do
+      check all(tool <- agent_tool_gen()) do
         assert is_function(tool.execute)
       end
     end
 
     property "AgentTool execute returns AgentToolResult" do
-      check all tool <- agent_tool_gen() do
+      check all(tool <- agent_tool_gen()) do
         result = tool.execute.("id", %{}, nil, nil)
         assert %AgentToolResult{} = result
       end
@@ -1085,19 +1097,19 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "StreamOptions temperature is nil or valid float" do
-      check all opts <- stream_options_gen() do
+      check all(opts <- stream_options_gen()) do
         assert is_nil(opts.temperature) or (is_float(opts.temperature) and opts.temperature >= 0)
       end
     end
 
     property "StreamOptions max_tokens is nil or positive integer" do
-      check all opts <- stream_options_gen() do
+      check all(opts <- stream_options_gen()) do
         assert is_nil(opts.max_tokens) or (is_integer(opts.max_tokens) and opts.max_tokens > 0)
       end
     end
 
     property "StreamOptions reasoning is nil or valid thinking_level" do
-      check all opts <- stream_options_gen() do
+      check all(opts <- stream_options_gen()) do
         assert is_nil(opts.reasoning) or
                  opts.reasoning in [:off, :minimal, :low, :medium, :high, :xhigh]
       end
@@ -1110,7 +1122,7 @@ defmodule AgentCore.TypesPropertyTest do
 
   describe "Model properties" do
     property "Model has required fields" do
-      check all model <- model_gen() do
+      check all(model <- model_gen()) do
         assert is_binary(model.id)
         assert is_binary(model.name)
         assert not is_nil(model.api)
@@ -1119,20 +1131,20 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "Model cost is ModelCost struct" do
-      check all model <- model_gen() do
+      check all(model <- model_gen()) do
         assert %ModelCost{} = model.cost
       end
     end
 
     property "Model context_window and max_tokens are non-negative integers" do
-      check all model <- model_gen() do
+      check all(model <- model_gen()) do
         assert is_integer(model.context_window) and model.context_window >= 0
         assert is_integer(model.max_tokens) and model.max_tokens >= 0
       end
     end
 
     property "Model input is list of input types" do
-      check all model <- model_gen() do
+      check all(model <- model_gen()) do
         assert is_list(model.input)
 
         Enum.each(model.input, fn input_type ->
@@ -1142,7 +1154,7 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "Model reasoning is boolean" do
-      check all model <- model_gen() do
+      check all(model <- model_gen()) do
         assert is_boolean(model.reasoning)
       end
     end
@@ -1154,7 +1166,7 @@ defmodule AgentCore.TypesPropertyTest do
 
   describe "Context properties" do
     property "Context.new creates valid struct" do
-      check all prompt <- maybe_string() do
+      check all(prompt <- maybe_string()) do
         ctx = Context.new(system_prompt: prompt)
         assert %Context{} = ctx
         assert ctx.system_prompt == prompt
@@ -1164,8 +1176,10 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "Context.add_user_message appends message" do
-      check all initial_count <- integer(0..5),
-                content <- non_empty_string() do
+      check all(
+              initial_count <- integer(0..5),
+              content <- non_empty_string()
+            ) do
         initial_messages =
           Enum.map(1..initial_count//1, fn i ->
             %UserMessage{role: :user, content: "msg#{i}", timestamp: i}
@@ -1182,7 +1196,7 @@ defmodule AgentCore.TypesPropertyTest do
     end
 
     property "Context messages preserve order" do
-      check all messages <- list_of(message_gen(), min_length: 2, max_length: 10) do
+      check all(messages <- list_of(message_gen(), min_length: 2, max_length: 10)) do
         ctx = %Context{messages: messages}
 
         Enum.with_index(messages)

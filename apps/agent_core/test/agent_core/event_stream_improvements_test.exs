@@ -85,10 +85,11 @@ defmodule AgentCore.EventStreamImprovementsTest do
     test "pushing to canceled stream returns error" do
       {:ok, stream} = EventStream.start_link()
 
-      task = Task.async(fn ->
-        Process.sleep(50)
-        EventStream.push(stream, {:late_event, 1})
-      end)
+      task =
+        Task.async(fn ->
+          Process.sleep(50)
+          EventStream.push(stream, {:late_event, 1})
+        end)
 
       EventStream.cancel(stream, :early_cancel)
 
@@ -122,18 +123,20 @@ defmodule AgentCore.EventStreamImprovementsTest do
       {:ok, stream} = EventStream.start_link()
 
       # Rapid push and take in parallel
-      pusher = Task.async(fn ->
-        for i <- 1..100 do
-          EventStream.push(stream, {:event, i})
-        end
-      end)
+      pusher =
+        Task.async(fn ->
+          for i <- 1..100 do
+            EventStream.push(stream, {:event, i})
+          end
+        end)
 
-      puller = Task.async(fn ->
-        stream
-        |> EventStream.events()
-        |> Enum.take_while(fn e -> not match?({:agent_end, _}, e) end)
-        |> length()
-      end)
+      puller =
+        Task.async(fn ->
+          stream
+          |> EventStream.events()
+          |> Enum.take_while(fn e -> not match?({:agent_end, _}, e) end)
+          |> length()
+        end)
 
       Task.await(pusher, 1000)
       EventStream.complete(stream, [])
@@ -146,9 +149,10 @@ defmodule AgentCore.EventStreamImprovementsTest do
       {:ok, stream} = EventStream.start_link()
 
       # Start multiple result waiters
-      tasks = for _ <- 1..10 do
-        Task.async(fn -> EventStream.result(stream) end)
-      end
+      tasks =
+        for _ <- 1..10 do
+          Task.async(fn -> EventStream.result(stream) end)
+        end
 
       Process.sleep(50)
       EventStream.complete(stream, ["done"])
@@ -163,13 +167,14 @@ defmodule AgentCore.EventStreamImprovementsTest do
       {:ok, stream} = EventStream.start_link()
 
       # Start event consumers
-      tasks = for _ <- 1..5 do
-        Task.async(fn ->
-          stream
-          |> EventStream.events()
-          |> Enum.to_list()
-        end)
-      end
+      tasks =
+        for _ <- 1..5 do
+          Task.async(fn ->
+            stream
+            |> EventStream.events()
+            |> Enum.to_list()
+          end)
+        end
 
       Process.sleep(50)
 
@@ -181,9 +186,10 @@ defmodule AgentCore.EventStreamImprovementsTest do
       EventStream.complete(stream, [])
 
       # All tasks should complete
-      results = for task <- tasks do
-        Task.await(task, 1000)
-      end
+      results =
+        for task <- tasks do
+          Task.await(task, 1000)
+        end
 
       # Combined results should include all events (distributed among consumers)
       all_events = List.flatten(results)
@@ -309,12 +315,13 @@ defmodule AgentCore.EventStreamImprovementsTest do
 
   describe "options" do
     test "all options can be specified together" do
-      {:ok, stream} = EventStream.start_link(
-        owner: self(),
-        max_queue: 100,
-        drop_strategy: :drop_oldest,
-        timeout: 60_000
-      )
+      {:ok, stream} =
+        EventStream.start_link(
+          owner: self(),
+          max_queue: 100,
+          drop_strategy: :drop_oldest,
+          timeout: 60_000
+        )
 
       assert Process.alive?(stream)
 

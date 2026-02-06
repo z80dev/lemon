@@ -60,11 +60,19 @@ defmodule CodingAgent.Tools.TruncateTest do
   describe "execute/5 - head strategy" do
     test "keeps beginning and truncates end" do
       text = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7\nLine 8\nLine 9\nLine 10"
-      result = Truncate.execute("call_1", %{
-        "text" => text,
-        "max_chars" => 60,
-        "strategy" => "head"
-      }, nil, nil, [])
+
+      result =
+        Truncate.execute(
+          "call_1",
+          %{
+            "text" => text,
+            "max_chars" => 60,
+            "strategy" => "head"
+          },
+          nil,
+          nil,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: truncated}], details: details} = result
       assert details.truncated == true
@@ -75,11 +83,19 @@ defmodule CodingAgent.Tools.TruncateTest do
 
     test "handles single line text" do
       text = String.duplicate("a", 100)
-      result = Truncate.execute("call_1", %{
-        "text" => text,
-        "max_chars" => 60,
-        "strategy" => "head"
-      }, nil, nil, [])
+
+      result =
+        Truncate.execute(
+          "call_1",
+          %{
+            "text" => text,
+            "max_chars" => 60,
+            "strategy" => "head"
+          },
+          nil,
+          nil,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: truncated}], details: details} = result
       assert details.truncated == true
@@ -90,11 +106,19 @@ defmodule CodingAgent.Tools.TruncateTest do
   describe "execute/5 - tail strategy" do
     test "keeps end and truncates beginning" do
       text = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7\nLine 8\nLine 9\nLine 10"
-      result = Truncate.execute("call_1", %{
-        "text" => text,
-        "max_chars" => 60,
-        "strategy" => "tail"
-      }, nil, nil, [])
+
+      result =
+        Truncate.execute(
+          "call_1",
+          %{
+            "text" => text,
+            "max_chars" => 60,
+            "strategy" => "tail"
+          },
+          nil,
+          nil,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: truncated}], details: details} = result
       assert details.truncated == true
@@ -107,11 +131,19 @@ defmodule CodingAgent.Tools.TruncateTest do
   describe "execute/5 - middle strategy" do
     test "keeps beginning and end, truncates middle" do
       text = "START\n" <> String.duplicate("middle line\n", 20) <> "END"
-      result = Truncate.execute("call_1", %{
-        "text" => text,
-        "max_chars" => 50,
-        "strategy" => "middle"
-      }, nil, nil, [])
+
+      result =
+        Truncate.execute(
+          "call_1",
+          %{
+            "text" => text,
+            "max_chars" => 50,
+            "strategy" => "middle"
+          },
+          nil,
+          nil,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: truncated}], details: details} = result
       assert details.truncated == true
@@ -138,11 +170,18 @@ defmodule CodingAgent.Tools.TruncateTest do
       end
       """
 
-      result = Truncate.execute("call_1", %{
-        "text" => text,
-        "max_chars" => 200,
-        "strategy" => "smart"
-      }, nil, nil, [])
+      result =
+        Truncate.execute(
+          "call_1",
+          %{
+            "text" => text,
+            "max_chars" => 200,
+            "strategy" => "smart"
+          },
+          nil,
+          nil,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: truncated}], details: details} = result
       assert details.truncated == true
@@ -164,12 +203,19 @@ defmodule CodingAgent.Tools.TruncateTest do
       end
       """
 
-      result = Truncate.execute("call_1", %{
-        "text" => text,
-        "max_chars" => 150,
-        "strategy" => "smart",
-        "preserve_structure" => true
-      }, nil, nil, [])
+      result =
+        Truncate.execute(
+          "call_1",
+          %{
+            "text" => text,
+            "max_chars" => 150,
+            "strategy" => "smart",
+            "preserve_structure" => true
+          },
+          nil,
+          nil,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: truncated}], details: details} = result
       assert details.truncated == true
@@ -180,12 +226,19 @@ defmodule CodingAgent.Tools.TruncateTest do
     test "falls back to middle truncation when preserve_structure is false" do
       text = "START\n" <> String.duplicate("x", 200) <> "\nEND"
 
-      result = Truncate.execute("call_1", %{
-        "text" => text,
-        "max_chars" => 50,
-        "strategy" => "smart",
-        "preserve_structure" => false
-      }, nil, nil, [])
+      result =
+        Truncate.execute(
+          "call_1",
+          %{
+            "text" => text,
+            "max_chars" => 50,
+            "strategy" => "smart",
+            "preserve_structure" => false
+          },
+          nil,
+          nil,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: truncated}], details: details} = result
       assert details.truncated == true
@@ -197,11 +250,18 @@ defmodule CodingAgent.Tools.TruncateTest do
     test "truncates by line count with head strategy" do
       text = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5"
 
-      result = Truncate.execute("call_1", %{
-        "text" => text,
-        "max_lines" => 2,
-        "strategy" => "head"
-      }, nil, nil, [])
+      result =
+        Truncate.execute(
+          "call_1",
+          %{
+            "text" => text,
+            "max_lines" => 2,
+            "strategy" => "head"
+          },
+          nil,
+          nil,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: truncated}], details: details} = result
       assert details.truncated == true
@@ -213,11 +273,18 @@ defmodule CodingAgent.Tools.TruncateTest do
     test "truncates by line count with tail strategy" do
       text = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5"
 
-      result = Truncate.execute("call_1", %{
-        "text" => text,
-        "max_lines" => 2,
-        "strategy" => "tail"
-      }, nil, nil, [])
+      result =
+        Truncate.execute(
+          "call_1",
+          %{
+            "text" => text,
+            "max_lines" => 2,
+            "strategy" => "tail"
+          },
+          nil,
+          nil,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: truncated}], details: details} = result
       assert details.truncated == true
@@ -227,12 +294,19 @@ defmodule CodingAgent.Tools.TruncateTest do
     test "applies both max_lines and max_chars" do
       text = String.duplicate("A very long line with lots of text\n", 10)
 
-      result = Truncate.execute("call_1", %{
-        "text" => text,
-        "max_lines" => 3,
-        "max_chars" => 50,
-        "strategy" => "head"
-      }, nil, nil, [])
+      result =
+        Truncate.execute(
+          "call_1",
+          %{
+            "text" => text,
+            "max_lines" => 3,
+            "max_chars" => 50,
+            "strategy" => "head"
+          },
+          nil,
+          nil,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: truncated}], details: details} = result
       assert details.truncated == true
@@ -244,11 +318,18 @@ defmodule CodingAgent.Tools.TruncateTest do
     test "includes comprehensive metadata" do
       text = String.duplicate("Hello\n", 100)
 
-      result = Truncate.execute("call_1", %{
-        "text" => text,
-        "max_chars" => 100,
-        "strategy" => "middle"
-      }, nil, nil, [])
+      result =
+        Truncate.execute(
+          "call_1",
+          %{
+            "text" => text,
+            "max_chars" => 100,
+            "strategy" => "middle"
+          },
+          nil,
+          nil,
+          []
+        )
 
       assert %AgentToolResult{details: details} = result
       assert is_integer(details.original_chars)
@@ -263,11 +344,18 @@ defmodule CodingAgent.Tools.TruncateTest do
     test "summary describes truncation" do
       text = String.duplicate("x", 200)
 
-      result = Truncate.execute("call_1", %{
-        "text" => text,
-        "max_chars" => 50,
-        "strategy" => "head"
-      }, nil, nil, [])
+      result =
+        Truncate.execute(
+          "call_1",
+          %{
+            "text" => text,
+            "max_chars" => 50,
+            "strategy" => "head"
+          },
+          nil,
+          nil,
+          []
+        )
 
       assert %AgentToolResult{details: details} = result
       assert details.summary =~ "Truncated from"
@@ -275,10 +363,17 @@ defmodule CodingAgent.Tools.TruncateTest do
     end
 
     test "summary indicates no truncation when not needed" do
-      result = Truncate.execute("call_1", %{
-        "text" => "short",
-        "max_chars" => 100
-      }, nil, nil, [])
+      result =
+        Truncate.execute(
+          "call_1",
+          %{
+            "text" => "short",
+            "max_chars" => 100
+          },
+          nil,
+          nil,
+          []
+        )
 
       assert %AgentToolResult{details: details} = result
       assert details.summary =~ "No truncation needed"
@@ -287,10 +382,17 @@ defmodule CodingAgent.Tools.TruncateTest do
 
   describe "execute/5 - error handling" do
     test "returns error for invalid strategy" do
-      result = Truncate.execute("call_1", %{
-        "text" => "hello",
-        "strategy" => "invalid"
-      }, nil, nil, [])
+      result =
+        Truncate.execute(
+          "call_1",
+          %{
+            "text" => "hello",
+            "strategy" => "invalid"
+          },
+          nil,
+          nil,
+          []
+        )
 
       assert {:error, msg} = result
       assert msg =~ "Invalid strategy"
@@ -302,11 +404,18 @@ defmodule CodingAgent.Tools.TruncateTest do
     test "includes character count in marker" do
       text = String.duplicate("x", 200)
 
-      result = Truncate.execute("call_1", %{
-        "text" => text,
-        "max_chars" => 50,
-        "strategy" => "head"
-      }, nil, nil, [])
+      result =
+        Truncate.execute(
+          "call_1",
+          %{
+            "text" => text,
+            "max_chars" => 50,
+            "strategy" => "head"
+          },
+          nil,
+          nil,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: truncated}]} = result
       assert truncated =~ "chars truncated"
@@ -315,12 +424,20 @@ defmodule CodingAgent.Tools.TruncateTest do
     test "includes line count in marker when truncating by lines" do
       text = String.duplicate("line\n", 100)
 
-      result = Truncate.execute("call_1", %{
-        "text" => text,
-        "max_lines" => 5,
-        "max_chars" => 100_000,  # High limit so only lines matter
-        "strategy" => "head"
-      }, nil, nil, [])
+      result =
+        Truncate.execute(
+          "call_1",
+          %{
+            "text" => text,
+            "max_lines" => 5,
+            # High limit so only lines matter
+            "max_chars" => 100_000,
+            "strategy" => "head"
+          },
+          nil,
+          nil,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: truncated}]} = result
       assert truncated =~ "lines truncated"
@@ -332,10 +449,16 @@ defmodule CodingAgent.Tools.TruncateTest do
       tool = Truncate.tool()
       text = String.duplicate("test ", 100)
 
-      result = tool.execute.("call_1", %{
-        "text" => text,
-        "max_chars" => 50
-      }, nil, nil)
+      result =
+        tool.execute.(
+          "call_1",
+          %{
+            "text" => text,
+            "max_chars" => 50
+          },
+          nil,
+          nil
+        )
 
       assert %AgentToolResult{details: details} = result
       assert details.truncated == true
@@ -356,10 +479,17 @@ defmodule CodingAgent.Tools.TruncateTest do
     test "uses smart strategy by default" do
       text = String.duplicate("a", 100)
 
-      result = Truncate.execute("call_1", %{
-        "text" => text,
-        "max_chars" => 50
-      }, nil, nil, [])
+      result =
+        Truncate.execute(
+          "call_1",
+          %{
+            "text" => text,
+            "max_chars" => 50
+          },
+          nil,
+          nil,
+          []
+        )
 
       assert %AgentToolResult{details: details} = result
       assert details.strategy == "smart"
@@ -369,15 +499,25 @@ defmodule CodingAgent.Tools.TruncateTest do
   describe "execute/5 - unicode handling" do
     test "correctly handles unicode characters" do
       # Each emoji is multiple bytes but one grapheme
-      text = String.duplicate("\u{1F600}", 100)  # 100 smiling face emojis
+      # 100 smiling face emojis
+      text = String.duplicate("\u{1F600}", 100)
 
-      result = Truncate.execute("call_1", %{
-        "text" => text,
-        "max_chars" => 50,
-        "strategy" => "head"
-      }, nil, nil, [])
+      result =
+        Truncate.execute(
+          "call_1",
+          %{
+            "text" => text,
+            "max_chars" => 50,
+            "strategy" => "head"
+          },
+          nil,
+          nil,
+          []
+        )
 
-      assert %AgentToolResult{content: [%TextContent{text: _truncated}], details: details} = result
+      assert %AgentToolResult{content: [%TextContent{text: _truncated}], details: details} =
+               result
+
       assert details.truncated == true
       # String.length counts graphemes, not bytes
       assert details.original_chars == 100
@@ -387,13 +527,22 @@ defmodule CodingAgent.Tools.TruncateTest do
       # Create longer mixed text to ensure truncation even after marker
       text = String.duplicate("Hello \u{1F600} World \u{1F600} ", 10) <> "END"
 
-      result = Truncate.execute("call_1", %{
-        "text" => text,
-        "max_chars" => 60,
-        "strategy" => "head"
-      }, nil, nil, [])
+      result =
+        Truncate.execute(
+          "call_1",
+          %{
+            "text" => text,
+            "max_chars" => 60,
+            "strategy" => "head"
+          },
+          nil,
+          nil,
+          []
+        )
 
-      assert %AgentToolResult{content: [%TextContent{text: _truncated}], details: details} = result
+      assert %AgentToolResult{content: [%TextContent{text: _truncated}], details: details} =
+               result
+
       assert details.truncated == true
     end
   end

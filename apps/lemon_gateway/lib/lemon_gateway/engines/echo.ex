@@ -36,7 +36,12 @@ defmodule LemonGateway.Engines.Echo do
       Task.start(fn ->
         send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
         answer = "Echo: #{job.text}"
-        send(sink_pid, {:engine_event, run_ref, %Event.Completed{engine: id(), resume: resume, ok: true, answer: answer}})
+
+        send(
+          sink_pid,
+          {:engine_event, run_ref,
+           %Event.Completed{engine: id(), resume: resume, ok: true, answer: answer}}
+        )
       end)
 
     {:ok, run_ref, %{task_pid: task_pid}}

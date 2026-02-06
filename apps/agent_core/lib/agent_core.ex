@@ -290,7 +290,7 @@ defmodule AgentCore do
           IO.puts("Done!")
       end
   """
-  @spec subscribe(agent(), pid()) :: (() -> :ok)
+  @spec subscribe(agent(), pid()) :: (-> :ok)
   defdelegate subscribe(agent, subscriber), to: AgentCore.Agent
 
   @doc """

@@ -92,7 +92,9 @@ defmodule Ai.RateLimiterTest do
     test "allows exactly max_tokens requests when bucket is full" do
       provider = unique_provider(:exact_max)
       max = 5
-      {:ok, _pid} = RateLimiter.start_link(provider: provider, max_tokens: max, tokens_per_second: 0)
+
+      {:ok, _pid} =
+        RateLimiter.start_link(provider: provider, max_tokens: max, tokens_per_second: 0)
 
       # Should allow exactly max_tokens requests
       for _ <- 1..max do
@@ -120,7 +122,9 @@ defmodule Ai.RateLimiterTest do
 
     test "does not affect token count" do
       provider = unique_provider(:release_no_effect)
-      {:ok, _pid} = RateLimiter.start_link(provider: provider, max_tokens: 5, tokens_per_second: 0)
+
+      {:ok, _pid} =
+        RateLimiter.start_link(provider: provider, max_tokens: 5, tokens_per_second: 0)
 
       :ok = RateLimiter.acquire(provider)
       {:ok, state_before} = RateLimiter.get_state(provider)
@@ -157,7 +161,8 @@ defmodule Ai.RateLimiterTest do
     test "tokens refill over time" do
       provider = unique_provider(:refill)
       # High refill rate for faster test
-      {:ok, _pid} = RateLimiter.start_link(provider: provider, max_tokens: 10, tokens_per_second: 100)
+      {:ok, _pid} =
+        RateLimiter.start_link(provider: provider, max_tokens: 10, tokens_per_second: 100)
 
       # Exhaust tokens
       for _ <- 1..10 do
@@ -176,7 +181,9 @@ defmodule Ai.RateLimiterTest do
 
     test "tokens do not exceed max_tokens" do
       provider = unique_provider(:max_cap)
-      {:ok, _pid} = RateLimiter.start_link(provider: provider, max_tokens: 5, tokens_per_second: 1000)
+
+      {:ok, _pid} =
+        RateLimiter.start_link(provider: provider, max_tokens: 5, tokens_per_second: 1000)
 
       # Wait for potential overfill
       Process.sleep(100)
@@ -187,7 +194,9 @@ defmodule Ai.RateLimiterTest do
 
     test "refill after exhaustion allows new requests" do
       provider = unique_provider(:refill_allows)
-      {:ok, _pid} = RateLimiter.start_link(provider: provider, max_tokens: 2, tokens_per_second: 50)
+
+      {:ok, _pid} =
+        RateLimiter.start_link(provider: provider, max_tokens: 2, tokens_per_second: 50)
 
       # Exhaust
       :ok = RateLimiter.acquire(provider)
@@ -207,13 +216,17 @@ defmodule Ai.RateLimiterTest do
       provider1 = unique_provider(:multi_1)
       provider2 = unique_provider(:multi_2)
 
-      {:ok, _pid1} = RateLimiter.start_link(provider: provider1, max_tokens: 3, tokens_per_second: 0)
-      {:ok, _pid2} = RateLimiter.start_link(provider: provider2, max_tokens: 5, tokens_per_second: 0)
+      {:ok, _pid1} =
+        RateLimiter.start_link(provider: provider1, max_tokens: 3, tokens_per_second: 0)
+
+      {:ok, _pid2} =
+        RateLimiter.start_link(provider: provider2, max_tokens: 5, tokens_per_second: 0)
 
       # Exhaust provider1
       for _ <- 1..3 do
         :ok = RateLimiter.acquire(provider1)
       end
+
       assert {:error, :rate_limited} = RateLimiter.acquire(provider1)
 
       # Provider2 should still have tokens
@@ -227,7 +240,9 @@ defmodule Ai.RateLimiterTest do
       provider_b = unique_provider(:exhaust_b)
 
       {:ok, _} = RateLimiter.start_link(provider: provider_a, max_tokens: 1, tokens_per_second: 0)
-      {:ok, _} = RateLimiter.start_link(provider: provider_b, max_tokens: 10, tokens_per_second: 0)
+
+      {:ok, _} =
+        RateLimiter.start_link(provider: provider_b, max_tokens: 10, tokens_per_second: 0)
 
       :ok = RateLimiter.acquire(provider_a)
       assert {:error, :rate_limited} = RateLimiter.acquire(provider_a)
@@ -242,7 +257,9 @@ defmodule Ai.RateLimiterTest do
   describe "concurrent access" do
     test "handles concurrent acquires safely" do
       provider = unique_provider(:concurrent)
-      {:ok, _pid} = RateLimiter.start_link(provider: provider, max_tokens: 100, tokens_per_second: 0)
+
+      {:ok, _pid} =
+        RateLimiter.start_link(provider: provider, max_tokens: 100, tokens_per_second: 0)
 
       # Spawn many concurrent acquires
       tasks =
@@ -259,7 +276,9 @@ defmodule Ai.RateLimiterTest do
 
     test "concurrent access respects rate limit" do
       provider = unique_provider(:concurrent_limit)
-      {:ok, _pid} = RateLimiter.start_link(provider: provider, max_tokens: 10, tokens_per_second: 0)
+
+      {:ok, _pid} =
+        RateLimiter.start_link(provider: provider, max_tokens: 10, tokens_per_second: 0)
 
       # Try to acquire 20 tokens concurrently with only 10 available
       tasks =
@@ -305,7 +324,9 @@ defmodule Ai.RateLimiterTest do
   describe "edge cases" do
     test "zero tokens_per_second means no auto-refill" do
       provider = unique_provider(:zero_refill)
-      {:ok, _pid} = RateLimiter.start_link(provider: provider, max_tokens: 2, tokens_per_second: 0)
+
+      {:ok, _pid} =
+        RateLimiter.start_link(provider: provider, max_tokens: 2, tokens_per_second: 0)
 
       :ok = RateLimiter.acquire(provider)
       :ok = RateLimiter.acquire(provider)
@@ -318,7 +339,9 @@ defmodule Ai.RateLimiterTest do
 
     test "single token bucket" do
       provider = unique_provider(:single_token)
-      {:ok, _pid} = RateLimiter.start_link(provider: provider, max_tokens: 1, tokens_per_second: 0)
+
+      {:ok, _pid} =
+        RateLimiter.start_link(provider: provider, max_tokens: 1, tokens_per_second: 0)
 
       assert :ok = RateLimiter.acquire(provider)
       assert {:error, :rate_limited} = RateLimiter.acquire(provider)
@@ -326,7 +349,9 @@ defmodule Ai.RateLimiterTest do
 
     test "very high refill rate" do
       provider = unique_provider(:high_refill)
-      {:ok, _pid} = RateLimiter.start_link(provider: provider, max_tokens: 1000, tokens_per_second: 10_000)
+
+      {:ok, _pid} =
+        RateLimiter.start_link(provider: provider, max_tokens: 1000, tokens_per_second: 10_000)
 
       # Exhaust some tokens
       for _ <- 1..100 do
@@ -343,7 +368,9 @@ defmodule Ai.RateLimiterTest do
 
     test "large max_tokens value" do
       provider = unique_provider(:large_max)
-      {:ok, _pid} = RateLimiter.start_link(provider: provider, max_tokens: 1_000_000, tokens_per_second: 0)
+
+      {:ok, _pid} =
+        RateLimiter.start_link(provider: provider, max_tokens: 1_000_000, tokens_per_second: 0)
 
       {:ok, state} = RateLimiter.get_state(provider)
       assert state.max_tokens == 1_000_000
@@ -352,7 +379,9 @@ defmodule Ai.RateLimiterTest do
 
     test "fractional token calculation" do
       provider = unique_provider(:fractional)
-      {:ok, _pid} = RateLimiter.start_link(provider: provider, max_tokens: 10, tokens_per_second: 1)
+
+      {:ok, _pid} =
+        RateLimiter.start_link(provider: provider, max_tokens: 10, tokens_per_second: 1)
 
       # Exhaust all tokens
       for _ <- 1..10 do

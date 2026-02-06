@@ -23,7 +23,8 @@ defmodule Ai.Providers.GoogleSharedTest do
     end
 
     test "handles down messages" do
-      assert :down == GoogleShared.normalize_sse_message({:DOWN, make_ref(), :process, self(), :normal})
+      assert :down ==
+               GoogleShared.normalize_sse_message({:DOWN, make_ref(), :process, self(), :normal})
     end
 
     test "ignores unknown messages" do

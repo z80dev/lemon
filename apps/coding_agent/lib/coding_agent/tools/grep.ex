@@ -111,7 +111,9 @@ defmodule CodingAgent.Tools.Grep do
     glob = Map.get(params, "glob")
     case_sensitive = Map.get(params, "case_sensitive", true)
     context_lines = Map.get(params, "context_lines", @default_context_lines)
-    max_results = Map.get(params, "max_results", Keyword.get(opts, :max_results, @default_max_results))
+
+    max_results =
+      Map.get(params, "max_results", Keyword.get(opts, :max_results, @default_max_results))
 
     with :ok <- validate_pattern(pattern),
          {:ok, resolved_path} <- resolve_path(path, cwd),
@@ -287,7 +289,8 @@ defmodule CodingAgent.Tools.Grep do
     args = [
       "--line-number",
       "--with-filename",
-      "--color", "never"
+      "--color",
+      "never"
     ]
 
     args = if opts.case_sensitive, do: args, else: args ++ ["--ignore-case"]

@@ -70,7 +70,8 @@ defmodule LemonGateway.Event do
     @doc """
     Create a new delta event.
     """
-    @spec new(run_id :: String.t(), seq :: pos_integer(), text :: String.t(), meta :: map() | nil) :: t()
+    @spec new(run_id :: String.t(), seq :: pos_integer(), text :: String.t(), meta :: map() | nil) ::
+            t()
     def new(run_id, seq, text, meta \\ nil) do
       %__MODULE__{
         run_id: run_id,

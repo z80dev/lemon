@@ -37,10 +37,18 @@ defmodule CodingAgent.Tools.GrepTest do
       path = Path.join(tmp_dir, "test.txt")
       File.write!(path, "Hello, World!\nGoodbye, World!\nHello again!")
 
-      result = Grep.execute("call_1", %{
-        "pattern" => "Hello",
-        "path" => path
-      }, nil, nil, tmp_dir, [])
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "Hello",
+            "path" => path
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
       assert text =~ "Hello"
@@ -52,9 +60,17 @@ defmodule CodingAgent.Tools.GrepTest do
       File.write!(Path.join(tmp_dir, "file2.txt"), "Hello from file2")
       File.write!(Path.join(tmp_dir, "file3.txt"), "No match here")
 
-      result = Grep.execute("call_1", %{
-        "pattern" => "Hello"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "Hello"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
       assert text =~ "file1"
@@ -66,10 +82,18 @@ defmodule CodingAgent.Tools.GrepTest do
       path = Path.join(tmp_dir, "test.txt")
       File.write!(path, "Hello, World!")
 
-      result = Grep.execute("call_1", %{
-        "pattern" => "xyz123",
-        "path" => path
-      }, nil, nil, tmp_dir, [])
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "xyz123",
+            "path" => path
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
       assert text =~ "No matches found"
@@ -79,9 +103,17 @@ defmodule CodingAgent.Tools.GrepTest do
     test "uses cwd when no path specified", %{tmp_dir: tmp_dir} do
       File.write!(Path.join(tmp_dir, "test.txt"), "searchable content")
 
-      result = Grep.execute("call_1", %{
-        "pattern" => "searchable"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "searchable"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "searchable"
@@ -93,29 +125,53 @@ defmodule CodingAgent.Tools.GrepTest do
       path = Path.join(tmp_dir, "test.txt")
       File.write!(path, "foo123bar\nfoo456bar\nbaz789qux")
 
-      result = Grep.execute("call_1", %{
-        "pattern" => "foo\\d+bar",
-        "path" => path
-      }, nil, nil, tmp_dir, [])
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "foo\\d+bar",
+            "path" => path
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{details: details} = result
       assert details.match_count == 2
     end
 
     test "returns error for invalid regex", %{tmp_dir: tmp_dir} do
-      result = Grep.execute("call_1", %{
-        "pattern" => "[invalid",
-        "path" => tmp_dir
-      }, nil, nil, tmp_dir, [])
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "[invalid",
+            "path" => tmp_dir
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert {:error, msg} = result
       assert msg =~ "Invalid regex"
     end
 
     test "returns error for empty pattern", %{tmp_dir: tmp_dir} do
-      result = Grep.execute("call_1", %{
-        "pattern" => ""
-      }, nil, nil, tmp_dir, [])
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => ""
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert {:error, "Pattern is required"} = result
     end
@@ -126,10 +182,18 @@ defmodule CodingAgent.Tools.GrepTest do
       path = Path.join(tmp_dir, "test.txt")
       File.write!(path, "Hello\nhello\nHELLO")
 
-      result = Grep.execute("call_1", %{
-        "pattern" => "Hello",
-        "path" => path
-      }, nil, nil, tmp_dir, [])
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "Hello",
+            "path" => path
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{details: details} = result
       assert details.match_count == 1
@@ -139,11 +203,19 @@ defmodule CodingAgent.Tools.GrepTest do
       path = Path.join(tmp_dir, "test.txt")
       File.write!(path, "Hello\nhello\nHELLO")
 
-      result = Grep.execute("call_1", %{
-        "pattern" => "Hello",
-        "path" => path,
-        "case_sensitive" => false
-      }, nil, nil, tmp_dir, [])
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "Hello",
+            "path" => path,
+            "case_sensitive" => false
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{details: details} = result
       assert details.match_count == 3
@@ -156,10 +228,18 @@ defmodule CodingAgent.Tools.GrepTest do
       File.write!(Path.join(tmp_dir, "test.exs"), "defmodule TestCase")
       File.write!(Path.join(tmp_dir, "test.txt"), "defmodule ShouldNotMatch")
 
-      result = Grep.execute("call_1", %{
-        "pattern" => "defmodule",
-        "glob" => "*.ex"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "defmodule",
+            "glob" => "*.ex"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
       assert text =~ "test.ex"
@@ -172,10 +252,18 @@ defmodule CodingAgent.Tools.GrepTest do
       File.write!(Path.join(tmp_dir, "test.exs"), "match2")
       File.write!(Path.join(tmp_dir, "test.txt"), "no_match")
 
-      result = Grep.execute("call_1", %{
-        "pattern" => "match",
-        "glob" => "*.{ex,exs}"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "match",
+            "glob" => "*.{ex,exs}"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{details: details} = result
       assert details.match_count == 2
@@ -187,11 +275,19 @@ defmodule CodingAgent.Tools.GrepTest do
       path = Path.join(tmp_dir, "test.txt")
       File.write!(path, "line1\nline2\nMATCH\nline4\nline5")
 
-      result = Grep.execute("call_1", %{
-        "pattern" => "MATCH",
-        "path" => path,
-        "context_lines" => 1
-      }, nil, nil, tmp_dir, [])
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "MATCH",
+            "path" => path,
+            "context_lines" => 1
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       # Should include line2 and line4 as context
@@ -206,11 +302,19 @@ defmodule CodingAgent.Tools.GrepTest do
       content = Enum.map_join(1..50, "\n", fn i -> "match line #{i}" end)
       File.write!(path, content)
 
-      result = Grep.execute("call_1", %{
-        "pattern" => "match",
-        "path" => path,
-        "max_results" => 5
-      }, nil, nil, tmp_dir, [])
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "match",
+            "path" => path,
+            "max_results" => 5
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
       assert details.truncated == true
@@ -229,10 +333,18 @@ defmodule CodingAgent.Tools.GrepTest do
       path = Path.join(tmp_dir, "absolute.txt")
       File.write!(path, "findme")
 
-      result = Grep.execute("call_1", %{
-        "pattern" => "findme",
-        "path" => path
-      }, nil, nil, tmp_dir, [])
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "findme",
+            "path" => path
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{details: details} = result
       assert details.match_count == 1
@@ -241,10 +353,18 @@ defmodule CodingAgent.Tools.GrepTest do
     test "handles relative paths", %{tmp_dir: tmp_dir} do
       File.write!(Path.join(tmp_dir, "relative.txt"), "findme")
 
-      result = Grep.execute("call_1", %{
-        "pattern" => "findme",
-        "path" => "relative.txt"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "findme",
+            "path" => "relative.txt"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{details: details} = result
       assert details.match_count == 1
@@ -252,10 +372,18 @@ defmodule CodingAgent.Tools.GrepTest do
 
     test "handles home directory expansion", %{tmp_dir: tmp_dir} do
       # This test just verifies the code path, actual ~ expansion would need real home dir
-      result = Grep.execute("call_1", %{
-        "pattern" => "test",
-        "path" => tmp_dir
-      }, nil, nil, tmp_dir, [])
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "test",
+            "path" => tmp_dir
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       # Should not error - either returns results or no matches
       assert match?(%AgentToolResult{}, result) or match?({:error, _}, result)
@@ -266,9 +394,17 @@ defmodule CodingAgent.Tools.GrepTest do
       File.mkdir_p!(subdir)
       File.write!(Path.join(subdir, "nested.txt"), "nested_match")
 
-      result = Grep.execute("call_1", %{
-        "pattern" => "nested_match"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "nested_match"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
       assert text =~ "nested_match"
@@ -278,10 +414,18 @@ defmodule CodingAgent.Tools.GrepTest do
 
   describe "execute/6 - error handling" do
     test "returns error for non-existent path", %{tmp_dir: tmp_dir} do
-      result = Grep.execute("call_1", %{
-        "pattern" => "test",
-        "path" => Path.join(tmp_dir, "nonexistent")
-      }, nil, nil, tmp_dir, [])
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "test",
+            "path" => Path.join(tmp_dir, "nonexistent")
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert {:error, msg} = result
       assert msg =~ "not found"
@@ -297,10 +441,18 @@ defmodule CodingAgent.Tools.GrepTest do
       on_exit(fn -> File.chmod(path, 0o644) end)
 
       # Search should not crash, but may not find the file
-      result = Grep.execute("call_1", %{
-        "pattern" => "content",
-        "path" => path
-      }, nil, nil, tmp_dir, [])
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "content",
+            "path" => path
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       # Either returns no matches or an error - both are acceptable
       assert match?(%AgentToolResult{}, result) or match?({:error, _}, result)
@@ -313,9 +465,17 @@ defmodule CodingAgent.Tools.GrepTest do
       signal = AgentCore.AbortSignal.new()
       AgentCore.AbortSignal.abort(signal)
 
-      result = Grep.execute("call_1", %{
-        "pattern" => "test"
-      }, signal, nil, tmp_dir, [])
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "test"
+          },
+          signal,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert {:error, "Operation aborted"} = result
     end
@@ -327,9 +487,17 @@ defmodule CodingAgent.Tools.GrepTest do
       File.write!(Path.join(tmp_dir, "text.txt"), "findme")
       File.write!(Path.join(tmp_dir, "binary.bin"), <<0, 1, 2, 102, 105, 110, 100, 109, 101, 0>>)
 
-      result = Grep.execute("call_1", %{
-        "pattern" => "findme"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Grep.execute(
+          "call_1",
+          %{
+            "pattern" => "findme"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       # Should find in text file but not binary
@@ -344,9 +512,15 @@ defmodule CodingAgent.Tools.GrepTest do
 
       tool = Grep.tool(tmp_dir)
 
-      result = tool.execute.("call_1", %{
-        "pattern" => "test"
-      }, nil, nil)
+      result =
+        tool.execute.(
+          "call_1",
+          %{
+            "pattern" => "test"
+          },
+          nil,
+          nil
+        )
 
       assert %AgentToolResult{details: details} = result
       assert details.match_count >= 1

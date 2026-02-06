@@ -30,6 +30,7 @@ defmodule LemonGateway.Store.EtsBackend do
   @impl true
   def get(state, table, key) do
     state = ensure_table(state, table)
+
     value =
       case :ets.lookup(state[table], key) do
         [{^key, val}] -> val

@@ -172,8 +172,11 @@ defmodule LemonGateway.EngineLockTest do
         spawn(fn ->
           {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 5000})
           send(test_pid, {:acquired, i, self()})
-          receive do: ({:release, lock_pid} -> GenServer.cast(lock_pid, {:release, :key1, self()}))
+
+          receive do: ({:release, lock_pid} ->
+                         GenServer.cast(lock_pid, {:release, :key1, self()}))
         end)
+
         Process.sleep(10)
       end
 
@@ -200,11 +203,12 @@ defmodule LemonGateway.EngineLockTest do
       {:ok, _release1} = GenServer.call(lock, {:acquire, :key1, 5000})
 
       # Single waiter
-      waiter = spawn(fn ->
-        {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 5000})
-        send(test_pid, :got_lock)
-        Process.sleep(:infinity)
-      end)
+      waiter =
+        spawn(fn ->
+          {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 5000})
+          send(test_pid, :got_lock)
+          Process.sleep(:infinity)
+        end)
 
       Process.sleep(20)
 
@@ -226,12 +230,13 @@ defmodule LemonGateway.EngineLockTest do
 
       {:ok, _release1} = GenServer.call(lock, {:acquire, :key1, 5000})
 
-      waiter = spawn(fn ->
-        {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 5000})
-        send(test_pid, :got_lock)
-        # Stay alive to prevent :DOWN handling
-        Process.sleep(:infinity)
-      end)
+      waiter =
+        spawn(fn ->
+          {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 5000})
+          send(test_pid, :got_lock)
+          # Stay alive to prevent :DOWN handling
+          Process.sleep(:infinity)
+        end)
 
       Process.sleep(20)
 
@@ -329,20 +334,21 @@ defmodule LemonGateway.EngineLockTest do
 
       {:ok, _release1} = GenServer.call(lock, {:acquire, :key1, 5000})
 
-      waiter = spawn(fn ->
-        # Request with timeout slightly longer than we'll wait
-        {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 200}, 1000)
-        send(test_pid, {:got_lock, self()})
-        # Hold lock for a while past when timeout would fire
-        receive do
-          {:release, lock_pid} ->
-            GenServer.cast(lock_pid, {:release, :key1, self()})
-            send(test_pid, :released)
-        after
-          300 ->
-            send(test_pid, :released)
-        end
-      end)
+      waiter =
+        spawn(fn ->
+          # Request with timeout slightly longer than we'll wait
+          {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 200}, 1000)
+          send(test_pid, {:got_lock, self()})
+          # Hold lock for a while past when timeout would fire
+          receive do
+            {:release, lock_pid} ->
+              GenServer.cast(lock_pid, {:release, :key1, self()})
+              send(test_pid, :released)
+          after
+            300 ->
+              send(test_pid, :released)
+          end
+        end)
 
       Process.sleep(20)
 
@@ -370,37 +376,40 @@ defmodule LemonGateway.EngineLockTest do
       test_pid = self()
       num_tasks = 10
 
-      tasks = for i <- 1..num_tasks do
-        Task.async(fn ->
-          {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 10_000}, 11_000)
-          send(test_pid, {:acquired, i, System.monotonic_time(:millisecond)})
-          Process.sleep(20)
-          GenServer.cast(lock, {:release, :key1, self()})
-          send(test_pid, {:released, i, System.monotonic_time(:millisecond)})
-          i
-        end)
-      end
+      tasks =
+        for i <- 1..num_tasks do
+          Task.async(fn ->
+            {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 10_000}, 11_000)
+            send(test_pid, {:acquired, i, System.monotonic_time(:millisecond)})
+            Process.sleep(20)
+            GenServer.cast(lock, {:release, :key1, self()})
+            send(test_pid, {:released, i, System.monotonic_time(:millisecond)})
+            i
+          end)
+        end
 
       results = Task.await_many(tasks, 15_000)
       assert length(results) == num_tasks
 
       # Collect all acquisition times
-      acquires = for _ <- 1..num_tasks do
-        receive do
-          {:acquired, i, time} -> {i, time}
-        after
-          5000 -> flunk("timeout waiting for acquire")
+      acquires =
+        for _ <- 1..num_tasks do
+          receive do
+            {:acquired, i, time} -> {i, time}
+          after
+            5000 -> flunk("timeout waiting for acquire")
+          end
         end
-      end
 
       # Collect all release times
-      _releases = for _ <- 1..num_tasks do
-        receive do
-          {:released, i, time} -> {i, time}
-        after
-          5000 -> flunk("timeout waiting for release")
+      _releases =
+        for _ <- 1..num_tasks do
+          receive do
+            {:released, i, time} -> {i, time}
+          after
+            5000 -> flunk("timeout waiting for release")
+          end
         end
-      end
 
       # Verify serialization: each acquire should happen after previous release
       acquires_sorted = Enum.sort_by(acquires, fn {_, time} -> time end)
@@ -421,15 +430,16 @@ defmodule LemonGateway.EngineLockTest do
 
       t_start = System.monotonic_time(:millisecond)
 
-      tasks = for i <- 1..num_keys do
-        Task.async(fn ->
-          key = :"key_#{i}"
-          {:ok, _release} = GenServer.call(lock, {:acquire, key, 5000})
-          Process.sleep(50)
-          GenServer.cast(lock, {:release, key, self()})
-          i
-        end)
-      end
+      tasks =
+        for i <- 1..num_keys do
+          Task.async(fn ->
+            key = :"key_#{i}"
+            {:ok, _release} = GenServer.call(lock, {:acquire, key, 5000})
+            Process.sleep(50)
+            GenServer.cast(lock, {:release, key, self()})
+            i
+          end)
+        end
 
       results = Task.await_many(tasks, 5000)
       t_end = System.monotonic_time(:millisecond)
@@ -444,12 +454,13 @@ defmodule LemonGateway.EngineLockTest do
 
       # This test verifies the lock handles rapid acquire/release cycles
       for _ <- 1..20 do
-        task = Task.async(fn ->
-          {:ok, _release} = GenServer.call(lock, {:acquire, :race_key, 1000})
-          # Immediate release
-          GenServer.cast(lock, {:release, :race_key, self()})
-          :ok
-        end)
+        task =
+          Task.async(fn ->
+            {:ok, _release} = GenServer.call(lock, {:acquire, :race_key, 1000})
+            # Immediate release
+            GenServer.cast(lock, {:release, :race_key, self()})
+            :ok
+          end)
 
         Task.await(task, 2000)
       end
@@ -478,10 +489,12 @@ defmodule LemonGateway.EngineLockTest do
         spawn(fn ->
           {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 5000})
           send(test_pid, {:waiter_acquired, i, self()})
+
           receive do
             {:release, lock_pid} -> GenServer.cast(lock_pid, {:release, :key1, self()})
           end
         end)
+
         Process.sleep(10)
       end
 
@@ -501,17 +514,19 @@ defmodule LemonGateway.EngineLockTest do
 
       {:ok, _release0} = GenServer.call(lock, {:acquire, :key1, 5000})
 
-      waiters = for i <- 1..3 do
-        spawn(fn ->
-          {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 5000})
-          send(test_pid, {:waiter_acquired, i, self()})
-          receive do
-            {:release, lock_pid} ->
-              GenServer.cast(lock_pid, {:release, :key1, self()})
-              send(test_pid, {:waiter_released, i})
-          end
-        end)
-      end
+      waiters =
+        for i <- 1..3 do
+          spawn(fn ->
+            {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 5000})
+            send(test_pid, {:waiter_acquired, i, self()})
+
+            receive do
+              {:release, lock_pid} ->
+                GenServer.cast(lock_pid, {:release, :key1, self()})
+                send(test_pid, {:waiter_released, i})
+            end
+          end)
+        end
 
       Process.sleep(50)
 
@@ -546,11 +561,12 @@ defmodule LemonGateway.EngineLockTest do
       test_pid = self()
 
       # Process A acquires lock
-      task_a = Task.async(fn ->
-        {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 5000})
-        send(test_pid, :task_a_acquired)
-        receive do: (:done -> :ok)
-      end)
+      task_a =
+        Task.async(fn ->
+          {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 5000})
+          send(test_pid, :task_a_acquired)
+          receive do: (:done -> :ok)
+        end)
 
       assert_receive :task_a_acquired, 500
 
@@ -576,11 +592,12 @@ defmodule LemonGateway.EngineLockTest do
       test_pid = self()
 
       # Spawn process that acquires lock then dies
-      owner = spawn(fn ->
-        {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 5000})
-        send(test_pid, :acquired)
-        receive do: (:die -> :ok)
-      end)
+      owner =
+        spawn(fn ->
+          {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 5000})
+          send(test_pid, :acquired)
+          receive do: (:die -> :ok)
+        end)
 
       assert_receive :acquired, 500
 
@@ -603,20 +620,22 @@ defmodule LemonGateway.EngineLockTest do
       test_pid = self()
 
       # Owner acquires lock
-      owner = spawn(fn ->
-        {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 5000})
-        send(test_pid, :owner_acquired)
-        receive do: (:die -> :ok)
-      end)
+      owner =
+        spawn(fn ->
+          {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 5000})
+          send(test_pid, :owner_acquired)
+          receive do: (:die -> :ok)
+        end)
 
       assert_receive :owner_acquired, 500
 
       # Waiter queues up
-      waiter = spawn(fn ->
-        {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 5000})
-        send(test_pid, :waiter_acquired)
-        Process.sleep(:infinity)
-      end)
+      waiter =
+        spawn(fn ->
+          {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 5000})
+          send(test_pid, :waiter_acquired)
+          Process.sleep(:infinity)
+        end)
 
       Process.sleep(50)
 
@@ -632,24 +651,28 @@ defmodule LemonGateway.EngineLockTest do
     test "owner death with multiple waiters grants to first waiter", %{lock: lock} do
       test_pid = self()
 
-      owner = spawn(fn ->
-        {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 5000})
-        send(test_pid, :owner_acquired)
-        receive do: (:die -> :ok)
-      end)
+      owner =
+        spawn(fn ->
+          {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 5000})
+          send(test_pid, :owner_acquired)
+          receive do: (:die -> :ok)
+        end)
 
       assert_receive :owner_acquired, 500
 
       # Spawn waiters in order
-      waiters = for i <- 1..3 do
-        waiter = spawn(fn ->
-          {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 5000})
-          send(test_pid, {:waiter_acquired, i})
-          Process.sleep(:infinity)
-        end)
-        Process.sleep(10)
-        waiter
-      end
+      waiters =
+        for i <- 1..3 do
+          waiter =
+            spawn(fn ->
+              {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 5000})
+              send(test_pid, {:waiter_acquired, i})
+              Process.sleep(:infinity)
+            end)
+
+          Process.sleep(10)
+          waiter
+        end
 
       Process.sleep(30)
 
@@ -670,17 +693,19 @@ defmodule LemonGateway.EngineLockTest do
       test_pid = self()
 
       # Acquire locks on two different keys from two different processes
-      owner1 = spawn(fn ->
-        {:ok, _release} = GenServer.call(lock, {:acquire, :key_a, 5000})
-        send(test_pid, {:owner1_acquired, :key_a})
-        receive do: (:die -> :ok)
-      end)
+      owner1 =
+        spawn(fn ->
+          {:ok, _release} = GenServer.call(lock, {:acquire, :key_a, 5000})
+          send(test_pid, {:owner1_acquired, :key_a})
+          receive do: (:die -> :ok)
+        end)
 
-      owner2 = spawn(fn ->
-        {:ok, _release} = GenServer.call(lock, {:acquire, :key_b, 5000})
-        send(test_pid, {:owner2_acquired, :key_b})
-        receive do: (:die -> :ok)
-      end)
+      owner2 =
+        spawn(fn ->
+          {:ok, _release} = GenServer.call(lock, {:acquire, :key_b, 5000})
+          send(test_pid, {:owner2_acquired, :key_b})
+          receive do: (:die -> :ok)
+        end)
 
       assert_receive {:owner1_acquired, :key_a}, 500
       assert_receive {:owner2_acquired, :key_b}, 500
@@ -702,9 +727,10 @@ defmodule LemonGateway.EngineLockTest do
       {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 5000})
 
       # Spawn waiter that will be killed
-      waiter = spawn(fn ->
-        GenServer.call(lock, {:acquire, :key1, 5000})
-      end)
+      waiter =
+        spawn(fn ->
+          GenServer.call(lock, {:acquire, :key1, 5000})
+        end)
 
       Process.sleep(30)
 
@@ -759,12 +785,13 @@ defmodule LemonGateway.EngineLockTest do
 
       {:ok, _release1} = GenServer.call(lock, {:acquire, :key1, 5000})
 
-      waiter = spawn(fn ->
-        # Very short timeout, but we'll release lock before it fires
-        {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 500}, 2000)
-        send(test_pid, :waiter_got_lock)
-        Process.sleep(:infinity)
-      end)
+      waiter =
+        spawn(fn ->
+          # Very short timeout, but we'll release lock before it fires
+          {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 500}, 2000)
+          send(test_pid, :waiter_got_lock)
+          Process.sleep(:infinity)
+        end)
 
       Process.sleep(20)
 
@@ -860,7 +887,11 @@ defmodule LemonGateway.EngineLockTest do
       Task.start(fn ->
         send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
         Process.sleep(delay)
-        send(sink_pid, {:engine_event, run_ref, %Event.Completed{engine: id(), ok: true, answer: "slow done"}})
+
+        send(
+          sink_pid,
+          {:engine_event, run_ref, %Event.Completed{engine: id(), ok: true, answer: "slow done"}}
+        )
       end)
 
       {:ok, run_ref, %{pid: self()}}
@@ -1070,7 +1101,9 @@ defmodule LemonGateway.EngineLockTest do
     assert length(completions) == 2
     # Should be serialized despite different scopes
     elapsed = t_end - t_start
-    assert elapsed >= 140, "Expected serialized execution due to shared resume token, got #{elapsed}ms"
+
+    assert elapsed >= 140,
+           "Expected serialized execution due to shared resume token, got #{elapsed}ms"
   end
 
   test "lock is released when run process crashes" do

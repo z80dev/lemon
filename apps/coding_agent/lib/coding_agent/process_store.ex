@@ -26,6 +26,7 @@ defmodule CodingAgent.ProcessStore do
   @spec new_process(map()) :: process_id()
   def new_process(attrs \\ %{}) when is_map(attrs) do
     ensure_table()
+
     process_id =
       case Map.get(attrs, :id) do
         id when is_binary(id) and id != "" -> id
@@ -165,7 +166,8 @@ defmodule CodingAgent.ProcessStore do
   Get recent log lines for a process.
   """
   @spec get_logs(process_id(), non_neg_integer()) :: {:ok, [String.t()]} | {:error, :not_found}
-  def get_logs(process_id, line_count \\ 100) when is_binary(process_id) and is_integer(line_count) do
+  def get_logs(process_id, line_count \\ 100)
+      when is_binary(process_id) and is_integer(line_count) do
     ensure_table()
 
     case :ets.lookup(@table, process_id) do
@@ -204,7 +206,8 @@ defmodule CodingAgent.ProcessStore do
   Cleanup completed/error/killed processes older than the TTL (seconds).
   """
   @spec cleanup(non_neg_integer()) :: :ok
-  def cleanup(ttl_seconds \\ @default_ttl_seconds) when is_integer(ttl_seconds) and ttl_seconds >= 0 do
+  def cleanup(ttl_seconds \\ @default_ttl_seconds)
+      when is_integer(ttl_seconds) and ttl_seconds >= 0 do
     {:ok, _count} = ProcessStoreServer.cleanup(CodingAgent.ProcessStoreServer, ttl_seconds)
     :ok
   end

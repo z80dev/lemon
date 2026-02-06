@@ -50,14 +50,15 @@ defmodule LemonGateway.UnifiedSchedulerTest do
     test "passes metadata to lane queue" do
       test_pid = self()
 
-      result = UnifiedScheduler.run_in_lane(
-        :subagent,
-        fn ->
-          send(test_pid, :executed)
-          :done
-        end,
-        meta: %{test: true}
-      )
+      result =
+        UnifiedScheduler.run_in_lane(
+          :subagent,
+          fn ->
+            send(test_pid, :executed)
+            :done
+          end,
+          meta: %{test: true}
+        )
 
       assert result == {:ok, :done}
       assert_receive :executed, 1000
@@ -117,10 +118,15 @@ defmodule LemonGateway.UnifiedSchedulerTest do
       test_pid = self()
 
       # Submit work through unified scheduler
-      result = UnifiedScheduler.run_in_lane(:subagent, fn ->
-        send(test_pid, {:lane_executed, :subagent})
-        :completed
-      end, [])
+      result =
+        UnifiedScheduler.run_in_lane(
+          :subagent,
+          fn ->
+            send(test_pid, {:lane_executed, :subagent})
+            :completed
+          end,
+          []
+        )
 
       assert result == {:ok, :completed}
       assert_receive {:lane_executed, :subagent}, 1000
@@ -128,19 +134,28 @@ defmodule LemonGateway.UnifiedSchedulerTest do
 
     test "respects lane caps" do
       # Start multiple concurrent tasks
-      tasks = for i <- 1..5 do
-        Task.async(fn ->
-          UnifiedScheduler.run_in_lane(:main, fn ->
-            Process.sleep(100)
-            i
-          end, [])
-        end)
-      end
+      tasks =
+        for i <- 1..5 do
+          Task.async(fn ->
+            UnifiedScheduler.run_in_lane(
+              :main,
+              fn ->
+                Process.sleep(100)
+                i
+              end,
+              []
+            )
+          end)
+        end
 
       results = Task.await_many(tasks, 5000)
 
       # All should complete successfully
-      assert Enum.all?(results, fn {:ok, _} -> true; _ -> false end)
+      assert Enum.all?(results, fn
+               {:ok, _} -> true
+               _ -> false
+             end)
+
       assert Enum.sort(Enum.map(results, fn {:ok, i} -> i end)) == [1, 2, 3, 4, 5]
     end
   end

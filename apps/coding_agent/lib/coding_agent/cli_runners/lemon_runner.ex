@@ -361,7 +361,11 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     end
   end
 
-  defp start_or_resume_session(%ResumeToken{engine: @engine, value: session_id}, session_opts, state) do
+  defp start_or_resume_session(
+         %ResumeToken{engine: @engine, value: session_id},
+         session_opts,
+         state
+       ) do
     # Resume existing session
     # First try to find an existing session, or load from file
     session_file = session_file_path(session_id, state.cwd)
@@ -417,7 +421,9 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     detail = %{name: name, args: args}
 
     action = Action.new(action_id, kind, title, detail)
-    {event, factory} = EventFactory.action_started(state.factory, action_id, kind, title, detail: detail)
+
+    {event, factory} =
+      EventFactory.action_started(state.factory, action_id, kind, title, detail: detail)
 
     emit_event(state.stream, event)
     pending = Map.put(state.pending_actions, action_id, action)
@@ -433,7 +439,12 @@ defmodule CodingAgent.CliRunners.LemonRunner do
 
       action ->
         detail = Map.merge(action.detail, %{partial_result: partial_result})
-        {event, factory} = EventFactory.action_updated(state.factory, action_id, action.kind, action.title, detail: detail)
+
+        {event, factory} =
+          EventFactory.action_updated(state.factory, action_id, action.kind, action.title,
+            detail: detail
+          )
+
         emit_event(state.stream, event)
 
         updated_action = %{action | detail: detail}
@@ -451,13 +462,28 @@ defmodule CodingAgent.CliRunners.LemonRunner do
         kind = tool_kind(name)
         title = tool_title(name, %{})
         detail = %{name: name, result: truncate_result(result)}
-        {event, factory} = EventFactory.action_completed(state.factory, action_id, kind, title, not is_error, detail: detail)
+
+        {event, factory} =
+          EventFactory.action_completed(state.factory, action_id, kind, title, not is_error,
+            detail: detail
+          )
+
         emit_event(state.stream, event)
         %{state | factory: factory}
 
       action ->
         detail = Map.merge(action.detail, %{result: truncate_result(result)})
-        {event, factory} = EventFactory.action_completed(state.factory, action_id, action.kind, action.title, not is_error, detail: detail)
+
+        {event, factory} =
+          EventFactory.action_completed(
+            state.factory,
+            action_id,
+            action.kind,
+            action.title,
+            not is_error,
+            detail: detail
+          )
+
         emit_event(state.stream, event)
 
         pending = Map.delete(state.pending_actions, action_id)
@@ -489,6 +515,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
         if state.delta_callback do
           state.delta_callback.(:first_token, %{run_id: state.run_id, seq: new_seq})
         end
+
         %{state | first_token_emitted: true}
       else
         state
@@ -549,7 +576,10 @@ defmodule CodingAgent.CliRunners.LemonRunner do
       state
     else
       token = state.factory.resume
-      {event, factory} = EventFactory.completed_ok(state.factory, answer, resume: token, usage: usage)
+
+      {event, factory} =
+        EventFactory.completed_ok(state.factory, answer, resume: token, usage: usage)
+
       emit_event(state.stream, event)
       EventStream.complete(state.stream, [])
       state = %{state | factory: factory, completed_emitted: true}
@@ -563,7 +593,10 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     else
       token = state.factory.resume
       answer = state.accumulated_text
-      {event, factory} = EventFactory.completed_error(state.factory, error_msg, resume: token, answer: answer)
+
+      {event, factory} =
+        EventFactory.completed_error(state.factory, error_msg, resume: token, answer: answer)
+
       emit_event(state.stream, event)
       EventStream.complete(state.stream, [])
       state = %{state | factory: factory, completed_emitted: true}

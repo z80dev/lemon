@@ -259,7 +259,8 @@ defmodule CodingAgent.BashExecutorTest do
 
       assert was_truncated == false
       assert truncated == ""
-      assert info.total_lines == 1  # empty string splits to [""]
+      # empty string splits to [""]
+      assert info.total_lines == 1
       assert info.total_bytes == 0
     end
 
@@ -349,5 +350,4 @@ defmodule CodingAgent.BashExecutorTest do
       assert result.full_output_path == nil
     end
   end
-
 end

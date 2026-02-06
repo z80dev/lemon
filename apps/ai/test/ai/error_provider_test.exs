@@ -125,7 +125,8 @@ defmodule Ai.ErrorProviderTest do
       body = %{
         "error" => %{
           "code" => "insufficient_quota",
-          "message" => "You exceeded your current quota, please check your plan and billing details.",
+          "message" =>
+            "You exceeded your current quota, please check your plan and billing details.",
           "type" => "insufficient_quota",
           "param" => nil
         }
@@ -188,7 +189,8 @@ defmodule Ai.ErrorProviderTest do
     test "parses OpenAI context_length_exceeded error" do
       body = %{
         "error" => %{
-          "message" => "This model's maximum context length is 8192 tokens. However, you requested 10000 tokens.",
+          "message" =>
+            "This model's maximum context length is 8192 tokens. However, you requested 10000 tokens.",
           "type" => "invalid_request_error",
           "param" => "messages",
           "code" => "context_length_exceeded"
@@ -387,7 +389,8 @@ defmodule Ai.ErrorProviderTest do
       body = %{
         "error" => %{
           "code" => "429",
-          "message" => "Requests to the ChatCompletions_Create Operation have exceeded rate limit."
+          "message" =>
+            "Requests to the ChatCompletions_Create Operation have exceeded rate limit."
         }
       }
 
@@ -401,7 +404,8 @@ defmodule Ai.ErrorProviderTest do
       body = %{
         "error" => %{
           "code" => "content_filter",
-          "message" => "The response was filtered due to the prompt triggering Azure's content management policy.",
+          "message" =>
+            "The response was filtered due to the prompt triggering Azure's content management policy.",
           "param" => "prompt",
           "type" => "invalid_request_error"
         }
@@ -597,7 +601,8 @@ defmodule Ai.ErrorProviderTest do
       headers = [
         {"x-ratelimit-remaining-requests", "100"},
         {"x-ratelimit-remaining-tokens", "50000"},
-        {"retry-after-ms", "1000"}  # Azure uses ms suffix sometimes
+        # Azure uses ms suffix sometimes
+        {"retry-after-ms", "1000"}
       ]
 
       info = Error.extract_rate_limit_info(headers)
@@ -636,7 +641,8 @@ defmodule Ai.ErrorProviderTest do
     test "handles headers with extra whitespace in values" do
       # Note: whitespace handling depends on implementation
       headers = [
-        {"x-ratelimit-limit-requests", "1000"},  # no whitespace
+        # no whitespace
+        {"x-ratelimit-limit-requests", "1000"},
         {"retry-after", "60"}
       ]
 
@@ -674,7 +680,7 @@ defmodule Ai.ErrorProviderTest do
   describe "DateTime parsing from rate-limit headers" do
     test "parses Unix timestamp (seconds)" do
       # 2024-01-01 00:00:00 UTC
-      timestamp = 1704067200
+      timestamp = 1_704_067_200
 
       headers = [
         {"x-ratelimit-reset-requests", "#{timestamp}"}
@@ -687,7 +693,7 @@ defmodule Ai.ErrorProviderTest do
 
     test "parses Unix timestamp (milliseconds treated as large seconds)" do
       # Millisecond timestamps cause overflow when treated as seconds
-      timestamp_ms = 1704067200000
+      timestamp_ms = 1_704_067_200_000
 
       headers = [
         {"x-ratelimit-reset-requests", "#{timestamp_ms}"}
@@ -724,7 +730,7 @@ defmodule Ai.ErrorProviderTest do
     end
 
     test "parses reset time from alternative header names" do
-      timestamp = 1704067200
+      timestamp = 1_704_067_200
 
       headers = [
         {"ratelimit-reset", "#{timestamp}"}
@@ -743,7 +749,7 @@ defmodule Ai.ErrorProviderTest do
 
       info = Error.extract_rate_limit_info(headers)
 
-      assert info.reset_at == DateTime.from_unix!(1704067200)
+      assert info.reset_at == DateTime.from_unix!(1_704_067_200)
     end
 
     test "retry-after is converted to milliseconds" do
@@ -973,7 +979,7 @@ defmodule Ai.ErrorProviderTest do
           "code" => 1001,
           "message" => "Invalid request",
           "details" => ["reason1", "reason2"],
-          "timestamp" => 1704067200
+          "timestamp" => 1_704_067_200
         }
       }
 
@@ -1314,7 +1320,8 @@ defmodule Ai.ErrorProviderTest do
       headers = [
         {"x-ratelimit-limit-tokens", "1000000"},
         {"x-ratelimit-remaining-tokens", "0"},
-        {"x-ratelimit-reset-tokens", "#{DateTime.utc_now() |> DateTime.add(60, :second) |> DateTime.to_unix()}"}
+        {"x-ratelimit-reset-tokens",
+         "#{DateTime.utc_now() |> DateTime.add(60, :second) |> DateTime.to_unix()}"}
       ]
 
       result = Error.parse_http_error(429, body, headers)

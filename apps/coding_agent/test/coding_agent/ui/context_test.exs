@@ -94,6 +94,7 @@ defmodule CodingAgent.UI.ContextTest do
   describe "select/4" do
     test "delegates to module.select/3", %{tracker: tracker} do
       ctx = Context.new(MockUI)
+
       options = [
         %{label: "Option A", value: "a", description: nil},
         %{label: "Option B", value: "b", description: "With description"}

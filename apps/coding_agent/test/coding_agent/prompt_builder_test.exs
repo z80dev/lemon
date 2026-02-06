@@ -1007,7 +1007,11 @@ defmodule CodingAgent.PromptBuilderTest do
           include_skills: false,
           include_commands: false,
           include_mentions: false,
-          custom_sections: [{"section123", "Content"}, {"123section", "More"}, {"sec456tion", "End"}]
+          custom_sections: [
+            {"section123", "Content"},
+            {"123section", "More"},
+            {"sec456tion", "End"}
+          ]
         })
 
       assert String.contains?(result, "<section123>")

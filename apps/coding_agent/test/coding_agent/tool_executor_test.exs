@@ -86,6 +86,7 @@ defmodule CodingAgent.ToolExecutorTest do
       case Process.whereis(LemonGateway.Store) do
         nil ->
           {:ok, _} = LemonGateway.Store.start_link([])
+
         _pid ->
           :ok
       end

@@ -72,7 +72,10 @@ defmodule CodingAgent.ProcessManager do
     end
   rescue
     e ->
-      Logger.warning("LaneQueue unavailable for background exec, falling back to direct: #{inspect(e)}")
+      Logger.warning(
+        "LaneQueue unavailable for background exec, falling back to direct: #{inspect(e)}"
+      )
+
       do_exec(command, opts)
   end
 

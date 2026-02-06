@@ -237,7 +237,9 @@ defmodule Ai.Providers.Google do
     Map.get(opts, :tool_choice, :auto)
   end
 
-  defp thinking_enabled?(%StreamOptions{reasoning: level}) when level in [:minimal, :low, :medium, :high], do: true
+  defp thinking_enabled?(%StreamOptions{reasoning: level})
+       when level in [:minimal, :low, :medium, :high], do: true
+
   defp thinking_enabled?(_), do: false
 
   defp get_thinking_level(%StreamOptions{reasoning: _level, thinking_budgets: budgets}) do
@@ -447,7 +449,11 @@ defmodule Ai.Providers.Google do
         {%ThinkingContent{}, false} ->
           # End thinking, start text
           old_idx = length(state.output.content) - 1
-          EventStream.push_async(stream, {:thinking_end, old_idx, state.current_block.thinking, state.output})
+
+          EventStream.push_async(
+            stream,
+            {:thinking_end, old_idx, state.current_block.thinking, state.output}
+          )
 
           block = %TextContent{text: "", text_signature: nil}
           output = %{state.output | content: state.output.content ++ [block]}
@@ -458,7 +464,11 @@ defmodule Ai.Providers.Google do
         {%TextContent{}, true} ->
           # End text, start thinking
           old_idx = length(state.output.content) - 1
-          EventStream.push_async(stream, {:text_end, old_idx, state.current_block.text, state.output})
+
+          EventStream.push_async(
+            stream,
+            {:text_end, old_idx, state.current_block.text, state.output}
+          )
 
           block = %ThinkingContent{thinking: "", thinking_signature: nil}
           output = %{state.output | content: state.output.content ++ [block]}
@@ -478,7 +488,9 @@ defmodule Ai.Providers.Google do
       if is_thinking do
         block = state.current_block
         new_sig = GoogleShared.retain_thought_signature(block.thinking_signature, thought_sig)
-        {%{block | thinking: block.thinking <> text, thinking_signature: new_sig}, :thinking_delta}
+
+        {%{block | thinking: block.thinking <> text, thinking_signature: new_sig},
+         :thinking_delta}
       else
         block = state.current_block
         new_sig = GoogleShared.retain_thought_signature(block.text_signature, thought_sig)
@@ -544,7 +556,12 @@ defmodule Ai.Providers.Google do
     idx = length(output.content) - 1
 
     EventStream.push_async(stream, {:tool_call_start, idx, output})
-    EventStream.push_async(stream, {:tool_call_delta, idx, Jason.encode!(tool_call.arguments), output})
+
+    EventStream.push_async(
+      stream,
+      {:tool_call_delta, idx, Jason.encode!(tool_call.arguments), output}
+    )
+
     EventStream.push_async(stream, {:tool_call_end, idx, tool_call, output})
 
     %{state | output: output, current_block: nil, tool_call_counter: state.tool_call_counter + 1}

@@ -149,7 +149,11 @@ defmodule CodingAgent.BashExecutor do
                 %{state | total_bytes: new_total}
               else
                 # Buffer in memory
-                %{state | output_buffer: [sanitized | state.output_buffer], total_bytes: new_total}
+                %{
+                  state
+                  | output_buffer: [sanitized | state.output_buffer],
+                    total_bytes: new_total
+                }
               end
             end
 

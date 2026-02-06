@@ -50,6 +50,9 @@ defmodule AgentCore.CliRunners.Types do
           }
 
     @enforce_keys [:engine, :value]
+    # Resume tokens are persisted into session JSONL files (via CodingAgent.SessionManager).
+    # Encode only the explicit fields to avoid accidental leakage if this struct grows.
+    @derive {Jason.Encoder, only: [:engine, :value]}
     defstruct [:engine, :value]
 
     @doc "Create a new resume token"
@@ -207,7 +210,9 @@ defmodule AgentCore.CliRunners.Types do
     defp strict_resume_regex("claude"), do: ~r/^`?claude\s+--resume\s+[a-zA-Z0-9_-]+`?$/i
     defp strict_resume_regex("kimi"), do: ~r/^`?kimi\s+--session\s+[a-zA-Z0-9_-]+`?$/i
     defp strict_resume_regex("lemon"), do: ~r/^`?lemon\s+resume\s+[a-zA-Z0-9_-]+`?$/i
-    defp strict_resume_regex(engine), do: ~r/^`?#{Regex.escape(engine)}\s+resume\s+[a-zA-Z0-9_-]+`?$/i
+
+    defp strict_resume_regex(engine),
+      do: ~r/^`?#{Regex.escape(engine)}\s+resume\s+[a-zA-Z0-9_-]+`?$/i
   end
 
   # ============================================================================
@@ -266,6 +271,7 @@ defmodule AgentCore.CliRunners.Types do
           }
 
     @enforce_keys [:id, :kind, :title]
+    @derive {Jason.Encoder, only: [:id, :kind, :title, :detail]}
     defstruct [:id, :kind, :title, detail: %{}]
 
     @doc "Create a new action"
@@ -298,6 +304,7 @@ defmodule AgentCore.CliRunners.Types do
           }
 
     @enforce_keys [:engine, :resume]
+    @derive {Jason.Encoder, only: [:type, :engine, :resume, :title, :meta]}
     defstruct type: :started, engine: nil, resume: nil, title: nil, meta: nil
 
     @doc "Create a new started event"
@@ -328,7 +335,14 @@ defmodule AgentCore.CliRunners.Types do
           }
 
     @enforce_keys [:engine, :action, :phase]
-    defstruct type: :action, engine: nil, action: nil, phase: nil, ok: nil, message: nil, level: nil
+    @derive {Jason.Encoder, only: [:type, :engine, :action, :phase, :ok, :message, :level]}
+    defstruct type: :action,
+              engine: nil,
+              action: nil,
+              phase: nil,
+              ok: nil,
+              message: nil,
+              level: nil
 
     @doc "Create a new action event"
     def new(engine, action, phase, opts \\ []) do
@@ -361,7 +375,14 @@ defmodule AgentCore.CliRunners.Types do
           }
 
     @enforce_keys [:engine, :ok, :answer]
-    defstruct type: :completed, engine: nil, ok: nil, answer: nil, resume: nil, error: nil, usage: nil
+    @derive {Jason.Encoder, only: [:type, :engine, :ok, :answer, :resume, :error, :usage]}
+    defstruct type: :completed,
+              engine: nil,
+              ok: nil,
+              answer: nil,
+              resume: nil,
+              error: nil,
+              usage: nil
 
     @doc "Create a successful completion event"
     def ok(engine, answer, opts \\ []) do
@@ -423,7 +444,13 @@ defmodule AgentCore.CliRunners.Types do
         completed = EventFactory.completed_ok(factory, "Done!")
 
     """
-    alias AgentCore.CliRunners.Types.{Action, ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
+    alias AgentCore.CliRunners.Types.{
+      Action,
+      ActionEvent,
+      CompletedEvent,
+      ResumeToken,
+      StartedEvent
+    }
 
     @type t :: %__MODULE__{
             engine: String.t(),
@@ -431,6 +458,7 @@ defmodule AgentCore.CliRunners.Types do
             note_seq: non_neg_integer()
           }
 
+    @derive {Jason.Encoder, only: [:engine, :resume, :note_seq]}
     defstruct engine: nil, resume: nil, note_seq: 0
 
     @doc "Create a new event factory for an engine"
@@ -471,17 +499,32 @@ defmodule AgentCore.CliRunners.Types do
 
     @doc "Create an action started event"
     def action_started(%__MODULE__{} = factory, action_id, kind, title, opts \\ []) do
-      action(factory, Keyword.merge(opts, action_id: action_id, kind: kind, title: title, phase: :started))
+      action(
+        factory,
+        Keyword.merge(opts, action_id: action_id, kind: kind, title: title, phase: :started)
+      )
     end
 
     @doc "Create an action updated event"
     def action_updated(%__MODULE__{} = factory, action_id, kind, title, opts \\ []) do
-      action(factory, Keyword.merge(opts, action_id: action_id, kind: kind, title: title, phase: :updated))
+      action(
+        factory,
+        Keyword.merge(opts, action_id: action_id, kind: kind, title: title, phase: :updated)
+      )
     end
 
     @doc "Create an action completed event"
     def action_completed(%__MODULE__{} = factory, action_id, kind, title, ok, opts \\ []) do
-      action(factory, Keyword.merge(opts, action_id: action_id, kind: kind, title: title, phase: :completed, ok: ok))
+      action(
+        factory,
+        Keyword.merge(opts,
+          action_id: action_id,
+          kind: kind,
+          title: title,
+          phase: :completed,
+          ok: ok
+        )
+      )
     end
 
     @doc "Create a note event with auto-incrementing ID"

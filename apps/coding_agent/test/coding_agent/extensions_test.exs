@@ -274,7 +274,9 @@ defmodule CodingAgent.ExtensionsTest do
       :code.delete(RichMetadataExtension)
     end
 
-    test "returns empty defaults for extensions without capabilities/config_schema", %{tmp_dir: tmp_dir} do
+    test "returns empty defaults for extensions without capabilities/config_schema", %{
+      tmp_dir: tmp_dir
+    } do
       extension_code = """
       defmodule MinimalExtension do
         @behaviour CodingAgent.Extensions.Extension
@@ -621,6 +623,7 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "status_report_extension.ex"), extension_code)
+
       {:ok, extensions, errors, _validation_errors} =
         Extensions.load_extensions_with_errors([tmp_dir])
 
@@ -652,6 +655,7 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "bad.ex"), bad_code)
+
       {:ok, extensions, errors, _validation_errors} =
         Extensions.load_extensions_with_errors([tmp_dir])
 
@@ -735,6 +739,7 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "bad_for_clear_test.ex"), invalid_code)
+
       {:ok, _extensions, errors, _validation_errors} =
         Extensions.load_extensions_with_errors([tmp_dir])
 
@@ -915,7 +920,9 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "provider_extension.ex"), extension_code)
-      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       providers = Extensions.get_providers(extensions)
       assert length(providers) == 1
@@ -982,7 +989,9 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "register_provider_ext.ex"), extension_code)
-      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       report = Extensions.register_extension_providers(extensions)
 
@@ -1006,7 +1015,9 @@ defmodule CodingAgent.ExtensionsTest do
       :code.delete(ExtModelProvider)
     end
 
-    test "detects conflicts when multiple extensions provide same provider name", %{tmp_dir: tmp_dir} do
+    test "detects conflicts when multiple extensions provide same provider name", %{
+      tmp_dir: tmp_dir
+    } do
       ext_a_code = """
       defmodule ConflictProviderExtA do
         @behaviour CodingAgent.Extensions.Extension
@@ -1049,7 +1060,9 @@ defmodule CodingAgent.ExtensionsTest do
 
       File.write!(Path.join(tmp_dir, "conflict_a.ex"), ext_a_code)
       File.write!(Path.join(tmp_dir, "conflict_b.ex"), ext_b_code)
-      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       report = Extensions.register_extension_providers(extensions)
 
@@ -1099,7 +1112,9 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "override_builtin.ex"), extension_code)
-      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       report = Extensions.register_extension_providers(extensions)
 
@@ -1131,7 +1146,9 @@ defmodule CodingAgent.ExtensionsTest do
 
       # Create a fake registration report
       report = %{
-        registered: [%{type: :model, name: :temp_provider, module: TempProviderModule, extension: SomeExt}],
+        registered: [
+          %{type: :model, name: :temp_provider, module: TempProviderModule, extension: SomeExt}
+        ],
         conflicts: [],
         total_registered: 1,
         total_conflicts: 0
@@ -1250,7 +1267,9 @@ defmodule CodingAgent.ExtensionsTest do
       File.write!(Path.join(tmp_dir, "three_way_a.ex"), ext_a_code)
       File.write!(Path.join(tmp_dir, "three_way_b.ex"), ext_b_code)
       File.write!(Path.join(tmp_dir, "three_way_c.ex"), ext_c_code)
-      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       report = Extensions.register_extension_providers(extensions)
 
@@ -1305,7 +1324,9 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "multi_provider.ex"), ext_code)
-      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       report = Extensions.register_extension_providers(extensions)
 
@@ -1355,7 +1376,9 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "shadowed_ext.ex"), ext_code)
-      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       report = Extensions.register_extension_providers(extensions)
 
@@ -1372,7 +1395,9 @@ defmodule CodingAgent.ExtensionsTest do
       :code.delete(ExtensionModelModule)
     end
 
-    test "built-in provider shadows multiple extension providers and creates conflict", %{tmp_dir: tmp_dir} do
+    test "built-in provider shadows multiple extension providers and creates conflict", %{
+      tmp_dir: tmp_dir
+    } do
       # Pre-register a built-in provider
       Ai.ProviderRegistry.register(:shared_builtin, SharedBuiltinModule)
 
@@ -1418,7 +1443,9 @@ defmodule CodingAgent.ExtensionsTest do
 
       File.write!(Path.join(tmp_dir, "builtin_shadow_a.ex"), ext_a_code)
       File.write!(Path.join(tmp_dir, "builtin_shadow_b.ex"), ext_b_code)
-      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       report = Extensions.register_extension_providers(extensions)
 
@@ -1496,7 +1523,9 @@ defmodule CodingAgent.ExtensionsTest do
       # Write Z file first to ensure file order doesn't matter
       File.write!(Path.join(tmp_dir, "zzz_ext.ex"), ext_z_code)
       File.write!(Path.join(tmp_dir, "aaa_ext.ex"), ext_a_code)
-      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       report = Extensions.register_extension_providers(extensions)
 
@@ -1570,7 +1599,10 @@ defmodule CodingAgent.ExtensionsTest do
       results =
         for _ <- 1..5 do
           Ai.ProviderRegistry.clear()
-          {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+          {:ok, extensions, _errors, _validation_errors} =
+            Extensions.load_extensions_with_errors([tmp_dir])
+
           report = Extensions.register_extension_providers(extensions)
           hd(report.conflicts).winner
         end
@@ -1619,7 +1651,9 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "storage_ext.ex"), ext_code)
-      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       report = Extensions.register_extension_providers(extensions)
 
@@ -1659,7 +1693,9 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "tool_executor_ext.ex"), ext_code)
-      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       report = Extensions.register_extension_providers(extensions)
 
@@ -1705,7 +1741,9 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "mixed_type_ext.ex"), ext_code)
-      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       report = Extensions.register_extension_providers(extensions)
 
@@ -1749,7 +1787,9 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "unknown_type_ext.ex"), ext_code)
-      {:ok, extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       report = Extensions.register_extension_providers(extensions)
 
@@ -1785,13 +1825,19 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "raising_providers.ex"), ext_code)
-      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       # Extension should fail validation
       assert extensions == []
       assert length(validation_errors) == 1
       assert hd(validation_errors).module == RaisingProvidersExt
-      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "providers/0 raised an error"))
+
+      assert Enum.any?(
+               hd(validation_errors).errors,
+               &String.contains?(&1, "providers/0 raised an error")
+             )
 
       # Cleanup
       :code.purge(RaisingProvidersExt)
@@ -1814,11 +1860,17 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "raising_name.ex"), ext_code)
-      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       assert extensions == []
       assert length(validation_errors) == 1
-      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "name/0 raised an error"))
+
+      assert Enum.any?(
+               hd(validation_errors).errors,
+               &String.contains?(&1, "name/0 raised an error")
+             )
 
       # Cleanup
       :code.purge(RaisingNameValidationExt)
@@ -1841,11 +1893,17 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "raising_version.ex"), ext_code)
-      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       assert extensions == []
       assert length(validation_errors) == 1
-      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "version/0 raised an error"))
+
+      assert Enum.any?(
+               hd(validation_errors).errors,
+               &String.contains?(&1, "version/0 raised an error")
+             )
 
       # Cleanup
       :code.purge(RaisingVersionValidationExt)
@@ -1871,11 +1929,17 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "raising_capabilities.ex"), ext_code)
-      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       assert extensions == []
       assert length(validation_errors) == 1
-      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "capabilities/0 raised an error"))
+
+      assert Enum.any?(
+               hd(validation_errors).errors,
+               &String.contains?(&1, "capabilities/0 raised an error")
+             )
 
       # Cleanup
       :code.purge(RaisingCapabilitiesExt)
@@ -1901,11 +1965,17 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "raising_config_schema.ex"), ext_code)
-      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       assert extensions == []
       assert length(validation_errors) == 1
-      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "config_schema/0 raised an error"))
+
+      assert Enum.any?(
+               hd(validation_errors).errors,
+               &String.contains?(&1, "config_schema/0 raised an error")
+             )
 
       # Cleanup
       :code.purge(RaisingConfigSchemaExt)
@@ -1931,11 +2001,17 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "raising_tools.ex"), ext_code)
-      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       assert extensions == []
       assert length(validation_errors) == 1
-      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "tools/1 raised an error"))
+
+      assert Enum.any?(
+               hd(validation_errors).errors,
+               &String.contains?(&1, "tools/1 raised an error")
+             )
 
       # Cleanup
       :code.purge(RaisingToolsValidationExt)
@@ -1961,11 +2037,17 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "raising_hooks.ex"), ext_code)
-      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       assert extensions == []
       assert length(validation_errors) == 1
-      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "hooks/0 raised an error"))
+
+      assert Enum.any?(
+               hd(validation_errors).errors,
+               &String.contains?(&1, "hooks/0 raised an error")
+             )
 
       # Cleanup
       :code.purge(RaisingHooksValidationExt)
@@ -1988,11 +2070,17 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "invalid_name_type.ex"), ext_code)
-      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       assert extensions == []
       assert length(validation_errors) == 1
-      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "name/0 must return a string"))
+
+      assert Enum.any?(
+               hd(validation_errors).errors,
+               &String.contains?(&1, "name/0 must return a string")
+             )
 
       # Cleanup
       :code.purge(InvalidNameTypeExt)
@@ -2013,11 +2101,17 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "invalid_version_type.ex"), ext_code)
-      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       assert extensions == []
       assert length(validation_errors) == 1
-      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "version/0 must return a string"))
+
+      assert Enum.any?(
+               hd(validation_errors).errors,
+               &String.contains?(&1, "version/0 must return a string")
+             )
 
       # Cleanup
       :code.purge(InvalidVersionTypeExt)
@@ -2041,11 +2135,17 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "invalid_tools_type.ex"), ext_code)
-      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       assert extensions == []
       assert length(validation_errors) == 1
-      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "tools/1 must return a list"))
+
+      assert Enum.any?(
+               hd(validation_errors).errors,
+               &String.contains?(&1, "tools/1 must return a list")
+             )
 
       # Cleanup
       :code.purge(InvalidToolsTypeExt)
@@ -2069,11 +2169,17 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "invalid_hooks_type.ex"), ext_code)
-      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       assert extensions == []
       assert length(validation_errors) == 1
-      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "hooks/0 must return a keyword list"))
+
+      assert Enum.any?(
+               hd(validation_errors).errors,
+               &String.contains?(&1, "hooks/0 must return a keyword list")
+             )
 
       # Cleanup
       :code.purge(InvalidHooksTypeExt)
@@ -2097,11 +2203,17 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "invalid_capabilities_type.ex"), ext_code)
-      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       assert extensions == []
       assert length(validation_errors) == 1
-      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "capabilities/0 must return a list"))
+
+      assert Enum.any?(
+               hd(validation_errors).errors,
+               &String.contains?(&1, "capabilities/0 must return a list")
+             )
 
       # Cleanup
       :code.purge(InvalidCapabilitiesTypeExt)
@@ -2125,11 +2237,17 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "invalid_config_schema_type.ex"), ext_code)
-      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       assert extensions == []
       assert length(validation_errors) == 1
-      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "config_schema/0 must return a map"))
+
+      assert Enum.any?(
+               hd(validation_errors).errors,
+               &String.contains?(&1, "config_schema/0 must return a map")
+             )
 
       # Cleanup
       :code.purge(InvalidConfigSchemaTypeExt)
@@ -2153,11 +2271,17 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "invalid_providers_type.ex"), ext_code)
-      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       assert extensions == []
       assert length(validation_errors) == 1
-      assert Enum.any?(hd(validation_errors).errors, &String.contains?(&1, "providers/0 must return a list"))
+
+      assert Enum.any?(
+               hd(validation_errors).errors,
+               &String.contains?(&1, "providers/0 must return a list")
+             )
 
       # Cleanup
       :code.purge(InvalidProvidersTypeExt)
@@ -2184,7 +2308,9 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "multiple_invalid.ex"), ext_code)
-      {:ok, extensions, _errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, _errors, validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       assert extensions == []
       assert length(validation_errors) == 1
@@ -2264,7 +2390,9 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "cache_load_errors.ex"), invalid_code)
-      {:ok, _extensions, errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, _extensions, errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       # Should have errors
       assert length(errors) == 1
@@ -2354,7 +2482,9 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "persist_error.ex"), invalid_code)
-      {:ok, _extensions, _errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, _extensions, _errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       # Query multiple times
       {errors1, ts1} = Extensions.last_load_errors()
@@ -2443,7 +2573,9 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "empty_errors.ex"), valid_code)
-      {:ok, _extensions, errors, _validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, _extensions, errors, _validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       # No errors
       assert errors == []
@@ -2508,7 +2640,9 @@ defmodule CodingAgent.ExtensionsTest do
       """
 
       File.write!(Path.join(tmp_dir, "validation_persist.ex"), ext_code)
-      {:ok, extensions, load_errors, validation_errors} = Extensions.load_extensions_with_errors([tmp_dir])
+
+      {:ok, extensions, load_errors, validation_errors} =
+        Extensions.load_extensions_with_errors([tmp_dir])
 
       # No load errors (file compiled fine)
       assert load_errors == []

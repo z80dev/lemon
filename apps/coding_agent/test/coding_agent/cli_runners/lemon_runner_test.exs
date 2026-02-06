@@ -2,6 +2,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.CliRunners.LemonRunner
+
   alias AgentCore.CliRunners.Types.{
     Action,
     ActionEvent,
@@ -10,6 +11,7 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     ResumeToken,
     StartedEvent
   }
+
   alias AgentCore.EventStream
 
   # ============================================================================
@@ -92,13 +94,14 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     test "action_started creates action event with phase :started" do
       factory = EventFactory.new("lemon")
 
-      {event, _factory} = EventFactory.action_started(
-        factory,
-        "tool_1",
-        :command,
-        "$ ls -la",
-        detail: %{name: "Bash", args: %{"command" => "ls -la"}}
-      )
+      {event, _factory} =
+        EventFactory.action_started(
+          factory,
+          "tool_1",
+          :command,
+          "$ ls -la",
+          detail: %{name: "Bash", args: %{"command" => "ls -la"}}
+        )
 
       assert %ActionEvent{} = event
       assert event.engine == "lemon"
@@ -112,13 +115,14 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     test "action_updated creates action event with phase :updated" do
       factory = EventFactory.new("lemon")
 
-      {event, _factory} = EventFactory.action_updated(
-        factory,
-        "tool_1",
-        :command,
-        "$ ls -la",
-        detail: %{partial_result: "file1.txt\n"}
-      )
+      {event, _factory} =
+        EventFactory.action_updated(
+          factory,
+          "tool_1",
+          :command,
+          "$ ls -la",
+          detail: %{partial_result: "file1.txt\n"}
+        )
 
       assert event.phase == :updated
       assert event.action.detail.partial_result == "file1.txt\n"
@@ -127,14 +131,15 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     test "action_completed creates action event with phase :completed" do
       factory = EventFactory.new("lemon")
 
-      {event, _factory} = EventFactory.action_completed(
-        factory,
-        "tool_1",
-        :command,
-        "$ ls -la",
-        true,
-        detail: %{result: "file1.txt\nfile2.txt\n"}
-      )
+      {event, _factory} =
+        EventFactory.action_completed(
+          factory,
+          "tool_1",
+          :command,
+          "$ ls -la",
+          true,
+          detail: %{result: "file1.txt\nfile2.txt\n"}
+        )
 
       assert event.phase == :completed
       assert event.ok == true
@@ -144,14 +149,15 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     test "action_completed with failure" do
       factory = EventFactory.new("lemon")
 
-      {event, _factory} = EventFactory.action_completed(
-        factory,
-        "tool_1",
-        :command,
-        "$ invalid_command",
-        false,
-        detail: %{result: "command not found"}
-      )
+      {event, _factory} =
+        EventFactory.action_completed(
+          factory,
+          "tool_1",
+          :command,
+          "$ invalid_command",
+          false,
+          detail: %{result: "command not found"}
+        )
 
       assert event.phase == :completed
       assert event.ok == false
@@ -162,11 +168,12 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
       token = ResumeToken.new("lemon", "session_123")
       {_event, factory} = EventFactory.started(factory, token)
 
-      {event, _factory} = EventFactory.completed_ok(
-        factory,
-        "Task completed successfully",
-        usage: %{input_tokens: 100, output_tokens: 50}
-      )
+      {event, _factory} =
+        EventFactory.completed_ok(
+          factory,
+          "Task completed successfully",
+          usage: %{input_tokens: 100, output_tokens: 50}
+        )
 
       assert %CompletedEvent{} = event
       assert event.engine == "lemon"
@@ -181,11 +188,12 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
       token = ResumeToken.new("lemon", "session_123")
       {_event, factory} = EventFactory.started(factory, token)
 
-      {event, _factory} = EventFactory.completed_error(
-        factory,
-        "Connection timeout",
-        answer: "Partial response before error"
-      )
+      {event, _factory} =
+        EventFactory.completed_error(
+          factory,
+          "Connection timeout",
+          answer: "Partial response before error"
+        )
 
       assert %CompletedEvent{} = event
       assert event.ok == false
@@ -398,7 +406,8 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
       long_cmd = String.duplicate("a", 100)
       title = tool_title("Bash", %{"command" => long_cmd})
       assert String.starts_with?(title, "$ ")
-      assert String.length(title) <= 62  # "$ " + 60 chars
+      # "$ " + 60 chars
+      assert String.length(title) <= 62
     end
 
     test "Bash takes first line of multiline command" do
@@ -439,7 +448,8 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     test "WebSearch truncates long query" do
       long_query = String.duplicate("word ", 20)
       title = tool_title("WebSearch", %{"query" => long_query})
-      assert String.length(title) <= 48  # "Search: " + 40 chars
+      # "Search: " + 40 chars
+      assert String.length(title) <= 48
     end
 
     test "Task shows truncated description" do
@@ -500,7 +510,8 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
       result = String.duplicate("a", 600)
       truncated = truncate_result(result)
 
-      assert String.length(truncated) == 503  # 500 + "..."
+      # 500 + "..."
+      assert String.length(truncated) == 503
       assert String.ends_with?(truncated, "...")
     end
 
@@ -576,10 +587,13 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     test "extracts text from list content" do
       messages = [
         %{role: :user, content: "Hello"},
-        %{role: :assistant, content: [
-          %{type: :text, text: "First part. "},
-          %{type: :text, text: "Second part."}
-        ]}
+        %{
+          role: :assistant,
+          content: [
+            %{type: :text, text: "First part. "},
+            %{type: :text, text: "Second part."}
+          ]
+        }
       ]
 
       assert extract_answer(messages, "") == "First part. \nSecond part."
@@ -753,11 +767,13 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
 
     test "creates event with optional fields" do
       action = Action.new("tool_1", :command, "$ ls")
-      event = ActionEvent.new("lemon", action, :completed,
-        ok: true,
-        message: "Command succeeded",
-        level: :info
-      )
+
+      event =
+        ActionEvent.new("lemon", action, :completed,
+          ok: true,
+          message: "Command succeeded",
+          level: :info
+        )
 
       assert event.ok == true
       assert event.message == "Command succeeded"
@@ -780,10 +796,12 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
 
     test "error/3 creates failed completion" do
       token = ResumeToken.new("lemon", "session_123")
-      event = CompletedEvent.error("lemon", "Timeout",
-        resume: token,
-        answer: "Partial response"
-      )
+
+      event =
+        CompletedEvent.error("lemon", "Timeout",
+          resume: token,
+          answer: "Partial response"
+        )
 
       assert event.type == :completed
       assert event.ok == false
@@ -839,7 +857,9 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
 
     test "rejects mismatched engine" do
       token = ResumeToken.new("claude", "session_123")
-      assert validate_resume_engine(token, "lemon") == {:error, {:wrong_engine, "claude", "lemon"}}
+
+      assert validate_resume_engine(token, "lemon") ==
+               {:error, {:wrong_engine, "claude", "lemon"}}
     end
 
     test "accepts nil token" do
@@ -848,8 +868,12 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
 
     # Helper to mirror the session resume validation logic
     defp validate_resume_engine(nil, _expected), do: :ok
-    defp validate_resume_engine(%ResumeToken{engine: engine}, expected) when engine == expected, do: :ok
-    defp validate_resume_engine(%ResumeToken{engine: other}, expected), do: {:error, {:wrong_engine, other, expected}}
+
+    defp validate_resume_engine(%ResumeToken{engine: engine}, expected) when engine == expected,
+      do: :ok
+
+    defp validate_resume_engine(%ResumeToken{engine: other}, expected),
+      do: {:error, {:wrong_engine, other, expected}}
   end
 
   # ============================================================================
@@ -858,12 +882,13 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
 
   describe "EventStream patterns used by LemonRunner" do
     test "EventStream can be created with runner-like options" do
-      {:ok, stream} = EventStream.start_link(
-        max_queue: 10_000,
-        drop_strategy: :drop_oldest,
-        owner: self(),
-        timeout: 600_000
-      )
+      {:ok, stream} =
+        EventStream.start_link(
+          max_queue: 10_000,
+          drop_strategy: :drop_oldest,
+          owner: self(),
+          timeout: 600_000
+        )
 
       assert Process.alive?(stream)
 
@@ -893,10 +918,11 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
       assert length(received_events) >= 1
 
       # Find the cli_event we pushed
-      cli_events = Enum.filter(received_events, fn
-        {:cli_event, _} -> true
-        _ -> false
-      end)
+      cli_events =
+        Enum.filter(received_events, fn
+          {:cli_event, _} -> true
+          _ -> false
+        end)
 
       assert length(cli_events) == 1
       {:cli_event, event} = hd(cli_events)
@@ -915,14 +941,14 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
 
       # Should include the test event and agent_end
       assert Enum.any?(events, fn
-        {:cli_event, :test_event} -> true
-        _ -> false
-      end)
+               {:cli_event, :test_event} -> true
+               _ -> false
+             end)
 
       assert Enum.any?(events, fn
-        {:agent_end, []} -> true
-        _ -> false
-      end)
+               {:agent_end, []} -> true
+               _ -> false
+             end)
     end
   end
 

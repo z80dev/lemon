@@ -218,7 +218,11 @@ defmodule LemonGateway.ThreadWorker do
   # Add a job to the pending steers for a given run pid
   defp add_pending_steer(state, run_pid, job, fallback_mode) do
     pending = Map.get(state.pending_steers, run_pid, [])
-    %{state | pending_steers: Map.put(state.pending_steers, run_pid, [{job, fallback_mode} | pending])}
+
+    %{
+      state
+      | pending_steers: Map.put(state.pending_steers, run_pid, [{job, fallback_mode} | pending])
+    }
   end
 
   # Remove a specific job from pending steers (called when steer is rejected normally)
@@ -238,7 +242,8 @@ defmodule LemonGateway.ThreadWorker do
     new_pending_steers = Map.delete(state.pending_steers, run_pid)
 
     # Convert each pending steer to its fallback mode and enqueue
-    Enum.reduce(pending, %{state | pending_steers: new_pending_steers}, fn {job, fallback_mode}, acc_state ->
+    Enum.reduce(pending, %{state | pending_steers: new_pending_steers}, fn {job, fallback_mode},
+                                                                           acc_state ->
       fallback_job = %{job | queue_mode: fallback_mode}
       enqueue_by_mode(fallback_job, acc_state)
     end)

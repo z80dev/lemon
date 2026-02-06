@@ -37,9 +37,10 @@ defmodule CodingAgent.UI.HeadlessTest do
     end
 
     test "handles large option list" do
-      options = Enum.map(1..1000, fn i ->
-        %{label: "Option #{i}", value: "opt_#{i}", description: "Description #{i}"}
-      end)
+      options =
+        Enum.map(1..1000, fn i ->
+          %{label: "Option #{i}", value: "opt_#{i}", description: "Description #{i}"}
+        end)
 
       assert Headless.select("Many options", options) == {:ok, nil}
     end
@@ -114,59 +115,66 @@ defmodule CodingAgent.UI.HeadlessTest do
 
   describe "notify/2" do
     test "logs :info type messages" do
-      log = capture_log(fn ->
-        assert Headless.notify("Info message", :info) == :ok
-      end)
+      log =
+        capture_log(fn ->
+          assert Headless.notify("Info message", :info) == :ok
+        end)
 
       assert log =~ "Info message"
     end
 
     test "logs :warning type messages" do
-      log = capture_log(fn ->
-        assert Headless.notify("Warning message", :warning) == :ok
-      end)
+      log =
+        capture_log(fn ->
+          assert Headless.notify("Warning message", :warning) == :ok
+        end)
 
       assert log =~ "Warning message"
     end
 
     test "logs :error type messages" do
-      log = capture_log(fn ->
-        assert Headless.notify("Error message", :error) == :ok
-      end)
+      log =
+        capture_log(fn ->
+          assert Headless.notify("Error message", :error) == :ok
+        end)
 
       assert log =~ "Error message"
     end
 
     test "logs :success type messages with prefix" do
-      log = capture_log(fn ->
-        assert Headless.notify("Success message", :success) == :ok
-      end)
+      log =
+        capture_log(fn ->
+          assert Headless.notify("Success message", :success) == :ok
+        end)
 
       assert log =~ "[SUCCESS]"
       assert log =~ "Success message"
     end
 
     test "handles empty message" do
-      log = capture_log(fn ->
-        assert Headless.notify("", :info) == :ok
-      end)
+      log =
+        capture_log(fn ->
+          assert Headless.notify("", :info) == :ok
+        end)
 
       # Should not crash, log might be empty or contain minimal output
       assert is_binary(log)
     end
 
     test "handles special characters in message" do
-      log = capture_log(fn ->
-        assert Headless.notify("Message with \u00E9moticons \u{1F389}", :info) == :ok
-      end)
+      log =
+        capture_log(fn ->
+          assert Headless.notify("Message with \u00E9moticons \u{1F389}", :info) == :ok
+        end)
 
       assert log =~ "moticons"
     end
 
     test "handles multiline messages" do
-      log = capture_log(fn ->
-        assert Headless.notify("Line 1\nLine 2\nLine 3", :info) == :ok
-      end)
+      log =
+        capture_log(fn ->
+          assert Headless.notify("Line 1\nLine 2\nLine 3", :info) == :ok
+        end)
 
       assert log =~ "Line 1"
     end
@@ -239,26 +247,29 @@ defmodule CodingAgent.UI.HeadlessTest do
     end
 
     test "logs debug with valid message" do
-      log = capture_log([level: :debug], fn ->
-        assert Headless.set_working_message("Processing...") == :ok
-      end)
+      log =
+        capture_log([level: :debug], fn ->
+          assert Headless.set_working_message("Processing...") == :ok
+        end)
 
       assert log =~ "[WORKING]"
       assert log =~ "Processing..."
     end
 
     test "returns :ok with empty string" do
-      log = capture_log([level: :debug], fn ->
-        assert Headless.set_working_message("") == :ok
-      end)
+      log =
+        capture_log([level: :debug], fn ->
+          assert Headless.set_working_message("") == :ok
+        end)
 
       assert log =~ "[WORKING]"
     end
 
     test "handles special characters" do
-      log = capture_log([level: :debug], fn ->
-        assert Headless.set_working_message("Loading \u{1F504}") == :ok
-      end)
+      log =
+        capture_log([level: :debug], fn ->
+          assert Headless.set_working_message("Loading \u{1F504}") == :ok
+        end)
 
       assert log =~ "[WORKING]"
     end
@@ -469,14 +480,15 @@ defmodule CodingAgent.UI.HeadlessTest do
     end
 
     test "concurrent calls from multiple processes" do
-      tasks = for i <- 1..50 do
-        Task.async(fn ->
-          Headless.set_status("key_#{i}", "value_#{i}")
-          Headless.select("Title #{i}", [])
-          Headless.confirm("Confirm #{i}", "Message #{i}")
-          Headless.has_ui?()
-        end)
-      end
+      tasks =
+        for i <- 1..50 do
+          Task.async(fn ->
+            Headless.set_status("key_#{i}", "value_#{i}")
+            Headless.select("Title #{i}", [])
+            Headless.confirm("Confirm #{i}", "Message #{i}")
+            Headless.has_ui?()
+          end)
+        end
 
       results = Task.await_many(tasks)
 
@@ -494,10 +506,11 @@ defmodule CodingAgent.UI.HeadlessTest do
       types = [:info, :warning, :error, :success]
 
       for type <- types do
-        log = capture_log(fn ->
-          result = Headless.notify("Test message for #{type}", type)
-          assert result == :ok
-        end)
+        log =
+          capture_log(fn ->
+            result = Headless.notify("Test message for #{type}", type)
+            assert result == :ok
+          end)
 
         assert log =~ "Test message for #{type}"
       end

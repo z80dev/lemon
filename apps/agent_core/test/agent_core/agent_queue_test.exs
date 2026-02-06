@@ -162,6 +162,7 @@ defmodule AgentCore.AgentQueueTest do
 
       # The steering queue should have been consumed one at a time
       internal_state = :sys.get_state(agent)
+
       # After completion, remaining messages should still be in queue (since only one was consumed per turn)
       # The exact count depends on how many turns occurred
       assert is_list(internal_state.steering_queue)

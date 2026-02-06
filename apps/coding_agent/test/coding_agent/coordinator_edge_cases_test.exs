@@ -61,8 +61,12 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
     |> Task.yield_many(timeout_ms)
     |> Enum.map(fn {task, result} ->
       case result do
-        {:ok, value} -> {:ok, value}
-        {:exit, reason} -> {:exit, reason}
+        {:ok, value} ->
+          {:ok, value}
+
+        {:exit, reason} ->
+          {:exit, reason}
+
         nil ->
           Task.shutdown(task, :brutal_kill)
           {:exit, :timeout}
@@ -78,10 +82,10 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
     @tag :tmp_dir
     test "coordinator process dies if started with invalid cwd type", %{tmp_dir: _tmp_dir} do
       result =
-        Coordinator.start_link([
+        Coordinator.start_link(
           cwd: 12345,
           model: mock_model()
-        ])
+        )
 
       case result do
         {:error, _} ->
@@ -113,9 +117,7 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
       # Coordinator should start even with nonexistent directory
       # Error occurs when actually running subagents
       coordinator =
-        start_coordinator(
-          cwd: "/nonexistent/path/that/does/not/exist/#{:rand.uniform(10000)}"
-        )
+        start_coordinator(cwd: "/nonexistent/path/that/does/not/exist/#{:rand.uniform(10000)}")
 
       assert Process.alive?(coordinator)
       GenServer.stop(coordinator)
@@ -213,7 +215,9 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
 
       task =
         Task.async(fn ->
-          results = Coordinator.run_subagents(coordinator, [%{prompt: "Long task"}], timeout: 10_000)
+          results =
+            Coordinator.run_subagents(coordinator, [%{prompt: "Long task"}], timeout: 10_000)
+
           send(parent, {:completed, results})
         end)
 
@@ -264,7 +268,10 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
     test "handles prompt with unicode characters", %{tmp_dir: tmp_dir} do
       coordinator = start_coordinator(cwd: tmp_dir)
 
-      specs = [%{prompt: "Task with unicode: \u{1F600} \u{1F4BB} \u{2764} \u{00E9}\u{00F1}\u{00FC}"}]
+      specs = [
+        %{prompt: "Task with unicode: \u{1F600} \u{1F4BB} \u{2764} \u{00E9}\u{00F1}\u{00FC}"}
+      ]
+
       results = Coordinator.run_subagents(coordinator, specs, timeout: 100)
 
       assert [result] = results
@@ -484,7 +491,11 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
 
       # Start long-running subagents
       Task.start(fn ->
-        results = Coordinator.run_subagents(coordinator, [%{prompt: "Task 1"}, %{prompt: "Task 2"}], timeout: 10_000)
+        results =
+          Coordinator.run_subagents(coordinator, [%{prompt: "Task 1"}, %{prompt: "Task 2"}],
+            timeout: 10_000
+          )
+
         send(parent, {:results, results})
       end)
 
@@ -530,10 +541,12 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
 
       # All should complete
       assert length(results) == 3
+
       assert Enum.all?(results, fn
                {:ok, [result]} -> result.status in [:timeout, :error]
                {:exit, _} -> true
              end)
+
       assert Process.alive?(coordinator)
     end
 
@@ -551,6 +564,7 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
       results = await_tasks(tasks, 10_000)
 
       assert length(results) == 5
+
       assert Enum.all?(results, fn
                {:ok, result} -> match?({:error, _}, result)
                {:exit, _} -> true
@@ -606,6 +620,7 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
                {:ok, result} -> is_list(result)
                {:exit, _} -> true
              end)
+
       assert Process.alive?(coordinator)
       Process.flag(:trap_exit, false)
     end

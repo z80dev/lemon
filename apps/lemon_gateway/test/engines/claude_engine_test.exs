@@ -90,7 +90,9 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
   describe "extract_resume/1" do
     test "extracts token from plain text" do
       text = "claude --resume sess_abc123"
-      assert %LemonGateway.Types.ResumeToken{engine: "claude", value: "sess_abc123"} = Claude.extract_resume(text)
+
+      assert %LemonGateway.Types.ResumeToken{engine: "claude", value: "sess_abc123"} =
+               Claude.extract_resume(text)
     end
 
     test "extracts token from text with surrounding content" do
@@ -105,7 +107,9 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
 
     test "extracts token case-insensitively" do
       text = "CLAUDE --RESUME Session123"
-      assert %LemonGateway.Types.ResumeToken{engine: "claude", value: "Session123"} = Claude.extract_resume(text)
+
+      assert %LemonGateway.Types.ResumeToken{engine: "claude", value: "Session123"} =
+               Claude.extract_resume(text)
     end
 
     test "returns nil for non-matching text" do
@@ -120,8 +124,10 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
     end
 
     test "returns nil for malformed claude tokens" do
-      assert Claude.extract_resume("claude resume abc") == nil  # missing --
-      assert Claude.extract_resume("claude--resume abc") == nil  # no space
+      # missing --
+      assert Claude.extract_resume("claude resume abc") == nil
+      # no space
+      assert Claude.extract_resume("claude--resume abc") == nil
     end
 
     test "extracts first token when multiple present" do
@@ -183,8 +189,10 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
     end
 
     test "returns false for malformed lines" do
-      refute Claude.is_resume_line("claude resume sess_123")  # missing --
-      refute Claude.is_resume_line("claude--resume sess_123")  # no space
+      # missing --
+      refute Claude.is_resume_line("claude resume sess_123")
+      # no space
+      refute Claude.is_resume_line("claude--resume sess_123")
     end
   end
 
@@ -242,7 +250,12 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
   describe "CliAdapter.to_gateway_event/1 - StartedEvent" do
     test "maps claude StartedEvent to gateway Started" do
       token = CoreResumeToken.new("claude", "sess_abc")
-      started = StartedEvent.new("claude", token, title: "Claude Session", meta: %{model: "claude-opus-4"})
+
+      started =
+        StartedEvent.new("claude", token,
+          title: "Claude Session",
+          meta: %{model: "claude-opus-4"}
+        )
 
       result = CliAdapter.to_gateway_event(started)
 
@@ -318,7 +331,12 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
   describe "CliAdapter.to_gateway_event/1 - CompletedEvent" do
     test "maps successful CompletedEvent" do
       token = CoreResumeToken.new("claude", "sess_abc")
-      ev = CompletedEvent.ok("claude", "The answer is 42", resume: token, usage: %{input_tokens: 100})
+
+      ev =
+        CompletedEvent.ok("claude", "The answer is 42",
+          resume: token,
+          usage: %{input_tokens: 100}
+        )
 
       result = CliAdapter.to_gateway_event(ev)
 
@@ -439,6 +457,7 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
   describe "Job struct for Claude engine" do
     test "creates valid job for Claude" do
       scope = %ChatScope{transport: :telegram, chat_id: 123}
+
       job = %Job{
         scope: scope,
         user_msg_id: 456,
@@ -454,6 +473,7 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
     test "creates job with resume token" do
       scope = %ChatScope{transport: :telegram, chat_id: 123}
       resume = %LemonGateway.Types.ResumeToken{engine: "claude", value: "sess_abc"}
+
       job = %Job{
         scope: scope,
         user_msg_id: 456,
@@ -474,6 +494,7 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
           text: "test",
           queue_mode: mode
         }
+
         assert job.queue_mode == mode
       end
     end
@@ -518,6 +539,7 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
 
     test "allows optional title and meta fields" do
       resume = %LemonGateway.Types.ResumeToken{engine: "claude", value: "s1"}
+
       started = %Event.Started{
         engine: "claude",
         resume: resume,
@@ -580,6 +602,7 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
 
     test "allows optional ok, message, and level fields" do
       action = %Event.Action{id: "a1", kind: "tool", title: "Test"}
+
       ev = %Event.ActionEvent{
         engine: "claude",
         action: action,

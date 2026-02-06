@@ -56,7 +56,10 @@ defmodule CodingAgent.MessagesTest do
 
     test "converts UserMessage with content blocks" do
       msg = %UserMessage{
-        content: [%TextContent{text: "hello"}, %ImageContent{data: "abc123", mime_type: "image/png"}],
+        content: [
+          %TextContent{text: "hello"},
+          %ImageContent{data: "abc123", mime_type: "image/png"}
+        ],
         timestamp: 123
       }
 
@@ -321,7 +324,14 @@ defmodule CodingAgent.MessagesTest do
     end
 
     test "converts plain map with role: :tool_result" do
-      msg = %{role: :tool_result, tool_call_id: "abc", content: [], is_error: false, timestamp: 100}
+      msg = %{
+        role: :tool_result,
+        tool_call_id: "abc",
+        content: [],
+        is_error: false,
+        timestamp: 100
+      }
+
       [result] = Messages.to_llm([msg])
       assert %Ai.Types.ToolResultMessage{} = result
       assert result.tool_call_id == "abc"
@@ -925,7 +935,13 @@ defmodule CodingAgent.MessagesTest do
 
     test "preserves all stop_reason values" do
       for stop_reason <- [:stop, :length, :tool_use, :error, :aborted] do
-        msg = %AssistantMessage{content: [], model: "test", stop_reason: stop_reason, timestamp: 0}
+        msg = %AssistantMessage{
+          content: [],
+          model: "test",
+          stop_reason: stop_reason,
+          timestamp: 0
+        }
+
         [result] = Messages.to_llm([msg])
         assert result.stop_reason == stop_reason
       end
@@ -1096,7 +1112,14 @@ defmodule CodingAgent.MessagesTest do
     end
 
     test "AssistantMessage with all fields populated" do
-      usage = %Usage{input: 10, output: 20, cache_read: 5, cache_write: 2, total_tokens: 37, cost: 0.001}
+      usage = %Usage{
+        input: 10,
+        output: 20,
+        cache_read: 5,
+        cache_write: 2,
+        total_tokens: 37,
+        cost: 0.001
+      }
 
       msg = %AssistantMessage{
         content: [%TextContent{text: "response"}],

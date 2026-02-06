@@ -3,7 +3,19 @@ defmodule Ai.Providers.OpenAIResponsesSharedTest do
 
   alias Ai.EventStream
   alias Ai.Providers.OpenAIResponsesShared
-  alias Ai.Types.{AssistantMessage, Cost, ImageContent, Model, ModelCost, TextContent, ToolCall, ToolResultMessage, Usage, UserMessage}
+
+  alias Ai.Types.{
+    AssistantMessage,
+    Cost,
+    ImageContent,
+    Model,
+    ModelCost,
+    TextContent,
+    ToolCall,
+    ToolResultMessage,
+    Usage,
+    UserMessage
+  }
 
   test "process_stream catches thrown stream errors" do
     {:ok, stream} = EventStream.start_link()
@@ -425,7 +437,12 @@ defmodule Ai.Providers.OpenAIResponsesSharedTest do
     events = [
       %{
         "type" => "response.output_item.added",
-        "item" => %{"type" => "function_call", "call_id" => "call_1", "id" => "fc_1", "name" => "tool_a"}
+        "item" => %{
+          "type" => "function_call",
+          "call_id" => "call_1",
+          "id" => "fc_1",
+          "name" => "tool_a"
+        }
       },
       %{
         "type" => "response.function_call_arguments.done",
@@ -469,7 +486,10 @@ defmodule Ai.Providers.OpenAIResponsesSharedTest do
         "item" => %{"type" => "reasoning"}
       },
       %{"type" => "response.reasoning_summary_text.delta", "delta" => "Step 1"},
-      %{"type" => "response.output_item.done", "item" => %{"type" => "reasoning", "summary" => [%{"text" => "Step 1"}]}}
+      %{
+        "type" => "response.output_item.done",
+        "item" => %{"type" => "reasoning", "summary" => [%{"text" => "Step 1"}]}
+      }
     ]
 
     output = %AssistantMessage{

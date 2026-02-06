@@ -88,9 +88,7 @@ defmodule AgentCore.LoopEdgeCasesTest do
       final_response = Mocks.assistant_message("Completed")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       signal = AbortSignal.new()
 
@@ -142,9 +140,7 @@ defmodule AgentCore.LoopEdgeCasesTest do
       final_response = Mocks.assistant_message("Done")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       stream = Loop.agent_loop([user_message("Run")], context, config, nil, nil)
 
@@ -179,9 +175,7 @@ defmodule AgentCore.LoopEdgeCasesTest do
       final_response = Mocks.assistant_message("All echoed")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       events = Loop.stream([user_message("Echo many")], context, config) |> Enum.to_list()
 
@@ -214,9 +208,7 @@ defmodule AgentCore.LoopEdgeCasesTest do
       final_response = Mocks.assistant_message("Mixed results")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       events = Loop.stream([user_message("Run mixed")], context, config) |> Enum.to_list()
 
@@ -256,9 +248,7 @@ defmodule AgentCore.LoopEdgeCasesTest do
       response = Mocks.assistant_message("")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn_single(response)
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
 
       events = Loop.stream([user_message("")], context, config) |> Enum.to_list()
 
@@ -271,9 +261,7 @@ defmodule AgentCore.LoopEdgeCasesTest do
       response = Mocks.assistant_message(long_text)
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn_single(response)
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
 
       events = Loop.stream([user_message("Long response")], context, config) |> Enum.to_list()
 
@@ -290,9 +278,7 @@ defmodule AgentCore.LoopEdgeCasesTest do
       response = Mocks.assistant_message(special_text)
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn_single(response)
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
 
       events = Loop.stream([user_message("Special chars")], context, config) |> Enum.to_list()
 
@@ -311,16 +297,16 @@ defmodule AgentCore.LoopEdgeCasesTest do
       config = fn i ->
         response = Mocks.assistant_message("Response #{i}")
 
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn_single(response)
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
       end
 
       # Start 5 concurrent loops
       tasks =
         for i <- 1..5 do
           Task.async(fn ->
-            stream = Loop.agent_loop([user_message("Message #{i}")], context, config.(i), nil, nil)
+            stream =
+              Loop.agent_loop([user_message("Message #{i}")], context, config.(i), nil, nil)
+
             EventStream.result(stream)
           end)
         end
@@ -343,9 +329,7 @@ defmodule AgentCore.LoopEdgeCasesTest do
         tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
         final_response = Mocks.assistant_message("3")
 
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
       end
 
       tasks =
@@ -480,9 +464,7 @@ defmodule AgentCore.LoopEdgeCasesTest do
       final_response = Mocks.assistant_message("Processed large output")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       events = Loop.stream([user_message("Large")], context, config) |> Enum.to_list()
 
@@ -519,9 +501,7 @@ defmodule AgentCore.LoopEdgeCasesTest do
       final_response = Mocks.assistant_message("Done")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       events = Loop.stream([user_message("Nil")], context, config) |> Enum.to_list()
 

@@ -707,7 +707,11 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       tasks =
         for i <- 1..10 do
           Task.async(fn ->
-            result = start_test_session(session_id: "concurrent-#{i}-#{:erlang.unique_integer([:positive])}")
+            result =
+              start_test_session(
+                session_id: "concurrent-#{i}-#{:erlang.unique_integer([:positive])}"
+              )
+
             send(parent, {:created, i, result})
             result
           end)
@@ -717,9 +721,9 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
 
       # All should succeed
       assert Enum.all?(results, fn
-        {:ok, pid} -> is_pid(pid) and Process.alive?(pid)
-        _ -> false
-      end)
+               {:ok, pid} -> is_pid(pid) and Process.alive?(pid)
+               _ -> false
+             end)
     end
 
     test "concurrent creation produces unique session IDs" do

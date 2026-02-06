@@ -48,7 +48,9 @@ defmodule AgentCore.ContextPropertyTest do
       # UTF-8 with specific ranges
       map(list_of(utf8_char(), min_length: 1, max_length: 100), &Enum.join/1),
       # Mixed ASCII and unicode
-      map({string(:ascii, max_length: 50), unicode_word(), string(:ascii, max_length: 50)}, fn {a, u, b} ->
+      map({string(:ascii, max_length: 50), unicode_word(), string(:ascii, max_length: 50)}, fn {a,
+                                                                                                u,
+                                                                                                b} ->
         a <> u <> b
       end)
     ])
@@ -66,8 +68,20 @@ defmodule AgentCore.ContextPropertyTest do
       # Greek
       integer(0x0370..0x03FF),
       # Emoji (common ones)
-      member_of([0x1F600, 0x1F601, 0x1F602, 0x1F603, 0x1F604, 0x1F605,
-                 0x1F389, 0x1F38A, 0x1F38B, 0x2764, 0x2665, 0x2666])
+      member_of([
+        0x1F600,
+        0x1F601,
+        0x1F602,
+        0x1F603,
+        0x1F604,
+        0x1F605,
+        0x1F389,
+        0x1F38A,
+        0x1F38B,
+        0x2764,
+        0x2665,
+        0x2666
+      ])
     ])
     |> map(fn codepoint -> <<codepoint::utf8>> end)
   end
@@ -140,9 +154,12 @@ defmodule AgentCore.ContextPropertyTest do
       # Long single line
       map(integer(1000..5000), fn len -> String.duplicate("x", len) end),
       # Many short lines
-      map(list_of(string(:printable, max_length: 80), min_length: 50, max_length: 100), fn lines ->
-        Enum.join(lines, "\n")
-      end),
+      map(
+        list_of(string(:printable, max_length: 80), min_length: 50, max_length: 100),
+        fn lines ->
+          Enum.join(lines, "\n")
+        end
+      ),
       # Mixed large content
       map({integer(500..1000), integer(500..1000)}, fn {a, b} ->
         String.duplicate("a", a) <> "\n" <> String.duplicate("b", b)
@@ -171,9 +188,12 @@ defmodule AgentCore.ContextPropertyTest do
   end
 
   defp tool_call_content_block do
-    map({string(:alphanumeric, min_length: 1, max_length: 20), string(:printable, max_length: 50)}, fn {key, value} ->
-      %{type: :tool_call, arguments: %{key => value}}
-    end)
+    map(
+      {string(:alphanumeric, min_length: 1, max_length: 20), string(:printable, max_length: 50)},
+      fn {key, value} ->
+        %{type: :tool_call, arguments: %{key => value}}
+      end
+    )
   end
 
   defp image_content_block do
@@ -209,8 +229,10 @@ defmodule AgentCore.ContextPropertyTest do
 
   describe "estimate_size properties" do
     property "estimate_size is always non-negative" do
-      check all messages <- message_list(),
-                prompt <- system_prompt() do
+      check all(
+              messages <- message_list(),
+              prompt <- system_prompt()
+            ) do
         size = Context.estimate_size(messages, prompt)
         assert size >= 0
       end
@@ -221,8 +243,10 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "estimate_size is additive - system prompt adds to message size" do
-      check all messages <- message_list(),
-                prompt_text <- string(:printable, min_length: 1, max_length: 100) do
+      check all(
+              messages <- message_list(),
+              prompt_text <- string(:printable, min_length: 1, max_length: 100)
+            ) do
         size_without_prompt = Context.estimate_size(messages, nil)
         size_with_prompt = Context.estimate_size(messages, prompt_text)
 
@@ -233,7 +257,7 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "estimate_size increases monotonically with messages" do
-      check all messages <- list_of(message(), min_length: 2, max_length: 20) do
+      check all(messages <- list_of(message(), min_length: 2, max_length: 20)) do
         sizes =
           messages
           |> Enum.scan([], fn msg, acc -> acc ++ [msg] end)
@@ -249,7 +273,7 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "estimate_size equals sum of individual message sizes" do
-      check all messages <- list_of(message(), min_length: 1, max_length: 20) do
+      check all(messages <- list_of(message(), min_length: 1, max_length: 20)) do
         total_size = Context.estimate_size(messages, nil)
 
         # Sum of individual message sizes
@@ -263,15 +287,17 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "estimate_size handles messages with content blocks" do
-      check all msg <- message_with_blocks() do
+      check all(msg <- message_with_blocks()) do
         size = Context.estimate_size([msg], nil)
         assert size >= 0
       end
     end
 
     property "estimate_size is consistent across multiple calls" do
-      check all messages <- message_list(),
-                prompt <- system_prompt() do
+      check all(
+              messages <- message_list(),
+              prompt <- system_prompt()
+            ) do
         size1 = Context.estimate_size(messages, prompt)
         size2 = Context.estimate_size(messages, prompt)
         size3 = Context.estimate_size(messages, prompt)
@@ -288,14 +314,14 @@ defmodule AgentCore.ContextPropertyTest do
 
   describe "estimate_tokens properties" do
     property "estimate_tokens is always non-negative" do
-      check all char_count <- integer(0..1_000_000) do
+      check all(char_count <- integer(0..1_000_000)) do
         tokens = Context.estimate_tokens(char_count)
         assert tokens >= 0
       end
     end
 
     property "estimate_tokens is proportional to char count (divide by 4)" do
-      check all char_count <- integer(0..1_000_000) do
+      check all(char_count <- integer(0..1_000_000)) do
         tokens = Context.estimate_tokens(char_count)
         # Should be char_count / 4 (integer division)
         assert tokens == div(char_count, 4)
@@ -303,7 +329,7 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "estimate_tokens is monotonically increasing" do
-      check all counts <- list_of(integer(0..100_000), min_length: 2, max_length: 10) do
+      check all(counts <- list_of(integer(0..100_000), min_length: 2, max_length: 10)) do
         sorted = Enum.sort(counts)
         tokens = Enum.map(sorted, &Context.estimate_tokens/1)
 
@@ -326,7 +352,7 @@ defmodule AgentCore.ContextPropertyTest do
       assert Context.estimate_tokens(4) == 1
 
       # Boundary values
-      check all n <- integer(0..100) do
+      check all(n <- integer(0..100)) do
         tokens = Context.estimate_tokens(n)
         assert tokens == div(n, 4)
         assert tokens * 4 <= n
@@ -341,18 +367,23 @@ defmodule AgentCore.ContextPropertyTest do
 
   describe "truncate properties" do
     property "truncate never increases message count" do
-      check all messages <- message_list(),
-                max_messages <- integer(1..200),
-                max_chars <- integer(100..100_000) do
-        {truncated, _dropped} = Context.truncate(messages, max_messages: max_messages, max_chars: max_chars)
+      check all(
+              messages <- message_list(),
+              max_messages <- integer(1..200),
+              max_chars <- integer(100..100_000)
+            ) do
+        {truncated, _dropped} =
+          Context.truncate(messages, max_messages: max_messages, max_chars: max_chars)
 
         assert length(truncated) <= length(messages)
       end
     end
 
     property "truncate dropped count equals original minus truncated" do
-      check all messages <- message_list(),
-                max_messages <- integer(1..100) do
+      check all(
+              messages <- message_list(),
+              max_messages <- integer(1..100)
+            ) do
         {truncated, dropped} = Context.truncate(messages, max_messages: max_messages)
 
         assert dropped == length(messages) - length(truncated)
@@ -360,8 +391,10 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "truncate respects max_messages limit" do
-      check all messages <- list_of(message(), min_length: 1, max_length: 100),
-                max_messages <- integer(1..50) do
+      check all(
+              messages <- list_of(message(), min_length: 1, max_length: 100),
+              max_messages <- integer(1..50)
+            ) do
         {truncated, _dropped} = Context.truncate(messages, max_messages: max_messages)
 
         # Truncated should not exceed max_messages (may be less if original was smaller)
@@ -371,9 +404,10 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "truncate with large limits returns original messages" do
-      check all messages <- list_of(message(), max_length: 20) do
+      check all(messages <- list_of(message(), max_length: 20)) do
         # Set limits much larger than messages
-        {truncated, dropped} = Context.truncate(messages, max_messages: 1000, max_chars: 10_000_000)
+        {truncated, dropped} =
+          Context.truncate(messages, max_messages: 1000, max_chars: 10_000_000)
 
         assert truncated == messages
         assert dropped == 0
@@ -381,18 +415,21 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "truncate returns subset of original messages (sliding_window)" do
-      check all messages <- list_of(message(), min_length: 3, max_length: 30),
-                max_messages <- integer(2..10) do
-        {truncated, _dropped} = Context.truncate(messages,
-          max_messages: max_messages,
-          strategy: :sliding_window,
-          keep_first_user: false
-        )
+      check all(
+              messages <- list_of(message(), min_length: 3, max_length: 30),
+              max_messages <- integer(2..10)
+            ) do
+        {truncated, _dropped} =
+          Context.truncate(messages,
+            max_messages: max_messages,
+            strategy: :sliding_window,
+            keep_first_user: false
+          )
 
         # All truncated messages should be present in original (subset property)
         Enum.each(truncated, fn msg ->
           assert Enum.member?(messages, msg),
-            "Truncated message not found in original"
+                 "Truncated message not found in original"
         end)
 
         # Truncated count should be <= original
@@ -401,15 +438,18 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "truncate with keep_first_user preserves first user message" do
-      check all messages <- list_of(message(), min_length: 5, max_length: 30),
-                max_messages <- integer(3..10) do
+      check all(
+              messages <- list_of(message(), min_length: 5, max_length: 30),
+              max_messages <- integer(3..10)
+            ) do
         # Ensure there's at least one user message
         messages_with_user = [%{role: :user, content: "first user message"} | messages]
 
-        {truncated, _dropped} = Context.truncate(messages_with_user,
-          max_messages: max_messages,
-          keep_first_user: true
-        )
+        {truncated, _dropped} =
+          Context.truncate(messages_with_user,
+            max_messages: max_messages,
+            keep_first_user: true
+          )
 
         if length(truncated) > 0 do
           # First user message should be preserved if truncation happened
@@ -424,12 +464,15 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "truncate bookends strategy keeps first and last messages" do
-      check all messages <- list_of(message(), min_length: 10, max_length: 30),
-                max_messages <- integer(4..8) do
-        {truncated, _dropped} = Context.truncate(messages,
-          max_messages: max_messages,
-          strategy: :keep_bookends
-        )
+      check all(
+              messages <- list_of(message(), min_length: 10, max_length: 30),
+              max_messages <- integer(4..8)
+            ) do
+        {truncated, _dropped} =
+          Context.truncate(messages,
+            max_messages: max_messages,
+            strategy: :keep_bookends
+          )
 
         if length(truncated) >= 2 and length(messages) >= 2 do
           # First message should match
@@ -441,38 +484,44 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "truncate returns only messages from original list" do
-      check all messages <- list_of(message(), min_length: 5, max_length: 30),
-                max_messages <- integer(2..10),
-                strategy <- truncation_strategy() do
+      check all(
+              messages <- list_of(message(), min_length: 5, max_length: 30),
+              max_messages <- integer(2..10),
+              strategy <- truncation_strategy()
+            ) do
         # Add unique identifiers to track membership
         indexed_messages =
           messages
           |> Enum.with_index()
           |> Enum.map(fn {msg, idx} -> Map.put(msg, :_test_index, idx) end)
 
-        {truncated, _dropped} = Context.truncate(indexed_messages,
-          max_messages: max_messages,
-          strategy: strategy,
-          keep_first_user: false
-        )
+        {truncated, _dropped} =
+          Context.truncate(indexed_messages,
+            max_messages: max_messages,
+            strategy: strategy,
+            keep_first_user: false
+          )
 
         # All truncated messages should have valid indices from original
         all_indices = MapSet.new(0..(length(indexed_messages) - 1))
         truncated_indices = truncated |> Enum.map(& &1._test_index) |> MapSet.new()
 
         assert MapSet.subset?(truncated_indices, all_indices),
-          "Truncated contains messages not in original"
+               "Truncated contains messages not in original"
       end
     end
 
     property "truncate always produces valid (non-nil) messages" do
-      check all messages <- message_list(),
-                max_messages <- integer(0..50),
-                max_chars <- integer(0..10_000) do
-        {truncated, _dropped} = Context.truncate(messages,
-          max_messages: max_messages,
-          max_chars: max_chars
-        )
+      check all(
+              messages <- message_list(),
+              max_messages <- integer(0..50),
+              max_chars <- integer(0..10_000)
+            ) do
+        {truncated, _dropped} =
+          Context.truncate(messages,
+            max_messages: max_messages,
+            max_chars: max_chars
+          )
 
         # All messages should be valid maps with role
         Enum.each(truncated, fn msg ->
@@ -483,8 +532,10 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "idempotent truncation - truncating already-truncated messages is stable" do
-      check all messages <- list_of(message(), min_length: 5, max_length: 30),
-                max_messages <- integer(2..10) do
+      check all(
+              messages <- list_of(message(), min_length: 5, max_length: 30),
+              max_messages <- integer(2..10)
+            ) do
         opts = [max_messages: max_messages, keep_first_user: false]
 
         {truncated1, _} = Context.truncate(messages, opts)
@@ -497,14 +548,17 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "truncate with both limits applies stricter one" do
-      check all messages <- list_of(message(), min_length: 10, max_length: 30),
-                max_messages <- integer(5..15),
-                max_chars <- integer(10..1000) do
-        {truncated, _dropped} = Context.truncate(messages,
-          max_messages: max_messages,
-          max_chars: max_chars,
-          keep_first_user: false
-        )
+      check all(
+              messages <- list_of(message(), min_length: 10, max_length: 30),
+              max_messages <- integer(5..15),
+              max_chars <- integer(10..1000)
+            ) do
+        {truncated, _dropped} =
+          Context.truncate(messages,
+            max_messages: max_messages,
+            max_chars: max_chars,
+            keep_first_user: false
+          )
 
         # Result should satisfy both constraints (or be minimal)
         assert length(truncated) <= max_messages
@@ -519,33 +573,37 @@ defmodule AgentCore.ContextPropertyTest do
 
   describe "large_context? properties" do
     property "large_context? returns boolean" do
-      check all messages <- message_list(),
-                prompt <- system_prompt(),
-                threshold <- integer(1..1_000_000) do
+      check all(
+              messages <- message_list(),
+              prompt <- system_prompt(),
+              threshold <- integer(1..1_000_000)
+            ) do
         result = Context.large_context?(messages, prompt, threshold: threshold)
         assert is_boolean(result)
       end
     end
 
     property "large_context? is consistent with estimate_size" do
-      check all messages <- message_list(),
-                prompt <- system_prompt(),
-                threshold <- integer(100..100_000) do
+      check all(
+              messages <- message_list(),
+              prompt <- system_prompt(),
+              threshold <- integer(100..100_000)
+            ) do
         size = Context.estimate_size(messages, prompt)
         is_large = Context.large_context?(messages, prompt, threshold: threshold)
 
-        assert is_large == (size > threshold)
+        assert is_large == size > threshold
       end
     end
 
     property "empty context is never large (with any reasonable threshold)" do
-      check all threshold <- integer(1..1_000_000) do
+      check all(threshold <- integer(1..1_000_000)) do
         refute Context.large_context?([], nil, threshold: threshold)
       end
     end
 
     property "context becomes large when threshold decreases below size" do
-      check all messages <- list_of(message(), min_length: 1, max_length: 10) do
+      check all(messages <- list_of(message(), min_length: 1, max_length: 10)) do
         size = Context.estimate_size(messages, nil)
 
         if size > 0 do
@@ -566,24 +624,30 @@ defmodule AgentCore.ContextPropertyTest do
 
   describe "check_size properties" do
     property "check_size returns :ok, :warning, or :critical" do
-      check all messages <- message_list(),
-                prompt <- system_prompt() do
+      check all(
+              messages <- message_list(),
+              prompt <- system_prompt()
+            ) do
         result = Context.check_size(messages, prompt, log: false)
         assert result in [:ok, :warning, :critical]
       end
     end
 
     property "check_size is consistent with thresholds" do
-      check all messages <- message_list(),
-                prompt <- system_prompt(),
-                warning <- integer(100..10_000),
-                critical <- integer(10_001..100_000) do
+      check all(
+              messages <- message_list(),
+              prompt <- system_prompt(),
+              warning <- integer(100..10_000),
+              critical <- integer(10_001..100_000)
+            ) do
         size = Context.estimate_size(messages, prompt)
-        result = Context.check_size(messages, prompt,
-          warning_threshold: warning,
-          critical_threshold: critical,
-          log: false
-        )
+
+        result =
+          Context.check_size(messages, prompt,
+            warning_threshold: warning,
+            critical_threshold: critical,
+            log: false
+          )
 
         cond do
           size > critical -> assert result == :critical
@@ -594,17 +658,20 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "check_size critical takes precedence over warning" do
-      check all messages <- message_list(),
-                prompt <- system_prompt() do
+      check all(
+              messages <- message_list(),
+              prompt <- system_prompt()
+            ) do
         size = Context.estimate_size(messages, prompt)
 
         # Set thresholds so size exceeds both
         if size > 2 do
-          result = Context.check_size(messages, prompt,
-            warning_threshold: 1,
-            critical_threshold: 2,
-            log: false
-          )
+          result =
+            Context.check_size(messages, prompt,
+              warning_threshold: 1,
+              critical_threshold: 2,
+              log: false
+            )
 
           assert result == :critical
         end
@@ -612,8 +679,10 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "check_size is idempotent" do
-      check all messages <- message_list(),
-                prompt <- system_prompt() do
+      check all(
+              messages <- message_list(),
+              prompt <- system_prompt()
+            ) do
         result1 = Context.check_size(messages, prompt, log: false)
         result2 = Context.check_size(messages, prompt, log: false)
         result3 = Context.check_size(messages, prompt, log: false)
@@ -630,8 +699,10 @@ defmodule AgentCore.ContextPropertyTest do
 
   describe "stats properties" do
     property "stats returns consistent values" do
-      check all messages <- message_list(),
-                prompt <- system_prompt() do
+      check all(
+              messages <- message_list(),
+              prompt <- system_prompt()
+            ) do
         stats = Context.stats(messages, prompt)
 
         # Message count should match
@@ -654,7 +725,7 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "stats by_role contains all roles present in messages" do
-      check all messages <- list_of(message(), min_length: 1, max_length: 20) do
+      check all(messages <- list_of(message(), min_length: 1, max_length: 20)) do
         stats = Context.stats(messages, nil)
 
         messages_roles = messages |> Enum.map(& &1.role) |> Enum.uniq() |> MapSet.new()
@@ -665,7 +736,7 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "stats by_role counts are accurate" do
-      check all messages <- list_of(message(), min_length: 1, max_length: 30) do
+      check all(messages <- list_of(message(), min_length: 1, max_length: 30)) do
         stats = Context.stats(messages, nil)
 
         # Manually count roles
@@ -680,8 +751,10 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "stats is consistent across multiple calls" do
-      check all messages <- message_list(),
-                prompt <- system_prompt() do
+      check all(
+              messages <- message_list(),
+              prompt <- system_prompt()
+            ) do
         stats1 = Context.stats(messages, prompt)
         stats2 = Context.stats(messages, prompt)
 
@@ -690,8 +763,10 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "stats estimated_tokens is always less than or equal to char_count" do
-      check all messages <- message_list(),
-                prompt <- system_prompt() do
+      check all(
+              messages <- message_list(),
+              prompt <- system_prompt()
+            ) do
         stats = Context.stats(messages, prompt)
 
         # Tokens * 4 should be <= char_count (since we divide by 4)
@@ -706,21 +781,26 @@ defmodule AgentCore.ContextPropertyTest do
 
   describe "make_transform properties" do
     property "make_transform returns a function that truncates" do
-      check all messages <- list_of(message(), min_length: 5, max_length: 30),
-                max_messages <- integer(2..10) do
+      check all(
+              messages <- list_of(message(), min_length: 5, max_length: 30),
+              max_messages <- integer(2..10)
+            ) do
         transform = Context.make_transform(max_messages: max_messages, warn_on_truncation: false)
 
         {:ok, truncated} = transform.(messages, nil)
 
         # Should respect the limit
-        assert length(truncated) <= max_messages + 1  # +1 for possible first user preservation
+        # +1 for possible first user preservation
+        assert length(truncated) <= max_messages + 1
         assert length(truncated) <= length(messages)
       end
     end
 
     property "make_transform returns {:ok, messages} tuple" do
-      check all messages <- message_list(),
-                max_messages <- integer(1..100) do
+      check all(
+              messages <- message_list(),
+              max_messages <- integer(1..100)
+            ) do
         transform = Context.make_transform(max_messages: max_messages, warn_on_truncation: false)
 
         result = transform.(messages, nil)
@@ -730,7 +810,7 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "make_transform with signal parameter works" do
-      check all messages <- message_list() do
+      check all(messages <- message_list()) do
         transform = Context.make_transform(warn_on_truncation: false)
         signal = make_ref()
 
@@ -741,13 +821,16 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "make_transform preserves subset relationship" do
-      check all messages <- list_of(message(), min_length: 5, max_length: 20),
-                max_messages <- integer(2..10) do
-        transform = Context.make_transform(
-          max_messages: max_messages,
-          keep_first_user: false,
-          warn_on_truncation: false
-        )
+      check all(
+              messages <- list_of(message(), min_length: 5, max_length: 20),
+              max_messages <- integer(2..10)
+            ) do
+        transform =
+          Context.make_transform(
+            max_messages: max_messages,
+            keep_first_user: false,
+            warn_on_truncation: false
+          )
 
         {:ok, truncated} = transform.(messages, nil)
 
@@ -765,8 +848,10 @@ defmodule AgentCore.ContextPropertyTest do
 
   describe "unicode handling properties" do
     property "estimate_size handles unicode strings correctly" do
-      check all messages <- unicode_message_list(),
-                prompt <- unicode_system_prompt() do
+      check all(
+              messages <- unicode_message_list(),
+              prompt <- unicode_system_prompt()
+            ) do
         size = Context.estimate_size(messages, prompt)
         assert size >= 0
 
@@ -787,8 +872,10 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "truncate handles unicode messages" do
-      check all messages <- unicode_message_list(),
-                max_messages <- integer(1..20) do
+      check all(
+              messages <- unicode_message_list(),
+              max_messages <- integer(1..20)
+            ) do
         {truncated, dropped} = Context.truncate(messages, max_messages: max_messages)
 
         assert is_list(truncated)
@@ -798,8 +885,10 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "stats handles unicode content" do
-      check all messages <- unicode_message_list(),
-                prompt <- unicode_system_prompt() do
+      check all(
+              messages <- unicode_message_list(),
+              prompt <- unicode_system_prompt()
+            ) do
         stats = Context.stats(messages, prompt)
 
         assert stats.message_count == length(messages)
@@ -814,12 +903,18 @@ defmodule AgentCore.ContextPropertyTest do
       # "a\u0301" (a + combining accent) is 1 grapheme in modern Elixir
       test_strings = [
         {"hello", 5},
-        {"\u3053\u3093\u306B\u3061\u306F", 5},  # Japanese hiragana
-        {"\u{1F600}", 1},  # Single emoji
-        {"\u{1F600}\u{1F601}\u{1F602}", 3},  # Multiple emoji
-        {"a\u0301", 1},  # 'a' with combining accent = 1 grapheme
-        {"\u4E16\u754C", 2},  # Chinese "world"
-        {"\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}", 1},  # Family emoji (single grapheme)
+        # Japanese hiragana
+        {"\u3053\u3093\u306B\u3061\u306F", 5},
+        # Single emoji
+        {"\u{1F600}", 1},
+        # Multiple emoji
+        {"\u{1F600}\u{1F601}\u{1F602}", 3},
+        # 'a' with combining accent = 1 grapheme
+        {"a\u0301", 1},
+        # Chinese "world"
+        {"\u4E16\u754C", 2},
+        # Family emoji (single grapheme)
+        {"\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}", 1}
       ]
 
       for {str, expected_len} <- test_strings do
@@ -830,7 +925,7 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "empty and whitespace unicode strings handled" do
-      check all whitespace <- member_of(["", " ", "\t", "\n", "  ", "\n\n", "\t\t"]) do
+      check all(whitespace <- member_of(["", " ", "\t", "\n", "  ", "\n\n", "\t\t"])) do
         messages = [%{role: :user, content: whitespace}]
         size = Context.estimate_size(messages, nil)
 
@@ -845,7 +940,7 @@ defmodule AgentCore.ContextPropertyTest do
 
   describe "large message handling properties" do
     property "estimate_size handles large messages" do
-      check all msg <- large_message() do
+      check all(msg <- large_message()) do
         size = Context.estimate_size([msg], nil)
         assert size >= 0
 
@@ -856,8 +951,10 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "truncate handles large messages gracefully" do
-      check all messages <- list_of(large_message(), min_length: 3, max_length: 10),
-                max_chars <- integer(100..10_000) do
+      check all(
+              messages <- list_of(large_message(), min_length: 3, max_length: 10),
+              max_chars <- integer(100..10_000)
+            ) do
         {truncated, dropped} = Context.truncate(messages, max_chars: max_chars)
 
         assert is_list(truncated)
@@ -867,7 +964,7 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "stats handles large messages" do
-      check all msg <- large_message() do
+      check all(msg <- large_message()) do
         stats = Context.stats([msg], nil)
 
         assert stats.message_count == 1
@@ -877,7 +974,7 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "large_context? detects large messages" do
-      check all msg <- large_message() do
+      check all(msg <- large_message()) do
         size = Context.estimate_size([msg], nil)
 
         # Should be large when threshold is less than size
@@ -897,7 +994,7 @@ defmodule AgentCore.ContextPropertyTest do
 
   describe "system prompt edge cases" do
     property "nil system prompt contributes zero to size" do
-      check all messages <- message_list() do
+      check all(messages <- message_list()) do
         size_nil = Context.estimate_size(messages, nil)
         size_empty = Context.estimate_size(messages, "")
 
@@ -906,7 +1003,7 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "system prompt size is exact string length" do
-      check all prompt <- string(:printable, min_length: 1, max_length: 500) do
+      check all(prompt <- string(:printable, min_length: 1, max_length: 500)) do
         size_with = Context.estimate_size([], prompt)
         size_without = Context.estimate_size([], nil)
 
@@ -916,15 +1013,17 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "system prompt with special characters" do
-      check all prompt <- unicode_content() do
+      check all(prompt <- unicode_content()) do
         size = Context.estimate_size([], prompt)
         assert size == String.length(prompt)
       end
     end
 
     property "very long system prompts handled correctly" do
-      check all base <- string(:printable, max_length: 100),
-                multiplier <- integer(10..100) do
+      check all(
+              base <- string(:printable, max_length: 100),
+              multiplier <- integer(10..100)
+            ) do
         long_prompt = String.duplicate(base, multiplier)
         size = Context.estimate_size([], long_prompt)
 
@@ -933,7 +1032,7 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "system prompt stats accuracy" do
-      check all prompt <- string(:printable, max_length: 200) do
+      check all(prompt <- string(:printable, max_length: 200)) do
         stats = Context.stats([], prompt)
 
         assert stats.system_prompt_chars == String.length(prompt)
@@ -943,15 +1042,16 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "check_size considers system prompt in threshold" do
-      check all prompt <- string(:printable, min_length: 100, max_length: 500) do
+      check all(prompt <- string(:printable, min_length: 100, max_length: 500)) do
         prompt_len = String.length(prompt)
 
         # With threshold below prompt length, should trigger warning
-        result = Context.check_size([], prompt,
-          warning_threshold: prompt_len - 1,
-          critical_threshold: prompt_len * 2,
-          log: false
-        )
+        result =
+          Context.check_size([], prompt,
+            warning_threshold: prompt_len - 1,
+            critical_threshold: prompt_len * 2,
+            log: false
+          )
 
         assert result == :warning
       end
@@ -964,7 +1064,7 @@ defmodule AgentCore.ContextPropertyTest do
 
   describe "content block properties" do
     property "text content blocks contribute text length" do
-      check all text <- string(:printable, max_length: 100) do
+      check all(text <- string(:printable, max_length: 100)) do
         msg = %{role: :assistant, content: [%{type: :text, text: text}]}
         size = Context.estimate_size([msg], nil)
 
@@ -973,7 +1073,7 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "thinking content blocks contribute thinking length" do
-      check all thinking <- string(:printable, max_length: 100) do
+      check all(thinking <- string(:printable, max_length: 100)) do
         msg = %{role: :assistant, content: [%{type: :thinking, thinking: thinking}]}
         size = Context.estimate_size([msg], nil)
 
@@ -985,11 +1085,12 @@ defmodule AgentCore.ContextPropertyTest do
       msg = %{role: :assistant, content: [%{type: :image}]}
       size = Context.estimate_size([msg], nil)
 
-      assert size == 100  # Fixed size for images
+      # Fixed size for images
+      assert size == 100
     end
 
     property "multiple content blocks are summed" do
-      check all blocks <- content_block_list() do
+      check all(blocks <- content_block_list()) do
         msg = %{role: :assistant, content: blocks}
         size = Context.estimate_size([msg], nil)
 
@@ -998,8 +1099,10 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "tool_call arguments contribute to size" do
-      check all key <- string(:alphanumeric, min_length: 1, max_length: 20),
-                value <- string(:printable, max_length: 50) do
+      check all(
+              key <- string(:alphanumeric, min_length: 1, max_length: 20),
+              value <- string(:printable, max_length: 50)
+            ) do
         args = %{key => value}
         msg = %{role: :assistant, content: [%{type: :tool_call, arguments: args}]}
         size = Context.estimate_size([msg], nil)
@@ -1013,7 +1116,8 @@ defmodule AgentCore.ContextPropertyTest do
       msg = %{role: :assistant, content: [%{type: :tool_call, arguments: %{}}]}
       size = Context.estimate_size([msg], nil)
 
-      assert size == 2  # "{}"
+      # "{}"
+      assert size == 2
     end
 
     property "nil content in blocks handled gracefully" do
@@ -1040,46 +1144,52 @@ defmodule AgentCore.ContextPropertyTest do
 
   describe "message order preservation" do
     property "truncated messages come from original list" do
-      check all messages <- list_of(message(), min_length: 5, max_length: 30),
-                max_messages <- integer(2..10) do
+      check all(
+              messages <- list_of(message(), min_length: 5, max_length: 30),
+              max_messages <- integer(2..10)
+            ) do
         # Add unique identifiers to track membership
         indexed_messages =
           messages
           |> Enum.with_index()
           |> Enum.map(fn {msg, idx} -> Map.put(msg, :_test_index, idx) end)
 
-        {truncated, _dropped} = Context.truncate(indexed_messages,
-          max_messages: max_messages,
-          keep_first_user: false
-        )
+        {truncated, _dropped} =
+          Context.truncate(indexed_messages,
+            max_messages: max_messages,
+            keep_first_user: false
+          )
 
         # All truncated messages should be from the original list
         original_indices = MapSet.new(0..(length(indexed_messages) - 1))
         truncated_indices = truncated |> Enum.map(& &1._test_index) |> MapSet.new()
 
         assert MapSet.subset?(truncated_indices, original_indices),
-          "Truncated contains indices not in original"
+               "Truncated contains indices not in original"
 
         # No duplicate messages
         assert length(truncated) == MapSet.size(truncated_indices),
-          "Truncated contains duplicate messages"
+               "Truncated contains duplicate messages"
       end
     end
 
     property "sliding window includes recent messages" do
-      check all messages <- list_of(message(), min_length: 10, max_length: 30),
-                max_messages <- integer(3..8) do
+      check all(
+              messages <- list_of(message(), min_length: 10, max_length: 30),
+              max_messages <- integer(3..8)
+            ) do
         # Add unique identifiers
         indexed_messages =
           messages
           |> Enum.with_index()
           |> Enum.map(fn {msg, idx} -> Map.put(msg, :_test_index, idx) end)
 
-        {truncated, _dropped} = Context.truncate(indexed_messages,
-          max_messages: max_messages,
-          strategy: :sliding_window,
-          keep_first_user: false
-        )
+        {truncated, _dropped} =
+          Context.truncate(indexed_messages,
+            max_messages: max_messages,
+            strategy: :sliding_window,
+            keep_first_user: false
+          )
 
         if length(truncated) > 0 do
           # Truncated messages should include some of the most recent messages
@@ -1090,18 +1200,21 @@ defmodule AgentCore.ContextPropertyTest do
           # The max index in truncated should be close to the end of original
           # Allow some flexibility due to char limits
           assert max_index >= original_max - max_messages,
-            "Expected recent messages but max index was #{max_index} out of #{original_max}"
+                 "Expected recent messages but max index was #{max_index} out of #{original_max}"
         end
       end
     end
 
     property "bookends keeps first and last messages" do
-      check all messages <- list_of(message(), min_length: 10, max_length: 30),
-                max_messages <- integer(4..8) do
-        {truncated, _dropped} = Context.truncate(messages,
-          max_messages: max_messages,
-          strategy: :keep_bookends
-        )
+      check all(
+              messages <- list_of(message(), min_length: 10, max_length: 30),
+              max_messages <- integer(4..8)
+            ) do
+        {truncated, _dropped} =
+          Context.truncate(messages,
+            max_messages: max_messages,
+            strategy: :keep_bookends
+          )
 
         if length(truncated) >= 2 do
           assert List.first(truncated) == List.first(messages)
@@ -1117,8 +1230,10 @@ defmodule AgentCore.ContextPropertyTest do
 
   describe "combined invariants" do
     property "truncate then stats gives consistent results" do
-      check all messages <- list_of(message(), min_length: 5, max_length: 30),
-                max_messages <- integer(2..10) do
+      check all(
+              messages <- list_of(message(), min_length: 5, max_length: 30),
+              max_messages <- integer(2..10)
+            ) do
         {truncated, dropped} = Context.truncate(messages, max_messages: max_messages)
         stats = Context.stats(truncated, nil)
 
@@ -1129,8 +1244,10 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "estimate_size equals stats.char_count" do
-      check all messages <- message_list(),
-                prompt <- system_prompt() do
+      check all(
+              messages <- message_list(),
+              prompt <- system_prompt()
+            ) do
         size = Context.estimate_size(messages, prompt)
         stats = Context.stats(messages, prompt)
 
@@ -1139,16 +1256,19 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "check_size uses estimate_size internally" do
-      check all messages <- message_list(),
-                prompt <- system_prompt() do
+      check all(
+              messages <- message_list(),
+              prompt <- system_prompt()
+            ) do
         size = Context.estimate_size(messages, prompt)
 
         # check_size should use the same size calculation
-        result = Context.check_size(messages, prompt,
-          warning_threshold: size,
-          critical_threshold: size + 1,
-          log: false
-        )
+        result =
+          Context.check_size(messages, prompt,
+            warning_threshold: size,
+            critical_threshold: size + 1,
+            log: false
+          )
 
         # At exactly warning_threshold, should be :ok (uses >)
         assert result == :ok
@@ -1156,8 +1276,10 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "make_transform produces same result as truncate" do
-      check all messages <- list_of(message(), min_length: 5, max_length: 20),
-                max_messages <- integer(2..10) do
+      check all(
+              messages <- list_of(message(), min_length: 5, max_length: 20),
+              max_messages <- integer(2..10)
+            ) do
         opts = [max_messages: max_messages, keep_first_user: false, warn_on_truncation: false]
 
         {truncated1, _dropped} = Context.truncate(messages, opts)
@@ -1202,7 +1324,7 @@ defmodule AgentCore.ContextPropertyTest do
 
   describe "mock message compatibility" do
     property "Mocks.user_message creates valid messages" do
-      check all content <- string(:printable, max_length: 100) do
+      check all(content <- string(:printable, max_length: 100)) do
         msg = Mocks.user_message(content)
         size = Context.estimate_size([msg], nil)
 
@@ -1211,7 +1333,7 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "Mocks.assistant_message creates valid messages" do
-      check all content <- string(:printable, max_length: 100) do
+      check all(content <- string(:printable, max_length: 100)) do
         msg = Mocks.assistant_message(content)
         size = Context.estimate_size([msg], nil)
 
@@ -1221,7 +1343,7 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "Mocks.tool_result_message creates valid messages" do
-      check all content <- string(:printable, max_length: 100) do
+      check all(content <- string(:printable, max_length: 100)) do
         msg = Mocks.tool_result_message("call_id", "tool_name", content)
         size = Context.estimate_size([msg], nil)
 
@@ -1230,9 +1352,11 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "mixed mock messages work with truncation" do
-      check all user_content <- string(:printable, max_length: 50),
-                assistant_content <- string(:printable, max_length: 50),
-                tool_content <- string(:printable, max_length: 50) do
+      check all(
+              user_content <- string(:printable, max_length: 50),
+              assistant_content <- string(:printable, max_length: 50),
+              tool_content <- string(:printable, max_length: 50)
+            ) do
         messages = [
           Mocks.user_message(user_content),
           Mocks.assistant_message(assistant_content),
@@ -1253,8 +1377,10 @@ defmodule AgentCore.ContextPropertyTest do
 
   describe "edge case properties" do
     property "messages with list content blocks are handled" do
-      check all text1 <- string(:printable, max_length: 50),
-                text2 <- string(:printable, max_length: 50) do
+      check all(
+              text1 <- string(:printable, max_length: 50),
+              text2 <- string(:printable, max_length: 50)
+            ) do
         # Create messages with list content (content blocks)
         messages = [
           %{
@@ -1274,8 +1400,10 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "messages with tool_call content include arguments size" do
-      check all arg_key <- string(:alphanumeric, min_length: 1, max_length: 10),
-                arg_value <- string(:printable, max_length: 50) do
+      check all(
+              arg_key <- string(:alphanumeric, min_length: 1, max_length: 10),
+              arg_value <- string(:printable, max_length: 50)
+            ) do
         args = %{arg_key => arg_value}
 
         messages = [
@@ -1319,7 +1447,7 @@ defmodule AgentCore.ContextPropertyTest do
     end
 
     property "single message truncation edge cases" do
-      check all content <- string(:printable, max_length: 100) do
+      check all(content <- string(:printable, max_length: 100)) do
         messages = [%{role: :user, content: content}]
 
         # Truncate with max_messages: 1
@@ -1328,13 +1456,17 @@ defmodule AgentCore.ContextPropertyTest do
         assert dropped == 0
 
         # Truncate with max_messages: 0 and keep_first_user: true
-        {truncated2, dropped2} = Context.truncate(messages, max_messages: 0, keep_first_user: true)
+        {truncated2, dropped2} =
+          Context.truncate(messages, max_messages: 0, keep_first_user: true)
+
         # First user message preserved
         assert length(truncated2) == 1
         assert dropped2 == 0
 
         # Truncate with max_messages: 0 and keep_first_user: false
-        {truncated3, dropped3} = Context.truncate(messages, max_messages: 0, keep_first_user: false)
+        {truncated3, dropped3} =
+          Context.truncate(messages, max_messages: 0, keep_first_user: false)
+
         assert truncated3 == []
         assert dropped3 == 1
       end

@@ -6,6 +6,7 @@ defmodule LemonGateway.Telegram.Transport do
   alias LemonGateway.Telegram.{API, Dedupe, OffsetStore}
   alias LemonGateway.Types.{ChatScope, Job, ResumeToken}
   alias LemonGateway.{BindingResolver, ChatState, Config, EngineRegistry, Store}
+  alias LemonCore.SessionKey
 
   @impl LemonGateway.Transport
   def id, do: "telegram"
@@ -38,8 +39,13 @@ defmodule LemonGateway.Telegram.Transport do
     account_id = config[:account_id] || config["account_id"] || "default"
     config_offset = config[:offset] || config["offset"]
     stored_offset = OffsetStore.get(account_id, config[:bot_token] || config["bot_token"])
-    drop_pending_updates = config[:drop_pending_updates] || config["drop_pending_updates"] || false
-    drop_pending_updates = drop_pending_updates && is_nil(config_offset) && is_nil(stored_offset)
+
+    drop_pending_updates =
+      config[:drop_pending_updates] || config["drop_pending_updates"] || false
+
+    # If enabled, drop any pending Telegram updates on every boot unless an explicit offset is set.
+    # This prevents the bot from replying to historical messages after downtime.
+    drop_pending_updates = drop_pending_updates && is_nil(config_offset)
 
     state = %{
       token: config[:bot_token] || config["bot_token"],
@@ -50,12 +56,16 @@ defmodule LemonGateway.Telegram.Transport do
       allowed_chat_ids: Map.get(config, :allowed_chat_ids, nil),
       allow_queue_override: Map.get(config, :allow_queue_override, false),
       account_id: account_id,
-      offset: initial_offset(config_offset, stored_offset),
+      # If configured to drop pending updates on boot, start from 0 so we can
+      # advance to the live edge even if a stale stored offset is ahead.
+      offset: if(drop_pending_updates, do: 0, else: initial_offset(config_offset, stored_offset)),
       drop_pending_updates?: drop_pending_updates,
       drop_pending_done?: false,
-      buffers: %{}
+      buffers: %{},
+      approval_messages: %{}
     }
 
+    maybe_subscribe_exec_approvals()
     send(self(), :poll)
     {:ok, state}
   end
@@ -86,16 +96,51 @@ defmodule LemonGateway.Telegram.Transport do
     {:noreply, state}
   end
 
+  # Receive approval request/resolution events from LemonCore.Bus ("exec_approvals" topic)
+  def handle_info(%LemonCore.Event{type: :approval_requested, payload: payload}, state) do
+    approval_id = payload[:approval_id] || get_in(payload, [:pending, :id])
+    pending = payload[:pending]
+
+    state =
+      if is_binary(approval_id) and is_map(pending) do
+        maybe_send_approval_prompt(state, approval_id, pending)
+      else
+        state
+      end
+
+    {:noreply, state}
+  end
+
+  def handle_info(%LemonCore.Event{type: :approval_resolved, payload: payload}, state) do
+    approval_id = payload[:approval_id]
+    decision = payload[:decision]
+    pending = payload[:pending]
+
+    state =
+      if is_binary(approval_id) do
+        maybe_mark_approval_resolved(state, approval_id, decision, pending)
+      else
+        state
+      end
+
+    {:noreply, state}
+  end
+
   def handle_info(_msg, state), do: {:noreply, state}
 
   defp poll_updates(state) do
     case state.api_mod.get_updates(state.token, state.offset, state.poll_interval_ms) do
       {:ok, %{"ok" => true, "result" => updates}} ->
         if state.drop_pending_updates? and not state.drop_pending_done? do
-          max_id = max_update_id(updates, state.offset)
-          new_offset = max(state.offset, max_id + 1)
-          persist_offset(state, new_offset)
-          %{state | offset: new_offset, drop_pending_done?: true}
+          if updates == [] do
+            %{state | drop_pending_done?: true}
+          else
+            # Keep dropping until Telegram returns an empty batch (there can be >100 pending).
+            max_id = max_update_id(updates, state.offset)
+            new_offset = max(state.offset, max_id + 1)
+            persist_offset(state, new_offset)
+            %{state | offset: new_offset, drop_pending_done?: false}
+          end
         else
           {state, max_id} = handle_updates(state, updates)
           new_offset = max(state.offset, max_id + 1)
@@ -150,6 +195,7 @@ defmodule LemonGateway.Telegram.Transport do
       topic_id = message["message_thread_id"]
       message_id = message["message_id"]
       reply_to_message = message["reply_to_message"]
+      peer_kind = peer_kind(chat)
 
       if allowed_chat?(state.allowed_chat_ids, chat_id) do
         scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: topic_id}
@@ -166,10 +212,10 @@ defmodule LemonGateway.Telegram.Transport do
                 state
 
               command_message?(text) ->
-                submit_job_immediate(state, scope, message_id, text, reply_to_message)
+                submit_job_immediate(state, scope, message_id, text, reply_to_message, peer_kind)
 
               true ->
-                enqueue_buffer(state, scope, message_id, text, reply_to_message)
+                enqueue_buffer(state, scope, message_id, text, reply_to_message, peer_kind)
             end
         end
       else
@@ -180,40 +226,61 @@ defmodule LemonGateway.Telegram.Transport do
     end
   end
 
+  defp handle_update(state, %{"callback_query" => cb} = _update) do
+    handle_callback_query(state, cb)
+  end
+
   defp handle_update(state, _update), do: state
 
-  defp enqueue_buffer(state, scope, message_id, text, reply_to_message) do
+  defp enqueue_buffer(state, scope, message_id, text, reply_to_message, peer_kind) do
     key = scope_key(scope)
     reply_to_text = reply_text(reply_to_message)
 
     case Map.get(state.buffers, key) do
       nil ->
         debounce_ref = make_ref()
-        timer_ref = Process.send_after(self(), {:debounce_flush, key, debounce_ref}, state.debounce_ms)
+
+        timer_ref =
+          Process.send_after(self(), {:debounce_flush, key, debounce_ref}, state.debounce_ms)
+
         buffer = %{
           scope: scope,
+          peer_kind: peer_kind,
           messages: [%{id: message_id, text: text, reply_to_text: reply_to_text}],
           timer_ref: timer_ref,
           debounce_ref: debounce_ref
         }
+
         %{state | buffers: Map.put(state.buffers, key, buffer)}
 
       buffer ->
         _ = Process.cancel_timer(buffer.timer_ref)
         debounce_ref = make_ref()
-        timer_ref = Process.send_after(self(), {:debounce_flush, key, debounce_ref}, state.debounce_ms)
-        messages = buffer.messages ++ [%{id: message_id, text: text, reply_to_text: reply_to_text}]
-        buffer = %{buffer | messages: messages, timer_ref: timer_ref, debounce_ref: debounce_ref}
+
+        timer_ref =
+          Process.send_after(self(), {:debounce_flush, key, debounce_ref}, state.debounce_ms)
+
+        messages =
+          buffer.messages ++ [%{id: message_id, text: text, reply_to_text: reply_to_text}]
+
+        buffer = %{
+          buffer
+          | messages: messages,
+            timer_ref: timer_ref,
+            debounce_ref: debounce_ref,
+            peer_kind: peer_kind
+        }
+
         %{state | buffers: Map.put(state.buffers, key, buffer)}
     end
   end
 
-  defp flush_buffer(%{messages: messages, scope: scope} = _buffer, state) do
+  defp flush_buffer(%{messages: messages, scope: scope, peer_kind: peer_kind} = _buffer, state) do
     {text, last_id, reply_to_text} = join_messages(messages)
-    submit_job_immediate(state, scope, last_id, text, reply_to_text)
+    submit_job_immediate(state, scope, last_id, text, reply_to_text, peer_kind)
   end
 
-  defp submit_job_immediate(state, scope, message_id, text, reply_to_message) do
+  defp submit_job_immediate(state, scope, message_id, text, reply_to_message, peer_kind) do
     progress_msg_id = send_progress(state, scope, message_id)
     reply_text = reply_text(reply_to_message)
 
@@ -231,18 +298,39 @@ defmodule LemonGateway.Telegram.Transport do
     {resume, engine_hint} = parse_routing(final_text, reply_text, directive_engine)
     {resume, engine_hint} = maybe_apply_auto_resume(scope, resume, engine_hint)
 
+    # Resolve agent_id/profile and build canonical session_key for approvals + resume
+    agent_id = BindingResolver.resolve_agent_id(scope)
+    session_key = build_session_key(agent_id, state.account_id, peer_kind, scope)
+
+    # Agent profile comes from canonical TOML config; optionally scoped by project cwd if bound.
+    cwd = BindingResolver.resolve_cwd(scope)
+    profile = get_profile(agent_id, cwd)
+
+    tool_policy = profile[:tool_policy] || profile["tool_policy"]
+    system_prompt = profile[:system_prompt] || profile["system_prompt"]
+    model = resolve_model(profile[:model] || profile["model"])
+
     job = %Job{
+      run_id: LemonCore.Id.run_id(),
+      session_key: session_key,
+      prompt: final_text,
       scope: scope,
       user_msg_id: message_id,
       text: final_text,
       resume: resume,
       engine_hint: engine_hint,
       queue_mode: final_queue_mode,
+      cwd: cwd,
+      tool_policy: tool_policy,
       meta: %{
         notify_pid: self(),
         chat_id: scope.chat_id,
         progress_msg_id: progress_msg_id,
-        user_msg_id: message_id
+        user_msg_id: message_id,
+        origin: :telegram,
+        agent_id: agent_id,
+        system_prompt: system_prompt,
+        model: model
       }
     }
 
@@ -384,7 +472,9 @@ defmodule LemonGateway.Telegram.Transport do
     case state.api_mod.send_message(state.token, scope.chat_id, "Running…", reply_to) do
       {:ok, %{"ok" => true, "result" => %{"message_id" => msg_id}}} ->
         msg_id
-      _ -> nil
+
+      _ ->
+        nil
     end
   end
 
@@ -396,6 +486,12 @@ defmodule LemonGateway.Telegram.Transport do
 
   defp allowed_chat?(nil, _chat_id), do: true
   defp allowed_chat?(list, chat_id) when is_list(list), do: chat_id in list
+
+  defp peer_kind(%{"type" => "private"}), do: :dm
+  defp peer_kind(%{"type" => "group"}), do: :group
+  defp peer_kind(%{"type" => "supergroup"}), do: :group
+  defp peer_kind(%{"type" => "channel"}), do: :channel
+  defp peer_kind(_), do: :unknown
 
   defp command_message?(text) do
     String.trim_leading(text) |> String.starts_with?("/")
@@ -461,6 +557,248 @@ defmodule LemonGateway.Telegram.Transport do
     _ = Application.ensure_all_started(:ssl)
     :ok
   end
+
+  defp maybe_subscribe_exec_approvals do
+    if Code.ensure_loaded?(LemonCore.Bus) do
+      _ = LemonCore.Bus.subscribe("exec_approvals")
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp build_session_key(agent_id, account_id, peer_kind, %ChatScope{} = scope) do
+    SessionKey.channel_peer(%{
+      agent_id: agent_id || "default",
+      channel_id: "telegram",
+      account_id: account_id || "default",
+      peer_kind: peer_kind || :unknown,
+      peer_id: to_string(scope.chat_id),
+      thread_id: if(scope.topic_id, do: to_string(scope.topic_id), else: nil)
+    })
+  end
+
+  defp get_profile(agent_id, cwd) do
+    cfg = LemonCore.Config.load(cwd)
+    Map.get(cfg.agents || %{}, agent_id) || Map.get(cfg.agents || %{}, "default") || %{}
+  end
+
+  defp resolve_model(nil), do: nil
+
+  defp resolve_model(model_str) when is_binary(model_str) do
+    case String.split(model_str, ":", parts: 2) do
+      [provider, id] ->
+        with {:ok, provider_atom} <- safe_provider(provider) do
+          Ai.Models.get_model(provider_atom, id)
+        else
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp resolve_model(_), do: nil
+
+  defp safe_provider("anthropic"), do: {:ok, :anthropic}
+  defp safe_provider("openai"), do: {:ok, :openai}
+  defp safe_provider("google"), do: {:ok, :google}
+  defp safe_provider("kimi"), do: {:ok, :kimi}
+  defp safe_provider("aws-bedrock"), do: {:ok, :aws_bedrock}
+  defp safe_provider("azure-openai-responses"), do: {:ok, :"azure-openai-responses"}
+  defp safe_provider(_), do: :error
+
+  defp maybe_send_approval_prompt(state, approval_id, pending) do
+    session_key = pending[:session_key] || pending["session_key"]
+
+    case SessionKey.parse(session_key) do
+      %{kind: :channel_peer, channel_id: "telegram", account_id: account_id, peer_id: peer_id} ->
+        if account_id == state.account_id do
+          case Integer.parse(to_string(peer_id)) do
+            {chat_id, _} ->
+              if allowed_chat?(state.allowed_chat_ids, chat_id) do
+                thread_id = pending_thread_id(session_key)
+
+                opts =
+                  %{}
+                  |> maybe_put("message_thread_id", thread_id)
+                  |> Map.put("reply_markup", approval_keyboard(approval_id))
+
+                text = approval_text(pending)
+
+                case state.api_mod.send_message(state.token, chat_id, text, opts, nil) do
+                  {:ok, %{"ok" => true, "result" => %{"message_id" => msg_id}}} ->
+                    %{
+                      state
+                      | approval_messages:
+                          Map.put(state.approval_messages, approval_id, %{
+                            chat_id: chat_id,
+                            message_id: msg_id
+                          })
+                    }
+
+                  _ ->
+                    state
+                end
+              else
+                state
+              end
+
+            _ ->
+              state
+          end
+        else
+          state
+        end
+
+      _ ->
+        state
+    end
+  rescue
+    _ -> state
+  end
+
+  defp maybe_mark_approval_resolved(state, approval_id, decision, _pending) do
+    case Map.get(state.approval_messages, approval_id) do
+      nil ->
+        state
+
+      %{chat_id: chat_id, message_id: message_id} ->
+        decision_str =
+          if is_atom(decision),
+            do: Atom.to_string(decision),
+            else: to_string(decision || "unknown")
+
+        text = "Approval #{approval_id} resolved: #{decision_str}"
+
+        _ =
+          state.api_mod.edit_message_text(state.token, chat_id, message_id, text, %{
+            "reply_markup" => %{"inline_keyboard" => []}
+          })
+
+        %{state | approval_messages: Map.delete(state.approval_messages, approval_id)}
+    end
+  rescue
+    _ -> state
+  end
+
+  defp pending_thread_id(session_key) do
+    case SessionKey.parse(session_key) do
+      %{thread_id: nil} ->
+        nil
+
+      %{thread_id: tid} ->
+        case Integer.parse(to_string(tid)) do
+          {i, _} -> i
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp approval_keyboard(approval_id) do
+    %{
+      "inline_keyboard" => [
+        [
+          %{"text" => "Once", "callback_data" => "#{approval_id}|once"},
+          %{"text" => "Session", "callback_data" => "#{approval_id}|session"},
+          %{"text" => "Agent", "callback_data" => "#{approval_id}|agent"}
+        ],
+        [
+          %{"text" => "Global", "callback_data" => "#{approval_id}|global"},
+          %{"text" => "Deny", "callback_data" => "#{approval_id}|deny"}
+        ]
+      ]
+    }
+  end
+
+  defp approval_text(pending) do
+    tool = pending[:tool] || pending["tool"] || "tool"
+    action = pending[:action] || pending["action"] || %{}
+    rationale = pending[:rationale] || pending["rationale"]
+
+    preview =
+      action
+      |> inspect(pretty: true, limit: 5, printable_limit: 500)
+      |> String.slice(0, 700)
+
+    base = "Approval required for tool: #{tool}\n\nAction:\n#{preview}"
+
+    if is_binary(rationale) and rationale != "",
+      do: base <> "\n\nReason: #{rationale}",
+      else: base
+  end
+
+  defp handle_callback_query(state, cb) when is_map(cb) do
+    id = cb["id"]
+    data = cb["data"] || ""
+
+    {approval_id, decision} = parse_callback_data(data)
+
+    msg = cb["message"] || %{}
+    chat = msg["chat"] || %{}
+    chat_id = chat["id"]
+    message_id = msg["message_id"]
+
+    # Acknowledge quickly to stop the client spinner
+    _ = if id, do: state.api_mod.answer_callback_query(state.token, id, %{}), else: :ok
+
+    if allowed_chat?(state.allowed_chat_ids, chat_id) and is_binary(approval_id) do
+      maybe_resolve_approval(approval_id, decision)
+
+      # Best-effort UI feedback
+      decision_str = Atom.to_string(decision)
+
+      _ =
+        state.api_mod.edit_message_text(
+          state.token,
+          chat_id,
+          message_id,
+          "Approval #{approval_id}: #{decision_str}",
+          %{"reply_markup" => %{"inline_keyboard" => []}}
+        )
+    end
+
+    state
+  rescue
+    _ -> state
+  end
+
+  defp parse_callback_data(data) when is_binary(data) do
+    case String.split(data, "|", parts: 2) do
+      [approval_id, decision_str] ->
+        {approval_id, decision_from_str(decision_str)}
+
+      _ ->
+        {nil, :deny}
+    end
+  end
+
+  defp decision_from_str("once"), do: :approve_once
+  defp decision_from_str("session"), do: :approve_session
+  defp decision_from_str("agent"), do: :approve_agent
+  defp decision_from_str("global"), do: :approve_global
+  defp decision_from_str("deny"), do: :deny
+  defp decision_from_str(_), do: :deny
+
+  defp maybe_resolve_approval(approval_id, decision) do
+    if Code.ensure_loaded?(LemonRouter.ApprovalsBridge) do
+      LemonRouter.ApprovalsBridge.resolve(approval_id, decision)
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp reply_text(nil), do: nil
   defp reply_text(%{"text" => text}) when is_binary(text), do: text

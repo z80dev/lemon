@@ -73,7 +73,10 @@ defmodule LemonGateway.Scheduler do
       {:noreply, %{state | in_flight: in_flight}}
     else
       {state, mon_ref} = ensure_monitor(state, worker_pid)
-      waitq = :queue.in(%{worker: worker_pid, thread_key: thread_key, mon_ref: mon_ref}, state.waitq)
+
+      waitq =
+        :queue.in(%{worker: worker_pid, thread_key: thread_key, mon_ref: mon_ref}, state.waitq)
+
       {:noreply, %{state | waitq: waitq}}
     end
   end
@@ -100,6 +103,7 @@ defmodule LemonGateway.Scheduler do
       case :queue.out(state.waitq) do
         {{:value, %{worker: worker_pid, thread_key: thread_key, mon_ref: mon_ref}}, waitq} ->
           slot_ref = make_ref()
+
           in_flight =
             Map.put(state.in_flight, slot_ref, %{
               worker: worker_pid,
@@ -229,7 +233,8 @@ defmodule LemonGateway.Scheduler do
 
   defp maybe_apply_auto_resume(%Job{resume: %ResumeToken{}} = job), do: job
 
-  defp maybe_apply_auto_resume(%Job{session_key: session_key} = job) when is_binary(session_key) do
+  defp maybe_apply_auto_resume(%Job{session_key: session_key} = job)
+       when is_binary(session_key) do
     if Config.get(:auto_resume) do
       case Store.get_chat_state(session_key) do
         %ChatState{last_engine: engine, last_resume_token: token}

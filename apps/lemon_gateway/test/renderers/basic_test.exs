@@ -30,7 +30,8 @@ defmodule LemonGateway.Renderers.BasicTest do
     token = %ResumeToken{engine: "test", value: "xyz"}
     state = Basic.init(%{engine: TestEngine})
 
-    {state, result} = Basic.apply_event(state, %Completed{engine: "test", ok: true, answer: "ok", resume: token})
+    {state, result} =
+      Basic.apply_event(state, %Completed{engine: "test", ok: true, answer: "ok", resume: token})
 
     assert {:render, %{text: text, status: :done}} = result
     assert String.contains?(text, "test resume xyz")

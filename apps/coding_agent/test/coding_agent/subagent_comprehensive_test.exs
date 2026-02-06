@@ -352,7 +352,7 @@ defmodule CodingAgent.SubagentComprehensiveTest do
               nil,
               nil,
               tmp_dir,
-              [model: test_model()]
+              model: test_model()
             )
 
           # If configured, should not be a validation error
@@ -386,7 +386,7 @@ defmodule CodingAgent.SubagentComprehensiveTest do
               nil,
               nil,
               tmp_dir,
-              [model: test_model()]
+              model: test_model()
             )
 
           # Should not be a validation error about engine
@@ -443,7 +443,7 @@ defmodule CodingAgent.SubagentComprehensiveTest do
                 signal,
                 nil,
                 tmp_dir,
-                [model: test_model()]
+                model: test_model()
               )
             end)
 
@@ -480,7 +480,7 @@ defmodule CodingAgent.SubagentComprehensiveTest do
               nil,
               nil,
               tmp_dir,
-              [model: test_model()]
+              model: test_model()
             )
 
           # Should not crash with nil signal
@@ -517,7 +517,7 @@ defmodule CodingAgent.SubagentComprehensiveTest do
               nil,
               on_update,
               tmp_dir,
-              [model: test_model()]
+              model: test_model()
             )
 
           # Collect updates
@@ -547,7 +547,7 @@ defmodule CodingAgent.SubagentComprehensiveTest do
               nil,
               nil,
               tmp_dir,
-              [model: test_model()]
+              model: test_model()
             )
 
           assert match?(%AgentToolResult{}, result) or match?({:error, _}, result)
@@ -771,7 +771,7 @@ defmodule CodingAgent.SubagentComprehensiveTest do
               nil,
               nil,
               tmp_dir,
-              [model: test_model()]
+              model: test_model()
             )
 
           case result do
@@ -808,7 +808,7 @@ defmodule CodingAgent.SubagentComprehensiveTest do
               nil,
               nil,
               tmp_dir,
-              [model: test_model()]
+              model: test_model()
             )
 
           case result do
@@ -846,7 +846,7 @@ defmodule CodingAgent.SubagentComprehensiveTest do
               nil,
               nil,
               tmp_dir,
-              [model: test_model()]
+              model: test_model()
             )
 
           case result do
@@ -883,7 +883,7 @@ defmodule CodingAgent.SubagentComprehensiveTest do
               nil,
               nil,
               tmp_dir,
-              [model: test_model()]
+              model: test_model()
             )
 
           # Small delay for cleanup
@@ -956,7 +956,7 @@ defmodule CodingAgent.SubagentComprehensiveTest do
                 nil,
                 nil,
                 tmp_dir,
-                [model: test_model()]
+                model: test_model()
               )
             end)
 
@@ -1263,7 +1263,7 @@ defmodule CodingAgent.SubagentComprehensiveTest do
               nil,
               nil,
               tmp_dir,
-              [model: test_model()]
+              model: test_model()
             )
 
           case result do

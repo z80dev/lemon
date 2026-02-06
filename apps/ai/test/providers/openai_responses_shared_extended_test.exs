@@ -7,7 +7,17 @@ defmodule Ai.Providers.OpenAIResponsesSharedExtendedTest do
 
   alias Ai.Providers.OpenAIResponsesShared
   alias Ai.EventStream
-  alias Ai.Types.{AssistantMessage, Cost, Model, ModelCost, TextContent, ThinkingContent, ToolCall, Usage}
+
+  alias Ai.Types.{
+    AssistantMessage,
+    Cost,
+    Model,
+    ModelCost,
+    TextContent,
+    ThinkingContent,
+    ToolCall,
+    Usage
+  }
 
   # ============================================================================
   # Short Hash Tests
@@ -64,7 +74,9 @@ defmodule Ai.Providers.OpenAIResponsesSharedExtendedTest do
       output = base_output()
       model = base_model()
 
-      assert {:error, error_msg} = OpenAIResponsesShared.process_stream(events, output, stream, model)
+      assert {:error, error_msg} =
+               OpenAIResponsesShared.process_stream(events, output, stream, model)
+
       assert String.contains?(error_msg, "rate_limit_exceeded")
       assert String.contains?(error_msg, "Too many requests")
 
@@ -81,7 +93,9 @@ defmodule Ai.Providers.OpenAIResponsesSharedExtendedTest do
       output = base_output()
       model = base_model()
 
-      assert {:error, error_msg} = OpenAIResponsesShared.process_stream(events, output, stream, model)
+      assert {:error, error_msg} =
+               OpenAIResponsesShared.process_stream(events, output, stream, model)
+
       assert String.contains?(error_msg, "unknown_error")
 
       EventStream.cancel(stream, :test_cleanup)
@@ -305,7 +319,13 @@ defmodule Ai.Providers.OpenAIResponsesSharedExtendedTest do
         %{"type" => "response.output_item.added", "item" => %{"type" => "message"}},
         %{"type" => "response.output_text.delta", "delta" => "Hello, "},
         %{"type" => "response.output_text.delta", "delta" => "world!"},
-        %{"type" => "response.output_item.done", "item" => %{"type" => "message", "content" => [%{"type" => "output_text", "text" => "Hello, world!"}]}}
+        %{
+          "type" => "response.output_item.done",
+          "item" => %{
+            "type" => "message",
+            "content" => [%{"type" => "output_text", "text" => "Hello, world!"}]
+          }
+        }
       ]
 
       output = base_output()
@@ -332,7 +352,13 @@ defmodule Ai.Providers.OpenAIResponsesSharedExtendedTest do
         %{"type" => "response.output_item.added", "item" => %{"type" => "message"}},
         %{"type" => "response.refusal.delta", "delta" => "I cannot "},
         %{"type" => "response.refusal.delta", "delta" => "do that."},
-        %{"type" => "response.output_item.done", "item" => %{"type" => "message", "content" => [%{"type" => "refusal", "refusal" => "I cannot do that."}]}}
+        %{
+          "type" => "response.output_item.done",
+          "item" => %{
+            "type" => "message",
+            "content" => [%{"type" => "refusal", "refusal" => "I cannot do that."}]
+          }
+        }
       ]
 
       output = base_output()
@@ -404,11 +430,17 @@ defmodule Ai.Providers.OpenAIResponsesSharedExtendedTest do
 
       events = [
         %{"type" => "response.output_item.added", "item" => %{"type" => "reasoning"}},
-        %{"type" => "response.reasoning_summary_part.added", "part" => %{"type" => "summary_text"}},
+        %{
+          "type" => "response.reasoning_summary_part.added",
+          "part" => %{"type" => "summary_text"}
+        },
         %{"type" => "response.reasoning_summary_text.delta", "delta" => "First, I need to "},
         %{"type" => "response.reasoning_summary_text.delta", "delta" => "analyze the problem."},
         %{"type" => "response.reasoning_summary_part.done"},
-        %{"type" => "response.reasoning_summary_part.added", "part" => %{"type" => "summary_text"}},
+        %{
+          "type" => "response.reasoning_summary_part.added",
+          "part" => %{"type" => "summary_text"}
+        },
         %{"type" => "response.reasoning_summary_text.delta", "delta" => "Then solve it."},
         %{"type" => "response.reasoning_summary_part.done"},
         %{

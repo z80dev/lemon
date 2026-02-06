@@ -7,7 +7,10 @@ defmodule LemonGateway.ConfigLoaderTest do
     original_home = System.get_env("HOME")
     original_override = Application.get_env(:lemon_gateway, LemonGateway.Config)
     original_config_path = Application.get_env(:lemon_gateway, :config_path)
-    tmp_dir = Path.join(System.tmp_dir!(), "lemon_gateway_config_#{System.unique_integer([:positive])}")
+
+    tmp_dir =
+      Path.join(System.tmp_dir!(), "lemon_gateway_config_#{System.unique_integer([:positive])}")
+
     File.mkdir_p!(tmp_dir)
     System.put_env("HOME", tmp_dir)
     Application.delete_env(:lemon_gateway, LemonGateway.Config)
@@ -15,6 +18,7 @@ defmodule LemonGateway.ConfigLoaderTest do
 
     on_exit(fn ->
       if original_home, do: System.put_env("HOME", original_home), else: System.delete_env("HOME")
+
       if is_nil(original_override) do
         Application.delete_env(:lemon_gateway, LemonGateway.Config)
       else

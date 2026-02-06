@@ -41,14 +41,22 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "sequential.txt")
       File.write!(path, "one two three")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "one", "new_text" => "ONE"},
-          %{"old_text" => "two", "new_text" => "TWO"},
-          %{"old_text" => "three", "new_text" => "THREE"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "one", "new_text" => "ONE"},
+              %{"old_text" => "two", "new_text" => "TWO"},
+              %{"old_text" => "three", "new_text" => "THREE"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "ONE TWO THREE"
@@ -59,13 +67,21 @@ defmodule CodingAgent.Tools.MultiEditTest do
       File.write!(path, "start")
 
       # Each edit depends on the previous result
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "start", "new_text" => "middle"},
-          %{"old_text" => "middle", "new_text" => "end"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "start", "new_text" => "middle"},
+              %{"old_text" => "middle", "new_text" => "end"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "end"
@@ -75,13 +91,21 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "multiline.txt")
       File.write!(path, "line1\nline2\nline3\nline4")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "line1", "new_text" => "FIRST"},
-          %{"old_text" => "line4", "new_text" => "LAST"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "line1", "new_text" => "FIRST"},
+              %{"old_text" => "line4", "new_text" => "LAST"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       content = File.read!(path)
@@ -94,14 +118,22 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "multiple.txt")
       File.write!(path, "apple banana cherry")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "apple", "new_text" => "APPLE"},
-          %{"old_text" => "banana", "new_text" => "BANANA"},
-          %{"old_text" => "cherry", "new_text" => "CHERRY"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "apple", "new_text" => "APPLE"},
+              %{"old_text" => "banana", "new_text" => "BANANA"},
+              %{"old_text" => "cherry", "new_text" => "CHERRY"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "APPLE BANANA CHERRY"
@@ -111,13 +143,21 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "combined.txt")
       File.write!(path, "foo bar baz")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "foo", "new_text" => "FOO"},
-          %{"old_text" => "bar", "new_text" => "BAR"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "foo", "new_text" => "FOO"},
+              %{"old_text" => "bar", "new_text" => "BAR"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{details: %{results: results}} = result
       assert length(results) == 2
@@ -127,12 +167,20 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "single.txt")
       File.write!(path, "hello world")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "hello", "new_text" => "hi"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "hello", "new_text" => "hi"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "hi world"
@@ -144,14 +192,23 @@ defmodule CodingAgent.Tools.MultiEditTest do
       content = Enum.map_join(1..10, " ", fn n -> "[item_#{n}]" end)
       File.write!(path, content)
 
-      edits = Enum.map(1..10, fn n ->
-        %{"old_text" => "[item_#{n}]", "new_text" => "[ITEM_#{n}]"}
-      end)
+      edits =
+        Enum.map(1..10, fn n ->
+          %{"old_text" => "[item_#{n}]", "new_text" => "[ITEM_#{n}]"}
+        end)
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => edits
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => edits
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       final_content = File.read!(path)
@@ -162,23 +219,39 @@ defmodule CodingAgent.Tools.MultiEditTest do
 
   describe "execute/6 - error handling" do
     test "returns error when path is missing", %{tmp_dir: tmp_dir} do
-      result = MultiEdit.execute("call_1", %{
-        "edits" => [
-          %{"old_text" => "foo", "new_text" => "bar"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "edits" => [
+              %{"old_text" => "foo", "new_text" => "bar"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert {:error, msg} = result
       assert msg =~ "Path is required"
     end
 
     test "returns error when path is empty string", %{tmp_dir: tmp_dir} do
-      result = MultiEdit.execute("call_1", %{
-        "path" => "",
-        "edits" => [
-          %{"old_text" => "foo", "new_text" => "bar"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => "",
+            "edits" => [
+              %{"old_text" => "foo", "new_text" => "bar"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert {:error, msg} = result
       assert msg =~ "Path is required"
@@ -188,10 +261,18 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "notarray.txt")
       File.write!(path, "content")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => "not an array"
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => "not an array"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert {:error, msg} = result
       assert msg =~ "Edits must be an array"
@@ -201,22 +282,38 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "empty.txt")
       File.write!(path, "content")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => []
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => []
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert {:error, msg} = result
       assert msg =~ "Edits array cannot be empty"
     end
 
     test "returns error when file does not exist", %{tmp_dir: tmp_dir} do
-      result = MultiEdit.execute("call_1", %{
-        "path" => Path.join(tmp_dir, "nonexistent.txt"),
-        "edits" => [
-          %{"old_text" => "foo", "new_text" => "bar"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => Path.join(tmp_dir, "nonexistent.txt"),
+            "edits" => [
+              %{"old_text" => "foo", "new_text" => "bar"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert {:error, msg} = result
       assert msg =~ "not found" or msg =~ "File not found"
@@ -226,12 +323,20 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "notfound.txt")
       File.write!(path, "hello world")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "nonexistent", "new_text" => "replacement"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "nonexistent", "new_text" => "replacement"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert {:error, msg} = result
       assert msg =~ "not find" or msg =~ "not found"
@@ -241,12 +346,20 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "duplicate.txt")
       File.write!(path, "hello hello world")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "hello", "new_text" => "hi"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "hello", "new_text" => "hi"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert {:error, msg} = result
       assert msg =~ "occurrence" or msg =~ "unique"
@@ -256,12 +369,20 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "nochange.txt")
       File.write!(path, "same content")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "same", "new_text" => "same"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "same", "new_text" => "same"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert {:error, msg} = result
       assert msg =~ "no change" or msg =~ "No changes"
@@ -273,14 +394,22 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "partial.txt")
       File.write!(path, "apple banana cherry")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "apple", "new_text" => "APPLE"},
-          %{"old_text" => "nonexistent", "new_text" => "FAIL"},
-          %{"old_text" => "cherry", "new_text" => "CHERRY"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "apple", "new_text" => "APPLE"},
+              %{"old_text" => "nonexistent", "new_text" => "FAIL"},
+              %{"old_text" => "cherry", "new_text" => "CHERRY"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert {:error, _} = result
       # First edit was applied before the error
@@ -294,14 +423,22 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "partial2.txt")
       File.write!(path, "one two three four")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "one", "new_text" => "ONE"},
-          %{"old_text" => "two", "new_text" => "TWO"},
-          %{"old_text" => "missing", "new_text" => "FAIL"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "one", "new_text" => "ONE"},
+              %{"old_text" => "two", "new_text" => "TWO"},
+              %{"old_text" => "missing", "new_text" => "FAIL"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert {:error, _} = result
       content = File.read!(path)
@@ -319,12 +456,19 @@ defmodule CodingAgent.Tools.MultiEditTest do
 
       # Edit tool throws ArgumentError for empty old_text (binary.match fails)
       assert_raise ArgumentError, fn ->
-        MultiEdit.execute("call_1", %{
-          "path" => path,
-          "edits" => [
-            %{"old_text" => "", "new_text" => "replacement"}
-          ]
-        }, nil, nil, tmp_dir, [])
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "", "new_text" => "replacement"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
       end
     end
 
@@ -332,12 +476,20 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "delete.txt")
       File.write!(path, "hello world goodbye")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => " world", "new_text" => ""}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => " world", "new_text" => ""}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "hello goodbye"
@@ -347,14 +499,22 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "adjacent.txt")
       File.write!(path, "AABBCC")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "AA", "new_text" => "11"},
-          %{"old_text" => "BB", "new_text" => "22"},
-          %{"old_text" => "CC", "new_text" => "33"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "AA", "new_text" => "11"},
+              %{"old_text" => "BB", "new_text" => "22"},
+              %{"old_text" => "CC", "new_text" => "33"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "112233"
@@ -364,13 +524,21 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "create.txt")
       File.write!(path, "placeholder")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "placeholder", "new_text" => "new_target"},
-          %{"old_text" => "new_target", "new_text" => "final_value"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "placeholder", "new_text" => "new_target"},
+              %{"old_text" => "new_target", "new_text" => "final_value"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "final_value"
@@ -380,12 +548,20 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "relative.txt")
       File.write!(path, "original")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => "relative.txt",
-        "edits" => [
-          %{"old_text" => "original", "new_text" => "modified"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => "relative.txt",
+            "edits" => [
+              %{"old_text" => "original", "new_text" => "modified"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "modified"
@@ -395,13 +571,21 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "unicode.txt")
       File.write!(path, "Hello 世界 Emoji 👋")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "世界", "new_text" => "World"},
-          %{"old_text" => "👋", "new_text" => "Wave"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "世界", "new_text" => "World"},
+              %{"old_text" => "👋", "new_text" => "Wave"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "Hello World Emoji Wave"
@@ -412,13 +596,21 @@ defmodule CodingAgent.Tools.MultiEditTest do
       bom = <<0xEF, 0xBB, 0xBF>>
       File.write!(path, bom <> "Hello World")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "Hello", "new_text" => "Hi"},
-          %{"old_text" => "World", "new_text" => "Universe"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "Hello", "new_text" => "Hi"},
+              %{"old_text" => "World", "new_text" => "Universe"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       content = File.read!(path)
@@ -430,13 +622,21 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "crlf.txt")
       File.write!(path, "line1\r\nline2\r\nline3")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "line1", "new_text" => "FIRST"},
-          %{"old_text" => "line3", "new_text" => "THIRD"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "line1", "new_text" => "FIRST"},
+              %{"old_text" => "line3", "new_text" => "THIRD"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       content = File.read!(path)
@@ -447,10 +647,18 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "nil_edits.txt")
       File.write!(path, "content")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => nil
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => nil
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert {:error, msg} = result
       assert msg =~ "Edits must be an array"
@@ -460,12 +668,20 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "nil_old.txt")
       File.write!(path, "content")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => nil, "new_text" => "replacement"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => nil, "new_text" => "replacement"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       # Edit tool handles nil old_text
       assert {:error, _} = result
@@ -475,12 +691,20 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "nil_new.txt")
       File.write!(path, "content")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "content", "new_text" => nil}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "content", "new_text" => nil}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       # Edit tool handles nil new_text
       assert {:error, _} = result
@@ -495,12 +719,20 @@ defmodule CodingAgent.Tools.MultiEditTest do
       signal = AbortSignal.new()
       AbortSignal.abort(signal)
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "original", "new_text" => "modified"}
-        ]
-      }, signal, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "original", "new_text" => "modified"}
+            ]
+          },
+          signal,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert {:error, "Operation aborted"} = result
       assert File.read!(path) == "original"
@@ -512,12 +744,20 @@ defmodule CodingAgent.Tools.MultiEditTest do
 
       signal = AbortSignal.new()
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "original", "new_text" => "modified"}
-        ]
-      }, signal, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "original", "new_text" => "modified"}
+            ]
+          },
+          signal,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "modified content"
@@ -535,13 +775,21 @@ defmodule CodingAgent.Tools.MultiEditTest do
         AbortSignal.abort(signal)
       end)
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "first", "new_text" => "FIRST"},
-          %{"old_text" => "second", "new_text" => "SECOND"}
-        ]
-      }, signal, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "first", "new_text" => "FIRST"},
+              %{"old_text" => "second", "new_text" => "SECOND"}
+            ]
+          },
+          signal,
+          nil,
+          tmp_dir,
+          []
+        )
 
       # Result could be success or abort depending on timing
       # Just verify operation completed without crash
@@ -552,12 +800,20 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "nil_signal.txt")
       File.write!(path, "hello world")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "hello", "new_text" => "hi"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "hello", "new_text" => "hi"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "hi world"
@@ -570,12 +826,20 @@ defmodule CodingAgent.Tools.MultiEditTest do
       File.write!(path, "test content")
 
       # MultiEdit should produce same result as sequential Edit calls
-      multiedit_result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "test", "new_text" => "modified"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      multiedit_result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "test", "new_text" => "modified"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = multiedit_result
       assert File.read!(path) == "modified content"
@@ -585,12 +849,20 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "fuzzy.txt")
       File.write!(path, "hello    world")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "hello world", "new_text" => "hello_world"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "hello world", "new_text" => "hello_world"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "hello_world"
@@ -601,12 +873,20 @@ defmodule CodingAgent.Tools.MultiEditTest do
       curly_quote = <<0x2019::utf8>>
       File.write!(path, "It#{curly_quote}s a test")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "It's a test", "new_text" => "It was a test"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "It's a test", "new_text" => "It was a test"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "It was a test"
@@ -616,12 +896,20 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "diff.txt")
       File.write!(path, "line1\nline2\nline3")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "line2", "new_text" => "changed"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "line2", "new_text" => "changed"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{details: %{results: [edit_details]}} = result
       assert edit_details.diff
@@ -636,13 +924,19 @@ defmodule CodingAgent.Tools.MultiEditTest do
 
       tool = MultiEdit.tool(tmp_dir)
 
-      result = tool.execute.("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "foo", "new_text" => "FOO"},
-          %{"old_text" => "baz", "new_text" => "BAZ"}
-        ]
-      }, nil, nil)
+      result =
+        tool.execute.(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "foo", "new_text" => "FOO"},
+              %{"old_text" => "baz", "new_text" => "BAZ"}
+            ]
+          },
+          nil,
+          nil
+        )
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "FOO bar BAZ"
@@ -654,13 +948,21 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "result.txt")
       File.write!(path, "one two three")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "one", "new_text" => "ONE"},
-          %{"old_text" => "two", "new_text" => "TWO"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "one", "new_text" => "ONE"},
+              %{"old_text" => "two", "new_text" => "TWO"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "Successfully replaced"
@@ -670,14 +972,22 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "all_details.txt")
       File.write!(path, "a b c")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "a", "new_text" => "A"},
-          %{"old_text" => "b", "new_text" => "B"},
-          %{"old_text" => "c", "new_text" => "C"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "a", "new_text" => "A"},
+              %{"old_text" => "b", "new_text" => "B"},
+              %{"old_text" => "c", "new_text" => "C"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{details: %{results: results}} = result
       assert length(results) == 3
@@ -697,14 +1007,22 @@ defmodule CodingAgent.Tools.MultiEditTest do
       end
       """)
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "OldModule", "new_text" => "NewModule"},
-          %{"old_text" => "old_server", "new_text" => "new_server"},
-          %{"old_text" => "3000", "new_text" => "8080"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "OldModule", "new_text" => "NewModule"},
+              %{"old_text" => "old_server", "new_text" => "new_server"},
+              %{"old_text" => "3000", "new_text" => "8080"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       content = File.read!(path)
@@ -718,6 +1036,7 @@ defmodule CodingAgent.Tools.MultiEditTest do
 
     test "updating configuration values", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "config.json")
+
       File.write!(path, """
       {
         "host": "localhost",
@@ -726,14 +1045,22 @@ defmodule CodingAgent.Tools.MultiEditTest do
       }
       """)
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "localhost", "new_text" => "production.example.com"},
-          %{"old_text" => "3000", "new_text" => "8080"},
-          %{"old_text" => "false", "new_text" => "true"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "localhost", "new_text" => "production.example.com"},
+              %{"old_text" => "3000", "new_text" => "8080"},
+              %{"old_text" => "false", "new_text" => "true"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       content = File.read!(path)
@@ -746,14 +1073,22 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "deletions.txt")
       File.write!(path, "keep remove1 keep remove2 keep remove3 keep")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => " remove1", "new_text" => ""},
-          %{"old_text" => " remove2", "new_text" => ""},
-          %{"old_text" => " remove3", "new_text" => ""}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => " remove1", "new_text" => ""},
+              %{"old_text" => " remove2", "new_text" => ""},
+              %{"old_text" => " remove3", "new_text" => ""}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "keep keep keep keep"
@@ -763,14 +1098,22 @@ defmodule CodingAgent.Tools.MultiEditTest do
       path = Path.join(tmp_dir, "insertions.txt")
       File.write!(path, "MARKER1 MARKER2 MARKER3")
 
-      result = MultiEdit.execute("call_1", %{
-        "path" => path,
-        "edits" => [
-          %{"old_text" => "MARKER1", "new_text" => "MARKER1\ninserted1"},
-          %{"old_text" => "MARKER2", "new_text" => "MARKER2\ninserted2"},
-          %{"old_text" => "MARKER3", "new_text" => "MARKER3\ninserted3"}
-        ]
-      }, nil, nil, tmp_dir, [])
+      result =
+        MultiEdit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "edits" => [
+              %{"old_text" => "MARKER1", "new_text" => "MARKER1\ninserted1"},
+              %{"old_text" => "MARKER2", "new_text" => "MARKER2\ninserted2"},
+              %{"old_text" => "MARKER3", "new_text" => "MARKER3\ninserted3"}
+            ]
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       content = File.read!(path)

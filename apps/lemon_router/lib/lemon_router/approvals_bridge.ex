@@ -66,6 +66,9 @@ defmodule LemonRouter.ApprovalsBridge do
         {:ok, :approved, scope}
 
       :not_approved ->
+        # Subscribe before publishing the request so a fast resolve can't race us.
+        LemonCore.Bus.subscribe("exec_approvals")
+
         # Store pending request
         pending = %{
           id: approval_id,
@@ -330,9 +333,6 @@ defmodule LemonRouter.ApprovalsBridge do
   end
 
   defp wait_for_resolution(approval_id, timeout_ms) do
-    # Subscribe to approval events
-    LemonCore.Bus.subscribe("exec_approvals")
-
     receive do
       # Match LemonCore.Event struct with nested payload
       %LemonCore.Event{type: :approval_resolved, payload: %{approval_id: ^approval_id, decision: decision}} ->

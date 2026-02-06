@@ -158,7 +158,8 @@ defmodule Ai.Providers.GoogleGeminiCli do
 
   defp parse_credentials(api_key) when is_binary(api_key) do
     case Jason.decode(api_key) do
-      {:ok, %{"token" => token, "projectId" => project_id}} when is_binary(token) and is_binary(project_id) ->
+      {:ok, %{"token" => token, "projectId" => project_id}}
+      when is_binary(token) and is_binary(project_id) ->
         {token, project_id}
 
       _ ->
@@ -174,7 +175,8 @@ defmodule Ai.Providers.GoogleGeminiCli do
   defp get_base_url(_model, true = _is_antigravity), do: @antigravity_daily_endpoint
   defp get_base_url(_model, false), do: @default_endpoint
 
-  defp get_endpoints(base_url, true = _is_antigravity) when base_url == @antigravity_daily_endpoint do
+  defp get_endpoints(base_url, true = _is_antigravity)
+       when base_url == @antigravity_daily_endpoint do
     [@antigravity_daily_endpoint, @default_endpoint]
   end
 
@@ -338,7 +340,9 @@ defmodule Ai.Providers.GoogleGeminiCli do
     config
   end
 
-  defp thinking_enabled?(%StreamOptions{reasoning: level}) when level in [:minimal, :low, :medium, :high], do: true
+  defp thinking_enabled?(%StreamOptions{reasoning: level})
+       when level in [:minimal, :low, :medium, :high], do: true
+
   defp thinking_enabled?(_), do: false
 
   defp get_thinking_level(%StreamOptions{thinking_budgets: budgets}) do
@@ -400,7 +404,8 @@ defmodule Ai.Providers.GoogleGeminiCli do
 
   defp make_request_with_retry(endpoints, headers, body, opts, attempt \\ 0)
 
-  defp make_request_with_retry(_endpoints, _headers, _body, _opts, attempt) when attempt > @max_retries do
+  defp make_request_with_retry(_endpoints, _headers, _body, _opts, attempt)
+       when attempt > @max_retries do
     {:error, "Max retries exceeded"}
   end
 
@@ -420,19 +425,20 @@ defmodule Ai.Providers.GoogleGeminiCli do
         if attempt < @max_retries and GoogleShared.retryable_error?(status, error_text) do
           delay =
             case GoogleShared.extract_retry_delay(error_text) do
-              nil -> @base_delay_ms * :math.pow(2, attempt) |> trunc()
+              nil -> (@base_delay_ms * :math.pow(2, attempt)) |> trunc()
               ms -> ms
             end
 
           Process.sleep(delay)
           make_request_with_retry(endpoints, headers, body, opts, attempt + 1)
         else
-          {:error, "Cloud Code Assist API error (#{status}): #{GoogleShared.extract_error_message(error_text)}"}
+          {:error,
+           "Cloud Code Assist API error (#{status}): #{GoogleShared.extract_error_message(error_text)}"}
         end
 
       {:error, %Req.TransportError{reason: reason}} ->
         if attempt < @max_retries do
-          delay = @base_delay_ms * :math.pow(2, attempt) |> trunc()
+          delay = (@base_delay_ms * :math.pow(2, attempt)) |> trunc()
           Process.sleep(delay)
           make_request_with_retry(endpoints, headers, body, opts, attempt + 1)
         else
@@ -441,7 +447,7 @@ defmodule Ai.Providers.GoogleGeminiCli do
 
       {:error, reason} ->
         if attempt < @max_retries do
-          delay = @base_delay_ms * :math.pow(2, attempt) |> trunc()
+          delay = (@base_delay_ms * :math.pow(2, attempt)) |> trunc()
           Process.sleep(delay)
           make_request_with_retry(endpoints, headers, body, opts, attempt + 1)
         else
@@ -450,14 +456,41 @@ defmodule Ai.Providers.GoogleGeminiCli do
     end
   end
 
-  defp process_response_stream(stream, response_tuple, output, model, headers, body, opts, empty_attempt \\ 0)
+  defp process_response_stream(
+         stream,
+         response_tuple,
+         output,
+         model,
+         headers,
+         body,
+         opts,
+         empty_attempt \\ 0
+       )
 
-  defp process_response_stream(stream, _response_tuple, output, _model, _headers, _body, _opts, empty_attempt)
+  defp process_response_stream(
+         stream,
+         _response_tuple,
+         output,
+         _model,
+         _headers,
+         _body,
+         _opts,
+         empty_attempt
+       )
        when empty_attempt > @max_empty_stream_retries do
     handle_error(stream, output, "Cloud Code Assist API returned an empty response")
   end
 
-  defp process_response_stream(stream, {url, _response}, output, model, headers, body, opts, empty_attempt) do
+  defp process_response_stream(
+         stream,
+         {url, _response},
+         output,
+         model,
+         headers,
+         body,
+         opts,
+         empty_attempt
+       ) do
     EventStream.push_async(stream, {:start, output})
 
     state = %{
@@ -471,7 +504,7 @@ defmodule Ai.Providers.GoogleGeminiCli do
 
     if not final_state.has_content and empty_attempt < @max_empty_stream_retries do
       # Retry on empty response
-      delay = @empty_stream_base_delay_ms * :math.pow(2, empty_attempt) |> trunc()
+      delay = (@empty_stream_base_delay_ms * :math.pow(2, empty_attempt)) |> trunc()
       Process.sleep(delay)
 
       headers_list = Enum.map(headers, fn {k, v} -> {k, v} end)
@@ -480,10 +513,24 @@ defmodule Ai.Providers.GoogleGeminiCli do
         {:ok, %Req.Response{status: status} = new_resp} when status in 200..299 ->
           # Reset output for retry
           new_output = %{output | content: [], timestamp: System.system_time(:millisecond)}
-          process_response_stream(stream, {url, new_resp}, new_output, model, headers, body, opts, empty_attempt + 1)
+
+          process_response_stream(
+            stream,
+            {url, new_resp},
+            new_output,
+            model,
+            headers,
+            body,
+            opts,
+            empty_attempt + 1
+          )
 
         {:ok, %Req.Response{status: status, body: error_body}} ->
-          handle_error(stream, output, "Cloud Code Assist API error (#{status}): #{inspect(error_body)}")
+          handle_error(
+            stream,
+            output,
+            "Cloud Code Assist API error (#{status}): #{inspect(error_body)}"
+          )
 
         {:error, reason} ->
           handle_error(stream, output, "Request failed: #{inspect(reason)}")
@@ -499,7 +546,12 @@ defmodule Ai.Providers.GoogleGeminiCli do
 
           %ThinkingContent{} = block ->
             idx = length(final_state.output.content) - 1
-            EventStream.push_async(stream, {:thinking_end, idx, block.thinking, final_state.output})
+
+            EventStream.push_async(
+              stream,
+              {:thinking_end, idx, block.thinking, final_state.output}
+            )
+
             final_state
 
           _ ->
@@ -663,7 +715,11 @@ defmodule Ai.Providers.GoogleGeminiCli do
 
         {%ThinkingContent{}, false} ->
           old_idx = length(state.output.content) - 1
-          EventStream.push_async(stream, {:thinking_end, old_idx, state.current_block.thinking, state.output})
+
+          EventStream.push_async(
+            stream,
+            {:thinking_end, old_idx, state.current_block.thinking, state.output}
+          )
 
           block = %TextContent{text: "", text_signature: nil}
           output = %{state.output | content: state.output.content ++ [block]}
@@ -673,7 +729,11 @@ defmodule Ai.Providers.GoogleGeminiCli do
 
         {%TextContent{}, true} ->
           old_idx = length(state.output.content) - 1
-          EventStream.push_async(stream, {:text_end, old_idx, state.current_block.text, state.output})
+
+          EventStream.push_async(
+            stream,
+            {:text_end, old_idx, state.current_block.text, state.output}
+          )
 
           block = %ThinkingContent{thinking: "", thinking_signature: nil}
           output = %{state.output | content: state.output.content ++ [block]}
@@ -693,7 +753,9 @@ defmodule Ai.Providers.GoogleGeminiCli do
       if is_thinking do
         block = state.current_block
         new_sig = GoogleShared.retain_thought_signature(block.thinking_signature, thought_sig)
-        {%{block | thinking: block.thinking <> text, thinking_signature: new_sig}, :thinking_delta}
+
+        {%{block | thinking: block.thinking <> text, thinking_signature: new_sig},
+         :thinking_delta}
       else
         block = state.current_block
         new_sig = GoogleShared.retain_thought_signature(block.text_signature, thought_sig)
@@ -759,10 +821,21 @@ defmodule Ai.Providers.GoogleGeminiCli do
     idx = length(output.content) - 1
 
     EventStream.push_async(stream, {:tool_call_start, idx, output})
-    EventStream.push_async(stream, {:tool_call_delta, idx, Jason.encode!(tool_call.arguments), output})
+
+    EventStream.push_async(
+      stream,
+      {:tool_call_delta, idx, Jason.encode!(tool_call.arguments), output}
+    )
+
     EventStream.push_async(stream, {:tool_call_end, idx, tool_call, output})
 
-    %{state | output: output, current_block: nil, tool_call_counter: state.tool_call_counter + 1, has_content: true}
+    %{
+      state
+      | output: output,
+        current_block: nil,
+        tool_call_counter: state.tool_call_counter + 1,
+        has_content: true
+    }
   end
 
   defp handle_error(stream, output, reason) do

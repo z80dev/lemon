@@ -172,10 +172,14 @@ defmodule CodingAgent.IntegrationTest do
       # With 6 messages of ~1000 tokens each = ~6000 tokens
       # context_window = 10000, reserve = 2000, threshold = 8000
       # 6000 < 8000, so should not compact yet
-      assert Compaction.should_compact?(context_tokens, 10_000, %{enabled: true, reserve_tokens: 2000}) == false
+      assert Compaction.should_compact?(context_tokens, 10_000, %{
+               enabled: true,
+               reserve_tokens: 2000
+             }) == false
 
       # But with more content, it should trigger
-      assert Compaction.should_compact?(9000, 10_000, %{enabled: true, reserve_tokens: 2000}) == true
+      assert Compaction.should_compact?(9000, 10_000, %{enabled: true, reserve_tokens: 2000}) ==
+               true
 
       # Test manual compaction
       session =
@@ -450,10 +454,10 @@ defmodule CodingAgent.IntegrationTest do
       }
 
       session_manager = %{
-        session_manager |
-        entries: session_manager.entries ++ [branch_b_entry],
-        by_id: Map.put(session_manager.by_id, branch_b_entry.id, branch_b_entry),
-        leaf_id: branch_b_entry.id
+        session_manager
+        | entries: session_manager.entries ++ [branch_b_entry],
+          by_id: Map.put(session_manager.by_id, branch_b_entry.id, branch_b_entry),
+          leaf_id: branch_b_entry.id
       }
 
       :ok = SessionManager.save_to_file(session_file, session_manager)
@@ -607,15 +611,17 @@ defmodule CodingAgent.IntegrationTest do
         "role" => "tool_result",
         "tool_call_id" => tool_result_msg.tool_call_id,
         "tool_name" => tool_result_msg.tool_name,
-        "content" => Enum.map(tool_result_msg.content, fn
-          %TextContent{text: text} -> %{"type" => "text", "text" => text}
-        end),
+        "content" =>
+          Enum.map(tool_result_msg.content, fn
+            %TextContent{text: text} -> %{"type" => "text", "text" => text}
+          end),
         "is_error" => tool_result_msg.is_error,
         "timestamp" => tool_result_msg.timestamp
       }
 
       # Save to session manager
-      session_manager = SessionManager.new(tmp_dir)
+      session_manager =
+        SessionManager.new(tmp_dir)
         |> SessionManager.append_message(serialized)
 
       session_file = Path.join(tmp_dir, "tool_persistence_test.jsonl")

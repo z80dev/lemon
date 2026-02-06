@@ -134,6 +134,22 @@ defmodule LemonGateway.TransportRegistryTest do
     Supervisor.restart_child(supervisor, TransportRegistry)
   end
 
+  defp restart_config do
+    supervisor = LemonGateway.Supervisor
+
+    case Supervisor.terminate_child(supervisor, LemonGateway.Config) do
+      :ok -> :ok
+      {:error, :not_found} -> :ok
+    end
+
+    Supervisor.restart_child(supervisor, LemonGateway.Config)
+  end
+
+  defp restart_config_and_registry do
+    {:ok, _} = restart_config()
+    restart_registry()
+  end
+
   setup do
     Application.put_env(:lemon_gateway, LemonGateway.Config, %{
       max_concurrent_runs: 1,
@@ -210,7 +226,7 @@ defmodule LemonGateway.TransportRegistryTest do
       enable_telegram: false
     })
 
-    {:ok, _} = restart_registry()
+    {:ok, _} = restart_config_and_registry()
 
     enabled = TransportRegistry.enabled_transports()
     enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -232,7 +248,7 @@ defmodule LemonGateway.TransportRegistryTest do
       enable_telegram: true
     })
 
-    {:ok, _} = restart_registry()
+    {:ok, _} = restart_config_and_registry()
 
     enabled = TransportRegistry.enabled_transports()
     enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -248,13 +264,14 @@ defmodule LemonGateway.TransportRegistryTest do
   describe "transport_enabled? with map config" do
     test "telegram disabled when enable_telegram is false" do
       Application.put_env(:lemon_gateway, :transports, [LemonGateway.Telegram.Transport])
+
       Application.put_env(:lemon_gateway, LemonGateway.Config, %{
         max_concurrent_runs: 1,
         default_engine: "echo",
         enable_telegram: false
       })
 
-      {:ok, _} = restart_registry()
+      {:ok, _} = restart_config_and_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -264,12 +281,13 @@ defmodule LemonGateway.TransportRegistryTest do
 
     test "telegram disabled when enable_telegram key missing from map" do
       Application.put_env(:lemon_gateway, :transports, [LemonGateway.Telegram.Transport])
+
       Application.put_env(:lemon_gateway, LemonGateway.Config, %{
         max_concurrent_runs: 1,
         default_engine: "echo"
       })
 
-      {:ok, _} = restart_registry()
+      {:ok, _} = restart_config_and_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -281,13 +299,14 @@ defmodule LemonGateway.TransportRegistryTest do
   describe "transport_enabled? with keyword list config" do
     test "telegram enabled when enable_telegram is true in keyword list" do
       Application.put_env(:lemon_gateway, :transports, [LemonGateway.Telegram.Transport])
-      Application.put_env(:lemon_gateway, LemonGateway.Config, [
+
+      Application.put_env(:lemon_gateway, LemonGateway.Config,
         max_concurrent_runs: 1,
         default_engine: "echo",
         enable_telegram: true
-      ])
+      )
 
-      {:ok, _} = restart_registry()
+      {:ok, _} = restart_config_and_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -297,13 +316,14 @@ defmodule LemonGateway.TransportRegistryTest do
 
     test "telegram disabled when enable_telegram is false in keyword list" do
       Application.put_env(:lemon_gateway, :transports, [LemonGateway.Telegram.Transport])
-      Application.put_env(:lemon_gateway, LemonGateway.Config, [
+
+      Application.put_env(:lemon_gateway, LemonGateway.Config,
         max_concurrent_runs: 1,
         default_engine: "echo",
         enable_telegram: false
-      ])
+      )
 
-      {:ok, _} = restart_registry()
+      {:ok, _} = restart_config_and_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -313,12 +333,13 @@ defmodule LemonGateway.TransportRegistryTest do
 
     test "telegram disabled when enable_telegram key missing from keyword list" do
       Application.put_env(:lemon_gateway, :transports, [LemonGateway.Telegram.Transport])
-      Application.put_env(:lemon_gateway, LemonGateway.Config, [
+
+      Application.put_env(:lemon_gateway, LemonGateway.Config,
         max_concurrent_runs: 1,
         default_engine: "echo"
-      ])
+      )
 
-      {:ok, _} = restart_registry()
+      {:ok, _} = restart_config_and_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -332,7 +353,7 @@ defmodule LemonGateway.TransportRegistryTest do
       Application.put_env(:lemon_gateway, :transports, [LemonGateway.Telegram.Transport])
       Application.put_env(:lemon_gateway, LemonGateway.Config, %{})
 
-      {:ok, _} = restart_registry()
+      {:ok, _} = restart_config_and_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -344,7 +365,7 @@ defmodule LemonGateway.TransportRegistryTest do
       Application.put_env(:lemon_gateway, :transports, [LemonGateway.Telegram.Transport])
       Application.put_env(:lemon_gateway, LemonGateway.Config, [])
 
-      {:ok, _} = restart_registry()
+      {:ok, _} = restart_config_and_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -453,11 +474,12 @@ defmodule LemonGateway.TransportRegistryTest do
         AnotherTransport,
         LemonGateway.Telegram.Transport
       ])
+
       Application.put_env(:lemon_gateway, LemonGateway.Config, %{
         enable_telegram: false
       })
 
-      {:ok, _} = restart_registry()
+      {:ok, _} = restart_config_and_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -484,11 +506,12 @@ defmodule LemonGateway.TransportRegistryTest do
         AnotherTransport,
         LemonGateway.Telegram.Transport
       ])
+
       Application.put_env(:lemon_gateway, LemonGateway.Config, %{
         enable_telegram: true
       })
 
-      {:ok, _} = restart_registry()
+      {:ok, _} = restart_config_and_registry()
 
       enabled = TransportRegistry.enabled_transports()
       enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
@@ -523,6 +546,7 @@ defmodule LemonGateway.TransportRegistryTest do
         AnotherTransport,
         ThirdTransport
       ])
+
       Application.put_env(:lemon_gateway, LemonGateway.Config, %{})
 
       {:ok, _} = restart_registry()
@@ -538,6 +562,7 @@ defmodule LemonGateway.TransportRegistryTest do
 
     test "non-telegram transports not affected by enable_telegram setting" do
       Application.put_env(:lemon_gateway, :transports, [MockTransport])
+
       Application.put_env(:lemon_gateway, LemonGateway.Config, %{
         enable_telegram: false
       })

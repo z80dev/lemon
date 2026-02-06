@@ -66,12 +66,17 @@ defmodule LemonGateway.Engines.CodexEngineTest do
         result = Codex.format_resume(token)
         assert String.contains?(result, value)
         assert String.contains?(result, "resume")
-        refute String.contains?(result, "--")  # Codex doesn't use --resume
+        # Codex doesn't use --resume
+        refute String.contains?(result, "--")
       end
     end
 
     test "preserves special characters in thread ID" do
-      token = %LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_with-dashes_and_123"}
+      token = %LemonGateway.Types.ResumeToken{
+        engine: "codex",
+        value: "thread_with-dashes_and_123"
+      }
+
       result = Codex.format_resume(token)
       assert result == "codex resume thread_with-dashes_and_123"
     end
@@ -91,7 +96,9 @@ defmodule LemonGateway.Engines.CodexEngineTest do
   describe "extract_resume/1" do
     test "extracts token from plain text" do
       text = "codex resume thread_abc123"
-      assert %LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_abc123"} = Codex.extract_resume(text)
+
+      assert %LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_abc123"} =
+               Codex.extract_resume(text)
     end
 
     test "extracts token from text with surrounding content" do
@@ -106,7 +113,9 @@ defmodule LemonGateway.Engines.CodexEngineTest do
 
     test "extracts token case-insensitively" do
       text = "CODEX RESUME Thread123"
-      assert %LemonGateway.Types.ResumeToken{engine: "codex", value: "Thread123"} = Codex.extract_resume(text)
+
+      assert %LemonGateway.Types.ResumeToken{engine: "codex", value: "Thread123"} =
+               Codex.extract_resume(text)
     end
 
     test "returns nil for non-matching text" do
@@ -121,7 +130,8 @@ defmodule LemonGateway.Engines.CodexEngineTest do
     end
 
     test "returns nil for malformed codex tokens" do
-      assert Codex.extract_resume("codex--resume abc") == nil  # no space
+      # no space
+      assert Codex.extract_resume("codex--resume abc") == nil
     end
 
     test "extracts first token when multiple present" do
@@ -183,7 +193,8 @@ defmodule LemonGateway.Engines.CodexEngineTest do
     end
 
     test "returns false for malformed lines" do
-      refute Codex.is_resume_line("codex--resume thread_123")  # no space
+      # no space
+      refute Codex.is_resume_line("codex--resume thread_123")
     end
   end
 
@@ -326,7 +337,12 @@ defmodule LemonGateway.Engines.CodexEngineTest do
   describe "CliAdapter.to_gateway_event/1 - CompletedEvent" do
     test "maps successful CompletedEvent" do
       token = CoreResumeToken.new("codex", "thread_abc")
-      ev = CompletedEvent.ok("codex", "Task completed successfully", resume: token, usage: %{input_tokens: 200})
+
+      ev =
+        CompletedEvent.ok("codex", "Task completed successfully",
+          resume: token,
+          usage: %{input_tokens: 200}
+        )
 
       result = CliAdapter.to_gateway_event(ev)
 
@@ -340,7 +356,9 @@ defmodule LemonGateway.Engines.CodexEngineTest do
 
     test "maps failed CompletedEvent with error" do
       token = CoreResumeToken.new("codex", "thread_fail")
-      ev = CompletedEvent.error("codex", "API error occurred", resume: token, answer: "partial work")
+
+      ev =
+        CompletedEvent.error("codex", "API error occurred", resume: token, answer: "partial work")
 
       result = CliAdapter.to_gateway_event(ev)
 
@@ -361,11 +379,16 @@ defmodule LemonGateway.Engines.CodexEngineTest do
 
     test "maps CompletedEvent with full usage stats" do
       token = CoreResumeToken.new("codex", "t1")
-      ev = CompletedEvent.ok("codex", "Done", resume: token, usage: %{
-        input_tokens: 100,
-        output_tokens: 50,
-        cached_input_tokens: 25
-      })
+
+      ev =
+        CompletedEvent.ok("codex", "Done",
+          resume: token,
+          usage: %{
+            input_tokens: 100,
+            output_tokens: 50,
+            cached_input_tokens: 25
+          }
+        )
 
       result = CliAdapter.to_gateway_event(ev)
 
@@ -458,6 +481,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
   describe "Job struct for Codex engine" do
     test "creates valid job for Codex" do
       scope = %ChatScope{transport: :telegram, chat_id: 123}
+
       job = %Job{
         scope: scope,
         user_msg_id: 456,
@@ -473,6 +497,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
     test "creates job with resume token" do
       scope = %ChatScope{transport: :telegram, chat_id: 123}
       resume = %LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_abc"}
+
       job = %Job{
         scope: scope,
         user_msg_id: 456,
@@ -485,12 +510,14 @@ defmodule LemonGateway.Engines.CodexEngineTest do
 
     test "creates job with metadata" do
       scope = %ChatScope{transport: :telegram, chat_id: 123}
+
       job = %Job{
         scope: scope,
         user_msg_id: 1,
         text: "test",
         meta: %{source: "api", priority: :high}
       }
+
       assert job.meta.source == "api"
       assert job.meta.priority == :high
     end
@@ -535,6 +562,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
 
     test "allows optional title and meta fields" do
       resume = %LemonGateway.Types.ResumeToken{engine: "codex", value: "t1"}
+
       started = %Event.Started{
         engine: "codex",
         resume: resume,
@@ -770,13 +798,15 @@ defmodule LemonGateway.Engines.CodexEngineTest do
     end
 
     test "file change with multiple files" do
-      action = Action.new("fc_1", :file_change, "3 files changed", %{
-        changes: [
-          %{path: "a.ex", kind: :add},
-          %{path: "b.ex", kind: :update},
-          %{path: "c.ex", kind: :delete}
-        ]
-      })
+      action =
+        Action.new("fc_1", :file_change, "3 files changed", %{
+          changes: [
+            %{path: "a.ex", kind: :add},
+            %{path: "b.ex", kind: :update},
+            %{path: "c.ex", kind: :delete}
+          ]
+        })
+
       ev = ActionEvent.new("codex", action, :completed, ok: true)
 
       result = CliAdapter.to_gateway_event(ev)

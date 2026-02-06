@@ -120,7 +120,8 @@ defmodule LemonGateway.SchedulerTest do
         in_flight: %{
           slot_ref1 => %{worker: worker1, thread_key: {:scope, :key1}, mon_ref: mon_ref1}
         },
-        waitq: :queue.from_list([%{worker: worker2, thread_key: {:scope, :key2}, mon_ref: mon_ref2}]),
+        waitq:
+          :queue.from_list([%{worker: worker2, thread_key: {:scope, :key2}, mon_ref: mon_ref2}]),
         monitors: %{worker1 => mon_ref1, worker2 => mon_ref2},
         worker_counts: %{worker1 => 1, worker2 => 1}
       }
@@ -173,7 +174,8 @@ defmodule LemonGateway.SchedulerTest do
         in_flight: %{
           slot_ref => %{worker: worker, thread_key: {:scope, :key1}, mon_ref: mon_ref}
         },
-        waitq: :queue.from_list([%{worker: worker, thread_key: {:scope, :key2}, mon_ref: mon_ref}]),
+        waitq:
+          :queue.from_list([%{worker: worker, thread_key: {:scope, :key2}, mon_ref: mon_ref}]),
         monitors: %{worker => mon_ref},
         worker_counts: %{worker => 2}
       }
@@ -225,15 +227,16 @@ defmodule LemonGateway.SchedulerTest do
         worker_counts: %{}
       }
 
-      workers = for _ <- 1..3 do
-        spawn(fn ->
-          receive do
-            {:slot_granted, _ref} -> :ok
-          after
-            1000 -> :timeout
-          end
-        end)
-      end
+      workers =
+        for _ <- 1..3 do
+          spawn(fn ->
+            receive do
+              {:slot_granted, _ref} -> :ok
+            after
+              1000 -> :timeout
+            end
+          end)
+        end
 
       # Request slots for all workers
       final_state =
@@ -241,6 +244,7 @@ defmodule LemonGateway.SchedulerTest do
         |> Enum.reduce(state, fn {worker, i}, acc ->
           {:noreply, new_state} =
             Scheduler.handle_cast({:request_slot, worker, {:scope, i}}, acc)
+
           new_state
         end)
 
@@ -253,9 +257,10 @@ defmodule LemonGateway.SchedulerTest do
     end
 
     test "fourth request is queued when max is 3" do
-      workers = for _ <- 1..4 do
-        spawn(fn -> Process.sleep(:infinity) end)
-      end
+      workers =
+        for _ <- 1..4 do
+          spawn(fn -> Process.sleep(:infinity) end)
+        end
 
       state = %{
         max: 3,
@@ -270,6 +275,7 @@ defmodule LemonGateway.SchedulerTest do
         |> Enum.reduce(state, fn {worker, i}, acc ->
           {:noreply, new_state} =
             Scheduler.handle_cast({:request_slot, worker, {:scope, i}}, acc)
+
           new_state
         end)
 
@@ -297,6 +303,7 @@ defmodule LemonGateway.SchedulerTest do
         Enum.reduce(1..3, state, fn i, acc ->
           {:noreply, new_state} =
             Scheduler.handle_cast({:request_slot, worker, {:scope, i}}, acc)
+
           new_state
         end)
 
@@ -367,15 +374,16 @@ defmodule LemonGateway.SchedulerTest do
 
     test "grant_until_full grants multiple waiting slots" do
       # Start with empty in_flight, 3 workers waiting
-      workers = for _ <- 1..3 do
-        spawn(fn ->
-          receive do
-            {:slot_granted, _ref} -> Process.sleep(:infinity)
-          after
-            1000 -> :timeout
-          end
-        end)
-      end
+      workers =
+        for _ <- 1..3 do
+          spawn(fn ->
+            receive do
+              {:slot_granted, _ref} -> Process.sleep(:infinity)
+            after
+              1000 -> :timeout
+            end
+          end)
+        end
 
       # Manually build waitq with monitor refs
       waitq_entries =
@@ -411,13 +419,14 @@ defmodule LemonGateway.SchedulerTest do
     end
 
     test "waitq preserves FIFO order" do
-      workers = for _ <- 1..3 do
-        spawn(fn ->
-          receive do
-            {:slot_granted, _ref} -> Process.sleep(:infinity)
-          end
-        end)
-      end
+      workers =
+        for _ <- 1..3 do
+          spawn(fn ->
+            receive do
+              {:slot_granted, _ref} -> Process.sleep(:infinity)
+            end
+          end)
+        end
 
       [w1, w2, w3] = workers
 
@@ -429,7 +438,11 @@ defmodule LemonGateway.SchedulerTest do
       state = %{
         max: 1,
         in_flight: %{
-          occupier_slot => %{worker: occupier, thread_key: {:scope, :occupier}, mon_ref: occupier_mon}
+          occupier_slot => %{
+            worker: occupier,
+            thread_key: {:scope, :occupier},
+            mon_ref: occupier_mon
+          }
         },
         waitq: :queue.new(),
         monitors: %{occupier => occupier_mon},
@@ -442,6 +455,7 @@ defmodule LemonGateway.SchedulerTest do
         |> Enum.reduce(state, fn {worker, i}, acc ->
           {:noreply, new_state} =
             Scheduler.handle_cast({:request_slot, worker, {:scope, i}}, acc)
+
           new_state
         end)
 
@@ -465,11 +479,12 @@ defmodule LemonGateway.SchedulerTest do
 
   describe "cancel/2" do
     test "cancel returns :ok for alive process" do
-      pid = spawn(fn ->
-        receive do
-          {:cancel, _reason} -> :ok
-        end
-      end)
+      pid =
+        spawn(fn ->
+          receive do
+            {:cancel, _reason} -> :ok
+          end
+        end)
 
       assert :ok == Scheduler.cancel(pid, :test_reason)
 
@@ -479,7 +494,8 @@ defmodule LemonGateway.SchedulerTest do
 
     test "cancel returns :ok for dead process" do
       pid = spawn(fn -> :ok end)
-      Process.sleep(10)  # Let it die
+      # Let it die
+      Process.sleep(10)
 
       refute Process.alive?(pid)
       assert :ok == Scheduler.cancel(pid, :test_reason)
@@ -493,13 +509,14 @@ defmodule LemonGateway.SchedulerTest do
     test "cancel uses :user_requested as default reason" do
       test_pid = self()
       # GenServer.cast wraps the message, so we need to receive the cast format
-      pid = spawn(fn ->
-        receive do
-          {:"$gen_cast", {:cancel, reason}} -> send(test_pid, {:got_cancel, reason})
-        after
-          1000 -> :timeout
-        end
-      end)
+      pid =
+        spawn(fn ->
+          receive do
+            {:"$gen_cast", {:cancel, reason}} -> send(test_pid, {:got_cancel, reason})
+          after
+            1000 -> :timeout
+          end
+        end)
 
       # Give the spawned process time to start and wait on receive
       Process.sleep(10)
@@ -628,13 +645,17 @@ defmodule LemonGateway.SchedulerTest do
     test "worker crash while in waitq is cleaned up" do
       # Create a worker that will die
       worker = spawn(fn -> :ok end)
-      Process.sleep(10)  # Let it die
+      # Let it die
+      Process.sleep(10)
 
-      mon_ref = make_ref()  # Simulated mon_ref (real one would be invalid now)
+      # Simulated mon_ref (real one would be invalid now)
+      mon_ref = make_ref()
 
       state = %{
         max: 1,
-        in_flight: %{make_ref() => %{worker: self(), thread_key: {:scope, :x}, mon_ref: make_ref()}},
+        in_flight: %{
+          make_ref() => %{worker: self(), thread_key: {:scope, :x}, mon_ref: make_ref()}
+        },
         waitq: :queue.from_list([%{worker: worker, thread_key: {:scope, :y}, mon_ref: mon_ref}]),
         monitors: %{worker => mon_ref, self() => make_ref()},
         worker_counts: %{worker => 1, self() => 1}
@@ -693,15 +714,17 @@ defmodule LemonGateway.SchedulerTest do
       }
 
       # Simulate 10 rapid slot requests
-      workers = for _ <- 1..10 do
-        spawn(fn -> Process.sleep(:infinity) end)
-      end
+      workers =
+        for _ <- 1..10 do
+          spawn(fn -> Process.sleep(:infinity) end)
+        end
 
       final_state =
         Enum.with_index(workers)
         |> Enum.reduce(state, fn {worker, i}, acc ->
           {:noreply, new_state} =
             Scheduler.handle_cast({:request_slot, worker, {:scope, i}}, acc)
+
           new_state
         end)
 
@@ -713,9 +736,10 @@ defmodule LemonGateway.SchedulerTest do
     end
 
     test "interleaved request and release operations" do
-      workers = for _ <- 1..3 do
-        spawn(fn -> Process.sleep(:infinity) end)
-      end
+      workers =
+        for _ <- 1..3 do
+          spawn(fn -> Process.sleep(:infinity) end)
+        end
 
       [w1, w2, w3] = workers
 
@@ -730,16 +754,19 @@ defmodule LemonGateway.SchedulerTest do
       # Request from w1 - granted
       {:noreply, state} =
         Scheduler.handle_cast({:request_slot, w1, {:scope, 1}}, state)
+
       assert map_size(state.in_flight) == 1
 
       # Request from w2 - granted
       {:noreply, state} =
         Scheduler.handle_cast({:request_slot, w2, {:scope, 2}}, state)
+
       assert map_size(state.in_flight) == 2
 
       # Request from w3 - queued (at max)
       {:noreply, state} =
         Scheduler.handle_cast({:request_slot, w3, {:scope, 3}}, state)
+
       assert map_size(state.in_flight) == 2
       assert :queue.len(state.waitq) == 1
 
@@ -760,6 +787,7 @@ defmodule LemonGateway.SchedulerTest do
       w3_in_flight =
         state.in_flight
         |> Enum.any?(fn {_ref, entry} -> entry.worker == w3 end)
+
       assert w3_in_flight
 
       Enum.each(workers, &Process.exit(&1, :kill))
@@ -767,11 +795,12 @@ defmodule LemonGateway.SchedulerTest do
 
     test "worker death during slot grant cycle" do
       # Worker that will die mid-test
-      dying_worker = spawn(fn ->
-        receive do
-          :die -> :ok
-        end
-      end)
+      dying_worker =
+        spawn(fn ->
+          receive do
+            :die -> :ok
+          end
+        end)
 
       stable_worker = self()
 
@@ -785,8 +814,16 @@ defmodule LemonGateway.SchedulerTest do
       state = %{
         max: 2,
         in_flight: %{
-          slot_dying => %{worker: dying_worker, thread_key: {:scope, :dying}, mon_ref: mon_ref_dying},
-          slot_stable => %{worker: stable_worker, thread_key: {:scope, :stable}, mon_ref: mon_ref_stable}
+          slot_dying => %{
+            worker: dying_worker,
+            thread_key: {:scope, :dying},
+            mon_ref: mon_ref_dying
+          },
+          slot_stable => %{
+            worker: stable_worker,
+            thread_key: {:scope, :stable},
+            mon_ref: mon_ref_stable
+          }
         },
         waitq: :queue.new(),
         monitors: %{dying_worker => mon_ref_dying, stable_worker => mon_ref_stable},
@@ -881,6 +918,7 @@ defmodule LemonGateway.SchedulerTest do
         Enum.reduce(1..5, state, fn i, acc ->
           {:noreply, new_state} =
             Scheduler.handle_cast({:request_slot, worker, {:scope, i}}, acc)
+
           new_state
         end)
 
@@ -898,6 +936,7 @@ defmodule LemonGateway.SchedulerTest do
             Scheduler.handle_cast({:release_slot, slot_ref}, acc_state)
 
           new_expected = expected_count - 1
+
           if new_expected > 0 do
             assert Map.get(new_state.worker_counts, worker) == new_expected
             assert Map.has_key?(new_state.monitors, worker)
@@ -948,6 +987,7 @@ defmodule LemonGateway.SchedulerTest do
 
       # Start with worker_counts at 1
       slot_ref = make_ref()
+
       state = %{
         max: 5,
         in_flight: %{
@@ -989,8 +1029,11 @@ defmodule LemonGateway.SchedulerTest do
 
       # Worker1 gets 3 slots, worker2 gets 2 slots, worker3 gets 1 slot
       requests = [
-        {worker1, 1}, {worker1, 2}, {worker1, 3},
-        {worker2, 4}, {worker2, 5},
+        {worker1, 1},
+        {worker1, 2},
+        {worker1, 3},
+        {worker2, 4},
+        {worker2, 5},
         {worker3, 6}
       ]
 
@@ -998,6 +1041,7 @@ defmodule LemonGateway.SchedulerTest do
         Enum.reduce(requests, state, fn {worker, i}, acc ->
           {:noreply, new_state} =
             Scheduler.handle_cast({:request_slot, worker, {:scope, i}}, acc)
+
           new_state
         end)
 
@@ -1016,7 +1060,8 @@ defmodule LemonGateway.SchedulerTest do
       assert not Map.has_key?(after_w1_death.worker_counts, worker1)
       assert Map.get(after_w1_death.worker_counts, worker2) == 2
       assert Map.get(after_w1_death.worker_counts, worker3) == 1
-      assert map_size(after_w1_death.in_flight) == 3  # Only worker2 and worker3 slots remain
+      # Only worker2 and worker3 slots remain
+      assert map_size(after_w1_death.in_flight) == 3
 
       Process.exit(worker2, :kill)
       Process.exit(worker3, :kill)
@@ -1087,7 +1132,11 @@ defmodule LemonGateway.SchedulerTest do
       state = %{
         max: 1,
         in_flight: %{
-          occupier_slot => %{worker: occupier, thread_key: {:scope, :occupier}, mon_ref: occupier_mon}
+          occupier_slot => %{
+            worker: occupier,
+            thread_key: {:scope, :occupier},
+            mon_ref: occupier_mon
+          }
         },
         waitq: :queue.new(),
         monitors: %{occupier => occupier_mon},
@@ -1140,7 +1189,8 @@ defmodule LemonGateway.SchedulerTest do
         in_flight: %{},
         waitq: :queue.new(),
         monitors: %{worker => existing_mon_ref},
-        worker_counts: %{}  # Missing entry for worker
+        # Missing entry for worker
+        worker_counts: %{}
       }
 
       {:noreply, new_state} =
@@ -1155,15 +1205,16 @@ defmodule LemonGateway.SchedulerTest do
   describe "concurrent slot requests" do
     test "multiple workers requesting slots simultaneously are handled in order" do
       # Simulate 20 workers making requests
-      workers = for i <- 1..20 do
-        spawn(fn ->
-          receive do
-            {:slot_granted, _ref} -> send(self(), {:worker_got_slot, i})
-          after
-            5000 -> :timeout
-          end
-        end)
-      end
+      workers =
+        for i <- 1..20 do
+          spawn(fn ->
+            receive do
+              {:slot_granted, _ref} -> send(self(), {:worker_got_slot, i})
+            after
+              5000 -> :timeout
+            end
+          end)
+        end
 
       state = %{
         max: 5,
@@ -1178,6 +1229,7 @@ defmodule LemonGateway.SchedulerTest do
         |> Enum.reduce(state, fn {worker, i}, acc ->
           {:noreply, new_state} =
             Scheduler.handle_cast({:request_slot, worker, {:scope, i}}, acc)
+
           new_state
         end)
 
@@ -1195,25 +1247,29 @@ defmodule LemonGateway.SchedulerTest do
 
     test "burst release followed by burst requests" do
       # Create initial state with 5 occupied slots
-      workers = for _ <- 1..5 do
-        spawn(fn -> Process.sleep(:infinity) end)
-      end
+      workers =
+        for _ <- 1..5 do
+          spawn(fn -> Process.sleep(:infinity) end)
+        end
 
       {initial_state, slot_refs} =
         Enum.with_index(workers)
-        |> Enum.reduce({%{
-          max: 5,
-          in_flight: %{},
-          waitq: :queue.new(),
-          monitors: %{},
-          worker_counts: %{}
-        }, []}, fn {worker, i}, {acc_state, refs} ->
-          {:noreply, new_state} =
-            Scheduler.handle_cast({:request_slot, worker, {:scope, i}}, acc_state)
+        |> Enum.reduce(
+          {%{
+             max: 5,
+             in_flight: %{},
+             waitq: :queue.new(),
+             monitors: %{},
+             worker_counts: %{}
+           }, []},
+          fn {worker, i}, {acc_state, refs} ->
+            {:noreply, new_state} =
+              Scheduler.handle_cast({:request_slot, worker, {:scope, i}}, acc_state)
 
-          new_refs = Map.keys(new_state.in_flight) -- refs
-          {new_state, refs ++ new_refs}
-        end)
+            new_refs = Map.keys(new_state.in_flight) -- refs
+            {new_state, refs ++ new_refs}
+          end
+        )
 
       assert map_size(initial_state.in_flight) == 5
       assert length(slot_refs) == 5
@@ -1223,21 +1279,24 @@ defmodule LemonGateway.SchedulerTest do
         Enum.reduce(slot_refs, initial_state, fn slot_ref, acc ->
           {:noreply, new_state} =
             Scheduler.handle_cast({:release_slot, slot_ref}, acc)
+
           new_state
         end)
 
       assert map_size(state_after_releases.in_flight) == 0
 
       # New burst of 10 requests
-      new_workers = for _ <- 1..10 do
-        spawn(fn -> Process.sleep(:infinity) end)
-      end
+      new_workers =
+        for _ <- 1..10 do
+          spawn(fn -> Process.sleep(:infinity) end)
+        end
 
       final_state =
         Enum.with_index(new_workers)
         |> Enum.reduce(state_after_releases, fn {worker, i}, acc ->
           {:noreply, new_state} =
             Scheduler.handle_cast({:request_slot, worker, {:scope, i + 100}}, acc)
+
           new_state
         end)
 
@@ -1257,9 +1316,10 @@ defmodule LemonGateway.SchedulerTest do
         worker_counts: %{}
       }
 
-      workers = for _ <- 1..6 do
-        spawn(fn -> Process.sleep(:infinity) end)
-      end
+      workers =
+        for _ <- 1..6 do
+          spawn(fn -> Process.sleep(:infinity) end)
+        end
 
       # Process: request, request, release first, request, release second, request...
       [w1, w2, w3, w4, w5, _w6] = workers
@@ -1326,9 +1386,10 @@ defmodule LemonGateway.SchedulerTest do
           slot_ref1 => %{worker: worker, thread_key: {:scope, :k1}, mon_ref: mon_ref},
           slot_ref2 => %{worker: worker, thread_key: {:scope, :k2}, mon_ref: mon_ref}
         },
-        waitq: :queue.from_list([
-          %{worker: worker, thread_key: {:scope, :k3}, mon_ref: mon_ref}
-        ]),
+        waitq:
+          :queue.from_list([
+            %{worker: worker, thread_key: {:scope, :k3}, mon_ref: mon_ref}
+          ]),
         monitors: %{worker => mon_ref},
         worker_counts: %{worker => 3}
       }
@@ -1362,10 +1423,11 @@ defmodule LemonGateway.SchedulerTest do
           slot_ref1 => %{worker: worker1, thread_key: {:scope, :k1}, mon_ref: mon_ref1},
           slot_ref2 => %{worker: worker2, thread_key: {:scope, :k2}, mon_ref: mon_ref2}
         },
-        waitq: :queue.from_list([
-          %{worker: worker1, thread_key: {:scope, :k3}, mon_ref: mon_ref1},
-          %{worker: worker2, thread_key: {:scope, :k4}, mon_ref: mon_ref2}
-        ]),
+        waitq:
+          :queue.from_list([
+            %{worker: worker1, thread_key: {:scope, :k3}, mon_ref: mon_ref1},
+            %{worker: worker2, thread_key: {:scope, :k4}, mon_ref: mon_ref2}
+          ]),
         monitors: %{worker1 => mon_ref1, worker2 => mon_ref2},
         worker_counts: %{worker1 => 2, worker2 => 2}
       }
@@ -1404,12 +1466,14 @@ defmodule LemonGateway.SchedulerTest do
 
       # Worker only has waitq entries, no in_flight
       state = %{
-        max: 0,  # max=0 so nothing can be in_flight
+        # max=0 so nothing can be in_flight
+        max: 0,
         in_flight: %{},
-        waitq: :queue.from_list([
-          %{worker: worker, thread_key: {:scope, :k1}, mon_ref: mon_ref},
-          %{worker: worker, thread_key: {:scope, :k2}, mon_ref: mon_ref}
-        ]),
+        waitq:
+          :queue.from_list([
+            %{worker: worker, thread_key: {:scope, :k1}, mon_ref: mon_ref},
+            %{worker: worker, thread_key: {:scope, :k2}, mon_ref: mon_ref}
+          ]),
         monitors: %{worker => mon_ref},
         worker_counts: %{worker => 2}
       }
@@ -1437,11 +1501,16 @@ defmodule LemonGateway.SchedulerTest do
       state = %{
         max: 1,
         in_flight: %{
-          dying_slot => %{worker: dying_worker, thread_key: {:scope, :dying}, mon_ref: dying_mon_ref}
+          dying_slot => %{
+            worker: dying_worker,
+            thread_key: {:scope, :dying},
+            mon_ref: dying_mon_ref
+          }
         },
-        waitq: :queue.from_list([
-          %{worker: waiting_worker, thread_key: {:scope, :waiting}, mon_ref: waiting_mon_ref}
-        ]),
+        waitq:
+          :queue.from_list([
+            %{worker: waiting_worker, thread_key: {:scope, :waiting}, mon_ref: waiting_mon_ref}
+          ]),
         monitors: %{dying_worker => dying_mon_ref, waiting_worker => waiting_mon_ref},
         worker_counts: %{dying_worker => 1, waiting_worker => 1}
       }
@@ -1471,7 +1540,8 @@ defmodule LemonGateway.SchedulerTest do
         },
         waitq: :queue.new(),
         monitors: %{worker => mon_ref},
-        worker_counts: %{}  # Missing entry
+        # Missing entry
+        worker_counts: %{}
       }
 
       Process.exit(worker, :kill)
@@ -1500,10 +1570,11 @@ defmodule LemonGateway.SchedulerTest do
           slot_ref2 => %{worker: worker, thread_key: {:scope, :k2}, mon_ref: mon_ref},
           slot_ref3 => %{worker: worker, thread_key: {:scope, :k3}, mon_ref: mon_ref}
         },
-        waitq: :queue.from_list([
-          %{worker: worker, thread_key: {:scope, :k4}, mon_ref: mon_ref},
-          %{worker: worker, thread_key: {:scope, :k5}, mon_ref: mon_ref}
-        ]),
+        waitq:
+          :queue.from_list([
+            %{worker: worker, thread_key: {:scope, :k4}, mon_ref: mon_ref},
+            %{worker: worker, thread_key: {:scope, :k5}, mon_ref: mon_ref}
+          ]),
         monitors: %{worker => mon_ref},
         worker_counts: %{worker => 5}
       }
@@ -1590,9 +1661,10 @@ defmodule LemonGateway.SchedulerTest do
         in_flight: %{
           occupier_slot => %{worker: occupier, thread_key: {:scope, :occ}, mon_ref: occupier_mon}
         },
-        waitq: :queue.from_list([
-          %{worker: worker, thread_key: {:scope, :test}, mon_ref: worker_mon}
-        ]),
+        waitq:
+          :queue.from_list([
+            %{worker: worker, thread_key: {:scope, :test}, mon_ref: worker_mon}
+          ]),
         monitors: %{occupier => occupier_mon, worker => worker_mon},
         worker_counts: %{occupier => 1, worker => 1}
       }
@@ -1679,30 +1751,36 @@ defmodule LemonGateway.SchedulerTest do
       # Phase 2: First slot request - granted
       {:noreply, state} =
         Scheduler.handle_cast({:request_slot, worker, {:scope, 1}}, state)
+
       assert_receive {:slot_granted, slot_ref1}
       assert Map.get(state.worker_counts, worker) == 1
 
       # Phase 3: Second slot request - granted
       {:noreply, state} =
         Scheduler.handle_cast({:request_slot, worker, {:scope, 2}}, state)
+
       assert_receive {:slot_granted, slot_ref2}
       assert Map.get(state.worker_counts, worker) == 2
 
       # Phase 4: Third slot request - queued (at max)
       {:noreply, state} =
         Scheduler.handle_cast({:request_slot, worker, {:scope, 3}}, state)
+
       refute_receive {:slot_granted, _}
       assert Map.get(state.worker_counts, worker) == 3
 
       # Phase 5: Release first slot - queued request granted
       {:noreply, state} =
         Scheduler.handle_cast({:release_slot, slot_ref1}, state)
+
       assert_receive {:slot_granted, slot_ref3}
-      assert Map.get(state.worker_counts, worker) == 2  # Released 1, granted 1 from waitq
+      # Released 1, granted 1 from waitq
+      assert Map.get(state.worker_counts, worker) == 2
 
       # Phase 6: Release all slots
       {:noreply, state} =
         Scheduler.handle_cast({:release_slot, slot_ref2}, state)
+
       assert Map.get(state.worker_counts, worker) == 1
 
       {:noreply, state} =
@@ -1716,9 +1794,10 @@ defmodule LemonGateway.SchedulerTest do
 
   describe "maximum worker limits" do
     test "max=1 only allows one concurrent slot" do
-      workers = for _ <- 1..5 do
-        spawn(fn -> Process.sleep(:infinity) end)
-      end
+      workers =
+        for _ <- 1..5 do
+          spawn(fn -> Process.sleep(:infinity) end)
+        end
 
       state = %{
         max: 1,
@@ -1733,6 +1812,7 @@ defmodule LemonGateway.SchedulerTest do
         |> Enum.reduce(state, fn {worker, i}, acc ->
           {:noreply, new_state} =
             Scheduler.handle_cast({:request_slot, worker, {:scope, i}}, acc)
+
           new_state
         end)
 
@@ -1743,9 +1823,10 @@ defmodule LemonGateway.SchedulerTest do
     end
 
     test "max=100 allows many concurrent slots" do
-      workers = for _ <- 1..50 do
-        spawn(fn -> Process.sleep(:infinity) end)
-      end
+      workers =
+        for _ <- 1..50 do
+          spawn(fn -> Process.sleep(:infinity) end)
+        end
 
       state = %{
         max: 100,
@@ -1760,6 +1841,7 @@ defmodule LemonGateway.SchedulerTest do
         |> Enum.reduce(state, fn {worker, i}, acc ->
           {:noreply, new_state} =
             Scheduler.handle_cast({:request_slot, worker, {:scope, i}}, acc)
+
           new_state
         end)
 
@@ -1771,9 +1853,10 @@ defmodule LemonGateway.SchedulerTest do
     end
 
     test "exact max boundary - grants up to max, queues the rest" do
-      workers = for _ <- 1..10 do
-        spawn(fn -> Process.sleep(:infinity) end)
-      end
+      workers =
+        for _ <- 1..10 do
+          spawn(fn -> Process.sleep(:infinity) end)
+        end
 
       state = %{
         max: 7,
@@ -1788,6 +1871,7 @@ defmodule LemonGateway.SchedulerTest do
         |> Enum.reduce(state, fn {worker, i}, acc ->
           {:noreply, new_state} =
             Scheduler.handle_cast({:request_slot, worker, {:scope, i}}, acc)
+
           new_state
         end)
 
@@ -1813,6 +1897,7 @@ defmodule LemonGateway.SchedulerTest do
         Enum.reduce(1..8, state, fn i, acc ->
           {:noreply, new_state} =
             Scheduler.handle_cast({:request_slot, worker, {:scope, i}}, acc)
+
           new_state
         end)
 
@@ -1820,7 +1905,8 @@ defmodule LemonGateway.SchedulerTest do
       assert map_size(final_state.in_flight) == 5
       assert :queue.len(final_state.waitq) == 3
       assert Map.get(final_state.worker_counts, worker) == 8
-      assert map_size(final_state.monitors) == 1  # Only one monitor for the worker
+      # Only one monitor for the worker
+      assert map_size(final_state.monitors) == 1
 
       # Receive the 5 granted slots
       for _ <- 1..5 do
@@ -1832,13 +1918,14 @@ defmodule LemonGateway.SchedulerTest do
     end
 
     test "releasing slots at max allows queued workers through" do
-      workers = for _ <- 1..6 do
-        spawn(fn ->
-          receive do
-            {:slot_granted, _} -> Process.sleep(:infinity)
-          end
-        end)
-      end
+      workers =
+        for _ <- 1..6 do
+          spawn(fn ->
+            receive do
+              {:slot_granted, _} -> Process.sleep(:infinity)
+            end
+          end)
+        end
 
       state = %{
         max: 3,
@@ -1854,6 +1941,7 @@ defmodule LemonGateway.SchedulerTest do
         |> Enum.reduce(state, fn {worker, i}, acc ->
           {:noreply, new_state} =
             Scheduler.handle_cast({:request_slot, worker, {:scope, i}}, acc)
+
           new_state
         end)
 
@@ -1867,6 +1955,7 @@ defmodule LemonGateway.SchedulerTest do
         Enum.reduce(slot_refs, state, fn slot_ref, acc ->
           {:noreply, new_state} =
             Scheduler.handle_cast({:release_slot, slot_ref}, acc)
+
           new_state
         end)
 
@@ -1890,9 +1979,10 @@ defmodule LemonGateway.SchedulerTest do
     end
 
     test "worker death frees slot allowing queued worker through respecting max" do
-      [w1, w2, w3, w4] = for _ <- 1..4 do
-        spawn(fn -> Process.sleep(:infinity) end)
-      end
+      [w1, w2, w3, w4] =
+        for _ <- 1..4 do
+          spawn(fn -> Process.sleep(:infinity) end)
+        end
 
       mon_ref1 = Process.monitor(w1)
       mon_ref2 = Process.monitor(w2)
@@ -1910,10 +2000,11 @@ defmodule LemonGateway.SchedulerTest do
           slot_ref1 => %{worker: w1, thread_key: {:scope, 1}, mon_ref: mon_ref1},
           slot_ref2 => %{worker: w2, thread_key: {:scope, 2}, mon_ref: mon_ref2}
         },
-        waitq: :queue.from_list([
-          %{worker: w3, thread_key: {:scope, 3}, mon_ref: mon_ref3},
-          %{worker: w4, thread_key: {:scope, 4}, mon_ref: mon_ref4}
-        ]),
+        waitq:
+          :queue.from_list([
+            %{worker: w3, thread_key: {:scope, 3}, mon_ref: mon_ref3},
+            %{worker: w4, thread_key: {:scope, 4}, mon_ref: mon_ref4}
+          ]),
         monitors: %{w1 => mon_ref1, w2 => mon_ref2, w3 => mon_ref3, w4 => mon_ref4},
         worker_counts: %{w1 => 1, w2 => 1, w3 => 1, w4 => 1}
       }
@@ -1925,8 +2016,10 @@ defmodule LemonGateway.SchedulerTest do
         Scheduler.handle_info({:DOWN, mon_ref1, :process, w1, :killed}, state)
 
       # w3 should be granted (was first in queue)
-      assert map_size(state.in_flight) == 2  # Still at max
-      assert :queue.len(state.waitq) == 1    # Only w4 waiting now
+      # Still at max
+      assert map_size(state.in_flight) == 2
+      # Only w4 waiting now
+      assert :queue.len(state.waitq) == 1
 
       # Verify w2 still has its slot
       assert Enum.any?(state.in_flight, fn {_, e} -> e.worker == w2 end)
@@ -1942,9 +2035,10 @@ defmodule LemonGateway.SchedulerTest do
 
   describe "stress tests" do
     test "high volume slot cycling maintains consistency" do
-      workers = for _ <- 1..20 do
-        spawn(fn -> Process.sleep(:infinity) end)
-      end
+      workers =
+        for _ <- 1..20 do
+          spawn(fn -> Process.sleep(:infinity) end)
+        end
 
       state = %{
         max: 5,
@@ -1960,6 +2054,7 @@ defmodule LemonGateway.SchedulerTest do
         |> Enum.reduce(state, fn {worker, i}, acc ->
           {:noreply, new_state} =
             Scheduler.handle_cast({:request_slot, worker, {:scope, i}}, acc)
+
           new_state
         end)
 
@@ -1971,6 +2066,7 @@ defmodule LemonGateway.SchedulerTest do
         Enum.reduce(1..10, state, fn _, acc_state ->
           # Release one slot
           slot_to_release = acc_state.in_flight |> Map.keys() |> hd()
+
           {:noreply, after_release} =
             Scheduler.handle_cast({:release_slot, slot_to_release}, acc_state)
 
@@ -1988,9 +2084,10 @@ defmodule LemonGateway.SchedulerTest do
     end
 
     test "invariant: in_flight + waitq worker counts match sum of worker_counts" do
-      workers = for _ <- 1..15 do
-        spawn(fn -> Process.sleep(:infinity) end)
-      end
+      workers =
+        for _ <- 1..15 do
+          spawn(fn -> Process.sleep(:infinity) end)
+        end
 
       state = %{
         max: 5,
@@ -2005,8 +2102,10 @@ defmodule LemonGateway.SchedulerTest do
         Enum.reduce(workers, state, fn worker, acc ->
           {:noreply, state1} =
             Scheduler.handle_cast({:request_slot, worker, {:scope, :a}}, acc)
+
           {:noreply, state2} =
             Scheduler.handle_cast({:request_slot, worker, {:scope, :b}}, state1)
+
           state2
         end)
 

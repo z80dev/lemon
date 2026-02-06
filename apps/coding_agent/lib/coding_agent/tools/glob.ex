@@ -65,7 +65,9 @@ defmodule CodingAgent.Tools.Glob do
   defp do_execute(params, cwd, opts) do
     pattern = Map.get(params, "pattern", "")
     path = Map.get(params, "path")
-    max_results = Map.get(params, "max_results", Keyword.get(opts, :max_results, @default_max_results))
+
+    max_results =
+      Map.get(params, "max_results", Keyword.get(opts, :max_results, @default_max_results))
 
     if pattern == "" do
       {:error, "Pattern is required"}
@@ -75,40 +77,40 @@ defmodule CodingAgent.Tools.Glob do
       else
         base_dir = resolve_path(path || cwd, cwd)
 
-      glob_pattern =
-        if Path.type(pattern) == :absolute do
-          pattern
-        else
-          Path.join(base_dir, pattern)
-        end
+        glob_pattern =
+          if Path.type(pattern) == :absolute do
+            pattern
+          else
+            Path.join(base_dir, pattern)
+          end
 
-      matches =
-        Path.wildcard(glob_pattern)
-        |> Enum.filter(&File.regular?/1)
-        |> Enum.map(&{&1, file_mtime(&1)})
-        |> Enum.sort_by(fn {_path, mtime} -> mtime end, :desc)
+        matches =
+          Path.wildcard(glob_pattern)
+          |> Enum.filter(&File.regular?/1)
+          |> Enum.map(&{&1, file_mtime(&1)})
+          |> Enum.sort_by(fn {_path, mtime} -> mtime end, :desc)
 
-      {entries, truncated} =
-        if length(matches) > max_results do
-          {Enum.take(matches, max_results), true}
-        else
-          {matches, false}
-        end
+        {entries, truncated} =
+          if length(matches) > max_results do
+            {Enum.take(matches, max_results), true}
+          else
+            {matches, false}
+          end
 
-      output_lines =
-        case entries do
-          [] ->
-            ["No files found"]
+        output_lines =
+          case entries do
+            [] ->
+              ["No files found"]
 
-          _ ->
-            files = Enum.map(entries, fn {path, _mtime} -> path end)
+            _ ->
+              files = Enum.map(entries, fn {path, _mtime} -> path end)
 
-            if truncated do
-              files ++ ["", "(Results are truncated. Consider using a more specific pattern.)"]
-            else
-              files
-            end
-        end
+              if truncated do
+                files ++ ["", "(Results are truncated. Consider using a more specific pattern.)"]
+              else
+                files
+              end
+          end
 
         %AgentToolResult{
           content: [%TextContent{text: Enum.join(output_lines, "\n")}],

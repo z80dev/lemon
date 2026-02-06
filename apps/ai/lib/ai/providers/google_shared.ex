@@ -89,7 +89,8 @@ defmodule Ai.Providers.GoogleShared do
   later deltas may omit it. This helper preserves the last non-empty signature.
   """
   @spec retain_thought_signature(String.t() | nil, String.t() | nil) :: String.t() | nil
-  def retain_thought_signature(_existing, incoming) when is_binary(incoming) and byte_size(incoming) > 0 do
+  def retain_thought_signature(_existing, incoming)
+      when is_binary(incoming) and byte_size(incoming) > 0 do
     incoming
   end
 
@@ -202,7 +203,11 @@ defmodule Ai.Providers.GoogleShared do
       "functionResponse" =>
         %{
           "name" => msg.tool_name,
-          "response" => if(msg.is_error, do: %{"error" => response_value}, else: %{"output" => response_value})
+          "response" =>
+            if(msg.is_error,
+              do: %{"error" => response_value},
+              else: %{"output" => response_value}
+            )
         }
         |> maybe_add_id(include_id, msg.tool_call_id)
         |> maybe_add_nested_images(has_images and supports_multimodal_response, image_parts)
@@ -212,7 +217,8 @@ defmodule Ai.Providers.GoogleShared do
 
     # For older models, add images in a separate user message
     if has_images and not supports_multimodal_response do
-      result ++ [%{"role" => "user", "parts" => [%{"text" => "Tool result image:"} | image_parts]}]
+      result ++
+        [%{"role" => "user", "parts" => [%{"text" => "Tool result image:"} | image_parts]}]
     else
       result
     end
@@ -240,7 +246,11 @@ defmodule Ai.Providers.GoogleShared do
 
   defp convert_assistant_content_part(_model, %TextContent{}, _same), do: nil
 
-  defp convert_assistant_content_part(_model, %ThinkingContent{thinking: thinking, thinking_signature: sig}, true = _same)
+  defp convert_assistant_content_part(
+         _model,
+         %ThinkingContent{thinking: thinking, thinking_signature: sig},
+         true = _same
+       )
        when is_binary(thinking) and thinking != "" do
     thought_sig = resolve_thought_signature(true, sig)
 
@@ -299,7 +309,8 @@ defmodule Ai.Providers.GoogleShared do
   defp merge_function_responses(contents) do
     Enum.reduce(contents, [], fn content, acc ->
       case {acc, content} do
-        {[%{"role" => "user", "parts" => prev_parts} = prev | rest], %{"role" => "user", "parts" => new_parts}} ->
+        {[%{"role" => "user", "parts" => prev_parts} = prev | rest],
+         %{"role" => "user", "parts" => new_parts}} ->
           has_prev_fn_response = Enum.any?(prev_parts, &Map.has_key?(&1, "functionResponse"))
           has_new_fn_response = Enum.any?(new_parts, &Map.has_key?(&1, "functionResponse"))
 
@@ -544,7 +555,9 @@ defmodule Ai.Providers.GoogleShared do
           nil
       end
 
-    if delay_from_headers, do: delay_from_headers, else: extract_delay_from_text(error_text, normalize_delay)
+    if delay_from_headers,
+      do: delay_from_headers,
+      else: extract_delay_from_text(error_text, normalize_delay)
   end
 
   defp extract_delay_from_text(text, normalize_delay) do
@@ -593,7 +606,9 @@ defmodule Ai.Providers.GoogleShared do
   def retryable_error?(status, _error_text) when status in [429, 500, 502, 503, 504], do: true
 
   def retryable_error?(_status, error_text) do
-    pattern = ~r/resource.?exhausted|rate.?limit|overloaded|service.?unavailable|other.?side.?closed/i
+    pattern =
+      ~r/resource.?exhausted|rate.?limit|overloaded|service.?unavailable|other.?side.?closed/i
+
     Regex.match?(pattern, error_text)
   end
 

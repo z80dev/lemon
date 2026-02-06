@@ -299,7 +299,13 @@ defmodule CodingAgent.RunGraphServer do
   end
 
   defp schedule_cleanup do
-    interval = Application.get_env(:coding_agent, :run_graph_cleanup_interval_seconds, @cleanup_interval_seconds)
+    interval =
+      Application.get_env(
+        :coding_agent,
+        :run_graph_cleanup_interval_seconds,
+        @cleanup_interval_seconds
+      )
+
     Process.send_after(self(), :cleanup, interval * 1_000)
   end
 

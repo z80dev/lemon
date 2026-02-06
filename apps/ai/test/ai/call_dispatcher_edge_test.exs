@@ -110,7 +110,10 @@ defmodule Ai.CallDispatcherEdgeTest do
     end
 
     test "emits rejected event when max concurrency reached", %{provider: provider} do
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100})
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 5})
 
       CallDispatcher.set_concurrency_cap(provider, 1)
@@ -198,7 +201,10 @@ defmodule Ai.CallDispatcherEdgeTest do
 
   describe "cascading failures" do
     test "multiple concurrent failures trigger circuit breaker", %{provider: provider} do
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100})
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 3})
 
       # Launch multiple concurrent failing requests
@@ -225,7 +231,9 @@ defmodule Ai.CallDispatcherEdgeTest do
     end
 
     test "failures during half-open state reopen circuit immediately", %{provider: provider} do
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100})
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
 
       start_supervised!(
         {CircuitBreaker, provider: provider, failure_threshold: 2, recovery_timeout: 100}
@@ -256,7 +264,10 @@ defmodule Ai.CallDispatcherEdgeTest do
     end
 
     test "exception in callback triggers circuit breaker failure recording", %{provider: provider} do
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100})
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 2})
 
       # First failure via exception
@@ -280,7 +291,10 @@ defmodule Ai.CallDispatcherEdgeTest do
     end
 
     test "mixed success and failure patterns", %{provider: provider} do
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100})
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 3})
 
       # Interleave successes and failures
@@ -352,7 +366,8 @@ defmodule Ai.CallDispatcherEdgeTest do
 
       # Multiple rate limit rejections
       for _ <- 1..3 do
-        assert {:error, :rate_limited} = CallDispatcher.dispatch(provider, fn -> {:ok, "blocked"} end)
+        assert {:error, :rate_limited} =
+                 CallDispatcher.dispatch(provider, fn -> {:ok, "blocked"} end)
       end
 
       Process.sleep(20)
@@ -364,7 +379,10 @@ defmodule Ai.CallDispatcherEdgeTest do
     end
 
     test "circuit opens while rate limiter has available capacity", %{provider: provider} do
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100})
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 2})
 
       # Verify rate limiter has capacity
@@ -447,7 +465,10 @@ defmodule Ai.CallDispatcherEdgeTest do
 
   describe "request timeout handling" do
     test "slow callback holds slot until completion", %{provider: provider} do
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100})
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 5})
 
       CallDispatcher.set_concurrency_cap(provider, 2)
@@ -480,7 +501,10 @@ defmodule Ai.CallDispatcherEdgeTest do
     end
 
     test "callback timeout does not leave orphaned slots", %{provider: provider} do
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100})
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 5})
 
       CallDispatcher.set_concurrency_cap(provider, 1)
@@ -512,7 +536,10 @@ defmodule Ai.CallDispatcherEdgeTest do
     end
 
     test "GenServer call timeout does not corrupt state", %{provider: provider} do
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100})
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 5})
 
       # Perform many rapid operations
@@ -533,7 +560,9 @@ defmodule Ai.CallDispatcherEdgeTest do
 
       # State should be consistent
       state_after = CallDispatcher.get_state()
-      assert state_after.active_requests[provider] == 0 || state_after.active_requests[provider] == nil
+
+      assert state_after.active_requests[provider] == 0 ||
+               state_after.active_requests[provider] == nil
     end
   end
 
@@ -543,7 +572,10 @@ defmodule Ai.CallDispatcherEdgeTest do
 
   describe "dynamic cap changes during active requests" do
     test "lowering cap does not kill active requests", %{provider: provider} do
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100})
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 5})
 
       CallDispatcher.set_concurrency_cap(provider, 5)
@@ -590,14 +622,21 @@ defmodule Ai.CallDispatcherEdgeTest do
       end
 
       results = Task.await_many(tasks, 5000)
-      assert Enum.all?(results, fn {:ok, _} -> true; _ -> false end)
+
+      assert Enum.all?(results, fn
+               {:ok, _} -> true
+               _ -> false
+             end)
 
       # Slots should be released
       wait_until(fn -> CallDispatcher.get_active_requests(provider) == 0 end)
     end
 
     test "raising cap allows new requests immediately", %{provider: provider} do
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100})
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 5})
 
       CallDispatcher.set_concurrency_cap(provider, 1)
@@ -639,7 +678,10 @@ defmodule Ai.CallDispatcherEdgeTest do
     end
 
     test "cap changes are atomic with slot acquisition", %{provider: provider} do
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100})
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 5})
 
       CallDispatcher.set_concurrency_cap(provider, 10)
@@ -689,7 +731,10 @@ defmodule Ai.CallDispatcherEdgeTest do
 
   describe "concurrent dispatch calls" do
     test "many concurrent requests to same provider", %{provider: provider} do
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 1000, max_tokens: 100})
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 1000, max_tokens: 100}
+      )
+
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 100})
 
       CallDispatcher.set_concurrency_cap(provider, 50)
@@ -782,7 +827,10 @@ defmodule Ai.CallDispatcherEdgeTest do
     test "concurrent dispatch with failures triggers circuit breaker appropriately", %{
       provider: provider
     } do
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100})
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
       # Use a higher threshold so the circuit doesn't open and reset on success
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 50})
 
@@ -816,7 +864,10 @@ defmodule Ai.CallDispatcherEdgeTest do
     end
 
     test "race condition: slot release and acquisition", %{provider: provider} do
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100})
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 100})
 
       CallDispatcher.set_concurrency_cap(provider, 1)
@@ -857,7 +908,10 @@ defmodule Ai.CallDispatcherEdgeTest do
     end
 
     test "high contention stress test", %{provider: provider} do
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 10000, max_tokens: 1000})
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 10000, max_tokens: 1000}
+      )
+
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 1000})
 
       # Very low cap to create high contention
@@ -938,7 +992,10 @@ defmodule Ai.CallDispatcherEdgeTest do
     end
 
     test "same process makes multiple concurrent requests", %{provider: provider} do
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100})
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 5})
 
       CallDispatcher.set_concurrency_cap(provider, 10)

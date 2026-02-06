@@ -56,13 +56,21 @@ defmodule LemonGateway.RunTransportAgnosticTest do
 
               receive do
                 :complete ->
-                  send(sink_pid, {:engine_event, run_ref, %Event.Completed{engine: id(), resume: resume, ok: true, answer: ""}})
+                  send(
+                    sink_pid,
+                    {:engine_event, run_ref,
+                     %Event.Completed{engine: id(), resume: resume, ok: true, answer: ""}}
+                  )
               after
                 5000 -> :ok
               end
           after
             30_000 ->
-              send(sink_pid, {:engine_event, run_ref, %Event.Completed{engine: id(), resume: resume, ok: false, error: :timeout}})
+              send(
+                sink_pid,
+                {:engine_event, run_ref,
+                 %Event.Completed{engine: id(), resume: resume, ok: false, error: :timeout}}
+              )
           end
         end)
 
@@ -187,12 +195,15 @@ defmodule LemonGateway.RunTransportAgnosticTest do
     test "does not call Telegram outbox directly" do
       scope = make_scope()
       # Include chat_id to trigger old rendering path if it existed
-      job = make_job(scope, meta: %{
-        notify_pid: self(),
-        controller_pid: self(),
-        chat_id: 12345,
-        progress_msg_id: 67890
-      })
+      job =
+        make_job(scope,
+          meta: %{
+            notify_pid: self(),
+            controller_pid: self(),
+            chat_id: 12345,
+            progress_msg_id: 67890
+          }
+        )
 
       {:ok, pid} = start_run_direct(job)
 
@@ -213,6 +224,7 @@ defmodule LemonGateway.RunTransportAgnosticTest do
     test "emits run_started event to bus" do
       scope = make_scope()
       run_id = "run_#{System.unique_integer()}"
+
       job = %Job{
         scope: scope,
         run_id: run_id,
@@ -247,6 +259,7 @@ defmodule LemonGateway.RunTransportAgnosticTest do
     test "emits run_completed event to bus" do
       scope = make_scope()
       run_id = "run_#{System.unique_integer()}"
+
       job = %Job{
         scope: scope,
         run_id: run_id,
@@ -277,6 +290,7 @@ defmodule LemonGateway.RunTransportAgnosticTest do
 
   # Helper to collect delta events with timeout
   defp collect_delta_events(acc, 0, _timeout), do: Enum.reverse(acc)
+
   defp collect_delta_events(acc, count, timeout) do
     receive do
       %LemonCore.Event{type: :delta} = event ->

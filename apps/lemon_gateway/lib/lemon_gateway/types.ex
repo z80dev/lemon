@@ -167,7 +167,11 @@ defmodule LemonGateway.Types do
       "channel:telegram:#{transport}:#{chat_id}"
     end
 
-    def session_key_from_scope(%ChatScope{transport: transport, chat_id: chat_id, topic_id: topic_id}) do
+    def session_key_from_scope(%ChatScope{
+          transport: transport,
+          chat_id: chat_id,
+          topic_id: topic_id
+        }) do
       "channel:telegram:#{transport}:#{chat_id}:thread:#{topic_id}"
     end
 
@@ -192,12 +196,7 @@ defmodule LemonGateway.Types do
         |> Map.put_new(:user_msg_id, job.user_msg_id)
         |> Map.put_new(:origin, :telegram)
 
-      %{job |
-        session_key: session_key,
-        prompt: job.text,
-        engine_id: job.engine_hint,
-        meta: meta
-      }
+      %{job | session_key: session_key, prompt: job.text, engine_id: job.engine_hint, meta: meta}
     end
 
     def migrate(job), do: job

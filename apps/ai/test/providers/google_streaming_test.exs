@@ -91,11 +91,16 @@ defmodule Ai.Providers.GoogleStreamingTest do
       %Tool{
         name: "lookup",
         description: "Lookup data",
-        parameters: %{"type" => "object", "properties" => %{"q" => %{"type" => "string"}}, "required" => ["q"]}
+        parameters: %{
+          "type" => "object",
+          "properties" => %{"q" => %{"type" => "string"}},
+          "required" => ["q"]
+        }
       }
     ]
 
-    context = Context.new(system_prompt: "System", messages: [%UserMessage{content: "Hi"}], tools: tools)
+    context =
+      Context.new(system_prompt: "System", messages: [%UserMessage{content: "Hi"}], tools: tools)
 
     opts =
       %StreamOptions{
@@ -121,7 +126,11 @@ defmodule Ai.Providers.GoogleStreamingTest do
             %{
               "name" => "lookup",
               "description" => "Lookup data",
-              "parameters" => %{"type" => "object", "properties" => %{"q" => %{"type" => "string"}}, "required" => ["q"]}
+              "parameters" => %{
+                "type" => "object",
+                "properties" => %{"q" => %{"type" => "string"}},
+                "required" => ["q"]
+              }
             }
           ]
         }

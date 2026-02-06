@@ -30,6 +30,7 @@ defmodule Ai.ProviderRegistryTest do
 
     test "get!/1 raises for unregistered provider", %{test_id: test_id} do
       api_id = :"nonexistent_#{test_id}"
+
       assert_raise ArgumentError, ~r/Provider not found/, fn ->
         ProviderRegistry.get!(api_id)
       end

@@ -5,7 +5,9 @@ defmodule LemonGateway.Store.JsonlBackendTest do
 
   setup do
     # Create a unique temp directory for each test
-    tmp_dir = Path.join(System.tmp_dir!(), "jsonl_backend_test_#{System.unique_integer([:positive])}")
+    tmp_dir =
+      Path.join(System.tmp_dir!(), "jsonl_backend_test_#{System.unique_integer([:positive])}")
+
     on_exit(fn -> File.rm_rf!(tmp_dir) end)
     {:ok, tmp_dir: tmp_dir}
   end
@@ -210,8 +212,8 @@ defmodule LemonGateway.Store.JsonlBackendTest do
 
       complex_value = %{
         "events" => [
-          %{"type" => "started", "ts" => 1234567890},
-          %{"type" => "completed", "ts" => 1234567900}
+          %{"type" => "started", "ts" => 1_234_567_890},
+          %{"type" => "completed", "ts" => 1_234_567_900}
         ],
         "summary" => %{
           "ok" => true,

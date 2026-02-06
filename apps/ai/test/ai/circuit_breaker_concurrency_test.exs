@@ -102,7 +102,10 @@ defmodule Ai.CircuitBreakerConcurrencyTest do
 
   describe "concurrent dispatch under load" do
     test "multiple concurrent dispatches respect circuit state", %{provider: provider} do
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 1000, max_tokens: 100})
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 1000, max_tokens: 100}
+      )
+
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 3})
 
       # First, record enough failures to open the circuit
@@ -127,7 +130,10 @@ defmodule Ai.CircuitBreakerConcurrencyTest do
     end
 
     test "concurrent successful requests don't interfere with each other", %{provider: provider} do
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 1000, max_tokens: 100})
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 1000, max_tokens: 100}
+      )
+
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 100})
 
       # Increase concurrency cap to allow all requests (default is 10)
@@ -161,7 +167,10 @@ defmodule Ai.CircuitBreakerConcurrencyTest do
       start_supervised!(
         {CircuitBreaker, provider: provider, failure_threshold: 2, recovery_timeout: 50}
       )
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 1000, max_tokens: 100})
+
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 1000, max_tokens: 100}
+      )
 
       # Open the circuit
       CircuitBreaker.record_failure(provider)
@@ -207,7 +216,10 @@ defmodule Ai.CircuitBreakerConcurrencyTest do
       start_supervised!(
         {CircuitBreaker, provider: provider, failure_threshold: 2, recovery_timeout: 50}
       )
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 1000, max_tokens: 100})
+
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 1000, max_tokens: 100}
+      )
 
       # Open the circuit
       CircuitBreaker.record_failure(provider)
@@ -231,7 +243,10 @@ defmodule Ai.CircuitBreakerConcurrencyTest do
 
   describe "race condition: opening circuit during dispatch" do
     test "handles circuit opening mid-dispatch gracefully", %{provider: provider} do
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 1000, max_tokens: 100})
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 1000, max_tokens: 100}
+      )
+
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 3})
 
       # Track how many requests actually executed

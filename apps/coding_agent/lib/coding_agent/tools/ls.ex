@@ -27,15 +27,15 @@ defmodule CodingAgent.Tools.Ls do
   def tool(cwd, opts \\ []) do
     %AgentTool{
       name: "ls",
-      description:
-        "List directory contents. Shows files and directories with optional metadata.",
+      description: "List directory contents. Shows files and directories with optional metadata.",
       label: "List Directory",
       parameters: %{
         "type" => "object",
         "properties" => %{
           "path" => %{
             "type" => "string",
-            "description" => "Directory path to list (relative to cwd or absolute). Defaults to cwd."
+            "description" =>
+              "Directory path to list (relative to cwd or absolute). Defaults to cwd."
           },
           "all" => %{
             "type" => "boolean",
@@ -52,7 +52,8 @@ defmodule CodingAgent.Tools.Ls do
           },
           "max_depth" => %{
             "type" => "integer",
-            "description" => "Maximum depth for recursive listing. Only used when recursive is true."
+            "description" =>
+              "Maximum depth for recursive listing. Only used when recursive is true."
           },
           "max_entries" => %{
             "type" => "integer",
@@ -106,7 +107,9 @@ defmodule CodingAgent.Tools.Ls do
     long_format = Map.get(params, "long", false)
     recursive = Map.get(params, "recursive", false)
     max_depth = Map.get(params, "max_depth")
-    max_entries = Map.get(params, "max_entries", Keyword.get(opts, :max_entries, @default_max_entries))
+
+    max_entries =
+      Map.get(params, "max_entries", Keyword.get(opts, :max_entries, @default_max_entries))
 
     with {:ok, resolved_path} <- resolve_path(path, cwd),
          {:ok, _stat} <- check_directory_access(resolved_path),
@@ -181,7 +184,8 @@ defmodule CodingAgent.Tools.Ls do
         sorted_entries = sort_entries(entries)
 
         # Format output
-        output = format_entries(sorted_entries, long_format, path, truncated, total_count, max_entries)
+        output =
+          format_entries(sorted_entries, long_format, path, truncated, total_count, max_entries)
 
         %AgentToolResult{
           content: [%TextContent{text: output}],
@@ -199,7 +203,15 @@ defmodule CodingAgent.Tools.Ls do
     end
   end
 
-  defp collect_entries(path, show_all, recursive, max_depth, max_entries, current_depth, base_path) do
+  defp collect_entries(
+         path,
+         show_all,
+         recursive,
+         max_depth,
+         max_entries,
+         current_depth,
+         base_path
+       ) do
     case File.ls(path) do
       {:ok, names} ->
         # Filter hidden files if not showing all
@@ -297,7 +309,9 @@ defmodule CodingAgent.Tools.Ls do
 
                 if combined_count > max_entries do
                   take_count = max_entries - new_count
-                  {:halt, {new_entries ++ Enum.take(sub_entries, take_count), combined_count, true}}
+
+                  {:halt,
+                   {new_entries ++ Enum.take(sub_entries, take_count), combined_count, true}}
                 else
                   {:cont, {new_entries ++ sub_entries, combined_count, sub_truncated}}
                 end
@@ -420,8 +434,8 @@ defmodule CodingAgent.Tools.Ls do
 
   defp format_permissions(mode, type) when is_integer(mode) do
     # Extract permission bits (last 9 bits)
-    user = permission_triplet((mode >>> 6) &&& 0o7)
-    group = permission_triplet((mode >>> 3) &&& 0o7)
+    user = permission_triplet(mode >>> 6 &&& 0o7)
+    group = permission_triplet(mode >>> 3 &&& 0o7)
     other = permission_triplet(mode &&& 0o7)
 
     prefix =

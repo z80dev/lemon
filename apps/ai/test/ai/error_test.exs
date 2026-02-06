@@ -11,7 +11,8 @@ defmodule Ai.ErrorTest do
         {"retry-after", "60"}
       ]
 
-      result = Error.parse_http_error(429, %{"error" => %{"message" => "Rate limit exceeded"}}, headers)
+      result =
+        Error.parse_http_error(429, %{"error" => %{"message" => "Rate limit exceeded"}}, headers)
 
       assert result.category == :rate_limit
       assert result.status == 429
@@ -42,7 +43,8 @@ defmodule Ai.ErrorTest do
     end
 
     test "parses client error" do
-      result = Error.parse_http_error(400, %{"error" => %{"message" => "Invalid request body"}}, [])
+      result =
+        Error.parse_http_error(400, %{"error" => %{"message" => "Invalid request body"}}, [])
 
       assert result.category == :client
       assert result.status == 400
@@ -135,7 +137,9 @@ defmodule Ai.ErrorTest do
 
   describe "format_error/1" do
     test "formats HTTP errors" do
-      assert Error.format_error({:http_error, 429, %{"error" => %{"message" => "Rate limit exceeded"}}}) =~
+      assert Error.format_error(
+               {:http_error, 429, %{"error" => %{"message" => "Rate limit exceeded"}}}
+             ) =~
                "Rate limit exceeded"
     end
 

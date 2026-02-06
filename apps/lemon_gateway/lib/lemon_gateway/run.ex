@@ -73,6 +73,7 @@ defmodule LemonGateway.Run do
       {:error, :timeout} ->
         # Lock acquisition timed out - fail fast
         run_id = job.run_id || generate_run_id()
+
         completed = %Event.Completed{
           engine: engine_id_for(job),
           ok: false,
@@ -91,6 +92,7 @@ defmodule LemonGateway.Run do
         send(worker_pid, {:run_complete, self(), completed})
 
         notify_pid = job.meta && job.meta[:notify_pid]
+
         if is_pid(notify_pid) do
           send(notify_pid, {:lemon_gateway_run_completed, job, completed})
         end
@@ -112,6 +114,7 @@ defmodule LemonGateway.Run do
   defp session_key_from_job(%Job{scope: scope}) when not is_nil(scope) do
     "scope:#{inspect(scope)}"
   end
+
   defp session_key_from_job(_), do: "default"
 
   defp maybe_acquire_lock(job) do
@@ -165,11 +168,16 @@ defmodule LemonGateway.Run do
       end
 
     # Emit run started event to bus
-    emit_to_bus(state.run_id, :run_started, %{
-      run_id: state.run_id,
-      session_key: state.session_key,
-      engine: engine_id
-    }, build_event_meta(state))
+    emit_to_bus(
+      state.run_id,
+      :run_started,
+      %{
+        run_id: state.run_id,
+        session_key: state.session_key,
+        engine: engine_id
+      },
+      build_event_meta(state)
+    )
 
     # Emit run_start telemetry
     emit_telemetry_start(state.run_id, %{
@@ -181,8 +189,15 @@ defmodule LemonGateway.Run do
     case engine.start_run(state.job, opts, self()) do
       {:ok, run_ref, cancel_ctx} ->
         register_progress_mapping(job, self())
+
         {:noreply,
-         %{state | engine: engine, run_ref: run_ref, cancel_ctx: cancel_ctx, renderer_state: renderer_state}}
+         %{
+           state
+           | engine: engine,
+             run_ref: run_ref,
+             cancel_ctx: cancel_ctx,
+             renderer_state: renderer_state
+         }}
 
       {:error, reason} ->
         completed = %Event.Completed{
@@ -193,6 +208,7 @@ defmodule LemonGateway.Run do
           run_id: state.run_id,
           session_key: state.session_key
         }
+
         {renderer_state, render_action} = state.renderer.apply_event(renderer_state, completed)
         maybe_update_progress(state, render_action)
         state = %{state | engine: engine, renderer_state: renderer_state}
@@ -232,17 +248,24 @@ defmodule LemonGateway.Run do
   end
 
   # Handle delta events from engine (for streaming)
-  def handle_info({:engine_delta, run_ref, text}, %{run_ref: run_ref} = state) when is_binary(text) do
+  def handle_info({:engine_delta, run_ref, text}, %{run_ref: run_ref} = state)
+      when is_binary(text) do
     new_seq = state.delta_seq + 1
 
     # Emit first_token telemetry on first delta
     state =
       if not state.first_token_emitted do
         latency_ms = System.system_time(:millisecond) - state.start_ts_ms
-        emit_telemetry_first_token(state.run_id, %{
-          session_key: state.session_key,
-          engine: state.engine && state.engine.id()
-        }, latency_ms)
+
+        emit_telemetry_first_token(
+          state.run_id,
+          %{
+            session_key: state.session_key,
+            engine: state.engine && state.engine.id()
+          },
+          latency_ms
+        )
+
         %{state | first_token_emitted: true}
       else
         state
@@ -351,6 +374,7 @@ defmodule LemonGateway.Run do
         run_id: state.run_id,
         session_key: state.session_key
       }
+
       finalize(state, completed)
       {:stop, :normal, %{state | completed: true}}
     end
@@ -385,29 +409,41 @@ defmodule LemonGateway.Run do
     end
 
     # Add run_id, session_key, and accumulated answer to completed event
-    completed = %{completed |
-      run_id: state.run_id,
-      session_key: state.session_key,
-      answer: if(completed.answer == "", do: state.accumulated_text, else: completed.answer)
+    completed = %{
+      completed
+      | run_id: state.run_id,
+        session_key: state.session_key,
+        answer: if(completed.answer == "", do: state.accumulated_text, else: completed.answer)
     }
 
     # Emit completion event to bus (channel delivery handled by subscribers)
     duration_ms = System.system_time(:millisecond) - state.start_ts_ms
 
     # Emit run_stop telemetry
-    emit_telemetry_stop(state.run_id, %{
-      session_key: state.session_key,
-      engine: engine_id_for(state.job)
-    }, duration_ms, completed.ok)
+    emit_telemetry_stop(
+      state.run_id,
+      %{
+        session_key: state.session_key,
+        engine: engine_id_for(state.job)
+      },
+      duration_ms,
+      completed.ok
+    )
 
-    emit_to_bus(state.run_id, :run_completed, %{
-      completed: completed,
-      duration_ms: duration_ms
-    }, build_event_meta(state))
+    emit_to_bus(
+      state.run_id,
+      :run_completed,
+      %{
+        completed: completed,
+        duration_ms: duration_ms
+      },
+      build_event_meta(state)
+    )
 
     if state.run_ref do
       # Include prompt in summary for complete chat history
       prompt = LemonGateway.Types.Job.get_prompt(state.job) || state.job.prompt
+
       LemonGateway.Store.finalize_run(state.run_ref, %{
         completed: completed,
         scope: state.job.scope,
@@ -419,6 +455,7 @@ defmodule LemonGateway.Run do
         meta: state.job.meta
       })
     end
+
     LemonGateway.Scheduler.release_slot(state.slot_ref)
     send(state.worker_pid, {:run_complete, self(), completed})
 
@@ -440,11 +477,14 @@ defmodule LemonGateway.Run do
       topic = "run:#{run_id}"
       # Include run_id in meta, plus any extra metadata
       meta = Map.merge(%{run_id: run_id}, extra_meta)
-      event = if Code.ensure_loaded?(LemonCore.Event) do
-        LemonCore.Event.new(event_type, payload, meta)
-      else
-        {event_type, payload}
-      end
+
+      event =
+        if Code.ensure_loaded?(LemonCore.Event) do
+          LemonCore.Event.new(event_type, payload, meta)
+        else
+          {event_type, payload}
+        end
+
       LemonCore.Bus.broadcast(topic, event)
     end
   rescue
@@ -465,12 +505,14 @@ defmodule LemonGateway.Run do
   end
 
   defp emit_engine_event_to_bus(state, event) do
-    event_type = case event do
-      %Event.Started{} -> :engine_started
-      %Event.Completed{} -> :engine_completed
-      %Event.ActionEvent{} -> :engine_action
-      _ -> :engine_event
-    end
+    event_type =
+      case event do
+        %Event.Started{} -> :engine_started
+        %Event.Completed{} -> :engine_completed
+        %Event.ActionEvent{} -> :engine_action
+        _ -> :engine_event
+      end
+
     emit_to_bus(state.run_id, event_type, event, build_event_meta(state))
   end
 
@@ -493,7 +535,8 @@ defmodule LemonGateway.Run do
     Store.put_chat_state(key, chat_state)
   end
 
-  defp register_progress_mapping(%Job{meta: meta, scope: scope}, run_pid) when not is_nil(scope) do
+  defp register_progress_mapping(%Job{meta: meta, scope: scope}, run_pid)
+       when not is_nil(scope) do
     progress_msg_id = meta && meta[:progress_msg_id]
 
     if progress_msg_id do
@@ -516,11 +559,17 @@ defmodule LemonGateway.Run do
   defp maybe_update_progress(%{job: %Job{} = job} = state, {:render, %{text: text}})
        when is_binary(text) do
     with %LemonGateway.Types.ChatScope{transport: :telegram, chat_id: chat_id} <- job.scope,
-         progress_msg_id when not is_nil(progress_msg_id) <- job.meta && job.meta[:progress_msg_id],
+         progress_msg_id when not is_nil(progress_msg_id) <-
+           job.meta && job.meta[:progress_msg_id],
          true <- is_pid(Process.whereis(LemonGateway.Telegram.Outbox)) do
       engine = if is_atom(state.engine), do: state.engine, else: nil
       key = {chat_id, progress_msg_id, :edit}
-      LemonGateway.Telegram.Outbox.enqueue(key, 0, {:edit, chat_id, progress_msg_id, %{text: text, engine: engine}})
+
+      LemonGateway.Telegram.Outbox.enqueue(
+        key,
+        0,
+        {:edit, chat_id, progress_msg_id, %{text: text, engine: engine}}
+      )
     else
       _ -> :ok
     end

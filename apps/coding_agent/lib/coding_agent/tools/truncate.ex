@@ -420,7 +420,9 @@ defmodule CodingAgent.Tools.Truncate do
     # Find important lines in the middle
     head_count = length(head_lines)
     tail_count = length(tail_lines_rev)
-    middle_lines = lines |> Enum.drop(head_count) |> Enum.take(length(lines) - head_count - tail_count)
+
+    middle_lines =
+      lines |> Enum.drop(head_count) |> Enum.take(length(lines) - head_count - tail_count)
 
     important_middle_lines =
       middle_lines
@@ -441,7 +443,8 @@ defmodule CodingAgent.Tools.Truncate do
   end
 
   defp take_lines_up_to_chars([line | rest], max_chars, acc_chars, acc_lines) do
-    line_chars = String.length(line) + 1  # +1 for newline
+    # +1 for newline
+    line_chars = String.length(line) + 1
 
     if acc_chars + line_chars > max_chars and acc_lines != [] do
       {Enum.reverse(acc_lines), acc_chars}

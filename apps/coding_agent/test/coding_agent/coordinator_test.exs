@@ -128,7 +128,8 @@ defmodule CodingAgent.CoordinatorTest do
       # and verify errors are handled properly
 
       # Test with an unknown subagent type to verify error handling
-      result = Coordinator.run_subagent(coordinator, prompt: "Hello", subagent: "nonexistent_agent")
+      result =
+        Coordinator.run_subagent(coordinator, prompt: "Hello", subagent: "nonexistent_agent")
 
       # Should get an error for unknown subagent
       assert {:error, {:error, "Unknown subagent: nonexistent_agent"}} = result
@@ -460,7 +461,10 @@ defmodule CodingAgent.CoordinatorTest do
 
       # Run multiple times with potential failures
       for _ <- 1..3 do
-        specs = [%{prompt: "Task", subagent: "invalid_" <> Integer.to_string(:rand.uniform(1000))}]
+        specs = [
+          %{prompt: "Task", subagent: "invalid_" <> Integer.to_string(:rand.uniform(1000))}
+        ]
+
         results = Coordinator.run_subagents(coordinator, specs, timeout: 50)
         assert length(results) == 1
       end

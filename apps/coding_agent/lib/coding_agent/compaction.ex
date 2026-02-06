@@ -102,7 +102,11 @@ defmodule CodingAgent.Compaction do
   """
   @spec find_cut_point([SessionEntry.t()], non_neg_integer(), keyword()) ::
           {:ok, String.t()} | {:error, :cannot_compact}
-  def find_cut_point(branch_entries, keep_recent_tokens \\ @default_keep_recent_tokens, opts \\ [])
+  def find_cut_point(
+        branch_entries,
+        keep_recent_tokens \\ @default_keep_recent_tokens,
+        opts \\ []
+      )
 
   def find_cut_point(branch_entries, keep_recent_tokens, opts) do
     force = Keyword.get(opts, :force, false)
@@ -365,8 +369,9 @@ defmodule CodingAgent.Compaction do
     end)
   end
 
-  defp estimate_entry_tokens(%SessionEntry{message: nil, type: type}) when type != :custom_message,
-    do: 0
+  defp estimate_entry_tokens(%SessionEntry{message: nil, type: type})
+       when type != :custom_message,
+       do: 0
 
   # Handle custom_message entries which have content directly on the entry, not in a message field
   defp estimate_entry_tokens(%SessionEntry{type: :custom_message, content: content}) do

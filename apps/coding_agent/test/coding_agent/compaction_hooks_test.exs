@@ -73,10 +73,14 @@ defmodule CodingAgent.CompactionHooksTest do
     test "executes hooks and returns summary" do
       test_pid = self()
 
-      CompactionHooks.register_hook("test_session", fn ->
-        send(test_pid, :hook_executed)
-        :ok
-      end, [])
+      CompactionHooks.register_hook(
+        "test_session",
+        fn ->
+          send(test_pid, :hook_executed)
+          :ok
+        end,
+        []
+      )
 
       result = CompactionHooks.execute_hooks("test_session", [])
 
@@ -91,20 +95,26 @@ defmodule CodingAgent.CompactionHooksTest do
     test "executes hooks in priority order" do
       test_pid = self()
 
-      CompactionHooks.register_hook("test_session", fn ->
-        send(test_pid, :low_priority)
-        :ok
-      end, priority: :low)
+      CompactionHooks.register_hook(
+        "test_session",
+        fn ->
+          send(test_pid, :low_priority)
+          :ok
+        end, priority: :low)
 
-      CompactionHooks.register_hook("test_session", fn ->
-        send(test_pid, :high_priority)
-        :ok
-      end, priority: :high)
+      CompactionHooks.register_hook(
+        "test_session",
+        fn ->
+          send(test_pid, :high_priority)
+          :ok
+        end, priority: :high)
 
-      CompactionHooks.register_hook("test_session", fn ->
-        send(test_pid, :normal_priority)
-        :ok
-      end, priority: :normal)
+      CompactionHooks.register_hook(
+        "test_session",
+        fn ->
+          send(test_pid, :normal_priority)
+          :ok
+        end, priority: :normal)
 
       CompactionHooks.execute_hooks("test_session", [])
 
@@ -115,9 +125,13 @@ defmodule CodingAgent.CompactionHooksTest do
     end
 
     test "handles hook failures gracefully" do
-      CompactionHooks.register_hook("test_session", fn ->
-        raise "hook error"
-      end, [])
+      CompactionHooks.register_hook(
+        "test_session",
+        fn ->
+          raise "hook error"
+        end,
+        []
+      )
 
       result = CompactionHooks.execute_hooks("test_session", [])
 
@@ -128,10 +142,12 @@ defmodule CodingAgent.CompactionHooksTest do
     end
 
     test "handles hook timeouts" do
-      CompactionHooks.register_hook("test_session", fn ->
-        Process.sleep(10_000)
-        :ok
-      end, timeout_ms: 50)
+      CompactionHooks.register_hook(
+        "test_session",
+        fn ->
+          Process.sleep(10_000)
+          :ok
+        end, timeout_ms: 50)
 
       result = CompactionHooks.execute_hooks("test_session", [])
 
@@ -144,14 +160,22 @@ defmodule CodingAgent.CompactionHooksTest do
     test "continues executing other hooks after failure" do
       test_pid = self()
 
-      CompactionHooks.register_hook("test_session", fn ->
-        raise "error"
-      end, [])
+      CompactionHooks.register_hook(
+        "test_session",
+        fn ->
+          raise "error"
+        end,
+        []
+      )
 
-      CompactionHooks.register_hook("test_session", fn ->
-        send(test_pid, :second_hook)
-        :ok
-      end, [])
+      CompactionHooks.register_hook(
+        "test_session",
+        fn ->
+          send(test_pid, :second_hook)
+          :ok
+        end,
+        []
+      )
 
       result = CompactionHooks.execute_hooks("test_session", [])
 
@@ -167,41 +191,52 @@ defmodule CodingAgent.CompactionHooksTest do
     test "returns true when compaction needed and executes hooks" do
       test_pid = self()
 
-      CompactionHooks.register_hook("test_session", fn ->
-        send(test_pid, :pre_compaction_hook)
-        :ok
-      end, [])
+      CompactionHooks.register_hook(
+        "test_session",
+        fn ->
+          send(test_pid, :pre_compaction_hook)
+          :ok
+        end,
+        []
+      )
 
       # Context tokens exceed window - reserve
-      result = CompactionHooks.should_compact_with_hooks?(
-        9000,    # context_tokens
-        10000,   # context_window
-        "test_session",
-        %{enabled: true, reserve_tokens: 2000}
-      )
+      result =
+        CompactionHooks.should_compact_with_hooks?(
+          # context_tokens
+          9000,
+          # context_window
+          10000,
+          "test_session",
+          %{enabled: true, reserve_tokens: 2000}
+        )
 
       assert result == true
       assert_receive :pre_compaction_hook, 1000
     end
 
     test "returns false when compaction not needed" do
-      result = CompactionHooks.should_compact_with_hooks?(
-        1000,    # context_tokens
-        10000,   # context_window
-        "test_session",
-        %{enabled: true, reserve_tokens: 2000}
-      )
+      result =
+        CompactionHooks.should_compact_with_hooks?(
+          # context_tokens
+          1000,
+          # context_window
+          10000,
+          "test_session",
+          %{enabled: true, reserve_tokens: 2000}
+        )
 
       assert result == false
     end
 
     test "returns false when compaction disabled" do
-      result = CompactionHooks.should_compact_with_hooks?(
-        9000,
-        10000,
-        "test_session",
-        %{enabled: false, reserve_tokens: 2000}
-      )
+      result =
+        CompactionHooks.should_compact_with_hooks?(
+          9000,
+          10000,
+          "test_session",
+          %{enabled: false, reserve_tokens: 2000}
+        )
 
       assert result == false
     end

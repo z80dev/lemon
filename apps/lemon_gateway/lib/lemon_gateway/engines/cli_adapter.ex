@@ -15,7 +15,8 @@ defmodule LemonGateway.Engines.CliAdapter do
             consume_runner(runner_module, runner_pid, engine_id, sink_pid, run_ref)
           end)
 
-        {:ok, run_ref, %{task_pid: task_pid, runner_pid: runner_pid, runner_module: runner_module}}
+        {:ok, run_ref,
+         %{task_pid: task_pid, runner_pid: runner_pid, runner_module: runner_module}}
 
       {:error, reason} ->
         completed = %Event.Completed{engine: engine_id, ok: false, error: reason, answer: ""}
@@ -44,8 +45,11 @@ defmodule LemonGateway.Engines.CliAdapter do
 
   def extract_resume(engine_id, text) do
     case ResumeToken.extract_resume(text, engine_id) do
-      %ResumeToken{engine: ^engine_id, value: value} -> %GatewayToken{engine: engine_id, value: value}
-      _ -> nil
+      %ResumeToken{engine: ^engine_id, value: value} ->
+        %GatewayToken{engine: engine_id, value: value}
+
+      _ ->
+        nil
     end
   end
 
@@ -83,6 +87,8 @@ defmodule LemonGateway.Engines.CliAdapter do
       |> maybe_put(:tool_policy, job.tool_policy)
       |> maybe_put(:session_key, job.session_key)
       |> maybe_put(:agent_id, get_in(job.meta || %{}, [:agent_id]))
+      |> maybe_put(:model, get_in(job.meta || %{}, [:model]))
+      |> maybe_put(:system_prompt, get_in(job.meta || %{}, [:system_prompt]))
       |> maybe_put(:run_id, job.run_id || Map.get(opts, :run_id))
 
     runner_module.start_link(start_opts)
@@ -101,7 +107,13 @@ defmodule LemonGateway.Engines.CliAdapter do
   end
 
   # Handle delta events from LemonRunner for streaming
-  defp handle_stream_event({:cli_event, {:delta, delta_event}}, _engine_id, sink_pid, run_ref, acc) do
+  defp handle_stream_event(
+         {:cli_event, {:delta, delta_event}},
+         _engine_id,
+         sink_pid,
+         run_ref,
+         acc
+       ) do
     # Forward delta to sink as :engine_delta message
     text = delta_event[:text] || delta_event.text
     send(sink_pid, {:engine_delta, run_ref, text})
@@ -120,7 +132,13 @@ defmodule LemonGateway.Engines.CliAdapter do
     acc
   end
 
-  defp handle_stream_event({:cli_event, %CompletedEvent{} = ev}, _engine_id, sink_pid, run_ref, acc) do
+  defp handle_stream_event(
+         {:cli_event, %CompletedEvent{} = ev},
+         _engine_id,
+         sink_pid,
+         run_ref,
+         acc
+       ) do
     completed = to_gateway_event(ev)
     send(sink_pid, {:engine_event, run_ref, completed})
     %{acc | completed: true}
@@ -153,11 +171,28 @@ defmodule LemonGateway.Engines.CliAdapter do
   def to_gateway_event(%CompletedEvent{} = ev), do: to_gateway_completed(ev)
   def to_gateway_event(_), do: nil
 
-  defp to_gateway_started(%StartedEvent{engine: engine, resume: %ResumeToken{value: value}, title: title, meta: meta}) do
-    %Event.Started{engine: engine, resume: %GatewayToken{engine: engine, value: value}, title: title, meta: meta}
+  defp to_gateway_started(%StartedEvent{
+         engine: engine,
+         resume: %ResumeToken{value: value},
+         title: title,
+         meta: meta
+       }) do
+    %Event.Started{
+      engine: engine,
+      resume: %GatewayToken{engine: engine, value: value},
+      title: title,
+      meta: meta
+    }
   end
 
-  defp to_gateway_action(%ActionEvent{engine: engine, action: action, phase: phase, ok: ok, message: message, level: level}) do
+  defp to_gateway_action(%ActionEvent{
+         engine: engine,
+         action: action,
+         phase: phase,
+         ok: ok,
+         message: message,
+         level: level
+       }) do
     gw_action = %Event.Action{
       id: action.id,
       kind: to_string(action.kind),
@@ -165,7 +200,14 @@ defmodule LemonGateway.Engines.CliAdapter do
       detail: action.detail
     }
 
-    %Event.ActionEvent{engine: engine, action: gw_action, phase: phase, ok: ok, message: message, level: level}
+    %Event.ActionEvent{
+      engine: engine,
+      action: gw_action,
+      phase: phase,
+      ok: ok,
+      message: message,
+      level: level
+    }
   end
 
   defp to_gateway_completed(%CompletedEvent{} = ev) do

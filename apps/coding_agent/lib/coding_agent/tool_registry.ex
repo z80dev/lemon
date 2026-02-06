@@ -393,19 +393,23 @@ defmodule CodingAgent.ToolRegistry do
           # Conflict with builtin tool
           MapSet.member?(builtin_names, name) ->
             {:extension, ext_module} = source
+
             Logger.warning(
               "Tool name conflict: extension tool '#{name}' from #{inspect(ext_module)} " <>
                 "is shadowed by built-in tool"
             )
+
             {acc, seen}
 
           # Conflict with another extension tool already processed
           MapSet.member?(seen, name) ->
             {:extension, ext_module} = source
+
             Logger.warning(
               "Tool name conflict: extension tool '#{name}' from #{inspect(ext_module)} " <>
                 "is shadowed by earlier extension"
             )
+
             {acc, seen}
 
           # No conflict, add the tool
@@ -461,7 +465,8 @@ defmodule CodingAgent.ToolRegistry do
 
     # Process extension tools, tracking conflicts
     {valid_extension_tools, conflicts, _seen} =
-      Enum.reduce(extension_tools, {[], [], builtin_names}, fn {name, tool, source}, {acc, conflicts, seen} ->
+      Enum.reduce(extension_tools, {[], [], builtin_names}, fn {name, tool, source},
+                                                               {acc, conflicts, seen} ->
         cond do
           # Conflict with builtin tool
           MapSet.member?(builtin_names, name) ->

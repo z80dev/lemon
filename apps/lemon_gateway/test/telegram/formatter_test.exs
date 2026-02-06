@@ -512,7 +512,9 @@ defmodule LemonGateway.Telegram.FormatterTest do
 
   describe "escape_markdown/1 real-world examples" do
     test "escapes typical agent response with tool result" do
-      text = "I found the file `config.ex` with the following content:\n```elixir\ndefmodule Config do\n  @version \"1.0.0\"\nend\n```"
+      text =
+        "I found the file `config.ex` with the following content:\n```elixir\ndefmodule Config do\n  @version \"1.0.0\"\nend\n```"
+
       result = Formatter.escape_markdown(text)
 
       assert String.contains?(result, "\\`config\\.ex\\`")
@@ -588,7 +590,9 @@ defmodule LemonGateway.Telegram.FormatterTest do
     end
 
     test "escapes bash tool output with exit code" do
-      text = "Command output:\n$ ls -la\ntotal 16\n-rw-r--r--  1 user  staff  123 Jan  1 00:00 file.txt"
+      text =
+        "Command output:\n$ ls -la\ntotal 16\n-rw-r--r--  1 user  staff  123 Jan  1 00:00 file.txt"
+
       result = Formatter.escape_markdown(text)
 
       assert String.contains?(result, "\\-la")
@@ -598,7 +602,9 @@ defmodule LemonGateway.Telegram.FormatterTest do
 
   describe "escape_markdown/1 agent response formatting" do
     test "escapes thinking/explanation text" do
-      text = "Let me analyze this:\n1. First, check the config\n2. Then, update the module\n3. Finally, run tests"
+      text =
+        "Let me analyze this:\n1. First, check the config\n2. Then, update the module\n3. Finally, run tests"
+
       result = Formatter.escape_markdown(text)
 
       assert String.contains?(result, "1\\.")
@@ -634,7 +640,9 @@ defmodule LemonGateway.Telegram.FormatterTest do
     end
 
     test "escapes runtime error" do
-      text = "** (RuntimeError) Something went wrong!\n    (myapp 0.1.0) lib/myapp.ex:15: MyApp.run/0"
+      text =
+        "** (RuntimeError) Something went wrong!\n    (myapp 0.1.0) lib/myapp.ex:15: MyApp.run/0"
+
       result = Formatter.escape_markdown(text)
 
       assert String.contains?(result, "\\*\\*")
@@ -788,6 +796,7 @@ defmodule LemonGateway.Telegram.FormatterTest do
       /resume def456
       Content line 3
       """
+
       result = Formatter.escape_markdown(text)
 
       lines = String.split(result, "\n")

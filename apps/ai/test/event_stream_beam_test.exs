@@ -31,8 +31,12 @@ defmodule Ai.EventStreamBeamTest do
     Stream.repeatedly(fn -> fun.() end)
     |> Enum.reduce_while(false, fn result, _ ->
       cond do
-        result -> {:halt, true}
-        System.monotonic_time(:millisecond) > deadline -> {:halt, false}
+        result ->
+          {:halt, true}
+
+        System.monotonic_time(:millisecond) > deadline ->
+          {:halt, false}
+
         true ->
           Process.sleep(5)
           {:cont, false}

@@ -2,6 +2,7 @@ defmodule AgentCore.CliRunners.ClaudeSchemaTest do
   use ExUnit.Case, async: true
 
   alias AgentCore.CliRunners.ClaudeSchema
+
   alias AgentCore.CliRunners.ClaudeSchema.{
     StreamAssistantMessage,
     StreamResultMessage,
@@ -16,7 +17,9 @@ defmodule AgentCore.CliRunners.ClaudeSchemaTest do
 
   describe "decode_event/1 - system messages" do
     test "decodes system init message" do
-      json = ~s|{"type":"system","subtype":"init","session_id":"sess_123","model":"claude-opus-4","cwd":"/home/user","tools":["Bash","Read"]}|
+      json =
+        ~s|{"type":"system","subtype":"init","session_id":"sess_123","model":"claude-opus-4","cwd":"/home/user","tools":["Bash","Read"]}|
+
       assert {:ok, %StreamSystemMessage{} = msg} = ClaudeSchema.decode_event(json)
       assert msg.subtype == "init"
       assert msg.session_id == "sess_123"
@@ -33,26 +36,38 @@ defmodule AgentCore.CliRunners.ClaudeSchemaTest do
 
   describe "decode_event/1 - assistant messages" do
     test "decodes assistant message with text content" do
-      json = ~s|{"type":"assistant","session_id":"sess_123","message":{"role":"assistant","content":[{"type":"text","text":"Hello world"}]}}|
+      json =
+        ~s|{"type":"assistant","session_id":"sess_123","message":{"role":"assistant","content":[{"type":"text","text":"Hello world"}]}}|
+
       assert {:ok, %StreamAssistantMessage{} = msg} = ClaudeSchema.decode_event(json)
       assert msg.session_id == "sess_123"
       assert [%TextBlock{text: "Hello world"}] = msg.message.content
     end
 
     test "decodes assistant message with thinking block" do
-      json = ~s|{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Let me analyze...","signature":"abc123"}]}}|
+      json =
+        ~s|{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Let me analyze...","signature":"abc123"}]}}|
+
       assert {:ok, %StreamAssistantMessage{} = msg} = ClaudeSchema.decode_event(json)
-      assert [%ThinkingBlock{thinking: "Let me analyze...", signature: "abc123"}] = msg.message.content
+
+      assert [%ThinkingBlock{thinking: "Let me analyze...", signature: "abc123"}] =
+               msg.message.content
     end
 
     test "decodes assistant message with tool_use block" do
-      json = ~s|{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_123","name":"Bash","input":{"command":"ls -la"}}]}}|
+      json =
+        ~s|{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_123","name":"Bash","input":{"command":"ls -la"}}]}}|
+
       assert {:ok, %StreamAssistantMessage{} = msg} = ClaudeSchema.decode_event(json)
-      assert [%ToolUseBlock{id: "toolu_123", name: "Bash", input: %{"command" => "ls -la"}}] = msg.message.content
+
+      assert [%ToolUseBlock{id: "toolu_123", name: "Bash", input: %{"command" => "ls -la"}}] =
+               msg.message.content
     end
 
     test "decodes assistant message with mixed content" do
-      json = ~s|{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I'll run a command"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"echo hi"}}]}}|
+      json =
+        ~s|{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I'll run a command"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"echo hi"}}]}}|
+
       assert {:ok, %StreamAssistantMessage{} = msg} = ClaudeSchema.decode_event(json)
       assert [%TextBlock{}, %ToolUseBlock{}] = msg.message.content
     end
@@ -60,14 +75,20 @@ defmodule AgentCore.CliRunners.ClaudeSchemaTest do
 
   describe "decode_event/1 - user messages" do
     test "decodes user message with tool_result" do
-      json = ~s|{"type":"user","session_id":"sess_123","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_123","content":"output text","is_error":false}]}}|
+      json =
+        ~s|{"type":"user","session_id":"sess_123","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_123","content":"output text","is_error":false}]}}|
+
       assert {:ok, %StreamUserMessage{} = msg} = ClaudeSchema.decode_event(json)
       assert msg.session_id == "sess_123"
-      assert [%ToolResultBlock{tool_use_id: "toolu_123", content: "output text", is_error: false}] = msg.message.content
+
+      assert [%ToolResultBlock{tool_use_id: "toolu_123", content: "output text", is_error: false}] =
+               msg.message.content
     end
 
     test "decodes user message with error result" do
-      json = ~s|{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"error message","is_error":true}]}}|
+      json =
+        ~s|{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"error message","is_error":true}]}}|
+
       assert {:ok, %StreamUserMessage{} = msg} = ClaudeSchema.decode_event(json)
       assert [%ToolResultBlock{is_error: true}] = msg.message.content
     end
@@ -81,7 +102,9 @@ defmodule AgentCore.CliRunners.ClaudeSchemaTest do
 
   describe "decode_event/1 - result messages" do
     test "decodes success result message" do
-      json = ~s|{"type":"result","subtype":"success","session_id":"sess_123","duration_ms":5000,"num_turns":3,"is_error":false,"result":"Final answer","usage":{"input_tokens":100,"output_tokens":50}}|
+      json =
+        ~s|{"type":"result","subtype":"success","session_id":"sess_123","duration_ms":5000,"num_turns":3,"is_error":false,"result":"Final answer","usage":{"input_tokens":100,"output_tokens":50}}|
+
       assert {:ok, %StreamResultMessage{} = msg} = ClaudeSchema.decode_event(json)
       assert msg.subtype == "success"
       assert msg.session_id == "sess_123"
@@ -93,7 +116,9 @@ defmodule AgentCore.CliRunners.ClaudeSchemaTest do
     end
 
     test "decodes error result message" do
-      json = ~s|{"type":"result","subtype":"error","is_error":true,"result":"Something went wrong"}|
+      json =
+        ~s|{"type":"result","subtype":"error","is_error":true,"result":"Something went wrong"}|
+
       assert {:ok, %StreamResultMessage{} = msg} = ClaudeSchema.decode_event(json)
       assert msg.subtype == "error"
       assert msg.is_error == true
@@ -130,14 +155,17 @@ defmodule AgentCore.CliRunners.ClaudeSchemaTest do
 
   describe "Usage struct" do
     test "decodes full usage" do
-      json = ~s|{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":1000,"output_tokens":500,"cache_creation_input_tokens":100,"cache_read_input_tokens":200}}|
+      json =
+        ~s|{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":1000,"output_tokens":500,"cache_creation_input_tokens":100,"cache_read_input_tokens":200}}|
+
       assert {:ok, %StreamResultMessage{usage: usage}} = ClaudeSchema.decode_event(json)
+
       assert %Usage{
-        input_tokens: 1000,
-        output_tokens: 500,
-        cache_creation_input_tokens: 100,
-        cache_read_input_tokens: 200
-      } = usage
+               input_tokens: 1000,
+               output_tokens: 500,
+               cache_creation_input_tokens: 100,
+               cache_read_input_tokens: 200
+             } = usage
     end
   end
 end

@@ -99,6 +99,7 @@ defmodule Ai.ProviderSupervisorTest do
       nil ->
         # Wait a bit longer if not found
         Process.sleep(100)
+
         assert Process.whereis(Ai.ProviderSupervisor) != nil,
                "ProviderSupervisor should be running"
 

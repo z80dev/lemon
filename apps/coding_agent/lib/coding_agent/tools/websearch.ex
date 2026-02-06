@@ -78,7 +78,8 @@ defmodule CodingAgent.Tools.WebSearch do
          :ok <- validate_timeout(Map.get(params, "timeout", nil)),
          :ok <- enforce_rate_limit(),
          :ok <- check_abort(signal),
-         {:ok, response} <- fetch_results(query, Map.get(params, "timeout"), Map.get(params, "region")),
+         {:ok, response} <-
+           fetch_results(query, Map.get(params, "timeout"), Map.get(params, "region")),
          :ok <- check_abort(signal) do
       results = extract_results(response)
       limited = Enum.take(results, max_results)
@@ -125,21 +126,24 @@ defmodule CodingAgent.Tools.WebSearch do
     if test_env?() do
       {:ok, %Req.Response{status: 200, body: %{"Results" => [], "RelatedTopics" => []}}}
     else
-    params = [
-      q: query,
-      format: "json",
-      no_redirect: 1,
-      no_html: 1,
-      skip_disambig: 1
-    ]
+      params = [
+        q: query,
+        format: "json",
+        no_redirect: 1,
+        no_html: 1,
+        skip_disambig: 1
+      ]
 
-    params =
-      case region do
-        value when is_binary(value) and value != "" -> Keyword.put(params, :kl, value)
-        _ -> params
-      end
+      params =
+        case region do
+          value when is_binary(value) and value != "" -> Keyword.put(params, :kl, value)
+          _ -> params
+        end
 
-      Req.get("https://api.duckduckgo.com/", params: params, receive_timeout: timeout_to_ms(timeout))
+      Req.get("https://api.duckduckgo.com/",
+        params: params,
+        receive_timeout: timeout_to_ms(timeout)
+      )
     end
   end
 

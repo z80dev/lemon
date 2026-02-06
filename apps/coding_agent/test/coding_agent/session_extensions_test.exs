@@ -351,6 +351,7 @@ defmodule CodingAgent.SessionExtensionsTest do
 
       # Create second extension
       ext_dir = Path.join(tmp_dir, ".lemon/extensions")
+
       extension_code2 = """
       defmodule TestHook2Extension do
         @behaviour CodingAgent.Extensions.Extension
@@ -370,6 +371,7 @@ defmodule CodingAgent.SessionExtensionsTest do
         end
       end
       """
+
       File.write!(Path.join(ext_dir, "testhook2extension.ex"), extension_code2)
       module2 = Module.concat(["TestHook2Extension"])
 
@@ -488,7 +490,9 @@ defmodule CodingAgent.SessionExtensionsTest do
       cleanup_module(module)
     end
 
-    test "on_turn_end hook is called with message and tool results when turn ends", %{tmp_dir: tmp_dir} do
+    test "on_turn_end hook is called with message and tool results when turn ends", %{
+      tmp_dir: tmp_dir
+    } do
       {:ok, tracker} = Agent.start_link(fn -> [] end, name: :test_turn_end_tracker)
 
       hooks_code = """
@@ -593,7 +597,9 @@ defmodule CodingAgent.SessionExtensionsTest do
       cleanup_module(module)
     end
 
-    test "extension_status_report is available via get_extension_status_report/1 at startup", %{tmp_dir: tmp_dir} do
+    test "extension_status_report is available via get_extension_status_report/1 at startup", %{
+      tmp_dir: tmp_dir
+    } do
       # The event is sent after init completes. Since we can't easily subscribe before
       # the session starts (GenServer.start_link is blocking), we verify the report
       # is available via the API instead. The event mechanism is tested implicitly

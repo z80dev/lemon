@@ -80,7 +80,10 @@ defmodule CodingAgent.ResourceLoaderTest do
   describe "load_agents/1" do
     test "returns empty string when no AGENTS.md exists" do
       isolated_dir =
-        Path.join(System.tmp_dir!(), "resource_loader_agents_#{System.unique_integer([:positive])}")
+        Path.join(
+          System.tmp_dir!(),
+          "resource_loader_agents_#{System.unique_integer([:positive])}"
+        )
 
       File.mkdir_p!(isolated_dir)
 
@@ -200,7 +203,9 @@ defmodule CodingAgent.ResourceLoaderTest do
     end
 
     test "loads valid theme JSON successfully", %{themes_dir: themes_dir} do
-      theme_content = ~s({"name": "test", "colors": {"primary": "#FF0000", "secondary": "#00FF00"}})
+      theme_content =
+        ~s({"name": "test", "colors": {"primary": "#FF0000", "secondary": "#00FF00"}})
+
       File.write!(Path.join(themes_dir, "test_theme.json"), theme_content)
 
       result = ResourceLoader.load_theme("test_theme")
@@ -235,20 +240,22 @@ defmodule CodingAgent.ResourceLoaderTest do
     end
 
     test "loads theme with nested structures", %{themes_dir: themes_dir} do
-      nested_theme = Jason.encode!(%{
-        "name" => "nested",
-        "colors" => %{
-          "ui" => %{
-            "background" => "#000000",
-            "foreground" => "#FFFFFF"
+      nested_theme =
+        Jason.encode!(%{
+          "name" => "nested",
+          "colors" => %{
+            "ui" => %{
+              "background" => "#000000",
+              "foreground" => "#FFFFFF"
+            },
+            "syntax" => %{
+              "keyword" => "#FF00FF",
+              "string" => "#00FFFF"
+            }
           },
-          "syntax" => %{
-            "keyword" => "#FF00FF",
-            "string" => "#00FFFF"
-          }
-        },
-        "fonts" => ["Monaco", "Consolas", "monospace"]
-      })
+          "fonts" => ["Monaco", "Consolas", "monospace"]
+        })
+
       File.write!(Path.join(themes_dir, "nested_theme.json"), nested_theme)
 
       result = ResourceLoader.load_theme("nested_theme")
@@ -298,7 +305,9 @@ defmodule CodingAgent.ResourceLoaderTest do
     end
 
     test "parses JSON with numeric and boolean values", %{themes_dir: themes_dir} do
-      typed_theme = ~s({"version": 2, "opacity": 0.95, "enabled": true, "deprecated": false, "count": null})
+      typed_theme =
+        ~s({"version": 2, "opacity": 0.95, "enabled": true, "deprecated": false, "count": null})
+
       File.write!(Path.join(themes_dir, "test_theme.json"), typed_theme)
 
       result = ResourceLoader.load_theme("test_theme")
@@ -337,9 +346,11 @@ defmodule CodingAgent.ResourceLoaderTest do
 
     test "handles large theme file", %{themes_dir: themes_dir} do
       # Create a theme with many properties
-      colors = for i <- 1..100, into: %{} do
-        {"color_#{i}", "##{String.pad_leading(Integer.to_string(i, 16), 6, "0")}"}
-      end
+      colors =
+        for i <- 1..100, into: %{} do
+          {"color_#{i}", "##{String.pad_leading(Integer.to_string(i, 16), 6, "0")}"}
+        end
+
       large_theme = Jason.encode!(%{"name" => "large", "colors" => colors})
       File.write!(Path.join(themes_dir, "test_theme.json"), large_theme)
 

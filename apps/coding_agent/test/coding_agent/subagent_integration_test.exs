@@ -41,7 +41,9 @@ defmodule CodingAgent.SubagentIntegrationTest do
       cwd: opts[:cwd] || System.tmp_dir!(),
       model: opts[:model] || IntegrationConfig.model(),
       settings_manager: opts[:settings_manager] || default_settings(),
-      system_prompt: opts[:system_prompt] || "You are a helpful coding assistant. Be concise. When asked to delegate work, use the task tool."
+      system_prompt:
+        opts[:system_prompt] ||
+          "You are a helpful coding assistant. Be concise. When asked to delegate work, use the task tool."
     ]
 
     merged_opts = Keyword.merge(base_opts, opts)
@@ -90,7 +92,10 @@ defmodule CodingAgent.SubagentIntegrationTest do
     if configured? do
       :ok
     else
-      IO.puts("[Subagent Integration Tests] Skipping: #{name} CLI not configured (missing API key env)")
+      IO.puts(
+        "[Subagent Integration Tests] Skipping: #{name} CLI not configured (missing API key env)"
+      )
+
       :skip
     end
   end
@@ -127,11 +132,13 @@ defmodule CodingAgent.SubagentIntegrationTest do
 
     case message_end_events do
       [] ->
-        error = Enum.find(events, fn
-          {:error, _} -> true
-          {:timeout, _} -> true
-          _ -> false
-        end)
+        error =
+          Enum.find(events, fn
+            {:error, _} -> true
+            {:timeout, _} -> true
+            _ -> false
+          end)
+
         {:error, error || :no_response, events}
 
       messages ->
@@ -181,27 +188,32 @@ defmodule CodingAgent.SubagentIntegrationTest do
 
         :ok ->
           # Execute the task tool directly
-          result = TaskTool.execute(
-            "test_call_1",
-            %{
-              "description" => "Say hello",
-              "prompt" => "Say 'Hello from subagent!' and nothing else."
-            },
-            nil,  # no abort signal
-            nil,  # no on_update callback
-            tmp_dir,
-            [model: IntegrationConfig.model()]
-          )
+          result =
+            TaskTool.execute(
+              "test_call_1",
+              %{
+                "description" => "Say hello",
+                "prompt" => "Say 'Hello from subagent!' and nothing else."
+              },
+              # no abort signal
+              nil,
+              # no on_update callback
+              nil,
+              tmp_dir,
+              model: IntegrationConfig.model()
+            )
 
           case result do
             %AgentCore.Types.AgentToolResult{content: content, details: details} ->
-              text = content
+              text =
+                content
                 |> Enum.filter(&match?(%TextContent{}, &1))
                 |> Enum.map(& &1.text)
                 |> Enum.join(" ")
 
               assert text =~ "Hello" or text =~ "hello",
-                "Expected greeting in response, got: #{text}"
+                     "Expected greeting in response, got: #{text}"
+
               assert details[:status] == "completed"
               assert details[:session_id] != nil
 
@@ -222,22 +234,25 @@ defmodule CodingAgent.SubagentIntegrationTest do
           test_file = Path.join(tmp_dir, "secret.txt")
           File.write!(test_file, "The answer is 42.")
 
-          result = TaskTool.execute(
-            "test_call_2",
-            %{
-              "description" => "Find secret",
-              "prompt" => "Read the file secret.txt and tell me what the answer is. Reply with just the number.",
-              "role" => "research"
-            },
-            nil,
-            nil,
-            tmp_dir,
-            [model: IntegrationConfig.model()]
-          )
+          result =
+            TaskTool.execute(
+              "test_call_2",
+              %{
+                "description" => "Find secret",
+                "prompt" =>
+                  "Read the file secret.txt and tell me what the answer is. Reply with just the number.",
+                "role" => "research"
+              },
+              nil,
+              nil,
+              tmp_dir,
+              model: IntegrationConfig.model()
+            )
 
           case result do
             %AgentCore.Types.AgentToolResult{content: content, details: details} ->
-              text = content
+              text =
+                content
                 |> Enum.filter(&match?(%TextContent{}, &1))
                 |> Enum.map(& &1.text)
                 |> Enum.join(" ")
@@ -263,28 +278,31 @@ defmodule CodingAgent.SubagentIntegrationTest do
           assert true
 
         {:ok, :ok} ->
-          result = TaskTool.execute(
-            "test_call_codex",
-            %{
-              "description" => "Codex hello",
-              "prompt" => "Say 'hello from codex' and nothing else.",
-              "engine" => "codex"
-            },
-            nil,
-            nil,
-            tmp_dir,
-            []
-          )
+          result =
+            TaskTool.execute(
+              "test_call_codex",
+              %{
+                "description" => "Codex hello",
+                "prompt" => "Say 'hello from codex' and nothing else.",
+                "engine" => "codex"
+              },
+              nil,
+              nil,
+              tmp_dir,
+              []
+            )
 
           case result do
             %AgentCore.Types.AgentToolResult{content: content, details: details} ->
-              text = content
+              text =
+                content
                 |> Enum.filter(&match?(%TextContent{}, &1))
                 |> Enum.map(& &1.text)
                 |> Enum.join(" ")
 
               assert text =~ "hello" or text =~ "Hello",
-                "Expected greeting in response, got: #{text}"
+                     "Expected greeting in response, got: #{text}"
+
               assert details[:engine] == "codex"
               assert details[:status] == "completed"
 
@@ -304,28 +322,31 @@ defmodule CodingAgent.SubagentIntegrationTest do
           assert true
 
         {:ok, :ok} ->
-          result = TaskTool.execute(
-            "test_call_claude",
-            %{
-              "description" => "Claude hello",
-              "prompt" => "Say 'hello from claude' and nothing else.",
-              "engine" => "claude"
-            },
-            nil,
-            nil,
-            tmp_dir,
-            []
-          )
+          result =
+            TaskTool.execute(
+              "test_call_claude",
+              %{
+                "description" => "Claude hello",
+                "prompt" => "Say 'hello from claude' and nothing else.",
+                "engine" => "claude"
+              },
+              nil,
+              nil,
+              tmp_dir,
+              []
+            )
 
           case result do
             %AgentCore.Types.AgentToolResult{content: content, details: details} ->
-              text = content
+              text =
+                content
                 |> Enum.filter(&match?(%TextContent{}, &1))
                 |> Enum.map(& &1.text)
                 |> Enum.join(" ")
 
               assert text =~ "hello" or text =~ "Hello",
-                "Expected greeting in response, got: #{text}"
+                     "Expected greeting in response, got: #{text}"
+
               assert details[:engine] == "claude"
               assert details[:status] == "completed"
 
@@ -345,18 +366,19 @@ defmodule CodingAgent.SubagentIntegrationTest do
           assert true
 
         _ ->
-          result = TaskTool.execute(
-            "test_call_kimi",
-            %{
-              "description" => "Kimi hello",
-              "prompt" => "Say 'hello from kimi' and nothing else.",
-              "engine" => "kimi"
-            },
-            nil,
-            nil,
-            tmp_dir,
-            [model: IntegrationConfig.model()]
-          )
+          result =
+            TaskTool.execute(
+              "test_call_kimi",
+              %{
+                "description" => "Kimi hello",
+                "prompt" => "Say 'hello from kimi' and nothing else.",
+                "engine" => "kimi"
+              },
+              nil,
+              nil,
+              tmp_dir,
+              model: IntegrationConfig.model()
+            )
 
           case result do
             %AgentCore.Types.AgentToolResult{content: content, details: details} ->
@@ -367,7 +389,7 @@ defmodule CodingAgent.SubagentIntegrationTest do
                 |> Enum.join(" ")
 
               assert text =~ "hello" or text =~ "Hello",
-                "Expected greeting in response, got: #{text}"
+                     "Expected greeting in response, got: #{text}"
 
               assert details[:engine] == "kimi"
 
@@ -394,13 +416,14 @@ defmodule CodingAgent.SubagentIntegrationTest do
           test_file = Path.join(tmp_dir, "data.txt")
           File.write!(test_file, "Project name: LemonAgent")
 
-          session = start_session(
-            cwd: tmp_dir,
-            system_prompt: """
-            You are a coding assistant. When asked to delegate a task, you MUST use the task tool.
-            The task tool spawns a subagent to handle the work.
-            """
-          )
+          session =
+            start_session(
+              cwd: tmp_dir,
+              system_prompt: """
+              You are a coding assistant. When asked to delegate a task, you MUST use the task tool.
+              The task tool spawns a subagent to handle the work.
+              """
+            )
 
           prompt = """
           Use the task tool to spawn a subagent that will read data.txt and report the project name.
@@ -419,10 +442,12 @@ defmodule CodingAgent.SubagentIntegrationTest do
               used_task_tool = has_task_tool_call?(events)
 
               assert text =~ "Lemon" or text =~ "lemon" or used_task_tool,
-                "Expected project name or task tool usage, got: #{text}"
+                     "Expected project name or task tool usage, got: #{text}"
 
             {:error, reason, events} ->
-              flunk("Agent loop failed: #{inspect(reason)}, events: #{inspect(Enum.take(events, 20))}")
+              flunk(
+                "Agent loop failed: #{inspect(reason)}, events: #{inspect(Enum.take(events, 20))}"
+              )
           end
       end
     end
@@ -440,17 +465,19 @@ defmodule CodingAgent.SubagentIntegrationTest do
           assert true
 
         :ok ->
-          {:ok, coordinator} = CodingAgent.Coordinator.start_link(
-            cwd: tmp_dir,
-            model: IntegrationConfig.model(),
-            default_timeout: 60_000
-          )
+          {:ok, coordinator} =
+            CodingAgent.Coordinator.start_link(
+              cwd: tmp_dir,
+              model: IntegrationConfig.model(),
+              default_timeout: 60_000
+            )
 
-          result = CodingAgent.Coordinator.run_subagent(
-            coordinator,
-            prompt: "What is 2 + 2? Reply with just the number.",
-            timeout: 60_000
-          )
+          result =
+            CodingAgent.Coordinator.run_subagent(
+              coordinator,
+              prompt: "What is 2 + 2? Reply with just the number.",
+              timeout: 60_000
+            )
 
           case result do
             {:ok, text} ->
@@ -469,11 +496,12 @@ defmodule CodingAgent.SubagentIntegrationTest do
           assert true
 
         :ok ->
-          {:ok, coordinator} = CodingAgent.Coordinator.start_link(
-            cwd: tmp_dir,
-            model: IntegrationConfig.model(),
-            default_timeout: 60_000
-          )
+          {:ok, coordinator} =
+            CodingAgent.Coordinator.start_link(
+              cwd: tmp_dir,
+              model: IntegrationConfig.model(),
+              default_timeout: 60_000
+            )
 
           specs = [
             %{prompt: "What is 1 + 1? Reply with just the number.", description: "Math 1"},
@@ -484,13 +512,15 @@ defmodule CodingAgent.SubagentIntegrationTest do
 
           assert length(results) == 2
 
-          completed = Enum.filter(results, & &1.status == :completed)
-          assert length(completed) >= 1, "Expected at least one completed subagent, got: #{inspect(results)}"
+          completed = Enum.filter(results, &(&1.status == :completed))
+
+          assert length(completed) >= 1,
+                 "Expected at least one completed subagent, got: #{inspect(results)}"
 
           # Check that completed results have expected answers
           Enum.each(completed, fn result ->
             assert result.result =~ "2" or result.result =~ "4",
-              "Expected math answer in result, got: #{result.result}"
+                   "Expected math answer in result, got: #{result.result}"
           end)
       end
     end

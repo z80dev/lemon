@@ -2,6 +2,7 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.CliRunners.LemonSubagent
+
   alias AgentCore.CliRunners.Types.{
     Action,
     ActionEvent,
@@ -9,6 +10,7 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
     ResumeToken,
     StartedEvent
   }
+
   alias AgentCore.EventStream
 
   # ============================================================================
@@ -75,7 +77,14 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
       agent_token = ResumeToken.new("lemon", "agent_updated")
       {:ok, agent} = Agent.start_link(fn -> agent_token end)
 
-      session = %{pid: nil, stream: nil, resume_token: session_token, token_agent: agent, cwd: "/tmp"}
+      session = %{
+        pid: nil,
+        stream: nil,
+        resume_token: session_token,
+        token_agent: agent,
+        cwd: "/tmp"
+      }
+
       assert LemonSubagent.resume_token(session) == agent_token
 
       Agent.stop(agent)
@@ -84,7 +93,14 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
     test "handles agent returning nil gracefully" do
       {:ok, agent} = Agent.start_link(fn -> nil end)
       session_token = ResumeToken.new("lemon", "fallback_token")
-      session = %{pid: nil, stream: nil, resume_token: session_token, token_agent: agent, cwd: "/tmp"}
+
+      session = %{
+        pid: nil,
+        stream: nil,
+        resume_token: session_token,
+        token_agent: agent,
+        cwd: "/tmp"
+      }
 
       # Should return nil from agent (not fall back to session token)
       assert LemonSubagent.resume_token(session) == nil
@@ -98,9 +114,10 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
       session = %{pid: nil, stream: nil, resume_token: nil, token_agent: agent, cwd: "/tmp"}
 
       # Multiple concurrent reads should all succeed
-      tasks = for _ <- 1..10 do
-        Task.async(fn -> LemonSubagent.resume_token(session) end)
-      end
+      tasks =
+        for _ <- 1..10 do
+          Task.async(fn -> LemonSubagent.resume_token(session) end)
+        end
 
       results = Enum.map(tasks, &Task.await/1)
       assert Enum.all?(results, fn t -> t == token end)
@@ -143,7 +160,7 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
 
       # Test that opts are accepted (will still fail due to no token)
       assert {:error, :no_resume_token} =
-        LemonSubagent.continue(session, "test", timeout: 30_000, cwd: "/other/path")
+               LemonSubagent.continue(session, "test", timeout: 30_000, cwd: "/other/path")
     end
 
     test "empty prompt is accepted" do
@@ -162,7 +179,13 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
       {:ok, stream} = EventStream.start_link(owner: self(), timeout: 5000)
       {:ok, token_agent} = Agent.start_link(fn -> nil end)
 
-      session = %{pid: nil, stream: stream, resume_token: nil, token_agent: token_agent, cwd: "/tmp"}
+      session = %{
+        pid: nil,
+        stream: stream,
+        resume_token: nil,
+        token_agent: token_agent,
+        cwd: "/tmp"
+      }
 
       # Complete the stream immediately
       EventStream.complete(stream, [])
@@ -182,7 +205,13 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
       {:ok, stream} = EventStream.start_link(owner: self(), timeout: 5000)
       {:ok, token_agent} = Agent.start_link(fn -> nil end)
 
-      session = %{pid: nil, stream: stream, resume_token: nil, token_agent: token_agent, cwd: "/tmp"}
+      session = %{
+        pid: nil,
+        stream: stream,
+        resume_token: nil,
+        token_agent: token_agent,
+        cwd: "/tmp"
+      }
 
       # Push a started event
       started_token = ResumeToken.new("lemon", "new_session_123")
@@ -203,7 +232,13 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
       {:ok, stream} = EventStream.start_link(owner: self(), timeout: 5000)
       {:ok, token_agent} = Agent.start_link(fn -> nil end)
 
-      session = %{pid: nil, stream: stream, resume_token: nil, token_agent: token_agent, cwd: "/tmp"}
+      session = %{
+        pid: nil,
+        stream: stream,
+        resume_token: nil,
+        token_agent: token_agent,
+        cwd: "/tmp"
+      }
 
       # Push a completed event with resume token
       resume_token = ResumeToken.new("lemon", "session_for_resume")
@@ -240,7 +275,13 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
       {:ok, stream} = EventStream.start_link(owner: self(), timeout: 5000)
       {:ok, token_agent} = Agent.start_link(fn -> nil end)
 
-      session = %{pid: nil, stream: stream, resume_token: nil, token_agent: token_agent, cwd: "/tmp"}
+      session = %{
+        pid: nil,
+        stream: stream,
+        resume_token: nil,
+        token_agent: token_agent,
+        cwd: "/tmp"
+      }
 
       # Push a sequence of events
       token = ResumeToken.new("lemon", "full_session")
@@ -249,9 +290,17 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
 
       action = Action.new("tool_1", :command, "$ ls")
       EventStream.push_async(stream, {:cli_event, ActionEvent.new("lemon", action, :started)})
-      EventStream.push_async(stream, {:cli_event, ActionEvent.new("lemon", action, :completed, ok: true)})
 
-      EventStream.push_async(stream, {:cli_event, CompletedEvent.ok("lemon", "All done", resume: token)})
+      EventStream.push_async(
+        stream,
+        {:cli_event, ActionEvent.new("lemon", action, :completed, ok: true)}
+      )
+
+      EventStream.push_async(
+        stream,
+        {:cli_event, CompletedEvent.ok("lemon", "All done", resume: token)}
+      )
+
       EventStream.complete(stream, [])
 
       events = session |> LemonSubagent.events() |> Enum.to_list()
@@ -279,10 +328,11 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
 
       events = session |> LemonSubagent.events() |> Enum.to_list()
 
-      started_events = Enum.filter(events, fn
-        {:started, _} -> true
-        _ -> false
-      end)
+      started_events =
+        Enum.filter(events, fn
+          {:started, _} -> true
+          _ -> false
+        end)
 
       assert length(started_events) == 1
       {:started, received_token} = hd(started_events)
@@ -296,15 +346,21 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
 
       action = Action.new("tool_42", :file_change, "Write test.ex", %{path: "/app/test.ex"})
       EventStream.push_async(stream, {:cli_event, ActionEvent.new("lemon", action, :started)})
-      EventStream.push_async(stream, {:cli_event, ActionEvent.new("lemon", action, :completed, ok: true)})
+
+      EventStream.push_async(
+        stream,
+        {:cli_event, ActionEvent.new("lemon", action, :completed, ok: true)}
+      )
+
       EventStream.complete(stream, [])
 
       events = session |> LemonSubagent.events() |> Enum.to_list()
 
-      action_events = Enum.filter(events, fn
-        {:action, _, _, _} -> true
-        _ -> false
-      end)
+      action_events =
+        Enum.filter(events, fn
+          {:action, _, _, _} -> true
+          _ -> false
+        end)
 
       assert length(action_events) == 2
 
@@ -328,17 +384,22 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
 
       token = ResumeToken.new("lemon", "complete_test")
       usage = %{input_tokens: 100, output_tokens: 50}
-      EventStream.push_async(stream, {:cli_event,
-        CompletedEvent.ok("lemon", "Task completed successfully", resume: token, usage: usage)
-      })
+
+      EventStream.push_async(
+        stream,
+        {:cli_event,
+         CompletedEvent.ok("lemon", "Task completed successfully", resume: token, usage: usage)}
+      )
+
       EventStream.complete(stream, [])
 
       events = session |> LemonSubagent.events() |> Enum.to_list()
 
-      completed_events = Enum.filter(events, fn
-        {:completed, _, _} -> true
-        _ -> false
-      end)
+      completed_events =
+        Enum.filter(events, fn
+          {:completed, _, _} -> true
+          _ -> false
+        end)
 
       assert length(completed_events) == 1
       {:completed, answer, opts} = hd(completed_events)
@@ -353,17 +414,21 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
 
       session = %{pid: nil, stream: stream, resume_token: nil, token_agent: nil, cwd: "/tmp"}
 
-      EventStream.push_async(stream, {:cli_event,
-        CompletedEvent.error("lemon", "Connection failed", answer: "Partial response")
-      })
+      EventStream.push_async(
+        stream,
+        {:cli_event,
+         CompletedEvent.error("lemon", "Connection failed", answer: "Partial response")}
+      )
+
       EventStream.complete(stream, [])
 
       events = session |> LemonSubagent.events() |> Enum.to_list()
 
-      completed_events = Enum.filter(events, fn
-        {:completed, _, _} -> true
-        _ -> false
-      end)
+      completed_events =
+        Enum.filter(events, fn
+          {:completed, _, _} -> true
+          _ -> false
+        end)
 
       {:completed, answer, opts} = hd(completed_events)
       assert answer == "Partial response"
@@ -381,10 +446,11 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
 
       events = session |> LemonSubagent.events() |> Enum.to_list()
 
-      error_events = Enum.filter(events, fn
-        {:error, _} -> true
-        _ -> false
-      end)
+      error_events =
+        Enum.filter(events, fn
+          {:error, _} -> true
+          _ -> false
+        end)
 
       assert length(error_events) == 1
       {:error, reason} = hd(error_events)
@@ -401,10 +467,11 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
 
       events = session |> LemonSubagent.events() |> Enum.to_list()
 
-      error_events = Enum.filter(events, fn
-        {:error, {:canceled, _}} -> true
-        _ -> false
-      end)
+      error_events =
+        Enum.filter(events, fn
+          {:error, {:canceled, _}} -> true
+          _ -> false
+        end)
 
       assert length(error_events) == 1
       {:error, {:canceled, reason}} = hd(error_events)
@@ -428,18 +495,20 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
       # The {:agent_end, []} is terminal and halts the stream after normalization.
       # normalize_event({:agent_end, _}) returns [] so it produces no output event.
       # We should only see the started event, not agent_end.
-      started_events = Enum.filter(events, fn
-        {:started, _} -> true
-        _ -> false
-      end)
+      started_events =
+        Enum.filter(events, fn
+          {:started, _} -> true
+          _ -> false
+        end)
 
       assert length(started_events) == 1
 
       # Verify no agent_end events leak through
-      agent_end_events = Enum.filter(events, fn
-        {:agent_end, _} -> true
-        _ -> false
-      end)
+      agent_end_events =
+        Enum.filter(events, fn
+          {:agent_end, _} -> true
+          _ -> false
+        end)
 
       assert length(agent_end_events) == 0
     end
@@ -460,13 +529,14 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
       events = session |> LemonSubagent.events() |> Enum.to_list()
 
       # Unknown events are filtered, known events pass through
-      known_events = Enum.filter(events, fn
-        {:started, _} -> true
-        {:action, _, _, _} -> true
-        {:completed, _, _} -> true
-        {:error, _} -> true
-        _ -> false
-      end)
+      known_events =
+        Enum.filter(events, fn
+          {:started, _} -> true
+          {:action, _, _, _} -> true
+          {:completed, _, _} -> true
+          {:error, _} -> true
+          _ -> false
+        end)
 
       # Should have the started event, unknown events are filtered
       assert length(known_events) == 1
@@ -631,21 +701,23 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
       # The timeout will cause a :canceled event
 
       # Start consuming events in a task
-      task = Task.async(fn ->
-        session
-        |> LemonSubagent.events()
-        |> Enum.to_list()
-      end)
+      task =
+        Task.async(fn ->
+          session
+          |> LemonSubagent.events()
+          |> Enum.to_list()
+        end)
 
       # Wait for timeout + buffer
       events = Task.await(task, 1000)
 
       # Should have received a canceled event due to timeout
-      has_canceled = Enum.any?(events, fn
-        {:canceled, :timeout} -> true
-        {:error, {:canceled, :timeout}} -> true
-        _ -> false
-      end)
+      has_canceled =
+        Enum.any?(events, fn
+          {:canceled, :timeout} -> true
+          {:error, {:canceled, :timeout}} -> true
+          _ -> false
+        end)
 
       assert has_canceled
     end
@@ -656,11 +728,12 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
       session = %{pid: nil, stream: stream, resume_token: nil, token_agent: nil, cwd: "/tmp"}
 
       # Start consuming in a separate task
-      consumer_task = Task.async(fn ->
-        session
-        |> LemonSubagent.events()
-        |> Enum.to_list()
-      end)
+      consumer_task =
+        Task.async(fn ->
+          session
+          |> LemonSubagent.events()
+          |> Enum.to_list()
+        end)
 
       # Give consumer time to start
       Process.sleep(10)
@@ -671,11 +744,12 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
       # Consumer should receive cancel and complete
       events = Task.await(consumer_task, 1000)
 
-      has_canceled = Enum.any?(events, fn
-        {:canceled, :test_cancel} -> true
-        {:error, {:canceled, :test_cancel}} -> true
-        _ -> false
-      end)
+      has_canceled =
+        Enum.any?(events, fn
+          {:canceled, :test_cancel} -> true
+          {:error, {:canceled, :test_cancel}} -> true
+          _ -> false
+        end)
 
       assert has_canceled
     end
@@ -693,7 +767,13 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
       fallback_token = ResumeToken.new("lemon", "fallback_after_crash")
       {:ok, agent} = Agent.start_link(fn -> ResumeToken.new("lemon", "agent_token") end)
 
-      session = %{pid: nil, stream: nil, resume_token: fallback_token, token_agent: agent, cwd: "/tmp"}
+      session = %{
+        pid: nil,
+        stream: nil,
+        resume_token: fallback_token,
+        token_agent: agent,
+        cwd: "/tmp"
+      }
 
       # Crash the agent
       Process.exit(agent, :kill)
@@ -707,7 +787,13 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
       fallback_token = ResumeToken.new("lemon", "shutdown_fallback")
       {:ok, agent} = Agent.start_link(fn -> ResumeToken.new("lemon", "will_shutdown") end)
 
-      session = %{pid: nil, stream: nil, resume_token: fallback_token, token_agent: agent, cwd: "/tmp"}
+      session = %{
+        pid: nil,
+        stream: nil,
+        resume_token: fallback_token,
+        token_agent: agent,
+        cwd: "/tmp"
+      }
 
       # Shutdown the agent normally
       Agent.stop(agent, :normal)

@@ -316,7 +316,8 @@ defmodule AgentCore.ContextTest do
           Mocks.user_message("Message #{i}")
         end
 
-      {truncated, _dropped} = Context.truncate(messages, max_messages: 4, strategy: :keep_bookends)
+      {truncated, _dropped} =
+        Context.truncate(messages, max_messages: 4, strategy: :keep_bookends)
 
       assert length(truncated) == 4
 
@@ -607,7 +608,8 @@ defmodule AgentCore.ContextTest do
           Mocks.user_message("Message #{i}")
         end
 
-      {truncated, _dropped} = Context.truncate(messages, max_messages: 5, strategy: :keep_bookends)
+      {truncated, _dropped} =
+        Context.truncate(messages, max_messages: 5, strategy: :keep_bookends)
 
       # With max_messages: 5, half = 2, so we get first 2 + last 2 = 4
       assert length(truncated) == 4
@@ -619,7 +621,8 @@ defmodule AgentCore.ContextTest do
           Mocks.user_message("Message #{i}")
         end
 
-      {truncated, dropped} = Context.truncate(messages, max_messages: 10, strategy: :keep_bookends)
+      {truncated, dropped} =
+        Context.truncate(messages, max_messages: 10, strategy: :keep_bookends)
 
       assert truncated == messages
       assert dropped == 0
@@ -762,7 +765,13 @@ defmodule AgentCore.ContextTest do
       text = String.duplicate("x", 101)
       messages = [Mocks.user_message(text)]
 
-      result = Context.check_size(messages, nil, warning_threshold: 100, critical_threshold: 200, log: false)
+      result =
+        Context.check_size(messages, nil,
+          warning_threshold: 100,
+          critical_threshold: 200,
+          log: false
+        )
+
       assert result == :warning
     end
 
@@ -770,7 +779,13 @@ defmodule AgentCore.ContextTest do
       text = String.duplicate("x", 201)
       messages = [Mocks.user_message(text)]
 
-      result = Context.check_size(messages, nil, warning_threshold: 100, critical_threshold: 200, log: false)
+      result =
+        Context.check_size(messages, nil,
+          warning_threshold: 100,
+          critical_threshold: 200,
+          log: false
+        )
+
       assert result == :critical
     end
 
@@ -778,7 +793,13 @@ defmodule AgentCore.ContextTest do
       text = String.duplicate("x", 500)
       messages = [Mocks.user_message(text)]
 
-      result = Context.check_size(messages, nil, warning_threshold: 100, critical_threshold: 200, log: false)
+      result =
+        Context.check_size(messages, nil,
+          warning_threshold: 100,
+          critical_threshold: 200,
+          log: false
+        )
+
       assert result == :critical
     end
   end
@@ -828,7 +849,8 @@ defmodule AgentCore.ContextTest do
       {truncated, dropped} = Context.truncate(messages, max_messages: 10)
 
       assert dropped > 0
-      assert length(truncated) <= 11  # max + possibly first user
+      # max + possibly first user
+      assert length(truncated) <= 11
 
       # Verify truncated stats
       truncated_stats = Context.stats(truncated, system_prompt)
@@ -864,7 +886,8 @@ defmodule AgentCore.ContextTest do
         Mocks.assistant_message("World")
       ]
 
-      {truncated, dropped} = Context.truncate(messages, max_chars: 0, max_messages: 100, keep_first_user: false)
+      {truncated, dropped} =
+        Context.truncate(messages, max_chars: 0, max_messages: 100, keep_first_user: false)
 
       # With 0 max_chars and no first user preservation, should drop everything
       assert length(truncated) == 0
@@ -985,7 +1008,8 @@ defmodule AgentCore.ContextTest do
           Mocks.user_message("Msg #{i}")
         end
 
-      {truncated, _dropped} = Context.truncate(messages, max_messages: 1, strategy: :keep_bookends)
+      {truncated, _dropped} =
+        Context.truncate(messages, max_messages: 1, strategy: :keep_bookends)
 
       # half = 0, so empty result from take operations
       assert length(truncated) == 0
@@ -1038,7 +1062,8 @@ defmodule AgentCore.ContextTest do
           Mocks.user_message("Msg #{i}")
         end
 
-      {truncated, dropped} = Context.truncate(messages, max_messages: 10, strategy: :keep_bookends)
+      {truncated, dropped} =
+        Context.truncate(messages, max_messages: 10, strategy: :keep_bookends)
 
       assert truncated == messages
       assert dropped == 0
@@ -1204,7 +1229,10 @@ defmodule AgentCore.ContextTest do
 
     test "single message with bookends strategy" do
       messages = [Mocks.user_message("Solo")]
-      {truncated, dropped} = Context.truncate(messages, max_messages: 10, strategy: :keep_bookends)
+
+      {truncated, dropped} =
+        Context.truncate(messages, max_messages: 10, strategy: :keep_bookends)
+
       assert truncated == messages
       assert dropped == 0
     end
@@ -1245,7 +1273,8 @@ defmodule AgentCore.ContextTest do
 
       # Should handle without crashing
       size = Context.estimate_size([msg], nil)
-      assert size == 11  # Length of the binary
+      # Length of the binary
+      assert size == 11
     end
 
     test "message with unicode content" do
@@ -1263,7 +1292,8 @@ defmodule AgentCore.ContextTest do
       messages = [Mocks.user_message(emoji_content)]
 
       size = Context.estimate_size(messages, nil)
-      assert size == 5  # 5 graphemes
+      # 5 graphemes
+      assert size == 5
     end
 
     test "message with mixed ASCII and unicode" do
@@ -1348,8 +1378,10 @@ defmodule AgentCore.ContextTest do
     end
 
     test "token estimation with system prompt included" do
-      messages = [Mocks.user_message("Hi")]  # 2 chars
-      system = "Be helpful"  # 10 chars
+      # 2 chars
+      messages = [Mocks.user_message("Hi")]
+      # 10 chars
+      system = "Be helpful"
       # Total: 12 chars -> 3 tokens
 
       stats = Context.stats(messages, system)
@@ -1383,7 +1415,10 @@ defmodule AgentCore.ContextTest do
   # ============================================================================
 
   describe "telemetry emission validation" do
-    test "estimate_size emits telemetry with correct measurements", %{handler_id: handler_id, collector: collector} do
+    test "estimate_size emits telemetry with correct measurements", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       attach_telemetry([[:agent_core, :context, :size]], handler_id, collector)
 
       messages = [
@@ -1400,12 +1435,16 @@ defmodule AgentCore.ContextTest do
       {event_name, measurements, metadata} = hd(events)
 
       assert event_name == [:agent_core, :context, :size]
-      assert measurements.char_count == 16  # 5 + 5 + 6
+      # 5 + 5 + 6
+      assert measurements.char_count == 16
       assert measurements.message_count == 2
       assert metadata.has_system_prompt == true
     end
 
-    test "estimate_size emits telemetry with has_system_prompt: false", %{handler_id: handler_id, collector: collector} do
+    test "estimate_size emits telemetry with has_system_prompt: false", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       attach_telemetry([[:agent_core, :context, :size]], handler_id, collector)
 
       messages = [Mocks.user_message("Test")]
@@ -1418,7 +1457,10 @@ defmodule AgentCore.ContextTest do
       assert metadata.has_system_prompt == false
     end
 
-    test "check_size emits warning telemetry with correct level", %{handler_id: handler_id, collector: collector} do
+    test "check_size emits warning telemetry with correct level", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       attach_telemetry([[:agent_core, :context, :warning]], handler_id, collector)
 
       messages = [Mocks.user_message("Hello")]
@@ -1428,7 +1470,9 @@ defmodule AgentCore.ContextTest do
       detach_telemetry(handler_id)
 
       # Filter for warning events only
-      warning_events = Enum.filter(events, fn {name, _, _} -> name == [:agent_core, :context, :warning] end)
+      warning_events =
+        Enum.filter(events, fn {name, _, _} -> name == [:agent_core, :context, :warning] end)
+
       assert length(warning_events) >= 1
 
       {_event_name, measurements, metadata} = hd(warning_events)
@@ -1437,7 +1481,10 @@ defmodule AgentCore.ContextTest do
       assert metadata.level == :warning
     end
 
-    test "check_size emits critical telemetry with correct level", %{handler_id: handler_id, collector: collector} do
+    test "check_size emits critical telemetry with correct level", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       attach_telemetry([[:agent_core, :context, :warning]], handler_id, collector)
 
       messages = [Mocks.user_message("Hello World")]
@@ -1446,7 +1493,9 @@ defmodule AgentCore.ContextTest do
       events = get_events(collector)
       detach_telemetry(handler_id)
 
-      warning_events = Enum.filter(events, fn {name, _, _} -> name == [:agent_core, :context, :warning] end)
+      warning_events =
+        Enum.filter(events, fn {name, _, _} -> name == [:agent_core, :context, :warning] end)
+
       assert length(warning_events) >= 1
 
       {_event_name, measurements, metadata} = hd(warning_events)
@@ -1455,20 +1504,33 @@ defmodule AgentCore.ContextTest do
       assert metadata.level == :critical
     end
 
-    test "check_size does not emit telemetry when below thresholds", %{handler_id: handler_id, collector: collector} do
+    test "check_size does not emit telemetry when below thresholds", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       attach_telemetry([[:agent_core, :context, :warning]], handler_id, collector)
 
       messages = [Mocks.user_message("Hi")]
-      Context.check_size(messages, nil, warning_threshold: 100, critical_threshold: 200, log: false)
+
+      Context.check_size(messages, nil,
+        warning_threshold: 100,
+        critical_threshold: 200,
+        log: false
+      )
 
       events = get_events(collector)
       detach_telemetry(handler_id)
 
-      warning_events = Enum.filter(events, fn {name, _, _} -> name == [:agent_core, :context, :warning] end)
+      warning_events =
+        Enum.filter(events, fn {name, _, _} -> name == [:agent_core, :context, :warning] end)
+
       assert warning_events == []
     end
 
-    test "truncate emits telemetry when messages are dropped", %{handler_id: handler_id, collector: collector} do
+    test "truncate emits telemetry when messages are dropped", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       attach_telemetry([[:agent_core, :context, :truncated]], handler_id, collector)
 
       messages =
@@ -1482,7 +1544,9 @@ defmodule AgentCore.ContextTest do
       detach_telemetry(handler_id)
 
       if dropped > 0 do
-        truncated_events = Enum.filter(events, fn {name, _, _} -> name == [:agent_core, :context, :truncated] end)
+        truncated_events =
+          Enum.filter(events, fn {name, _, _} -> name == [:agent_core, :context, :truncated] end)
+
         assert length(truncated_events) == 1
 
         {_event_name, measurements, metadata} = hd(truncated_events)
@@ -1492,7 +1556,10 @@ defmodule AgentCore.ContextTest do
       end
     end
 
-    test "truncate does not emit telemetry when no messages are dropped", %{handler_id: handler_id, collector: collector} do
+    test "truncate does not emit telemetry when no messages are dropped", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       attach_telemetry([[:agent_core, :context, :truncated]], handler_id, collector)
 
       messages = [Mocks.user_message("Hello")]
@@ -1502,11 +1569,17 @@ defmodule AgentCore.ContextTest do
       detach_telemetry(handler_id)
 
       assert dropped == 0
-      truncated_events = Enum.filter(events, fn {name, _, _} -> name == [:agent_core, :context, :truncated] end)
+
+      truncated_events =
+        Enum.filter(events, fn {name, _, _} -> name == [:agent_core, :context, :truncated] end)
+
       assert truncated_events == []
     end
 
-    test "truncate emits telemetry with bookends strategy", %{handler_id: handler_id, collector: collector} do
+    test "truncate emits telemetry with bookends strategy", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       attach_telemetry([[:agent_core, :context, :truncated]], handler_id, collector)
 
       messages =
@@ -1519,14 +1592,19 @@ defmodule AgentCore.ContextTest do
       events = get_events(collector)
       detach_telemetry(handler_id)
 
-      truncated_events = Enum.filter(events, fn {name, _, _} -> name == [:agent_core, :context, :truncated] end)
+      truncated_events =
+        Enum.filter(events, fn {name, _, _} -> name == [:agent_core, :context, :truncated] end)
+
       assert length(truncated_events) == 1
 
       {_event_name, _measurements, metadata} = hd(truncated_events)
       assert metadata.strategy == :keep_bookends
     end
 
-    test "multiple estimate_size calls emit multiple telemetry events", %{handler_id: handler_id, collector: collector} do
+    test "multiple estimate_size calls emit multiple telemetry events", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       attach_telemetry([[:agent_core, :context, :size]], handler_id, collector)
 
       messages = [Mocks.user_message("Test")]
@@ -1538,11 +1616,16 @@ defmodule AgentCore.ContextTest do
       events = get_events(collector)
       detach_telemetry(handler_id)
 
-      size_events = Enum.filter(events, fn {name, _, _} -> name == [:agent_core, :context, :size] end)
+      size_events =
+        Enum.filter(events, fn {name, _, _} -> name == [:agent_core, :context, :size] end)
+
       assert length(size_events) == 3
     end
 
-    test "stats function also triggers size telemetry", %{handler_id: handler_id, collector: collector} do
+    test "stats function also triggers size telemetry", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       attach_telemetry([[:agent_core, :context, :size]], handler_id, collector)
 
       messages = [Mocks.user_message("Hello")]
@@ -1552,11 +1635,16 @@ defmodule AgentCore.ContextTest do
       detach_telemetry(handler_id)
 
       # stats calls estimate_size internally
-      size_events = Enum.filter(events, fn {name, _, _} -> name == [:agent_core, :context, :size] end)
+      size_events =
+        Enum.filter(events, fn {name, _, _} -> name == [:agent_core, :context, :size] end)
+
       assert length(size_events) >= 1
     end
 
-    test "large_context? also triggers size telemetry", %{handler_id: handler_id, collector: collector} do
+    test "large_context? also triggers size telemetry", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       attach_telemetry([[:agent_core, :context, :size]], handler_id, collector)
 
       messages = [Mocks.user_message("Test")]
@@ -1565,7 +1653,9 @@ defmodule AgentCore.ContextTest do
       events = get_events(collector)
       detach_telemetry(handler_id)
 
-      size_events = Enum.filter(events, fn {name, _, _} -> name == [:agent_core, :context, :size] end)
+      size_events =
+        Enum.filter(events, fn {name, _, _} -> name == [:agent_core, :context, :size] end)
+
       assert length(size_events) >= 1
     end
   end
@@ -1591,6 +1681,7 @@ defmodule AgentCore.ContextTest do
         Mocks.user_message("AB"),
         Mocks.assistant_message("CD")
       ]
+
       # Total: 4 chars
 
       {truncated, dropped} = Context.truncate(messages, max_chars: 4)
@@ -1668,7 +1759,8 @@ defmodule AgentCore.ContextTest do
       }
 
       size = Context.estimate_size([msg], nil)
-      assert size == 11  # "Hello" + " " + "World"
+      # "Hello" + " " + "World"
+      assert size == 11
     end
 
     test "message with all supported content block types" do
@@ -1684,7 +1776,8 @@ defmodule AgentCore.ContextTest do
 
       size = Context.estimate_size([msg], nil)
       # "Text" (4) + "Think" (5) + JSON {"a":1} (7) + image (100) = 116
-      assert size > 100  # At least image size
+      # At least image size
+      assert size > 100
     end
 
     test "tool_call with complex nested arguments" do
@@ -1716,7 +1809,8 @@ defmodule AgentCore.ContextTest do
       }
 
       size = Context.estimate_size([msg], nil)
-      assert size == 2  # "{}"
+      # "{}"
+      assert size == 2
     end
 
     test "tool_call with non-serializable arguments fallback" do
@@ -1752,7 +1846,8 @@ defmodule AgentCore.ContextTest do
       }
 
       size = Context.estimate_size([msg], nil)
-      assert size == 300  # 3 * 100
+      # 3 * 100
+      assert size == 300
     end
   end
 end

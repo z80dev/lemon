@@ -104,6 +104,7 @@ defmodule AgentCore.AgentRegistryTest do
 
     test "registers with complex metadata" do
       key = {unique_session_id(), :agent, 0}
+
       metadata = %{
         model: "claude-3-opus",
         config: %{
@@ -138,13 +139,15 @@ defmodule AgentCore.AgentRegistryTest do
       research_key = {session_id, :research, 0}
       research_metadata = %{role: :research, priority: :normal}
 
-      pid = spawn(fn ->
-        :ok = AgentRegistry.register(research_key, research_metadata)
-        send(parent, :registered)
-        receive do
-          :done -> :ok
-        end
-      end)
+      pid =
+        spawn(fn ->
+          :ok = AgentRegistry.register(research_key, research_metadata)
+          send(parent, :registered)
+
+          receive do
+            :done -> :ok
+          end
+        end)
 
       assert_receive :registered
 
@@ -179,13 +182,15 @@ defmodule AgentCore.AgentRegistryTest do
       key = {unique_session_id(), :main, 0}
       parent = self()
 
-      pid = spawn(fn ->
-        :ok = AgentRegistry.register(key)
-        send(parent, :registered)
-        receive do
-          :exit -> :ok
-        end
-      end)
+      pid =
+        spawn(fn ->
+          :ok = AgentRegistry.register(key)
+          send(parent, :registered)
+
+          receive do
+            :exit -> :ok
+          end
+        end)
 
       assert_receive :registered
       assert {:ok, ^pid} = AgentRegistry.lookup(key)
@@ -209,13 +214,16 @@ defmodule AgentCore.AgentRegistryTest do
 
       # Register in session2 from another process
       key2 = {session2, :main, 0}
-      pid2 = spawn(fn ->
-        :ok = AgentRegistry.register(key2)
-        send(parent, :registered)
-        receive do
-          :done -> :ok
-        end
-      end)
+
+      pid2 =
+        spawn(fn ->
+          :ok = AgentRegistry.register(key2)
+          send(parent, :registered)
+
+          receive do
+            :done -> :ok
+          end
+        end)
 
       assert_receive :registered
 
@@ -291,6 +299,7 @@ defmodule AgentCore.AgentRegistryTest do
       spawn(fn ->
         result = AgentRegistry.register(key)
         send(parent, {:result, result, self()})
+
         receive do
           :done -> :ok
         end
@@ -312,13 +321,15 @@ defmodule AgentCore.AgentRegistryTest do
       parent = self()
 
       # Register from another process
-      pid = spawn(fn ->
-        :ok = AgentRegistry.register(key)
-        send(parent, :registered)
-        receive do
-          :done -> :ok
-        end
-      end)
+      pid =
+        spawn(fn ->
+          :ok = AgentRegistry.register(key)
+          send(parent, :registered)
+
+          receive do
+            :done -> :ok
+          end
+        end)
 
       assert_receive :registered
       assert {:ok, ^pid} = AgentRegistry.lookup(key)
@@ -354,25 +365,28 @@ defmodule AgentCore.AgentRegistryTest do
       parent = self()
       num_processes = 20
 
-      pids = for i <- 0..(num_processes - 1) do
-        spawn(fn ->
-          key = {session_id, :worker, i}
-          result = AgentRegistry.register(key)
-          send(parent, {:registered, i, result, self()})
-          receive do
-            :done -> :ok
-          end
-        end)
-      end
+      pids =
+        for i <- 0..(num_processes - 1) do
+          spawn(fn ->
+            key = {session_id, :worker, i}
+            result = AgentRegistry.register(key)
+            send(parent, {:registered, i, result, self()})
+
+            receive do
+              :done -> :ok
+            end
+          end)
+        end
 
       # Collect all results
-      results = for _ <- 0..(num_processes - 1) do
-        receive do
-          {:registered, i, result, pid} -> {i, result, pid}
-        after
-          5000 -> flunk("Timeout waiting for registration")
+      results =
+        for _ <- 0..(num_processes - 1) do
+          receive do
+            {:registered, i, result, pid} -> {i, result, pid}
+          after
+            5000 -> flunk("Timeout waiting for registration")
+          end
         end
-      end
 
       # All should succeed
       for {i, result, pid} <- results do
@@ -421,6 +435,7 @@ defmodule AgentCore.AgentRegistryTest do
         spawn(fn ->
           result = AgentRegistry.register(key)
           send(parent, {:result, result, self()})
+
           receive do
             :done -> :ok
           end
@@ -428,13 +443,14 @@ defmodule AgentCore.AgentRegistryTest do
       end
 
       # Collect results
-      results = for _ <- 1..num_processes do
-        receive do
-          {:result, result, pid} -> {result, pid}
-        after
-          5000 -> flunk("Timeout")
+      results =
+        for _ <- 1..num_processes do
+          receive do
+            {:result, result, pid} -> {result, pid}
+          after
+            5000 -> flunk("Timeout")
+          end
         end
-      end
 
       # Exactly one should succeed
       successful = Enum.filter(results, fn {result, _pid} -> result == :ok end)
@@ -457,11 +473,13 @@ defmodule AgentCore.AgentRegistryTest do
         key = {session_id, :main, 0}
         :ok = AgentRegistry.register(key)
         send(parent, {:a_registered, self()})
+
         receive do
           :unregister ->
             :ok = AgentRegistry.unregister(key)
             send(parent, :a_unregistered)
         end
+
         receive do
           :done -> :ok
         end
@@ -479,6 +497,7 @@ defmodule AgentCore.AgentRegistryTest do
         key = {session_id, :main, 0}
         result = AgentRegistry.register(key)
         send(parent, {:b_result, result, self()})
+
         receive do
           :done -> :ok
         end
@@ -508,14 +527,15 @@ defmodule AgentCore.AgentRegistryTest do
       key = {unique_session_id(), :crasher, 0}
       parent = self()
 
-      pid = spawn(fn ->
-        :ok = AgentRegistry.register(key)
-        send(parent, :registered)
-        # Crash intentionally
-        receive do
-          :crash -> exit(:crash)
-        end
-      end)
+      pid =
+        spawn(fn ->
+          :ok = AgentRegistry.register(key)
+          send(parent, :registered)
+          # Crash intentionally
+          receive do
+            :crash -> exit(:crash)
+          end
+        end)
 
       assert_receive :registered
       assert {:ok, ^pid} = AgentRegistry.lookup(key)
@@ -582,25 +602,28 @@ defmodule AgentCore.AgentRegistryTest do
       parent = self()
 
       # Register multiple agents from different processes
-      pids = for {role, _i} <- Enum.with_index([:main, :research, :implement]) do
-        spawn(fn ->
-          key = {session_id, role, 0}
-          :ok = AgentRegistry.register(key)
-          send(parent, {:registered, role, self()})
-          receive do
-            :done -> :ok
-          end
-        end)
-      end
+      pids =
+        for {role, _i} <- Enum.with_index([:main, :research, :implement]) do
+          spawn(fn ->
+            key = {session_id, role, 0}
+            :ok = AgentRegistry.register(key)
+            send(parent, {:registered, role, self()})
+
+            receive do
+              :done -> :ok
+            end
+          end)
+        end
 
       # Wait for all registrations
-      registered = for _ <- 1..3 do
-        receive do
-          {:registered, role, pid} -> {role, pid}
-        after
-          5000 -> flunk("Timeout")
+      registered =
+        for _ <- 1..3 do
+          receive do
+            {:registered, role, pid} -> {role, pid}
+          after
+            5000 -> flunk("Timeout")
+          end
         end
-      end
 
       agents = AgentRegistry.list_by_session(session_id)
       assert length(agents) == 3
@@ -624,13 +647,16 @@ defmodule AgentCore.AgentRegistryTest do
       :ok = AgentRegistry.register({session1, :main, 0})
 
       parent = self()
-      pid2 = spawn(fn ->
-        :ok = AgentRegistry.register({session2, :main, 0})
-        send(parent, :registered)
-        receive do
-          :done -> :ok
-        end
-      end)
+
+      pid2 =
+        spawn(fn ->
+          :ok = AgentRegistry.register({session2, :main, 0})
+          send(parent, :registered)
+
+          receive do
+            :done -> :ok
+          end
+        end)
 
       assert_receive :registered
 
@@ -664,13 +690,15 @@ defmodule AgentCore.AgentRegistryTest do
       # Register same role in two different sessions
       :ok = AgentRegistry.register({session1, role, 0})
 
-      pid2 = spawn(fn ->
-        :ok = AgentRegistry.register({session2, role, 0})
-        send(parent, :registered)
-        receive do
-          :done -> :ok
-        end
-      end)
+      pid2 =
+        spawn(fn ->
+          :ok = AgentRegistry.register({session2, role, 0})
+          send(parent, :registered)
+
+          receive do
+            :done -> :ok
+          end
+        end)
 
       assert_receive :registered
 
@@ -727,15 +755,17 @@ defmodule AgentCore.AgentRegistryTest do
       session_id = unique_session_id()
       parent = self()
 
-      pids = for role <- [:main, :research, :implement] do
-        spawn(fn ->
-          :ok = AgentRegistry.register({session_id, role, 0})
-          send(parent, :registered)
-          receive do
-            :done -> :ok
-          end
-        end)
-      end
+      pids =
+        for role <- [:main, :research, :implement] do
+          spawn(fn ->
+            :ok = AgentRegistry.register({session_id, role, 0})
+            send(parent, :registered)
+
+            receive do
+              :done -> :ok
+            end
+          end)
+        end
 
       for _ <- 1..3, do: assert_receive(:registered)
 
@@ -843,13 +873,15 @@ defmodule AgentCore.AgentRegistryTest do
       key = {unique_session_id(), :lifecycle, 0}
       parent = self()
 
-      pid = spawn(fn ->
-        :ok = AgentRegistry.register(key)
-        send(parent, :registered)
-        receive do
-          :exit -> :ok
-        end
-      end)
+      pid =
+        spawn(fn ->
+          :ok = AgentRegistry.register(key)
+          send(parent, :registered)
+
+          receive do
+            :exit -> :ok
+          end
+        end)
 
       assert_receive :registered
       assert {:ok, ^pid} = AgentRegistry.lookup(key)
@@ -870,24 +902,26 @@ defmodule AgentCore.AgentRegistryTest do
       parent = self()
 
       # Spawn a process that registers, then links to a child that will die
-      pid = spawn(fn ->
-        Process.flag(:trap_exit, false)
-        :ok = AgentRegistry.register(key)
-        send(parent, {:registered, self()})
+      pid =
+        spawn(fn ->
+          Process.flag(:trap_exit, false)
+          :ok = AgentRegistry.register(key)
+          send(parent, {:registered, self()})
 
-        child = spawn_link(fn ->
+          child =
+            spawn_link(fn ->
+              receive do
+                :die -> exit(:intentional)
+              end
+            end)
+
+          send(parent, {:child, child})
+
+          # This process will die when child dies (due to link)
           receive do
-            :die -> exit(:intentional)
+            :never -> :ok
           end
         end)
-
-        send(parent, {:child, child})
-
-        # This process will die when child dies (due to link)
-        receive do
-          :never -> :ok
-        end
-      end)
 
       assert_receive {:registered, ^pid}
       assert_receive {:child, child_pid}

@@ -19,9 +19,35 @@ defmodule LemonGateway.TransportSupervisorTest do
   alias LemonGateway.TransportSupervisor
   alias LemonGateway.TransportRegistry
 
+  setup_all do
+    # `mix test` starts the current application by default. This test suite is a
+    # unit test for the legacy `TransportSupervisor`, so we explicitly stop the
+    # running apps and start only the minimal processes we need per test.
+    _ = Application.stop(:lemon_gateway)
+    _ = Application.stop(:lemon_channels)
+    _ = Application.stop(:lemon_control_plane)
+    :ok
+  end
+
   # ============================================================================
   # Mock Transports for Testing
   # ============================================================================
+
+  defmodule MockTelegramTransport do
+    use LemonGateway.Transport
+    use GenServer
+
+    @impl LemonGateway.Transport
+    def id, do: "telegram"
+
+    @impl LemonGateway.Transport
+    def start_link(_opts) do
+      GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
+    end
+
+    @impl GenServer
+    def init(state), do: {:ok, state}
+  end
 
   defmodule MockTransportA do
     use LemonGateway.Transport
@@ -144,21 +170,48 @@ defmodule LemonGateway.TransportSupervisorTest do
   # Setup Helpers
   # ============================================================================
 
-  defp setup_app(transports, config \\ %{}) do
-    _ = Application.stop(:lemon_gateway)
+  defp stop_if_running(name) do
+    case Process.whereis(name) do
+      nil ->
+        :ok
+
+      pid ->
+        ref = Process.monitor(pid)
+
+        try do
+          GenServer.stop(pid, :shutdown, 1000)
+        catch
+          :exit, _ -> :ok
+        end
+
+        receive do
+          {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+        after
+          1000 ->
+            Process.exit(pid, :kill)
+            :ok
+        end
+    end
+  end
+
+  defp setup_app(transports, config \\ %{}, telegram \\ %{}) do
+    # These are globally named processes. Ensure a clean slate even if another
+    # test module started them.
+    stop_if_running(LemonGateway.Telegram.Outbox)
+    stop_if_running(TransportSupervisor)
+    stop_if_running(TransportRegistry)
 
     base_config = %{
-      max_concurrent_runs: 10,
-      default_engine: "echo",
       enable_telegram: false
     }
 
     Application.put_env(:lemon_gateway, LemonGateway.Config, Map.merge(base_config, config))
-    Application.put_env(:lemon_gateway, :engines, [LemonGateway.Engines.Echo])
     Application.put_env(:lemon_gateway, :transports, transports)
-    Application.put_env(:lemon_gateway, :commands, [])
+    Application.put_env(:lemon_gateway, :telegram, telegram)
 
-    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+    start_supervised!(TransportRegistry)
+    start_supervised!(TransportSupervisor)
+
     :ok
   end
 
@@ -230,10 +283,11 @@ defmodule LemonGateway.TransportSupervisorTest do
     end
 
     test "does not start telegram transport when enable_telegram is false" do
-      setup_app([LemonGateway.Telegram.Transport], %{enable_telegram: false})
+      setup_app([MockTelegramTransport], %{enable_telegram: false}, %{bot_token: "test"})
 
       # Telegram transport should not be started
-      assert Process.whereis(LemonGateway.Telegram.Transport) == nil
+      assert Process.whereis(MockTelegramTransport) == nil
+      assert Process.whereis(LemonGateway.Telegram.Outbox) == nil
     end
 
     test "non-telegram transports are enabled by default" do
@@ -258,30 +312,14 @@ defmodule LemonGateway.TransportSupervisorTest do
 
   describe "telegram transport special handling" do
     test "telegram transport includes Outbox child" do
-      # Configure telegram with bot token for it to start
-      _ = Application.stop(:lemon_gateway)
-
-      Application.put_env(:lemon_gateway, LemonGateway.Config, %{
-        max_concurrent_runs: 10,
-        default_engine: "echo",
-        enable_telegram: true
-      })
-
-      Application.put_env(:lemon_gateway, :telegram, %{
-        bot_token: "test_token_123"
-      })
-
-      Application.put_env(:lemon_gateway, :engines, [LemonGateway.Engines.Echo])
-      Application.put_env(:lemon_gateway, :transports, [LemonGateway.Telegram.Transport])
-      Application.put_env(:lemon_gateway, :commands, [])
-
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      setup_app([MockTelegramTransport], %{enable_telegram: true}, %{bot_token: "test_token_123"})
 
       # Check that Outbox is started
       children = Supervisor.which_children(TransportSupervisor)
       child_ids = Enum.map(children, fn {id, _, _, _} -> id end)
 
       assert LemonGateway.Telegram.Outbox in child_ids
+      assert MockTelegramTransport in child_ids
     end
 
     test "non-telegram transports do not include Outbox" do
@@ -449,30 +487,48 @@ defmodule LemonGateway.TransportSupervisorTest do
       ref_a = Process.monitor(pid_a)
       ref_b = Process.monitor(pid_b)
 
-      # Stop the app
-      Application.stop(:lemon_gateway)
+      # Stop the supervisor
+      Supervisor.stop(Process.whereis(TransportSupervisor))
 
       # Children should be terminated
       assert_receive {:DOWN, ^ref_a, :process, ^pid_a, _reason}, 2000
       assert_receive {:DOWN, ^ref_b, :process, ^pid_b, _reason}, 2000
-
-      # Restart for other tests
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
     end
 
     test "terminated transports are no longer registered" do
-      setup_app([MockTransportA])
+      # Start unsupervised here so stopping the supervisor doesn't immediately
+      # get restarted by the test supervisor (which would re-register children).
+      _ = Application.stop(:lemon_gateway)
+      _ = Application.stop(:lemon_channels)
+      _ = Application.stop(:lemon_control_plane)
+
+      stop_if_running(LemonGateway.Telegram.Outbox)
+      stop_if_running(TransportSupervisor)
+      stop_if_running(TransportRegistry)
+
+      Application.put_env(:lemon_gateway, LemonGateway.Config, %{enable_telegram: false})
+      Application.put_env(:lemon_gateway, :transports, [MockTransportA])
+      Application.put_env(:lemon_gateway, :telegram, %{})
+
+      {:ok, _} = TransportRegistry.start_link([])
+      {:ok, _} = TransportSupervisor.start_link([])
+
+      on_exit(fn ->
+        stop_if_running(LemonGateway.Telegram.Outbox)
+        stop_if_running(TransportSupervisor)
+        stop_if_running(TransportRegistry)
+      end)
 
       pid = Process.whereis(MockTransportA)
       assert is_pid(pid)
 
-      Application.stop(:lemon_gateway)
+      ref = Process.monitor(pid)
+      Supervisor.stop(Process.whereis(TransportSupervisor))
 
-      Process.sleep(100)
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 2000
+
+      Process.sleep(50)
       assert Process.whereis(MockTransportA) == nil
-
-      # Restart
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
     end
   end
 
@@ -545,28 +601,18 @@ defmodule LemonGateway.TransportSupervisorTest do
 
     test "handles empty enabled transports list" do
       # All transports disabled
-      _ = Application.stop(:lemon_gateway)
-
-      Application.put_env(:lemon_gateway, LemonGateway.Config, %{
-        max_concurrent_runs: 10,
-        default_engine: "echo",
-        enable_telegram: false
-      })
-
-      Application.put_env(:lemon_gateway, :engines, [LemonGateway.Engines.Echo])
-      Application.put_env(:lemon_gateway, :transports, [LemonGateway.Telegram.Transport])
-      Application.put_env(:lemon_gateway, :commands, [])
-
-      {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+      setup_app([MockTelegramTransport], %{enable_telegram: false}, %{bot_token: "test"})
 
       # Supervisor should still be running but have fewer children
       assert Process.alive?(Process.whereis(TransportSupervisor))
 
       children = Supervisor.which_children(TransportSupervisor)
       # No telegram children since it's disabled
-      transport_children = Enum.filter(children, fn {id, _, _, _} ->
-        id == LemonGateway.Telegram.Transport or id == LemonGateway.Telegram.Outbox
-      end)
+      transport_children =
+        Enum.filter(children, fn {id, _, _, _} ->
+          id == MockTelegramTransport or id == LemonGateway.Telegram.Outbox
+        end)
+
       assert length(transport_children) == 0
     end
   end
@@ -588,6 +634,7 @@ defmodule LemonGateway.TransportSupervisorTest do
       setup_app([MockTransportA])
 
       children = Supervisor.which_children(TransportSupervisor)
+
       child_pids =
         children
         |> Enum.map(fn {_, pid, _, _} -> pid end)
@@ -666,35 +713,6 @@ defmodule LemonGateway.TransportSupervisorTest do
   end
 
   # ============================================================================
-  # 13. Integration with Application Supervision Tree
-  # ============================================================================
-
-  describe "integration with application supervision tree" do
-    test "TransportSupervisor is started as part of application" do
-      setup_app([MockTransportA])
-
-      assert Process.whereis(TransportSupervisor) != nil
-    end
-
-    test "TransportSupervisor is under main application supervisor" do
-      setup_app([MockTransportA])
-
-      # The supervisor should be alive and part of the app
-      sup_pid = Process.whereis(TransportSupervisor)
-      assert Process.alive?(sup_pid)
-
-      # Verify it's in the supervision tree by checking it survives and restarts children
-      transport_pid = Process.whereis(MockTransportA)
-      Process.exit(transport_pid, :kill)
-      Process.sleep(100)
-
-      new_transport_pid = Process.whereis(MockTransportA)
-      assert new_transport_pid != nil
-      assert new_transport_pid != transport_pid
-    end
-  end
-
-  # ============================================================================
   # 14. Stress Testing
   # ============================================================================
 
@@ -723,6 +741,7 @@ defmodule LemonGateway.TransportSupervisorTest do
       tasks =
         for _ <- 1..50 do
           transport = Enum.random([MockTransportA, MockTransportB, MockTransportC])
+
           Task.async(fn ->
             pid = Process.whereis(transport)
             if pid, do: GenServer.call(pid, :ping), else: :no_process
@@ -862,9 +881,10 @@ defmodule LemonGateway.TransportSupervisorTest do
       children = Supervisor.which_children(TransportSupervisor)
 
       # Count children with MockTransportA id
-      mock_a_children = Enum.filter(children, fn {id, _, _, _} ->
-        id == MockTransportA
-      end)
+      mock_a_children =
+        Enum.filter(children, fn {id, _, _, _} ->
+          id == MockTransportA
+        end)
 
       # Should have exactly one child
       assert length(mock_a_children) == 1
@@ -892,6 +912,7 @@ defmodule LemonGateway.TransportSupervisorTest do
 
       # All children should be present
       children = Supervisor.which_children(TransportSupervisor)
+
       child_ids =
         children
         |> Enum.map(fn {id, _, _, _} -> id end)

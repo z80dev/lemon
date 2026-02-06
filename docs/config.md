@@ -51,6 +51,23 @@ enable_telegram = false
 [gateway.telegram]
 bot_token = "123456:token"
 allowed_chat_ids = [12345678]
+
+[agents.default]
+name = "Daily Assistant"
+default_engine = "lemon"
+system_prompt = "You are my daily assistant."
+model = "anthropic:claude-sonnet-4-20250514"
+
+[agents.default.tool_policy]
+allow = "all"
+deny = []
+require_approval = ["bash", "write", "edit"]
+no_reply = false
+
+[[gateway.bindings]]
+transport = "telegram"
+chat_id = 12345678
+agent_id = "default"
 ```
 
 ## Environment Overrides
@@ -67,6 +84,7 @@ Environment variables override file values. Common overrides:
 
 - `providers.<name>`: API keys and base URLs per provider.
 - `agent`: default model/provider and agent behavior.
+- `agents.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
 - `agent.compaction`: context compaction settings.
 - `agent.retry`: retry settings.
 - `agent.cli`: CLI runner settings (`codex`, `claude`, `kimi`).

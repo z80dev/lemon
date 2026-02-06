@@ -48,7 +48,8 @@ defmodule CodingAgent.Tools.BashTest do
     end
 
     test "executes command with arguments", %{tmp_dir: tmp_dir} do
-      result = Bash.execute("call_1", %{"command" => "echo -n 'no newline'"}, nil, nil, tmp_dir, [])
+      result =
+        Bash.execute("call_1", %{"command" => "echo -n 'no newline'"}, nil, nil, tmp_dir, [])
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "no newline"
@@ -70,7 +71,15 @@ defmodule CodingAgent.Tools.BashTest do
     end
 
     test "returns output with non-zero exit code", %{tmp_dir: tmp_dir} do
-      result = Bash.execute("call_1", %{"command" => "echo 'error output' && exit 1"}, nil, nil, tmp_dir, [])
+      result =
+        Bash.execute(
+          "call_1",
+          %{"command" => "echo 'error output' && exit 1"},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
       assert text =~ "error output"
@@ -79,7 +88,15 @@ defmodule CodingAgent.Tools.BashTest do
     end
 
     test "executes command with multiple outputs", %{tmp_dir: tmp_dir} do
-      result = Bash.execute("call_1", %{"command" => "echo line1; echo line2; echo line3"}, nil, nil, tmp_dir, [])
+      result =
+        Bash.execute(
+          "call_1",
+          %{"command" => "echo line1; echo line2; echo line3"},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "line1"
@@ -88,7 +105,8 @@ defmodule CodingAgent.Tools.BashTest do
     end
 
     test "executes piped commands", %{tmp_dir: tmp_dir} do
-      result = Bash.execute("call_1", %{"command" => "echo 'hello' | tr 'h' 'H'"}, nil, nil, tmp_dir, [])
+      result =
+        Bash.execute("call_1", %{"command" => "echo 'hello' | tr 'h' 'H'"}, nil, nil, tmp_dir, [])
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "Hello"
@@ -123,7 +141,14 @@ defmodule CodingAgent.Tools.BashTest do
         :ok
       end
 
-      Bash.execute("call_1", %{"command" => "echo line1; echo line2"}, nil, on_update, tmp_dir, [])
+      Bash.execute(
+        "call_1",
+        %{"command" => "echo line1; echo line2"},
+        nil,
+        on_update,
+        tmp_dir,
+        []
+      )
 
       # Get collected updates
       updates = Agent.get(agent, fn updates -> Enum.reverse(updates) end)
@@ -237,14 +262,15 @@ defmodule CodingAgent.Tools.BashTest do
   describe "timeout handling" do
     test "command that exceeds timeout is killed", %{tmp_dir: tmp_dir} do
       # Set a short timeout of 1 second
-      result = Bash.execute(
-        "call_1",
-        %{"command" => "sleep 10", "timeout" => 1},
-        nil,
-        nil,
-        tmp_dir,
-        []
-      )
+      result =
+        Bash.execute(
+          "call_1",
+          %{"command" => "sleep 10", "timeout" => 1},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
       assert text =~ "timed out after 1 second"
@@ -252,14 +278,15 @@ defmodule CodingAgent.Tools.BashTest do
     end
 
     test "timeout includes partial output", %{tmp_dir: tmp_dir} do
-      result = Bash.execute(
-        "call_1",
-        %{"command" => "echo 'before sleep'; sleep 10; echo 'after sleep'", "timeout" => 1},
-        nil,
-        nil,
-        tmp_dir,
-        []
-      )
+      result =
+        Bash.execute(
+          "call_1",
+          %{"command" => "echo 'before sleep'; sleep 10; echo 'after sleep'", "timeout" => 1},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "timed out"
@@ -268,14 +295,15 @@ defmodule CodingAgent.Tools.BashTest do
     end
 
     test "command that completes before timeout succeeds", %{tmp_dir: tmp_dir} do
-      result = Bash.execute(
-        "call_1",
-        %{"command" => "echo fast", "timeout" => 10},
-        nil,
-        nil,
-        tmp_dir,
-        []
-      )
+      result =
+        Bash.execute(
+          "call_1",
+          %{"command" => "echo fast", "timeout" => 10},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
       assert text =~ "fast"
@@ -321,7 +349,8 @@ defmodule CodingAgent.Tools.BashTest do
       signal = AbortSignal.new()
       AbortSignal.abort(signal)
 
-      result = Bash.execute("call_1", %{"command" => "echo should not run"}, signal, nil, tmp_dir, [])
+      result =
+        Bash.execute("call_1", %{"command" => "echo should not run"}, signal, nil, tmp_dir, [])
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "cancelled"
@@ -332,16 +361,17 @@ defmodule CodingAgent.Tools.BashTest do
     test "abort signal during execution stops command", %{tmp_dir: tmp_dir} do
       signal = AbortSignal.new()
 
-      task = Task.async(fn ->
-        Bash.execute(
-          "call_1",
-          %{"command" => "echo 'started'; sleep 10; echo 'finished'"},
-          signal,
-          nil,
-          tmp_dir,
-          []
-        )
-      end)
+      task =
+        Task.async(fn ->
+          Bash.execute(
+            "call_1",
+            %{"command" => "echo 'started'; sleep 10; echo 'finished'"},
+            signal,
+            nil,
+            tmp_dir,
+            []
+          )
+        end)
 
       # Give it time to start
       Process.sleep(100)
@@ -366,9 +396,10 @@ defmodule CodingAgent.Tools.BashTest do
 
       # Run multiple aborted commands to check for resource leaks
       for _ <- 1..5 do
-        task = Task.async(fn ->
-          Bash.execute("call_1", %{"command" => "sleep 5"}, signal, nil, tmp_dir, [])
-        end)
+        task =
+          Task.async(fn ->
+            Bash.execute("call_1", %{"command" => "sleep 5"}, signal, nil, tmp_dir, [])
+          end)
 
         Process.sleep(50)
         AbortSignal.abort(signal)
@@ -396,16 +427,17 @@ defmodule CodingAgent.Tools.BashTest do
         :ok
       end
 
-      task = Task.async(fn ->
-        Bash.execute(
-          "call_1",
-          %{"command" => "for i in $(seq 1 100); do echo line$i; sleep 0.1; done"},
-          signal,
-          on_update,
-          tmp_dir,
-          []
-        )
-      end)
+      task =
+        Task.async(fn ->
+          Bash.execute(
+            "call_1",
+            %{"command" => "for i in $(seq 1 100); do echo line$i; sleep 0.1; done"},
+            signal,
+            on_update,
+            tmp_dir,
+            []
+          )
+        end)
 
       # Wait for some output
       Process.sleep(200)
@@ -437,14 +469,15 @@ defmodule CodingAgent.Tools.BashTest do
   describe "output truncation" do
     test "very large output is truncated", %{tmp_dir: tmp_dir} do
       # Generate more than 2000 lines
-      result = Bash.execute(
-        "call_1",
-        %{"command" => "for i in $(seq 1 3000); do echo line$i; done"},
-        nil,
-        nil,
-        tmp_dir,
-        []
-      )
+      result =
+        Bash.execute(
+          "call_1",
+          %{"command" => "for i in $(seq 1 3000); do echo line$i; done"},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
       assert details.truncated == true
@@ -454,14 +487,15 @@ defmodule CodingAgent.Tools.BashTest do
     end
 
     test "truncation includes metadata", %{tmp_dir: tmp_dir} do
-      result = Bash.execute(
-        "call_1",
-        %{"command" => "for i in $(seq 1 5000); do echo line$i; done"},
-        nil,
-        nil,
-        tmp_dir,
-        []
-      )
+      result =
+        Bash.execute(
+          "call_1",
+          %{"command" => "for i in $(seq 1 5000); do echo line$i; done"},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
       assert details.truncated == true
@@ -477,14 +511,15 @@ defmodule CodingAgent.Tools.BashTest do
     end
 
     test "full output path is provided when truncated", %{tmp_dir: tmp_dir} do
-      result = Bash.execute(
-        "call_1",
-        %{"command" => "for i in $(seq 1 5000); do echo line$i; done"},
-        nil,
-        nil,
-        tmp_dir,
-        []
-      )
+      result =
+        Bash.execute(
+          "call_1",
+          %{"command" => "for i in $(seq 1 5000); do echo line$i; done"},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
 
@@ -503,14 +538,15 @@ defmodule CodingAgent.Tools.BashTest do
 
   describe "error handling" do
     test "command not found returns error in output", %{tmp_dir: tmp_dir} do
-      result = Bash.execute(
-        "call_1",
-        %{"command" => "nonexistent_command_xyz_12345"},
-        nil,
-        nil,
-        tmp_dir,
-        []
-      )
+      result =
+        Bash.execute(
+          "call_1",
+          %{"command" => "nonexistent_command_xyz_12345"},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
       # Should have non-zero exit code
@@ -523,7 +559,8 @@ defmodule CodingAgent.Tools.BashTest do
       # Create a file without execute permission
       script_path = Path.join(tmp_dir, "no_exec.sh")
       File.write!(script_path, "#!/bin/bash\necho test")
-      File.chmod!(script_path, 0o644)  # No execute permission
+      # No execute permission
+      File.chmod!(script_path, 0o644)
 
       result = Bash.execute("call_1", %{"command" => script_path}, nil, nil, tmp_dir, [])
 
@@ -534,14 +571,15 @@ defmodule CodingAgent.Tools.BashTest do
     end
 
     test "invalid command syntax returns error", %{tmp_dir: tmp_dir} do
-      result = Bash.execute(
-        "call_1",
-        %{"command" => "if then fi"},
-        nil,
-        nil,
-        tmp_dir,
-        []
-      )
+      result =
+        Bash.execute(
+          "call_1",
+          %{"command" => "if then fi"},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
       # Should have non-zero exit code for syntax error
@@ -574,7 +612,8 @@ defmodule CodingAgent.Tools.BashTest do
       File.mkdir_p!(subdir)
       File.write!(Path.join(subdir, "test.txt"), "hello")
 
-      result = Bash.execute("call_1", %{"command" => "cat subdir/test.txt"}, nil, nil, tmp_dir, [])
+      result =
+        Bash.execute("call_1", %{"command" => "cat subdir/test.txt"}, nil, nil, tmp_dir, [])
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "hello"
@@ -636,28 +675,30 @@ defmodule CodingAgent.Tools.BashTest do
     end
 
     test "shell environment variables work", %{tmp_dir: tmp_dir} do
-      result = Bash.execute(
-        "call_1",
-        %{"command" => "MY_VAR=test123 && echo $MY_VAR"},
-        nil,
-        nil,
-        tmp_dir,
-        []
-      )
+      result =
+        Bash.execute(
+          "call_1",
+          %{"command" => "MY_VAR=test123 && echo $MY_VAR"},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "test123"
     end
 
     test "command substitution works", %{tmp_dir: tmp_dir} do
-      result = Bash.execute(
-        "call_1",
-        %{"command" => "echo \"Current dir: $(pwd)\""},
-        nil,
-        nil,
-        tmp_dir,
-        []
-      )
+      result =
+        Bash.execute(
+          "call_1",
+          %{"command" => "echo \"Current dir: $(pwd)\""},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "Current dir:"
@@ -735,14 +776,15 @@ defmodule CodingAgent.Tools.BashTest do
 
   describe "edge cases" do
     test "handles unicode output", %{tmp_dir: tmp_dir} do
-      result = Bash.execute(
-        "call_1",
-        %{"command" => "echo '日本語 emoji 🎉'"},
-        nil,
-        nil,
-        tmp_dir,
-        []
-      )
+      result =
+        Bash.execute(
+          "call_1",
+          %{"command" => "echo '日本語 emoji 🎉'"},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       # Unicode should be preserved
@@ -751,37 +793,40 @@ defmodule CodingAgent.Tools.BashTest do
 
     test "handles binary output gracefully", %{tmp_dir: tmp_dir} do
       # Generate some binary data
-      result = Bash.execute(
-        "call_1",
-        %{"command" => "printf '\\x00\\x01\\x02'"},
-        nil,
-        nil,
-        tmp_dir,
-        []
-      )
+      result =
+        Bash.execute(
+          "call_1",
+          %{"command" => "printf '\\x00\\x01\\x02'"},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       # Should not crash
       assert %AgentToolResult{} = result
     end
 
     test "handles very long single line", %{tmp_dir: tmp_dir} do
-      result = Bash.execute(
-        "call_1",
-        %{"command" => "printf '%0.s-' {1..10000}"},
-        nil,
-        nil,
-        tmp_dir,
-        []
-      )
+      result =
+        Bash.execute(
+          "call_1",
+          %{"command" => "printf '%0.s-' {1..10000}"},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert String.contains?(text, "-")
     end
 
     test "handles rapid succession of commands", %{tmp_dir: tmp_dir} do
-      results = for i <- 1..10 do
-        Bash.execute("call_#{i}", %{"command" => "echo #{i}"}, nil, nil, tmp_dir, [])
-      end
+      results =
+        for i <- 1..10 do
+          Bash.execute("call_#{i}", %{"command" => "echo #{i}"}, nil, nil, tmp_dir, [])
+        end
 
       for {result, i} <- Enum.with_index(results, 1) do
         assert %AgentToolResult{content: [%TextContent{text: text}]} = result
@@ -791,14 +836,15 @@ defmodule CodingAgent.Tools.BashTest do
 
     test "handles ANSI color codes in output", %{tmp_dir: tmp_dir} do
       # Output with ANSI codes should be sanitized
-      result = Bash.execute(
-        "call_1",
-        %{"command" => "printf '\\033[31mred\\033[0m text'"},
-        nil,
-        nil,
-        tmp_dir,
-        []
-      )
+      result =
+        Bash.execute(
+          "call_1",
+          %{"command" => "printf '\\033[31mred\\033[0m text'"},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       # ANSI codes should be stripped
@@ -808,14 +854,15 @@ defmodule CodingAgent.Tools.BashTest do
     end
 
     test "handles carriage returns", %{tmp_dir: tmp_dir} do
-      result = Bash.execute(
-        "call_1",
-        %{"command" => "printf 'line1\\r\\nline2'"},
-        nil,
-        nil,
-        tmp_dir,
-        []
-      )
+      result =
+        Bash.execute(
+          "call_1",
+          %{"command" => "printf 'line1\\r\\nline2'"},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       # Carriage returns should be normalized

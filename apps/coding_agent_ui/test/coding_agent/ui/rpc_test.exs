@@ -235,6 +235,7 @@ defmodule CodingAgent.UI.RPCTest do
           :exit, _ -> :ok
         end
       end
+
       if Process.alive?(input), do: MockIO.close(input)
       if Process.alive?(output), do: GenServer.stop(output)
     end)
@@ -674,7 +675,11 @@ defmodule CodingAgent.UI.RPCTest do
   end
 
   describe "concurrent requests" do
-    test "handles multiple concurrent requests with different IDs", %{rpc: rpc, input: input, output: output} do
+    test "handles multiple concurrent requests with different IDs", %{
+      rpc: rpc,
+      input: input,
+      output: output
+    } do
       # Start multiple requests concurrently
       task1 =
         Task.async(fn ->
@@ -779,7 +784,11 @@ defmodule CodingAgent.UI.RPCTest do
       assert result == {:ok, "first"}
     end
 
-    test "many concurrent requests with staggered responses", %{rpc: rpc, input: input, output: output} do
+    test "many concurrent requests with staggered responses", %{
+      rpc: rpc,
+      input: input,
+      output: output
+    } do
       # Start many concurrent requests
       tasks =
         for i <- 1..10 do
@@ -808,7 +817,10 @@ defmodule CodingAgent.UI.RPCTest do
       results = Enum.map(tasks, &Task.await/1)
 
       # All should succeed
-      assert Enum.all?(results, fn {:ok, _} -> true; _ -> false end)
+      assert Enum.all?(results, fn
+               {:ok, _} -> true
+               _ -> false
+             end)
     end
   end
 
@@ -992,7 +1004,11 @@ defmodule CodingAgent.UI.RPCTest do
       assert result == {:ok, "ok"}
     end
 
-    test "handles response with neither result nor error", %{rpc: rpc, input: input, output: output} do
+    test "handles response with neither result nor error", %{
+      rpc: rpc,
+      input: input,
+      output: output
+    } do
       spawn(fn ->
         Process.sleep(50)
         [request_json | _] = wait_for_output(output)
@@ -1113,7 +1129,11 @@ defmodule CodingAgent.UI.RPCTest do
 
       # All should succeed
       assert length(results) == 20
-      assert Enum.all?(results, fn {:ok, _} -> true; _ -> false end)
+
+      assert Enum.all?(results, fn
+               {:ok, _} -> true
+               _ -> false
+             end)
     end
 
     test "handles burst of concurrent requests", %{rpc: rpc, input: input, output: output} do
@@ -1140,7 +1160,11 @@ defmodule CodingAgent.UI.RPCTest do
       results = Enum.map(tasks, &Task.await(&1, 2000))
 
       assert length(results) == 15
-      assert Enum.all?(results, fn {:ok, true} -> true; _ -> false end)
+
+      assert Enum.all?(results, fn
+               {:ok, true} -> true
+               _ -> false
+             end)
     end
 
     test "maintains request isolation under rapid fire", %{rpc: rpc, input: input, output: output} do
@@ -1433,14 +1457,21 @@ defmodule CodingAgent.UI.RPCTest do
         )
 
       # Start multiple requests that will timeout
-      task1 = Task.async(fn -> RPC.select("A", [%{label: "A", value: "a", description: nil}], server: rpc) end)
+      task1 =
+        Task.async(fn ->
+          RPC.select("A", [%{label: "A", value: "a", description: nil}], server: rpc)
+        end)
+
       task2 = Task.async(fn -> RPC.confirm("B", "Sure?", server: rpc) end)
       task3 = Task.async(fn -> RPC.input("C", nil, server: rpc) end)
 
       # Wait for all to timeout
       results = [Task.await(task1), Task.await(task2), Task.await(task3)]
 
-      assert Enum.all?(results, fn {:error, :timeout} -> true; _ -> false end)
+      assert Enum.all?(results, fn
+               {:error, :timeout} -> true
+               _ -> false
+             end)
 
       GenServer.stop(rpc)
     end
@@ -1478,7 +1509,11 @@ defmodule CodingAgent.UI.RPCTest do
       end)
 
       # Default timeout is 1000ms in setup, but we specify longer via opts
-      result = RPC.select("Choose", [%{label: "A", value: "a", description: nil}], server: rpc, timeout: 2000)
+      result =
+        RPC.select("Choose", [%{label: "A", value: "a", description: nil}],
+          server: rpc,
+          timeout: 2000
+        )
 
       assert result == {:ok, "slow_response"}
     end
@@ -1524,11 +1559,12 @@ defmodule CodingAgent.UI.RPCTest do
         )
 
       # Start multiple pending requests
-      tasks = for i <- 1..5 do
-        Task.async(fn ->
-          RPC.input("Input #{i}", nil, server: rpc)
-        end)
-      end
+      tasks =
+        for i <- 1..5 do
+          Task.async(fn ->
+            RPC.input("Input #{i}", nil, server: rpc)
+          end)
+        end
 
       # Wait for requests to be sent
       Process.sleep(100)
@@ -1539,7 +1575,10 @@ defmodule CodingAgent.UI.RPCTest do
       # All should fail
       results = Enum.map(tasks, &Task.await/1)
 
-      assert Enum.all?(results, fn {:error, :connection_closed} -> true; _ -> false end)
+      assert Enum.all?(results, fn
+               {:error, :connection_closed} -> true
+               _ -> false
+             end)
 
       GenServer.stop(rpc)
     end
@@ -1645,11 +1684,12 @@ defmodule CodingAgent.UI.RPCTest do
         )
 
       # Start requests
-      tasks = for i <- 1..3 do
-        Task.async(fn ->
-          RPC.input("Input #{i}", nil, server: rpc)
-        end)
-      end
+      tasks =
+        for i <- 1..3 do
+          Task.async(fn ->
+            RPC.input("Input #{i}", nil, server: rpc)
+          end)
+        end
 
       # Wait for requests to be sent
       Process.sleep(50)
@@ -1668,10 +1708,10 @@ defmodule CodingAgent.UI.RPCTest do
         end)
 
       assert Enum.all?(results, fn
-        {:error, :server_shutdown} -> true
-        {:error, _} -> true
-        _ -> false
-      end)
+               {:error, :server_shutdown} -> true
+               {:error, _} -> true
+               _ -> false
+             end)
     end
 
     test "reader task is killed on server shutdown" do

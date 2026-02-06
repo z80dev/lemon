@@ -126,7 +126,12 @@ defmodule AgentCore.LoopAbortTest do
 
       stream_fn = fn model, llm_context, options ->
         send(parent, :stream_fn_called)
-        Mocks.mock_stream_fn_single(Mocks.assistant_message("Should not appear")).(model, llm_context, options)
+
+        Mocks.mock_stream_fn_single(Mocks.assistant_message("Should not appear")).(
+          model,
+          llm_context,
+          options
+        )
       end
 
       config = simple_config(stream_fn: stream_fn)
@@ -469,13 +474,17 @@ defmodule AgentCore.LoopAbortTest do
       assert length(tool_ends) == 2
 
       # Instant tool should succeed
-      instant_end = Enum.find(tool_ends, fn {:tool_execution_end, id, _, _, _} -> id == "call_instant" end)
+      instant_end =
+        Enum.find(tool_ends, fn {:tool_execution_end, id, _, _, _} -> id == "call_instant" end)
+
       assert instant_end != nil
       {:tool_execution_end, _, _, _instant_result, instant_is_error} = instant_end
       assert instant_is_error == false
 
       # Slow tool should be aborted
-      slow_end = Enum.find(tool_ends, fn {:tool_execution_end, id, _, _, _} -> id == "call_slow" end)
+      slow_end =
+        Enum.find(tool_ends, fn {:tool_execution_end, id, _, _, _} -> id == "call_slow" end)
+
       assert slow_end != nil
       {:tool_execution_end, _, _, _slow_result, slow_is_error} = slow_end
       assert slow_is_error == true
@@ -1144,6 +1153,7 @@ defmodule AgentCore.LoopAbortTest do
             Process.sleep(40)
             Ai.EventStream.push(stream, {:text_delta, 0, "chunk #{i}", response})
           end
+
           Ai.EventStream.push(stream, {:done, :stop, response})
           Ai.EventStream.complete(stream, response)
         end)

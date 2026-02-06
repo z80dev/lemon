@@ -423,7 +423,11 @@ defmodule CodingAgent.Coordinator do
     end
   end
 
-  @spec collect_results([{String.t(), subagent_spec(), {:ok, subagent_state()} | {:error, term()}}], pos_integer(), t()) ::
+  @spec collect_results(
+          [{String.t(), subagent_spec(), {:ok, subagent_state()} | {:error, term()}}],
+          pos_integer(),
+          t()
+        ) ::
           {[subagent_result()], t()}
   defp collect_results(started, timeout, state) do
     # Separate successful starts from failures

@@ -122,7 +122,8 @@ defmodule CodingAgent.TaskStore do
   Cleanup completed/error tasks older than the TTL (seconds).
   """
   @spec cleanup(non_neg_integer()) :: :ok
-  def cleanup(ttl_seconds \\ @default_ttl_seconds) when is_integer(ttl_seconds) and ttl_seconds >= 0 do
+  def cleanup(ttl_seconds \\ @default_ttl_seconds)
+      when is_integer(ttl_seconds) and ttl_seconds >= 0 do
     {:ok, _count} = TaskStoreServer.cleanup(CodingAgent.TaskStoreServer, ttl_seconds)
     :ok
   end

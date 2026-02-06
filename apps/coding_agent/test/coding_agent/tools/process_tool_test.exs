@@ -72,7 +72,9 @@ defmodule CodingAgent.Tools.ProcessToolTest do
       Elixir.Process.sleep(200)
 
       tool = CodingAgent.Tools.Process.tool([])
-      result = tool.execute.("call_1", %{"action" => "poll", "process_id" => process_id}, nil, nil)
+
+      result =
+        tool.execute.("call_1", %{"action" => "poll", "process_id" => process_id}, nil, nil)
 
       assert result.content != nil
       text = result.content |> hd() |> Map.get(:text)
@@ -85,12 +87,13 @@ defmodule CodingAgent.Tools.ProcessToolTest do
     test "returns error for unknown process" do
       tool = CodingAgent.Tools.Process.tool([])
 
-      assert {:error, reason} = tool.execute.(
-        "call_1",
-        %{"action" => "poll", "process_id" => "unknown_id"},
-        nil,
-        nil
-      )
+      assert {:error, reason} =
+               tool.execute.(
+                 "call_1",
+                 %{"action" => "poll", "process_id" => "unknown_id"},
+                 nil,
+                 nil
+               )
 
       assert reason =~ "not found"
     end
@@ -110,12 +113,13 @@ defmodule CodingAgent.Tools.ProcessToolTest do
 
       tool = CodingAgent.Tools.Process.tool([])
 
-      result = tool.execute.(
-        "call_1",
-        %{"action" => "poll", "process_id" => process_id, "lines" => 5},
-        nil,
-        nil
-      )
+      result =
+        tool.execute.(
+          "call_1",
+          %{"action" => "poll", "process_id" => process_id, "lines" => 5},
+          nil,
+          nil
+        )
 
       assert length(result.details.logs) <= 5
     end
@@ -142,12 +146,13 @@ defmodule CodingAgent.Tools.ProcessToolTest do
     test "returns not_found for unknown process" do
       tool = CodingAgent.Tools.Process.tool([])
 
-      assert {:error, reason} = tool.execute.(
-        "call_1",
-        %{"action" => "log", "process_id" => "unknown_id"},
-        nil,
-        nil
-      )
+      assert {:error, reason} =
+               tool.execute.(
+                 "call_1",
+                 %{"action" => "log", "process_id" => "unknown_id"},
+                 nil,
+                 nil
+               )
 
       assert reason =~ "not found"
     end
@@ -163,12 +168,13 @@ defmodule CodingAgent.Tools.ProcessToolTest do
 
       tool = CodingAgent.Tools.Process.tool([])
 
-      result = tool.execute.(
-        "call_1",
-        %{"action" => "write", "process_id" => process_id, "data" => "hello\n"},
-        nil,
-        nil
-      )
+      result =
+        tool.execute.(
+          "call_1",
+          %{"action" => "write", "process_id" => process_id, "data" => "hello\n"},
+          nil,
+          nil
+        )
 
       assert result.content != nil
       text = result.content |> hd() |> Map.get(:text)
@@ -183,12 +189,13 @@ defmodule CodingAgent.Tools.ProcessToolTest do
     test "requires data parameter" do
       tool = CodingAgent.Tools.Process.tool([])
 
-      assert {:error, reason} = tool.execute.(
-        "call_1",
-        %{"action" => "write", "process_id" => "some_id"},
-        nil,
-        nil
-      )
+      assert {:error, reason} =
+               tool.execute.(
+                 "call_1",
+                 %{"action" => "write", "process_id" => "some_id"},
+                 nil,
+                 nil
+               )
 
       assert reason =~ "data is required"
     end
@@ -196,12 +203,13 @@ defmodule CodingAgent.Tools.ProcessToolTest do
     test "returns error for non-running process" do
       tool = CodingAgent.Tools.Process.tool([])
 
-      assert {:error, reason} = tool.execute.(
-        "call_1",
-        %{"action" => "write", "process_id" => "nonexistent", "data" => "test"},
-        nil,
-        nil
-      )
+      assert {:error, reason} =
+               tool.execute.(
+                 "call_1",
+                 %{"action" => "write", "process_id" => "nonexistent", "data" => "test"},
+                 nil,
+                 nil
+               )
 
       assert reason =~ "not running"
     end
@@ -216,12 +224,13 @@ defmodule CodingAgent.Tools.ProcessToolTest do
 
       tool = CodingAgent.Tools.Process.tool([])
 
-      result = tool.execute.(
-        "call_1",
-        %{"action" => "kill", "process_id" => process_id},
-        nil,
-        nil
-      )
+      result =
+        tool.execute.(
+          "call_1",
+          %{"action" => "kill", "process_id" => process_id},
+          nil,
+          nil
+        )
 
       assert result.content != nil
       text = result.content |> hd() |> Map.get(:text)
@@ -245,12 +254,13 @@ defmodule CodingAgent.Tools.ProcessToolTest do
 
       tool = CodingAgent.Tools.Process.tool([])
 
-      result = tool.execute.(
-        "call_1",
-        %{"action" => "kill", "process_id" => process_id, "signal" => "sigkill"},
-        nil,
-        nil
-      )
+      result =
+        tool.execute.(
+          "call_1",
+          %{"action" => "kill", "process_id" => process_id, "signal" => "sigkill"},
+          nil,
+          nil
+        )
 
       assert result.content != nil
       text = result.content |> hd() |> Map.get(:text)
@@ -264,12 +274,13 @@ defmodule CodingAgent.Tools.ProcessToolTest do
     test "returns error for unknown process" do
       tool = CodingAgent.Tools.Process.tool([])
 
-      assert {:error, reason} = tool.execute.(
-        "call_1",
-        %{"action" => "kill", "process_id" => "unknown_id"},
-        nil,
-        nil
-      )
+      assert {:error, reason} =
+               tool.execute.(
+                 "call_1",
+                 %{"action" => "kill", "process_id" => "unknown_id"},
+                 nil,
+                 nil
+               )
 
       assert reason =~ "not found"
     end
@@ -284,12 +295,13 @@ defmodule CodingAgent.Tools.ProcessToolTest do
 
       tool = CodingAgent.Tools.Process.tool([])
 
-      result = tool.execute.(
-        "call_1",
-        %{"action" => "clear", "process_id" => process_id},
-        nil,
-        nil
-      )
+      result =
+        tool.execute.(
+          "call_1",
+          %{"action" => "clear", "process_id" => process_id},
+          nil,
+          nil
+        )
 
       assert result.content != nil
       text = result.content |> hd() |> Map.get(:text)
@@ -302,12 +314,13 @@ defmodule CodingAgent.Tools.ProcessToolTest do
     test "returns error for unknown process" do
       tool = CodingAgent.Tools.Process.tool([])
 
-      assert {:error, reason} = tool.execute.(
-        "call_1",
-        %{"action" => "clear", "process_id" => "unknown_id"},
-        nil,
-        nil
-      )
+      assert {:error, reason} =
+               tool.execute.(
+                 "call_1",
+                 %{"action" => "clear", "process_id" => "unknown_id"},
+                 nil,
+                 nil
+               )
 
       assert reason =~ "not found"
     end
@@ -339,12 +352,13 @@ defmodule CodingAgent.Tools.ProcessToolTest do
     test "returns error for unknown action" do
       tool = CodingAgent.Tools.Process.tool([])
 
-      assert {:error, reason} = tool.execute.(
-        "call_1",
-        %{"action" => "unknown"},
-        nil,
-        nil
-      )
+      assert {:error, reason} =
+               tool.execute.(
+                 "call_1",
+                 %{"action" => "unknown"},
+                 nil,
+                 nil
+               )
 
       assert reason =~ "Unknown action"
     end

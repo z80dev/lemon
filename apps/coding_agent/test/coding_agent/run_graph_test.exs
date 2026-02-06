@@ -161,7 +161,9 @@ defmodule CodingAgent.RunGraphTest do
       RunGraph.finish(run1, %{result: "done1"})
       RunGraph.finish(run2, %{result: "done2"})
 
-      assert {:ok, %{mode: :wait_all, runs: runs}} = RunGraph.await([run1, run2], :wait_all, 1_000)
+      assert {:ok, %{mode: :wait_all, runs: runs}} =
+               RunGraph.await([run1, run2], :wait_all, 1_000)
+
       assert length(runs) == 2
       assert Enum.all?(runs, &(&1.status == :completed))
     end
@@ -175,7 +177,9 @@ defmodule CodingAgent.RunGraphTest do
       RunGraph.fail(run1, "error1")
       RunGraph.fail(run2, "error2")
 
-      assert {:ok, %{mode: :wait_all, runs: runs}} = RunGraph.await([run1, run2], :wait_all, 1_000)
+      assert {:ok, %{mode: :wait_all, runs: runs}} =
+               RunGraph.await([run1, run2], :wait_all, 1_000)
+
       assert length(runs) == 2
       assert Enum.all?(runs, &(&1.status == :error))
     end
@@ -189,7 +193,9 @@ defmodule CodingAgent.RunGraphTest do
       RunGraph.finish(run1, %{result: "done"})
       RunGraph.fail(run2, "error")
 
-      assert {:ok, %{mode: :wait_all, runs: runs}} = RunGraph.await([run1, run2], :wait_all, 1_000)
+      assert {:ok, %{mode: :wait_all, runs: runs}} =
+               RunGraph.await([run1, run2], :wait_all, 1_000)
+
       assert length(runs) == 2
     end
 
@@ -208,7 +214,9 @@ defmodule CodingAgent.RunGraphTest do
         RunGraph.finish(run2, %{result: "done2"})
       end)
 
-      assert {:ok, %{mode: :wait_all, runs: runs}} = RunGraph.await([run1, run2], :wait_all, 5_000)
+      assert {:ok, %{mode: :wait_all, runs: runs}} =
+               RunGraph.await([run1, run2], :wait_all, 5_000)
+
       assert length(runs) == 2
       assert Enum.all?(runs, &(&1.status == :completed))
     end
@@ -239,7 +247,9 @@ defmodule CodingAgent.RunGraphTest do
 
     test "returns unknown status for non-existent runs" do
       # Non-existent runs are immediately terminal (unknown status)
-      assert {:ok, %{mode: :wait_all, runs: runs}} = RunGraph.await(["nonexistent"], :wait_all, 1_000)
+      assert {:ok, %{mode: :wait_all, runs: runs}} =
+               RunGraph.await(["nonexistent"], :wait_all, 1_000)
+
       assert [%{id: "nonexistent", status: :unknown}] = runs
     end
   end

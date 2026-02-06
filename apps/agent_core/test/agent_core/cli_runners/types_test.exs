@@ -17,6 +17,15 @@ defmodule AgentCore.CliRunners.TypesTest do
       assert token.value == "thread_123"
     end
 
+    test "implements Jason.Encoder" do
+      token = ResumeToken.new("codex", "thread_123")
+
+      assert Jason.encode!(token) |> Jason.decode!() == %{
+               "engine" => "codex",
+               "value" => "thread_123"
+             }
+    end
+
     test "formats codex token correctly" do
       token = ResumeToken.new("codex", "thread_123")
       assert ResumeToken.format(token) == "`codex resume thread_123`"
@@ -91,7 +100,9 @@ defmodule AgentCore.CliRunners.TypesTest do
       # Underscores
       assert ResumeToken.extract_resume("codex resume thread_abc_123").value == "thread_abc_123"
       # Hyphens
-      assert ResumeToken.extract_resume("claude --resume session-xyz-456").value == "session-xyz-456"
+      assert ResumeToken.extract_resume("claude --resume session-xyz-456").value ==
+               "session-xyz-456"
+
       # Mixed
       assert ResumeToken.extract_resume("lemon resume abc-123_xyz").value == "abc-123_xyz"
     end
@@ -190,6 +201,19 @@ defmodule AgentCore.CliRunners.TypesTest do
       assert event.resume == token
       assert event.title == nil
       assert event.meta == nil
+    end
+
+    test "implements Jason.Encoder (including nested ResumeToken)" do
+      token = ResumeToken.new("codex", "thread_123")
+      event = StartedEvent.new("codex", token)
+
+      assert Jason.encode!(event) |> Jason.decode!() == %{
+               "engine" => "codex",
+               "meta" => nil,
+               "resume" => %{"engine" => "codex", "value" => "thread_123"},
+               "title" => nil,
+               "type" => "started"
+             }
     end
 
     test "creates event with optional fields" do

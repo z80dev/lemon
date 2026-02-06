@@ -15,6 +15,7 @@ defmodule Ai.Providers.BedrockStreamingTest do
   use ExUnit.Case, async: true
 
   alias Ai.Providers.Bedrock
+
   alias Ai.Types.{
     AssistantMessage,
     Context,
@@ -166,6 +167,7 @@ defmodule Ai.Providers.BedrockStreamingTest do
           "signature" => "abc123signature"
         }
       }
+
       assert Map.has_key?(delta, "reasoningContent")
       assert delta["reasoningContent"]["text"] == "Let me think about this..."
       assert delta["reasoningContent"]["signature"] == "abc123signature"
@@ -390,7 +392,8 @@ defmodule Ai.Providers.BedrockStreamingTest do
       # Anthropic style
       assert normalize_tool_call_id("toolu_01ABC") == "toolu_01ABC"
       # UUID style
-      assert normalize_tool_call_id("550e8400-e29b-41d4-a716-446655440000") == "550e8400-e29b-41d4-a716-446655440000"
+      assert normalize_tool_call_id("550e8400-e29b-41d4-a716-446655440000") ==
+               "550e8400-e29b-41d4-a716-446655440000"
     end
 
     defp normalize_tool_call_id(id) do
@@ -518,7 +521,7 @@ defmodule Ai.Providers.BedrockStreamingTest do
         output: output,
         cache_read: data["cacheReadInputTokens"] || 0,
         cache_write: data["cacheWriteInputTokens"] || 0,
-        total_tokens: data["totalTokens"] || (input + output),
+        total_tokens: data["totalTokens"] || input + output,
         cost: %Cost{}
       }
     end
@@ -638,6 +641,7 @@ defmodule Ai.Providers.BedrockStreamingTest do
         "source" => %{"bytes" => <<0, 1, 2, 3>>},
         "format" => "png"
       }
+
       assert Map.has_key?(image_block["source"], "bytes")
       assert image_block["format"] == "png"
     end
@@ -673,6 +677,7 @@ defmodule Ai.Providers.BedrockStreamingTest do
         "maxTokens" => 1000,
         "temperature" => 0.7
       }
+
       assert config["maxTokens"] == 1000
       assert config["temperature"] == 0.7
     end
@@ -689,6 +694,7 @@ defmodule Ai.Providers.BedrockStreamingTest do
           }
         ]
       }
+
       assert length(config["tools"]) == 1
       assert hd(config["tools"])["toolSpec"]["name"] == "read_file"
     end
@@ -696,7 +702,9 @@ defmodule Ai.Providers.BedrockStreamingTest do
     test "toolChoice variants" do
       assert %{"auto" => %{}} == build_tool_choice("auto")
       assert %{"any" => %{}} == build_tool_choice("any")
-      assert %{"tool" => %{"name" => "specific"}} == build_tool_choice(%{"type" => "tool", "name" => "specific"})
+
+      assert %{"tool" => %{"name" => "specific"}} ==
+               build_tool_choice(%{"type" => "tool", "name" => "specific"})
     end
 
     test "additionalModelRequestFields for thinking" do
@@ -706,6 +714,7 @@ defmodule Ai.Providers.BedrockStreamingTest do
           "budget_tokens" => 8192
         }
       }
+
       assert fields["thinking"]["type"] == "enabled"
       assert fields["thinking"]["budget_tokens"] == 8192
     end
@@ -718,7 +727,9 @@ defmodule Ai.Providers.BedrockStreamingTest do
 
     defp build_tool_choice("auto"), do: %{"auto" => %{}}
     defp build_tool_choice("any"), do: %{"any" => %{}}
-    defp build_tool_choice(%{"type" => "tool", "name" => name}), do: %{"tool" => %{"name" => name}}
+
+    defp build_tool_choice(%{"type" => "tool", "name" => name}),
+      do: %{"tool" => %{"name" => name}}
 
     defp build_thinking_config(level, interleaved) do
       budgets = %{minimal: 1024, low: 2048, medium: 8192, high: 16384}
@@ -770,6 +781,7 @@ defmodule Ai.Providers.BedrockStreamingTest do
       msg = %AssistantMessage{
         content: [%ToolCall{id: "call_1", name: "test", arguments: %{"key" => "value"}}]
       }
+
       converted = convert_assistant_message(msg)
 
       tool_use = hd(converted["content"])["toolUse"]
@@ -782,6 +794,7 @@ defmodule Ai.Providers.BedrockStreamingTest do
       msg = %AssistantMessage{
         content: [%ThinkingContent{thinking: "Let me think...", thinking_signature: "sig123"}]
       }
+
       converted = convert_assistant_message(msg, supports_signature: true)
 
       reasoning = hd(converted["content"])["reasoningContent"]["reasoningText"]
@@ -795,6 +808,7 @@ defmodule Ai.Providers.BedrockStreamingTest do
         content: [%TextContent{text: "Result data"}],
         is_error: false
       }
+
       converted = convert_tool_result_message(msg)
 
       assert converted["role"] == "user"
@@ -809,6 +823,7 @@ defmodule Ai.Providers.BedrockStreamingTest do
         content: [%TextContent{text: "Error occurred"}],
         is_error: true
       }
+
       converted = convert_tool_result_message(msg)
 
       tool_result = hd(converted["content"])["toolResult"]
@@ -820,36 +835,43 @@ defmodule Ai.Providers.BedrockStreamingTest do
     end
 
     defp convert_user_message(%UserMessage{content: content}) when is_list(content) do
-      converted_content = Enum.map(content, fn
-        %TextContent{text: text} -> %{"text" => text}
-      end)
+      converted_content =
+        Enum.map(content, fn
+          %TextContent{text: text} -> %{"text" => text}
+        end)
 
       %{"role" => "user", "content" => converted_content}
     end
 
     defp convert_assistant_message(%AssistantMessage{content: content}, opts \\ []) do
-      converted_content = Enum.map(content, fn
-        %TextContent{text: text} ->
-          %{"text" => text}
+      converted_content =
+        Enum.map(content, fn
+          %TextContent{text: text} ->
+            %{"text" => text}
 
-        %ToolCall{id: id, name: name, arguments: args} ->
-          %{"toolUse" => %{"toolUseId" => id, "name" => name, "input" => args}}
+          %ToolCall{id: id, name: name, arguments: args} ->
+            %{"toolUse" => %{"toolUseId" => id, "name" => name, "input" => args}}
 
-        %ThinkingContent{thinking: text, thinking_signature: sig} ->
-          if Keyword.get(opts, :supports_signature, false) do
-            %{"reasoningContent" => %{"reasoningText" => %{"text" => text, "signature" => sig || ""}}}
-          else
-            %{"reasoningContent" => %{"reasoningText" => %{"text" => text}}}
-          end
-      end)
+          %ThinkingContent{thinking: text, thinking_signature: sig} ->
+            if Keyword.get(opts, :supports_signature, false) do
+              %{
+                "reasoningContent" => %{
+                  "reasoningText" => %{"text" => text, "signature" => sig || ""}
+                }
+              }
+            else
+              %{"reasoningContent" => %{"reasoningText" => %{"text" => text}}}
+            end
+        end)
 
       %{"role" => "assistant", "content" => converted_content}
     end
 
     defp convert_tool_result_message(%ToolResultMessage{} = msg) do
-      content = Enum.map(msg.content, fn
-        %TextContent{text: text} -> %{"text" => text}
-      end)
+      content =
+        Enum.map(msg.content, fn
+          %TextContent{text: text} -> %{"text" => text}
+        end)
 
       status = if msg.is_error, do: "error", else: "success"
 
@@ -1053,7 +1075,9 @@ defmodule Ai.Providers.BedrockStreamingTest do
     test "tracks tool call blocks with partial JSON" do
       blocks = %{}
       blocks = Map.put(blocks, 0, %{type: :tool_call, index: 0, partial_json: "{\"key\":"})
-      blocks = Map.put(blocks, 0, %{blocks[0] | partial_json: blocks[0].partial_json <> "\"value\"}"})
+
+      blocks =
+        Map.put(blocks, 0, %{blocks[0] | partial_json: blocks[0].partial_json <> "\"value\"}"})
 
       assert blocks[0].partial_json == "{\"key\":\"value\"}"
     end
@@ -1139,8 +1163,16 @@ defmodule Ai.Providers.BedrockStreamingTest do
   describe "consecutive tool result merging" do
     test "merges two consecutive tool results" do
       messages = [
-        %{"role" => "user", "content" => [%{"toolResult" => %{"toolUseId" => "1"}}], "_is_tool_result" => true},
-        %{"role" => "user", "content" => [%{"toolResult" => %{"toolUseId" => "2"}}], "_is_tool_result" => true}
+        %{
+          "role" => "user",
+          "content" => [%{"toolResult" => %{"toolUseId" => "1"}}],
+          "_is_tool_result" => true
+        },
+        %{
+          "role" => "user",
+          "content" => [%{"toolResult" => %{"toolUseId" => "2"}}],
+          "_is_tool_result" => true
+        }
       ]
 
       merged = merge_consecutive_tool_results(messages)
@@ -1151,9 +1183,17 @@ defmodule Ai.Providers.BedrockStreamingTest do
 
     test "does not merge non-consecutive tool results" do
       messages = [
-        %{"role" => "user", "content" => [%{"toolResult" => %{"toolUseId" => "1"}}], "_is_tool_result" => true},
+        %{
+          "role" => "user",
+          "content" => [%{"toolResult" => %{"toolUseId" => "1"}}],
+          "_is_tool_result" => true
+        },
         %{"role" => "assistant", "content" => [%{"text" => "Response"}]},
-        %{"role" => "user", "content" => [%{"toolResult" => %{"toolUseId" => "2"}}], "_is_tool_result" => true}
+        %{
+          "role" => "user",
+          "content" => [%{"toolResult" => %{"toolUseId" => "2"}}],
+          "_is_tool_result" => true
+        }
       ]
 
       merged = merge_consecutive_tool_results(messages)

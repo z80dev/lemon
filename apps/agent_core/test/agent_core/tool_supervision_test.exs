@@ -74,9 +74,7 @@ defmodule AgentCore.ToolSupervisionTest do
       final_response = Mocks.assistant_message("Done")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       stream = Loop.agent_loop([user_message("Run pid_reporter")], context, config, nil, nil)
 
@@ -109,9 +107,7 @@ defmodule AgentCore.ToolSupervisionTest do
       final_response = Mocks.assistant_message("Handled the crash")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       events = Loop.stream([user_message("Crash please")], context, config) |> Enum.to_list()
 
@@ -172,9 +168,7 @@ defmodule AgentCore.ToolSupervisionTest do
       signal = AbortSignal.new()
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       stream = Loop.agent_loop([user_message("Run slow tool")], context, config, signal, nil)
 
@@ -216,13 +210,14 @@ defmodule AgentCore.ToolSupervisionTest do
       tool_call1 = Mocks.tool_call("reporting_tool", %{"id" => "1"}, id: "call_1")
       tool_call2 = Mocks.tool_call("reporting_tool", %{"id" => "2"}, id: "call_2")
       tool_call3 = Mocks.tool_call("reporting_tool", %{"id" => "3"}, id: "call_3")
-      tool_response = Mocks.assistant_message_with_tool_calls([tool_call1, tool_call2, tool_call3])
+
+      tool_response =
+        Mocks.assistant_message_with_tool_calls([tool_call1, tool_call2, tool_call3])
+
       final_response = Mocks.assistant_message("All done")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       stream = Loop.agent_loop([user_message("Run all tools")], context, config, nil, nil)
 
@@ -268,9 +263,7 @@ defmodule AgentCore.ToolSupervisionTest do
         final_response = Mocks.assistant_message("Handled crash #{i}")
 
         config =
-          simple_config(
-            stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-          )
+          simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
         events = Loop.stream([user_message("Crash #{i}")], context, config) |> Enum.to_list()
 
@@ -321,9 +314,7 @@ defmodule AgentCore.ToolSupervisionTest do
       final_response = Mocks.assistant_message("Done")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       _events = Loop.stream([user_message("Echo")], context, config) |> Enum.to_list()
 
@@ -342,9 +333,7 @@ defmodule AgentCore.ToolSupervisionTest do
       final_response = Mocks.assistant_message("Done")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       _events = Loop.stream([user_message("Echo")], context, config) |> Enum.to_list()
 
@@ -364,9 +353,7 @@ defmodule AgentCore.ToolSupervisionTest do
       final_response = Mocks.assistant_message("Done")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       _events = Loop.stream([user_message("Error")], context, config) |> Enum.to_list()
 
@@ -393,9 +380,7 @@ defmodule AgentCore.ToolSupervisionTest do
       final_response = Mocks.assistant_message("Done")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       _events = Loop.stream([user_message("Crash")], context, config) |> Enum.to_list()
 

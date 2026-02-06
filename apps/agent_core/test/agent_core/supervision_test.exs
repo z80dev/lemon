@@ -295,11 +295,12 @@ defmodule AgentCore.SupervisionTest do
 
   describe "AgentCore.LoopTaskSupervisor" do
     test "agent_loop runs under LoopTaskSupervisor" do
-      context = AgentContext.new(
-        system_prompt: "You are helpful.",
-        messages: [],
-        tools: []
-      )
+      context =
+        AgentContext.new(
+          system_prompt: "You are helpful.",
+          messages: [],
+          tools: []
+        )
 
       response = Mocks.assistant_message("Hello!")
 
@@ -316,7 +317,8 @@ defmodule AgentCore.SupervisionTest do
       }
 
       # Start the loop
-      stream = Loop.agent_loop([prompt], context, config, nil, Mocks.mock_stream_fn_single(response))
+      stream =
+        Loop.agent_loop([prompt], context, config, nil, Mocks.mock_stream_fn_single(response))
 
       # The loop runs in a Task under LoopTaskSupervisor
       # Verify by checking supervisor children include our task
@@ -334,11 +336,12 @@ defmodule AgentCore.SupervisionTest do
         timestamp: System.system_time(:millisecond)
       }
 
-      context = AgentContext.new(
-        system_prompt: "You are helpful.",
-        messages: [user_msg],
-        tools: []
-      )
+      context =
+        AgentContext.new(
+          system_prompt: "You are helpful.",
+          messages: [user_msg],
+          tools: []
+        )
 
       response = Mocks.assistant_message("Continuing...")
 
@@ -349,7 +352,8 @@ defmodule AgentCore.SupervisionTest do
       }
 
       # Start continue loop
-      stream = Loop.agent_loop_continue(context, config, nil, Mocks.mock_stream_fn_single(response))
+      stream =
+        Loop.agent_loop_continue(context, config, nil, Mocks.mock_stream_fn_single(response))
 
       # The loop runs in a Task under LoopTaskSupervisor
       children = Task.Supervisor.children(AgentCore.LoopTaskSupervisor)
@@ -360,11 +364,12 @@ defmodule AgentCore.SupervisionTest do
     end
 
     test "loop task crashes are isolated and don't affect supervisor" do
-      context = AgentContext.new(
-        system_prompt: "You are helpful.",
-        messages: [],
-        tools: []
-      )
+      context =
+        AgentContext.new(
+          system_prompt: "You are helpful.",
+          messages: [],
+          tools: []
+        )
 
       # Create a stream function that crashes
       crashing_stream_fn = fn _model, _context, _options ->
@@ -397,11 +402,12 @@ defmodule AgentCore.SupervisionTest do
     end
 
     test "multiple loops can run concurrently" do
-      context = AgentContext.new(
-        system_prompt: "You are helpful.",
-        messages: [],
-        tools: []
-      )
+      context =
+        AgentContext.new(
+          system_prompt: "You are helpful.",
+          messages: [],
+          tools: []
+        )
 
       config = %AgentLoopConfig{
         model: Mocks.mock_model(),

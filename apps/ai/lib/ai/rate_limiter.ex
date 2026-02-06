@@ -218,14 +218,20 @@ defmodule Ai.RateLimiter do
       }
 
       case DynamicSupervisor.start_child(Ai.ProviderSupervisor, child_spec) do
-        {:ok, pid} -> {:ok, pid}
-        {:error, {:already_started, pid}} -> {:ok, pid}
+        {:ok, pid} ->
+          {:ok, pid}
+
+        {:error, {:already_started, pid}} ->
+          {:ok, pid}
+
         {:error, {:already_present, _}} ->
           case GenServer.whereis(via_tuple(provider)) do
             nil -> {:error, :already_present}
             pid -> {:ok, pid}
           end
-        other -> other
+
+        other ->
+          other
       end
     else
       case start_link(opts) do

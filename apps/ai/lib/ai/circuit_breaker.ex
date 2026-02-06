@@ -249,7 +249,9 @@ defmodule Ai.CircuitBreaker do
           new_count = state.failure_count + 1
 
           if new_count >= state.failure_threshold do
-            Logger.warning("CircuitBreaker for #{state.provider} opened after #{new_count} failures")
+            Logger.warning(
+              "CircuitBreaker for #{state.provider} opened after #{new_count} failures"
+            )
 
             %{
               state
@@ -330,14 +332,20 @@ defmodule Ai.CircuitBreaker do
       }
 
       case DynamicSupervisor.start_child(Ai.ProviderSupervisor, child_spec) do
-        {:ok, pid} -> {:ok, pid}
-        {:error, {:already_started, pid}} -> {:ok, pid}
+        {:ok, pid} ->
+          {:ok, pid}
+
+        {:error, {:already_started, pid}} ->
+          {:ok, pid}
+
         {:error, {:already_present, _}} ->
           case GenServer.whereis(via_tuple(provider)) do
             nil -> {:error, :already_present}
             pid -> {:ok, pid}
           end
-        other -> other
+
+        other ->
+          other
       end
     else
       case start_link(opts) do

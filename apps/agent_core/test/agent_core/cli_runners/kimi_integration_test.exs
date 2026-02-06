@@ -47,15 +47,19 @@ defmodule AgentCore.CliRunners.KimiIntegrationTest do
             timeout: 60_000
           )
 
-      events = collect_events(session)
+        events = collect_events(session)
 
-      {answer, opts} = get_completed_answer(events)
-      assert opts[:error] == nil
-      assert String.trim(answer) != ""
-      assert %ResumeToken{engine: "kimi"} = opts[:resume]
-      assert Enum.any?(events, fn
-                 {:completed, answer, opts} -> opts[:error] == nil and String.contains?(answer, "4")
-                 _ -> false
+        {answer, opts} = get_completed_answer(events)
+        assert opts[:error] == nil
+        assert String.trim(answer) != ""
+        assert %ResumeToken{engine: "kimi"} = opts[:resume]
+
+        assert Enum.any?(events, fn
+                 {:completed, answer, opts} ->
+                   opts[:error] == nil and String.contains?(answer, "4")
+
+                 _ ->
+                   false
                end)
 
         IO.puts("\n=== Kimi Basic Execution Test ===")
@@ -92,7 +96,9 @@ defmodule AgentCore.CliRunners.KimiIntegrationTest do
           IO.puts("No resume token returned by Kimi CLI; skipping continuation check.")
           assert true
         else
-          {:ok, session2} = KimiSubagent.continue(session1, "What number did I ask you to remember?")
+          {:ok, session2} =
+            KimiSubagent.continue(session1, "What number did I ask you to remember?")
+
           events2 = collect_events(session2)
 
           IO.puts("\n=== Kimi Session Continuation Test - Part 2 ===")
@@ -124,7 +130,10 @@ defmodule AgentCore.CliRunners.KimiIntegrationTest do
 
         {:action, %{kind: kind, title: title}, phase, opts} ->
           ok_str = if opts[:ok] != nil, do: " (ok=#{opts[:ok]})", else: ""
-          IO.puts("  [ACTION:#{phase}] #{kind}: #{String.slice(to_string(title), 0, 60)}#{ok_str}")
+
+          IO.puts(
+            "  [ACTION:#{phase}] #{kind}: #{String.slice(to_string(title), 0, 60)}#{ok_str}"
+          )
 
         {:completed, answer, opts} ->
           status = if opts[:error], do: "FAILED", else: "SUCCESS"
@@ -148,5 +157,4 @@ defmodule AgentCore.CliRunners.KimiIntegrationTest do
       _ -> flunk("Expected a completed event")
     end
   end
-
 end

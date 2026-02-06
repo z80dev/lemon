@@ -491,7 +491,10 @@ defmodule Ai.Providers.OpenAICompletions do
                 [%{"type" => "text", "text" => thinking_text}]
 
               text when is_binary(text) ->
-                [%{"type" => "text", "text" => thinking_text}, %{"type" => "text", "text" => text}]
+                [
+                  %{"type" => "text", "text" => thinking_text},
+                  %{"type" => "text", "text" => text}
+                ]
 
               parts when is_list(parts) ->
                 [%{"type" => "text", "text" => thinking_text} | parts]
@@ -594,8 +597,9 @@ defmodule Ai.Providers.OpenAICompletions do
 
         user_msg = %{
           "role" => "user",
-          "content" => [%{"type" => "text", "text" => "Attached image(s) from tool result:"}] ++
-            image_blocks
+          "content" =>
+            [%{"type" => "text", "text" => "Attached image(s) from tool result:"}] ++
+              image_blocks
         }
 
         converted ++ [user_msg]
@@ -846,6 +850,7 @@ defmodule Ai.Providers.OpenAICompletions do
     }
 
     state = receive_sse_chunks(stream, state, pid, ref)
+
     state
     |> finalize_current_block(stream)
     |> finalize_tool_call_blocks(stream)
@@ -1071,7 +1076,9 @@ defmodule Ai.Providers.OpenAICompletions do
   defp process_single_tool_call(stream, state, tool_call) do
     index =
       case tool_call["index"] do
-        i when is_integer(i) -> i
+        i when is_integer(i) ->
+          i
+
         i when is_binary(i) ->
           case Integer.parse(i) do
             {parsed, _} -> parsed
@@ -1146,7 +1153,10 @@ defmodule Ai.Providers.OpenAICompletions do
           updated_tool_calls =
             Enum.reduce(acc.tool_call_blocks, %{}, fn {index, info}, tool_acc ->
               if info.block.id == detail_id do
-                Map.put(tool_acc, index, %{info | block: %{info.block | thought_signature: signature}})
+                Map.put(tool_acc, index, %{
+                  info
+                  | block: %{info.block | thought_signature: signature}
+                })
               else
                 Map.put(tool_acc, index, info)
               end

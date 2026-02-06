@@ -954,7 +954,8 @@ defmodule CodingAgent.Tools.PatchTest do
       File.write!(file, "line1\nline2\nline3")
 
       # Patch text with CRLF endings
-      patch_text = "*** Update File: mixed_endings.txt\r\n@@ hunk\r\n line1\r\n-line2\r\n+replaced\r\n line3"
+      patch_text =
+        "*** Update File: mixed_endings.txt\r\n@@ hunk\r\n line1\r\n-line2\r\n+replaced\r\n line3"
 
       result = Patch.execute("call_1", %{"patch_text" => patch_text}, nil, nil, tmp_dir, [])
 

@@ -305,7 +305,9 @@ defmodule AgentCore.ProxyErrorTest do
   describe "SSE parsing - partial data handling" do
     test "handles events split across multiple chunks" do
       # Split an event across multiple chunks
-      full_event = sse_event(%{"type" => "text_delta", "contentIndex" => 0, "delta" => "Hello World"})
+      full_event =
+        sse_event(%{"type" => "text_delta", "contentIndex" => 0, "delta" => "Hello World"})
+
       {chunk1, rest} = String.split_at(full_event, 10)
       {chunk2, chunk3} = String.split_at(rest, 15)
 
@@ -370,7 +372,10 @@ defmodule AgentCore.ProxyErrorTest do
     test "handles event split exactly at newline boundary" do
       # Split right before/after newlines
       event1 = "data: " <> Jason.encode!(%{"type" => "start"})
-      event2 = "\n\ndata: " <> Jason.encode!(%{"type" => "text_start", "contentIndex" => 0}) <> "\n"
+
+      event2 =
+        "\n\ndata: " <> Jason.encode!(%{"type" => "text_start", "contentIndex" => 0}) <> "\n"
+
       event3 = "\n"
 
       chunks = [
@@ -706,7 +711,8 @@ defmodule AgentCore.ProxyErrorTest do
     end
 
     test "handles HTTP 503 Service Unavailable" do
-      port = start_error_server(503, Jason.encode!(%{"error" => "Service temporarily unavailable"}))
+      port =
+        start_error_server(503, Jason.encode!(%{"error" => "Service temporarily unavailable"}))
 
       stream =
         Proxy.stream_proxy(
@@ -955,13 +961,17 @@ defmodule AgentCore.ProxyErrorTest do
 
     test "handles many small deltas" do
       delta_count = 100
+
       deltas =
         for i <- 1..delta_count do
           sse_event(%{"type" => "text_delta", "contentIndex" => 0, "delta" => "word#{i} "})
         end
 
       chunks =
-        [sse_event(%{"type" => "start"}), sse_event(%{"type" => "text_start", "contentIndex" => 0})] ++
+        [
+          sse_event(%{"type" => "start"}),
+          sse_event(%{"type" => "text_start", "contentIndex" => 0})
+        ] ++
           deltas ++
           [
             sse_event(%{"type" => "text_end", "contentIndex" => 0}),
@@ -994,14 +1004,20 @@ defmodule AgentCore.ProxyErrorTest do
 
     test "handles large tool call arguments" do
       large_args = %{
-        "items" => Enum.map(1..1000, fn i -> %{"id" => i, "data" => String.duplicate("x", 100)} end)
+        "items" =>
+          Enum.map(1..1000, fn i -> %{"id" => i, "data" => String.duplicate("x", 100)} end)
       }
 
       large_json = Jason.encode!(large_args)
 
       chunks = [
         sse_event(%{"type" => "start"}),
-        sse_event(%{"type" => "toolcall_start", "contentIndex" => 0, "id" => "call_1", "toolName" => "big_tool"}),
+        sse_event(%{
+          "type" => "toolcall_start",
+          "contentIndex" => 0,
+          "id" => "call_1",
+          "toolName" => "big_tool"
+        }),
         sse_event(%{"type" => "toolcall_delta", "contentIndex" => 0, "delta" => large_json}),
         sse_event(%{"type" => "toolcall_end", "contentIndex" => 0}),
         sse_event(%{"type" => "done", "reason" => "toolUse", "usage" => %{}})
@@ -1039,8 +1055,17 @@ defmodule AgentCore.ProxyErrorTest do
         sse_event(%{"type" => "text_delta", "contentIndex" => 1, "delta" => "Second"}),
         sse_event(%{"type" => "text_end", "contentIndex" => 1}),
         # Tool call block
-        sse_event(%{"type" => "toolcall_start", "contentIndex" => 2, "id" => "call_1", "toolName" => "test"}),
-        sse_event(%{"type" => "toolcall_delta", "contentIndex" => 2, "delta" => ~s({"arg": "value"})}),
+        sse_event(%{
+          "type" => "toolcall_start",
+          "contentIndex" => 2,
+          "id" => "call_1",
+          "toolName" => "test"
+        }),
+        sse_event(%{
+          "type" => "toolcall_delta",
+          "contentIndex" => 2,
+          "delta" => ~s({"arg": "value"})
+        }),
         sse_event(%{"type" => "toolcall_end", "contentIndex" => 2}),
         sse_event(%{"type" => "done", "reason" => "toolUse", "usage" => %{}})
       ]
@@ -1059,6 +1084,7 @@ defmodule AgentCore.ProxyErrorTest do
 
       {:ok, %AssistantMessage{} = message} = EventStream.result(stream, @receive_timeout)
       assert message.stop_reason == :tool_use
+
       assert [
                %TextContent{text: "First"},
                %TextContent{text: "Second"},
@@ -1233,7 +1259,9 @@ defmodule AgentCore.ProxyErrorTest do
           )
 
         {:ok, %AssistantMessage{} = message} = EventStream.result(stream, @receive_timeout)
-        assert message.stop_reason == expected_atom, "Expected #{expected_atom} for '#{reason_str}'"
+
+        assert message.stop_reason == expected_atom,
+               "Expected #{expected_atom} for '#{reason_str}'"
 
         assert_receive :sse_server_done, @receive_timeout
       end
@@ -1383,11 +1411,23 @@ defmodule AgentCore.ProxyErrorTest do
       chunks = [
         sse_event(%{"type" => "start"}),
         sse_event(%{"type" => "thinking_start", "contentIndex" => 0}),
-        sse_event(%{"type" => "thinking_delta", "contentIndex" => 0, "delta" => "Let me think..."}),
+        sse_event(%{
+          "type" => "thinking_delta",
+          "contentIndex" => 0,
+          "delta" => "Let me think..."
+        }),
         sse_event(%{"type" => "thinking_delta", "contentIndex" => 0, "delta" => " about this."}),
-        sse_event(%{"type" => "thinking_end", "contentIndex" => 0, "contentSignature" => "sig123"}),
+        sse_event(%{
+          "type" => "thinking_end",
+          "contentIndex" => 0,
+          "contentSignature" => "sig123"
+        }),
         sse_event(%{"type" => "text_start", "contentIndex" => 1}),
-        sse_event(%{"type" => "text_delta", "contentIndex" => 1, "delta" => "Here is my answer."}),
+        sse_event(%{
+          "type" => "text_delta",
+          "contentIndex" => 1,
+          "delta" => "Here is my answer."
+        }),
         sse_event(%{"type" => "text_end", "contentIndex" => 1}),
         sse_event(%{"type" => "done", "reason" => "stop", "usage" => %{}})
       ]
@@ -1408,7 +1448,10 @@ defmodule AgentCore.ProxyErrorTest do
       assert message.stop_reason == :stop
 
       assert [
-               %Ai.Types.ThinkingContent{thinking: "Let me think... about this.", thinking_signature: "sig123"},
+               %Ai.Types.ThinkingContent{
+                 thinking: "Let me think... about this.",
+                 thinking_signature: "sig123"
+               },
                %TextContent{text: "Here is my answer."}
              ] = message.content
 
@@ -1426,7 +1469,11 @@ defmodule AgentCore.ProxyErrorTest do
         sse_event(%{"type" => "start"}),
         sse_event(%{"type" => "text_start", "contentIndex" => 0}),
         sse_event(%{"type" => "text_delta", "contentIndex" => 0, "delta" => "Signed text"}),
-        sse_event(%{"type" => "text_end", "contentIndex" => 0, "contentSignature" => "text_sig_abc"}),
+        sse_event(%{
+          "type" => "text_end",
+          "contentIndex" => 0,
+          "contentSignature" => "text_sig_abc"
+        }),
         sse_event(%{"type" => "done", "reason" => "stop", "usage" => %{}})
       ]
 

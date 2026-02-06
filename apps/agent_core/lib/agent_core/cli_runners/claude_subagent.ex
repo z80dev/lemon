@@ -152,7 +152,9 @@ defmodule AgentCore.CliRunners.ClaudeSubagent do
       {:ok, pid} ->
         stream = ClaudeRunner.stream(pid)
         {:ok, token_agent} = Agent.start_link(fn -> token end)
-        {:ok, %{pid: pid, stream: stream, resume_token: token, token_agent: token_agent, cwd: cwd}}
+
+        {:ok,
+         %{pid: pid, stream: stream, resume_token: token, token_agent: token_agent, cwd: cwd}}
 
       {:error, reason} ->
         {:error, reason}
@@ -260,7 +262,9 @@ defmodule AgentCore.CliRunners.ClaudeSubagent do
   @spec resume_token(session()) :: ResumeToken.t() | nil
   def resume_token(session) do
     case session.token_agent do
-      nil -> session.resume_token
+      nil ->
+        session.resume_token
+
       agent ->
         try do
           Agent.get(agent, & &1)
@@ -329,7 +333,10 @@ defmodule AgentCore.CliRunners.ClaudeSubagent do
     [{:action, action_map, phase, opts}]
   end
 
-  defp normalize_event({:cli_event, %CompletedEvent{ok: ok, answer: answer, resume: resume, error: error, usage: usage}}) do
+  defp normalize_event(
+         {:cli_event,
+          %CompletedEvent{ok: ok, answer: answer, resume: resume, error: error, usage: usage}}
+       ) do
     opts =
       [ok: ok]
       |> maybe_add(:resume, resume)

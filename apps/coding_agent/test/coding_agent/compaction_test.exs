@@ -184,7 +184,10 @@ defmodule CodingAgent.CompactionTest do
           id: "entry2",
           parent_id: "entry1",
           type: :message,
-          message: %{"role" => "assistant", "content" => [%{"type" => "text", "text" => long_content}]},
+          message: %{
+            "role" => "assistant",
+            "content" => [%{"type" => "text", "text" => long_content}]
+          },
           timestamp: 1
         },
         %SessionEntry{
@@ -198,7 +201,10 @@ defmodule CodingAgent.CompactionTest do
           id: "entry4",
           parent_id: "entry3",
           type: :message,
-          message: %{"role" => "assistant", "content" => [%{"type" => "text", "text" => long_content}]},
+          message: %{
+            "role" => "assistant",
+            "content" => [%{"type" => "text", "text" => long_content}]
+          },
           timestamp: 3
         },
         %SessionEntry{
@@ -449,7 +455,9 @@ defmodule CodingAgent.CompactionTest do
       ]
 
       # With force and min_keep_messages: 2, should cut earlier in the conversation
-      assert {:ok, cut_id} = Compaction.find_cut_point(branch, 20000, force: true, min_keep_messages: 2)
+      assert {:ok, cut_id} =
+               Compaction.find_cut_point(branch, 20000, force: true, min_keep_messages: 2)
+
       # Should cut at entry4 or entry5 to keep 2 messages
       assert cut_id in ["entry4", "entry5"]
     end
@@ -1048,7 +1056,10 @@ defmodule CodingAgent.CompactionTest do
       # threshold = 35_000 - 5000 = 30_000
       # 30_000 > 30_000 is false, so we need to set tokens higher or threshold lower
       context_window = 34_000
-      should_compact = Compaction.should_compact?(tokens, context_window, %{enabled: true, reserve_tokens: 5000})
+
+      should_compact =
+        Compaction.should_compact?(tokens, context_window, %{enabled: true, reserve_tokens: 5000})
+
       # 30_000 > 34_000 - 5000 = 29_000
       assert should_compact == true
     end
@@ -1695,7 +1706,12 @@ defmodule CodingAgent.CompactionTest do
                 "role" => "assistant",
                 "content" => [
                   %{"type" => "text", "text" => "Step #{i}"},
-                  %{"type" => "tool_call", "id" => "tc_#{i}", "name" => "read", "arguments" => %{}}
+                  %{
+                    "type" => "tool_call",
+                    "id" => "tc_#{i}",
+                    "name" => "read",
+                    "arguments" => %{}
+                  }
                 ]
               },
               timestamp: i * 2 - 1
@@ -1753,9 +1769,24 @@ defmodule CodingAgent.CompactionTest do
             "role" => "assistant",
             "content" => [
               %{"type" => "text", "text" => "I'll read multiple files"},
-              %{"type" => "tool_call", "id" => "tc_1", "name" => "read", "arguments" => %{"path" => "/a"}},
-              %{"type" => "tool_call", "id" => "tc_2", "name" => "read", "arguments" => %{"path" => "/b"}},
-              %{"type" => "tool_call", "id" => "tc_3", "name" => "read", "arguments" => %{"path" => "/c"}}
+              %{
+                "type" => "tool_call",
+                "id" => "tc_1",
+                "name" => "read",
+                "arguments" => %{"path" => "/a"}
+              },
+              %{
+                "type" => "tool_call",
+                "id" => "tc_2",
+                "name" => "read",
+                "arguments" => %{"path" => "/b"}
+              },
+              %{
+                "type" => "tool_call",
+                "id" => "tc_3",
+                "name" => "read",
+                "arguments" => %{"path" => "/c"}
+              }
             ]
           },
           timestamp: 1
@@ -1888,7 +1919,8 @@ defmodule CodingAgent.CompactionTest do
           type: :message,
           message: %{
             "role" => "tool_result",
-            "tool_use_id" => "tc_1",  # Using tool_use_id instead of tool_call_id
+            # Using tool_use_id instead of tool_call_id
+            "tool_use_id" => "tc_1",
             "content" => [%{"type" => "text", "text" => long_content}]
           },
           timestamp: 2
@@ -1991,7 +2023,12 @@ defmodule CodingAgent.CompactionTest do
       }
 
       # When summary is provided in opts, it should return immediately
-      result = Compaction.generate_summary(messages, model, signal: signal, summary: "Pre-generated summary")
+      result =
+        Compaction.generate_summary(messages, model,
+          signal: signal,
+          summary: "Pre-generated summary"
+        )
+
       assert {:ok, "Pre-generated summary"} = result
 
       AgentCore.AbortSignal.clear(signal)
@@ -2016,7 +2053,12 @@ defmodule CodingAgent.CompactionTest do
         id: "claude-3-sonnet"
       }
 
-      result = Compaction.generate_branch_summary(branch_entries, model, signal: signal, summary: "Branch summary")
+      result =
+        Compaction.generate_branch_summary(branch_entries, model,
+          signal: signal,
+          summary: "Branch summary"
+        )
+
       assert {:ok, "Branch summary"} = result
 
       AgentCore.AbortSignal.clear(signal)
@@ -2232,7 +2274,8 @@ defmodule CodingAgent.CompactionTest do
   describe "find_cut_point boundary conditions" do
     test "single message that exceeds keep_recent_tokens" do
       # One very large message that alone exceeds the threshold
-      huge_content = String.duplicate("z", 400_000)  # 100,000 tokens
+      # 100,000 tokens
+      huge_content = String.duplicate("z", 400_000)
 
       branch = [
         %SessionEntry{

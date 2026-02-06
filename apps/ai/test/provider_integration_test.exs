@@ -80,7 +80,9 @@ defmodule Ai.ProviderIntegrationTest do
   describe "Basic Completion" do
     test "completes a simple prompt" do
       case skip_unless_configured() do
-        :skip -> assert true
+        :skip ->
+          assert true
+
         :ok ->
           model = IntegrationConfig.model()
 
@@ -109,7 +111,9 @@ defmodule Ai.ProviderIntegrationTest do
 
     test "handles multi-turn conversation" do
       case skip_unless_configured() do
-        :skip -> assert true
+        :skip ->
+          assert true
+
         :ok ->
           model = IntegrationConfig.model()
 
@@ -143,7 +147,9 @@ defmodule Ai.ProviderIntegrationTest do
   describe "Streaming" do
     test "streams responses with correct events" do
       case skip_unless_configured() do
-        :skip -> assert true
+        :skip ->
+          assert true
+
         :ok ->
           model = IntegrationConfig.model()
 
@@ -182,7 +188,9 @@ defmodule Ai.ProviderIntegrationTest do
 
     test "stream result returns final message" do
       case skip_unless_configured() do
-        :skip -> assert true
+        :skip ->
+          assert true
+
         :ok ->
           model = IntegrationConfig.model()
 
@@ -208,7 +216,9 @@ defmodule Ai.ProviderIntegrationTest do
   describe "Tool Calling" do
     test "handles tool calling" do
       case skip_unless_configured() do
-        :skip -> assert true
+        :skip ->
+          assert true
+
         :ok ->
           model = IntegrationConfig.model()
           tool = get_weather_tool()
@@ -239,7 +249,9 @@ defmodule Ai.ProviderIntegrationTest do
 
     test "streams tool calls correctly" do
       case skip_unless_configured() do
-        :skip -> assert true
+        :skip ->
+          assert true
+
         :ok ->
           model = IntegrationConfig.model()
           tool = get_weather_tool()
@@ -272,7 +284,9 @@ defmodule Ai.ProviderIntegrationTest do
   describe "Usage Tracking" do
     test "tracks input and output tokens" do
       case skip_unless_configured() do
-        :skip -> assert true
+        :skip ->
+          assert true
+
         :ok ->
           model = IntegrationConfig.model()
 

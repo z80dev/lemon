@@ -1,12 +1,13 @@
 defmodule LemonGateway.Binding do
   @moduledoc false
-  defstruct [:transport, :chat_id, :topic_id, :project, :default_engine, :queue_mode]
+  defstruct [:transport, :chat_id, :topic_id, :project, :agent_id, :default_engine, :queue_mode]
 
   @type t :: %__MODULE__{
           transport: atom(),
           chat_id: integer(),
           topic_id: integer() | nil,
           project: String.t() | nil,
+          agent_id: String.t() | nil,
           default_engine: String.t() | nil,
           queue_mode: LemonGateway.Types.queue_mode() | nil
         }
@@ -76,6 +77,7 @@ defmodule LemonGateway.BindingResolver do
       chat_id: get_field(b, :chat_id),
       topic_id: get_field(b, :topic_id),
       project: get_field(b, :project),
+      agent_id: get_field(b, :agent_id),
       default_engine: get_field(b, :default_engine),
       queue_mode: parse_queue_mode(get_field(b, :queue_mode))
     }
@@ -111,6 +113,16 @@ defmodule LemonGateway.BindingResolver do
     end
   end
 
+  # Be defensive: some callers/tests may pass a non-ChatScope value.
+  # In that case, fall back to resume/engine_hint/default_engine without binding logic.
+  def resolve_engine(_scope, engine_hint, resume) do
+    cond do
+      resume && resume.engine -> resume.engine
+      is_binary(engine_hint) -> engine_hint
+      true -> Config.get(:default_engine)
+    end
+  end
+
   defp resolve_engine_from_binding(scope) do
     binding = resolve_binding(scope)
 
@@ -118,11 +130,47 @@ defmodule LemonGateway.BindingResolver do
       binding && binding.default_engine ->
         binding.default_engine
 
-      binding && binding.project ->
-        resolve_project_engine(binding.project) || Config.get(:default_engine)
-
       true ->
-        Config.get(:default_engine)
+        project_engine =
+          if binding && binding.project do
+            resolve_project_engine(binding.project)
+          else
+            nil
+          end
+
+        project_engine || agent_default_engine(binding, scope) || Config.get(:default_engine)
+    end
+  end
+
+  defp agent_default_engine(%Binding{agent_id: agent_id} = _binding, scope)
+       when is_binary(agent_id) do
+    cwd = resolve_cwd(scope)
+    cfg = LemonCore.Config.load(cwd)
+    profile = Map.get(cfg.agents || %{}, agent_id) || Map.get(cfg.agents || %{}, "default") || %{}
+
+    engine =
+      profile[:default_engine] || profile["default_engine"] ||
+        profile[:engine] || profile["engine"]
+
+    if is_binary(engine) and byte_size(engine) > 0, do: engine, else: nil
+  rescue
+    _ -> nil
+  end
+
+  defp agent_default_engine(_, _), do: nil
+
+  @doc """
+  Resolve the agent_id for a given scope.
+
+  If no binding exists or no agent_id is set, returns "default".
+  """
+  @spec resolve_agent_id(ChatScope.t()) :: String.t()
+  def resolve_agent_id(%ChatScope{} = scope) do
+    binding = resolve_binding(scope)
+
+    case binding && binding.agent_id do
+      id when is_binary(id) and byte_size(id) > 0 -> id
+      _ -> "default"
     end
   end
 
@@ -155,6 +203,9 @@ defmodule LemonGateway.BindingResolver do
       nil
     end
   end
+
+  # Be defensive: some callers/tests use scope identifiers (strings) instead of ChatScope structs.
+  def resolve_cwd(_scope), do: nil
 
   @doc """
   Resolves the queue mode for a given scope.

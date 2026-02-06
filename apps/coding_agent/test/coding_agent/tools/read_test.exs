@@ -547,7 +547,8 @@ defmodule CodingAgent.Tools.ReadTest do
     test "expands home directory (~)", %{tmp_dir: tmp_dir} do
       # This test may not work in all environments
       # We'll test that ~ expansion doesn't crash
-      result = Read.execute("call_1", %{"path" => "~/nonexistent_file.txt"}, nil, nil, tmp_dir, [])
+      result =
+        Read.execute("call_1", %{"path" => "~/nonexistent_file.txt"}, nil, nil, tmp_dir, [])
 
       # Should return file not found, not a crash
       assert {:error, msg} = result

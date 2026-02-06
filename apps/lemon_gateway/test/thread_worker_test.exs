@@ -40,7 +40,12 @@ defmodule LemonGateway.ThreadWorkerTest do
           send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
           Process.sleep(delay_ms)
           answer = "Slow: #{job.text}"
-          send(sink_pid, {:engine_event, run_ref, %Event.Completed{engine: id(), resume: resume, ok: true, answer: answer}})
+
+          send(
+            sink_pid,
+            {:engine_event, run_ref,
+             %Event.Completed{engine: id(), resume: resume, ok: true, answer: answer}}
+          )
         end)
 
       {:ok, run_ref, %{task_pid: task_pid}}
@@ -89,10 +94,18 @@ defmodule LemonGateway.ThreadWorkerTest do
 
           receive do
             :complete ->
-              send(sink_pid, {:engine_event, run_ref, %Event.Completed{engine: id(), resume: resume, ok: true, answer: "done"}})
+              send(
+                sink_pid,
+                {:engine_event, run_ref,
+                 %Event.Completed{engine: id(), resume: resume, ok: true, answer: "done"}}
+              )
           after
             10_000 ->
-              send(sink_pid, {:engine_event, run_ref, %Event.Completed{engine: id(), resume: resume, ok: true, answer: "timeout"}})
+              send(
+                sink_pid,
+                {:engine_event, run_ref,
+                 %Event.Completed{engine: id(), resume: resume, ok: true, answer: "timeout"}}
+              )
           end
         end)
 
@@ -143,10 +156,18 @@ defmodule LemonGateway.ThreadWorkerTest do
 
           receive do
             :complete ->
-              send(sink_pid, {:engine_event, run_ref, %Event.Completed{engine: id(), resume: resume, ok: true, answer: "done"}})
+              send(
+                sink_pid,
+                {:engine_event, run_ref,
+                 %Event.Completed{engine: id(), resume: resume, ok: true, answer: "done"}}
+              )
           after
             10_000 ->
-              send(sink_pid, {:engine_event, run_ref, %Event.Completed{engine: id(), resume: resume, ok: true, answer: "timeout"}})
+              send(
+                sink_pid,
+                {:engine_event, run_ref,
+                 %Event.Completed{engine: id(), resume: resume, ok: true, answer: "timeout"}}
+              )
           end
         end)
 
@@ -227,20 +248,29 @@ defmodule LemonGateway.ThreadWorkerTest do
       LemonGateway.submit(job2)
       LemonGateway.submit(job3)
 
-      assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true, answer: "Echo: first"}}, 2000
-      assert_receive {:lemon_gateway_run_completed, ^job2, %Completed{ok: true, answer: "Echo: second"}}, 2000
-      assert_receive {:lemon_gateway_run_completed, ^job3, %Completed{ok: true, answer: "Echo: third"}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^job1,
+                      %Completed{ok: true, answer: "Echo: first"}},
+                     2000
+
+      assert_receive {:lemon_gateway_run_completed, ^job2,
+                      %Completed{ok: true, answer: "Echo: second"}},
+                     2000
+
+      assert_receive {:lemon_gateway_run_completed, ^job3,
+                      %Completed{ok: true, answer: "Echo: third"}},
+                     2000
     end
 
     test "multiple collect jobs from same scope share the same worker" do
       scope = make_scope()
 
       # Submit multiple jobs quickly
-      jobs = for i <- 1..5 do
-        job = make_job(scope, text: "job#{i}", queue_mode: :collect)
-        LemonGateway.submit(job)
-        job
-      end
+      jobs =
+        for i <- 1..5 do
+          job = make_job(scope, text: "job#{i}", queue_mode: :collect)
+          LemonGateway.submit(job)
+          job
+        end
 
       # All should complete
       for job <- jobs do
@@ -260,14 +290,21 @@ defmodule LemonGateway.ThreadWorkerTest do
       scope = make_scope()
 
       # Use slow engine to ensure all followups queue before processing starts
-      job1 = make_job(scope, text: "part1", queue_mode: :followup, engine_hint: "slow",
-        meta: %{notify_pid: self(), delay_ms: 50})
+      job1 =
+        make_job(scope,
+          text: "part1",
+          queue_mode: :followup,
+          engine_hint: "slow",
+          meta: %{notify_pid: self(), delay_ms: 50}
+        )
 
       # Submit first job (this starts processing)
       LemonGateway.submit(job1)
 
       # Let it start processing (can't merge once started)
-      assert_receive {:lemon_gateway_run_completed, _, %Completed{ok: true, answer: "Slow: part1"}}, 2000
+      assert_receive {:lemon_gateway_run_completed, _,
+                      %Completed{ok: true, answer: "Slow: part1"}},
+                     2000
     end
 
     test "consecutively submitted followups are merged when queued" do
@@ -276,14 +313,30 @@ defmodule LemonGateway.ThreadWorkerTest do
       scope = make_scope()
 
       # First job uses slow engine to block the queue
-      blocking_job = make_job(scope, text: "blocking", queue_mode: :collect, engine_hint: "slow",
-        meta: %{notify_pid: self(), delay_ms: 200})
+      blocking_job =
+        make_job(scope,
+          text: "blocking",
+          queue_mode: :collect,
+          engine_hint: "slow",
+          meta: %{notify_pid: self(), delay_ms: 200}
+        )
 
       # Followup jobs that should be merged while waiting
-      followup1 = make_job(scope, text: "f1", queue_mode: :followup, engine_hint: "echo",
-        meta: %{notify_pid: self()})
-      followup2 = make_job(scope, text: "f2", queue_mode: :followup, engine_hint: "echo",
-        meta: %{notify_pid: self()})
+      followup1 =
+        make_job(scope,
+          text: "f1",
+          queue_mode: :followup,
+          engine_hint: "echo",
+          meta: %{notify_pid: self()}
+        )
+
+      followup2 =
+        make_job(scope,
+          text: "f2",
+          queue_mode: :followup,
+          engine_hint: "echo",
+          meta: %{notify_pid: self()}
+        )
 
       LemonGateway.submit(blocking_job)
       # Small delay to ensure blocking job starts
@@ -296,7 +349,10 @@ defmodule LemonGateway.ThreadWorkerTest do
 
       # The followups should have been merged - we only get one completion
       # with merged text "f1\nf2"
-      assert_receive {:lemon_gateway_run_completed, _merged_job, %Completed{ok: true, answer: answer}}, 2000
+      assert_receive {:lemon_gateway_run_completed, _merged_job,
+                      %Completed{ok: true, answer: answer}},
+                     2000
+
       assert answer == "Echo: f1\nf2"
 
       # Should NOT receive a second followup completion
@@ -309,13 +365,29 @@ defmodule LemonGateway.ThreadWorkerTest do
       scope = make_scope()
 
       # Use a slow blocking job
-      blocking_job = make_job(scope, text: "blocking", queue_mode: :collect, engine_hint: "slow",
-        meta: %{notify_pid: self(), delay_ms: 300})
+      blocking_job =
+        make_job(scope,
+          text: "blocking",
+          queue_mode: :collect,
+          engine_hint: "slow",
+          meta: %{notify_pid: self(), delay_ms: 300}
+        )
 
-      followup1 = make_job(scope, text: "f1", queue_mode: :followup, engine_hint: "echo",
-        meta: %{notify_pid: self()})
-      followup2 = make_job(scope, text: "f2", queue_mode: :followup, engine_hint: "echo",
-        meta: %{notify_pid: self()})
+      followup1 =
+        make_job(scope,
+          text: "f1",
+          queue_mode: :followup,
+          engine_hint: "echo",
+          meta: %{notify_pid: self()}
+        )
+
+      followup2 =
+        make_job(scope,
+          text: "f2",
+          queue_mode: :followup,
+          engine_hint: "echo",
+          meta: %{notify_pid: self()}
+        )
 
       LemonGateway.submit(blocking_job)
       Process.sleep(50)
@@ -327,8 +399,11 @@ defmodule LemonGateway.ThreadWorkerTest do
       assert_receive {:lemon_gateway_run_completed, ^blocking_job, %Completed{ok: true}}, 2000
 
       # Both followups should complete separately (not merged)
-      assert_receive {:lemon_gateway_run_completed, _, %Completed{ok: true, answer: "Echo: f1"}}, 2000
-      assert_receive {:lemon_gateway_run_completed, _, %Completed{ok: true, answer: "Echo: f2"}}, 2000
+      assert_receive {:lemon_gateway_run_completed, _, %Completed{ok: true, answer: "Echo: f1"}},
+                     2000
+
+      assert_receive {:lemon_gateway_run_completed, _, %Completed{ok: true, answer: "Echo: f2"}},
+                     2000
     end
   end
 
@@ -341,11 +416,16 @@ defmodule LemonGateway.ThreadWorkerTest do
       scope = make_scope()
 
       # Use steerable engine that records steer calls
-      running_job = make_job(scope, text: "running", queue_mode: :collect, engine_hint: "steerable",
-        meta: %{notify_pid: self(), steer_notify_pid: self()})
+      running_job =
+        make_job(scope,
+          text: "running",
+          queue_mode: :collect,
+          engine_hint: "steerable",
+          meta: %{notify_pid: self(), steer_notify_pid: self()}
+        )
 
-      steer_job = make_job(scope, text: "injected message", queue_mode: :steer,
-        meta: %{notify_pid: self()})
+      steer_job =
+        make_job(scope, text: "injected message", queue_mode: :steer, meta: %{notify_pid: self()})
 
       LemonGateway.submit(running_job)
       # Wait for run to start
@@ -363,11 +443,15 @@ defmodule LemonGateway.ThreadWorkerTest do
       scope = make_scope()
 
       # Use slow engine that does NOT support steering
-      running_job = make_job(scope, text: "running", queue_mode: :collect, engine_hint: "slow",
-        meta: %{notify_pid: self(), delay_ms: 200})
+      running_job =
+        make_job(scope,
+          text: "running",
+          queue_mode: :collect,
+          engine_hint: "slow",
+          meta: %{notify_pid: self(), delay_ms: 200}
+        )
 
-      steer_job = make_job(scope, text: "steer", queue_mode: :steer,
-        meta: %{notify_pid: self()})
+      steer_job = make_job(scope, text: "steer", queue_mode: :steer, meta: %{notify_pid: self()})
 
       LemonGateway.submit(running_job)
       Process.sleep(50)
@@ -384,8 +468,7 @@ defmodule LemonGateway.ThreadWorkerTest do
       scope = make_scope()
 
       # Submit only a steer job with no active run
-      steer_job = make_job(scope, text: "steer", queue_mode: :steer,
-        meta: %{notify_pid: self()})
+      steer_job = make_job(scope, text: "steer", queue_mode: :steer, meta: %{notify_pid: self()})
 
       LemonGateway.submit(steer_job)
 
@@ -396,8 +479,13 @@ defmodule LemonGateway.ThreadWorkerTest do
     test "multiple steer jobs are all injected when engine supports steering" do
       scope = make_scope()
 
-      running_job = make_job(scope, text: "running", queue_mode: :collect, engine_hint: "steerable",
-        meta: %{notify_pid: self(), steer_notify_pid: self()})
+      running_job =
+        make_job(scope,
+          text: "running",
+          queue_mode: :collect,
+          engine_hint: "steerable",
+          meta: %{notify_pid: self(), steer_notify_pid: self()}
+        )
 
       steer1 = make_job(scope, text: "msg1", queue_mode: :steer, meta: %{notify_pid: self()})
       steer2 = make_job(scope, text: "msg2", queue_mode: :steer, meta: %{notify_pid: self()})
@@ -420,11 +508,15 @@ defmodule LemonGateway.ThreadWorkerTest do
       scope = make_scope()
 
       # Use cancellable engine to detect if cancel is called
-      running_job = make_job(scope, text: "running", queue_mode: :collect, engine_hint: "cancellable",
-        meta: %{notify_pid: self(), cancel_notify_pid: self()})
+      running_job =
+        make_job(scope,
+          text: "running",
+          queue_mode: :collect,
+          engine_hint: "cancellable",
+          meta: %{notify_pid: self(), cancel_notify_pid: self()}
+        )
 
-      steer_job = make_job(scope, text: "steer", queue_mode: :steer,
-        meta: %{notify_pid: self()})
+      steer_job = make_job(scope, text: "steer", queue_mode: :steer, meta: %{notify_pid: self()})
 
       LemonGateway.submit(running_job)
       Process.sleep(50)
@@ -442,22 +534,36 @@ defmodule LemonGateway.ThreadWorkerTest do
       scope = make_scope()
 
       # Use slow engine for blocking job to allow steer to queue during run
-      running_job = make_job(scope, text: "blocking", queue_mode: :collect, engine_hint: "slow",
-        meta: %{notify_pid: self(), delay_ms: 150})
+      running_job =
+        make_job(scope,
+          text: "blocking",
+          queue_mode: :collect,
+          engine_hint: "slow",
+          meta: %{notify_pid: self(), delay_ms: 150}
+        )
 
       # Steer job targeting the echo engine
-      steer_job = make_job(scope, text: "my steer message", queue_mode: :steer, engine_hint: "echo",
-        meta: %{notify_pid: self()})
+      steer_job =
+        make_job(scope,
+          text: "my steer message",
+          queue_mode: :steer,
+          engine_hint: "echo",
+          meta: %{notify_pid: self()}
+        )
 
       LemonGateway.submit(running_job)
       Process.sleep(50)
       LemonGateway.submit(steer_job)
 
       # Blocking job completes first
-      assert_receive {:lemon_gateway_run_completed, ^running_job, %Completed{ok: true, answer: "Slow: blocking"}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^running_job,
+                      %Completed{ok: true, answer: "Slow: blocking"}},
+                     2000
 
       # Steer job should complete as a followup with its original text preserved
-      assert_receive {:lemon_gateway_run_completed, _job, %Completed{ok: true, answer: answer}}, 2000
+      assert_receive {:lemon_gateway_run_completed, _job, %Completed{ok: true, answer: answer}},
+                     2000
+
       assert answer == "Echo: my steer message"
     end
 
@@ -466,11 +572,21 @@ defmodule LemonGateway.ThreadWorkerTest do
       scope = make_scope()
 
       # Use slow engine that does NOT support steering
-      running_job = make_job(scope, text: "first", queue_mode: :collect, engine_hint: "slow",
-        meta: %{notify_pid: self(), delay_ms: 100})
+      running_job =
+        make_job(scope,
+          text: "first",
+          queue_mode: :collect,
+          engine_hint: "slow",
+          meta: %{notify_pid: self(), delay_ms: 100}
+        )
 
-      steer_job = make_job(scope, text: "steer content", queue_mode: :steer, engine_hint: "echo",
-        meta: %{notify_pid: self()})
+      steer_job =
+        make_job(scope,
+          text: "steer content",
+          queue_mode: :steer,
+          engine_hint: "echo",
+          meta: %{notify_pid: self()}
+        )
 
       LemonGateway.submit(running_job)
       Process.sleep(30)
@@ -482,9 +598,10 @@ defmodule LemonGateway.ThreadWorkerTest do
       assert length(completions) == 2
 
       # Find the steer job's completion by matching answer text
-      steer_completion = Enum.find(completions, fn {_job, completed} ->
-        String.contains?(completed.answer, "steer content")
-      end)
+      steer_completion =
+        Enum.find(completions, fn {_job, completed} ->
+          String.contains?(completed.answer, "steer content")
+        end)
 
       assert steer_completion != nil
       {_job, completed} = steer_completion
@@ -498,13 +615,29 @@ defmodule LemonGateway.ThreadWorkerTest do
 
       scope = make_scope()
 
-      running_job = make_job(scope, text: "blocking", queue_mode: :collect, engine_hint: "slow",
-        meta: %{notify_pid: self(), delay_ms: 200})
+      running_job =
+        make_job(scope,
+          text: "blocking",
+          queue_mode: :collect,
+          engine_hint: "slow",
+          meta: %{notify_pid: self(), delay_ms: 200}
+        )
 
-      steer1 = make_job(scope, text: "s1", queue_mode: :steer, engine_hint: "echo",
-        meta: %{notify_pid: self()})
-      steer2 = make_job(scope, text: "s2", queue_mode: :steer, engine_hint: "echo",
-        meta: %{notify_pid: self()})
+      steer1 =
+        make_job(scope,
+          text: "s1",
+          queue_mode: :steer,
+          engine_hint: "echo",
+          meta: %{notify_pid: self()}
+        )
+
+      steer2 =
+        make_job(scope,
+          text: "s2",
+          queue_mode: :steer,
+          engine_hint: "echo",
+          meta: %{notify_pid: self()}
+        )
 
       LemonGateway.submit(running_job)
       Process.sleep(50)
@@ -516,7 +649,9 @@ defmodule LemonGateway.ThreadWorkerTest do
 
       # Both steer jobs should be merged (converted to followup and merged)
       # and complete with combined text
-      assert_receive {:lemon_gateway_run_completed, _job, %Completed{ok: true, answer: answer}}, 2000
+      assert_receive {:lemon_gateway_run_completed, _job, %Completed{ok: true, answer: answer}},
+                     2000
+
       assert answer == "Echo: s1\ns2"
 
       # Should not receive a second completion (merged into one)
@@ -529,13 +664,20 @@ defmodule LemonGateway.ThreadWorkerTest do
       scope = make_scope()
 
       # Submit steer job directly with no prior run
-      steer_job = make_job(scope, text: "orphan steer", queue_mode: :steer, engine_hint: "echo",
-        meta: %{notify_pid: self()})
+      steer_job =
+        make_job(scope,
+          text: "orphan steer",
+          queue_mode: :steer,
+          engine_hint: "echo",
+          meta: %{notify_pid: self()}
+        )
 
       LemonGateway.submit(steer_job)
 
       # Should complete as followup since there's no active run
-      assert_receive {:lemon_gateway_run_completed, _job, %Completed{ok: true, answer: "Echo: orphan steer"}}, 2000
+      assert_receive {:lemon_gateway_run_completed, _job,
+                      %Completed{ok: true, answer: "Echo: orphan steer"}},
+                     2000
     end
 
     test "steer converts to followup when run process died but :DOWN not yet received" do
@@ -551,13 +693,19 @@ defmodule LemonGateway.ThreadWorkerTest do
       # Simulate a dead process as current_run
       # spawn a process and immediately kill it to get a dead PID
       dead_pid = spawn(fn -> :ok end)
-      Process.sleep(10)  # Ensure the process has exited
+      # Ensure the process has exited
+      Process.sleep(10)
 
       refute Process.alive?(dead_pid), "Test setup: PID should be dead"
 
       state = %{state | current_run: dead_pid}
 
-      steer_job = %Job{scope: make_scope(), user_msg_id: 1, text: "steer to dead run", queue_mode: :steer}
+      steer_job = %Job{
+        scope: make_scope(),
+        user_msg_id: 1,
+        text: "steer to dead run",
+        queue_mode: :steer
+      }
 
       # When enqueuing a steer with a dead current_run PID,
       # it should convert to followup and be queued (not lost)
@@ -582,11 +730,16 @@ defmodule LemonGateway.ThreadWorkerTest do
       scope = make_scope()
 
       # Use cancellable engine
-      running_job = make_job(scope, text: "running", queue_mode: :collect, engine_hint: "cancellable",
-        meta: %{notify_pid: self(), cancel_notify_pid: self()})
+      running_job =
+        make_job(scope,
+          text: "running",
+          queue_mode: :collect,
+          engine_hint: "cancellable",
+          meta: %{notify_pid: self(), cancel_notify_pid: self()}
+        )
 
-      interrupt_job = make_job(scope, text: "interrupt", queue_mode: :interrupt,
-        meta: %{notify_pid: self()})
+      interrupt_job =
+        make_job(scope, text: "interrupt", queue_mode: :interrupt, meta: %{notify_pid: self()})
 
       LemonGateway.submit(running_job)
       Process.sleep(50)
@@ -602,13 +755,19 @@ defmodule LemonGateway.ThreadWorkerTest do
     test "interrupt job is processed before queued collect jobs" do
       scope = make_scope()
 
-      blocking_job = make_job(scope, text: "blocking", queue_mode: :collect, engine_hint: "slow",
-        meta: %{notify_pid: self(), delay_ms: 200})
+      blocking_job =
+        make_job(scope,
+          text: "blocking",
+          queue_mode: :collect,
+          engine_hint: "slow",
+          meta: %{notify_pid: self(), delay_ms: 200}
+        )
 
-      collect_job = make_job(scope, text: "collect", queue_mode: :collect,
-        meta: %{notify_pid: self()})
-      interrupt_job = make_job(scope, text: "interrupt", queue_mode: :interrupt,
-        meta: %{notify_pid: self()})
+      collect_job =
+        make_job(scope, text: "collect", queue_mode: :collect, meta: %{notify_pid: self()})
+
+      interrupt_job =
+        make_job(scope, text: "interrupt", queue_mode: :interrupt, meta: %{notify_pid: self()})
 
       LemonGateway.submit(blocking_job)
       Process.sleep(50)
@@ -625,8 +784,8 @@ defmodule LemonGateway.ThreadWorkerTest do
       scope = make_scope()
 
       # Just submit an interrupt job without any running job
-      interrupt_job = make_job(scope, text: "interrupt", queue_mode: :interrupt,
-        meta: %{notify_pid: self()})
+      interrupt_job =
+        make_job(scope, text: "interrupt", queue_mode: :interrupt, meta: %{notify_pid: self()})
 
       LemonGateway.submit(interrupt_job)
 
@@ -677,7 +836,13 @@ defmodule LemonGateway.ThreadWorkerTest do
       state = make_worker_state()
 
       collect = %Job{scope: make_scope(), user_msg_id: 1, text: "collect", queue_mode: :collect}
-      followup = %Job{scope: make_scope(), user_msg_id: 2, text: "followup", queue_mode: :followup}
+
+      followup = %Job{
+        scope: make_scope(),
+        user_msg_id: 2,
+        text: "followup",
+        queue_mode: :followup
+      }
 
       state = enqueue_by_mode(collect, state)
       state = enqueue_by_mode(followup, state)
@@ -702,7 +867,8 @@ defmodule LemonGateway.ThreadWorkerTest do
     test "steer without active run converts to followup and may merge" do
       Application.put_env(:lemon_gateway, :followup_debounce_ms, 5000)
 
-      state = make_worker_state()  # current_run is nil
+      # current_run is nil
+      state = make_worker_state()
 
       steer1 = %Job{scope: make_scope(), user_msg_id: 1, text: "s1", queue_mode: :steer}
       steer2 = %Job{scope: make_scope(), user_msg_id: 2, text: "s2", queue_mode: :steer}
@@ -725,11 +891,16 @@ defmodule LemonGateway.ThreadWorkerTest do
     test "cancel is sent with :interrupted reason for interrupt mode" do
       scope = make_scope()
 
-      running_job = make_job(scope, text: "running", queue_mode: :collect, engine_hint: "cancellable",
-        meta: %{notify_pid: self(), cancel_notify_pid: self()})
+      running_job =
+        make_job(scope,
+          text: "running",
+          queue_mode: :collect,
+          engine_hint: "cancellable",
+          meta: %{notify_pid: self(), cancel_notify_pid: self()}
+        )
 
-      interrupt_job = make_job(scope, text: "interrupt", queue_mode: :interrupt,
-        meta: %{notify_pid: self()})
+      interrupt_job =
+        make_job(scope, text: "interrupt", queue_mode: :interrupt, meta: %{notify_pid: self()})
 
       LemonGateway.submit(running_job)
       Process.sleep(50)
@@ -779,9 +950,10 @@ defmodule LemonGateway.ThreadWorkerTest do
     test "worker continues when more jobs arrive before idle" do
       scope = make_scope()
 
-      jobs = for i <- 1..3 do
-        make_job(scope, text: "job#{i}", meta: %{notify_pid: self()})
-      end
+      jobs =
+        for i <- 1..3 do
+          make_job(scope, text: "job#{i}", meta: %{notify_pid: self()})
+        end
 
       # Submit all jobs
       Enum.each(jobs, &LemonGateway.submit/1)
@@ -813,10 +985,19 @@ defmodule LemonGateway.ThreadWorkerTest do
       scope1 = make_scope()
       scope2 = make_scope()
 
-      job1 = make_job(scope1, text: "scope1", engine_hint: "slow",
-        meta: %{notify_pid: self(), delay_ms: 100})
-      job2 = make_job(scope2, text: "scope2", engine_hint: "slow",
-        meta: %{notify_pid: self(), delay_ms: 100})
+      job1 =
+        make_job(scope1,
+          text: "scope1",
+          engine_hint: "slow",
+          meta: %{notify_pid: self(), delay_ms: 100}
+        )
+
+      job2 =
+        make_job(scope2,
+          text: "scope2",
+          engine_hint: "slow",
+          meta: %{notify_pid: self(), delay_ms: 100}
+        )
 
       t1 = System.monotonic_time(:millisecond)
       LemonGateway.submit(job1)
@@ -887,9 +1068,10 @@ defmodule LemonGateway.ThreadWorkerTest do
       scope = make_scope()
 
       # Submit all jobs at once
-      jobs = for i <- 1..5 do
-        make_job(scope, text: "job#{i}", meta: %{notify_pid: self()})
-      end
+      jobs =
+        for i <- 1..5 do
+          make_job(scope, text: "job#{i}", meta: %{notify_pid: self()})
+        end
 
       Enum.each(jobs, &LemonGateway.submit/1)
 
@@ -1045,7 +1227,12 @@ defmodule LemonGateway.ThreadWorkerTest do
     end
 
     test "queue with only :collect job returns :no_merge" do
-      queue = :queue.in(%Job{scope: make_scope(), user_msg_id: 1, text: "collect", queue_mode: :collect}, :queue.new())
+      queue =
+        :queue.in(
+          %Job{scope: make_scope(), user_msg_id: 1, text: "collect", queue_mode: :collect},
+          :queue.new()
+        )
+
       job = %Job{scope: make_scope(), user_msg_id: 2, text: "new", queue_mode: :followup}
 
       result = merge_with_last_followup(queue, job)
@@ -1054,7 +1241,12 @@ defmodule LemonGateway.ThreadWorkerTest do
     end
 
     test "queue with only :interrupt job returns :no_merge" do
-      queue = :queue.in(%Job{scope: make_scope(), user_msg_id: 1, text: "interrupt", queue_mode: :interrupt}, :queue.new())
+      queue =
+        :queue.in(
+          %Job{scope: make_scope(), user_msg_id: 1, text: "interrupt", queue_mode: :interrupt},
+          :queue.new()
+        )
+
       job = %Job{scope: make_scope(), user_msg_id: 2, text: "new", queue_mode: :followup}
 
       result = merge_with_last_followup(queue, job)
@@ -1080,7 +1272,12 @@ defmodule LemonGateway.ThreadWorkerTest do
     end
 
     test "merges when last job is :followup" do
-      queue = :queue.in(%Job{scope: make_scope(), user_msg_id: 1, text: "first", queue_mode: :followup}, :queue.new())
+      queue =
+        :queue.in(
+          %Job{scope: make_scope(), user_msg_id: 1, text: "first", queue_mode: :followup},
+          :queue.new()
+        )
+
       job = %Job{scope: make_scope(), user_msg_id: 2, text: "second", queue_mode: :followup}
 
       {:merged, new_queue} = merge_with_last_followup(queue, job)
@@ -1115,12 +1312,18 @@ defmodule LemonGateway.ThreadWorkerTest do
       assert merged.resume == resume
       assert merged.engine_hint == "echo"
       assert merged.meta == %{notify_pid: self()}
-      assert merged.user_msg_id == 1  # First job's message ID preserved
+      # First job's message ID preserved
+      assert merged.user_msg_id == 1
       assert merged.scope == scope
     end
 
     test "merges with empty text in first job" do
-      queue = :queue.in(%Job{scope: make_scope(), user_msg_id: 1, text: "", queue_mode: :followup}, :queue.new())
+      queue =
+        :queue.in(
+          %Job{scope: make_scope(), user_msg_id: 1, text: "", queue_mode: :followup},
+          :queue.new()
+        )
+
       job = %Job{scope: make_scope(), user_msg_id: 2, text: "content", queue_mode: :followup}
 
       {:merged, new_queue} = merge_with_last_followup(queue, job)
@@ -1130,7 +1333,12 @@ defmodule LemonGateway.ThreadWorkerTest do
     end
 
     test "merges with empty text in second job" do
-      queue = :queue.in(%Job{scope: make_scope(), user_msg_id: 1, text: "content", queue_mode: :followup}, :queue.new())
+      queue =
+        :queue.in(
+          %Job{scope: make_scope(), user_msg_id: 1, text: "content", queue_mode: :followup},
+          :queue.new()
+        )
+
       job = %Job{scope: make_scope(), user_msg_id: 2, text: "", queue_mode: :followup}
 
       {:merged, new_queue} = merge_with_last_followup(queue, job)
@@ -1140,10 +1348,12 @@ defmodule LemonGateway.ThreadWorkerTest do
     end
 
     test "merges with multiline text in both jobs" do
-      queue = :queue.in(
-        %Job{scope: make_scope(), user_msg_id: 1, text: "line1\nline2", queue_mode: :followup},
-        :queue.new()
-      )
+      queue =
+        :queue.in(
+          %Job{scope: make_scope(), user_msg_id: 1, text: "line1\nline2", queue_mode: :followup},
+          :queue.new()
+        )
+
       job = %Job{scope: make_scope(), user_msg_id: 2, text: "line3\nline4", queue_mode: :followup}
 
       {:merged, new_queue} = merge_with_last_followup(queue, job)
@@ -1186,7 +1396,13 @@ defmodule LemonGateway.ThreadWorkerTest do
       state = make_worker_state()
 
       collect = %Job{scope: make_scope(), user_msg_id: 1, text: "collect", queue_mode: :collect}
-      followup = %Job{scope: make_scope(), user_msg_id: 2, text: "followup", queue_mode: :followup}
+
+      followup = %Job{
+        scope: make_scope(),
+        user_msg_id: 2,
+        text: "followup",
+        queue_mode: :followup
+      }
 
       state = enqueue_by_mode(collect, state)
       state = enqueue_by_mode(followup, state)
@@ -1202,7 +1418,13 @@ defmodule LemonGateway.ThreadWorkerTest do
 
       state = make_worker_state()
 
-      followup = %Job{scope: make_scope(), user_msg_id: 1, text: "followup", queue_mode: :followup}
+      followup = %Job{
+        scope: make_scope(),
+        user_msg_id: 1,
+        text: "followup",
+        queue_mode: :followup
+      }
+
       collect = %Job{scope: make_scope(), user_msg_id: 2, text: "collect", queue_mode: :collect}
 
       state = enqueue_by_mode(followup, state)
@@ -1217,11 +1439,24 @@ defmodule LemonGateway.ThreadWorkerTest do
     test "interrupt followed by followup: interrupt at front, followup at back" do
       state = make_worker_state()
 
-      interrupt = %Job{scope: make_scope(), user_msg_id: 1, text: "interrupt", queue_mode: :interrupt}
-      followup = %Job{scope: make_scope(), user_msg_id: 2, text: "followup", queue_mode: :followup}
+      interrupt = %Job{
+        scope: make_scope(),
+        user_msg_id: 1,
+        text: "interrupt",
+        queue_mode: :interrupt
+      }
 
-      state = enqueue_by_mode(followup, state)  # Add followup first
-      state = enqueue_by_mode(interrupt, state)  # Interrupt goes to front
+      followup = %Job{
+        scope: make_scope(),
+        user_msg_id: 2,
+        text: "followup",
+        queue_mode: :followup
+      }
+
+      # Add followup first
+      state = enqueue_by_mode(followup, state)
+      # Interrupt goes to front
+      state = enqueue_by_mode(interrupt, state)
 
       jobs = :queue.to_list(state.jobs)
       assert length(jobs) == 2
@@ -1323,10 +1558,17 @@ defmodule LemonGateway.ThreadWorkerTest do
     test "steer with no run followed by followup: both merge" do
       Application.put_env(:lemon_gateway, :followup_debounce_ms, 5000)
 
-      state = make_worker_state()  # current_run is nil
+      # current_run is nil
+      state = make_worker_state()
 
       steer = %Job{scope: make_scope(), user_msg_id: 1, text: "steer msg", queue_mode: :steer}
-      followup = %Job{scope: make_scope(), user_msg_id: 2, text: "followup msg", queue_mode: :followup}
+
+      followup = %Job{
+        scope: make_scope(),
+        user_msg_id: 2,
+        text: "followup msg",
+        queue_mode: :followup
+      }
 
       state = enqueue_by_mode(steer, state)
       state = enqueue_by_mode(followup, state)
@@ -1343,7 +1585,13 @@ defmodule LemonGateway.ThreadWorkerTest do
 
       state = make_worker_state()
 
-      followup = %Job{scope: make_scope(), user_msg_id: 1, text: "followup", queue_mode: :followup}
+      followup = %Job{
+        scope: make_scope(),
+        user_msg_id: 1,
+        text: "followup",
+        queue_mode: :followup
+      }
+
       steer = %Job{scope: make_scope(), user_msg_id: 2, text: "steer", queue_mode: :steer}
 
       state = enqueue_by_mode(followup, state)
@@ -1397,11 +1645,23 @@ defmodule LemonGateway.ThreadWorkerTest do
       state = make_worker_state()
 
       # Add an existing followup
-      followup = %Job{scope: make_scope(), user_msg_id: 1, text: "existing", queue_mode: :followup}
+      followup = %Job{
+        scope: make_scope(),
+        user_msg_id: 1,
+        text: "existing",
+        queue_mode: :followup
+      }
+
       state = enqueue_by_mode(followup, state)
 
       # Simulate a steer job that was rejected and re-enqueued as followup
-      rejected_steer = %Job{scope: make_scope(), user_msg_id: 2, text: "rejected steer", queue_mode: :steer}
+      rejected_steer = %Job{
+        scope: make_scope(),
+        user_msg_id: 2,
+        text: "rejected steer",
+        queue_mode: :steer
+      }
+
       followup_job = %{rejected_steer | queue_mode: :followup}
       state = enqueue_by_mode(followup_job, state)
 
@@ -1429,7 +1689,8 @@ defmodule LemonGateway.ThreadWorkerTest do
         %Job{scope: make_scope(), user_msg_id: 3, text: "f2", queue_mode: :followup},
         %Job{scope: make_scope(), user_msg_id: 4, text: "int1", queue_mode: :interrupt},
         %Job{scope: make_scope(), user_msg_id: 5, text: "c2", queue_mode: :collect},
-        %Job{scope: make_scope(), user_msg_id: 6, text: "s1", queue_mode: :steer},  # Will convert to followup
+        # Will convert to followup
+        %Job{scope: make_scope(), user_msg_id: 6, text: "s1", queue_mode: :steer},
         %Job{scope: make_scope(), user_msg_id: 7, text: "f3", queue_mode: :followup},
         %Job{scope: make_scope(), user_msg_id: 8, text: "int2", queue_mode: :interrupt}
       ]
@@ -1556,8 +1817,13 @@ defmodule LemonGateway.ThreadWorkerTest do
       thread_key = {:scope, scope}
 
       # Use slow engine to keep worker busy
-      job1 = make_job(scope, text: "slow1", engine_hint: "slow",
-        meta: %{notify_pid: self(), delay_ms: 100})
+      job1 =
+        make_job(scope,
+          text: "slow1",
+          engine_hint: "slow",
+          meta: %{notify_pid: self(), delay_ms: 100}
+        )
+
       job2 = make_job(scope, text: "fast", meta: %{notify_pid: self()})
 
       LemonGateway.submit(job1)
@@ -1611,9 +1877,10 @@ defmodule LemonGateway.ThreadWorkerTest do
       thread_key = {:scope, scope}
 
       # Submit burst of jobs
-      jobs = for i <- 1..5 do
-        make_job(scope, text: "burst#{i}", meta: %{notify_pid: self()})
-      end
+      jobs =
+        for i <- 1..5 do
+          make_job(scope, text: "burst#{i}", meta: %{notify_pid: self()})
+        end
 
       Enum.each(jobs, &LemonGateway.submit/1)
 
@@ -1636,12 +1903,18 @@ defmodule LemonGateway.ThreadWorkerTest do
       scopes = for i <- 1..3, do: make_scope(1000 + i)
 
       # Submit slow jobs to each scope
-      jobs = for scope <- scopes do
-        job = make_job(scope, text: "concurrent", engine_hint: "slow",
-          meta: %{notify_pid: self(), delay_ms: 100})
-        LemonGateway.submit(job)
-        job
-      end
+      jobs =
+        for scope <- scopes do
+          job =
+            make_job(scope,
+              text: "concurrent",
+              engine_hint: "slow",
+              meta: %{notify_pid: self(), delay_ms: 100}
+            )
+
+          LemonGateway.submit(job)
+          job
+        end
 
       t_start = System.monotonic_time(:millisecond)
 
@@ -1660,12 +1933,18 @@ defmodule LemonGateway.ThreadWorkerTest do
       scope = make_scope()
 
       # Submit multiple slow jobs to same scope
-      jobs = for i <- 1..3 do
-        job = make_job(scope, text: "serial#{i}", engine_hint: "slow",
-          meta: %{notify_pid: self(), delay_ms: 50})
-        LemonGateway.submit(job)
-        job
-      end
+      jobs =
+        for i <- 1..3 do
+          job =
+            make_job(scope,
+              text: "serial#{i}",
+              engine_hint: "slow",
+              meta: %{notify_pid: self(), delay_ms: 50}
+            )
+
+          LemonGateway.submit(job)
+          job
+        end
 
       t_start = System.monotonic_time(:millisecond)
 
@@ -1685,13 +1964,14 @@ defmodule LemonGateway.ThreadWorkerTest do
       test_pid = self()
 
       # Spawn multiple processes to submit concurrently
-      tasks = for i <- 1..10 do
-        Task.async(fn ->
-          job = make_job(scope, text: "concurrent#{i}", meta: %{notify_pid: test_pid})
-          LemonGateway.submit(job)
-          job
-        end)
-      end
+      tasks =
+        for i <- 1..10 do
+          Task.async(fn ->
+            job = make_job(scope, text: "concurrent#{i}", meta: %{notify_pid: test_pid})
+            LemonGateway.submit(job)
+            job
+          end)
+        end
 
       _jobs = Task.await_many(tasks, 5000)
 
@@ -1706,15 +1986,22 @@ defmodule LemonGateway.ThreadWorkerTest do
       Application.put_env(:lemon_gateway, :followup_debounce_ms, 5000)
 
       # Start a blocking job
-      blocking = make_job(scope, text: "blocking", engine_hint: "slow",
-        meta: %{notify_pid: self(), delay_ms: 300})
+      blocking =
+        make_job(scope,
+          text: "blocking",
+          engine_hint: "slow",
+          meta: %{notify_pid: self(), delay_ms: 300}
+        )
+
       LemonGateway.submit(blocking)
       Process.sleep(50)
 
       # Submit followups and an interrupt concurrently
       followup1 = make_job(scope, text: "f1", queue_mode: :followup, meta: %{notify_pid: self()})
       followup2 = make_job(scope, text: "f2", queue_mode: :followup, meta: %{notify_pid: self()})
-      interrupt = make_job(scope, text: "int", queue_mode: :interrupt, meta: %{notify_pid: self()})
+
+      interrupt =
+        make_job(scope, text: "int", queue_mode: :interrupt, meta: %{notify_pid: self()})
 
       LemonGateway.submit(followup1)
       LemonGateway.submit(followup2)
@@ -1732,8 +2019,13 @@ defmodule LemonGateway.ThreadWorkerTest do
       scope = make_scope()
 
       # Submit via cast (async)
-      job1 = make_job(scope, text: "async", engine_hint: "slow",
-        meta: %{notify_pid: self(), delay_ms: 100})
+      job1 =
+        make_job(scope,
+          text: "async",
+          engine_hint: "slow",
+          meta: %{notify_pid: self(), delay_ms: 100}
+        )
+
       LemonGateway.submit(job1)
 
       # Small delay to ensure processing starts
@@ -1744,8 +2036,10 @@ defmodule LemonGateway.ThreadWorkerTest do
 
       # This should not hang - worker should handle the call
       thread_key = {:scope, scope}
+
       case LemonGateway.ThreadRegistry.whereis(thread_key) do
-        nil -> :ok  # Worker may have finished
+        # Worker may have finished
+        nil -> :ok
         pid -> GenServer.call(pid, {:enqueue, job2}, 5000)
       end
 
@@ -1758,11 +2052,12 @@ defmodule LemonGateway.ThreadWorkerTest do
       scopes = for i <- 1..5, do: make_scope(2000 + i)
 
       # Submit jobs in interleaved pattern
-      jobs = for _ <- 1..3, scope <- scopes do
-        job = make_job(scope, text: "interleaved", meta: %{notify_pid: self()})
-        LemonGateway.submit(job)
-        job
-      end
+      jobs =
+        for _ <- 1..3, scope <- scopes do
+          job = make_job(scope, text: "interleaved", meta: %{notify_pid: self()})
+          LemonGateway.submit(job)
+          job
+        end
 
       # All 15 jobs should complete without errors
       for job <- jobs do
@@ -1786,7 +2081,8 @@ defmodule LemonGateway.ThreadWorkerTest do
         job = make_job(scope, text: "job#{i}", meta: %{notify_pid: self()})
         LemonGateway.submit(job)
         assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2000
-        Process.sleep(50)  # Allow cleanup
+        # Allow cleanup
+        Process.sleep(50)
       end
 
       # If slots weren't released, this would hang
@@ -1801,8 +2097,13 @@ defmodule LemonGateway.ThreadWorkerTest do
       scope = make_scope()
 
       # Submit two jobs in quick succession
-      job1 = make_job(scope, text: "first", engine_hint: "slow",
-        meta: %{notify_pid: self(), delay_ms: 100})
+      job1 =
+        make_job(scope,
+          text: "first",
+          engine_hint: "slow",
+          meta: %{notify_pid: self(), delay_ms: 100}
+        )
+
       job2 = make_job(scope, text: "second", meta: %{notify_pid: self()})
 
       LemonGateway.submit(job1)
@@ -1839,8 +2140,13 @@ defmodule LemonGateway.ThreadWorkerTest do
       scope = make_scope()
 
       # Start a normal job
-      job = make_job(scope, text: "normal", engine_hint: "slow",
-        meta: %{notify_pid: self(), delay_ms: 100})
+      job =
+        make_job(scope,
+          text: "normal",
+          engine_hint: "slow",
+          meta: %{notify_pid: self(), delay_ms: 100}
+        )
+
       LemonGateway.submit(job)
 
       # Spawn and kill an unrelated process - worker should ignore its DOWN

@@ -7,7 +7,7 @@ defmodule LemonGateway.Application do
 
   @impl true
   def start(_type, _args) do
-    base_children = [
+    children = [
       LemonGateway.Config,
       LemonGateway.EngineRegistry,
       LemonGateway.TransportRegistry,
@@ -17,36 +17,15 @@ defmodule LemonGateway.Application do
       LemonGateway.RunSupervisor,
       LemonGateway.ThreadWorkerSupervisor,
       LemonGateway.Scheduler,
-      LemonGateway.Store
+      LemonGateway.Store,
+      # Start lemon_channels *after* LemonGateway.Config is running. If lemon_channels can't
+      # be started for any reason, fall back to the legacy TransportSupervisor.
+      LemonGateway.ChannelBootstrap
     ]
-
-    # Only start legacy TransportSupervisor if lemon_channels is NOT active
-    # to avoid duplicate ingestion from both systems
-    children =
-      if lemon_channels_active?() do
-        base_children
-      else
-        base_children ++ [{LemonGateway.TransportSupervisor, []}]
-      end
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: LemonGateway.Supervisor]
     Supervisor.start_link(children, opts)
-  end
-
-  # Check if lemon_channels application is running and has adapters enabled
-  defp lemon_channels_active? do
-    # Check if the lemon_channels application is started
-    case Application.ensure_started(:lemon_channels) do
-      :ok -> true
-      {:error, {:already_started, :lemon_channels}} -> true
-      _ ->
-        # Also check if it's in the started applications
-        :lemon_channels in Enum.map(Application.started_applications(), fn {app, _, _} -> app end)
-    end
-  rescue
-    # If lemon_channels doesn't exist, fall back to legacy
-    _ -> false
   end
 end

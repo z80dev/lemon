@@ -88,6 +88,7 @@ defmodule CodingAgent.Tools.TodoReadTest do
         %{"id" => "1", "content" => "Task 1", "status" => "pending", "priority" => "high"},
         %{"id" => "2", "content" => "Task 2", "status" => "completed", "priority" => "low"}
       ]
+
       TodoStore.put(session_id, todos)
 
       result = TodoRead.execute("call_1", %{}, nil, nil, session_id)
@@ -101,24 +102,42 @@ defmodule CodingAgent.Tools.TodoReadTest do
     test "returns todos with all statuses", %{session_id: session_id} do
       todos = [
         %{"id" => "1", "content" => "Pending task", "status" => "pending", "priority" => "high"},
-        %{"id" => "2", "content" => "In progress task", "status" => "in_progress", "priority" => "medium"},
-        %{"id" => "3", "content" => "Completed task", "status" => "completed", "priority" => "low"}
+        %{
+          "id" => "2",
+          "content" => "In progress task",
+          "status" => "in_progress",
+          "priority" => "medium"
+        },
+        %{
+          "id" => "3",
+          "content" => "Completed task",
+          "status" => "completed",
+          "priority" => "low"
+        }
       ]
+
       TodoStore.put(session_id, todos)
 
       result = TodoRead.execute("call_1", %{}, nil, nil, session_id)
 
       assert %AgentToolResult{details: details} = result
       assert details.todos == todos
-      assert details.title == "2 todos"  # 2 non-completed
+      # 2 non-completed
+      assert details.title == "2 todos"
     end
 
     test "returns todos with all priorities", %{session_id: session_id} do
       todos = [
         %{"id" => "1", "content" => "High priority", "status" => "pending", "priority" => "high"},
-        %{"id" => "2", "content" => "Medium priority", "status" => "pending", "priority" => "medium"},
+        %{
+          "id" => "2",
+          "content" => "Medium priority",
+          "status" => "pending",
+          "priority" => "medium"
+        },
         %{"id" => "3", "content" => "Low priority", "status" => "pending", "priority" => "low"}
       ]
+
       TodoStore.put(session_id, todos)
 
       result = TodoRead.execute("call_1", %{}, nil, nil, session_id)
@@ -134,8 +153,13 @@ defmodule CodingAgent.Tools.TodoReadTest do
       session1 = "session-1-#{:erlang.unique_integer([:positive])}"
       session2 = "session-2-#{:erlang.unique_integer([:positive])}"
 
-      todos1 = [%{"id" => "1", "content" => "Session 1 task", "status" => "pending", "priority" => "high"}]
-      todos2 = [%{"id" => "2", "content" => "Session 2 task", "status" => "pending", "priority" => "low"}]
+      todos1 = [
+        %{"id" => "1", "content" => "Session 1 task", "status" => "pending", "priority" => "high"}
+      ]
+
+      todos2 = [
+        %{"id" => "2", "content" => "Session 2 task", "status" => "pending", "priority" => "low"}
+      ]
 
       TodoStore.put(session1, todos1)
       TodoStore.put(session2, todos2)
@@ -151,8 +175,13 @@ defmodule CodingAgent.Tools.TodoReadTest do
     end
 
     test "returns most recent todos after updates", %{session_id: session_id} do
-      original_todos = [%{"id" => "1", "content" => "Original", "status" => "pending", "priority" => "high"}]
-      updated_todos = [%{"id" => "2", "content" => "Updated", "status" => "completed", "priority" => "low"}]
+      original_todos = [
+        %{"id" => "1", "content" => "Original", "status" => "pending", "priority" => "high"}
+      ]
+
+      updated_todos = [
+        %{"id" => "2", "content" => "Updated", "status" => "completed", "priority" => "low"}
+      ]
 
       TodoStore.put(session_id, original_todos)
       TodoStore.put(session_id, updated_todos)
@@ -174,6 +203,7 @@ defmodule CodingAgent.Tools.TodoReadTest do
           "due_date" => "2024-12-31"
         }
       ]
+
       TodoStore.put(session_id, todos)
 
       result = TodoRead.execute("call_1", %{}, nil, nil, session_id)
@@ -232,7 +262,10 @@ defmodule CodingAgent.Tools.TodoReadTest do
       old_session = "old-session-#{:erlang.unique_integer([:positive])}"
       new_session = "new-session-#{:erlang.unique_integer([:positive])}"
 
-      TodoStore.put(old_session, [%{"id" => "1", "content" => "Old task", "status" => "pending", "priority" => "high"}])
+      TodoStore.put(old_session, [
+        %{"id" => "1", "content" => "Old task", "status" => "pending", "priority" => "high"}
+      ])
+
       TodoStore.clear()
 
       result = TodoRead.execute("call_1", %{}, nil, nil, new_session)
@@ -301,8 +334,13 @@ defmodule CodingAgent.Tools.TodoReadTest do
       lower_session = "mysession"
       upper_session = "MYSESSION"
 
-      lower_todos = [%{"id" => "1", "content" => "Lower task", "status" => "pending", "priority" => "high"}]
-      upper_todos = [%{"id" => "2", "content" => "Upper task", "status" => "pending", "priority" => "low"}]
+      lower_todos = [
+        %{"id" => "1", "content" => "Lower task", "status" => "pending", "priority" => "high"}
+      ]
+
+      upper_todos = [
+        %{"id" => "2", "content" => "Upper task", "status" => "pending", "priority" => "low"}
+      ]
 
       TodoStore.put(lower_session, lower_todos)
       TodoStore.put(upper_session, upper_todos)
@@ -329,10 +367,16 @@ defmodule CodingAgent.Tools.TodoReadTest do
 
     test "encodes todos with unicode content", %{session_id: session_id} do
       todos = [
-        %{"id" => "1", "content" => "Task with unicode: ", "status" => "pending", "priority" => "high"},
+        %{
+          "id" => "1",
+          "content" => "Task with unicode: ",
+          "status" => "pending",
+          "priority" => "high"
+        },
         %{"id" => "2", "content" => "Chinese: ", "status" => "pending", "priority" => "medium"},
         %{"id" => "3", "content" => "Arabic: ", "status" => "pending", "priority" => "low"}
       ]
+
       TodoStore.put(session_id, todos)
 
       result = TodoRead.execute("call_1", %{}, nil, nil, session_id)
@@ -352,6 +396,7 @@ defmodule CodingAgent.Tools.TodoReadTest do
           "priority" => "high"
         }
       ]
+
       TodoStore.put(session_id, todos)
 
       result = TodoRead.execute("call_1", %{}, nil, nil, session_id)
@@ -373,6 +418,7 @@ defmodule CodingAgent.Tools.TodoReadTest do
           "priority" => "high"
         }
       ]
+
       TodoStore.put(session_id, todos)
 
       result = TodoRead.execute("call_1", %{}, nil, nil, session_id)
@@ -396,6 +442,7 @@ defmodule CodingAgent.Tools.TodoReadTest do
           }
         }
       ]
+
       TodoStore.put(session_id, todos)
 
       result = TodoRead.execute("call_1", %{}, nil, nil, session_id)
@@ -409,6 +456,7 @@ defmodule CodingAgent.Tools.TodoReadTest do
       todos = [
         %{"id" => "1", "content" => "Task", "status" => "pending", "priority" => "high"}
       ]
+
       TodoStore.put(session_id, todos)
 
       result = TodoRead.execute("call_1", %{}, nil, nil, session_id)
@@ -428,6 +476,7 @@ defmodule CodingAgent.Tools.TodoReadTest do
           "optional_field" => nil
         }
       ]
+
       TodoStore.put(session_id, todos)
 
       result = TodoRead.execute("call_1", %{}, nil, nil, session_id)
@@ -447,6 +496,7 @@ defmodule CodingAgent.Tools.TodoReadTest do
           "score" => 3.14
         }
       ]
+
       TodoStore.put(session_id, todos)
 
       result = TodoRead.execute("call_1", %{}, nil, nil, session_id)
@@ -467,6 +517,7 @@ defmodule CodingAgent.Tools.TodoReadTest do
           "is_archived" => false
         }
       ]
+
       TodoStore.put(session_id, todos)
 
       result = TodoRead.execute("call_1", %{}, nil, nil, session_id)
@@ -543,7 +594,8 @@ defmodule CodingAgent.Tools.TodoReadTest do
       TodoStore.put(session_id, todos)
 
       # Extra params should be ignored
-      result = TodoRead.execute("call_1", %{"extra" => "param", "another" => 123}, nil, nil, session_id)
+      result =
+        TodoRead.execute("call_1", %{"extra" => "param", "another" => 123}, nil, nil, session_id)
 
       assert %AgentToolResult{details: %{todos: ^todos}} = result
     end
@@ -572,6 +624,7 @@ defmodule CodingAgent.Tools.TodoReadTest do
         %{"id" => "1", "content" => "Task 1", "status" => "pending", "priority" => "high"},
         %{"id" => "2", "content" => "Task 2", "status" => "completed", "priority" => "low"}
       ]
+
       TodoStore.put(session_id, todos)
 
       result = TodoRead.execute("call_1", %{}, nil, nil, session_id)
@@ -639,6 +692,7 @@ defmodule CodingAgent.Tools.TodoReadTest do
         %{"id" => "1", "content" => "Pending 1", "status" => "pending", "priority" => "high"},
         %{"id" => "2", "content" => "Pending 2", "status" => "pending", "priority" => "low"}
       ]
+
       TodoStore.put(session_id, todos)
 
       result = TodoRead.execute("call_1", %{}, nil, nil, session_id)
@@ -648,8 +702,14 @@ defmodule CodingAgent.Tools.TodoReadTest do
 
     test "counts in_progress todos as open", %{session_id: session_id} do
       todos = [
-        %{"id" => "1", "content" => "In progress", "status" => "in_progress", "priority" => "high"}
+        %{
+          "id" => "1",
+          "content" => "In progress",
+          "status" => "in_progress",
+          "priority" => "high"
+        }
       ]
+
       TodoStore.put(session_id, todos)
 
       result = TodoRead.execute("call_1", %{}, nil, nil, session_id)
@@ -661,8 +721,14 @@ defmodule CodingAgent.Tools.TodoReadTest do
       todos = [
         %{"id" => "1", "content" => "Pending", "status" => "pending", "priority" => "high"},
         %{"id" => "2", "content" => "Completed 1", "status" => "completed", "priority" => "low"},
-        %{"id" => "3", "content" => "Completed 2", "status" => "completed", "priority" => "medium"}
+        %{
+          "id" => "3",
+          "content" => "Completed 2",
+          "status" => "completed",
+          "priority" => "medium"
+        }
       ]
+
       TodoStore.put(session_id, todos)
 
       result = TodoRead.execute("call_1", %{}, nil, nil, session_id)
@@ -675,6 +741,7 @@ defmodule CodingAgent.Tools.TodoReadTest do
         %{"id" => "1", "content" => "Done 1", "status" => "completed", "priority" => "high"},
         %{"id" => "2", "content" => "Done 2", "status" => "completed", "priority" => "low"}
       ]
+
       TodoStore.put(session_id, todos)
 
       result = TodoRead.execute("call_1", %{}, nil, nil, session_id)
@@ -685,9 +752,15 @@ defmodule CodingAgent.Tools.TodoReadTest do
     test "mixed statuses are counted correctly", %{session_id: session_id} do
       todos = [
         %{"id" => "1", "content" => "Pending", "status" => "pending", "priority" => "high"},
-        %{"id" => "2", "content" => "In progress", "status" => "in_progress", "priority" => "medium"},
+        %{
+          "id" => "2",
+          "content" => "In progress",
+          "status" => "in_progress",
+          "priority" => "medium"
+        },
         %{"id" => "3", "content" => "Completed", "status" => "completed", "priority" => "low"}
       ]
+
       TodoStore.put(session_id, todos)
 
       result = TodoRead.execute("call_1", %{}, nil, nil, session_id)
@@ -719,14 +792,17 @@ defmodule CodingAgent.Tools.TodoReadTest do
 
       assert %AgentToolResult{details: details} = result
       assert length(details.todos) == 1000
-      assert details.title == "500 todos"  # 500 pending (odd numbers)
+      # 500 pending (odd numbers)
+      assert details.title == "500 todos"
     end
 
     test "handles todos with very long content", %{session_id: session_id} do
       long_content = String.duplicate("x", 10_000)
+
       todos = [
         %{"id" => "1", "content" => long_content, "status" => "pending", "priority" => "high"}
       ]
+
       TodoStore.put(session_id, todos)
 
       result = TodoRead.execute("call_1", %{}, nil, nil, session_id)
@@ -747,7 +823,10 @@ defmodule CodingAgent.Tools.TodoReadTest do
     end
 
     test "handles todos without optional fields", %{session_id: session_id} do
-      todos = [%{"id" => "1", "content" => "Minimal todo", "status" => "pending", "priority" => "high"}]
+      todos = [
+        %{"id" => "1", "content" => "Minimal todo", "status" => "pending", "priority" => "high"}
+      ]
+
       TodoStore.put(session_id, todos)
 
       result = TodoRead.execute("call_1", %{}, nil, nil, session_id)
@@ -809,6 +888,7 @@ defmodule CodingAgent.Tools.TodoReadTest do
         %{"id" => "2", "content" => "Task 2", "status" => "pending", "priority" => "low"},
         %{"id" => "3", "content" => "Task 3", "status" => "pending", "priority" => "medium"}
       ]
+
       TodoStore.put(session_id, todos)
 
       result = TodoRead.execute("call_1", %{}, nil, nil, session_id)

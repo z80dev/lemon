@@ -89,12 +89,14 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
     {load_errors, loaded_at} = CodingAgent.Extensions.last_load_errors()
     tool_conflicts = CodingAgent.ToolRegistry.tool_conflict_report(cwd)
 
-    output = format_fallback_report(extensions, tool_conflicts, load_errors, loaded_at, include_details)
+    output =
+      format_fallback_report(extensions, tool_conflicts, load_errors, loaded_at, include_details)
 
     %AgentToolResult{
       content: [%TextContent{text: output}],
       details: %{
-        title: format_fallback_title(extensions, tool_conflicts, load_errors, "no session context"),
+        title:
+          format_fallback_title(extensions, tool_conflicts, load_errors, "no session context"),
         extensions: extensions,
         tool_conflicts: tool_conflicts,
         load_errors: load_errors,
@@ -116,12 +118,20 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
         {load_errors, loaded_at} = CodingAgent.Extensions.last_load_errors()
         tool_conflicts = CodingAgent.ToolRegistry.tool_conflict_report(cwd)
 
-        output = format_fallback_report(extensions, tool_conflicts, load_errors, loaded_at, include_details)
+        output =
+          format_fallback_report(
+            extensions,
+            tool_conflicts,
+            load_errors,
+            loaded_at,
+            include_details
+          )
 
         %AgentToolResult{
           content: [%TextContent{text: output}],
           details: %{
-            title: format_fallback_title(extensions, tool_conflicts, load_errors, "session not found"),
+            title:
+              format_fallback_title(extensions, tool_conflicts, load_errors, "session not found"),
             extensions: extensions,
             tool_conflicts: tool_conflicts,
             load_errors: load_errors,

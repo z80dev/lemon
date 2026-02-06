@@ -9,24 +9,28 @@ defmodule CodingAgent.Tools.WebFetchExtendedTest do
   describe "URL validation" do
     test "rejects non-HTTP URLs" do
       tool = WebFetch.tool("/tmp", [])
-      result = tool.execute.(
-        "test-id",
-        %{"url" => "ftp://example.com/file.txt", "format" => "text"},
-        nil,
-        nil
-      )
+
+      result =
+        tool.execute.(
+          "test-id",
+          %{"url" => "ftp://example.com/file.txt", "format" => "text"},
+          nil,
+          nil
+        )
 
       assert {:error, "URL must start with http:// or https://"} = result
     end
 
     test "rejects file:// URLs" do
       tool = WebFetch.tool("/tmp", [])
-      result = tool.execute.(
-        "test-id",
-        %{"url" => "file:///etc/passwd", "format" => "text"},
-        nil,
-        nil
-      )
+
+      result =
+        tool.execute.(
+          "test-id",
+          %{"url" => "file:///etc/passwd", "format" => "text"},
+          nil,
+          nil
+        )
 
       assert {:error, "URL must start with http:// or https://"} = result
     end

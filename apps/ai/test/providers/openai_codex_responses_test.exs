@@ -41,12 +41,19 @@ defmodule Ai.Providers.OpenAICodexResponsesTest do
     tool = %Tool{
       name: "lookup",
       description: "Lookup data",
-      parameters: %{"type" => "object", "properties" => %{"q" => %{"type" => "string"}}, "required" => ["q"]}
+      parameters: %{
+        "type" => "object",
+        "properties" => %{"q" => %{"type" => "string"}},
+        "required" => ["q"]
+      }
     }
 
-    context = Context.new(system_prompt: "System", messages: [%UserMessage{content: "Hi"}], tools: [tool])
+    context =
+      Context.new(system_prompt: "System", messages: [%UserMessage{content: "Hi"}], tools: [tool])
 
-    payload = Jason.encode!(%{"https://api.openai.com/auth" => %{"chatgpt_account_id" => "acc_test"}})
+    payload =
+      Jason.encode!(%{"https://api.openai.com/auth" => %{"chatgpt_account_id" => "acc_test"}})
+
     token = "x." <> Base.encode64(payload) <> ".y"
 
     opts =
@@ -81,7 +88,11 @@ defmodule Ai.Providers.OpenAICodexResponsesTest do
           "type" => "function",
           "name" => "lookup",
           "description" => "Lookup data",
-          "parameters" => %{"type" => "object", "properties" => %{"q" => %{"type" => "string"}}, "required" => ["q"]}
+          "parameters" => %{
+            "type" => "object",
+            "properties" => %{"q" => %{"type" => "string"}},
+            "required" => ["q"]
+          }
         }
       ],
       "reasoning" => %{"effort" => "low", "summary" => "concise"}

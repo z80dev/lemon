@@ -3,6 +3,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
 
   alias AgentCore.CliRunners.CodexRunner
   alias AgentCore.CliRunners.CodexRunner.RunnerState
+
   alias AgentCore.CliRunners.CodexSchema.{
     AgentMessageItem,
     CommandExecutionItem,
@@ -26,6 +27,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
     Usage,
     WebSearchItem
   }
+
   alias AgentCore.CliRunners.CodexSchema.ThreadError
   alias AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
 
@@ -64,6 +66,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
       {cmd, args} = CodexRunner.build_command("Hello", nil, state)
 
       assert cmd == "codex"
+
       assert args == [
                "-c",
                "notify=[]",
@@ -81,6 +84,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
       {cmd, args} = CodexRunner.build_command("Continue", token, state)
 
       assert cmd == "codex"
+
       assert args == [
                "-c",
                "notify=[]",
@@ -251,7 +255,12 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
     end
 
     test "translates TurnCompleted to CompletedEvent" do
-      state = %{RunnerState.new() | final_answer: "Done!", found_session: ResumeToken.new("codex", "thread_123")}
+      state = %{
+        RunnerState.new()
+        | final_answer: "Done!",
+          found_session: ResumeToken.new("codex", "thread_123")
+      }
+
       event = %TurnCompleted{usage: %Usage{input_tokens: 100, output_tokens: 200}}
 
       {events, _new_state, opts} = CodexRunner.translate_event(event, state)
@@ -277,7 +286,12 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
     end
 
     test "translates TurnFailed to CompletedEvent with error" do
-      state = %{RunnerState.new() | final_answer: "partial", found_session: ResumeToken.new("codex", "t_1")}
+      state = %{
+        RunnerState.new()
+        | final_answer: "partial",
+          found_session: ResumeToken.new("codex", "t_1")
+      }
+
       event = %TurnFailed{error: %ThreadError{message: "API rate limit exceeded"}}
 
       {events, _new_state, opts} = CodexRunner.translate_event(event, state)
@@ -292,7 +306,10 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
 
     test "preserves cached_input_tokens in usage" do
       state = %{RunnerState.new() | found_session: ResumeToken.new("codex", "t_1")}
-      event = %TurnCompleted{usage: %Usage{input_tokens: 100, cached_input_tokens: 50, output_tokens: 200}}
+
+      event = %TurnCompleted{
+        usage: %Usage{input_tokens: 100, cached_input_tokens: 50, output_tokens: 200}
+      }
 
       {[completed], _new_state, _opts} = CodexRunner.translate_event(event, state)
 
@@ -415,7 +432,14 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
 
     test "translates command execution declined" do
       state = RunnerState.new()
-      item = %CommandExecutionItem{id: "cmd_1", command: "rm -rf /", exit_code: nil, status: :declined}
+
+      item = %CommandExecutionItem{
+        id: "cmd_1",
+        command: "rm -rf /",
+        exit_code: nil,
+        status: :declined
+      }
+
       event = %ItemCompleted{item: item}
 
       {events, _new_state, _opts} = CodexRunner.translate_event(event, state)
@@ -428,7 +452,13 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
     test "relativizes long commands with home directory" do
       state = RunnerState.new()
       home = System.user_home() || "/home/user"
-      item = %CommandExecutionItem{id: "cmd_1", command: "cat #{home}/very/long/path/to/file.txt", status: :in_progress}
+
+      item = %CommandExecutionItem{
+        id: "cmd_1",
+        command: "cat #{home}/very/long/path/to/file.txt",
+        status: :in_progress
+      }
+
       event = %ItemStarted{item: item}
 
       {[action], _new_state, _opts} = CodexRunner.translate_event(event, state)
@@ -505,11 +535,13 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
   describe "translate_event/2 - file change items" do
     test "translates file change completed with single file" do
       state = RunnerState.new()
+
       item = %FileChangeItem{
         id: "fc_1",
         changes: [%FileUpdateChange{path: "foo.ex", kind: :add}],
         status: :completed
       }
+
       event = %ItemCompleted{item: item}
 
       {events, _new_state, _opts} = CodexRunner.translate_event(event, state)
@@ -522,6 +554,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
 
     test "translates file change completed with multiple files" do
       state = RunnerState.new()
+
       item = %FileChangeItem{
         id: "fc_1",
         changes: [
@@ -530,6 +563,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
         ],
         status: :completed
       }
+
       event = %ItemCompleted{item: item}
 
       {events, _new_state, _opts} = CodexRunner.translate_event(event, state)
@@ -571,6 +605,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
 
     test "normalizes change list in detail" do
       state = RunnerState.new()
+
       item = %FileChangeItem{
         id: "fc_1",
         changes: [
@@ -579,6 +614,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
         ],
         status: :completed
       }
+
       event = %ItemCompleted{item: item}
 
       {[action], _new_state, _opts} = CodexRunner.translate_event(event, state)
@@ -592,11 +628,13 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
 
     test "marks failed file changes as not ok" do
       state = RunnerState.new()
+
       item = %FileChangeItem{
         id: "fc_1",
         changes: [%FileUpdateChange{path: "foo.ex", kind: :add}],
         status: :failed
       }
+
       event = %ItemCompleted{item: item}
 
       {[action], _new_state, _opts} = CodexRunner.translate_event(event, state)
@@ -612,6 +650,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
   describe "translate_event/2 - mcp tool call items" do
     test "translates mcp tool call started" do
       state = RunnerState.new()
+
       item = %McpToolCallItem{
         id: "t_1",
         server: "filesystem",
@@ -619,6 +658,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
         arguments: %{"path" => "foo.ex"},
         status: :in_progress
       }
+
       event = %ItemStarted{item: item}
 
       {events, _new_state, _opts} = CodexRunner.translate_event(event, state)
@@ -632,6 +672,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
 
     test "translates mcp tool call with empty server" do
       state = RunnerState.new()
+
       item = %McpToolCallItem{
         id: "t_1",
         server: "",
@@ -639,6 +680,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
         arguments: %{},
         status: :in_progress
       }
+
       event = %ItemStarted{item: item}
 
       {[action], _new_state, _opts} = CodexRunner.translate_event(event, state)
@@ -648,6 +690,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
 
     test "translates mcp tool call with nil server" do
       state = RunnerState.new()
+
       item = %McpToolCallItem{
         id: "t_1",
         server: nil,
@@ -655,6 +698,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
         arguments: %{},
         status: :in_progress
       }
+
       event = %ItemStarted{item: item}
 
       {[action], _new_state, _opts} = CodexRunner.translate_event(event, state)
@@ -664,6 +708,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
 
     test "translates mcp tool call completed with success" do
       state = RunnerState.new()
+
       item = %McpToolCallItem{
         id: "t_1",
         server: "fs",
@@ -672,6 +717,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
         result: %McpToolCallItemResult{content: [%{"type" => "text", "text" => "file contents"}]},
         status: :completed
       }
+
       event = %ItemCompleted{item: item}
 
       {[action], _new_state, _opts} = CodexRunner.translate_event(event, state)
@@ -682,6 +728,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
 
     test "translates mcp tool call completed with error" do
       state = RunnerState.new()
+
       item = %McpToolCallItem{
         id: "t_1",
         server: "fs",
@@ -690,6 +737,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
         error: %McpToolCallItemError{message: "File not found"},
         status: :failed
       }
+
       event = %ItemCompleted{item: item}
 
       {[action], _new_state, _opts} = CodexRunner.translate_event(event, state)
@@ -701,6 +749,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
     test "truncates long result summaries" do
       state = RunnerState.new()
       long_text = String.duplicate("x", 500)
+
       item = %McpToolCallItem{
         id: "t_1",
         server: "fs",
@@ -709,6 +758,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
         result: %McpToolCallItemResult{content: [%{"type" => "text", "text" => long_text}]},
         status: :completed
       }
+
       event = %ItemCompleted{item: item}
 
       {[action], _new_state, _opts} = CodexRunner.translate_event(event, state)
@@ -764,6 +814,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
   describe "translate_event/2 - todo list items" do
     test "translates todo list with mixed completion status" do
       state = RunnerState.new()
+
       item = %TodoListItem{
         id: "todo_1",
         items: [
@@ -772,6 +823,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
           %TodoItem{text: "Task 3", completed: true}
         ]
       }
+
       event = %ItemCompleted{item: item}
 
       {events, _new_state, _opts} = CodexRunner.translate_event(event, state)
@@ -794,10 +846,12 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
 
     test "translates todo list started" do
       state = RunnerState.new()
+
       item = %TodoListItem{
         id: "todo_1",
         items: [%TodoItem{text: "Task 1", completed: false}]
       }
+
       event = %ItemStarted{item: item}
 
       {[action], _new_state, _opts} = CodexRunner.translate_event(event, state)
@@ -808,10 +862,12 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
 
     test "translates todo list updated" do
       state = RunnerState.new()
+
       item = %TodoListItem{
         id: "todo_1",
         items: [%TodoItem{text: "Task 1", completed: true}]
       }
+
       event = %ItemUpdated{item: item}
 
       {[action], _new_state, _opts} = CodexRunner.translate_event(event, state)
@@ -922,7 +978,11 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
 
   describe "handle_exit_error/2" do
     test "returns note and completed error events" do
-      state = %{RunnerState.new() | final_answer: "partial", found_session: ResumeToken.new("codex", "t_1")}
+      state = %{
+        RunnerState.new()
+        | final_answer: "partial",
+          found_session: ResumeToken.new("codex", "t_1")
+      }
 
       {events, _new_state} = CodexRunner.handle_exit_error(1, state)
 
@@ -987,7 +1047,11 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
     end
 
     test "returns error when session found without turn completion" do
-      state = %{RunnerState.new() | final_answer: "Done", found_session: ResumeToken.new("codex", "t_1")}
+      state = %{
+        RunnerState.new()
+        | final_answer: "Done",
+          found_session: ResumeToken.new("codex", "t_1")
+      }
 
       {events, _new_state} = CodexRunner.handle_stream_end(state)
 
@@ -1139,14 +1203,17 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
   describe "GenServer lifecycle - start_link/1" do
     test "starts successfully with valid options" do
       # Mock script that outputs valid JSONL
-      script = ~s|echo '{"type":"thread.started","thread_id":"test_thread_123"}'; echo '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":5}}'|
+      script =
+        ~s|echo '{"type":"thread.started","thread_id":"test_thread_123"}'; echo '{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":5}}'|
+
       Application.put_env(:agent_core, :mock_codex_script, script)
 
-      {:ok, pid} = MockCodexRunner.start_link(
-        prompt: "test",
-        cwd: System.tmp_dir!(),
-        timeout: 10_000
-      )
+      {:ok, pid} =
+        MockCodexRunner.start_link(
+          prompt: "test",
+          cwd: System.tmp_dir!(),
+          timeout: 10_000
+        )
 
       assert Process.alive?(pid)
 
@@ -1167,8 +1234,12 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
 
       # Check that it fails or we receive an exit message
       case result do
-        {:error, _} -> :ok
-        :ignore -> :ok
+        {:error, _} ->
+          :ok
+
+        :ignore ->
+          :ok
+
         {:ok, _pid} ->
           # Should receive an exit message
           assert_receive {:EXIT, _, _}, 1_000
@@ -1178,14 +1249,17 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
 
   describe "GenServer lifecycle - terminate" do
     test "cleans up resources on normal termination" do
-      script = ~s|echo '{"type":"thread.started","thread_id":"cleanup_test"}'; echo '{"type":"turn.completed","usage":{}}'|
+      script =
+        ~s|echo '{"type":"thread.started","thread_id":"cleanup_test"}'; echo '{"type":"turn.completed","usage":{}}'|
+
       Application.put_env(:agent_core, :mock_codex_script, script)
 
-      {:ok, pid} = MockCodexRunner.start_link(
-        prompt: "test",
-        cwd: System.tmp_dir!(),
-        timeout: 5_000
-      )
+      {:ok, pid} =
+        MockCodexRunner.start_link(
+          prompt: "test",
+          cwd: System.tmp_dir!(),
+          timeout: 5_000
+        )
 
       ref = Process.monitor(pid)
       stream = MockCodexRunner.stream(pid)
@@ -1204,14 +1278,17 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
 
   describe "process management - subprocess spawning" do
     test "spawns subprocess and monitors it" do
-      script = ~s|sleep 0.2; echo '{"type":"thread.started","thread_id":"spawn_test"}'; echo '{"type":"turn.completed","usage":{}}'|
+      script =
+        ~s|sleep 0.2; echo '{"type":"thread.started","thread_id":"spawn_test"}'; echo '{"type":"turn.completed","usage":{}}'|
+
       Application.put_env(:agent_core, :mock_codex_script, script)
 
-      {:ok, pid} = MockCodexRunner.start_link(
-        prompt: "test",
-        cwd: System.tmp_dir!(),
-        timeout: 10_000
-      )
+      {:ok, pid} =
+        MockCodexRunner.start_link(
+          prompt: "test",
+          cwd: System.tmp_dir!(),
+          timeout: 10_000
+        )
 
       # Process should be alive during execution
       assert Process.alive?(pid)
@@ -1224,11 +1301,12 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
       script = ~s|echo '{"type":"thread.started","thread_id":"error_exit"}'; exit 1|
       Application.put_env(:agent_core, :mock_codex_script, script)
 
-      {:ok, pid} = MockCodexRunner.start_link(
-        prompt: "test",
-        cwd: System.tmp_dir!(),
-        timeout: 5_000
-      )
+      {:ok, pid} =
+        MockCodexRunner.start_link(
+          prompt: "test",
+          cwd: System.tmp_dir!(),
+          timeout: 5_000
+        )
 
       stream = MockCodexRunner.stream(pid)
       events = AgentCore.EventStream.events(stream) |> Enum.to_list()
@@ -1249,18 +1327,20 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
       Application.put_env(:agent_core, :mock_codex_script, script)
 
       # Spawn an owner process that will die
-      owner = spawn(fn ->
-        receive do
-          :die -> :ok
-        end
-      end)
+      owner =
+        spawn(fn ->
+          receive do
+            :die -> :ok
+          end
+        end)
 
-      {:ok, pid} = MockCodexRunner.start_link(
-        prompt: "test",
-        cwd: System.tmp_dir!(),
-        owner: owner,
-        timeout: 10_000
-      )
+      {:ok, pid} =
+        MockCodexRunner.start_link(
+          prompt: "test",
+          cwd: System.tmp_dir!(),
+          owner: owner,
+          timeout: 10_000
+        )
 
       ref = Process.monitor(pid)
 
@@ -1286,13 +1366,15 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
       echo '{"type":"item.completed","item":{"type":"agent_message","id":"msg_1","text":"Task completed"}}'
       echo '{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":50}}'
       """
+
       Application.put_env(:agent_core, :mock_codex_script, script)
 
-      {:ok, pid} = MockCodexRunner.start_link(
-        prompt: "test",
-        cwd: System.tmp_dir!(),
-        timeout: 10_000
-      )
+      {:ok, pid} =
+        MockCodexRunner.start_link(
+          prompt: "test",
+          cwd: System.tmp_dir!(),
+          timeout: 10_000
+        )
 
       stream = MockCodexRunner.stream(pid)
       events = AgentCore.EventStream.events(stream) |> Enum.to_list()
@@ -1322,13 +1404,15 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
       echo 'this is not valid json'
       echo '{"type":"turn.completed","usage":{}}'
       """
+
       Application.put_env(:agent_core, :mock_codex_script, script)
 
-      {:ok, pid} = MockCodexRunner.start_link(
-        prompt: "test",
-        cwd: System.tmp_dir!(),
-        timeout: 10_000
-      )
+      {:ok, pid} =
+        MockCodexRunner.start_link(
+          prompt: "test",
+          cwd: System.tmp_dir!(),
+          timeout: 10_000
+        )
 
       stream = MockCodexRunner.stream(pid)
       events = AgentCore.EventStream.events(stream) |> Enum.to_list()
@@ -1341,10 +1425,12 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
       assert completed.ok == true
 
       # Should have warning about invalid line
-      warnings = Enum.filter(cli_events, fn
-        %ActionEvent{action: %{kind: :warning}} -> true
-        _ -> false
-      end)
+      warnings =
+        Enum.filter(cli_events, fn
+          %ActionEvent{action: %{kind: :warning}} -> true
+          _ -> false
+        end)
+
       assert length(warnings) >= 1
     end
   end
@@ -1357,15 +1443,18 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
     test "cancel stops running subprocess" do
       Application.put_env(:agent_core, :cli_cancel_grace_ms, 500)
 
-      script = ~s|trap 'exit 0' TERM; echo '{"type":"thread.started","thread_id":"cancel_test"}'; while true; do sleep 0.1; done|
+      script =
+        ~s|trap 'exit 0' TERM; echo '{"type":"thread.started","thread_id":"cancel_test"}'; while true; do sleep 0.1; done|
+
       Application.put_env(:agent_core, :mock_codex_script, script)
 
-      {:ok, pid} = MockCodexRunner.start_link(
-        prompt: "test",
-        cwd: System.tmp_dir!(),
-        owner: self(),
-        timeout: 30_000
-      )
+      {:ok, pid} =
+        MockCodexRunner.start_link(
+          prompt: "test",
+          cwd: System.tmp_dir!(),
+          owner: self(),
+          timeout: 30_000
+        )
 
       stream = MockCodexRunner.stream(pid)
       ref = Process.monitor(pid)
@@ -1381,9 +1470,9 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
 
       # Should have cancel event
       assert Enum.any?(events, fn
-        {:canceled, :test_cancel} -> true
-        _ -> false
-      end)
+               {:canceled, :test_cancel} -> true
+               _ -> false
+             end)
 
       # Runner should terminate
       assert_receive {:DOWN, ^ref, :process, ^pid, _}, 5_000
@@ -1396,14 +1485,18 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
 
   describe "error conditions - timeout" do
     test "times out long-running subprocess" do
-      script = ~s|trap 'exit 0' TERM; echo '{"type":"thread.started","thread_id":"timeout_test"}'; sleep 60|
+      script =
+        ~s|trap 'exit 0' TERM; echo '{"type":"thread.started","thread_id":"timeout_test"}'; sleep 60|
+
       Application.put_env(:agent_core, :mock_codex_script, script)
 
-      {:ok, pid} = MockCodexRunner.start_link(
-        prompt: "test",
-        cwd: System.tmp_dir!(),
-        timeout: 500  # Very short timeout
-      )
+      {:ok, pid} =
+        MockCodexRunner.start_link(
+          prompt: "test",
+          cwd: System.tmp_dir!(),
+          # Very short timeout
+          timeout: 500
+        )
 
       stream = MockCodexRunner.stream(pid)
       ref = Process.monitor(pid)
@@ -1412,10 +1505,10 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
 
       # Should have timeout error (can be {:error, :timeout} or {:error, :timeout, nil})
       assert Enum.any?(events, fn
-        {:error, :timeout} -> true
-        {:error, :timeout, _} -> true
-        _ -> false
-      end)
+               {:error, :timeout} -> true
+               {:error, :timeout, _} -> true
+               _ -> false
+             end)
 
       # Process should terminate
       assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 5_000
@@ -1428,14 +1521,17 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
 
   describe "resume token extraction" do
     test "extracts thread_id from ThreadStarted event" do
-      script = ~s|echo '{"type":"thread.started","thread_id":"extracted_thread_abc123"}'; echo '{"type":"turn.completed","usage":{}}'|
+      script =
+        ~s|echo '{"type":"thread.started","thread_id":"extracted_thread_abc123"}'; echo '{"type":"turn.completed","usage":{}}'|
+
       Application.put_env(:agent_core, :mock_codex_script, script)
 
-      {:ok, pid} = MockCodexRunner.start_link(
-        prompt: "test",
-        cwd: System.tmp_dir!(),
-        timeout: 10_000
-      )
+      {:ok, pid} =
+        MockCodexRunner.start_link(
+          prompt: "test",
+          cwd: System.tmp_dir!(),
+          timeout: 10_000
+        )
 
       stream = MockCodexRunner.stream(pid)
       events = AgentCore.EventStream.events(stream) |> Enum.to_list()
@@ -1455,14 +1551,17 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
     end
 
     test "resume token is preserved through error exit" do
-      script = ~s|echo '{"type":"thread.started","thread_id":"preserved_on_error"}'; echo '{"type":"turn.started"}'; exit 1|
+      script =
+        ~s|echo '{"type":"thread.started","thread_id":"preserved_on_error"}'; echo '{"type":"turn.started"}'; exit 1|
+
       Application.put_env(:agent_core, :mock_codex_script, script)
 
-      {:ok, pid} = MockCodexRunner.start_link(
-        prompt: "test",
-        cwd: System.tmp_dir!(),
-        timeout: 10_000
-      )
+      {:ok, pid} =
+        MockCodexRunner.start_link(
+          prompt: "test",
+          cwd: System.tmp_dir!(),
+          timeout: 10_000
+        )
 
       stream = MockCodexRunner.stream(pid)
       events = AgentCore.EventStream.events(stream) |> Enum.to_list()
@@ -1489,29 +1588,34 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
 
       # Use a unique session ID that matches what the script will output
       unique_id = "locked_session_#{System.unique_integer([:positive])}"
-      script = ~s|trap 'exit 0' TERM; echo '{"type":"thread.started","thread_id":"#{unique_id}"}'; sleep 5; echo '{"type":"turn.completed","usage":{}}'|
+
+      script =
+        ~s|trap 'exit 0' TERM; echo '{"type":"thread.started","thread_id":"#{unique_id}"}'; sleep 5; echo '{"type":"turn.completed","usage":{}}'|
+
       Application.put_env(:agent_core, :mock_codex_script, script)
 
       token = ResumeToken.new("codex", unique_id)
 
       # Start first runner with resume token
-      {:ok, pid1} = MockCodexRunner.start_link(
-        prompt: "test",
-        resume: token,
-        cwd: System.tmp_dir!(),
-        timeout: 10_000
-      )
+      {:ok, pid1} =
+        MockCodexRunner.start_link(
+          prompt: "test",
+          resume: token,
+          cwd: System.tmp_dir!(),
+          timeout: 10_000
+        )
 
       # Give it time to acquire lock
       Process.sleep(100)
 
       # Try to start second runner with same session - should fail
-      result = MockCodexRunner.start_link(
-        prompt: "test",
-        resume: token,
-        cwd: System.tmp_dir!(),
-        timeout: 10_000
-      )
+      result =
+        MockCodexRunner.start_link(
+          prompt: "test",
+          resume: token,
+          cwd: System.tmp_dir!(),
+          timeout: 10_000
+        )
 
       assert {:error, {:error, :session_locked}} = result
 

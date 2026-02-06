@@ -213,7 +213,9 @@ defmodule Ai.Providers.OpenAIResponsesTest do
     System.delete_env("PI_CACHE_RETENTION")
 
     on_exit(fn ->
-      if prev_retention, do: System.put_env("PI_CACHE_RETENTION", prev_retention), else: System.delete_env("PI_CACHE_RETENTION")
+      if prev_retention,
+        do: System.put_env("PI_CACHE_RETENTION", prev_retention),
+        else: System.delete_env("PI_CACHE_RETENTION")
     end)
 
     Req.Test.stub(__MODULE__, fn conn ->
@@ -234,10 +236,15 @@ defmodule Ai.Providers.OpenAIResponsesTest do
     tool = %Ai.Types.Tool{
       name: "lookup",
       description: "Lookup data",
-      parameters: %{"type" => "object", "properties" => %{"q" => %{"type" => "string"}}, "required" => ["q"]}
+      parameters: %{
+        "type" => "object",
+        "properties" => %{"q" => %{"type" => "string"}},
+        "required" => ["q"]
+      }
     }
 
-    context = Context.new(system_prompt: "System", messages: [%UserMessage{content: "Hi"}], tools: [tool])
+    context =
+      Context.new(system_prompt: "System", messages: [%UserMessage{content: "Hi"}], tools: [tool])
 
     opts =
       %StreamOptions{
@@ -269,7 +276,11 @@ defmodule Ai.Providers.OpenAIResponsesTest do
           "type" => "function",
           "name" => "lookup",
           "description" => "Lookup data",
-          "parameters" => %{"type" => "object", "properties" => %{"q" => %{"type" => "string"}}, "required" => ["q"]},
+          "parameters" => %{
+            "type" => "object",
+            "properties" => %{"q" => %{"type" => "string"}},
+            "required" => ["q"]
+          },
           "strict" => false
         }
       ],
@@ -304,11 +315,15 @@ defmodule Ai.Providers.OpenAIResponsesTest do
     System.delete_env("OPENAI_API_KEY")
 
     on_exit(fn ->
-      if prev_key, do: System.put_env("OPENAI_API_KEY", prev_key), else: System.delete_env("OPENAI_API_KEY")
+      if prev_key,
+        do: System.put_env("OPENAI_API_KEY", prev_key),
+        else: System.delete_env("OPENAI_API_KEY")
     end)
 
     {:ok, stream} = OpenAIResponses.stream(model, context, %StreamOptions{api_key: nil})
-    assert {:error, %Ai.Types.AssistantMessage{stop_reason: :error}} = EventStream.result(stream, 1000)
+
+    assert {:error, %Ai.Types.AssistantMessage{stop_reason: :error}} =
+             EventStream.result(stream, 1000)
 
     refute_received {:request_called, _}
   end

@@ -1,0 +1,59 @@
+#!/bin/bash
+#
+# lemon-gateway - Launch LemonGateway (e.g. for Telegram) from source.
+#
+# Usage:
+#   ./bin/lemon-gateway [--debug]
+#
+# Reads configuration from:
+#   ~/.lemon/config.toml
+#   <project>/.lemon/config.toml (if you run from a project directory)
+#
+set -e
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+LEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+export LEMON_PATH="$LEMON_ROOT"
+
+DEBUG=""
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --debug)
+      DEBUG="1"
+      shift
+      ;;
+    --help|-h)
+      echo "Usage: ./bin/lemon-gateway [--debug]"
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      echo "Usage: ./bin/lemon-gateway [--debug]" >&2
+      exit 1
+      ;;
+  esac
+done
+
+cd "$LEMON_ROOT"
+
+if [[ -n "$DEBUG" ]]; then
+  export LEMON_DEBUG=1
+fi
+
+mix deps.get
+mix compile
+
+echo "[lemon-gateway] Starting LemonGateway (Ctrl-C to stop)..."
+# Note: approvals are implemented via LemonRouter.ApprovalsBridge, so for Telegram
+# "daily assistant" usage we start lemon_router as well.
+# `--no-start` is important in umbrella projects: it prevents Mix from starting every
+# OTP application in the umbrella (e.g. the control plane on :4040) implicitly.
+exec mix run --no-start --no-halt -e 'Application.ensure_all_started(:lemon_gateway); Application.ensure_all_started(:lemon_router)'

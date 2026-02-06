@@ -9,7 +9,7 @@ defmodule LemonGateway.EngineLock do
   end
 
   @spec acquire(thread_key(), non_neg_integer()) ::
-          {:ok, (()-> :ok)} | {:error, :timeout}
+          {:ok, (-> :ok)} | {:error, :timeout}
   def acquire(thread_key, timeout_ms \\ 60_000) do
     GenServer.call(__MODULE__, {:acquire, thread_key, timeout_ms}, timeout_ms + 1_000)
   end
@@ -29,7 +29,15 @@ defmodule LemonGateway.EngineLock do
       _locked ->
         timer_ref = Process.send_after(self(), {:lock_timeout, thread_key, from}, timeout_ms)
         waiter = %{from: from, pid: pid, timer_ref: timer_ref}
-        waiters = Map.update(state.waiters, thread_key, :queue.from_list([waiter]), &:queue.in(waiter, &1))
+
+        waiters =
+          Map.update(
+            state.waiters,
+            thread_key,
+            :queue.from_list([waiter]),
+            &:queue.in(waiter, &1)
+          )
+
         {:noreply, %{state | waiters: waiters}}
     end
   end
@@ -59,7 +67,11 @@ defmodule LemonGateway.EngineLock do
           GenServer.reply(from, {:error, :timeout})
         end
 
-        waiters = if :queue.is_empty(queue), do: Map.delete(state.waiters, thread_key), else: Map.put(state.waiters, thread_key, queue)
+        waiters =
+          if :queue.is_empty(queue),
+            do: Map.delete(state.waiters, thread_key),
+            else: Map.put(state.waiters, thread_key, queue)
+
         {:noreply, %{state | waiters: waiters}}
     end
   end
@@ -97,7 +109,11 @@ defmodule LemonGateway.EngineLock do
         {state, release_fun} = grant_lock(%{state | locks: locks}, thread_key, waiter.pid)
         GenServer.reply(waiter.from, {:ok, release_fun})
 
-        waiters = if :queue.is_empty(queue), do: Map.delete(state.waiters, thread_key), else: Map.put(state.waiters, thread_key, queue)
+        waiters =
+          if :queue.is_empty(queue),
+            do: Map.delete(state.waiters, thread_key),
+            else: Map.put(state.waiters, thread_key, queue)
+
         %{state | waiters: waiters}
     end
   end

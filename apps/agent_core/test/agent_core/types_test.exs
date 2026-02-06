@@ -246,6 +246,7 @@ defmodule AgentCore.TypesTest do
         updated2
         | pending_tool_calls: MapSet.delete(updated2.pending_tool_calls, "call_1")
       }
+
       assert MapSet.size(updated3.pending_tool_calls) == 1
       assert MapSet.member?(updated3.pending_tool_calls, "call_2")
     end

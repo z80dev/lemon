@@ -75,7 +75,10 @@ defmodule AgentCore.TelemetryTest do
   # ============================================================================
 
   describe "telemetry event name consistency" do
-    test "all loop telemetry events use [:agent_core, :loop, *] prefix", %{handler_id: handler_id, collector: collector} do
+    test "all loop telemetry events use [:agent_core, :loop, *] prefix", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       # Attach to all possible loop events
       loop_events = [
         [:agent_core, :loop, :start],
@@ -95,12 +98,16 @@ defmodule AgentCore.TelemetryTest do
 
       # Verify all collected events have the correct prefix
       assert length(telemetry_events) >= 2
+
       for {event_name, _measurements, _metadata} <- telemetry_events do
         assert [:agent_core, :loop | _rest] = event_name
       end
     end
 
-    test "all tool_task telemetry events use [:agent_core, :tool_task, *] prefix", %{handler_id: handler_id, collector: collector} do
+    test "all tool_task telemetry events use [:agent_core, :tool_task, *] prefix", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       tool_events = [
         [:agent_core, :tool_task, :start],
         [:agent_core, :tool_task, :end],
@@ -135,7 +142,10 @@ defmodule AgentCore.TelemetryTest do
   # ============================================================================
 
   describe "tool task telemetry" do
-    test "emits :start event when tool execution begins", %{handler_id: handler_id, collector: collector} do
+    test "emits :start event when tool execution begins", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       attach_telemetry([[:agent_core, :tool_task, :start]], handler_id, collector)
 
       echo_tool = Mocks.echo_tool()
@@ -153,9 +163,10 @@ defmodule AgentCore.TelemetryTest do
       detach_telemetry(handler_id)
 
       # Filter for this test's specific tool call (telemetry is global with async tests)
-      matching_events = Enum.filter(telemetry_events, fn {_name, _measurements, metadata} ->
-        metadata.tool_call_id == "call_start_test"
-      end)
+      matching_events =
+        Enum.filter(telemetry_events, fn {_name, _measurements, metadata} ->
+          metadata.tool_call_id == "call_start_test"
+        end)
 
       assert length(matching_events) >= 1
 
@@ -166,7 +177,10 @@ defmodule AgentCore.TelemetryTest do
       assert metadata.tool_call_id == "call_start_test"
     end
 
-    test "emits :end event when tool execution completes", %{handler_id: handler_id, collector: collector} do
+    test "emits :end event when tool execution completes", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       attach_telemetry([[:agent_core, :tool_task, :end]], handler_id, collector)
 
       echo_tool = Mocks.echo_tool()
@@ -184,9 +198,10 @@ defmodule AgentCore.TelemetryTest do
       detach_telemetry(handler_id)
 
       # Filter for this test's specific tool call (telemetry is global with async tests)
-      matching_events = Enum.filter(telemetry_events, fn {_name, _measurements, metadata} ->
-        metadata.tool_call_id == "call_end_test"
-      end)
+      matching_events =
+        Enum.filter(telemetry_events, fn {_name, _measurements, metadata} ->
+          metadata.tool_call_id == "call_end_test"
+        end)
 
       assert length(matching_events) >= 1
 
@@ -198,13 +213,18 @@ defmodule AgentCore.TelemetryTest do
       assert metadata.is_error == false
     end
 
-    test "emits :end event with is_error=true when tool returns error", %{handler_id: handler_id, collector: collector} do
+    test "emits :end event with is_error=true when tool returns error", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       attach_telemetry([[:agent_core, :tool_task, :end]], handler_id, collector)
 
       error_tool = Mocks.error_tool()
       context = simple_context(tools: [error_tool])
 
-      tool_call = Mocks.tool_call("error_tool", %{"message" => "test error"}, id: "call_error_test")
+      tool_call =
+        Mocks.tool_call("error_tool", %{"message" => "test error"}, id: "call_error_test")
+
       tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
       final_response = Mocks.assistant_message("Handled error")
 
@@ -216,9 +236,10 @@ defmodule AgentCore.TelemetryTest do
       detach_telemetry(handler_id)
 
       # Filter for this test's specific tool call (telemetry is global with async tests)
-      matching_events = Enum.filter(telemetry_events, fn {_name, _measurements, metadata} ->
-        metadata.tool_call_id == "call_error_test"
-      end)
+      matching_events =
+        Enum.filter(telemetry_events, fn {_name, _measurements, metadata} ->
+          metadata.tool_call_id == "call_error_test"
+        end)
 
       assert length(matching_events) >= 1
 
@@ -228,7 +249,10 @@ defmodule AgentCore.TelemetryTest do
       assert metadata.is_error == true
     end
 
-    test "emits :end with is_error=true when tool raises exception", %{handler_id: handler_id, collector: collector} do
+    test "emits :end with is_error=true when tool raises exception", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       # Note: Tool exceptions are caught and returned as error results,
       # so they emit :end with is_error=true, not :error
       # The :error event is only emitted when the task process itself crashes
@@ -258,9 +282,10 @@ defmodule AgentCore.TelemetryTest do
       detach_telemetry(handler_id)
 
       # The crash is caught and returned as error result via :end event
-      end_events = Enum.filter(telemetry_events, fn {name, _, meta} ->
-        name == [:agent_core, :tool_task, :end] and meta.tool_call_id == "call_crash_test"
-      end)
+      end_events =
+        Enum.filter(telemetry_events, fn {name, _, meta} ->
+          name == [:agent_core, :tool_task, :end] and meta.tool_call_id == "call_crash_test"
+        end)
 
       # Should have :end event with is_error=true
       assert length(end_events) >= 1
@@ -272,11 +297,18 @@ defmodule AgentCore.TelemetryTest do
       assert metadata.is_error == true
     end
 
-    test "emits telemetry for multiple parallel tool calls", %{handler_id: handler_id, collector: collector} do
-      attach_telemetry([
-        [:agent_core, :tool_task, :start],
-        [:agent_core, :tool_task, :end]
-      ], handler_id, collector)
+    test "emits telemetry for multiple parallel tool calls", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
+      attach_telemetry(
+        [
+          [:agent_core, :tool_task, :start],
+          [:agent_core, :tool_task, :end]
+        ],
+        handler_id,
+        collector
+      )
 
       add_tool = Mocks.add_tool()
       context = simple_context(tools: [add_tool])
@@ -293,15 +325,17 @@ defmodule AgentCore.TelemetryTest do
       telemetry_events = get_events(collector)
       detach_telemetry(handler_id)
 
-      start_events = Enum.filter(telemetry_events, fn {name, _, meta} ->
-        name == [:agent_core, :tool_task, :start] and
-          meta.tool_call_id in ["call_parallel_1", "call_parallel_2"]
-      end)
+      start_events =
+        Enum.filter(telemetry_events, fn {name, _, meta} ->
+          name == [:agent_core, :tool_task, :start] and
+            meta.tool_call_id in ["call_parallel_1", "call_parallel_2"]
+        end)
 
-      end_events = Enum.filter(telemetry_events, fn {name, _, meta} ->
-        name == [:agent_core, :tool_task, :end] and
-          meta.tool_call_id in ["call_parallel_1", "call_parallel_2"]
-      end)
+      end_events =
+        Enum.filter(telemetry_events, fn {name, _, meta} ->
+          name == [:agent_core, :tool_task, :end] and
+            meta.tool_call_id in ["call_parallel_1", "call_parallel_2"]
+        end)
 
       assert length(start_events) == 2
       assert length(end_events) == 2
@@ -335,7 +369,10 @@ defmodule AgentCore.TelemetryTest do
       assert metadata.tool_count == 0
     end
 
-    test "emits :end event with duration when loop completes", %{handler_id: handler_id, collector: collector} do
+    test "emits :end event with duration when loop completes", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       attach_telemetry([[:agent_core, :loop, :end]], handler_id, collector)
 
       context = simple_context()
@@ -357,7 +394,10 @@ defmodule AgentCore.TelemetryTest do
       assert metadata.status == :completed
     end
 
-    test "loop :start event has correct metadata structure", %{handler_id: handler_id, collector: collector} do
+    test "loop :start event has correct metadata structure", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       attach_telemetry([[:agent_core, :loop, :start]], handler_id, collector)
 
       echo_tool = Mocks.echo_tool()
@@ -365,7 +405,9 @@ defmodule AgentCore.TelemetryTest do
       response = Mocks.assistant_message("Hello!")
       config = simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
 
-      _events = Loop.stream([user_message("Test1"), user_message("Test2")], context, config) |> Enum.to_list()
+      _events =
+        Loop.stream([user_message("Test1"), user_message("Test2")], context, config)
+        |> Enum.to_list()
 
       telemetry_events = get_events(collector)
       detach_telemetry(handler_id)
@@ -386,12 +428,18 @@ defmodule AgentCore.TelemetryTest do
       assert Map.has_key?(metadata, :model)
 
       # Verify correct counts
-      assert metadata.prompt_count == 2  # Two user messages
-      assert metadata.message_count == 0  # No prior messages in context
-      assert metadata.tool_count == 1    # One tool (echo_tool)
+      # Two user messages
+      assert metadata.prompt_count == 2
+      # No prior messages in context
+      assert metadata.message_count == 0
+      # One tool (echo_tool)
+      assert metadata.tool_count == 1
     end
 
-    test "loop :end event has duration measurement", %{handler_id: handler_id, collector: collector} do
+    test "loop :end event has duration measurement", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       attach_telemetry([[:agent_core, :loop, :end]], handler_id, collector)
 
       context = simple_context()
@@ -423,7 +471,10 @@ defmodule AgentCore.TelemetryTest do
       assert Map.has_key?(metadata, :model)
     end
 
-    test "loop :end event status reflects completion type", %{handler_id: handler_id, collector: collector} do
+    test "loop :end event status reflects completion type", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       attach_telemetry([[:agent_core, :loop, :end]], handler_id, collector)
 
       context = simple_context()
@@ -445,7 +496,10 @@ defmodule AgentCore.TelemetryTest do
   # ============================================================================
 
   describe "tool task telemetry measurements and metadata" do
-    test "tool_task :start has correct metadata fields", %{handler_id: handler_id, collector: collector} do
+    test "tool_task :start has correct metadata fields", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       attach_telemetry([[:agent_core, :tool_task, :start]], handler_id, collector)
 
       echo_tool = Mocks.echo_tool()
@@ -463,9 +517,10 @@ defmodule AgentCore.TelemetryTest do
       detach_telemetry(handler_id)
 
       # Filter for our specific tool call
-      matching = Enum.filter(telemetry_events, fn {_name, _m, meta} ->
-        meta.tool_call_id == "meta_test_start"
-      end)
+      matching =
+        Enum.filter(telemetry_events, fn {_name, _m, meta} ->
+          meta.tool_call_id == "meta_test_start"
+        end)
 
       assert length(matching) >= 1
 
@@ -501,9 +556,10 @@ defmodule AgentCore.TelemetryTest do
       detach_telemetry(handler_id)
 
       # Filter for our specific tool call
-      matching = Enum.filter(telemetry_events, fn {_name, _m, meta} ->
-        meta.tool_call_id == "meta_test_end"
-      end)
+      matching =
+        Enum.filter(telemetry_events, fn {_name, _m, meta} ->
+          meta.tool_call_id == "meta_test_end"
+        end)
 
       assert length(matching) >= 1
 
@@ -520,7 +576,10 @@ defmodule AgentCore.TelemetryTest do
       assert metadata.is_error == false
     end
 
-    test "tool_task :end with is_error=true when tool raises exception", %{handler_id: handler_id, collector: collector} do
+    test "tool_task :end with is_error=true when tool raises exception", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       # Note: Tool exceptions are caught inside the task and returned as error results
       # The :error telemetry is only for when the task process itself crashes (killed, etc.)
       attach_telemetry([[:agent_core, :tool_task, :end]], handler_id, collector)
@@ -550,9 +609,10 @@ defmodule AgentCore.TelemetryTest do
       detach_telemetry(handler_id)
 
       # The exception is caught and results in :end with is_error=true
-      end_events = Enum.filter(telemetry_events, fn {name, _m, meta} ->
-        name == [:agent_core, :tool_task, :end] and meta.tool_call_id == "crash_error_test"
-      end)
+      end_events =
+        Enum.filter(telemetry_events, fn {name, _m, meta} ->
+          name == [:agent_core, :tool_task, :end] and meta.tool_call_id == "crash_error_test"
+        end)
 
       assert length(end_events) >= 1
 
@@ -568,11 +628,18 @@ defmodule AgentCore.TelemetryTest do
   # ============================================================================
 
   describe "telemetry edge cases" do
-    test "telemetry events are emitted even for no tool calls", %{handler_id: handler_id, collector: collector} do
-      attach_telemetry([
-        [:agent_core, :loop, :start],
-        [:agent_core, :loop, :end]
-      ], handler_id, collector)
+    test "telemetry events are emitted even for no tool calls", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
+      attach_telemetry(
+        [
+          [:agent_core, :loop, :start],
+          [:agent_core, :loop, :end]
+        ],
+        handler_id,
+        collector
+      )
 
       context = simple_context()
       response = Mocks.assistant_message("Hello!")
@@ -583,23 +650,32 @@ defmodule AgentCore.TelemetryTest do
       telemetry_events = get_events(collector)
       detach_telemetry(handler_id)
 
-      start_events = Enum.filter(telemetry_events, fn {name, _, _} ->
-        name == [:agent_core, :loop, :start]
-      end)
+      start_events =
+        Enum.filter(telemetry_events, fn {name, _, _} ->
+          name == [:agent_core, :loop, :start]
+        end)
 
-      end_events = Enum.filter(telemetry_events, fn {name, _, _} ->
-        name == [:agent_core, :loop, :end]
-      end)
+      end_events =
+        Enum.filter(telemetry_events, fn {name, _, _} ->
+          name == [:agent_core, :loop, :end]
+        end)
 
       assert length(start_events) >= 1
       assert length(end_events) >= 1
     end
 
-    test "multiple sequential tool calls emit separate telemetry events", %{handler_id: handler_id, collector: collector} do
-      attach_telemetry([
-        [:agent_core, :tool_task, :start],
-        [:agent_core, :tool_task, :end]
-      ], handler_id, collector)
+    test "multiple sequential tool calls emit separate telemetry events", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
+      attach_telemetry(
+        [
+          [:agent_core, :tool_task, :start],
+          [:agent_core, :tool_task, :end]
+        ],
+        handler_id,
+        collector
+      )
 
       add_tool = Mocks.add_tool()
       context = simple_context(tools: [add_tool])
@@ -614,7 +690,10 @@ defmodule AgentCore.TelemetryTest do
 
       final_response = Mocks.assistant_message("Final result")
 
-      config = simple_config(stream_fn: Mocks.mock_stream_fn([tool_response1, tool_response2, final_response]))
+      config =
+        simple_config(
+          stream_fn: Mocks.mock_stream_fn([tool_response1, tool_response2, final_response])
+        )
 
       _events = Loop.stream([user_message("Test")], context, config) |> Enum.to_list()
 
@@ -622,15 +701,17 @@ defmodule AgentCore.TelemetryTest do
       detach_telemetry(handler_id)
 
       # Filter start events for our specific tool calls
-      start_events = Enum.filter(telemetry_events, fn {name, _m, meta} ->
-        name == [:agent_core, :tool_task, :start] and
-          meta.tool_call_id in ["sequential_1", "sequential_2"]
-      end)
+      start_events =
+        Enum.filter(telemetry_events, fn {name, _m, meta} ->
+          name == [:agent_core, :tool_task, :start] and
+            meta.tool_call_id in ["sequential_1", "sequential_2"]
+        end)
 
-      end_events = Enum.filter(telemetry_events, fn {name, _m, meta} ->
-        name == [:agent_core, :tool_task, :end] and
-          meta.tool_call_id in ["sequential_1", "sequential_2"]
-      end)
+      end_events =
+        Enum.filter(telemetry_events, fn {name, _m, meta} ->
+          name == [:agent_core, :tool_task, :end] and
+            meta.tool_call_id in ["sequential_1", "sequential_2"]
+        end)
 
       # Should have start and end for both tool calls
       assert length(start_events) == 2
@@ -647,7 +728,10 @@ defmodule AgentCore.TelemetryTest do
   # ============================================================================
 
   describe "telemetry handler management" do
-    test "multiple handlers can attach to same events", %{handler_id: handler_id, collector: collector} do
+    test "multiple handlers can attach to same events", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       # Create a second collector
       {:ok, collector2} = Agent.start_link(fn -> [] end)
       handler_id2 = :erlang.unique_integer()
@@ -677,7 +761,10 @@ defmodule AgentCore.TelemetryTest do
       assert hd(events1) == hd(events2)
     end
 
-    test "detaching handler stops receiving events", %{handler_id: handler_id, collector: collector} do
+    test "detaching handler stops receiving events", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
       attach_telemetry([[:agent_core, :loop, :start]], handler_id, collector)
 
       context = simple_context()

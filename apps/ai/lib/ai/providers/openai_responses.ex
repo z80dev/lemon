@@ -106,7 +106,8 @@ defmodule Ai.Providers.OpenAIResponses do
                      model,
                      %{
                        service_tier: parse_service_tier(opts),
-                       apply_service_tier_pricing: &OpenAIResponsesShared.apply_service_tier_pricing/2
+                       apply_service_tier_pricing:
+                         &OpenAIResponsesShared.apply_service_tier_pricing/2
                      }
                    ) do
                 {:ok, final_output} ->
@@ -150,7 +151,10 @@ defmodule Ai.Providers.OpenAIResponses do
 
     # Add optional parameters
     params = maybe_add_param(params, "prompt_cache_key", opts.session_id)
-    params = maybe_add_param(params, "prompt_cache_retention", get_cache_retention(model.base_url))
+
+    params =
+      maybe_add_param(params, "prompt_cache_retention", get_cache_retention(model.base_url))
+
     params = maybe_add_param(params, "max_output_tokens", opts.max_tokens)
     params = maybe_add_param(params, "temperature", opts.temperature)
     params = maybe_add_service_tier(params, opts)

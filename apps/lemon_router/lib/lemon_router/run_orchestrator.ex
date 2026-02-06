@@ -74,12 +74,13 @@ defmodule LemonRouter.RunOrchestrator do
     session_config = get_session_config(session_key)
 
     # Resolve base tool policy from agent/session/channel
-    base_tool_policy = Policy.resolve_for_run(%{
-      agent_id: agent_id,
-      session_key: session_key,
-      origin: origin,
-      channel_context: meta[:channel_context]
-    })
+    base_tool_policy =
+      Policy.resolve_for_run(%{
+        agent_id: agent_id,
+        session_key: session_key,
+        origin: origin,
+        channel_context: meta[:channel_context]
+      })
 
     # Merge in operator-provided tool_policy override
     # Operator overrides take highest precedence
@@ -100,22 +101,32 @@ defmodule LemonRouter.RunOrchestrator do
     # Resolve thinking_level from session config
     thinking_level = session_config[:thinking_level] || session_config["thinking_level"]
 
+    # Backward compatibility: a lot of legacy gateway code and tests still expect
+    # `job.text`, `job.engine_hint`, and (for Telegram) `job.scope/user_msg_id`.
+    legacy_scope = legacy_scope_from_meta(meta)
+    legacy_user_msg_id = meta[:user_msg_id] || meta["user_msg_id"]
+
     # Build gateway job
     job = %LemonGateway.Types.Job{
       run_id: run_id,
       session_key: session_key,
       prompt: prompt,
+      text: prompt,
       engine_id: resolved_engine_id,
+      engine_hint: resolved_engine_id,
       cwd: cwd,
       queue_mode: queue_mode,
       lane: meta[:lane] || :main,
       tool_policy: tool_policy,
-      meta: Map.merge(meta, %{
-        origin: origin,
-        agent_id: agent_id,
-        thinking_level: thinking_level,
-        model: session_config[:model] || session_config["model"]
-      })
+      scope: legacy_scope,
+      user_msg_id: legacy_user_msg_id,
+      meta:
+        Map.merge(meta, %{
+          origin: origin,
+          agent_id: agent_id,
+          thinking_level: thinking_level,
+          model: session_config[:model] || session_config["model"]
+        })
     }
 
     # Start run process
@@ -172,6 +183,7 @@ defmodule LemonRouter.RunOrchestrator do
 
   # Resolve engine_id from session config's model setting
   defp resolve_engine_from_session(nil), do: nil
+
   defp resolve_engine_from_session(config) when is_map(config) do
     model = config[:model] || config["model"]
 
@@ -209,4 +221,53 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   defp map_model_to_engine(_), do: nil
+
+  defp legacy_scope_from_meta(meta) when is_map(meta) do
+    channel_id = meta[:channel_id] || meta["channel_id"]
+
+    if channel_id == "telegram" do
+      chat_id =
+        cond do
+          is_integer(meta[:chat_id]) -> meta[:chat_id]
+          is_integer(meta["chat_id"]) -> meta["chat_id"]
+          is_binary(meta[:chat_id]) -> parse_int(meta[:chat_id])
+          is_binary(meta["chat_id"]) -> parse_int(meta["chat_id"])
+          is_map(meta[:peer]) -> parse_int(meta[:peer][:id] || meta[:peer]["id"])
+          is_map(meta["peer"]) -> parse_int(meta["peer"][:id] || meta["peer"]["id"])
+          true -> nil
+        end
+
+      topic_id =
+        cond do
+          is_integer(meta[:topic_id]) -> meta[:topic_id]
+          is_integer(meta["topic_id"]) -> meta["topic_id"]
+          is_binary(meta[:topic_id]) -> parse_int(meta[:topic_id])
+          is_binary(meta["topic_id"]) -> parse_int(meta["topic_id"])
+          is_map(meta[:peer]) -> parse_int(meta[:peer][:thread_id] || meta[:peer]["thread_id"])
+          is_map(meta["peer"]) -> parse_int(meta["peer"][:thread_id] || meta["peer"]["thread_id"])
+          true -> nil
+        end
+
+      if is_integer(chat_id) do
+        %LemonGateway.Types.ChatScope{transport: :telegram, chat_id: chat_id, topic_id: topic_id}
+      else
+        nil
+      end
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp legacy_scope_from_meta(_), do: nil
+
+  defp parse_int(nil), do: nil
+
+  defp parse_int(i) when is_integer(i), do: i
+
+  defp parse_int(s) when is_binary(s) do
+    case Integer.parse(s) do
+      {i, _} -> i
+      :error -> nil
+    end
+  end
 end

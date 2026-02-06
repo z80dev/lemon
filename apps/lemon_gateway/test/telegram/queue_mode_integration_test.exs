@@ -91,6 +91,8 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
     def get_updates(_token, _offset, _timeout_ms) do
       Agent.get_and_update(__MODULE__, fn state ->
         updates = state.pending_updates
+        notify_pid = state.notify_pid
+        if is_pid(notify_pid), do: send(notify_pid, {:telegram_get_updates, updates})
         new_state = %{state | pending_updates: []}
         {{:ok, %{"ok" => true, "result" => updates}}, new_state}
       end)
@@ -208,6 +210,8 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
   setup do
     # Stop the app to reset state
     _ = Application.stop(:lemon_gateway)
+    _ = Application.stop(:lemon_router)
+    _ = Application.stop(:lemon_channels)
 
     # Clean up any existing agents
     MockTelegramAPI.stop()
@@ -233,15 +237,35 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
   defp start_gateway_with_config(config_overrides) do
     # Stop the app first to ensure fresh config is loaded
     _ = Application.stop(:lemon_gateway)
+    _ = Application.stop(:lemon_router)
+    _ = Application.stop(:lemon_channels)
 
     base_config = %{
       max_concurrent_runs: 10,
       default_engine: "capture",
       enable_telegram: true,
-      bindings: []
+      bindings: [],
+      telegram: %{
+        bot_token: "test_token",
+        poll_interval_ms: 50,
+        dedupe_ttl_ms: 60_000,
+        debounce_ms: 10,
+        allowed_chat_ids: nil,
+        allow_queue_override: config_overrides[:allow_queue_override] || false
+      }
     }
 
-    config = Map.merge(base_config, config_overrides)
+    config =
+      base_config
+      |> Map.merge(config_overrides)
+      # Keep allow_queue_override under the telegram config, even if callers pass it at top-level.
+      |> Map.update(:telegram, %{}, fn tg ->
+        Map.put(
+          tg || %{},
+          :allow_queue_override,
+          config_overrides[:allow_queue_override] || false
+        )
+      end)
 
     Application.put_env(:lemon_gateway, :config_path, "/nonexistent/path.toml")
     Application.put_env(:lemon_gateway, Config, config)
@@ -251,21 +275,52 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       LemonGateway.Engines.Echo
     ])
 
-    Application.put_env(:lemon_gateway, :transports, [
-      LemonGateway.Telegram.Transport
-    ])
-
     Application.put_env(:lemon_gateway, :telegram, %{
-      bot_token: "test_token",
       api_mod: MockTelegramAPI,
-      poll_interval_ms: 50,
-      dedupe_ttl_ms: 60_000,
-      debounce_ms: 10,
-      allowed_chat_ids: nil,
-      allow_queue_override: config_overrides[:allow_queue_override] || false
+      # The adapter transport merges these into TOML-backed config (used in tests).
+      poll_interval_ms: 50
     })
 
+    assert Application.get_env(:lemon_gateway, :telegram)[:api_mod] == MockTelegramAPI
+
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+    {:ok, _} = Application.ensure_all_started(:lemon_router)
+
+    # Ensure the channels-based Telegram poller is actually running and using our mock API.
+    poller_pid =
+      wait_for_pid(LemonChannels.Adapters.Telegram.Transport, 2_000) ||
+        Process.whereis(LemonChannels.Adapters.Telegram.Transport)
+
+    assert is_pid(poller_pid)
+
+    poller_state = :sys.get_state(LemonChannels.Adapters.Telegram.Transport)
+    assert poller_state.api_mod == MockTelegramAPI
+
+    # Sanity-check engine wiring so `JobCapturingEngine` can actually receive jobs.
+    assert is_pid(Process.whereis(JobCapturingEngine))
+    assert LemonGateway.EngineRegistry.get_engine("capture") == JobCapturingEngine
+  end
+
+  defp wait_for_pid(name, timeout_ms) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_for_pid(name, deadline)
+  end
+
+  defp do_wait_for_pid(name, deadline_ms) do
+    case Process.whereis(name) do
+      pid when is_pid(pid) ->
+        pid
+
+      _ ->
+        now = System.monotonic_time(:millisecond)
+
+        if now >= deadline_ms do
+          nil
+        else
+          Process.sleep(10)
+          do_wait_for_pid(name, deadline_ms)
+        end
+    end
   end
 
   # ============================================================================

@@ -75,7 +75,7 @@ defmodule LemonGateway.M6IntegrationTest do
       assert length(bindings) == 1
       [binding] = bindings
       assert binding.transport == :telegram
-      assert binding.chat_id == 123456
+      assert binding.chat_id == 123_456
       assert binding.project == "myproject"
       assert binding.default_engine == "lemon"
       assert binding.queue_mode == :followup
@@ -104,6 +104,7 @@ defmodule LemonGateway.M6IntegrationTest do
       default_engine = "binding_engine"
       queue_mode = "collect"
       """)
+
       Application.put_env(:lemon_gateway, :config_path, toml_path)
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -147,6 +148,7 @@ defmodule LemonGateway.M6IntegrationTest do
       topic_id = 123
       default_engine = "topic_engine"
       """)
+
       Application.put_env(:lemon_gateway, :config_path, toml_path)
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -181,6 +183,7 @@ defmodule LemonGateway.M6IntegrationTest do
       chat_id = 888
       project = "proj"
       """)
+
       Application.put_env(:lemon_gateway, :config_path, toml_path)
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -213,6 +216,7 @@ defmodule LemonGateway.M6IntegrationTest do
         last_resume_token: "test_token_123",
         updated_at: System.system_time(:millisecond)
       }
+
       Store.put_chat_state(scope, chat_state)
       Process.sleep(50)
 

@@ -38,19 +38,21 @@ defmodule AgentCore.CliRunners.ClaudeIntegrationTest do
   describe "basic execution" do
     @tag timeout: 60_000
     test "starts a session and receives events", %{cwd: cwd} do
-      {:ok, session} = ClaudeSubagent.start(
-        prompt: "What is 2 + 2? Reply with just the number, nothing else.",
-        cwd: cwd,
-        timeout: 60_000
-      )
+      {:ok, session} =
+        ClaudeSubagent.start(
+          prompt: "What is 2 + 2? Reply with just the number, nothing else.",
+          cwd: cwd,
+          timeout: 60_000
+        )
 
       events = collect_events(session)
 
       assert_started_and_output(events, "claude")
+
       assert Enum.any?(events, fn
-        {:completed, answer, opts} -> opts[:ok] == true and String.contains?(answer, "4")
-        _ -> false
-      end)
+               {:completed, answer, opts} -> opts[:ok] == true and String.contains?(answer, "4")
+               _ -> false
+             end)
 
       IO.puts("\n=== Claude Basic Execution Test ===")
       IO.puts("Events received: #{length(events)}")
@@ -62,11 +64,12 @@ defmodule AgentCore.CliRunners.ClaudeIntegrationTest do
     @tag timeout: 120_000
     test "can continue a session with follow-up prompt", %{cwd: cwd} do
       # First prompt
-      {:ok, session1} = ClaudeSubagent.start(
-        prompt: "Remember the number 42. Just say 'remembered'.",
-        cwd: cwd,
-        timeout: 60_000
-      )
+      {:ok, session1} =
+        ClaudeSubagent.start(
+          prompt: "Remember the number 42. Just say 'remembered'.",
+          cwd: cwd,
+          timeout: 60_000
+        )
 
       events1 = collect_events(session1)
 
@@ -79,7 +82,8 @@ defmodule AgentCore.CliRunners.ClaudeIntegrationTest do
       IO.puts("Resume token: #{token.value}")
 
       # Continue the session
-      {:ok, session2} = ClaudeSubagent.continue(session1, "What number did I ask you to remember?")
+      {:ok, session2} =
+        ClaudeSubagent.continue(session1, "What number did I ask you to remember?")
 
       events2 = collect_events(session2)
 
@@ -99,11 +103,12 @@ defmodule AgentCore.CliRunners.ClaudeIntegrationTest do
     @tag timeout: 120_000
     test "can resume session using saved token", %{cwd: cwd} do
       # First session
-      {:ok, session1} = ClaudeSubagent.start(
-        prompt: "My favorite color is green and my lucky number is 888. Remember these.",
-        cwd: cwd,
-        timeout: 60_000
-      )
+      {:ok, session1} =
+        ClaudeSubagent.start(
+          prompt: "My favorite color is green and my lucky number is 888. Remember these.",
+          cwd: cwd,
+          timeout: 60_000
+        )
 
       events1 = collect_events(session1)
       token = ClaudeSubagent.resume_token(session1)
@@ -115,11 +120,12 @@ defmodule AgentCore.CliRunners.ClaudeIntegrationTest do
       assert token != nil
 
       # Resume with the token directly
-      {:ok, session2} = ClaudeSubagent.resume(token,
-        prompt: "What was my lucky number?",
-        cwd: cwd,
-        timeout: 60_000
-      )
+      {:ok, session2} =
+        ClaudeSubagent.resume(token,
+          prompt: "What was my lucky number?",
+          cwd: cwd,
+          timeout: 60_000
+        )
 
       events2 = collect_events(session2)
 
@@ -139,11 +145,12 @@ defmodule AgentCore.CliRunners.ClaudeIntegrationTest do
   describe "tool execution" do
     @tag timeout: 60_000
     test "receives action events for tool calls", %{cwd: cwd} do
-      {:ok, session} = ClaudeSubagent.start(
-        prompt: "Run the command: echo 'hello from claude'",
-        cwd: cwd,
-        timeout: 60_000
-      )
+      {:ok, session} =
+        ClaudeSubagent.start(
+          prompt: "Run the command: echo 'hello from claude'",
+          cwd: cwd,
+          timeout: 60_000
+        )
 
       events = collect_events(session)
 
@@ -151,10 +158,11 @@ defmodule AgentCore.CliRunners.ClaudeIntegrationTest do
       print_events(events)
 
       # Should have tool/command action events
-      action_events = Enum.filter(events, fn
-        {:action, _, _, _} -> true
-        _ -> false
-      end)
+      action_events =
+        Enum.filter(events, fn
+          {:action, _, _, _} -> true
+          _ -> false
+        end)
 
       IO.puts("Action events: #{length(action_events)}")
 
@@ -182,7 +190,10 @@ defmodule AgentCore.CliRunners.ClaudeIntegrationTest do
 
         {:action, %{kind: kind, title: title}, phase, opts} ->
           ok_str = if opts[:ok] != nil, do: " (ok=#{opts[:ok]})", else: ""
-          IO.puts("  [ACTION:#{phase}] #{kind}: #{String.slice(to_string(title), 0, 60)}#{ok_str}")
+
+          IO.puts(
+            "  [ACTION:#{phase}] #{kind}: #{String.slice(to_string(title), 0, 60)}#{ok_str}"
+          )
 
         {:completed, answer, opts} ->
           status = if opts[:ok], do: "SUCCESS", else: "FAILED"
@@ -202,9 +213,9 @@ defmodule AgentCore.CliRunners.ClaudeIntegrationTest do
 
   defp assert_started_and_output(events, engine) do
     assert Enum.any?(events, fn
-      {:started, %ResumeToken{engine: ^engine}} -> true
-      _ -> false
-    end),
+             {:started, %ResumeToken{engine: ^engine}} -> true
+             _ -> false
+           end),
            "Expected started event for #{engine}"
 
     {answer, opts} = get_completed_answer(events)

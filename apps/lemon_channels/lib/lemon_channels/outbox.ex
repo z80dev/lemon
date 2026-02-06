@@ -116,8 +116,10 @@ defmodule LemonChannels.Outbox do
             {:noreply, state}
 
           {:error, reason} ->
-            # Retry if attempts < max
-            if entry.attempts < 3 do
+            # Retry only for retryable failures.
+            #
+            # `:unknown_channel` is a configuration/programming error and will never succeed by retrying.
+            if retryable_reason?(reason) and entry.attempts < 3 do
               entry = %{entry | attempts: entry.attempts + 1}
               queue = :queue.in(entry, state.queue)
               Process.send_after(self(), :process_queue, retry_delay(entry.attempts))
@@ -303,4 +305,7 @@ defmodule LemonChannels.Outbox do
     # Exponential backoff: 1s, 2s, 4s
     :math.pow(2, attempt - 1) |> round() |> Kernel.*(1000)
   end
+
+  defp retryable_reason?(:unknown_channel), do: false
+  defp retryable_reason?(_reason), do: true
 end

@@ -105,7 +105,9 @@ defmodule CodingAgent.Extensions do
   - `:total_conflicts` - Count of provider name conflicts
   """
   @type provider_registration_report :: %{
-          registered: [%{type: atom(), name: atom() | String.t(), module: module(), extension: module()}],
+          registered: [
+            %{type: atom(), name: atom() | String.t(), module: module(), extension: module()}
+          ],
           conflicts: [provider_conflict()],
           total_registered: non_neg_integer(),
           total_conflicts: non_neg_integer()

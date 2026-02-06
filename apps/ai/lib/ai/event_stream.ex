@@ -221,7 +221,8 @@ defmodule Ai.EventStream do
   @doc """
   Get the final result of the stream, blocking until complete.
   """
-  @spec result(t(), timeout()) :: {:ok, AssistantMessage.t()} | {:error, AssistantMessage.t() | term()}
+  @spec result(t(), timeout()) ::
+          {:ok, AssistantMessage.t()} | {:error, AssistantMessage.t() | term()}
   def result(stream, timeout \\ :infinity) do
     GenServer.call(stream, :result, timeout)
   catch
@@ -246,7 +247,11 @@ defmodule Ai.EventStream do
   @doc """
   Get current queue statistics.
   """
-  @spec stats(t()) :: %{queue_size: non_neg_integer(), max_queue: pos_integer(), dropped: non_neg_integer()}
+  @spec stats(t()) :: %{
+          queue_size: non_neg_integer(),
+          max_queue: pos_integer(),
+          dropped: non_neg_integer()
+        }
   def stats(stream) do
     GenServer.call(stream, :stats)
   end
@@ -266,7 +271,8 @@ defmodule Ai.EventStream do
     owner_ref = if owner != self(), do: Process.monitor(owner), else: nil
 
     # Set up stream timeout
-    timeout_ref = if timeout != :infinity, do: Process.send_after(self(), :stream_timeout, timeout), else: nil
+    timeout_ref =
+      if timeout != :infinity, do: Process.send_after(self(), :stream_timeout, timeout), else: nil
 
     state = %{
       events: :queue.new(),
@@ -360,7 +366,13 @@ defmodule Ai.EventStream do
   end
 
   def handle_cast({:complete, message}, state) do
-    done_event = {:done, message.stop_reason, message}
+    stop_reason =
+      cond do
+        is_map(message) -> Map.get(message, :stop_reason) || Map.get(message, "stop_reason")
+        true -> message.stop_reason
+      end
+
+    done_event = {:done, stop_reason, message}
 
     state = push_terminal(done_event, state)
 
@@ -376,7 +388,13 @@ defmodule Ai.EventStream do
   end
 
   def handle_cast({:error, message}, state) do
-    error_event = {:error, message.stop_reason, message}
+    stop_reason =
+      cond do
+        is_map(message) -> Map.get(message, :stop_reason) || Map.get(message, "stop_reason")
+        true -> message.stop_reason
+      end
+
+    error_event = {:error, stop_reason, message}
 
     state = push_terminal(error_event, state)
 

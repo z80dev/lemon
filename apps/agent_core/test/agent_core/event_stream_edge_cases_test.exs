@@ -722,6 +722,7 @@ defmodule AgentCore.EventStreamEdgeCasesTest do
 
       # Wait for crashing consumer to finish
       ref = Process.monitor(crashing_pid)
+
       receive do
         {:DOWN, ^ref, :process, ^crashing_pid, _} -> :ok
       after
@@ -987,7 +988,8 @@ defmodule AgentCore.EventStreamEdgeCasesTest do
       # event when we call complete(), and that event + agent_end may be delivered
       # atomically before the Enum.reduce counts it. So we check received + dropped
       # is close to 100, allowing for small timing variations.
-      assert received + dropped >= 99, "Expected ~100, got received=#{received}, dropped=#{dropped}"
+      assert received + dropped >= 99,
+             "Expected ~100, got received=#{received}, dropped=#{dropped}"
     end
 
     test "terminal event always makes it through despite backpressure" do

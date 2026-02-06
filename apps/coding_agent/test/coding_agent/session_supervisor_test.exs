@@ -50,7 +50,9 @@ defmodule CodingAgent.SessionSupervisorTest do
     assert :ok = SessionSupervisor.stop_session(pid)
     assert_receive {:DOWN, ^ref, :process, ^pid, _}, 1_000
 
-    {:ok, pid2} = SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model(id: "mock-2"))
+    {:ok, pid2} =
+      SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model(id: "mock-2"))
+
     stats2 = CodingAgent.Session.get_stats(pid2)
 
     ref2 = Process.monitor(pid2)
@@ -72,7 +74,9 @@ defmodule CodingAgent.SessionSupervisorTest do
 
     test "returns health status for all sessions" do
       {:ok, _pid1} = SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model())
-      {:ok, _pid2} = SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model(id: "mock-2"))
+
+      {:ok, _pid2} =
+        SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model(id: "mock-2"))
 
       health_results = SessionSupervisor.health_all()
 
@@ -92,7 +96,9 @@ defmodule CodingAgent.SessionSupervisorTest do
 
     test "sorts by status (unhealthy first)" do
       {:ok, pid1} = SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model())
-      {:ok, _pid2} = SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model(id: "mock-2"))
+
+      {:ok, _pid2} =
+        SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model(id: "mock-2"))
 
       # Kill the agent of the first session to make it unhealthy
       state = CodingAgent.Session.get_state(pid1)
@@ -133,7 +139,9 @@ defmodule CodingAgent.SessionSupervisorTest do
       Process.sleep(50)
 
       {:ok, _pid1} = SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model())
-      {:ok, _pid2} = SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model(id: "mock-2"))
+
+      {:ok, _pid2} =
+        SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model(id: "mock-2"))
 
       summary = SessionSupervisor.health_summary()
 
@@ -144,7 +152,9 @@ defmodule CodingAgent.SessionSupervisorTest do
 
     test "returns unhealthy when any session is unhealthy" do
       {:ok, pid1} = SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model())
-      {:ok, _pid2} = SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model(id: "mock-2"))
+
+      {:ok, _pid2} =
+        SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model(id: "mock-2"))
 
       # Kill the agent of the first session to make it unhealthy
       state = CodingAgent.Session.get_state(pid1)
@@ -167,8 +177,12 @@ defmodule CodingAgent.SessionSupervisorTest do
 
       # Start exactly 3 sessions
       {:ok, _pid1} = SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model())
-      {:ok, _pid2} = SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model(id: "mock-2"))
-      {:ok, _pid3} = SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model(id: "mock-3"))
+
+      {:ok, _pid2} =
+        SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model(id: "mock-2"))
+
+      {:ok, _pid3} =
+        SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model(id: "mock-3"))
 
       summary = SessionSupervisor.health_summary()
 

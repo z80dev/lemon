@@ -181,13 +181,14 @@ defmodule Ai.Providers.GoogleSharedRetryTest do
 
   describe "extract_error_message/1" do
     test "extracts message from Google API error format" do
-      error_json = Jason.encode!(%{
-        "error" => %{
-          "code" => 400,
-          "message" => "API key not valid",
-          "status" => "INVALID_ARGUMENT"
-        }
-      })
+      error_json =
+        Jason.encode!(%{
+          "error" => %{
+            "code" => 400,
+            "message" => "API key not valid",
+            "status" => "INVALID_ARGUMENT"
+          }
+        })
 
       assert GoogleShared.extract_error_message(error_json) == "API key not valid"
     end

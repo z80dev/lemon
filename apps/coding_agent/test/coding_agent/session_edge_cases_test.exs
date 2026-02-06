@@ -525,6 +525,7 @@ defmodule CodingAgent.SessionEdgeCasesTest do
       :ok = Session.switch_model(session, new_model)
 
       state = Session.get_state(session)
+
       model_changes =
         Enum.filter(state.session_manager.entries, &(&1.type == :model_change))
 
@@ -562,6 +563,7 @@ defmodule CodingAgent.SessionEdgeCasesTest do
 
       # All should succeed
       assert length(results) == 10
+
       Enum.each(results, fn state ->
         assert state.cwd == System.tmp_dir!()
       end)

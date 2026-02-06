@@ -167,7 +167,8 @@ defmodule CodingAgent.BudgetTracker do
       # => {:error, :budget_exceeded, %{limit: 100000, used: 100050}}
   """
   @spec check_budget(String.t()) ::
-          {:ok, map()} | {:error, :budget_exceeded | :token_limit_exceeded | :cost_limit_exceeded, map()}
+          {:ok, map()}
+          | {:error, :budget_exceeded | :token_limit_exceeded | :cost_limit_exceeded, map()}
   def check_budget(run_id) do
     case get_budget(run_id) do
       nil ->
@@ -296,16 +297,14 @@ defmodule CodingAgent.BudgetTracker do
   defp check_limits(budget) do
     token_check =
       if budget.max_tokens && budget.used_tokens > budget.max_tokens do
-        {:error, :token_limit_exceeded,
-         %{limit: budget.max_tokens, used: budget.used_tokens}}
+        {:error, :token_limit_exceeded, %{limit: budget.max_tokens, used: budget.used_tokens}}
       else
         :ok
       end
 
     cost_check =
       if budget.max_cost && budget.used_cost > budget.max_cost do
-        {:error, :cost_limit_exceeded,
-         %{limit: budget.max_cost, used: budget.used_cost}}
+        {:error, :cost_limit_exceeded, %{limit: budget.max_cost, used: budget.used_cost}}
       else
         :ok
       end

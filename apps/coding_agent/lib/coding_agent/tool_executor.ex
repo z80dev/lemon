@@ -133,7 +133,8 @@ defmodule CodingAgent.ToolExecutor do
       content: [
         %TextContent{
           type: :text,
-          text: "Tool '#{tool_name}' execution was denied. The operation requires approval that was not granted."
+          text:
+            "Tool '#{tool_name}' execution was denied. The operation requires approval that was not granted."
         }
       ],
       details: %{

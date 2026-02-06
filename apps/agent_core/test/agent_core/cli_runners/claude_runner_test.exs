@@ -3,6 +3,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
   alias AgentCore.CliRunners.ClaudeRunner
   alias AgentCore.CliRunners.ClaudeRunner.RunnerState
+
   alias AgentCore.CliRunners.ClaudeSchema.{
     StreamAssistantMessage,
     StreamResultMessage,
@@ -16,6 +17,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     ToolUseBlock,
     Usage
   }
+
   alias AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
 
   # ============================================================================
@@ -103,7 +105,8 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
         state = RunnerState.new()
         {_cmd, args} = ClaudeRunner.build_command("Hello", nil, state)
 
-        assert "--dangerously-skip-permissions" in args, "Expected truthy for LEMON_CLAUDE_YOLO=#{val}"
+        assert "--dangerously-skip-permissions" in args,
+               "Expected truthy for LEMON_CLAUDE_YOLO=#{val}"
       end
     end
 
@@ -181,6 +184,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
   describe "translate_event/2 - system messages" do
     test "translates system init to StartedEvent" do
       state = RunnerState.new()
+
       event = %StreamSystemMessage{
         subtype: "init",
         session_id: "sess_abc123",
@@ -240,6 +244,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
   describe "translate_event/2 - assistant messages" do
     test "accumulates text content for final result" do
       state = RunnerState.new()
+
       event = %StreamAssistantMessage{
         message: %AssistantMessageContent{
           content: [%TextBlock{text: "Here is "}, %TextBlock{text: "my answer"}]
@@ -258,11 +263,13 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
       event1 = %StreamAssistantMessage{
         message: %AssistantMessageContent{content: [%TextBlock{text: "First part. "}]}
       }
+
       {_, state, _} = ClaudeRunner.translate_event(event1, state)
 
       event2 = %StreamAssistantMessage{
         message: %AssistantMessageContent{content: [%TextBlock{text: "Second part."}]}
       }
+
       {_, state, _} = ClaudeRunner.translate_event(event2, state)
 
       assert state.last_assistant_text == "First part. Second part."
@@ -270,6 +277,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
     test "translates thinking block to action completed" do
       state = RunnerState.new()
+
       event = %StreamAssistantMessage{
         message: %AssistantMessageContent{
           content: [%ThinkingBlock{thinking: "Let me analyze this...", signature: "sig123"}]
@@ -293,11 +301,13 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
       event1 = %StreamAssistantMessage{
         message: %AssistantMessageContent{content: [%ThinkingBlock{thinking: "First thought"}]}
       }
+
       {[action1], state, _} = ClaudeRunner.translate_event(event1, state)
 
       event2 = %StreamAssistantMessage{
         message: %AssistantMessageContent{content: [%ThinkingBlock{thinking: "Second thought"}]}
       }
+
       {[action2], state, _} = ClaudeRunner.translate_event(event2, state)
 
       assert action1.action.id == "claude.thinking.0"
@@ -308,6 +318,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     test "truncates long thinking text in title" do
       state = RunnerState.new()
       long_thinking = String.duplicate("x", 200)
+
       event = %StreamAssistantMessage{
         message: %AssistantMessageContent{
           content: [%ThinkingBlock{thinking: long_thinking}]
@@ -321,6 +332,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
     test "translates tool_use to action started" do
       state = RunnerState.new()
+
       event = %StreamAssistantMessage{
         message: %AssistantMessageContent{
           content: [%ToolUseBlock{id: "toolu_123", name: "Bash", input: %{"command" => "ls -la"}}]
@@ -341,9 +353,12 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
     test "translates Read tool to tool kind" do
       state = RunnerState.new()
+
       event = %StreamAssistantMessage{
         message: %AssistantMessageContent{
-          content: [%ToolUseBlock{id: "t1", name: "Read", input: %{"file_path" => "/path/to/file.ex"}}]
+          content: [
+            %ToolUseBlock{id: "t1", name: "Read", input: %{"file_path" => "/path/to/file.ex"}}
+          ]
         }
       }
 
@@ -356,9 +371,12 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
     test "translates Write tool to file_change kind" do
       state = RunnerState.new()
+
       event = %StreamAssistantMessage{
         message: %AssistantMessageContent{
-          content: [%ToolUseBlock{id: "t1", name: "Write", input: %{"file_path" => "/path/to/new.ex"}}]
+          content: [
+            %ToolUseBlock{id: "t1", name: "Write", input: %{"file_path" => "/path/to/new.ex"}}
+          ]
         }
       }
 
@@ -371,9 +389,12 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
     test "translates Edit tool to file_change kind" do
       state = RunnerState.new()
+
       event = %StreamAssistantMessage{
         message: %AssistantMessageContent{
-          content: [%ToolUseBlock{id: "t1", name: "Edit", input: %{"file_path" => "/path/to/edit.ex"}}]
+          content: [
+            %ToolUseBlock{id: "t1", name: "Edit", input: %{"file_path" => "/path/to/edit.ex"}}
+          ]
         }
       }
 
@@ -386,6 +407,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
     test "translates Glob tool correctly" do
       state = RunnerState.new()
+
       event = %StreamAssistantMessage{
         message: %AssistantMessageContent{
           content: [%ToolUseBlock{id: "t1", name: "Glob", input: %{"pattern" => "**/*.ex"}}]
@@ -401,6 +423,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
     test "translates Grep tool correctly" do
       state = RunnerState.new()
+
       event = %StreamAssistantMessage{
         message: %AssistantMessageContent{
           content: [%ToolUseBlock{id: "t1", name: "Grep", input: %{"pattern" => "defmodule"}}]
@@ -416,9 +439,12 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
     test "translates WebSearch tool correctly" do
       state = RunnerState.new()
+
       event = %StreamAssistantMessage{
         message: %AssistantMessageContent{
-          content: [%ToolUseBlock{id: "t1", name: "WebSearch", input: %{"query" => "elixir genserver"}}]
+          content: [
+            %ToolUseBlock{id: "t1", name: "WebSearch", input: %{"query" => "elixir genserver"}}
+          ]
         }
       }
 
@@ -431,9 +457,12 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
     test "translates WebFetch tool correctly" do
       state = RunnerState.new()
+
       event = %StreamAssistantMessage{
         message: %AssistantMessageContent{
-          content: [%ToolUseBlock{id: "t1", name: "WebFetch", input: %{"url" => "https://example.com"}}]
+          content: [
+            %ToolUseBlock{id: "t1", name: "WebFetch", input: %{"url" => "https://example.com"}}
+          ]
         }
       }
 
@@ -446,9 +475,16 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
     test "translates Task tool as subagent" do
       state = RunnerState.new()
+
       event = %StreamAssistantMessage{
         message: %AssistantMessageContent{
-          content: [%ToolUseBlock{id: "t1", name: "Task", input: %{"prompt" => "Implement the feature with tests"}}]
+          content: [
+            %ToolUseBlock{
+              id: "t1",
+              name: "Task",
+              input: %{"prompt" => "Implement the feature with tests"}
+            }
+          ]
         }
       }
 
@@ -462,6 +498,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     test "truncates long Task prompts in title" do
       state = RunnerState.new()
       long_prompt = String.duplicate("x", 100)
+
       event = %StreamAssistantMessage{
         message: %AssistantMessageContent{
           content: [%ToolUseBlock{id: "t1", name: "Task", input: %{"prompt" => long_prompt}}]
@@ -477,6 +514,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
     test "handles unknown tool types" do
       state = RunnerState.new()
+
       event = %StreamAssistantMessage{
         message: %AssistantMessageContent{
           content: [%ToolUseBlock{id: "t1", name: "CustomTool", input: %{}}]
@@ -492,6 +530,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
     test "emits warning when permission denied message is present" do
       state = RunnerState.new()
+
       event = %StreamAssistantMessage{
         message: %AssistantMessageContent{
           error: "Permission denied: Read tool not allowed",
@@ -509,6 +548,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
     test "handles multiple content blocks in single message" do
       state = RunnerState.new()
+
       event = %StreamAssistantMessage{
         message: %AssistantMessageContent{
           content: [
@@ -555,13 +595,19 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     test "translates tool_result to action completed" do
       # First, create a pending action
       state = RunnerState.new()
-      state = %{state | pending_actions: %{
-        "toolu_123" => %{id: "toolu_123", kind: :command, title: "ls -la", detail: %{}}
-      }}
+
+      state = %{
+        state
+        | pending_actions: %{
+            "toolu_123" => %{id: "toolu_123", kind: :command, title: "ls -la", detail: %{}}
+          }
+      }
 
       event = %StreamUserMessage{
         message: %UserMessageContent{
-          content: [%ToolResultBlock{tool_use_id: "toolu_123", content: "file listing", is_error: false}]
+          content: [
+            %ToolResultBlock{tool_use_id: "toolu_123", content: "file listing", is_error: false}
+          ]
         }
       }
 
@@ -577,9 +623,12 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     end
 
     test "translates error tool_result correctly" do
-      state = %{RunnerState.new() | pending_actions: %{
-        "t1" => %{id: "t1", kind: :command, title: "bad command", detail: %{}}
-      }}
+      state = %{
+        RunnerState.new()
+        | pending_actions: %{
+            "t1" => %{id: "t1", kind: :command, title: "bad command", detail: %{}}
+          }
+      }
 
       event = %StreamUserMessage{
         message: %UserMessageContent{
@@ -616,7 +665,9 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
       event = %StreamUserMessage{
         message: %UserMessageContent{
-          content: [%ToolResultBlock{tool_use_id: "t1", content: "Permission denied", is_error: true}]
+          content: [
+            %ToolResultBlock{tool_use_id: "t1", content: "Permission denied", is_error: true}
+          ]
         }
       }
 
@@ -624,6 +675,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
       # Should have both the warning and the fallback action
       assert length(events) >= 1
+
       assert Enum.any?(events, fn
                %ActionEvent{action: %{kind: :warning}} -> true
                _ -> false
@@ -631,17 +683,22 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     end
 
     test "handles list content in tool result" do
-      state = %{RunnerState.new() | pending_actions: %{
-        "t1" => %{id: "t1", kind: :tool, title: "test", detail: %{}}
-      }}
+      state = %{
+        RunnerState.new()
+        | pending_actions: %{
+            "t1" => %{id: "t1", kind: :tool, title: "test", detail: %{}}
+          }
+      }
 
       event = %StreamUserMessage{
         message: %UserMessageContent{
-          content: [%ToolResultBlock{
-            tool_use_id: "t1",
-            content: [%{"text" => "line 1"}, %{"text" => "line 2"}],
-            is_error: false
-          }]
+          content: [
+            %ToolResultBlock{
+              tool_use_id: "t1",
+              content: [%{"text" => "line 1"}, %{"text" => "line 2"}],
+              is_error: false
+            }
+          ]
         }
       }
 
@@ -651,11 +708,15 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     end
 
     test "truncates long tool result previews" do
-      state = %{RunnerState.new() | pending_actions: %{
-        "t1" => %{id: "t1", kind: :tool, title: "test", detail: %{}}
-      }}
+      state = %{
+        RunnerState.new()
+        | pending_actions: %{
+            "t1" => %{id: "t1", kind: :tool, title: "test", detail: %{}}
+          }
+      }
 
       long_content = String.duplicate("x", 500)
+
       event = %StreamUserMessage{
         message: %UserMessageContent{
           content: [%ToolResultBlock{tool_use_id: "t1", content: long_content, is_error: false}]
@@ -668,10 +729,13 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     end
 
     test "handles multiple tool results in single message" do
-      state = %{RunnerState.new() | pending_actions: %{
-        "t1" => %{id: "t1", kind: :command, title: "cmd1", detail: %{}},
-        "t2" => %{id: "t2", kind: :tool, title: "cmd2", detail: %{}}
-      }}
+      state = %{
+        RunnerState.new()
+        | pending_actions: %{
+            "t1" => %{id: "t1", kind: :command, title: "cmd1", detail: %{}},
+            "t2" => %{id: "t2", kind: :tool, title: "cmd2", detail: %{}}
+          }
+      }
 
       event = %StreamUserMessage{
         message: %UserMessageContent{
@@ -755,13 +819,19 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     end
 
     test "allows environment overrides when scrubbing" do
-      env = ClaudeRunner.env(RunnerState.new(%{scrub_env: true, env_overrides: %{"LEMON_TEST_SECRET" => "shh"}}))
+      env =
+        ClaudeRunner.env(
+          RunnerState.new(%{scrub_env: true, env_overrides: %{"LEMON_TEST_SECRET" => "shh"}})
+        )
 
       assert Enum.any?(env, fn {key, value} -> key == "LEMON_TEST_SECRET" and value == "shh" end)
     end
 
     test "allows environment overrides as keyword list" do
-      env = ClaudeRunner.env(RunnerState.new(%{scrub_env: true, env_overrides: [{"CUSTOM_VAR", "value"}]}))
+      env =
+        ClaudeRunner.env(
+          RunnerState.new(%{scrub_env: true, env_overrides: [{"CUSTOM_VAR", "value"}]})
+        )
 
       assert Enum.any?(env, fn {key, value} -> key == "CUSTOM_VAR" and value == "value" end)
     end
@@ -769,7 +839,8 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     test "includes env_allowlist variables" do
       System.put_env("CUSTOM_ALLOWED", "yes")
 
-      env = ClaudeRunner.env(RunnerState.new(%{scrub_env: true, env_allowlist: ["CUSTOM_ALLOWED"]}))
+      env =
+        ClaudeRunner.env(RunnerState.new(%{scrub_env: true, env_allowlist: ["CUSTOM_ALLOWED"]}))
 
       assert Enum.any?(env, fn {key, _} -> key == "CUSTOM_ALLOWED" end)
     end
@@ -777,7 +848,8 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     test "includes variables matching env_allow_prefixes" do
       System.put_env("MY_PREFIX_VAR", "value")
 
-      env = ClaudeRunner.env(RunnerState.new(%{scrub_env: true, env_allow_prefixes: ["MY_PREFIX_"]}))
+      env =
+        ClaudeRunner.env(RunnerState.new(%{scrub_env: true, env_allow_prefixes: ["MY_PREFIX_"]}))
 
       assert Enum.any?(env, fn {key, _} -> key == "MY_PREFIX_VAR" end)
     end
@@ -789,21 +861,28 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
   describe "translate_event/2 - result messages" do
     test "translates success result to CompletedEvent" do
-      state = %{RunnerState.new() |
-        found_session: ResumeToken.new("claude", "sess_123"),
-        last_assistant_text: "Final answer text"
+      state = %{
+        RunnerState.new()
+        | found_session: ResumeToken.new("claude", "sess_123"),
+          last_assistant_text: "Final answer text"
       }
 
       event = %StreamResultMessage{
         subtype: "success",
         session_id: "sess_123",
         is_error: false,
-        result: nil,  # Uses last_assistant_text
+        # Uses last_assistant_text
+        result: nil,
         duration_ms: 5000,
         duration_api_ms: 4000,
         num_turns: 3,
         total_cost_usd: 0.05,
-        usage: %Usage{input_tokens: 100, output_tokens: 50, cache_creation_input_tokens: 10, cache_read_input_tokens: 20}
+        usage: %Usage{
+          input_tokens: 100,
+          output_tokens: 50,
+          cache_creation_input_tokens: 10,
+          cache_read_input_tokens: 20
+        }
       }
 
       {events, _state, opts} = ClaudeRunner.translate_event(event, state)
@@ -822,16 +901,18 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     end
 
     test "uses result text when available" do
-      state = %{RunnerState.new() |
-        found_session: ResumeToken.new("claude", "sess_123"),
-        last_assistant_text: "Assistant text"
+      state = %{
+        RunnerState.new()
+        | found_session: ResumeToken.new("claude", "sess_123"),
+          last_assistant_text: "Assistant text"
       }
 
       event = %StreamResultMessage{
         subtype: "success",
         session_id: "sess_123",
         is_error: false,
-        result: "Result text"  # Should use this over last_assistant_text
+        # Should use this over last_assistant_text
+        result: "Result text"
       }
 
       {[completed], _state, _opts} = ClaudeRunner.translate_event(event, state)
@@ -875,9 +956,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     end
 
     test "uses session_id from event over found_session" do
-      state = %{RunnerState.new() |
-        found_session: ResumeToken.new("claude", "old_session")
-      }
+      state = %{RunnerState.new() | found_session: ResumeToken.new("claude", "old_session")}
 
       event = %StreamResultMessage{
         subtype: "success",
@@ -892,9 +971,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     end
 
     test "falls back to found_session when event has no session_id" do
-      state = %{RunnerState.new() |
-        found_session: ResumeToken.new("claude", "found_sess")
-      }
+      state = %{RunnerState.new() | found_session: ResumeToken.new("claude", "found_sess")}
 
       event = %StreamResultMessage{
         subtype: "success",
@@ -915,9 +992,10 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
   describe "handle_exit_error/2" do
     test "returns note and completed error events" do
-      state = %{RunnerState.new() |
-        last_assistant_text: "partial",
-        found_session: ResumeToken.new("claude", "s1")
+      state = %{
+        RunnerState.new()
+        | last_assistant_text: "partial",
+          found_session: ResumeToken.new("claude", "s1")
       }
 
       {events, _state} = ClaudeRunner.handle_exit_error(1, state)
@@ -968,9 +1046,10 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     end
 
     test "returns error when session found but no result event" do
-      state = %{RunnerState.new() |
-        found_session: ResumeToken.new("claude", "s1"),
-        last_assistant_text: "Done"
+      state = %{
+        RunnerState.new()
+        | found_session: ResumeToken.new("claude", "s1"),
+          last_assistant_text: "Done"
       }
 
       {events, _state} = ClaudeRunner.handle_stream_end(state)
@@ -981,9 +1060,10 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     end
 
     test "includes partial text in error case" do
-      state = %{RunnerState.new() |
-        found_session: ResumeToken.new("claude", "s1"),
-        last_assistant_text: "Partial response"
+      state = %{
+        RunnerState.new()
+        | found_session: ResumeToken.new("claude", "s1"),
+          last_assistant_text: "Partial response"
       }
 
       {[completed], _state} = ClaudeRunner.handle_stream_end(state)
@@ -998,12 +1078,13 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
   describe "decode_line/1" do
     test "decodes valid system init JSON" do
-      json = Jason.encode!(%{
-        "type" => "system",
-        "subtype" => "init",
-        "session_id" => "sess_123",
-        "model" => "claude-opus-4"
-      })
+      json =
+        Jason.encode!(%{
+          "type" => "system",
+          "subtype" => "init",
+          "session_id" => "sess_123",
+          "model" => "claude-opus-4"
+        })
 
       {:ok, event} = ClaudeRunner.decode_line(json)
 
@@ -1013,12 +1094,13 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     end
 
     test "decodes valid assistant message JSON" do
-      json = Jason.encode!(%{
-        "type" => "assistant",
-        "message" => %{
-          "content" => [%{"type" => "text", "text" => "Hello"}]
-        }
-      })
+      json =
+        Jason.encode!(%{
+          "type" => "assistant",
+          "message" => %{
+            "content" => [%{"type" => "text", "text" => "Hello"}]
+          }
+        })
 
       {:ok, event} = ClaudeRunner.decode_line(json)
 
@@ -1027,12 +1109,13 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     end
 
     test "decodes valid user message JSON" do
-      json = Jason.encode!(%{
-        "type" => "user",
-        "message" => %{
-          "content" => [%{"type" => "tool_result", "tool_use_id" => "t1", "content" => "ok"}]
-        }
-      })
+      json =
+        Jason.encode!(%{
+          "type" => "user",
+          "message" => %{
+            "content" => [%{"type" => "tool_result", "tool_use_id" => "t1", "content" => "ok"}]
+          }
+        })
 
       {:ok, event} = ClaudeRunner.decode_line(json)
 
@@ -1041,12 +1124,13 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     end
 
     test "decodes valid result message JSON" do
-      json = Jason.encode!(%{
-        "type" => "result",
-        "subtype" => "success",
-        "is_error" => false,
-        "result" => "Done"
-      })
+      json =
+        Jason.encode!(%{
+          "type" => "result",
+          "subtype" => "success",
+          "is_error" => false,
+          "result" => "Done"
+        })
 
       {:ok, event} = ClaudeRunner.decode_line(json)
 
@@ -1175,9 +1259,12 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     end
 
     test "parses tool result and emits ActionEvent completed" do
-      state = %{RunnerState.new() | pending_actions: %{
-        "t1" => %{id: "t1", kind: :command, title: "ls", detail: %{}}
-      }}
+      state = %{
+        RunnerState.new()
+        | pending_actions: %{
+            "t1" => %{id: "t1", kind: :command, title: "ls", detail: %{}}
+          }
+      }
 
       event = %StreamUserMessage{
         message: %UserMessageContent{
@@ -1225,9 +1312,10 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     end
 
     test "handle_stream_end creates error when no result received" do
-      state = %{RunnerState.new() |
-        found_session: ResumeToken.new("claude", "s1"),
-        last_assistant_text: "partial"
+      state = %{
+        RunnerState.new()
+        | found_session: ResumeToken.new("claude", "s1"),
+          last_assistant_text: "partial"
       }
 
       {events, _state} = ClaudeRunner.handle_stream_end(state)
@@ -1253,9 +1341,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
 
   describe "resume token extraction" do
     test "session_id from result overrides found_session in state" do
-      state = %{RunnerState.new() |
-        found_session: ResumeToken.new("claude", "init_session")
-      }
+      state = %{RunnerState.new() | found_session: ResumeToken.new("claude", "init_session")}
 
       event = %StreamResultMessage{
         subtype: "success",
@@ -1358,6 +1444,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
         cwd: "/test",
         tools: ["Bash", "Read"]
       }
+
       {[started], state, _} = ClaudeRunner.translate_event(init_event, state)
 
       assert %StartedEvent{} = started
@@ -1370,6 +1457,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
           content: [%ThinkingBlock{thinking: "Let me analyze the request..."}]
         }
       }
+
       {[thinking_action], state, _} = ClaudeRunner.translate_event(thinking_event, state)
 
       assert thinking_action.action.kind == :note
@@ -1381,6 +1469,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
           content: [%TextBlock{text: "I'll run a command. "}]
         }
       }
+
       {[], state, _} = ClaudeRunner.translate_event(text_event, state)
       assert state.last_assistant_text == "I'll run a command. "
 
@@ -1390,6 +1479,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
           content: [%ToolUseBlock{id: "tool_1", name: "Bash", input: %{"command" => "ls -la"}}]
         }
       }
+
       {[tool_started], state, _} = ClaudeRunner.translate_event(tool_use_event, state)
 
       assert tool_started.phase == :started
@@ -1399,9 +1489,12 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
       # 5. Tool result
       tool_result_event = %StreamUserMessage{
         message: %UserMessageContent{
-          content: [%ToolResultBlock{tool_use_id: "tool_1", content: "total 42\n...", is_error: false}]
+          content: [
+            %ToolResultBlock{tool_use_id: "tool_1", content: "total 42\n...", is_error: false}
+          ]
         }
       }
+
       {[tool_completed], state, _} = ClaudeRunner.translate_event(tool_result_event, state)
 
       assert tool_completed.phase == :completed
@@ -1414,6 +1507,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
           content: [%TextBlock{text: "The directory contains 42 items."}]
         }
       }
+
       {[], state, _} = ClaudeRunner.translate_event(more_text_event, state)
       assert state.last_assistant_text == "I'll run a command. The directory contains 42 items."
 
@@ -1427,6 +1521,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
         num_turns: 2,
         usage: %Usage{input_tokens: 100, output_tokens: 50}
       }
+
       {[completed], _final_state, opts} = ClaudeRunner.translate_event(result_event, state)
 
       assert %CompletedEvent{} = completed
@@ -1445,6 +1540,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
         subtype: "init",
         session_id: "sess_error_test"
       }
+
       {[_started], state, _} = ClaudeRunner.translate_event(init_event, state)
 
       # 2. Some text before error
@@ -1453,6 +1549,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
           content: [%TextBlock{text: "Starting to process..."}]
         }
       }
+
       {[], state, _} = ClaudeRunner.translate_event(text_event, state)
 
       # 3. Error result
@@ -1464,6 +1561,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
         is_error: true,
         result: "Rate limit exceeded"
       }
+
       {[completed], _state, opts} = ClaudeRunner.translate_event(result_event, state)
 
       assert completed.ok == false
@@ -1478,20 +1576,26 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
       state = RunnerState.new()
 
       # Setup with pending action
-      state = %{state | pending_actions: %{
-        "tool_err" => %{id: "tool_err", kind: :command, title: "bad command", detail: %{}}
-      }}
+      state = %{
+        state
+        | pending_actions: %{
+            "tool_err" => %{id: "tool_err", kind: :command, title: "bad command", detail: %{}}
+          }
+      }
 
       # Tool result with error
       tool_result_event = %StreamUserMessage{
         message: %UserMessageContent{
-          content: [%ToolResultBlock{
-            tool_use_id: "tool_err",
-            content: "command not found: badcmd",
-            is_error: true
-          }]
+          content: [
+            %ToolResultBlock{
+              tool_use_id: "tool_err",
+              content: "command not found: badcmd",
+              is_error: true
+            }
+          ]
         }
       }
+
       {[tool_completed], state, _} = ClaudeRunner.translate_event(tool_result_event, state)
 
       assert tool_completed.ok == false
@@ -1505,20 +1609,24 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
       # Tool result with permission error
       tool_result_event = %StreamUserMessage{
         message: %UserMessageContent{
-          content: [%ToolResultBlock{
-            tool_use_id: "perm_tool",
-            content: "Permission denied: cannot access /root",
-            is_error: true
-          }]
+          content: [
+            %ToolResultBlock{
+              tool_use_id: "perm_tool",
+              content: "Permission denied: cannot access /root",
+              is_error: true
+            }
+          ]
         }
       }
+
       {events, _state, _} = ClaudeRunner.translate_event(tool_result_event, state)
 
       # Should have both a warning and the tool result
-      warning = Enum.find(events, fn
-        %ActionEvent{action: %{kind: :warning}} -> true
-        _ -> false
-      end)
+      warning =
+        Enum.find(events, fn
+          %ActionEvent{action: %{kind: :warning}} -> true
+          _ -> false
+        end)
 
       assert warning != nil
       assert warning.action.title =~ "Permission denied"
@@ -1594,7 +1702,8 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
       {events, new_state} = ClaudeRunner.handle_exit_error(1, state)
 
       assert is_list(events)
-      assert length(events) == 2  # note + completed
+      # note + completed
+      assert length(events) == 2
       assert %RunnerState{} = new_state
     end
 
@@ -1604,7 +1713,8 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
       {events, new_state} = ClaudeRunner.handle_stream_end(state)
 
       assert is_list(events)
-      assert length(events) == 1  # completed
+      # completed
+      assert length(events) == 1
       assert %RunnerState{} = new_state
     end
 
@@ -1613,6 +1723,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
       env = ClaudeRunner.env(state)
 
       assert env == nil or is_list(env)
+
       if is_list(env) do
         assert Enum.all?(env, fn {k, v} -> is_binary(k) and is_binary(v) end)
       end

@@ -309,9 +309,7 @@ defmodule AgentCore.LoopTest do
       final_response = Mocks.assistant_message("I echoed your message")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       events = Loop.stream([user_message("Echo hello")], context, config) |> Enum.to_list()
       event_types = Enum.map(events, fn e -> elem(e, 0) end)
@@ -329,9 +327,7 @@ defmodule AgentCore.LoopTest do
       final_response = Mocks.assistant_message("Done")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       events = Loop.stream([user_message("Echo test")], context, config) |> Enum.to_list()
 
@@ -356,9 +352,7 @@ defmodule AgentCore.LoopTest do
       final_response = Mocks.assistant_message("Complete")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       events = Loop.stream([user_message("Echo")], context, config) |> Enum.to_list()
 
@@ -379,14 +373,14 @@ defmodule AgentCore.LoopTest do
       error_tool = Mocks.error_tool()
       context = simple_context(tools: [error_tool])
 
-      tool_call = Mocks.tool_call("error_tool", %{"message" => "Intentional error"}, id: "call_err")
+      tool_call =
+        Mocks.tool_call("error_tool", %{"message" => "Intentional error"}, id: "call_err")
+
       tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
       final_response = Mocks.assistant_message("Handled the error")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       events = Loop.stream([user_message("Trigger error")], context, config) |> Enum.to_list()
 
@@ -409,9 +403,7 @@ defmodule AgentCore.LoopTest do
       final_response = Mocks.assistant_message("Tool not found")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       events = Loop.stream([user_message("Use unknown tool")], context, config) |> Enum.to_list()
 
@@ -438,9 +430,7 @@ defmodule AgentCore.LoopTest do
       final_response = Mocks.assistant_message("Results: 3 and 7")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       events = Loop.stream([user_message("Add numbers")], context, config) |> Enum.to_list()
 
@@ -461,9 +451,7 @@ defmodule AgentCore.LoopTest do
       final_response = Mocks.assistant_message("Streaming done")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       events = Loop.stream([user_message("Stream tool")], context, config) |> Enum.to_list()
 
@@ -651,9 +639,7 @@ defmodule AgentCore.LoopTest do
       context = simple_context()
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn_error(:api_unavailable)
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn_error(:api_unavailable))
 
       stream = Loop.agent_loop([user_message("Test")], context, config, nil, nil)
 
@@ -665,9 +651,7 @@ defmodule AgentCore.LoopTest do
       context = simple_context()
 
       config =
-        simple_config(
-          convert_to_llm: fn _messages -> {:error, :bad_convert} end
-        )
+        simple_config(convert_to_llm: fn _messages -> {:error, :bad_convert} end)
 
       stream = Loop.agent_loop([user_message("Test")], context, config, nil, nil)
 
@@ -679,9 +663,7 @@ defmodule AgentCore.LoopTest do
       context = simple_context()
 
       config =
-        simple_config(
-          transform_context: fn _messages, _signal -> {:error, :bad_transform} end
-        )
+        simple_config(transform_context: fn _messages, _signal -> {:error, :bad_transform} end)
 
       stream = Loop.agent_loop([user_message("Test")], context, config, nil, nil)
 
@@ -707,9 +689,7 @@ defmodule AgentCore.LoopTest do
       final_response = Mocks.assistant_message("Handled")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       events = Loop.stream([user_message("Use bad tool")], context, config) |> Enum.to_list()
 
@@ -780,9 +760,7 @@ defmodule AgentCore.LoopTest do
       end
 
       config =
-        simple_config(
-          stream_fn: stream_fn
-        )
+        simple_config(stream_fn: stream_fn)
 
       stream = Loop.agent_loop([user_message("Test")], context, config, nil, nil)
 
@@ -810,7 +788,12 @@ defmodule AgentCore.LoopTest do
 
       stream_fn = fn model, llm_context, options ->
         send(parent, :stream_called)
-        Mocks.mock_stream_fn_single(Mocks.assistant_message("Should not run")).(model, llm_context, options)
+
+        Mocks.mock_stream_fn_single(Mocks.assistant_message("Should not run")).(
+          model,
+          llm_context,
+          options
+        )
       end
 
       signal = AbortSignal.new()
@@ -842,9 +825,7 @@ defmodule AgentCore.LoopTest do
       response = Mocks.assistant_message("Hello!")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn_single(response)
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
 
       prompt = user_message("Hi")
       stream = Loop.agent_loop([prompt], context, config, nil, nil)
@@ -864,9 +845,7 @@ defmodule AgentCore.LoopTest do
       final_response = Mocks.assistant_message("Done")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       stream = Loop.agent_loop([user_message("Echo")], context, config, nil, nil)
 

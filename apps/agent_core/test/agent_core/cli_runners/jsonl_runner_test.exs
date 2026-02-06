@@ -2,7 +2,14 @@ defmodule AgentCore.CliRunners.JsonlRunnerTest do
   use ExUnit.Case, async: true
 
   alias AgentCore.CliRunners.JsonlRunner
-  alias AgentCore.CliRunners.Types.{Action, ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
+
+  alias AgentCore.CliRunners.Types.{
+    Action,
+    ActionEvent,
+    CompletedEvent,
+    ResumeToken,
+    StartedEvent
+  }
 
   # ============================================================================
   # Test Runner Modules
@@ -303,8 +310,11 @@ defmodule AgentCore.CliRunners.JsonlRunnerTest do
 
     def build_command(_prompt, resume, _state) do
       case resume do
-        nil -> {"bash", ["-c", "echo '{\"type\":\"start\",\"session\":\"sess_new\"}'"]}
-        %ResumeToken{value: value} -> {"bash", ["-c", "echo '{\"type\":\"resumed\",\"session\":\"#{value}\"}'"]}
+        nil ->
+          {"bash", ["-c", "echo '{\"type\":\"start\",\"session\":\"sess_new\"}'"]}
+
+        %ResumeToken{value: value} ->
+          {"bash", ["-c", "echo '{\"type\":\"resumed\",\"session\":\"#{value}\"}'"]}
       end
     end
 
@@ -849,7 +859,9 @@ defmodule AgentCore.CliRunners.JsonlRunnerTest do
     end
 
     test "accepts env option" do
-      {:ok, events} = JsonlRunner.run(TestRunner, prompt: "test", env: [{"CUSTOM", "value"}], timeout: 5_000)
+      {:ok, events} =
+        JsonlRunner.run(TestRunner, prompt: "test", env: [{"CUSTOM", "value"}], timeout: 5_000)
+
       assert is_list(events)
     end
   end

@@ -74,7 +74,9 @@ defmodule AgentCore.ProxyStreamIntegrationTest do
 
   describe "stream_proxy/3" do
     test "reconstructs text content from SSE stream" do
-      text_delta_line = sse_event(%{"type" => "text_delta", "contentIndex" => 0, "delta" => "Hello"})
+      text_delta_line =
+        sse_event(%{"type" => "text_delta", "contentIndex" => 0, "delta" => "Hello"})
+
       {chunk1, chunk2} = String.split_at(text_delta_line, 15)
 
       chunks = [
@@ -138,8 +140,17 @@ defmodule AgentCore.ProxyStreamIntegrationTest do
     test "reconstructs tool call arguments from streaming JSON" do
       chunks = [
         sse_event(%{"type" => "start"}),
-        sse_event(%{"type" => "toolcall_start", "contentIndex" => 0, "id" => "call_1", "toolName" => "echo"}),
-        sse_event(%{"type" => "toolcall_delta", "contentIndex" => 0, "delta" => "{\"text\":\"hi"}),
+        sse_event(%{
+          "type" => "toolcall_start",
+          "contentIndex" => 0,
+          "id" => "call_1",
+          "toolName" => "echo"
+        }),
+        sse_event(%{
+          "type" => "toolcall_delta",
+          "contentIndex" => 0,
+          "delta" => "{\"text\":\"hi"
+        }),
         sse_event(%{"type" => "toolcall_delta", "contentIndex" => 0, "delta" => "\"}"}),
         sse_event(%{"type" => "toolcall_end", "contentIndex" => 0}),
         sse_event(%{"type" => "done", "reason" => "toolUse", "usage" => %{}})
@@ -168,7 +179,12 @@ defmodule AgentCore.ProxyStreamIntegrationTest do
     test "propagates proxy error events" do
       chunks = [
         sse_event(%{"type" => "start"}),
-        sse_event(%{"type" => "error", "reason" => "error", "errorMessage" => "boom", "usage" => %{}})
+        sse_event(%{
+          "type" => "error",
+          "reason" => "error",
+          "errorMessage" => "boom",
+          "usage" => %{}
+        })
       ]
 
       port = start_sse_server(chunks)

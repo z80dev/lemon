@@ -52,7 +52,7 @@ defmodule CodingAgent.Tools.TaskKimiIntegrationTest do
           nil,
           nil,
           cwd,
-          [model: IntegrationConfig.model()]
+          model: IntegrationConfig.model()
         )
 
       case result do
@@ -68,7 +68,8 @@ defmodule CodingAgent.Tools.TaskKimiIntegrationTest do
           assert details[:status] == "completed"
 
         {:error, %{message: message} = reason} ->
-          if String.contains?(message, "Invalid Authentication") or String.contains?(message, "LLM not set") do
+          if String.contains?(message, "Invalid Authentication") or
+               String.contains?(message, "LLM not set") do
             IO.puts("Skipping Kimi Task integration test: #{message}")
             assert true
           else

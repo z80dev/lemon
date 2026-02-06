@@ -78,14 +78,15 @@ defmodule LemonCore.Config do
     "engines" => %{}
   }
 
-  defstruct providers: %{}, agent: %{}, tui: %{}, gateway: %{}
+  defstruct providers: %{}, agent: %{}, tui: %{}, gateway: %{}, agents: %{}
 
   @type provider_config :: %{api_key: String.t() | nil, base_url: String.t() | nil}
   @type t :: %__MODULE__{
           providers: %{optional(String.t()) => provider_config()},
           agent: map(),
           tui: map(),
-          gateway: map()
+          gateway: map(),
+          agents: map()
         }
 
   @doc """
@@ -158,7 +159,8 @@ defmodule LemonCore.Config do
       providers: config.providers,
       agent: config.agent,
       tui: config.tui,
-      gateway: config.gateway
+      gateway: config.gateway,
+      agents: config.agents
     }
   end
 
@@ -174,7 +176,8 @@ defmodule LemonCore.Config do
       providers: parse_providers(Map.get(map, "providers", %{})),
       agent: parse_agent(Map.get(map, "agent", %{})),
       tui: parse_tui(Map.get(map, "tui", %{})),
-      gateway: parse_gateway(Map.get(map, "gateway", %{}))
+      gateway: parse_gateway(Map.get(map, "gateway", %{})),
+      agents: parse_agents(Map.get(map, "agents", %{}))
     }
   end
 
@@ -269,6 +272,7 @@ defmodule LemonCore.Config do
         chat_id: cfg["chat_id"],
         topic_id: cfg["topic_id"],
         project: cfg["project"],
+        agent_id: cfg["agent_id"],
         default_engine: cfg["default_engine"],
         queue_mode: cfg["queue_mode"]
       }
@@ -318,6 +322,120 @@ defmodule LemonCore.Config do
   end
 
   defp parse_gateway_engines(_), do: %{}
+
+  defp parse_agents(map) when is_map(map) do
+    map
+    |> stringify_keys()
+    |> Enum.reduce(%{}, fn {id, cfg}, acc ->
+      parsed = parse_agent_profile(to_string(id), cfg)
+      Map.put(acc, to_string(id), parsed)
+    end)
+    |> ensure_default_agent()
+  end
+
+  defp parse_agents(_), do: ensure_default_agent(%{})
+
+  defp ensure_default_agent(agents) when is_map(agents) do
+    if Map.has_key?(agents, "default") do
+      agents
+    else
+      Map.put(agents, "default", default_agent_profile("default", %{}))
+    end
+  end
+
+  defp parse_agent_profile(id, cfg) do
+    cfg = stringify_keys(cfg || %{})
+
+    base = default_agent_profile(id, cfg)
+
+    # Allow both "default_engine" and legacy "engine"
+    default_engine = cfg["default_engine"] || cfg["engine"]
+
+    tool_policy = parse_tool_policy(cfg["tool_policy"])
+
+    base
+    |> Map.put(:name, cfg["name"] || base.name || id)
+    |> Map.put(:description, cfg["description"])
+    |> Map.put(:avatar, cfg["avatar"])
+    |> Map.put(:default_engine, default_engine)
+    |> Map.put(:model, cfg["model"])
+    |> Map.put(:system_prompt, cfg["system_prompt"])
+    |> Map.put(:tool_policy, tool_policy)
+    |> Map.put(:rate_limit, cfg["rate_limit"])
+    |> Map.put(:status, cfg["status"] || "active")
+  end
+
+  defp default_agent_profile(id, _cfg) do
+    name =
+      if id == "default" do
+        "Default Agent"
+      else
+        id
+      end
+
+    %{
+      id: id,
+      name: name,
+      description: nil,
+      avatar: nil,
+      default_engine: nil,
+      model: nil,
+      system_prompt: nil,
+      tool_policy: nil,
+      rate_limit: nil,
+      status: "active"
+    }
+  end
+
+  defp parse_tool_policy(nil), do: nil
+
+  defp parse_tool_policy(map) when is_map(map) do
+    map = stringify_keys(map)
+
+    allow =
+      case map["allow"] do
+        "all" -> :all
+        :all -> :all
+        list when is_list(list) -> Enum.map(list, &to_string/1)
+        other when is_binary(other) -> [other]
+        _ -> :all
+      end
+
+    deny =
+      case map["deny"] do
+        list when is_list(list) -> Enum.map(list, &to_string/1)
+        other when is_binary(other) -> [other]
+        _ -> []
+      end
+
+    require_approval =
+      case map["require_approval"] do
+        list when is_list(list) -> Enum.map(list, &to_string/1)
+        other when is_binary(other) -> [other]
+        _ -> []
+      end
+
+    profile =
+      case map["profile"] do
+        "full_access" -> :full_access
+        "read_only" -> :read_only
+        "safe_mode" -> :safe_mode
+        "subagent_restricted" -> :subagent_restricted
+        "no_external" -> :no_external
+        "custom" -> :custom
+        _ -> nil
+      end
+
+    %{
+      allow: allow,
+      deny: deny,
+      require_approval: require_approval,
+      no_reply: parse_boolean(map["no_reply"], false),
+      profile: profile
+    }
+  end
+
+  defp parse_tool_policy(_), do: nil
 
   defp parse_compaction(map) do
     map = stringify_keys(map)

@@ -53,7 +53,8 @@ defmodule LemonGateway.Renderers.Basic do
     if text == state.last_text and status == state.last_status do
       {state, :unchanged}
     else
-      { %{state | last_text: text, last_status: status, last_answer: answer}, {:render, %{text: text, status: status}} }
+      {%{state | last_text: text, last_status: status, last_answer: answer},
+       {:render, %{text: text, status: status}}}
     end
   end
 

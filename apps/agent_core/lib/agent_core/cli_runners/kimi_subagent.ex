@@ -62,7 +62,9 @@ defmodule AgentCore.CliRunners.KimiSubagent do
       {:ok, pid} ->
         stream = KimiRunner.stream(pid)
         {:ok, token_agent} = Agent.start_link(fn -> token end)
-        {:ok, %{pid: pid, stream: stream, resume_token: token, token_agent: token_agent, cwd: cwd}}
+
+        {:ok,
+         %{pid: pid, stream: stream, resume_token: token, token_agent: token_agent, cwd: cwd}}
 
       {:error, reason} ->
         {:error, reason}
@@ -163,7 +165,9 @@ defmodule AgentCore.CliRunners.KimiSubagent do
     [{:action, action, phase, ok: ok}]
   end
 
-  defp normalize_event({:cli_event, %CompletedEvent{answer: answer, resume: resume, error: error, usage: usage}}) do
+  defp normalize_event(
+         {:cli_event, %CompletedEvent{answer: answer, resume: resume, error: error, usage: usage}}
+       ) do
     opts =
       []
       |> maybe_put(:resume, resume)

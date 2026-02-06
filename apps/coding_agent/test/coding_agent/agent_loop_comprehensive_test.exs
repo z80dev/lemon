@@ -51,7 +51,12 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       stream_fn: Keyword.get(opts, :stream_fn)
     ]
 
-    merged_opts = Keyword.merge(base_opts, Keyword.drop(opts, [:cwd, :model, :settings_manager, :system_prompt, :tools, :stream_fn]))
+    merged_opts =
+      Keyword.merge(
+        base_opts,
+        Keyword.drop(opts, [:cwd, :model, :settings_manager, :system_prompt, :tools, :stream_fn])
+      )
+
     {:ok, session} = Session.start_link(merged_opts)
     session
   end
@@ -149,9 +154,11 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
         nil ->
           {:ok, stream} = Ai.EventStream.start_link()
           empty_msg = Mocks.assistant_message("", stop_reason: :stop)
+
           Task.start(fn ->
             Ai.EventStream.complete(stream, empty_msg)
           end)
+
           {:ok, stream}
 
         response ->
@@ -209,24 +216,25 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
       final_response = Mocks.assistant_message("The echo tool returned: Echo: test input")
 
-      session = start_session(
-        tools: [Mocks.echo_tool()],
-        stream_fn: multi_response_stream_fn([tool_response, final_response])
-      )
+      session =
+        start_session(
+          tools: [Mocks.echo_tool()],
+          stream_fn: multi_response_stream_fn([tool_response, final_response])
+        )
 
       :ok = Session.prompt(session, "Echo the text 'test input'")
       events = subscribe_and_collect(session)
 
       # Should have tool execution events
       assert Enum.any?(events, fn
-        {:tool_execution_start, "call_1", "echo", _args} -> true
-        _ -> false
-      end)
+               {:tool_execution_start, "call_1", "echo", _args} -> true
+               _ -> false
+             end)
 
       assert Enum.any?(events, fn
-        {:tool_execution_end, "call_1", "echo", _result, _is_error} -> true
-        _ -> false
-      end)
+               {:tool_execution_end, "call_1", "echo", _result, _is_error} -> true
+               _ -> false
+             end)
 
       # Should have final assistant message
       message_ends = Enum.filter(events, &match?({:message_end, %AssistantMessage{}}, &1))
@@ -241,10 +249,11 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       response2 = Mocks.assistant_message_with_tool_calls([tool_call2])
       final_response = Mocks.assistant_message("Done with calculations and echo")
 
-      session = start_session(
-        tools: [Mocks.add_tool(), Mocks.echo_tool()],
-        stream_fn: multi_response_stream_fn([response1, response2, final_response])
-      )
+      session =
+        start_session(
+          tools: [Mocks.add_tool(), Mocks.echo_tool()],
+          stream_fn: multi_response_stream_fn([response1, response2, final_response])
+        )
 
       :ok = Session.prompt(session, "Add 5 and 3, then echo 'result'")
       events = subscribe_and_collect(session)
@@ -261,10 +270,11 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       response_with_parallel = Mocks.assistant_message_with_tool_calls([tool_call1, tool_call2])
       final_response = Mocks.assistant_message("Results: 3 and 7")
 
-      session = start_session(
-        tools: [Mocks.add_tool()],
-        stream_fn: multi_response_stream_fn([response_with_parallel, final_response])
-      )
+      session =
+        start_session(
+          tools: [Mocks.add_tool()],
+          stream_fn: multi_response_stream_fn([response_with_parallel, final_response])
+        )
 
       :ok = Session.prompt(session, "Calculate 1+2 and 3+4 at the same time")
       events = subscribe_and_collect(session)
@@ -275,23 +285,28 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
     end
 
     test "handles tool that returns error" do
-      tool_call = Mocks.tool_call("error_tool", %{"message" => "Something went wrong"}, id: "call_err")
+      tool_call =
+        Mocks.tool_call("error_tool", %{"message" => "Something went wrong"}, id: "call_err")
+
       tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
       final_response = Mocks.assistant_message("The tool encountered an error.")
 
-      session = start_session(
-        tools: [Mocks.error_tool()],
-        stream_fn: multi_response_stream_fn([tool_response, final_response])
-      )
+      session =
+        start_session(
+          tools: [Mocks.error_tool()],
+          stream_fn: multi_response_stream_fn([tool_response, final_response])
+        )
 
       :ok = Session.prompt(session, "Trigger an error")
       events = subscribe_and_collect(session)
 
       # Tool should end with error result
-      tool_end = Enum.find(events, fn
-        {:tool_execution_end, "call_err", "error_tool", result, _is_error} -> true
-        _ -> false
-      end)
+      tool_end =
+        Enum.find(events, fn
+          {:tool_execution_end, "call_err", "error_tool", result, _is_error} -> true
+          _ -> false
+        end)
+
       assert tool_end != nil
     end
 
@@ -300,10 +315,11 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
       final_response = Mocks.assistant_message("Tool not found, proceeding without it.")
 
-      session = start_session(
-        tools: [],
-        stream_fn: multi_response_stream_fn([tool_response, final_response])
-      )
+      session =
+        start_session(
+          tools: [],
+          stream_fn: multi_response_stream_fn([tool_response, final_response])
+        )
 
       unsub = Session.subscribe(session)
       :ok = Session.prompt(session, "Use nonexistent tool")
@@ -345,10 +361,11 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       response2 = Mocks.assistant_message("The sum is 30.")
       response3 = Mocks.assistant_message("Yes, I calculated 10 + 20 = 30 earlier.")
 
-      session = start_session(
-        tools: [Mocks.add_tool()],
-        stream_fn: multi_response_stream_fn([response1, response2, response3])
-      )
+      session =
+        start_session(
+          tools: [Mocks.add_tool()],
+          stream_fn: multi_response_stream_fn([response1, response2, response3])
+        )
 
       :ok = Session.prompt(session, "Add 10 and 20")
       _events1 = subscribe_and_collect(session)
@@ -378,9 +395,10 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
     end
 
     test "correctly handles 5 turn conversation" do
-      responses = for i <- 1..5 do
-        Mocks.assistant_message("Response #{i}")
-      end
+      responses =
+        for i <- 1..5 do
+          Mocks.assistant_message("Response #{i}")
+        end
 
       session = start_session(stream_fn: multi_response_stream_fn(responses))
 
@@ -407,10 +425,11 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       response1 = Mocks.assistant_message_with_tool_calls([tool_call])
       response2 = Mocks.assistant_message("I encountered an error but will continue.")
 
-      session = start_session(
-        tools: [Mocks.error_tool()],
-        stream_fn: multi_response_stream_fn([response1, response2])
-      )
+      session =
+        start_session(
+          tools: [Mocks.error_tool()],
+          stream_fn: multi_response_stream_fn([response1, response2])
+        )
 
       :ok = Session.prompt(session, "Trigger error")
       events = subscribe_and_collect(session)
@@ -431,9 +450,9 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
 
       # Should have error event
       assert Enum.any?(events, fn
-        {:error, _} -> true
-        _ -> false
-      end)
+               {:error, _} -> true
+               _ -> false
+             end)
     end
 
     test "recovers from tool crash" do
@@ -451,10 +470,11 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       response1 = Mocks.assistant_message_with_tool_calls([tool_call])
       response2 = Mocks.assistant_message("Tool crashed but I recovered.")
 
-      session = start_session(
-        tools: [crashing_tool],
-        stream_fn: multi_response_stream_fn([response1, response2])
-      )
+      session =
+        start_session(
+          tools: [crashing_tool],
+          stream_fn: multi_response_stream_fn([response1, response2])
+        )
 
       :ok = Session.prompt(session, "Crash the tool")
       events = subscribe_and_collect(session)
@@ -478,10 +498,11 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       response1 = Mocks.assistant_message_with_tool_calls([tool_call])
       response2 = Mocks.assistant_message("I provided bad arguments.")
 
-      session = start_session(
-        tools: [Mocks.add_tool()],
-        stream_fn: multi_response_stream_fn([response1, response2])
-      )
+      session =
+        start_session(
+          tools: [Mocks.add_tool()],
+          stream_fn: multi_response_stream_fn([response1, response2])
+        )
 
       :ok = Session.prompt(session, "Use tool with bad args")
       events = subscribe_and_collect(session)
@@ -530,8 +551,10 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
 
       # Subscribe from another process
       parent = self()
+
       spawn(fn ->
         _unsub2 = Session.subscribe(session)
+
         receive do
           {:session_event, _, event} -> send(parent, {:other_sub, event})
         after
@@ -539,7 +562,8 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
         end
       end)
 
-      Process.sleep(50)  # Let subscriber connect
+      # Let subscriber connect
+      Process.sleep(50)
       :ok = Session.prompt(session, "Hello")
 
       # Main process collects events
@@ -564,7 +588,8 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
 
       # Should not receive agent_end
       receive do
-        {:session_event, _, {:agent_end, _}} -> flunk("Should not receive events after unsubscribe")
+        {:session_event, _, {:agent_end, _}} ->
+          flunk("Should not receive events after unsubscribe")
       after
         500 -> :ok
       end
@@ -579,7 +604,8 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       :ok = Session.prompt(session, "Hello")
 
       # Collect events from stream
-      events = stream
+      events =
+        stream
         |> AgentCore.EventStream.events()
         |> Enum.take_while(fn
           {:session_event, _, {:agent_end, _}} -> false
@@ -618,6 +644,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
         label: "Slow Tool",
         execute: fn _id, _args, _signal, _on_update ->
           Process.sleep(200)
+
           %AgentToolResult{
             content: [%TextContent{type: :text, text: "Slow result"}],
             details: nil
@@ -629,10 +656,11 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       response1 = Mocks.assistant_message_with_tool_calls([tool_call])
       response2 = Mocks.assistant_message("Received steering message and tool result.")
 
-      session = start_session(
-        tools: [slow_tool],
-        stream_fn: multi_response_stream_fn([response1, response2])
-      )
+      session =
+        start_session(
+          tools: [slow_tool],
+          stream_fn: multi_response_stream_fn([response1, response2])
+        )
 
       _unsub = Session.subscribe(session)
       :ok = Session.prompt(session, "Run slow tool")
@@ -698,6 +726,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
         label: "Signal Checker",
         execute: fn _id, _args, signal, _on_update ->
           send(parent, {:signal_received, signal})
+
           %AgentToolResult{
             content: [%TextContent{type: :text, text: "Signal checked"}],
             details: nil
@@ -709,10 +738,11 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       response1 = Mocks.assistant_message_with_tool_calls([tool_call])
       response2 = Mocks.assistant_message("Done")
 
-      session = start_session(
-        tools: [signal_tool],
-        stream_fn: multi_response_stream_fn([response1, response2])
-      )
+      session =
+        start_session(
+          tools: [signal_tool],
+          stream_fn: multi_response_stream_fn([response1, response2])
+        )
 
       :ok = Session.prompt(session, "Check signal")
       _events = subscribe_and_collect(session)
@@ -733,6 +763,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
               content: [%TextContent{type: :text, text: "Progress: #{i}/3"}],
               details: %{step: i}
             })
+
             Process.sleep(10)
           end
 
@@ -747,10 +778,11 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       response1 = Mocks.assistant_message_with_tool_calls([tool_call])
       response2 = Mocks.assistant_message("Progress complete")
 
-      session = start_session(
-        tools: [progress_tool],
-        stream_fn: multi_response_stream_fn([response1, response2])
-      )
+      session =
+        start_session(
+          tools: [progress_tool],
+          stream_fn: multi_response_stream_fn([response1, response2])
+        )
 
       :ok = Session.prompt(session, "Show progress")
       events = subscribe_and_collect(session)
@@ -782,18 +814,21 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       response1 = Mocks.assistant_message_with_tool_calls([tool_call])
       response2 = Mocks.assistant_message("Complex data processed")
 
-      session = start_session(
-        tools: [complex_tool],
-        stream_fn: multi_response_stream_fn([response1, response2])
-      )
+      session =
+        start_session(
+          tools: [complex_tool],
+          stream_fn: multi_response_stream_fn([response1, response2])
+        )
 
       :ok = Session.prompt(session, "Get complex data")
       events = subscribe_and_collect(session)
 
-      tool_end = Enum.find(events, fn
-        {:tool_execution_end, "call_complex", "complex_tool", _result, _is_error} -> true
-        _ -> false
-      end)
+      tool_end =
+        Enum.find(events, fn
+          {:tool_execution_end, "call_complex", "complex_tool", _result, _is_error} -> true
+          _ -> false
+        end)
+
       assert tool_end != nil
     end
 
@@ -805,6 +840,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
         label: "Long Tool",
         execute: fn _id, _args, _signal, _on_update ->
           Process.sleep(300)
+
           %AgentToolResult{
             content: [%TextContent{type: :text, text: "Finally done"}],
             details: nil
@@ -816,10 +852,11 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       response1 = Mocks.assistant_message_with_tool_calls([tool_call])
       response2 = Mocks.assistant_message("Long operation complete")
 
-      session = start_session(
-        tools: [long_tool],
-        stream_fn: multi_response_stream_fn([response1, response2])
-      )
+      session =
+        start_session(
+          tools: [long_tool],
+          stream_fn: multi_response_stream_fn([response1, response2])
+        )
 
       :ok = Session.prompt(session, "Run long operation")
       events = subscribe_and_collect(session, 10_000)
@@ -851,9 +888,9 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
 
       # Should not timeout
       refute Enum.any?(events, fn
-        {:timeout, _} -> true
-        _ -> false
-      end)
+               {:timeout, _} -> true
+               _ -> false
+             end)
     end
 
     test "abort during tool execution" do
@@ -868,6 +905,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
             if AgentCore.AbortSignal.aborted?(signal) do
               throw(:aborted)
             end
+
             Process.sleep(20)
           end
 
@@ -881,10 +919,11 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       tool_call = Mocks.tool_call("very_slow", %{}, id: "call_vs")
       response = Mocks.assistant_message_with_tool_calls([tool_call])
 
-      session = start_session(
-        tools: [slow_tool],
-        stream_fn: Mocks.mock_stream_fn_single(response)
-      )
+      session =
+        start_session(
+          tools: [slow_tool],
+          stream_fn: Mocks.mock_stream_fn_single(response)
+        )
 
       _unsub = Session.subscribe(session)
       :ok = Session.prompt(session, "Run very slow tool")
@@ -897,9 +936,9 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
 
       # Should complete without timing out
       refute Enum.any?(events, fn
-        {:timeout, _} -> true
-        _ -> false
-      end)
+               {:timeout, _} -> true
+               _ -> false
+             end)
     end
 
     test "reset clears state and allows new prompts" do
@@ -965,9 +1004,10 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
 
   describe "context window management" do
     test "accumulates messages correctly across turns" do
-      responses = for i <- 1..3 do
-        Mocks.assistant_message("Response #{i}")
-      end
+      responses =
+        for i <- 1..3 do
+          Mocks.assistant_message("Response #{i}")
+        end
 
       session = start_session(stream_fn: multi_response_stream_fn(responses))
 
@@ -993,10 +1033,11 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       response1 = Mocks.assistant_message_with_tool_calls([tool_call])
       response2 = Mocks.assistant_message("Echo completed")
 
-      session = start_session(
-        tools: [Mocks.echo_tool()],
-        stream_fn: multi_response_stream_fn([response1, response2])
-      )
+      session =
+        start_session(
+          tools: [Mocks.echo_tool()],
+          stream_fn: multi_response_stream_fn([response1, response2])
+        )
 
       :ok = Session.prompt(session, "Echo something")
       _events = subscribe_and_collect(session)
@@ -1012,10 +1053,11 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       response1 = Mocks.assistant_message_with_tool_calls([tool_call])
       response2 = Mocks.assistant_message("Sum is 3")
 
-      session = start_session(
-        tools: [Mocks.add_tool()],
-        stream_fn: multi_response_stream_fn([response1, response2])
-      )
+      session =
+        start_session(
+          tools: [Mocks.add_tool()],
+          stream_fn: multi_response_stream_fn([response1, response2])
+        )
 
       :ok = Session.prompt(session, "Add numbers")
       _events = subscribe_and_collect(session)
@@ -1023,7 +1065,8 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       stats = Session.get_stats(session)
 
       assert stats.turn_count >= 1
-      assert stats.message_count >= 3  # user + assistant + tool_result + assistant
+      # user + assistant + tool_result + assistant
+      assert stats.message_count >= 3
       assert stats.is_streaming == false
     end
 
@@ -1098,14 +1141,18 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
 
     test "save and load session preserves messages" do
       tmp_dir = System.tmp_dir!()
-      session_file = Path.join(tmp_dir, "test_session_#{System.unique_integer([:positive])}.jsonl")
+
+      session_file =
+        Path.join(tmp_dir, "test_session_#{System.unique_integer([:positive])}.jsonl")
 
       response = Mocks.assistant_message("Session to save")
-      session1 = start_session(
-        cwd: tmp_dir,
-        session_file: session_file,
-        stream_fn: Mocks.mock_stream_fn_single(response)
-      )
+
+      session1 =
+        start_session(
+          cwd: tmp_dir,
+          session_file: session_file,
+          stream_fn: Mocks.mock_stream_fn_single(response)
+        )
 
       :ok = Session.prompt(session1, "Save this")
       _events = subscribe_and_collect(session1)
@@ -1119,11 +1166,13 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
 
       # Load the session
       response2 = Mocks.assistant_message("Loaded session response")
-      session2 = start_session(
-        cwd: tmp_dir,
-        session_file: session_file,
-        stream_fn: Mocks.mock_stream_fn_single(response2)
-      )
+
+      session2 =
+        start_session(
+          cwd: tmp_dir,
+          session_file: session_file,
+          stream_fn: Mocks.mock_stream_fn_single(response2)
+        )
 
       messages = Session.get_messages(session2)
       assert length(messages) >= 2
@@ -1188,6 +1237,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       Line 2
       Line 3
       """
+
       :ok = Session.prompt(session, multiline)
       events = subscribe_and_collect(session)
 
@@ -1199,14 +1249,17 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
     end
 
     test "special characters in tool arguments" do
-      tool_call = Mocks.tool_call("echo", %{"text" => "Hello \"world\" & <test>"}, id: "call_special")
+      tool_call =
+        Mocks.tool_call("echo", %{"text" => "Hello \"world\" & <test>"}, id: "call_special")
+
       response1 = Mocks.assistant_message_with_tool_calls([tool_call])
       response2 = Mocks.assistant_message("Echoed special chars")
 
-      session = start_session(
-        tools: [Mocks.echo_tool()],
-        stream_fn: multi_response_stream_fn([response1, response2])
-      )
+      session =
+        start_session(
+          tools: [Mocks.echo_tool()],
+          stream_fn: multi_response_stream_fn([response1, response2])
+        )
 
       :ok = Session.prompt(session, "Echo special characters")
       events = subscribe_and_collect(session)
@@ -1237,10 +1290,11 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       response1 = Mocks.assistant_message_with_tool_calls([tool_call])
       response2 = Mocks.assistant_message("Handled null")
 
-      session = start_session(
-        tools: [null_tool],
-        stream_fn: multi_response_stream_fn([response1, response2])
-      )
+      session =
+        start_session(
+          tools: [null_tool],
+          stream_fn: multi_response_stream_fn([response1, response2])
+        )
 
       :ok = Session.prompt(session, "Handle null")
       events = subscribe_and_collect(session)

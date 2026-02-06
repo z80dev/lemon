@@ -4,7 +4,26 @@ defmodule LemonGateway.Telegram.Formatter do
   """
 
   # Characters that must be escaped in MarkdownV2
-  @escape_chars ["_", "*", "[", "]", "(", ")", "~", "`", ">", "#", "+", "-", "=", "|", "{", "}", ".", "!"]
+  @escape_chars [
+    "_",
+    "*",
+    "[",
+    "]",
+    "(",
+    ")",
+    "~",
+    "`",
+    ">",
+    "#",
+    "+",
+    "-",
+    "=",
+    "|",
+    "{",
+    "}",
+    ".",
+    "!"
+  ]
 
   @doc """
   Escapes text for Telegram MarkdownV2 format.

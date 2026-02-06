@@ -21,6 +21,7 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
   use ExUnit.Case, async: true
 
   alias AgentCore.CliRunners.CodexSubagent
+
   alias AgentCore.CliRunners.Types.{
     Action,
     ActionEvent,
@@ -28,6 +29,7 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
     ResumeToken,
     StartedEvent
   }
+
   alias AgentCore.EventStream
 
   # ============================================================================
@@ -96,11 +98,13 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
     test "accepts timeout option" do
       try do
-        {:ok, session} = CodexSubagent.start(
-          prompt: "test",
-          cwd: System.tmp_dir!(),
-          timeout: 5_000
-        )
+        {:ok, session} =
+          CodexSubagent.start(
+            prompt: "test",
+            cwd: System.tmp_dir!(),
+            timeout: 5_000
+          )
+
         assert Map.has_key?(session, :stream)
       catch
         :exit, _ -> :ok
@@ -109,11 +113,13 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
     test "accepts role_prompt option" do
       try do
-        {:ok, session} = CodexSubagent.start(
-          prompt: "main task",
-          role_prompt: "You are a helpful assistant",
-          cwd: System.tmp_dir!()
-        )
+        {:ok, session} =
+          CodexSubagent.start(
+            prompt: "main task",
+            role_prompt: "You are a helpful assistant",
+            cwd: System.tmp_dir!()
+          )
+
         assert Map.has_key?(session, :pid)
       catch
         :exit, _ -> :ok
@@ -194,12 +200,14 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
       token = ResumeToken.new("codex", "thread_123")
 
       try do
-        {:ok, _session} = CodexSubagent.resume(
-          token,
-          prompt: "continue",
-          cwd: System.tmp_dir!(),
-          timeout: 30_000
-        )
+        {:ok, _session} =
+          CodexSubagent.resume(
+            token,
+            prompt: "continue",
+            cwd: System.tmp_dir!(),
+            timeout: 30_000
+          )
+
         :ok
       catch
         :exit, _ -> :ok
@@ -271,7 +279,7 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
       session = %{pid: nil, stream: nil, resume_token: nil, token_agent: nil, cwd: "/tmp"}
 
       assert {:error, :no_resume_token} =
-        CodexSubagent.continue(session, "test", timeout: 30_000)
+               CodexSubagent.continue(session, "test", timeout: 30_000)
     end
 
     test "can override cwd" do
@@ -314,7 +322,13 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
       {:ok, stream} = EventStream.start_link(owner: self(), timeout: 5000)
       {:ok, token_agent} = Agent.start_link(fn -> nil end)
 
-      session = %{pid: nil, stream: stream, resume_token: nil, token_agent: token_agent, cwd: "/tmp"}
+      session = %{
+        pid: nil,
+        stream: stream,
+        resume_token: nil,
+        token_agent: token_agent,
+        cwd: "/tmp"
+      }
 
       EventStream.complete(stream, [])
 
@@ -331,7 +345,13 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
       {:ok, stream} = EventStream.start_link(owner: self(), timeout: 5000)
       {:ok, token_agent} = Agent.start_link(fn -> nil end)
 
-      session = %{pid: nil, stream: stream, resume_token: nil, token_agent: token_agent, cwd: "/tmp"}
+      session = %{
+        pid: nil,
+        stream: stream,
+        resume_token: nil,
+        token_agent: token_agent,
+        cwd: "/tmp"
+      }
 
       started_token = ResumeToken.new("codex", "new_session_123")
       started_event = StartedEvent.new("codex", started_token)
@@ -349,7 +369,13 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
       {:ok, stream} = EventStream.start_link(owner: self(), timeout: 5000)
       {:ok, token_agent} = Agent.start_link(fn -> nil end)
 
-      session = %{pid: nil, stream: stream, resume_token: nil, token_agent: token_agent, cwd: "/tmp"}
+      session = %{
+        pid: nil,
+        stream: stream,
+        resume_token: nil,
+        token_agent: token_agent,
+        cwd: "/tmp"
+      }
 
       resume_token = ResumeToken.new("codex", "session_for_resume")
       completed_event = CompletedEvent.ok("codex", "Done!", resume: resume_token)
@@ -382,7 +408,13 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
       {:ok, stream} = EventStream.start_link(owner: self(), timeout: 5000)
       {:ok, token_agent} = Agent.start_link(fn -> nil end)
 
-      session = %{pid: nil, stream: stream, resume_token: nil, token_agent: token_agent, cwd: "/tmp"}
+      session = %{
+        pid: nil,
+        stream: stream,
+        resume_token: nil,
+        token_agent: token_agent,
+        cwd: "/tmp"
+      }
 
       token = ResumeToken.new("codex", "full_session")
 
@@ -390,9 +422,17 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
       action = Action.new("tool_1", :command, "$ ls")
       EventStream.push_async(stream, {:cli_event, ActionEvent.new("codex", action, :started)})
-      EventStream.push_async(stream, {:cli_event, ActionEvent.new("codex", action, :completed, ok: true)})
 
-      EventStream.push_async(stream, {:cli_event, CompletedEvent.ok("codex", "All done", resume: token)})
+      EventStream.push_async(
+        stream,
+        {:cli_event, ActionEvent.new("codex", action, :completed, ok: true)}
+      )
+
+      EventStream.push_async(
+        stream,
+        {:cli_event, CompletedEvent.ok("codex", "All done", resume: token)}
+      )
+
       EventStream.complete(stream, [])
 
       events = session |> CodexSubagent.events() |> Enum.to_list()
@@ -419,10 +459,11 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
       events = session |> CodexSubagent.events() |> Enum.to_list()
 
-      started_events = Enum.filter(events, fn
-        {:started, _} -> true
-        _ -> false
-      end)
+      started_events =
+        Enum.filter(events, fn
+          {:started, _} -> true
+          _ -> false
+        end)
 
       assert length(started_events) == 1
       {:started, received_token} = hd(started_events)
@@ -436,15 +477,21 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
       action = Action.new("tool_42", :file_change, "Write test.ex", %{path: "/app/test.ex"})
       EventStream.push_async(stream, {:cli_event, ActionEvent.new("codex", action, :started)})
-      EventStream.push_async(stream, {:cli_event, ActionEvent.new("codex", action, :completed, ok: true)})
+
+      EventStream.push_async(
+        stream,
+        {:cli_event, ActionEvent.new("codex", action, :completed, ok: true)}
+      )
+
       EventStream.complete(stream, [])
 
       events = session |> CodexSubagent.events() |> Enum.to_list()
 
-      action_events = Enum.filter(events, fn
-        {:action, _, _, _} -> true
-        _ -> false
-      end)
+      action_events =
+        Enum.filter(events, fn
+          {:action, _, _, _} -> true
+          _ -> false
+        end)
 
       assert length(action_events) == 2
 
@@ -466,17 +513,22 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
       token = ResumeToken.new("codex", "complete_test")
       usage = %{input_tokens: 100, output_tokens: 50}
-      EventStream.push_async(stream, {:cli_event,
-        CompletedEvent.ok("codex", "Task completed successfully", resume: token, usage: usage)
-      })
+
+      EventStream.push_async(
+        stream,
+        {:cli_event,
+         CompletedEvent.ok("codex", "Task completed successfully", resume: token, usage: usage)}
+      )
+
       EventStream.complete(stream, [])
 
       events = session |> CodexSubagent.events() |> Enum.to_list()
 
-      completed_events = Enum.filter(events, fn
-        {:completed, _, _} -> true
-        _ -> false
-      end)
+      completed_events =
+        Enum.filter(events, fn
+          {:completed, _, _} -> true
+          _ -> false
+        end)
 
       assert length(completed_events) == 1
       {:completed, answer, opts} = hd(completed_events)
@@ -491,17 +543,21 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
       session = %{pid: nil, stream: stream, resume_token: nil, token_agent: nil, cwd: "/tmp"}
 
-      EventStream.push_async(stream, {:cli_event,
-        CompletedEvent.error("codex", "Connection failed", answer: "Partial response")
-      })
+      EventStream.push_async(
+        stream,
+        {:cli_event,
+         CompletedEvent.error("codex", "Connection failed", answer: "Partial response")}
+      )
+
       EventStream.complete(stream, [])
 
       events = session |> CodexSubagent.events() |> Enum.to_list()
 
-      completed_events = Enum.filter(events, fn
-        {:completed, _, _} -> true
-        _ -> false
-      end)
+      completed_events =
+        Enum.filter(events, fn
+          {:completed, _, _} -> true
+          _ -> false
+        end)
 
       {:completed, answer, opts} = hd(completed_events)
       assert answer == "Partial response"
@@ -519,10 +575,11 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
       events = session |> CodexSubagent.events() |> Enum.to_list()
 
-      error_events = Enum.filter(events, fn
-        {:error, _} -> true
-        _ -> false
-      end)
+      error_events =
+        Enum.filter(events, fn
+          {:error, _} -> true
+          _ -> false
+        end)
 
       assert length(error_events) == 1
       {:error, reason} = hd(error_events)
@@ -539,10 +596,11 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
       events = session |> CodexSubagent.events() |> Enum.to_list()
 
-      error_events = Enum.filter(events, fn
-        {:error, {:canceled, _}} -> true
-        _ -> false
-      end)
+      error_events =
+        Enum.filter(events, fn
+          {:error, {:canceled, _}} -> true
+          _ -> false
+        end)
 
       assert length(error_events) == 1
       {:error, {:canceled, reason}} = hd(error_events)
@@ -561,17 +619,19 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
       events = session |> CodexSubagent.events() |> Enum.to_list()
 
-      started_events = Enum.filter(events, fn
-        {:started, _} -> true
-        _ -> false
-      end)
+      started_events =
+        Enum.filter(events, fn
+          {:started, _} -> true
+          _ -> false
+        end)
 
       assert length(started_events) == 1
 
-      agent_end_events = Enum.filter(events, fn
-        {:agent_end, _} -> true
-        _ -> false
-      end)
+      agent_end_events =
+        Enum.filter(events, fn
+          {:agent_end, _} -> true
+          _ -> false
+        end)
 
       assert length(agent_end_events) == 0
     end
@@ -589,13 +649,14 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
       events = session |> CodexSubagent.events() |> Enum.to_list()
 
-      known_events = Enum.filter(events, fn
-        {:started, _} -> true
-        {:action, _, _, _} -> true
-        {:completed, _, _} -> true
-        {:error, _} -> true
-        _ -> false
-      end)
+      known_events =
+        Enum.filter(events, fn
+          {:started, _} -> true
+          {:action, _, _, _} -> true
+          {:completed, _, _} -> true
+          {:error, _} -> true
+          _ -> false
+        end)
 
       assert length(known_events) == 1
       assert match?({:started, _}, hd(known_events))
@@ -612,14 +673,16 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
         action = Action.new("action_#{kind}", kind, "Test #{kind}")
         EventStream.push_async(stream, {:cli_event, ActionEvent.new("codex", action, :started)})
       end)
+
       EventStream.complete(stream, [])
 
       events = session |> CodexSubagent.events() |> Enum.to_list()
 
-      action_events = Enum.filter(events, fn
-        {:action, _, _, _} -> true
-        _ -> false
-      end)
+      action_events =
+        Enum.filter(events, fn
+          {:action, _, _, _} -> true
+          _ -> false
+        end)
 
       assert length(action_events) == 5
 
@@ -674,9 +737,11 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
       session = %{pid: nil, stream: stream, resume_token: nil, token_agent: nil, cwd: "/tmp"}
 
-      EventStream.push_async(stream, {:cli_event,
-        CompletedEvent.error("codex", "failed", answer: "partial work")
-      })
+      EventStream.push_async(
+        stream,
+        {:cli_event, CompletedEvent.error("codex", "failed", answer: "partial work")}
+      )
+
       EventStream.complete(stream, [])
 
       answer = CodexSubagent.collect_answer(session)
@@ -738,7 +803,14 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
       agent_token = ResumeToken.new("codex", "agent_updated")
       {:ok, agent} = Agent.start_link(fn -> agent_token end)
 
-      session = %{pid: nil, stream: nil, resume_token: session_token, token_agent: agent, cwd: "/tmp"}
+      session = %{
+        pid: nil,
+        stream: nil,
+        resume_token: session_token,
+        token_agent: agent,
+        cwd: "/tmp"
+      }
+
       assert CodexSubagent.resume_token(session) == agent_token
 
       Agent.stop(agent)
@@ -747,7 +819,14 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
     test "handles agent returning nil" do
       {:ok, agent} = Agent.start_link(fn -> nil end)
       session_token = ResumeToken.new("codex", "fallback_token")
-      session = %{pid: nil, stream: nil, resume_token: session_token, token_agent: agent, cwd: "/tmp"}
+
+      session = %{
+        pid: nil,
+        stream: nil,
+        resume_token: session_token,
+        token_agent: agent,
+        cwd: "/tmp"
+      }
 
       # Should return nil from agent, not fall back
       assert CodexSubagent.resume_token(session) == nil
@@ -760,9 +839,10 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
       {:ok, agent} = Agent.start_link(fn -> token end)
       session = %{pid: nil, stream: nil, resume_token: nil, token_agent: agent, cwd: "/tmp"}
 
-      tasks = for _ <- 1..10 do
-        Task.async(fn -> CodexSubagent.resume_token(session) end)
-      end
+      tasks =
+        for _ <- 1..10 do
+          Task.async(fn -> CodexSubagent.resume_token(session) end)
+        end
 
       results = Enum.map(tasks, &Task.await/1)
       assert Enum.all?(results, fn t -> t == token end)
@@ -776,7 +856,13 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
       fallback_token = ResumeToken.new("codex", "fallback_on_exit")
       {:ok, agent} = Agent.start_link(fn -> ResumeToken.new("codex", "agent_token") end)
 
-      session = %{pid: nil, stream: nil, resume_token: fallback_token, token_agent: agent, cwd: "/tmp"}
+      session = %{
+        pid: nil,
+        stream: nil,
+        resume_token: fallback_token,
+        token_agent: agent,
+        cwd: "/tmp"
+      }
 
       # Kill the agent
       Process.exit(agent, :kill)
@@ -803,14 +889,15 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
       try do
         events_received = Agent.start_link(fn -> [] end) |> elem(1)
 
-        _answer = CodexSubagent.run!(
-          prompt: "test",
-          cwd: System.tmp_dir!(),
-          timeout: 1_000,
-          on_event: fn event ->
-            Agent.update(events_received, fn list -> [event | list] end)
-          end
-        )
+        _answer =
+          CodexSubagent.run!(
+            prompt: "test",
+            cwd: System.tmp_dir!(),
+            timeout: 1_000,
+            on_event: fn event ->
+              Agent.update(events_received, fn list -> [event | list] end)
+            end
+          )
 
         Agent.stop(events_received)
       catch
@@ -845,19 +932,21 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
       session = %{pid: nil, stream: stream, resume_token: nil, token_agent: nil, cwd: "/tmp"}
 
-      task = Task.async(fn ->
-        session
-        |> CodexSubagent.events()
-        |> Enum.to_list()
-      end)
+      task =
+        Task.async(fn ->
+          session
+          |> CodexSubagent.events()
+          |> Enum.to_list()
+        end)
 
       events = Task.await(task, 1000)
 
-      has_canceled = Enum.any?(events, fn
-        {:canceled, :timeout} -> true
-        {:error, {:canceled, :timeout}} -> true
-        _ -> false
-      end)
+      has_canceled =
+        Enum.any?(events, fn
+          {:canceled, :timeout} -> true
+          {:error, {:canceled, :timeout}} -> true
+          _ -> false
+        end)
 
       assert has_canceled
     end
@@ -867,11 +956,12 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
       session = %{pid: nil, stream: stream, resume_token: nil, token_agent: nil, cwd: "/tmp"}
 
-      consumer_task = Task.async(fn ->
-        session
-        |> CodexSubagent.events()
-        |> Enum.to_list()
-      end)
+      consumer_task =
+        Task.async(fn ->
+          session
+          |> CodexSubagent.events()
+          |> Enum.to_list()
+        end)
 
       Process.sleep(10)
 
@@ -879,11 +969,12 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
       events = Task.await(consumer_task, 1000)
 
-      has_canceled = Enum.any?(events, fn
-        {:canceled, :test_cancel} -> true
-        {:error, {:canceled, :test_cancel}} -> true
-        _ -> false
-      end)
+      has_canceled =
+        Enum.any?(events, fn
+          {:canceled, :test_cancel} -> true
+          {:error, {:canceled, :test_cancel}} -> true
+          _ -> false
+        end)
 
       assert has_canceled
     end
@@ -904,10 +995,11 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
       events = session |> CodexSubagent.events() |> Enum.to_list()
 
-      error_events = Enum.filter(events, fn
-        {:error, _} -> true
-        _ -> false
-      end)
+      error_events =
+        Enum.filter(events, fn
+          {:error, _} -> true
+          _ -> false
+        end)
 
       assert length(error_events) == 1
     end
@@ -922,32 +1014,35 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
       events = session |> CodexSubagent.events() |> Enum.to_list()
 
-      canceled_events = Enum.filter(events, fn
-        {:error, {:canceled, _}} -> true
-        _ -> false
-      end)
+      canceled_events =
+        Enum.filter(events, fn
+          {:error, {:canceled, _}} -> true
+          _ -> false
+        end)
 
       assert length(canceled_events) == 1
     end
 
     test "handles stream owner dying" do
       # Create stream owned by a spawned process
-      owner = spawn(fn ->
-        receive do
-          :die -> :ok
-        end
-      end)
+      owner =
+        spawn(fn ->
+          receive do
+            :die -> :ok
+          end
+        end)
 
       {:ok, stream} = EventStream.start_link(owner: owner, timeout: 5000)
 
       session = %{pid: nil, stream: stream, resume_token: nil, token_agent: nil, cwd: "/tmp"}
 
       # Start consuming events
-      consumer_task = Task.async(fn ->
-        session
-        |> CodexSubagent.events()
-        |> Enum.to_list()
-      end)
+      consumer_task =
+        Task.async(fn ->
+          session
+          |> CodexSubagent.events()
+          |> Enum.to_list()
+        end)
 
       # Kill the owner
       Process.sleep(10)
@@ -956,11 +1051,12 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
       # Consumer should receive cancellation
       events = Task.await(consumer_task, 1000)
 
-      has_ended = Enum.any?(events, fn
-        {:canceled, _} -> true
-        {:error, _} -> true
-        _ -> false
-      end)
+      has_ended =
+        Enum.any?(events, fn
+          {:canceled, _} -> true
+          {:error, _} -> true
+          _ -> false
+        end)
 
       assert has_ended
     end
@@ -1020,8 +1116,21 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
       {:ok, agent1} = Agent.start_link(fn -> nil end)
       {:ok, agent2} = Agent.start_link(fn -> nil end)
 
-      session1 = %{pid: nil, stream: stream1, resume_token: nil, token_agent: agent1, cwd: "/tmp/1"}
-      session2 = %{pid: nil, stream: stream2, resume_token: nil, token_agent: agent2, cwd: "/tmp/2"}
+      session1 = %{
+        pid: nil,
+        stream: stream1,
+        resume_token: nil,
+        token_agent: agent1,
+        cwd: "/tmp/1"
+      }
+
+      session2 = %{
+        pid: nil,
+        stream: stream2,
+        resume_token: nil,
+        token_agent: agent2,
+        cwd: "/tmp/2"
+      }
 
       token1 = ResumeToken.new("codex", "session_1")
       token2 = ResumeToken.new("codex", "session_2")
@@ -1069,7 +1178,9 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
     test "unicode in prompts" do
       session = %{pid: nil, stream: nil, resume_token: nil, token_agent: nil, cwd: "/tmp"}
 
-      unicode_prompt = "Create a function that handles emoji: \u{1F600} and Japanese: \u65E5\u672C"
+      unicode_prompt =
+        "Create a function that handles emoji: \u{1F600} and Japanese: \u65E5\u672C"
+
       assert {:error, :no_resume_token} = CodexSubagent.continue(session, unicode_prompt)
     end
 
@@ -1098,15 +1209,21 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
       session = %{pid: nil, stream: stream, resume_token: nil, token_agent: nil, cwd: "/tmp"}
 
       action = Action.new("test_action", :command, "$ test", %{exit_code: nil, output: nil})
-      EventStream.push_async(stream, {:cli_event, ActionEvent.new("codex", action, :completed, ok: true)})
+
+      EventStream.push_async(
+        stream,
+        {:cli_event, ActionEvent.new("codex", action, :completed, ok: true)}
+      )
+
       EventStream.complete(stream, [])
 
       events = session |> CodexSubagent.events() |> Enum.to_list()
 
-      action_events = Enum.filter(events, fn
-        {:action, _, _, _} -> true
-        _ -> false
-      end)
+      action_events =
+        Enum.filter(events, fn
+          {:action, _, _, _} -> true
+          _ -> false
+        end)
 
       assert length(action_events) == 1
       {:action, action_map, _, _} = hd(action_events)
@@ -1184,10 +1301,13 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
       events = session |> CodexSubagent.events() |> Enum.to_list()
 
-      {:action, _, :started, opts} = hd(Enum.filter(events, fn
-        {:action, _, :started, _} -> true
-        _ -> false
-      end))
+      {:action, _, :started, opts} =
+        hd(
+          Enum.filter(events, fn
+            {:action, _, :started, _} -> true
+            _ -> false
+          end)
+        )
 
       assert opts == []
     end
@@ -1203,10 +1323,13 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
       events = session |> CodexSubagent.events() |> Enum.to_list()
 
-      {:action, _, :updated, opts} = hd(Enum.filter(events, fn
-        {:action, _, :updated, _} -> true
-        _ -> false
-      end))
+      {:action, _, :updated, opts} =
+        hd(
+          Enum.filter(events, fn
+            {:action, _, :updated, _} -> true
+            _ -> false
+          end)
+        )
 
       assert opts == []
     end
@@ -1217,15 +1340,23 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
       session = %{pid: nil, stream: stream, resume_token: nil, token_agent: nil, cwd: "/tmp"}
 
       action = Action.new("cmd_1", :command, "$ echo hello")
-      EventStream.push_async(stream, {:cli_event, ActionEvent.new("codex", action, :completed, ok: true)})
+
+      EventStream.push_async(
+        stream,
+        {:cli_event, ActionEvent.new("codex", action, :completed, ok: true)}
+      )
+
       EventStream.complete(stream, [])
 
       events = session |> CodexSubagent.events() |> Enum.to_list()
 
-      {:action, _, :completed, opts} = hd(Enum.filter(events, fn
-        {:action, _, :completed, _} -> true
-        _ -> false
-      end))
+      {:action, _, :completed, opts} =
+        hd(
+          Enum.filter(events, fn
+            {:action, _, :completed, _} -> true
+            _ -> false
+          end)
+        )
 
       assert opts[:ok] == true
     end
@@ -1236,15 +1367,23 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
       session = %{pid: nil, stream: stream, resume_token: nil, token_agent: nil, cwd: "/tmp"}
 
       action = Action.new("cmd_1", :command, "$ false")
-      EventStream.push_async(stream, {:cli_event, ActionEvent.new("codex", action, :completed, ok: false)})
+
+      EventStream.push_async(
+        stream,
+        {:cli_event, ActionEvent.new("codex", action, :completed, ok: false)}
+      )
+
       EventStream.complete(stream, [])
 
       events = session |> CodexSubagent.events() |> Enum.to_list()
 
-      {:action, _, :completed, opts} = hd(Enum.filter(events, fn
-        {:action, _, :completed, _} -> true
-        _ -> false
-      end))
+      {:action, _, :completed, opts} =
+        hd(
+          Enum.filter(events, fn
+            {:action, _, :completed, _} -> true
+            _ -> false
+          end)
+        )
 
       assert opts[:ok] == false
     end
@@ -1257,15 +1396,21 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
       action = Action.new("cmd_1", :command, "$ long_running_command")
       EventStream.push_async(stream, {:cli_event, ActionEvent.new("codex", action, :started)})
       EventStream.push_async(stream, {:cli_event, ActionEvent.new("codex", action, :updated)})
-      EventStream.push_async(stream, {:cli_event, ActionEvent.new("codex", action, :completed, ok: true)})
+
+      EventStream.push_async(
+        stream,
+        {:cli_event, ActionEvent.new("codex", action, :completed, ok: true)}
+      )
+
       EventStream.complete(stream, [])
 
       events = session |> CodexSubagent.events() |> Enum.to_list()
 
-      action_events = Enum.filter(events, fn
-        {:action, _, _, _} -> true
-        _ -> false
-      end)
+      action_events =
+        Enum.filter(events, fn
+          {:action, _, _, _} -> true
+          _ -> false
+        end)
 
       assert length(action_events) == 3
 
@@ -1285,17 +1430,23 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
       session = %{pid: nil, stream: stream, resume_token: nil, token_agent: nil, cwd: "/tmp"}
 
       usage = %{input_tokens: 1000, output_tokens: 500, cached_input_tokens: 200}
-      EventStream.push_async(stream, {:cli_event,
-        CompletedEvent.ok("codex", "Answer", usage: usage)
-      })
+
+      EventStream.push_async(
+        stream,
+        {:cli_event, CompletedEvent.ok("codex", "Answer", usage: usage)}
+      )
+
       EventStream.complete(stream, [])
 
       events = session |> CodexSubagent.events() |> Enum.to_list()
 
-      {:completed, _, opts} = hd(Enum.filter(events, fn
-        {:completed, _, _} -> true
-        _ -> false
-      end))
+      {:completed, _, opts} =
+        hd(
+          Enum.filter(events, fn
+            {:completed, _, _} -> true
+            _ -> false
+          end)
+        )
 
       assert opts[:usage] == usage
       assert opts[:usage][:input_tokens] == 1000
@@ -1313,10 +1464,13 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
       events = session |> CodexSubagent.events() |> Enum.to_list()
 
-      {:completed, _, opts} = hd(Enum.filter(events, fn
-        {:completed, _, _} -> true
-        _ -> false
-      end))
+      {:completed, _, opts} =
+        hd(
+          Enum.filter(events, fn
+            {:completed, _, _} -> true
+            _ -> false
+          end)
+        )
 
       assert opts[:usage] == nil
     end
@@ -1418,46 +1572,92 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
       {:ok, stream} = EventStream.start_link(owner: self(), timeout: 5000)
       {:ok, token_agent} = Agent.start_link(fn -> nil end)
 
-      session = %{pid: nil, stream: stream, resume_token: nil, token_agent: token_agent, cwd: "/tmp"}
+      session = %{
+        pid: nil,
+        stream: stream,
+        resume_token: nil,
+        token_agent: token_agent,
+        cwd: "/tmp"
+      }
 
       # Simulate full Codex session
       token = ResumeToken.new("codex", "full_flow_session")
 
       # 1. Session starts
-      EventStream.push_async(stream, {:cli_event, StartedEvent.new("codex", token, title: "Codex")})
+      EventStream.push_async(
+        stream,
+        {:cli_event, StartedEvent.new("codex", token, title: "Codex")}
+      )
 
       # 2. Command execution
       cmd_action = Action.new("cmd_1", :command, "$ npm install")
       EventStream.push_async(stream, {:cli_event, ActionEvent.new("codex", cmd_action, :started)})
-      EventStream.push_async(stream, {:cli_event, ActionEvent.new("codex", cmd_action, :completed, ok: true)})
+
+      EventStream.push_async(
+        stream,
+        {:cli_event, ActionEvent.new("codex", cmd_action, :completed, ok: true)}
+      )
 
       # 3. Tool call
       tool_action = Action.new("tool_1", :tool, "fs.read_file", %{path: "package.json"})
-      EventStream.push_async(stream, {:cli_event, ActionEvent.new("codex", tool_action, :started)})
-      EventStream.push_async(stream, {:cli_event, ActionEvent.new("codex", tool_action, :completed, ok: true)})
+
+      EventStream.push_async(
+        stream,
+        {:cli_event, ActionEvent.new("codex", tool_action, :started)}
+      )
+
+      EventStream.push_async(
+        stream,
+        {:cli_event, ActionEvent.new("codex", tool_action, :completed, ok: true)}
+      )
 
       # 4. File change
       file_action = Action.new("fc_1", :file_change, "1 file changed", %{path: "src/app.ts"})
-      EventStream.push_async(stream, {:cli_event, ActionEvent.new("codex", file_action, :completed, ok: true)})
+
+      EventStream.push_async(
+        stream,
+        {:cli_event, ActionEvent.new("codex", file_action, :completed, ok: true)}
+      )
 
       # 5. Session completes
       usage = %{input_tokens: 500, output_tokens: 200}
-      EventStream.push_async(stream, {:cli_event,
-        CompletedEvent.ok("codex", "Successfully installed dependencies and updated the app.",
-          resume: token, usage: usage)
-      })
+
+      EventStream.push_async(
+        stream,
+        {:cli_event,
+         CompletedEvent.ok("codex", "Successfully installed dependencies and updated the app.",
+           resume: token,
+           usage: usage
+         )}
+      )
+
       EventStream.complete(stream, [])
 
       # Consume events
       events = session |> CodexSubagent.events() |> Enum.to_list()
 
       # Verify event sequence
-      started_events = Enum.filter(events, fn {:started, _} -> true; _ -> false end)
-      action_events = Enum.filter(events, fn {:action, _, _, _} -> true; _ -> false end)
-      completed_events = Enum.filter(events, fn {:completed, _, _} -> true; _ -> false end)
+      started_events =
+        Enum.filter(events, fn
+          {:started, _} -> true
+          _ -> false
+        end)
+
+      action_events =
+        Enum.filter(events, fn
+          {:action, _, _, _} -> true
+          _ -> false
+        end)
+
+      completed_events =
+        Enum.filter(events, fn
+          {:completed, _, _} -> true
+          _ -> false
+        end)
 
       assert length(started_events) == 1
-      assert length(action_events) == 5  # 2 for cmd, 2 for tool, 1 for file
+      # 2 for cmd, 2 for tool, 1 for file
+      assert length(action_events) == 5
       assert length(completed_events) == 1
 
       # Verify token was captured
@@ -1476,7 +1676,13 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
       {:ok, stream} = EventStream.start_link(owner: self(), timeout: 5000)
       {:ok, token_agent} = Agent.start_link(fn -> nil end)
 
-      session = %{pid: nil, stream: stream, resume_token: nil, token_agent: token_agent, cwd: "/tmp"}
+      session = %{
+        pid: nil,
+        stream: stream,
+        resume_token: nil,
+        token_agent: token_agent,
+        cwd: "/tmp"
+      }
 
       token = ResumeToken.new("codex", "error_session")
 
@@ -1486,17 +1692,30 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
       # Command fails
       cmd_action = Action.new("cmd_1", :command, "$ npm test")
       EventStream.push_async(stream, {:cli_event, ActionEvent.new("codex", cmd_action, :started)})
-      EventStream.push_async(stream, {:cli_event, ActionEvent.new("codex", cmd_action, :completed, ok: false)})
+
+      EventStream.push_async(
+        stream,
+        {:cli_event, ActionEvent.new("codex", cmd_action, :completed, ok: false)}
+      )
 
       # Session completes with error
-      EventStream.push_async(stream, {:cli_event,
-        CompletedEvent.error("codex", "Tests failed", answer: "Partial work done", resume: token)
-      })
+      EventStream.push_async(
+        stream,
+        {:cli_event,
+         CompletedEvent.error("codex", "Tests failed", answer: "Partial work done", resume: token)}
+      )
+
       EventStream.complete(stream, [])
 
       events = session |> CodexSubagent.events() |> Enum.to_list()
 
-      {:completed, answer, opts} = hd(Enum.filter(events, fn {:completed, _, _} -> true; _ -> false end))
+      {:completed, answer, opts} =
+        hd(
+          Enum.filter(events, fn
+            {:completed, _, _} -> true
+            _ -> false
+          end)
+        )
 
       assert answer == "Partial work done"
       assert opts[:ok] == false

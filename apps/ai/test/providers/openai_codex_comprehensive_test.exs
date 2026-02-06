@@ -20,7 +20,21 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
 
   alias Ai.EventStream
   alias Ai.Providers.OpenAICodexResponses
-  alias Ai.Types.{AssistantMessage, Context, Cost, Model, ModelCost, StreamOptions, TextContent, Tool, ToolCall, ToolResultMessage, Usage, UserMessage}
+
+  alias Ai.Types.{
+    AssistantMessage,
+    Context,
+    Cost,
+    Model,
+    ModelCost,
+    StreamOptions,
+    TextContent,
+    Tool,
+    ToolCall,
+    ToolResultMessage,
+    Usage,
+    UserMessage
+  }
 
   # ============================================================================
   # Test Setup
@@ -43,7 +57,9 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
 
   # Helper to create a valid JWT token with account ID
   defp make_jwt(account_id \\ "acc_test123") do
-    payload = Jason.encode!(%{"https://api.openai.com/auth" => %{"chatgpt_account_id" => account_id}})
+    payload =
+      Jason.encode!(%{"https://api.openai.com/auth" => %{"chatgpt_account_id" => account_id}})
+
     "header." <> Base.encode64(payload) <> ".signature"
   end
 
@@ -79,8 +95,13 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       prev_chatgpt = System.get_env("CHATGPT_TOKEN")
 
       on_exit(fn ->
-        if prev_codex, do: System.put_env("OPENAI_CODEX_API_KEY", prev_codex), else: System.delete_env("OPENAI_CODEX_API_KEY")
-        if prev_chatgpt, do: System.put_env("CHATGPT_TOKEN", prev_chatgpt), else: System.delete_env("CHATGPT_TOKEN")
+        if prev_codex,
+          do: System.put_env("OPENAI_CODEX_API_KEY", prev_codex),
+          else: System.delete_env("OPENAI_CODEX_API_KEY")
+
+        if prev_chatgpt,
+          do: System.put_env("CHATGPT_TOKEN", prev_chatgpt),
+          else: System.delete_env("CHATGPT_TOKEN")
       end)
 
       System.put_env("OPENAI_CODEX_API_KEY", "codex_key")
@@ -94,8 +115,13 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       prev_chatgpt = System.get_env("CHATGPT_TOKEN")
 
       on_exit(fn ->
-        if prev_codex, do: System.put_env("OPENAI_CODEX_API_KEY", prev_codex), else: System.delete_env("OPENAI_CODEX_API_KEY")
-        if prev_chatgpt, do: System.put_env("CHATGPT_TOKEN", prev_chatgpt), else: System.delete_env("CHATGPT_TOKEN")
+        if prev_codex,
+          do: System.put_env("OPENAI_CODEX_API_KEY", prev_codex),
+          else: System.delete_env("OPENAI_CODEX_API_KEY")
+
+        if prev_chatgpt,
+          do: System.put_env("CHATGPT_TOKEN", prev_chatgpt),
+          else: System.delete_env("CHATGPT_TOKEN")
       end)
 
       System.delete_env("OPENAI_CODEX_API_KEY")
@@ -109,8 +135,13 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       prev_chatgpt = System.get_env("CHATGPT_TOKEN")
 
       on_exit(fn ->
-        if prev_codex, do: System.put_env("OPENAI_CODEX_API_KEY", prev_codex), else: System.delete_env("OPENAI_CODEX_API_KEY")
-        if prev_chatgpt, do: System.put_env("CHATGPT_TOKEN", prev_chatgpt), else: System.delete_env("CHATGPT_TOKEN")
+        if prev_codex,
+          do: System.put_env("OPENAI_CODEX_API_KEY", prev_codex),
+          else: System.delete_env("OPENAI_CODEX_API_KEY")
+
+        if prev_chatgpt,
+          do: System.put_env("CHATGPT_TOKEN", prev_chatgpt),
+          else: System.delete_env("CHATGPT_TOKEN")
       end)
 
       System.delete_env("OPENAI_CODEX_API_KEY")
@@ -155,8 +186,13 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       prev_chatgpt = System.get_env("CHATGPT_TOKEN")
 
       on_exit(fn ->
-        if prev_codex, do: System.put_env("OPENAI_CODEX_API_KEY", prev_codex), else: System.delete_env("OPENAI_CODEX_API_KEY")
-        if prev_chatgpt, do: System.put_env("CHATGPT_TOKEN", prev_chatgpt), else: System.delete_env("CHATGPT_TOKEN")
+        if prev_codex,
+          do: System.put_env("OPENAI_CODEX_API_KEY", prev_codex),
+          else: System.delete_env("OPENAI_CODEX_API_KEY")
+
+        if prev_chatgpt,
+          do: System.put_env("CHATGPT_TOKEN", prev_chatgpt),
+          else: System.delete_env("CHATGPT_TOKEN")
       end)
 
       System.delete_env("OPENAI_CODEX_API_KEY")
@@ -166,7 +202,10 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
       {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: nil})
-      assert {:error, %AssistantMessage{stop_reason: :error, error_message: msg}} = EventStream.result(stream, 1000)
+
+      assert {:error, %AssistantMessage{stop_reason: :error, error_message: msg}} =
+               EventStream.result(stream, 1000)
+
       assert msg =~ "token is required"
     end
 
@@ -179,7 +218,10 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
       {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: ""})
-      assert {:error, %AssistantMessage{stop_reason: :error, error_message: msg}} = EventStream.result(stream, 1000)
+
+      assert {:error, %AssistantMessage{stop_reason: :error, error_message: msg}} =
+               EventStream.result(stream, 1000)
+
       assert msg =~ "token is required"
     end
 
@@ -191,8 +233,12 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: "invalid.token"})
-      assert {:error, %AssistantMessage{stop_reason: :error, error_message: msg}} = EventStream.result(stream, 1000)
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: "invalid.token"})
+
+      assert {:error, %AssistantMessage{stop_reason: :error, error_message: msg}} =
+               EventStream.result(stream, 1000)
+
       assert msg =~ "Invalid JWT"
     end
 
@@ -209,7 +255,10 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
       {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: token})
-      assert {:error, %AssistantMessage{stop_reason: :error, error_message: msg}} = EventStream.result(stream, 1000)
+
+      assert {:error, %AssistantMessage{stop_reason: :error, error_message: msg}} =
+               EventStream.result(stream, 1000)
+
       assert msg =~ "account ID"
     end
 
@@ -280,9 +329,15 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       end)
 
       model = make_model()
-      context = Context.new(system_prompt: "You are a helpful assistant", messages: [%UserMessage{content: "Hi"}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      context =
+        Context.new(
+          system_prompt: "You are a helpful assistant",
+          messages: [%UserMessage{content: "Hi"}]
+        )
+
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:request_body, body}, 1000
       assert body["instructions"] == "You are a helpful assistant"
@@ -304,7 +359,8 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:request_body, body}, 1000
       assert body["store"] == false
@@ -324,7 +380,8 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:request_body, body}, 1000
       assert body["stream"] == true
@@ -365,7 +422,8 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:request_body, body}, 1000
       assert body["text"]["verbosity"] == "medium"
@@ -406,7 +464,8 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:request_body, body}, 1000
       assert "reasoning.encrypted_content" in body["include"]
@@ -447,7 +506,8 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:request_body, body}, 1000
       assert body["prompt_cache_key"] == nil
@@ -467,7 +527,8 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:request_body, body}, 1000
       assert body["tool_choice"] == "auto"
@@ -487,7 +548,8 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:request_body, body}, 1000
       assert body["parallel_tool_calls"] == true
@@ -528,7 +590,8 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:request_body, body}, 1000
       refute Map.has_key?(body, "temperature")
@@ -548,7 +611,8 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       model = make_model(id: "gpt-5.1-turbo")
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:request_body, body}, 1000
       assert body["model"] == "gpt-5.1-turbo"
@@ -572,14 +636,17 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       end)
 
       model = make_model()
+
       tool = %Tool{
         name: "search",
         description: "Search the web",
         parameters: %{"type" => "object", "properties" => %{"query" => %{"type" => "string"}}}
       }
+
       context = Context.new(messages: [%UserMessage{content: "Hi"}], tools: [tool])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:request_body, body}, 1000
       assert [converted_tool] = body["tools"]
@@ -602,14 +669,17 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       end)
 
       model = make_model()
+
       tools = [
         %Tool{name: "read", description: "Read a file", parameters: %{}},
         %Tool{name: "write", description: "Write a file", parameters: %{}},
         %Tool{name: "execute", description: "Execute code", parameters: %{}}
       ]
+
       context = Context.new(messages: [%UserMessage{content: "Hi"}], tools: tools)
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:request_body, body}, 1000
       assert length(body["tools"]) == 3
@@ -630,7 +700,8 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}], tools: [])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:request_body, body}, 1000
       refute Map.has_key?(body, "tools")
@@ -650,7 +721,8 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:request_body, body}, 1000
       refute Map.has_key?(body, "tools")
@@ -668,6 +740,7 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       end)
 
       model = make_model()
+
       complex_params = %{
         "type" => "object",
         "properties" => %{
@@ -682,10 +755,12 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
         },
         "required" => ["path", "content"]
       }
+
       tool = %Tool{name: "write_file", description: "Write to file", parameters: complex_params}
       context = Context.new(messages: [%UserMessage{content: "Hi"}], tools: [tool])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:request_body, body}, 1000
       [converted_tool] = body["tools"]
@@ -732,7 +807,12 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
 
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      opts = %StreamOptions{api_key: make_jwt(), reasoning: :low, thinking_budgets: %{summary: "detailed"}}
+
+      opts = %StreamOptions{
+        api_key: make_jwt(),
+        reasoning: :low,
+        thinking_budgets: %{summary: "detailed"}
+      }
 
       {:ok, stream} = OpenAICodexResponses.stream(model, context, opts)
 
@@ -753,7 +833,12 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
 
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      opts = %StreamOptions{api_key: make_jwt(), reasoning: :low, thinking_budgets: %{summary: "concise"}}
+
+      opts = %StreamOptions{
+        api_key: make_jwt(),
+        reasoning: :low,
+        thinking_budgets: %{summary: "concise"}
+      }
 
       {:ok, stream} = OpenAICodexResponses.stream(model, context, opts)
 
@@ -796,7 +881,8 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:request_body, body}, 1000
       refute Map.has_key?(body, "reasoning")
@@ -1038,7 +1124,8 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:headers, headers}, 1000
       headers_map = Map.new(headers)
@@ -1080,7 +1167,8 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:headers, headers}, 1000
       headers_map = Map.new(headers)
@@ -1100,7 +1188,8 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       model = make_model(headers: %{"X-Custom-Header" => "custom-value"})
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:headers, headers}, 1000
       headers_map = Map.new(headers)
@@ -1169,10 +1258,17 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hello world"}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:request_body, body}, 1000
-      assert [%{"role" => "user", "content" => [%{"type" => "input_text", "text" => "Hello world"}]}] = body["input"]
+
+      assert [
+               %{
+                 "role" => "user",
+                 "content" => [%{"type" => "input_text", "text" => "Hello world"}]
+               }
+             ] = body["input"]
 
       EventStream.result(stream, 1000)
     end
@@ -1187,12 +1283,17 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       end)
 
       model = make_model()
-      context = Context.new(messages: [%UserMessage{content: [%TextContent{text: "Test content"}]}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      context =
+        Context.new(messages: [%UserMessage{content: [%TextContent{text: "Test content"}]}])
+
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:request_body, body}, 1000
-      assert [%{"content" => [%{"type" => "input_text", "text" => "Test content"}]}] = body["input"]
+
+      assert [%{"content" => [%{"type" => "input_text", "text" => "Test content"}]}] =
+               body["input"]
 
       EventStream.result(stream, 1000)
     end
@@ -1219,13 +1320,17 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
         timestamp: System.system_time(:millisecond)
       }
 
-      context = Context.new(messages: [
-        %UserMessage{content: "Hello"},
-        assistant_msg,
-        %UserMessage{content: "Thanks"}
-      ])
+      context =
+        Context.new(
+          messages: [
+            %UserMessage{content: "Hello"},
+            assistant_msg,
+            %UserMessage{content: "Thanks"}
+          ]
+        )
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:request_body, body}, 1000
       assert length(body["input"]) == 3
@@ -1264,13 +1369,17 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
         timestamp: System.system_time(:millisecond)
       }
 
-      context = Context.new(messages: [
-        %UserMessage{content: "Search for test"},
-        assistant_msg,
-        tool_result
-      ])
+      context =
+        Context.new(
+          messages: [
+            %UserMessage{content: "Search for test"},
+            assistant_msg,
+            tool_result
+          ]
+        )
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:request_body, body}, 1000
 
@@ -1293,13 +1402,18 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       end)
 
       model = make_model()
-      context = Context.new(messages: [
-        %UserMessage{content: "First message"},
-        %UserMessage{content: "Second message"},
-        %UserMessage{content: "Third message"}
-      ])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      context =
+        Context.new(
+          messages: [
+            %UserMessage{content: "First message"},
+            %UserMessage{content: "Second message"},
+            %UserMessage{content: "Third message"}
+          ]
+        )
+
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
       assert_receive {:request_body, body}, 1000
       assert length(body["input"]) == 3
@@ -1327,9 +1441,12 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
-      assert {:error, %AssistantMessage{stop_reason: :error, error_message: msg}} = EventStream.result(stream, 1000)
+      assert {:error, %AssistantMessage{stop_reason: :error, error_message: msg}} =
+               EventStream.result(stream, 1000)
+
       assert msg =~ "Bad request"
     end
 
@@ -1342,9 +1459,12 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
-      assert {:error, %AssistantMessage{stop_reason: :error, error_message: msg}} = EventStream.result(stream, 1000)
+      assert {:error, %AssistantMessage{stop_reason: :error, error_message: msg}} =
+               EventStream.result(stream, 1000)
+
       assert msg =~ "Model not found"
     end
 
@@ -1356,9 +1476,12 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
-      assert {:error, %AssistantMessage{stop_reason: :error, error_message: msg}} = EventStream.result(stream, 1000)
+      assert {:error, %AssistantMessage{stop_reason: :error, error_message: msg}} =
+               EventStream.result(stream, 1000)
+
       assert msg =~ "400"
     end
 
@@ -1371,24 +1494,34 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
-      assert {:error, %AssistantMessage{stop_reason: :error, error_message: msg}} = EventStream.result(stream, 1000)
+      assert {:error, %AssistantMessage{stop_reason: :error, error_message: msg}} =
+               EventStream.result(stream, 1000)
+
       assert msg =~ "400"
     end
 
     test "handles error with type instead of code" do
       Req.Test.stub(__MODULE__, fn conn ->
-        error_body = Jason.encode!(%{"error" => %{"type" => "invalid_request_error", "message" => "Invalid parameters"}})
+        error_body =
+          Jason.encode!(%{
+            "error" => %{"type" => "invalid_request_error", "message" => "Invalid parameters"}
+          })
+
         Plug.Conn.send_resp(conn, 400, error_body)
       end)
 
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
-      assert {:error, %AssistantMessage{stop_reason: :error, error_message: msg}} = EventStream.result(stream, 1000)
+      assert {:error, %AssistantMessage{stop_reason: :error, error_message: msg}} =
+               EventStream.result(stream, 1000)
+
       assert msg =~ "Invalid parameters"
     end
 
@@ -1400,9 +1533,12 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
 
-      assert {:error, %AssistantMessage{stop_reason: :error, error_message: msg}} = EventStream.result(stream, 1000)
+      assert {:error, %AssistantMessage{stop_reason: :error, error_message: msg}} =
+               EventStream.result(stream, 1000)
+
       assert msg =~ "400"
     end
   end
@@ -1422,12 +1558,23 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       end)
 
       model = make_model()
+
       tool = %Tool{
         name: "lookup",
         description: "Lookup data",
-        parameters: %{"type" => "object", "properties" => %{"q" => %{"type" => "string"}}, "required" => ["q"]}
+        parameters: %{
+          "type" => "object",
+          "properties" => %{"q" => %{"type" => "string"}},
+          "required" => ["q"]
+        }
       }
-      context = Context.new(system_prompt: "System", messages: [%UserMessage{content: "Hi"}], tools: [tool])
+
+      context =
+        Context.new(
+          system_prompt: "System",
+          messages: [%UserMessage{content: "Hi"}],
+          tools: [tool]
+        )
 
       opts = %StreamOptions{
         api_key: make_jwt("acc_test"),
@@ -1460,7 +1607,11 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
             "type" => "function",
             "name" => "lookup",
             "description" => "Lookup data",
-            "parameters" => %{"type" => "object", "properties" => %{"q" => %{"type" => "string"}}, "required" => ["q"]}
+            "parameters" => %{
+              "type" => "object",
+              "properties" => %{"q" => %{"type" => "string"}},
+              "required" => ["q"]
+            }
           }
         ],
         "reasoning" => %{"effort" => "low", "summary" => "concise"}

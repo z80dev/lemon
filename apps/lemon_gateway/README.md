@@ -79,6 +79,7 @@ default_engine = "lemon"
 [[gateway.bindings]]
 transport = "telegram"
 chat_id = 123456789
+agent_id = "default"
 project = "lemon"
 default_engine = "claude"
 queue_mode = "steer"

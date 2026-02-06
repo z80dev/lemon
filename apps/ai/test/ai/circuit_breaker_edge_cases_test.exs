@@ -113,7 +113,9 @@ defmodule Ai.CircuitBreakerEdgeCasesTest do
         Process.sleep(40)
 
         {:ok, state} = CircuitBreaker.get_state(provider)
-        assert state.circuit_state == :half_open, "Cycle #{cycle}: Expected half-open after timeout"
+
+        assert state.circuit_state == :half_open,
+               "Cycle #{cycle}: Expected half-open after timeout"
 
         # Get 2 successes to close
         CircuitBreaker.record_success(provider)

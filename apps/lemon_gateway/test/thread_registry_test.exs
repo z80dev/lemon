@@ -731,7 +731,12 @@ defmodule LemonGateway.ThreadRegistryTest do
 
       alias LemonGateway.Types.{ChatScope, Job}
 
-      scope = %ChatScope{transport: :test, chat_id: System.unique_integer([:positive]), topic_id: nil}
+      scope = %ChatScope{
+        transport: :test,
+        chat_id: System.unique_integer([:positive]),
+        topic_id: nil
+      }
+
       thread_key = {:scope, scope}
 
       # Submit a job to create a thread worker
@@ -807,7 +812,12 @@ defmodule LemonGateway.ThreadRegistryTest do
     test "new worker can register after previous worker dies" do
       alias LemonGateway.Types.{ChatScope, Job}
 
-      scope = %ChatScope{transport: :test, chat_id: System.unique_integer([:positive]), topic_id: nil}
+      scope = %ChatScope{
+        transport: :test,
+        chat_id: System.unique_integer([:positive]),
+        topic_id: nil
+      }
+
       thread_key = {:scope, scope}
 
       # First job

@@ -3,7 +3,17 @@ defmodule Ai.Providers.OpenAICompletionsTest do
 
   alias Ai.EventStream
   alias Ai.Providers.OpenAICompletions
-  alias Ai.Types.{Context, ImageContent, Model, StreamOptions, TextContent, ToolCall, ToolResultMessage, UserMessage}
+
+  alias Ai.Types.{
+    Context,
+    ImageContent,
+    Model,
+    StreamOptions,
+    TextContent,
+    ToolCall,
+    ToolResultMessage,
+    UserMessage
+  }
 
   setup do
     {:ok, _} = Application.ensure_all_started(:ai)
@@ -89,10 +99,15 @@ defmodule Ai.Providers.OpenAICompletionsTest do
     tool = %Ai.Types.Tool{
       name: "lookup",
       description: "Lookup data",
-      parameters: %{"type" => "object", "properties" => %{"q" => %{"type" => "string"}}, "required" => ["q"]}
+      parameters: %{
+        "type" => "object",
+        "properties" => %{"q" => %{"type" => "string"}},
+        "required" => ["q"]
+      }
     }
 
-    context = Context.new(system_prompt: "System", messages: [%UserMessage{content: "Hi"}], tools: [tool])
+    context =
+      Context.new(system_prompt: "System", messages: [%UserMessage{content: "Hi"}], tools: [tool])
 
     opts = %StreamOptions{api_key: "test-key", max_tokens: 111, temperature: 0.2}
 
@@ -117,7 +132,11 @@ defmodule Ai.Providers.OpenAICompletionsTest do
           "function" => %{
             "name" => "lookup",
             "description" => "Lookup data",
-            "parameters" => %{"type" => "object", "properties" => %{"q" => %{"type" => "string"}}, "required" => ["q"]},
+            "parameters" => %{
+              "type" => "object",
+              "properties" => %{"q" => %{"type" => "string"}},
+              "required" => ["q"]
+            },
             "strict" => false
           }
         }

@@ -99,7 +99,8 @@ defmodule CodingAgent.Tools.GlobTest do
       File.write!(Path.join(subdir, "in_subdir.txt"), "content")
       File.write!(Path.join(tmp_dir, "in_root.txt"), "content")
 
-      result = Glob.execute("call_1", %{"pattern" => "*.txt", "path" => "subdir"}, nil, nil, tmp_dir, [])
+      result =
+        Glob.execute("call_1", %{"pattern" => "*.txt", "path" => "subdir"}, nil, nil, tmp_dir, [])
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "in_subdir.txt"
@@ -109,7 +110,8 @@ defmodule CodingAgent.Tools.GlobTest do
     test "handles absolute path", %{tmp_dir: tmp_dir} do
       File.write!(Path.join(tmp_dir, "file.txt"), "content")
 
-      result = Glob.execute("call_1", %{"pattern" => "*.txt", "path" => tmp_dir}, nil, nil, "/other", [])
+      result =
+        Glob.execute("call_1", %{"pattern" => "*.txt", "path" => tmp_dir}, nil, nil, "/other", [])
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "file.txt"
@@ -117,7 +119,15 @@ defmodule CodingAgent.Tools.GlobTest do
 
     test "expands home directory", %{tmp_dir: tmp_dir} do
       # Just verify it doesn't crash with ~ - actual result depends on home dir contents
-      result = Glob.execute("call_1", %{"pattern" => "*.nonexistent", "path" => "~"}, nil, nil, tmp_dir, [])
+      result =
+        Glob.execute(
+          "call_1",
+          %{"pattern" => "*.nonexistent", "path" => "~"},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       # Either succeeds or returns error - both are valid behaviors
       case result do
@@ -134,10 +144,14 @@ defmodule CodingAgent.Tools.GlobTest do
   describe "execute/6 - result limiting" do
     test "limits results to max_results", %{tmp_dir: tmp_dir} do
       for i <- 1..20 do
-        File.write!(Path.join(tmp_dir, "file#{String.pad_leading("#{i}", 2, "0")}.txt"), "content")
+        File.write!(
+          Path.join(tmp_dir, "file#{String.pad_leading("#{i}", 2, "0")}.txt"),
+          "content"
+        )
       end
 
-      result = Glob.execute("call_1", %{"pattern" => "*.txt", "max_results" => 5}, nil, nil, tmp_dir, [])
+      result =
+        Glob.execute("call_1", %{"pattern" => "*.txt", "max_results" => 5}, nil, nil, tmp_dir, [])
 
       assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
       assert details.count == 5
@@ -211,14 +225,23 @@ defmodule CodingAgent.Tools.GlobTest do
     end
 
     test "returns error when max_results is invalid" do
-      result = Glob.execute("call_1", %{"pattern" => "*.txt", "max_results" => 0}, nil, nil, "/tmp", [])
+      result =
+        Glob.execute("call_1", %{"pattern" => "*.txt", "max_results" => 0}, nil, nil, "/tmp", [])
 
       assert {:error, msg} = result
       assert msg =~ "max_results must be a positive integer"
     end
 
     test "returns error when max_results is not an integer" do
-      result = Glob.execute("call_1", %{"pattern" => "*.txt", "max_results" => 1.5}, nil, nil, "/tmp", [])
+      result =
+        Glob.execute(
+          "call_1",
+          %{"pattern" => "*.txt", "max_results" => 1.5},
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       assert {:error, msg} = result
       assert msg =~ "max_results must be a positive integer"

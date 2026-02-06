@@ -57,7 +57,12 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
           send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
           Process.sleep(delay_ms)
           answer = "Test: #{job.text}"
-          send(sink_pid, {:engine_event, run_ref, %Event.Completed{engine: id(), resume: resume, ok: true, answer: answer}})
+
+          send(
+            sink_pid,
+            {:engine_event, run_ref,
+             %Event.Completed{engine: id(), resume: resume, ok: true, answer: answer}}
+          )
         end)
 
       {:ok, run_ref, %{task_pid: task_pid}}
@@ -198,9 +203,14 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       key2 = thread_key(scope2)
       key3 = thread_key(scope3)
 
-      {:ok, pid1} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key1]})
-      {:ok, pid2} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key2]})
-      {:ok, pid3} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key3]})
+      {:ok, pid1} =
+        DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key1]})
+
+      {:ok, pid2} =
+        DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key2]})
+
+      {:ok, pid3} =
+        DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key3]})
 
       assert is_pid(pid1)
       assert is_pid(pid2)
@@ -290,8 +300,11 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       key1 = thread_key(scope1)
       key2 = thread_key(scope2)
 
-      {:ok, pid1} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key1]})
-      {:ok, pid2} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key2]})
+      {:ok, pid1} =
+        DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key1]})
+
+      {:ok, pid2} =
+        DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key2]})
 
       assert LemonGateway.ThreadRegistry.whereis(key1) == pid1
       assert LemonGateway.ThreadRegistry.whereis(key2) == pid2
@@ -385,8 +398,11 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       key1 = thread_key(scope1)
       key2 = thread_key(scope2)
 
-      {:ok, pid1} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key1]})
-      {:ok, pid2} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key2]})
+      {:ok, pid1} =
+        DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key1]})
+
+      {:ok, pid2} =
+        DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key2]})
 
       # Kill first worker
       Process.exit(pid1, :kill)
@@ -403,7 +419,8 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       scope1 = make_scope()
       key1 = thread_key(scope1)
 
-      {:ok, pid1} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key1]})
+      {:ok, pid1} =
+        DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key1]})
 
       # Kill the worker
       Process.exit(pid1, :kill)
@@ -416,7 +433,9 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       scope2 = make_scope()
       key2 = thread_key(scope2)
 
-      {:ok, pid2} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key2]})
+      {:ok, pid2} =
+        DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key2]})
+
       assert is_pid(pid2)
 
       DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid2)
@@ -427,7 +446,13 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
         for _ <- 1..5 do
           scope = make_scope()
           key = thread_key(scope)
-          {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+
+          {:ok, pid} =
+            DynamicSupervisor.start_child(
+              ThreadWorkerSupervisor,
+              {ThreadWorker, [thread_key: key]}
+            )
+
           {key, pid}
         end
 
@@ -507,7 +532,9 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
         scope = make_scope()
         key = thread_key(scope)
 
-        {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+        {:ok, pid} =
+          DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+
         assert Process.alive?(pid)
         DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
       end
@@ -603,7 +630,8 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       scope = make_scope()
       key = thread_key(scope)
 
-      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+      {:ok, pid} =
+        DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
 
       assert DynamicSupervisor.count_children(ThreadWorkerSupervisor).active == initial_count + 1
 
@@ -616,7 +644,9 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       scope = make_scope()
       key = thread_key(scope)
 
-      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+      {:ok, pid} =
+        DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+
       assert LemonGateway.ThreadRegistry.whereis(key) == pid
 
       DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
@@ -629,7 +659,9 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       scope = make_scope()
       key = thread_key(scope)
 
-      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+      {:ok, pid} =
+        DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+
       ref = Process.monitor(pid)
 
       # Crash the worker
@@ -654,7 +686,8 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       scope = make_scope()
       key = thread_key(scope)
 
-      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+      {:ok, pid} =
+        DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
 
       # Worker is alive but has no jobs
       assert Process.alive?(pid)
@@ -686,7 +719,9 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       scope = make_scope()
       key = thread_key(scope)
 
-      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+      {:ok, pid} =
+        DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+
       DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
 
       Process.sleep(50)
@@ -708,7 +743,9 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       scope = make_scope()
       key = thread_key(scope)
 
-      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+      {:ok, pid} =
+        DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+
       ref = Process.monitor(pid)
 
       DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
@@ -722,7 +759,12 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
           scope = make_scope()
           key = thread_key(scope)
 
-          {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+          {:ok, pid} =
+            DynamicSupervisor.start_child(
+              ThreadWorkerSupervisor,
+              {ThreadWorker, [thread_key: key]}
+            )
+
           ref = Process.monitor(pid)
           {ref, pid}
         end
@@ -747,7 +789,13 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
         for _ <- 1..30 do
           scope = make_scope()
           key = thread_key(scope)
-          {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+
+          {:ok, pid} =
+            DynamicSupervisor.start_child(
+              ThreadWorkerSupervisor,
+              {ThreadWorker, [thread_key: key]}
+            )
+
           {key, pid}
         end
 
@@ -766,7 +814,13 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
           for _ <- 1..5 do
             scope = make_scope()
             key = thread_key(scope)
-            {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+
+            {:ok, pid} =
+              DynamicSupervisor.start_child(
+                ThreadWorkerSupervisor,
+                {ThreadWorker, [thread_key: key]}
+              )
+
             pid
           end
 
@@ -908,7 +962,8 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       scope = make_scope()
       key = thread_key(scope)
 
-      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+      {:ok, pid} =
+        DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
 
       children = DynamicSupervisor.which_children(ThreadWorkerSupervisor)
       child = Enum.find(children, fn {_, child_pid, _, _} -> child_pid == pid end)
@@ -929,7 +984,8 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       scope = make_scope()
       key = thread_key(scope)
 
-      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+      {:ok, pid} =
+        DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
 
       # Verify via tuple works
       via_name = {:via, Registry, {LemonGateway.ThreadRegistry, key}}
@@ -942,7 +998,9 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       scope = make_scope()
       key = thread_key(scope)
 
-      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+      {:ok, pid} =
+        DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+
       DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
 
       Process.sleep(50)
@@ -961,7 +1019,9 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       scope = make_scope()
       key = thread_key(scope)
 
-      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+      {:ok, pid} =
+        DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+
       ref = Process.monitor(pid)
 
       # Kill the worker
@@ -1006,7 +1066,8 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       scope = make_scope()
       key = thread_key(scope)
 
-      {:ok, worker_pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+      {:ok, worker_pid} =
+        DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
 
       # Kill the worker
       Process.exit(worker_pid, :kill)
@@ -1045,7 +1106,8 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       scope = make_scope()
       key = thread_key(scope)
 
-      {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
+      {:ok, pid} =
+        DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
 
       # First terminate should succeed
       assert :ok = DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)

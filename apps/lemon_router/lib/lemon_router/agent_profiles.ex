@@ -63,20 +63,55 @@ defmodule LemonRouter.AgentProfiles do
   end
 
   defp load_profiles do
-    # TODO: Load from config file or store
-    %{
-      "default" => default_profile()
-    }
+    # Prefer canonical TOML config (global + project). For now, load from global config.
+    # This keeps the control plane agent registry in sync with runtime configuration.
+    cfg = LemonCore.Config.load()
+    profiles = cfg.agents || %{}
+
+    # Normalize to map keyed by agent_id with atom keys for internal use.
+    profiles =
+      profiles
+      |> Enum.map(fn {id, p} ->
+        {to_string(id), normalize_profile(id, p)}
+      end)
+      |> Map.new()
+
+    if map_size(profiles) == 0 do
+      %{"default" => default_profile()}
+    else
+      Map.put_new(profiles, "default", default_profile())
+    end
   end
 
   defp default_profile do
     %{
       id: "default",
       name: "Default Agent",
-      engine: "lemon",
-      tool_policy: %{},
+      description: nil,
+      avatar: nil,
+      default_engine: "lemon",
+      tool_policy: nil,
       system_prompt: nil,
+      model: nil,
       rate_limit: nil
     }
   end
+
+  defp normalize_profile(id, profile) when is_map(profile) do
+    %{
+      id: profile[:id] || profile["id"] || to_string(id),
+      name: profile[:name] || profile["name"] || to_string(id),
+      description: profile[:description] || profile["description"],
+      avatar: profile[:avatar] || profile["avatar"],
+      default_engine:
+        profile[:default_engine] || profile["default_engine"] ||
+          profile[:engine] || profile["engine"] || "lemon",
+      tool_policy: profile[:tool_policy] || profile["tool_policy"],
+      system_prompt: profile[:system_prompt] || profile["system_prompt"],
+      model: profile[:model] || profile["model"],
+      rate_limit: profile[:rate_limit] || profile["rate_limit"]
+    }
+  end
+
+  defp normalize_profile(_id, _), do: default_profile()
 end

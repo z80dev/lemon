@@ -96,11 +96,13 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
 
     case message_end_events do
       [] ->
-        error = Enum.find(events, fn
-          {:error, _} -> true
-          {:timeout, _} -> true
-          _ -> false
-        end)
+        error =
+          Enum.find(events, fn
+            {:error, _} -> true
+            {:timeout, _} -> true
+            _ -> false
+          end)
+
         {:error, error || :no_response, events}
 
       messages ->
@@ -175,15 +177,15 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
 
               # Should have message_start for user
               assert Enum.any?(events, fn
-                {:message_start, %Ai.Types.UserMessage{}} -> true
-                _ -> false
-              end)
+                       {:message_start, %Ai.Types.UserMessage{}} -> true
+                       _ -> false
+                     end)
 
               # Should have message_start for assistant
               assert Enum.any?(events, fn
-                {:message_start, %AssistantMessage{}} -> true
-                _ -> false
-              end)
+                       {:message_start, %AssistantMessage{}} -> true
+                       _ -> false
+                     end)
 
               # Should have message_update events (streaming)
               assert Enum.any?(events, &match?({:message_update, _, _}, &1))
@@ -255,23 +257,27 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
           case wait_for_response(session, 60_000) do
             {:ok, msg, events} ->
               # Should have tool call events (may be nested in message_update)
-              tool_events = Enum.filter(events, fn
-                {:tool_start, _, _} -> true
-                {:tool_end, _, _} -> true
-                {:message_update, _, {:tool_call_start, _, _}} -> true
-                {:message_update, _, {:tool_call_end, _, _, _}} -> true
-                _ -> false
-              end)
+              tool_events =
+                Enum.filter(events, fn
+                  {:tool_start, _, _} -> true
+                  {:tool_end, _, _} -> true
+                  {:message_update, _, {:tool_call_start, _, _}} -> true
+                  {:message_update, _, {:tool_call_end, _, _, _}} -> true
+                  _ -> false
+                end)
 
               # Model should have called the read tool
-              assert length(tool_events) > 0, "Expected tool call events, got: #{inspect(Enum.take(events, 20))}"
+              assert length(tool_events) > 0,
+                     "Expected tool call events, got: #{inspect(Enum.take(events, 20))}"
 
               # Final response should contain 42
               text = get_text(msg)
               assert String.contains?(text, "42"), "Expected '42' in response, got: #{text}"
 
             {:error, reason, events} ->
-              flunk("Tool execution failed: #{inspect(reason)}, events: #{inspect(Enum.take(events, 10))}")
+              flunk(
+                "Tool execution failed: #{inspect(reason)}, events: #{inspect(Enum.take(events, 10))}"
+              )
           end
       end
     end
@@ -295,13 +301,14 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
           case wait_for_response(session, 60_000) do
             {:ok, _msg, events} ->
               # Should have tool call events for write (may be nested in message_update)
-              tool_events = Enum.filter(events, fn
-                {:tool_start, _, _} -> true
-                {:tool_end, _, _} -> true
-                {:message_update, _, {:tool_call_start, _, _}} -> true
-                {:message_update, _, {:tool_call_end, _, _, _}} -> true
-                _ -> false
-              end)
+              tool_events =
+                Enum.filter(events, fn
+                  {:tool_start, _, _} -> true
+                  {:tool_end, _, _} -> true
+                  {:message_update, _, {:tool_call_start, _, _}} -> true
+                  {:message_update, _, {:tool_call_end, _, _, _}} -> true
+                  _ -> false
+                end)
 
               assert length(tool_events) > 0, "Expected tool call events"
 
@@ -346,16 +353,17 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
               # Should either mention the .ex files or have tool events showing glob was used
               has_file_names = text =~ "file1" or text =~ "file2" or text =~ ".ex"
 
-              tool_events = Enum.filter(events, fn
-                {:tool_start, _, _} -> true
-                {:tool_end, _, _} -> true
-                {:message_update, _, {:tool_call_start, _, _}} -> true
-                {:message_update, _, {:tool_call_end, _, _, _}} -> true
-                _ -> false
-              end)
+              tool_events =
+                Enum.filter(events, fn
+                  {:tool_start, _, _} -> true
+                  {:tool_end, _, _} -> true
+                  {:message_update, _, {:tool_call_start, _, _}} -> true
+                  {:message_update, _, {:tool_call_end, _, _, _}} -> true
+                  _ -> false
+                end)
 
               assert has_file_names or length(tool_events) > 0,
-                "Expected file names in response or tool events, got text: #{text}"
+                     "Expected file names in response or tool events, got text: #{text}"
 
             {:error, reason, _events} ->
               flunk("Tool execution failed: #{inspect(reason)}")
@@ -477,7 +485,9 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
             end)
 
           case result do
-            {:ok, _state} -> assert true
+            {:ok, _state} ->
+              assert true
+
             {:error, :timeout} ->
               state = Session.get_state(session)
               assert state.is_streaming == false, "is_streaming should be false after abort"

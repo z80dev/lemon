@@ -46,7 +46,17 @@ defmodule AgentCore.Loop do
   alias AgentCore.AbortSignal
   alias AgentCore.EventStream
   alias AgentCore.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
-  alias Ai.Types.{AssistantMessage, ToolResultMessage, TextContent, ToolCall, Context, Tool, Usage, Cost}
+
+  alias Ai.Types.{
+    AssistantMessage,
+    ToolResultMessage,
+    TextContent,
+    ToolCall,
+    Context,
+    Tool,
+    Usage,
+    Cost
+  }
 
   # ============================================================================
   # Public API
@@ -113,16 +123,16 @@ defmodule AgentCore.Loop do
 
     # Run the loop in a supervised task
     case Task.Supervisor.start_child(AgentCore.LoopTaskSupervisor, fn ->
-        try do
-          run_agent_loop(prompts, context, config, signal, stream_fn, stream)
-        rescue
-          e ->
-            EventStream.error(stream, {:exception, Exception.message(e)}, nil)
-        catch
-          kind, value ->
-            EventStream.error(stream, {kind, value}, nil)
-        end
-      end) do
+           try do
+             run_agent_loop(prompts, context, config, signal, stream_fn, stream)
+           rescue
+             e ->
+               EventStream.error(stream, {:exception, Exception.message(e)}, nil)
+           catch
+             kind, value ->
+               EventStream.error(stream, {kind, value}, nil)
+           end
+         end) do
       {:ok, pid} ->
         EventStream.attach_task(stream, pid)
 
@@ -225,16 +235,16 @@ defmodule AgentCore.Loop do
       end
 
     case Task.Supervisor.start_child(AgentCore.LoopTaskSupervisor, fn ->
-        try do
-          run_continue_loop(context, config, signal, stream_fn, stream)
-        rescue
-          e ->
-            EventStream.error(stream, {:exception, Exception.message(e)}, nil)
-        catch
-          kind, value ->
-            EventStream.error(stream, {kind, value}, nil)
-        end
-      end) do
+           try do
+             run_continue_loop(context, config, signal, stream_fn, stream)
+           rescue
+             e ->
+               EventStream.error(stream, {:exception, Exception.message(e)}, nil)
+           catch
+             kind, value ->
+               EventStream.error(stream, {kind, value}, nil)
+           end
+         end) do
       {:ok, pid} ->
         EventStream.attach_task(stream, pid)
 
@@ -350,7 +360,16 @@ defmodule AgentCore.Loop do
   end
 
   # Main loop with outer/inner loop structure
-  defp do_run_loop(context, new_messages, config, signal, stream_fn, stream, pending_messages, first_turn) do
+  defp do_run_loop(
+         context,
+         new_messages,
+         config,
+         signal,
+         stream_fn,
+         stream,
+         pending_messages,
+         first_turn
+       ) do
     # Inner loop: process tool calls and steering messages
     {context, new_messages, _pending_out, continue_outer} =
       do_inner_loop(
@@ -372,7 +391,16 @@ defmodule AgentCore.Loop do
 
       if follow_up_messages != [] do
         # Set as pending so inner loop processes them
-        do_run_loop(context, new_messages, config, signal, stream_fn, stream, follow_up_messages, false)
+        do_run_loop(
+          context,
+          new_messages,
+          config,
+          signal,
+          stream_fn,
+          stream,
+          follow_up_messages,
+          false
+        )
       else
         # No more messages, exit
         emit_loop_end_telemetry(new_messages, config, :completed)
@@ -522,7 +550,7 @@ defmodule AgentCore.Loop do
         }
 
         # Resolve stream function
-        stream_function = stream_fn || config.stream_fn || &default_stream_fn/3
+        stream_function = stream_fn || config.stream_fn || (&default_stream_fn/3)
 
         # Resolve API key (important for expiring tokens)
         api_key =
@@ -534,7 +562,7 @@ defmodule AgentCore.Loop do
               provider = config.model.provider
 
               get_key_fn.(provider) ||
-                (if is_atom(provider), do: get_key_fn.(Atom.to_string(provider))) ||
+                if(is_atom(provider), do: get_key_fn.(Atom.to_string(provider))) ||
                 config.stream_options.api_key
           end
 
@@ -570,8 +598,10 @@ defmodule AgentCore.Loop do
         fn event, {partial, ctx, added} ->
           if aborted?(signal) do
             Ai.EventStream.cancel(response_stream, :aborted)
+
             {final_message, final_ctx} =
               finalize_canceled_message(partial, ctx, added, stream, config, :aborted)
+
             {:halt, {:done, final_message, final_ctx}}
           else
             case process_stream_event(event, partial, ctx, added, stream, config) do
@@ -632,12 +662,26 @@ defmodule AgentCore.Loop do
     end
   end
 
-  defp process_stream_event({:done, _reason, final_message}, _partial, context, added, stream, _config) do
+  defp process_stream_event(
+         {:done, _reason, final_message},
+         _partial,
+         context,
+         added,
+         stream,
+         _config
+       ) do
     {final_message, context} = finalize_message(final_message, context, added, stream)
     {:done, final_message, context}
   end
 
-  defp process_stream_event({:error, _reason, final_message}, _partial, context, added, stream, _config) do
+  defp process_stream_event(
+         {:error, _reason, final_message},
+         _partial,
+         context,
+         added,
+         stream,
+         _config
+       ) do
     {final_message, context} = finalize_message(final_message, context, added, stream)
     {:done, final_message, context}
   end
@@ -694,7 +738,10 @@ defmodule AgentCore.Loop do
       Enum.reduce(tool_calls, {%{}, %{}}, fn tool_call, {by_ref, by_mon} ->
         tool = find_tool(context.tools, tool_call.name)
 
-        EventStream.push(stream, {:tool_execution_start, tool_call.id, tool_call.name, tool_call.arguments})
+        EventStream.push(
+          stream,
+          {:tool_execution_start, tool_call.id, tool_call.name, tool_call.arguments}
+        )
 
         ref = make_ref()
 
@@ -719,7 +766,15 @@ defmodule AgentCore.Loop do
         }
       end)
 
-    collect_parallel_tool_results(context, new_messages, pending_by_ref, pending_by_mon, [], stream, signal)
+    collect_parallel_tool_results(
+      context,
+      new_messages,
+      pending_by_ref,
+      pending_by_mon,
+      [],
+      stream,
+      signal
+    )
   end
 
   defp collect_parallel_tool_results(
@@ -750,14 +805,27 @@ defmodule AgentCore.Loop do
 
         # Return aborted results for remaining tool calls
         {aborted_results, context, new_messages} =
-          Enum.reduce(pending_by_ref, {results, context, new_messages}, fn {_ref, %{tool_call: tool_call}}, {acc_results, acc_ctx, acc_msgs} ->
+          Enum.reduce(pending_by_ref, {results, context, new_messages}, fn {_ref,
+                                                                            %{
+                                                                              tool_call: tool_call
+                                                                            }},
+                                                                           {acc_results, acc_ctx,
+                                                                            acc_msgs} ->
             aborted_result = %AgentToolResult{
               content: [%TextContent{type: :text, text: "Tool execution aborted"}],
               details: %{error_type: :aborted}
             }
 
             {acc_ctx, acc_msgs, acc_results} =
-              emit_tool_result(tool_call, aborted_result, true, acc_ctx, acc_msgs, acc_results, stream)
+              emit_tool_result(
+                tool_call,
+                aborted_result,
+                true,
+                acc_ctx,
+                acc_msgs,
+                acc_results,
+                stream
+              )
 
             {acc_results, acc_ctx, acc_msgs}
           end)
@@ -766,7 +834,8 @@ defmodule AgentCore.Loop do
       else
         receive do
           {:tool_task_result, ref, tool_call, result, is_error} ->
-            {pending_by_ref, pending_by_mon} = drop_pending_task(pending_by_ref, pending_by_mon, ref)
+            {pending_by_ref, pending_by_mon} =
+              drop_pending_task(pending_by_ref, pending_by_mon, ref)
 
             # Emit telemetry for tool task end
             :telemetry.execute(
@@ -776,7 +845,15 @@ defmodule AgentCore.Loop do
             )
 
             {context, new_messages, results} =
-              emit_tool_result(tool_call, result, is_error, context, new_messages, results, stream)
+              emit_tool_result(
+                tool_call,
+                result,
+                is_error,
+                context,
+                new_messages,
+                results,
+                stream
+              )
 
             collect_parallel_tool_results(
               context,
@@ -803,7 +880,9 @@ defmodule AgentCore.Loop do
 
               ref ->
                 %{tool_call: tool_call} = Map.fetch!(pending_by_ref, ref)
-                {pending_by_ref, pending_by_mon} = drop_pending_task(pending_by_ref, pending_by_mon, ref)
+
+                {pending_by_ref, pending_by_mon} =
+                  drop_pending_task(pending_by_ref, pending_by_mon, ref)
 
                 # Emit telemetry for tool task error (crash)
                 :telemetry.execute(
@@ -863,7 +942,10 @@ defmodule AgentCore.Loop do
   end
 
   defp emit_tool_result(tool_call, result, is_error, context, new_messages, results, stream) do
-    EventStream.push(stream, {:tool_execution_end, tool_call.id, tool_call.name, result, is_error})
+    EventStream.push(
+      stream,
+      {:tool_execution_end, tool_call.id, tool_call.name, result, is_error}
+    )
 
     tool_result_message = %ToolResultMessage{
       role: :tool_result,
@@ -903,7 +985,8 @@ defmodule AgentCore.Loop do
     on_update = fn partial_result ->
       EventStream.push(
         stream,
-        {:tool_execution_update, tool_call.id, tool_call.name, tool_call.arguments, partial_result}
+        {:tool_execution_update, tool_call.id, tool_call.name, tool_call.arguments,
+         partial_result}
       )
 
       :ok
@@ -938,7 +1021,11 @@ defmodule AgentCore.Loop do
       details: nil
     }
 
-    EventStream.push(stream, {:tool_execution_start, tool_call.id, tool_call.name, tool_call.arguments})
+    EventStream.push(
+      stream,
+      {:tool_execution_start, tool_call.id, tool_call.name, tool_call.arguments}
+    )
+
     EventStream.push(stream, {:tool_execution_end, tool_call.id, tool_call.name, result, true})
 
     tool_result_message = %ToolResultMessage{
@@ -1074,8 +1161,11 @@ defmodule AgentCore.Loop do
 
     final_message =
       case partial do
-        %AssistantMessage{} = msg -> %{msg | stop_reason: stop_reason, error_message: error_message}
-        _ -> build_error_message(config, stop_reason, error_message)
+        %AssistantMessage{} = msg ->
+          %{msg | stop_reason: stop_reason, error_message: error_message}
+
+        _ ->
+          build_error_message(config, stop_reason, error_message)
       end
 
     finalize_message(final_message, context, added, stream)

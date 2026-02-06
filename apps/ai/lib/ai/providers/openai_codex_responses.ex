@@ -361,7 +361,7 @@ defmodule Ai.Providers.OpenAICodexResponses do
         error_text = normalize_error_body(error_body)
 
         if retryable_error?(status, error_text) do
-          delay = @base_delay_ms * :math.pow(2, @max_retries - retries_left) |> round()
+          delay = (@base_delay_ms * :math.pow(2, @max_retries - retries_left)) |> round()
           Process.sleep(delay)
           stream_with_retries(body, headers, retries_left - 1)
         else
@@ -376,7 +376,7 @@ defmodule Ai.Providers.OpenAICodexResponses do
         error_msg = inspect(reason)
 
         if not String.contains?(error_msg, "usage limit") do
-          delay = @base_delay_ms * :math.pow(2, @max_retries - retries_left) |> round()
+          delay = (@base_delay_ms * :math.pow(2, @max_retries - retries_left)) |> round()
           Process.sleep(delay)
           stream_with_retries(body, headers, retries_left - 1)
         else
@@ -404,7 +404,10 @@ defmodule Ai.Providers.OpenAICodexResponses do
         friendly_message =
           if Regex.match?(~r/usage_limit_reached|usage_not_included|rate_limit_exceeded/i, code) ||
                status == 429 do
-            plan = if error["plan_type"], do: " (#{String.downcase(error["plan_type"])} plan)", else: ""
+            plan =
+              if error["plan_type"],
+                do: " (#{String.downcase(error["plan_type"])} plan)",
+                else: ""
 
             resets_at = error["resets_at"]
 

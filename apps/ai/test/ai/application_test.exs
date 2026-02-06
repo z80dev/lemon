@@ -123,7 +123,8 @@ defmodule Ai.ApplicationTest do
     test "list returns all registered providers" do
       providers = Ai.ProviderRegistry.list()
       assert is_list(providers)
-      assert length(providers) >= 9  # At least the 9 built-in providers
+      # At least the 9 built-in providers
+      assert length(providers) >= 9
 
       # Verify expected providers are in the list
       assert :anthropic_messages in providers

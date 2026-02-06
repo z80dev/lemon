@@ -38,8 +38,12 @@ defmodule Ai.EventStreamOverflowTest do
     Stream.repeatedly(fn -> fun.() end)
     |> Enum.reduce_while(false, fn result, _ ->
       cond do
-        result -> {:halt, true}
-        System.monotonic_time(:millisecond) > deadline -> {:halt, false}
+        result ->
+          {:halt, true}
+
+        System.monotonic_time(:millisecond) > deadline ->
+          {:halt, false}
+
         true ->
           Process.sleep(5)
           {:cont, false}
@@ -255,9 +259,9 @@ defmodule Ai.EventStreamOverflowTest do
 
       # Wait for async messages to be processed
       assert wait_until(fn ->
-        stats = EventStream.stats(stream)
-        stats.dropped >= 8
-      end)
+               stats = EventStream.stats(stream)
+               stats.dropped >= 8
+             end)
     end
 
     test "allows pushing after consuming events" do
@@ -270,9 +274,10 @@ defmodule Ai.EventStreamOverflowTest do
       assert {:error, :overflow} = EventStream.push(stream, {:text_delta, 0, "msg_3", partial})
 
       # Start a consumer to drain some events
-      reader = Task.async(fn ->
-        EventStream.events(stream) |> Enum.take(1)
-      end)
+      reader =
+        Task.async(fn ->
+          EventStream.events(stream) |> Enum.take(1)
+        end)
 
       Task.await(reader, 1000)
 
@@ -366,9 +371,9 @@ defmodule Ai.EventStreamOverflowTest do
       results = Enum.map(waiters, &Task.await(&1, 1000))
 
       assert Enum.all?(results, fn
-        {:ok, %AssistantMessage{content: [%TextContent{text: "shared result"}]}} -> true
-        _ -> false
-      end)
+               {:ok, %AssistantMessage{content: [%TextContent{text: "shared result"}]}} -> true
+               _ -> false
+             end)
     end
 
     test "result/1 returns error result when stream errors" do
@@ -391,19 +396,21 @@ defmodule Ai.EventStreamOverflowTest do
       test_pid = self()
 
       # Start first task
-      {:ok, task1_pid} = Task.start(fn ->
-        send(test_pid, {:task1_started, self()})
-        receive do: (:stop -> :ok)
-      end)
+      {:ok, task1_pid} =
+        Task.start(fn ->
+          send(test_pid, {:task1_started, self()})
+          receive do: (:stop -> :ok)
+        end)
 
       EventStream.attach_task(stream, task1_pid)
       assert_receive {:task1_started, ^task1_pid}, 1000
 
       # Start second task
-      {:ok, task2_pid} = Task.start(fn ->
-        send(test_pid, {:task2_started, self()})
-        receive do: (:stop -> :ok)
-      end)
+      {:ok, task2_pid} =
+        Task.start(fn ->
+          send(test_pid, {:task2_started, self()})
+          receive do: (:stop -> :ok)
+        end)
 
       EventStream.attach_task(stream, task2_pid)
       assert_receive {:task2_started, ^task2_pid}, 1000
@@ -424,10 +431,11 @@ defmodule Ai.EventStreamOverflowTest do
     test "task crash before stream completion triggers error" do
       {:ok, stream} = EventStream.start_link()
 
-      {:ok, task_pid} = Task.start(fn ->
-        Process.sleep(50)
-        exit(:intentional_crash)
-      end)
+      {:ok, task_pid} =
+        Task.start(fn ->
+          Process.sleep(50)
+          exit(:intentional_crash)
+        end)
 
       EventStream.attach_task(stream, task_pid)
 
@@ -438,11 +446,12 @@ defmodule Ai.EventStreamOverflowTest do
     test "task normal exit after completion doesn't affect stream" do
       {:ok, stream} = EventStream.start_link()
 
-      {:ok, task_pid} = Task.start(fn ->
-        Process.sleep(20)
-        EventStream.complete(stream, make_message())
-        # Task exits normally after completing
-      end)
+      {:ok, task_pid} =
+        Task.start(fn ->
+          Process.sleep(20)
+          EventStream.complete(stream, make_message())
+          # Task exits normally after completing
+        end)
 
       EventStream.attach_task(stream, task_pid)
 
@@ -482,16 +491,18 @@ defmodule Ai.EventStreamOverflowTest do
       test_pid = self()
 
       # Create an owner process
-      owner_pid = spawn(fn ->
-        receive do: (:die -> :ok)
-      end)
+      owner_pid =
+        spawn(fn ->
+          receive do: (:die -> :ok)
+        end)
 
       {:ok, stream} = EventStream.start_link(owner: owner_pid)
 
-      {:ok, task_pid} = Task.start(fn ->
-        send(test_pid, {:task_started, self()})
-        receive do: (_ -> :ok)
-      end)
+      {:ok, task_pid} =
+        Task.start(fn ->
+          send(test_pid, {:task_started, self()})
+          receive do: (_ -> :ok)
+        end)
 
       EventStream.attach_task(stream, task_pid)
       assert_receive {:task_started, ^task_pid}, 1000
@@ -516,17 +527,19 @@ defmodule Ai.EventStreamOverflowTest do
     test "stream terminates when owner dies" do
       test_pid = self()
 
-      owner = spawn(fn ->
-        {:ok, stream} = EventStream.start_link(owner: self())
-        send(test_pid, {:stream, stream})
-        receive do: (:die -> :ok)
-      end)
+      owner =
+        spawn(fn ->
+          {:ok, stream} = EventStream.start_link(owner: self())
+          send(test_pid, {:stream, stream})
+          receive do: (:die -> :ok)
+        end)
 
-      stream = receive do
-        {:stream, s} -> s
-      after
-        1000 -> flunk("Did not receive stream")
-      end
+      stream =
+        receive do
+          {:stream, s} -> s
+        after
+          1000 -> flunk("Did not receive stream")
+        end
 
       assert Process.alive?(stream)
 
@@ -542,22 +555,25 @@ defmodule Ai.EventStreamOverflowTest do
     test "result waiters receive error on owner death" do
       test_pid = self()
 
-      owner = spawn(fn ->
-        {:ok, stream} = EventStream.start_link(owner: self())
-        send(test_pid, {:stream, stream})
-        receive do: (:die -> :ok)
-      end)
+      owner =
+        spawn(fn ->
+          {:ok, stream} = EventStream.start_link(owner: self())
+          send(test_pid, {:stream, stream})
+          receive do: (:die -> :ok)
+        end)
 
-      stream = receive do
-        {:stream, s} -> s
-      after
-        1000 -> flunk("Did not receive stream")
-      end
+      stream =
+        receive do
+          {:stream, s} -> s
+        after
+          1000 -> flunk("Did not receive stream")
+        end
 
       # Start waiting for result
-      waiter = Task.async(fn ->
-        EventStream.result(stream, 5000)
-      end)
+      waiter =
+        Task.async(fn ->
+          EventStream.result(stream, 5000)
+        end)
 
       # Give waiter time to register
       Process.sleep(50)
@@ -572,22 +588,25 @@ defmodule Ai.EventStreamOverflowTest do
     test "events include canceled event with :owner_down reason" do
       test_pid = self()
 
-      owner = spawn(fn ->
-        {:ok, stream} = EventStream.start_link(owner: self())
-        send(test_pid, {:stream, stream})
-        receive do: (:die -> :ok)
-      end)
+      owner =
+        spawn(fn ->
+          {:ok, stream} = EventStream.start_link(owner: self())
+          send(test_pid, {:stream, stream})
+          receive do: (:die -> :ok)
+        end)
 
-      stream = receive do
-        {:stream, s} -> s
-      after
-        1000 -> flunk("Did not receive stream")
-      end
+      stream =
+        receive do
+          {:stream, s} -> s
+        after
+          1000 -> flunk("Did not receive stream")
+        end
 
       # Start reading events
-      reader = Task.async(fn ->
-        EventStream.events(stream) |> Enum.to_list()
-      end)
+      reader =
+        Task.async(fn ->
+          EventStream.events(stream) |> Enum.to_list()
+        end)
 
       # Give reader time to start waiting
       Process.sleep(50)
@@ -614,22 +633,25 @@ defmodule Ai.EventStreamOverflowTest do
     test "attached task is killed when owner dies" do
       test_pid = self()
 
-      owner = spawn(fn ->
-        {:ok, stream} = EventStream.start_link(owner: self())
-        send(test_pid, {:stream, stream})
-        receive do: (:die -> :ok)
-      end)
+      owner =
+        spawn(fn ->
+          {:ok, stream} = EventStream.start_link(owner: self())
+          send(test_pid, {:stream, stream})
+          receive do: (:die -> :ok)
+        end)
 
-      stream = receive do
-        {:stream, s} -> s
-      after
-        1000 -> flunk("Did not receive stream")
-      end
+      stream =
+        receive do
+          {:stream, s} -> s
+        after
+          1000 -> flunk("Did not receive stream")
+        end
 
-      {:ok, task_pid} = Task.start(fn ->
-        send(test_pid, {:task_started, self()})
-        receive do: (_ -> :ok)
-      end)
+      {:ok, task_pid} =
+        Task.start(fn ->
+          send(test_pid, {:task_started, self()})
+          receive do: (_ -> :ok)
+        end)
 
       EventStream.attach_task(stream, task_pid)
       assert_receive {:task_started, ^task_pid}, 1000
@@ -654,14 +676,15 @@ defmodule Ai.EventStreamOverflowTest do
       partial = make_message()
 
       # Start slow consumer
-      consumer = Task.async(fn ->
-        EventStream.events(stream)
-        |> Enum.map(fn event ->
-          Process.sleep(10)
-          event
+      consumer =
+        Task.async(fn ->
+          EventStream.events(stream)
+          |> Enum.map(fn event ->
+            Process.sleep(10)
+            event
+          end)
+          |> Enum.to_list()
         end)
-        |> Enum.to_list()
-      end)
 
       # Fast producer
       for i <- 1..20 do
@@ -688,9 +711,10 @@ defmodule Ai.EventStreamOverflowTest do
       assert {:error, :overflow} = EventStream.push(stream, {:text_delta, 0, "overflow", partial})
 
       # Start consumer
-      consumer = Task.async(fn ->
-        EventStream.events(stream) |> Enum.take(1)
-      end)
+      consumer =
+        Task.async(fn ->
+          EventStream.events(stream) |> Enum.take(1)
+        end)
 
       Task.await(consumer, 1000)
 
@@ -725,14 +749,15 @@ defmodule Ai.EventStreamOverflowTest do
       partial = make_message()
 
       # Start consumer
-      consumer = Task.async(fn ->
-        EventStream.events(stream)
-        |> Enum.map(fn event ->
-          Process.sleep(5)
-          event
+      consumer =
+        Task.async(fn ->
+          EventStream.events(stream)
+          |> Enum.map(fn event ->
+            Process.sleep(5)
+            event
+          end)
+          |> Enum.to_list()
         end)
-        |> Enum.to_list()
-      end)
 
       # Multiple producers
       producers =
@@ -767,9 +792,10 @@ defmodule Ai.EventStreamOverflowTest do
       # Consumer should get event immediately
       start_time = System.monotonic_time(:millisecond)
 
-      consumer = Task.async(fn ->
-        EventStream.events(stream) |> Enum.take(1)
-      end)
+      consumer =
+        Task.async(fn ->
+          EventStream.events(stream) |> Enum.take(1)
+        end)
 
       events = Task.await(consumer, 1000)
       elapsed = System.monotonic_time(:millisecond) - start_time
@@ -790,7 +816,10 @@ defmodule Ai.EventStreamOverflowTest do
 
       # Push events in order
       for i <- 1..100 do
-        EventStream.push(stream, {:text_delta, 0, "msg_#{String.pad_leading(to_string(i), 3, "0")}", partial})
+        EventStream.push(
+          stream,
+          {:text_delta, 0, "msg_#{String.pad_leading(to_string(i), 3, "0")}", partial}
+        )
       end
 
       EventStream.complete(stream, make_message())
@@ -800,6 +829,7 @@ defmodule Ai.EventStreamOverflowTest do
 
       # Verify FIFO order
       indexed = Enum.with_index(texts)
+
       Enum.each(indexed, fn {text, idx} ->
         expected = "msg_#{String.pad_leading(to_string(idx + 1), 3, "0")}"
         assert text == expected, "Expected #{expected} at index #{idx}, got #{text}"
@@ -871,9 +901,10 @@ defmodule Ai.EventStreamOverflowTest do
       partial = make_message()
 
       # Start consumer first
-      consumer = Task.async(fn ->
-        EventStream.events(stream) |> Enum.to_list()
-      end)
+      consumer =
+        Task.async(fn ->
+          EventStream.events(stream) |> Enum.to_list()
+        end)
 
       # Give consumer time to start waiting
       Process.sleep(20)
@@ -990,9 +1021,10 @@ defmodule Ai.EventStreamOverflowTest do
     test "stream timeout cancels waiting result calls" do
       {:ok, stream} = EventStream.start_link(timeout: 100)
 
-      waiter = Task.async(fn ->
-        EventStream.result(stream, 5000)
-      end)
+      waiter =
+        Task.async(fn ->
+          EventStream.result(stream, 5000)
+        end)
 
       result = Task.await(waiter, 1000)
       assert {:error, {:canceled, :timeout}} = result

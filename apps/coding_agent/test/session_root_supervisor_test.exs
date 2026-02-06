@@ -114,7 +114,8 @@ defmodule CodingAgent.SessionRootSupervisorTest do
 
       {:ok, session_pid} = SessionRootSupervisor.get_session(pid)
       state = CodingAgent.Session.get_state(session_pid)
-      assert state.system_prompt == system_prompt
+      assert state.explicit_system_prompt == system_prompt
+      assert String.starts_with?(state.system_prompt, system_prompt)
 
       # Cleanup
       Process.exit(pid, :normal)
@@ -608,8 +609,11 @@ defmodule CodingAgent.SessionRootSupervisorTest do
 
   describe "session isolation" do
     test "multiple supervisor instances are independent" do
-      opts1 = default_supervisor_opts(session_id: "session-1-#{:erlang.unique_integer([:positive])}")
-      opts2 = default_supervisor_opts(session_id: "session-2-#{:erlang.unique_integer([:positive])}")
+      opts1 =
+        default_supervisor_opts(session_id: "session-1-#{:erlang.unique_integer([:positive])}")
+
+      opts2 =
+        default_supervisor_opts(session_id: "session-2-#{:erlang.unique_integer([:positive])}")
 
       {:ok, sup1} = SessionRootSupervisor.start_link(opts1)
       {:ok, sup2} = SessionRootSupervisor.start_link(opts2)

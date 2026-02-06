@@ -38,19 +38,21 @@ defmodule AgentCore.CliRunners.CodexIntegrationTest do
   describe "basic execution" do
     @tag timeout: 60_000
     test "starts a session and receives events", %{cwd: cwd} do
-      {:ok, session} = CodexSubagent.start(
-        prompt: "What is 2 + 2? Reply with just the number.",
-        cwd: cwd,
-        timeout: 60_000
-      )
+      {:ok, session} =
+        CodexSubagent.start(
+          prompt: "What is 2 + 2? Reply with just the number.",
+          cwd: cwd,
+          timeout: 60_000
+        )
 
       events = collect_events(session)
 
       assert_started_and_output(events, "codex")
+
       assert Enum.any?(events, fn
-        {:completed, answer, opts} -> opts[:ok] == true and String.contains?(answer, "4")
-        _ -> false
-      end)
+               {:completed, answer, opts} -> opts[:ok] == true and String.contains?(answer, "4")
+               _ -> false
+             end)
 
       IO.puts("\n=== Basic Execution Test ===")
       IO.puts("Events received: #{length(events)}")
@@ -59,11 +61,12 @@ defmodule AgentCore.CliRunners.CodexIntegrationTest do
 
     @tag timeout: 60_000
     test "handles simple code task", %{cwd: cwd} do
-      {:ok, session} = CodexSubagent.start(
-        prompt: "Create a file called hello.txt with the content 'Hello, World!'",
-        cwd: cwd,
-        timeout: 60_000
-      )
+      {:ok, session} =
+        CodexSubagent.start(
+          prompt: "Create a file called hello.txt with the content 'Hello, World!'",
+          cwd: cwd,
+          timeout: 60_000
+        )
 
       events = collect_events(session)
 
@@ -84,11 +87,12 @@ defmodule AgentCore.CliRunners.CodexIntegrationTest do
     @tag timeout: 120_000
     test "can continue a session with follow-up prompt", %{cwd: cwd} do
       # First prompt
-      {:ok, session1} = CodexSubagent.start(
-        prompt: "Remember the number 42. Just acknowledge.",
-        cwd: cwd,
-        timeout: 60_000
-      )
+      {:ok, session1} =
+        CodexSubagent.start(
+          prompt: "Remember the number 42. Just acknowledge.",
+          cwd: cwd,
+          timeout: 60_000
+        )
 
       events1 = collect_events(session1)
 
@@ -122,11 +126,12 @@ defmodule AgentCore.CliRunners.CodexIntegrationTest do
     @tag timeout: 120_000
     test "can resume session using saved token", %{cwd: cwd} do
       # First session - use a neutral topic that Codex won't refuse
-      {:ok, session1} = CodexSubagent.start(
-        prompt: "My favorite color is blue and my favorite number is 777. Remember these.",
-        cwd: cwd,
-        timeout: 60_000
-      )
+      {:ok, session1} =
+        CodexSubagent.start(
+          prompt: "My favorite color is blue and my favorite number is 777. Remember these.",
+          cwd: cwd,
+          timeout: 60_000
+        )
 
       events1 = collect_events(session1)
       token = CodexSubagent.resume_token(session1)
@@ -138,11 +143,12 @@ defmodule AgentCore.CliRunners.CodexIntegrationTest do
       assert token != nil
 
       # Resume with the token directly (simulating a fresh process)
-      {:ok, session2} = CodexSubagent.resume(token,
-        prompt: "What was my favorite number?",
-        cwd: cwd,
-        timeout: 60_000
-      )
+      {:ok, session2} =
+        CodexSubagent.resume(token,
+          prompt: "What was my favorite number?",
+          cwd: cwd,
+          timeout: 60_000
+        )
 
       events2 = collect_events(session2)
 
@@ -162,11 +168,12 @@ defmodule AgentCore.CliRunners.CodexIntegrationTest do
   describe "action events" do
     @tag timeout: 60_000
     test "receives action events for commands", %{cwd: cwd} do
-      {:ok, session} = CodexSubagent.start(
-        prompt: "Run the command: echo 'test output'",
-        cwd: cwd,
-        timeout: 60_000
-      )
+      {:ok, session} =
+        CodexSubagent.start(
+          prompt: "Run the command: echo 'test output'",
+          cwd: cwd,
+          timeout: 60_000
+        )
 
       events = collect_events(session)
 
@@ -174,10 +181,11 @@ defmodule AgentCore.CliRunners.CodexIntegrationTest do
       print_events(events)
 
       # Should have command action events
-      command_events = Enum.filter(events, fn
-        {:action, %{kind: :command}, _, _} -> true
-        _ -> false
-      end)
+      command_events =
+        Enum.filter(events, fn
+          {:action, %{kind: :command}, _, _} -> true
+          _ -> false
+        end)
 
       IO.puts("Command events: #{length(command_events)}")
 
@@ -190,11 +198,12 @@ defmodule AgentCore.CliRunners.CodexIntegrationTest do
   describe "minimal input" do
     @tag timeout: 30_000
     test "handles minimal prompt and returns output", %{cwd: cwd} do
-      {:ok, session} = CodexSubagent.start(
-        prompt: "Say 'ok' and nothing else.",
-        cwd: cwd,
-        timeout: 30_000
-      )
+      {:ok, session} =
+        CodexSubagent.start(
+          prompt: "Say 'ok' and nothing else.",
+          cwd: cwd,
+          timeout: 30_000
+        )
 
       events = collect_events(session)
 
@@ -243,9 +252,9 @@ defmodule AgentCore.CliRunners.CodexIntegrationTest do
 
   defp assert_started_and_output(events, engine) do
     assert Enum.any?(events, fn
-      {:started, %ResumeToken{engine: ^engine}} -> true
-      _ -> false
-    end),
+             {:started, %ResumeToken{engine: ^engine}} -> true
+             _ -> false
+           end),
            "Expected started event for #{engine}"
 
     {answer, opts} = get_completed_answer(events)

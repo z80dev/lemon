@@ -22,7 +22,18 @@ defmodule Ai.Providers.Anthropic do
   @behaviour Ai.Provider
 
   alias Ai.EventStream
-  alias Ai.Types.{AssistantMessage, Context, Cost, Model, StreamOptions, TextContent, ThinkingContent, ToolCall, Usage}
+
+  alias Ai.Types.{
+    AssistantMessage,
+    Context,
+    Cost,
+    Model,
+    StreamOptions,
+    TextContent,
+    ThinkingContent,
+    ToolCall,
+    Usage
+  }
 
   @api_base_url "https://api.anthropic.com"
   @api_version "2023-06-01"
@@ -266,17 +277,24 @@ defmodule Ai.Providers.Anthropic do
     usage = message["usage"] || %{}
 
     output =
-      update_usage(state.output, %{
-        "input_tokens" => usage["input_tokens"],
-        "output_tokens" => usage["output_tokens"],
-        "cache_read_input_tokens" => usage["cache_read_input_tokens"],
-        "cache_creation_input_tokens" => usage["cache_creation_input_tokens"]
-      }, state.model)
+      update_usage(
+        state.output,
+        %{
+          "input_tokens" => usage["input_tokens"],
+          "output_tokens" => usage["output_tokens"],
+          "cache_read_input_tokens" => usage["cache_read_input_tokens"],
+          "cache_creation_input_tokens" => usage["cache_creation_input_tokens"]
+        },
+        state.model
+      )
 
     %{state | output: output}
   end
 
-  defp process_sse_event({"content_block_start", %{"index" => index, "content_block" => block}}, state) do
+  defp process_sse_event(
+         {"content_block_start", %{"index" => index, "content_block" => block}},
+         state
+       ) do
     case block["type"] do
       "text" ->
         text_block = %TextContent{type: :text, text: ""}
@@ -343,7 +361,11 @@ defmodule Ai.Providers.Anthropic do
         state
 
       {content_index, %ThinkingContent{} = block} ->
-        EventStream.push_async(state.stream, {:thinking_end, content_index, block.thinking, state.output})
+        EventStream.push_async(
+          state.stream,
+          {:thinking_end, content_index, block.thinking, state.output}
+        )
+
         state
 
       {content_index, %ToolCall{} = block, _partial_json} ->
@@ -427,7 +449,12 @@ defmodule Ai.Providers.Anthropic do
         updated_block = %{block | thinking: block.thinking <> delta_thinking}
         blocks = update_block_at_index(state.blocks, index, updated_block)
         output = update_content_at_index(state.output, content_index, updated_block)
-        EventStream.push_async(state.stream, {:thinking_delta, content_index, delta_thinking, output})
+
+        EventStream.push_async(
+          state.stream,
+          {:thinking_delta, content_index, delta_thinking, output}
+        )
+
         %{state | blocks: blocks, output: output}
 
       _ ->
@@ -458,7 +485,12 @@ defmodule Ai.Providers.Anthropic do
         updated_block = %{block | arguments: arguments}
         blocks = update_tool_block_at_index(state.blocks, index, updated_block, new_json)
         output = update_content_at_index(state.output, content_index, updated_block)
-        EventStream.push_async(state.stream, {:tool_call_delta, content_index, partial_json, output})
+
+        EventStream.push_async(
+          state.stream,
+          {:tool_call_delta, content_index, partial_json, output}
+        )
+
         %{state | blocks: blocks, output: output}
 
       _ ->
@@ -470,9 +502,14 @@ defmodule Ai.Providers.Anthropic do
     blocks
     |> Enum.with_index()
     |> Enum.find_value(fn
-      {{^target_index, block}, content_index} -> {content_index, block}
-      {{^target_index, block, partial_json}, content_index} -> {content_index, block, partial_json}
-      _ -> nil
+      {{^target_index, block}, content_index} ->
+        {content_index, block}
+
+      {{^target_index, block, partial_json}, content_index} ->
+        {content_index, block, partial_json}
+
+      _ ->
+        nil
     end)
   end
 
@@ -673,7 +710,10 @@ defmodule Ai.Providers.Anthropic do
     end
   end
 
-  defp convert_assistant_content_block(%ThinkingContent{thinking: thinking, thinking_signature: sig}) do
+  defp convert_assistant_content_block(%ThinkingContent{
+         thinking: thinking,
+         thinking_signature: sig
+       }) do
     if String.trim(thinking) != "" do
       # If signature is missing, convert to plain text
       if sig && String.trim(sig) != "" do

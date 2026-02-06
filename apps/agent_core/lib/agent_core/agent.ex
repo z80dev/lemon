@@ -49,6 +49,8 @@ defmodule AgentCore.Agent do
   alias AgentCore.Types.{AgentLoopConfig, AgentState}
   alias Ai.Types.StreamOptions
 
+  @follow_up_poll_timeout_ms 50
+
   # ============================================================================
   # Types
   # ============================================================================
@@ -160,7 +162,10 @@ defmodule AgentCore.Agent do
       :ok = AgentCore.Agent.prompt(agent, %{role: :user, content: "Hi", timestamp: now})
       :ok = AgentCore.Agent.prompt(agent, [msg1, msg2])
   """
-  @spec prompt(GenServer.server(), String.t() | Types.agent_message() | list(Types.agent_message())) ::
+  @spec prompt(
+          GenServer.server(),
+          String.t() | Types.agent_message() | list(Types.agent_message())
+        ) ::
           :ok | {:error, :already_streaming}
   def prompt(agent, message) do
     GenServer.call(agent, {:prompt, message})
@@ -174,7 +179,8 @@ defmodule AgentCore.Agent do
   Returns `{:error, :no_messages}` if there are no messages to continue from.
   Returns `{:error, :cannot_continue}` if the last message is from the assistant.
   """
-  @spec continue(GenServer.server()) :: :ok | {:error, :already_streaming | :no_messages | :cannot_continue}
+  @spec continue(GenServer.server()) ::
+          :ok | {:error, :already_streaming | :no_messages | :cannot_continue}
   def continue(agent) do
     GenServer.call(agent, :continue)
   end
@@ -211,7 +217,7 @@ defmodule AgentCore.Agent do
 
       unsubscribe.()
   """
-  @spec subscribe(GenServer.server(), pid()) :: (() -> :ok)
+  @spec subscribe(GenServer.server(), pid()) :: (-> :ok)
   def subscribe(agent, subscriber_pid) when is_pid(subscriber_pid) do
     GenServer.call(agent, {:subscribe, subscriber_pid})
   end
@@ -477,6 +483,7 @@ defmodule AgentCore.Agent do
       running_task: nil,
       steering_queue: [],
       follow_up_queue: [],
+      follow_up_poll: nil,
       steering_mode: Keyword.get(opts, :steering_mode, :one_at_a_time),
       follow_up_mode: Keyword.get(opts, :follow_up_mode, :one_at_a_time),
       convert_to_llm: convert_to_llm,
@@ -651,10 +658,35 @@ defmodule AgentCore.Agent do
     end
   end
 
-  def handle_call({:get_follow_up_messages, abort_ref}, _from, state) do
+  def handle_call({:get_follow_up_messages, abort_ref}, from, state) do
     if state.abort_ref == abort_ref or match?({:aborted, ^abort_ref}, state.abort_ref) do
-      {messages, new_queue} = consume_queue(state.follow_up_queue, state.follow_up_mode)
-      {:reply, messages, %{state | follow_up_queue: new_queue}}
+      if state.follow_up_queue != [] do
+        {messages, new_queue} = consume_queue(state.follow_up_queue, state.follow_up_mode)
+        {:reply, messages, %{state | follow_up_queue: new_queue}}
+      else
+        # Long-poll briefly to close the race where a follow-up is enqueued right
+        # as the loop is finishing. This keeps follow-ups inside the same run.
+        poll_ref = make_ref()
+
+        timer_ref =
+          Process.send_after(
+            self(),
+            {:follow_up_poll_timeout, poll_ref},
+            @follow_up_poll_timeout_ms
+          )
+
+        state = %{
+          state
+          | follow_up_poll: %{
+              from: from,
+              abort_ref: abort_ref,
+              poll_ref: poll_ref,
+              timer_ref: timer_ref
+            }
+        }
+
+        {:noreply, state}
+      end
     else
       {:reply, [], state}
     end
@@ -682,7 +714,25 @@ defmodule AgentCore.Agent do
   end
 
   def handle_cast({:follow_up, message}, state) do
-    {:noreply, %{state | follow_up_queue: state.follow_up_queue ++ [message]}}
+    state = %{state | follow_up_queue: state.follow_up_queue ++ [message]}
+
+    state =
+      case state.follow_up_poll do
+        %{from: from, abort_ref: poll_abort_ref} = poll ->
+          if abort_ref_matches?(state.abort_ref, poll_abort_ref) do
+            if poll[:timer_ref], do: Process.cancel_timer(poll.timer_ref)
+            {messages, new_queue} = consume_queue(state.follow_up_queue, state.follow_up_mode)
+            GenServer.reply(from, messages)
+            %{state | follow_up_queue: new_queue, follow_up_poll: nil}
+          else
+            state
+          end
+
+        _ ->
+          state
+      end
+
+    {:noreply, state}
   end
 
   def handle_cast({:unsubscribe, pid}, state) do
@@ -761,17 +811,31 @@ defmodule AgentCore.Agent do
     end
   end
 
+  def handle_info({:follow_up_poll_timeout, poll_ref}, state) do
+    case state.follow_up_poll do
+      %{poll_ref: ^poll_ref, from: from} ->
+        GenServer.reply(from, [])
+        {:noreply, %{state | follow_up_poll: nil}}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
   def handle_info(_msg, state) do
     {:noreply, state}
+  end
+
+  defp abort_ref_matches?(state_abort_ref, abort_ref) do
+    state_abort_ref == abort_ref or state_abort_ref == {:aborted, abort_ref}
   end
 
   # ============================================================================
   # Private Functions
   # ============================================================================
 
-  @spec normalize_prompt_input(
-          String.t() | Types.agent_message() | list(Types.agent_message())
-        ) :: list(Types.agent_message())
+  @spec normalize_prompt_input(String.t() | Types.agent_message() | list(Types.agent_message())) ::
+          list(Types.agent_message())
   defp normalize_prompt_input(input) when is_binary(input) do
     [
       %Ai.Types.UserMessage{
@@ -944,7 +1008,13 @@ defmodule AgentCore.Agent do
         cache_read: 0,
         cache_write: 0,
         total_tokens: 0,
-        cost: %Ai.Types.Cost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0, total: 0.0}
+        cost: %Ai.Types.Cost{
+          input: 0.0,
+          output: 0.0,
+          cache_read: 0.0,
+          cache_write: 0.0,
+          total: 0.0
+        }
       },
       stop_reason: stop_reason,
       error_message: error_text,
@@ -1081,6 +1151,7 @@ defmodule AgentCore.Agent do
         %StreamOptions{} = opts -> opts
         _ -> %StreamOptions{}
       end
+
     session_id = state.session_id || base.session_id
 
     thinking_budgets =

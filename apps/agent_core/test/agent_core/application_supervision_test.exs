@@ -29,7 +29,9 @@ defmodule AgentCore.ApplicationSupervisionTest do
     # Wait up to 500ms for process to be available
     Enum.reduce_while(1..10, nil, fn _, _ ->
       case Process.whereis(name) do
-        pid when is_pid(pid) -> {:halt, pid}
+        pid when is_pid(pid) ->
+          {:halt, pid}
+
         nil ->
           Process.sleep(50)
           {:cont, nil}

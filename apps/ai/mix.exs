@@ -26,10 +26,14 @@ defmodule Ai.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:req, "~> 0.5"},           # HTTP client with streaming support
-      {:jason, "~> 1.4"},         # JSON encoding/decoding
-      {:nimble_options, "~> 1.1"}, # Options validation
-      {:plug, "~> 1.16", only: :test} # Required for Req.Test stubs
+      # HTTP client with streaming support
+      {:req, "~> 0.5"},
+      # JSON encoding/decoding
+      {:jason, "~> 1.4"},
+      # Options validation
+      {:nimble_options, "~> 1.1"},
+      # Required for Req.Test stubs
+      {:plug, "~> 1.16", only: :test}
     ]
   end
 end

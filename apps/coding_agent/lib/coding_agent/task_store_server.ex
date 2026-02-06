@@ -18,6 +18,7 @@ defmodule CodingAgent.TaskStoreServer do
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
+
     case GenServer.start_link(__MODULE__, opts, name: name) do
       {:error, {:already_started, pid}} -> {:ok, pid}
       other -> other
@@ -128,7 +129,10 @@ defmodule CodingAgent.TaskStoreServer do
   @impl true
   def handle_info(:cleanup, state) do
     state = ensure_tables(state)
-    ttl_seconds = Application.get_env(:coding_agent, :task_store_ttl_seconds, @default_ttl_seconds)
+
+    ttl_seconds =
+      Application.get_env(:coding_agent, :task_store_ttl_seconds, @default_ttl_seconds)
+
     _deleted_count = do_cleanup(ttl_seconds)
     schedule_cleanup()
     {:noreply, state}
@@ -277,7 +281,13 @@ defmodule CodingAgent.TaskStoreServer do
   end
 
   defp schedule_cleanup do
-    interval = Application.get_env(:coding_agent, :task_store_cleanup_interval_seconds, @cleanup_interval_seconds)
+    interval =
+      Application.get_env(
+        :coding_agent,
+        :task_store_cleanup_interval_seconds,
+        @cleanup_interval_seconds
+      )
+
     Process.send_after(self(), :cleanup, interval * 1_000)
   end
 

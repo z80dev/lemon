@@ -110,7 +110,8 @@ defmodule CodingAgent.Tools.WebFetch do
 
   defp validate_timeout(nil), do: :ok
 
-  defp validate_timeout(timeout_seconds) when is_integer(timeout_seconds) and timeout_seconds > 0 do
+  defp validate_timeout(timeout_seconds)
+       when is_integer(timeout_seconds) and timeout_seconds > 0 do
     :ok
   end
 

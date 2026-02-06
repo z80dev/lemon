@@ -33,7 +33,7 @@ defmodule LemonCore.Store do
   """
   @spec put(table :: atom(), key :: term(), value :: term()) :: :ok
   def put(table, key, value) do
-    LemonGateway.Store.put(table, key, value)
+    apply(store_mod(), :put, [table, key, value])
   end
 
   @doc """
@@ -43,7 +43,7 @@ defmodule LemonCore.Store do
   """
   @spec get(table :: atom(), key :: term()) :: term() | nil
   def get(table, key) do
-    LemonGateway.Store.get(table, key)
+    apply(store_mod(), :get, [table, key])
   end
 
   @doc """
@@ -51,7 +51,7 @@ defmodule LemonCore.Store do
   """
   @spec delete(table :: atom(), key :: term()) :: :ok
   def delete(table, key) do
-    LemonGateway.Store.delete(table, key)
+    apply(store_mod(), :delete, [table, key])
   end
 
   @doc """
@@ -59,7 +59,7 @@ defmodule LemonCore.Store do
   """
   @spec list(table :: atom()) :: [{term(), term()}]
   def list(table) do
-    LemonGateway.Store.list(table)
+    apply(store_mod(), :list, [table])
   end
 
   @doc """
@@ -97,5 +97,11 @@ defmodule LemonCore.Store do
 
   def put_many(table, entries) when is_map(entries) do
     put_many(table, Map.to_list(entries))
+  end
+
+  # Avoid a compile-time dependency on lemon_gateway (umbrella compile order),
+  # while still using the shared LemonGateway.Store at runtime.
+  defp store_mod do
+    Application.get_env(:lemon_core, :store_mod, :"Elixir.LemonGateway.Store")
   end
 end

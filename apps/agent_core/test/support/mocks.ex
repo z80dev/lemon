@@ -339,9 +339,11 @@ defmodule AgentCore.Test.Mocks do
 
   defp empty_event_stream do
     {:ok, stream} = Ai.EventStream.start_link()
+
     Task.start(fn ->
       Ai.EventStream.complete(stream, assistant_message("", stop_reason: :stop))
     end)
+
     stream
   end
 

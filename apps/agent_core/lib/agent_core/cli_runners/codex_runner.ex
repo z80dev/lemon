@@ -62,6 +62,7 @@ defmodule AgentCore.CliRunners.CodexRunner do
   use AgentCore.CliRunners.JsonlRunner
 
   alias AgentCore.CliRunners.CodexSchema
+
   alias AgentCore.CliRunners.CodexSchema.{
     AgentMessageItem,
     CommandExecutionItem,
@@ -80,6 +81,7 @@ defmodule AgentCore.CliRunners.CodexRunner do
     TurnStarted,
     WebSearchItem
   }
+
   alias AgentCore.CliRunners.Types.{EventFactory, ResumeToken}
   alias LemonCore.Config, as: LemonConfig
 
@@ -180,7 +182,10 @@ defmodule AgentCore.CliRunners.CodexRunner do
       # Turn lifecycle
       %TurnStarted{} ->
         action_id = "turn_#{state.turn_index}"
-        {event, factory} = EventFactory.action_started(state.factory, action_id, :turn, "turn started")
+
+        {event, factory} =
+          EventFactory.action_started(state.factory, action_id, :turn, "turn started")
+
         state = %{state | factory: factory, turn_index: state.turn_index + 1}
         {[event], state, []}
 
@@ -356,7 +361,9 @@ defmodule AgentCore.CliRunners.CodexRunner do
             detail = %{exit_code: exit_code, status: status}
 
             {event, factory} =
-              EventFactory.action_completed(state.factory, action_id, :command, title, ok, detail: detail)
+              EventFactory.action_completed(state.factory, action_id, :command, title, ok,
+                detail: detail
+              )
 
             state = %{state | factory: factory}
             {[event], state, []}
@@ -404,7 +411,9 @@ defmodule AgentCore.CliRunners.CodexRunner do
               |> maybe_add_result_summary(result)
 
             {event, factory} =
-              EventFactory.action_completed(state.factory, action_id, :tool, title, ok, detail: detail)
+              EventFactory.action_completed(state.factory, action_id, :tool, title, ok,
+                detail: detail
+              )
 
             state = %{state | factory: factory}
             {[event], state, []}
@@ -430,7 +439,9 @@ defmodule AgentCore.CliRunners.CodexRunner do
 
           :completed ->
             {event, factory} =
-              EventFactory.action_completed(state.factory, action_id, :web_search, query, true, detail: detail)
+              EventFactory.action_completed(state.factory, action_id, :web_search, query, true,
+                detail: detail
+              )
 
             state = %{state | factory: factory}
             {[event], state, []}
@@ -453,7 +464,9 @@ defmodule AgentCore.CliRunners.CodexRunner do
           ok = status == :completed
 
           {event, factory} =
-            EventFactory.action_completed(state.factory, action_id, :file_change, title, ok, detail: detail)
+            EventFactory.action_completed(state.factory, action_id, :file_change, title, ok,
+              detail: detail
+            )
 
           state = %{state | factory: factory}
           {[event], state, []}
@@ -481,7 +494,9 @@ defmodule AgentCore.CliRunners.CodexRunner do
 
           :completed ->
             {event, factory} =
-              EventFactory.action_completed(state.factory, action_id, :note, title, true, detail: detail)
+              EventFactory.action_completed(state.factory, action_id, :note, title, true,
+                detail: detail
+              )
 
             state = %{state | factory: factory}
             {[event], state, []}

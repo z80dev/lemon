@@ -147,7 +147,8 @@ defmodule CodingAgent.SessionManagerTest do
 
       first_id = hd(session.entries).id
 
-      session = SessionManager.append_compaction(session, "Summary of conversation", first_id, 5000)
+      session =
+        SessionManager.append_compaction(session, "Summary of conversation", first_id, 5000)
 
       compaction = List.last(session.entries)
       assert compaction.type == :compaction
@@ -175,7 +176,11 @@ defmodule CodingAgent.SessionManagerTest do
       session =
         SessionManager.new("/tmp")
         |> SessionManager.append_message(%{"role" => "user", "content" => "q1", "timestamp" => 1})
-        |> SessionManager.append_message(%{"role" => "assistant", "content" => "a1", "timestamp" => 2})
+        |> SessionManager.append_message(%{
+          "role" => "assistant",
+          "content" => "a1",
+          "timestamp" => 2
+        })
 
       context = SessionManager.build_session_context(session)
       assert length(context.messages) == 2
@@ -183,7 +188,10 @@ defmodule CodingAgent.SessionManagerTest do
 
     test "includes custom_message entries in messages" do
       session = SessionManager.new("/tmp")
-      custom_entry = SessionEntry.custom_message("system_prompt", "You are helpful", display: true)
+
+      custom_entry =
+        SessionEntry.custom_message("system_prompt", "You are helpful", display: true)
+
       session = SessionManager.append_entry(session, custom_entry)
 
       context = SessionManager.build_session_context(session)
@@ -407,7 +415,12 @@ defmodule CodingAgent.SessionManagerTest do
 
       # Add another root by using explicit nil parent_id
       entry = SessionEntry.message(%{role: "user", content: "root2"}, parent_id: nil)
-      session = %{session | entries: session.entries ++ [entry], by_id: Map.put(session.by_id, entry.id || "temp", entry)}
+
+      session = %{
+        session
+        | entries: session.entries ++ [entry],
+          by_id: Map.put(session.by_id, entry.id || "temp", entry)
+      }
 
       root_children = SessionManager.get_children(session, nil)
       assert length(root_children) >= 1
@@ -435,7 +448,11 @@ defmodule CodingAgent.SessionManagerTest do
 
       session =
         SessionManager.new("/tmp")
-        |> SessionManager.append_message(%{"role" => "user", "content" => "test", "timestamp" => 123})
+        |> SessionManager.append_message(%{
+          "role" => "user",
+          "content" => "test",
+          "timestamp" => 123
+        })
 
       :ok = SessionManager.save_to_file(path, session)
       {:ok, loaded} = SessionManager.load_from_file(path)
@@ -641,7 +658,8 @@ defmodule CodingAgent.SessionManagerTest do
     end
 
     test "branch_summary/3 creates branch summary entry" do
-      entry = SessionEntry.branch_summary("from-id", "The branch discussed X", details: %{extra: true})
+      entry =
+        SessionEntry.branch_summary("from-id", "The branch discussed X", details: %{extra: true})
 
       assert entry.type == :branch_summary
       assert entry.from_id == "from-id"
@@ -673,7 +691,11 @@ defmodule CodingAgent.SessionManagerTest do
     end
 
     test "custom_message/3 creates custom message entry" do
-      entry = SessionEntry.custom_message("prompt", [%{type: "text", text: "hello"}], display: true, details: %{source: "hook"})
+      entry =
+        SessionEntry.custom_message("prompt", [%{type: "text", text: "hello"}],
+          display: true,
+          details: %{source: "hook"}
+        )
 
       assert entry.type == :custom_message
       assert entry.custom_type == "prompt"
@@ -721,7 +743,10 @@ defmodule CodingAgent.SessionManagerTest do
 
   describe "migrate_to_current_version/2" do
     test "v3 entries pass through unchanged" do
-      entries = [%{"id" => "abc", "parentId" => nil, "type" => "message", "message" => %{"role" => "user"}}]
+      entries = [
+        %{"id" => "abc", "parentId" => nil, "type" => "message", "message" => %{"role" => "user"}}
+      ]
+
       {:ok, migrated} = SessionManager.migrate_to_current_version(3, entries)
 
       assert length(migrated) == 1

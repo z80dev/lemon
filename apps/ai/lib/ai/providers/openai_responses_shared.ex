@@ -118,14 +118,16 @@ defmodule Ai.Providers.OpenAIResponsesShared do
     converted
   end
 
-  defp convert_message(%UserMessage{content: content}, _model, _idx, _providers) when is_binary(content) do
+  defp convert_message(%UserMessage{content: content}, _model, _idx, _providers)
+       when is_binary(content) do
     %{
       "role" => "user",
       "content" => [%{"type" => "input_text", "text" => sanitize_surrogates(content)}]
     }
   end
 
-  defp convert_message(%UserMessage{content: content}, model, _idx, _providers) when is_list(content) do
+  defp convert_message(%UserMessage{content: content}, model, _idx, _providers)
+       when is_list(content) do
     input_content =
       content
       |> Enum.map(fn
@@ -343,7 +345,14 @@ defmodule Ai.Providers.OpenAIResponsesShared do
 
   defp transform_message(msg, _model, _providers, id_map), do: {msg, id_map}
 
-  defp transform_block(%ThinkingContent{} = block, _model, _providers, is_same_model, _msg, id_map) do
+  defp transform_block(
+         %ThinkingContent{} = block,
+         _model,
+         _providers,
+         is_same_model,
+         _msg,
+         id_map
+       ) do
     result =
       cond do
         # Keep thinking with signature for same model
@@ -401,9 +410,11 @@ defmodule Ai.Providers.OpenAIResponsesShared do
     {block, new_id_map}
   end
 
-  defp transform_block(block, _model, _providers, _is_same_model, _msg, id_map), do: {block, id_map}
+  defp transform_block(block, _model, _providers, _is_same_model, _msg, id_map),
+    do: {block, id_map}
 
-  defp normalize_tool_call_id(id, provider) when provider in [:openai, :"openai-codex", :opencode] do
+  defp normalize_tool_call_id(id, provider)
+       when provider in [:openai, :"openai-codex", :opencode] do
     if not String.contains?(id, "|") do
       id
     else
@@ -570,7 +581,13 @@ defmodule Ai.Providers.OpenAIResponsesShared do
   @doc """
   Process OpenAI Responses API stream events and emit to EventStream.
   """
-  @spec process_stream(Enumerable.t(), AssistantMessage.t(), EventStream.t(), Model.t(), stream_options()) ::
+  @spec process_stream(
+          Enumerable.t(),
+          AssistantMessage.t(),
+          EventStream.t(),
+          Model.t(),
+          stream_options()
+        ) ::
           {:ok, AssistantMessage.t()} | {:error, term()}
   def process_stream(events, output, stream, model, opts \\ %{}) do
     state = %{
@@ -607,7 +624,12 @@ defmodule Ai.Providers.OpenAIResponsesShared do
       "reasoning" ->
         block = %ThinkingContent{type: :thinking, thinking: ""}
         output = %{state.output | content: state.output.content ++ [block]}
-        EventStream.push_async(state.stream, {:thinking_start, length(output.content) - 1, output})
+
+        EventStream.push_async(
+          state.stream,
+          {:thinking_start, length(output.content) - 1, output}
+        )
+
         {:ok, %{state | current_item: item, current_block: block, output: output}}
 
       "message" ->
@@ -631,7 +653,12 @@ defmodule Ai.Providers.OpenAIResponsesShared do
         block = Map.put(block, :partial_json, partial_json)
 
         output = %{state.output | content: state.output.content ++ [block]}
-        EventStream.push_async(state.stream, {:tool_call_start, length(output.content) - 1, output})
+
+        EventStream.push_async(
+          state.stream,
+          {:tool_call_start, length(output.content) - 1, output}
+        )
+
         {:ok, %{state | current_item: item, current_block: block, output: output}}
 
       _ ->
@@ -648,7 +675,10 @@ defmodule Ai.Providers.OpenAIResponsesShared do
     end
   end
 
-  defp process_event(%{"type" => "response.reasoning_summary_text.delta", "delta" => delta}, state) do
+  defp process_event(
+         %{"type" => "response.reasoning_summary_text.delta", "delta" => delta},
+         state
+       ) do
     if state.current_item && state.current_item["type"] == "reasoning" &&
          state.current_block && state.current_block.type == :thinking do
       # Update block thinking text
@@ -722,12 +752,18 @@ defmodule Ai.Providers.OpenAIResponsesShared do
     end
   end
 
-  defp process_event(%{"type" => "response.function_call_arguments.delta", "delta" => delta}, state) do
+  defp process_event(
+         %{"type" => "response.function_call_arguments.delta", "delta" => delta},
+         state
+       ) do
     if state.current_item && state.current_item["type"] == "function_call" &&
          state.current_block && state.current_block.type == :tool_call do
       partial_json = Map.get(state.current_block, :partial_json, "") <> delta
       arguments = parse_streaming_json(partial_json)
-      block = %{state.current_block | arguments: arguments} |> Map.put(:partial_json, partial_json)
+
+      block =
+        %{state.current_block | arguments: arguments} |> Map.put(:partial_json, partial_json)
+
       output = update_content_block(state.output, block)
       idx = length(output.content) - 1
 
@@ -738,7 +774,10 @@ defmodule Ai.Providers.OpenAIResponsesShared do
     end
   end
 
-  defp process_event(%{"type" => "response.function_call_arguments.done", "arguments" => arguments}, state) do
+  defp process_event(
+         %{"type" => "response.function_call_arguments.done", "arguments" => arguments},
+         state
+       ) do
     if state.current_item && state.current_item["type"] == "function_call" &&
          state.current_block && state.current_block.type == :tool_call do
       parsed_args = parse_streaming_json(arguments)
@@ -979,7 +1018,9 @@ defmodule Ai.Providers.OpenAIResponsesShared do
       end)
 
     # Add closing characters
-    closing = String.duplicate("}", max(open_braces, 0)) <> String.duplicate("]", max(open_brackets, 0))
+    closing =
+      String.duplicate("}", max(open_braces, 0)) <> String.duplicate("]", max(open_brackets, 0))
+
     json <> closing
   end
 

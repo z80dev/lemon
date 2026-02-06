@@ -24,18 +24,19 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
   describe "execute/6 - async: true" do
     test "returns task_id when async is true" do
-      result = Task.execute(
-        "call_1",
-        %{
-          "description" => "Async test task",
-          "prompt" => "Return hello",
-          "async" => true
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Async test task",
+            "prompt" => "Return hello",
+            "async" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       assert %AgentCore.Types.AgentToolResult{} = result
       assert result.details.status == "queued"
@@ -44,18 +45,19 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
     end
 
     test "creates task in TaskStore when async" do
-      result = Task.execute(
-        "call_1",
-        %{
-          "description" => "Async store test",
-          "prompt" => "Test prompt",
-          "async" => true
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Async store test",
+            "prompt" => "Test prompt",
+            "async" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       task_id = result.details.task_id
       assert {:ok, record, _events} = TaskStore.get(task_id)
@@ -64,18 +66,19 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
     end
 
     test "creates run in RunGraph when async" do
-      result = Task.execute(
-        "call_1",
-        %{
-          "description" => "Async graph test",
-          "prompt" => "Test prompt",
-          "async" => true
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Async graph test",
+            "prompt" => "Test prompt",
+            "async" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       run_id = result.details.run_id
       assert {:ok, record} = RunGraph.get(run_id)
@@ -86,63 +89,67 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
   describe "execute/6 - poll action" do
     test "poll returns error when task_id is missing" do
-      result = Task.execute(
-        "call_1",
-        %{"action" => "poll"},
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result =
+        Task.execute(
+          "call_1",
+          %{"action" => "poll"},
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       assert {:error, "task_id is required for action=poll"} = result
     end
 
     test "poll returns error for unknown task_id" do
-      result = Task.execute(
-        "call_1",
-        %{
-          "action" => "poll",
-          "task_id" => "unknown_task_12345"
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "action" => "poll",
+            "task_id" => "unknown_task_12345"
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       assert {:error, "Unknown task_id: unknown_task_12345"} = result
     end
 
     test "poll returns task status for existing task" do
       # First create an async task
-      create_result = Task.execute(
-        "call_1",
-        %{
-          "description" => "Poll test task",
-          "prompt" => "Test prompt",
-          "async" => true
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      create_result =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Poll test task",
+            "prompt" => "Test prompt",
+            "async" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       task_id = create_result.details.task_id
 
       # Now poll for it
-      poll_result = Task.execute(
-        "call_2",
-        %{
-          "action" => "poll",
-          "task_id" => task_id
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      poll_result =
+        Task.execute(
+          "call_2",
+          %{
+            "action" => "poll",
+            "task_id" => task_id
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       assert %AgentCore.Types.AgentToolResult{} = poll_result
       assert poll_result.details.status in ["queued", "running", "completed"]
@@ -152,115 +159,122 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
   describe "execute/6 - join action validation" do
     test "join returns error when task_ids is missing" do
-      result = Task.execute(
-        "call_1",
-        %{"action" => "join"},
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result =
+        Task.execute(
+          "call_1",
+          %{"action" => "join"},
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       assert {:error, "task_ids is required for action=join"} = result
     end
 
     test "join returns error when task_ids is empty list" do
-      result = Task.execute(
-        "call_1",
-        %{
-          "action" => "join",
-          "task_ids" => []
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "action" => "join",
+            "task_ids" => []
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       assert {:error, "task_ids is required for action=join"} = result
     end
 
     test "join returns error when task_ids contains non-strings" do
-      result = Task.execute(
-        "call_1",
-        %{
-          "action" => "join",
-          "task_ids" => ["valid_id", 123, "another"]
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "action" => "join",
+            "task_ids" => ["valid_id", 123, "another"]
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       assert {:error, "task_ids must be a list of strings"} = result
     end
 
     test "join returns error when timeout_ms is not an integer" do
-      result = Task.execute(
-        "call_1",
-        %{
-          "action" => "join",
-          "task_ids" => ["task1"],
-          "timeout_ms" => "not_an_integer"
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "action" => "join",
+            "task_ids" => ["task1"],
+            "timeout_ms" => "not_an_integer"
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       assert {:error, "timeout_ms must be an integer"} = result
     end
 
     test "join returns error when timeout_ms is negative" do
-      result = Task.execute(
-        "call_1",
-        %{
-          "action" => "join",
-          "task_ids" => ["task1"],
-          "timeout_ms" => -100
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "action" => "join",
+            "task_ids" => ["task1"],
+            "timeout_ms" => -100
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       assert {:error, "timeout_ms must be non-negative"} = result
     end
 
     test "join returns error when timeout_ms exceeds 1 hour" do
-      result = Task.execute(
-        "call_1",
-        %{
-          "action" => "join",
-          "task_ids" => ["task1"],
-          "timeout_ms" => 3_600_001
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "action" => "join",
+            "task_ids" => ["task1"],
+            "timeout_ms" => 3_600_001
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       assert {:error, "timeout_ms must not exceed 1 hour (3600000ms)"} = result
     end
 
     test "join accepts valid timeout_ms at boundary" do
       # This will fail because task doesn't exist, but validation should pass
-      result = Task.execute(
-        "call_1",
-        %{
-          "action" => "join",
-          "task_ids" => ["nonexistent_task"],
-          "timeout_ms" => 3_600_000
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "action" => "join",
+            "task_ids" => ["nonexistent_task"],
+            "timeout_ms" => 3_600_000
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       # Should fail at resolve_run_ids, not validation
       assert {:error, "Unknown task_id: nonexistent_task"} = result
@@ -268,34 +282,36 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
     test "join accepts task_id as single string" do
       # Create a task first
-      create_result = Task.execute(
-        "call_1",
-        %{
-          "description" => "Join single test",
-          "prompt" => "Test",
-          "async" => true
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      create_result =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Join single test",
+            "prompt" => "Test",
+            "async" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       task_id = create_result.details.task_id
 
       # Join with single task_id (not in array)
-      result = Task.execute(
-        "call_2",
-        %{
-          "action" => "join",
-          "task_id" => task_id,
-          "timeout_ms" => 100
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result =
+        Task.execute(
+          "call_2",
+          %{
+            "action" => "join",
+            "task_id" => task_id,
+            "timeout_ms" => 100
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       # Should timeout since task is still queued
       assert %AgentCore.Types.AgentToolResult{} = result
@@ -304,46 +320,49 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
     test "join accepts task_ids as array" do
       # Create two tasks
-      result1 = Task.execute(
-        "call_1",
-        %{
-          "description" => "Join multi test 1",
-          "prompt" => "Test 1",
-          "async" => true
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result1 =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Join multi test 1",
+            "prompt" => "Test 1",
+            "async" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
-      result2 = Task.execute(
-        "call_2",
-        %{
-          "description" => "Join multi test 2",
-          "prompt" => "Test 2",
-          "async" => true
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result2 =
+        Task.execute(
+          "call_2",
+          %{
+            "description" => "Join multi test 2",
+            "prompt" => "Test 2",
+            "async" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       task_ids = [result1.details.task_id, result2.details.task_id]
 
-      result = Task.execute(
-        "call_3",
-        %{
-          "action" => "join",
-          "task_ids" => task_ids,
-          "timeout_ms" => 100
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result =
+        Task.execute(
+          "call_3",
+          %{
+            "action" => "join",
+            "task_ids" => task_ids,
+            "timeout_ms" => 100
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       # Should timeout since tasks are still queued
       assert %AgentCore.Types.AgentToolResult{} = result
@@ -354,47 +373,50 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
   describe "execute/6 - join action modes" do
     test "join with wait_all mode" do
       # Create two tasks
-      result1 = Task.execute(
-        "call_1",
-        %{
-          "description" => "Wait all test 1",
-          "prompt" => "Test 1",
-          "async" => true
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result1 =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Wait all test 1",
+            "prompt" => "Test 1",
+            "async" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
-      result2 = Task.execute(
-        "call_2",
-        %{
-          "description" => "Wait all test 2",
-          "prompt" => "Test 2",
-          "async" => true
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result2 =
+        Task.execute(
+          "call_2",
+          %{
+            "description" => "Wait all test 2",
+            "prompt" => "Test 2",
+            "async" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       task_ids = [result1.details.task_id, result2.details.task_id]
 
-      join_result = Task.execute(
-        "call_3",
-        %{
-          "action" => "join",
-          "task_ids" => task_ids,
-          "mode" => "wait_all",
-          "timeout_ms" => 100
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      join_result =
+        Task.execute(
+          "call_3",
+          %{
+            "action" => "join",
+            "task_ids" => task_ids,
+            "mode" => "wait_all",
+            "timeout_ms" => 100
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       assert %AgentCore.Types.AgentToolResult{} = join_result
       assert join_result.details.status in ["timeout", "completed"]
@@ -407,47 +429,50 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
     test "join with wait_any mode" do
       # Create two tasks
-      result1 = Task.execute(
-        "call_1",
-        %{
-          "description" => "Wait any test 1",
-          "prompt" => "Test 1",
-          "async" => true
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result1 =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Wait any test 1",
+            "prompt" => "Test 1",
+            "async" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
-      result2 = Task.execute(
-        "call_2",
-        %{
-          "description" => "Wait any test 2",
-          "prompt" => "Test 2",
-          "async" => true
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result2 =
+        Task.execute(
+          "call_2",
+          %{
+            "description" => "Wait any test 2",
+            "prompt" => "Test 2",
+            "async" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       task_ids = [result1.details.task_id, result2.details.task_id]
 
-      join_result = Task.execute(
-        "call_3",
-        %{
-          "action" => "join",
-          "task_ids" => task_ids,
-          "mode" => "wait_any",
-          "timeout_ms" => 100
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      join_result =
+        Task.execute(
+          "call_3",
+          %{
+            "action" => "join",
+            "task_ids" => task_ids,
+            "mode" => "wait_any",
+            "timeout_ms" => 100
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       assert %AgentCore.Types.AgentToolResult{} = join_result
       assert join_result.details.status in ["timeout", "completed"]
@@ -460,32 +485,34 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
     test "join defaults to wait_all when mode is invalid" do
       # Create a task
-      result = Task.execute(
-        "call_1",
-        %{
-          "description" => "Default mode test",
-          "prompt" => "Test",
-          "async" => true
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Default mode test",
+            "prompt" => "Test",
+            "async" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
-      join_result = Task.execute(
-        "call_2",
-        %{
-          "action" => "join",
-          "task_ids" => [result.details.task_id],
-          "mode" => "invalid_mode",
-          "timeout_ms" => 100
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      join_result =
+        Task.execute(
+          "call_2",
+          %{
+            "action" => "join",
+            "task_ids" => [result.details.task_id],
+            "mode" => "invalid_mode",
+            "timeout_ms" => 100
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       # Should default to wait_all
       assert %AgentCore.Types.AgentToolResult{} = join_result
@@ -500,47 +527,50 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
   describe "execute/6 - join with unknown task" do
     test "join returns error when task_id doesn't exist" do
-      result = Task.execute(
-        "call_1",
-        %{
-          "action" => "join",
-          "task_ids" => ["nonexistent_task_12345"]
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "action" => "join",
+            "task_ids" => ["nonexistent_task_12345"]
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       assert {:error, "Unknown task_id: nonexistent_task_12345"} = result
     end
 
     test "join returns error when any task_id in list doesn't exist" do
       # Create one valid task
-      create_result = Task.execute(
-        "call_1",
-        %{
-          "description" => "Partial test",
-          "prompt" => "Test",
-          "async" => true
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      create_result =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Partial test",
+            "prompt" => "Test",
+            "async" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
-      result = Task.execute(
-        "call_2",
-        %{
-          "action" => "join",
-          "task_ids" => [create_result.details.task_id, "nonexistent_task"]
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result =
+        Task.execute(
+          "call_2",
+          %{
+            "action" => "join",
+            "task_ids" => [create_result.details.task_id, "nonexistent_task"]
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       assert {:error, "Unknown task_id: nonexistent_task"} = result
     end
@@ -551,17 +581,18 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       # Create a task directly in TaskStore without a run_id
       task_id = TaskStore.new_task(%{description: "No run_id task"})
 
-      result = Task.execute(
-        "call_1",
-        %{
-          "action" => "join",
-          "task_ids" => [task_id]
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "action" => "join",
+            "task_ids" => [task_id]
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       assert {:error, "Task " <> ^task_id <> " is missing a run_id"} = result
     end
@@ -569,69 +600,73 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
   describe "execute/6 - invalid input edge cases" do
     test "join handles null task_ids" do
-      result = Task.execute(
-        "call_1",
-        %{
-          "action" => "join",
-          "task_ids" => nil
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "action" => "join",
+            "task_ids" => nil
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       assert {:error, "task_ids is required for action=join"} = result
     end
 
     test "join handles float timeout_ms" do
-      result = Task.execute(
-        "call_1",
-        %{
-          "action" => "join",
-          "task_ids" => ["task1"],
-          "timeout_ms" => 100.5
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "action" => "join",
+            "task_ids" => ["task1"],
+            "timeout_ms" => 100.5
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       assert {:error, "timeout_ms must be an integer"} = result
     end
 
     test "join handles zero timeout_ms" do
       # This will immediately timeout, but validation should pass
-      result = Task.execute(
-        "call_1",
-        %{
-          "action" => "join",
-          "task_ids" => ["nonexistent"],
-          "timeout_ms" => 0
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "action" => "join",
+            "task_ids" => ["nonexistent"],
+            "timeout_ms" => 0
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       # Should fail at resolve_run_ids, not validation
       assert {:error, "Unknown task_id: nonexistent"} = result
     end
 
     test "join handles empty string task_ids" do
-      result = Task.execute(
-        "call_1",
-        %{
-          "action" => "join",
-          "task_ids" => [""]
-        },
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "action" => "join",
+            "task_ids" => [""]
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       # Empty string is still a valid string, so validation passes
       # But it will fail to find the task

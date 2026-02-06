@@ -44,8 +44,13 @@ defmodule LemonGateway.Config do
   @doc """
   Returns the queue configuration (cap, drop policy).
   """
-  @spec get_queue_config() :: %{cap: non_neg_integer() | nil, drop: :oldest | :newest | nil, mode: atom() | nil}
-  def get_queue_config, do: GenServer.call(__MODULE__, {:get, :queue}) || %{cap: nil, drop: nil, mode: nil}
+  @spec get_queue_config() :: %{
+          cap: non_neg_integer() | nil,
+          drop: :oldest | :newest | nil,
+          mode: atom() | nil
+        }
+  def get_queue_config,
+    do: GenServer.call(__MODULE__, {:get, :queue}) || %{cap: nil, drop: nil, mode: nil}
 
   @impl true
   def init(_opts) do

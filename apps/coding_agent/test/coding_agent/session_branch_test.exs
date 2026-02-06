@@ -171,7 +171,13 @@ defmodule CodingAgent.SessionBranchTest do
 
   # Helper to create a branching session manager
   # Creates a tree where branch point is at entry N, with K alternative branches
-  defp create_branching_session_manager(cwd, initial_depth, branch_point, num_branches, branch_depth) do
+  defp create_branching_session_manager(
+         cwd,
+         initial_depth,
+         branch_point,
+         num_branches,
+         branch_depth
+       ) do
     # Create initial linear chain
     sm = create_deep_session_manager(cwd, initial_depth)
     entries = sm.entries
@@ -386,7 +392,11 @@ defmodule CodingAgent.SessionBranchTest do
         parent_id: "entry1",
         timestamp: 2,
         type: :message,
-        message: %{"role" => "assistant", "content" => [%{"type" => "text", "text" => "Second"}], "timestamp" => 2}
+        message: %{
+          "role" => "assistant",
+          "content" => [%{"type" => "text", "text" => "Second"}],
+          "timestamp" => 2
+        }
       }
 
       entry3 = %SessionEntry{
@@ -1119,7 +1129,10 @@ defmodule CodingAgent.SessionBranchTest do
       # Messages should be consistent with final position
       final_state = Session.get_state(session)
       messages = Session.get_messages(session)
-      expected_count = Enum.find_index(entries, &(&1.id == final_state.session_manager.leaf_id)) + 1
+
+      expected_count =
+        Enum.find_index(entries, &(&1.id == final_state.session_manager.leaf_id)) + 1
+
       assert length(messages) == expected_count
     end
 

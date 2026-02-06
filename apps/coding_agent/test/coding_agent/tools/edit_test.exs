@@ -26,11 +26,19 @@ defmodule CodingAgent.Tools.EditTest do
       path = Path.join(tmp_dir, "test.txt")
       File.write!(path, "Hello, World!")
 
-      result = Edit.execute("call_1", %{
-        "path" => path,
-        "old_text" => "World",
-        "new_text" => "Elixir"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Edit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "old_text" => "World",
+            "new_text" => "Elixir"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "Successfully replaced text"
@@ -39,18 +47,28 @@ defmodule CodingAgent.Tools.EditTest do
 
     test "replaces multiline text", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "multi.txt")
+
       content = """
       line 1
       line 2
       line 3
       """
+
       File.write!(path, content)
 
-      result = Edit.execute("call_1", %{
-        "path" => path,
-        "old_text" => "line 2",
-        "new_text" => "replaced line"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Edit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "old_text" => "line 2",
+            "new_text" => "replaced line"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       assert File.read!(path) =~ "replaced line"
@@ -60,11 +78,19 @@ defmodule CodingAgent.Tools.EditTest do
       path = Path.join(tmp_dir, "relative.txt")
       File.write!(path, "original content")
 
-      result = Edit.execute("call_1", %{
-        "path" => "relative.txt",
-        "old_text" => "original",
-        "new_text" => "modified"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Edit.execute(
+          "call_1",
+          %{
+            "path" => "relative.txt",
+            "old_text" => "original",
+            "new_text" => "modified"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "modified content"
@@ -77,11 +103,19 @@ defmodule CodingAgent.Tools.EditTest do
       bom = <<0xEF, 0xBB, 0xBF>>
       File.write!(path, bom <> "Hello, World!")
 
-      result = Edit.execute("call_1", %{
-        "path" => path,
-        "old_text" => "World",
-        "new_text" => "BOM"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Edit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "old_text" => "World",
+            "new_text" => "BOM"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       content = File.read!(path)
@@ -95,11 +129,19 @@ defmodule CodingAgent.Tools.EditTest do
       path = Path.join(tmp_dir, "crlf.txt")
       File.write!(path, "line1\r\nline2\r\nline3")
 
-      result = Edit.execute("call_1", %{
-        "path" => path,
-        "old_text" => "line2",
-        "new_text" => "replaced"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Edit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "old_text" => "line2",
+            "new_text" => "replaced"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       content = File.read!(path)
@@ -110,11 +152,19 @@ defmodule CodingAgent.Tools.EditTest do
       path = Path.join(tmp_dir, "lf.txt")
       File.write!(path, "line1\nline2\nline3")
 
-      result = Edit.execute("call_1", %{
-        "path" => path,
-        "old_text" => "line2",
-        "new_text" => "replaced"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Edit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "old_text" => "line2",
+            "new_text" => "replaced"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       content = File.read!(path)
@@ -126,11 +176,19 @@ defmodule CodingAgent.Tools.EditTest do
       File.write!(path, "line1\r\nline2\r\nline3")
 
       # Search with LF but file has CRLF
-      result = Edit.execute("call_1", %{
-        "path" => path,
-        "old_text" => "line1\nline2",
-        "new_text" => "replaced"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Edit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "old_text" => "line1\nline2",
+            "new_text" => "replaced"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       content = File.read!(path)
@@ -143,11 +201,19 @@ defmodule CodingAgent.Tools.EditTest do
       path = Path.join(tmp_dir, "whitespace.txt")
       File.write!(path, "hello world   \nnext line")
 
-      result = Edit.execute("call_1", %{
-        "path" => path,
-        "old_text" => "hello world\nnext",
-        "new_text" => "hello universe\nnext"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Edit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "old_text" => "hello world\nnext",
+            "new_text" => "hello universe\nnext"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       content = File.read!(path)
@@ -160,12 +226,20 @@ defmodule CodingAgent.Tools.EditTest do
       curly_quote = <<0x2019::utf8>>
       File.write!(path, "It#{curly_quote}s a test")
 
-      result = Edit.execute("call_1", %{
-        "path" => path,
-        # Search with ASCII quote
-        "old_text" => "It's a test",
-        "new_text" => "It was a test"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Edit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            # Search with ASCII quote
+            "old_text" => "It's a test",
+            "new_text" => "It was a test"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       content = File.read!(path)
@@ -179,12 +253,20 @@ defmodule CodingAgent.Tools.EditTest do
       right_quote = <<0x201D::utf8>>
       File.write!(path, "She said #{left_quote}hello#{right_quote}")
 
-      result = Edit.execute("call_1", %{
-        "path" => path,
-        # Search with ASCII quotes
-        "old_text" => "She said \"hello\"",
-        "new_text" => "She said \"hi\""
-      }, nil, nil, tmp_dir, [])
+      result =
+        Edit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            # Search with ASCII quotes
+            "old_text" => "She said \"hello\"",
+            "new_text" => "She said \"hi\""
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       content = File.read!(path)
@@ -197,12 +279,20 @@ defmodule CodingAgent.Tools.EditTest do
       em_dash = <<0x2014::utf8>>
       File.write!(path, "hello#{em_dash}world")
 
-      result = Edit.execute("call_1", %{
-        "path" => path,
-        # Search with ASCII hyphen
-        "old_text" => "hello-world",
-        "new_text" => "hello_world"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Edit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            # Search with ASCII hyphen
+            "old_text" => "hello-world",
+            "new_text" => "hello_world"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       content = File.read!(path)
@@ -213,11 +303,19 @@ defmodule CodingAgent.Tools.EditTest do
       path = Path.join(tmp_dir, "spaces.txt")
       File.write!(path, "hello    world")
 
-      result = Edit.execute("call_1", %{
-        "path" => path,
-        "old_text" => "hello world",
-        "new_text" => "hello_world"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Edit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "old_text" => "hello world",
+            "new_text" => "hello_world"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       content = File.read!(path)
@@ -230,11 +328,19 @@ defmodule CodingAgent.Tools.EditTest do
       path = Path.join(tmp_dir, "dup.txt")
       File.write!(path, "hello world hello universe")
 
-      result = Edit.execute("call_1", %{
-        "path" => path,
-        "old_text" => "hello",
-        "new_text" => "hi"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Edit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "old_text" => "hello",
+            "new_text" => "hi"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert {:error, msg} = result
       assert msg =~ "2 occurrences"
@@ -245,11 +351,19 @@ defmodule CodingAgent.Tools.EditTest do
       path = Path.join(tmp_dir, "unique.txt")
       File.write!(path, "hello world")
 
-      result = Edit.execute("call_1", %{
-        "path" => path,
-        "old_text" => "hello",
-        "new_text" => "hi"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Edit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "old_text" => "hello",
+            "new_text" => "hi"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "hi world"
@@ -258,11 +372,19 @@ defmodule CodingAgent.Tools.EditTest do
 
   describe "execute/6 - error handling" do
     test "returns error for non-existent file", %{tmp_dir: tmp_dir} do
-      result = Edit.execute("call_1", %{
-        "path" => Path.join(tmp_dir, "nonexistent.txt"),
-        "old_text" => "hello",
-        "new_text" => "hi"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Edit.execute(
+          "call_1",
+          %{
+            "path" => Path.join(tmp_dir, "nonexistent.txt"),
+            "old_text" => "hello",
+            "new_text" => "hi"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert {:error, msg} = result
       assert msg =~ "File not found"
@@ -272,11 +394,19 @@ defmodule CodingAgent.Tools.EditTest do
       path = Path.join(tmp_dir, "notfound.txt")
       File.write!(path, "hello world")
 
-      result = Edit.execute("call_1", %{
-        "path" => path,
-        "old_text" => "xyz",
-        "new_text" => "abc"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Edit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "old_text" => "xyz",
+            "new_text" => "abc"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert {:error, msg} = result
       assert msg =~ "Could not find the exact text"
@@ -286,11 +416,19 @@ defmodule CodingAgent.Tools.EditTest do
       path = Path.join(tmp_dir, "nochange.txt")
       File.write!(path, "hello world")
 
-      result = Edit.execute("call_1", %{
-        "path" => path,
-        "old_text" => "hello",
-        "new_text" => "hello"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Edit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "old_text" => "hello",
+            "new_text" => "hello"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert {:error, msg} = result
       assert msg =~ "No changes made"
@@ -302,11 +440,19 @@ defmodule CodingAgent.Tools.EditTest do
       path = Path.join(tmp_dir, "diff.txt")
       File.write!(path, "line1\nline2\nline3\nline4\nline5")
 
-      result = Edit.execute("call_1", %{
-        "path" => path,
-        "old_text" => "line3",
-        "new_text" => "replaced"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Edit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "old_text" => "line3",
+            "new_text" => "replaced"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
       assert text =~ "Successfully replaced"
@@ -318,11 +464,19 @@ defmodule CodingAgent.Tools.EditTest do
       path = Path.join(tmp_dir, "line.txt")
       File.write!(path, "line1\nline2\nline3")
 
-      result = Edit.execute("call_1", %{
-        "path" => path,
-        "old_text" => "line2",
-        "new_text" => "changed"
-      }, nil, nil, tmp_dir, [])
+      result =
+        Edit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "old_text" => "line2",
+            "new_text" => "changed"
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{details: %{first_changed_line: line}} = result
       assert line == 2
@@ -336,11 +490,17 @@ defmodule CodingAgent.Tools.EditTest do
 
       tool = Edit.tool(tmp_dir)
 
-      result = tool.execute.("call_1", %{
-        "path" => path,
-        "old_text" => "test",
-        "new_text" => "new"
-      }, nil, nil)
+      result =
+        tool.execute.(
+          "call_1",
+          %{
+            "path" => path,
+            "old_text" => "test",
+            "new_text" => "new"
+          },
+          nil,
+          nil
+        )
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "new content"
@@ -356,11 +516,19 @@ defmodule CodingAgent.Tools.EditTest do
       signal = AbortSignal.new()
       AbortSignal.abort(signal)
 
-      result = Edit.execute("call_1", %{
-        "path" => path,
-        "old_text" => "original",
-        "new_text" => "modified"
-      }, signal, nil, tmp_dir, [])
+      result =
+        Edit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "old_text" => "original",
+            "new_text" => "modified"
+          },
+          signal,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert {:error, "Operation aborted"} = result
       # File should not be modified
@@ -374,11 +542,19 @@ defmodule CodingAgent.Tools.EditTest do
       # Create signal but don't abort it
       signal = AbortSignal.new()
 
-      result = Edit.execute("call_1", %{
-        "path" => path,
-        "old_text" => "original",
-        "new_text" => "modified"
-      }, signal, nil, tmp_dir, [])
+      result =
+        Edit.execute(
+          "call_1",
+          %{
+            "path" => path,
+            "old_text" => "original",
+            "new_text" => "modified"
+          },
+          signal,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "modified content"

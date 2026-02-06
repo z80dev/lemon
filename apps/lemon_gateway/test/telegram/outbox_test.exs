@@ -722,7 +722,8 @@ defmodule LemonGateway.Telegram.OutboxTest do
       calls = MockOutboxAPI.calls()
       # Due to coalescing, we should have significantly fewer calls than num_processes
       # The exact number depends on timing, but it should be much less than 10
-      assert length(calls) <= 3, "Expected at most 3 calls due to coalescing, got #{length(calls)}"
+      assert length(calls) <= 3,
+             "Expected at most 3 calls due to coalescing, got #{length(calls)}"
 
       # All calls should be for the same key with one of the update texts
       for {:edit, 1, 1, text, _} <- calls do
@@ -792,9 +793,7 @@ defmodule LemonGateway.Telegram.OutboxTest do
       {:ok, _} = start_supervised({MockOutboxAPI, [notify_pid: self()]})
 
       {:ok, pid} =
-        start_supervised(
-          {Outbox, [bot_token: "valid_token", api_mod: MockOutboxAPI]}
-        )
+        start_supervised({Outbox, [bot_token: "valid_token", api_mod: MockOutboxAPI]})
 
       assert is_pid(pid)
       assert Process.alive?(pid)
@@ -804,9 +803,7 @@ defmodule LemonGateway.Telegram.OutboxTest do
       {:ok, _} = start_supervised({MockOutboxAPI, [notify_pid: self()]})
 
       {:ok, pid} =
-        start_supervised(
-          {Outbox, [{"bot_token", "string_key_token"}, {:api_mod, MockOutboxAPI}]}
-        )
+        start_supervised({Outbox, [{"bot_token", "string_key_token"}, {:api_mod, MockOutboxAPI}]})
 
       assert is_pid(pid)
     end
@@ -909,9 +906,7 @@ defmodule LemonGateway.Telegram.OutboxTest do
 
     test "uses default edit_throttle_ms when not specified" do
       {:ok, _} =
-        start_supervised(
-          {Outbox, [bot_token: "token", api_mod: MockOutboxAPI]}
-        )
+        start_supervised({Outbox, [bot_token: "token", api_mod: MockOutboxAPI]})
 
       state = :sys.get_state(LemonGateway.Telegram.Outbox)
       # Default is 400ms as per @default_edit_throttle
@@ -998,7 +993,9 @@ defmodule LemonGateway.Telegram.OutboxTest do
         )
 
       # First call will fail with 429 error with retry_after
-      retry_after_body = Jason.encode!(%{"error_code" => 429, "parameters" => %{"retry_after" => 1}})
+      retry_after_body =
+        Jason.encode!(%{"error_code" => 429, "parameters" => %{"retry_after" => 1}})
+
       MockOutboxAPI.fail_next({:http_error, 429, retry_after_body})
 
       Outbox.enqueue({1, 2, :edit}, 0, {:edit, 1, 2, %{text: "rate limited"}})

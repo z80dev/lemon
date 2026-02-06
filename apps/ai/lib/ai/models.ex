@@ -234,7 +234,7 @@ defmodule Ai.Models do
       context_window: 200_000,
       max_tokens: 64_000
     },
-"claude-sonnet-4-0" => %Model{
+    "claude-sonnet-4-0" => %Model{
       id: "claude-sonnet-4-0",
       name: "Claude Sonnet 4 (latest)",
       api: :anthropic_messages,

@@ -69,7 +69,12 @@ defmodule Ai.Providers.AzureOpenAIResponses do
   @default_api_version "v1"
 
   # Providers that use OpenAI-style tool call IDs
-  @tool_call_providers MapSet.new([:openai, :"openai-codex", :opencode, :"azure-openai-responses"])
+  @tool_call_providers MapSet.new([
+                         :openai,
+                         :"openai-codex",
+                         :opencode,
+                         :"azure-openai-responses"
+                       ])
 
   # ============================================================================
   # Provider Behaviour
@@ -115,28 +120,28 @@ defmodule Ai.Providers.AzureOpenAIResponses do
 
           EventStream.push_async(stream, {:start, output})
 
-        # Make streaming request
-        case stream_request(url, headers, body) do
-          {:ok, event_stream} ->
-            case OpenAIResponsesShared.process_stream(event_stream, output, stream, model) do
-              {:ok, final_output} ->
-                EventStream.complete(stream, final_output)
+          # Make streaming request
+          case stream_request(url, headers, body) do
+            {:ok, event_stream} ->
+              case OpenAIResponsesShared.process_stream(event_stream, output, stream, model) do
+                {:ok, final_output} ->
+                  EventStream.complete(stream, final_output)
 
-              {:error, reason} ->
-                output = %{output | stop_reason: :error, error_message: reason}
-                EventStream.error(stream, output)
-            end
+                {:error, reason} ->
+                  output = %{output | stop_reason: :error, error_message: reason}
+                  EventStream.error(stream, output)
+              end
 
-          {:error, reason} ->
-            output = %{output | stop_reason: :error, error_message: reason}
+            {:error, reason} ->
+              output = %{output | stop_reason: :error, error_message: reason}
+              EventStream.error(stream, output)
+          end
+        rescue
+          e ->
+            output = %{output | stop_reason: :error, error_message: Exception.message(e)}
             EventStream.error(stream, output)
         end
-      rescue
-        e ->
-          output = %{output | stop_reason: :error, error_message: Exception.message(e)}
-          EventStream.error(stream, output)
-      end
-    end)
+      end)
 
     EventStream.attach_task(stream, task_pid)
 
@@ -278,7 +283,9 @@ defmodule Ai.Providers.AzureOpenAIResponses do
 
     query =
       case base_uri.query do
-        nil -> URI.encode_query(%{"api-version" => api_version})
+        nil ->
+          URI.encode_query(%{"api-version" => api_version})
+
         existing ->
           URI.decode_query(existing)
           |> Map.put("api-version", api_version)

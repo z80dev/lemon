@@ -67,7 +67,8 @@ defmodule CodingAgent.Tools.WriteTest do
       path = Path.join(tmp_dir, "unicode.txt")
       content = "Hello 世界! 🌍"
 
-      result = Write.execute("call_1", %{"path" => path, "content" => content}, nil, nil, tmp_dir, [])
+      result =
+        Write.execute("call_1", %{"path" => path, "content" => content}, nil, nil, tmp_dir, [])
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == content
@@ -77,7 +78,8 @@ defmodule CodingAgent.Tools.WriteTest do
       path = Path.join(tmp_dir, "multiline.txt")
       content = "line 1\nline 2\nline 3"
 
-      result = Write.execute("call_1", %{"path" => path, "content" => content}, nil, nil, tmp_dir, [])
+      result =
+        Write.execute("call_1", %{"path" => path, "content" => content}, nil, nil, tmp_dir, [])
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == content
@@ -111,7 +113,8 @@ defmodule CodingAgent.Tools.WriteTest do
       path = Path.join(tmp_dir, "shrink.txt")
       File.write!(path, "this is a very long original content string")
 
-      result = Write.execute("call_1", %{"path" => path, "content" => "short"}, nil, nil, tmp_dir, [])
+      result =
+        Write.execute("call_1", %{"path" => path, "content" => "short"}, nil, nil, tmp_dir, [])
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "short"
@@ -124,7 +127,14 @@ defmodule CodingAgent.Tools.WriteTest do
       long_content = String.duplicate("a", 10000)
 
       result =
-        Write.execute("call_1", %{"path" => path, "content" => long_content}, nil, nil, tmp_dir, [])
+        Write.execute(
+          "call_1",
+          %{"path" => path, "content" => long_content},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == long_content
@@ -140,7 +150,14 @@ defmodule CodingAgent.Tools.WriteTest do
       path = Path.join(tmp_dir, "a/b/c/deep_file.txt")
 
       result =
-        Write.execute("call_1", %{"path" => path, "content" => "deep content"}, nil, nil, tmp_dir, [])
+        Write.execute(
+          "call_1",
+          %{"path" => path, "content" => "deep content"},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "deep content"
@@ -163,7 +180,14 @@ defmodule CodingAgent.Tools.WriteTest do
       path = Path.join(tmp_dir, "level1/level2/level3/level4/level5/deep.txt")
 
       result =
-        Write.execute("call_1", %{"path" => path, "content" => "very deep"}, nil, nil, tmp_dir, [])
+        Write.execute(
+          "call_1",
+          %{"path" => path, "content" => "very deep"},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "very deep"
@@ -206,7 +230,8 @@ defmodule CodingAgent.Tools.WriteTest do
       path = Path.join(tmp_dir, "lf.txt")
       content = "line1\nline2\nline3"
 
-      result = Write.execute("call_1", %{"path" => path, "content" => content}, nil, nil, tmp_dir, [])
+      result =
+        Write.execute("call_1", %{"path" => path, "content" => content}, nil, nil, tmp_dir, [])
 
       assert %AgentToolResult{} = result
       # Read in binary mode to preserve line endings
@@ -217,7 +242,8 @@ defmodule CodingAgent.Tools.WriteTest do
       path = Path.join(tmp_dir, "crlf.txt")
       content = "line1\r\nline2\r\nline3"
 
-      result = Write.execute("call_1", %{"path" => path, "content" => content}, nil, nil, tmp_dir, [])
+      result =
+        Write.execute("call_1", %{"path" => path, "content" => content}, nil, nil, tmp_dir, [])
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "line1\r\nline2\r\nline3"
@@ -227,7 +253,8 @@ defmodule CodingAgent.Tools.WriteTest do
       path = Path.join(tmp_dir, "mixed.txt")
       content = "line1\nline2\r\nline3\rline4"
 
-      result = Write.execute("call_1", %{"path" => path, "content" => content}, nil, nil, tmp_dir, [])
+      result =
+        Write.execute("call_1", %{"path" => path, "content" => content}, nil, nil, tmp_dir, [])
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == content
@@ -237,7 +264,8 @@ defmodule CodingAgent.Tools.WriteTest do
       path = Path.join(tmp_dir, "trailing.txt")
       content = "content\n"
 
-      result = Write.execute("call_1", %{"path" => path, "content" => content}, nil, nil, tmp_dir, [])
+      result =
+        Write.execute("call_1", %{"path" => path, "content" => content}, nil, nil, tmp_dir, [])
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "content\n"
@@ -247,7 +275,8 @@ defmodule CodingAgent.Tools.WriteTest do
       path = Path.join(tmp_dir, "no_trailing.txt")
       content = "content"
 
-      result = Write.execute("call_1", %{"path" => path, "content" => content}, nil, nil, tmp_dir, [])
+      result =
+        Write.execute("call_1", %{"path" => path, "content" => content}, nil, nil, tmp_dir, [])
 
       assert %AgentToolResult{} = result
       assert File.read!(path) == "content"
@@ -267,7 +296,8 @@ defmodule CodingAgent.Tools.WriteTest do
 
       path = Path.join(no_write_dir, "file.txt")
 
-      result = Write.execute("call_1", %{"path" => path, "content" => "test"}, nil, nil, tmp_dir, [])
+      result =
+        Write.execute("call_1", %{"path" => path, "content" => "test"}, nil, nil, tmp_dir, [])
 
       # Restore permissions for cleanup
       File.chmod!(no_write_dir, 0o755)
@@ -282,7 +312,8 @@ defmodule CodingAgent.Tools.WriteTest do
       File.write!(path, "original")
       File.chmod!(path, 0o444)
 
-      result = Write.execute("call_1", %{"path" => path, "content" => "new"}, nil, nil, tmp_dir, [])
+      result =
+        Write.execute("call_1", %{"path" => path, "content" => "new"}, nil, nil, tmp_dir, [])
 
       # Restore permissions for cleanup
       File.chmod!(path, 0o644)
@@ -302,7 +333,14 @@ defmodule CodingAgent.Tools.WriteTest do
       File.mkdir_p!(dir_path)
 
       result =
-        Write.execute("call_1", %{"path" => dir_path, "content" => "content"}, nil, nil, tmp_dir, [])
+        Write.execute(
+          "call_1",
+          %{"path" => dir_path, "content" => "content"},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
 
       assert {:error, msg} = result
       assert msg =~ "Failed to write file" or msg =~ "is a directory"
@@ -418,7 +456,8 @@ defmodule CodingAgent.Tools.WriteTest do
     end
 
     test "returns error when path is not a string" do
-      result = Write.execute("call_1", %{"path" => 123, "content" => "test"}, nil, nil, "/tmp", [])
+      result =
+        Write.execute("call_1", %{"path" => 123, "content" => "test"}, nil, nil, "/tmp", [])
 
       assert {:error, msg} = result
       assert msg =~ "path must be a non-empty string"
@@ -446,7 +485,14 @@ defmodule CodingAgent.Tools.WriteTest do
       AbortSignal.abort(signal)
 
       result =
-        Write.execute("call_1", %{"path" => path, "content" => "content"}, signal, nil, tmp_dir, [])
+        Write.execute(
+          "call_1",
+          %{"path" => path, "content" => "content"},
+          signal,
+          nil,
+          tmp_dir,
+          []
+        )
 
       AbortSignal.clear(signal)
 

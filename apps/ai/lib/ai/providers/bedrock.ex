@@ -438,10 +438,17 @@ defmodule Ai.Providers.Bedrock do
       config = %{"tools" => bedrock_tools}
 
       case tool_choice do
-        "auto" -> Map.put(config, "toolChoice", %{"auto" => %{}})
-        "any" -> Map.put(config, "toolChoice", %{"any" => %{}})
-        %{"type" => "tool", "name" => name} -> Map.put(config, "toolChoice", %{"tool" => %{"name" => name}})
-        _ -> config
+        "auto" ->
+          Map.put(config, "toolChoice", %{"auto" => %{}})
+
+        "any" ->
+          Map.put(config, "toolChoice", %{"any" => %{}})
+
+        %{"type" => "tool", "name" => name} ->
+          Map.put(config, "toolChoice", %{"tool" => %{"name" => name}})
+
+        _ ->
+          config
       end
     end
   end
@@ -515,10 +522,11 @@ defmodule Ai.Providers.Bedrock do
   defp supports_prompt_caching?(model) do
     id = String.downcase(model.id)
     # Claude 4.x models (opus-4, sonnet-4, haiku-4)
-    (String.contains?(id, "claude") and (String.contains?(id, "-4-") or String.contains?(id, "-4."))) or
-      # Claude 3.7 Sonnet
+    # Claude 3.7 Sonnet
+    # Claude 3.5 Haiku
+    (String.contains?(id, "claude") and
+       (String.contains?(id, "-4-") or String.contains?(id, "-4."))) or
       String.contains?(id, "claude-3-7-sonnet") or
-      # Claude 3.5 Haiku
       String.contains?(id, "claude-3-5-haiku")
   end
 
@@ -541,17 +549,18 @@ defmodule Ai.Providers.Bedrock do
     amz_date = format_amz_date(now)
     date_stamp = format_date_stamp(now)
 
-    headers = build_signed_headers(
-      endpoint.host,
-      endpoint.path,
-      json_body,
-      region,
-      access_key,
-      secret_key,
-      session_token,
-      amz_date,
-      date_stamp
-    )
+    headers =
+      build_signed_headers(
+        endpoint.host,
+        endpoint.path,
+        json_body,
+        region,
+        access_key,
+        secret_key,
+        session_token,
+        amz_date,
+        date_stamp
+      )
 
     # Use Req for HTTP request with streaming
     case Req.post(url, body: json_body, headers: headers, into: :self, receive_timeout: 600_000) do
@@ -592,7 +601,17 @@ defmodule Ai.Providers.Bedrock do
     )
   end
 
-  defp build_signed_headers(host, path, body, region, access_key, secret_key, session_token, amz_date, date_stamp) do
+  defp build_signed_headers(
+         host,
+         path,
+         body,
+         region,
+         access_key,
+         secret_key,
+         session_token,
+         amz_date,
+         date_stamp
+       ) do
     service = "bedrock"
     method = "POST"
     content_type = "application/json"
@@ -628,24 +647,30 @@ defmodule Ai.Providers.Bedrock do
       |> Enum.join(";")
 
     # Canonical request
-    canonical_request = [
-      method,
-      path,
-      "",  # query string
-      canonical_headers,
-      signed_headers,
-      payload_hash
-    ] |> Enum.join("\n")
+    canonical_request =
+      [
+        method,
+        path,
+        # query string
+        "",
+        canonical_headers,
+        signed_headers,
+        payload_hash
+      ]
+      |> Enum.join("\n")
 
     # String to sign
     algorithm = "AWS4-HMAC-SHA256"
     credential_scope = "#{date_stamp}/#{region}/#{service}/aws4_request"
-    string_to_sign = [
-      algorithm,
-      amz_date,
-      credential_scope,
-      hash_sha256(canonical_request)
-    ] |> Enum.join("\n")
+
+    string_to_sign =
+      [
+        algorithm,
+        amz_date,
+        credential_scope,
+        hash_sha256(canonical_request)
+      ]
+      |> Enum.join("\n")
 
     # Signing key
     signing_key = get_signature_key(secret_key, date_stamp, region, service)
@@ -654,7 +679,8 @@ defmodule Ai.Providers.Bedrock do
     signature = hmac_sha256(signing_key, string_to_sign) |> Base.encode16(case: :lower)
 
     # Authorization header
-    authorization = "#{algorithm} Credential=#{access_key}/#{credential_scope}, SignedHeaders=#{signed_headers}, Signature=#{signature}"
+    authorization =
+      "#{algorithm} Credential=#{access_key}/#{credential_scope}, SignedHeaders=#{signed_headers}, Signature=#{signature}"
 
     # Return headers as list of tuples
     [
@@ -700,8 +726,10 @@ defmodule Ai.Providers.Bedrock do
     # State for tracking content blocks by index
     initial_state = %{
       output: output,
-      blocks: %{},  # Map of content_block_index -> block data
-      buffer: <<>>  # Buffer for incomplete frames
+      # Map of content_block_index -> block data
+      blocks: %{},
+      # Buffer for incomplete frames
+      buffer: <<>>
     }
 
     final_state =
@@ -742,10 +770,8 @@ defmodule Ai.Providers.Bedrock do
   end
 
   defp parse_frame(buffer) do
-    <<total_length::32-unsigned-big,
-      headers_length::32-unsigned-big,
-      _prelude_crc::32-unsigned-big,
-      _rest::binary>> = buffer
+    <<total_length::32-unsigned-big, headers_length::32-unsigned-big,
+      _prelude_crc::32-unsigned-big, _rest::binary>> = buffer
 
     # Total length includes prelude (8) + prelude CRC (4) + headers + payload + message CRC (4)
     message_length = total_length
@@ -757,9 +783,11 @@ defmodule Ai.Providers.Bedrock do
 
       # Extract headers and payload
       # Frame structure: prelude(8) + prelude_crc(4) + headers + payload + message_crc(4)
-      headers_start = 12  # After prelude + prelude CRC
+      # After prelude + prelude CRC
+      headers_start = 12
       payload_start = headers_start + headers_length
-      payload_length = total_length - 12 - headers_length - 4  # Subtract prelude, prelude_crc, headers, message_crc
+      # Subtract prelude, prelude_crc, headers, message_crc
+      payload_length = total_length - 12 - headers_length - 4
 
       headers_data = binary_part(frame_data, headers_start, headers_length)
       payload_data = binary_part(frame_data, payload_start, payload_length)
@@ -779,7 +807,11 @@ defmodule Ai.Providers.Bedrock do
 
   defp parse_headers(<<>>, acc), do: acc
 
-  defp parse_headers(<<name_len::8, name::binary-size(name_len), 7::8, value_len::16-big, value::binary-size(value_len), rest::binary>>, acc) do
+  defp parse_headers(
+         <<name_len::8, name::binary-size(name_len), 7::8, value_len::16-big,
+           value::binary-size(value_len), rest::binary>>,
+         acc
+       ) do
     # Type 7 is string
     parse_headers(rest, Map.put(acc, name, value))
   end
@@ -787,29 +819,49 @@ defmodule Ai.Providers.Bedrock do
   defp parse_headers(<<name_len::8, name::binary-size(name_len), type::8, rest::binary>>, acc) do
     # Handle other types - skip them for now
     case type do
-      0 -> parse_headers(rest, Map.put(acc, name, true))  # bool true
-      1 -> parse_headers(rest, Map.put(acc, name, false)) # bool false
-      2 -> # byte
+      # bool true
+      0 ->
+        parse_headers(rest, Map.put(acc, name, true))
+
+      # bool false
+      1 ->
+        parse_headers(rest, Map.put(acc, name, false))
+
+      # byte
+      2 ->
         <<_value::8, rest2::binary>> = rest
         parse_headers(rest2, acc)
-      3 -> # short
+
+      # short
+      3 ->
         <<_value::16-big, rest2::binary>> = rest
         parse_headers(rest2, acc)
-      4 -> # int
+
+      # int
+      4 ->
         <<_value::32-big, rest2::binary>> = rest
         parse_headers(rest2, acc)
-      5 -> # long
+
+      # long
+      5 ->
         <<_value::64-big, rest2::binary>> = rest
         parse_headers(rest2, acc)
-      6 -> # bytes
+
+      # bytes
+      6 ->
         <<len::16-big, _value::binary-size(len), rest2::binary>> = rest
         parse_headers(rest2, acc)
-      8 -> # timestamp
+
+      # timestamp
+      8 ->
         <<_value::64-big, rest2::binary>> = rest
         parse_headers(rest2, acc)
-      9 -> # uuid
+
+      # uuid
+      9 ->
         <<_value::binary-size(16), rest2::binary>> = rest
         parse_headers(rest2, acc)
+
       _ ->
         # Unknown type, stop parsing
         acc
@@ -858,6 +910,7 @@ defmodule Ai.Providers.Bedrock do
 
         if start["toolUse"] do
           tool_use = start["toolUse"]
+
           block = %ToolCall{
             type: :tool_call,
             id: tool_use["toolUseId"] || "",
@@ -871,9 +924,10 @@ defmodule Ai.Providers.Bedrock do
 
           EventStream.push_async(stream, {:tool_call_start, length(content) - 1, output})
 
-          %{state |
-            output: output,
-            blocks: Map.put(state.blocks, content_block_index, block_data)
+          %{
+            state
+            | output: output,
+              blocks: Map.put(state.blocks, content_block_index, block_data)
           }
         else
           state
@@ -973,8 +1027,10 @@ defmodule Ai.Providers.Bedrock do
             output: usage["outputTokens"] || 0,
             cache_read: usage["cacheReadInputTokens"] || 0,
             cache_write: usage["cacheWriteInputTokens"] || 0,
-            total_tokens: usage["totalTokens"] || (usage["inputTokens"] || 0) + (usage["outputTokens"] || 0),
-            cost: %Cost{}  # Cost calculation could be added based on model pricing
+            total_tokens:
+              usage["totalTokens"] || (usage["inputTokens"] || 0) + (usage["outputTokens"] || 0),
+            # Cost calculation could be added based on model pricing
+            cost: %Cost{}
           }
 
           output = %{state.output | usage: updated_usage}
@@ -1020,10 +1076,7 @@ defmodule Ai.Providers.Bedrock do
 
     EventStream.push_async(stream, {:text_delta, idx, text, output})
 
-    %{state |
-      output: output,
-      blocks: Map.put(state.blocks, content_block_index, block_data)
-    }
+    %{state | output: output, blocks: Map.put(state.blocks, content_block_index, block_data)}
   end
 
   defp handle_tool_use_delta(content_block_index, tool_use, state, stream) do
@@ -1045,9 +1098,11 @@ defmodule Ai.Providers.Bedrock do
 
       EventStream.push_async(stream, {:tool_call_delta, idx, input_delta, output})
 
-      %{state |
-        output: output,
-        blocks: Map.put(state.blocks, content_block_index, %{block_data | partial_json: partial_json})
+      %{
+        state
+        | output: output,
+          blocks:
+            Map.put(state.blocks, content_block_index, %{block_data | partial_json: partial_json})
       }
     else
       state
@@ -1066,10 +1121,13 @@ defmodule Ai.Providers.Bedrock do
         idx = block_data.index
         content = state.output.content
         block = Enum.at(content, idx)
-        updated_block = %{block |
-          thinking: block.thinking <> text_delta,
-          thinking_signature: (block.thinking_signature || "") <> signature_delta
+
+        updated_block = %{
+          block
+          | thinking: block.thinking <> text_delta,
+            thinking_signature: (block.thinking_signature || "") <> signature_delta
         }
+
         updated_content = List.replace_at(content, idx, updated_block)
         output = %{state.output | content: updated_content}
         {output, block_data, idx}
@@ -1080,6 +1138,7 @@ defmodule Ai.Providers.Bedrock do
           thinking: text_delta,
           thinking_signature: signature_delta
         }
+
         content = state.output.content ++ [block]
         output = %{state.output | content: content}
         idx = length(content) - 1
@@ -1092,10 +1151,7 @@ defmodule Ai.Providers.Bedrock do
       EventStream.push_async(stream, {:thinking_delta, idx, text_delta, output})
     end
 
-    %{state |
-      output: output,
-      blocks: Map.put(state.blocks, content_block_index, block_data)
-    }
+    %{state | output: output, blocks: Map.put(state.blocks, content_block_index, block_data)}
   end
 
   defp map_stop_reason(reason) do
@@ -1115,7 +1171,9 @@ defmodule Ai.Providers.Bedrock do
     # Try to parse partial JSON, falling back to empty map
     # This handles incomplete JSON during streaming
     case Jason.decode(partial) do
-      {:ok, result} when is_map(result) -> result
+      {:ok, result} when is_map(result) ->
+        result
+
       _ ->
         # Try adding closing braces to make it valid
         try_complete_json(partial)

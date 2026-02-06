@@ -18,8 +18,8 @@ defmodule LemonGateway.ApplicationTest do
     LemonGateway.ThreadWorkerSupervisor,
     LemonGateway.Scheduler,
     LemonGateway.Store,
-    LemonGateway.TransportSupervisor,
-    {:ranch_embedded_sup, LemonGateway.Web.Router.HTTP}
+    # Boots lemon_channels (preferred) and falls back to legacy TransportSupervisor if needed.
+    LemonGateway.ChannelBootstrap
   ]
 
   # ---------------------------------------------------------------------
@@ -70,7 +70,9 @@ defmodule LemonGateway.ApplicationTest do
 
     test "application starts successfully" do
       assert {:ok, _pid} = Application.ensure_all_started(:lemon_gateway)
-      assert Application.started_applications() |> Enum.any?(fn {app, _, _} -> app == :lemon_gateway end)
+
+      assert Application.started_applications()
+             |> Enum.any?(fn {app, _, _} -> app == :lemon_gateway end)
     end
 
     test "application can be started and stopped multiple times" do
@@ -157,7 +159,9 @@ defmodule LemonGateway.ApplicationTest do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       children = Supervisor.which_children(LemonGateway.Supervisor)
-      {_id, _pid, type, _modules} = Enum.find(children, fn {id, _, _, _} -> id == LemonGateway.Config end)
+
+      {_id, _pid, type, _modules} =
+        Enum.find(children, fn {id, _, _, _} -> id == LemonGateway.Config end)
 
       assert type == :worker
     end
@@ -166,7 +170,9 @@ defmodule LemonGateway.ApplicationTest do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       children = Supervisor.which_children(LemonGateway.Supervisor)
-      {_id, _pid, type, _modules} = Enum.find(children, fn {id, _, _, _} -> id == LemonGateway.RunSupervisor end)
+
+      {_id, _pid, type, _modules} =
+        Enum.find(children, fn {id, _, _, _} -> id == LemonGateway.RunSupervisor end)
 
       assert type == :supervisor
     end
@@ -182,22 +188,22 @@ defmodule LemonGateway.ApplicationTest do
       assert type == :supervisor
     end
 
-    test "TransportSupervisor is a supervisor type" do
+    test "TransportSupervisor is not started by default (channels-first)" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       children = Supervisor.which_children(LemonGateway.Supervisor)
 
-      {_id, _pid, type, _modules} =
-        Enum.find(children, fn {id, _, _, _} -> id == LemonGateway.TransportSupervisor end)
-
-      assert type == :supervisor
+      assert Enum.find(children, fn {id, _, _, _} -> id == LemonGateway.TransportSupervisor end) ==
+               nil
     end
 
     test "ThreadRegistry is a supervisor (Registry)" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       children = Supervisor.which_children(LemonGateway.Supervisor)
-      {_id, _pid, type, _modules} = Enum.find(children, fn {id, _, _, _} -> id == LemonGateway.ThreadRegistry end)
+
+      {_id, _pid, type, _modules} =
+        Enum.find(children, fn {id, _, _, _} -> id == LemonGateway.ThreadRegistry end)
 
       assert type == :supervisor
     end
@@ -434,7 +440,7 @@ defmodule LemonGateway.ApplicationTest do
       :ok
     end
 
-    test "enable_telegram: false does not start telegram transport" do
+    test "enable_telegram: false disables telegram transport in TransportRegistry" do
       Application.put_env(:lemon_gateway, LemonGateway.Config, %{
         max_concurrent_runs: 1,
         default_engine: "echo",
@@ -446,10 +452,10 @@ defmodule LemonGateway.ApplicationTest do
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-      # TransportSupervisor should be running but with no telegram children
-      # since enable_telegram is false
-      supervisor_pid = Process.whereis(LemonGateway.TransportSupervisor)
-      assert is_pid(supervisor_pid)
+      enabled = LemonGateway.TransportRegistry.enabled_transports()
+      enabled_ids = Enum.map(enabled, fn {id, _mod} -> id end)
+
+      refute "telegram" in enabled_ids
     end
 
     test "custom engines list is loaded from config" do
@@ -513,9 +519,9 @@ defmodule LemonGateway.ApplicationTest do
       Application.put_env(:lemon_gateway, :commands, [])
 
       # Configure ETS backend (default)
-      Application.put_env(:lemon_gateway, LemonGateway.Store, [
+      Application.put_env(:lemon_gateway, LemonGateway.Store,
         backend: LemonGateway.Store.EtsBackend
-      ])
+      )
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -934,15 +940,11 @@ defmodule LemonGateway.ApplicationTest do
       assert result == nil
     end
 
-    test "TransportSupervisor is registered" do
+    test "TransportSupervisor is not registered by default (channels-first)" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       pid = Process.whereis(LemonGateway.TransportSupervisor)
-      assert is_pid(pid)
-
-      # Should accept which_children call
-      children = Supervisor.which_children(LemonGateway.TransportSupervisor)
-      assert is_list(children)
+      assert pid == nil
     end
   end
 

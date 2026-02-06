@@ -111,6 +111,7 @@ defmodule Ai.Providers.BedrockParsingTest do
           "signature" => "abc123"
         }
       }
+
       assert Map.has_key?(delta, "reasoningContent")
       assert delta["reasoningContent"]["text"] == "Let me think..."
     end
@@ -313,6 +314,7 @@ defmodule Ai.Providers.BedrockParsingTest do
         "maxTokens" => 1000,
         "temperature" => 0.7
       }
+
       assert config["maxTokens"] == 1000
       assert config["temperature"] == 0.7
     end
@@ -329,6 +331,7 @@ defmodule Ai.Providers.BedrockParsingTest do
           }
         ]
       }
+
       assert length(config["tools"]) == 1
     end
 
@@ -339,6 +342,7 @@ defmodule Ai.Providers.BedrockParsingTest do
           "budget_tokens" => 8192
         }
       }
+
       assert fields["thinking"]["type"] == "enabled"
       assert fields["thinking"]["budget_tokens"] == 8192
     end
@@ -367,7 +371,7 @@ defmodule Ai.Providers.BedrockParsingTest do
 
       Enum.each(model_ids, fn id ->
         assert String.contains?(id, "claude") and
-               (String.contains?(id, "-4-") or String.contains?(id, "-4."))
+                 (String.contains?(id, "-4-") or String.contains?(id, "-4."))
       end)
     end
 
@@ -384,13 +388,16 @@ defmodule Ai.Providers.BedrockParsingTest do
   describe "image block handling" do
     test "JPEG format mapping" do
       mime_type = "image/jpeg"
-      format = case mime_type do
-        "image/jpeg" -> "jpeg"
-        "image/jpg" -> "jpeg"
-        "image/png" -> "png"
-        "image/gif" -> "gif"
-        "image/webp" -> "webp"
-      end
+
+      format =
+        case mime_type do
+          "image/jpeg" -> "jpeg"
+          "image/jpg" -> "jpeg"
+          "image/png" -> "png"
+          "image/gif" -> "gif"
+          "image/webp" -> "webp"
+        end
+
       assert format == "jpeg"
     end
 
@@ -406,6 +413,7 @@ defmodule Ai.Providers.BedrockParsingTest do
         "source" => %{"bytes" => "base64data"},
         "format" => "png"
       }
+
       assert Map.has_key?(image_block["source"], "bytes")
       assert image_block["format"] == "png"
     end

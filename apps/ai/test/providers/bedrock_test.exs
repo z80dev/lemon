@@ -28,8 +28,13 @@ defmodule Ai.Providers.BedrockTest do
     System.delete_env("AWS_SECRET_ACCESS_KEY")
 
     on_exit(fn ->
-      if prev_access, do: System.put_env("AWS_ACCESS_KEY_ID", prev_access), else: System.delete_env("AWS_ACCESS_KEY_ID")
-      if prev_secret, do: System.put_env("AWS_SECRET_ACCESS_KEY", prev_secret), else: System.delete_env("AWS_SECRET_ACCESS_KEY")
+      if prev_access,
+        do: System.put_env("AWS_ACCESS_KEY_ID", prev_access),
+        else: System.delete_env("AWS_ACCESS_KEY_ID")
+
+      if prev_secret,
+        do: System.put_env("AWS_SECRET_ACCESS_KEY", prev_secret),
+        else: System.delete_env("AWS_SECRET_ACCESS_KEY")
     end)
 
     model = %Model{
@@ -44,7 +49,11 @@ defmodule Ai.Providers.BedrockTest do
 
     {:ok, stream} = Bedrock.stream(model, context, %StreamOptions{})
 
-    assert {:error, %Ai.Types.AssistantMessage{stop_reason: :error, error_message: "AWS_ACCESS_KEY_ID not found"}} =
+    assert {:error,
+            %Ai.Types.AssistantMessage{
+              stop_reason: :error,
+              error_message: "AWS_ACCESS_KEY_ID not found"
+            }} =
              EventStream.result(stream, 1000)
   end
 
@@ -70,10 +79,15 @@ defmodule Ai.Providers.BedrockTest do
     tool = %Tool{
       name: "lookup",
       description: "Lookup data",
-      parameters: %{"type" => "object", "properties" => %{"q" => %{"type" => "string"}}, "required" => ["q"]}
+      parameters: %{
+        "type" => "object",
+        "properties" => %{"q" => %{"type" => "string"}},
+        "required" => ["q"]
+      }
     }
 
-    context = Context.new(system_prompt: "System", messages: [%UserMessage{content: "Hi"}], tools: [tool])
+    context =
+      Context.new(system_prompt: "System", messages: [%UserMessage{content: "Hi"}], tools: [tool])
 
     opts =
       %StreamOptions{
@@ -113,7 +127,13 @@ defmodule Ai.Providers.BedrockTest do
             "toolSpec" => %{
               "name" => "lookup",
               "description" => "Lookup data",
-              "inputSchema" => %{"json" => %{"type" => "object", "properties" => %{"q" => %{"type" => "string"}}, "required" => ["q"]}}
+              "inputSchema" => %{
+                "json" => %{
+                  "type" => "object",
+                  "properties" => %{"q" => %{"type" => "string"}},
+                  "required" => ["q"]
+                }
+              }
             }
           }
         ]

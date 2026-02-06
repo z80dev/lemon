@@ -21,7 +21,20 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
 
   alias Ai.EventStream
   alias Ai.Providers.GoogleGeminiCli
-  alias Ai.Types.{AssistantMessage, Context, Model, ModelCost, StreamOptions, TextContent, ThinkingContent, Tool, ToolCall, ToolResultMessage, UserMessage}
+
+  alias Ai.Types.{
+    AssistantMessage,
+    Context,
+    Model,
+    ModelCost,
+    StreamOptions,
+    TextContent,
+    ThinkingContent,
+    Tool,
+    ToolCall,
+    ToolResultMessage,
+    UserMessage
+  }
 
   # ============================================================================
   # Test Setup
@@ -311,15 +324,19 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
         Plug.Conn.send_resp(conn, 400, "test")
       end)
 
-      context = Context.new(
-        system_prompt: "You are a helpful assistant",
-        messages: [%UserMessage{content: "Hi"}]
-      )
+      context =
+        Context.new(
+          system_prompt: "You are a helpful assistant",
+          messages: [%UserMessage{content: "Hi"}]
+        )
 
       {:ok, _stream} = GoogleGeminiCli.stream(default_model(), context, default_opts())
 
       assert_receive {:request_body, body}, 1000
-      assert body["request"]["systemInstruction"]["parts"] == [%{"text" => "You are a helpful assistant"}]
+
+      assert body["request"]["systemInstruction"]["parts"] == [
+               %{"text" => "You are a helpful assistant"}
+             ]
     end
 
     test "omits system instruction when not provided" do
@@ -422,7 +439,13 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
       end)
 
       model = %{default_model() | reasoning: true}
-      opts = %StreamOptions{api_key: default_api_key(), reasoning: :low, thinking_budgets: %{level: "LOW"}}
+
+      opts = %StreamOptions{
+        api_key: default_api_key(),
+        reasoning: :low,
+        thinking_budgets: %{level: "LOW"}
+      }
+
       {:ok, _stream} = GoogleGeminiCli.stream(model, default_context(), opts)
 
       assert_receive {:request_body, body}, 1000
@@ -440,7 +463,13 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
       end)
 
       model = %{default_model() | reasoning: true}
-      opts = %StreamOptions{api_key: default_api_key(), reasoning: :high, thinking_budgets: %{budget_tokens: 16384}}
+
+      opts = %StreamOptions{
+        api_key: default_api_key(),
+        reasoning: :high,
+        thinking_budgets: %{budget_tokens: 16384}
+      }
+
       {:ok, _stream} = GoogleGeminiCli.stream(model, default_context(), opts)
 
       assert_receive {:request_body, body}, 1000
@@ -467,7 +496,11 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
         %Tool{
           name: "read_file",
           description: "Read a file",
-          parameters: %{"type" => "object", "properties" => %{"path" => %{"type" => "string"}}, "required" => ["path"]}
+          parameters: %{
+            "type" => "object",
+            "properties" => %{"path" => %{"type" => "string"}},
+            "required" => ["path"]
+          }
         }
       ]
 
@@ -653,7 +686,11 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
         Plug.Conn.send_resp(conn, 400, "test")
       end)
 
-      opts = %StreamOptions{api_key: default_api_key(), headers: %{"x-opts-header" => "opts-value"}}
+      opts = %StreamOptions{
+        api_key: default_api_key(),
+        headers: %{"x-opts-header" => "opts-value"}
+      }
+
       {:ok, _stream} = GoogleGeminiCli.stream(default_model(), default_context(), opts)
 
       assert_receive {:custom, [custom]}, 1000
@@ -669,8 +706,16 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
     test "streams text responses end-to-end" do
       body =
         sse_body([
-          %{"response" => %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Hello"}]}}]}},
-          %{"response" => %{"candidates" => [%{"content" => %{"parts" => [%{"text" => " world"}]}}]}},
+          %{
+            "response" => %{
+              "candidates" => [%{"content" => %{"parts" => [%{"text" => "Hello"}]}}]
+            }
+          },
+          %{
+            "response" => %{
+              "candidates" => [%{"content" => %{"parts" => [%{"text" => " world"}]}}]
+            }
+          },
           %{
             "response" => %{
               "candidates" => [%{"finishReason" => "STOP"}],
@@ -698,7 +743,11 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
       body =
         sse_body([
           %{"response" => %{"candidates" => [%{"content" => %{"parts" => []}}]}},
-          %{"response" => %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Hello"}]}}]}},
+          %{
+            "response" => %{
+              "candidates" => [%{"content" => %{"parts" => [%{"text" => "Hello"}]}}]
+            }
+          },
           %{"response" => %{"candidates" => [%{"finishReason" => "STOP"}]}}
         ])
 
@@ -754,8 +803,18 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
     test "processes thinking parts with thought marker" do
       body =
         sse_body([
-          %{"response" => %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Let me think...", "thought" => true}]}}]}},
-          %{"response" => %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "The answer is 42"}]}}]}},
+          %{
+            "response" => %{
+              "candidates" => [
+                %{"content" => %{"parts" => [%{"text" => "Let me think...", "thought" => true}]}}
+              ]
+            }
+          },
+          %{
+            "response" => %{
+              "candidates" => [%{"content" => %{"parts" => [%{"text" => "The answer is 42"}]}}]
+            }
+          },
           %{"response" => %{"candidates" => [%{"finishReason" => "STOP"}]}}
         ])
 
@@ -778,7 +837,19 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
     test "preserves thought signature during streaming" do
       body =
         sse_body([
-          %{"response" => %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Thinking", "thought" => true, "thoughtSignature" => "sig123"}]}}]}},
+          %{
+            "response" => %{
+              "candidates" => [
+                %{
+                  "content" => %{
+                    "parts" => [
+                      %{"text" => "Thinking", "thought" => true, "thoughtSignature" => "sig123"}
+                    ]
+                  }
+                }
+              ]
+            }
+          },
           %{"response" => %{"candidates" => [%{"finishReason" => "STOP"}]}}
         ])
 
@@ -797,9 +868,25 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
     test "transitions from thinking to text correctly" do
       body =
         sse_body([
-          %{"response" => %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Think 1", "thought" => true}]}}]}},
-          %{"response" => %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Think 2", "thought" => true}]}}]}},
-          %{"response" => %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Response"}]}}]}},
+          %{
+            "response" => %{
+              "candidates" => [
+                %{"content" => %{"parts" => [%{"text" => "Think 1", "thought" => true}]}}
+              ]
+            }
+          },
+          %{
+            "response" => %{
+              "candidates" => [
+                %{"content" => %{"parts" => [%{"text" => "Think 2", "thought" => true}]}}
+              ]
+            }
+          },
+          %{
+            "response" => %{
+              "candidates" => [%{"content" => %{"parts" => [%{"text" => "Response"}]}}]
+            }
+          },
           %{"response" => %{"candidates" => [%{"finishReason" => "STOP"}]}}
         ])
 
@@ -820,8 +907,18 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
     test "transitions from text to thinking correctly" do
       body =
         sse_body([
-          %{"response" => %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Initial"}]}}]}},
-          %{"response" => %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "More thinking", "thought" => true}]}}]}},
+          %{
+            "response" => %{
+              "candidates" => [%{"content" => %{"parts" => [%{"text" => "Initial"}]}}]
+            }
+          },
+          %{
+            "response" => %{
+              "candidates" => [
+                %{"content" => %{"parts" => [%{"text" => "More thinking", "thought" => true}]}}
+              ]
+            }
+          },
           %{"response" => %{"candidates" => [%{"finishReason" => "STOP"}]}}
         ])
 
@@ -928,7 +1025,13 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
                 %{
                   "content" => %{
                     "parts" => [
-                      %{"functionCall" => %{"id" => "custom-id-123", "name" => "test", "args" => %{}}}
+                      %{
+                        "functionCall" => %{
+                          "id" => "custom-id-123",
+                          "name" => "test",
+                          "args" => %{}
+                        }
+                      }
                     ]
                   }
                 }
@@ -953,11 +1056,19 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
     test "ends text block before processing function call" do
       body =
         sse_body([
-          %{"response" => %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Let me check..."}]}}]}},
+          %{
+            "response" => %{
+              "candidates" => [%{"content" => %{"parts" => [%{"text" => "Let me check..."}]}}]
+            }
+          },
           %{
             "response" => %{
               "candidates" => [
-                %{"content" => %{"parts" => [%{"functionCall" => %{"name" => "check", "args" => %{}}}]}}
+                %{
+                  "content" => %{
+                    "parts" => [%{"functionCall" => %{"name" => "check", "args" => %{}}}]
+                  }
+                }
               ]
             }
           },
@@ -1119,7 +1230,9 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
     test "STOP maps to :stop" do
       body =
         sse_body([
-          %{"response" => %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Done"}]}}]}},
+          %{
+            "response" => %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Done"}]}}]}
+          },
           %{"response" => %{"candidates" => [%{"finishReason" => "STOP"}]}}
         ])
 
@@ -1136,7 +1249,11 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
     test "MAX_TOKENS maps to :length" do
       body =
         sse_body([
-          %{"response" => %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Truncated"}]}}]}},
+          %{
+            "response" => %{
+              "candidates" => [%{"content" => %{"parts" => [%{"text" => "Truncated"}]}}]
+            }
+          },
           %{"response" => %{"candidates" => [%{"finishReason" => "MAX_TOKENS"}]}}
         ])
 
@@ -1156,7 +1273,11 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
           %{
             "response" => %{
               "candidates" => [
-                %{"content" => %{"parts" => [%{"functionCall" => %{"name" => "test", "args" => %{}}}]}}
+                %{
+                  "content" => %{
+                    "parts" => [%{"functionCall" => %{"name" => "test", "args" => %{}}}]
+                  }
+                }
               ]
             }
           },
@@ -1241,7 +1362,11 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
       # Mix of invalid and valid JSON - only valid parts should be processed
       body =
         sse_body([
-          %{"response" => %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Valid"}]}}]}},
+          %{
+            "response" => %{
+              "candidates" => [%{"content" => %{"parts" => [%{"text" => "Valid"}]}}]
+            }
+          },
           %{"response" => %{"candidates" => [%{"finishReason" => "STOP"}]}}
         ])
 
@@ -1259,7 +1384,11 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
       body =
         sse_body([
           %{"response" => %{"candidates" => [%{"content" => %{"parts" => []}}]}},
-          %{"response" => %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Hello"}]}}]}},
+          %{
+            "response" => %{
+              "candidates" => [%{"content" => %{"parts" => [%{"text" => "Hello"}]}}]
+            }
+          },
           %{"response" => %{"candidates" => [%{"finishReason" => "STOP"}]}}
         ])
 
@@ -1287,9 +1416,12 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
         Plug.Conn.send_resp(conn, 400, "test")
       end)
 
-      context = Context.new(messages: [
-        %UserMessage{content: "Hello there"}
-      ])
+      context =
+        Context.new(
+          messages: [
+            %UserMessage{content: "Hello there"}
+          ]
+        )
 
       {:ok, _stream} = GoogleGeminiCli.stream(default_model(), context, default_opts())
 
@@ -1308,14 +1440,17 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
         Plug.Conn.send_resp(conn, 400, "test")
       end)
 
-      context = Context.new(messages: [
-        %UserMessage{content: "Hi"},
-        %AssistantMessage{
-          content: [%TextContent{text: "Hello!"}],
-          provider: :google_gemini_cli,
-          model: "gemini-2.5-pro"
-        }
-      ])
+      context =
+        Context.new(
+          messages: [
+            %UserMessage{content: "Hi"},
+            %AssistantMessage{
+              content: [%TextContent{text: "Hello!"}],
+              provider: :google_gemini_cli,
+              model: "gemini-2.5-pro"
+            }
+          ]
+        )
 
       {:ok, _stream} = GoogleGeminiCli.stream(default_model(), context, default_opts())
 
@@ -1334,20 +1469,23 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
         Plug.Conn.send_resp(conn, 400, "test")
       end)
 
-      context = Context.new(messages: [
-        %UserMessage{content: "Hi"},
-        %AssistantMessage{
-          content: [%ToolCall{id: "tc1", name: "read_file", arguments: %{"path" => "/test"}}],
-          provider: :google_gemini_cli,
-          model: "gemini-2.5-pro"
-        },
-        %ToolResultMessage{
-          tool_call_id: "tc1",
-          tool_name: "read_file",
-          content: [%TextContent{text: "file contents"}],
-          is_error: false
-        }
-      ])
+      context =
+        Context.new(
+          messages: [
+            %UserMessage{content: "Hi"},
+            %AssistantMessage{
+              content: [%ToolCall{id: "tc1", name: "read_file", arguments: %{"path" => "/test"}}],
+              provider: :google_gemini_cli,
+              model: "gemini-2.5-pro"
+            },
+            %ToolResultMessage{
+              tool_call_id: "tc1",
+              tool_name: "read_file",
+              content: [%TextContent{text: "file contents"}],
+              is_error: false
+            }
+          ]
+        )
 
       {:ok, _stream} = GoogleGeminiCli.stream(default_model(), context, default_opts())
 
@@ -1368,20 +1506,23 @@ defmodule Ai.Providers.GoogleGeminiCliComprehensiveTest do
         Plug.Conn.send_resp(conn, 400, "test")
       end)
 
-      context = Context.new(messages: [
-        %UserMessage{content: "Hi"},
-        %AssistantMessage{
-          content: [%ToolCall{id: "tc1", name: "read_file", arguments: %{}}],
-          provider: :google_gemini_cli,
-          model: "gemini-2.5-pro"
-        },
-        %ToolResultMessage{
-          tool_call_id: "tc1",
-          tool_name: "read_file",
-          content: [%TextContent{text: "File not found"}],
-          is_error: true
-        }
-      ])
+      context =
+        Context.new(
+          messages: [
+            %UserMessage{content: "Hi"},
+            %AssistantMessage{
+              content: [%ToolCall{id: "tc1", name: "read_file", arguments: %{}}],
+              provider: :google_gemini_cli,
+              model: "gemini-2.5-pro"
+            },
+            %ToolResultMessage{
+              tool_call_id: "tc1",
+              tool_name: "read_file",
+              content: [%TextContent{text: "File not found"}],
+              is_error: true
+            }
+          ]
+        )
 
       {:ok, _stream} = GoogleGeminiCli.stream(default_model(), context, default_opts())
 

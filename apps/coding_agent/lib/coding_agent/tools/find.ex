@@ -44,7 +44,8 @@ defmodule CodingAgent.Tools.Find do
           "type" => %{
             "type" => "string",
             "enum" => ["file", "directory", "all"],
-            "description" => "Type of entries to find: 'file', 'directory', or 'all' (default: 'all')"
+            "description" =>
+              "Type of entries to find: 'file', 'directory', or 'all' (default: 'all')"
           },
           "max_depth" => %{
             "type" => "integer",
@@ -103,13 +104,25 @@ defmodule CodingAgent.Tools.Find do
     search_path = Map.get(params, "path", ".")
     entry_type = Map.get(params, "type", "all")
     max_depth = Map.get(params, "max_depth")
-    max_results = Map.get(params, "max_results", Keyword.get(opts, :max_results, @default_max_results))
+
+    max_results =
+      Map.get(params, "max_results", Keyword.get(opts, :max_results, @default_max_results))
+
     include_hidden = Map.get(params, "hidden", false)
 
     with {:ok, resolved_path} <- resolve_path(search_path, cwd),
          :ok <- check_directory(resolved_path),
          :ok <- check_abort(signal) do
-      find_files(pattern, resolved_path, entry_type, max_depth, max_results, include_hidden, signal, cwd)
+      find_files(
+        pattern,
+        resolved_path,
+        entry_type,
+        max_depth,
+        max_results,
+        include_hidden,
+        signal,
+        cwd
+      )
     end
   end
 
@@ -170,13 +183,40 @@ defmodule CodingAgent.Tools.Find do
   # File Finding
   # ============================================================================
 
-  defp find_files(pattern, search_path, entry_type, max_depth, max_results, include_hidden, signal, cwd) do
+  defp find_files(
+         pattern,
+         search_path,
+         entry_type,
+         max_depth,
+         max_results,
+         include_hidden,
+         signal,
+         cwd
+       ) do
     case fd_available?() do
       true ->
-        find_with_fd(pattern, search_path, entry_type, max_depth, max_results, include_hidden, signal, cwd)
+        find_with_fd(
+          pattern,
+          search_path,
+          entry_type,
+          max_depth,
+          max_results,
+          include_hidden,
+          signal,
+          cwd
+        )
 
       false ->
-        find_with_elixir(pattern, search_path, entry_type, max_depth, max_results, include_hidden, signal, cwd)
+        find_with_elixir(
+          pattern,
+          search_path,
+          entry_type,
+          max_depth,
+          max_results,
+          include_hidden,
+          signal,
+          cwd
+        )
     end
   end
 
@@ -191,7 +231,16 @@ defmodule CodingAgent.Tools.Find do
     end
   end
 
-  defp find_with_fd(pattern, search_path, entry_type, max_depth, max_results, include_hidden, signal, cwd) do
+  defp find_with_fd(
+         pattern,
+         search_path,
+         entry_type,
+         max_depth,
+         max_results,
+         include_hidden,
+         signal,
+         cwd
+       ) do
     args = build_fd_args(pattern, search_path, entry_type, max_depth, max_results, include_hidden)
 
     case run_fd(args, cwd, signal) do
@@ -205,7 +254,16 @@ defmodule CodingAgent.Tools.Find do
 
       {:error, reason} ->
         # Fall back to Elixir if fd fails
-        case find_with_elixir(pattern, search_path, entry_type, max_depth, max_results, include_hidden, signal, cwd) do
+        case find_with_elixir(
+               pattern,
+               search_path,
+               entry_type,
+               max_depth,
+               max_results,
+               include_hidden,
+               signal,
+               cwd
+             ) do
           {:error, _} -> {:error, reason}
           result -> result
         end
@@ -304,7 +362,16 @@ defmodule CodingAgent.Tools.Find do
   # Elixir-based Finding (fallback)
   # ============================================================================
 
-  defp find_with_elixir(pattern, search_path, entry_type, max_depth, max_results, include_hidden, signal, cwd) do
+  defp find_with_elixir(
+         pattern,
+         search_path,
+         entry_type,
+         max_depth,
+         max_results,
+         include_hidden,
+         signal,
+         cwd
+       ) do
     glob_pattern = build_glob_pattern(pattern, search_path, max_depth)
 
     results =

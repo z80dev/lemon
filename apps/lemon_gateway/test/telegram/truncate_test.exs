@@ -201,7 +201,8 @@ defmodule LemonGateway.Telegram.TruncateTest do
       resume_len = String.length(resume)
       # We need: content_len + 3 (ellipsis) + 1 (newline) + resume_len = 4096
       content_len = 4096 - 3 - 1 - resume_len
-      content = String.duplicate("x", content_len + 100) # Slightly over
+      # Slightly over
+      content = String.duplicate("x", content_len + 100)
       text = content <> "\n" <> resume
 
       result = Truncate.truncate_for_telegram(text, MockEngine)
@@ -212,7 +213,8 @@ defmodule LemonGateway.Telegram.TruncateTest do
 
     test "unicode characters are handled correctly" do
       # Unicode takes multiple bytes but should count as single characters
-      content = String.duplicate("\u{1F600}", 5000) # Emoji
+      # Emoji
+      content = String.duplicate("\u{1F600}", 5000)
       resume = "lemon resume abc123"
       text = content <> "\n" <> resume
 
@@ -238,7 +240,8 @@ defmodule LemonGateway.Telegram.TruncateTest do
     test "text just over the limit truncates minimally" do
       resume = "lemon resume abc123"
       # Create text that's just over 4096
-      content_size = 4096 - String.length(resume) - 1 + 10 # 10 chars over
+      # 10 chars over
+      content_size = 4096 - String.length(resume) - 1 + 10
       content = String.duplicate("x", content_size)
       text = content <> "\n" <> resume
 
@@ -685,7 +688,8 @@ defmodule LemonGateway.Telegram.TruncateTest do
 
     test "grapheme clusters (combining characters)" do
       # e + combining acute accent forms a single grapheme
-      combining = String.duplicate("e\u{0301}", 3000) # é as combining
+      # é as combining
+      combining = String.duplicate("e\u{0301}", 3000)
       resume = "lemon resume abc123"
       text = combining <> "\n" <> resume
 
@@ -698,7 +702,8 @@ defmodule LemonGateway.Telegram.TruncateTest do
 
     test "flag emoji (multiple code points)" do
       # Flag emojis are two regional indicator symbols
-      flags = String.duplicate("\u{1F1FA}\u{1F1F8}", 2500) # US flag
+      # US flag
+      flags = String.duplicate("\u{1F1FA}\u{1F1F8}", 2500)
       resume = "lemon resume abc123"
       text = flags <> "\n" <> resume
 
@@ -738,7 +743,8 @@ defmodule LemonGateway.Telegram.TruncateTest do
 
     test "variation selectors" do
       # Text with variation selectors
-      with_variation = String.duplicate("\u{2764}\u{FE0F}", 3000) # Red heart emoji
+      # Red heart emoji
+      with_variation = String.duplicate("\u{2764}\u{FE0F}", 3000)
       resume = "lemon resume abc123"
       text = with_variation <> "\n" <> resume
 
@@ -751,7 +757,8 @@ defmodule LemonGateway.Telegram.TruncateTest do
 
     test "skin tone modifiers" do
       # Emoji with skin tone modifier
-      with_skin_tone = String.duplicate("\u{1F44B}\u{1F3FD}", 2000) # Waving hand medium skin
+      # Waving hand medium skin
+      with_skin_tone = String.duplicate("\u{1F44B}\u{1F3FD}", 2000)
       resume = "lemon resume abc123"
       text = with_skin_tone <> "\n" <> resume
 

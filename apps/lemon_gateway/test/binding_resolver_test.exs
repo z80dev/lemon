@@ -222,9 +222,7 @@ defmodule LemonGateway.BindingResolverTest do
     end
 
     test "handles empty binding map" do
-      setup_config(
-        bindings: [%{}]
-      )
+      setup_config(bindings: [%{}])
 
       scope = %ChatScope{transport: :telegram, chat_id: 12345}
       binding = BindingResolver.resolve_binding(scope)
@@ -341,7 +339,12 @@ defmodule LemonGateway.BindingResolverTest do
           "test_proj" => %{root: "/tmp/test_project", default_engine: "project_engine"}
         },
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "test_proj", default_engine: "chat_engine"}
+          %{
+            transport: :telegram,
+            chat_id: 12345,
+            project: "test_proj",
+            default_engine: "chat_engine"
+          }
         ]
       )
 
@@ -498,7 +501,12 @@ defmodule LemonGateway.BindingResolverTest do
           "chain_proj" => %{root: "/tmp/test_full_chain", default_engine: "project_engine"}
         },
         bindings: [
-          %{transport: :telegram, chat_id: 12345, project: "chain_proj", default_engine: "chat_engine"},
+          %{
+            transport: :telegram,
+            chat_id: 12345,
+            project: "chain_proj",
+            default_engine: "chat_engine"
+          },
           %{transport: :telegram, chat_id: 12345, topic_id: 999, default_engine: "topic_engine"}
         ]
       )

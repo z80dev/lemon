@@ -4,7 +4,15 @@ defmodule AgentCore.CliRunners.KimiRunnerTest do
   alias AgentCore.CliRunners.KimiRunner
   alias AgentCore.CliRunners.KimiRunner.RunnerState
   alias AgentCore.CliRunners.KimiSchema
-  alias AgentCore.CliRunners.KimiSchema.{ErrorMessage, Message, StreamMessage, ToolCall, ToolFunction}
+
+  alias AgentCore.CliRunners.KimiSchema.{
+    ErrorMessage,
+    Message,
+    StreamMessage,
+    ToolCall,
+    ToolFunction
+  }
+
   alias AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
 
   setup do
@@ -103,11 +111,14 @@ defmodule AgentCore.CliRunners.KimiRunnerTest do
   describe "decode_line/1" do
     test "decodes assistant message line" do
       json = ~s|{"role":"assistant","content":"Hello"}|
-      assert {:ok, %StreamMessage{message: %Message{role: "assistant"}}} = KimiSchema.decode_event(json)
+
+      assert {:ok, %StreamMessage{message: %Message{role: "assistant"}}} =
+               KimiSchema.decode_event(json)
     end
 
     test "decodes tool message line" do
       json = ~s|{"role":"tool","tool_call_id":"call_1","content":"ok"}|
+
       assert {:ok, %StreamMessage{message: %Message{role: "tool", tool_call_id: "call_1"}}} =
                KimiSchema.decode_event(json)
     end
@@ -160,6 +171,7 @@ defmodule AgentCore.CliRunners.KimiRunnerTest do
 
     test "completes tool action from tool result" do
       state = RunnerState.new(nil)
+
       tool_call = %ToolCall{
         id: "call_1",
         type: "function",
@@ -180,7 +192,9 @@ defmodule AgentCore.CliRunners.KimiRunnerTest do
 
     test "translates error event to completed error" do
       state = RunnerState.new(nil)
-      {[completed], _state, _opts} = KimiRunner.translate_event(%ErrorMessage{error: "boom"}, state)
+
+      {[completed], _state, _opts} =
+        KimiRunner.translate_event(%ErrorMessage{error: "boom"}, state)
 
       assert %CompletedEvent{ok: false, error: "boom"} = completed
     end

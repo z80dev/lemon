@@ -23,9 +23,10 @@ defmodule LemonGateway.CodexIntegrationTest do
 
         stream = CodexRunner.stream(pid)
 
-        task = Task.async(fn ->
-          AgentCore.EventStream.events(stream) |> Enum.to_list()
-        end)
+        task =
+          Task.async(fn ->
+            AgentCore.EventStream.events(stream) |> Enum.to_list()
+          end)
 
         events = Task.await(task, 200_000)
 

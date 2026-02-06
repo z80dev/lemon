@@ -372,8 +372,13 @@ defmodule CodingAgent.ConfigTest do
 
       on_exit(fn ->
         # Restore original values
-        if original_pi_debug, do: System.put_env("PI_DEBUG", original_pi_debug), else: System.delete_env("PI_DEBUG")
-        if original_debug, do: System.put_env("DEBUG", original_debug), else: System.delete_env("DEBUG")
+        if original_pi_debug,
+          do: System.put_env("PI_DEBUG", original_pi_debug),
+          else: System.delete_env("PI_DEBUG")
+
+        if original_debug,
+          do: System.put_env("DEBUG", original_debug),
+          else: System.delete_env("DEBUG")
       end)
 
       :ok

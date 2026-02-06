@@ -441,7 +441,8 @@ defmodule CodingAgent.MentionsTest do
     test "unicode in prompt text is preserved", %{tmp_dir: tmp_dir} do
       create_subagent(tmp_dir, "agent", "Test agent")
 
-      result = Mentions.parse("@agent \u65E5\u672C\u8A9E\u306E\u30E1\u30C3\u30BB\u30FC\u30B8", tmp_dir)
+      result =
+        Mentions.parse("@agent \u65E5\u672C\u8A9E\u306E\u30E1\u30C3\u30BB\u30FC\u30B8", tmp_dir)
 
       assert {:ok, mention} = result
       assert mention.prompt == "\u65E5\u672C\u8A9E\u306E\u30E1\u30C3\u30BB\u30FC\u30B8"
@@ -511,7 +512,8 @@ defmodule CodingAgent.MentionsTest do
     test "flag emojis in prompt", %{tmp_dir: tmp_dir} do
       create_subagent(tmp_dir, "agent", "Test agent")
 
-      result = Mentions.parse("@agent \u{1F1FA}\u{1F1F8} \u{1F1E8}\u{1F1E6} \u{1F1EF}\u{1F1F5}", tmp_dir)
+      result =
+        Mentions.parse("@agent \u{1F1FA}\u{1F1F8} \u{1F1E8}\u{1F1E6} \u{1F1EF}\u{1F1F5}", tmp_dir)
 
       assert {:ok, mention} = result
       assert String.contains?(mention.prompt, "\u{1F1FA}\u{1F1F8}")

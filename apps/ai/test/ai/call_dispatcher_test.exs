@@ -56,7 +56,10 @@ defmodule Ai.CallDispatcherTest do
 
     test "dispatch enforces concurrency cap", %{provider: provider} do
       # Start rate limiter and circuit breaker
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100})
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 5})
 
       # Set concurrency cap to 1
@@ -89,7 +92,10 @@ defmodule Ai.CallDispatcherTest do
     end
 
     test "dispatcher releases slot if caller is killed", %{provider: provider} do
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100})
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 5})
 
       CallDispatcher.set_concurrency_cap(provider, 1)

@@ -243,7 +243,7 @@ defmodule Ai.CallDispatcher do
     end
   end
 
-    @impl true
+  @impl true
   def handle_call({:set_concurrency_cap, provider, cap}, _from, state) do
     new_caps = Map.put(state.concurrency_caps, provider, cap)
     {:reply, :ok, %{state | concurrency_caps: new_caps}}
@@ -272,7 +272,7 @@ defmodule Ai.CallDispatcher do
     {:reply, info, state}
   end
 
-@impl true
+  @impl true
   def handle_info({:DOWN, monitor_ref, :process, _pid, _reason}, state) do
     case Map.pop(state.monitors, monitor_ref) do
       {nil, _monitors} ->

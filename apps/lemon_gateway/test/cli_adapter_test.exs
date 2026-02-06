@@ -1,7 +1,14 @@
 defmodule LemonGateway.CliAdapterTest do
   use ExUnit.Case
 
-  alias AgentCore.CliRunners.Types.{Action, ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
+  alias AgentCore.CliRunners.Types.{
+    Action,
+    ActionEvent,
+    CompletedEvent,
+    ResumeToken,
+    StartedEvent
+  }
+
   alias LemonGateway.Engines.CliAdapter
   alias LemonGateway.Event
   alias LemonGateway.Types.ResumeToken, as: GatewayToken
@@ -18,7 +25,11 @@ defmodule LemonGateway.CliAdapterTest do
     action = Action.new("a1", :command, "ls -la", %{})
     ev = ActionEvent.new("codex", action, :started, level: :info)
 
-    %Event.ActionEvent{engine: "codex", action: %Event.Action{id: "a1", kind: "command"}, phase: :started} =
+    %Event.ActionEvent{
+      engine: "codex",
+      action: %Event.Action{id: "a1", kind: "command"},
+      phase: :started
+    } =
       CliAdapter.to_gateway_event(ev)
   end
 

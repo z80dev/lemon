@@ -122,7 +122,13 @@ defmodule LemonGateway.Telegram.APITest do
       request(token, "getUpdates", params, timeout_ms, httpc_fun)
     end
 
-    def send_message(token, chat_id, text, reply_to_message_id \\ nil, httpc_fun \\ &default_httpc/4) do
+    def send_message(
+          token,
+          chat_id,
+          text,
+          reply_to_message_id \\ nil,
+          httpc_fun \\ &default_httpc/4
+        ) do
       params =
         %{
           "chat_id" => chat_id,
@@ -155,7 +161,9 @@ defmodule LemonGateway.Telegram.APITest do
 
       opts = [timeout: timeout_ms, connect_timeout: timeout_ms]
 
-      case httpc_fun.(:post, {to_charlist(url), headers, ~c"application/json", body}, opts, body_format: :binary) do
+      case httpc_fun.(:post, {to_charlist(url), headers, ~c"application/json", body}, opts,
+             body_format: :binary
+           ) do
         {:ok, {{_, 200, _}, _headers, response_body}} ->
           Jason.decode(response_body)
 
@@ -185,10 +193,10 @@ defmodule LemonGateway.Telegram.APITest do
     end
   end
 
-
   describe "get_updates/3" do
     test "sends correct request to Telegram API" do
-      response = {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => []})}}
+      response =
+        {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => []})}}
 
       result = TestableAPI.get_updates("test_token", 0, 30_000, mock_httpc(response))
 
@@ -203,11 +211,13 @@ defmodule LemonGateway.Telegram.APITest do
     end
 
     test "sends correct offset parameter" do
-      response = {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => []})}}
+      response =
+        {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => []})}}
 
       TestableAPI.get_updates("token", 12345, 5_000, mock_httpc(response))
 
-      assert_receive {:httpc_request, :post, _url, _headers, _content_type, body, _http_opts, _opts}
+      assert_receive {:httpc_request, :post, _url, _headers, _content_type, body, _http_opts,
+                      _opts}
 
       assert Jason.decode!(body)["offset"] == 12345
     end
@@ -218,7 +228,9 @@ defmodule LemonGateway.Telegram.APITest do
         %{"update_id" => 2, "message" => %{"text" => "world"}}
       ]
 
-      response = {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => updates})}}
+      response =
+        {:ok,
+         {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => updates})}}
 
       result = TestableAPI.get_updates("token", 0, 10_000, mock_httpc(response))
 
@@ -226,7 +238,8 @@ defmodule LemonGateway.Telegram.APITest do
     end
 
     test "handles empty updates list" do
-      response = {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => []})}}
+      response =
+        {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => []})}}
 
       result = TestableAPI.get_updates("token", 0, 10_000, mock_httpc(response))
 
@@ -282,11 +295,13 @@ defmodule LemonGateway.Telegram.APITest do
     end
 
     test "uses custom timeout value" do
-      response = {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => []})}}
+      response =
+        {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => []})}}
 
       TestableAPI.get_updates("token", 0, 60_000, mock_httpc(response))
 
-      assert_receive {:httpc_request, :post, _url, _headers, _content_type, _body, http_opts, _opts}
+      assert_receive {:httpc_request, :post, _url, _headers, _content_type, _body, http_opts,
+                      _opts}
 
       assert Keyword.get(http_opts, :timeout) == 60_000
       assert Keyword.get(http_opts, :connect_timeout) == 60_000
@@ -295,13 +310,18 @@ defmodule LemonGateway.Telegram.APITest do
 
   describe "send_message/4" do
     test "sends message without reply_to" do
-      response = {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => %{"message_id" => 123}})}}
+      response =
+        {:ok,
+         {{~c"HTTP/1.1", 200, ~c"OK"}, [],
+          Jason.encode!(%{"ok" => true, "result" => %{"message_id" => 123}})}}
 
-      result = TestableAPI.send_message("token", 12345, "Hello, World!", nil, mock_httpc(response))
+      result =
+        TestableAPI.send_message("token", 12345, "Hello, World!", nil, mock_httpc(response))
 
       assert {:ok, %{"ok" => true, "result" => %{"message_id" => 123}}} = result
 
-      assert_receive {:httpc_request, :post, url, _headers, _content_type, body, _http_opts, _opts}
+      assert_receive {:httpc_request, :post, url, _headers, _content_type, body, _http_opts,
+                      _opts}
 
       assert to_string(url) == "https://api.telegram.org/bottoken/sendMessage"
       decoded_body = Jason.decode!(body)
@@ -312,13 +332,17 @@ defmodule LemonGateway.Telegram.APITest do
     end
 
     test "sends message with reply_to" do
-      response = {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => %{"message_id" => 124}})}}
+      response =
+        {:ok,
+         {{~c"HTTP/1.1", 200, ~c"OK"}, [],
+          Jason.encode!(%{"ok" => true, "result" => %{"message_id" => 124}})}}
 
       result = TestableAPI.send_message("token", 12345, "Reply text", 999, mock_httpc(response))
 
       assert {:ok, %{"ok" => true, "result" => %{"message_id" => 124}}} = result
 
-      assert_receive {:httpc_request, :post, _url, _headers, _content_type, body, _http_opts, _opts}
+      assert_receive {:httpc_request, :post, _url, _headers, _content_type, body, _http_opts,
+                      _opts}
 
       decoded_body = Jason.decode!(body)
       assert decoded_body["reply_to_message_id"] == 999
@@ -326,38 +350,59 @@ defmodule LemonGateway.Telegram.APITest do
 
     test "handles long messages" do
       long_text = String.duplicate("x", 4096)
-      response = {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => %{"message_id" => 125}})}}
+
+      response =
+        {:ok,
+         {{~c"HTTP/1.1", 200, ~c"OK"}, [],
+          Jason.encode!(%{"ok" => true, "result" => %{"message_id" => 125}})}}
 
       result = TestableAPI.send_message("token", 12345, long_text, nil, mock_httpc(response))
 
       assert {:ok, _} = result
 
-      assert_receive {:httpc_request, :post, _url, _headers, _content_type, body, _http_opts, _opts}
+      assert_receive {:httpc_request, :post, _url, _headers, _content_type, body, _http_opts,
+                      _opts}
 
       assert Jason.decode!(body)["text"] == long_text
     end
 
     test "handles unicode in messages" do
       unicode_text = "Hello! \u{1F600} \u{1F389}"
-      response = {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => %{"message_id" => 126}})}}
+
+      response =
+        {:ok,
+         {{~c"HTTP/1.1", 200, ~c"OK"}, [],
+          Jason.encode!(%{"ok" => true, "result" => %{"message_id" => 126}})}}
 
       result = TestableAPI.send_message("token", 12345, unicode_text, nil, mock_httpc(response))
 
       assert {:ok, _} = result
 
-      assert_receive {:httpc_request, :post, _url, _headers, _content_type, body, _http_opts, _opts}
+      assert_receive {:httpc_request, :post, _url, _headers, _content_type, body, _http_opts,
+                      _opts}
 
       assert Jason.decode!(body)["text"] == unicode_text
     end
 
     test "handles negative chat_id (groups)" do
-      response = {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => %{"message_id" => 127}})}}
+      response =
+        {:ok,
+         {{~c"HTTP/1.1", 200, ~c"OK"}, [],
+          Jason.encode!(%{"ok" => true, "result" => %{"message_id" => 127}})}}
 
-      result = TestableAPI.send_message("token", -100_123_456_789, "Group message", nil, mock_httpc(response))
+      result =
+        TestableAPI.send_message(
+          "token",
+          -100_123_456_789,
+          "Group message",
+          nil,
+          mock_httpc(response)
+        )
 
       assert {:ok, _} = result
 
-      assert_receive {:httpc_request, :post, _url, _headers, _content_type, body, _http_opts, _opts}
+      assert_receive {:httpc_request, :post, _url, _headers, _content_type, body, _http_opts,
+                      _opts}
 
       assert Jason.decode!(body)["chat_id"] == -100_123_456_789
     end
@@ -409,13 +454,18 @@ defmodule LemonGateway.Telegram.APITest do
 
   describe "edit_message_text/4" do
     test "sends correct edit request" do
-      response = {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => %{"message_id" => 456}})}}
+      response =
+        {:ok,
+         {{~c"HTTP/1.1", 200, ~c"OK"}, [],
+          Jason.encode!(%{"ok" => true, "result" => %{"message_id" => 456}})}}
 
-      result = TestableAPI.edit_message_text("token", 12345, 456, "Updated text", mock_httpc(response))
+      result =
+        TestableAPI.edit_message_text("token", 12345, 456, "Updated text", mock_httpc(response))
 
       assert {:ok, %{"ok" => true, "result" => %{"message_id" => 456}}} = result
 
-      assert_receive {:httpc_request, :post, url, _headers, _content_type, body, _http_opts, _opts}
+      assert_receive {:httpc_request, :post, url, _headers, _content_type, body, _http_opts,
+                      _opts}
 
       assert to_string(url) == "https://api.telegram.org/bottoken/editMessageText"
       decoded_body = Jason.decode!(body)
@@ -449,7 +499,8 @@ defmodule LemonGateway.Telegram.APITest do
 
       response = {:ok, {{~c"HTTP/1.1", 400, ~c"Bad Request"}, [], Jason.encode!(error_response)}}
 
-      result = TestableAPI.edit_message_text("token", 12345, 456, "Same text", mock_httpc(response))
+      result =
+        TestableAPI.edit_message_text("token", 12345, 456, "Same text", mock_httpc(response))
 
       assert {:error, {:http_error, 400, body}} = result
       assert Jason.decode!(body)["description"] =~ "message is not modified"
@@ -494,7 +545,8 @@ defmodule LemonGateway.Telegram.APITest do
         "parameters" => %{"retry_after" => 30}
       }
 
-      response = {:ok, {{~c"HTTP/1.1", 429, ~c"Too Many Requests"}, [], Jason.encode!(error_response)}}
+      response =
+        {:ok, {{~c"HTTP/1.1", 429, ~c"Too Many Requests"}, [], Jason.encode!(error_response)}}
 
       result = TestableAPI.send_message("token", 12345, "Text", nil, mock_httpc(response))
 
@@ -505,7 +557,9 @@ defmodule LemonGateway.Telegram.APITest do
     end
 
     test "handles HTTP 503 Service Unavailable" do
-      response = {:ok, {{~c"HTTP/1.1", 503, ~c"Service Unavailable"}, [], "Service Temporarily Unavailable"}}
+      response =
+        {:ok,
+         {{~c"HTTP/1.1", 503, ~c"Service Unavailable"}, [], "Service Temporarily Unavailable"}}
 
       result = TestableAPI.get_updates("token", 0, 10_000, mock_httpc(response))
 
@@ -521,7 +575,10 @@ defmodule LemonGateway.Telegram.APITest do
     end
 
     test "handles network error during request" do
-      response = {:error, {:failed_connect, [{:to_address, {~c"api.telegram.org", 443}}, {:inet, [:inet], :etimedout}]}}
+      response =
+        {:error,
+         {:failed_connect,
+          [{:to_address, {~c"api.telegram.org", 443}}, {:inet, [:inet], :etimedout}]}}
 
       result = TestableAPI.get_updates("token", 0, 10_000, mock_httpc(response))
 
@@ -581,7 +638,8 @@ defmodule LemonGateway.Telegram.APITest do
         "parameters" => %{"retry_after" => 60}
       }
 
-      response = {:ok, {{~c"HTTP/1.1", 429, ~c"Too Many Requests"}, [], Jason.encode!(error_response)}}
+      response =
+        {:ok, {{~c"HTTP/1.1", 429, ~c"Too Many Requests"}, [], Jason.encode!(error_response)}}
 
       result = TestableAPI.send_message("token", 12345, "Text", nil, mock_httpc(response))
 
@@ -596,7 +654,8 @@ defmodule LemonGateway.Telegram.APITest do
         "description" => "Too Many Requests"
       }
 
-      response = {:ok, {{~c"HTTP/1.1", 429, ~c"Too Many Requests"}, [], Jason.encode!(error_response)}}
+      response =
+        {:ok, {{~c"HTTP/1.1", 429, ~c"Too Many Requests"}, [], Jason.encode!(error_response)}}
 
       result = TestableAPI.send_message("token", 12345, "Text", nil, mock_httpc(response))
 
@@ -614,7 +673,8 @@ defmodule LemonGateway.Telegram.APITest do
         }
       }
 
-      response = {:ok, {{~c"HTTP/1.1", 429, ~c"Too Many Requests"}, [], Jason.encode!(error_response)}}
+      response =
+        {:ok, {{~c"HTTP/1.1", 429, ~c"Too Many Requests"}, [], Jason.encode!(error_response)}}
 
       result = TestableAPI.send_message("token", -100_123_456, "Text", nil, mock_httpc(response))
 
@@ -626,18 +686,21 @@ defmodule LemonGateway.Telegram.APITest do
 
   describe "request headers" do
     test "sends correct content-type header" do
-      response = {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => []})}}
+      response =
+        {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => []})}}
 
       TestableAPI.get_updates("token", 0, 10_000, mock_httpc(response))
 
-      assert_receive {:httpc_request, :post, _url, headers, content_type, _body, _http_opts, _opts}
+      assert_receive {:httpc_request, :post, _url, headers, content_type, _body, _http_opts,
+                      _opts}
 
       assert {~c"content-type", ~c"application/json"} in headers
       assert content_type == ~c"application/json"
     end
 
     test "uses POST method for all requests" do
-      response = {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => []})}}
+      response =
+        {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => []})}}
 
       TestableAPI.get_updates("token", 0, 10_000, mock_httpc(response))
       assert_receive {:httpc_request, :post, _, _, _, _, _, _}
@@ -652,7 +715,8 @@ defmodule LemonGateway.Telegram.APITest do
 
   describe "URL construction" do
     test "constructs correct URL for getUpdates" do
-      response = {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => []})}}
+      response =
+        {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => []})}}
 
       TestableAPI.get_updates("my_bot_token", 0, 10_000, mock_httpc(response))
 
@@ -661,7 +725,8 @@ defmodule LemonGateway.Telegram.APITest do
     end
 
     test "constructs correct URL for sendMessage" do
-      response = {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => %{}})}}
+      response =
+        {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => %{}})}}
 
       TestableAPI.send_message("another_token", 12345, "Text", nil, mock_httpc(response))
 
@@ -670,7 +735,8 @@ defmodule LemonGateway.Telegram.APITest do
     end
 
     test "constructs correct URL for editMessageText" do
-      response = {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => %{}})}}
+      response =
+        {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => %{}})}}
 
       TestableAPI.edit_message_text("edit_token", 12345, 456, "Text", mock_httpc(response))
 
@@ -681,7 +747,9 @@ defmodule LemonGateway.Telegram.APITest do
     test "handles special characters in token" do
       # Telegram tokens can contain colons and alphanumeric characters
       token = "123456789:ABCdefGHIjklMNOpqrSTUvwxYZ"
-      response = {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => []})}}
+
+      response =
+        {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => []})}}
 
       TestableAPI.get_updates(token, 0, 10_000, mock_httpc(response))
 
@@ -692,7 +760,8 @@ defmodule LemonGateway.Telegram.APITest do
 
   describe "edge cases" do
     test "handles very large offset values" do
-      response = {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => []})}}
+      response =
+        {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => []})}}
 
       TestableAPI.get_updates("token", 999_999_999_999, 10_000, mock_httpc(response))
 
@@ -701,7 +770,8 @@ defmodule LemonGateway.Telegram.APITest do
     end
 
     test "handles zero timeout" do
-      response = {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => []})}}
+      response =
+        {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => []})}}
 
       TestableAPI.get_updates("token", 0, 0, mock_httpc(response))
 
@@ -710,7 +780,10 @@ defmodule LemonGateway.Telegram.APITest do
     end
 
     test "handles empty text message" do
-      response = {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => %{"message_id" => 1}})}}
+      response =
+        {:ok,
+         {{~c"HTTP/1.1", 200, ~c"OK"}, [],
+          Jason.encode!(%{"ok" => true, "result" => %{"message_id" => 1}})}}
 
       result = TestableAPI.send_message("token", 12345, "", nil, mock_httpc(response))
 
@@ -719,7 +792,8 @@ defmodule LemonGateway.Telegram.APITest do
     end
 
     test "handles message_id of 0" do
-      response = {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => %{}})}}
+      response =
+        {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => %{}})}}
 
       TestableAPI.edit_message_text("token", 12345, 0, "Text", mock_httpc(response))
 
@@ -729,7 +803,11 @@ defmodule LemonGateway.Telegram.APITest do
 
     test "handles newlines in message text" do
       text = "Line 1\nLine 2\nLine 3"
-      response = {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => %{"message_id" => 1}})}}
+
+      response =
+        {:ok,
+         {{~c"HTTP/1.1", 200, ~c"OK"}, [],
+          Jason.encode!(%{"ok" => true, "result" => %{"message_id" => 1}})}}
 
       result = TestableAPI.send_message("token", 12345, text, nil, mock_httpc(response))
 
@@ -741,7 +819,11 @@ defmodule LemonGateway.Telegram.APITest do
 
     test "handles special markdown characters in text" do
       text = "*bold* _italic_ `code` [link](http://example.com)"
-      response = {:ok, {{~c"HTTP/1.1", 200, ~c"OK"}, [], Jason.encode!(%{"ok" => true, "result" => %{"message_id" => 1}})}}
+
+      response =
+        {:ok,
+         {{~c"HTTP/1.1", 200, ~c"OK"}, [],
+          Jason.encode!(%{"ok" => true, "result" => %{"message_id" => 1}})}}
 
       result = TestableAPI.send_message("token", 12345, text, nil, mock_httpc(response))
 

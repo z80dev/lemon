@@ -214,10 +214,18 @@ defmodule CodingAgent.Tools.TaskTest do
       signal = AbortSignal.new()
       AbortSignal.abort(signal)
 
-      result = Task.execute("call_1", %{
-        "description" => "Test",
-        "prompt" => "do something"
-      }, signal, nil, "/tmp", [])
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Test",
+            "prompt" => "do something"
+          },
+          signal,
+          nil,
+          "/tmp",
+          []
+        )
 
       assert {:error, "Operation aborted"} = result
     end
@@ -225,11 +233,19 @@ defmodule CodingAgent.Tools.TaskTest do
 
   describe "execute/6 - unknown role" do
     test "returns error for unknown role" do
-      result = Task.execute("call_1", %{
-        "description" => "Test",
-        "prompt" => "do something",
-        "role" => "nonexistent_role_xyz"
-      }, nil, nil, "/tmp", [])
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Test",
+            "prompt" => "do something",
+            "role" => "nonexistent_role_xyz"
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       assert {:error, msg} = result
       assert msg =~ "Unknown role" or msg =~ "Failed to start"
@@ -279,7 +295,8 @@ defmodule CodingAgent.Tools.TaskTest do
 
     test "captures stderr warning action as error" do
       events = [
-        {:action, %{title: "CLI stderr output", kind: :warning, detail: %{stderr: "oops"}}, :completed, []},
+        {:action, %{title: "CLI stderr output", kind: :warning, detail: %{stderr: "oops"}},
+         :completed, []},
         {:completed, "answer", []}
       ]
 

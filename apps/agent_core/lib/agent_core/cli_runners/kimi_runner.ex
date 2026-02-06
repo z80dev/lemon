@@ -134,6 +134,7 @@ defmodule AgentCore.CliRunners.KimiRunner do
 
   def translate_event(%ErrorMessage{error: error}, state) do
     state = maybe_refresh_session(state)
+
     error_text =
       case error do
         text when is_binary(text) -> text
@@ -145,6 +146,7 @@ defmodule AgentCore.CliRunners.KimiRunner do
         answer: state.last_assistant_text || "",
         resume: state.found_session
       )
+
     state = %{state | factory: factory}
     {[event], state, [done: true]}
   end
@@ -157,12 +159,13 @@ defmodule AgentCore.CliRunners.KimiRunner do
     message = "kimi failed (rc=#{exit_code})"
     {note_event, factory} = EventFactory.note(state.factory, message, ok: false)
 
-    {completed_event, factory} = EventFactory.completed_error(
-      factory,
-      message,
-      answer: state.last_assistant_text || "",
-      resume: state.found_session
-    )
+    {completed_event, factory} =
+      EventFactory.completed_error(
+        factory,
+        message,
+        answer: state.last_assistant_text || "",
+        resume: state.found_session
+      )
 
     state = %{state | factory: factory}
     {[note_event, completed_event], state}
@@ -178,7 +181,9 @@ defmodule AgentCore.CliRunners.KimiRunner do
       {event, factory} = EventFactory.completed_error(state.factory, message, answer: "")
       {[event], %{state | factory: factory}}
     else
-      {event, factory} = EventFactory.completed_ok(state.factory, answer, resume: state.found_session)
+      {event, factory} =
+        EventFactory.completed_ok(state.factory, answer, resume: state.found_session)
+
       {[event], %{state | factory: factory}}
     end
   end
@@ -213,12 +218,14 @@ defmodule AgentCore.CliRunners.KimiRunner do
   end
 
   defp start_tool_calls(nil, state), do: {[], state}
+
   defp start_tool_calls(calls, state) when is_list(calls) do
     Enum.reduce(calls, {[], state}, fn call, {events_acc, state_acc} ->
       {new_events, new_state} = start_tool_call(call, state_acc)
       {events_acc ++ new_events, new_state}
     end)
   end
+
   defp start_tool_calls(_, state), do: {[], state}
 
   defp start_tool_call(%ToolCall{id: id, function: func} = call, state) do
@@ -235,7 +242,14 @@ defmodule AgentCore.CliRunners.KimiRunner do
     }
 
     {event, factory, pending_actions} =
-      ToolActionHelpers.start_action(state.factory, state.pending_actions, tool_id, kind, title, detail)
+      ToolActionHelpers.start_action(
+        state.factory,
+        state.pending_actions,
+        tool_id,
+        kind,
+        title,
+        detail
+      )
 
     state = %{state | factory: factory, pending_actions: pending_actions}
     {[event], state}
@@ -243,7 +257,10 @@ defmodule AgentCore.CliRunners.KimiRunner do
 
   defp start_tool_call(_, state), do: {[], state}
 
-  defp complete_tool_result(%Message{tool_call_id: tool_call_id, content: content, is_error: is_error}, state)
+  defp complete_tool_result(
+         %Message{tool_call_id: tool_call_id, content: content, is_error: is_error},
+         state
+       )
        when is_binary(tool_call_id) do
     ok = not (is_error == true)
     result_preview = ToolActionHelpers.normalize_tool_result(content)
@@ -255,7 +272,13 @@ defmodule AgentCore.CliRunners.KimiRunner do
     }
 
     {event, factory, pending_actions} =
-      ToolActionHelpers.complete_action(state.factory, state.pending_actions, tool_call_id, ok, detail)
+      ToolActionHelpers.complete_action(
+        state.factory,
+        state.pending_actions,
+        tool_call_id,
+        ok,
+        detail
+      )
 
     state = %{state | factory: factory, pending_actions: pending_actions}
     {[event], state}
@@ -449,7 +472,9 @@ defmodule AgentCore.CliRunners.KimiRunner do
 
   defp normalize_extra_args(nil), do: []
   defp normalize_extra_args(list) when is_list(list), do: Enum.map(list, &to_string/1)
-  defp normalize_extra_args(value) when is_binary(value), do: String.split(value, ~r/\s+/, trim: true)
-  defp normalize_extra_args(_), do: []
 
+  defp normalize_extra_args(value) when is_binary(value),
+    do: String.split(value, ~r/\s+/, trim: true)
+
+  defp normalize_extra_args(_), do: []
 end

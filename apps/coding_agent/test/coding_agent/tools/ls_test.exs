@@ -144,7 +144,8 @@ defmodule CodingAgent.Tools.LsTest do
       File.write!(Path.join(level2, "l2.txt"), "content")
       File.write!(Path.join(level3, "l3.txt"), "content")
 
-      result = Ls.execute("call_1", %{"recursive" => true, "max_depth" => 1}, nil, nil, tmp_dir, [])
+      result =
+        Ls.execute("call_1", %{"recursive" => true, "max_depth" => 1}, nil, nil, tmp_dir, [])
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "level1"

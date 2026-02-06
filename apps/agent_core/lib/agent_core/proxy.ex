@@ -220,7 +220,12 @@ defmodule AgentCore.Proxy do
   defp do_process_sse_stream(stream, state, signal, buffer) do
     # Check for abort
     if AbortSignal.aborted?(signal) do
-      error_partial = %{state.partial | stop_reason: :aborted, error_message: "Request aborted by user"}
+      error_partial = %{
+        state.partial
+        | stop_reason: :aborted,
+          error_message: "Request aborted by user"
+      }
+
       EventStream.error(stream, error_partial)
     else
       receive do
@@ -247,7 +252,12 @@ defmodule AgentCore.Proxy do
         # Timeout for checking abort signal
         100 ->
           if AbortSignal.aborted?(signal) do
-            error_partial = %{state.partial | stop_reason: :aborted, error_message: "Request aborted by user"}
+            error_partial = %{
+              state.partial
+              | stop_reason: :aborted,
+                error_message: "Request aborted by user"
+            }
+
             EventStream.error(stream, error_partial)
           else
             do_process_sse_stream(stream, state, signal, buffer)
@@ -294,7 +304,11 @@ defmodule AgentCore.Proxy do
     state
   end
 
-  defp process_proxy_event(%{"type" => "text_start", "contentIndex" => content_index}, state, stream) do
+  defp process_proxy_event(
+         %{"type" => "text_start", "contentIndex" => content_index},
+         state,
+         stream
+       ) do
     new_content = %TextContent{type: :text, text: ""}
     partial = update_content_at(state.partial, content_index, new_content)
     state = %{state | partial: partial}
@@ -349,7 +363,11 @@ defmodule AgentCore.Proxy do
     state
   end
 
-  defp process_proxy_event(%{"type" => "thinking_start", "contentIndex" => content_index}, state, stream) do
+  defp process_proxy_event(
+         %{"type" => "thinking_start", "contentIndex" => content_index},
+         state,
+         stream
+       ) do
     new_content = %ThinkingContent{type: :thinking, thinking: ""}
     partial = update_content_at(state.partial, content_index, new_content)
     state = %{state | partial: partial}
@@ -405,7 +423,12 @@ defmodule AgentCore.Proxy do
   end
 
   defp process_proxy_event(
-         %{"type" => "toolcall_start", "contentIndex" => content_index, "id" => id, "toolName" => tool_name},
+         %{
+           "type" => "toolcall_start",
+           "contentIndex" => content_index,
+           "id" => id,
+           "toolName" => tool_name
+         },
          state,
          stream
        ) do
@@ -451,7 +474,11 @@ defmodule AgentCore.Proxy do
     state
   end
 
-  defp process_proxy_event(%{"type" => "toolcall_end", "contentIndex" => content_index}, state, stream) do
+  defp process_proxy_event(
+         %{"type" => "toolcall_end", "contentIndex" => content_index},
+         state,
+         stream
+       ) do
     # Get the final tool call
     tool_call = Enum.at(state.partial.content, content_index)
 
@@ -464,7 +491,11 @@ defmodule AgentCore.Proxy do
     state
   end
 
-  defp process_proxy_event(%{"type" => "done", "reason" => reason, "usage" => usage_data}, state, stream) do
+  defp process_proxy_event(
+         %{"type" => "done", "reason" => reason, "usage" => usage_data},
+         state,
+         stream
+       ) do
     usage = decode_usage(usage_data)
     stop_reason = decode_stop_reason(reason)
 
@@ -484,7 +515,13 @@ defmodule AgentCore.Proxy do
     stop_reason = decode_stop_reason(reason)
     error_message = Map.get(event_data, "errorMessage")
 
-    partial = %{state.partial | stop_reason: stop_reason, usage: usage, error_message: error_message}
+    partial = %{
+      state.partial
+      | stop_reason: stop_reason,
+        usage: usage,
+        error_message: error_message
+    }
+
     state = %{state | partial: partial}
 
     EventStream.error(stream, partial)
@@ -640,7 +677,13 @@ defmodule AgentCore.Proxy do
   end
 
   defp encode_content_block(%Ai.Types.ToolCall{} = c) do
-    %{type: "toolCall", id: c.id, name: c.name, arguments: c.arguments, thoughtSignature: c.thought_signature}
+    %{
+      type: "toolCall",
+      id: c.id,
+      name: c.name,
+      arguments: c.arguments,
+      thoughtSignature: c.thought_signature
+    }
   end
 
   defp encode_tool(tool) do
@@ -717,7 +760,9 @@ defmodule AgentCore.Proxy do
 
     # Add closing characters.
     # Close brackets before braces (e.g. `{ "items": [1,2` needs `]}` not `}]`).
-    closing = String.duplicate("]", max(open_brackets, 0)) <> String.duplicate("}", max(open_braces, 0))
+    closing =
+      String.duplicate("]", max(open_brackets, 0)) <> String.duplicate("}", max(open_braces, 0))
+
     json <> closing
   end
 end

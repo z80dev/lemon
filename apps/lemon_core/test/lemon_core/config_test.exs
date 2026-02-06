@@ -139,4 +139,55 @@ defmodule LemonCore.ConfigTest do
   after
     System.delete_env("ANTHROPIC_BASE_URL")
   end
+
+  test "parses agents from config (including tool_policy)", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [agents.default]
+    name = "Daily Assistant"
+    default_engine = "lemon"
+    system_prompt = "You are my daily assistant."
+    model = "anthropic:claude-sonnet-4-20250514"
+
+    [agents.default.tool_policy]
+    allow = "all"
+    deny = ["process_kill"]
+    require_approval = ["bash", "write"]
+    no_reply = false
+    """)
+
+    config = Config.load()
+
+    assert config.agents["default"].name == "Daily Assistant"
+    assert config.agents["default"].default_engine == "lemon"
+    assert config.agents["default"].system_prompt == "You are my daily assistant."
+    assert config.agents["default"].model == "anthropic:claude-sonnet-4-20250514"
+    assert config.agents["default"].tool_policy.allow == :all
+    assert "process_kill" in config.agents["default"].tool_policy.deny
+    assert "bash" in config.agents["default"].tool_policy.require_approval
+  end
+
+  test "parses gateway binding agent_id", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [gateway]
+    enable_telegram = true
+
+    [[gateway.bindings]]
+    transport = "telegram"
+    chat_id = 123
+    agent_id = "daily"
+    """)
+
+    config = Config.load()
+
+    [binding] = config.gateway.bindings
+    assert binding.transport == "telegram"
+    assert binding.chat_id == 123
+    assert binding.agent_id == "daily"
+  end
 end

@@ -112,6 +112,7 @@ defmodule LemonGateway.ConfigLoader do
         chat_id: fetch(b, :chat_id),
         topic_id: fetch(b, :topic_id),
         project: fetch(b, :project),
+        agent_id: fetch(b, :agent_id),
         default_engine: fetch(b, :default_engine),
         queue_mode: parse_queue_mode(fetch(b, :queue_mode))
       }

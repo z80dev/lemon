@@ -85,17 +85,26 @@ defmodule AgentCore.CliRunners.JsonlRunner do
   @callback engine() :: String.t()
 
   @doc "Build the command and arguments to execute"
-  @callback build_command(prompt :: String.t(), resume :: resume_option(), state :: runner_state()) ::
+  @callback build_command(
+              prompt :: String.t(),
+              resume :: resume_option(),
+              state :: runner_state()
+            ) ::
               {command :: String.t(), args :: [String.t()]}
 
   @doc "Create initial runner state"
   @callback init_state(prompt :: String.t(), resume :: resume_option()) :: runner_state()
 
   @doc "Create initial runner state with cwd context"
-  @callback init_state(prompt :: String.t(), resume :: resume_option(), cwd :: String.t()) :: runner_state()
+  @callback init_state(prompt :: String.t(), resume :: resume_option(), cwd :: String.t()) ::
+              runner_state()
 
   @doc "Return bytes to send to stdin (or nil for no input)"
-  @callback stdin_payload(prompt :: String.t(), resume :: resume_option(), state :: runner_state()) ::
+  @callback stdin_payload(
+              prompt :: String.t(),
+              resume :: resume_option(),
+              state :: runner_state()
+            ) ::
               binary() | nil
 
   @doc "Decode a JSON line into a data structure"
@@ -109,7 +118,8 @@ defmodule AgentCore.CliRunners.JsonlRunner do
   - `:done` - true if this is the final event
   """
   @callback translate_event(data :: term(), state :: runner_state()) ::
-              {events :: [AgentCore.CliRunners.Types.cli_event()], state :: runner_state(), opts :: keyword()}
+              {events :: [AgentCore.CliRunners.Types.cli_event()], state :: runner_state(),
+               opts :: keyword()}
 
   @doc "Handle non-zero exit code"
   @callback handle_exit_error(exit_code :: integer(), state :: runner_state()) ::
@@ -386,7 +396,11 @@ defmodule AgentCore.CliRunners.JsonlRunner do
 
     # Build environment
     base_env = module.env(state.runner_state) || []
-    env = Enum.map(base_env ++ state.extra_env, fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end)
+
+    env =
+      Enum.map(base_env ++ state.extra_env, fn {k, v} ->
+        {String.to_charlist(k), String.to_charlist(v)}
+      end)
 
     # Since Erlang ports can't close stdin, we need to pipe stdin through a shell
     # This ensures EOF is properly sent after the input
@@ -398,19 +412,21 @@ defmodule AgentCore.CliRunners.JsonlRunner do
 
         # Build shell command that pipes temp file to the executable
         escaped_args = Enum.map(args, &escape_shell_arg/1) |> Enum.join(" ")
+
         shell_command =
           "cat #{escape_shell_arg(tmp_file)} | #{escape_shell_arg(cmd_path)} #{escaped_args} 2> #{escape_shell_arg(stderr_path)}; rm -f #{escape_shell_arg(tmp_file)}"
 
         shell_path = System.find_executable("bash") || System.find_executable("sh") || "/bin/sh"
 
-        opts = [
-          :binary,
-          :exit_status,
-          :use_stdio,
-          :stderr_to_stdout,
-          {:cd, state.cwd},
-          {:args, ["-c", shell_command]}
-        ] ++ if env != [], do: [{:env, env}], else: []
+        opts =
+          [
+            :binary,
+            :exit_status,
+            :use_stdio,
+            :stderr_to_stdout,
+            {:cd, state.cwd},
+            {:args, ["-c", shell_command]}
+          ] ++ if env != [], do: [{:env, env}], else: []
 
         {shell_path, opts}
       else
@@ -418,18 +434,21 @@ defmodule AgentCore.CliRunners.JsonlRunner do
         # and avoid TTY buffering issues. Important: redirect stdin from /dev/null to ensure
         # the subprocess gets EOF immediately (some CLIs like Claude wait for stdin to close)
         escaped_args = Enum.map(args, &escape_shell_arg/1) |> Enum.join(" ")
-        shell_command = "#{escape_shell_arg(cmd_path)} #{escaped_args} </dev/null 2> #{escape_shell_arg(stderr_path)}"
+
+        shell_command =
+          "#{escape_shell_arg(cmd_path)} #{escaped_args} </dev/null 2> #{escape_shell_arg(stderr_path)}"
 
         shell_path = System.find_executable("bash") || System.find_executable("sh") || "/bin/sh"
 
-        opts = [
-          :binary,
-          :exit_status,
-          :use_stdio,
-          :stderr_to_stdout,
-          {:cd, state.cwd},
-          {:args, ["-c", shell_command]}
-        ] ++ if env != [], do: [{:env, env}], else: []
+        opts =
+          [
+            :binary,
+            :exit_status,
+            :use_stdio,
+            :stderr_to_stdout,
+            {:cd, state.cwd},
+            {:args, ["-c", shell_command]}
+          ] ++ if env != [], do: [{:env, env}], else: []
 
         {shell_path, opts}
       end
@@ -438,14 +457,19 @@ defmodule AgentCore.CliRunners.JsonlRunner do
     shell_args = Keyword.get(port_opts, :args, [])
     shell_script = if length(shell_args) > 1, do: Enum.at(shell_args, 1), else: "N/A"
     debug_log = "/tmp/jsonl_runner_debug.log"
-    File.write!(debug_log, """
-    [#{DateTime.utc_now()}] JsonlRunner starting
-    cmd: #{cmd}
-    path: #{cmd_path || "NOT FOUND"}
-    cwd: #{state.cwd}
-    script: #{shell_script}
-    PATH: #{System.get_env("PATH")}
-    """, [:append])
+
+    File.write!(
+      debug_log,
+      """
+      [#{DateTime.utc_now()}] JsonlRunner starting
+      cmd: #{cmd}
+      path: #{cmd_path || "NOT FOUND"}
+      cwd: #{state.cwd}
+      script: #{shell_script}
+      PATH: #{System.get_env("PATH")}
+      """,
+      [:append]
+    )
 
     try do
       port = Port.open({:spawn_executable, shell_cmd}, port_opts)
@@ -457,7 +481,13 @@ defmodule AgentCore.CliRunners.JsonlRunner do
           Process.send_after(self(), :timeout, state.timeout)
         end
 
-      state = %{state | port: port, os_pid: os_pid, timeout_ref: timeout_ref, stderr_path: stderr_path}
+      state = %{
+        state
+        | port: port,
+          os_pid: os_pid,
+          timeout_ref: timeout_ref,
+          stderr_path: stderr_path
+      }
 
       {:noreply, state}
     rescue
@@ -515,12 +545,16 @@ defmodule AgentCore.CliRunners.JsonlRunner do
         "no stderr path"
       end
 
-    File.write!(debug_log, """
+    File.write!(
+      debug_log,
+      """
 
-    [#{DateTime.utc_now()}] Exit status: #{exit_code}
-    stderr_path: #{state.stderr_path}
-    stderr_content: #{stderr_content}
-    """, [:append])
+      [#{DateTime.utc_now()}] Exit status: #{exit_code}
+      stderr_path: #{state.stderr_path}
+      stderr_content: #{stderr_content}
+      """,
+      [:append]
+    )
 
     state =
       if state.done do
@@ -640,7 +674,12 @@ defmodule AgentCore.CliRunners.JsonlRunner do
             found_session = Keyword.get(opts, :found_session, state.found_session)
             done = Keyword.get(opts, :done, false)
 
-            state = %{state | runner_state: runner_state, found_session: found_session, done: done}
+            state = %{
+              state
+              | runner_state: runner_state,
+                found_session: found_session,
+                done: done
+            }
 
             case handle_started_events(events, state) do
               {:ok, state} ->
@@ -666,14 +705,28 @@ defmodule AgentCore.CliRunners.JsonlRunner do
       %StartedEvent{resume: resume}, {:ok, acc} ->
         cond do
           acc.resume != nil and resume != acc.resume ->
-            Logger.error("Resume session mismatch: expected #{inspect(acc.resume)}, got #{inspect(resume)}")
-            AgentCore.EventStream.error(acc.stream, {:session_mismatch, %{expected: acc.resume, got: resume}})
+            Logger.error(
+              "Resume session mismatch: expected #{inspect(acc.resume)}, got #{inspect(resume)}"
+            )
+
+            AgentCore.EventStream.error(
+              acc.stream,
+              {:session_mismatch, %{expected: acc.resume, got: resume}}
+            )
+
             terminate_subprocess(acc, :kill)
             {:halt, {:error, %{acc | done: true}}}
 
           acc.found_session != nil and resume != acc.found_session ->
-            Logger.error("Session switched midstream: expected #{inspect(acc.found_session)}, got #{inspect(resume)}")
-            AgentCore.EventStream.error(acc.stream, {:session_mismatch, %{expected: acc.found_session, got: resume}})
+            Logger.error(
+              "Session switched midstream: expected #{inspect(acc.found_session)}, got #{inspect(resume)}"
+            )
+
+            AgentCore.EventStream.error(
+              acc.stream,
+              {:session_mismatch, %{expected: acc.found_session, got: resume}}
+            )
+
             terminate_subprocess(acc, :kill)
             {:halt, {:error, %{acc | done: true}}}
 

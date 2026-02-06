@@ -41,10 +41,15 @@ defmodule Ai.Providers.AzureOpenAIResponsesTest do
     tool = %Tool{
       name: "lookup",
       description: "Lookup data",
-      parameters: %{"type" => "object", "properties" => %{"q" => %{"type" => "string"}}, "required" => ["q"]}
+      parameters: %{
+        "type" => "object",
+        "properties" => %{"q" => %{"type" => "string"}},
+        "required" => ["q"]
+      }
     }
 
-    context = Context.new(system_prompt: "System", messages: [%UserMessage{content: "Hi"}], tools: [tool])
+    context =
+      Context.new(system_prompt: "System", messages: [%UserMessage{content: "Hi"}], tools: [tool])
 
     opts =
       %StreamOptions{
@@ -75,7 +80,11 @@ defmodule Ai.Providers.AzureOpenAIResponsesTest do
           "type" => "function",
           "name" => "lookup",
           "description" => "Lookup data",
-          "parameters" => %{"type" => "object", "properties" => %{"q" => %{"type" => "string"}}, "required" => ["q"]},
+          "parameters" => %{
+            "type" => "object",
+            "properties" => %{"q" => %{"type" => "string"}},
+            "required" => ["q"]
+          },
           "strict" => false
         }
       ],

@@ -122,7 +122,8 @@ defmodule CodingAgent.RunGraph do
   Cleanup completed/error runs older than the TTL (seconds).
   """
   @spec cleanup(non_neg_integer()) :: :ok
-  def cleanup(ttl_seconds \\ @default_ttl_seconds) when is_integer(ttl_seconds) and ttl_seconds >= 0 do
+  def cleanup(ttl_seconds \\ @default_ttl_seconds)
+      when is_integer(ttl_seconds) and ttl_seconds >= 0 do
     {:ok, _count} = RunGraphServer.cleanup(CodingAgent.RunGraphServer, ttl_seconds)
     :ok
   end
@@ -154,6 +155,7 @@ defmodule CodingAgent.RunGraph do
           record
           |> update_fn.()
           |> Map.put(:updated_at, System.system_time(:second))
+
         insert_record(run_id, updated)
 
       {:error, :not_found} ->

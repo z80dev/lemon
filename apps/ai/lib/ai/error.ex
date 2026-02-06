@@ -81,8 +81,18 @@ defmodule Ai.Error do
     headers_map = headers_to_map(headers)
 
     %{
-      limit: get_rate_limit_value(headers_map, ["x-ratelimit-limit-requests", "x-ratelimit-limit-tokens", "ratelimit-limit"]),
-      remaining: get_rate_limit_value(headers_map, ["x-ratelimit-remaining-requests", "x-ratelimit-remaining-tokens", "ratelimit-remaining"]),
+      limit:
+        get_rate_limit_value(headers_map, [
+          "x-ratelimit-limit-requests",
+          "x-ratelimit-limit-tokens",
+          "ratelimit-limit"
+        ]),
+      remaining:
+        get_rate_limit_value(headers_map, [
+          "x-ratelimit-remaining-requests",
+          "x-ratelimit-remaining-tokens",
+          "ratelimit-remaining"
+        ]),
       reset_at: get_reset_time(headers_map),
       retry_after: get_retry_after(headers_map)
     }
@@ -98,8 +108,13 @@ defmodule Ai.Error do
   end
 
   def format_error(:rate_limited), do: "Request rate limited. Please wait before retrying."
-  def format_error(:circuit_open), do: "Service temporarily unavailable (circuit breaker open). Please try again later."
-  def format_error(:max_concurrency), do: "Too many concurrent requests. Please try again shortly."
+
+  def format_error(:circuit_open),
+    do: "Service temporarily unavailable (circuit breaker open). Please try again later."
+
+  def format_error(:max_concurrency),
+    do: "Too many concurrent requests. Please try again shortly."
+
   def format_error(:timeout), do: "Request timed out. Please try again."
   def format_error(:closed), do: "Connection closed unexpectedly. Please try again."
   def format_error(:econnrefused), do: "Connection refused. The service may be unavailable."
@@ -129,8 +144,10 @@ defmodule Ai.Error do
   def retryable?(:circuit_open), do: false
   def retryable?(:max_concurrency), do: true
   def retryable?({:unknown_api, _}), do: false
+
   def retryable?(error) when is_binary(error) do
     downcased = String.downcase(error)
+
     String.contains?(downcased, "timeout") or
       String.contains?(downcased, "rate limit") or
       String.contains?(downcased, "overloaded") or
@@ -139,6 +156,7 @@ defmodule Ai.Error do
       String.contains?(downcased, "502") or
       String.contains?(downcased, "504")
   end
+
   def retryable?(_), do: false
 
   @doc """
@@ -294,22 +312,31 @@ defmodule Ai.Error do
 
   # Provider-specific error message extraction
   # Google API format (prefer first entry in errors array when a top-level message is present)
-  defp extract_provider_message(%{"error" => %{"errors" => [%{"message" => message} | _], "message" => _top_message}})
+  defp extract_provider_message(%{
+         "error" => %{"errors" => [%{"message" => message} | _], "message" => _top_message}
+       })
        when is_binary(message),
        do: message
 
   # Anthropic format
-  defp extract_provider_message(%{"error" => %{"message" => message}}) when is_binary(message), do: message
-  defp extract_provider_message(%{"error" => %{"type" => type, "message" => message}}) when is_binary(type) and is_binary(message) do
+  defp extract_provider_message(%{"error" => %{"message" => message}}) when is_binary(message),
+    do: message
+
+  defp extract_provider_message(%{"error" => %{"type" => type, "message" => message}})
+       when is_binary(type) and is_binary(message) do
     "#{type}: #{message}"
   end
+
   # OpenAI format
-  defp extract_provider_message(%{"error" => %{"code" => code, "message" => message}}) when is_binary(code) and is_binary(message) do
+  defp extract_provider_message(%{"error" => %{"code" => code, "message" => message}})
+       when is_binary(code) and is_binary(message) do
     "#{code}: #{message}"
   end
+
   defp extract_provider_message(%{"error" => %{"code" => code}}) when is_binary(code), do: code
   # Generic error formats
   defp extract_provider_message(%{"error" => error}) when is_binary(error), do: error
+
   defp extract_provider_message(%{"error" => error_map}) when is_map(error_map) do
     # Try to extract nested error information
     parts = []
@@ -323,36 +350,45 @@ defmodule Ai.Error do
       _ -> Enum.join(parts, " - ")
     end
   end
+
   # Direct message fields
   defp extract_provider_message(%{"message" => message}) when is_binary(message), do: message
   defp extract_provider_message(%{"Message" => message}) when is_binary(message), do: message
   defp extract_provider_message(%{"detail" => detail}) when is_binary(detail), do: detail
   # Google API format
-  defp extract_provider_message(%{"error" => %{"status" => status, "message" => message}}) when is_binary(status) and is_binary(message) do
+  defp extract_provider_message(%{"error" => %{"status" => status, "message" => message}})
+       when is_binary(status) and is_binary(message) do
     "#{status}: #{message}"
   end
+
   # AWS/Bedrock format
-  defp extract_provider_message(%{"__type" => type, "message" => message}) when is_binary(type) and is_binary(message) do
+  defp extract_provider_message(%{"__type" => type, "message" => message})
+       when is_binary(type) and is_binary(message) do
     "#{type}: #{message}"
   end
+
   # Fallback for maps
-  defp extract_provider_message(body) when is_map(body), do: inspect(body) |> truncate_message(200)
+  defp extract_provider_message(body) when is_map(body),
+    do: inspect(body) |> truncate_message(200)
+
   defp extract_provider_message(_), do: nil
 
   defp truncate_message(msg, max_length) when byte_size(msg) > max_length do
     String.slice(msg, 0, max_length) <> "..."
   end
+
   defp truncate_message(msg, _), do: msg
 
   defp build_error_message(status, provider_message, category) do
-    base_message = case category do
-      :rate_limit -> "Rate limit exceeded"
-      :auth -> "Authentication failed"
-      :client -> "Invalid request"
-      :server -> "Server error"
-      :transient -> "Service temporarily unavailable"
-      :unknown -> "Request failed"
-    end
+    base_message =
+      case category do
+        :rate_limit -> "Rate limit exceeded"
+        :auth -> "Authentication failed"
+        :client -> "Invalid request"
+        :server -> "Server error"
+        :transient -> "Service temporarily unavailable"
+        :unknown -> "Request failed"
+      end
 
     if provider_message do
       "#{base_message} (HTTP #{status}): #{provider_message}"
@@ -400,6 +436,7 @@ defmodule Ai.Error do
       :error -> nil
     end
   end
+
   defp parse_integer(value) when is_integer(value), do: value
   defp parse_integer(_), do: nil
 
@@ -408,6 +445,7 @@ defmodule Ai.Error do
     case Integer.parse(value) do
       {timestamp, _} ->
         DateTime.from_unix(timestamp) |> elem(1)
+
       :error ->
         # Try parsing as ISO 8601
         case DateTime.from_iso8601(value) do
@@ -416,18 +454,22 @@ defmodule Ai.Error do
         end
     end
   end
+
   defp parse_reset_time(_), do: nil
 
   defp parse_retry_after(value) when is_binary(value) do
     # Retry-After can be seconds or an HTTP date
     case Integer.parse(value) do
       {seconds, _} ->
-        seconds * 1000  # Convert to milliseconds
+        # Convert to milliseconds
+        seconds * 1000
+
       :error ->
         # Try parsing as HTTP date (not commonly used, return nil for simplicity)
         nil
     end
   end
+
   defp parse_retry_after(value) when is_integer(value), do: value * 1000
   defp parse_retry_after(_), do: nil
 end

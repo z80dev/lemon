@@ -176,7 +176,8 @@ defmodule CodingAgent.ToolPolicy do
   a `require_approval` key.
   """
   @spec requires_approval?(policy() | map(), String.t()) :: boolean()
-  def requires_approval?(%{require_approval: approval_list}, tool_name) when is_list(approval_list) do
+  def requires_approval?(%{require_approval: approval_list}, tool_name)
+      when is_list(approval_list) do
     tool_name in approval_list
   end
 

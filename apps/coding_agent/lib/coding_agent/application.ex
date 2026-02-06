@@ -22,11 +22,13 @@ defmodule CodingAgent.Application do
       {CodingAgent.RunGraphServer, name: CodingAgent.RunGraphServer},
       {CodingAgent.ProcessStoreServer, name: CodingAgent.ProcessStoreServer},
       {CodingAgent.ProcessManager, name: CodingAgent.ProcessManager},
-      {CodingAgent.LaneQueue, name: CodingAgent.LaneQueue, caps: lane_caps, task_supervisor: CodingAgent.TaskSupervisor},
+      {CodingAgent.LaneQueue,
+       name: CodingAgent.LaneQueue, caps: lane_caps, task_supervisor: CodingAgent.TaskSupervisor},
       {CodingAgent.CompactionHooks, name: CodingAgent.CompactionHooks}
     ]
 
     opts = [strategy: :one_for_one, name: CodingAgent.Supervisor]
+
     case Supervisor.start_link(children, opts) do
       {:ok, _supervisor} = ok ->
         maybe_start_primary_session()

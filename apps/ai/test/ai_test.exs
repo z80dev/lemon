@@ -3,7 +3,17 @@ defmodule AiTest do
 
   alias Ai.EventStream
   alias Ai.ProviderRegistry
-  alias Ai.Types.{Context, UserMessage, TextContent, AssistantMessage, Usage, Cost, Model, StreamOptions}
+
+  alias Ai.Types.{
+    Context,
+    UserMessage,
+    TextContent,
+    AssistantMessage,
+    Usage,
+    Cost,
+    Model,
+    StreamOptions
+  }
 
   defmodule StreamTimeoutProvider do
     @behaviour Ai.Provider

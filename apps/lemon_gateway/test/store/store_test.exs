@@ -5,12 +5,19 @@ defmodule LemonGateway.StoreTest do
   alias LemonGateway.Store
   alias LemonGateway.Types.ChatScope
 
+  setup do
+    # Some other lemon_gateway tests stop the application for isolation. Ensure the
+    # Store (and its supervisor tree) is running before each test here.
+    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+    :ok
+  end
+
   # Use a unique key prefix per test to avoid conflicts with other tests
   # This avoids having to restart the Store between tests
 
   describe "chat state" do
     test "put and get chat state" do
-      scope = %ChatScope{transport: :test, chat_id: unique_id(), topic_id: nil}
+      scope = %ChatScope{transport: :test, chat_id: unique_chat_id(), topic_id: nil}
       state = %{history: [], context: "test"}
 
       Store.put_chat_state(scope, state)
@@ -26,12 +33,12 @@ defmodule LemonGateway.StoreTest do
     end
 
     test "returns nil for missing scope" do
-      scope = %ChatScope{transport: :test, chat_id: unique_id(), topic_id: nil}
+      scope = %ChatScope{transport: :test, chat_id: unique_chat_id(), topic_id: nil}
       assert Store.get_chat_state(scope) == nil
     end
 
     test "delete_chat_state removes state" do
-      scope = %ChatScope{transport: :test, chat_id: unique_id(), topic_id: nil}
+      scope = %ChatScope{transport: :test, chat_id: unique_chat_id(), topic_id: nil}
       state = %{history: [], context: "test"}
 
       Store.put_chat_state(scope, state)
@@ -44,7 +51,7 @@ defmodule LemonGateway.StoreTest do
     end
 
     test "chat state expires_at is set to future timestamp" do
-      scope = %ChatScope{transport: :test, chat_id: unique_id(), topic_id: nil}
+      scope = %ChatScope{transport: :test, chat_id: unique_chat_id(), topic_id: nil}
       state = %{data: "test"}
       now = System.system_time(:millisecond)
 
@@ -92,7 +99,7 @@ defmodule LemonGateway.StoreTest do
 
   describe "progress mapping" do
     test "put, get, and delete progress mapping" do
-      scope = %ChatScope{transport: :test, chat_id: unique_id(), topic_id: nil}
+      scope = %ChatScope{transport: :test, chat_id: unique_chat_id(), topic_id: nil}
       progress_msg_id = unique_id()
       run_id = make_ref()
 
@@ -110,7 +117,7 @@ defmodule LemonGateway.StoreTest do
 
   describe "run history" do
     test "get_run_history returns finalized runs for scope" do
-      scope = %ChatScope{transport: :test, chat_id: unique_id(), topic_id: nil}
+      scope = %ChatScope{transport: :test, chat_id: unique_chat_id(), topic_id: nil}
 
       # Create multiple runs
       run1 = "run_#{System.unique_integer()}"
@@ -135,7 +142,7 @@ defmodule LemonGateway.StoreTest do
     end
 
     test "get_run_history respects limit" do
-      scope = %ChatScope{transport: :test, chat_id: unique_id(), topic_id: nil}
+      scope = %ChatScope{transport: :test, chat_id: unique_chat_id(), topic_id: nil}
 
       # Create 5 runs
       for i <- 1..5 do
@@ -152,8 +159,8 @@ defmodule LemonGateway.StoreTest do
     end
 
     test "get_run_history filters by scope" do
-      scope_a = %ChatScope{transport: :test, chat_id: unique_id(), topic_id: nil}
-      scope_b = %ChatScope{transport: :test, chat_id: unique_id(), topic_id: nil}
+      scope_a = %ChatScope{transport: :test, chat_id: unique_chat_id(), topic_id: nil}
+      scope_b = %ChatScope{transport: :test, chat_id: unique_chat_id(), topic_id: nil}
 
       run_a = "run_a_#{unique_id()}"
       run_b = "run_b_#{unique_id()}"
@@ -180,13 +187,16 @@ defmodule LemonGateway.StoreTest do
     end
 
     test "get_run_history returns empty list for no runs" do
-      scope = %ChatScope{transport: :test, chat_id: unique_id(), topic_id: nil}
+      scope = %ChatScope{transport: :test, chat_id: unique_chat_id(), topic_id: nil}
       assert Store.get_run_history(scope) == []
     end
   end
 
   # Generate unique IDs to avoid test interference
   defp unique_id, do: System.unique_integer([:positive])
+
+  # Avoid collisions with other test suites that may use small-ish fixed chat_id values.
+  defp unique_chat_id, do: 1_000_000_000 + unique_id()
 end
 
 defmodule LemonGateway.Store.BackendConfigTest do

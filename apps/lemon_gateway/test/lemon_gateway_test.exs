@@ -101,8 +101,17 @@ defmodule LemonGatewayTest do
 
       Task.start(fn ->
         send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
-        send(sink_pid, {:engine_event, run_ref, %Event.ActionEvent{engine: id(), action: action, phase: :started}})
-        send(sink_pid, {:engine_event, run_ref, %Event.Completed{engine: id(), ok: true, answer: "result"}})
+
+        send(
+          sink_pid,
+          {:engine_event, run_ref,
+           %Event.ActionEvent{engine: id(), action: action, phase: :started}}
+        )
+
+        send(
+          sink_pid,
+          {:engine_event, run_ref, %Event.Completed{engine: id(), ok: true, answer: "result"}}
+        )
       end)
 
       {:ok, run_ref, %{pid: self()}}
@@ -144,15 +153,44 @@ defmodule LemonGatewayTest do
       Task.start(fn ->
         send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
         Process.sleep(10)
-        send(sink_pid, {:engine_event, run_ref, %Event.ActionEvent{engine: id(), action: action1, phase: :started}})
+
+        send(
+          sink_pid,
+          {:engine_event, run_ref,
+           %Event.ActionEvent{engine: id(), action: action1, phase: :started}}
+        )
+
         Process.sleep(10)
-        send(sink_pid, {:engine_event, run_ref, %Event.ActionEvent{engine: id(), action: action1, phase: :completed}})
+
+        send(
+          sink_pid,
+          {:engine_event, run_ref,
+           %Event.ActionEvent{engine: id(), action: action1, phase: :completed}}
+        )
+
         Process.sleep(10)
-        send(sink_pid, {:engine_event, run_ref, %Event.ActionEvent{engine: id(), action: action2, phase: :started}})
+
+        send(
+          sink_pid,
+          {:engine_event, run_ref,
+           %Event.ActionEvent{engine: id(), action: action2, phase: :started}}
+        )
+
         Process.sleep(10)
-        send(sink_pid, {:engine_event, run_ref, %Event.ActionEvent{engine: id(), action: action2, phase: :completed}})
+
+        send(
+          sink_pid,
+          {:engine_event, run_ref,
+           %Event.ActionEvent{engine: id(), action: action2, phase: :completed}}
+        )
+
         Process.sleep(10)
-        send(sink_pid, {:engine_event, run_ref, %Event.Completed{engine: id(), ok: true, answer: "done streaming"}})
+
+        send(
+          sink_pid,
+          {:engine_event, run_ref,
+           %Event.Completed{engine: id(), ok: true, answer: "done streaming"}}
+        )
       end)
 
       {:ok, run_ref, %{pid: self()}}
@@ -199,7 +237,6 @@ defmodule LemonGatewayTest do
     def calls do
       Agent.get(__MODULE__, &Enum.reverse(&1.calls))
     end
-
 
     def get_updates(_token, _offset, _timeout_ms) do
       {updates, notify_pid} =
@@ -294,7 +331,9 @@ defmodule LemonGatewayTest do
 
     LemonGateway.submit(job)
 
-    assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true, answer: "Echo: hello"}}, 1_000
+    assert_receive {:lemon_gateway_run_completed, ^job,
+                    %Completed{ok: true, answer: "Echo: hello"}},
+                   1_000
   end
 
   test "scheduler releases slot after worker death" do
@@ -303,6 +342,7 @@ defmodule LemonGatewayTest do
     _worker_a =
       spawn(fn ->
         LemonGateway.Scheduler.request_slot(self(), :thread_a)
+
         receive do
           {:slot_granted, _slot_ref} ->
             send(parent, :worker_a_granted)
@@ -313,6 +353,7 @@ defmodule LemonGatewayTest do
     worker_b =
       spawn(fn ->
         LemonGateway.Scheduler.request_slot(self(), :thread_b)
+
         receive do
           {:slot_granted, _slot_ref} ->
             send(parent, :worker_b_granted)
@@ -349,7 +390,9 @@ defmodule LemonGatewayTest do
     LemonGateway.submit(crash_job)
     LemonGateway.submit(ok_job)
 
-    assert_receive {:lemon_gateway_run_completed, ^ok_job, %Completed{ok: true, answer: "Echo: ok"}}, 2_000
+    assert_receive {:lemon_gateway_run_completed, ^ok_job,
+                    %Completed{ok: true, answer: "Echo: ok"}},
+                   2_000
   end
 
   test "scheduler handles back-to-back submits for same thread" do
@@ -376,8 +419,13 @@ defmodule LemonGatewayTest do
     Task.async(fn -> LemonGateway.submit(job1) end)
     Task.async(fn -> LemonGateway.submit(job2) end)
 
-    assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true, answer: "Echo: first"}}, 2_000
-    assert_receive {:lemon_gateway_run_completed, ^job2, %Completed{ok: true, answer: "Echo: second"}}, 2_000
+    assert_receive {:lemon_gateway_run_completed, ^job1,
+                    %Completed{ok: true, answer: "Echo: first"}},
+                   2_000
+
+    assert_receive {:lemon_gateway_run_completed, ^job2,
+                    %Completed{ok: true, answer: "Echo: second"}},
+                   2_000
   end
 
   test "scheduler re-creates worker after idle stop" do
@@ -402,13 +450,19 @@ defmodule LemonGatewayTest do
     }
 
     LemonGateway.submit(job1)
-    assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true, answer: "Echo: one"}}, 2_000
+
+    assert_receive {:lemon_gateway_run_completed, ^job1,
+                    %Completed{ok: true, answer: "Echo: one"}},
+                   2_000
 
     # Allow worker to stop when idle.
     Process.sleep(50)
 
     LemonGateway.submit(job2)
-    assert_receive {:lemon_gateway_run_completed, ^job2, %Completed{ok: true, answer: "Echo: two"}}, 2_000
+
+    assert_receive {:lemon_gateway_run_completed, ^job2,
+                    %Completed{ok: true, answer: "Echo: two"}},
+                   2_000
   end
 
   test "engine start error still notifies completion" do
@@ -456,7 +510,8 @@ defmodule LemonGatewayTest do
       }
     ]
 
-    {:ok, _} = start_supervised({TestTelegramAPI, [updates_queue: [updates_a], notify_pid: self()]})
+    {:ok, _} =
+      start_supervised({TestTelegramAPI, [updates_queue: [updates_a], notify_pid: self()]})
 
     Application.put_env(:lemon_gateway, :telegram, %{
       bot_token: "token",
@@ -491,6 +546,7 @@ defmodule LemonGatewayTest do
         {LemonGateway.Telegram.Outbox,
          [bot_token: "token", api_mod: TestTelegramAPI, edit_throttle_ms: 0]}
       )
+
     assert is_pid(Process.whereis(LemonGateway.Telegram.Outbox))
     assert :sys.get_state(LemonGateway.Telegram.Outbox).api_mod == TestTelegramAPI
 
@@ -597,7 +653,8 @@ defmodule LemonGatewayTest do
         String.contains?(text, "Running")
       end)
 
-    assert length(running_edits) >= 1, "Expected at least one running edit, got #{inspect(edit_calls)}"
+    assert length(running_edits) >= 1,
+           "Expected at least one running edit, got #{inspect(edit_calls)}"
   end
 
   test "telegram streaming edits use stable key for coalescing" do
@@ -667,6 +724,7 @@ defmodule LemonGatewayTest do
         {LemonGateway.Telegram.Outbox,
          [bot_token: "token", api_mod: TestTelegramAPI, edit_throttle_ms: 0]}
       )
+
     assert is_pid(Process.whereis(LemonGateway.Telegram.Outbox))
     assert :sys.get_state(LemonGateway.Telegram.Outbox).api_mod == TestTelegramAPI
 
@@ -699,6 +757,7 @@ defmodule LemonGatewayTest do
       end,
       "expected error edit for chat 3 message 100"
     )
+
     refute_receive {:api_send_message, _, _, _, _}, 200
   end
 
@@ -734,7 +793,8 @@ defmodule LemonGatewayTest do
       }
     ]
 
-    {:ok, _} = start_supervised({TestTelegramAPI, [updates_queue: [updates, updates], notify_pid: self()]})
+    {:ok, _} =
+      start_supervised({TestTelegramAPI, [updates_queue: [updates, updates], notify_pid: self()]})
 
     Application.put_env(:lemon_gateway, :telegram, %{
       bot_token: "token",

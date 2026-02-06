@@ -363,7 +363,8 @@ defmodule Ai.ErrorEdgeCasesTest do
 
     test "handles Unix timestamp reset time" do
       # Jan 1, 2030
-      timestamp = 1893456000
+      timestamp = 1_893_456_000
+
       headers = [
         {"x-ratelimit-reset-requests", "#{timestamp}"}
       ]
@@ -542,7 +543,8 @@ defmodule Ai.ErrorEdgeCasesTest do
 
       # Zero is not > 0, so falls through to reset_at or status
       result = Error.suggested_retry_delay_from_error(error)
-      assert result == 60_000  # Falls back to status-based
+      # Falls back to status-based
+      assert result == 60_000
     end
 
     test "handles error with negative retry_after" do
@@ -552,7 +554,8 @@ defmodule Ai.ErrorEdgeCasesTest do
       }
 
       result = Error.suggested_retry_delay_from_error(error)
-      assert result == 60_000  # Falls back
+      # Falls back
+      assert result == 60_000
     end
 
     test "handles error with nil rate_limit_info fields" do
@@ -562,7 +565,8 @@ defmodule Ai.ErrorEdgeCasesTest do
       }
 
       result = Error.suggested_retry_delay_from_error(error)
-      assert result == 5_000  # Status-based
+      # Status-based
+      assert result == 5_000
     end
 
     test "handles error with only reset_at in the future" do
@@ -578,7 +582,8 @@ defmodule Ai.ErrorEdgeCasesTest do
     end
 
     test "handles error with very far future reset_at" do
-      far_future = DateTime.utc_now() |> DateTime.add(86400, :second)  # 1 day
+      # 1 day
+      far_future = DateTime.utc_now() |> DateTime.add(86400, :second)
 
       error = %{
         status: 429,
@@ -586,7 +591,8 @@ defmodule Ai.ErrorEdgeCasesTest do
       }
 
       delay = Error.suggested_retry_delay_from_error(error)
-      assert delay > 86_000_000  # More than 86000 seconds in ms
+      # More than 86000 seconds in ms
+      assert delay > 86_000_000
     end
 
     test "handles error without rate_limit_info key" do
@@ -683,7 +689,8 @@ defmodule Ai.ErrorEdgeCasesTest do
     end
 
     test "formats reset time in hours and minutes" do
-      future = DateTime.utc_now() |> DateTime.add(3700, :second)  # 1h 1m 40s
+      # 1h 1m 40s
+      future = DateTime.utc_now() |> DateTime.add(3700, :second)
 
       info = %{limit: 100, remaining: 0, reset_at: future}
 
@@ -695,6 +702,7 @@ defmodule Ai.ErrorEdgeCasesTest do
   describe "integration - parse and retry flow" do
     test "rate limit error with all info can compute retry delay" do
       body = %{"error" => %{"message" => "Too many requests"}}
+
       headers = [
         {"x-ratelimit-limit-requests", "100"},
         {"x-ratelimit-remaining-requests", "0"},

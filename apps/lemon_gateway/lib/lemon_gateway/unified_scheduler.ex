@@ -88,7 +88,7 @@ defmodule LemonGateway.UnifiedScheduler do
         result
       end)
   """
-  @spec run_in_lane(lane(), (() -> term()), keyword()) :: {:ok, term()} | {:error, term()}
+  @spec run_in_lane(lane(), (-> term()), keyword()) :: {:ok, term()} | {:error, term()}
   def run_in_lane(lane, fun, opts \\ []) when is_function(fun, 0) do
     _timeout = Keyword.get(opts, :timeout_ms, :infinity)
     meta = Keyword.get(opts, :meta, %{})
@@ -159,9 +159,13 @@ defmodule LemonGateway.UnifiedScheduler do
     # Schedule the job through LaneQueue
     Task.start(fn ->
       result =
-        run_in_lane(lane, fn ->
-          execute_job(job)
-        end, meta: %{job_id: job_id, lane: lane})
+        run_in_lane(
+          lane,
+          fn ->
+            execute_job(job)
+          end,
+          meta: %{job_id: job_id, lane: lane}
+        )
 
       GenServer.reply(from, result)
     end)
@@ -174,9 +178,13 @@ defmodule LemonGateway.UnifiedScheduler do
 
     # Schedule the job asynchronously
     Task.start(fn ->
-      run_in_lane(lane, fn ->
-        execute_job(job)
-      end, meta: %{job_id: job_id, lane: lane})
+      run_in_lane(
+        lane,
+        fn ->
+          execute_job(job)
+        end,
+        meta: %{job_id: job_id, lane: lane}
+      )
     end)
 
     {:reply, {:ok, job_id}, %{state | job_counter: state.job_counter + 1}}

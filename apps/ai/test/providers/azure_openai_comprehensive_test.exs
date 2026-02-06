@@ -671,7 +671,10 @@ defmodule Ai.Providers.AzureOpenAIResponsesComprehensiveTest do
       end)
 
       model = base_model(%{reasoning: true})
-      context = Context.new(system_prompt: "You are helpful", messages: [%UserMessage{content: "Hi"}])
+
+      context =
+        Context.new(system_prompt: "You are helpful", messages: [%UserMessage{content: "Hi"}])
+
       opts = %StreamOptions{api_key: "test-key", reasoning: :medium}
 
       {:ok, stream} = AzureOpenAIResponses.stream(model, context, opts)
@@ -694,7 +697,10 @@ defmodule Ai.Providers.AzureOpenAIResponsesComprehensiveTest do
       end)
 
       model = base_model(%{reasoning: false})
-      context = Context.new(system_prompt: "You are helpful", messages: [%UserMessage{content: "Hi"}])
+
+      context =
+        Context.new(system_prompt: "You are helpful", messages: [%UserMessage{content: "Hi"}])
+
       opts = %StreamOptions{api_key: "test-key"}
 
       {:ok, stream} = AzureOpenAIResponses.stream(model, context, opts)
@@ -1114,7 +1120,11 @@ defmodule Ai.Providers.AzureOpenAIResponsesComprehensiveTest do
 
     test "handles 500 server error" do
       Req.Test.stub(__MODULE__, fn conn ->
-        Plug.Conn.send_resp(conn, 500, Jason.encode!(%{error: %{message: "Internal server error"}}))
+        Plug.Conn.send_resp(
+          conn,
+          500,
+          Jason.encode!(%{error: %{message: "Internal server error"}})
+        )
       end)
 
       model = base_model()
@@ -1294,7 +1304,10 @@ defmodule Ai.Providers.AzureOpenAIResponsesComprehensiveTest do
     test "parses reasoning response" do
       events = [
         %{"type" => "response.output_item.added", "item" => %{"type" => "reasoning"}},
-        %{"type" => "response.reasoning_summary_part.added", "part" => %{"type" => "summary_text"}},
+        %{
+          "type" => "response.reasoning_summary_part.added",
+          "part" => %{"type" => "summary_text"}
+        },
         %{"type" => "response.reasoning_summary_text.delta", "delta" => "Let me think "},
         %{"type" => "response.reasoning_summary_text.delta", "delta" => "about this."},
         %{"type" => "response.reasoning_summary_part.done"},
@@ -1761,9 +1774,7 @@ defmodule Ai.Providers.AzureOpenAIResponsesComprehensiveTest do
       }
 
       context =
-        Context.new(
-          messages: [%UserMessage{content: "Read file"}, assistant_msg, tool_result]
-        )
+        Context.new(messages: [%UserMessage{content: "Read file"}, assistant_msg, tool_result])
 
       opts = %StreamOptions{api_key: "test-key"}
 

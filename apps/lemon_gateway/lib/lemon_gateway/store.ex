@@ -30,7 +30,8 @@ defmodule LemonGateway.Store do
   # Chat State API
 
   @spec put_chat_state(term(), map()) :: :ok
-  def put_chat_state(scope, state), do: GenServer.cast(__MODULE__, {:put_chat_state, scope, state})
+  def put_chat_state(scope, state),
+    do: GenServer.cast(__MODULE__, {:put_chat_state, scope, state})
 
   @spec get_chat_state(term()) :: map() | nil
   def get_chat_state(scope), do: GenServer.call(__MODULE__, {:get_chat_state, scope})
@@ -41,10 +42,12 @@ defmodule LemonGateway.Store do
   # Run Events API
 
   @spec append_run_event(term(), term()) :: :ok
-  def append_run_event(run_id, event), do: GenServer.cast(__MODULE__, {:append_run_event, run_id, event})
+  def append_run_event(run_id, event),
+    do: GenServer.cast(__MODULE__, {:append_run_event, run_id, event})
 
   @spec finalize_run(term(), map()) :: :ok
-  def finalize_run(run_id, summary), do: GenServer.cast(__MODULE__, {:finalize_run, run_id, summary})
+  def finalize_run(run_id, summary),
+    do: GenServer.cast(__MODULE__, {:finalize_run, run_id, summary})
 
   # Progress Mapping API
 
@@ -195,17 +198,25 @@ defmodule LemonGateway.Store do
       |> Enum.filter(fn
         # Tuple key format: {scope_or_session_key, ts, run_id}
         {{key, _ts, _run_id}, data} ->
-          key == scope_or_session_key or data[:session_key] == scope_or_session_key or data[:scope] == scope_or_session_key
+          key == scope_or_session_key or data[:session_key] == scope_or_session_key or
+            data[:scope] == scope_or_session_key
+
         # New session_key based format (string key)
         {key, data} when is_binary(key) ->
-          key == scope_or_session_key or data[:session_key] == scope_or_session_key or data[:scope] == scope_or_session_key
+          key == scope_or_session_key or data[:session_key] == scope_or_session_key or
+            data[:scope] == scope_or_session_key
+
         {key, data} ->
-          data[:session_key] == scope_or_session_key or data[:scope] == scope_or_session_key or key == scope_or_session_key
+          data[:session_key] == scope_or_session_key or data[:scope] == scope_or_session_key or
+            key == scope_or_session_key
       end)
-      |> Enum.sort_by(fn
-        {{_s, ts, _run_id}, _data} -> ts
-        {_key, data} -> data[:started_at] || 0
-      end, :desc)
+      |> Enum.sort_by(
+        fn
+          {{_s, ts, _run_id}, _data} -> ts
+          {_key, data} -> data[:started_at] || 0
+        end,
+        :desc
+      )
       |> Enum.take(limit)
       |> Enum.map(fn
         {{_scope, _ts, run_id}, data} -> {run_id, data}
@@ -288,6 +299,7 @@ defmodule LemonGateway.Store do
         session_key ->
           # Primary: Store by session_key
           history_key = {session_key, started_at, run_id}
+
           history_data = %{
             events: record.events,
             summary: summary,
@@ -296,6 +308,7 @@ defmodule LemonGateway.Store do
             run_id: run_id,
             started_at: started_at
           }
+
           {:ok, bs} = state.backend.put(backend_state, :run_history, history_key, history_data)
 
           # Update sessions_index for sessions.list
@@ -304,7 +317,14 @@ defmodule LemonGateway.Store do
         scope ->
           # Legacy: Store by scope
           history_key = {scope, started_at, run_id}
-          history_data = %{events: record.events, summary: summary, scope: scope, started_at: started_at}
+
+          history_data = %{
+            events: record.events,
+            summary: summary,
+            scope: scope,
+            started_at: started_at
+          }
+
           {:ok, bs} = state.backend.put(backend_state, :run_history, history_key, history_data)
           bs
 
@@ -336,10 +356,7 @@ defmodule LemonGateway.Store do
           }
 
         entry ->
-          %{entry |
-            updated_at_ms: timestamp,
-            run_count: (entry[:run_count] || 0) + 1
-          }
+          %{entry | updated_at_ms: timestamp, run_count: (entry[:run_count] || 0) + 1}
       end
 
     {:ok, backend_state} = backend.put(backend_state, :sessions_index, session_key, session_entry)
@@ -347,12 +364,14 @@ defmodule LemonGateway.Store do
   end
 
   defp parse_agent_id(nil), do: "default"
+
   defp parse_agent_id(session_key) when is_binary(session_key) do
     case String.split(session_key, ":") do
       ["agent", agent_id | _] -> agent_id
       _ -> "default"
     end
   end
+
   defp parse_agent_id(_), do: "default"
 
   def handle_cast({:put_progress_mapping, scope, progress_msg_id, run_id}, state) do

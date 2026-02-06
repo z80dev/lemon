@@ -513,7 +513,8 @@ defmodule CodingAgent.Tools.TodoStoreTest do
               {:read, TodoStore.get(session_id)}
             else
               # Writer
-              {:write, TodoStore.put(session_id, [%{"id" => "#{i}", "content" => "Written by #{i}"}])}
+              {:write,
+               TodoStore.put(session_id, [%{"id" => "#{i}", "content" => "Written by #{i}"}])}
             end
           end,
           timeout: 5000
@@ -901,7 +902,12 @@ defmodule CodingAgent.Tools.TodoStoreTest do
 
       # Add more todos
       TodoStore.put(session_id, [
-        %{"id" => "1", "content" => "First task", "status" => "in_progress", "priority" => "high"},
+        %{
+          "id" => "1",
+          "content" => "First task",
+          "status" => "in_progress",
+          "priority" => "high"
+        },
         %{"id" => "2", "content" => "Second task", "status" => "pending", "priority" => "low"}
       ])
 

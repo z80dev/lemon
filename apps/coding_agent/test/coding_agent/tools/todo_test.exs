@@ -40,7 +40,10 @@ defmodule CodingAgent.Tools.TodoTest do
 
     test "overwrites existing todos", %{session_id: session_id} do
       old_todos = [%{"id" => "1", "content" => "Old", "status" => "pending", "priority" => "low"}]
-      new_todos = [%{"id" => "2", "content" => "New", "status" => "completed", "priority" => "high"}]
+
+      new_todos = [
+        %{"id" => "2", "content" => "New", "status" => "completed", "priority" => "high"}
+      ]
 
       TodoStore.put(session_id, old_todos)
       TodoStore.put(session_id, new_todos)
@@ -65,8 +68,13 @@ defmodule CodingAgent.Tools.TodoTest do
 
   describe "TodoStore.clear/0" do
     test "removes all todos" do
-      TodoStore.put("session1", [%{"id" => "1", "content" => "Task", "status" => "pending", "priority" => "high"}])
-      TodoStore.put("session2", [%{"id" => "2", "content" => "Task", "status" => "pending", "priority" => "high"}])
+      TodoStore.put("session1", [
+        %{"id" => "1", "content" => "Task", "status" => "pending", "priority" => "high"}
+      ])
+
+      TodoStore.put("session2", [
+        %{"id" => "2", "content" => "Task", "status" => "pending", "priority" => "high"}
+      ])
 
       assert :ok = TodoStore.clear()
       assert TodoStore.get("session1") == []
@@ -104,7 +112,8 @@ defmodule CodingAgent.Tools.TodoTest do
       assert text =~ "Task 1"
       assert text =~ "Task 2"
       assert details.todos == todos
-      assert details.title == "1 todos"  # One non-completed
+      # One non-completed
+      assert details.title == "1 todos"
     end
 
     test "counts open todos correctly", %{session_id: session_id} do
@@ -117,7 +126,8 @@ defmodule CodingAgent.Tools.TodoTest do
       result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
 
       assert %AgentToolResult{details: details} = result
-      assert details.title == "2 todos"  # Two non-completed
+      # Two non-completed
+      assert details.title == "2 todos"
     end
 
     test "returns error when todos is not an array", %{session_id: session_id} do
@@ -230,6 +240,7 @@ defmodule CodingAgent.Tools.TodoTest do
         %{"id" => "1", "content" => "Task 1", "status" => "pending", "priority" => "high"},
         %{"id" => "2", "content" => "Task 2", "status" => "completed", "priority" => "low"}
       ]
+
       TodoStore.put(session_id, todos)
 
       result = TodoRead.execute("call_1", %{}, nil, nil, session_id)

@@ -40,23 +40,30 @@ defmodule LemonGateway.ChatStateTest do
       # Map.from_struct returns all fields defined in defstruct
       fields = Map.from_struct(state)
       assert map_size(fields) == 4
-      assert Map.keys(fields) |> Enum.sort() == [:expires_at, :last_engine, :last_resume_token, :updated_at]
+
+      assert Map.keys(fields) |> Enum.sort() == [
+               :expires_at,
+               :last_engine,
+               :last_resume_token,
+               :updated_at
+             ]
     end
   end
 
   describe "new/1 with atom keys" do
     test "creates ChatState with all atom key values" do
-      state = ChatState.new(%{
-        last_engine: "claude",
-        last_resume_token: "abc123",
-        updated_at: 1234567890,
-        expires_at: 1234569999
-      })
+      state =
+        ChatState.new(%{
+          last_engine: "claude",
+          last_resume_token: "abc123",
+          updated_at: 1_234_567_890,
+          expires_at: 1_234_569_999
+        })
 
       assert state.last_engine == "claude"
       assert state.last_resume_token == "abc123"
-      assert state.updated_at == 1234567890
-      assert state.expires_at == 1234569999
+      assert state.updated_at == 1_234_567_890
+      assert state.expires_at == 1_234_569_999
     end
 
     test "creates ChatState with partial atom keys" do
@@ -80,17 +87,18 @@ defmodule LemonGateway.ChatStateTest do
 
   describe "new/1 with string keys" do
     test "creates ChatState with all string key values" do
-      state = ChatState.new(%{
-        "last_engine" => "gemini",
-        "last_resume_token" => "xyz789",
-        "updated_at" => 9876543210,
-        "expires_at" => 9876549999
-      })
+      state =
+        ChatState.new(%{
+          "last_engine" => "gemini",
+          "last_resume_token" => "xyz789",
+          "updated_at" => 9_876_543_210,
+          "expires_at" => 9_876_549_999
+        })
 
       assert state.last_engine == "gemini"
       assert state.last_resume_token == "xyz789"
-      assert state.updated_at == 9876543210
-      assert state.expires_at == 9876549999
+      assert state.updated_at == 9_876_543_210
+      assert state.expires_at == 9_876_549_999
     end
 
     test "creates ChatState with partial string keys" do
@@ -107,39 +115,43 @@ defmodule LemonGateway.ChatStateTest do
     test "atom keys take precedence over string keys" do
       # The implementation uses || which means atom key is checked first
       # Must use arrow syntax for all keys when mixing atom and string keys
-      state = ChatState.new(%{
-        :last_engine => "atom_engine",
-        "last_engine" => "string_engine"
-      })
+      state =
+        ChatState.new(%{
+          :last_engine => "atom_engine",
+          "last_engine" => "string_engine"
+        })
 
       # atom key value is truthy, so it should be used
       assert state.last_engine == "atom_engine"
     end
 
     test "string key used when atom key is nil" do
-      state = ChatState.new(%{
-        :last_engine => nil,
-        "last_engine" => "fallback_engine"
-      })
+      state =
+        ChatState.new(%{
+          :last_engine => nil,
+          "last_engine" => "fallback_engine"
+        })
 
       # nil || "fallback_engine" => "fallback_engine"
       assert state.last_engine == "fallback_engine"
     end
 
     test "string key used when atom key is missing" do
-      state = ChatState.new(%{
-        "last_engine" => "only_string"
-      })
+      state =
+        ChatState.new(%{
+          "last_engine" => "only_string"
+        })
 
       assert state.last_engine == "only_string"
     end
 
     test "mixed keys for different fields" do
-      state = ChatState.new(%{
-        :last_engine => "atom_engine",
-        "last_resume_token" => "string_token",
-        :updated_at => 12345
-      })
+      state =
+        ChatState.new(%{
+          :last_engine => "atom_engine",
+          "last_resume_token" => "string_token",
+          :updated_at => 12345
+        })
 
       assert state.last_engine == "atom_engine"
       assert state.last_resume_token == "string_token"
@@ -149,41 +161,45 @@ defmodule LemonGateway.ChatStateTest do
     test "false atom key value still uses atom key (falsy but not nil)" do
       # Note: false is falsy in || but the implementation uses attrs[:key] || attrs["key"]
       # false || "string" => "string" because false is falsy
-      state = ChatState.new(%{
-        :last_engine => false,
-        "last_engine" => "fallback"
-      })
+      state =
+        ChatState.new(%{
+          :last_engine => false,
+          "last_engine" => "fallback"
+        })
 
       # false || "fallback" => "fallback"
       assert state.last_engine == "fallback"
     end
 
     test "empty string atom key is truthy" do
-      state = ChatState.new(%{
-        :last_engine => "",
-        "last_engine" => "fallback"
-      })
+      state =
+        ChatState.new(%{
+          :last_engine => "",
+          "last_engine" => "fallback"
+        })
 
       # "" is truthy in Elixir (only nil and false are falsy)
       assert state.last_engine == ""
     end
 
     test "zero value is truthy" do
-      state = ChatState.new(%{
-        :updated_at => 0,
-        "updated_at" => 999
-      })
+      state =
+        ChatState.new(%{
+          :updated_at => 0,
+          "updated_at" => 999
+        })
 
       # 0 is truthy in Elixir
       assert state.updated_at == 0
     end
 
     test "ignores extra keys not in struct" do
-      state = ChatState.new(%{
-        :last_engine => "valid",
-        :extra_key => "ignored",
-        "another_extra" => "also_ignored"
-      })
+      state =
+        ChatState.new(%{
+          :last_engine => "valid",
+          :extra_key => "ignored",
+          "another_extra" => "also_ignored"
+        })
 
       assert state.last_engine == "valid"
       # Extra keys don't raise errors, they're simply not used
@@ -209,11 +225,12 @@ defmodule LemonGateway.ChatStateTest do
     end
 
     test "pattern matching extracts values correctly" do
-      state = ChatState.new(%{
-        last_engine: "engine1",
-        last_resume_token: "token1",
-        updated_at: 1000
-      })
+      state =
+        ChatState.new(%{
+          last_engine: "engine1",
+          last_resume_token: "token1",
+          updated_at: 1000
+        })
 
       %ChatState{
         last_engine: engine,
@@ -267,7 +284,7 @@ defmodule LemonGateway.ChatStateTest do
     end
 
     test "updated_at accepts integer values" do
-      state = ChatState.new(%{updated_at: 1234567890})
+      state = ChatState.new(%{updated_at: 1_234_567_890})
       assert is_integer(state.updated_at)
     end
 
@@ -297,11 +314,12 @@ defmodule LemonGateway.ChatStateTest do
 
   describe "all field access patterns" do
     setup do
-      state = ChatState.new(%{
-        last_engine: "test_engine",
-        last_resume_token: "test_token",
-        updated_at: 1609459200000
-      })
+      state =
+        ChatState.new(%{
+          last_engine: "test_engine",
+          last_resume_token: "test_token",
+          updated_at: 1_609_459_200_000
+        })
 
       {:ok, state: state}
     end
@@ -309,13 +327,13 @@ defmodule LemonGateway.ChatStateTest do
     test "dot notation access", %{state: state} do
       assert state.last_engine == "test_engine"
       assert state.last_resume_token == "test_token"
-      assert state.updated_at == 1609459200000
+      assert state.updated_at == 1_609_459_200_000
     end
 
     test "Map.get/2 access", %{state: state} do
       assert Map.get(state, :last_engine) == "test_engine"
       assert Map.get(state, :last_resume_token) == "test_token"
-      assert Map.get(state, :updated_at) == 1609459200000
+      assert Map.get(state, :updated_at) == 1_609_459_200_000
     end
 
     test "Map.get/3 with default", %{state: state} do
@@ -326,7 +344,7 @@ defmodule LemonGateway.ChatStateTest do
     test "Map.fetch/2 access", %{state: state} do
       assert Map.fetch(state, :last_engine) == {:ok, "test_engine"}
       assert Map.fetch(state, :last_resume_token) == {:ok, "test_token"}
-      assert Map.fetch(state, :updated_at) == {:ok, 1609459200000}
+      assert Map.fetch(state, :updated_at) == {:ok, 1_609_459_200_000}
     end
 
     test "Map.fetch!/2 access", %{state: state} do
@@ -350,7 +368,7 @@ defmodule LemonGateway.ChatStateTest do
                expires_at: nil,
                last_engine: "test_engine",
                last_resume_token: "test_token",
-               updated_at: 1609459200000
+               updated_at: 1_609_459_200_000
              }
     end
 
@@ -372,7 +390,7 @@ defmodule LemonGateway.ChatStateTest do
 
       assert updated.last_engine == "new_engine"
       assert updated.last_resume_token == "test_token"
-      assert updated.updated_at == 1609459200000
+      assert updated.updated_at == 1_609_459_200_000
     end
 
     test "Map.put/3 update", %{state: state} do
@@ -527,6 +545,7 @@ defmodule LemonGateway.ChatStateTest do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       scope = %ChatScope{transport: :telegram, chat_id: 12345}
+
       original = %ChatState{
         last_engine: "codex",
         last_resume_token: "token123",
@@ -552,7 +571,7 @@ defmodule LemonGateway.ChatStateTest do
         %{} = map ->
           # ETS backend stores maps directly
           assert map.last_engine == original.last_engine ||
-                 map[:last_engine] == original.last_engine
+                   map[:last_engine] == original.last_engine
       end
     end
 

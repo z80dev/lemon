@@ -38,6 +38,7 @@ defmodule CodingAgent.SubagentsTest do
 
     agent_dir = CodingAgent.Config.agent_dir()
     global_path = Path.join(agent_dir, "subagents.json")
+
     if String.starts_with?(agent_dir, home_dir) do
       File.mkdir_p!(agent_dir)
       global_agents = [%{"id" => "global", "prompt" => "Global prompt"}]
@@ -50,6 +51,7 @@ defmodule CodingAgent.SubagentsTest do
     assert Subagents.get(project_dir, "custom2").prompt == "Do work"
     assert Subagents.get(project_dir, "custom2").description == ""
     assert Subagents.get(project_dir, "review").prompt == "Override review"
+
     if String.starts_with?(agent_dir, home_dir) do
       assert Subagents.get(project_dir, "global").prompt == "Global prompt"
     end
@@ -78,11 +80,15 @@ defmodule CodingAgent.SubagentsTest do
       assert Enum.map(agents, & &1.id) == default_ids
     end
 
-    test "returns defaults when global file contains invalid JSON", %{tmp_dir: tmp_dir, home_dir: home_dir} do
+    test "returns defaults when global file contains invalid JSON", %{
+      tmp_dir: tmp_dir,
+      home_dir: home_dir
+    } do
       project_dir = Path.join(tmp_dir, "project_no_config")
       File.mkdir_p!(project_dir)
 
       agent_dir = CodingAgent.Config.agent_dir()
+
       if String.starts_with?(agent_dir, home_dir) do
         File.mkdir_p!(agent_dir)
         # Write truncated JSON
@@ -124,7 +130,10 @@ defmodule CodingAgent.SubagentsTest do
       File.mkdir_p!(project_config)
 
       # Valid JSON but wrong type (object instead of array)
-      File.write!(Path.join(project_config, "subagents.json"), ~s({"id": "test", "prompt": "hello"}))
+      File.write!(
+        Path.join(project_config, "subagents.json"),
+        ~s({"id": "test", "prompt": "hello"})
+      )
 
       agents = Subagents.list(project_dir)
       default_ids = ["implement", "research", "review", "test"]
@@ -137,7 +146,10 @@ defmodule CodingAgent.SubagentsTest do
       File.mkdir_p!(project_config)
 
       # JSON with null bytes and control characters
-      File.write!(Path.join(project_config, "subagents.json"), "[{\"id\": \"test\x00\", \"prompt\": \"hi\"}]")
+      File.write!(
+        Path.join(project_config, "subagents.json"),
+        "[{\"id\": \"test\x00\", \"prompt\": \"hi\"}]"
+      )
 
       agents = Subagents.list(project_dir)
       # Should fail to parse and return defaults
@@ -215,6 +227,7 @@ defmodule CodingAgent.SubagentsTest do
         %{"prompt" => "No id here", "description" => "Test"},
         %{"id" => "valid", "prompt" => "Has id"}
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(agents_json))
 
       _agents = Subagents.list(project_dir)
@@ -231,6 +244,7 @@ defmodule CodingAgent.SubagentsTest do
         %{"id" => "no_prompt", "description" => "Test"},
         %{"id" => "valid", "prompt" => "Has prompt"}
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(agents_json))
 
       _agents = Subagents.list(project_dir)
@@ -257,7 +271,9 @@ defmodule CodingAgent.SubagentsTest do
       agents = Subagents.list(project_dir)
       assert Subagents.get(project_dir, "valid") != nil
       # Count custom agents (excluding defaults)
-      custom = Enum.reject(agents, fn a -> a.id in ["implement", "research", "review", "test"] end)
+      custom =
+        Enum.reject(agents, fn a -> a.id in ["implement", "research", "review", "test"] end)
+
       assert length(custom) == 1
     end
 
@@ -273,11 +289,15 @@ defmodule CodingAgent.SubagentsTest do
         %{"id" => ["array"], "prompt" => "Array id"},
         %{"id" => "valid", "prompt" => "String id"}
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(agents_json))
 
       agents = Subagents.list(project_dir)
       assert Subagents.get(project_dir, "valid") != nil
-      custom = Enum.reject(agents, fn a -> a.id in ["implement", "research", "review", "test"] end)
+
+      custom =
+        Enum.reject(agents, fn a -> a.id in ["implement", "research", "review", "test"] end)
+
       assert length(custom) == 1
     end
 
@@ -292,6 +312,7 @@ defmodule CodingAgent.SubagentsTest do
         %{"id" => "bool", "prompt" => false},
         %{"id" => "valid", "prompt" => "String prompt"}
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(agents_json))
 
       _agents = Subagents.list(project_dir)
@@ -310,6 +331,7 @@ defmodule CodingAgent.SubagentsTest do
         %{"id" => %{"nested" => "object"}, "prompt" => "Nested id"},
         %{"id" => "valid", "prompt" => "Good"}
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(agents_json))
 
       _agents = Subagents.list(project_dir)
@@ -322,12 +344,16 @@ defmodule CodingAgent.SubagentsTest do
   # ===========================================================================
 
   describe "merge/override logic" do
-    test "project overrides global which overrides defaults", %{tmp_dir: tmp_dir, home_dir: home_dir} do
+    test "project overrides global which overrides defaults", %{
+      tmp_dir: tmp_dir,
+      home_dir: home_dir
+    } do
       project_dir = Path.join(tmp_dir, "merge_test")
       project_config = Path.join(project_dir, ".lemon")
       File.mkdir_p!(project_config)
 
       agent_dir = CodingAgent.Config.agent_dir()
+
       if String.starts_with?(agent_dir, home_dir) do
         File.mkdir_p!(agent_dir)
 
@@ -335,6 +361,7 @@ defmodule CodingAgent.SubagentsTest do
         global_agents = [
           %{"id" => "research", "prompt" => "Global research", "description" => "Global desc"}
         ]
+
         File.write!(Path.join(agent_dir, "subagents.json"), Jason.encode!(global_agents))
       end
 
@@ -342,6 +369,7 @@ defmodule CodingAgent.SubagentsTest do
       project_agents = [
         %{"id" => "research", "prompt" => "Project research", "description" => "Project desc"}
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(project_agents))
 
       agent = Subagents.get(project_dir, "research")
@@ -358,6 +386,7 @@ defmodule CodingAgent.SubagentsTest do
       project_agents = [
         %{"id" => "implement", "prompt" => "Custom implement", "description" => "Custom desc"}
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(project_agents))
 
       _agents = Subagents.list(project_dir)
@@ -380,12 +409,14 @@ defmodule CodingAgent.SubagentsTest do
         %{"id" => "custom1", "prompt" => "Custom 1"},
         %{"id" => "custom2", "prompt" => "Custom 2"}
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(project_agents))
 
       _agents = Subagents.list(project_dir)
 
       # Defaults still present
       default_ids = ["implement", "research", "review", "test"]
+
       for id <- default_ids do
         assert Subagents.get(project_dir, id) != nil
       end
@@ -405,6 +436,7 @@ defmodule CodingAgent.SubagentsTest do
         %{"id" => "alpha", "prompt" => "A"},
         %{"id" => "middle", "prompt" => "M"}
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(project_agents))
 
       agents = Subagents.list(project_dir)
@@ -435,6 +467,7 @@ defmodule CodingAgent.SubagentsTest do
       project_agents = [
         %{"id" => "research", "prompt" => "New prompt", "description" => "New description"}
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(project_agents))
 
       agent = Subagents.get(project_dir, "research")
@@ -443,17 +476,22 @@ defmodule CodingAgent.SubagentsTest do
       assert agent.description == "New description"
     end
 
-    test "global agents are used when no project config exists", %{tmp_dir: tmp_dir, home_dir: home_dir} do
+    test "global agents are used when no project config exists", %{
+      tmp_dir: tmp_dir,
+      home_dir: home_dir
+    } do
       project_dir = Path.join(tmp_dir, "no_project_config")
       File.mkdir_p!(project_dir)
 
       agent_dir = CodingAgent.Config.agent_dir()
+
       if String.starts_with?(agent_dir, home_dir) do
         File.mkdir_p!(agent_dir)
 
         global_agents = [
           %{"id" => "global_custom", "prompt" => "Global custom agent"}
         ]
+
         File.write!(Path.join(agent_dir, "subagents.json"), Jason.encode!(global_agents))
 
         _agents = Subagents.list(project_dir)
@@ -475,6 +513,7 @@ defmodule CodingAgent.SubagentsTest do
       agents_json = [
         %{"id" => "  spaced  ", "prompt" => "Test"}
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(agents_json))
 
       agent = Subagents.get(project_dir, "spaced")
@@ -490,6 +529,7 @@ defmodule CodingAgent.SubagentsTest do
       agents_json = [
         %{"id" => "test", "prompt" => "\n\t  Trimmed prompt  \n\t"}
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(agents_json))
 
       agent = Subagents.get(project_dir, "test")
@@ -505,10 +545,14 @@ defmodule CodingAgent.SubagentsTest do
         %{"id" => "   ", "prompt" => "Valid prompt"},
         %{"id" => "\t\n", "prompt" => "Another"}
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(agents_json))
 
       agents = Subagents.list(project_dir)
-      custom = Enum.reject(agents, fn a -> a.id in ["implement", "research", "review", "test"] end)
+
+      custom =
+        Enum.reject(agents, fn a -> a.id in ["implement", "research", "review", "test"] end)
+
       assert custom == []
     end
 
@@ -521,6 +565,7 @@ defmodule CodingAgent.SubagentsTest do
         %{"id" => "empty1", "prompt" => "   "},
         %{"id" => "empty2", "prompt" => "\n\n\t"}
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(agents_json))
 
       _agents = Subagents.list(project_dir)
@@ -536,6 +581,7 @@ defmodule CodingAgent.SubagentsTest do
       agents_json = [
         %{"id" => "test", "prompt" => "Line one\n\nLine two\twith tab"}
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(agents_json))
 
       agent = Subagents.get(project_dir, "test")
@@ -551,6 +597,7 @@ defmodule CodingAgent.SubagentsTest do
       agents_json = [
         %{"id" => "unicode", "prompt" => "Test prompt"}
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(agents_json))
 
       agent = Subagents.get(project_dir, "unicode")
@@ -575,6 +622,7 @@ defmodule CodingAgent.SubagentsTest do
         %{"id" => "arr_desc", "prompt" => "Test", "description" => [1, 2, 3]},
         %{"id" => "obj_desc", "prompt" => "Test", "description" => %{"key" => "value"}}
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(agents_json))
 
       for id <- ["num_desc", "null_desc", "bool_desc", "arr_desc", "obj_desc"] do
@@ -592,6 +640,7 @@ defmodule CodingAgent.SubagentsTest do
       agents_json = [
         %{"id" => "valid", "prompt" => "Test", "description" => "Valid description"}
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(agents_json))
 
       agent = Subagents.get(project_dir, "valid")
@@ -607,10 +656,14 @@ defmodule CodingAgent.SubagentsTest do
       agents_json = [
         %{"id" => 42, "prompt" => "Test"}
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(agents_json))
 
       agents = Subagents.list(project_dir)
-      custom = Enum.reject(agents, fn a -> a.id in ["implement", "research", "review", "test"] end)
+
+      custom =
+        Enum.reject(agents, fn a -> a.id in ["implement", "research", "review", "test"] end)
+
       assert custom == []
     end
 
@@ -622,6 +675,7 @@ defmodule CodingAgent.SubagentsTest do
       agents_json = [
         %{"id" => "num_prompt", "prompt" => 42}
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(agents_json))
 
       agent = Subagents.get(project_dir, "num_prompt")
@@ -642,6 +696,7 @@ defmodule CodingAgent.SubagentsTest do
       agents_json = [
         %{"id" => "no_description", "prompt" => "Just a prompt"}
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(agents_json))
 
       agent = Subagents.get(project_dir, "no_description")
@@ -692,6 +747,7 @@ defmodule CodingAgent.SubagentsTest do
           "nested" => %{"deep" => "value"}
         }
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(agents_json))
 
       agent = Subagents.get(project_dir, "custom")
@@ -730,6 +786,7 @@ defmodule CodingAgent.SubagentsTest do
       agents_json = [
         %{"id" => "MyAgent", "prompt" => "Test"}
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(agents_json))
 
       assert Subagents.get(project_dir, "MyAgent") != nil
@@ -763,6 +820,7 @@ defmodule CodingAgent.SubagentsTest do
       agents_json = [
         %{"id" => "custom", "prompt" => "Test", "description" => "Custom description"}
       ]
+
       File.write!(Path.join(project_config, "subagents.json"), Jason.encode!(agents_json))
 
       result = Subagents.format_for_description(project_dir)
@@ -775,7 +833,8 @@ defmodule CodingAgent.SubagentsTest do
 
       result = Subagents.format_for_description(project_dir)
       lines = String.split(result, "\n")
-      assert length(lines) >= 4  # At least the 4 defaults
+      # At least the 4 defaults
+      assert length(lines) >= 4
     end
   end
 end

@@ -80,12 +80,18 @@ defmodule LemonGateway.TransportRegistry do
   end
 
   defp transport_enabled?("telegram") do
-    cfg = Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
-    # Handle both map and keyword list configs
-    if is_list(cfg) do
-      Keyword.get(cfg, :enable_telegram, false)
+    # Primary source of truth: LemonGateway.Config (TOML-backed GenServer).
+    # Fallback: application env override (used in tests).
+    if is_pid(Process.whereis(LemonGateway.Config)) do
+      LemonGateway.Config.get(:enable_telegram) == true
     else
-      Map.get(cfg, :enable_telegram, false)
+      cfg = Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
+
+      if is_list(cfg) do
+        Keyword.get(cfg, :enable_telegram, false)
+      else
+        Map.get(cfg, :enable_telegram, false)
+      end
     end
   end
 

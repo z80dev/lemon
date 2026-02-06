@@ -316,7 +316,11 @@ defmodule AgentCore.EventStream do
 
       %{queue_size: 42, max_queue: 10000, dropped: 0} = EventStream.stats(stream)
   """
-  @spec stats(t()) :: %{queue_size: non_neg_integer(), max_queue: pos_integer(), dropped: non_neg_integer()}
+  @spec stats(t()) :: %{
+          queue_size: non_neg_integer(),
+          max_queue: pos_integer(),
+          dropped: non_neg_integer()
+        }
   def stats(stream) do
     GenServer.call(stream, :stats)
   end
@@ -674,7 +678,14 @@ defmodule AgentCore.EventStream do
       end
 
     # Set canceled state
-    state = %{state | canceled: true, cancel_reason: reason, done: true, task_pid: nil, task_ref: nil}
+    state = %{
+      state
+      | canceled: true,
+        cancel_reason: reason,
+        done: true,
+        task_pid: nil,
+        task_ref: nil
+    }
 
     # If no result set, set a cancel result
     state =

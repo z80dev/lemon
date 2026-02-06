@@ -12,6 +12,7 @@
 
 # Temporary files, for example, from tests.
 /tmp/
+apps/lemon_skills/tmp/
 
 # If the VM crashes, it generates a dump, let's ignore it too.
 erl_crash.dump

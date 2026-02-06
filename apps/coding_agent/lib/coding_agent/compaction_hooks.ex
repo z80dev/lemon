@@ -57,7 +57,7 @@ defmodule CodingAgent.CompactionHooks do
         :ok
       end, priority: :high)
   """
-  @spec register_hook(String.t(), (() -> term()), keyword()) :: :ok
+  @spec register_hook(String.t(), (-> term()), keyword()) :: :ok
   def register_hook(session_id, hook_fn, opts \\ []) when is_function(hook_fn, 0) do
     hook = %{
       id: generate_hook_id(),
@@ -151,7 +151,9 @@ defmodule CodingAgent.CompactionHooks do
     should_compact = enabled && context_tokens > context_window - reserve_tokens
 
     if should_compact do
-      Logger.info("Compaction triggered for session #{session_id}, executing pre-compaction hooks")
+      Logger.info(
+        "Compaction triggered for session #{session_id}, executing pre-compaction hooks"
+      )
 
       # Execute hooks before confirming compaction
       results = execute_hooks(session_id)

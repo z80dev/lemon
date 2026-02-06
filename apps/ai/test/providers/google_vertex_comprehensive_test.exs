@@ -61,7 +61,13 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       base_url: "https://example.test",
       reasoning: Keyword.get(opts, :reasoning, false),
       input: Keyword.get(opts, :input, [:text]),
-      cost: Keyword.get(opts, :cost, %ModelCost{input: 1.25, output: 5.0, cache_read: 0.3125, cache_write: 0.0}),
+      cost:
+        Keyword.get(opts, :cost, %ModelCost{
+          input: 1.25,
+          output: 5.0,
+          cache_read: 0.3125,
+          cache_write: 0.0
+        }),
       context_window: 1_000_000,
       max_tokens: 8192,
       headers: Keyword.get(opts, :headers, %{})
@@ -137,7 +143,11 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       end)
 
       Req.Test.stub(__MODULE__, fn conn ->
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -162,7 +172,11 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       end)
 
       Req.Test.stub(__MODULE__, fn conn ->
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -183,12 +197,19 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       test_pid = self()
 
       Req.Test.stub(__MODULE__, fn conn ->
-        auth_header = Enum.find_value(conn.req_headers, fn
-          {"authorization", v} -> v
-          _ -> nil
-        end)
+        auth_header =
+          Enum.find_value(conn.req_headers, fn
+            {"authorization", v} -> v
+            _ -> nil
+          end)
+
         send(test_pid, {:auth, auth_header})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -213,7 +234,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
 
       Req.Test.stub(__MODULE__, fn conn ->
         send(test_pid, {:host_path, {conn.host, conn.request_path}})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -224,7 +250,10 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
 
       assert_receive {:host_path, {host, path}}, 1000
       assert host == "us-central1-aiplatform.googleapis.com"
-      assert path =~ "/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-2.5-pro:streamGenerateContent"
+
+      assert path =~
+               "/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-2.5-pro:streamGenerateContent"
+
       EventStream.result(stream, 1000)
     end
 
@@ -233,7 +262,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
 
       Req.Test.stub(__MODULE__, fn conn ->
         send(test_pid, {:host_path, {conn.host, conn.request_path}})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -252,7 +286,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
 
       Req.Test.stub(__MODULE__, fn conn ->
         send(test_pid, {:host_path, {conn.host, conn.request_path}})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -271,7 +310,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
 
       Req.Test.stub(__MODULE__, fn conn ->
         send(test_pid, {:query, conn.query_string})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -297,7 +341,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -317,17 +366,32 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
-      context = Context.new(system_prompt: "You are a helpful assistant", messages: [%UserMessage{content: "Hi"}])
+
+      context =
+        Context.new(
+          system_prompt: "You are a helpful assistant",
+          messages: [%UserMessage{content: "Hi"}]
+        )
+
       opts = default_opts()
 
       {:ok, stream} = GoogleVertex.stream(model, context, opts)
 
       assert_receive {:request_body, body}, 1000
-      assert body["systemInstruction"] == %{"parts" => [%{"text" => "You are a helpful assistant"}]}
+
+      assert body["systemInstruction"] == %{
+               "parts" => [%{"text" => "You are a helpful assistant"}]
+             }
+
       EventStream.result(stream, 1000)
     end
 
@@ -337,7 +401,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -359,7 +428,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -379,7 +453,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -399,7 +478,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -421,7 +505,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -438,7 +527,9 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
         }
       ]
 
-      context = Context.new(messages: [%UserMessage{content: "What's the weather?"}], tools: tools)
+      context =
+        Context.new(messages: [%UserMessage{content: "What's the weather?"}], tools: tools)
+
       opts = default_opts()
 
       {:ok, stream} = GoogleVertex.stream(model, context, opts)
@@ -470,7 +561,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -500,7 +596,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -522,7 +623,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -543,7 +649,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -564,7 +675,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -585,7 +701,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -608,7 +729,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model(reasoning: true)
@@ -618,7 +744,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       {:ok, stream} = GoogleVertex.stream(model, context, opts)
 
       assert_receive {:request_body, body}, 1000
-      assert body["generationConfig"]["thinkingConfig"] == %{"includeThoughts" => true, "thinkingLevel" => "LOW"}
+
+      assert body["generationConfig"]["thinkingConfig"] == %{
+               "includeThoughts" => true,
+               "thinkingLevel" => "LOW"
+             }
+
       EventStream.result(stream, 1000)
     end
 
@@ -628,7 +759,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model(reasoning: true)
@@ -638,7 +774,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       {:ok, stream} = GoogleVertex.stream(model, context, opts)
 
       assert_receive {:request_body, body}, 1000
-      assert body["generationConfig"]["thinkingConfig"] == %{"includeThoughts" => true, "thinkingBudget" => 4096}
+
+      assert body["generationConfig"]["thinkingConfig"] == %{
+               "includeThoughts" => true,
+               "thinkingBudget" => 4096
+             }
+
       EventStream.result(stream, 1000)
     end
 
@@ -648,7 +789,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model(reasoning: false)
@@ -668,7 +814,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model(reasoning: true)
@@ -816,8 +967,24 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
     test "generates unique tool call IDs" do
       body =
         sse_body([
-          %{"candidates" => [%{"content" => %{"parts" => [%{"functionCall" => %{"name" => "test", "args" => %{}}}]}}]},
-          %{"candidates" => [%{"content" => %{"parts" => [%{"functionCall" => %{"name" => "test", "args" => %{}}}]}}]},
+          %{
+            "candidates" => [
+              %{
+                "content" => %{
+                  "parts" => [%{"functionCall" => %{"name" => "test", "args" => %{}}}]
+                }
+              }
+            ]
+          },
+          %{
+            "candidates" => [
+              %{
+                "content" => %{
+                  "parts" => [%{"functionCall" => %{"name" => "test", "args" => %{}}}]
+                }
+              }
+            ]
+          },
           %{"candidates" => [%{"finishReason" => "STOP"}]}
         ])
 
@@ -843,7 +1010,11 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
     test "parses thinking content with thought=true marker" do
       body =
         sse_body([
-          %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Let me think...", "thought" => true}]}}]},
+          %{
+            "candidates" => [
+              %{"content" => %{"parts" => [%{"text" => "Let me think...", "thought" => true}]}}
+            ]
+          },
           %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Here is my answer."}]}}]},
           %{"candidates" => [%{"finishReason" => "STOP"}]}
         ])
@@ -920,15 +1091,17 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
 
       events = stream |> EventStream.events() |> Enum.to_list()
 
-      has_text_start = Enum.any?(events, fn
-        {:text_start, _idx, _output} -> true
-        _ -> false
-      end)
+      has_text_start =
+        Enum.any?(events, fn
+          {:text_start, _idx, _output} -> true
+          _ -> false
+        end)
 
-      has_text_end = Enum.any?(events, fn
-        {:text_end, _idx, _text, _output} -> true
-        _ -> false
-      end)
+      has_text_end =
+        Enum.any?(events, fn
+          {:text_end, _idx, _text, _output} -> true
+          _ -> false
+        end)
 
       assert has_text_start
       assert has_text_end
@@ -966,7 +1139,15 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
     test "emits tool_call events" do
       body =
         sse_body([
-          %{"candidates" => [%{"content" => %{"parts" => [%{"functionCall" => %{"name" => "test", "args" => %{}}}]}}]},
+          %{
+            "candidates" => [
+              %{
+                "content" => %{
+                  "parts" => [%{"functionCall" => %{"name" => "test", "args" => %{}}}]
+                }
+              }
+            ]
+          },
           %{"candidates" => [%{"finishReason" => "STOP"}]}
         ])
 
@@ -982,15 +1163,17 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
 
       events = stream |> EventStream.events() |> Enum.to_list()
 
-      has_tool_call_start = Enum.any?(events, fn
-        {:tool_call_start, _idx, _output} -> true
-        _ -> false
-      end)
+      has_tool_call_start =
+        Enum.any?(events, fn
+          {:tool_call_start, _idx, _output} -> true
+          _ -> false
+        end)
 
-      has_tool_call_end = Enum.any?(events, fn
-        {:tool_call_end, _idx, _tool_call, _output} -> true
-        _ -> false
-      end)
+      has_tool_call_end =
+        Enum.any?(events, fn
+          {:tool_call_end, _idx, _tool_call, _output} -> true
+          _ -> false
+        end)
 
       assert has_tool_call_start
       assert has_tool_call_end
@@ -1070,7 +1253,11 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
 
     test "handles 429 quota exceeded" do
       Req.Test.stub(__MODULE__, fn conn ->
-        error_body = Jason.encode!(%{"error" => %{"message" => "Quota exceeded. Your quota will reset after 60s"}})
+        error_body =
+          Jason.encode!(%{
+            "error" => %{"message" => "Quota exceeded. Your quota will reset after 60s"}
+          })
+
         Plug.Conn.send_resp(conn, 429, error_body)
       end)
 
@@ -1218,7 +1405,11 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
         Plug.Conn.send_resp(conn, 200, body)
       end)
 
-      model = test_model(cost: %ModelCost{input: 1.25, output: 5.0, cache_read: 0.3125, cache_write: 0.0})
+      model =
+        test_model(
+          cost: %ModelCost{input: 1.25, output: 5.0, cache_read: 0.3125, cache_write: 0.0}
+        )
+
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
       opts = default_opts()
 
@@ -1243,7 +1434,11 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
     test "maps STOP to :stop" do
       body =
         sse_body([
-          %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Done"}]}, "finishReason" => "STOP"}]}
+          %{
+            "candidates" => [
+              %{"content" => %{"parts" => [%{"text" => "Done"}]}, "finishReason" => "STOP"}
+            ]
+          }
         ])
 
       Req.Test.stub(__MODULE__, fn conn ->
@@ -1263,7 +1458,14 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
     test "maps MAX_TOKENS to :length" do
       body =
         sse_body([
-          %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Truncated"}]}, "finishReason" => "MAX_TOKENS"}]}
+          %{
+            "candidates" => [
+              %{
+                "content" => %{"parts" => [%{"text" => "Truncated"}]},
+                "finishReason" => "MAX_TOKENS"
+              }
+            ]
+          }
         ])
 
       Req.Test.stub(__MODULE__, fn conn ->
@@ -1283,7 +1485,16 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
     test "sets :tool_use when function calls present" do
       body =
         sse_body([
-          %{"candidates" => [%{"content" => %{"parts" => [%{"functionCall" => %{"name" => "test", "args" => %{}}}]}, "finishReason" => "STOP"}]}
+          %{
+            "candidates" => [
+              %{
+                "content" => %{
+                  "parts" => [%{"functionCall" => %{"name" => "test", "args" => %{}}}]
+                },
+                "finishReason" => "STOP"
+              }
+            ]
+          }
         ])
 
       Req.Test.stub(__MODULE__, fn conn ->
@@ -1311,7 +1522,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
 
       Req.Test.stub(__MODULE__, fn conn ->
         send(test_pid, {:path, conn.request_path})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model(id: "gemini-2.5-pro")
@@ -1330,7 +1546,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
 
       Req.Test.stub(__MODULE__, fn conn ->
         send(test_pid, {:path, conn.request_path})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model(id: "gemini-2.5-flash")
@@ -1349,7 +1570,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
 
       Req.Test.stub(__MODULE__, fn conn ->
         send(test_pid, {:path, conn.request_path})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model(id: "gemini-3-pro-preview-0520")
@@ -1375,7 +1601,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         headers = Enum.into(conn.req_headers, %{})
         send(test_pid, {:headers, headers})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model(headers: %{"X-Custom-Model-Header" => "model-value"})
@@ -1395,7 +1626,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         headers = Enum.into(conn.req_headers, %{})
         send(test_pid, {:headers, headers})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -1415,7 +1651,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         headers = Enum.into(conn.req_headers, %{})
         send(test_pid, {:headers, headers})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -1574,7 +1815,17 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       body =
         sse_body([
           %{"candidates" => [%{"content" => %{"parts" => [%{"text" => "Let me check... "}]}}]},
-          %{"candidates" => [%{"content" => %{"parts" => [%{"functionCall" => %{"name" => "search", "args" => %{"q" => "test"}}}]}}]},
+          %{
+            "candidates" => [
+              %{
+                "content" => %{
+                  "parts" => [
+                    %{"functionCall" => %{"name" => "search", "args" => %{"q" => "test"}}}
+                  ]
+                }
+              }
+            ]
+          },
           %{"candidates" => [%{"finishReason" => "STOP"}]}
         ])
 
@@ -1612,7 +1863,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -1632,7 +1888,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -1653,12 +1914,15 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
         content: [%TextContent{text: "Search results..."}]
       }
 
-      context = Context.new(messages: [
-        %UserMessage{content: "Search for test"},
-        assistant_msg,
-        tool_result,
-        %UserMessage{content: "Thanks"}
-      ])
+      context =
+        Context.new(
+          messages: [
+            %UserMessage{content: "Search for test"},
+            assistant_msg,
+            tool_result,
+            %UserMessage{content: "Thanks"}
+          ]
+        )
 
       opts = default_opts()
 
@@ -1676,7 +1940,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -1695,11 +1964,14 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
         is_error: false
       }
 
-      context = Context.new(messages: [
-        %UserMessage{content: "Read the file"},
-        assistant_msg,
-        tool_result
-      ])
+      context =
+        Context.new(
+          messages: [
+            %UserMessage{content: "Read the file"},
+            assistant_msg,
+            tool_result
+          ]
+        )
 
       opts = default_opts()
 
@@ -1725,7 +1997,12 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
       Req.Test.stub(__MODULE__, fn conn ->
         {:ok, raw, conn} = Plug.Conn.read_body(conn)
         send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}])
+        )
       end)
 
       model = test_model()
@@ -1744,11 +2021,14 @@ defmodule Ai.Providers.GoogleVertexComprehensiveTest do
         is_error: true
       }
 
-      context = Context.new(messages: [
-        %UserMessage{content: "Read file"},
-        assistant_msg,
-        tool_result
-      ])
+      context =
+        Context.new(
+          messages: [
+            %UserMessage{content: "Read file"},
+            assistant_msg,
+            tool_result
+          ]
+        )
 
       opts = default_opts()
 

@@ -215,9 +215,7 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       final_response = Mocks.assistant_message("Handled crash")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       events = Loop.stream([user_message("Crash tool")], context, config) |> Enum.to_list()
 
@@ -253,9 +251,7 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       final_response = Mocks.assistant_message("Handled throw")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       events = Loop.stream([user_message("Throw tool")], context, config) |> Enum.to_list()
 
@@ -288,9 +284,7 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       final_response = Mocks.assistant_message("Handled weird")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       events = Loop.stream([user_message("Weird tool")], context, config) |> Enum.to_list()
 
@@ -340,9 +334,7 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       final_response = Mocks.assistant_message("Done")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       signal = AbortSignal.new()
 
@@ -394,9 +386,7 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       final_response = Mocks.assistant_message("Done")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       signal = AbortSignal.new()
 
@@ -446,9 +436,7 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       error_response = Mocks.assistant_message("Error occurred", stop_reason: :error)
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn_single(error_response)
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn_single(error_response))
 
       events = Loop.stream([user_message("Test")], context, config) |> Enum.to_list()
 
@@ -472,9 +460,7 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       aborted_response = Mocks.assistant_message("Aborted", stop_reason: :aborted)
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn_single(aborted_response)
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn_single(aborted_response))
 
       events = Loop.stream([user_message("Test")], context, config) |> Enum.to_list()
 
@@ -502,9 +488,7 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       final_response = Mocks.assistant_message("Final")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       prompt = user_message("Start")
       stream = Loop.agent_loop([prompt], context, config, nil, nil)
@@ -536,9 +520,7 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       response = Mocks.assistant_message("Response")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn_single(response)
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
 
       events = Loop.stream([user_message("Test")], context, config) |> Enum.to_list()
 
@@ -595,9 +577,7 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       response = Mocks.assistant_message("Hello")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn_single(response)
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
 
       stream = Loop.agent_loop([user_message("Hi")], context, config, nil, nil)
       {:ok, _messages} = EventStream.result(stream)
@@ -609,7 +589,9 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       assert metadata.tool_count == 0
 
       # Should have received end telemetry
-      assert_receive {:telemetry, [:agent_core, :loop, :end], %{duration: duration, system_time: _}, end_metadata}
+      assert_receive {:telemetry, [:agent_core, :loop, :end],
+                      %{duration: duration, system_time: _}, end_metadata}
+
       assert is_integer(duration) or is_nil(duration)
       assert end_metadata.status == :completed
     end
@@ -623,20 +605,22 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       final_response = Mocks.assistant_message("Done")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       stream = Loop.agent_loop([user_message("Echo")], context, config, nil, nil)
       {:ok, _messages} = EventStream.result(stream)
 
       # Should have tool task start
-      assert_receive {:telemetry, [:agent_core, :tool_task, :start], %{system_time: _}, tool_start_meta}
+      assert_receive {:telemetry, [:agent_core, :tool_task, :start], %{system_time: _},
+                      tool_start_meta}
+
       assert tool_start_meta.tool_name == "echo"
       assert tool_start_meta.tool_call_id == "call_telemetry"
 
       # Should have tool task end
-      assert_receive {:telemetry, [:agent_core, :tool_task, :end], %{system_time: _}, tool_end_meta}
+      assert_receive {:telemetry, [:agent_core, :tool_task, :end], %{system_time: _},
+                      tool_end_meta}
+
       assert tool_end_meta.tool_name == "echo"
       assert tool_end_meta.is_error == false
     end
@@ -661,15 +645,15 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       final_response = Mocks.assistant_message("Done")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
 
       stream = Loop.agent_loop([user_message("Crash")], context, config, nil, nil)
       {:ok, _messages} = EventStream.result(stream)
 
       # Should have tool task end with is_error: true (caught exit is handled by task)
-      assert_receive {:telemetry, [:agent_core, :tool_task, :end], %{system_time: _}, tool_end_meta}
+      assert_receive {:telemetry, [:agent_core, :tool_task, :end], %{system_time: _},
+                      tool_end_meta}
+
       assert tool_end_meta.tool_name == "crash_tele"
       assert tool_end_meta.is_error == true
     end
@@ -685,9 +669,7 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       response = Mocks.assistant_message("Got both messages")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn_single(response)
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
 
       prompts = [
         user_message("First message"),
@@ -725,21 +707,18 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
         timestamp: System.system_time(:millisecond)
       }
 
-      existing_assistant = Mocks.assistant_message_with_tool_calls([
-        Mocks.tool_call("previous_tool", %{}, id: "call_existing")
-      ])
+      existing_assistant =
+        Mocks.assistant_message_with_tool_calls([
+          Mocks.tool_call("previous_tool", %{}, id: "call_existing")
+        ])
 
       context =
-        simple_context(
-          messages: [user_message("Original"), existing_assistant, tool_result]
-        )
+        simple_context(messages: [user_message("Original"), existing_assistant, tool_result])
 
       response = Mocks.assistant_message("Continuing from tool result")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn_single(response)
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
 
       stream = Loop.agent_loop_continue(context, config, nil, nil)
 
@@ -762,9 +741,7 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
 
     test "raises when last message is assistant" do
       context =
-        simple_context(
-          messages: [user_message("Hi"), Mocks.assistant_message("Hello")]
-        )
+        simple_context(messages: [user_message("Hi"), Mocks.assistant_message("Hello")])
 
       config = simple_config()
 
@@ -784,9 +761,7 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       response = Mocks.assistant_message("Hello")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn_single(response)
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
 
       owner = self()
       stream = Loop.agent_loop([user_message("Hi")], context, config, nil, nil, owner)
@@ -800,9 +775,7 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       response = Mocks.assistant_message("Continued")
 
       config =
-        simple_config(
-          stream_fn: Mocks.mock_stream_fn_single(response)
-        )
+        simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
 
       owner = self()
       stream = Loop.agent_loop_continue(context, config, nil, nil, owner)

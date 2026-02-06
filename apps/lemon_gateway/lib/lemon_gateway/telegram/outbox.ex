@@ -188,7 +188,13 @@ defmodule LemonGateway.Telegram.Outbox do
 
     state
     |> safe_api_call(fn ->
-      state.api_mod.edit_message_text(state.token, chat_id, message_id, formatted_text, parse_mode)
+      state.api_mod.edit_message_text(
+        state.token,
+        chat_id,
+        message_id,
+        formatted_text,
+        parse_mode
+      )
     end)
     |> handle_api_result()
   end
@@ -243,7 +249,8 @@ defmodule LemonGateway.Telegram.Outbox do
     {:error, :rate_limited, retry_after_ms}
   end
 
-  defp handle_api_error({:http_error, status, _response_body}) when status >= 500 and status < 600 do
+  defp handle_api_error({:http_error, status, _response_body})
+       when status >= 500 and status < 600 do
     # Server errors are retryable
     {:error, {:server_error, status}, @base_backoff_ms}
   end

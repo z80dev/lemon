@@ -487,7 +487,9 @@ defmodule AgentCore.EventStreamTest do
       events = EventStream.events(stream) |> Enum.to_list()
 
       # Should have events 4-7 plus agent_end (1,2,3 were dropped)
-      event_values = events |> Enum.filter(&match?({:event, _}, &1)) |> Enum.map(fn {:event, i} -> i end)
+      event_values =
+        events |> Enum.filter(&match?({:event, _}, &1)) |> Enum.map(fn {:event, i} -> i end)
+
       assert event_values == [4, 5, 6, 7]
 
       stats = EventStream.stats(stream)
@@ -535,7 +537,9 @@ defmodule AgentCore.EventStreamTest do
       events = EventStream.events(stream) |> Enum.to_list()
 
       # Should have events 1-6 plus agent_end (7,8 were dropped, and complete drops oldest to make room)
-      event_values = events |> Enum.filter(&match?({:event, _}, &1)) |> Enum.map(fn {:event, i} -> i end)
+      event_values =
+        events |> Enum.filter(&match?({:event, _}, &1)) |> Enum.map(fn {:event, i} -> i end)
+
       assert event_values == [2, 3, 4, 5, 6]
     end
 
@@ -587,7 +591,10 @@ defmodule AgentCore.EventStreamTest do
       EventStream.complete(stream, [])
 
       events = EventStream.events(stream) |> Enum.to_list()
-      event_values = events |> Enum.filter(&match?({:event, _}, &1)) |> Enum.map(fn {:event, i} -> i end)
+
+      event_values =
+        events |> Enum.filter(&match?({:event, _}, &1)) |> Enum.map(fn {:event, i} -> i end)
+
       # Complete drops oldest to make room for agent_end
       assert event_values == [2, 3, 4]
     end
@@ -651,9 +658,10 @@ defmodule AgentCore.EventStreamTest do
     test "events stream receives canceled event" do
       {:ok, stream} = EventStream.start_link()
 
-      task = Task.async(fn ->
-        EventStream.events(stream) |> Enum.to_list()
-      end)
+      task =
+        Task.async(fn ->
+          EventStream.events(stream) |> Enum.to_list()
+        end)
 
       Process.sleep(20)
       EventStream.cancel(stream, :test_cancel)
@@ -708,20 +716,22 @@ defmodule AgentCore.EventStreamTest do
       test_pid = self()
 
       # Spawn an owner process
-      owner = spawn(fn ->
-        receive do
-          :die -> :ok
-        end
-      end)
+      owner =
+        spawn(fn ->
+          receive do
+            :die -> :ok
+          end
+        end)
 
       {:ok, stream} = EventStream.start_link(owner: owner)
 
       # Start a result waiter
-      task = Task.async(fn ->
-        result = EventStream.result(stream)
-        send(test_pid, {:result, result})
-        result
-      end)
+      task =
+        Task.async(fn ->
+          result = EventStream.result(stream)
+          send(test_pid, {:result, result})
+          result
+        end)
 
       Process.sleep(20)
 
@@ -737,17 +747,19 @@ defmodule AgentCore.EventStreamTest do
     end
 
     test "events stream terminates when owner dies" do
-      owner = spawn(fn ->
-        receive do
-          :die -> :ok
-        end
-      end)
+      owner =
+        spawn(fn ->
+          receive do
+            :die -> :ok
+          end
+        end)
 
       {:ok, stream} = EventStream.start_link(owner: owner)
 
-      task = Task.async(fn ->
-        EventStream.events(stream) |> Enum.to_list()
-      end)
+      task =
+        Task.async(fn ->
+          EventStream.events(stream) |> Enum.to_list()
+        end)
 
       Process.sleep(20)
       send(owner, :die)
@@ -778,9 +790,10 @@ defmodule AgentCore.EventStreamTest do
     test "stream auto-cancels on timeout" do
       {:ok, stream} = EventStream.start_link(timeout: 50)
 
-      task = Task.async(fn ->
-        EventStream.result(stream)
-      end)
+      task =
+        Task.async(fn ->
+          EventStream.result(stream)
+        end)
 
       result = Task.await(task, 1000)
       assert {:error, {:canceled, :timeout}} = result
@@ -792,9 +805,10 @@ defmodule AgentCore.EventStreamTest do
     test "events stream receives timeout cancel event" do
       {:ok, stream} = EventStream.start_link(timeout: 50)
 
-      task = Task.async(fn ->
-        EventStream.events(stream) |> Enum.to_list()
-      end)
+      task =
+        Task.async(fn ->
+          EventStream.events(stream) |> Enum.to_list()
+        end)
 
       events = Task.await(task, 1000)
       assert {:canceled, :timeout} in events
@@ -894,11 +908,12 @@ defmodule AgentCore.EventStreamTest do
     test "attaches a task to the stream" do
       {:ok, stream} = EventStream.start_link()
 
-      task = Task.async(fn ->
-        receive do
-          :done -> :ok
-        end
-      end)
+      task =
+        Task.async(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
 
       :ok = EventStream.attach_task(stream, task.pid)
 
@@ -913,13 +928,14 @@ defmodule AgentCore.EventStreamTest do
       {:ok, stream} = EventStream.start_link()
 
       # Use spawn instead of Task.async to avoid Task catching shutdown
-      task_pid = spawn(fn ->
-        receive do
-          :done -> :ok
-        after
-          5000 -> :timeout
-        end
-      end)
+      task_pid =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          after
+            5000 -> :timeout
+          end
+        end)
 
       EventStream.attach_task(stream, task_pid)
 
@@ -933,22 +949,24 @@ defmodule AgentCore.EventStreamTest do
     end
 
     test "attached task is shutdown when owner dies" do
-      owner = spawn(fn ->
-        receive do
-          :die -> :ok
-        end
-      end)
+      owner =
+        spawn(fn ->
+          receive do
+            :die -> :ok
+          end
+        end)
 
       {:ok, stream} = EventStream.start_link(owner: owner)
 
       # Use spawn instead of Task.async to avoid Task catching shutdown
-      task_pid = spawn(fn ->
-        receive do
-          :done -> :ok
-        after
-          5000 -> :timeout
-        end
-      end)
+      task_pid =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          after
+            5000 -> :timeout
+          end
+        end)
 
       EventStream.attach_task(stream, task_pid)
 
@@ -964,17 +982,19 @@ defmodule AgentCore.EventStreamTest do
     test "stream receives error when attached task crashes" do
       {:ok, stream} = EventStream.start_link()
 
-      task_pid = spawn(fn ->
-        receive do
-          :crash -> exit(:boom)
-        end
-      end)
+      task_pid =
+        spawn(fn ->
+          receive do
+            :crash -> exit(:boom)
+          end
+        end)
 
       EventStream.attach_task(stream, task_pid)
 
-      task = Task.async(fn ->
-        EventStream.result(stream)
-      end)
+      task =
+        Task.async(fn ->
+          EventStream.result(stream)
+        end)
 
       Process.sleep(20)
       send(task_pid, :crash)
@@ -986,11 +1006,12 @@ defmodule AgentCore.EventStreamTest do
     test "task crash does not affect stream if already completed" do
       {:ok, stream} = EventStream.start_link()
 
-      task_pid = spawn(fn ->
-        receive do
-          :crash -> exit(:boom)
-        end
-      end)
+      task_pid =
+        spawn(fn ->
+          receive do
+            :crash -> exit(:boom)
+          end
+        end)
 
       EventStream.attach_task(stream, task_pid)
       EventStream.complete(stream, ["done"])
@@ -1009,17 +1030,19 @@ defmodule AgentCore.EventStreamTest do
     test "only one task can be attached at a time" do
       {:ok, stream} = EventStream.start_link()
 
-      task1_pid = spawn(fn ->
-        receive do
-          :done -> :ok
-        end
-      end)
+      task1_pid =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
 
-      task2_pid = spawn(fn ->
-        receive do
-          :done -> :ok
-        end
-      end)
+      task2_pid =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
 
       EventStream.attach_task(stream, task1_pid)
       EventStream.attach_task(stream, task2_pid)

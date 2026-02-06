@@ -697,7 +697,7 @@ defmodule CodingAgent.Tools.Patch do
 
   defp do_apply_changes(lines, changes, start_idx) do
     Enum.reduce_while(changes, {lines, start_idx, 0, 0}, fn change,
-                                                           {acc_lines, idx, adds, removes} ->
+                                                            {acc_lines, idx, adds, removes} ->
       case change.type do
         :keep ->
           {:cont, {acc_lines, idx + 1, adds, removes}}
@@ -705,7 +705,8 @@ defmodule CodingAgent.Tools.Patch do
         :remove ->
           if idx >= length(acc_lines) do
             {:halt,
-             {:error, "Patch remove out of bounds at index #{idx} (file has #{length(acc_lines)} lines)"}}
+             {:error,
+              "Patch remove out of bounds at index #{idx} (file has #{length(acc_lines)} lines)"}}
           else
             {:cont, {List.delete_at(acc_lines, idx), idx, adds, removes + 1}}
           end
@@ -770,11 +771,20 @@ defmodule CodingAgent.Tools.Patch do
 
   defp file_exists?(path) do
     case File.stat(path) do
-      {:ok, %File.Stat{type: :regular}} -> {:ok, true}
-      {:ok, %File.Stat{type: type}} -> {:error, "Path is not a regular file (is #{type}): #{path}"}
-      {:error, :enoent} -> {:ok, false}
-      {:error, :eacces} -> {:error, "Permission denied: #{path}"}
-      {:error, reason} -> {:error, "Failed to check file: #{inspect(reason)}"}
+      {:ok, %File.Stat{type: :regular}} ->
+        {:ok, true}
+
+      {:ok, %File.Stat{type: type}} ->
+        {:error, "Path is not a regular file (is #{type}): #{path}"}
+
+      {:error, :enoent} ->
+        {:ok, false}
+
+      {:error, :eacces} ->
+        {:error, "Permission denied: #{path}"}
+
+      {:error, reason} ->
+        {:error, "Failed to check file: #{inspect(reason)}"}
     end
   end
 

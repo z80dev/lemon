@@ -1,11 +1,185 @@
 # lemon 🍋
 
-an AI coding agent system named after my cat :)
+Lemon is a local-first assistant and coding agent system (named after my cat) that you run on your own machine.
 
-built on the BEAM (Erlang/Elixir). It uses the Erlang Virtual Machine's process model for handling concurrent agent coordination and fault tolerance.
+The easiest way to use Lemon day-to-day is through **Telegram**: you talk to a bot from your phone/desktop, while LemonGateway runs locally and routes each message to an engine (native Lemon, Claude Code, Codex) and streams replies back.
+
+If you're here for the architecture deep-dive, jump to [What is Lemon?](#what-is-lemon).
+
+## Quickstart (Telegram)
+
+### 1. Prerequisites
+
+- Elixir 1.19+ and Erlang/OTP 27+
+- A model provider API key (Anthropic/OpenAI/etc.)
+
+Node.js is only required for the TUI/Web clients; the Telegram gateway is Elixir-only.
+
+#### Installing Dependencies (If You Have Never Used Elixir)
+
+**macOS (Homebrew):**
+
+```bash
+brew install elixir
+elixir -v
+```
+
+Optional (only if you want the TUI/Web clients):
+
+```bash
+brew install node@20
+node -v
+```
+
+**Linux:**
+
+<details>
+<summary>Show Linux install instructions (Arch, Ubuntu/Debian, Fedora, and asdf)</summary>
+
+#### Option A (Recommended): asdf (consistent versions across distros)
+
+Install `asdf` (see the asdf docs for your distro), then:
+
+```bash
+asdf plugin add erlang
+asdf plugin add elixir
+
+# Pick any Erlang/OTP 27.x + Elixir 1.19.x combo.
+# Example (adjust versions as needed):
+asdf install erlang 27.2
+asdf install elixir 1.19.0-otp-27
+
+asdf global erlang 27.2
+asdf global elixir 1.19.0-otp-27
+
+elixir -v
+```
+
+If your distro packages are too old to satisfy OTP 27 / Elixir 1.19, `asdf` is the simplest fix.
+
+Build deps if `asdf install erlang ...` fails:
+
+- Arch Linux:
+```bash
+sudo pacman -Syu
+sudo pacman -S --needed base-devel git ncurses openssl wxwidgets-gtk3
+```
+- Ubuntu/Debian:
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential git autoconf m4 libncurses5-dev libssl-dev libwxgtk3.2-dev libgl1-mesa-dev libglu1-mesa-dev libpng-dev libssh-dev unixodbc-dev
+```
+- Fedora:
+```bash
+sudo dnf install -y @development-tools git autoconf m4 ncurses-devel openssl-devel wxGTK-devel mesa-libGL-devel mesa-libGLU-devel libpng-devel libssh-devel unixODBC-devel
+```
+
+#### Option B: OS packages (fastest, version varies by distro)
+
+- Arch Linux:
+```bash
+sudo pacman -Syu
+sudo pacman -S elixir erlang
+elixir -v
+```
+- Ubuntu/Debian:
+```bash
+sudo apt-get update
+sudo apt-get install -y elixir erlang
+elixir -v
+```
+- Fedora:
+```bash
+sudo dnf install -y elixir erlang
+elixir -v
+```
+
+</details>
+
+### 2. Create a Telegram bot token
+
+1. In Telegram, message `@BotFather`
+2. Run `/newbot`
+3. Copy the bot token it gives you
+
+If you plan to use Lemon in a group chat, also set bot privacy appropriately in BotFather (`/setprivacy`) so the bot receives messages.
+
+### 3. Get your chat ID
+
+Send any message to your new bot, then fetch updates via the Telegram Bot API:
+
+```bash
+export LEMON_TELEGRAM_BOT_TOKEN="123456:token"
+curl -s "https://api.telegram.org/bot${LEMON_TELEGRAM_BOT_TOKEN}/getUpdates" | python3 -m json.tool
+```
+
+Look for `message.chat.id`. For groups/supergroups this is usually a negative number.
+
+### 4. Configure Lemon
+
+Create `~/.lemon/config.toml`:
+
+```toml
+# Provider keys (pick one)
+[providers.anthropic]
+api_key = "sk-ant-..."
+
+# Default model behavior (used by native Lemon engine and as a fallback)
+[agent]
+default_provider = "anthropic"
+default_model = "claude-sonnet-4-20250514"
+
+# Telegram gateway (runs locally, you chat from Telegram)
+[gateway]
+enable_telegram = true
+auto_resume = true
+default_engine = "lemon"
+
+[gateway.telegram]
+bot_token = "123456:token"
+allowed_chat_ids = [123456789]
+drop_pending_updates = true
+
+# Assistant profile used for Telegram chats (when no binding overrides it)
+[agents.default]
+name = "Lemon"
+system_prompt = "You are my general assistant. Be concise, practical, and ask clarifying questions when needed."
+model = "anthropic:claude-sonnet-4-20250514"
+default_engine = "lemon"
+
+[agents.default.tool_policy]
+allow = "all"
+deny = []
+require_approval = ["bash", "write", "edit"]
+
+[[gateway.bindings]]
+transport = "telegram"
+chat_id = 123456789
+agent_id = "default"
+```
+
+Notes:
+- `allowed_chat_ids` is your main safety rail. If you omit it, **anyone who can reach your bot can use it**.
+- If you want Lemon to operate inside a specific repo, add a project and bind it (see `docs/config.md`).
+
+### 5. Run the gateway
+
+From this repo:
+
+```bash
+./bin/lemon-gateway
+```
+
+### 6. Use Lemon from Telegram
+
+- Engine override (put at the start of a message): `/lemon`, `/claude`, `/codex`
+- Queue mode override: `/steer`, `/followup`, `/interrupt`
+- Cancel a running thread: `/cancel`
+- Approvals: when a tool needs approval, Telegram will show inline buttons (Once / Session / Agent / Global / Deny).
 
 ## Table of Contents
 
+- [Quickstart (Telegram)](#quickstart-telegram)
 - [What is Lemon?](#what-is-lemon)
 - [Why BEAM?](#why-beam)
 - [Architecture Overview](#architecture-overview)
@@ -1504,14 +1678,22 @@ export AZURE_OPENAI_RESOURCE_NAME="myresource"
 export AZURE_OPENAI_API_VERSION="2024-12-01-preview"
 ```
 
-### Codex CLI Configuration
+### CLI Runner Configuration (Codex/Claude/Kimi)
 
-To configure Codex CLI runner behavior, add to `config/config.exs`:
+CLI runner behavior is configured in the canonical TOML config under `[agent.cli.*]`
+(see `docs/config.md`):
 
-```elixir
-config :agent_core, :codex,
-  extra_args: ["-c", "notify=[]"],  # Extra args passed to codex before exec
-  auto_approve: false                # Enable full automation without approvals
+```toml
+[agent.cli.codex]
+extra_args = ["-c", "notify=[]"]
+auto_approve = false
+
+[agent.cli.kimi]
+extra_args = []
+
+[agent.cli.claude]
+dangerously_skip_permissions = true
+# yolo = true  # Can also be toggled via env (see docs/config.md)
 ```
 
 ---
@@ -1590,30 +1772,61 @@ config :lemon_control_plane, :port, 4040
 
 ### Running LemonGateway
 
-LemonGateway is optional and typically used for Telegram or other transport-based workflows. Configure it via `~/.lemon/config.toml` under the `[gateway]` section and start it from IEx or your own supervision tree.
+LemonGateway powers transport-based workflows (Telegram, etc.). Configure it via `~/.lemon/config.toml` under the `[gateway]` section.
+
+To run Telegram locally from source:
+
+```bash
+./bin/lemon-gateway
+# ./bin/lemon-gateway --debug
+```
 
 Minimal `~/.lemon/config.toml` for Telegram:
 
 ```toml
 [gateway]
 enable_telegram = true
+auto_resume = true
 default_engine = "lemon"
 
 [gateway.telegram]
 bot_token = "your-telegram-bot-token"
 allowed_chat_ids = [123456789]
+# Optional: don't reply to messages that were sent while Lemon was offline.
+drop_pending_updates = true
 
 [[gateway.bindings]]
 transport = "telegram"
 chat_id = 123456789
-project = "lemon"
+agent_id = "default"
 default_engine = "lemon"
 ```
 
-Start in IEx:
+Optional: bind a chat to a specific working directory (project):
+
+```toml
+[gateway.projects.myrepo]
+root = "/path/to/myrepo"
+default_engine = "lemon"
+
+[[gateway.bindings]]
+transport = "telegram"
+chat_id = 123456789
+project = "myrepo"
+agent_id = "default"
+```
+
+From Telegram:
+- Engine override: `/lemon`, `/claude`, `/codex` (at the start of a message)
+- Queue mode override: `/steer`, `/followup`, `/interrupt`
+- Cancel a running thread: `/cancel`
+- Approvals: when a tool needs approval, you'll get inline approval buttons
+
+Start from IEx (advanced):
 
 ```elixir
 Application.ensure_all_started(:lemon_gateway)
+Application.ensure_all_started(:lemon_router)
 ```
 
 ### Running Cron Jobs (LemonAutomation)

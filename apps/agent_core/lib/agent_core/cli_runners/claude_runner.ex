@@ -56,6 +56,7 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
   use AgentCore.CliRunners.JsonlRunner
 
   alias AgentCore.CliRunners.ClaudeSchema
+
   alias AgentCore.CliRunners.ClaudeSchema.{
     StreamAssistantMessage,
     StreamResultMessage,
@@ -66,6 +67,7 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
     ToolResultBlock,
     ToolUseBlock
   }
+
   alias AgentCore.CliRunners.Types.{EventFactory, ResumeToken}
   alias AgentCore.CliRunners.ToolActionHelpers
   alias LemonCore.Config, as: LemonConfig
@@ -125,7 +127,8 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
     base_args =
       [
         "-p",
-        "--output-format", "stream-json",
+        "--output-format",
+        "stream-json",
         "--verbose"
       ]
       |> maybe_add_permissions(state)
@@ -136,6 +139,7 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
       case resume do
         %ResumeToken{value: session_id} ->
           base_args ++ ["--resume", session_id]
+
         nil ->
           base_args
       end
@@ -205,7 +209,9 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
             permission_mode: event.permission_mode
           }
 
-          {started_event, factory} = EventFactory.started(state.factory, token, title: "Claude", meta: meta)
+          {started_event, factory} =
+            EventFactory.started(state.factory, token, title: "Claude", meta: meta)
+
           state = %{state | factory: factory, found_session: token}
           {[started_event], state, [found_session: token]}
         else
@@ -239,12 +245,16 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
           duration_ms: event.duration_ms,
           duration_api_ms: event.duration_api_ms,
           num_turns: event.num_turns,
-          usage: if(event.usage, do: %{
-            input_tokens: event.usage.input_tokens,
-            output_tokens: event.usage.output_tokens,
-            cache_creation_input_tokens: event.usage.cache_creation_input_tokens,
-            cache_read_input_tokens: event.usage.cache_read_input_tokens
-          }, else: nil)
+          usage:
+            if(event.usage,
+              do: %{
+                input_tokens: event.usage.input_tokens,
+                output_tokens: event.usage.output_tokens,
+                cache_creation_input_tokens: event.usage.cache_creation_input_tokens,
+                cache_read_input_tokens: event.usage.cache_read_input_tokens
+              },
+              else: nil
+            )
         }
 
         # Get resume token from event or state
@@ -256,22 +266,27 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
           end
 
         if ok do
-          {completed_event, factory} = EventFactory.completed_ok(
-            state.factory,
-            result_text,
-            resume: resume_token,
-            usage: usage
-          )
+          {completed_event, factory} =
+            EventFactory.completed_ok(
+              state.factory,
+              result_text,
+              resume: resume_token,
+              usage: usage
+            )
+
           state = %{state | factory: factory}
           {[completed_event], state, [done: true]}
         else
           error = extract_error(event)
-          {completed_event, factory} = EventFactory.completed_error(
-            state.factory,
-            error,
-            answer: result_text,
-            resume: resume_token
-          )
+
+          {completed_event, factory} =
+            EventFactory.completed_error(
+              state.factory,
+              error,
+              answer: result_text,
+              resume: resume_token
+            )
+
           state = %{state | factory: factory}
           {[completed_event], state, [done: true]}
         end
@@ -286,12 +301,13 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
     message = "claude failed (rc=#{exit_code})"
     {note_event, factory} = EventFactory.note(state.factory, message, ok: false)
 
-    {completed_event, factory} = EventFactory.completed_error(
-      factory,
-      message,
-      answer: state.last_assistant_text || "",
-      resume: state.found_session
-    )
+    {completed_event, factory} =
+      EventFactory.completed_error(
+        factory,
+        message,
+        answer: state.last_assistant_text || "",
+        resume: state.found_session
+      )
 
     state = %{state | factory: factory}
     {[note_event, completed_event], state}
@@ -301,21 +317,27 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
   def handle_stream_end(state) do
     if state.found_session == nil do
       message = "claude finished but no session_id was captured"
-      {event, factory} = EventFactory.completed_error(
-        state.factory,
-        message,
-        answer: state.last_assistant_text || ""
-      )
+
+      {event, factory} =
+        EventFactory.completed_error(
+          state.factory,
+          message,
+          answer: state.last_assistant_text || ""
+        )
+
       state = %{state | factory: factory}
       {[event], state}
     else
       message = "claude finished without a result event"
-      {event, factory} = EventFactory.completed_error(
-        state.factory,
-        message,
-        answer: state.last_assistant_text || "",
-        resume: state.found_session
-      )
+
+      {event, factory} =
+        EventFactory.completed_error(
+          state.factory,
+          message,
+          answer: state.last_assistant_text || "",
+          resume: state.found_session
+        )
+
       state = %{state | factory: factory}
       {[event], state}
     end
@@ -349,14 +371,15 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
     title = String.slice(thinking, 0, 100)
     detail = if signature, do: %{signature: signature}, else: %{}
 
-    {event, factory} = EventFactory.action_completed(
-      state.factory,
-      action_id,
-      :note,
-      title,
-      true,
-      detail: detail
-    )
+    {event, factory} =
+      EventFactory.action_completed(
+        state.factory,
+        action_id,
+        :note,
+        title,
+        true,
+        detail: detail
+      )
 
     state = %{state | factory: factory}
     {[event], state}
@@ -371,7 +394,14 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
     }
 
     {event, factory, pending_actions} =
-      ToolActionHelpers.start_action(state.factory, state.pending_actions, id, kind, title, detail)
+      ToolActionHelpers.start_action(
+        state.factory,
+        state.pending_actions,
+        id,
+        kind,
+        title,
+        detail
+      )
 
     state = %{state | factory: factory, pending_actions: pending_actions}
 
@@ -389,7 +419,10 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
 
   defp process_user_content(_, state), do: {[], state}
 
-  defp process_tool_result(%ToolResultBlock{tool_use_id: tool_use_id, content: content, is_error: is_error}, state) do
+  defp process_tool_result(
+         %ToolResultBlock{tool_use_id: tool_use_id, content: content, is_error: is_error},
+         state
+       ) do
     {warning_events, state} =
       if is_error do
         maybe_permission_warning(ToolActionHelpers.normalize_tool_result(content), state)
@@ -407,7 +440,13 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
     }
 
     {event, factory, pending_actions} =
-      ToolActionHelpers.complete_action(state.factory, state.pending_actions, tool_use_id, ok, detail)
+      ToolActionHelpers.complete_action(
+        state.factory,
+        state.pending_actions,
+        tool_use_id,
+        ok,
+        detail
+      )
 
     state = %{state | factory: factory, pending_actions: pending_actions}
     {[event | warning_events], state}
@@ -464,7 +503,8 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
     end
   end
 
-  defp extract_error(%StreamResultMessage{is_error: true, result: result}) when is_binary(result) do
+  defp extract_error(%StreamResultMessage{is_error: true, result: result})
+       when is_binary(result) do
     result
   end
 
@@ -475,6 +515,7 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
   defp extract_error(_), do: nil
 
   defp maybe_permission_warning(nil, state), do: {[], state}
+
   defp maybe_permission_warning(error, state) when is_binary(error) do
     if permission_denied?(error) do
       message = "Permission denied: #{String.slice(error, 0, 200)}"
@@ -484,6 +525,7 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
       {[], state}
     end
   end
+
   defp maybe_permission_warning(_error, state), do: {[], state}
 
   defp permission_denied?(text) when is_binary(text) do
@@ -507,7 +549,10 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
 
   defp normalize_allowed_tools(nil), do: []
   defp normalize_allowed_tools(list) when is_list(list), do: Enum.map(list, &to_string/1)
-  defp normalize_allowed_tools(value) when is_binary(value), do: String.split(value, ~r/\s*,\s*/, trim: true)
+
+  defp normalize_allowed_tools(value) when is_binary(value),
+    do: String.split(value, ~r/\s*,\s*/, trim: true)
+
   defp normalize_allowed_tools(_), do: []
 
   defp skip_permissions?(state) do

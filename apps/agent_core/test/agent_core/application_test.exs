@@ -90,7 +90,8 @@ defmodule AgentCore.ApplicationTest do
 
       assert counts.active == 4
       assert counts.specs == 4
-      assert counts.supervisors >= 2  # SubagentSupervisor and Task.Supervisors
+      # SubagentSupervisor and Task.Supervisors
+      assert counts.supervisors >= 2
       assert counts.workers >= 0
     end
   end

@@ -9,7 +9,15 @@ defmodule AgentCore.CliRunners.ClaudeSubagentTest do
   use ExUnit.Case, async: true
 
   alias AgentCore.CliRunners.ClaudeSubagent
-  alias AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent, Action}
+
+  alias AgentCore.CliRunners.Types.{
+    ActionEvent,
+    CompletedEvent,
+    ResumeToken,
+    StartedEvent,
+    Action
+  }
+
   alias AgentCore.EventStream
 
   setup_all do
@@ -344,6 +352,7 @@ defmodule AgentCore.CliRunners.ClaudeSubagentTest do
 
     test "normalizes completed event with success" do
       token = ResumeToken.new("claude", "sess_123")
+
       completed = %CompletedEvent{
         engine: "claude",
         ok: true,
@@ -372,6 +381,7 @@ defmodule AgentCore.CliRunners.ClaudeSubagentTest do
 
     test "normalizes completed event with error" do
       token = ResumeToken.new("claude", "sess_123")
+
       completed = %CompletedEvent{
         engine: "claude",
         ok: false,
@@ -472,6 +482,7 @@ defmodule AgentCore.CliRunners.ClaudeSubagentTest do
 
     test "updates token agent on completed event with resume token" do
       token = ResumeToken.new("claude", "sess_completed")
+
       completed = %CompletedEvent{
         engine: "claude",
         ok: true,
@@ -1172,7 +1183,10 @@ defmodule AgentCore.CliRunners.ClaudeSubagentTest do
       assert match?({:started, ^token}, Enum.at(normalized, 0))
 
       # Last should be completed
-      assert match?({:completed, "Here are the files in the directory.", _opts}, List.last(normalized))
+      assert match?(
+               {:completed, "Here are the files in the directory.", _opts},
+               List.last(normalized)
+             )
 
       # Token agent should be updated
       Process.sleep(10)
@@ -1448,12 +1462,13 @@ defmodule AgentCore.CliRunners.ClaudeSubagentTest do
 
   describe "typespec validation" do
     test "session type has correct structure" do
-      session = create_mock_session(
-        pid: self(),
-        stream: nil,
-        token: ResumeToken.new("claude", "sess_123"),
-        cwd: "/test"
-      )
+      session =
+        create_mock_session(
+          pid: self(),
+          stream: nil,
+          token: ResumeToken.new("claude", "sess_123"),
+          cwd: "/test"
+        )
 
       assert is_pid(session.pid) or is_nil(session.pid)
       assert is_pid(session.stream) or is_nil(session.stream)
@@ -1470,7 +1485,9 @@ defmodule AgentCore.CliRunners.ClaudeSubagentTest do
       assert match?({:started, %ResumeToken{}}, started_event)
 
       # Test {:action, action, phase, opts}
-      action_event = {:action, %{id: "a1", kind: :command, title: "ls", detail: %{}}, :completed, [ok: true]}
+      action_event =
+        {:action, %{id: "a1", kind: :command, title: "ls", detail: %{}}, :completed, [ok: true]}
+
       assert match?({:action, _, _, _}, action_event)
 
       # Test {:completed, answer, opts}

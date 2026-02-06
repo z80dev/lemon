@@ -20,7 +20,7 @@ defmodule CodingAgent.LaneQueue do
 
   Returns {:ok, result} or {:error, reason}.
   """
-  @spec run(GenServer.server(), lane(), (() -> term()), map()) ::
+  @spec run(GenServer.server(), lane(), (-> term()), map()) ::
           {:ok, term()} | {:error, term()}
   def run(server \\ __MODULE__, lane, fun, meta \\ %{}) when is_function(fun, 0) do
     GenServer.call(server, {:enqueue, lane, fun, meta}, :infinity)

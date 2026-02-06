@@ -276,7 +276,10 @@ defmodule CodingAgent.UI.RPC do
         {:noreply, state}
 
       {:error, reason} ->
-        Logger.warning("[RPC UI] Failed to parse JSON: #{inspect(reason)}, line: #{inspect(json_line)}")
+        Logger.warning(
+          "[RPC UI] Failed to parse JSON: #{inspect(reason)}, line: #{inspect(json_line)}"
+        )
+
         {:noreply, state}
     end
   end

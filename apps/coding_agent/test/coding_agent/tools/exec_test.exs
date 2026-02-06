@@ -74,12 +74,13 @@ defmodule CodingAgent.Tools.ExecTest do
     test "respects timeout" do
       tool = Exec.tool("/tmp")
 
-      result = tool.execute.(
-        "call_1",
-        %{"command" => "sleep 10", "timeout_sec" => 1},
-        nil,
-        nil
-      )
+      result =
+        tool.execute.(
+          "call_1",
+          %{"command" => "sleep 10", "timeout_sec" => 1},
+          nil,
+          nil
+        )
 
       assert result.content != nil
       text = result.content |> hd() |> Map.get(:text)
@@ -104,12 +105,13 @@ defmodule CodingAgent.Tools.ExecTest do
     test "validates timeout range" do
       tool = Exec.tool("/tmp")
 
-      assert {:error, reason} = tool.execute.(
-        "call_1",
-        %{"command" => "echo test", "timeout_sec" => 100_000},
-        nil,
-        nil
-      )
+      assert {:error, reason} =
+               tool.execute.(
+                 "call_1",
+                 %{"command" => "echo test", "timeout_sec" => 100_000},
+                 nil,
+                 nil
+               )
 
       assert reason =~ "24 hours"
     end
@@ -117,12 +119,13 @@ defmodule CodingAgent.Tools.ExecTest do
     test "validates yield_ms range" do
       tool = Exec.tool("/tmp")
 
-      assert {:error, reason} = tool.execute.(
-        "call_1",
-        %{"command" => "echo test", "yield_ms" => 4_000_000},
-        nil,
-        nil
-      )
+      assert {:error, reason} =
+               tool.execute.(
+                 "call_1",
+                 %{"command" => "echo test", "yield_ms" => 4_000_000},
+                 nil,
+                 nil
+               )
 
       assert reason =~ "1 hour"
     end
@@ -132,12 +135,13 @@ defmodule CodingAgent.Tools.ExecTest do
     test "starts process in background when background=true" do
       tool = Exec.tool("/tmp")
 
-      result = tool.execute.(
-        "call_1",
-        %{"command" => "sleep 60", "background" => true},
-        nil,
-        nil
-      )
+      result =
+        tool.execute.(
+          "call_1",
+          %{"command" => "sleep 60", "background" => true},
+          nil,
+          nil
+        )
 
       assert result.content != nil
       text = result.content |> hd() |> Map.get(:text)
@@ -153,12 +157,13 @@ defmodule CodingAgent.Tools.ExecTest do
     test "starts process in background when yield_ms is set" do
       tool = Exec.tool("/tmp")
 
-      result = tool.execute.(
-        "call_1",
-        %{"command" => "sleep 60", "yield_ms" => 100},
-        nil,
-        nil
-      )
+      result =
+        tool.execute.(
+          "call_1",
+          %{"command" => "sleep 60", "yield_ms" => 100},
+          nil,
+          nil
+        )
 
       assert result.content != nil
       text = result.content |> hd() |> Map.get(:text)
@@ -189,12 +194,13 @@ defmodule CodingAgent.Tools.ExecTest do
     test "sets environment variables" do
       tool = Exec.tool("/tmp")
 
-      result = tool.execute.(
-        "call_1",
-        %{"command" => "echo $TEST_VAR", "env" => %{"TEST_VAR" => "hello"}},
-        nil,
-        nil
-      )
+      result =
+        tool.execute.(
+          "call_1",
+          %{"command" => "echo $TEST_VAR", "env" => %{"TEST_VAR" => "hello"}},
+          nil,
+          nil
+        )
 
       assert result.content != nil
       text = result.content |> hd() |> Map.get(:text)

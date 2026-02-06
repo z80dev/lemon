@@ -6,7 +6,15 @@ defmodule AgentCore.CliRunners.KimiSubagentTest do
   use ExUnit.Case, async: true
 
   alias AgentCore.CliRunners.KimiSubagent
-  alias AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent, Action}
+
+  alias AgentCore.CliRunners.Types.{
+    ActionEvent,
+    CompletedEvent,
+    ResumeToken,
+    StartedEvent,
+    Action
+  }
+
   alias AgentCore.EventStream
 
   defp create_mock_session(opts \\ []) do
@@ -51,7 +59,14 @@ defmodule AgentCore.CliRunners.KimiSubagentTest do
     test "normalizes started/action/completed events" do
       token = ResumeToken.new("kimi", "session_123")
       started = %StartedEvent{engine: "kimi", resume: token}
-      action = %ActionEvent{engine: "kimi", action: Action.new("a1", :tool, "Do thing"), phase: :started, ok: nil}
+
+      action = %ActionEvent{
+        engine: "kimi",
+        action: Action.new("a1", :tool, "Do thing"),
+        phase: :started,
+        ok: nil
+      }
+
       completed = %CompletedEvent{engine: "kimi", answer: "done", ok: true, resume: token}
 
       stream =
@@ -69,7 +84,8 @@ defmodule AgentCore.CliRunners.KimiSubagentTest do
                _ -> false
              end)
 
-      assert {:action, %{id: "a1"}, :started, _} = Enum.find(events, &match?({:action, _, _, _}, &1))
+      assert {:action, %{id: "a1"}, :started, _} =
+               Enum.find(events, &match?({:action, _, _, _}, &1))
 
       assert Enum.any?(events, fn
                {:completed, "done", _} -> true

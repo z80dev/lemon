@@ -326,9 +326,10 @@ defmodule CodingAgent.UITest do
     end
 
     test "select with many options", %{tracker: tracker} do
-      options = for i <- 1..100 do
-        %{label: "Option #{i}", value: "#{i}", description: "Description #{i}"}
-      end
+      options =
+        for i <- 1..100 do
+          %{label: "Option #{i}", value: "#{i}", description: "Description #{i}"}
+        end
 
       result = CodingAgent.Test.MockUI.select("Many options", options)
       assert result == {:ok, nil}
@@ -447,11 +448,12 @@ defmodule CodingAgent.UITest do
         %{
           label: "Complex option",
           value: "complex",
-          description: "This is a longer description with\nmultiple lines\nand special chars: @#$%"
+          description:
+            "This is a longer description with\nmultiple lines\nand special chars: @#$%"
         }
       ]
 
-      result = CodingAgent.Test.MockUI.select("Complex", options, [default: "complex"])
+      result = CodingAgent.Test.MockUI.select("Complex", options, default: "complex")
       assert result == {:ok, nil}
 
       calls = CodingAgent.Test.MockUI.get_calls(tracker)
@@ -558,7 +560,11 @@ defmodule CodingAgent.UITest do
 
   describe "MockUI tracker" do
     test "start_tracker creates new tracker" do
-      tracker = CodingAgent.Test.MockUI.start_tracker(:"test_tracker_#{:erlang.unique_integer([:positive])}")
+      tracker =
+        CodingAgent.Test.MockUI.start_tracker(
+          :"test_tracker_#{:erlang.unique_integer([:positive])}"
+        )
+
       assert is_reference(tracker)
 
       calls = CodingAgent.Test.MockUI.get_calls(tracker)
@@ -568,7 +574,11 @@ defmodule CodingAgent.UITest do
     end
 
     test "get_calls returns calls in order" do
-      tracker = CodingAgent.Test.MockUI.start_tracker(:"test_tracker_#{:erlang.unique_integer([:positive])}")
+      tracker =
+        CodingAgent.Test.MockUI.start_tracker(
+          :"test_tracker_#{:erlang.unique_integer([:positive])}"
+        )
+
       CodingAgent.Test.MockUI.set_global_tracker(tracker)
 
       CodingAgent.Test.MockUI.set_title("First")
@@ -586,7 +596,11 @@ defmodule CodingAgent.UITest do
     end
 
     test "clear_calls removes all calls" do
-      tracker = CodingAgent.Test.MockUI.start_tracker(:"test_tracker_#{:erlang.unique_integer([:positive])}")
+      tracker =
+        CodingAgent.Test.MockUI.start_tracker(
+          :"test_tracker_#{:erlang.unique_integer([:positive])}"
+        )
+
       CodingAgent.Test.MockUI.set_global_tracker(tracker)
 
       CodingAgent.Test.MockUI.set_title("Title")
@@ -602,7 +616,11 @@ defmodule CodingAgent.UITest do
     end
 
     test "stop_tracker handles already stopped tracker" do
-      tracker = CodingAgent.Test.MockUI.start_tracker(:"test_tracker_#{:erlang.unique_integer([:positive])}")
+      tracker =
+        CodingAgent.Test.MockUI.start_tracker(
+          :"test_tracker_#{:erlang.unique_integer([:positive])}"
+        )
+
       assert CodingAgent.Test.MockUI.stop_tracker(tracker) == :ok
       assert CodingAgent.Test.MockUI.stop_tracker(tracker) == :ok
     end
@@ -614,25 +632,31 @@ defmodule CodingAgent.UITest do
 
   describe "concurrent access" do
     test "multiple processes can use the same tracker" do
-      tracker = CodingAgent.Test.MockUI.start_tracker(:"concurrent_tracker_#{:erlang.unique_integer([:positive])}")
+      tracker =
+        CodingAgent.Test.MockUI.start_tracker(
+          :"concurrent_tracker_#{:erlang.unique_integer([:positive])}"
+        )
+
       CodingAgent.Test.MockUI.set_global_tracker(tracker)
 
       parent = self()
 
       # Spawn multiple processes that make UI calls
-      tasks = for i <- 1..5 do
-        Task.async(fn ->
-          CodingAgent.Test.MockUI.set_title("Title #{i}")
-          CodingAgent.Test.MockUI.notify("Message #{i}", :info)
-          send(parent, {:done, i})
-        end)
-      end
+      tasks =
+        for i <- 1..5 do
+          Task.async(fn ->
+            CodingAgent.Test.MockUI.set_title("Title #{i}")
+            CodingAgent.Test.MockUI.notify("Message #{i}", :info)
+            send(parent, {:done, i})
+          end)
+        end
 
       # Wait for all tasks
       Enum.each(tasks, &Task.await/1)
 
       calls = CodingAgent.Test.MockUI.get_calls(tracker)
-      assert length(calls) == 10  # 5 set_title + 5 notify
+      # 5 set_title + 5 notify
+      assert length(calls) == 10
 
       CodingAgent.Test.MockUI.clear_global_tracker()
       CodingAgent.Test.MockUI.stop_tracker(tracker)
@@ -645,7 +669,11 @@ defmodule CodingAgent.UITest do
 
   describe "process dictionary tracker" do
     test "register_tracker sets process-local tracker" do
-      tracker = CodingAgent.Test.MockUI.start_tracker(:"pd_tracker_#{:erlang.unique_integer([:positive])}")
+      tracker =
+        CodingAgent.Test.MockUI.start_tracker(
+          :"pd_tracker_#{:erlang.unique_integer([:positive])}"
+        )
+
       CodingAgent.Test.MockUI.register_tracker(tracker)
 
       CodingAgent.Test.MockUI.set_title("Title")
@@ -657,8 +685,11 @@ defmodule CodingAgent.UITest do
     end
 
     test "process-local tracker takes precedence over global" do
-      global_tracker = CodingAgent.Test.MockUI.start_tracker(:"global_#{:erlang.unique_integer([:positive])}")
-      local_tracker = CodingAgent.Test.MockUI.start_tracker(:"local_#{:erlang.unique_integer([:positive])}")
+      global_tracker =
+        CodingAgent.Test.MockUI.start_tracker(:"global_#{:erlang.unique_integer([:positive])}")
+
+      local_tracker =
+        CodingAgent.Test.MockUI.start_tracker(:"local_#{:erlang.unique_integer([:positive])}")
 
       CodingAgent.Test.MockUI.set_global_tracker(global_tracker)
       CodingAgent.Test.MockUI.register_tracker(local_tracker)

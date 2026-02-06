@@ -27,11 +27,21 @@ defmodule AgentCore.CliRunners.ToolActionHelpers do
 
   @spec complete_action(EventFactory.t(), map(), String.t(), boolean(), map(), atom(), String.t()) ::
           {AgentCore.CliRunners.Types.ActionEvent.t(), EventFactory.t(), map()}
-  def complete_action(factory, pending_actions, id, ok, detail, fallback_kind \\ :tool, fallback_title \\ "tool result") do
+  def complete_action(
+        factory,
+        pending_actions,
+        id,
+        ok,
+        detail,
+        fallback_kind \\ :tool,
+        fallback_title \\ "tool result"
+      ) do
     case Map.pop(pending_actions, id) do
       {nil, pending_actions} ->
         {event, factory} =
-          EventFactory.action_completed(factory, id, fallback_kind, fallback_title, ok, detail: detail)
+          EventFactory.action_completed(factory, id, fallback_kind, fallback_title, ok,
+            detail: detail
+          )
 
         {event, factory, pending_actions}
 
@@ -39,7 +49,9 @@ defmodule AgentCore.CliRunners.ToolActionHelpers do
         detail = Map.merge(action.detail || %{}, detail)
 
         {event, factory} =
-          EventFactory.action_completed(factory, action.id, action.kind, action.title, ok, detail: detail)
+          EventFactory.action_completed(factory, action.id, action.kind, action.title, ok,
+            detail: detail
+          )
 
         {event, factory, pending_actions}
     end

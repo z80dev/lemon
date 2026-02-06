@@ -22,7 +22,9 @@ defmodule CodingAgent.SettingsManager do
           default_thinking_level: thinking_level(),
 
           # Provider settings
-          providers: %{optional(String.t()) => %{api_key: String.t() | nil, base_url: String.t() | nil}},
+          providers: %{
+            optional(String.t()) => %{api_key: String.t() | nil, base_url: String.t() | nil}
+          },
 
           # Compaction settings
           compaction_enabled: boolean(),

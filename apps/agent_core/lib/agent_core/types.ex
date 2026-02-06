@@ -92,7 +92,9 @@ defmodule AgentCore.Types do
              params :: map(),
              signal :: reference() | nil,
              on_update :: on_update() | nil ->
-               AgentCore.Types.AgentToolResult.t() | {:ok, AgentCore.Types.AgentToolResult.t()} | {:error, term()})
+               AgentCore.Types.AgentToolResult.t()
+               | {:ok, AgentCore.Types.AgentToolResult.t()}
+               | {:error, term()})
     @type t :: %__MODULE__{
             name: String.t(),
             description: String.t(),
@@ -281,7 +283,7 @@ defmodule AgentCore.Types do
           | {:tool_execution_start, id :: String.t(), name :: String.t(), args :: map()}
           | {:tool_execution_update, id :: String.t(), name :: String.t(), args :: map(),
              partial_result :: AgentToolResult.t()}
-          | {:tool_execution_end, id :: String.t(), name :: String.t(), result :: AgentToolResult.t(),
-             is_error :: boolean()}
+          | {:tool_execution_end, id :: String.t(), name :: String.t(),
+             result :: AgentToolResult.t(), is_error :: boolean()}
           | {:error, reason :: term(), partial_state :: term()}
 end
