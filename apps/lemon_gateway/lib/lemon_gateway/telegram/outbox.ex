@@ -47,7 +47,12 @@ defmodule LemonGateway.Telegram.Outbox do
       token: config[:bot_token] || config["bot_token"],
       api_mod: config[:api_mod] || API,
       edit_throttle_ms: config[:edit_throttle_ms] || @default_edit_throttle,
-      use_markdown: config[:use_markdown] || false,
+      # Default to true now that we render via Telegram entities (robust, no MarkdownV2 escaping).
+      use_markdown:
+        case config[:use_markdown] || config["use_markdown"] do
+          nil -> true
+          v -> v
+        end,
       queue: [],
       ops: %{},
       retry_state: %{},
@@ -184,7 +189,7 @@ defmodule LemonGateway.Telegram.Outbox do
   defp execute_op(state, {:edit, chat_id, message_id, %{text: text} = payload}) do
     engine = payload[:engine]
     truncated_text = truncate_text(text, engine)
-    {formatted_text, parse_mode} = format_text(truncated_text, state.use_markdown)
+    {formatted_text, opts} = format_text(truncated_text, state.use_markdown)
 
     state
     |> safe_api_call(fn ->
@@ -193,7 +198,7 @@ defmodule LemonGateway.Telegram.Outbox do
         chat_id,
         message_id,
         formatted_text,
-        parse_mode
+        opts
       )
     end)
     |> handle_api_result()
@@ -204,11 +209,18 @@ defmodule LemonGateway.Telegram.Outbox do
     engine = payload[:engine]
     reply_to = payload[:reply_to_message_id] || payload["reply_to_message_id"]
     truncated_text = truncate_text(text, engine)
-    {formatted_text, parse_mode} = format_text(truncated_text, state.use_markdown)
+    {formatted_text, opts} = format_text(truncated_text, state.use_markdown)
 
     state
     |> safe_api_call(fn ->
-      state.api_mod.send_message(state.token, chat_id, formatted_text, reply_to, parse_mode)
+      # Keep the legacy call shape (reply_to + parse_mode) unless we need extra options
+      # (e.g. Telegram entities for markdown rendering).
+      if is_map(opts) do
+        opts = opts |> maybe_put_opt(:reply_to_message_id, reply_to)
+        state.api_mod.send_message(state.token, chat_id, formatted_text, opts, nil)
+      else
+        state.api_mod.send_message(state.token, chat_id, formatted_text, reply_to, nil)
+      end
     end)
     |> handle_api_result()
   end
@@ -301,6 +313,9 @@ defmodule LemonGateway.Telegram.Outbox do
   defp format_text(text, _use_markdown) do
     {text, nil}
   end
+
+  defp maybe_put_opt(map, _key, nil), do: map
+  defp maybe_put_opt(map, key, value), do: Map.put(map, key, value)
 
   defp merge_config(config, nil), do: config
 

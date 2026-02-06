@@ -29,6 +29,8 @@ defmodule LemonGateway.MixProject do
       {:jason, "~> 1.4"},
       {:uuid, "~> 1.1"},
       {:toml, "~> 0.7"},
+      # Markdown -> Telegram rendering uses entities (no parse_mode) for robust formatting.
+      {:earmark_parser, "~> 1.4"},
       {:agent_core, in_umbrella: true},
       {:coding_agent, in_umbrella: true},
       {:lemon_core, in_umbrella: true}

@@ -6,7 +6,6 @@ summary: "User profile record"
 
 - **Name:**
 - **What to call them:**
-- **Pronouns:** *(optional)*
 - **Timezone:**
 - **Notes:**
 
