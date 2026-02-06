@@ -143,18 +143,21 @@ defmodule LemonRouter.StreamCoalescer do
       if state.run_id != run_id do
         cancel_timer(state.flush_timer)
 
-        %{state |
-          run_id: run_id,
-          buffer: "",
-          full_text: "",
-          last_seq: 0,
-          first_delta_ts: nil,
-          flush_timer: nil,
-          meta: Map.merge(state.meta || %{}, meta)
+        %{
+          state
+          | run_id: run_id,
+            buffer: "",
+            full_text: "",
+            last_seq: 0,
+            first_delta_ts: nil,
+            flush_timer: nil,
+            # New run: do not carry forward prior run's message ids.
+            meta: compact_meta(meta)
         }
       else
         # Update meta if provided (e.g., progress_msg_id may come in later)
-        %{state | meta: Map.merge(state.meta || %{}, meta)}
+        # Never let nil values wipe known ids (e.g. progress_msg_id).
+        %{state | meta: Map.merge(state.meta || %{}, compact_meta(meta))}
       end
 
     # Only accept in-order deltas
@@ -196,6 +199,13 @@ defmodule LemonRouter.StreamCoalescer do
     {:noreply, state}
   end
 
+  # Avoid overriding previously-known message ids with nils coming from upstream meta.
+  defp compact_meta(meta) when is_map(meta) do
+    Map.reject(meta, fn {_k, v} -> is_nil(v) end)
+  end
+
+  defp compact_meta(_), do: %{}
+
   defp maybe_flush(state, now) do
     buffer_len = String.length(state.buffer)
     time_since_first = now - (state.first_delta_ts || now)
@@ -225,11 +235,12 @@ defmodule LemonRouter.StreamCoalescer do
 
     cancel_timer(state.flush_timer)
 
-    %{state |
-      buffer: "",
-      first_delta_ts: nil,
-      last_flush_ts: System.system_time(:millisecond),
-      flush_timer: nil
+    %{
+      state
+      | buffer: "",
+        first_delta_ts: nil,
+        last_flush_ts: System.system_time(:millisecond),
+        flush_timer: nil
     }
   end
 
@@ -254,31 +265,37 @@ defmodule LemonRouter.StreamCoalescer do
 
     # Also enqueue to LemonChannels.Outbox for delivery
     if Code.ensure_loaded?(LemonChannels.Outbox) and
-       Code.ensure_loaded?(LemonChannels.OutboundPayload) do
+         Code.ensure_loaded?(LemonChannels.OutboundPayload) do
       # Determine output kind and content based on channel capabilities
       {kind, content} = get_output_kind_and_content(state)
 
-      payload = struct!(LemonChannels.OutboundPayload,
-        channel_id: state.channel_id,
-        account_id: parsed.account_id,
-        peer: %{
-          kind: parsed.peer_kind,
-          id: parsed.peer_id,
-          thread_id: parsed.thread_id
-        },
-        kind: kind,
-        content: content,
-        idempotency_key: "#{state.run_id}:#{state.last_seq}",
-        meta: %{
-          run_id: state.run_id,
-          session_key: state.session_key,
-          seq: state.last_seq
-        }
-      )
+      payload =
+        struct!(LemonChannels.OutboundPayload,
+          channel_id: state.channel_id,
+          account_id: parsed.account_id,
+          peer: %{
+            kind: parsed.peer_kind,
+            id: parsed.peer_id,
+            thread_id: parsed.thread_id
+          },
+          kind: kind,
+          content: content,
+          idempotency_key: "#{state.run_id}:#{state.last_seq}",
+          meta: %{
+            run_id: state.run_id,
+            session_key: state.session_key,
+            seq: state.last_seq
+          }
+        )
 
       case LemonChannels.Outbox.enqueue(payload) do
-        {:ok, _ref} -> :ok
-        {:error, :duplicate} -> :ok  # Already delivered
+        {:ok, _ref} ->
+          :ok
+
+        # Already delivered
+        {:error, :duplicate} ->
+          :ok
+
         {:error, reason} ->
           Logger.warning("Failed to enqueue coalesced output: #{inspect(reason)}")
       end
@@ -294,7 +311,11 @@ defmodule LemonRouter.StreamCoalescer do
     cond do
       supports_edit and progress_msg_id != nil ->
         # Edit mode requires message_id and text
-        {:edit, %{message_id: progress_msg_id, text: truncate_for_channel(state.channel_id, state.full_text)}}
+        {:edit,
+         %{
+           message_id: progress_msg_id,
+           text: truncate_for_channel(state.channel_id, state.full_text)
+         }}
 
       supports_edit ->
         # Edit mode but no message_id yet - send as text first
@@ -341,6 +362,7 @@ defmodule LemonRouter.StreamCoalescer do
       # Canonical format: agent:<agent_id>:<channel_id>:<account_id>:<peer_kind>:<peer_id>[:thread:<thread_id>]
       ["agent", agent_id, channel_id, account_id, peer_kind, peer_id | rest] ->
         thread_id = extract_thread_id(rest)
+
         %{
           agent_id: agent_id,
           kind: :channel_peer,
@@ -366,6 +388,7 @@ defmodule LemonRouter.StreamCoalescer do
       # Legacy format: channel:telegram:bot:<chat_id>[:thread:<thread_id>]
       ["channel", "telegram", transport, chat_id | rest] ->
         thread_id = extract_thread_id(rest)
+
         %{
           agent_id: "default",
           kind: :channel_peer,

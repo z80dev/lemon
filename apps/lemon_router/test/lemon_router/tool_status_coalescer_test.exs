@@ -10,7 +10,10 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
 
     if is_nil(Process.whereis(LemonRouter.ToolStatusSupervisor)) do
       {:ok, _} =
-        DynamicSupervisor.start_link(strategy: :one_for_one, name: LemonRouter.ToolStatusSupervisor)
+        DynamicSupervisor.start_link(
+          strategy: :one_for_one,
+          name: LemonRouter.ToolStatusSupervisor
+        )
     end
 
     :ok
@@ -21,7 +24,12 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
     channel_id = "telegram"
     run_id = "run_#{System.unique_integer([:positive])}"
 
-    action = %LemonGateway.Event.Action{id: "a1", kind: "tool", title: "Read: foo.txt", detail: %{}}
+    action = %LemonGateway.Event.Action{
+      id: "a1",
+      kind: "tool",
+      title: "Read: foo.txt",
+      detail: %{}
+    }
 
     ev = %LemonGateway.Event.ActionEvent{
       engine: "lemon",
@@ -60,5 +68,38 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
     assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, ev)
     assert :ok = ToolStatusCoalescer.flush(session_key, channel_id)
   end
-end
 
+  test "does not overwrite status_msg_id with nil meta updates" do
+    session_key = "agent:test3:telegram:bot:dm:789"
+    channel_id = "telegram"
+    run_id = "run_#{System.unique_integer([:positive])}"
+
+    action = %LemonGateway.Event.Action{id: "a1", kind: "tool", title: "Test tool", detail: %{}}
+
+    ev = %LemonGateway.Event.ActionEvent{
+      engine: "lemon",
+      action: action,
+      phase: :started,
+      ok: nil,
+      message: nil,
+      level: nil
+    }
+
+    assert :ok =
+             ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, ev,
+               meta: %{status_msg_id: 111}
+             )
+
+    [{pid, _}] = Registry.lookup(LemonRouter.ToolStatusRegistry, {session_key, channel_id})
+    state = :sys.get_state(pid)
+    assert state.meta[:status_msg_id] == 111
+
+    assert :ok =
+             ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, ev,
+               meta: %{status_msg_id: nil}
+             )
+
+    state2 = :sys.get_state(pid)
+    assert state2.meta[:status_msg_id] == 111
+  end
+end
