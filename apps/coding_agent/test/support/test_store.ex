@@ -59,4 +59,3 @@ defmodule CodingAgent.TestStore do
     end
   end
 end
-
