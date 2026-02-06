@@ -408,7 +408,7 @@ defmodule AgentCore.CliRunners.CodexRunner do
             detail =
               detail
               |> maybe_add_error(error)
-              |> maybe_add_result_summary(result)
+              |> maybe_add_result_preview(result)
 
             {event, factory} =
               EventFactory.action_completed(state.factory, action_id, :tool, title, ok,
@@ -571,9 +571,9 @@ defmodule AgentCore.CliRunners.CodexRunner do
     Map.put(detail, :error_message, error.message)
   end
 
-  defp maybe_add_result_summary(detail, nil), do: detail
+  defp maybe_add_result_preview(detail, nil), do: detail
 
-  defp maybe_add_result_summary(detail, result) do
+  defp maybe_add_result_preview(detail, result) do
     summary =
       case result.content do
         [%{"type" => "text", "text" => text} | _] ->
@@ -584,7 +584,7 @@ defmodule AgentCore.CliRunners.CodexRunner do
       end
 
     if summary do
-      Map.put(detail, :result_summary, summary)
+      Map.put(detail, :result_preview, summary)
     else
       detail
     end

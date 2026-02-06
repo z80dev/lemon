@@ -506,6 +506,15 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
       assert truncate_result(result) == "short result"
     end
 
+    test "AgentToolResult results are rendered as plain text" do
+      result = %AgentCore.Types.AgentToolResult{
+        content: [%Ai.Types.TextContent{type: :text, text: "ok"}],
+        details: nil
+      }
+
+      assert truncate_result(result) == "ok"
+    end
+
     test "long results are truncated at 500 chars" do
       result = String.duplicate("a", 600)
       truncated = truncate_result(result)
@@ -535,6 +544,29 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
       else
         result
       end
+    end
+
+    defp truncate_result(%AgentCore.Types.AgentToolResult{} = result) do
+      result
+      |> AgentCore.get_text()
+      |> truncate_result()
+    end
+
+    defp truncate_result(%Ai.Types.TextContent{text: text}) when is_binary(text),
+      do: truncate_result(text)
+
+    defp truncate_result(content) when is_list(content) do
+      content
+      |> Enum.map(fn
+        %Ai.Types.TextContent{text: text} when is_binary(text) -> text
+        %{type: :text, text: text} when is_binary(text) -> text
+        %{"type" => "text", "text" => text} when is_binary(text) -> text
+        item when is_binary(item) -> item
+        _ -> ""
+      end)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.join("\n")
+      |> truncate_result()
     end
 
     defp truncate_result(result), do: inspect(result, limit: 500)

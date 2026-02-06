@@ -689,6 +689,32 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     end
   end
 
+  # Most tools return AgentToolResult with structured content blocks.
+  # For user-facing transports (e.g., Telegram status surfaces), extract the plain text
+  # so we don't leak raw Elixir struct inspection output.
+  defp truncate_result(%AgentCore.Types.AgentToolResult{} = result) do
+    result
+    |> AgentCore.get_text()
+    |> truncate_result()
+  end
+
+  defp truncate_result(%Ai.Types.TextContent{text: text}) when is_binary(text),
+    do: truncate_result(text)
+
+  defp truncate_result(content) when is_list(content) do
+    content
+    |> Enum.map(fn
+      %Ai.Types.TextContent{text: text} when is_binary(text) -> text
+      %{type: :text, text: text} when is_binary(text) -> text
+      %{"type" => "text", "text" => text} when is_binary(text) -> text
+      item when is_binary(item) -> item
+      _ -> ""
+    end)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n")
+    |> truncate_result()
+  end
+
   defp truncate_result(result), do: inspect(result, limit: 500)
 
   defp extract_answer(messages, accumulated_text) do
