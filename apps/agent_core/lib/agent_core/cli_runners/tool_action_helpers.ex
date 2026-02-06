@@ -61,20 +61,51 @@ defmodule AgentCore.CliRunners.ToolActionHelpers do
   def normalize_tool_result(nil), do: ""
   def normalize_tool_result(content) when is_binary(content), do: String.slice(content, 0, 200)
 
+  # Internal tool result (e.g. Codex tool executor) should display as plain text,
+  # not as `%AgentCore.Types.AgentToolResult{...}` / `%Ai.Types.TextContent{...}` structs.
+  def normalize_tool_result(%AgentCore.Types.AgentToolResult{} = result) do
+    result
+    |> AgentCore.get_text()
+    |> String.slice(0, 200)
+  end
+
+  def normalize_tool_result(%Ai.Types.TextContent{text: text}) when is_binary(text),
+    do: String.slice(text, 0, 200)
+
   def normalize_tool_result(content) when is_list(content) do
     content
     |> Enum.map(fn
       %{"text" => text} when is_binary(text) -> text
+      %Ai.Types.TextContent{text: text} when is_binary(text) -> text
+      %{text: text} when is_binary(text) -> text
       item when is_binary(item) -> item
       _ -> ""
     end)
+    |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n")
     |> String.slice(0, 200)
   end
 
   def normalize_tool_result(content) when is_map(content) do
-    Map.get(content, "text", inspect(content))
-    |> String.slice(0, 200)
+    text =
+      cond do
+        is_binary(Map.get(content, "text")) ->
+          Map.get(content, "text")
+
+        is_binary(Map.get(content, :text)) ->
+          Map.get(content, :text)
+
+        is_list(Map.get(content, "content")) ->
+          normalize_tool_result(Map.get(content, "content"))
+
+        is_list(Map.get(content, :content)) ->
+          normalize_tool_result(Map.get(content, :content))
+
+        true ->
+          inspect(content)
+      end
+
+    String.slice(text, 0, 200)
   end
 
   def normalize_tool_result(content), do: inspect(content) |> String.slice(0, 200)
