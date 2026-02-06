@@ -42,7 +42,7 @@ defmodule AgentCore.AbortSignal do
   defp ensure_table do
     case :ets.whereis(@table) do
       :undefined ->
-        heir = Process.whereis(:init)
+        heir = Process.whereis(AgentCore.AbortSignal.TableOwner)
 
         opts =
           [
