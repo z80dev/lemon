@@ -144,12 +144,15 @@ defmodule LemonRouter.ToolStatusCoalescer do
             first_event_ts: nil,
             flush_timer: nil,
             seq: 0,
-            meta: Map.merge(state.meta || %{}, meta),
+            # New run: do not carry forward prior run's message ids.
+            meta: compact_meta(meta),
             status_create_ref: nil,
             deferred_text: nil
         }
       else
-        %{state | meta: Map.merge(state.meta || %{}, meta)}
+        # Same run: merge meta updates, but never allow nil values to wipe
+        # platform message ids (e.g. Telegram status_msg_id).
+        %{state | meta: Map.merge(state.meta || %{}, compact_meta(meta))}
       end
 
     state =
@@ -214,6 +217,13 @@ defmodule LemonRouter.ToolStatusCoalescer do
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
+
+  # Avoid overriding previously-known message ids with nils coming from upstream meta.
+  defp compact_meta(meta) when is_map(meta) do
+    Map.reject(meta, fn {_k, v} -> is_nil(v) end)
+  end
+
+  defp compact_meta(_), do: %{}
 
   defp maybe_flush(state, now) do
     time_since_first = now - (state.first_event_ts || now)
@@ -291,7 +301,9 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
           case LemonChannels.Outbox.enqueue(payload) do
             {:ok, _ref} ->
-              if is_reference(notify_ref), do: %{state | status_create_ref: notify_ref}, else: state
+              if is_reference(notify_ref),
+                do: %{state | status_create_ref: notify_ref},
+                else: state
 
             {:error, :duplicate} ->
               state
@@ -532,7 +544,9 @@ defmodule LemonRouter.ToolStatusCoalescer do
     meta[:user_msg_id] || meta["user_msg_id"]
   end
 
-  defp extract_message_id_from_delivery({:ok, result}), do: extract_message_id_from_delivery(result)
+  defp extract_message_id_from_delivery({:ok, result}),
+    do: extract_message_id_from_delivery(result)
+
   defp extract_message_id_from_delivery({:error, _}), do: nil
 
   defp extract_message_id_from_delivery(result) when is_integer(result), do: result
@@ -544,10 +558,15 @@ defmodule LemonRouter.ToolStatusCoalescer do
     end
   end
 
-  defp extract_message_id_from_delivery(%{message_id: id}), do: extract_message_id_from_delivery(id)
-  defp extract_message_id_from_delivery(%{"message_id" => id}), do: extract_message_id_from_delivery(id)
+  defp extract_message_id_from_delivery(%{message_id: id}),
+    do: extract_message_id_from_delivery(id)
+
+  defp extract_message_id_from_delivery(%{"message_id" => id}),
+    do: extract_message_id_from_delivery(id)
+
   defp extract_message_id_from_delivery(%{"result" => %{"message_id" => id}}),
     do: extract_message_id_from_delivery(id)
+
   defp extract_message_id_from_delivery(_), do: nil
 
   defp truncate_for_channel("telegram", text) when is_binary(text) do

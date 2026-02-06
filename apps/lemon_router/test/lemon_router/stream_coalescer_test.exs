@@ -10,7 +10,11 @@ defmodule LemonRouter.StreamCoalescerTest do
     end
 
     if is_nil(Process.whereis(LemonRouter.CoalescerSupervisor)) do
-      {:ok, _} = DynamicSupervisor.start_link(strategy: :one_for_one, name: LemonRouter.CoalescerSupervisor)
+      {:ok, _} =
+        DynamicSupervisor.start_link(
+          strategy: :one_for_one,
+          name: LemonRouter.CoalescerSupervisor
+        )
     end
 
     :ok
@@ -24,19 +28,21 @@ defmodule LemonRouter.StreamCoalescerTest do
       run_id = "run_#{System.unique_integer()}"
 
       # Should successfully ingest delta with canonical session key format
-      assert :ok = StreamCoalescer.ingest_delta(
-        session_key,
-        channel_id,
-        run_id,
-        1,
-        "Hello"
-      )
+      assert :ok =
+               StreamCoalescer.ingest_delta(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 1,
+                 "Hello"
+               )
 
       # Verify coalescer was started
-      assert [{_pid, _}] = Registry.lookup(
-        LemonRouter.CoalescerRegistry,
-        {session_key, channel_id}
-      )
+      assert [{_pid, _}] =
+               Registry.lookup(
+                 LemonRouter.CoalescerRegistry,
+                 {session_key, channel_id}
+               )
     end
 
     test "handles canonical channel peer format with thread" do
@@ -44,18 +50,20 @@ defmodule LemonRouter.StreamCoalescerTest do
       channel_id = "telegram"
       run_id = "run_#{System.unique_integer()}"
 
-      assert :ok = StreamCoalescer.ingest_delta(
-        session_key,
-        channel_id,
-        run_id,
-        1,
-        "Thread test"
-      )
+      assert :ok =
+               StreamCoalescer.ingest_delta(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 1,
+                 "Thread test"
+               )
 
-      assert [{_pid, _}] = Registry.lookup(
-        LemonRouter.CoalescerRegistry,
-        {session_key, channel_id}
-      )
+      assert [{_pid, _}] =
+               Registry.lookup(
+                 LemonRouter.CoalescerRegistry,
+                 {session_key, channel_id}
+               )
     end
 
     test "handles main session format" do
@@ -64,13 +72,14 @@ defmodule LemonRouter.StreamCoalescerTest do
       channel_id = "web"
       run_id = "run_#{System.unique_integer()}"
 
-      assert :ok = StreamCoalescer.ingest_delta(
-        session_key,
-        channel_id,
-        run_id,
-        1,
-        "Main session test"
-      )
+      assert :ok =
+               StreamCoalescer.ingest_delta(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 1,
+                 "Main session test"
+               )
     end
 
     test "handles legacy channel format" do
@@ -78,18 +87,20 @@ defmodule LemonRouter.StreamCoalescerTest do
       channel_id = "telegram"
       run_id = "run_#{System.unique_integer()}"
 
-      assert :ok = StreamCoalescer.ingest_delta(
-        session_key,
-        channel_id,
-        run_id,
-        1,
-        "Legacy format test"
-      )
+      assert :ok =
+               StreamCoalescer.ingest_delta(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 1,
+                 "Legacy format test"
+               )
 
-      assert [{_pid, _}] = Registry.lookup(
-        LemonRouter.CoalescerRegistry,
-        {session_key, channel_id}
-      )
+      assert [{_pid, _}] =
+               Registry.lookup(
+                 LemonRouter.CoalescerRegistry,
+                 {session_key, channel_id}
+               )
     end
 
     test "handles unknown format gracefully" do
@@ -98,13 +109,14 @@ defmodule LemonRouter.StreamCoalescerTest do
       run_id = "run_#{System.unique_integer()}"
 
       # Should not crash on unknown format
-      assert :ok = StreamCoalescer.ingest_delta(
-        session_key,
-        channel_id,
-        run_id,
-        1,
-        "Unknown format test"
-      )
+      assert :ok =
+               StreamCoalescer.ingest_delta(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 1,
+                 "Unknown format test"
+               )
     end
 
     test "handles unknown peer_kind gracefully with :unknown fallback" do
@@ -114,13 +126,14 @@ defmodule LemonRouter.StreamCoalescerTest do
       run_id = "run_#{System.unique_integer()}"
 
       # Should successfully ingest without crashing
-      assert :ok = StreamCoalescer.ingest_delta(
-        session_key,
-        channel_id,
-        run_id,
-        1,
-        "Invalid kind test"
-      )
+      assert :ok =
+               StreamCoalescer.ingest_delta(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 1,
+                 "Invalid kind test"
+               )
     end
   end
 
@@ -138,19 +151,21 @@ defmodule LemonRouter.StreamCoalescerTest do
       run_id = "run_#{System.unique_integer()}"
 
       # Should successfully ingest without crashing
-      assert :ok = StreamCoalescer.ingest_delta(
-        session_key,
-        channel_id,
-        run_id,
-        1,
-        "Test"
-      )
+      assert :ok =
+               StreamCoalescer.ingest_delta(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 1,
+                 "Test"
+               )
 
       # The coalescer should have started with peer_kind = :unknown
-      assert [{_pid, _}] = Registry.lookup(
-        LemonRouter.CoalescerRegistry,
-        {session_key, channel_id}
-      )
+      assert [{_pid, _}] =
+               Registry.lookup(
+                 LemonRouter.CoalescerRegistry,
+                 {session_key, channel_id}
+               )
     end
 
     test "safe_to_atom uses whitelist and doesn't create arbitrary atoms" do
@@ -162,13 +177,14 @@ defmodule LemonRouter.StreamCoalescerTest do
         run_id = "run_#{System.unique_integer()}"
 
         # Should not crash
-        assert :ok = StreamCoalescer.ingest_delta(
-          session_key,
-          "telegram",
-          run_id,
-          1,
-          "Test #{invalid_kind}"
-        )
+        assert :ok =
+                 StreamCoalescer.ingest_delta(
+                   session_key,
+                   "telegram",
+                   run_id,
+                   1,
+                   "Test #{invalid_kind}"
+                 )
       end
 
       # All invalid kinds should result in :unknown, not new atoms
@@ -182,22 +198,24 @@ defmodule LemonRouter.StreamCoalescerTest do
       channel_id = "telegram"
       run_id = "run_#{System.unique_integer()}"
 
-      assert :ok = StreamCoalescer.ingest_delta(
-        session_key,
-        channel_id,
-        run_id,
-        1,
-        "Hello, "
-      )
+      assert :ok =
+               StreamCoalescer.ingest_delta(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 1,
+                 "Hello, "
+               )
 
       # Second delta should also succeed
-      assert :ok = StreamCoalescer.ingest_delta(
-        session_key,
-        channel_id,
-        run_id,
-        2,
-        "world!"
-      )
+      assert :ok =
+               StreamCoalescer.ingest_delta(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 2,
+                 "world!"
+               )
 
       # Give it time to process
       Process.sleep(10)
@@ -208,14 +226,48 @@ defmodule LemonRouter.StreamCoalescerTest do
       channel_id = "telegram"
       run_id = "run_#{System.unique_integer()}"
 
-      assert :ok = StreamCoalescer.ingest_delta(
-        session_key,
-        channel_id,
-        run_id,
-        1,
-        "Hello",
-        meta: %{progress_msg_id: "msg123"}
-      )
+      assert :ok =
+               StreamCoalescer.ingest_delta(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 1,
+                 "Hello",
+                 meta: %{progress_msg_id: "msg123"}
+               )
+    end
+
+    test "does not overwrite progress_msg_id with nil meta updates" do
+      session_key = "agent:test2b:telegram:bot2:dm:user2"
+      channel_id = "telegram"
+      run_id = "run_#{System.unique_integer()}"
+
+      assert :ok =
+               StreamCoalescer.ingest_delta(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 1,
+                 "Hello",
+                 meta: %{progress_msg_id: 123}
+               )
+
+      [{pid, _}] = Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id})
+      state = :sys.get_state(pid)
+      assert state.meta[:progress_msg_id] == 123
+
+      assert :ok =
+               StreamCoalescer.ingest_delta(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 2,
+                 " world",
+                 meta: %{progress_msg_id: nil}
+               )
+
+      state2 = :sys.get_state(pid)
+      assert state2.meta[:progress_msg_id] == 123
     end
 
     test "ignores out-of-order deltas" do
@@ -224,22 +276,24 @@ defmodule LemonRouter.StreamCoalescerTest do
       run_id = "run_#{System.unique_integer()}"
 
       # First delta with seq 2
-      assert :ok = StreamCoalescer.ingest_delta(
-        session_key,
-        channel_id,
-        run_id,
-        2,
-        "Second"
-      )
+      assert :ok =
+               StreamCoalescer.ingest_delta(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 2,
+                 "Second"
+               )
 
       # This delta with seq 1 should be ignored (out of order)
-      assert :ok = StreamCoalescer.ingest_delta(
-        session_key,
-        channel_id,
-        run_id,
-        1,
-        "First"
-      )
+      assert :ok =
+               StreamCoalescer.ingest_delta(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 1,
+                 "First"
+               )
     end
   end
 
