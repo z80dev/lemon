@@ -1,70 +1,31 @@
 defmodule LemonGateway.Telegram.Formatter do
   @moduledoc """
-  Formats text for Telegram MarkdownV2 while preserving resume lines.
+  Formats markdown for Telegram in a robust way.
+
+  We avoid Telegram's MarkdownV2 escaping (fragile) and instead render markdown into
+  plain text with Telegram `entities` (UTF-16 offsets) for formatting.
   """
 
-  # Characters that must be escaped in MarkdownV2
-  @escape_chars [
-    "_",
-    "*",
-    "[",
-    "]",
-    "(",
-    ")",
-    "~",
-    "`",
-    ">",
-    "#",
-    "+",
-    "-",
-    "=",
-    "|",
-    "{",
-    "}",
-    ".",
-    "!"
-  ]
+  alias LemonGateway.Telegram.Markdown
 
   @doc """
-  Escapes text for Telegram MarkdownV2 format.
-  Preserves resume lines (lines starting with specific patterns like session IDs).
+  Prepare markdown text for Telegram.
+
+  Returns `{text, opts}` where `opts` is a map suitable for passing to
+  `LemonGateway.Telegram.API.send_message/4` or `edit_message_text/5`.
   """
-  @spec escape_markdown(String.t()) :: String.t()
-  def escape_markdown(text) when is_binary(text) do
-    text
-    |> String.split("\n")
-    |> Enum.map(&escape_line/1)
-    |> Enum.join("\n")
+  @spec prepare_for_telegram(String.t() | nil) :: {String.t(), map() | nil}
+  def prepare_for_telegram(text) when is_binary(text) do
+    {rendered, entities} = Markdown.render(text)
+
+    opts =
+      case entities do
+        [] -> nil
+        _ -> %{entities: entities}
+      end
+
+    {rendered, opts}
   end
 
-  def escape_markdown(nil), do: ""
-
-  defp escape_line(line) do
-    # Don't escape resume lines (they contain session IDs that should stay as-is)
-    if resume_line?(line) do
-      line
-    else
-      escape_chars(line)
-    end
-  end
-
-  defp resume_line?(line) do
-    # Resume lines typically look like: `/resume claude:abc123` or similar
-    String.starts_with?(String.trim(line), "/resume")
-  end
-
-  defp escape_chars(text) do
-    Enum.reduce(@escape_chars, text, fn char, acc ->
-      String.replace(acc, char, "\\#{char}")
-    end)
-  end
-
-  @doc """
-  Prepares text for sending to Telegram with MarkdownV2 parse mode.
-  Returns {text, parse_mode} tuple.
-  """
-  @spec prepare_for_telegram(String.t()) :: {String.t(), String.t()}
-  def prepare_for_telegram(text) do
-    {escape_markdown(text), "MarkdownV2"}
-  end
+  def prepare_for_telegram(nil), do: {"", nil}
 end

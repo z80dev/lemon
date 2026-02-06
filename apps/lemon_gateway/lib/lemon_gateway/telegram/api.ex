@@ -31,6 +31,7 @@ defmodule LemonGateway.Telegram.API do
       )
       |> maybe_put("message_thread_id", opts[:message_thread_id] || opts["message_thread_id"])
       |> maybe_put("parse_mode", opts[:parse_mode] || opts["parse_mode"] || parse_mode)
+      |> maybe_put("entities", opts[:entities] || opts["entities"])
       |> maybe_put("reply_markup", opts[:reply_markup] || opts["reply_markup"])
 
     request(token, "sendMessage", params, @default_timeout)
@@ -66,6 +67,7 @@ defmodule LemonGateway.Telegram.API do
         "disable_web_page_preview" => true
       }
       |> maybe_put("parse_mode", opts[:parse_mode] || opts["parse_mode"])
+      |> maybe_put("entities", opts[:entities] || opts["entities"])
       |> maybe_put("reply_markup", opts[:reply_markup] || opts["reply_markup"])
 
     request(token, "editMessageText", params, @default_timeout)
