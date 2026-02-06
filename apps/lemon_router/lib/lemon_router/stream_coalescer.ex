@@ -35,7 +35,8 @@ defmodule LemonRouter.StreamCoalescer do
     :first_delta_ts,
     :flush_timer,
     :config,
-    :meta
+    :meta,
+    :finalized
   ]
 
   def start_link(opts) do
@@ -74,6 +75,42 @@ defmodule LemonRouter.StreamCoalescer do
 
       {:error, reason} ->
         Logger.warning("Failed to start coalescer: #{inspect(reason)}")
+    end
+
+    :ok
+  end
+
+  @doc """
+  Finalize a run for a session/channel.
+
+  For Telegram, this converts the last update into:
+  1) delete the initial "Running..." progress message
+  2) send the final answer as a new message
+
+  This ensures the final answer appears *after* any tool-call/status messages
+  that were sent as separate messages during the run.
+  """
+  @spec finalize_run(
+          session_key :: binary(),
+          channel_id :: binary(),
+          run_id :: binary(),
+          opts :: keyword()
+        ) :: :ok
+  def finalize_run(session_key, channel_id, run_id, opts \\ [])
+      when is_binary(session_key) and is_binary(channel_id) and is_binary(run_id) do
+    meta = Keyword.get(opts, :meta, %{})
+    final_text = Keyword.get(opts, :final_text)
+
+    case get_or_start_coalescer(session_key, channel_id, meta) do
+      {:ok, pid} ->
+        try do
+          GenServer.call(pid, {:finalize, run_id, meta, final_text}, 5_000)
+        catch
+          :exit, _ -> :ok
+        end
+
+      _ ->
+        :ok
     end
 
     :ok
@@ -128,7 +165,8 @@ defmodule LemonRouter.StreamCoalescer do
       first_delta_ts: nil,
       flush_timer: nil,
       config: config,
-      meta: Keyword.get(opts, :meta, %{})
+      meta: Keyword.get(opts, :meta, %{}),
+      finalized: false
     }
 
     {:ok, state}
@@ -152,7 +190,8 @@ defmodule LemonRouter.StreamCoalescer do
             first_delta_ts: nil,
             flush_timer: nil,
             # New run: do not carry forward prior run's message ids.
-            meta: compact_meta(meta)
+            meta: compact_meta(meta),
+            finalized: false
         }
       else
         # Update meta if provided (e.g., progress_msg_id may come in later)
@@ -160,6 +199,10 @@ defmodule LemonRouter.StreamCoalescer do
         %{state | meta: Map.merge(state.meta || %{}, compact_meta(meta))}
       end
 
+    # If we've already finalized this run, ignore late deltas.
+    if state.finalized == true and state.run_id == run_id do
+      {:noreply, state}
+    else
     # Only accept in-order deltas
     if seq <= state.last_seq do
       {:noreply, state}
@@ -177,6 +220,7 @@ defmodule LemonRouter.StreamCoalescer do
       state = maybe_flush(state, now)
       {:noreply, state}
     end
+    end
   end
 
   # Handle legacy delta messages without meta
@@ -187,6 +231,26 @@ defmodule LemonRouter.StreamCoalescer do
   def handle_cast(:flush, state) do
     state = do_flush(state)
     {:noreply, state}
+  end
+
+  @impl true
+  def handle_call({:finalize, run_id, meta, final_text}, _from, state) do
+    # Ensure state is aligned with the run we're finalizing.
+    state =
+      cond do
+        state.run_id == nil ->
+          %{state | run_id: run_id, meta: compact_meta(meta), finalized: false}
+
+        state.run_id != run_id ->
+          # Different run in this coalescer; don't try to finalize it.
+          state
+
+        true ->
+          %{state | meta: Map.merge(state.meta || %{}, compact_meta(meta))}
+      end
+
+    state = do_finalize(state, final_text)
+    {:reply, :ok, state}
   end
 
   @impl true
@@ -300,6 +364,94 @@ defmodule LemonRouter.StreamCoalescer do
           Logger.warning("Failed to enqueue coalesced output: #{inspect(reason)}")
       end
     end
+  end
+
+  defp do_finalize(state, final_text) do
+    cond do
+      state.channel_id != "telegram" ->
+        # Only Telegram needs the "delete Running... then send final" behavior.
+        state
+
+      true ->
+        text =
+          cond do
+            is_binary(final_text) and final_text != "" -> final_text
+            is_binary(state.full_text) and state.full_text != "" -> state.full_text
+            is_binary(state.buffer) and state.buffer != "" -> state.buffer
+            true -> ""
+          end
+
+        progress_msg_id = (state.meta || %{})[:progress_msg_id]
+        reply_to = (state.meta || %{})[:user_msg_id]
+
+        parsed = parse_session_key(state.session_key)
+
+        if Code.ensure_loaded?(LemonChannels.Outbox) and
+             Code.ensure_loaded?(LemonChannels.OutboundPayload) and
+             is_pid(Process.whereis(LemonChannels.Outbox)) do
+          # Always remove the initial progress message so it can't remain stuck.
+          if progress_msg_id != nil do
+            delete_payload =
+              struct!(LemonChannels.OutboundPayload,
+                channel_id: state.channel_id,
+                account_id: parsed.account_id,
+                peer: %{
+                  kind: parsed.peer_kind,
+                  id: parsed.peer_id,
+                  thread_id: parsed.thread_id
+                },
+                kind: :delete,
+                content: %{message_id: progress_msg_id},
+                idempotency_key: "#{state.run_id}:final:delete",
+                meta: %{
+                  run_id: state.run_id,
+                  session_key: state.session_key,
+                  final: true
+                }
+              )
+
+            _ = LemonChannels.Outbox.enqueue(delete_payload)
+          end
+
+          if text != "" do
+            send_payload =
+              struct!(LemonChannels.OutboundPayload,
+                channel_id: state.channel_id,
+                account_id: parsed.account_id,
+                peer: %{
+                  kind: parsed.peer_kind,
+                  id: parsed.peer_id,
+                  thread_id: parsed.thread_id
+                },
+                kind: :text,
+                content: text,
+                reply_to: reply_to,
+                idempotency_key: "#{state.run_id}:final:send",
+                meta: %{
+                  run_id: state.run_id,
+                  session_key: state.session_key,
+                  final: true
+                }
+              )
+
+            _ = LemonChannels.Outbox.enqueue(send_payload)
+          end
+        end
+
+        cancel_timer(state.flush_timer)
+
+        %{
+          state
+          | buffer: "",
+            full_text: "",
+            first_delta_ts: nil,
+            flush_timer: nil,
+            finalized: true
+        }
+    end
+  rescue
+    _ ->
+      state
   end
 
   # Determine output kind and content based on channel capabilities

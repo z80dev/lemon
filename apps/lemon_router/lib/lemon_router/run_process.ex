@@ -89,13 +89,25 @@ defmodule LemonRouter.RunProcess do
     # Emit router-level completion event
     Bus.broadcast(Bus.session_topic(state.session_key), event)
 
+    # Mark any still-running tool calls as completed so the editable "Tool calls"
+    # status message (Telegram) can't get stuck at [running] if a final action
+    # completion event is missed/raced.
+    finalize_tool_status(state, event)
+
     # If we never streamed deltas, make sure any tool-status output is flushed
     # before we emit a single final answer chunk.
     if state.saw_delta == false do
       flush_tool_status(state)
     end
 
+    # Telegram: delete the "Running..." progress message and send the final response as a new message,
+    # so it always appears below the last tool-call/status message.
+    maybe_finalize_stream_output(state, event)
+
     # If no streaming deltas were emitted, emit a final output chunk so channels respond.
+    #
+    # Note: Telegram final output is handled by maybe_finalize_stream_output/2 instead to avoid
+    # producing a terminal :edit update to the progress message.
     maybe_emit_final_output(state, event)
 
     {:stop, :normal, %{state | completed: true}}
@@ -223,6 +235,11 @@ defmodule LemonRouter.RunProcess do
          answer when is_binary(answer) and answer != "" <- extract_completed_answer(event),
          %{kind: :channel_peer, channel_id: channel_id} when not is_nil(channel_id) <-
            LemonRouter.SessionKey.parse(state.session_key) do
+      # Telegram final output is handled via StreamCoalescer.finalize_run/4
+      # so we avoid emitting a terminal :edit update to the progress message.
+      if channel_id == "telegram" do
+        :ok
+      else
       meta = extract_coalescer_meta(state.job)
       LemonRouter.StreamCoalescer.ingest_delta(
         state.session_key,
@@ -232,6 +249,7 @@ defmodule LemonRouter.RunProcess do
         answer,
         meta: meta
       )
+      end
     else
       _ -> :ok
     end
@@ -243,6 +261,48 @@ defmodule LemonRouter.RunProcess do
   defp extract_completed_answer(%LemonCore.Event{payload: %{answer: answer}}), do: answer
   defp extract_completed_answer(%LemonCore.Event{payload: %LemonGateway.Event.Completed{answer: answer}}), do: answer
   defp extract_completed_answer(_), do: nil
+
+  defp maybe_finalize_stream_output(state, %LemonCore.Event{} = event) do
+    with %{kind: :channel_peer, channel_id: "telegram"} <- LemonRouter.SessionKey.parse(state.session_key),
+         true <- Code.ensure_loaded?(LemonRouter.StreamCoalescer) do
+      meta = extract_coalescer_meta(state.job)
+      final_text = extract_completed_answer(event)
+
+      LemonRouter.StreamCoalescer.finalize_run(
+        state.session_key,
+        "telegram",
+        state.run_id,
+        meta: meta,
+        final_text: final_text
+      )
+    else
+      _ -> :ok
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp finalize_tool_status(state, %LemonCore.Event{} = event) do
+    with %{kind: :channel_peer, channel_id: channel_id} when not is_nil(channel_id) <-
+           LemonRouter.SessionKey.parse(state.session_key),
+         true <- Code.ensure_loaded?(LemonRouter.ToolStatusCoalescer) do
+      ok? =
+        case event.payload do
+          %{completed: %{ok: ok}} -> ok == true
+          %LemonGateway.Event.Completed{ok: ok} -> ok == true
+          %{ok: ok} -> ok == true
+          _ -> false
+        end
+
+      LemonRouter.ToolStatusCoalescer.finalize_run(state.session_key, channel_id, state.run_id, ok?)
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
 
   defp ingest_action_to_tool_status_coalescer(state, action_ev) do
     case LemonRouter.SessionKey.parse(state.session_key) do
