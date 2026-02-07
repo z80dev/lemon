@@ -115,13 +115,9 @@ defmodule LemonControlPlane.Methods.UpdateRun do
   end
 
   defp fetch_update_manifest(url) do
-    # Ensure inets and ssl are started
-    :inets.start()
-    :ssl.start()
-
     request = {String.to_charlist(url), []}
 
-    case :httpc.request(:get, request, [timeout: 10_000], body_format: :binary) do
+    case LemonCore.Httpc.request(:get, request, [timeout: 10_000], body_format: :binary) do
       {:ok, {{_, 200, _}, _headers, body}} ->
         case Jason.decode(body) do
           {:ok, manifest} -> {:ok, manifest}
@@ -198,12 +194,9 @@ defmodule LemonControlPlane.Methods.UpdateRun do
   end
 
   defp download_update(url, expected_checksum) do
-    :inets.start()
-    :ssl.start()
-
     request = {String.to_charlist(url), []}
 
-    case :httpc.request(:get, request, [timeout: 300_000], body_format: :binary) do
+    case LemonCore.Httpc.request(:get, request, [timeout: 300_000], body_format: :binary) do
       {:ok, {{_, 200, _}, _headers, body}} ->
         # Verify checksum if provided
         if expected_checksum do

@@ -38,7 +38,7 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriber do
 
     opts = [timeout: 120_000, connect_timeout: 30_000]
 
-    case :httpc.request(
+    case LemonCore.Httpc.request(
            :post,
            {to_charlist(url), headers, to_charlist(content_type), body},
            opts,
