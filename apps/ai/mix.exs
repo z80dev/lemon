@@ -27,6 +27,7 @@ defmodule Ai.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
+      {:lemon_core, in_umbrella: true},
       # HTTP client with streaming support
       {:req, "~> 0.5"},
       # JSON encoding/decoding

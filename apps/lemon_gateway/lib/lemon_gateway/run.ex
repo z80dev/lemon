@@ -691,7 +691,7 @@ defmodule LemonGateway.Run do
   defp emit_telemetry_start(run_id, meta) do
     # Emit both legacy [:lemon_gateway, :run, :start] and new [:lemon, :run, :start]
     # for backwards compatibility during migration
-    :telemetry.execute(
+    LemonCore.Telemetry.emit(
       [:lemon_gateway, :run, :start],
       %{system_time: System.system_time()},
       %{
@@ -714,7 +714,7 @@ defmodule LemonGateway.Run do
 
   defp emit_telemetry_first_token(run_id, meta, latency_ms) do
     # Legacy event
-    :telemetry.execute(
+    LemonCore.Telemetry.emit(
       [:lemon_gateway, :run, :first_token],
       %{latency_ms: latency_ms, system_time: System.system_time()},
       %{
@@ -734,7 +734,7 @@ defmodule LemonGateway.Run do
 
   defp emit_telemetry_stop(run_id, meta, duration_ms, ok?) do
     # Legacy event
-    :telemetry.execute(
+    LemonCore.Telemetry.emit(
       [:lemon_gateway, :run, :stop],
       %{duration_ms: duration_ms, system_time: System.system_time()},
       %{

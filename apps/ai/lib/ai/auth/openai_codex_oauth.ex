@@ -236,9 +236,6 @@ defmodule Ai.Auth.OpenAICodexOAuth do
   defp refresh_access_token(refresh_token) do
     # Use :httpc directly so unit tests that set Req.Test plugs don't accidentally
     # hijack this request (refresh should not depend on test stubs unless explicitly mocked).
-    :ok = :inets.start()
-    :ok = :ssl.start()
-
     body =
       URI.encode_query(%{
         "grant_type" => "refresh_token",
@@ -254,7 +251,7 @@ defmodule Ai.Auth.OpenAICodexOAuth do
     http_opts = [timeout: 15_000, connect_timeout: 5_000]
     req_opts = [body_format: :binary]
 
-    case :httpc.request(:post, request, http_opts, req_opts) do
+    case LemonCore.Httpc.request(:post, request, http_opts, req_opts) do
       {:ok, {{_http, status, _reason}, _resp_headers, resp_body}} when status in 200..299 ->
         case Jason.decode(resp_body) do
           {:ok,

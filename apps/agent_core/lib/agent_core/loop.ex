@@ -292,7 +292,7 @@ defmodule AgentCore.Loop do
     # Store start time for duration calculation in telemetry
     Process.put(:agent_loop_start_time, System.monotonic_time())
 
-    :telemetry.execute(
+    LemonCore.Telemetry.emit(
       [:agent_core, :loop, :start],
       %{system_time: System.system_time()},
       %{
@@ -328,7 +328,7 @@ defmodule AgentCore.Loop do
     # Store start time for duration calculation in telemetry
     Process.put(:agent_loop_start_time, System.monotonic_time())
 
-    :telemetry.execute(
+    LemonCore.Telemetry.emit(
       [:agent_core, :loop, :start],
       %{system_time: System.system_time()},
       %{
@@ -746,7 +746,7 @@ defmodule AgentCore.Loop do
         ref = make_ref()
 
         # Emit telemetry for tool task start
-        :telemetry.execute(
+        LemonCore.Telemetry.emit(
           [:agent_core, :tool_task, :start],
           %{system_time: System.system_time()},
           %{tool_name: tool_call.name, tool_call_id: tool_call.id}
@@ -796,7 +796,7 @@ defmodule AgentCore.Loop do
           Task.Supervisor.terminate_child(AgentCore.ToolTaskSupervisor, pid)
           Process.demonitor(mon_ref, [:flush])
 
-          :telemetry.execute(
+          LemonCore.Telemetry.emit(
             [:agent_core, :tool_task, :error],
             %{system_time: System.system_time()},
             %{tool_name: tool_call.name, tool_call_id: tool_call.id, reason: :aborted}
@@ -838,7 +838,7 @@ defmodule AgentCore.Loop do
               drop_pending_task(pending_by_ref, pending_by_mon, ref)
 
             # Emit telemetry for tool task end
-            :telemetry.execute(
+            LemonCore.Telemetry.emit(
               [:agent_core, :tool_task, :end],
               %{system_time: System.system_time()},
               %{tool_name: tool_call.name, tool_call_id: tool_call.id, is_error: is_error}
@@ -885,7 +885,7 @@ defmodule AgentCore.Loop do
                   drop_pending_task(pending_by_ref, pending_by_mon, ref)
 
                 # Emit telemetry for tool task error (crash)
-                :telemetry.execute(
+                LemonCore.Telemetry.emit(
                   [:agent_core, :tool_task, :error],
                   %{system_time: System.system_time()},
                   %{tool_name: tool_call.name, tool_call_id: tool_call.id, reason: reason}
@@ -1220,7 +1220,7 @@ defmodule AgentCore.Loop do
     start_time = Process.get(:agent_loop_start_time)
     duration = if start_time, do: System.monotonic_time() - start_time, else: nil
 
-    :telemetry.execute(
+    LemonCore.Telemetry.emit(
       [:agent_core, :loop, :end],
       %{duration: duration, system_time: System.system_time()},
       %{

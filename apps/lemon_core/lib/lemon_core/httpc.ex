@@ -19,8 +19,8 @@ defmodule LemonCore.Httpc do
   """
   @spec ensure_started() :: :ok
   def ensure_started do
-    _ = :inets.start()
-    _ = :ssl.start()
+    _ = Application.ensure_all_started(:inets)
+    _ = Application.ensure_all_started(:ssl)
     :ok
   end
 
@@ -33,4 +33,3 @@ defmodule LemonCore.Httpc do
     :httpc.request(method, request, http_opts, opts)
   end
 end
-

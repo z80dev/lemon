@@ -140,7 +140,7 @@ defmodule LemonGateway.Telegram.API do
     headers = []
     opts = [timeout: 30_000, connect_timeout: 30_000]
 
-    case :httpc.request(:get, {to_charlist(url), headers}, opts, body_format: :binary) do
+    case LemonCore.Httpc.request(:get, {to_charlist(url), headers}, opts, body_format: :binary) do
       {:ok, {{_, 200, _}, _headers, body}} -> {:ok, body}
       {:ok, {{_, status, _}, _headers, body}} -> {:error, {:http_error, status, body}}
       {:error, reason} -> {:error, reason}
@@ -164,7 +164,7 @@ defmodule LemonGateway.Telegram.API do
     headers = [{~c"content-type", to_charlist(content_type)}]
     http_opts = [timeout: 60_000, connect_timeout: 30_000]
 
-    case :httpc.request(
+    case LemonCore.Httpc.request(
            :post,
            {to_charlist(url), headers, to_charlist(content_type), body},
            http_opts,
@@ -288,7 +288,7 @@ defmodule LemonGateway.Telegram.API do
 
     opts = [timeout: timeout_ms, connect_timeout: timeout_ms]
 
-    case :httpc.request(:post, {to_charlist(url), headers, ~c"application/json", body}, opts,
+    case LemonCore.Httpc.request(:post, {to_charlist(url), headers, ~c"application/json", body}, opts,
            body_format: :binary
          ) do
       {:ok, {{_, 200, _}, _headers, response_body}} ->
