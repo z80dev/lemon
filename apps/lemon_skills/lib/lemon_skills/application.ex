@@ -7,6 +7,8 @@ defmodule LemonSkills.Application do
   def start(_type, _args) do
     # Ensure ~/.lemon/agent/skill exists before the registry loads from disk.
     LemonSkills.Config.ensure_dirs!()
+    # Copy repo-bundled skills into the user's global config dir if missing.
+    LemonSkills.BuiltinSeeder.seed!()
 
     children = [
       LemonSkills.Registry
