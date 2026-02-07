@@ -96,7 +96,7 @@ defmodule AgentCore.SubagentSupervisor do
 
     case DynamicSupervisor.start_child(@supervisor_name, child_spec) do
       {:ok, pid} = result ->
-        :telemetry.execute(
+        LemonCore.Telemetry.emit(
           [:agent_core, :subagent, :spawn],
           %{system_time: System.system_time()},
           %{
@@ -147,7 +147,7 @@ defmodule AgentCore.SubagentSupervisor do
   def stop_subagent(pid) when is_pid(pid) do
     case DynamicSupervisor.terminate_child(@supervisor_name, pid) do
       :ok ->
-        :telemetry.execute(
+        LemonCore.Telemetry.emit(
           [:agent_core, :subagent, :end],
           %{system_time: System.system_time()},
           %{pid: pid, reason: :stopped}

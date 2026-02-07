@@ -104,7 +104,32 @@ defmodule CodingAgent.Tools.TodoStore do
   defp ensure_table do
     case :ets.whereis(@table) do
       :undefined ->
-        :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
+        # Try hard to avoid the ETS table being owned by a short-lived process
+        # (e.g. Task processes in async tests). If a stable, supervised process
+        # exists, set it as the ETS heir so the table survives owner exits.
+        heir_opt =
+          cond do
+            is_pid(Process.whereis(CodingAgent.Tools.TodoStoreOwner)) ->
+              [{:heir, Process.whereis(CodingAgent.Tools.TodoStoreOwner), @table}]
+
+            is_pid(Process.whereis(CodingAgent.Supervisor)) ->
+              [{:heir, Process.whereis(CodingAgent.Supervisor), @table}]
+
+            true ->
+              []
+          end
+
+        :ets.new(
+          @table,
+          [
+            :named_table,
+            :public,
+            :set,
+            read_concurrency: true,
+            write_concurrency: true
+          ] ++ heir_opt
+        )
+
         :ok
 
       _ ->

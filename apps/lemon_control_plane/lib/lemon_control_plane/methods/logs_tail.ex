@@ -25,10 +25,10 @@ defmodule LemonControlPlane.Methods.LogsTail do
   end
 
   defp get_recent_logs(limit, level) do
-    # Try to get from LemonControlPlane.LogRing if available
-    if Code.ensure_loaded?(LemonControlPlane.LogRing) and
-       function_exported?(LemonControlPlane.LogRing, :get_logs, 2) do
-      LemonControlPlane.LogRing.get_logs(limit, level)
+    mod = LemonControlPlane.LogRing
+
+    if Code.ensure_loaded?(mod) and function_exported?(mod, :get_logs, 2) do
+      apply(mod, :get_logs, [limit, level])
     else
       # Fallback: return empty list
       []

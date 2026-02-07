@@ -30,39 +30,35 @@ defmodule LemonControlPlane.Methods.ExecApprovalRequest do
         {:error, Errors.invalid_request("tool is required")}
 
       true ->
-        if Code.ensure_loaded?(LemonRouter.ApprovalsBridge) do
-          approval_id = LemonCore.Id.uuid()
-          expires_at_ms = System.system_time(:millisecond) + expires_in_ms
+        approval_id = LemonCore.Id.uuid()
+        expires_at_ms = System.system_time(:millisecond) + expires_in_ms
 
-          pending = %{
-            id: approval_id,
-            run_id: run_id,
-            session_key: session_key,
-            tool: tool,
-            action: action,
-            rationale: rationale,
-            expires_at_ms: expires_at_ms,
-            created_at_ms: System.system_time(:millisecond)
-          }
+        pending = %{
+          id: approval_id,
+          run_id: run_id,
+          session_key: session_key,
+          tool: tool,
+          action: action,
+          rationale: rationale,
+          expires_at_ms: expires_at_ms,
+          created_at_ms: System.system_time(:millisecond)
+        }
 
-          # Store the pending approval
-          LemonCore.Store.put(:exec_approvals_pending, approval_id, pending)
+        LemonCore.Store.put(:exec_approvals_pending, approval_id, pending)
 
-          # Broadcast approval requested event
-          event = LemonCore.Event.new(:approval_requested, %{pending: pending}, %{
+        event =
+          LemonCore.Event.new(:approval_requested, %{pending: pending}, %{
             approval_id: approval_id,
             run_id: run_id,
             session_key: session_key
           })
-          LemonCore.Bus.broadcast("exec_approvals", event)
 
-          {:ok, %{
-            "approvalId" => approval_id,
-            "expiresAtMs" => expires_at_ms
-          }}
-        else
-          {:error, Errors.not_implemented("ApprovalsBridge not available")}
-        end
+        LemonCore.Bus.broadcast("exec_approvals", event)
+
+        {:ok, %{
+          "approvalId" => approval_id,
+          "expiresAtMs" => expires_at_ms
+        }}
     end
   end
 end

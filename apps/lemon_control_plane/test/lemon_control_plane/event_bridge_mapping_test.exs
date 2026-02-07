@@ -2,7 +2,6 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
   use ExUnit.Case, async: true
 
   alias LemonControlPlane.Protocol.Frames
-  alias LemonControlPlane.EventBridge
 
   describe "supported_events synchronization" do
     test "supported_events includes all expected event types" do

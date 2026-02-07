@@ -24,7 +24,6 @@ defmodule LemonGateway.ThreadRegistry do
   @spec register(term()) :: {:ok, pid()} | {:error, {:already_registered, pid()}}
   def register(thread_key) do
     case Registry.register(__MODULE__, thread_key, :ok) do
-      :ok -> {:ok, self()}
       {:ok, _pid} -> {:ok, self()}
       {:error, {:already_registered, pid}} -> {:error, {:already_registered, pid}}
     end

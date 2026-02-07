@@ -1,5 +1,7 @@
 defmodule CodingAgent.ToolRegistryTest do
-  use ExUnit.Case, async: true
+  # Uses `capture_log/1` in a few tests; run synchronously to avoid
+  # cross-test log interference in umbrella `mix test`.
+  use ExUnit.Case, async: false
 
   alias CodingAgent.ToolRegistry
 

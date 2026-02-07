@@ -221,4 +221,22 @@ defmodule LemonSkills do
   """
   @spec disable(String.t(), keyword()) :: :ok | {:error, term()}
   defdelegate disable(key, opts \\ []), to: Config
+
+  @doc """
+  Find skills relevant to a context string.
+
+  This uses simple keyword matching against the skill key/name/description,
+  and (lightly) the SKILL.md body content.
+
+  ## Parameters
+
+  - `context` - Text to match against skills
+
+  ## Options
+
+  - `:cwd` - Project working directory (optional)
+  - `:max_results` - Maximum number of skills to return (default: 3)
+  """
+  @spec find_relevant(String.t(), keyword()) :: [Entry.t()]
+  defdelegate find_relevant(context, opts \\ []), to: Registry
 end

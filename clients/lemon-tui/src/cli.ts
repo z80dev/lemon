@@ -22,6 +22,13 @@ interface CLIArgs {
   debug?: boolean;
   ui?: boolean;
   lemonPath?: string;
+  wsUrl?: string;
+  wsToken?: string;
+  wsRole?: string;
+  wsScopes?: string;
+  wsClientId?: string;
+  wsSessionKey?: string;
+  wsAgentId?: string;
 }
 
 function parseArgs(): CLIArgs {
@@ -71,6 +78,34 @@ function parseArgs(): CLIArgs {
         options.lemonPath = args[++i];
         break;
 
+      case '--ws-url':
+        options.wsUrl = args[++i];
+        break;
+
+      case '--ws-token':
+        options.wsToken = args[++i];
+        break;
+
+      case '--ws-role':
+        options.wsRole = args[++i];
+        break;
+
+      case '--ws-scopes':
+        options.wsScopes = args[++i];
+        break;
+
+      case '--ws-client-id':
+        options.wsClientId = args[++i];
+        break;
+
+      case '--ws-session-key':
+        options.wsSessionKey = args[++i];
+        break;
+
+      case '--ws-agent-id':
+        options.wsAgentId = args[++i];
+        break;
+
       case '--help':
       case '-h':
         console.log(`
@@ -88,6 +123,13 @@ Options:
   --debug                Enable debug mode
   --no-ui                Disable UI overlays
   --lemon-path <path>    Path to lemon project root
+  --ws-url <url>         Connect to LemonControlPlane WebSocket (OpenClaw)
+  --ws-token <token>     Auth token for WebSocket connect
+  --ws-role <role>       WebSocket role (operator, node, device)
+  --ws-scopes <csv>      WebSocket scopes (comma-separated)
+  --ws-client-id <id>    WebSocket client ID
+  --ws-session-key <id>  Default session key for WebSocket mode
+  --ws-agent-id <id>     Default agent ID for WebSocket mode
   --help, -h             Show this help message
 
 Configuration:
@@ -120,6 +162,15 @@ function buildOptions(cliArgs: CLIArgs, config: ResolvedConfig): AgentConnection
     lemonPath: cliArgs.lemonPath,
     systemPrompt: cliArgs.systemPrompt,
     sessionFile: cliArgs.sessionFile,
+    wsUrl: cliArgs.wsUrl || config.wsUrl,
+    wsToken: cliArgs.wsToken || config.wsToken,
+    wsRole: cliArgs.wsRole || config.wsRole,
+    wsScopes: cliArgs.wsScopes
+      ? cliArgs.wsScopes.split(',').map((s) => s.trim()).filter(Boolean)
+      : config.wsScopes,
+    wsClientId: cliArgs.wsClientId || config.wsClientId,
+    wsSessionKey: cliArgs.wsSessionKey || process.env.LEMON_SESSION_KEY,
+    wsAgentId: cliArgs.wsAgentId || process.env.LEMON_AGENT_ID,
   };
 
   // Build model string - if CLI provided full "provider:model", use that

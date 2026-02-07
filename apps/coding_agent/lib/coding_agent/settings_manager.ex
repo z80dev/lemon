@@ -52,7 +52,9 @@ defmodule CodingAgent.SettingsManager do
           # CLI settings
           codex: map(),
           kimi: map(),
-          claude: map()
+          claude: map(),
+          opencode: map(),
+          pi: map()
         }
 
   defstruct [
@@ -89,7 +91,9 @@ defmodule CodingAgent.SettingsManager do
     # CLI settings
     codex: %{},
     kimi: %{},
-    claude: %{}
+    claude: %{},
+    opencode: %{},
+    pi: %{}
   ]
 
   @doc """
@@ -136,7 +140,9 @@ defmodule CodingAgent.SettingsManager do
       theme: Map.get(agent, :theme, "default"),
       codex: Map.get(cli, :codex, %{}),
       kimi: Map.get(cli, :kimi, %{}),
-      claude: Map.get(cli, :claude, %{})
+      claude: Map.get(cli, :claude, %{}),
+      opencode: Map.get(cli, :opencode, %{}),
+      pi: Map.get(cli, :pi, %{})
     }
   end
 

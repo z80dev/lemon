@@ -5,6 +5,14 @@ defmodule LemonRouter.Application do
 
   @impl true
   def start(_type, _args) do
+    # Allow producers (e.g. :lemon_channels) to submit runs / forward inbound
+    # messages without a compile-time dependency on :lemon_router.
+    :ok =
+      LemonCore.RouterBridge.configure(
+        run_orchestrator: LemonRouter.RunOrchestrator,
+        router: LemonRouter.Router
+      )
+
     children = [
       # Agent profiles configuration
       LemonRouter.AgentProfiles,
@@ -18,6 +26,7 @@ defmodule LemonRouter.Application do
       {DynamicSupervisor, strategy: :one_for_one, name: LemonRouter.ToolStatusSupervisor},
       # Registries
       {Registry, keys: :unique, name: LemonRouter.RunRegistry},
+      # Strict single-flight: at most one *active* run per session_key.
       {Registry, keys: :unique, name: LemonRouter.SessionRegistry},
       # Coalescer registry - required for StreamCoalescer to work
       {Registry, keys: :unique, name: LemonRouter.CoalescerRegistry},

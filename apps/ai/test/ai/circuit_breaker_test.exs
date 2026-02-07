@@ -450,36 +450,40 @@ defmodule Ai.CircuitBreakerTest do
 
   describe "record_failure/1 - open state" do
     test "extends recovery timeout on additional failures", %{provider: provider} do
+      # Keep timeouts large enough to avoid scheduler jitter making the test flaky.
+      recovery_timeout = 200
+
       start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 50}
+        {CircuitBreaker,
+         provider: provider, failure_threshold: 1, recovery_timeout: recovery_timeout}
       )
 
       # Open the circuit
       CircuitBreaker.record_failure(provider)
-      Process.sleep(20)
 
-      {:ok, state} = CircuitBreaker.get_state(provider)
-      assert state.circuit_state == :open
+      assert wait_until(
+               fn ->
+                 {:ok, state} = CircuitBreaker.get_state(provider)
+                 state.circuit_state == :open
+               end,
+               200
+             )
 
       # Wait but not long enough for recovery
-      Process.sleep(30)
+      Process.sleep(120)
 
       # Record another failure - this should reset the recovery timer
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
+      Process.sleep(20)
 
-      # Circuit should still be open
-      {:ok, state} = CircuitBreaker.get_state(provider)
-      assert state.circuit_state == :open
-
-      # Wait a bit more - should still be open because timer was reset
-      Process.sleep(30)
-
+      # Wait a bit more. If the recovery timer was not extended, the circuit would
+      # be half-open by now (120ms + 120ms > 200ms).
+      Process.sleep(120)
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
 
       # Now wait for full recovery timeout from last failure
-      Process.sleep(40)
+      Process.sleep(recovery_timeout + 20)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
@@ -652,6 +656,24 @@ defmodule Ai.CircuitBreakerTest do
       # Due to success resetting failure count, circuit should stay closed
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :closed
+    end
+  end
+
+  defp wait_until(fun, timeout_ms) when is_function(fun, 0) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_until(fun, deadline)
+  end
+
+  defp do_wait_until(fun, deadline_ms) do
+    if fun.() do
+      true
+    else
+      if System.monotonic_time(:millisecond) >= deadline_ms do
+        false
+      else
+        Process.sleep(10)
+        do_wait_until(fun, deadline_ms)
+      end
     end
   end
 end

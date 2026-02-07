@@ -483,8 +483,6 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
 
   describe "concurrent operations" do
     test "many workers can be started in parallel" do
-      test_pid = self()
-
       tasks =
         for i <- 1..10 do
           Task.async(fn ->

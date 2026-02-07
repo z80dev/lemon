@@ -5,6 +5,10 @@ defmodule LemonControlPlane.Application do
 
   @impl true
   def start(_type, _args) do
+    # Allow :lemon_router to call LemonCore.EventBridge without depending on
+    # :lemon_control_plane at compile time.
+    :ok = LemonCore.EventBridge.configure(LemonControlPlane.EventBridge)
+
     children = [
       # Method registry (ETS-backed for fast lookup)
       LemonControlPlane.Methods.Registry,

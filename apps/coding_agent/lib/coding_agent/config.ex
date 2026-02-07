@@ -14,7 +14,7 @@ defmodule CodingAgent.Config do
       ├── sessions/          # Session storage (encoded by cwd)
       │   └── --path-to-project--/
       ├── extensions/        # Global extensions
-      ├── skills/            # Skill definitions
+      ├── skill/             # Skill definitions (SKILL.md directories)
       └── prompts/           # Custom prompts
 
   Projects can also have local configuration in `.lemon/` directories.
@@ -28,6 +28,9 @@ defmodule CodingAgent.Config do
   Get the agent configuration directory.
 
   Returns the path to `~/.lemon/agent` where global agent configuration is stored.
+  This can be overridden with:
+  - `LEMON_AGENT_DIR` environment variable
+  - `config :coding_agent, :agent_dir, "/path"`
 
   ## Examples
 
@@ -35,7 +38,11 @@ defmodule CodingAgent.Config do
       "/home/user/.lemon/agent"
   """
   @spec agent_dir() :: String.t()
-  def agent_dir, do: Path.join(System.user_home!(), ".lemon/agent")
+  def agent_dir do
+    System.get_env("LEMON_AGENT_DIR") ||
+      Application.get_env(:coding_agent, :agent_dir) ||
+      Path.join(System.user_home!(), ".lemon/agent")
+  end
 
   @doc """
   Get the global settings file path.
@@ -92,10 +99,10 @@ defmodule CodingAgent.Config do
   ## Examples
 
       iex> CodingAgent.Config.skills_dir()
-      "/home/user/.lemon/agent/skills"
+      "/home/user/.lemon/agent/skill"
   """
   @spec skills_dir() :: String.t()
-  def skills_dir, do: Path.join(agent_dir(), "skills")
+  def skills_dir, do: Path.join(agent_dir(), "skill")
 
   @doc """
   Get the prompts directory.

@@ -63,10 +63,14 @@ defmodule LemonRouter.StreamCoalescerTest do
 
     on_exit(fn ->
       _ = :persistent_term.erase({TestTelegramPlugin, :test_pid})
-      _ = LemonChannels.Registry.unregister("telegram")
+      # on_exit callbacks can run after the test process has terminated; avoid
+      # failing tests on cleanup if the registry is already gone.
+      if is_pid(Process.whereis(LemonChannels.Registry)) do
+        _ = LemonChannels.Registry.unregister("telegram")
 
-      if is_atom(existing) do
-        _ = LemonChannels.Registry.register(existing)
+        if is_atom(existing) and not is_nil(existing) do
+          _ = LemonChannels.Registry.register(existing)
+        end
       end
     end)
 

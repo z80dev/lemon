@@ -8,7 +8,8 @@ defmodule CodingAgent.SystemPrompt do
   - Keeps skills + workspace file context
   """
 
-  alias CodingAgent.{Skills, Workspace}
+  alias CodingAgent.Workspace
+  alias LemonSkills.{Config, Status}
 
   @type opts :: %{
           optional(:workspace_dir) => String.t(),
@@ -48,7 +49,11 @@ defmodule CodingAgent.SystemPrompt do
   # ============================================================================
 
   defp build_skills_section(cwd) do
-    skills = Skills.list(cwd)
+    skills =
+      LemonSkills.list(cwd: cwd)
+      |> Enum.reject(fn entry ->
+        not entry.enabled or Config.skill_disabled?(entry.key, cwd)
+      end)
 
     if skills == [] do
       ""
@@ -56,11 +61,15 @@ defmodule CodingAgent.SystemPrompt do
       body =
         skills
         |> Enum.map(fn skill ->
+          status = Status.check_entry(skill, cwd: cwd)
+
           [
             "  <skill>",
             "    <name>#{skill.name}</name>",
             "    <description>#{escape(skill.description)}</description>",
             "    <location>#{skill.path}</location>",
+            "    <key>#{skill.key}</key>",
+            "    <ready>#{status.ready}</ready>",
             "  </skill>"
           ]
           |> Enum.join("\n")
@@ -70,9 +79,12 @@ defmodule CodingAgent.SystemPrompt do
       """
       ## Skills (available)
       Before replying: scan <available_skills> <description> entries.
-      - If exactly one skill clearly applies: open its SKILL.md at <location> and follow it.
+      - If exactly one skill clearly applies:
+        Use `read_skill` with <key> to load it, then follow it.
+        If `read_skill` isn't available, open its SKILL.md at <location> and follow it.
       - If multiple could apply: choose the most specific one, then follow it.
       - If none clearly apply: do not load any skill.
+      - Prefer skills where <ready>true</ready> unless you are intentionally trying to diagnose missing requirements.
 
       <available_skills>
       #{body}

@@ -37,7 +37,7 @@ defmodule LemonGateway.BindingResolver do
   """
   @spec resolve_binding(ChatScope.t()) :: Binding.t() | nil
   def resolve_binding(%ChatScope{} = scope) do
-    bindings = Config.get(:bindings) || []
+    bindings = bindings()
 
     # First try to find a topic-level binding if topic_id is set
     topic_binding =
@@ -61,6 +61,20 @@ defmodule LemonGateway.BindingResolver do
 
     binding = topic_binding || chat_binding
     normalize_binding(binding)
+  end
+
+  # In umbrella `mix test`, lemon_gateway may not be started even if callers
+  # reference BindingResolver. Be defensive and fall back to env/TOML parsing.
+  defp bindings do
+    if is_pid(Process.whereis(Config)) do
+      Config.get(:bindings) || []
+    else
+      LemonGateway.ConfigLoader.load()
+      |> Map.get(:bindings, [])
+      |> List.wrap()
+    end
+  rescue
+    _ -> []
   end
 
   # Helper to get field from either a struct or a map
@@ -151,7 +165,7 @@ defmodule LemonGateway.BindingResolver do
   defp agent_default_engine(%Binding{agent_id: agent_id} = _binding, scope)
        when is_binary(agent_id) do
     cwd = resolve_cwd(scope)
-    cfg = LemonCore.Config.load(cwd)
+    cfg = LemonCore.Config.cached(cwd)
     profile = Map.get(cfg.agents || %{}, agent_id) || Map.get(cfg.agents || %{}, "default") || %{}
 
     engine =

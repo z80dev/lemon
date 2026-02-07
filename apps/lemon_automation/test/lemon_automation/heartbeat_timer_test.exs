@@ -10,6 +10,8 @@ defmodule LemonAutomation.HeartbeatTimerTest do
   alias LemonAutomation.HeartbeatManager
 
   setup do
+    {:ok, _} = Application.ensure_all_started(:lemon_automation)
+
     # Clean up stores after each test
     on_exit(fn ->
       try do

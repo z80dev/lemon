@@ -54,6 +54,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.SessionsPatch,
     LemonControlPlane.Methods.SessionsReset,
     LemonControlPlane.Methods.SessionsCompact,
+    LemonControlPlane.Methods.SessionsActive,
     # Cron
     LemonControlPlane.Methods.CronList,
     LemonControlPlane.Methods.CronAdd,

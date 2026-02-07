@@ -74,9 +74,10 @@ defmodule CodingAgent.SessionRegistryTest do
   end
 
   describe "list_ids/0" do
-    test "returns empty list when no sessions registered" do
-      # Get initial count
-      initial_ids = SessionRegistry.list_ids()
+    test "returns a list and includes registered session ids" do
+      # In umbrella `mix test`, other suites may have started the Registry and left
+      # entries behind in the same BEAM. Don't assume global emptiness here.
+      initial_ids = MapSet.new(SessionRegistry.list_ids())
 
       # Create a unique session and verify it appears
       session_id = "list_test_#{:rand.uniform(100_000)}"
@@ -88,6 +89,13 @@ defmodule CodingAgent.SessionRegistryTest do
       assert session_id in ids
 
       Agent.stop(pid)
+
+      assert wait_until(
+               fn ->
+                 MapSet.new(SessionRegistry.list_ids()) == initial_ids
+               end,
+               1_000
+             )
     end
 
     test "returns all registered session ids" do

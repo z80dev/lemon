@@ -15,7 +15,6 @@ defmodule CodingAgent.BashEdgeCasesTest do
 
   alias CodingAgent.Tools.Bash
   alias CodingAgent.BashExecutor
-  alias CodingAgent.BashExecutor.Result
   alias AgentCore.Types.AgentToolResult
   alias AgentCore.AbortSignal
   alias Ai.Types.TextContent
@@ -720,7 +719,7 @@ defmodule CodingAgent.BashEdgeCasesTest do
       AbortSignal.clear(signal)
     end
 
-    test "error result from BashExecutor", %{tmp_dir: tmp_dir} do
+    test "error result from BashExecutor", %{tmp_dir: _tmp_dir} do
       # Test error handling - invalid cwd should cause an error
       result = BashExecutor.execute("echo test", "/nonexistent/path/xyz")
 

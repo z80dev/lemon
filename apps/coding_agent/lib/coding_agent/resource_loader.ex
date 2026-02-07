@@ -291,8 +291,8 @@ defmodule CodingAgent.ResourceLoader do
 
   Skills are reusable agent capabilities defined in markdown files.
   They are loaded from:
-  - Project-local skills (`.lemon/skills/`)
-  - Global skills (`~/.lemon/agent/skills/`)
+  - Project-local skills (`.lemon/skill/*/SKILL.md`)
+  - Global skills (`~/.lemon/agent/skill/*/SKILL.md`)
 
   ## Parameters
 
@@ -309,18 +309,24 @@ defmodule CodingAgent.ResourceLoader do
   """
   @spec load_skills(String.t()) :: %{String.t() => String.t()}
   def load_skills(cwd) do
-    skill_dirs = [
-      Path.join([cwd, ".lemon", "skills"]),
-      Path.join([cwd, ".claude", "skills"]),
-      Config.skills_dir()
+    dirs = [
+      Path.join([cwd, ".lemon", "skill"]),
+      Path.join([Config.agent_dir(), "skill"])
     ]
 
-    skill_dirs
+    dirs
     |> Enum.filter(&File.dir?/1)
-    |> Enum.flat_map(&list_skill_files/1)
+    |> Enum.flat_map(fn dir ->
+      dir
+      |> File.ls!()
+      |> Enum.map(&Path.join(dir, &1))
+      |> Enum.filter(&File.dir?/1)
+      |> Enum.map(&Path.join(&1, "SKILL.md"))
+      |> Enum.filter(&File.regular?/1)
+    end)
     |> Enum.reduce(%{}, fn path, acc ->
-      name = Path.basename(path, Path.extname(path))
-      Map.put_new(acc, name, read_file_safe(path))
+      key = Path.basename(Path.dirname(path))
+      Map.put_new(acc, key, read_file_safe(path))
     end)
   end
 
@@ -343,18 +349,9 @@ defmodule CodingAgent.ResourceLoader do
   """
   @spec load_skill(String.t(), String.t()) :: {:ok, String.t()} | {:error, :not_found}
   def load_skill(cwd, name) do
-    skill_dirs = [
-      Path.join([cwd, ".lemon", "skills"]),
-      Path.join([cwd, ".claude", "skills"]),
-      Config.skills_dir()
-    ]
-
-    extensions = [".md", ".txt", ""]
-
     result =
-      for dir <- skill_dirs,
-          ext <- extensions,
-          path = Path.join(dir, "#{name}#{ext}"),
+      for dir <- [Path.join([cwd, ".lemon", "skill"]), Path.join([Config.agent_dir(), "skill"])],
+          path = Path.join([dir, name, "SKILL.md"]),
           File.regular?(path) do
         path
       end
@@ -508,19 +505,6 @@ defmodule CodingAgent.ResourceLoader do
   # List prompt files in a directory
   @spec list_prompt_files(String.t()) :: [String.t()]
   defp list_prompt_files(dir) do
-    patterns = [
-      Path.join(dir, "*.md"),
-      Path.join(dir, "*.txt")
-    ]
-
-    patterns
-    |> Enum.flat_map(&Path.wildcard/1)
-    |> Enum.filter(&File.regular?/1)
-  end
-
-  # List skill files in a directory
-  @spec list_skill_files(String.t()) :: [String.t()]
-  defp list_skill_files(dir) do
     patterns = [
       Path.join(dir, "*.md"),
       Path.join(dir, "*.txt")

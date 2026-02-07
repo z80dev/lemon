@@ -42,6 +42,7 @@ defmodule CodingAgent.Extensions do
   """
 
   alias CodingAgent.Config
+  require Logger
 
   @type extension_module :: module()
   @type loaded_extensions :: [extension_module()]
@@ -661,14 +662,14 @@ defmodule CodingAgent.Extensions do
         apply(hook_fn, args)
       rescue
         e ->
-          # Log but don't crash on hook errors
-          IO.warn("Hook error for #{event}: #{inspect(e)}")
+          # Log but don't crash on hook errors.
+          Logger.warning("Hook error for #{event}: #{Exception.message(e)}")
       catch
         :throw, reason ->
-          IO.warn("Hook throw for #{event}: #{inspect(reason)}")
+          Logger.warning("Hook throw for #{event}: #{inspect(reason)}")
 
         :exit, reason ->
-          IO.warn("Hook exit for #{event}: #{inspect(reason)}")
+          Logger.warning("Hook exit for #{event}: #{inspect(reason)}")
       end
     end
 

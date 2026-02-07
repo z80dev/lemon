@@ -16,7 +16,14 @@ defmodule LemonControlPlane.EventBridgeTickTest do
       nil ->
         {:ok, pid} = EventBridge.start_link([])
         on_exit(fn ->
-          if Process.alive?(pid), do: GenServer.stop(pid)
+          # Avoid flakiness: the bridge can terminate between `Process.alive?/1` and `GenServer.stop/1`.
+          if is_pid(pid) do
+            try do
+              if Process.alive?(pid), do: GenServer.stop(pid)
+            catch
+              :exit, _ -> :ok
+            end
+          end
         end)
         {:ok, bridge_pid: pid}
 

@@ -23,6 +23,9 @@ System.put_env("HOME", home)
 # Ensure agent directories exist under the isolated HOME
 CodingAgent.Config.ensure_dirs!()
 
+# Skills are now managed by lemon_skills (registry + installer).
+Application.ensure_all_started(:lemon_skills)
+
 # Compile test support files
 Code.require_file("support/mock_ui.ex", __DIR__)
 
@@ -30,12 +33,12 @@ Code.require_file("support/mock_ui.ex", __DIR__)
 agent_core_support = Path.join([__DIR__, "..", "..", "agent_core", "test", "support", "mocks.ex"])
 
 if File.exists?(agent_core_support) do
-  Code.compile_file(agent_core_support)
+  Code.require_file(agent_core_support)
 end
 
 # Load shared test support from ai app (for integration tests)
 ai_support = Path.join([__DIR__, "..", "..", "ai", "test", "support", "integration_config.ex"])
 
 if File.exists?(ai_support) do
-  Code.compile_file(ai_support)
+  Code.require_file(ai_support)
 end

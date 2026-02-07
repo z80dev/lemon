@@ -144,7 +144,7 @@ defmodule LemonControlPlane.EventBridge do
   defp state_version_key_for(_), do: nil
 
   # Broadcast an event to all connected clients
-  defp broadcast_event(event, state_version \\ nil) do
+  defp broadcast_event(event, state_version) do
     case map_event(event) do
       nil ->
         :ok
@@ -394,7 +394,6 @@ defmodule LemonControlPlane.EventBridge do
 
   # Helper to extract timestamp from various payload formats
   defp extract_timestamp(%{timestamp_ms: ts}), do: ts
-  defp extract_timestamp(%{:timestamp_ms => ts}), do: ts
   defp extract_timestamp(ts) when is_integer(ts), do: ts
   defp extract_timestamp(_), do: System.system_time(:millisecond)
 

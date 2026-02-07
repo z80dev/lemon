@@ -284,22 +284,41 @@ defmodule CodingAgent.ProcessManagerTest do
 
   describe "active_count/0" do
     test "returns count of active processes" do
-      # Get count before
-      count_before = ProcessManager.active_count()
-
       {:ok, id1} = ProcessManager.exec(command: "sleep 60")
       {:ok, id2} = ProcessManager.exec(command: "sleep 60")
 
-      # Wait for processes to be created (may take longer due to LaneQueue)
-      Process.sleep(500)
+      on_exit(fn ->
+        _ = ProcessManager.kill(id1, :sigkill)
+        _ = ProcessManager.kill(id2, :sigkill)
+      end)
 
-      # Count should have increased by 2
-      count_after = ProcessManager.active_count()
-      assert count_after >= count_before + 2
+      # Avoid comparing against a global baseline (other tests may create/cleanup sessions).
+      # Instead, wait until our sessions are alive/running and assert the supervisor has at
+      # least those children.
+      wait_until_running = fn process_id ->
+        deadline = System.monotonic_time(:millisecond) + 2_500
 
-      # Clean up
-      ProcessManager.kill(id1, :sigkill)
-      ProcessManager.kill(id2, :sigkill)
+        Stream.repeatedly(fn -> :tick end)
+        |> Enum.reduce_while(:timeout, fn _, _ ->
+          cond do
+            CodingAgent.ProcessSession.alive?(process_id) and
+                match?({:ok, %{status: :running}}, ProcessManager.poll(process_id)) ->
+              {:halt, :ok}
+
+            System.monotonic_time(:millisecond) >= deadline ->
+              {:halt, :timeout}
+
+            true ->
+              Process.sleep(50)
+              {:cont, :timeout}
+          end
+        end)
+      end
+
+      assert wait_until_running.(id1) == :ok
+      assert wait_until_running.(id2) == :ok
+
+      assert ProcessManager.active_count() >= 2
     end
   end
 

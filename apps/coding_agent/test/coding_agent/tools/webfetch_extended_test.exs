@@ -66,11 +66,6 @@ defmodule CodingAgent.Tools.WebFetchExtendedTest do
 
   describe "content type handling" do
     test "extracts content type from headers" do
-      headers = [
-        {"Content-Type", "text/html; charset=utf-8"},
-        {"Content-Length", "1000"}
-      ]
-
       # Content type should be extracted (implementation detail tested via actual fetch)
       tool = WebFetch.tool("/tmp", [])
       assert tool.name == "webfetch"
@@ -79,32 +74,18 @@ defmodule CodingAgent.Tools.WebFetchExtendedTest do
 
   describe "HTML to text conversion" do
     test "strips HTML tags" do
-      html = "<html><body><p>Hello world</p></body></html>"
-
       # Should extract text content
       tool = WebFetch.tool("/tmp", [])
       assert tool.name == "webfetch"
     end
 
     test "handles script and style tag removal" do
-      html = """
-      <html>
-        <head><style>body { color: red; }</style></head>
-        <body>
-          <script>alert('test');</script>
-          <p>Visible content</p>
-        </body>
-      </html>
-      """
-
       # Script and style content should be removed
       tool = WebFetch.tool("/tmp", [])
       assert tool.name == "webfetch"
     end
 
     test "converts line break tags to newlines" do
-      html = "Line 1<br>Line 2<br/>Line 3"
-
       # <br> tags should become newlines
       tool = WebFetch.tool("/tmp", [])
       assert tool.name == "webfetch"

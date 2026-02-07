@@ -37,7 +37,7 @@ defmodule LemonChannels.Plugin do
         @impl true
         def normalize_inbound(raw) do
           # Convert raw channel data to InboundMessage
-          {:ok, %LemonRouter.InboundMessage{...}}
+          {:ok, %LemonCore.InboundMessage{...}}
         end
 
         @impl true
@@ -83,7 +83,7 @@ defmodule LemonChannels.Plugin do
   Returns `{:ok, message}` or `{:error, reason}`.
   """
   @callback normalize_inbound(raw :: term()) ::
-              {:ok, LemonRouter.InboundMessage.t()} | {:error, term()}
+              {:ok, LemonCore.InboundMessage.t()} | {:error, term()}
 
   @doc """
   Deliver an outbound payload to the channel.

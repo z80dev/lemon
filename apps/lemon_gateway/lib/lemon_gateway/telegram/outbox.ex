@@ -146,7 +146,9 @@ defmodule LemonGateway.Telegram.Outbox do
 
   defp schedule_drain(state) do
     if state.next_at == 0 do
-      send(self(), :drain)
+      # Use a 0ms timer (instead of `send/2`) to reduce races where `:drain` runs
+      # before a burst of subsequent enqueues can coalesce.
+      Process.send_after(self(), :drain, 0)
       state
     else
       state

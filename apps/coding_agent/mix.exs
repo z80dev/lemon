@@ -9,6 +9,7 @@ defmodule CodingAgent.MixProject do
       config_path: "../../config/config.exs",
       deps_path: "../../deps",
       lockfile: "../../mix.lock",
+      test_pattern: "*_test.exs",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       deps: deps()
@@ -28,6 +29,7 @@ defmodule CodingAgent.MixProject do
     [
       {:agent_core, in_umbrella: true},
       {:ai, in_umbrella: true},
+      {:lemon_skills, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
       {:jason, "~> 1.4"},
       {:req, "~> 0.5"},

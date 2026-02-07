@@ -9,6 +9,7 @@ defmodule Ai.MixProject do
       config_path: "../../config/config.exs",
       deps_path: "../../deps",
       lockfile: "../../mix.lock",
+      test_pattern: "*_test.exs",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       deps: deps()
@@ -26,6 +27,7 @@ defmodule Ai.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
+      {:lemon_core, in_umbrella: true},
       # HTTP client with streaming support
       {:req, "~> 0.5"},
       # JSON encoding/decoding

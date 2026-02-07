@@ -112,7 +112,7 @@ defmodule AgentCore.Context do
     total = system_size + message_size
 
     # Emit telemetry
-    :telemetry.execute(
+    LemonCore.Telemetry.emit(
       [:agent_core, :context, :size],
       %{char_count: total, message_count: length(messages)},
       %{has_system_prompt: system_prompt != nil}
@@ -205,7 +205,7 @@ defmodule AgentCore.Context do
           )
         end
 
-        :telemetry.execute(
+        LemonCore.Telemetry.emit(
           [:agent_core, :context, :warning],
           %{char_count: size, threshold: critical_threshold},
           %{level: :critical}
@@ -221,7 +221,7 @@ defmodule AgentCore.Context do
           )
         end
 
-        :telemetry.execute(
+        LemonCore.Telemetry.emit(
           [:agent_core, :context, :warning],
           %{char_count: size, threshold: warning_threshold},
           %{level: :warning}
@@ -286,7 +286,7 @@ defmodule AgentCore.Context do
     dropped = original_count - length(truncated)
 
     if dropped > 0 do
-      :telemetry.execute(
+      LemonCore.Telemetry.emit(
         [:agent_core, :context, :truncated],
         %{dropped_count: dropped, remaining_count: length(truncated)},
         %{strategy: strategy}

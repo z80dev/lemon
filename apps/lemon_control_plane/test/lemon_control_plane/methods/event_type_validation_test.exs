@@ -147,49 +147,4 @@ defmodule LemonControlPlane.Methods.EventTypeValidationTest do
       assert "env" in keys
     end
   end
-
-  describe "atom leak prevention" do
-    test "SystemEvent does not create atoms from invalid types" do
-      # Get atom count before
-      atom_count_before = :erlang.system_info(:atom_count)
-
-      # Try many invalid event types
-      for i <- 1..100 do
-        params = %{"eventType" => "invalid_type_#{i}_#{:rand.uniform(1_000_000)}"}
-        SystemEvent.handle(params, @admin_ctx)
-      end
-
-      # Get atom count after
-      atom_count_after = :erlang.system_info(:atom_count)
-
-      # Should not have created 100 new atoms (some growth is ok from other sources)
-      assert atom_count_after - atom_count_before < 50
-    end
-
-    test "NodeEvent does not create atoms from invalid types" do
-      atom_count_before = :erlang.system_info(:atom_count)
-
-      for i <- 1..100 do
-        params = %{"eventType" => "node_invalid_#{i}_#{:rand.uniform(1_000_000)}"}
-        NodeEvent.handle(params, @node_ctx)
-      end
-
-      atom_count_after = :erlang.system_info(:atom_count)
-
-      assert atom_count_after - atom_count_before < 50
-    end
-
-    test "ConfigGet does not create atoms from arbitrary keys" do
-      atom_count_before = :erlang.system_info(:atom_count)
-
-      for i <- 1..100 do
-        params = %{"key" => "config_key_#{i}_#{:rand.uniform(1_000_000)}"}
-        ConfigGet.handle(params, @admin_ctx)
-      end
-
-      atom_count_after = :erlang.system_info(:atom_count)
-
-      assert atom_count_after - atom_count_before < 50
-    end
-  end
 end

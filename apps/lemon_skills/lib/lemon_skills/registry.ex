@@ -55,6 +55,54 @@ defmodule LemonSkills.Registry do
   end
 
   @doc """
+  Find skills relevant to a given context/query.
+
+  Uses simple keyword matching on key/name/description/body content.
+
+  ## Options
+
+  - `:cwd` - Project working directory (optional)
+  - `:max_results` - Maximum results (default: 3)
+  - `:refresh` - Force refresh from disk before searching (default: false)
+  """
+  @spec find_relevant(String.t(), keyword()) :: [Entry.t()]
+  def find_relevant(context, opts \\ []) when is_binary(context) do
+    cwd = Keyword.get(opts, :cwd)
+    max_results = Keyword.get(opts, :max_results, 3)
+    refresh? = Keyword.get(opts, :refresh, false)
+
+    if refresh? do
+      refresh(cwd: cwd)
+    end
+
+    GenServer.call(__MODULE__, {:find_relevant, cwd, context, max_results})
+  end
+
+  @doc """
+  Return counts useful for status UIs.
+
+  ## Options
+
+  - `:cwd` - Project working directory (optional)
+  """
+  @spec counts(keyword()) :: %{installed: non_neg_integer(), enabled: non_neg_integer()}
+  def counts(opts \\ []) do
+    cwd = Keyword.get(opts, :cwd)
+
+    skills = list(cwd: cwd)
+    installed = length(skills)
+
+    enabled =
+      Enum.count(skills, fn entry ->
+        entry.enabled and not Config.skill_disabled?(entry.key, cwd)
+      end)
+
+    %{installed: installed, enabled: enabled}
+  rescue
+    _ -> %{installed: 0, enabled: 0}
+  end
+
+  @doc """
   Get a skill by key.
 
   ## Parameters
@@ -133,13 +181,13 @@ defmodule LemonSkills.Registry do
 
   @impl true
   def handle_call({:list, cwd}, _from, state) do
-    skills = merge_skills(state, cwd)
+    {skills, state} = merge_skills(state, cwd)
     {:reply, Map.values(skills), state}
   end
 
   @impl true
   def handle_call({:get, key, cwd}, _from, state) do
-    skills = merge_skills(state, cwd)
+    {skills, state} = merge_skills(state, cwd)
 
     result =
       case Map.fetch(skills, key) do
@@ -148,6 +196,30 @@ defmodule LemonSkills.Registry do
       end
 
     {:reply, result, state}
+  end
+
+  @impl true
+  def handle_call({:find_relevant, cwd, context, max_results}, _from, state) do
+    {skills, state} = merge_skills(state, cwd)
+
+    context_lower = String.downcase(context)
+    context_words = extract_words(context_lower)
+
+    entries =
+      skills
+      |> Map.values()
+      |> Enum.filter(fn entry ->
+        entry.enabled and not Config.skill_disabled?(entry.key, cwd)
+      end)
+      |> Enum.map(fn entry ->
+        {entry, calculate_relevance(entry, context_lower, context_words)}
+      end)
+      |> Enum.filter(fn {_entry, score} -> score > 0 end)
+      |> Enum.sort_by(fn {_entry, score} -> score end, :desc)
+      |> Enum.take(max_results)
+      |> Enum.map(fn {entry, _score} -> entry end)
+
+    {:reply, entries, state}
   end
 
   @impl true
@@ -240,20 +312,67 @@ defmodule LemonSkills.Registry do
     end
   end
 
-  defp merge_skills(state, nil) do
-    state.global_skills
-  end
+  defp merge_skills(state, nil), do: {state.global_skills, state}
 
   defp merge_skills(state, cwd) do
-    # Ensure project skills are loaded
-    project_skills =
-      case Map.fetch(state.project_skills, cwd) do
-        {:ok, skills} -> skills
-        :error -> load_skills_from_dir(Config.project_skills_dir(cwd), :project)
+    state = ensure_project_loaded(state, cwd)
+    project_skills = Map.get(state.project_skills, cwd, %{})
+
+    # Project skills override global.
+    {Map.merge(state.global_skills, project_skills), state}
+  end
+
+  defp ensure_project_loaded(state, cwd) when is_binary(cwd) do
+    case Map.fetch(state.project_skills, cwd) do
+      {:ok, _skills} ->
+        state
+
+      :error ->
+        load_project_skills(state, cwd)
+    end
+  end
+
+  defp ensure_project_loaded(state, _cwd), do: state
+
+  defp calculate_relevance(%Entry{} = entry, context_lower, context_words) do
+    key_lower = String.downcase(entry.key || "")
+    name_lower = String.downcase(entry.name || entry.key || "")
+    desc_lower = String.downcase(entry.description || "")
+
+    # Read and score against the body content as a low-weight signal.
+    body_lower =
+      case Entry.content(entry) do
+        {:ok, content} ->
+          content
+          |> Manifest.parse_body()
+          |> String.slice(0, 10_000)
+          |> String.downcase()
+
+        _ ->
+          ""
       end
 
-    # Project skills override global
-    Map.merge(state.global_skills, project_skills)
+    name_score =
+      if String.contains?(context_lower, key_lower) or String.contains?(context_lower, name_lower),
+        do: 10,
+        else: 0
+
+    desc_word_matches =
+      context_words
+      |> Enum.count(fn word -> String.contains?(desc_lower, word) end)
+
+    body_word_matches =
+      context_words
+      |> Enum.count(fn word -> String.contains?(body_lower, word) end)
+
+    name_score + desc_word_matches * 3 + body_word_matches
+  end
+
+  defp extract_words(text) when is_binary(text) do
+    text
+    |> String.split(~r/[^\w]+/)
+    |> Enum.filter(fn word -> String.length(word) > 2 end)
+    |> Enum.uniq()
   end
 
   defp add_entry(state, %Entry{source: :global} = entry) do

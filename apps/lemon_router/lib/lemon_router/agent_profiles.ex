@@ -41,7 +41,7 @@ defmodule LemonRouter.AgentProfiles do
 
   @impl true
   def init(_opts) do
-    profiles = load_profiles()
+    profiles = load_profiles(:cached)
     {:ok, %{profiles: profiles}}
   end
 
@@ -58,14 +58,19 @@ defmodule LemonRouter.AgentProfiles do
 
   @impl true
   def handle_cast(:reload, state) do
-    profiles = load_profiles()
+    profiles = load_profiles(:reload)
     {:noreply, %{state | profiles: profiles}}
   end
 
-  defp load_profiles do
+  defp load_profiles(mode) do
     # Prefer canonical TOML config (global + project). For now, load from global config.
     # This keeps the control plane agent registry in sync with runtime configuration.
-    cfg = LemonCore.Config.load()
+    cfg =
+      case mode do
+        :reload -> LemonCore.Config.reload()
+        _ -> LemonCore.Config.cached()
+      end
+
     profiles = cfg.agents || %{}
 
     # Normalize to map keyed by agent_id with atom keys for internal use.

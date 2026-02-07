@@ -66,6 +66,8 @@ defmodule AgentCore.CliRunners.Types do
         "codex" -> "`codex resume #{value}`"
         "claude" -> "`claude --resume #{value}`"
         "kimi" -> "`kimi --session #{value}`"
+        "opencode" -> "`opencode --session #{value}`"
+        "pi" -> "`pi --session #{quote_token(value)}`"
         "lemon" -> "`lemon resume #{value}`"
         _ -> "`#{engine} resume #{value}`"
       end
@@ -110,14 +112,28 @@ defmodule AgentCore.CliRunners.Types do
         {~r/`?claude\s+--resume\s+([a-zA-Z0-9_-]+)`?/i, "claude"},
         # Kimi: `kimi --session <session_id>` or kimi --session <session_id>
         {~r/`?kimi\s+--session\s+([a-zA-Z0-9_-]+)`?/i, "kimi"},
+        # OpenCode: `opencode --session <ses_...>` (optionally `opencode run --session`)
+        {~r/`?opencode(?:\s+run)?\s+(?:--session|-s)\s+(ses_[A-Za-z0-9]+)`?/i, "opencode"},
+        # Pi: `pi --session <token>` (token may be quoted)
+        {~r/`?pi\s+--session\s+("(?:[^"\\]|\\.)+"|'(?:[^'\\]|\\.)+'|\S+)`?/i, "pi"},
         # Lemon: `lemon resume <session_id>` or lemon resume <session_id>
         {~r/`?lemon\s+resume\s+([a-zA-Z0-9_-]+)`?/i, "lemon"}
       ]
 
       Enum.find_value(patterns, fn {regex, engine} ->
         case Regex.run(regex, text) do
-          [_, value] -> new(engine, value)
-          _ -> nil
+          [_, value] ->
+            value =
+              if engine == "pi" do
+                strip_quotes(value)
+              else
+                value
+              end
+
+            new(engine, value)
+
+          _ ->
+            nil
         end
       end)
     end
@@ -141,8 +157,12 @@ defmodule AgentCore.CliRunners.Types do
       regex = resume_regex(engine)
 
       case Regex.run(regex, text) do
-        [_, value] -> new(engine, value)
-        _ -> nil
+        [_, value] ->
+          value = if engine == "pi", do: strip_quotes(value), else: value
+          new(engine, value)
+
+        _ ->
+          nil
       end
     end
 
@@ -179,6 +199,10 @@ defmodule AgentCore.CliRunners.Types do
         ~r/^`?claude\s+--resume\s+[a-zA-Z0-9_-]+`?$/i,
         # Kimi
         ~r/^`?kimi\s+--session\s+[a-zA-Z0-9_-]+`?$/i,
+        # OpenCode
+        ~r/^`?opencode(?:\s+run)?\s+(?:--session|-s)\s+ses_[A-Za-z0-9]+`?$/i,
+        # Pi (token may be quoted)
+        ~r/^`?pi\s+--session\s+("(?:[^"\\]|\\.)+"|'(?:[^'\\]|\\.)+'|\S+)`?$/i,
         # Lemon
         ~r/^`?lemon\s+resume\s+[a-zA-Z0-9_-]+`?$/i
       ]
@@ -203,16 +227,62 @@ defmodule AgentCore.CliRunners.Types do
     defp resume_regex("codex"), do: ~r/`?codex\s+resume\s+([a-zA-Z0-9_-]+)`?/i
     defp resume_regex("claude"), do: ~r/`?claude\s+--resume\s+([a-zA-Z0-9_-]+)`?/i
     defp resume_regex("kimi"), do: ~r/`?kimi\s+--session\s+([a-zA-Z0-9_-]+)`?/i
+
+    defp resume_regex("opencode"),
+      do: ~r/`?opencode(?:\s+run)?\s+(?:--session|-s)\s+(ses_[A-Za-z0-9]+)`?/i
+
+    defp resume_regex("pi"),
+      do: ~r/`?pi\s+--session\s+("(?:[^"\\]|\\.)+"|'(?:[^'\\]|\\.)+'|\S+)`?/i
+
     defp resume_regex("lemon"), do: ~r/`?lemon\s+resume\s+([a-zA-Z0-9_-]+)`?/i
     defp resume_regex(engine), do: ~r/`?#{Regex.escape(engine)}\s+resume\s+([a-zA-Z0-9_-]+)`?/i
 
     defp strict_resume_regex("codex"), do: ~r/^`?codex\s+resume\s+[a-zA-Z0-9_-]+`?$/i
     defp strict_resume_regex("claude"), do: ~r/^`?claude\s+--resume\s+[a-zA-Z0-9_-]+`?$/i
     defp strict_resume_regex("kimi"), do: ~r/^`?kimi\s+--session\s+[a-zA-Z0-9_-]+`?$/i
+
+    defp strict_resume_regex("opencode"),
+      do: ~r/^`?opencode(?:\s+run)?\s+(?:--session|-s)\s+ses_[A-Za-z0-9]+`?$/i
+
+    defp strict_resume_regex("pi"),
+      do: ~r/^`?pi\s+--session\s+("(?:[^"\\]|\\.)+"|'(?:[^'\\]|\\.)+'|\S+)`?$/i
+
     defp strict_resume_regex("lemon"), do: ~r/^`?lemon\s+resume\s+[a-zA-Z0-9_-]+`?$/i
 
     defp strict_resume_regex(engine),
       do: ~r/^`?#{Regex.escape(engine)}\s+resume\s+[a-zA-Z0-9_-]+`?$/i
+
+    defp strip_quotes(value) when is_binary(value) do
+      trimmed = String.trim(value)
+
+      if String.length(trimmed) >= 2 do
+        first = String.first(trimmed)
+        last = String.last(trimmed)
+
+        if first == last and first in ["\"", "'"] do
+          String.slice(trimmed, 1, String.length(trimmed) - 2)
+        else
+          trimmed
+        end
+      else
+        trimmed
+      end
+    end
+
+    defp quote_token(value) when is_binary(value) do
+      needs_quotes = Regex.match?(~r/\s/, value)
+
+      cond do
+        not needs_quotes and not String.contains?(value, "\"") ->
+          value
+
+        true ->
+          escaped = String.replace(value, "\"", "\\\"")
+          "\"#{escaped}\""
+      end
+    end
+
+    defp quote_token(value), do: to_string(value)
   end
 
   # ============================================================================
@@ -402,7 +472,8 @@ defmodule AgentCore.CliRunners.Types do
         ok: false,
         answer: Keyword.get(opts, :answer, ""),
         resume: Keyword.get(opts, :resume),
-        error: error
+        error: error,
+        usage: Keyword.get(opts, :usage)
       }
     end
   end
@@ -550,8 +621,11 @@ defmodule AgentCore.CliRunners.Types do
     def completed_error(%__MODULE__{} = factory, error, opts \\ []) do
       resume = Keyword.get(opts, :resume, factory.resume)
       answer = Keyword.get(opts, :answer, "")
+      usage = Keyword.get(opts, :usage)
 
-      event = CompletedEvent.error(factory.engine, error, resume: resume, answer: answer)
+      event =
+        CompletedEvent.error(factory.engine, error, resume: resume, answer: answer, usage: usage)
+
       {event, factory}
     end
   end

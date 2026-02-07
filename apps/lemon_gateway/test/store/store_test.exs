@@ -212,9 +212,11 @@ defmodule LemonGateway.Store.BackendConfigTest do
   setup do
     # Stop the application to get full control
     Application.stop(:lemon_gateway)
+    Application.stop(:lemon_core)
 
     on_exit(fn ->
       # Clean up config
+      Application.delete_env(:lemon_core, LemonCore.Store)
       Application.delete_env(:lemon_gateway, Store)
       # Restart application for other tests
       Application.ensure_all_started(:lemon_gateway)
@@ -224,6 +226,7 @@ defmodule LemonGateway.Store.BackendConfigTest do
   end
 
   test "uses ETS backend by default" do
+    Application.delete_env(:lemon_core, LemonCore.Store)
     Application.delete_env(:lemon_gateway, Store)
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
@@ -240,11 +243,18 @@ defmodule LemonGateway.Store.BackendConfigTest do
   test "can use JSONL backend when configured" do
     # Create temp directory
     tmp_dir = Path.join(System.tmp_dir!(), "store_test_#{System.unique_integer([:positive])}")
-    on_exit(fn -> File.rm_rf!(tmp_dir) end)
+
+    on_exit(fn ->
+      # Stop the store before deleting the directory; late async writes (casts) can otherwise
+      # crash LemonCore.Store after the test has already finished.
+      _ = Application.stop(:lemon_gateway)
+      _ = Application.stop(:lemon_core)
+      File.rm_rf!(tmp_dir)
+    end)
 
     # Configure JSONL backend
-    Application.put_env(:lemon_gateway, Store,
-      backend: LemonGateway.Store.JsonlBackend,
+    Application.put_env(:lemon_core, LemonCore.Store,
+      backend: LemonCore.Store.JsonlBackend,
       backend_opts: [path: tmp_dir]
     )
 

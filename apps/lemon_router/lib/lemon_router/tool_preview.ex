@@ -22,11 +22,7 @@ defmodule LemonRouter.ToolPreview do
   end
 
   def to_text(%AgentCore.Types.AgentToolResult{} = result) do
-    if Code.ensure_loaded?(AgentCore) do
-      AgentCore.get_text(result)
-    else
-      inspect(result)
-    end
+    AgentCore.get_text(result)
   rescue
     _ -> inspect(result)
   end
@@ -98,4 +94,3 @@ defmodule LemonRouter.ToolPreview do
     |> String.replace("\\t", "\t")
   end
 end
-

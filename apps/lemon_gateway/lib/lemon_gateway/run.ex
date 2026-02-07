@@ -31,7 +31,19 @@ defmodule LemonGateway.Run do
   alias LemonGateway.Types.{Job, ResumeToken}
 
   def start_link(args) do
-    GenServer.start_link(__MODULE__, args)
+    # Allow cancel-by-run-id (used by router/control-plane) by registering the run
+    # process under LemonGateway.RunRegistry when job.run_id is present.
+    name =
+      case args do
+        %{job: %Job{run_id: run_id}} when is_binary(run_id) and run_id != "" ->
+          {:via, Registry, {LemonGateway.RunRegistry, run_id}}
+
+        _ ->
+          nil
+      end
+
+    opts = if name, do: [name: name], else: []
+    GenServer.start_link(__MODULE__, args, opts)
   end
 
   @impl true
@@ -85,7 +97,14 @@ defmodule LemonGateway.Run do
 
         # Emit completion event to bus (include session_key and origin in meta)
         meta = %{session_key: job.session_key, origin: job.meta && job.meta[:origin]}
-        emit_to_bus(run_id, :run_completed, completed, meta)
+
+        # Bus payloads must be plain maps; do not leak LemonGateway.Event structs.
+        emit_to_bus(
+          run_id,
+          :run_completed,
+          %{completed: completed_to_map(completed), duration_ms: nil},
+          meta
+        )
 
         # Notify worker and release slot synchronously before stopping
         LemonGateway.Scheduler.release_slot(slot_ref)
@@ -274,7 +293,19 @@ defmodule LemonGateway.Run do
     delta = Event.Delta.new(state.run_id, new_seq, text, %{session_key: state.session_key})
 
     # Emit delta to bus (subscribers like StreamCoalescer will handle channel delivery)
-    emit_to_bus(state.run_id, :delta, delta, build_event_meta(state))
+    # Bus payloads must be plain maps; do not leak LemonGateway.Event structs.
+    emit_to_bus(
+      state.run_id,
+      :delta,
+      %{
+        run_id: delta.run_id,
+        ts_ms: delta.ts_ms,
+        seq: delta.seq,
+        text: delta.text,
+        meta: delta.meta
+      },
+      build_event_meta(state)
+    )
 
     # Accumulate text for final answer
     {:noreply, %{state | delta_seq: new_seq, accumulated_text: state.accumulated_text <> text}}
@@ -434,7 +465,7 @@ defmodule LemonGateway.Run do
       state.run_id,
       :run_completed,
       %{
-        completed: completed,
+        completed: completed_to_map(completed),
         duration_ms: duration_ms
       },
       build_event_meta(state)
@@ -471,7 +502,7 @@ defmodule LemonGateway.Run do
   end
 
   # Emit events to the LemonCore.Bus
-  defp emit_to_bus(run_id, event_type, payload, extra_meta \\ %{}) do
+  defp emit_to_bus(run_id, event_type, payload, extra_meta) do
     # Only emit if LemonCore.Bus is available
     if Code.ensure_loaded?(LemonCore.Bus) do
       topic = "run:#{run_id}"
@@ -505,15 +536,82 @@ defmodule LemonGateway.Run do
   end
 
   defp emit_engine_event_to_bus(state, event) do
-    event_type =
+    # Bus payloads must be plain maps; do not leak LemonGateway.Event structs.
+    {event_type, payload} =
       case event do
-        %Event.Started{} -> :engine_started
-        %Event.Completed{} -> :engine_completed
-        %Event.ActionEvent{} -> :engine_action
-        _ -> :engine_event
+        %Event.Started{} = ev -> {:engine_started, started_to_map(ev)}
+        %Event.Completed{} = ev -> {:engine_completed, completed_to_map(ev)}
+        %Event.ActionEvent{} = ev -> {:engine_action, action_event_to_map(ev)}
+        ev when is_map(ev) -> {:engine_event, ev}
+        other -> {:engine_event, %{event: inspect(other)}}
       end
 
-    emit_to_bus(state.run_id, event_type, event, build_event_meta(state))
+    emit_to_bus(state.run_id, event_type, payload, build_event_meta(state))
+  end
+
+  defp resume_to_map(nil), do: nil
+
+  defp resume_to_map(%ResumeToken{} = resume) do
+    %{
+      engine: resume.engine,
+      value: resume.value
+    }
+  end
+
+  defp resume_to_map(%{engine: engine, value: value}) do
+    %{
+      engine: engine,
+      value: value
+    }
+  end
+
+  defp resume_to_map(_), do: nil
+
+  defp action_to_map(nil), do: nil
+
+  defp action_to_map(action) when is_map(action) do
+    %{
+      id: Map.get(action, :id),
+      kind: Map.get(action, :kind),
+      title: Map.get(action, :title),
+      detail: Map.get(action, :detail)
+    }
+  end
+
+  defp started_to_map(%Event.Started{} = ev) do
+    %{
+      engine: ev.engine,
+      resume: resume_to_map(ev.resume),
+      title: ev.title,
+      meta: ev.meta,
+      run_id: ev.run_id,
+      session_key: ev.session_key
+    }
+  end
+
+  defp action_event_to_map(%Event.ActionEvent{} = ev) do
+    %{
+      engine: ev.engine,
+      action: action_to_map(ev.action),
+      phase: ev.phase,
+      ok: ev.ok,
+      message: ev.message,
+      level: ev.level
+    }
+  end
+
+  defp completed_to_map(%Event.Completed{} = ev) do
+    %{
+      engine: ev.engine,
+      resume: resume_to_map(ev.resume),
+      ok: ev.ok,
+      answer: ev.answer,
+      error: ev.error,
+      usage: ev.usage,
+      meta: ev.meta,
+      run_id: ev.run_id,
+      session_key: ev.session_key
+    }
   end
 
   defp maybe_store_chat_state(%Job{} = job, %Event.Completed{resume: %ResumeToken{} = resume}) do
@@ -593,7 +691,7 @@ defmodule LemonGateway.Run do
   defp emit_telemetry_start(run_id, meta) do
     # Emit both legacy [:lemon_gateway, :run, :start] and new [:lemon, :run, :start]
     # for backwards compatibility during migration
-    :telemetry.execute(
+    LemonCore.Telemetry.emit(
       [:lemon_gateway, :run, :start],
       %{system_time: System.system_time()},
       %{
@@ -616,7 +714,7 @@ defmodule LemonGateway.Run do
 
   defp emit_telemetry_first_token(run_id, meta, latency_ms) do
     # Legacy event
-    :telemetry.execute(
+    LemonCore.Telemetry.emit(
       [:lemon_gateway, :run, :first_token],
       %{latency_ms: latency_ms, system_time: System.system_time()},
       %{
@@ -636,7 +734,7 @@ defmodule LemonGateway.Run do
 
   defp emit_telemetry_stop(run_id, meta, duration_ms, ok?) do
     # Legacy event
-    :telemetry.execute(
+    LemonCore.Telemetry.emit(
       [:lemon_gateway, :run, :stop],
       %{duration_ms: duration_ms, system_time: System.system_time()},
       %{

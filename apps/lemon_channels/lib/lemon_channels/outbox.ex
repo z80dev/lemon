@@ -17,6 +17,8 @@ defmodule LemonChannels.Outbox do
   alias LemonChannels.{OutboundPayload, Registry}
   alias LemonChannels.Outbox.{Chunker, Dedupe, RateLimiter}
 
+  @worker_supervisor LemonChannels.Outbox.WorkerSupervisor
+
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
@@ -44,6 +46,10 @@ defmodule LemonChannels.Outbox do
 
   @impl true
   def init(_opts) do
+    # The Outbox is sometimes started standalone in tests. Ensure the task supervisor
+    # exists so we can safely run supervised delivery tasks.
+    _ = ensure_worker_supervisor_started()
+
     {:ok, %{queue: :queue.new(), processing: %{}}}
   end
 
@@ -89,6 +95,7 @@ defmodule LemonChannels.Outbox do
       queue_length: :queue.len(state.queue),
       processing_count: map_size(state.processing)
     }
+
     {:reply, stats, state}
   end
 
@@ -98,12 +105,16 @@ defmodule LemonChannels.Outbox do
     {:noreply, state}
   end
 
-  def handle_info({:delivery_complete, ref, result}, state) do
-    case Map.pop(state.processing, ref) do
+  # Task.Supervisor.async_nolink/2 sends `{ref, result}` on success, and `{:DOWN, ref, ...}`
+  # on failure. We key `processing` by the task monitor ref for correct per-chunk bookkeeping.
+  def handle_info({task_ref, result}, state) when is_reference(task_ref) do
+    case Map.pop(state.processing, task_ref) do
       {nil, _} ->
         {:noreply, state}
 
       {entry, processing} ->
+        # Flush a pending DOWN for this task ref if it already arrived.
+        Process.demonitor(task_ref, [:flush])
         state = %{state | processing: processing}
 
         maybe_notify_delivery(entry.payload, result)
@@ -127,11 +138,45 @@ defmodule LemonChannels.Outbox do
               Process.send_after(self(), :process_queue, retry_delay(entry.attempts))
               {:noreply, %{state | queue: queue}}
             else
-              Logger.warning("Delivery failed after #{entry.attempts} attempts: #{inspect(reason)}")
+              Logger.warning(
+                "Delivery failed after #{entry.attempts} attempts: #{inspect(reason)}"
+              )
+
               # Continue processing queue even after failure
               send(self(), :process_queue)
               {:noreply, state}
             end
+        end
+    end
+  end
+
+  def handle_info({:DOWN, task_ref, :process, _worker_pid, reason}, state)
+      when is_reference(task_ref) do
+    case Map.pop(state.processing, task_ref) do
+      {nil, _processing} ->
+        {:noreply, state}
+
+      {entry, processing} ->
+        state = %{state | processing: processing}
+
+        # Treat unexpected worker exits as delivery failures. This is the critical difference
+        # from raw spawn/1: we always clean up bookkeeping and keep the queue moving.
+        result = {:error, {:worker_exit, reason}}
+
+        maybe_notify_delivery(entry.payload, result)
+
+        if retryable_reason?(reason) and entry.attempts < 3 do
+          entry = %{entry | attempts: entry.attempts + 1}
+          queue = :queue.in(entry, state.queue)
+          Process.send_after(self(), :process_queue, retry_delay(entry.attempts))
+          {:noreply, %{state | queue: queue}}
+        else
+          Logger.warning(
+            "Delivery worker exited after #{entry.attempts} attempts: #{inspect(reason)}"
+          )
+
+          send(self(), :process_queue)
+          {:noreply, state}
         end
     end
   end
@@ -174,8 +219,7 @@ defmodule LemonChannels.Outbox do
           payload
           | content: chunk_content,
             # Only use idempotency key for first chunk
-            idempotency_key:
-              if(index == 0, do: payload.idempotency_key, else: nil),
+            idempotency_key: if(index == 0, do: payload.idempotency_key, else: nil),
             # Add chunk metadata
             meta:
               Map.merge(payload.meta || %{}, %{
@@ -224,10 +268,19 @@ defmodule LemonChannels.Outbox do
         # Use atomic consume to check and decrement in one operation
         case RateLimiter.consume(entry.payload.channel_id, entry.payload.account_id) do
           :ok ->
-            # Token consumed, process delivery asynchronously
-            spawn_delivery(entry)
-            processing = Map.put(state.processing, entry.ref, entry)
-            %{state | queue: queue, processing: processing}
+            # Token consumed, process delivery asynchronously (supervised)
+            case start_delivery_task(entry) do
+              {:ok, %Task{} = task} ->
+                processing = Map.put(state.processing, task.ref, entry)
+                %{state | queue: queue, processing: processing}
+
+              {:error, reason} ->
+                # If we fail to start a worker, keep the entry and retry shortly.
+                Logger.warning("Failed to start outbox delivery worker: #{inspect(reason)}")
+                requeued = :queue.in_r(entry, queue)
+                Process.send_after(self(), :process_queue, 50)
+                %{state | queue: requeued}
+            end
 
           {:rate_limited, wait_ms} ->
             # Re-queue the entry at the front and schedule retry
@@ -240,19 +293,35 @@ defmodule LemonChannels.Outbox do
     end
   end
 
-  defp spawn_delivery(entry) do
-    ref = entry.ref
-    payload = entry.payload
-    parent = self()
+  defp start_delivery_task(entry) do
+    _ = ensure_worker_supervisor_started()
 
-    spawn(fn ->
-      result = do_deliver(payload)
-      send(parent, {:delivery_complete, ref, result})
-    end)
+    payload = entry.payload
+
+    try do
+      {:ok, Task.Supervisor.async_nolink(@worker_supervisor, fn -> do_deliver(payload) end)}
+    catch
+      :exit, reason -> {:error, reason}
+    end
+  end
+
+  defp ensure_worker_supervisor_started do
+    case Process.whereis(@worker_supervisor) do
+      nil ->
+        case Task.Supervisor.start_link(name: @worker_supervisor) do
+          {:ok, _pid} -> :ok
+          {:error, {:already_started, _pid}} -> :ok
+          {:error, _} = err -> err
+        end
+
+      _pid ->
+        :ok
+    end
   end
 
   defp do_deliver(payload) do
     start_time = System.monotonic_time()
+
     meta = %{
       channel_id: payload.channel_id,
       account_id: payload.account_id,
@@ -324,5 +393,7 @@ defmodule LemonChannels.Outbox do
   end
 
   defp retryable_reason?(:unknown_channel), do: false
+  defp retryable_reason?(:normal), do: true
+  defp retryable_reason?(:shutdown), do: true
   defp retryable_reason?(_reason), do: true
 end

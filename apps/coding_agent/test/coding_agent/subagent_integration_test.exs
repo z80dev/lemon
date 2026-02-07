@@ -36,7 +36,7 @@ defmodule CodingAgent.SubagentIntegrationTest do
     }
   end
 
-  defp start_session(opts \\ []) do
+  defp start_session(opts) do
     base_opts = [
       cwd: opts[:cwd] || System.tmp_dir!(),
       model: opts[:model] || IntegrationConfig.model(),
@@ -100,7 +100,7 @@ defmodule CodingAgent.SubagentIntegrationTest do
     end
   end
 
-  defp subscribe_and_collect_events(session, timeout \\ 60_000) do
+  defp subscribe_and_collect_events(session, timeout) do
     _ref = Session.subscribe(session)
     collect_events([], timeout)
   end
@@ -121,7 +121,7 @@ defmodule CodingAgent.SubagentIntegrationTest do
     end
   end
 
-  defp wait_for_response(session, timeout \\ 60_000) do
+  defp wait_for_response(session, timeout) do
     events = subscribe_and_collect_events(session, timeout)
 
     message_end_events =

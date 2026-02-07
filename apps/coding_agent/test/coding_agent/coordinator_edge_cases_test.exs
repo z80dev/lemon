@@ -50,7 +50,7 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
     )
   end
 
-  defp start_coordinator(opts \\ []) do
+  defp start_coordinator(opts) do
     opts = default_coordinator_opts(opts)
     {:ok, coordinator} = Coordinator.start_link(opts)
     coordinator

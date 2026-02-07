@@ -10,13 +10,21 @@ defmodule LemonRouter.RunProcessTest do
   alias LemonRouter.{RunProcess, SessionKey}
 
   setup do
+    # Ensure PubSub is running for LemonCore.Bus.
+    if is_nil(Process.whereis(LemonCore.PubSub)) do
+      case start_supervised({Phoenix.PubSub, name: LemonCore.PubSub}) do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+      end
+    end
+
     # Ensure registries are running
     start_if_needed(LemonRouter.RunRegistry, fn ->
       Registry.start_link(keys: :unique, name: LemonRouter.RunRegistry)
     end)
 
     start_if_needed(LemonRouter.SessionRegistry, fn ->
-      Registry.start_link(keys: :duplicate, name: LemonRouter.SessionRegistry)
+      Registry.start_link(keys: :unique, name: LemonRouter.SessionRegistry)
     end)
 
     start_if_needed(LemonRouter.CoalescerRegistry, fn ->
@@ -65,6 +73,60 @@ defmodule LemonRouter.RunProcessTest do
       # Process should start successfully (even if it completes quickly)
       assert {:ok, pid} = result
       assert is_pid(pid)
+    end
+
+    test "registers session_key -> run_id only when the gateway run starts" do
+      run_id = "run_#{System.unique_integer()}"
+      session_key = SessionKey.main("test-agent")
+
+      job = make_test_job(run_id)
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false
+               })
+
+      # Not registered until :run_started
+      assert [] == Registry.lookup(LemonRouter.SessionRegistry, session_key)
+
+      event =
+        LemonCore.Event.new(
+          :run_started,
+          %{run_id: run_id, session_key: session_key, engine: "echo"},
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), event)
+
+      assert eventually(fn ->
+               case Registry.lookup(LemonRouter.SessionRegistry, session_key) do
+                 [{_pid, %{run_id: ^run_id}}] -> true
+                 _ -> false
+               end
+             end)
+
+      GenServer.stop(pid)
+    end
+  end
+
+  defp eventually(fun, timeout_ms \\ 500) when is_function(fun, 0) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_eventually(fun, deadline)
+  end
+
+  defp do_eventually(fun, deadline) do
+    if fun.() do
+      true
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        false
+      else
+        Process.sleep(10)
+        do_eventually(fun, deadline)
+      end
     end
   end
 

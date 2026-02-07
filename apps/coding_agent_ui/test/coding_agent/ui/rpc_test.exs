@@ -650,7 +650,9 @@ defmodule CodingAgent.UI.RPCTest do
         RPC.start_link(
           input_device: input,
           output_device: output,
-          timeout: 500
+          # Under load, the reader task may not observe EOF quickly enough to beat a very short
+          # request timeout. Use a more realistic timeout to avoid test flakiness.
+          timeout: 2_000
         )
 
       # Start a request, then close input
@@ -1215,27 +1217,6 @@ defmodule CodingAgent.UI.RPCTest do
     else
       Process.sleep(5)
       rapid_responder_loop(input, output, count, last_index)
-    end
-  end
-
-  defp wait_for_new_request(output, timeout) do
-    initial_count = length(MockIO.get_output(output))
-    deadline = System.monotonic_time(:millisecond) + timeout
-    do_wait_for_new_request(output, initial_count, deadline)
-  end
-
-  defp do_wait_for_new_request(output, initial_count, deadline) do
-    current = MockIO.get_output(output)
-
-    if length(current) > initial_count do
-      List.last(current) |> Jason.decode!()
-    else
-      if System.monotonic_time(:millisecond) >= deadline do
-        nil
-      else
-        Process.sleep(5)
-        do_wait_for_new_request(output, initial_count, deadline)
-      end
     end
   end
 

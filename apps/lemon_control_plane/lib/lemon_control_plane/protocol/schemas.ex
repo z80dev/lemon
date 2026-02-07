@@ -158,6 +158,11 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "sessionKey" => :string
       }
     },
+    "sessions.active" => %{
+      required: %{
+        "sessionKey" => :string
+      }
+    },
 
     # Cron methods
     "cron.list" => %{

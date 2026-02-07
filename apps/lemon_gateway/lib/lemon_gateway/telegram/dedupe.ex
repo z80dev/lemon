@@ -4,43 +4,18 @@ defmodule LemonGateway.Telegram.Dedupe do
   @table :lemon_gateway_telegram_dedupe
 
   def init do
-    case :ets.info(@table) do
-      :undefined ->
-        _ = :ets.new(@table, [:set, :public, :named_table])
-        :ok
-
-      _info ->
-        :ok
-    end
+    LemonCore.Dedupe.Ets.init(@table)
   end
 
   def seen?(key, ttl_ms) do
-    now = System.monotonic_time(:millisecond)
-
-    case :ets.lookup(@table, key) do
-      [{^key, ts}] when now - ts <= ttl_ms ->
-        true
-
-      [{^key, _ts}] ->
-        :ets.delete(@table, key)
-        false
-
-      _ ->
-        false
-    end
+    LemonCore.Dedupe.Ets.seen?(@table, key, ttl_ms)
   end
 
   def mark(key) do
-    :ets.insert(@table, {key, System.monotonic_time(:millisecond)})
-    :ok
+    LemonCore.Dedupe.Ets.mark(@table, key)
   end
 
   def check_and_mark(key, ttl_ms) do
-    if seen?(key, ttl_ms) do
-      :seen
-    else
-      mark(key)
-      :new
-    end
+    LemonCore.Dedupe.Ets.check_and_mark(@table, key, ttl_ms)
   end
 end

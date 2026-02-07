@@ -24,16 +24,14 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
     channel_id = "telegram"
     run_id = "run_#{System.unique_integer([:positive])}"
 
-    action = %LemonGateway.Event.Action{
-      id: "a1",
-      kind: "tool",
-      title: "Read: foo.txt",
-      detail: %{}
-    }
-
-    ev = %LemonGateway.Event.ActionEvent{
+    ev = %{
       engine: "lemon",
-      action: action,
+      action: %{
+        id: "a1",
+        kind: "tool",
+        title: "Read: foo.txt",
+        detail: %{}
+      },
       phase: :started,
       ok: nil,
       message: nil,
@@ -54,11 +52,9 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
     channel_id = "telegram"
     run_id = "run_#{System.unique_integer([:positive])}"
 
-    action = %LemonGateway.Event.Action{id: "n1", kind: "note", title: "thinking", detail: %{}}
-
-    ev = %LemonGateway.Event.ActionEvent{
+    ev = %{
       engine: "lemon",
-      action: action,
+      action: %{id: "n1", kind: "note", title: "thinking", detail: %{}},
       phase: :completed,
       ok: true,
       message: nil,
@@ -74,11 +70,9 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
     channel_id = "telegram"
     run_id = "run_#{System.unique_integer([:positive])}"
 
-    action = %LemonGateway.Event.Action{id: "a1", kind: "tool", title: "Test tool", detail: %{}}
-
-    ev = %LemonGateway.Event.ActionEvent{
+    ev = %{
       engine: "lemon",
-      action: action,
+      action: %{id: "a1", kind: "tool", title: "Test tool", detail: %{}},
       phase: :started,
       ok: nil,
       message: nil,
@@ -108,11 +102,9 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
     channel_id = "telegram"
     run_id = "run_#{System.unique_integer([:positive])}"
 
-    action = %LemonGateway.Event.Action{id: "a1", kind: "tool", title: "Test tool", detail: %{}}
-
-    started = %LemonGateway.Event.ActionEvent{
+    started = %{
       engine: "lemon",
-      action: action,
+      action: %{id: "a1", kind: "tool", title: "Test tool", detail: %{}},
       phase: :started,
       ok: nil,
       message: nil,

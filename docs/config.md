@@ -35,6 +35,17 @@ base_delay_ms = 1000
 extra_args = ["-c", "notify=[]"]
 auto_approve = false
 
+[agent.cli.opencode]
+# Optional model override passed to `opencode run --model`.
+model = "gpt-4.1"
+
+[agent.cli.pi]
+# Optional extra flags prepended to the `pi` command.
+extra_args = []
+# Optional provider/model overrides passed to `pi --provider/--model`.
+provider = "openai"
+model = "gpt-4.1"
+
 [agent.cli.claude]
 dangerously_skip_permissions = true
 
@@ -80,6 +91,27 @@ Environment variables override file values. Common overrides:
 - `LEMON_CODEX_EXTRA_ARGS`, `LEMON_CODEX_AUTO_APPROVE`
 - `LEMON_CLAUDE_YOLO`
 
+## OpenAI Codex (ChatGPT OAuth)
+
+Lemon supports the **Codex subscription** provider as `openai-codex` (it uses the ChatGPT OAuth JWT, not `OPENAI_API_KEY`).
+
+Recommended setup:
+
+1. Authenticate with Codex CLI once: `codex login` (ChatGPT)
+2. Set your default provider/model:
+
+```toml
+[agent]
+default_provider = "openai-codex"
+default_model = "gpt-5.2"
+```
+
+Lemon will automatically read your access token from `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`) and refresh it as needed.
+
+To force a token explicitly, set:
+- `OPENAI_CODEX_API_KEY` (preferred)
+- `CHATGPT_TOKEN` (fallback)
+
 ## Sections
 
 - `providers.<name>`: API keys and base URLs per provider.
@@ -87,7 +119,7 @@ Environment variables override file values. Common overrides:
 - `agents.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
 - `agent.compaction`: context compaction settings.
 - `agent.retry`: retry settings.
-- `agent.cli`: CLI runner settings (`codex`, `claude`, `kimi`).
+- `agent.cli`: CLI runner settings (`codex`, `claude`, `kimi`, `opencode`, `pi`).
 - `tui`: terminal UI settings.
 - `gateway`: Lemon gateway settings, including `queue`, `telegram`, `projects`, `bindings`, and `engines`.
 
@@ -144,3 +176,49 @@ Notes:
 Tip:
 - In Telegram, you can switch the current chat's working directory at runtime with `/new <project_id|path>`. If you pass a
   path, Lemon will register it as a project named after the last path segment (e.g. `~/dev/lemon` => project `lemon`).
+
+## Telegram Voice Transcription
+
+If enabled, Telegram voice notes are transcribed and the transcript is routed as a normal text message.
+
+```toml
+[gateway.telegram]
+voice_transcription = true
+voice_transcription_model = "gpt-4o-mini-transcribe"  # optional
+voice_max_bytes = 10485760                            # optional (default: 10MB)
+
+# Optional OpenAI-compatible overrides (defaults to providers.openai)
+voice_transcription_base_url = "https://api.openai.com/v1"
+voice_transcription_api_key = "sk-..."
+```
+
+## Telegram File Transfer
+
+Enable `/file put` and `/file get` (and optional auto-save for plain document uploads).
+
+```toml
+[gateway.telegram.files]
+enabled = true
+auto_put = true
+auto_put_mode = "upload"  # "upload" | "prompt"
+uploads_dir = "incoming"
+media_group_debounce_ms = 1000  # optional (default: 1000ms)
+
+# Optional safety rails
+allowed_user_ids = [123456789]  # if empty, group uploads require admin
+deny_globs = [".git/**", ".env", ".envrc", "**/*.pem", "**/.ssh/**"]
+max_upload_bytes = 20971520     # optional (default: 20MB)
+max_download_bytes = 52428800   # optional (default: 50MB)
+```
+
+Commands:
+- `/file put [--force] <path>`: upload a Telegram document into the bound project.
+- `/file get <path>`: fetch a file (or zip a directory) back into Telegram.
+
+## Trigger Mode (Mentions-Only)
+
+In Telegram group chats, you can gate runs so Lemon only triggers when explicitly invoked:
+- `/trigger`: show current trigger mode.
+- `/trigger mentions`: only run on `@botname`, reply-to-bot, or slash commands.
+- `/trigger all`: run on all messages.
+- `/trigger clear`: clear a topic override (forum topics only).

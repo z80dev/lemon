@@ -729,9 +729,9 @@ defmodule AgentCore.ModuleTest do
       parent = self()
       context = AgentCore.new_context(system_prompt: "Test")
 
-      custom_stream_fn = fn model, _context, _options ->
+      custom_stream_fn = fn model, context, options ->
         send(parent, {:custom_stream_called, model.id})
-        simple_stream_fn(Mocks.assistant_message("Custom")).(model, _context, _options)
+        simple_stream_fn(Mocks.assistant_message("Custom")).(model, context, options)
       end
 
       config = %AgentLoopConfig{

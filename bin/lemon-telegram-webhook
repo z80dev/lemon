@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+#
+# Utilities for Telegram polling mode.
+#
+# Usage:
+#   ./bin/lemon-telegram-webhook info
+#   ./bin/lemon-telegram-webhook delete [--drop-pending|--keep-pending]
+#
+# Reads bot token from ~/.lemon/config.toml (gateway.telegram.bot_token).
+#
+set -euo pipefail
+
+CMD="${1:-}"
+shift || true
+
+case "${CMD}" in
+  info|delete) ;;
+  ""|--help|-h)
+    echo "Usage: ./bin/lemon-telegram-webhook info|delete [--drop-pending|--keep-pending]" >&2
+    exit 0
+    ;;
+  *)
+    echo "Unknown command: ${CMD}" >&2
+    echo "Usage: ./bin/lemon-telegram-webhook info|delete [--drop-pending|--keep-pending]" >&2
+    exit 1
+    ;;
+esac
+
+DROP_PENDING="true"
+if [[ "${CMD}" == "delete" ]]; then
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --drop-pending)
+        DROP_PENDING="true"
+        shift
+        ;;
+      --keep-pending)
+        DROP_PENDING="false"
+        shift
+        ;;
+      --help|-h)
+        echo "Usage: ./bin/lemon-telegram-webhook delete [--drop-pending|--keep-pending]" >&2
+        exit 0
+        ;;
+      *)
+        echo "Unknown option: $1" >&2
+        exit 1
+        ;;
+    esac
+  done
+fi
+
+export LEMON_TG_WEBHOOK_CMD="${CMD}"
+export LEMON_TG_DROP_PENDING="${DROP_PENDING}"
+
+python3 - <<'PY'
+import json
+import os
+import pathlib
+import tomllib
+import urllib.request
+
+cmd = os.environ.get("LEMON_TG_WEBHOOK_CMD")
+drop_pending = os.environ.get("LEMON_TG_DROP_PENDING", "true").lower() == "true"
+
+cfg_path = pathlib.Path(os.path.expanduser("~/.lemon/config.toml"))
+if not cfg_path.exists():
+    raise SystemExit("~/.lemon/config.toml not found")
+
+cfg = tomllib.loads(cfg_path.read_text("utf-8"))
+token = (((cfg.get("gateway") or {}).get("telegram") or {}).get("bot_token") or "").strip()
+if not token:
+    raise SystemExit("gateway.telegram.bot_token is missing in ~/.lemon/config.toml")
+
+def call(method: str, params: dict | None = None):
+    url = f"https://api.telegram.org/bot{token}/{method}"
+    data = None
+    if params is not None:
+        data = json.dumps(params).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers={"content-type": "application/json"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return r.status, r.read().decode("utf-8", "replace")
+
+if cmd == "info":
+    status, body = call("getWebhookInfo", {})
+    print(body)
+elif cmd == "delete":
+    status, body = call("deleteWebhook", {"drop_pending_updates": drop_pending})
+    print(body)
+else:
+    raise SystemExit("Unknown cmd")
+PY
+

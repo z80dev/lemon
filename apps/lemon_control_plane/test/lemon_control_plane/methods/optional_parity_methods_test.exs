@@ -15,8 +15,6 @@ defmodule LemonControlPlane.Methods.OptionalParityMethodsTest do
     ConfigPatch,
     ConfigSchema,
     DevicePairRequest,
-    DevicePairApprove,
-    DevicePairReject,
     WizardStart,
     WizardStep,
     WizardCancel,

@@ -13,13 +13,11 @@ defmodule LemonGateway.ApplicationTest do
     LemonGateway.TransportRegistry,
     LemonGateway.CommandRegistry,
     LemonGateway.EngineLock,
+    LemonGateway.RunRegistry,
     LemonGateway.ThreadRegistry,
     LemonGateway.RunSupervisor,
     LemonGateway.ThreadWorkerSupervisor,
-    LemonGateway.Scheduler,
-    LemonGateway.Store,
-    # Boots lemon_channels (preferred) and falls back to legacy TransportSupervisor if needed.
-    LemonGateway.ChannelBootstrap
+    LemonGateway.Scheduler
   ]
 
   # ---------------------------------------------------------------------
@@ -48,7 +46,7 @@ defmodule LemonGateway.ApplicationTest do
     Application.delete_env(:lemon_gateway, :transports)
     Application.delete_env(:lemon_gateway, :commands)
     Application.delete_env(:lemon_gateway, :config_path)
-    Application.delete_env(:lemon_gateway, LemonGateway.Store)
+    Application.delete_env(:lemon_core, LemonCore.Store)
   end
 
   # ---------------------------------------------------------------------
@@ -274,7 +272,7 @@ defmodule LemonGateway.ApplicationTest do
     test "Store is initialized after Config" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-      assert is_pid(Process.whereis(LemonGateway.Store))
+      assert is_pid(Process.whereis(LemonCore.Store))
 
       # Store should be functional
       scope = {:test, 12345}
@@ -519,13 +517,11 @@ defmodule LemonGateway.ApplicationTest do
       Application.put_env(:lemon_gateway, :commands, [])
 
       # Configure ETS backend (default)
-      Application.put_env(:lemon_gateway, LemonGateway.Store,
-        backend: LemonGateway.Store.EtsBackend
-      )
+      Application.put_env(:lemon_core, LemonCore.Store, backend: LemonCore.Store.EtsBackend)
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-      assert is_pid(Process.whereis(LemonGateway.Store))
+      assert is_pid(Process.whereis(LemonCore.Store))
     end
   end
 
@@ -585,7 +581,6 @@ defmodule LemonGateway.ApplicationTest do
       # Verify processes are registered
       assert is_pid(Process.whereis(LemonGateway.Config))
       assert is_pid(Process.whereis(LemonGateway.Scheduler))
-      assert is_pid(Process.whereis(LemonGateway.Store))
 
       :ok = Application.stop(:lemon_gateway)
       Process.sleep(50)
@@ -593,7 +588,6 @@ defmodule LemonGateway.ApplicationTest do
       # Names should be freed
       assert Process.whereis(LemonGateway.Config) == nil
       assert Process.whereis(LemonGateway.Scheduler) == nil
-      assert Process.whereis(LemonGateway.Store) == nil
     end
 
     test "application can be restarted after shutdown" do
@@ -932,7 +926,7 @@ defmodule LemonGateway.ApplicationTest do
     test "Store process is registered and responding" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-      pid = Process.whereis(LemonGateway.Store)
+      pid = Process.whereis(LemonCore.Store)
       assert is_pid(pid)
 
       # Should respond to calls
@@ -1113,7 +1107,7 @@ defmodule LemonGateway.ApplicationTest do
     test "Store process is restarted if it crashes" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-      original_pid = Process.whereis(LemonGateway.Store)
+      original_pid = Process.whereis(LemonCore.Store)
       assert is_pid(original_pid)
 
       # Kill the process
@@ -1123,7 +1117,7 @@ defmodule LemonGateway.ApplicationTest do
       Process.sleep(100)
 
       # Should have a new pid
-      new_pid = Process.whereis(LemonGateway.Store)
+      new_pid = Process.whereis(LemonCore.Store)
       assert is_pid(new_pid)
       assert new_pid != original_pid
 

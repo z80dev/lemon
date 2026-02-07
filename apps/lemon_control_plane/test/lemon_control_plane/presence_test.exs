@@ -10,7 +10,14 @@ defmodule LemonControlPlane.PresenceTest do
         {:ok, pid} = Presence.start_link([])
 
         on_exit(fn ->
-          if Process.alive?(pid), do: GenServer.stop(pid)
+          # Avoid flakiness: presence can terminate between `Process.alive?/1` and `GenServer.stop/1`.
+          if is_pid(pid) do
+            try do
+              if Process.alive?(pid), do: GenServer.stop(pid)
+            catch
+              :exit, _ -> :ok
+            end
+          end
         end)
 
         {:ok, presence_pid: pid}

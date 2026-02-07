@@ -109,23 +109,19 @@ defmodule CodingAgent.ToolExecutor do
   end
 
   defp request_approval(run_id, session_key, tool_name, args, timeout_ms) do
-    # Check if LemonRouter.ApprovalsBridge is available
-    case Code.ensure_loaded(LemonRouter.ApprovalsBridge) do
-      {:module, _} ->
-        LemonRouter.ApprovalsBridge.request(%{
-          run_id: run_id,
-          session_key: session_key,
-          tool: tool_name,
-          action: args,
-          rationale: "Tool execution: #{tool_name}",
-          expires_in_ms: timeout_ms
-        })
-
-      _ ->
-        # If ApprovalsBridge is not available, auto-approve
-        Logger.debug("ApprovalsBridge not available, auto-approving #{tool_name}")
-        {:ok, :approved, :auto}
-    end
+    LemonCore.ExecApprovals.request(%{
+      run_id: run_id,
+      session_key: session_key,
+      tool: tool_name,
+      action: args,
+      rationale: "Tool execution: #{tool_name}",
+      expires_in_ms: timeout_ms
+    })
+  rescue
+    _ ->
+      # If approvals are unavailable, auto-approve (matches previous behavior).
+      Logger.debug("ExecApprovals unavailable, auto-approving #{tool_name}")
+      {:ok, :approved, :auto}
   end
 
   defp denied_result(tool_name) do

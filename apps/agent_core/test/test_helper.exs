@@ -3,4 +3,4 @@ ExUnit.configure(exclude: [:integration])
 ExUnit.start()
 
 # Compile and load support files
-Code.compile_file("support/mocks.ex", __DIR__)
+Code.require_file("support/mocks.ex", __DIR__)

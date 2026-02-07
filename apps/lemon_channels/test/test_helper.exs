@@ -12,12 +12,22 @@ Application.put_env(:lemon_gateway, LemonGateway.Config, %{
   default_engine: "lemon"
 })
 
+Application.put_env(:lemon_gateway, :engines, [
+  LemonGateway.Engines.Lemon,
+  LemonGateway.Engines.Echo,
+  LemonGateway.Engines.Codex,
+  LemonGateway.Engines.Claude,
+  LemonGateway.Engines.Opencode,
+  LemonGateway.Engines.Pi
+])
+
 # Remove any prior test overrides that could trigger Telegram polling.
 Application.delete_env(:lemon_gateway, :telegram)
 
 _ = Application.stop(:lemon_channels)
 _ = Application.stop(:lemon_gateway)
 
+{:ok, _} = Application.ensure_all_started(:lemon_gateway)
 {:ok, _} = Application.ensure_all_started(:lemon_channels)
 
 ExUnit.start()
@@ -25,4 +35,6 @@ ExUnit.start()
 ExUnit.after_suite(fn _ ->
   _ = Application.stop(:lemon_channels)
   _ = Application.stop(:lemon_gateway)
+
+  Application.delete_env(:lemon_gateway, :engines)
 end)

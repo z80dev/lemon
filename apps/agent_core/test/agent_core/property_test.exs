@@ -358,16 +358,6 @@ defmodule AgentCore.TypesPropertyTest do
   # Context and State Generators
   # ============================================================================
 
-  defp context_gen do
-    map(
-      {maybe_string(), list_of(message_gen(), max_length: 10),
-       list_of(tool_gen(), max_length: 5)},
-      fn {prompt, messages, tools} ->
-        %Context{system_prompt: prompt, messages: messages, tools: tools}
-      end
-    )
-  end
-
   defp agent_context_gen do
     map(
       {maybe_string(), list_of(message_gen(), max_length: 10),

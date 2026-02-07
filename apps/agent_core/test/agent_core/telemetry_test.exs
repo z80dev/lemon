@@ -49,7 +49,7 @@ defmodule AgentCore.TelemetryTest do
     )
   end
 
-  defp simple_config(opts \\ []) do
+  defp simple_config(opts) do
     %AgentLoopConfig{
       model: Keyword.get(opts, :model, Mocks.mock_model()),
       convert_to_llm: Keyword.get(opts, :convert_to_llm, Mocks.simple_convert_to_llm()),

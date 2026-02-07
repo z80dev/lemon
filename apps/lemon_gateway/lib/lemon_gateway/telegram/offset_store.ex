@@ -30,7 +30,7 @@ defmodule LemonGateway.Telegram.OffsetStore do
   defp store_available? do
     Code.ensure_loaded?(LemonGateway.Store) and
       function_exported?(LemonGateway.Store, :get, 2) and
-      is_pid(Process.whereis(LemonGateway.Store))
+      is_pid(Process.whereis(LemonCore.Store))
   end
 
   defp key(account_id, token) do

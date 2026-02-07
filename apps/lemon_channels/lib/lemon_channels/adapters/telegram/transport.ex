@@ -1,6 +1,6 @@
 defmodule LemonChannels.Adapters.Telegram.Transport do
   @moduledoc """
-  Telegram polling transport that normalizes messages and forwards them to LemonRouter.
+  Telegram polling transport that normalizes messages and forwards them to the router.
 
   This transport wraps the existing LemonGateway.Telegram.Transport polling logic
   but routes messages through the new lemon_channels -> lemon_router pipeline.
@@ -13,6 +13,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   alias LemonGateway.BindingResolver
   alias LemonGateway.EngineRegistry
   alias LemonGateway.Store
+  alias LemonGateway.Telegram.TriggerMode
   alias LemonGateway.Types.ChatScope
   alias LemonGateway.Types.ResumeToken
   alias LemonCore.SessionKey
@@ -31,9 +32,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   @impl true
   def init(opts) do
-    # Source of truth is TOML-backed LemonGateway.Config, but allow Application env
-    # overrides (used in tests and local dev) and per-process opts.
-    base = Keyword.get(opts, :config, LemonGateway.Config.get(:telegram) || %{})
+    # Source of truth is TOML-backed LemonGateway.Config (when running), but allow
+    # Application env overrides (tests/dev) and per-process opts.
+    base = LemonChannels.GatewayConfig.get(:telegram, %{})
 
     config =
       base
@@ -65,6 +66,16 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           # This prevents the bot from replying to historical messages after downtime.
           drop_pending_updates = drop_pending_updates && is_nil(config_offset)
 
+          {openai_api_key, openai_base_url} = resolve_openai_provider()
+
+          {bot_id, bot_username} =
+            resolve_bot_identity(
+              config[:bot_id] || config["bot_id"],
+              config[:bot_username] || config["bot_username"],
+              config[:api_mod] || LemonGateway.Telegram.API,
+              token
+            )
+
           state = %{
             token: token,
             api_mod: config[:api_mod] || LemonGateway.Telegram.API,
@@ -78,6 +89,23 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             deny_unbound_chats:
               config[:deny_unbound_chats] || config["deny_unbound_chats"] || false,
             account_id: account_id,
+            voice_transcription:
+              config[:voice_transcription] || config["voice_transcription"] || false,
+            voice_transcription_model:
+              config[:voice_transcription_model] || config["voice_transcription_model"] ||
+                "gpt-4o-mini-transcribe",
+            voice_transcription_base_url:
+              normalize_blank(
+                config[:voice_transcription_base_url] || config["voice_transcription_base_url"]
+              ) || openai_base_url,
+            voice_transcription_api_key:
+              normalize_blank(
+                config[:voice_transcription_api_key] || config["voice_transcription_api_key"]
+              ) || openai_api_key,
+            voice_max_bytes:
+              config[:voice_max_bytes] || config["voice_max_bytes"] || 10 * 1024 * 1024,
+            voice_transcriber:
+              config[:voice_transcriber] || LemonChannels.Adapters.Telegram.VoiceTranscriber,
             # If we're configured to drop pending updates on boot, start from 0 so we can
             # advance to the real "latest" update_id even if a stale stored offset is ahead.
             offset:
@@ -85,8 +113,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             drop_pending_updates?: drop_pending_updates,
             drop_pending_done?: false,
             buffers: %{},
+            media_groups: %{},
             # run_id => %{scope, session_key, chat_id, thread_id, user_msg_id}
-            pending_new: %{}
+            pending_new: %{},
+            bot_id: bot_id,
+            bot_username: bot_username,
+            files: config[:files] || config["files"] || %{},
+            last_poll_error: nil,
+            last_poll_error_log_ts: nil
           }
 
           maybe_subscribe_exec_approvals()
@@ -131,6 +165,29 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       end
 
     {:noreply, state}
+  end
+
+  # Media group flush for Telegram albums of documents.
+  def handle_info({:media_group_flush, group_key, debounce_ref}, state) do
+    {group, media_groups} = Map.pop(state.media_groups, group_key)
+
+    state =
+      cond do
+        group && group.debounce_ref == debounce_ref ->
+          process_media_group(group, state)
+          %{state | media_groups: media_groups}
+
+        group ->
+          # Stale timer; keep latest buffer.
+          %{state | media_groups: Map.put(state.media_groups, group_key, group)}
+
+        true ->
+          state
+      end
+
+    {:noreply, state}
+  rescue
+    _ -> {:noreply, state}
   end
 
   # Tool execution approval requests/resolutions are delivered on the `exec_approvals` bus topic.
@@ -239,6 +296,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp poll_updates(state) do
+    _ = PollerLock.heartbeat(state.account_id, state.token)
+
     case safe_get_updates(state) do
       {:ok, %{"ok" => true, "result" => updates}} ->
         if state.drop_pending_updates? and not state.drop_pending_done? do
@@ -259,13 +318,59 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           %{state | offset: new_offset}
         end
 
-      _ ->
-        state
+      {:error, reason} ->
+        maybe_log_poll_error(state, reason)
+
+      other ->
+        maybe_log_poll_error(state, other)
     end
   rescue
     e ->
       Logger.warning("Telegram poll error: #{inspect(e)}")
       state
+  end
+
+  defp maybe_log_poll_error(state, reason) do
+    now = System.monotonic_time(:millisecond)
+    last_ts = state.last_poll_error_log_ts
+    last_reason = state.last_poll_error
+
+    should_log? =
+      cond do
+        is_nil(last_ts) ->
+          true
+
+        now - last_ts > 60_000 ->
+          true
+
+        last_reason != reason ->
+          true
+
+        true ->
+          false
+      end
+
+    if should_log? do
+      msg =
+        case reason do
+          {:http_error, 409, body} ->
+            body_s = body |> to_string() |> String.slice(0, 200)
+
+            "Telegram getUpdates returned HTTP 409 Conflict (#{body_s}). " <>
+              "This usually means a webhook is set for the bot, which conflicts with polling. " <>
+              "Fix: call Telegram Bot API deleteWebhook (optionally with drop_pending_updates=true), " <>
+              "then restart the gateway."
+
+          other ->
+            "Telegram getUpdates failed: #{inspect(other)}"
+        end
+
+      Logger.warning(msg)
+    end
+
+    %{state | last_poll_error: reason, last_poll_error_log_ts: now}
+  rescue
+    _ -> state
   end
 
   defp safe_get_updates(state) do
@@ -298,24 +403,29 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
               # Set account_id from config
               inbound = %{inbound | account_id: acc_state.account_id}
 
-              inbound =
-                inbound
-                |> maybe_put_reply_to_text(update)
-                |> enrich_for_router(acc_state)
+              inbound = inbound |> maybe_put_reply_to_text(update)
 
-              # Check dedupe
-              key = dedupe_key(inbound)
+              case maybe_transcribe_voice(acc_state, inbound) do
+                {:ok, inbound} ->
+                  inbound = enrich_for_router(inbound, acc_state)
 
-              cond do
-                not authorized_inbound?(acc_state, inbound) ->
-                  {acc_state, max(max_id, id)}
+                  # Check dedupe
+                  key = dedupe_key(inbound)
 
-                is_seen?(key, acc_state.dedupe_ttl_ms) ->
-                  {acc_state, max(max_id, id)}
+                  cond do
+                    not authorized_inbound?(acc_state, inbound) ->
+                      {acc_state, max(max_id, id)}
 
-                true ->
-                  mark_seen(key, acc_state.dedupe_ttl_ms)
-                  acc_state = handle_inbound_message(acc_state, inbound)
+                    is_seen?(key, acc_state.dedupe_ttl_ms) ->
+                      {acc_state, max(max_id, id)}
+
+                    true ->
+                      mark_seen(key, acc_state.dedupe_ttl_ms)
+                      acc_state = handle_inbound_message(acc_state, inbound)
+                      {acc_state, max(max_id, id)}
+                  end
+
+                {:skip, acc_state} ->
                   {acc_state, max(max_id, id)}
               end
 
@@ -332,27 +442,53 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     original_text = text
 
     cond do
-      resume_command?(original_text) ->
+      media_group_member?(inbound) and media_group_exists?(state, inbound) ->
+        enqueue_media_group(state, inbound)
+
+      file_command?(original_text, state.bot_username) and media_group_member?(inbound) ->
+        # If this is a /file put command attached to a media group document, batch the whole group.
+        enqueue_media_group(state, inbound)
+
+      file_command?(original_text, state.bot_username) ->
+        handle_file_command(state, inbound)
+
+      should_auto_put_document?(state, inbound) ->
+        if media_group_member?(inbound) do
+          enqueue_media_group(state, inbound)
+        else
+          handle_document_auto_put(state, inbound)
+        end
+
+      trigger_command?(original_text, state.bot_username) ->
+        handle_trigger_command(state, inbound)
+
+      resume_command?(original_text, state.bot_username) ->
         handle_resume_command(state, inbound)
 
-      new_command?(original_text) ->
+      new_command?(original_text, state.bot_username) ->
         args = telegram_command_args(original_text, "new")
         handle_new_session(state, inbound, args)
 
-      cancel_command?(original_text) ->
+      cancel_command?(original_text, state.bot_username) ->
         maybe_cancel_by_reply(state, inbound)
         state
 
       true ->
-        {state, inbound} = maybe_switch_session_from_reply(state, inbound)
-        inbound = maybe_apply_selected_resume(state, inbound, original_text)
-
         cond do
-          command_message?(original_text) ->
-            submit_inbound_now(state, inbound)
+          should_ignore_for_trigger?(state, inbound, original_text) ->
+            state
 
           true ->
-            enqueue_buffer(state, inbound)
+            {state, inbound} = maybe_switch_session_from_reply(state, inbound)
+            inbound = maybe_apply_selected_resume(state, inbound, original_text)
+
+            cond do
+              command_message_for_bot?(original_text, state.bot_username) ->
+                submit_inbound_now(state, inbound)
+
+              true ->
+                enqueue_buffer(state, inbound)
+            end
         end
     end
   rescue
@@ -505,22 +641,817 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     {chat_id, thread_id}
   end
 
-  defp cancel_command?(text) do
-    telegram_command?(text, "cancel")
+  defp cancel_command?(text, bot_username) do
+    telegram_command?(text, "cancel", bot_username)
   end
 
-  defp new_command?(text) do
-    telegram_command?(text, "new")
+  defp new_command?(text, bot_username) do
+    telegram_command?(text, "new", bot_username)
   end
 
-  defp resume_command?(text) do
-    telegram_command?(text, "resume")
+  defp resume_command?(text, bot_username) do
+    telegram_command?(text, "resume", bot_username)
+  end
+
+  defp trigger_command?(text, bot_username) do
+    telegram_command?(text, "trigger", bot_username)
+  end
+
+  defp file_command?(text, bot_username) do
+    telegram_command?(text, "file", bot_username)
+  end
+
+  defp media_group_member?(inbound) do
+    mg = inbound.meta && (inbound.meta[:media_group_id] || inbound.meta["media_group_id"])
+    doc = inbound.meta && (inbound.meta[:document] || inbound.meta["document"])
+    is_binary(mg) and mg != "" and is_map(doc) and map_size(doc) > 0
+  rescue
+    _ -> false
+  end
+
+  defp media_group_key(state, inbound) do
+    account_id = state.account_id || "default"
+    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
+    thread_id = parse_int(inbound.peer.thread_id)
+    mg = inbound.meta && (inbound.meta[:media_group_id] || inbound.meta["media_group_id"])
+
+    {account_id, chat_id, thread_id, mg}
+  end
+
+  defp media_group_exists?(state, inbound) do
+    key = media_group_key(state, inbound)
+    Map.has_key?(state.media_groups || %{}, key)
+  rescue
+    _ -> false
+  end
+
+  defp media_group_debounce_ms(state) do
+    cfg = files_cfg(state)
+    parse_int(cfg[:media_group_debounce_ms] || cfg["media_group_debounce_ms"]) || 1_000
+  rescue
+    _ -> 1_000
+  end
+
+  defp enqueue_media_group(state, inbound) do
+    group_key = media_group_key(state, inbound)
+    debounce_ms = media_group_debounce_ms(state)
+
+    case Map.get(state.media_groups, group_key) do
+      nil ->
+        debounce_ref = make_ref()
+
+        timer_ref =
+          Process.send_after(self(), {:media_group_flush, group_key, debounce_ref}, debounce_ms)
+
+        group = %{
+          items: [inbound],
+          timer_ref: timer_ref,
+          debounce_ref: debounce_ref
+        }
+
+        %{state | media_groups: Map.put(state.media_groups, group_key, group)}
+
+      group ->
+        _ = Process.cancel_timer(group.timer_ref)
+        debounce_ref = make_ref()
+
+        timer_ref =
+          Process.send_after(self(), {:media_group_flush, group_key, debounce_ref}, debounce_ms)
+
+        group = %{
+          group
+          | items: group.items ++ [inbound],
+            timer_ref: timer_ref,
+            debounce_ref: debounce_ref
+        }
+
+        %{state | media_groups: Map.put(state.media_groups, group_key, group)}
+    end
+  rescue
+    _ -> state
+  end
+
+  defp process_media_group(group, state) do
+    items = group.items || []
+    first = List.first(items)
+
+    if not is_map(first) do
+      :ok
+    else
+      chat_id = first.meta[:chat_id] || parse_int(first.peer.id)
+      thread_id = parse_int(first.peer.thread_id)
+      user_msg_id = first.meta[:user_msg_id] || parse_int(first.message.id)
+
+      # If any item has a /file put command caption, use that; else auto-put behavior.
+      file_put =
+        Enum.find(items, fn inbound ->
+          txt = inbound.message.text || ""
+
+          file_command?(txt, state.bot_username) and
+            String.starts_with?(String.trim_leading(txt), "/file") and
+            String.starts_with?(String.trim(telegram_command_args(txt, "file") || ""), "put")
+        end)
+
+      if file_put do
+        # Delegate to handle_file_command by synthesizing a single inbound, but batch semantics:
+        handle_file_put_media_group(state, file_put, items, chat_id, thread_id, user_msg_id)
+      else
+        handle_auto_put_media_group(state, items, chat_id, thread_id, user_msg_id)
+      end
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp handle_auto_put_media_group(state, items, chat_id, thread_id, user_msg_id) do
+    cfg = files_cfg(state)
+
+    with :ok <- ensure_files_enabled(cfg),
+         true <- files_sender_allowed?(state, List.first(items), chat_id),
+         {:ok, root} <- files_project_root(List.first(items), chat_id, thread_id) do
+      uploads_dir = cfg[:uploads_dir] || cfg["uploads_dir"] || "incoming"
+
+      results =
+        Enum.map(items, fn inbound ->
+          doc = (inbound.meta && (inbound.meta[:document] || inbound.meta["document"])) || %{}
+          filename = doc[:file_name] || doc["file_name"] || "upload.bin"
+          rel = Path.join(uploads_dir, filename)
+
+          with {:ok, abs} <- resolve_dest_abs(root, rel),
+               :ok <- ensure_not_denied(root, rel, cfg),
+               {:ok, bytes} <- download_document_bytes(state, inbound),
+               :ok <- enforce_bytes_limit(bytes, cfg, :max_upload_bytes, 20 * 1024 * 1024),
+               {:ok, final_rel, _} <- write_document(rel, abs, bytes, force: false) do
+            {:ok, final_rel}
+          else
+            {:error, msg} -> {:error, msg}
+            _ -> {:error, "upload failed"}
+          end
+        end)
+
+      ok_paths = for {:ok, p} <- results, do: p
+      err_count = Enum.count(results, fn r -> match?({:error, _}, r) end)
+
+      msg =
+        cond do
+          ok_paths == [] ->
+            "Upload failed."
+
+          err_count == 0 ->
+            "Uploaded #{length(ok_paths)} files:\n" <> Enum.map_join(ok_paths, "\n", &"- #{&1}")
+
+          true ->
+            "Uploaded #{length(ok_paths)} files (#{err_count} failed):\n" <>
+              Enum.map_join(ok_paths, "\n", &"- #{&1}")
+        end
+
+      _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
+      :ok
+    else
+      {:error, msg} when is_binary(msg) ->
+        _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
+        :ok
+
+      false ->
+        _ =
+          send_system_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            "File uploads are restricted."
+          )
+
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp handle_file_put_media_group(
+         state,
+         file_put_inbound,
+         items,
+         chat_id,
+         thread_id,
+         user_msg_id
+       ) do
+    cfg = files_cfg(state)
+
+    scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
+    root = BindingResolver.resolve_cwd(scope)
+
+    args = telegram_command_args(file_put_inbound.message.text || "", "file") || ""
+    parts = String.split(String.trim(args || ""), ~r/\s+/, trim: true)
+
+    # Expect: put [--force] <path>
+    rest =
+      case parts do
+        ["put" | tail] -> tail
+        _ -> []
+      end
+
+    with :ok <- ensure_files_enabled(cfg),
+         true <- files_sender_allowed?(state, file_put_inbound, chat_id),
+         {:ok, root} <- ensure_project_root(root),
+         {:ok, force, dest_rel0} <- parse_file_put_args(cfg, file_put_inbound, rest) do
+      # For multiple files, require a directory destination: `incoming/`
+      dest_rel =
+        if String.ends_with?(dest_rel0, "/") do
+          dest_rel0
+        else
+          dest_rel0
+        end
+
+      if length(items) > 1 and not String.ends_with?(dest_rel, "/") do
+        _ =
+          send_system_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            "For multiple files, use a directory path ending with '/'. Example: /file put incoming/"
+          )
+
+        :ok
+      else
+        results =
+          Enum.map(items, fn inbound ->
+            doc = (inbound.meta && (inbound.meta[:document] || inbound.meta["document"])) || %{}
+            filename = doc[:file_name] || doc["file_name"] || "upload.bin"
+
+            rel =
+              if String.ends_with?(dest_rel, "/") do
+                Path.join(dest_rel, filename)
+              else
+                dest_rel
+              end
+
+            with {:ok, abs} <- resolve_dest_abs(root, rel),
+                 :ok <- ensure_not_denied(root, rel, cfg),
+                 {:ok, bytes} <- download_document_bytes(state, inbound),
+                 :ok <- enforce_bytes_limit(bytes, cfg, :max_upload_bytes, 20 * 1024 * 1024),
+                 {:ok, final_rel, _} <- write_document(rel, abs, bytes, force: force) do
+              {:ok, final_rel}
+            else
+              {:error, msg} -> {:error, msg}
+              _ -> {:error, "upload failed"}
+            end
+          end)
+
+        ok_paths = for {:ok, p} <- results, do: p
+        err_count = Enum.count(results, fn r -> match?({:error, _}, r) end)
+
+        msg =
+          cond do
+            ok_paths == [] ->
+              "Upload failed."
+
+            err_count == 0 ->
+              "Saved #{length(ok_paths)} files:\n" <> Enum.map_join(ok_paths, "\n", &"- #{&1}")
+
+            true ->
+              "Saved #{length(ok_paths)} files (#{err_count} failed):\n" <>
+                Enum.map_join(ok_paths, "\n", &"- #{&1}")
+          end
+
+        _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
+        :ok
+      end
+    else
+      {:error, msg} when is_binary(msg) ->
+        _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
+        :ok
+
+      false ->
+        _ =
+          send_system_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            "File uploads are restricted."
+          )
+
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
+
+  # Telegram file transfer (Takopi parity):
+  # - /file put [--force] <path>
+  # - /file get <path>
+  # - optional auto-put for bare document uploads (configured under gateway.telegram.files)
+  defp should_auto_put_document?(state, inbound) do
+    cfg = files_cfg(state)
+
+    enabled? = truthy(cfg[:enabled] || cfg["enabled"])
+    auto_put? = truthy(cfg[:auto_put] || cfg["auto_put"])
+
+    doc = inbound.meta && (inbound.meta[:document] || inbound.meta["document"])
+
+    enabled? and auto_put? and is_map(doc) and map_size(doc) > 0 and
+      not command_message_for_bot?(inbound.message.text || "", state.bot_username)
+  rescue
+    _ -> false
+  end
+
+  defp handle_document_auto_put(state, inbound) do
+    cfg = files_cfg(state)
+    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
+    thread_id = parse_int(inbound.peer.thread_id)
+    user_msg_id = inbound.meta[:user_msg_id] || parse_int(inbound.message.id)
+
+    with true <- is_integer(chat_id),
+         :ok <- ensure_files_enabled(cfg),
+         true <- files_sender_allowed?(state, inbound, chat_id),
+         {:ok, root} <- files_project_root(inbound, chat_id, thread_id),
+         {:ok, dest_rel} <- auto_put_destination(cfg, inbound),
+         {:ok, dest_abs} <- resolve_dest_abs(root, dest_rel),
+         :ok <- ensure_not_denied(root, dest_rel, cfg),
+         {:ok, bytes} <- download_document_bytes(state, inbound),
+         :ok <- enforce_bytes_limit(bytes, cfg, :max_upload_bytes, 20 * 1024 * 1024),
+         {:ok, final_rel, _final_abs} <- write_document(dest_rel, dest_abs, bytes, force: false) do
+      _ = send_system_message(state, chat_id, thread_id, user_msg_id, "Uploaded: #{final_rel}")
+
+      mode = cfg[:auto_put_mode] || cfg["auto_put_mode"] || "upload"
+      caption = String.trim(inbound.message.text || "")
+
+      cond do
+        mode == "prompt" and caption != "" ->
+          prompt = String.trim("#{caption}\n\n[uploaded: #{final_rel}]")
+          inbound = %{inbound | message: Map.put(inbound.message, :text, prompt)}
+
+          if should_ignore_for_trigger?(state, inbound, prompt) do
+            state
+          else
+            {state, inbound} = maybe_switch_session_from_reply(state, inbound)
+            inbound = maybe_apply_selected_resume(state, inbound, prompt)
+            submit_inbound_now(state, inbound)
+          end
+
+        true ->
+          state
+      end
+    else
+      {:error, msg} when is_binary(msg) ->
+        _ =
+          is_integer(chat_id) && send_system_message(state, chat_id, thread_id, user_msg_id, msg)
+
+        state
+
+      false ->
+        _ =
+          is_integer(chat_id) &&
+            send_system_message(
+              state,
+              chat_id,
+              thread_id,
+              user_msg_id,
+              "File uploads are restricted."
+            )
+
+        state
+
+      _ ->
+        state
+    end
+  rescue
+    _ -> state
+  end
+
+  defp handle_file_command(state, inbound) do
+    cfg = files_cfg(state)
+    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
+    thread_id = parse_int(inbound.peer.thread_id)
+    user_msg_id = inbound.meta[:user_msg_id] || parse_int(inbound.message.id)
+    args = telegram_command_args(inbound.message.text, "file") || ""
+
+    if not is_integer(chat_id) do
+      state
+    else
+      scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
+      root = BindingResolver.resolve_cwd(scope)
+
+      parts = String.split(String.trim(args || ""), ~r/\s+/, trim: true)
+
+      case parts do
+        [] ->
+          _ = send_system_message(state, chat_id, thread_id, user_msg_id, file_usage())
+          state
+
+        ["put" | rest] ->
+          handle_file_put(state, inbound, cfg, chat_id, thread_id, user_msg_id, root, rest)
+
+        ["get" | rest] ->
+          handle_file_get(state, inbound, cfg, chat_id, thread_id, user_msg_id, root, rest)
+
+        _ ->
+          _ = send_system_message(state, chat_id, thread_id, user_msg_id, file_usage())
+          state
+      end
+    end
+  rescue
+    _ -> state
+  end
+
+  defp handle_file_put(state, inbound, cfg, chat_id, thread_id, user_msg_id, root, rest) do
+    with :ok <- ensure_files_enabled(cfg),
+         true <- files_sender_allowed?(state, inbound, chat_id),
+         {:ok, root} <- ensure_project_root(root),
+         {:ok, force, dest_rel} <- parse_file_put_args(cfg, inbound, rest),
+         {:ok, dest_abs} <- resolve_dest_abs(root, dest_rel),
+         :ok <- ensure_not_denied(root, dest_rel, cfg),
+         {:ok, bytes} <- download_document_bytes(state, inbound),
+         :ok <- enforce_bytes_limit(bytes, cfg, :max_upload_bytes, 20 * 1024 * 1024),
+         {:ok, final_rel, _final_abs} <- write_document(dest_rel, dest_abs, bytes, force: force) do
+      _ = send_system_message(state, chat_id, thread_id, user_msg_id, "Saved: #{final_rel}")
+      state
+    else
+      {:error, msg} when is_binary(msg) ->
+        _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
+        state
+
+      false ->
+        _ =
+          send_system_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            "File uploads are restricted."
+          )
+
+        state
+
+      _ ->
+        state
+    end
+  end
+
+  defp handle_file_get(state, inbound, cfg, chat_id, thread_id, user_msg_id, root, rest) do
+    with :ok <- ensure_files_enabled(cfg),
+         true <- files_sender_allowed?(state, inbound, chat_id),
+         {:ok, root} <- ensure_project_root(root),
+         {:ok, rel} <- parse_file_get_args(rest),
+         {:ok, abs} <- resolve_dest_abs(root, rel),
+         :ok <- ensure_not_denied(root, rel, cfg),
+         {:ok, kind, send_path, filename} <- prepare_file_get(abs),
+         :ok <- enforce_path_size(send_path, cfg, :max_download_bytes, 50 * 1024 * 1024),
+         :ok <- send_document_reply(state, chat_id, thread_id, user_msg_id, send_path, filename) do
+      if kind == :zip do
+        _ = File.rm(send_path)
+      end
+
+      state
+    else
+      {:error, msg} when is_binary(msg) ->
+        _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
+        state
+
+      false ->
+        _ =
+          send_system_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            "File downloads are restricted."
+          )
+
+        state
+
+      _ ->
+        state
+    end
+  rescue
+    _ -> state
+  end
+
+  defp files_cfg(state) do
+    cfg = state.files || %{}
+    if is_map(cfg), do: cfg, else: %{}
+  end
+
+  defp truthy(v), do: v in [true, "true", 1, "1", true]
+
+  defp ensure_files_enabled(cfg) do
+    if truthy(cfg[:enabled] || cfg["enabled"]) do
+      :ok
+    else
+      {:error, "File transfer is disabled. Enable it under [gateway.telegram.files]."}
+    end
+  end
+
+  defp files_sender_allowed?(state, inbound, chat_id) do
+    cfg = files_cfg(state)
+    allowed = cfg[:allowed_user_ids] || cfg["allowed_user_ids"] || []
+    allowed = if is_list(allowed), do: allowed, else: []
+
+    sender_id = parse_int(inbound.sender && inbound.sender.id)
+
+    cond do
+      is_integer(sender_id) and Enum.any?(allowed, fn x -> parse_int(x) == sender_id end) ->
+        true
+
+      inbound.peer.kind in [:group, :channel] ->
+        if allowed == [] do
+          sender_admin?(state, chat_id, sender_id)
+        else
+          false
+        end
+
+      true ->
+        true
+    end
+  rescue
+    _ -> false
+  end
+
+  defp files_project_root(_inbound, chat_id, thread_id) do
+    scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
+
+    root = BindingResolver.resolve_cwd(scope)
+
+    case root do
+      r when is_binary(r) and byte_size(r) > 0 -> {:ok, Path.expand(r)}
+      _ -> {:error, "No project is bound to this chat. Use /new <project_id|path> to bind one."}
+    end
+  rescue
+    _ -> {:error, "No project is bound to this chat. Use /new <project_id|path> to bind one."}
+  end
+
+  defp ensure_project_root(root) when is_binary(root) and byte_size(root) > 0,
+    do: {:ok, Path.expand(root)}
+
+  defp ensure_project_root(_),
+    do: {:error, "No project is bound to this chat. Use /new <project_id|path> to bind one."}
+
+  defp auto_put_destination(cfg, inbound) do
+    uploads_dir = cfg[:uploads_dir] || cfg["uploads_dir"] || "incoming"
+    doc = (inbound.meta && (inbound.meta[:document] || inbound.meta["document"])) || %{}
+    filename = doc[:file_name] || doc["file_name"] || "upload.bin"
+    {:ok, Path.join(uploads_dir, filename)}
+  end
+
+  defp parse_file_put_args(cfg, inbound, rest) do
+    rest = rest || []
+
+    {force, rest} =
+      case rest do
+        ["--force" | tail] -> {true, tail}
+        tail -> {false, tail}
+      end
+
+    dest =
+      case rest do
+        [path | _] when is_binary(path) and path != "" ->
+          path
+
+        _ ->
+          uploads_dir = cfg[:uploads_dir] || cfg["uploads_dir"] || "incoming"
+          doc = (inbound.meta && (inbound.meta[:document] || inbound.meta["document"])) || %{}
+          filename = doc[:file_name] || doc["file_name"] || "upload.bin"
+          Path.join(uploads_dir, filename)
+      end
+
+    if is_binary(dest) and String.trim(dest) != "" do
+      {:ok, force, String.trim(dest)}
+    else
+      {:error, file_usage()}
+    end
+  end
+
+  defp parse_file_get_args(rest) do
+    case rest do
+      [path | _] when is_binary(path) and path != "" -> {:ok, String.trim(path)}
+      _ -> {:error, file_usage()}
+    end
+  end
+
+  defp resolve_dest_abs(root, rel) do
+    rel = String.trim(rel || "")
+
+    cond do
+      rel == "" ->
+        {:error, file_usage()}
+
+      Path.type(rel) == :absolute ->
+        {:error, "Path must be relative to the project root."}
+
+      String.contains?(rel, "\\0") ->
+        {:error, "Invalid path."}
+
+      true ->
+        root = Path.expand(root)
+        abs = Path.expand(rel, root)
+
+        if within_root?(root, abs) do
+          {:ok, abs}
+        else
+          {:error, "Path escapes the project root."}
+        end
+    end
+  rescue
+    _ -> {:error, "Invalid path."}
+  end
+
+  defp within_root?(root, abs) when is_binary(root) and is_binary(abs) do
+    root = Path.expand(root)
+    abs = Path.expand(abs)
+    abs == root or String.starts_with?(abs, root <> "/")
+  end
+
+  defp ensure_not_denied(root, rel, cfg) do
+    globs = cfg[:deny_globs] || cfg["deny_globs"] || []
+    globs = if is_list(globs), do: globs, else: []
+
+    if denied_by_globs?(root, rel, globs) do
+      {:error, "Access denied for that path."}
+    else
+      :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp denied_by_globs?(_root, _rel, []), do: false
+
+  defp denied_by_globs?(root, rel, globs) do
+    root = Path.expand(root)
+    abs = Path.expand(rel, root)
+
+    Enum.any?(globs, fn glob ->
+      matches = Path.wildcard(Path.join(root, glob), match_dot: true)
+      Enum.any?(matches, fn m -> Path.expand(m) == abs end)
+    end)
+  end
+
+  defp download_document_bytes(state, inbound) do
+    doc = (inbound.meta && (inbound.meta[:document] || inbound.meta["document"])) || %{}
+    file_id = doc[:file_id] || doc["file_id"]
+
+    cond do
+      not is_binary(file_id) or file_id == "" ->
+        {:error, "Attach a Telegram document and use:\n/file put [--force] <path>"}
+
+      true ->
+        with {:ok, %{"ok" => true, "result" => %{"file_path" => file_path}}} <-
+               state.api_mod.get_file(state.token, file_id),
+             {:ok, bytes} <- state.api_mod.download_file(state.token, file_path) do
+          {:ok, bytes}
+        else
+          _ -> {:error, "Failed to download the file from Telegram."}
+        end
+    end
+  rescue
+    _ -> {:error, "Failed to download the file from Telegram."}
+  end
+
+  defp enforce_bytes_limit(bytes, cfg, key, default_max) when is_binary(bytes) do
+    max = parse_int(cfg[key] || cfg[to_string(key)]) || default_max
+
+    if is_integer(max) and max > 0 and byte_size(bytes) > max do
+      {:error, "File is too large."}
+    else
+      :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp write_document(rel, abs, bytes, opts) do
+    force = Keyword.get(opts, :force, false)
+    abs = Path.expand(abs)
+    rel = String.trim(rel || "")
+
+    dir = Path.dirname(abs)
+    File.mkdir_p!(dir)
+
+    cond do
+      not force and File.exists?(abs) ->
+        {:error, "File already exists. Use /file put --force <path> to overwrite."}
+
+      true ->
+        tmp = abs <> ".tmp-" <> Base.url_encode64(:crypto.strong_rand_bytes(6), padding: false)
+        File.write!(tmp, bytes)
+        File.rename!(tmp, abs)
+        {:ok, rel, abs}
+    end
+  rescue
+    _ -> {:error, "Failed to write file."}
+  end
+
+  defp prepare_file_get(abs) do
+    cond do
+      File.regular?(abs) ->
+        {:ok, :file, abs, Path.basename(abs)}
+
+      File.dir?(abs) ->
+        tmp =
+          Path.join(
+            System.tmp_dir!(),
+            "lemon-telegram-#{Base.url_encode64(:crypto.strong_rand_bytes(6), padding: false)}.zip"
+          )
+
+        case zip_dir(abs, tmp) do
+          :ok -> {:ok, :zip, tmp, Path.basename(abs) <> ".zip"}
+          {:error, _} -> {:error, "Failed to zip directory."}
+        end
+
+      true ->
+        {:error, "Not found."}
+    end
+  rescue
+    _ -> {:error, "Not found."}
+  end
+
+  defp zip_dir(dir, zip_path) do
+    files =
+      Path.wildcard(Path.join(dir, "**/*"), match_dot: true)
+      |> Enum.filter(&File.regular?/1)
+      |> Enum.map(&Path.relative_to(&1, dir))
+
+    _ =
+      :zip.create(
+        to_charlist(zip_path),
+        Enum.map(files, &to_charlist/1),
+        cwd: to_charlist(dir)
+      )
+
+    :ok
+  rescue
+    _ -> {:error, :zip_failed}
+  end
+
+  defp enforce_path_size(path, cfg, key, default_max) do
+    max = parse_int(cfg[key] || cfg[to_string(key)]) || default_max
+
+    if is_integer(max) and max > 0 do
+      size =
+        case File.stat(path) do
+          {:ok, %File.Stat{size: s}} -> s
+          _ -> 0
+        end
+
+      if is_integer(size) and size > max, do: {:error, "File is too large."}, else: :ok
+    else
+      :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp send_document_reply(state, chat_id, thread_id, reply_to_id, path, filename) do
+    if function_exported?(state.api_mod, :send_document, 4) do
+      opts =
+        %{}
+        |> maybe_put("reply_to_message_id", reply_to_id)
+        |> maybe_put("message_thread_id", thread_id)
+        |> maybe_put("caption", filename)
+
+      case state.api_mod.send_document(state.token, chat_id, {:path, path}, opts) do
+        {:ok, _} -> :ok
+        _ -> {:error, "Failed to send file."}
+      end
+    else
+      {:error, "This Telegram API module does not support sendDocument."}
+    end
+  rescue
+    _ -> {:error, "Failed to send file."}
+  end
+
+  defp file_usage do
+    "Usage:\n/file put [--force] <path>\n/file get <path>"
   end
 
   # Telegram commands in groups may include a bot username suffix: /cmd@BotName
-  defp telegram_command?(text, cmd) when is_binary(cmd) do
+  defp telegram_command?(text, cmd, bot_username) when is_binary(cmd) do
     trimmed = String.trim_leading(text || "")
-    Regex.match?(~r/^\/#{cmd}(?:@[\w_]+)?(?:\s|$)/i, trimmed)
+
+    case Regex.run(~r/^\/#{cmd}(?:@([\w_]+))?(?:\s|$)/i, trimmed) do
+      # No @suffix: Regex.run/2 returns only the full match (no capture entries).
+      [_full] ->
+        true
+
+      [_, nil] ->
+        true
+
+      [_, ""] ->
+        true
+
+      [_, target] when is_binary(bot_username) and bot_username != "" ->
+        String.downcase(target) == String.downcase(bot_username)
+
+      [_, _target] ->
+        true
+
+      _ ->
+        false
+    end
   end
 
   defp telegram_command_args(text, cmd) when is_binary(cmd) do
@@ -599,6 +1530,27 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp command_message?(text) do
     String.trim_leading(text || "") |> String.starts_with?("/")
+  end
+
+  defp command_message_for_bot?(text, bot_username) do
+    trimmed = String.trim_leading(text || "")
+
+    case Regex.run(~r{^/([a-z][a-z0-9_]*)(?:@([\w_]+))?(?:\s|$)}i, trimmed) do
+      [_, _cmd, nil] ->
+        true
+
+      [_, _cmd, ""] ->
+        true
+
+      [_, _cmd, target] when is_binary(bot_username) and bot_username != "" ->
+        String.downcase(target) == String.downcase(bot_username)
+
+      [_, _cmd, _target] ->
+        true
+
+      _ ->
+        false
+    end
   end
 
   defp maybe_switch_session_from_reply(state, inbound) do
@@ -923,7 +1875,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp extract_resume_from_history(_), do: nil
 
-  defp handle_new_session(state, inbound, raw_selector \\ nil) do
+  defp handle_new_session(state, inbound, raw_selector) do
     chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
     thread_id = parse_int(inbound.peer.thread_id)
     user_msg_id = inbound.meta[:user_msg_id] || parse_int(inbound.message.id)
@@ -1031,58 +1983,53 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
          inbound,
          %ChatScope{} = scope,
          session_key,
-         _chat_id,
-         thread_id,
-         user_msg_id
-       )
-       when is_binary(session_key) do
-    if not (Code.ensure_loaded?(LemonRouter.RunOrchestrator) and
-              function_exported?(LemonRouter.RunOrchestrator, :submit, 1)) do
+       _chat_id,
+       thread_id,
+       user_msg_id
+     )
+     when is_binary(session_key) do
+    history = fetch_run_history_for_memory(session_key, scope, limit: 8)
+    transcript = format_run_history_transcript(history, max_chars: 12_000)
+
+    if transcript == "" do
       :skip
     else
-      history = fetch_run_history_for_memory(session_key, scope, limit: 8)
-      transcript = format_run_history_transcript(history, max_chars: 12_000)
+      prompt = memory_reflection_prompt(transcript)
 
-      if transcript == "" do
-        :skip
-      else
-        prompt = memory_reflection_prompt(transcript)
+      # Internal run: avoid creating "Running…" / tool status messages.
+      progress_msg_id = nil
+      status_msg_id = nil
 
-        # Internal run: avoid creating "Running…" / tool status messages.
-        progress_msg_id = nil
-        status_msg_id = nil
+      engine_id = last_engine_hint(scope, session_key) || (inbound.meta || %{})[:engine_id]
+      agent_id = (inbound.meta || %{})[:agent_id] || "default"
 
-        engine_id = last_engine_hint(scope, session_key) || (inbound.meta || %{})[:engine_id]
-        agent_id = (inbound.meta || %{})[:agent_id] || "default"
+      meta =
+        (inbound.meta || %{})
+        |> Map.put(:progress_msg_id, progress_msg_id)
+        |> Map.put(:status_msg_id, status_msg_id)
+        |> Map.put(:topic_id, thread_id)
+        |> Map.put(:user_msg_id, user_msg_id)
+        |> Map.put(:command, :new)
+        |> Map.put(:record_memories, true)
+        |> Map.merge(%{
+          channel_id: inbound.channel_id,
+          account_id: inbound.account_id,
+          peer: inbound.peer,
+          sender: inbound.sender,
+          raw: inbound.raw
+        })
 
-        meta =
-          (inbound.meta || %{})
-          |> Map.put(:progress_msg_id, progress_msg_id)
-          |> Map.put(:status_msg_id, status_msg_id)
-          |> Map.put(:topic_id, thread_id)
-          |> Map.put(:user_msg_id, user_msg_id)
-          |> Map.put(:command, :new)
-          |> Map.put(:record_memories, true)
-          |> Map.merge(%{
-            channel_id: inbound.channel_id,
-            account_id: inbound.account_id,
-            peer: inbound.peer,
-            sender: inbound.sender,
-            raw: inbound.raw
-          })
-
-        case LemonRouter.RunOrchestrator.submit(%{
-               origin: :channel,
-               session_key: session_key,
-               agent_id: agent_id,
-               prompt: prompt,
-               queue_mode: :interrupt,
-               engine_id: engine_id,
-               meta: meta
-             }) do
-          {:ok, run_id} when is_binary(run_id) -> {:ok, run_id, state}
-          _ -> :skip
-        end
+      case LemonCore.RouterBridge.submit_run(%{
+             origin: :channel,
+             session_key: session_key,
+             agent_id: agent_id,
+             prompt: prompt,
+             queue_mode: :interrupt,
+             engine_id: engine_id,
+             meta: meta
+           }) do
+        {:ok, run_id} when is_binary(run_id) -> {:ok, run_id, state}
+        _ -> :skip
       end
     end
   rescue
@@ -1375,6 +2322,373 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     _ -> :ok
   end
 
+  defp resolve_bot_identity(bot_id, bot_username, api_mod, token) do
+    bot_id = parse_int(bot_id) || bot_id
+    bot_username = normalize_bot_username(bot_username)
+
+    cond do
+      is_integer(bot_id) and is_binary(bot_username) and bot_username != "" ->
+        {bot_id, bot_username}
+
+      function_exported?(api_mod, :get_me, 1) ->
+        case api_mod.get_me(token) do
+          {:ok, %{"ok" => true, "result" => %{"id" => id, "username" => username}}} ->
+            {parse_int(id) || id, normalize_bot_username(username)}
+
+          _ ->
+            {bot_id, bot_username}
+        end
+
+      true ->
+        {bot_id, bot_username}
+    end
+  rescue
+    _ -> {bot_id, bot_username}
+  end
+
+  defp normalize_bot_username(nil), do: nil
+
+  defp normalize_bot_username(username) when is_binary(username) do
+    username
+    |> String.trim()
+    |> String.trim_leading("@")
+  end
+
+  defp should_ignore_for_trigger?(state, inbound, text) do
+    case inbound.peer.kind do
+      :group ->
+        trigger_mode = trigger_mode_for(state, inbound)
+        trigger_mode.mode == :mentions and not explicit_invocation?(state, inbound, text)
+
+      :channel ->
+        trigger_mode = trigger_mode_for(state, inbound)
+        trigger_mode.mode == :mentions and not explicit_invocation?(state, inbound, text)
+
+      _ ->
+        false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp trigger_mode_for(state, inbound) do
+    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
+    topic_id = parse_int(inbound.peer.thread_id)
+    account_id = state.account_id || "default"
+
+    if is_integer(chat_id) do
+      TriggerMode.resolve(account_id, chat_id, topic_id)
+    else
+      %{mode: :all, chat_mode: nil, topic_mode: nil, source: :default}
+    end
+  rescue
+    _ -> %{mode: :all, chat_mode: nil, topic_mode: nil, source: :default}
+  end
+
+  defp explicit_invocation?(state, inbound, text) do
+    command_message_for_bot?(text, state.bot_username) or
+      mention_of_bot?(state, inbound) or
+      reply_to_bot?(state, inbound)
+  rescue
+    _ -> false
+  end
+
+  defp mention_of_bot?(state, inbound) do
+    bot_username = state.bot_username
+    bot_id = state.bot_id
+    message = inbound_message_from_update(inbound.raw)
+    text = message["text"] || message["caption"] || inbound.message.text || ""
+
+    mention_by_username =
+      if is_binary(bot_username) and bot_username != "" do
+        Regex.match?(~r/(?:^|\W)@#{Regex.escape(bot_username)}(?:\b|$)/i, text || "")
+      else
+        false
+      end
+
+    mention_by_id =
+      if is_integer(bot_id) do
+        entities = message_entities(message)
+
+        Enum.any?(entities, fn entity ->
+          case entity do
+            %{"type" => "text_mention", "user" => %{"id" => id}} ->
+              parse_int(id) == bot_id
+
+            _ ->
+              false
+          end
+        end)
+      else
+        false
+      end
+
+    mention_by_username or mention_by_id
+  rescue
+    _ -> false
+  end
+
+  defp reply_to_bot?(state, inbound) do
+    message = inbound_message_from_update(inbound.raw)
+    reply = message["reply_to_message"] || %{}
+    thread_id = message["message_thread_id"]
+
+    cond do
+      reply == %{} ->
+        false
+
+      topic_root_reply?(thread_id, reply) ->
+        false
+
+      is_integer(state.bot_id) and get_in(reply, ["from", "id"]) == state.bot_id ->
+        true
+
+      is_binary(state.bot_username) and state.bot_username != "" ->
+        reply_username = get_in(reply, ["from", "username"])
+
+        is_binary(reply_username) and
+          String.downcase(reply_username) == String.downcase(state.bot_username)
+
+      true ->
+        false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp topic_root_reply?(thread_id, reply) do
+    is_integer(thread_id) and is_map(reply) and reply["message_id"] == thread_id
+  end
+
+  defp inbound_message_from_update(update) when is_map(update) do
+    cond do
+      is_map(update["message"]) -> update["message"]
+      is_map(update["edited_message"]) -> update["edited_message"]
+      is_map(update["channel_post"]) -> update["channel_post"]
+      true -> %{}
+    end
+  end
+
+  defp inbound_message_from_update(_), do: %{}
+
+  defp message_entities(message) when is_map(message) do
+    entities = message["entities"] || message["caption_entities"]
+    if is_list(entities), do: entities, else: []
+  end
+
+  defp message_entities(_), do: []
+
+  defp handle_trigger_command(state, inbound) do
+    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
+    thread_id = parse_int(inbound.peer.thread_id)
+    user_msg_id = inbound.meta[:user_msg_id] || parse_int(inbound.message.id)
+    args = telegram_command_args(inbound.message.text, "trigger") || ""
+    arg = String.downcase(String.trim(args || ""))
+    account_id = state.account_id || "default"
+
+    if not is_integer(chat_id) do
+      state
+    else
+      scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
+      current = TriggerMode.resolve(account_id, chat_id, thread_id)
+
+      case arg do
+        "" ->
+          _ =
+            send_system_message(
+              state,
+              chat_id,
+              thread_id,
+              user_msg_id,
+              render_trigger_mode_status(current)
+            )
+
+          state
+
+        "mentions" ->
+          with true <- trigger_change_allowed?(state, inbound, chat_id),
+               :ok <- TriggerMode.set(scope, account_id, :mentions) do
+            _ =
+              send_system_message(
+                state,
+                chat_id,
+                thread_id,
+                user_msg_id,
+                render_trigger_mode_set("mentions", scope)
+              )
+
+            state
+          else
+            false ->
+              _ =
+                send_system_message(
+                  state,
+                  chat_id,
+                  thread_id,
+                  user_msg_id,
+                  "Trigger mode can only be changed by a group admin."
+                )
+
+              state
+
+            _ ->
+              state
+          end
+
+        "all" ->
+          with true <- trigger_change_allowed?(state, inbound, chat_id),
+               :ok <- TriggerMode.set(scope, account_id, :all) do
+            _ =
+              send_system_message(
+                state,
+                chat_id,
+                thread_id,
+                user_msg_id,
+                render_trigger_mode_set("all", scope)
+              )
+
+            state
+          else
+            false ->
+              _ =
+                send_system_message(
+                  state,
+                  chat_id,
+                  thread_id,
+                  user_msg_id,
+                  "Trigger mode can only be changed by a group admin."
+                )
+
+              state
+
+            _ ->
+              state
+          end
+
+        "clear" ->
+          cond do
+            is_nil(thread_id) ->
+              _ =
+                send_system_message(
+                  state,
+                  chat_id,
+                  thread_id,
+                  user_msg_id,
+                  "No topic override to clear. Use /trigger all or /trigger mentions to set chat defaults."
+                )
+
+              state
+
+            trigger_change_allowed?(state, inbound, chat_id) ->
+              :ok = TriggerMode.clear_topic(account_id, chat_id, thread_id)
+
+              _ =
+                send_system_message(
+                  state,
+                  chat_id,
+                  thread_id,
+                  user_msg_id,
+                  "Cleared topic trigger override."
+                )
+
+              state
+
+            true ->
+              _ =
+                send_system_message(
+                  state,
+                  chat_id,
+                  thread_id,
+                  user_msg_id,
+                  "Trigger mode can only be changed by a group admin."
+                )
+
+              state
+          end
+
+        _ ->
+          _ =
+            send_system_message(
+              state,
+              chat_id,
+              thread_id,
+              user_msg_id,
+              "Usage: /trigger [mentions|all|clear]"
+            )
+
+          state
+      end
+    end
+  rescue
+    _ -> state
+  end
+
+  defp trigger_change_allowed?(state, inbound, chat_id) do
+    case inbound.peer.kind do
+      :group ->
+        sender_id = parse_int(inbound.sender && inbound.sender.id)
+
+        if is_integer(sender_id) do
+          sender_admin?(state, chat_id, sender_id)
+        else
+          false
+        end
+
+      _ ->
+        true
+    end
+  end
+
+  defp sender_admin?(state, chat_id, sender_id) do
+    if function_exported?(state.api_mod, :get_chat_member, 3) do
+      case state.api_mod.get_chat_member(state.token, chat_id, sender_id) do
+        {:ok, %{"ok" => true, "result" => %{"status" => status}}}
+        when status in ["administrator", "creator"] ->
+          true
+
+        _ ->
+          false
+      end
+    else
+      false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp render_trigger_mode_status(%{mode: mode, chat_mode: chat_mode, topic_mode: topic_mode}) do
+    base =
+      case mode do
+        :mentions -> "Trigger mode: mentions-only."
+        _ -> "Trigger mode: all."
+      end
+
+    chat_line =
+      case chat_mode do
+        :mentions -> "Chat default: mentions-only."
+        :all -> "Chat default: all."
+        _ -> "Chat default: all."
+      end
+
+    topic_line =
+      case topic_mode do
+        :mentions -> "Topic override: mentions-only."
+        :all -> "Topic override: all."
+        _ -> "Topic override: none."
+      end
+
+    [base, chat_line, topic_line, "Use /trigger mentions|all|clear."]
+    |> Enum.join("\n")
+  end
+
+  defp render_trigger_mode_set(mode, %ChatScope{topic_id: nil}) do
+    "Trigger mode set to #{mode} for this chat."
+  end
+
+  defp render_trigger_mode_set(mode, %ChatScope{topic_id: _}) do
+    "Trigger mode set to #{mode} for this topic."
+  end
+
   defp authorized_inbound?(state, inbound) do
     chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
 
@@ -1506,16 +2820,16 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp route_to_router(inbound) do
-    # Forward to LemonRouter.Router.handle_inbound/1 if available
-    if Code.ensure_loaded?(LemonRouter.Router) and
-         function_exported?(LemonRouter.Router, :handle_inbound, 1) do
-      LemonRouter.Router.handle_inbound(inbound)
-    else
-      # Fallback: emit telemetry for observability
-      LemonCore.Telemetry.channel_inbound("telegram", %{
-        peer_id: inbound.peer.id,
-        peer_kind: inbound.peer.kind
-      })
+    case LemonCore.RouterBridge.handle_inbound(inbound) do
+      :ok ->
+        :ok
+
+      _ ->
+        # Fallback: emit telemetry for observability
+        LemonCore.Telemetry.channel_inbound("telegram", %{
+          peer_id: inbound.peer.id,
+          peer_kind: inbound.peer.kind
+        })
     end
   rescue
     e ->
@@ -1607,7 +2921,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     {approval_id, decision} = parse_approval_callback(data)
 
     if is_binary(approval_id) and decision do
-      _ = LemonRouter.ApprovalsBridge.resolve(approval_id, decision)
+      _ = LemonCore.ExecApprovals.resolve(approval_id, decision)
 
       _ = state.api_mod.answer_callback_query(state.token, cb_id, %{"text" => "Recorded"})
 
@@ -1713,6 +3027,136 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     %{inbound | message: message, meta: meta}
   end
 
+  defp maybe_transcribe_voice(state, inbound) do
+    voice = inbound.meta && inbound.meta[:voice]
+
+    cond do
+      not is_map(voice) or map_size(voice) == 0 ->
+        {:ok, inbound}
+
+      not state.voice_transcription ->
+        if is_binary(inbound.message.text) and inbound.message.text != "" do
+          {:ok, inbound}
+        else
+          _ = maybe_send_voice_error(state, inbound, "Voice transcription is disabled.")
+          {:skip, state}
+        end
+
+      not is_binary(state.voice_transcription_api_key) or state.voice_transcription_api_key == "" ->
+        _ = maybe_send_voice_error(state, inbound, "Voice transcription requires an API key.")
+        {:skip, state}
+
+      true ->
+        case transcribe_voice(state, inbound, voice) do
+          {:ok, transcript} ->
+            message = Map.put(inbound.message, :text, String.trim(transcript || ""))
+            meta = Map.put(inbound.meta || %{}, :voice_transcribed, true)
+            {:ok, %{inbound | message: message, meta: meta}}
+
+          {:error, reason} ->
+            _ = maybe_send_voice_error(state, inbound, format_voice_error(reason))
+            {:skip, state}
+        end
+    end
+  end
+
+  defp transcribe_voice(state, _inbound, voice) do
+    file_id = voice[:file_id] || voice["file_id"]
+    file_size = parse_int(voice[:file_size] || voice["file_size"])
+    max_bytes = parse_int(state.voice_max_bytes)
+
+    if is_integer(max_bytes) and is_integer(file_size) and file_size > max_bytes do
+      {:error, :voice_too_large}
+    else
+      ensure_httpc()
+
+      with {:ok, file_path} <- fetch_voice_file(state, file_id),
+           {:ok, audio_bytes} <- fetch_voice_bytes(state, file_path),
+           :ok <- enforce_voice_size(audio_bytes, max_bytes) do
+        transcriber = state.voice_transcriber
+        mime_type = voice[:mime_type] || voice["mime_type"]
+
+        transcriber.transcribe(%{
+          model: state.voice_transcription_model,
+          base_url: state.voice_transcription_base_url,
+          api_key: state.voice_transcription_api_key,
+          audio_bytes: audio_bytes,
+          mime_type: mime_type
+        })
+      end
+    end
+  end
+
+  defp fetch_voice_file(state, file_id) when is_binary(file_id) do
+    case state.api_mod.get_file(state.token, file_id) do
+      {:ok, %{"ok" => true, "result" => %{"file_path" => file_path}}} when is_binary(file_path) ->
+        {:ok, file_path}
+
+      {:ok, %{"result" => %{"file_path" => file_path}}} when is_binary(file_path) ->
+        {:ok, file_path}
+
+      other ->
+        {:error, {:telegram_file_lookup_failed, other}}
+    end
+  end
+
+  defp fetch_voice_file(_state, _file_id), do: {:error, :missing_file_id}
+
+  defp fetch_voice_bytes(state, file_path) do
+    case state.api_mod.download_file(state.token, file_path) do
+      {:ok, bytes} when is_binary(bytes) -> {:ok, bytes}
+      other -> {:error, {:telegram_download_failed, other}}
+    end
+  end
+
+  defp enforce_voice_size(_bytes, max_bytes) when not is_integer(max_bytes), do: :ok
+
+  defp enforce_voice_size(bytes, max_bytes) when is_binary(bytes) do
+    if byte_size(bytes) > max_bytes do
+      {:error, :voice_too_large}
+    else
+      :ok
+    end
+  end
+
+  defp maybe_send_voice_error(state, inbound, text) when is_binary(text) do
+    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
+    thread_id = parse_int(inbound.peer.thread_id)
+    user_msg_id = inbound.meta[:user_msg_id] || parse_int(inbound.message.id)
+
+    if is_integer(chat_id) do
+      send_system_message(state, chat_id, thread_id, user_msg_id, text)
+    else
+      :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp format_voice_error(:voice_too_large), do: "Voice message is too large to transcribe."
+  defp format_voice_error(:missing_api_key), do: "Voice transcription requires an API key."
+
+  defp format_voice_error({:http_error, status, msg}) do
+    msg =
+      if is_binary(msg) and msg != "" do
+        String.slice(msg, 0, 200)
+      else
+        "request failed"
+      end
+
+    "Voice transcription failed (#{status}): #{msg}"
+  end
+
+  defp format_voice_error({:telegram_file_lookup_failed, _}), do: "Failed to fetch voice file."
+  defp format_voice_error({:telegram_download_failed, _}), do: "Failed to download voice file."
+  defp format_voice_error(other), do: "Voice transcription failed: #{inspect(other)}"
+
+  defp ensure_httpc do
+    _ = Application.ensure_all_started(:inets)
+    _ = Application.ensure_all_started(:ssl)
+    :ok
+  end
+
   defp parse_queue_override(text, allow_override) do
     if allow_override do
       trimmed = String.trim_leading(text || "")
@@ -1767,6 +3211,27 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     _ -> nil
   end
 
+  defp resolve_openai_provider do
+    provider =
+      try do
+        cfg = LemonCore.Config.load()
+        providers = cfg.providers || %{}
+        Map.get(providers, "openai") || Map.get(providers, :openai) || %{}
+      rescue
+        _ -> %{}
+      end
+
+    {get_field(provider, :api_key), get_field(provider, :base_url)}
+  end
+
+  defp get_field(map, key) when is_atom(key) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  end
+
+  defp normalize_blank(nil), do: nil
+  defp normalize_blank(""), do: nil
+  defp normalize_blank(value), do: value
+
   defp parse_int(nil), do: nil
 
   defp parse_int(i) when is_integer(i), do: i
@@ -1783,41 +3248,22 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   @dedupe_table :lemon_channels_telegram_dedupe
 
   defp ensure_dedupe_table do
-    if :ets.whereis(@dedupe_table) == :undefined do
-      :ets.new(@dedupe_table, [:named_table, :public, :set])
-    end
-
-    :ok
+    LemonCore.Dedupe.Ets.init(@dedupe_table)
   end
 
   defp dedupe_key(inbound) do
     {inbound.peer.id, inbound.message.id}
   end
 
-  defp is_seen?(key, _ttl_ms) do
-    case :ets.lookup(@dedupe_table, key) do
-      [{^key, expires_at}] ->
-        now = System.monotonic_time(:millisecond)
-
-        if now < expires_at do
-          true
-        else
-          :ets.delete(@dedupe_table, key)
-          false
-        end
-
-      [] ->
-        false
-    end
-  rescue
-    _ -> false
+  defp is_seen?(key, ttl_ms) do
+    LemonCore.Dedupe.Ets.seen?(@dedupe_table, key, ttl_ms)
   end
 
   defp mark_seen(key, ttl_ms) do
-    expires_at = System.monotonic_time(:millisecond) + ttl_ms
-    :ets.insert(@dedupe_table, {key, expires_at})
-  rescue
-    _ -> :ok
+    # Marking updates the timestamp, effectively extending TTL from "now".
+    _ = ttl_ms
+    LemonCore.Dedupe.Ets.mark(@dedupe_table, key)
+    :ok
   end
 
   defp maybe_put(map, _key, nil), do: map

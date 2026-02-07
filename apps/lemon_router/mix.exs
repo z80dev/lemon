@@ -9,6 +9,7 @@ defmodule LemonRouter.MixProject do
       config_path: "../../config/config.exs",
       deps_path: "../../deps",
       lockfile: "../../mix.lock",
+      test_pattern: "*_test.exs",
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       deps: deps()
@@ -26,6 +27,7 @@ defmodule LemonRouter.MixProject do
     [
       {:lemon_core, in_umbrella: true},
       {:lemon_gateway, in_umbrella: true},
+      {:lemon_channels, in_umbrella: true},
       {:coding_agent, in_umbrella: true},
       {:agent_core, in_umbrella: true},
       {:jason, "~> 1.4"}

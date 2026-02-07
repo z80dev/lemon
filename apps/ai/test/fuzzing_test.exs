@@ -10,7 +10,7 @@ defmodule Ai.FuzzingTest do
   end
 
   defp random_string(size) do
-    alphabet = Enum.concat([?a..?z, ?A..?Z, ?0..?9, ' !@#$%^&*()-=+[]{}|;:",.<>?/\\'])
+    alphabet = Enum.concat([?a..?z, ?A..?Z, ?0..?9, ~c" !@#$%^&*()-=+[]{}|;:\",.<>?/\\"])
     for _ <- 1..size, into: "", do: <<Enum.random(alphabet)>>
   end
 

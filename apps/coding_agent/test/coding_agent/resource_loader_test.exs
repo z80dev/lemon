@@ -139,10 +139,10 @@ defmodule CodingAgent.ResourceLoaderTest do
       assert result == %{}
     end
 
-    test "loads skills from .lemon/skills", %{tmp_dir: tmp_dir} do
-      skills_dir = Path.join(tmp_dir, ".lemon/skills")
-      File.mkdir_p!(skills_dir)
-      File.write!(Path.join(skills_dir, "commit.md"), "Git commit skill")
+    test "loads skills from .lemon/skill/*/SKILL.md", %{tmp_dir: tmp_dir} do
+      skill_dir = Path.join([tmp_dir, ".lemon", "skill", "commit"])
+      File.mkdir_p!(skill_dir)
+      File.write!(Path.join(skill_dir, "SKILL.md"), "Git commit skill")
 
       result = ResourceLoader.load_skills(tmp_dir)
       assert result["commit"] == "Git commit skill"
@@ -156,9 +156,9 @@ defmodule CodingAgent.ResourceLoaderTest do
     end
 
     test "loads a specific skill", %{tmp_dir: tmp_dir} do
-      skills_dir = Path.join(tmp_dir, ".lemon/skills")
-      File.mkdir_p!(skills_dir)
-      File.write!(Path.join(skills_dir, "review.md"), "Code review skill")
+      skill_dir = Path.join([tmp_dir, ".lemon", "skill", "review"])
+      File.mkdir_p!(skill_dir)
+      File.write!(Path.join(skill_dir, "SKILL.md"), "Code review skill")
 
       result = ResourceLoader.load_skill(tmp_dir, "review")
       assert result == {:ok, "Code review skill"}

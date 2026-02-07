@@ -251,10 +251,6 @@ defmodule LemonControlPlane.Methods.TtsConvert do
 
   # Simple HTTP POST using httpc (built into Erlang/OTP)
   defp http_post(url, headers, body) do
-    # Ensure inets and ssl are started
-    :inets.start()
-    :ssl.start()
-
     # Convert headers to httpc format
     httpc_headers = Enum.map(headers, fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end)
 
@@ -265,7 +261,7 @@ defmodule LemonControlPlane.Methods.TtsConvert do
       body
     }
 
-    case :httpc.request(:post, request, [timeout: 30_000], body_format: :binary) do
+    case LemonCore.Httpc.request(:post, request, [timeout: 30_000], body_format: :binary) do
       {:ok, {{_, status_code, _}, _resp_headers, resp_body}} ->
         {:ok, status_code, resp_body}
 

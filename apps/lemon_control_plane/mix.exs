@@ -9,6 +9,7 @@ defmodule LemonControlPlane.MixProject do
       config_path: "../../config/config.exs",
       deps_path: "../../deps",
       lockfile: "../../mix.lock",
+      test_pattern: "*_test.exs",
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       deps: deps()
@@ -29,6 +30,8 @@ defmodule LemonControlPlane.MixProject do
       {:lemon_router, in_umbrella: true},
       {:lemon_channels, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},
+      {:lemon_automation, in_umbrella: true},
+      {:ai, in_umbrella: true},
       # HTTP server
       {:bandit, "~> 1.5"},
       {:plug, "~> 1.16"},

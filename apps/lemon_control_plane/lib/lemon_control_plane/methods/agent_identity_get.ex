@@ -17,21 +17,24 @@ defmodule LemonControlPlane.Methods.AgentIdentityGet do
   def handle(params, _ctx) do
     agent_id = params["agentId"] || params["agent_id"] || "default"
 
-    # Try to get agent profile
     identity =
-      cond do
-        Code.ensure_loaded?(LemonRouter.AgentProfiles) ->
-          case LemonRouter.AgentProfiles.get(agent_id) do
-            nil -> default_identity(agent_id)
-            profile -> profile_to_identity(profile)
-          end
+      try do
+        cond do
+          Code.ensure_loaded?(LemonRouter.AgentProfiles) and
+              is_pid(Process.whereis(LemonRouter.AgentProfiles)) ->
+            case LemonRouter.AgentProfiles.get(agent_id) do
+              nil -> default_identity(agent_id)
+              profile -> profile_to_identity(profile)
+            end
 
-        true ->
-          # Fallback: get from store
-          case LemonCore.Store.get(:agents, agent_id) do
-            nil -> default_identity(agent_id)
-            agent -> agent_to_identity(agent)
-          end
+          true ->
+            case LemonCore.Store.get(:agents, agent_id) do
+              nil -> default_identity(agent_id)
+              agent -> agent_to_identity(agent)
+            end
+        end
+      rescue
+        _ -> default_identity(agent_id)
       end
 
     {:ok, identity}

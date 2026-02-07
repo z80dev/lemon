@@ -42,7 +42,9 @@ defmodule LemonGateway.EngineRegistry do
         LemonGateway.Engines.Lemon,
         LemonGateway.Engines.Echo,
         LemonGateway.Engines.Codex,
-        LemonGateway.Engines.Claude
+        LemonGateway.Engines.Claude,
+        LemonGateway.Engines.Opencode,
+        LemonGateway.Engines.Pi
       ])
 
     map =

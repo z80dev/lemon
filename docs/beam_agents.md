@@ -31,6 +31,7 @@ All agent loop executions must run under a `Task.Supervisor`. This ensures:
 
 **Implementation:**
 - `AgentCore.LoopTaskSupervisor` - Task.Supervisor for agent loop tasks
+- `AgentCore.ToolTaskSupervisor` - Task.Supervisor for tool execution tasks
 - Agent loops started via `Task.Supervisor.async_nolink/2` or `start_child/2`
 
 ### 2. Agent Event Streams Must Be Bounded and Cancelable
@@ -81,6 +82,7 @@ AgentCore.Supervisor (:one_for_one)
 +-- AgentCore.AgentRegistry (Registry)
 +-- AgentCore.SubagentSupervisor (DynamicSupervisor)
 +-- AgentCore.LoopTaskSupervisor (Task.Supervisor)
++-- AgentCore.ToolTaskSupervisor (Task.Supervisor)
 ```
 
 ---
@@ -166,10 +168,10 @@ end
 
 #### Parallel Execution
 
-The `execute_tool_calls_parallel/5` function (line 690) spawns tool tasks:
+The `execute_tool_calls_parallel/5` function spawns tool tasks:
 
 ```elixir
-# Line 690-716
+# apps/agent_core/lib/agent_core/loop.ex
 defp execute_tool_calls_parallel(context, new_messages, tool_calls, signal, stream) do
   parent = self()
 
@@ -181,8 +183,8 @@ defp execute_tool_calls_parallel(context, new_messages, tool_calls, signal, stre
 
       ref = make_ref()
 
-      pid =
-        spawn(fn ->  # <-- NOT supervised, uses raw spawn/1
+      {:ok, pid} =
+        Task.Supervisor.start_child(AgentCore.ToolTaskSupervisor, fn ->
           {result, is_error} = execute_tool_call(tool, tool_call, signal, stream)
           send(parent, {:tool_task_result, ref, tool_call, result, is_error})
         end)
@@ -203,7 +205,7 @@ end
 
 | Aspect | Implementation | Location |
 |--------|---------------|----------|
-| Process creation | `spawn/1` (unsupervised) | Line 702 |
+| Process creation | `Task.Supervisor.start_child/2` (supervised) | `AgentCore.ToolTaskSupervisor` |
 | Crash detection | `Process.monitor(pid)` | Line 707 |
 | Result tracking | `pending_by_ref` and `pending_by_mon` maps | Lines 693, 709-711 |
 | Result message | `{:tool_task_result, ref, tool_call, result, is_error}` | Line 704 |
@@ -465,24 +467,23 @@ case Task.Supervisor.start_child(AgentCore.LoopTaskSupervisor, fn ->
 end
 ```
 
-#### Tool Tasks - NOT Supervised
+#### Tool Tasks - Supervised
 
-**Critical Note**: Individual tool execution tasks use raw `spawn/1` and are NOT
-under supervision:
+Individual tool execution tasks are supervised under `AgentCore.ToolTaskSupervisor`:
 
 ```elixir
-# apps/agent_core/lib/agent_core/loop.ex, Line 702
-pid =
-  spawn(fn ->  # <-- NOT supervised
+# apps/agent_core/lib/agent_core/loop.ex
+{:ok, pid} =
+  Task.Supervisor.start_child(AgentCore.ToolTaskSupervisor, fn ->
     {result, is_error} = execute_tool_call(tool, tool_call, signal, stream)
     send(parent, {:tool_task_result, ref, tool_call, result, is_error})
   end)
 ```
 
 This means:
-- Tool task crashes are detected via monitors but not automatically restarted
-- No supervisor visibility into running tool tasks
-- No graceful shutdown coordination for tool tasks
+- Tool task crashes are detected via monitors and surfaced as tool errors
+- Supervisor visibility into running tool tasks (`AgentCore.ToolTaskSupervisor`)
+- Tool tasks can be terminated on abort via `Task.Supervisor.terminate_child/2`
 
 ---
 
@@ -561,8 +562,8 @@ Use this checklist to verify BEAM agent behavior after making changes:
 
 ## Known Limitations
 
-1. **Unsupervised tool tasks**: Tool execution processes use `spawn/1`, making them
-   invisible to the supervision tree and preventing graceful shutdown coordination.
+1. **No automatic tool retries**: Tool execution tasks run under
+   `AgentCore.ToolTaskSupervisor`, but are not automatically retried/restarted on crash.
 
 2. **No event backpressure**: Event broadcasting uses fire-and-forget `send/2`,
    which can cause mailbox growth with slow consumers.
@@ -570,5 +571,5 @@ Use this checklist to verify BEAM agent behavior after making changes:
 3. **No event batching**: Each event is sent individually to each subscriber,
    creating overhead with many subscribers or high event frequency.
 
-4. **Monitor-only crash detection**: Tool crashes are detected but not automatically
-   retried or escalated to supervisors.
+4. **Best-effort tool task abort**: Abort terminates in-flight tool tasks, but tasks may
+   still run briefly until termination takes effect (scheduler timing, NIFs, external calls).

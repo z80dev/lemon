@@ -127,7 +127,7 @@ defmodule LemonRouter.StreamCoalescer do
     end
   end
 
-  defp get_or_start_coalescer(session_key, channel_id, meta \\ %{}) do
+  defp get_or_start_coalescer(session_key, channel_id, meta) do
     case Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id}) do
       [{pid, _}] ->
         {:ok, pid}
@@ -203,23 +203,23 @@ defmodule LemonRouter.StreamCoalescer do
     if state.finalized == true and state.run_id == run_id do
       {:noreply, state}
     else
-    # Only accept in-order deltas
-    if seq <= state.last_seq do
-      {:noreply, state}
-    else
-      new_full = cap_full_text(state.full_text <> text)
+      # Only accept in-order deltas
+      if seq <= state.last_seq do
+        {:noreply, state}
+      else
+        new_full = cap_full_text(state.full_text <> text)
 
-      state = %{
-        state
-        | buffer: state.buffer <> text,
-          full_text: new_full,
-          last_seq: seq,
-          first_delta_ts: state.first_delta_ts || now
-      }
+        state = %{
+          state
+          | buffer: state.buffer <> text,
+            full_text: new_full,
+            last_seq: seq,
+            first_delta_ts: state.first_delta_ts || now
+        }
 
-      state = maybe_flush(state, now)
-      {:noreply, state}
-    end
+        state = maybe_flush(state, now)
+        {:noreply, state}
+      end
     end
   end
 
@@ -313,7 +313,7 @@ defmodule LemonRouter.StreamCoalescer do
     parsed = parse_session_key(state.session_key)
 
     # Broadcast to session topic for any local subscribers
-    if Code.ensure_loaded?(LemonCore.Bus) do
+    if is_pid(Process.whereis(LemonCore.PubSub)) do
       LemonCore.Bus.broadcast(
         LemonCore.Bus.session_topic(state.session_key),
         %{
@@ -328,8 +328,7 @@ defmodule LemonRouter.StreamCoalescer do
     end
 
     # Also enqueue to LemonChannels.Outbox for delivery
-    if Code.ensure_loaded?(LemonChannels.Outbox) and
-         Code.ensure_loaded?(LemonChannels.OutboundPayload) do
+    if is_pid(Process.whereis(LemonChannels.Outbox)) do
       # Determine output kind and content based on channel capabilities
       {kind, content} = get_output_kind_and_content(state)
 
@@ -386,9 +385,7 @@ defmodule LemonRouter.StreamCoalescer do
 
         parsed = parse_session_key(state.session_key)
 
-        if Code.ensure_loaded?(LemonChannels.Outbox) and
-             Code.ensure_loaded?(LemonChannels.OutboundPayload) and
-             is_pid(Process.whereis(LemonChannels.Outbox)) do
+        if is_pid(Process.whereis(LemonChannels.Outbox)) do
           # Always remove the initial progress message so it can't remain stuck.
           if progress_msg_id != nil do
             delete_payload =
@@ -480,7 +477,7 @@ defmodule LemonRouter.StreamCoalescer do
 
   # Check if channel supports editing messages
   defp channel_supports_edit?(channel_id) do
-    if Code.ensure_loaded?(LemonChannels.Registry) do
+    if is_pid(Process.whereis(LemonChannels.Registry)) do
       case LemonChannels.Registry.get_capabilities(channel_id) do
         # Use the correct capability key: edit_support (not supports_edit)
         %{edit_support: true} -> true
@@ -493,18 +490,10 @@ defmodule LemonRouter.StreamCoalescer do
     _ -> false
   end
 
-  # Parse session key using LemonRouter.SessionKey if available, with fallback
   defp parse_session_key(session_key) do
-    if Code.ensure_loaded?(LemonRouter.SessionKey) do
-      case LemonRouter.SessionKey.parse(session_key) do
-        {:error, :invalid} ->
-          fallback_parse_session_key(session_key)
-
-        parsed ->
-          parsed
-      end
-    else
-      fallback_parse_session_key(session_key)
+    case LemonRouter.SessionKey.parse(session_key) do
+      {:error, _} -> fallback_parse_session_key(session_key)
+      parsed -> parsed
     end
   end
 
@@ -598,11 +587,7 @@ defmodule LemonRouter.StreamCoalescer do
   defp cap_full_text(text), do: text
 
   defp truncate_for_channel("telegram", text) when is_binary(text) do
-    if Code.ensure_loaded?(LemonGateway.Telegram.Truncate) do
-      LemonGateway.Telegram.Truncate.truncate_for_telegram(text)
-    else
-      text
-    end
+    LemonGateway.Telegram.Truncate.truncate_for_telegram(text)
   rescue
     _ -> text
   end

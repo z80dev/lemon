@@ -1,4 +1,4 @@
-defmodule LemonGateway.ChannelBootstrapTest do
+defmodule LemonChannels.StartupTest do
   use ExUnit.Case, async: false
 
   alias LemonGateway.Config
@@ -40,28 +40,21 @@ defmodule LemonGateway.ChannelBootstrapTest do
   end
 
   setup do
-    _ = Application.stop(:lemon_gateway)
-    _ = Application.stop(:lemon_router)
     _ = Application.stop(:lemon_channels)
+    _ = Application.stop(:lemon_router)
+    _ = Application.stop(:lemon_gateway)
+
+    lock_dir =
+      Path.join([
+        System.tmp_dir!(),
+        "lemon_channels_test_locks_#{System.unique_integer([:positive])}"
+      ])
+
+    _ = File.mkdir_p(lock_dir)
+    System.put_env("LEMON_LOCK_DIR", lock_dir)
 
     MockTelegramAPI.stop()
     {:ok, _} = MockTelegramAPI.start_link()
-
-    on_exit(fn ->
-      MockTelegramAPI.stop()
-      _ = Application.stop(:lemon_gateway)
-      _ = Application.stop(:lemon_router)
-      _ = Application.stop(:lemon_channels)
-      Application.delete_env(:lemon_gateway, Config)
-      Application.delete_env(:lemon_gateway, :config_path)
-      Application.delete_env(:lemon_gateway, :telegram)
-    end)
-
-    :ok
-  end
-
-  test "bootstraps lemon_channels (and deps) without starting legacy telegram transport" do
-    Application.put_env(:lemon_gateway, :config_path, "/nonexistent/path.toml")
 
     Application.put_env(:lemon_gateway, Config, %{
       max_concurrent_runs: 1,
@@ -81,7 +74,41 @@ defmodule LemonGateway.ChannelBootstrapTest do
       poll_interval_ms: 50
     })
 
-    assert {:ok, _apps} = Application.ensure_all_started(:lemon_gateway)
+    on_exit(fn ->
+      MockTelegramAPI.stop()
+      _ = Application.stop(:lemon_channels)
+      _ = Application.stop(:lemon_router)
+      _ = Application.stop(:lemon_gateway)
+      Application.delete_env(:lemon_gateway, Config)
+      Application.delete_env(:lemon_gateway, :telegram)
+
+      # Restore a baseline for the rest of the lemon_channels suite. This module
+      # intentionally stops applications as part of boot validation.
+      Application.put_env(:lemon_gateway, Config, %{
+        enable_telegram: false,
+        max_concurrent_runs: 1,
+        default_engine: "lemon"
+      })
+
+      Application.put_env(:lemon_gateway, :engines, [
+        LemonGateway.Engines.Lemon,
+        LemonGateway.Engines.Echo,
+        LemonGateway.Engines.Codex,
+        LemonGateway.Engines.Claude,
+        LemonGateway.Engines.Opencode,
+        LemonGateway.Engines.Pi
+      ])
+
+      Application.delete_env(:lemon_gateway, :telegram)
+
+      _ = Application.ensure_all_started(:lemon_channels)
+    end)
+
+    :ok
+  end
+
+  test "starting lemon_channels boots telegram transport without legacy poller" do
+    assert {:ok, _apps} = Application.ensure_all_started(:lemon_channels)
 
     # Wait for channels transport to come up.
     assert is_pid(wait_for_pid(LemonChannels.Adapters.Telegram.Transport, 2_000))

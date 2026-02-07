@@ -196,14 +196,8 @@ defmodule LemonSkills.InstallerTest do
 
   # Helper to mock the config module for testing
   defp with_mock_config(base_dir, fun) do
-    # Create the skills directories
-    global_dir = Path.join(base_dir, ".lemon/skills")
-    project_dir = Path.join(base_dir, ".lemon-skills")
-
-    File.mkdir_p!(global_dir)
-    File.mkdir_p!(project_dir)
-
-    # The actual install may fail due to missing Registry, but we're testing the logic
+    # Ensure project-local skills directory exists for the cwd used in tests.
+    File.mkdir_p!(Path.join([base_dir, ".lemon", "skill"]))
     fun.()
   end
 end

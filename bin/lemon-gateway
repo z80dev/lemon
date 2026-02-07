@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# lemon-gateway - Launch LemonGateway (e.g. for Telegram) from source.
+# lemon-gateway - Launch Lemon's Telegram runtime from source.
 #
 # Usage:
 #   ./bin/lemon-gateway [--debug]
@@ -51,9 +51,9 @@ fi
 mix deps.get
 mix compile
 
-echo "[lemon-gateway] Starting LemonGateway (Ctrl-C to stop)..."
-# Note: approvals are implemented via LemonRouter.ApprovalsBridge, so for Telegram
-# "daily assistant" usage we start lemon_router as well.
+echo "[lemon-gateway] Starting Telegram runtime (Ctrl-C to stop)..."
+# Telegram polling and delivery are owned by lemon_channels (Telegram adapter + outbox),
+# while run orchestration lives in lemon_router and execution lives in lemon_gateway.
 # `--no-start` is important in umbrella projects: it prevents Mix from starting every
 # OTP application in the umbrella (e.g. the control plane on :4040) implicitly.
-exec mix run --no-start --no-halt -e 'Application.ensure_all_started(:lemon_gateway); Application.ensure_all_started(:lemon_router)'
+exec mix run --no-start --no-halt -e 'Application.ensure_all_started(:lemon_gateway); Application.ensure_all_started(:lemon_router); Application.ensure_all_started(:lemon_channels)'
