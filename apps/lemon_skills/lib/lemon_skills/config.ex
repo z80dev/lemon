@@ -22,9 +22,32 @@ defmodule LemonSkills.Config do
       │   └── my-custom-skill/
       │       └── SKILL.md
       └── skills.json         # Project skill configuration
+
+  ## Overrides
+
+  The global agent directory defaults to `~/.lemon/agent` but can be overridden via:
+  - `LEMON_AGENT_DIR` environment variable
+  - `config :lemon_skills, :agent_dir, "/path"`
+
+  If `:lemon_skills` doesn't specify `:agent_dir`, this module will fall back to
+  `config :coding_agent, :agent_dir, ...` so the skill registry and coding agent
+  share a single on-disk location by default.
   """
 
   @skills_config_filename "skills.json"
+
+  @doc """
+  Get the global agent directory used for skills/config.
+
+  Returns a path like `~/.lemon/agent` unless overridden.
+  """
+  @spec agent_dir() :: String.t()
+  def agent_dir do
+    System.get_env("LEMON_AGENT_DIR") ||
+      Application.get_env(:lemon_skills, :agent_dir) ||
+      Application.get_env(:coding_agent, :agent_dir) ||
+      Path.join(System.user_home!(), ".lemon/agent")
+  end
 
   @doc """
   Get the global skills directory.
@@ -244,10 +267,6 @@ defmodule LemonSkills.Config do
   # ============================================================================
   # Private Functions
   # ============================================================================
-
-  defp agent_dir do
-    Path.join(System.user_home!(), ".lemon/agent")
-  end
 
   defp load_config_file(path) do
     case File.read(path) do
