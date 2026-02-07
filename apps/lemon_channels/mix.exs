@@ -25,7 +25,6 @@ defmodule LemonChannels.MixProject do
   defp deps do
     [
       {:lemon_core, in_umbrella: true},
-      {:lemon_router, in_umbrella: true},
       {:lemon_gateway, in_umbrella: true},
       {:jason, "~> 1.4"}
     ]

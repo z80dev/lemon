@@ -1021,6 +1021,13 @@ defmodule Ai.Models do
   end
 
   @doc """
+  Backwards-compatible alias for `list_models/0`.
+  """
+  @deprecated "Use list_models/0"
+  @spec all() :: [Model.t()]
+  def all, do: list_models()
+
+  @doc """
   Check if a model supports vision (image input).
 
   ## Examples

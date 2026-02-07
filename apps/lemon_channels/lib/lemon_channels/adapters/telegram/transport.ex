@@ -1,6 +1,6 @@
 defmodule LemonChannels.Adapters.Telegram.Transport do
   @moduledoc """
-  Telegram polling transport that normalizes messages and forwards them to LemonRouter.
+  Telegram polling transport that normalizes messages and forwards them to the router.
 
   This transport wraps the existing LemonGateway.Telegram.Transport polling logic
   but routes messages through the new lemon_channels -> lemon_router pipeline.
@@ -1033,56 +1033,51 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
          session_key,
          _chat_id,
          thread_id,
-         user_msg_id
+       user_msg_id
        )
        when is_binary(session_key) do
-    if not (Code.ensure_loaded?(LemonRouter.RunOrchestrator) and
-              function_exported?(LemonRouter.RunOrchestrator, :submit, 1)) do
+    history = fetch_run_history_for_memory(session_key, scope, limit: 8)
+    transcript = format_run_history_transcript(history, max_chars: 12_000)
+
+    if transcript == "" do
       :skip
     else
-      history = fetch_run_history_for_memory(session_key, scope, limit: 8)
-      transcript = format_run_history_transcript(history, max_chars: 12_000)
+      prompt = memory_reflection_prompt(transcript)
 
-      if transcript == "" do
-        :skip
-      else
-        prompt = memory_reflection_prompt(transcript)
+      # Internal run: avoid creating "Running…" / tool status messages.
+      progress_msg_id = nil
+      status_msg_id = nil
 
-        # Internal run: avoid creating "Running…" / tool status messages.
-        progress_msg_id = nil
-        status_msg_id = nil
+      engine_id = last_engine_hint(scope, session_key) || (inbound.meta || %{})[:engine_id]
+      agent_id = (inbound.meta || %{})[:agent_id] || "default"
 
-        engine_id = last_engine_hint(scope, session_key) || (inbound.meta || %{})[:engine_id]
-        agent_id = (inbound.meta || %{})[:agent_id] || "default"
+      meta =
+        (inbound.meta || %{})
+        |> Map.put(:progress_msg_id, progress_msg_id)
+        |> Map.put(:status_msg_id, status_msg_id)
+        |> Map.put(:topic_id, thread_id)
+        |> Map.put(:user_msg_id, user_msg_id)
+        |> Map.put(:command, :new)
+        |> Map.put(:record_memories, true)
+        |> Map.merge(%{
+          channel_id: inbound.channel_id,
+          account_id: inbound.account_id,
+          peer: inbound.peer,
+          sender: inbound.sender,
+          raw: inbound.raw
+        })
 
-        meta =
-          (inbound.meta || %{})
-          |> Map.put(:progress_msg_id, progress_msg_id)
-          |> Map.put(:status_msg_id, status_msg_id)
-          |> Map.put(:topic_id, thread_id)
-          |> Map.put(:user_msg_id, user_msg_id)
-          |> Map.put(:command, :new)
-          |> Map.put(:record_memories, true)
-          |> Map.merge(%{
-            channel_id: inbound.channel_id,
-            account_id: inbound.account_id,
-            peer: inbound.peer,
-            sender: inbound.sender,
-            raw: inbound.raw
-          })
-
-        case LemonRouter.RunOrchestrator.submit(%{
-               origin: :channel,
-               session_key: session_key,
-               agent_id: agent_id,
-               prompt: prompt,
-               queue_mode: :interrupt,
-               engine_id: engine_id,
-               meta: meta
-             }) do
-          {:ok, run_id} when is_binary(run_id) -> {:ok, run_id, state}
-          _ -> :skip
-        end
+      case LemonCore.RouterBridge.submit_run(%{
+             origin: :channel,
+             session_key: session_key,
+             agent_id: agent_id,
+             prompt: prompt,
+             queue_mode: :interrupt,
+             engine_id: engine_id,
+             meta: meta
+           }) do
+        {:ok, run_id} when is_binary(run_id) -> {:ok, run_id, state}
+        _ -> :skip
       end
     end
   rescue
@@ -1506,16 +1501,16 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp route_to_router(inbound) do
-    # Forward to LemonRouter.Router.handle_inbound/1 if available
-    if Code.ensure_loaded?(LemonRouter.Router) and
-         function_exported?(LemonRouter.Router, :handle_inbound, 1) do
-      LemonRouter.Router.handle_inbound(inbound)
-    else
-      # Fallback: emit telemetry for observability
-      LemonCore.Telemetry.channel_inbound("telegram", %{
-        peer_id: inbound.peer.id,
-        peer_kind: inbound.peer.kind
-      })
+    case LemonCore.RouterBridge.handle_inbound(inbound) do
+      :ok ->
+        :ok
+
+      _ ->
+        # Fallback: emit telemetry for observability
+        LemonCore.Telemetry.channel_inbound("telegram", %{
+          peer_id: inbound.peer.id,
+          peer_kind: inbound.peer.kind
+        })
     end
   rescue
     e ->
@@ -1607,7 +1602,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     {approval_id, decision} = parse_approval_callback(data)
 
     if is_binary(approval_id) and decision do
-      _ = LemonRouter.ApprovalsBridge.resolve(approval_id, decision)
+      _ = LemonCore.ExecApprovals.resolve(approval_id, decision)
 
       _ = state.api_mod.answer_callback_query(state.token, cb_id, %{"text" => "Recorded"})
 

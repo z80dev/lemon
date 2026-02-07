@@ -15,10 +15,10 @@ config :coding_agent, :lane_caps,
   subagent: 8,
   background_exec: 2
 
-# Persist LemonGateway state (including Telegram offsets) to disk.
-config :lemon_gateway, LemonGateway.Store,
-  backend: LemonGateway.Store.JsonlBackend,
-  backend_opts: [path: Path.expand("~/.lemon/store")]
+# Default to an in-memory store. Dev/prod override to disk-backed persistence.
+config :lemon_core, LemonCore.Store,
+  backend: LemonCore.Store.EtsBackend,
+  backend_opts: []
 
 # Sample configuration:
 #
@@ -29,3 +29,5 @@ config :lemon_gateway, LemonGateway.Store,
 #       format: "$date $time [$level] $metadata$message\n",
 #       metadata: [:user_id]
 #
+
+import_config "#{config_env()}.exs"

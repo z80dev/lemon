@@ -13,14 +13,14 @@ defmodule LemonGateway.Application do
       LemonGateway.TransportRegistry,
       LemonGateway.CommandRegistry,
       LemonGateway.EngineLock,
+      {Registry, keys: :unique, name: LemonGateway.RunRegistry},
       LemonGateway.ThreadRegistry,
       LemonGateway.RunSupervisor,
       LemonGateway.ThreadWorkerSupervisor,
-      LemonGateway.Scheduler,
-      LemonGateway.Store,
-      # Start lemon_channels *after* LemonGateway.Config is running. If lemon_channels can't
-      # be started for any reason, fall back to the legacy TransportSupervisor.
-      LemonGateway.ChannelBootstrap
+      LemonGateway.Scheduler
+      # lemon_channels is started explicitly by the top-level runtime app (or by
+      # starting :lemon_control_plane / :lemon_channels directly). LemonGateway
+      # does not attempt to orchestrate startup of sibling applications.
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html

@@ -22,7 +22,7 @@ defmodule LemonControlPlane.Methods.ModelsList do
   defp get_available_models do
     # Try to get models from Ai.Models if available
     if Code.ensure_loaded?(Ai.Models) do
-      Ai.Models.all()
+      Ai.Models.list_models()
       |> Enum.map(&format_model/1)
     else
       # Fallback: return common models

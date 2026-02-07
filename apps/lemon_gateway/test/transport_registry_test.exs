@@ -653,13 +653,13 @@ defmodule LemonGateway.TransportRegistryTest do
   # ===========================================================================
 
   describe "default transports" do
-    test "uses telegram transport as default when no transports configured" do
+    test "uses empty transport list by default (telegram polling is owned by lemon_channels)" do
       Application.delete_env(:lemon_gateway, :transports)
 
       {:ok, _} = restart_registry()
 
       ids = TransportRegistry.list_transports()
-      assert "telegram" in ids
+      assert ids == []
     end
   end
 end

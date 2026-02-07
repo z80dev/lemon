@@ -44,6 +44,32 @@ defmodule LemonChannels.Registry do
   end
 
   @doc """
+  List adapters with metadata for status UIs.
+
+  Returns a list of `{channel_id, info}` tuples.
+  """
+  @spec list() :: [{binary(), map()}]
+  def list do
+    GenServer.call(__MODULE__, :list_info)
+  end
+
+  @doc """
+  Summarize configured/connected channel adapters.
+  """
+  @spec status() :: %{configured: [binary()], connected: [binary()]}
+  def status do
+    GenServer.call(__MODULE__, :status)
+  end
+
+  @doc """
+  Stop and unregister a channel adapter by `channel_id`.
+  """
+  @spec logout(binary()) :: :ok | {:error, :not_found} | {:error, term()}
+  def logout(channel_id) when is_binary(channel_id) do
+    GenServer.call(__MODULE__, {:logout, channel_id})
+  end
+
+  @doc """
   Get plugin metadata.
   """
   @spec get_meta(binary()) :: map() | nil
@@ -95,5 +121,66 @@ defmodule LemonChannels.Registry do
   def handle_call(:list, _from, state) do
     plugins = Map.values(state.plugins)
     {:reply, plugins, state}
+  end
+
+  def handle_call(:list_info, _from, state) do
+    plugins = Map.values(state.plugins)
+
+    result =
+      Enum.map(plugins, fn plugin ->
+        id = plugin.id()
+        meta = plugin.meta() || %{}
+
+        info = %{
+          type: id,
+          status: if(adapter_running?(plugin), do: :running, else: :stopped),
+          account_id: nil,
+          capabilities: meta[:capabilities] || %{}
+        }
+
+        {id, info}
+      end)
+
+    {:reply, result, state}
+  end
+
+  def handle_call(:status, _from, state) do
+    plugins = Map.values(state.plugins)
+    configured = Enum.map(plugins, & &1.id())
+    connected = Enum.filter(configured, &adapter_running_by_id?(state, &1))
+    {:reply, %{configured: configured, connected: connected}, state}
+  end
+
+  def handle_call({:logout, channel_id}, _from, state) do
+    case Map.get(state.plugins, channel_id) do
+      nil ->
+        {:reply, {:error, :not_found}, state}
+
+      plugin ->
+        _ = LemonChannels.Application.stop_adapter(plugin)
+        plugins = Map.delete(state.plugins, channel_id)
+        {:reply, :ok, %{state | plugins: plugins}}
+    end
+  end
+
+  defp adapter_running_by_id?(state, channel_id) do
+    case Map.get(state.plugins, channel_id) do
+      nil -> false
+      plugin -> adapter_running?(plugin)
+    end
+  end
+
+  defp adapter_running?(plugin_module) when is_atom(plugin_module) do
+    children =
+      try do
+        DynamicSupervisor.which_children(LemonChannels.AdapterSupervisor)
+      rescue
+        _ -> []
+      end
+
+    Enum.any?(children, fn
+      {^plugin_module, pid, _type, _modules} when is_pid(pid) -> Process.alive?(pid)
+      _ -> false
+    end)
   end
 end

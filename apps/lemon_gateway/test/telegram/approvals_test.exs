@@ -129,6 +129,7 @@ defmodule LemonGateway.Telegram.ApprovalsTest do
     })
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+    {:ok, _} = Application.ensure_all_started(:lemon_channels)
 
     # Wait for channels-based Telegram poller to come up and pick up the mock API module.
     poller_pid =
@@ -176,7 +177,7 @@ defmodule LemonGateway.Telegram.ApprovalsTest do
 
     task =
       Task.async(fn ->
-        LemonRouter.ApprovalsBridge.request(%{
+        LemonCore.ExecApprovals.request(%{
           run_id: "run_test",
           session_key: session_key,
           agent_id: "daily",

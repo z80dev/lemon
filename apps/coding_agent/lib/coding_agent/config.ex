@@ -28,6 +28,9 @@ defmodule CodingAgent.Config do
   Get the agent configuration directory.
 
   Returns the path to `~/.lemon/agent` where global agent configuration is stored.
+  This can be overridden with:
+  - `LEMON_AGENT_DIR` environment variable
+  - `config :coding_agent, :agent_dir, "/path"`
 
   ## Examples
 
@@ -35,7 +38,11 @@ defmodule CodingAgent.Config do
       "/home/user/.lemon/agent"
   """
   @spec agent_dir() :: String.t()
-  def agent_dir, do: Path.join(System.user_home!(), ".lemon/agent")
+  def agent_dir do
+    System.get_env("LEMON_AGENT_DIR") ||
+      Application.get_env(:coding_agent, :agent_dir) ||
+      Path.join(System.user_home!(), ".lemon/agent")
+  end
 
   @doc """
   Get the global settings file path.

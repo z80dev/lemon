@@ -40,12 +40,14 @@ defmodule LemonRouter.RunProcess do
   Abort this run process.
   """
   @spec abort(pid() | binary(), reason :: term()) :: :ok
-  def abort(pid, reason \\ :user_requested) when is_pid(pid) do
-    GenServer.cast(pid, {:abort, reason})
+  def abort(pid_or_run_id, reason \\ :user_requested)
+
+  def abort(pid_or_run_id, reason) when is_pid(pid_or_run_id) do
+    GenServer.cast(pid_or_run_id, {:abort, reason})
   end
 
-  def abort(run_id, reason) when is_binary(run_id) do
-    case Registry.lookup(LemonRouter.RunRegistry, run_id) do
+  def abort(pid_or_run_id, reason) when is_binary(pid_or_run_id) do
+    case Registry.lookup(LemonRouter.RunRegistry, pid_or_run_id) do
       [{pid, _}] -> abort(pid, reason)
       _ -> :ok
     end
@@ -56,9 +58,6 @@ defmodule LemonRouter.RunProcess do
     # Subscribe to run events
     Bus.subscribe(Bus.run_topic(run_id))
 
-    # Register in session registry
-    Registry.register(LemonRouter.SessionRegistry, session_key, %{run_id: run_id})
-
     state = %{
       run_id: run_id,
       session_key: session_key,
@@ -66,7 +65,8 @@ defmodule LemonRouter.RunProcess do
       start_ts_ms: LemonCore.Clock.now_ms(),
       aborted: false,
       completed: false,
-      saw_delta: false
+      saw_delta: false,
+      session_registered?: false
     }
 
     # Submit to gateway
@@ -83,6 +83,38 @@ defmodule LemonRouter.RunProcess do
   end
 
   # Handle run events from Bus
+  def handle_info(%LemonCore.Event{type: :run_started} = event, state) do
+    # Mark this run as the currently active run for the session.
+    #
+    # Note: strict single-flight is enforced by LemonGateway.ThreadWorker, which
+    # serializes runs per session_key (scheduler thread_key is `{:session, session_key}`).
+    if state.session_registered? do
+      Bus.broadcast(Bus.session_topic(state.session_key), event)
+      {:noreply, state}
+    else
+      case Registry.register(LemonRouter.SessionRegistry, state.session_key, %{run_id: state.run_id}) do
+        {:ok, _pid} ->
+          Bus.broadcast(Bus.session_topic(state.session_key), event)
+          {:noreply, %{state | session_registered?: true}}
+
+        {:error, {:already_registered, _pid}} ->
+          Logger.warning(
+            "SessionRegistry already has an active run for session_key=#{inspect(state.session_key)}; " <>
+              "run_id=#{inspect(state.run_id)} violates strict single-flight; cancelling this run"
+          )
+
+          # Don't forward events into the session topic for a non-active run; otherwise
+          # clients see interleaved streams for a single session_key.
+          if Code.ensure_loaded?(LemonGateway.Runtime) and
+               function_exported?(LemonGateway.Runtime, :cancel_by_run_id, 2) do
+            LemonGateway.Runtime.cancel_by_run_id(state.run_id, :single_flight_violation)
+          end
+
+          {:stop, :normal, state}
+      end
+    end
+  end
+
   def handle_info(%LemonCore.Event{type: :run_completed} = event, state) do
     Logger.debug("RunProcess #{state.run_id} completed")
 
@@ -155,9 +187,12 @@ defmodule LemonRouter.RunProcess do
     else
       Logger.debug("RunProcess #{state.run_id} aborting: #{inspect(reason)}")
 
-      # Signal abort to gateway
-      # Note: We rely on the gateway's abort mechanism
-      LemonRouter.Router.abort_run(state.run_id, reason)
+      # Best-effort cancel of the gateway run. This does not currently remove
+      # queued jobs for the same session_key; it only cancels the in-flight run.
+      if Code.ensure_loaded?(LemonGateway.Runtime) and
+           function_exported?(LemonGateway.Runtime, :cancel_by_run_id, 2) do
+        LemonGateway.Runtime.cancel_by_run_id(state.run_id, reason)
+      end
 
       {:noreply, %{state | aborted: true}}
     end
@@ -179,7 +214,10 @@ defmodule LemonRouter.RunProcess do
 
       # Best-effort abort of the gateway run on abnormal termination
       try do
-        LemonGateway.Scheduler.abort(state.run_id, :run_process_terminated)
+        if Code.ensure_loaded?(LemonGateway.Runtime) and
+             function_exported?(LemonGateway.Runtime, :cancel_by_run_id, 2) do
+          LemonGateway.Runtime.cancel_by_run_id(state.run_id, :run_process_terminated)
+        end
       rescue
         _ -> :ok
       end
@@ -358,10 +396,6 @@ defmodule LemonRouter.RunProcess do
 
   # Unsubscribe control-plane EventBridge from run events
   defp unsubscribe_event_bridge(run_id) do
-    if Code.ensure_loaded?(LemonControlPlane.EventBridge) do
-      LemonControlPlane.EventBridge.unsubscribe_run(run_id)
-    end
-  rescue
-    _ -> :ok
+    LemonCore.EventBridge.unsubscribe_run(run_id)
   end
 end

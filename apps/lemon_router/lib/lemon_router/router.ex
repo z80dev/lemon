@@ -15,8 +15,8 @@ defmodule LemonRouter.Router do
 
   Normalizes the message and submits it to the orchestrator.
   """
-  @spec handle_inbound(LemonRouter.InboundMessage.t()) :: :ok
-  def handle_inbound(%LemonRouter.InboundMessage{} = msg) do
+  @spec handle_inbound(LemonCore.InboundMessage.t()) :: :ok
+  def handle_inbound(%LemonCore.InboundMessage{} = msg) do
     # Emit inbound telemetry
     emit_inbound_telemetry(msg)
 
@@ -52,13 +52,11 @@ defmodule LemonRouter.Router do
   end
 
   defp emit_inbound_telemetry(msg) do
-    if Code.ensure_loaded?(LemonCore.Telemetry) do
-      LemonCore.Telemetry.channel_inbound(msg.channel_id, %{
-        account_id: msg.account_id,
-        peer_kind: msg.peer.kind,
-        agent_id: msg.meta[:agent_id] || "default"
-      })
-    end
+    LemonCore.Telemetry.channel_inbound(msg.channel_id, %{
+      account_id: msg.account_id,
+      peer_kind: msg.peer.kind,
+      agent_id: msg.meta[:agent_id] || "default"
+    })
   rescue
     _ -> :ok
   end
@@ -99,13 +97,15 @@ defmodule LemonRouter.Router do
   @spec abort(session_key :: binary(), reason :: term()) :: :ok
   def abort(session_key, reason \\ :user_requested) do
     # Find active run for session
-    case Registry.lookup(LemonRouter.SessionRegistry, session_key) do
-      [{_pid, %{run_id: run_id}}] ->
-        abort_run(run_id, reason)
+    LemonRouter.SessionRegistry
+    |> Registry.lookup(session_key)
+    |> Enum.reduce(MapSet.new(), fn
+      {_pid, %{run_id: run_id}}, acc when is_binary(run_id) -> MapSet.put(acc, run_id)
+      _, acc -> acc
+    end)
+    |> Enum.each(&abort_run(&1, reason))
 
-      _ ->
-        :ok
-    end
+    :ok
   end
 
   @doc """

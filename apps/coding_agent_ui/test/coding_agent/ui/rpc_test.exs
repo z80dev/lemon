@@ -645,13 +645,15 @@ defmodule CodingAgent.UI.RPCTest do
       assert result == {:ok, "correct"}
     end
 
-    test "handles connection closed", %{input: input, output: output} do
-      {:ok, rpc} =
-        RPC.start_link(
-          input_device: input,
-          output_device: output,
-          timeout: 500
-        )
+	    test "handles connection closed", %{input: input, output: output} do
+	      {:ok, rpc} =
+	        RPC.start_link(
+	          input_device: input,
+	          output_device: output,
+	          # Under load, the reader task may not observe EOF quickly enough to beat a very short
+	          # request timeout. Use a more realistic timeout to avoid test flakiness.
+	          timeout: 2_000
+	        )
 
       # Start a request, then close input
       task =

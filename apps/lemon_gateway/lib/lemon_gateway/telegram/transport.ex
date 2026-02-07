@@ -21,15 +21,13 @@ defmodule LemonGateway.Telegram.Transport do
   @default_debounce_ms 1_000
 
   def start_link(opts) do
-    # Defense-in-depth: never run the legacy Telegram poller if the lemon_channels-based
-    # Telegram transport is active. Having both will double-submit jobs and can surface
-    # as "out of nowhere" late replies (a second run finishing later).
+    # Legacy transport is intentionally disabled. Telegram polling is owned by
+    # lemon_channels (LemonChannels.Adapters.Telegram.Transport).
+    #
+    # Keep an escape hatch for tests/dev via `force: true`.
     force = Keyword.get(opts || [], :force, false)
 
-    if not force and Code.ensure_loaded?(LemonChannels.Adapters.Telegram.Transport) and
-         is_pid(Process.whereis(LemonChannels.Adapters.Telegram.Transport)) do
-      :ignore
-    else
+    if force do
       config =
         base_telegram_config()
         |> merge_config(Application.get_env(:lemon_gateway, :telegram))
@@ -41,6 +39,12 @@ defmodule LemonGateway.Telegram.Transport do
       else
         :ignore
       end
+    else
+      Logger.warning(
+        "Legacy Telegram transport is disabled; use lemon_channels Telegram adapter instead"
+      )
+
+      :ignore
     end
   end
 
@@ -1482,11 +1486,7 @@ defmodule LemonGateway.Telegram.Transport do
   defp decision_from_str(_), do: :deny
 
   defp maybe_resolve_approval(approval_id, decision) do
-    if Code.ensure_loaded?(LemonRouter.ApprovalsBridge) do
-      LemonRouter.ApprovalsBridge.resolve(approval_id, decision)
-    end
-
-    :ok
+    LemonCore.ExecApprovals.resolve(approval_id, decision)
   rescue
     _ -> :ok
   end

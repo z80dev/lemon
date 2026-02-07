@@ -15,6 +15,32 @@ defmodule LemonChannels.OutboxRetentionTest do
   @default_peer %{kind: :dm, id: "test-user", thread_id: nil}
 
   setup do
+    # Start Registry if not running (Outbox delivery path expects it)
+    case Process.whereis(LemonChannels.Registry) do
+      nil ->
+        {:ok, reg_pid} = LemonChannels.Registry.start_link([])
+
+        on_exit(fn ->
+          if Process.alive?(reg_pid), do: GenServer.stop(reg_pid)
+        end)
+
+      _ ->
+        :ok
+    end
+
+    # Start Dedupe if not running (Outbox enqueue path checks idempotency)
+    case Process.whereis(LemonChannels.Outbox.Dedupe) do
+      nil ->
+        {:ok, dedupe_pid} = LemonChannels.Outbox.Dedupe.start_link([])
+
+        on_exit(fn ->
+          if Process.alive?(dedupe_pid), do: GenServer.stop(dedupe_pid)
+        end)
+
+      _ ->
+        :ok
+    end
+
     # Start RateLimiter if not running
     case Process.whereis(RateLimiter) do
       nil ->

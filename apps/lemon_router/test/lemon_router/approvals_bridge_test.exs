@@ -13,7 +13,7 @@ defmodule LemonRouter.ApprovalsBridgeTest do
   # Start the required dependencies before tests
   setup do
     # Ensure LemonGateway.Store is running
-    case Process.whereis(LemonGateway.Store) do
+    case Process.whereis(LemonCore.Store) do
       nil ->
         {:ok, _} = LemonGateway.Store.start_link([])
       _pid ->

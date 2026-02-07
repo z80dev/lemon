@@ -6,7 +6,8 @@ defmodule LemonCore.Application do
   @impl true
   def start(_type, _args) do
     children = [
-      {Phoenix.PubSub, name: LemonCore.PubSub}
+      {Phoenix.PubSub, name: LemonCore.PubSub},
+      LemonCore.Store
     ]
 
     opts = [strategy: :one_for_one, name: LemonCore.Supervisor]

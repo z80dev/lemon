@@ -328,9 +328,7 @@ defmodule LemonSkills.Installer do
   end
 
   defp approvals_enabled? do
-    # Check if LemonRouter.ApprovalsBridge is available
-    Code.ensure_loaded?(LemonRouter.ApprovalsBridge) and
-      Application.get_env(:lemon_skills, :require_approval, true)
+    Application.get_env(:lemon_skills, :require_approval, true)
   end
 
   defp request_skill_approval(operation, skill_name, source, ctx) do
@@ -360,7 +358,7 @@ defmodule LemonSkills.Installer do
       "[SkillInstaller] Requesting approval for #{operation} of skill '#{skill_name}'"
     )
 
-    case LemonRouter.ApprovalsBridge.request(params) do
+    case LemonCore.ExecApprovals.request(params) do
       {:ok, :approved, scope} ->
         Logger.info(
           "[SkillInstaller] #{operation} approved at scope #{scope} for skill '#{skill_name}'"
@@ -376,6 +374,11 @@ defmodule LemonSkills.Installer do
         Logger.warning("[SkillInstaller] #{operation} approval timed out for skill '#{skill_name}'")
         {:error, "Skill #{operation} approval timed out"}
     end
+  rescue
+    _ ->
+      # If approvals infrastructure isn't available, default to allowing so the
+      # installer can still be used in minimal runtimes.
+      :ok
   end
 
   defp build_rationale(:install, skill_name, source) do

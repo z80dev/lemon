@@ -3,7 +3,7 @@ defmodule LemonChannels.Adapters.Telegram.Inbound do
   Inbound message normalization for Telegram.
   """
 
-  alias LemonRouter.InboundMessage
+  alias LemonCore.InboundMessage
 
   @doc """
   Normalize a raw Telegram update to an InboundMessage.

@@ -115,10 +115,7 @@ defmodule LemonChannels.Application do
   """
   @spec stop_adapter(module()) :: :ok | {:error, term()}
   def stop_adapter(adapter_module) do
-    # Find the adapter process
-    adapter_id = adapter_module.id()
-
-    case find_adapter_pid(adapter_id) do
+    case find_adapter_pid(adapter_module) do
       nil ->
         {:error, :not_running}
 
@@ -127,17 +124,16 @@ defmodule LemonChannels.Application do
     end
   end
 
-  defp find_adapter_pid(adapter_id) do
+  defp find_adapter_pid(adapter_module) when is_atom(adapter_module) do
     # Search for the adapter in the supervisor children
     children = DynamicSupervisor.which_children(LemonChannels.AdapterSupervisor)
 
     Enum.find_value(children, fn
-      {^adapter_id, pid, _type, _modules} when is_pid(pid) -> pid
-      {_id, pid, _type, [module]} when is_pid(pid) ->
-        if function_exported?(module, :id, 0) and module.id() == adapter_id do
-          pid
-        end
-      _ -> nil
+      {^adapter_module, pid, _type, _modules} when is_pid(pid) ->
+        pid
+
+      _ ->
+        nil
     end)
   end
 end

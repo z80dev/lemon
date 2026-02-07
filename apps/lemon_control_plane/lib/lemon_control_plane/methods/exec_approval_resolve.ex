@@ -31,7 +31,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalResolve do
         if is_nil(decision_atom) do
           {:error, {:invalid_request, "Invalid decision. Must be one of: approve_once, approve_session, approve_agent, approve_global, deny", nil}}
         else
-          LemonRouter.ApprovalsBridge.resolve(approval_id, decision_atom)
+          LemonCore.ExecApprovals.resolve(approval_id, decision_atom)
 
           {:ok, %{
             "resolved" => true,

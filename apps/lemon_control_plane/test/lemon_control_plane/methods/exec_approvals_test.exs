@@ -10,7 +10,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
 
   setup do
     # Ensure LemonGateway.Store is running
-    case Process.whereis(LemonGateway.Store) do
+    case Process.whereis(LemonCore.Store) do
       nil ->
         {:ok, _} = LemonGateway.Store.start_link([])
 

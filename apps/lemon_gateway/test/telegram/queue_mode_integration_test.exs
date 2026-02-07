@@ -224,6 +224,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
     _ = Application.stop(:lemon_gateway)
     _ = Application.stop(:lemon_router)
     _ = Application.stop(:lemon_channels)
+    _ = Application.stop(:lemon_core)
 
     # Clean up any existing agents
     MockTelegramAPI.stop()
@@ -237,7 +238,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       MockTelegramAPI.stop()
       JobCapturingEngine.stop()
       Application.delete_env(:lemon_gateway, LemonGateway.Config)
-      Application.delete_env(:lemon_gateway, LemonGateway.Store)
+      Application.delete_env(:lemon_core, LemonCore.Store)
       Application.delete_env(:lemon_gateway, :config_path)
       Application.delete_env(:lemon_gateway, :telegram)
       Application.delete_env(:lemon_gateway, :transports)
@@ -252,6 +253,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
     _ = Application.stop(:lemon_gateway)
     _ = Application.stop(:lemon_router)
     _ = Application.stop(:lemon_channels)
+    _ = Application.stop(:lemon_core)
 
     # Isolate Telegram poller file locks from any locally running gateway process (and from other tests).
     lock_dir =
@@ -290,8 +292,8 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
     Application.put_env(:lemon_gateway, :config_path, "/nonexistent/path.toml")
     Application.put_env(:lemon_gateway, Config, config)
     # Avoid leaking state across tests via the default JsonlBackend (config/config.exs).
-    Application.put_env(:lemon_gateway, LemonGateway.Store,
-      backend: LemonGateway.Store.EtsBackend
+    Application.put_env(:lemon_core, LemonCore.Store,
+      backend: LemonCore.Store.EtsBackend
     )
 
     Application.put_env(:lemon_gateway, :engines, [
@@ -309,6 +311,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
     {:ok, _} = Application.ensure_all_started(:lemon_router)
+    {:ok, _} = Application.ensure_all_started(:lemon_channels)
 
     # Ensure the channels-based Telegram poller is actually running and using our mock API.
     poller_pid =

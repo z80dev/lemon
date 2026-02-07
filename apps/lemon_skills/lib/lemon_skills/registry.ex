@@ -55,6 +55,30 @@ defmodule LemonSkills.Registry do
   end
 
   @doc """
+  Return counts useful for status UIs.
+
+  ## Options
+
+  - `:cwd` - Project working directory (optional)
+  """
+  @spec counts(keyword()) :: %{installed: non_neg_integer(), enabled: non_neg_integer()}
+  def counts(opts \\ []) do
+    cwd = Keyword.get(opts, :cwd)
+
+    skills = list(cwd: cwd)
+    installed = length(skills)
+
+    enabled =
+      Enum.count(skills, fn entry ->
+        entry.enabled and not Config.skill_disabled?(entry.key, cwd)
+      end)
+
+    %{installed: installed, enabled: enabled}
+  rescue
+    _ -> %{installed: 0, enabled: 0}
+  end
+
+  @doc """
   Get a skill by key.
 
   ## Parameters

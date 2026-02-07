@@ -21,6 +21,25 @@ export interface TUIConfig {
 }
 
 /**
+ * Control plane configuration (remote/server mode)
+ *
+ * Example (~/.lemon/config.toml):
+ * [control_plane]
+ * ws_url = "ws://localhost:4040/ws"
+ * token = "..."
+ * role = "operator"
+ * scopes = ["read", "write"]
+ * client_id = "lemon-tui"
+ */
+export interface ControlPlaneConfig {
+  ws_url?: string;
+  token?: string;
+  role?: string;
+  scopes?: string[];
+  client_id?: string;
+}
+
+/**
  * Main Lemon configuration file structure (~/.lemon/config.toml)
  */
 export interface AgentConfig {
@@ -32,6 +51,7 @@ export interface LemonConfig {
   providers?: Record<string, ProviderConfig>;
   agent?: AgentConfig;
   tui?: TUIConfig;
+  control_plane?: ControlPlaneConfig;
 }
 
 /**
@@ -44,6 +64,11 @@ export interface ResolvedConfig {
   baseUrl?: string;
   theme: string;
   debug: boolean;
+  wsUrl?: string;
+  wsToken?: string;
+  wsRole?: string;
+  wsScopes?: string[];
+  wsClientId?: string;
 }
 
 export function parseModelSpec(model?: string): { provider?: string; model?: string } {
@@ -181,6 +206,7 @@ function mergeConfig(base: LemonConfig, override: Partial<LemonConfig>): LemonCo
       ...overrideAgent,
     },
     tui: { ...base.tui, ...override.tui },
+    control_plane: { ...base.control_plane, ...override.control_plane },
   };
 }
 
@@ -214,6 +240,7 @@ export function resolveConfig(cliArgs?: {
 }): ResolvedConfig {
   const config = loadConfigSync(cliArgs?.cwd);
   const agentConfig = config.agent || {};
+  const controlPlaneConfig = config.control_plane || {};
 
   // Determine provider (CLI > env > config)
   const provider = cliArgs?.provider
@@ -251,6 +278,15 @@ export function resolveConfig(cliArgs?: {
     ?? config.tui?.debug
     ?? false;
 
+  const wsUrl = process.env.LEMON_WS_URL || controlPlaneConfig.ws_url;
+  const wsToken = process.env.LEMON_WS_TOKEN || controlPlaneConfig.token;
+  const wsRole = process.env.LEMON_WS_ROLE || controlPlaneConfig.role;
+  const wsScopes =
+    process.env.LEMON_WS_SCOPES
+      ? process.env.LEMON_WS_SCOPES.split(',').map((s) => s.trim()).filter(Boolean)
+      : controlPlaneConfig.scopes;
+  const wsClientId = process.env.LEMON_WS_CLIENT_ID || controlPlaneConfig.client_id;
+
   return {
     provider,
     model,
@@ -258,6 +294,11 @@ export function resolveConfig(cliArgs?: {
     baseUrl,
     theme,
     debug,
+    wsUrl,
+    wsToken,
+    wsRole,
+    wsScopes,
+    wsClientId,
   };
 }
 

@@ -31,7 +31,19 @@ defmodule LemonGateway.Run do
   alias LemonGateway.Types.{Job, ResumeToken}
 
   def start_link(args) do
-    GenServer.start_link(__MODULE__, args)
+    # Allow cancel-by-run-id (used by router/control-plane) by registering the run
+    # process under LemonGateway.RunRegistry when job.run_id is present.
+    name =
+      case args do
+        %{job: %Job{run_id: run_id}} when is_binary(run_id) and run_id != "" ->
+          {:via, Registry, {LemonGateway.RunRegistry, run_id}}
+
+        _ ->
+          nil
+      end
+
+    opts = if name, do: [name: name], else: []
+    GenServer.start_link(__MODULE__, args, opts)
   end
 
   @impl true
