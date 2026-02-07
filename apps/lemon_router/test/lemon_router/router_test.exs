@@ -41,7 +41,8 @@ defmodule LemonRouter.RouterTest do
   end
 
   test "abort/2 aborts the active run registered for the session" do
-    session_key = "agent:test:main"
+    # Avoid flakiness in umbrella runs: other tests may also use SessionRegistry.
+    session_key = "agent:test:main:#{System.unique_integer([:positive])}"
     run_id1 = "run_#{System.unique_integer([:positive])}"
 
     _pid1 = start_registered_run(self(), session_key, run_id1)
