@@ -54,7 +54,18 @@ defmodule LemonRouter.RunProcess do
   end
 
   @impl true
-  def init(%{run_id: run_id, session_key: session_key, job: job}) do
+  def init(opts) do
+    run_id = opts[:run_id]
+    session_key = opts[:session_key]
+    job = opts[:job]
+
+    # For tests and partial-boot scenarios, allow skipping gateway submission.
+    submit_to_gateway? =
+      case opts[:submit_to_gateway?] do
+        nil -> true
+        other -> other
+      end
+
     # Subscribe to run events
     Bus.subscribe(Bus.run_topic(run_id))
 
@@ -66,19 +77,30 @@ defmodule LemonRouter.RunProcess do
       aborted: false,
       completed: false,
       saw_delta: false,
-      session_registered?: false
+      session_registered?: false,
+      submit_to_gateway?: submit_to_gateway?
     }
 
     # Submit to gateway
-    send(self(), :submit_to_gateway)
+    if submit_to_gateway? do
+      send(self(), :submit_to_gateway)
+    end
 
     {:ok, state}
   end
 
   @impl true
   def handle_info(:submit_to_gateway, state) do
-    # Submit job to gateway scheduler
-    LemonGateway.Scheduler.submit(state.job)
+    # Submit job to gateway scheduler.
+    #
+    # In umbrella `mix test`, other suites may stop/start gateway. Avoid crashing
+    # if the scheduler isn't running; the RunProcess can still process bus events.
+    if is_pid(Process.whereis(LemonGateway.Scheduler)) do
+      LemonGateway.Scheduler.submit(state.job)
+    else
+      Logger.debug("Gateway scheduler not running; skipping submit for run_id=#{inspect(state.run_id)}")
+    end
+
     {:noreply, state}
   end
 
@@ -92,7 +114,9 @@ defmodule LemonRouter.RunProcess do
       Bus.broadcast(Bus.session_topic(state.session_key), event)
       {:noreply, state}
     else
-      case Registry.register(LemonRouter.SessionRegistry, state.session_key, %{run_id: state.run_id}) do
+      case Registry.register(LemonRouter.SessionRegistry, state.session_key, %{
+             run_id: state.run_id
+           }) do
         {:ok, _pid} ->
           Bus.broadcast(Bus.session_topic(state.session_key), event)
           {:noreply, %{state | session_registered?: true}}
@@ -105,10 +129,7 @@ defmodule LemonRouter.RunProcess do
 
           # Don't forward events into the session topic for a non-active run; otherwise
           # clients see interleaved streams for a single session_key.
-          if Code.ensure_loaded?(LemonGateway.Runtime) and
-               function_exported?(LemonGateway.Runtime, :cancel_by_run_id, 2) do
-            LemonGateway.Runtime.cancel_by_run_id(state.run_id, :single_flight_violation)
-          end
+          LemonGateway.Runtime.cancel_by_run_id(state.run_id, :single_flight_violation)
 
           {:stop, :normal, state}
       end
@@ -189,10 +210,7 @@ defmodule LemonRouter.RunProcess do
 
       # Best-effort cancel of the gateway run. This does not currently remove
       # queued jobs for the same session_key; it only cancels the in-flight run.
-      if Code.ensure_loaded?(LemonGateway.Runtime) and
-           function_exported?(LemonGateway.Runtime, :cancel_by_run_id, 2) do
-        LemonGateway.Runtime.cancel_by_run_id(state.run_id, reason)
-      end
+      LemonGateway.Runtime.cancel_by_run_id(state.run_id, reason)
 
       {:noreply, %{state | aborted: true}}
     end
@@ -214,10 +232,7 @@ defmodule LemonRouter.RunProcess do
 
       # Best-effort abort of the gateway run on abnormal termination
       try do
-        if Code.ensure_loaded?(LemonGateway.Runtime) and
-             function_exported?(LemonGateway.Runtime, :cancel_by_run_id, 2) do
-          LemonGateway.Runtime.cancel_by_run_id(state.run_id, :run_process_terminated)
-        end
+        LemonGateway.Runtime.cancel_by_run_id(state.run_id, :run_process_terminated)
       rescue
         _ -> :ok
       end
@@ -240,14 +255,21 @@ defmodule LemonRouter.RunProcess do
         # Build meta from job for progress_msg_id
         meta = extract_coalescer_meta(state.job)
 
-        LemonRouter.StreamCoalescer.ingest_delta(
-          state.session_key,
-          channel_id,
-          state.run_id,
-          delta.seq,
-          delta.text,
-          meta: meta
-        )
+        seq = Map.get(delta, :seq)
+        text = Map.get(delta, :text)
+
+        if is_integer(seq) and is_binary(text) do
+          LemonRouter.StreamCoalescer.ingest_delta(
+            state.session_key,
+            channel_id,
+            state.run_id,
+            seq,
+            text,
+            meta: meta
+          )
+        else
+          :ok
+        end
 
       _ ->
         # Not a channel session, no coalescing needed
@@ -265,6 +287,7 @@ defmodule LemonRouter.RunProcess do
       user_msg_id: meta[:user_msg_id]
     }
   end
+
   defp extract_coalescer_meta(_), do: %{}
 
   # If the run completed without streaming deltas, emit a single delta with the final answer.
@@ -278,15 +301,16 @@ defmodule LemonRouter.RunProcess do
       if channel_id == "telegram" do
         :ok
       else
-      meta = extract_coalescer_meta(state.job)
-      LemonRouter.StreamCoalescer.ingest_delta(
-        state.session_key,
-        channel_id,
-        state.run_id,
-        1,
-        answer,
-        meta: meta
-      )
+        meta = extract_coalescer_meta(state.job)
+
+        LemonRouter.StreamCoalescer.ingest_delta(
+          state.session_key,
+          channel_id,
+          state.run_id,
+          1,
+          answer,
+          meta: meta
+        )
       end
     else
       _ -> :ok
@@ -295,16 +319,54 @@ defmodule LemonRouter.RunProcess do
     _ -> :ok
   end
 
-  defp extract_completed_answer(%LemonCore.Event{payload: %{completed: %{answer: answer}}}), do: answer
+  defp extract_completed_answer(%LemonCore.Event{payload: %{completed: %{answer: answer}}}),
+    do: answer
+
   defp extract_completed_answer(%LemonCore.Event{payload: %{answer: answer}}), do: answer
-  defp extract_completed_answer(%LemonCore.Event{payload: %LemonGateway.Event.Completed{answer: answer}}), do: answer
   defp extract_completed_answer(_), do: nil
 
+  defp extract_completed_ok_and_error(%LemonCore.Event{payload: %{completed: %{ok: ok} = c}})
+       when is_boolean(ok) do
+    {ok, Map.get(c, :error) || Map.get(c, "error")}
+  end
+
+  defp extract_completed_ok_and_error(%LemonCore.Event{payload: %{ok: ok} = p})
+       when is_boolean(ok) do
+    {ok, Map.get(p, :error) || Map.get(p, "error")}
+  end
+
+  defp extract_completed_ok_and_error(%LemonCore.Event{
+         payload: %LemonGateway.Event.Completed{ok: ok, error: err}
+       })
+       when is_boolean(ok),
+       do: {ok, err}
+
+  defp extract_completed_ok_and_error(_), do: {true, nil}
+
+  defp format_run_error(nil), do: "unknown error"
+  defp format_run_error(e) when is_binary(e), do: e
+  defp format_run_error(e) when is_atom(e), do: Atom.to_string(e)
+  defp format_run_error(e), do: inspect(e)
+
   defp maybe_finalize_stream_output(state, %LemonCore.Event{} = event) do
-    with %{kind: :channel_peer, channel_id: "telegram"} <- LemonRouter.SessionKey.parse(state.session_key),
-         true <- Code.ensure_loaded?(LemonRouter.StreamCoalescer) do
+    with %{kind: :channel_peer, channel_id: "telegram"} <-
+           LemonRouter.SessionKey.parse(state.session_key) do
       meta = extract_coalescer_meta(state.job)
-      final_text = extract_completed_answer(event)
+
+      final_text =
+        case extract_completed_answer(event) do
+          answer when is_binary(answer) and answer != "" ->
+            answer
+
+          _ ->
+            case extract_completed_ok_and_error(event) do
+              {false, err} ->
+                "Run failed: #{format_run_error(err)}"
+
+              _ ->
+                nil
+            end
+        end
 
       LemonRouter.StreamCoalescer.finalize_run(
         state.session_key,
@@ -324,17 +386,20 @@ defmodule LemonRouter.RunProcess do
 
   defp finalize_tool_status(state, %LemonCore.Event{} = event) do
     with %{kind: :channel_peer, channel_id: channel_id} when not is_nil(channel_id) <-
-           LemonRouter.SessionKey.parse(state.session_key),
-         true <- Code.ensure_loaded?(LemonRouter.ToolStatusCoalescer) do
+           LemonRouter.SessionKey.parse(state.session_key) do
       ok? =
         case event.payload do
           %{completed: %{ok: ok}} -> ok == true
-          %LemonGateway.Event.Completed{ok: ok} -> ok == true
           %{ok: ok} -> ok == true
           _ -> false
         end
 
-      LemonRouter.ToolStatusCoalescer.finalize_run(state.session_key, channel_id, state.run_id, ok?)
+      LemonRouter.ToolStatusCoalescer.finalize_run(
+        state.session_key,
+        channel_id,
+        state.run_id,
+        ok?
+      )
     end
 
     :ok
@@ -347,15 +412,13 @@ defmodule LemonRouter.RunProcess do
       %{kind: :channel_peer, channel_id: channel_id} when not is_nil(channel_id) ->
         meta = extract_coalescer_meta(state.job)
 
-        if Code.ensure_loaded?(LemonRouter.ToolStatusCoalescer) do
-          LemonRouter.ToolStatusCoalescer.ingest_action(
-            state.session_key,
-            channel_id,
-            state.run_id,
-            action_ev,
-            meta: meta
-          )
-        end
+        LemonRouter.ToolStatusCoalescer.ingest_action(
+          state.session_key,
+          channel_id,
+          state.run_id,
+          action_ev,
+          meta: meta
+        )
 
       _ ->
         :ok
@@ -369,9 +432,7 @@ defmodule LemonRouter.RunProcess do
     case LemonRouter.SessionKey.parse(state.session_key) do
       %{kind: :channel_peer, channel_id: channel_id} when not is_nil(channel_id) ->
         LemonRouter.StreamCoalescer.flush(state.session_key, channel_id)
-        if Code.ensure_loaded?(LemonRouter.ToolStatusCoalescer) do
-          LemonRouter.ToolStatusCoalescer.flush(state.session_key, channel_id)
-        end
+        LemonRouter.ToolStatusCoalescer.flush(state.session_key, channel_id)
 
       _ ->
         :ok
@@ -383,9 +444,7 @@ defmodule LemonRouter.RunProcess do
   defp flush_tool_status(state) do
     case LemonRouter.SessionKey.parse(state.session_key) do
       %{kind: :channel_peer, channel_id: channel_id} when not is_nil(channel_id) ->
-        if Code.ensure_loaded?(LemonRouter.ToolStatusCoalescer) do
-          LemonRouter.ToolStatusCoalescer.flush(state.session_key, channel_id)
-        end
+        LemonRouter.ToolStatusCoalescer.flush(state.session_key, channel_id)
 
       _ ->
         :ok

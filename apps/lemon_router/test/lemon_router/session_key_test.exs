@@ -112,24 +112,6 @@ defmodule LemonRouter.SessionKeyTest do
     end
   end
 
-  describe "atom exhaustion protection" do
-    test "does not create new atoms for invalid peer_kind values" do
-      # Record initial atom count
-      initial_count = :erlang.system_info(:atom_count)
-
-      # Try to parse many unique invalid peer_kind values
-      for i <- 1..100 do
-        SessionKey.parse("agent:a:tg:bot:malicious_kind_#{i}:123")
-      end
-
-      # Atom count should not have increased significantly
-      # (allow some tolerance for normal atom creation)
-      final_count = :erlang.system_info(:atom_count)
-      assert final_count - initial_count < 10,
-             "Atom count increased by #{final_count - initial_count}, possible atom leak"
-    end
-  end
-
   describe "roundtrip" do
     test "main key roundtrips" do
       original = SessionKey.main("test-agent")

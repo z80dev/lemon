@@ -1,68 +1,94 @@
 defmodule LemonChannels.OutboxTest do
   use ExUnit.Case, async: false
 
-  alias LemonChannels.{Outbox, OutboundPayload, Adapter}
+  alias LemonChannels.{Outbox, OutboundPayload}
 
-  # Mock adapter for testing
-  defmodule MockAdapter do
-    @behaviour Adapter
-    import Kernel, except: [send: 2]
+  defmodule TestChannelPlugin do
+    @behaviour LemonChannels.Plugin
 
     @impl true
-    def send(payload, _opts) do
-      Kernel.send(self(), {:mock_send, payload})
-      :ok
-    end
+    def id, do: "test-channel"
 
     @impl true
-    def capabilities do
+    def meta do
       %{
-        max_message_size: 4096,
-        supports_batch: false,
-        rate_limit_per_minute: 60
+        label: "Test Channel",
+        capabilities: %{
+          edit_support: false,
+          chunk_limit: 4096
+        },
+        docs: nil
       }
     end
 
     @impl true
-    def channel_id, do: "mock-channel"
+    def child_spec(_opts) do
+      %{
+        id: __MODULE__,
+        start: {Task, :start_link, [fn -> :ok end]}
+      }
+    end
+
+    @impl true
+    def normalize_inbound(_raw), do: {:error, :not_implemented}
+
+    @impl true
+    def deliver(_payload), do: {:ok, :delivered}
+
+    @impl true
+    def gateway_methods, do: []
   end
 
-  # Rate-limited adapter for testing rate limiting
-  defmodule RateLimitedAdapter do
-    @behaviour Adapter
-    import Kernel, except: [send: 2]
+  defmodule RateLimitedChannelPlugin do
+    @behaviour LemonChannels.Plugin
 
     @impl true
-    def send(_payload, _opts) do
-      {:rate_limited, 100}
-    end
+    def id, do: "rate-limited-channel"
 
     @impl true
-    def capabilities do
+    def meta do
       %{
-        max_message_size: 4096,
-        supports_batch: false,
-        rate_limit_per_minute: 1
+        label: "Rate Limited Channel",
+        capabilities: %{
+          edit_support: false,
+          chunk_limit: 4096
+        },
+        docs: nil
       }
     end
 
     @impl true
-    def channel_id, do: "rate-limited-channel"
+    def child_spec(_opts) do
+      %{
+        id: __MODULE__,
+        start: {Task, :start_link, [fn -> :ok end]}
+      }
+    end
+
+    @impl true
+    def normalize_inbound(_raw), do: {:error, :not_implemented}
+
+    @impl true
+    def deliver(_payload), do: {:ok, :delivered}
+
+    @impl true
+    def gateway_methods, do: []
   end
 
   setup do
-    # Start the Outbox if not running
-    case Process.whereis(Outbox) do
-      nil ->
-        {:ok, pid} = Outbox.start_link([])
-        on_exit(fn ->
-          if Process.alive?(pid), do: GenServer.stop(pid)
-        end)
-        {:ok, outbox_pid: pid}
-
-      pid ->
-        {:ok, outbox_pid: pid}
+    for plugin <- [TestChannelPlugin, RateLimitedChannelPlugin] do
+      case LemonChannels.Registry.register(plugin) do
+        :ok -> :ok
+        {:error, :already_registered} -> :ok
+      end
     end
+
+    on_exit(fn ->
+      _ = LemonChannels.Registry.unregister(TestChannelPlugin.id())
+      _ = LemonChannels.Registry.unregister(RateLimitedChannelPlugin.id())
+    end)
+
+    {:ok, outbox_pid: Process.whereis(Outbox)}
   end
 
   describe "enqueue/1" do
@@ -80,13 +106,14 @@ defmodule LemonChannels.OutboxTest do
     end
 
     test "accepts payload struct" do
-      payload = struct!(OutboundPayload,
-        channel_id: "ch-1",
-        account_id: "account-1",
-        peer: %{kind: :dm, id: "user-1", thread_id: nil},
-        kind: :text,
-        content: "test"
-      )
+      payload =
+        struct!(OutboundPayload,
+          channel_id: "ch-1",
+          account_id: "account-1",
+          peer: %{kind: :dm, id: "user-1", thread_id: nil},
+          kind: :text,
+          content: "test"
+        )
 
       assert {:ok, _ref} = Outbox.enqueue(payload)
     end

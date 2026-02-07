@@ -37,7 +37,7 @@ defmodule CodingAgent.SessionResourcesTest do
     }
   end
 
-  defp default_opts(tmp_dir, overrides \\ []) do
+  defp default_opts(tmp_dir, overrides) do
     Keyword.merge(
       [
         cwd: tmp_dir,

@@ -2,7 +2,7 @@
 
 Lemon is a local-first assistant and coding agent system (named after my cat) that you run on your own machine.
 
-The easiest way to use Lemon day-to-day is through **Telegram**: you talk to a bot from your phone/desktop, while LemonGateway runs locally and routes each message to an engine (native Lemon, Claude Code, Codex) and streams replies back.
+The easiest way to use Lemon day-to-day is through **Telegram**: you talk to a bot from your phone/desktop, while Lemon runs locally. Inbound/outbound messaging is handled by `lemon_channels` (Telegram adapter + outbox), runs are orchestrated by `lemon_router`, and execution is handled by `lemon_gateway` using one of the configured engines (native Lemon, Claude CLI, Codex CLI, Echo). Kimi is available as a CodingAgent `task` subagent engine.
 
 If you're here for the architecture deep-dive, jump to [What is Lemon?](#what-is-lemon).
 
@@ -148,7 +148,9 @@ default_engine = "lemon"
 [gateway.telegram]
 bot_token = "123456:token"
 allowed_chat_ids = [123456789]
+deny_unbound_chats = true
 drop_pending_updates = true
+allow_queue_override = true
 
 # Assistant profile used for Telegram chats (when no binding overrides it)
 [agents.default]
@@ -169,7 +171,7 @@ agent_id = "default"
 ```
 
 Notes:
-- `allowed_chat_ids` is your main safety rail. If you omit it, **anyone who can reach your bot can use it**.
+- Restrict who can use the bot. Set `allowed_chat_ids` and consider enabling `deny_unbound_chats` (see `docs/config.md`).
 - If you want Lemon to operate inside a specific repo, add a project and bind it (see `docs/config.md`).
 
 ### 5. Run the gateway
@@ -186,7 +188,8 @@ From this repo:
 - Queue mode override: `/steer`, `/followup`, `/interrupt`
 - Start a new session: `/new`
   - Optional: bind this chat to a repo for subsequent runs: `/new <project_id|path>`
-- Cancel a running thread: `/cancel`
+- Resume a previous CLI session (when you have a resume token): `/resume <token>`
+- Cancel a running run: reply to the bot’s `Running…` message with `/cancel`
 - Approvals: when a tool needs approval, Telegram will show inline buttons (Once / Session / Agent / Global / Deny).
 
 ## Table of Contents
@@ -472,7 +475,9 @@ lemon/
 │   └── config.exs               # Application configuration
 │
 ├── bin/                         # Executable scripts
-│   └── lemon-dev                # Development launcher script
+│   ├── lemon-dev                # Development launcher script (builds + launches the TUI)
+│   ├── lemon-gateway            # Starts the Telegram runtime (router + gateway + channels)
+│   └── diag                     # Small diagnostic helper (Python)
 │
 ├── apps/                        # Umbrella applications (11 apps)
 │   │
@@ -492,8 +497,9 @@ lemon/
 │   │       ├── context.ex       # Context management and truncation
 │   │       ├── event_stream.ex  # Bounded event streams
 │   │       └── cli_runners/     # CLI runner infrastructure
-│   │           ├── codex_runner.ex   # Codex CLI wrapper
-│   │           ├── claude_runner.ex  # Claude CLI wrapper
+│   │           ├── codex_runner.ex, codex_schema.ex, codex_subagent.ex
+│   │           ├── claude_runner.ex, claude_schema.ex, claude_subagent.ex
+│   │           ├── kimi_runner.ex, kimi_schema.ex, kimi_subagent.ex
 │   │           └── jsonl_runner.ex   # Base JSONL subprocess runner
 │   │
 │   │  # ─── Agent Execution ───────────────────────────────────
@@ -548,7 +554,7 @@ lemon/
 │   │       │   ├── claude.ex    # Claude CLI engine
 │   │       │   ├── codex.ex     # Codex CLI engine
 │   │       │   └── cli_adapter.ex
-│   │       └── telegram/        # Telegram bot integration
+│   │       └── telegram/        # Legacy Telegram transport (disabled by default; kept for tests/dev)
 │   │
 │   ├── lemon_router/            # Run orchestration and routing
 │   │   └── lib/lemon_router/
@@ -762,12 +768,13 @@ end
 **Supported integrations:**
 - **CodexRunner / CodexSubagent**: Codex CLI (`codex exec`) with JSONL streaming
 - **ClaudeRunner / ClaudeSubagent**: Claude Code CLI (`claude -p --output-format stream-json`)
-- **LemonRunner / LemonSubagent**: Native `CodingAgent.Session` as a runner backend (no subprocess)
+- **KimiRunner / KimiSubagent**: Kimi CLI (`kimi --print --output-format stream-json`)
+- **LemonRunner / LemonSubagent**: Native `CodingAgent.Session` runner backend (no subprocess, implemented in `CodingAgent.CliRunners`)
 - **JsonlRunner**: Base infrastructure for implementing new CLI runners
 
 **Where they’re used:**
 - LemonGateway engines use the `*Runner` modules (via `LemonGateway.Engines.CliAdapter`) to stream engine events to clients.
-- The CodingAgent `task` tool uses the `*Subagent` modules to run delegated subtasks and surface progress/answers back to the parent session.
+- The CodingAgent `task` tool uses `CodexSubagent` / `ClaudeSubagent` / `KimiSubagent` for CLI engines, and starts a new `CodingAgent.Session` for the internal engine.
 
 #### Task Tool Integration
 
@@ -803,7 +810,7 @@ The **Task tool** in CodingAgent uses CLI runners to delegate subtasks to differ
 
 **How it works:**
 
-1. **Internal engine** (default): Spawns a new `CodingAgent.Session` as a subprocess
+1. **Internal engine** (default): Starts a new `CodingAgent.Session` (in-process GenServer)
 2. **Codex engine**: Uses `CodexSubagent` to spawn the Codex CLI (`codex exec`)
 3. **Claude engine**: Uses `ClaudeSubagent` to spawn Claude CLI (`claude -p`)
 4. **Kimi engine**: Uses Kimi CLI (`kimi --print --output-format stream-json`)
@@ -957,17 +964,15 @@ job = %LemonGateway.Types.Job{
 LemonGateway.submit(job)
 
 # Events flow through the system:
-# Job → Scheduler → ThreadWorker → Run → Engine → Events → Renderer → Output
+# Job → Scheduler → ThreadWorker → Run → Engine → Events (consumed by Router/Channels/ControlPlane)
 ```
 
 **Key Features:**
-- **Multi-Engine Support**: Lemon (default), Codex CLI, Claude CLI, Kimi, Echo
+- **Multi-Engine Support**: Lemon (default), Codex CLI, Claude CLI, Echo
 - **Job Scheduling**: Configurable concurrency with slot-based allocation
-- **Lane-Aware Scheduling**: UnifiedScheduler routes work through LaneQueue with per-lane caps
 - **Thread Workers**: Per-conversation job queues with sequential execution
 - **Resume Tokens**: Persist and continue sessions across restarts
 - **Event Streaming**: Unified event format across all engines
-- **Telegram Integration**: Bot transport with debouncing and throttling
 - **Config Loader**: Reads `~/.lemon/config.toml` (`[gateway]` section) with projects, bindings, and queue modes
 
 **Supported Engines:**
@@ -976,7 +981,6 @@ LemonGateway.submit(job)
 | Lemon | `lemon` | Native CodingAgent.Session with full tool support and steering |
 | Claude | `claude` | Claude CLI via subprocess |
 | Codex | `codex` | Codex CLI via subprocess |
-| Kimi | `kimi` | Kimi CLI via subprocess |
 | Echo | `echo` | Simple echo stub for testing |
 
 ### LemonRouter
@@ -1056,6 +1060,7 @@ LemonChannels.enqueue(%LemonChannels.OutboundPayload{
 - Normalized `InboundMessage` format
 - Edit/delete support for message updates
 - Peer kind detection (DM, group, supergroup, channel)
+- `/cancel` works by replying to the bot’s `Running…` message
 
 **Adding Custom Adapters:**
 
@@ -1234,7 +1239,11 @@ Instructions for the agent...
 
 ### Lemon TUI
 
-The Terminal UI client provides a full-featured interactive interface for interacting with the Lemon coding agent. It connects to `scripts/debug_agent_rpc.exs` over JSONL RPC (stdio) and supports real-time streaming, multi-session management, interactive overlays, keyboard shortcuts, and configurable settings.
+The Terminal UI client provides a full-featured interactive interface for interacting with the Lemon coding agent.
+
+It supports two backend modes:
+- **Local mode (default):** spawns `mix run scripts/debug_agent_rpc.exs -- ...` and communicates over JSONL (stdio)
+- **Server mode:** connects to LemonControlPlane over WebSocket (`ws://localhost:4040/ws`)
 
 #### CLI Usage
 
@@ -1291,11 +1300,20 @@ default_model = "claude-sonnet-4-20250514"
 [tui]
 theme = "lemon"
 debug = false
+
+# Optional: connect to LemonControlPlane instead of spawning a local backend
+[control_plane]
+ws_url = "ws://localhost:4040/ws"
+token = "..."
+role = "operator"
+scopes = ["read", "write"]
+client_id = "lemon-tui"
 ```
 
 Environment overrides (examples):
 - `LEMON_DEFAULT_PROVIDER`, `LEMON_DEFAULT_MODEL`, `LEMON_THEME`, `LEMON_DEBUG`
-- `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`)
+- `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `KIMI_API_KEY`)
+- Control plane (server mode): `LEMON_WS_URL`, `LEMON_WS_TOKEN`, `LEMON_WS_ROLE`, `LEMON_WS_SCOPES`, `LEMON_WS_CLIENT_ID`
 
 #### Slash Commands
 
@@ -1411,7 +1429,7 @@ Lemon includes a comprehensive orchestration runtime that coordinates subagents,
 
 ### Lane-Aware Scheduling
 
-All work in Lemon routes through a unified **LaneQueue** with per-lane concurrency caps:
+Within the CodingAgent runtime, work routes through a unified **LaneQueue** with per-lane concurrency caps (subagents and background exec). LemonGateway separately enforces global run concurrency via `gateway.max_concurrent_runs` plus per-thread serialization.
 
 ```elixir
 # Default lane configuration
@@ -1425,12 +1443,12 @@ All work in Lemon routes through a unified **LaneQueue** with per-lane concurren
 **Key Components:**
 
 - **LaneQueue** (`CodingAgent.LaneQueue`): FIFO queue with O(1) task lookups and configurable per-lane caps
-- **UnifiedScheduler** (`LemonGateway.UnifiedScheduler`): Integrates lane scheduling into LemonGateway
 - **RunGraph** (`CodingAgent.RunGraph`): Tracks parent/child relationships between runs with DETS persistence
+- `LemonGateway.UnifiedScheduler` exists but is currently not the default production scheduler (it’s primarily covered by tests).
 
 ```elixir
 # Submit work to a specific lane
-LaneQueue.run(:lemon_lane_queue, :subagent, fn -> do_work() end, %{task_id: id})
+CodingAgent.LaneQueue.run(CodingAgent.LaneQueue, :subagent, fn -> do_work() end, %{task_id: id})
 
 # All subagent spawns automatically route through :subagent lane
 # All background processes route through :background_exec lane
@@ -1508,7 +1526,7 @@ Unlike OpenClaw (which loses background sessions on restart), Lemon persists all
 %{"action" => "write", "process_id" => "hex123", "data" => "y\n"}
 
 # Kill a process
-%{"action" => "kill", "process_id" => "hex123", "signal" => "SIGTERM"}
+%{"action" => "kill", "process_id" => "hex123", "signal" => "sigterm"}
 
 # Clear completed process
 %{"action" => "clear", "process_id" => "hex123"}
@@ -1680,6 +1698,15 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 # OpenAI
 export OPENAI_API_KEY="sk-..."
 
+# OpenAI Codex (chatgpt.com backend)
+export OPENAI_CODEX_API_KEY="..."
+# or
+export CHATGPT_TOKEN="..."
+
+# Kimi
+export KIMI_API_KEY="sk-kimi-..."
+export KIMI_BASE_URL="https://api.kimi.com/coding/"
+
 # Google Generative AI
 export GOOGLE_GENERATIVE_AI_API_KEY="your-api-key"
 # or
@@ -1724,18 +1751,13 @@ dangerously_skip_permissions = true
 
 ```bash
 # Using lemon-dev (recommended)
-./bin/lemon-dev --cwd /path/to/your/project
+./bin/lemon-dev /path/to/your/project
 
 # With specific model
-./bin/lemon-dev \
-  --cwd /path/to/project \
-  --model anthropic:claude-sonnet-4-20250514
+./bin/lemon-dev /path/to/project --model anthropic:claude-sonnet-4-20250514
 
 # With custom base URL (for local models)
-./bin/lemon-dev \
-  --cwd /path/to/project \
-  --model openai:llama3.1:8b \
-  --base-url http://localhost:11434/v1
+./bin/lemon-dev /path/to/project --model openai:llama3.1:8b --base-url http://localhost:11434/v1
 ```
 
 ### Running the Web UI
@@ -1776,8 +1798,11 @@ mix test --include integration
 LemonControlPlane provides a WebSocket/HTTP server for external clients:
 
 ```bash
-# Start in IEx (starts automatically with the umbrella)
+# Start everything in IEx (umbrella starts all OTP apps, including the control plane)
 iex -S mix
+
+# Or start only the pieces you need (recommended when you don't want to boot everything)
+mix run --no-start --no-halt -e 'Application.ensure_all_started(:lemon_control_plane); Application.ensure_all_started(:lemon_router); Application.ensure_all_started(:lemon_gateway)'
 
 # The control plane listens on port 4040 by default
 # Health check: curl http://localhost:4040/healthz
@@ -1792,7 +1817,7 @@ config :lemon_control_plane, :port, 4040
 
 ### Running LemonGateway
 
-LemonGateway powers transport-based workflows (Telegram, etc.). Configure it via `~/.lemon/config.toml` under the `[gateway]` section.
+LemonGateway powers transport-based workflows (Telegram, etc.). Telegram polling and message delivery live in `lemon_channels` (Telegram adapter + outbox), but the simplest way to run the full Telegram runtime from source is `./bin/lemon-gateway` which starts `:lemon_gateway`, `:lemon_router`, and `:lemon_channels` without booting every umbrella app (for example the control plane on `:4040`).
 
 To run Telegram locally from source:
 
@@ -1812,6 +1837,8 @@ default_engine = "lemon"
 [gateway.telegram]
 bot_token = "your-telegram-bot-token"
 allowed_chat_ids = [123456789]
+deny_unbound_chats = true
+allow_queue_override = true
 # Optional: don't reply to messages that were sent while Lemon was offline.
 drop_pending_updates = true
 
@@ -1840,7 +1867,8 @@ From Telegram:
 - Engine override: `/lemon`, `/claude`, `/codex` (at the start of a message)
 - Queue mode override: `/steer`, `/followup`, `/interrupt`
 - Start a new session: `/new` (optional: `/new <project_id|path>` to bind the chat to a repo)
-- Cancel a running thread: `/cancel`
+- Resume a previous CLI session (when you have a resume token): `/resume <token>`
+- Cancel a running run: reply to the bot’s `Running…` message with `/cancel`
 - Approvals: when a tool needs approval, you'll get inline approval buttons
 
 Start from IEx (advanced):
@@ -1848,6 +1876,7 @@ Start from IEx (advanced):
 ```elixir
 Application.ensure_all_started(:lemon_gateway)
 Application.ensure_all_started(:lemon_router)
+Application.ensure_all_started(:lemon_channels)
 ```
 
 ### Running Cron Jobs (LemonAutomation)

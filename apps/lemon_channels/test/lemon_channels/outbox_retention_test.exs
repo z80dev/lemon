@@ -143,7 +143,7 @@ defmodule LemonChannels.OutboxRetentionTest do
       new_stats = Outbox.stats()
       # Queue length should have increased by at least the number of messages we added
       # (may be more due to chunking or less due to processing)
-      assert new_stats.queue_length >= 0
+      assert new_stats.queue_length >= initial_length
     end
   end
 

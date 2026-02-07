@@ -133,6 +133,8 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
     test "get_env_api_key returns nil when no keys set" do
       prev_codex = System.get_env("OPENAI_CODEX_API_KEY")
       prev_chatgpt = System.get_env("CHATGPT_TOKEN")
+      prev_home = System.get_env("HOME")
+      prev_codex_home = System.get_env("CODEX_HOME")
 
       on_exit(fn ->
         if prev_codex,
@@ -142,12 +144,86 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
         if prev_chatgpt,
           do: System.put_env("CHATGPT_TOKEN", prev_chatgpt),
           else: System.delete_env("CHATGPT_TOKEN")
+
+        if prev_home,
+          do: System.put_env("HOME", prev_home),
+          else: System.delete_env("HOME")
+
+        if prev_codex_home,
+          do: System.put_env("CODEX_HOME", prev_codex_home),
+          else: System.delete_env("CODEX_HOME")
       end)
 
       System.delete_env("OPENAI_CODEX_API_KEY")
       System.delete_env("CHATGPT_TOKEN")
 
+      # Isolate from any real local Codex / Lemon credential stores on the dev machine.
+      temp =
+        Path.join([System.tmp_dir!(), "lemon-ai-test-home-#{System.unique_integer([:positive])}"])
+
+      File.mkdir_p!(temp)
+      System.put_env("HOME", temp)
+      System.put_env("CODEX_HOME", Path.join(temp, ".codex"))
+
       assert OpenAICodexResponses.get_env_api_key() == nil
+    end
+
+    test "get_env_api_key reads Codex CLI auth.json when env vars are missing" do
+      prev_codex = System.get_env("OPENAI_CODEX_API_KEY")
+      prev_chatgpt = System.get_env("CHATGPT_TOKEN")
+      prev_home = System.get_env("HOME")
+      prev_codex_home = System.get_env("CODEX_HOME")
+
+      on_exit(fn ->
+        if prev_codex,
+          do: System.put_env("OPENAI_CODEX_API_KEY", prev_codex),
+          else: System.delete_env("OPENAI_CODEX_API_KEY")
+
+        if prev_chatgpt,
+          do: System.put_env("CHATGPT_TOKEN", prev_chatgpt),
+          else: System.delete_env("CHATGPT_TOKEN")
+
+        if prev_home,
+          do: System.put_env("HOME", prev_home),
+          else: System.delete_env("HOME")
+
+        if prev_codex_home,
+          do: System.put_env("CODEX_HOME", prev_codex_home),
+          else: System.delete_env("CODEX_HOME")
+      end)
+
+      System.delete_env("OPENAI_CODEX_API_KEY")
+      System.delete_env("CHATGPT_TOKEN")
+
+      temp =
+        Path.join([
+          System.tmp_dir!(),
+          "lemon-ai-test-codex-#{System.unique_integer([:positive])}"
+        ])
+
+      codex_home = Path.join(temp, ".codex")
+      File.mkdir_p!(codex_home)
+      System.put_env("HOME", temp)
+      System.put_env("CODEX_HOME", codex_home)
+
+      payload =
+        Jason.encode!(%{"https://api.openai.com/auth" => %{"chatgpt_account_id" => "acc_test"}})
+
+      token = "x." <> Base.encode64(payload) <> ".y"
+
+      File.write!(
+        Path.join(codex_home, "auth.json"),
+        Jason.encode!(%{
+          "tokens" => %{
+            "access_token" => token,
+            "refresh_token" => "rt_test",
+            "account_id" => "acc_test"
+          },
+          "last_refresh" => System.system_time(:millisecond)
+        })
+      )
+
+      assert OpenAICodexResponses.get_env_api_key() == token
     end
   end
 
@@ -184,6 +260,8 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
 
       prev_codex = System.get_env("OPENAI_CODEX_API_KEY")
       prev_chatgpt = System.get_env("CHATGPT_TOKEN")
+      prev_home = System.get_env("HOME")
+      prev_codex_home = System.get_env("CODEX_HOME")
 
       on_exit(fn ->
         if prev_codex,
@@ -193,10 +271,25 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
         if prev_chatgpt,
           do: System.put_env("CHATGPT_TOKEN", prev_chatgpt),
           else: System.delete_env("CHATGPT_TOKEN")
+
+        if prev_home,
+          do: System.put_env("HOME", prev_home),
+          else: System.delete_env("HOME")
+
+        if prev_codex_home,
+          do: System.put_env("CODEX_HOME", prev_codex_home),
+          else: System.delete_env("CODEX_HOME")
       end)
 
       System.delete_env("OPENAI_CODEX_API_KEY")
       System.delete_env("CHATGPT_TOKEN")
+
+      temp =
+        Path.join([System.tmp_dir!(), "lemon-ai-test-home-#{System.unique_integer([:positive])}"])
+
+      File.mkdir_p!(temp)
+      System.put_env("HOME", temp)
+      System.put_env("CODEX_HOME", Path.join(temp, ".codex"))
 
       model = make_model()
       context = Context.new(messages: [%UserMessage{content: "Hi"}])

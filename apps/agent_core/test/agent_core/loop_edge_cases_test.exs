@@ -31,7 +31,7 @@ defmodule AgentCore.LoopEdgeCasesTest do
     )
   end
 
-  defp simple_config(opts \\ []) do
+  defp simple_config(opts) do
     %AgentLoopConfig{
       model: Keyword.get(opts, :model, Mocks.mock_model()),
       convert_to_llm: Keyword.get(opts, :convert_to_llm, Mocks.simple_convert_to_llm()),
@@ -263,7 +263,7 @@ defmodule AgentCore.LoopEdgeCasesTest do
       config =
         simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
 
-      events = Loop.stream([user_message("Long response")], context, config) |> Enum.to_list()
+      _events = Loop.stream([user_message("Long response")], context, config) |> Enum.to_list()
 
       {:ok, messages} =
         Loop.agent_loop([user_message("Test")], context, config, nil, nil)

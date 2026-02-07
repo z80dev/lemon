@@ -20,7 +20,7 @@ defmodule CodingAgent.PromptBuilder do
       })
   """
 
-  alias CodingAgent.{Skills, Commands, Subagents}
+  alias CodingAgent.{Commands, Subagents}
 
   @type build_opts :: %{
           optional(:base_prompt) => String.t(),
@@ -88,10 +88,25 @@ defmodule CodingAgent.PromptBuilder do
   @spec build_skills_section(String.t(), String.t(), pos_integer()) :: String.t()
   def build_skills_section(cwd, context, max_skills \\ 3) do
     if context != "" do
-      skills = Skills.find_relevant(cwd, context, max_skills)
+      skills = LemonSkills.find_relevant(context, cwd: cwd, max_results: max_skills)
 
       if skills != [] do
-        content = Skills.format_for_prompt(skills)
+        content =
+          skills
+          |> Enum.map(fn entry ->
+            body =
+              case LemonSkills.Entry.content(entry) do
+                {:ok, raw} -> LemonSkills.Manifest.parse_body(raw) |> String.trim()
+                _ -> ""
+              end
+
+            """
+            <skill name="#{entry.name}">
+            #{body}
+            </skill>
+            """
+          end)
+          |> Enum.join("\n")
 
         """
         <relevant-skills>

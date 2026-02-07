@@ -110,7 +110,7 @@ defmodule LemonGateway.RunTransportAgnosticTest do
     %ChatScope{transport: :test, chat_id: chat_id, topic_id: nil}
   end
 
-  defp make_job(scope, opts \\ []) do
+  defp make_job(scope, opts) do
     %Job{
       scope: scope,
       user_msg_id: Keyword.get(opts, :user_msg_id, 1),
@@ -147,7 +147,7 @@ defmodule LemonGateway.RunTransportAgnosticTest do
 
       {:ok, _pid} = start_run_direct(job)
 
-      assert_receive {:engine_started, run_ref, sink_pid}, 2000
+      assert_receive {:engine_started, _run_ref, sink_pid}, 2000
 
       # Send deltas
       send(sink_pid, {:send_deltas, ["Hello", " ", "World"]})

@@ -8,6 +8,8 @@ defmodule LemonChannels.Outbox.Dedupe do
   use GenServer
 
   @default_ttl_ms 60 * 60 * 1000  # 1 hour
+  @cleanup_interval_ms 60_000
+  @table :lemon_channels_outbox_dedupe
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -33,52 +35,36 @@ defmodule LemonChannels.Outbox.Dedupe do
 
   @impl true
   def init(_opts) do
-    # Schedule periodic cleanup
+    _ = LemonCore.Dedupe.Ets.init(@table)
     schedule_cleanup()
-    {:ok, %{keys: %{}}}
+    {:ok, %{ttl_ms: @default_ttl_ms}}
   end
 
   @impl true
   def handle_call({:check, channel_id, key}, _from, state) do
     full_key = {channel_id, key}
-    now = System.system_time(:millisecond)
-
-    case Map.get(state.keys, full_key) do
-      nil ->
-        {:reply, :new, state}
-
-      ts when now - ts > @default_ttl_ms ->
-        # Expired
-        keys = Map.delete(state.keys, full_key)
-        {:reply, :new, %{state | keys: keys}}
-
-      _ ->
-        {:reply, :duplicate, state}
+    if LemonCore.Dedupe.Ets.seen?(@table, full_key, state.ttl_ms) do
+      {:reply, :duplicate, state}
+    else
+      {:reply, :new, state}
     end
   end
 
   @impl true
   def handle_cast({:mark, channel_id, key}, state) do
     full_key = {channel_id, key}
-    now = System.system_time(:millisecond)
-    keys = Map.put(state.keys, full_key, now)
-    {:noreply, %{state | keys: keys}}
+    _ = LemonCore.Dedupe.Ets.mark(@table, full_key)
+    {:noreply, state}
   end
 
   @impl true
   def handle_info(:cleanup, state) do
-    now = System.system_time(:millisecond)
-
-    keys =
-      state.keys
-      |> Enum.reject(fn {_key, ts} -> now - ts > @default_ttl_ms end)
-      |> Map.new()
-
+    _ = LemonCore.Dedupe.Ets.cleanup_expired(@table, state.ttl_ms)
     schedule_cleanup()
-    {:noreply, %{state | keys: keys}}
+    {:noreply, state}
   end
 
   defp schedule_cleanup do
-    Process.send_after(self(), :cleanup, 60_000)
+    Process.send_after(self(), :cleanup, @cleanup_interval_ms)
   end
 end

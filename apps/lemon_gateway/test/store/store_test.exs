@@ -243,6 +243,7 @@ defmodule LemonGateway.Store.BackendConfigTest do
   test "can use JSONL backend when configured" do
     # Create temp directory
     tmp_dir = Path.join(System.tmp_dir!(), "store_test_#{System.unique_integer([:positive])}")
+
     on_exit(fn ->
       # Stop the store before deleting the directory; late async writes (casts) can otherwise
       # crash LemonCore.Store after the test has already finished.

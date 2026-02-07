@@ -625,7 +625,7 @@ defmodule AgentCore.CliRunners.JsonlRunnerTest do
     test "emits stderr warning on non-zero exit" do
       {:ok, events} = JsonlRunner.run(StderrOutputRunner, prompt: "test", timeout: 5_000)
 
-      warnings =
+      _warnings =
         events
         |> Enum.filter(fn
           {:cli_event, %ActionEvent{action: %Action{id: "cli.stderr"}}} -> true

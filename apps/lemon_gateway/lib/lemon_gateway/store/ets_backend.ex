@@ -11,4 +11,3 @@ defmodule LemonGateway.Store.EtsBackend do
   defdelegate delete(state, table, key), to: LemonCore.Store.EtsBackend
   defdelegate list(state, table), to: LemonCore.Store.EtsBackend
 end
-

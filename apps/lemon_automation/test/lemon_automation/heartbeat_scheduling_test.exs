@@ -1,7 +1,7 @@
 defmodule LemonAutomation.HeartbeatSchedulingTest do
   use ExUnit.Case, async: false
 
-  alias LemonAutomation.{HeartbeatManager, CronManager}
+  alias LemonAutomation.HeartbeatManager
 
   setup do
     # LemonCore.Bus should already be started by the application

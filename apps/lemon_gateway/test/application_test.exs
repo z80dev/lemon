@@ -517,9 +517,7 @@ defmodule LemonGateway.ApplicationTest do
       Application.put_env(:lemon_gateway, :commands, [])
 
       # Configure ETS backend (default)
-      Application.put_env(:lemon_core, LemonCore.Store,
-        backend: LemonCore.Store.EtsBackend
-      )
+      Application.put_env(:lemon_core, LemonCore.Store, backend: LemonCore.Store.EtsBackend)
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 

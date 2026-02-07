@@ -12,6 +12,12 @@ defmodule LemonGateway.Telegram.PollerLock do
   # insufficient. To prevent duplicate replies in that scenario, we also use a best-effort on-disk lock
   # scoped to (account_id, token).
 
+  # If a lock file is not refreshed (via `heartbeat/2`) for this long, it is treated as stale.
+  #
+  # This protects against PID reuse: a stale lock created by a dead lemon process can be "kept alive"
+  # forever if the old OS PID is later reused by some unrelated process.
+  @default_stale_ms 300_000
+
   @spec acquire(term(), term()) :: :ok | {:error, :locked}
   def acquire(account_id, token) do
     case :global.register_name(lock_name(account_id, token), self()) do
@@ -36,6 +42,23 @@ defmodule LemonGateway.Telegram.PollerLock do
     _ = :global.unregister_name(lock_name(account_id, token))
     _ = release_file_lock(account_id, token)
     :ok
+  rescue
+    _ -> :ok
+  end
+
+  @spec heartbeat(term(), term()) :: :ok
+  def heartbeat(account_id, token) do
+    path = lock_path(account_id, token)
+
+    with true <- File.exists?(path),
+         {:ok, content} <- File.read(path),
+         true <- lock_owned_by_self?(content) do
+      # Touching mtime is our heartbeat; this is what new processes use to detect staleness.
+      _ = File.touch(path)
+      :ok
+    else
+      _ -> :ok
+    end
   rescue
     _ -> :ok
   end
@@ -113,6 +136,8 @@ defmodule LemonGateway.Telegram.PollerLock do
         os_pid = extract_kv(content, "os_pid")
         node_s = extract_kv(content, "node")
         erl_pid_s = extract_kv(content, "erl_pid")
+        lock_ts_ms = extract_ts_ms(content)
+        stale_by_mtime? = stale_file?(path)
 
         current_os_pid = System.pid() || ""
         current_node_s = to_string(node())
@@ -125,6 +150,19 @@ defmodule LemonGateway.Telegram.PollerLock do
 
         cond do
           stale_on_this_node? ->
+            steal_lock_file(path)
+
+          stale_by_mtime? and is_binary(os_pid) and os_pid != "" and os_pid_alive?(os_pid) ->
+            # If the lock file is stale but the PID is alive, it may be PID reuse. Disambiguate by
+            # comparing the lock timestamp to the OS process start time.
+            if is_nil(lock_ts_ms) or os_pid_started_after_lock?(os_pid, lock_ts_ms) do
+              steal_lock_file(path)
+            else
+              # Conservative: don't steal from a still-running process (older lemon versions won't heartbeat).
+              {:error, :locked}
+            end
+
+          stale_by_mtime? ->
             steal_lock_file(path)
 
           is_binary(os_pid) and os_pid != "" and os_pid_alive?(os_pid) ->
@@ -215,5 +253,116 @@ defmodule LemonGateway.Telegram.PollerLock do
       "telegram_poller_#{normalize_account_id(account_id)}_#{token_fingerprint(token)}.lock"
 
     Path.join(dir, filename)
+  end
+
+  defp stale_file?(path) do
+    stale_ms = stale_after_ms()
+
+    with {:ok, %File.Stat{mtime: mtime}} <- File.stat(path) do
+      now_s = :calendar.datetime_to_gregorian_seconds(:calendar.local_time())
+      mtime_s = :calendar.datetime_to_gregorian_seconds(mtime)
+      max(0, now_s - mtime_s) * 1_000 > stale_ms
+    else
+      _ -> false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp stale_after_ms do
+    case System.get_env("LEMON_TELEGRAM_POLLER_LOCK_STALE_MS") do
+      s when is_binary(s) and s != "" ->
+        case Integer.parse(s) do
+          {i, _} when i >= 0 -> i
+          _ -> @default_stale_ms
+        end
+
+      _ ->
+        @default_stale_ms
+    end
+  end
+
+  defp extract_ts_ms(content) when is_binary(content) do
+    case extract_kv(content, "ts") do
+      s when is_binary(s) ->
+        case Integer.parse(s) do
+          {i, _} when i >= 0 -> i
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp extract_ts_ms(_), do: nil
+
+  defp os_pid_started_after_lock?(pid, lock_ts_ms)
+       when is_binary(pid) and is_integer(lock_ts_ms) do
+    # `ps -o etime=` returns `[[dd-]hh:]mm:ss` on macOS/Linux.
+    case System.cmd("ps", ["-p", pid, "-o", "etime="], stderr_to_stdout: true) do
+      {out, 0} ->
+        etime = out |> to_string() |> String.trim()
+
+        case parse_etime_seconds(etime) do
+          {:ok, seconds} ->
+            now_ms = System.system_time(:millisecond)
+            start_ms = now_ms - seconds * 1_000
+            # Grace window to avoid edge flaps.
+            start_ms > lock_ts_ms + 10_000
+
+          _ ->
+            false
+        end
+
+      _ ->
+        false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp os_pid_started_after_lock?(_pid, _lock_ts_ms), do: false
+
+  defp parse_etime_seconds(etime) when is_binary(etime) do
+    {days, time_part} =
+      case String.split(etime, "-", parts: 2) do
+        [a, b] ->
+          case Integer.parse(String.trim(a)) do
+            {d, _} when d >= 0 -> {d, String.trim(b)}
+            _ -> {0, String.trim(b)}
+          end
+
+        [a] ->
+          {0, String.trim(a)}
+      end
+
+    parts =
+      time_part
+      |> String.split(":")
+      |> Enum.map(&String.trim/1)
+
+    with true <- length(parts) in [1, 2, 3],
+         nums <- Enum.map(parts, &Integer.parse/1),
+         true <-
+           Enum.all?(nums, fn
+             {i, _} -> i >= 0
+             _ -> false
+           end) do
+      ints = Enum.map(nums, fn {i, _} -> i end)
+
+      seconds =
+        case ints do
+          [s] -> s
+          [m, s] -> m * 60 + s
+          [h, m, s] -> h * 3600 + m * 60 + s
+        end
+
+      {:ok, days * 86_400 + seconds}
+    else
+      _ -> {:error, :invalid}
+    end
+  rescue
+    _ -> {:error, :invalid}
   end
 end

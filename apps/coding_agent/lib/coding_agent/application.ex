@@ -16,6 +16,7 @@ defmodule CodingAgent.Application do
     children = [
       {Registry, keys: :unique, name: CodingAgent.SessionRegistry},
       {Registry, keys: :unique, name: CodingAgent.ProcessRegistry},
+      CodingAgent.Tools.TodoStoreOwner,
       CodingAgent.SessionSupervisor,
       {Task.Supervisor, name: CodingAgent.TaskSupervisor},
       {CodingAgent.TaskStoreServer, name: CodingAgent.TaskStoreServer},

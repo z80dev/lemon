@@ -9,7 +9,15 @@ defmodule CodingAgent.Tools.Task do
   require Logger
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias AgentCore.CliRunners.{ClaudeSubagent, CodexSubagent, KimiSubagent}
+
+  alias AgentCore.CliRunners.{
+    ClaudeSubagent,
+    CodexSubagent,
+    KimiSubagent,
+    OpencodeSubagent,
+    PiSubagent
+  }
+
   alias AgentCore.AbortSignal
   alias Ai.Types.TextContent
   alias CodingAgent.BudgetEnforcer
@@ -76,7 +84,8 @@ defmodule CodingAgent.Tools.Task do
           },
           "engine" => %{
             "type" => "string",
-            "description" => "Execution engine: internal (default), codex, claude, or kimi"
+            "description" =>
+              "Execution engine: internal (default), codex, claude, kimi, opencode, or pi"
           },
           "role" => %{
             "type" => "string",
@@ -173,7 +182,7 @@ defmodule CodingAgent.Tools.Task do
           is_function(run_override, 2) ->
             run_override.(on_update_safe, signal)
 
-          engine in ["codex", "claude", "kimi"] ->
+          engine in ["codex", "claude", "kimi", "opencode", "pi"] ->
             execute_via_cli_engine(
               engine,
               prompt,
@@ -320,8 +329,9 @@ defmodule CodingAgent.Tools.Task do
       not is_nil(engine) and not is_binary(engine) ->
         {:error, "Engine must be a string"}
 
-      not is_nil(engine) and engine not in ["internal", "codex", "claude", "kimi"] ->
-        {:error, "Engine must be one of: internal, codex, claude, kimi"}
+      not is_nil(engine) and
+          engine not in ["internal", "codex", "claude", "kimi", "opencode", "pi"] ->
+        {:error, "Engine must be one of: internal, codex, claude, kimi, opencode, pi"}
 
       not is_nil(role_id) and Subagents.get(cwd, role_id) == nil ->
         {:error, "Unknown role: #{role_id}"}
@@ -738,6 +748,8 @@ defmodule CodingAgent.Tools.Task do
         "codex" -> {CodexSubagent, "codex"}
         "claude" -> {ClaudeSubagent, "claude"}
         "kimi" -> {KimiSubagent, "kimi"}
+        "opencode" -> {OpencodeSubagent, "opencode"}
+        "pi" -> {PiSubagent, "pi"}
       end
 
     # Get role prompt if role_id is specified

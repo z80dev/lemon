@@ -13,7 +13,6 @@ defmodule CodingAgent.SessionEdgeCasesTest do
 
   alias CodingAgent.Session
   alias CodingAgent.SessionManager
-  alias CodingAgent.SettingsManager
 
   alias Ai.Types.{
     AssistantMessage,
@@ -23,11 +22,8 @@ defmodule CodingAgent.SessionEdgeCasesTest do
     Cost,
     Model,
     ModelCost,
-    ThinkingContent,
-    ImageContent
+    ThinkingContent
   }
-
-  alias AgentCore.Types.{AgentTool, AgentToolResult}
 
   # ============================================================================
   # Test Helpers
@@ -288,14 +284,13 @@ defmodule CodingAgent.SessionEdgeCasesTest do
         end
 
       # Wait for all subscriptions
-      unsubs =
-        for _ <- 1..3 do
-          receive do
-            {:subscribed, _i, unsub} -> unsub
-          after
-            1000 -> raise "Timeout waiting for subscription"
-          end
+      for _ <- 1..3 do
+        receive do
+          {:subscribed, _i, _unsub} -> :ok
+        after
+          1000 -> raise "Timeout waiting for subscription"
         end
+      end
 
       state = Session.get_state(session)
       assert length(state.event_listeners) == 3

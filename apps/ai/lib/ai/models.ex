@@ -589,6 +589,18 @@ defmodule Ai.Models do
       context_window: 400_000,
       max_tokens: 128_000
     },
+    "gpt-5.3-codex" => %Model{
+      id: "gpt-5.3-codex",
+      name: "GPT-5.3 Codex",
+      api: :openai_responses,
+      provider: :openai,
+      base_url: "https://api.openai.com/v1",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 1.75, output: 14.0, cache_read: 0.175, cache_write: 0.0},
+      context_window: 400_000,
+      max_tokens: 128_000
+    },
     "gpt-5.2-pro" => %Model{
       id: "gpt-5.2-pro",
       name: "GPT-5.2 Pro",
@@ -933,11 +945,31 @@ defmodule Ai.Models do
   # Combined Registry
   # ============================================================================
 
+  # OpenAI Codex (ChatGPT OAuth) uses the Codex Responses endpoint.
+  # Models are mostly the same IDs as OpenAI's Responses API, but usage is billed
+  # via ChatGPT subscription, not per-token API pricing, so we set costs to 0.
+  @openai_codex_models Enum.into(@openai_models, %{}, fn {id, model} ->
+                         {id,
+                          %Model{
+                            model
+                            | api: :openai_codex_responses,
+                              provider: :"openai-codex",
+                              base_url: "https://chatgpt.com",
+                              cost: %ModelCost{
+                                input: 0.0,
+                                output: 0.0,
+                                cache_read: 0.0,
+                                cache_write: 0.0
+                              }
+                          }}
+                       end)
+
   @models %{
-    anthropic: @anthropic_models,
-    openai: @openai_models,
-    google: @google_models,
-    kimi: @kimi_models
+    :anthropic => @anthropic_models,
+    :openai => @openai_models,
+    :"openai-codex" => @openai_codex_models,
+    :google => @google_models,
+    :kimi => @kimi_models
   }
 
   @providers Map.keys(@models)

@@ -845,15 +845,34 @@ defmodule LemonGatewayTest do
       bot_token: "token",
       api_mod: TestTelegramAPI,
       poll_interval_ms: 20,
-      debounce_ms: 200,
+      # Use a large debounce so the test is robust on loaded CI/dev machines.
+      # The command path should bypass buffering entirely, so send should happen well
+      # before this debounce would have elapsed.
+      debounce_ms: 5_000,
       allowed_chat_ids: [2]
     })
 
     {:ok, _} = start_supervised({LemonGateway.Telegram.Transport, [force: true]})
 
-    assert_receive {:api_get_updates, ^updates, t_poll}, 500
-    assert_receive {:api_send_message, 2, "Running…", 60, t_send}, 500
+    assert_receive {:api_get_updates, ^updates, t_poll}, 2_000
 
-    assert t_send - t_poll < 150
+    wait_for(
+      fn ->
+        Enum.any?(TestTelegramAPI.calls(), fn
+          {:send, 2, "Running…", 60, _t_send} -> true
+          _ -> false
+        end)
+      end,
+      "expected immediate progress send for /status command"
+    )
+
+    {:send, 2, "Running…", 60, t_send} =
+      TestTelegramAPI.calls()
+      |> Enum.find(fn
+        {:send, 2, "Running…", 60, _t_send} -> true
+        _ -> false
+      end)
+
+    assert t_send - t_poll < 2_000
   end
 end

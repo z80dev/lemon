@@ -45,6 +45,16 @@ defmodule AgentCore.CliRunners.TypesTest do
       token = ResumeToken.new("lemon", "abc12345")
       assert ResumeToken.format(token) == "`lemon resume abc12345`"
     end
+
+    test "formats opencode token correctly" do
+      token = ResumeToken.new("opencode", "ses_abc123")
+      assert ResumeToken.format(token) == "`opencode --session ses_abc123`"
+    end
+
+    test "formats pi token correctly" do
+      token = ResumeToken.new("pi", "session_1")
+      assert ResumeToken.format(token) == "`pi --session session_1`"
+    end
   end
 
   describe "ResumeToken.extract_resume/1" do
@@ -78,6 +88,20 @@ defmodule AgentCore.CliRunners.TypesTest do
       assert token == %ResumeToken{engine: "lemon", value: "abc12345"}
     end
 
+    test "extracts opencode token" do
+      token = ResumeToken.extract_resume("opencode --session ses_494719016ffe85dkDMj0FPRbHK")
+      assert %ResumeToken{engine: "opencode", value: value} = token
+      assert String.starts_with?(value, "ses_")
+    end
+
+    test "extracts pi token (including quoted tokens)" do
+      token = ResumeToken.extract_resume("pi --session s1")
+      assert token == %ResumeToken{engine: "pi", value: "s1"}
+
+      token = ResumeToken.extract_resume("pi --session \"~/pi sessions/s1.jsonl\"")
+      assert token == %ResumeToken{engine: "pi", value: "~/pi sessions/s1.jsonl"}
+    end
+
     test "returns nil when no token found" do
       assert ResumeToken.extract_resume("No token here") == nil
       assert ResumeToken.extract_resume("") == nil
@@ -87,6 +111,8 @@ defmodule AgentCore.CliRunners.TypesTest do
       assert ResumeToken.extract_resume("CODEX resume ABC") != nil
       assert ResumeToken.extract_resume("Claude --Resume XYZ") != nil
       assert ResumeToken.extract_resume("LEMON RESUME abc") != nil
+      assert ResumeToken.extract_resume("OPENCODE --SESSION ses_abc") != nil
+      assert ResumeToken.extract_resume("PI --SESSION s1") != nil
     end
 
     test "extracts first token when multiple present" do
@@ -164,6 +190,14 @@ defmodule AgentCore.CliRunners.TypesTest do
     test "is case insensitive" do
       assert ResumeToken.is_resume_line("CODEX RESUME abc") == true
       assert ResumeToken.is_resume_line("Claude --Resume xyz") == true
+    end
+
+    test "matches opencode and pi resume lines" do
+      assert ResumeToken.is_resume_line("opencode --session ses_abc123") == true
+      assert ResumeToken.is_resume_line("`opencode run --session ses_abc123`") == true
+      assert ResumeToken.is_resume_line("pi --session s1") == true
+      assert ResumeToken.is_resume_line("`pi --session \"~/x y.jsonl\"`") == true
+      assert ResumeToken.is_resume_line("Please run pi --session s1") == false
     end
   end
 

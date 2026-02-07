@@ -17,10 +17,9 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
 
   use ExUnit.Case, async: true
 
-  alias AgentCore.Agent, as: CoreAgent
   alias AgentCore.Test.Mocks
   alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.{AssistantMessage, TextContent, ToolCall, Usage, Cost}
+  alias Ai.Types.{AssistantMessage, TextContent, ToolCall}
   alias CodingAgent.Session
   alias CodingAgent.SettingsManager
 
@@ -38,7 +37,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
     }
   end
 
-  defp start_session(opts \\ []) do
+  defp start_session(opts) do
     tmp_dir = System.tmp_dir!()
     cwd = Keyword.get(opts, :cwd, tmp_dir)
 
@@ -59,22 +58,6 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
 
     {:ok, session} = Session.start_link(merged_opts)
     session
-  end
-
-  defp start_agent(opts \\ []) do
-    default_opts = [
-      initial_state: %{
-        system_prompt: Keyword.get(opts, :system_prompt, "You are a test assistant."),
-        model: Keyword.get(opts, :model, Mocks.mock_model()),
-        thinking_level: Keyword.get(opts, :thinking_level, :off),
-        tools: Keyword.get(opts, :tools, [])
-      },
-      convert_to_llm: Keyword.get(opts, :convert_to_llm, Mocks.simple_convert_to_llm()),
-      stream_fn: Keyword.get(opts, :stream_fn)
-    ]
-
-    merged_opts = Keyword.merge(default_opts, opts)
-    CoreAgent.start_link(merged_opts)
   end
 
   defp subscribe_and_collect(session, timeout \\ 5000) do
@@ -105,14 +88,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
     end
   end
 
-  defp get_text(%AssistantMessage{content: content}) do
-    content
-    |> Enum.filter(&match?(%TextContent{}, &1))
-    |> Enum.map(& &1.text)
-    |> Enum.join("\n")
-  end
-
-  defp wait_for_idle(session, timeout_ms \\ 5_000) do
+  defp wait_for_idle(session, timeout_ms) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
 
     cond do
@@ -303,7 +279,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       # Tool should end with error result
       tool_end =
         Enum.find(events, fn
-          {:tool_execution_end, "call_err", "error_tool", result, _is_error} -> true
+          {:tool_execution_end, "call_err", "error_tool", _result, _is_error} -> true
           _ -> false
         end)
 
@@ -345,7 +321,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       _events1 = subscribe_and_collect(session)
 
       :ok = Session.prompt(session, "What is my name?")
-      events2 = subscribe_and_collect(session)
+      _events2 = subscribe_and_collect(session)
 
       # Get state and verify messages accumulated
       state = Session.get_state(session)
@@ -965,10 +941,6 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
     end
 
     test "session remains functional after error" do
-      error_stream_fn = fn _model, _context, _options ->
-        {:error, :temporary_error}
-      end
-
       recovery_response = Mocks.assistant_message("Recovered")
 
       # Create session that will error first, then work

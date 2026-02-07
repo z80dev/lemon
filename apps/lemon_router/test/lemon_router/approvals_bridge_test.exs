@@ -10,6 +10,11 @@ defmodule LemonRouter.ApprovalsBridgeTest do
     |> String.slice(0, 16)
   end
 
+  # ApprovalsBridge is deprecated; call via apply/3 to avoid deprecation warnings
+  # while still validating the bridge behavior.
+  defp bridge_request(params), do: apply(ApprovalsBridge, :request, [params])
+  defp bridge_resolve(approval_id, decision), do: apply(ApprovalsBridge, :resolve, [approval_id, decision])
+
   # Start the required dependencies before tests
   setup do
     # Ensure LemonGateway.Store is running
@@ -60,7 +65,7 @@ defmodule LemonRouter.ApprovalsBridgeTest do
         approved_at_ms: System.system_time(:millisecond)
       })
 
-      result = ApprovalsBridge.request(%{
+      result = bridge_request(%{
         run_id: "run-123",
         session_key: "agent:default:main",
         tool: "bash",
@@ -83,7 +88,7 @@ defmodule LemonRouter.ApprovalsBridgeTest do
         approved_at_ms: System.system_time(:millisecond)
       })
 
-      result = ApprovalsBridge.request(%{
+      result = bridge_request(%{
         run_id: "run-456",
         session_key: session_key,
         tool: "write",
@@ -96,7 +101,7 @@ defmodule LemonRouter.ApprovalsBridgeTest do
 
     test "returns timeout when no approval is given" do
       # Request with a very short timeout to test timeout behavior
-      result = ApprovalsBridge.request(%{
+      result = bridge_request(%{
         run_id: "run-789",
         session_key: "agent:timeout:main",
         tool: "dangerous_tool",
@@ -122,7 +127,7 @@ defmodule LemonRouter.ApprovalsBridgeTest do
 
         case Enum.find(pending, fn {_id, p} -> p.session_key == session_key end) do
           {approval_id, _} ->
-            ApprovalsBridge.resolve(approval_id, :approve_once)
+            bridge_resolve(approval_id, :approve_once)
             send(test_pid, :resolved)
 
           nil ->
@@ -130,7 +135,7 @@ defmodule LemonRouter.ApprovalsBridgeTest do
         end
       end)
 
-      result = ApprovalsBridge.request(%{
+      result = bridge_request(%{
         run_id: "run-pending",
         session_key: session_key,
         tool: "bash",
@@ -166,7 +171,7 @@ defmodule LemonRouter.ApprovalsBridgeTest do
 
       LemonCore.Store.put(:exec_approvals_pending, approval_id, pending)
 
-      :ok = ApprovalsBridge.resolve(approval_id, :approve_global)
+      :ok = bridge_resolve(approval_id, :approve_global)
 
       # Verify the pending approval was removed
       assert LemonCore.Store.get(:exec_approvals_pending, approval_id) == nil
@@ -197,7 +202,7 @@ defmodule LemonRouter.ApprovalsBridgeTest do
 
       LemonCore.Store.put(:exec_approvals_pending, approval_id, pending)
 
-      :ok = ApprovalsBridge.resolve(approval_id, :approve_agent)
+      :ok = bridge_resolve(approval_id, :approve_agent)
 
       # Verify agent-level approval was stored (keyed by agent_id and hashed action)
       policy = LemonCore.Store.get(:exec_approvals_policy_agent, {agent_id, "write", action_hash})
@@ -220,7 +225,7 @@ defmodule LemonRouter.ApprovalsBridgeTest do
 
       LemonCore.Store.put(:exec_approvals_pending, approval_id, pending)
 
-      :ok = ApprovalsBridge.resolve(approval_id, :deny)
+      :ok = bridge_resolve(approval_id, :deny)
 
       # Verify the pending approval was removed
       assert LemonCore.Store.get(:exec_approvals_pending, approval_id) == nil
@@ -230,7 +235,7 @@ defmodule LemonRouter.ApprovalsBridgeTest do
     end
 
     test "handles non-existent approval_id gracefully" do
-      result = ApprovalsBridge.resolve("non-existent-id", :approve_once)
+      result = bridge_resolve("non-existent-id", :approve_once)
       assert result == :ok
     end
 
@@ -252,10 +257,10 @@ defmodule LemonRouter.ApprovalsBridgeTest do
 
       LemonCore.Store.put(:exec_approvals_pending, approval_id, pending)
 
-      :ok = ApprovalsBridge.resolve(approval_id, :approve_session)
+      :ok = bridge_resolve(approval_id, :approve_session)
 
       # Verify session-level approval was stored (parity requirement)
-      policy = LemonCore.Store.get(
+      _policy = LemonCore.Store.get(
         :exec_approvals_policy_session,
         {session_key, "read", pending.action}
       )
@@ -292,7 +297,7 @@ defmodule LemonRouter.ApprovalsBridgeTest do
 
       LemonCore.Store.put(:exec_approvals_pending, approval_id, pending)
 
-      :ok = ApprovalsBridge.resolve(approval_id, :approve_agent)
+      :ok = bridge_resolve(approval_id, :approve_agent)
 
       # Verify approval is keyed by agent_id, not session_key
       agent_policies = LemonCore.Store.list(:exec_approvals_policy_agent)
@@ -319,7 +324,7 @@ defmodule LemonRouter.ApprovalsBridgeTest do
         approved_at_ms: System.system_time(:millisecond)
       })
 
-      result = ApprovalsBridge.request(%{
+      result = bridge_request(%{
         run_id: "run-node",
         session_key: "agent:test:main",
         node_id: node_id,
@@ -348,7 +353,7 @@ defmodule LemonRouter.ApprovalsBridgeTest do
         approved_at_ms: System.system_time(:millisecond)
       })
 
-      result = ApprovalsBridge.request(%{
+      result = bridge_request(%{
         run_id: "run-precedence",
         session_key: "agent:test:main",
         node_id: node_id,
@@ -380,7 +385,7 @@ defmodule LemonRouter.ApprovalsBridgeTest do
         approved_at_ms: System.system_time(:millisecond)
       })
 
-      result = ApprovalsBridge.request(%{
+      result = bridge_request(%{
         run_id: "run-node-agent",
         session_key: session_key,
         node_id: node_id,
@@ -417,7 +422,7 @@ defmodule LemonRouter.ApprovalsBridgeTest do
         %{approved: true, approved_at_ms: System.system_time(:millisecond)}
       )
 
-      result = ApprovalsBridge.request(%{
+      result = bridge_request(%{
         run_id: "run-extract",
         session_key: session_key,
         # Note: not providing agent_id, should be extracted
@@ -431,19 +436,12 @@ defmodule LemonRouter.ApprovalsBridgeTest do
   end
 
   describe "end-to-end approval resolution" do
-    @moduledoc """
-    Tests that verify exec.approval.resolve actually unblocks tool execution.
-    This is critical for the approval flow - the control plane must be able to
-    resolve pending approvals and have the tool execution continue.
-    """
-
     test "exec.approval.resolve unblocks waiting request with approve_once" do
       session_key = "agent:e2e-test:main"
-      test_pid = self()
 
       # Start the approval request in a separate task
       request_task = Task.async(fn ->
-        ApprovalsBridge.request(%{
+        bridge_request(%{
           run_id: "run-e2e-once",
           session_key: session_key,
           tool: "bash",
@@ -482,7 +480,7 @@ defmodule LemonRouter.ApprovalsBridgeTest do
       session_key = "agent:e2e-session:main"
 
       request_task = Task.async(fn ->
-        ApprovalsBridge.request(%{
+        bridge_request(%{
           run_id: "run-e2e-session",
           session_key: session_key,
           tool: "write",
@@ -528,7 +526,7 @@ defmodule LemonRouter.ApprovalsBridgeTest do
       action = %{command: "npm test"}
 
       request_task = Task.async(fn ->
-        ApprovalsBridge.request(%{
+        bridge_request(%{
           run_id: "run-e2e-global",
           session_key: session_key,
           tool: "bash",
@@ -567,7 +565,7 @@ defmodule LemonRouter.ApprovalsBridgeTest do
       session_key = "agent:e2e-deny:main"
 
       request_task = Task.async(fn ->
-        ApprovalsBridge.request(%{
+        bridge_request(%{
           run_id: "run-e2e-deny",
           session_key: session_key,
           tool: "dangerous_tool",
@@ -610,7 +608,7 @@ defmodule LemonRouter.ApprovalsBridgeTest do
       })
 
       # Request should return immediately without waiting
-      result = ApprovalsBridge.request(%{
+      result = bridge_request(%{
         run_id: "run-e2e-repeat",
         session_key: session_key,
         tool: "bash",
@@ -633,7 +631,7 @@ defmodule LemonRouter.ApprovalsBridgeTest do
       })
 
       # Any action for the "read" tool should be approved
-      result1 = ApprovalsBridge.request(%{
+      result1 = bridge_request(%{
         run_id: "run-wildcard-1",
         session_key: session_key,
         tool: "read",
@@ -644,7 +642,7 @@ defmodule LemonRouter.ApprovalsBridgeTest do
 
       assert {:ok, :approved, :global} = result1
 
-      result2 = ApprovalsBridge.request(%{
+      result2 = bridge_request(%{
         run_id: "run-wildcard-2",
         session_key: session_key,
         tool: "read",

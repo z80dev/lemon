@@ -1,5 +1,7 @@
 defmodule CodingAgent.UI.HeadlessTest do
-  use ExUnit.Case, async: true
+  # Uses `capture_log/1`, which is global. Run synchronously to avoid
+  # cross-test log interference in umbrella `mix test`.
+  use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
 

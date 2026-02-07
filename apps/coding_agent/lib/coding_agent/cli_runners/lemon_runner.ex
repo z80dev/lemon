@@ -504,6 +504,30 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     state
   end
 
+  defp translate_and_emit({:agent_end, messages}, state) do
+    # Extract final answer from messages
+    answer = extract_answer(messages, state.accumulated_text)
+
+    # Build usage stats if available
+    usage = build_usage(messages)
+
+    emit_completed_ok(state, answer, usage)
+  end
+
+  defp translate_and_emit({:error, reason, _partial_state}, state) do
+    error_msg = format_error(reason)
+    emit_completed_error(state, error_msg)
+  end
+
+  defp translate_and_emit({:turn_start}, state), do: state
+  defp translate_and_emit({:turn_end, _msg, _results}, state), do: state
+  defp translate_and_emit({:message_start, _msg}, state), do: state
+  defp translate_and_emit({:message_end, _msg}, state), do: state
+  defp translate_and_emit({:extension_status_report, _report}, state), do: state
+  defp translate_and_emit({:compaction_complete, _info}, state), do: state
+  defp translate_and_emit({:branch_summarized, _info}, state), do: state
+  defp translate_and_emit(_event, state), do: state
+
   # Emit a delta event for streaming output
   defp emit_delta(state, text) when is_binary(text) and byte_size(text) > 0 do
     new_seq = state.delta_seq + 1
@@ -542,30 +566,6 @@ defmodule CodingAgent.CliRunners.LemonRunner do
   end
 
   defp emit_delta(state, _text), do: state
-
-  defp translate_and_emit({:agent_end, messages}, state) do
-    # Extract final answer from messages
-    answer = extract_answer(messages, state.accumulated_text)
-
-    # Build usage stats if available
-    usage = build_usage(messages)
-
-    emit_completed_ok(state, answer, usage)
-  end
-
-  defp translate_and_emit({:error, reason, _partial_state}, state) do
-    error_msg = format_error(reason)
-    emit_completed_error(state, error_msg)
-  end
-
-  defp translate_and_emit({:turn_start}, state), do: state
-  defp translate_and_emit({:turn_end, _msg, _results}, state), do: state
-  defp translate_and_emit({:message_start, _msg}, state), do: state
-  defp translate_and_emit({:message_end, _msg}, state), do: state
-  defp translate_and_emit({:extension_status_report, _report}, state), do: state
-  defp translate_and_emit({:compaction_complete, _info}, state), do: state
-  defp translate_and_emit({:branch_summarized, _info}, state), do: state
-  defp translate_and_emit(_event, state), do: state
 
   # ============================================================================
   # Completion Helpers

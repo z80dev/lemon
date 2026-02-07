@@ -423,23 +423,6 @@ defmodule LemonAutomation.HeartbeatManager do
     "* * * * *"
   end
 
-  # Legacy function for backwards compatibility
-  defp build_cron_schedule(interval_minutes) when interval_minutes >= 60 do
-    # Run every N hours
-    hours = div(interval_minutes, 60)
-    "0 */#{hours} * * *"
-  end
-
-  defp build_cron_schedule(interval_minutes) when interval_minutes >= 1 do
-    # Run every N minutes
-    "*/#{interval_minutes} * * * *"
-  end
-
-  defp build_cron_schedule(_) do
-    # Default to every minute
-    "* * * * *"
-  end
-
   @impl true
   def handle_info(%LemonCore.Event{type: :cron_run_completed} = event, state) do
     run = event.payload[:run]

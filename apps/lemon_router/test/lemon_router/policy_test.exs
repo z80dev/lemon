@@ -84,13 +84,8 @@ defmodule LemonRouter.PolicyTest do
   end
 
   describe "ToolPolicy.requires_approval?/2 with router default policies" do
-    @moduledoc """
-    Tests that ToolPolicy.requires_approval?/2 handles empty policies from
-    LemonRouter.Policy.resolve_for_run/1 without crashing.
-
-    This is critical because resolve_for_run returns %{} by default, and
-    the ToolRegistry passes this to ToolPolicy.requires_approval?/2.
-    """
+    # Tests that ToolPolicy.requires_approval?/2 handles empty policies from
+    # LemonRouter.Policy.resolve_for_run/1 without crashing.
 
     test "handles empty policy map without crashing" do
       # This is what resolve_for_run returns by default
@@ -135,9 +130,7 @@ defmodule LemonRouter.PolicyTest do
   end
 
   describe "integration: router policy to tool wrapping" do
-    @moduledoc """
-    Tests the full flow from router policy resolution to tool approval wrapping.
-    """
+    # Tests the full flow from router policy resolution to tool approval wrapping.
 
     test "empty router policy does not wrap any tools" do
       # Simulate what happens in ToolRegistry

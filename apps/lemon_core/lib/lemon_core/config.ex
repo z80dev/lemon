@@ -44,6 +44,14 @@ defmodule LemonCore.Config do
       "kimi" => %{
         "extra_args" => []
       },
+      "opencode" => %{
+        "model" => nil
+      },
+      "pi" => %{
+        "extra_args" => [],
+        "model" => nil,
+        "provider" => nil
+      },
       "claude" => %{
         "dangerously_skip_permissions" => true,
         "allowed_tools" => nil,
@@ -113,14 +121,58 @@ defmodule LemonCore.Config do
   """
   @spec load(String.t() | nil, keyword()) :: t()
   def load(cwd \\ nil, opts \\ []) do
-    global = load_file(global_path())
-    project = if is_binary(cwd), do: load_file(project_path(cwd)), else: %{}
-    merged = deep_merge(global, project)
+    cached(cwd, opts)
+  end
 
-    merged
-    |> from_map()
+  @doc """
+  Load config using the supervised cache when available.
+
+  This is the default hot-path read. It avoids re-reading/parsing TOML on every call.
+  """
+  @spec cached(String.t() | nil, keyword()) :: t()
+  def cached(cwd \\ nil, opts \\ []) do
+    base =
+      if Keyword.get(opts, :cache, true) and Code.ensure_loaded?(LemonCore.ConfigCache) and
+           function_exported?(LemonCore.ConfigCache, :available?, 0) and
+           LemonCore.ConfigCache.available?() do
+        LemonCore.ConfigCache.get(cwd, opts)
+      else
+        load_base_from_disk(cwd)
+      end
+
+    base
     |> apply_env_overrides()
     |> apply_overrides(Keyword.get(opts, :overrides))
+  end
+
+  @doc """
+  Force a reload from disk (and update the cache when available).
+
+  Use this for explicit reload flows (e.g. admin reload, control plane refresh).
+  """
+  @spec reload(String.t() | nil, keyword()) :: t()
+  def reload(cwd \\ nil, opts \\ []) do
+    base =
+      if Code.ensure_loaded?(LemonCore.ConfigCache) and
+           function_exported?(LemonCore.ConfigCache, :available?, 0) and
+           LemonCore.ConfigCache.available?() do
+        LemonCore.ConfigCache.reload(cwd, opts)
+      else
+        load_base_from_disk(cwd)
+      end
+
+    base
+    |> apply_env_overrides()
+    |> apply_overrides(Keyword.get(opts, :overrides))
+  end
+
+  @doc false
+  @spec load_base_from_disk(String.t() | nil) :: t()
+  def load_base_from_disk(cwd \\ nil) do
+    global = load_file(global_path())
+    project = if is_binary(cwd) and cwd != "", do: load_file(project_path(cwd)), else: %{}
+    merged = deep_merge(global, project)
+    from_map(merged)
   end
 
   @doc """
@@ -132,7 +184,9 @@ defmodule LemonCore.Config do
 
     if File.exists?(expanded) do
       case Toml.decode_file(expanded) do
-        {:ok, map} -> stringify_keys(map)
+        {:ok, map} ->
+          stringify_keys(map)
+
         {:error, reason} ->
           Logger.warning("Failed to parse config TOML at #{expanded}: #{inspect(reason)}")
           %{}
@@ -480,6 +534,8 @@ defmodule LemonCore.Config do
     %{
       codex: parse_codex_cli(map["codex"] || %{}),
       kimi: parse_kimi_cli(map["kimi"] || %{}),
+      opencode: parse_opencode_cli(map["opencode"] || %{}),
+      pi: parse_pi_cli(map["pi"] || %{}),
       claude: parse_claude_cli(map["claude"] || %{})
     }
   end
@@ -498,6 +554,52 @@ defmodule LemonCore.Config do
 
     %{
       extra_args: parse_string_list(map["extra_args"])
+    }
+  end
+
+  defp parse_opencode_cli(map) do
+    map = stringify_keys(map)
+
+    model =
+      case map["model"] do
+        v when is_binary(v) ->
+          v = String.trim(v)
+          if v == "", do: nil, else: v
+
+        _ ->
+          nil
+      end
+
+    %{model: model}
+  end
+
+  defp parse_pi_cli(map) do
+    map = stringify_keys(map)
+
+    model =
+      case map["model"] do
+        v when is_binary(v) ->
+          v = String.trim(v)
+          if v == "", do: nil, else: v
+
+        _ ->
+          nil
+      end
+
+    provider =
+      case map["provider"] do
+        v when is_binary(v) ->
+          v = String.trim(v)
+          if v == "", do: nil, else: v
+
+        _ ->
+          nil
+      end
+
+    %{
+      extra_args: parse_string_list(map["extra_args"]),
+      model: model,
+      provider: provider
     }
   end
 
@@ -544,8 +646,12 @@ defmodule LemonCore.Config do
 
     agent =
       case System.get_env("LEMON_CODEX_EXTRA_ARGS") do
-        nil -> agent
-        "" -> agent
+        nil ->
+          agent
+
+        "" ->
+          agent
+
         raw ->
           put_in(agent, [:cli, :codex, :extra_args], String.split(raw, ~r/\s+/, trim: true))
       end
@@ -558,8 +664,15 @@ defmodule LemonCore.Config do
 
     agent =
       case System.get_env("LEMON_CLAUDE_YOLO") do
-        nil -> agent
-        value -> put_in(agent, [:cli, :claude, :dangerously_skip_permissions], parse_boolean(value, true))
+        nil ->
+          agent
+
+        value ->
+          put_in(
+            agent,
+            [:cli, :claude, :dangerously_skip_permissions],
+            parse_boolean(value, true)
+          )
       end
 
     %{config | agent: agent}
@@ -633,7 +746,10 @@ defmodule LemonCore.Config do
 
   defp parse_string_list(nil), do: []
   defp parse_string_list(list) when is_list(list), do: Enum.map(list, &to_string/1)
-  defp parse_string_list(value) when is_binary(value), do: String.split(value, ~r/\s*,\s*/, trim: true)
+
+  defp parse_string_list(value) when is_binary(value),
+    do: String.split(value, ~r/\s*,\s*/, trim: true)
+
   defp parse_string_list(_), do: []
 
   defp normalize_env_overrides(nil), do: %{}
@@ -681,7 +797,10 @@ defmodule LemonCore.Config do
   end
 
   defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value) when is_binary(key), do: Map.put(map, String.to_atom(key), value)
+
+  defp maybe_put(map, key, value) when is_binary(key),
+    do: Map.put(map, String.to_atom(key), value)
+
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp put_provider_env_override(providers, name, api_key: api_key, base_url: base_url) do

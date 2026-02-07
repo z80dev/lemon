@@ -8,7 +8,6 @@ defmodule CodingAgent.ExtensionsEdgeCasesTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.Extensions
-  alias AgentCore.Types.AgentTool
   alias AgentCore.Types.AgentToolResult
 
   @moduletag :tmp_dir
@@ -56,7 +55,7 @@ defmodule CodingAgent.ExtensionsEdgeCasesTest do
         @behaviour CodingAgent.Extensions.Extension
 
         @impl true
-        def name, do: UndefinedModule.undefined_function()
+        def name, do: apply(UndefinedModule, :undefined_function, [])
 
         @impl true
         def version, do: "1.0.0"

@@ -39,4 +39,3 @@ defmodule LemonGateway.Store do
   defdelegate get_run_history(scope_or_session_key, opts \\ []), to: LemonCore.Store
   defdelegate get_run(run_id), to: LemonCore.Store
 end
-

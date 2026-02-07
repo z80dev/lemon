@@ -41,7 +41,7 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
     }
   end
 
-  defp start_session(opts \\ []) do
+  defp start_session(opts) do
     base_opts = [
       cwd: opts[:cwd] || System.tmp_dir!(),
       model: opts[:model] || IntegrationConfig.model(),
@@ -63,7 +63,7 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
     end
   end
 
-  defp subscribe_and_collect_events(session, timeout \\ 30_000) do
+  defp subscribe_and_collect_events(session, timeout) do
     _ref = Session.subscribe(session)
     collect_events([], timeout)
   end

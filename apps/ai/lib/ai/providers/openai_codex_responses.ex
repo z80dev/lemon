@@ -88,7 +88,9 @@ defmodule Ai.Providers.OpenAICodexResponses do
 
   @impl true
   def get_env_api_key do
-    System.get_env("OPENAI_CODEX_API_KEY") || System.get_env("CHATGPT_TOKEN")
+    System.get_env("OPENAI_CODEX_API_KEY") ||
+      System.get_env("CHATGPT_TOKEN") ||
+      Ai.Auth.OpenAICodexOAuth.resolve_access_token()
   end
 
   @impl true
@@ -463,15 +465,21 @@ defmodule Ai.Providers.OpenAICodexResponses do
       fn -> %{buffer: ""} end,
       fn state ->
         receive do
-          {:data, chunk} ->
-            {events, new_buffer} = parse_sse_chunk(state.buffer <> chunk)
-            {events, %{state | buffer: new_buffer}}
+          message ->
+            case normalize_sse_message(message) do
+              {:data, chunk} ->
+                {events, new_buffer} = parse_sse_chunk(state.buffer <> chunk)
+                {events, %{state | buffer: new_buffer}}
 
-          {:done, _} ->
-            {:halt, state}
+              :done ->
+                {:halt, state}
 
-          {:error, reason} ->
-            throw({:stream_error, reason})
+              {:error, reason} ->
+                throw({:stream_error, reason})
+
+              :ignore ->
+                {[], state}
+            end
         after
           300_000 ->
             {:halt, state}
@@ -479,6 +487,35 @@ defmodule Ai.Providers.OpenAICodexResponses do
       end,
       fn _state -> :ok end
     )
+  end
+
+  # Req's `into: :self` streaming can deliver messages in a few shapes depending on adapters/versions.
+  defp normalize_sse_message(message) do
+    case message do
+      {:data, data} when is_binary(data) ->
+        {:data, data}
+
+      {_, {:data, data}} when is_binary(data) ->
+        {:data, data}
+
+      {:done, _} ->
+        :done
+
+      {_, :done} ->
+        :done
+
+      {_, {:done, _}} ->
+        :done
+
+      {:error, reason} ->
+        {:error, reason}
+
+      {_, {:error, reason}} ->
+        {:error, reason}
+
+      _ ->
+        :ignore
+    end
   end
 
   defp parse_sse_chunk(buffer) do

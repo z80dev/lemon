@@ -18,7 +18,6 @@ defmodule Ai.Providers.BedrockStreamingTest do
 
   alias Ai.Types.{
     AssistantMessage,
-    Context,
     Cost,
     Model,
     StreamOptions,

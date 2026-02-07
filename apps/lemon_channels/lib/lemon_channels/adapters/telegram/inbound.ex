@@ -52,6 +52,8 @@ defmodule LemonChannels.Adapters.Telegram.Inbound do
       end
 
     text = message["text"] || message["caption"] || ""
+    voice = message["voice"] || %{}
+    document = message["document"] || %{}
 
     inbound = %InboundMessage{
       channel_id: "telegram",
@@ -73,7 +75,30 @@ defmodule LemonChannels.Adapters.Telegram.Inbound do
         chat_id: chat["id"],
         user_msg_id: message["message_id"],
         chat_type: chat["type"],
-        chat_title: chat["title"]
+        chat_title: chat["title"],
+        media_group_id: message["media_group_id"],
+        document:
+          if is_map(document) and map_size(document) > 0 do
+            %{
+              file_id: document["file_id"],
+              file_name: document["file_name"],
+              mime_type: document["mime_type"],
+              file_size: document["file_size"]
+            }
+          else
+            nil
+          end,
+        voice:
+          if is_map(voice) and map_size(voice) > 0 do
+            %{
+              file_id: voice["file_id"],
+              mime_type: voice["mime_type"],
+              file_size: voice["file_size"],
+              duration: voice["duration"]
+            }
+          else
+            nil
+          end
       }
     }
 

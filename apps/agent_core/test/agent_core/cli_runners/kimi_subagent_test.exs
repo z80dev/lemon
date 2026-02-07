@@ -17,7 +17,7 @@ defmodule AgentCore.CliRunners.KimiSubagentTest do
 
   alias AgentCore.EventStream
 
-  defp create_mock_session(opts \\ []) do
+  defp create_mock_session(opts) do
     token = Keyword.get(opts, :token)
     token_agent_pid = Keyword.get(opts, :token_agent)
 

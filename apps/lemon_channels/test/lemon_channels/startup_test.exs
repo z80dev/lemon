@@ -81,6 +81,27 @@ defmodule LemonChannels.StartupTest do
       _ = Application.stop(:lemon_gateway)
       Application.delete_env(:lemon_gateway, Config)
       Application.delete_env(:lemon_gateway, :telegram)
+
+      # Restore a baseline for the rest of the lemon_channels suite. This module
+      # intentionally stops applications as part of boot validation.
+      Application.put_env(:lemon_gateway, Config, %{
+        enable_telegram: false,
+        max_concurrent_runs: 1,
+        default_engine: "lemon"
+      })
+
+      Application.put_env(:lemon_gateway, :engines, [
+        LemonGateway.Engines.Lemon,
+        LemonGateway.Engines.Echo,
+        LemonGateway.Engines.Codex,
+        LemonGateway.Engines.Claude,
+        LemonGateway.Engines.Opencode,
+        LemonGateway.Engines.Pi
+      ])
+
+      Application.delete_env(:lemon_gateway, :telegram)
+
+      _ = Application.ensure_all_started(:lemon_channels)
     end)
 
     :ok

@@ -31,7 +31,7 @@
 # ============================================================================
 
 # Load support files
-Code.compile_file("support/integration_config.ex", __DIR__)
+Code.require_file("support/integration_config.ex", __DIR__)
 
 ExUnit.configure(exclude: [:integration])
 ExUnit.start()

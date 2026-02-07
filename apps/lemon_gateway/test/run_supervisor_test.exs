@@ -477,7 +477,7 @@ defmodule LemonGateway.RunSupervisorTest do
           meta: %{notify_pid: self(), controller_pid: self()}
         )
 
-      {:ok, pid1} =
+      {:ok, _pid1} =
         RunSupervisor.start_run(%{job: job1, slot_ref: make_ref(), worker_pid: self()})
 
       {:ok, pid2} =
@@ -536,7 +536,7 @@ defmodule LemonGateway.RunSupervisorTest do
       {:ok, pid1} =
         RunSupervisor.start_run(%{job: job1, slot_ref: make_ref(), worker_pid: self()})
 
-      assert_receive {:engine_started, _, task_pid1}, 2000
+      assert_receive {:engine_started, _, _task_pid1}, 2000
 
       # Kill the child abruptly
       Process.exit(pid1, :kill)
@@ -645,8 +645,10 @@ defmodule LemonGateway.RunSupervisorTest do
       {:ok, pid2} =
         RunSupervisor.start_run(%{job: job2, slot_ref: make_ref(), worker_pid: self()})
 
-      assert_receive {:engine_started, _, _task_pid1}, 2000
-      assert_receive {:engine_started, _, task_pid2}, 2000
+      # Engine start notifications are asynchronous and can arrive in either order.
+      assert_receive {:engine_started, _, task_pid_a}, 2000
+      assert_receive {:engine_started, _, task_pid_b}, 2000
+      task_pids = [task_pid_a, task_pid_b]
 
       # Terminate first child
       :ok = DynamicSupervisor.terminate_child(RunSupervisor, pid1)
@@ -657,7 +659,12 @@ defmodule LemonGateway.RunSupervisorTest do
       assert Process.alive?(pid2)
 
       # Complete second
-      send(task_pid2, {:complete, "done"})
+      Enum.each(task_pids, fn pid ->
+        if is_pid(pid) and Process.alive?(pid) do
+          send(pid, {:complete, "done"})
+        end
+      end)
+
       assert_receive {:run_complete, ^pid2, %Event.Completed{ok: true}}, 2000
     end
   end
@@ -876,7 +883,7 @@ defmodule LemonGateway.RunSupervisorTest do
       {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
       ref = Process.monitor(pid)
 
-      assert_receive {:engine_started, _, task_pid}, 2000
+      assert_receive {:engine_started, _, _task_pid}, 2000
 
       # Terminate the child
       :ok = DynamicSupervisor.terminate_child(RunSupervisor, pid)

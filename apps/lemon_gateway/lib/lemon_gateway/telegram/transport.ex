@@ -5,7 +5,7 @@ defmodule LemonGateway.Telegram.Transport do
 
   require Logger
 
-  alias LemonGateway.Telegram.{API, Dedupe, OffsetStore}
+  alias LemonGateway.Telegram.{API, Dedupe, OffsetStore, TriggerMode}
   alias LemonGateway.Telegram.PollerLock
   alias LemonGateway.Types.{ChatScope, Job, ResumeToken}
   alias LemonGateway.{BindingResolver, ChatState, Config, EngineRegistry, Store}
@@ -68,6 +68,14 @@ defmodule LemonGateway.Telegram.Transport do
         # This prevents the bot from replying to historical messages after downtime.
         drop_pending_updates = drop_pending_updates && is_nil(config_offset)
 
+        {bot_id, bot_username} =
+          resolve_bot_identity(
+            config[:bot_id] || config["bot_id"],
+            config[:bot_username] || config["bot_username"],
+            config[:api_mod] || API,
+            token
+          )
+
         state = %{
           token: token,
           api_mod: config[:api_mod] || API,
@@ -86,7 +94,9 @@ defmodule LemonGateway.Telegram.Transport do
           buffers: %{},
           approval_messages: %{},
           # run_id => %{scope, session_key, message_id, peer_kind}
-          pending_new: %{}
+          pending_new: %{},
+          bot_id: bot_id,
+          bot_username: bot_username
         }
 
         maybe_subscribe_exec_approvals()
@@ -222,6 +232,8 @@ defmodule LemonGateway.Telegram.Transport do
   end
 
   defp poll_updates(state) do
+    _ = PollerLock.heartbeat(state.account_id, state.token)
+
     case state.api_mod.get_updates(state.token, state.offset, state.poll_interval_ms) do
       {:ok, %{"ok" => true, "result" => updates}} ->
         if state.drop_pending_updates? and not state.drop_pending_done? do
@@ -301,21 +313,27 @@ defmodule LemonGateway.Telegram.Transport do
 
           :new ->
             cond do
-              resume_command?(text) ->
+              trigger_command?(text, state.bot_username) ->
+                handle_trigger_command(state, scope, message_id, message, text)
+
+              resume_command?(text, state.bot_username) ->
                 handle_resume_command(state, scope, message_id, peer_kind, text)
 
-              recompile_command?(text) ->
+              recompile_command?(text, state.bot_username) ->
                 handle_recompile_command(state, scope, message_id, peer_kind, text)
 
-              new_command?(text) ->
+              new_command?(text, state.bot_username) ->
                 args = telegram_command_args(text, "new")
                 handle_new_session(state, scope, message_id, peer_kind, args)
 
-              cancel_command?(text) ->
+              cancel_command?(text, state.bot_username) ->
                 handle_cancel(scope, message)
                 state
 
-              command_message?(text) ->
+              should_ignore_for_trigger?(state, scope, message, text) ->
+                state
+
+              command_message_for_bot?(text, state.bot_username) ->
                 submit_job_immediate(state, scope, message_id, text, reply_to_message, peer_kind)
 
               true ->
@@ -597,30 +615,76 @@ defmodule LemonGateway.Telegram.Transport do
   defp peer_kind(%{"type" => "channel"}), do: :channel
   defp peer_kind(_), do: :unknown
 
-  defp command_message?(text) do
-    String.trim_leading(text) |> String.starts_with?("/")
+  defp command_message_for_bot?(text, bot_username) do
+    trimmed = String.trim_leading(text || "")
+
+    case Regex.run(~r{^/([a-z][a-z0-9_]*)(?:@([\w_]+))?(?:\s|$)}i, trimmed) do
+      # Note: Elixir's Regex.run/2 omits optional capture groups when they don't match.
+      # For "/cmd" (no @BotName suffix), we only get [full_match, cmd].
+      [_, _cmd] ->
+        true
+
+      [_, _cmd, nil] ->
+        true
+
+      [_, _cmd, ""] ->
+        true
+
+      [_, _cmd, target] when is_binary(bot_username) and bot_username != "" ->
+        String.downcase(target) == String.downcase(bot_username)
+
+      [_, _cmd, _target] ->
+        true
+
+      _ ->
+        false
+    end
   end
 
-  defp cancel_command?(text) do
-    telegram_command?(text, "cancel")
+  defp cancel_command?(text, bot_username) do
+    telegram_command?(text, "cancel", bot_username)
   end
 
-  defp new_command?(text) do
-    telegram_command?(text, "new")
+  defp new_command?(text, bot_username) do
+    telegram_command?(text, "new", bot_username)
   end
 
-  defp resume_command?(text) do
-    telegram_command?(text, "resume")
+  defp resume_command?(text, bot_username) do
+    telegram_command?(text, "resume", bot_username)
   end
 
-  defp recompile_command?(text) do
-    telegram_command?(text, "recompile")
+  defp recompile_command?(text, bot_username) do
+    telegram_command?(text, "recompile", bot_username)
+  end
+
+  defp trigger_command?(text, bot_username) do
+    telegram_command?(text, "trigger", bot_username)
   end
 
   # Telegram commands in groups may include a bot username suffix: /cmd@BotName
-  defp telegram_command?(text, cmd) when is_binary(cmd) do
+  defp telegram_command?(text, cmd, bot_username) when is_binary(cmd) do
     trimmed = String.trim_leading(text || "")
-    Regex.match?(~r/^\/#{cmd}(?:@[\w_]+)?(?:\s|$)/i, trimmed)
+
+    case Regex.run(~r/^\/#{cmd}(?:@([\w_]+))?(?:\s|$)/i, trimmed) do
+      # "/cmd" without a @BotName suffix => only the full match is returned.
+      [_] ->
+        true
+
+      [_, nil] ->
+        true
+
+      [_, ""] ->
+        true
+
+      [_, target] when is_binary(bot_username) and bot_username != "" ->
+        String.downcase(target) == String.downcase(bot_username)
+
+      [_, _target] ->
+        true
+
+      _ ->
+        false
+    end
   end
 
   defp telegram_command_args(text, cmd) when is_binary(cmd) do
@@ -929,10 +993,6 @@ defmodule LemonGateway.Telegram.Transport do
 
   defp abbrev(token) when is_binary(token) do
     if byte_size(token) > 40, do: String.slice(token, 0, 40) <> "…", else: token
-  end
-
-  defp handle_new_session(state, %ChatScope{} = scope, message_id, peer_kind) do
-    handle_new_session(state, scope, message_id, peer_kind, nil)
   end
 
   defp handle_new_session(state, %ChatScope{} = scope, message_id, peer_kind, raw_selector) do
@@ -1248,6 +1308,355 @@ defmodule LemonGateway.Telegram.Transport do
     _ -> :ok
   end
 
+  defp parse_int(nil), do: nil
+
+  defp parse_int(i) when is_integer(i), do: i
+
+  defp parse_int(s) when is_binary(s) do
+    case Integer.parse(s) do
+      {i, _} -> i
+      :error -> nil
+    end
+  end
+
+  defp parse_int(_), do: nil
+
+  defp resolve_bot_identity(bot_id, bot_username, api_mod, token) do
+    bot_id = parse_int(bot_id) || bot_id
+    bot_username = normalize_bot_username(bot_username)
+
+    cond do
+      is_integer(bot_id) and is_binary(bot_username) and bot_username != "" ->
+        {bot_id, bot_username}
+
+      function_exported?(api_mod, :get_me, 1) ->
+        case api_mod.get_me(token) do
+          {:ok, %{"ok" => true, "result" => %{"id" => id, "username" => username}}} ->
+            {parse_int(id) || id, normalize_bot_username(username)}
+
+          _ ->
+            {bot_id, bot_username}
+        end
+
+      true ->
+        {bot_id, bot_username}
+    end
+  rescue
+    _ -> {bot_id, bot_username}
+  end
+
+  defp normalize_bot_username(nil), do: nil
+
+  defp normalize_bot_username(username) when is_binary(username) do
+    username
+    |> String.trim()
+    |> String.trim_leading("@")
+  end
+
+  defp should_ignore_for_trigger?(state, %ChatScope{} = scope, message, text) do
+    case peer_kind(message["chat"] || %{}) do
+      kind when kind in [:group, :channel] ->
+        trigger_mode = trigger_mode_for(state, scope)
+        trigger_mode.mode == :mentions and not explicit_invocation?(state, message, text)
+
+      _ ->
+        false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp trigger_mode_for(state, %ChatScope{} = scope) do
+    account_id = state.account_id || "default"
+    TriggerMode.resolve(account_id, scope.chat_id, scope.topic_id)
+  rescue
+    _ -> %{mode: :all, chat_mode: nil, topic_mode: nil, source: :default}
+  end
+
+  defp explicit_invocation?(state, message, text) do
+    command_message_for_bot?(text, state.bot_username) or
+      mention_of_bot?(state, message) or
+      reply_to_bot?(state, message)
+  rescue
+    _ -> false
+  end
+
+  defp mention_of_bot?(state, message) do
+    bot_username = state.bot_username
+    bot_id = state.bot_id
+    text = message["text"] || message["caption"] || ""
+
+    mention_by_username =
+      if is_binary(bot_username) and bot_username != "" do
+        Regex.match?(~r/(?:^|\W)@#{Regex.escape(bot_username)}(?:\b|$)/i, text || "")
+      else
+        false
+      end
+
+    mention_by_id =
+      if is_integer(bot_id) do
+        entities = message_entities(message)
+
+        Enum.any?(entities, fn entity ->
+          case entity do
+            %{"type" => "text_mention", "user" => %{"id" => id}} ->
+              parse_int(id) == bot_id
+
+            _ ->
+              false
+          end
+        end)
+      else
+        false
+      end
+
+    mention_by_username or mention_by_id
+  rescue
+    _ -> false
+  end
+
+  defp reply_to_bot?(state, message) do
+    reply = message["reply_to_message"] || %{}
+    thread_id = message["message_thread_id"]
+
+    cond do
+      reply == %{} ->
+        false
+
+      topic_root_reply?(thread_id, reply) ->
+        false
+
+      is_integer(state.bot_id) and get_in(reply, ["from", "id"]) == state.bot_id ->
+        true
+
+      is_binary(state.bot_username) and state.bot_username != "" ->
+        reply_username = get_in(reply, ["from", "username"])
+
+        is_binary(reply_username) and
+          String.downcase(reply_username) == String.downcase(state.bot_username)
+
+      true ->
+        false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp topic_root_reply?(thread_id, reply) do
+    is_integer(thread_id) and is_map(reply) and reply["message_id"] == thread_id
+  end
+
+  defp message_entities(message) when is_map(message) do
+    entities = message["entities"] || message["caption_entities"]
+    if is_list(entities), do: entities, else: []
+  end
+
+  defp message_entities(_), do: []
+
+  defp handle_trigger_command(state, %ChatScope{} = scope, message_id, message, text) do
+    chat_id = scope.chat_id
+    topic_id = scope.topic_id
+    account_id = state.account_id || "default"
+    args = telegram_command_args(text, "trigger") || ""
+    arg = String.downcase(String.trim(args || ""))
+    current = TriggerMode.resolve(account_id, chat_id, topic_id)
+
+    case arg do
+      "" ->
+        _ =
+          send_system_message(
+            state,
+            chat_id,
+            topic_id,
+            message_id,
+            render_trigger_mode_status(current)
+          )
+
+        state
+
+      "mentions" ->
+        with true <- trigger_change_allowed?(state, message, chat_id),
+             :ok <- TriggerMode.set(scope, account_id, :mentions) do
+          _ =
+            send_system_message(
+              state,
+              chat_id,
+              topic_id,
+              message_id,
+              render_trigger_mode_set("mentions", scope)
+            )
+
+          state
+        else
+          false ->
+            _ =
+              send_system_message(
+                state,
+                chat_id,
+                topic_id,
+                message_id,
+                "Trigger mode can only be changed by a group admin."
+              )
+
+            state
+
+          _ ->
+            state
+        end
+
+      "all" ->
+        with true <- trigger_change_allowed?(state, message, chat_id),
+             :ok <- TriggerMode.set(scope, account_id, :all) do
+          _ =
+            send_system_message(
+              state,
+              chat_id,
+              topic_id,
+              message_id,
+              render_trigger_mode_set("all", scope)
+            )
+
+          state
+        else
+          false ->
+            _ =
+              send_system_message(
+                state,
+                chat_id,
+                topic_id,
+                message_id,
+                "Trigger mode can only be changed by a group admin."
+              )
+
+            state
+
+          _ ->
+            state
+        end
+
+      "clear" ->
+        cond do
+          is_nil(topic_id) ->
+            _ =
+              send_system_message(
+                state,
+                chat_id,
+                topic_id,
+                message_id,
+                "No topic override to clear. Use /trigger all or /trigger mentions to set chat defaults."
+              )
+
+            state
+
+          trigger_change_allowed?(state, message, chat_id) ->
+            :ok = TriggerMode.clear_topic(account_id, chat_id, topic_id)
+
+            _ =
+              send_system_message(
+                state,
+                chat_id,
+                topic_id,
+                message_id,
+                "Cleared topic trigger override."
+              )
+
+            state
+
+          true ->
+            _ =
+              send_system_message(
+                state,
+                chat_id,
+                topic_id,
+                message_id,
+                "Trigger mode can only be changed by a group admin."
+              )
+
+            state
+        end
+
+      _ ->
+        _ =
+          send_system_message(
+            state,
+            chat_id,
+            topic_id,
+            message_id,
+            "Usage: /trigger [mentions|all|clear]"
+          )
+
+        state
+    end
+  rescue
+    _ -> state
+  end
+
+  defp trigger_change_allowed?(state, message, chat_id) do
+    case peer_kind(message["chat"] || %{}) do
+      :group ->
+        sender_id = parse_int(get_in(message, ["from", "id"]))
+
+        if is_integer(sender_id) do
+          sender_admin?(state, chat_id, sender_id)
+        else
+          false
+        end
+
+      _ ->
+        true
+    end
+  end
+
+  defp sender_admin?(state, chat_id, sender_id) do
+    if function_exported?(state.api_mod, :get_chat_member, 3) do
+      case state.api_mod.get_chat_member(state.token, chat_id, sender_id) do
+        {:ok, %{"ok" => true, "result" => %{"status" => status}}}
+        when status in ["administrator", "creator"] ->
+          true
+
+        _ ->
+          false
+      end
+    else
+      false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp render_trigger_mode_status(%{mode: mode, chat_mode: chat_mode, topic_mode: topic_mode}) do
+    base =
+      case mode do
+        :mentions -> "Trigger mode: mentions-only."
+        _ -> "Trigger mode: all."
+      end
+
+    chat_line =
+      case chat_mode do
+        :mentions -> "Chat default: mentions-only."
+        :all -> "Chat default: all."
+        _ -> "Chat default: all."
+      end
+
+    topic_line =
+      case topic_mode do
+        :mentions -> "Topic override: mentions-only."
+        :all -> "Topic override: all."
+        _ -> "Topic override: none."
+      end
+
+    [base, chat_line, topic_line, "Use /trigger mentions|all|clear."]
+    |> Enum.join("\n")
+  end
+
+  defp render_trigger_mode_set(mode, %ChatScope{topic_id: nil}) do
+    "Trigger mode set to #{mode} for this chat."
+  end
+
+  defp render_trigger_mode_set(mode, %ChatScope{topic_id: _}) do
+    "Trigger mode set to #{mode} for this topic."
+  end
+
   defp scope_key(%ChatScope{chat_id: chat_id, topic_id: topic_id}), do: {chat_id, topic_id}
 
   defp ensure_httpc do
@@ -1278,7 +1687,7 @@ defmodule LemonGateway.Telegram.Transport do
   end
 
   defp get_profile(agent_id, cwd) do
-    cfg = LemonCore.Config.load(cwd)
+    cfg = LemonCore.Config.cached(cwd)
     Map.get(cfg.agents || %{}, agent_id) || Map.get(cfg.agents || %{}, "default") || %{}
   end
 
@@ -1304,6 +1713,7 @@ defmodule LemonGateway.Telegram.Transport do
 
   defp safe_provider("anthropic"), do: {:ok, :anthropic}
   defp safe_provider("openai"), do: {:ok, :openai}
+  defp safe_provider("openai-codex"), do: {:ok, :"openai-codex"}
   defp safe_provider("google"), do: {:ok, :google}
   defp safe_provider("kimi"), do: {:ok, :kimi}
   defp safe_provider("aws-bedrock"), do: {:ok, :aws_bedrock}

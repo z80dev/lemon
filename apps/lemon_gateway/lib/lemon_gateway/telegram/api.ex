@@ -4,12 +4,34 @@ defmodule LemonGateway.Telegram.API do
   @default_timeout 10_000
 
   def get_updates(token, offset, timeout_ms) do
+    # `timeout_ms` is passed in from polling transports. Historically it has been wired to the
+    # poll interval (often 1s), which is too low for TLS handshake / transient network hiccups and
+    # results in silent "no replies" behavior. Clamp to a sane minimum for the HTTP request timeout.
+    timeout_ms =
+      cond do
+        is_integer(timeout_ms) and timeout_ms > 0 -> max(timeout_ms, @default_timeout)
+        true -> @default_timeout
+      end
+
     params = %{
       "offset" => offset,
       "timeout" => 0
     }
 
     request(token, "getUpdates", params, timeout_ms)
+  end
+
+  def get_me(token) do
+    request(token, "getMe", %{}, @default_timeout)
+  end
+
+  def get_chat_member(token, chat_id, user_id) do
+    params = %{
+      "chat_id" => chat_id,
+      "user_id" => user_id
+    }
+
+    request(token, "getChatMember", params, @default_timeout)
   end
 
   def send_message(token, chat_id, text, reply_to_or_opts \\ nil, parse_mode \\ nil)
@@ -106,6 +128,154 @@ defmodule LemonGateway.Telegram.API do
     }
 
     request(token, "deleteMessage", params, @default_timeout)
+  end
+
+  def get_file(token, file_id) when is_binary(file_id) do
+    params = %{"file_id" => file_id}
+    request(token, "getFile", params, @default_timeout)
+  end
+
+  def download_file(token, file_path) when is_binary(file_path) do
+    url = "https://api.telegram.org/file/bot#{token}/#{file_path}"
+    headers = []
+    opts = [timeout: 30_000, connect_timeout: 30_000]
+
+    case :httpc.request(:get, {to_charlist(url), headers}, opts, body_format: :binary) do
+      {:ok, {{_, 200, _}, _headers, body}} -> {:ok, body}
+      {:ok, {{_, status, _}, _headers, body}} -> {:error, {:http_error, status, body}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Send a document (file) to Telegram.
+
+  `file` may be:
+  - `{:path, "/abs/path/to/file"}`
+  - `{:binary, "filename.ext", "application/octet-stream", <<bytes>>}`
+  """
+  def send_document(token, chat_id, file, opts \\ %{}) do
+    opts = if is_map(opts), do: opts, else: Enum.into(opts, %{})
+
+    boundary = build_boundary("lemon-doc")
+    {body, content_type} = build_document_multipart(boundary, chat_id, file, opts)
+
+    url = "https://api.telegram.org/bot#{token}/sendDocument"
+    headers = [{~c"content-type", to_charlist(content_type)}]
+    http_opts = [timeout: 60_000, connect_timeout: 30_000]
+
+    case :httpc.request(
+           :post,
+           {to_charlist(url), headers, to_charlist(content_type), body},
+           http_opts,
+           body_format: :binary
+         ) do
+      {:ok, {{_, 200, _}, _headers, resp_body}} ->
+        Jason.decode(resp_body)
+
+      {:ok, {{_, status, _}, _headers, resp_body}} ->
+        {:error, {:http_error, status, resp_body}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp build_boundary(prefix) when is_binary(prefix) do
+    "----" <> prefix <> "-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+  end
+
+  defp build_document_multipart(boundary, chat_id, file, opts) do
+    boundary_line = "--" <> boundary <> "\r\n"
+    end_boundary = "--" <> boundary <> "--\r\n"
+
+    parts = []
+
+    parts =
+      parts ++
+        [
+          boundary_line,
+          "Content-Disposition: form-data; name=\"chat_id\"\r\n\r\n",
+          to_string(chat_id),
+          "\r\n"
+        ]
+
+    parts =
+      case opts[:reply_to_message_id] || opts["reply_to_message_id"] do
+        nil ->
+          parts
+
+        v ->
+          parts ++
+            [
+              boundary_line,
+              "Content-Disposition: form-data; name=\"reply_to_message_id\"\r\n\r\n",
+              to_string(v),
+              "\r\n"
+            ]
+      end
+
+    parts =
+      case opts[:message_thread_id] || opts["message_thread_id"] do
+        nil ->
+          parts
+
+        v ->
+          parts ++
+            [
+              boundary_line,
+              "Content-Disposition: form-data; name=\"message_thread_id\"\r\n\r\n",
+              to_string(v),
+              "\r\n"
+            ]
+      end
+
+    parts =
+      case opts[:caption] || opts["caption"] do
+        nil ->
+          parts
+
+        v when is_binary(v) and v != "" ->
+          parts ++
+            [
+              boundary_line,
+              "Content-Disposition: form-data; name=\"caption\"\r\n\r\n",
+              v,
+              "\r\n"
+            ]
+
+        _ ->
+          parts
+      end
+
+    {filename, mime_type, bytes} =
+      case file do
+        {:path, path} when is_binary(path) ->
+          {Path.basename(path), "application/octet-stream", File.read!(path)}
+
+        {:binary, name, ct, b} when is_binary(name) and is_binary(ct) and is_binary(b) ->
+          {name, ct, b}
+
+        _ ->
+          {"document.bin", "application/octet-stream", ""}
+      end
+
+    parts =
+      parts ++
+        [
+          boundary_line,
+          "Content-Disposition: form-data; name=\"document\"; filename=\"",
+          filename,
+          "\"\r\n",
+          "Content-Type: ",
+          mime_type,
+          "\r\n\r\n",
+          bytes,
+          "\r\n",
+          end_boundary
+        ]
+
+    {IO.iodata_to_binary(parts), "multipart/form-data; boundary=#{boundary}"}
   end
 
   defp request(token, method, params, timeout_ms) do

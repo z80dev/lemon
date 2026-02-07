@@ -96,19 +96,6 @@ defmodule Ai.Providers.AzureOpenAIResponsesComprehensiveTest do
     |> Map.merge(Map.drop(overrides, [:reasoning, :input]))
   end
 
-  defp base_output do
-    %AssistantMessage{
-      role: :assistant,
-      content: [],
-      api: :azure_openai_responses,
-      provider: :"azure-openai-responses",
-      model: "gpt-4o",
-      usage: %Usage{cost: %Cost{}},
-      stop_reason: :stop,
-      timestamp: System.system_time(:millisecond)
-    }
-  end
-
   # ============================================================================
   # Provider Identification Tests
   # ============================================================================

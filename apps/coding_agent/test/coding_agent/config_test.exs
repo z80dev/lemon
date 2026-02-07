@@ -133,7 +133,7 @@ defmodule CodingAgent.ConfigTest do
     test "returns skills directory" do
       result = Config.skills_dir()
 
-      assert String.ends_with?(result, "skills")
+      assert String.ends_with?(result, "skill")
     end
   end
 

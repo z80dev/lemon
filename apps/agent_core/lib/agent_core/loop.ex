@@ -1008,45 +1008,6 @@ defmodule AgentCore.Loop do
     end
   end
 
-  defp skip_remaining_tools(context, new_messages, tool_calls, stream) do
-    Enum.reduce(tool_calls, {[], context, new_messages}, fn tool_call, {results, ctx, msgs} ->
-      {result, ctx, msgs} = skip_tool_call(tool_call, ctx, msgs, stream)
-      {results ++ [result], ctx, msgs}
-    end)
-  end
-
-  defp skip_tool_call(tool_call, context, new_messages, stream) do
-    result = %AgentToolResult{
-      content: [%TextContent{type: :text, text: "Skipped due to queued user message."}],
-      details: nil
-    }
-
-    EventStream.push(
-      stream,
-      {:tool_execution_start, tool_call.id, tool_call.name, tool_call.arguments}
-    )
-
-    EventStream.push(stream, {:tool_execution_end, tool_call.id, tool_call.name, result, true})
-
-    tool_result_message = %ToolResultMessage{
-      role: :tool_result,
-      tool_call_id: tool_call.id,
-      tool_name: tool_call.name,
-      content: result.content,
-      details: nil,
-      is_error: true,
-      timestamp: System.system_time(:millisecond)
-    }
-
-    context = %{context | messages: context.messages ++ [tool_result_message]}
-    new_messages = new_messages ++ [tool_result_message]
-
-    EventStream.push(stream, {:message_start, tool_result_message})
-    EventStream.push(stream, {:message_end, tool_result_message})
-
-    {tool_result_message, context, new_messages}
-  end
-
   # ============================================================================
   # Private: Helpers
   # ============================================================================
@@ -1055,7 +1016,8 @@ defmodule AgentCore.Loop do
     Ai.stream(model, context, options)
   end
 
-  # Ai.EventStream can stop immediately on cancel, which can raise :noproc on :take.
+  # Ai.EventStream can stop immediately on cancel, which can raise on :take
+  # (:noproc, :shutdown, or :normal depending on timing).
   # Wrap the take loop to treat those exits as a canceled terminal event.
   defp ai_events(response_stream) do
     Stream.resource(
@@ -1086,6 +1048,9 @@ defmodule AgentCore.Loop do
       GenServer.call(stream, :take, :infinity)
     catch
       :exit, {:noproc, _} ->
+        {:event, {:canceled, :canceled}}
+
+      :exit, {:normal, _} ->
         {:event, {:canceled, :canceled}}
 
       :exit, {:shutdown, _} ->

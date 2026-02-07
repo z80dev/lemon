@@ -51,7 +51,11 @@ defmodule LemonRouter.RunOrchestrator do
   `queued` and `completed_today` are placeholders (the router does not own a
   durable queue); `active` reflects current supervised run processes.
   """
-  @spec counts() :: %{active: non_neg_integer(), queued: non_neg_integer(), completed_today: non_neg_integer()}
+  @spec counts() :: %{
+          active: non_neg_integer(),
+          queued: non_neg_integer(),
+          completed_today: non_neg_integer()
+        }
   def counts do
     active =
       try do
@@ -119,6 +123,14 @@ defmodule LemonRouter.RunOrchestrator do
     # If a resume token is present, prefer its engine and strip strict resume lines
     # from the prompt so we don't send `codex resume ...` as the user prompt.
     {resume, prompt} = extract_resume_and_strip_prompt(prompt, meta)
+
+    prompt =
+      if meta[:voice_transcribed] do
+        base = prompt || ""
+        "(voice transcribed) " <> base
+      else
+        prompt
+      end
 
     # Resolve engine_id: explicit param > session config model > nil
     # Session config can set model which maps to engine_id
@@ -312,20 +324,21 @@ defmodule LemonRouter.RunOrchestrator do
 
     resume =
       cond do
-        Code.ensure_loaded?(EngineRegistry) ->
+        true ->
           case EngineRegistry.extract_resume(prompt) do
-            {:ok, token} -> token
+            {:ok, token} ->
+              token
+
             :none ->
               if is_binary(reply_to_text) and reply_to_text != "" do
                 case EngineRegistry.extract_resume(reply_to_text) do
                   {:ok, token} -> token
                   :none -> nil
                 end
+              else
+                nil
               end
           end
-
-        true ->
-          nil
       end
 
     stripped = strip_strict_resume_lines(prompt)

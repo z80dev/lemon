@@ -14,4 +14,3 @@ defmodule LemonGateway.Store.JsonlBackend do
   defdelegate list_tables(state), to: LemonCore.Store.JsonlBackend
   defdelegate ensure_table_loaded(state, table), to: LemonCore.Store.JsonlBackend
 end
-

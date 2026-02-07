@@ -134,6 +134,8 @@ defmodule LemonGateway.ConfigLoader do
   defp parse_telegram(telegram) when is_map(telegram) do
     %{
       bot_token: fetch(telegram, :bot_token),
+      bot_id: fetch(telegram, :bot_id),
+      bot_username: fetch(telegram, :bot_username),
       allowed_chat_ids: fetch(telegram, :allowed_chat_ids),
       deny_unbound_chats: fetch(telegram, :deny_unbound_chats),
       poll_interval_ms: fetch(telegram, :poll_interval_ms),
@@ -144,11 +146,35 @@ defmodule LemonGateway.ConfigLoader do
       allow_queue_override: fetch(telegram, :allow_queue_override),
       account_id: fetch(telegram, :account_id),
       offset: fetch(telegram, :offset),
-      drop_pending_updates: fetch(telegram, :drop_pending_updates)
+      drop_pending_updates: fetch(telegram, :drop_pending_updates),
+      voice_transcription: fetch(telegram, :voice_transcription),
+      voice_transcription_model: fetch(telegram, :voice_transcription_model),
+      voice_transcription_base_url: fetch(telegram, :voice_transcription_base_url),
+      voice_transcription_api_key: fetch(telegram, :voice_transcription_api_key),
+      voice_max_bytes: fetch(telegram, :voice_max_bytes),
+      files: parse_telegram_files(fetch(telegram, :files))
     }
   end
 
   defp parse_telegram(_), do: %{}
+
+  defp parse_telegram_files(files) when is_map(files) do
+    %{
+      enabled: fetch(files, :enabled),
+      auto_put: fetch(files, :auto_put),
+      auto_put_mode: fetch(files, :auto_put_mode),
+      uploads_dir: fetch(files, :uploads_dir),
+      allowed_user_ids: fetch(files, :allowed_user_ids),
+      deny_globs: fetch(files, :deny_globs),
+      max_upload_bytes: fetch(files, :max_upload_bytes),
+      max_download_bytes: fetch(files, :max_download_bytes),
+      media_group_debounce_ms: fetch(files, :media_group_debounce_ms)
+    }
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.new()
+  end
+
+  defp parse_telegram_files(_), do: %{}
 
   defp parse_engines(engines) when is_map(engines) do
     for {name, config} <- engines, into: %{} do

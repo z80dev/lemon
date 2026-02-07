@@ -6,7 +6,6 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
   alias LemonControlPlane.Methods.ExecApprovalsGet
   alias LemonControlPlane.Methods.ExecApprovalsNodeGet
   alias LemonControlPlane.Methods.ExecApprovalResolve
-  alias LemonRouter.ApprovalsBridge
 
   setup do
     # Ensure LemonGateway.Store is running
@@ -93,12 +92,12 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
       assert approval1.approved == true
     end
 
-    test "pre-approved tools are automatically approved by ApprovalsBridge" do
+    test "pre-approved tools are automatically approved by ExecApprovals" do
       # Pre-approve bash for any action
       {:ok, _} = ExecApprovalsSet.handle(%{"policy" => %{"bash" => "allow"}}, %{})
 
       # Request approval - should return immediately
-      result = ApprovalsBridge.request(%{
+      result = LemonCore.ExecApprovals.request(%{
         run_id: "test-run",
         session_key: "agent:test:main",
         tool: "bash",
@@ -110,7 +109,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
       assert {:ok, :approved, :global} = result
     end
 
-    test "specific action pre-approval works with ApprovalsBridge" do
+    test "specific action pre-approval works with ExecApprovals" do
       action = %{"command" => "npm test"}
 
       {:ok, _} =
@@ -120,7 +119,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
         )
 
       # Request with the same action should be approved
-      result = ApprovalsBridge.request(%{
+      result = LemonCore.ExecApprovals.request(%{
         run_id: "test-run",
         session_key: "agent:test:main",
         tool: "bash",
@@ -191,7 +190,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
       assert approval.node_id == node_id
     end
 
-    test "node pre-approval works with ApprovalsBridge" do
+    test "node pre-approval works with ExecApprovals" do
       node_id = "node-bridge-test"
 
       {:ok, _} =
@@ -201,7 +200,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
         )
 
       # Request with node_id should be approved
-      result = ApprovalsBridge.request(%{
+      result = LemonCore.ExecApprovals.request(%{
         run_id: "test-run",
         session_key: "agent:test:main",
         node_id: node_id,

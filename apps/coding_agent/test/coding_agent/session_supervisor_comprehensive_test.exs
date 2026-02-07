@@ -106,7 +106,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
     end
   end
 
-  defp default_session_opts(overrides \\ []) do
+  defp default_session_opts(overrides) do
     Keyword.merge(
       [
         cwd: System.tmp_dir!(),
@@ -128,11 +128,6 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
     end
 
     Process.sleep(50)
-  end
-
-  defp wait_for_process_exit(pid, timeout \\ 1000) do
-    ref = Process.monitor(pid)
-    assert_receive {:DOWN, ^ref, :process, ^pid, _}, timeout
   end
 
   defp wait_for_registry_cleanup(session_id, timeout_ms \\ 1000) do

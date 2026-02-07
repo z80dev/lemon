@@ -39,9 +39,26 @@ defmodule LemonGateway.Engines.CliAdapter do
     case engine_id do
       "codex" -> "codex resume #{value}"
       "claude" -> "claude --resume #{value}"
+      "opencode" -> "opencode --session #{value}"
+      "pi" -> "pi --session #{quote_token(value)}"
       _ -> "#{engine_id} resume #{value}"
     end
   end
+
+  defp quote_token(value) when is_binary(value) do
+    needs_quotes = Regex.match?(~r/\s/, value)
+
+    cond do
+      not needs_quotes and not String.contains?(value, "\"") ->
+        value
+
+      true ->
+        escaped = String.replace(value, "\"", "\\\"")
+        "\"#{escaped}\""
+    end
+  end
+
+  defp quote_token(value), do: to_string(value)
 
   def extract_resume(engine_id, text) do
     case ResumeToken.extract_resume(text, engine_id) do

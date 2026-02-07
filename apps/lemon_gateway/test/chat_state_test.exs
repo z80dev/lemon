@@ -421,7 +421,8 @@ defmodule LemonGateway.ChatStateTest do
       state = ChatState.new()
 
       assert_raise KeyError, fn ->
-        _ = state.nonexistent_field
+        # Avoid compile-time "unknown key" warnings for struct dot access.
+        Code.eval_string("state.nonexistent_field", state: state)
       end
     end
 
@@ -462,7 +463,8 @@ defmodule LemonGateway.ChatStateTest do
       state = ChatState.new()
 
       assert_raise KeyError, fn ->
-        %{state | nonexistent_field: "value"}
+        # Avoid compile-time warnings for invalid struct update syntax.
+        Code.eval_string("%{state | nonexistent_field: \"value\"}", state: state)
       end
     end
 

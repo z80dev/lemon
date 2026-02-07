@@ -32,6 +32,18 @@ defmodule Ai.ModelsTest do
       assert model.input == [:text, :image]
     end
 
+    test "returns openai-codex model by id (Codex subscription provider)" do
+      model = Models.get_model(:"openai-codex", "gpt-5.2")
+
+      assert %Model{} = model
+      assert model.id == "gpt-5.2"
+      assert model.api == :openai_codex_responses
+      assert model.provider == :"openai-codex"
+      assert model.base_url == "https://chatgpt.com"
+      assert %ModelCost{} = model.cost
+      assert model.cost.input == 0.0
+    end
+
     test "returns google model by id" do
       model = Models.get_model(:google, "gemini-2.5-pro")
 
@@ -69,6 +81,14 @@ defmodule Ai.ModelsTest do
       assert Enum.all?(models, &match?(%Model{provider: :openai}, &1))
     end
 
+    test "returns all openai-codex models" do
+      models = Models.get_models(:"openai-codex")
+
+      assert is_list(models)
+      assert length(models) > 0
+      assert Enum.all?(models, &match?(%Model{provider: :"openai-codex"}, &1))
+    end
+
     test "returns all google models" do
       models = Models.get_models(:google)
 
@@ -89,6 +109,7 @@ defmodule Ai.ModelsTest do
       assert is_list(providers)
       assert :anthropic in providers
       assert :openai in providers
+      assert :"openai-codex" in providers
       assert :google in providers
     end
   end
@@ -104,6 +125,7 @@ defmodule Ai.ModelsTest do
       providers = models |> Enum.map(& &1.provider) |> Enum.uniq()
       assert :anthropic in providers
       assert :openai in providers
+      assert :"openai-codex" in providers
       assert :google in providers
     end
   end

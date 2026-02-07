@@ -357,6 +357,18 @@ defmodule LemonCore.Store do
     {:noreply, %{state | backend_state: backend_state}}
   end
 
+  def handle_cast({:put_progress_mapping, scope, progress_msg_id, run_id}, state) do
+    key = {scope, progress_msg_id}
+    {:ok, backend_state} = state.backend.put(state.backend_state, :progress, key, run_id)
+    {:noreply, %{state | backend_state: backend_state}}
+  end
+
+  def handle_cast({:delete_progress_mapping, scope, progress_msg_id}, state) do
+    key = {scope, progress_msg_id}
+    {:ok, backend_state} = state.backend.delete(state.backend_state, :progress, key)
+    {:noreply, %{state | backend_state: backend_state}}
+  end
+
   # Update sessions_index when a run is finalized
   defp update_sessions_index(backend, backend_state, session_key, summary, timestamp) do
     {:ok, existing, backend_state} = backend.get(backend_state, :sessions_index, session_key)
@@ -496,18 +508,6 @@ defmodule LemonCore.Store do
   end
 
   defp parse_agent_id(_), do: "default"
-
-  def handle_cast({:put_progress_mapping, scope, progress_msg_id, run_id}, state) do
-    key = {scope, progress_msg_id}
-    {:ok, backend_state} = state.backend.put(state.backend_state, :progress, key, run_id)
-    {:noreply, %{state | backend_state: backend_state}}
-  end
-
-  def handle_cast({:delete_progress_mapping, scope, progress_msg_id}, state) do
-    key = {scope, progress_msg_id}
-    {:ok, backend_state} = state.backend.delete(state.backend_state, :progress, key)
-    {:noreply, %{state | backend_state: backend_state}}
-  end
 
   @impl true
   def handle_info(:sweep_expired_chat_states, state) do

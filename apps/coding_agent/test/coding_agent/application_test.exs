@@ -32,19 +32,20 @@ defmodule CodingAgent.ApplicationTest do
     end
 
     test "supervisor has correct child count" do
-      # The application should have 10 children:
+      # The application should have 11 children:
       # 1. CodingAgent.SessionRegistry (Registry)
       # 2. CodingAgent.ProcessRegistry (Registry)
-      # 3. CodingAgent.SessionSupervisor (DynamicSupervisor)
-      # 4. CodingAgent.TaskSupervisor (Task.Supervisor)
-      # 5. CodingAgent.TaskStoreServer (GenServer)
-      # 6. CodingAgent.RunGraphServer (GenServer)
-      # 7. CodingAgent.ProcessStoreServer (GenServer)
-      # 8. CodingAgent.ProcessManager (DynamicSupervisor)
-      # 9. CodingAgent.LaneQueue (GenServer)
-      # 10. CodingAgent.CompactionHooks (GenServer)
+      # 3. CodingAgent.Tools.TodoStoreOwner (GenServer)
+      # 4. CodingAgent.SessionSupervisor (DynamicSupervisor)
+      # 5. CodingAgent.TaskSupervisor (Task.Supervisor)
+      # 6. CodingAgent.TaskStoreServer (GenServer)
+      # 7. CodingAgent.RunGraphServer (GenServer)
+      # 8. CodingAgent.ProcessStoreServer (GenServer)
+      # 9. CodingAgent.ProcessManager (DynamicSupervisor)
+      # 10. CodingAgent.LaneQueue (GenServer)
+      # 11. CodingAgent.CompactionHooks (GenServer)
       children = Supervisor.which_children(CodingAgent.Supervisor)
-      assert length(children) == 10
+      assert length(children) == 11
     end
 
     test "supervisor uses one_for_one strategy" do
@@ -68,8 +69,8 @@ defmodule CodingAgent.ApplicationTest do
     test "supervisor counts children correctly" do
       counts = Supervisor.count_children(CodingAgent.Supervisor)
 
-      assert counts.active == 10
-      assert counts.specs == 10
+      assert counts.active == 11
+      assert counts.specs == 11
       # SessionSupervisor is a DynamicSupervisor
       assert counts.supervisors >= 1
     end

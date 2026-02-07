@@ -74,7 +74,7 @@ defmodule LemonControlPlane.EventBridgeTest do
       Process.sleep(10)
 
       if Code.ensure_loaded?(LemonCore.Bus) do
-        delta = LemonGateway.Event.Delta.new(run_id, 1, "Hello")
+        delta = %{run_id: run_id, ts_ms: System.system_time(:millisecond), seq: 1, text: "Hello"}
 
         event = LemonCore.Event.new(:delta, delta, %{run_id: run_id, session_key: "test"})
         LemonCore.Bus.broadcast("run:#{run_id}", event)

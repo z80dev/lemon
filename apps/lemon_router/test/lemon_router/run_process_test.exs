@@ -11,9 +11,12 @@ defmodule LemonRouter.RunProcessTest do
 
   setup do
     # Ensure PubSub is running for LemonCore.Bus.
-    start_if_needed(LemonCore.PubSub, fn ->
-      Phoenix.PubSub.start_link(name: LemonCore.PubSub)
-    end)
+    if is_nil(Process.whereis(LemonCore.PubSub)) do
+      case start_supervised({Phoenix.PubSub, name: LemonCore.PubSub}) do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+      end
+    end
 
     # Ensure registries are running
     start_if_needed(LemonRouter.RunRegistry, fn ->
@@ -82,7 +85,8 @@ defmodule LemonRouter.RunProcessTest do
                RunProcess.start_link(%{
                  run_id: run_id,
                  session_key: session_key,
-                 job: job
+                 job: job,
+                 submit_to_gateway?: false
                })
 
       # Not registered until :run_started

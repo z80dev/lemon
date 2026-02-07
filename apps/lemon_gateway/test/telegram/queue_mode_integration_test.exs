@@ -235,6 +235,13 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
     {:ok, _} = JobCapturingEngine.start_link(notify_pid: self())
 
     on_exit(fn ->
+      _ = Application.stop(:lemon_channels)
+      _ = Application.stop(:lemon_router)
+      _ = Application.stop(:lemon_gateway)
+      _ = Application.stop(:lemon_control_plane)
+      _ = Application.stop(:lemon_automation)
+      _ = Application.stop(:lemon_core)
+
       MockTelegramAPI.stop()
       JobCapturingEngine.stop()
       Application.delete_env(:lemon_gateway, LemonGateway.Config)
@@ -292,9 +299,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
     Application.put_env(:lemon_gateway, :config_path, "/nonexistent/path.toml")
     Application.put_env(:lemon_gateway, Config, config)
     # Avoid leaking state across tests via the default JsonlBackend (config/config.exs).
-    Application.put_env(:lemon_core, LemonCore.Store,
-      backend: LemonCore.Store.EtsBackend
-    )
+    Application.put_env(:lemon_core, LemonCore.Store, backend: LemonCore.Store.EtsBackend)
 
     Application.put_env(:lemon_gateway, :engines, [
       JobCapturingEngine,

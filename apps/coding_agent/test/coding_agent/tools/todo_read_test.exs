@@ -6,7 +6,8 @@ defmodule CodingAgent.Tools.TodoReadTest do
   for the current session from ETS-based storage.
   """
 
-  use ExUnit.Case, async: true
+  # Uses a global ETS table; tests call TodoStore.clear/0, so cannot be async.
+  use ExUnit.Case, async: false
 
   alias CodingAgent.Tools.{TodoRead, TodoStore}
   alias AgentCore.Types.{AgentTool, AgentToolResult}

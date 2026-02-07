@@ -99,7 +99,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
   def finalize_run(_session_key, _channel_id, _run_id, _ok?), do: :ok
 
-  defp get_or_start_coalescer(session_key, channel_id, meta \\ %{}) do
+  defp get_or_start_coalescer(session_key, channel_id, meta) do
     case Registry.lookup(LemonRouter.ToolStatusRegistry, {session_key, channel_id}) do
       [{pid, _}] ->
         {:ok, pid}
@@ -313,8 +313,9 @@ defmodule LemonRouter.ToolStatusCoalescer do
   defp emit_output(state, text) do
     parsed = parse_session_key(state.session_key)
 
-    if Code.ensure_loaded?(LemonChannels.Outbox) and
-         Code.ensure_loaded?(LemonChannels.OutboundPayload) do
+    if not is_pid(Process.whereis(LemonChannels.Outbox)) do
+      state
+    else
       status_msg_id = (state.meta || %{})[:status_msg_id]
 
       cond do
@@ -389,7 +390,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
   end
 
   defp channel_supports_edit?(channel_id) do
-    if Code.ensure_loaded?(LemonChannels.Registry) do
+    if is_pid(Process.whereis(LemonChannels.Registry)) do
       case LemonChannels.Registry.get_capabilities(channel_id) do
         %{edit_support: true} -> true
         _ -> false
@@ -401,10 +402,10 @@ defmodule LemonRouter.ToolStatusCoalescer do
     _ -> false
   end
 
-  defp normalize_action_event(%LemonGateway.Event.ActionEvent{} = ev) do
-    action = ev.action
+  defp normalize_action_event(ev) when is_map(ev) do
+    action = Map.get(ev, :action) || %{}
 
-    kind = action.kind
+    kind = Map.get(action, :kind)
 
     allowed_kinds = [
       "tool",
@@ -426,21 +427,25 @@ defmodule LemonRouter.ToolStatusCoalescer do
         {:skip, :note}
 
       kind in allowed_kinds ->
-        id = action.id
+        id = Map.get(action, :id)
 
         data = %{
           id: id,
           kind: kind,
-          caller_engine: ev.engine,
-          title: action.title,
-          phase: ev.phase,
-          ok: ev.ok,
-          message: ev.message,
-          level: ev.level,
-          detail: action.detail
+          caller_engine: Map.get(ev, :engine),
+          title: Map.get(action, :title),
+          phase: Map.get(ev, :phase),
+          ok: Map.get(ev, :ok),
+          message: Map.get(ev, :message),
+          level: Map.get(ev, :level),
+          detail: Map.get(action, :detail)
         }
 
-        {:ok, id, data}
+        if is_binary(id) and id != "" do
+          {:ok, id, data}
+        else
+          {:skip, :missing_id}
+        end
 
       true ->
         {:skip, :irrelevant_kind}
@@ -466,13 +471,9 @@ defmodule LemonRouter.ToolStatusCoalescer do
   end
 
   defp parse_session_key(session_key) do
-    if Code.ensure_loaded?(LemonRouter.SessionKey) do
-      case LemonRouter.SessionKey.parse(session_key) do
-        {:error, :invalid} -> fallback_parse_session_key(session_key)
-        parsed -> parsed
-      end
-    else
-      fallback_parse_session_key(session_key)
+    case LemonRouter.SessionKey.parse(session_key) do
+      {:error, _} -> fallback_parse_session_key(session_key)
+      parsed -> parsed
     end
   end
 
@@ -556,11 +557,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
   defp extract_message_id_from_delivery(_), do: nil
 
   defp truncate_for_channel("telegram", text) when is_binary(text) do
-    if Code.ensure_loaded?(LemonGateway.Telegram.Truncate) do
-      LemonGateway.Telegram.Truncate.truncate_for_telegram(text)
-    else
-      text
-    end
+    LemonGateway.Telegram.Truncate.truncate_for_telegram(text)
   rescue
     _ -> text
   end
