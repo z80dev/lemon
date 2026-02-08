@@ -1619,7 +1619,15 @@ defmodule AgentCore.ContextTest do
       size_events =
         Enum.filter(events, fn {name, _, _} -> name == [:agent_core, :context, :size] end)
 
-      assert length(size_events) == 3
+      # This handler captures global telemetry while attached, so concurrent tests may
+      # contribute additional size events. Assert the expected shapes occurred.
+      assert Enum.count(size_events, fn {_name, m, md} ->
+               m[:message_count] == 1 and m[:char_count] == 4 and md[:has_system_prompt] == false
+             end) >= 2
+
+      assert Enum.count(size_events, fn {_name, m, md} ->
+               m[:message_count] == 1 and m[:char_count] == 10 and md[:has_system_prompt] == true
+             end) >= 1
     end
 
     test "stats function also triggers size telemetry", %{

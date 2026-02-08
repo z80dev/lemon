@@ -244,11 +244,16 @@ defmodule CodingAgent.ProcessSession do
         end
       end
 
-    # Update store
-    if status == :completed do
-      ProcessStore.mark_completed(state.process_id, exit_code)
-    else
-      ProcessStore.mark_error(state.process_id, %{exit_code: exit_code, status: status})
+    # Update store. Killed processes should remain `:killed` (not overwritten to `:error`).
+    cond do
+      status == :completed ->
+        ProcessStore.mark_completed(state.process_id, exit_code)
+
+      status == :killed ->
+        ProcessStore.mark_killed(state.process_id)
+
+      true ->
+        ProcessStore.mark_error(state.process_id, %{exit_code: exit_code, status: status})
     end
 
     # Call exit callback if provided

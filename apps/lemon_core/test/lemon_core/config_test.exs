@@ -190,4 +190,42 @@ defmodule LemonCore.ConfigTest do
     assert binding.chat_id == 123
     assert binding.agent_id == "daily"
   end
+
+  test "parses logging settings", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [logging]
+    file = "./logs/lemon.log"
+    level = "debug"
+    """)
+
+    config = Config.load()
+
+    assert config.logging.file == "./logs/lemon.log"
+    assert config.logging.level == :debug
+  end
+
+  test "env overrides log file and log level", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [logging]
+    file = "./logs/from-file.log"
+    level = "info"
+    """)
+
+    System.put_env("LEMON_LOG_FILE", "./logs/from-env.log")
+    System.put_env("LEMON_LOG_LEVEL", "warning")
+
+    config = Config.load()
+
+    assert config.logging.file == "./logs/from-env.log"
+    assert config.logging.level == :warning
+  after
+    System.delete_env("LEMON_LOG_FILE")
+    System.delete_env("LEMON_LOG_LEVEL")
+  end
 end

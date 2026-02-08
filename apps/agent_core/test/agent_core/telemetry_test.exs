@@ -1,5 +1,7 @@
 defmodule AgentCore.TelemetryTest do
-  use ExUnit.Case, async: true
+  # Telemetry handlers are global and will observe events emitted by other tests.
+  # Keep this test case synchronous to avoid cross-test contamination.
+  use ExUnit.Case, async: false
 
   alias AgentCore.Loop
   alias AgentCore.Test.Mocks

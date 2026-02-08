@@ -91,9 +91,10 @@ defmodule LemonChannels.OutboxRetentionTest do
         RateLimiter.consume(channel, account)
       end
 
-      # Get initial queue length
+      # Use a monotonic counter instead of queue length since other tests may
+      # concurrently drain the global outbox queue.
       initial_stats = Outbox.stats()
-      initial_length = initial_stats.queue_length
+      initial_enqueued = initial_stats.enqueued_total
 
       # Enqueue a message (should still be accepted despite rate limit)
       payload = %OutboundPayload{
@@ -107,9 +108,8 @@ defmodule LemonChannels.OutboxRetentionTest do
       result = Outbox.enqueue(payload)
       assert {:ok, _ref} = result
 
-      # Queue length should have increased
       new_stats = Outbox.stats()
-      assert new_stats.queue_length >= initial_length
+      assert new_stats.enqueued_total > initial_enqueued
     end
 
     test "multiple messages are retained when rate limited" do
@@ -121,9 +121,8 @@ defmodule LemonChannels.OutboxRetentionTest do
         RateLimiter.consume(channel, account)
       end
 
-      # Get initial queue length
       initial_stats = Outbox.stats()
-      initial_length = initial_stats.queue_length
+      initial_enqueued = initial_stats.enqueued_total
 
       # Enqueue multiple messages
       for i <- 1..5 do
@@ -141,9 +140,8 @@ defmodule LemonChannels.OutboxRetentionTest do
 
       # All messages should be enqueued
       new_stats = Outbox.stats()
-      # Queue length should have increased by at least the number of messages we added
-      # (may be more due to chunking or less due to processing)
-      assert new_stats.queue_length >= initial_length
+      # Chunking may enqueue more than 5, but it must enqueue at least 5.
+      assert new_stats.enqueued_total >= initial_enqueued + 5
     end
   end
 

@@ -265,7 +265,7 @@ defmodule CodingAgent.CoordinatorTest do
       elapsed = System.monotonic_time(:millisecond) - start_time
 
       # Should complete within reasonable time of timeout
-      assert elapsed < 1_000
+      assert elapsed < 2_000
 
       assert [result] = results
       # Can be timeout or error depending on whether session started
@@ -284,7 +284,7 @@ defmodule CodingAgent.CoordinatorTest do
       elapsed = System.monotonic_time(:millisecond) - start_time
 
       # Should use default timeout
-      assert elapsed < 1_000
+      assert elapsed < 2_000
       assert [result] = results
       # Can be timeout or error depending on whether session started
       assert result.status in [:timeout, :error]

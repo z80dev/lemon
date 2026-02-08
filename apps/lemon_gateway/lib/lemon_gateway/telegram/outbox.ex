@@ -41,6 +41,22 @@ defmodule LemonGateway.Telegram.Outbox do
     GenServer.cast(__MODULE__, {:enqueue, key, priority, op})
   end
 
+  @spec enqueue_with_notify(
+          term(),
+          integer(),
+          term(),
+          pid(),
+          reference(),
+          atom()
+        ) :: :ok
+  def enqueue_with_notify(key, priority, op, notify_pid, notify_ref, notify_tag \\ :outbox_delivered)
+      when is_pid(notify_pid) and is_reference(notify_ref) and is_atom(notify_tag) do
+    GenServer.cast(
+      __MODULE__,
+      {:enqueue, key, priority, {op, {notify_pid, notify_ref, notify_tag}}}
+    )
+  end
+
   @impl true
   def init(config) do
     state = %{
@@ -49,10 +65,17 @@ defmodule LemonGateway.Telegram.Outbox do
       edit_throttle_ms: config[:edit_throttle_ms] || @default_edit_throttle,
       # Default to true now that we render via Telegram entities (robust, no MarkdownV2 escaping).
       use_markdown:
-        case config[:use_markdown] || config["use_markdown"] do
-          nil -> true
-          v -> v
-        end,
+        case Map.fetch(config, :use_markdown) do
+          {:ok, v} ->
+            v
+
+          :error ->
+            Map.get(config, "use_markdown")
+        end
+        |> then(fn v ->
+          # Allow explicit `false`; only default to true when unset.
+          if is_nil(v), do: true, else: v
+        end),
       queue: [],
       ops: %{},
       retry_state: %{},
@@ -68,22 +91,32 @@ defmodule LemonGateway.Telegram.Outbox do
 
     if state.edit_throttle_ms == 0 do
       case execute_op(state, op) do
-        {:ok, _result} ->
+        {:ok, result} ->
+          _ = maybe_notify(op, {:ok, result})
           {:noreply, state}
 
-        {:error, _reason, retry_after_ms} ->
+        {:error, reason, retry_after_ms} ->
           state = enqueue_with_retry(state, key, priority, op, retry_after_ms)
+
+          # Notify only on terminal failures (non-retryable or max-retries).
+          if retry_after_ms == 0 do
+            _ = maybe_notify(op, {:error, reason})
+          end
+
           {:noreply, state}
       end
     else
+      # If we're deleting a message, drop any pending edit for that same message id.
+      {queue0, ops0} = maybe_drop_related_ops(state.queue, state.ops, op)
+
       {queue, ops} =
-        if Map.has_key?(state.ops, key) do
+        if Map.has_key?(ops0, key) do
           # Update existing op, keep position in queue
-          {state.queue, Map.put(state.ops, key, {priority, op})}
+          {queue0, Map.put(ops0, key, {priority, op})}
         else
           # Add new entry to queue sorted by priority
-          queue = insert_by_priority(state.queue, {key, priority})
-          {queue, Map.put(state.ops, key, {priority, op})}
+          queue = insert_by_priority(queue0, {key, priority})
+          {queue, Map.put(ops0, key, {priority, op})}
         end
 
       state = %{state | queue: queue, ops: ops}
@@ -111,12 +144,20 @@ defmodule LemonGateway.Telegram.Outbox do
 
         state =
           case execute_op(state, op) do
-            {:ok, _result} ->
+            {:ok, result} ->
+              _ = maybe_notify(op, {:ok, result})
               # Clear retry state on success
               %{state | retry_state: Map.delete(state.retry_state, key)}
 
-            {:error, _reason, retry_after_ms} ->
-              enqueue_with_retry(state, key, default_priority(op), op, retry_after_ms)
+            {:error, reason, retry_after_ms} ->
+              state2 = enqueue_with_retry(state, key, default_priority(op), op, retry_after_ms)
+
+              # Notify only on terminal failures (non-retryable or max-retries).
+              if retry_after_ms == 0 do
+                _ = maybe_notify(op, {:error, reason})
+              end
+
+              state2
           end
 
         next_at = now + state.edit_throttle_ms
@@ -155,6 +196,7 @@ defmodule LemonGateway.Telegram.Outbox do
     end
   end
 
+  defp default_priority({op, {_pid, _ref, _tag}}), do: default_priority(op)
   defp default_priority({:delete, _chat_id, _message_id}), do: @priority_delete
   defp default_priority({:edit, _chat_id, _message_id, _payload}), do: @priority_edit
   defp default_priority({:send, _chat_id, _payload}), do: @priority_send
@@ -175,6 +217,7 @@ defmodule LemonGateway.Telegram.Outbox do
 
     if retry_count >= @max_retries do
       # Max retries reached, drop the operation
+      _ = maybe_notify(op, {:error, :max_retries})
       state
     else
       # Calculate backoff with exponential increase
@@ -187,6 +230,8 @@ defmodule LemonGateway.Telegram.Outbox do
       %{state | retry_state: new_retry_state}
     end
   end
+
+  defp execute_op(state, {op, {_pid, _ref, _tag}}), do: execute_op(state, op)
 
   defp execute_op(state, {:edit, chat_id, message_id, %{text: text} = payload}) do
     engine = payload[:engine]
@@ -210,6 +255,7 @@ defmodule LemonGateway.Telegram.Outbox do
     text = payload[:text] || payload["text"] || ""
     engine = payload[:engine]
     reply_to = payload[:reply_to_message_id] || payload["reply_to_message_id"]
+    thread_id = payload[:message_thread_id] || payload["message_thread_id"]
     truncated_text = truncate_text(text, engine)
     {formatted_text, opts} = format_text(truncated_text, state.use_markdown)
 
@@ -218,10 +264,20 @@ defmodule LemonGateway.Telegram.Outbox do
       # Keep the legacy call shape (reply_to + parse_mode) unless we need extra options
       # (e.g. Telegram entities for markdown rendering).
       if is_map(opts) do
-        opts = opts |> maybe_put_opt(:reply_to_message_id, reply_to)
+        opts =
+          opts
+          |> maybe_put_opt(:reply_to_message_id, reply_to)
+          |> maybe_put_opt(:message_thread_id, thread_id)
+
         state.api_mod.send_message(state.token, chat_id, formatted_text, opts, nil)
       else
-        state.api_mod.send_message(state.token, chat_id, formatted_text, reply_to, nil)
+        # Even when markdown/entities are disabled, preserve topic routing and reply threading.
+        opts =
+          %{}
+          |> maybe_put_opt(:reply_to_message_id, reply_to)
+          |> maybe_put_opt(:message_thread_id, thread_id)
+
+        state.api_mod.send_message(state.token, chat_id, formatted_text, opts, nil)
       end
     end)
     |> handle_api_result()
@@ -318,6 +374,39 @@ defmodule LemonGateway.Telegram.Outbox do
 
   defp maybe_put_opt(map, _key, nil), do: map
   defp maybe_put_opt(map, key, value), do: Map.put(map, key, value)
+
+  defp maybe_drop_related_ops(queue, ops, op) do
+    inner =
+      case op do
+        {o, {_pid, _ref, _tag}} -> o
+        other -> other
+      end
+
+    case inner do
+      {:delete, chat_id, message_id} ->
+        edit_key = {chat_id, message_id, :edit}
+        queue = Enum.reject(queue, fn {k, _p} -> k == edit_key end)
+        ops = Map.delete(ops, edit_key)
+        {queue, ops}
+
+      _ ->
+        {queue, ops}
+    end
+  rescue
+    _ -> {queue, ops}
+  end
+
+  defp maybe_notify({_, {pid, ref, tag}}, result) when is_pid(pid) and is_reference(ref) do
+    try do
+      send(pid, {tag, ref, result})
+    rescue
+      _ -> :ok
+    end
+
+    :ok
+  end
+
+  defp maybe_notify(_op, _result), do: :ok
 
   defp merge_config(config, nil), do: config
 

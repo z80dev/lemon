@@ -15,7 +15,10 @@ config :lemon_core, LemonCore.ConfigCache, mtime_check_interval_ms: 0
 # Avoid writing dets / sessions / global config under ~/.lemon/agent during tests.
 config :coding_agent,
        :agent_dir,
-       Path.join(System.tmp_dir!(), "lemon_agent_test_#{:erlang.unique_integer([:positive])}")
+       Path.join(
+         System.tmp_dir!(),
+         "lemon_agent_test_#{System.system_time(:millisecond)}_#{:erlang.unique_integer([:positive])}"
+       )
 
 # Avoid copying repo-bundled skills into user config during unrelated test suites.
 config :lemon_skills, seed_builtin_skills: false

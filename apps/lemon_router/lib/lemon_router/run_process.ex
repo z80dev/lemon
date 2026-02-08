@@ -325,6 +325,34 @@ defmodule LemonRouter.RunProcess do
   defp extract_completed_answer(%LemonCore.Event{payload: %{answer: answer}}), do: answer
   defp extract_completed_answer(_), do: nil
 
+  defp extract_completed_resume(%LemonCore.Event{payload: %{completed: %{resume: resume}}}),
+    do: resume
+
+  defp extract_completed_resume(%LemonCore.Event{payload: %{resume: resume}}), do: resume
+
+  defp extract_completed_resume(%LemonCore.Event{
+         payload: %LemonGateway.Event.Completed{resume: resume}
+       }),
+       do: resume
+
+  defp extract_completed_resume(_), do: nil
+
+  defp normalize_resume_token(nil), do: nil
+
+  defp normalize_resume_token(%LemonGateway.Types.ResumeToken{} = tok), do: tok
+
+  defp normalize_resume_token(%{engine: engine, value: value})
+       when is_binary(engine) and is_binary(value) do
+    %LemonGateway.Types.ResumeToken{engine: engine, value: value}
+  end
+
+  defp normalize_resume_token(%{"engine" => engine, "value" => value})
+       when is_binary(engine) and is_binary(value) do
+    %LemonGateway.Types.ResumeToken{engine: engine, value: value}
+  end
+
+  defp normalize_resume_token(_), do: nil
+
   defp extract_completed_ok_and_error(%LemonCore.Event{payload: %{completed: %{ok: ok} = c}})
        when is_boolean(ok) do
     {ok, Map.get(c, :error) || Map.get(c, "error")}
@@ -352,6 +380,7 @@ defmodule LemonRouter.RunProcess do
     with %{kind: :channel_peer, channel_id: "telegram"} <-
            LemonRouter.SessionKey.parse(state.session_key) do
       meta = extract_coalescer_meta(state.job)
+      resume = event |> extract_completed_resume() |> normalize_resume_token()
 
       final_text =
         case extract_completed_answer(event) do
@@ -367,6 +396,9 @@ defmodule LemonRouter.RunProcess do
                 nil
             end
         end
+
+      # StreamCoalescer handles optional resume footer formatting; RunProcess just passes metadata.
+      meta = if resume, do: Map.put(meta, :resume, resume), else: meta
 
       LemonRouter.StreamCoalescer.finalize_run(
         state.session_key,

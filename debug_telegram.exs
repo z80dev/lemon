@@ -5,7 +5,26 @@ IO.puts("\n=== TELEGRAM DEBUG ===\n")
 IO.puts("1. Checking Telegram Transport process...")
 case Process.whereis(LemonChannels.Adapters.Telegram.Transport) do
   nil -> IO.puts("   ❌ Telegram Transport NOT RUNNING")
-  pid -> IO.puts("   ✅ Telegram Transport running: #{inspect(pid)}")
+  pid ->
+    IO.puts("   ✅ Telegram Transport running: #{inspect(pid)}")
+
+    try do
+      st = :sys.get_state(pid)
+
+      IO.puts("   account_id: #{inspect(st.account_id)}")
+      IO.puts("   offset: #{inspect(st.offset)}")
+      IO.puts("   poll_interval_ms: #{inspect(st.poll_interval_ms)}")
+      IO.puts("   debounce_ms: #{inspect(st.debounce_ms)}")
+      IO.puts("   allowed_chat_ids: #{inspect(st.allowed_chat_ids)}")
+      IO.puts("   deny_unbound_chats: #{inspect(st.deny_unbound_chats)}")
+      IO.puts("   drop_pending_updates?: #{inspect(st.drop_pending_updates?)}")
+      IO.puts("   drop_pending_done?: #{inspect(st.drop_pending_done?)}")
+      IO.puts("   last_poll_error: #{inspect(st.last_poll_error)}")
+      IO.puts("   debug_inbound: #{inspect(Map.get(st, :debug_inbound))}")
+      IO.puts("   log_drops: #{inspect(Map.get(st, :log_drops))}")
+    rescue
+      e -> IO.puts("   Could not read transport state: #{inspect(e)}")
+    end
 end
 
 # 2. Check Telegram Supervisor
@@ -34,6 +53,13 @@ case Process.whereis(LemonChannels.Outbox) do
   pid -> IO.puts("   ✅ Outbox running: #{inspect(pid)}")
 end
 
+# 4b. Check legacy Telegram outbox (used for delete/edit coalescing)
+IO.puts("\n4b. Checking LemonGateway.Telegram.Outbox...")
+case Process.whereis(LemonGateway.Telegram.Outbox) do
+  nil -> IO.puts("   ℹ️  LemonGateway.Telegram.Outbox NOT RUNNING")
+  pid -> IO.puts("   ✅ LemonGateway.Telegram.Outbox running: #{inspect(pid)}")
+end
+
 # 5. Check RunOrchestrator/DynamicSupervisor
 IO.puts("\n5. Checking Run infrastructure...")
 case Process.whereis(LemonRouter.RunSupervisor) do
@@ -46,9 +72,9 @@ end
 
 # 6. Check StreamCoalescer registry
 IO.puts("\n6. Checking StreamCoalescer...")
-case Process.whereis(LemonRouter.StreamCoalescer.Registry) do
-  nil -> IO.puts("   ❌ StreamCoalescer Registry NOT RUNNING")
-  pid -> IO.puts("   ✅ StreamCoalescer Registry running: #{inspect(pid)}")
+case Process.whereis(LemonRouter.CoalescerRegistry) do
+  nil -> IO.puts("   ❌ CoalescerRegistry NOT RUNNING")
+  pid -> IO.puts("   ✅ CoalescerRegistry running: #{inspect(pid)}")
 end
 
 # 7. Check EventBridge
@@ -71,6 +97,15 @@ case Process.whereis(LemonGateway.Store) do
     rescue
       e -> IO.puts("   Could not list agents: #{inspect(e)}")
     end
+end
+
+# 8b. Check RouterBridge wiring
+IO.puts("\n8b. Checking LemonCore.RouterBridge config...")
+try do
+  cfg = Application.get_env(:lemon_core, :router_bridge, %{})
+  IO.puts("   router_bridge env: #{inspect(cfg)}")
+rescue
+  e -> IO.puts("   Could not read router_bridge env: #{inspect(e)}")
 end
 
 # 9. Check for any ETS tables

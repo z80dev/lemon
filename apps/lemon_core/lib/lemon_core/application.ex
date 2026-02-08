@@ -5,6 +5,10 @@ defmodule LemonCore.Application do
 
   @impl true
   def start(_type, _args) do
+    # If configured, install a log-to-file handler early so dropped/errored
+    # messages can be diagnosed even when stdout/stderr isn't persisted.
+    _ = LemonCore.Logging.maybe_add_file_handler()
+
     config_cache_opts = Application.get_env(:lemon_core, LemonCore.ConfigCache, [])
 
     children = [

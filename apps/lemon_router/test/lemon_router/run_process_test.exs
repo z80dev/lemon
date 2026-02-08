@@ -9,6 +9,40 @@ defmodule LemonRouter.RunProcessTest do
 
   alias LemonRouter.{RunProcess, SessionKey}
 
+  defmodule TestOutboxAPI do
+    @moduledoc false
+    use Agent
+
+    def start_link(opts) do
+      notify_pid = opts[:notify_pid]
+      Agent.start_link(fn -> %{calls: [], notify_pid: notify_pid} end, name: __MODULE__)
+    end
+
+    def calls, do: Agent.get(__MODULE__, fn s -> Enum.reverse(s.calls) end)
+
+    def send_message(_token, chat_id, text, opts_or_reply_to \\ nil, parse_mode \\ nil) do
+      record({:send, chat_id, text, opts_or_reply_to, parse_mode})
+      {:ok, %{"ok" => true, "result" => %{"message_id" => 101}}}
+    end
+
+    def edit_message_text(_token, chat_id, message_id, text, opts \\ nil) do
+      record({:edit, chat_id, message_id, text, opts})
+      {:ok, %{"ok" => true}}
+    end
+
+    def delete_message(_token, chat_id, message_id) do
+      record({:delete, chat_id, message_id})
+      {:ok, %{"ok" => true}}
+    end
+
+    defp record(call) do
+      Agent.update(__MODULE__, fn s -> %{s | calls: [call | s.calls]} end)
+      notify_pid = Agent.get(__MODULE__, & &1.notify_pid)
+      if is_pid(notify_pid), do: send(notify_pid, {:outbox_api_call, call})
+      :ok
+    end
+  end
+
   setup do
     # Ensure PubSub is running for LemonCore.Bus.
     if is_nil(Process.whereis(LemonCore.PubSub)) do
@@ -33,6 +67,14 @@ defmodule LemonRouter.RunProcessTest do
 
     start_if_needed(LemonRouter.CoalescerSupervisor, fn ->
       DynamicSupervisor.start_link(strategy: :one_for_one, name: LemonRouter.CoalescerSupervisor)
+    end)
+
+    start_if_needed(LemonRouter.ToolStatusRegistry, fn ->
+      Registry.start_link(keys: :unique, name: LemonRouter.ToolStatusRegistry)
+    end)
+
+    start_if_needed(LemonRouter.ToolStatusSupervisor, fn ->
+      DynamicSupervisor.start_link(strategy: :one_for_one, name: LemonRouter.ToolStatusSupervisor)
     end)
 
     :ok
@@ -134,6 +176,75 @@ defmodule LemonRouter.RunProcessTest do
     test "abort by non-existent run_id returns :ok" do
       # Abort on non-existent run should be safe
       assert :ok = RunProcess.abort("non-existent-run", :test_abort)
+    end
+  end
+
+  describe "telegram final message resume indexing" do
+    test "indexes the bot final message id so replies can resume the right engine/session" do
+      {:ok, _} = start_supervised({TestOutboxAPI, [notify_pid: self()]})
+
+      {:ok, _} =
+        start_supervised(
+          {LemonGateway.Telegram.Outbox,
+           [bot_token: "token", api_mod: TestOutboxAPI, edit_throttle_ms: 0, use_markdown: false]}
+        )
+
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      session_key =
+        SessionKey.channel_peer(%{
+          agent_id: "test-agent",
+          channel_id: "telegram",
+          account_id: "botx",
+          peer_kind: :dm,
+          peer_id: "12345"
+        })
+
+      store_key = {"botx", 12_345, nil, 101}
+      _ = LemonCore.Store.delete(:telegram_msg_resume, store_key)
+
+      job =
+        make_test_job(run_id, %{
+          progress_msg_id: 111,
+          user_msg_id: 222
+        })
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false
+               })
+
+      completed_event =
+        LemonCore.Event.new(
+          :run_completed,
+          %{
+            completed: %{
+              ok: true,
+              answer: "Final answer",
+              resume: %{engine: "codex", value: "thread_abc"}
+            }
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+
+      # RunProcess stops after completion; give it a moment to tear down.
+      assert eventually(fn -> not Process.alive?(pid) end)
+
+      assert_receive {:outbox_api_call, {:delete, 12_345, 111}}, 1_000
+      assert_receive {:outbox_api_call, {:send, 12_345, text, _opts, nil}}, 1_000
+      assert String.contains?(text, "Final answer")
+
+      assert eventually(fn ->
+               case LemonCore.Store.get(:telegram_msg_resume, store_key) do
+                 %LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_abc"} -> true
+                 _ -> false
+               end
+             end)
     end
   end
 

@@ -10,6 +10,8 @@ defmodule LemonRouter.Router do
 
   alias LemonRouter.{RunOrchestrator, SessionKey}
 
+  require Logger
+
   @doc """
   Handle an inbound message from a channel.
 
@@ -32,21 +34,32 @@ defmodule LemonRouter.Router do
       })
 
     # Submit to orchestrator
-    RunOrchestrator.submit(%{
-      origin: :channel,
-      session_key: session_key,
-      agent_id: msg.meta[:agent_id] || "default",
-      prompt: msg.message.text,
-      queue_mode: msg.meta[:queue_mode] || :collect,
-      engine_id: msg.meta[:engine_id],
-      meta: Map.merge(msg.meta || %{}, %{
-        channel_id: msg.channel_id,
-        account_id: msg.account_id,
-        peer: msg.peer,
-        sender: msg.sender,
-        raw: msg.raw
-      })
-    })
+    case RunOrchestrator.submit(%{
+           origin: :channel,
+           session_key: session_key,
+           agent_id: msg.meta[:agent_id] || "default",
+           prompt: msg.message.text,
+           queue_mode: msg.meta[:queue_mode] || :collect,
+           engine_id: msg.meta[:engine_id],
+           meta: Map.merge(msg.meta || %{}, %{
+             channel_id: msg.channel_id,
+             account_id: msg.account_id,
+             peer: msg.peer,
+             sender: msg.sender,
+             raw: msg.raw
+           })
+         }) do
+      {:ok, _run_id} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "RunOrchestrator.submit failed for inbound (channel_id=#{inspect(msg.channel_id)} account_id=#{inspect(msg.account_id)} peer_id=#{inspect(msg.peer && msg.peer.id)}): " <>
+            inspect(reason)
+        )
+
+        :ok
+    end
 
     :ok
   end

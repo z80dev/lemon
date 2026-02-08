@@ -68,6 +68,15 @@ defmodule LemonCore.Config do
     "debug" => false
   }
 
+  @default_logging %{
+    "file" => nil,
+    "level" => nil,
+    "max_no_bytes" => nil,
+    "max_no_files" => nil,
+    "compress_on_rotate" => nil,
+    "filesync_repeat_interval" => nil
+  }
+
   @default_gateway %{
     "max_concurrent_runs" => 2,
     "default_engine" => "lemon",
@@ -86,13 +95,14 @@ defmodule LemonCore.Config do
     "engines" => %{}
   }
 
-  defstruct providers: %{}, agent: %{}, tui: %{}, gateway: %{}, agents: %{}
+  defstruct providers: %{}, agent: %{}, tui: %{}, logging: %{}, gateway: %{}, agents: %{}
 
   @type provider_config :: %{api_key: String.t() | nil, base_url: String.t() | nil}
   @type t :: %__MODULE__{
           providers: %{optional(String.t()) => provider_config()},
           agent: map(),
           tui: map(),
+          logging: map(),
           gateway: map(),
           agents: map()
         }
@@ -213,6 +223,7 @@ defmodule LemonCore.Config do
       providers: config.providers,
       agent: config.agent,
       tui: config.tui,
+      logging: config.logging,
       gateway: config.gateway,
       agents: config.agents
     }
@@ -230,6 +241,7 @@ defmodule LemonCore.Config do
       providers: parse_providers(Map.get(map, "providers", %{})),
       agent: parse_agent(Map.get(map, "agent", %{})),
       tui: parse_tui(Map.get(map, "tui", %{})),
+      logging: parse_logging(Map.get(map, "logging", %{})),
       gateway: parse_gateway(Map.get(map, "gateway", %{})),
       agents: parse_agents(Map.get(map, "agents", %{}))
     }
@@ -282,6 +294,20 @@ defmodule LemonCore.Config do
       theme: map["theme"],
       debug: parse_boolean(map["debug"], false)
     }
+  end
+
+  defp parse_logging(map) do
+    map = deep_merge(@default_logging, stringify_keys(map))
+
+    %{
+      file: map["file"],
+      level: parse_log_level(map["level"]),
+      max_no_bytes: map["max_no_bytes"],
+      max_no_files: map["max_no_files"],
+      compress_on_rotate: parse_boolean(map["compress_on_rotate"], nil),
+      filesync_repeat_interval: map["filesync_repeat_interval"]
+    }
+    |> reject_nil_values()
   end
 
   defp parse_gateway(map) do
@@ -634,6 +660,7 @@ defmodule LemonCore.Config do
     |> apply_env_provider_overrides()
     |> apply_env_agent_overrides()
     |> apply_env_tui_overrides()
+    |> apply_env_logging_overrides()
   end
 
   defp apply_env_agent_overrides(%__MODULE__{} = config) do
@@ -721,6 +748,23 @@ defmodule LemonCore.Config do
     %{config | providers: providers}
   end
 
+  defp apply_env_logging_overrides(%__MODULE__{} = config) do
+    logging = config.logging
+
+    logging =
+      logging
+      |> maybe_put("file", System.get_env("LEMON_LOG_FILE"))
+
+    logging =
+      case System.get_env("LEMON_LOG_LEVEL") do
+        nil -> logging
+        "" -> logging
+        level -> Map.put(logging, :level, parse_log_level(level))
+      end
+
+    %{config | logging: logging}
+  end
+
   # ============================================================================
   # Helpers
   # ============================================================================
@@ -751,6 +795,24 @@ defmodule LemonCore.Config do
     do: String.split(value, ~r/\s*,\s*/, trim: true)
 
   defp parse_string_list(_), do: []
+
+  defp parse_log_level(nil), do: nil
+  defp parse_log_level("all"), do: :all
+  defp parse_log_level("debug"), do: :debug
+  defp parse_log_level("info"), do: :info
+  defp parse_log_level("notice"), do: :notice
+  defp parse_log_level("warning"), do: :warning
+  defp parse_log_level("warn"), do: :warning
+  defp parse_log_level("error"), do: :error
+  defp parse_log_level("critical"), do: :critical
+  defp parse_log_level("alert"), do: :alert
+  defp parse_log_level("emergency"), do: :emergency
+  defp parse_log_level(level) when is_atom(level), do: level
+  defp parse_log_level(level) when is_binary(level) do
+    level |> String.downcase() |> parse_log_level()
+  end
+
+  defp parse_log_level(_), do: nil
 
   defp normalize_env_overrides(nil), do: %{}
   defp normalize_env_overrides(env) when is_map(env), do: env

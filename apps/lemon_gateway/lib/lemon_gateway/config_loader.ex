@@ -141,6 +141,8 @@ defmodule LemonGateway.ConfigLoader do
       poll_interval_ms: fetch(telegram, :poll_interval_ms),
       edit_throttle_ms: fetch(telegram, :edit_throttle_ms),
       debounce_ms: fetch(telegram, :debounce_ms),
+      # When enabled, append a short "resume" line to final answers.
+      show_resume_line: fetch(telegram, :show_resume_line),
       # When enabled, outgoing text is treated as markdown and rendered using Telegram entities.
       use_markdown: fetch(telegram, :use_markdown),
       allow_queue_override: fetch(telegram, :allow_queue_override),

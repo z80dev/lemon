@@ -750,7 +750,8 @@ defmodule AgentCore.CliRunners.JsonlRunnerTest do
 
         def build_command(_prompt, _resume, _state) do
           # Generate 100 events quickly
-          {"bash", ["-c", "for i in $(seq 1 100); do echo '{\"n\":'$i'}'; done"]}
+          # Use printf (not echo) so output is deterministic across shells/distros.
+          {"bash", ["-c", "for i in $(seq 1 100); do printf '{\"n\":%s}\\n' $i; done"]}
         end
 
         def init_state(_prompt, _resume), do: %{count: 0}

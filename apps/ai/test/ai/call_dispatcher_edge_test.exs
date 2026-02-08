@@ -440,19 +440,19 @@ defmodule Ai.CallDispatcherEdgeTest do
       )
 
       start_supervised!(
-        {CircuitBreaker, provider: cb_provider, failure_threshold: 2, recovery_timeout: 100},
+        # Give slack so the circuit can't flip to half-open before we assert it's open.
+        {CircuitBreaker, provider: cb_provider, failure_threshold: 2, recovery_timeout: 500},
         id: {CircuitBreaker, cb_provider}
       )
 
       # Open circuit
       CircuitBreaker.record_failure(cb_provider)
       CircuitBreaker.record_failure(cb_provider)
-      Process.sleep(20)
 
-      assert CircuitBreaker.is_open?(cb_provider)
+      wait_until(fn -> CircuitBreaker.is_open?(cb_provider) end, 200)
 
       # Wait for recovery
-      Process.sleep(120)
+      wait_until(fn -> not CircuitBreaker.is_open?(cb_provider) end, 1_200)
 
       # Circuit should be half-open (not open)
       refute CircuitBreaker.is_open?(cb_provider)

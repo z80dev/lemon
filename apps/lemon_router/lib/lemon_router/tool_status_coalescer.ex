@@ -313,54 +313,101 @@ defmodule LemonRouter.ToolStatusCoalescer do
   defp emit_output(state, text) do
     parsed = parse_session_key(state.session_key)
 
-    if not is_pid(Process.whereis(LemonChannels.Outbox)) do
-      state
-    else
-      status_msg_id = (state.meta || %{})[:status_msg_id]
+    status_msg_id = (state.meta || %{})[:status_msg_id]
+
+    # For Telegram, prefer LemonGateway.Telegram.Outbox, which coalesces edits by key.
+    if state.channel_id == "telegram" and is_pid(Process.whereis(LemonGateway.Telegram.Outbox)) do
+      chat_id = parse_int(parsed.peer_id)
+      thread_id = parse_int(parsed.thread_id)
 
       cond do
+        not is_integer(chat_id) ->
+          state
+
         is_nil(status_msg_id) and is_reference(state.status_create_ref) ->
           # Creation is in flight; remember latest desired text and wait for ack.
           %{state | deferred_text: truncate_for_channel(state.channel_id, text)}
 
+        is_integer(status_msg_id) ->
+          edit_text = truncate_for_channel(state.channel_id, text)
+
+          LemonGateway.Telegram.Outbox.enqueue(
+            {chat_id, status_msg_id, :edit},
+            0,
+            {:edit, chat_id, status_msg_id, %{text: edit_text}}
+          )
+
+          state
+
         true ->
-          {kind, content, notify_pid, notify_ref} = get_output_kind_and_content(state, text)
+          # Create the status message and wait for a delivery ack to capture message_id.
+          notify_ref = make_ref()
+          send_text = truncate_for_channel(state.channel_id, text)
 
-          payload =
-            struct!(LemonChannels.OutboundPayload,
-              channel_id: state.channel_id,
-              account_id: parsed.account_id,
-              peer: %{
-                kind: parsed.peer_kind,
-                id: parsed.peer_id,
-                thread_id: parsed.thread_id
-              },
-              kind: kind,
-              content: content,
-              reply_to: maybe_reply_to(state),
-              idempotency_key: "#{state.run_id}:status:#{state.seq}",
-              meta: %{
-                run_id: state.run_id,
-                session_key: state.session_key,
-                status_seq: state.seq
-              },
-              notify_pid: notify_pid,
-              notify_ref: notify_ref
-            )
+          LemonGateway.Telegram.Outbox.enqueue_with_notify(
+            {chat_id, state.run_id, :status_create},
+            0,
+            {:send, chat_id,
+             %{
+               text: send_text,
+               reply_to_message_id: maybe_reply_to(state),
+               message_thread_id: thread_id
+             }},
+            self(),
+            notify_ref,
+            :outbox_delivered
+          )
 
-          case LemonChannels.Outbox.enqueue(payload) do
-            {:ok, _ref} ->
-              if is_reference(notify_ref),
-                do: %{state | status_create_ref: notify_ref},
-                else: state
+          %{state | status_create_ref: notify_ref}
+      end
+    else
+      if not is_pid(Process.whereis(LemonChannels.Outbox)) do
+        state
+      else
+        cond do
+          is_nil(status_msg_id) and is_reference(state.status_create_ref) ->
+            # Creation is in flight; remember latest desired text and wait for ack.
+            %{state | deferred_text: truncate_for_channel(state.channel_id, text)}
 
-            {:error, :duplicate} ->
-              state
+          true ->
+            {kind, content, notify_pid, notify_ref} = get_output_kind_and_content(state, text)
 
-            {:error, reason} ->
-              Logger.warning("Failed to enqueue tool status output: #{inspect(reason)}")
-              state
-          end
+            payload =
+              struct!(LemonChannels.OutboundPayload,
+                channel_id: state.channel_id,
+                account_id: parsed.account_id,
+                peer: %{
+                  kind: parsed.peer_kind,
+                  id: parsed.peer_id,
+                  thread_id: parsed.thread_id
+                },
+                kind: kind,
+                content: content,
+                reply_to: maybe_reply_to(state),
+                idempotency_key: "#{state.run_id}:status:#{state.seq}",
+                meta: %{
+                  run_id: state.run_id,
+                  session_key: state.session_key,
+                  status_seq: state.seq
+                },
+                notify_pid: notify_pid,
+                notify_ref: notify_ref
+              )
+
+            case LemonChannels.Outbox.enqueue(payload) do
+              {:ok, _ref} ->
+                if is_reference(notify_ref),
+                  do: %{state | status_create_ref: notify_ref},
+                  else: state
+
+              {:error, :duplicate} ->
+                state
+
+              {:error, reason} ->
+                Logger.warning("Failed to enqueue tool status output: #{inspect(reason)}")
+                state
+            end
+        end
       end
     end
   rescue
@@ -563,4 +610,17 @@ defmodule LemonRouter.ToolStatusCoalescer do
   end
 
   defp truncate_for_channel(_channel_id, text), do: text
+
+  defp parse_int(nil), do: nil
+
+  defp parse_int(v) when is_integer(v), do: v
+
+  defp parse_int(v) when is_binary(v) do
+    case Integer.parse(v) do
+      {i, _} -> i
+      :error -> nil
+    end
+  end
+
+  defp parse_int(_), do: nil
 end

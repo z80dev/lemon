@@ -1,5 +1,8 @@
 defmodule CodingAgent.Tools.ExtensionsStatusTest do
-  use ExUnit.Case, async: true
+  # This suite relies on `CodingAgent.Extensions.last_load_errors/0`, which is a
+  # global cache. Running async can interleave extension loads from other tests
+  # and make assertions flaky.
+  use ExUnit.Case, async: false
 
   alias CodingAgent.Tools.ExtensionsStatus
   alias AgentCore.Types.AgentToolResult

@@ -50,7 +50,7 @@ defmodule LemonChannels.Outbox do
     # exists so we can safely run supervised delivery tasks.
     _ = ensure_worker_supervisor_started()
 
-    {:ok, %{queue: :queue.new(), processing: %{}}}
+    {:ok, %{queue: :queue.new(), processing: %{}, processing_groups: %{}, enqueued_total: 0}}
   end
 
   @impl true
@@ -93,7 +93,8 @@ defmodule LemonChannels.Outbox do
   def handle_call(:stats, _from, state) do
     stats = %{
       queue_length: :queue.len(state.queue),
-      processing_count: map_size(state.processing)
+      processing_count: map_size(state.processing),
+      enqueued_total: state.enqueued_total
     }
 
     {:reply, stats, state}
@@ -101,8 +102,12 @@ defmodule LemonChannels.Outbox do
 
   @impl true
   def handle_info(:process_queue, state) do
-    state = process_next(state)
-    {:noreply, state}
+    # Preserve delivery ordering per "delivery group" (channel/account/peer/thread),
+    # while still allowing concurrency across independent groups.
+    #
+    # Chunked messages share the same delivery group and must not be delivered
+    # concurrently, otherwise chunks can reorder on the wire.
+    {:noreply, process_available(state)}
   end
 
   # Task.Supervisor.async_nolink/2 sends `{ref, result}` on success, and `{:DOWN, ref, ...}`
@@ -116,6 +121,7 @@ defmodule LemonChannels.Outbox do
         # Flush a pending DOWN for this task ref if it already arrived.
         Process.demonitor(task_ref, [:flush])
         state = %{state | processing: processing}
+        state = release_processing_group(state, entry, task_ref)
 
         maybe_notify_delivery(entry.payload, result)
 
@@ -158,6 +164,7 @@ defmodule LemonChannels.Outbox do
 
       {entry, processing} ->
         state = %{state | processing: processing}
+        state = release_processing_group(state, entry, task_ref)
 
         # Treat unexpected worker exits as delivery failures. This is the critical difference
         # from raw spawn/1: we always clean up bookkeeping and keep the queue moving.
@@ -245,52 +252,99 @@ defmodule LemonChannels.Outbox do
   end
 
   defp enqueue_payloads(state, ref, payloads) do
-    Enum.reduce(payloads, state, fn payload, acc ->
-      entry = %{
-        ref: ref,
-        payload: payload,
-        attempts: 0,
-        chunk_index: get_in(payload.meta || %{}, [:chunk_index]) || 0
-      }
+    state =
+      Enum.reduce(payloads, state, fn payload, acc ->
+        entry = %{
+          ref: ref,
+          payload: payload,
+          attempts: 0,
+          chunk_index: get_in(payload.meta || %{}, [:chunk_index]) || 0,
+          group_key: delivery_group_key(payload)
+        }
 
-      queue = :queue.in(entry, acc.queue)
-      %{acc | queue: queue}
-    end)
+        queue = :queue.in(entry, acc.queue)
+        %{acc | queue: queue}
+      end)
+
+    %{state | enqueued_total: state.enqueued_total + length(payloads)}
   end
 
-  defp process_next(state) do
-    case :queue.out(state.queue) do
-      {:empty, _} ->
-        state
+  defp process_available(state) do
+    {state, min_wait_ms} = do_process_available(state, nil)
 
-      {{:value, entry}, queue} ->
-        # Check rate limit before processing
-        # Use atomic consume to check and decrement in one operation
+    if is_integer(min_wait_ms) do
+      Process.send_after(self(), :process_queue, min_wait_ms)
+    end
+
+    state
+  end
+
+  defp do_process_available(state, min_wait_ms) do
+    case dequeue_next_available(state.queue, state.processing_groups) do
+      :none ->
+        {state, min_wait_ms}
+
+      {entry, queue} ->
         case RateLimiter.consume(entry.payload.channel_id, entry.payload.account_id) do
           :ok ->
-            # Token consumed, process delivery asynchronously (supervised)
             case start_delivery_task(entry) do
               {:ok, %Task{} = task} ->
                 processing = Map.put(state.processing, task.ref, entry)
-                %{state | queue: queue, processing: processing}
+                processing_groups = Map.put(state.processing_groups, entry.group_key, task.ref)
+                state = %{state | queue: queue, processing: processing, processing_groups: processing_groups}
+                do_process_available(state, min_wait_ms)
 
               {:error, reason} ->
-                # If we fail to start a worker, keep the entry and retry shortly.
                 Logger.warning("Failed to start outbox delivery worker: #{inspect(reason)}")
-                requeued = :queue.in_r(entry, queue)
-                Process.send_after(self(), :process_queue, 50)
-                %{state | queue: requeued}
+                requeued = :queue.in(entry, queue)
+                { %{state | queue: requeued}, min_wait_ms || 50 }
             end
 
           {:rate_limited, wait_ms} ->
-            # Re-queue the entry at the front and schedule retry
-            # We explicitly put the entry back at the front of the dequeued queue
-            # to ensure it's not lost
-            requeued = :queue.in_r(entry, queue)
-            Process.send_after(self(), :process_queue, wait_ms)
-            %{state | queue: requeued}
+            requeued = :queue.in(entry, queue)
+            min_wait_ms = if is_integer(min_wait_ms), do: min(min_wait_ms, wait_ms), else: wait_ms
+            do_process_available(%{state | queue: requeued}, min_wait_ms)
         end
     end
+  end
+
+  defp dequeue_next_available(queue, processing_groups) do
+    len = :queue.len(queue)
+    do_dequeue_next_available(queue, processing_groups, len)
+  end
+
+  defp do_dequeue_next_available(_queue, _processing_groups, 0), do: :none
+
+  defp do_dequeue_next_available(queue, processing_groups, remaining) do
+    case :queue.out(queue) do
+      {:empty, _} ->
+        :none
+
+      {{:value, entry}, rest} ->
+        if Map.has_key?(processing_groups, entry.group_key) do
+          # Group is currently in-flight; rotate to preserve per-group ordering.
+          do_dequeue_next_available(:queue.in(entry, rest), processing_groups, remaining - 1)
+        else
+          {entry, rest}
+        end
+    end
+  end
+
+  defp release_processing_group(state, entry, task_ref) do
+    group_key = entry.group_key
+
+    processing_groups =
+      case Map.get(state.processing_groups, group_key) do
+        ^task_ref -> Map.delete(state.processing_groups, group_key)
+        _ -> state.processing_groups
+      end
+
+    %{state | processing_groups: processing_groups}
+  end
+
+  defp delivery_group_key(%OutboundPayload{} = payload) do
+    peer = payload.peer || %{}
+    {payload.channel_id, payload.account_id, Map.get(peer, :kind), Map.get(peer, :id), Map.get(peer, :thread_id)}
   end
 
   defp start_delivery_task(entry) do

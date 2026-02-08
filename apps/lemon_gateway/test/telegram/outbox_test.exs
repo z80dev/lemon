@@ -32,13 +32,16 @@ defmodule LemonGateway.Telegram.OutboxTest do
       Agent.update(__MODULE__, &%{&1 | fail_next: error})
     end
 
-    def send_message(_token, chat_id, text, reply_to_message_id \\ nil, parse_mode \\ nil) do
-      record({:send, chat_id, text, reply_to_message_id, parse_mode})
+    # The outbox may call send_message/5 with either:
+    # - reply_to_message_id (legacy), or
+    # - an opts map (preferred; supports thread_id + entities).
+    def send_message(_token, chat_id, text, opts_or_reply_to \\ nil, parse_mode \\ nil) do
+      record({:send, chat_id, text, opts_or_reply_to, parse_mode})
       maybe_fail_or_succeed(%{"ok" => true, "result" => %{"message_id" => 1}})
     end
 
-    def edit_message_text(_token, chat_id, message_id, text, parse_mode \\ nil) do
-      record({:edit, chat_id, message_id, text, parse_mode})
+    def edit_message_text(_token, chat_id, message_id, text, opts \\ nil) do
+      record({:edit, chat_id, message_id, text, opts})
       maybe_fail_or_succeed(%{"ok" => true})
     end
 
@@ -87,12 +90,12 @@ defmodule LemonGateway.Telegram.OutboxTest do
       Agent.get(__MODULE__, fn state -> Enum.reverse(state.calls) end)
     end
 
-    def send_message(_token, chat_id, text, reply_to_message_id \\ nil, _parse_mode \\ nil) do
-      record({:send, chat_id, text, reply_to_message_id, System.monotonic_time(:millisecond)})
+    def send_message(_token, chat_id, text, opts_or_reply_to \\ nil, _parse_mode \\ nil) do
+      record({:send, chat_id, text, opts_or_reply_to, System.monotonic_time(:millisecond)})
       {:ok, %{"ok" => true, "result" => %{"message_id" => 1}}}
     end
 
-    def edit_message_text(_token, chat_id, message_id, text, _parse_mode \\ nil) do
+    def edit_message_text(_token, chat_id, message_id, text, _opts \\ nil) do
       record({:edit, chat_id, message_id, text, System.monotonic_time(:millisecond)})
       {:ok, %{"ok" => true}}
     end
@@ -184,7 +187,7 @@ defmodule LemonGateway.Telegram.OutboxTest do
       calls = MockOutboxAPI.calls()
       # Only the final value should be sent due to coalescing
       assert length(calls) == 1
-      assert hd(calls) == {:send, 1, "final", nil, nil}
+      assert hd(calls) == {:send, 1, "final", %{}, nil}
     end
 
     test "coalescing preserves queue order for first occurrence" do
@@ -235,6 +238,41 @@ defmodule LemonGateway.Telegram.OutboxTest do
       # Only one call should have been made (the final coalesced one)
       assert length(calls) == 1
       assert hd(calls) == {:edit, 1, 2, "third", nil}
+    end
+  end
+
+  describe "enqueue_with_notify/6" do
+    setup do
+      {:ok, _} = start_supervised({MockOutboxAPI, [notify_pid: self()]})
+      :ok
+    end
+
+    test "notifies on success when edit_throttle_ms = 0" do
+      {:ok, _} =
+        start_supervised(
+          {Outbox,
+           [bot_token: "token", api_mod: MockOutboxAPI, edit_throttle_ms: 0, use_markdown: false]}
+        )
+
+      ref = make_ref()
+
+      Outbox.enqueue_with_notify({1, :send}, 0, {:send, 1, %{text: "hi"}}, self(), ref)
+
+      assert_receive {:outbox_delivered, ^ref, {:ok, _result}}, 200
+    end
+
+    test "notifies on success when edit_throttle_ms > 0" do
+      {:ok, _} =
+        start_supervised(
+          {Outbox,
+           [bot_token: "token", api_mod: MockOutboxAPI, edit_throttle_ms: 25, use_markdown: false]}
+        )
+
+      ref = make_ref()
+
+      Outbox.enqueue_with_notify({1, :send}, 0, {:send, 1, %{text: "hi"}}, self(), ref)
+
+      assert_receive {:outbox_delivered, ^ref, {:ok, _result}}, 500
     end
   end
 
@@ -397,9 +435,9 @@ defmodule LemonGateway.Telegram.OutboxTest do
 
       calls = MockOutboxAPI.calls()
       assert length(calls) == 3
-      assert Enum.at(calls, 0) == {:send, 1, "send1", nil, nil}
+      assert Enum.at(calls, 0) == {:send, 1, "send1", %{}, nil}
       assert Enum.at(calls, 1) == {:edit, 1, 1, "edit1", nil}
-      assert Enum.at(calls, 2) == {:send, 2, "send2", nil, nil}
+      assert Enum.at(calls, 2) == {:send, 2, "send2", %{}, nil}
     end
 
     test "priority ordering - lower priority numbers execute first" do
@@ -443,7 +481,7 @@ defmodule LemonGateway.Telegram.OutboxTest do
 
       calls = MockOutboxAPI.calls()
       assert length(calls) == 1
-      assert {:send, 1, "Hello world", nil, nil} in calls
+      assert {:send, 1, "Hello world", %{}, nil} in calls
     end
 
     test "send with explicit nil engine still works" do
@@ -457,7 +495,7 @@ defmodule LemonGateway.Telegram.OutboxTest do
       Process.sleep(50)
 
       calls = MockOutboxAPI.calls()
-      assert [{:send, 1, "test message", nil, nil}] = calls
+      assert [{:send, 1, "test message", %{}, nil}] = calls
     end
 
     test "send without engine key in payload" do
@@ -472,7 +510,7 @@ defmodule LemonGateway.Telegram.OutboxTest do
       Process.sleep(50)
 
       calls = MockOutboxAPI.calls()
-      assert [{:send, 1, "no engine key", nil, nil}] = calls
+      assert [{:send, 1, "no engine key", %{}, nil}] = calls
     end
 
     test "send with reply_to_message_id" do
@@ -490,7 +528,7 @@ defmodule LemonGateway.Telegram.OutboxTest do
       Process.sleep(50)
 
       calls = MockOutboxAPI.calls()
-      assert [{:send, 1, "reply", 123, nil}] = calls
+      assert [{:send, 1, "reply", %{reply_to_message_id: 123}, nil}] = calls
     end
 
     test "send with string keys in payload" do
@@ -508,7 +546,7 @@ defmodule LemonGateway.Telegram.OutboxTest do
       Process.sleep(50)
 
       calls = MockOutboxAPI.calls()
-      assert [{:send, 1, "string key", 456, nil}] = calls
+      assert [{:send, 1, "string key", %{reply_to_message_id: 456}, nil}] = calls
     end
   end
 
@@ -867,7 +905,7 @@ defmodule LemonGateway.Telegram.OutboxTest do
       Process.sleep(50)
 
       calls = MockOutboxAPI.calls()
-      assert [{:send, 1, "", nil, nil}] = calls
+      assert [{:send, 1, "", %{}, nil}] = calls
     end
 
     test "handles missing text key - uses empty string" do
@@ -880,7 +918,7 @@ defmodule LemonGateway.Telegram.OutboxTest do
       Process.sleep(50)
 
       calls = MockOutboxAPI.calls()
-      assert [{:send, 1, "", nil, nil}] = calls
+      assert [{:send, 1, "", %{}, nil}] = calls
     end
 
     test "handles very long keys" do
@@ -966,7 +1004,37 @@ defmodule LemonGateway.Telegram.OutboxTest do
       # Delete should execute first (priority -1), then edit (0), then send (1)
       assert Enum.at(calls, 0) == {:delete, 1, 3}
       assert Enum.at(calls, 1) == {:edit, 1, 2, "edit msg", nil}
-      assert Enum.at(calls, 2) == {:send, 1, "send msg", nil, nil}
+      assert Enum.at(calls, 2) == {:send, 1, "send msg", %{}, nil}
+    end
+
+    test "delete drops any pending edit for the same chat/message" do
+      {:ok, pid} =
+        start_supervised(
+          {Outbox,
+           [bot_token: "token", api_mod: MockOutboxAPI, edit_throttle_ms: 50, use_markdown: false]}
+        )
+
+      # Make the test deterministic by preventing auto-drain scheduling until we've enqueued
+      # both ops. (schedule_drain/1 only triggers when next_at == 0)
+      :sys.replace_state(pid, fn state ->
+        %{state | next_at: System.monotonic_time(:millisecond) + 60_000}
+      end)
+
+      edit_key = {1, 2, :edit}
+      delete_key = {1, 2, :delete}
+
+      Outbox.enqueue(edit_key, 0, {:edit, 1, 2, %{text: "should be dropped"}})
+      Outbox.enqueue(delete_key, -1, {:delete, 1, 2})
+
+      state = :sys.get_state(pid)
+      refute Map.has_key?(state.ops, edit_key)
+      assert Enum.all?(state.queue, fn {k, _p} -> k != edit_key end)
+
+      :sys.replace_state(pid, fn state -> %{state | next_at: 0} end)
+      send(pid, :drain)
+
+      assert_receive {:outbox_api_call, {:delete, 1, 2}}, 200
+      refute_receive {:outbox_api_call, {:edit, 1, 2, _text, _opts}}, 50
     end
   end
 

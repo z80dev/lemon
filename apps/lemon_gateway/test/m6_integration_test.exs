@@ -4,17 +4,21 @@ defmodule LemonGateway.M6IntegrationTest do
   alias LemonGateway.{BindingResolver, ChatState, Config, Store}
   alias LemonGateway.Types.{ChatScope, ResumeToken}
 
-  @test_toml_dir "/private/tmp/claude-501/-Users-z80-dev-lemon/m6_integration_test"
-
   setup do
+    test_toml_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "lemon-m6-integration-#{System.unique_integer([:positive, :monotonic])}"
+      )
+
     original_home = System.get_env("HOME")
     # Stop the app to reset state
     _ = Application.stop(:lemon_gateway)
 
     # Set up test directories
-    File.rm_rf!(@test_toml_dir)
-    File.mkdir_p!(@test_toml_dir)
-    System.put_env("HOME", @test_toml_dir)
+    File.rm_rf!(test_toml_dir)
+    File.mkdir_p!(test_toml_dir)
+    System.put_env("HOME", test_toml_dir)
 
     # Clean up any existing config
     Application.delete_env(:lemon_gateway, LemonGateway.Config)
@@ -23,16 +27,16 @@ defmodule LemonGateway.M6IntegrationTest do
     on_exit(fn ->
       Application.delete_env(:lemon_gateway, LemonGateway.Config)
       Application.delete_env(:lemon_gateway, :config_path)
-      File.rm_rf!(@test_toml_dir)
+      File.rm_rf!(test_toml_dir)
       if original_home, do: System.put_env("HOME", original_home), else: System.delete_env("HOME")
     end)
 
-    :ok
+    {:ok, %{test_toml_dir: test_toml_dir}}
   end
 
   describe "full M6 integration" do
-    test "config loader parses TOML and populates Config" do
-      project_root = Path.join(@test_toml_dir, "project")
+    test "config loader parses TOML and populates Config", %{test_toml_dir: test_toml_dir} do
+      project_root = Path.join(test_toml_dir, "project")
       File.mkdir_p!(project_root)
 
       toml_content = """
@@ -52,7 +56,7 @@ defmodule LemonGateway.M6IntegrationTest do
       queue_mode = "followup"
       """
 
-      config_dir = Path.join(@test_toml_dir, ".lemon")
+      config_dir = Path.join(test_toml_dir, ".lemon")
       File.mkdir_p!(config_dir)
       toml_path = Path.join(config_dir, "config.toml")
       File.write!(toml_path, toml_content)
@@ -81,11 +85,11 @@ defmodule LemonGateway.M6IntegrationTest do
       assert binding.queue_mode == :followup
     end
 
-    test "binding resolver uses config for resolution" do
-      project_root = Path.join(@test_toml_dir, "project2")
+    test "binding resolver uses config for resolution", %{test_toml_dir: test_toml_dir} do
+      project_root = Path.join(test_toml_dir, "project2")
       File.mkdir_p!(project_root)
 
-      config_dir = Path.join(@test_toml_dir, ".lemon")
+      config_dir = Path.join(test_toml_dir, ".lemon")
       File.mkdir_p!(config_dir)
       toml_path = Path.join(config_dir, "config.toml")
 
@@ -128,8 +132,8 @@ defmodule LemonGateway.M6IntegrationTest do
       assert queue_mode == :collect
     end
 
-    test "topic binding overrides chat binding" do
-      config_dir = Path.join(@test_toml_dir, ".lemon")
+    test "topic binding overrides chat binding", %{test_toml_dir: test_toml_dir} do
+      config_dir = Path.join(test_toml_dir, ".lemon")
       File.mkdir_p!(config_dir)
       toml_path = Path.join(config_dir, "config.toml")
 
@@ -162,11 +166,11 @@ defmodule LemonGateway.M6IntegrationTest do
       assert BindingResolver.resolve_engine(topic_scope, nil, nil) == "topic_engine"
     end
 
-    test "engine precedence cascade works correctly" do
-      project_root = Path.join(@test_toml_dir, "project3")
+    test "engine precedence cascade works correctly", %{test_toml_dir: test_toml_dir} do
+      project_root = Path.join(test_toml_dir, "project3")
       File.mkdir_p!(project_root)
 
-      config_dir = Path.join(@test_toml_dir, ".lemon")
+      config_dir = Path.join(test_toml_dir, ".lemon")
       File.mkdir_p!(config_dir)
       toml_path = Path.join(config_dir, "config.toml")
 
@@ -200,7 +204,7 @@ defmodule LemonGateway.M6IntegrationTest do
       assert BindingResolver.resolve_engine(scope, "hint", resume) == "resume"
     end
 
-    test "chat state persistence works" do
+    test "chat state persistence works", %{test_toml_dir: _test_toml_dir} do
       Application.put_env(:lemon_gateway, :config_path, "/nonexistent/path.toml")
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 

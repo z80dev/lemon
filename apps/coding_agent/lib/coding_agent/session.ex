@@ -35,6 +35,11 @@ defmodule CodingAgent.Session do
   use GenServer
   require Logger
 
+  # Small deferral so callers can (a) subscribe after `prompt/3` and still see early
+  # events, and (b) queue immediate follow-ups/steering before the agent loop reaches
+  # its end-of-run checks (avoids a race in very fast mock runs).
+  @prompt_defer_ms 10
+
   alias AgentCore.Types.AgentTool
   alias CodingAgent.Config
   alias CodingAgent.Extensions
@@ -685,8 +690,13 @@ defmodule CodingAgent.Session do
           }
         end
 
-      # Send to agent (user message will be persisted on :message_end event)
-      :ok = AgentCore.Agent.prompt(state.agent, user_message)
+      # Defer the actual prompt slightly after we reply so callers can subscribe immediately
+      # after `Session.prompt/3` and still observe `:agent_start` and other early events.
+      #
+      # This also gives the session a chance to receive near-immediate `follow_up/2` and
+      # `steer/2` messages before the agent loop does its end-of-turn queue checks in
+      # very fast (mocked) runs.
+      Process.send_after(self(), {:do_prompt, user_message}, @prompt_defer_ms)
 
       new_state = %{
         state
@@ -1174,6 +1184,12 @@ defmodule CodingAgent.Session do
   def handle_info({:publish_extension_status_report, report}, state) do
     # Publish the extension status report event for UI/CLI consumption
     broadcast_event(state, {:extension_status_report, report})
+    {:noreply, state}
+  end
+
+  def handle_info({:do_prompt, %Ai.Types.UserMessage{} = user_message}, state) do
+    # Send to agent (user message will be persisted on :message_end event)
+    _ = AgentCore.Agent.prompt(state.agent, user_message)
     {:noreply, state}
   end
 

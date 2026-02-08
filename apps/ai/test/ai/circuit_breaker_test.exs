@@ -303,33 +303,50 @@ defmodule Ai.CircuitBreakerTest do
 
   describe "state transition: half-open -> open" do
     test "transitions on any failure", %{provider: provider} do
+      recovery_timeout = 200
+
       start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 30}
+        {CircuitBreaker,
+         provider: provider, failure_threshold: 1, recovery_timeout: recovery_timeout}
       )
 
       # Open -> half-open
       CircuitBreaker.record_failure(provider)
-      Process.sleep(50)
+      assert wait_until(
+               fn ->
+                 {:ok, state} = CircuitBreaker.get_state(provider)
+                 state.circuit_state == :half_open
+               end,
+               recovery_timeout + 300
+             )
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
 
       # Failure should reopen circuit
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
     end
 
     test "transitions even after some successes", %{provider: provider} do
+      recovery_timeout = 200
+
       start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 30}
+        {CircuitBreaker,
+         provider: provider, failure_threshold: 1, recovery_timeout: recovery_timeout}
       )
 
       # Open -> half-open
       CircuitBreaker.record_failure(provider)
-      Process.sleep(50)
+      assert wait_until(
+               fn ->
+                 {:ok, state} = CircuitBreaker.get_state(provider)
+                 state.circuit_state == :half_open
+               end,
+               recovery_timeout + 300
+             )
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
@@ -343,7 +360,6 @@ defmodule Ai.CircuitBreakerTest do
 
       # Now failure should reopen
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
@@ -451,7 +467,7 @@ defmodule Ai.CircuitBreakerTest do
   describe "record_failure/1 - open state" do
     test "extends recovery timeout on additional failures", %{provider: provider} do
       # Keep timeouts large enough to avoid scheduler jitter making the test flaky.
-      recovery_timeout = 200
+      recovery_timeout = 1_000
 
       start_supervised!(
         {CircuitBreaker,
@@ -470,23 +486,26 @@ defmodule Ai.CircuitBreakerTest do
              )
 
       # Wait but not long enough for recovery
-      Process.sleep(120)
+      Process.sleep(800)
 
       # Record another failure - this should reset the recovery timer
       CircuitBreaker.record_failure(provider)
       Process.sleep(20)
 
       # Wait a bit more. If the recovery timer was not extended, the circuit would
-      # be half-open by now (120ms + 120ms > 200ms).
-      Process.sleep(120)
+      # be half-open by now (800ms + 500ms > 1000ms).
+      Process.sleep(500)
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
 
       # Now wait for full recovery timeout from last failure
-      Process.sleep(recovery_timeout + 20)
-
-      {:ok, state} = CircuitBreaker.get_state(provider)
-      assert state.circuit_state == :half_open
+      assert wait_until(
+               fn ->
+                 {:ok, state} = CircuitBreaker.get_state(provider)
+                 state.circuit_state == :half_open
+               end,
+               recovery_timeout + 500
+             )
     end
   end
 

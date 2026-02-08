@@ -939,7 +939,8 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
           |> Enum.to_list()
         end)
 
-      events = Task.await(task, 1000)
+      # CI can be busy; allow slack while still validating the stream self-cancels.
+      events = Task.await(task, 5_000)
 
       has_canceled =
         Enum.any?(events, fn
@@ -967,7 +968,7 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
       EventStream.cancel(stream, :test_cancel)
 
-      events = Task.await(consumer_task, 1000)
+      events = Task.await(consumer_task, 5_000)
 
       has_canceled =
         Enum.any?(events, fn

@@ -36,6 +36,8 @@ defmodule LemonRouter.StreamCoalescer do
     :flush_timer,
     :config,
     :meta,
+    :last_sent_text,
+    :pending_resume_indices,
     :finalized
   ]
 
@@ -166,6 +168,8 @@ defmodule LemonRouter.StreamCoalescer do
       flush_timer: nil,
       config: config,
       meta: Keyword.get(opts, :meta, %{}),
+      last_sent_text: nil,
+      pending_resume_indices: %{},
       finalized: false
     }
 
@@ -191,6 +195,9 @@ defmodule LemonRouter.StreamCoalescer do
             flush_timer: nil,
             # New run: do not carry forward prior run's message ids.
             meta: compact_meta(meta),
+            last_sent_text: nil,
+            # Don't drop pending resume-index entries: final sends can still be in-flight.
+            pending_resume_indices: state.pending_resume_indices || %{},
             finalized: false
         }
       else
@@ -259,6 +266,32 @@ defmodule LemonRouter.StreamCoalescer do
     {:noreply, state}
   end
 
+  def handle_info({:outbox_delivered, ref, result}, state) when is_reference(ref) do
+    {entry, pending} = Map.pop(state.pending_resume_indices || %{}, ref)
+
+    state =
+      case entry do
+        %{account_id: account_id, chat_id: chat_id, thread_id: thread_id, resume: resume} ->
+          message_id = extract_message_id_from_delivery(result)
+
+          _ =
+            maybe_index_resume(
+              account_id,
+              chat_id,
+              thread_id,
+              message_id,
+              resume
+            )
+
+          %{state | pending_resume_indices: pending}
+
+        _ ->
+          state
+      end
+
+    {:noreply, state}
+  end
+
   def handle_info(_msg, state) do
     {:noreply, state}
   end
@@ -295,7 +328,7 @@ defmodule LemonRouter.StreamCoalescer do
 
   defp do_flush(state) do
     # Emit the buffered content
-    emit_output(state)
+    state = emit_output(state)
 
     cancel_timer(state.flush_timer)
 
@@ -327,11 +360,45 @@ defmodule LemonRouter.StreamCoalescer do
       )
     end
 
-    # Also enqueue to LemonChannels.Outbox for delivery
-    if is_pid(Process.whereis(LemonChannels.Outbox)) do
-      # Determine output kind and content based on channel capabilities
-      {kind, content} = get_output_kind_and_content(state)
+    # Determine output kind and content based on channel capabilities
+    {kind, content} = get_output_kind_and_content(state)
 
+    state =
+      case {state.channel_id, kind, content} do
+        {"telegram", :edit, %{message_id: msg_id, text: text}}
+        when is_integer(msg_id) and is_binary(text) ->
+          # Skip redundant edits (saves rate limit + improves perceived snappiness).
+          if text == state.last_sent_text do
+            state
+          else
+            chat_id = parse_int(parsed.peer_id)
+
+            if is_integer(chat_id) and is_pid(Process.whereis(LemonGateway.Telegram.Outbox)) do
+              key = {chat_id, msg_id, :edit}
+              LemonGateway.Telegram.Outbox.enqueue(key, 0, {:edit, chat_id, msg_id, %{text: text}})
+              %{state | last_sent_text: text}
+            else
+              state
+            end
+          end
+
+        _ ->
+          state
+      end
+
+    skip_channels_outbox? =
+      case {state.channel_id, kind, content} do
+        {"telegram", :edit, %{message_id: _msg_id, text: _text}} ->
+          chat_id = parse_int(parsed.peer_id)
+          is_integer(chat_id) and is_pid(Process.whereis(LemonGateway.Telegram.Outbox))
+
+        _ ->
+          false
+      end
+
+    # Fallback: enqueue to LemonChannels.Outbox (used for non-Telegram channels and as a
+    # safety net if the Telegram outbox isn't running).
+    if is_pid(Process.whereis(LemonChannels.Outbox)) and not skip_channels_outbox? do
       payload =
         struct!(LemonChannels.OutboundPayload,
           channel_id: state.channel_id,
@@ -355,7 +422,6 @@ defmodule LemonRouter.StreamCoalescer do
         {:ok, _ref} ->
           :ok
 
-        # Already delivered
         {:error, :duplicate} ->
           :ok
 
@@ -363,6 +429,8 @@ defmodule LemonRouter.StreamCoalescer do
           Logger.warning("Failed to enqueue coalesced output: #{inspect(reason)}")
       end
     end
+
+    state
   end
 
   defp do_finalize(state, final_text) do
@@ -372,6 +440,8 @@ defmodule LemonRouter.StreamCoalescer do
         state
 
       true ->
+        resume = (state.meta || %{})[:resume] || (state.meta || %{})["resume"]
+
         text =
           cond do
             is_binary(final_text) and final_text != "" -> final_text
@@ -380,60 +450,136 @@ defmodule LemonRouter.StreamCoalescer do
             true -> ""
           end
 
+        # By default keep Telegram output clean; enable the footer in config if desired.
+        text = if telegram_show_resume_line?(), do: maybe_append_resume_line(text, resume), else: text
+
         progress_msg_id = (state.meta || %{})[:progress_msg_id]
         reply_to = (state.meta || %{})[:user_msg_id]
 
         parsed = parse_session_key(state.session_key)
 
-        if is_pid(Process.whereis(LemonChannels.Outbox)) do
-          # Always remove the initial progress message so it can't remain stuck.
-          if progress_msg_id != nil do
-            delete_payload =
-              struct!(LemonChannels.OutboundPayload,
-                channel_id: state.channel_id,
-                account_id: parsed.account_id,
-                peer: %{
-                  kind: parsed.peer_kind,
-                  id: parsed.peer_id,
-                  thread_id: parsed.thread_id
-                },
-                kind: :delete,
-                content: %{message_id: progress_msg_id},
-                idempotency_key: "#{state.run_id}:final:delete",
-                meta: %{
-                  run_id: state.run_id,
-                  session_key: state.session_key,
-                  final: true
-                }
+        chat_id = parse_int(parsed.peer_id)
+        thread_id = parse_int(parsed.thread_id)
+        account_id = parsed.account_id || "default"
+
+        state =
+          if is_integer(chat_id) and is_pid(Process.whereis(LemonGateway.Telegram.Outbox)) do
+            # Always remove the initial progress message so it can't remain stuck.
+            if is_integer(progress_msg_id) do
+              LemonGateway.Telegram.Outbox.enqueue(
+                {chat_id, progress_msg_id, :delete},
+                -1,
+                {:delete, chat_id, progress_msg_id}
               )
+            end
 
-            _ = LemonChannels.Outbox.enqueue(delete_payload)
+            state =
+              if text != "" do
+                notify_ref = make_ref()
+
+                # Also enqueue a notifyable send so we can index the bot's final message_id for reply-based resumes.
+                pending = state.pending_resume_indices || %{}
+
+                pending =
+                  if resume_token_like?(resume) do
+                    # If finalize is called more than once for the same chat/thread, keep only the latest pending index.
+                    pending =
+                      pending
+                      |> Enum.reject(fn
+                        {_ref,
+                         %{kind: :final_send, account_id: acc, chat_id: cid, thread_id: tid}}
+                        when acc == account_id and cid == chat_id and tid == thread_id ->
+                          true
+
+                        _ ->
+                          false
+                      end)
+                      |> Map.new()
+
+                    Map.put(pending, notify_ref, %{
+                      kind: :final_send,
+                      account_id: account_id,
+                      chat_id: chat_id,
+                      thread_id: thread_id,
+                      resume: normalize_resume_token(resume)
+                    })
+                  else
+                    pending
+                  end
+
+                LemonGateway.Telegram.Outbox.enqueue_with_notify(
+                  {chat_id, state.run_id, :final_send},
+                  1,
+                  {:send, chat_id,
+                   %{
+                     text: text,
+                     reply_to_message_id: reply_to,
+                     message_thread_id: thread_id
+                   }},
+                  self(),
+                  notify_ref,
+                  :outbox_delivered
+                )
+
+                %{state | pending_resume_indices: pending}
+              else
+                state
+              end
+
+            state
+          else
+            if is_pid(Process.whereis(LemonChannels.Outbox)) do
+              # Always remove the initial progress message so it can't remain stuck.
+              if progress_msg_id != nil do
+                delete_payload =
+                  struct!(LemonChannels.OutboundPayload,
+                    channel_id: state.channel_id,
+                    account_id: parsed.account_id,
+                    peer: %{
+                      kind: parsed.peer_kind,
+                      id: parsed.peer_id,
+                      thread_id: parsed.thread_id
+                    },
+                    kind: :delete,
+                    content: %{message_id: progress_msg_id},
+                    idempotency_key: "#{state.run_id}:final:delete",
+                    meta: %{
+                      run_id: state.run_id,
+                      session_key: state.session_key,
+                      final: true
+                    }
+                  )
+
+                _ = LemonChannels.Outbox.enqueue(delete_payload)
+              end
+
+              if text != "" do
+                send_payload =
+                  struct!(LemonChannels.OutboundPayload,
+                    channel_id: state.channel_id,
+                    account_id: parsed.account_id,
+                    peer: %{
+                      kind: parsed.peer_kind,
+                      id: parsed.peer_id,
+                      thread_id: parsed.thread_id
+                    },
+                    kind: :text,
+                    content: text,
+                    reply_to: reply_to,
+                    idempotency_key: "#{state.run_id}:final:send",
+                    meta: %{
+                      run_id: state.run_id,
+                      session_key: state.session_key,
+                      final: true
+                    }
+                  )
+
+                _ = LemonChannels.Outbox.enqueue(send_payload)
+              end
+            end
+
+            state
           end
-
-          if text != "" do
-            send_payload =
-              struct!(LemonChannels.OutboundPayload,
-                channel_id: state.channel_id,
-                account_id: parsed.account_id,
-                peer: %{
-                  kind: parsed.peer_kind,
-                  id: parsed.peer_id,
-                  thread_id: parsed.thread_id
-                },
-                kind: :text,
-                content: text,
-                reply_to: reply_to,
-                idempotency_key: "#{state.run_id}:final:send",
-                meta: %{
-                  run_id: state.run_id,
-                  session_key: state.session_key,
-                  final: true
-                }
-              )
-
-            _ = LemonChannels.Outbox.enqueue(send_payload)
-          end
-        end
 
         cancel_timer(state.flush_timer)
 
@@ -443,12 +589,125 @@ defmodule LemonRouter.StreamCoalescer do
             full_text: "",
             first_delta_ts: nil,
             flush_timer: nil,
+            last_sent_text: nil,
             finalized: true
         }
     end
   rescue
     _ ->
       state
+  end
+
+  defp normalize_resume_token(nil), do: nil
+
+  defp normalize_resume_token(%LemonGateway.Types.ResumeToken{} = tok), do: tok
+
+  defp normalize_resume_token(%{engine: engine, value: value})
+       when is_binary(engine) and is_binary(value) do
+    %LemonGateway.Types.ResumeToken{engine: engine, value: value}
+  end
+
+  defp normalize_resume_token(%{"engine" => engine, "value" => value})
+       when is_binary(engine) and is_binary(value) do
+    %LemonGateway.Types.ResumeToken{engine: engine, value: value}
+  end
+
+  defp normalize_resume_token(_), do: nil
+
+  defp resume_token_like?(%LemonGateway.Types.ResumeToken{engine: e, value: v})
+       when is_binary(e) and is_binary(v),
+       do: true
+
+  defp resume_token_like?(%{engine: e, value: v}) when is_binary(e) and is_binary(v), do: true
+  defp resume_token_like?(%{"engine" => e, "value" => v}) when is_binary(e) and is_binary(v), do: true
+  defp resume_token_like?(_), do: false
+
+  defp maybe_append_resume_line(text, nil), do: text
+
+  defp maybe_append_resume_line(text, resume) when is_binary(text) do
+    resume = normalize_resume_token(resume)
+
+    if is_nil(resume) do
+      text
+    else
+      text = String.trim_trailing(text)
+
+      if resume_token_present?(text) do
+        text
+      else
+        line = format_resume_line(resume)
+
+        if text == "" do
+          line
+        else
+          text <> "\n\n" <> line
+        end
+      end
+    end
+  rescue
+    _ -> text
+  end
+
+  defp maybe_append_resume_line(text, _resume), do: text
+
+  defp resume_token_present?(text) when is_binary(text) do
+    case AgentCore.CliRunners.Types.ResumeToken.extract_resume(text) do
+      %AgentCore.CliRunners.Types.ResumeToken{} -> true
+      _ -> false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp format_resume_line(%LemonGateway.Types.ResumeToken{engine: engine, value: value})
+       when is_binary(engine) and is_binary(value) do
+    engine = String.downcase(engine)
+
+    AgentCore.CliRunners.Types.ResumeToken.new(engine, value)
+    |> AgentCore.CliRunners.Types.ResumeToken.format()
+  rescue
+    _ -> "`#{engine} resume #{value}`"
+  end
+
+  defp extract_message_id_from_delivery({:ok, result}),
+    do: extract_message_id_from_delivery(result)
+
+  defp extract_message_id_from_delivery({:error, _}), do: nil
+
+  defp extract_message_id_from_delivery(result) when is_integer(result), do: result
+
+  defp extract_message_id_from_delivery(result) when is_binary(result) do
+    case Integer.parse(result) do
+      {i, _} -> i
+      :error -> nil
+    end
+  end
+
+  defp extract_message_id_from_delivery(%{message_id: id}),
+    do: extract_message_id_from_delivery(id)
+
+  defp extract_message_id_from_delivery(%{"message_id" => id}),
+    do: extract_message_id_from_delivery(id)
+
+  defp extract_message_id_from_delivery(%{"result" => %{"message_id" => id}}),
+    do: extract_message_id_from_delivery(id)
+
+  defp extract_message_id_from_delivery(_), do: nil
+
+  defp maybe_index_resume(_account_id, _chat_id, _thread_id, nil, _resume), do: :ok
+
+  defp maybe_index_resume(account_id, chat_id, thread_id, message_id, resume) do
+    resume = normalize_resume_token(resume)
+
+    if resume_token_like?(resume) and Code.ensure_loaded?(LemonCore.Store) and
+         function_exported?(LemonCore.Store, :put, 3) do
+      key = {account_id || "default", chat_id, thread_id, message_id}
+      LemonCore.Store.put(:telegram_msg_resume, key, resume)
+    else
+      :ok
+    end
+  rescue
+    _ -> :ok
   end
 
   # Determine output kind and content based on channel capabilities
@@ -496,6 +755,32 @@ defmodule LemonRouter.StreamCoalescer do
       parsed -> parsed
     end
   end
+
+  defp telegram_show_resume_line? do
+    if is_pid(Process.whereis(LemonGateway.Config)) do
+      case LemonGateway.Config.get(:telegram) do
+        %{} = cfg -> cfg[:show_resume_line] || cfg["show_resume_line"] || false
+        _ -> false
+      end
+    else
+      false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp parse_int(nil), do: nil
+
+  defp parse_int(v) when is_integer(v), do: v
+
+  defp parse_int(v) when is_binary(v) do
+    case Integer.parse(v) do
+      {i, _} -> i
+      :error -> nil
+    end
+  end
+
+  defp parse_int(_), do: nil
 
   # Fallback parsing for when SessionKey module is not available
   defp fallback_parse_session_key(session_key) do

@@ -104,7 +104,7 @@ defmodule LemonChannels.OutboxArchitectureTest do
     end
   end
 
-  test "processing_count tracks multiple in-flight chunks (per-chunk bookkeeping)" do
+  test "per-group ordering: chunked payload delivers one in-flight chunk at a time (prevents reordering)" do
     Registry.register(BlockingPlugin)
     on_exit(fn -> Registry.unregister(BlockingPlugin.id()) end)
 
@@ -129,22 +129,67 @@ defmodule LemonChannels.OutboxArchitectureTest do
 
     outbox_pid = Process.whereis(Outbox)
 
-    for _ <- 1..chunk_count do
+    for chunk_index <- 0..(chunk_count - 1) do
+      # Try to nudge the outbox into processing; only one chunk should start at a time for this group.
       send(outbox_pid, :process_queue)
+      send(outbox_pid, :process_queue)
+      send(outbox_pid, :process_queue)
+
+      assert_receive {:deliver_started, pid, ^chunk_index}, 500
+
+      stats = Outbox.stats()
+      assert stats.processing_count == 1
+
+      send(pid, :release)
+      assert_receive {:delivered, ^chunk_index}, 500
     end
 
+    eventually(fn ->
+      stats2 = Outbox.stats()
+      assert stats2.processing_count == 0
+    end)
+  end
+
+  test "processing_count tracks multiple in-flight deliveries across independent delivery groups" do
+    Registry.register(BlockingPlugin)
+    on_exit(fn -> Registry.unregister(BlockingPlugin.id()) end)
+
+    outbox_pid = Process.whereis(Outbox)
+    account_id = "acct-#{System.unique_integer([:positive])}"
+
+    payloads =
+      for i <- 1..3 do
+        %OutboundPayload{
+          channel_id: BlockingPlugin.id(),
+          kind: :text,
+          content: "hello #{i}",
+          account_id: account_id,
+          peer: %{kind: :dm, id: "user-#{i}", thread_id: nil},
+          meta: %{test_pid: self()}
+        }
+      end
+
+    Enum.each(payloads, fn p ->
+      {:ok, _ref} = Outbox.enqueue(p)
+    end)
+
+    # Start all three groups
+    send(outbox_pid, :process_queue)
+    send(outbox_pid, :process_queue)
+    send(outbox_pid, :process_queue)
+
     workers =
-      for _ <- 1..chunk_count do
+      for _ <- 1..3 do
         assert_receive {:deliver_started, pid, _chunk_index}, 500
         pid
       end
 
     stats = Outbox.stats()
-    assert stats.processing_count == chunk_count
+    assert stats.processing_count == 3
 
     Enum.each(workers, fn pid -> send(pid, :release) end)
 
-    for _ <- 1..chunk_count do
+    for _ <- 1..3 do
       assert_receive {:delivered, _chunk_index}, 500
     end
 

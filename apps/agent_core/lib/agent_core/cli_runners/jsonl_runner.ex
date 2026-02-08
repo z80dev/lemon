@@ -311,6 +311,8 @@ defmodule AgentCore.CliRunners.JsonlRunner do
       :timeout_ref,
       :done,
       :buffer,
+      :pending_exit_code,
+      :exit_finalize_ref,
       :new_session_locked,
       :decode_error_count,
       :cancel_kill_ref
@@ -357,6 +359,8 @@ defmodule AgentCore.CliRunners.JsonlRunner do
           found_session: nil,
           done: false,
           buffer: "",
+          pending_exit_code: nil,
+          exit_finalize_ref: nil,
           new_session_locked: false,
           decode_error_count: 0,
           cancel_kill_ref: nil
@@ -453,24 +457,6 @@ defmodule AgentCore.CliRunners.JsonlRunner do
         {shell_path, opts}
       end
 
-    # Write to a debug file since stderr seems to be swallowed
-    shell_args = Keyword.get(port_opts, :args, [])
-    shell_script = if length(shell_args) > 1, do: Enum.at(shell_args, 1), else: "N/A"
-    debug_log = "/tmp/jsonl_runner_debug.log"
-
-    File.write!(
-      debug_log,
-      """
-      [#{DateTime.utc_now()}] JsonlRunner starting
-      cmd: #{cmd}
-      path: #{cmd_path || "NOT FOUND"}
-      cwd: #{state.cwd}
-      script: #{shell_script}
-      PATH: #{System.get_env("PATH")}
-      """,
-      [:append]
-    )
-
     try do
       port = Port.open({:spawn_executable, shell_cmd}, port_opts)
       os_pid = get_os_pid(port)
@@ -527,41 +513,32 @@ defmodule AgentCore.CliRunners.JsonlRunner do
       state
       |> maybe_reset_timeout(data)
       |> process_data(data)
+      |> maybe_reschedule_exit_finalize()
 
     {:noreply, state}
   end
 
   def handle_info({port, {:exit_status, exit_code}}, %{port: port} = state) do
-    # Write to debug file
-    debug_log = "/tmp/jsonl_runner_debug.log"
+    # `:exit_status` can arrive before the final `:data` chunk(s).
+    # Defer finalization briefly and extend that delay whenever more stdout arrives.
+    state =
+      state
+      |> Map.put(:pending_exit_code, exit_code)
+      |> schedule_exit_finalize()
 
-    stderr_content =
-      if state.stderr_path do
-        case File.read(state.stderr_path) do
-          {:ok, content} -> content
-          {:error, reason} -> "failed to read: #{inspect(reason)}"
-        end
-      else
-        "no stderr path"
-      end
+    {:noreply, state}
+  end
 
-    File.write!(
-      debug_log,
-      """
-
-      [#{DateTime.utc_now()}] Exit status: #{exit_code}
-      stderr_path: #{state.stderr_path}
-      stderr_content: #{stderr_content}
-      """,
-      [:append]
-    )
+  def handle_info(:finalize_exit, %{pending_exit_code: exit_code} = state)
+      when is_integer(exit_code) do
+    state = %{state | exit_finalize_ref: nil}
+    state = process_final_buffer(state)
 
     state =
       if state.done do
         state
       else
-        state =
-          maybe_emit_stderr_warning(state, exit_code)
+        state = maybe_emit_stderr_warning(state, exit_code)
 
         if exit_code != 0 do
           {events, runner_state} = state.module.handle_exit_error(exit_code, state.runner_state)
@@ -576,12 +553,9 @@ defmodule AgentCore.CliRunners.JsonlRunner do
         %{state | done: true}
       end
 
-    # Complete the stream
     AgentCore.EventStream.complete(state.stream, [])
-
-    # Cleanup
     cleanup(state)
-    {:stop, :normal, state}
+    {:stop, :normal, %{state | pending_exit_code: nil}}
   end
 
   def handle_info(:timeout, state) do
@@ -649,6 +623,30 @@ defmodule AgentCore.CliRunners.JsonlRunner do
       end)
 
     %{state | buffer: remainder}
+  end
+
+  defp process_final_buffer(%{buffer: ""} = state), do: state
+
+  defp process_final_buffer(state) do
+    # Treat any remaining bytes as a final line even if it wasn't newline-terminated.
+    state
+    |> then(fn s -> process_line(s.buffer, s) end)
+    |> Map.put(:buffer, "")
+  end
+
+  defp maybe_reschedule_exit_finalize(%State{pending_exit_code: nil} = state), do: state
+
+  defp maybe_reschedule_exit_finalize(%State{} = state) do
+    schedule_exit_finalize(state)
+  end
+
+  defp schedule_exit_finalize(%State{} = state) do
+    # Debounce finalization to allow buffered stdout to arrive after :exit_status.
+    # This is especially important for high-throughput JSONL emitters.
+    if state.exit_finalize_ref, do: Process.cancel_timer(state.exit_finalize_ref)
+
+    ref = Process.send_after(self(), :finalize_exit, 25)
+    %{state | exit_finalize_ref: ref}
   end
 
   defp process_line(line, state) when byte_size(line) == 0, do: state

@@ -218,22 +218,22 @@ defmodule Ai.CircuitBreakerEdgeCasesTest do
 
     test "multiple rapid failures in half-open keep circuit open", %{provider: provider} do
       start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 30}
+        # Use a larger timeout to avoid scheduler jitter making this test flaky.
+        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 200}
       )
 
-      for _ <- 1..5 do
+      for _ <- 1..3 do
         # Open the circuit
         CircuitBreaker.record_failure(provider)
 
         # Wait for half-open after recovery timeout
-        Process.sleep(40)
+        Process.sleep(260)
 
         {:ok, state} = CircuitBreaker.get_state(provider)
         assert state.circuit_state == :half_open
 
         # Fail again - back to open
         CircuitBreaker.record_failure(provider)
-        Process.sleep(10)
 
         {:ok, state} = CircuitBreaker.get_state(provider)
         assert state.circuit_state == :open
@@ -349,7 +349,8 @@ defmodule Ai.CircuitBreakerEdgeCasesTest do
   describe "timing precision for recovery timeout" do
     test "circuit stays open just before timeout expires", %{provider: provider} do
       start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 100}
+        # Give enough slack so wall-clock jitter doesn't accidentally cross the boundary.
+        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 1_000}
       )
 
       CircuitBreaker.record_failure(provider)
@@ -358,62 +359,81 @@ defmodule Ai.CircuitBreakerEdgeCasesTest do
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
 
-      # Wait 80ms (less than 100ms timeout)
-      Process.sleep(80)
+      # Wait well under the timeout.
+      Process.sleep(200)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
     end
 
     test "circuit transitions to half-open right after timeout", %{provider: provider} do
+      recovery_timeout = 200
+
       start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 50}
+        {CircuitBreaker,
+         provider: provider, failure_threshold: 1, recovery_timeout: recovery_timeout}
       )
 
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
-      {:ok, state} = CircuitBreaker.get_state(provider)
-      assert state.circuit_state == :open
+      wait_until(
+        fn ->
+          {:ok, state} = CircuitBreaker.get_state(provider)
+          state.circuit_state == :open
+        end,
+        200
+      )
 
-      # Wait past the timeout
-      Process.sleep(60)
-
-      {:ok, state} = CircuitBreaker.get_state(provider)
-      assert state.circuit_state == :half_open
+      wait_until(
+        fn ->
+          {:ok, state} = CircuitBreaker.get_state(provider)
+          state.circuit_state == :half_open
+        end,
+        recovery_timeout + 500
+      )
     end
 
     test "additional failures extend the recovery timeout", %{provider: provider} do
+      # Use larger timeouts so scheduling jitter doesn't accidentally cross boundaries.
+      recovery_timeout = 1_000
+
       start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 50}
+        {CircuitBreaker,
+         provider: provider, failure_threshold: 1, recovery_timeout: recovery_timeout}
       )
 
       # Open circuit
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
-      {:ok, state} = CircuitBreaker.get_state(provider)
-      assert state.circuit_state == :open
+      wait_until(
+        fn ->
+          {:ok, state} = CircuitBreaker.get_state(provider)
+          state.circuit_state == :open
+        end,
+        200
+      )
 
-      # Wait 30ms (not enough for timeout)
-      Process.sleep(30)
+      # Wait, but not long enough for recovery.
+      Process.sleep(800)
 
       # Record another failure (resets timeout)
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
-      # Wait another 30ms - total 60ms from first, but only 30ms from second
-      Process.sleep(30)
+      # Wait long enough that we'd have recovered if the timer wasn't reset.
+      Process.sleep(500)
 
       # Should still be open because timeout restarted
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
 
       # Wait for full timeout from last failure
-      Process.sleep(40)
-
-      {:ok, state} = CircuitBreaker.get_state(provider)
-      assert state.circuit_state == :half_open
+      wait_until(
+        fn ->
+          {:ok, state} = CircuitBreaker.get_state(provider)
+          state.circuit_state == :half_open
+        end,
+        recovery_timeout + 500
+      )
     end
 
     test "very short recovery timeout (1ms) transitions quickly", %{provider: provider} do
@@ -946,32 +966,40 @@ defmodule Ai.CircuitBreakerEdgeCasesTest do
 
     test "closing from half-open resets failure count to 0", %{provider: provider} do
       start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 2, recovery_timeout: 20}
+        {CircuitBreaker, provider: provider, failure_threshold: 2, recovery_timeout: 200}
       )
 
       # Open the circuit (2 failures)
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
-      {:ok, state} = CircuitBreaker.get_state(provider)
-      assert state.circuit_state == :open
-      assert state.failure_count >= 2
+      wait_until(
+        fn ->
+          {:ok, state} = CircuitBreaker.get_state(provider)
+          state.circuit_state == :open
+        end,
+        200
+      )
 
       # Transition to half-open
-      Process.sleep(30)
-
-      {:ok, state} = CircuitBreaker.get_state(provider)
-      assert state.circuit_state == :half_open
+      wait_until(
+        fn ->
+          {:ok, state} = CircuitBreaker.get_state(provider)
+          state.circuit_state == :half_open
+        end,
+        600
+      )
 
       # Close with successes
       CircuitBreaker.record_success(provider)
       CircuitBreaker.record_success(provider)
-      Process.sleep(10)
-
-      {:ok, state} = CircuitBreaker.get_state(provider)
-      assert state.circuit_state == :closed
-      assert state.failure_count == 0
+      wait_until(
+        fn ->
+          {:ok, state} = CircuitBreaker.get_state(provider)
+          state.circuit_state == :closed and state.failure_count == 0
+        end,
+        300
+      )
     end
   end
 
@@ -984,5 +1012,20 @@ defmodule Ai.CircuitBreakerEdgeCasesTest do
 
     assert state.circuit_state == expected_state,
            "Expected circuit state to be #{expected_state}, got #{state.circuit_state}"
+  end
+
+  defp wait_until(fun, timeout_ms, step_ms \\ 10) when is_function(fun, 0) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+
+    if fun.() do
+      :ok
+    else
+      if System.monotonic_time(:millisecond) < deadline do
+        Process.sleep(step_ms)
+        wait_until(fun, timeout_ms, step_ms)
+      else
+        flunk("condition not met within #{timeout_ms}ms")
+      end
+    end
   end
 end

@@ -82,6 +82,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             poll_interval_ms: config[:poll_interval_ms] || @default_poll_interval,
             dedupe_ttl_ms: config[:dedupe_ttl_ms] || @default_dedupe_ttl,
             debounce_ms: config[:debounce_ms] || config["debounce_ms"] || @default_debounce_ms,
+            # When true, emit debug logs for inbound decisions (drops, routing, etc).
+            debug_inbound: config[:debug_inbound] || config["debug_inbound"] || false,
+            # When true, log drop/ignore reasons even if debug_inbound is false.
+            log_drops: config[:log_drops] || config["log_drops"] || false,
             allow_queue_override:
               config[:allow_queue_override] || config["allow_queue_override"] || false,
             allowed_chat_ids:
@@ -401,7 +405,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           case Inbound.normalize(update) do
             {:ok, inbound} ->
               # Set account_id from config
-              inbound = %{inbound | account_id: acc_state.account_id}
+              inbound =
+                inbound
+                |> Map.put(:account_id, acc_state.account_id)
+                |> then(fn inbound ->
+                  # Preserve update_id for troubleshooting/log correlation.
+                  meta = Map.put(inbound.meta || %{}, :update_id, id)
+                  %{inbound | meta: meta}
+                end)
 
               inbound = inbound |> maybe_put_reply_to_text(update)
 
@@ -413,16 +424,23 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
                   key = dedupe_key(inbound)
 
                   cond do
-                    not authorized_inbound?(acc_state, inbound) ->
-                      {acc_state, max(max_id, id)}
-
-                    is_seen?(key, acc_state.dedupe_ttl_ms) ->
-                      {acc_state, max(max_id, id)}
-
                     true ->
-                      mark_seen(key, acc_state.dedupe_ttl_ms)
-                      acc_state = handle_inbound_message(acc_state, inbound)
-                      {acc_state, max(max_id, id)}
+                      case authorized_inbound_reason(acc_state, inbound) do
+                        :ok ->
+                          if is_seen?(key, acc_state.dedupe_ttl_ms) do
+                            maybe_log_drop(acc_state, inbound, :dedupe)
+                            {acc_state, max(max_id, id)}
+                          else
+                            mark_seen(key, acc_state.dedupe_ttl_ms)
+                            acc_state = handle_inbound_message(acc_state, inbound)
+                            {acc_state, max(max_id, id)}
+                          end
+
+                        {:drop, why} ->
+                          maybe_log_drop(acc_state, inbound, why)
+                          {acc_state, max(max_id, id)}
+                      end
+
                   end
 
                 {:skip, acc_state} ->
@@ -476,6 +494,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       true ->
         cond do
           should_ignore_for_trigger?(state, inbound, original_text) ->
+            maybe_log_drop(state, inbound, :trigger_mentions)
             state
 
           true ->
@@ -492,7 +511,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         end
     end
   rescue
-    _ -> state
+    e ->
+      meta = inbound.meta || %{}
+      Logger.warning(
+        "Telegram inbound handler crashed (chat_id=#{inspect(meta[:chat_id])} update_id=#{inspect(meta[:update_id])} msg_id=#{inspect(meta[:user_msg_id])}): " <>
+          Exception.format(:error, e, __STACKTRACE__)
+      )
+
+      state
   end
 
   defp enqueue_buffer(state, inbound) do
@@ -2689,25 +2715,30 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     "Trigger mode set to #{mode} for this topic."
   end
 
-  defp authorized_inbound?(state, inbound) do
+  defp authorized_inbound_reason(state, inbound) do
     chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
 
     cond do
       not is_integer(chat_id) ->
-        false
+        {:drop, :no_chat_id}
 
       not allowed_chat?(state.allowed_chat_ids, chat_id) ->
-        false
+        {:drop, :chat_not_allowed}
 
       state.deny_unbound_chats ->
         scope = inbound_scope(inbound, chat_id)
-        is_nil(scope) == false and binding_exists?(scope)
+
+        if is_nil(scope) do
+          {:drop, :unbound_chat}
+        else
+          if binding_exists?(scope), do: :ok, else: {:drop, :unbound_chat}
+        end
 
       true ->
-        true
+        :ok
     end
   rescue
-    _ -> false
+    _ -> {:drop, :unauthorized_error}
   end
 
   defp authorized_callback_query?(state, cb) when is_map(cb) do
@@ -2824,7 +2855,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       :ok ->
         :ok
 
-      _ ->
+      other ->
+        meta = inbound.meta || %{}
+        Logger.warning(
+          "RouterBridge.handle_inbound failed for telegram inbound (chat_id=#{inspect(meta[:chat_id])} update_id=#{inspect(meta[:update_id])} msg_id=#{inspect(meta[:user_msg_id])}): " <>
+            inspect(other)
+        )
+
         # Fallback: emit telemetry for observability
         LemonCore.Telemetry.channel_inbound("telegram", %{
           peer_id: inbound.peer.id,
@@ -2834,6 +2871,19 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   rescue
     e ->
       Logger.warning("Failed to route inbound message: #{inspect(e)}")
+  end
+
+  defp maybe_log_drop(state, inbound, reason) do
+    if state.debug_inbound or state.log_drops do
+      meta = inbound.meta || %{}
+      Logger.debug(
+        "Telegram inbound dropped (#{inspect(reason)}) chat_id=#{inspect(meta[:chat_id])} update_id=#{inspect(meta[:update_id])} msg_id=#{inspect(meta[:user_msg_id])} peer=#{inspect(inbound.peer)}"
+      )
+    end
+
+    :ok
+  rescue
+    _ -> :ok
   end
 
   defp merge_config(base, nil), do: base

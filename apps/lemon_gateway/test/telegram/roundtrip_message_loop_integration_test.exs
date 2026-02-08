@@ -25,7 +25,12 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
             calls: [],
             pending_updates: opts[:updates] || [],
             update_id: opts[:start_update_id] || 1000,
-            notify_pid: opts[:notify_pid]
+            notify_pid: opts[:notify_pid],
+            # Deterministic "Running…" message id so tests can reply-to it.
+            running_message_id: opts[:running_message_id] || 90_001,
+            # Controls whether the Running… send_message response includes a message_id.
+            # Values: :ok_with_id | :ok_missing_id
+            running_send_mode: opts[:running_send_mode] || :ok_with_id
           }
         end,
         name: __MODULE__
@@ -45,6 +50,14 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
       Agent.update(__MODULE__, &%{&1 | notify_pid: pid})
     end
 
+    def set_running_message_id(message_id) when is_integer(message_id) do
+      Agent.update(__MODULE__, &%{&1 | running_message_id: message_id})
+    end
+
+    def set_running_send_mode(mode) when mode in [:ok_with_id, :ok_missing_id] do
+      Agent.update(__MODULE__, &%{&1 | running_send_mode: mode})
+    end
+
     def enqueue_update(update) do
       Agent.update(__MODULE__, fn state ->
         id = state.update_id
@@ -56,6 +69,7 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
     def enqueue_message(chat_id, text, opts \\ []) do
       message_id = Keyword.get(opts, :message_id, System.unique_integer([:positive]))
       topic_id = Keyword.get(opts, :topic_id)
+      reply_to_message_id = Keyword.get(opts, :reply_to_message_id)
 
       message = %{
         "message_id" => message_id,
@@ -67,6 +81,13 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
       message =
         if topic_id do
           Map.put(message, "message_thread_id", topic_id)
+        else
+          message
+        end
+
+      message =
+        if is_integer(reply_to_message_id) do
+          Map.put(message, "reply_to_message", %{"message_id" => reply_to_message_id})
         else
           message
         end
@@ -90,8 +111,21 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
 
     def send_message(_token, chat_id, text, reply_to_or_opts \\ nil, parse_mode \\ nil) do
       record({:send_message, chat_id, text, reply_to_or_opts, parse_mode})
-      msg_id = System.unique_integer([:positive])
-      {:ok, %{"ok" => true, "result" => %{"message_id" => msg_id}}}
+
+      if text == "Running…" do
+        state = Agent.get(__MODULE__, & &1)
+
+        case state.running_send_mode do
+          :ok_with_id ->
+            {:ok, %{"ok" => true, "result" => %{"message_id" => state.running_message_id}}}
+
+          :ok_missing_id ->
+            {:ok, %{"ok" => true, "result" => %{}}}
+        end
+      else
+        msg_id = System.unique_integer([:positive])
+        {:ok, %{"ok" => true, "result" => %{"message_id" => msg_id}}}
+      end
     end
 
     def edit_message_text(_token, chat_id, message_id, text, _parse_mode \\ nil) do
@@ -146,6 +180,108 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
         Task.start(fn ->
           send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
           Process.sleep(10)
+
+          send(
+            sink_pid,
+            {:engine_event, run_ref,
+             %Event.Completed{engine: id(), resume: resume, ok: true, answer: "pong"}}
+          )
+        end)
+
+      {:ok, run_ref, %{task_pid: task_pid}}
+    end
+
+    @impl true
+    def cancel(%{task_pid: pid}) when is_pid(pid) do
+      Process.exit(pid, :kill)
+      :ok
+    end
+
+    defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
+  end
+
+  # Deterministic test engine: completes with ok: false and no answer.
+  defmodule FailEngine do
+    @behaviour LemonGateway.Engine
+
+    alias LemonGateway.Types.{Job, ResumeToken}
+    alias LemonGateway.Event
+
+    @impl true
+    def id, do: "fail"
+
+    @impl true
+    def format_resume(%ResumeToken{value: sid}), do: "fail resume #{sid}"
+
+    @impl true
+    def extract_resume(_text), do: nil
+
+    @impl true
+    def is_resume_line(_line), do: false
+
+    @impl true
+    def supports_steer?, do: false
+
+    @impl true
+    def start_run(%Job{} = _job, _opts, sink_pid) do
+      run_ref = make_ref()
+      resume = %ResumeToken{engine: id(), value: unique_id()}
+
+      {:ok, task_pid} =
+        Task.start(fn ->
+          send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
+          Process.sleep(10)
+
+          send(
+            sink_pid,
+            {:engine_event, run_ref,
+             %Event.Completed{engine: id(), resume: resume, ok: false, error: :boom, answer: ""}}
+          )
+        end)
+
+      {:ok, run_ref, %{task_pid: task_pid}}
+    end
+
+    @impl true
+    def cancel(%{task_pid: pid}) when is_pid(pid) do
+      Process.exit(pid, :kill)
+      :ok
+    end
+
+    defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
+  end
+
+  # Deterministic test engine: slow completion so cancel timing is stable.
+  defmodule SlowReplyEngine do
+    @behaviour LemonGateway.Engine
+
+    alias LemonGateway.Types.{Job, ResumeToken}
+    alias LemonGateway.Event
+
+    @impl true
+    def id, do: "slow_reply"
+
+    @impl true
+    def format_resume(%ResumeToken{value: sid}), do: "slow reply resume #{sid}"
+
+    @impl true
+    def extract_resume(_text), do: nil
+
+    @impl true
+    def is_resume_line(_line), do: false
+
+    @impl true
+    def supports_steer?, do: false
+
+    @impl true
+    def start_run(%Job{} = _job, _opts, sink_pid) do
+      run_ref = make_ref()
+      resume = %ResumeToken{engine: id(), value: unique_id()}
+
+      {:ok, task_pid} =
+        Task.start(fn ->
+          send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
+          Process.sleep(500)
 
           send(
             sink_pid,
@@ -229,6 +365,8 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
 
     Application.put_env(:lemon_gateway, :engines, [
       ReplyEngine,
+      SlowReplyEngine,
+      FailEngine,
       LemonGateway.Engines.Echo
     ])
 
@@ -385,5 +523,134 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
                end,
                5_000
              )
+  end
+
+  test "engine failure produces run failed message (delete progress + send final)" do
+    start_system!(%{default_engine: "fail"})
+
+    chat_id = 55_555
+    user_msg_id = 12
+    MockTelegramAPI.enqueue_message(chat_id, "please fail", message_id: user_msg_id)
+
+    assert_receive {:telegram_api_call, {:send_message, ^chat_id, "Running…", _opts, _pm}}, 2_000
+
+    assert :ok ==
+             wait_until(
+               fn ->
+                 calls = MockTelegramAPI.calls()
+
+                 Enum.any?(calls, fn
+                   {:delete_message, ^chat_id, _} -> true
+                   _ -> false
+                 end) and
+                   Enum.any?(calls, fn
+                     {:send_message, ^chat_id, text, _opts, _pm} when is_binary(text) ->
+                       String.starts_with?(text, "Run failed:")
+
+                     _ ->
+                       false
+                   end)
+               end,
+               5_000
+             )
+  end
+
+  test "reply /cancel cancels the run and deletes the Running… message" do
+    start_system!(%{default_engine: "slow_reply"})
+
+    chat_id = 66_666
+    user_msg_id = 13
+    running_msg_id = 90_001
+    MockTelegramAPI.set_running_message_id(running_msg_id)
+
+    MockTelegramAPI.enqueue_message(chat_id, "slow please", message_id: user_msg_id)
+
+    assert_receive {:telegram_api_call, {:send_message, ^chat_id, "Running…", _opts, _pm}}, 2_000
+
+    # Wait until the gateway indexes the progress message id so cancel-by-reply can resolve it.
+    scope = %LemonGateway.Types.ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
+
+    assert :ok ==
+             wait_until(
+               fn ->
+                 is_pid(LemonGateway.Store.get_run_by_progress(scope, running_msg_id))
+               end,
+               5_000
+             )
+
+    MockTelegramAPI.enqueue_message(chat_id, "/cancel", reply_to_message_id: running_msg_id)
+
+    assert :ok ==
+             wait_until(
+               fn ->
+                 calls = MockTelegramAPI.calls()
+
+                 Enum.any?(calls, fn
+                   {:delete_message, ^chat_id, ^running_msg_id} -> true
+                   _ -> false
+                 end) and
+                   Enum.any?(calls, fn
+                     {:send_message, ^chat_id, text, _opts, _pm} when is_binary(text) ->
+                       String.starts_with?(text, "Run failed:")
+
+                     _ ->
+                       false
+                   end)
+               end,
+               5_000
+             )
+  end
+
+  test "/cancel without reply does not cancel an in-flight run" do
+    start_system!(%{default_engine: "slow_reply"})
+
+    chat_id = 77_777
+    user_msg_id = 14
+    MockTelegramAPI.enqueue_message(chat_id, "slow please", message_id: user_msg_id)
+
+    assert_receive {:telegram_api_call, {:send_message, ^chat_id, "Running…", _opts, _pm}}, 2_000
+
+    # This /cancel is ignored because it is not a reply to the progress message.
+    MockTelegramAPI.enqueue_message(chat_id, "/cancel")
+
+    assert :ok ==
+             wait_until(
+               fn ->
+                 calls = MockTelegramAPI.calls()
+
+                 Enum.any?(calls, fn
+                   {:send_message, ^chat_id, "pong", _opts, _pm} -> true
+                   _ -> false
+                 end)
+               end,
+               5_000
+             )
+  end
+
+  test "if the Running… send response has no message_id, finalize does not attempt delete" do
+    start_system!()
+    MockTelegramAPI.set_running_send_mode(:ok_missing_id)
+
+    chat_id = 88_888
+    user_msg_id = 15
+    MockTelegramAPI.enqueue_message(chat_id, "hello", message_id: user_msg_id)
+
+    assert_receive {:telegram_api_call, {:send_message, ^chat_id, "Running…", _opts, _pm}}, 2_000
+
+    assert :ok ==
+             wait_until(
+               fn ->
+                 calls = MockTelegramAPI.calls()
+                 Enum.any?(calls, fn {:send_message, ^chat_id, "pong", _, _} -> true; _ -> false end)
+               end,
+               5_000
+             )
+
+    # Running… was sent, but without a message_id in the response; progress_msg_id stays nil
+    # and the router cannot delete the progress message.
+    refute Enum.any?(MockTelegramAPI.calls(), fn
+             {:delete_message, ^chat_id, _} -> true
+             _ -> false
+           end)
   end
 end
