@@ -7,6 +7,16 @@ defmodule LemonChannels.Application do
 
   @impl true
   def start(_type, _args) do
+    # Build list of children, including Discord consumer early if enabled
+    discord_children = 
+      if discord_enabled?() do
+        Logger.info("Discord adapter enabled, starting consumer")
+        config = get_discord_config()
+        [{LemonChannels.Adapters.Discord.Consumer, config}]
+      else
+        []
+      end
+
     children = [
       # Plugin registry
       LemonChannels.Registry,
@@ -20,19 +30,28 @@ defmodule LemonChannels.Application do
       LemonChannels.Outbox,
       # Adapter supervisor for channel adapters
       {DynamicSupervisor, strategy: :one_for_one, name: LemonChannels.AdapterSupervisor}
-    ]
+    ] ++ discord_children
 
     opts = [strategy: :one_for_one, name: LemonChannels.Supervisor]
 
     case Supervisor.start_link(children, opts) do
       {:ok, pid} ->
-        # Register and start built-in adapters after startup
+        # Register and start built-in adapters after startup (except Discord which started above)
         register_and_start_adapters()
         {:ok, pid}
 
       error ->
         error
     end
+  end
+
+  defp discord_enabled? do
+    Application.get_env(:lemon_gateway, :enable_discord, false) == true
+  end
+
+  defp get_discord_config do
+    base = Application.get_env(:lemon_gateway, :discord) || %{}
+    if is_list(base), do: Enum.into(base, %{}), else: base
   end
 
   defp register_and_start_adapters do
@@ -47,7 +66,19 @@ defmodule LemonChannels.Application do
       end
     end
 
-    # Future: register other adapters here (Discord, Slack, etc.)
+    # Discord adapter is started directly in the supervision tree (above)
+    # Just register it with the plugin registry if enabled
+    if discord_enabled?() do
+      Logger.debug("Discord enabled, registering adapter...")
+      case LemonChannels.Registry.register(LemonChannels.Adapters.Discord) do
+        :ok -> Logger.info("Discord adapter registered")
+        {:error, :already_registered} -> Logger.info("Discord adapter already registered")
+        error -> Logger.warning("Failed to register Discord adapter: #{inspect(error)}")
+      end
+    else
+      Logger.debug("Discord not enabled, skipping registration")
+    end
+
     :ok
   end
 
@@ -84,7 +115,8 @@ defmodule LemonChannels.Application do
 
     enabled? =
       case adapter_id do
-        :telegram -> LemonChannels.GatewayConfig.get(:enable_telegram, false) == true
+        "telegram" -> LemonChannels.GatewayConfig.get(:enable_telegram, false) == true
+        "discord" -> LemonChannels.GatewayConfig.get(:enable_discord, false) == true
         _ -> true
       end
 
