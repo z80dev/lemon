@@ -1301,6 +1301,11 @@ default_model = "claude-sonnet-4-20250514"
 theme = "lemon"
 debug = false
 
+# Optional: file logging (useful to debug dropped messages)
+[logging]
+file_path = "~/.lemon/log/lemon.log"
+level = "debug"
+
 # Optional: connect to LemonControlPlane instead of spawning a local backend
 [control_plane]
 ws_url = "ws://localhost:4040/ws"
@@ -1312,6 +1317,7 @@ client_id = "lemon-tui"
 
 Environment overrides (examples):
 - `LEMON_DEFAULT_PROVIDER`, `LEMON_DEFAULT_MODEL`, `LEMON_THEME`, `LEMON_DEBUG`
+- `LEMON_LOG_FILE`, `LEMON_LOG_LEVEL`
 - `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `KIMI_API_KEY`)
 - Control plane (server mode): `LEMON_WS_URL`, `LEMON_WS_TOKEN`, `LEMON_WS_ROLE`, `LEMON_WS_SCOPES`, `LEMON_WS_CLIENT_ID`
 

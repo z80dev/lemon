@@ -61,6 +61,16 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
       with token when is_binary(token) and token != "" <- token do
         case api_mod.delete_message(token, chat_id, msg_id) do
           {:ok, result} -> {:ok, result}
+          # Telegram deleteMessage is effectively idempotent for our purposes. If the progress
+          # message was already deleted (or never existed due to a race), Telegram returns 400
+          # "message to delete not found". Treat as success so the Outbox won't retry.
+          {:error, {:http_error, 400, body}} when is_binary(body) ->
+            if telegram_delete_not_found?(body) do
+              {:ok, :already_deleted}
+            else
+              {:error, {:http_error, 400, body}}
+            end
+
           {:error, reason} -> {:error, reason}
         end
       else
@@ -97,6 +107,16 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
 
   defp parse_message_id(id) when is_binary(id), do: String.to_integer(id)
   defp parse_message_id(id) when is_integer(id), do: id
+
+  defp telegram_delete_not_found?(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, %{"description" => desc}} when is_binary(desc) ->
+        String.contains?(String.downcase(desc), "message to delete not found")
+
+      _ ->
+        String.contains?(String.downcase(body), "message to delete not found")
+    end
+  end
 
   # Transport merges runtime overrides from `Application.get_env(:lemon_gateway, :telegram)`;
   # do the same here so tests can inject a mock api module without hitting the network.

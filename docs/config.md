@@ -53,6 +53,13 @@ dangerously_skip_permissions = true
 theme = "lemon"
 debug = false
 
+[logging]
+# Optional: write logs to a file for later analysis.
+# If unset/empty, file logging is disabled and logs go to stdout/stderr only.
+file_path = "~/.lemon/log/lemon.log"
+# Optional: handler level for the file (defaults to "debug").
+level = "debug"
+
 [gateway]
 max_concurrent_runs = 2
 default_engine = "lemon"
@@ -90,6 +97,7 @@ Environment variables override file values. Common overrides:
 - `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`)
 - `LEMON_CODEX_EXTRA_ARGS`, `LEMON_CODEX_AUTO_APPROVE`
 - `LEMON_CLAUDE_YOLO`
+- `LEMON_LOG_FILE`, `LEMON_LOG_LEVEL`
 
 ## OpenAI Codex (ChatGPT OAuth)
 
@@ -122,6 +130,7 @@ To force a token explicitly, set:
 - `agent.cli`: CLI runner settings (`codex`, `claude`, `kimi`, `opencode`, `pi`).
 - `tui`: terminal UI settings.
 - `gateway`: Lemon gateway settings, including `queue`, `telegram`, `projects`, `bindings`, and `engines`.
+- `logging`: optional file logging configuration.
 
 ## Gateway Projects and Bindings
 
