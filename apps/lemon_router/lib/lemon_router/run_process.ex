@@ -153,8 +153,7 @@ defmodule LemonRouter.RunProcess do
       flush_tool_status(state)
     end
 
-    # Telegram: delete the "Running..." progress message and send the final response as a new message,
-    # so it always appears below the last tool-call/status message.
+    # Telegram: StreamCoalescer finalizes by sending a final response as a new message.
     maybe_finalize_stream_output(state, event)
 
     # If no streaming deltas were emitted, emit a final output chunk so channels respond.

@@ -85,12 +85,7 @@ defmodule LemonRouter.StreamCoalescer do
   @doc """
   Finalize a run for a session/channel.
 
-  For Telegram, this converts the last update into:
-  1) delete the initial "Running..." progress message
-  2) send the final answer as a new message
-
-  This ensures the final answer appears *after* any tool-call/status messages
-  that were sent as separate messages during the run.
+  For Telegram, this sends the final answer as a new message.
   """
   @spec finalize_run(
           session_key :: binary(),
@@ -436,7 +431,7 @@ defmodule LemonRouter.StreamCoalescer do
   defp do_finalize(state, final_text) do
     cond do
       state.channel_id != "telegram" ->
-        # Only Telegram needs the "delete Running... then send final" behavior.
+        # Telegram finalization is special-cased below.
         state
 
       true ->

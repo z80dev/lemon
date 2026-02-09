@@ -440,7 +440,7 @@ defmodule LemonRouter.StreamCoalescerTest do
   end
 
   describe "finalize_run/4 (telegram)" do
-    test "deletes progress message and sends final response as a new message" do
+    test "sends final response as a new message" do
       session_key = "agent:my-agent:telegram:bot123:dm:user456"
       channel_id = "telegram"
       run_id = "run_#{System.unique_integer()}"
@@ -459,18 +459,13 @@ defmodule LemonRouter.StreamCoalescerTest do
 
       # Outbox can be shared across tests; filter by idempotency key so we don't
       # accidentally assert against an unrelated pending delivery.
-      delete_key = "#{run_id}:final:delete"
       send_key = "#{run_id}:final:send"
 
-      assert_receive {:delivered, %{idempotency_key: ^delete_key} = payload1}, 1_000
-      assert_receive {:delivered, %{idempotency_key: ^send_key} = payload2}, 1_000
+      assert_receive {:delivered, %{idempotency_key: ^send_key} = payload}, 1_000
 
-      assert payload1.kind == :delete
-      assert payload1.content == %{message_id: 111}
-
-      assert payload2.kind == :text
-      assert payload2.content == "Final answer"
-      assert payload2.reply_to == 222
+      assert payload.kind == :text
+      assert payload.content == "Final answer"
+      assert payload.reply_to == 222
     end
 
     test "deletes progress message even when there is no final text" do

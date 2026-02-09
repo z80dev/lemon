@@ -441,7 +441,7 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
     opts[:message_thread_id] || opts["message_thread_id"]
   end
 
-  test "incoming message produces final reply (delete progress + send final)" do
+  test "incoming message produces final reply" do
     start_system!()
 
     chat_id = 12_345
@@ -451,20 +451,16 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
     # Transport progress: send "Running…" (and store its msg id into run meta)
     assert_receive {:telegram_api_call, {:send_message, ^chat_id, "Running…", _opts, _pm}}, 2_000
 
-    # Wait for the outbox to deliver the finalize payloads (delete + send).
+    # Wait for the outbox to deliver the finalize payload.
     assert :ok ==
              wait_until(
                fn ->
                  calls = MockTelegramAPI.calls()
 
                  Enum.any?(calls, fn
-                   {:delete_message, ^chat_id, _} -> true
+                   {:send_message, ^chat_id, "pong", _opts, _pm} -> true
                    _ -> false
-                 end) and
-                   Enum.any?(calls, fn
-                     {:send_message, ^chat_id, "pong", _opts, _pm} -> true
-                     _ -> false
-                   end)
+                 end)
                end,
                5_000
              )
@@ -476,14 +472,6 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
         {:send_message, ^chat_id, "Running…", _, _} -> true
         _ -> false
       end)
-
-    {:delete_message, ^chat_id, progress_msg_id} =
-      Enum.find(calls, fn
-        {:delete_message, ^chat_id, _} -> true
-        _ -> false
-      end)
-
-    assert is_integer(progress_msg_id)
 
     {:send_message, ^chat_id, "pong", final_opts, _} =
       Enum.find(calls, fn

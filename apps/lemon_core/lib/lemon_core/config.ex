@@ -788,6 +788,26 @@ defmodule LemonCore.Config do
   defp parse_boolean("0", _default), do: false
   defp parse_boolean(_, default), do: default
 
+  defp parse_log_level(nil), do: nil
+  defp parse_log_level(level) when is_atom(level), do: level
+
+  defp parse_log_level(level) when is_binary(level) do
+    case String.downcase(String.trim(level)) do
+      "debug" -> :debug
+      "info" -> :info
+      "notice" -> :notice
+      "warning" -> :warning
+      "warn" -> :warning
+      "error" -> :error
+      "critical" -> :critical
+      "alert" -> :alert
+      "emergency" -> :emergency
+      _ -> nil
+    end
+  end
+
+  defp parse_log_level(_), do: nil
+
   defp parse_string_list(nil), do: []
   defp parse_string_list(list) when is_list(list), do: Enum.map(list, &to_string/1)
 
@@ -795,24 +815,6 @@ defmodule LemonCore.Config do
     do: String.split(value, ~r/\s*,\s*/, trim: true)
 
   defp parse_string_list(_), do: []
-
-  defp parse_log_level(nil), do: nil
-  defp parse_log_level("all"), do: :all
-  defp parse_log_level("debug"), do: :debug
-  defp parse_log_level("info"), do: :info
-  defp parse_log_level("notice"), do: :notice
-  defp parse_log_level("warning"), do: :warning
-  defp parse_log_level("warn"), do: :warning
-  defp parse_log_level("error"), do: :error
-  defp parse_log_level("critical"), do: :critical
-  defp parse_log_level("alert"), do: :alert
-  defp parse_log_level("emergency"), do: :emergency
-  defp parse_log_level(level) when is_atom(level), do: level
-  defp parse_log_level(level) when is_binary(level) do
-    level |> String.downcase() |> parse_log_level()
-  end
-
-  defp parse_log_level(_), do: nil
 
   defp normalize_env_overrides(nil), do: %{}
   defp normalize_env_overrides(env) when is_map(env), do: env
