@@ -49,7 +49,14 @@ defmodule LemonGateway.Telegram.Outbox do
           reference(),
           atom()
         ) :: :ok
-  def enqueue_with_notify(key, priority, op, notify_pid, notify_ref, notify_tag \\ :outbox_delivered)
+  def enqueue_with_notify(
+        key,
+        priority,
+        op,
+        notify_pid,
+        notify_ref,
+        notify_tag \\ :outbox_delivered
+      )
       when is_pid(notify_pid) and is_reference(notify_ref) and is_atom(notify_tag) do
     GenServer.cast(
       __MODULE__,

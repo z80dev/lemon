@@ -1,45 +1,39 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { SelectOption } from '@lemon-web/shared';
-import { useLemonStore } from '../store/useLemonStore';
+import { useMemo, useState } from 'react';
+import type { SelectOption, UIRequestMessage } from '@lemon-web/shared';
+import { useLemonStore, type LemonState } from '../store/useLemonStore';
 
-export function UIRequestModal() {
-  const request = useLemonStore((state) => state.ui.requestsQueue[0]);
-  const dequeue = useLemonStore((state) => state.dequeueUIRequest);
-  const send = useLemonStore((state) => state.send);
-  const connectionState = useLemonStore((state) => state.connection.state);
-  const enqueueNotification = useLemonStore((state) => state.enqueueNotification);
+type ModalBodyProps = {
+  request: UIRequestMessage;
+  dequeue: LemonState['dequeueUIRequest'];
+  send: LemonState['send'];
+  connectionState: LemonState['connection']['state'];
+  enqueueNotification: LemonState['enqueueNotification'];
+};
 
-  const [inputValue, setInputValue] = useState('');
+function UIRequestModalBody({
+  request,
+  dequeue,
+  send,
+  connectionState,
+  enqueueNotification,
+}: ModalBodyProps) {
+  const initialInputValue =
+    request.method === 'input' || request.method === 'editor'
+      ? ((request.params as { prefill?: string; placeholder?: string }).prefill ?? '')
+      : '';
+
+  const [inputValue, setInputValue] = useState(initialInputValue);
   const [selectedOption, setSelectedOption] = useState<SelectOption | null>(null);
   const [filter, setFilter] = useState('');
 
-  useEffect(() => {
-    setSelectedOption(null);
-    setFilter('');
-    if (!request) {
-      setInputValue('');
-      return;
-    }
-    if (request.method === 'input' || request.method === 'editor') {
-      const prefill = (request.params as { prefill?: string; placeholder?: string }).prefill;
-      setInputValue(prefill ?? '');
-    } else {
-      setInputValue('');
-    }
-  }, [request]);
-
   const options = useMemo(() => {
-    if (!request || request.method !== 'select') return [];
+    if (request.method !== 'select') return [];
     const list = (request.params as { options?: SelectOption[] }).options ?? [];
     if (!filter.trim()) return list;
     return list.filter((opt) =>
       `${opt.label} ${opt.description ?? ''}`.toLowerCase().includes(filter.toLowerCase())
     );
   }, [request, filter]);
-
-  if (!request) {
-    return null;
-  }
 
   const respond = (result: unknown, error: string | null = null) => {
     if (connectionState !== 'connected') {
@@ -173,5 +167,28 @@ export function UIRequestModal() {
         </footer>
       </div>
     </div>
+  );
+}
+
+export function UIRequestModal() {
+  const request = useLemonStore((state) => state.ui.requestsQueue[0]);
+  const dequeue = useLemonStore((state) => state.dequeueUIRequest);
+  const send = useLemonStore((state) => state.send);
+  const connectionState = useLemonStore((state) => state.connection.state);
+  const enqueueNotification = useLemonStore((state) => state.enqueueNotification);
+
+  if (!request) {
+    return null;
+  }
+
+  return (
+    <UIRequestModalBody
+      key={`${request.id}:${request.method}:${JSON.stringify(request.params)}`}
+      request={request}
+      dequeue={dequeue}
+      send={send}
+      connectionState={connectionState}
+      enqueueNotification={enqueueNotification}
+    />
   );
 }

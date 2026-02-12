@@ -1,5 +1,5 @@
-import { render, screen, cleanup, fireEvent, within } from '@testing-library/react';
-import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ChatView } from './ChatView';
 import { useLemonStore, type MessageWithMeta } from '../store/useLemonStore';
 import type { UserMessage, AssistantMessage, ToolResultMessage } from '@lemon-web/shared';

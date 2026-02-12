@@ -2,10 +2,9 @@ import { useMemo, useState, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import { useLemonStore } from '../store/useLemonStore';
 
-const DEFAULT_DETAIL_KEYS = ['args', 'partial', 'result'] as const;
 const STATUS_FILTERS = ['all', 'running', 'complete', 'error'] as const;
 
-type DetailKey = (typeof DEFAULT_DETAIL_KEYS)[number];
+type DetailKey = 'args' | 'partial' | 'result';
 type StatusFilter = (typeof STATUS_FILTERS)[number];
 
 type DetailState = Record<string, Record<DetailKey, boolean>>;

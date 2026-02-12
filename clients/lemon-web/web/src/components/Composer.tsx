@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useLemonStore } from '../store/useLemonStore';
 
 export function Composer() {
@@ -9,14 +9,8 @@ export function Composer() {
   const enqueueNotification = useLemonStore((state) => state.enqueueNotification);
   const [text, setText] = useState('');
   const [history, setHistory] = useState<string[]>([]);
-  const [historyIndex, setHistoryIndex] = useState<number | null>(null);
+  const [, setHistoryIndex] = useState<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-
-  useEffect(() => {
-    if (historyIndex === null) return;
-    const entry = history[historyIndex] ?? '';
-    setText(entry);
-  }, [historyIndex, history]);
 
   const canSend = Boolean(activeSessionId) && connectionState === 'connected';
   const charCount = text.trim().length;
@@ -112,7 +106,9 @@ export function Composer() {
                 event.preventDefault();
                 setHistoryIndex((prev) => {
                   const nextIndex = prev === null ? 0 : Math.min(prev + 1, history.length - 1);
-                  return history.length === 0 ? null : nextIndex;
+                  if (history.length === 0) return null;
+                  setText(history[nextIndex] ?? '');
+                  return nextIndex;
                 });
               }
               if (event.key === 'ArrowDown' && event.altKey) {
@@ -120,7 +116,11 @@ export function Composer() {
                 setHistoryIndex((prev) => {
                   if (prev === null) return null;
                   const nextIndex = prev - 1;
-                  return nextIndex >= 0 ? nextIndex : null;
+                  if (nextIndex >= 0) {
+                    setText(history[nextIndex] ?? '');
+                    return nextIndex;
+                  }
+                  return null;
                 });
               }
             }}

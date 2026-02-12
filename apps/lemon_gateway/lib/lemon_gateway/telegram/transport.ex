@@ -48,17 +48,17 @@ defmodule LemonGateway.Telegram.Transport do
         :ignore
 
       true ->
-      config =
-        base_telegram_config()
-        |> merge_config(Application.get_env(:lemon_gateway, :telegram))
+        config =
+          base_telegram_config()
+          |> merge_config(Application.get_env(:lemon_gateway, :telegram))
 
-      token = config[:bot_token] || config["bot_token"]
+        token = config[:bot_token] || config["bot_token"]
 
-      if is_binary(token) and token != "" do
-        GenServer.start_link(__MODULE__, config, name: __MODULE__)
-      else
-        :ignore
-      end
+        if is_binary(token) and token != "" do
+          GenServer.start_link(__MODULE__, config, name: __MODULE__)
+        else
+          :ignore
+        end
     end
   end
 

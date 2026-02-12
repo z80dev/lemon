@@ -1,4 +1,4 @@
-import { render, screen, within, act } from '@testing-library/react';
+import { render, screen, act } from '@testing-library/react';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { WidgetDock } from './WidgetDock';
 import { useLemonStore, type LemonState, type WidgetState } from '../store/useLemonStore';

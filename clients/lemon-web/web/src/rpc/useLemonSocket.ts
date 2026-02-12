@@ -165,7 +165,7 @@ export function useLemonSocket(): void {
         try {
           const parsed = JSON.parse(event.data as string) as WireServerMessage;
           applyServerMessage(parsed);
-        } catch (err) {
+        } catch {
           setConnectionState('error', 'Failed to parse server message');
         }
       };

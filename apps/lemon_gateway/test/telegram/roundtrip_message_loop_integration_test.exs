@@ -629,7 +629,11 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
              wait_until(
                fn ->
                  calls = MockTelegramAPI.calls()
-                 Enum.any?(calls, fn {:send_message, ^chat_id, "pong", _, _} -> true; _ -> false end)
+
+                 Enum.any?(calls, fn
+                   {:send_message, ^chat_id, "pong", _, _} -> true
+                   _ -> false
+                 end)
                end,
                5_000
              )

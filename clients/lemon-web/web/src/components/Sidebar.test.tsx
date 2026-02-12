@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Sidebar } from './Sidebar';
@@ -1112,6 +1112,42 @@ describe('Sidebar', () => {
 
       const providerSelect = screen.getByLabelText('Provider') as HTMLSelectElement;
       expect(providerSelect.value).toBe('openai');
+    });
+
+    it('backfills provider and model when models load after opening form', async () => {
+      setupStore({
+        sessions: {
+          running: {
+            'session-1': createRunningSession({ session_id: 'session-1' }),
+          },
+          saved: [],
+          activeSessionId: 'session-1',
+          primarySessionId: null,
+        },
+        statsBySession: {
+          'session-1': createSessionStats({
+            model: { provider: 'openai', id: 'gpt-4' },
+          }),
+        },
+        models: [],
+      });
+
+      render(<Sidebar />);
+
+      await userEvent.click(screen.getByRole('button', { name: 'New' }));
+      expect(screen.getByLabelText('Model').tagName).toBe('INPUT');
+
+      act(() => {
+        useLemonStore.setState({ models: createProviders() });
+      });
+
+      const providerSelect = (await screen.findByLabelText('Provider')) as HTMLSelectElement;
+      const modelSelect = screen.getByLabelText('Model') as HTMLSelectElement;
+
+      await waitFor(() => {
+        expect(providerSelect.value).toBe('openai');
+        expect(modelSelect.value).toBe('gpt-4');
+      });
     });
 
     it('falls back to first running session cwd when no active session', async () => {

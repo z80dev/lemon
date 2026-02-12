@@ -585,7 +585,13 @@ describe('ToastStack', () => {
       setupStore([notification]);
       render(<ToastStack />);
 
-      expect(screen.getByText('Line 1\nLine 2\nLine 3')).toBeInTheDocument();
+      expect(
+        screen.getByText((content) =>
+          content.includes('Line 1') &&
+          content.includes('Line 2') &&
+          content.includes('Line 3')
+        )
+      ).toBeInTheDocument();
     });
 
     it('handles notification with whitespace-only message', () => {

@@ -257,4 +257,3 @@ defmodule LemonGateway.Telegram.ResumeByReplyMsgIndexIntegrationTest do
              {chat_id, thread_id}
   end
 end
-

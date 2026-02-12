@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLemonStore } from '../store/useLemonStore';
 
 export function Sidebar() {
@@ -65,35 +65,49 @@ export function Sidebar() {
     return selectedProvider?.models ?? [];
   }, [providerOptions, newSession.providerId]);
 
-  useEffect(() => {
-    if (!showNewSession) return;
-    setNewSession((prev) => {
-      const next = { ...prev };
+  const withNewSessionDefaults = useCallback(
+    (current: typeof newSession) => {
+      const next = { ...current };
+
       if (!next.cwd) {
-        next.cwd =
-          activeRunning?.cwd ||
-          runningList[0]?.cwd ||
-          savedSessions[0]?.cwd ||
-          '';
+        next.cwd = activeRunning?.cwd || runningList[0]?.cwd || savedSessions[0]?.cwd || '';
       }
+
       if (providerOptions.length > 0 && !next.providerId) {
         const preferredProvider = activeStats?.model.provider;
         const provider =
           providerOptions.find((item) => item.id === preferredProvider) ?? providerOptions[0];
         next.providerId = provider?.id ?? '';
       }
+
       if (providerOptions.length > 0 && !next.modelId) {
         const provider =
           providerOptions.find((item) => item.id === next.providerId) ?? providerOptions[0];
         const preferredModel = activeStats?.model.id;
         const model =
-          provider?.models?.find((item) => item.id === preferredModel) ??
-          provider?.models?.[0];
+          provider?.models?.find((item) => item.id === preferredModel) ?? provider?.models?.[0];
         next.modelId = model?.id ?? '';
+      }
+
+      return next;
+    },
+    [activeRunning, runningList, savedSessions, providerOptions, activeStats]
+  );
+
+  useEffect(() => {
+    if (!showNewSession) return;
+    setNewSession((current) => {
+      const next = withNewSessionDefaults(current);
+      if (
+        next.cwd === current.cwd &&
+        next.providerId === current.providerId &&
+        next.modelId === current.modelId
+      ) {
+        return current;
       }
       return next;
     });
-  }, [showNewSession, activeRunning, activeStats, runningList, savedSessions, providerOptions]);
+  }, [showNewSession, withNewSessionDefaults]);
 
   return (
     <aside className="sidebar">
@@ -111,7 +125,15 @@ export function Sidebar() {
             <button
               className="ghost-button"
               type="button"
-              onClick={() => setShowNewSession((value) => !value)}
+              onClick={() => {
+                setShowNewSession((isOpen) => {
+                  const willOpen = !isOpen;
+                  if (willOpen) {
+                    setNewSession(withNewSessionDefaults);
+                  }
+                  return willOpen;
+                });
+              }}
             >
               {showNewSession ? 'Close' : 'New'}
             </button>

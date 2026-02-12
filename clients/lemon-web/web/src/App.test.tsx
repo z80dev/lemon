@@ -1,4 +1,4 @@
-import { render, screen, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, cleanup } from '@testing-library/react';
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import App from './App';
 import { useLemonStore, type LemonState } from './store/useLemonStore';
@@ -857,8 +857,6 @@ describe('App', () => {
 
   describe('effect dependencies', () => {
     it('title effect only runs when title changes', () => {
-      const originalTitle = document.title;
-
       setupStore({
         ui: {
           requestsQueue: [],

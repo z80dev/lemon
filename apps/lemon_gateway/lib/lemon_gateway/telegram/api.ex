@@ -288,7 +288,10 @@ defmodule LemonGateway.Telegram.API do
 
     opts = [timeout: timeout_ms, connect_timeout: timeout_ms]
 
-    case LemonCore.Httpc.request(:post, {to_charlist(url), headers, ~c"application/json", body}, opts,
+    case LemonCore.Httpc.request(
+           :post,
+           {to_charlist(url), headers, ~c"application/json", body},
+           opts,
            body_format: :binary
          ) do
       {:ok, {{_, 200, _}, _headers, response_body}} ->

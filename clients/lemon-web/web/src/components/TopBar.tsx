@@ -1,6 +1,8 @@
 import { useMemo } from 'react';
 import { useLemonStore } from '../store/useLemonStore';
 
+const getCurrentTimeMs = () => Date.now();
+
 export function TopBar() {
   const title = useLemonStore((state) => state.ui.title);
   const connection = useLemonStore((state) => state.connection);
@@ -29,7 +31,7 @@ export function TopBar() {
   /** Format the last server time as a relative or absolute string */
   const lastServerTimeLabel = useMemo(() => {
     if (!connection.lastServerTime) return null;
-    const now = Date.now();
+    const now = getCurrentTimeMs();
     const diff = now - connection.lastServerTime;
     if (diff < 60000) {
       // Less than 1 minute ago

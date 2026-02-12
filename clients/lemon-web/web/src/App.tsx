@@ -27,7 +27,7 @@ function App() {
   }, [title]);
 
   useEffect(() => {
-    if (connectionState !== 'connected') return;
+    if (connectionState !== 'connected' || typeof send !== 'function') return;
     send({ type: 'list_models' });
     send({ type: 'list_sessions' });
     send({ type: 'list_running_sessions' });
