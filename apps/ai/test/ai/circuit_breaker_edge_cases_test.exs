@@ -993,6 +993,7 @@ defmodule Ai.CircuitBreakerEdgeCasesTest do
       # Close with successes
       CircuitBreaker.record_success(provider)
       CircuitBreaker.record_success(provider)
+
       wait_until(
         fn ->
           {:ok, state} = CircuitBreaker.get_state(provider)

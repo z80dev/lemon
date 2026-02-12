@@ -100,11 +100,35 @@ defmodule AgentCore.LoopEdgeCasesTest do
         AbortSignal.abort(signal)
       end)
 
-      # Should complete (with aborted tools)
+      # Should terminate with canceled semantics
       events = EventStream.events(stream) |> Enum.to_list()
 
-      # Should have agent_end event
-      assert {:agent_end, _messages} = List.last(events)
+      # Tool execution should have started before cancellation
+      assert Enum.any?(events, &match?({:tool_execution_start, "call_slow", _, _}, &1))
+
+      # Aborted runs can surface via cancellation, aborted assistant message,
+      # aborted turn_end, or errored tool completion.
+      assert Enum.any?(events, fn
+               {:canceled, _reason} ->
+                 true
+
+               {:turn_end, message, _} ->
+                 Map.get(message, :stop_reason) == :aborted
+
+               {:message_start, message} ->
+                 Map.get(message, :role) == :assistant and
+                   Map.get(message, :stop_reason) == :aborted
+
+               {:message_end, message} ->
+                 Map.get(message, :role) == :assistant and
+                   Map.get(message, :stop_reason) == :aborted
+
+               {:tool_execution_end, "call_slow", _, _, is_error} ->
+                 is_error
+
+               _ ->
+                 false
+             end)
     end
 
     test "abort mid-execution returns partial results" do

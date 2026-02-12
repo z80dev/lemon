@@ -41,8 +41,7 @@ defmodule Ai.CallDispatcher do
   @type state :: %{
           concurrency_caps: %{provider() => pos_integer()},
           active_requests: %{provider() => non_neg_integer()},
-          monitors: %{reference() => provider()},
-          owners: %{{pid(), provider()} => [reference()]}
+          monitors: %{reference() => provider()}
         }
 
   @default_concurrency_cap 10
@@ -99,19 +98,18 @@ defmodule Ai.CallDispatcher do
     else
       # Try to acquire concurrency slot and rate limit permit
       case acquire_slot(provider) do
-        :ok ->
+        {:ok, slot_ref} ->
           case Ai.RateLimiter.acquire(provider) do
             :ok ->
               try do
-                result = callback.()
-                record_result(provider, result)
-                result
+                callback.()
+                |> handle_dispatch_result(provider, slot_ref)
               rescue
                 error ->
+                  release_slot(slot_ref)
                   Ai.CircuitBreaker.record_failure(provider)
                   reraise error, __STACKTRACE__
               after
-                release_slot(provider)
                 Ai.RateLimiter.release(provider)
               end
 
@@ -124,7 +122,7 @@ defmodule Ai.CallDispatcher do
                 %{provider: provider, reason: :rate_limited}
               )
 
-              release_slot(provider)
+              release_slot(slot_ref)
               error
           end
 
@@ -183,8 +181,7 @@ defmodule Ai.CallDispatcher do
     state = %{
       concurrency_caps: %{},
       active_requests: %{},
-      monitors: %{},
-      owners: %{}
+      monitors: %{}
     }
 
     Logger.debug("CallDispatcher started")
@@ -202,45 +199,15 @@ defmodule Ai.CallDispatcher do
       new_active = Map.update(state.active_requests, provider, 1, &(&1 + 1))
       new_monitors = Map.put(state.monitors, monitor_ref, provider)
 
-      new_owners =
-        Map.update(state.owners, {from_pid, provider}, [monitor_ref], fn refs ->
-          [monitor_ref | refs]
-        end)
-
-      {:reply, :ok,
-       %{state | active_requests: new_active, monitors: new_monitors, owners: new_owners}}
+      {:reply, {:ok, monitor_ref}, %{state | active_requests: new_active, monitors: new_monitors}}
     else
       {:reply, {:error, :max_concurrency}, state}
     end
   end
 
   @impl true
-  def handle_call({:release_slot, provider}, {from_pid, _tag}, state) do
-    key = {from_pid, provider}
-
-    case Map.get(state.owners, key, []) do
-      [monitor_ref | rest] ->
-        Process.demonitor(monitor_ref, [:flush])
-
-        new_active =
-          Map.update(state.active_requests, provider, 0, fn count ->
-            max(0, count - 1)
-          end)
-
-        new_monitors = Map.delete(state.monitors, monitor_ref)
-
-        new_owners =
-          case rest do
-            [] -> Map.delete(state.owners, key)
-            _ -> Map.put(state.owners, key, rest)
-          end
-
-        {:reply, :ok,
-         %{state | active_requests: new_active, monitors: new_monitors, owners: new_owners}}
-
-      [] ->
-        {:reply, :ok, state}
-    end
+  def handle_call({:release_slot, monitor_ref}, _from, state) do
+    {:reply, :ok, release_slot_by_ref(state, monitor_ref, demonitor: true)}
   end
 
   @impl true
@@ -274,27 +241,7 @@ defmodule Ai.CallDispatcher do
 
   @impl true
   def handle_info({:DOWN, monitor_ref, :process, _pid, _reason}, state) do
-    case Map.pop(state.monitors, monitor_ref) do
-      {nil, _monitors} ->
-        {:noreply, state}
-
-      {provider, new_monitors} ->
-        new_active =
-          Map.update(state.active_requests, provider, 0, fn count ->
-            max(0, count - 1)
-          end)
-
-        new_owners =
-          Enum.reduce(state.owners, %{}, fn {key, refs}, acc ->
-            case List.delete(refs, monitor_ref) do
-              [] -> acc
-              updated_refs -> Map.put(acc, key, updated_refs)
-            end
-          end)
-
-        {:noreply,
-         %{state | active_requests: new_active, monitors: new_monitors, owners: new_owners}}
-    end
+    {:noreply, release_slot_by_ref(state, monitor_ref)}
   end
 
   # ============================================================================
@@ -304,13 +251,106 @@ defmodule Ai.CallDispatcher do
   defp acquire_slot(provider) do
     GenServer.call(__MODULE__, {:acquire_slot, provider})
   catch
+    :exit, {:noproc, _} -> {:ok, nil}
+  end
+
+  defp release_slot(nil), do: :ok
+
+  defp release_slot(monitor_ref) do
+    GenServer.call(__MODULE__, {:release_slot, monitor_ref})
+  catch
     :exit, {:noproc, _} -> :ok
   end
 
-  defp release_slot(provider) do
-    GenServer.call(__MODULE__, {:release_slot, provider})
+  defp handle_dispatch_result({:ok, stream_pid} = result, provider, slot_ref)
+       when is_pid(stream_pid) do
+    case start_stream_tracking(provider, slot_ref, stream_pid) do
+      :ok ->
+        result
+
+      {:error, reason} ->
+        Logger.warning(
+          "CallDispatcher failed to start stream tracking for #{inspect(provider)}: #{inspect(reason)}"
+        )
+
+        release_slot(slot_ref)
+        Ai.CircuitBreaker.record_failure(provider)
+        result
+    end
+  end
+
+  defp handle_dispatch_result(result, provider, slot_ref) do
+    record_result(provider, result)
+    release_slot(slot_ref)
+    result
+  end
+
+  defp start_stream_tracking(provider, slot_ref, stream_pid) do
+    case Task.Supervisor.start_child(Ai.StreamTaskSupervisor, fn ->
+           track_stream_result(provider, slot_ref, stream_pid)
+         end) do
+      {:ok, _pid} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
   catch
-    :exit, {:noproc, _} -> :ok
+    :exit, reason -> {:error, reason}
+  end
+
+  defp track_stream_result(provider, slot_ref, stream_pid) do
+    try do
+      terminal_result = Ai.EventStream.result(stream_pid, :infinity)
+      record_stream_terminal_result(provider, terminal_result)
+    rescue
+      error ->
+        Logger.warning(
+          "CallDispatcher stream tracking crashed for #{inspect(provider)}: #{Exception.message(error)}"
+        )
+
+        Ai.CircuitBreaker.record_failure(provider)
+    catch
+      :exit, reason ->
+        Logger.warning(
+          "CallDispatcher stream tracking exited for #{inspect(provider)}: #{inspect(reason)}"
+        )
+
+        Ai.CircuitBreaker.record_failure(provider)
+    after
+      release_slot(slot_ref)
+    end
+  end
+
+  defp record_stream_terminal_result(provider, {:ok, _message}) do
+    Ai.CircuitBreaker.record_success(provider)
+  end
+
+  defp record_stream_terminal_result(provider, {:error, _reason}) do
+    Ai.CircuitBreaker.record_failure(provider)
+  end
+
+  defp record_stream_terminal_result(provider, _unexpected_result) do
+    Ai.CircuitBreaker.record_failure(provider)
+  end
+
+  defp release_slot_by_ref(state, monitor_ref, opts \\ [])
+  defp release_slot_by_ref(state, nil, _opts), do: state
+
+  defp release_slot_by_ref(state, monitor_ref, opts) do
+    case Map.pop(state.monitors, monitor_ref) do
+      {nil, _monitors} ->
+        state
+
+      {provider, new_monitors} ->
+        if Keyword.get(opts, :demonitor, false) do
+          Process.demonitor(monitor_ref, [:flush])
+        end
+
+        new_active =
+          Map.update(state.active_requests, provider, 0, fn count ->
+            max(0, count - 1)
+          end)
+
+        %{state | active_requests: new_active, monitors: new_monitors}
+    end
   end
 
   defp record_result(provider, result) do

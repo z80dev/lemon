@@ -226,12 +226,20 @@ defmodule Ai.Providers.TextSanitizerExtendedTest do
     test "sanitizing valid UTF-8 is efficient" do
       text = String.duplicate("Hello, World! 🌟 ", 1000)
 
-      # Should complete quickly for valid input
-      {time_us, result} = :timer.tc(fn -> TextSanitizer.sanitize(text) end)
+      # Warm up once to reduce first-run scheduling jitter in CI.
+      assert TextSanitizer.sanitize(text) == text
 
-      assert result == text
-      # Should be under 10ms for this size
-      assert time_us < 10_000
+      times_us =
+        for _ <- 1..5 do
+          {time_us, result} = :timer.tc(fn -> TextSanitizer.sanitize(text) end)
+          assert result == text
+          time_us
+        end
+
+      median_time_us = times_us |> Enum.sort() |> Enum.at(2)
+
+      # Keep a meaningful bound while avoiding single-sample flakes.
+      assert median_time_us < 20_000
     end
 
     test "sanitizing invalid UTF-8 completes" do

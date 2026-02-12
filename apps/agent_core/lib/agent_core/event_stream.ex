@@ -63,6 +63,7 @@ defmodule AgentCore.EventStream do
 
   @default_max_queue 10_000
   @default_timeout 300_000
+  @default_task_shutdown_grace_ms 100
 
   # ============================================================================
   # Event Types
@@ -655,14 +656,10 @@ defmodule AgentCore.EventStream do
     # Cancel the timeout timer
     if state.timeout_ref, do: Process.cancel_timer(state.timeout_ref)
 
-    # Shutdown attached task
-    if state.task_pid && Process.alive?(state.task_pid) do
-      Process.exit(state.task_pid, :shutdown)
-    end
-
-    if state.task_ref do
-      Process.demonitor(state.task_ref, [:flush])
-    end
+    # Signal cancellation to attached task first (if it exposed an abort signal),
+    # then ask it to shutdown gracefully before forcing exit after a short grace period.
+    maybe_abort_attached_task(state.task_pid)
+    shutdown_attached_task(state.task_pid, state.task_ref)
 
     # Push a canceled event if not already done
     cancel_event = {:canceled, reason}
@@ -704,4 +701,69 @@ defmodule AgentCore.EventStream do
   defp terminal?({:error, _reason, _partial_state}), do: true
   defp terminal?({:canceled, _reason}), do: true
   defp terminal?(_event), do: false
+
+  defp maybe_abort_attached_task(task_pid) when is_pid(task_pid) do
+    case Process.info(task_pid, :dictionary) do
+      {:dictionary, dictionary} ->
+        case List.keyfind(dictionary, :agent_abort_signal, 0) do
+          {:agent_abort_signal, abort_ref} when is_reference(abort_ref) ->
+            AgentCore.AbortSignal.abort(abort_ref)
+
+          _ ->
+            :ok
+        end
+
+      _ ->
+        :ok
+    end
+  rescue
+    ArgumentError ->
+      :ok
+  end
+
+  defp maybe_abort_attached_task(_task_pid), do: :ok
+
+  defp shutdown_attached_task(task_pid, task_ref) do
+    if is_pid(task_pid) and Process.alive?(task_pid) do
+      Process.exit(task_pid, :shutdown)
+      schedule_force_exit_after_grace(task_pid)
+    end
+
+    if task_ref do
+      Process.demonitor(task_ref, [:flush])
+    end
+  end
+
+  defp schedule_force_exit_after_grace(task_pid) do
+    grace_ms = task_shutdown_grace_ms()
+
+    spawn(fn ->
+      ref = Process.monitor(task_pid)
+
+      receive do
+        {:DOWN, ^ref, :process, ^task_pid, _reason} ->
+          :ok
+      after
+        grace_ms ->
+          if Process.alive?(task_pid) do
+            Process.exit(task_pid, :kill)
+          end
+
+          receive do
+            {:DOWN, ^ref, :process, ^task_pid, _reason} -> :ok
+          after
+            0 -> :ok
+          end
+      end
+
+      Process.demonitor(ref, [:flush])
+    end)
+  end
+
+  defp task_shutdown_grace_ms do
+    case Application.get_env(:agent_core, :event_stream_cancel_grace_ms) do
+      value when is_integer(value) and value > 0 -> value
+      _ -> @default_task_shutdown_grace_ms
+    end
+  end
 end

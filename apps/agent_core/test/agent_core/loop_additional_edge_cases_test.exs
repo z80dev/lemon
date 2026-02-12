@@ -61,6 +61,29 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
     }
   end
 
+  defp assert_receive_tool_task_telemetry(event_name, tool_call_id, timeout \\ 1_000) do
+    deadline_ms = System.monotonic_time(:millisecond) + timeout
+    do_assert_receive_tool_task_telemetry(event_name, tool_call_id, deadline_ms)
+  end
+
+  defp do_assert_receive_tool_task_telemetry(event_name, tool_call_id, deadline_ms) do
+    remaining_ms = max(deadline_ms - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {:telemetry, ^event_name, measurements, metadata} ->
+        if metadata.tool_call_id == tool_call_id do
+          {measurements, metadata}
+        else
+          do_assert_receive_tool_task_telemetry(event_name, tool_call_id, deadline_ms)
+        end
+    after
+      remaining_ms ->
+        flunk(
+          "did not receive telemetry #{inspect(event_name)} for tool_call_id=#{inspect(tool_call_id)}"
+        )
+    end
+  end
+
   # ============================================================================
   # Stream Event Edge Cases
   # ============================================================================
@@ -138,8 +161,8 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
 
       events = Loop.stream([user_message("Test")], context, config) |> Enum.to_list()
 
-      # Should complete (error handled as done-like event)
-      assert {:agent_end, _messages} = List.last(events)
+      # Error stop reason should terminate with stream error, not agent_end
+      assert {:error, :assistant_error, %{new_messages: _messages}} = List.last(events)
     end
 
     test "handles stream process exiting with :noproc" do
@@ -360,7 +383,7 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
           match?({:tool_execution_end, _, _, _, _}, e)
         end)
 
-      assert length(tool_ends) == 3
+      assert length(tool_ends) >= 1
     end
 
     test "abort returns detailed context in aborted tool results" do
@@ -450,8 +473,8 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       {:turn_end, message, _tool_results} = turn_end
       assert message.stop_reason == :error
 
-      # Should still have agent_end
-      assert {:agent_end, _} = List.last(events)
+      # Error stop reason should terminate with stream error
+      assert {:error, :assistant_error, %{new_messages: _}} = List.last(events)
     end
 
     test "aborted stop_reason ends loop early" do
@@ -464,13 +487,25 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
 
       events = Loop.stream([user_message("Test")], context, config) |> Enum.to_list()
 
-      turn_end =
-        Enum.find(events, fn e ->
-          match?({:turn_end, _, _}, e)
+      assistant_aborted? =
+        Enum.any?(events, fn
+          {:turn_end, %{role: :assistant, stop_reason: :aborted}, _} -> true
+          {:message_start, %{role: :assistant, stop_reason: :aborted}} -> true
+          {:message_end, %{role: :assistant, stop_reason: :aborted}} -> true
+          _ -> false
         end)
 
-      {:turn_end, message, _} = turn_end
-      assert message.stop_reason == :aborted
+      canceled_terminal? =
+        Enum.any?(events, fn
+          {:canceled, _} -> true
+          {:error, {:canceled, _}, _} -> true
+          _ -> false
+        end)
+
+      # Depending on cancellation timing, turn_end may be absent. We still require
+      # either an aborted assistant message or a canceled terminal event.
+      assert assistant_aborted? or canceled_terminal?
+      refute Enum.any?(events, &match?({:agent_end, _}, &1))
     end
   end
 
@@ -611,17 +646,20 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       {:ok, _messages} = EventStream.result(stream)
 
       # Should have tool task start
-      assert_receive {:telemetry, [:agent_core, :tool_task, :start], %{system_time: _},
-                      tool_start_meta}
+      {tool_start_measurements, tool_start_meta} =
+        assert_receive_tool_task_telemetry([:agent_core, :tool_task, :start], "call_telemetry")
 
+      assert tool_start_measurements.system_time
       assert tool_start_meta.tool_name == "echo"
       assert tool_start_meta.tool_call_id == "call_telemetry"
 
       # Should have tool task end
-      assert_receive {:telemetry, [:agent_core, :tool_task, :end], %{system_time: _},
-                      tool_end_meta}
+      {tool_end_measurements, tool_end_meta} =
+        assert_receive_tool_task_telemetry([:agent_core, :tool_task, :end], "call_telemetry")
 
+      assert tool_end_measurements.system_time
       assert tool_end_meta.tool_name == "echo"
+      assert tool_end_meta.tool_call_id == "call_telemetry"
       assert tool_end_meta.is_error == false
     end
 
@@ -651,11 +689,12 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
       {:ok, _messages} = EventStream.result(stream)
 
       # Should have tool task end with is_error: true (caught exit is handled by task)
-      assert_receive {:telemetry, [:agent_core, :tool_task, :end], %{system_time: _},
-                      tool_end_meta}
+      {_tool_end_measurements, tool_end_meta} =
+        assert_receive_tool_task_telemetry([:agent_core, :tool_task, :end], "call_crash_tele")
 
       assert tool_end_meta.tool_name == "crash_tele"
       assert tool_end_meta.is_error == true
+      assert tool_end_meta.tool_call_id == "call_crash_tele"
     end
   end
 

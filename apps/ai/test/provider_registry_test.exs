@@ -78,7 +78,8 @@ defmodule Ai.ProviderRegistryTest do
 
       # List should have at least our 10
       ids = ProviderRegistry.list()
-      registered_count = Enum.count(ids, &String.contains?(Atom.to_string(&1), "#{test_id}"))
+      prefix = "api_#{test_id}_"
+      registered_count = Enum.count(ids, &String.starts_with?(Atom.to_string(&1), prefix))
       assert registered_count == 10
     end
 
@@ -126,6 +127,32 @@ defmodule Ai.ProviderRegistryTest do
       for {result, is_registered, expected_module} <- results do
         assert {:ok, ^expected_module} = result
         assert is_registered, "Expected registered? to return true"
+      end
+    end
+
+    test "concurrent writes do not lose providers", %{test_id: test_id} do
+      total = 100
+
+      tasks =
+        for i <- 1..total do
+          Task.async(fn ->
+            api_id = :"write_race_#{test_id}_#{i}"
+            module = Module.concat([WriteRaceProvider, "#{test_id}", "#{i}"])
+            ProviderRegistry.register(api_id, module)
+          end)
+        end
+
+      Task.await_many(tasks, 5_000)
+
+      ids = ProviderRegistry.list()
+      prefix = "write_race_#{test_id}_"
+      write_race_count = Enum.count(ids, &String.starts_with?(Atom.to_string(&1), prefix))
+      assert write_race_count == total
+
+      for i <- 1..total do
+        api_id = :"write_race_#{test_id}_#{i}"
+        expected_module = Module.concat([WriteRaceProvider, "#{test_id}", "#{i}"])
+        assert {:ok, ^expected_module} = ProviderRegistry.get(api_id)
       end
     end
   end

@@ -298,6 +298,7 @@ defmodule Ai.CircuitBreakerTest do
 
       # Open -> half-open
       CircuitBreaker.record_failure(provider)
+
       assert wait_until(
                fn ->
                  {:ok, state} = CircuitBreaker.get_state(provider)
@@ -326,6 +327,7 @@ defmodule Ai.CircuitBreakerTest do
 
       # Open -> half-open
       CircuitBreaker.record_failure(provider)
+
       assert wait_until(
                fn ->
                  {:ok, state} = CircuitBreaker.get_state(provider)

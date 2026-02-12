@@ -4,6 +4,7 @@ defmodule Ai.CallDispatcherTest do
   alias Ai.CallDispatcher
   alias Ai.RateLimiter
   alias Ai.CircuitBreaker
+  alias Ai.EventStream
 
   # Use unique provider names per test to avoid conflicts
   setup do
@@ -115,6 +116,64 @@ defmodule Ai.CallDispatcherTest do
       wait_until(fn -> CallDispatcher.get_active_requests(provider) == 0 end)
 
       assert {:ok, "ok"} = CallDispatcher.dispatch(provider, fn -> {:ok, "ok"} end)
+    end
+
+    test "stream dispatch keeps slot occupied until stream terminal result", %{provider: provider} do
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
+      start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 5})
+
+      CallDispatcher.set_concurrency_cap(provider, 1)
+
+      {:ok, stream} =
+        CallDispatcher.dispatch(provider, fn ->
+          EventStream.start_link(owner: self())
+        end)
+
+      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 1 end)
+
+      assert {:error, :max_concurrency} =
+               CallDispatcher.dispatch(provider, fn -> {:ok, "blocked"} end)
+
+      EventStream.complete(stream, %{stop_reason: :end_turn, content: []})
+
+      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 0 end)
+
+      assert {:ok, "after_stream"} =
+               CallDispatcher.dispatch(provider, fn -> {:ok, "after_stream"} end)
+    end
+
+    test "stream terminal error is recorded as circuit breaker failure", %{provider: provider} do
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
+      start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 3})
+
+      {:ok, stream} =
+        CallDispatcher.dispatch(provider, fn ->
+          EventStream.start_link(owner: self())
+        end)
+
+      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 1 end)
+
+      {:ok, cb_before} = CircuitBreaker.get_state(provider)
+      assert cb_before.failure_count == 0
+
+      EventStream.error(stream, %{
+        stop_reason: :error,
+        error_message: "stream failed",
+        content: []
+      })
+
+      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 0 end)
+
+      wait_until(fn ->
+        {:ok, state} = CircuitBreaker.get_state(provider)
+        state.failure_count == 1
+      end)
     end
 
     test "set_concurrency_cap works correctly", %{provider: provider} do

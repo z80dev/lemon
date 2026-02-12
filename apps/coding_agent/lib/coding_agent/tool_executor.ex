@@ -76,8 +76,16 @@ defmodule CodingAgent.ToolExecutor do
     run_id = context[:run_id]
     session_key = context[:session_key]
     timeout_ms = context[:timeout_ms] || @default_timeout_ms
+    approval_request_fun = context[:approval_request_fun] || (&LemonCore.ExecApprovals.request/1)
 
-    case request_approval(run_id, session_key, tool_name, args, timeout_ms) do
+    case request_approval(
+           run_id,
+           session_key,
+           tool_name,
+           args,
+           timeout_ms,
+           approval_request_fun
+         ) do
       {:ok, :approved, scope} ->
         Logger.debug("Tool #{tool_name} approved at scope: #{scope}")
         execute_fn.()
@@ -89,6 +97,14 @@ defmodule CodingAgent.ToolExecutor do
       {:error, :timeout} ->
         Logger.warning("Tool #{tool_name} approval timed out")
         timeout_result(tool_name, timeout_ms)
+
+      {:error, reason} ->
+        Logger.warning("Tool #{tool_name} approval failed: #{inspect(reason)}")
+        approval_error_result(tool_name, reason)
+
+      other ->
+        Logger.warning("Tool #{tool_name} approval returned unexpected value: #{inspect(other)}")
+        approval_error_result(tool_name, {:unexpected_result, other})
     end
   end
 
@@ -109,8 +125,8 @@ defmodule CodingAgent.ToolExecutor do
     %{tool | execute: wrapped_execute}
   end
 
-  defp request_approval(run_id, session_key, tool_name, args, timeout_ms) do
-    LemonCore.ExecApprovals.request(%{
+  defp request_approval(run_id, session_key, tool_name, args, timeout_ms, request_fun) do
+    request_fun.(%{
       run_id: run_id,
       session_key: session_key,
       tool: tool_name,
@@ -157,6 +173,23 @@ defmodule CodingAgent.ToolExecutor do
         timeout: true,
         timeout_ms: timeout_ms,
         reason: :approval_timeout
+      }
+    }
+  end
+
+  defp approval_error_result(tool_name, reason) do
+    %AgentToolResult{
+      content: [
+        %TextContent{
+          type: :text,
+          text:
+            "Tool '#{tool_name}' could not run because approval failed: #{inspect(reason)}. " <>
+              "Please retry or approve manually."
+        }
+      ],
+      details: %{
+        approval_error: reason,
+        reason: :approval_error
       }
     }
   end

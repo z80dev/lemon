@@ -1021,7 +1021,7 @@ defmodule CodingAgent.Tools.Task do
 
   defp build_description(cwd) do
     base =
-        "Run a focused subtask and return the final response.\n\n" <>
+      "Run a focused subtask and return the final response.\n\n" <>
         "Parameters:\n" <>
         "- action: run (default), poll, or join\n" <>
         "- async: when true, run in background and return task_id\n" <>

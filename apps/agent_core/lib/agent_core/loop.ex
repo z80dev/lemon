@@ -58,6 +58,8 @@ defmodule AgentCore.Loop do
     Cost
   }
 
+  @loop_abort_signal_pd_key :agent_abort_signal
+
   # ============================================================================
   # Public API
   # ============================================================================
@@ -291,6 +293,7 @@ defmodule AgentCore.Loop do
   defp run_agent_loop(prompts, context, config, signal, stream_fn, stream) do
     # Store start time for duration calculation in telemetry
     Process.put(:agent_loop_start_time, System.monotonic_time())
+    maybe_put_loop_abort_signal(signal)
 
     LemonCore.Telemetry.emit(
       [:agent_core, :loop, :start],
@@ -327,6 +330,7 @@ defmodule AgentCore.Loop do
   defp run_continue_loop(context, config, signal, stream_fn, stream) do
     # Store start time for duration calculation in telemetry
     Process.put(:agent_loop_start_time, System.monotonic_time())
+    maybe_put_loop_abort_signal(signal)
 
     LemonCore.Telemetry.emit(
       [:agent_core, :loop, :start],
@@ -458,54 +462,66 @@ defmodule AgentCore.Loop do
       {:ok, message, context} ->
         new_messages = new_messages ++ [message]
 
-        # Check for error or abort
-        if message.stop_reason in [:error, :aborted] do
-          EventStream.push(stream, {:turn_end, message, []})
-          EventStream.push(stream, {:agent_end, new_messages})
-          EventStream.complete(stream, new_messages)
-          {context, new_messages, [], false}
-        else
-          # Check for tool calls
-          tool_calls = get_tool_calls(message)
-          has_more_tool_calls = tool_calls != []
+        case message.stop_reason do
+          :aborted ->
+            EventStream.push(stream, {:turn_end, message, []})
+            EventStream.cancel(stream, :assistant_aborted)
+            {context, new_messages, [], false}
 
-          {tool_results, steering_after_tools, context, new_messages} =
-            if has_more_tool_calls do
-              execute_and_collect_tools(
-                context,
-                new_messages,
-                tool_calls,
-                config,
-                signal,
-                stream
-              )
-            else
-              {[], nil, context, new_messages}
-            end
+          :error ->
+            EventStream.push(stream, {:turn_end, message, []})
 
-          EventStream.push(stream, {:turn_end, message, tool_results})
+            reason =
+              case message.error_message do
+                msg when is_binary(msg) and byte_size(msg) > 0 -> {:assistant_error, msg}
+                _ -> :assistant_error
+              end
 
-          # Get steering messages after turn completes
-          pending_messages =
-            if steering_after_tools && steering_after_tools != [] do
-              steering_after_tools
-            else
-              get_steering_messages(config) || []
-            end
+            EventStream.error(stream, reason, %{new_messages: new_messages})
+            {context, new_messages, [], false}
 
-          # Continue inner loop
-          do_inner_loop(
-            context,
-            new_messages,
-            config,
-            signal,
-            stream_fn,
-            stream,
-            pending_messages,
-            false,
-            has_more_tool_calls,
-            nil
-          )
+          _ ->
+            # Check for tool calls
+            tool_calls = get_tool_calls(message)
+            has_more_tool_calls = tool_calls != []
+
+            {tool_results, steering_after_tools, context, new_messages} =
+              if has_more_tool_calls do
+                execute_and_collect_tools(
+                  context,
+                  new_messages,
+                  tool_calls,
+                  config,
+                  signal,
+                  stream
+                )
+              else
+                {[], nil, context, new_messages}
+              end
+
+            EventStream.push(stream, {:turn_end, message, tool_results})
+
+            # Get steering messages after turn completes
+            pending_messages =
+              if steering_after_tools && steering_after_tools != [] do
+                steering_after_tools
+              else
+                get_steering_messages(config) || []
+              end
+
+            # Continue inner loop
+            do_inner_loop(
+              context,
+              new_messages,
+              config,
+              signal,
+              stream_fn,
+              stream,
+              pending_messages,
+              false,
+              has_more_tool_calls,
+              nil
+            )
         end
 
       {:error, reason} ->
@@ -1062,6 +1078,12 @@ defmodule AgentCore.Loop do
   defp terminal_ai_event?({:error, _reason, _message}), do: true
   defp terminal_ai_event?({:canceled, _reason}), do: true
   defp terminal_ai_event?(_event), do: false
+
+  defp maybe_put_loop_abort_signal(signal) when is_reference(signal) do
+    Process.put(@loop_abort_signal_pd_key, signal)
+  end
+
+  defp maybe_put_loop_abort_signal(_signal), do: :ok
 
   defp aborted?(signal), do: AbortSignal.aborted?(signal)
 

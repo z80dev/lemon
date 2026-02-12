@@ -88,7 +88,8 @@ defmodule CodingAgent.PromptBuilder do
   @spec build_skills_section(String.t(), String.t(), pos_integer()) :: String.t()
   def build_skills_section(cwd, context, max_skills \\ 3) do
     if context != "" do
-      skills = LemonSkills.find_relevant(context, cwd: cwd, max_results: max_skills, refresh: true)
+      skills =
+        LemonSkills.find_relevant(context, cwd: cwd, max_results: max_skills, refresh: true)
 
       if skills != [] do
         content =

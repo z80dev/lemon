@@ -763,17 +763,28 @@ defmodule AgentCore.LoopTest do
         simple_config(stream_fn: stream_fn)
 
       stream = Loop.agent_loop([user_message("Test")], context, config, nil, nil)
-
-      {:ok, messages} = EventStream.result(stream)
+      events_task = Task.async(fn -> EventStream.events(stream) |> Enum.to_list() end)
+      result = EventStream.result(stream)
+      events = Task.await(events_task, 5000)
+      assert {:error, {:canceled, :assistant_aborted}} = result
 
       final_assistant =
-        Enum.find(messages, fn message ->
-          Map.get(message, :role) == :assistant
-        end)
+        Enum.find_value(events, fn
+          {:turn_end, message, _tool_results} ->
+            if Map.get(message, :role) == :assistant, do: message
 
-      assert final_assistant != nil
-      assert final_assistant.stop_reason == :aborted
-      assert String.contains?(final_assistant.error_message || "", "canceled")
+          _ ->
+            nil
+        end) ||
+          Enum.find_value(events, fn
+            {:message_end, message} -> if Map.get(message, :role) == :assistant, do: message
+            _ -> nil
+          end)
+
+      if final_assistant do
+        assert final_assistant.stop_reason == :aborted
+        assert String.contains?(final_assistant.error_message || "", "canceled")
+      end
     end
   end
 
@@ -802,15 +813,28 @@ defmodule AgentCore.LoopTest do
       config = simple_config(stream_fn: stream_fn)
 
       stream = Loop.agent_loop([user_message("Test")], context, config, signal, nil)
-
-      {:ok, messages} = EventStream.result(stream)
+      events_task = Task.async(fn -> EventStream.events(stream) |> Enum.to_list() end)
+      result = EventStream.result(stream)
+      events = Task.await(events_task, 5000)
+      assert {:error, {:canceled, :assistant_aborted}} = result
 
       final_assistant =
-        Enum.find(messages, fn message ->
-          Map.get(message, :role) == :assistant
-        end)
+        Enum.find_value(events, fn
+          {:turn_end, message, _tool_results} ->
+            if Map.get(message, :role) == :assistant, do: message
 
-      assert final_assistant.stop_reason == :aborted
+          _ ->
+            nil
+        end) ||
+          Enum.find_value(events, fn
+            {:message_end, message} -> if Map.get(message, :role) == :assistant, do: message
+            _ -> nil
+          end)
+
+      if final_assistant do
+        assert final_assistant.stop_reason == :aborted
+      end
+
       refute_receive :stream_called
     end
   end

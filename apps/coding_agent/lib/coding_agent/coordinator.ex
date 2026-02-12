@@ -78,8 +78,10 @@ defmodule CodingAgent.Coordinator do
            session_id: String.t(),
            monitor_ref: reference(),
            caller: {pid(), reference()} | nil,
-           status: :running | :completed | :error
+           status: :running | :completed | :error | :stopping
          }
+
+  @cleanup_wait_timeout 5_000
 
   defstruct [
     :cwd,
@@ -288,16 +290,15 @@ defmodule CodingAgent.Coordinator do
     # Find the subagent that crashed
     case find_subagent_by_monitor(state, ref) do
       {id, subagent_state} ->
-        Logger.warning(
-          "Subagent #{id} (#{subagent_state.session_id}) crashed: #{inspect(reason)}"
-        )
+        if subagent_state.status == :stopping do
+          {:noreply, remove_subagent(id, state)}
+        else
+          Logger.warning(
+            "Subagent #{id} (#{subagent_state.session_id}) crashed: #{inspect(reason)}"
+          )
 
-        new_subagents =
-          Map.update!(state.active_subagents, id, fn sa ->
-            %{sa | status: :error, pid: nil}
-          end)
-
-        {:noreply, %{state | active_subagents: new_subagents}}
+          {:noreply, remove_subagent(id, state)}
+        end
 
       nil ->
         # Unknown process, ignore
@@ -459,7 +460,9 @@ defmodule CodingAgent.Coordinator do
 
   @spec await_subagents([String.t()], integer(), %{String.t() => subagent_result()}, t()) ::
           {%{String.t() => subagent_result()}, t()}
-  defp await_subagents([], _deadline, results, state), do: {results, state}
+  defp await_subagents([], _deadline, results, state) do
+    await_cleanup_completion(results, state)
+  end
 
   defp await_subagents(pending_ids, deadline, results, state) do
     remaining = deadline - System.monotonic_time(:millisecond)
@@ -486,7 +489,7 @@ defmodule CodingAgent.Coordinator do
           cleanup_subagent(id, st)
         end)
 
-      {timeout_results, new_state}
+      await_cleanup_completion(timeout_results, new_state)
     else
       receive do
         {:"$gen_call", from, :list_active} ->
@@ -511,7 +514,7 @@ defmodule CodingAgent.Coordinator do
             end)
 
           new_state = abort_all_subagents(state)
-          {aborted_results, new_state}
+          await_cleanup_completion(aborted_results, new_state)
 
         :abort_all ->
           aborted_results =
@@ -529,7 +532,11 @@ defmodule CodingAgent.Coordinator do
             end)
 
           new_state = abort_all_subagents(state)
-          {aborted_results, new_state}
+          await_cleanup_completion(aborted_results, new_state)
+
+        {:system, from, {:terminate, reason}} ->
+          GenServer.reply(from, :ok)
+          exit(reason)
 
         {:session_event, session_id, {:agent_end, messages}} ->
           case find_subagent_by_session(state, session_id) do
@@ -588,22 +595,29 @@ defmodule CodingAgent.Coordinator do
         {:DOWN, ref, :process, _pid, reason} ->
           case find_subagent_by_monitor(state, ref) do
             {id, subagent_state} ->
-              if id in pending_ids do
-                result = %{
-                  id: id,
-                  status: :error,
-                  result: nil,
-                  error: {:crashed, reason},
-                  session_id: subagent_state.session_id
-                }
+              cond do
+                subagent_state.status == :stopping ->
+                  new_state = remove_subagent(id, state)
+                  new_pending = List.delete(pending_ids, id)
+                  await_subagents(new_pending, deadline, results, new_state)
 
-                new_state = remove_subagent(id, state)
-                new_pending = List.delete(pending_ids, id)
-                new_results = Map.put(results, id, result)
+                id in pending_ids ->
+                  result = %{
+                    id: id,
+                    status: :error,
+                    result: nil,
+                    error: {:crashed, reason},
+                    session_id: subagent_state.session_id
+                  }
 
-                await_subagents(new_pending, deadline, new_results, new_state)
-              else
-                await_subagents(pending_ids, deadline, results, state)
+                  new_state = remove_subagent(id, state)
+                  new_pending = List.delete(pending_ids, id)
+                  new_results = Map.put(results, id, result)
+
+                  await_subagents(new_pending, deadline, new_results, new_state)
+
+                true ->
+                  await_subagents(pending_ids, deadline, results, state)
               end
 
             _ ->
@@ -617,6 +631,78 @@ defmodule CodingAgent.Coordinator do
           await_subagents(pending_ids, deadline, results, state)
       end
     end
+  end
+
+  @spec await_cleanup_completion(%{String.t() => subagent_result()}, t()) ::
+          {%{String.t() => subagent_result()}, t()}
+  defp await_cleanup_completion(results, state) do
+    deadline = System.monotonic_time(:millisecond) + @cleanup_wait_timeout
+    do_await_cleanup_completion(results, state, deadline)
+  end
+
+  @spec do_await_cleanup_completion(%{String.t() => subagent_result()}, t(), integer()) ::
+          {%{String.t() => subagent_result()}, t()}
+  defp do_await_cleanup_completion(results, state, deadline) do
+    if cleanup_pending?(state) do
+      remaining = deadline - System.monotonic_time(:millisecond)
+
+      if remaining <= 0 do
+        {results, state}
+      else
+        receive do
+          {:"$gen_call", from, :list_active} ->
+            GenServer.reply(from, Map.keys(state.active_subagents))
+            do_await_cleanup_completion(results, state, deadline)
+
+          {:"$gen_call", from, :abort_all} ->
+            GenServer.reply(from, :ok)
+            new_state = abort_all_subagents(state)
+            do_await_cleanup_completion(results, new_state, deadline)
+
+          :abort_all ->
+            new_state = abort_all_subagents(state)
+            do_await_cleanup_completion(results, new_state, deadline)
+
+          {:system, from, {:terminate, reason}} ->
+            GenServer.reply(from, :ok)
+            exit(reason)
+
+          {:DOWN, ref, :process, _pid, reason} ->
+            new_state =
+              case find_subagent_by_monitor(state, ref) do
+                {id, %{status: :stopping}} ->
+                  remove_subagent(id, state)
+
+                {id, subagent_state} ->
+                  Logger.warning(
+                    "Subagent #{id} (#{subagent_state.session_id}) crashed: #{inspect(reason)}"
+                  )
+
+                  remove_subagent(id, state)
+
+                nil ->
+                  state
+              end
+
+            do_await_cleanup_completion(results, new_state, deadline)
+
+          _other ->
+            do_await_cleanup_completion(results, state, deadline)
+        after
+          min(remaining, 1000) ->
+            do_await_cleanup_completion(results, state, deadline)
+        end
+      end
+    else
+      {results, state}
+    end
+  end
+
+  @spec cleanup_pending?(t()) :: boolean()
+  defp cleanup_pending?(state) do
+    Enum.any?(state.active_subagents, fn {_id, subagent_state} ->
+      subagent_state.status == :stopping
+    end)
   end
 
   @spec extract_final_text([map()]) :: String.t()
@@ -650,16 +736,15 @@ defmodule CodingAgent.Coordinator do
       nil ->
         state
 
-      subagent_state ->
-        # Demonitor
-        if subagent_state.monitor_ref do
-          Process.demonitor(subagent_state.monitor_ref, [:flush])
-        end
+      %{status: :stopping} ->
+        state
 
-        # Stop the session asynchronously to avoid blocking the coordinator.
+      subagent_state ->
         if subagent_state.pid && Process.alive?(subagent_state.pid) do
           pid = subagent_state.pid
 
+          # Stop asynchronously, but keep bookkeeping until the :DOWN confirms
+          # the process is actually gone.
           spawn(fn ->
             try do
               Session.abort(pid)
@@ -673,9 +758,18 @@ defmodule CodingAgent.Coordinator do
               _ -> :ok
             end
           end)
-        end
 
-        remove_subagent(id, state)
+          new_subagents =
+            Map.put(state.active_subagents, id, %{subagent_state | status: :stopping})
+
+          %{state | active_subagents: new_subagents}
+        else
+          if subagent_state.monitor_ref do
+            Process.demonitor(subagent_state.monitor_ref, [:flush])
+          end
+
+          remove_subagent(id, state)
+        end
     end
   end
 

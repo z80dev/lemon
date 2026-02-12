@@ -24,6 +24,7 @@ defmodule Ai.ProviderRegistry do
   """
 
   @persistent_term_key {__MODULE__, :providers}
+  @mutation_lock {__MODULE__, :mutation_lock}
 
   # ============================================================================
   # Public API
@@ -36,12 +37,14 @@ defmodule Ai.ProviderRegistry do
   """
   @spec init() :: :ok
   def init do
-    # Only initialize if not already set
-    unless initialized?() do
-      :persistent_term.put(@persistent_term_key, %{})
-    end
+    with_mutation_lock(fn ->
+      # Only initialize if not already set
+      unless initialized?() do
+        :persistent_term.put(@persistent_term_key, %{})
+      end
 
-    :ok
+      :ok
+    end)
   end
 
   @doc """
@@ -53,10 +56,9 @@ defmodule Ai.ProviderRegistry do
   """
   @spec register(atom(), module()) :: :ok
   def register(api_id, module) when is_atom(api_id) and is_atom(module) do
-    ensure_initialized()
-    providers = :persistent_term.get(@persistent_term_key)
-    :persistent_term.put(@persistent_term_key, Map.put(providers, api_id, module))
-    :ok
+    mutate_providers(fn providers ->
+      Map.put(providers, api_id, module)
+    end)
   end
 
   @doc """
@@ -111,10 +113,9 @@ defmodule Ai.ProviderRegistry do
   """
   @spec unregister(atom()) :: :ok
   def unregister(api_id) when is_atom(api_id) do
-    ensure_initialized()
-    providers = :persistent_term.get(@persistent_term_key)
-    :persistent_term.put(@persistent_term_key, Map.delete(providers, api_id))
-    :ok
+    mutate_providers(fn providers ->
+      Map.delete(providers, api_id)
+    end)
   end
 
   @doc """
@@ -122,8 +123,7 @@ defmodule Ai.ProviderRegistry do
   """
   @spec clear() :: :ok
   def clear do
-    :persistent_term.put(@persistent_term_key, %{})
-    :ok
+    mutate_providers(fn _providers -> %{} end)
   end
 
   @doc """
@@ -147,5 +147,23 @@ defmodule Ai.ProviderRegistry do
     unless initialized?() do
       init()
     end
+  end
+
+  defp mutate_providers(update_fun) do
+    with_mutation_lock(fn ->
+      providers =
+        if initialized?() do
+          :persistent_term.get(@persistent_term_key)
+        else
+          %{}
+        end
+
+      :persistent_term.put(@persistent_term_key, update_fun.(providers))
+      :ok
+    end)
+  end
+
+  defp with_mutation_lock(fun) do
+    :global.trans({@mutation_lock, self()}, fun)
   end
 end
