@@ -26,7 +26,7 @@ defmodule AgentCore.CliRunners.OpencodeSubagent do
   def start(opts) do
     prompt = Keyword.fetch!(opts, :prompt)
     cwd = Keyword.get(opts, :cwd, File.cwd!())
-    timeout = Keyword.get(opts, :timeout, 600_000)
+    timeout = Keyword.get(opts, :timeout, :infinity)
     role_prompt = Keyword.get(opts, :role_prompt)
 
     full_prompt = if role_prompt, do: role_prompt <> "\n\n" <> prompt, else: prompt
@@ -46,7 +46,7 @@ defmodule AgentCore.CliRunners.OpencodeSubagent do
   def resume(%ResumeToken{engine: "opencode"} = token, opts) do
     prompt = Keyword.fetch!(opts, :prompt)
     cwd = Keyword.get(opts, :cwd, File.cwd!())
-    timeout = Keyword.get(opts, :timeout, 600_000)
+    timeout = Keyword.get(opts, :timeout, :infinity)
 
     case OpencodeRunner.start_link(prompt: prompt, resume: token, cwd: cwd, timeout: timeout) do
       {:ok, pid} ->

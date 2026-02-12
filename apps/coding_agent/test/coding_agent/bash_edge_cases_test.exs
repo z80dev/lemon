@@ -215,21 +215,6 @@ defmodule CodingAgent.BashEdgeCasesTest do
       # (We can't easily verify this, but the test ensures no hang)
     end
 
-    test "timeout message includes duration in Bash tool", %{tmp_dir: tmp_dir} do
-      result =
-        Bash.execute(
-          "call_1",
-          %{"command" => "sleep 10", "timeout" => 1},
-          nil,
-          nil,
-          tmp_dir,
-          []
-        )
-
-      assert %AgentToolResult{content: [%TextContent{text: text}]} = result
-      assert text =~ "1 second"
-    end
-
     test "timeout with streaming still calls final callbacks", %{tmp_dir: tmp_dir} do
       {:ok, agent} = Agent.start_link(fn -> {0, nil} end)
 
@@ -653,23 +638,6 @@ defmodule CodingAgent.BashEdgeCasesTest do
 
       assert %AgentToolResult{details: details} = result
       assert details.exit_code != 0
-    end
-
-    test "timeout error formatting", %{tmp_dir: tmp_dir} do
-      result =
-        Bash.execute(
-          "call_1",
-          %{"command" => "sleep 10", "timeout" => 1},
-          nil,
-          nil,
-          tmp_dir,
-          []
-        )
-
-      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
-      assert text =~ "timed out"
-      assert text =~ "1 second"
-      assert details.exit_code == nil
     end
 
     test "cancelled error formatting without output", %{tmp_dir: tmp_dir} do

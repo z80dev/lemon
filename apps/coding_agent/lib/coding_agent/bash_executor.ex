@@ -28,7 +28,9 @@ defmodule CodingAgent.BashExecutor do
   end
 
   @default_max_bytes 50_000
-  @default_timeout 120_000
+  # Tool calls should not time out by default. Callers can pass `timeout: ms`
+  # explicitly (or abort via AbortSignal).
+  @default_timeout :infinity
   @default_max_lines 2000
 
   # ANSI escape sequence pattern
@@ -41,7 +43,7 @@ defmodule CodingAgent.BashExecutor do
 
     * `:on_chunk` - Callback function `fn(chunk :: String.t()) -> :ok` called for each output chunk
     * `:signal` - Abort signal reference (check with `AbortSignal.aborted?/1`)
-    * `:timeout` - Timeout in milliseconds (default: #{@default_timeout})
+    * `:timeout` - Timeout in milliseconds, or `:infinity` for no timeout (default: #{@default_timeout})
     * `:max_bytes` - Maximum output bytes before truncation (default: #{@default_max_bytes})
 
   ## Returns
@@ -78,8 +80,21 @@ defmodule CodingAgent.BashExecutor do
       port = Port.open({:spawn_executable, shell_path}, port_opts)
       os_pid = get_os_pid(port)
 
-      # Set up timeout
-      timeout_ref = if timeout > 0, do: Process.send_after(self(), {:timeout, port}, timeout)
+      # Set up timeout (optional). `Process.send_after/3` requires an integer timeout.
+      timeout_ref =
+        case timeout do
+          :infinity ->
+            nil
+
+          nil ->
+            nil
+
+          ms when is_integer(ms) and ms > 0 ->
+            Process.send_after(self(), {:timeout, port}, ms)
+
+          _ ->
+            nil
+        end
 
       state = %{
         port: port,

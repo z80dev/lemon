@@ -22,7 +22,6 @@ defmodule CodingAgent.Tools.WebFetchTest do
 
       assert Map.has_key?(props, "url")
       assert Map.has_key?(props, "format")
-      assert Map.has_key?(props, "timeout")
       assert props["format"]["enum"] == ["text", "markdown", "html"]
     end
   end
@@ -92,42 +91,6 @@ defmodule CodingAgent.Tools.WebFetchTest do
 
       assert {:error, msg} = result
       assert msg =~ "format must be one of"
-    end
-  end
-
-  describe "execute/4 - timeout validation" do
-    test "rejects non-integer timeout" do
-      result =
-        WebFetch.execute(
-          "call_1",
-          %{
-            "url" => "https://example.com",
-            "format" => "text",
-            "timeout" => 1.5
-          },
-          nil,
-          nil
-        )
-
-      assert {:error, msg} = result
-      assert msg =~ "timeout must be an integer"
-    end
-
-    test "rejects non-positive timeout" do
-      result =
-        WebFetch.execute(
-          "call_1",
-          %{
-            "url" => "https://example.com",
-            "format" => "text",
-            "timeout" => 0
-          },
-          nil,
-          nil
-        )
-
-      assert {:error, msg} = result
-      assert msg =~ "timeout must be a positive integer"
     end
   end
 
@@ -741,130 +704,6 @@ defmodule CodingAgent.Tools.WebFetchTest do
   # TIMEOUT VALIDATION
   # ===========================================================================
 
-  describe "timeout validation comprehensive" do
-    test "rejects negative timeout" do
-      result =
-        WebFetch.execute(
-          "call_1",
-          %{
-            "url" => "https://example.com",
-            "format" => "text",
-            "timeout" => -10
-          },
-          nil,
-          nil
-        )
-
-      assert {:error, msg} = result
-      assert msg =~ "timeout must be a positive integer"
-    end
-
-    test "rejects string timeout" do
-      result =
-        WebFetch.execute(
-          "call_1",
-          %{
-            "url" => "https://example.com",
-            "format" => "text",
-            "timeout" => "30"
-          },
-          nil,
-          nil
-        )
-
-      assert {:error, msg} = result
-      assert msg =~ "timeout must be an integer"
-    end
-
-    test "rejects float timeout" do
-      result =
-        WebFetch.execute(
-          "call_1",
-          %{
-            "url" => "https://example.com",
-            "format" => "text",
-            "timeout" => 30.5
-          },
-          nil,
-          nil
-        )
-
-      assert {:error, msg} = result
-      assert msg =~ "timeout must be an integer"
-    end
-
-    test "rejects list timeout" do
-      result =
-        WebFetch.execute(
-          "call_1",
-          %{
-            "url" => "https://example.com",
-            "format" => "text",
-            "timeout" => [30]
-          },
-          nil,
-          nil
-        )
-
-      assert {:error, msg} = result
-      assert msg =~ "timeout must be an integer"
-    end
-
-    test "accepts nil timeout without error" do
-      result =
-        WebFetch.execute(
-          "call_1",
-          %{
-            "url" => "https://example.com",
-            "format" => "invalid_format",
-            "timeout" => nil
-          },
-          nil,
-          nil
-        )
-
-      # Should fail on format, not timeout
-      assert {:error, msg} = result
-      assert msg =~ "format must be one of"
-    end
-
-    test "accepts positive integer timeout" do
-      result =
-        WebFetch.execute(
-          "call_1",
-          %{
-            "url" => "https://example.com",
-            "format" => "invalid_format",
-            "timeout" => 30
-          },
-          nil,
-          nil
-        )
-
-      # Should fail on format, not timeout
-      assert {:error, msg} = result
-      assert msg =~ "format must be one of"
-    end
-
-    test "accepts large timeout (gets capped internally)" do
-      result =
-        WebFetch.execute(
-          "call_1",
-          %{
-            "url" => "https://example.com",
-            "format" => "invalid_format",
-            "timeout" => 9999
-          },
-          nil,
-          nil
-        )
-
-      # Should fail on format, not timeout - large values are capped not rejected
-      assert {:error, msg} = result
-      assert msg =~ "format must be one of"
-    end
-  end
-
   # ===========================================================================
   # FORMAT VALIDATION
   # ===========================================================================
@@ -1118,7 +957,7 @@ defmodule CodingAgent.Tools.WebFetchTest do
           %{
             "url" => "https://example.com",
             "format" => "text",
-            "timeout" => -1
+            "extra" => "ignored"
           },
           signal,
           nil
@@ -1253,19 +1092,5 @@ defmodule CodingAgent.Tools.WebFetchTest do
   # TIMEOUT BEHAVIOR DURING DOWNLOAD DOCUMENTATION
   # ===========================================================================
 
-  describe "timeout behavior during download (documentation)" do
-    @moduletag :feature_documentation
-
-    test "documents default timeout value" do
-      # @default_timeout_ms is 30_000 (30 seconds)
-      tool = WebFetch.tool("/tmp")
-      assert tool.parameters["properties"]["timeout"]["description"] =~ "timeout"
-    end
-
-    test "documents maximum timeout value" do
-      # @max_timeout_ms is 120_000 (120 seconds)
-      tool = WebFetch.tool("/tmp")
-      assert tool.parameters["properties"]["timeout"]["description"] =~ "max 120"
-    end
-  end
+  # Timeout behavior tests removed: tool calls should not enforce timeouts.
 end

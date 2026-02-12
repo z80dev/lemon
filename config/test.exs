@@ -4,6 +4,16 @@ import Config
 # messages via `ExUnit.CaptureLog`. If you need quieter output, prefer per-test
 # `capture_log/2` or configure console formatting in CI.
 
+# Isolate on-disk poller locks per `mix test` OS process. This prevents cross-process
+# test interference if multiple `mix test` commands run concurrently on the same host.
+System.put_env(
+  "LEMON_LOCK_DIR",
+  Path.join(
+    System.tmp_dir!(),
+    "lemon_locks_test_#{System.system_time(:millisecond)}_#{:erlang.unique_integer([:positive])}"
+  )
+)
+
 # Tests must not depend on or mutate a developer's persistent state on disk.
 config :lemon_core, LemonCore.Store,
   backend: LemonCore.Store.EtsBackend,

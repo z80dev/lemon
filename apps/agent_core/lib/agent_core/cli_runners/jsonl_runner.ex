@@ -61,6 +61,11 @@ defmodule AgentCore.CliRunners.JsonlRunner do
 
   alias AgentCore.CliRunners.Types.{Action, ActionEvent, ResumeToken, StartedEvent}
 
+  # `:exit_status` messages can arrive before trailing stdout `:data` chunks.
+  # Debounce exit finalization long enough to consistently capture all output
+  # under scheduler load and across OS/stdio buffering differences.
+  @exit_finalize_debounce_ms 100
+
   # ============================================================================
   # Types
   # ============================================================================
@@ -202,7 +207,7 @@ defmodule AgentCore.CliRunners.JsonlRunner do
   - `:resume` - ResumeToken for session continuation (optional)
   - `:cwd` - Working directory (default: current directory)
   - `:env` - Additional environment variables
-  - `:timeout` - Subprocess timeout in ms (default: 10 minutes)
+  - `:timeout` - Subprocess timeout in ms (default: `:infinity`)
   - `:owner` - Owner process to monitor (default: caller)
 
   Returns `{:ok, pid}` where pid is the runner GenServer.
@@ -325,7 +330,7 @@ defmodule AgentCore.CliRunners.JsonlRunner do
     resume = Keyword.get(opts, :resume)
     cwd = Keyword.get(opts, :cwd, File.cwd!())
     extra_env = Keyword.get(opts, :env, [])
-    timeout = Keyword.get(opts, :timeout, 600_000)
+    timeout = Keyword.get(opts, :timeout, :infinity)
     owner = Keyword.get(opts, :owner, self())
 
     # Acquire session lock if resuming
@@ -334,8 +339,13 @@ defmodule AgentCore.CliRunners.JsonlRunner do
         # Monitor owner
         owner_ref = Process.monitor(owner)
 
-        # Create event stream
-        {:ok, stream} = AgentCore.EventStream.start_link(owner: self(), timeout: :infinity)
+        # Create event stream.
+        #
+        # The stream must outlive the runner process long enough for the caller to
+        # drain all queued events (especially final exit/cleanup events). If we set
+        # the owner to the runner itself, the stream will cancel as soon as the
+        # runner terminates, which can race with the consumer and drop events.
+        {:ok, stream} = AgentCore.EventStream.start_link(owner: owner, timeout: :infinity)
 
         # Initialize runner state
         runner_state =
@@ -645,7 +655,7 @@ defmodule AgentCore.CliRunners.JsonlRunner do
     # This is especially important for high-throughput JSONL emitters.
     if state.exit_finalize_ref, do: Process.cancel_timer(state.exit_finalize_ref)
 
-    ref = Process.send_after(self(), :finalize_exit, 25)
+    ref = Process.send_after(self(), :finalize_exit, @exit_finalize_debounce_ms)
     %{state | exit_finalize_ref: ref}
   end
 

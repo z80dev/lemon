@@ -12,7 +12,8 @@ defmodule CodingAgent.Tools.WebSearch do
   @default_max_results 5
   @max_results 10
   @max_query_length 500
-  @default_timeout_s 30
+  # Tool calls should not enforce timeouts; callers can abort explicitly.
+  @no_timeout :infinity
   @rate_limit_window_ms 1_000
   @rate_limit_max_requests 5
   @rate_limit_table :coding_agent_websearch_rate_limit
@@ -36,10 +37,6 @@ defmodule CodingAgent.Tools.WebSearch do
           "max_results" => %{
             "type" => "integer",
             "description" => "Maximum number of results to return (max 10)"
-          },
-          "timeout" => %{
-            "type" => "integer",
-            "description" => "Request timeout in seconds"
           },
           "region" => %{
             "type" => "string",
@@ -75,11 +72,9 @@ defmodule CodingAgent.Tools.WebSearch do
     max_results = Map.get(params, "max_results", @default_max_results) |> normalize_max_results()
 
     with :ok <- validate_query(query),
-         :ok <- validate_timeout(Map.get(params, "timeout", nil)),
          :ok <- enforce_rate_limit(),
          :ok <- check_abort(signal),
-         {:ok, response} <-
-           fetch_results(query, Map.get(params, "timeout"), Map.get(params, "region")),
+         {:ok, response} <- fetch_results(query, Map.get(params, "region")),
          :ok <- check_abort(signal) do
       results = extract_results(response)
       limited = Enum.take(results, max_results)
@@ -122,7 +117,7 @@ defmodule CodingAgent.Tools.WebSearch do
 
   defp normalize_max_results(_), do: @default_max_results
 
-  defp fetch_results(query, timeout, region) do
+  defp fetch_results(query, region) do
     if test_env?() do
       {:ok, %Req.Response{status: 200, body: %{"Results" => [], "RelatedTopics" => []}}}
     else
@@ -142,7 +137,7 @@ defmodule CodingAgent.Tools.WebSearch do
 
       Req.get("https://api.duckduckgo.com/",
         params: params,
-        receive_timeout: timeout_to_ms(timeout)
+        receive_timeout: @no_timeout
       )
     end
   end
@@ -237,20 +232,6 @@ defmodule CodingAgent.Tools.WebSearch do
       :ok
     end
   end
-
-  defp validate_timeout(nil), do: :ok
-
-  defp validate_timeout(value) when is_integer(value) and value > 0, do: :ok
-
-  defp validate_timeout(value) when is_integer(value),
-    do: {:error, "timeout must be a positive integer"}
-
-  defp validate_timeout(_),
-    do: {:error, "timeout must be an integer"}
-
-  defp timeout_to_ms(nil), do: @default_timeout_s * 1_000
-  defp timeout_to_ms(value) when is_integer(value) and value > 0, do: value * 1_000
-  defp timeout_to_ms(_), do: @default_timeout_s * 1_000
 
   defp enforce_rate_limit do
     ensure_rate_limit_table()

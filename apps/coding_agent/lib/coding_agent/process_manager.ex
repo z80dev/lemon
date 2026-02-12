@@ -112,7 +112,9 @@ defmodule CodingAgent.ProcessManager do
   @spec exec_sync(keyword()) :: {:ok, map()} | {:error, term()}
   def exec_sync(opts) do
     yield_ms = Keyword.get(opts, :yield_ms)
-    timeout_ms = Keyword.get(opts, :timeout_ms, 60_000)
+    # Tool calls should not enforce timeouts by default.
+    # Allow callers to override, but default is no timeout.
+    timeout_ms = Keyword.get(opts, :timeout_ms, :infinity)
 
     if yield_ms do
       # Start in background and return immediately
@@ -292,8 +294,38 @@ defmodule CodingAgent.ProcessManager do
   # Private Functions
 
   defp wait_for_completion(process_id, timeout_ms) do
-    deadline = System.monotonic_time(:millisecond) + timeout_ms
-    do_wait(process_id, deadline)
+    case timeout_ms do
+      :infinity ->
+        do_wait(process_id, :infinity)
+
+      nil ->
+        do_wait(process_id, :infinity)
+
+      ms when is_integer(ms) and ms >= 0 ->
+        deadline = System.monotonic_time(:millisecond) + ms
+        do_wait(process_id, deadline)
+
+      _ ->
+        # Be conservative: invalid values fall back to no timeout.
+        do_wait(process_id, :infinity)
+    end
+  end
+
+  defp do_wait(process_id, :infinity) do
+    case poll(process_id, lines: 0) do
+      {:ok, %{status: status} = result} when status in [:completed, :error, :killed] ->
+        case poll(process_id, lines: 1000) do
+          {:ok, result_with_logs} -> {:ok, result_with_logs}
+          _ -> {:ok, result}
+        end
+
+      {:ok, _} ->
+        Process.sleep(100)
+        do_wait(process_id, :infinity)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   defp do_wait(process_id, deadline) do

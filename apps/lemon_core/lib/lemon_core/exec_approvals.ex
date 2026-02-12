@@ -39,7 +39,7 @@ defmodule LemonCore.ExecApprovals do
   - `:tool` - Tool name
   - `:action` - Action details map
   - `:rationale` - Optional rationale for the request
-  - `:expires_in_ms` - Timeout in milliseconds (default: 300000)
+  - `:expires_in_ms` - Timeout in milliseconds (default: no timeout)
 
   ## Returns
 
@@ -59,7 +59,8 @@ defmodule LemonCore.ExecApprovals do
     tool = params[:tool]
     action = params[:action]
     rationale = params[:rationale]
-    expires_in_ms = params[:expires_in_ms] || 300_000
+    # Tool calls should not enforce timeouts by default.
+    expires_in_ms = params[:expires_in_ms] || :infinity
 
     approval_id = LemonCore.Id.approval_id()
 
@@ -71,6 +72,13 @@ defmodule LemonCore.ExecApprovals do
         # Subscribe before publishing the request so a fast resolve can't race us.
         LemonCore.Bus.subscribe("exec_approvals")
 
+        expires_at_ms =
+          case expires_in_ms do
+            :infinity -> nil
+            ms when is_integer(ms) -> LemonCore.Clock.now_ms() + ms
+            _ -> nil
+          end
+
         pending = %{
           id: approval_id,
           run_id: run_id,
@@ -80,7 +88,7 @@ defmodule LemonCore.ExecApprovals do
           action: action,
           rationale: rationale,
           requested_at_ms: LemonCore.Clock.now_ms(),
-          expires_at_ms: LemonCore.Clock.now_ms() + expires_in_ms
+          expires_at_ms: expires_at_ms
         }
 
         LemonCore.Store.put(:exec_approvals_pending, approval_id, pending)

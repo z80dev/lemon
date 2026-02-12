@@ -524,7 +524,8 @@ defmodule CodingAgent.Session do
         %{
           session_key: Keyword.get(opts, :session_key, session_manager.header.id),
           agent_id: Keyword.get(opts, :agent_id, "default"),
-          timeout_ms: Keyword.get(opts, :approval_timeout_ms, 300_000)
+          # Tool calls should not enforce approval timeouts by default.
+          timeout_ms: Keyword.get(opts, :approval_timeout_ms, :infinity)
         }
       else
         approval_context
@@ -711,12 +712,15 @@ defmodule CodingAgent.Session do
   def handle_call({:subscribe, pid, :stream, opts}, _from, state) do
     max_queue = Keyword.get(opts, :max_queue, 1000)
     drop_strategy = Keyword.get(opts, :drop_strategy, :drop_oldest)
+    # Tool calls and long-running sessions should not time out by default.
+    timeout = Keyword.get(opts, :timeout, :infinity)
 
     {:ok, stream} =
       AgentCore.EventStream.start_link(
         max_queue: max_queue,
         drop_strategy: drop_strategy,
-        owner: pid
+        owner: pid,
+        timeout: timeout
       )
 
     mon_ref = Process.monitor(pid)

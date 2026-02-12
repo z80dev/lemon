@@ -71,23 +71,6 @@ defmodule CodingAgent.Tools.ExecTest do
       assert text =~ "/default/path"
     end
 
-    test "respects timeout" do
-      tool = Exec.tool("/tmp")
-
-      result =
-        tool.execute.(
-          "call_1",
-          %{"command" => "sleep 10", "timeout_sec" => 1},
-          nil,
-          nil
-        )
-
-      assert result.content != nil
-      text = result.content |> hd() |> Map.get(:text)
-      assert text =~ "timed out"
-      assert result.details.status == "timeout"
-    end
-
     test "validates empty command" do
       tool = Exec.tool("/tmp")
 
@@ -100,20 +83,6 @@ defmodule CodingAgent.Tools.ExecTest do
 
       assert {:error, reason} = tool.execute.("call_1", %{"command" => 123}, nil, nil)
       assert reason =~ "string"
-    end
-
-    test "validates timeout range" do
-      tool = Exec.tool("/tmp")
-
-      assert {:error, reason} =
-               tool.execute.(
-                 "call_1",
-                 %{"command" => "echo test", "timeout_sec" => 100_000},
-                 nil,
-                 nil
-               )
-
-      assert reason =~ "24 hours"
     end
 
     test "validates yield_ms range" do

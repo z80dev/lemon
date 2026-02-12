@@ -21,7 +21,12 @@ defmodule LemonChannels.Adapters.Telegram.TransportOffsetTest do
   setup do
     on_exit(fn ->
       if pid = Process.whereis(LemonChannels.Adapters.Telegram.Transport) do
-        GenServer.stop(pid, :normal)
+        # Transport may already be dead by the time on_exit runs.
+        try do
+          GenServer.stop(pid, :normal)
+        catch
+          :exit, _ -> :ok
+        end
       end
     end)
 
@@ -47,4 +52,3 @@ defmodule LemonChannels.Adapters.Telegram.TransportOffsetTest do
     assert state.offset == 123
   end
 end
-

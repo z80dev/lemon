@@ -19,7 +19,7 @@ defmodule CodingAgent.ToolExecutor do
   The context map should include:
   - `:run_id` - The current run ID
   - `:session_key` - The session key for routing
-  - `:timeout_ms` - Approval timeout in milliseconds (default: 300000)
+  - `:timeout_ms` - Approval timeout in milliseconds (optional; default: no timeout)
   """
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
@@ -28,7 +28,8 @@ defmodule CodingAgent.ToolExecutor do
 
   require Logger
 
-  @default_timeout_ms 300_000
+  # Tool calls should not enforce approval timeouts by default.
+  @default_timeout_ms :infinity
 
   @doc """
   Wrap a single tool with approval checks.

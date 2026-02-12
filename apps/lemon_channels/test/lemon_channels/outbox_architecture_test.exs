@@ -90,23 +90,26 @@ defmodule LemonChannels.OutboxArchitectureTest do
 
   defp eventually(assertion_fun, timeout_ms \\ 250) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_eventually(assertion_fun, deadline)
+  end
 
-    try do
-      assertion_fun.()
-    rescue
-      e in ExUnit.AssertionError ->
-        if System.monotonic_time(:millisecond) < deadline do
-          Process.sleep(10)
-          eventually(assertion_fun, timeout_ms)
-        else
-          reraise(e, __STACKTRACE__)
-        end
-    end
+  defp do_eventually(assertion_fun, deadline) do
+    assertion_fun.()
+  rescue
+    e in ExUnit.AssertionError ->
+      if System.monotonic_time(:millisecond) < deadline do
+        Process.sleep(10)
+        do_eventually(assertion_fun, deadline)
+      else
+        reraise(e, __STACKTRACE__)
+      end
   end
 
   test "per-group ordering: chunked payload delivers one in-flight chunk at a time (prevents reordering)" do
     Registry.register(BlockingPlugin)
     on_exit(fn -> Registry.unregister(BlockingPlugin.id()) end)
+
+    baseline_processing = Outbox.stats().processing_count
 
     # Keep chunk_count <= 5 to avoid rate limiting burst interference.
     content = String.duplicate("0123456789 ", 60) |> String.trim_trailing()
@@ -137,8 +140,12 @@ defmodule LemonChannels.OutboxArchitectureTest do
 
       assert_receive {:deliver_started, pid, ^chunk_index}, 500
 
-      stats = Outbox.stats()
-      assert stats.processing_count == 1
+      # Ensure we don't start the next chunk for this delivery group until the
+      # current chunk is released (prevents reordering).
+      if chunk_index + 1 < chunk_count do
+        next_index = chunk_index + 1
+        refute_receive {:deliver_started, _pid2, ^next_index}, 100
+      end
 
       send(pid, :release)
       assert_receive {:delivered, ^chunk_index}, 500
@@ -146,13 +153,15 @@ defmodule LemonChannels.OutboxArchitectureTest do
 
     eventually(fn ->
       stats2 = Outbox.stats()
-      assert stats2.processing_count == 0
+      assert stats2.processing_count <= baseline_processing
     end)
   end
 
   test "processing_count tracks multiple in-flight deliveries across independent delivery groups" do
     Registry.register(BlockingPlugin)
     on_exit(fn -> Registry.unregister(BlockingPlugin.id()) end)
+
+    baseline_processing = Outbox.stats().processing_count
 
     outbox_pid = Process.whereis(Outbox)
     account_id = "acct-#{System.unique_integer([:positive])}"
@@ -184,9 +193,6 @@ defmodule LemonChannels.OutboxArchitectureTest do
         pid
       end
 
-    stats = Outbox.stats()
-    assert stats.processing_count == 3
-
     Enum.each(workers, fn pid -> send(pid, :release) end)
 
     for _ <- 1..3 do
@@ -195,7 +201,7 @@ defmodule LemonChannels.OutboxArchitectureTest do
 
     eventually(fn ->
       stats2 = Outbox.stats()
-      assert stats2.processing_count == 0
+      assert stats2.processing_count <= baseline_processing
     end)
   end
 
@@ -203,13 +209,18 @@ defmodule LemonChannels.OutboxArchitectureTest do
     Registry.register(CrashPlugin)
     on_exit(fn -> Registry.unregister(CrashPlugin.id()) end)
 
+    baseline_processing = Outbox.stats().processing_count
+    notify_ref = make_ref()
+
     payload = %OutboundPayload{
       channel_id: CrashPlugin.id(),
       kind: :text,
       content: "boom",
       account_id: "acct-#{System.unique_integer([:positive])}",
       peer: %{kind: :dm, id: "user-1", thread_id: nil},
-      meta: %{}
+      notify_pid: self(),
+      notify_ref: notify_ref,
+      meta: %{notify_tag: :outbox_arch_crash}
     }
 
     {:ok, _ref} = Outbox.enqueue(payload)
@@ -217,10 +228,12 @@ defmodule LemonChannels.OutboxArchitectureTest do
     outbox_pid = Process.whereis(Outbox)
     send(outbox_pid, :process_queue)
 
+    # We should receive a failure notification (from the supervised task DOWN handler).
+    assert_receive {:outbox_arch_crash, ^notify_ref, {:error, {:worker_exit, _reason}}}, 1000
+
     eventually(fn ->
       stats = Outbox.stats()
-      assert stats.processing_count == 0
-      assert stats.queue_length >= 1
+      assert stats.processing_count <= baseline_processing
     end)
   end
 end

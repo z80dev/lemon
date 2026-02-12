@@ -892,25 +892,14 @@ defmodule LemonGateway.RunTest do
       scope = make_scope()
       job = make_job(scope, engine_hint: "nonexistent")
 
-      # Trap exits to catch the process crash without crashing the test
-      Process.flag(:trap_exit, true)
+      {:ok, pid} = start_run_direct(job)
 
-      # The Run process starts but crashes when trying to get the unknown engine
-      # The error propagates as an EXIT signal
-      result = start_run_direct(job)
+      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false, error: error}}, 2000
+      assert is_binary(error)
+      assert error =~ "unknown engine id"
 
-      case result do
-        {:ok, pid} ->
-          # Process should exit due to the engine lookup error
-          assert_receive {:EXIT, ^pid, _reason}, 2000
-
-        {:error, _reason} ->
-          # This is also acceptable - init failed
-          :ok
-      end
-
-      # Restore default trap_exit behavior
-      Process.flag(:trap_exit, false)
+      Process.sleep(50)
+      refute Process.alive?(pid)
     end
 
     test "handles nil notify_pid gracefully" do

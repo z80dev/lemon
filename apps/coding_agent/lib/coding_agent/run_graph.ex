@@ -90,7 +90,7 @@ defmodule CodingAgent.RunGraph do
     end
   end
 
-  @spec await([run_id()] | run_id(), :wait_all | :wait_any, non_neg_integer()) ::
+  @spec await([run_id()] | run_id(), :wait_all | :wait_any, non_neg_integer() | :infinity | nil) ::
           {:ok, map()} | {:error, :timeout, map()}
   def await(run_ids, mode \\ :wait_all, timeout_ms \\ @default_timeout_ms)
 
@@ -100,8 +100,23 @@ defmodule CodingAgent.RunGraph do
 
   def await(run_ids, mode, timeout_ms) when is_list(run_ids) and is_atom(mode) do
     ensure_table()
-    deadline = System.monotonic_time(:millisecond) + timeout_ms
-    do_await(run_ids, mode, deadline)
+
+    case timeout_ms do
+      :infinity ->
+        do_await(run_ids, mode, :infinity)
+
+      nil ->
+        do_await(run_ids, mode, :infinity)
+
+      ms when is_integer(ms) and ms >= 0 ->
+        deadline = System.monotonic_time(:millisecond) + ms
+        do_await(run_ids, mode, deadline)
+
+      _ ->
+        # Be conservative: invalid values fall back to the default.
+        deadline = System.monotonic_time(:millisecond) + @default_timeout_ms
+        do_await(run_ids, mode, deadline)
+    end
   end
 
   @doc """
@@ -206,6 +221,11 @@ defmodule CodingAgent.RunGraph do
           run -> {:ok, %{mode: :wait_any, run: run}}
         end
     end
+  end
+
+  defp wait_or_timeout(run_ids, mode, :infinity, _snapshot) do
+    Process.sleep(@poll_interval_ms)
+    do_await(run_ids, mode, :infinity)
   end
 
   defp wait_or_timeout(run_ids, mode, deadline, snapshot) do

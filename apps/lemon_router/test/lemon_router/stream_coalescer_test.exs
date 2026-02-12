@@ -517,7 +517,10 @@ defmodule LemonRouter.StreamCoalescerTest do
       assert :ok = StreamCoalescer.flush(session_key, channel_id)
 
       assert_receive {:outbox_api_call, {:edit, 12_345, 999, _text, nil}}, 500
-      refute_receive {:delivered, _payload}, 100
+      # Other async tests may enqueue telegram deliveries while this test has the telegram
+      # plugin registered globally. Only assert that *this run* didn't go through
+      # LemonChannels.Outbox (it should use LemonGateway.Telegram.Outbox for edits).
+      refute_receive {:delivered, %LemonChannels.OutboundPayload{meta: %{run_id: ^run_id}}}, 200
     end
 
     test "telegram finalize uses outbox delete + send (thread_id + reply_to preserved)" do

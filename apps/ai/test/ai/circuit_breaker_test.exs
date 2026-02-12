@@ -71,7 +71,6 @@ defmodule Ai.CircuitBreakerTest do
       # Open the circuit
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
-      Process.sleep(20)
 
       assert CircuitBreaker.is_open?(provider)
     end
@@ -84,7 +83,6 @@ defmodule Ai.CircuitBreakerTest do
       # Open the circuit
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
-      Process.sleep(20)
 
       assert CircuitBreaker.is_open?(provider)
 
@@ -107,7 +105,6 @@ defmodule Ai.CircuitBreakerTest do
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 5})
 
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.failure_count == 1
@@ -120,7 +117,6 @@ defmodule Ai.CircuitBreakerTest do
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
-      Process.sleep(20)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
@@ -149,14 +145,12 @@ defmodule Ai.CircuitBreakerTest do
       # Accumulate some failures
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.failure_count == 2
 
       # Record success
       CircuitBreaker.record_success(provider)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.failure_count == 0
@@ -171,13 +165,11 @@ defmodule Ai.CircuitBreakerTest do
       assert state.circuit_state == :closed
 
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :closed
 
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
@@ -187,7 +179,6 @@ defmodule Ai.CircuitBreakerTest do
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 1})
 
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
       # We can't directly check last_failure_time from public API,
       # but we verify the circuit opened
@@ -203,7 +194,6 @@ defmodule Ai.CircuitBreakerTest do
 
       # Open the circuit
       CircuitBreaker.record_failure(provider)
-      Process.sleep(20)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
@@ -240,7 +230,6 @@ defmodule Ai.CircuitBreakerTest do
 
       # Open the circuit
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
       # Wait for half-open
       Process.sleep(50)
@@ -266,14 +255,12 @@ defmodule Ai.CircuitBreakerTest do
 
       # First success
       CircuitBreaker.record_success(provider)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
 
       # Second success - should close
       CircuitBreaker.record_success(provider)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :closed
@@ -294,7 +281,6 @@ defmodule Ai.CircuitBreakerTest do
 
       # Single success
       CircuitBreaker.record_success(provider)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
@@ -353,7 +339,6 @@ defmodule Ai.CircuitBreakerTest do
 
       # One success (not enough to close)
       CircuitBreaker.record_success(provider)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
@@ -376,11 +361,9 @@ defmodule Ai.CircuitBreakerTest do
 
       # One success
       CircuitBreaker.record_success(provider)
-      Process.sleep(10)
 
       # Failure reopens
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
       # Wait for half-open again
       Process.sleep(50)
@@ -390,13 +373,11 @@ defmodule Ai.CircuitBreakerTest do
 
       # Now need 2 successes again (not just 1 more)
       CircuitBreaker.record_success(provider)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
 
       CircuitBreaker.record_success(provider)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :closed
@@ -409,14 +390,12 @@ defmodule Ai.CircuitBreakerTest do
 
       # Open the circuit
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
 
       # Reset
       CircuitBreaker.reset(provider)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :closed
@@ -437,7 +416,6 @@ defmodule Ai.CircuitBreakerTest do
 
       # Reset
       CircuitBreaker.reset(provider)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :closed
@@ -450,14 +428,12 @@ defmodule Ai.CircuitBreakerTest do
       # Accumulate some failures (not enough to open)
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.failure_count == 2
 
       # Reset
       CircuitBreaker.reset(provider)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.failure_count == 0
@@ -490,7 +466,6 @@ defmodule Ai.CircuitBreakerTest do
 
       # Record another failure - this should reset the recovery timer
       CircuitBreaker.record_failure(provider)
-      Process.sleep(20)
 
       # Wait a bit more. If the recovery timer was not extended, the circuit would
       # be half-open by now (800ms + 500ms > 1000ms).
@@ -583,7 +558,6 @@ defmodule Ai.CircuitBreakerTest do
       # Trigger failures -> open
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
-      Process.sleep(20)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
@@ -597,7 +571,6 @@ defmodule Ai.CircuitBreakerTest do
       # Record 2 successes -> closed
       CircuitBreaker.record_success(provider)
       CircuitBreaker.record_success(provider)
-      Process.sleep(20)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :closed
@@ -605,7 +578,6 @@ defmodule Ai.CircuitBreakerTest do
       # Trigger failures again -> open
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
-      Process.sleep(20)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
@@ -620,14 +592,12 @@ defmodule Ai.CircuitBreakerTest do
 
       # Open the circuit
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
 
       # Record success - should be ignored
       CircuitBreaker.record_success(provider)
-      Process.sleep(10)
 
       # Still open
       {:ok, state} = CircuitBreaker.get_state(provider)
@@ -638,7 +608,6 @@ defmodule Ai.CircuitBreakerTest do
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 1})
 
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
@@ -650,7 +619,6 @@ defmodule Ai.CircuitBreakerTest do
       )
 
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open

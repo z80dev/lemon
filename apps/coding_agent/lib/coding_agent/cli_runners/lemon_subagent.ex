@@ -105,7 +105,7 @@ defmodule CodingAgent.CliRunners.LemonSubagent do
 
   - `:prompt` - The initial prompt/task (required)
   - `:cwd` - Working directory (default: current directory)
-  - `:timeout` - Session timeout in ms (default: 10 minutes)
+  - `:timeout` - Session timeout in ms (default: `:infinity`)
   - `:model` - Model to use (optional)
   - `:system_prompt` - Custom system prompt (optional)
   - `:role_prompt` - Role prompt prepended to prompt (optional)
@@ -126,7 +126,7 @@ defmodule CodingAgent.CliRunners.LemonSubagent do
   def start(opts) do
     prompt = Keyword.fetch!(opts, :prompt)
     cwd = Keyword.get(opts, :cwd, File.cwd!())
-    timeout = Keyword.get(opts, :timeout, 600_000)
+    timeout = Keyword.get(opts, :timeout, :infinity)
     role_prompt = Keyword.get(opts, :role_prompt)
     model = Keyword.get(opts, :model)
     system_prompt = Keyword.get(opts, :system_prompt)
@@ -167,7 +167,7 @@ defmodule CodingAgent.CliRunners.LemonSubagent do
   def resume(%ResumeToken{engine: "lemon"} = token, opts) do
     prompt = Keyword.fetch!(opts, :prompt)
     cwd = Keyword.get(opts, :cwd, File.cwd!())
-    timeout = Keyword.get(opts, :timeout, 600_000)
+    timeout = Keyword.get(opts, :timeout, :infinity)
 
     case LemonRunner.start_link(prompt: prompt, resume: token, cwd: cwd, timeout: timeout) do
       {:ok, pid} ->

@@ -9,11 +9,17 @@ defmodule LemonGateway.Telegram.DedupeTest do
   @table :lemon_gateway_telegram_dedupe
 
   setup do
-    # Ensure the table exists
-    Dedupe.init()
+    # Ensure we own the table for this test process.
+    #
+    # The table name is global across the node, and other tests (or supervised apps)
+    # may create it under a different owner process. If that owner stops during this
+    # test, ETS will delete the table out from under us. Recreate it here so the
+    # current test process owns it.
+    if :ets.info(@table) != :undefined do
+      :ets.delete(@table)
+    end
 
-    # Clean up any existing entries before each test
-    :ets.delete_all_objects(@table)
+    :ok = Dedupe.init()
 
     :ok
   end

@@ -10,8 +10,8 @@ defmodule CodingAgent.Tools.WebFetch do
   alias Ai.Types.TextContent
 
   @max_response_size 5 * 1024 * 1024
-  @default_timeout_ms 30_000
-  @max_timeout_ms 120_000
+  # Tool calls should not enforce timeouts; callers can abort explicitly.
+  @no_timeout :infinity
 
   @doc """
   Returns the WebFetch tool definition.
@@ -33,10 +33,6 @@ defmodule CodingAgent.Tools.WebFetch do
             "type" => "string",
             "description" => "Format to return: text, markdown, or html",
             "enum" => ["text", "markdown", "html"]
-          },
-          "timeout" => %{
-            "type" => "integer",
-            "description" => "Optional timeout in seconds (max 120)"
           }
         },
         "required" => ["url", "format"]
@@ -62,13 +58,10 @@ defmodule CodingAgent.Tools.WebFetch do
   defp do_execute(params, signal) do
     url = Map.get(params, "url", "")
     format = Map.get(params, "format", "text")
-    timeout_seconds = Map.get(params, "timeout")
 
     with :ok <- validate_url(url),
          :ok <- validate_format(format),
-         :ok <- validate_timeout(timeout_seconds),
-         timeout_ms <- normalize_timeout(timeout_seconds),
-         {:ok, response} <- fetch_with_retry(url, timeout_ms, signal),
+         {:ok, response} <- fetch_with_retry(url, signal),
          :ok <- check_abort(signal) do
       case response do
         %{status: status} when status >= 200 and status < 300 ->
@@ -108,34 +101,11 @@ defmodule CodingAgent.Tools.WebFetch do
   defp validate_format(format) when format in ["text", "markdown", "html"], do: :ok
   defp validate_format(_), do: {:error, "format must be one of: text, markdown, html"}
 
-  defp validate_timeout(nil), do: :ok
-
-  defp validate_timeout(timeout_seconds)
-       when is_integer(timeout_seconds) and timeout_seconds > 0 do
-    :ok
-  end
-
-  defp validate_timeout(timeout_seconds) when is_integer(timeout_seconds) do
-    {:error, "timeout must be a positive integer"}
-  end
-
-  defp validate_timeout(_), do: {:error, "timeout must be an integer"}
-
-  defp normalize_timeout(nil), do: @default_timeout_ms
-
-  defp normalize_timeout(timeout_seconds) when is_integer(timeout_seconds) do
-    timeout_seconds
-    |> min(div(@max_timeout_ms, 1000))
-    |> Kernel.*(1000)
-  end
-
-  defp normalize_timeout(_), do: @default_timeout_ms
-
   @max_retries 3
   @retry_base_delay_ms 1000
 
-  defp fetch_with_retry(url, timeout_ms, signal, retries_left \\ @max_retries) do
-    case fetch(url, timeout_ms, signal) do
+  defp fetch_with_retry(url, signal, retries_left \\ @max_retries) do
+    case fetch(url, signal) do
       {:ok, response} ->
         {:ok, response}
 
@@ -143,7 +113,7 @@ defmodule CodingAgent.Tools.WebFetch do
         if retries_left > 0 and retryable_error?(reason) do
           delay = @retry_base_delay_ms * (@max_retries - retries_left + 1)
           Process.sleep(delay)
-          fetch_with_retry(url, timeout_ms, signal, retries_left - 1)
+          fetch_with_retry(url, signal, retries_left - 1)
         else
           {:error, reason}
         end
@@ -169,7 +139,7 @@ defmodule CodingAgent.Tools.WebFetch do
   defp format_http_error(503, url), do: "Service unavailable (503): #{url}"
   defp format_http_error(status, url), do: "Request failed with status #{status}: #{url}"
 
-  defp fetch(url, timeout_ms, _signal) do
+  defp fetch(url, _signal) do
     headers = [
       {"user-agent",
        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
@@ -181,8 +151,8 @@ defmodule CodingAgent.Tools.WebFetch do
     Req.get(url,
       headers: headers,
       decode_body: false,
-      connect_options: [timeout: timeout_ms],
-      receive_timeout: timeout_ms
+      connect_options: [timeout: @no_timeout],
+      receive_timeout: @no_timeout
     )
   end
 

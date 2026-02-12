@@ -110,7 +110,8 @@ defmodule CodingAgent.CliRunners.LemonRunner do
   - `:prompt` - The initial prompt (required)
   - `:cwd` - Working directory (default: current directory)
   - `:resume` - ResumeToken for resuming an existing session
-  - `:timeout` - Stream timeout in ms (default: 10 minutes)
+  - `:timeout` - Stream timeout in ms (default: `:infinity`)
+  - `:approval_timeout_ms` - Approval wait timeout for tool calls that require approval (default: `:infinity`)
   - `:model` - Model to use (optional, uses session default)
   - `:system_prompt` - Custom system prompt (optional)
 
@@ -183,9 +184,11 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     prompt = Keyword.fetch!(opts, :prompt)
     cwd = Keyword.get(opts, :cwd, File.cwd!())
     resume = Keyword.get(opts, :resume)
-    timeout = Keyword.get(opts, :timeout, 600_000)
+    # Tool calls should not time out by default; allow callers to opt in.
+    timeout = Keyword.get(opts, :timeout, :infinity)
     model = Keyword.get(opts, :model)
     system_prompt = Keyword.get(opts, :system_prompt)
+    approval_timeout_ms = Keyword.get(opts, :approval_timeout_ms, :infinity)
 
     # Create the event stream
     {:ok, stream} =
@@ -230,7 +233,8 @@ defmodule CodingAgent.CliRunners.LemonRunner do
           session_key: session_key || run_id,
           agent_id: agent_id || "default",
           run_id: run_id,
-          timeout_ms: timeout
+          # Approval timeouts are separate from stream timeouts. Default: no timeout.
+          timeout_ms: approval_timeout_ms
         }
       else
         nil

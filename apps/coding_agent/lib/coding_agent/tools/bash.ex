@@ -2,8 +2,8 @@ defmodule CodingAgent.Tools.Bash do
   @moduledoc """
   Bash command execution tool for the coding agent.
 
-  Provides shell command execution with streaming output support,
-  timeout handling, and cancellation via abort signals.
+  Provides shell command execution with streaming output support and
+  cancellation via abort signals.
   """
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
@@ -33,8 +33,7 @@ defmodule CodingAgent.Tools.Bash do
       parameters: %{
         "type" => "object",
         "properties" => %{
-          "command" => %{"type" => "string", "description" => "The bash command to execute"},
-          "timeout" => %{"type" => "integer", "description" => "Timeout in seconds (optional)"}
+          "command" => %{"type" => "string", "description" => "The bash command to execute"}
         },
         "required" => ["command"]
       },
@@ -48,7 +47,7 @@ defmodule CodingAgent.Tools.Bash do
   ## Parameters
 
     * `tool_call_id` - Unique identifier for this tool invocation
-    * `params` - Map containing "command" (required) and "timeout" (optional) keys
+    * `params` - Map containing "command" (required)
     * `signal` - Abort signal reference for cancellation (can be nil)
     * `on_update` - Callback function for streaming partial results (can be nil)
     * `cwd` - Working directory for command execution
@@ -80,8 +79,6 @@ defmodule CodingAgent.Tools.Bash do
 
   defp do_execute(params, signal, on_update, cwd) do
     command = Map.fetch!(params, "command")
-    timeout_seconds = Map.get(params, "timeout")
-    timeout_ms = if timeout_seconds, do: timeout_seconds * 1000, else: nil
 
     # Set up streaming callback if on_update is provided
     {accumulator_pid, streaming_callback} = build_streaming_callback(on_update)
@@ -91,12 +88,11 @@ defmodule CodingAgent.Tools.Bash do
         on_chunk: streaming_callback,
         signal: signal
       ]
-      |> maybe_add_timeout(timeout_ms)
 
     try do
       case BashExecutor.execute(command, cwd, executor_opts) do
         {:ok, result} ->
-          format_result(result, timeout_seconds)
+          format_result(result)
 
         {:error, reason} ->
           %AgentToolResult{
@@ -108,9 +104,6 @@ defmodule CodingAgent.Tools.Bash do
       if accumulator_pid, do: Agent.stop(accumulator_pid)
     end
   end
-
-  defp maybe_add_timeout(opts, nil), do: opts
-  defp maybe_add_timeout(opts, timeout_ms), do: Keyword.put(opts, :timeout, timeout_ms)
 
   defp build_streaming_callback(nil), do: {nil, nil}
 
@@ -133,22 +126,8 @@ defmodule CodingAgent.Tools.Bash do
     {accumulator, callback}
   end
 
-  defp format_result(%BashExecutor.Result{} = result, timeout_seconds) do
+  defp format_result(%BashExecutor.Result{} = result) do
     cond do
-      result.cancelled && timeout_seconds != nil ->
-        # Timeout case
-        output_text =
-          if result.output && result.output != "" do
-            "Command timed out after #{timeout_seconds} seconds.\n\n#{result.output}"
-          else
-            "Command timed out after #{timeout_seconds} seconds."
-          end
-
-        %AgentToolResult{
-          content: [%TextContent{text: output_text}],
-          details: build_details(result)
-        }
-
       result.cancelled ->
         # Cancelled via abort signal
         output_text =

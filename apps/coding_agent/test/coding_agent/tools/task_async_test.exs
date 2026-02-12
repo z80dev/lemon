@@ -206,79 +206,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert {:error, "task_ids must be a list of strings"} = result
     end
 
-    test "join returns error when timeout_ms is not an integer" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "action" => "join",
-            "task_ids" => ["task1"],
-            "timeout_ms" => "not_an_integer"
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, "timeout_ms must be an integer"} = result
-    end
-
-    test "join returns error when timeout_ms is negative" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "action" => "join",
-            "task_ids" => ["task1"],
-            "timeout_ms" => -100
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, "timeout_ms must be non-negative"} = result
-    end
-
-    test "join returns error when timeout_ms exceeds 1 hour" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "action" => "join",
-            "task_ids" => ["task1"],
-            "timeout_ms" => 3_600_001
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, "timeout_ms must not exceed 1 hour (3600000ms)"} = result
-    end
-
-    test "join accepts valid timeout_ms at boundary" do
-      # This will fail because task doesn't exist, but validation should pass
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "action" => "join",
-            "task_ids" => ["nonexistent_task"],
-            "timeout_ms" => 3_600_000
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      # Should fail at resolve_run_ids, not validation
-      assert {:error, "Unknown task_id: nonexistent_task"} = result
-    end
+    # timeout_ms validation tests removed: join should not time out.
 
     test "join accepts task_id as single string" do
       # Create a task first
@@ -616,43 +544,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert {:error, "task_ids is required for action=join"} = result
     end
 
-    test "join handles float timeout_ms" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "action" => "join",
-            "task_ids" => ["task1"],
-            "timeout_ms" => 100.5
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, "timeout_ms must be an integer"} = result
-    end
-
-    test "join handles zero timeout_ms" do
-      # This will immediately timeout, but validation should pass
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "action" => "join",
-            "task_ids" => ["nonexistent"],
-            "timeout_ms" => 0
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      # Should fail at resolve_run_ids, not validation
-      assert {:error, "Unknown task_id: nonexistent"} = result
-    end
+    # timeout_ms edge-case tests removed: join should not time out.
 
     test "join handles empty string task_ids" do
       result =

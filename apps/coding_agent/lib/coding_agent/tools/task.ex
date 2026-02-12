@@ -78,10 +78,6 @@ defmodule CodingAgent.Tools.Task do
             "enum" => ["wait_all", "wait_any"],
             "description" => "Join mode for action=join (default: wait_all)"
           },
-          "timeout_ms" => %{
-            "type" => "integer",
-            "description" => "Join timeout in milliseconds (optional)"
-          },
           "engine" => %{
             "type" => "string",
             "description" =>
@@ -243,14 +239,12 @@ defmodule CodingAgent.Tools.Task do
 
   defp do_join(params) do
     with {:ok, task_ids} <- validate_join_task_ids(params),
-         {:ok, timeout_ms} <- validate_join_timeout(params),
          {:ok, mode} <- validate_join_mode(params) do
       with {:ok, run_ids} <- resolve_run_ids(task_ids),
-           {:ok, join_result} <- RunGraph.await(run_ids, mode, timeout_ms) do
+           {:ok, join_result} <- RunGraph.await(run_ids, mode, :infinity) do
         build_join_result(task_ids, join_result)
       else
         {:error, reason} -> {:error, reason}
-        {:error, :timeout, snapshot} -> build_join_timeout(task_ids, snapshot)
       end
     end
   end
@@ -274,24 +268,6 @@ defmodule CodingAgent.Tools.Task do
 
       true ->
         {:ok, task_ids}
-    end
-  end
-
-  defp validate_join_timeout(params) do
-    timeout_ms = Map.get(params, "timeout_ms", 30_000)
-
-    cond do
-      not is_integer(timeout_ms) ->
-        {:error, "timeout_ms must be an integer"}
-
-      timeout_ms < 0 ->
-        {:error, "timeout_ms must be non-negative"}
-
-      timeout_ms > 3_600_000 ->
-        {:error, "timeout_ms must not exceed 1 hour (3600000ms)"}
-
-      true ->
-        {:ok, timeout_ms}
     end
   end
 
@@ -705,19 +681,6 @@ defmodule CodingAgent.Tools.Task do
     }
   end
 
-  defp build_join_timeout(task_ids, snapshot) do
-    details = %{
-      status: "timeout",
-      task_ids: task_ids,
-      snapshot: snapshot
-    }
-
-    %AgentToolResult{
-      content: [%TextContent{text: "Join timed out."}],
-      details: details
-    }
-  end
-
   defp maybe_mark_running(nil, _run_id), do: :ok
 
   defp maybe_mark_running(task_id, run_id) do
@@ -1058,14 +1021,13 @@ defmodule CodingAgent.Tools.Task do
 
   defp build_description(cwd) do
     base =
-      "Run a focused subtask and return the final response.\n\n" <>
+        "Run a focused subtask and return the final response.\n\n" <>
         "Parameters:\n" <>
         "- action: run (default), poll, or join\n" <>
         "- async: when true, run in background and return task_id\n" <>
         "- task_id: required when action=poll\n" <>
         "- task_ids: required when action=join\n" <>
         "- mode: join mode for action=join (wait_all or wait_any)\n" <>
-        "- timeout_ms: join timeout in milliseconds\n" <>
         "- engine: Which executor runs the task\n" <>
         "  - \"internal\" (default): Lemon's built-in agent\n" <>
         "  - \"codex\": OpenAI Codex CLI\n" <>

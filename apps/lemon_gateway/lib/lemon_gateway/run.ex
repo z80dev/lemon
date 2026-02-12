@@ -167,73 +167,111 @@ defmodule LemonGateway.Run do
   @impl true
   def handle_continue({:start_run, %{job: job}}, state) do
     engine_id = engine_id_for(job)
-    engine = LemonGateway.EngineRegistry.get_engine!(engine_id)
-    renderer_state = state.renderer.init(%{engine: engine})
+    engine = resolve_engine(engine_id)
 
-    # Resolve cwd from job or scope
-    opts =
-      cond do
-        is_binary(job.cwd) ->
-          %{cwd: job.cwd, run_id: state.run_id}
-
-        not is_nil(job.scope) ->
-          case BindingResolver.resolve_cwd(job.scope) do
-            cwd when is_binary(cwd) -> %{cwd: cwd, run_id: state.run_id}
-            _ -> %{run_id: state.run_id}
-          end
-
-        true ->
-          %{run_id: state.run_id}
-      end
-
-    # Emit run started event to bus
-    emit_to_bus(
-      state.run_id,
-      :run_started,
-      %{
+    if is_nil(engine) do
+      completed = %Event.Completed{
+        engine: engine_id,
+        ok: false,
+        # Keep this stringy: the Basic renderer calls to_string/1 on error.
+        error: "unknown engine id: #{engine_id}",
+        answer: "",
         run_id: state.run_id,
-        session_key: state.session_key,
-        engine: engine_id
-      },
-      build_event_meta(state)
-    )
+        session_key: state.session_key
+      }
 
-    # Emit run_start telemetry
-    emit_telemetry_start(state.run_id, %{
-      session_key: state.session_key,
-      engine: engine_id,
-      origin: get_in(state.job.meta || %{}, [:origin])
-    })
+      renderer_state = state.renderer.init(%{engine: nil})
+      {renderer_state, render_action} = state.renderer.apply_event(renderer_state, completed)
+      maybe_update_progress(state, render_action)
+      state = %{state | renderer_state: renderer_state}
 
-    case engine.start_run(state.job, opts, self()) do
-      {:ok, run_ref, cancel_ctx} ->
-        register_progress_mapping(job, self())
+      finalize(state, completed)
+      {:stop, :normal, state}
+    else
+      renderer_state = state.renderer.init(%{engine: engine})
 
-        {:noreply,
-         %{
-           state
-           | engine: engine,
-             run_ref: run_ref,
-             cancel_ctx: cancel_ctx,
-             renderer_state: renderer_state
-         }}
+      # Resolve cwd from job or scope
+      opts =
+        cond do
+          is_binary(job.cwd) ->
+            %{cwd: job.cwd, run_id: state.run_id}
 
-      {:error, reason} ->
-        completed = %Event.Completed{
-          engine: engine_id,
-          ok: false,
-          error: reason,
-          answer: "",
+          not is_nil(job.scope) ->
+            case BindingResolver.resolve_cwd(job.scope) do
+              cwd when is_binary(cwd) -> %{cwd: cwd, run_id: state.run_id}
+              _ -> %{run_id: state.run_id}
+            end
+
+          true ->
+            %{run_id: state.run_id}
+        end
+
+      # Emit run started event to bus
+      emit_to_bus(
+        state.run_id,
+        :run_started,
+        %{
           run_id: state.run_id,
-          session_key: state.session_key
-        }
+          session_key: state.session_key,
+          engine: engine_id
+        },
+        build_event_meta(state)
+      )
 
-        {renderer_state, render_action} = state.renderer.apply_event(renderer_state, completed)
-        maybe_update_progress(state, render_action)
-        state = %{state | engine: engine, renderer_state: renderer_state}
+      # Emit run_start telemetry
+      emit_telemetry_start(state.run_id, %{
+        session_key: state.session_key,
+        engine: engine_id,
+        origin: get_in(state.job.meta || %{}, [:origin])
+      })
 
-        finalize(state, completed)
-        {:stop, :normal, state}
+      case engine.start_run(state.job, opts, self()) do
+        {:ok, run_ref, cancel_ctx} ->
+          register_progress_mapping(job, self())
+
+          {:noreply,
+           %{
+             state
+             | engine: engine,
+               run_ref: run_ref,
+               cancel_ctx: cancel_ctx,
+               renderer_state: renderer_state
+           }}
+
+        {:error, reason} ->
+          completed = %Event.Completed{
+            engine: engine_id,
+            ok: false,
+            error: reason,
+            answer: "",
+            run_id: state.run_id,
+            session_key: state.session_key
+          }
+
+          {renderer_state, render_action} = state.renderer.apply_event(renderer_state, completed)
+          maybe_update_progress(state, render_action)
+          state = %{state | engine: engine, renderer_state: renderer_state}
+
+          finalize(state, completed)
+          {:stop, :normal, state}
+      end
+    end
+  end
+
+  defp resolve_engine(engine_id) when is_binary(engine_id) do
+    LemonGateway.EngineRegistry.get_engine(engine_id) || resolve_engine_by_prefix(engine_id)
+  end
+
+  defp resolve_engine(_), do: nil
+
+  # Accept composite IDs like "claude:claude-3-opus" by falling back to "claude".
+  defp resolve_engine_by_prefix(engine_id) do
+    case String.split(engine_id, ":", parts: 2) do
+      [prefix, _rest] when is_binary(prefix) and byte_size(prefix) > 0 ->
+        LemonGateway.EngineRegistry.get_engine(prefix)
+
+      _ ->
+        nil
     end
   end
 

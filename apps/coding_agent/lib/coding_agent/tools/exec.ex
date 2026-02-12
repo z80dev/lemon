@@ -8,7 +8,6 @@ defmodule CodingAgent.Tools.Exec do
   Features:
   - Background execution with process_id tracking
   - yield_ms option to auto-background after specified time
-  - timeout_sec option to kill after specified time
   - Integration with ProcessManager for durability
   """
 
@@ -41,10 +40,6 @@ defmodule CodingAgent.Tools.Exec do
           "cwd" => %{
             "type" => "string",
             "description" => "Working directory (optional, defaults to project root)"
-          },
-          "timeout_sec" => %{
-            "type" => "integer",
-            "description" => "Timeout in seconds (optional, default: no timeout)"
           },
           "yield_ms" => %{
             "type" => "integer",
@@ -102,7 +97,6 @@ defmodule CodingAgent.Tools.Exec do
   defp do_execute(params, default_cwd) do
     command = Map.fetch!(params, "command")
     cwd = Map.get(params, "cwd", default_cwd)
-    timeout_sec = Map.get(params, "timeout_sec")
     yield_ms = Map.get(params, "yield_ms")
     background? = Map.get(params, "background", false)
     env = Map.get(params, "env", %{})
@@ -110,7 +104,6 @@ defmodule CodingAgent.Tools.Exec do
 
     # Validate parameters
     with :ok <- validate_command(command),
-         :ok <- validate_timeout(timeout_sec),
          :ok <- validate_yield_ms(yield_ms) do
       exec_opts = [
         command: command,
@@ -118,14 +111,6 @@ defmodule CodingAgent.Tools.Exec do
         env: env,
         max_log_lines: max_log_lines
       ]
-
-      # Add timeout if specified
-      exec_opts =
-        if timeout_sec do
-          Keyword.put(exec_opts, :timeout_ms, timeout_sec * 1000)
-        else
-          exec_opts
-        end
 
       cond do
         background? or yield_ms != nil ->
@@ -143,12 +128,6 @@ defmodule CodingAgent.Tools.Exec do
           case ProcessManager.exec_sync(exec_opts) do
             {:ok, result} ->
               build_sync_result(result)
-
-            {:error, :timeout} ->
-              %AgentToolResult{
-                content: [%TextContent{text: "Command timed out."}],
-                details: %{status: "timeout", command: command}
-              }
 
             {:error, reason} ->
               {:error, "Command failed: #{inspect(reason)}"}
@@ -168,18 +147,6 @@ defmodule CodingAgent.Tools.Exec do
   end
 
   defp validate_command(_), do: {:error, "Command must be a string"}
-
-  defp validate_timeout(nil), do: :ok
-
-  defp validate_timeout(timeout) when is_integer(timeout) and timeout > 0 do
-    if timeout > 86400 do
-      {:error, "Timeout cannot exceed 24 hours (86400 seconds)"}
-    else
-      :ok
-    end
-  end
-
-  defp validate_timeout(_), do: {:error, "Timeout must be a positive integer"}
 
   defp validate_yield_ms(nil), do: :ok
 
@@ -258,7 +225,6 @@ defmodule CodingAgent.Tools.Exec do
     Parameters:
     - command: The shell command to execute (required)
     - cwd: Working directory (optional, defaults to project root)
-    - timeout_sec: Kill the process after this many seconds (optional)
     - yield_ms: Return immediately after this many milliseconds, leaving process running (optional)
     - background: Start in background immediately without waiting (optional, default: false)
     - env: Environment variables as key-value pairs (optional)

@@ -86,6 +86,19 @@ defmodule LemonAutomation.HeartbeatTimerTest do
       # We test that HeartbeatManager starts without errors
       assert Process.whereis(HeartbeatManager) != nil or true
     end
+
+    test "process_response accepts map runs (timer heartbeat events)" do
+      run = %{
+        id: "timer-heartbeat-test-#{System.unique_integer([:positive])}",
+        job_id: "timer-heartbeat-test-job-#{System.unique_integer([:positive])}",
+        status: :failed
+      }
+
+      # Timer-based heartbeats broadcast maps, not %CronRun{} structs. This should not crash.
+      assert {:ok, false} = HeartbeatManager.process_response(run, "HEARTBEAT_ERROR: :noproc")
+      assert {:ok, false} = HeartbeatManager.process_response(run, "HEARTBEAT_OK")
+      assert {:ok, false} = HeartbeatManager.process_response(run, nil)
+    end
   end
 
   describe "stats/0" do

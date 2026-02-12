@@ -75,8 +75,8 @@ defmodule LemonAutomation.HeartbeatManager do
   Returns `{:ok, suppressed?}` where `suppressed?` indicates if the
   response was a healthy heartbeat that should be suppressed.
   """
-  @spec process_response(CronRun.t(), binary() | nil) :: {:ok, boolean()}
-  def process_response(%CronRun{} = run, response) do
+  @spec process_response(CronRun.t() | map(), binary() | nil) :: {:ok, boolean()}
+  def process_response(run, response) when is_map(run) do
     GenServer.call(__MODULE__, {:process_response, run, response})
   end
 
@@ -186,7 +186,10 @@ defmodule LemonAutomation.HeartbeatManager do
 
   @impl true
   def handle_call({:process_response, run, response}, _from, state) do
-    job = CronStore.get_job(run.job_id)
+    job_id = Map.get(run, :job_id) || Map.get(run, "job_id")
+    run_id = Map.get(run, :id) || Map.get(run, "id")
+
+    job = if job_id, do: CronStore.get_job(job_id), else: nil
 
     if job && heartbeat?(job) do
       # Parity: use exact match only
@@ -199,8 +202,8 @@ defmodule LemonAutomation.HeartbeatManager do
         status: if(suppressed, do: :ok, else: :alert),
         response: response,
         suppressed: suppressed,
-        run_id: run.id,
-        job_id: run.job_id
+        run_id: run_id,
+        job_id: job_id
       }
       LemonCore.Store.put(:heartbeat_last, agent_id, last_result)
 
@@ -209,7 +212,12 @@ defmodule LemonAutomation.HeartbeatManager do
         |> then(fn s ->
           if suppressed do
             # Mark run as suppressed
-            updated_run = CronRun.suppress(run)
+            updated_run =
+              case run do
+                %CronRun{} = r -> CronRun.suppress(r)
+                %{} = m -> m |> CronRun.from_map() |> CronRun.suppress()
+              end
+
             CronStore.put_run(updated_run)
             Events.emit_heartbeat_suppressed(updated_run, job)
 
@@ -494,7 +502,10 @@ defmodule LemonAutomation.HeartbeatManager do
     })
 
     # Submit via LemonRouter (the same path CronManager uses)
-    Task.start(fn ->
+    # Important: do NOT let background heartbeats crash the HeartbeatManager.
+    # Use an unlinked task and catch exits from LemonRouter.submit/1.
+    {:ok, pid} =
+      Task.start(fn ->
       params = %{
         origin: :cron,
         session_key: session_key,
@@ -507,7 +518,14 @@ defmodule LemonAutomation.HeartbeatManager do
         }
       }
 
-      case LemonRouter.submit(params) do
+      submit_result =
+        try do
+          LemonRouter.submit(params)
+        catch
+          :exit, reason -> {:error, reason}
+        end
+
+      case submit_result do
         {:ok, run_id} ->
           # Wait for run completion via LemonCore.Bus events
           result = wait_for_heartbeat_completion(run_id, 30_000)
@@ -564,6 +582,10 @@ defmodule LemonAutomation.HeartbeatManager do
           })
       end
     end)
+
+    # Break the link to avoid crashing the manager on task failure.
+    Process.unlink(pid)
+    :ok
   end
 
   # Wait for run completion via LemonCore.Bus events

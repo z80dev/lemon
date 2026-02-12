@@ -462,19 +462,36 @@ defmodule LemonGateway.RunSupervisorTest do
 
   describe "error isolation between children" do
     test "one child crashing does not affect other children" do
+      parent = self()
       scope1 = make_scope()
       scope2 = make_scope()
+
+      controller1 =
+        spawn(fn ->
+          receive do
+            {:engine_started, run_ref, task_pid} ->
+              send(parent, {:engine_started, :job1, run_ref, task_pid})
+          end
+        end)
+
+      controller2 =
+        spawn(fn ->
+          receive do
+            {:engine_started, run_ref, task_pid} ->
+              send(parent, {:engine_started, :job2, run_ref, task_pid})
+          end
+        end)
 
       job1 =
         make_job(scope1,
           engine_hint: "controllable_test",
-          meta: %{notify_pid: self(), controller_pid: self()}
+          meta: %{notify_pid: self(), controller_pid: controller1}
         )
 
       job2 =
         make_job(scope2,
           engine_hint: "controllable_test",
-          meta: %{notify_pid: self(), controller_pid: self()}
+          meta: %{notify_pid: self(), controller_pid: controller2}
         )
 
       {:ok, _pid1} =
@@ -483,8 +500,8 @@ defmodule LemonGateway.RunSupervisorTest do
       {:ok, pid2} =
         RunSupervisor.start_run(%{job: job2, slot_ref: make_ref(), worker_pid: self()})
 
-      assert_receive {:engine_started, _, task_pid1}, 2000
-      assert_receive {:engine_started, _, task_pid2}, 2000
+      assert_receive {:engine_started, :job1, _run_ref1, task_pid1}, 2000
+      assert_receive {:engine_started, :job2, _run_ref2, task_pid2}, 2000
 
       # Kill the first one's task
       Process.exit(task_pid1, :kill)

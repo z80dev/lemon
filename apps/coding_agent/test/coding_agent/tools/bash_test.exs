@@ -18,7 +18,6 @@ defmodule CodingAgent.Tools.BashTest do
       assert tool.parameters["type"] == "object"
       assert tool.parameters["required"] == ["command"]
       assert "command" in Map.keys(tool.parameters["properties"])
-      assert "timeout" in Map.keys(tool.parameters["properties"])
       assert is_function(tool.execute, 4)
     end
 
@@ -252,91 +251,6 @@ defmodule CodingAgent.Tools.BashTest do
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "test"
-    end
-  end
-
-  # ============================================================================
-  # Timeout Handling Tests
-  # ============================================================================
-
-  describe "timeout handling" do
-    test "command that exceeds timeout is killed", %{tmp_dir: tmp_dir} do
-      # Set a short timeout of 1 second
-      result =
-        Bash.execute(
-          "call_1",
-          %{"command" => "sleep 10", "timeout" => 1},
-          nil,
-          nil,
-          tmp_dir,
-          []
-        )
-
-      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
-      assert text =~ "timed out after 1 second"
-      assert details.exit_code == nil
-    end
-
-    test "timeout includes partial output", %{tmp_dir: tmp_dir} do
-      result =
-        Bash.execute(
-          "call_1",
-          %{"command" => "echo 'before sleep'; sleep 10; echo 'after sleep'", "timeout" => 1},
-          nil,
-          nil,
-          tmp_dir,
-          []
-        )
-
-      assert %AgentToolResult{content: [%TextContent{text: text}]} = result
-      assert text =~ "timed out"
-      assert text =~ "before sleep"
-      refute text =~ "after sleep"
-    end
-
-    test "command that completes before timeout succeeds", %{tmp_dir: tmp_dir} do
-      result =
-        Bash.execute(
-          "call_1",
-          %{"command" => "echo fast", "timeout" => 10},
-          nil,
-          nil,
-          tmp_dir,
-          []
-        )
-
-      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
-      assert text =~ "fast"
-      refute text =~ "timed out"
-      assert details.exit_code == 0
-    end
-
-    test "timeout streaming callback receives partial output", %{tmp_dir: tmp_dir} do
-      {:ok, agent} = Agent.start_link(fn -> [] end)
-
-      on_update = fn result ->
-        Agent.update(agent, fn updates -> [result | updates] end)
-        :ok
-      end
-
-      Bash.execute(
-        "call_1",
-        %{"command" => "echo 'starting'; sleep 10", "timeout" => 1},
-        nil,
-        on_update,
-        tmp_dir,
-        []
-      )
-
-      updates = Agent.get(agent, fn updates -> Enum.reverse(updates) end)
-      Agent.stop(agent)
-
-      # Should have received at least one update before timeout
-      assert length(updates) > 0
-
-      # First update should contain 'starting'
-      first_text = hd(updates).content |> hd() |> Map.get(:text)
-      assert first_text =~ "starting"
     end
   end
 
@@ -728,15 +642,6 @@ defmodule CodingAgent.Tools.BashTest do
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert String.trim(text) == "/tmp"
-    end
-
-    test "tool supports timeout parameter", %{tmp_dir: tmp_dir} do
-      tool = Bash.tool(tmp_dir)
-
-      result = tool.execute.("call_1", %{"command" => "sleep 5", "timeout" => 1}, nil, nil)
-
-      assert %AgentToolResult{content: [%TextContent{text: text}]} = result
-      assert text =~ "timed out"
     end
 
     test "tool supports streaming callback", %{tmp_dir: tmp_dir} do

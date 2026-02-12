@@ -28,13 +28,10 @@ defmodule CodingAgent.Tools.WebSearchTest do
 
       assert Map.has_key?(props, "query")
       assert Map.has_key?(props, "max_results")
-      assert Map.has_key?(props, "timeout")
       assert Map.has_key?(props, "region")
       assert props["query"]["type"] == "string"
       assert props["max_results"]["type"] == "integer"
       assert props["max_results"]["description"] =~ "max 10"
-      assert props["timeout"]["type"] == "integer"
-      assert props["timeout"]["description"] =~ "timeout"
       assert props["region"]["type"] == "string"
     end
   end
@@ -204,87 +201,7 @@ defmodule CodingAgent.Tools.WebSearchTest do
     end
   end
 
-  describe "execute/4 - timeout validation" do
-    test "rejects non-integer timeout" do
-      result =
-        WebSearch.execute(
-          "call_1",
-          %{
-            "query" => "test",
-            "timeout" => 1.5
-          },
-          nil,
-          nil
-        )
-
-      assert {:error, msg} = result
-      assert msg =~ "timeout must be an integer"
-    end
-
-    test "rejects non-positive timeout" do
-      result =
-        WebSearch.execute(
-          "call_1",
-          %{
-            "query" => "test",
-            "timeout" => 0
-          },
-          nil,
-          nil
-        )
-
-      assert {:error, msg} = result
-      assert msg =~ "timeout must be a positive integer"
-    end
-
-    test "rejects negative timeout" do
-      result =
-        WebSearch.execute(
-          "call_1",
-          %{
-            "query" => "test",
-            "timeout" => -5
-          },
-          nil,
-          nil
-        )
-
-      assert {:error, msg} = result
-      assert msg =~ "timeout must be a positive integer"
-    end
-
-    test "accepts valid timeout" do
-      result =
-        WebSearch.execute(
-          "call_1",
-          %{
-            "query" => "test",
-            "timeout" => 30
-          },
-          nil,
-          nil
-        )
-
-      # Should not error on timeout
-      refute match?({:error, "timeout" <> _}, result)
-    end
-
-    test "accepts nil timeout (uses default)" do
-      result =
-        WebSearch.execute(
-          "call_1",
-          %{
-            "query" => "test",
-            "timeout" => nil
-          },
-          nil,
-          nil
-        )
-
-      # Should not error on timeout
-      refute match?({:error, "timeout" <> _}, result)
-    end
-  end
+  # Timeout validation tests removed: tool calls should not enforce timeouts.
 
   describe "execute/4 - region parameter" do
     test "accepts valid region code" do
@@ -446,12 +363,9 @@ defmodule CodingAgent.Tools.WebSearchTest do
       assert max_results_schema["description"] =~ "10"
     end
 
-    test "timeout parameter has correct schema" do
+    test "does not expose a timeout parameter (tool calls should not time out)" do
       tool = WebSearch.tool("/tmp")
-      timeout_schema = tool.parameters["properties"]["timeout"]
-
-      assert timeout_schema["type"] == "integer"
-      assert timeout_schema["description"] =~ "timeout"
+      refute Map.has_key?(tool.parameters["properties"], "timeout")
     end
 
     test "region parameter has correct schema" do

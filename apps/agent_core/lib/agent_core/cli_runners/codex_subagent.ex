@@ -129,7 +129,7 @@ defmodule AgentCore.CliRunners.CodexSubagent do
 
   - `:prompt` - The initial prompt/task (required)
   - `:cwd` - Working directory (default: current directory)
-  - `:timeout` - Session timeout in ms (default: 10 minutes)
+  - `:timeout` - Session timeout in ms (default: `:infinity`)
 
   ## Returns
 
@@ -147,7 +147,7 @@ defmodule AgentCore.CliRunners.CodexSubagent do
   def start(opts) do
     prompt = Keyword.fetch!(opts, :prompt)
     cwd = Keyword.get(opts, :cwd, File.cwd!())
-    timeout = Keyword.get(opts, :timeout, 600_000)
+    timeout = Keyword.get(opts, :timeout, :infinity)
     role_prompt = Keyword.get(opts, :role_prompt)
 
     # Prepend role prompt if provided
@@ -182,7 +182,7 @@ defmodule AgentCore.CliRunners.CodexSubagent do
   def resume(%ResumeToken{engine: "codex"} = token, opts) do
     prompt = Keyword.fetch!(opts, :prompt)
     cwd = Keyword.get(opts, :cwd, File.cwd!())
-    timeout = Keyword.get(opts, :timeout, 600_000)
+    timeout = Keyword.get(opts, :timeout, :infinity)
 
     case CodexRunner.start_link(prompt: prompt, resume: token, cwd: cwd, timeout: timeout) do
       {:ok, pid} ->
