@@ -1,6 +1,8 @@
 defmodule LemonRouter.StreamCoalescerTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias LemonRouter.StreamCoalescer
 
   defmodule TestTelegramPlugin do
@@ -31,7 +33,10 @@ defmodule LemonRouter.StreamCoalescerTest do
 
     def start_link(opts) do
       notify_pid = opts[:notify_pid]
-      Agent.start_link(fn -> %{calls: [], notify_pid: notify_pid, fail_next_delete: nil} end, name: __MODULE__)
+
+      Agent.start_link(fn -> %{calls: [], notify_pid: notify_pid, fail_next_delete: nil} end,
+        name: __MODULE__
+      )
     end
 
     def calls, do: Agent.get(__MODULE__, fn s -> Enum.reverse(s.calls) end)
@@ -55,7 +60,9 @@ defmodule LemonRouter.StreamCoalescerTest do
     def delete_message(_token, chat_id, message_id) do
       record({:delete, chat_id, message_id})
 
-      case Agent.get_and_update(__MODULE__, fn s -> {s.fail_next_delete, %{s | fail_next_delete: nil}} end) do
+      case Agent.get_and_update(__MODULE__, fn s ->
+             {s.fail_next_delete, %{s | fail_next_delete: nil}}
+           end) do
         nil -> {:ok, %{"ok" => true}}
         reason -> {:error, reason}
       end
@@ -67,6 +74,21 @@ defmodule LemonRouter.StreamCoalescerTest do
       if is_pid(notify_pid), do: send(notify_pid, {:outbox_api_call, call})
       :ok
     end
+  end
+
+  defmodule TestNoopTelegramOutbox do
+    @moduledoc false
+    use GenServer
+
+    def start_link(opts) do
+      GenServer.start_link(__MODULE__, :ok, opts)
+    end
+
+    @impl true
+    def init(:ok), do: {:ok, :ok}
+
+    @impl true
+    def handle_cast(_msg, state), do: {:noreply, state}
   end
 
   setup do
@@ -446,7 +468,9 @@ defmodule LemonRouter.StreamCoalescerTest do
       run_id = "run_#{System.unique_integer()}"
 
       # Simulate a run that streamed at least one delta and has a progress msg id.
-      StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 1, "Partial", meta: %{progress_msg_id: 111})
+      StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 1, "Partial",
+        meta: %{progress_msg_id: 111}
+      )
 
       assert :ok =
                StreamCoalescer.finalize_run(
@@ -513,7 +537,10 @@ defmodule LemonRouter.StreamCoalescerTest do
       channel_id = "telegram"
       run_id = "run_#{System.unique_integer([:positive])}"
 
-      StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 1, "Hello", meta: %{progress_msg_id: 999})
+      StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 1, "Hello",
+        meta: %{progress_msg_id: 999}
+      )
+
       assert :ok = StreamCoalescer.flush(session_key, channel_id)
 
       assert_receive {:outbox_api_call, {:edit, 12_345, 999, _text, nil}}, 500
@@ -604,6 +631,49 @@ defmodule LemonRouter.StreamCoalescerTest do
 
       assert_receive {:outbox_api_call, {:delete, 12_347, 111}}, 500
       assert_receive {:outbox_api_call, {:send, 12_347, _text, _opts, nil}}, 500
+    end
+
+    test "stale pending resume index is cleaned up when delivery notify never arrives" do
+      {:ok, _} = start_supervised({TestNoopTelegramOutbox, [name: LemonGateway.Telegram.Outbox]})
+
+      session_key = "agent:test:telegram:botx:group:12349:thread:778"
+      channel_id = "telegram"
+      run_id = "run_#{System.unique_integer([:positive])}"
+      resume = %LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_missing_ack"}
+
+      assert :ok =
+               StreamCoalescer.finalize_run(session_key, channel_id, run_id,
+                 meta: %{resume: resume, user_msg_id: 222},
+                 final_text: "Final answer"
+               )
+
+      [{pid, _}] = Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id})
+      state = :sys.get_state(pid)
+      assert map_size(state.pending_resume_indices) == 1
+
+      [{ref, _}] = Map.to_list(state.pending_resume_indices)
+
+      retry_log =
+        capture_log(fn ->
+          send(pid, {:pending_resume_cleanup_timeout, ref, 1})
+          Process.sleep(20)
+        end)
+
+      assert retry_log =~ "Timed out waiting for :outbox_delivered for pending resume index"
+      state = :sys.get_state(pid)
+      assert Map.has_key?(state.pending_resume_indices, ref)
+
+      cleanup_log =
+        capture_log(fn ->
+          send(pid, {:pending_resume_cleanup_timeout, ref, 99})
+
+          assert eventually(fn ->
+                   state = :sys.get_state(pid)
+                   map_size(state.pending_resume_indices) == 0
+                 end)
+        end)
+
+      assert cleanup_log =~ "Cleaning stale pending resume index after missing :outbox_delivered"
     end
   end
 end

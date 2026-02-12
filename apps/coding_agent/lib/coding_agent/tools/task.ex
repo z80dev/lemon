@@ -1033,6 +1033,8 @@ defmodule CodingAgent.Tools.Task do
         "  - \"codex\": OpenAI Codex CLI\n" <>
         "  - \"claude\": Claude Code CLI\n" <>
         "  - \"kimi\": Kimi CLI\n" <>
+        "  - \"opencode\": Opencode CLI\n" <>
+        "  - \"pi\": Pi (pi-coding-agent) CLI\n" <>
         "- role: Optional specialization that applies to ANY engine\n\n" <>
         "The role prepends a system prompt to focus the executor on a specific type of work. " <>
         "You can combine any engine with any role."

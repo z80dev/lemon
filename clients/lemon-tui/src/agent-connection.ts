@@ -299,6 +299,77 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
     return { provider: 'remote', id: model };
   }
 
+  private readNonEmptyString(value: unknown): string | null {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  private parseSessionCwd(payload: Record<string, unknown>): string {
+    return (
+      this.readNonEmptyString(payload.cwd)
+      || this.readNonEmptyString(payload.path)
+      || this.readNonEmptyString(payload.workdir)
+      || ''
+    );
+  }
+
+  private parseSessionModel(payload: Record<string, unknown>): { provider: string; id: string } | undefined {
+    const rawModel = payload.model;
+
+    if (rawModel && typeof rawModel === 'object') {
+      const modelPayload = rawModel as Record<string, unknown>;
+      const provider =
+        this.readNonEmptyString(modelPayload.provider)
+        || this.readNonEmptyString(payload.provider);
+      const modelId =
+        this.readNonEmptyString(modelPayload.id)
+        || this.readNonEmptyString(modelPayload.model)
+        || this.readNonEmptyString(payload.model_id)
+        || this.readNonEmptyString(payload.modelId);
+
+      if (provider || modelId) {
+        return {
+          provider: provider || 'unknown',
+          id: modelId || 'unknown',
+        };
+      }
+    }
+
+    const provider =
+      this.readNonEmptyString(payload.provider)
+      || this.readNonEmptyString(payload.model_provider)
+      || this.readNonEmptyString(payload.modelProvider);
+
+    let modelId: string | null =
+      this.readNonEmptyString(payload.model_id)
+      || this.readNonEmptyString(payload.modelId)
+      || (typeof rawModel === 'string' ? this.readNonEmptyString(rawModel) : null);
+
+    if (!provider && modelId?.includes(':')) {
+      const [parsedProvider, ...rest] = modelId.split(':');
+      const parsedId = rest.join(':').trim();
+      if (parsedProvider && parsedId) {
+        return {
+          provider: parsedProvider,
+          id: parsedId,
+        };
+      }
+    }
+
+    if (!provider && !modelId) {
+      return undefined;
+    }
+
+    modelId = modelId || 'unknown';
+    return {
+      provider: provider || 'unknown',
+      id: modelId,
+    };
+  }
+
   private buildReadyMessage(): ReadyMessage {
     const sessionKey = this.resolveWsSessionKey();
     return {
@@ -915,10 +986,11 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
       case 'sessions.list.running': {
         const sessions = (payload as { sessions?: Array<Record<string, unknown>> }).sessions || [];
         const mapped = sessions.map((s) => ({
-          path: String(s.sessionKey || ''),
-          id: String(s.sessionKey || ''),
+          path: String(s.sessionKey || s.id || ''),
+          id: String(s.sessionKey || s.id || ''),
           timestamp: Number(s.updatedAtMs || s.createdAtMs || Date.now()),
-          cwd: '',
+          cwd: this.parseSessionCwd(s),
+          model: this.parseSessionModel(s),
         }));
         if (pending?.method === 'sessions.list') {
           this.emit('message', {
@@ -933,6 +1005,7 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
               session_id: s.id,
               cwd: s.cwd,
               is_streaming: false,
+              model: s.model,
             })),
             error: null,
           });

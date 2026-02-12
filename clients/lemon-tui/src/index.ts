@@ -17,7 +17,7 @@ import {
 } from '@mariozechner/pi-tui';
 import { AgentConnection, AGENT_RESTART_EXIT_CODE, type AgentConnectionOptions } from './agent-connection.js';
 import { StateStore, type AppState, type NormalizedAssistantMessage } from './state.js';
-import type { ServerMessage, UIRequestMessage, SessionSummary } from './types.js';
+import type { ServerMessage, UIRequestMessage, SessionSummary, RunningSessionInfo } from './types.js';
 import { slashCommands, MODELINE_PREFIXES, GIT_REFRESH_INTERVAL_MS } from './constants.js';
 import { getGitModeline } from './git-utils.js';
 
@@ -544,20 +544,12 @@ export class LemonTUI {
     this.updateSessionsHome();
   }
 
-  private handleRunningSessions(msg: { type: 'running_sessions'; sessions: Array<{ session_id: string; cwd: string; is_streaming: boolean }>; error?: string | null }): void {
+  private handleRunningSessions(msg: { type: 'running_sessions'; sessions: RunningSessionInfo[]; error?: string | null }): void {
     if (msg.error) {
       this.store.setError(`Failed to list running sessions: ${msg.error}`);
       return;
     }
     this.store.setRunningSessions(msg.sessions);
-
-    // Ensure any unknown sessions are tracked locally
-    const state = this.store.getState();
-    for (const session of msg.sessions) {
-      if (!this.store.getSession(session.session_id)) {
-        this.store.handleSessionStarted(session.session_id, session.cwd, state.model);
-      }
-    }
 
     if (this.pendingRunningSessionsOverlay) {
       this.pendingRunningSessionsOverlay = false;
@@ -678,7 +670,7 @@ export class LemonTUI {
     }
   }
 
-  private showRunningSessionsOverlay(sessions: Array<{ session_id: string; cwd: string; is_streaming: boolean }>): void {
+  private showRunningSessionsOverlay(sessions: RunningSessionInfo[]): void {
     if (sessions.length === 0) {
       // Still allow creating a new session
       const items: SelectItem[] = [

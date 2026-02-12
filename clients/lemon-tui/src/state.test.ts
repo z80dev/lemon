@@ -4,7 +4,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { StateStore, type ToolExecution } from './state.js';
-import type { UIRequestMessage, AssistantMessage, SessionEvent } from './types.js';
+import type { UIRequestMessage, AssistantMessage, SessionEvent, RunningSessionInfo } from './types.js';
 
 describe('StateStore', () => {
   let store: StateStore;
@@ -469,6 +469,32 @@ describe('StateStore', () => {
       expect(state.widgets.size).toBe(0);
       expect(state.pendingUIRequests).toHaveLength(0);
     });
+
+    it('should notify listeners with the real previous state snapshot', () => {
+      let observedState: any = null;
+      let observedPrevState: any = null;
+
+      store.setStatus('model', 'test-model');
+      store.setWidget('spinner', 'Loading');
+
+      store.subscribe((state, prevState) => {
+        observedState = state;
+        observedPrevState = prevState;
+      });
+
+      store.reset();
+
+      expect(observedState).not.toBeNull();
+      expect(observedPrevState).not.toBeNull();
+      if (!observedState || !observedPrevState) {
+        throw new Error('Expected listener to receive both state snapshots');
+      }
+
+      expect(observedState).not.toBe(observedPrevState);
+      expect(observedState.status.size).toBe(0);
+      expect(observedPrevState.status.get('model')).toBe('test-model');
+      expect(observedPrevState.widgets.get('spinner')?.content).toEqual(['Loading']);
+    });
   });
 
   describe('multi-session support', () => {
@@ -546,6 +572,52 @@ describe('StateStore', () => {
       expect(state.activeSessionId).toBe('session-2');
       expect(state.cwd).toBe('/another/cwd');
       expect(state.model.id).toBe('gpt-4');
+    });
+
+    it('should seed unknown running sessions with a neutral model placeholder', () => {
+      store.setReady(
+        '/test/cwd',
+        { provider: 'anthropic', id: 'claude-3' },
+        true,
+        false,
+        'session-1',
+        'session-1'
+      );
+
+      const running: RunningSessionInfo[] = [
+        { session_id: 'session-2', cwd: '/other/cwd', is_streaming: false },
+      ];
+      store.setRunningSessions(running);
+
+      const seeded = store.getSession('session-2');
+      expect(seeded).toBeDefined();
+      expect(seeded?.model).toEqual({ provider: 'unknown', id: 'unknown' });
+      expect(seeded?.model).not.toEqual({ provider: 'anthropic', id: 'claude-3' });
+    });
+
+    it('should seed unknown running sessions using payload model when provided', () => {
+      store.setReady(
+        '/test/cwd',
+        { provider: 'anthropic', id: 'claude-3' },
+        true,
+        false,
+        'session-1',
+        'session-1'
+      );
+
+      const running: RunningSessionInfo[] = [
+        {
+          session_id: 'session-2',
+          cwd: '/other/cwd',
+          is_streaming: false,
+          model: { provider: 'openai', id: 'gpt-4.1' },
+        },
+      ];
+      store.setRunningSessions(running);
+
+      const seeded = store.getSession('session-2');
+      expect(seeded).toBeDefined();
+      expect(seeded?.model).toEqual({ provider: 'openai', id: 'gpt-4.1' });
     });
 
     it('should reset active session state without affecting other sessions', () => {

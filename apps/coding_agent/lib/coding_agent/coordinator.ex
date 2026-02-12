@@ -514,7 +514,7 @@ defmodule CodingAgent.Coordinator do
             end)
 
           new_state = abort_all_subagents(state)
-          await_cleanup_completion(aborted_results, new_state)
+          {aborted_results, new_state}
 
         :abort_all ->
           aborted_results =
@@ -532,7 +532,7 @@ defmodule CodingAgent.Coordinator do
             end)
 
           new_state = abort_all_subagents(state)
-          await_cleanup_completion(aborted_results, new_state)
+          {aborted_results, new_state}
 
         {:system, from, {:terminate, reason}} ->
           GenServer.reply(from, :ok)

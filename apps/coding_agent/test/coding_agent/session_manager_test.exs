@@ -204,6 +204,41 @@ defmodule CodingAgent.SessionManagerTest do
       assert is_map(entry.details)
       assert entry.details["details"]["status"] == "running"
     end
+
+    @tag :tmp_dir
+    test "preserves existing file contents when temp write fails", %{tmp_dir: tmp_dir} do
+      session_file = Path.join(tmp_dir, "atomic_preserve.jsonl")
+      existing = "existing-session-data\n"
+      File.write!(session_file, existing)
+
+      File.chmod!(tmp_dir, 0o555)
+
+      on_exit(fn ->
+        File.chmod(tmp_dir, 0o755)
+      end)
+
+      session =
+        SessionManager.new(tmp_dir)
+        |> SessionManager.append_message(%{"role" => "user", "content" => "new content"})
+
+      assert {:error, _reason} = SessionManager.save_to_file(session_file, session)
+      assert File.read!(session_file) == existing
+      assert Path.wildcard(session_file <> ".tmp.*") == []
+    end
+
+    @tag :tmp_dir
+    test "cleans up temp file when rename fails", %{tmp_dir: tmp_dir} do
+      session_path = Path.join(tmp_dir, "rename_target")
+      File.mkdir!(session_path)
+
+      session =
+        SessionManager.new(tmp_dir)
+        |> SessionManager.append_message(%{"role" => "user", "content" => "new content"})
+
+      assert {:error, _reason} = SessionManager.save_to_file(session_path, session)
+      assert File.dir?(session_path)
+      assert Path.wildcard(session_path <> ".tmp.*") == []
+    end
   end
 
   # ============================================================================

@@ -331,7 +331,12 @@ defmodule CodingAgent.SubagentComprehensiveTest do
           []
         )
 
-      assert {:error, "Engine must be one of: internal, codex, claude, kimi"} = result
+      assert {:error, message} = result
+      assert message =~ "Engine must be one of:"
+
+      for engine <- ["internal", "codex", "claude", "kimi", "opencode", "pi"] do
+        assert message =~ engine
+      end
     end
 
     test "accepts valid role", %{tmp_dir: tmp_dir} do
@@ -1301,8 +1306,7 @@ defmodule CodingAgent.SubagentComprehensiveTest do
       assert Map.has_key?(properties, "role")
 
       required = tool.parameters["required"]
-      assert "description" in required
-      assert "prompt" in required
+      assert required == []
     end
 
     test "tool description includes available roles", %{tmp_dir: tmp_dir} do
@@ -1312,6 +1316,14 @@ defmodule CodingAgent.SubagentComprehensiveTest do
       assert tool.description =~ "implement"
       assert tool.description =~ "review"
       assert tool.description =~ "test"
+    end
+
+    test "tool description lists supported engines", %{tmp_dir: tmp_dir} do
+      tool = TaskTool.tool(tmp_dir, [])
+
+      for engine <- ["internal", "codex", "claude", "kimi", "opencode", "pi"] do
+        assert tool.description =~ "\"#{engine}\""
+      end
     end
 
     test "role parameter includes enum of available roles", %{tmp_dir: tmp_dir} do

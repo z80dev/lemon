@@ -1,5 +1,6 @@
 defmodule LemonGatewayTest do
   use ExUnit.Case
+  import ExUnit.CaptureLog
 
   alias LemonGateway.Event.Completed
   alias LemonGateway.Types.{ChatScope, Job}
@@ -306,6 +307,56 @@ defmodule LemonGatewayTest do
     end
   end
 
+  defmodule PollingFailureTelegramAPI do
+    @moduledoc false
+
+    def child_spec(opts) do
+      %{
+        id: __MODULE__,
+        start: {__MODULE__, :start_link, [opts]},
+        type: :worker,
+        restart: :temporary,
+        shutdown: 500
+      }
+    end
+
+    def start_link(opts \\ []) do
+      Agent.start_link(
+        fn ->
+          %{
+            responses: Keyword.get(opts, :responses, []),
+            notify_pid: Keyword.get(opts, :notify_pid)
+          }
+        end,
+        name: __MODULE__
+      )
+    end
+
+    def get_updates(_token, _offset, _timeout_ms) do
+      {response, notify_pid} =
+        Agent.get_and_update(__MODULE__, fn state ->
+          case state.responses do
+            [head | rest] ->
+              {head, %{state | responses: rest}}
+
+            [] ->
+              {{:ok, %{"ok" => true, "result" => []}}, state}
+          end
+          |> then(fn {resp, new_state} -> {{resp, new_state.notify_pid}, new_state} end)
+        end)
+
+      if is_pid(notify_pid) do
+        send(notify_pid, {:poll_response, response})
+      end
+
+      response
+    end
+
+    def send_message(_token, _chat_id, _text, _reply_to_or_opts \\ nil, _parse_mode \\ nil) do
+      {:ok, %{"ok" => true, "result" => %{"message_id" => 123}}}
+    end
+  end
+
   setup do
     _ = Application.stop(:lemon_gateway)
 
@@ -545,6 +596,120 @@ defmodule LemonGatewayTest do
     assert_receive {:api_send_message, 1, "Running…", 2, t_send}, 1_000
 
     assert t_send - t2 >= 50
+  end
+
+  test "telegram allowed_chat_ids accepts string and integer values" do
+    updates = [
+      %{
+        "update_id" => 10,
+        "message" => %{
+          "text" => "allowed-one",
+          "chat" => %{"id" => 1},
+          "message_id" => 101
+        }
+      },
+      %{
+        "update_id" => 11,
+        "message" => %{
+          "text" => "allowed-two",
+          "chat" => %{"id" => 2},
+          "message_id" => 102
+        }
+      },
+      %{
+        "update_id" => 12,
+        "message" => %{
+          "text" => "blocked",
+          "chat" => %{"id" => 3},
+          "message_id" => 103
+        }
+      }
+    ]
+
+    {:ok, _} = start_supervised({TestTelegramAPI, [updates_queue: [updates], notify_pid: self()]})
+
+    Application.put_env(:lemon_gateway, :telegram, %{
+      bot_token: "token",
+      api_mod: TestTelegramAPI,
+      poll_interval_ms: 20,
+      debounce_ms: 0,
+      allowed_chat_ids: ["1", 2]
+    })
+
+    {:ok, _} = start_supervised({LemonGateway.Telegram.Transport, [force: true]})
+
+    assert_receive {:api_get_updates, ^updates, _t1}, 500
+    assert_receive {:api_send_message, 1, "Running…", 101, _t_send_1}, 1_000
+    assert_receive {:api_send_message, 2, "Running…", 102, _t_send_2}, 1_000
+    refute_receive {:api_send_message, 3, "Running…", 103, _t_send_3}, 300
+  end
+
+  test "telegram poll failure logging is throttled for repeated errors" do
+    responses = [
+      {:error, :econnrefused},
+      {:error, :econnrefused},
+      {:error, :econnrefused}
+    ]
+
+    log =
+      capture_log(fn ->
+        {:ok, _} =
+          start_supervised(
+            {PollingFailureTelegramAPI, [responses: responses, notify_pid: self()]}
+          )
+
+        Application.put_env(:lemon_gateway, :telegram, %{
+          bot_token: "token",
+          api_mod: PollingFailureTelegramAPI,
+          poll_interval_ms: 20,
+          debounce_ms: 0
+        })
+
+        {:ok, _} = start_supervised({LemonGateway.Telegram.Transport, [force: true]})
+
+        assert_receive {:poll_response, {:error, :econnrefused}}, 500
+        assert_receive {:poll_response, {:error, :econnrefused}}, 500
+        assert_receive {:poll_response, {:error, :econnrefused}}, 500
+      end)
+
+    assert length(Regex.scan(~r/Telegram getUpdates failed: :econnrefused/, log)) == 1
+  end
+
+  test "telegram poll logging includes non-ok responses and throttles duplicates" do
+    non_ok = {:ok, %{"ok" => false, "error_code" => 429, "description" => "Too Many Requests"}}
+    responses = [non_ok, non_ok]
+
+    log =
+      capture_log(fn ->
+        {:ok, _} =
+          start_supervised(
+            {PollingFailureTelegramAPI, [responses: responses, notify_pid: self()]}
+          )
+
+        Application.put_env(:lemon_gateway, :telegram, %{
+          bot_token: "token",
+          api_mod: PollingFailureTelegramAPI,
+          poll_interval_ms: 20,
+          debounce_ms: 0
+        })
+
+        {:ok, _} = start_supervised({LemonGateway.Telegram.Transport, [force: true]})
+
+        assert_receive {:poll_response, ^non_ok}, 500
+        assert_receive {:poll_response, ^non_ok}, 500
+      end)
+
+    assert String.contains?(
+             log,
+             "Telegram getUpdates returned ok=false (error_code=429): Too Many Requests"
+           )
+
+    assert length(
+             Regex.scan(
+               ~r/Telegram getUpdates returned ok=false \(error_code=429\): Too Many Requests/,
+               log
+             )
+           ) == 1
   end
 
   test "telegram outbox edits progress message for final result" do

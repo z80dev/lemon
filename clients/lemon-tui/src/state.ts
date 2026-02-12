@@ -376,6 +376,15 @@ export class StateStore {
     return sessionId || this.state.activeSessionId;
   }
 
+  private resolveRunningSessionModel(
+    model?: { provider: string; id: string } | null
+  ): { provider: string; id: string } {
+    return {
+      provider: model?.provider?.trim() || 'unknown',
+      id: model?.id?.trim() || 'unknown',
+    };
+  }
+
   getState(): AppState {
     return this.state;
   }
@@ -553,7 +562,25 @@ export class StateStore {
       cwd: s.cwd,
       isStreaming: s.is_streaming,
     }));
-    this.setState({ runningSessions });
+
+    // Track unknown sessions so session switch/home views can render immediately.
+    const allSessions = new Map(this.state.sessions);
+    for (const session of sessions) {
+      if (allSessions.has(session.session_id)) {
+        continue;
+      }
+
+      allSessions.set(session.session_id, {
+        ...this.createSessionState(
+          session.session_id,
+          session.cwd || this.state.cwd || process.cwd(),
+          this.resolveRunningSessionModel(session.model)
+        ),
+        isStreaming: session.is_streaming,
+      });
+    }
+
+    this.setState({ runningSessions, sessions: allSessions });
   }
 
   /**
@@ -1341,12 +1368,13 @@ export class StateStore {
    * Full reset - clears all state including sessions.
    */
   reset(): void {
+    const prevState = this.state;
     this.state = this.createInitialState();
     this.messageIdCounter = 0;
     // Notify listeners of reset
     for (const listener of this.listeners) {
       try {
-        listener(this.state, this.state);
+        listener(this.state, prevState);
       } catch (err) {
         console.error('State listener error:', err);
       }

@@ -39,6 +39,7 @@ defmodule CodingAgent.Session do
   # events, and (b) queue immediate follow-ups/steering before the agent loop reaches
   # its end-of-run checks (avoids a race in very fast mock runs).
   @prompt_defer_ms 10
+  @reset_abort_wait_ms 5_000
 
   alias AgentCore.Types.AgentTool
   alias CodingAgent.Config
@@ -903,7 +904,36 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call(:reset, _from, state) do
+    was_streaming = state.is_streaming
+    had_pending_prompt = not is_nil(state.pending_prompt_timer_ref)
     state = cancel_pending_prompt(state)
+
+    state =
+      if was_streaming do
+        # Explicitly publish cancellation semantics for subscribers when reset
+        # interrupts an active prompt/run.
+        broadcast_event(state, {:canceled, :reset})
+        complete_event_streams(state, {:canceled, :reset})
+
+        if not had_pending_prompt do
+          AgentCore.Agent.abort(state.agent)
+
+          case AgentCore.Agent.wait_for_idle(state.agent, timeout: @reset_abort_wait_ms) do
+            :ok ->
+              :ok
+
+            {:error, :timeout} ->
+              Logger.warning("Timed out waiting for agent abort during reset")
+          end
+
+          # Prevent stale events from the aborted run from mutating the new session.
+          flush_queued_agent_events()
+        end
+
+        %{state | is_streaming: false, event_streams: %{}, steering_queue: :queue.new()}
+      else
+        state
+      end
 
     # Reset agent
     :ok = AgentCore.Agent.reset(state.agent)
@@ -1654,13 +1684,28 @@ defmodule CodingAgent.Session do
   end
 
   @spec complete_event_streams(t(), term()) :: :ok
-  defp complete_event_streams(state, _final_event) do
-    # Note: The final event was already pushed via broadcast_event before this is called.
-    # We just need to complete the streams to signal they're done.
+  defp complete_event_streams(state, final_event) do
+    # Align EventStream terminal semantics with the terminal lifecycle event.
     Enum.each(state.event_streams, fn {mon_ref, %{stream: stream}} ->
-      # Complete the stream (this pushes {:agent_end, []} as the terminal event)
-      AgentCore.EventStream.complete(stream, [])
-      # Demonitor since we're completing normally
+      case final_event do
+        {:agent_end, messages} when is_list(messages) ->
+          AgentCore.EventStream.complete(stream, messages)
+
+        {:error, reason, partial_state} ->
+          AgentCore.EventStream.error(stream, reason, partial_state)
+
+        {:canceled, reason} ->
+          AgentCore.EventStream.push_async(stream, {:canceled, reason})
+          AgentCore.EventStream.complete(stream, [])
+
+        {:turn_end, %Ai.Types.AssistantMessage{stop_reason: :aborted}, _tool_results} ->
+          AgentCore.EventStream.push_async(stream, {:canceled, :assistant_aborted})
+          AgentCore.EventStream.complete(stream, [])
+
+        _ ->
+          AgentCore.EventStream.complete(stream, [])
+      end
+
       Process.demonitor(mon_ref, [:flush])
     end)
 
@@ -1708,6 +1753,16 @@ defmodule CodingAgent.Session do
   defp cancel_pending_prompt(%__MODULE__{pending_prompt_timer_ref: timer_ref} = state) do
     _ = Process.cancel_timer(timer_ref)
     %{state | pending_prompt_timer_ref: nil, is_streaming: false}
+  end
+
+  defp flush_queued_agent_events do
+    receive do
+      {:agent_event, _event} ->
+        flush_queued_agent_events()
+    after
+      0 ->
+        :ok
+    end
   end
 
   @spec serialize_message(map()) :: map()

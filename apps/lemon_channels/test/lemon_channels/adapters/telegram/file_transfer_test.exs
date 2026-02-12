@@ -62,8 +62,16 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
     on_exit(fn ->
       if pid = Process.whereis(LemonChannels.Adapters.Telegram.Transport) do
+        Process.unlink(pid)
+
         if Process.alive?(pid) do
-          GenServer.stop(pid, :normal)
+          try do
+            GenServer.stop(pid, :normal)
+          rescue
+            ArgumentError -> :ok
+          catch
+            :exit, _ -> :ok
+          end
         end
       end
 

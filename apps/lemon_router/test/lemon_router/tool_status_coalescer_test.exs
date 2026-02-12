@@ -160,12 +160,10 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
 
     assert :ok = ToolStatusCoalescer.finalize_run(session_key, channel_id, run_id, true)
 
-    # finalize_run is a cast; give the coalescer a moment to process.
-    :timer.sleep(20)
-
-    state2 = :sys.get_state(pid)
-    assert state2.actions["a1"].phase == :completed
-    assert state2.actions["a1"].ok == true
+    assert eventually(fn ->
+             state2 = :sys.get_state(pid)
+             state2.actions["a1"].phase == :completed and state2.actions["a1"].ok == true
+           end)
   end
 
   test "telegram status uses LemonGateway.Telegram.Outbox (create then edit), preserving thread_id" do
@@ -226,5 +224,23 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
     assert :ok = ToolStatusCoalescer.flush(session_key, channel_id)
 
     assert_receive {:outbox_api_call, {:edit, 12_345, 1001, _text, nil}}, 500
+  end
+
+  defp eventually(fun, timeout_ms \\ 500) when is_function(fun, 0) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_eventually(fun, deadline)
+  end
+
+  defp do_eventually(fun, deadline) do
+    if fun.() do
+      true
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        false
+      else
+        Process.sleep(10)
+        do_eventually(fun, deadline)
+      end
+    end
   end
 end

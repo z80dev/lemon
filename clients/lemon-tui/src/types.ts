@@ -89,6 +89,10 @@ export interface RunningSessionInfo {
   session_id: string;
   cwd: string;
   is_streaming: boolean;
+  model?: {
+    provider: string;
+    id: string;
+  } | null;
 }
 
 /** Running sessions list response */

@@ -16,6 +16,9 @@ defmodule LemonRouter.RunProcess do
 
   alias LemonCore.Bus
 
+  @gateway_submit_retry_base_ms 100
+  @gateway_submit_retry_max_ms 2_000
+
   def start_link(opts) do
     run_id = opts[:run_id]
     GenServer.start_link(__MODULE__, opts, name: via_tuple(run_id))
@@ -58,6 +61,7 @@ defmodule LemonRouter.RunProcess do
     run_id = opts[:run_id]
     session_key = opts[:session_key]
     job = opts[:job]
+    gateway_scheduler = opts[:gateway_scheduler] || LemonGateway.Scheduler
 
     # For tests and partial-boot scenarios, allow skipping gateway submission.
     submit_to_gateway? =
@@ -78,7 +82,10 @@ defmodule LemonRouter.RunProcess do
       completed: false,
       saw_delta: false,
       session_registered?: false,
-      submit_to_gateway?: submit_to_gateway?
+      submit_to_gateway?: submit_to_gateway?,
+      gateway_scheduler: gateway_scheduler,
+      gateway_submit_attempt: 0,
+      gateway_submitted?: false
     }
 
     # Submit to gateway
@@ -91,17 +98,25 @@ defmodule LemonRouter.RunProcess do
 
   @impl true
   def handle_info(:submit_to_gateway, state) do
-    # Submit job to gateway scheduler.
-    #
-    # In umbrella `mix test`, other suites may stop/start gateway. Avoid crashing
-    # if the scheduler isn't running; the RunProcess can still process bus events.
-    if is_pid(Process.whereis(LemonGateway.Scheduler)) do
-      LemonGateway.Scheduler.submit(state.job)
-    else
-      Logger.debug("Gateway scheduler not running; skipping submit for run_id=#{inspect(state.run_id)}")
-    end
+    cond do
+      state.gateway_submitted? or state.aborted or state.completed ->
+        {:noreply, state}
 
-    {:noreply, state}
+      scheduler_available?(state.gateway_scheduler) ->
+        state.gateway_scheduler.submit(state.job)
+        {:noreply, %{state | gateway_submitted?: true, gateway_submit_attempt: 0}}
+
+      true ->
+        delay_ms = gateway_submit_retry_delay_ms(state.gateway_submit_attempt)
+        Process.send_after(self(), :submit_to_gateway, delay_ms)
+
+        Logger.warning(
+          "Gateway scheduler unavailable; retrying submit for run_id=#{inspect(state.run_id)} " <>
+            "in #{delay_ms}ms (attempt=#{state.gateway_submit_attempt + 1})"
+        )
+
+        {:noreply, %{state | gateway_submit_attempt: state.gateway_submit_attempt + 1}}
+    end
   end
 
   # Handle run events from Bus
@@ -487,5 +502,18 @@ defmodule LemonRouter.RunProcess do
   # Unsubscribe control-plane EventBridge from run events
   defp unsubscribe_event_bridge(run_id) do
     LemonCore.EventBridge.unsubscribe_run(run_id)
+  end
+
+  defp scheduler_available?(scheduler) do
+    case GenServer.whereis(scheduler) do
+      pid when is_pid(pid) -> true
+      _ -> false
+    end
+  end
+
+  defp gateway_submit_retry_delay_ms(attempt) when is_integer(attempt) and attempt >= 0 do
+    exponential = @gateway_submit_retry_base_ms * :math.pow(2, attempt)
+    delay_ms = round(exponential)
+    min(delay_ms, @gateway_submit_retry_max_ms)
   end
 end

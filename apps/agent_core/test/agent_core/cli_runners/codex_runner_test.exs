@@ -1,5 +1,5 @@
 defmodule AgentCore.CliRunners.CodexRunnerTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias AgentCore.CliRunners.CodexRunner
   alias AgentCore.CliRunners.CodexRunner.RunnerState
@@ -54,8 +54,17 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
       System.delete_env("LEMON_CODEX_AUTO_APPROVE")
 
       on_exit(fn ->
-        if prev_env, do: System.put_env("LEMON_CODEX_EXTRA_ARGS", prev_env)
-        if prev_auto, do: System.put_env("LEMON_CODEX_AUTO_APPROVE", prev_auto)
+        if prev_env do
+          System.put_env("LEMON_CODEX_EXTRA_ARGS", prev_env)
+        else
+          System.delete_env("LEMON_CODEX_EXTRA_ARGS")
+        end
+
+        if prev_auto do
+          System.put_env("LEMON_CODEX_AUTO_APPROVE", prev_auto)
+        else
+          System.delete_env("LEMON_CODEX_AUTO_APPROVE")
+        end
       end)
 
       :ok

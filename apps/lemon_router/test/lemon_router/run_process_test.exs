@@ -43,6 +43,29 @@ defmodule LemonRouter.RunProcessTest do
     end
   end
 
+  defmodule TestScheduler do
+    @moduledoc false
+    use GenServer
+
+    def start_link(opts) do
+      notify_pid = opts[:notify_pid]
+      GenServer.start_link(__MODULE__, %{notify_pid: notify_pid}, name: __MODULE__)
+    end
+
+    def submit(%LemonGateway.Types.Job{} = job) do
+      GenServer.cast(__MODULE__, {:submit, job})
+    end
+
+    @impl true
+    def init(state), do: {:ok, state}
+
+    @impl true
+    def handle_cast({:submit, job}, state) do
+      if is_pid(state.notify_pid), do: send(state.notify_pid, {:test_scheduler_submit, job})
+      {:noreply, state}
+    end
+  end
+
   setup do
     # Ensure PubSub is running for LemonCore.Bus.
     if is_nil(Process.whereis(LemonCore.PubSub)) do
@@ -106,11 +129,12 @@ defmodule LemonRouter.RunProcessTest do
       session_key = SessionKey.main("test-agent")
       job = make_test_job(run_id)
 
-      result = RunProcess.start_link(%{
-        run_id: run_id,
-        session_key: session_key,
-        job: job
-      })
+      result =
+        RunProcess.start_link(%{
+          run_id: run_id,
+          session_key: session_key,
+          job: job
+        })
 
       # Process should start successfully (even if it completes quickly)
       assert {:ok, pid} = result
@@ -176,6 +200,72 @@ defmodule LemonRouter.RunProcessTest do
     test "abort by non-existent run_id returns :ok" do
       # Abort on non-existent run should be safe
       assert :ok = RunProcess.abort("non-existent-run", :test_abort)
+    end
+  end
+
+  describe ":submit_to_gateway retry/backoff" do
+    test "retries until scheduler becomes available and submits the job once" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+      session_key = SessionKey.main("test-agent")
+      job = make_test_job(run_id)
+
+      assert Process.whereis(TestScheduler) == nil
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 gateway_scheduler: TestScheduler
+               })
+
+      assert eventually(fn ->
+               state = :sys.get_state(pid)
+               state.gateway_submit_attempt > 0
+             end)
+
+      refute_receive {:test_scheduler_submit, _job}, 20
+
+      {:ok, _scheduler_pid} = start_supervised({TestScheduler, [notify_pid: self()]})
+
+      assert_receive {:test_scheduler_submit, %LemonGateway.Types.Job{run_id: ^run_id}}, 1_500
+      refute_receive {:test_scheduler_submit, _job}, 300
+
+      GenServer.stop(pid)
+    end
+
+    test "does not submit after abort while waiting for scheduler" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+      session_key = SessionKey.main("test-agent")
+      job = make_test_job(run_id)
+
+      assert Process.whereis(TestScheduler) == nil
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 gateway_scheduler: TestScheduler
+               })
+
+      assert eventually(fn ->
+               state = :sys.get_state(pid)
+               state.gateway_submit_attempt > 0
+             end)
+
+      assert :ok = RunProcess.abort(pid, :test_abort)
+
+      assert eventually(fn ->
+               state = :sys.get_state(pid)
+               state.aborted == true
+             end)
+
+      {:ok, _scheduler_pid} = start_supervised({TestScheduler, [notify_pid: self()]})
+
+      refute_receive {:test_scheduler_submit, %LemonGateway.Types.Job{run_id: ^run_id}}, 400
+
+      GenServer.stop(pid)
     end
   end
 
@@ -256,13 +346,14 @@ defmodule LemonRouter.RunProcessTest do
     end
 
     test "channel_peer/1 generates correct format" do
-      key = SessionKey.channel_peer(%{
-        agent_id: "my-agent",
-        channel_id: "telegram",
-        account_id: "bot123",
-        peer_kind: :dm,
-        peer_id: "user456"
-      })
+      key =
+        SessionKey.channel_peer(%{
+          agent_id: "my-agent",
+          channel_id: "telegram",
+          account_id: "bot123",
+          peer_kind: :dm,
+          peer_id: "user456"
+        })
 
       assert is_binary(key)
       assert String.contains?(key, "telegram")

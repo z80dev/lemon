@@ -319,19 +319,37 @@ defmodule CodingAgent.SessionManager do
   end
 
   @doc """
-  Write session to JSONL file.
+  Write session to JSONL file using atomic replace semantics.
   """
   @spec save_to_file(String.t(), Session.t()) :: :ok | {:error, term()}
   def save_to_file(path, %Session{} = session) do
-    # Ensure directory exists
     dir = Path.dirname(path)
-    File.mkdir_p!(dir)
 
     lines =
       [encode_header(session.header) | Enum.map(session.entries, &encode_entry/1)]
       |> Enum.join("\n")
 
-    File.write(path, lines <> "\n")
+    with :ok <- File.mkdir_p(dir) do
+      atomic_write(path, lines <> "\n")
+    end
+  end
+
+  defp atomic_write(path, content) do
+    temp_path = atomic_temp_path(path)
+
+    with :ok <- File.write(temp_path, content, [:write, :binary, :exclusive]),
+         :ok <- File.rename(temp_path, path) do
+      :ok
+    else
+      {:error, reason} ->
+        _ = File.rm(temp_path)
+        {:error, reason}
+    end
+  end
+
+  defp atomic_temp_path(path) do
+    suffix = :crypto.strong_rand_bytes(6) |> Base.encode16(case: :lower)
+    "#{path}.tmp.#{suffix}"
   end
 
   @doc """

@@ -16,6 +16,7 @@ defmodule CodingAgent.SessionTest do
   }
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
+  alias AgentCore.EventStream
 
   # ============================================================================
   # Test Mocks and Helpers
@@ -895,6 +896,48 @@ defmodule CodingAgent.SessionTest do
 
       assert :queue.len(state.steering_queue) == 0
       assert :queue.len(state.follow_up_queue) == 0
+    end
+
+    test "reset during active run aborts work and stream subscribers get canceled terminal" do
+      parent = self()
+
+      slow_stream_fn = fn model, context, options ->
+        send(parent, :stream_called)
+        Process.sleep(300)
+        mock_stream_fn_single(assistant_message("Slow response")).(model, context, options)
+      end
+
+      session = start_session(stream_fn: slow_stream_fn)
+      {:ok, stream} = Session.subscribe(session, mode: :stream)
+
+      stream_events_task = Task.async(fn -> EventStream.events(stream) |> Enum.to_list() end)
+
+      :ok = Session.prompt(session, "Hello")
+      assert_receive :stream_called, 500
+
+      :ok = Session.reset(session)
+
+      state_after_reset = Session.get_state(session)
+      assert state_after_reset.is_streaming == false
+      assert Session.get_messages(session) == []
+
+      # Ensure aborted run events do not repopulate the reset session.
+      Process.sleep(200)
+      assert Session.get_messages(session) == []
+
+      events = Task.await(stream_events_task, 2_000)
+
+      assert Enum.any?(events, fn
+               {:session_event, _, {:canceled, :reset}} -> true
+               _ -> false
+             end)
+
+      assert List.last(events) == {:canceled, :reset}
+
+      refute Enum.any?(events, fn
+               {:agent_end, _} -> true
+               _ -> false
+             end)
     end
 
     @tag :tmp_dir

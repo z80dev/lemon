@@ -19,6 +19,7 @@ defmodule LemonGateway.Telegram.Transport do
   @default_poll_interval 1_000
   @default_dedupe_ttl 600_000
   @default_debounce_ms 1_000
+  @poll_error_log_throttle_ms 60_000
 
   def start_link(opts) do
     # Legacy transport is intentionally disabled. Telegram polling is owned by
@@ -96,7 +97,10 @@ defmodule LemonGateway.Telegram.Transport do
           poll_interval_ms: config[:poll_interval_ms] || @default_poll_interval,
           dedupe_ttl_ms: config[:dedupe_ttl_ms] || @default_dedupe_ttl,
           debounce_ms: config[:debounce_ms] || @default_debounce_ms,
-          allowed_chat_ids: Map.get(config, :allowed_chat_ids, nil),
+          allowed_chat_ids:
+            parse_allowed_chat_ids(
+              Map.get(config, :allowed_chat_ids) || Map.get(config, "allowed_chat_ids")
+            ),
           allow_queue_override: Map.get(config, :allow_queue_override, false),
           account_id: account_id,
           # If configured to drop pending updates on boot, start from 0 so we can
@@ -110,7 +114,9 @@ defmodule LemonGateway.Telegram.Transport do
           # run_id => %{scope, session_key, message_id, peer_kind}
           pending_new: %{},
           bot_id: bot_id,
-          bot_username: bot_username
+          bot_username: bot_username,
+          last_poll_error: nil,
+          last_poll_error_log_ts: nil
         }
 
         maybe_subscribe_exec_approvals()
@@ -248,7 +254,7 @@ defmodule LemonGateway.Telegram.Transport do
   defp poll_updates(state) do
     _ = PollerLock.heartbeat(state.account_id, state.token)
 
-    case state.api_mod.get_updates(state.token, state.offset, state.poll_interval_ms) do
+    case safe_get_updates(state) do
       {:ok, %{"ok" => true, "result" => updates}} ->
         if state.drop_pending_updates? and not state.drop_pending_done? do
           if updates == [] do
@@ -267,8 +273,86 @@ defmodule LemonGateway.Telegram.Transport do
           %{state | offset: new_offset}
         end
 
-      _ ->
-        state
+      {:ok, %{"ok" => false} = response} ->
+        maybe_log_poll_error(state, {:non_ok_response, response})
+
+      {:error, reason} ->
+        maybe_log_poll_error(state, reason)
+
+      other ->
+        maybe_log_poll_error(state, {:unexpected_response, other})
+    end
+  end
+
+  defp maybe_log_poll_error(state, reason) do
+    now = System.monotonic_time(:millisecond)
+    last_ts = state.last_poll_error_log_ts
+    last_reason = state.last_poll_error
+
+    should_log? =
+      cond do
+        is_nil(last_ts) ->
+          true
+
+        now - last_ts > @poll_error_log_throttle_ms ->
+          true
+
+        last_reason != reason ->
+          true
+
+        true ->
+          false
+      end
+
+    if should_log? do
+      Logger.warning(format_poll_error(reason))
+    end
+
+    %{state | last_poll_error: reason, last_poll_error_log_ts: now}
+  rescue
+    _ -> state
+  end
+
+  defp format_poll_error({:http_error, 409, body}) do
+    body_s = body |> to_string() |> String.slice(0, 200)
+
+    "Telegram getUpdates returned HTTP 409 Conflict (#{body_s}). " <>
+      "This usually means a webhook is set for the bot, which conflicts with polling. " <>
+      "Fix: call Telegram Bot API deleteWebhook (optionally with drop_pending_updates=true), " <>
+      "then restart the gateway."
+  end
+
+  defp format_poll_error({:non_ok_response, %{"error_code" => code, "description" => desc}})
+       when is_integer(code) and is_binary(desc) do
+    "Telegram getUpdates returned ok=false (error_code=#{code}): #{desc}"
+  end
+
+  defp format_poll_error({:non_ok_response, response}) do
+    "Telegram getUpdates returned ok=false: " <>
+      inspect(response, limit: 10, printable_limit: 500)
+  end
+
+  defp format_poll_error({:unexpected_response, response}) do
+    "Telegram getUpdates returned unexpected response: " <>
+      inspect(response, limit: 10, printable_limit: 500)
+  end
+
+  defp format_poll_error(reason) do
+    "Telegram getUpdates failed: #{inspect(reason, limit: 10, printable_limit: 500)}"
+  end
+
+  defp safe_get_updates(state) do
+    try do
+      state.api_mod.get_updates(state.token, state.offset, state.poll_interval_ms)
+    rescue
+      e ->
+        {:error, {:exception, e}}
+    catch
+      :exit, reason ->
+        {:error, {:exit, reason}}
+
+      kind, reason ->
+        {:error, {kind, reason}}
     end
   end
 
@@ -621,7 +705,21 @@ defmodule LemonGateway.Telegram.Transport do
   end
 
   defp allowed_chat?(nil, _chat_id), do: true
-  defp allowed_chat?(list, chat_id) when is_list(list), do: chat_id in list
+  defp allowed_chat?(list, chat_id) when is_list(list), do: parse_int(chat_id) in list
+
+  defp parse_allowed_chat_ids(nil), do: nil
+
+  defp parse_allowed_chat_ids(list) when is_list(list) do
+    parsed =
+      list
+      |> Enum.map(&parse_int/1)
+      |> Enum.filter(&is_integer/1)
+      |> Enum.uniq()
+
+    if parsed == [], do: [], else: parsed
+  end
+
+  defp parse_allowed_chat_ids(_), do: nil
 
   defp peer_kind(%{"type" => "private"}), do: :dm
   defp peer_kind(%{"type" => "group"}), do: :group

@@ -23,6 +23,9 @@ defmodule LemonRouter.StreamCoalescer do
   @default_min_chars 48
   @default_idle_ms 400
   @default_max_latency_ms 1200
+  @pending_resume_cleanup_base_ms 2_000
+  @pending_resume_cleanup_max_attempts 4
+  @pending_resume_cleanup_max_backoff_ms 30_000
 
   defstruct [
     :session_key,
@@ -287,6 +290,22 @@ defmodule LemonRouter.StreamCoalescer do
     {:noreply, state}
   end
 
+  def handle_info({:pending_resume_cleanup_timeout, ref, attempt}, state)
+      when is_reference(ref) and is_integer(attempt) and attempt > 0 do
+    pending = state.pending_resume_indices || %{}
+
+    state =
+      case Map.get(pending, ref) do
+        %{kind: :final_send} = entry ->
+          maybe_cleanup_pending_resume_index(state, ref, entry, attempt)
+
+        _ ->
+          state
+      end
+
+    {:noreply, state}
+  end
+
   def handle_info(_msg, state) do
     {:noreply, state}
   end
@@ -370,7 +389,13 @@ defmodule LemonRouter.StreamCoalescer do
 
             if is_integer(chat_id) and is_pid(Process.whereis(LemonGateway.Telegram.Outbox)) do
               key = {chat_id, msg_id, :edit}
-              LemonGateway.Telegram.Outbox.enqueue(key, 0, {:edit, chat_id, msg_id, %{text: text}})
+
+              LemonGateway.Telegram.Outbox.enqueue(
+                key,
+                0,
+                {:edit, chat_id, msg_id, %{text: text}}
+              )
+
               %{state | last_sent_text: text}
             else
               state
@@ -446,7 +471,8 @@ defmodule LemonRouter.StreamCoalescer do
           end
 
         # By default keep Telegram output clean; enable the footer in config if desired.
-        text = if telegram_show_resume_line?(), do: maybe_append_resume_line(text, resume), else: text
+        text =
+          if telegram_show_resume_line?(), do: maybe_append_resume_line(text, resume), else: text
 
         progress_msg_id = (state.meta || %{})[:progress_msg_id]
         reply_to = (state.meta || %{})[:user_msg_id]
@@ -477,6 +503,8 @@ defmodule LemonRouter.StreamCoalescer do
 
                 pending =
                   if resume_token_like?(resume) do
+                    normalized_resume = normalize_resume_token(resume)
+
                     # If finalize is called more than once for the same chat/thread, keep only the latest pending index.
                     pending =
                       pending
@@ -491,13 +519,18 @@ defmodule LemonRouter.StreamCoalescer do
                       end)
                       |> Map.new()
 
-                    Map.put(pending, notify_ref, %{
-                      kind: :final_send,
-                      account_id: account_id,
-                      chat_id: chat_id,
-                      thread_id: thread_id,
-                      resume: normalize_resume_token(resume)
-                    })
+                    pending =
+                      Map.put(pending, notify_ref, %{
+                        kind: :final_send,
+                        account_id: account_id,
+                        chat_id: chat_id,
+                        thread_id: thread_id,
+                        resume: normalized_resume,
+                        inserted_at_ms: System.system_time(:millisecond)
+                      })
+
+                    _ = schedule_pending_resume_cleanup(notify_ref, 1)
+                    pending
                   else
                     pending
                   end
@@ -614,7 +647,10 @@ defmodule LemonRouter.StreamCoalescer do
        do: true
 
   defp resume_token_like?(%{engine: e, value: v}) when is_binary(e) and is_binary(v), do: true
-  defp resume_token_like?(%{"engine" => e, "value" => v}) when is_binary(e) and is_binary(v), do: true
+
+  defp resume_token_like?(%{"engine" => e, "value" => v}) when is_binary(e) and is_binary(v),
+    do: true
+
   defp resume_token_like?(_), do: false
 
   defp maybe_append_resume_line(text, nil), do: text
@@ -703,6 +739,56 @@ defmodule LemonRouter.StreamCoalescer do
     end
   rescue
     _ -> :ok
+  end
+
+  defp maybe_cleanup_pending_resume_index(state, ref, entry, attempt) do
+    pending = state.pending_resume_indices || %{}
+
+    if attempt < @pending_resume_cleanup_max_attempts do
+      next_attempt = attempt + 1
+      next_delay_ms = pending_resume_cleanup_delay_ms(next_attempt)
+
+      Logger.warning(
+        "Timed out waiting for :outbox_delivered for pending resume index " <>
+          "(chat_id=#{inspect(Map.get(entry, :chat_id))} thread_id=#{inspect(Map.get(entry, :thread_id))} " <>
+          "attempt=#{attempt}/#{@pending_resume_cleanup_max_attempts}); " <>
+          "retrying cleanup in #{next_delay_ms}ms"
+      )
+
+      _ = schedule_pending_resume_cleanup(ref, next_attempt)
+      state
+    else
+      Logger.warning(
+        "Cleaning stale pending resume index after missing :outbox_delivered " <>
+          "(chat_id=#{inspect(Map.get(entry, :chat_id))} thread_id=#{inspect(Map.get(entry, :thread_id))} " <>
+          "attempt=#{attempt}/#{@pending_resume_cleanup_max_attempts} " <>
+          "age_ms=#{pending_entry_age_ms(entry)})"
+      )
+
+      %{state | pending_resume_indices: Map.delete(pending, ref)}
+    end
+  end
+
+  defp schedule_pending_resume_cleanup(ref, attempt)
+       when is_reference(ref) and is_integer(attempt) and attempt > 0 do
+    Process.send_after(
+      self(),
+      {:pending_resume_cleanup_timeout, ref, attempt},
+      pending_resume_cleanup_delay_ms(attempt)
+    )
+
+    :ok
+  end
+
+  defp pending_resume_cleanup_delay_ms(attempt) when is_integer(attempt) and attempt > 0 do
+    delay_ms = trunc(@pending_resume_cleanup_base_ms * :math.pow(2, attempt - 1))
+    min(delay_ms, @pending_resume_cleanup_max_backoff_ms)
+  end
+
+  defp pending_entry_age_ms(entry) when is_map(entry) do
+    now = System.system_time(:millisecond)
+    inserted_at_ms = Map.get(entry, :inserted_at_ms, now)
+    max(now - inserted_at_ms, 0)
   end
 
   # Determine output kind and content based on channel capabilities
