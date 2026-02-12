@@ -327,7 +327,7 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
     end
 
     @tag :tmp_dir
-    test "model can call glob tool to find files", %{tmp_dir: tmp_dir} do
+    test "model can call find tool to locate files", %{tmp_dir: tmp_dir} do
       case skip_unless_configured() do
         :skip ->
           assert true
@@ -341,7 +341,7 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
           session = start_session(cwd: tmp_dir)
 
           prompt = """
-          Find all .ex files in the current directory using the glob tool.
+          Find all .ex files in the current directory using the find tool.
           List their names.
           """
 
@@ -350,7 +350,7 @@ defmodule CodingAgent.AgentLoopIntegrationTest do
           case wait_for_response(session, 60_000) do
             {:ok, msg, events} ->
               text = String.downcase(get_text(msg))
-              # Should either mention the .ex files or have tool events showing glob was used
+              # Should either mention the .ex files or have tool events showing find was used
               has_file_names = text =~ "file1" or text =~ "file2" or text =~ ".ex"
 
               tool_events =

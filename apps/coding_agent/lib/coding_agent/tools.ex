@@ -3,7 +3,7 @@ defmodule CodingAgent.Tools do
   Tool registry and factory functions for coding agent tools.
 
   Provides pre-configured tool sets for different use cases:
-  - `coding_tools/2` - Full access tools (read, write, edit, multiedit, patch, bash, grep, find, glob, ls, webfetch, websearch, todoread, todowrite, task)
+  - `coding_tools/2` - Full access tools (read, write, edit, patch, bash, grep, find, ls, webfetch, websearch, todo, task, extensions_status)
   - `read_only_tools/2` - Exploration tools (read only)
   - `all_tools/2` - All available tools as a map
   """
@@ -12,24 +12,21 @@ defmodule CodingAgent.Tools do
     Read,
     Write,
     Edit,
-    MultiEdit,
     Patch,
     Bash,
     Grep,
     Find,
-    Glob,
     Ls,
     WebFetch,
     WebSearch,
-    TodoRead,
-    TodoWrite,
+    Todo,
     Truncate,
-    Restart,
-    Task
+    Task,
+    ExtensionsStatus
   }
 
   @doc """
-  Get the default coding tools (read, write, edit, multiedit, patch, bash, grep, find, glob, ls, webfetch, websearch, todoread, todowrite, task).
+  Get the default coding tools (read, write, edit, patch, bash, grep, find, ls, webfetch, websearch, todo, task, extensions_status).
 
   ## Options
   - Any options are passed through to individual tools
@@ -40,19 +37,16 @@ defmodule CodingAgent.Tools do
       Read.tool(cwd, opts),
       Write.tool(cwd, opts),
       Edit.tool(cwd, opts),
-      MultiEdit.tool(cwd, opts),
       Patch.tool(cwd, opts),
       Bash.tool(cwd, opts),
       Grep.tool(cwd, opts),
       Find.tool(cwd, opts),
-      Glob.tool(cwd, opts),
       Ls.tool(cwd, opts),
       WebFetch.tool(cwd, opts),
       WebSearch.tool(cwd, opts),
-      TodoRead.tool(cwd, opts),
-      TodoWrite.tool(cwd, opts),
-      Restart.tool(cwd, opts),
-      Task.tool(cwd, opts)
+      Todo.tool(cwd, opts),
+      Task.tool(cwd, opts),
+      ExtensionsStatus.tool(cwd, opts)
     ]
   end
 
@@ -78,20 +72,17 @@ defmodule CodingAgent.Tools do
       "read" => Read.tool(cwd, opts),
       "write" => Write.tool(cwd, opts),
       "edit" => Edit.tool(cwd, opts),
-      "multiedit" => MultiEdit.tool(cwd, opts),
       "patch" => Patch.tool(cwd, opts),
       "bash" => Bash.tool(cwd, opts),
       "grep" => Grep.tool(cwd, opts),
       "find" => Find.tool(cwd, opts),
-      "glob" => Glob.tool(cwd, opts),
       "ls" => Ls.tool(cwd, opts),
       "webfetch" => WebFetch.tool(cwd, opts),
       "websearch" => WebSearch.tool(cwd, opts),
-      "todoread" => TodoRead.tool(cwd, opts),
-      "todowrite" => TodoWrite.tool(cwd, opts),
+      "todo" => Todo.tool(cwd, opts),
       "truncate" => Truncate.tool(opts),
-      "restart" => Restart.tool(cwd, opts),
-      "task" => Task.tool(cwd, opts)
+      "task" => Task.tool(cwd, opts),
+      "extensions_status" => ExtensionsStatus.tool(cwd, opts)
     }
   end
 

@@ -123,9 +123,10 @@ defmodule CodingAgent.SystemPrompt do
     """
     ## Memory Workflow
     Before answering about prior decisions, preferences, people, dates, or todos, inspect memory files first.
-    - Use `read` to check `MEMORY.md` and relevant `memory/YYYY-MM-DD.md` files.
-    - Use `write` to create missing `memory/YYYY-MM-DD.md` files.
-    - Use `edit` to update `MEMORY.md` or daily memory files with durable facts.
+    - Use `read` to check `MEMORY.md`, relevant `memory/topics/*.md` files, and recent `memory/YYYY-MM-DD.md` files.
+    - Use `grep` with `path: "memory"` to quickly find relevant notes before opening files.
+    - Use `write` to create missing topic files (`memory/topics/<topic-slug>.md`) and daily files (`memory/YYYY-MM-DD.md`).
+    - Use `edit` to keep `MEMORY.md` concise as a durable index of key facts and topic files.
     - If confidence is still low after checking memory files, say so explicitly.
     """
     |> String.trim()

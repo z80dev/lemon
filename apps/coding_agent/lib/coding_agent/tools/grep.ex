@@ -116,7 +116,7 @@ defmodule CodingAgent.Tools.Grep do
       Map.get(params, "max_results", Keyword.get(opts, :max_results, @default_max_results))
 
     with :ok <- validate_pattern(pattern),
-         {:ok, resolved_path} <- resolve_path(path, cwd),
+         {:ok, resolved_path} <- resolve_path(path, cwd, opts),
          :ok <- check_path_access(resolved_path),
          :ok <- check_abort(signal) do
       search_opts = %{
@@ -201,14 +201,14 @@ defmodule CodingAgent.Tools.Grep do
   # Path Resolution
   # ============================================================================
 
-  defp resolve_path(nil, cwd), do: {:ok, cwd}
-  defp resolve_path("", cwd), do: {:ok, cwd}
+  defp resolve_path(nil, cwd, _opts), do: {:ok, cwd}
+  defp resolve_path("", cwd, _opts), do: {:ok, cwd}
 
-  defp resolve_path(path, cwd) do
+  defp resolve_path(path, cwd, opts) do
     expanded =
       path
       |> expand_home()
-      |> resolve_relative(cwd)
+      |> resolve_relative(cwd, opts)
 
     {:ok, expanded}
   end
@@ -219,12 +219,30 @@ defmodule CodingAgent.Tools.Grep do
 
   defp expand_home(path), do: path
 
-  defp resolve_relative(path, cwd) do
+  defp resolve_relative(path, cwd, opts) do
     if Path.type(path) == :absolute do
       path
     else
-      Path.join(cwd, path) |> Path.expand()
+      workspace_dir = Keyword.get(opts, :workspace_dir)
+
+      if prefer_workspace_for_path?(path, workspace_dir) do
+        Path.join(workspace_dir, path) |> Path.expand()
+      else
+        Path.join(cwd, path) |> Path.expand()
+      end
     end
+  end
+
+  defp prefer_workspace_for_path?(path, workspace_dir) do
+    is_binary(workspace_dir) and String.trim(workspace_dir) != "" and
+      not explicit_relative?(path) and
+      (path == "MEMORY.md" or path == "memory" or String.starts_with?(path, "memory/") or
+         String.starts_with?(path, "memory\\"))
+  end
+
+  defp explicit_relative?(path) when is_binary(path) do
+    String.starts_with?(path, "./") or String.starts_with?(path, "../") or
+      String.starts_with?(path, ".\\") or String.starts_with?(path, "..\\")
   end
 
   defp check_path_access(path) do

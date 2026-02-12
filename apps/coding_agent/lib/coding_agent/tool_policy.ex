@@ -9,6 +9,7 @@ defmodule CodingAgent.ToolPolicy do
 
   Predefined profiles:
   - `:full_access` - All tools allowed
+  - `:minimal_core` - Lean core toolset
   - `:read_only` - Only read/search tools
   - `:safe_mode` - No write/exec/bash tools
   - `:subagent_restricted` - Subagent can't run dangerous tools
@@ -36,17 +37,34 @@ defmodule CodingAgent.ToolPolicy do
 
   @type profile ::
           :full_access
+          | :minimal_core
           | :read_only
           | :safe_mode
           | :subagent_restricted
           | :no_external
           | :custom
 
-  @read_tools ["read", "grep", "find", "glob", "ls", "todoread"]
+  @read_tools ["read", "grep", "find", "ls"]
+
+  @minimal_core_tools [
+    "read",
+    "write",
+    "edit",
+    "patch",
+    "bash",
+    "grep",
+    "find",
+    "ls",
+    "webfetch",
+    "websearch",
+    "todo",
+    "task",
+    "extensions_status"
+  ]
 
   @external_tools ["webfetch", "websearch"]
 
-  @dangerous_tools ["write", "edit", "multiedit", "patch", "bash", "exec", "process"]
+  @dangerous_tools ["write", "edit", "patch", "bash", "exec", "process"]
 
   # ============================================================================
   # Profile Creation
@@ -58,6 +76,7 @@ defmodule CodingAgent.ToolPolicy do
   ## Profiles
 
   - `:full_access` - All tools allowed (default)
+  - `:minimal_core` - Core coding/web/task tools only
   - `:read_only` - Only read/search tools allowed
   - `:safe_mode` - No write/exec/bash tools allowed
   - `:subagent_restricted` - Subagent with no dangerous tools
@@ -71,6 +90,16 @@ defmodule CodingAgent.ToolPolicy do
       require_approval: [],
       no_reply: false,
       profile: :full_access
+    }
+  end
+
+  def from_profile(:minimal_core) do
+    %{
+      allow: @minimal_core_tools,
+      deny: [],
+      require_approval: [],
+      no_reply: false,
+      profile: :minimal_core
     }
   end
 

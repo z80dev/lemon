@@ -498,6 +498,7 @@ defmodule LemonCore.Config do
     profile =
       case map["profile"] do
         "full_access" -> :full_access
+        "minimal_core" -> :minimal_core
         "read_only" -> :read_only
         "safe_mode" -> :safe_mode
         "subagent_restricted" -> :subagent_restricted

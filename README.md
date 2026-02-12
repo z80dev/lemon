@@ -2,7 +2,7 @@
 
 Lemon is a local-first assistant and coding agent system (named after my cat) that you run on your own machine.
 
-The easiest way to use Lemon day-to-day is through **Telegram**: you talk to a bot from your phone/desktop, while Lemon runs locally. Inbound/outbound messaging is handled by `lemon_channels` (Telegram adapter + outbox), runs are orchestrated by `lemon_router`, and execution is handled by `lemon_gateway` using one of the configured engines (native Lemon, Claude CLI, Codex CLI, Echo). Kimi is available as a CodingAgent `task` subagent engine.
+The easiest way to use Lemon day-to-day is through **Telegram**: you talk to a bot from your phone/desktop, while Lemon runs locally. Inbound/outbound messaging is handled by `lemon_channels` (Telegram adapter + outbox), runs are orchestrated by `lemon_router`, and execution is handled by `lemon_gateway` using one of the configured engines (native Lemon, Claude CLI, Codex CLI, OpenCode CLI, Pi CLI). Kimi, OpenCode, and Pi are also available as CodingAgent `task` subagent engines.
 
 If you're here for the architecture deep-dive, jump to [What is Lemon?](#what-is-lemon).
 
@@ -243,12 +243,12 @@ Lemon is an AI coding assistant built as a distributed system of concurrent proc
 
 5. **Multi-Provider Abstraction**: Unified interface for OpenAI, Anthropic, Google, Azure, and AWS Bedrock with automatic model configuration and cost tracking.
 
-6. **Multi-Engine Architecture**: Pluggable execution engines supporting native Lemon agents, Claude CLI, and Codex CLI as interchangeable backends with unified event streaming.
+6. **Multi-Engine Architecture**: Pluggable execution engines supporting native Lemon plus Codex/Claude/OpenCode/Pi CLI backends with unified event streaming.
 
 ### Key Features
 
 **Agent Capabilities:**
-- **Multi-turn conversations** with 20+ tools (read, write, edit, bash, grep, glob, webfetch, websearch, task, exec, process, etc.)
+- **Multi-turn conversations** with 13 built-in tools (`read`, `write`, `edit`, `patch`, `bash`, `grep`, `find`, `ls`, `webfetch`, `websearch`, `todo`, `task`, `extensions_status`) plus extension tools
 - **Real-time streaming** of LLM responses with fine-grained event notifications
 - **Session persistence** via JSONL with tree-structured conversation history
 - **Context compaction** and branch summarization for long conversations
@@ -256,7 +256,7 @@ Lemon is an AI coding assistant built as a distributed system of concurrent proc
 - **Skill system** for reusable knowledge modules with dependency verification
 
 **Execution & Orchestration:**
-- **Multi-engine support** with native Lemon, Claude CLI, and Codex CLI
+- **Multi-engine support** with native Lemon, Codex CLI, Claude CLI, OpenCode CLI, and Pi CLI
 - **Lane-aware scheduling** with per-lane concurrency caps (main: 4, subagent: 8, background: 2)
 - **Async subagent semantics** with spawn/poll/join patterns
 - **Durable background processes** with persistent state across restarts
@@ -445,7 +445,7 @@ The diagram above shows the complete Lemon system architecture:
 - **Control Plane**: LemonControlPlane provides HTTP/WebSocket server with 81+ RPC methods
 - **Routing**: LemonRouter orchestrates runs with policy enforcement and approval gating
 - **Infrastructure**: LemonChannels (adapters), LemonGateway (execution), LemonAutomation (scheduling)
-- **Core Runtime**: CodingAgent.Session with 20+ tools, extensions, and compaction
+- **Core Runtime**: CodingAgent.Session with built-in tools, extension tools, and compaction
 - **Foundation**: LemonCore (Bus, Store, Telemetry), LemonSkills (knowledge), Ai Providers
 
 ### Data Flow
@@ -477,6 +477,8 @@ lemon/
 ├── bin/                         # Executable scripts
 │   ├── lemon-dev                # Development launcher script (builds + launches the TUI)
 │   ├── lemon-gateway            # Starts the Telegram runtime (router + gateway + channels)
+│   ├── lemon-telegram-send-test # Telegram delivery smoke test helper
+│   ├── lemon-telegram-webhook   # Telegram webhook helper
 │   └── diag                     # Small diagnostic helper (Python)
 │
 ├── apps/                        # Umbrella applications (11 apps)
@@ -500,6 +502,8 @@ lemon/
 │   │           ├── codex_runner.ex, codex_schema.ex, codex_subagent.ex
 │   │           ├── claude_runner.ex, claude_schema.ex, claude_subagent.ex
 │   │           ├── kimi_runner.ex, kimi_schema.ex, kimi_subagent.ex
+│   │           ├── opencode_runner.ex, opencode_schema.ex, opencode_subagent.ex
+│   │           ├── pi_runner.ex, pi_schema.ex, pi_subagent.ex
 │   │           └── jsonl_runner.ex   # Base JSONL subprocess runner
 │   │
 │   │  # ─── Agent Execution ───────────────────────────────────
@@ -518,11 +522,12 @@ lemon/
 │   │       ├── process_manager.ex    # Background process supervision
 │   │       ├── budget_tracker.ex     # Token/cost tracking
 │   │       ├── cli_runners/          # Lemon CLI runner
-│   │       └── tools/                # 20+ tool implementations
+│   │       └── tools/                # Default built-ins + optional tool modules
 │   │           ├── bash.ex, edit.ex, read.ex, write.ex
-│   │           ├── glob.ex, grep.ex, find.ex, ls.ex
-│   │           ├── task.ex, exec.ex, process.ex
-│   │           └── webfetch.ex, websearch.ex
+│   │           ├── grep.ex, find.ex, ls.ex
+│   │           ├── task.ex, todo.ex, extensions_status.ex
+│   │           ├── webfetch.ex, websearch.ex
+│   │           └── exec.ex, process.ex, truncate.ex (custom integrations)
 │   │
 │   ├── coding_agent_ui/         # UI abstraction layer
 │   │   └── lib/coding_agent/ui/
@@ -553,6 +558,9 @@ lemon/
 │   │       │   ├── lemon.ex     # Native CodingAgent engine
 │   │       │   ├── claude.ex    # Claude CLI engine
 │   │       │   ├── codex.ex     # Codex CLI engine
+│   │       │   ├── opencode.ex  # OpenCode CLI engine
+│   │       │   ├── pi.ex        # Pi CLI engine
+│   │       │   ├── echo.ex      # Echo stub engine (testing)
 │   │       │   └── cli_adapter.ex
 │   │       └── telegram/        # Legacy Telegram transport (disabled by default; kept for tests/dev)
 │   │
@@ -631,7 +639,8 @@ lemon/
 │
 ├── scripts/
 │   ├── debug_agent_rpc.exs      # RPC debugging
-│   └── cron_lemon_loop.sh       # Scheduled execution
+│   ├── cron_lemon_loop.sh       # Scheduled execution
+│   └── setup_telegram_bot.py    # Telegram bot setup helper
 │
 ├── docs/                        # Documentation
 │   ├── beam_agents.md           # BEAM architecture
@@ -769,23 +778,25 @@ end
 - **CodexRunner / CodexSubagent**: Codex CLI (`codex exec`) with JSONL streaming
 - **ClaudeRunner / ClaudeSubagent**: Claude Code CLI (`claude -p --output-format stream-json`)
 - **KimiRunner / KimiSubagent**: Kimi CLI (`kimi --print --output-format stream-json`)
+- **OpencodeRunner / OpencodeSubagent**: OpenCode CLI (`opencode run --format json`)
+- **PiRunner / PiSubagent**: Pi CLI (`pi --print --mode json`)
 - **LemonRunner / LemonSubagent**: Native `CodingAgent.Session` runner backend (no subprocess, implemented in `CodingAgent.CliRunners`)
 - **JsonlRunner**: Base infrastructure for implementing new CLI runners
 
 **Where they’re used:**
 - LemonGateway engines use the `*Runner` modules (via `LemonGateway.Engines.CliAdapter`) to stream engine events to clients.
-- The CodingAgent `task` tool uses `CodexSubagent` / `ClaudeSubagent` / `KimiSubagent` for CLI engines, and starts a new `CodingAgent.Session` for the internal engine.
+- The CodingAgent `task` tool uses `CodexSubagent` / `ClaudeSubagent` / `KimiSubagent` / `OpencodeSubagent` / `PiSubagent` for CLI engines, and starts a new `CodingAgent.Session` for the internal engine.
 
 #### Task Tool Integration
 
-The **Task tool** in CodingAgent uses CLI runners to delegate subtasks to different AI engines. This allows your agent to spawn Codex or Claude as subagents for specialized work:
+The **Task tool** in CodingAgent uses CLI runners to delegate subtasks to different AI engines. This allows your agent to spawn Codex, Claude, Kimi, OpenCode, or Pi as subagents for specialized work:
 
 ```elixir
 # Synchronous task (default)
 %{
   "description" => "Implement authentication",
   "prompt" => "Add JWT authentication to the User controller",
-  "engine" => "codex"  # or "claude", "kimi", or "internal" (default)
+  "engine" => "codex"  # or "claude", "kimi", "opencode", "pi", or "internal" (default)
 }
 
 # Async task - returns immediately with task_id
@@ -814,6 +825,8 @@ The **Task tool** in CodingAgent uses CLI runners to delegate subtasks to differ
 2. **Codex engine**: Uses `CodexSubagent` to spawn the Codex CLI (`codex exec`)
 3. **Claude engine**: Uses `ClaudeSubagent` to spawn Claude CLI (`claude -p`)
 4. **Kimi engine**: Uses Kimi CLI (`kimi --print --output-format stream-json`)
+5. **Opencode engine**: Uses `OpencodeSubagent` to spawn OpenCode CLI (`opencode run --format json`)
+6. **Pi engine**: Uses `PiSubagent` to spawn Pi CLI (`pi --print --mode json`)
 
 All engines support:
 - **Streaming progress**: Events flow back to the parent agent
@@ -850,12 +863,22 @@ Parent Agent                    Task Tool                     Codex CLI
 
 **Configuration:**
 
-Configure Codex CLI behavior in `~/.lemon/config.toml`:
+Configure CLI runner behavior in `~/.lemon/config.toml`:
 
 ```toml
 [agent.cli.codex]
 extra_args = ["-c", "notify=[]"]
 auto_approve = false
+
+[agent.cli.opencode]
+# Optional model override passed to `opencode run --model`
+model = "gpt-4.1"
+
+[agent.cli.pi]
+extra_args = []
+# Optional provider/model overrides passed to `pi --provider/--model`
+provider = "openai"
+model = "gpt-4.1"
 ```
 
 ### CodingAgent
@@ -884,7 +907,8 @@ unsubscribe = CodingAgent.Session.subscribe(session)
 
 **Key Features:**
 - Session persistence (JSONL v3 format with tree structure)
-- Built-in coding tools (read, write, edit, multiedit, patch, bash, grep, find, glob, ls, webfetch, websearch, todoread, todowrite, task, exec, process)
+- Default built-in coding tools (`read`, `write`, `edit`, `patch`, `bash`, `grep`, `find`, `ls`, `webfetch`, `websearch`, `todo`, `task`, `extensions_status`)
+- Optional runtime tool modules for custom integrations (`exec`, `process`, `truncate`)
 - Context compaction and branch summarization
 - Extension system for custom tools
 - Settings management (global + project-level)
@@ -958,7 +982,7 @@ end)
 job = %LemonGateway.Types.Job{
   scope: %LemonGateway.Types.ChatScope{transport: :telegram, chat_id: 123},
   text: "Explain this code",
-  engine_hint: "claude"  # or "codex", "lemon"
+  engine_hint: "claude"  # or "codex", "lemon", "opencode", "pi"
 }
 
 LemonGateway.submit(job)
@@ -968,7 +992,7 @@ LemonGateway.submit(job)
 ```
 
 **Key Features:**
-- **Multi-Engine Support**: Lemon (default), Codex CLI, Claude CLI, Echo
+- **Multi-Engine Support**: Lemon (default), Codex CLI, Claude CLI, OpenCode CLI, Pi CLI
 - **Job Scheduling**: Configurable concurrency with slot-based allocation
 - **Thread Workers**: Per-conversation job queues with sequential execution
 - **Resume Tokens**: Persist and continue sessions across restarts
@@ -981,7 +1005,8 @@ LemonGateway.submit(job)
 | Lemon | `lemon` | Native CodingAgent.Session with full tool support and steering |
 | Claude | `claude` | Claude CLI via subprocess |
 | Codex | `codex` | Codex CLI via subprocess |
-| Echo | `echo` | Simple echo stub for testing |
+| OpenCode | `opencode` | OpenCode CLI via subprocess |
+| Pi | `pi` | Pi CLI via subprocess |
 
 ### LemonRouter
 
@@ -1052,7 +1077,7 @@ LemonChannels.enqueue(%LemonChannels.OutboundPayload{
 - **Pluggable Adapters**: Standardized `Plugin` behaviour for any channel
 - **Smart Chunking**: Automatic message splitting at word/sentence boundaries
 - **Rate Limiting**: Token bucket algorithm (30 msgs/sec, 5 burst)
-- **Deduplication**: Idempotency key tracking with 1-hour TTL
+- **Deduplication**: Outbound idempotency keys use a 1-hour TTL; Telegram inbound update dedupe defaults to 10 minutes
 - **Retry Logic**: Exponential backoff (3 attempts: 1s, 2s, 4s)
 
 **Telegram Adapter:**
@@ -1301,9 +1326,9 @@ default_model = "claude-sonnet-4-20250514"
 theme = "lemon"
 debug = false
 
-# Optional: file logging (useful to debug dropped messages)
+# Optional: local runtime file logging (used by Lemon runtime in local mode)
 [logging]
-file_path = "~/.lemon/log/lemon.log"
+file = "~/.lemon/log/lemon.log"
 level = "debug"
 
 # Optional: connect to LemonControlPlane instead of spawning a local backend
@@ -1319,7 +1344,7 @@ Environment overrides (examples):
 - `LEMON_DEFAULT_PROVIDER`, `LEMON_DEFAULT_MODEL`, `LEMON_THEME`, `LEMON_DEBUG`
 - `LEMON_LOG_FILE`, `LEMON_LOG_LEVEL`
 - `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `KIMI_API_KEY`)
-- Control plane (server mode): `LEMON_WS_URL`, `LEMON_WS_TOKEN`, `LEMON_WS_ROLE`, `LEMON_WS_SCOPES`, `LEMON_WS_CLIENT_ID`
+- Control plane (server mode): `LEMON_WS_URL`, `LEMON_WS_TOKEN`, `LEMON_WS_ROLE`, `LEMON_WS_SCOPES`, `LEMON_WS_CLIENT_ID`, `LEMON_SESSION_KEY`, `LEMON_AGENT_ID`
 
 #### Slash Commands
 
@@ -1345,6 +1370,7 @@ All commands are prefixed with `/`. Type `/help` within the TUI to see this list
 - `/close-session [session_id]` — Close a session
 
 **Application:**
+- `/restart` — Restart the Lemon agent process (reload latest code)
 - `/quit` or `/exit` or `/q` — Exit the application
 - `/help` — Display help message with all commands and shortcuts
 
@@ -1502,10 +1528,14 @@ The **Task tool** supports async spawn/poll/join patterns for coordinating multi
 - `codex`: Codex CLI via subprocess
 - `claude`: Claude CLI via subprocess
 - `kimi`: Kimi CLI via subprocess
+- `opencode`: OpenCode CLI via subprocess
+- `pi`: Pi CLI via subprocess
 
 ### Durable Background Processes
 
 Unlike OpenClaw (which loses background sessions on restart), Lemon persists all background process state to DETS:
+
+Note: `exec`/`process` tool modules currently exist for custom integrations and tests, but they are not enabled in the default `CodingAgent.ToolRegistry` tool set.
 
 **Exec Tool** - Start background processes:
 
@@ -1582,8 +1612,9 @@ Per-agent tool policies with allow/deny lists:
 ```elixir
 # Predefined profiles
 :full_access        # All tools allowed
+:minimal_core       # Lean core set (read/write/edit/patch/bash/grep/find/ls/webfetch/websearch/todo/task/extensions_status)
 :read_only          # Only read operations
-:safe_mode          # No bash, no write, no external
+:safe_mode          # No write/edit/patch/bash/exec/process
 :subagent_restricted # Limited tools for subagents
 :no_external        # No web fetch/search
 
@@ -1592,6 +1623,8 @@ Per-agent tool policies with allow/deny lists:
   "codex" => :subagent_restricted,
   "claude" => :subagent_restricted,
   "kimi" => :subagent_restricted,
+  "opencode" => :subagent_restricted,
+  "pi" => :subagent_restricted,
   "internal" => :full_access
 }
 ```
@@ -1731,7 +1764,7 @@ export AZURE_OPENAI_RESOURCE_NAME="myresource"
 export AZURE_OPENAI_API_VERSION="2024-12-01-preview"
 ```
 
-### CLI Runner Configuration (Codex/Claude/Kimi)
+### CLI Runner Configuration (Codex/Claude/Kimi/OpenCode/Pi)
 
 CLI runner behavior is configured in the canonical TOML config under `[agent.cli.*]`
 (see `docs/config.md`):
@@ -1743,6 +1776,14 @@ auto_approve = false
 
 [agent.cli.kimi]
 extra_args = []
+
+[agent.cli.opencode]
+model = "gpt-4.1"
+
+[agent.cli.pi]
+extra_args = []
+provider = "openai"
+model = "gpt-4.1"
 
 [agent.cli.claude]
 dangerously_skip_permissions = true
@@ -1797,6 +1838,12 @@ mix test apps/lemon_skills
 
 # Run integration tests (require CLI tools)
 mix test --include integration
+```
+
+For Codex/Claude integration tests specifically, set the gate env vars and ensure binaries are on `PATH`:
+
+```bash
+LEMON_CODEX_INTEGRATION=1 LEMON_CLAUDE_INTEGRATION=1 mix test --include integration
 ```
 
 ### Running the Control Plane

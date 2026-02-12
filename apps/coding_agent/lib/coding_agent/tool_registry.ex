@@ -45,19 +45,15 @@ defmodule CodingAgent.ToolRegistry do
     {:read, Tools.Read},
     {:write, Tools.Write},
     {:edit, Tools.Edit},
-    {:multiedit, Tools.MultiEdit},
-    {:glob, Tools.Glob},
+    {:patch, Tools.Patch},
+    {:bash, Tools.Bash},
     {:grep, Tools.Grep},
     {:find, Tools.Find},
     {:ls, Tools.Ls},
-    {:bash, Tools.Bash},
-    {:restart, Tools.Restart},
-    {:task, Tools.Task},
-    {:patch, Tools.Patch},
-    {:todoread, Tools.TodoRead},
-    {:todowrite, Tools.TodoWrite},
     {:webfetch, Tools.WebFetch},
     {:websearch, Tools.WebSearch},
+    {:todo, Tools.Todo},
+    {:task, Tools.Task},
     {:extensions_status, Tools.ExtensionsStatus}
   ]
 

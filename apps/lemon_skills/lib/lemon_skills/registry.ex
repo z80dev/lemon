@@ -7,9 +7,10 @@ defmodule LemonSkills.Registry do
 
   ## Architecture
 
-  Skills are loaded from two locations:
-  1. Global: `~/.lemon/agent/skill/*/SKILL.md`
-  2. Project: `<cwd>/.lemon/skill/*/SKILL.md`
+  Skills are loaded from global and project locations:
+  1. Global (primary): `~/.lemon/agent/skill/*/SKILL.md`
+  2. Global (compat): `~/.agents/skills/*/SKILL.md`
+  3. Project: `<cwd>/.lemon/skill/*/SKILL.md`
 
   Project skills override global skills with the same key.
   """
@@ -259,8 +260,15 @@ defmodule LemonSkills.Registry do
   # ============================================================================
 
   defp load_global_skills(state) do
-    dir = Config.global_skills_dir()
-    skills = load_skills_from_dir(dir, :global)
+    skills =
+      Config.global_skills_dirs()
+      |> Enum.reduce(%{}, fn dir, acc ->
+        dir_skills = load_skills_from_dir(dir, :global)
+
+        # Keep first-seen entries so directory order controls precedence.
+        Map.merge(acc, dir_skills, fn _key, existing, _incoming -> existing end)
+      end)
+
     %{state | global_skills: skills}
   end
 

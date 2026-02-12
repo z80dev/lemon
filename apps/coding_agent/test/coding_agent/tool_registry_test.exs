@@ -16,7 +16,7 @@ defmodule CodingAgent.ToolRegistryTest do
       assert "write" in names
       assert "edit" in names
       assert "bash" in names
-      assert "glob" in names
+      assert "todo" in names
       assert "grep" in names
     end
 

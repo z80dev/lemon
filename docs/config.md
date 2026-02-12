@@ -77,6 +77,8 @@ system_prompt = "You are my daily assistant."
 model = "anthropic:claude-sonnet-4-20250514"
 
 [agents.default.tool_policy]
+# Optional preset profile:
+# profile = "minimal_core"  # full_access | minimal_core | read_only | safe_mode | subagent_restricted | no_external | custom
 allow = "all"
 deny = []
 require_approval = ["bash", "write", "edit"]

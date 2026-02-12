@@ -412,8 +412,8 @@ report = CodingAgent.ToolRegistry.tool_conflict_report(cwd)
 #       shadowed: [{:extension, ExtensionB}]
 #     }
 #   ],
-#   total_tools: 16,
-#   builtin_count: 15,
+#   total_tools: 14,
+#   builtin_count: 13,
 #   extension_count: 1,
 #   shadowed_count: 2,
 #   load_errors: [
@@ -503,8 +503,8 @@ end
   # Tool conflict report from ToolRegistry
   tool_conflicts: %{
     conflicts: [...],
-    total_tools: 16,
-    builtin_count: 15,
+    total_tools: 14,
+    builtin_count: 13,
     extension_count: 1,
     shadowed_count: 0
   },

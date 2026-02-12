@@ -24,6 +24,23 @@ defmodule CodingAgent.ToolPolicyTest do
       refute ToolPolicy.allowed?(policy, "bash")
     end
 
+    test "minimal_core allows core tools and excludes redundant ones" do
+      policy = ToolPolicy.from_profile(:minimal_core)
+
+      assert ToolPolicy.allowed?(policy, "read")
+      assert ToolPolicy.allowed?(policy, "write")
+      assert ToolPolicy.allowed?(policy, "patch")
+      assert ToolPolicy.allowed?(policy, "todo")
+      assert ToolPolicy.allowed?(policy, "task")
+      assert ToolPolicy.allowed?(policy, "extensions_status")
+
+      refute ToolPolicy.allowed?(policy, "restart")
+      refute ToolPolicy.allowed?(policy, "multiedit")
+      refute ToolPolicy.allowed?(policy, "glob")
+      refute ToolPolicy.allowed?(policy, "todoread")
+      refute ToolPolicy.allowed?(policy, "todowrite")
+    end
+
     test "safe_mode denies dangerous tools" do
       policy = ToolPolicy.from_profile(:safe_mode)
 

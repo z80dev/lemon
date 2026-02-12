@@ -36,8 +36,10 @@ defmodule CodingAgent.SystemPromptTest do
 
     assert String.contains?(prompt, "## Memory Workflow")
     assert String.contains?(prompt, "Use `read` to check `MEMORY.md`")
-    assert String.contains?(prompt, "Use `write` to create missing `memory/YYYY-MM-DD.md` files.")
-    assert String.contains?(prompt, "Use `edit` to update `MEMORY.md`")
+    assert String.contains?(prompt, "memory/topics/*.md")
+    assert String.contains?(prompt, "Use `grep` with `path: \"memory\"`")
+    assert String.contains?(prompt, "memory/topics/<topic-slug>.md")
+    assert String.contains?(prompt, "Use `edit` to keep `MEMORY.md` concise")
   end
 
   @tag :tmp_dir

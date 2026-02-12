@@ -60,6 +60,22 @@ defmodule LemonSkills.Config do
   end
 
   @doc """
+  Get all global skills directories.
+
+  Directories are returned in precedence order (first wins on key collisions):
+  1. Lemon global skills (`~/.lemon/agent/skill` or `LEMON_AGENT_DIR/skill`)
+  2. Harness-compatible skills (`~/.agents/skills`)
+  """
+  @spec global_skills_dirs() :: [String.t()]
+  def global_skills_dirs do
+    [
+      global_skills_dir(),
+      Path.join([System.user_home!(), ".agents", "skills"])
+    ]
+    |> Enum.uniq()
+  end
+
+  @doc """
   Get the project skills directory.
 
   Returns `<cwd>/.lemon/skill`.

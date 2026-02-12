@@ -1,7 +1,7 @@
 defmodule CodingAgent.Tools.MemoryPathsTest do
   use ExUnit.Case, async: true
 
-  alias CodingAgent.Tools.{Edit, Read, Write}
+  alias CodingAgent.Tools.{Edit, Grep, Read, Write}
 
   defp tool_text(%{content: content}) when is_list(content) do
     case Enum.find(content, &match?(%Ai.Types.TextContent{}, &1)) do
@@ -92,5 +92,33 @@ defmodule CodingAgent.Tools.MemoryPathsTest do
 
     assert File.read!(Path.join(workspace_dir, "MEMORY.md")) == "ws-bar"
     assert File.read!(Path.join(project_dir, "MEMORY.md")) == "project-foo"
+  end
+
+  @tag :tmp_dir
+  test "grep resolves memory path to workspace_dir (./ escape hatch stays in cwd)", %{
+    tmp_dir: tmp_dir
+  } do
+    project_dir = Path.join(tmp_dir, "project")
+    workspace_dir = Path.join(tmp_dir, "workspace")
+
+    File.mkdir_p!(Path.join(project_dir, "memory"))
+    File.mkdir_p!(Path.join(workspace_dir, "memory"))
+
+    File.write!(Path.join(project_dir, "memory/topic.md"), "project-secret")
+    File.write!(Path.join(workspace_dir, "memory/topic.md"), "workspace-secret")
+
+    tool = Grep.tool(project_dir, workspace_dir: workspace_dir)
+
+    result_workspace =
+      tool.execute.("t1", %{"pattern" => "workspace-secret", "path" => "memory"}, nil, nil)
+
+    assert String.contains?(tool_text(result_workspace), "workspace-secret")
+    refute String.contains?(tool_text(result_workspace), "project-secret")
+
+    result_project =
+      tool.execute.("t2", %{"pattern" => "project-secret", "path" => "./memory"}, nil, nil)
+
+    assert String.contains?(tool_text(result_project), "project-secret")
+    refute String.contains?(tool_text(result_project), "workspace-secret")
   end
 end

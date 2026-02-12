@@ -169,6 +169,23 @@ defmodule LemonCore.ConfigTest do
     assert "bash" in config.agents["default"].tool_policy.require_approval
   end
 
+  test "parses tool policy profile for agents", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [agents.default]
+    name = "Daily Assistant"
+
+    [agents.default.tool_policy]
+    profile = "minimal_core"
+    """)
+
+    config = Config.load()
+
+    assert config.agents["default"].tool_policy.profile == :minimal_core
+  end
+
   test "parses gateway binding agent_id", %{home: home} do
     global_dir = Path.join(home, ".lemon")
     File.mkdir_p!(global_dir)

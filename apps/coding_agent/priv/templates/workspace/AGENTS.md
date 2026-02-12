@@ -16,8 +16,9 @@ Before doing anything else:
 
 1. Read `SOUL.md` - this is who you are
 2. Read `USER.md` - this is who you're helping
-3. **If in MAIN SESSION** (direct chat with your human): Read `memory/YYYY-MM-DD.md` (today + yesterday) for recent context
-4. **If in MAIN SESSION** (direct chat with your human): Also read `MEMORY.md`
+3. **If in MAIN SESSION** (direct chat with your human): Read `MEMORY.md` first (this is your curated index)
+4. **If in MAIN SESSION** (direct chat with your human): Read relevant `memory/topics/*.md` files for setup/API/local-environment context
+5. **If in MAIN SESSION** (direct chat with your human): Read `memory/YYYY-MM-DD.md` (today + yesterday) for recent context
 
 Don't ask permission. Just do it.
 
@@ -26,7 +27,8 @@ Don't ask permission. Just do it.
 You wake up fresh each session. These files are your continuity:
 
 - **Daily notes:** `memory/YYYY-MM-DD.md` (create `memory/` if needed) - raw logs of what happened
-- **Long-term:** `MEMORY.md` - your curated memories, like a human's long-term memory
+- **Topic notes:** `memory/topics/<topic-slug>.md` - durable how-to/setup/API/environment notes
+- **Long-term index:** `MEMORY.md` - concise map of key facts and links to topic notes
 
 Capture what matters. Decisions, context, things to remember.
 
@@ -34,7 +36,7 @@ Capture what matters. Decisions, context, things to remember.
 
 - **Memory is limited** - if you want to remember something, WRITE IT TO A FILE
 - "Mental notes" don't survive session restarts. Files do.
-- When someone says "remember this" -> update `memory/YYYY-MM-DD.md` or `MEMORY.md`
+- When someone says "remember this" -> update the most specific file (`memory/topics/*.md` for durable operational knowledge, `memory/YYYY-MM-DD.md` for recent events) and keep `MEMORY.md` indexed
 
 ## Safety
 

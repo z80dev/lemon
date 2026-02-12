@@ -293,6 +293,7 @@ defmodule CodingAgent.ResourceLoader do
   They are loaded from:
   - Project-local skills (`.lemon/skill/*/SKILL.md`)
   - Global skills (`~/.lemon/agent/skill/*/SKILL.md`)
+  - Harness-compatible global skills (`~/.agents/skills/*/SKILL.md`)
 
   ## Parameters
 
@@ -309,12 +310,8 @@ defmodule CodingAgent.ResourceLoader do
   """
   @spec load_skills(String.t()) :: %{String.t() => String.t()}
   def load_skills(cwd) do
-    dirs = [
-      Path.join([cwd, ".lemon", "skill"]),
-      Path.join([Config.agent_dir(), "skill"])
-    ]
-
-    dirs
+    cwd
+    |> skill_dirs()
     |> Enum.filter(&File.dir?/1)
     |> Enum.flat_map(fn dir ->
       dir
@@ -350,7 +347,7 @@ defmodule CodingAgent.ResourceLoader do
   @spec load_skill(String.t(), String.t()) :: {:ok, String.t()} | {:error, :not_found}
   def load_skill(cwd, name) do
     result =
-      for dir <- [Path.join([cwd, ".lemon", "skill"]), Path.join([Config.agent_dir(), "skill"])],
+      for dir <- skill_dirs(cwd),
           path = Path.join([dir, name, "SKILL.md"]),
           File.regular?(path) do
         path
@@ -500,6 +497,17 @@ defmodule CodingAgent.ResourceLoader do
       {:ok, content} -> String.trim(content)
       {:error, _} -> ""
     end
+  end
+
+  # Skill directories in precedence order.
+  @spec skill_dirs(String.t()) :: [String.t()]
+  defp skill_dirs(cwd) do
+    [
+      Path.join([cwd, ".lemon", "skill"]),
+      Path.join([Config.agent_dir(), "skill"]),
+      Path.join([System.user_home!(), ".agents", "skills"])
+    ]
+    |> Enum.uniq()
   end
 
   # List prompt files in a directory

@@ -149,6 +149,18 @@ defmodule CodingAgent.ResourceLoaderTest do
       result = ResourceLoader.load_skills(tmp_dir)
       assert result["commit"] == "Git commit skill"
     end
+
+    test "loads skills from ~/.agents/skills/*/SKILL.md", %{tmp_dir: tmp_dir} do
+      skill_name = "agents-global-#{System.unique_integer([:positive])}"
+      skill_dir = Path.join([System.user_home!(), ".agents", "skills", skill_name])
+      File.mkdir_p!(skill_dir)
+      File.write!(Path.join(skill_dir, "SKILL.md"), "Agents global skill")
+
+      on_exit(fn -> File.rm_rf(skill_dir) end)
+
+      result = ResourceLoader.load_skills(tmp_dir)
+      assert result[skill_name] == "Agents global skill"
+    end
   end
 
   describe "load_skill/2" do
@@ -164,6 +176,18 @@ defmodule CodingAgent.ResourceLoaderTest do
 
       result = ResourceLoader.load_skill(tmp_dir, "review")
       assert result == {:ok, "Code review skill"}
+    end
+
+    test "loads a specific skill from ~/.agents/skills", %{tmp_dir: tmp_dir} do
+      skill_name = "agents-specific-#{System.unique_integer([:positive])}"
+      skill_dir = Path.join([System.user_home!(), ".agents", "skills", skill_name])
+      File.mkdir_p!(skill_dir)
+      File.write!(Path.join(skill_dir, "SKILL.md"), "Agents specific skill")
+
+      on_exit(fn -> File.rm_rf(skill_dir) end)
+
+      result = ResourceLoader.load_skill(tmp_dir, skill_name)
+      assert result == {:ok, "Agents specific skill"}
     end
   end
 

@@ -30,19 +30,16 @@ defmodule CodingAgent.ToolsTest do
         "read",
         "write",
         "edit",
-        "multiedit",
         "patch",
         "bash",
         "grep",
         "find",
-        "glob",
         "ls",
         "webfetch",
         "websearch",
-        "todoread",
-        "todowrite",
-        "restart",
-        "task"
+        "todo",
+        "task",
+        "extensions_status"
       ]
 
       Enum.each(expected_tools, fn expected_name ->
@@ -50,9 +47,9 @@ defmodule CodingAgent.ToolsTest do
       end)
     end
 
-    test "returns exactly 16 tools" do
+    test "returns exactly 13 tools" do
       tools = Tools.coding_tools(@test_cwd)
-      assert length(tools) == 16
+      assert length(tools) == 13
     end
 
     test "passes cwd to each tool" do
@@ -71,7 +68,7 @@ defmodule CodingAgent.ToolsTest do
 
       # Should not raise any errors
       assert is_list(tools)
-      assert length(tools) == 16
+      assert length(tools) == 13
     end
   end
 
@@ -109,7 +106,7 @@ defmodule CodingAgent.ToolsTest do
       tools = Tools.read_only_tools(@test_cwd)
       tool_names = Enum.map(tools, & &1.name)
 
-      write_tools = ["write", "edit", "multiedit", "patch", "bash"]
+      write_tools = ["write", "edit", "patch", "bash", "todo"]
 
       Enum.each(write_tools, fn write_tool ->
         refute write_tool in tool_names, "Should not include write tool '#{write_tool}'"
@@ -141,20 +138,17 @@ defmodule CodingAgent.ToolsTest do
         "read",
         "write",
         "edit",
-        "multiedit",
         "patch",
         "bash",
         "grep",
         "find",
-        "glob",
         "ls",
         "webfetch",
         "websearch",
-        "todoread",
-        "todowrite",
+        "todo",
         "truncate",
-        "restart",
-        "task"
+        "task",
+        "extensions_status"
       ]
 
       Enum.each(expected_tools, fn expected_name ->
@@ -163,9 +157,9 @@ defmodule CodingAgent.ToolsTest do
       end)
     end
 
-    test "returns 17 tools (includes truncate which is not in coding_tools)" do
+    test "returns 14 tools (includes truncate which is not in coding_tools)" do
       tools_map = Tools.all_tools(@test_cwd)
-      assert map_size(tools_map) == 17
+      assert map_size(tools_map) == 14
     end
 
     test "tool names match map keys" do
@@ -217,19 +211,17 @@ defmodule CodingAgent.ToolsTest do
         "read",
         "write",
         "edit",
-        "multiedit",
         "patch",
         "bash",
         "grep",
         "find",
-        "glob",
         "ls",
         "webfetch",
         "websearch",
-        "todoread",
-        "todowrite",
+        "todo",
         "truncate",
-        "task"
+        "task",
+        "extensions_status"
       ]
 
       Enum.each(known_tools, fn name ->
@@ -288,19 +280,17 @@ defmodule CodingAgent.ToolsTest do
         "read",
         "write",
         "edit",
-        "multiedit",
         "patch",
         "bash",
         "grep",
         "find",
-        "glob",
         "ls",
         "webfetch",
         "websearch",
-        "todoread",
-        "todowrite",
+        "todo",
         "truncate",
-        "task"
+        "task",
+        "extensions_status"
       ]
 
       tools = Tools.get_tools(all_names, @test_cwd)
@@ -492,12 +482,6 @@ defmodule CodingAgent.ToolsTest do
       assert Map.has_key?(tool.parameters["properties"], "pattern")
     end
 
-    test "glob tool has expected parameters" do
-      tool = Tools.get_tool("glob", @test_cwd)
-
-      assert Map.has_key?(tool.parameters["properties"], "pattern")
-    end
-
     test "find tool has expected parameters" do
       tool = Tools.get_tool("find", @test_cwd)
 
@@ -539,24 +523,19 @@ defmodule CodingAgent.ToolsTest do
       assert is_map(tool.parameters)
     end
 
-    test "todoread tool has expected structure" do
-      tool = Tools.get_tool("todoread", @test_cwd)
+    test "todo tool has expected structure" do
+      tool = Tools.get_tool("todo", @test_cwd)
 
       assert %AgentTool{} = tool
-      assert tool.name == "todoread"
+      assert tool.name == "todo"
+      assert Map.has_key?(tool.parameters["properties"], "action")
     end
 
-    test "todowrite tool has expected structure" do
-      tool = Tools.get_tool("todowrite", @test_cwd)
+    test "extensions_status tool has expected structure" do
+      tool = Tools.get_tool("extensions_status", @test_cwd)
 
       assert %AgentTool{} = tool
-      assert tool.name == "todowrite"
-    end
-
-    test "multiedit tool has expected parameters" do
-      tool = Tools.get_tool("multiedit", @test_cwd)
-
-      assert Map.has_key?(tool.parameters["properties"], "edits")
+      assert tool.name == "extensions_status"
     end
 
     test "patch tool has expected parameters" do
