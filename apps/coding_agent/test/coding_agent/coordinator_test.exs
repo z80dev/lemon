@@ -46,6 +46,54 @@ defmodule CodingAgent.CoordinatorTest do
     coordinator
   end
 
+  defp assert_eventually(fun, timeout_ms \\ 1_000) when is_function(fun, 0) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_assert_eventually(fun, deadline)
+  end
+
+  defp do_assert_eventually(fun, deadline) do
+    if fun.() do
+      :ok
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        flunk("condition was not met within timeout")
+      else
+        Process.sleep(10)
+        do_assert_eventually(fun, deadline)
+      end
+    end
+  end
+
+  defmodule SlowSession do
+    use GenServer
+
+    def start_link(opts) do
+      GenServer.start_link(__MODULE__, opts)
+    end
+
+    @impl true
+    def init(opts) do
+      Process.flag(:trap_exit, true)
+
+      {:ok,
+       %{
+         delay_ms: Keyword.get(opts, :delay_ms, 300),
+         test_pid: Keyword.fetch!(opts, :test_pid)
+       }}
+    end
+
+    @impl true
+    def handle_cast(:abort, state), do: {:noreply, state}
+
+    @impl true
+    def terminate(_reason, state) do
+      send(state.test_pid, {:slow_session_terminate_started, self()})
+      Process.sleep(state.delay_ms)
+      send(state.test_pid, {:slow_session_terminate_finished, self()})
+      :ok
+    end
+  end
+
   # ============================================================================
   # Initialization Tests
   # ============================================================================
@@ -367,11 +415,59 @@ defmodule CodingAgent.CoordinatorTest do
 
       :ok = Coordinator.abort_all(coordinator)
 
-      # Give cleanup a moment
-      Process.sleep(100)
+      assert_eventually(fn ->
+        Coordinator.list_active(coordinator) == []
+      end)
+    end
 
-      # Should have no active subagents
-      assert Coordinator.list_active(coordinator) == []
+    @tag :tmp_dir
+    test "keeps bookkeeping until session cleanup completes", %{tmp_dir: tmp_dir} do
+      coordinator = start_coordinator(cwd: tmp_dir, default_timeout: 30_000)
+      assert Process.whereis(CodingAgent.SessionSupervisor)
+
+      child_spec = %{
+        id: {:slow_session, make_ref()},
+        start: {SlowSession, :start_link, [[delay_ms: 300, test_pid: self()]]},
+        restart: :temporary,
+        shutdown: 5_000,
+        type: :worker
+      }
+
+      {:ok, slow_pid} = DynamicSupervisor.start_child(CodingAgent.SessionSupervisor, child_spec)
+
+      on_exit(fn ->
+        if Process.alive?(slow_pid) do
+          _ = DynamicSupervisor.terminate_child(CodingAgent.SessionSupervisor, slow_pid)
+        end
+      end)
+
+      subagent_id = "slow-subagent-#{System.unique_integer([:positive])}"
+      monitor_ref = make_ref()
+
+      :sys.replace_state(coordinator, fn state ->
+        subagent_state = %{
+          pid: slow_pid,
+          session_id: "slow-session-#{System.unique_integer([:positive])}",
+          monitor_ref: monitor_ref,
+          caller: nil,
+          status: :running
+        }
+
+        %{state | active_subagents: Map.put(state.active_subagents, subagent_id, subagent_state)}
+      end)
+
+      assert subagent_id in Coordinator.list_active(coordinator)
+
+      :ok = Coordinator.abort_all(coordinator)
+
+      assert_receive {:slow_session_terminate_started, ^slow_pid}, 1_000
+      assert subagent_id in Coordinator.list_active(coordinator)
+      assert_receive {:slow_session_terminate_finished, ^slow_pid}, 1_000
+      send(coordinator, {:DOWN, monitor_ref, :process, slow_pid, :normal})
+
+      assert_eventually(fn ->
+        subagent_id not in Coordinator.list_active(coordinator)
+      end)
     end
   end
 

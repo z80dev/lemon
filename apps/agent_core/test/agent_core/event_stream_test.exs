@@ -1,6 +1,7 @@
 defmodule AgentCore.EventStreamTest do
   use ExUnit.Case, async: true
 
+  alias AgentCore.AbortSignal
   alias AgentCore.EventStream
 
   # ============================================================================
@@ -977,6 +978,75 @@ defmodule AgentCore.EventStreamTest do
 
       Process.sleep(50)
       refute Process.alive?(task_pid)
+    end
+
+    test "attached task abort signal is triggered before shutdown" do
+      {:ok, stream} = EventStream.start_link()
+      test_pid = self()
+      abort_ref = AbortSignal.new()
+
+      task_pid =
+        spawn(fn ->
+          Process.flag(:trap_exit, true)
+          Process.put(:agent_abort_signal, abort_ref)
+
+          receive do
+            {:EXIT, _from, :shutdown} ->
+              send(test_pid, {:saw_shutdown, AbortSignal.aborted?(abort_ref)})
+
+              receive do
+                :done -> :ok
+              after
+                5_000 -> :ok
+              end
+          end
+        end)
+
+      task_ref = Process.monitor(task_pid)
+
+      EventStream.attach_task(stream, task_pid)
+      Process.sleep(20)
+
+      EventStream.cancel(stream, :test_cancel)
+
+      assert_receive {:saw_shutdown, true}, 500
+      assert_receive {:DOWN, ^task_ref, :process, ^task_pid, :killed}, 1_500
+      assert AbortSignal.aborted?(abort_ref)
+
+      AbortSignal.clear(abort_ref)
+    end
+
+    test "attached task gets a grace window before forced shutdown" do
+      {:ok, stream} = EventStream.start_link()
+      test_pid = self()
+
+      task_pid =
+        spawn(fn ->
+          Process.flag(:trap_exit, true)
+
+          receive do
+            {:EXIT, _from, :shutdown} ->
+              send(test_pid, :shutdown_received)
+
+              receive do
+                :done -> :ok
+              after
+                5_000 -> :ok
+              end
+          end
+        end)
+
+      task_ref = Process.monitor(task_pid)
+
+      EventStream.attach_task(stream, task_pid)
+      Process.sleep(20)
+
+      EventStream.cancel(stream, :test_cancel)
+
+      assert_receive :shutdown_received, 500
+      Process.sleep(20)
+      assert Process.alive?(task_pid)
+      assert_receive {:DOWN, ^task_ref, :process, ^task_pid, :killed}, 1_500
     end
 
     test "stream receives error when attached task crashes" do

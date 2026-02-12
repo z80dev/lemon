@@ -152,6 +152,38 @@ defmodule CodingAgent.ToolExecutorTest do
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert String.contains?(text, "timed out waiting for approval")
     end
+
+    test "returns error result when approval returns non-timeout error" do
+      parent = self()
+
+      context = %{
+        run_id: "test-approval-error",
+        session_key: "agent:error:main",
+        timeout_ms: 100,
+        approval_request_fun: fn _ ->
+          {:error, :service_unavailable}
+        end
+      }
+
+      result =
+        ToolExecutor.execute_with_approval(
+          "dangerous_tool",
+          %{action: "delete"},
+          fn ->
+            send(parent, :executed)
+            %AgentToolResult{content: [%TextContent{type: :text, text: "should not execute"}]}
+          end,
+          context
+        )
+
+      assert %AgentToolResult{
+               content: [%TextContent{text: text}],
+               details: %{reason: :approval_error, approval_error: :service_unavailable}
+             } = result
+
+      assert String.contains?(text, "approval failed")
+      refute_received :executed
+    end
   end
 
   describe "policy integration" do

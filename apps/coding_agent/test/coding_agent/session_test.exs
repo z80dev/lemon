@@ -896,6 +896,55 @@ defmodule CodingAgent.SessionTest do
       assert :queue.len(state.steering_queue) == 0
       assert :queue.len(state.follow_up_queue) == 0
     end
+
+    @tag :tmp_dir
+    test "reset clears prior session file path and saves under new session id", %{
+      tmp_dir: tmp_dir
+    } do
+      explicit_path = Path.join(tmp_dir, "existing_session.jsonl")
+      File.write!(explicit_path, "")
+
+      session = start_session(cwd: tmp_dir, session_file: explicit_path)
+
+      :ok = Session.save(session)
+      initial_state = Session.get_state(session)
+      initial_id = initial_state.session_manager.header.id
+      assert initial_state.session_file == explicit_path
+
+      :ok = Session.reset(session)
+
+      reset_state = Session.get_state(session)
+      reset_id = reset_state.session_manager.header.id
+      refute reset_id == initial_id
+      assert reset_state.session_file == nil
+
+      :ok = Session.save(session)
+      saved_state = Session.get_state(session)
+
+      refute saved_state.session_file == explicit_path
+      assert Path.basename(saved_state.session_file) == "#{reset_id}.jsonl"
+    end
+
+    @tag :tmp_dir
+    test "reset re-registers session id when registration is enabled", %{tmp_dir: tmp_dir} do
+      registry = :"session_registry_#{System.unique_integer([:positive])}"
+      start_supervised!({Registry, keys: :unique, name: registry})
+
+      session = start_session(cwd: tmp_dir, register: true, registry: registry)
+      state_before = Session.get_state(session)
+      old_id = state_before.session_manager.header.id
+
+      assert [{^session, _meta}] = Registry.lookup(registry, old_id)
+
+      :ok = Session.reset(session)
+
+      state_after = Session.get_state(session)
+      new_id = state_after.session_manager.header.id
+      refute new_id == old_id
+
+      assert [] == Registry.lookup(registry, old_id)
+      assert [{^session, _meta}] = Registry.lookup(registry, new_id)
+    end
   end
 
   describe "save/1" do
@@ -1023,6 +1072,28 @@ defmodule CodingAgent.SessionTest do
       wait_for_streaming_complete(session)
       final_state = Session.get_state(session)
       assert final_state.is_streaming == false
+    end
+
+    test "abort cancels deferred prompt before stream starts" do
+      parent = self()
+
+      stream_fn = fn model, context, options ->
+        send(parent, :stream_called)
+        mock_stream_fn_single(assistant_message("Hello!")).(model, context, options)
+      end
+
+      session = start_session(stream_fn: stream_fn)
+
+      :ok = Session.prompt(session, "Hello!")
+      :ok = Session.abort(session)
+      Process.sleep(50)
+
+      refute_receive :stream_called, 100
+      assert Session.get_state(session).is_streaming == false
+
+      :ok = Session.prompt(session, "Second prompt")
+      assert_receive :stream_called, 200
+      wait_for_streaming_complete(session)
     end
   end
 

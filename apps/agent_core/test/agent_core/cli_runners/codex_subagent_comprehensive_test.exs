@@ -32,6 +32,10 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
   alias AgentCore.EventStream
 
+  defp unique_codex_token do
+    ResumeToken.new("codex", "thread_#{System.unique_integer([:positive, :monotonic])}")
+  end
+
   # ============================================================================
   # API Structure Tests
   # ============================================================================
@@ -157,7 +161,7 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
 
   describe "resume/2" do
     test "requires codex engine token" do
-      token = ResumeToken.new("codex", "thread_123")
+      token = unique_codex_token()
 
       try do
         {:ok, session} = CodexSubagent.resume(token, prompt: "continue", cwd: System.tmp_dir!())
@@ -184,7 +188,7 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
     end
 
     test "initializes session with provided token" do
-      token = ResumeToken.new("codex", "thread_abc")
+      token = unique_codex_token()
 
       try do
         {:ok, session} = CodexSubagent.resume(token, prompt: "continue", cwd: System.tmp_dir!())
@@ -197,7 +201,7 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
     end
 
     test "accepts timeout option" do
-      token = ResumeToken.new("codex", "thread_123")
+      token = unique_codex_token()
 
       try do
         {:ok, _session} =
@@ -215,7 +219,7 @@ defmodule AgentCore.CliRunners.CodexSubagentComprehensiveTest do
     end
 
     test "uses default cwd when not specified" do
-      token = ResumeToken.new("codex", "thread_123")
+      token = unique_codex_token()
 
       try do
         {:ok, session} = CodexSubagent.resume(token, prompt: "continue")

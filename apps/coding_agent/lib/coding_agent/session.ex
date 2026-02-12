@@ -69,6 +69,7 @@ defmodule CodingAgent.Session do
     :workspace_dir,
     :session_scope,
     :is_streaming,
+    :pending_prompt_timer_ref,
     :event_listeners,
     :event_streams,
     :abort_signal,
@@ -77,6 +78,8 @@ defmodule CodingAgent.Session do
     :turn_index,
     :started_at,
     :session_file,
+    :register_session,
+    :session_registry,
     :convert_to_llm,
     :extensions,
     :hooks,
@@ -98,6 +101,7 @@ defmodule CodingAgent.Session do
           workspace_dir: String.t(),
           session_scope: :main | :subagent,
           is_streaming: boolean(),
+          pending_prompt_timer_ref: reference() | nil,
           event_listeners: [{pid(), reference()}],
           event_streams: %{reference() => %{pid: pid(), stream: pid()}},
           abort_signal: reference() | nil,
@@ -105,6 +109,8 @@ defmodule CodingAgent.Session do
           follow_up_queue: :queue.queue(),
           turn_index: non_neg_integer(),
           session_file: String.t() | nil,
+          register_session: boolean(),
+          session_registry: atom(),
           convert_to_llm: (list() -> list()),
           extensions: [module()],
           hooks: keyword([function()]),
@@ -455,6 +461,8 @@ defmodule CodingAgent.Session do
     ui_context = Keyword.get(opts, :ui_context)
     custom_tools = Keyword.get(opts, :tools)
     workspace_dir = Keyword.get(opts, :workspace_dir, Config.workspace_dir())
+    register_session = Keyword.get(opts, :register, false)
+    session_registry = Keyword.get(opts, :registry, CodingAgent.SessionRegistry)
 
     maybe_register_ui_tracker(ui_context)
     Workspace.ensure_workspace(workspace_dir: workspace_dir)
@@ -633,6 +641,7 @@ defmodule CodingAgent.Session do
       workspace_dir: workspace_dir,
       session_scope: session_scope,
       is_streaming: false,
+      pending_prompt_timer_ref: nil,
       event_listeners: [],
       event_streams: %{},
       abort_signal: nil,
@@ -641,13 +650,15 @@ defmodule CodingAgent.Session do
       turn_index: 0,
       started_at: System.system_time(:millisecond),
       session_file: session_file,
+      register_session: register_session,
+      session_registry: session_registry,
       convert_to_llm: convert_to_llm,
       extensions: extensions,
       hooks: hooks,
       extension_status_report: extension_status_report
     }
 
-    maybe_register_session(session_manager, cwd, opts)
+    maybe_register_session(session_manager, cwd, register_session, session_registry)
 
     # Schedule the extension status report event to be published after init completes.
     # This allows subscribers to receive the event after they subscribe.
@@ -697,11 +708,12 @@ defmodule CodingAgent.Session do
       # This also gives the session a chance to receive near-immediate `follow_up/2` and
       # `steer/2` messages before the agent loop does its end-of-turn queue checks in
       # very fast (mocked) runs.
-      Process.send_after(self(), {:do_prompt, user_message}, @prompt_defer_ms)
+      timer_ref = Process.send_after(self(), {:do_prompt, user_message}, @prompt_defer_ms)
 
       new_state = %{
         state
         | is_streaming: true,
+          pending_prompt_timer_ref: timer_ref,
           turn_index: state.turn_index + 1
       }
 
@@ -891,18 +903,32 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call(:reset, _from, state) do
+    state = cancel_pending_prompt(state)
+
     # Reset agent
     :ok = AgentCore.Agent.reset(state.agent)
 
     # Create new session
+    previous_session_id = state.session_manager.header.id
     new_session_manager = SessionManager.new(state.cwd)
+
+    maybe_unregister_session(previous_session_id, state.register_session, state.session_registry)
+
+    maybe_register_session(
+      new_session_manager,
+      state.cwd,
+      state.register_session,
+      state.session_registry
+    )
 
     new_state = %{
       state
       | session_manager: new_session_manager,
         is_streaming: false,
+        pending_prompt_timer_ref: nil,
         turn_index: 0,
         started_at: System.system_time(:millisecond),
+        session_file: nil,
         steering_queue: :queue.new(),
         follow_up_queue: :queue.new()
     }
@@ -1118,6 +1144,7 @@ defmodule CodingAgent.Session do
   end
 
   def handle_cast(:abort, state) do
+    state = cancel_pending_prompt(state)
     AgentCore.Agent.abort(state.agent)
     {:noreply, state}
   end
@@ -1171,7 +1198,8 @@ defmodule CodingAgent.Session do
 
   def handle_info({:EXIT, pid, reason}, state) when pid == state.agent do
     Logger.warning("Agent process exited: #{inspect(reason)}")
-    {:noreply, %{state | is_streaming: false}}
+    state = state |> Map.put(:is_streaming, false) |> cancel_pending_prompt()
+    {:noreply, state}
   end
 
   def handle_info({:store_branch_summary, from_id, summary}, state) do
@@ -1192,9 +1220,14 @@ defmodule CodingAgent.Session do
   end
 
   def handle_info({:do_prompt, %Ai.Types.UserMessage{} = user_message}, state) do
-    # Send to agent (user message will be persisted on :message_end event)
-    _ = AgentCore.Agent.prompt(state.agent, user_message)
-    {:noreply, state}
+    if state.pending_prompt_timer_ref do
+      # Send to agent (user message will be persisted on :message_end event)
+      _ = AgentCore.Agent.prompt(state.agent, user_message)
+      {:noreply, %{state | pending_prompt_timer_ref: nil}}
+    else
+      # Prompt was canceled (e.g. via abort/reset) before deferred dispatch.
+      {:noreply, state}
+    end
   end
 
   def handle_info(_msg, state) do
@@ -1489,7 +1522,18 @@ defmodule CodingAgent.Session do
   defp handle_agent_event({:turn_end, message, tool_results}, state) do
     # Execute on_turn_end hooks
     Extensions.execute_hooks(state.hooks, :on_turn_end, [message, tool_results])
-    state
+
+    # Abort can terminate the underlying stream before {:canceled, reason} is observed.
+    # Treat an aborted assistant turn as terminal to keep Session lifecycle consistent.
+    case message do
+      %Ai.Types.AssistantMessage{stop_reason: :aborted} ->
+        ui_set_working_message(state, nil)
+        complete_event_streams(state, {:turn_end, message, tool_results})
+        %{state | is_streaming: false, steering_queue: :queue.new(), event_streams: %{}}
+
+      _ ->
+        state
+    end
   end
 
   defp handle_agent_event({:message_start, message}, state) do
@@ -1578,6 +1622,16 @@ defmodule CodingAgent.Session do
     %{state | is_streaming: false, event_streams: %{}}
   end
 
+  defp handle_agent_event({:canceled, reason}, state) do
+    # Canceled is a terminal lifecycle event (e.g. abort) and may occur without :agent_end.
+    ui_set_working_message(state, nil)
+
+    # Complete all event streams with the canceled event
+    complete_event_streams(state, {:canceled, reason})
+
+    %{state | is_streaming: false, steering_queue: :queue.new(), event_streams: %{}}
+  end
+
   defp handle_agent_event(_event, state) do
     state
   end
@@ -1622,23 +1676,38 @@ defmodule CodingAgent.Session do
     |> Enum.reject(&is_nil/1)
   end
 
-  defp maybe_register_session(session_manager, cwd, opts) do
-    if Keyword.get(opts, :register, false) do
-      registry = Keyword.get(opts, :registry, CodingAgent.SessionRegistry)
+  defp maybe_register_session(_session_manager, _cwd, false, _registry), do: :ok
 
-      if Process.whereis(registry) do
-        case Registry.register(registry, session_manager.header.id, %{cwd: cwd}) do
-          {:ok, _} ->
-            :ok
+  defp maybe_register_session(session_manager, cwd, true, registry) do
+    if Process.whereis(registry) do
+      case Registry.register(registry, session_manager.header.id, %{cwd: cwd}) do
+        {:ok, _} ->
+          :ok
 
-          {:error, {:already_registered, _pid}} ->
-            :ok
+        {:error, {:already_registered, _pid}} ->
+          :ok
 
-          {:error, reason} ->
-            Logger.warning("Failed to register session: #{inspect(reason)}")
-        end
+        {:error, reason} ->
+          Logger.warning("Failed to register session: #{inspect(reason)}")
       end
     end
+  end
+
+  defp maybe_unregister_session(_session_id, false, _registry), do: :ok
+
+  defp maybe_unregister_session(session_id, true, registry) do
+    if Process.whereis(registry) do
+      Registry.unregister(registry, session_id)
+    end
+
+    :ok
+  end
+
+  defp cancel_pending_prompt(%__MODULE__{pending_prompt_timer_ref: nil} = state), do: state
+
+  defp cancel_pending_prompt(%__MODULE__{pending_prompt_timer_ref: timer_ref} = state) do
+    _ = Process.cancel_timer(timer_ref)
+    %{state | pending_prompt_timer_ref: nil, is_streaming: false}
   end
 
   @spec serialize_message(map()) :: map()

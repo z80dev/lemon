@@ -79,6 +79,13 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
         {:session_event, _session_id, {:error, reason, _partial}} ->
           Enum.reverse(events ++ [{:error, reason}])
 
+        {:session_event, _session_id, {:canceled, reason}} ->
+          Enum.reverse(events ++ [{:canceled, reason}])
+
+        {:session_event, _session_id,
+         {:turn_end, %AssistantMessage{stop_reason: :aborted} = message, messages}} ->
+          Enum.reverse(events ++ [{:turn_end, message, messages}])
+
         {:session_event, _session_id, event} ->
           collect_events(events ++ [event], timeout, deadline)
       after
@@ -862,6 +869,28 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       # Collect events - should complete relatively quickly
       events = collect_events([], 2000)
 
+      aborted_terminal? =
+        Enum.any?(events, fn
+          {:canceled, :assistant_aborted} -> true
+          {:turn_end, %AssistantMessage{stop_reason: :aborted}, _} -> true
+          _ -> false
+        end)
+
+      aborted_message_seen? =
+        Enum.any?(events, fn
+          {:message_start, %AssistantMessage{stop_reason: :aborted}} -> true
+          {:message_end, %AssistantMessage{stop_reason: :aborted}} -> true
+          _ -> false
+        end)
+
+      agent_ended? = Enum.any?(events, &match?({:agent_end, _}, &1))
+
+      assert aborted_terminal? or (agent_ended? and aborted_message_seen?)
+
+      if agent_ended? do
+        assert aborted_message_seen?
+      end
+
       # Should not timeout
       refute Enum.any?(events, fn
                {:timeout, _} -> true
@@ -909,6 +938,28 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       :ok = Session.abort(session)
 
       events = collect_events([], 3000)
+
+      aborted_terminal? =
+        Enum.any?(events, fn
+          {:canceled, :assistant_aborted} -> true
+          {:turn_end, %AssistantMessage{stop_reason: :aborted}, _} -> true
+          _ -> false
+        end)
+
+      aborted_message_seen? =
+        Enum.any?(events, fn
+          {:message_start, %AssistantMessage{stop_reason: :aborted}} -> true
+          {:message_end, %AssistantMessage{stop_reason: :aborted}} -> true
+          _ -> false
+        end)
+
+      agent_ended? = Enum.any?(events, &match?({:agent_end, _}, &1))
+
+      assert aborted_terminal? or aborted_message_seen?
+
+      if agent_ended? do
+        assert aborted_message_seen?
+      end
 
       # Should complete without timing out
       refute Enum.any?(events, fn
