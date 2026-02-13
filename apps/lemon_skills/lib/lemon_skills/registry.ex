@@ -213,7 +213,11 @@ defmodule LemonSkills.Registry do
         entry.enabled and not Config.skill_disabled?(entry.key, cwd)
       end)
       |> Enum.map(fn entry ->
-        {entry, calculate_relevance(entry, context_lower, context_words)}
+        score =
+          calculate_relevance(entry, context_lower, context_words) +
+            source_priority_bonus(entry)
+
+        {entry, score}
       end)
       |> Enum.filter(fn {_entry, score} -> score > 0 end)
       |> Enum.sort_by(fn {_entry, score} -> score end, :desc)
@@ -375,6 +379,10 @@ defmodule LemonSkills.Registry do
 
     name_score + desc_word_matches * 3 + body_word_matches
   end
+
+  # Prefer project-local skills over global ones when both are relevant.
+  defp source_priority_bonus(%Entry{source: :project}), do: 1000
+  defp source_priority_bonus(_), do: 0
 
   defp extract_words(text) when is_binary(text) do
     text
