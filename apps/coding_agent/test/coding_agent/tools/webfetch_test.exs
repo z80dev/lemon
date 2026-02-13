@@ -130,7 +130,9 @@ defmodule CodingAgent.Tools.WebFetchTest do
     tool =
       build_tool(
         http_get: http_get,
-        settings_manager: %{tools: %{web: %{fetch: %{allow_private_network: true, readability: false}}}}
+        settings_manager: %{
+          tools: %{web: %{fetch: %{allow_private_network: true, readability: false}}}
+        }
       )
 
     result =

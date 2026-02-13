@@ -8,7 +8,10 @@ defmodule CodingAgent.Tools.WebGuardTest do
     http_get = fn _url, _opts -> flunk("http_get should not be called") end
 
     assert {:error, {:invalid_url, "Invalid URL: must be http or https"}} =
-             WebGuard.guarded_get("file:///etc/passwd", resolve_host: resolver, http_get: http_get)
+             WebGuard.guarded_get("file:///etc/passwd",
+               resolve_host: resolver,
+               http_get: http_get
+             )
   end
 
   test "blocks localhost before resolver or http_get" do

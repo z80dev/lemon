@@ -37,6 +37,9 @@ defmodule LemonControlPlane.Methods.BrowserRequest do
     method = params["method"]
     args = params["args"] || %{}
     node_id = params["nodeId"] || params["node_id"]
+    await_result = params["await"] == true
+    force_local = params["local"] == true
+    timeout_ms = params["timeoutMs"] || 30_000
 
     cond do
       is_nil(method) or method == "" ->
@@ -44,13 +47,18 @@ defmodule LemonControlPlane.Methods.BrowserRequest do
 
       true ->
         # Find browser node
-        browser_node = find_browser_node(node_id)
+        browser_node = if(force_local, do: nil, else: find_browser_node(node_id))
 
-        case browser_node do
-          nil ->
+        cond do
+          browser_node == nil and local_fallback_enabled?() ->
+            run_local(method, args, timeout_ms)
+
+          browser_node == nil ->
             {:error, Errors.not_found("No browser node available. Pair a browser node first.")}
 
-          node ->
+          true ->
+            node = browser_node
+
             # Get node ID (handle both atom and string keys)
             actual_node_id = get_field(node, :id) || node_id
             status = get_field(node, :status)
@@ -63,12 +71,89 @@ defmodule LemonControlPlane.Methods.BrowserRequest do
                 "nodeId" => actual_node_id,
                 "method" => "browser.#{method}",
                 "args" => args,
-                "timeoutMs" => params["timeoutMs"] || 30_000
+                "timeoutMs" => timeout_ms
               }
 
-              LemonControlPlane.Methods.NodeInvoke.handle(invoke_params, ctx)
+              with {:ok, invoke} <-
+                     LemonControlPlane.Methods.NodeInvoke.handle(invoke_params, ctx) do
+                if await_result do
+                  await_invoke(invoke, timeout_ms)
+                else
+                  {:ok, invoke}
+                end
+              end
             end
         end
+    end
+  end
+
+  defp local_fallback_enabled? do
+    Application.get_env(:lemon_control_plane, :browser_local_fallback, true)
+  end
+
+  defp run_local(method, args, timeout_ms) do
+    full = if String.starts_with?(method, "browser."), do: method, else: "browser.#{method}"
+
+    case LemonCore.Browser.LocalServer.request(full, args, timeout_ms) do
+      {:ok, result} ->
+        {:ok,
+         %{
+           "mode" => "local",
+           "ok" => true,
+           "result" => result
+         }}
+
+      {:error, reason} ->
+        {:error, Errors.unavailable(reason)}
+    end
+  end
+
+  defp await_invoke(%{"invokeId" => invoke_id} = invoke, timeout_ms) when is_binary(invoke_id) do
+    deadline = System.monotonic_time(:millisecond) + max(0, timeout_ms)
+
+    poll = fn ->
+      case LemonCore.Store.get(:node_invocations, invoke_id) do
+        nil ->
+          :pending
+
+        inv when is_map(inv) ->
+          status = get_field(inv, :status)
+          result = get_field(inv, :result)
+          error = get_field(inv, :error)
+
+          cond do
+            status in [:completed, "completed"] ->
+              {:done, %{"status" => "completed", "ok" => true, "result" => result}}
+
+            status in [:error, "error"] ->
+              {:done, %{"status" => "error", "ok" => false, "error" => error}}
+
+            true ->
+              :pending
+          end
+      end
+    end
+
+    await_loop(invoke, deadline, poll)
+  end
+
+  defp await_invoke(invoke, _timeout_ms), do: {:ok, invoke}
+
+  defp await_loop(invoke, deadline, poll) do
+    now = System.monotonic_time(:millisecond)
+
+    if now >= deadline do
+      # Timed out waiting; return the pending invocation.
+      {:ok, invoke}
+    else
+      case poll.() do
+        {:done, extra} ->
+          {:ok, Map.merge(invoke, extra)}
+
+        :pending ->
+          Process.sleep(50)
+          await_loop(invoke, deadline, poll)
+      end
     end
   end
 

@@ -9,6 +9,7 @@ defmodule CodingAgent.Tools do
   """
 
   alias CodingAgent.Tools.{
+    Browser,
     Read,
     Write,
     Edit,
@@ -34,6 +35,7 @@ defmodule CodingAgent.Tools do
   @spec coding_tools(String.t(), keyword()) :: [AgentCore.Types.AgentTool.t()]
   def coding_tools(cwd, opts \\ []) do
     [
+      Browser.tool(cwd, opts),
       Read.tool(cwd, opts),
       Write.tool(cwd, opts),
       Edit.tool(cwd, opts),
@@ -69,6 +71,7 @@ defmodule CodingAgent.Tools do
   @spec all_tools(String.t(), keyword()) :: %{String.t() => AgentCore.Types.AgentTool.t()}
   def all_tools(cwd, opts \\ []) do
     %{
+      "browser" => Browser.tool(cwd, opts),
       "read" => Read.tool(cwd, opts),
       "write" => Write.tool(cwd, opts),
       "edit" => Edit.tool(cwd, opts),

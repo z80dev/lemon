@@ -53,3 +53,6 @@ config :lemon_gateway, :engines, [
 ]
 
 config :lemon_gateway, :telegram, nil
+
+# Keep browser.request parity tests node-only; don't try to auto-fallback to the local driver in tests.
+config :lemon_control_plane, :browser_local_fallback, false

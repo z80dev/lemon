@@ -14,7 +14,8 @@ defmodule LemonCore.Application do
     children = [
       {Phoenix.PubSub, name: LemonCore.PubSub},
       {LemonCore.ConfigCache, config_cache_opts},
-      LemonCore.Store
+      LemonCore.Store,
+      LemonCore.Browser.LocalServer
     ]
 
     opts = [strategy: :one_for_one, name: LemonCore.Supervisor]

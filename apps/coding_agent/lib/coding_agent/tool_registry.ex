@@ -51,6 +51,7 @@ defmodule CodingAgent.ToolRegistry do
     {:grep, Tools.Grep},
     {:find, Tools.Find},
     {:ls, Tools.Ls},
+    {:browser, Tools.Browser},
     {:webfetch, Tools.WebFetch},
     {:websearch, Tools.WebSearch},
     {:todo, Tools.Todo},

@@ -205,10 +205,17 @@ defmodule LemonControlPlane.WS.Connection do
   end
 
   defp build_auth_response(auth) do
-    %{
+    base = %{
       "role" => to_string(auth.role),
       "scopes" => Enum.map(auth.scopes, &to_string/1)
     }
+
+    # Helpful for nodes: when authenticated via token, client_id is set to nodeId/deviceId.
+    if auth.client_id do
+      Map.put(base, "clientId", auth.client_id)
+    else
+      base
+    end
   end
 
   defp register_presence(state) do

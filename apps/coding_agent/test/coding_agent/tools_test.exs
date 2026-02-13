@@ -27,6 +27,7 @@ defmodule CodingAgent.ToolsTest do
       tool_names = Enum.map(tools, & &1.name)
 
       expected_tools = [
+        "browser",
         "read",
         "write",
         "edit",
@@ -47,9 +48,9 @@ defmodule CodingAgent.ToolsTest do
       end)
     end
 
-    test "returns exactly 13 tools" do
+    test "returns exactly 14 tools" do
       tools = Tools.coding_tools(@test_cwd)
-      assert length(tools) == 13
+      assert length(tools) == 14
     end
 
     test "passes cwd to each tool" do
@@ -68,7 +69,7 @@ defmodule CodingAgent.ToolsTest do
 
       # Should not raise any errors
       assert is_list(tools)
-      assert length(tools) == 13
+      assert length(tools) == 14
     end
   end
 
@@ -135,6 +136,7 @@ defmodule CodingAgent.ToolsTest do
       tools_map = Tools.all_tools(@test_cwd)
 
       expected_tools = [
+        "browser",
         "read",
         "write",
         "edit",
@@ -157,9 +159,9 @@ defmodule CodingAgent.ToolsTest do
       end)
     end
 
-    test "returns 14 tools (includes truncate which is not in coding_tools)" do
+    test "returns 15 tools (includes truncate which is not in coding_tools)" do
       tools_map = Tools.all_tools(@test_cwd)
-      assert map_size(tools_map) == 14
+      assert map_size(tools_map) == 15
     end
 
     test "tool names match map keys" do

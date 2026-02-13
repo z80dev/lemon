@@ -251,13 +251,14 @@ defmodule LemonControlPlane.Protocol.Schemas do
     # Browser methods
     "browser.request" => %{
       required: %{
-        "runId" => :string,
-        "requestType" => :string
+        "method" => :string
       },
       optional: %{
-        "url" => :string,
-        "action" => :string,
-        "data" => :map
+        "args" => :map,
+        "nodeId" => :string,
+        "timeoutMs" => :integer,
+        "await" => :boolean,
+        "local" => :boolean
       }
     },
 
