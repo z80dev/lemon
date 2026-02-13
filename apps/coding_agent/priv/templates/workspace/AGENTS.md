@@ -29,6 +29,7 @@ You wake up fresh each session. These files are your continuity:
 - **Daily notes:** `memory/YYYY-MM-DD.md` (create `memory/` if needed) - raw logs of what happened
 - **Topic notes:** `memory/topics/<topic-slug>.md` - durable how-to/setup/API/environment notes
 - **Long-term index:** `MEMORY.md` - concise map of key facts and links to topic notes
+- **Template:** `memory/topics/TEMPLATE.md` - copy this structure for new topic files
 
 Capture what matters. Decisions, context, things to remember.
 

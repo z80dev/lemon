@@ -338,18 +338,20 @@ defmodule DebugAgentRPC do
   end
 
   defp handle_command(state, %{"type" => "list_models"}) do
+    discovered_models = Ai.Models.list_models(discover_openai: true)
+
     providers =
-      Ai.Models.get_providers()
-      |> Enum.map(fn provider ->
-        models =
-          provider
-          |> Ai.Models.get_models()
+      discovered_models
+      |> Enum.group_by(& &1.provider)
+      |> Enum.map(fn {provider, models} ->
+        formatted_models =
+          models
           |> Enum.sort_by(& &1.id)
           |> Enum.map(fn model ->
             %{id: model.id, name: model.name}
           end)
 
-        %{id: Atom.to_string(provider), models: models}
+        %{id: Atom.to_string(provider), models: formatted_models}
       end)
       |> Enum.sort_by(& &1.id)
 

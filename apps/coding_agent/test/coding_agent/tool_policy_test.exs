@@ -28,6 +28,7 @@ defmodule CodingAgent.ToolPolicyTest do
       policy = ToolPolicy.from_profile(:minimal_core)
 
       assert ToolPolicy.allowed?(policy, "read")
+      assert ToolPolicy.allowed?(policy, "memory_topic")
       assert ToolPolicy.allowed?(policy, "write")
       assert ToolPolicy.allowed?(policy, "patch")
       assert ToolPolicy.allowed?(policy, "todo")

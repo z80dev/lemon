@@ -14,9 +14,14 @@ defmodule CodingAgent.WorkspaceTest do
     # Create a template file
     File.write!(Path.join(template_dir, "AGENTS.md"), "TEMPLATE AGENTS")
     File.write!(Path.join(template_dir, "SOUL.md"), "TEMPLATE SOUL")
+    File.mkdir_p!(Path.join(template_dir, "memory/topics"))
+    File.write!(Path.join(template_dir, "memory/topics/TEMPLATE.md"), "TEMPLATE TOPIC FILE")
+    File.write!(Path.join(template_dir, "memory/topics/git.md"), "TEMPLATE GIT NOTE")
 
     # Pre-create AGENTS.md to ensure we do not overwrite
     File.write!(Path.join(workspace_dir, "AGENTS.md"), "EXISTING AGENTS")
+    File.mkdir_p!(Path.join(workspace_dir, "memory/topics"))
+    File.write!(Path.join(workspace_dir, "memory/topics/TEMPLATE.md"), "EXISTING TOPIC FILE")
 
     :ok =
       Workspace.ensure_workspace(
@@ -26,6 +31,11 @@ defmodule CodingAgent.WorkspaceTest do
 
     assert File.read!(Path.join(workspace_dir, "AGENTS.md")) == "EXISTING AGENTS"
     assert File.read!(Path.join(workspace_dir, "SOUL.md")) == "TEMPLATE SOUL"
+
+    assert File.read!(Path.join(workspace_dir, "memory/topics/TEMPLATE.md")) ==
+             "EXISTING TOPIC FILE"
+
+    assert File.read!(Path.join(workspace_dir, "memory/topics/git.md")) == "TEMPLATE GIT NOTE"
   end
 
   @tag :tmp_dir

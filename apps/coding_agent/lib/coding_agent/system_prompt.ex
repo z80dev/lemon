@@ -126,6 +126,8 @@ defmodule CodingAgent.SystemPrompt do
     - Use `read` to check `MEMORY.md`, relevant `memory/topics/*.md` files, and recent `memory/YYYY-MM-DD.md` files.
     - Use `grep` with `path: "memory"` to quickly find relevant notes before opening files.
     - Use `write` to create missing topic files (`memory/topics/<topic-slug>.md`) and daily files (`memory/YYYY-MM-DD.md`).
+    - Use `memory_topic` to scaffold new topic notes from `memory/topics/TEMPLATE.md`.
+    - When creating a new topic file, follow the structure in `memory/topics/TEMPLATE.md`.
     - Use `edit` to keep `MEMORY.md` concise as a durable index of key facts and topic files.
     - If confidence is still low after checking memory files, say so explicitly.
     """

@@ -244,11 +244,31 @@ defmodule LemonRouter.StreamCoalescer do
     state =
       cond do
         state.run_id == nil ->
-          %{state | run_id: run_id, meta: compact_meta(meta), finalized: false}
+          %{
+            state
+            | run_id: run_id,
+              meta: compact_meta(meta),
+              finalized: false
+          }
 
         state.run_id != run_id ->
-          # Different run in this coalescer; don't try to finalize it.
-          state
+          # New run with no streamed deltas yet. Reset to the incoming run so
+          # finalization uses the correct run_id/progress_msg_id.
+          cancel_timer(state.flush_timer)
+
+          %{
+            state
+            | run_id: run_id,
+              buffer: "",
+              full_text: "",
+              last_seq: 0,
+              first_delta_ts: nil,
+              flush_timer: nil,
+              meta: compact_meta(meta),
+              last_sent_text: nil,
+              pending_resume_indices: state.pending_resume_indices || %{},
+              finalized: false
+          }
 
         true ->
           %{state | meta: Map.merge(state.meta || %{}, compact_meta(meta))}

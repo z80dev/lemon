@@ -14,15 +14,17 @@ defmodule LemonControlPlane.Methods.ModelsList do
   def scopes, do: [:read]
 
   @impl true
-  def handle(_params, _ctx) do
-    models = get_available_models()
+  def handle(params, _ctx) do
+    models = get_available_models(params || %{})
     {:ok, %{"models" => models}}
   end
 
-  defp get_available_models do
+  defp get_available_models(params) when is_map(params) do
+    discover_openai = Map.get(params, "discoverOpenAI", true)
+
     # Try to get models from Ai.Models if available
     if Code.ensure_loaded?(Ai.Models) do
-      Ai.Models.list_models()
+      Ai.Models.list_models(discover_openai: discover_openai)
       |> Enum.map(&format_model/1)
     else
       # Fallback: return common models

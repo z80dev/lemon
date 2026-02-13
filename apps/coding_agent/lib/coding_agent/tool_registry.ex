@@ -43,6 +43,7 @@ defmodule CodingAgent.ToolRegistry do
   # Built-in tools - order matters for tool description
   @builtin_tools [
     {:read, Tools.Read},
+    {:memory_topic, Tools.MemoryTopic},
     {:write, Tools.Write},
     {:edit, Tools.Edit},
     {:patch, Tools.Patch},

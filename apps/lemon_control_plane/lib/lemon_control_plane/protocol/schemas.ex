@@ -38,7 +38,11 @@ defmodule LemonControlPlane.Protocol.Schemas do
     },
 
     # Model methods
-    "models.list" => %{optional: %{}},
+    "models.list" => %{
+      optional: %{
+        "discoverOpenAI" => :boolean
+      }
+    },
 
     # Agent methods
     "agents.list" => %{optional: %{}},
