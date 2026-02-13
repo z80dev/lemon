@@ -32,7 +32,42 @@ defmodule LemonCore.Config do
       "command_prefix" => nil
     },
     "tools" => %{
-      "auto_resize_images" => true
+      "auto_resize_images" => true,
+      "web" => %{
+        "search" => %{
+          "enabled" => true,
+          "provider" => "brave",
+          "api_key" => nil,
+          "max_results" => 5,
+          "timeout_seconds" => 30,
+          "cache_ttl_minutes" => 15,
+          "perplexity" => %{
+            "api_key" => nil,
+            "base_url" => nil,
+            "model" => "perplexity/sonar-pro"
+          }
+        },
+        "fetch" => %{
+          "enabled" => true,
+          "max_chars" => 50_000,
+          "timeout_seconds" => 30,
+          "cache_ttl_minutes" => 15,
+          "max_redirects" => 3,
+          "user_agent" =>
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+          "readability" => true,
+          "allow_private_network" => false,
+          "allowed_hostnames" => [],
+          "firecrawl" => %{
+            "enabled" => nil,
+            "api_key" => nil,
+            "base_url" => "https://api.firecrawl.dev",
+            "only_main_content" => true,
+            "max_age_ms" => 172_800_000,
+            "timeout_seconds" => 60
+          }
+        }
+      }
     },
     "extension_paths" => [],
     "theme" => "default",
@@ -551,7 +586,73 @@ defmodule LemonCore.Config do
     map = stringify_keys(map)
 
     %{
-      auto_resize_images: parse_boolean(map["auto_resize_images"], true)
+      auto_resize_images: parse_boolean(map["auto_resize_images"], true),
+      web: parse_web_tools(map["web"] || %{})
+    }
+  end
+
+  defp parse_web_tools(map) do
+    map = stringify_keys(map)
+
+    %{
+      search: parse_web_search_config(map["search"] || %{}),
+      fetch: parse_web_fetch_config(map["fetch"] || %{})
+    }
+  end
+
+  defp parse_web_search_config(map) do
+    map = stringify_keys(map)
+
+    %{
+      enabled: parse_boolean(map["enabled"], true),
+      provider: normalize_web_search_provider(map["provider"]),
+      api_key: normalize_optional_string(map["api_key"]),
+      max_results: parse_positive_integer(map["max_results"], 5),
+      timeout_seconds: parse_positive_integer(map["timeout_seconds"], 30),
+      cache_ttl_minutes: parse_non_negative_number(map["cache_ttl_minutes"], 15),
+      perplexity: parse_perplexity_config(map["perplexity"] || %{})
+    }
+  end
+
+  defp parse_perplexity_config(map) do
+    map = stringify_keys(map)
+
+    %{
+      api_key: normalize_optional_string(map["api_key"]),
+      base_url: normalize_optional_string(map["base_url"]),
+      model: normalize_optional_string(map["model"]) || "perplexity/sonar-pro"
+    }
+  end
+
+  defp parse_web_fetch_config(map) do
+    map = stringify_keys(map)
+
+    %{
+      enabled: parse_boolean(map["enabled"], true),
+      max_chars: parse_positive_integer(map["max_chars"], 50_000),
+      timeout_seconds: parse_positive_integer(map["timeout_seconds"], 30),
+      cache_ttl_minutes: parse_non_negative_number(map["cache_ttl_minutes"], 15),
+      max_redirects: parse_non_negative_integer(map["max_redirects"], 3),
+      user_agent:
+        normalize_optional_string(map["user_agent"]) ||
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+      readability: parse_boolean(map["readability"], true),
+      allow_private_network: parse_boolean(map["allow_private_network"], false),
+      allowed_hostnames: parse_string_list(map["allowed_hostnames"]),
+      firecrawl: parse_firecrawl_config(map["firecrawl"] || %{})
+    }
+  end
+
+  defp parse_firecrawl_config(map) do
+    map = stringify_keys(map)
+
+    %{
+      enabled: parse_boolean(map["enabled"], nil),
+      api_key: normalize_optional_string(map["api_key"]),
+      base_url: normalize_optional_string(map["base_url"]) || "https://api.firecrawl.dev",
+      only_main_content: parse_boolean(map["only_main_content"], true),
+      max_age_ms: parse_non_negative_integer(map["max_age_ms"], 172_800_000),
+      timeout_seconds: parse_positive_integer(map["timeout_seconds"], 60)
     }
   end
 
@@ -816,6 +917,56 @@ defmodule LemonCore.Config do
     do: String.split(value, ~r/\s*,\s*/, trim: true)
 
   defp parse_string_list(_), do: []
+
+  defp parse_positive_integer(value, _default) when is_integer(value), do: max(value, 1)
+
+  defp parse_positive_integer(value, default) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {parsed, ""} -> max(parsed, 1)
+      _ -> default
+    end
+  end
+
+  defp parse_positive_integer(_value, default), do: default
+
+  defp parse_non_negative_integer(value, _default) when is_integer(value), do: max(value, 0)
+
+  defp parse_non_negative_integer(value, default) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {parsed, ""} -> max(parsed, 0)
+      _ -> default
+    end
+  end
+
+  defp parse_non_negative_integer(_value, default), do: default
+
+  defp parse_non_negative_number(value, _default) when is_number(value), do: max(value, 0)
+
+  defp parse_non_negative_number(value, default) when is_binary(value) do
+    case Float.parse(String.trim(value)) do
+      {parsed, ""} -> max(parsed, 0)
+      _ -> default
+    end
+  end
+
+  defp parse_non_negative_number(_value, default), do: default
+
+  defp normalize_optional_string(value) when is_binary(value) do
+    trimmed = String.trim(value)
+    if trimmed == "", do: nil, else: trimmed
+  end
+
+  defp normalize_optional_string(_), do: nil
+
+  defp normalize_web_search_provider(value) when is_binary(value) do
+    case String.downcase(String.trim(value)) do
+      "perplexity" -> "perplexity"
+      "brave" -> "brave"
+      _ -> "brave"
+    end
+  end
+
+  defp normalize_web_search_provider(_), do: "brave"
 
   defp normalize_env_overrides(nil), do: %{}
   defp normalize_env_overrides(env) when is_map(env), do: env

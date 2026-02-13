@@ -130,6 +130,77 @@ defmodule Ai.ModelsTest do
     end
   end
 
+  describe "list_models/1 with OpenAI discovery" do
+    setup do
+      previous_defaults = Req.default_options()
+      Req.default_options(plug: {Req.Test, __MODULE__})
+      Req.Test.set_req_test_to_shared(%{})
+
+      on_exit(fn ->
+        Req.default_options(previous_defaults)
+        Req.Test.set_req_test_to_private(%{})
+      end)
+
+      :ok
+    end
+
+    test "filters OpenAI models to those returned by /v1/models" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        assert conn.request_path == "/v1/models"
+        assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer test-openai-key"]
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          200,
+          Jason.encode!(%{
+            "data" => [
+              %{"id" => "gpt-4o"},
+              %{"id" => "gpt-5"}
+            ]
+          })
+        )
+      end)
+
+      models =
+        Models.list_models(
+          discover_openai: true,
+          openai_api_key: "test-openai-key",
+          openai_base_url: "https://api.openai.com/v1"
+        )
+
+      openai_ids =
+        models
+        |> Enum.filter(&(&1.provider == :openai))
+        |> Enum.map(& &1.id)
+
+      assert "gpt-4o" in openai_ids
+      assert "gpt-5" in openai_ids
+      refute "gpt-4-turbo" in openai_ids
+      assert Enum.any?(models, &(&1.provider == :anthropic))
+    end
+
+    test "falls back to static models when discovery fails" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(500, Jason.encode!(%{"error" => "bad gateway"}))
+      end)
+
+      static_models = Models.list_models()
+
+      discovered_models =
+        Models.list_models(
+          discover_openai: true,
+          openai_api_key: "test-openai-key",
+          openai_base_url: "https://api.openai.com/v1"
+        )
+
+      assert Enum.sort_by(discovered_models, &{&1.provider, &1.id}) ==
+               Enum.sort_by(static_models, &{&1.provider, &1.id})
+    end
+  end
+
   describe "supports_vision?/1" do
     test "returns true for models that support images" do
       model = Models.get_model(:anthropic, "claude-sonnet-4-20250514")

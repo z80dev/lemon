@@ -48,6 +48,7 @@ defmodule CodingAgent.ToolPolicy do
 
   @minimal_core_tools [
     "read",
+    "memory_topic",
     "write",
     "edit",
     "patch",

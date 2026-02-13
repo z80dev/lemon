@@ -42,6 +42,7 @@ defmodule CodingAgent.SettingsManager do
 
           # Tool settings
           auto_resize_images: boolean(),
+          tools: map(),
 
           # Extension settings
           extension_paths: [String.t()],
@@ -81,6 +82,7 @@ defmodule CodingAgent.SettingsManager do
 
     # Tool settings
     auto_resize_images: true,
+    tools: %{},
 
     # Extension settings
     extension_paths: [],
@@ -136,6 +138,7 @@ defmodule CodingAgent.SettingsManager do
       shell_path: Map.get(shell, :path),
       command_prefix: Map.get(shell, :command_prefix),
       auto_resize_images: Map.get(tools, :auto_resize_images, true),
+      tools: tools,
       extension_paths: Map.get(agent, :extension_paths, []),
       theme: Map.get(agent, :theme, "default"),
       codex: Map.get(cli, :codex, %{}),

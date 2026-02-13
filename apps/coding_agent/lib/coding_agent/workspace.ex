@@ -63,8 +63,9 @@ defmodule CodingAgent.Workspace do
 
     templates = list_template_files(template_dir)
 
-    Enum.each(templates, fn {name, template_path} ->
-      target = Path.join(dir, name)
+    Enum.each(templates, fn {relative_path, template_path} ->
+      target = Path.join(dir, relative_path)
+      File.mkdir_p!(Path.dirname(target))
 
       case File.open(target, [:write, :exclusive]) do
         {:ok, io} ->
@@ -226,16 +227,31 @@ defmodule CodingAgent.Workspace do
 
   defp list_template_files(dir) do
     if File.dir?(dir) do
-      dir
-      |> File.ls!()
-      |> Enum.filter(fn name ->
-        path = Path.join(dir, name)
-        File.regular?(path)
-      end)
-      |> Enum.map(fn name -> {name, Path.join(dir, name)} end)
+      do_list_template_files(dir, "")
+      |> Enum.sort_by(fn {relative_path, _abs_path} -> relative_path end)
     else
       []
     end
+  end
+
+  defp do_list_template_files(dir, prefix) do
+    dir
+    |> File.ls!()
+    |> Enum.flat_map(fn name ->
+      abs_path = Path.join(dir, name)
+      relative_path = if prefix == "", do: name, else: Path.join(prefix, name)
+
+      cond do
+        File.regular?(abs_path) ->
+          [{relative_path, abs_path}]
+
+        File.dir?(abs_path) ->
+          do_list_template_files(abs_path, relative_path)
+
+        true ->
+          []
+      end
+    end)
   end
 
   defp trim_content(content, file_name, max_chars) do

@@ -610,6 +610,41 @@ defmodule LemonRouter.StreamCoalescerTest do
       assert_receive {:outbox_api_call, {:send, 12_346, _text, _opts, nil}}, 500
     end
 
+    test "telegram finalize switches run_id for consecutive no-delta runs" do
+      {:ok, _} =
+        start_supervised(
+          {LemonGateway.Telegram.Outbox,
+           [bot_token: "token", api_mod: TestOutboxAPI, edit_throttle_ms: 0, use_markdown: false]}
+        )
+
+      session_key = "agent:test:telegram:bot:dm:12348"
+      channel_id = "telegram"
+      run_id_1 = "run_#{System.unique_integer([:positive])}"
+      run_id_2 = "run_#{System.unique_integer([:positive])}"
+
+      assert :ok =
+               StreamCoalescer.finalize_run(session_key, channel_id, run_id_1,
+                 meta: %{progress_msg_id: 711_111, user_msg_id: 222},
+                 final_text: "first-final"
+               )
+
+      assert_receive {:outbox_api_call, {:delete, 12_348, 711_111}}, 500
+      assert_receive {:outbox_api_call, {:send, 12_348, "first-final", _opts, nil}}, 500
+
+      assert :ok =
+               StreamCoalescer.finalize_run(session_key, channel_id, run_id_2,
+                 meta: %{progress_msg_id: 722_222, user_msg_id: 333},
+                 final_text: "second-final"
+               )
+
+      assert_receive {:outbox_api_call, {:delete, 12_348, 722_222}}, 500
+      assert_receive {:outbox_api_call, {:send, 12_348, "second-final", _opts, nil}}, 500
+
+      [{pid, _}] = Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id})
+      state = :sys.get_state(pid)
+      assert state.run_id == run_id_2
+    end
+
     test "telegram finalize sends final even if delete fails (non-retryable)" do
       {:ok, _} =
         start_supervised(

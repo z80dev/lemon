@@ -6,6 +6,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   """
 
   alias LemonChannels.OutboundPayload
+  alias LemonGateway.Telegram.Formatter
 
   @doc """
   Deliver an outbound payload to Telegram.
@@ -13,13 +14,14 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   @spec deliver(OutboundPayload.t()) :: {:ok, term()} | {:error, term()}
   def deliver(%OutboundPayload{kind: :text} = payload) do
     chat_id = String.to_integer(payload.peer.id)
-    opts = build_send_opts(payload)
+    {text, md_opts} = format_text(payload.content, telegram_use_markdown())
+    opts = build_send_opts(payload, md_opts)
     {token, api_mod} = telegram_config()
 
     # Use existing Telegram API if available
     if Code.ensure_loaded?(api_mod) do
       with token when is_binary(token) and token != "" <- token do
-        case api_mod.send_message(token, chat_id, payload.content, opts, nil) do
+        case api_mod.send_message(token, chat_id, text, opts, nil) do
           {:ok, result} -> {:ok, result}
           {:error, reason} -> {:error, reason}
         end
@@ -36,11 +38,12 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
       ) do
     chat_id = String.to_integer(payload.peer.id)
     msg_id = parse_message_id(message_id)
+    {formatted_text, md_opts} = format_text(text, telegram_use_markdown())
     {token, api_mod} = telegram_config()
 
     if Code.ensure_loaded?(api_mod) do
       with token when is_binary(token) and token != "" <- token do
-        case api_mod.edit_message_text(token, chat_id, msg_id, text, nil) do
+        case api_mod.edit_message_text(token, chat_id, msg_id, formatted_text, md_opts) do
           {:ok, result} -> {:ok, result}
           {:error, reason} -> {:error, reason}
         end
@@ -60,7 +63,9 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     if Code.ensure_loaded?(api_mod) do
       with token when is_binary(token) and token != "" <- token do
         case api_mod.delete_message(token, chat_id, msg_id) do
-          {:ok, result} -> {:ok, result}
+          {:ok, result} ->
+            {:ok, result}
+
           # Telegram deleteMessage is effectively idempotent for our purposes. If the progress
           # message was already deleted (or never existed due to a race), Telegram returns 400
           # "message to delete not found". Treat as success so the Outbox won't retry.
@@ -71,7 +76,8 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
               {:error, {:http_error, 400, body}}
             end
 
-          {:error, reason} -> {:error, reason}
+          {:error, reason} ->
+            {:error, reason}
         end
       else
         _ -> {:error, :telegram_not_configured}
@@ -85,28 +91,40 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     {:error, {:unsupported_kind, kind}}
   end
 
-  defp build_send_opts(payload) do
-    opts = []
-
+  defp build_send_opts(payload, md_opts) do
     opts =
-      if payload.reply_to do
-        [{:reply_to_message_id, parse_message_id(payload.reply_to)} | opts]
-      else
-        opts
-      end
+      %{}
+      |> maybe_put(:reply_to_message_id, parse_optional_message_id(payload.reply_to))
+      |> maybe_put(:message_thread_id, parse_optional_thread_id(payload.peer.thread_id))
 
-    opts =
-      if payload.peer.thread_id do
-        [{:message_thread_id, String.to_integer(payload.peer.thread_id)} | opts]
-      else
-        opts
-      end
-
-    opts
+    case md_opts do
+      nil -> opts
+      m when is_map(m) -> Map.merge(opts, m)
+      _ -> opts
+    end
   end
 
   defp parse_message_id(id) when is_binary(id), do: String.to_integer(id)
   defp parse_message_id(id) when is_integer(id), do: id
+  defp parse_optional_message_id(nil), do: nil
+  defp parse_optional_message_id(id), do: parse_message_id(id)
+
+  defp parse_optional_thread_id(nil), do: nil
+  defp parse_optional_thread_id(id) when is_binary(id), do: String.to_integer(id)
+  defp parse_optional_thread_id(id) when is_integer(id), do: id
+
+  defp format_text(text, true) do
+    normalized = normalize_text(text)
+    Formatter.prepare_for_telegram(normalized)
+  end
+
+  defp format_text(text, _use_markdown) do
+    {normalize_text(text), nil}
+  end
+
+  defp normalize_text(text) when is_binary(text), do: text
+  defp normalize_text(nil), do: ""
+  defp normalize_text(text), do: to_string(text)
 
   defp telegram_delete_not_found?(body) when is_binary(body) do
     case Jason.decode(body) do
@@ -121,6 +139,23 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   # Transport merges runtime overrides from `Application.get_env(:lemon_gateway, :telegram)`;
   # do the same here so tests can inject a mock api module without hitting the network.
   defp telegram_config do
+    config = telegram_runtime_config()
+    token = config[:bot_token] || config["bot_token"]
+    api_mod = config[:api_mod] || config["api_mod"] || LemonGateway.Telegram.API
+    {token, api_mod}
+  end
+
+  defp telegram_use_markdown do
+    config = telegram_runtime_config()
+
+    case fetch_config(config, :use_markdown) do
+      {:ok, nil} -> true
+      {:ok, v} -> v
+      :error -> true
+    end
+  end
+
+  defp telegram_runtime_config do
     base = LemonChannels.GatewayConfig.get(:telegram, %{}) || %{}
 
     overrides =
@@ -142,9 +177,19 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
           %{}
       end
 
-    config = Map.merge(base, overrides)
-    token = config[:bot_token] || config["bot_token"]
-    api_mod = config[:api_mod] || config["api_mod"] || LemonGateway.Telegram.API
-    {token, api_mod}
+    Map.merge(base, overrides)
   end
+
+  defp fetch_config(config, key) when is_map(config) and is_atom(key) do
+    case Map.fetch(config, key) do
+      {:ok, value} ->
+        {:ok, value}
+
+      :error ->
+        Map.fetch(config, Atom.to_string(key))
+    end
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 end

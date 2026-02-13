@@ -245,4 +245,60 @@ defmodule LemonCore.ConfigTest do
     System.delete_env("LEMON_LOG_FILE")
     System.delete_env("LEMON_LOG_LEVEL")
   end
+
+  test "parses web tool configuration under agent.tools", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [agent.tools.web.search]
+    enabled = true
+    provider = "perplexity"
+    max_results = 7
+    timeout_seconds = 42
+    cache_ttl_minutes = 10
+
+    [agent.tools.web.search.perplexity]
+    api_key = "pplx-test"
+    base_url = "https://api.perplexity.ai"
+    model = "perplexity/sonar"
+
+    [agent.tools.web.fetch]
+    enabled = true
+    max_chars = 64000
+    timeout_seconds = 25
+    cache_ttl_minutes = 5
+    max_redirects = 2
+    readability = false
+    allow_private_network = false
+    allowed_hostnames = ["example.com"]
+
+    [agent.tools.web.fetch.firecrawl]
+    enabled = true
+    api_key = "fc-test"
+    base_url = "https://api.firecrawl.dev"
+    only_main_content = true
+    max_age_ms = 123000
+    timeout_seconds = 15
+    """)
+
+    config = Config.load()
+    tools = config.agent.tools
+
+    assert tools.web.search.provider == "perplexity"
+    assert tools.web.search.max_results == 7
+    assert tools.web.search.timeout_seconds == 42
+    assert tools.web.search.cache_ttl_minutes == 10
+    assert tools.web.search.perplexity.model == "perplexity/sonar"
+
+    assert tools.web.fetch.max_chars == 64_000
+    assert tools.web.fetch.timeout_seconds == 25
+    assert tools.web.fetch.cache_ttl_minutes == 5
+    assert tools.web.fetch.max_redirects == 2
+    assert tools.web.fetch.readability == false
+    assert tools.web.fetch.allowed_hostnames == ["example.com"]
+
+    assert tools.web.fetch.firecrawl.enabled == true
+    assert tools.web.fetch.firecrawl.timeout_seconds == 15
+  end
 end

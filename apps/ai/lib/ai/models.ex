@@ -25,6 +25,9 @@ defmodule Ai.Models do
 
   alias Ai.Types.{Model, ModelCost}
 
+  @default_openai_base_url "https://api.openai.com/v1"
+  @default_openai_discovery_timeout_ms 4_000
+
   # ============================================================================
   # Anthropic Models
   # ============================================================================
@@ -1052,6 +1055,41 @@ defmodule Ai.Models do
     |> Enum.flat_map(&Map.values/1)
   end
 
+  @type list_models_opt ::
+          {:discover_openai, boolean()}
+          | {:openai_api_key, String.t()}
+          | {:openai_base_url, String.t()}
+          | {:openai_timeout_ms, pos_integer()}
+
+  @doc """
+  List all known models with optional runtime discovery.
+
+  ## Options
+
+  - `:discover_openai` - When true, query OpenAI `/v1/models` and filter the
+    OpenAI model list to IDs reported as available for the configured key.
+    If discovery fails, returns the static model registry.
+  - `:openai_api_key` - Optional API key override for discovery.
+  - `:openai_base_url` - Optional OpenAI-compatible base URL override.
+  - `:openai_timeout_ms` - Optional request timeout in milliseconds.
+  """
+  @spec list_models([list_models_opt()]) :: [Model.t()]
+  def list_models(opts) when is_list(opts) do
+    static_models = list_models()
+
+    if Keyword.get(opts, :discover_openai, false) do
+      case discover_openai_model_ids(opts) do
+        {:ok, available_ids} ->
+          filter_openai_models(static_models, available_ids)
+
+        {:error, _reason} ->
+          static_models
+      end
+    else
+      static_models
+    end
+  end
+
   @doc """
   Backwards-compatible alias for `list_models/0`.
   """
@@ -1135,5 +1173,93 @@ defmodule Ai.Models do
       nil -> []
       provider_models -> Map.keys(provider_models)
     end
+  end
+
+  defp discover_openai_model_ids(opts) do
+    with {:ok, api_key} <- resolve_openai_api_key(opts),
+         {:ok, %Req.Response{status: status, body: body}} when status in 200..299 <-
+           Req.get(openai_models_url(opts),
+             headers: %{
+               "Authorization" => "Bearer #{api_key}",
+               "Accept" => "application/json"
+             },
+             connect_options: [timeout: openai_timeout_ms(opts)],
+             receive_timeout: openai_timeout_ms(opts),
+             retry: false
+           ),
+         %{"data" => data} when is_list(data) <- body do
+      ids =
+        data
+        |> Enum.flat_map(fn
+          %{"id" => id} when is_binary(id) and id != "" -> [id]
+          _ -> []
+        end)
+        |> MapSet.new()
+
+      if MapSet.size(ids) > 0 do
+        {:ok, ids}
+      else
+        {:error, :no_models_returned}
+      end
+    else
+      {:ok, _response} ->
+        {:error, :http_error}
+
+      {:error, _reason} = error ->
+        error
+
+      _ ->
+        {:error, :invalid_response}
+    end
+  rescue
+    _ -> {:error, :request_failed}
+  end
+
+  defp resolve_openai_api_key(opts) do
+    case Keyword.get(opts, :openai_api_key) || System.get_env("OPENAI_API_KEY") do
+      key when is_binary(key) and key != "" -> {:ok, key}
+      _ -> {:error, :missing_api_key}
+    end
+  end
+
+  defp openai_models_url(opts) do
+    base_url =
+      Keyword.get(opts, :openai_base_url) ||
+        System.get_env("OPENAI_BASE_URL") ||
+        @default_openai_base_url
+
+    "#{normalize_openai_base_url(base_url)}/models"
+  end
+
+  defp normalize_openai_base_url(base_url) when is_binary(base_url) do
+    trimmed =
+      base_url
+      |> String.trim()
+      |> String.trim_trailing("/")
+
+    cond do
+      trimmed == "" ->
+        @default_openai_base_url
+
+      String.ends_with?(trimmed, "/v1") ->
+        trimmed
+
+      true ->
+        "#{trimmed}/v1"
+    end
+  end
+
+  defp openai_timeout_ms(opts) do
+    case Keyword.get(opts, :openai_timeout_ms, @default_openai_discovery_timeout_ms) do
+      timeout when is_integer(timeout) and timeout > 0 -> timeout
+      _ -> @default_openai_discovery_timeout_ms
+    end
+  end
+
+  defp filter_openai_models(models, available_ids) do
+    Enum.filter(models, fn
+      %Model{provider: :openai, id: id} -> MapSet.member?(available_ids, id)
+      %Model{} -> true
+    end)
   end
 end

@@ -13,6 +13,7 @@ defmodule CodingAgent.ToolRegistryTest do
 
       names = Enum.map(tools, & &1.name)
       assert "read" in names
+      assert "memory_topic" in names
       assert "write" in names
       assert "edit" in names
       assert "bash" in names
