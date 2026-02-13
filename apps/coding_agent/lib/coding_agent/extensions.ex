@@ -145,6 +145,7 @@ defmodule CodingAgent.Extensions do
   @source_path_table :coding_agent_extension_source_paths
   # ETS table for storing last extension load errors
   @load_error_table :coding_agent_extension_load_errors
+  @last_load_errors_pd_key {__MODULE__, :last_load_errors}
 
   # ============================================================================
   # Extension Loading
@@ -779,24 +780,30 @@ defmodule CodingAgent.Extensions do
   """
   @spec last_load_errors() :: {[load_error()], integer() | nil}
   def last_load_errors do
-    case :ets.whereis(@load_error_table) do
-      :undefined ->
-        {[], nil}
-
-      _tid ->
-        errors =
-          case :ets.lookup(@load_error_table, :last_errors) do
-            [{:last_errors, value}] -> value
-            [] -> []
-          end
-
-        loaded_at =
-          case :ets.lookup(@load_error_table, :last_loaded_at) do
-            [{:last_loaded_at, value}] -> value
-            [] -> nil
-          end
-
+    case Process.get(@last_load_errors_pd_key) do
+      {errors, loaded_at} when is_list(errors) ->
         {errors, loaded_at}
+
+      _ ->
+        case :ets.whereis(@load_error_table) do
+          :undefined ->
+            {[], nil}
+
+          _tid ->
+            errors =
+              case :ets.lookup(@load_error_table, :last_errors) do
+                [{:last_errors, value}] -> value
+                [] -> []
+              end
+
+            loaded_at =
+              case :ets.lookup(@load_error_table, :last_loaded_at) do
+                [{:last_loaded_at, value}] -> value
+                [] -> nil
+              end
+
+            {errors, loaded_at}
+        end
     end
   end
 
@@ -984,6 +991,8 @@ defmodule CodingAgent.Extensions do
       _tid -> :ets.delete_all_objects(@load_error_table)
     end
 
+    Process.delete(@last_load_errors_pd_key)
+
     :ok
   end
 
@@ -1025,8 +1034,10 @@ defmodule CodingAgent.Extensions do
 
   defp store_load_errors(errors) do
     ensure_load_error_table()
+    loaded_at = System.system_time(:millisecond)
     :ets.insert(@load_error_table, {:last_errors, errors})
-    :ets.insert(@load_error_table, {:last_loaded_at, System.system_time(:millisecond)})
+    :ets.insert(@load_error_table, {:last_loaded_at, loaded_at})
+    Process.put(@last_load_errors_pd_key, {errors, loaded_at})
     :ok
   end
 
