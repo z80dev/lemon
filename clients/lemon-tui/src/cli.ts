@@ -6,6 +6,7 @@
 import { LemonTUI } from './index.js';
 import { parseModelSpec, resolveConfig, getModelString, type ResolvedConfig } from './config.js';
 import { setTheme } from './theme.js';
+import { loadDotenvFromDir } from './dotenv.js';
 import type { AgentConnectionOptions } from './agent-connection.js';
 
 // ============================================================================
@@ -134,6 +135,7 @@ Options:
 
 Configuration:
   Config file: ~/.lemon/config.toml
+  Dotenv file: <cwd>/.env (if present, without overriding existing env vars)
   Environment variables override config file values.
   CLI arguments override everything.
 `);
@@ -187,6 +189,7 @@ function buildOptions(cliArgs: CLIArgs, config: ResolvedConfig): AgentConnection
 
 // Main
 const cliArgs = parseArgs();
+loadDotenvFromDir(cliArgs.cwd || process.cwd());
 
 // If model includes provider prefix, parse and override provider/model for resolution
 const modelSpec = parseModelSpec(cliArgs.model);

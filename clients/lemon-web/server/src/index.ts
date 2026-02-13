@@ -13,6 +13,7 @@ import {
   type BridgeStatusMessage,
   type BridgeStderrMessage,
 } from '@lemon-web/shared';
+import { loadDotenvFromDir } from './dotenv.js';
 
 interface BridgeOptions {
   cwd?: string;
@@ -370,6 +371,7 @@ function contentTypeFor(ext: string): string | null {
 }
 
 const opts = parseArgs(process.argv);
+loadDotenvFromDir(opts.cwd || process.cwd());
 const port = Number.isFinite(opts.port) ? (opts.port as number) : DEFAULT_PORT;
 const staticDir = resolveStaticDir(opts.staticDir);
 

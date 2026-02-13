@@ -1,14 +1,83 @@
 // src/index.ts
 import { spawn } from "child_process";
 import http from "http";
-import fs from "fs";
-import path from "path";
+import fs2 from "fs";
+import path2 from "path";
 import { fileURLToPath } from "url";
 import { WebSocketServer, WebSocket } from "ws";
 import {
   JsonLineDecoder,
   encodeJsonLine
 } from "@lemon-web/shared";
+
+// src/dotenv.ts
+import fs from "fs";
+import path from "path";
+var KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+function loadDotenvFromDir(dir, opts2) {
+  const targetDir = path.resolve(dir || process.cwd());
+  const envPath = path.join(targetDir, ".env");
+  const override = opts2?.override === true;
+  let content;
+  try {
+    content = fs.readFileSync(envPath, "utf-8");
+  } catch {
+    return;
+  }
+  for (const line of content.split(/\r?\n/)) {
+    const parsed = parseLine(line);
+    if (!parsed) {
+      continue;
+    }
+    const [key, value] = parsed;
+    if (override || process.env[key] == null) {
+      process.env[key] = value;
+    }
+  }
+}
+function parseLine(line) {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith("#")) {
+    return null;
+  }
+  const exportStripped = trimmed.startsWith("export ") ? trimmed.slice("export ".length).trimStart() : trimmed;
+  const eqIndex = exportStripped.indexOf("=");
+  if (eqIndex <= 0) {
+    return null;
+  }
+  const key = exportStripped.slice(0, eqIndex).trim();
+  if (!KEY_PATTERN.test(key)) {
+    return null;
+  }
+  const rawValue = exportStripped.slice(eqIndex + 1).trimStart();
+  return [key, parseValue(rawValue)];
+}
+function parseValue(rawValue) {
+  if (!rawValue) {
+    return "";
+  }
+  if (rawValue.startsWith('"')) {
+    const match = rawValue.match(/^"((?:\\.|[^"])*)"(?:\s+#.*)?\s*$/);
+    if (match) {
+      return unescapeDoubleQuoted(match[1]);
+    }
+  }
+  if (rawValue.startsWith("'")) {
+    const match = rawValue.match(/^'([^']*)'(?:\s+#.*)?\s*$/);
+    if (match) {
+      return match[1];
+    }
+  }
+  return stripInlineComment(rawValue).trim();
+}
+function stripInlineComment(value) {
+  return value.replace(/\s+#.*$/, "");
+}
+function unescapeDoubleQuoted(value) {
+  return value.replace(/\\n/g, "\n").replace(/\\r/g, "\r").replace(/\\t/g, "	").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+}
+
+// src/index.ts
 var DEFAULT_PORT = 3939;
 var RpcBridge = class {
   constructor(opts2) {
@@ -222,20 +291,20 @@ function findLemonPath() {
   if (cwd.includes("lemon")) {
     let current = cwd;
     while (current !== "/") {
-      if (fs.existsSync(path.join(current, "mix.exs")) && fs.existsSync(path.join(current, "apps"))) {
+      if (fs2.existsSync(path2.join(current, "mix.exs")) && fs2.existsSync(path2.join(current, "apps"))) {
         return current;
       }
-      current = path.dirname(current);
+      current = path2.dirname(current);
     }
   }
   const home = process.env.HOME || "";
   const commonPaths = [
     "/home/z80/dev/lemon",
-    path.join(home, "dev", "lemon"),
-    path.join(home, "projects", "lemon")
+    path2.join(home, "dev", "lemon"),
+    path2.join(home, "projects", "lemon")
   ];
   for (const candidate of commonPaths) {
-    if (fs.existsSync(path.join(candidate, "mix.exs"))) {
+    if (fs2.existsSync(path2.join(candidate, "mix.exs"))) {
       return candidate;
     }
   }
@@ -245,9 +314,9 @@ function resolveStaticDir(custom) {
   if (custom) {
     return custom;
   }
-  const currentDir = path.dirname(fileURLToPath(import.meta.url));
-  const distPath = path.resolve(currentDir, "..", "..", "web", "dist");
-  if (fs.existsSync(distPath)) {
+  const currentDir = path2.dirname(fileURLToPath(import.meta.url));
+  const distPath = path2.resolve(currentDir, "..", "..", "web", "dist");
+  if (fs2.existsSync(distPath)) {
     return distPath;
   }
   return null;
@@ -258,17 +327,17 @@ function serveStatic(distDir, req, res) {
   if (pathname === "/") {
     pathname = "/index.html";
   }
-  const filePath = path.join(distDir, pathname);
+  const filePath = path2.join(distDir, pathname);
   if (!filePath.startsWith(distDir)) {
     res.writeHead(403);
     res.end("Forbidden");
     return;
   }
-  fs.readFile(filePath, (err, data) => {
+  fs2.readFile(filePath, (err, data) => {
     if (err) {
-      const fallback = path.join(distDir, "index.html");
-      if (err.code === "ENOENT" && !path.extname(filePath)) {
-        fs.readFile(fallback, (fallbackErr, fallbackData) => {
+      const fallback = path2.join(distDir, "index.html");
+      if (err.code === "ENOENT" && !path2.extname(filePath)) {
+        fs2.readFile(fallback, (fallbackErr, fallbackData) => {
           if (fallbackErr) {
             res.writeHead(404);
             res.end("Not Found");
@@ -284,7 +353,7 @@ function serveStatic(distDir, req, res) {
       res.end("Not Found");
       return;
     }
-    const ext = path.extname(filePath).toLowerCase();
+    const ext = path2.extname(filePath).toLowerCase();
     const contentType = contentTypeFor(ext);
     if (contentType) {
       res.setHeader("Content-Type", contentType);
@@ -319,6 +388,7 @@ function contentTypeFor(ext) {
   }
 }
 var opts = parseArgs(process.argv);
+loadDotenvFromDir(opts.cwd || process.cwd());
 var port = Number.isFinite(opts.port) ? opts.port : DEFAULT_PORT;
 var staticDir = resolveStaticDir(opts.staticDir);
 var server = http.createServer((req, res) => {

@@ -51,6 +51,7 @@ defmodule DebugAgentRPC do
     Process.put(:debug, debug_enabled)
 
     cwd = opts[:cwd] || File.cwd!()
+    LemonCore.Dotenv.load_and_log(cwd)
     settings = CodingAgent.SettingsManager.load(cwd)
     model = resolve_model(opts[:model], settings)
     model = maybe_override_base_url(model, opts[:base_url], settings)

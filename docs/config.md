@@ -4,7 +4,7 @@ Lemon uses a single canonical configuration file in TOML format. Configuration i
 
 1. Global: `~/.lemon/config.toml`
 2. Project: `<project>/.lemon/config.toml` (overrides global)
-3. Environment variables (override file values)
+3. Environment variables (override file values; `.env` may auto-populate missing env vars at startup)
 4. CLI arguments (highest priority, when applicable)
 
 ## Example
@@ -100,6 +100,16 @@ Environment variables override file values. Common overrides:
 - `LEMON_CODEX_EXTRA_ARGS`, `LEMON_CODEX_AUTO_APPROVE`
 - `LEMON_CLAUDE_YOLO`
 - `LEMON_LOG_FILE`, `LEMON_LOG_LEVEL`
+
+## Dotenv Autoload
+
+Lemon can auto-load a `.env` file at startup:
+
+- `./bin/lemon-dev` / `lemon-tui`: loads `<cwd>/.env` where `<cwd>` is the agent working directory (`--cwd`, or current directory).
+- `clients/lemon-web/server` bridge: loads `<cwd>/.env` from `--cwd` (or current directory).
+- `./bin/lemon-gateway`: loads `.env` from the directory where you launch the script.
+
+By default, existing environment variables are preserved. `.env` values only fill missing variables.
 
 ## OpenAI Codex (ChatGPT OAuth)
 

@@ -1302,6 +1302,9 @@ Lemon TUI reads settings from `~/.lemon/config.toml`, applies project overrides 
 `<project>/.lemon/config.toml` (when `--cwd` is set), then applies environment variables,
 then CLI args (highest priority).
 
+At startup, Lemon also auto-loads `<cwd>/.env` (`--cwd`, or current directory) for the TUI/web bridge.
+Existing shell environment variables still win; `.env` only fills missing values.
+
 Example `~/.lemon/config.toml`:
 
 ```toml

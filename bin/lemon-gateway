@@ -8,8 +8,12 @@
 # Reads configuration from:
 #   ~/.lemon/config.toml
 #   <project>/.lemon/config.toml (if you run from a project directory)
+# Also loads:
+#   <launch_dir>/.env (can be overridden by setting LEMON_DOTENV_DIR)
 #
 set -e
+
+LAUNCH_CWD="$(pwd)"
 
 SCRIPT_PATH="${BASH_SOURCE[0]}"
 while [ -L "$SCRIPT_PATH" ]; do
@@ -48,6 +52,8 @@ if [[ -n "$DEBUG" ]]; then
   export LEMON_DEBUG=1
 fi
 
+export LEMON_DOTENV_DIR="${LEMON_DOTENV_DIR:-$LAUNCH_CWD}"
+
 mix deps.get
 mix compile
 
@@ -56,4 +62,4 @@ echo "[lemon-gateway] Starting Telegram runtime (Ctrl-C to stop)..."
 # while run orchestration lives in lemon_router and execution lives in lemon_gateway.
 # `--no-start` is important in umbrella projects: it prevents Mix from starting every
 # OTP application in the umbrella (e.g. the control plane on :4040) implicitly.
-exec mix run --no-start --no-halt -e 'Application.ensure_all_started(:lemon_gateway); Application.ensure_all_started(:lemon_router); Application.ensure_all_started(:lemon_channels)'
+exec mix run --no-start --no-halt -e 'LemonCore.Dotenv.load_and_log(System.get_env("LEMON_DOTENV_DIR")); Application.ensure_all_started(:lemon_gateway); Application.ensure_all_started(:lemon_router); Application.ensure_all_started(:lemon_channels)'
