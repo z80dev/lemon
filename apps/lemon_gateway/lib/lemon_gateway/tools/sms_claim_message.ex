@@ -78,4 +78,3 @@ defmodule LemonGateway.Tools.SmsClaimMessage do
 
   defp normalize_string(_), do: nil
 end
-

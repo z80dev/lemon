@@ -40,4 +40,3 @@ defmodule LemonGateway.Tools.SmsGetInboxNumber do
     end
   end
 end
-

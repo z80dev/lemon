@@ -52,7 +52,8 @@ defmodule LemonGateway.Sms.Config do
   end
 
   def inbox_number do
-    normalize_blank(System.get_env("TWILIO_INBOX_NUMBER")) || normalize_blank(sms_cfg(:inbox_number))
+    normalize_blank(System.get_env("TWILIO_INBOX_NUMBER")) ||
+      normalize_blank(sms_cfg(:inbox_number))
   end
 
   def inbox_ttl_ms do
@@ -74,7 +75,8 @@ defmodule LemonGateway.Sms.Config do
   end
 
   def webhook_url_override do
-    normalize_blank(System.get_env("TWILIO_WEBHOOK_URL")) || normalize_blank(sms_cfg(:webhook_url))
+    normalize_blank(System.get_env("TWILIO_WEBHOOK_URL")) ||
+      normalize_blank(sms_cfg(:webhook_url))
   end
 
   defp sms_cfg(key) when is_atom(key) do

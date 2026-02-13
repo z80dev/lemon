@@ -47,7 +47,7 @@ defmodule LemonGateway.ConfigLoaderTest do
     default_engine = "lemon"
     default_cwd = "/tmp/lemon-home"
     enable_telegram = true
-    
+
     [gateway.sms]
     webhook_port = 8786
 

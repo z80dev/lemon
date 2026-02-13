@@ -33,4 +33,3 @@ defmodule LemonGateway.Sms.WebhookServer do
     }
   end
 end
-

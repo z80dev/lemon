@@ -179,4 +179,3 @@ defmodule LemonGateway.Tools.SmsListMessages do
   defp maybe_put(opts, _k, nil), do: opts
   defp maybe_put(opts, k, v), do: Keyword.put(opts, k, v)
 end
-

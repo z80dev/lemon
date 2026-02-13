@@ -181,7 +181,8 @@ defmodule LemonGateway.Sms.Inbox do
 
   defp normalize_twilio_sms(params) when is_map(params) do
     sid =
-      params["MessageSid"] || params["SmsMessageSid"] || params[:MessageSid] || params[:SmsMessageSid]
+      params["MessageSid"] || params["SmsMessageSid"] || params[:MessageSid] ||
+        params[:SmsMessageSid]
 
     body = params["Body"] || params[:Body] || ""
     to = params["To"] || params[:To]

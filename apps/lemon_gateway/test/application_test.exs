@@ -571,6 +571,7 @@ defmodule LemonGateway.ApplicationTest do
 
       # Collect all child pids
       children = Supervisor.which_children(LemonGateway.Supervisor)
+
       child_pids =
         children
         |> Enum.map(fn {_id, pid, _type, _modules} -> pid end)

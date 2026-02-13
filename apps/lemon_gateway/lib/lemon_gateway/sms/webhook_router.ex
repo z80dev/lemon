@@ -11,10 +11,11 @@ defmodule LemonGateway.Sms.WebhookRouter do
 
   plug(Plug.Logger, log: :debug)
 
-  plug Plug.Parsers,
+  plug(Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
     json_decoder: Jason
+  )
 
   plug(:match)
   plug(:dispatch)
@@ -96,7 +97,8 @@ defmodule LemonGateway.Sms.WebhookRouter do
         "#{scheme}://#{host}"
       end
 
-    base <> conn.request_path <> if(conn.query_string != "", do: "?" <> conn.query_string, else: "")
+    base <>
+      conn.request_path <> if(conn.query_string != "", do: "?" <> conn.query_string, else: "")
   end
 
   defp send_twiml(conn, status, xml) when is_binary(xml) do
@@ -105,4 +107,3 @@ defmodule LemonGateway.Sms.WebhookRouter do
     |> Plug.Conn.send_resp(status, xml)
   end
 end
-

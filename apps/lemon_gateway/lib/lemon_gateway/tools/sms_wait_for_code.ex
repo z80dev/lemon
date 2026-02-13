@@ -45,7 +45,8 @@ defmodule LemonGateway.Tools.SmsWaitForCode do
           },
           "claim" => %{
             "type" => "boolean",
-            "description" => "If true, mark the matched message as claimed by this session. Default: true."
+            "description" =>
+              "If true, mark the matched message as claimed by this session. Default: true."
           }
         }
       },
@@ -83,7 +84,8 @@ defmodule LemonGateway.Tools.SmsWaitForCode do
           content: [
             %TextContent{
               type: :text,
-              text: "Code: #{code}\nFrom: #{from}\nTo: #{to}\nMessageSid: #{sid}\nReceivedAtMs: #{ts}"
+              text:
+                "Code: #{code}\nFrom: #{from}\nTo: #{to}\nMessageSid: #{sid}\nReceivedAtMs: #{ts}"
             }
           ],
           details: %{code: code, message: msg}

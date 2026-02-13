@@ -162,4 +162,3 @@ defmodule LemonGateway.Sms.InboxTest do
     assert length(msgs) == 2
   end
 end
-

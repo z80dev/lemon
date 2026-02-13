@@ -41,4 +41,3 @@ defmodule LemonGateway.Sms.WebhookRouterTest do
     assert Enum.any?(msgs, fn msg -> msg["message_sid"] == sid end)
   end
 end
-
