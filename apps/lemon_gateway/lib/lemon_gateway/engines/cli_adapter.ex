@@ -26,7 +26,17 @@ defmodule LemonGateway.Engines.CliAdapter do
   end
 
   def cancel(%{runner_pid: pid, runner_module: mod}) when is_pid(pid) do
-    mod.cancel(pid, :user_requested)
+    cond do
+      function_exported?(mod, :cancel, 2) ->
+        mod.cancel(pid, :user_requested)
+
+      function_exported?(mod, :cancel, 1) ->
+        mod.cancel(pid)
+
+      true ->
+        Process.exit(pid, :kill)
+    end
+
     :ok
   end
 

@@ -26,6 +26,11 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     test "supports_steer?/0 returns true" do
       assert LemonRunner.supports_steer?() == true
     end
+
+    test "exports cancel/1 and cancel/2 for adapter compatibility" do
+      assert function_exported?(LemonRunner, :cancel, 1)
+      assert function_exported?(LemonRunner, :cancel, 2)
+    end
   end
 
   # ============================================================================

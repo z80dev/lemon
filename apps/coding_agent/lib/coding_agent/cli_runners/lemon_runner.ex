@@ -138,8 +138,9 @@ defmodule CodingAgent.CliRunners.LemonRunner do
   Sends an abort signal to the underlying CodingAgent.Session.
   """
   @spec cancel(pid()) :: :ok
-  def cancel(pid) do
-    GenServer.cast(pid, :cancel)
+  @spec cancel(pid(), term()) :: :ok
+  def cancel(pid, reason \\ :user_requested) do
+    GenServer.cast(pid, {:cancel, reason})
   end
 
   @doc """
@@ -303,6 +304,14 @@ defmodule CodingAgent.CliRunners.LemonRunner do
 
   @impl true
   def handle_cast(:cancel, state) do
+    handle_cancel(:user_requested, state)
+  end
+
+  def handle_cast({:cancel, reason}, state) do
+    handle_cancel(reason, state)
+  end
+
+  defp handle_cancel(reason, state) do
     if state.session do
       CodingAgent.Session.abort(state.session)
     end
@@ -310,7 +319,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     # Emit completed event if not already done
     state =
       if state.started_emitted and not state.completed_emitted do
-        emit_completed_error(state, "Cancelled by user")
+        emit_completed_error(state, cancel_error_message(reason))
       else
         state
       end
@@ -825,6 +834,9 @@ defmodule CodingAgent.CliRunners.LemonRunner do
   defp format_error(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp format_error({:error, reason}), do: format_error(reason)
   defp format_error(reason), do: inspect(reason)
+
+  defp cancel_error_message(:user_requested), do: "Cancelled by user"
+  defp cancel_error_message(reason), do: "Cancelled: #{format_error(reason)}"
 
   defp normalize_extra_tools_opt(tools) when is_list(tools) and tools != [], do: tools
   defp normalize_extra_tools_opt(_), do: nil
