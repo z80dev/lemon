@@ -153,6 +153,7 @@ Why it matters:
 - The gateway will run engines with `cwd` set to the project root (so file edits/commands happen in the right repo).
 - The gateway will load per-project config from `<project_root>/.lemon/config.toml` (which can override agent profiles,
   models, tool policy, etc. compared to your global `~/.lemon/config.toml`).
+- If a chat has no bound project, gateway falls back to `gateway.default_cwd` (or `~/` by default).
 
 ### Projects
 
@@ -186,13 +187,19 @@ queue_mode = "steer"
 ```
 
 Notes:
-- If you omit `project`, LemonGateway will run without a project `cwd` (so engines fall back to their process working
-  directory), and only global config will apply.
+- If you omit `project`, LemonGateway will run with `cwd` set to `gateway.default_cwd` when configured, otherwise `~/`.
 - You can also bind at the topic/thread level by setting `topic_id` in the binding (takes precedence over the chat-level
   binding when a matching topic exists).
 - `topic_id` corresponds to Telegram's `message_thread_id` (only present in forum topics).
 - LemonGateway loads `gateway.*` config on startup; after changing `gateway.projects` or `gateway.bindings`, restart the
   gateway process.
+
+Optional fallback cwd:
+
+```toml
+[gateway]
+default_cwd = "~/"
+```
 
 Tip:
 - In Telegram, you can switch the current chat's working directory at runtime with `/new <project_id|path>`. If you pass a
@@ -235,8 +242,10 @@ max_download_bytes = 52428800   # optional (default: 50MB)
 ```
 
 Commands:
-- `/file put [--force] <path>`: upload a Telegram document into the bound project.
-- `/file get <path>`: fetch a file (or zip a directory) back into Telegram.
+- `/file put [--force] <path>`: upload a Telegram document into the active working root.
+- `/file get <path>`: fetch a file (or zip a directory) from the active working root back into Telegram.
+
+If no project is bound for the chat, the active root falls back to `gateway.default_cwd` (or `~/`).
 
 When `auto_send_generated_images = true`, Lemon tracks image files created/changed during the run and sends up to
 `auto_send_generated_max_files` files back to Telegram automatically at completion (using the same `max_download_bytes`

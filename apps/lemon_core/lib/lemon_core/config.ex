@@ -115,6 +115,7 @@ defmodule LemonCore.Config do
   @default_gateway %{
     "max_concurrent_runs" => 2,
     "default_engine" => "lemon",
+    "default_cwd" => nil,
     "auto_resume" => false,
     "enable_telegram" => false,
     "require_engine_lock" => true,
@@ -351,6 +352,7 @@ defmodule LemonCore.Config do
     %{
       max_concurrent_runs: map["max_concurrent_runs"],
       default_engine: map["default_engine"],
+      default_cwd: parse_optional_string(map["default_cwd"]),
       auto_resume: parse_boolean(map["auto_resume"], false),
       enable_telegram: parse_boolean(map["enable_telegram"], false),
       require_engine_lock: parse_boolean(map["require_engine_lock"], true),
@@ -939,6 +941,15 @@ defmodule LemonCore.Config do
     do: String.split(value, ~r/\s*,\s*/, trim: true)
 
   defp parse_string_list(_), do: []
+
+  defp parse_optional_string(nil), do: nil
+
+  defp parse_optional_string(value) when is_binary(value) do
+    value = String.trim(value)
+    if value == "", do: nil, else: value
+  end
+
+  defp parse_optional_string(_), do: nil
 
   defp parse_positive_integer(value, _default) when is_integer(value), do: max(value, 1)
 

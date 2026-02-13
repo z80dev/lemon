@@ -160,6 +160,8 @@ provider = "brave" # "brave" or "perplexity"
 enable_telegram = true
 auto_resume = true
 default_engine = "lemon"
+# Optional fallback cwd for unbound chats/sessions (defaults to ~/).
+default_cwd = "~/"
 
 [gateway.telegram]
 bot_token = "123456:token"
@@ -1905,6 +1907,8 @@ Minimal `~/.lemon/config.toml` for Telegram:
 enable_telegram = true
 auto_resume = true
 default_engine = "lemon"
+# Optional fallback cwd for unbound chats/sessions (defaults to ~/).
+default_cwd = "~/"
 
 [gateway.telegram]
 bot_token = "your-telegram-bot-token"

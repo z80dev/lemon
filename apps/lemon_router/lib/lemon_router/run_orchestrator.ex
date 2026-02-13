@@ -16,6 +16,7 @@ defmodule LemonRouter.RunOrchestrator do
   require Logger
 
   alias LemonRouter.{Policy, SessionKey, RunProcess}
+  alias LemonGateway.Cwd, as: GatewayCwd
   alias LemonGateway.EngineRegistry
   alias AgentCore.CliRunners.Types.ResumeToken, as: CliResume
 
@@ -116,8 +117,8 @@ defmodule LemonRouter.RunOrchestrator do
         base_tool_policy
       end
 
-    # Resolve cwd: operator override > meta cwd > nil
-    cwd = cwd_override || meta[:cwd]
+    # Resolve cwd: operator override > meta cwd > gateway default
+    cwd = resolve_effective_cwd(cwd_override, meta)
 
     # Extract explicit resume token from prompt or reply-to (Telegram) context.
     # If a resume token is present, prefer its engine and strip strict resume lines
@@ -264,6 +265,18 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   defp map_model_to_engine(_), do: nil
+
+  defp resolve_effective_cwd(cwd_override, meta) do
+    normalize_cwd(cwd_override) || normalize_cwd(meta[:cwd] || meta["cwd"]) ||
+      GatewayCwd.default_cwd()
+  end
+
+  defp normalize_cwd(cwd) when is_binary(cwd) do
+    cwd = String.trim(cwd)
+    if cwd == "", do: nil, else: Path.expand(cwd)
+  end
+
+  defp normalize_cwd(_), do: nil
 
   defp legacy_scope_from_meta(meta) when is_map(meta) do
     channel_id = meta[:channel_id] || meta["channel_id"]

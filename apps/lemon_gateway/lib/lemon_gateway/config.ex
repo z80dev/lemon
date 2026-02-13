@@ -11,6 +11,7 @@ defmodule LemonGateway.Config do
   @default %{
     max_concurrent_runs: 2,
     default_engine: "lemon",
+    default_cwd: nil,
     auto_resume: false,
     enable_telegram: false,
     require_engine_lock: true,

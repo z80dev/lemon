@@ -8,7 +8,7 @@ defmodule LemonGateway.Telegram.Transport do
   alias LemonGateway.Telegram.{API, Dedupe, OffsetStore, TriggerMode}
   alias LemonGateway.Telegram.PollerLock
   alias LemonGateway.Types.{ChatScope, Job, ResumeToken}
-  alias LemonGateway.{BindingResolver, ChatState, Config, EngineRegistry, Store}
+  alias LemonGateway.{BindingResolver, ChatState, Config, Cwd, EngineRegistry, Store}
   alias LemonCore.SessionKey
 
   @impl LemonGateway.Transport
@@ -523,7 +523,7 @@ defmodule LemonGateway.Telegram.Transport do
     session_key = build_session_key(agent_id, state.account_id, peer_kind, scope)
 
     # Agent profile comes from canonical TOML config; optionally scoped by project cwd if bound.
-    cwd = BindingResolver.resolve_cwd(scope)
+    cwd = BindingResolver.resolve_cwd(scope) || Cwd.default_cwd()
     profile = get_profile(agent_id, cwd)
 
     tool_policy = profile[:tool_policy] || profile["tool_policy"]
@@ -1175,7 +1175,7 @@ defmodule LemonGateway.Telegram.Transport do
 
           run_id = LemonCore.Id.run_id()
           engine_hint = last_engine_hint(scope, session_key)
-          cwd = BindingResolver.resolve_cwd(scope)
+          cwd = BindingResolver.resolve_cwd(scope) || Cwd.default_cwd()
           profile = get_profile(agent_id, cwd)
 
           tool_policy = profile[:tool_policy] || profile["tool_policy"]
@@ -1238,7 +1238,7 @@ defmodule LemonGateway.Telegram.Transport do
         base =
           case BindingResolver.resolve_cwd(scope) do
             cwd when is_binary(cwd) and byte_size(cwd) > 0 -> cwd
-            _ -> File.cwd!()
+            _ -> Cwd.default_cwd()
           end
 
         expanded =

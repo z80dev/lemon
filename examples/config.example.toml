@@ -45,6 +45,9 @@ debug = false
 [gateway]
 max_concurrent_runs = 2
 default_engine = "lemon"
+# Optional fallback working directory for unbound chats/sessions.
+# If omitted, Lemon defaults to your home directory.
+default_cwd = "~/"
 auto_resume = false
 enable_telegram = false
 require_engine_lock = true

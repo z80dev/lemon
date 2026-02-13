@@ -45,6 +45,7 @@ defmodule LemonGateway.ConfigLoaderTest do
     [gateway]
     max_concurrent_runs = 3
     default_engine = "lemon"
+    default_cwd = "/tmp/lemon-home"
     enable_telegram = true
 
     [gateway.queue]
@@ -73,6 +74,7 @@ defmodule LemonGateway.ConfigLoaderTest do
 
     assert config.max_concurrent_runs == 3
     assert config.default_engine == "lemon"
+    assert config.default_cwd == "/tmp/lemon-home"
     assert config.enable_telegram == true
     assert config.queue.mode == :collect
     assert config.queue.cap == 10

@@ -28,7 +28,7 @@ defmodule LemonGateway.Run do
   use GenServer
   require Logger
 
-  alias LemonGateway.{BindingResolver, ChatState, Event, Store}
+  alias LemonGateway.{BindingResolver, ChatState, Cwd, Event, Store}
   alias LemonGateway.Types.{Job, ResumeToken}
 
   @max_logged_error_bytes 4_096
@@ -193,21 +193,26 @@ defmodule LemonGateway.Run do
     else
       renderer_state = state.renderer.init(%{engine: engine})
 
-      # Resolve cwd from job or scope
-      opts =
+      # Resolve cwd from job or scope; fall back to gateway default/home for unbound sessions.
+      cwd =
         cond do
-          is_binary(job.cwd) ->
-            %{cwd: job.cwd, run_id: state.run_id}
+          is_binary(job.cwd) and String.trim(job.cwd) != "" ->
+            Path.expand(job.cwd)
 
           not is_nil(job.scope) ->
             case BindingResolver.resolve_cwd(job.scope) do
-              cwd when is_binary(cwd) -> %{cwd: cwd, run_id: state.run_id}
-              _ -> %{run_id: state.run_id}
+              cwd when is_binary(cwd) ->
+                if String.trim(cwd) == "", do: Cwd.default_cwd(), else: Path.expand(cwd)
+
+              _ ->
+                Cwd.default_cwd()
             end
 
           true ->
-            %{run_id: state.run_id}
+            Cwd.default_cwd()
         end
+
+      opts = %{cwd: cwd, run_id: state.run_id}
 
       # Emit run started event to bus
       emit_to_bus(

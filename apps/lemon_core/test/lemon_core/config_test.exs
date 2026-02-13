@@ -208,6 +208,20 @@ defmodule LemonCore.ConfigTest do
     assert binding.agent_id == "daily"
   end
 
+  test "parses gateway default_cwd", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [gateway]
+    default_cwd = "  ~/workspace  "
+    """)
+
+    config = Config.load()
+
+    assert config.gateway.default_cwd == "~/workspace"
+  end
+
   test "parses logging settings", %{home: home} do
     global_dir = Path.join(home, ".lemon")
     File.mkdir_p!(global_dir)

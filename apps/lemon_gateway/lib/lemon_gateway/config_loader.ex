@@ -74,6 +74,7 @@ defmodule LemonGateway.ConfigLoader do
     %{
       max_concurrent_runs: fetch(gateway, :max_concurrent_runs),
       default_engine: fetch(gateway, :default_engine),
+      default_cwd: fetch(gateway, :default_cwd),
       auto_resume: fetch(gateway, :auto_resume),
       enable_telegram: fetch(gateway, :enable_telegram),
       require_engine_lock: fetch(gateway, :require_engine_lock),
