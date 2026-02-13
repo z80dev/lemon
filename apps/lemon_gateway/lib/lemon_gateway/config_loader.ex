@@ -61,6 +61,11 @@ defmodule LemonGateway.ConfigLoader do
       |> fetch(:queue)
       |> parse_queue()
 
+    sms =
+      gateway
+      |> fetch(:sms)
+      |> parse_sms()
+
     telegram =
       gateway
       |> fetch(:telegram)
@@ -85,6 +90,7 @@ defmodule LemonGateway.ConfigLoader do
     |> Map.put(:projects, projects)
     |> Map.put(:bindings, bindings)
     |> Map.put(:queue, queue)
+    |> Map.put(:sms, sms)
     |> Map.put(:telegram, telegram)
     |> Map.put(:engines, engines)
   end
@@ -131,6 +137,23 @@ defmodule LemonGateway.ConfigLoader do
   end
 
   defp parse_queue(_), do: %{mode: nil, cap: nil, drop: nil}
+
+  defp parse_sms(sms) when is_map(sms) do
+    %{
+      webhook_enabled: fetch(sms, :webhook_enabled),
+      webhook_port: fetch(sms, :webhook_port),
+      webhook_bind: fetch(sms, :webhook_bind),
+      inbox_number: fetch(sms, :inbox_number),
+      inbox_ttl_ms: fetch(sms, :inbox_ttl_ms),
+      validate_webhook: fetch(sms, :validate_webhook),
+      auth_token: fetch(sms, :auth_token),
+      webhook_url: fetch(sms, :webhook_url)
+    }
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.new()
+  end
+
+  defp parse_sms(_), do: %{}
 
   defp parse_telegram(telegram) when is_map(telegram) do
     %{

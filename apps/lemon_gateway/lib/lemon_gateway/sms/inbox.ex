@@ -78,7 +78,13 @@ defmodule LemonGateway.Sms.Inbox do
     filtered = filter_messages(entries, opts)
     {:reply, filtered, state}
   rescue
-    _ -> {:reply, [], state}
+    e ->
+      Logger.warning(
+        "Sms.Inbox list_messages failed: #{Exception.message(e)}\n" <>
+          Exception.format_stacktrace(__STACKTRACE__)
+      )
+
+      {:reply, [], state}
   end
 
   def handle_call({:claim_message, session_key, message_sid}, _from, state) do
@@ -221,7 +227,7 @@ defmodule LemonGateway.Sms.Inbox do
   end
 
   defp extract_default_codes(body) when is_binary(body) do
-    Regex.scan(~r/\\b\\d{4,8}\\b/, body)
+    Regex.scan(~r/\b\d{4,8}\b/, body)
     |> List.flatten()
     |> Enum.uniq()
   end
@@ -235,12 +241,12 @@ defmodule LemonGateway.Sms.Inbox do
   end
 
   defp filter_messages(messages, opts) do
-    to = Keyword.get(opts, :to) || Keyword.get(opts, "to")
-    from_contains = Keyword.get(opts, :from_contains) || Keyword.get(opts, "from_contains")
-    body_contains = Keyword.get(opts, :body_contains) || Keyword.get(opts, "body_contains")
-    since_ms = Keyword.get(opts, :since_ms) || Keyword.get(opts, "since_ms")
-    include_claimed = Keyword.get(opts, :include_claimed, false) || Keyword.get(opts, "include_claimed") == true
-    limit = Keyword.get(opts, :limit, 20) || Keyword.get(opts, "limit") || 20
+    to = Keyword.get(opts, :to)
+    from_contains = Keyword.get(opts, :from_contains)
+    body_contains = Keyword.get(opts, :body_contains)
+    since_ms = Keyword.get(opts, :since_ms)
+    include_claimed = Keyword.get(opts, :include_claimed, false)
+    limit = Keyword.get(opts, :limit, 20)
 
     messages
     |> Enum.sort_by(&(&1["received_at_ms"] || 0), :desc)

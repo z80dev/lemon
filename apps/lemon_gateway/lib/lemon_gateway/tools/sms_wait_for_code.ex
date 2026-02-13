@@ -130,7 +130,18 @@ defmodule LemonGateway.Tools.SmsWaitForCode do
 
   defp parse_bool(nil, default), do: default
   defp parse_bool(v, _default) when is_boolean(v), do: v
-  defp parse_bool(v, default) when is_binary(v), do: String.downcase(String.trim(v)) in ["1", "true", "yes", "on"] or default == true and String.trim(v) == ""
+
+  defp parse_bool(v, default) when is_binary(v) do
+    v = v |> String.trim() |> String.downcase()
+
+    cond do
+      v in ["1", "true", "yes", "on"] -> true
+      v in ["0", "false", "no", "off"] -> false
+      v == "" -> default
+      true -> default
+    end
+  end
+
   defp parse_bool(_v, default), do: default
 
   defp normalize_string(nil), do: nil
@@ -145,4 +156,3 @@ defmodule LemonGateway.Tools.SmsWaitForCode do
   defp maybe_put(opts, _k, nil), do: opts
   defp maybe_put(opts, k, v), do: Keyword.put(opts, k, v)
 end
-

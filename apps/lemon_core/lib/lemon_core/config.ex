@@ -131,6 +131,7 @@ defmodule LemonCore.Config do
     "engine_lock_timeout_ms" => 60_000,
     "projects" => %{},
     "bindings" => [],
+    "sms" => %{},
     "queue" => %{
       "mode" => nil,
       "cap" => nil,
@@ -368,6 +369,7 @@ defmodule LemonCore.Config do
       engine_lock_timeout_ms: map["engine_lock_timeout_ms"],
       projects: parse_gateway_projects(map["projects"] || %{}),
       bindings: parse_gateway_bindings(map["bindings"] || []),
+      sms: parse_gateway_sms(map["sms"] || %{}),
       queue: parse_gateway_queue(map["queue"] || %{}),
       telegram: parse_gateway_telegram(map["telegram"] || %{}),
       engines: parse_gateway_engines(map["engines"] || %{})
@@ -416,6 +418,24 @@ defmodule LemonCore.Config do
       drop: map["drop"]
     }
   end
+
+  defp parse_gateway_sms(map) when is_map(map) do
+    map = stringify_keys(map)
+
+    %{
+      webhook_enabled: parse_boolean(map["webhook_enabled"], nil),
+      webhook_port: map["webhook_port"],
+      webhook_bind: parse_optional_string(map["webhook_bind"]),
+      inbox_number: parse_optional_string(map["inbox_number"]),
+      inbox_ttl_ms: map["inbox_ttl_ms"],
+      validate_webhook: parse_boolean(map["validate_webhook"], nil),
+      auth_token: parse_optional_string(map["auth_token"]),
+      webhook_url: parse_optional_string(map["webhook_url"])
+    }
+    |> reject_nil_values()
+  end
+
+  defp parse_gateway_sms(_), do: %{}
 
   defp parse_gateway_telegram(map) do
     map = stringify_keys(map)

@@ -15,6 +15,8 @@ defmodule LemonGateway.ApplicationTest do
     LemonGateway.EngineLock,
     LemonGateway.RunRegistry,
     LemonGateway.ThreadRegistry,
+    LemonGateway.Sms.Inbox,
+    LemonGateway.Sms.WebhookServer,
     LemonGateway.RunSupervisor,
     LemonGateway.ThreadWorkerSupervisor,
     LemonGateway.Scheduler
@@ -148,8 +150,17 @@ defmodule LemonGateway.ApplicationTest do
       children = Supervisor.which_children(LemonGateway.Supervisor)
 
       for {id, pid, _type, _modules} <- children do
-        assert is_pid(pid), "Child #{inspect(id)} should have a pid"
-        assert Process.alive?(pid), "Child #{inspect(id)} should be alive"
+        cond do
+          is_pid(pid) ->
+            assert Process.alive?(pid), "Child #{inspect(id)} should be alive"
+
+          pid == :undefined and id == LemonGateway.Sms.WebhookServer ->
+            # Webhook server is optional and may return :ignore when disabled.
+            assert true
+
+          true ->
+            flunk("Child #{inspect(id)} should have a pid (got: #{inspect(pid)})")
+        end
       end
     end
 
@@ -560,7 +571,10 @@ defmodule LemonGateway.ApplicationTest do
 
       # Collect all child pids
       children = Supervisor.which_children(LemonGateway.Supervisor)
-      child_pids = Enum.map(children, fn {_id, pid, _type, _modules} -> pid end)
+      child_pids =
+        children
+        |> Enum.map(fn {_id, pid, _type, _modules} -> pid end)
+        |> Enum.filter(&is_pid/1)
 
       # All should be alive
       assert Enum.all?(child_pids, &Process.alive?/1)

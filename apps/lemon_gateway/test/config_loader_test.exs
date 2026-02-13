@@ -47,6 +47,9 @@ defmodule LemonGateway.ConfigLoaderTest do
     default_engine = "lemon"
     default_cwd = "/tmp/lemon-home"
     enable_telegram = true
+    
+    [gateway.sms]
+    webhook_port = 8786
 
     [gateway.queue]
     mode = "collect"
@@ -76,6 +79,7 @@ defmodule LemonGateway.ConfigLoaderTest do
     assert config.default_engine == "lemon"
     assert config.default_cwd == "/tmp/lemon-home"
     assert config.enable_telegram == true
+    assert config.sms.webhook_port == 8786
     assert config.queue.mode == :collect
     assert config.queue.cap == 10
     assert config.queue.drop == :oldest

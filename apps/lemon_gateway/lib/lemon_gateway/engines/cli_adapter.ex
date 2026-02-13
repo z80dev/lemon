@@ -123,8 +123,16 @@ defmodule LemonGateway.Engines.CliAdapter do
   end
 
   defp gateway_extra_tools("lemon", job, opts) do
+    cwd = job.cwd || Map.get(opts, :cwd) || File.cwd!()
+
+    sms_tools = [
+      LemonGateway.Tools.SmsGetInboxNumber.tool(cwd),
+      LemonGateway.Tools.SmsWaitForCode.tool(cwd, session_key: job.session_key),
+      LemonGateway.Tools.SmsListMessages.tool(cwd, session_key: job.session_key),
+      LemonGateway.Tools.SmsClaimMessage.tool(cwd, session_key: job.session_key)
+    ]
+
     if telegram_session?(job) do
-      cwd = job.cwd || Map.get(opts, :cwd) || File.cwd!()
       workspace_dir = CodingAgent.Config.workspace_dir()
 
       [
@@ -133,9 +141,10 @@ defmodule LemonGateway.Engines.CliAdapter do
           session_key: job.session_key,
           workspace_dir: workspace_dir
         )
+        | sms_tools
       ]
     else
-      nil
+      sms_tools
     end
   end
 
