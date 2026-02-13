@@ -7,7 +7,9 @@ building coding workflows.
 ## Features
 
 - Session GenServer with JSONL persistence and branching
-- Built-in tools (read/write/edit/bash) plus extension loading
+- Built-in tools (`read`, `memory_topic`, `write`, `edit`, `patch`, `bash`, `grep`, `find`, `ls`, `webfetch`, `websearch`, `todo`, `task`, `extensions_status`) plus extension loading
+- `websearch` supports Brave (default) and Perplexity providers with structured JSON output
+- `webfetch` includes SSRF guards, readability extraction, optional Firecrawl fallback, and caching
 - Steering and follow-up message queues
 - UI integration and event subscription streams
 - Coordinator for running subagent sessions
