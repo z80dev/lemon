@@ -15,6 +15,8 @@ defmodule LemonGateway.Application do
       LemonGateway.EngineLock,
       {Registry, keys: :unique, name: LemonGateway.RunRegistry},
       LemonGateway.ThreadRegistry,
+      LemonGateway.Sms.Inbox,
+      LemonGateway.Sms.WebhookServer,
       LemonGateway.RunSupervisor,
       LemonGateway.ThreadWorkerSupervisor,
       LemonGateway.Scheduler

@@ -30,6 +30,9 @@ defmodule LemonGateway.MixProject do
       {:jason, "~> 1.4"},
       {:uuid, "~> 1.1"},
       {:toml, "~> 0.7"},
+      # HTTP webhook listener (Twilio SMS inbox utility)
+      {:plug, "~> 1.16"},
+      {:bandit, "~> 1.5"},
       # Markdown -> Telegram rendering uses entities (no parse_mode) for robust formatting.
       {:earmark_parser, "~> 1.4"},
       {:agent_core, in_umbrella: true},
