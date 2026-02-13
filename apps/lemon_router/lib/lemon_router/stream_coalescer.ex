@@ -629,6 +629,8 @@ defmodule LemonRouter.StreamCoalescer do
             state
           end
 
+        state = maybe_enqueue_auto_send_files(state, parsed, reply_to)
+
         cancel_timer(state.flush_timer)
 
         %{
@@ -882,6 +884,105 @@ defmodule LemonRouter.StreamCoalescer do
   end
 
   defp parse_int(_), do: nil
+
+  defp maybe_enqueue_auto_send_files(state, parsed, reply_to) do
+    files = auto_send_files_from_meta(state.meta)
+
+    if files == [] or not is_pid(Process.whereis(LemonChannels.Outbox)) do
+      state
+    else
+      Enum.with_index(files)
+      |> Enum.each(fn {file, idx} ->
+        payload =
+          struct!(LemonChannels.OutboundPayload,
+            channel_id: state.channel_id,
+            account_id: parsed.account_id,
+            peer: %{
+              kind: parsed.peer_kind,
+              id: parsed.peer_id,
+              thread_id: parsed.thread_id
+            },
+            kind: :file,
+            content: %{
+              path: file.path,
+              filename: file.filename,
+              caption: file.caption
+            },
+            reply_to: if(idx == 0, do: reply_to, else: nil),
+            idempotency_key: "#{state.run_id}:final:file:#{idx}",
+            meta: %{
+              run_id: state.run_id,
+              session_key: state.session_key,
+              final: true,
+              auto_send_generated: true
+            }
+          )
+
+        case LemonChannels.Outbox.enqueue(payload) do
+          {:ok, _ref} ->
+            :ok
+
+          {:error, :duplicate} ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning("Failed to enqueue auto-sent file: #{inspect(reason)}")
+        end
+      end)
+
+      state
+    end
+  end
+
+  defp auto_send_files_from_meta(meta) when is_map(meta) do
+    value = Map.get(meta, :auto_send_files) || Map.get(meta, "auto_send_files")
+
+    case value do
+      list when is_list(list) ->
+        list
+        |> Enum.map(&normalize_auto_send_file/1)
+        |> Enum.flat_map(fn
+          {:ok, file} -> [file]
+          _ -> []
+        end)
+
+      _ ->
+        []
+    end
+  end
+
+  defp auto_send_files_from_meta(_), do: []
+
+  defp normalize_auto_send_file(%{} = raw) do
+    path = Map.get(raw, :path) || Map.get(raw, "path")
+    filename = Map.get(raw, :filename) || Map.get(raw, "filename")
+    caption = Map.get(raw, :caption) || Map.get(raw, "caption")
+
+    cond do
+      not is_binary(path) or path == "" ->
+        :error
+
+      not File.regular?(path) ->
+        :error
+
+      not (is_nil(caption) or is_binary(caption)) ->
+        :error
+
+      true ->
+        {:ok,
+         %{
+           path: path,
+           filename:
+             case filename do
+               x when is_binary(x) and x != "" -> x
+               _ -> Path.basename(path)
+             end,
+           caption: caption
+         }}
+    end
+  end
+
+  defp normalize_auto_send_file(_), do: :error
 
   # Fallback parsing for when SessionKey module is not available
   defp fallback_parse_session_key(session_key) do

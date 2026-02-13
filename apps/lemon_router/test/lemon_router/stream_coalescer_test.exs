@@ -492,6 +492,39 @@ defmodule LemonRouter.StreamCoalescerTest do
       assert payload.reply_to == 222
     end
 
+    test "sends configured auto-send files after final text" do
+      session_key = "agent:my-agent:telegram:bot123:dm:user456"
+      channel_id = "telegram"
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      path = Path.join(System.tmp_dir!(), "coalescer-auto-file-#{run_id}.png")
+      File.write!(path, "png")
+      on_exit(fn -> File.rm(path) end)
+
+      assert :ok =
+               StreamCoalescer.finalize_run(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 meta: %{
+                   user_msg_id: 222,
+                   auto_send_files: [%{path: path, caption: "Generated image"}]
+                 },
+                 final_text: "Final answer"
+               )
+
+      send_key = "#{run_id}:final:send"
+      file_key = "#{run_id}:final:file:0"
+
+      assert_receive {:delivered, %{idempotency_key: ^send_key, kind: :text}}, 1_000
+
+      assert_receive {:delivered, %{idempotency_key: ^file_key} = payload}, 1_000
+      assert payload.kind == :file
+      assert payload.reply_to == 222
+      assert payload.content.path == path
+      assert payload.content.caption == "Generated image"
+    end
+
     test "deletes progress message even when there is no final text" do
       {:ok, _} = start_supervised({TestOutboxAPI, [notify_pid: self()]})
 

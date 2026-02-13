@@ -16,6 +16,8 @@ defmodule LemonRouter.RunProcess do
 
   alias LemonCore.Bus
 
+  @default_auto_send_generated_max_files 3
+  @default_max_download_bytes 50 * 1024 * 1024
   @gateway_submit_retry_base_ms 100
   @gateway_submit_retry_max_ms 2_000
 
@@ -85,7 +87,8 @@ defmodule LemonRouter.RunProcess do
       submit_to_gateway?: submit_to_gateway?,
       gateway_scheduler: gateway_scheduler,
       gateway_submit_attempt: 0,
-      gateway_submitted?: false
+      gateway_submitted?: false,
+      generated_image_paths: []
     }
 
     # Submit to gateway
@@ -201,6 +204,8 @@ defmodule LemonRouter.RunProcess do
 
     # Also ingest into ToolStatusCoalescer for channel delivery
     ingest_action_to_tool_status_coalescer(state, action_ev)
+
+    state = maybe_track_generated_images(state, action_ev)
 
     {:noreply, state}
   end
@@ -413,6 +418,7 @@ defmodule LemonRouter.RunProcess do
 
       # StreamCoalescer handles optional resume footer formatting; RunProcess just passes metadata.
       meta = if resume, do: Map.put(meta, :resume, resume), else: meta
+      meta = maybe_add_auto_send_generated_files(meta, state)
 
       LemonRouter.StreamCoalescer.finalize_run(
         state.session_key,
@@ -498,6 +504,265 @@ defmodule LemonRouter.RunProcess do
   rescue
     _ -> :ok
   end
+
+  defp maybe_track_generated_images(state, action_ev) do
+    paths = extract_generated_image_paths(action_ev)
+
+    if paths == [] do
+      state
+    else
+      existing = state.generated_image_paths || []
+      %{state | generated_image_paths: merge_paths(existing, paths)}
+    end
+  end
+
+  defp merge_paths(existing, new_paths) do
+    Enum.reduce(new_paths, existing, fn path, acc ->
+      if path in acc do
+        acc
+      else
+        acc ++ [path]
+      end
+    end)
+  end
+
+  defp extract_generated_image_paths(action_ev) do
+    action = fetch(action_ev, :action)
+    kind = fetch(action, :kind)
+    phase = fetch(action_ev, :phase)
+    ok = fetch(action_ev, :ok)
+
+    cond do
+      not file_change_kind?(kind) ->
+        []
+
+      not phase_completed?(phase) ->
+        []
+
+      ok == false ->
+        []
+
+      true ->
+        detail = fetch(action, :detail)
+
+        case fetch(detail, :changes) do
+          changes when is_list(changes) ->
+            changes
+            |> Enum.flat_map(fn change ->
+              case extract_image_change_path(change) do
+                nil -> []
+                path -> [path]
+              end
+            end)
+
+          _ ->
+            []
+        end
+    end
+  end
+
+  defp extract_image_change_path(change) do
+    path = fetch(change, :path)
+    kind = fetch(change, :kind)
+
+    cond do
+      not is_binary(path) or path == "" ->
+        nil
+
+      deleted_change_kind?(kind) ->
+        nil
+
+      not image_path?(path) ->
+        nil
+
+      true ->
+        path
+    end
+  end
+
+  defp file_change_kind?(kind) when kind in [:file_change, "file_change"], do: true
+  defp file_change_kind?(_), do: false
+
+  defp phase_completed?(phase) when phase in [:completed, "completed"], do: true
+  defp phase_completed?(_), do: false
+
+  defp deleted_change_kind?(kind) when kind in [:deleted, "deleted", :remove, "remove"], do: true
+  defp deleted_change_kind?(_), do: false
+
+  defp image_path?(path) when is_binary(path) do
+    case Path.extname(path) |> String.downcase() do
+      ".png" -> true
+      ".jpg" -> true
+      ".jpeg" -> true
+      ".gif" -> true
+      ".webp" -> true
+      ".bmp" -> true
+      ".svg" -> true
+      ".tif" -> true
+      ".tiff" -> true
+      ".heic" -> true
+      ".heif" -> true
+      _ -> false
+    end
+  end
+
+  defp maybe_add_auto_send_generated_files(meta, state) when is_map(meta) do
+    cfg = telegram_auto_send_generated_config()
+
+    if cfg.enabled do
+      files =
+        state.generated_image_paths
+        |> select_recent_paths(cfg.max_files)
+        |> resolve_generated_files(state.job && state.job.cwd, cfg.max_bytes)
+
+      if files == [] do
+        meta
+      else
+        Map.put(meta, :auto_send_files, files)
+      end
+    else
+      meta
+    end
+  end
+
+  defp maybe_add_auto_send_generated_files(meta, _state), do: meta
+
+  defp select_recent_paths(paths, max_files) when is_list(paths) and is_integer(max_files) do
+    if max_files > 0 and length(paths) > max_files do
+      Enum.take(paths, -max_files)
+    else
+      paths
+    end
+  end
+
+  defp select_recent_paths(paths, _max_files), do: paths
+
+  defp resolve_generated_files(paths, cwd, max_bytes) when is_list(paths) do
+    paths
+    |> Enum.map(&resolve_generated_path(&1, cwd))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Enum.flat_map(fn path ->
+      case file_within_limit(path, max_bytes) do
+        {:ok, file} -> [file]
+        _ -> []
+      end
+    end)
+  end
+
+  defp resolve_generated_files(_, _cwd, _max_bytes), do: []
+
+  defp resolve_generated_path(path, _cwd) when not is_binary(path), do: nil
+
+  defp resolve_generated_path(path, cwd) when is_binary(cwd) and cwd != "" do
+    root = Path.expand(cwd)
+
+    absolute =
+      if Path.type(path) == :absolute do
+        Path.expand(path)
+      else
+        Path.expand(path, root)
+      end
+
+    if path_within_root?(absolute, root) do
+      absolute
+    else
+      nil
+    end
+  end
+
+  defp resolve_generated_path(_path, _cwd), do: nil
+
+  defp path_within_root?(absolute, root) when is_binary(absolute) and is_binary(root) do
+    rel = Path.relative_to(absolute, root)
+    rel == "." or not String.starts_with?(rel, "..")
+  end
+
+  defp file_within_limit(path, max_bytes) when is_binary(path) and is_integer(max_bytes) do
+    with true <- File.regular?(path),
+         {:ok, %File.Stat{size: size}} <- File.stat(path),
+         true <- size <= max_bytes do
+      {:ok, %{path: path, filename: Path.basename(path), caption: nil}}
+    else
+      _ -> :error
+    end
+  end
+
+  defp file_within_limit(_path, _max_bytes), do: :error
+
+  defp telegram_auto_send_generated_config do
+    telegram_cfg =
+      if Process.whereis(LemonGateway.Config) do
+        LemonGateway.Config.get(:telegram) || %{}
+      else
+        Application.get_env(:lemon_gateway, :telegram, %{}) || %{}
+      end
+
+    telegram_cfg = normalize_map(telegram_cfg)
+
+    files_cfg = fetch(telegram_cfg, :files)
+    files_cfg = normalize_map(files_cfg)
+
+    enabled? =
+      truthy?(fetch(files_cfg, :enabled)) and
+        truthy?(fetch(files_cfg, :auto_send_generated_images))
+
+    %{
+      enabled: enabled?,
+      max_files:
+        positive_int_or(
+          fetch(files_cfg, :auto_send_generated_max_files),
+          @default_auto_send_generated_max_files
+        ),
+      max_bytes:
+        positive_int_or(fetch(files_cfg, :max_download_bytes), @default_max_download_bytes)
+    }
+  rescue
+    _ ->
+      %{
+        enabled: false,
+        max_files: @default_auto_send_generated_max_files,
+        max_bytes: @default_max_download_bytes
+      }
+  end
+
+  defp fetch(map, key) when is_map(map) do
+    case Map.fetch(map, key) do
+      {:ok, value} ->
+        value
+
+      :error ->
+        Map.get(map, Atom.to_string(key))
+    end
+  end
+
+  defp fetch(_, _), do: nil
+
+  defp normalize_map(value) when is_map(value), do: value
+
+  defp normalize_map(value) when is_list(value) do
+    if Keyword.keyword?(value) do
+      Enum.into(value, %{})
+    else
+      %{}
+    end
+  end
+
+  defp normalize_map(_), do: %{}
+
+  defp truthy?(value) when value in [true, "true", "1", 1], do: true
+  defp truthy?(_), do: false
+
+  defp positive_int_or(value, _default) when is_integer(value) and value > 0, do: value
+
+  defp positive_int_or(value, default) when is_binary(value) do
+    case Integer.parse(value) do
+      {parsed, _} when parsed > 0 -> parsed
+      _ -> default
+    end
+  end
+
+  defp positive_int_or(_value, default), do: default
 
   # Unsubscribe control-plane EventBridge from run events
   defp unsubscribe_event_bridge(run_id) do

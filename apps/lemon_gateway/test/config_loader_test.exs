@@ -83,4 +83,26 @@ defmodule LemonGateway.ConfigLoaderTest do
 
     assert %{lemon: %{cli_path: "lemon", enabled: true}} = config.engines
   end
+
+  test "parses telegram files auto-send settings from override config" do
+    Application.put_env(
+      :lemon_gateway,
+      LemonGateway.Config,
+      %{
+        "telegram" => %{
+          "files" => %{
+            "enabled" => true,
+            "auto_send_generated_images" => true,
+            "auto_send_generated_max_files" => 4
+          }
+        }
+      }
+    )
+
+    config = ConfigLoader.load()
+
+    assert config.telegram.files.enabled == true
+    assert config.telegram.files.auto_send_generated_images == true
+    assert config.telegram.files.auto_send_generated_max_files == 4
+  end
 end
