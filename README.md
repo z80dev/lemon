@@ -12,6 +12,7 @@ If you're here for the architecture deep-dive, jump to [What is Lemon?](#what-is
 
 - Elixir 1.19+ and Erlang/OTP 27+
 - A model provider API key (Anthropic/OpenAI/etc.)
+- Optional for web tools: Brave Search API key or Perplexity/OpenRouter API key
 
 Node.js is only required for the TUI/Web clients; the Telegram gateway is Elixir-only.
 
@@ -139,6 +140,21 @@ api_key = "sk-ant-..."
 default_provider = "anthropic"
 default_model = "claude-sonnet-4-20250514"
 
+# Optional web tool config (`websearch` / `webfetch`)
+[agent.tools.web.search]
+provider = "brave" # "brave" or "perplexity"
+# api_key = "..." # Brave key when provider = "brave"
+
+[agent.tools.web.search.perplexity]
+# model = "perplexity/sonar-pro"
+# api_key = "..." # optional if PERPLEXITY_API_KEY/OPENROUTER_API_KEY is set
+# base_url = "https://api.perplexity.ai"
+
+[agent.tools.web.fetch.firecrawl]
+# Optional fallback extractor for hard pages
+# enabled = true
+# api_key = "fc-..."
+
 # Telegram gateway (runs locally, you chat from Telegram)
 [gateway]
 enable_telegram = true
@@ -248,7 +264,7 @@ Lemon is an AI coding assistant built as a distributed system of concurrent proc
 ### Key Features
 
 **Agent Capabilities:**
-- **Multi-turn conversations** with 13 built-in tools (`read`, `write`, `edit`, `patch`, `bash`, `grep`, `find`, `ls`, `webfetch`, `websearch`, `todo`, `task`, `extensions_status`) plus extension tools
+- **Multi-turn conversations** with 14 built-in tools (`read`, `memory_topic`, `write`, `edit`, `patch`, `bash`, `grep`, `find`, `ls`, `webfetch`, `websearch`, `todo`, `task`, `extensions_status`) plus extension tools
 - **Real-time streaming** of LLM responses with fine-grained event notifications
 - **Session persistence** via JSONL with tree-structured conversation history
 - **Context compaction** and branch summarization for long conversations
@@ -523,10 +539,10 @@ lemon/
 │   │       ├── budget_tracker.ex     # Token/cost tracking
 │   │       ├── cli_runners/          # Lemon CLI runner
 │   │       └── tools/                # Default built-ins + optional tool modules
-│   │           ├── bash.ex, edit.ex, read.ex, write.ex
+│   │           ├── bash.ex, edit.ex, memory_topic.ex, read.ex, write.ex
 │   │           ├── grep.ex, find.ex, ls.ex
 │   │           ├── task.ex, todo.ex, extensions_status.ex
-│   │           ├── webfetch.ex, websearch.ex
+│   │           ├── webfetch.ex, websearch.ex, web_cache.ex, web_guard.ex
 │   │           └── exec.ex, process.ex, truncate.ex (custom integrations)
 │   │
 │   ├── coding_agent_ui/         # UI abstraction layer
@@ -907,7 +923,7 @@ unsubscribe = CodingAgent.Session.subscribe(session)
 
 **Key Features:**
 - Session persistence (JSONL v3 format with tree structure)
-- Default built-in coding tools (`read`, `write`, `edit`, `patch`, `bash`, `grep`, `find`, `ls`, `webfetch`, `websearch`, `todo`, `task`, `extensions_status`)
+- Default built-in coding tools (`read`, `memory_topic`, `write`, `edit`, `patch`, `bash`, `grep`, `find`, `ls`, `webfetch`, `websearch`, `todo`, `task`, `extensions_status`)
 - Optional runtime tool modules for custom integrations (`exec`, `process`, `truncate`)
 - Context compaction and branch summarization
 - Extension system for custom tools
@@ -1615,7 +1631,7 @@ Per-agent tool policies with allow/deny lists:
 ```elixir
 # Predefined profiles
 :full_access        # All tools allowed
-:minimal_core       # Lean core set (read/write/edit/patch/bash/grep/find/ls/webfetch/websearch/todo/task/extensions_status)
+:minimal_core       # Lean core set (read/memory_topic/write/edit/patch/bash/grep/find/ls/webfetch/websearch/todo/task/extensions_status)
 :read_only          # Only read operations
 :safe_mode          # No write/edit/patch/bash/exec/process
 :subagent_restricted # Limited tools for subagents
@@ -2197,6 +2213,9 @@ Detailed documentation is available in the `docs/` directory:
 
 | Document | Description |
 |----------|-------------|
+| [docs/README.md](docs/README.md) | Canonical docs index and navigation map |
+| [architecture_boundaries.md](docs/architecture_boundaries.md) | Allowed umbrella dependency boundaries and enforcement |
+| [quality_harness.md](docs/quality_harness.md) | Quality checks, eval harness, and cleanup workflow |
 | [beam_agents.md](docs/beam_agents.md) | BEAM/OTP architecture patterns, supervision trees, event flow |
 | [extensions.md](docs/extensions.md) | Extension system: behaviors, hooks, tool conflicts, capabilities |
 | [skills.md](docs/skills.md) | Skill system: SKILL.md format, APIs, project vs global |
