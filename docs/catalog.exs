@@ -66,6 +66,18 @@
     max_age_days: 90
   },
   %{
+    path: "docs/tools/firecrawl.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-02-13],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/tools/web.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-02-13],
+    max_age_days: 90
+  },
+  %{
     path: "docs/telemetry.md",
     owner: "@z80",
     last_reviewed: ~D[2026-02-13],

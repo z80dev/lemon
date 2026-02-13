@@ -17,9 +17,11 @@ defmodule CodingAgent.Tools.WebFetch do
   @default_fetch_max_redirects 3
   @default_timeout_seconds 30
   @default_cache_ttl_minutes 15
+  @default_cache_max_entries 100
   @default_firecrawl_base_url "https://api.firecrawl.dev"
   @default_firecrawl_max_age_ms 172_800_000
   @default_fetch_user_agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+  @max_error_detail_chars 400
   @fetch_cache_table :coding_agent_webfetch_cache
 
   @doc """
@@ -75,12 +77,7 @@ defmodule CodingAgent.Tools.WebFetch do
   end
 
   @doc false
-  def reset_cache do
-    case :ets.whereis(@fetch_cache_table) do
-      :undefined -> :ok
-      _ -> :ets.delete_all_objects(@fetch_cache_table)
-    end
-  end
+  def reset_cache(opts \\ []), do: WebCache.clear_cache(@fetch_cache_table, opts)
 
   defp execute(_tool_call_id, params, signal, _on_update, runtime) do
     if runtime.enabled do
@@ -103,13 +100,21 @@ defmodule CodingAgent.Tools.WebFetch do
     cache_key =
       WebCache.normalize_cache_key("fetch:#{url}:#{Atom.to_string(extract_mode)}:#{max_chars}")
 
-    case WebCache.read_cache(@fetch_cache_table, cache_key) do
+    case WebCache.read_cache(@fetch_cache_table, cache_key, runtime.cache_opts) do
       {:hit, payload} ->
         json_result(Map.put(payload, "cached", true))
 
       :miss ->
         with {:ok, payload} <- perform_fetch(url, extract_mode, max_chars, runtime) do
-          WebCache.write_cache(@fetch_cache_table, cache_key, payload, runtime.cache_ttl_ms)
+          WebCache.write_cache(
+            @fetch_cache_table,
+            cache_key,
+            payload,
+            runtime.cache_ttl_ms,
+            runtime.cache_max_entries,
+            runtime.cache_opts
+          )
+
           json_result(payload)
         end
     end
@@ -297,20 +302,82 @@ defmodule CodingAgent.Tools.WebFetch do
     end
   end
 
-  defp extract_html_content(html, extract_mode, _url, runtime) do
+  defp extract_html_content(html, extract_mode, url, runtime) do
     if runtime.readability_enabled do
-      rendered = html_to_markdown(html)
+      case safe_readability_extract(runtime, html, extract_mode, url) do
+        {:ok, %{text: text} = payload} when is_binary(text) ->
+          title = Map.get(payload, :title) || Map.get(payload, "title")
 
-      extracted_text =
-        if extract_mode == :text, do: markdown_to_text(rendered.text), else: rendered.text
+          if String.trim(text) == "" do
+            extract_html_content_fallback(html, extract_mode)
+          else
+            {:ok, %{text: text, title: title, extractor: "readability"}}
+          end
 
-      if String.trim(extracted_text) == "" do
-        {:error, "Readability extraction returned no content"}
-      else
-        {:ok, %{text: extracted_text, title: rendered.title, extractor: "readability"}}
+        {:ok, _other} ->
+          extract_html_content_fallback(html, extract_mode)
+
+        {:error, _reason} ->
+          extract_html_content_fallback(html, extract_mode)
       end
     else
-      {:error, "Readability disabled"}
+      extract_html_content_fallback(html, extract_mode)
+    end
+  end
+
+  defp safe_readability_extract(runtime, html, extract_mode, url) do
+    try do
+      runtime.readability_extract.(html, extract_mode, url)
+    rescue
+      error ->
+        {:error, "Readability extraction failed: #{Exception.message(error)}"}
+    catch
+      :exit, reason ->
+        {:error, "Readability extraction failed: #{format_reason(reason)}"}
+
+      kind, reason ->
+        {:error, "Readability extraction failed (#{kind}): #{format_reason(reason)}"}
+    end
+  end
+
+  defp extract_with_readability(html, extract_mode, url) do
+    article = Readability.article(html, page_url: url)
+    readable_html = Readability.readable_html(article)
+    rendered = html_to_markdown(readable_html)
+
+    text =
+      case extract_mode do
+        :text ->
+          article
+          |> Readability.readable_text()
+          |> normalize_whitespace()
+
+        :markdown ->
+          rendered.text
+      end
+
+    title = readability_title(html) || rendered.title
+
+    {:ok, %{text: text, title: title}}
+  end
+
+  defp readability_title(html) do
+    case Readability.title(html) do
+      value when is_binary(value) -> normalize_optional_string(value)
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp extract_html_content_fallback(html, extract_mode) do
+    rendered = html_to_markdown(html)
+    text = if extract_mode == :text, do: markdown_to_text(rendered.text), else: rendered.text
+
+    if String.trim(text) == "" do
+      {:error, "Readability extraction returned no content"}
+    else
+      {:ok, %{text: text, title: rendered.title, extractor: "readability_fallback"}}
     end
   end
 
@@ -365,7 +432,7 @@ defmodule CodingAgent.Tools.WebFetch do
         end
 
       {:ok, %Req.Response{status: status} = response} ->
-        detail = response.body |> to_string_safe() |> String.trim()
+        detail = sanitize_error_detail(response.body)
 
         {:error,
          "Firecrawl fetch failed (#{status}): #{if(detail == "", do: "request failed", else: detail)}"}
@@ -622,7 +689,7 @@ defmodule CodingAgent.Tools.WebFetch do
   defp direct_guard_error?(_), do: false
 
   defp format_primary_error({:http_error, status, response}) do
-    detail = response.body |> to_string_safe() |> String.trim()
+    detail = sanitize_error_detail(response.body)
     "HTTP #{status}: #{if(detail == "", do: "request failed", else: detail)}"
   end
 
@@ -651,6 +718,19 @@ defmodule CodingAgent.Tools.WebFetch do
   defp to_string_safe(body) when is_binary(body), do: body
   defp to_string_safe(body) when is_list(body), do: IO.iodata_to_binary(body)
   defp to_string_safe(body), do: inspect(body)
+
+  defp sanitize_error_detail(body) do
+    body
+    |> to_string_safe()
+    |> strip_tags()
+    |> normalize_whitespace()
+    |> truncate_error_detail()
+  end
+
+  defp truncate_error_detail(detail) when byte_size(detail) <= @max_error_detail_chars, do: detail
+
+  defp truncate_error_detail(detail),
+    do: String.slice(detail, 0, @max_error_detail_chars) <> "..."
 
   defp read_required_string(params, key) do
     case normalize_optional_string(Map.get(params, key)) do
@@ -733,6 +813,25 @@ defmodule CodingAgent.Tools.WebFetch do
     web_cfg = tools_cfg |> get_map_value(:web, %{}) |> ensure_map()
     fetch_cfg = web_cfg |> get_map_value(:fetch, %{}) |> ensure_map()
     firecrawl_cfg = fetch_cfg |> get_map_value(:firecrawl, %{}) |> ensure_map()
+    cache_cfg = web_cfg |> get_map_value(:cache, %{}) |> ensure_map()
+
+    cache_max_entries =
+      WebCache.resolve_cache_max_entries(
+        get_map_value(cache_cfg, :max_entries, @default_cache_max_entries),
+        @default_cache_max_entries
+      )
+
+    default_cache_opts = %{
+      "persistent" => truthy?(get_map_value(cache_cfg, :persistent, true)),
+      "path" => normalize_optional_string(get_map_value(cache_cfg, :path, nil)),
+      "max_entries" => cache_max_entries
+    }
+
+    cache_opts =
+      case Keyword.get(opts, :cache_opts) do
+        override when is_map(override) or is_list(override) -> override
+        _ -> default_cache_opts
+      end
 
     timeout_seconds =
       WebCache.resolve_timeout_seconds(
@@ -771,6 +870,12 @@ defmodule CodingAgent.Tools.WebFetch do
         timeout_seconds
       )
 
+    readability_extract =
+      case Keyword.get(opts, :readability_extract) do
+        fun when is_function(fun, 3) -> fun
+        _ -> &extract_with_readability/3
+      end
+
     %{
       enabled: truthy?(get_map_value(fetch_cfg, :enabled, true)),
       max_chars:
@@ -779,11 +884,14 @@ defmodule CodingAgent.Tools.WebFetch do
         |> normalize_max_chars(@default_fetch_max_chars),
       timeout_ms: timeout_seconds * 1_000,
       cache_ttl_ms: cache_ttl_ms,
+      cache_max_entries: cache_max_entries,
+      cache_opts: cache_opts,
       max_redirects: max_redirects,
       user_agent:
         normalize_optional_string(get_map_value(fetch_cfg, :user_agent, nil)) ||
           @default_fetch_user_agent,
       readability_enabled: truthy?(get_map_value(fetch_cfg, :readability, true)),
+      readability_extract: readability_extract,
       allow_private_network: truthy?(get_map_value(fetch_cfg, :allow_private_network, false)),
       allowed_hostnames:
         get_map_value(fetch_cfg, :allowed_hostnames, [])

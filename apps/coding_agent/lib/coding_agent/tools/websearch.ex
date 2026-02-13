@@ -16,6 +16,8 @@ defmodule CodingAgent.Tools.WebSearch do
   @max_query_length 500
   @default_timeout_seconds 30
   @default_cache_ttl_minutes 15
+  @default_cache_max_entries 100
+  @default_failover_enabled true
   @default_perplexity_base_url "https://openrouter.ai/api/v1"
   @perplexity_direct_base_url "https://api.perplexity.ai"
   @default_perplexity_model "perplexity/sonar-pro"
@@ -104,13 +106,7 @@ defmodule CodingAgent.Tools.WebSearch do
            request <- normalize_request_params(params, runtime),
            :ok <- validate_freshness_provider(freshness, runtime.provider),
            :ok <- check_abort(signal) do
-        case resolve_api_config(runtime) do
-          {:error, payload} ->
-            json_result(payload)
-
-          {:ok, api_cfg} ->
-            run_search(query, freshness, request, api_cfg, runtime)
-        end
+        run_search(query, freshness, request, runtime)
       end
     else
       {:error, "websearch is disabled by configuration"}
@@ -125,58 +121,166 @@ defmodule CodingAgent.Tools.WebSearch do
   end
 
   @doc false
-  def reset_cache do
-    case :ets.whereis(@search_cache_table) do
-      :undefined -> :ok
-      _ -> :ets.delete_all_objects(@search_cache_table)
+  def reset_cache(opts \\ []) do
+    WebCache.clear_cache(@search_cache_table, opts)
+  end
+
+  defp run_search(query, freshness, request, runtime) do
+    primary_provider = runtime.provider
+    failover = failover_context(runtime, freshness)
+
+    case run_provider_attempt(primary_provider, query, freshness, request, runtime) do
+      {:ok, payload, cached?} ->
+        payload =
+          annotate_payload(
+            payload,
+            primary_provider,
+            primary_provider,
+            failover_payload(false, false, primary_provider, nil)
+          )
+          |> maybe_mark_cached(cached?)
+
+        json_result(payload)
+
+      primary_failure ->
+        maybe_failover(
+          primary_failure,
+          primary_provider,
+          query,
+          freshness,
+          request,
+          runtime,
+          failover
+        )
     end
   end
 
-  defp run_search(query, freshness, request, api_cfg, runtime) do
-    cache_key = build_cache_key(query, freshness, request, runtime.provider)
+  defp maybe_failover(
+         primary_failure,
+         primary_provider,
+         _query,
+         _freshness,
+         _request,
+         _runtime,
+         %{
+           secondary_provider: nil
+         }
+       ) do
+    render_failure(
+      primary_failure,
+      primary_provider,
+      failover_payload(false, false, primary_provider, nil)
+    )
+  end
 
-    case WebCache.read_cache(@search_cache_table, cache_key) do
+  defp maybe_failover(
+         primary_failure,
+         primary_provider,
+         _query,
+         _freshness,
+         _request,
+         _runtime,
+         %{
+           blocked_reason: blocked_reason
+         }
+       )
+       when is_binary(blocked_reason) do
+    render_failure(
+      primary_failure,
+      primary_provider,
+      failover_payload(false, false, primary_provider, blocked_reason)
+    )
+  end
+
+  defp maybe_failover(
+         primary_failure,
+         primary_provider,
+         query,
+         freshness,
+         request,
+         runtime,
+         %{secondary_provider: secondary_provider}
+       ) do
+    case run_provider_attempt(secondary_provider, query, freshness, request, runtime) do
+      {:ok, payload, cached?} ->
+        payload =
+          annotate_payload(
+            payload,
+            primary_provider,
+            secondary_provider,
+            failover_payload(
+              true,
+              true,
+              primary_provider,
+              failure_summary(primary_failure)
+            )
+          )
+          |> maybe_mark_cached(cached?)
+
+        json_result(payload)
+
+      secondary_failure ->
+        render_combined_failure(
+          primary_failure,
+          secondary_failure,
+          primary_provider,
+          secondary_provider
+        )
+    end
+  end
+
+  defp run_provider_attempt(provider, query, freshness, request, runtime) do
+    cache_key = build_cache_key(query, freshness, request, provider)
+
+    case WebCache.read_cache(@search_cache_table, cache_key, runtime.cache_opts) do
       {:hit, payload} ->
-        cached = Map.put(payload, "cached", true)
-        json_result(cached)
+        {:ok, payload, true}
 
       :miss ->
-        case perform_search(query, freshness, request, api_cfg, runtime) do
-          {:ok, payload} ->
-            WebCache.write_cache(
-              @search_cache_table,
-              cache_key,
-              payload,
-              runtime.cache_ttl_ms
-            )
+        case resolve_api_config(provider, runtime) do
+          {:error, payload} ->
+            {:setup_error, payload}
 
-            json_result(payload)
+          {:ok, api_cfg} ->
+            case perform_search(provider, query, freshness, request, api_cfg, runtime) do
+              {:ok, payload} ->
+                WebCache.write_cache(
+                  @search_cache_table,
+                  cache_key,
+                  payload,
+                  runtime.cache_ttl_ms,
+                  runtime.cache_max_entries,
+                  runtime.cache_opts
+                )
 
-          {:error, reason} ->
-            {:error, reason}
+                {:ok, payload, false}
+
+              {:error, reason} ->
+                {:runtime_error, reason}
+            end
         end
     end
   end
 
-  defp perform_search(query, freshness, request, api_cfg, runtime) do
+  defp perform_search(provider, query, freshness, request, api_cfg, runtime) do
     start_ms = System.monotonic_time(:millisecond)
 
-    case runtime.provider do
+    case provider do
       "perplexity" ->
         with {:ok, payload} <-
-               run_perplexity_search(query, request, api_cfg, runtime, start_ms) do
+               run_perplexity_search(provider, query, request, api_cfg, runtime, start_ms) do
           {:ok, payload}
         end
 
       _ ->
         with {:ok, payload} <-
-               run_brave_search(query, freshness, request, api_cfg, runtime, start_ms) do
+               run_brave_search(provider, query, freshness, request, api_cfg, runtime, start_ms) do
           {:ok, payload}
         end
     end
   end
 
-  defp run_brave_search(query, freshness, request, api_cfg, runtime, start_ms) do
+  defp run_brave_search(provider, query, freshness, request, api_cfg, runtime, start_ms) do
     params =
       [
         {"q", query},
@@ -202,7 +306,7 @@ defmodule CodingAgent.Tools.WebSearch do
         {:ok,
          %{
            "query" => query,
-           "provider" => runtime.provider,
+           "provider" => provider,
            "count" => length(mapped),
            "took_ms" => elapsed_ms(start_ms),
            "results" => mapped
@@ -222,7 +326,7 @@ defmodule CodingAgent.Tools.WebSearch do
     end
   end
 
-  defp run_perplexity_search(query, _request, api_cfg, runtime, start_ms) do
+  defp run_perplexity_search(provider, query, _request, api_cfg, runtime, start_ms) do
     endpoint = String.trim_trailing(api_cfg.base_url, "/") <> "/chat/completions"
 
     request_body = %{
@@ -256,7 +360,7 @@ defmodule CodingAgent.Tools.WebSearch do
         {:ok,
          %{
            "query" => query,
-           "provider" => runtime.provider,
+           "provider" => provider,
            "model" => api_cfg.model,
            "took_ms" => elapsed_ms(start_ms),
            "content" => ExternalContent.wrap_web_content(to_string(content), :web_search),
@@ -307,6 +411,102 @@ defmodule CodingAgent.Tools.WebSearch do
     ]
   end
 
+  defp failover_context(runtime, freshness) do
+    secondary_provider = runtime.secondary_provider
+
+    blocked_reason =
+      cond do
+        is_nil(secondary_provider) ->
+          nil
+
+        not is_nil(freshness) and secondary_provider != "brave" ->
+          "Failover to #{secondary_provider} skipped because freshness is only supported by Brave."
+
+        true ->
+          nil
+      end
+
+    %{
+      secondary_provider: secondary_provider,
+      blocked_reason: blocked_reason
+    }
+  end
+
+  defp failover_payload(attempted, used, from, reason) do
+    %{
+      "attempted" => attempted,
+      "used" => used,
+      "from" => from,
+      "reason" => reason
+    }
+  end
+
+  defp annotate_payload(payload, requested_provider, used_provider, failover)
+       when is_map(payload) do
+    failover = Map.put(failover, "to", if(failover["used"], do: used_provider, else: nil))
+
+    payload
+    |> Map.put("provider", used_provider)
+    |> Map.put("provider_requested", requested_provider)
+    |> Map.put("provider_used", used_provider)
+    |> Map.put("failover", failover)
+  end
+
+  defp maybe_mark_cached(payload, true), do: Map.put(payload, "cached", true)
+  defp maybe_mark_cached(payload, _), do: payload
+
+  defp render_failure({:setup_error, payload}, primary_provider, failover) do
+    payload
+    |> annotate_payload(primary_provider, primary_provider, failover)
+    |> json_result()
+  end
+
+  defp render_failure({:runtime_error, reason}, _primary_provider, failover) do
+    reason_text = to_string(reason)
+
+    case Map.get(failover, "reason") do
+      nil -> {:error, reason_text}
+      context -> {:error, "#{reason_text} (#{context})"}
+    end
+  end
+
+  defp render_combined_failure(
+         primary_failure,
+         secondary_failure,
+         primary_provider,
+         secondary_provider
+       ) do
+    summary =
+      "Primary provider #{primary_provider} failed: #{failure_summary(primary_failure)}. " <>
+        "Failover provider #{secondary_provider} failed: #{failure_summary(secondary_failure)}."
+
+    failover = failover_payload(true, false, primary_provider, summary)
+
+    case {primary_failure, secondary_failure} do
+      {{:setup_error, payload}, _} ->
+        payload
+        |> annotate_payload(primary_provider, primary_provider, failover)
+        |> Map.put("warning", summary)
+        |> json_result()
+
+      {_, {:setup_error, payload}} ->
+        payload
+        |> annotate_payload(primary_provider, primary_provider, failover)
+        |> Map.put("warning", summary)
+        |> json_result()
+
+      {{:runtime_error, reason}, _} ->
+        {:error, "#{to_string(reason)} (#{summary})"}
+    end
+  end
+
+  defp failure_summary({:setup_error, payload}) when is_map(payload) do
+    Map.get(payload, "error") || Map.get(payload, "message") || "setup_error"
+  end
+
+  defp failure_summary({:runtime_error, reason}) when is_binary(reason), do: reason
+  defp failure_summary({:runtime_error, reason}), do: inspect(reason)
+
   defp build_cache_key(query, freshness, request, provider) do
     key =
       if provider == "brave" do
@@ -320,7 +520,7 @@ defmodule CodingAgent.Tools.WebSearch do
     WebCache.normalize_cache_key(key)
   end
 
-  defp resolve_api_config(%{provider: "perplexity"} = runtime) do
+  defp resolve_api_config("perplexity", runtime) do
     api_key = resolve_perplexity_api_key(runtime.perplexity)
 
     if is_nil(api_key) do
@@ -329,7 +529,7 @@ defmodule CodingAgent.Tools.WebSearch do
          "error" => "missing_perplexity_api_key",
          "message" =>
            "websearch (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY, or configure agent.tools.web.search.perplexity.api_key.",
-         "docs" => "https://docs.openclaw.ai/tools/web"
+         "docs" => "docs/tools/web.md"
        }}
     else
       source = perplexity_api_key_source(runtime.perplexity)
@@ -345,7 +545,7 @@ defmodule CodingAgent.Tools.WebSearch do
     end
   end
 
-  defp resolve_api_config(runtime) do
+  defp resolve_api_config(_provider, runtime) do
     api_key = normalize_optional_string(runtime.api_key) || env_optional("BRAVE_API_KEY")
 
     if is_nil(api_key) do
@@ -354,7 +554,7 @@ defmodule CodingAgent.Tools.WebSearch do
          "error" => "missing_brave_api_key",
          "message" =>
            "websearch needs a Brave Search API key. Set BRAVE_API_KEY or configure agent.tools.web.search.api_key.",
-         "docs" => "https://docs.openclaw.ai/tools/web"
+         "docs" => "docs/tools/web.md"
        }}
     else
       {:ok, %{api_key: api_key}}
@@ -654,6 +854,50 @@ defmodule CodingAgent.Tools.WebSearch do
 
   defp normalize_optional_string(_), do: nil
 
+  defp normalize_provider(value, fallback) when is_binary(value) do
+    case String.downcase(String.trim(value)) do
+      "perplexity" -> "perplexity"
+      "brave" -> "brave"
+      _ -> fallback
+    end
+  end
+
+  defp normalize_provider(value, fallback) when is_atom(value) or is_integer(value) do
+    normalize_provider(to_string(value), fallback)
+  end
+
+  defp normalize_provider(_value, fallback), do: fallback
+
+  defp normalize_provider_optional(nil), do: nil
+
+  defp normalize_provider_optional(value) when is_binary(value) do
+    case String.downcase(String.trim(value)) do
+      "perplexity" -> "perplexity"
+      "brave" -> "brave"
+      _ -> nil
+    end
+  end
+
+  defp normalize_provider_optional(_), do: nil
+
+  defp resolve_secondary_provider(_primary, false, _configured), do: nil
+
+  defp resolve_secondary_provider(primary, true, configured) do
+    candidate =
+      cond do
+        configured in ["brave", "perplexity"] ->
+          configured
+
+        primary == "brave" ->
+          "perplexity"
+
+        true ->
+          "brave"
+      end
+
+    if candidate == primary, do: nil, else: candidate
+  end
+
   defp env_optional(name), do: normalize_optional_string(System.get_env(name))
 
   defp present?(value), do: not is_nil(normalize_optional_string(value))
@@ -692,17 +936,35 @@ defmodule CodingAgent.Tools.WebSearch do
     web_cfg = tools_cfg |> get_map_value(:web, %{}) |> ensure_map()
     search_cfg = web_cfg |> get_map_value(:search, %{}) |> ensure_map()
     perplexity_cfg = search_cfg |> get_map_value(:perplexity, %{}) |> ensure_map()
+    failover_cfg = search_cfg |> get_map_value(:failover, %{}) |> ensure_map()
+    cache_cfg = web_cfg |> get_map_value(:cache, %{}) |> ensure_map()
 
     provider =
       search_cfg
       |> get_map_value(:provider, "brave")
-      |> to_string()
-      |> String.trim()
-      |> String.downcase()
-      |> case do
-        "perplexity" -> "perplexity"
-        _ -> "brave"
-      end
+      |> normalize_provider("brave")
+
+    failover_enabled = truthy?(get_map_value(failover_cfg, :enabled, @default_failover_enabled))
+
+    configured_secondary =
+      failover_cfg
+      |> get_map_value(:provider, get_map_value(failover_cfg, :secondary_provider, nil))
+      |> normalize_provider_optional()
+
+    secondary_provider =
+      resolve_secondary_provider(provider, failover_enabled, configured_secondary)
+
+    cache_max_entries =
+      WebCache.resolve_cache_max_entries(
+        get_map_value(cache_cfg, :max_entries, @default_cache_max_entries),
+        @default_cache_max_entries
+      )
+
+    cache_opts = %{
+      "persistent" => truthy?(get_map_value(cache_cfg, :persistent, true)),
+      "path" => normalize_optional_string(get_map_value(cache_cfg, :path, nil)),
+      "max_entries" => cache_max_entries
+    }
 
     timeout_seconds =
       WebCache.resolve_timeout_seconds(
@@ -721,6 +983,7 @@ defmodule CodingAgent.Tools.WebSearch do
 
     %{
       provider: provider,
+      secondary_provider: secondary_provider,
       enabled: truthy?(get_map_value(search_cfg, :enabled, true)),
       api_key: normalize_optional_string(get_map_value(search_cfg, :api_key, nil)),
       max_results:
@@ -731,6 +994,8 @@ defmodule CodingAgent.Tools.WebSearch do
         ),
       timeout_ms: timeout_seconds * 1_000,
       cache_ttl_ms: cache_ttl_ms,
+      cache_max_entries: cache_max_entries,
+      cache_opts: cache_opts,
       perplexity: %{
         api_key: normalize_optional_string(get_map_value(perplexity_cfg, :api_key, nil)),
         base_url: normalize_optional_string(get_map_value(perplexity_cfg, :base_url, nil)),

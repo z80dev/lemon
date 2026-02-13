@@ -5,8 +5,24 @@ defmodule CodingAgent.Tools.WebSearchTest do
   alias CodingAgent.Tools.WebSearch
 
   setup do
+    original_cache_path = System.get_env("LEMON_WEB_CACHE_PATH")
+
+    cache_dir =
+      Path.join(System.tmp_dir!(), "websearch_cache_#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(cache_dir)
+    System.put_env("LEMON_WEB_CACHE_PATH", cache_dir)
+
+    on_exit(fn ->
+      if original_cache_path,
+        do: System.put_env("LEMON_WEB_CACHE_PATH", original_cache_path),
+        else: System.delete_env("LEMON_WEB_CACHE_PATH")
+
+      File.rm_rf!(cache_dir)
+    end)
+
     WebSearch.reset_rate_limit()
-    WebSearch.reset_cache()
+    WebSearch.reset_cache(%{"path" => cache_dir})
     :ok
   end
 
@@ -48,7 +64,11 @@ defmodule CodingAgent.Tools.WebSearchTest do
 
     tool =
       WebSearch.tool("/tmp",
-        settings_manager: %{tools: %{web: %{search: %{provider: "brave", api_key: nil}}}}
+        settings_manager: %{
+          tools: %{
+            web: %{search: %{provider: "brave", api_key: nil, failover: %{enabled: false}}}
+          }
+        }
       )
 
     result = tool.execute.("id", %{"query" => "hello"}, nil, nil)
@@ -56,6 +76,62 @@ defmodule CodingAgent.Tools.WebSearchTest do
 
     assert payload["error"] == "missing_brave_api_key"
     assert payload["docs"] =~ "/tools/web"
+  end
+
+  test "fails over when primary provider is missing key" do
+    original_brave = System.get_env("BRAVE_API_KEY")
+    System.delete_env("BRAVE_API_KEY")
+
+    on_exit(fn ->
+      if original_brave,
+        do: System.put_env("BRAVE_API_KEY", original_brave),
+        else: System.delete_env("BRAVE_API_KEY")
+    end)
+
+    parent = self()
+
+    http_post = fn _url, _opts ->
+      send(parent, :fallback_http_post)
+
+      {:ok,
+       %Req.Response{
+         status: 200,
+         headers: [{"content-type", "application/json"}],
+         body: %{
+           "choices" => [%{"message" => %{"content" => "Fallback response"}}],
+           "citations" => ["https://example.com/fallback"]
+         }
+       }}
+    end
+
+    tool =
+      WebSearch.tool("/tmp",
+        http_post: http_post,
+        settings_manager: %{
+          tools: %{
+            web: %{
+              search: %{
+                provider: "brave",
+                api_key: nil,
+                failover: %{enabled: true, provider: "perplexity"},
+                perplexity: %{api_key: "pplx-key"}
+              }
+            }
+          }
+        }
+      )
+
+    payload = tool.execute.("id", %{"query" => "lemon failover"}, nil, nil) |> decode_payload()
+
+    assert payload["provider"] == "perplexity"
+    assert payload["provider_requested"] == "brave"
+    assert payload["provider_used"] == "perplexity"
+    assert payload["failover"]["attempted"] == true
+    assert payload["failover"]["used"] == true
+    assert payload["failover"]["from"] == "brave"
+    assert payload["failover"]["to"] == "perplexity"
+    assert payload["failover"]["reason"] =~ "missing_brave_api_key"
+    assert_received :fallback_http_post
   end
 
   test "runs Brave search and caches results" do
@@ -115,6 +191,133 @@ defmodule CodingAgent.Tools.WebSearchTest do
     assert second_payload["cached"] == true
     assert_received {:http_get, _, _}
     refute_received {:http_get, _, _}
+  end
+
+  test "fails over when primary provider request errors" do
+    parent = self()
+
+    http_get = fn _url, _opts ->
+      send(parent, :primary_http_get)
+      {:error, :timeout}
+    end
+
+    http_post = fn _url, _opts ->
+      send(parent, :fallback_http_post)
+
+      {:ok,
+       %Req.Response{
+         status: 200,
+         headers: [{"content-type", "application/json"}],
+         body: %{
+           "choices" => [%{"message" => %{"content" => "Fallback answer"}}],
+           "citations" => []
+         }
+       }}
+    end
+
+    tool =
+      WebSearch.tool("/tmp",
+        http_get: http_get,
+        http_post: http_post,
+        settings_manager: %{
+          tools: %{
+            web: %{
+              search: %{
+                provider: "brave",
+                api_key: "brave-key",
+                failover: %{enabled: true, provider: "perplexity"},
+                perplexity: %{api_key: "pplx-key"}
+              }
+            }
+          }
+        }
+      )
+
+    payload = tool.execute.("id", %{"query" => "lemon timeout"}, nil, nil) |> decode_payload()
+
+    assert payload["provider"] == "perplexity"
+    assert payload["provider_requested"] == "brave"
+    assert payload["provider_used"] == "perplexity"
+    assert payload["failover"]["attempted"] == true
+    assert payload["failover"]["used"] == true
+    assert payload["failover"]["reason"] =~ "Brave Search request failed"
+    assert_received :primary_http_get
+    assert_received :fallback_http_post
+  end
+
+  test "returns primary provider error when failover disabled" do
+    parent = self()
+
+    http_get = fn _url, _opts ->
+      send(parent, :primary_http_get)
+      {:error, :econnrefused}
+    end
+
+    http_post = fn _url, _opts ->
+      send(parent, :fallback_http_post)
+      {:error, :should_not_be_called}
+    end
+
+    tool =
+      WebSearch.tool("/tmp",
+        http_get: http_get,
+        http_post: http_post,
+        settings_manager: %{
+          tools: %{
+            web: %{
+              search: %{
+                provider: "brave",
+                api_key: "brave-key",
+                failover: %{enabled: false},
+                perplexity: %{api_key: "pplx-key"}
+              }
+            }
+          }
+        }
+      )
+
+    assert {:error, message} = tool.execute.("id", %{"query" => "no fallback"}, nil, nil)
+    assert message =~ "Brave Search request failed"
+    assert_received :primary_http_get
+    refute_received :fallback_http_post
+  end
+
+  test "does not degrade freshness requests to non-brave failover provider" do
+    original_brave = System.get_env("BRAVE_API_KEY")
+    System.delete_env("BRAVE_API_KEY")
+
+    on_exit(fn ->
+      if original_brave,
+        do: System.put_env("BRAVE_API_KEY", original_brave),
+        else: System.delete_env("BRAVE_API_KEY")
+    end)
+
+    tool =
+      WebSearch.tool("/tmp",
+        settings_manager: %{
+          tools: %{
+            web: %{
+              search: %{
+                provider: "brave",
+                api_key: nil,
+                failover: %{enabled: true, provider: "perplexity"},
+                perplexity: %{api_key: "pplx-key"}
+              }
+            }
+          }
+        }
+      )
+
+    payload =
+      tool.execute.("id", %{"query" => "fresh lemons", "freshness" => "pw"}, nil, nil)
+      |> decode_payload()
+
+    assert payload["error"] == "missing_brave_api_key"
+    assert payload["provider_requested"] == "brave"
+    assert payload["provider_used"] == "brave"
+    assert payload["failover"]["attempted"] == false
+    assert payload["failover"]["used"] == false
+    assert payload["failover"]["reason"] =~ "freshness is only supported by Brave"
   end
 
   test "rejects freshness for non-brave providers" do

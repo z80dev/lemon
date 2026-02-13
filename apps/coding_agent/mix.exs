@@ -33,6 +33,7 @@ defmodule CodingAgent.MixProject do
       {:lemon_core, in_umbrella: true},
       {:jason, "~> 1.4"},
       {:req, "~> 0.5"},
+      {:readability, "~> 0.12"},
       {:uuid, "~> 1.1"}
     ]
   end

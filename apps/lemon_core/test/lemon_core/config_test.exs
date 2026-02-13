@@ -272,6 +272,10 @@ defmodule LemonCore.ConfigTest do
     timeout_seconds = 42
     cache_ttl_minutes = 10
 
+    [agent.tools.web.search.failover]
+    enabled = false
+    provider = "brave"
+
     [agent.tools.web.search.perplexity]
     api_key = "pplx-test"
     base_url = "https://api.perplexity.ai"
@@ -294,6 +298,11 @@ defmodule LemonCore.ConfigTest do
     only_main_content = true
     max_age_ms = 123000
     timeout_seconds = 15
+
+    [agent.tools.web.cache]
+    persistent = true
+    path = "~/.lemon/cache/custom-web-tools"
+    max_entries = 250
     """)
 
     config = Config.load()
@@ -303,6 +312,8 @@ defmodule LemonCore.ConfigTest do
     assert tools.web.search.max_results == 7
     assert tools.web.search.timeout_seconds == 42
     assert tools.web.search.cache_ttl_minutes == 10
+    assert tools.web.search.failover.enabled == false
+    assert tools.web.search.failover.provider == "brave"
     assert tools.web.search.perplexity.model == "perplexity/sonar"
 
     assert tools.web.fetch.max_chars == 64_000
@@ -314,5 +325,9 @@ defmodule LemonCore.ConfigTest do
 
     assert tools.web.fetch.firecrawl.enabled == true
     assert tools.web.fetch.firecrawl.timeout_seconds == 15
+
+    assert tools.web.cache.persistent == true
+    assert tools.web.cache.path == "~/.lemon/cache/custom-web-tools"
+    assert tools.web.cache.max_entries == 250
   end
 end

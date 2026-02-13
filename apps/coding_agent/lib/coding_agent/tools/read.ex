@@ -14,6 +14,10 @@ defmodule CodingAgent.Tools.Read do
 
   @default_max_lines 2000
   @default_max_bytes 50 * 1024
+  @workspace_bootstrap_fallback_files MapSet.new(["SOUL.md", "USER.md"])
+  @daily_memory_path_regex Regex.compile!(
+                             "(?:^|[\\\\/])memory[\\\\/](\\d{4}-\\d{2}-\\d{2})\\.md$"
+                           )
 
   @doc """
   Returns the Read tool definition.
@@ -94,16 +98,144 @@ defmodule CodingAgent.Tools.Read do
     limit = Map.get(params, "limit")
 
     with {:ok, resolved_path} <- resolve_path(path, cwd, opts),
-         {:ok, stat} <- check_file_access(resolved_path),
          :ok <- check_abort(signal) do
-      case detect_mime_type(resolved_path) do
-        nil ->
-          read_text_file(resolved_path, stat, offset, limit, opts)
+      case resolve_existing_read_path(path, resolved_path, cwd, opts) do
+        {:ok, readable_path, stat} ->
+          case detect_mime_type(readable_path) do
+            nil ->
+              read_text_file(readable_path, stat, offset, limit, opts)
 
-        mime_type ->
-          read_image_file(resolved_path, mime_type)
+            mime_type ->
+              read_image_file(readable_path, mime_type)
+          end
+
+        {:ok_optional_missing, readable_path} ->
+          optional_missing_daily_memory_result(readable_path)
+
+        {:error, _} = error ->
+          error
       end
     end
+  end
+
+  defp resolve_existing_read_path(path, resolved_path, cwd, opts) do
+    case check_file_access(resolved_path) do
+      {:ok, stat} ->
+        {:ok, resolved_path, stat}
+
+      {:error, _} = error ->
+        if missing_file?(resolved_path) do
+          case maybe_workspace_bootstrap_fallback(path, cwd, opts) do
+            {:ok, fallback_path, stat} ->
+              {:ok, fallback_path, stat}
+
+            :no_fallback ->
+              if optional_missing_daily_memory?(path, resolved_path, opts) do
+                {:ok_optional_missing, resolved_path}
+              else
+                error
+              end
+          end
+        else
+          error
+        end
+    end
+  end
+
+  defp missing_file?(path) do
+    match?({:error, :enoent}, File.stat(path))
+  end
+
+  defp maybe_workspace_bootstrap_fallback(path, cwd, opts) do
+    workspace_dir = Keyword.get(opts, :workspace_dir)
+
+    cond do
+      not is_binary(path) or String.trim(path) == "" ->
+        :no_fallback
+
+      Path.type(path) == :absolute ->
+        :no_fallback
+
+      explicit_relative?(path) ->
+        :no_fallback
+
+      Path.dirname(path) != "." ->
+        :no_fallback
+
+      not MapSet.member?(@workspace_bootstrap_fallback_files, path) ->
+        :no_fallback
+
+      not is_binary(workspace_dir) or String.trim(workspace_dir) == "" ->
+        :no_fallback
+
+      true ->
+        fallback_path = Path.join(workspace_dir, path) |> Path.expand()
+        primary_path = Path.join(cwd, path) |> Path.expand()
+
+        if fallback_path == primary_path do
+          :no_fallback
+        else
+          case check_file_access(fallback_path) do
+            {:ok, stat} -> {:ok, fallback_path, stat}
+            _ -> :no_fallback
+          end
+        end
+    end
+  end
+
+  defp optional_missing_daily_memory?(path, resolved_path, opts) do
+    workspace_dir = Keyword.get(opts, :workspace_dir)
+
+    with true <- is_binary(workspace_dir) and String.trim(workspace_dir) != "",
+         {:ok, date} <- extract_daily_memory_date(path, resolved_path),
+         true <- date in [Date.utc_today(), Date.add(Date.utc_today(), -1)] do
+      memory_dir = Path.join(workspace_dir, "memory")
+      path_within_dir?(resolved_path, memory_dir)
+    else
+      _ -> false
+    end
+  end
+
+  defp extract_daily_memory_date(path, resolved_path) do
+    case parse_daily_memory_date(path) do
+      {:ok, _} = ok -> ok
+      :error -> parse_daily_memory_date(resolved_path)
+    end
+  end
+
+  defp parse_daily_memory_date(path) when is_binary(path) do
+    case Regex.run(@daily_memory_path_regex, path, capture: :all_but_first) do
+      [iso_date] -> Date.from_iso8601(iso_date)
+      _ -> :error
+    end
+  end
+
+  defp parse_daily_memory_date(_), do: :error
+
+  defp path_within_dir?(path, dir) do
+    expanded_path = Path.expand(path)
+    expanded_dir = Path.expand(dir)
+
+    dir_prefix =
+      if String.ends_with?(expanded_dir, "/"),
+        do: expanded_dir,
+        else: expanded_dir <> "/"
+
+    expanded_path == expanded_dir or String.starts_with?(expanded_path, dir_prefix)
+  end
+
+  defp optional_missing_daily_memory_result(path) do
+    %AgentToolResult{
+      content: [%TextContent{text: ""}],
+      details: %{
+        path: path,
+        total_lines: 0,
+        start_line: 1,
+        lines_shown: 0,
+        truncation: nil,
+        missing_optional: true
+      }
+    }
   end
 
   # ============================================================================

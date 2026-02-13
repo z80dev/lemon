@@ -5,12 +5,12 @@ defmodule CodingAgent.Tools.WebFetchTest do
   alias CodingAgent.Tools.WebFetch
 
   setup do
-    WebFetch.reset_cache()
+    WebFetch.reset_cache(persistent: false)
     :ok
   end
 
   test "tool schema exposes url + extractMode + compatibility format" do
-    tool = WebFetch.tool("/tmp")
+    tool = build_tool()
 
     assert tool.name == "webfetch"
     assert tool.parameters["required"] == ["url"]
@@ -21,23 +21,21 @@ defmodule CodingAgent.Tools.WebFetchTest do
 
   test "returns disabled error when configured off" do
     tool =
-      WebFetch.tool("/tmp",
-        settings_manager: %{tools: %{web: %{fetch: %{enabled: false}}}}
-      )
+      build_tool(settings_manager: %{tools: %{web: %{fetch: %{enabled: false}}}})
 
     assert {:error, "webfetch is disabled by configuration"} =
              tool.execute.("id", %{"url" => "https://example.com"}, nil, nil)
   end
 
   test "rejects invalid URL scheme" do
-    tool = WebFetch.tool("/tmp")
+    tool = build_tool()
 
     assert {:error, "Invalid URL: must be http or https"} =
              tool.execute.("id", %{"url" => "file:///etc/passwd"}, nil, nil)
   end
 
   test "blocks localhost SSRF targets" do
-    tool = WebFetch.tool("/tmp")
+    tool = build_tool()
 
     assert {:error, message} = tool.execute.("id", %{"url" => "http://localhost/admin"}, nil, nil)
     assert message =~ "Blocked hostname"
@@ -58,7 +56,7 @@ defmodule CodingAgent.Tools.WebFetchTest do
     end
 
     tool =
-      WebFetch.tool("/tmp",
+      build_tool(
         http_get: http_get,
         settings_manager: %{
           tools: %{
@@ -85,12 +83,12 @@ defmodule CodingAgent.Tools.WebFetchTest do
          status: 200,
          headers: [{"content-type", "text/html; charset=utf-8"}],
          body:
-           "<html><head><title>Lemon Doc</title></head><body><main><h1>Hello</h1><p>World</p></main></body></html>"
+           "<html><head><title>Lemon Doc</title></head><body><article><h1>Hello</h1><p>Lemon ships a focused coding runtime with built in tools for safe web access and extraction.</p><p>This paragraph is intentionally long enough to make readability keep the main section instead of falling back to tiny content extraction heuristics.</p></article></body></html>"
        }}
     end
 
     tool =
-      WebFetch.tool("/tmp",
+      build_tool(
         http_get: http_get,
         settings_manager: %{
           tools: %{
@@ -116,6 +114,71 @@ defmodule CodingAgent.Tools.WebFetchTest do
     assert payload["contentType"] == "text/html"
     assert payload["text"] =~ "EXTERNAL_UNTRUSTED_CONTENT"
     assert payload["text"] =~ "Hello"
+  end
+
+  test "extracts HTML with simple fallback when readability is disabled" do
+    http_get = fn _url, _opts ->
+      {:ok,
+       %Req.Response{
+         status: 200,
+         headers: [{"content-type", "text/html; charset=utf-8"}],
+         body:
+           "<html><head><title>Disabled</title></head><body><main><h1>Disabled</h1><p>Content</p></main></body></html>"
+       }}
+    end
+
+    tool =
+      build_tool(
+        http_get: http_get,
+        settings_manager: %{tools: %{web: %{fetch: %{allow_private_network: true, readability: false}}}}
+      )
+
+    result =
+      tool.execute.(
+        "id",
+        %{"url" => "https://8.8.8.8/disabled", "extractMode" => "markdown"},
+        nil,
+        nil
+      )
+
+    payload = decode_payload(result)
+
+    assert payload["extractor"] == "readability_fallback"
+    assert payload["text"] =~ "EXTERNAL_UNTRUSTED_CONTENT"
+    assert payload["text"] =~ "Disabled"
+  end
+
+  test "falls back to simple HTML extraction when readability parser fails" do
+    http_get = fn _url, _opts ->
+      {:ok,
+       %Req.Response{
+         status: 200,
+         headers: [{"content-type", "text/html; charset=utf-8"}],
+         body:
+           "<html><head><title>Fallback Doc</title></head><body><main><h1>Fallback</h1><p>Content</p></main></body></html>"
+       }}
+    end
+
+    tool =
+      build_tool(
+        http_get: http_get,
+        readability_extract: fn _html, _extract_mode, _url -> {:error, "boom"} end,
+        settings_manager: %{tools: %{web: %{fetch: %{allow_private_network: true}}}}
+      )
+
+    result =
+      tool.execute.(
+        "id",
+        %{"url" => "https://8.8.8.8/fallback", "extractMode" => "markdown"},
+        nil,
+        nil
+      )
+
+    payload = decode_payload(result)
+
+    assert payload["extractor"] == "readability_fallback"
+    assert payload["text"] =~ "EXTERNAL_UNTRUSTED_CONTENT"
+    assert payload["text"] =~ "Fallback"
   end
 
   test "uses firecrawl fallback on guarded fetch failure" do
@@ -148,7 +211,7 @@ defmodule CodingAgent.Tools.WebFetchTest do
     end
 
     tool =
-      WebFetch.tool("/tmp",
+      build_tool(
         http_get: http_get,
         http_post: http_post,
         settings_manager: %{
@@ -178,6 +241,35 @@ defmodule CodingAgent.Tools.WebFetchTest do
     assert_received :http_post_called
   end
 
+  test "sanitizes non-2xx response bodies in errors" do
+    noisy_html =
+      "<html><body><h1>Failure&nbsp;reason</h1><script>alert('x')</script><p>" <>
+        String.duplicate(" detail ", 90) <> "</p></body></html>"
+
+    http_get = fn _url, _opts ->
+      {:ok,
+       %Req.Response{
+         status: 500,
+         headers: [{"content-type", "text/html"}],
+         body: noisy_html
+       }}
+    end
+
+    tool =
+      build_tool(
+        http_get: http_get,
+        settings_manager: %{tools: %{web: %{fetch: %{allow_private_network: true}}}}
+      )
+
+    assert {:error, message} = tool.execute.("id", %{"url" => "https://8.8.8.8/error"}, nil, nil)
+
+    assert message =~ "Web fetch failed: HTTP 500:"
+    assert message =~ "Failure reason"
+    refute message =~ "<html"
+    refute message =~ "<script"
+    assert message =~ "..."
+  end
+
   test "caches successful fetch results" do
     parent = self()
 
@@ -193,7 +285,7 @@ defmodule CodingAgent.Tools.WebFetchTest do
     end
 
     tool =
-      WebFetch.tool("/tmp",
+      build_tool(
         http_get: http_get,
         settings_manager: %{
           tools: %{
@@ -230,7 +322,7 @@ defmodule CodingAgent.Tools.WebFetchTest do
     end
 
     tool =
-      WebFetch.tool("/tmp",
+      build_tool(
         http_get: http_get,
         settings_manager: %{tools: %{web: %{fetch: %{allow_private_network: true}}}}
       )
@@ -247,7 +339,7 @@ defmodule CodingAgent.Tools.WebFetchTest do
     signal = AbortSignal.new()
     AbortSignal.abort(signal)
 
-    tool = WebFetch.tool("/tmp")
+    tool = build_tool()
 
     assert {:error, "Operation aborted"} =
              tool.execute.("id", %{"url" => "https://example.com"}, signal, nil)
@@ -256,5 +348,10 @@ defmodule CodingAgent.Tools.WebFetchTest do
   defp decode_payload(result) do
     [content] = result.content
     Jason.decode!(content.text)
+  end
+
+  defp build_tool(opts \\ []) do
+    opts = Keyword.put_new(opts, :cache_opts, persistent: false)
+    WebFetch.tool("/tmp", opts)
   end
 end

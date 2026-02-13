@@ -1,6 +1,7 @@
 defmodule CodingAgent.Tools.MemoryPathsTest do
   use ExUnit.Case, async: true
 
+  alias AgentCore.Types.AgentToolResult
   alias CodingAgent.Tools.{Edit, Grep, Read, Write}
 
   defp tool_text(%{content: content}) when is_list(content) do
@@ -32,6 +33,63 @@ defmodule CodingAgent.Tools.MemoryPathsTest do
     result_project = tool.execute.("t2", %{"path" => "./MEMORY.md"}, nil, nil)
     assert String.contains?(tool_text(result_project), "project-memory")
     refute String.contains?(tool_text(result_project), "workspace-memory")
+  end
+
+  @tag :tmp_dir
+  test "read falls back to workspace SOUL.md and USER.md when missing in cwd", %{tmp_dir: tmp_dir} do
+    project_dir = Path.join(tmp_dir, "project")
+    workspace_dir = Path.join(tmp_dir, "workspace")
+
+    File.mkdir_p!(project_dir)
+    File.mkdir_p!(workspace_dir)
+
+    File.write!(Path.join(workspace_dir, "SOUL.md"), "workspace-soul")
+    File.write!(Path.join(workspace_dir, "USER.md"), "workspace-user")
+
+    tool = Read.tool(project_dir, workspace_dir: workspace_dir)
+
+    result_soul = tool.execute.("t1", %{"path" => "SOUL.md"}, nil, nil)
+    assert String.contains?(tool_text(result_soul), "workspace-soul")
+
+    result_user = tool.execute.("t2", %{"path" => "USER.md"}, nil, nil)
+    assert String.contains?(tool_text(result_user), "workspace-user")
+
+    result_explicit = tool.execute.("t3", %{"path" => "./SOUL.md"}, nil, nil)
+    assert {:error, msg} = result_explicit
+    assert msg =~ "File not found"
+  end
+
+  @tag :tmp_dir
+  test "read treats missing workspace daily memory for today and yesterday as optional", %{
+    tmp_dir: tmp_dir
+  } do
+    project_dir = Path.join(tmp_dir, "project")
+    workspace_dir = Path.join(tmp_dir, "workspace")
+
+    File.mkdir_p!(project_dir)
+    File.mkdir_p!(workspace_dir)
+
+    tool = Read.tool(project_dir, workspace_dir: workspace_dir)
+
+    today = Date.utc_today() |> Date.to_iso8601()
+    yesterday = Date.add(Date.utc_today(), -1) |> Date.to_iso8601()
+    older = Date.add(Date.utc_today(), -7) |> Date.to_iso8601()
+
+    result_today = tool.execute.("t1", %{"path" => "memory/#{today}.md"}, nil, nil)
+
+    assert %AgentToolResult{details: details_today} = result_today
+    assert details_today.missing_optional == true
+    assert tool_text(result_today) == ""
+
+    result_yesterday = tool.execute.("t2", %{"path" => "memory/#{yesterday}.md"}, nil, nil)
+
+    assert %AgentToolResult{details: details_yesterday} = result_yesterday
+    assert details_yesterday.missing_optional == true
+    assert tool_text(result_yesterday) == ""
+
+    result_older = tool.execute.("t3", %{"path" => "memory/#{older}.md"}, nil, nil)
+    assert {:error, msg} = result_older
+    assert msg =~ "File not found"
   end
 
   @tag :tmp_dir

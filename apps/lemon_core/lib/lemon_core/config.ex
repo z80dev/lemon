@@ -41,6 +41,10 @@ defmodule LemonCore.Config do
           "max_results" => 5,
           "timeout_seconds" => 30,
           "cache_ttl_minutes" => 15,
+          "failover" => %{
+            "enabled" => true,
+            "provider" => nil
+          },
           "perplexity" => %{
             "api_key" => nil,
             "base_url" => nil,
@@ -66,6 +70,11 @@ defmodule LemonCore.Config do
             "max_age_ms" => 172_800_000,
             "timeout_seconds" => 60
           }
+        },
+        "cache" => %{
+          "persistent" => true,
+          "path" => nil,
+          "max_entries" => 100
         }
       }
     },
@@ -620,7 +629,8 @@ defmodule LemonCore.Config do
 
     %{
       search: parse_web_search_config(map["search"] || %{}),
-      fetch: parse_web_fetch_config(map["fetch"] || %{})
+      fetch: parse_web_fetch_config(map["fetch"] || %{}),
+      cache: parse_web_cache_config(map["cache"] || %{})
     }
   end
 
@@ -634,7 +644,30 @@ defmodule LemonCore.Config do
       max_results: parse_positive_integer(map["max_results"], 5),
       timeout_seconds: parse_positive_integer(map["timeout_seconds"], 30),
       cache_ttl_minutes: parse_non_negative_number(map["cache_ttl_minutes"], 15),
+      failover: parse_web_search_failover_config(map["failover"] || %{}),
       perplexity: parse_perplexity_config(map["perplexity"] || %{})
+    }
+  end
+
+  defp parse_web_search_failover_config(map) do
+    map = stringify_keys(map)
+
+    %{
+      enabled: parse_boolean(map["enabled"], true),
+      provider:
+        normalize_optional_web_search_provider(
+          normalize_optional_string(map["provider"] || map["secondary_provider"])
+        )
+    }
+  end
+
+  defp parse_web_cache_config(map) do
+    map = stringify_keys(map)
+
+    %{
+      persistent: parse_boolean(map["persistent"], true),
+      path: normalize_optional_string(map["path"]),
+      max_entries: parse_positive_integer(map["max_entries"], 100)
     }
   end
 
@@ -1000,6 +1033,16 @@ defmodule LemonCore.Config do
   end
 
   defp normalize_web_search_provider(_), do: "brave"
+
+  defp normalize_optional_web_search_provider(value) when is_binary(value) do
+    case String.downcase(String.trim(value)) do
+      "perplexity" -> "perplexity"
+      "brave" -> "brave"
+      _ -> nil
+    end
+  end
+
+  defp normalize_optional_web_search_provider(_), do: nil
 
   defp normalize_env_overrides(nil), do: %{}
   defp normalize_env_overrides(env) when is_map(env), do: env

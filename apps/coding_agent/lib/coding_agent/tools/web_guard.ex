@@ -11,6 +11,8 @@ defmodule CodingAgent.Tools.WebGuard do
 
   @redirect_statuses [301, 302, 303, 307, 308]
   @blocked_hostnames MapSet.new(["localhost", "metadata.google.internal"])
+  @always_blocked_hostnames MapSet.new(["metadata.google.internal"])
+  @always_blocked_addresses MapSet.new([{169, 254, 169, 254}])
 
   @spec guarded_get(String.t(), keyword()) ::
           {:ok, Req.Response.t(), String.t()} | {:error, fetch_error()}
@@ -31,8 +33,8 @@ defmodule CodingAgent.Tools.WebGuard do
 
   defp do_guarded_get(url, opts, redirect_count, max_redirects, visited) do
     with {:ok, uri} <- parse_http_uri(url),
-         :ok <- assert_safe_hostname(uri.host, opts),
-         {:ok, response} <- http_get(url, opts) do
+         {:ok, target} <- build_request_target(uri, opts),
+         {:ok, response} <- http_get(target, opts) do
       if response.status in @redirect_statuses do
         follow_redirect(url, uri, response, opts, redirect_count, max_redirects, visited)
       else
@@ -98,26 +100,26 @@ defmodule CodingAgent.Tools.WebGuard do
     end
   end
 
-  defp http_get(url, opts) do
+  defp http_get(target, opts) do
     timeout_ms = opts |> Keyword.get(:timeout_ms, 30_000) |> normalize_integer(30_000)
-    headers = Keyword.get(opts, :headers, [])
+    headers = Keyword.get(opts, :headers, []) |> put_header("host", target.host_header)
     custom = Keyword.get(opts, :http_get)
 
     request_opts = [
       headers: headers,
       decode_body: false,
       redirect: false,
-      connect_options: [timeout: timeout_ms],
+      connect_options: build_connect_options(target, timeout_ms, opts),
       receive_timeout: timeout_ms
     ]
 
     result =
       cond do
         is_function(custom, 2) ->
-          custom.(url, request_opts)
+          custom.(target.request_url, request_opts)
 
         true ->
-          Req.get(url, request_opts)
+          Req.get(target.request_url, request_opts)
       end
 
     case result do
@@ -135,6 +137,20 @@ defmodule CodingAgent.Tools.WebGuard do
     end
   end
 
+  defp build_request_target(uri, opts) do
+    with {:ok, normalized_host, addresses} <- assert_safe_hostname(uri.host, opts),
+         {:ok, pinned_host} <- pick_pinned_host(addresses),
+         {:ok, request_url} <- build_pinned_request_url(uri, pinned_host) do
+      {:ok,
+       %{
+         request_url: request_url,
+         host_header: build_host_header(uri.host, uri.scheme, uri.port),
+         tls_hostname: normalized_host,
+         scheme: uri.scheme
+       }}
+    end
+  end
+
   defp assert_safe_hostname(hostname, opts) do
     normalized_host = normalize_hostname(hostname)
     allow_private_network = Keyword.get(opts, :allow_private_network, false)
@@ -145,47 +161,200 @@ defmodule CodingAgent.Tools.WebGuard do
       normalized_host == "" ->
         {:error, {:invalid_url, "Invalid hostname"}}
 
+      always_blocked_hostname?(normalized_host) ->
+        {:error, {:ssrf_blocked, "Blocked hostname: #{normalized_host}"}}
+
       allow_private_network or explicitly_allowed ->
-        :ok
+        with {:ok, addresses} <- resolve_host_addresses(normalized_host, opts),
+             :ok <- assert_not_always_blocked_addresses(addresses) do
+          {:ok, normalized_host, addresses}
+        end
 
       blocked_hostname?(normalized_host) ->
         {:error, {:ssrf_blocked, "Blocked hostname: #{normalized_host}"}}
 
       true ->
-        with {:ok, addresses} <- resolve_host_addresses(normalized_host),
+        with {:ok, addresses} <- resolve_host_addresses(normalized_host, opts),
+             :ok <- assert_not_always_blocked_addresses(addresses),
              :ok <- assert_public_addresses(addresses) do
-          :ok
+          {:ok, normalized_host, addresses}
         end
     end
   end
 
-  defp resolve_host_addresses(hostname) do
+  defp resolve_host_addresses(hostname, opts) do
     case parse_ip_literal(hostname) do
       {:ok, ip} ->
         {:ok, [ip]}
 
       :error ->
-        v4 =
-          try do
-            :inet_res.lookup(String.to_charlist(hostname), :in, :a)
-          rescue
-            _ -> []
-          end
+        resolve_host_with_dns(hostname, opts)
+    end
+  end
 
-        v6 =
-          try do
-            :inet_res.lookup(String.to_charlist(hostname), :in, :aaaa)
-          rescue
-            _ -> []
-          end
+  defp resolve_host_with_dns(hostname, opts) do
+    custom_resolver = Keyword.get(opts, :resolve_host)
 
-        addresses = Enum.uniq(v4 ++ v6)
+    if is_function(custom_resolver, 1) do
+      case custom_resolver.(hostname) do
+        {:ok, addresses} ->
+          normalize_resolved_addresses(hostname, addresses)
 
-        if addresses == [] do
-          {:error, {:network_error, "Unable to resolve hostname: #{hostname}"}}
-        else
-          {:ok, addresses}
+        {:error, reason} ->
+          {:error,
+           {:network_error, "Unable to resolve hostname: #{hostname} (#{format_reason(reason)})"}}
+
+        addresses when is_list(addresses) ->
+          normalize_resolved_addresses(hostname, addresses)
+
+        other ->
+          {:error,
+           {:network_error,
+            "Unable to resolve hostname: #{hostname} (unexpected resolver result: #{inspect(other)})"}}
+      end
+    else
+      v4 =
+        try do
+          :inet_res.lookup(String.to_charlist(hostname), :in, :a)
+        rescue
+          _ -> []
         end
+
+      v6 =
+        try do
+          :inet_res.lookup(String.to_charlist(hostname), :in, :aaaa)
+        rescue
+          _ -> []
+        end
+
+      normalize_resolved_addresses(hostname, Enum.uniq(v4 ++ v6))
+    end
+  end
+
+  defp normalize_resolved_addresses(hostname, addresses) when is_list(addresses) do
+    normalized =
+      addresses
+      |> Enum.map(&normalize_resolved_address/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    if normalized == [] do
+      {:error, {:network_error, "Unable to resolve hostname: #{hostname}"}}
+    else
+      {:ok, normalized}
+    end
+  end
+
+  defp normalize_resolved_addresses(hostname, _addresses) do
+    {:error, {:network_error, "Unable to resolve hostname: #{hostname}"}}
+  end
+
+  defp normalize_resolved_address(address)
+       when is_tuple(address) and tuple_size(address) in [4, 8],
+       do: address
+
+  defp normalize_resolved_address(address) when is_binary(address) do
+    case parse_ip_literal(address) do
+      {:ok, ip} -> ip
+      :error -> nil
+    end
+  end
+
+  defp normalize_resolved_address(_address), do: nil
+
+  defp pick_pinned_host([address | _]) do
+    {:ok, ip_to_string(address)}
+  end
+
+  defp pick_pinned_host([]) do
+    {:error, {:network_error, "Unable to resolve hostname"}}
+  end
+
+  defp build_pinned_request_url(uri, pinned_host) do
+    try do
+      uri
+      |> Map.put(:host, pinned_host)
+      |> Map.put(:authority, nil)
+      |> URI.to_string()
+      |> case do
+        "" -> {:error, {:network_error, "Unable to build pinned request URL"}}
+        url -> {:ok, url}
+      end
+    rescue
+      _ -> {:error, {:network_error, "Unable to build pinned request URL"}}
+    end
+  end
+
+  defp ip_to_string({_, _, _, _} = ip), do: :inet.ntoa(ip) |> to_string()
+  defp ip_to_string({_, _, _, _, _, _, _, _} = ip), do: :inet.ntoa(ip) |> to_string()
+
+  defp build_host_header(host, scheme, port) do
+    host_part =
+      if is_binary(host) and String.contains?(host, ":") and not String.starts_with?(host, "[") do
+        "[#{host}]"
+      else
+        host
+      end
+
+    if default_port?(scheme, port) do
+      host_part
+    else
+      "#{host_part}:#{port}"
+    end
+  end
+
+  defp default_port?("http", nil), do: true
+  defp default_port?("https", nil), do: true
+  defp default_port?("http", 80), do: true
+  defp default_port?("https", 443), do: true
+  defp default_port?(_, _), do: false
+
+  defp build_connect_options(target, timeout_ms, opts) do
+    connect_options = [timeout: timeout_ms]
+
+    if target.scheme == "https" do
+      transport_opts =
+        [verify: :verify_peer, server_name_indication: String.to_charlist(target.tls_hostname)]
+        |> maybe_put_tls_cacerts(opts)
+
+      connect_options
+      |> Keyword.put(:hostname, target.tls_hostname)
+      |> Keyword.put(:transport_opts, transport_opts)
+    else
+      connect_options
+    end
+  end
+
+  defp maybe_put_tls_cacerts(transport_opts, opts) do
+    cond do
+      Keyword.has_key?(opts, :cacerts) ->
+        Keyword.put(transport_opts, :cacerts, Keyword.get(opts, :cacerts))
+
+      Keyword.has_key?(opts, :cacertfile) ->
+        Keyword.put(transport_opts, :cacertfile, Keyword.get(opts, :cacertfile))
+
+      cacerts = default_cacerts() ->
+        Keyword.put(transport_opts, :cacerts, cacerts)
+
+      true ->
+        transport_opts
+    end
+  end
+
+  defp default_cacerts do
+    if function_exported?(:public_key, :cacerts_get, 0) do
+      try do
+        case :public_key.cacerts_get() do
+          cacerts when is_list(cacerts) and cacerts != [] -> cacerts
+          _ -> nil
+        end
+      rescue
+        _ -> nil
+      catch
+        _, _ -> nil
+      end
+    else
+      nil
     end
   end
 
@@ -196,6 +365,31 @@ defmodule CodingAgent.Tools.WebGuard do
       :ok
     end
   end
+
+  defp assert_not_always_blocked_addresses(addresses) when is_list(addresses) do
+    if Enum.any?(addresses, &always_blocked_address?/1) do
+      {:error, {:ssrf_blocked, "Blocked: resolves to metadata IP address"}}
+    else
+      :ok
+    end
+  end
+
+  defp always_blocked_hostname?(hostname) do
+    MapSet.member?(@always_blocked_hostnames, hostname)
+  end
+
+  defp always_blocked_address?({_, _, _, _} = ip) do
+    MapSet.member?(@always_blocked_addresses, ip)
+  end
+
+  defp always_blocked_address?(ip) when tuple_size(ip) == 8 do
+    case mapped_ipv4(ip) do
+      nil -> false
+      mapped -> always_blocked_address?(mapped)
+    end
+  end
+
+  defp always_blocked_address?(_), do: false
 
   defp parse_ip_literal(hostname) do
     case :inet.parse_address(String.to_charlist(hostname)) do
@@ -353,6 +547,16 @@ defmodule CodingAgent.Tools.WebGuard do
       if String.downcase(to_string(header_key)) == String.downcase(key),
         do: to_string(header_value)
     end)
+  end
+
+  defp put_header(headers, key, value) do
+    downcased = String.downcase(key)
+
+    headers
+    |> Enum.reject(fn {header_key, _header_value} ->
+      String.downcase(to_string(header_key)) == downcased
+    end)
+    |> Kernel.++([{key, value}])
   end
 
   defp normalize_integer(value, _default) when is_integer(value), do: value

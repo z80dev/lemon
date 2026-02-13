@@ -49,6 +49,21 @@ model = "gpt-4.1"
 [agent.cli.claude]
 dangerously_skip_permissions = true
 
+[agent.tools.web.search]
+provider = "brave" # "brave" | "perplexity"
+cache_ttl_minutes = 15
+
+[agent.tools.web.search.perplexity]
+model = "perplexity/sonar-pro"
+
+[agent.tools.web.fetch]
+cache_ttl_minutes = 15
+allow_private_network = false
+allowed_hostnames = []
+
+[agent.tools.web.fetch.firecrawl]
+enabled = true
+
 [tui]
 theme = "lemon"
 debug = false
@@ -100,6 +115,7 @@ Environment variables override file values. Common overrides:
 - `LEMON_CODEX_EXTRA_ARGS`, `LEMON_CODEX_AUTO_APPROVE`
 - `LEMON_CLAUDE_YOLO`
 - `LEMON_LOG_FILE`, `LEMON_LOG_LEVEL`
+- `BRAVE_API_KEY`, `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, `FIRECRAWL_API_KEY`
 
 ## Dotenv Autoload
 
@@ -132,10 +148,60 @@ To force a token explicitly, set:
 - `OPENAI_CODEX_API_KEY` (preferred)
 - `CHATGPT_TOKEN` (fallback)
 
+## Web Tools (`websearch` / `webfetch`)
+
+Lemon includes web tools under `agent.tools.web`. For full setup and troubleshooting, see:
+- [`docs/tools/web.md`](tools/web.md)
+- [`docs/tools/firecrawl.md`](tools/firecrawl.md)
+
+```toml
+[agent.tools.web.search]
+enabled = true
+provider = "brave"   # "brave" | "perplexity"
+max_results = 5
+timeout_seconds = 30
+cache_ttl_minutes = 15
+
+[agent.tools.web.search.failover]
+enabled = true
+provider = "perplexity"
+
+[agent.tools.web.search.perplexity]
+# Optional if PERPLEXITY_API_KEY / OPENROUTER_API_KEY is set.
+api_key = "pplx-..."
+base_url = "https://api.perplexity.ai"
+model = "perplexity/sonar-pro"
+
+[agent.tools.web.fetch]
+enabled = true
+max_chars = 50000
+timeout_seconds = 30
+cache_ttl_minutes = 15
+max_redirects = 3
+readability = true
+allow_private_network = false
+allowed_hostnames = []
+
+[agent.tools.web.fetch.firecrawl]
+# Optional if FIRECRAWL_API_KEY is set.
+enabled = true
+api_key = "fc-..."
+base_url = "https://api.firecrawl.dev"
+only_main_content = true
+max_age_ms = 172800000
+timeout_seconds = 60
+
+[agent.tools.web.cache]
+persistent = true
+path = "~/.lemon/cache/web_tools"
+max_entries = 100
+```
+
 ## Sections
 
 - `providers.<name>`: API keys and base URLs per provider.
 - `agent`: default model/provider and agent behavior.
+- `agent.tools.web`: `websearch` / `webfetch` providers, guardrails, cache, and Firecrawl fallback.
 - `agents.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
 - `agent.compaction`: context compaction settings.
 - `agent.retry`: retry settings.
