@@ -85,7 +85,11 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
   defp bind_project!(chat_id, root) do
     scope = %LemonGateway.Types.ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
 
-    LemonGateway.Store.put(:gateway_projects_dynamic, "testproj", %{root: root, default_engine: nil})
+    LemonGateway.Store.put(:gateway_projects_dynamic, "testproj", %{
+      root: root,
+      default_engine: nil
+    })
+
     LemonGateway.Store.put(:gateway_project_overrides, scope, "testproj")
   end
 
@@ -180,6 +184,34 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     assert File.read!(Path.join(root, "incoming/example.txt")) == "FILE_BYTES"
   end
 
+  test "/file put defaults to gateway.default_cwd when no project is bound" do
+    chat_id = 12_346
+    root = LemonGateway.Cwd.default_cwd()
+
+    rel =
+      Path.join("incoming", "lemon-file-put-default-#{System.unique_integer([:positive])}.txt")
+
+    on_exit(fn ->
+      _ = File.rm(Path.join(root, rel))
+    end)
+
+    MockAPI.set_updates([document_update(chat_id, "/file put #{rel}")])
+
+    {:ok, _pid} =
+      LemonChannels.Adapters.Telegram.Transport.start_link(
+        config: %{
+          bot_token: "token",
+          api_mod: MockAPI,
+          poll_interval_ms: 10,
+          files: %{enabled: true, auto_put: false, uploads_dir: "incoming"}
+        }
+      )
+
+    assert_receive {:sent, text}, 300
+    assert String.contains?(text, "Saved: #{rel}")
+    assert File.read!(Path.join(root, rel)) == "FILE_BYTES"
+  end
+
   test "/file get sends a file back to Telegram" do
     chat_id = 22_222
     root = fresh_root!("lemon-file-get")
@@ -212,6 +244,49 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
     assert_receive {:send_document, path, _opts}, 300
     assert String.ends_with?(path, "/out.txt")
+  end
+
+  test "/file get defaults to gateway.default_cwd when no project is bound" do
+    chat_id = 22_223
+    root = LemonGateway.Cwd.default_cwd()
+
+    rel =
+      Path.join("incoming", "lemon-file-get-default-#{System.unique_integer([:positive])}.txt")
+
+    full = Path.join(root, rel)
+    File.mkdir_p!(Path.dirname(full))
+    File.write!(full, "hello")
+
+    on_exit(fn ->
+      _ = File.rm(full)
+    end)
+
+    MockAPI.set_updates([
+      %{
+        "update_id" => 2,
+        "message" => %{
+          "message_id" => 12,
+          "date" => 1,
+          "chat" => %{"id" => chat_id, "type" => "private"},
+          "from" => %{"id" => 999, "username" => "tester", "first_name" => "Test"},
+          "text" => "/file get #{rel}"
+        }
+      }
+    ])
+
+    {:ok, _pid} =
+      LemonChannels.Adapters.Telegram.Transport.start_link(
+        config: %{
+          bot_token: "token",
+          api_mod: MockAPI,
+          poll_interval_ms: 10,
+          files: %{enabled: true}
+        }
+      )
+
+    assert_receive {:send_document, path, _opts}, 300
+    assert String.starts_with?(path, Path.expand(root))
+    assert String.ends_with?(path, Path.basename(rel))
   end
 
   test "auto-put stores document with no caption into uploads_dir" do

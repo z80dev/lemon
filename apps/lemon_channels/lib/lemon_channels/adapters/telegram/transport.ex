@@ -11,6 +11,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   require Logger
 
   alias LemonGateway.BindingResolver
+  alias LemonGateway.Cwd
   alias LemonGateway.EngineRegistry
   alias LemonGateway.Store
   alias LemonGateway.Telegram.TriggerMode
@@ -440,7 +441,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
                           maybe_log_drop(acc_state, inbound, why)
                           {acc_state, max(max_id, id)}
                       end
-
                   end
 
                 {:skip, acc_state} ->
@@ -513,6 +513,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   rescue
     e ->
       meta = inbound.meta || %{}
+
       Logger.warning(
         "Telegram inbound handler crashed (chat_id=#{inspect(meta[:chat_id])} update_id=#{inspect(meta[:update_id])} msg_id=#{inspect(meta[:user_msg_id])}): " <>
           Exception.format(:error, e, __STACKTRACE__)
@@ -1201,20 +1202,20 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
 
     root = BindingResolver.resolve_cwd(scope)
-
-    case root do
-      r when is_binary(r) and byte_size(r) > 0 -> {:ok, Path.expand(r)}
-      _ -> {:error, "No project is bound to this chat. Use /new <project_id|path> to bind one."}
-    end
+    ensure_project_root(root)
   rescue
-    _ -> {:error, "No project is bound to this chat. Use /new <project_id|path> to bind one."}
+    _ -> ensure_project_root(nil)
   end
 
   defp ensure_project_root(root) when is_binary(root) and byte_size(root) > 0,
     do: {:ok, Path.expand(root)}
 
-  defp ensure_project_root(_),
-    do: {:error, "No project is bound to this chat. Use /new <project_id|path> to bind one."}
+  defp ensure_project_root(_) do
+    case Cwd.default_cwd() do
+      cwd when is_binary(cwd) and byte_size(cwd) > 0 -> {:ok, Path.expand(cwd)}
+      _ -> {:error, "No accessible working directory configured."}
+    end
+  end
 
   defp auto_put_destination(cfg, inbound) do
     uploads_dir = cfg[:uploads_dir] || cfg["uploads_dir"] || "incoming"
@@ -1266,7 +1267,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         {:error, file_usage()}
 
       Path.type(rel) == :absolute ->
-        {:error, "Path must be relative to the project root."}
+        {:error, "Path must be relative to the active working directory root."}
 
       String.contains?(rel, "\\0") ->
         {:error, "Invalid path."}
@@ -1278,7 +1279,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         if within_root?(root, abs) do
           {:ok, abs}
         else
-          {:error, "Path escapes the project root."}
+          {:error, "Path escapes the active working directory root."}
         end
     end
   rescue
@@ -1500,7 +1501,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         base =
           case BindingResolver.resolve_cwd(scope) do
             cwd when is_binary(cwd) and byte_size(cwd) > 0 -> cwd
-            _ -> File.cwd!()
+            _ -> Cwd.default_cwd()
           end
 
         expanded =
@@ -2009,11 +2010,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
          inbound,
          %ChatScope{} = scope,
          session_key,
-       _chat_id,
-       thread_id,
-       user_msg_id
-     )
-     when is_binary(session_key) do
+         _chat_id,
+         thread_id,
+         user_msg_id
+       )
+       when is_binary(session_key) do
     history = fetch_run_history_for_memory(session_key, scope, limit: 8)
     transcript = format_run_history_transcript(history, max_chars: 12_000)
 
@@ -2857,6 +2858,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
       other ->
         meta = inbound.meta || %{}
+
         Logger.warning(
           "RouterBridge.handle_inbound failed for telegram inbound (chat_id=#{inspect(meta[:chat_id])} update_id=#{inspect(meta[:update_id])} msg_id=#{inspect(meta[:user_msg_id])}): " <>
             inspect(other)
@@ -2876,6 +2878,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp maybe_log_drop(state, inbound, reason) do
     if state.debug_inbound or state.log_drops do
       meta = inbound.meta || %{}
+
       Logger.debug(
         "Telegram inbound dropped (#{inspect(reason)}) chat_id=#{inspect(meta[:chat_id])} update_id=#{inspect(meta[:update_id])} msg_id=#{inspect(meta[:user_msg_id])} peer=#{inspect(inbound.peer)}"
       )
