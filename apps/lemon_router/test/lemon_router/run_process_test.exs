@@ -381,6 +381,52 @@ defmodule LemonRouter.RunProcessTest do
 
       GenServer.stop(pid)
     end
+
+    test "tracks explicit auto_send_files from tool result metadata" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+      session_key = SessionKey.main("test-agent")
+      job = %{make_test_job(run_id) | cwd: "/tmp/project"}
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false
+               })
+
+      action_event =
+        LemonCore.Event.new(
+          :engine_action,
+          %{
+            phase: :completed,
+            ok: true,
+            action: %{
+              kind: "tool",
+              detail: %{
+                result_meta: %{
+                  auto_send_files: [
+                    %{path: "workspace/image.png", filename: "image.png", caption: "Generated"}
+                  ]
+                }
+              }
+            }
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), action_event)
+
+      assert eventually(fn ->
+               state = :sys.get_state(pid)
+
+               state.requested_send_files == [
+                 %{path: "workspace/image.png", filename: "image.png", caption: "Generated"}
+               ]
+             end)
+
+      GenServer.stop(pid)
+    end
   end
 
   describe "SessionKey" do

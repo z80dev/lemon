@@ -189,6 +189,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     model = Keyword.get(opts, :model)
     system_prompt = Keyword.get(opts, :system_prompt)
     approval_timeout_ms = Keyword.get(opts, :approval_timeout_ms, :infinity)
+    extra_tools = Keyword.get(opts, :extra_tools)
 
     # Create the event stream
     {:ok, stream} =
@@ -249,6 +250,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
       |> maybe_add_opt(:approval_context, approval_context)
       |> maybe_add_opt(:session_key, session_key)
       |> maybe_add_opt(:agent_id, agent_id)
+      |> maybe_add_opt(:extra_tools, normalize_extra_tools_opt(extra_tools))
 
     # Start or resume session
     case start_or_resume_session(resume, session_opts, state) do
@@ -476,7 +478,10 @@ defmodule CodingAgent.CliRunners.LemonRunner do
         %{state | factory: factory}
 
       action ->
-        detail = Map.merge(action.detail, %{result: truncate_result(result)})
+        detail =
+          action.detail
+          |> Map.merge(%{result: truncate_result(result)})
+          |> maybe_put_result_meta(result)
 
         {event, factory} =
           EventFactory.action_completed(
@@ -721,6 +726,51 @@ defmodule CodingAgent.CliRunners.LemonRunner do
 
   defp truncate_result(result), do: inspect(result, limit: 500)
 
+  defp maybe_put_result_meta(detail, %AgentCore.Types.AgentToolResult{} = result)
+       when is_map(detail) do
+    case extract_tool_result_meta(result.details) do
+      nil -> detail
+      meta -> Map.put(detail, :result_meta, meta)
+    end
+  end
+
+  defp maybe_put_result_meta(detail, _), do: detail
+
+  defp extract_tool_result_meta(details) when is_map(details) do
+    auto_send_files = Map.get(details, :auto_send_files) || Map.get(details, "auto_send_files")
+
+    case normalize_auto_send_files(auto_send_files) do
+      [] -> nil
+      files -> %{auto_send_files: files}
+    end
+  end
+
+  defp extract_tool_result_meta(_), do: nil
+
+  defp normalize_auto_send_files(files) when is_list(files) do
+    files
+    |> Enum.map(&normalize_auto_send_file/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp normalize_auto_send_files(_), do: []
+
+  defp normalize_auto_send_file(file) when is_map(file) do
+    path = Map.get(file, :path) || Map.get(file, "path")
+
+    if is_binary(path) and path != "" do
+      %{
+        path: path,
+        filename: Map.get(file, :filename) || Map.get(file, "filename"),
+        caption: Map.get(file, :caption) || Map.get(file, "caption")
+      }
+    else
+      nil
+    end
+  end
+
+  defp normalize_auto_send_file(_), do: nil
+
   defp extract_answer(messages, accumulated_text) do
     # Try to get the last assistant message content
     last_assistant =
@@ -775,6 +825,9 @@ defmodule CodingAgent.CliRunners.LemonRunner do
   defp format_error(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp format_error({:error, reason}), do: format_error(reason)
   defp format_error(reason), do: inspect(reason)
+
+  defp normalize_extra_tools_opt(tools) when is_list(tools) and tools != [], do: tools
+  defp normalize_extra_tools_opt(_), do: nil
 
   defp maybe_add_opt(opts, _key, nil), do: opts
   defp maybe_add_opt(opts, key, value), do: Keyword.put(opts, key, value)

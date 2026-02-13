@@ -68,6 +68,7 @@ defmodule CodingAgent.Session do
     :explicit_system_prompt,
     :prompt_template,
     :workspace_dir,
+    :extra_tools,
     :session_scope,
     :is_streaming,
     :pending_prompt_timer_ref,
@@ -100,6 +101,7 @@ defmodule CodingAgent.Session do
           explicit_system_prompt: String.t() | nil,
           prompt_template: String.t() | nil,
           workspace_dir: String.t(),
+          extra_tools: [AgentTool.t()],
           session_scope: :main | :subagent,
           is_streaming: boolean(),
           pending_prompt_timer_ref: reference() | nil,
@@ -140,6 +142,7 @@ defmodule CodingAgent.Session do
       `~/.lemon/agent/prompts/`.
     * `:workspace_dir` - Workspace directory for bootstrap files (default: `~/.lemon/agent/workspace`)
     * `:tools` - List of `AgentTool` structs (default: read, write, edit, bash)
+    * `:extra_tools` - Additional `AgentTool` structs appended to the default toolset
     * `:session_file` - Path to existing session file to load
     * `:session_id` - Explicit session ID for new sessions (ignored when loading from file)
     * `:parent_session` - Parent session ID for fork lineage (ignored when loading from file)
@@ -461,6 +464,7 @@ defmodule CodingAgent.Session do
     parent_session = Keyword.get(opts, :parent_session)
     ui_context = Keyword.get(opts, :ui_context)
     custom_tools = Keyword.get(opts, :tools)
+    extra_tools = normalize_extra_tools(Keyword.get(opts, :extra_tools, []))
     workspace_dir = Keyword.get(opts, :workspace_dir, Config.workspace_dir())
     register_session = Keyword.get(opts, :register, false)
     session_registry = Keyword.get(opts, :registry, CodingAgent.SessionRegistry)
@@ -559,12 +563,12 @@ defmodule CodingAgent.Session do
     tools =
       case custom_tools do
         nil ->
-          ToolRegistry.get_tools(cwd, tool_opts)
+          ToolRegistry.get_tools(cwd, tool_opts) ++ extra_tools
 
         custom ->
           # Extension tools are always loaded, even with custom base tools
           extension_tools = Extensions.get_tools(extensions, cwd)
-          all_tools = custom ++ extension_tools
+          all_tools = custom ++ extension_tools ++ extra_tools
 
           # Apply approval wrapping if policy and context provided
           if tool_policy && approval_context do
@@ -640,6 +644,7 @@ defmodule CodingAgent.Session do
       explicit_system_prompt: explicit_system_prompt,
       prompt_template: prompt_template,
       workspace_dir: workspace_dir,
+      extra_tools: extra_tools,
       session_scope: session_scope,
       is_streaming: false,
       pending_prompt_timer_ref: nil,
@@ -863,7 +868,7 @@ defmodule CodingAgent.Session do
       ]
 
       # Rebuild tools via ToolRegistry
-      tools = ToolRegistry.get_tools(state.cwd, tool_opts)
+      tools = ToolRegistry.get_tools(state.cwd, tool_opts) ++ state.extra_tools
 
       # Build extension status report
       tool_conflict_report = ToolRegistry.tool_conflict_report(state.cwd, tool_opts)
@@ -1545,6 +1550,12 @@ defmodule CodingAgent.Session do
   end
 
   defp maybe_register_ui_tracker(_), do: :ok
+
+  defp normalize_extra_tools(tools) when is_list(tools) do
+    Enum.filter(tools, &match?(%AgentCore.Types.AgentTool{}, &1))
+  end
+
+  defp normalize_extra_tools(_), do: []
 
   @spec handle_agent_event(AgentCore.Types.agent_event(), t()) :: t()
   defp handle_agent_event({:agent_start}, state) do

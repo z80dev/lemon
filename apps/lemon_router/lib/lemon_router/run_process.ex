@@ -88,7 +88,8 @@ defmodule LemonRouter.RunProcess do
       gateway_scheduler: gateway_scheduler,
       gateway_submit_attempt: 0,
       gateway_submitted?: false,
-      generated_image_paths: []
+      generated_image_paths: [],
+      requested_send_files: []
     }
 
     # Submit to gateway
@@ -206,6 +207,7 @@ defmodule LemonRouter.RunProcess do
     ingest_action_to_tool_status_coalescer(state, action_ev)
 
     state = maybe_track_generated_images(state, action_ev)
+    state = maybe_track_requested_send_files(state, action_ev)
 
     {:noreply, state}
   end
@@ -516,6 +518,17 @@ defmodule LemonRouter.RunProcess do
     end
   end
 
+  defp maybe_track_requested_send_files(state, action_ev) do
+    files = extract_requested_send_files(action_ev)
+
+    if files == [] do
+      state
+    else
+      existing = state.requested_send_files || []
+      %{state | requested_send_files: merge_files(existing, files)}
+    end
+  end
+
   defp merge_paths(existing, new_paths) do
     Enum.reduce(new_paths, existing, fn path, acc ->
       if path in acc do
@@ -525,6 +538,61 @@ defmodule LemonRouter.RunProcess do
       end
     end)
   end
+
+  defp extract_requested_send_files(action_ev) do
+    action = fetch(action_ev, :action)
+    phase = fetch(action_ev, :phase)
+    ok = fetch(action_ev, :ok)
+
+    cond do
+      not phase_completed?(phase) ->
+        []
+
+      ok == false ->
+        []
+
+      true ->
+        detail = fetch(action, :detail)
+        result_meta = fetch(detail, :result_meta)
+        auto_send_files = fetch(result_meta, :auto_send_files)
+
+        case auto_send_files do
+          files when is_list(files) ->
+            files
+            |> Enum.map(&normalize_requested_send_file/1)
+            |> Enum.reject(&is_nil/1)
+
+          _ ->
+            []
+        end
+    end
+  end
+
+  defp normalize_requested_send_file(file) when is_map(file) do
+    path = fetch(file, :path)
+    filename = fetch(file, :filename)
+    caption = fetch(file, :caption)
+
+    if is_binary(path) and path != "" do
+      %{
+        path: path,
+        filename:
+          case filename do
+            x when is_binary(x) and x != "" -> x
+            _ -> Path.basename(path)
+          end,
+        caption:
+          case caption do
+            x when is_binary(x) and x != "" -> x
+            _ -> nil
+          end
+      }
+    else
+      nil
+    end
+  end
+
+  defp normalize_requested_send_file(_), do: nil
 
   defp extract_generated_image_paths(action_ev) do
     action = fetch(action_ev, :action)
@@ -607,21 +675,27 @@ defmodule LemonRouter.RunProcess do
   end
 
   defp maybe_add_auto_send_generated_files(meta, state) when is_map(meta) do
+    explicit_files =
+      state.requested_send_files
+      |> resolve_explicit_send_files(state.job && state.job.cwd)
+
     cfg = telegram_auto_send_generated_config()
 
-    if cfg.enabled do
-      files =
+    generated_files =
+      if cfg.enabled do
         state.generated_image_paths
         |> select_recent_paths(cfg.max_files)
         |> resolve_generated_files(state.job && state.job.cwd, cfg.max_bytes)
-
-      if files == [] do
-        meta
       else
-        Map.put(meta, :auto_send_files, files)
+        []
       end
-    else
+
+    files = merge_files(explicit_files, generated_files)
+
+    if files == [] do
       meta
+    else
+      Map.put(meta, :auto_send_files, files)
     end
   end
 
@@ -652,6 +726,66 @@ defmodule LemonRouter.RunProcess do
 
   defp resolve_generated_files(_, _cwd, _max_bytes), do: []
 
+  defp resolve_explicit_send_files(files, cwd) when is_list(files) do
+    max_bytes = telegram_files_max_download_bytes()
+
+    files
+    |> Enum.map(&resolve_explicit_send_file(&1, cwd, max_bytes))
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp resolve_explicit_send_files(_, _cwd), do: []
+
+  defp resolve_explicit_send_file(file, cwd, max_bytes) when is_map(file) do
+    path = fetch(file, :path)
+    caption = fetch(file, :caption)
+    filename = fetch(file, :filename)
+
+    resolved_path =
+      cond do
+        is_binary(cwd) and cwd != "" ->
+          case resolve_generated_path(path, cwd) do
+            nil ->
+              if is_binary(path) and Path.type(path) == :absolute do
+                Path.expand(path)
+              else
+                nil
+              end
+
+            resolved ->
+              resolved
+          end
+
+        is_binary(path) and Path.type(path) == :absolute ->
+          Path.expand(path)
+
+        true ->
+          nil
+      end
+
+    with path when is_binary(path) and path != "" <- path,
+         resolved when is_binary(resolved) <- resolved_path,
+         {:ok, %{path: valid_path}} <- file_within_limit(resolved, max_bytes) do
+      %{
+        path: valid_path,
+        filename:
+          case filename do
+            x when is_binary(x) and x != "" -> x
+            _ -> Path.basename(valid_path)
+          end,
+        caption:
+          case caption do
+            x when is_binary(x) and x != "" -> x
+            _ -> nil
+          end
+      }
+    else
+      _ -> nil
+    end
+  end
+
+  defp resolve_explicit_send_file(_, _cwd, _max_bytes), do: nil
+
   defp resolve_generated_path(path, _cwd) when not is_binary(path), do: nil
 
   defp resolve_generated_path(path, cwd) when is_binary(cwd) and cwd != "" do
@@ -672,6 +806,24 @@ defmodule LemonRouter.RunProcess do
   end
 
   defp resolve_generated_path(_path, _cwd), do: nil
+
+  defp merge_files(first, second) when is_list(first) and is_list(second) do
+    (first ++ second)
+    |> Enum.reduce({[], MapSet.new()}, fn file, {acc, seen} ->
+      key = {Map.get(file, :path), Map.get(file, :caption)}
+
+      if MapSet.member?(seen, key) do
+        {acc, seen}
+      else
+        {acc ++ [file], MapSet.put(seen, key)}
+      end
+    end)
+    |> elem(0)
+  end
+
+  defp merge_files(first, second) when is_list(first), do: first ++ List.wrap(second)
+  defp merge_files(_first, second) when is_list(second), do: second
+  defp merge_files(_, _), do: []
 
   defp path_within_root?(absolute, root) when is_binary(absolute) and is_binary(root) do
     rel = Path.relative_to(absolute, root)
@@ -763,6 +915,22 @@ defmodule LemonRouter.RunProcess do
   end
 
   defp positive_int_or(_value, default), do: default
+
+  defp telegram_files_max_download_bytes do
+    telegram_cfg =
+      if Process.whereis(LemonGateway.Config) do
+        LemonGateway.Config.get(:telegram) || %{}
+      else
+        Application.get_env(:lemon_gateway, :telegram, %{}) || %{}
+      end
+
+    telegram_cfg = normalize_map(telegram_cfg)
+    files_cfg = fetch(telegram_cfg, :files) |> normalize_map()
+
+    positive_int_or(fetch(files_cfg, :max_download_bytes), @default_max_download_bytes)
+  rescue
+    _ -> @default_max_download_bytes
+  end
 
   # Unsubscribe control-plane EventBridge from run events
   defp unsubscribe_event_bridge(run_id) do

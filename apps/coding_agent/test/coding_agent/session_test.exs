@@ -326,6 +326,16 @@ defmodule CodingAgent.SessionTest do
       assert "add" in tool_names
     end
 
+    test "appends extra_tools to default toolset" do
+      session = start_session(extra_tools: [echo_tool()])
+      state = Session.get_state(session)
+
+      tool_names = Enum.map(state.tools, & &1.name)
+      assert "read" in tool_names
+      assert "bash" in tool_names
+      assert "echo" in tool_names
+    end
+
     test "defaults thinking_level to :medium" do
       session = start_session()
       state = Session.get_state(session)

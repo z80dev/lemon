@@ -107,8 +107,37 @@ defmodule LemonGateway.Engines.CliAdapter do
       |> maybe_put(:model, get_in(job.meta || %{}, [:model]))
       |> maybe_put(:system_prompt, get_in(job.meta || %{}, [:system_prompt]))
       |> maybe_put(:run_id, job.run_id || Map.get(opts, :run_id))
+      |> maybe_put(:extra_tools, gateway_extra_tools(engine_id, job, opts))
 
     runner_module.start_link(start_opts)
+  end
+
+  defp gateway_extra_tools("lemon", job, opts) do
+    if telegram_session?(job) do
+      cwd = job.cwd || Map.get(opts, :cwd) || File.cwd!()
+      workspace_dir = CodingAgent.Config.workspace_dir()
+
+      [
+        LemonGateway.Tools.TelegramSendImage.tool(
+          cwd,
+          session_key: job.session_key,
+          workspace_dir: workspace_dir
+        )
+      ]
+    else
+      nil
+    end
+  end
+
+  defp gateway_extra_tools(_engine_id, _job, _opts), do: nil
+
+  defp telegram_session?(job) do
+    case LemonCore.SessionKey.parse(job.session_key || "") do
+      %{kind: :channel_peer, channel_id: "telegram"} -> true
+      _ -> false
+    end
+  rescue
+    _ -> false
   end
 
   defp consume_runner(runner_module, runner_pid, engine_id, sink_pid, run_ref) do
