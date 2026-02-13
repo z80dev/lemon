@@ -525,6 +525,49 @@ defmodule LemonRouter.StreamCoalescerTest do
       assert payload.content.caption == "Generated image"
     end
 
+    test "batches multiple telegram image files into one outbound payload" do
+      session_key = "agent:my-agent:telegram:bot123:dm:user456"
+      channel_id = "telegram"
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      path1 = Path.join(System.tmp_dir!(), "coalescer-batch-1-#{run_id}.png")
+      path2 = Path.join(System.tmp_dir!(), "coalescer-batch-2-#{run_id}.jpg")
+      File.write!(path1, "png")
+      File.write!(path2, "jpg")
+
+      on_exit(fn ->
+        File.rm(path1)
+        File.rm(path2)
+      end)
+
+      assert :ok =
+               StreamCoalescer.finalize_run(
+                 session_key,
+                 channel_id,
+                 run_id,
+                 meta: %{
+                   user_msg_id: 222,
+                   auto_send_files: [
+                     %{path: path1, caption: "First"},
+                     %{path: path2, caption: "Second"}
+                   ]
+                 },
+                 final_text: "Final answer"
+               )
+
+      send_key = "#{run_id}:final:send"
+      file_key = "#{run_id}:final:file:0"
+
+      assert_receive {:delivered, %{idempotency_key: ^send_key, kind: :text}}, 1_000
+      assert_receive {:delivered, %{idempotency_key: ^file_key} = payload}, 1_000
+
+      assert payload.kind == :file
+      assert payload.reply_to == 222
+      assert is_list(payload.content.files)
+      assert Enum.map(payload.content.files, & &1.path) == [path1, path2]
+      assert Enum.map(payload.content.files, & &1.caption) == ["First", "Second"]
+    end
+
     test "deletes progress message even when there is no final text" do
       {:ok, _} = start_supervised({TestOutboxAPI, [notify_pid: self()]})
 

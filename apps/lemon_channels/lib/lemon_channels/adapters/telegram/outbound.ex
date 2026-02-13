@@ -7,6 +7,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
 
   alias LemonChannels.OutboundPayload
   alias LemonGateway.Telegram.Formatter
+  @telegram_media_group_max_items 10
 
   @doc """
   Deliver an outbound payload to Telegram.
@@ -91,15 +92,11 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     chat_id = String.to_integer(payload.peer.id)
     {token, api_mod} = telegram_config()
 
-    with {:ok, %{path: path, caption: caption}} <- normalize_file_content(content),
-         true <- File.regular?(path) do
+    with {:ok, normalized_content} <- normalize_file_content(content) do
       if Code.ensure_loaded?(api_mod) do
         with token when is_binary(token) and token != "" <- token do
-          opts =
-            build_send_opts(payload, nil)
-            |> maybe_put(:caption, caption)
-
-          send_file(api_mod, token, chat_id, path, opts)
+          opts = build_send_opts(payload, nil)
+          send_normalized_file(api_mod, token, chat_id, normalized_content, opts)
         else
           _ -> {:error, :telegram_not_configured}
         end
@@ -108,7 +105,6 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
       end
     else
       {:error, reason} -> {:error, reason}
-      false -> {:error, :file_not_found}
     end
   end
 
@@ -162,12 +158,73 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   end
 
   defp normalize_file_content(%{} = content) do
+    files = Map.get(content, :files) || Map.get(content, "files")
+
+    case files do
+      list when is_list(list) ->
+        normalize_file_batch_content(list)
+
+      nil ->
+        normalize_single_file_content(content)
+
+      _ ->
+        {:error, :invalid_file_payload}
+    end
+  end
+
+  defp normalize_file_content(_), do: {:error, :invalid_file_payload}
+
+  defp normalize_single_file_content(%{} = content) do
     path = Map.get(content, :path) || Map.get(content, "path")
     caption = Map.get(content, :caption) || Map.get(content, "caption")
 
     cond do
       not is_binary(path) or path == "" ->
         {:error, :invalid_file_payload}
+
+      not File.regular?(path) ->
+        {:error, :file_not_found}
+
+      not (is_nil(caption) or is_binary(caption)) ->
+        {:error, :invalid_file_payload}
+
+      true ->
+        {:ok, %{files: [%{path: path, caption: caption}]}}
+    end
+  end
+
+  defp normalize_file_batch_content(files) when is_list(files) do
+    if files == [] do
+      {:error, :invalid_file_payload}
+    else
+      Enum.reduce_while(files, {:ok, []}, fn file, {:ok, acc} ->
+        case normalize_batch_file_entry(file) do
+          {:ok, normalized} -> {:cont, {:ok, [normalized | acc]}}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+      |> case do
+        {:ok, normalized_files} ->
+          {:ok, %{files: Enum.reverse(normalized_files)}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp normalize_file_batch_content(_), do: {:error, :invalid_file_payload}
+
+  defp normalize_batch_file_entry(%{} = content) do
+    path = Map.get(content, :path) || Map.get(content, "path")
+    caption = Map.get(content, :caption) || Map.get(content, "caption")
+
+    cond do
+      not is_binary(path) or path == "" ->
+        {:error, :invalid_file_payload}
+
+      not File.regular?(path) ->
+        {:error, :file_not_found}
 
       not (is_nil(caption) or is_binary(caption)) ->
         {:error, :invalid_file_payload}
@@ -177,7 +234,77 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     end
   end
 
-  defp normalize_file_content(_), do: {:error, :invalid_file_payload}
+  defp normalize_batch_file_entry(_), do: {:error, :invalid_file_payload}
+
+  defp send_normalized_file(api_mod, token, chat_id, %{files: [file]}, opts) do
+    send_file(api_mod, token, chat_id, file.path, maybe_put(opts, :caption, file.caption))
+  end
+
+  defp send_normalized_file(api_mod, token, chat_id, %{files: files}, opts) when is_list(files) do
+    send_file_batch(api_mod, token, chat_id, files, opts)
+  end
+
+  defp send_normalized_file(_api_mod, _token, _chat_id, _content, _opts) do
+    {:error, :invalid_file_payload}
+  end
+
+  defp send_file_batch(api_mod, token, chat_id, files, opts) do
+    cond do
+      files == [] ->
+        {:error, :invalid_file_payload}
+
+      all_image_files?(files) and function_exported?(api_mod, :send_media_group, 4) ->
+        send_image_batches(api_mod, token, chat_id, files, opts)
+
+      true ->
+        send_files_sequentially(api_mod, token, chat_id, files, opts)
+    end
+  end
+
+  defp send_image_batches(api_mod, token, chat_id, files, opts) do
+    files
+    |> Enum.chunk_every(@telegram_media_group_max_items)
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {batch, idx}, {:ok, acc} ->
+      batch_opts = maybe_remove_reply_to(opts, idx)
+
+      case api_mod.send_media_group(token, chat_id, batch, batch_opts) do
+        {:ok, result} ->
+          {:cont, {:ok, [result | acc]}}
+
+        {:error, _reason} ->
+          # If media-group delivery is rejected by Telegram, retry this batch as
+          # individual sends to preserve image delivery.
+          case send_files_sequentially(api_mod, token, chat_id, batch, batch_opts) do
+            {:ok, result} -> {:cont, {:ok, [result | acc]}}
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
+      end
+    end)
+    |> case do
+      {:ok, results} -> {:ok, Enum.reverse(results)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp send_files_sequentially(api_mod, token, chat_id, files, opts) do
+    Enum.with_index(files)
+    |> Enum.reduce_while({:ok, []}, fn {file, idx}, {:ok, acc} ->
+      file_opts =
+        opts
+        |> maybe_put(:caption, file.caption)
+        |> maybe_remove_reply_to(idx)
+
+      case send_file(api_mod, token, chat_id, file.path, file_opts) do
+        {:ok, result} -> {:cont, {:ok, [result | acc]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, results} -> {:ok, Enum.reverse(results)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   defp send_file(api_mod, token, chat_id, path, opts) do
     cond do
@@ -190,6 +317,23 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
       true ->
         {:error, :telegram_send_document_not_available}
     end
+  end
+
+  defp maybe_remove_reply_to(opts, 0), do: opts
+
+  defp maybe_remove_reply_to(opts, _idx) when is_map(opts) do
+    opts
+    |> Map.delete(:reply_to_message_id)
+    |> Map.delete("reply_to_message_id")
+  end
+
+  defp maybe_remove_reply_to(opts, _idx), do: opts
+
+  defp all_image_files?(files) when is_list(files) do
+    Enum.all?(files, fn
+      %{path: path} when is_binary(path) -> image_file?(path)
+      _ -> false
+    end)
   end
 
   defp image_file?(path) when is_binary(path) do

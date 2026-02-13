@@ -219,8 +219,189 @@ defmodule LemonGateway.Telegram.API do
     end
   end
 
+  @doc """
+  Send a photo media group to Telegram.
+
+  `files` is a list of maps with:
+  - `path` (required)
+  - `caption` (optional)
+  """
+  def send_media_group(token, chat_id, files, opts \\ %{})
+
+  def send_media_group(token, chat_id, files, opts) when is_list(files) do
+    opts = if is_map(opts), do: opts, else: Enum.into(opts, %{})
+
+    with {:ok, normalized_files} <- normalize_media_group_files(files) do
+      boundary = build_boundary("lemon-media-group")
+
+      {body, content_type} =
+        build_media_group_multipart(boundary, chat_id, normalized_files, opts)
+
+      url = "https://api.telegram.org/bot#{token}/sendMediaGroup"
+      headers = [{~c"content-type", to_charlist(content_type)}]
+      http_opts = [timeout: 60_000, connect_timeout: 30_000]
+
+      case LemonCore.Httpc.request(
+             :post,
+             {to_charlist(url), headers, to_charlist(content_type), body},
+             http_opts,
+             body_format: :binary
+           ) do
+        {:ok, {{_, 200, _}, _headers, resp_body}} ->
+          Jason.decode(resp_body)
+
+        {:ok, {{_, status, _}, _headers, resp_body}} ->
+          {:error, {:http_error, status, resp_body}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  def send_media_group(_token, _chat_id, _files, _opts), do: {:error, :invalid_media_group}
+
   defp build_boundary(prefix) when is_binary(prefix) do
     "----" <> prefix <> "-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+  end
+
+  defp normalize_media_group_files(files) when is_list(files) do
+    if files == [] do
+      {:error, :invalid_media_group}
+    else
+      Enum.reduce_while(files, {:ok, []}, fn file, {:ok, acc} ->
+        case normalize_media_group_file(file) do
+          {:ok, normalized} -> {:cont, {:ok, [normalized | acc]}}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+      |> case do
+        {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp normalize_media_group_files(_), do: {:error, :invalid_media_group}
+
+  defp normalize_media_group_file(%{} = file) do
+    path = Map.get(file, :path) || Map.get(file, "path")
+    caption = Map.get(file, :caption) || Map.get(file, "caption")
+
+    cond do
+      not is_binary(path) or path == "" ->
+        {:error, :invalid_media_group}
+
+      not File.regular?(path) ->
+        {:error, :file_not_found}
+
+      not (is_nil(caption) or is_binary(caption)) ->
+        {:error, :invalid_media_group}
+
+      true ->
+        {:ok, %{path: path, caption: caption}}
+    end
+  end
+
+  defp normalize_media_group_file(_), do: {:error, :invalid_media_group}
+
+  defp build_media_group_multipart(boundary, chat_id, files, opts) do
+    boundary_line = "--" <> boundary <> "\r\n"
+    end_boundary = "--" <> boundary <> "--\r\n"
+
+    media_entries =
+      files
+      |> Enum.with_index()
+      |> Enum.map(fn {%{path: path, caption: caption}, idx} ->
+        attachment = "media#{idx}"
+
+        media =
+          %{
+            "type" => "photo",
+            "media" => "attach://#{attachment}"
+          }
+          |> maybe_put("caption", caption)
+
+        %{attachment: attachment, path: path, media: media}
+      end)
+
+    media_json = Jason.encode!(Enum.map(media_entries, & &1.media))
+
+    parts = []
+
+    parts =
+      parts ++
+        [
+          boundary_line,
+          "Content-Disposition: form-data; name=\"chat_id\"\r\n\r\n",
+          to_string(chat_id),
+          "\r\n"
+        ]
+
+    parts =
+      case opts[:reply_to_message_id] || opts["reply_to_message_id"] do
+        nil ->
+          parts
+
+        v ->
+          parts ++
+            [
+              boundary_line,
+              "Content-Disposition: form-data; name=\"reply_to_message_id\"\r\n\r\n",
+              to_string(v),
+              "\r\n"
+            ]
+      end
+
+    parts =
+      case opts[:message_thread_id] || opts["message_thread_id"] do
+        nil ->
+          parts
+
+        v ->
+          parts ++
+            [
+              boundary_line,
+              "Content-Disposition: form-data; name=\"message_thread_id\"\r\n\r\n",
+              to_string(v),
+              "\r\n"
+            ]
+      end
+
+    parts =
+      parts ++
+        [
+          boundary_line,
+          "Content-Disposition: form-data; name=\"media\"\r\n\r\n",
+          media_json,
+          "\r\n"
+        ]
+
+    parts =
+      parts ++
+        Enum.flat_map(media_entries, fn %{attachment: attachment, path: path} ->
+          filename = Path.basename(path)
+          mime_type = mime_type_for_path(path, "image/png")
+          bytes = File.read!(path)
+
+          [
+            boundary_line,
+            "Content-Disposition: form-data; name=\"",
+            attachment,
+            "\"; filename=\"",
+            filename,
+            "\"\r\n",
+            "Content-Type: ",
+            mime_type,
+            "\r\n\r\n",
+            bytes,
+            "\r\n"
+          ]
+        end)
+
+    parts = parts ++ [end_boundary]
+
+    {IO.iodata_to_binary(parts), "multipart/form-data; boundary=#{boundary}"}
   end
 
   defp build_media_multipart(boundary, chat_id, field_name, file, opts, default_mime) do

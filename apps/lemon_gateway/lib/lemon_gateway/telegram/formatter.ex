@@ -16,7 +16,17 @@ defmodule LemonGateway.Telegram.Formatter do
   """
   @spec prepare_for_telegram(String.t() | nil) :: {String.t(), map() | nil}
   def prepare_for_telegram(text) when is_binary(text) do
-    {rendered, entities} = Markdown.render(text)
+    {rendered0, entities0} = Markdown.render(text)
+
+    # Guard against malformed markdown producing an empty render while the original
+    # text is non-empty (e.g., unclosed code fences). In that case, send plain text
+    # so Telegram doesn't reject the message as empty.
+    {rendered, entities} =
+      if markdown_render_empty?(text, rendered0) do
+        {text, []}
+      else
+        {rendered0, entities0}
+      end
 
     opts =
       case entities do
@@ -28,4 +38,9 @@ defmodule LemonGateway.Telegram.Formatter do
   end
 
   def prepare_for_telegram(nil), do: {"", nil}
+
+  defp markdown_render_empty?(source, rendered)
+       when is_binary(source) and is_binary(rendered) do
+    String.trim(source) != "" and String.trim(rendered) == ""
+  end
 end

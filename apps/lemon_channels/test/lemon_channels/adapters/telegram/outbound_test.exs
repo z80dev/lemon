@@ -25,6 +25,11 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
       {:ok, %{"ok" => true, "result" => %{"message_id" => 654}}}
     end
 
+    def send_media_group(_token, chat_id, files, opts) do
+      send(self(), {:send_media_group, chat_id, files, opts})
+      {:ok, %{"ok" => true, "result" => [%{"message_id" => 700}, %{"message_id" => 701}]}}
+    end
+
     def delete_message(_token, _chat_id, _message_id), do: {:ok, %{"ok" => true}}
   end
 
@@ -32,6 +37,24 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
     def send_document(_token, chat_id, {:path, path}, opts) do
       send(self(), {:send_document, chat_id, path, opts})
       {:ok, %{"ok" => true, "result" => %{"message_id" => 999}}}
+    end
+  end
+
+  defmodule MockApiNoMediaGroup do
+    def send_photo(_token, chat_id, {:path, path}, opts) do
+      send(self(), {:send_photo, chat_id, path, opts})
+      {:ok, %{"ok" => true, "result" => %{"message_id" => 111}}}
+    end
+  end
+
+  defmodule MockApiMediaGroupFails do
+    def send_media_group(_token, _chat_id, _files, _opts) do
+      {:error, {:http_error, 400, "Bad Request: media group failed"}}
+    end
+
+    def send_photo(_token, chat_id, {:path, path}, opts) do
+      send(self(), {:send_photo, chat_id, path, opts})
+      {:ok, %{"ok" => true, "result" => %{"message_id" => 222}}}
     end
   end
 
@@ -217,5 +240,154 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
     assert {:ok, _} = Outbound.deliver(payload)
     assert_receive {:send_document, 123, ^path, opts}
     refute Map.has_key?(opts, :caption)
+  end
+
+  test "file: image batches use send_media_group when available" do
+    Application.put_env(:lemon_gateway, :telegram, %{bot_token: "token", api_mod: MockApiCapture})
+
+    path1 =
+      Path.join(System.tmp_dir!(), "outbound-batch-1-#{System.unique_integer([:positive])}.png")
+
+    path2 =
+      Path.join(System.tmp_dir!(), "outbound-batch-2-#{System.unique_integer([:positive])}.png")
+
+    File.write!(path1, "png1")
+    File.write!(path2, "png2")
+
+    on_exit(fn ->
+      File.rm(path1)
+      File.rm(path2)
+    end)
+
+    payload =
+      %OutboundPayload{
+        channel_id: "telegram",
+        account_id: "acct",
+        peer: %{kind: :dm, id: "123", thread_id: "777"},
+        kind: :file,
+        content: %{
+          files: [
+            %{path: path1, caption: "Generated image 1"},
+            %{path: path2}
+          ]
+        },
+        reply_to: "456"
+      }
+
+    assert {:ok, _} = Outbound.deliver(payload)
+
+    assert_receive {:send_media_group, 123, files, opts}
+    assert Enum.map(files, & &1.path) == [path1, path2]
+    assert Enum.map(files, & &1.caption) == ["Generated image 1", nil]
+    assert opts[:reply_to_message_id] == 456
+    assert opts[:message_thread_id] == 777
+  end
+
+  test "file: image batches fallback to sequential sends when media group API is unavailable" do
+    Application.put_env(:lemon_gateway, :telegram, %{
+      bot_token: "token",
+      api_mod: MockApiNoMediaGroup
+    })
+
+    path1 =
+      Path.join(
+        System.tmp_dir!(),
+        "outbound-fallback-1-#{System.unique_integer([:positive])}.png"
+      )
+
+    path2 =
+      Path.join(
+        System.tmp_dir!(),
+        "outbound-fallback-2-#{System.unique_integer([:positive])}.png"
+      )
+
+    File.write!(path1, "png1")
+    File.write!(path2, "png2")
+
+    on_exit(fn ->
+      File.rm(path1)
+      File.rm(path2)
+    end)
+
+    payload =
+      %OutboundPayload{
+        channel_id: "telegram",
+        account_id: "acct",
+        peer: %{kind: :dm, id: "123", thread_id: "777"},
+        kind: :file,
+        content: %{
+          files: [
+            %{path: path1, caption: "First"},
+            %{path: path2, caption: "Second"}
+          ]
+        },
+        reply_to: "456"
+      }
+
+    assert {:ok, _} = Outbound.deliver(payload)
+
+    assert_receive {:send_photo, 123, ^path1, first_opts}
+    assert first_opts[:caption] == "First"
+    assert first_opts[:reply_to_message_id] == 456
+    assert first_opts[:message_thread_id] == 777
+
+    assert_receive {:send_photo, 123, ^path2, second_opts}
+    assert second_opts[:caption] == "Second"
+    refute Map.has_key?(second_opts, :reply_to_message_id)
+    assert second_opts[:message_thread_id] == 777
+  end
+
+  test "file: image batches fallback to sequential sends when media group call fails" do
+    Application.put_env(:lemon_gateway, :telegram, %{
+      bot_token: "token",
+      api_mod: MockApiMediaGroupFails
+    })
+
+    path1 =
+      Path.join(
+        System.tmp_dir!(),
+        "outbound-failover-1-#{System.unique_integer([:positive])}.png"
+      )
+
+    path2 =
+      Path.join(
+        System.tmp_dir!(),
+        "outbound-failover-2-#{System.unique_integer([:positive])}.png"
+      )
+
+    File.write!(path1, "png1")
+    File.write!(path2, "png2")
+
+    on_exit(fn ->
+      File.rm(path1)
+      File.rm(path2)
+    end)
+
+    payload =
+      %OutboundPayload{
+        channel_id: "telegram",
+        account_id: "acct",
+        peer: %{kind: :dm, id: "123", thread_id: "777"},
+        kind: :file,
+        content: %{
+          files: [
+            %{path: path1, caption: "First"},
+            %{path: path2, caption: "Second"}
+          ]
+        },
+        reply_to: "456"
+      }
+
+    assert {:ok, _} = Outbound.deliver(payload)
+
+    assert_receive {:send_photo, 123, ^path1, first_opts}
+    assert first_opts[:caption] == "First"
+    assert first_opts[:reply_to_message_id] == 456
+    assert first_opts[:message_thread_id] == 777
+
+    assert_receive {:send_photo, 123, ^path2, second_opts}
+    assert second_opts[:caption] == "Second"
+    refute Map.has_key?(second_opts, :reply_to_message_id)
+    assert second_opts[:message_thread_id] == 777
   end
 end

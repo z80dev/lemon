@@ -66,6 +66,11 @@ defmodule LemonGateway.Telegram.FormatterTest do
     assert ent["language"] == "elixir"
   end
 
+  test "falls back to plain text when malformed markdown renders empty" do
+    md = "```hello"
+    assert {"```hello", nil} == Formatter.prepare_for_telegram(md)
+  end
+
   test "uses UTF-16 offsets for entities (emoji is 2 code units)" do
     md = "**😀** ok"
     {text, opts} = Formatter.prepare_for_telegram(md)

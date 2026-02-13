@@ -26,6 +26,7 @@ defmodule LemonRouter.StreamCoalescer do
   @pending_resume_cleanup_base_ms 2_000
   @pending_resume_cleanup_max_attempts 4
   @pending_resume_cleanup_max_backoff_ms 30_000
+  @telegram_media_group_max_items 10
 
   defstruct [
     :session_key,
@@ -891,23 +892,23 @@ defmodule LemonRouter.StreamCoalescer do
     if files == [] or not is_pid(Process.whereis(LemonChannels.Outbox)) do
       state
     else
-      Enum.with_index(files)
+      peer = %{
+        kind: parsed.peer_kind,
+        id: parsed.peer_id,
+        thread_id: parsed.thread_id
+      }
+
+      payload_files = auto_send_payloads_for_channel(state.channel_id, files)
+
+      Enum.with_index(payload_files)
       |> Enum.each(fn {file, idx} ->
         payload =
           struct!(LemonChannels.OutboundPayload,
             channel_id: state.channel_id,
             account_id: parsed.account_id,
-            peer: %{
-              kind: parsed.peer_kind,
-              id: parsed.peer_id,
-              thread_id: parsed.thread_id
-            },
+            peer: peer,
             kind: :file,
-            content: %{
-              path: file.path,
-              filename: file.filename,
-              caption: file.caption
-            },
+            content: build_auto_send_file_content(file),
             reply_to: if(idx == 0, do: reply_to, else: nil),
             idempotency_key: "#{state.run_id}:final:file:#{idx}",
             meta: %{
@@ -933,6 +934,73 @@ defmodule LemonRouter.StreamCoalescer do
       state
     end
   end
+
+  defp auto_send_payloads_for_channel("telegram", files) do
+    batch_telegram_files(files)
+  end
+
+  defp auto_send_payloads_for_channel(_, files) do
+    Enum.map(files, &[&1])
+  end
+
+  defp build_auto_send_file_content([file]) do
+    %{path: file.path, filename: file.filename, caption: file.caption}
+  end
+
+  defp build_auto_send_file_content(files) when is_list(files) do
+    %{
+      files:
+        Enum.map(files, fn file ->
+          %{path: file.path, filename: file.filename, caption: file.caption}
+        end)
+    }
+  end
+
+  defp batch_telegram_files(files) when is_list(files) do
+    {batches_rev, pending_images_rev} =
+      Enum.reduce(files, {[], []}, fn file, {batches, pending_images} ->
+        if image_file?(file.path) do
+          pending_images = [file | pending_images]
+
+          if length(pending_images) >= @telegram_media_group_max_items do
+            {[Enum.reverse(pending_images) | batches], []}
+          else
+            {batches, pending_images}
+          end
+        else
+          batches = flush_image_batch(batches, pending_images)
+          {[[file] | batches], []}
+        end
+      end)
+
+    batches_rev
+    |> flush_image_batch(pending_images_rev)
+    |> Enum.reverse()
+  end
+
+  defp batch_telegram_files(_), do: []
+
+  defp flush_image_batch(batches, []), do: batches
+  defp flush_image_batch(batches, pending_images), do: [Enum.reverse(pending_images) | batches]
+
+  defp image_file?(path) when is_binary(path) do
+    case Path.extname(path) |> String.downcase() do
+      ".png" -> true
+      ".jpg" -> true
+      ".jpeg" -> true
+      ".gif" -> true
+      ".webp" -> true
+      ".bmp" -> true
+      ".svg" -> true
+      ".tif" -> true
+      ".tiff" -> true
+      ".heic" -> true
+      ".heif" -> true
+      _ -> false
+    end
+  end
+
+  defp image_file?(_), do: false
 
   defp auto_send_files_from_meta(meta) when is_map(meta) do
     value = Map.get(meta, :auto_send_files) || Map.get(meta, "auto_send_files")
