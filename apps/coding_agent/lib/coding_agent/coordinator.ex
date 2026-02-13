@@ -204,8 +204,10 @@ defmodule CodingAgent.Coordinator do
   """
   @spec abort_all(GenServer.server()) :: :ok
   def abort_all(coordinator) do
-    send(coordinator, :abort_all)
-    :ok
+    GenServer.call(coordinator, :abort_all, :infinity)
+  catch
+    :exit, _ ->
+      :ok
   end
 
   # ============================================================================

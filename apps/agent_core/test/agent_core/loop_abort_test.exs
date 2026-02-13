@@ -1337,6 +1337,7 @@ defmodule AgentCore.LoopAbortTest do
       if assistant1 do
         assert assistant1.stop_reason == :aborted
       end
+
       assert assistant2.stop_reason == :stop
     end
 

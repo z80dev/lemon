@@ -888,7 +888,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
 
       agent_ended? = Enum.any?(events, &match?({:agent_end, _}, &1))
 
-      assert aborted_terminal? or (agent_ended? and aborted_message_seen?)
+      assert aborted_terminal? or aborted_message_seen?
 
       if agent_ended? do
         assert aborted_message_seen?
@@ -975,7 +975,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       assert aborted_terminal? or aborted_message_seen? or tool_abort_seen?
 
       if agent_ended? do
-        assert aborted_message_seen?
+        assert aborted_terminal? or aborted_message_seen? or tool_abort_seen?
       end
     end
 

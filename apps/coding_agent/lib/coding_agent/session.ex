@@ -1174,9 +1174,19 @@ defmodule CodingAgent.Session do
   end
 
   def handle_cast(:abort, state) do
+    had_pending_prompt = not is_nil(state.pending_prompt_timer_ref)
     state = cancel_pending_prompt(state)
     AgentCore.Agent.abort(state.agent)
-    {:noreply, state}
+
+    if had_pending_prompt do
+      # If abort lands before deferred prompt dispatch, emit a terminal canceled
+      # event so subscribers don't wait for a lifecycle event that never comes.
+      broadcast_event(state, {:canceled, :assistant_aborted})
+      complete_event_streams(state, {:canceled, :assistant_aborted})
+      {:noreply, %{state | steering_queue: :queue.new(), event_streams: %{}}}
+    else
+      {:noreply, state}
+    end
   end
 
   def handle_cast({:unsubscribe, pid}, state) do
@@ -1596,7 +1606,20 @@ defmodule CodingAgent.Session do
           state.session_manager
       end
 
-    %{state | session_manager: new_session_manager}
+    new_state = %{state | session_manager: new_session_manager}
+
+    # Some abort paths can terminate after :message_end without emitting
+    # :turn_end/:agent_end/:canceled. Treat aborted assistant messages as terminal
+    # to avoid leaving the session in a permanently streaming state.
+    case message do
+      %Ai.Types.AssistantMessage{stop_reason: :aborted} ->
+        ui_set_working_message(new_state, nil)
+        complete_event_streams(new_state, {:canceled, :assistant_aborted})
+        %{new_state | is_streaming: false, steering_queue: :queue.new(), event_streams: %{}}
+
+      _ ->
+        new_state
+    end
   end
 
   defp handle_agent_event({:tool_start, tool_call}, state) do
