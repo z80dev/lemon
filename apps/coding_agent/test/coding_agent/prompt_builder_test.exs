@@ -117,7 +117,8 @@ defmodule CodingAgent.PromptBuilderTest do
 
   describe "build_skills_section/3" do
     test "returns empty string when no skills match", %{tmp_dir: tmp_dir} do
-      result = PromptBuilder.build_skills_section(tmp_dir, "unrelated context", 3)
+      context = "qzxvbnmnonexistenttokenabc123"
+      result = PromptBuilder.build_skills_section(tmp_dir, context, 3)
       assert result == ""
     end
 
@@ -657,7 +658,7 @@ defmodule CodingAgent.PromptBuilderTest do
       result =
         PromptBuilder.build(tmp_dir, %{
           base_prompt: "Base.",
-          context: "no matching skills here xyz123",
+          context: "definitelynomatchtokenxyz123",
           include_skills: true,
           include_commands: false,
           include_mentions: false
