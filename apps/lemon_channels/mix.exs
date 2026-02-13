@@ -27,7 +27,8 @@ defmodule LemonChannels.MixProject do
     [
       {:lemon_core, in_umbrella: true},
       {:lemon_gateway, in_umbrella: true},
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+      {:nostrum, "~> 0.10"}
     ]
   end
 end

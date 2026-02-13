@@ -20,6 +20,18 @@ defmodule LemonChannels.GatewayConfig do
     Application.get_env(:lemon_gateway, :telegram) || default
   end
 
+  defp fallback_get(:discord, default) do
+    Application.get_env(:lemon_gateway, :discord) || default
+  end
+
+  defp fallback_get(:enable_discord, default) do
+    Application.get_env(:lemon_gateway, :enable_discord, default)
+  end
+
+  defp fallback_get(:enable_telegram, default) do
+    Application.get_env(:lemon_gateway, :enable_telegram, default)
+  end
+
   defp fallback_get(key, default) do
     Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
     |> Map.get(key, default)
