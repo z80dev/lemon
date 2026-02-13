@@ -26,9 +26,12 @@ defmodule LemonGateway.Run do
   4. Coalesced output is enqueued to LemonChannels.Outbox for delivery
   """
   use GenServer
+  require Logger
 
   alias LemonGateway.{BindingResolver, ChatState, Event, Store}
   alias LemonGateway.Types.{Job, ResumeToken}
+
+  @max_logged_error_bytes 4_096
 
   def start_link(args) do
     # Allow cancel-by-run-id (used by router/control-plane) by registering the run
@@ -485,6 +488,10 @@ defmodule LemonGateway.Run do
         answer: if(completed.answer == "", do: state.accumulated_text, else: completed.answer)
     }
 
+    if completed.ok != true do
+      log_run_failure(state, completed)
+    end
+
     # Emit completion event to bus (channel delivery handled by subscribers)
     duration_ms = System.system_time(:millisecond) - state.start_ts_ms
 
@@ -537,6 +544,60 @@ defmodule LemonGateway.Run do
 
     maybe_store_chat_state(state.job, completed)
     unregister_progress_mapping(state.job)
+  end
+
+  defp log_run_failure(state, %Event.Completed{} = completed) do
+    error_text = format_error_for_log(completed.error)
+    engine_id = engine_id_for(state.job)
+    level = if completed.error in [:user_requested, :interrupted], do: :warning, else: :error
+
+    message =
+      "Gateway run failed " <>
+        "run_id=#{inspect(completed.run_id)} " <>
+        "session_key=#{inspect(completed.session_key)} " <>
+        "engine=#{inspect(engine_id)} " <>
+        "error=#{error_text} " <>
+        "answer_bytes=#{byte_size(completed.answer || "")}"
+
+    case level do
+      :warning -> Logger.warning(message)
+      _ -> Logger.error(message)
+    end
+  end
+
+  defp format_error_for_log(error) when is_binary(error) do
+    truncate_for_log(error, @max_logged_error_bytes)
+  end
+
+  defp format_error_for_log(error) when is_atom(error), do: Atom.to_string(error)
+
+  defp format_error_for_log(error) do
+    error
+    |> inspect(limit: 50, printable_limit: @max_logged_error_bytes)
+    |> truncate_for_log(@max_logged_error_bytes)
+  end
+
+  defp truncate_for_log(text, max_bytes) when byte_size(text) <= max_bytes, do: text
+
+  defp truncate_for_log(text, max_bytes) do
+    prefix =
+      text
+      |> binary_part(0, max_bytes)
+      |> trim_to_valid_utf8()
+
+    "#{prefix}...[truncated #{byte_size(text) - byte_size(prefix)} bytes]"
+  end
+
+  defp trim_to_valid_utf8(<<>>), do: ""
+
+  defp trim_to_valid_utf8(binary) when is_binary(binary) do
+    if String.valid?(binary) do
+      binary
+    else
+      binary
+      |> binary_part(0, byte_size(binary) - 1)
+      |> trim_to_valid_utf8()
+    end
   end
 
   # Emit events to the LemonCore.Bus
