@@ -14,3 +14,6 @@ Outputs are written to `docs/agent-loop/runs/` and summarized back to z80.
   - what changed (diff)
   - what’s next
 - Keep architecture modular; avoid hard-coding client-specific behavior into the core.
+- Run periodic entropy cleanup for run artifacts:
+  - `mix lemon.cleanup` (dry-run)
+  - `mix lemon.cleanup --apply --retention-days 21` (prune old run files)

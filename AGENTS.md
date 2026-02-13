@@ -41,3 +41,9 @@ Convenience:
 ## Configuration & Secrets
 - Project settings live in `.lemon/config.toml`; global settings in `~/.lemon/config.toml`.
 - Prefer environment variables for API keys (e.g., `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). Never commit secrets.
+
+## Docs Navigation & Quality
+- Treat this file as a navigation map, not a full manual. Durable implementation details belong in `docs/`.
+- Start with `docs/README.md` for the docs index and canonical entry points.
+- Keep docs metadata in `docs/catalog.exs` (`owner`, `last_reviewed`, `max_age_days`).
+- Run `mix lemon.quality` after docs edits or umbrella dependency changes.

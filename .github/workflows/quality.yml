@@ -1,0 +1,36 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27.2"
+          elixir-version: "1.19.0"
+
+      - name: Install deps
+        run: mix deps.get
+
+      - name: Compile
+        run: mix compile
+
+      - name: Run quality checks
+        run: mix lemon.quality
+
+      - name: Run eval harness
+        run: mix lemon.eval --iterations 20
+
+      - name: Run quality test suite
+        run: mix test apps/lemon_core/test/lemon_core/quality apps/coding_agent/test/coding_agent/evals/harness_test.exs
