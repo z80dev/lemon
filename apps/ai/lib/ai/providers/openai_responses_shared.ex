@@ -26,6 +26,9 @@ defmodule Ai.Providers.OpenAIResponsesShared do
 
   alias Ai.EventStream
   alias Ai.Providers.TextSanitizer
+  require Logger
+
+  @max_function_call_output_bytes 10_485_760
 
   # ============================================================================
   # Types
@@ -184,11 +187,16 @@ defmodule Ai.Providers.OpenAIResponsesShared do
     # Build function call output
     output_text = if has_text, do: text_result, else: "(see attached image)"
 
+    output_text =
+      output_text
+      |> sanitize_surrogates()
+      |> truncate_function_call_output(call_id, msg.tool_name)
+
     result = [
       %{
         "type" => "function_call_output",
         "call_id" => call_id,
-        "output" => sanitize_surrogates(output_text)
+        "output" => output_text
       }
     ]
 
@@ -217,6 +225,39 @@ defmodule Ai.Providers.OpenAIResponsesShared do
   end
 
   defp convert_message(_msg, _model, _idx, _providers), do: nil
+
+  defp truncate_function_call_output(text, _call_id, _tool_name)
+       when byte_size(text) <= @max_function_call_output_bytes do
+    text
+  end
+
+  defp truncate_function_call_output(text, call_id, tool_name) do
+    truncated =
+      text
+      |> binary_part(0, @max_function_call_output_bytes)
+      |> trim_to_valid_utf8()
+
+    Logger.warning(
+      "OpenAI function_call_output truncated " <>
+        "call_id=#{inspect(call_id)} tool_name=#{inspect(tool_name)} " <>
+        "original_bytes=#{byte_size(text)} truncated_bytes=#{byte_size(truncated)} " <>
+        "limit_bytes=#{@max_function_call_output_bytes}"
+    )
+
+    truncated
+  end
+
+  defp trim_to_valid_utf8(<<>>), do: ""
+
+  defp trim_to_valid_utf8(binary) when is_binary(binary) do
+    if String.valid?(binary) do
+      binary
+    else
+      binary
+      |> binary_part(0, byte_size(binary) - 1)
+      |> trim_to_valid_utf8()
+    end
+  end
 
   defp convert_assistant_block(%ThinkingContent{} = block, _msg_index, _is_different_model) do
     if block.thinking_signature do

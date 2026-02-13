@@ -1,5 +1,6 @@
 defmodule Ai.Providers.OpenAIResponsesSharedTest do
   use ExUnit.Case
+  import ExUnit.CaptureLog
 
   alias Ai.EventStream
   alias Ai.Providers.OpenAIResponsesShared
@@ -16,6 +17,8 @@ defmodule Ai.Providers.OpenAIResponsesSharedTest do
     Usage,
     UserMessage
   }
+
+  @max_function_call_output_bytes 10_485_760
 
   test "process_stream catches thrown stream errors" do
     {:ok, stream} = EventStream.start_link()
@@ -305,6 +308,43 @@ defmodule Ai.Providers.OpenAIResponsesSharedTest do
     assert length(messages) == 2
     assert Enum.any?(messages, &(&1["type"] == "function_call_output"))
     assert Enum.any?(messages, &(&1["role"] == "user"))
+  end
+
+  test "convert_messages truncates oversized function_call_output to API limit" do
+    model = %Model{
+      id: "gpt-4o",
+      name: "GPT-4o",
+      api: :openai_responses,
+      provider: :openai,
+      base_url: "https://api.openai.com/v1",
+      input: [:text],
+      cost: %ModelCost{}
+    }
+
+    oversized = String.duplicate("a", @max_function_call_output_bytes + 1)
+
+    tool_result = %ToolResultMessage{
+      role: :tool_result,
+      tool_call_id: "call_big|fc_1",
+      tool_name: "tool_big",
+      content: [%TextContent{text: oversized}],
+      is_error: false,
+      timestamp: System.system_time(:millisecond)
+    }
+
+    context = %Ai.Types.Context{system_prompt: nil, messages: [tool_result]}
+
+    log =
+      capture_log(fn ->
+        messages = OpenAIResponsesShared.convert_messages(model, context, MapSet.new([:openai]))
+
+        [output] = Enum.filter(messages, &(&1["type"] == "function_call_output"))
+        assert output["call_id"] == "call_big"
+        assert byte_size(output["output"]) == @max_function_call_output_bytes
+        assert output["output"] == binary_part(oversized, 0, @max_function_call_output_bytes)
+      end)
+
+    assert log =~ "function_call_output truncated"
   end
 
   test "insert_synthetic_tool_results when user interrupts tool flow" do
