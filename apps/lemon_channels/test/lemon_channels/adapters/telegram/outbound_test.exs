@@ -15,7 +15,24 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
       {:ok, %{"ok" => true}}
     end
 
+    def send_document(_token, chat_id, {:path, path}, opts) do
+      send(self(), {:send_document, chat_id, path, opts})
+      {:ok, %{"ok" => true, "result" => %{"message_id" => 321}}}
+    end
+
+    def send_photo(_token, chat_id, {:path, path}, opts) do
+      send(self(), {:send_photo, chat_id, path, opts})
+      {:ok, %{"ok" => true, "result" => %{"message_id" => 654}}}
+    end
+
     def delete_message(_token, _chat_id, _message_id), do: {:ok, %{"ok" => true}}
+  end
+
+  defmodule MockApiDocumentOnly do
+    def send_document(_token, chat_id, {:path, path}, opts) do
+      send(self(), {:send_document, chat_id, path, opts})
+      {:ok, %{"ok" => true, "result" => %{"message_id" => 999}}}
+    end
   end
 
   defmodule MockApiNotFound do
@@ -149,5 +166,56 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
       }
 
     assert {:error, {:http_error, 400, _body}} = Outbound.deliver(payload)
+  end
+
+  test "file: image paths use send_photo when available" do
+    Application.put_env(:lemon_gateway, :telegram, %{bot_token: "token", api_mod: MockApiCapture})
+
+    path =
+      Path.join(System.tmp_dir!(), "outbound-image-#{System.unique_integer([:positive])}.png")
+
+    File.write!(path, "png")
+    on_exit(fn -> File.rm(path) end)
+
+    payload =
+      %OutboundPayload{
+        channel_id: "telegram",
+        account_id: "acct",
+        peer: %{kind: :dm, id: "123", thread_id: "777"},
+        kind: :file,
+        content: %{path: path, caption: "Generated image"},
+        reply_to: "456"
+      }
+
+    assert {:ok, _} = Outbound.deliver(payload)
+
+    assert_receive {:send_photo, 123, ^path, opts}
+    assert opts[:caption] == "Generated image"
+    assert opts[:reply_to_message_id] == 456
+    assert opts[:message_thread_id] == 777
+  end
+
+  test "file: non-image paths fallback to send_document" do
+    Application.put_env(:lemon_gateway, :telegram, %{
+      bot_token: "token",
+      api_mod: MockApiDocumentOnly
+    })
+
+    path = Path.join(System.tmp_dir!(), "outbound-text-#{System.unique_integer([:positive])}.txt")
+    File.write!(path, "hello")
+    on_exit(fn -> File.rm(path) end)
+
+    payload =
+      %OutboundPayload{
+        channel_id: "telegram",
+        account_id: "acct",
+        peer: %{kind: :dm, id: "123", thread_id: nil},
+        kind: :file,
+        content: %{path: path}
+      }
+
+    assert {:ok, _} = Outbound.deliver(payload)
+    assert_receive {:send_document, 123, ^path, opts}
+    refute Map.has_key?(opts, :caption)
   end
 end

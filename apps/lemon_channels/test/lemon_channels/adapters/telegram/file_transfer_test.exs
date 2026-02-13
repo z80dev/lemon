@@ -140,10 +140,21 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     end
   end
 
+  defp fresh_root!(prefix) do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "#{prefix}-#{System.system_time(:nanosecond)}-#{System.unique_integer([:positive])}"
+      )
+
+    File.rm_rf!(root)
+    File.mkdir_p!(root)
+    root
+  end
+
   test "/file put saves document into bound project" do
     chat_id = 12_345
-    root = Path.join(System.tmp_dir!(), "lemon-file-put-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
+    root = fresh_root!("lemon-file-put")
     bind_project!(chat_id, root)
 
     MockAPI.set_updates([document_update(chat_id, "/file put incoming/example.txt")])
@@ -171,8 +182,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
   test "/file get sends a file back to Telegram" do
     chat_id = 22_222
-    root = Path.join(System.tmp_dir!(), "lemon-file-get-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
+    root = fresh_root!("lemon-file-get")
     bind_project!(chat_id, root)
 
     File.write!(Path.join(root, "out.txt"), "hello")
@@ -206,8 +216,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
   test "auto-put stores document with no caption into uploads_dir" do
     chat_id = 33_333
-    root = Path.join(System.tmp_dir!(), "lemon-auto-put-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
+    root = fresh_root!("lemon-auto-put")
     bind_project!(chat_id, root)
 
     MockAPI.set_updates([document_update(chat_id, nil)])
@@ -229,8 +238,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
   test "auto-put batches media_group_id documents into uploads_dir" do
     chat_id = 44_444
-    root = Path.join(System.tmp_dir!(), "lemon-auto-put-mg-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
+    root = fresh_root!("lemon-auto-put-mg")
     bind_project!(chat_id, root)
 
     mg = "mg-1"
@@ -263,8 +271,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
   test "/file put batches media_group_id documents into a directory path" do
     chat_id = 55_555
-    root = Path.join(System.tmp_dir!(), "lemon-file-put-mg-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
+    root = fresh_root!("lemon-file-put-mg")
     bind_project!(chat_id, root)
 
     mg = "mg-2"

@@ -158,9 +158,47 @@ defmodule LemonGateway.Telegram.API do
     opts = if is_map(opts), do: opts, else: Enum.into(opts, %{})
 
     boundary = build_boundary("lemon-doc")
-    {body, content_type} = build_document_multipart(boundary, chat_id, file, opts)
+
+    {body, content_type} =
+      build_media_multipart(boundary, chat_id, "document", file, opts, "application/octet-stream")
 
     url = "https://api.telegram.org/bot#{token}/sendDocument"
+    headers = [{~c"content-type", to_charlist(content_type)}]
+    http_opts = [timeout: 60_000, connect_timeout: 30_000]
+
+    case LemonCore.Httpc.request(
+           :post,
+           {to_charlist(url), headers, to_charlist(content_type), body},
+           http_opts,
+           body_format: :binary
+         ) do
+      {:ok, {{_, 200, _}, _headers, resp_body}} ->
+        Jason.decode(resp_body)
+
+      {:ok, {{_, status, _}, _headers, resp_body}} ->
+        {:error, {:http_error, status, resp_body}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Send a photo to Telegram.
+
+  `file` may be:
+  - `{:path, "/abs/path/to/image.png"}`
+  - `{:binary, "image.png", "image/png", <<bytes>>}`
+  """
+  def send_photo(token, chat_id, file, opts \\ %{}) do
+    opts = if is_map(opts), do: opts, else: Enum.into(opts, %{})
+
+    boundary = build_boundary("lemon-photo")
+
+    {body, content_type} =
+      build_media_multipart(boundary, chat_id, "photo", file, opts, "image/png")
+
+    url = "https://api.telegram.org/bot#{token}/sendPhoto"
     headers = [{~c"content-type", to_charlist(content_type)}]
     http_opts = [timeout: 60_000, connect_timeout: 30_000]
 
@@ -185,7 +223,7 @@ defmodule LemonGateway.Telegram.API do
     "----" <> prefix <> "-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
   end
 
-  defp build_document_multipart(boundary, chat_id, file, opts) do
+  defp build_media_multipart(boundary, chat_id, field_name, file, opts, default_mime) do
     boundary_line = "--" <> boundary <> "\r\n"
     end_boundary = "--" <> boundary <> "--\r\n"
 
@@ -251,20 +289,22 @@ defmodule LemonGateway.Telegram.API do
     {filename, mime_type, bytes} =
       case file do
         {:path, path} when is_binary(path) ->
-          {Path.basename(path), "application/octet-stream", File.read!(path)}
+          {Path.basename(path), mime_type_for_path(path, default_mime), File.read!(path)}
 
         {:binary, name, ct, b} when is_binary(name) and is_binary(ct) and is_binary(b) ->
           {name, ct, b}
 
         _ ->
-          {"document.bin", "application/octet-stream", ""}
+          {"file.bin", default_mime, ""}
       end
 
     parts =
       parts ++
         [
           boundary_line,
-          "Content-Disposition: form-data; name=\"document\"; filename=\"",
+          "Content-Disposition: form-data; name=\"",
+          field_name,
+          "\"; filename=\"",
           filename,
           "\"\r\n",
           "Content-Type: ",
@@ -276,6 +316,19 @@ defmodule LemonGateway.Telegram.API do
         ]
 
     {IO.iodata_to_binary(parts), "multipart/form-data; boundary=#{boundary}"}
+  end
+
+  defp mime_type_for_path(path, default_mime) when is_binary(path) and is_binary(default_mime) do
+    case Path.extname(path) |> String.downcase() do
+      ".png" -> "image/png"
+      ".jpg" -> "image/jpeg"
+      ".jpeg" -> "image/jpeg"
+      ".gif" -> "image/gif"
+      ".webp" -> "image/webp"
+      ".bmp" -> "image/bmp"
+      ".svg" -> "image/svg+xml"
+      _ -> default_mime
+    end
   end
 
   defp request(token, method, params, timeout_ms) do

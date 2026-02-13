@@ -87,6 +87,31 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     end
   end
 
+  def deliver(%OutboundPayload{kind: :file, content: content} = payload) do
+    chat_id = String.to_integer(payload.peer.id)
+    {token, api_mod} = telegram_config()
+
+    with {:ok, %{path: path, caption: caption}} <- normalize_file_content(content),
+         true <- File.regular?(path) do
+      if Code.ensure_loaded?(api_mod) do
+        with token when is_binary(token) and token != "" <- token do
+          opts =
+            build_send_opts(payload, nil)
+            |> maybe_put(:caption, caption)
+
+          send_file(api_mod, token, chat_id, path, opts)
+        else
+          _ -> {:error, :telegram_not_configured}
+        end
+      else
+        {:error, :telegram_api_not_available}
+      end
+    else
+      {:error, reason} -> {:error, reason}
+      false -> {:error, :file_not_found}
+    end
+  end
+
   def deliver(%OutboundPayload{kind: kind}) do
     {:error, {:unsupported_kind, kind}}
   end
@@ -133,6 +158,54 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
 
       _ ->
         String.contains?(String.downcase(body), "message to delete not found")
+    end
+  end
+
+  defp normalize_file_content(%{} = content) do
+    path = Map.get(content, :path) || Map.get(content, "path")
+    caption = Map.get(content, :caption) || Map.get(content, "caption")
+
+    cond do
+      not is_binary(path) or path == "" ->
+        {:error, :invalid_file_payload}
+
+      not (is_nil(caption) or is_binary(caption)) ->
+        {:error, :invalid_file_payload}
+
+      true ->
+        {:ok, %{path: path, caption: caption}}
+    end
+  end
+
+  defp normalize_file_content(_), do: {:error, :invalid_file_payload}
+
+  defp send_file(api_mod, token, chat_id, path, opts) do
+    cond do
+      image_file?(path) and function_exported?(api_mod, :send_photo, 4) ->
+        api_mod.send_photo(token, chat_id, {:path, path}, opts)
+
+      function_exported?(api_mod, :send_document, 4) ->
+        api_mod.send_document(token, chat_id, {:path, path}, opts)
+
+      true ->
+        {:error, :telegram_send_document_not_available}
+    end
+  end
+
+  defp image_file?(path) when is_binary(path) do
+    case Path.extname(path) |> String.downcase() do
+      ".png" -> true
+      ".jpg" -> true
+      ".jpeg" -> true
+      ".gif" -> true
+      ".webp" -> true
+      ".bmp" -> true
+      ".svg" -> true
+      ".tif" -> true
+      ".tiff" -> true
+      ".heic" -> true
+      ".heif" -> true
+      _ -> false
     end
   end
 
