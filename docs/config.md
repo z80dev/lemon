@@ -222,6 +222,8 @@ Enable `/file put` and `/file get` (and optional auto-save for plain document up
 enabled = true
 auto_put = true
 auto_put_mode = "upload"  # "upload" | "prompt"
+auto_send_generated_images = true      # optional: send generated images automatically after a run
+auto_send_generated_max_files = 3      # optional: max images auto-sent per run (default: 3)
 uploads_dir = "incoming"
 media_group_debounce_ms = 1000  # optional (default: 1000ms)
 
@@ -235,6 +237,10 @@ max_download_bytes = 52428800   # optional (default: 50MB)
 Commands:
 - `/file put [--force] <path>`: upload a Telegram document into the bound project.
 - `/file get <path>`: fetch a file (or zip a directory) back into Telegram.
+
+When `auto_send_generated_images = true`, Lemon tracks image files created/changed during the run and sends up to
+`auto_send_generated_max_files` files back to Telegram automatically at completion (using the same `max_download_bytes`
+limit as `/file get`).
 
 ## Trigger Mode (Mentions-Only)
 

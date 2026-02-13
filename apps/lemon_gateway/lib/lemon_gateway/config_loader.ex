@@ -165,6 +165,8 @@ defmodule LemonGateway.ConfigLoader do
       enabled: fetch(files, :enabled),
       auto_put: fetch(files, :auto_put),
       auto_put_mode: fetch(files, :auto_put_mode),
+      auto_send_generated_images: fetch(files, :auto_send_generated_images),
+      auto_send_generated_max_files: fetch(files, :auto_send_generated_max_files),
       uploads_dir: fetch(files, :uploads_dir),
       allowed_user_ids: fetch(files, :allowed_user_ids),
       deny_globs: fetch(files, :deny_globs),

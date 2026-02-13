@@ -338,6 +338,51 @@ defmodule LemonRouter.RunProcessTest do
     end
   end
 
+  describe "generated image tracking" do
+    test "tracks image file_change paths from completed engine actions" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+      session_key = SessionKey.main("test-agent")
+      job = make_test_job(run_id)
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false
+               })
+
+      action_event =
+        LemonCore.Event.new(
+          :engine_action,
+          %{
+            phase: :completed,
+            ok: true,
+            action: %{
+              kind: "file_change",
+              detail: %{
+                changes: [
+                  %{path: "artifacts/chart.png", kind: "added"},
+                  %{path: "notes.txt", kind: "added"},
+                  %{path: "artifacts/old.jpg", kind: "deleted"}
+                ]
+              }
+            }
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), action_event)
+
+      assert eventually(fn ->
+               state = :sys.get_state(pid)
+               state.generated_image_paths == ["artifacts/chart.png"]
+             end)
+
+      GenServer.stop(pid)
+    end
+  end
+
   describe "SessionKey" do
     test "main/1 generates correct format" do
       key = SessionKey.main("my-agent")

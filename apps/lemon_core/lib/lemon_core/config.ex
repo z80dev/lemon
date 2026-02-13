@@ -418,10 +418,32 @@ defmodule LemonCore.Config do
       allow_queue_override: map["allow_queue_override"],
       account_id: map["account_id"],
       offset: map["offset"],
-      drop_pending_updates: map["drop_pending_updates"]
+      drop_pending_updates: map["drop_pending_updates"],
+      files: parse_gateway_telegram_files(map["files"] || %{})
     }
     |> reject_nil_values()
   end
+
+  defp parse_gateway_telegram_files(map) when is_map(map) do
+    map = stringify_keys(map)
+
+    %{
+      enabled: map["enabled"],
+      auto_put: map["auto_put"],
+      auto_put_mode: map["auto_put_mode"],
+      auto_send_generated_images: map["auto_send_generated_images"],
+      auto_send_generated_max_files: map["auto_send_generated_max_files"],
+      uploads_dir: map["uploads_dir"],
+      allowed_user_ids: map["allowed_user_ids"],
+      deny_globs: map["deny_globs"],
+      max_upload_bytes: map["max_upload_bytes"],
+      max_download_bytes: map["max_download_bytes"],
+      media_group_debounce_ms: map["media_group_debounce_ms"]
+    }
+    |> reject_nil_values()
+  end
+
+  defp parse_gateway_telegram_files(_), do: %{}
 
   defp parse_gateway_engines(map) when is_map(map) do
     map
