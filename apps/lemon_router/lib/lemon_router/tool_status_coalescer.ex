@@ -14,6 +14,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
   @default_max_latency_ms 1200
 
   @max_actions 40
+  @cancel_callback_prefix "lemon:cancel"
 
   defstruct [
     :session_key,
@@ -27,6 +28,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
     :config,
     :meta,
     :seq,
+    :finalized,
     # When creating an editable status message lazily, we wait for an outbox
     # delivery ack so we can capture the platform message_id and switch to edits.
     :status_create_ref,
@@ -90,14 +92,27 @@ defmodule LemonRouter.ToolStatusCoalescer do
   completion events arrive (or if they're dropped), the status message can otherwise
   get stuck showing `[running]`.
   """
-  def finalize_run(session_key, channel_id, run_id, ok?) when is_binary(run_id) do
-    case Registry.lookup(LemonRouter.ToolStatusRegistry, {session_key, channel_id}) do
-      [{pid, _}] -> GenServer.cast(pid, {:finalize_run, run_id, ok?})
-      _ -> :ok
+  def finalize_run(session_key, channel_id, run_id, ok?, opts \\ [])
+
+  def finalize_run(session_key, channel_id, run_id, ok?, opts) when is_binary(run_id) do
+    meta = Keyword.get(opts, :meta, %{})
+
+    case get_or_start_coalescer(session_key, channel_id, meta) do
+      {:ok, pid} ->
+        try do
+          GenServer.call(pid, {:finalize_run, run_id, ok?, meta}, 2_000)
+        catch
+          :exit, _ -> :ok
+        end
+
+        :ok
+
+      _ ->
+        :ok
     end
   end
 
-  def finalize_run(_session_key, _channel_id, _run_id, _ok?), do: :ok
+  def finalize_run(_session_key, _channel_id, _run_id, _ok?, _opts), do: :ok
 
   defp get_or_start_coalescer(session_key, channel_id, meta) do
     case Registry.lookup(LemonRouter.ToolStatusRegistry, {session_key, channel_id}) do
@@ -137,6 +152,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
       config: config,
       meta: Keyword.get(opts, :meta, %{}),
       seq: 0,
+      finalized: false,
       status_create_ref: nil,
       deferred_text: nil
     }
@@ -161,6 +177,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
             first_event_ts: nil,
             flush_timer: nil,
             seq: 0,
+            finalized: false,
             # New run: do not carry forward prior run's message ids.
             meta: compact_meta(meta),
             status_create_ref: nil,
@@ -172,6 +189,10 @@ defmodule LemonRouter.ToolStatusCoalescer do
         %{state | meta: Map.merge(state.meta || %{}, compact_meta(meta))}
       end
 
+    # If we've already finalized this run, ignore late action events.
+    if state.finalized == true and state.run_id == run_id do
+      {:noreply, state}
+    else
     state =
       case normalize_action_event(action_event) do
         {:skip, _reason} ->
@@ -191,6 +212,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
       end
 
     {:noreply, state}
+    end
   end
 
   def handle_cast(:flush, state) do
@@ -198,17 +220,56 @@ defmodule LemonRouter.ToolStatusCoalescer do
     {:noreply, state}
   end
 
-  def handle_cast({:finalize_run, run_id, ok?}, state) do
+  @impl true
+  def handle_call({:finalize_run, run_id, ok?, meta}, _from, state) do
     state =
-      if state.run_id == run_id do
-        state
-        |> finalize_running_actions(ok?)
-        |> do_flush()
-      else
-        state
+      cond do
+        state.run_id == nil ->
+          %{
+            state
+            | run_id: run_id,
+              meta: compact_meta(meta),
+              actions: %{},
+              order: [],
+              last_text: nil,
+              first_event_ts: nil,
+              flush_timer: nil,
+              seq: 0,
+              finalized: false,
+              status_create_ref: nil,
+              deferred_text: nil
+          }
+
+        state.run_id != run_id ->
+          cancel_timer(state.flush_timer)
+
+          %{
+            state
+            | run_id: run_id,
+              actions: %{},
+              order: [],
+              last_text: nil,
+              first_event_ts: nil,
+              flush_timer: nil,
+              seq: 0,
+              finalized: false,
+              # New run: do not carry forward prior run's message ids.
+              meta: compact_meta(meta),
+              status_create_ref: nil,
+              deferred_text: nil
+          }
+
+        true ->
+          %{state | meta: Map.merge(state.meta || %{}, compact_meta(meta))}
       end
 
-    {:noreply, state}
+    state =
+      state
+      |> Map.put(:finalized, true)
+      |> finalize_running_actions(ok?)
+      |> do_flush()
+
+    {:reply, :ok, state}
   end
 
   @impl true
@@ -272,12 +333,23 @@ defmodule LemonRouter.ToolStatusCoalescer do
   defp do_flush(state) do
     cancel_timer(state.flush_timer)
 
-    text = LemonRouter.ToolStatusRenderer.render(state.channel_id, state.actions, state.order)
+    progress_msg_id = (state.meta || %{})[:progress_msg_id]
+
+    text =
+      cond do
+        state.order == [] and state.finalized == true and is_integer(progress_msg_id) ->
+          "Done"
+
+        true ->
+          state.channel_id
+          |> LemonRouter.ToolStatusRenderer.render(state.actions, state.order)
+          |> maybe_prefix_running(state)
+      end
 
     state =
       cond do
         # Only send a tool-status message when we actually have tool/actions to show.
-        state.order == [] ->
+        state.order == [] and not (state.finalized == true and is_integer(progress_msg_id)) ->
           state
 
         text == state.last_text ->
@@ -314,27 +386,37 @@ defmodule LemonRouter.ToolStatusCoalescer do
     parsed = parse_session_key(state.session_key)
 
     status_msg_id = (state.meta || %{})[:status_msg_id]
+    progress_msg_id = (state.meta || %{})[:progress_msg_id]
+    target_msg_id = status_msg_id || progress_msg_id
 
     # For Telegram, prefer LemonGateway.Telegram.Outbox, which coalesces edits by key.
     if state.channel_id == "telegram" and is_pid(Process.whereis(LemonGateway.Telegram.Outbox)) do
       chat_id = parse_int(parsed.peer_id)
       thread_id = parse_int(parsed.thread_id)
+      reply_markup = tool_status_reply_markup(state)
 
       cond do
         not is_integer(chat_id) ->
           state
 
-        is_nil(status_msg_id) and is_reference(state.status_create_ref) ->
+        is_nil(target_msg_id) and is_reference(state.status_create_ref) ->
           # Creation is in flight; remember latest desired text and wait for ack.
           %{state | deferred_text: truncate_for_channel(state.channel_id, text)}
 
-        is_integer(status_msg_id) ->
+        is_integer(target_msg_id) ->
           edit_text = truncate_for_channel(state.channel_id, text)
 
+          payload =
+            if state.finalized == true do
+              %{text: edit_text, reply_markup: %{"inline_keyboard" => []}}
+            else
+              %{text: edit_text}
+            end
+
           LemonGateway.Telegram.Outbox.enqueue(
-            {chat_id, status_msg_id, :edit},
+            {chat_id, target_msg_id, :edit},
             0,
-            {:edit, chat_id, status_msg_id, %{text: edit_text}}
+            {:edit, chat_id, target_msg_id, payload}
           )
 
           state
@@ -351,7 +433,8 @@ defmodule LemonRouter.ToolStatusCoalescer do
              %{
                text: send_text,
                reply_to_message_id: maybe_reply_to(state),
-               message_thread_id: thread_id
+               message_thread_id: thread_id,
+               reply_markup: reply_markup
              }},
             self(),
             notify_ref,
@@ -388,7 +471,8 @@ defmodule LemonRouter.ToolStatusCoalescer do
                 meta: %{
                   run_id: state.run_id,
                   session_key: state.session_key,
-                  status_seq: state.seq
+                  status_seq: state.seq,
+                  reply_markup: tool_status_reply_markup(state)
                 },
                 notify_pid: notify_pid,
                 notify_ref: notify_ref
@@ -414,9 +498,36 @@ defmodule LemonRouter.ToolStatusCoalescer do
     _ -> state
   end
 
+  defp maybe_prefix_running(text, %__MODULE__{} = state) when is_binary(text) do
+    progress_msg_id = (state.meta || %{})[:progress_msg_id]
+
+    if is_integer(progress_msg_id) and any_running_action?(state) do
+      "Running…\n\n" <> text
+    else
+      text
+    end
+  end
+
+  defp maybe_prefix_running(text, _state), do: text
+
+  defp any_running_action?(%__MODULE__{} = state) do
+    actions = state.actions || %{}
+    order = state.order || []
+
+    Enum.any?(order, fn id ->
+      case Map.get(actions, id) do
+        %{phase: phase} when phase in [:started, :updated] -> true
+        %{"phase" => phase} when phase in [:started, :updated] -> true
+        _ -> false
+      end
+    end)
+  rescue
+    _ -> false
+  end
+
   defp get_output_kind_and_content(state, text) do
     supports_edit = channel_supports_edit?(state.channel_id)
-    status_msg_id = (state.meta || %{})[:status_msg_id]
+    status_msg_id = (state.meta || %{})[:status_msg_id] || (state.meta || %{})[:progress_msg_id]
 
     cond do
       supports_edit and status_msg_id != nil ->
@@ -610,6 +721,26 @@ defmodule LemonRouter.ToolStatusCoalescer do
   end
 
   defp truncate_for_channel(_channel_id, text), do: text
+
+  defp tool_status_reply_markup(%__MODULE__{finalized: true}) do
+    %{"inline_keyboard" => []}
+  end
+
+  defp tool_status_reply_markup(%__MODULE__{run_id: run_id})
+       when is_binary(run_id) and run_id != "" do
+    %{
+      "inline_keyboard" => [
+        [
+          %{
+            "text" => "cancel",
+            "callback_data" => @cancel_callback_prefix <> ":" <> run_id
+          }
+        ]
+      ]
+    }
+  end
+
+  defp tool_status_reply_markup(_), do: nil
 
   defp parse_int(nil), do: nil
 

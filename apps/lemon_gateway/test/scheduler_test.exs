@@ -4,6 +4,57 @@ defmodule LemonGateway.SchedulerTest do
   alias LemonGateway.Scheduler
   alias LemonGateway.Types.{ChatScope, Job, ResumeToken}
 
+  defmodule SlowEngine do
+    @behaviour LemonGateway.Engine
+
+    alias LemonGateway.Event
+    alias LemonGateway.Types.{Job, ResumeToken}
+
+    @impl true
+    def id, do: "slow"
+
+    @impl true
+    def format_resume(%ResumeToken{value: v}), do: "slow resume #{v}"
+
+    @impl true
+    def extract_resume(_text), do: nil
+
+    @impl true
+    def is_resume_line(_line), do: false
+
+    @impl true
+    def supports_steer?, do: false
+
+    @impl true
+    def start_run(%Job{} = job, _opts, sink_pid) do
+      run_ref = make_ref()
+      resume = job.resume || %ResumeToken{engine: id(), value: unique_id()}
+      delay_ms = (job.meta || %{})[:delay_ms] || 100
+
+      {:ok, task_pid} =
+        Task.start(fn ->
+          send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
+          Process.sleep(delay_ms)
+
+          send(
+            sink_pid,
+            {:engine_event, run_ref,
+             %Event.Completed{engine: id(), resume: resume, ok: true, answer: "ok"}}
+          )
+        end)
+
+      {:ok, run_ref, %{task_pid: task_pid}}
+    end
+
+    @impl true
+    def cancel(%{task_pid: pid}) when is_pid(pid) do
+      Process.exit(pid, :kill)
+      :ok
+    end
+
+    defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
+  end
+
   # Test helper to create a minimal job
   defp make_job(opts \\ []) do
     scope = Keyword.get(opts, :scope, %ChatScope{transport: :test, chat_id: 1, topic_id: nil})
@@ -541,6 +592,7 @@ defmodule LemonGateway.SchedulerTest do
       })
 
       Application.put_env(:lemon_gateway, :engines, [
+        SlowEngine,
         LemonGateway.Engines.Echo
       ])
 
@@ -856,6 +908,7 @@ defmodule LemonGateway.SchedulerTest do
       })
 
       Application.put_env(:lemon_gateway, :engines, [
+        SlowEngine,
         LemonGateway.Engines.Echo
       ])
 
@@ -883,6 +936,32 @@ defmodule LemonGateway.SchedulerTest do
 
       # Submit should succeed
       assert :ok == Scheduler.submit(job)
+    end
+
+    test "job with session_key and resume token creates thread_key from session_key" do
+      session_key = "session_#{System.unique_integer([:positive])}"
+
+      resume = %ResumeToken{
+        engine: SlowEngine.id(),
+        value: "resume_#{System.unique_integer([:positive])}"
+      }
+
+      job = %Job{
+        session_key: session_key,
+        prompt: "test",
+        text: "test",
+        resume: resume,
+        engine_hint: SlowEngine.id(),
+        meta: %{delay_ms: 200}
+      }
+
+      assert :ok == Scheduler.submit(job)
+
+      assert eventually(fn ->
+               is_pid(LemonGateway.ThreadRegistry.whereis({:session, session_key}))
+             end)
+
+      assert LemonGateway.ThreadRegistry.whereis({resume.engine, resume.value}) == nil
     end
 
     test "job without resume token creates thread_key from scope" do
@@ -2119,6 +2198,21 @@ defmodule LemonGateway.SchedulerTest do
       assert total_worker_counts == 30
 
       Enum.each(workers, &Process.exit(&1, :kill))
+    end
+  end
+
+  defp eventually(fun, attempts_left \\ 40)
+
+  defp eventually(fun, 0) when is_function(fun, 0) do
+    fun.()
+  end
+
+  defp eventually(fun, attempts_left) when is_function(fun, 0) and attempts_left > 0 do
+    if fun.() do
+      true
+    else
+      Process.sleep(10)
+      eventually(fun, attempts_left - 1)
     end
   end
 end

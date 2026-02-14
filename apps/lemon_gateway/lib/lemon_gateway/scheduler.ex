@@ -220,12 +220,25 @@ defmodule LemonGateway.Scheduler do
     {:queue.from_list(kept), length(removed)}
   end
 
-  defp thread_key(%Job{resume: %ResumeToken{engine: engine, value: value}}) do
-    {engine, value}
+  #
+  # IMPORTANT: session_key must win over resume tokens.
+  #
+  # We want strict single-flight per user session (Telegram DM, Slack thread, etc).
+  # If we derive the worker key from a resume token first, commands like /new
+  # (which intentionally run without a resume token) can end up on a different
+  # ThreadWorker and run concurrently with an in-flight session run.
+  #
+  # The router has a session-level single-flight guard (LemonRouter.SessionRegistry)
+  # to track the best-effort "active run" for a session_key. The gateway is responsible
+  # for serializing runs per session_key; the router should not cancel queued runs just
+  # because the previous RunProcess is still finalizing output.
+  defp thread_key(%Job{session_key: session_key})
+       when is_binary(session_key) and session_key != "" do
+    {:session, session_key}
   end
 
-  defp thread_key(%Job{session_key: session_key}) when is_binary(session_key) do
-    {:session, session_key}
+  defp thread_key(%Job{resume: %ResumeToken{engine: engine, value: value}}) do
+    {engine, value}
   end
 
   defp thread_key(%Job{scope: scope}) when not is_nil(scope), do: {:scope, scope}

@@ -558,9 +558,22 @@ defmodule Ai.Providers.OpenAICodexResponses do
 
       cond do
         type == "error" ->
-          code = event["code"] || ""
-          message = event["message"] || ""
-          raise "Codex error: #{message || code || inspect(event)}"
+          code = event["code"]
+          message = event["message"]
+
+          detail =
+            cond do
+              is_binary(message) and String.trim(message) != "" ->
+                message
+
+              is_binary(code) and String.trim(code) != "" ->
+                code
+
+              true ->
+                inspect(event, limit: 500)
+            end
+
+          raise "Codex error: #{detail}"
 
         type == "response.failed" ->
           message = get_in(event, ["response", "error", "message"])

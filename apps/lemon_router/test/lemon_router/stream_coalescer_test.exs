@@ -462,15 +462,10 @@ defmodule LemonRouter.StreamCoalescerTest do
   end
 
   describe "finalize_run/4 (telegram)" do
-    test "sends final response as a new message" do
+    test "sends a final answer message (progress message is reserved for tool status)" do
       session_key = "agent:my-agent:telegram:bot123:dm:user456"
       channel_id = "telegram"
       run_id = "run_#{System.unique_integer()}"
-
-      # Simulate a run that streamed at least one delta and has a progress msg id.
-      StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 1, "Partial",
-        meta: %{progress_msg_id: 111}
-      )
 
       assert :ok =
                StreamCoalescer.finalize_run(
@@ -488,8 +483,8 @@ defmodule LemonRouter.StreamCoalescerTest do
       assert_receive {:delivered, %{idempotency_key: ^send_key} = payload}, 1_000
 
       assert payload.kind == :text
-      assert payload.content == "Final answer"
       assert payload.reply_to == 222
+      assert payload.content == "Final answer"
     end
 
     test "sends configured auto-send files after final text" do
@@ -507,6 +502,7 @@ defmodule LemonRouter.StreamCoalescerTest do
                  channel_id,
                  run_id,
                  meta: %{
+                   progress_msg_id: 111,
                    user_msg_id: 222,
                    auto_send_files: [%{path: path, caption: "Generated image"}]
                  },
@@ -568,7 +564,7 @@ defmodule LemonRouter.StreamCoalescerTest do
       assert Enum.map(payload.content.files, & &1.caption) == ["First", "Second"]
     end
 
-    test "deletes progress message even when there is no final text" do
+    test "edits progress message even when there is no final text" do
       {:ok, _} = start_supervised({TestOutboxAPI, [notify_pid: self()]})
 
       {:ok, _} =
@@ -590,8 +586,10 @@ defmodule LemonRouter.StreamCoalescerTest do
                  final_text: ""
                )
 
-      assert_receive {:outbox_api_call, {:delete, 12_340, 111}}, 500
-      refute_receive {:outbox_api_call, {:send, 12_340, _text, _opts, nil}}, 200
+      assert_receive {:outbox_api_call, {:send, 12_340, "Done", %{reply_to_message_id: 222}, nil}},
+                     500
+      refute_receive {:outbox_api_call, {:delete, 12_340, 111}}, 200
+      refute_receive {:outbox_api_call, {:edit, 12_340, 111, _text, _opts}}, 200
     end
   end
 
@@ -602,7 +600,7 @@ defmodule LemonRouter.StreamCoalescerTest do
       :ok
     end
 
-    test "telegram edits use LemonGateway.Telegram.Outbox when it is running" do
+    test "telegram deltas stream into a dedicated answer message (progress message is reserved for tool status)" do
       {:ok, _} =
         start_supervised(
           {LemonGateway.Telegram.Outbox,
@@ -619,14 +617,27 @@ defmodule LemonRouter.StreamCoalescerTest do
 
       assert :ok = StreamCoalescer.flush(session_key, channel_id)
 
-      assert_receive {:outbox_api_call, {:edit, 12_345, 999, _text, nil}}, 500
+      refute_receive {:outbox_api_call, {:edit, 12_345, 999, _text, _opts}}, 200
+
+      assert_receive {:outbox_api_call, {:send, 12_345, "Hello", _opts, nil}}, 500
+
+      StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 2, " world",
+        meta: %{progress_msg_id: 999}
+      )
+
+      assert :ok = StreamCoalescer.flush(session_key, channel_id)
+
+      assert_receive {:outbox_api_call, {:edit, 12_345, 101, text, _opts}}, 1_000
+      assert String.contains?(text, "Hello world")
+
+      refute_receive {:outbox_api_call, {:edit, 12_345, 999, _text, _opts}}, 200
       # Other async tests may enqueue telegram deliveries while this test has the telegram
       # plugin registered globally. Only assert that *this run* didn't go through
       # LemonChannels.Outbox (it should use LemonGateway.Telegram.Outbox for edits).
       refute_receive {:delivered, %LemonChannels.OutboundPayload{meta: %{run_id: ^run_id}}}, 200
     end
 
-    test "telegram finalize uses outbox delete + send (thread_id + reply_to preserved)" do
+    test "telegram finalize sends a final answer message and indexes resume by that message id" do
       {:ok, _} =
         start_supervised(
           {LemonGateway.Telegram.Outbox,
@@ -648,14 +659,10 @@ defmodule LemonRouter.StreamCoalescerTest do
                  final_text: "Final answer"
                )
 
-      assert_receive {:outbox_api_call, {:delete, 12_345, 111}}, 500
-
-      assert_receive {:outbox_api_call, {:send, 12_345, text, opts, nil}}, 500
+      assert_receive {:outbox_api_call, {:send, 12_345, "Final answer", opts, nil}}, 500
       assert is_map(opts)
-      assert opts[:reply_to_message_id] == 222
       assert opts[:message_thread_id] == 777
-
-      assert String.contains?(text, "Final answer")
+      assert opts[:reply_to_message_id] == 222
 
       assert eventually(fn ->
                case LemonCore.Store.get(:telegram_msg_resume, store_key) do
@@ -663,6 +670,9 @@ defmodule LemonRouter.StreamCoalescerTest do
                  _ -> false
                end
              end)
+
+      refute_receive {:outbox_api_call, {:delete, 12_345, _}}, 200
+      refute_receive {:outbox_api_call, {:edit, 12_345, 111, _text, _opts}}, 200
     end
 
     test "telegram finalize still sends when progress_msg_id is nil (no delete attempted)" do
@@ -704,8 +714,9 @@ defmodule LemonRouter.StreamCoalescerTest do
                  final_text: "first-final"
                )
 
-      assert_receive {:outbox_api_call, {:delete, 12_348, 711_111}}, 500
-      assert_receive {:outbox_api_call, {:send, 12_348, "first-final", _opts, nil}}, 500
+      assert_receive {:outbox_api_call,
+                      {:send, 12_348, "first-final", %{reply_to_message_id: 222}, nil}},
+                     500
 
       assert :ok =
                StreamCoalescer.finalize_run(session_key, channel_id, run_id_2,
@@ -713,35 +724,13 @@ defmodule LemonRouter.StreamCoalescerTest do
                  final_text: "second-final"
                )
 
-      assert_receive {:outbox_api_call, {:delete, 12_348, 722_222}}, 500
-      assert_receive {:outbox_api_call, {:send, 12_348, "second-final", _opts, nil}}, 500
+      assert_receive {:outbox_api_call,
+                      {:send, 12_348, "second-final", %{reply_to_message_id: 333}, nil}},
+                     500
 
       [{pid, _}] = Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id})
       state = :sys.get_state(pid)
       assert state.run_id == run_id_2
-    end
-
-    test "telegram finalize sends final even if delete fails (non-retryable)" do
-      {:ok, _} =
-        start_supervised(
-          {LemonGateway.Telegram.Outbox,
-           [bot_token: "token", api_mod: TestOutboxAPI, edit_throttle_ms: 0, use_markdown: false]}
-        )
-
-      TestOutboxAPI.fail_next_delete({:http_error, 400, "Bad Request"})
-
-      session_key = "agent:test:telegram:bot:dm:12347"
-      channel_id = "telegram"
-      run_id = "run_#{System.unique_integer([:positive])}"
-
-      assert :ok =
-               StreamCoalescer.finalize_run(session_key, channel_id, run_id,
-                 meta: %{progress_msg_id: 111, user_msg_id: 222},
-                 final_text: "Final answer"
-               )
-
-      assert_receive {:outbox_api_call, {:delete, 12_347, 111}}, 500
-      assert_receive {:outbox_api_call, {:send, 12_347, _text, _opts, nil}}, 500
     end
 
     test "stale pending resume index is cleaned up when delivery notify never arrives" do

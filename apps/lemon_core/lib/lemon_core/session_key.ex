@@ -8,7 +8,7 @@ defmodule LemonCore.SessionKey do
   ## Canonical Formats
 
   - Main: `agent:<agent_id>:main`
-  - Channel: `agent:<agent_id>:<channel_id>:<account_id>:<peer_kind>:<peer_id>[:thread:<thread_id>]`
+  - Channel: `agent:<agent_id>:<channel_id>:<account_id>:<peer_kind>:<peer_id>[:thread:<thread_id>][:sub:<sub_id>]`
 
   ## Notes
 
@@ -33,7 +33,8 @@ defmodule LemonCore.SessionKey do
           account_id: binary() | nil,
           peer_kind: atom() | nil,
           peer_id: binary() | nil,
-          thread_id: binary() | nil
+          thread_id: binary() | nil,
+          sub_id: binary() | nil
         }
 
   @doc "Generate a main session key for an agent."
@@ -54,20 +55,29 @@ defmodule LemonCore.SessionKey do
 
   Optional:
   - `:thread_id`
+  - `:sub_id`
   """
   @spec channel_peer(opts :: map()) :: binary()
-  def channel_peer(%{
-        agent_id: agent_id,
-        channel_id: channel_id,
-        account_id: account_id,
-        peer_kind: peer_kind,
-        peer_id: peer_id
-      } = opts) do
+  def channel_peer(
+        %{
+          agent_id: agent_id,
+          channel_id: channel_id,
+          account_id: account_id,
+          peer_kind: peer_kind,
+          peer_id: peer_id
+        } = opts
+      ) do
     base = "agent:#{agent_id}:#{channel_id}:#{account_id}:#{peer_kind}:#{peer_id}"
 
-    case opts[:thread_id] do
+    base =
+      case opts[:thread_id] do
+        nil -> base
+        thread_id -> "#{base}:thread:#{thread_id}"
+      end
+
+    case opts[:sub_id] do
       nil -> base
-      thread_id -> "#{base}:thread:#{thread_id}"
+      sub_id -> "#{base}:sub:#{sub_id}"
     end
   end
 
@@ -87,38 +97,29 @@ defmodule LemonCore.SessionKey do
           account_id: nil,
           peer_kind: nil,
           peer_id: nil,
-          thread_id: nil
+          thread_id: nil,
+          sub_id: nil
         }
 
-      ["agent", agent_id, channel_id, account_id, peer_kind, peer_id] ->
+      ["agent", agent_id, channel_id, account_id, peer_kind, peer_id | rest] ->
         case safe_peer_kind(peer_kind) do
           {:ok, atom_kind} ->
-            %{
-              agent_id: agent_id,
-              kind: :channel_peer,
-              channel_id: channel_id,
-              account_id: account_id,
-              peer_kind: atom_kind,
-              peer_id: peer_id,
-              thread_id: nil
-            }
+            case parse_extras(rest) do
+              {:ok, extras} ->
+                %{
+                  agent_id: agent_id,
+                  kind: :channel_peer,
+                  channel_id: channel_id,
+                  account_id: account_id,
+                  peer_kind: atom_kind,
+                  peer_id: peer_id,
+                  thread_id: Map.get(extras, "thread"),
+                  sub_id: Map.get(extras, "sub")
+                }
 
-          :error ->
-            {:error, :invalid_peer_kind}
-        end
-
-      ["agent", agent_id, channel_id, account_id, peer_kind, peer_id, "thread", thread_id] ->
-        case safe_peer_kind(peer_kind) do
-          {:ok, atom_kind} ->
-            %{
-              agent_id: agent_id,
-              kind: :channel_peer,
-              channel_id: channel_id,
-              account_id: account_id,
-              peer_kind: atom_kind,
-              peer_id: peer_id,
-              thread_id: thread_id
-            }
+              {:error, :invalid} ->
+                {:error, :invalid}
+            end
 
           :error ->
             {:error, :invalid_peer_kind}
@@ -126,10 +127,10 @@ defmodule LemonCore.SessionKey do
 
       # Legacy format support (Telegram)
       ["channel", "telegram", transport, chat_id | rest] ->
-        thread_id =
-          case rest do
-            ["thread", tid] -> tid
-            _ -> nil
+        {thread_id, sub_id} =
+          case parse_extras(rest) do
+            {:ok, extras} -> {Map.get(extras, "thread"), Map.get(extras, "sub")}
+            _ -> {nil, nil}
           end
 
         %{
@@ -139,7 +140,8 @@ defmodule LemonCore.SessionKey do
           account_id: transport,
           peer_kind: :dm,
           peer_id: chat_id,
-          thread_id: thread_id
+          thread_id: thread_id,
+          sub_id: sub_id
         }
 
       _ ->
@@ -193,5 +195,39 @@ defmodule LemonCore.SessionKey do
       atom -> {:ok, atom}
     end
   end
-end
 
+  # Parse key/value extras after the peer_id.
+  #
+  # Current supported keys:
+  # - thread:<thread_id>
+  # - sub:<sub_id>
+  #
+  # Unknown keys are ignored (forward compatibility).
+  defp parse_extras([]), do: {:ok, %{}}
+  defp parse_extras(nil), do: {:ok, %{}}
+
+  defp parse_extras(rest) when is_list(rest) do
+    if rem(length(rest), 2) != 0 do
+      {:error, :invalid}
+    else
+      extras =
+        rest
+        |> Enum.chunk_every(2)
+        |> Enum.reduce(%{}, fn
+          [k, v], acc when is_binary(k) and is_binary(v) ->
+            if k in ["thread", "sub"] do
+              Map.put(acc, k, v)
+            else
+              acc
+            end
+
+          _other, acc ->
+            acc
+        end)
+
+      {:ok, extras}
+    end
+  end
+
+  defp parse_extras(_), do: {:error, :invalid}
+end

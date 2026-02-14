@@ -70,6 +70,7 @@ drop = "oldest"
 bot_token = "your-telegram-bot-token"
 allowed_chat_ids = [123456789, -100123456789]
 deny_unbound_chats = true
+startup_message = true
 poll_interval_ms = 1000
 edit_throttle_ms = 1000
 
@@ -112,6 +113,7 @@ cli_path = "/usr/local/bin/claude"
 | `bot_token` | required | Telegram Bot API token |
 | `allowed_chat_ids` | `nil` | List of allowed chat IDs, `nil` allows all |
 | `deny_unbound_chats` | `false` | If true, ignore messages from chats/topics with no matching binding |
+| `startup_message` | `nil` | If set to a string (or `true`), send a startup message to bound chats on boot |
 | `poll_interval_ms` | `1000` | Polling interval for updates |
 | `edit_throttle_ms` | `1000` | Edit throttle window for Telegram updates |
 

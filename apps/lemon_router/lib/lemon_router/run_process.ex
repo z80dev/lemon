@@ -20,6 +20,8 @@ defmodule LemonRouter.RunProcess do
   @default_max_download_bytes 50 * 1024 * 1024
   @gateway_submit_retry_base_ms 100
   @gateway_submit_retry_max_ms 2_000
+  @session_register_retry_ms 25
+  @session_register_retry_max_ms 250
 
   def start_link(opts) do
     run_id = opts[:run_id]
@@ -84,10 +86,15 @@ defmodule LemonRouter.RunProcess do
       completed: false,
       saw_delta: false,
       session_registered?: false,
+      pending_run_started_event: nil,
+      session_register_retry_ref: nil,
+      session_register_retry_attempt: 0,
       submit_to_gateway?: submit_to_gateway?,
       gateway_scheduler: gateway_scheduler,
       gateway_submit_attempt: 0,
       gateway_submitted?: false,
+      gateway_run_pid: nil,
+      gateway_run_ref: nil,
       generated_image_paths: [],
       requested_send_files: []
     }
@@ -138,25 +145,43 @@ defmodule LemonRouter.RunProcess do
            }) do
         {:ok, _pid} ->
           Bus.broadcast(Bus.session_topic(state.session_key), event)
-          {:noreply, %{state | session_registered?: true}}
+          state = %{state | session_registered?: true} |> maybe_monitor_gateway_run()
+          {:noreply, state}
 
         {:error, {:already_registered, _pid}} ->
-          Logger.warning(
+          # We expect the gateway to serialize runs per session_key. This can still happen
+          # briefly when the previous RunProcess is finalizing output and hasn't torn down
+          # yet. Do NOT cancel the run (that drops a user message); instead, retry
+          # registration until the old entry is released.
+          {active_pid, active_run_id} = lookup_active_session(state.session_key)
+
+          Logger.debug(
             "SessionRegistry already has an active run for session_key=#{inspect(state.session_key)}; " <>
-              "run_id=#{inspect(state.run_id)} violates strict single-flight; cancelling this run"
+              "active_run_id=#{inspect(active_run_id)} active_pid=#{inspect(active_pid)}; " <>
+              "deferring registration for run_id=#{inspect(state.run_id)}"
           )
 
-          # Don't forward events into the session topic for a non-active run; otherwise
-          # clients see interleaved streams for a single session_key.
-          LemonGateway.Runtime.cancel_by_run_id(state.run_id, :single_flight_violation)
+          state =
+            state
+            |> maybe_monitor_gateway_run()
+            |> put_pending_run_started(event)
+            |> schedule_session_register_retry()
 
-          {:stop, :normal, state}
+          {:noreply, state}
       end
     end
   end
 
   def handle_info(%LemonCore.Event{type: :run_completed} = event, state) do
     Logger.debug("RunProcess #{state.run_id} completed")
+
+    # Free the session key ASAP so the next queued run can become active without
+    # tripping the SessionRegistry single-flight guard.
+    _ = Registry.unregister(LemonRouter.SessionRegistry, state.session_key)
+
+    # If we were monitoring the gateway run process, stop monitoring it before we exit so
+    # we don't race a :DOWN message and emit a synthetic completion.
+    state = maybe_demonitor_gateway_run(state)
 
     # Emit router-level completion event
     Bus.broadcast(Bus.session_topic(state.session_key), event)
@@ -172,7 +197,8 @@ defmodule LemonRouter.RunProcess do
       flush_tool_status(state)
     end
 
-    # Telegram: StreamCoalescer finalizes by sending a final response as a new message.
+    # Telegram: StreamCoalescer finalizes by sending/editing a dedicated answer message; the
+    # progress message is reserved for tool-call status + cancel UI and is never overwritten.
     maybe_finalize_stream_output(state, event)
 
     # If no streaming deltas were emitted, emit a final output chunk so channels respond.
@@ -216,6 +242,84 @@ defmodule LemonRouter.RunProcess do
     # Forward other events to session subscribers
     Bus.broadcast(Bus.session_topic(state.session_key), event)
     {:noreply, state}
+  end
+
+  def handle_info(:retry_session_register, state) do
+    # Timer fired.
+    state = %{state | session_register_retry_ref: nil}
+
+    cond do
+      state.session_registered? or state.aborted or state.completed ->
+        {:noreply, state}
+
+      true ->
+        case Registry.register(LemonRouter.SessionRegistry, state.session_key, %{
+               run_id: state.run_id
+             }) do
+          {:ok, _pid} ->
+            if %LemonCore.Event{} = ev = state.pending_run_started_event do
+              Bus.broadcast(Bus.session_topic(state.session_key), ev)
+            end
+
+            state =
+              state
+              |> Map.put(:session_registered?, true)
+              |> Map.put(:pending_run_started_event, nil)
+              |> Map.put(:session_register_retry_attempt, 0)
+              |> maybe_monitor_gateway_run()
+
+            {:noreply, state}
+
+          {:error, {:already_registered, _pid}} ->
+            {:noreply, schedule_session_register_retry(state)}
+
+          _ ->
+            {:noreply, schedule_session_register_retry(state)}
+        end
+    end
+  rescue
+    _ -> {:noreply, state}
+  end
+
+  # If the gateway run process dies without emitting a completion event, synthesize a failure
+  # completion so the session can make progress (and SessionRegistry is eventually cleared).
+  def handle_info(
+        {:DOWN, ref, :process, pid, reason},
+        %{gateway_run_ref: ref, gateway_run_pid: pid} = state
+      ) do
+    # Normal completions should be handled by :run_completed; give the bus a small grace window.
+    delay_ms = gateway_down_grace_ms(reason)
+    Process.send_after(self(), {:gateway_run_down, reason}, delay_ms)
+    {:noreply, %{state | gateway_run_ref: nil, gateway_run_pid: nil}}
+  end
+
+  def handle_info({:gateway_run_down, reason}, state) do
+    if state.completed do
+      {:noreply, state}
+    else
+      event =
+        LemonCore.Event.new(
+          :run_completed,
+          %{
+            completed: %{
+              ok: false,
+              error: {:gateway_run_down, reason},
+              answer: ""
+            },
+            duration_ms: nil
+          },
+          %{
+            run_id: state.run_id,
+            session_key: state.session_key,
+            synthetic: true
+          }
+        )
+
+      Bus.broadcast(Bus.run_topic(state.run_id), event)
+      {:noreply, state}
+    end
+  rescue
+    _ -> {:noreply, state}
   end
 
   def handle_info(_msg, state) do
@@ -266,6 +370,71 @@ defmodule LemonRouter.RunProcess do
     unsubscribe_event_bridge(state.run_id)
 
     :ok
+  end
+
+  defp maybe_monitor_gateway_run(%{gateway_run_ref: ref} = state) when not is_nil(ref), do: state
+
+  defp maybe_monitor_gateway_run(state) do
+    with true <- Code.ensure_loaded?(Registry),
+         true <- Code.ensure_loaded?(LemonGateway.RunRegistry),
+         [{pid, _}] when is_pid(pid) <- Registry.lookup(LemonGateway.RunRegistry, state.run_id) do
+      %{state | gateway_run_pid: pid, gateway_run_ref: Process.monitor(pid)}
+    else
+      _ -> state
+    end
+  rescue
+    _ -> state
+  end
+
+  defp maybe_demonitor_gateway_run(%{gateway_run_ref: nil} = state), do: state
+
+  defp maybe_demonitor_gateway_run(%{gateway_run_ref: ref} = state) do
+    Process.demonitor(ref, [:flush])
+    %{state | gateway_run_ref: nil, gateway_run_pid: nil}
+  rescue
+    _ -> %{state | gateway_run_ref: nil, gateway_run_pid: nil}
+  end
+
+  defp gateway_down_grace_ms(:normal), do: 200
+  defp gateway_down_grace_ms(:shutdown), do: 200
+  defp gateway_down_grace_ms({:shutdown, _}), do: 200
+  defp gateway_down_grace_ms(_), do: 20
+
+  defp lookup_active_session(session_key) do
+    case Registry.lookup(LemonRouter.SessionRegistry, session_key) do
+      [{pid, %{run_id: run_id}}] when is_pid(pid) and is_binary(run_id) ->
+        {pid, run_id}
+
+      [{pid, value}] when is_pid(pid) and is_map(value) ->
+        run_id = value[:run_id] || value["run_id"]
+        {pid, run_id}
+
+      [{pid, _value}] when is_pid(pid) ->
+        {pid, nil}
+
+      _ ->
+        {nil, nil}
+    end
+  end
+
+  defp put_pending_run_started(%{pending_run_started_event: %LemonCore.Event{}} = state, _ev),
+    do: state
+
+  defp put_pending_run_started(state, %LemonCore.Event{} = ev),
+    do: %{state | pending_run_started_event: ev}
+
+  defp put_pending_run_started(state, _), do: state
+
+  defp schedule_session_register_retry(%{session_register_retry_ref: ref} = state)
+       when not is_nil(ref) do
+    state
+  end
+
+  defp schedule_session_register_retry(state) do
+    attempt = (state.session_register_retry_attempt || 0) + 1
+    delay_ms = min(@session_register_retry_ms * attempt, @session_register_retry_max_ms)
+    ref = Process.send_after(self(), :retry_session_register, delay_ms)
+    %{state | session_register_retry_ref: ref, session_register_retry_attempt: attempt}
   end
 
   # Ingest delta into StreamCoalescer for channel delivery
@@ -342,6 +511,11 @@ defmodule LemonRouter.RunProcess do
 
   defp extract_completed_answer(%LemonCore.Event{payload: %{completed: %{answer: answer}}}),
     do: answer
+
+  defp extract_completed_answer(%LemonCore.Event{
+         payload: %LemonGateway.Event.Completed{answer: answer}
+       }),
+       do: answer
 
   defp extract_completed_answer(%LemonCore.Event{payload: %{answer: answer}}), do: answer
   defp extract_completed_answer(_), do: nil
@@ -448,11 +622,14 @@ defmodule LemonRouter.RunProcess do
           _ -> false
         end
 
+      meta = extract_coalescer_meta(state.job)
+
       LemonRouter.ToolStatusCoalescer.finalize_run(
         state.session_key,
         channel_id,
         state.run_id,
-        ok?
+        ok?,
+        meta: meta
       )
     end
 

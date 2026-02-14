@@ -40,6 +40,8 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     chat_id = String.to_integer(payload.peer.id)
     msg_id = parse_message_id(message_id)
     {formatted_text, md_opts} = format_text(text, telegram_use_markdown())
+    reply_markup = extract_reply_markup(payload.meta)
+    md_opts = maybe_merge_reply_markup(md_opts, reply_markup)
     {token, api_mod} = telegram_config()
 
     if Code.ensure_loaded?(api_mod) do
@@ -113,10 +115,13 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   end
 
   defp build_send_opts(payload, md_opts) do
+    reply_markup = extract_reply_markup(payload.meta)
+
     opts =
       %{}
       |> maybe_put(:reply_to_message_id, parse_optional_message_id(payload.reply_to))
       |> maybe_put(:message_thread_id, parse_optional_thread_id(payload.peer.thread_id))
+      |> maybe_put(:reply_markup, reply_markup)
 
     case md_opts do
       nil -> opts
@@ -124,6 +129,28 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
       _ -> opts
     end
   end
+
+  defp maybe_merge_reply_markup(nil, nil), do: nil
+
+  defp maybe_merge_reply_markup(md_opts, nil), do: md_opts
+
+  defp maybe_merge_reply_markup(nil, reply_markup) when is_map(reply_markup) do
+    %{:reply_markup => reply_markup}
+  end
+
+  defp maybe_merge_reply_markup(md_opts, reply_markup) when is_map(md_opts) and is_map(reply_markup) do
+    Map.put(md_opts, :reply_markup, reply_markup)
+  end
+
+  defp maybe_merge_reply_markup(md_opts, _reply_markup), do: md_opts
+
+  defp extract_reply_markup(meta) when is_map(meta) do
+    meta[:reply_markup] || meta["reply_markup"]
+  rescue
+    _ -> nil
+  end
+
+  defp extract_reply_markup(_), do: nil
 
   defp parse_message_id(id) when is_binary(id), do: String.to_integer(id)
   defp parse_message_id(id) when is_integer(id), do: id

@@ -176,6 +176,74 @@ defmodule LemonRouter.RunProcessTest do
 
       GenServer.stop(pid)
     end
+
+    test "single-flight contention does not cancel the new run; it retries registration until released" do
+      run_id1 = "run_#{System.unique_integer()}"
+      run_id2 = "run_#{System.unique_integer()}"
+      session_key = SessionKey.main("test-agent")
+
+      job1 = make_test_job(run_id1)
+      job2 = make_test_job(run_id2)
+
+      assert {:ok, pid1} =
+               RunProcess.start_link(%{
+                 run_id: run_id1,
+                 session_key: session_key,
+                 job: job1,
+                 submit_to_gateway?: false
+               })
+
+      ev1 =
+        LemonCore.Event.new(
+          :run_started,
+          %{run_id: run_id1, session_key: session_key, engine: "echo"},
+          %{run_id: run_id1, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id1), ev1)
+
+      assert eventually(fn ->
+               case Registry.lookup(LemonRouter.SessionRegistry, session_key) do
+                 [{_pid, %{run_id: ^run_id1}}] -> true
+                 _ -> false
+               end
+             end)
+
+      assert {:ok, pid2} =
+               RunProcess.start_link(%{
+                 run_id: run_id2,
+                 session_key: session_key,
+                 job: job2,
+                 submit_to_gateway?: false
+               })
+
+      ev2 =
+        LemonCore.Event.new(
+          :run_started,
+          %{run_id: run_id2, session_key: session_key, engine: "echo"},
+          %{run_id: run_id2, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id2), ev2)
+
+      # pid2 stays alive (the run is not cancelled).
+      assert eventually(fn -> Process.alive?(pid2) end)
+
+      # Still held by pid1 until it stops/unregisters.
+      assert [{_pid, %{run_id: ^run_id1}}] =
+               Registry.lookup(LemonRouter.SessionRegistry, session_key)
+
+      GenServer.stop(pid1)
+
+      assert eventually(fn ->
+               case Registry.lookup(LemonRouter.SessionRegistry, session_key) do
+                 [{_pid, %{run_id: ^run_id2}}] -> true
+                 _ -> false
+               end
+             end)
+
+      GenServer.stop(pid2)
+    end
   end
 
   defp eventually(fun, timeout_ms \\ 500) when is_function(fun, 0) do
@@ -325,9 +393,9 @@ defmodule LemonRouter.RunProcessTest do
       # RunProcess stops after completion; give it a moment to tear down.
       assert eventually(fn -> not Process.alive?(pid) end)
 
-      assert_receive {:outbox_api_call, {:delete, 12_345, 111}}, 1_000
-      assert_receive {:outbox_api_call, {:send, 12_345, text, _opts, nil}}, 1_000
-      assert String.contains?(text, "Final answer")
+      assert_receive {:outbox_api_call,
+                      {:send, 12_345, "Final answer", %{reply_to_message_id: 222}, nil}},
+                     1_000
 
       assert eventually(fn ->
                case LemonCore.Store.get(:telegram_msg_resume, store_key) do
@@ -335,6 +403,8 @@ defmodule LemonRouter.RunProcessTest do
                  _ -> false
                end
              end)
+
+      refute_receive {:outbox_api_call, {:delete, 12_345, _}}, 200
     end
   end
 

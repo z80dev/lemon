@@ -166,7 +166,80 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
            end)
   end
 
-  test "telegram status uses LemonGateway.Telegram.Outbox (create then edit), preserving thread_id" do
+  test "telegram tool status edits the progress message when progress_msg_id is present" do
+    {:ok, _} = start_supervised({TestOutboxAPI, [notify_pid: self()]})
+
+    {:ok, _} =
+      start_supervised(
+        {LemonGateway.Telegram.Outbox,
+         [bot_token: "token", api_mod: TestOutboxAPI, edit_throttle_ms: 0, use_markdown: false]}
+      )
+
+    session_key = "agent:tool-status:telegram:bot:group:12345:thread:777"
+    channel_id = "telegram"
+    run_id = "run_#{System.unique_integer([:positive])}"
+    progress_msg_id = 9001
+
+    started = %{
+      engine: "lemon",
+      action: %{id: "a1", kind: "tool", title: "Read: foo.txt", detail: %{}},
+      phase: :started,
+      ok: nil,
+      message: nil,
+      level: nil
+    }
+
+    assert :ok =
+             ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, started,
+               meta: %{user_msg_id: 9, progress_msg_id: progress_msg_id}
+             )
+
+    assert :ok = ToolStatusCoalescer.flush(session_key, channel_id)
+
+    assert_receive {:outbox_api_call, {:edit, 12_345, ^progress_msg_id, text, _opts}}, 500
+    assert String.contains?(text, "Running")
+    assert String.contains?(text, "Tool calls:")
+    assert String.contains?(text, "Read: foo.txt")
+
+    refute_receive {:outbox_api_call, {:send, 12_345, _text, _opts, nil}}, 200
+
+    completed = %{started | phase: :completed, ok: true}
+    assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, completed)
+    assert :ok = ToolStatusCoalescer.flush(session_key, channel_id)
+
+    assert_receive {:outbox_api_call, {:edit, 12_345, ^progress_msg_id, text, _opts}}, 500
+    refute String.starts_with?(text, "Running")
+    assert String.contains?(text, "Tool calls:")
+  end
+
+  test "finalize_run edits progress message to Done even when there were no tool actions" do
+    {:ok, _} = start_supervised({TestOutboxAPI, [notify_pid: self()]})
+
+    {:ok, _} =
+      start_supervised(
+        {LemonGateway.Telegram.Outbox,
+         [bot_token: "token", api_mod: TestOutboxAPI, edit_throttle_ms: 0, use_markdown: false]}
+      )
+
+    session_key = "agent:tool-status:telegram:bot:group:12345:thread:777"
+    channel_id = "telegram"
+    run_id = "run_#{System.unique_integer([:positive])}"
+    progress_msg_id = 9002
+
+    assert :ok =
+             ToolStatusCoalescer.finalize_run(session_key, channel_id, run_id, true,
+               meta: %{user_msg_id: 9, progress_msg_id: progress_msg_id}
+             )
+
+    assert_receive {:outbox_api_call,
+                    {:edit, 12_345, ^progress_msg_id, "Done",
+                     %{reply_markup: %{"inline_keyboard" => []}}}},
+                   500
+
+    refute_receive {:outbox_api_call, {:send, 12_345, _text, _opts, nil}}, 200
+  end
+
+  test "telegram tool status falls back to a dedicated status message when progress_msg_id is nil" do
     {:ok, _} = start_supervised({TestOutboxAPI, [notify_pid: self()]})
 
     {:ok, _} =
@@ -218,12 +291,23 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
     assert is_map(opts)
     assert opts[:message_thread_id] == 777
     assert opts[:reply_to_message_id] == 9
+    reply_markup = opts[:reply_markup] || opts["reply_markup"]
+    assert is_map(reply_markup)
+    assert reply_markup["inline_keyboard"] == [
+             [
+               %{
+                 "text" => "cancel",
+                 "callback_data" => "lemon:cancel:#{run_id}"
+               }
+             ]
+           ]
 
-    completed = %{started | phase: :completed, ok: true}
-    assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, completed)
-    assert :ok = ToolStatusCoalescer.flush(session_key, channel_id)
+    assert :ok = ToolStatusCoalescer.finalize_run(session_key, channel_id, run_id, true)
 
-    assert_receive {:outbox_api_call, {:edit, 12_345, 1001, _text, nil}}, 500
+    assert_receive {:outbox_api_call,
+                    {:edit, 12_345, 1001, _text,
+                     %{reply_markup: %{"inline_keyboard" => []}}}},
+                   500
   end
 
   defp eventually(fun, timeout_ms \\ 500) when is_function(fun, 0) do

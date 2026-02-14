@@ -513,7 +513,7 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
              )
   end
 
-  test "engine failure produces run failed message (delete progress + send final)" do
+  test "engine failure produces run failed message (keep progress message; clear cancel UI)" do
     start_system!(%{default_engine: "fail"})
 
     chat_id = 55_555
@@ -528,7 +528,7 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
                  calls = MockTelegramAPI.calls()
 
                  Enum.any?(calls, fn
-                   {:delete_message, ^chat_id, _} -> true
+                   {:edit_message, ^chat_id, _msg_id, "Done"} -> true
                    _ -> false
                  end) and
                    Enum.any?(calls, fn
@@ -543,7 +543,7 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
              )
   end
 
-  test "reply /cancel cancels the run and deletes the Running… message" do
+  test "reply /cancel cancels the run and clears the Running… message UI (no delete)" do
     start_system!(%{default_engine: "slow_reply"})
 
     chat_id = 66_666
@@ -574,7 +574,7 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
                  calls = MockTelegramAPI.calls()
 
                  Enum.any?(calls, fn
-                   {:delete_message, ^chat_id, ^running_msg_id} -> true
+                   {:edit_message, ^chat_id, ^running_msg_id, "Done"} -> true
                    _ -> false
                  end) and
                    Enum.any?(calls, fn

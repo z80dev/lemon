@@ -9,6 +9,7 @@ defmodule LemonGateway.Application do
   def start(_type, _args) do
     children = [
       LemonGateway.Config,
+      LemonGateway.Telegram.StartupNotifier,
       LemonGateway.EngineRegistry,
       LemonGateway.TransportRegistry,
       LemonGateway.CommandRegistry,

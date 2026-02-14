@@ -26,6 +26,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   @default_poll_interval 1_000
   @default_dedupe_ttl 600_000
   @default_debounce_ms 1_000
+  @cancel_callback_prefix "lemon:cancel"
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -498,6 +499,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             state
 
           true ->
+            inbound = maybe_mark_fork_when_busy(state, inbound)
             {state, inbound} = maybe_switch_session_from_reply(state, inbound)
             inbound = maybe_apply_selected_resume(state, inbound, original_text)
 
@@ -589,7 +591,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         nil
       end
 
-    meta =
+    scope =
+      if is_integer(chat_id) do
+        %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
+      else
+        nil
+      end
+
+    meta0 =
       (inbound.meta || %{})
       |> Map.put(:progress_msg_id, progress_msg_id)
       |> Map.put(:user_msg_id, user_msg_id)
@@ -597,16 +606,39 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       |> Map.put(:status_msg_id, nil)
       |> Map.put(:topic_id, thread_id)
 
+    {session_key, forked?} = resolve_session_key(state, inbound, scope, meta0)
+
+    meta =
+      meta0
+      |> Map.put(:session_key, session_key)
+      |> Map.put(:forked_session, forked?)
+
+    # Allow reply-to routing into the correct session even while a run is in-flight.
+    _ =
+      maybe_index_telegram_msg_session(state, scope, session_key, [progress_msg_id, user_msg_id])
+
     inbound = %{inbound | meta: meta}
     route_to_router(inbound)
     state
   end
 
   defp send_progress(state, chat_id, thread_id, reply_to_message_id) do
+    cancel_markup = %{
+      "inline_keyboard" => [
+        [
+          %{
+            "text" => "cancel",
+            "callback_data" => @cancel_callback_prefix
+          }
+        ]
+      ]
+    }
+
     opts =
       %{}
       |> maybe_put("reply_to_message_id", reply_to_message_id)
       |> maybe_put("message_thread_id", thread_id)
+      |> maybe_put("reply_markup", cancel_markup)
 
     case state.api_mod.send_message(state.token, chat_id, "Running…", opts, nil) do
       {:ok, %{"ok" => true, "result" => %{"message_id" => msg_id}}} -> msg_id
@@ -2305,37 +2337,206 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp normalize_msg_id(_), do: nil
 
   defp maybe_apply_selected_resume(state, inbound, original_text) do
-    # Don't interfere with Telegram slash commands; those can be engine directives etc.
-    if command_message?(original_text) do
-      inbound
-    else
+    meta = inbound.meta || %{}
+
+    cond do
+      # Don't interfere with Telegram slash commands; those can be engine directives etc.
+      command_message?(original_text) ->
+        inbound
+
+      # Forked sessions are meant to run independently; avoid implicitly resuming
+      # the currently-selected session when we auto-fork due to the base session
+      # being busy.
+      meta[:fork_when_busy] == true or meta["fork_when_busy"] == true ->
+        inbound
+
       # If user already provided an explicit resume token, don't add another.
-      case EngineRegistry.extract_resume(inbound.message.text || "") do
-        {:ok, %ResumeToken{}} ->
-          inbound
+      match?({:ok, %ResumeToken{}}, EngineRegistry.extract_resume(inbound.message.text || "")) ->
+        inbound
 
-        _ ->
-          chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
-          thread_id = parse_int(inbound.peer.thread_id)
+      true ->
+        chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
+        thread_id = parse_int(inbound.peer.thread_id)
 
-          if is_integer(chat_id) do
-            key = {state.account_id || "default", chat_id, thread_id}
+        if is_integer(chat_id) do
+          key = {state.account_id || "default", chat_id, thread_id}
 
-            case CoreStore.get(:telegram_selected_resume, key) do
-              %ResumeToken{} = token ->
-                maybe_prefix_resume_to_prompt(inbound, token)
-
-              _ ->
-                inbound
-            end
-          else
-            inbound
+          case CoreStore.get(:telegram_selected_resume, key) do
+            %ResumeToken{} = token -> maybe_prefix_resume_to_prompt(inbound, token)
+            _ -> inbound
           end
-      end
+        else
+          inbound
+        end
     end
   rescue
     _ -> inbound
   end
+
+  # Mark an inbound as eligible for a new parallel session when the base session is busy.
+  #
+  # This is applied before buffering so we can avoid prefixing resume tokens to
+  # auto-forked sessions.
+  defp maybe_mark_fork_when_busy(state, inbound) do
+    reply_to_id = normalize_msg_id(inbound.message.reply_to_id || inbound.meta[:reply_to_id])
+
+    cond do
+      is_integer(reply_to_id) ->
+        inbound
+
+      true ->
+        chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
+        thread_id = parse_int(inbound.peer.thread_id)
+
+        if is_integer(chat_id) do
+          scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
+          base_session_key = build_session_key(state, inbound, scope)
+
+          if is_binary(base_session_key) and session_busy?(base_session_key) do
+            meta = Map.put(inbound.meta || %{}, :fork_when_busy, true)
+            %{inbound | meta: meta}
+          else
+            inbound
+          end
+        else
+          inbound
+        end
+    end
+  rescue
+    _ -> inbound
+  end
+
+  defp session_busy?(session_key) when is_binary(session_key) and session_key != "" do
+    thread_key = {:session, session_key}
+
+    case LemonGateway.ThreadRegistry.whereis(thread_key) do
+      pid when is_pid(pid) ->
+        st = :sys.get_state(pid)
+        current_run = Map.get(st, :current_run) || Map.get(st, "current_run")
+        jobs = Map.get(st, :jobs) || Map.get(st, "jobs")
+        slot_pending = Map.get(st, :slot_pending) || Map.get(st, "slot_pending")
+
+        queued? =
+          cond do
+            is_tuple(jobs) and tuple_size(jobs) == 2 ->
+              :queue.len(jobs) > 0
+
+            true ->
+              false
+          end
+
+        is_pid(current_run) or slot_pending == true or queued?
+
+      _ ->
+        false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp session_busy?(_), do: false
+
+  defp resolve_session_key(state, inbound, %ChatScope{} = scope, meta0) do
+    meta = meta0 || %{}
+
+    explicit =
+      cond do
+        is_binary(meta[:session_key]) and meta[:session_key] != "" -> meta[:session_key]
+        is_binary(meta["session_key"]) and meta["session_key"] != "" -> meta["session_key"]
+        true -> nil
+      end
+
+    base_session_key = build_session_key(state, inbound, scope)
+
+    reply_to_id =
+      normalize_msg_id(inbound.message.reply_to_id || meta[:reply_to_id] || meta["reply_to_id"])
+
+    session_key =
+      cond do
+        is_binary(explicit) and explicit != "" ->
+          explicit
+
+        is_integer(reply_to_id) ->
+          lookup_session_key_for_reply(state, scope, reply_to_id) || base_session_key
+
+        (meta[:fork_when_busy] == true or meta["fork_when_busy"] == true) and
+            is_integer(meta[:user_msg_id] || meta["user_msg_id"]) ->
+          fork_id = meta[:user_msg_id] || meta["user_msg_id"]
+          maybe_with_sub_id(base_session_key, fork_id)
+
+        true ->
+          base_session_key
+      end
+
+    forked? = is_binary(session_key) and session_key != base_session_key
+
+    {session_key, forked?}
+  rescue
+    _ ->
+      base_session_key = build_session_key(state, inbound, scope)
+      {base_session_key, false}
+  end
+
+  defp resolve_session_key(_state, _inbound, _scope, meta0) do
+    meta = meta0 || %{}
+
+    explicit =
+      cond do
+        is_binary(meta[:session_key]) and meta[:session_key] != "" -> meta[:session_key]
+        is_binary(meta["session_key"]) and meta["session_key"] != "" -> meta["session_key"]
+        true -> nil
+      end
+
+    {explicit, false}
+  end
+
+  defp maybe_with_sub_id(session_key, sub_id)
+       when is_binary(session_key) and session_key != "" and
+              (is_binary(sub_id) or is_integer(sub_id)) do
+    if String.contains?(session_key, ":sub:") do
+      session_key
+    else
+      session_key <> ":sub:" <> to_string(sub_id)
+    end
+  rescue
+    _ -> session_key
+  end
+
+  defp maybe_with_sub_id(session_key, _sub_id), do: session_key
+
+  defp lookup_session_key_for_reply(state, %ChatScope{} = scope, reply_to_id)
+       when is_integer(reply_to_id) do
+    key = {state.account_id || "default", scope.chat_id, scope.topic_id, reply_to_id}
+
+    case CoreStore.get(:telegram_msg_session, key) do
+      sk when is_binary(sk) and sk != "" -> sk
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp lookup_session_key_for_reply(_state, _scope, _reply_to_id), do: nil
+
+  defp maybe_index_telegram_msg_session(state, %ChatScope{} = scope, session_key, msg_ids)
+       when is_list(msg_ids) and is_binary(session_key) and session_key != "" do
+    account_id = state.account_id || "default"
+
+    msg_ids
+    |> Enum.map(&normalize_msg_id/1)
+    |> Enum.filter(&is_integer/1)
+    |> Enum.uniq()
+    |> Enum.each(fn msg_id ->
+      key = {account_id, scope.chat_id, scope.topic_id, msg_id}
+      _ = CoreStore.put(:telegram_msg_session, key, session_key)
+    end)
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp maybe_index_telegram_msg_session(_state, _scope, _session_key, _msg_ids), do: :ok
 
   defp send_system_message(state, chat_id, thread_id, reply_to_message_id, text)
        when is_integer(chat_id) and is_binary(text) do
@@ -2971,32 +3172,64 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     cb_id = cb["id"]
     data = cb["data"] || ""
 
-    {approval_id, decision} = parse_approval_callback(data)
+    cond do
+      data == @cancel_callback_prefix ->
+        msg = cb["message"] || %{}
+        chat_id = get_in(msg, ["chat", "id"])
+        topic_id = parse_int(msg["message_thread_id"])
+        message_id = msg["message_id"]
 
-    if is_binary(approval_id) and decision do
-      _ = LemonCore.ExecApprovals.resolve(approval_id, decision)
+        if is_integer(chat_id) and is_integer(message_id) do
+          scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: topic_id}
 
-      _ = state.api_mod.answer_callback_query(state.token, cb_id, %{"text" => "Recorded"})
+          if Code.ensure_loaded?(LemonGateway.Runtime) and
+               function_exported?(LemonGateway.Runtime, :cancel_by_progress_msg, 2) do
+            LemonGateway.Runtime.cancel_by_progress_msg(scope, message_id)
+          end
+        end
 
-      msg = cb["message"] || %{}
-      chat_id = get_in(msg, ["chat", "id"])
-      message_id = msg["message_id"]
+        _ = state.api_mod.answer_callback_query(state.token, cb_id, %{"text" => "cancelling..."})
+        :ok
 
-      if is_integer(chat_id) and is_integer(message_id) do
-        _ =
-          state.api_mod.edit_message_text(
-            state.token,
-            chat_id,
-            message_id,
-            "Approval: #{decision_label(decision)}",
-            %{"reply_markup" => %{"inline_keyboard" => []}}
-          )
-      end
-    else
-      _ = state.api_mod.answer_callback_query(state.token, cb_id, %{"text" => "Unknown"})
+      String.starts_with?(data, @cancel_callback_prefix <> ":") ->
+        run_id = String.trim_leading(data, @cancel_callback_prefix <> ":")
+
+        if is_binary(run_id) and run_id != "" and Code.ensure_loaded?(LemonGateway.Runtime) and
+             function_exported?(LemonGateway.Runtime, :cancel_by_run_id, 2) do
+          LemonGateway.Runtime.cancel_by_run_id(run_id, :user_requested)
+        end
+
+        _ = state.api_mod.answer_callback_query(state.token, cb_id, %{"text" => "cancelling..."})
+        :ok
+
+      true ->
+        {approval_id, decision} = parse_approval_callback(data)
+
+        if is_binary(approval_id) and decision do
+          _ = LemonCore.ExecApprovals.resolve(approval_id, decision)
+
+          _ = state.api_mod.answer_callback_query(state.token, cb_id, %{"text" => "Recorded"})
+
+          msg = cb["message"] || %{}
+          chat_id = get_in(msg, ["chat", "id"])
+          message_id = msg["message_id"]
+
+          if is_integer(chat_id) and is_integer(message_id) do
+            _ =
+              state.api_mod.edit_message_text(
+                state.token,
+                chat_id,
+                message_id,
+                "Approval: #{decision_label(decision)}",
+                %{"reply_markup" => %{"inline_keyboard" => []}}
+              )
+          end
+        else
+          _ = state.api_mod.answer_callback_query(state.token, cb_id, %{"text" => "Unknown"})
+        end
+
+        :ok
     end
-
-    :ok
   rescue
     _ -> :ok
   end

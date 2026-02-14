@@ -242,8 +242,21 @@ defmodule LemonGateway.Telegram.Outbox do
 
   defp execute_op(state, {:edit, chat_id, message_id, %{text: text} = payload}) do
     engine = payload[:engine]
+    reply_markup = payload[:reply_markup] || payload["reply_markup"]
     truncated_text = truncate_text(text, engine)
     {formatted_text, opts} = format_text(truncated_text, state.use_markdown)
+
+    opts =
+      cond do
+        is_map(opts) ->
+          maybe_put_opt(opts, :reply_markup, reply_markup)
+
+        is_nil(opts) and not is_nil(reply_markup) ->
+          maybe_put_opt(%{}, :reply_markup, reply_markup)
+
+        true ->
+          opts
+      end
 
     state
     |> safe_api_call(fn ->
@@ -261,6 +274,7 @@ defmodule LemonGateway.Telegram.Outbox do
   defp execute_op(state, {:send, chat_id, payload}) do
     text = payload[:text] || payload["text"] || ""
     engine = payload[:engine]
+    reply_markup = payload[:reply_markup] || payload["reply_markup"]
     reply_to = payload[:reply_to_message_id] || payload["reply_to_message_id"]
     thread_id = payload[:message_thread_id] || payload["message_thread_id"]
     truncated_text = truncate_text(text, engine)
@@ -275,6 +289,7 @@ defmodule LemonGateway.Telegram.Outbox do
           opts
           |> maybe_put_opt(:reply_to_message_id, reply_to)
           |> maybe_put_opt(:message_thread_id, thread_id)
+          |> maybe_put_opt(:reply_markup, reply_markup)
 
         state.api_mod.send_message(state.token, chat_id, formatted_text, opts, nil)
       else
@@ -283,6 +298,7 @@ defmodule LemonGateway.Telegram.Outbox do
           %{}
           |> maybe_put_opt(:reply_to_message_id, reply_to)
           |> maybe_put_opt(:message_thread_id, thread_id)
+          |> maybe_put_opt(:reply_markup, reply_markup)
 
         state.api_mod.send_message(state.token, chat_id, formatted_text, opts, nil)
       end

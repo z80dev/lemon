@@ -23,6 +23,20 @@ defmodule LemonRouter.SessionKeyTest do
       assert key == "agent:my-agent:telegram:bot123:dm:user456"
     end
 
+    test "generates channel peer key with sub_id" do
+      key =
+        SessionKey.channel_peer(%{
+          agent_id: "my-agent",
+          channel_id: "telegram",
+          account_id: "bot123",
+          peer_kind: :dm,
+          peer_id: "user456",
+          sub_id: "msg123"
+        })
+
+      assert key == "agent:my-agent:telegram:bot123:dm:user456:sub:msg123"
+    end
+
     test "generates channel peer key with thread" do
       key =
         SessionKey.channel_peer(%{
@@ -36,6 +50,21 @@ defmodule LemonRouter.SessionKeyTest do
 
       assert key == "agent:my-agent:telegram:bot123:group:chat789:thread:topic42"
     end
+
+    test "generates channel peer key with thread and sub_id" do
+      key =
+        SessionKey.channel_peer(%{
+          agent_id: "my-agent",
+          channel_id: "telegram",
+          account_id: "bot123",
+          peer_kind: :group,
+          peer_id: "chat789",
+          thread_id: "topic42",
+          sub_id: "msg123"
+        })
+
+      assert key == "agent:my-agent:telegram:bot123:group:chat789:thread:topic42:sub:msg123"
+    end
   end
 
   describe "parse/1" do
@@ -47,7 +76,8 @@ defmodule LemonRouter.SessionKeyTest do
                account_id: nil,
                peer_kind: nil,
                peer_id: nil,
-               thread_id: nil
+               thread_id: nil,
+               sub_id: nil
              } = SessionKey.parse("agent:my-agent:main")
     end
 
@@ -59,7 +89,8 @@ defmodule LemonRouter.SessionKeyTest do
                account_id: "bot123",
                peer_kind: :dm,
                peer_id: "user456",
-               thread_id: nil
+               thread_id: nil,
+               sub_id: nil
              } = SessionKey.parse("agent:my-agent:telegram:bot123:dm:user456")
     end
 
@@ -71,8 +102,25 @@ defmodule LemonRouter.SessionKeyTest do
                account_id: "bot123",
                peer_kind: :group,
                peer_id: "chat789",
-               thread_id: "topic42"
+               thread_id: "topic42",
+               sub_id: nil
              } = SessionKey.parse("agent:my-agent:telegram:bot123:group:chat789:thread:topic42")
+    end
+
+    test "parses channel peer key with thread and sub_id" do
+      assert %{
+               agent_id: "my-agent",
+               kind: :channel_peer,
+               channel_id: "telegram",
+               account_id: "bot123",
+               peer_kind: :group,
+               peer_id: "chat789",
+               thread_id: "topic42",
+               sub_id: "msg123"
+             } =
+               SessionKey.parse(
+                 "agent:my-agent:telegram:bot123:group:chat789:thread:topic42:sub:msg123"
+               )
     end
 
     test "returns error for invalid key" do
@@ -141,6 +189,7 @@ defmodule LemonRouter.SessionKeyTest do
     test "returns true for valid keys" do
       assert SessionKey.valid?("agent:foo:main")
       assert SessionKey.valid?("agent:foo:telegram:bot:dm:123")
+      assert SessionKey.valid?("agent:foo:telegram:bot:dm:123:sub:1")
     end
 
     test "returns false for invalid keys" do

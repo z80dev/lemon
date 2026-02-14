@@ -2,6 +2,7 @@ defmodule LemonRouter.RouterTest do
   use ExUnit.Case, async: false
 
   alias LemonRouter.Router
+  alias LemonCore.InboundMessage
 
   setup do
     start_if_needed(LemonRouter.RunRegistry, fn ->
@@ -56,5 +57,39 @@ defmodule LemonRouter.RouterTest do
 
   test "abort/2 is a no-op when session has no runs" do
     assert :ok = Router.abort("missing:session", :test_abort)
+  end
+
+  test "resolve_session_key/1 uses explicit meta.session_key when provided" do
+    msg = %InboundMessage{
+      channel_id: "telegram",
+      account_id: "default",
+      peer: %{kind: :dm, id: "123", thread_id: nil},
+      sender: nil,
+      message: %{id: "1", text: "hi", timestamp: nil, reply_to_id: nil},
+      raw: %{},
+      meta: %{
+        agent_id: "default",
+        session_key: "agent:default:telegram:default:dm:123:sub:999"
+      }
+    }
+
+    assert Router.resolve_session_key(msg) == "agent:default:telegram:default:dm:123:sub:999"
+  end
+
+  test "resolve_session_key/1 ignores invalid meta.session_key and falls back to computed" do
+    msg = %InboundMessage{
+      channel_id: "telegram",
+      account_id: "default",
+      peer: %{kind: :dm, id: "123", thread_id: nil},
+      sender: nil,
+      message: %{id: "1", text: "hi", timestamp: nil, reply_to_id: nil},
+      raw: %{},
+      meta: %{
+        agent_id: "default",
+        session_key: "not:a:valid:key"
+      }
+    }
+
+    assert Router.resolve_session_key(msg) == "agent:default:telegram:default:dm:123"
   end
 end

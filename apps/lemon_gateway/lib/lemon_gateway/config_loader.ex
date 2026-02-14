@@ -162,6 +162,8 @@ defmodule LemonGateway.ConfigLoader do
       bot_username: fetch(telegram, :bot_username),
       allowed_chat_ids: fetch(telegram, :allowed_chat_ids),
       deny_unbound_chats: fetch(telegram, :deny_unbound_chats),
+      # When set (string) or enabled (true), send a startup message to bound chats on boot.
+      startup_message: fetch(telegram, :startup_message),
       poll_interval_ms: fetch(telegram, :poll_interval_ms),
       edit_throttle_ms: fetch(telegram, :edit_throttle_ms),
       debounce_ms: fetch(telegram, :debounce_ms),

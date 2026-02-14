@@ -28,6 +28,13 @@ defmodule LemonSkills.BuiltinSeederTest do
       contents = File.read!(skill_file)
       assert contents =~ "name: skill-creator"
       refute contents =~ "Codex"
+
+      pinata_skill_file =
+        Path.join([Config.global_skills_dir(), "pinata", "SKILL.md"])
+
+      assert File.regular?(pinata_skill_file)
+      pinata_contents = File.read!(pinata_skill_file)
+      assert pinata_contents =~ "name: pinata"
     after
       if is_nil(prev_home), do: System.delete_env("HOME"), else: System.put_env("HOME", prev_home)
     end

@@ -38,6 +38,10 @@ defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
 
           # >= 48 chars triggers immediate flush; then idle flush safety covers if needed.
           send(sink_pid, {:engine_delta, run_ref, String.duplicate("a", 60)})
+          Process.sleep(100)
+
+          # Second delta exercises the "edit answer message" path.
+          send(sink_pid, {:engine_delta, run_ref, String.duplicate("b", 60)})
           Process.sleep(500)
 
           send(
@@ -227,7 +231,7 @@ defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
 
   defp reply_to_from_opts(_), do: nil
 
-  test "streaming deltas cause editMessageText calls to update progress message" do
+  test "streaming deltas update the answer message (progress message is reserved for tool status)" do
     start_system!(StreamingEngine)
 
     chat_id = 31_001
@@ -239,10 +243,22 @@ defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
     assert :ok ==
              wait_until(
                fn ->
-                 Enum.any?(MockTelegramAPI.calls(), fn
-                   {:edit_message, ^chat_id, _msg_id, _text, _opts} -> true
-                   _ -> false
-                 end)
+                 calls = MockTelegramAPI.calls()
+
+                 Enum.any?(calls, fn
+                   {:send_message, ^chat_id, text, _opts, _pm} ->
+                     is_binary(text) and String.starts_with?(text, "a")
+
+                   _ ->
+                     false
+                 end) and
+                   Enum.any?(calls, fn
+                     {:edit_message, ^chat_id, _msg_id, text, _opts} ->
+                       is_binary(text) and String.contains?(text, "b")
+
+                     _ ->
+                       false
+                   end)
                end,
                5_000
              )
