@@ -2257,9 +2257,17 @@ Thank you, Mario, for open-sourcing pi and advancing the state of agent framewor
 
 If Lemon feels snappy, practical, and unreasonably “it just works” for an agent framework, a big chunk of that vibe is because **banteg** shipped **takopi** and showed what *high-signal, zero-bullshit engineering* looks like in this space.
 
-**takopi** is one of those projects that quietly raises the bar for everyone: clean design, sharp defaults, and the kind of pragmatic choices that make you want to delete half your codebase and rebuild it properly.
+**takopi** is a straight-up masterclass in shipping: clean design, sharp defaults, and the kind of pragmatic choices that make you want to delete half your codebase and rebuild it properly.
 
-So, genuinely: **thank you, banteg** — for building in public, for being allergic to fluff, and for dropping a project that’s both a reference implementation *and* a mindset.
+What I love about takopi (and what it pushed Lemon toward) is the relentless focus on the parts that matter in real usage:
+
+- **Tight feedback loops**: you can feel the bias toward iteration speed.
+- **Ergonomic, disciplined interfaces**: the API surface stays understandable as features grow.
+- **Pragmatic correctness**: sharp edges get sanded down *before* they cut users.
+- **Clarity over cleverness**: readable wins, every time.
+- **Taste**: the small decisions add up to a project that feels *inevitable*.
+
+So, genuinely: **thank you, banteg** — for building in public, for being allergic to fluff, and for dropping a project that’s both a reference implementation *and* a mindset. Lemon is better because takopi exists.
 
 ### Additional Thanks
 
