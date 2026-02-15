@@ -2253,6 +2253,14 @@ Many of the core concepts, type definitions, and architectural patterns in Lemon
 
 Thank you, Mario, for open-sourcing pi and advancing the state of agent frameworks!
 
+### HUGE THANK YOU to [banteg](https://github.com/banteg) and [takopi](https://github.com/banteg/takopi)
+
+If Lemon feels snappy, practical, and unreasonably “it just works” for an agent framework, a big chunk of that vibe is because **banteg** shipped **takopi** and showed what *high-signal, zero-bullshit engineering* looks like in this space.
+
+**takopi** is one of those projects that quietly raises the bar for everyone: clean design, sharp defaults, and the kind of pragmatic choices that make you want to delete half your codebase and rebuild it properly.
+
+So, genuinely: **thank you, banteg** — for building in public, for being allergic to fluff, and for dropping a project that’s both a reference implementation *and* a mindset.
+
 ### Additional Thanks
 
 - Built with [Elixir](https://elixir-lang.org/) and the [BEAM](https://www.erlang.org/)
