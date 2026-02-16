@@ -54,6 +54,7 @@ defmodule LemonChannels.Adapters.Telegram.Inbound do
     text = message["text"] || message["caption"] || ""
     voice = message["voice"] || %{}
     document = message["document"] || %{}
+    photo = select_photo(message["photo"])
 
     inbound = %InboundMessage{
       channel_id: "telegram",
@@ -77,6 +78,7 @@ defmodule LemonChannels.Adapters.Telegram.Inbound do
         chat_type: chat["type"],
         chat_title: chat["title"],
         media_group_id: message["media_group_id"],
+        photo: photo,
         document:
           if is_map(document) and map_size(document) > 0 do
             %{
@@ -104,4 +106,33 @@ defmodule LemonChannels.Adapters.Telegram.Inbound do
 
     {:ok, inbound}
   end
+
+  defp select_photo(photos) when is_list(photos) do
+    photos
+    |> Enum.filter(&is_map/1)
+    |> Enum.max_by(
+      fn photo ->
+        cond do
+          is_integer(photo["file_size"]) -> photo["file_size"]
+          is_integer(photo["width"]) and is_integer(photo["height"]) -> photo["width"] * photo["height"]
+          true -> 0
+        end
+      end,
+      fn -> nil end
+    )
+    |> case do
+      nil ->
+        nil
+
+      selected ->
+        %{
+          file_id: selected["file_id"],
+          width: selected["width"],
+          height: selected["height"],
+          file_size: selected["file_size"]
+        }
+    end
+  end
+
+  defp select_photo(_), do: nil
 end

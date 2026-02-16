@@ -128,7 +128,9 @@ defmodule CodingAgent.Tools.WebDownload do
         end
       else
         detail = sanitize_error_detail(response.body)
-        {:error, "Web download failed: HTTP #{response.status}: #{if(detail == "", do: "request failed", else: detail)}"}
+
+        {:error,
+         "Web download failed: HTTP #{response.status}: #{if(detail == "", do: "request failed", else: detail)}"}
       end
     else
       {:error, reason} ->

@@ -1,289 +1,288 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { act, renderHook } from '@testing-library/react';
+import type { ClientCommand } from '@lemon-web/shared';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { QueuedCommandMeta } from './commandQueue';
 
-/**
- * Tests for buildWsUrl() function behavior in useLemonSocket.
- *
- * The buildWsUrl function handles WebSocket URL construction with:
- * 1. Environment variable override (VITE_LEMON_WS_URL)
- * 2. Same-origin derivation (http->ws, https->wss) as fallback
- */
-
-describe('buildWsUrl() behavior', () => {
-  // Store original location properties
-  const originalLocation = {
-    protocol: window.location.protocol,
-    host: window.location.host,
+const HOISTED = vi.hoisted(() => {
+  const storeState = {
+    applyServerMessage: vi.fn(),
+    setConnectionState: vi.fn(),
+    setSendCommand: vi.fn(),
+    enqueueNotification: vi.fn(),
+    setQueueCount: vi.fn(),
+    addPendingConfirmation: vi.fn(),
+    removePendingConfirmation: vi.fn(),
+    sessions: {
+      activeSessionId: 'session-a',
+    },
+    sendCommand: undefined as ((command: ClientCommand) => void) | undefined,
   };
 
+  const useLemonStore = vi.fn((selector: (state: typeof storeState) => unknown) =>
+    selector(storeState)
+  );
+  Object.assign(useLemonStore, {
+    getState: () => storeState,
+  });
+
+  const commandQueue = {
+    length: 0,
+    subscribe: vi.fn(),
+    enqueue: vi.fn(),
+    processOnReconnect: vi.fn(),
+    confirmCommand: vi.fn(),
+  };
+
+  return {
+    storeState,
+    useLemonStore,
+    commandQueue,
+  };
+});
+
+vi.mock('../store/useLemonStore', () => ({
+  useLemonStore: HOISTED.useLemonStore,
+}));
+
+vi.mock('./commandQueue', () => ({
+  commandQueue: HOISTED.commandQueue,
+  DEFAULT_COMMAND_TTL_MS: 5 * 60 * 1000,
+}));
+
+import { confirmQueuedCommand, getQueueCount, useLemonSocket } from './useLemonSocket';
+
+class MockWebSocket {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSING = 2;
+  static readonly CLOSED = 3;
+  static instances: MockWebSocket[] = [];
+
+  readonly url: string;
+  readyState = MockWebSocket.CONNECTING;
+  onopen: ((event: Event) => void) | null = null;
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onerror: ((event: Event) => void) | null = null;
+  onclose: ((event: CloseEvent) => void) | null = null;
+  send = vi.fn();
+  close = vi.fn();
+
+  constructor(url: string) {
+    this.url = url;
+    MockWebSocket.instances.push(this);
+  }
+
+  emitOpen(): void {
+    this.readyState = MockWebSocket.OPEN;
+    this.onopen?.(new Event('open'));
+  }
+
+  emitMessage(data: string): void {
+    this.onmessage?.({ data } as MessageEvent);
+  }
+
+  emitError(): void {
+    this.onerror?.(new Event('error'));
+  }
+
+  emitClose(): void {
+    this.readyState = MockWebSocket.CLOSED;
+    this.onclose?.(new CloseEvent('close'));
+  }
+
+  static reset(): void {
+    MockWebSocket.instances = [];
+  }
+}
+
+function createQueuedMeta(overrides: Partial<QueuedCommandMeta> = {}): QueuedCommandMeta {
+  return {
+    payload: JSON.stringify({ type: 'ping' }),
+    enqueuedAt: 1000,
+    ttlMs: 300000,
+    sessionIdAtEnqueue: 'session-a',
+    commandType: 'ping',
+    ...overrides,
+  };
+}
+
+describe('useLemonSocket', () => {
   beforeEach(() => {
-    vi.resetModules();
-    vi.unstubAllEnvs();
+    vi.useRealTimers();
+    vi.clearAllMocks();
+    MockWebSocket.reset();
+    vi.stubGlobal('WebSocket', MockWebSocket);
+
+    HOISTED.storeState.sessions.activeSessionId = 'session-a';
+    HOISTED.storeState.sendCommand = undefined;
+
+    HOISTED.commandQueue.length = 0;
+    HOISTED.commandQueue.enqueue.mockReturnValue(true);
+    HOISTED.commandQueue.processOnReconnect.mockReturnValue([]);
+    HOISTED.commandQueue.confirmCommand.mockReturnValue(null);
+    HOISTED.commandQueue.subscribe.mockImplementation((listener: (count: number) => void) => {
+      listener(HOISTED.commandQueue.length);
+      return vi.fn();
+    });
   });
 
   afterEach(() => {
-    // Restore original location
-    Object.defineProperty(window, 'location', {
-      value: {
-        ...window.location,
-        protocol: originalLocation.protocol,
-        host: originalLocation.host,
-      },
-      writable: true,
-    });
-    vi.unstubAllEnvs();
-    vi.resetModules();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
-  describe('same-origin URL derivation logic', () => {
-    it('converts http: protocol to ws:', () => {
-      const protocol = 'http:';
-      const wsProto = protocol === 'https:' ? 'wss:' : 'ws:';
-      expect(wsProto).toBe('ws:');
-    });
+  it('enqueues commands while disconnected and emits queue overflow notification', () => {
+    const { unmount } = renderHook(() => useLemonSocket());
 
-    it('converts https: protocol to wss:', () => {
-      const protocol = 'https:';
-      const wsProto = protocol === 'https:' ? 'wss:' : 'ws:';
-      expect(wsProto).toBe('wss:');
-    });
+    const sendCommand = HOISTED.storeState.setSendCommand.mock.calls[0][0] as (
+      command: ClientCommand
+    ) => void;
+    sendCommand({ type: 'ping' });
 
-    it('constructs correct URL with host and /ws path', () => {
-      const wsProto = 'ws:';
-      const host = 'localhost:3000';
-      const url = `${wsProto}//${host}/ws`;
-      expect(url).toBe('ws://localhost:3000/ws');
-    });
+    expect(HOISTED.commandQueue.enqueue).toHaveBeenCalledTimes(1);
+    expect(HOISTED.commandQueue.enqueue).toHaveBeenCalledWith(
+      { type: 'ping' },
+      'session-a',
+      5 * 60 * 1000,
+      expect.any(Function)
+    );
 
-    it('handles host without port', () => {
-      const wsProto = 'wss:';
-      const host = 'example.com';
-      const url = `${wsProto}//${host}/ws`;
-      expect(url).toBe('wss://example.com/ws');
-    });
+    const onOverflow = HOISTED.commandQueue.enqueue.mock.calls[0][3] as (
+      dropped: QueuedCommandMeta
+    ) => void;
+    onOverflow(createQueuedMeta({ commandType: 'abort' }));
 
-    it('handles host with subdomain', () => {
-      const wsProto = 'wss:';
-      const host = 'api.staging.example.com';
-      const url = `${wsProto}//${host}/ws`;
-      expect(url).toBe('wss://api.staging.example.com/ws');
-    });
+    expect(HOISTED.storeState.enqueueNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        message: 'Queue full: dropped oldest command "abort"',
+      })
+    );
 
-    it('handles host with IP address', () => {
-      const wsProto = 'ws:';
-      const host = '192.168.1.100:8080';
-      const url = `${wsProto}//${host}/ws`;
-      expect(url).toBe('ws://192.168.1.100:8080/ws');
-    });
-
-    it('handles IPv6 addresses', () => {
-      const wsProto = 'ws:';
-      const host = '[::1]:3000';
-      const url = `${wsProto}//${host}/ws`;
-      expect(url).toBe('ws://[::1]:3000/ws');
-    });
+    unmount();
   });
 
-  describe('VITE_LEMON_WS_URL env override logic', () => {
-    it('env override takes precedence when truthy', () => {
-      const envUrl = 'wss://override.example.com/ws';
-      const sameOriginUrl = 'ws://localhost:3000/ws';
-
-      // Simulate buildWsUrl logic
-      const result = envUrl || sameOriginUrl;
-      expect(result).toBe(envUrl);
+  it('processes queued commands on reconnect and requests config', () => {
+    const expired = createQueuedMeta({ commandType: 'reset' });
+    const confirmation = createQueuedMeta({
+      payload: JSON.stringify({ type: 'abort' }),
+      commandType: 'abort',
+    });
+    const ready = createQueuedMeta({
+      payload: JSON.stringify({ type: 'prompt', text: 'hello' }),
+      commandType: 'prompt',
     });
 
-    it('same-origin is used when env is empty string', () => {
-      const envUrl = '';
-      const sameOriginUrl = 'ws://localhost:3000/ws';
+    HOISTED.commandQueue.processOnReconnect.mockImplementation(
+      (
+        _sessionId: string | null,
+        onExpired?: (commands: QueuedCommandMeta[]) => void,
+        onNeedsConfirmation?: (commands: QueuedCommandMeta[]) => void
+      ) => {
+        onExpired?.([expired]);
+        onNeedsConfirmation?.([confirmation]);
+        return [ready];
+      }
+    );
 
-      // Simulate buildWsUrl logic
-      const result = envUrl || sameOriginUrl;
-      expect(result).toBe(sameOriginUrl);
+    const { unmount } = renderHook(() => useLemonSocket());
+    const socket = MockWebSocket.instances[0];
+
+    act(() => {
+      socket.emitOpen();
     });
 
-    it('same-origin is used when env is undefined', () => {
-      const envUrl: string | undefined = undefined;
-      const sameOriginUrl = 'ws://localhost:3000/ws';
+    expect(HOISTED.storeState.setConnectionState).toHaveBeenCalledWith('connected');
+    expect(HOISTED.commandQueue.processOnReconnect).toHaveBeenCalledWith(
+      'session-a',
+      expect.any(Function),
+      expect.any(Function)
+    );
+    expect(HOISTED.storeState.addPendingConfirmation).toHaveBeenCalledWith(confirmation);
+    expect(socket.send).toHaveBeenCalledWith(ready.payload);
+    expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: 'get_config' }));
 
-      // Simulate buildWsUrl logic
-      const result = envUrl || sameOriginUrl;
-      expect(result).toBe(sameOriginUrl);
-    });
+    const messages = HOISTED.storeState.enqueueNotification.mock.calls.map((call) => call[0].message);
+    expect(messages).toContain('1 queued command expired while disconnected: reset');
+    expect(messages).toContain(
+      '1 destructive command queued for different session - please confirm'
+    );
+    expect(messages).toContain('Sent 1 queued command');
 
-    it('custom WebSocket path is preserved in env override', () => {
-      const envUrl = 'wss://custom.example.com/custom/path/websocket';
-      expect(envUrl).toBe('wss://custom.example.com/custom/path/websocket');
-    });
-
-    it('non-standard ports in env override are preserved', () => {
-      const envUrl = 'ws://dev-backend:9999/ws';
-      expect(envUrl).toBe('ws://dev-backend:9999/ws');
-    });
+    unmount();
   });
 
-  describe('window.location integration', () => {
-    it('uses window.location.protocol for protocol detection', () => {
-      const protocol = window.location.protocol;
-      expect(['http:', 'https:']).toContain(protocol);
+  it('reconnects with exponential backoff after close', () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const { unmount } = renderHook(() => useLemonSocket());
+    const firstSocket = MockWebSocket.instances[0];
+
+    act(() => {
+      firstSocket.emitClose();
+    });
+    expect(HOISTED.storeState.setConnectionState).toHaveBeenCalledWith('disconnected');
+    expect(MockWebSocket.instances).toHaveLength(1);
+
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(MockWebSocket.instances).toHaveLength(2);
+
+    const secondSocket = MockWebSocket.instances[1];
+    act(() => {
+      secondSocket.emitClose();
     });
 
-    it('uses window.location.host for host derivation', () => {
-      const host = window.location.host;
-      expect(typeof host).toBe('string');
-      expect(host.length).toBeGreaterThan(0);
+    act(() => {
+      vi.advanceTimersByTime(1000);
     });
+    expect(MockWebSocket.instances).toHaveLength(3);
+    expect(warnSpy).not.toHaveBeenCalled();
 
-    it('builds URL from current window location', () => {
-      const { protocol, host } = window.location;
-      const wsProto = protocol === 'https:' ? 'wss:' : 'ws:';
-      const url = `${wsProto}//${host}/ws`;
-
-      // URL should be well-formed
-      expect(url).toMatch(/^wss?:\/\/.+\/ws$/);
-    });
-  });
-
-  describe('edge cases', () => {
-    it('handles localhost with default port', () => {
-      const host = 'localhost';
-      const url = `ws://${host}/ws`;
-      expect(url).toBe('ws://localhost/ws');
-    });
-
-    it('handles localhost with explicit port 80', () => {
-      const host = 'localhost:80';
-      const url = `ws://${host}/ws`;
-      expect(url).toBe('ws://localhost:80/ws');
-    });
-
-    it('handles production domain on default HTTPS port', () => {
-      const host = 'app.lemon.io';
-      const url = `wss://${host}/ws`;
-      expect(url).toBe('wss://app.lemon.io/ws');
-    });
-
-    it('handles Vite dev server default port', () => {
-      const host = 'localhost:5173';
-      const url = `ws://${host}/ws`;
-      expect(url).toBe('ws://localhost:5173/ws');
-    });
-
-    it('handles backend server on different port', () => {
-      const host = 'localhost:3939';
-      const url = `ws://${host}/ws`;
-      expect(url).toBe('ws://localhost:3939/ws');
-    });
+    unmount();
+    warnSpy.mockRestore();
   });
 });
 
-describe('logConnectionWarning behavior', () => {
-  /**
-   * Tests for the connection warning logic.
-   * The function logs a warning after CONNECTION_WARNING_THRESHOLD (3) retries.
-   */
-
-  it('threshold is set to 3', () => {
-    // This is a constant in the module
-    const CONNECTION_WARNING_THRESHOLD = 3;
-    expect(CONNECTION_WARNING_THRESHOLD).toBe(3);
+describe('confirmQueuedCommand', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    HOISTED.commandQueue.confirmCommand.mockReturnValue(null);
+    HOISTED.storeState.sendCommand = undefined;
   });
 
-  it('warning should be triggered at threshold', () => {
-    const CONNECTION_WARNING_THRESHOLD = 3;
-    const retryCount = 3;
-
-    // Warning is triggered when retryCount equals threshold
-    const shouldWarn = retryCount === CONNECTION_WARNING_THRESHOLD;
-    expect(shouldWarn).toBe(true);
-  });
-
-  it('warning should not be triggered before threshold', () => {
-    const CONNECTION_WARNING_THRESHOLD = 3;
-    const retryCount = 2;
-
-    const shouldWarn = retryCount === CONNECTION_WARNING_THRESHOLD;
-    expect(shouldWarn).toBe(false);
-  });
-
-  it('warning should not be triggered after threshold', () => {
-    const CONNECTION_WARNING_THRESHOLD = 3;
-    const retryCount = 4;
-
-    // Only warn once at the threshold
-    const shouldWarn = retryCount === CONNECTION_WARNING_THRESHOLD;
-    expect(shouldWarn).toBe(false);
-  });
-
-  describe('warning message content', () => {
-    it('includes retry count in warning message', () => {
-      const retryCount = 3;
-      const message = `[LemonSocket] Failed to connect after ${retryCount} retries.`;
-      expect(message).toContain('3 retries');
+  it('sends confirmed command and always removes pending confirmation', () => {
+    const meta = createQueuedMeta({
+      payload: JSON.stringify({ type: 'prompt', text: 'resume' }),
+      commandType: 'prompt',
     });
+    const sendCommand = vi.fn();
+    HOISTED.storeState.sendCommand = sendCommand;
+    HOISTED.commandQueue.confirmCommand.mockReturnValue(meta);
 
-    it('includes env URL in message when VITE_LEMON_WS_URL is set', () => {
-      const envUrl = 'wss://custom.example.com/ws';
-      const message = `Using VITE_LEMON_WS_URL override: ${envUrl}`;
-      expect(message).toContain('VITE_LEMON_WS_URL override');
-      expect(message).toContain(envUrl);
-    });
+    confirmQueuedCommand(meta, true);
 
-    it('suggests setting VITE_LEMON_WS_URL when not using override', () => {
-      const wsUrl = 'ws://localhost:3000/ws';
-      const message =
-        `Using same-origin WebSocket URL: ${wsUrl}\n` +
-        `If using a separate backend, set VITE_LEMON_WS_URL environment variable.`;
-      expect(message).toContain('same-origin');
-      expect(message).toContain('set VITE_LEMON_WS_URL');
-    });
+    expect(HOISTED.commandQueue.confirmCommand).toHaveBeenCalledWith(meta, true);
+    expect(sendCommand).toHaveBeenCalledWith({ type: 'prompt', text: 'resume' });
+    expect(HOISTED.storeState.removePendingConfirmation).toHaveBeenCalledWith(meta);
+  });
+
+  it('does not send when command is rejected but still removes pending confirmation', () => {
+    const meta = createQueuedMeta({ commandType: 'abort' });
+    HOISTED.commandQueue.confirmCommand.mockReturnValue(null);
+
+    confirmQueuedCommand(meta, false);
+
+    expect(HOISTED.commandQueue.confirmCommand).toHaveBeenCalledWith(meta, false);
+    expect(HOISTED.storeState.removePendingConfirmation).toHaveBeenCalledWith(meta);
   });
 });
 
-describe('exponential backoff', () => {
-  /**
-   * Tests for the exponential backoff logic used in reconnection.
-   */
-
-  it('calculates correct delay for first retry', () => {
-    const retryCount = 0;
-    const delay = Math.min(10000, 500 * Math.pow(2, retryCount));
-    expect(delay).toBe(500);
-  });
-
-  it('calculates correct delay for second retry', () => {
-    const retryCount = 1;
-    const delay = Math.min(10000, 500 * Math.pow(2, retryCount));
-    expect(delay).toBe(1000);
-  });
-
-  it('calculates correct delay for third retry', () => {
-    const retryCount = 2;
-    const delay = Math.min(10000, 500 * Math.pow(2, retryCount));
-    expect(delay).toBe(2000);
-  });
-
-  it('calculates correct delay for fourth retry', () => {
-    const retryCount = 3;
-    const delay = Math.min(10000, 500 * Math.pow(2, retryCount));
-    expect(delay).toBe(4000);
-  });
-
-  it('calculates correct delay for fifth retry', () => {
-    const retryCount = 4;
-    const delay = Math.min(10000, 500 * Math.pow(2, retryCount));
-    expect(delay).toBe(8000);
-  });
-
-  it('caps delay at 10 seconds', () => {
-    const retryCount = 5;
-    const delay = Math.min(10000, 500 * Math.pow(2, retryCount));
-    expect(delay).toBe(10000);
-  });
-
-  it('stays capped at 10 seconds for higher retry counts', () => {
-    const retryCount = 10;
-    const delay = Math.min(10000, 500 * Math.pow(2, retryCount));
-    expect(delay).toBe(10000);
+describe('getQueueCount', () => {
+  it('returns the current queue length', () => {
+    HOISTED.commandQueue.length = 9;
+    expect(getQueueCount()).toBe(9);
   });
 });

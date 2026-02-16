@@ -2,47 +2,80 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
+import { asBool, asInt, asString, parseCliArgs, type CliArgs } from './cli-args.js';
 import { LemonSocket } from './lemon-socket.js';
 import { runBrowserNode } from './index.js';
 import { resolveOpenClawUserDataDir } from './openclaw-profile.js';
 
-type Args = Record<string, string | boolean>;
+export type BrowserNodeCliConfig = {
+  wsUrl: string;
+  cdpPort: number;
+  headless: boolean;
+  noSandbox: boolean;
+  attachOnly: boolean;
+  executablePath: string | null;
+  openclawProfile: string;
+  userDataDir: string;
+  doPair: boolean;
+  nodeName: string;
+  operatorToken: string | null;
+  token: string | null;
+  challengeToken: string | null;
+};
 
-function parseArgs(argv: string[]): Args {
-  const out: Args = {};
-  for (let i = 0; i < argv.length; i += 1) {
-    const a = argv[i]!;
-    if (!a.startsWith('--')) continue;
-    const key = a.slice(2);
-    const next = argv[i + 1];
-    if (!next || next.startsWith('--')) {
-      out[key] = true;
-    } else {
-      out[key] = next;
-      i += 1;
-    }
-  }
-  return out;
-}
+export function resolveCliConfig(params: {
+  args: CliArgs;
+  env?: NodeJS.ProcessEnv;
+  hostname?: string;
+  storedToken?: string | null;
+}): BrowserNodeCliConfig {
+  const env = params.env ?? process.env;
 
-function asString(v: unknown): string | null {
-  if (typeof v === 'string' && v.trim()) return v.trim();
-  return null;
-}
+  const wsUrl = asString(params.args['ws-url']) ?? 'ws://localhost:4040/ws';
+  const cdpPort = asInt(params.args['cdp-port'], 18800);
+  const headless = asBool(params.args['headless']);
+  const noSandbox = asBool(params.args['no-sandbox']);
+  const attachOnly = asBool(params.args['attach-only']);
+  const executablePath = asString(params.args['executable-path']) ?? asString(env.LEMON_CHROME_EXECUTABLE);
 
-function asBool(v: unknown): boolean {
-  if (v === true) return true;
-  if (typeof v === 'string') return ['1', 'true', 'yes', 'on'].includes(v.toLowerCase());
-  return false;
-}
+  const openclawProfile = asString(params.args['openclaw-profile']) ?? 'openclaw';
+  const userDataDir =
+    asString(params.args['user-data-dir']) ??
+    resolveOpenClawUserDataDir(openclawProfile);
 
-function asInt(v: unknown, def: number): number {
-  if (typeof v === 'string') {
-    const n = Number.parseInt(v, 10);
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  return def;
+  const doPair = asBool(params.args['pair']);
+  const defaultNodeName = `Local Browser (${params.hostname ?? os.hostname()})`;
+  const nodeName = asString(params.args['node-name']) ?? defaultNodeName;
+
+  const operatorToken =
+    asString(params.args['operator-token']) ??
+    asString(env.LEMON_OPERATOR_TOKEN) ??
+    null;
+
+  const token =
+    asString(params.args['token']) ??
+    asString(params.storedToken) ??
+    null;
+
+  const challengeToken = asString(params.args['challenge-token']);
+
+  return {
+    wsUrl,
+    cdpPort,
+    headless,
+    noSandbox,
+    attachOnly,
+    executablePath,
+    openclawProfile,
+    userDataDir,
+    doPair,
+    nodeName,
+    operatorToken,
+    token,
+    challengeToken,
+  };
 }
 
 const TOKEN_PATH = path.join(os.homedir(), '.lemon', 'nodes', 'browser-node.json');
@@ -100,43 +133,27 @@ async function pairAndGetNodeToken(params: {
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2));
+  const args = parseCliArgs(process.argv.slice(2));
+  const config = resolveCliConfig({
+    args,
+    storedToken: readStoredToken()?.token ?? null,
+  });
 
-  const wsUrl = asString(args['ws-url']) ?? 'ws://localhost:4040/ws';
-  const cdpPort = asInt(args['cdp-port'], 18800);
-  const headless = asBool(args['headless']);
-  const noSandbox = asBool(args['no-sandbox']);
-  const attachOnly = asBool(args['attach-only']);
-  const executablePath = asString(args['executable-path']) ?? asString(process.env.LEMON_CHROME_EXECUTABLE);
-
-  const openclawProfile = asString(args['openclaw-profile']) ?? 'openclaw';
-  const userDataDir =
-    asString(args['user-data-dir']) ??
-    resolveOpenClawUserDataDir(openclawProfile);
-
-  const doPair = asBool(args['pair']);
-
-  const defaultNodeName = `Local Browser (${os.hostname()})`;
-  const nodeName = asString(args['node-name']) ?? defaultNodeName;
-
-  const operatorToken =
-    asString(args['operator-token']) ??
-    asString(process.env.LEMON_OPERATOR_TOKEN) ??
-    null;
-
-  let token = asString(args['token']) ?? readStoredToken()?.token ?? null;
-
-  const challengeToken = asString(args['challenge-token']);
-  if (doPair) {
-    const paired = await pairAndGetNodeToken({ wsUrl, nodeName, operatorToken });
+  let token = config.token;
+  if (config.doPair) {
+    const paired = await pairAndGetNodeToken({
+      wsUrl: config.wsUrl,
+      nodeName: config.nodeName,
+      operatorToken: config.operatorToken,
+    });
     token = paired.token;
     writeStoredToken(token);
-    process.stdout.write(`Paired node "${nodeName}" (pairingId=${paired.pairingId ?? 'unknown'})\n`);
+    process.stdout.write(`Paired node "${config.nodeName}" (pairingId=${paired.pairingId ?? 'unknown'})\n`);
     process.stdout.write(`Stored node token at ${TOKEN_PATH}\n`);
-  } else if (!token && challengeToken) {
+  } else if (!token && config.challengeToken) {
     // One-off operator-scope connection to exchange a pairing challenge for a session token.
-    const { socket } = await LemonSocket.connect(wsUrl, {});
-    const res: any = await socket.call('connect.challenge', { challenge: challengeToken });
+    const { socket } = await LemonSocket.connect(config.wsUrl, {});
+    const res: any = await socket.call('connect.challenge', { challenge: config.challengeToken });
     socket.close();
 
     const newToken = asString(res?.token);
@@ -155,28 +172,38 @@ async function main() {
   process.stdout.write(
     [
       'lemon-browser-node',
-      `wsUrl=${wsUrl}`,
-      `cdpPort=${cdpPort}`,
-      `userDataDir=${userDataDir}`,
-      `headless=${headless}`,
-      `attachOnly=${attachOnly}`,
+      `wsUrl=${config.wsUrl}`,
+      `cdpPort=${config.cdpPort}`,
+      `userDataDir=${config.userDataDir}`,
+      `headless=${config.headless}`,
+      `attachOnly=${config.attachOnly}`,
     ].join(' ') + '\n',
   );
 
   await runBrowserNode({
-    wsUrl,
+    wsUrl: config.wsUrl,
     token,
-    cdpPort,
-    userDataDir,
-    executablePath: executablePath ?? undefined,
-    headless,
-    noSandbox,
-    attachOnly,
+    cdpPort: config.cdpPort,
+    userDataDir: config.userDataDir,
+    executablePath: config.executablePath ?? undefined,
+    headless: config.headless,
+    noSandbox: config.noSandbox,
+    attachOnly: config.attachOnly,
   });
 }
 
-main().catch((err) => {
-  const msg = err instanceof Error ? err.stack || err.message : String(err);
-  process.stderr.write(msg + '\n');
-  process.exit(1);
-});
+function isMainModule(): boolean {
+  const entry = process.argv[1];
+  if (!entry) {
+    return false;
+  }
+  return import.meta.url === pathToFileURL(entry).href;
+}
+
+if (isMainModule()) {
+  main().catch((err) => {
+    const msg = err instanceof Error ? err.stack || err.message : String(err);
+    process.stderr.write(msg + '\n');
+    process.exit(1);
+  });
+}

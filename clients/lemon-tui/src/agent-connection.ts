@@ -8,15 +8,12 @@ import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import WebSocket, { type RawData } from 'ws';
 import type {
   ServerMessage,
   ClientCommand,
   ReadyMessage,
-  SessionStartedMessage,
-  SessionClosedMessage,
-  RunningSessionsMessage,
-  ActiveSessionMessage,
 } from './types.js';
 
 export const AGENT_RESTART_EXIT_CODE = 75;
@@ -38,6 +35,18 @@ export interface AgentConnectionOptions {
   sessionFile?: string;
   /** Path to the lemon project root */
   lemonPath?: string;
+  /** Additional root hints used while discovering the lemon project root */
+  lemonRootHints?: string[];
+  /** Custom resolver for lemon project root discovery */
+  lemonPathResolver?: () => string | null;
+  /** Command used to launch the local agent process */
+  agentCommand?: string;
+  /** Base command args used to launch the local agent process */
+  agentCommandArgs?: string[];
+  /** Path to the rpc script used by the local agent command */
+  agentScriptPath?: string;
+  /** Exit code that triggers automatic restart in the TUI */
+  agentRestartExitCode?: number;
   /** WebSocket URL for LemonControlPlane (OpenClaw) */
   wsUrl?: string;
   /** Auth token for WebSocket connection */
@@ -97,6 +106,320 @@ type OpenClawFrame =
   | OpenClawEventFrame
   | OpenClawHelloOkFrame;
 
+type OpenClawPendingRequest = { method: string; sessionId?: string | null };
+
+type ParsedOpenClawEventAction =
+  | {
+      kind: 'agent_started';
+      sessionKey: string;
+      runId?: string;
+    }
+  | {
+      kind: 'agent_completed';
+      sessionKey: string;
+      runId?: string;
+      answer?: string;
+    }
+  | {
+      kind: 'chat_delta';
+      sessionKey: string;
+      runId: string;
+      text: string;
+    };
+
+function readNonEmptyString(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
+
+function parseSessionCwd(payload: Record<string, unknown>): string {
+  return (
+    readNonEmptyString(payload.cwd)
+    || readNonEmptyString(payload.path)
+    || readNonEmptyString(payload.workdir)
+    || ''
+  );
+}
+
+function parseSessionModel(payload: Record<string, unknown>): { provider: string; id: string } | undefined {
+  const rawModel = payload.model;
+
+  if (rawModel && typeof rawModel === 'object') {
+    const modelPayload = rawModel as Record<string, unknown>;
+    const provider =
+      readNonEmptyString(modelPayload.provider)
+      || readNonEmptyString(payload.provider);
+    const modelId =
+      readNonEmptyString(modelPayload.id)
+      || readNonEmptyString(modelPayload.model)
+      || readNonEmptyString(payload.model_id)
+      || readNonEmptyString(payload.modelId);
+
+    if (provider || modelId) {
+      return {
+        provider: provider || 'unknown',
+        id: modelId || 'unknown',
+      };
+    }
+  }
+
+  const provider =
+    readNonEmptyString(payload.provider)
+    || readNonEmptyString(payload.model_provider)
+    || readNonEmptyString(payload.modelProvider);
+
+  let modelId: string | null =
+    readNonEmptyString(payload.model_id)
+    || readNonEmptyString(payload.modelId)
+    || (typeof rawModel === 'string' ? readNonEmptyString(rawModel) : null);
+
+  if (!provider && modelId?.includes(':')) {
+    const [parsedProvider, ...rest] = modelId.split(':');
+    const parsedId = rest.join(':').trim();
+    if (parsedProvider && parsedId) {
+      return {
+        provider: parsedProvider,
+        id: parsedId,
+      };
+    }
+  }
+
+  if (!provider && !modelId) {
+    return undefined;
+  }
+
+  modelId = modelId || 'unknown';
+  return {
+    provider: provider || 'unknown',
+    id: modelId,
+  };
+}
+
+function parseOpenClawFrame(payload: string): OpenClawFrame | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return null;
+  }
+
+  if (!parsed || typeof parsed !== 'object') {
+    return null;
+  }
+
+  const frame = parsed as { type?: unknown };
+  if (
+    frame.type !== 'req'
+    && frame.type !== 'res'
+    && frame.type !== 'event'
+    && frame.type !== 'hello-ok'
+  ) {
+    return null;
+  }
+
+  return parsed as OpenClawFrame;
+}
+
+function mapOpenClawResponseToMessages(
+  frame: OpenClawResponseFrame,
+  pending?: OpenClawPendingRequest,
+  now: () => number = () => Date.now()
+): ServerMessage[] {
+  if (!frame.ok) {
+    const message =
+      frame.error?.message
+      || frame.error?.code
+      || 'Control-plane request failed';
+    return [{
+      type: 'error',
+      message,
+      session_id: pending?.sessionId || undefined,
+    }];
+  }
+
+  const method = pending?.method;
+  const payload = asRecord(frame.payload);
+
+  switch (method) {
+    case 'models.list': {
+      const models = Array.isArray(payload.models) ? payload.models : [];
+      const providers = new Map<string, Array<{ id: string; name?: string }>>();
+      for (const model of models) {
+        const modelPayload = asRecord(model);
+        const provider = String(modelPayload.provider || 'unknown');
+        const list = providers.get(provider) || [];
+        list.push({
+          id: String(modelPayload.id || ''),
+          name: modelPayload.name ? String(modelPayload.name) : undefined,
+        });
+        providers.set(provider, list);
+      }
+
+      return [{
+        type: 'models_list',
+        providers: Array.from(providers.entries()).map(([id, providerModels]) => ({
+          id,
+          models: providerModels,
+        })),
+        error: null,
+      }];
+    }
+
+    case 'sessions.list':
+    case 'sessions.list.running': {
+      const sessionsPayload = Array.isArray(payload.sessions) ? payload.sessions : [];
+      const mapped = sessionsPayload.map((session) => {
+        const sessionPayload = asRecord(session);
+        return {
+          path: String(sessionPayload.sessionKey || sessionPayload.id || ''),
+          id: String(sessionPayload.sessionKey || sessionPayload.id || ''),
+          timestamp: Number(sessionPayload.updatedAtMs || sessionPayload.createdAtMs || now()),
+          cwd: parseSessionCwd(sessionPayload),
+          model: parseSessionModel(sessionPayload),
+        };
+      });
+
+      if (method === 'sessions.list') {
+        return [{
+          type: 'sessions_list',
+          sessions: mapped,
+        }];
+      }
+
+      return [{
+        type: 'running_sessions',
+        sessions: mapped.map((session) => ({
+          session_id: session.id,
+          cwd: session.cwd,
+          is_streaming: false,
+          model: session.model,
+        })),
+        error: null,
+      }];
+    }
+
+    case 'sessions.delete': {
+      return [{
+        type: 'session_closed',
+        session_id: pending?.sessionId || '',
+        reason: 'normal',
+      }];
+    }
+
+    case 'sessions.reset': {
+      return [{
+        type: 'ui_notify',
+        params: {
+          message: `Session reset: ${pending?.sessionId || ''}`,
+          notify_type: 'success',
+        },
+      }];
+    }
+
+    case 'chat.abort': {
+      return [{
+        type: 'ui_notify',
+        params: {
+          message: 'Abort requested',
+          notify_type: 'info',
+        },
+      }];
+    }
+
+    case 'health': {
+      return [{ type: 'pong' }];
+    }
+
+    default:
+      return [];
+  }
+}
+
+function mapOpenClawEventToActions(
+  frame: OpenClawEventFrame,
+  defaultSessionKey: string
+): ParsedOpenClawEventAction[] {
+  if (frame.event === 'agent') {
+    const payload = asRecord(frame.payload);
+    const eventType = String(payload.type || '');
+    const sessionKey =
+      readNonEmptyString(payload.sessionKey)
+      || defaultSessionKey;
+    const runId = readNonEmptyString(payload.runId) || undefined;
+
+    if (eventType === 'started') {
+      return [{
+        kind: 'agent_started',
+        sessionKey,
+        runId,
+      }];
+    }
+
+    if (eventType === 'completed') {
+      return [{
+        kind: 'agent_completed',
+        sessionKey,
+        runId,
+        answer: readNonEmptyString(payload.answer) || undefined,
+      }];
+    }
+  }
+
+  if (frame.event === 'chat') {
+    const payload = asRecord(frame.payload);
+    const eventType = String(payload.type || '');
+    if (eventType !== 'delta') {
+      return [];
+    }
+    const runId = String(payload.runId || '');
+    const sessionKey =
+      readNonEmptyString(payload.sessionKey)
+      || defaultSessionKey;
+    const text = String(payload.text || '');
+    return [{
+      kind: 'chat_delta',
+      sessionKey,
+      runId,
+      text,
+    }];
+  }
+
+  return [];
+}
+
+function parseRestartExitCode(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 0) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isInteger(parsed) && parsed >= 0) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function parseRootHints(raw: string | undefined): string[] {
+  if (!raw) {
+    return [];
+  }
+  return raw
+    .split(path.delimiter)
+    .map((hint) => hint.trim())
+    .filter(Boolean);
+}
+
 export interface AgentConnectionEvents {
   ready: [ReadyMessage];
   message: [ServerMessage];
@@ -114,10 +437,11 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
   private readyReject: ((err: Error) => void) | null = null;
   private primarySessionId: string | null = null;
   private activeSessionId: string | null = null;
-  private wsPendingRequests = new Map<string, { method: string; sessionId?: string | null }>();
+  private wsPendingRequests = new Map<string, OpenClawPendingRequest>();
   private wsRunBuffers = new Map<string, { sessionKey: string | null; text: string }>();
   private wsLastRunBySession = new Map<string, string>();
   private wsSessionKey: string | null = null;
+  private restartExitCode: number | null = null;
 
   constructor(private options: AgentConnectionOptions = {}) {
     super();
@@ -162,7 +486,7 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
       return await this.startWebSocket();
     }
 
-    const lemonPath = this.options.lemonPath || process.env.LEMON_PATH || findLemonPath();
+    const lemonPath = this.resolveLemonPath();
 
     if (!lemonPath) {
       throw new Error(
@@ -170,30 +494,7 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
       );
     }
 
-    // Build command arguments
-    const args = ['run', 'scripts/debug_agent_rpc.exs', '--'];
-
-    if (this.options.cwd) {
-      args.push('--cwd', this.options.cwd);
-    }
-    if (this.options.model) {
-      args.push('--model', this.options.model);
-    }
-    if (this.options.baseUrl) {
-      args.push('--base_url', this.options.baseUrl);
-    }
-    if (this.options.systemPrompt) {
-      args.push('--system_prompt', this.options.systemPrompt);
-    }
-    if (this.options.sessionFile) {
-      args.push('--session-file', this.options.sessionFile);
-    }
-    if (this.options.debug) {
-      args.push('--debug');
-    }
-    if (this.options.ui === false) {
-      args.push('--no-ui');
-    }
+    const launchConfig = this.buildLocalAgentLaunch(lemonPath);
 
     // Create promise for ready message
     this.readyPromise = new Promise((resolve, reject) => {
@@ -201,9 +502,8 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
       this.readyReject = reject;
     });
 
-    // Spawn the mix process
-    this.process = spawn('mix', args, {
-      cwd: lemonPath,
+    this.process = spawn(launchConfig.command, launchConfig.args, {
+      cwd: launchConfig.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,
@@ -299,74 +599,82 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
     return { provider: 'remote', id: model };
   }
 
-  private readNonEmptyString(value: unknown): string | null {
-    if (typeof value !== 'string') {
-      return null;
+  getRestartExitCode(): number {
+    if (this.restartExitCode !== null) {
+      return this.restartExitCode;
     }
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : null;
+
+    this.restartExitCode =
+      parseRestartExitCode(this.options.agentRestartExitCode)
+      ?? parseRestartExitCode(process.env.LEMON_AGENT_RESTART_EXIT_CODE)
+      ?? AGENT_RESTART_EXIT_CODE;
+
+    return this.restartExitCode;
   }
 
-  private parseSessionCwd(payload: Record<string, unknown>): string {
-    return (
-      this.readNonEmptyString(payload.cwd)
-      || this.readNonEmptyString(payload.path)
-      || this.readNonEmptyString(payload.workdir)
-      || ''
-    );
+  private resolveLemonPath(): string | null {
+    const explicitPath =
+      readNonEmptyString(this.options.lemonPath)
+      || readNonEmptyString(process.env.LEMON_PATH);
+    if (explicitPath) {
+      return explicitPath;
+    }
+
+    if (this.options.lemonPathResolver) {
+      const resolved = this.options.lemonPathResolver();
+      return readNonEmptyString(resolved);
+    }
+
+    const hints = [
+      ...(this.options.lemonRootHints || []),
+      ...parseRootHints(process.env.LEMON_ROOT_HINTS),
+      this.options.cwd || '',
+    ].filter(Boolean);
+
+    return findLemonPath(hints);
   }
 
-  private parseSessionModel(payload: Record<string, unknown>): { provider: string; id: string } | undefined {
-    const rawModel = payload.model;
+  private buildLocalAgentLaunch(lemonPath: string): { command: string; args: string[]; cwd: string } {
+    const command =
+      readNonEmptyString(this.options.agentCommand)
+      || readNonEmptyString(process.env.LEMON_AGENT_COMMAND)
+      || 'mix';
 
-    if (rawModel && typeof rawModel === 'object') {
-      const modelPayload = rawModel as Record<string, unknown>;
-      const provider =
-        this.readNonEmptyString(modelPayload.provider)
-        || this.readNonEmptyString(payload.provider);
-      const modelId =
-        this.readNonEmptyString(modelPayload.id)
-        || this.readNonEmptyString(modelPayload.model)
-        || this.readNonEmptyString(payload.model_id)
-        || this.readNonEmptyString(payload.modelId);
+    const defaultScriptPath =
+      readNonEmptyString(this.options.agentScriptPath)
+      || readNonEmptyString(process.env.LEMON_AGENT_SCRIPT_PATH)
+      || 'scripts/debug_agent_rpc.exs';
 
-      if (provider || modelId) {
-        return {
-          provider: provider || 'unknown',
-          id: modelId || 'unknown',
-        };
-      }
+    const args = this.options.agentCommandArgs
+      ? [...this.options.agentCommandArgs]
+      : ['run', defaultScriptPath, '--'];
+
+    if (this.options.cwd) {
+      args.push('--cwd', this.options.cwd);
+    }
+    if (this.options.model) {
+      args.push('--model', this.options.model);
+    }
+    if (this.options.baseUrl) {
+      args.push('--base_url', this.options.baseUrl);
+    }
+    if (this.options.systemPrompt) {
+      args.push('--system_prompt', this.options.systemPrompt);
+    }
+    if (this.options.sessionFile) {
+      args.push('--session-file', this.options.sessionFile);
+    }
+    if (this.options.debug) {
+      args.push('--debug');
+    }
+    if (this.options.ui === false) {
+      args.push('--no-ui');
     }
 
-    const provider =
-      this.readNonEmptyString(payload.provider)
-      || this.readNonEmptyString(payload.model_provider)
-      || this.readNonEmptyString(payload.modelProvider);
-
-    let modelId: string | null =
-      this.readNonEmptyString(payload.model_id)
-      || this.readNonEmptyString(payload.modelId)
-      || (typeof rawModel === 'string' ? this.readNonEmptyString(rawModel) : null);
-
-    if (!provider && modelId?.includes(':')) {
-      const [parsedProvider, ...rest] = modelId.split(':');
-      const parsedId = rest.join(':').trim();
-      if (parsedProvider && parsedId) {
-        return {
-          provider: parsedProvider,
-          id: parsedId,
-        };
-      }
-    }
-
-    if (!provider && !modelId) {
-      return undefined;
-    }
-
-    modelId = modelId || 'unknown';
     return {
-      provider: provider || 'unknown',
-      id: modelId,
+      command,
+      args,
+      cwd: lemonPath,
     };
   }
 
@@ -883,10 +1191,8 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
       return;
     }
 
-    let frame: OpenClawFrame;
-    try {
-      frame = JSON.parse(payload) as OpenClawFrame;
-    } catch (err) {
+    const frame = parseOpenClawFrame(payload);
+    if (!frame) {
       if (this.options.debug) {
         process.stderr.write(`[ws] Non-JSON frame: ${payload}\n`);
       }
@@ -927,178 +1233,41 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
       this.wsPendingRequests.delete(frame.id);
     }
 
-    if (!frame.ok) {
-      const message =
-        frame.error?.message
-        || frame.error?.code
-        || 'Control-plane request failed';
-      this.emit('message', {
-        type: 'error',
-        message,
-        session_id: pending?.sessionId || undefined,
-      });
-      return;
-    }
-
-    const method = pending?.method;
-    const payload = frame.payload || {};
-
-    switch (method) {
-      case 'connect': {
-        if (!frame.ok) {
-          const message =
-            frame.error?.message
-            || frame.error?.code
-            || 'Connect failed';
-          if (this.readyReject) {
-            this.readyReject(new Error(message));
-            this.readyReject = null;
-            this.readyResolve = null;
-          }
-          this.emit('error', new Error(message));
-        }
-        break;
-      }
-      case 'models.list': {
-        const models = (payload as { models?: Array<Record<string, unknown>> }).models || [];
-        const providers = new Map<string, Array<{ id: string; name?: string }>>();
-        for (const model of models) {
-          const provider = String(model.provider || 'unknown');
-          const list = providers.get(provider) || [];
-          list.push({
-            id: String(model.id || ''),
-            name: model.name ? String(model.name) : undefined,
-          });
-          providers.set(provider, list);
-        }
-        this.emit('message', {
-          type: 'models_list',
-          providers: Array.from(providers.entries()).map(([id, models]) => ({
-            id,
-            models,
-          })),
-          error: null,
-        });
-        break;
-      }
-
-      case 'sessions.list':
-      case 'sessions.list.running': {
-        const sessions = (payload as { sessions?: Array<Record<string, unknown>> }).sessions || [];
-        const mapped = sessions.map((s) => ({
-          path: String(s.sessionKey || s.id || ''),
-          id: String(s.sessionKey || s.id || ''),
-          timestamp: Number(s.updatedAtMs || s.createdAtMs || Date.now()),
-          cwd: this.parseSessionCwd(s),
-          model: this.parseSessionModel(s),
-        }));
-        if (pending?.method === 'sessions.list') {
-          this.emit('message', {
-            type: 'sessions_list',
-            sessions: mapped,
-          });
-        }
-        if (pending?.method === 'sessions.list.running') {
-          this.emit('message', {
-            type: 'running_sessions',
-            sessions: mapped.map((s) => ({
-              session_id: s.id,
-              cwd: s.cwd,
-              is_streaming: false,
-              model: s.model,
-            })),
-            error: null,
-          });
-        }
-        break;
-      }
-
-      case 'sessions.delete': {
-        const sessionId = pending?.sessionId || '';
-        this.emit('message', {
-          type: 'session_closed',
-          session_id: sessionId,
-          reason: 'normal',
-        });
-        break;
-      }
-
-      case 'sessions.reset': {
-        const sessionId = pending?.sessionId || '';
-        this.emit('message', {
-          type: 'ui_notify',
-          params: {
-            message: `Session reset: ${sessionId}`,
-            notify_type: 'success',
-          },
-        });
-        break;
-      }
-
-      case 'chat.send': {
-        // No-op: events will stream via event frames
-        break;
-      }
-
-      case 'chat.abort': {
-        this.emit('message', {
-          type: 'ui_notify',
-          params: {
-            message: 'Abort requested',
-            notify_type: 'info',
-          },
-        });
-        break;
-      }
-
-      case 'health': {
-        this.emit('message', { type: 'pong' });
-        break;
-      }
+    const messages = mapOpenClawResponseToMessages(frame, pending);
+    for (const message of messages) {
+      this.emit('message', message);
     }
   }
 
   private handleOpenClawEvent(frame: OpenClawEventFrame): void {
-    if (frame.event === 'agent') {
-      const payload = frame.payload || {};
-      const eventType = String(payload.type || '');
-      const sessionKey = (payload.sessionKey as string) || this.resolveWsSessionKey();
-      const runId = payload.runId as string | undefined;
-
-      if (runId && sessionKey) {
-        this.wsLastRunBySession.set(sessionKey, runId);
-      }
-
-      if (eventType === 'started') {
+    const actions = mapOpenClawEventToActions(frame, this.resolveWsSessionKey());
+    for (const action of actions) {
+      if (action.kind === 'agent_started') {
+        if (action.runId && action.sessionKey) {
+          this.wsLastRunBySession.set(action.sessionKey, action.runId);
+        }
         this.emit('message', {
           type: 'event',
-          session_id: sessionKey,
+          session_id: action.sessionKey,
           event: { type: 'agent_start' },
         });
-        return;
+        continue;
       }
 
-      if (eventType === 'completed') {
-        this.emitAssistantCompletion(sessionKey, runId, payload.answer as string | undefined);
+      if (action.kind === 'agent_completed') {
+        if (action.runId && action.sessionKey) {
+          this.wsLastRunBySession.set(action.sessionKey, action.runId);
+        }
+        this.emitAssistantCompletion(action.sessionKey, action.runId, action.answer);
         this.emit('message', {
           type: 'event',
-          session_id: sessionKey,
+          session_id: action.sessionKey,
           event: { type: 'agent_end', data: [[]] },
         });
-        return;
+        continue;
       }
-    }
 
-    if (frame.event === 'chat') {
-      const payload = frame.payload || {};
-      const eventType = String(payload.type || '');
-      if (eventType !== 'delta') {
-        return;
-      }
-      const runId = String(payload.runId || '');
-      const sessionKey = (payload.sessionKey as string) || this.resolveWsSessionKey();
-      const text = String(payload.text || '');
-      this.emitChatDelta(sessionKey, runId, text);
+      this.emitChatDelta(action.sessionKey, action.runId, action.text);
     }
   }
 
@@ -1244,47 +1413,49 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
 }
 
 /**
- * Attempts to find the lemon project root by looking in common locations.
+ * Attempts to find the lemon project root by walking up from candidate paths.
  */
-function findLemonPath(): string | null {
-  // Try relative to this package
-  const cwd = process.cwd();
+function findLemonPath(hints: string[] = []): string | null {
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  const candidateRoots = new Set<string>([
+    process.cwd(),
+    moduleDir,
+    ...hints.map((hint) => path.resolve(hint)),
+  ]);
 
-  // Check if we're already in lemon
-  if (cwd.includes('lemon')) {
-    // Walk up to find the root (contains mix.exs and apps/)
-    let current = cwd;
-    while (current !== '/') {
-      try {
-        if (
-          fs.existsSync(`${current}/mix.exs`) &&
-          fs.existsSync(`${current}/apps`)
-        ) {
-          return current;
-        }
-      } catch {
-        // Ignore
-      }
-      current = path.dirname(current);
-    }
-  }
-
-  // Common development locations
-  const commonPaths = [
-    '/home/z80/dev/lemon',
-    `${process.env.HOME}/dev/lemon`,
-    `${process.env.HOME}/projects/lemon`,
-  ];
-
-  for (const p of commonPaths) {
-    try {
-      if (fs.existsSync(`${p}/mix.exs`)) {
-        return p;
-      }
-    } catch {
-      // Ignore
+  for (const candidate of candidateRoots) {
+    const found = findLemonPathFrom(candidate);
+    if (found) {
+      return found;
     }
   }
 
   return null;
+}
+
+function findLemonPathFrom(start: string): string | null {
+  let current = path.resolve(start);
+
+  while (true) {
+    if (isLemonProjectRoot(current)) {
+      return current;
+    }
+
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
+  }
+}
+
+function isLemonProjectRoot(candidate: string): boolean {
+  try {
+    return (
+      fs.existsSync(path.join(candidate, 'mix.exs'))
+      && fs.existsSync(path.join(candidate, 'apps'))
+    );
+  } catch {
+    return false;
+  }
 }

@@ -17,6 +17,61 @@ import type {
   ActiveSessionMessage,
 } from './types.js';
 
+const { MockWebSocket, mockWebSocketInstances } = vi.hoisted(() => {
+  class MockWebSocket {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSING = 2;
+    static CLOSED = 3;
+    static instances: MockWebSocket[] = [];
+
+    readyState = MockWebSocket.CONNECTING;
+    sentFrames: string[] = [];
+    private listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+
+    constructor(public readonly url: string) {
+      MockWebSocket.instances.push(this);
+    }
+
+    on(event: string, listener: (...args: unknown[]) => void): this {
+      const list = this.listeners.get(event) || [];
+      list.push(listener);
+      this.listeners.set(event, list);
+      return this;
+    }
+
+    emit(event: string, ...args: unknown[]): boolean {
+      const list = this.listeners.get(event) || [];
+      for (const listener of list) {
+        listener(...args);
+      }
+      return list.length > 0;
+    }
+
+    removeAllListeners(): this {
+      this.listeners.clear();
+      return this;
+    }
+
+    send(data: string): void {
+      this.sentFrames.push(String(data));
+    }
+
+    close(): void {
+      this.readyState = MockWebSocket.CLOSED;
+    }
+
+    terminate(): void {
+      this.readyState = MockWebSocket.CLOSED;
+    }
+  }
+
+  return {
+    MockWebSocket,
+    mockWebSocketInstances: MockWebSocket.instances,
+  };
+});
+
 // Mock child_process module
 vi.mock('node:child_process', () => ({
   spawn: vi.fn(),
@@ -32,6 +87,10 @@ vi.mock('node:fs', () => ({
   default: {
     existsSync: vi.fn(),
   },
+}));
+
+vi.mock('ws', () => ({
+  default: MockWebSocket,
 }));
 
 // Import after mocks are set up
@@ -83,6 +142,48 @@ function createMockReadline(): {
   return { readline, emitter };
 }
 
+function getLastWebSocket(): MockWebSocket {
+  const ws = mockWebSocketInstances[mockWebSocketInstances.length - 1];
+  if (!ws) {
+    throw new Error('No WebSocket instance created');
+  }
+  return ws;
+}
+
+function openWebSocket(ws: MockWebSocket): void {
+  ws.readyState = MockWebSocket.OPEN;
+  ws.emit('open');
+}
+
+function emitWebSocketMessage(ws: MockWebSocket, frame: unknown): void {
+  const payload = typeof frame === 'string' ? frame : JSON.stringify(frame);
+  ws.emit('message', payload);
+}
+
+function readFrameAt(ws: MockWebSocket, index: number): Record<string, unknown> {
+  return JSON.parse(ws.sentFrames[index] || '{}') as Record<string, unknown>;
+}
+
+function readLastFrame(ws: MockWebSocket): Record<string, unknown> {
+  return readFrameAt(ws, ws.sentFrames.length - 1);
+}
+
+async function startWebSocketConnection(connection: AgentConnection): Promise<MockWebSocket> {
+  const startPromise = connection.start();
+  const ws = getLastWebSocket();
+  openWebSocket(ws);
+  emitWebSocketMessage(ws, {
+    type: 'hello-ok',
+    protocol: 1,
+    server: {},
+    features: {},
+    snapshot: {},
+    policy: {},
+  });
+  await startPromise;
+  return ws;
+}
+
 describe('AgentConnection', () => {
   let connection: AgentConnection;
   let mockProcess: ReturnType<typeof createMockProcess>;
@@ -90,6 +191,7 @@ describe('AgentConnection', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockWebSocketInstances.length = 0;
 
     mockProcess = createMockProcess();
     mockReadline = createMockReadline();
@@ -153,6 +255,60 @@ describe('AgentConnection', () => {
           cwd: '/test/lemon',
           stdio: ['pipe', 'pipe', 'pipe'],
         })
+      );
+    });
+
+    it('should allow overriding command and script path', async () => {
+      const conn = new AgentConnection({
+        lemonPath: '/test/lemon',
+        agentCommand: 'custom-mix',
+        agentScriptPath: 'scripts/custom_rpc.exs',
+      });
+
+      const startPromise = conn.start();
+      mockReadline.emitter.emit('line', JSON.stringify({
+        type: 'ready',
+        cwd: '/test',
+        model: { provider: 'anthropic', id: 'claude-3' },
+        debug: false,
+        ui: true,
+        primary_session_id: 'session-1',
+        active_session_id: 'session-1',
+      } satisfies ReadyMessage));
+
+      await startPromise;
+
+      expect(spawn).toHaveBeenCalledWith(
+        'custom-mix',
+        ['run', 'scripts/custom_rpc.exs', '--'],
+        expect.objectContaining({ cwd: '/test/lemon' })
+      );
+    });
+
+    it('should allow overriding command args', async () => {
+      const conn = new AgentConnection({
+        lemonPath: '/test/lemon',
+        agentCommand: 'elixir',
+        agentCommandArgs: ['scripts/debug_agent_rpc.exs'],
+      });
+
+      const startPromise = conn.start();
+      mockReadline.emitter.emit('line', JSON.stringify({
+        type: 'ready',
+        cwd: '/test',
+        model: { provider: 'anthropic', id: 'claude-3' },
+        debug: false,
+        ui: true,
+        primary_session_id: 'session-1',
+        active_session_id: 'session-1',
+      } satisfies ReadyMessage));
+
+      await startPromise;
+
+      expect(spawn).toHaveBeenCalledWith(
+        'elixir',
+        ['scripts/debug_agent_rpc.exs'],
+        expect.objectContaining({ cwd: '/test/lemon' })
       );
     });
 
@@ -1502,6 +1658,277 @@ describe('AgentConnection', () => {
       expect(stderrWriteSpy).not.toHaveBeenCalled();
 
       stderrWriteSpy.mockRestore();
+    });
+  });
+
+  describe('restart exit code', () => {
+    it('returns configured restart exit code', () => {
+      const conn = new AgentConnection({
+        lemonPath: '/test/lemon',
+        agentRestartExitCode: 99,
+      });
+      expect(conn.getRestartExitCode()).toBe(99);
+    });
+
+    it('falls back to env restart exit code', () => {
+      const previous = process.env.LEMON_AGENT_RESTART_EXIT_CODE;
+      process.env.LEMON_AGENT_RESTART_EXIT_CODE = '88';
+      const conn = new AgentConnection({ lemonPath: '/test/lemon' });
+      expect(conn.getRestartExitCode()).toBe(88);
+      if (previous === undefined) {
+        delete process.env.LEMON_AGENT_RESTART_EXIT_CODE;
+      } else {
+        process.env.LEMON_AGENT_RESTART_EXIT_CODE = previous;
+      }
+    });
+  });
+
+  describe('websocket mode', () => {
+    it('starts over websocket and sends connect frame', async () => {
+      const conn = new AgentConnection({
+        wsUrl: 'ws://control-plane.test/ws',
+        wsToken: 'token-123',
+        wsSessionKey: 'agent:custom:main',
+      });
+      const startPromise = conn.start();
+
+      const ws = getLastWebSocket();
+      openWebSocket(ws);
+
+      const connectFrame = readFrameAt(ws, 0);
+      expect(connectFrame.type).toBe('req');
+      expect(connectFrame.method).toBe('connect');
+      expect(connectFrame.params).toEqual(expect.objectContaining({
+        role: 'operator',
+        client: { id: 'lemon-tui' },
+        auth: { token: 'token-123' },
+      }));
+
+      emitWebSocketMessage(ws, {
+        type: 'hello-ok',
+        protocol: 1,
+        server: {},
+        features: {},
+        snapshot: {},
+        policy: {},
+      });
+
+      const ready = await startPromise;
+      expect(ready.primary_session_id).toBe('agent:custom:main');
+      expect(conn.getPrimarySessionId()).toBe('agent:custom:main');
+      expect(conn.isReady()).toBe(true);
+    });
+
+    it('maps sessions.list responses into sessions_list message', async () => {
+      const conn = new AgentConnection({
+        wsUrl: 'ws://control-plane.test/ws',
+        wsSessionKey: 'agent:test:main',
+      });
+      const ws = await startWebSocketConnection(conn);
+      const messageHandler = vi.fn();
+      conn.on('message', messageHandler);
+
+      conn.listSessions();
+      const reqFrame = readLastFrame(ws);
+      expect(reqFrame.method).toBe('sessions.list');
+
+      emitWebSocketMessage(ws, {
+        type: 'res',
+        id: reqFrame.id,
+        ok: true,
+        payload: {
+          sessions: [
+            {
+              sessionKey: 'agent:test:main',
+              updatedAtMs: 1234,
+              cwd: '/repo',
+              model: 'openai:gpt-4o',
+            },
+          ],
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'sessions_list',
+        sessions: [
+          {
+            path: 'agent:test:main',
+            id: 'agent:test:main',
+            timestamp: 1234,
+            cwd: '/repo',
+            model: { provider: 'openai', id: 'gpt-4o' },
+          },
+        ],
+      });
+    });
+
+    it('maps models.list responses into models_list message', async () => {
+      const conn = new AgentConnection({
+        wsUrl: 'ws://control-plane.test/ws',
+      });
+      const ws = await startWebSocketConnection(conn);
+      const messageHandler = vi.fn();
+      conn.on('message', messageHandler);
+
+      conn.listModels();
+      const reqFrame = readLastFrame(ws);
+
+      emitWebSocketMessage(ws, {
+        type: 'res',
+        id: reqFrame.id,
+        ok: true,
+        payload: {
+          models: [
+            { provider: 'openai', id: 'gpt-4o', name: 'GPT-4o' },
+            { provider: 'openai', id: 'gpt-4o-mini' },
+            { provider: 'anthropic', id: 'claude-sonnet-4' },
+          ],
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'models_list',
+        providers: [
+          {
+            id: 'openai',
+            models: [
+              { id: 'gpt-4o', name: 'GPT-4o' },
+              { id: 'gpt-4o-mini', name: undefined },
+            ],
+          },
+          {
+            id: 'anthropic',
+            models: [{ id: 'claude-sonnet-4', name: undefined }],
+          },
+        ],
+        error: null,
+      });
+    });
+
+    it('maps chat delta and completion events to message stream updates', async () => {
+      const conn = new AgentConnection({
+        wsUrl: 'ws://control-plane.test/ws',
+        wsSessionKey: 'agent:test:main',
+      });
+      const ws = await startWebSocketConnection(conn);
+      const messageHandler = vi.fn();
+      conn.on('message', messageHandler);
+
+      emitWebSocketMessage(ws, {
+        type: 'event',
+        event: 'chat',
+        payload: {
+          type: 'delta',
+          sessionKey: 'agent:test:main',
+          runId: 'run-1',
+          text: 'Hel',
+        },
+      });
+      emitWebSocketMessage(ws, {
+        type: 'event',
+        event: 'chat',
+        payload: {
+          type: 'delta',
+          sessionKey: 'agent:test:main',
+          runId: 'run-1',
+          text: 'lo',
+        },
+      });
+      emitWebSocketMessage(ws, {
+        type: 'event',
+        event: 'agent',
+        payload: {
+          type: 'completed',
+          sessionKey: 'agent:test:main',
+          runId: 'run-1',
+          answer: 'ignored because buffered text wins',
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'event',
+        session_id: 'agent:test:main',
+        event: expect.objectContaining({ type: 'agent_start' }),
+      }));
+      expect(messageHandler).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'event',
+        session_id: 'agent:test:main',
+        event: expect.objectContaining({
+          type: 'message_start',
+        }),
+      }));
+      expect(messageHandler).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'event',
+        session_id: 'agent:test:main',
+        event: expect.objectContaining({
+          type: 'message_update',
+        }),
+      }));
+      expect(messageHandler).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'event',
+        session_id: 'agent:test:main',
+        event: expect.objectContaining({
+          type: 'message_end',
+        }),
+      }));
+      expect(messageHandler).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'event',
+        session_id: 'agent:test:main',
+        event: expect.objectContaining({ type: 'agent_end' }),
+      }));
+    });
+
+    it('uses last run id for abort requests after agent completion', async () => {
+      const conn = new AgentConnection({
+        wsUrl: 'ws://control-plane.test/ws',
+        wsSessionKey: 'agent:test:main',
+      });
+      const ws = await startWebSocketConnection(conn);
+
+      emitWebSocketMessage(ws, {
+        type: 'event',
+        event: 'agent',
+        payload: {
+          type: 'completed',
+          sessionKey: 'agent:test:main',
+          runId: 'run-42',
+          answer: 'done',
+        },
+      });
+
+      conn.abort('agent:test:main');
+      const abortFrame = readLastFrame(ws);
+
+      expect(abortFrame.method).toBe('chat.abort');
+      expect(abortFrame.params).toEqual({
+        sessionKey: 'agent:test:main',
+        runId: 'run-42',
+      });
+    });
+
+    it('maps non-ok responses into error messages', async () => {
+      const conn = new AgentConnection({
+        wsUrl: 'ws://control-plane.test/ws',
+      });
+      const ws = await startWebSocketConnection(conn);
+      const messageHandler = vi.fn();
+      conn.on('message', messageHandler);
+
+      conn.ping();
+      const reqFrame = readLastFrame(ws);
+
+      emitWebSocketMessage(ws, {
+        type: 'res',
+        id: reqFrame.id,
+        ok: false,
+        error: { message: 'request failed' },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'error',
+        message: 'request failed',
+        session_id: undefined,
+      });
     });
   });
 

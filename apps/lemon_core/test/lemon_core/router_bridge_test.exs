@@ -21,6 +21,12 @@ defmodule LemonCore.RouterBridgeTest do
     end
   end
 
+  defmodule AlternativeRunOrchestrator do
+    @moduledoc false
+
+    def submit(_params), do: {:ok, "run_alt"}
+  end
+
   setup do
     original = Application.get_env(:lemon_core, :router_bridge)
 
@@ -90,6 +96,32 @@ defmodule LemonCore.RouterBridgeTest do
     test "returns unavailable when no router is configured" do
       :ok = RouterBridge.configure(run_orchestrator: TestRunOrchestrator)
       assert {:error, :unavailable} = RouterBridge.abort_session("agent:x:main")
+    end
+  end
+
+  describe "configure guardrails" do
+    test "configure_guarded/1 rejects conflicting non-nil overrides" do
+      :ok =
+        RouterBridge.configure(
+          run_orchestrator: TestRunOrchestrator,
+          router: TestRouter
+        )
+
+      assert {:error, {:already_configured, :run_orchestrator, TestRunOrchestrator, AlternativeRunOrchestrator}} =
+               RouterBridge.configure_guarded(run_orchestrator: AlternativeRunOrchestrator)
+    end
+
+    test "merge mode preserves unspecified keys" do
+      :ok =
+        RouterBridge.configure(
+          run_orchestrator: TestRunOrchestrator,
+          router: TestRouter
+        )
+
+      :ok = RouterBridge.configure([router: TestRouter], mode: :merge)
+
+      assert {:ok, "run_test"} = RouterBridge.submit_run(%{session_key: "agent:merge:main"})
+      assert_receive {:submitted, %RunRequest{}}
     end
   end
 end

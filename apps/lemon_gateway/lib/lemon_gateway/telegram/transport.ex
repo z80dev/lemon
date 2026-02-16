@@ -5,7 +5,7 @@ defmodule LemonGateway.Telegram.Transport do
 
   require Logger
 
-  alias LemonGateway.Telegram.{API, Dedupe, OffsetStore, TriggerMode}
+  alias LemonGateway.Telegram.{API, OffsetStore, TransportShared, TriggerMode}
   alias LemonGateway.Telegram.PollerLock
   alias LemonGateway.Types.{ChatScope, Job, ResumeToken}
   alias LemonGateway.{BindingResolver, ChatState, Config, Cwd, EngineRegistry, Store}
@@ -22,33 +22,22 @@ defmodule LemonGateway.Telegram.Transport do
   @poll_error_log_throttle_ms 60_000
 
   def start_link(opts) do
-    # Legacy transport is intentionally disabled. Telegram polling is owned by
-    # lemon_channels (LemonChannels.Adapters.Telegram.Transport).
-    #
-    # Keep an escape hatch for tests/dev via `force: true`, but refuse to start
-    # if the lemon_channels transport is already running (double-polling duplicates work).
-    force = Keyword.get(opts || [], :force, false)
-
-    channels_running? =
-      Code.ensure_loaded?(LemonChannels.Adapters.Telegram.Transport) and
-        is_pid(Process.whereis(LemonChannels.Adapters.Telegram.Transport))
-
-    cond do
-      not force ->
+    case TransportShared.legacy_start_decision(opts || []) do
+      :disabled ->
         Logger.warning(
           "Legacy Telegram transport is disabled; use lemon_channels Telegram adapter instead"
         )
 
         :ignore
 
-      channels_running? ->
+      :channels_running ->
         Logger.warning(
           "Refusing to start legacy Telegram transport because lemon_channels Telegram transport is already running"
         )
 
         :ignore
 
-      true ->
+      :start ->
         config =
           base_telegram_config()
           |> merge_config(Application.get_env(:lemon_gateway, :telegram))
@@ -70,7 +59,7 @@ defmodule LemonGateway.Telegram.Transport do
 
     case PollerLock.acquire(account_id, token) do
       :ok ->
-        :ok = Dedupe.init()
+        :ok = TransportShared.init_dedupe(:legacy)
         :ok = ensure_httpc()
 
         config_offset = config[:offset] || config["offset"]
@@ -403,9 +392,9 @@ defmodule LemonGateway.Telegram.Transport do
 
       if allowed_chat?(state.allowed_chat_ids, chat_id) do
         scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: topic_id}
-        key = {chat_id, topic_id, message_id}
+        key = TransportShared.message_dedupe_key(chat_id, topic_id, message_id)
 
-        case Dedupe.check_and_mark(key, state.dedupe_ttl_ms) do
+        case TransportShared.check_and_mark_dedupe(:legacy, key, state.dedupe_ttl_ms) do
           :seen ->
             state
 

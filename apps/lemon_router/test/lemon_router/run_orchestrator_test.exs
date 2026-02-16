@@ -8,6 +8,31 @@ defmodule LemonRouter.RunOrchestratorTest do
   Tests for RunOrchestrator including cwd and tool_policy override handling.
   """
 
+  defmodule BlockingRunProcess do
+    @moduledoc false
+    use GenServer
+
+    def child_spec(opts) do
+      run_id = opts[:run_id] || System.unique_integer([:positive])
+
+      %{
+        id: {__MODULE__, run_id},
+        start: {__MODULE__, :start_link, [opts]},
+        restart: :temporary,
+        shutdown: 5_000
+      }
+    end
+
+    def start_link(opts) do
+      GenServer.start_link(__MODULE__, opts)
+    end
+
+    @impl true
+    def init(opts) do
+      {:ok, opts}
+    end
+  end
+
   setup do
     {engine_registry_started_here?, engine_pid} =
       case Process.whereis(LemonGateway.EngineRegistry) do
@@ -97,6 +122,43 @@ defmodule LemonRouter.RunOrchestratorTest do
         })
 
       assert match?({:ok, _}, result) or match?({:error, _}, result)
+    end
+  end
+
+  describe "admission control" do
+    test "returns :run_capacity_reached when bounded run supervisor is saturated" do
+      run_supervisor =
+        start_supervised!(
+          {DynamicSupervisor, strategy: :one_for_one, max_children: 1}
+        )
+
+      {:ok, orchestrator_pid} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: run_supervisor,
+          run_process_module: BlockingRunProcess
+        )
+
+      on_exit(fn ->
+        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+      end)
+
+      params_1 = %{
+        origin: :control_plane,
+        session_key: "agent:cap:test:1",
+        agent_id: "test",
+        prompt: "first"
+      }
+
+      params_2 = %{
+        origin: :control_plane,
+        session_key: "agent:cap:test:2",
+        agent_id: "test",
+        prompt: "second"
+      }
+
+      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, params_1)
+      assert {:error, :run_capacity_reached} = RunOrchestrator.submit(orchestrator_pid, params_2)
     end
   end
 

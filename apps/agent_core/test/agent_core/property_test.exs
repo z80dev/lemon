@@ -996,6 +996,7 @@ defmodule AgentCore.TypesPropertyTest do
       assert is_nil(config.get_api_key)
       assert is_nil(config.get_steering_messages)
       assert is_nil(config.get_follow_up_messages)
+      assert is_nil(config.max_tool_concurrency)
       assert is_nil(config.stream_fn)
     end
   end

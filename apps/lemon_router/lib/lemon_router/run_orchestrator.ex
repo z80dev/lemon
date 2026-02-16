@@ -22,7 +22,8 @@ defmodule LemonRouter.RunOrchestrator do
   alias AgentCore.CliRunners.Types.ResumeToken, as: CliResume
 
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    name = Keyword.get(opts, :name, __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
 
   @doc """
@@ -47,8 +48,15 @@ defmodule LemonRouter.RunOrchestrator do
   `{:ok, run_id}` on success, `{:error, reason}` on failure.
   """
   @spec submit(RunRequest.t() | map()) :: {:ok, binary()} | {:error, term()}
-  def submit(%RunRequest{} = request), do: GenServer.call(__MODULE__, {:submit, request})
-  def submit(params) when is_map(params), do: GenServer.call(__MODULE__, {:submit, params})
+  def submit(%RunRequest{} = request), do: submit(__MODULE__, request)
+  def submit(params) when is_map(params), do: submit(__MODULE__, params)
+
+  @doc """
+  Submit a run request to a specific orchestrator server.
+  """
+  @spec submit(GenServer.server(), RunRequest.t() | map()) :: {:ok, binary()} | {:error, term()}
+  def submit(server, %RunRequest{} = request), do: GenServer.call(server, {:submit, request})
+  def submit(server, params) when is_map(params), do: GenServer.call(server, {:submit, params})
 
   @doc """
   Lightweight run counts for status UIs.
@@ -74,18 +82,29 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   @impl true
-  def init(_opts) do
-    {:ok, %{}}
+  def init(opts) do
+    run_process_opts =
+      opts
+      |> Keyword.get(:run_process_opts, %{})
+      |> normalize_run_process_opts()
+
+    state = %{
+      run_supervisor: Keyword.get(opts, :run_supervisor, LemonRouter.RunSupervisor),
+      run_process_module: Keyword.get(opts, :run_process_module, RunProcess),
+      run_process_opts: run_process_opts
+    }
+
+    {:ok, state}
   end
 
   @impl true
   def handle_call({:submit, params}, _from, state) do
     params = RunRequest.normalize(params)
-    result = do_submit(params)
+    result = do_submit(params, state)
     {:reply, result, state}
   end
 
-  defp do_submit(%RunRequest{} = params) do
+  defp do_submit(%RunRequest{} = params, orchestrator_state) do
     origin = params.origin || :unknown
     session_key = params.session_key
     agent_id = params.agent_id || SessionKey.agent_id(session_key) || "default"
@@ -183,7 +202,7 @@ defmodule LemonRouter.RunOrchestrator do
     }
 
     # Start run process
-    case start_run_process(run_id, session_key, job) do
+    case start_run_process(orchestrator_state, run_id, session_key, job) do
       {:ok, _pid} ->
         # Subscribe control-plane EventBridge to run events for WS delivery
         subscribe_event_bridge(run_id)
@@ -193,20 +212,40 @@ defmodule LemonRouter.RunOrchestrator do
         {:ok, run_id}
 
       {:error, reason} ->
-        Logger.error("Failed to start run process: #{inspect(reason)}")
+        if reason == :run_capacity_reached do
+          Logger.warning(
+            "Run admission control rejected run_id=#{inspect(run_id)} session_key=#{inspect(session_key)}: #{inspect(reason)}"
+          )
+        else
+          Logger.error("Failed to start run process: #{inspect(reason)}")
+        end
+
         {:error, reason}
     end
   end
 
-  defp start_run_process(run_id, session_key, job) do
-    spec = {RunProcess, %{run_id: run_id, session_key: session_key, job: job}}
+  defp start_run_process(state, run_id, session_key, job) do
+    run_opts =
+      state.run_process_opts
+      |> Map.merge(%{run_id: run_id, session_key: session_key, job: job})
 
-    case DynamicSupervisor.start_child(LemonRouter.RunSupervisor, spec) do
+    spec = {state.run_process_module, run_opts}
+
+    case DynamicSupervisor.start_child(state.run_supervisor, spec) do
       {:ok, pid} ->
         {:ok, pid}
 
       {:error, {:already_started, pid}} ->
         {:ok, pid}
+
+      {:error, :max_children} ->
+        {:error, :run_capacity_reached}
+
+      {:error, {:noproc, _}} ->
+        {:error, :router_not_ready}
+
+      {:error, :noproc} ->
+        {:error, :router_not_ready}
 
       {:error, reason} ->
         {:error, reason}
@@ -386,4 +425,8 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   defp strip_strict_resume_lines(_), do: ""
+
+  defp normalize_run_process_opts(opts) when is_map(opts), do: opts
+  defp normalize_run_process_opts(opts) when is_list(opts), do: Map.new(opts)
+  defp normalize_run_process_opts(_), do: %{}
 end

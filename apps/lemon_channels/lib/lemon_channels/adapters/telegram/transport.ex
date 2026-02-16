@@ -15,6 +15,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   alias LemonGateway.EngineRegistry
   alias LemonGateway.Store
   alias LemonGateway.Telegram.TriggerMode
+  alias LemonGateway.Telegram.TransportShared
   alias LemonGateway.Types.ChatScope
   alias LemonGateway.Types.ResumeToken
   alias LemonCore.SessionKey
@@ -51,12 +52,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
       # Prefer the lemon_channels transport. If the legacy poller is already running
       # (transient startup ordering), stop it so we don't double-submit jobs.
-      _ = stop_legacy_transport()
+      _ = TransportShared.stop_legacy_transport()
 
       case PollerLock.acquire(account_id, token) do
         :ok ->
-          # Initialize dedupe ETS table
-          ensure_dedupe_table()
+          :ok = TransportShared.init_dedupe(:channels)
 
           config_offset = config[:offset] || config["offset"]
           stored_offset = OffsetStore.get(account_id, token)
@@ -285,22 +285,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     :ok
   end
 
-  defp stop_legacy_transport do
-    if Code.ensure_loaded?(LemonGateway.Telegram.Transport) do
-      case Process.whereis(LemonGateway.Telegram.Transport) do
-        pid when is_pid(pid) ->
-          GenServer.stop(pid, :normal)
-
-        _ ->
-          :ok
-      end
-    else
-      :ok
-    end
-  rescue
-    _ -> :ok
-  end
-
   defp poll_updates(state) do
     _ = PollerLock.heartbeat(state.account_id, state.token)
 
@@ -421,27 +405,27 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
               case maybe_transcribe_voice(acc_state, inbound) do
                 {:ok, inbound} ->
                   inbound = enrich_for_router(inbound, acc_state)
+                  key = TransportShared.inbound_message_dedupe_key(inbound)
 
-                  # Check dedupe
-                  key = dedupe_key(inbound)
+                  case authorized_inbound_reason(acc_state, inbound) do
+                    :ok ->
+                      case TransportShared.check_and_mark_dedupe(
+                             :channels,
+                             key,
+                             acc_state.dedupe_ttl_ms
+                           ) do
+                        :seen ->
+                          maybe_log_drop(acc_state, inbound, :dedupe)
+                          {acc_state, max(max_id, id)}
 
-                  cond do
-                    true ->
-                      case authorized_inbound_reason(acc_state, inbound) do
-                        :ok ->
-                          if is_seen?(key, acc_state.dedupe_ttl_ms) do
-                            maybe_log_drop(acc_state, inbound, :dedupe)
-                            {acc_state, max(max_id, id)}
-                          else
-                            mark_seen(key, acc_state.dedupe_ttl_ms)
-                            acc_state = handle_inbound_message(acc_state, inbound)
-                            {acc_state, max(max_id, id)}
-                          end
-
-                        {:drop, why} ->
-                          maybe_log_drop(acc_state, inbound, why)
+                        :new ->
+                          acc_state = handle_inbound_message(acc_state, inbound)
                           {acc_state, max(max_id, id)}
                       end
+
+                    {:drop, why} ->
+                      maybe_log_drop(acc_state, inbound, why)
+                      {acc_state, max(max_id, id)}
                   end
 
                 {:skip, acc_state} ->
@@ -3539,29 +3523,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       {i, _} -> i
       :error -> nil
     end
-  end
-
-  # Dedupe helpers
-
-  @dedupe_table :lemon_channels_telegram_dedupe
-
-  defp ensure_dedupe_table do
-    LemonCore.Dedupe.Ets.init(@dedupe_table)
-  end
-
-  defp dedupe_key(inbound) do
-    {inbound.peer.id, inbound.message.id}
-  end
-
-  defp is_seen?(key, ttl_ms) do
-    LemonCore.Dedupe.Ets.seen?(@dedupe_table, key, ttl_ms)
-  end
-
-  defp mark_seen(key, ttl_ms) do
-    # Marking updates the timestamp, effectively extending TTL from "now".
-    _ = ttl_ms
-    LemonCore.Dedupe.Ets.mark(@dedupe_table, key)
-    :ok
   end
 
   defp maybe_put(map, _key, nil), do: map

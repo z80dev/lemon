@@ -78,6 +78,10 @@ defmodule LemonGateway.UnifiedSchedulerTest do
       assert UnifiedScheduler.lane_available?(:main) == true
       assert UnifiedScheduler.lane_available?(:subagent) == true
     end
+
+    test "returns true for unknown lanes (current placeholder behavior)" do
+      assert UnifiedScheduler.lane_available?(:unknown_lane) == true
+    end
   end
 
   describe "submit/2" do

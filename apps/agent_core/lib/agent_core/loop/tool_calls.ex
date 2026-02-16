@@ -29,53 +29,35 @@ defmodule AgentCore.Loop.ToolCalls do
 
   defp execute_tool_calls(context, new_messages, tool_calls, config, signal, stream) do
     {results, context, new_messages} =
-      execute_tool_calls_parallel(context, new_messages, tool_calls, signal, stream)
+      execute_tool_calls_parallel(context, new_messages, tool_calls, config, signal, stream)
 
     steering_messages = get_steering_messages(config)
 
     {results, steering_messages, context, new_messages}
   end
 
-  defp execute_tool_calls_parallel(context, new_messages, tool_calls, signal, stream) do
-    parent = self()
+  defp execute_tool_calls_parallel(context, new_messages, tool_calls, config, signal, stream) do
+    max_concurrency = resolve_max_tool_concurrency(config, length(tool_calls))
 
-    {pending_by_ref, pending_by_mon} =
-      Enum.reduce(tool_calls, {%{}, %{}}, fn tool_call, {by_ref, by_mon} ->
-        tool = find_tool(context.tools, tool_call.name)
-
-        EventStream.push(
-          stream,
-          {:tool_execution_start, tool_call.id, tool_call.name, tool_call.arguments}
-        )
-
-        ref = make_ref()
-
-        # Emit telemetry for tool task start
-        LemonCore.Telemetry.emit(
-          [:agent_core, :tool_task, :start],
-          %{system_time: System.system_time()},
-          %{tool_name: tool_call.name, tool_call_id: tool_call.id}
-        )
-
-        {:ok, pid} =
-          Task.Supervisor.start_child(AgentCore.ToolTaskSupervisor, fn ->
-            {result, is_error} = execute_tool_call(tool, tool_call, signal, stream)
-            send(parent, {:tool_task_result, ref, tool_call, result, is_error})
-          end)
-
-        mon_ref = Process.monitor(pid)
-
-        {
-          Map.put(by_ref, ref, %{tool_call: tool_call, mon_ref: mon_ref, pid: pid}),
-          Map.put(by_mon, mon_ref, ref)
-        }
-      end)
+    {pending_by_ref, pending_by_mon, remaining_tool_calls} =
+      start_tool_tasks(
+        context.tools,
+        tool_calls,
+        %{},
+        %{},
+        max_concurrency,
+        signal,
+        stream
+      )
 
     collect_parallel_tool_results(
       context,
       new_messages,
       pending_by_ref,
       pending_by_mon,
+      remaining_tool_calls,
+      context.tools,
+      max_concurrency,
       [],
       stream,
       signal
@@ -87,11 +69,14 @@ defmodule AgentCore.Loop.ToolCalls do
          new_messages,
          pending_by_ref,
          pending_by_mon,
+         remaining_tool_calls,
+         tools,
+         max_concurrency,
          results,
          stream,
          signal
        ) do
-    if map_size(pending_by_ref) == 0 do
+    if map_size(pending_by_ref) == 0 and remaining_tool_calls == [] do
       {Enum.reverse(results), context, new_messages}
     else
       # Check for abort before waiting
@@ -108,14 +93,26 @@ defmodule AgentCore.Loop.ToolCalls do
           )
         end)
 
-        # Return aborted results for remaining tool calls
+        pending_tool_calls =
+          pending_by_ref
+          |> Map.values()
+          |> Enum.map(& &1.tool_call)
+
+        all_aborted_tool_calls = pending_tool_calls ++ remaining_tool_calls
+
+        Enum.each(remaining_tool_calls, fn tool_call ->
+          LemonCore.Telemetry.emit(
+            [:agent_core, :tool_task, :error],
+            %{system_time: System.system_time()},
+            %{tool_name: tool_call.name, tool_call_id: tool_call.id, reason: :aborted}
+          )
+        end)
+
         {aborted_results, context, new_messages} =
-          Enum.reduce(pending_by_ref, {results, context, new_messages}, fn {_ref,
-                                                                            %{
-                                                                              tool_call: tool_call
-                                                                            }},
-                                                                           {acc_results, acc_ctx,
-                                                                            acc_msgs} ->
+          Enum.reduce(all_aborted_tool_calls, {results, context, new_messages}, fn tool_call,
+                                                                                   {acc_results,
+                                                                                    acc_ctx,
+                                                                                    acc_msgs} ->
             aborted_result = %AgentToolResult{
               content: [%TextContent{type: :text, text: "Tool execution aborted"}],
               details: %{error_type: :aborted}
@@ -142,6 +139,17 @@ defmodule AgentCore.Loop.ToolCalls do
             {pending_by_ref, pending_by_mon} =
               drop_pending_task(pending_by_ref, pending_by_mon, ref)
 
+            {pending_by_ref, pending_by_mon, remaining_tool_calls} =
+              start_tool_tasks(
+                tools,
+                remaining_tool_calls,
+                pending_by_ref,
+                pending_by_mon,
+                max_concurrency - map_size(pending_by_ref),
+                signal,
+                stream
+              )
+
             # Emit telemetry for tool task end
             LemonCore.Telemetry.emit(
               [:agent_core, :tool_task, :end],
@@ -165,6 +173,9 @@ defmodule AgentCore.Loop.ToolCalls do
               new_messages,
               pending_by_ref,
               pending_by_mon,
+              remaining_tool_calls,
+              tools,
+              max_concurrency,
               results,
               stream,
               signal
@@ -178,6 +189,9 @@ defmodule AgentCore.Loop.ToolCalls do
                   new_messages,
                   pending_by_ref,
                   pending_by_mon,
+                  remaining_tool_calls,
+                  tools,
+                  max_concurrency,
                   results,
                   stream,
                   signal
@@ -188,6 +202,17 @@ defmodule AgentCore.Loop.ToolCalls do
 
                 {pending_by_ref, pending_by_mon} =
                   drop_pending_task(pending_by_ref, pending_by_mon, ref)
+
+                {pending_by_ref, pending_by_mon, remaining_tool_calls} =
+                  start_tool_tasks(
+                    tools,
+                    remaining_tool_calls,
+                    pending_by_ref,
+                    pending_by_mon,
+                    max_concurrency - map_size(pending_by_ref),
+                    signal,
+                    stream
+                  )
 
                 # Emit telemetry for tool task error (crash)
                 LemonCore.Telemetry.emit(
@@ -212,6 +237,9 @@ defmodule AgentCore.Loop.ToolCalls do
                   new_messages,
                   pending_by_ref,
                   pending_by_mon,
+                  remaining_tool_calls,
+                  tools,
+                  max_concurrency,
                   results,
                   stream,
                   signal
@@ -225,12 +253,86 @@ defmodule AgentCore.Loop.ToolCalls do
               new_messages,
               pending_by_ref,
               pending_by_mon,
+              remaining_tool_calls,
+              tools,
+              max_concurrency,
               results,
               stream,
               signal
             )
         end
       end
+    end
+  end
+
+  defp start_tool_tasks(
+         _tools,
+         remaining_tool_calls,
+         pending_by_ref,
+         pending_by_mon,
+         available_slots,
+         _signal,
+         _stream
+       )
+       when available_slots <= 0 do
+    {pending_by_ref, pending_by_mon, remaining_tool_calls}
+  end
+
+  defp start_tool_tasks(
+         tools,
+         remaining_tool_calls,
+         pending_by_ref,
+         pending_by_mon,
+         available_slots,
+         signal,
+         stream
+       ) do
+    if aborted?(signal) do
+      {pending_by_ref, pending_by_mon, remaining_tool_calls}
+    else
+      parent = self()
+
+      Enum.reduce_while(
+        1..available_slots,
+        {pending_by_ref, pending_by_mon, remaining_tool_calls},
+        fn _, {by_ref, by_mon, remaining} ->
+          case remaining do
+            [] ->
+              {:halt, {by_ref, by_mon, remaining}}
+
+            [tool_call | rest] ->
+              tool = find_tool(tools, tool_call.name)
+
+              EventStream.push(
+                stream,
+                {:tool_execution_start, tool_call.id, tool_call.name, tool_call.arguments}
+              )
+
+              ref = make_ref()
+
+              LemonCore.Telemetry.emit(
+                [:agent_core, :tool_task, :start],
+                %{system_time: System.system_time()},
+                %{tool_name: tool_call.name, tool_call_id: tool_call.id}
+              )
+
+              {:ok, pid} =
+                Task.Supervisor.start_child(AgentCore.ToolTaskSupervisor, fn ->
+                  {result, is_error} = execute_tool_call(tool, tool_call, signal, stream)
+                  send(parent, {:tool_task_result, ref, tool_call, result, is_error})
+                end)
+
+              mon_ref = Process.monitor(pid)
+
+              {:cont,
+               {
+                 Map.put(by_ref, ref, %{tool_call: tool_call, mon_ref: mon_ref, pid: pid}),
+                 Map.put(by_mon, mon_ref, ref),
+                 rest
+               }}
+          end
+        end
+      )
     end
   end
 
@@ -344,6 +446,27 @@ defmodule AgentCore.Loop.ToolCalls do
       details: nil
     }
   end
+
+  defp resolve_max_tool_concurrency(_config, total_tool_calls) when total_tool_calls <= 0, do: 0
+
+  defp resolve_max_tool_concurrency(
+         %AgentLoopConfig{max_tool_concurrency: :infinity},
+         total_tool_calls
+       ) do
+    total_tool_calls
+  end
+
+  defp resolve_max_tool_concurrency(
+         %AgentLoopConfig{max_tool_concurrency: max_tool_concurrency},
+         total_tool_calls
+       )
+       when is_integer(max_tool_concurrency) do
+    max_tool_concurrency
+    |> max(1)
+    |> min(total_tool_calls)
+  end
+
+  defp resolve_max_tool_concurrency(%AgentLoopConfig{}, total_tool_calls), do: total_tool_calls
 
   defp aborted?(signal), do: AbortSignal.aborted?(signal)
 

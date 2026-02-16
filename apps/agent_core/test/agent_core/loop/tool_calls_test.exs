@@ -29,6 +29,7 @@ defmodule AgentCore.Loop.ToolCallsTest do
       get_api_key: Keyword.get(opts, :get_api_key, nil),
       get_steering_messages: Keyword.get(opts, :get_steering_messages, nil),
       get_follow_up_messages: Keyword.get(opts, :get_follow_up_messages, nil),
+      max_tool_concurrency: Keyword.get(opts, :max_tool_concurrency, nil),
       stream_options: Keyword.get(opts, :stream_options, %StreamOptions{}),
       stream_fn: Keyword.get(opts, :stream_fn, nil)
     }
@@ -93,7 +94,7 @@ defmodule AgentCore.Loop.ToolCallsTest do
     EventStream.complete(stream, [])
     events = EventStream.events(stream) |> Enum.to_list()
 
-    assert Enum.any?(events, &match?({:tool_execution_start, "call_abort_test", _, _}, &1))
+    refute Enum.any?(events, &match?({:tool_execution_start, "call_abort_test", _, _}, &1))
     assert Enum.any?(events, &match?({:tool_execution_end, "call_abort_test", _, _, true}, &1))
   end
 
@@ -140,5 +141,94 @@ defmodule AgentCore.Loop.ToolCallsTest do
 
     assert Enum.any?(events, &match?({:tool_execution_start, "call_tool_error", _, _}, &1))
     assert Enum.any?(events, &match?({:tool_execution_end, "call_tool_error", _, _, true}, &1))
+  end
+
+  test "respects max_tool_concurrency while executing tool calls" do
+    {:ok, counter} = Agent.start_link(fn -> %{current: 0, max: 0} end)
+
+    controlled_tool = %AgentTool{
+      name: "controlled_tool",
+      description: "tracks concurrent executions",
+      parameters: %{"type" => "object", "properties" => %{}},
+      label: "Controlled",
+      execute: fn _id, _params, _signal, _on_update ->
+        Agent.update(counter, fn %{current: current, max: max_seen} ->
+          current = current + 1
+          %{current: current, max: max(max_seen, current)}
+        end)
+
+        Process.sleep(120)
+
+        Agent.update(counter, fn %{current: current} = state ->
+          %{state | current: max(current - 1, 0)}
+        end)
+
+        %AgentToolResult{
+          content: [%TextContent{type: :text, text: "ok"}],
+          details: nil
+        }
+      end
+    }
+
+    context = simple_context(tools: [controlled_tool])
+    config = simple_config(max_tool_concurrency: 2)
+    signal = AbortSignal.new()
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    tool_calls =
+      for i <- 1..4 do
+        Mocks.tool_call("controlled_tool", %{}, id: "call_concurrency_#{i}")
+      end
+
+    {results, _steering_messages, _context, _new_messages} =
+      ToolCalls.execute_and_collect_tools(context, [], tool_calls, config, signal, stream)
+
+    assert length(results) == 4
+    assert Agent.get(counter, & &1.max) <= 2
+  end
+
+  test "abort marks both running and queued tool calls as aborted when max_tool_concurrency is 1" do
+    parent = self()
+
+    slow_tool = %AgentTool{
+      name: "slow_tool",
+      description: "slow tool",
+      parameters: %{"type" => "object", "properties" => %{}},
+      label: "Slow",
+      execute: fn id, _params, _signal, _on_update ->
+        send(parent, {:tool_started, id})
+        Process.sleep(5_000)
+
+        %AgentToolResult{
+          content: [%TextContent{type: :text, text: "done"}],
+          details: nil
+        }
+      end
+    }
+
+    context = simple_context(tools: [slow_tool])
+    config = simple_config(max_tool_concurrency: 1)
+    signal = AbortSignal.new()
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    tool_calls =
+      for i <- 1..3 do
+        Mocks.tool_call("slow_tool", %{}, id: "call_abort_queue_#{i}")
+      end
+
+    runner =
+      Task.async(fn ->
+        ToolCalls.execute_and_collect_tools(context, [], tool_calls, config, signal, stream)
+      end)
+
+    assert_receive {:tool_started, "call_abort_queue_1"}, 1_000
+    :ok = AbortSignal.abort(signal)
+
+    {results, _steering_messages, _updated_context, _updated_new_messages} =
+      Task.await(runner, 5_000)
+
+    assert length(results) == 3
+    assert Enum.all?(results, &(&1.is_error == true))
+    assert Enum.all?(results, &(&1.details == %{error_type: :aborted}))
   end
 end

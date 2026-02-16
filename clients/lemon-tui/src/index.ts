@@ -15,7 +15,7 @@ import {
   type Component,
   type SelectItem,
 } from '@mariozechner/pi-tui';
-import { AgentConnection, AGENT_RESTART_EXIT_CODE, type AgentConnectionOptions } from './agent-connection.js';
+import { AgentConnection, type AgentConnectionOptions } from './agent-connection.js';
 import { StateStore, type AppState, type NormalizedAssistantMessage } from './state.js';
 import type { ServerMessage, UIRequestMessage, SessionSummary, RunningSessionInfo } from './types.js';
 import { slashCommands, MODELINE_PREFIXES, GIT_REFRESH_INTERVAL_MS } from './constants.js';
@@ -36,6 +36,7 @@ export class LemonTUI {
   private connectionOptions: AgentConnectionOptions;
   private store: StateStore;
   private agentRestartInFlight = false;
+  private readonly agentRestartExitCode: number;
 
   private header: Text;
   private welcomeSection: Text;
@@ -87,6 +88,7 @@ export class LemonTUI {
     this.tui = new TUI(new ProcessTerminal());
     this.connectionOptions = options;
     this.connection = new AgentConnection(options);
+    this.agentRestartExitCode = this.connection.getRestartExitCode();
     this.store = new StateStore({ cwd: options.cwd });
 
     // Initialize components
@@ -368,7 +370,7 @@ export class LemonTUI {
 
     this.connection.on('close', (code) => {
       // If the agent intentionally exited to trigger a restart, transparently respawn it.
-      if (code === AGENT_RESTART_EXIT_CODE) {
+      if (code === this.agentRestartExitCode) {
         void this.restartAgentConnection('Agent requested restart');
         return;
       }

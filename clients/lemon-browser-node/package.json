@@ -12,7 +12,9 @@
     "build": "tsup src/cli.ts src/index.ts src/local-driver.ts --format esm --clean",
     "dev": "tsup src/cli.ts src/index.ts src/local-driver.ts --format esm --watch",
     "start": "node dist/cli.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "playwright-core": "1.58.1",
@@ -22,7 +24,8 @@
     "@types/node": "^22.0.0",
     "@types/ws": "^8.18.0",
     "tsup": "^8.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vitest": "^2.1.9"
   },
   "engines": {
     "node": ">=20.0.0"

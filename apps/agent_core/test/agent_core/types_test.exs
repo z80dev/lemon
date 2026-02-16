@@ -281,6 +281,7 @@ defmodule AgentCore.TypesTest do
       assert config.get_api_key == nil
       assert config.get_steering_messages == nil
       assert config.get_follow_up_messages == nil
+      assert config.max_tool_concurrency == nil
       assert config.stream_options == %StreamOptions{}
       assert config.stream_fn == nil
     end

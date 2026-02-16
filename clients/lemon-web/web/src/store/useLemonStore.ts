@@ -8,10 +8,10 @@ import type {
   ModelsListMessage,
   UIRequestMessage,
   Message,
-  SessionEvent,
-  BridgeMessage,
-  EventMessage,
 } from '@lemon-web/shared';
+import { reduceSessionEvent, getMessageReactKey } from './sessionEventReducer';
+import { reduceBridgeMessage, reduceCoreServerMessage } from './serverMessageReducer';
+import { routeUiMessage } from './uiMessageRouter';
 
 /**
  * Extended message type with ordering metadata for stable display.
@@ -217,310 +217,43 @@ export const useLemonStore = create<LemonState>((set, get) => ({
         lastServerTime: message.server_time ?? state.connection.lastServerTime,
       };
 
-      if (isBridgeMessage(message)) {
-        if (message.type === 'bridge_status') {
-          connection.bridgeStatus = message.message ?? null;
-        }
-        if (message.type === 'bridge_error') {
-          connection.lastError = message.message;
-          const note: Notification = {
-            id: `bridge-error-${now}`,
-            message: message.message,
-            level: 'error',
-            createdAt: now,
-          };
-          return { ...state, debugLog, connection, notifications: [...state.notifications, note] };
-        }
-        return { ...state, debugLog, connection };
+      const bridgeUpdate = reduceBridgeMessage({
+        state,
+        message,
+        now,
+        debugLog,
+        connection,
+        sendCommand,
+      });
+      if (bridgeUpdate) {
+        return bridgeUpdate;
       }
 
-      switch (message.type) {
-        case 'ready': {
-          return {
-            ...state,
-            connection,
-            debugLog,
-            sessions: {
-              ...state.sessions,
-              activeSessionId: message.active_session_id,
-              primarySessionId: message.primary_session_id,
-            },
-          };
-        }
-        case 'active_session': {
-          return {
-            ...state,
-            debugLog,
-            sessions: {
-              ...state.sessions,
-              activeSessionId: message.session_id,
-            },
-          };
-        }
-        case 'session_started': {
-          const running = { ...state.sessions.running };
-          running[message.session_id] = {
-            session_id: message.session_id,
-            cwd: message.cwd,
-            is_streaming: false,
-          };
-
-          if (state.autoActivateNextSession && sendCommand) {
-            sendCommand({ type: 'set_active_session', session_id: message.session_id });
-          }
-
-          return {
-            ...state,
-            debugLog,
-            autoActivateNextSession: false,
-            sessions: {
-              ...state.sessions,
-              running,
-            },
-          };
-        }
-        case 'session_closed': {
-          const running = { ...state.sessions.running };
-          delete running[message.session_id];
-          const activeSessionId =
-            state.sessions.activeSessionId === message.session_id
-              ? null
-              : state.sessions.activeSessionId;
-          const messagesBySession = { ...state.messagesBySession };
-          const toolExecutionsBySession = { ...state.toolExecutionsBySession };
-          const statsBySession = { ...state.statsBySession };
-          const _insertionCounters = { ...state._insertionCounters };
-          delete messagesBySession[message.session_id];
-          delete toolExecutionsBySession[message.session_id];
-          delete statsBySession[message.session_id];
-          delete _insertionCounters[message.session_id];
-          return {
-            ...state,
-            debugLog,
-            messagesBySession,
-            toolExecutionsBySession,
-            statsBySession,
-            _insertionCounters,
-            sessions: {
-              ...state.sessions,
-              running,
-              activeSessionId,
-            },
-          };
-        }
-        case 'sessions_list': {
-          return {
-            ...state,
-            debugLog,
-            sessions: {
-              ...state.sessions,
-              saved: message.sessions,
-            },
-          };
-        }
-        case 'running_sessions': {
-          const running: Record<string, RunningSessionInfo> = {};
-          for (const session of message.sessions) {
-            running[session.session_id] = session;
-          }
-          return {
-            ...state,
-            debugLog,
-            sessions: {
-              ...state.sessions,
-              running,
-            },
-          };
-        }
-        case 'models_list': {
-          return { ...state, debugLog, models: message.providers };
-        }
-        case 'config_state': {
-          return {
-            ...state,
-            debugLog,
-            config: message.config,
-          };
-        }
-        case 'stats': {
-          return {
-            ...state,
-            debugLog,
-            statsBySession: {
-              ...state.statsBySession,
-              [message.session_id]: message.stats,
-            },
-          };
-        }
-        case 'save_result': {
-          const note: Notification = {
-            id: `save-${now}`,
-            message: message.ok
-              ? `Session saved to ${message.path ?? 'unknown path'}`
-              : `Save failed: ${message.error ?? 'unknown error'}`,
-            level: message.ok ? 'success' : 'error',
-            createdAt: now,
-          };
-          return {
-            ...state,
-            debugLog,
-            notifications: [...state.notifications, note],
-          };
-        }
-        case 'error': {
-          const note: Notification = {
-            id: `error-${now}`,
-            message: message.message,
-            level: 'error',
-            createdAt: now,
-          };
-          return {
-            ...state,
-            debugLog,
-            notifications: [...state.notifications, note],
-          };
-        }
-        case 'debug': {
-          const note: Notification = {
-            id: `debug-${now}`,
-            message: message.message,
-            level: 'info',
-            createdAt: now,
-          };
-          return {
-            ...state,
-            debugLog,
-            notifications: [...state.notifications, note],
-          };
-        }
-        case 'ui_request': {
-          return {
-            ...state,
-            debugLog,
-            ui: {
-              ...state.ui,
-              requestsQueue: [...state.ui.requestsQueue, message],
-            },
-          };
-        }
-        default:
-          break;
+      const coreUpdate = reduceCoreServerMessage({
+        state,
+        message,
+        now,
+        debugLog,
+        connection,
+        sendCommand,
+      });
+      if (coreUpdate) {
+        return coreUpdate;
       }
 
-      if (message.type === 'ui_notify') {
-        const noteType = (message.params as Record<string, unknown>).notify_type;
-        const fallbackType = (message.params as Record<string, unknown>).type;
-        const level =
-          (typeof noteType === 'string' ? noteType : undefined) ||
-          (typeof fallbackType === 'string' ? fallbackType : 'info');
-
-        const normalizedLevel = normalizeLevel(level);
-        const note: Notification = {
-          id: `notify-${now}`,
-          message: String((message.params as Record<string, unknown>).message ?? ''),
-          level: normalizedLevel,
-          createdAt: now,
-        };
-        return {
-          ...state,
-          debugLog,
-          notifications: [...state.notifications, note],
-        };
-      }
-
-      if (message.type === 'ui_status') {
-        const key = String((message.params as Record<string, unknown>).key ?? '');
-        const rawText = (message.params as Record<string, unknown>).text;
-        if (!key) {
-          return { ...state, debugLog };
-        }
-        const status = { ...state.ui.status };
-        if (rawText === null) {
-          delete status[key];
-        } else if (rawText !== undefined) {
-          status[key] = String(rawText);
-        }
-        return {
-          ...state,
-          debugLog,
-          ui: {
-            ...state.ui,
-            status,
-          },
-        };
-      }
-
-      if (message.type === 'ui_widget') {
-        const key = String((message.params as Record<string, unknown>).key ?? '');
-        const content = (message.params as Record<string, unknown>).content;
-        const opts = (message.params as Record<string, unknown>).opts as Record<string, unknown>;
-        if (!key) {
-          return { ...state, debugLog };
-        }
-        if (content === null) {
-          const widgets = { ...state.ui.widgets };
-          delete widgets[key];
-          return {
-            ...state,
-            debugLog,
-            ui: {
-              ...state.ui,
-              widgets,
-            },
-          };
-        }
-        return {
-          ...state,
-          debugLog,
-          ui: {
-            ...state.ui,
-            widgets: {
-              ...state.ui.widgets,
-              [key]: { key, content, opts },
-            },
-          },
-        };
-      }
-
-      if (message.type === 'ui_working') {
-        const workingMessage = (message.params as Record<string, unknown>).message ?? null;
-        return {
-          ...state,
-          debugLog,
-          ui: {
-            ...state.ui,
-            workingMessage: workingMessage ? String(workingMessage) : null,
-          },
-        };
-      }
-
-      if (message.type === 'ui_set_title') {
-        const title = String((message.params as Record<string, unknown>).title ?? 'Lemon');
-        return {
-          ...state,
-          debugLog,
-          ui: {
-            ...state.ui,
-            title,
-          },
-        };
-      }
-
-      if (message.type === 'ui_set_editor_text') {
-        const text = String((message.params as Record<string, unknown>).text ?? '');
-        return {
-          ...state,
-          debugLog,
-          ui: {
-            ...state.ui,
-            editorText: text,
-          },
-        };
+      const uiUpdate = routeUiMessage({ state, message, debugLog, now });
+      if (uiUpdate) {
+        return uiUpdate;
       }
 
       if (message.type === 'event') {
-        const eventMsg = message as EventMessage;
-        const updated = applySessionEvent(state, eventMsg.session_id, eventMsg.event, eventMsg.event_seq);
+        const updated = reduceSessionEvent(
+          state,
+          message.session_id,
+          message.event,
+          message.event_seq,
+          now
+        );
         return {
           ...state,
           debugLog,
@@ -591,243 +324,11 @@ export const useLemonStore = create<LemonState>((set, get) => ({
     })),
 }));
 
-function isBridgeMessage(message: WireServerMessage): message is BridgeMessage {
-  return (
-    message.type === 'bridge_status' ||
-    message.type === 'bridge_error' ||
-    message.type === 'bridge_stderr'
-  );
-}
-
-function normalizeLevel(level: string): Notification['level'] {
-  switch (level) {
-    case 'success':
-      return 'success';
-    case 'warn':
-    case 'warning':
-      return 'warn';
-    case 'error':
-      return 'error';
-    default:
-      return 'info';
-  }
-}
-
-function applySessionEvent(state: LemonState, sessionId: string, event: SessionEvent, eventSeq?: number) {
-  const messagesBySession = { ...state.messagesBySession };
-  const toolExecutionsBySession = { ...state.toolExecutionsBySession };
-  const statsBySession = { ...state.statsBySession };
-  const _insertionCounters = { ...state._insertionCounters };
-
-  const messages: MessageWithMeta[] = [...(messagesBySession[sessionId] ?? [])];
-
-  // Get next insertion index for this session
-  const getNextInsertionIndex = (): number => {
-    const current = _insertionCounters[sessionId] ?? 0;
-    _insertionCounters[sessionId] = current + 1;
-    return current;
-  };
-
-  switch (event.type) {
-    case 'agent_end': {
-      const newMessages = (event.data?.[0] as Message[]) ?? [];
-      const merged: MessageWithMeta[] = [...messages];
-      for (const msg of newMessages) {
-        const msgWithMeta: MessageWithMeta = {
-          ...msg,
-          _event_seq: eventSeq,
-          _insertionIndex: getNextInsertionIndex(),
-        };
-        upsertMessage(merged, msgWithMeta);
-      }
-      messagesBySession[sessionId] = sortMessages(merged);
-      break;
-    }
-    case 'message_start':
-    case 'message_update':
-    case 'message_end': {
-      const msg = (event.data?.[0] as Message | undefined) ?? null;
-      if (msg) {
-        const msgWithMeta: MessageWithMeta = {
-          ...msg,
-          _event_seq: eventSeq,
-          _insertionIndex: getNextInsertionIndex(),
-        };
-        upsertMessage(messages, msgWithMeta);
-        messagesBySession[sessionId] = sortMessages(messages);
-      }
-      break;
-    }
-    case 'turn_end': {
-      const msg = (event.data?.[0] as Message | undefined) ?? null;
-      if (msg) {
-        const msgWithMeta: MessageWithMeta = {
-          ...msg,
-          _event_seq: eventSeq,
-          _insertionIndex: getNextInsertionIndex(),
-        };
-        upsertMessage(messages, msgWithMeta);
-        messagesBySession[sessionId] = sortMessages(messages);
-      }
-      break;
-    }
-    case 'tool_execution_start': {
-      const [id, name, args] = (event.data ?? []) as [string, string, Record<string, unknown>];
-      const map = { ...(toolExecutionsBySession[sessionId] ?? {}) };
-      map[id] = {
-        id,
-        name,
-        args,
-        status: 'running',
-        startedAt: Date.now(),
-        updatedAt: Date.now(),
-      };
-      toolExecutionsBySession[sessionId] = map;
-      break;
-    }
-    case 'tool_execution_update': {
-      const [id, name, args, partial] = (event.data ?? []) as [
-        string,
-        string,
-        Record<string, unknown>,
-        unknown,
-      ];
-      const map = { ...(toolExecutionsBySession[sessionId] ?? {}) };
-      const existing = map[id];
-      map[id] = {
-        id,
-        name,
-        args,
-        status: existing?.status ?? 'running',
-        partial,
-        result: existing?.result,
-        startedAt: existing?.startedAt ?? Date.now(),
-        updatedAt: Date.now(),
-      };
-      toolExecutionsBySession[sessionId] = map;
-      break;
-    }
-    case 'tool_execution_end': {
-      const [id, name, result, isError] = (event.data ?? []) as [string, string, unknown, boolean];
-      const map = { ...(toolExecutionsBySession[sessionId] ?? {}) };
-      const existing = map[id];
-      map[id] = {
-        id,
-        name,
-        args: existing?.args ?? null,
-        status: isError ? 'error' : 'complete',
-        partial: existing?.partial,
-        result,
-        startedAt: existing?.startedAt ?? Date.now(),
-        updatedAt: Date.now(),
-        endedAt: Date.now(),
-      };
-      toolExecutionsBySession[sessionId] = map;
-      break;
-    }
-    case 'error': {
-      const reason = String((event.data?.[0] as string | undefined) ?? 'unknown error');
-      const note: Notification = {
-        id: `session-error-${Date.now()}`,
-        message: `Session ${sessionId}: ${reason}`,
-        level: 'error',
-        createdAt: Date.now(),
-      };
-      return {
-        messagesBySession,
-        toolExecutionsBySession,
-        statsBySession,
-        _insertionCounters,
-        notifications: [...state.notifications, note],
-      };
-    }
-    default:
-      break;
-  }
-
-  return { messagesBySession, toolExecutionsBySession, statsBySession, _insertionCounters };
-}
-
-function upsertMessage(messages: MessageWithMeta[], msg: MessageWithMeta): void {
-  const key = messageKey(msg);
-  const existingIndex = messages.findIndex((existing) => messageKey(existing) === key);
-  if (existingIndex >= 0) {
-    // Preserve the original insertion index when updating
-    const existingMeta = messages[existingIndex];
-    messages[existingIndex] = {
-      ...msg,
-      _insertionIndex: existingMeta._insertionIndex,
-      // Keep earliest event_seq if we're updating an existing message
-      _event_seq: existingMeta._event_seq ?? msg._event_seq,
-    };
-  } else {
-    messages.push(msg);
-  }
-}
-
-/**
- * Generate a stable key for a message that combines:
- * - event_seq (if present) for server-side ordering
- * - role and tool_call_id for uniqueness
- * - timestamp as fallback
- */
-function messageKey(msg: MessageWithMeta): string {
-  const meta = msg as MessageWithMeta;
-  const seqPart = meta._event_seq !== undefined ? `seq:${meta._event_seq}:` : '';
-
-  if (msg.role === 'tool_result') {
-    // Tool results are uniquely identified by their tool_call_id
-    return `${seqPart}tool:${msg.tool_call_id}`;
-  }
-  // For user/assistant messages, use role + timestamp
-  // The timestamp should be unique per message from the server
-  return `${seqPart}${msg.role}:${msg.timestamp}`;
-}
-
-/**
- * Sort messages for stable display ordering.
- * Primary sort: event_seq (if present) - monotonic server order
- * Secondary sort: timestamp
- * Tertiary sort: insertion index (for messages with same timestamp)
- */
-function sortMessages(messages: MessageWithMeta[]): MessageWithMeta[] {
-  return [...messages].sort((a, b) => {
-    // First, sort by event_seq if both have it
-    if (a._event_seq !== undefined && b._event_seq !== undefined) {
-      if (a._event_seq !== b._event_seq) {
-        return a._event_seq - b._event_seq;
-      }
-    }
-    // If only one has event_seq, it should come after messages without
-    // (messages without event_seq are likely from older protocol)
-    if (a._event_seq !== undefined && b._event_seq === undefined) {
-      return 1;
-    }
-    if (a._event_seq === undefined && b._event_seq !== undefined) {
-      return -1;
-    }
-
-    // Fall back to timestamp comparison
-    if (a.timestamp !== b.timestamp) {
-      return a.timestamp - b.timestamp;
-    }
-
-    // Finally, use insertion index for deterministic ordering
-    return a._insertionIndex - b._insertionIndex;
-  });
-}
-
 /**
  * Generate a stable React key for a message.
  * Uses event_seq + role + tool_call_id/timestamp to ensure uniqueness
  * and avoid key collisions even when messages arrive out of order.
  */
 export function getMessageKey(msg: MessageWithMeta): string {
-  const seqPart = msg._event_seq !== undefined ? `${msg._event_seq}-` : '';
-  const indexPart = `-${msg._insertionIndex}`;
-
-  if (msg.role === 'tool_result') {
-    return `${seqPart}tool-${msg.tool_call_id}${indexPart}`;
-  }
-  return `${seqPart}${msg.role}-${msg.timestamp}${indexPart}`;
+  return getMessageReactKey(msg);
 }

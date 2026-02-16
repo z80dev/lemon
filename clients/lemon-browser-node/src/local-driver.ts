@@ -1,49 +1,102 @@
 #!/usr/bin/env node
-import { ChromeSession } from './chrome.js';
+import { pathToFileURL } from 'node:url';
+
 import { handleBrowserMethod } from './browser-methods.js';
+import { asBool, asInt, asString, parseCliArgs, type CliArgs } from './cli-args.js';
+import { ChromeSession } from './chrome.js';
 import { resolveOpenClawUserDataDir } from './openclaw-profile.js';
 
-type RequestMsg = {
+export type RequestMsg = {
   id: string;
   method: string;
   args?: unknown;
   timeoutMs?: number;
 };
 
-function parseArgs(argv: string[]): Record<string, string | boolean> {
-  const out: Record<string, string | boolean> = {};
-  for (let i = 0; i < argv.length; i += 1) {
-    const a = argv[i]!;
-    if (!a.startsWith('--')) continue;
-    const key = a.slice(2);
-    const next = argv[i + 1];
-    if (!next || next.startsWith('--')) {
-      out[key] = true;
-    } else {
-      out[key] = next;
-      i += 1;
-    }
+export type LocalDriverConfig = {
+  cdpPort: number;
+  headless: boolean;
+  noSandbox: boolean;
+  attachOnly: boolean;
+  executablePath: string | null;
+  openclawProfile: string;
+  userDataDir: string;
+};
+
+export type LocalDriverResponse = {
+  id: string;
+  ok: boolean;
+  result?: unknown;
+  error?: string;
+};
+
+export function resolveLocalDriverConfig(params: {
+  args: CliArgs;
+  env?: NodeJS.ProcessEnv;
+}): LocalDriverConfig {
+  const env = params.env ?? process.env;
+
+  const cdpPort =
+    asInt(params.args['cdp-port'], asInt(env.LEMON_BROWSER_CDP_PORT, 18800));
+  const headless = asBool(params.args['headless']) || asBool(env.LEMON_BROWSER_HEADLESS);
+  const noSandbox = asBool(params.args['no-sandbox']) || asBool(env.LEMON_BROWSER_NO_SANDBOX);
+  const attachOnly = asBool(params.args['attach-only']) || asBool(env.LEMON_BROWSER_ATTACH_ONLY);
+  const executablePath =
+    asString(params.args['executable-path']) ?? asString(env.LEMON_BROWSER_EXECUTABLE);
+
+  const openclawProfile = asString(params.args['openclaw-profile']) ?? 'openclaw';
+  const userDataDir =
+    asString(params.args['user-data-dir']) ??
+    asString(env.LEMON_BROWSER_USER_DATA_DIR) ??
+    resolveOpenClawUserDataDir(openclawProfile);
+
+  return {
+    cdpPort,
+    headless,
+    noSandbox,
+    attachOnly,
+    executablePath,
+    openclawProfile,
+    userDataDir,
+  };
+}
+
+export async function executeLocalDriverRequest(params: {
+  line: string;
+  invoke: (method: string, args: unknown) => Promise<unknown>;
+  defaultTimeoutMs?: number;
+}): Promise<LocalDriverResponse> {
+  const defaultTimeoutMs = params.defaultTimeoutMs ?? 30_000;
+
+  let msg: RequestMsg;
+  try {
+    msg = JSON.parse(params.line) as RequestMsg;
+  } catch (err) {
+    return {
+      id: 'unknown',
+      ok: false,
+      error: `invalid json: ${String(err)}`,
+    };
   }
-  return out;
-}
 
-function asString(v: unknown): string | null {
-  if (typeof v === 'string' && v.trim()) return v.trim();
-  return null;
-}
+  const id = asString(msg.id) ?? 'unknown';
+  const method = asString(msg.method) ?? '';
+  const args = msg.args ?? {};
+  const timeoutMs =
+    typeof msg.timeoutMs === 'number' && msg.timeoutMs > 0
+      ? msg.timeoutMs
+      : defaultTimeoutMs;
 
-function asBool(v: unknown): boolean {
-  if (v === true) return true;
-  if (typeof v === 'string') return ['1', 'true', 'yes', 'on'].includes(v.toLowerCase());
-  return false;
-}
-
-function asInt(v: unknown, def: number): number {
-  if (typeof v === 'string') {
-    const n = Number.parseInt(v, 10);
-    if (Number.isFinite(n) && n > 0) return n;
+  try {
+    const result = await withTimeout(() => params.invoke(method, args), timeoutMs);
+    return { id, ok: true, result };
+  } catch (err) {
+    return {
+      id,
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
-  return def;
 }
 
 async function withTimeout<T>(fn: () => Promise<T>, timeoutMs: number): Promise<T> {
@@ -65,29 +118,16 @@ function writeLine(obj: unknown) {
 }
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2));
-
-  const cdpPort =
-    asInt(args['cdp-port'], asInt(process.env.LEMON_BROWSER_CDP_PORT, 18800));
-  const headless = asBool(args['headless']) || asBool(process.env.LEMON_BROWSER_HEADLESS);
-  const noSandbox = asBool(args['no-sandbox']) || asBool(process.env.LEMON_BROWSER_NO_SANDBOX);
-  const attachOnly = asBool(args['attach-only']) || asBool(process.env.LEMON_BROWSER_ATTACH_ONLY);
-  const executablePath =
-    asString(args['executable-path']) ?? asString(process.env.LEMON_BROWSER_EXECUTABLE);
-
-  const openclawProfile = asString(args['openclaw-profile']) ?? 'openclaw';
-  const userDataDir =
-    asString(args['user-data-dir']) ??
-    asString(process.env.LEMON_BROWSER_USER_DATA_DIR) ??
-    resolveOpenClawUserDataDir(openclawProfile);
+  const args = parseCliArgs(process.argv.slice(2));
+  const config = resolveLocalDriverConfig({ args });
 
   const chrome = new ChromeSession({
-    cdpPort,
-    userDataDir,
-    executablePath: executablePath ?? undefined,
-    headless,
-    noSandbox,
-    attachOnly,
+    cdpPort: config.cdpPort,
+    userDataDir: config.userDataDir,
+    executablePath: config.executablePath ?? undefined,
+    headless: config.headless,
+    noSandbox: config.noSandbox,
+    attachOnly: config.attachOnly,
   });
   await chrome.start();
   const page = chrome.getPage();
@@ -103,32 +143,15 @@ async function main() {
       const line = buf.slice(0, idx).trim();
       buf = buf.slice(idx + 1);
       if (!line) continue;
-      void handleLine(line);
+
+      void executeLocalDriverRequest({
+        line,
+        invoke: (method, methodArgs) => handleBrowserMethod(page, method, methodArgs),
+      }).then((response) => {
+        writeLine(response);
+      });
     }
   });
-
-  async function handleLine(line: string) {
-    let msg: RequestMsg;
-    try {
-      msg = JSON.parse(line) as RequestMsg;
-    } catch (err) {
-      writeLine({ id: 'unknown', ok: false, error: `invalid json: ${String(err)}` });
-      return;
-    }
-
-    const id = asString(msg.id) ?? 'unknown';
-    const method = asString(msg.method) ?? '';
-    const args = msg.args ?? {};
-    const timeoutMs = typeof msg.timeoutMs === 'number' && msg.timeoutMs > 0 ? msg.timeoutMs : 30_000;
-
-    try {
-      const result = await withTimeout(() => handleBrowserMethod(page, method, args), timeoutMs);
-      writeLine({ id, ok: true, result });
-    } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
-      writeLine({ id, ok: false, error });
-    }
-  }
 
   const shutdown = async () => {
     try {
@@ -141,9 +164,18 @@ async function main() {
   process.on('SIGTERM', () => void shutdown());
 }
 
-main().catch((err) => {
-  const msg = err instanceof Error ? err.stack || err.message : String(err);
-  process.stderr.write(msg + '\n');
-  process.exit(1);
-});
+function isMainModule(): boolean {
+  const entry = process.argv[1];
+  if (!entry) {
+    return false;
+  }
+  return import.meta.url === pathToFileURL(entry).href;
+}
 
+if (isMainModule()) {
+  main().catch((err) => {
+    const msg = err instanceof Error ? err.stack || err.message : String(err);
+    process.stderr.write(msg + '\n');
+    process.exit(1);
+  });
+}

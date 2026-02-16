@@ -288,14 +288,14 @@ defmodule LemonGateway.Scheduler do
 
   defp enqueue_job(thread_key, job) do
     case ensure_worker(thread_key) do
-      {:ok, name} ->
-        case safe_enqueue(name, job) do
+      {:ok, worker_pid} ->
+        case safe_enqueue_async(worker_pid, job) do
           :ok ->
             :ok
 
           {:error, :noproc} ->
             case ensure_worker(thread_key) do
-              {:ok, name2} -> safe_enqueue(name2, job) |> normalize_enqueue()
+              {:ok, worker_pid2} -> safe_enqueue_async(worker_pid2, job) |> normalize_enqueue()
               {:error, _} -> :ok
             end
         end
@@ -306,35 +306,33 @@ defmodule LemonGateway.Scheduler do
   end
 
   defp ensure_worker(thread_key) do
-    name = {:via, Registry, {LemonGateway.ThreadRegistry, thread_key}}
-
     case LemonGateway.ThreadRegistry.whereis(thread_key) do
       nil ->
         case DynamicSupervisor.start_child(
                LemonGateway.ThreadWorkerSupervisor,
                {LemonGateway.ThreadWorker, thread_key: thread_key}
              ) do
-          {:ok, _pid} ->
-            {:ok, name}
+          {:ok, pid} ->
+            {:ok, pid}
 
-          {:error, {:already_started, _pid}} ->
-            {:ok, name}
+          {:error, {:already_started, pid}} ->
+            {:ok, pid}
 
           {:error, _reason} = err ->
             err
         end
 
-      _pid ->
-        {:ok, name}
+      pid ->
+        {:ok, pid}
     end
   end
 
-  defp safe_enqueue(name, job) do
-    try do
-      GenServer.call(name, {:enqueue, job}, 5_000)
-    catch
-      :exit, {:noproc, _} -> {:error, :noproc}
-      :exit, _ -> {:error, :noproc}
+  defp safe_enqueue_async(pid, job) when is_pid(pid) do
+    if Process.alive?(pid) do
+      GenServer.cast(pid, {:enqueue, job})
+      :ok
+    else
+      {:error, :noproc}
     end
   end
 

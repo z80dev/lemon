@@ -6,44 +6,14 @@ import {
   type QueuedCommandMeta,
   DEFAULT_COMMAND_TTL_MS,
 } from './commandQueue';
-
-/** Number of connection failures before logging a warning */
-const CONNECTION_WARNING_THRESHOLD = 3;
-
-function buildWsUrl(): string {
-  // Allow explicit override via environment variable for custom deployments
-  const envUrl = import.meta.env.VITE_LEMON_WS_URL as string | undefined;
-  if (envUrl) {
-    return envUrl;
-  }
-
-  // Default: use same-origin WebSocket connection
-  // This works when the UI is served by the same server handling WebSocket connections
-  const { protocol, host } = window.location;
-  const wsProto = protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${wsProto}//${host}/ws`;
-}
-
-function logConnectionWarning(retryCount: number): void {
-  if (retryCount === CONNECTION_WARNING_THRESHOLD) {
-    const envUrl = import.meta.env.VITE_LEMON_WS_URL as string | undefined;
-    const wsUrl = buildWsUrl();
-
-    if (envUrl) {
-      console.warn(
-        `[LemonSocket] Failed to connect after ${retryCount} retries.\n` +
-          `Using VITE_LEMON_WS_URL override: ${wsUrl}\n` +
-          `Verify the WebSocket server is running and accessible.`
-      );
-    } else {
-      console.warn(
-        `[LemonSocket] Failed to connect after ${retryCount} retries.\n` +
-          `Using same-origin WebSocket URL: ${wsUrl}\n` +
-          `If using a separate backend, set VITE_LEMON_WS_URL environment variable.`
-      );
-    }
-  }
-}
+import {
+  buildWsUrl,
+  confirmQueuedCommandWithDeps,
+  getReconnectDelayMs,
+  logConnectionWarning,
+  processReconnectQueue,
+  sendOrQueueCommand,
+} from './socketTransport';
 
 export function useLemonSocket(): void {
   const applyServerMessage = useLemonStore((state) => state.applyServerMessage);
@@ -67,23 +37,14 @@ export function useLemonSocket(): void {
 
   const send = useCallback(
     (command: ClientCommand) => {
-      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-        socketRef.current.send(JSON.stringify(command));
-      } else {
-        // Get current active session ID for tagging
-        const activeSessionId = useLemonStore.getState().sessions.activeSessionId;
-
-        // Enqueue with metadata
-        commandQueue.enqueue(command, activeSessionId, DEFAULT_COMMAND_TTL_MS, (dropped) => {
-          // Notify about dropped command due to queue overflow
-          enqueueNotification({
-            id: `queue-overflow-${Date.now()}`,
-            message: `Queue full: dropped oldest command "${dropped.commandType}"`,
-            level: 'warn',
-            createdAt: Date.now(),
-          });
-        });
-      }
+      sendOrQueueCommand({
+        socket: socketRef.current,
+        command,
+        queue: commandQueue,
+        activeSessionId: useLemonStore.getState().sessions.activeSessionId,
+        ttlMs: DEFAULT_COMMAND_TTL_MS,
+        enqueueNotification,
+      });
     },
     [enqueueNotification]
   );
@@ -109,53 +70,13 @@ export function useLemonSocket(): void {
         retryCount.current = 0;
         setConnectionState('connected');
 
-        // Get current session ID for reconnect processing
-        const currentSessionId = useLemonStore.getState().sessions.activeSessionId;
-
-        // Process queued commands on reconnect
-        const readyToSend = commandQueue.processOnReconnect(
-          currentSessionId,
-          // Handle expired commands
-          (expired) => {
-            const count = expired.length;
-            const types = [...new Set(expired.map((e) => e.commandType))].join(', ');
-            enqueueNotification({
-              id: `queue-expired-${Date.now()}`,
-              message: `${count} queued command${count > 1 ? 's' : ''} expired while disconnected: ${types}`,
-              level: 'warn',
-              createdAt: Date.now(),
-            });
-          },
-          // Handle commands needing confirmation
-          (needsConfirmation) => {
-            for (const meta of needsConfirmation) {
-              addPendingConfirmation(meta);
-            }
-            if (needsConfirmation.length > 0) {
-              enqueueNotification({
-                id: `queue-confirm-${Date.now()}`,
-                message: `${needsConfirmation.length} destructive command${needsConfirmation.length > 1 ? 's' : ''} queued for different session - please confirm`,
-                level: 'warn',
-                createdAt: Date.now(),
-              });
-            }
-          }
-        );
-
-        // Send ready commands
-        for (const meta of readyToSend) {
-          ws.send(meta.payload);
-        }
-
-        // Notify if commands were sent from queue
-        if (readyToSend.length > 0) {
-          enqueueNotification({
-            id: `queue-sent-${Date.now()}`,
-            message: `Sent ${readyToSend.length} queued command${readyToSend.length > 1 ? 's' : ''}`,
-            level: 'info',
-            createdAt: Date.now(),
-          });
-        }
+        processReconnectQueue({
+          queue: commandQueue,
+          currentSessionId: useLemonStore.getState().sessions.activeSessionId,
+          enqueueNotification,
+          addPendingConfirmation,
+          sendPayload: (payload) => ws.send(payload),
+        });
 
         // Request current config state
         ws.send(JSON.stringify({ type: 'get_config' }));
@@ -179,7 +100,7 @@ export function useLemonSocket(): void {
           return;
         }
         setConnectionState('disconnected');
-        const delay = Math.min(10000, 500 * Math.pow(2, retryCount.current));
+        const delay = getReconnectDelayMs(retryCount.current);
         retryCount.current += 1;
         logConnectionWarning(retryCount.current);
         reconnectTimer.current = window.setTimeout(connect, delay);
@@ -203,19 +124,12 @@ export function useLemonSocket(): void {
  * Call this from UI when user confirms/rejects a stale destructive command
  */
 export function confirmQueuedCommand(meta: QueuedCommandMeta, confirmed: boolean): void {
-  const result = commandQueue.confirmCommand(meta, confirmed);
-
-  if (confirmed && result) {
-    // Send the command if confirmed
-    const sendCommand = useLemonStore.getState().sendCommand;
-    if (sendCommand) {
-      const command = JSON.parse(result.payload) as ClientCommand;
-      sendCommand(command);
-    }
-  }
-
-  // Remove from pending confirmations in store
-  useLemonStore.getState().removePendingConfirmation(meta);
+  confirmQueuedCommandWithDeps(meta, confirmed, {
+    queue: commandQueue,
+    getSendCommand: () => useLemonStore.getState().sendCommand,
+    removePendingConfirmation: (pendingMeta) =>
+      useLemonStore.getState().removePendingConfirmation(pendingMeta),
+  });
 }
 
 /**

@@ -43,7 +43,7 @@ defmodule LemonAutomation.CronManager do
 
   use GenServer
 
-  alias LemonAutomation.{CronJob, CronRun, CronStore, CronSchedule, Events}
+  alias LemonAutomation.{CronJob, CronRun, CronStore, CronSchedule, Events, RunSubmitter}
 
   require Logger
 
@@ -339,116 +339,12 @@ defmodule LemonAutomation.CronManager do
 
     # Submit to router asynchronously
     Task.start(fn ->
-      result = submit_to_router(job, run)
+      result = RunSubmitter.submit(job, run)
       send(__MODULE__, {:run_complete, run.id, result})
     end)
 
     run
   end
-
-  defp submit_to_router(job, run) do
-    timeout_ms = job.timeout_ms || 300_000
-
-    params = %{
-      origin: :cron,
-      session_key: job.session_key,
-      prompt: job.prompt,
-      agent_id: job.agent_id,
-      meta: %{
-        cron_job_id: job.id,
-        cron_run_id: run.id,
-        triggered_by: run.triggered_by
-      }
-    }
-
-    try do
-      case LemonRouter.submit(params) do
-        {:ok, run_id} ->
-          # LemonRouter.submit returns run_id, not the result!
-          # We need to subscribe to bus events and wait for run completion
-          wait_for_run_completion(run_id, timeout_ms)
-
-        {:error, reason} ->
-          {:error, inspect(reason)}
-      end
-    rescue
-      e ->
-        {:error, Exception.message(e)}
-    catch
-      :exit, reason ->
-        {:error, "Exit: #{inspect(reason)}"}
-    end
-  end
-
-  # Wait for run completion via LemonCore.Bus events
-  defp wait_for_run_completion(run_id, timeout_ms) do
-    topic = "run:#{run_id}"
-
-    # Subscribe to run events
-    LemonCore.Bus.subscribe(topic)
-
-    try do
-      receive do
-        %LemonCore.Event{type: :run_completed, payload: payload} ->
-          extract_output_from_completion(payload)
-
-        # Also handle raw tuple format if LemonCore.Event isn't used
-        {:run_completed, payload} ->
-          extract_output_from_completion(payload)
-
-        %{type: :run_completed, payload: payload} ->
-          extract_output_from_completion(payload)
-
-        # Handle completion wrapped in completed key
-        %{completed: %{answer: answer, ok: true}} ->
-          {:ok, truncate_output(answer)}
-
-        %{completed: %{ok: false, error: error}} ->
-          {:error, inspect(error)}
-      after
-        timeout_ms ->
-          :timeout
-      end
-    after
-      LemonCore.Bus.unsubscribe(topic)
-    end
-  end
-
-  defp extract_output_from_completion(%{completed: %{answer: answer, ok: true}}) do
-    {:ok, truncate_output(answer)}
-  end
-
-  defp extract_output_from_completion(%{completed: %{ok: false, error: error}}) do
-    {:error, inspect(error)}
-  end
-
-  defp extract_output_from_completion(%{answer: answer, ok: true}) do
-    {:ok, truncate_output(answer)}
-  end
-
-  defp extract_output_from_completion(%{ok: false, error: error}) do
-    {:error, inspect(error)}
-  end
-
-  defp extract_output_from_completion(result) when is_map(result) do
-    cond do
-      is_binary(result[:output]) -> {:ok, truncate_output(result[:output])}
-      is_binary(result["output"]) -> {:ok, truncate_output(result["output"])}
-      is_binary(result[:answer]) -> {:ok, truncate_output(result[:answer])}
-      is_binary(result["answer"]) -> {:ok, truncate_output(result["answer"])}
-      true -> {:ok, truncate_output(inspect(result))}
-    end
-  end
-
-  defp extract_output_from_completion(result) do
-    {:ok, truncate_output(inspect(result))}
-  end
-
-  defp truncate_output(text) when is_binary(text) do
-    String.slice(text, 0, 1000)
-  end
-
-  defp truncate_output(text), do: inspect(text) |> String.slice(0, 1000)
 
   defp validate_params(params) do
     required = [:name, :schedule, :agent_id, :session_key, :prompt]
