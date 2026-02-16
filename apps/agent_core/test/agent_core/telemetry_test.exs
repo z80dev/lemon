@@ -137,6 +137,35 @@ defmodule AgentCore.TelemetryTest do
         assert [:agent_core, :tool_task | _rest] = event_name
       end
     end
+
+    test "all tool_result telemetry events use [:agent_core, :tool_result, *] prefix", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
+      attach_telemetry([[:agent_core, :tool_result, :emit]], handler_id, collector)
+
+      echo_tool = Mocks.echo_tool()
+      context = simple_context(tools: [echo_tool])
+
+      tool_call =
+        Mocks.tool_call("echo", %{"text" => "hello"}, id: "call_tool_result_prefix_test")
+
+      tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
+      final_response = Mocks.assistant_message("Done")
+
+      config = simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
+
+      _events = Loop.stream([user_message("Test")], context, config) |> Enum.to_list()
+
+      telemetry_events = get_events(collector)
+      detach_telemetry(handler_id)
+
+      assert length(telemetry_events) >= 1
+
+      for {event_name, _measurements, _metadata} <- telemetry_events do
+        assert [:agent_core, :tool_result | _rest] = event_name
+      end
+    end
   end
 
   # ============================================================================
@@ -341,6 +370,139 @@ defmodule AgentCore.TelemetryTest do
 
       assert length(start_events) == 2
       assert length(end_events) == 2
+    end
+  end
+
+  # ============================================================================
+  # Tool Result Telemetry Tests
+  # ============================================================================
+
+  describe "tool result telemetry" do
+    test "emits :emit event with trust=:trusted for successful tool results", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
+      attach_telemetry([[:agent_core, :tool_result, :emit]], handler_id, collector)
+
+      echo_tool = Mocks.echo_tool()
+      context = simple_context(tools: [echo_tool])
+
+      tool_call = Mocks.tool_call("echo", %{"text" => "hello"}, id: "tool_result_trusted_test")
+      tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
+      final_response = Mocks.assistant_message("Done")
+
+      config = simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
+
+      _events = Loop.stream([user_message("Test")], context, config) |> Enum.to_list()
+
+      telemetry_events = get_events(collector)
+      detach_telemetry(handler_id)
+
+      matching_events =
+        Enum.filter(telemetry_events, fn {name, _measurements, metadata} ->
+          name == [:agent_core, :tool_result, :emit] and
+            metadata.tool_call_id == "tool_result_trusted_test"
+        end)
+
+      assert length(matching_events) >= 1
+
+      {event_name, measurements, metadata} = hd(matching_events)
+      assert event_name == [:agent_core, :tool_result, :emit]
+      assert Map.has_key?(measurements, :system_time)
+      assert metadata.tool_name == "echo"
+      assert metadata.tool_call_id == "tool_result_trusted_test"
+      assert metadata.is_error == false
+      assert metadata.trust == :trusted
+    end
+
+    test "emits :emit event with trust=:untrusted when tool marks result untrusted", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
+      attach_telemetry([[:agent_core, :tool_result, :emit]], handler_id, collector)
+
+      untrusted_tool = %AgentTool{
+        name: "untrusted_echo",
+        description: "Returns untrusted output",
+        parameters: %{"type" => "object"},
+        label: "Untrusted Echo",
+        execute: fn _id, %{"text" => text}, _signal, _on_update ->
+          %AgentCore.Types.AgentToolResult{
+            content: [%Ai.Types.TextContent{type: :text, text: text}],
+            trust: :untrusted
+          }
+        end
+      }
+
+      context = simple_context(tools: [untrusted_tool])
+
+      tool_call =
+        Mocks.tool_call("untrusted_echo", %{"text" => "from web"},
+          id: "tool_result_untrusted_test"
+        )
+
+      tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
+      final_response = Mocks.assistant_message("Done")
+
+      config = simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
+
+      _events = Loop.stream([user_message("Test")], context, config) |> Enum.to_list()
+
+      telemetry_events = get_events(collector)
+      detach_telemetry(handler_id)
+
+      matching_events =
+        Enum.filter(telemetry_events, fn {name, _measurements, metadata} ->
+          name == [:agent_core, :tool_result, :emit] and
+            metadata.tool_call_id == "tool_result_untrusted_test"
+        end)
+
+      assert length(matching_events) >= 1
+
+      {event_name, measurements, metadata} = hd(matching_events)
+      assert event_name == [:agent_core, :tool_result, :emit]
+      assert Map.has_key?(measurements, :system_time)
+      assert metadata.tool_name == "untrusted_echo"
+      assert metadata.tool_call_id == "tool_result_untrusted_test"
+      assert metadata.is_error == false
+      assert metadata.trust == :untrusted
+    end
+
+    test "emits :emit event with is_error=true for tool execution errors", %{
+      handler_id: handler_id,
+      collector: collector
+    } do
+      attach_telemetry([[:agent_core, :tool_result, :emit]], handler_id, collector)
+
+      error_tool = Mocks.error_tool()
+      context = simple_context(tools: [error_tool])
+
+      tool_call =
+        Mocks.tool_call("error_tool", %{"message" => "fail"}, id: "tool_result_error_test")
+
+      tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
+      final_response = Mocks.assistant_message("Done")
+
+      config = simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
+
+      _events = Loop.stream([user_message("Test")], context, config) |> Enum.to_list()
+
+      telemetry_events = get_events(collector)
+      detach_telemetry(handler_id)
+
+      matching_events =
+        Enum.filter(telemetry_events, fn {name, _measurements, metadata} ->
+          name == [:agent_core, :tool_result, :emit] and
+            metadata.tool_call_id == "tool_result_error_test"
+        end)
+
+      assert length(matching_events) >= 1
+
+      {_event_name, _measurements, metadata} = hd(matching_events)
+      assert metadata.tool_name == "error_tool"
+      assert metadata.tool_call_id == "tool_result_error_test"
+      assert metadata.is_error == true
+      assert metadata.trust == :trusted
     end
   end
 

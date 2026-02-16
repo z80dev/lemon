@@ -252,13 +252,15 @@ defmodule AgentCore.Loop.ToolCalls do
       {:tool_execution_end, tool_call.id, tool_call.name, result, is_error}
     )
 
+    trust = normalize_trust(result.trust)
+
     tool_result_message = %ToolResultMessage{
       role: :tool_result,
       tool_call_id: tool_call.id,
       tool_name: tool_call.name,
       content: result.content,
       details: result.details,
-      trust: normalize_trust(result.trust),
+      trust: trust,
       is_error: is_error,
       timestamp: System.system_time(:millisecond)
     }
@@ -269,6 +271,17 @@ defmodule AgentCore.Loop.ToolCalls do
 
     EventStream.push(stream, {:message_start, tool_result_message})
     EventStream.push(stream, {:message_end, tool_result_message})
+
+    LemonCore.Telemetry.emit(
+      [:agent_core, :tool_result, :emit],
+      %{system_time: System.system_time()},
+      %{
+        tool_name: tool_call.name,
+        tool_call_id: tool_call.id,
+        is_error: is_error,
+        trust: trust
+      }
+    )
 
     {context, new_messages, results}
   end
