@@ -32,7 +32,7 @@ defmodule LemonRouter.Router do
     request = build_inbound_run_request(msg, meta, session_key, agent_id)
 
     # Submit to orchestrator
-    case RunOrchestrator.submit(request) do
+    case run_orchestrator().submit(request) do
       {:ok, _run_id} ->
         :ok
 
@@ -119,7 +119,7 @@ defmodule LemonRouter.Router do
           })
       })
 
-    case RunOrchestrator.submit(request) do
+    case run_orchestrator().submit(request) do
       {:ok, run_id} ->
         {:ok, %{run_id: run_id, session_key: session_key}}
 
@@ -185,4 +185,8 @@ defmodule LemonRouter.Router do
 
   defp normalize_meta(meta) when is_map(meta), do: meta
   defp normalize_meta(_), do: %{}
+
+  defp run_orchestrator do
+    Application.get_env(:lemon_router, :run_orchestrator, RunOrchestrator)
+  end
 end
