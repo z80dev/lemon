@@ -1968,6 +1968,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             state
 
           _ ->
+            _ = safe_abort_session(session_key, :new_session)
+
             case submit_memory_reflection_before_new(
                    state,
                    inbound,
@@ -2221,6 +2223,16 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   rescue
     _ -> :ok
   end
+
+  defp safe_abort_session(session_key, reason)
+       when is_binary(session_key) and byte_size(session_key) > 0 do
+    _ = LemonCore.RouterBridge.abort_session(session_key, reason)
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp safe_abort_session(_, _), do: :ok
 
   defp safe_delete_selected_resume(state, chat_id, thread_id)
        when is_integer(chat_id) do

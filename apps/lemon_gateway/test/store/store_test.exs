@@ -300,6 +300,17 @@ defmodule LemonGateway.Store.BackendConfigTest do
     assert result.persistent == true
     assert is_integer(result.expires_at)
 
+    # Regression: repeated SQLite reads for the same key should not poison the
+    # prepared statement cursor and crash the Store process.
+    result_again = Store.get_chat_state(scope)
+    assert result_again.persistent == true
+    assert is_integer(result_again.expires_at)
+
+    override_scope = %ChatScope{transport: :telegram, chat_id: 300_001, topic_id: nil}
+    :ok = Store.put(:gateway_project_overrides, override_scope, "default")
+    assert Store.get(:gateway_project_overrides, override_scope) == "default"
+    assert Store.get(:gateway_project_overrides, override_scope) == "default"
+
     assert File.exists?(db_path)
   end
 end

@@ -554,7 +554,11 @@ defmodule LemonGateway.Run do
   defp log_run_failure(state, %Event.Completed{} = completed) do
     error_text = format_error_for_log(completed.error)
     engine_id = engine_id_for(state.job)
-    level = if completed.error in [:user_requested, :interrupted], do: :warning, else: :error
+
+    level =
+      if completed.error in [:user_requested, :interrupted, :new_session],
+        do: :warning,
+        else: :error
 
     message =
       "Gateway run failed " <>

@@ -94,7 +94,7 @@ defmodule LemonCore.Store.SqliteBackend do
       now_ms = System.system_time(:millisecond)
 
       with :ok <-
-             Sqlite3.bind(state.statements.put, [
+             bind_statement(state.statements.put, [
                table_name,
                {:blob, encoded_key},
                {:blob, encoded_value},
@@ -126,7 +126,7 @@ defmodule LemonCore.Store.SqliteBackend do
       table_name = normalize_table_name(table)
       encoded_key = encode(key)
 
-      with :ok <- Sqlite3.bind(state.statements.get, [table_name, {:blob, encoded_key}]) do
+      with :ok <- bind_statement(state.statements.get, [table_name, {:blob, encoded_key}]) do
         case Sqlite3.step(state.conn, state.statements.get) do
           {:row, [value_blob]} ->
             {:ok, decode(value_blob), state}
@@ -157,7 +157,7 @@ defmodule LemonCore.Store.SqliteBackend do
       table_name = normalize_table_name(table)
       encoded_key = encode(key)
 
-      with :ok <- Sqlite3.bind(state.statements.delete, [table_name, {:blob, encoded_key}]),
+      with :ok <- bind_statement(state.statements.delete, [table_name, {:blob, encoded_key}]),
            :done <- Sqlite3.step(state.conn, state.statements.delete) do
         {:ok, state}
       else
@@ -177,7 +177,7 @@ defmodule LemonCore.Store.SqliteBackend do
     else
       table_name = normalize_table_name(table)
 
-      with :ok <- Sqlite3.bind(state.statements.list, [table_name]),
+      with :ok <- bind_statement(state.statements.list, [table_name]),
            {:ok, rows} <- Sqlite3.fetch_all(state.conn, state.statements.list) do
         items =
           Enum.map(rows, fn [key_blob, value_blob] ->
@@ -198,7 +198,7 @@ defmodule LemonCore.Store.SqliteBackend do
   @spec list_tables(map()) :: [atom()]
   def list_tables(state) do
     persistent_tables =
-      with :ok <- Sqlite3.bind(state.statements.list_tables, []),
+      with :ok <- bind_statement(state.statements.list_tables, []),
            {:ok, rows} <- Sqlite3.fetch_all(state.conn, state.statements.list_tables) do
         rows
         |> Enum.map(fn [table_name] -> table_name end)
@@ -295,6 +295,13 @@ defmodule LemonCore.Store.SqliteBackend do
       _ ->
         tid = :ets.new(:lemon_core_store_sqlite_ephemeral, [:set, :protected])
         {tid, %{state | ephemeral_ets: Map.put(state.ephemeral_ets, table, tid)}}
+    end
+  end
+
+  defp bind_statement(statement, params) do
+    with :ok <- Sqlite3.reset(statement),
+         :ok <- Sqlite3.bind(statement, params) do
+      :ok
     end
   end
 

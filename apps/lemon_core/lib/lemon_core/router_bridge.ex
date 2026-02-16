@@ -75,6 +75,24 @@ defmodule LemonCore.RouterBridge do
     e -> {:error, e}
   end
 
+  @spec abort_session(binary(), term()) :: :ok | {:error, :unavailable} | {:error, term()}
+  def abort_session(session_key, reason \\ :user_requested) when is_binary(session_key) do
+    case impl(:router) do
+      nil ->
+        {:error, :unavailable}
+
+      mod ->
+        if Code.ensure_loaded?(mod) and function_exported?(mod, :abort, 2) do
+          _ = apply(mod, :abort, [session_key, reason])
+          :ok
+        else
+          {:error, :unavailable}
+        end
+    end
+  rescue
+    e -> {:error, e}
+  end
+
   defp impl(key) do
     config = Application.get_env(:lemon_core, @bridge_key, %{})
     Map.get(config, key)

@@ -6,14 +6,18 @@ defmodule LemonRouter.ToolStatusRenderer do
   message shown in transports like Telegram.
   """
 
+  @telegram_recent_action_limit 5
+
   @spec render(String.t() | nil, map(), [String.t()]) :: String.t()
   def render(_channel_id, _actions, []) do
     "Tool calls:\n- (none yet)"
   end
 
   def render(channel_id, actions, order) when is_map(actions) and is_list(order) do
+    {display_order, omitted_count} = limit_order_for_channel(channel_id, order)
+
     lines =
-      Enum.map(order, fn id ->
+      Enum.map(display_order, fn id ->
         case Map.get(actions, id) do
           nil -> nil
           action -> format_action_line(channel_id, action)
@@ -21,8 +25,32 @@ defmodule LemonRouter.ToolStatusRenderer do
       end)
       |> Enum.reject(&is_nil/1)
 
+    lines =
+      case omitted_count do
+        n when is_integer(n) and n > 0 ->
+          ["- (#{n} #{tool_word(n)} omitted)" | lines]
+
+        _ ->
+          lines
+      end
+
     Enum.join(["Tool calls:" | lines], "\n")
   end
+
+  defp limit_order_for_channel("telegram", order) when is_list(order) do
+    if length(order) > @telegram_recent_action_limit do
+      display_order = Enum.take(order, -@telegram_recent_action_limit)
+      omitted_count = length(order) - length(display_order)
+      {display_order, omitted_count}
+    else
+      {order, 0}
+    end
+  end
+
+  defp limit_order_for_channel(_channel_id, order), do: {order, 0}
+
+  defp tool_word(1), do: "tool"
+  defp tool_word(_n), do: "tools"
 
   defp format_action_line(channel_id, action) when is_map(action) do
     title = truncate_one_line(action[:title] || action["title"] || "", 80)
@@ -68,7 +96,6 @@ defmodule LemonRouter.ToolStatusRenderer do
     if not task_like? do
       nil
     else
-
       # We show:
       # - selected task engine (default: internal) if args are present
       # - role if present
@@ -137,6 +164,7 @@ defmodule LemonRouter.ToolStatusRenderer do
   defp maybe_add_flag(parts, flag, true), do: parts ++ [flag]
 
   defp maybe_add_via(parts, nil, _task_engine), do: parts
+
   defp maybe_add_via(parts, caller_engine, nil) do
     if caller_engine != "" do
       parts ++ ["via=#{caller_engine}"]
@@ -209,6 +237,7 @@ defmodule LemonRouter.ToolStatusRenderer do
 
   defp normalize_optional_string(nil), do: nil
   defp normalize_optional_string(s) when is_binary(s), do: String.trim(s)
+
   defp normalize_optional_string(other) do
     (LemonRouter.ToolPreview.to_text(other) || inspect(other))
     |> String.trim()

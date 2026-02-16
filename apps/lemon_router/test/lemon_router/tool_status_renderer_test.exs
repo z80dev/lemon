@@ -22,5 +22,49 @@ defmodule LemonRouter.ToolStatusRendererTest do
     refute String.contains?(text, "%AgentCore.Types.AgentToolResult")
     refute String.contains?(text, "%Ai.Types.TextContent")
   end
-end
 
+  test "telegram shows only the 5 most recent tool calls and omits older ones" do
+    actions =
+      for i <- 1..7, into: %{} do
+        id = "a#{i}"
+
+        {id,
+         %{
+           title: "Tool #{i}",
+           phase: :completed,
+           ok: true,
+           detail: %{result_preview: "ok"}
+         }}
+      end
+
+    order = Enum.map(1..7, &"a#{&1}")
+
+    text = ToolStatusRenderer.render("telegram", actions, order)
+
+    assert String.contains?(text, "2 tools omitted")
+
+    # Keep the most recent 5 only (a3..a7)
+    refute String.contains?(text, "Tool 1")
+    refute String.contains?(text, "Tool 2")
+    assert String.contains?(text, "Tool 3")
+    assert String.contains?(text, "Tool 7")
+  end
+
+  test "non-telegram channels keep full tool call list" do
+    actions = %{
+      "a1" => %{title: "Tool 1", phase: :completed, ok: true, detail: %{result_preview: "ok"}},
+      "a2" => %{title: "Tool 2", phase: :completed, ok: true, detail: %{result_preview: "ok"}},
+      "a3" => %{title: "Tool 3", phase: :completed, ok: true, detail: %{result_preview: "ok"}},
+      "a4" => %{title: "Tool 4", phase: :completed, ok: true, detail: %{result_preview: "ok"}},
+      "a5" => %{title: "Tool 5", phase: :completed, ok: true, detail: %{result_preview: "ok"}},
+      "a6" => %{title: "Tool 6", phase: :completed, ok: true, detail: %{result_preview: "ok"}}
+    }
+
+    order = Enum.map(1..6, &"a#{&1}")
+    text = ToolStatusRenderer.render("discord", actions, order)
+
+    refute String.contains?(text, "omitted")
+    assert String.contains?(text, "Tool 1")
+    assert String.contains?(text, "Tool 6")
+  end
+end

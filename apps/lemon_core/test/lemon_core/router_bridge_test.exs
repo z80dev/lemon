@@ -14,6 +14,11 @@ defmodule LemonCore.RouterBridgeTest do
 
   defmodule TestRouter do
     @moduledoc false
+
+    def abort(session_key, reason) do
+      send(self(), {:aborted, session_key, reason})
+      :ok
+    end
   end
 
   setup do
@@ -71,6 +76,20 @@ defmodule LemonCore.RouterBridgeTest do
     test "returns unavailable when no orchestrator is configured" do
       :ok = RouterBridge.configure(router: TestRouter)
       assert {:error, :unavailable} = RouterBridge.submit_run(%{session_key: "agent:x:main"})
+    end
+  end
+
+  describe "abort_session/2" do
+    test "delegates to router abort when configured" do
+      :ok = RouterBridge.configure(router: TestRouter)
+
+      assert :ok = RouterBridge.abort_session("agent:bridge:main", :new_session)
+      assert_receive {:aborted, "agent:bridge:main", :new_session}
+    end
+
+    test "returns unavailable when no router is configured" do
+      :ok = RouterBridge.configure(run_orchestrator: TestRunOrchestrator)
+      assert {:error, :unavailable} = RouterBridge.abort_session("agent:x:main")
     end
   end
 end
