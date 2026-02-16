@@ -10,7 +10,7 @@ defmodule CodingAgent.Tools.WebDownload do
 
   alias AgentCore.AbortSignal
   alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias CodingAgent.Security.ExternalContent
   alias CodingAgent.Tools.WebGuard
 
   @default_timeout_seconds 60
@@ -116,7 +116,9 @@ defmodule CodingAgent.Tools.WebDownload do
             "bytes" => byte_size(binary),
             "sha256" => sha256,
             "downloadedAt" => DateTime.utc_now() |> DateTime.to_iso8601(),
-            "tookMs" => elapsed_ms(started_ms)
+            "tookMs" => elapsed_ms(started_ms),
+            "trustMetadata" => web_download_trust_metadata(:camel_case),
+            "trust_metadata" => web_download_trust_metadata(:snake_case)
           }
 
           json_result(payload)
@@ -304,12 +306,18 @@ defmodule CodingAgent.Tools.WebDownload do
   end
 
   defp json_result(payload) do
-    text = Jason.encode!(payload, pretty: true)
+    ExternalContent.untrusted_json_result(payload)
+  end
 
-    %AgentToolResult{
-      content: [%TextContent{text: text}],
-      details: payload
-    }
+  defp web_download_trust_metadata(:camel_case) do
+    ExternalContent.web_trust_metadata(:web_fetch, [],
+      key_style: :camel_case,
+      warning_included: false
+    )
+  end
+
+  defp web_download_trust_metadata(:snake_case) do
+    ExternalContent.web_trust_metadata(:web_fetch, [], warning_included: false)
   end
 
   defp format_guard_error({:ssrf_blocked, message}), do: message

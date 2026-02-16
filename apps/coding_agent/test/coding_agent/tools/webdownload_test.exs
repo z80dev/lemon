@@ -57,6 +57,7 @@ defmodule CodingAgent.Tools.WebDownloadTest do
     out = Path.join(tmp_dir, "out.png")
 
     result = tool.execute.("id", %{"url" => "https://8.8.8.8/file.png", "path" => out}, nil, nil)
+    assert result.trust == :untrusted
     payload = decode_payload(result)
 
     assert payload["status"] == 200
@@ -64,6 +65,18 @@ defmodule CodingAgent.Tools.WebDownloadTest do
     assert payload["path"] == out
     assert payload["bytes"] == byte_size(data)
     assert is_binary(payload["sha256"])
+    assert payload["trustMetadata"]["untrusted"] == true
+    assert payload["trustMetadata"]["source"] == "web_fetch"
+    assert payload["trustMetadata"]["sourceLabel"] == "Web Fetch"
+    assert payload["trustMetadata"]["wrappingApplied"] == true
+    assert payload["trustMetadata"]["warningIncluded"] == false
+    assert payload["trustMetadata"]["wrappedFields"] == []
+    assert payload["trust_metadata"]["untrusted"] == true
+    assert payload["trust_metadata"]["source"] == "web_fetch"
+    assert payload["trust_metadata"]["source_label"] == "Web Fetch"
+    assert payload["trust_metadata"]["wrapping_applied"] == true
+    assert payload["trust_metadata"]["warning_included"] == false
+    assert payload["trust_metadata"]["wrapped_fields"] == []
     assert File.read!(out) == data
   end
 
@@ -82,6 +95,7 @@ defmodule CodingAgent.Tools.WebDownloadTest do
     tool = build_tool(tmp_dir, http_get: http_get)
 
     result = tool.execute.("id", %{"url" => "https://8.8.8.8/hello"}, nil, nil)
+    assert result.trust == :untrusted
     payload = decode_payload(result)
 
     assert payload["status"] == 200

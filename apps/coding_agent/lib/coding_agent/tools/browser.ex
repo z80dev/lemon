@@ -6,7 +6,7 @@ defmodule CodingAgent.Tools.Browser do
   """
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
+  alias CodingAgent.Security.ExternalContent
 
   @default_timeout_ms 30_000
   @default_max_chars 50_000
@@ -74,8 +74,15 @@ defmodule CodingAgent.Tools.Browser do
 
   defp handle_ok_result(cwd, "browser.screenshot", args, %{} = result) do
     case materialize_screenshot(cwd, args, result) do
-      {:ok, out} -> json_result(%{"ok" => true, "result" => out.result}, details: out.details)
-      {:error, reason} -> {:error, reason}
+      {:ok, out} ->
+        json_result(
+          %{"ok" => true, "result" => out.result},
+          details: out.details,
+          wrapped_fields: ["result"]
+        )
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -89,18 +96,21 @@ defmodule CodingAgent.Tools.Browser do
 
     {final_html, truncated?} = maybe_truncate(html, max_chars)
 
-    json_result(%{
-      "ok" => true,
-      "result" =>
-        result
-        |> Map.put("html", final_html)
-        |> maybe_put("truncated", truncated?)
-        |> maybe_put("originalChars", String.length(html))
-    })
+    json_result(
+      %{
+        "ok" => true,
+        "result" =>
+          result
+          |> Map.put("html", final_html)
+          |> maybe_put("truncated", truncated?)
+          |> maybe_put("originalChars", String.length(html))
+      },
+      wrapped_fields: ["result.html"]
+    )
   end
 
   defp handle_ok_result(_cwd, _method, _args, result) do
-    json_result(%{"ok" => true, "result" => result})
+    json_result(%{"ok" => true, "result" => result}, wrapped_fields: ["result"])
   end
 
   defp read_timeout_ms(params) do
@@ -134,14 +144,33 @@ defmodule CodingAgent.Tools.Browser do
     end
   end
 
-  defp json_result(payload, opts \\ []) do
-    text = Jason.encode!(payload, pretty: true)
-    details = Keyword.get(opts, :details)
+  defp json_result(payload, opts) when is_map(payload) do
+    payload = put_trust_metadata(payload, Keyword.get(opts, :wrapped_fields, ["result"]))
+    result = ExternalContent.untrusted_json_result(payload)
 
-    %AgentToolResult{
-      content: [%TextContent{text: text}],
-      details: details || payload
-    }
+    case Keyword.fetch(opts, :details) do
+      {:ok, details} -> %{result | details: details}
+      :error -> result
+    end
+  end
+
+  defp put_trust_metadata(payload, wrapped_fields) when is_map(payload) do
+    trust_metadata_camel =
+      ExternalContent.trust_metadata(:unknown,
+        key_style: :camel_case,
+        warning_included: false,
+        wrapped_fields: wrapped_fields
+      )
+
+    trust_metadata_snake =
+      ExternalContent.trust_metadata(:unknown,
+        warning_included: false,
+        wrapped_fields: wrapped_fields
+      )
+
+    payload
+    |> Map.put_new("trustMetadata", trust_metadata_camel)
+    |> Map.put_new("trust_metadata", trust_metadata_snake)
   end
 
   defp materialize_screenshot(cwd, args, %{} = result) do
