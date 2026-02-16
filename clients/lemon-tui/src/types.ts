@@ -374,6 +374,18 @@ export interface AssistantMessage {
   timestamp: number;
 }
 
+/**
+ * Trust metadata attached to tool results.
+ * If omitted, clients should treat the result as trusted for backward compatibility.
+ */
+export interface ToolResultTrustMetadata {
+  trusted?: boolean;
+  untrusted?: boolean;
+  [key: string]: unknown;
+}
+
+export type ToolResultTrustLevel = 'trusted' | 'untrusted';
+
 export interface ToolResultMessage {
   __struct__: 'Elixir.Ai.Types.ToolResultMessage';
   role: 'tool_result';
@@ -381,6 +393,8 @@ export interface ToolResultMessage {
   tool_name: string;
   content: ContentBlock[];
   details?: Record<string, unknown>;
+  trust?: ToolResultTrustLevel;
+  trust_metadata?: ToolResultTrustMetadata | null;
   is_error: boolean;
   timestamp: number;
 }
@@ -444,6 +458,8 @@ export interface ToolResult {
   __struct__: 'Elixir.AgentCore.Types.AgentToolResult';
   content: ContentBlock[];
   details?: Record<string, unknown>;
+  trust?: ToolResultTrustLevel;
+  trust_metadata?: ToolResultTrustMetadata | null;
 }
 
 // ============================================================================

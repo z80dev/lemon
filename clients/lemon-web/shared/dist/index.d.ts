@@ -307,6 +307,16 @@ interface AssistantMessage {
     error_message: string | null;
     timestamp: number;
 }
+/**
+ * Trust metadata attached to tool results.
+ * If omitted, clients should treat the result as trusted for backward compatibility.
+ */
+interface ToolResultTrustMetadata {
+    trusted?: boolean;
+    untrusted?: boolean;
+    [key: string]: unknown;
+}
+type ToolResultTrustLevel = 'trusted' | 'untrusted';
 interface ToolResultMessage {
     __struct__: 'Elixir.Ai.Types.ToolResultMessage';
     role: 'tool_result';
@@ -314,6 +324,8 @@ interface ToolResultMessage {
     tool_name: string;
     content: ContentBlock[];
     details?: Record<string, unknown>;
+    trust?: ToolResultTrustLevel;
+    trust_metadata?: ToolResultTrustMetadata | null;
     is_error: boolean;
     timestamp: number;
 }
@@ -357,6 +369,8 @@ interface ToolResult {
     __struct__: 'Elixir.AgentCore.Types.AgentToolResult';
     content: ContentBlock[];
     details?: Record<string, unknown>;
+    trust?: ToolResultTrustLevel;
+    trust_metadata?: ToolResultTrustMetadata | null;
 }
 interface SelectOption {
     label: string;
@@ -424,4 +438,23 @@ declare class JsonLineDecoder {
 }
 declare function encodeJsonLine(payload: unknown): string;
 
-export { type AbortCommand, type ActiveSessionMessage, type AgentEndEvent, type AgentStartEvent, type AssistantEvent, type AssistantMessage, type BridgeErrorMessage, type BridgeMessage, type BridgeStatusMessage, type BridgeStderrMessage, type ClientCommand, type CloseSessionCommand, type ConfigStateMessage, type ConfirmParams, type ContentBlock, type DebugCommand, type DebugMessage, type EditorParams, type ErrorMessage, type EventMessage, type GetConfigCommand, type ImageContent, type InputParams, JsonLineDecoder, type JsonLineParserOptions, type KnownSessionEvent, type ListModelsCommand, type ListRunningSessionsCommand, type ListSessionsCommand, type Message, type MessageEndEvent, type MessageStartEvent, type MessageUpdateEvent, type ModelsListMessage, type PingCommand, type PongMessage, type PromptCommand, type QuitCommand, type ReadyMessage, type ResetCommand, type RunningSessionInfo, type RunningSessionsMessage, type SaveCommand, type SaveResultMessage, type SelectOption, type SelectParams, type ServerMessage, type ServerTimeStamp, type SessionClosedMessage, type SessionErrorEvent, type SessionEvent, type SessionStartedMessage, type SessionStats, type SessionSummary, type SessionsListMessage, type SetActiveSessionCommand, type SetConfigCommand, type StartSessionCommand, type StatsCommand, type StatsMessage, type TextContent, type ThinkingContent, type ToolCall, type ToolExecutionEndEvent, type ToolExecutionStartEvent, type ToolExecutionUpdateEvent, type ToolResult, type ToolResultMessage, type TurnEndEvent, type TurnStartEvent, type UIRequestMessage, type UIRequestParams, type UIResponseCommand, type UISignalMessage, type UsageCost, type UserMessage, type WireServerMessage, encodeJsonLine };
+interface FrameContractEntry {
+    required: readonly string[];
+}
+interface ProtocolContract {
+    version: number;
+    core_frames: Record<string, FrameContractEntry>;
+}
+declare const PROTOCOL_CONTRACT: ProtocolContract;
+declare const CORE_FRAME_CONTRACT: Record<string, FrameContractEntry>;
+declare const CORE_FRAME_TYPES: string[];
+interface ContractValidationResult {
+    ok: boolean;
+    type?: string;
+    missing: string[];
+}
+declare function getRequiredCoreFrameFields(frameType: string): readonly string[] | null;
+declare function validateCoreServerFrame(value: unknown): ContractValidationResult;
+declare function isCoreServerFrame(value: unknown): value is ServerMessage;
+
+export { type AbortCommand, type ActiveSessionMessage, type AgentEndEvent, type AgentStartEvent, type AssistantEvent, type AssistantMessage, type BridgeErrorMessage, type BridgeMessage, type BridgeStatusMessage, type BridgeStderrMessage, CORE_FRAME_CONTRACT, CORE_FRAME_TYPES, type ClientCommand, type CloseSessionCommand, type ConfigStateMessage, type ConfirmParams, type ContentBlock, type ContractValidationResult, type DebugCommand, type DebugMessage, type EditorParams, type ErrorMessage, type EventMessage, type FrameContractEntry, type GetConfigCommand, type ImageContent, type InputParams, JsonLineDecoder, type JsonLineParserOptions, type KnownSessionEvent, type ListModelsCommand, type ListRunningSessionsCommand, type ListSessionsCommand, type Message, type MessageEndEvent, type MessageStartEvent, type MessageUpdateEvent, type ModelsListMessage, PROTOCOL_CONTRACT, type PingCommand, type PongMessage, type PromptCommand, type ProtocolContract, type QuitCommand, type ReadyMessage, type ResetCommand, type RunningSessionInfo, type RunningSessionsMessage, type SaveCommand, type SaveResultMessage, type SelectOption, type SelectParams, type ServerMessage, type ServerTimeStamp, type SessionClosedMessage, type SessionErrorEvent, type SessionEvent, type SessionStartedMessage, type SessionStats, type SessionSummary, type SessionsListMessage, type SetActiveSessionCommand, type SetConfigCommand, type StartSessionCommand, type StatsCommand, type StatsMessage, type TextContent, type ThinkingContent, type ToolCall, type ToolExecutionEndEvent, type ToolExecutionStartEvent, type ToolExecutionUpdateEvent, type ToolResult, type ToolResultMessage, type ToolResultTrustLevel, type ToolResultTrustMetadata, type TurnEndEvent, type TurnStartEvent, type UIRequestMessage, type UIRequestParams, type UIResponseCommand, type UISignalMessage, type UsageCost, type UserMessage, type WireServerMessage, encodeJsonLine, getRequiredCoreFrameFields, isCoreServerFrame, validateCoreServerFrame };

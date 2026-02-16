@@ -37,6 +37,7 @@ function createToolResultMessage(overrides: Partial<ToolResultMessage> = {}): To
     tool_call_id: 'tool-123',
     tool_name: 'test_tool',
     content: [],
+    trust: 'trusted',
     is_error: false,
     timestamp: Date.now(),
     ...overrides,
@@ -284,6 +285,63 @@ describe('useLemonStore message keying and ordering', () => {
       expect(messages).toHaveLength(2);
       // First inserted should come first
       expect(messages[0]._insertionIndex).toBeLessThan(messages[1]._insertionIndex);
+    });
+  });
+
+  describe('tool result trust handling', () => {
+    it('preserves top-level trust on tool_result messages', () => {
+      const sessionId = 'test-session';
+      const store = useLemonStore.getState();
+
+      store.applyServerMessage({
+        type: 'event',
+        session_id: sessionId,
+        event_seq: 1,
+        event: {
+          type: 'message_end',
+          data: [createToolResultMessage({ tool_call_id: 'call-trust', trust: 'untrusted' })],
+        },
+      } as EventMessage);
+
+      const messages = useLemonStore.getState().messagesBySession[sessionId];
+      expect(messages).toHaveLength(1);
+      expect(messages[0].role).toBe('tool_result');
+      if (messages[0].role === 'tool_result') {
+        expect(messages[0].trust).toBe('untrusted');
+      }
+    });
+
+    it('preserves trust metadata on tool_result messages', () => {
+      const sessionId = 'test-session';
+      const store = useLemonStore.getState();
+
+      store.applyServerMessage({
+        type: 'event',
+        session_id: sessionId,
+        event_seq: 1,
+        event: {
+          type: 'message_end',
+          data: [
+            createToolResultMessage({
+              tool_call_id: 'call-trust',
+              trust_metadata: {
+                trusted: false,
+                source: 'web_fetch',
+              },
+            }),
+          ],
+        },
+      } as EventMessage);
+
+      const messages = useLemonStore.getState().messagesBySession[sessionId];
+      expect(messages).toHaveLength(1);
+      expect(messages[0].role).toBe('tool_result');
+      if (messages[0].role === 'tool_result') {
+        expect(messages[0].trust_metadata).toEqual({
+          trusted: false,
+          source: 'web_fetch',
+        });
+      }
     });
   });
 

@@ -9,6 +9,8 @@ import type {
   AssistantMessage,
   UserMessage,
   ToolResultMessage,
+  ToolResultTrustLevel,
+  ToolResultTrustMetadata,
   ContentBlock,
   SessionEvent,
   SessionStats,
@@ -195,6 +197,12 @@ export interface NormalizedToolResultMessage {
   content: string;
   /** Images from tool result content blocks */
   images: NormalizedImage[];
+  /** Tool result trust level from backend contract */
+  trust: ToolResultTrustLevel;
+  /** Optional trust metadata from the wire contract */
+  trustMetadata: ToolResultTrustMetadata | null;
+  /** Defaults to true when trust is omitted */
+  isTrusted: boolean;
   isError: boolean;
   timestamp: number;
 }
@@ -1255,6 +1263,8 @@ export class StateStore {
     message: ToolResultMessage
   ): NormalizedToolResultMessage {
     const { text, images } = this.extractContentWithImages(message.content);
+    const trustMetadata = message.trust_metadata ?? null;
+    const trust = this.resolveToolResultTrust(message.trust, trustMetadata);
     return {
       id: message.tool_call_id,
       type: 'tool_result',
@@ -1262,9 +1272,27 @@ export class StateStore {
       toolName: message.tool_name,
       content: text,
       images,
+      trust,
+      trustMetadata,
+      isTrusted: trust === 'trusted',
       isError: message.is_error,
       timestamp: message.timestamp,
     };
+  }
+
+  private resolveToolResultTrust(
+    trust: ToolResultTrustLevel | undefined,
+    trustMetadata: ToolResultTrustMetadata | null
+  ): ToolResultTrustLevel {
+    if (trust === 'trusted' || trust === 'untrusted') {
+      return trust;
+    }
+
+    if (trustMetadata?.trusted === false || trustMetadata?.untrusted === true) {
+      return 'untrusted';
+    }
+
+    return 'trusted';
   }
 
   private extractTextFromContent(content: ContentBlock[]): string {

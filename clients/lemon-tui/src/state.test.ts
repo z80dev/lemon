@@ -4,7 +4,13 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { StateStore, type ToolExecution } from './state.js';
-import type { UIRequestMessage, AssistantMessage, SessionEvent, RunningSessionInfo } from './types.js';
+import type {
+  UIRequestMessage,
+  AssistantMessage,
+  ToolResultMessage,
+  SessionEvent,
+  RunningSessionInfo,
+} from './types.js';
 
 describe('StateStore', () => {
   let store: StateStore;
@@ -260,6 +266,93 @@ describe('StateStore', () => {
       expect(messages).toHaveLength(1);
       if (messages[0].type === 'assistant') {
         expect(messages[0].usage).toBeUndefined();
+      }
+    });
+  });
+
+  describe('tool result trust handling', () => {
+    it('uses top-level trust when present', () => {
+      const message: ToolResultMessage = {
+        __struct__: 'Elixir.Ai.Types.ToolResultMessage',
+        role: 'tool_result',
+        tool_call_id: 'tool-123',
+        tool_name: 'web_fetch',
+        content: [{ __struct__: 'Elixir.Ai.Types.TextContent', type: 'text', text: 'ok' }],
+        trust: 'untrusted',
+        trust_metadata: {
+          trusted: true,
+          source: 'web_fetch',
+        },
+        is_error: false,
+        timestamp: Date.now(),
+      };
+
+      store.handleEvent({
+        type: 'message_end',
+        data: [message],
+      });
+
+      const normalized = store.getState().messages[0];
+      expect(normalized?.type).toBe('tool_result');
+      if (normalized?.type === 'tool_result') {
+        expect(normalized.trust).toBe('untrusted');
+        expect(normalized.trustMetadata).toEqual({
+          trusted: true,
+          source: 'web_fetch',
+        });
+        expect(normalized.isTrusted).toBe(false);
+      }
+    });
+
+    it('falls back to trust metadata when trust is missing', () => {
+      const message: ToolResultMessage = {
+        __struct__: 'Elixir.Ai.Types.ToolResultMessage',
+        role: 'tool_result',
+        tool_call_id: 'tool-234',
+        tool_name: 'web_fetch',
+        content: [{ __struct__: 'Elixir.Ai.Types.TextContent', type: 'text', text: 'ok' }],
+        trust_metadata: {
+          untrusted: true,
+        },
+        is_error: false,
+        timestamp: Date.now(),
+      };
+
+      store.handleEvent({
+        type: 'message_end',
+        data: [message],
+      });
+
+      const normalized = store.getState().messages[0];
+      expect(normalized?.type).toBe('tool_result');
+      if (normalized?.type === 'tool_result') {
+        expect(normalized.trust).toBe('untrusted');
+        expect(normalized.isTrusted).toBe(false);
+      }
+    });
+
+    it('defaults to trusted when trust and metadata are missing', () => {
+      const message: ToolResultMessage = {
+        __struct__: 'Elixir.Ai.Types.ToolResultMessage',
+        role: 'tool_result',
+        tool_call_id: 'tool-456',
+        tool_name: 'read',
+        content: [{ __struct__: 'Elixir.Ai.Types.TextContent', type: 'text', text: 'ok' }],
+        is_error: false,
+        timestamp: Date.now(),
+      };
+
+      store.handleEvent({
+        type: 'message_end',
+        data: [message],
+      });
+
+      const normalized = store.getState().messages[0];
+      expect(normalized?.type).toBe('tool_result');
+      if (normalized?.type === 'tool_result') {
+        expect(normalized.trust).toBe('trusted');
+        expect(normalized.trustMetadata).toBeNull();
+        expect(normalized.isTrusted).toBe(true);
       }
     });
   });
