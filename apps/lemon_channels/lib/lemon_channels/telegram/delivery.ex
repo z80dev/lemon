@@ -35,6 +35,53 @@ defmodule LemonChannels.Telegram.Delivery do
           | {:notify_ref, reference()}
           | {:notify_tag, atom()}
 
+  @type legacy_fallback_opt ::
+          {:context, map()}
+          | {:notify, {pid(), reference(), atom()}}
+          | {:on_failure, (OutboundPayload.t(), term(), map() -> term())}
+
+  @doc false
+  @spec legacy_outbox_available?() :: boolean()
+  def legacy_outbox_available? do
+    is_pid(Process.whereis(@legacy_outbox))
+  end
+
+  @doc false
+  @spec enqueue_legacy_fallback(
+          key :: term(),
+          priority :: integer(),
+          op :: term(),
+          fallback_payload :: OutboundPayload.t(),
+          opts :: [legacy_fallback_opt()]
+        ) :: {:ok, reference()} | {:error, term()}
+  def enqueue_legacy_fallback(
+        key,
+        priority,
+        op,
+        %OutboundPayload{} = fallback_payload,
+        opts \\ []
+      )
+      when is_list(opts) do
+    context = normalize_fallback_context(opts[:context])
+    notify = fallback_notify(opts[:notify])
+    on_failure = normalize_failure_callback(opts[:on_failure])
+
+    case enqueue_legacy_for_fallback(op, key, priority, notify) do
+      {:ok, ref} ->
+        {:ok, ref}
+
+      {:fallback, reason} ->
+        maybe_emit_enqueue_failure(on_failure, fallback_payload, reason, context)
+
+        fallback_payload
+        |> attach_fallback_notify(notify)
+        |> enqueue_channels_for_fallback(
+          Map.put(context, :fallback, :channels_outbox),
+          on_failure
+        )
+    end
+  end
+
   @doc """
   Enqueue a Telegram send operation.
 
@@ -139,7 +186,7 @@ defmodule LemonChannels.Telegram.Delivery do
   defp enqueue_legacy(:skip, _key, _priority, _notify), do: :fallback
 
   defp enqueue_legacy(op, key, priority, notify) do
-    if is_pid(Process.whereis(@legacy_outbox)) do
+    if legacy_outbox_available?() do
       try do
         case notify do
           %{enabled?: true, pid: pid, ref: ref, tag: tag} ->
@@ -159,7 +206,7 @@ defmodule LemonChannels.Telegram.Delivery do
   end
 
   defp enqueue_channels(payload) do
-    if is_pid(Process.whereis(Outbox)) do
+    if channels_outbox_available?() do
       case Outbox.enqueue(payload) do
         {:ok, _ref} -> :ok
         {:error, reason} -> {:error, reason}
@@ -169,6 +216,100 @@ defmodule LemonChannels.Telegram.Delivery do
     end
   rescue
     _ -> {:error, :channels_outbox_exception}
+  end
+
+  defp enqueue_legacy_for_fallback(:skip, _key, _priority, _notify), do: {:fallback, nil}
+
+  defp enqueue_legacy_for_fallback(op, key, priority, notify) do
+    if legacy_outbox_available?() do
+      try do
+        case notify do
+          %{enabled?: true, pid: pid, ref: ref, tag: tag} ->
+            @legacy_outbox.enqueue_with_notify(key, priority, op, pid, ref, tag)
+            {:ok, ref}
+
+          _ ->
+            @legacy_outbox.enqueue(key, priority, op)
+            {:ok, make_ref()}
+        end
+      rescue
+        exception ->
+          {:fallback, {:telegram_outbox_exception, Exception.message(exception)}}
+      end
+    else
+      {:fallback, nil}
+    end
+  end
+
+  defp enqueue_channels_for_fallback(payload, context, on_failure) do
+    if channels_outbox_available?() do
+      case Outbox.enqueue(payload) do
+        {:ok, ref} ->
+          {:ok, ref}
+
+        {:error, :duplicate} = duplicate ->
+          duplicate
+
+        {:error, reason} = error ->
+          maybe_emit_enqueue_failure(on_failure, payload, reason, context)
+          error
+      end
+    else
+      reason = :channels_outbox_unavailable
+      maybe_emit_enqueue_failure(on_failure, payload, reason, context)
+      {:error, reason}
+    end
+  rescue
+    exception ->
+      reason = {:channels_outbox_exception, Exception.message(exception)}
+      maybe_emit_enqueue_failure(on_failure, payload, reason, context)
+      {:error, reason}
+  end
+
+  defp attach_fallback_notify(
+         %OutboundPayload{} = payload,
+         %{enabled?: true, pid: notify_pid, ref: notify_ref, tag: notify_tag}
+       ) do
+    meta = payload.meta || %{}
+
+    meta =
+      if notify_tag == @default_notify_tag do
+        meta
+      else
+        Map.put(meta, :notify_tag, notify_tag)
+      end
+
+    %{payload | notify_pid: notify_pid, notify_ref: notify_ref, meta: meta}
+  end
+
+  defp attach_fallback_notify(%OutboundPayload{} = payload, _notify), do: payload
+
+  defp fallback_notify({pid, ref, tag})
+       when is_pid(pid) and is_reference(ref) and is_atom(tag) do
+    %{enabled?: true, pid: pid, ref: ref, tag: tag}
+  end
+
+  defp fallback_notify(_notify), do: %{enabled?: false, pid: nil, ref: nil, tag: nil}
+
+  defp normalize_fallback_context(context) when is_map(context), do: context
+  defp normalize_fallback_context(_context), do: %{}
+
+  defp normalize_failure_callback(callback) when is_function(callback, 3), do: callback
+  defp normalize_failure_callback(_callback), do: nil
+
+  defp maybe_emit_enqueue_failure(_callback, _payload, nil, _context), do: :ok
+  defp maybe_emit_enqueue_failure(nil, _payload, _reason, _context), do: :ok
+
+  defp maybe_emit_enqueue_failure(callback, payload, reason, context) do
+    try do
+      callback.(payload, reason, context)
+    rescue
+      _ -> :ok
+    end
+  end
+
+  defp channels_outbox_available? do
+    is_pid(Process.whereis(Outbox))
   end
 
   defp build_meta(opts, notify) do

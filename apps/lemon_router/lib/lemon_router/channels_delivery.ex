@@ -4,12 +4,13 @@ defmodule LemonRouter.ChannelsDelivery do
   require Logger
 
   alias LemonChannels.OutboundPayload
+  alias LemonChannels.Telegram.Delivery, as: TelegramDelivery
 
   @enqueue_failure_event [:lemon_router, :channels_delivery, :enqueue, :failure]
 
   @spec telegram_outbox_available?() :: boolean()
   def telegram_outbox_available? do
-    is_pid(Process.whereis(LemonGateway.Telegram.Outbox))
+    TelegramDelivery.legacy_outbox_available?()
   end
 
   @spec enqueue(OutboundPayload.t(), keyword()) :: {:ok, reference()} | {:error, term()}
@@ -25,20 +26,14 @@ defmodule LemonRouter.ChannelsDelivery do
           opts :: keyword()
         ) :: {:ok, reference()} | {:error, term()}
   def telegram_enqueue(key, priority, op, %OutboundPayload{} = fallback_payload, opts \\ []) do
-    context = normalize_context(opts[:context])
-
-    if telegram_outbox_available?() do
-      LemonGateway.Telegram.Outbox.enqueue(key, priority, op)
-      {:ok, make_ref()}
-    else
-      do_channels_enqueue(fallback_payload, Map.put(context, :fallback, :channels_outbox))
-    end
-  rescue
-    exception ->
-      context = normalize_context(opts[:context])
-      reason = {:telegram_outbox_exception, Exception.message(exception)}
-      emit_enqueue_failure(fallback_payload, reason, context)
-      do_channels_enqueue(fallback_payload, Map.put(context, :fallback, :channels_outbox))
+    TelegramDelivery.enqueue_legacy_fallback(
+      key,
+      priority,
+      op,
+      fallback_payload,
+      context: normalize_context(opts[:context]),
+      on_failure: &emit_enqueue_failure/3
+    )
   end
 
   @spec telegram_enqueue_with_notify(
@@ -62,33 +57,15 @@ defmodule LemonRouter.ChannelsDelivery do
         opts \\ []
       )
       when is_pid(notify_pid) and is_reference(notify_ref) and is_atom(notify_tag) do
-    context = normalize_context(opts[:context])
-
-    if telegram_outbox_available?() do
-      LemonGateway.Telegram.Outbox.enqueue_with_notify(
-        key,
-        priority,
-        op,
-        notify_pid,
-        notify_ref,
-        notify_tag
-      )
-
-      {:ok, notify_ref}
-    else
-      fallback_payload
-      |> attach_notify(notify_pid, notify_ref, notify_tag)
-      |> do_channels_enqueue(Map.put(context, :fallback, :channels_outbox))
-    end
-  rescue
-    exception ->
-      context = normalize_context(opts[:context])
-      reason = {:telegram_outbox_exception, Exception.message(exception)}
-      emit_enqueue_failure(fallback_payload, reason, context)
-
-      fallback_payload
-      |> attach_notify(notify_pid, notify_ref, notify_tag)
-      |> do_channels_enqueue(Map.put(context, :fallback, :channels_outbox))
+    TelegramDelivery.enqueue_legacy_fallback(
+      key,
+      priority,
+      op,
+      fallback_payload,
+      context: normalize_context(opts[:context]),
+      notify: {notify_pid, notify_ref, notify_tag},
+      on_failure: &emit_enqueue_failure/3
+    )
   end
 
   defp do_channels_enqueue(%OutboundPayload{} = payload, context) do
@@ -114,19 +91,6 @@ defmodule LemonRouter.ChannelsDelivery do
       reason = {:channels_outbox_exception, Exception.message(exception)}
       emit_enqueue_failure(payload, reason, context)
       {:error, reason}
-  end
-
-  defp attach_notify(%OutboundPayload{} = payload, notify_pid, notify_ref, notify_tag) do
-    meta = payload.meta || %{}
-
-    meta =
-      if notify_tag == :outbox_delivered do
-        meta
-      else
-        Map.put(meta, :notify_tag, notify_tag)
-      end
-
-    %{payload | notify_pid: notify_pid, notify_ref: notify_ref, meta: meta}
   end
 
   defp emit_enqueue_failure(%OutboundPayload{} = payload, reason, context) do
