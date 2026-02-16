@@ -46,6 +46,7 @@ defmodule CodingAgent.Session do
   alias CodingAgent.ExtensionLifecycle
   alias CodingAgent.Extensions
   alias CodingAgent.ResourceLoader
+  alias CodingAgent.Session.EventHandler
   alias CodingAgent.Workspace
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.{Session, SessionEntry}
@@ -85,8 +86,13 @@ defmodule CodingAgent.Session do
     :convert_to_llm,
     :extensions,
     :hooks,
-    :extension_status_report
+    :extension_status_report,
+    :auto_compaction_in_progress,
+    :auto_compaction_signature
   ]
+
+  @type session_signature ::
+          {String.t(), String.t() | nil, non_neg_integer(), non_neg_integer(), term(), term()}
 
   @type t :: %__MODULE__{
           agent: pid() | nil,
@@ -117,7 +123,17 @@ defmodule CodingAgent.Session do
           convert_to_llm: (list() -> list()),
           extensions: [module()],
           hooks: keyword([function()]),
-          extension_status_report: Extensions.extension_status_report() | nil
+          extension_status_report: Extensions.extension_status_report() | nil,
+          auto_compaction_in_progress: boolean(),
+          auto_compaction_signature: session_signature() | nil
+        }
+
+  @type event_handler_callbacks :: %{
+          required(:set_working_message) => (t(), String.t() | nil -> :ok),
+          required(:notify) => (t(), String.t(), CodingAgent.UI.notify_type() -> :ok),
+          required(:complete_event_streams) => (t(), term() -> :ok),
+          required(:maybe_trigger_compaction) => (t() -> t()),
+          required(:persist_message) => (t(), term() -> t())
         }
 
   # ============================================================================
@@ -625,7 +641,9 @@ defmodule CodingAgent.Session do
       convert_to_llm: convert_to_llm,
       extensions: extensions,
       hooks: hooks,
-      extension_status_report: extension_status_report
+      extension_status_report: extension_status_report,
+      auto_compaction_in_progress: false,
+      auto_compaction_signature: nil
     }
 
     maybe_register_session(session_manager, cwd, register_session, session_registry)
@@ -890,6 +908,8 @@ defmodule CodingAgent.Session do
       state.session_registry
     )
 
+    ui_set_working_message(state, nil)
+
     new_state = %{
       state
       | session_manager: new_session_manager,
@@ -899,7 +919,9 @@ defmodule CodingAgent.Session do
         started_at: System.system_time(:millisecond),
         session_file: nil,
         steering_queue: :queue.new(),
-        follow_up_queue: :queue.new()
+        follow_up_queue: :queue.new(),
+        auto_compaction_in_progress: false,
+        auto_compaction_signature: nil
     }
 
     {:reply, :ok, new_state}
@@ -931,55 +953,20 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call({:compact, opts}, _from, state) do
+    state = clear_auto_compaction_state(state)
     custom_summary = Keyword.get(opts, :summary)
 
     # Show working message before compaction
     ui_set_working_message(state, "Compacting context...")
 
-    case CodingAgent.Compaction.compact(state.session_manager, state.model, opts) do
-      {:ok, result} ->
-        # Use custom summary if provided, otherwise use generated one
-        summary = custom_summary || result.summary
+    result = CodingAgent.Compaction.compact(state.session_manager, state.model, opts)
 
-        # Append compaction entry to session manager
-        session_manager =
-          SessionManager.append_compaction(
-            state.session_manager,
-            summary,
-            result.first_kept_entry_id,
-            result.tokens_before,
-            result.details
-          )
+    case apply_compaction_result(state, result, custom_summary) do
+      {:ok, new_state} ->
+        {:reply, :ok, new_state}
 
-        # Rebuild messages from the new position and update agent
-        messages = restore_messages_from_session(session_manager)
-        :ok = AgentCore.Agent.replace_messages(state.agent, messages)
-
-        # Broadcast compaction event to listeners
-        compaction_event =
-          {:compaction_complete,
-           %{
-             summary: summary,
-             first_kept_entry_id: result.first_kept_entry_id,
-             tokens_before: result.tokens_before
-           }}
-
-        broadcast_event(state, compaction_event)
-
-        # Clear working message and notify success
-        ui_set_working_message(state, nil)
-        ui_notify(state, "Context compacted", :info)
-
-        {:reply, :ok, %{state | session_manager: session_manager}}
-
-      {:error, :cannot_compact} ->
-        ui_set_working_message(state, nil)
-        {:reply, {:error, :cannot_compact}, state}
-
-      {:error, reason} ->
-        ui_set_working_message(state, nil)
-        ui_notify(state, "Compaction failed: #{inspect(reason)}", :error)
-        {:reply, {:error, reason}, state}
+      {:error, reason, new_state} ->
+        {:reply, {:error, reason}, new_state}
     end
   end
 
@@ -1196,6 +1183,36 @@ defmodule CodingAgent.Session do
     # Publish the extension status report event for UI/CLI consumption
     broadcast_event(state, {:extension_status_report, report})
     {:noreply, state}
+  end
+
+  def handle_info({:auto_compaction_result, signature, result}, state) do
+    cond do
+      not state.auto_compaction_in_progress ->
+        {:noreply, state}
+
+      state.auto_compaction_signature != signature ->
+        {:noreply, state}
+
+      signature != session_signature(state) ->
+        state = clear_auto_compaction_state(state)
+
+        if not state.is_streaming do
+          ui_set_working_message(state, nil)
+        end
+
+        {:noreply, state}
+
+      true ->
+        state = clear_auto_compaction_state(state)
+
+        case apply_compaction_result(state, result, nil) do
+          {:ok, new_state} ->
+            {:noreply, new_state}
+
+          {:error, _reason, new_state} ->
+            {:noreply, new_state}
+        end
+    end
   end
 
   def handle_info({:do_prompt, %Ai.Types.UserMessage{} = user_message}, state) do
@@ -1492,146 +1509,19 @@ defmodule CodingAgent.Session do
   defp normalize_extra_tools(_), do: []
 
   @spec handle_agent_event(AgentCore.Types.agent_event(), t()) :: t()
-  defp handle_agent_event({:agent_start}, state) do
-    # Execute on_agent_start hooks
-    Extensions.execute_hooks(state.hooks, :on_agent_start, [])
-    state
+  defp handle_agent_event(event, state) do
+    EventHandler.handle(event, state, event_handler_callbacks())
   end
 
-  defp handle_agent_event({:turn_start}, state) do
-    # Execute on_turn_start hooks
-    Extensions.execute_hooks(state.hooks, :on_turn_start, [])
-    state
-  end
-
-  defp handle_agent_event({:turn_end, message, tool_results}, state) do
-    # Execute on_turn_end hooks
-    Extensions.execute_hooks(state.hooks, :on_turn_end, [message, tool_results])
-
-    # Abort can terminate the underlying stream before {:canceled, reason} is observed.
-    # Treat an aborted assistant turn as terminal to keep Session lifecycle consistent.
-    case message do
-      %Ai.Types.AssistantMessage{stop_reason: :aborted} ->
-        ui_set_working_message(state, nil)
-        complete_event_streams(state, {:turn_end, message, tool_results})
-        %{state | is_streaming: false, steering_queue: :queue.new(), event_streams: %{}}
-
-      _ ->
-        state
-    end
-  end
-
-  defp handle_agent_event({:message_start, message}, state) do
-    # Execute on_message_start hooks
-    Extensions.execute_hooks(state.hooks, :on_message_start, [message])
-    state
-  end
-
-  defp handle_agent_event({:message_end, message}, state) do
-    # Execute on_message_end hooks
-    Extensions.execute_hooks(state.hooks, :on_message_end, [message])
-
-    # Persist ALL messages, not just assistant
-    new_session_manager =
-      case message do
-        %Ai.Types.UserMessage{} ->
-          # Persist user messages (including steering/follow-up)
-          SessionManager.append_message(state.session_manager, serialize_message(message))
-
-        %Ai.Types.AssistantMessage{} ->
-          # Persist assistant messages
-          SessionManager.append_message(state.session_manager, serialize_message(message))
-
-        %Ai.Types.ToolResultMessage{} ->
-          # Persist tool results
-          SessionManager.append_message(state.session_manager, serialize_message(message))
-
-        _ ->
-          # Other message types, don't persist
-          state.session_manager
-      end
-
-    new_state = %{state | session_manager: new_session_manager}
-
-    # Some abort paths can terminate after :message_end without emitting
-    # :turn_end/:agent_end/:canceled. Treat aborted assistant messages as terminal
-    # to avoid leaving the session in a permanently streaming state.
-    case message do
-      %Ai.Types.AssistantMessage{stop_reason: :aborted} ->
-        ui_set_working_message(new_state, nil)
-        complete_event_streams(new_state, {:canceled, :assistant_aborted})
-        %{new_state | is_streaming: false, steering_queue: :queue.new(), event_streams: %{}}
-
-      _ ->
-        new_state
-    end
-  end
-
-  defp handle_agent_event({:tool_start, tool_call}, state) do
-    # Execute on_tool_execution_start hooks
-    Extensions.execute_hooks(state.hooks, :on_tool_execution_start, [
-      tool_call.id,
-      tool_call.name,
-      tool_call.arguments
-    ])
-
-    tool_name = tool_call.name
-    ui_set_working_message(state, "Running #{tool_name}...")
-    state
-  end
-
-  defp handle_agent_event({:tool_end, tool_call, result}, state) do
-    # Execute on_tool_execution_end hooks
-    is_error = Map.get(result, :is_error, false)
-
-    Extensions.execute_hooks(state.hooks, :on_tool_execution_end, [
-      tool_call.id,
-      tool_call.name,
-      result,
-      is_error
-    ])
-
-    ui_set_working_message(state, nil)
-    state
-  end
-
-  defp handle_agent_event({:agent_end, messages}, state) do
-    # Execute on_agent_end hooks
-    Extensions.execute_hooks(state.hooks, :on_agent_end, [messages])
-
-    # Clear working message and steering queue
-    ui_set_working_message(state, nil)
-
-    # Complete all event streams with the final event
-    complete_event_streams(state, {:agent_end, messages})
-
-    # Check if compaction is needed
-    new_state = %{state | is_streaming: false, steering_queue: :queue.new(), event_streams: %{}}
-    maybe_trigger_compaction(new_state)
-  end
-
-  defp handle_agent_event({:error, reason, partial_state}, state) do
-    ui_set_working_message(state, nil)
-    ui_notify(state, "Agent error: #{inspect(reason)}", :error)
-
-    # Complete all event streams with the error event
-    complete_event_streams(state, {:error, reason, partial_state})
-
-    %{state | is_streaming: false, event_streams: %{}}
-  end
-
-  defp handle_agent_event({:canceled, reason}, state) do
-    # Canceled is a terminal lifecycle event (e.g. abort) and may occur without :agent_end.
-    ui_set_working_message(state, nil)
-
-    # Complete all event streams with the canceled event
-    complete_event_streams(state, {:canceled, reason})
-
-    %{state | is_streaming: false, steering_queue: :queue.new(), event_streams: %{}}
-  end
-
-  defp handle_agent_event(_event, state) do
-    state
+  @spec event_handler_callbacks() :: event_handler_callbacks()
+  defp event_handler_callbacks do
+    %{
+      set_working_message: &ui_set_working_message/2,
+      notify: &ui_notify/3,
+      complete_event_streams: &complete_event_streams/2,
+      maybe_trigger_compaction: &maybe_trigger_compaction/1,
+      persist_message: &persist_message/2
+    }
   end
 
   @spec broadcast_event(t(), AgentCore.Types.agent_event()) :: :ok
@@ -1678,6 +1568,31 @@ defmodule CodingAgent.Session do
     end)
 
     :ok
+  end
+
+  @spec persist_message(t(), term()) :: t()
+  defp persist_message(state, message) do
+    # Persist ALL messages, not just assistant
+    new_session_manager =
+      case message do
+        %Ai.Types.UserMessage{} ->
+          # Persist user messages (including steering/follow-up)
+          SessionManager.append_message(state.session_manager, serialize_message(message))
+
+        %Ai.Types.AssistantMessage{} ->
+          # Persist assistant messages
+          SessionManager.append_message(state.session_manager, serialize_message(message))
+
+        %Ai.Types.ToolResultMessage{} ->
+          # Persist tool results
+          SessionManager.append_message(state.session_manager, serialize_message(message))
+
+        _ ->
+          # Other message types, don't persist
+          state.session_manager
+      end
+
+    %{state | session_manager: new_session_manager}
   end
 
   @spec restore_messages_from_session(Session.t()) :: [map()]
@@ -2009,6 +1924,88 @@ defmodule CodingAgent.Session do
     state
   end
 
+  @spec session_signature(t()) :: session_signature()
+  defp session_signature(state) do
+    {
+      state.session_manager.header.id,
+      state.session_manager.leaf_id,
+      length(state.session_manager.entries),
+      state.turn_index,
+      state.model.provider,
+      state.model.id
+    }
+  end
+
+  @spec clear_auto_compaction_state(t()) :: t()
+  defp clear_auto_compaction_state(state) do
+    %{state | auto_compaction_in_progress: false, auto_compaction_signature: nil}
+  end
+
+  @spec apply_compaction_result(t(), {:ok, map()} | {:error, term()}, String.t() | nil) ::
+          {:ok, t()} | {:error, term(), t()}
+  defp apply_compaction_result(state, {:ok, result}, custom_summary) do
+    # Use custom summary if provided, otherwise use generated one
+    summary = custom_summary || result.summary
+
+    # Append compaction entry to session manager
+    session_manager =
+      SessionManager.append_compaction(
+        state.session_manager,
+        summary,
+        result.first_kept_entry_id,
+        result.tokens_before,
+        result.details
+      )
+
+    # Rebuild messages from the new position and update agent
+    messages = restore_messages_from_session(session_manager)
+    :ok = AgentCore.Agent.replace_messages(state.agent, messages)
+
+    # Broadcast compaction event to listeners
+    compaction_event =
+      {:compaction_complete,
+       %{
+         summary: summary,
+         first_kept_entry_id: result.first_kept_entry_id,
+         tokens_before: result.tokens_before
+       }}
+
+    broadcast_event(state, compaction_event)
+
+    # Clear working message and notify success
+    ui_set_working_message(state, nil)
+    ui_notify(state, "Context compacted", :info)
+
+    {:ok, %{state | session_manager: session_manager}}
+  end
+
+  defp apply_compaction_result(state, {:error, :cannot_compact}, _custom_summary) do
+    ui_set_working_message(state, nil)
+    {:error, :cannot_compact, state}
+  end
+
+  defp apply_compaction_result(state, {:error, reason}, _custom_summary) do
+    ui_set_working_message(state, nil)
+    ui_notify(state, "Compaction failed: #{inspect(reason)}", :error)
+    {:error, reason, state}
+  end
+
+  @spec auto_compaction_task_result(Session.t(), Ai.Types.Model.t()) ::
+          {:ok, map()} | {:error, term()}
+  defp auto_compaction_task_result(session_manager, model) do
+    try do
+      CodingAgent.Compaction.compact(session_manager, model, [])
+    rescue
+      exception ->
+        {:error, {:exception, exception}}
+    catch
+      kind, reason ->
+        {:error, {kind, reason}}
+    end
+  end
+
+  defp maybe_trigger_compaction(%__MODULE__{auto_compaction_in_progress: true} = state), do: state
+
   @spec maybe_trigger_compaction(t()) :: t()
   defp maybe_trigger_compaction(state) do
     # Get context usage from agent state
@@ -2023,15 +2020,26 @@ defmodule CodingAgent.Session do
 
     # Check if compaction should be triggered
     if CodingAgent.Compaction.should_compact?(context_tokens, context_window, compaction_settings) do
-      # Trigger compaction asynchronously
+      signature = session_signature(state)
       session_pid = self()
+      session_manager = state.session_manager
+      model = state.model
+
+      ui_set_working_message(state, "Compacting context...")
 
       Task.start(fn ->
-        GenServer.call(session_pid, {:compact, []}, :infinity)
+        result = auto_compaction_task_result(session_manager, model)
+        send(session_pid, {:auto_compaction_result, signature, result})
       end)
-    end
 
-    state
+      %{
+        state
+        | auto_compaction_in_progress: true,
+          auto_compaction_signature: signature
+      }
+    else
+      state
+    end
   end
 
   @spec get_compaction_settings(CodingAgent.SettingsManager.t() | nil) :: map()
