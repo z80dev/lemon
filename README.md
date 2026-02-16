@@ -2253,21 +2253,15 @@ Many of the core concepts, type definitions, and architectural patterns in Lemon
 
 Thank you, Mario, for open-sourcing pi and advancing the state of agent frameworks!
 
-### HUGE THANK YOU to [banteg](https://github.com/banteg) and [takopi](https://github.com/banteg/takopi)
+### Thanks to [banteg](https://github.com/banteg) and [takopi](https://github.com/banteg/takopi)
 
-If Lemon feels snappy, practical, and unreasonably “it just works” for an agent framework, a big chunk of that vibe is because **banteg** shipped **takopi** and showed what *high-signal, zero-bullshit engineering* looks like in this space.
+Lemon was influenced by ideas from **takopi**, especially around responsiveness, practical defaults, and interface design.
 
-**takopi** is a straight-up masterclass in shipping: clean design, sharp defaults, and the kind of pragmatic choices that make you want to delete half your codebase and rebuild it properly.
+Thank you to **banteg** for sharing that work publicly. It has been a helpful reference while building Lemon.
 
-What I love about takopi (and what it pushed Lemon toward) is the relentless focus on the parts that matter in real usage:
+### Thanks to the OpenClaw Project
 
-- **Tight feedback loops**: you can feel the bias toward iteration speed.
-- **Ergonomic, disciplined interfaces**: the API surface stays understandable as features grow.
-- **Pragmatic correctness**: sharp edges get sanded down *before* they cut users.
-- **Clarity over cleverness**: readable wins, every time.
-- **Taste**: the small decisions add up to a project that feels *inevitable*.
-
-So, genuinely: **thank you, banteg** — for building in public, for being allergic to fluff, and for dropping a project that’s both a reference implementation *and* a mindset. Lemon is better because takopi exists.
+Thank you to the OpenClaw maintainers and contributors. Lemon's protocol and compatibility work benefited from their published interfaces and implementation details.
 
 ### Additional Thanks
 
