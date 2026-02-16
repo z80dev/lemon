@@ -176,6 +176,7 @@ defmodule CodingAgent.Tools.WebSearchTest do
       )
 
     first = tool.execute.("id1", %{"query" => "lemon"}, nil, nil)
+    assert first.trust == :untrusted
     first_payload = decode_payload(first)
 
     assert first_payload["provider"] == "brave"
@@ -184,8 +185,19 @@ defmodule CodingAgent.Tools.WebSearchTest do
     [first_result] = first_payload["results"]
     assert first_result["url"] == "https://example.com/lemon"
     assert first_result["title"] =~ "EXTERNAL_UNTRUSTED_CONTENT"
+    assert first_payload["trust_metadata"]["untrusted"] == true
+    assert first_payload["trust_metadata"]["source"] == "web_search"
+    assert first_payload["trust_metadata"]["source_label"] == "Web Search"
+    assert first_payload["trust_metadata"]["wrapping_applied"] == true
+    assert first_payload["trust_metadata"]["warning_included"] == false
+
+    assert first_payload["trust_metadata"]["wrapped_fields"] == [
+             "results[].title",
+             "results[].description"
+           ]
 
     second = tool.execute.("id2", %{"query" => "lemon"}, nil, nil)
+    assert second.trust == :untrusted
     second_payload = decode_payload(second)
 
     assert second_payload["cached"] == true
@@ -375,12 +387,16 @@ defmodule CodingAgent.Tools.WebSearchTest do
       )
 
     result = tool.execute.("id", %{"query" => "latest lemon news"}, nil, nil)
+    assert result.trust == :untrusted
     payload = decode_payload(result)
 
     assert payload["provider"] == "perplexity"
     assert payload["model"] == "perplexity/sonar"
     assert payload["content"] =~ "EXTERNAL_UNTRUSTED_CONTENT"
     assert payload["citations"] == ["https://example.com/source"]
+    assert payload["trust_metadata"]["untrusted"] == true
+    assert payload["trust_metadata"]["source"] == "web_search"
+    assert payload["trust_metadata"]["wrapped_fields"] == ["content"]
     assert_received {:http_post, _, _}
   end
 

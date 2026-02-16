@@ -107,6 +107,7 @@ defmodule CodingAgent.Tools.WebFetchTest do
     result =
       tool.execute.("id", %{"url" => "https://8.8.8.8/doc", "extractMode" => "text"}, nil, nil)
 
+    assert result.trust == :untrusted
     payload = decode_payload(result)
 
     assert payload["extractor"] == "readability"
@@ -114,6 +115,16 @@ defmodule CodingAgent.Tools.WebFetchTest do
     assert payload["contentType"] == "text/html"
     assert payload["text"] =~ "EXTERNAL_UNTRUSTED_CONTENT"
     assert payload["text"] =~ "Hello"
+    assert payload["trustMetadata"]["untrusted"] == true
+    assert payload["trustMetadata"]["source"] == "web_fetch"
+    assert payload["trustMetadata"]["sourceLabel"] == "Web Fetch"
+    assert payload["trustMetadata"]["wrappingApplied"] == true
+    assert payload["trustMetadata"]["warningIncluded"] == true
+    assert "text" in payload["trustMetadata"]["wrappedFields"]
+
+    if payload["title"] do
+      assert "title" in payload["trustMetadata"]["wrappedFields"]
+    end
   end
 
   test "extracts HTML with simple fallback when readability is disabled" do
@@ -234,11 +245,15 @@ defmodule CodingAgent.Tools.WebFetchTest do
       )
 
     result = tool.execute.("id", %{"url" => "https://8.8.8.8/fail"}, nil, nil)
+    assert result.trust == :untrusted
     payload = decode_payload(result)
 
     assert payload["extractor"] == "firecrawl"
     assert payload["finalUrl"] == "https://example.com/final"
     assert payload["text"] =~ "EXTERNAL_UNTRUSTED_CONTENT"
+    assert payload["trustMetadata"]["untrusted"] == true
+    assert payload["trustMetadata"]["source"] == "web_fetch"
+    assert payload["trustMetadata"]["wrappedFields"] == ["text", "title"]
     assert_received :http_get_called
     assert_received :http_post_called
   end

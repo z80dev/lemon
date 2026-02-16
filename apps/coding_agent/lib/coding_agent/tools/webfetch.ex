@@ -206,6 +206,7 @@ defmodule CodingAgent.Tools.WebFetch do
       {:ok, %{text: text, title: title, extractor: extractor}} ->
         wrapped = wrap_web_fetch_content(text, max_chars)
         wrapped_title = wrap_web_fetch_field(title)
+        trust_metadata = web_fetch_trust_metadata(wrapped, wrapped_title)
 
         {:ok,
          %{
@@ -222,7 +223,8 @@ defmodule CodingAgent.Tools.WebFetch do
            "wrappedLength" => wrapped.wrapped_length,
            "fetchedAt" => DateTime.utc_now() |> DateTime.to_iso8601(),
            "tookMs" => elapsed_ms(started_ms),
-           "text" => wrapped.text
+           "text" => wrapped.text,
+           "trustMetadata" => trust_metadata
          }}
 
       {:error, reason} ->
@@ -250,6 +252,8 @@ defmodule CodingAgent.Tools.WebFetch do
         {:ok, firecrawl} ->
           wrapped = wrap_web_fetch_content(firecrawl.text, max_chars)
           wrapped_title = wrap_web_fetch_field(firecrawl.title)
+          wrapped_warning = wrap_web_fetch_field(firecrawl.warning)
+          trust_metadata = web_fetch_trust_metadata(wrapped, wrapped_title, wrapped_warning)
 
           {:ok,
            %{
@@ -267,7 +271,8 @@ defmodule CodingAgent.Tools.WebFetch do
              "fetchedAt" => DateTime.utc_now() |> DateTime.to_iso8601(),
              "tookMs" => elapsed_ms(started_ms),
              "text" => wrapped.text,
-             "warning" => wrap_web_fetch_field(firecrawl.warning)
+             "warning" => wrapped_warning,
+             "trustMetadata" => trust_metadata
            }}
 
         {:error, firecrawl_reason} ->
@@ -641,7 +646,8 @@ defmodule CodingAgent.Tools.WebFetch do
       text: final_wrapped,
       truncated: final_truncated,
       raw_length: String.length(final_raw),
-      wrapped_length: String.length(final_wrapped)
+      wrapped_length: String.length(final_wrapped),
+      warning_included: include_warning
     }
   end
 
@@ -657,6 +663,23 @@ defmodule CodingAgent.Tools.WebFetch do
   defp wrap_web_fetch_field(value) do
     ExternalContent.wrap_external_content(value, source: :web_fetch, include_warning: false)
   end
+
+  defp web_fetch_trust_metadata(wrapped, wrapped_title, wrapped_warning \\ nil) do
+    wrapped_fields =
+      ["text"]
+      |> maybe_add_wrapped_field(wrapped_title, "title")
+      |> maybe_add_wrapped_field(wrapped_warning, "warning")
+
+    ExternalContent.trust_metadata(:web_fetch,
+      key_style: :camel_case,
+      warning_included: wrapped.warning_included,
+      wrapped_fields: wrapped_fields
+    )
+  end
+
+  defp maybe_add_wrapped_field(fields, nil, _field), do: fields
+  defp maybe_add_wrapped_field(fields, "", _field), do: fields
+  defp maybe_add_wrapped_field(fields, _value, field), do: fields ++ [field]
 
   defp truncate_text(_value, max_chars) when max_chars <= 0, do: {"", true}
 
@@ -803,7 +826,8 @@ defmodule CodingAgent.Tools.WebFetch do
 
     %AgentToolResult{
       content: [%TextContent{text: text}],
-      details: payload
+      details: payload,
+      trust: :untrusted
     }
   end
 

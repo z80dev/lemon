@@ -309,7 +309,9 @@ defmodule CodingAgent.Tools.WebSearch do
            "provider" => provider,
            "count" => length(mapped),
            "took_ms" => elapsed_ms(start_ms),
-           "results" => mapped
+           "results" => mapped,
+           "trust_metadata" =>
+             web_search_trust_metadata(["results[].title", "results[].description"])
          }}
 
       {:ok, %Req.Response{status: status} = response} ->
@@ -364,7 +366,8 @@ defmodule CodingAgent.Tools.WebSearch do
            "model" => api_cfg.model,
            "took_ms" => elapsed_ms(start_ms),
            "content" => ExternalContent.wrap_web_content(to_string(content), :web_search),
-           "citations" => citations
+           "citations" => citations,
+           "trust_metadata" => web_search_trust_metadata(["content"])
          }}
 
       {:ok, %Req.Response{status: status} = response} ->
@@ -399,6 +402,13 @@ defmodule CodingAgent.Tools.WebSearch do
   end
 
   defp map_brave_result(_), do: nil
+
+  defp web_search_trust_metadata(wrapped_fields) do
+    ExternalContent.trust_metadata(:web_search,
+      warning_included: false,
+      wrapped_fields: wrapped_fields
+    )
+  end
 
   defp brave_request_opts(api_key, timeout_ms) do
     [
@@ -926,7 +936,8 @@ defmodule CodingAgent.Tools.WebSearch do
 
     %AgentToolResult{
       content: [%TextContent{text: text}],
-      details: payload
+      details: payload,
+      trust: :untrusted
     }
   end
 
