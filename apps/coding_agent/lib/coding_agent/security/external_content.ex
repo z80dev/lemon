@@ -3,6 +3,9 @@ defmodule CodingAgent.Security.ExternalContent do
   Security helpers for wrapping untrusted external content before returning it to models.
   """
 
+  alias AgentCore.Types.AgentToolResult
+  alias Ai.Types.TextContent
+
   @external_content_start "<<<EXTERNAL_UNTRUSTED_CONTENT>>>"
   @external_content_end "<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>"
 
@@ -24,6 +27,7 @@ defmodule CodingAgent.Security.ExternalContent do
 
   @type source :: :email | :webhook | :api | :web_search | :web_fetch | :unknown
   @type key_style :: :snake_case | :camel_case
+  @type web_source :: :web_search | :web_fetch
 
   @spec wrap_external_content(String.t(), keyword()) :: String.t()
   def wrap_external_content(content, opts \\ []) when is_binary(content) do
@@ -84,6 +88,27 @@ defmodule CodingAgent.Security.ExternalContent do
       |> maybe_put("warning_included", warning_included)
 
     format_trust_metadata(metadata, key_style)
+  end
+
+  @spec web_trust_metadata(web_source(), [term()], keyword()) :: map()
+  def web_trust_metadata(source, wrapped_fields, opts \\ [])
+      when source in [:web_search, :web_fetch] do
+    trust_metadata(source,
+      key_style: Keyword.get(opts, :key_style, :snake_case),
+      warning_included: Keyword.get(opts, :warning_included, false),
+      wrapped_fields: wrapped_fields
+    )
+  end
+
+  @spec untrusted_json_result(map()) :: AgentToolResult.t()
+  def untrusted_json_result(payload) when is_map(payload) do
+    text = Jason.encode!(payload, pretty: true)
+
+    %AgentToolResult{
+      content: [%TextContent{text: text}],
+      details: payload,
+      trust: :untrusted
+    }
   end
 
   defp maybe_add_line(lines, nil, _label), do: lines

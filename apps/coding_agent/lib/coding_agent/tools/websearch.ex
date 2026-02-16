@@ -7,7 +7,6 @@ defmodule CodingAgent.Tools.WebSearch do
 
   alias AgentCore.AbortSignal
   alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
   alias CodingAgent.Security.ExternalContent
   alias CodingAgent.Tools.WebCache
 
@@ -404,10 +403,7 @@ defmodule CodingAgent.Tools.WebSearch do
   defp map_brave_result(_), do: nil
 
   defp web_search_trust_metadata(wrapped_fields) do
-    ExternalContent.trust_metadata(:web_search,
-      warning_included: false,
-      wrapped_fields: wrapped_fields
-    )
+    ExternalContent.web_trust_metadata(:web_search, wrapped_fields, warning_included: false)
   end
 
   defp brave_request_opts(api_key, timeout_ms) do
@@ -932,13 +928,7 @@ defmodule CodingAgent.Tools.WebSearch do
   defp format_reason(reason), do: inspect(reason)
 
   defp json_result(payload) do
-    text = Jason.encode!(payload, pretty: true)
-
-    %AgentToolResult{
-      content: [%TextContent{text: text}],
-      details: payload,
-      trust: :untrusted
-    }
+    ExternalContent.untrusted_json_result(payload)
   end
 
   defp build_runtime(opts) do

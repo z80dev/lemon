@@ -8,7 +8,6 @@ defmodule CodingAgent.Tools.WebFetch do
 
   alias AgentCore.AbortSignal
   alias AgentCore.Types.{AgentTool, AgentToolResult}
-  alias Ai.Types.TextContent
   alias CodingAgent.Security.ExternalContent
   alias CodingAgent.Tools.WebCache
   alias CodingAgent.Tools.WebGuard
@@ -670,10 +669,9 @@ defmodule CodingAgent.Tools.WebFetch do
       |> maybe_add_wrapped_field(wrapped_title, "title")
       |> maybe_add_wrapped_field(wrapped_warning, "warning")
 
-    ExternalContent.trust_metadata(:web_fetch,
+    ExternalContent.web_trust_metadata(:web_fetch, wrapped_fields,
       key_style: :camel_case,
-      warning_included: wrapped.warning_included,
-      wrapped_fields: wrapped_fields
+      warning_included: wrapped.warning_included
     )
   end
 
@@ -822,13 +820,7 @@ defmodule CodingAgent.Tools.WebFetch do
   end
 
   defp json_result(payload) do
-    text = Jason.encode!(payload, pretty: true)
-
-    %AgentToolResult{
-      content: [%TextContent{text: text}],
-      details: payload,
-      trust: :untrusted
-    }
+    ExternalContent.untrusted_json_result(payload)
   end
 
   defp build_runtime(opts) do

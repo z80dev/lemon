@@ -35,4 +35,27 @@ defmodule CodingAgent.Security.ExternalContentTest do
     refute Map.has_key?(metadata, "source_label")
     refute Map.has_key?(metadata, "wrapped_fields")
   end
+
+  test "web_trust_metadata applies web defaults and wrapped field normalization" do
+    metadata =
+      ExternalContent.web_trust_metadata(:web_search, ["content", :title, nil, ""])
+
+    assert metadata["untrusted"] == true
+    assert metadata["source"] == "web_search"
+    assert metadata["source_label"] == "Web Search"
+    assert metadata["wrapping_applied"] == true
+    assert metadata["warning_included"] == false
+    assert metadata["wrapped_fields"] == ["content", "title"]
+  end
+
+  test "untrusted_json_result encodes payload and marks trust as untrusted" do
+    payload = %{"ok" => true, "nested" => %{"value" => 1}}
+    result = ExternalContent.untrusted_json_result(payload)
+
+    assert result.trust == :untrusted
+    assert result.details == payload
+
+    [content] = result.content
+    assert Jason.decode!(content.text) == payload
+  end
 end
