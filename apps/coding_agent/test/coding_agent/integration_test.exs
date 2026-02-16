@@ -602,6 +602,7 @@ defmodule CodingAgent.IntegrationTest do
         tool_name: "write",
         content: tool_result.content,
         details: tool_result.details,
+        trust: :untrusted,
         is_error: false,
         timestamp: System.system_time(:millisecond)
       }
@@ -615,6 +616,7 @@ defmodule CodingAgent.IntegrationTest do
           Enum.map(tool_result_msg.content, fn
             %TextContent{text: text} -> %{"type" => "text", "text" => text}
           end),
+        "trust" => "untrusted",
         "is_error" => tool_result_msg.is_error,
         "timestamp" => tool_result_msg.timestamp
       }
@@ -634,6 +636,7 @@ defmodule CodingAgent.IntegrationTest do
       entry = hd(loaded.entries)
       assert entry.message["role"] == "tool_result"
       assert entry.message["tool_call_id"] == "call_123"
+      assert entry.message["trust"] == "untrusted"
     end
   end
 
@@ -848,6 +851,12 @@ defmodule CodingAgent.IntegrationTest do
       tool_call_id: msg["tool_call_id"] || "",
       tool_name: msg["tool_name"] || "",
       content: [],
+      trust:
+        case msg["trust"] do
+          "untrusted" -> :untrusted
+          :untrusted -> :untrusted
+          _ -> :trusted
+        end,
       is_error: msg["is_error"] || false,
       timestamp: msg["timestamp"] || 0
     }

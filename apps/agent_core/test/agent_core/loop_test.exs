@@ -878,6 +878,41 @@ defmodule AgentCore.LoopTest do
       # Should include tool result message
       tool_results = Enum.filter(messages, fn m -> Map.get(m, :role) == :tool_result end)
       assert length(tool_results) >= 1
+      assert Enum.all?(tool_results, &(&1.trust == :trusted))
+    end
+
+    test "propagates untrusted trust from tool results" do
+      untrusted_tool = %AgentTool{
+        name: "untrusted_echo",
+        description: "Returns untrusted output",
+        parameters: %{"type" => "object"},
+        label: "Untrusted Echo",
+        execute: fn _id, %{"text" => text}, _signal, _on_update ->
+          %AgentToolResult{
+            content: [%TextContent{type: :text, text: text}],
+            trust: :untrusted
+          }
+        end
+      }
+
+      context = simple_context(tools: [untrusted_tool])
+
+      tool_call = Mocks.tool_call("untrusted_echo", %{"text" => "from web"}, id: "call_untrusted")
+      tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
+      final_response = Mocks.assistant_message("Done")
+
+      config =
+        simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
+
+      stream = Loop.agent_loop([user_message("Run untrusted tool")], context, config, nil, nil)
+      {:ok, messages} = EventStream.result(stream)
+
+      tool_results =
+        Enum.filter(messages, fn m ->
+          Map.get(m, :role) == :tool_result and Map.get(m, :tool_call_id) == "call_untrusted"
+        end)
+
+      assert [%ToolResultMessage{trust: :untrusted}] = tool_results
     end
   end
 end

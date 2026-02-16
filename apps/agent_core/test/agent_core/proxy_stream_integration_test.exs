@@ -6,18 +6,23 @@ defmodule AgentCore.ProxyStreamIntegrationTest do
   alias AgentCore.Test.Mocks
 
   alias Ai.EventStream
-  alias Ai.Types.{AssistantMessage, TextContent, ToolCall}
+  alias Ai.Types.{AssistantMessage, TextContent, ToolCall, ToolResultMessage}
 
   @receive_timeout 2_000
 
-  defp start_sse_server(chunks) do
+  defp start_sse_server(chunks, opts \\ []) do
+    capture_request = Keyword.get(opts, :capture_request, false)
     {:ok, listen} = :gen_tcp.listen(0, [:binary, packet: :raw, active: false, reuseaddr: true])
     {:ok, {_, port}} = :inet.sockname(listen)
     parent = self()
 
     Task.start(fn ->
       {:ok, socket} = :gen_tcp.accept(listen)
-      read_request(socket, "")
+      request = read_request(socket, "")
+
+      if capture_request do
+        send(parent, {:sse_server_request, request})
+      end
 
       :ok =
         :gen_tcp.send(
@@ -47,13 +52,54 @@ defmodule AgentCore.ProxyStreamIntegrationTest do
         acc = acc <> data
 
         if String.contains?(acc, "\r\n\r\n") do
-          :ok
+          [headers, body_so_far] = String.split(acc, "\r\n\r\n", parts: 2)
+          content_length = parse_content_length(headers)
+          remaining = max(content_length - byte_size(body_so_far), 0)
+          body = body_so_far <> recv_exact(socket, remaining)
+          headers <> "\r\n\r\n" <> body
         else
           read_request(socket, acc)
         end
 
       {:error, _} ->
-        :ok
+        acc
+    end
+  end
+
+  defp parse_content_length(headers) do
+    headers
+    |> String.split("\r\n")
+    |> Enum.find_value(0, fn line ->
+      case String.split(line, ":", parts: 2) do
+        [name, value] ->
+          if String.downcase(String.trim(name)) == "content-length" do
+            case Integer.parse(String.trim(value)) do
+              {length, _} -> length
+              :error -> 0
+            end
+          end
+
+        _ ->
+          nil
+      end
+    end)
+  end
+
+  defp recv_exact(_socket, 0), do: ""
+
+  defp recv_exact(socket, bytes) do
+    case :gen_tcp.recv(socket, bytes, 1_000) do
+      {:ok, data} ->
+        read = byte_size(data)
+
+        if read >= bytes do
+          binary_part(data, 0, bytes)
+        else
+          data <> recv_exact(socket, bytes - read)
+        end
+
+      {:error, _} ->
+        ""
     end
   end
 
@@ -203,6 +249,48 @@ defmodule AgentCore.ProxyStreamIntegrationTest do
 
       assert message.stop_reason == :error
       assert message.error_message == "boom"
+
+      assert_receive :sse_server_done, @receive_timeout
+    end
+
+    test "encodes tool result trust in proxy request context" do
+      chunks = [
+        sse_event(%{"type" => "start"}),
+        sse_event(%{"type" => "done", "reason" => "stop", "usage" => %{}})
+      ]
+
+      port = start_sse_server(chunks, capture_request: true)
+
+      context =
+        Ai.Types.Context.new(
+          messages: [
+            %ToolResultMessage{
+              role: :tool_result,
+              tool_call_id: "call_1",
+              tool_name: "webfetch",
+              content: [%TextContent{type: :text, text: "<html>"}],
+              trust: :untrusted,
+              is_error: false,
+              timestamp: 1
+            }
+          ]
+        )
+
+      stream =
+        Proxy.stream_proxy(
+          Mocks.mock_model(),
+          context,
+          %ProxyStreamOptions{
+            auth_token: "token",
+            proxy_url: "http://localhost:#{port}"
+          }
+        )
+
+      {:ok, %AssistantMessage{}} = EventStream.result(stream, @receive_timeout)
+
+      assert_receive {:sse_server_request, request}, @receive_timeout
+      assert request =~ "\"role\":\"tool_result\""
+      assert request =~ "\"trust\":\"untrusted\""
 
       assert_receive :sse_server_done, @receive_timeout
     end

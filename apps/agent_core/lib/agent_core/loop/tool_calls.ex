@@ -258,6 +258,7 @@ defmodule AgentCore.Loop.ToolCalls do
       tool_name: tool_call.name,
       content: result.content,
       details: result.details,
+      trust: normalize_trust(result.trust),
       is_error: is_error,
       timestamp: System.system_time(:millisecond)
     }
@@ -338,4 +339,7 @@ defmodule AgentCore.Loop.ToolCalls do
   defp get_steering_messages(%AgentLoopConfig{get_steering_messages: get_fn}) do
     get_fn.() || []
   end
+
+  defp normalize_trust(:untrusted), do: :untrusted
+  defp normalize_trust(_), do: :trusted
 end

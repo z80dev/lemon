@@ -1009,6 +1009,7 @@ defmodule AgentCore.TypesPropertyTest do
       result = %AgentToolResult{}
       assert result.content == []
       assert is_nil(result.details)
+      assert result.trust == :trusted
     end
 
     property "AgentToolResult content is list of content blocks" do

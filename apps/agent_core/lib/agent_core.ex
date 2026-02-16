@@ -483,6 +483,7 @@ defmodule AgentCore do
 
     * `:content` - List of content blocks (default: [])
     * `:details` - Optional details for logging/UI
+    * `:trust` - Tool result trust level, `:trusted` or `:untrusted` (default: `:trusted`)
 
   ## Examples
 
@@ -495,7 +496,8 @@ defmodule AgentCore do
   def new_tool_result(opts \\ []) do
     %AgentToolResult{
       content: Keyword.get(opts, :content, []),
-      details: Keyword.get(opts, :details)
+      details: Keyword.get(opts, :details),
+      trust: Keyword.get(opts, :trust, :trusted)
     }
   end
 

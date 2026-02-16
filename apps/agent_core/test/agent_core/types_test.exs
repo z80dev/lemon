@@ -21,14 +21,16 @@ defmodule AgentCore.TypesTest do
 
       assert result.content == []
       assert result.details == nil
+      assert result.trust == :trusted
     end
 
     test "creates with text content" do
       content = [%TextContent{type: :text, text: "Hello, world!"}]
-      result = %AgentToolResult{content: content, details: %{foo: "bar"}}
+      result = %AgentToolResult{content: content, details: %{foo: "bar"}, trust: :untrusted}
 
       assert result.content == content
       assert result.details == %{foo: "bar"}
+      assert result.trust == :untrusted
     end
 
     test "creates with mixed content types" do

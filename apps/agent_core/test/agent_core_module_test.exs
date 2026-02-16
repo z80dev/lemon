@@ -983,6 +983,7 @@ defmodule AgentCore.ModuleTest do
       assert %AgentToolResult{} = result
       assert result.content == []
       assert result.details == nil
+      assert result.trust == :trusted
     end
 
     test "creates tool result with content" do
@@ -1011,6 +1012,11 @@ defmodule AgentCore.ModuleTest do
 
       assert result.content == content
       assert result.details == details
+    end
+
+    test "creates tool result with trust level" do
+      result = AgentCore.new_tool_result(trust: :untrusted)
+      assert result.trust == :untrusted
     end
   end
 

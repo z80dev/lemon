@@ -9,6 +9,7 @@ defmodule CodingAgent.SessionTest do
     AssistantMessage,
     TextContent,
     ToolCall,
+    ToolResultMessage,
     Usage,
     Cost,
     Model,
@@ -413,6 +414,42 @@ defmodule CodingAgent.SessionTest do
       # Subagent scope should not inject durable context like SOUL/MEMORY.
       refute String.contains?(state.system_prompt, "## SOUL.md")
       refute String.contains?(state.system_prompt, "## MEMORY.md")
+    end
+
+    @tag :tmp_dir
+    test "loads tool result trust and defaults missing trust to :trusted", %{tmp_dir: tmp_dir} do
+      session_manager =
+        SessionManager.new(tmp_dir)
+        |> SessionManager.append_message(%{
+          "role" => "tool_result",
+          "tool_call_id" => "call_untrusted",
+          "tool_name" => "webfetch",
+          "content" => [%{"type" => "text", "text" => "untrusted output"}],
+          "trust" => "untrusted",
+          "timestamp" => 1
+        })
+        |> SessionManager.append_message(%{
+          "role" => "tool_result",
+          "tool_call_id" => "call_legacy",
+          "tool_name" => "legacy_tool",
+          "content" => [%{"type" => "text", "text" => "legacy output"}],
+          "timestamp" => 2
+        })
+
+      session_file = Path.join(tmp_dir, "tool_result_trust.jsonl")
+      :ok = SessionManager.save_to_file(session_file, session_manager)
+
+      session = start_session(session_file: session_file, cwd: tmp_dir)
+
+      messages =
+        session
+        |> Session.get_messages()
+        |> Enum.filter(&match?(%ToolResultMessage{}, &1))
+
+      assert [
+               %ToolResultMessage{tool_call_id: "call_untrusted", trust: :untrusted},
+               %ToolResultMessage{tool_call_id: "call_legacy", trust: :trusted}
+             ] = messages
     end
 
     @tag :tmp_dir
@@ -1772,6 +1809,7 @@ defmodule CodingAgent.SessionTest do
       assert tool_entries != []
       last_entry = List.last(tool_entries)
       assert last_entry.message["details"] == %{category: "demo", length: 5}
+      assert last_entry.message["trust"] == "trusted"
     end
   end
 end

@@ -53,15 +53,16 @@ defmodule AgentCore.Types do
     @moduledoc """
     Result returned from tool execution.
 
-    Contains content blocks (text/images) to be displayed and optional
-    details for UI rendering or logging.
+    Contains content blocks (text/images) to be displayed, optional
+    details for UI rendering or logging, and trust metadata.
     """
     @type content_block :: Ai.Types.TextContent.t() | Ai.Types.ImageContent.t()
     @type t :: %__MODULE__{
             content: [content_block()],
-            details: any()
+            details: any(),
+            trust: Ai.Types.trust_level()
           }
-    defstruct content: [], details: nil
+    defstruct content: [], details: nil, trust: :trusted
   end
 
   # ============================================================================

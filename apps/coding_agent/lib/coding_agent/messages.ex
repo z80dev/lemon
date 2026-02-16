@@ -135,12 +135,14 @@ defmodule CodingAgent.Messages do
             role: :tool_result,
             tool_use_id: String.t(),
             content: [TextContent.t()],
+            trust: :trusted | :untrusted,
             is_error: boolean(),
             timestamp: integer()
           }
     defstruct role: :tool_result,
               tool_use_id: "",
               content: [],
+              trust: :trusted,
               is_error: false,
               timestamp: 0
   end
@@ -386,6 +388,7 @@ defmodule CodingAgent.Messages do
       tool_call_id: msg.tool_use_id,
       tool_name: "",
       content: Enum.map(msg.content, &convert_content_block/1),
+      trust: normalize_trust(msg.trust),
       is_error: msg.is_error,
       timestamp: msg.timestamp
     }
@@ -463,6 +466,7 @@ defmodule CodingAgent.Messages do
       tool_call_id: Map.get(msg, :tool_call_id) || Map.get(msg, :tool_use_id, ""),
       tool_name: Map.get(msg, :tool_name, ""),
       content: content,
+      trust: normalize_trust(Map.get(msg, :trust)),
       is_error: Map.get(msg, :is_error, false),
       timestamp: Map.get(msg, :timestamp, 0)
     }
@@ -505,6 +509,12 @@ defmodule CodingAgent.Messages do
 
   defp convert_cost(nil), do: %Ai.Types.Cost{}
   defp convert_cost(cost) when is_float(cost), do: %Ai.Types.Cost{total: cost}
+
+  defp normalize_trust(:untrusted), do: :untrusted
+  defp normalize_trust("untrusted"), do: :untrusted
+  defp normalize_trust(:trusted), do: :trusted
+  defp normalize_trust("trusted"), do: :trusted
+  defp normalize_trust(_), do: :trusted
 
   defp format_bash_output(%BashExecutionMessage{} = msg) do
     parts = ["$ #{msg.command}"]

@@ -1677,6 +1677,7 @@ defmodule CodingAgent.Session do
       "tool_name" => msg.tool_name,
       "content" => Enum.map(msg.content, &serialize_content_block/1),
       "details" => msg.details,
+      "trust" => serialize_trust(msg.trust),
       "is_error" => msg.is_error,
       "timestamp" => msg.timestamp
     }
@@ -1762,6 +1763,7 @@ defmodule CodingAgent.Session do
       tool_name: msg["tool_name"] || "",
       content: deserialize_content_blocks(msg["content"]),
       details: msg["details"],
+      trust: deserialize_trust(msg["trust"]),
       is_error: msg["is_error"] || false,
       timestamp: msg["timestamp"] || 0
     }
@@ -1845,6 +1847,18 @@ defmodule CodingAgent.Session do
   defp deserialize_stop_reason("error"), do: :error
   defp deserialize_stop_reason("aborted"), do: :aborted
   defp deserialize_stop_reason(_), do: nil
+
+  defp serialize_trust(:untrusted), do: "untrusted"
+  defp serialize_trust(:trusted), do: "trusted"
+  defp serialize_trust("untrusted"), do: "untrusted"
+  defp serialize_trust("trusted"), do: "trusted"
+  defp serialize_trust(_), do: "trusted"
+
+  defp deserialize_trust(:untrusted), do: :untrusted
+  defp deserialize_trust("untrusted"), do: :untrusted
+  defp deserialize_trust(:trusted), do: :trusted
+  defp deserialize_trust("trusted"), do: :trusted
+  defp deserialize_trust(_), do: :trusted
 
   # ============================================================================
   # Branch Summarization Helpers

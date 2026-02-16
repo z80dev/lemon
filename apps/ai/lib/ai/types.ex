@@ -6,6 +6,14 @@ defmodule Ai.Types do
   for representing conversations, messages, tool calls, and model metadata.
   """
 
+  @typedoc """
+  Trust level for tool-generated content.
+
+  - `:trusted` - Content can be treated as trusted
+  - `:untrusted` - Content should be handled as untrusted
+  """
+  @type trust_level :: :trusted | :untrusted
+
   # ============================================================================
   # Content Types
   # ============================================================================
@@ -102,6 +110,7 @@ defmodule Ai.Types do
             tool_name: String.t(),
             content: [TextContent.t() | ImageContent.t()],
             details: any(),
+            trust: Ai.Types.trust_level(),
             is_error: boolean(),
             timestamp: integer()
           }
@@ -110,6 +119,7 @@ defmodule Ai.Types do
               tool_name: "",
               content: [],
               details: nil,
+              trust: :trusted,
               is_error: false,
               timestamp: 0
   end

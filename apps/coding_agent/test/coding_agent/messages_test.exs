@@ -37,6 +37,7 @@ defmodule CodingAgent.MessagesTest do
         tool_call_id: "123",
         tool_name: "test_tool",
         content: [],
+        trust: :untrusted,
         is_error: false,
         timestamp: 0
       }
@@ -155,6 +156,7 @@ defmodule CodingAgent.MessagesTest do
       assert %Ai.Types.ToolResultMessage{} = result
       assert result.role == :tool_result
       assert result.tool_call_id == "tool_123"
+      assert result.trust == :trusted
       assert result.is_error == false
       assert result.timestamp == 789
       assert length(result.content) == 1
@@ -170,6 +172,18 @@ defmodule CodingAgent.MessagesTest do
 
       [result] = Messages.to_llm([msg])
       assert result.is_error == true
+    end
+
+    test "converts ToolResultMessage trust to Ai.Types.ToolResultMessage" do
+      msg = %ToolResultMessage{
+        tool_use_id: "tool_123",
+        content: [%TextContent{text: "untrusted output"}],
+        trust: :untrusted,
+        timestamp: 0
+      }
+
+      [result] = Messages.to_llm([msg])
+      assert result.trust == :untrusted
     end
 
     test "converts BashExecutionMessage to user message" do
@@ -335,6 +349,7 @@ defmodule CodingAgent.MessagesTest do
       [result] = Messages.to_llm([msg])
       assert %Ai.Types.ToolResultMessage{} = result
       assert result.tool_call_id == "abc"
+      assert result.trust == :trusted
       assert result.timestamp == 100
     end
 
@@ -910,12 +925,19 @@ defmodule CodingAgent.MessagesTest do
       msg = %{role: :tool_result, tool_use_id: "legacy_id", content: []}
       [result] = Messages.to_llm([msg])
       assert result.tool_call_id == "legacy_id"
+      assert result.trust == :trusted
     end
 
     test "plain map with role: :tool_result prefers tool_call_id over tool_use_id" do
       msg = %{role: :tool_result, tool_call_id: "new_id", tool_use_id: "old_id", content: []}
       [result] = Messages.to_llm([msg])
       assert result.tool_call_id == "new_id"
+    end
+
+    test "plain map with role: :tool_result accepts string trust values" do
+      msg = %{role: :tool_result, tool_call_id: "trusted_id", trust: "untrusted", content: []}
+      [result] = Messages.to_llm([msg])
+      assert result.trust == :untrusted
     end
 
     test "UserMessage with only image content blocks" do
@@ -1245,6 +1267,7 @@ defmodule CodingAgent.MessagesTest do
       assert msg.role == :tool_result
       assert msg.tool_use_id == ""
       assert msg.content == []
+      assert msg.trust == :trusted
       assert msg.is_error == false
       assert msg.timestamp == 0
     end

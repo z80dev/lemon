@@ -114,6 +114,7 @@ defmodule AgentCore.Test.Mocks do
       tool_name: tool_name,
       content: [%TextContent{type: :text, text: content}],
       details: Keyword.get(opts, :details, nil),
+      trust: Keyword.get(opts, :trust, :trusted),
       is_error: Keyword.get(opts, :is_error, false),
       timestamp: Keyword.get(opts, :timestamp, System.system_time(:millisecond))
     }

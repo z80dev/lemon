@@ -653,6 +653,7 @@ defmodule AgentCore.Proxy do
       toolName: msg.tool_name,
       content: Enum.map(msg.content, &encode_content_block/1),
       details: msg.details,
+      trust: encode_trust(msg.trust),
       isError: msg.is_error,
       timestamp: msg.timestamp
     }
@@ -719,6 +720,12 @@ defmodule AgentCore.Proxy do
   defp encode_stop_reason(:aborted), do: "aborted"
   defp encode_stop_reason(:error), do: "error"
   defp encode_stop_reason(nil), do: nil
+
+  defp encode_trust(:untrusted), do: "untrusted"
+  defp encode_trust(:trusted), do: "trusted"
+  defp encode_trust("untrusted"), do: "untrusted"
+  defp encode_trust("trusted"), do: "trusted"
+  defp encode_trust(_), do: "trusted"
 
   @doc """
   Parse partial/streaming JSON, attempting to complete incomplete JSON.
