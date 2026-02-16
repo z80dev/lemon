@@ -287,7 +287,7 @@ Lemon is an AI coding assistant built as a distributed system of concurrent proc
 ### Key Features
 
 **Agent Capabilities:**
-- **Multi-turn conversations** with 14 built-in tools (`read`, `memory_topic`, `write`, `edit`, `patch`, `bash`, `grep`, `find`, `ls`, `webfetch`, `websearch`, `todo`, `task`, `extensions_status`) plus extension tools
+- **Multi-turn conversations** with 15 built-in tools (`read`, `memory_topic`, `write`, `edit`, `patch`, `bash`, `grep`, `find`, `ls`, `browser`, `webfetch`, `websearch`, `todo`, `task`, `extensions_status`) plus extension tools
 - **Real-time streaming** of LLM responses with fine-grained event notifications
 - **Session persistence** via JSONL with tree-structured conversation history
 - **Context compaction** and branch summarization for long conversations
@@ -562,11 +562,11 @@ lemon/
 │   │       ├── budget_tracker.ex     # Token/cost tracking
 │   │       ├── cli_runners/          # Lemon CLI runner
 │   │       └── tools/                # Default built-ins + optional tool modules
-│   │           ├── bash.ex, edit.ex, memory_topic.ex, read.ex, write.ex
-│   │           ├── grep.ex, find.ex, ls.ex
+│   │           ├── bash.ex, browser.ex, edit.ex, memory_topic.ex, read.ex, write.ex
+│   │           ├── grep.ex, find.ex, glob.ex, ls.ex, patch.ex
 │   │           ├── task.ex, todo.ex, extensions_status.ex
-│   │           ├── webfetch.ex, websearch.ex, web_cache.ex, web_guard.ex
-│   │           └── exec.ex, process.ex, truncate.ex (custom integrations)
+│   │           ├── webfetch.ex, websearch.ex, webdownload.ex, web_cache.ex, web_guard.ex
+│   │           └── exec.ex, process.ex, restart.ex, truncate.ex (runtime integrations)
 │   │
 │   ├── coding_agent_ui/         # UI abstraction layer
 │   │   └── lib/coding_agent/ui/
@@ -580,7 +580,7 @@ lemon/
 │   │   └── lib/lemon_core/
 │   │       ├── bus.ex           # Phoenix.PubSub wrapper for events
 │   │       ├── event.ex         # Canonical event envelope
-│   │       ├── store.ex         # Persistent key-value storage
+│   │       ├── store.ex         # Persistent key-value storage (ETS/JSONL/SQLite backends)
 │   │       ├── id.ex            # Prefixed UUID generation
 │   │       ├── idempotency.ex   # At-most-once execution
 │   │       ├── telemetry.ex     # Observability events
@@ -592,7 +592,7 @@ lemon/
 │   │       ├── run.ex           # Run lifecycle GenServer
 │   │       ├── scheduler.ex     # Global concurrency control
 │   │       ├── thread_worker.ex # Per-thread job queues
-│   │       ├── store.ex         # Pluggable storage (ETS/JSONL)
+│   │       ├── store.ex         # Pluggable storage via LemonCore.Store backends
 │   │       ├── engines/         # Execution engines
 │   │       │   ├── lemon.ex     # Native CodingAgent engine
 │   │       │   ├── claude.ex    # Claude CLI engine
@@ -946,8 +946,8 @@ unsubscribe = CodingAgent.Session.subscribe(session)
 
 **Key Features:**
 - Session persistence (JSONL v3 format with tree structure)
-- Default built-in coding tools (`read`, `memory_topic`, `write`, `edit`, `patch`, `bash`, `grep`, `find`, `ls`, `webfetch`, `websearch`, `todo`, `task`, `extensions_status`)
-- Optional runtime tool modules for custom integrations (`exec`, `process`, `truncate`)
+- Default built-in coding tools (`read`, `memory_topic`, `write`, `edit`, `patch`, `bash`, `grep`, `find`, `ls`, `browser`, `webfetch`, `websearch`, `todo`, `task`, `extensions_status`)
+- Optional runtime tool modules for custom integrations (`exec`, `process`, `restart`, `truncate`, `webdownload`)
 - Context compaction and branch summarization
 - Extension system for custom tools
 - Settings management (global + project-level)
@@ -1285,6 +1285,7 @@ Instructions for the agent...
 **Key Features:**
 
 - **Dual Scope**: Global (`~/.lemon/agent/skill/`) and project (`.lemon/skill/`)
+- **Bundled Skills**: Seeds built-ins on first run (`github`, `peekaboo`, `pinata`, `runtime-remsh`, `session-logs`, `skill-creator`, `summarize`, `tmux`)
 - **Manifest Parsing**: YAML or TOML frontmatter with metadata
 - **Dependency Verification**: Checks for required binaries and env vars
 - **Approval Gating**: Requires approval for install/update/uninstall
@@ -1654,11 +1655,11 @@ Per-agent tool policies with allow/deny lists:
 ```elixir
 # Predefined profiles
 :full_access        # All tools allowed
-:minimal_core       # Lean core set (read/memory_topic/write/edit/patch/bash/grep/find/ls/webfetch/websearch/todo/task/extensions_status)
+:minimal_core       # Lean core set (read/memory_topic/write/edit/patch/bash/grep/find/ls/browser/webfetch/websearch/todo/task/extensions_status)
 :read_only          # Only read operations
 :safe_mode          # No write/edit/patch/bash/exec/process
 :subagent_restricted # Limited tools for subagents
-:no_external        # No web fetch/search
+:no_external        # No browser/web fetch/search
 
 # Per-engine defaults
 %{
