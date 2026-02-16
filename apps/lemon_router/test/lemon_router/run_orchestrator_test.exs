@@ -9,6 +9,16 @@ defmodule LemonRouter.RunOrchestratorTest do
   """
 
   setup do
+    {engine_registry_started_here?, engine_pid} =
+      case Process.whereis(LemonGateway.EngineRegistry) do
+        nil ->
+          {:ok, started_pid} = LemonGateway.EngineRegistry.start_link([])
+          {true, started_pid}
+
+        existing_pid ->
+          {false, existing_pid}
+      end
+
     # Start RunOrchestrator if not running
     case Process.whereis(RunOrchestrator) do
       nil ->
@@ -16,11 +26,21 @@ defmodule LemonRouter.RunOrchestratorTest do
 
         on_exit(fn ->
           if Process.alive?(pid), do: GenServer.stop(pid)
+
+          if engine_registry_started_here? and is_pid(engine_pid) and Process.alive?(engine_pid) do
+            GenServer.stop(engine_pid)
+          end
         end)
 
         {:ok, orchestrator_pid: pid}
 
       pid ->
+        on_exit(fn ->
+          if engine_registry_started_here? and is_pid(engine_pid) and Process.alive?(engine_pid) do
+            GenServer.stop(engine_pid)
+          end
+        end)
+
         {:ok, orchestrator_pid: pid}
     end
   end
@@ -275,6 +295,51 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       result = RunOrchestrator.submit(params)
       assert match?({:ok, _}, result) or match?({:error, _}, result)
+    end
+  end
+
+  describe "resume extraction and prompt sanitization" do
+    test "extracts resume token from prompt and strips strict resume lines" do
+      prompt = "codex resume thread_abc123\nPlease continue with this task."
+
+      {resume, stripped} = RunOrchestrator.extract_resume_and_strip_prompt(prompt, %{})
+
+      assert %LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_abc123"} = resume
+      assert stripped == "Please continue with this task."
+    end
+
+    test "extracts resume token from reply_to_text when prompt has none" do
+      prompt = "Continue with changes."
+      meta = %{reply_to_text: "`codex resume thread_reply_123`"}
+
+      {resume, stripped} = RunOrchestrator.extract_resume_and_strip_prompt(prompt, meta)
+
+      assert %LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_reply_123"} = resume
+      assert stripped == "Continue with changes."
+    end
+
+    test "uses fallback prompt when stripped prompt would be empty" do
+      prompt = "codex resume thread_only_resume"
+
+      {resume, stripped} = RunOrchestrator.extract_resume_and_strip_prompt(prompt, %{})
+
+      assert %LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_only_resume"} =
+               resume
+
+      assert stripped == "Continue."
+    end
+
+    test "strips multiple strict resume lines but keeps non-resume text" do
+      prompt = """
+      codex resume thread_one
+      Keep this line
+      `codex resume thread_two`
+      and this one too
+      """
+
+      {_resume, stripped} = RunOrchestrator.extract_resume_and_strip_prompt(prompt, %{})
+
+      assert stripped == "Keep this line\nand this one too"
     end
   end
 end

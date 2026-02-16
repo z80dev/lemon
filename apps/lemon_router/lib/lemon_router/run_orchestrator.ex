@@ -332,7 +332,10 @@ defmodule LemonRouter.RunOrchestrator do
     end
   end
 
-  defp extract_resume_and_strip_prompt(prompt, meta) do
+  @doc false
+  @spec extract_resume_and_strip_prompt(String.t() | nil, map()) ::
+          {LemonGateway.Types.ResumeToken.t() | nil, String.t()}
+  def extract_resume_and_strip_prompt(prompt, meta) do
     prompt = prompt || ""
 
     reply_to_text =
