@@ -16,7 +16,8 @@ Lemon uses Erlang's `:telemetry` library for observability. Events are emitted a
     [:agent_core, :loop, :start],
     [:agent_core, :loop, :end],
     [:agent_core, :tool_task, :start],
-    [:agent_core, :tool_task, :end]
+    [:agent_core, :tool_task, :end],
+    [:agent_core, :tool_result, :emit]
   ],
   &MyModule.handle_event/4,
   %{my_config: true}
@@ -118,6 +119,24 @@ Emitted when a tool task fails or is aborted.
 | `tool_name` | string | Name of the tool |
 | `tool_call_id` | string | Unique tool call identifier |
 | `reason` | term | Error reason |
+
+### Tool Result Events
+
+#### [:agent_core, :tool_result, :emit]
+
+Emitted when a tool result message is appended to context.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| **Measurements** | | |
+| `system_time` | integer | Emit time (native units) |
+| **Metadata** | | |
+| `tool_name` | string | Name of the tool |
+| `tool_call_id` | string | Unique tool call identifier |
+| `is_error` | boolean | Whether the result is an error |
+| `trust` | `:trusted` \| `:untrusted` | Normalized trust level for the emitted tool result |
+
+`trust` comes from tool result trust normalization in the tool-call loop. Only `:untrusted` is emitted as untrusted; all other values are emitted as `:trusted`.
 
 ### Context Events
 
@@ -316,6 +335,7 @@ defmodule MyApp.TelemetryHandler do
       [:agent_core, :loop, :end],
       [:agent_core, :tool_task, :start],
       [:agent_core, :tool_task, :end],
+      [:agent_core, :tool_result, :emit],
       [:agent_core, :tool_task, :error],
       [:agent_core, :context, :warning],
       [:coding_agent, :session, :event_stream, :broadcast],
@@ -341,6 +361,13 @@ defmodule MyApp.TelemetryHandler do
 
   def handle_event([:agent_core, :tool_task, :error], _measurements, metadata, _config) do
     Logger.error("Tool #{metadata.tool_name} failed: #{inspect(metadata.reason)}")
+  end
+
+  def handle_event([:agent_core, :tool_result, :emit], _measurements, metadata, _config) do
+    Logger.info(
+      "Tool result #{metadata.tool_name} emitted " <>
+        "(trust=#{metadata.trust}, error=#{metadata.is_error})"
+    )
   end
 
   def handle_event([:agent_core, :context, :warning], measurements, metadata, _config) do

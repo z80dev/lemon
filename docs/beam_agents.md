@@ -133,6 +133,10 @@ The following telemetry events are emitted:
 
 - `[:agent_core, :loop, :start]` - Agent loop started
 - `[:agent_core, :loop, :end]` - Agent loop completed
+- `[:agent_core, :tool_task, :start]` - Tool task started
+- `[:agent_core, :tool_task, :end]` - Tool task completed
+- `[:agent_core, :tool_task, :error]` - Tool task failed or was aborted
+- `[:agent_core, :tool_result, :emit]` - Tool result message emitted (`tool_name`, `tool_call_id`, `is_error`, `trust`)
 - `[:agent_core, :subagent, :spawn]` - Subagent spawned
 - `[:agent_core, :subagent, :end]` - Subagent completed
 - `[:agent_core, :event_stream, :queue_depth]` - Queue depth measurement
@@ -150,7 +154,7 @@ changes.
 
 ### Current Tool Execution Path
 
-Tool execution is handled in `apps/agent_core/lib/agent_core/loop.ex`.
+Tool execution is handled in `apps/agent_core/lib/agent_core/loop/tool_calls.ex`.
 
 #### Entry Point
 
@@ -225,6 +229,20 @@ receive do
     ...
 end
 ```
+
+#### Tool Result Trust and Metadata Pipeline
+
+- Tools return `%AgentCore.Types.AgentToolResult{trust: ...}`.
+- `emit_tool_result/7` normalizes trust before emitting messages and telemetry:
+  `:untrusted` stays `:untrusted`; every other value becomes `:trusted`.
+- Emitted tool result telemetry (`[:agent_core, :tool_result, :emit]`) includes `tool_name`, `tool_call_id`, `is_error`, and normalized `trust`.
+- External-content tools use `CodingAgent.Security.ExternalContent.untrusted_json_result/1`, which sets `trust: :untrusted` and places the JSON payload into `details`.
+- `CodingAgent.Security.ExternalContent.trust_metadata/2` emits structured trust metadata fields:
+  `untrusted`, `source`, `source_label`/`sourceLabel`, `wrapping_applied`/`wrappingApplied`,
+  `wrapped_fields`/`wrappedFields`, and optional `warning_included`/`warningIncluded`.
+- Current tool payload conventions:
+  `browser` and `web_download` include both `trustMetadata` and `trust_metadata`;
+  `web_fetch` includes `trustMetadata`; `web_search` includes `trust_metadata`.
 
 ---
 
