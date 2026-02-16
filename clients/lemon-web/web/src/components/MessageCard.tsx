@@ -14,6 +14,18 @@ export function MessageCard({ message }: MessageCardProps) {
     message.role === 'tool_result'
       ? `tool ${message.tool_name} (${message.tool_call_id})`
       : null;
+  const toolTrust =
+    message.role === 'tool_result'
+      ? resolveToolResultTrust(message)
+      : null;
+  const toolStatus =
+    message.role === 'tool_result'
+      ? message.is_error
+        ? 'Error'
+        : toolTrust === 'untrusted'
+          ? 'Untrusted'
+          : 'Success'
+      : null;
 
   const activeSessionId = useLemonStore((state) => state.sessions.activeSessionId);
   const toolExecution = useLemonStore((state) => {
@@ -48,7 +60,7 @@ export function MessageCard({ message }: MessageCardProps) {
       </div>
       {message.role === 'tool_result' ? (
         <footer className="message-card__footer">
-          <div>{message.is_error ? 'Error' : 'Success'}</div>
+          <div>{toolStatus}</div>
           <div className="message-card__meta">
             {toolDuration ? <span>duration: {toolDuration}</span> : null}
             {message.details ? <span>details: {Object.keys(message.details).length}</span> : null}
@@ -66,4 +78,11 @@ export function MessageCard({ message }: MessageCardProps) {
       ) : null}
     </article>
   );
+}
+
+function resolveToolResultTrust(message: Extract<Message, { role: 'tool_result' }>): 'trusted' | 'untrusted' {
+  if (message.trust) return message.trust;
+  if (message.trust_metadata?.untrusted === true) return 'untrusted';
+  if (message.trust_metadata?.trusted === false) return 'untrusted';
+  return 'trusted';
 }

@@ -51,6 +51,50 @@ describe('MessageCard', () => {
     expect(screen.getByText(/details: 1/)).toBeInTheDocument();
   });
 
+  it('surfaces untrusted status from top-level trust', () => {
+    render(
+      <MessageCard
+        message={{
+          ...baseToolMessage,
+          trust: 'untrusted',
+          trust_metadata: { trusted: true },
+        }}
+      />
+    );
+
+    expect(screen.getByText('Untrusted')).toBeInTheDocument();
+    expect(screen.queryByText('Success')).not.toBeInTheDocument();
+  });
+
+  it('falls back to trust metadata when top-level trust is missing', () => {
+    render(
+      <MessageCard
+        message={{
+          ...baseToolMessage,
+          trust_metadata: { trusted: false },
+        }}
+      />
+    );
+
+    expect(screen.getByText('Untrusted')).toBeInTheDocument();
+  });
+
+  it('keeps error status for tool result errors', () => {
+    render(
+      <MessageCard
+        message={{
+          ...baseToolMessage,
+          is_error: true,
+          trust: 'untrusted',
+          trust_metadata: { trusted: false },
+        }}
+      />
+    );
+
+    expect(screen.getByText('Error')).toBeInTheDocument();
+    expect(screen.queryByText('Untrusted')).not.toBeInTheDocument();
+  });
+
   it('renders assistant usage footer', () => {
     render(<MessageCard message={baseAssistantMessage} />);
 

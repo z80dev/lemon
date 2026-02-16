@@ -95,13 +95,15 @@ export class MessageRenderer {
       case 'tool_result': {
         const toolResult = message as NormalizedToolResultMessage;
         const colorFn = toolResult.isError ? ansi.error : ansi.secondary;
+        const untrustedIndicator = toolResult.trust === 'untrusted' ? ' [untrusted]' : '';
+        const label = `[${toolResult.toolName}]${untrustedIndicator}`;
         const content = toolResult.content.length > 500
           ? toolResult.content.slice(0, 500) + '...'
           : toolResult.content;
 
         // If there are no images, return a simple Text component
         if (!toolResult.images || toolResult.images.length === 0) {
-          return new Text(colorFn(`[${toolResult.toolName}] ${content}`), 1, 1);
+          return new Text(colorFn(`${label} ${content}`), 1, 1);
         }
 
         // Otherwise, use a Container to render text and images
@@ -109,9 +111,9 @@ export class MessageRenderer {
 
         // Add text content first
         if (content) {
-          container.addChild(new Text(colorFn(`[${toolResult.toolName}] ${content}`), 1, 1));
+          container.addChild(new Text(colorFn(`${label} ${content}`), 1, 1));
         } else {
-          container.addChild(new Text(colorFn(`[${toolResult.toolName}]`), 1, 0));
+          container.addChild(new Text(colorFn(label), 1, 0));
         }
 
         // Add each image
