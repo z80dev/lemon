@@ -156,14 +156,14 @@ defmodule CodingAgent.Tools.Browser do
 
   defp put_trust_metadata(payload, wrapped_fields) when is_map(payload) do
     trust_metadata_camel =
-      ExternalContent.trust_metadata(:unknown,
+      ExternalContent.trust_metadata(:browser,
         key_style: :camel_case,
         warning_included: false,
         wrapped_fields: wrapped_fields
       )
 
     trust_metadata_snake =
-      ExternalContent.trust_metadata(:unknown,
+      ExternalContent.trust_metadata(:browser,
         warning_included: false,
         wrapped_fields: wrapped_fields
       )

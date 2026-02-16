@@ -53,14 +53,14 @@ defmodule CodingAgent.Tools.BrowserTest do
     assert payload["ok"] == true
     assert payload["result"]["title"] == "Example Domain"
     assert payload["trustMetadata"]["untrusted"] == true
-    assert payload["trustMetadata"]["source"] == "unknown"
-    assert payload["trustMetadata"]["sourceLabel"] == "External"
+    assert payload["trustMetadata"]["source"] == "browser"
+    assert payload["trustMetadata"]["sourceLabel"] == "Browser"
     assert payload["trustMetadata"]["wrappingApplied"] == true
     assert payload["trustMetadata"]["warningIncluded"] == false
     assert payload["trustMetadata"]["wrappedFields"] == ["result"]
     assert payload["trust_metadata"]["untrusted"] == true
-    assert payload["trust_metadata"]["source"] == "unknown"
-    assert payload["trust_metadata"]["source_label"] == "External"
+    assert payload["trust_metadata"]["source"] == "browser"
+    assert payload["trust_metadata"]["source_label"] == "Browser"
     assert payload["trust_metadata"]["wrapped_fields"] == ["result"]
   end
 

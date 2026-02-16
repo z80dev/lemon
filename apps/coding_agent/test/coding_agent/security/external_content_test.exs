@@ -48,6 +48,20 @@ defmodule CodingAgent.Security.ExternalContentTest do
     assert metadata["wrapped_fields"] == ["content", "title"]
   end
 
+  test "trust_metadata supports browser source label" do
+    metadata = ExternalContent.trust_metadata(:browser)
+
+    assert metadata["source"] == "browser"
+    assert metadata["source_label"] == "Browser"
+  end
+
+  test "trust_metadata normalizes browser source from string input" do
+    metadata = ExternalContent.trust_metadata(" Browser ", key_style: :camel_case)
+
+    assert metadata["source"] == "browser"
+    assert metadata["sourceLabel"] == "Browser"
+  end
+
   test "untrusted_json_result encodes payload and marks trust as untrusted" do
     payload = %{"ok" => true, "nested" => %{"value" => 1}}
     result = ExternalContent.untrusted_json_result(payload)
