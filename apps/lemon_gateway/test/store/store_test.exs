@@ -271,4 +271,35 @@ defmodule LemonGateway.Store.BackendConfigTest do
     # Verify file was created
     assert File.exists?(Path.join(tmp_dir, "chat.jsonl"))
   end
+
+  test "can use SQLite backend when configured" do
+    tmp_dir =
+      Path.join(System.tmp_dir!(), "store_sqlite_test_#{System.unique_integer([:positive])}")
+
+    db_path = Path.join(tmp_dir, "store.sqlite3")
+
+    on_exit(fn ->
+      # Stop the store before deleting files to avoid late writes during teardown.
+      _ = Application.stop(:lemon_gateway)
+      _ = Application.stop(:lemon_core)
+      File.rm_rf!(tmp_dir)
+    end)
+
+    Application.put_env(:lemon_core, LemonCore.Store,
+      backend: LemonCore.Store.SqliteBackend,
+      backend_opts: [path: tmp_dir, ephemeral_tables: []]
+    )
+
+    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+
+    scope = %ChatScope{transport: :test, chat_id: 300_000, topic_id: nil}
+    Store.put_chat_state(scope, %{persistent: true})
+    Process.sleep(10)
+
+    result = Store.get_chat_state(scope)
+    assert result.persistent == true
+    assert is_integer(result.expires_at)
+
+    assert File.exists?(db_path)
+  end
 end

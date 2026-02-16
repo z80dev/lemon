@@ -48,6 +48,7 @@ defmodule LemonCore.Store.JsonlBackend do
   @impl true
   def init(opts) do
     path = Keyword.fetch!(opts, :path)
+    skip_tables = Keyword.get(opts, :skip_tables, [])
 
     case File.mkdir_p(path) do
       :ok ->
@@ -58,7 +59,7 @@ defmodule LemonCore.Store.JsonlBackend do
           loaded_tables: MapSet.new()
         }
 
-        load_all_tables(state)
+        load_all_tables(state, skip_tables)
 
       {:error, reason} ->
         {:error, {:mkdir_failed, path, reason}}
@@ -151,13 +152,14 @@ defmodule LemonCore.Store.JsonlBackend do
 
   # Private functions
 
-  defp load_all_tables(state) do
+  defp load_all_tables(state, skip_tables) do
     # First, discover all existing .jsonl files in the directory
     discovered_tables = discover_tables(state.path)
 
     # Combine core tables, parity tables, and discovered tables
     all_tables =
       (@core_tables ++ @parity_tables ++ discovered_tables)
+      |> Enum.reject(&(&1 in skip_tables))
       |> Enum.uniq()
 
     result =

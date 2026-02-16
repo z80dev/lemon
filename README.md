@@ -194,10 +194,31 @@ Notes:
 
 ### 5. Run the gateway
 
-From this repo:
+From this repo, start with the default command:
 
 ```bash
 ./bin/lemon-gateway
+# defaults to a distributed BEAM node: lemon_gateway@<short-hostname>
+```
+
+The launcher prints the exact remote shell target on boot, so you can copy it when attaching from another terminal.
+
+If you want explicit local defaults:
+
+```bash
+export LEMON_GATEWAY_NODE_NAME=lemon_gateway
+export LEMON_GATEWAY_NODE_COOKIE="change-me"
+# legacy cookie env var still works as fallback:
+export LEMON_GATEWAY_COOKIE="change-me"
+
+./bin/lemon-gateway --sname "$LEMON_GATEWAY_NODE_NAME" --cookie "$LEMON_GATEWAY_NODE_COOKIE"
+```
+
+Other launch modes:
+
+```bash
+./bin/lemon-gateway --name lemon_gateway@my-host.example.com --cookie "change-me"
+./bin/lemon-gateway --no-distribution
 ```
 
 ### 6. Use Lemon from Telegram
@@ -1893,12 +1914,100 @@ config :lemon_control_plane, :port, 4040
 
 LemonGateway powers transport-based workflows (Telegram, etc.). Telegram polling and message delivery live in `lemon_channels` (Telegram adapter + outbox), but the simplest way to run the full Telegram runtime from source is `./bin/lemon-gateway` which starts `:lemon_gateway`, `:lemon_router`, and `:lemon_channels` without booting every umbrella app (for example the control plane on `:4040`).
 
-To run Telegram locally from source:
+#### Quickest local workflow (copy/paste)
+
+Terminal 1 (start gateway):
 
 ```bash
 ./bin/lemon-gateway
-# ./bin/lemon-gateway --debug
 ```
+
+Terminal 2 (attach remote shell):
+
+```bash
+iex --sname lemon_attach --cookie lemon_gateway_dev_cookie --remsh "lemon_gateway@$(hostname -s)"
+```
+
+Inside attached shell (run code in the live gateway runtime):
+
+```elixir
+node()
+Application.started_applications() |> Enum.map(&elem(&1, 0))
+LemonGateway.Config.get()
+```
+
+Detach without stopping gateway:
+
+```text
+Ctrl+G
+q
+```
+
+#### Launch/attach options
+
+Notes:
+- `--sname` is best for local/same-LAN use and requires matching short host naming.
+- `--name` is best when you want explicit FQDN-style hostnames.
+- `--no-distribution` disables remote attach entirely.
+- `LEMON_GATEWAY_COOKIE` is supported as a legacy fallback for cookie configuration.
+- `LEMON_GATEWAY_NODE_NAME` and `LEMON_GATEWAY_NODE_COOKIE` set defaults for `./bin/lemon-gateway`.
+
+Attach to the running gateway node from another terminal:
+
+```bash
+# default short-name mode
+iex --sname lemon_attach --cookie lemon_gateway_dev_cookie --remsh "lemon_gateway@$(hostname -s)"
+
+# long-name mode (if you started gateway with --name)
+iex --name lemon_attach@my-host.example.com --cookie "change-me" --remsh lemon_gateway@my-host.example.com
+```
+
+Start examples with explicit node settings:
+
+```bash
+# short-name node
+./bin/lemon-gateway --sname lemon_gateway --cookie "change-me"
+
+# long-name node
+./bin/lemon-gateway --name lemon_gateway@my-host.example.com --cookie "change-me"
+
+# disable distribution (no remsh/rpc attach)
+./bin/lemon-gateway --no-distribution
+```
+
+Once attached, run Elixir code in the live runtime, for example:
+
+```elixir
+node()
+Application.started_applications() |> Enum.map(&elem(&1, 0))
+LemonGateway.Config.get()
+```
+
+Run one-off code remotely without opening an interactive shell:
+
+```bash
+elixir --sname lemon_probe --cookie lemon_gateway_dev_cookie --rpc-eval "lemon_gateway@$(hostname -s)" "IO.puts(node()); IO.inspect(LemonGateway.Config.get(:default_engine))"
+```
+
+Long-name one-off eval:
+
+```bash
+elixir --name lemon_probe@my-host.example.com --cookie "change-me" --rpc-eval "lemon_gateway@my-host.example.com" "IO.inspect(LemonGateway.Config.get(:default_engine))"
+```
+
+#### Remote attach troubleshooting
+
+- `nodedown` or timeout while attaching:
+  - Check the exact target printed by gateway on startup: `[lemon-gateway] Remote shell target: ...`
+  - Ensure both terminals use either short names (`--sname`) or long names (`--name`) consistently.
+- `Invalid challenge reply`:
+  - Cookie mismatch. Use the same cookie value for launcher and `iex --remsh`/`elixir --rpc-eval`.
+- `Can't set long node name`:
+  - Your host name is not suitable for long names. Use `--sname` or pass a valid FQDN with `--name`.
+- Node exists but app calls fail:
+  - Gateway may have exited after startup (for example port conflict). Check terminal 1 logs.
+- Verify node registration:
+  - `epmd -names` should list your gateway node name.
 
 Minimal `~/.lemon/config.toml` for Telegram:
 

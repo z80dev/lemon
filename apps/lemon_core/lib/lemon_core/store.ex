@@ -7,7 +7,7 @@ defmodule LemonCore.Store do
   Configure the backend in your application config:
 
       config :lemon_core, LemonCore.Store,
-        backend: LemonCore.Store.JsonlBackend,
+        backend: LemonCore.Store.SqliteBackend,
         backend_opts: [path: "/var/lib/lemon/store"]
 
   Defaults to `LemonCore.Store.EtsBackend` (in-memory, ephemeral).
@@ -487,7 +487,8 @@ defmodule LemonCore.Store do
     scope = summary[:scope] || summary["scope"]
 
     cond do
-      is_map(scope) and (Map.get(scope, :transport) || Map.get(scope, "transport")) in [:telegram, "telegram"] ->
+      is_map(scope) and
+          (Map.get(scope, :transport) || Map.get(scope, "transport")) in [:telegram, "telegram"] ->
         {Map.get(scope, :chat_id) || Map.get(scope, "chat_id"),
          Map.get(scope, :topic_id) || Map.get(scope, "topic_id")}
 
