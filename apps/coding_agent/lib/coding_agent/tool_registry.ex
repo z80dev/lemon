@@ -39,6 +39,7 @@ defmodule CodingAgent.ToolRegistry do
 
   @type tool_name :: String.t()
   @type tool_opts :: keyword()
+  @extension_cache_table :coding_agent_tool_registry_extension_cache
 
   # Built-in tools - order matters for tool description
   @builtin_tools [
@@ -82,7 +83,6 @@ defmodule CodingAgent.ToolRegistry do
     disabled = Keyword.get(opts, :disabled, [])
     enabled_only = Keyword.get(opts, :enabled_only, nil)
     include_extensions = Keyword.get(opts, :include_extensions, true)
-    extension_paths = Keyword.get(opts, :extension_paths)
 
     # Get built-in tools with source tracking
     builtin =
@@ -91,23 +91,10 @@ defmodule CodingAgent.ToolRegistry do
         {Atom.to_string(name), module.tool(cwd, opts), {:builtin, module}}
       end)
 
-    # Get extension tools with source tracking (using load_extensions_with_errors to capture failures)
+    # Get extension tools with source tracking.
     extension_tools =
       if include_extensions do
-        paths =
-          if extension_paths do
-            extension_paths
-          else
-            [
-              CodingAgent.Config.extensions_dir(),
-              CodingAgent.Config.project_extensions_dir(cwd)
-            ]
-          end
-
-        {:ok, extensions, _load_errors, _validation_errors} =
-          Extensions.load_extensions_with_errors(paths)
-
-        extensions = sort_extensions(extensions)
+        {extensions, _load_errors} = extension_inventory(cwd, opts)
 
         Extensions.get_tools_with_source(extensions, cwd)
         |> Enum.map(fn {tool, ext_module} ->
@@ -233,6 +220,68 @@ defmodule CodingAgent.ToolRegistry do
     Enum.map(@builtin_tools, fn {name, _} -> name end)
   end
 
+  @doc """
+  Prime the extension load cache for a cwd/path set.
+
+  This allows callers that already loaded extensions (for example, session
+  lifecycle orchestration) to avoid a second load when calling registry lookups.
+  """
+  @spec prime_extension_cache(String.t(), [String.t()], [module()], [Extensions.load_error()]) ::
+          :ok
+  def prime_extension_cache(cwd, extension_paths, extensions, load_errors \\ [])
+      when is_list(extension_paths) and is_list(extensions) and is_list(load_errors) do
+    ensure_cache_table()
+    key = cache_key(cwd, extension_paths)
+
+    snapshot = %{
+      extensions: sort_extensions(extensions),
+      load_errors: load_errors,
+      loaded_at: System.system_time(:millisecond)
+    }
+
+    :ets.insert(@extension_cache_table, {key, snapshot})
+    :ok
+  end
+
+  @doc """
+  Invalidate all cached extension load data.
+  """
+  @spec invalidate_extension_cache() :: :ok
+  def invalidate_extension_cache do
+    ensure_cache_table()
+    :ets.delete_all_objects(@extension_cache_table)
+    :ok
+  end
+
+  @doc """
+  Invalidate cached extension load data for a cwd.
+
+  When `:extension_paths` is provided, only that specific cache entry is removed.
+  Otherwise all cache entries for the cwd are removed.
+  """
+  @spec invalidate_extension_cache(String.t(), tool_opts()) :: :ok
+  def invalidate_extension_cache(cwd, opts \\ []) do
+    ensure_cache_table()
+    expanded_cwd = Path.expand(cwd)
+    extension_paths = Keyword.get(opts, :extension_paths)
+
+    case extension_paths do
+      paths when is_list(paths) ->
+        :ets.delete(@extension_cache_table, cache_key(expanded_cwd, paths))
+
+      _ ->
+        @extension_cache_table
+        |> :ets.tab2list()
+        |> Enum.each(fn {{cached_cwd, _paths} = key, _snapshot} ->
+          if cached_cwd == expanded_cwd do
+            :ets.delete(@extension_cache_table, key)
+          end
+        end)
+    end
+
+    :ok
+  end
+
   @typedoc """
   A tool conflict report entry.
 
@@ -313,7 +362,6 @@ defmodule CodingAgent.ToolRegistry do
   @spec tool_conflict_report(String.t(), tool_opts()) :: conflict_report()
   def tool_conflict_report(cwd, opts \\ []) do
     include_extensions = Keyword.get(opts, :include_extensions, true)
-    extension_paths = Keyword.get(opts, :extension_paths)
 
     # Get built-in tools with source tracking
     builtin =
@@ -322,23 +370,10 @@ defmodule CodingAgent.ToolRegistry do
         {Atom.to_string(name), module.tool(cwd, opts), {:builtin, module}}
       end)
 
-    # Get extension tools with source tracking (using load_extensions_with_errors to capture failures)
+    # Get extension tools with source tracking.
     {extension_tools, load_errors} =
       if include_extensions do
-        paths =
-          if extension_paths do
-            extension_paths
-          else
-            [
-              CodingAgent.Config.extensions_dir(),
-              CodingAgent.Config.project_extensions_dir(cwd)
-            ]
-          end
-
-        {:ok, extensions, errors, _validation_errors} =
-          Extensions.load_extensions_with_errors(paths)
-
-        extensions = sort_extensions(extensions)
+        {extensions, errors} = extension_inventory(cwd, opts)
 
         tools =
           Extensions.get_tools_with_source(extensions, cwd)
@@ -371,6 +406,72 @@ defmodule CodingAgent.ToolRegistry do
   # ============================================================================
   # Private Functions
   # ============================================================================
+
+  @spec extension_inventory(String.t(), tool_opts()) :: {[module()], [Extensions.load_error()]}
+  defp extension_inventory(cwd, opts) do
+    extension_paths = resolve_extension_paths(cwd, opts)
+    key = cache_key(cwd, extension_paths)
+
+    case lookup_extension_inventory(key) do
+      {:ok, %{extensions: extensions, load_errors: load_errors}} ->
+        {extensions, load_errors}
+
+      :error ->
+        {:ok, extensions, load_errors, _validation_errors} =
+          Extensions.load_extensions_with_errors(extension_paths)
+
+        prime_extension_cache(cwd, extension_paths, extensions, load_errors)
+
+        {sort_extensions(extensions), load_errors}
+    end
+  end
+
+  defp lookup_extension_inventory(key) do
+    ensure_cache_table()
+
+    case :ets.lookup(@extension_cache_table, key) do
+      [{^key, snapshot}] -> {:ok, snapshot}
+      [] -> :error
+    end
+  end
+
+  defp resolve_extension_paths(cwd, opts) do
+    case Keyword.get(opts, :extension_paths) do
+      paths when is_list(paths) ->
+        paths
+
+      _ ->
+        [
+          CodingAgent.Config.extensions_dir(),
+          CodingAgent.Config.project_extensions_dir(cwd)
+        ]
+    end
+  end
+
+  defp cache_key(cwd, extension_paths) do
+    {Path.expand(cwd), normalize_paths(extension_paths)}
+  end
+
+  defp normalize_paths(paths) when is_list(paths) do
+    paths
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&Path.expand/1)
+  end
+
+  defp ensure_cache_table do
+    case :ets.whereis(@extension_cache_table) do
+      :undefined ->
+        try do
+          :ets.new(@extension_cache_table, [:set, :public, :named_table])
+          :ok
+        rescue
+          ArgumentError -> :ok
+        end
+
+      _tid ->
+        :ok
+    end
+  end
 
   # Merge builtin and extension tools, detecting and warning about conflicts.
   # Builtin tools always take precedence over extension tools.

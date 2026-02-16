@@ -16,6 +16,7 @@ defmodule LemonRouter.RunOrchestrator do
   require Logger
 
   alias LemonRouter.{Policy, SessionKey, RunProcess}
+  alias LemonCore.RunRequest
   alias LemonGateway.Cwd, as: GatewayCwd
   alias LemonGateway.EngineRegistry
   alias AgentCore.CliRunners.Types.ResumeToken, as: CliResume
@@ -29,6 +30,8 @@ defmodule LemonRouter.RunOrchestrator do
 
   ## Parameters
 
+  Accepts either `%LemonCore.RunRequest{}` or a legacy map with these fields:
+
   - `:origin` - Source of the request (:channel, :control_plane, :cron, :node)
   - `:session_key` - Session key for routing
   - `:agent_id` - Agent identifier
@@ -36,15 +39,16 @@ defmodule LemonRouter.RunOrchestrator do
   - `:queue_mode` - Queue mode (:collect, :followup, :steer, :steer_backlog, :interrupt)
   - `:engine_id` - Optional engine override
   - `:meta` - Additional metadata
+  - `:cwd` - Optional cwd override
+  - `:tool_policy` - Optional tool policy override
 
   ## Returns
 
   `{:ok, run_id}` on success, `{:error, reason}` on failure.
   """
-  @spec submit(map()) :: {:ok, binary()} | {:error, term()}
-  def submit(params) do
-    GenServer.call(__MODULE__, {:submit, params})
-  end
+  @spec submit(RunRequest.t() | map()) :: {:ok, binary()} | {:error, term()}
+  def submit(%RunRequest{} = request), do: GenServer.call(__MODULE__, {:submit, request})
+  def submit(params) when is_map(params), do: GenServer.call(__MODULE__, {:submit, params})
 
   @doc """
   Lightweight run counts for status UIs.
@@ -76,22 +80,23 @@ defmodule LemonRouter.RunOrchestrator do
 
   @impl true
   def handle_call({:submit, params}, _from, state) do
+    params = RunRequest.normalize(params)
     result = do_submit(params)
     {:reply, result, state}
   end
 
-  defp do_submit(params) do
-    origin = params[:origin] || :unknown
-    session_key = params[:session_key]
-    agent_id = params[:agent_id] || SessionKey.agent_id(session_key) || "default"
-    prompt = params[:prompt]
-    queue_mode = params[:queue_mode] || :collect
-    engine_id = params[:engine_id]
-    meta = params[:meta] || %{}
+  defp do_submit(%RunRequest{} = params) do
+    origin = params.origin || :unknown
+    session_key = params.session_key
+    agent_id = params.agent_id || SessionKey.agent_id(session_key) || "default"
+    prompt = params.prompt
+    queue_mode = params.queue_mode || :collect
+    engine_id = params.engine_id
+    meta = params.meta || %{}
 
     # Extract cwd and tool_policy overrides from params
-    cwd_override = params[:cwd]
-    tool_policy_override = params[:tool_policy]
+    cwd_override = params.cwd
+    tool_policy_override = params.tool_policy
 
     # Generate run_id
     run_id = LemonCore.Id.run_id()

@@ -15,6 +15,7 @@ defmodule LemonRouter.RunProcess do
   require Logger
 
   alias LemonCore.Bus
+  alias LemonRouter.ChannelContext
 
   @default_auto_send_generated_max_files 3
   @default_max_download_bytes 50 * 1024 * 1024
@@ -439,11 +440,9 @@ defmodule LemonRouter.RunProcess do
 
   # Ingest delta into StreamCoalescer for channel delivery
   defp ingest_delta_to_coalescer(state, delta) do
-    # Extract channel_id from session_key using SessionKey parser
-    case LemonRouter.SessionKey.parse(state.session_key) do
-      %{kind: :channel_peer, channel_id: channel_id} when not is_nil(channel_id) ->
-        # Build meta from job for progress_msg_id
-        meta = extract_coalescer_meta(state.job)
+    case ChannelContext.channel_id(state.session_key) do
+      {:ok, channel_id} ->
+        meta = ChannelContext.coalescer_meta_from_job(state.job)
 
         seq = Map.get(delta, :seq)
         text = Map.get(delta, :text)
@@ -462,36 +461,24 @@ defmodule LemonRouter.RunProcess do
         end
 
       _ ->
-        # Not a channel session, no coalescing needed
         :ok
     end
   rescue
     _ -> :ok
   end
 
-  # Extract metadata relevant for coalescer (e.g., progress_msg_id for edit mode)
-  defp extract_coalescer_meta(%{meta: meta}) when is_map(meta) do
-    %{
-      progress_msg_id: meta[:progress_msg_id],
-      status_msg_id: meta[:status_msg_id],
-      user_msg_id: meta[:user_msg_id]
-    }
-  end
-
-  defp extract_coalescer_meta(_), do: %{}
-
   # If the run completed without streaming deltas, emit a single delta with the final answer.
   defp maybe_emit_final_output(state, %LemonCore.Event{} = event) do
     with false <- state.saw_delta,
          answer when is_binary(answer) and answer != "" <- extract_completed_answer(event),
          %{kind: :channel_peer, channel_id: channel_id} when not is_nil(channel_id) <-
-           LemonRouter.SessionKey.parse(state.session_key) do
+           ChannelContext.parse_session_key(state.session_key) do
       # Telegram final output is handled via StreamCoalescer.finalize_run/4
       # so we avoid emitting a terminal :edit update to the progress message.
       if channel_id == "telegram" do
         :ok
       else
-        meta = extract_coalescer_meta(state.job)
+        meta = ChannelContext.coalescer_meta_from_job(state.job)
 
         LemonRouter.StreamCoalescer.ingest_delta(
           state.session_key,
@@ -573,8 +560,8 @@ defmodule LemonRouter.RunProcess do
 
   defp maybe_finalize_stream_output(state, %LemonCore.Event{} = event) do
     with %{kind: :channel_peer, channel_id: "telegram"} <-
-           LemonRouter.SessionKey.parse(state.session_key) do
-      meta = extract_coalescer_meta(state.job)
+           ChannelContext.parse_session_key(state.session_key) do
+      meta = ChannelContext.coalescer_meta_from_job(state.job)
       resume = event |> extract_completed_resume() |> normalize_resume_token()
 
       final_text =
@@ -614,7 +601,7 @@ defmodule LemonRouter.RunProcess do
 
   defp finalize_tool_status(state, %LemonCore.Event{} = event) do
     with %{kind: :channel_peer, channel_id: channel_id} when not is_nil(channel_id) <-
-           LemonRouter.SessionKey.parse(state.session_key) do
+           ChannelContext.parse_session_key(state.session_key) do
       ok? =
         case event.payload do
           %{completed: %{ok: ok}} -> ok == true
@@ -622,7 +609,7 @@ defmodule LemonRouter.RunProcess do
           _ -> false
         end
 
-      meta = extract_coalescer_meta(state.job)
+      meta = ChannelContext.coalescer_meta_from_job(state.job)
 
       LemonRouter.ToolStatusCoalescer.finalize_run(
         state.session_key,
@@ -639,9 +626,9 @@ defmodule LemonRouter.RunProcess do
   end
 
   defp ingest_action_to_tool_status_coalescer(state, action_ev) do
-    case LemonRouter.SessionKey.parse(state.session_key) do
-      %{kind: :channel_peer, channel_id: channel_id} when not is_nil(channel_id) ->
-        meta = extract_coalescer_meta(state.job)
+    case ChannelContext.channel_id(state.session_key) do
+      {:ok, channel_id} ->
+        meta = ChannelContext.coalescer_meta_from_job(state.job)
 
         LemonRouter.ToolStatusCoalescer.ingest_action(
           state.session_key,
@@ -660,8 +647,8 @@ defmodule LemonRouter.RunProcess do
 
   # Flush any pending coalesced output on termination
   defp flush_coalescer(state) do
-    case LemonRouter.SessionKey.parse(state.session_key) do
-      %{kind: :channel_peer, channel_id: channel_id} when not is_nil(channel_id) ->
+    case ChannelContext.channel_id(state.session_key) do
+      {:ok, channel_id} ->
         LemonRouter.StreamCoalescer.flush(state.session_key, channel_id)
         LemonRouter.ToolStatusCoalescer.flush(state.session_key, channel_id)
 
@@ -673,8 +660,8 @@ defmodule LemonRouter.RunProcess do
   end
 
   defp flush_tool_status(state) do
-    case LemonRouter.SessionKey.parse(state.session_key) do
-      %{kind: :channel_peer, channel_id: channel_id} when not is_nil(channel_id) ->
+    case ChannelContext.channel_id(state.session_key) do
+      {:ok, channel_id} ->
         LemonRouter.ToolStatusCoalescer.flush(state.session_key, channel_id)
 
       _ ->
@@ -1020,12 +1007,7 @@ defmodule LemonRouter.RunProcess do
   defp file_within_limit(_path, _max_bytes), do: :error
 
   defp telegram_auto_send_generated_config do
-    telegram_cfg =
-      if Process.whereis(LemonGateway.Config) do
-        LemonGateway.Config.get(:telegram) || %{}
-      else
-        Application.get_env(:lemon_gateway, :telegram, %{}) || %{}
-      end
+    telegram_cfg = LemonChannels.GatewayConfig.get(:telegram, %{}) || %{}
 
     telegram_cfg = normalize_map(telegram_cfg)
 
@@ -1094,12 +1076,7 @@ defmodule LemonRouter.RunProcess do
   defp positive_int_or(_value, default), do: default
 
   defp telegram_files_max_download_bytes do
-    telegram_cfg =
-      if Process.whereis(LemonGateway.Config) do
-        LemonGateway.Config.get(:telegram) || %{}
-      else
-        Application.get_env(:lemon_gateway, :telegram, %{}) || %{}
-      end
+    telegram_cfg = LemonChannels.GatewayConfig.get(:telegram, %{}) || %{}
 
     telegram_cfg = normalize_map(telegram_cfg)
     files_cfg = fetch(telegram_cfg, :files) |> normalize_map()

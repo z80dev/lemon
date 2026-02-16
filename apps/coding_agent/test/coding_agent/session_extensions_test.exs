@@ -559,6 +559,55 @@ defmodule CodingAgent.SessionExtensionsTest do
   end
 
   # ============================================================================
+  # Extension Reload Tests
+  # ============================================================================
+
+  describe "reload_extensions/1" do
+    test "rebuilds extension tools after extension file changes", %{tmp_dir: tmp_dir} do
+      v1_tools = """
+      [
+        %AgentCore.Types.AgentTool{
+          name: "reload_tool_v1",
+          description: "Reload tool version 1",
+          parameters: %{},
+          label: "Reload Tool V1",
+          execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+        }
+      ]
+      """
+
+      module = create_extension_file(tmp_dir, "TestReloadExtension", tools: v1_tools)
+
+      session = start_session(cwd: tmp_dir)
+      initial_tool_names = Session.get_state(session).tools |> Enum.map(& &1.name)
+      assert "reload_tool_v1" in initial_tool_names
+
+      v2_tools = """
+      [
+        %AgentCore.Types.AgentTool{
+          name: "reload_tool_v2",
+          description: "Reload tool version 2",
+          parameters: %{},
+          label: "Reload Tool V2",
+          execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+        }
+      ]
+      """
+
+      _ = create_extension_file(tmp_dir, "TestReloadExtension", tools: v2_tools)
+
+      assert {:ok, report} = Session.reload_extensions(session)
+      assert report.total_loaded >= 1
+
+      reloaded_tool_names = Session.get_state(session).tools |> Enum.map(& &1.name)
+      assert "reload_tool_v2" in reloaded_tool_names
+      refute "reload_tool_v1" in reloaded_tool_names
+
+      cleanup_module(module)
+    end
+  end
+
+  # ============================================================================
   # Extension Status Report Tests
   # ============================================================================
 

@@ -43,12 +43,12 @@ defmodule CodingAgent.Session do
 
   alias AgentCore.Types.AgentTool
   alias CodingAgent.Config
+  alias CodingAgent.ExtensionLifecycle
   alias CodingAgent.Extensions
   alias CodingAgent.ResourceLoader
   alias CodingAgent.Workspace
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.{Session, SessionEntry}
-  alias CodingAgent.ToolRegistry
   alias CodingAgent.UI.Context, as: UIContext
 
   # ============================================================================
@@ -513,20 +513,6 @@ defmodule CodingAgent.Session do
     # Get thinking_level from opts, or fall back to settings_manager.default_thinking_level
     thinking_level = Keyword.get(opts, :thinking_level) || settings_manager.default_thinking_level
 
-    # Load extensions from multiple paths (for hooks)
-    extension_paths =
-      (settings_manager.extension_paths || []) ++
-        [
-          Config.extensions_dir(),
-          Config.project_extensions_dir(cwd)
-        ]
-
-    {:ok, extensions, load_errors, _validation_errors} =
-      Extensions.load_extensions_with_errors(extension_paths)
-
-    # Get hooks from extensions
-    hooks = Extensions.get_hooks(extensions)
-
     # Get tool policy and approval context if provided
     tool_policy = Keyword.get(opts, :tool_policy)
     approval_context = Keyword.get(opts, :approval_context)
@@ -554,46 +540,24 @@ defmodule CodingAgent.Session do
       |> Keyword.put(:settings_manager, settings_manager)
       |> Keyword.put(:workspace_dir, workspace_dir)
       |> Keyword.put(:ui_context, ui_context)
-      |> Keyword.put(:extension_paths, extension_paths)
       |> Keyword.put(:tool_policy, tool_policy)
       |> Keyword.put(:approval_context, approval_context)
 
-    # Build tools list via ToolRegistry (handles extension tools + conflict detection + approval wrapping)
-    # When custom_tools is provided, extension tools are still added
-    tools =
-      case custom_tools do
-        nil ->
-          ToolRegistry.get_tools(cwd, tool_opts) ++ extra_tools
-
-        custom ->
-          # Extension tools are always loaded, even with custom base tools
-          extension_tools = Extensions.get_tools(extensions, cwd)
-          all_tools = custom ++ extension_tools ++ extra_tools
-
-          # Apply approval wrapping if policy and context provided
-          if tool_policy && approval_context do
-            CodingAgent.ToolExecutor.wrap_all_with_approval(
-              all_tools,
-              tool_policy,
-              approval_context
-            )
-          else
-            all_tools
-          end
-      end
-
-    # Register extension-provided providers (e.g., model providers)
-    provider_registration = Extensions.register_extension_providers(extensions)
-
-    # Build extension status report (tool conflicts computed from registry)
-    tool_conflict_report = ToolRegistry.tool_conflict_report(cwd, tool_opts)
-
-    extension_status_report =
-      Extensions.build_status_report(extensions, load_errors,
+    lifecycle =
+      ExtensionLifecycle.initialize(
         cwd: cwd,
-        tool_conflict_report: tool_conflict_report,
-        provider_registration: provider_registration
+        settings_manager: settings_manager,
+        tool_opts: tool_opts,
+        custom_tools: custom_tools,
+        extra_tools: extra_tools,
+        tool_policy: tool_policy,
+        approval_context: approval_context
       )
+
+    extensions = lifecycle.extensions
+    hooks = lifecycle.hooks
+    tools = lifecycle.tools
+    extension_status_report = lifecycle.extension_status_report
 
     # Create the convert_to_llm function
     convert_to_llm = &CodingAgent.Messages.to_llm/1
@@ -825,36 +789,6 @@ defmodule CodingAgent.Session do
       # Show working message
       ui_set_working_message(state, "Reloading extensions...")
 
-      # Unregister previously registered extension providers
-      old_provider_registration =
-        case state.extension_status_report do
-          %{provider_registration: reg} -> reg
-          _ -> nil
-        end
-
-      Extensions.unregister_extension_providers(old_provider_registration)
-
-      # Clear extension module cache
-      Extensions.clear_extension_cache()
-
-      # Build extension paths (same logic as init)
-      extension_paths =
-        (state.settings_manager.extension_paths || []) ++
-          [
-            Config.extensions_dir(),
-            Config.project_extensions_dir(state.cwd)
-          ]
-
-      # Reload extensions
-      {:ok, extensions, load_errors, _validation_errors} =
-        Extensions.load_extensions_with_errors(extension_paths)
-
-      # Get hooks from extensions
-      hooks = Extensions.get_hooks(extensions)
-
-      # Register extension-provided providers (e.g., model providers)
-      provider_registration = Extensions.register_extension_providers(extensions)
-
       # Build tool options
       tool_opts = [
         model: state.model,
@@ -863,22 +797,22 @@ defmodule CodingAgent.Session do
         session_id: state.session_manager.header.id,
         settings_manager: state.settings_manager,
         workspace_dir: state.workspace_dir,
-        ui_context: state.ui_context,
-        extension_paths: extension_paths
+        ui_context: state.ui_context
       ]
 
-      # Rebuild tools via ToolRegistry
-      tools = ToolRegistry.get_tools(state.cwd, tool_opts) ++ state.extra_tools
-
-      # Build extension status report
-      tool_conflict_report = ToolRegistry.tool_conflict_report(state.cwd, tool_opts)
-
-      extension_status_report =
-        Extensions.build_status_report(extensions, load_errors,
+      lifecycle =
+        ExtensionLifecycle.reload(
           cwd: state.cwd,
-          tool_conflict_report: tool_conflict_report,
-          provider_registration: provider_registration
+          settings_manager: state.settings_manager,
+          tool_opts: tool_opts,
+          extra_tools: state.extra_tools,
+          previous_status_report: state.extension_status_report
         )
+
+      extensions = lifecycle.extensions
+      hooks = lifecycle.hooks
+      tools = lifecycle.tools
+      extension_status_report = lifecycle.extension_status_report
 
       # Update the agent's tools
       :ok = AgentCore.Agent.set_tools(state.agent, tools)

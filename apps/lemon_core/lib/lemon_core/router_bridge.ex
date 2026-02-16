@@ -5,9 +5,13 @@ defmodule LemonCore.RouterBridge do
   Channel adapters and other producers can forward inbound messages and submit
   runs without depending on `:lemon_router`. `:lemon_router` configures the
   bridge at runtime.
+
+  `submit_run/1` accepts either `%LemonCore.RunRequest{}` or a legacy map and
+  normalizes map submissions through `LemonCore.RunRequest`.
   """
 
   @bridge_key :router_bridge
+  alias LemonCore.RunRequest
 
   @type config :: %{
           optional(:run_orchestrator) => module(),
@@ -25,8 +29,19 @@ defmodule LemonCore.RouterBridge do
     :ok
   end
 
-  @spec submit_run(map()) :: {:ok, binary()} | {:error, :unavailable} | {:error, term()}
+  @spec submit_run(RunRequest.t() | map()) ::
+          {:ok, binary()} | {:error, :unavailable} | {:error, term()}
+  def submit_run(%RunRequest{} = params) do
+    do_submit_run(params)
+  end
+
   def submit_run(params) when is_map(params) do
+    params
+    |> RunRequest.normalize()
+    |> do_submit_run()
+  end
+
+  defp do_submit_run(params) do
     case impl(:run_orchestrator) do
       nil ->
         {:error, :unavailable}
@@ -65,4 +80,3 @@ defmodule LemonCore.RouterBridge do
     Map.get(config, key)
   end
 end
-

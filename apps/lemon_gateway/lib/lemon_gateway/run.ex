@@ -772,22 +772,33 @@ defmodule LemonGateway.Run do
        when is_binary(text) do
     with %LemonGateway.Types.ChatScope{transport: :telegram, chat_id: chat_id} <- job.scope,
          progress_msg_id when not is_nil(progress_msg_id) <-
-           job.meta && job.meta[:progress_msg_id],
-         true <- is_pid(Process.whereis(LemonGateway.Telegram.Outbox)) do
+           job.meta && job.meta[:progress_msg_id] do
       engine = if is_atom(state.engine), do: state.engine, else: nil
-      key = {chat_id, progress_msg_id, :edit}
 
-      LemonGateway.Telegram.Outbox.enqueue(
-        key,
-        0,
-        {:edit, chat_id, progress_msg_id, %{text: text, engine: engine}}
-      )
+      _ =
+        enqueue_telegram_progress_edit(chat_id, progress_msg_id, text,
+          engine: engine,
+          topic_id: job.scope.topic_id
+        )
     else
       _ -> :ok
     end
   end
 
   defp maybe_update_progress(_state, _render_action), do: :ok
+
+  defp enqueue_telegram_progress_edit(chat_id, message_id, text, opts) do
+    delivery_mod = Module.concat([LemonChannels, Telegram, Delivery])
+
+    if Code.ensure_loaded?(delivery_mod) and function_exported?(delivery_mod, :enqueue_edit, 4) do
+      _ = apply(delivery_mod, :enqueue_edit, [chat_id, message_id, text, opts])
+      :ok
+    else
+      :ok
+    end
+  rescue
+    _ -> :ok
+  end
 
   # Telemetry emission helpers for run lifecycle events
   # Uses LemonCore.Telemetry for consistent event naming across the umbrella

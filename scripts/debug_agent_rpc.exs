@@ -4,7 +4,6 @@ Application.ensure_all_started(:agent_core)
 Application.ensure_all_started(:coding_agent)
 Application.ensure_all_started(:coding_agent_ui)
 
-
 defmodule DebugAgentRPC do
   @moduledoc """
   JSON-line RPC server for Lemon TUI with multi-session support.
@@ -31,6 +30,40 @@ defmodule DebugAgentRPC do
     # Monotonic event sequence counters per session for stable ordering
     event_seqs: %{}
   ]
+
+  @protocol_contract_path Path.expand(
+                            "../clients/lemon-web/shared/src/protocol_contract.json",
+                            __DIR__
+                          )
+  @fallback_protocol_contract %{
+    "version" => 1,
+    "core_frames" => %{
+      "ready" => %{
+        "required" => [
+          "type",
+          "cwd",
+          "model",
+          "debug",
+          "ui",
+          "primary_session_id",
+          "active_session_id"
+        ]
+      },
+      "event" => %{"required" => ["type", "session_id", "event"]},
+      "stats" => %{"required" => ["type", "session_id", "stats"]},
+      "pong" => %{"required" => ["type"]},
+      "debug" => %{"required" => ["type", "message"]},
+      "error" => %{"required" => ["type", "message"]},
+      "save_result" => %{"required" => ["type", "ok"]},
+      "sessions_list" => %{"required" => ["type", "sessions"]},
+      "running_sessions" => %{"required" => ["type", "sessions"]},
+      "models_list" => %{"required" => ["type", "providers"]},
+      "session_started" => %{"required" => ["type", "session_id", "cwd", "model"]},
+      "session_closed" => %{"required" => ["type", "session_id", "reason"]},
+      "active_session" => %{"required" => ["type", "session_id"]},
+      "config_state" => %{"required" => ["type", "config"]}
+    }
+  }
 
   def run(args) do
     {opts, _rest, _invalid} =
@@ -64,6 +97,7 @@ defmodule DebugAgentRPC do
 
     # UI is enabled by default; use --no-ui to disable
     ui_enabled = opts[:no_ui] != true
+
     ui_context =
       if ui_enabled do
         {:ok, _ui_pid} = CodingAgent.UI.DebugRPC.start_link(name: CodingAgent.UI.DebugRPC)
@@ -95,10 +129,12 @@ defmodule DebugAgentRPC do
       primary_session_id: nil,
       active_session_id: nil
     })
+
     debug_log("ready_sent", %{cwd: cwd, primary_session_id: nil})
 
     parent = self()
     Task.start(fn -> read_input_loop(parent) end)
+
     if Process.get(:debug, false) do
       send_json(%{type: "debug", message: "debug mode enabled", argv: System.argv()})
     end
@@ -112,7 +148,14 @@ defmodule DebugAgentRPC do
         debug_log("session_event", %{type: event_type(event), session_id: session_id})
         # Get and increment monotonic event sequence for this session
         {event_seq, new_event_seqs} = next_event_seq(state.event_seqs, session_id)
-        send_json(%{type: "event", session_id: session_id, event_seq: event_seq, event: encode_event(event)})
+
+        send_json(%{
+          type: "event",
+          session_id: session_id,
+          event_seq: event_seq,
+          event: encode_event(event)
+        })
+
         loop(%{state | event_seqs: new_event_seqs})
 
       {:stdin, :eof} ->
@@ -138,6 +181,7 @@ defmodule DebugAgentRPC do
           :error ->
             :ok
         end
+
         loop(state)
 
       {:DOWN, _ref, :process, pid, reason} ->
@@ -154,6 +198,7 @@ defmodule DebugAgentRPC do
 
             # Remove from state
             forwarder_pid = Map.get(state.forwarders, session_id)
+
             if is_pid(forwarder_pid) and Process.alive?(forwarder_pid) do
               send(forwarder_pid, :stop_forwarder)
             end
@@ -311,10 +356,21 @@ defmodule DebugAgentRPC do
         case CodingAgent.Session.save(pid) do
           :ok ->
             sess_state = CodingAgent.Session.get_state(pid)
-            send_json(%{type: "save_result", ok: true, path: sess_state.session_file, session_id: resolved_id})
+
+            send_json(%{
+              type: "save_result",
+              ok: true,
+              path: sess_state.session_file,
+              session_id: resolved_id
+            })
 
           {:error, reason} ->
-            send_json(%{type: "save_result", ok: false, error: inspect(reason), session_id: resolved_id})
+            send_json(%{
+              type: "save_result",
+              ok: false,
+              error: inspect(reason),
+              session_id: resolved_id
+            })
         end
 
       :error ->
@@ -366,6 +422,7 @@ defmodule DebugAgentRPC do
       |> Enum.map(fn {session_id, pid} ->
         try do
           stats = CodingAgent.Session.get_stats(pid)
+
           %{
             session_id: session_id,
             cwd: stats.cwd,
@@ -419,7 +476,9 @@ defmodule DebugAgentRPC do
 
         opts = if system_prompt, do: Keyword.put(opts, :system_prompt, system_prompt), else: opts
         opts = if session_file, do: Keyword.put(opts, :session_file, session_file), else: opts
-        opts = if parent_session, do: Keyword.put(opts, :parent_session, parent_session), else: opts
+
+        opts =
+          if parent_session, do: Keyword.put(opts, :parent_session, parent_session), else: opts
 
         case start_session_process(opts) do
           {:ok, pid} ->
@@ -434,10 +493,11 @@ defmodule DebugAgentRPC do
             Process.monitor(pid)
 
             # Update state
-            new_state = %{state |
-              sessions: Map.put(state.sessions, new_session_id, pid),
-              pid_to_session: Map.put(state.pid_to_session, pid, new_session_id),
-              forwarders: Map.put(state.forwarders, new_session_id, forwarder_pid)
+            new_state = %{
+              state
+              | sessions: Map.put(state.sessions, new_session_id, pid),
+                pid_to_session: Map.put(state.pid_to_session, pid, new_session_id),
+                forwarders: Map.put(state.forwarders, new_session_id, forwarder_pid)
             }
 
             # If there is no active session, make this one active
@@ -479,7 +539,12 @@ defmodule DebugAgentRPC do
             {:ok, state}
 
           {:error, reason} ->
-            send_json(%{type: "error", message: "failed to close session: #{inspect(reason)}", session_id: session_id})
+            send_json(%{
+              type: "error",
+              message: "failed to close session: #{inspect(reason)}",
+              session_id: session_id
+            })
+
             {:ok, state}
         end
     end
@@ -558,8 +623,10 @@ defmodule DebugAgentRPC do
     claude_config = Application.get_env(:agent_core, :claude, [])
     codex_config = Application.get_env(:agent_core, :codex, [])
 
-    claude_skip = Keyword.get(claude_config, :dangerously_skip_permissions, false) ||
-                  Keyword.get(claude_config, :yolo, false)
+    claude_skip =
+      Keyword.get(claude_config, :dangerously_skip_permissions, false) ||
+        Keyword.get(claude_config, :yolo, false)
+
     codex_auto = Keyword.get(codex_config, :auto_approve, false)
 
     send_json(%{
@@ -664,7 +731,9 @@ defmodule DebugAgentRPC do
 
   defp get_active_session(state) do
     case state.active_session_id do
-      nil -> :error
+      nil ->
+        :error
+
       id ->
         case Map.get(state.sessions, id) do
           nil -> :error
@@ -846,10 +915,83 @@ defmodule DebugAgentRPC do
   defp atom_to_string(atom) when is_atom(atom), do: Atom.to_string(atom)
 
   defp send_json(payload) do
+    maybe_validate_outgoing_frame(payload)
+
     payload
     |> Jason.encode!()
     |> IO.puts()
   end
+
+  defp maybe_validate_outgoing_frame(payload) when is_map(payload) do
+    frame_type =
+      cond do
+        is_binary(payload[:type]) -> payload[:type]
+        is_binary(payload["type"]) -> payload["type"]
+        true -> nil
+      end
+
+    if is_binary(frame_type) do
+      required = required_fields_for_type(protocol_contract(), frame_type)
+
+      if is_list(required) do
+        missing = Enum.filter(required, fn field -> not payload_has_field?(payload, field) end)
+
+        if missing != [] do
+          details = %{type: frame_type, missing: missing}
+          debug_log("protocol_contract_mismatch", details)
+
+          raise ArgumentError,
+                "Outgoing frame violates protocol contract for #{frame_type}: missing #{Enum.join(missing, ", ")}"
+        end
+      end
+    end
+  end
+
+  defp maybe_validate_outgoing_frame(_payload), do: :ok
+
+  defp protocol_contract do
+    case Process.get(:debug_rpc_protocol_contract) do
+      nil ->
+        contract = load_protocol_contract()
+        Process.put(:debug_rpc_protocol_contract, contract)
+        contract
+
+      contract ->
+        contract
+    end
+  end
+
+  defp load_protocol_contract do
+    with {:ok, raw} <- File.read(@protocol_contract_path),
+         {:ok, decoded} <- Jason.decode(raw),
+         true <- is_map(decoded),
+         true <- is_map(decoded["core_frames"]) do
+      decoded
+    else
+      _ ->
+        @fallback_protocol_contract
+    end
+  end
+
+  defp required_fields_for_type(contract, frame_type) do
+    case get_in(contract, ["core_frames", frame_type, "required"]) do
+      required when is_list(required) ->
+        required
+
+      _ ->
+        nil
+    end
+  end
+
+  defp payload_has_field?(payload, field) when is_binary(field) do
+    Enum.any?(Map.keys(payload), fn key -> payload_key_to_string(key) == field end)
+  end
+
+  defp payload_has_field?(_payload, _field), do: false
+
+  defp payload_key_to_string(key) when is_binary(key), do: key
+  defp payload_key_to_string(key) when is_atom(key), do: Atom.to_string(key)
+  defp payload_key_to_string(key), do: inspect(key)
 end
 
 DebugAgentRPC.run(System.argv())

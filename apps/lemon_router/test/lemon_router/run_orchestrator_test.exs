@@ -1,6 +1,7 @@
 defmodule LemonRouter.RunOrchestratorTest do
   use ExUnit.Case, async: false
 
+  alias LemonCore.RunRequest
   alias LemonRouter.RunOrchestrator
 
   @moduledoc """
@@ -12,9 +13,11 @@ defmodule LemonRouter.RunOrchestratorTest do
     case Process.whereis(RunOrchestrator) do
       nil ->
         {:ok, pid} = RunOrchestrator.start_link([])
+
         on_exit(fn ->
           if Process.alive?(pid), do: GenServer.stop(pid)
         end)
+
         {:ok, orchestrator_pid: pid}
 
       pid ->
@@ -29,13 +32,14 @@ defmodule LemonRouter.RunOrchestratorTest do
       # by verifying it doesn't crash and returns an appropriate response
 
       # We expect this to fail since RunSupervisor isn't started
-      result = RunOrchestrator.submit(%{
-        origin: :control_plane,
-        session_key: "agent:test:main",
-        agent_id: "test",
-        prompt: "Hello",
-        queue_mode: :collect
-      })
+      result =
+        RunOrchestrator.submit(%{
+          origin: :control_plane,
+          session_key: "agent:test:main",
+          agent_id: "test",
+          prompt: "Hello",
+          queue_mode: :collect
+        })
 
       # Either succeeds with run_id or fails with meaningful error
       case result do
@@ -47,6 +51,32 @@ defmodule LemonRouter.RunOrchestratorTest do
           # Expected when RunSupervisor isn't running
           assert reason != nil
       end
+    end
+
+    test "accepts RunRequest struct input" do
+      result =
+        RunOrchestrator.submit(%RunRequest{
+          origin: :control_plane,
+          session_key: "agent:test:main",
+          agent_id: "test",
+          prompt: "Hello from struct",
+          queue_mode: :collect
+        })
+
+      assert match?({:ok, _}, result) or match?({:error, _}, result)
+    end
+
+    test "accepts and normalizes string-keyed map input" do
+      result =
+        RunOrchestrator.submit(%{
+          "origin" => :control_plane,
+          "session_key" => "agent:test:main",
+          "prompt" => "Hello from string keys",
+          "queue_mode" => :collect,
+          "meta" => %{"source" => "test"}
+        })
+
+      assert match?({:ok, _}, result) or match?({:error, _}, result)
     end
   end
 
@@ -223,7 +253,8 @@ defmodule LemonRouter.RunOrchestratorTest do
         session_key: session_key,
         agent_id: "test",
         prompt: "Hello",
-        engine_id: "explicit:engine"  # This should take precedence
+        # This should take precedence
+        engine_id: "explicit:engine"
       }
 
       result = RunOrchestrator.submit(params)

@@ -8,6 +8,7 @@ defmodule LemonRouter.Router do
   - Handling abort requests
   """
 
+  alias LemonCore.RunRequest
   alias LemonRouter.{RunOrchestrator, SessionKey}
 
   require Logger
@@ -22,26 +23,16 @@ defmodule LemonRouter.Router do
     # Emit inbound telemetry
     emit_inbound_telemetry(msg)
 
+    meta = normalize_meta(msg.meta)
     session_key = resolve_session_key(msg)
-    agent_id = msg.meta[:agent_id] || SessionKey.agent_id(session_key) || "default"
+
+    agent_id =
+      meta[:agent_id] || meta["agent_id"] || SessionKey.agent_id(session_key) || "default"
+
+    request = build_inbound_run_request(msg, meta, session_key, agent_id)
 
     # Submit to orchestrator
-    case RunOrchestrator.submit(%{
-           origin: :channel,
-           session_key: session_key,
-           agent_id: agent_id,
-           prompt: msg.message.text,
-           queue_mode: msg.meta[:queue_mode] || :collect,
-           engine_id: msg.meta[:engine_id],
-           meta:
-             Map.merge(msg.meta || %{}, %{
-               channel_id: msg.channel_id,
-               account_id: msg.account_id,
-               peer: msg.peer,
-               sender: msg.sender,
-               raw: msg.raw
-             })
-         }) do
+    case RunOrchestrator.submit(request) do
       {:ok, _run_id} ->
         :ok
 
@@ -88,10 +79,12 @@ defmodule LemonRouter.Router do
   end
 
   defp emit_inbound_telemetry(msg) do
+    meta = normalize_meta(msg.meta)
+
     LemonCore.Telemetry.channel_inbound(msg.channel_id, %{
       account_id: msg.account_id,
       peer_kind: msg.peer.kind,
-      agent_id: msg.meta[:agent_id] || "default"
+      agent_id: meta[:agent_id] || meta["agent_id"] || "default"
     })
   rescue
     _ -> :ok
@@ -106,20 +99,27 @@ defmodule LemonRouter.Router do
           {:ok, %{run_id: binary(), session_key: binary()}}
           | {:error, %{code: binary(), message: binary(), details: term()}}
   def handle_control_agent(params, ctx) do
-    session_key = params[:session_key] || SessionKey.main(params[:agent_id] || "default")
+    session_key = control_param(params, :session_key)
+    agent_id = control_param(params, :agent_id) || "default"
+    session_key = session_key || SessionKey.main(agent_id)
 
-    case RunOrchestrator.submit(%{
-           origin: :control_plane,
-           session_key: session_key,
-           agent_id: params[:agent_id] || "default",
-           prompt: params[:prompt],
-           queue_mode: params[:queue_mode] || :collect,
-           engine_id: params[:engine_id],
-           meta:
-             Map.merge(params[:meta] || %{}, %{
-               control_plane_ctx: ctx
-             })
-         }) do
+    request =
+      RunRequest.new(%{
+        origin: :control_plane,
+        session_key: session_key,
+        agent_id: agent_id,
+        prompt: control_param(params, :prompt),
+        queue_mode: control_param(params, :queue_mode),
+        engine_id: control_param(params, :engine_id),
+        cwd: control_param(params, :cwd),
+        tool_policy: control_param(params, :tool_policy),
+        meta:
+          Map.merge(normalize_meta(control_param(params, :meta)), %{
+            control_plane_ctx: ctx
+          })
+      })
+
+    case RunOrchestrator.submit(request) do
       {:ok, run_id} ->
         {:ok, %{run_id: run_id, session_key: session_key}}
 
@@ -159,4 +159,30 @@ defmodule LemonRouter.Router do
         :ok
     end
   end
+
+  defp build_inbound_run_request(msg, meta, session_key, agent_id) do
+    RunRequest.new(%{
+      origin: :channel,
+      session_key: session_key,
+      agent_id: agent_id,
+      prompt: msg.message.text,
+      queue_mode: meta[:queue_mode] || meta["queue_mode"],
+      engine_id: meta[:engine_id] || meta["engine_id"],
+      meta:
+        Map.merge(meta, %{
+          channel_id: msg.channel_id,
+          account_id: msg.account_id,
+          peer: msg.peer,
+          sender: msg.sender,
+          raw: msg.raw
+        })
+    })
+  end
+
+  defp control_param(params, key) when is_map(params) and is_atom(key) do
+    Map.get(params, key) || Map.get(params, Atom.to_string(key))
+  end
+
+  defp normalize_meta(meta) when is_map(meta), do: meta
+  defp normalize_meta(_), do: %{}
 end

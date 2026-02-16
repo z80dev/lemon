@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "core_frames": {
+    "ready": {
+      "required": [
+        "type",
+        "cwd",
+        "model",
+        "debug",
+        "ui",
+        "primary_session_id",
+        "active_session_id"
+      ]
+    },
+    "event": {
+      "required": ["type", "session_id", "event"]
+    },
+    "stats": {
+      "required": ["type", "session_id", "stats"]
+    },
+    "pong": {
+      "required": ["type"]
+    },
+    "debug": {
+      "required": ["type", "message"]
+    },
+    "error": {
+      "required": ["type", "message"]
+    },
+    "save_result": {
+      "required": ["type", "ok"]
+    },
+    "sessions_list": {
+      "required": ["type", "sessions"]
+    },
+    "running_sessions": {
+      "required": ["type", "sessions"]
+    },
+    "models_list": {
+      "required": ["type", "providers"]
+    },
+    "session_started": {
+      "required": ["type", "session_id", "cwd", "model"]
+    },
+    "session_closed": {
+      "required": ["type", "session_id", "reason"]
+    },
+    "active_session": {
+      "required": ["type", "session_id"]
+    },
+    "config_state": {
+      "required": ["type", "config"]
+    }
+  }
+}

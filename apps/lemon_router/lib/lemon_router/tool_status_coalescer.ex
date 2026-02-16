@@ -10,6 +10,9 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
   require Logger
 
+  alias LemonRouter.ChannelContext
+  alias LemonRouter.ChannelsDelivery
+
   @default_idle_ms 400
   @default_max_latency_ms 1200
 
@@ -193,25 +196,25 @@ defmodule LemonRouter.ToolStatusCoalescer do
     if state.finalized == true and state.run_id == run_id do
       {:noreply, state}
     else
-    state =
-      case normalize_action_event(action_event) do
-        {:skip, _reason} ->
-          state
-
-        {:ok, id, action_data} ->
-          {actions, order} = upsert_action(state.actions, state.order, id, action_data)
-
-          state = %{
+      state =
+        case normalize_action_event(action_event) do
+          {:skip, _reason} ->
             state
-            | actions: actions,
-              order: order,
-              first_event_ts: state.first_event_ts || now
-          }
 
-          maybe_flush(state, now)
-      end
+          {:ok, id, action_data} ->
+            {actions, order} = upsert_action(state.actions, state.order, id, action_data)
 
-    {:noreply, state}
+            state = %{
+              state
+              | actions: actions,
+                order: order,
+                first_event_ts: state.first_event_ts || now
+            }
+
+            maybe_flush(state, now)
+        end
+
+      {:noreply, state}
     end
   end
 
@@ -310,11 +313,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
   def handle_info(_msg, state), do: {:noreply, state}
 
   # Avoid overriding previously-known message ids with nils coming from upstream meta.
-  defp compact_meta(meta) when is_map(meta) do
-    Map.reject(meta, fn {_k, v} -> is_nil(v) end)
-  end
-
-  defp compact_meta(_), do: %{}
+  defp compact_meta(meta), do: ChannelContext.compact_meta(meta)
 
   defp maybe_flush(state, now) do
     time_since_first = now - (state.first_event_ts || now)
@@ -389,8 +388,8 @@ defmodule LemonRouter.ToolStatusCoalescer do
     progress_msg_id = (state.meta || %{})[:progress_msg_id]
     target_msg_id = status_msg_id || progress_msg_id
 
-    # For Telegram, prefer LemonGateway.Telegram.Outbox, which coalesces edits by key.
-    if state.channel_id == "telegram" and is_pid(Process.whereis(LemonGateway.Telegram.Outbox)) do
+    # For Telegram, prefer the Telegram outbox path (coalescing edits by key) via channels delivery.
+    if state.channel_id == "telegram" and ChannelsDelivery.telegram_outbox_available?() do
       chat_id = parse_int(parsed.peer_id)
       thread_id = parse_int(parsed.thread_id)
       reply_markup = tool_status_reply_markup(state)
@@ -406,18 +405,47 @@ defmodule LemonRouter.ToolStatusCoalescer do
         is_integer(target_msg_id) ->
           edit_text = truncate_for_channel(state.channel_id, text)
 
-          payload =
+          telegram_payload =
             if state.finalized == true do
               %{text: edit_text, reply_markup: %{"inline_keyboard" => []}}
             else
               %{text: edit_text}
             end
 
-          LemonGateway.Telegram.Outbox.enqueue(
-            {chat_id, target_msg_id, :edit},
-            0,
-            {:edit, chat_id, target_msg_id, payload}
-          )
+          fallback_payload =
+            struct!(LemonChannels.OutboundPayload,
+              channel_id: state.channel_id,
+              account_id: parsed.account_id,
+              peer: %{
+                kind: parsed.peer_kind,
+                id: parsed.peer_id,
+                thread_id: parsed.thread_id
+              },
+              kind: :edit,
+              content: %{message_id: target_msg_id, text: edit_text},
+              reply_to: maybe_reply_to(state),
+              idempotency_key: "#{state.run_id}:status:#{state.seq}",
+              meta: %{
+                run_id: state.run_id,
+                session_key: state.session_key,
+                status_seq: state.seq,
+                reply_markup: tool_status_reply_markup(state)
+              }
+            )
+
+          case ChannelsDelivery.telegram_enqueue(
+                 {chat_id, target_msg_id, :edit},
+                 0,
+                 {:edit, chat_id, target_msg_id, telegram_payload},
+                 fallback_payload,
+                 context: %{component: :tool_status_coalescer, phase: :status_edit}
+               ) do
+            {:ok, _ref} ->
+              :ok
+
+            {:error, reason} ->
+              Logger.warning("Failed to enqueue tool status edit: #{inspect(reason)}")
+          end
 
           state
 
@@ -426,72 +454,104 @@ defmodule LemonRouter.ToolStatusCoalescer do
           notify_ref = make_ref()
           send_text = truncate_for_channel(state.channel_id, text)
 
-          LemonGateway.Telegram.Outbox.enqueue_with_notify(
-            {chat_id, state.run_id, :status_create},
-            0,
-            {:send, chat_id,
-             %{
-               text: send_text,
-               reply_to_message_id: maybe_reply_to(state),
-               message_thread_id: thread_id,
-               reply_markup: reply_markup
-             }},
-            self(),
-            notify_ref,
-            :outbox_delivered
-          )
+          fallback_payload =
+            struct!(LemonChannels.OutboundPayload,
+              channel_id: state.channel_id,
+              account_id: parsed.account_id,
+              peer: %{
+                kind: parsed.peer_kind,
+                id: parsed.peer_id,
+                thread_id: parsed.thread_id
+              },
+              kind: :text,
+              content: send_text,
+              reply_to: maybe_reply_to(state),
+              idempotency_key: "#{state.run_id}:status:#{state.seq}",
+              meta: %{
+                run_id: state.run_id,
+                session_key: state.session_key,
+                status_seq: state.seq,
+                reply_markup: tool_status_reply_markup(state)
+              }
+            )
 
-          %{state | status_create_ref: notify_ref}
+          case ChannelsDelivery.telegram_enqueue_with_notify(
+                 {chat_id, state.run_id, :status_create},
+                 0,
+                 {:send, chat_id,
+                  %{
+                    text: send_text,
+                    reply_to_message_id: maybe_reply_to(state),
+                    message_thread_id: thread_id,
+                    reply_markup: reply_markup
+                  }},
+                 fallback_payload,
+                 self(),
+                 notify_ref,
+                 :outbox_delivered,
+                 context: %{component: :tool_status_coalescer, phase: :status_create}
+               ) do
+            {:ok, _ref} ->
+              %{state | status_create_ref: notify_ref}
+
+            {:error, :duplicate} ->
+              state
+
+            {:error, :channels_outbox_unavailable} ->
+              state
+
+            {:error, reason} ->
+              Logger.warning("Failed to enqueue tool status create: #{inspect(reason)}")
+              state
+          end
       end
     else
-      if not is_pid(Process.whereis(LemonChannels.Outbox)) do
-        state
-      else
-        cond do
-          is_nil(status_msg_id) and is_reference(state.status_create_ref) ->
-            # Creation is in flight; remember latest desired text and wait for ack.
-            %{state | deferred_text: truncate_for_channel(state.channel_id, text)}
+      cond do
+        is_nil(status_msg_id) and is_reference(state.status_create_ref) ->
+          # Creation is in flight; remember latest desired text and wait for ack.
+          %{state | deferred_text: truncate_for_channel(state.channel_id, text)}
 
-          true ->
-            {kind, content, notify_pid, notify_ref} = get_output_kind_and_content(state, text)
+        true ->
+          {kind, content, notify_pid, notify_ref} = get_output_kind_and_content(state, text)
 
-            payload =
-              struct!(LemonChannels.OutboundPayload,
-                channel_id: state.channel_id,
-                account_id: parsed.account_id,
-                peer: %{
-                  kind: parsed.peer_kind,
-                  id: parsed.peer_id,
-                  thread_id: parsed.thread_id
-                },
-                kind: kind,
-                content: content,
-                reply_to: maybe_reply_to(state),
-                idempotency_key: "#{state.run_id}:status:#{state.seq}",
-                meta: %{
-                  run_id: state.run_id,
-                  session_key: state.session_key,
-                  status_seq: state.seq,
-                  reply_markup: tool_status_reply_markup(state)
-                },
-                notify_pid: notify_pid,
-                notify_ref: notify_ref
-              )
+          payload =
+            struct!(LemonChannels.OutboundPayload,
+              channel_id: state.channel_id,
+              account_id: parsed.account_id,
+              peer: %{
+                kind: parsed.peer_kind,
+                id: parsed.peer_id,
+                thread_id: parsed.thread_id
+              },
+              kind: kind,
+              content: content,
+              reply_to: maybe_reply_to(state),
+              idempotency_key: "#{state.run_id}:status:#{state.seq}",
+              meta: %{
+                run_id: state.run_id,
+                session_key: state.session_key,
+                status_seq: state.seq,
+                reply_markup: tool_status_reply_markup(state)
+              },
+              notify_pid: notify_pid,
+              notify_ref: notify_ref
+            )
 
-            case LemonChannels.Outbox.enqueue(payload) do
-              {:ok, _ref} ->
-                if is_reference(notify_ref),
-                  do: %{state | status_create_ref: notify_ref},
-                  else: state
+          case ChannelsDelivery.enqueue(payload,
+                 context: %{component: :tool_status_coalescer, phase: :status_output}
+               ) do
+            {:ok, _ref} ->
+              if is_reference(notify_ref),
+                do: %{state | status_create_ref: notify_ref},
+                else: state
 
-              {:error, :duplicate} ->
-                state
+            {:error, :duplicate} ->
+              state
 
-              {:error, reason} ->
-                Logger.warning("Failed to enqueue tool status output: #{inspect(reason)}")
-                state
-            end
-        end
+            {:error, reason} ->
+              Logger.warning("Failed to enqueue tool status output: #{inspect(reason)}")
+              state
+          end
       end
     end
   rescue
@@ -548,16 +608,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
   end
 
   defp channel_supports_edit?(channel_id) do
-    if is_pid(Process.whereis(LemonChannels.Registry)) do
-      case LemonChannels.Registry.get_capabilities(channel_id) do
-        %{edit_support: true} -> true
-        _ -> false
-      end
-    else
-      false
-    end
-  rescue
-    _ -> false
+    ChannelContext.channel_supports_edit?(channel_id)
   end
 
   defp normalize_action_event(ev) when is_map(ev) do
@@ -629,56 +680,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
   end
 
   defp parse_session_key(session_key) do
-    case LemonRouter.SessionKey.parse(session_key) do
-      {:error, _} -> fallback_parse_session_key(session_key)
-      parsed -> parsed
-    end
-  end
-
-  defp fallback_parse_session_key(session_key) do
-    case String.split(session_key, ":") do
-      ["agent", _agent_id, channel_id, account_id, peer_kind, peer_id | rest] ->
-        %{
-          channel_id: channel_id,
-          account_id: account_id,
-          peer_kind: safe_to_atom(peer_kind),
-          peer_id: peer_id,
-          thread_id: extract_thread_id(rest)
-        }
-
-      ["channel", "telegram", transport, chat_id | rest] ->
-        %{
-          channel_id: "telegram",
-          account_id: transport,
-          peer_kind: :dm,
-          peer_id: chat_id,
-          thread_id: extract_thread_id(rest)
-        }
-
-      _ ->
-        %{
-          channel_id: nil,
-          account_id: "unknown",
-          peer_kind: :unknown,
-          peer_id: session_key,
-          thread_id: nil
-        }
-    end
-  end
-
-  defp extract_thread_id(["thread", thread_id | _]), do: thread_id
-  defp extract_thread_id(_), do: nil
-
-  @allowed_peer_kinds %{
-    "dm" => :dm,
-    "group" => :group,
-    "channel" => :channel,
-    "main" => :main,
-    "unknown" => :unknown
-  }
-
-  defp safe_to_atom(str) when is_binary(str) do
-    Map.get(@allowed_peer_kinds, str, :unknown)
+    ChannelContext.parse_session_key(session_key)
   end
 
   defp cancel_timer(nil), do: :ok
@@ -742,16 +744,5 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
   defp tool_status_reply_markup(_), do: nil
 
-  defp parse_int(nil), do: nil
-
-  defp parse_int(v) when is_integer(v), do: v
-
-  defp parse_int(v) when is_binary(v) do
-    case Integer.parse(v) do
-      {i, _} -> i
-      :error -> nil
-    end
-  end
-
-  defp parse_int(_), do: nil
+  defp parse_int(value), do: ChannelContext.parse_int(value)
 end

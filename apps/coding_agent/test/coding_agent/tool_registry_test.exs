@@ -7,6 +7,61 @@ defmodule CodingAgent.ToolRegistryTest do
 
   @moduletag :tmp_dir
 
+  defp create_counter_extension(tmp_dir, module_name, tool_name, counter_path) do
+    ext_dir = Path.join(tmp_dir, ".lemon/extensions")
+    File.mkdir_p!(ext_dir)
+
+    extension_code = """
+    defmodule #{module_name} do
+      @behaviour CodingAgent.Extensions.Extension
+
+      @counter_path #{inspect(counter_path)}
+      count =
+        case File.read(@counter_path) do
+          {:ok, value} ->
+            value |> String.trim() |> String.to_integer()
+
+          _ ->
+            0
+        end
+
+      File.write!(@counter_path, Integer.to_string(count + 1))
+
+      @impl true
+      def name, do: "#{String.downcase(module_name)}"
+
+      @impl true
+      def version, do: "1.0.0"
+
+      @impl true
+      def tools(_cwd) do
+        [
+          %AgentCore.Types.AgentTool{
+            name: "#{tool_name}",
+            description: "Counter tool",
+            parameters: %{},
+            label: "Counter Tool",
+            execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+          }
+        ]
+      end
+    end
+    """
+
+    file_name = Macro.underscore(module_name)
+    file_path = Path.join(ext_dir, "#{file_name}.ex")
+
+    File.write!(file_path, extension_code)
+    Module.concat([module_name])
+  end
+
+  defp read_counter(path) do
+    path
+    |> File.read!()
+    |> String.trim()
+    |> String.to_integer()
+  end
+
   describe "get_tools/2" do
     test "returns built-in tools", %{tmp_dir: tmp_dir} do
       tools = ToolRegistry.get_tools(tmp_dir)
@@ -221,6 +276,65 @@ defmodule CodingAgent.ToolRegistryTest do
       # Cleanup
       :code.purge(DefaultPathExtension)
       :code.delete(DefaultPathExtension)
+    end
+  end
+
+  describe "extension load cache" do
+    test "reuses cached extension loads across lookups", %{tmp_dir: tmp_dir} do
+      ToolRegistry.invalidate_extension_cache(tmp_dir)
+
+      counter_path = Path.join(tmp_dir, "compile_counter.txt")
+      File.write!(counter_path, "0")
+
+      module =
+        create_counter_extension(
+          tmp_dir,
+          "CacheLookupExtension",
+          "cache_lookup_tool",
+          counter_path
+        )
+
+      tools = ToolRegistry.get_tools(tmp_dir)
+      assert "cache_lookup_tool" in Enum.map(tools, & &1.name)
+      assert read_counter(counter_path) == 1
+
+      assert {:ok, _tool} = ToolRegistry.get_tool(tmp_dir, "cache_lookup_tool")
+      _ = ToolRegistry.list_tool_names(tmp_dir)
+      _ = ToolRegistry.tool_conflict_report(tmp_dir)
+
+      # Follow-up lookups should reuse cached extension load data.
+      assert read_counter(counter_path) == 1
+
+      ToolRegistry.invalidate_extension_cache(tmp_dir)
+      :code.purge(module)
+      :code.delete(module)
+    end
+
+    test "reloads extensions after cache invalidation", %{tmp_dir: tmp_dir} do
+      ToolRegistry.invalidate_extension_cache(tmp_dir)
+
+      counter_path = Path.join(tmp_dir, "compile_counter_invalidation.txt")
+      File.write!(counter_path, "0")
+
+      module =
+        create_counter_extension(
+          tmp_dir,
+          "CacheInvalidationExtension",
+          "cache_invalidation_tool",
+          counter_path
+        )
+
+      _ = ToolRegistry.get_tools(tmp_dir)
+      assert read_counter(counter_path) == 1
+
+      ToolRegistry.invalidate_extension_cache(tmp_dir)
+
+      _ = ToolRegistry.get_tools(tmp_dir)
+      assert read_counter(counter_path) == 2
+
+      ToolRegistry.invalidate_extension_cache(tmp_dir)
+      :code.purge(module)
+      :code.delete(module)
     end
   end
 
