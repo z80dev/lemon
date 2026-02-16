@@ -173,4 +173,68 @@ defmodule LemonCore.StoreTest do
       assert Store.get_run_by_progress(scope_b, progress_msg_id) == "run_b_v1"
     end
   end
+
+  describe "policy wrapper API" do
+    test "agent policy wrappers preserve table/key compatibility" do
+      token = unique_token()
+      agent_id = "agent_#{token}"
+      policy = %{approvals: %{"bash" => :always}}
+
+      :ok = Store.put_agent_policy(agent_id, policy)
+
+      assert Store.get_agent_policy(agent_id) == policy
+      assert Store.get(:agent_policies, agent_id) == policy
+      assert {agent_id, policy} in Store.list_agent_policies()
+
+      :ok = Store.delete_agent_policy(agent_id)
+      assert Store.get_agent_policy(agent_id) == nil
+      assert Store.get(:agent_policies, agent_id) == nil
+    end
+
+    test "channel policy wrappers preserve table/key compatibility" do
+      token = unique_token()
+      channel_id = "channel_#{token}"
+      policy = %{blocked_tools: ["exec_raw"]}
+
+      :ok = Store.put_channel_policy(channel_id, policy)
+
+      assert Store.get_channel_policy(channel_id) == policy
+      assert Store.get(:channel_policies, channel_id) == policy
+      assert {channel_id, policy} in Store.list_channel_policies()
+
+      :ok = Store.delete_channel_policy(channel_id)
+      assert Store.get_channel_policy(channel_id) == nil
+      assert Store.get(:channel_policies, channel_id) == nil
+    end
+
+    test "session policy wrappers preserve table/key compatibility" do
+      token = unique_token()
+      key = session_key(token)
+      policy = %{thinking_level: "high"}
+
+      :ok = Store.put_session_policy(key, policy)
+
+      assert Store.get_session_policy(key) == policy
+      assert Store.get(:session_policies, key) == policy
+      assert {key, policy} in Store.list_session_policies()
+
+      :ok = Store.delete_session_policy(key)
+      assert Store.get_session_policy(key) == nil
+      assert Store.get(:session_policies, key) == nil
+    end
+
+    test "runtime policy wrappers preserve :global key compatibility" do
+      policy = %{sandbox: true}
+
+      :ok = Store.put_runtime_policy(policy)
+
+      assert Store.get_runtime_policy() == policy
+      assert Store.get(:runtime_policy, :global) == policy
+      assert {:global, policy} in Store.list_runtime_policies()
+
+      :ok = Store.delete_runtime_policy()
+      assert Store.get_runtime_policy() == nil
+      assert Store.get(:runtime_policy, :global) == nil
+    end
+  end
 end

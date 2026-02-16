@@ -22,6 +22,11 @@ defmodule LemonCore.Store do
   @default_chat_state_ttl_ms 24 * 60 * 60 * 1000
   # Sweep interval: 5 minutes in milliseconds
   @sweep_interval_ms 5 * 60 * 1000
+  @agent_policy_table :agent_policies
+  @channel_policy_table :channel_policies
+  @session_policy_table :session_policies
+  @runtime_policy_table :runtime_policy
+  @runtime_policy_key :global
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -95,6 +100,104 @@ defmodule LemonCore.Store do
   """
   @spec list(table :: atom()) :: [{term(), term()}]
   def list(table), do: GenServer.call(__MODULE__, {:generic_list, table})
+
+  # Policy Table API
+
+  @doc """
+  Put an agent policy.
+  """
+  @spec put_agent_policy(agent_id :: term(), policy :: map()) :: :ok
+  def put_agent_policy(agent_id, policy), do: put(@agent_policy_table, agent_id, policy)
+
+  @doc """
+  Get an agent policy by agent_id.
+  """
+  @spec get_agent_policy(agent_id :: term()) :: map() | nil
+  def get_agent_policy(agent_id), do: get(@agent_policy_table, agent_id)
+
+  @doc """
+  Delete an agent policy by agent_id.
+  """
+  @spec delete_agent_policy(agent_id :: term()) :: :ok
+  def delete_agent_policy(agent_id), do: delete(@agent_policy_table, agent_id)
+
+  @doc """
+  List all agent policies.
+  """
+  @spec list_agent_policies() :: [{term(), map()}]
+  def list_agent_policies, do: list(@agent_policy_table)
+
+  @doc """
+  Put a channel policy.
+  """
+  @spec put_channel_policy(channel_id :: term(), policy :: map()) :: :ok
+  def put_channel_policy(channel_id, policy), do: put(@channel_policy_table, channel_id, policy)
+
+  @doc """
+  Get a channel policy by channel_id.
+  """
+  @spec get_channel_policy(channel_id :: term()) :: map() | nil
+  def get_channel_policy(channel_id), do: get(@channel_policy_table, channel_id)
+
+  @doc """
+  Delete a channel policy by channel_id.
+  """
+  @spec delete_channel_policy(channel_id :: term()) :: :ok
+  def delete_channel_policy(channel_id), do: delete(@channel_policy_table, channel_id)
+
+  @doc """
+  List all channel policies.
+  """
+  @spec list_channel_policies() :: [{term(), map()}]
+  def list_channel_policies, do: list(@channel_policy_table)
+
+  @doc """
+  Put a session policy.
+  """
+  @spec put_session_policy(session_key :: term(), policy :: map()) :: :ok
+  def put_session_policy(session_key, policy), do: put(@session_policy_table, session_key, policy)
+
+  @doc """
+  Get a session policy by session key.
+  """
+  @spec get_session_policy(session_key :: term()) :: map() | nil
+  def get_session_policy(session_key), do: get(@session_policy_table, session_key)
+
+  @doc """
+  Delete a session policy by session key.
+  """
+  @spec delete_session_policy(session_key :: term()) :: :ok
+  def delete_session_policy(session_key), do: delete(@session_policy_table, session_key)
+
+  @doc """
+  List all session policies.
+  """
+  @spec list_session_policies() :: [{term(), map()}]
+  def list_session_policies, do: list(@session_policy_table)
+
+  @doc """
+  Put global runtime policy overrides.
+  """
+  @spec put_runtime_policy(policy :: map()) :: :ok
+  def put_runtime_policy(policy), do: put(@runtime_policy_table, @runtime_policy_key, policy)
+
+  @doc """
+  Get global runtime policy overrides.
+  """
+  @spec get_runtime_policy() :: map() | nil
+  def get_runtime_policy, do: get(@runtime_policy_table, @runtime_policy_key)
+
+  @doc """
+  Delete global runtime policy overrides.
+  """
+  @spec delete_runtime_policy() :: :ok
+  def delete_runtime_policy, do: delete(@runtime_policy_table, @runtime_policy_key)
+
+  @doc """
+  List runtime policy entries.
+  """
+  @spec list_runtime_policies() :: [{term(), map()}]
+  def list_runtime_policies, do: list(@runtime_policy_table)
 
   # Run History API
 

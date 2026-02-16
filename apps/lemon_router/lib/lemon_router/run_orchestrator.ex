@@ -222,7 +222,7 @@ defmodule LemonRouter.RunOrchestrator do
   defp get_session_config(nil), do: %{}
 
   defp get_session_config(session_key) do
-    case LemonCore.Store.get(:session_policies, session_key) do
+    case LemonCore.Store.get_session_policy(session_key) do
       nil -> %{}
       config when is_map(config) -> config
     end

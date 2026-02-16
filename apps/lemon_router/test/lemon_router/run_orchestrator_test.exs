@@ -227,7 +227,7 @@ defmodule LemonRouter.RunOrchestratorTest do
       session_key = "test:session:model:#{System.unique_integer()}"
 
       # Store session config with model
-      LemonCore.Store.put(:session_policies, session_key, %{
+      LemonCore.Store.put_session_policy(session_key, %{
         model: "claude-3-opus"
       })
 
@@ -246,7 +246,7 @@ defmodule LemonRouter.RunOrchestratorTest do
     test "applies thinking_level from session config" do
       session_key = "test:session:thinking:#{System.unique_integer()}"
 
-      LemonCore.Store.put(:session_policies, session_key, %{
+      LemonCore.Store.put_session_policy(session_key, %{
         thinking_level: "high"
       })
 
@@ -264,7 +264,7 @@ defmodule LemonRouter.RunOrchestratorTest do
     test "explicit engine_id overrides session model" do
       session_key = "test:session:override:#{System.unique_integer()}"
 
-      LemonCore.Store.put(:session_policies, session_key, %{
+      LemonCore.Store.put_session_policy(session_key, %{
         model: "claude-3-haiku"
       })
 

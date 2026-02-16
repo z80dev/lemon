@@ -20,13 +20,14 @@ defmodule LemonControlPlane.Methods.SessionsPatch do
     if is_nil(session_key) do
       {:error, {:invalid_request, "sessionKey is required", nil}}
     else
-      patch = %{
-        tool_policy: params["toolPolicy"],
-        model: params["model"],
-        thinking_level: params["thinkingLevel"]
-      }
-      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
-      |> Map.new()
+      patch =
+        %{
+          tool_policy: params["toolPolicy"],
+          model: params["model"],
+          thinking_level: params["thinkingLevel"]
+        }
+        |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+        |> Map.new()
 
       case apply_session_patch(session_key, patch) do
         :ok ->
@@ -40,9 +41,9 @@ defmodule LemonControlPlane.Methods.SessionsPatch do
 
   defp apply_session_patch(session_key, patch) do
     # Store session policies (router reads from :session_policies, not :session_overrides)
-    existing = LemonCore.Store.get(:session_policies, session_key) || %{}
+    existing = LemonCore.Store.get_session_policy(session_key) || %{}
     updated = Map.merge(existing, patch)
-    LemonCore.Store.put(:session_policies, session_key, updated)
+    LemonCore.Store.put_session_policy(session_key, updated)
     :ok
   rescue
     e -> {:error, Exception.message(e)}
