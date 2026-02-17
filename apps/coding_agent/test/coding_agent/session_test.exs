@@ -212,6 +212,22 @@ defmodule CodingAgent.SessionTest do
       assert state.model.id == "mock-model-1"
     end
 
+    test "accepts provider:model string model specs" do
+      session = start_session(model: "openai-codex:gpt-5.3-codex")
+      state = Session.get_state(session)
+
+      assert state.model.provider == :"openai-codex"
+      assert state.model.id == "gpt-5.3-codex"
+    end
+
+    test "accepts bare model_id string specs" do
+      session = start_session(model: "gpt-5.3-codex")
+      state = Session.get_state(session)
+
+      assert state.model.provider == :openai
+      assert state.model.id == "gpt-5.3-codex"
+    end
+
     test "fails without cwd" do
       # Session.start_link crashes the spawned process, so we need to catch the exit
       Process.flag(:trap_exit, true)

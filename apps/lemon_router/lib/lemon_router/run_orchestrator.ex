@@ -180,11 +180,11 @@ defmodule LemonRouter.RunOrchestrator do
     explicit_system_prompt = map_get(meta, :system_prompt)
 
     resolved_model = explicit_model || session_model || profile_model
+    resolved_model_engine = map_model_to_engine(resolved_model)
     resolved_thinking_level = session_thinking_level
     resolved_system_prompt = explicit_system_prompt || profile_system_prompt
 
-    # Resolve engine_id: explicit param > session config model > nil
-    # Session config can set model which maps to engine_id
+    # Resolve engine_id: explicit param > model-as-engine (if engine-like) > profile default > nil
     resolved_engine_id =
       cond do
         match?(%ResumeToken{}, resume) ->
@@ -194,8 +194,8 @@ defmodule LemonRouter.RunOrchestrator do
         is_binary(engine_id) and engine_id != "" ->
           engine_id
 
-        is_binary(resolved_model) and resolved_model != "" ->
-          map_model_to_engine(resolved_model)
+        is_binary(resolved_model_engine) and resolved_model_engine != "" ->
+          resolved_model_engine
 
         is_binary(profile_default_engine) and profile_default_engine != "" ->
           profile_default_engine
@@ -296,31 +296,44 @@ defmodule LemonRouter.RunOrchestrator do
     _ -> %{}
   end
 
-  # Map model name to engine ID
-  # This provides a flexible mapping layer between user-friendly model names
-  # and internal engine identifiers
+  # Treat model strings as engine IDs only when they clearly target a configured
+  # engine ("codex", "codex:model", etc.). Provider/model specs like
+  # "openai-codex:gpt-5.3-codex" should not be interpreted as engine IDs.
   defp map_model_to_engine(model) when is_binary(model) do
-    # Check if it's already an engine_id format
-    if String.contains?(model, ":") do
-      model
-    else
-      # Map common model names to engine formats
-      case String.downcase(model) do
-        "claude-3-opus" -> "claude:claude-3-opus"
-        "claude-3-sonnet" -> "claude:claude-3-sonnet"
-        "claude-3-haiku" -> "claude:claude-3-haiku"
-        "claude-3.5-sonnet" -> "claude:claude-3-5-sonnet"
-        "gpt-4" -> "openai:gpt-4"
-        "gpt-4-turbo" -> "openai:gpt-4-turbo"
-        "gpt-4o" -> "openai:gpt-4o"
-        "gpt-3.5-turbo" -> "openai:gpt-3.5-turbo"
-        # Default: pass through as-is (might be a valid engine_id)
-        _ -> model
-      end
+    normalized = String.trim(model)
+
+    cond do
+      normalized == "" ->
+        nil
+
+      known_engine_id?(normalized) ->
+        normalized
+
+      true ->
+        case String.split(normalized, ":", parts: 2) do
+          [prefix, _rest] when is_binary(prefix) and byte_size(prefix) > 0 ->
+            if known_engine_id?(prefix), do: normalized, else: nil
+
+          _ ->
+            nil
+        end
     end
   end
 
   defp map_model_to_engine(_), do: nil
+
+  defp known_engine_id?(engine_id) when is_binary(engine_id) do
+    case LemonGateway.EngineRegistry.get_engine(engine_id) do
+      nil -> false
+      _ -> true
+    end
+  rescue
+    _ -> false
+  catch
+    :exit, _ -> false
+  end
+
+  defp known_engine_id?(_), do: false
 
   defp get_agent_profile(nil), do: %{}
 

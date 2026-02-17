@@ -536,8 +536,9 @@ defmodule CodingAgent.Session do
         session_scope
       )
 
-    # Get model from opts, or fall back to settings_manager.default_model
-    model = Keyword.get(opts, :model) || resolve_default_model(settings_manager)
+    # Resolve explicit model overrides (including provider:model strings) or
+    # fall back to settings_manager.default_model.
+    model = resolve_session_model(Keyword.get(opts, :model), settings_manager)
 
     # Get thinking_level from opts, or fall back to settings_manager.default_thinking_level
     thinking_level = Keyword.get(opts, :thinking_level) || settings_manager.default_thinking_level
@@ -1424,6 +1425,100 @@ defmodule CodingAgent.Session do
   defp determine_health_status(true, error_rate, _state) when error_rate > 0.2, do: :degraded
 
   defp determine_health_status(true, _error_rate, _state), do: :healthy
+
+  @spec resolve_session_model(term(), CodingAgent.SettingsManager.t()) :: Ai.Types.Model.t()
+  defp resolve_session_model(nil, %CodingAgent.SettingsManager{} = settings) do
+    resolve_default_model(settings)
+  end
+
+  defp resolve_session_model(%Ai.Types.Model{} = model, %CodingAgent.SettingsManager{} = settings) do
+    apply_provider_base_url(model, settings)
+  end
+
+  defp resolve_session_model(model_spec, %CodingAgent.SettingsManager{} = settings) do
+    case resolve_explicit_model(model_spec) do
+      %Ai.Types.Model{} = model ->
+        apply_provider_base_url(model, settings)
+
+      _ ->
+        raise ArgumentError, "unknown model #{inspect(model_spec)}"
+    end
+  end
+
+  @spec resolve_explicit_model(term()) :: Ai.Types.Model.t() | nil
+  defp resolve_explicit_model(spec) when is_binary(spec) do
+    trimmed = String.trim(spec)
+
+    cond do
+      trimmed == "" ->
+        nil
+
+      true ->
+        case String.split(trimmed, ":", parts: 2) do
+          [model_id] ->
+            lookup_model(nil, non_empty_string(model_id))
+
+          [provider, model_id] ->
+            provider = non_empty_string(provider)
+            model_id = non_empty_string(model_id)
+
+            if model_id do
+              lookup_model(provider, model_id)
+            else
+              nil
+            end
+
+          _ ->
+            nil
+        end
+    end
+  end
+
+  defp resolve_explicit_model(spec) when is_map(spec) do
+    provider = spec[:provider] || spec["provider"]
+
+    model_id =
+      spec[:model_id] || spec["model_id"] || spec[:id] || spec["id"] || spec[:model] ||
+        spec["model"]
+
+    lookup_model(non_empty_string(provider), non_empty_string(model_id))
+  end
+
+  defp resolve_explicit_model(_), do: nil
+
+  @spec lookup_model(String.t() | nil, String.t() | nil) :: Ai.Types.Model.t() | nil
+  defp lookup_model(_provider, nil), do: nil
+
+  defp lookup_model(nil, model_id) when is_binary(model_id) do
+    Ai.Models.find_by_id(model_id)
+  end
+
+  defp lookup_model(provider, model_id) when is_binary(provider) and is_binary(model_id) do
+    case provider_to_atom(provider) do
+      nil -> nil
+      provider_atom -> Ai.Models.get_model(provider_atom, model_id)
+    end
+  end
+
+  defp lookup_model(_provider, _model_id), do: nil
+
+  @spec provider_to_atom(String.t()) :: atom() | nil
+  defp provider_to_atom(provider) when is_binary(provider) do
+    normalized = String.downcase(String.trim(provider))
+
+    Enum.find(Ai.Models.get_providers(), fn known ->
+      Atom.to_string(known) == normalized
+    end)
+  end
+
+  defp provider_to_atom(_), do: nil
+
+  defp non_empty_string(value) when is_binary(value) do
+    trimmed = String.trim(value)
+    if trimmed == "", do: nil, else: trimmed
+  end
+
+  defp non_empty_string(_), do: nil
 
   @spec resolve_default_model(CodingAgent.SettingsManager.t()) :: Ai.Types.Model.t()
   defp resolve_default_model(%CodingAgent.SettingsManager{default_model: nil}) do

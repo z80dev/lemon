@@ -476,10 +476,43 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params))
       assert_receive {:captured_job, job}, 500
 
-      assert job.engine_id == "openai:gpt-4o"
-      assert job.meta[:model] == "gpt-4o"
+      assert job.engine_id == "echo"
+      assert job.meta[:model] == "openai-codex:gpt-5.3-codex"
       assert job.meta[:system_prompt] == "You are the oracle."
       assert "bash" in (job.tool_policy[:blocked_tools] || [])
+    end
+
+    test "treats engine-prefixed model as engine override" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+
+      {:ok, orchestrator_pid} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: run_supervisor,
+          run_process_module: CapturingRunProcess,
+          run_process_opts: %{notify_pid: self()}
+        )
+
+      on_exit(fn ->
+        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+      end)
+
+      :sys.replace_state(LemonRouter.AgentProfiles, fn state ->
+        %{state | profiles: profile_map_with_oracle("codex:gpt-test")}
+      end)
+
+      params = %{
+        origin: :control_plane,
+        session_key: "agent:oracle:main",
+        agent_id: "oracle",
+        prompt: "Hello oracle"
+      }
+
+      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params))
+      assert_receive {:captured_job, job}, 500
+
+      assert job.engine_id == "codex:gpt-test"
+      assert job.meta[:model] == "codex:gpt-test"
     end
 
     test "explicit engine_id still overrides profile defaults" do
@@ -517,7 +550,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
   defp request(attrs), do: RunRequest.new(attrs)
 
-  defp profile_map_with_oracle do
+  defp profile_map_with_oracle(model \\ "openai-codex:gpt-5.3-codex") do
     %{
       "default" => %{
         id: "default",
@@ -533,7 +566,7 @@ defmodule LemonRouter.RunOrchestratorTest do
         default_engine: "echo",
         tool_policy: %{blocked_tools: ["bash"]},
         system_prompt: "You are the oracle.",
-        model: "gpt-4o"
+        model: model
       }
     }
   end
