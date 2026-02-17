@@ -486,6 +486,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             state
 
           true ->
+            inbound = maybe_mark_new_session_pending(state, inbound)
             inbound = maybe_mark_fork_when_busy(state, inbound)
             {state, inbound} = maybe_switch_session_from_reply(state, inbound)
             inbound = maybe_apply_pending_compaction(state, inbound, original_text)
@@ -1601,9 +1602,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp maybe_switch_session_from_reply(state, inbound) do
+    meta = inbound.meta || %{}
     reply_to_id = normalize_msg_id(inbound.message.reply_to_id || inbound.meta[:reply_to_id])
 
     cond do
+      meta[:disable_auto_resume] == true or meta["disable_auto_resume"] == true ->
+        {state, inbound}
+
       not is_integer(reply_to_id) ->
         {state, inbound}
 
@@ -1952,6 +1957,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
           _ ->
             _ = safe_abort_session(session_key, :new_session)
+            _ = safe_delete_selected_resume(state, chat_id, thread_id)
             _ = safe_clear_thread_message_indices(state, chat_id, thread_id)
 
             case submit_memory_reflection_before_new(
@@ -2482,10 +2488,46 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp build_pending_compaction_prompt(_transcript, user_text), do: user_text
 
+  defp maybe_mark_new_session_pending(state, inbound) do
+    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
+    thread_id = parse_int(inbound.peer.thread_id)
+
+    if pending_new_for_scope?(state, chat_id, thread_id) do
+      meta =
+        (inbound.meta || %{})
+        |> Map.put(:new_session_pending, true)
+        |> Map.put(:disable_auto_resume, true)
+
+      %{inbound | meta: meta}
+    else
+      inbound
+    end
+  rescue
+    _ -> inbound
+  end
+
+  defp pending_new_for_scope?(state, chat_id, thread_id)
+       when is_integer(chat_id) and is_map(state.pending_new) do
+    state.pending_new
+    |> Map.values()
+    |> Enum.any?(fn pending ->
+      pending_chat_id = pending[:chat_id] || pending["chat_id"]
+      pending_thread_id = pending[:thread_id] || pending["thread_id"]
+      pending_chat_id == chat_id and pending_thread_id == thread_id
+    end)
+  rescue
+    _ -> false
+  end
+
+  defp pending_new_for_scope?(_state, _chat_id, _thread_id), do: false
+
   defp maybe_apply_selected_resume(state, inbound, original_text) do
     meta = inbound.meta || %{}
 
     cond do
+      meta[:disable_auto_resume] == true or meta["disable_auto_resume"] == true ->
+        inbound
+
       # Don't interfere with Telegram slash commands; those can be engine directives etc.
       command_message?(original_text) ->
         inbound

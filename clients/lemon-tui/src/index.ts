@@ -18,13 +18,14 @@ import {
 import { AgentConnection, type AgentConnectionOptions } from './agent-connection.js';
 import { StateStore, type AppState, type NormalizedAssistantMessage } from './state.js';
 import type { ServerMessage, UIRequestMessage, SessionSummary, RunningSessionInfo } from './types.js';
-import { slashCommands, MODELINE_PREFIXES, GIT_REFRESH_INTERVAL_MS } from './constants.js';
+import { slashCommands, MODELINE_PREFIXES, GIT_REFRESH_INTERVAL_MS, SPINNER_FRAMES, TOOL_CATEGORIES, ERROR_DISMISS_MS } from './constants.js';
 import { getGitModeline } from './git-utils.js';
 
 import { ansi, getLemonArt } from './theme.js';
 import { selectListTheme, editorTheme } from './component-themes.js';
 import { MessageRenderer } from './message-renderer.js';
 import { OverlayManager } from './overlay-manager.js';
+import { BorderBox } from './components/border-box.js';
 
 // ============================================================================
 // Main Application
@@ -71,8 +72,13 @@ export class LemonTUI {
   }> | null = null;
   private pendingModelSelection: { cwd: string } | null = null;
   private toolExecutionTimer: ReturnType<typeof setInterval> | null = null;
+  private spinnerIndex = 0;
   private messageRenderer: MessageRenderer;
   private overlayManager: OverlayManager;
+
+  // Dedicated error bar (above editor)
+  private errorBar: Text | null = null;
+  private errorDismissTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Ctrl+C double-press handling
   private ctrlCHint: Text | null = null;
@@ -1007,34 +1013,45 @@ export class LemonTUI {
   }
 
   private showHelp(): void {
-    const helpText = `${ansi.bold('Commands:')}
-  /abort         - Stop the current operation
-  /reset         - Clear conversation and reset session
-  /save          - Save the current session
-  /sessions      - List saved sessions
-  /resume        - Resume a saved session
-  /stats         - Show session statistics
-  /search        - Search for text in conversations
-  /settings      - Open settings
-  /debug         - Toggle debug mode (on/off)
-  /restart       - Restart the Lemon agent process (reload latest code)
-  /quit          - Exit the application
-  /help          - Show this help message
+    const h = ansi.bold;
+    const p = ansi.primary;
+    const m = ansi.muted;
+    const a = ansi.accent;
 
-${ansi.bold('Multi-Session:')}
-  /running       - List running sessions
-  /new-session   - Start a new session [--cwd <path>] [--model <model>]
-  /switch [id]   - Switch to a different session (or show list)
-  /close-session - Close the current session
-
-${ansi.bold('Shortcuts:')}
-  Enter         - Send message
-  Shift+Enter   - New line in editor
-  Ctrl+N        - New session
-  Ctrl+Tab      - Cycle sessions
-  Ctrl+C        - Clear input (press twice to quit)
-  Esc (x2)      - Abort current operation
-  Escape        - Cancel overlay dialogs`;
+    const helpText = [
+      '',
+      `${h(p('📋 Session Commands'))}`,
+      `  ${a('/abort')}          ${m('Stop the current operation')}`,
+      `  ${a('/reset')}          ${m('Clear conversation and reset session')}`,
+      `  ${a('/save')}           ${m('Save the current session')}`,
+      `  ${a('/sessions')}       ${m('List saved sessions')}`,
+      `  ${a('/resume')}         ${m('Resume a saved session')}`,
+      `  ${a('/stats')}          ${m('Show session statistics')}`,
+      '',
+      `${h(p('🔧 Application'))}`,
+      `  ${a('/search')}         ${m('Search for text in conversations')}`,
+      `  ${a('/settings')}       ${m('Open settings')}`,
+      `  ${a('/debug')}          ${m('Toggle debug mode (on/off)')}`,
+      `  ${a('/restart')}        ${m('Restart agent (reloads latest code)')}`,
+      `  ${a('/quit')}           ${m('Exit the application')}`,
+      `  ${a('/help')}           ${m('Show this help message')}`,
+      '',
+      `${h(p('🔀 Multi-Session'))}`,
+      `  ${a('/running')}        ${m('List running sessions')}`,
+      `  ${a('/new-session')}    ${m('Start a new session [--cwd] [--model]')}`,
+      `  ${a('/switch [id]')}    ${m('Switch to a different session')}`,
+      `  ${a('/close-session')}  ${m('Close the current session')}`,
+      '',
+      `${h(p('⌨️  Shortcuts'))}`,
+      `  ${a('Enter')}           ${m('Send message')}`,
+      `  ${a('Shift+Enter')}     ${m('New line in editor')}`,
+      `  ${a('Ctrl+N')}          ${m('New session')}`,
+      `  ${a('Ctrl+Tab')}        ${m('Cycle sessions')}`,
+      `  ${a('Ctrl+O')}          ${m('Toggle tool output panel')}`,
+      `  ${a('Ctrl+C')}          ${m('Clear input (×2 to quit)')}`,
+      `  ${a('Esc ×2')}          ${m('Abort current operation')}`,
+      '',
+    ].join('\n');
 
     this.messagesContainer.addChild(new Text(helpText, 1, 1));
     this.tui.requestRender();
@@ -1147,7 +1164,7 @@ ${ansi.bold('Shortcuts:')}
       '',
       lemon,
       '',
-      ansi.bold('  Welcome to Lemon!'),
+      ansi.bold('  Welcome to Lemon! 🍋'),
       '',
       `  ${ansi.muted('cwd')}     ${ansi.secondary(cwdShort)}`,
     ];
@@ -1158,8 +1175,16 @@ ${ansi.bold('Shortcuts:')}
       lines.push(`  ${ansi.muted('model')}   ${ansi.dim('connecting...')}`);
     }
 
+    // Session count
+    const sessionCount = state.sessions.size;
+    if (sessionCount > 0) {
+      lines.push(`  ${ansi.muted('sessions')} ${ansi.secondary(String(sessionCount))} ${ansi.muted('active')}`);
+    }
+
     lines.push('');
     lines.push(`  ${ansi.muted('Type a message to get started, or')} ${ansi.primary('/help')} ${ansi.muted('for commands.')}`);
+    lines.push('');
+    lines.push(`  ${ansi.muted('Shortcuts:')} ${ansi.accent('Ctrl+N')} ${ansi.muted('new session')} ${ansi.muted('·')} ${ansi.accent('Ctrl+Tab')} ${ansi.muted('cycle')} ${ansi.muted('·')} ${ansi.accent('Ctrl+O')} ${ansi.muted('tools')} ${ansi.muted('·')} ${ansi.accent('/settings')} ${ansi.muted('config')}`);
     lines.push('');
 
     this.welcomeSection.setText(lines.join('\n'));
@@ -1195,14 +1220,14 @@ ${ansi.bold('Shortcuts:')}
       }
     }
 
-    // Token and cost display
+    // Token and cost display with emoji indicators
     const usage = state.cumulativeUsage;
     if (usage.inputTokens > 0 || usage.outputTokens > 0) {
       const inTokens = this.formatTokenCount(usage.inputTokens);
       const outTokens = this.formatTokenCount(usage.outputTokens);
-      let tokenPart = `tokens: ${inTokens} in, ${outTokens} out`;
+      let tokenPart = `⬇ ${inTokens}  ⬆ ${outTokens}`;
       if (usage.totalCost > 0) {
-        tokenPart += ` | $${usage.totalCost.toFixed(2)}`;
+        tokenPart += `  💰 $${usage.totalCost.toFixed(2)}`;
       }
       parts.push(ansi.muted(tokenPart));
     }
@@ -1210,27 +1235,74 @@ ${ansi.bold('Shortcuts:')}
     // Stats
     if (state.stats) {
       parts.push(
-        ansi.muted(`turns: ${state.stats.turn_count} | msgs: ${state.stats.message_count}`)
+        ansi.muted(`turns: ${state.stats.turn_count} · msgs: ${state.stats.message_count}`)
       );
     }
 
-    // Error
+    // Errors are now shown in a dedicated error bar, not inline
     if (state.error) {
-      parts.push(ansi.error(`Error: ${state.error}`));
+      this.showErrorBar(state.error);
     }
 
-    this.statusBar.setText(parts.length > 0 ? parts.join(' | ') : ' ');
+    this.statusBar.setText(parts.length > 0 ? parts.join(' │ ') : ' ');
+  }
+
+  /** Shows a dedicated error bar above the editor. Auto-dismisses after ERROR_DISMISS_MS. */
+  private showErrorBar(message: string): void {
+    // Avoid duplicate error bars
+    if (this.errorBar) {
+      this.clearErrorBar();
+    }
+
+    const content = ansi.error(`  ✗ ${message}  `);
+    this.errorBar = new Text(content, 0, 0);
+
+    // Insert before the editor
+    const children = this.tui.children;
+    const editorIndex = children.indexOf(this.inputEditor);
+    if (editorIndex > 0) {
+      children.splice(editorIndex, 0, this.errorBar);
+    }
+
+    // Auto-dismiss after timeout
+    this.errorDismissTimer = setTimeout(() => {
+      this.clearErrorBar();
+      this.tui.requestRender();
+    }, ERROR_DISMISS_MS);
+  }
+
+  /** Clears the dedicated error bar if present. */
+  private clearErrorBar(): void {
+    if (this.errorBar) {
+      this.tui.removeChild(this.errorBar);
+      this.errorBar = null;
+    }
+    if (this.errorDismissTimer) {
+      clearTimeout(this.errorDismissTimer);
+      this.errorDismissTimer = null;
+    }
   }
 
   private updateModeline(): void {
     const state = this.store.getState();
     const parts: string[] = [];
 
-    // Show session info if there are multiple sessions
+    // Session tab bar when multiple sessions exist
     const sessionCount = state.sessions.size;
     if (sessionCount > 1 && state.activeSessionId) {
-      const shortId = state.activeSessionId.slice(0, 8);
-      parts.push(ansi.primary(`session: ${shortId} (${sessionCount})`));
+      const tabs: string[] = [];
+      for (const session of state.sessions.values()) {
+        const shortId = session.sessionId.slice(0, 6);
+        const modelShort = session.model.id.split('/').pop() || session.model.id;
+        const isActive = session.sessionId === state.activeSessionId;
+        const label = `${shortId}·${modelShort}`;
+        if (isActive) {
+          tabs.push(ansi.bold(ansi.primary(`*[${label}]`)));
+        } else {
+          tabs.push(ansi.muted(`[${label}]`));
+        }
+      }
+      parts.push(tabs.join(' '));
     }
 
     for (const [key, value] of state.status) {
@@ -1249,7 +1321,16 @@ ${ansi.bold('Shortcuts:')}
       parts.push(ansi.secondary(cwdShort));
     }
 
-    const content = ` ${parts.join(' | ')} `;
+    // Contextual keybinding hints
+    if (state.busy) {
+      parts.push(ansi.muted(`Esc×2: abort │ Ctrl+O: tools`));
+    } else if (state.activeSessionId) {
+      parts.push(ansi.muted(`Ctrl+O: tools │ /help`));
+    } else {
+      parts.push(ansi.muted(`Ctrl+N: new session`));
+    }
+
+    const content = ` ${parts.join(' │ ')} `;
     // Pad to full terminal width for background effect
     const termWidth = process.stdout.columns || 80;
     // Strip ANSI codes to get actual visible length
@@ -1289,14 +1370,41 @@ ${ansi.bold('Shortcuts:')}
     return count.toString();
   }
 
+  /** Formats duration with appropriate precision: 3.2s, 42s, 1m 23s */
+  private formatDuration(ms: number): string {
+    const seconds = ms / 1000;
+    if (seconds < 10) {
+      return `${seconds.toFixed(1)}s`;
+    } else if (seconds < 60) {
+      return `${Math.floor(seconds)}s`;
+    }
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}m ${s}s`;
+  }
+
+  /** Returns a color function for a tool based on its category. */
+  private getToolColor(toolName: string): (s: string) => string {
+    const category = TOOL_CATEGORIES[toolName];
+    switch (category) {
+      case 'file': return ansi.success;
+      case 'shell': return ansi.warning;
+      case 'search': return ansi.primary;
+      case 'orchestration': return ansi.secondary;
+      default: return ansi.bold;
+    }
+  }
+
   private updateToolExecutionBar(): void {
     const state = this.store.getState();
     const activeTools: string[] = [];
+    const spinnerChar = SPINNER_FRAMES[this.spinnerIndex % SPINNER_FRAMES.length];
 
     for (const [, tool] of state.toolExecutions) {
       if (!tool.endTime) {
         // Tool is still running
-        const elapsed = Math.floor((Date.now() - tool.startTime) / 1000);
+        const elapsed = this.formatDuration(Date.now() - tool.startTime);
+        const nameColor = this.getToolColor(tool.name);
 
         if (tool.name === 'task' && tool.taskEngine) {
           // Enhanced display for Task tool with engine and current action
@@ -1305,17 +1413,17 @@ ${ansi.bold('Shortcuts:')}
             ? ` → ${tool.taskCurrentAction.title}`
             : '';
           activeTools.push(
-            `${ansi.warning('▶')} task[${ansi.secondary(engine)}]${actionInfo} (${elapsed}s)`
+            `${ansi.accent(spinnerChar)} task[${ansi.secondary(engine)}]${actionInfo} (${elapsed})`
           );
         } else {
           // Standard display for other tools
-          activeTools.push(`${ansi.warning('▶')} ${tool.name} (${elapsed}s)`);
+          activeTools.push(`${ansi.accent(spinnerChar)} ${nameColor(tool.name)} (${elapsed})`);
         }
       }
     }
 
     if (activeTools.length > 0) {
-      this.toolExecutionBar.setText(activeTools.join(' | '));
+      this.toolExecutionBar.setText(activeTools.join(' │ '));
     } else {
       this.toolExecutionBar.setText('');
     }
@@ -1326,15 +1434,18 @@ ${ansi.bold('Shortcuts:')}
     const hasRunningTool = Array.from(state.toolExecutions.values()).some((tool) => !tool.endTime);
 
     if (hasRunningTool && !this.toolExecutionTimer) {
+      // Use 100ms interval for smooth spinner animation
       this.toolExecutionTimer = setInterval(() => {
+        this.spinnerIndex++;
         this.updateToolExecutionBar();
         this.updateToolPanel();
         this.updateToolHint();
         this.tui.requestRender();
-      }, 1000);
+      }, 100);
     } else if (!hasRunningTool && this.toolExecutionTimer) {
       clearInterval(this.toolExecutionTimer);
       this.toolExecutionTimer = null;
+      this.spinnerIndex = 0;
     }
   }
 
@@ -1350,28 +1461,30 @@ ${ansi.bold('Shortcuts:')}
 
     // Show newest tools first
     const sorted = tools.sort((a, b) => b.startTime - a.startTime).slice(0, 4);
+    const spinnerChar = SPINNER_FRAMES[this.spinnerIndex % SPINNER_FRAMES.length];
 
-    this.toolPanel.addChild(new Text(ansi.muted('[tools]'), 1, 0));
+    this.toolPanel.addChild(new Text(ansi.muted('┌─ tools ─────────────'), 1, 0));
 
     for (const tool of sorted) {
       const isRunning = !tool.endTime;
       const isError = Boolean(tool.isError);
       const statusIcon = isRunning
-        ? ansi.warning('▶')
+        ? ansi.accent(spinnerChar)
         : isError
-        ? ansi.error('✗')
-        : ansi.success('✓');
+          ? ansi.error('✗')
+          : ansi.success('✓');
       const durationMs = (tool.endTime ?? Date.now()) - tool.startTime;
-      const duration = `${Math.max(0, Math.floor(durationMs / 1000))}s`;
+      const duration = this.formatDuration(durationMs);
+      const nameColor = this.getToolColor(tool.name);
 
-      const title = `${statusIcon} ${ansi.bold(tool.name)} ${ansi.muted(`(${duration})`)}`;
+      const title = `${ansi.muted('│')} ${statusIcon} ${nameColor(tool.name)} ${ansi.muted(`(${duration})`)}`;
       this.toolPanel.addChild(new Text(title, 1, 0));
 
       // For Task tools, show enhanced info (engine and current action)
       if (tool.name === 'task') {
         if (tool.taskEngine) {
           this.toolPanel.addChild(
-            new Text(ansi.muted(`  engine: ${tool.taskEngine}`), 1, 0)
+            new Text(`${ansi.muted('│')}   ${ansi.muted('engine:')} ${ansi.secondary(tool.taskEngine)}`, 1, 0)
           );
         }
 
@@ -1379,32 +1492,32 @@ ${ansi.bold('Shortcuts:')}
           const action = tool.taskCurrentAction;
           const phaseIcon =
             action.phase === 'started'
-              ? '▶'
+              ? ansi.accent('▶')
               : action.phase === 'completed'
-              ? '✓'
-              : '…';
+                ? ansi.success('✓')
+                : ansi.muted('…');
           this.toolPanel.addChild(
-            new Text(ansi.secondary(`  ${phaseIcon} ${action.title}`), 1, 0)
+            new Text(`${ansi.muted('│')}   ${phaseIcon} ${ansi.secondary(action.title)}`, 1, 0)
           );
         }
       }
 
       const argsText = this.formatToolArgs(tool.args, tool.name);
       if (argsText) {
-        this.toolPanel.addChild(new Text(ansi.muted(`  args: ${argsText}`), 1, 0));
+        this.toolPanel.addChild(new Text(`${ansi.muted('│')}   ${ansi.muted(argsText)}`, 1, 0));
       }
 
       const resultPayload = tool.result ?? tool.partialResult;
       if (resultPayload !== undefined) {
-        const label = tool.result ? '  result:' : '  partial:';
+        const label = tool.result ? 'result:' : 'partial:';
         const resultText = this.formatToolResult(resultPayload, tool.name, tool.args);
         if (resultText) {
-          this.toolPanel.addChild(new Text(ansi.secondary(`${label} ${resultText}`), 1, 0));
+          this.toolPanel.addChild(new Text(`${ansi.muted('│')}   ${ansi.muted(label)} ${ansi.secondary(resultText)}`, 1, 0));
         }
       }
-
-      this.toolPanel.addChild(new Text('', 1, 0));
     }
+
+    this.toolPanel.addChild(new Text(ansi.muted('└─────────────────────'), 1, 0));
   }
 
   private updateToolHint(): void {
@@ -1564,13 +1677,21 @@ ${ansi.bold('Shortcuts:')}
 
   private updateLoader(busy: boolean): void {
     if (busy && !this.loader) {
-      this.loader = new Loader(this.tui, ansi.primary, ansi.muted, 'Processing...');
+      // Use working message as loader text if available
+      const state = this.store.getState();
+      const workingMsg = state.agentWorkingMessage || state.toolWorkingMessage || 'Processing...';
+      this.loader = new Loader(this.tui, ansi.primary, ansi.muted, workingMsg);
       // Insert before the editor
       const children = this.tui.children;
       const editorIndex = children.indexOf(this.inputEditor);
       if (editorIndex > 0) {
         children.splice(editorIndex, 0, this.loader);
       }
+    } else if (busy && this.loader) {
+      // Update loader text if working message changed
+      const state = this.store.getState();
+      const workingMsg = state.agentWorkingMessage || state.toolWorkingMessage || 'Processing...';
+      this.loader.setText?.(workingMsg);
     } else if (!busy && this.loader) {
       this.tui.removeChild(this.loader);
       this.loader.stop();
@@ -1642,12 +1763,25 @@ ${ansi.bold('Shortcuts:')}
       notifyType === 'error'
         ? ansi.error
         : notifyType === 'warning'
-        ? ansi.warning
-        : notifyType === 'success'
-        ? ansi.success
-        : ansi.secondary;
+          ? ansi.warning
+          : notifyType === 'success'
+            ? ansi.success
+            : ansi.secondary;
 
-    this.messagesContainer.addChild(new Text(colorFn(`[${notifyType}] ${params.message}`), 1, 1));
+    const icon =
+      notifyType === 'error' ? '✗' :
+        notifyType === 'warning' ? '⚠' :
+          notifyType === 'success' ? '✓' :
+            'ℹ';
+
+    if (notifyType === 'error' || notifyType === 'warning') {
+      // Important notifications get a bordered display
+      const box = new BorderBox(colorFn, undefined, true);
+      box.addChild(new Text(colorFn(`${icon} ${params.message}`), 1, 0));
+      this.messagesContainer.addChild(box);
+    } else {
+      this.messagesContainer.addChild(new Text(colorFn(`${icon} ${params.message}`), 1, 1));
+    }
     this.tui.requestRender();
   }
 
@@ -1674,7 +1808,7 @@ ${ansi.bold('Shortcuts:')}
     this.lastSessions = msg.sessions;
 
     if (msg.sessions.length === 0) {
-      this.handleUINotify({ message: 'No saved sessions found', notify_type: 'info' });
+      this.handleUINotify({ message: 'No saved sessions yet. Use /save to save your current session.', notify_type: 'info' });
       return;
     }
 

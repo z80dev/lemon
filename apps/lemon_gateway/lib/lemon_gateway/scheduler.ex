@@ -244,9 +244,22 @@ defmodule LemonGateway.Scheduler do
   defp thread_key(%Job{scope: scope}) when not is_nil(scope), do: {:scope, scope}
   defp thread_key(_), do: {:default, :global}
 
-  defp maybe_apply_auto_resume(%Job{resume: %ResumeToken{}} = job), do: job
+  defp maybe_apply_auto_resume(%Job{} = job) do
+    meta = job.meta || %{}
 
-  defp maybe_apply_auto_resume(%Job{session_key: session_key} = job)
+    if is_map(meta) and
+         (meta[:disable_auto_resume] == true or meta["disable_auto_resume"] == true) do
+      job
+    else
+      maybe_apply_auto_resume_inner(job)
+    end
+  rescue
+    _ -> job
+  end
+
+  defp maybe_apply_auto_resume_inner(%Job{resume: %ResumeToken{}} = job), do: job
+
+  defp maybe_apply_auto_resume_inner(%Job{session_key: session_key} = job)
        when is_binary(session_key) do
     if Config.get(:auto_resume) do
       case Store.get_chat_state(session_key) do
@@ -274,7 +287,7 @@ defmodule LemonGateway.Scheduler do
     _ -> job
   end
 
-  defp maybe_apply_auto_resume(job), do: job
+  defp maybe_apply_auto_resume_inner(job), do: job
 
   defp apply_resume_if_compatible(%Job{} = job, engine, token) do
     # Only apply auto-resume if engine matches (or no engine selected yet).

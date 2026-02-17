@@ -13,6 +13,14 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
 
       :ok
     end
+
+    def submit(params) do
+      if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
+        send(pid, {:submit_run, params})
+      end
+
+      {:ok, "run_#{System.unique_integer([:positive])}"}
+    end
   end
 
   defmodule MockAPI do
@@ -78,7 +86,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
 
     :persistent_term.put({TestRouter, :pid}, self())
     MockAPI.register_test(self())
-    LemonCore.RouterBridge.configure(router: TestRouter)
+    LemonCore.RouterBridge.configure(router: TestRouter, run_orchestrator: TestRouter)
     set_bindings([])
 
     on_exit(fn ->
@@ -282,6 +290,80 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
              nil
 
     assert CoreStore.get(:telegram_msg_resume, {"default", chat_id, topic_id, reply_to_id}) == nil
+  end
+
+  test "/new in topic suppresses stale resume while memory reflection is pending" do
+    chat_id = System.unique_integer([:positive])
+    topic_id = 778
+    new_msg_id = System.unique_integer([:positive])
+    followup_msg_id = System.unique_integer([:positive])
+    history_run_id = "run_#{System.unique_integer([:positive])}"
+    history_started_at = System.system_time(:millisecond) - 1
+
+    base_session_key =
+      SessionKey.channel_peer(%{
+        agent_id: "default",
+        channel_id: "telegram",
+        account_id: "default",
+        peer_kind: :group,
+        peer_id: Integer.to_string(chat_id),
+        thread_id: Integer.to_string(topic_id)
+      })
+
+    scope = %LemonGateway.Types.ChatScope{
+      transport: :telegram,
+      chat_id: chat_id,
+      topic_id: topic_id
+    }
+
+    stale_resume = %LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_old"}
+
+    _ =
+      CoreStore.put(
+        :run_history,
+        {base_session_key, history_started_at, history_run_id},
+        %{
+          events: [],
+          summary: %{
+            prompt: "old prompt",
+            completed: %{answer: "old answer"}
+          },
+          scope: scope,
+          session_key: base_session_key,
+          run_id: history_run_id,
+          started_at: history_started_at
+        }
+      )
+
+    _ = CoreStore.put(:telegram_selected_resume, {"default", chat_id, topic_id}, stale_resume)
+
+    MockAPI.set_updates([
+      topic_message_update(chat_id, topic_id, new_msg_id, "/new"),
+      topic_message_update(chat_id, topic_id, followup_msg_id, "after new")
+    ])
+
+    assert {:ok, _pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               deny_unbound_chats: false
+             })
+
+    assert_receive {:inbound, first_msg}, 1_200
+
+    followup_msg =
+      if first_msg.message.text == "after new" do
+        first_msg
+      else
+        assert_receive {:inbound, second_msg}, 1_200
+        second_msg
+      end
+
+    assert followup_msg.message.text == "after new"
+    assert followup_msg.meta[:new_session_pending] == true
+    assert followup_msg.meta[:disable_auto_resume] == true
+    refute followup_msg.message.text =~ "thread_old"
+
+    assert CoreStore.get(:telegram_selected_resume, {"default", chat_id, topic_id}) == nil
   end
 
   test "auto-compacts the next prompt after an overflow marker is set" do

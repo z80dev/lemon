@@ -7,6 +7,9 @@ import {
   ansi,
   lemonTheme,
   limeTheme,
+  midnightTheme,
+  roseTheme,
+  oceanTheme,
   type Theme,
 } from './theme.js';
 
@@ -78,11 +81,14 @@ describe('Theme system', () => {
       expect(Array.isArray(themes)).toBe(true);
       expect(themes).toContain('lemon');
       expect(themes).toContain('lime');
+      expect(themes).toContain('midnight');
+      expect(themes).toContain('rose');
+      expect(themes).toContain('ocean');
     });
 
-    it('returns at least 2 themes', () => {
+    it('returns at least 5 themes', () => {
       const themes = getAvailableThemes();
-      expect(themes.length).toBeGreaterThanOrEqual(2);
+      expect(themes.length).toBeGreaterThanOrEqual(5);
     });
 
     it('returns array of strings', () => {
@@ -155,6 +161,14 @@ describe('Theme system', () => {
       expect(ansi.overlayBg('test')).toBe(lemonTheme.overlayBg('test'));
     });
 
+    it('delegates accent to current theme', () => {
+      setTheme('lemon');
+      expect(ansi.accent('test')).toBe(lemonTheme.accent('test'));
+
+      setTheme('lime');
+      expect(ansi.accent('test')).toBe(limeTheme.accent('test'));
+    });
+
     it('delegates border to current theme', () => {
       setTheme('lemon');
       expect(ansi.border('test')).toBe(lemonTheme.border('test'));
@@ -224,6 +238,79 @@ describe('Theme system', () => {
       const input = 'hello\nworld\ttab';
       const result = lemonTheme.primary(input);
       expect(result).toContain(input);
+    });
+  });
+
+  describe('New themes', () => {
+    it('switches to midnight theme', () => {
+      const result = setTheme('midnight');
+      expect(result).toBe(true);
+      expect(getThemeName()).toBe('midnight');
+    });
+
+    it('switches to rose theme', () => {
+      const result = setTheme('rose');
+      expect(result).toBe(true);
+      expect(getThemeName()).toBe('rose');
+    });
+
+    it('switches to ocean theme', () => {
+      const result = setTheme('ocean');
+      expect(result).toBe(true);
+      expect(getThemeName()).toBe('ocean');
+    });
+
+    it('midnight theme has all required color functions', () => {
+      const requiredFns: (keyof Theme)[] = ['primary', 'secondary', 'accent', 'success', 'warning', 'error', 'muted', 'dim', 'bold', 'italic', 'modelineBg', 'overlayBg', 'border'];
+      for (const fn of requiredFns) {
+        if (fn === 'name') continue;
+        expect(typeof midnightTheme[fn]).toBe('function');
+        const result = (midnightTheme[fn] as (s: string) => string)('hello');
+        expect(result).toContain('\x1b[');
+        expect(result).toContain('hello');
+      }
+    });
+
+    it('rose theme has all required color functions', () => {
+      const requiredFns: (keyof Theme)[] = ['primary', 'secondary', 'accent', 'success', 'warning', 'error', 'muted', 'dim', 'bold', 'italic', 'modelineBg', 'overlayBg', 'border'];
+      for (const fn of requiredFns) {
+        if (fn === 'name') continue;
+        expect(typeof roseTheme[fn]).toBe('function');
+        const result = (roseTheme[fn] as (s: string) => string)('hello');
+        expect(result).toContain('\x1b[');
+        expect(result).toContain('hello');
+      }
+    });
+
+    it('ocean theme has all required color functions', () => {
+      const requiredFns: (keyof Theme)[] = ['primary', 'secondary', 'accent', 'success', 'warning', 'error', 'muted', 'dim', 'bold', 'italic', 'modelineBg', 'overlayBg', 'border'];
+      for (const fn of requiredFns) {
+        if (fn === 'name') continue;
+        expect(typeof oceanTheme[fn]).toBe('function');
+        const result = (oceanTheme[fn] as (s: string) => string)('hello');
+        expect(result).toContain('\x1b[');
+        expect(result).toContain('hello');
+      }
+    });
+
+    it('all themes have distinct primary colors', () => {
+      const primaries = new Set([
+        lemonTheme.primary('test'),
+        limeTheme.primary('test'),
+        midnightTheme.primary('test'),
+        roseTheme.primary('test'),
+        oceanTheme.primary('test'),
+      ]);
+      expect(primaries.size).toBe(5);
+    });
+
+    it('all themes have accent property', () => {
+      for (const theme of [lemonTheme, limeTheme, midnightTheme, roseTheme, oceanTheme]) {
+        expect(typeof theme.accent).toBe('function');
+        const result = theme.accent('test');
+        expect(result).toContain('\x1b[');
+        expect(result).toContain('test');
+      }
     });
   });
 });

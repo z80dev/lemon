@@ -29,3 +29,31 @@ export const slashCommands: SlashCommand[] = [
 export const MODELINE_PREFIXES = ['modeline:', 'modeline.'];
 export const GIT_STATUS_TIMEOUT_MS = 2000;
 export const GIT_REFRESH_INTERVAL_MS = 5000;
+
+/** Braille spinner frames for tool execution animation. */
+export const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+/** Tool category for color coding in tool panel. Values: 'file', 'shell', 'search', 'orchestration'. */
+export const TOOL_CATEGORIES: Record<string, string> = {
+  read: 'file',
+  write: 'file',
+  edit: 'file',
+  multiedit: 'file',
+  patch: 'file',
+  find: 'file',
+  glob: 'file',
+  ls: 'file',
+  bash: 'shell',
+  exec: 'shell',
+  grep: 'search',
+  websearch: 'search',
+  webfetch: 'search',
+  task: 'orchestration',
+  process: 'orchestration',
+  todo: 'orchestration',
+  todoread: 'orchestration',
+  todowrite: 'orchestration',
+};
+
+/** Auto-dismiss timeout for error bars (ms). */
+export const ERROR_DISMISS_MS = 5000;

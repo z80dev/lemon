@@ -12,10 +12,12 @@ export class BorderBox implements Component {
   children: Component[] = [];
   private borderFn: (s: string) => string;
   private bgFn?: (s: string) => string;
+  private compact: boolean;
 
-  constructor(borderFn: (s: string) => string, bgFn?: (s: string) => string) {
+  constructor(borderFn: (s: string) => string, bgFn?: (s: string) => string, compact = false) {
     this.borderFn = borderFn;
     this.bgFn = bgFn;
+    this.compact = compact;
   }
 
   addChild(component: Component): void {
@@ -71,8 +73,10 @@ export class BorderBox implements Component {
     const topBorder = topLeft + horizontal.repeat(innerWidth) + topRight;
     result.push(this.borderFn(topBorder));
 
-    // Empty line for top padding
-    result.push(this.renderPaddingLine(vertical, innerWidth));
+    // Empty line for top padding (skip in compact mode)
+    if (!this.compact) {
+      result.push(this.renderPaddingLine(vertical, innerWidth));
+    }
 
     // Content lines with side borders and padding
     for (const line of childLines) {
@@ -85,8 +89,10 @@ export class BorderBox implements Component {
       result.push(this.borderFn(vertical) + content + this.borderFn(vertical));
     }
 
-    // Empty line for bottom padding
-    result.push(this.renderPaddingLine(vertical, innerWidth));
+    // Empty line for bottom padding (skip in compact mode)
+    if (!this.compact) {
+      result.push(this.renderPaddingLine(vertical, innerWidth));
+    }
 
     // Bottom border
     const bottomBorder = bottomLeft + horizontal.repeat(innerWidth) + bottomRight;

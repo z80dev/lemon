@@ -129,7 +129,7 @@ export class OverlayManager {
     contentContainer.addChild(titleText);
     contentContainer.addChild(selectList);
 
-    const box = new BorderBox(ansi.border, ansi.overlayBg);
+    const box = new BorderBox(ansi.border, ansi.overlayBg, true);
     box.addChild(contentContainer);
 
     const handle = this.tui.showOverlay(box, {
@@ -167,7 +167,7 @@ export class OverlayManager {
     contentContainer.addChild(header);
     contentContainer.addChild(selectList);
 
-    const box = new BorderBox(ansi.border, ansi.overlayBg);
+    const box = new BorderBox(ansi.border, ansi.overlayBg, true);
     box.addChild(contentContainer);
 
     const handle = this.tui.showOverlay(box, {
@@ -204,7 +204,7 @@ export class OverlayManager {
     contentContainer.addChild(header);
     contentContainer.addChild(input);
 
-    const box = new BorderBox(ansi.border, ansi.overlayBg);
+    const box = new BorderBox(ansi.border, ansi.overlayBg, true);
     box.addChild(contentContainer);
 
     const handle = this.tui.showOverlay(box, {
@@ -250,7 +250,7 @@ export class OverlayManager {
     contentContainer.addChild(header);
     contentContainer.addChild(editorOverlay);
 
-    const box = new BorderBox(ansi.border, ansi.overlayBg);
+    const box = new BorderBox(ansi.border, ansi.overlayBg, true);
     box.addChild(contentContainer);
 
     const handle = this.tui.showOverlay(box, {
@@ -312,7 +312,7 @@ export class OverlayManager {
     contentContainer.addChild(titleText);
     contentContainer.addChild(selectList);
 
-    const box = new BorderBox(ansi.border, ansi.overlayBg);
+    const box = new BorderBox(ansi.border, ansi.overlayBg, true);
     box.addChild(contentContainer);
 
     this.callbacks.setCurrentOverlayRequestId('__local__');
@@ -357,7 +357,7 @@ export class OverlayManager {
     contentContainer.addChild(header);
     contentContainer.addChild(input);
 
-    const box = new BorderBox(ansi.border, ansi.overlayBg);
+    const box = new BorderBox(ansi.border, ansi.overlayBg, true);
     box.addChild(contentContainer);
 
     this.callbacks.setCurrentOverlayRequestId('__local__');
@@ -416,7 +416,7 @@ export class OverlayManager {
     contentContainer.addChild(header);
     contentContainer.addChild(editor);
 
-    const box = new BorderBox(ansi.border, ansi.overlayBg);
+    const box = new BorderBox(ansi.border, ansi.overlayBg, true);
     box.addChild(contentContainer);
 
     this.callbacks.setCurrentOverlayRequestId('__local__');
@@ -534,7 +534,7 @@ export class OverlayManager {
     contentContainer.addChild(titleText);
     contentContainer.addChild(settingsList);
 
-    const box = new BorderBox(ansi.border, ansi.overlayBg);
+    const box = new BorderBox(ansi.border, ansi.overlayBg, true);
     box.addChild(contentContainer);
 
     const handle = this.tui.showOverlay(box, {

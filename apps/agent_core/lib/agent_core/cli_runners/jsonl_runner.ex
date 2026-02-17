@@ -65,6 +65,8 @@ defmodule AgentCore.CliRunners.JsonlRunner do
   # Debounce exit finalization long enough to consistently capture all output
   # under scheduler load and across OS/stdio buffering differences.
   @exit_finalize_debounce_ms 100
+  @default_cli_timeout_ms 300_000
+  @default_session_lock_max_age_ms 900_000
 
   # ============================================================================
   # Types
@@ -207,7 +209,7 @@ defmodule AgentCore.CliRunners.JsonlRunner do
   - `:resume` - ResumeToken for session continuation (optional)
   - `:cwd` - Working directory (default: current directory)
   - `:env` - Additional environment variables
-  - `:timeout` - Subprocess timeout in ms (default: `:infinity`)
+  - `:timeout` - Subprocess timeout in ms (default from `:agent_core, :cli_timeout_ms`)
   - `:owner` - Owner process to monitor (default: caller)
 
   Returns `{:ok, pid}` where pid is the runner GenServer.
@@ -270,10 +272,19 @@ defmodule AgentCore.CliRunners.JsonlRunner do
   defp acquire_session_lock(%ResumeToken{engine: engine, value: value}) do
     ensure_lock_table()
     key = {engine, value}
+    now_ms = System.monotonic_time(:millisecond)
+    lock_entry = {key, self(), now_ms}
 
-    case :ets.insert_new(@lock_table, {key, self()}) do
-      true -> :ok
-      false -> {:error, :session_locked}
+    case :ets.insert_new(@lock_table, lock_entry) do
+      true ->
+        :ok
+
+      false ->
+        if reclaim_stale_session_lock(key, now_ms) and :ets.insert_new(@lock_table, lock_entry) do
+          :ok
+        else
+          {:error, :session_locked}
+        end
     end
   end
 
@@ -289,6 +300,72 @@ defmodule AgentCore.CliRunners.JsonlRunner do
     end
 
     :ok
+  end
+
+  defp reclaim_stale_session_lock(key, now_ms) do
+    case :ets.lookup(@lock_table, key) do
+      [{^key, owner_pid}] ->
+        reclaim_dead_lock(key, owner_pid)
+
+      [{^key, owner_pid, acquired_at_ms}] ->
+        cond do
+          not Process.alive?(owner_pid) ->
+            Logger.warning("Reclaiming stale CLI session lock #{inspect(key)} from dead owner")
+            :ets.delete(@lock_table, key)
+            true
+
+          session_lock_expired?(acquired_at_ms, now_ms) ->
+            Logger.warning("Reclaiming expired CLI session lock #{inspect(key)}")
+            :ets.delete(@lock_table, key)
+            true
+
+          true ->
+            false
+        end
+
+      _ ->
+        false
+    end
+  rescue
+    _ ->
+      false
+  end
+
+  defp reclaim_dead_lock(key, owner_pid) do
+    if Process.alive?(owner_pid) do
+      false
+    else
+      Logger.warning("Reclaiming stale CLI session lock #{inspect(key)} from dead owner")
+      :ets.delete(@lock_table, key)
+      true
+    end
+  end
+
+  defp session_lock_expired?(acquired_at_ms, now_ms)
+       when is_integer(acquired_at_ms) and is_integer(now_ms) do
+    case session_lock_max_age_ms() do
+      :infinity -> false
+      max_age_ms when is_integer(max_age_ms) -> now_ms - acquired_at_ms > max_age_ms
+    end
+  end
+
+  defp session_lock_expired?(_, _), do: false
+
+  defp session_lock_max_age_ms do
+    case Application.get_env(
+           :agent_core,
+           :cli_session_lock_max_age_ms,
+           @default_session_lock_max_age_ms
+         ) do
+      :infinity ->
+        :infinity
+
+      value when is_integer(value) and value > 0 ->
+        value
+
+      _ ->
+        @default_session_lock_max_age_ms
+    end
   end
 
   # ============================================================================
@@ -330,7 +407,7 @@ defmodule AgentCore.CliRunners.JsonlRunner do
     resume = Keyword.get(opts, :resume)
     cwd = Keyword.get(opts, :cwd, File.cwd!())
     extra_env = Keyword.get(opts, :env, [])
-    timeout = Keyword.get(opts, :timeout, :infinity)
+    timeout = Keyword.get(opts, :timeout, default_cli_timeout_ms())
     owner = Keyword.get(opts, :owner, self())
 
     # Acquire session lock if resuming
@@ -1003,6 +1080,19 @@ defmodule AgentCore.CliRunners.JsonlRunner do
     @doc false
     def ingest_data_for_test(state, data) do
       process_data(state, data)
+    end
+  end
+
+  defp default_cli_timeout_ms do
+    case Application.get_env(:agent_core, :cli_timeout_ms, @default_cli_timeout_ms) do
+      :infinity ->
+        :infinity
+
+      value when is_integer(value) and value > 0 ->
+        value
+
+      _ ->
+        @default_cli_timeout_ms
     end
   end
 end

@@ -147,16 +147,34 @@ export class MessageRenderer {
 
     messagesContainer.clear();
 
+    let prevType: string | null = null;
     for (const msg of messages) {
       if (msg.type === 'tool_result' && !showToolResults) {
         continue;
       }
+      // Add separator between turns (user→assistant or assistant→user)
+      const isNewTurn =
+        prevType !== null &&
+        ((prevType === 'user' && msg.type === 'assistant') ||
+          (prevType === 'assistant' && msg.type === 'user') ||
+          (prevType === 'tool_result' && msg.type === 'user'));
+      if (isNewTurn) {
+        const sep = ansi.muted('─── ─── ─── ─── ───');
+        messagesContainer.addChild(new Text(sep, 1, 0));
+      }
+
       const component = this.createMessageComponent(msg);
       messagesContainer.addChild(component);
+      prevType = msg.type;
     }
 
     let streamingComponent: Component | null = null;
     if (streamingMessage) {
+      // Separator before streaming if previous was a user message
+      if (prevType === 'user') {
+        const sep = ansi.muted('─── ─── ─── ─── ───');
+        messagesContainer.addChild(new Text(sep, 1, 0));
+      }
       streamingComponent = this.createMessageComponent(streamingMessage);
       messagesContainer.addChild(streamingComponent);
     }

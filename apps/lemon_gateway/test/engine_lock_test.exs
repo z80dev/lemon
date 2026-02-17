@@ -824,11 +824,34 @@ defmodule LemonGateway.EngineLockTest do
     end
   end
 
+  describe "unit tests - stale lock reclamation" do
+    setup context do
+      context
+      |> Map.put(:engine_lock_opts, %{max_lock_age_ms: 120, reap_interval_ms: 20})
+      |> start_engine_lock()
+    end
+
+    test "reclaims locks older than max_lock_age_ms", %{lock: lock} do
+      {:ok, _release} = GenServer.call(lock, {:acquire, :stale_key, 5_000})
+
+      Process.sleep(150)
+
+      assert {:ok, _release} = GenServer.call(lock, {:acquire, :stale_key, 300}, 1_000)
+    end
+
+    test "does not reclaim fresh locks before max age", %{lock: lock} do
+      {:ok, _release} = GenServer.call(lock, {:acquire, :fresh_key, 5_000})
+
+      assert {:error, :timeout} = GenServer.call(lock, {:acquire, :fresh_key, 30}, 500)
+    end
+  end
+
   # Helper to start a fresh EngineLock for unit tests
-  defp start_engine_lock(_context) do
+  defp start_engine_lock(context) do
     # Start a new EngineLock with a unique name for isolation
     name = :"engine_lock_#{:erlang.unique_integer([:positive])}"
-    {:ok, pid} = GenServer.start_link(LemonGateway.EngineLock, %{}, name: name)
+    opts = Map.get(context, :engine_lock_opts, %{})
+    {:ok, pid} = GenServer.start_link(LemonGateway.EngineLock, opts, name: name)
 
     on_exit(fn ->
       if Process.alive?(pid), do: GenServer.stop(pid)
