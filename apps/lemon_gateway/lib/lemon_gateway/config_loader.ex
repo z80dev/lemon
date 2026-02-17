@@ -180,11 +180,25 @@ defmodule LemonGateway.ConfigLoader do
       voice_transcription_base_url: fetch(telegram, :voice_transcription_base_url),
       voice_transcription_api_key: fetch(telegram, :voice_transcription_api_key),
       voice_max_bytes: fetch(telegram, :voice_max_bytes),
+      compaction: parse_telegram_compaction(fetch(telegram, :compaction)),
       files: parse_telegram_files(fetch(telegram, :files))
     }
   end
 
   defp parse_telegram(_), do: %{}
+
+  defp parse_telegram_compaction(compaction) when is_map(compaction) do
+    %{
+      enabled: fetch(compaction, :enabled),
+      context_window_tokens: fetch(compaction, :context_window_tokens),
+      reserve_tokens: fetch(compaction, :reserve_tokens),
+      trigger_ratio: fetch(compaction, :trigger_ratio)
+    }
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.new()
+  end
+
+  defp parse_telegram_compaction(_), do: %{}
 
   defp parse_telegram_files(files) when is_map(files) do
     %{
@@ -198,7 +212,8 @@ defmodule LemonGateway.ConfigLoader do
       deny_globs: fetch(files, :deny_globs),
       max_upload_bytes: fetch(files, :max_upload_bytes),
       max_download_bytes: fetch(files, :max_download_bytes),
-      media_group_debounce_ms: fetch(files, :media_group_debounce_ms)
+      media_group_debounce_ms: fetch(files, :media_group_debounce_ms),
+      outbound_send_delay_ms: fetch(files, :outbound_send_delay_ms)
     }
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
     |> Map.new()

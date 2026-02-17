@@ -27,6 +27,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   @default_poll_interval 1_000
   @default_dedupe_ttl 600_000
   @default_debounce_ms 1_000
+  @pending_compaction_ttl_ms 12 * 60 * 60 * 1000
   @cancel_callback_prefix "lemon:cancel"
 
   def start_link(opts \\ []) do
@@ -212,6 +213,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     _ = safe_delete_chat_state(scope)
     _ = safe_delete_chat_state(session_key)
     _ = safe_delete_selected_resume(state, chat_id, thread_id)
+    _ = safe_clear_thread_message_indices(state, chat_id, thread_id)
     {:noreply, state}
   rescue
     _ -> {:noreply, state}
@@ -232,6 +234,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         _ = safe_delete_chat_state(scope)
         _ = safe_delete_chat_state(session_key)
         _ = safe_delete_selected_resume(state, chat_id, thread_id)
+        _ = safe_clear_thread_message_indices(state, chat_id, thread_id)
 
         # Store writes are async; do a second delete shortly after to win races.
         Process.send_after(
@@ -485,6 +488,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           true ->
             inbound = maybe_mark_fork_when_busy(state, inbound)
             {state, inbound} = maybe_switch_session_from_reply(state, inbound)
+            inbound = maybe_apply_pending_compaction(state, inbound, original_text)
             inbound = maybe_apply_selected_resume(state, inbound, original_text)
 
             cond do
@@ -1621,14 +1625,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             if switching_session?(current, resume) do
               set_chat_resume(scope, session_key, resume)
 
-              _ =
-                send_system_message(
-                  state,
-                  chat_id,
-                  thread_id,
-                  normalize_msg_id(inbound.message.id) || inbound.meta[:user_msg_id],
-                  "Resuming session: #{format_session_ref(resume)}"
-                )
+              # Keep automatic reply-based session switching silent. The user
+              # doesn't need an extra "Resuming session..." system message on
+              # normal follow-ups.
 
               inbound =
                 case source do
@@ -1953,6 +1952,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
           _ ->
             _ = safe_abort_session(session_key, :new_session)
+            _ = safe_clear_thread_message_indices(state, chat_id, thread_id)
 
             case submit_memory_reflection_before_new(
                    state,
@@ -2000,6 +2000,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
                 safe_delete_chat_state(scope)
                 safe_delete_chat_state(session_key)
                 safe_delete_selected_resume(state, chat_id, thread_id)
+                safe_clear_thread_message_indices(state, chat_id, thread_id)
 
                 msg =
                   case project_result do
@@ -2227,6 +2228,65 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     _ -> :ok
   end
 
+  defp safe_clear_thread_message_indices(state, chat_id, thread_id)
+       when is_integer(chat_id) and is_integer(thread_id) do
+    account_id = state.account_id || "default"
+
+    _ = clear_thread_index_table(:telegram_msg_session, account_id, chat_id, thread_id)
+    _ = clear_thread_index_table(:telegram_msg_resume, account_id, chat_id, thread_id)
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp safe_clear_thread_message_indices(_state, _chat_id, _thread_id), do: :ok
+
+  defp clear_thread_index_table(table, account_id, chat_id, thread_id) when is_atom(table) do
+    list_store_table(table)
+    |> Enum.each(fn
+      {{acc, cid, tid, _msg_id} = key, _value}
+      when acc == account_id and cid == chat_id and tid == thread_id ->
+        _ = delete_store_key(table, key)
+
+      _ ->
+        :ok
+    end)
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp list_store_table(table) when is_atom(table) do
+    cond do
+      Code.ensure_loaded?(CoreStore) and function_exported?(CoreStore, :list, 1) ->
+        CoreStore.list(table)
+
+      Code.ensure_loaded?(Store) and function_exported?(Store, :list, 1) ->
+        Store.list(table)
+
+      true ->
+        []
+    end
+  rescue
+    _ -> []
+  end
+
+  defp delete_store_key(table, key) when is_atom(table) do
+    cond do
+      Code.ensure_loaded?(CoreStore) and function_exported?(CoreStore, :delete, 2) ->
+        CoreStore.delete(table, key)
+
+      Code.ensure_loaded?(Store) and function_exported?(Store, :delete, 2) ->
+        Store.delete(table, key)
+
+      true ->
+        :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
   defp safe_get_chat_state(key) do
     if Code.ensure_loaded?(LemonGateway.Store) and
          function_exported?(LemonGateway.Store, :get_chat_state, 1) do
@@ -2332,12 +2392,106 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp normalize_msg_id(_), do: nil
 
+  defp maybe_apply_pending_compaction(state, inbound, original_text) do
+    cond do
+      command_message?(original_text) ->
+        inbound
+
+      true ->
+        chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
+        thread_id = parse_int(inbound.peer.thread_id)
+        account_id = state.account_id || "default"
+
+        if is_integer(chat_id) do
+          key = {account_id, chat_id, thread_id}
+
+          case CoreStore.get(:telegram_pending_compaction, key) do
+            pending when is_map(pending) ->
+              if pending_compaction_fresh?(pending) do
+                scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
+
+                session_key =
+                  pending[:session_key] || pending["session_key"] ||
+                    build_session_key(state, inbound, scope)
+
+                transcript =
+                  fetch_run_history_for_memory(session_key, scope, limit: 8)
+                  |> format_run_history_transcript(max_chars: 8_000)
+
+                if transcript != "" do
+                  _ = CoreStore.delete(:telegram_pending_compaction, key)
+                  text = build_pending_compaction_prompt(transcript, inbound.message.text || "")
+                  meta = Map.put(inbound.meta || %{}, :auto_compacted, true)
+                  %{inbound | message: Map.put(inbound.message, :text, text), meta: meta}
+                else
+                  inbound
+                end
+              else
+                _ = CoreStore.delete(:telegram_pending_compaction, key)
+                inbound
+              end
+
+            _ ->
+              inbound
+          end
+        else
+          inbound
+        end
+    end
+  rescue
+    _ -> inbound
+  end
+
+  defp pending_compaction_fresh?(pending) when is_map(pending) do
+    set_at_ms = pending[:set_at_ms] || pending["set_at_ms"]
+
+    cond do
+      is_integer(set_at_ms) ->
+        System.system_time(:millisecond) - set_at_ms <= @pending_compaction_ttl_ms
+
+      true ->
+        true
+    end
+  rescue
+    _ -> false
+  end
+
+  defp pending_compaction_fresh?(_), do: false
+
+  defp build_pending_compaction_prompt(transcript, user_text)
+       when is_binary(transcript) and is_binary(user_text) do
+    user_text = String.trim(user_text)
+
+    base =
+      [
+        "The previous conversation reached the model context limit.",
+        "Use this compact transcript as prior context and continue.",
+        "",
+        "<previous_conversation>",
+        transcript,
+        "</previous_conversation>"
+      ]
+      |> Enum.join("\n")
+
+    if user_text == "" do
+      String.trim(base <> "\n\nContinue.")
+    else
+      String.trim(base <> "\n\nUser:\n" <> user_text)
+    end
+  end
+
+  defp build_pending_compaction_prompt(_transcript, user_text), do: user_text
+
   defp maybe_apply_selected_resume(state, inbound, original_text) do
     meta = inbound.meta || %{}
 
     cond do
       # Don't interfere with Telegram slash commands; those can be engine directives etc.
       command_message?(original_text) ->
+        inbound
+
+      # After overflow recovery compaction we intentionally start a fresh session.
+      meta[:auto_compacted] == true or meta["auto_compacted"] == true ->
         inbound
 
       # Forked sessions are meant to run independently; avoid implicitly resuming

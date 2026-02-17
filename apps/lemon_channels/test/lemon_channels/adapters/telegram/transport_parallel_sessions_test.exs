@@ -111,8 +111,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     :sys.replace_state(worker_pid, fn st -> Map.put(st, :current_run, self()) end)
 
     on_exit(fn ->
-      if is_pid(worker_pid) and Process.alive?(worker_pid),
-        do: GenServer.stop(worker_pid, :normal)
+      safe_stop(worker_pid)
     end)
 
     MockAPI.set_updates([message_update(chat_id, user_msg_id, "hello")])
@@ -145,8 +144,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     :sys.replace_state(worker_pid, fn st -> Map.put(st, :current_run, self()) end)
 
     on_exit(fn ->
-      if is_pid(worker_pid) and Process.alive?(worker_pid),
-        do: GenServer.stop(worker_pid, :normal)
+      safe_stop(worker_pid)
     end)
 
     resume = %LemonGateway.Types.ResumeToken{engine: "lemon", value: "tok"}
@@ -183,8 +181,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     :sys.replace_state(worker_pid, fn st -> Map.put(st, :current_run, self()) end)
 
     on_exit(fn ->
-      if is_pid(worker_pid) and Process.alive?(worker_pid),
-        do: GenServer.stop(worker_pid, :normal)
+      safe_stop(worker_pid)
     end)
 
     MockAPI.set_updates([message_update(chat_id, user_msg_id1, "first")])
@@ -217,6 +214,139 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     assert_receive {:inbound, msg2}, 800
     assert msg2.meta[:session_key] == fork_session_key
     refute msg2.meta[:session_key] == base_session_key
+
+    refute_receive {:send_message, ^chat_id, "Resuming session:" <> _rest, _opts, _parse_mode},
+                   150
+  end
+
+  test "/new clears stale topic reply routing and selected resume state" do
+    chat_id = System.unique_integer([:positive])
+    topic_id = 777
+    reply_to_id = 9_001
+    new_msg_id = System.unique_integer([:positive])
+    followup_msg_id = System.unique_integer([:positive])
+
+    base_session_key =
+      SessionKey.channel_peer(%{
+        agent_id: "default",
+        channel_id: "telegram",
+        account_id: "default",
+        peer_kind: :group,
+        peer_id: Integer.to_string(chat_id),
+        thread_id: Integer.to_string(topic_id)
+      })
+
+    stale_session_key = base_session_key <> ":sub:legacy"
+    stale_resume = %LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_old"}
+
+    _ =
+      CoreStore.put(
+        :telegram_selected_resume,
+        {"default", chat_id, topic_id},
+        stale_resume
+      )
+
+    _ =
+      CoreStore.put(
+        :telegram_msg_session,
+        {"default", chat_id, topic_id, reply_to_id},
+        stale_session_key
+      )
+
+    _ =
+      CoreStore.put(
+        :telegram_msg_resume,
+        {"default", chat_id, topic_id, reply_to_id},
+        stale_resume
+      )
+
+    MockAPI.set_updates([
+      topic_message_update(chat_id, topic_id, new_msg_id, "/new"),
+      topic_message_update(chat_id, topic_id, followup_msg_id, "after new", reply_to_id)
+    ])
+
+    assert {:ok, _pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               deny_unbound_chats: false
+             })
+
+    assert_receive {:inbound, msg}, 1_200
+    assert msg.message.text == "after new"
+    assert msg.meta[:session_key] == base_session_key
+    refute msg.meta[:session_key] == stale_session_key
+
+    assert CoreStore.get(:telegram_selected_resume, {"default", chat_id, topic_id}) == nil
+
+    assert CoreStore.get(:telegram_msg_session, {"default", chat_id, topic_id, reply_to_id}) ==
+             nil
+
+    assert CoreStore.get(:telegram_msg_resume, {"default", chat_id, topic_id, reply_to_id}) == nil
+  end
+
+  test "auto-compacts the next prompt after an overflow marker is set" do
+    chat_id = System.unique_integer([:positive])
+    user_msg_id = System.unique_integer([:positive])
+    run_id = "run_#{System.unique_integer([:positive])}"
+    started_at = System.system_time(:millisecond) - 1
+
+    session_key =
+      SessionKey.channel_peer(%{
+        agent_id: "default",
+        channel_id: "telegram",
+        account_id: "default",
+        peer_kind: :dm,
+        peer_id: Integer.to_string(chat_id)
+      })
+
+    scope = %LemonGateway.Types.ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
+
+    _ =
+      CoreStore.put(
+        :run_history,
+        {session_key, started_at, run_id},
+        %{
+          events: [],
+          summary: %{
+            prompt: "Please build a parser",
+            completed: %{answer: "Implemented parser and tests."}
+          },
+          scope: scope,
+          session_key: session_key,
+          run_id: run_id,
+          started_at: started_at
+        }
+      )
+
+    pending_key = {"default", chat_id, nil}
+
+    _ =
+      CoreStore.put(
+        :telegram_pending_compaction,
+        pending_key,
+        %{
+          reason: "overflow",
+          session_key: session_key,
+          set_at_ms: System.system_time(:millisecond)
+        }
+      )
+
+    MockAPI.set_updates([message_update(chat_id, user_msg_id, "continue and polish output")])
+
+    assert {:ok, _pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               deny_unbound_chats: false
+             })
+
+    assert_receive {:inbound, msg}, 1_200
+
+    assert msg.meta[:auto_compacted] == true
+    assert msg.message.text =~ "<previous_conversation>"
+    assert msg.message.text =~ "Please build a parser"
+    assert msg.message.text =~ "Implemented parser and tests."
+    assert msg.message.text =~ "User:\ncontinue and polish output"
+    assert CoreStore.get(:telegram_pending_compaction, pending_key) == nil
   end
 
   defp start_transport(overrides) when is_map(overrides) do
@@ -266,6 +396,35 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     }
   end
 
+  defp topic_message_update(chat_id, topic_id, message_id, text, reply_to_id \\ nil) do
+    message =
+      %{
+        "message_id" => message_id,
+        "date" => 1,
+        "chat" => %{"id" => chat_id, "type" => "supergroup"},
+        "from" => %{"id" => 99, "username" => "tester", "first_name" => "Test"},
+        "text" => text,
+        "message_thread_id" => topic_id
+      }
+      |> maybe_put_topic_reply(chat_id, reply_to_id)
+
+    %{
+      "update_id" => System.unique_integer([:positive]),
+      "message" => message
+    }
+  end
+
+  defp maybe_put_topic_reply(message, _chat_id, nil), do: message
+
+  defp maybe_put_topic_reply(message, chat_id, reply_to_id) do
+    Map.put(message, "reply_to_message", %{
+      "message_id" => reply_to_id,
+      "date" => 1,
+      "chat" => %{"id" => chat_id, "type" => "supergroup"},
+      "text" => "earlier"
+    })
+  end
+
   defp set_bindings(bindings) do
     case Process.whereis(LemonGateway.Config) do
       pid when is_pid(pid) ->
@@ -311,11 +470,23 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
 
   defp stop_transport do
     if pid = Process.whereis(LemonChannels.Adapters.Telegram.Transport) do
-      if Process.alive?(pid) do
-        GenServer.stop(pid, :normal)
-      end
+      safe_stop(pid)
     end
   catch
     :exit, _ -> :ok
   end
+
+  defp safe_stop(pid) when is_pid(pid) do
+    if Process.alive?(pid) do
+      try do
+        GenServer.stop(pid, :normal)
+      catch
+        :exit, _ -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  defp safe_stop(_), do: :ok
 end

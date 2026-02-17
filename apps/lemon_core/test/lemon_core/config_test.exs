@@ -330,4 +330,27 @@ defmodule LemonCore.ConfigTest do
     assert tools.web.cache.path == "~/.lemon/cache/custom-web-tools"
     assert tools.web.cache.max_entries == 250
   end
+
+  test "parses gateway telegram compaction settings", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [gateway]
+    enable_telegram = true
+
+    [gateway.telegram.compaction]
+    enabled = true
+    context_window_tokens = 400000
+    reserve_tokens = 16384
+    trigger_ratio = 0.9
+    """)
+
+    config = Config.load()
+
+    assert config.gateway.telegram.compaction.enabled == true
+    assert config.gateway.telegram.compaction.context_window_tokens == 400_000
+    assert config.gateway.telegram.compaction.reserve_tokens == 16_384
+    assert config.gateway.telegram.compaction.trigger_ratio == 0.9
+  end
 end

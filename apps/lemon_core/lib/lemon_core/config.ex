@@ -450,10 +450,25 @@ defmodule LemonCore.Config do
       account_id: map["account_id"],
       offset: map["offset"],
       drop_pending_updates: map["drop_pending_updates"],
+      compaction: parse_gateway_telegram_compaction(map["compaction"] || %{}),
       files: parse_gateway_telegram_files(map["files"] || %{})
     }
     |> reject_nil_values()
   end
+
+  defp parse_gateway_telegram_compaction(map) when is_map(map) do
+    map = stringify_keys(map)
+
+    %{
+      enabled: parse_boolean(map["enabled"], nil),
+      context_window_tokens: parse_positive_integer(map["context_window_tokens"], nil),
+      reserve_tokens: parse_positive_integer(map["reserve_tokens"], nil),
+      trigger_ratio: parse_non_negative_number(map["trigger_ratio"], nil)
+    }
+    |> reject_nil_values()
+  end
+
+  defp parse_gateway_telegram_compaction(_), do: %{}
 
   defp parse_gateway_telegram_files(map) when is_map(map) do
     map = stringify_keys(map)
@@ -469,7 +484,8 @@ defmodule LemonCore.Config do
       deny_globs: map["deny_globs"],
       max_upload_bytes: map["max_upload_bytes"],
       max_download_bytes: map["max_download_bytes"],
-      media_group_debounce_ms: map["media_group_debounce_ms"]
+      media_group_debounce_ms: map["media_group_debounce_ms"],
+      outbound_send_delay_ms: map["outbound_send_delay_ms"]
     }
     |> reject_nil_values()
   end

@@ -96,10 +96,17 @@ defmodule LemonGateway.ConfigLoaderTest do
       LemonGateway.Config,
       %{
         "telegram" => %{
+          "compaction" => %{
+            "enabled" => true,
+            "context_window_tokens" => 123_000,
+            "reserve_tokens" => 12_000,
+            "trigger_ratio" => 0.88
+          },
           "files" => %{
             "enabled" => true,
             "auto_send_generated_images" => true,
-            "auto_send_generated_max_files" => 4
+            "auto_send_generated_max_files" => 4,
+            "outbound_send_delay_ms" => 800
           }
         }
       }
@@ -107,8 +114,13 @@ defmodule LemonGateway.ConfigLoaderTest do
 
     config = ConfigLoader.load()
 
+    assert config.telegram.compaction.enabled == true
+    assert config.telegram.compaction.context_window_tokens == 123_000
+    assert config.telegram.compaction.reserve_tokens == 12_000
+    assert config.telegram.compaction.trigger_ratio == 0.88
     assert config.telegram.files.enabled == true
     assert config.telegram.files.auto_send_generated_images == true
     assert config.telegram.files.auto_send_generated_max_files == 4
+    assert config.telegram.files.outbound_send_delay_ms == 800
   end
 end

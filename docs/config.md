@@ -305,6 +305,7 @@ allowed_user_ids = [123456789]  # if empty, group uploads require admin
 deny_globs = [".git/**", ".env", ".envrc", "**/*.pem", "**/.ssh/**"]
 max_upload_bytes = 20971520     # optional (default: 20MB)
 max_download_bytes = 52428800   # optional (default: 50MB)
+outbound_send_delay_ms = 1000   # optional: delay between auto-sent files/batches to reduce 429s
 ```
 
 Commands:
@@ -316,6 +317,19 @@ If no project is bound for the chat, the active root falls back to `gateway.defa
 When `auto_send_generated_images = true`, Lemon tracks image files created/changed during the run and sends up to
 `auto_send_generated_max_files` files back to Telegram automatically at completion (using the same `max_download_bytes`
 limit as `/file get`).
+
+## Telegram Context Compaction
+
+When a Telegram run approaches the model context limit, Lemon can proactively mark the session for compaction so the
+next user message is automatically rewritten with a compact transcript and sent as a fresh session.
+
+```toml
+[gateway.telegram.compaction]
+enabled = true
+context_window_tokens = 400000  # optional override; if unset Lemon infers from model/engine
+reserve_tokens = 16384          # optional safety margin before limit
+trigger_ratio = 0.9             # optional; 0.9 means trigger at 90% of context window
+```
 
 ## Trigger Mode (Mentions-Only)
 

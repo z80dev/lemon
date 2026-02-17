@@ -408,6 +408,175 @@ defmodule LemonRouter.RunProcessTest do
     end
   end
 
+  describe "telegram context overflow recovery" do
+    test "context_length_exceeded clears persisted resume state for the topic/session" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      session_key =
+        SessionKey.channel_peer(%{
+          agent_id: "test-agent",
+          channel_id: "telegram",
+          account_id: "botx",
+          peer_kind: :group,
+          peer_id: "12345",
+          thread_id: "777"
+        })
+
+      scope = %LemonGateway.Types.ChatScope{transport: :telegram, chat_id: 12_345, topic_id: 777}
+      selected_key = {"botx", 12_345, 777}
+      index_key = {"botx", 12_345, 777, 9_001}
+      pending_compaction_key = {"botx", 12_345, 777}
+      stale_resume = %LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_old"}
+
+      _ = LemonCore.Store.delete(:telegram_pending_compaction, pending_compaction_key)
+
+      _ =
+        LemonGateway.Store.put_chat_state(scope, %{
+          last_engine: "codex",
+          last_resume_token: "thread_old",
+          updated_at: System.system_time(:millisecond)
+        })
+
+      _ =
+        LemonGateway.Store.put_chat_state(session_key, %{
+          last_engine: "codex",
+          last_resume_token: "thread_old",
+          updated_at: System.system_time(:millisecond)
+        })
+
+      _ = LemonCore.Store.put(:telegram_selected_resume, selected_key, stale_resume)
+      _ = LemonCore.Store.put(:telegram_msg_session, index_key, session_key <> ":sub:old")
+      _ = LemonCore.Store.put(:telegram_msg_resume, index_key, stale_resume)
+
+      job = make_test_job(run_id, %{progress_msg_id: 111, user_msg_id: 222})
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false
+               })
+
+      completed_event =
+        LemonCore.Event.new(
+          :run_completed,
+          %{
+            completed: %{
+              ok: false,
+              error: %{
+                "error" => %{
+                  "code" => "context_length_exceeded",
+                  "message" => "Your input exceeds the context window of this model."
+                }
+              }
+            }
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+
+      assert eventually(fn -> not Process.alive?(pid) end)
+      assert eventually(fn -> LemonGateway.Store.get_chat_state(scope) == nil end)
+      assert eventually(fn -> LemonGateway.Store.get_chat_state(session_key) == nil end)
+      assert LemonCore.Store.get(:telegram_selected_resume, selected_key) == nil
+      assert LemonCore.Store.get(:telegram_msg_session, index_key) == nil
+      assert LemonCore.Store.get(:telegram_msg_resume, index_key) == nil
+
+      assert eventually(fn ->
+               case LemonCore.Store.get(:telegram_pending_compaction, pending_compaction_key) do
+                 %{reason: "overflow", session_key: ^session_key, set_at_ms: ts}
+                 when is_integer(ts) ->
+                   true
+
+                 _ ->
+                   false
+               end
+             end)
+    end
+
+    test "marks pending compaction before overflow when input_tokens approaches threshold" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      session_key =
+        SessionKey.channel_peer(%{
+          agent_id: "test-agent",
+          channel_id: "telegram",
+          account_id: "botx",
+          peer_kind: :group,
+          peer_id: "12345",
+          thread_id: "777"
+        })
+
+      pending_compaction_key = {"botx", 12_345, 777}
+      old_telegram_env = Application.get_env(:lemon_gateway, :telegram)
+
+      Application.put_env(:lemon_gateway, :telegram, %{
+        "compaction" => %{
+          "enabled" => true,
+          "context_window_tokens" => 1_000,
+          "reserve_tokens" => 100,
+          "trigger_ratio" => 0.95
+        }
+      })
+
+      on_exit(fn ->
+        if is_nil(old_telegram_env) do
+          Application.delete_env(:lemon_gateway, :telegram)
+        else
+          Application.put_env(:lemon_gateway, :telegram, old_telegram_env)
+        end
+      end)
+
+      _ = LemonCore.Store.delete(:telegram_pending_compaction, pending_compaction_key)
+
+      job = make_test_job(run_id, %{progress_msg_id: 111, user_msg_id: 222})
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false
+               })
+
+      completed_event =
+        LemonCore.Event.new(
+          :run_completed,
+          %{
+            completed: %{
+              ok: true,
+              answer: "done",
+              usage: %{input_tokens: 950, output_tokens: 50}
+            }
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+
+      assert eventually(fn -> not Process.alive?(pid) end)
+
+      assert eventually(fn ->
+               case LemonCore.Store.get(:telegram_pending_compaction, pending_compaction_key) do
+                 %{
+                   reason: "near_limit",
+                   input_tokens: 950,
+                   threshold_tokens: threshold,
+                   context_window_tokens: 1_000,
+                   session_key: ^session_key
+                 }
+                 when is_integer(threshold) and threshold <= 950 ->
+                   true
+
+                 _ ->
+                   false
+               end
+             end)
+    end
+  end
+
   describe "generated image tracking" do
     test "tracks image file_change paths from completed engine actions" do
       run_id = "run_#{System.unique_integer([:positive])}"

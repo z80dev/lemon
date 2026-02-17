@@ -1164,15 +1164,13 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       assert_receive {:job_captured, %Job{} = job3}, 2000
       assert %ResumeToken{engine: "capture", value: ^token1} = job3.resume
 
-      # Explicit session switching should be acknowledged.
-      assert eventually(fn ->
-               Enum.any?(MockTelegramAPI.calls(), fn
-                 {:send_message, 12345, text, _opts, _parse_mode} ->
-                   String.contains?(text, "Resuming session") and String.contains?(text, token1)
+      # Reply-based switching is intentionally silent (no extra "Resuming session" chat noise).
+      refute Enum.any?(MockTelegramAPI.calls(), fn
+               {:send_message, 12345, text, _opts, _parse_mode} ->
+                 String.contains?(text, "Resuming session") and String.contains?(text, token1)
 
-                 _ ->
-                   false
-               end)
+               _ ->
+                 false
              end)
     end
   end
