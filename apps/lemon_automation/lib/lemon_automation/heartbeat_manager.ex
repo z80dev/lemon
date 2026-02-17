@@ -42,6 +42,7 @@ defmodule LemonAutomation.HeartbeatManager do
 
   # Per parity: suppression ONLY if response equals exactly "HEARTBEAT_OK" (trimmed)
   @heartbeat_ok_exact "HEARTBEAT_OK"
+  @task_supervisor LemonAutomation.TaskSupervisor
 
   # ============================================================================
   # Client API
@@ -197,6 +198,7 @@ defmodule LemonAutomation.HeartbeatManager do
 
       # Persist heartbeat_last for last-heartbeat method to read
       agent_id = job.agent_id || "default"
+
       last_result = %{
         timestamp_ms: System.system_time(:millisecond),
         status: if(suppressed, do: :ok, else: :alert),
@@ -205,6 +207,7 @@ defmodule LemonAutomation.HeartbeatManager do
         run_id: run_id,
         job_id: job_id
       }
+
       LemonCore.Store.put(:heartbeat_last, agent_id, last_result)
 
       state =
@@ -293,7 +296,9 @@ defmodule LemonAutomation.HeartbeatManager do
               Logger.info("[HeartbeatManager] Disabled heartbeat job for agent #{agent_id}")
 
             {:error, reason} ->
-              Logger.error("[HeartbeatManager] Failed to disable heartbeat job: #{inspect(reason)}")
+              Logger.error(
+                "[HeartbeatManager] Failed to disable heartbeat job: #{inspect(reason)}"
+              )
           end
 
           # Remove from active heartbeats
@@ -318,7 +323,9 @@ defmodule LemonAutomation.HeartbeatManager do
     # Schedule the first timer
     timer_ref = Process.send_after(self(), {:timer_heartbeat, agent_id}, interval_ms)
 
-    Logger.info("[HeartbeatManager] Scheduled timer-based heartbeat for agent #{agent_id} every #{interval_ms}ms")
+    Logger.info(
+      "[HeartbeatManager] Scheduled timer-based heartbeat for agent #{agent_id} every #{interval_ms}ms"
+    )
 
     state
     |> put_in([:active_heartbeats, agent_id], {:timer, timer_ref})
@@ -369,7 +376,10 @@ defmodule LemonAutomation.HeartbeatManager do
         # Create new job
         case CronManager.add(job_params) do
           {:ok, job} ->
-            Logger.info("[HeartbeatManager] Created heartbeat job for agent #{agent_id}: #{job.id}")
+            Logger.info(
+              "[HeartbeatManager] Created heartbeat job for agent #{agent_id}: #{job.id}"
+            )
+
             put_in(state, [:active_heartbeats, agent_id], job.id)
 
           {:error, reason} ->
@@ -381,7 +391,10 @@ defmodule LemonAutomation.HeartbeatManager do
         # Update existing job
         case CronManager.update(existing.id, job_params) do
           {:ok, job} ->
-            Logger.info("[HeartbeatManager] Updated heartbeat job for agent #{agent_id}: #{job.id}")
+            Logger.info(
+              "[HeartbeatManager] Updated heartbeat job for agent #{agent_id}: #{job.id}"
+            )
+
             put_in(state, [:active_heartbeats, agent_id], job.id)
 
           {:error, reason} ->
@@ -438,9 +451,10 @@ defmodule LemonAutomation.HeartbeatManager do
 
     if run do
       # Auto-process completed runs
-      Task.start(fn ->
-        process_response(run, response)
-      end)
+      _ =
+        start_background_task(fn ->
+          process_response(run, response)
+        end)
     end
 
     {:noreply, state}
@@ -504,88 +518,110 @@ defmodule LemonAutomation.HeartbeatManager do
     # Submit via LemonRouter (the same path CronManager uses)
     # Important: do NOT let background heartbeats crash the HeartbeatManager.
     # Use an unlinked task and catch exits from LemonRouter.submit/1.
-    {:ok, pid} =
-      Task.start(fn ->
-      params = %{
-        origin: :cron,
-        session_key: session_key,
-        prompt: prompt,
-        agent_id: agent_id,
-        meta: %{
-          heartbeat: true,
-          timer_based: true,
-          synthetic_run_id: synthetic_run_id
+    _ =
+      start_background_task(fn ->
+        params = %{
+          origin: :cron,
+          session_key: session_key,
+          prompt: prompt,
+          agent_id: agent_id,
+          meta: %{
+            heartbeat: true,
+            timer_based: true,
+            synthetic_run_id: synthetic_run_id
+          }
         }
-      }
 
-      submit_result =
-        try do
-          LemonRouter.submit(params)
-        catch
-          :exit, reason -> {:error, reason}
-        end
-
-      case submit_result do
-        {:ok, run_id} ->
-          # Wait for run completion via LemonCore.Bus events
-          result = wait_for_heartbeat_completion(run_id, 30_000)
-
-          case result do
-            {:ok, output} ->
-              Bus.broadcast("cron", %LemonCore.Event{
-                type: :cron_run_completed,
-                ts_ms: System.system_time(:millisecond),
-                payload: %{
-                  run: %{
-                    id: synthetic_run_id,
-                    job_id: "timer-heartbeat-#{agent_id}",
-                    agent_id: agent_id,
-                    status: :completed
-                  },
-                  output: output
-                }
-              })
-
-            {:error, reason} ->
-              Logger.error("[HeartbeatManager] Timer heartbeat failed for #{agent_id}: #{inspect(reason)}")
-
-              Bus.broadcast("cron", %LemonCore.Event{
-                type: :cron_run_completed,
-                ts_ms: System.system_time(:millisecond),
-                payload: %{
-                  run: %{
-                    id: synthetic_run_id,
-                    job_id: "timer-heartbeat-#{agent_id}",
-                    agent_id: agent_id,
-                    status: :failed
-                  },
-                  output: "HEARTBEAT_ERROR: #{inspect(reason)}"
-                }
-              })
+        submit_result =
+          try do
+            LemonRouter.submit(params)
+          catch
+            :exit, reason -> {:error, reason}
           end
 
-        {:error, reason} ->
-          Logger.error("[HeartbeatManager] Failed to submit timer heartbeat for #{agent_id}: #{inspect(reason)}")
+        case submit_result do
+          {:ok, run_id} ->
+            # Wait for run completion via LemonCore.Bus events
+            result = wait_for_heartbeat_completion(run_id, 30_000)
 
-          Bus.broadcast("cron", %LemonCore.Event{
-            type: :cron_run_completed,
-            ts_ms: System.system_time(:millisecond),
-            payload: %{
-              run: %{
-                id: synthetic_run_id,
-                job_id: "timer-heartbeat-#{agent_id}",
-                agent_id: agent_id,
-                status: :failed
-              },
-              output: "HEARTBEAT_ERROR: Failed to submit: #{inspect(reason)}"
-            }
-          })
-      end
-    end)
+            case result do
+              {:ok, output} ->
+                Bus.broadcast("cron", %LemonCore.Event{
+                  type: :cron_run_completed,
+                  ts_ms: System.system_time(:millisecond),
+                  payload: %{
+                    run: %{
+                      id: synthetic_run_id,
+                      job_id: "timer-heartbeat-#{agent_id}",
+                      agent_id: agent_id,
+                      status: :completed
+                    },
+                    output: output
+                  }
+                })
 
-    # Break the link to avoid crashing the manager on task failure.
-    Process.unlink(pid)
+              {:error, reason} ->
+                Logger.error(
+                  "[HeartbeatManager] Timer heartbeat failed for #{agent_id}: #{inspect(reason)}"
+                )
+
+                Bus.broadcast("cron", %LemonCore.Event{
+                  type: :cron_run_completed,
+                  ts_ms: System.system_time(:millisecond),
+                  payload: %{
+                    run: %{
+                      id: synthetic_run_id,
+                      job_id: "timer-heartbeat-#{agent_id}",
+                      agent_id: agent_id,
+                      status: :failed
+                    },
+                    output: "HEARTBEAT_ERROR: #{inspect(reason)}"
+                  }
+                })
+            end
+
+          {:error, reason} ->
+            Logger.error(
+              "[HeartbeatManager] Failed to submit timer heartbeat for #{agent_id}: #{inspect(reason)}"
+            )
+
+            Bus.broadcast("cron", %LemonCore.Event{
+              type: :cron_run_completed,
+              ts_ms: System.system_time(:millisecond),
+              payload: %{
+                run: %{
+                  id: synthetic_run_id,
+                  job_id: "timer-heartbeat-#{agent_id}",
+                  agent_id: agent_id,
+                  status: :failed
+                },
+                output: "HEARTBEAT_ERROR: Failed to submit: #{inspect(reason)}"
+              }
+            })
+        end
+      end)
+
     :ok
+  end
+
+  defp start_background_task(fun) when is_function(fun, 0) do
+    case Task.Supervisor.start_child(@task_supervisor, fun) do
+      {:ok, pid} ->
+        {:ok, pid}
+
+      {:error, {:noproc, _}} ->
+        Task.start(fun)
+
+      {:error, :noproc} ->
+        Task.start(fun)
+
+      {:error, reason} ->
+        Logger.warning(
+          "[HeartbeatManager] Failed to start supervised task: #{inspect(reason)}; falling back to Task.start/1"
+        )
+
+        Task.start(fun)
+    end
   end
 
   # Wait for run completion via LemonCore.Bus events

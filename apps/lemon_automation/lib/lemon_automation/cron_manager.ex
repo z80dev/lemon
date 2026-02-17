@@ -48,6 +48,7 @@ defmodule LemonAutomation.CronManager do
   require Logger
 
   @tick_interval_ms 60_000
+  @task_supervisor LemonAutomation.TaskSupervisor
 
   # ============================================================================
   # Client API
@@ -338,12 +339,33 @@ defmodule LemonAutomation.CronManager do
     Events.emit_run_started(run, job)
 
     # Submit to router asynchronously
-    Task.start(fn ->
-      result = RunSubmitter.submit(job, run)
-      send(__MODULE__, {:run_complete, run.id, result})
-    end)
+    _ =
+      start_background_task(fn ->
+        result = RunSubmitter.submit(job, run)
+        send(__MODULE__, {:run_complete, run.id, result})
+      end)
 
     run
+  end
+
+  defp start_background_task(fun) when is_function(fun, 0) do
+    case Task.Supervisor.start_child(@task_supervisor, fun) do
+      {:ok, pid} ->
+        {:ok, pid}
+
+      {:error, {:noproc, _}} ->
+        Task.start(fun)
+
+      {:error, :noproc} ->
+        Task.start(fun)
+
+      {:error, reason} ->
+        Logger.warning(
+          "[CronManager] Failed to start supervised task: #{inspect(reason)}; falling back to Task.start/1"
+        )
+
+        Task.start(fun)
+    end
   end
 
   defp validate_params(params) do

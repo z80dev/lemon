@@ -40,6 +40,7 @@ defmodule CodingAgent.Session do
   # its end-of-run checks (avoids a race in very fast mock runs).
   @prompt_defer_ms 10
   @reset_abort_wait_ms 5_000
+  @task_supervisor CodingAgent.TaskSupervisor
 
   alias AgentCore.Types.AgentTool
   alias CodingAgent.Config
@@ -1922,17 +1923,18 @@ defmodule CodingAgent.Session do
       session_pid = self()
       model = state.model
 
-      Task.start(fn ->
-        case CodingAgent.Compaction.generate_branch_summary(branch_entries, model, []) do
-          {:ok, summary} ->
-            # Send a message back to the session to store the summary
-            send(session_pid, {:store_branch_summary, from_id, summary})
+      _ =
+        start_background_task(fn ->
+          case CodingAgent.Compaction.generate_branch_summary(branch_entries, model, []) do
+            {:ok, summary} ->
+              # Send a message back to the session to store the summary
+              send(session_pid, {:store_branch_summary, from_id, summary})
 
-          {:error, _reason} ->
-            # Silently ignore summarization failures for abandoned branches
-            :ok
-        end
-      end)
+            {:error, _reason} ->
+              # Silently ignore summarization failures for abandoned branches
+              :ok
+          end
+        end)
     end
 
     state
@@ -2041,10 +2043,11 @@ defmodule CodingAgent.Session do
 
       ui_set_working_message(state, "Compacting context...")
 
-      Task.start(fn ->
-        result = auto_compaction_task_result(session_manager, model)
-        send(session_pid, {:auto_compaction_result, signature, result})
-      end)
+      _ =
+        start_background_task(fn ->
+          result = auto_compaction_task_result(session_manager, model)
+          send(session_pid, {:auto_compaction_result, signature, result})
+        end)
 
       %{
         state
@@ -2061,5 +2064,25 @@ defmodule CodingAgent.Session do
 
   defp get_compaction_settings(%CodingAgent.SettingsManager{} = settings) do
     CodingAgent.SettingsManager.get_compaction_settings(settings)
+  end
+
+  defp start_background_task(fun) when is_function(fun, 0) do
+    case Task.Supervisor.start_child(@task_supervisor, fun) do
+      {:ok, pid} ->
+        {:ok, pid}
+
+      {:error, {:noproc, _}} ->
+        Task.start(fun)
+
+      {:error, :noproc} ->
+        Task.start(fun)
+
+      {:error, reason} ->
+        Logger.warning(
+          "Failed to start supervised session task: #{inspect(reason)}; falling back to Task.start/1"
+        )
+
+        Task.start(fun)
+    end
   end
 end

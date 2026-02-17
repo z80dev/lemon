@@ -19,6 +19,7 @@ defmodule LemonGateway.ApplicationTest do
     LemonGateway.Sms.WebhookServer,
     LemonGateway.RunSupervisor,
     LemonGateway.ThreadWorkerSupervisor,
+    LemonGateway.TaskSupervisor,
     LemonGateway.Scheduler,
     LemonGateway.Health.Server
   ]

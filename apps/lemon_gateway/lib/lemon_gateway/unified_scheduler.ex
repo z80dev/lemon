@@ -34,6 +34,7 @@ defmodule LemonGateway.UnifiedScheduler do
   alias LemonGateway.Types.Job
 
   @type lane :: :main | :subagent | :background_exec | atom()
+  @task_supervisor LemonGateway.TaskSupervisor
 
   # Client API
 
@@ -157,18 +158,19 @@ defmodule LemonGateway.UnifiedScheduler do
     job_id = generate_job_id(state)
 
     # Schedule the job through LaneQueue
-    Task.start(fn ->
-      result =
-        run_in_lane(
-          lane,
-          fn ->
-            execute_job(job)
-          end,
-          meta: %{job_id: job_id, lane: lane}
-        )
+    _ =
+      start_background_task(fn ->
+        result =
+          run_in_lane(
+            lane,
+            fn ->
+              execute_job(job)
+            end,
+            meta: %{job_id: job_id, lane: lane}
+          )
 
-      GenServer.reply(from, result)
-    end)
+        GenServer.reply(from, result)
+      end)
 
     {:noreply, %{state | job_counter: state.job_counter + 1}}
   end
@@ -177,15 +179,16 @@ defmodule LemonGateway.UnifiedScheduler do
     job_id = generate_job_id(state)
 
     # Schedule the job asynchronously
-    Task.start(fn ->
-      run_in_lane(
-        lane,
-        fn ->
-          execute_job(job)
-        end,
-        meta: %{job_id: job_id, lane: lane}
-      )
-    end)
+    _ =
+      start_background_task(fn ->
+        run_in_lane(
+          lane,
+          fn ->
+            execute_job(job)
+          end,
+          meta: %{job_id: job_id, lane: lane}
+        )
+      end)
 
     {:reply, {:ok, job_id}, %{state | job_counter: state.job_counter + 1}}
   end
@@ -229,5 +232,25 @@ defmodule LemonGateway.UnifiedScheduler do
 
   defp generate_job_id(state) do
     "job_#{state.job_counter}_#{System.unique_integer([:positive])}"
+  end
+
+  defp start_background_task(fun) when is_function(fun, 0) do
+    case Task.Supervisor.start_child(@task_supervisor, fun) do
+      {:ok, pid} ->
+        {:ok, pid}
+
+      {:error, {:noproc, _}} ->
+        Task.start(fun)
+
+      {:error, :noproc} ->
+        Task.start(fun)
+
+      {:error, reason} ->
+        Logger.warning(
+          "[UnifiedScheduler] Failed to start supervised task: #{inspect(reason)}; falling back to Task.start/1"
+        )
+
+        Task.start(fun)
+    end
   end
 end

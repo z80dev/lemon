@@ -6,6 +6,7 @@ defmodule LemonAutomation.Application do
   @impl true
   def start(_type, _args) do
     children = [
+      {Task.Supervisor, name: LemonAutomation.TaskSupervisor},
       LemonAutomation.CronManager,
       LemonAutomation.HeartbeatManager
     ]

@@ -21,6 +21,7 @@ defmodule LemonGateway.Application do
         LemonGateway.Sms.WebhookServer,
         LemonGateway.RunSupervisor,
         LemonGateway.ThreadWorkerSupervisor,
+        {Task.Supervisor, name: LemonGateway.TaskSupervisor},
         LemonGateway.Scheduler
         # lemon_channels is started explicitly by the top-level runtime app (or by
         # starting :lemon_control_plane / :lemon_channels directly). LemonGateway
