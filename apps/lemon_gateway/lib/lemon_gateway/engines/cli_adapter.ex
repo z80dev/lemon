@@ -125,7 +125,15 @@ defmodule LemonGateway.Engines.CliAdapter do
   defp gateway_extra_tools("lemon", job, opts) do
     cwd = job.cwd || Map.get(opts, :cwd) || File.cwd!()
 
+    cron_tool =
+      LemonGateway.Tools.Cron.tool(
+        cwd,
+        session_key: job.session_key,
+        agent_id: job_agent_id(job)
+      )
+
     sms_tools = [
+      cron_tool,
       LemonGateway.Tools.SmsGetInboxNumber.tool(cwd),
       LemonGateway.Tools.SmsWaitForCode.tool(cwd, session_key: job.session_key),
       LemonGateway.Tools.SmsListMessages.tool(cwd, session_key: job.session_key),
@@ -157,6 +165,24 @@ defmodule LemonGateway.Engines.CliAdapter do
     end
   rescue
     _ -> false
+  end
+
+  defp job_agent_id(job) do
+    meta = job.meta || %{}
+
+    agent_id =
+      meta[:agent_id] ||
+        meta["agent_id"] ||
+        LemonCore.SessionKey.agent_id(job.session_key || "")
+
+    case agent_id do
+      id when is_binary(id) ->
+        id = String.trim(id)
+        if id == "", do: nil, else: id
+
+      _ ->
+        nil
+    end
   end
 
   defp consume_runner(runner_module, runner_pid, engine_id, sink_pid, run_ref) do
