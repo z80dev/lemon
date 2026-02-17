@@ -846,12 +846,20 @@ defmodule LemonRouter.StreamCoalescer do
                 {:ok, _ref} ->
                   %{state | pending_resume_indices: pending.()}
 
+                {:error, :duplicate} ->
+                  Logger.debug(
+                    "Skipping pending resume index tracking for duplicate final answer send " <>
+                      "(chat_id=#{inspect(chat_id)} thread_id=#{inspect(thread_id)} run_id=#{inspect(state.run_id)})"
+                  )
+
+                  state
+
                 {:error, :channels_outbox_unavailable} ->
                   state
 
                 {:error, reason} ->
                   Logger.warning("Failed to enqueue final answer send: #{inspect(reason)}")
-                  %{state | pending_resume_indices: pending.()}
+                  state
               end
 
             true ->

@@ -18,6 +18,7 @@ defmodule LemonChannels.Outbox do
   alias LemonChannels.Outbox.{Chunker, Dedupe, RateLimiter}
 
   @worker_supervisor LemonChannels.Outbox.WorkerSupervisor
+  @default_max_attempts 3
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -123,12 +124,11 @@ defmodule LemonChannels.Outbox do
         state = %{state | processing: processing}
         state = release_processing_group(state, entry, task_ref)
 
-        maybe_notify_delivery(entry.payload, result)
-
         case result do
           {:ok, _delivery_ref} ->
             # Mark as delivered for idempotency
             mark_delivered(entry.payload)
+            maybe_notify_delivery(entry.payload, result)
 
             # Continue processing queue
             send(self(), :process_queue)
@@ -138,15 +138,19 @@ defmodule LemonChannels.Outbox do
             # Retry only for retryable failures.
             #
             # `:unknown_channel` is a configuration/programming error and will never succeed by retrying.
-            if retryable_reason?(reason) and entry.attempts < 3 do
-              entry = %{entry | attempts: entry.attempts + 1}
+            if retryable_reason?(reason) and entry.attempts < max_attempts() do
+              {entry, delay_ms} = schedule_retry(entry, reason)
               queue = :queue.in(entry, state.queue)
-              Process.send_after(self(), :process_queue, retry_delay(entry.attempts))
+              Process.send_after(self(), :process_queue, delay_ms)
               {:noreply, %{state | queue: queue}}
             else
+              reason = finalize_failure_reason(reason)
+
               Logger.warning(
                 "Delivery failed after #{entry.attempts} attempts: #{inspect(reason)}"
               )
+
+              maybe_notify_delivery(entry.payload, {:error, reason})
 
               # Continue processing queue even after failure
               send(self(), :process_queue)
@@ -168,19 +172,21 @@ defmodule LemonChannels.Outbox do
 
         # Treat unexpected worker exits as delivery failures. This is the critical difference
         # from raw spawn/1: we always clean up bookkeeping and keep the queue moving.
-        result = {:error, {:worker_exit, reason}}
+        reason = {:worker_exit, reason}
 
-        maybe_notify_delivery(entry.payload, result)
-
-        if retryable_reason?(reason) and entry.attempts < 3 do
-          entry = %{entry | attempts: entry.attempts + 1}
+        if retryable_reason?(reason) and entry.attempts < max_attempts() do
+          {entry, delay_ms} = schedule_retry(entry, reason)
           queue = :queue.in(entry, state.queue)
-          Process.send_after(self(), :process_queue, retry_delay(entry.attempts))
+          Process.send_after(self(), :process_queue, delay_ms)
           {:noreply, %{state | queue: queue}}
         else
+          reason = finalize_failure_reason(reason)
+
           Logger.warning(
             "Delivery worker exited after #{entry.attempts} attempts: #{inspect(reason)}"
           )
+
+          maybe_notify_delivery(entry.payload, {:error, reason})
 
           send(self(), :process_queue)
           {:noreply, state}
@@ -258,6 +264,7 @@ defmodule LemonChannels.Outbox do
           ref: ref,
           payload: payload,
           attempts: 0,
+          available_at_ms: nil,
           chunk_index: get_in(payload.meta || %{}, [:chunk_index]) || 0,
           group_key: delivery_group_key(payload)
         }
@@ -281,28 +288,37 @@ defmodule LemonChannels.Outbox do
 
   defp do_process_available(state, min_wait_ms) do
     case dequeue_next_available(state.queue, state.processing_groups) do
-      :none ->
-        {state, min_wait_ms}
+      {:none, queue, wait_ms} ->
+        {%{state | queue: queue}, min_wait(min_wait_ms, wait_ms)}
 
-      {entry, queue} ->
+      {:ready, entry, queue, wait_ms} ->
+        min_wait_ms = min_wait(min_wait_ms, wait_ms)
+
         case RateLimiter.consume(entry.payload.channel_id, entry.payload.account_id) do
           :ok ->
             case start_delivery_task(entry) do
               {:ok, %Task{} = task} ->
                 processing = Map.put(state.processing, task.ref, entry)
                 processing_groups = Map.put(state.processing_groups, entry.group_key, task.ref)
-                state = %{state | queue: queue, processing: processing, processing_groups: processing_groups}
+
+                state = %{
+                  state
+                  | queue: queue,
+                    processing: processing,
+                    processing_groups: processing_groups
+                }
+
                 do_process_available(state, min_wait_ms)
 
               {:error, reason} ->
                 Logger.warning("Failed to start outbox delivery worker: #{inspect(reason)}")
                 requeued = :queue.in(entry, queue)
-                { %{state | queue: requeued}, min_wait_ms || 50 }
+                {%{state | queue: requeued}, min_wait(min_wait_ms, 50)}
             end
 
           {:rate_limited, wait_ms} ->
             requeued = :queue.in(entry, queue)
-            min_wait_ms = if is_integer(min_wait_ms), do: min(min_wait_ms, wait_ms), else: wait_ms
+            min_wait_ms = min_wait(min_wait_ms, wait_ms)
             do_process_available(%{state | queue: requeued}, min_wait_ms)
         end
     end
@@ -310,22 +326,52 @@ defmodule LemonChannels.Outbox do
 
   defp dequeue_next_available(queue, processing_groups) do
     len = :queue.len(queue)
-    do_dequeue_next_available(queue, processing_groups, len)
+
+    do_dequeue_next_available(
+      queue,
+      processing_groups,
+      len,
+      System.monotonic_time(:millisecond),
+      nil
+    )
   end
 
-  defp do_dequeue_next_available(_queue, _processing_groups, 0), do: :none
+  defp do_dequeue_next_available(queue, _processing_groups, 0, _now_ms, wait_ms),
+    do: {:none, queue, wait_ms}
 
-  defp do_dequeue_next_available(queue, processing_groups, remaining) do
+  defp do_dequeue_next_available(queue, processing_groups, remaining, now_ms, min_wait_ms) do
     case :queue.out(queue) do
       {:empty, _} ->
-        :none
+        {:none, queue, min_wait_ms}
 
       {{:value, entry}, rest} ->
-        if Map.has_key?(processing_groups, entry.group_key) do
-          # Group is currently in-flight; rotate to preserve per-group ordering.
-          do_dequeue_next_available(:queue.in(entry, rest), processing_groups, remaining - 1)
-        else
-          {entry, rest}
+        entry_wait_ms = entry_wait_ms(entry, now_ms)
+
+        cond do
+          entry_wait_ms > 0 ->
+            # Entry is waiting for its retry window; rotate and continue scanning.
+            min_wait_ms = min_wait(min_wait_ms, entry_wait_ms)
+
+            do_dequeue_next_available(
+              :queue.in(entry, rest),
+              processing_groups,
+              remaining - 1,
+              now_ms,
+              min_wait_ms
+            )
+
+          Map.has_key?(processing_groups, entry.group_key) ->
+            # Group is currently in-flight; rotate to preserve per-group ordering.
+            do_dequeue_next_available(
+              :queue.in(entry, rest),
+              processing_groups,
+              remaining - 1,
+              now_ms,
+              min_wait_ms
+            )
+
+          true ->
+            {:ready, entry, rest, min_wait_ms}
         end
     end
   end
@@ -344,7 +390,9 @@ defmodule LemonChannels.Outbox do
 
   defp delivery_group_key(%OutboundPayload{} = payload) do
     peer = payload.peer || %{}
-    {payload.channel_id, payload.account_id, Map.get(peer, :kind), Map.get(peer, :id), Map.get(peer, :thread_id)}
+
+    {payload.channel_id, payload.account_id, Map.get(peer, :kind), Map.get(peer, :id),
+     Map.get(peer, :thread_id)}
   end
 
   defp start_delivery_task(entry) do
@@ -441,12 +489,110 @@ defmodule LemonChannels.Outbox do
     Dedupe.mark(channel_id, key)
   end
 
-  defp retry_delay(attempt) do
+  defp max_attempts do
+    case Application.get_env(:lemon_channels, __MODULE__, []) do
+      opts when is_list(opts) ->
+        case Keyword.get(opts, :max_attempts, @default_max_attempts) do
+          value when is_integer(value) and value >= 0 -> value
+          _ -> @default_max_attempts
+        end
+
+      _ ->
+        @default_max_attempts
+    end
+  end
+
+  defp schedule_retry(entry, reason) do
+    attempt = entry.attempts + 1
+    delay_ms = retry_delay(attempt, reason)
+    available_at_ms = System.monotonic_time(:millisecond) + delay_ms
+    {%{entry | attempts: attempt, available_at_ms: available_at_ms}, delay_ms}
+  end
+
+  defp retry_delay(attempt, reason) do
+    max(exponential_retry_delay(attempt), retry_after_ms(reason))
+  end
+
+  defp exponential_retry_delay(attempt) do
     # Exponential backoff: 1s, 2s, 4s
     :math.pow(2, attempt - 1) |> round() |> Kernel.*(1000)
   end
 
+  defp retry_after_ms({:http_error, 429, body}) do
+    parse_retry_after_ms(body)
+  end
+
+  defp retry_after_ms({:worker_exit, reason}) do
+    retry_after_ms(reason)
+  end
+
+  defp retry_after_ms(_reason), do: 0
+
+  defp parse_retry_after_ms(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, decoded} ->
+        parse_retry_after_ms(decoded)
+
+      _ ->
+        parse_retry_after_ms_from_text(body)
+    end
+  end
+
+  defp parse_retry_after_ms(body) when is_map(body) do
+    with params when is_map(params) <- body["parameters"] || body[:parameters],
+         seconds when is_number(seconds) <- params["retry_after"] || params[:retry_after],
+         true <- seconds > 0 do
+      trunc(seconds * 1000)
+    else
+      _ -> 0
+    end
+  end
+
+  defp parse_retry_after_ms(_body), do: 0
+
+  defp parse_retry_after_ms_from_text(body) do
+    case Regex.run(~r/retry after (\d+(?:\.\d+)?)/i, body, capture: :all_but_first) do
+      [seconds] ->
+        case Float.parse(seconds) do
+          {value, _} when value > 0 -> trunc(value * 1000)
+          _ -> 0
+        end
+
+      _ ->
+        0
+    end
+  end
+
+  defp finalize_failure_reason(reason) do
+    case retry_after_ms(reason) do
+      ms when is_integer(ms) and ms > 0 ->
+        {:rate_limited, %{reason: reason, retry_after_ms: ms}}
+
+      _ ->
+        reason
+    end
+  end
+
+  defp entry_wait_ms(%{available_at_ms: nil}, _now_ms), do: 0
+
+  defp entry_wait_ms(%{available_at_ms: available_at_ms}, now_ms)
+       when is_integer(available_at_ms) do
+    max(available_at_ms - now_ms, 0)
+  end
+
+  defp entry_wait_ms(_entry, _now_ms), do: 0
+
+  defp min_wait(nil, nil), do: nil
+  defp min_wait(nil, wait_ms), do: wait_ms
+  defp min_wait(wait_ms, nil), do: wait_ms
+  defp min_wait(wait_a, wait_b), do: min(wait_a, wait_b)
+
   defp retryable_reason?(:unknown_channel), do: false
+
+  defp retryable_reason?({:http_error, status, _reason})
+       when status >= 400 and status < 500 and status != 429, do: false
+
+  defp retryable_reason?({:worker_exit, _reason}), do: false
   defp retryable_reason?(:normal), do: true
   defp retryable_reason?(:shutdown), do: true
   defp retryable_reason?(_reason), do: true

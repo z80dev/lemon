@@ -586,8 +586,10 @@ defmodule LemonRouter.StreamCoalescerTest do
                  final_text: ""
                )
 
-      assert_receive {:outbox_api_call, {:send, 12_340, "Done", %{reply_to_message_id: 222}, nil}},
+      assert_receive {:outbox_api_call,
+                      {:send, 12_340, "Done", %{reply_to_message_id: 222}, nil}},
                      500
+
       refute_receive {:outbox_api_call, {:delete, 12_340, 111}}, 200
       refute_receive {:outbox_api_call, {:edit, 12_340, 111, _text, _opts}}, 200
     end
@@ -731,6 +733,40 @@ defmodule LemonRouter.StreamCoalescerTest do
       [{pid, _}] = Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id})
       state = :sys.get_state(pid)
       assert state.run_id == run_id_2
+    end
+
+    test "telegram finalize does not track pending resume index when enqueue returns duplicate" do
+      session_key = "agent:test:telegram:botx:group:12350:thread:779"
+      channel_id = "telegram"
+      run_id = "run_#{System.unique_integer([:positive])}"
+      resume = %LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_duplicate"}
+      idempotency_key = "#{run_id}:final:send"
+
+      assert :ok =
+               StreamCoalescer.finalize_run(session_key, channel_id, run_id,
+                 meta: %{resume: resume, user_msg_id: 222},
+                 final_text: "Final answer"
+               )
+
+      [{pid, _}] = Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id})
+
+      assert eventually(fn ->
+               state = :sys.get_state(pid)
+               map_size(state.pending_resume_indices) == 0
+             end)
+
+      assert eventually(fn ->
+               LemonChannels.Outbox.Dedupe.check("telegram", idempotency_key) == :duplicate
+             end)
+
+      assert :ok =
+               StreamCoalescer.finalize_run(session_key, channel_id, run_id,
+                 meta: %{resume: resume, user_msg_id: 222},
+                 final_text: "Final answer"
+               )
+
+      state = :sys.get_state(pid)
+      assert map_size(state.pending_resume_indices) == 0
     end
 
     test "stale pending resume index is cleaned up when delivery notify never arrives" do

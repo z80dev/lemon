@@ -58,6 +58,33 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
     end
   end
 
+  defmodule MockApiPhotoRateLimitedOnce do
+    @attempt_key {__MODULE__, :attempt}
+
+    def reset, do: :persistent_term.put(@attempt_key, 0)
+    def clear, do: :persistent_term.erase(@attempt_key)
+
+    def send_photo(_token, chat_id, {:path, path}, opts) do
+      attempt = :persistent_term.get(@attempt_key, 0) + 1
+      :persistent_term.put(@attempt_key, attempt)
+      send(self(), {:send_photo_attempt, attempt, chat_id, path, opts})
+
+      if attempt == 1 do
+        body =
+          Jason.encode!(%{
+            "ok" => false,
+            "error_code" => 429,
+            "description" => "Too Many Requests: retry later",
+            "parameters" => %{"retry_after" => 1}
+          })
+
+        {:error, {:http_error, 429, body}}
+      else
+        {:ok, %{"ok" => true, "result" => %{"message_id" => 333}}}
+      end
+    end
+  end
+
   defmodule MockApiNotFound do
     def delete_message(_token, _chat_id, _message_id) do
       body =
@@ -86,6 +113,7 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
 
   setup do
     old = Application.get_env(:lemon_gateway, :telegram)
+    MockApiPhotoRateLimitedOnce.reset()
 
     on_exit(fn ->
       if old == nil do
@@ -93,13 +121,15 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
       else
         Application.put_env(:lemon_gateway, :telegram, old)
       end
+
+      MockApiPhotoRateLimitedOnce.clear()
     end)
 
     :ok
   end
 
   test "text: renders markdown into Telegram entities by default" do
-    Application.put_env(:lemon_gateway, :telegram, %{bot_token: "token", api_mod: MockApiCapture})
+    put_telegram_config(%{bot_token: "token", api_mod: MockApiCapture})
 
     payload =
       %OutboundPayload{
@@ -119,7 +149,7 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
   end
 
   test "text: respects use_markdown = false and sends literal markdown" do
-    Application.put_env(:lemon_gateway, :telegram, %{
+    put_telegram_config(%{
       bot_token: "token",
       api_mod: MockApiCapture,
       use_markdown: false
@@ -142,7 +172,7 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
   end
 
   test "edit: renders markdown into Telegram entities by default" do
-    Application.put_env(:lemon_gateway, :telegram, %{bot_token: "token", api_mod: MockApiCapture})
+    put_telegram_config(%{bot_token: "token", api_mod: MockApiCapture})
 
     payload =
       %OutboundPayload{
@@ -162,7 +192,7 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
   end
 
   test "delete: 400 message to delete not found is treated as success" do
-    Application.put_env(:lemon_gateway, :telegram, %{bot_token: "token", api_mod: MockApiNotFound})
+    put_telegram_config(%{bot_token: "token", api_mod: MockApiNotFound})
 
     payload =
       %OutboundPayload{
@@ -177,7 +207,7 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
   end
 
   test "delete: other 400s are returned as errors" do
-    Application.put_env(:lemon_gateway, :telegram, %{bot_token: "token", api_mod: MockApiOther400})
+    put_telegram_config(%{bot_token: "token", api_mod: MockApiOther400})
 
     payload =
       %OutboundPayload{
@@ -192,7 +222,7 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
   end
 
   test "file: image paths use send_photo when available" do
-    Application.put_env(:lemon_gateway, :telegram, %{bot_token: "token", api_mod: MockApiCapture})
+    put_telegram_config(%{bot_token: "token", api_mod: MockApiCapture})
 
     path =
       Path.join(System.tmp_dir!(), "outbound-image-#{System.unique_integer([:positive])}.png")
@@ -219,7 +249,7 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
   end
 
   test "file: non-image paths fallback to send_document" do
-    Application.put_env(:lemon_gateway, :telegram, %{
+    put_telegram_config(%{
       bot_token: "token",
       api_mod: MockApiDocumentOnly
     })
@@ -243,7 +273,7 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
   end
 
   test "file: image batches use send_media_group when available" do
-    Application.put_env(:lemon_gateway, :telegram, %{bot_token: "token", api_mod: MockApiCapture})
+    put_telegram_config(%{bot_token: "token", api_mod: MockApiCapture})
 
     path1 =
       Path.join(System.tmp_dir!(), "outbound-batch-1-#{System.unique_integer([:positive])}.png")
@@ -284,7 +314,7 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
   end
 
   test "file: image batches fallback to sequential sends when media group API is unavailable" do
-    Application.put_env(:lemon_gateway, :telegram, %{
+    put_telegram_config(%{
       bot_token: "token",
       api_mod: MockApiNoMediaGroup
     })
@@ -338,7 +368,7 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
   end
 
   test "file: image batches fallback to sequential sends when media group call fails" do
-    Application.put_env(:lemon_gateway, :telegram, %{
+    put_telegram_config(%{
       bot_token: "token",
       api_mod: MockApiMediaGroupFails
     })
@@ -389,5 +419,53 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
     assert second_opts[:caption] == "Second"
     refute Map.has_key?(second_opts, :reply_to_message_id)
     assert second_opts[:message_thread_id] == 777
+  end
+
+  test "file: retries send_photo when Telegram responds with 429 retry_after" do
+    put_telegram_config(%{bot_token: "token", api_mod: MockApiPhotoRateLimitedOnce})
+
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "outbound-rate-limit-#{System.unique_integer([:positive])}.png"
+      )
+
+    File.write!(path, "png")
+    on_exit(fn -> File.rm(path) end)
+
+    payload =
+      %OutboundPayload{
+        channel_id: "telegram",
+        account_id: "acct",
+        peer: %{kind: :dm, id: "123", thread_id: "777"},
+        kind: :file,
+        content: %{path: path, caption: "Retry me"},
+        reply_to: "456"
+      }
+
+    assert {:ok, _} = Outbound.deliver(payload)
+
+    assert_receive {:send_photo_attempt, 1, 123, ^path, first_opts}
+    assert first_opts[:reply_to_message_id] == 456
+    assert first_opts[:caption] == "Retry me"
+
+    assert_receive {:send_photo_attempt, 2, 123, ^path, second_opts}, 2_000
+    assert second_opts[:reply_to_message_id] == 456
+    assert second_opts[:caption] == "Retry me"
+  end
+
+  defp put_telegram_config(config) when is_map(config) do
+    base = %{files: %{outbound_send_delay_ms: 0}}
+    Application.put_env(:lemon_gateway, :telegram, deep_merge(base, config))
+  end
+
+  defp deep_merge(left, right) when is_map(left) and is_map(right) do
+    Map.merge(left, right, fn _key, left_val, right_val ->
+      if is_map(left_val) and is_map(right_val) do
+        deep_merge(left_val, right_val)
+      else
+        right_val
+      end
+    end)
   end
 end
