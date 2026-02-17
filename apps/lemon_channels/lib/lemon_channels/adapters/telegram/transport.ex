@@ -3228,7 +3228,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     session_key = pending[:session_key] || pending["session_key"]
 
     with true <- is_binary(approval_id) and is_binary(session_key),
-         %{kind: :channel_peer, channel_id: "telegram", account_id: account_id, peer_id: peer_id} <-
+         %{
+           kind: :channel_peer,
+           channel_id: "telegram",
+           account_id: account_id,
+           peer_id: peer_id,
+           thread_id: thread_id
+         } <-
            LemonCore.SessionKey.parse(session_key),
          true <- is_nil(account_id) or account_id == state.account_id,
          chat_id when is_integer(chat_id) <- parse_int(peer_id) do
@@ -3254,7 +3260,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         ]
       }
 
-      opts = %{"reply_markup" => reply_markup}
+      topic_id = parse_int(thread_id)
+
+      opts =
+        %{"reply_markup" => reply_markup}
+        |> maybe_put("message_thread_id", topic_id)
+
       _ = state.api_mod.send_message(state.token, chat_id, text, opts)
       :ok
     else

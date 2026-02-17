@@ -412,6 +412,47 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     assert CoreStore.get(:telegram_pending_compaction, pending_key) == nil
   end
 
+  test "approval requests for topic sessions are posted in the same topic" do
+    chat_id = System.unique_integer([:positive])
+    topic_id = 320
+    approval_id = "ap_#{System.unique_integer([:positive])}"
+
+    session_key =
+      SessionKey.channel_peer(%{
+        agent_id: "default",
+        channel_id: "telegram",
+        account_id: "default",
+        peer_kind: :group,
+        peer_id: Integer.to_string(chat_id),
+        thread_id: Integer.to_string(topic_id)
+      })
+
+    assert {:ok, transport_pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               deny_unbound_chats: false
+             })
+
+    event =
+      LemonCore.Event.new(
+        :approval_requested,
+        %{
+          approval_id: approval_id,
+          pending: %{
+            session_key: session_key,
+            tool: "shell",
+            action: %{"cmd" => "pwd"}
+          }
+        }
+      )
+
+    send(transport_pid, event)
+
+    assert_receive {:send_message, ^chat_id, text, opts, _parse_mode}, 800
+    assert text =~ "Approval requested"
+    assert opts["message_thread_id"] == topic_id
+  end
+
   defp start_transport(overrides) when is_map(overrides) do
     token = "token-" <> Integer.to_string(System.unique_integer([:positive]))
 
