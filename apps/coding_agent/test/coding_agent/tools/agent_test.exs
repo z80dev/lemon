@@ -36,6 +36,10 @@ defmodule CodingAgent.Tools.AgentTest do
     end
   end
 
+  defmodule UnknownAgentRunOrchestrator do
+    def submit(%RunRequest{}), do: {:error, {:unknown_agent_id, "missing-agent"}}
+  end
+
   setup do
     start_supervised!(StubRunOrchestrator)
     StubRunOrchestrator.configure(self())
@@ -50,11 +54,12 @@ defmodule CodingAgent.Tools.AgentTest do
   end
 
   test "tool/2 returns definition with run and poll actions" do
-    tool = AgentTool.tool("/tmp")
+    tool = AgentTool.tool("/tmp", available_agent_ids: ["oracle", "coder"])
     assert tool.name == "agent"
     assert tool.label == "Delegate To Agent"
     assert is_function(tool.execute, 4)
     assert tool.parameters["properties"]["action"]["enum"] == ["run", "poll"]
+    assert tool.parameters["properties"]["agent_id"]["enum"] == ["coder", "default", "oracle"]
   end
 
   test "execute run async queues delegated run and poll returns completion" do
@@ -222,6 +227,22 @@ defmodule CodingAgent.Tools.AgentTest do
                nil,
                "/tmp",
                []
+             )
+  end
+
+  test "run returns explicit unknown agent error from router" do
+    assert {:error, "Unknown agent_id: missing-agent"} =
+             AgentTool.execute(
+               "call_1",
+               %{
+                 "agent_id" => "missing-agent",
+                 "prompt" => "hi",
+                 "async" => true
+               },
+               nil,
+               nil,
+               "/tmp",
+               run_orchestrator: UnknownAgentRunOrchestrator
              )
   end
 

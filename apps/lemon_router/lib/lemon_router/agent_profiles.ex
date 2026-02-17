@@ -24,6 +24,14 @@ defmodule LemonRouter.AgentProfiles do
   end
 
   @doc """
+  Check whether an agent profile key exists.
+  """
+  @spec exists?(agent_id :: binary()) :: boolean()
+  def exists?(agent_id) do
+    GenServer.call(__MODULE__, {:exists, agent_id})
+  end
+
+  @doc """
   List all agent profiles.
   """
   @spec list() :: [map()]
@@ -49,6 +57,10 @@ defmodule LemonRouter.AgentProfiles do
   def handle_call({:get, agent_id}, _from, state) do
     profile = Map.get(state.profiles, agent_id, default_profile())
     {:reply, profile, state}
+  end
+
+  def handle_call({:exists, agent_id}, _from, state) do
+    {:reply, Map.has_key?(state.profiles, agent_id), state}
   end
 
   def handle_call(:list, _from, state) do

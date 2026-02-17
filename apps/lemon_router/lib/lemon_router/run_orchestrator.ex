@@ -124,130 +124,131 @@ defmodule LemonRouter.RunOrchestrator do
 
     # Get session policies (includes model, thinkingLevel, and tool_policy)
     session_config = get_session_config(session_key)
-    agent_profile = get_agent_profile(agent_id)
 
-    # Resolve base tool policy from agent/session/channel
-    base_tool_policy =
-      Policy.resolve_for_run(%{
-        agent_id: agent_id,
-        session_key: session_key,
-        origin: origin,
-        channel_context: meta[:channel_context]
-      })
+    with {:ok, agent_profile} <- get_agent_profile(agent_id) do
+      # Resolve base tool policy from agent/session/channel
+      base_tool_policy =
+        Policy.resolve_for_run(%{
+          agent_id: agent_id,
+          session_key: session_key,
+          origin: origin,
+          channel_context: meta[:channel_context]
+        })
 
-    # Merge agent profile tool policy before operator overrides.
-    profile_tool_policy = normalize_profile_tool_policy(agent_profile)
+      # Merge agent profile tool policy before operator overrides.
+      profile_tool_policy = normalize_profile_tool_policy(agent_profile)
 
-    base_tool_policy =
-      if is_map(profile_tool_policy) and map_size(profile_tool_policy) > 0 do
-        Policy.merge(base_tool_policy, profile_tool_policy)
-      else
-        base_tool_policy
-      end
-
-    # Merge in operator-provided tool_policy override
-    # Operator overrides take highest precedence
-    tool_policy =
-      if tool_policy_override && is_map(tool_policy_override) do
-        Policy.merge(base_tool_policy, tool_policy_override)
-      else
-        base_tool_policy
-      end
-
-    # Resolve cwd: operator override > meta cwd > gateway default
-    cwd = resolve_effective_cwd(cwd_override, meta)
-
-    # Extract explicit resume token from prompt or reply-to (Telegram) context.
-    # If a resume token is present, prefer its engine and strip strict resume lines
-    # from the prompt so we don't send `codex resume ...` as the user prompt.
-    {resume, prompt} = extract_resume_and_strip_prompt(prompt, meta)
-
-    prompt =
-      if meta[:voice_transcribed] do
-        base = prompt || ""
-        "(voice transcribed) " <> base
-      else
-        prompt
-      end
-
-    session_model = session_config[:model] || session_config["model"]
-    session_thinking_level = session_config[:thinking_level] || session_config["thinking_level"]
-    profile_model = map_get(agent_profile, :model)
-    profile_default_engine = map_get(agent_profile, :default_engine)
-    profile_system_prompt = map_get(agent_profile, :system_prompt)
-
-    explicit_model = map_get(meta, :model)
-    explicit_system_prompt = map_get(meta, :system_prompt)
-
-    resolved_model = explicit_model || session_model || profile_model
-    resolved_model_engine = map_model_to_engine(resolved_model)
-    resolved_thinking_level = session_thinking_level
-    resolved_system_prompt = explicit_system_prompt || profile_system_prompt
-
-    # Resolve engine_id: explicit param > model-as-engine (if engine-like) > profile default > nil
-    resolved_engine_id =
-      cond do
-        match?(%ResumeToken{}, resume) ->
-          # Resume must win; otherwise scheduler won't apply the resume token.
-          resume.engine
-
-        is_binary(engine_id) and engine_id != "" ->
-          engine_id
-
-        is_binary(resolved_model_engine) and resolved_model_engine != "" ->
-          resolved_model_engine
-
-        is_binary(profile_default_engine) and profile_default_engine != "" ->
-          profile_default_engine
-
-        true ->
-          nil
-      end
-
-    # Build gateway job
-    enriched_meta =
-      meta
-      |> Map.merge(%{
-        origin: origin,
-        agent_id: agent_id,
-        thinking_level: resolved_thinking_level,
-        model: resolved_model
-      })
-      |> maybe_put(:system_prompt, resolved_system_prompt)
-
-    job = %LemonGateway.Types.Job{
-      run_id: run_id,
-      session_key: session_key,
-      prompt: prompt,
-      engine_id: resolved_engine_id,
-      cwd: cwd,
-      resume: resume,
-      queue_mode: queue_mode,
-      lane: meta[:lane] || :main,
-      tool_policy: tool_policy,
-      meta: enriched_meta
-    }
-
-    # Start run process
-    case start_run_process(orchestrator_state, run_id, session_key, job) do
-      {:ok, _pid} ->
-        # Subscribe control-plane EventBridge to run events for WS delivery
-        subscribe_event_bridge(run_id)
-
-        # Emit telemetry
-        LemonCore.Telemetry.run_submit(session_key, origin, resolved_engine_id || "default")
-        {:ok, run_id}
-
-      {:error, reason} ->
-        if reason == :run_capacity_reached do
-          Logger.warning(
-            "Run admission control rejected run_id=#{inspect(run_id)} session_key=#{inspect(session_key)}: #{inspect(reason)}"
-          )
+      base_tool_policy =
+        if is_map(profile_tool_policy) and map_size(profile_tool_policy) > 0 do
+          Policy.merge(base_tool_policy, profile_tool_policy)
         else
-          Logger.error("Failed to start run process: #{inspect(reason)}")
+          base_tool_policy
         end
 
-        {:error, reason}
+      # Merge in operator-provided tool_policy override
+      # Operator overrides take highest precedence
+      tool_policy =
+        if tool_policy_override && is_map(tool_policy_override) do
+          Policy.merge(base_tool_policy, tool_policy_override)
+        else
+          base_tool_policy
+        end
+
+      # Resolve cwd: operator override > meta cwd > gateway default
+      cwd = resolve_effective_cwd(cwd_override, meta)
+
+      # Extract explicit resume token from prompt or reply-to (Telegram) context.
+      # If a resume token is present, prefer its engine and strip strict resume lines
+      # from the prompt so we don't send `codex resume ...` as the user prompt.
+      {resume, prompt} = extract_resume_and_strip_prompt(prompt, meta)
+
+      prompt =
+        if meta[:voice_transcribed] do
+          base = prompt || ""
+          "(voice transcribed) " <> base
+        else
+          prompt
+        end
+
+      session_model = session_config[:model] || session_config["model"]
+      session_thinking_level = session_config[:thinking_level] || session_config["thinking_level"]
+      profile_model = map_get(agent_profile, :model)
+      profile_default_engine = map_get(agent_profile, :default_engine)
+      profile_system_prompt = map_get(agent_profile, :system_prompt)
+
+      explicit_model = map_get(meta, :model)
+      explicit_system_prompt = map_get(meta, :system_prompt)
+
+      resolved_model = explicit_model || session_model || profile_model
+      resolved_model_engine = map_model_to_engine(resolved_model)
+      resolved_thinking_level = session_thinking_level
+      resolved_system_prompt = explicit_system_prompt || profile_system_prompt
+
+      # Resolve engine_id: explicit param > model-as-engine (if engine-like) > profile default > nil
+      resolved_engine_id =
+        cond do
+          match?(%ResumeToken{}, resume) ->
+            # Resume must win; otherwise scheduler won't apply the resume token.
+            resume.engine
+
+          is_binary(engine_id) and engine_id != "" ->
+            engine_id
+
+          is_binary(resolved_model_engine) and resolved_model_engine != "" ->
+            resolved_model_engine
+
+          is_binary(profile_default_engine) and profile_default_engine != "" ->
+            profile_default_engine
+
+          true ->
+            nil
+        end
+
+      # Build gateway job
+      enriched_meta =
+        meta
+        |> Map.merge(%{
+          origin: origin,
+          agent_id: agent_id,
+          thinking_level: resolved_thinking_level,
+          model: resolved_model
+        })
+        |> maybe_put(:system_prompt, resolved_system_prompt)
+
+      job = %LemonGateway.Types.Job{
+        run_id: run_id,
+        session_key: session_key,
+        prompt: prompt,
+        engine_id: resolved_engine_id,
+        cwd: cwd,
+        resume: resume,
+        queue_mode: queue_mode,
+        lane: meta[:lane] || :main,
+        tool_policy: tool_policy,
+        meta: enriched_meta
+      }
+
+      # Start run process
+      case start_run_process(orchestrator_state, run_id, session_key, job) do
+        {:ok, _pid} ->
+          # Subscribe control-plane EventBridge to run events for WS delivery
+          subscribe_event_bridge(run_id)
+
+          # Emit telemetry
+          LemonCore.Telemetry.run_submit(session_key, origin, resolved_engine_id || "default")
+          {:ok, run_id}
+
+        {:error, reason} ->
+          if reason == :run_capacity_reached do
+            Logger.warning(
+              "Run admission control rejected run_id=#{inspect(run_id)} session_key=#{inspect(session_key)}: #{inspect(reason)}"
+            )
+          else
+            Logger.error("Failed to start run process: #{inspect(reason)}")
+          end
+
+          {:error, reason}
+      end
     end
   end
 
@@ -335,16 +336,54 @@ defmodule LemonRouter.RunOrchestrator do
 
   defp known_engine_id?(_), do: false
 
-  defp get_agent_profile(nil), do: %{}
-
-  defp get_agent_profile(agent_id) do
-    case AgentProfiles.get(agent_id) do
-      profile when is_map(profile) -> profile
-      _ -> %{}
+  defp get_agent_profile(agent_id) when is_binary(agent_id) do
+    if agent_profile_exists?(agent_id) do
+      case AgentProfiles.get(agent_id) do
+        profile when is_map(profile) -> {:ok, profile}
+        _ -> {:ok, %{}}
+      end
+    else
+      {:error, {:unknown_agent_id, agent_id}}
     end
   rescue
-    _ -> %{}
+    _ ->
+      if fallback_agent_profile_exists?(agent_id) do
+        {:ok, %{}}
+      else
+        {:error, {:unknown_agent_id, agent_id}}
+      end
+  catch
+    :exit, _ ->
+      if fallback_agent_profile_exists?(agent_id) do
+        {:ok, %{}}
+      else
+        {:error, {:unknown_agent_id, agent_id}}
+      end
   end
+
+  defp get_agent_profile(_), do: {:error, {:unknown_agent_id, nil}}
+
+  defp agent_profile_exists?(agent_id) when is_binary(agent_id) and agent_id != "" do
+    AgentProfiles.exists?(agent_id) == true
+  rescue
+    _ -> fallback_agent_profile_exists?(agent_id)
+  catch
+    :exit, _ -> fallback_agent_profile_exists?(agent_id)
+  end
+
+  defp agent_profile_exists?(_), do: false
+
+  defp fallback_agent_profile_exists?(agent_id) when is_binary(agent_id) and agent_id != "" do
+    cfg = LemonCore.Config.cached()
+    agents = map_get(cfg, :agents) || %{}
+    Map.has_key?(agents, agent_id) or agent_id == "default"
+  rescue
+    _ -> agent_id == "default"
+  catch
+    :exit, _ -> agent_id == "default"
+  end
+
+  defp fallback_agent_profile_exists?(_), do: false
 
   defp normalize_profile_tool_policy(profile) when is_map(profile) do
     case map_get(profile, :tool_policy) do

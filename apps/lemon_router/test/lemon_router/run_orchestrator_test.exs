@@ -79,8 +79,16 @@ defmodule LemonRouter.RunOrchestratorTest do
       nil ->
         {:ok, pid} = RunOrchestrator.start_link([])
 
+        original_profiles_state = :sys.get_state(LemonRouter.AgentProfiles)
+
+        :sys.replace_state(LemonRouter.AgentProfiles, fn state ->
+          %{state | profiles: Map.put_new(state.profiles, "test", test_profile())}
+        end)
+
         on_exit(fn ->
           if Process.alive?(pid), do: GenServer.stop(pid)
+
+          :sys.replace_state(LemonRouter.AgentProfiles, fn _ -> original_profiles_state end)
 
           if engine_registry_started_here? and is_pid(engine_pid) and Process.alive?(engine_pid) do
             GenServer.stop(engine_pid)
@@ -90,7 +98,15 @@ defmodule LemonRouter.RunOrchestratorTest do
         {:ok, orchestrator_pid: pid}
 
       pid ->
+        original_profiles_state = :sys.get_state(LemonRouter.AgentProfiles)
+
+        :sys.replace_state(LemonRouter.AgentProfiles, fn state ->
+          %{state | profiles: Map.put_new(state.profiles, "test", test_profile())}
+        end)
+
         on_exit(fn ->
+          :sys.replace_state(LemonRouter.AgentProfiles, fn _ -> original_profiles_state end)
+
           if engine_registry_started_here? and is_pid(engine_pid) and Process.alive?(engine_pid) do
             GenServer.stop(engine_pid)
           end
@@ -153,6 +169,21 @@ defmodule LemonRouter.RunOrchestratorTest do
           }
         ])
       end
+    end
+
+    test "returns unknown_agent_id error for unconfigured agent" do
+      result =
+        RunOrchestrator.submit(
+          request(%{
+            origin: :control_plane,
+            session_key: "agent:missing-agent:main",
+            agent_id: "missing-agent",
+            prompt: "Hello",
+            queue_mode: :collect
+          })
+        )
+
+      assert {:error, {:unknown_agent_id, "missing-agent"}} = result
     end
   end
 
@@ -549,6 +580,20 @@ defmodule LemonRouter.RunOrchestratorTest do
   end
 
   defp request(attrs), do: RunRequest.new(attrs)
+
+  defp test_profile do
+    %{
+      id: "test",
+      name: "Test Agent",
+      description: nil,
+      avatar: nil,
+      default_engine: "lemon",
+      tool_policy: nil,
+      system_prompt: nil,
+      model: nil,
+      rate_limit: nil
+    }
+  end
 
   defp profile_map_with_oracle(model \\ "openai-codex:gpt-5.3-codex") do
     %{

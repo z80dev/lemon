@@ -29,6 +29,8 @@ defmodule CodingAgent.Tools.Agent do
   """
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
+    agent_id_property = build_agent_id_property(cwd, opts)
+
     %AgentTool{
       name: "agent",
       description: build_description(),
@@ -41,10 +43,7 @@ defmodule CodingAgent.Tools.Agent do
             "enum" => @valid_actions,
             "description" => "Action to perform: run (default) or poll"
           },
-          "agent_id" => %{
-            "type" => "string",
-            "description" => "Target agent id for action=run"
-          },
+          "agent_id" => agent_id_property,
           "prompt" => %{
             "type" => "string",
             "description" => "Prompt to send to the delegated agent"
@@ -307,6 +306,7 @@ defmodule CodingAgent.Tools.Agent do
     case router.submit(request) do
       {:ok, run_id} when is_binary(run_id) -> {:ok, run_id}
       {:ok, other} -> {:error, "Unexpected run id: #{inspect(other)}"}
+      {:error, {:unknown_agent_id, agent_id}} -> {:error, "Unknown agent_id: #{agent_id}"}
       {:error, reason} -> {:error, "Delegated run submission failed: #{inspect(reason)}"}
     end
   end
@@ -821,4 +821,87 @@ defmodule CodingAgent.Tools.Agent do
     """
     |> String.trim()
   end
+
+  defp build_agent_id_property(cwd, opts) do
+    ids = resolve_available_agent_ids(cwd, opts)
+
+    base = %{
+      "type" => "string",
+      "description" => "Target agent id for action=run"
+    }
+
+    if ids == [] do
+      base
+    else
+      base
+      |> Map.put("enum", ids)
+      |> Map.put(
+        "description",
+        "Target agent id for action=run. Available: #{Enum.join(ids, ", ")}"
+      )
+    end
+  end
+
+  defp resolve_available_agent_ids(cwd, opts) do
+    case Keyword.get(opts, :available_agent_ids) do
+      ids when is_list(ids) ->
+        normalize_agent_ids(ids)
+
+      _ ->
+        load_config_agent_ids(cwd, opts)
+    end
+  end
+
+  defp load_config_agent_ids(cwd, opts) do
+    config =
+      case Keyword.get(opts, :config) do
+        cfg when is_map(cfg) -> cfg
+        _ -> LemonCore.Config.cached(cwd)
+      end
+
+    ids =
+      case map_get(config, :agents) do
+        agents when is_map(agents) -> Map.keys(agents)
+        _ -> []
+      end
+
+    normalize_agent_ids(ids)
+  rescue
+    _ -> ["default"]
+  catch
+    :exit, _ -> ["default"]
+  end
+
+  defp normalize_agent_ids(ids) when is_list(ids) do
+    ids
+    |> Enum.map(&normalize_agent_id/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> ensure_default_agent_id()
+    |> Enum.sort()
+  end
+
+  defp normalize_agent_ids(_), do: ["default"]
+
+  defp normalize_agent_id(id) when is_binary(id) do
+    id = String.trim(id)
+    if id == "", do: nil, else: id
+  end
+
+  defp normalize_agent_id(id) when is_atom(id), do: normalize_agent_id(Atom.to_string(id))
+  defp normalize_agent_id(_), do: nil
+
+  defp ensure_default_agent_id(ids) do
+    if "default" in ids do
+      ids
+    else
+      ["default" | ids]
+    end
+  end
+
+  defp map_get(map, key) when is_map(map) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  end
+
+  defp map_get(_, _), do: nil
 end
