@@ -532,8 +532,7 @@ defmodule LemonCore.Config do
 
     base = default_agent_profile(id, cfg)
 
-    # Allow both "default_engine" and legacy "engine"
-    default_engine = cfg["default_engine"] || cfg["engine"]
+    default_engine = cfg["default_engine"]
 
     tool_policy = parse_tool_policy(cfg["tool_policy"])
 

@@ -62,7 +62,6 @@ defmodule LemonCore.StoreTest do
   describe "run history ordering/backfill" do
     test "get_run_history orders finalized runs by newest started_at first" do
       token = unique_token()
-      scope = scope(token, :history)
       session_key = session_key(token)
 
       oldest = run_id(token, :oldest)
@@ -73,9 +72,9 @@ defmodule LemonCore.StoreTest do
       :ok = Store.put(:runs, middle, %{events: [%{step: 2}], summary: nil, started_at: 2_000})
       :ok = Store.put(:runs, newest, %{events: [%{step: 3}], summary: nil, started_at: 3_000})
 
-      :ok = Store.finalize_run(oldest, %{scope: scope, session_key: session_key})
-      :ok = Store.finalize_run(middle, %{scope: scope, session_key: session_key})
-      :ok = Store.finalize_run(newest, %{scope: scope, session_key: session_key})
+      :ok = Store.finalize_run(oldest, %{session_key: session_key})
+      :ok = Store.finalize_run(middle, %{session_key: session_key})
+      :ok = Store.finalize_run(newest, %{session_key: session_key})
 
       history = Store.get_run_history(session_key, limit: 10)
 
@@ -83,25 +82,22 @@ defmodule LemonCore.StoreTest do
       assert Enum.map(history, fn {_run_id, data} -> data.started_at end) == [3_000, 2_000, 1_000]
     end
 
-    test "supports backfilled run_history rows and applies ordering/limit consistently" do
+    test "applies ordering/limit consistently for canonical run_history rows" do
       token = unique_token()
-      scope = scope(token, :backfill)
       session_key = session_key(token)
 
-      tuple_run = run_id(token, :tuple)
-      backfilled_run = run_id(token, :backfilled)
-      legacy_scope_run = run_id(token, :legacy_scope)
+      older_run = run_id(token, :older)
+      newer_run = run_id(token, :newer)
 
       :ok =
         Store.put(
           :run_history,
-          {session_key, 2_000, tuple_run},
+          {session_key, 2_000, older_run},
           %{
-            events: [%{kind: :tuple}],
-            summary: %{scope: scope, session_key: session_key},
+            events: [%{kind: :older}],
+            summary: %{session_key: session_key},
             session_key: session_key,
-            scope: scope,
-            run_id: tuple_run,
+            run_id: older_run,
             started_at: 2_000
           }
         )
@@ -109,42 +105,21 @@ defmodule LemonCore.StoreTest do
       :ok =
         Store.put(
           :run_history,
-          "backfill_row_#{token}",
+          {session_key, 3_000, newer_run},
           %{
-            events: [%{kind: :backfill}],
-            summary: %{scope: scope, session_key: session_key},
+            events: [%{kind: :newer}],
+            summary: %{session_key: session_key},
             session_key: session_key,
-            scope: scope,
-            run_id: backfilled_run,
-            started_at: 1_500
+            run_id: newer_run,
+            started_at: 3_000
           }
         )
-
-      :ok =
-        Store.put(
-          :run_history,
-          {scope, 1_000, legacy_scope_run},
-          %{
-            events: [%{kind: :legacy_scope}],
-            summary: %{scope: scope},
-            scope: scope,
-            started_at: 1_000
-          }
-        )
-
-      scoped_history = Store.get_run_history(scope, limit: 10)
-
-      assert Enum.map(scoped_history, &elem(&1, 0)) == [
-               tuple_run,
-               backfilled_run,
-               legacy_scope_run
-             ]
-
-      scoped_limited = Store.get_run_history(scope, limit: 2)
-      assert Enum.map(scoped_limited, &elem(&1, 0)) == [tuple_run, backfilled_run]
 
       session_history = Store.get_run_history(session_key, limit: 10)
-      assert Enum.map(session_history, &elem(&1, 0)) == [tuple_run, backfilled_run]
+      assert Enum.map(session_history, &elem(&1, 0)) == [newer_run, older_run]
+
+      session_limited = Store.get_run_history(session_key, limit: 1)
+      assert Enum.map(session_limited, &elem(&1, 0)) == [newer_run]
     end
   end
 

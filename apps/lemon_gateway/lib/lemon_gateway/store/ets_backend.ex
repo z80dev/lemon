@@ -1,6 +1,6 @@
 defmodule LemonGateway.Store.EtsBackend do
   @moduledoc """
-  Backwards-compatible alias for `LemonCore.Store.EtsBackend`.
+  ETS store backend adapter for gateway callers.
   """
 
   @behaviour LemonCore.Store.Backend

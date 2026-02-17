@@ -15,7 +15,7 @@ defmodule LemonGateway.RunSupervisorTest do
   use ExUnit.Case, async: false
 
   alias LemonGateway.RunSupervisor
-  alias LemonGateway.Types.{ChatScope, Job}
+  alias LemonGateway.Types.Job
   alias LemonGateway.Event
 
   # ============================================================================
@@ -51,7 +51,7 @@ defmodule LemonGateway.RunSupervisorTest do
       {:ok, task_pid} =
         Task.start(fn ->
           send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
-          answer = "Quick: #{job.text}"
+          answer = "Quick: #{job.prompt}"
 
           send(
             sink_pid,
@@ -103,7 +103,7 @@ defmodule LemonGateway.RunSupervisorTest do
         Task.start(fn ->
           send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
           Process.sleep(delay_ms)
-          answer = "Slow: #{job.text}"
+          answer = "Slow: #{job.prompt}"
 
           send(
             sink_pid,
@@ -212,17 +212,27 @@ defmodule LemonGateway.RunSupervisorTest do
   end
 
   defp make_scope(chat_id \\ System.unique_integer([:positive])) do
-    %ChatScope{transport: :test, chat_id: chat_id, topic_id: nil}
+    "test:#{chat_id}"
   end
 
-  defp make_job(scope, opts \\ []) do
+  defp make_job(session_key, opts \\ []) do
+    user_msg_id = Keyword.get(opts, :user_msg_id, 1)
+    base_meta = %{notify_pid: self(), user_msg_id: user_msg_id}
+    meta_opt = Keyword.get(opts, :meta, %{})
+
+    meta =
+      cond do
+        is_nil(meta_opt) -> nil
+        is_map(meta_opt) -> Map.merge(base_meta, meta_opt)
+        true -> meta_opt
+      end
+
     %Job{
-      scope: scope,
-      user_msg_id: Keyword.get(opts, :user_msg_id, 1),
-      text: Keyword.get(opts, :text, "test message"),
+      session_key: session_key,
+      prompt: Keyword.get(opts, :prompt, Keyword.get(opts, :text, "test message")),
       queue_mode: Keyword.get(opts, :queue_mode, :collect),
-      engine_hint: Keyword.get(opts, :engine_hint, "quick"),
-      meta: Keyword.get(opts, :meta, %{notify_pid: self()})
+      engine_id: Keyword.get(opts, :engine_id, Keyword.get(opts, :engine_hint, "quick")),
+      meta: meta
     }
   end
 

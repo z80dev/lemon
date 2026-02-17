@@ -94,18 +94,28 @@ defmodule LemonGateway.SchedulerTest do
   # Test helper to create a minimal job
   defp make_job(opts \\ []) do
     scope = Keyword.get(opts, :scope, %ChatScope{transport: :test, chat_id: 1, topic_id: nil})
-    text = Keyword.get(opts, :text, "test message")
+    session_key = Keyword.get(opts, :session_key, scope_to_session_key(scope))
+    prompt = Keyword.get(opts, :text, Keyword.get(opts, :prompt, "test message"))
     resume = Keyword.get(opts, :resume, nil)
+    user_msg_id = Keyword.get(opts, :user_msg_id, 1)
+    meta = Map.merge(%{user_msg_id: user_msg_id}, Keyword.get(opts, :meta, %{}))
 
     %Job{
-      scope: scope,
-      user_msg_id: Keyword.get(opts, :user_msg_id, 1),
-      text: text,
+      session_key: session_key,
+      prompt: prompt,
       resume: resume,
-      engine_hint: Keyword.get(opts, :engine_hint, "echo"),
-      meta: Keyword.get(opts, :meta, %{})
+      engine_id: Keyword.get(opts, :engine_hint, Keyword.get(opts, :engine_id, "echo")),
+      meta: meta
     }
   end
+
+  defp scope_to_session_key(%ChatScope{transport: transport, chat_id: chat_id, topic_id: topic_id}) do
+    topic = if is_nil(topic_id), do: "main", else: topic_id
+    "#{transport}:#{chat_id}:#{topic}"
+  end
+
+  defp scope_to_session_key(scope) when is_binary(scope), do: scope
+  defp scope_to_session_key(scope), do: inspect(scope)
 
   describe "Scheduler unit tests (isolated GenServer)" do
     setup do
@@ -198,8 +208,8 @@ defmodule LemonGateway.SchedulerTest do
         {:ok, _} = start_supervised({Registry, keys: :unique, name: LemonGateway.ThreadRegistry})
       end
 
-      scope = {:blocking_enqueue, System.unique_integer([:positive])}
-      thread_key = {:scope, scope}
+      session_key = "blocking_enqueue:#{System.unique_integer([:positive])}"
+      thread_key = {:session, session_key}
 
       {:ok, _worker_pid} =
         start_supervised(
@@ -214,7 +224,7 @@ defmodule LemonGateway.SchedulerTest do
         worker_counts: %{}
       }
 
-      job = make_job(scope: scope)
+      job = make_job(session_key: session_key)
 
       {elapsed_us, {:noreply, new_state}} =
         :timer.tc(fn ->
@@ -993,15 +1003,12 @@ defmodule LemonGateway.SchedulerTest do
 
     test "job with resume token creates thread_key from engine and value" do
       resume = %ResumeToken{engine: "claude", value: "session-abc"}
-      scope = %ChatScope{transport: :test, chat_id: 999}
 
       job = %Job{
-        scope: scope,
-        user_msg_id: 1,
-        text: "test",
+        prompt: "test",
         resume: resume,
-        engine_hint: "echo",
-        meta: %{}
+        engine_id: "echo",
+        meta: %{user_msg_id: 1}
       }
 
       # Submit should succeed
@@ -1019,9 +1026,8 @@ defmodule LemonGateway.SchedulerTest do
       job = %Job{
         session_key: session_key,
         prompt: "test",
-        text: "test",
         resume: resume,
-        engine_hint: SlowEngine.id(),
+        engine_id: SlowEngine.id(),
         meta: %{delay_ms: 200}
       }
 
@@ -1034,16 +1040,15 @@ defmodule LemonGateway.SchedulerTest do
       assert LemonGateway.ThreadRegistry.whereis({resume.engine, resume.value}) == nil
     end
 
-    test "job without resume token creates thread_key from scope" do
-      scope = %ChatScope{transport: :test, chat_id: 888, topic_id: 42}
+    test "job without resume token creates thread_key from session_key" do
+      session_key = "test:888:42"
 
       job = %Job{
-        scope: scope,
-        user_msg_id: 1,
-        text: "test",
+        session_key: session_key,
+        prompt: "test",
         resume: nil,
-        engine_hint: "echo",
-        meta: %{}
+        engine_id: "echo",
+        meta: %{user_msg_id: 1}
       }
 
       assert :ok == Scheduler.submit(job)

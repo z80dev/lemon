@@ -20,7 +20,7 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
 
   alias LemonGateway.Engines.Claude
   alias LemonGateway.Engines.CliAdapter
-  alias LemonGateway.Types.{ChatScope, Job}
+  alias LemonGateway.Types.Job
   alias LemonGateway.Event
 
   alias AgentCore.CliRunners.Types.{
@@ -456,42 +456,42 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
 
   describe "Job struct for Claude engine" do
     test "creates valid job for Claude" do
-      scope = %ChatScope{transport: :telegram, chat_id: 123}
+      session_key = "telegram:123"
 
       job = %Job{
-        scope: scope,
-        user_msg_id: 456,
-        text: "Hello Claude",
-        engine_hint: "claude"
+        session_key: session_key,
+        prompt: "Hello Claude",
+        engine_id: "claude",
+        meta: %{user_msg_id: 456}
       }
 
-      assert job.text == "Hello Claude"
-      assert job.engine_hint == "claude"
+      assert job.prompt == "Hello Claude"
+      assert job.engine_id == "claude"
       assert job.resume == nil
     end
 
     test "creates job with resume token" do
-      scope = %ChatScope{transport: :telegram, chat_id: 123}
+      session_key = "telegram:123"
       resume = %LemonGateway.Types.ResumeToken{engine: "claude", value: "sess_abc"}
 
       job = %Job{
-        scope: scope,
-        user_msg_id: 456,
-        text: "Continue",
-        resume: resume
+        session_key: session_key,
+        prompt: "Continue",
+        resume: resume,
+        meta: %{user_msg_id: 456}
       }
 
       assert job.resume.value == "sess_abc"
     end
 
     test "creates job with various queue modes" do
-      scope = %ChatScope{transport: :telegram, chat_id: 123}
+      session_key = "telegram:123"
 
       for mode <- [:collect, :followup, :steer, :interrupt] do
         job = %Job{
-          scope: scope,
-          user_msg_id: 1,
-          text: "test",
+          session_key: session_key,
+          prompt: "test",
+          meta: %{user_msg_id: 1},
           queue_mode: mode
         }
 

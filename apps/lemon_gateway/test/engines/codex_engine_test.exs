@@ -480,42 +480,41 @@ defmodule LemonGateway.Engines.CodexEngineTest do
 
   describe "Job struct for Codex engine" do
     test "creates valid job for Codex" do
-      scope = %ChatScope{transport: :telegram, chat_id: 123}
+      session_key = "telegram:123"
 
       job = %Job{
-        scope: scope,
-        user_msg_id: 456,
-        text: "Hello Codex",
-        engine_hint: "codex"
+        session_key: session_key,
+        prompt: "Hello Codex",
+        engine_id: "codex",
+        meta: %{user_msg_id: 456}
       }
 
-      assert job.text == "Hello Codex"
-      assert job.engine_hint == "codex"
+      assert job.prompt == "Hello Codex"
+      assert job.engine_id == "codex"
       assert job.resume == nil
     end
 
     test "creates job with resume token" do
-      scope = %ChatScope{transport: :telegram, chat_id: 123}
+      session_key = "telegram:123"
       resume = %LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_abc"}
 
       job = %Job{
-        scope: scope,
-        user_msg_id: 456,
-        text: "Continue",
-        resume: resume
+        session_key: session_key,
+        prompt: "Continue",
+        resume: resume,
+        meta: %{user_msg_id: 456}
       }
 
       assert job.resume.value == "thread_abc"
     end
 
     test "creates job with metadata" do
-      scope = %ChatScope{transport: :telegram, chat_id: 123}
+      session_key = "telegram:123"
 
       job = %Job{
-        scope: scope,
-        user_msg_id: 1,
-        text: "test",
-        meta: %{source: "api", priority: :high}
+        session_key: session_key,
+        prompt: "test",
+        meta: %{source: "api", priority: :high, user_msg_id: 1}
       }
 
       assert job.meta.source == "api"

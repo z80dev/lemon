@@ -10,7 +10,7 @@ defmodule LemonGateway.RunTransportAgnosticTest do
   use ExUnit.Case, async: false
 
   alias LemonGateway.Run
-  alias LemonGateway.Types.{ChatScope, Job, ResumeToken}
+  alias LemonGateway.Types.{Job, ResumeToken}
   alias LemonGateway.Event
 
   # Test engine that sends deltas
@@ -107,18 +107,21 @@ defmodule LemonGateway.RunTransportAgnosticTest do
   end
 
   defp make_scope(chat_id \\ System.unique_integer([:positive])) do
-    %ChatScope{transport: :test, chat_id: chat_id, topic_id: nil}
+    "test:#{chat_id}"
   end
 
-  defp make_job(scope, opts) do
+  defp make_job(session_key, opts) do
+    user_msg_id = Keyword.get(opts, :user_msg_id, 1)
+    base_meta = %{notify_pid: self(), user_msg_id: user_msg_id}
+    meta = Map.merge(base_meta, Keyword.get(opts, :meta, %{}))
+
     %Job{
-      scope: scope,
-      user_msg_id: Keyword.get(opts, :user_msg_id, 1),
-      text: Keyword.get(opts, :text, "test message"),
+      session_key: session_key,
+      prompt: Keyword.get(opts, :text, Keyword.get(opts, :prompt, "test message")),
       queue_mode: Keyword.get(opts, :queue_mode, :collect),
-      engine_hint: Keyword.get(opts, :engine_hint, "delta_test"),
+      engine_id: Keyword.get(opts, :engine_hint, Keyword.get(opts, :engine_id, "delta_test")),
       resume: Keyword.get(opts, :resume),
-      meta: Keyword.get(opts, :meta, %{notify_pid: self()})
+      meta: meta
     }
   end
 
@@ -226,13 +229,12 @@ defmodule LemonGateway.RunTransportAgnosticTest do
       run_id = "run_#{System.unique_integer()}"
 
       job = %Job{
-        scope: scope,
+        session_key: scope,
         run_id: run_id,
-        user_msg_id: 1,
-        text: "test",
+        prompt: "test",
         queue_mode: :collect,
-        engine_hint: "echo",
-        meta: %{notify_pid: self()}
+        engine_id: "echo",
+        meta: %{notify_pid: self(), user_msg_id: 1}
       }
 
       # Subscribe to bus
@@ -261,13 +263,12 @@ defmodule LemonGateway.RunTransportAgnosticTest do
       run_id = "run_#{System.unique_integer()}"
 
       job = %Job{
-        scope: scope,
+        session_key: scope,
         run_id: run_id,
-        user_msg_id: 1,
-        text: "test",
+        prompt: "test",
         queue_mode: :collect,
-        engine_hint: "echo",
-        meta: %{notify_pid: self()}
+        engine_id: "echo",
+        meta: %{notify_pid: self(), user_msg_id: 1}
       }
 
       # Subscribe to bus

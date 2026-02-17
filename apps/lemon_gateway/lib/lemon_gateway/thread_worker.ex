@@ -192,10 +192,14 @@ defmodule LemonGateway.ThreadWorker do
 
   # Try to merge a followup job with the last followup job in the queue
   defp merge_with_last_followup(queue, new_job) do
-    case :queue.out_r(queue) do
+      case :queue.out_r(queue) do
       {{:value, %Job{queue_mode: :followup} = last_job}, rest_queue} ->
-        # Merge by concatenating text with newline separator
-        merged_job = %{last_job | text: last_job.text <> "\n" <> new_job.text}
+        merged_job = %{
+          last_job
+          | prompt: merge_prompt(last_job.prompt, new_job.prompt),
+            meta: merge_user_message_meta(last_job.meta, new_job.meta)
+        }
+
         {:merged, :queue.in(merged_job, rest_queue)}
 
       _ ->
@@ -372,8 +376,7 @@ defmodule LemonGateway.ThreadWorker do
   @doc """
   Coalesces consecutive :collect jobs at the front of the queue into a single job.
 
-  Merges text with newline separator, keeps the scope from the first job,
-  and uses the user_msg_id from the last job.
+  Merges prompts with newline separators and keeps the latest user message metadata.
   """
   def coalesce_collect_jobs(queue) do
     case :queue.out(queue) do
@@ -414,11 +417,36 @@ defmodule LemonGateway.ThreadWorker do
   end
 
   # Merge multiple :collect jobs into one
-  # Keeps scope from first, user_msg_id from last, concatenates text
+  # Keeps base job identity, concatenates prompt text, and carries latest user message metadata.
   defp merge_collect_jobs([first | _] = jobs) do
     last = List.last(jobs)
-    merged_text = jobs |> Enum.map(& &1.text) |> Enum.join("\n")
+    merged_prompt = jobs |> Enum.map(&(&1.prompt || "")) |> Enum.join("\n")
 
-    %{first | text: merged_text, user_msg_id: last.user_msg_id}
+    %{
+      first
+      | prompt: merged_prompt,
+        meta: merge_user_message_meta(first.meta, last.meta)
+    }
   end
+
+  defp merge_prompt(nil, right), do: right || ""
+  defp merge_prompt(left, nil), do: left
+  defp merge_prompt(left, right), do: left <> "\n" <> right
+
+  defp merge_user_message_meta(left, right) when is_map(left) and is_map(right) do
+    right_user_msg_id = Map.get(right, :user_msg_id) || Map.get(right, "user_msg_id")
+
+    if is_nil(right_user_msg_id) do
+      Map.merge(left, right)
+    else
+      left
+      |> Map.merge(right)
+      |> Map.put(:user_msg_id, right_user_msg_id)
+      |> Map.delete("user_msg_id")
+    end
+  end
+
+  defp merge_user_message_meta(left, _right) when is_map(left), do: left
+  defp merge_user_message_meta(_left, right) when is_map(right), do: right
+  defp merge_user_message_meta(_left, _right), do: %{}
 end

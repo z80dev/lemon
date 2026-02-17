@@ -28,7 +28,7 @@ defmodule LemonGateway.Run do
   use GenServer
   require Logger
 
-  alias LemonGateway.{BindingResolver, ChatState, Cwd, Event, Store}
+  alias LemonGateway.{ChatState, Cwd, Event, Store}
   alias LemonGateway.Types.{Job, ResumeToken}
 
   @max_logged_error_bytes 4_096
@@ -51,7 +51,7 @@ defmodule LemonGateway.Run do
 
   @impl true
   def init(%{job: %Job{} = job, slot_ref: slot_ref, worker_pid: worker_pid} = args) do
-    # Acquire engine lock based on thread_key (derived from scope/resume/session_key)
+    # Acquire engine lock based on thread_key (derived from resume/session_key)
     lock_result = maybe_acquire_lock(job)
 
     case lock_result do
@@ -129,14 +129,6 @@ defmodule LemonGateway.Run do
 
   defp session_key_from_job(%Job{session_key: key}) when is_binary(key), do: key
 
-  defp session_key_from_job(%Job{scope: %LemonGateway.Types.ChatScope{} = scope}) do
-    LemonGateway.Types.Job.Legacy.session_key_from_scope(scope)
-  end
-
-  defp session_key_from_job(%Job{scope: scope}) when not is_nil(scope) do
-    "scope:#{inspect(scope)}"
-  end
-
   defp session_key_from_job(_), do: "default"
 
   defp maybe_acquire_lock(job) do
@@ -152,17 +144,13 @@ defmodule LemonGateway.Run do
     end
   end
 
-  # Derive lock key from job - use resume token value if present, otherwise session_key or scope
+  # Derive lock key from job - use resume token value if present, otherwise session_key.
   defp lock_key_for(%Job{resume: %ResumeToken{value: value}}) when is_binary(value) do
     {:resume, value}
   end
 
   defp lock_key_for(%Job{session_key: session_key}) when is_binary(session_key) do
     {:session, session_key}
-  end
-
-  defp lock_key_for(%Job{scope: scope}) when not is_nil(scope) do
-    {:scope, scope}
   end
 
   defp lock_key_for(_), do: {:default, :global}
@@ -193,20 +181,11 @@ defmodule LemonGateway.Run do
     else
       renderer_state = state.renderer.init(%{engine: engine})
 
-      # Resolve cwd from job or scope; fall back to gateway default/home for unbound sessions.
+      # Resolve cwd from explicit job value; otherwise use gateway default/home.
       cwd =
         cond do
           is_binary(job.cwd) and String.trim(job.cwd) != "" ->
             Path.expand(job.cwd)
-
-          not is_nil(job.scope) ->
-            case BindingResolver.resolve_cwd(job.scope) do
-              cwd when is_binary(cwd) ->
-                if String.trim(cwd) == "", do: Cwd.default_cwd(), else: Path.expand(cwd)
-
-              _ ->
-                Cwd.default_cwd()
-            end
 
           true ->
             Cwd.default_cwd()
@@ -361,8 +340,7 @@ defmodule LemonGateway.Run do
 
   @impl true
   def handle_cast({:steer, %Job{} = job, worker_pid}, state) do
-    # Use effective prompt from job
-    steer_text = Job.get_prompt(job) || job.text
+    steer_text = job.prompt || ""
 
     cond do
       # Run already completed - reject steer
@@ -397,7 +375,7 @@ defmodule LemonGateway.Run do
   end
 
   def handle_cast({:steer_backlog, %Job{} = job, worker_pid}, state) do
-    steer_text = Job.get_prompt(job) || job.text
+    steer_text = job.prompt || ""
 
     cond do
       # Run already completed - reject steer_backlog
@@ -458,19 +436,12 @@ defmodule LemonGateway.Run do
   end
 
   defp engine_id_for(%Job{} = job) do
-    # Check new field first, then legacy
     cond do
       is_binary(job.engine_id) ->
         job.engine_id
 
-      not is_nil(job.scope) ->
-        BindingResolver.resolve_engine(job.scope, job.engine_hint, job.resume)
-
       not is_nil(job.resume) ->
         job.resume.engine
-
-      is_binary(job.engine_hint) ->
-        job.engine_hint
 
       true ->
         LemonGateway.Config.get(:default_engine) || "lemon"
@@ -522,12 +493,10 @@ defmodule LemonGateway.Run do
     )
 
     if state.run_ref do
-      # Include prompt in summary for complete chat history
-      prompt = LemonGateway.Types.Job.get_prompt(state.job) || state.job.prompt
+      prompt = state.job.prompt
 
       LemonGateway.Store.finalize_run(state.run_ref, %{
         completed: completed,
-        scope: state.job.scope,
         session_key: state.session_key,
         run_id: state.run_id,
         prompt: prompt,
@@ -723,7 +692,6 @@ defmodule LemonGateway.Run do
   end
 
   defp maybe_store_chat_state(%Job{} = job, %Event.Completed{resume: %ResumeToken{} = resume}) do
-    store_chat_state(job.scope, resume)
     store_chat_state(job.session_key, resume)
   end
 
@@ -741,87 +709,44 @@ defmodule LemonGateway.Run do
     Store.put_chat_state(key, chat_state)
   end
 
-  defp register_progress_mapping(%Job{meta: meta, scope: scope}, run_pid)
-       when not is_nil(scope) do
+  defp register_progress_mapping(%Job{} = job, run_pid) do
+    meta = job.meta
+    keys = progress_mapping_keys(job)
     progress_msg_id = meta && meta[:progress_msg_id]
     status_msg_id = meta && meta[:status_msg_id]
 
-    if progress_msg_id do
-      LemonGateway.Store.put_progress_mapping(scope, progress_msg_id, run_pid)
-    end
-
-    if status_msg_id do
-      LemonGateway.Store.put_progress_mapping(scope, status_msg_id, run_pid)
-    end
+    Enum.each(keys, fn key ->
+      if progress_msg_id, do: LemonGateway.Store.put_progress_mapping(key, progress_msg_id, run_pid)
+      if status_msg_id, do: LemonGateway.Store.put_progress_mapping(key, status_msg_id, run_pid)
+    end)
   end
 
-  defp register_progress_mapping(_, _), do: :ok
-
-  defp unregister_progress_mapping(%Job{meta: meta, scope: scope}) when not is_nil(scope) do
+  defp unregister_progress_mapping(%Job{} = job) do
+    meta = job.meta
+    keys = progress_mapping_keys(job)
     progress_msg_id = meta && meta[:progress_msg_id]
     status_msg_id = meta && meta[:status_msg_id]
 
-    if progress_msg_id do
-      LemonGateway.Store.delete_progress_mapping(scope, progress_msg_id)
-    end
-
-    if status_msg_id do
-      LemonGateway.Store.delete_progress_mapping(scope, status_msg_id)
-    end
+    Enum.each(keys, fn key ->
+      if progress_msg_id, do: LemonGateway.Store.delete_progress_mapping(key, progress_msg_id)
+      if status_msg_id, do: LemonGateway.Store.delete_progress_mapping(key, status_msg_id)
+    end)
   end
 
-  defp unregister_progress_mapping(_), do: :ok
-
-  defp maybe_update_progress(%{job: %Job{} = job} = state, {:render, %{text: text}})
-       when is_binary(text) do
-    with %LemonGateway.Types.ChatScope{transport: :telegram, chat_id: chat_id} <- job.scope,
-         progress_msg_id when not is_nil(progress_msg_id) <-
-           job.meta && job.meta[:progress_msg_id] do
-      engine = if is_atom(state.engine), do: state.engine, else: nil
-
-      _ =
-        enqueue_telegram_progress_edit(chat_id, progress_msg_id, text,
-          engine: engine,
-          topic_id: job.scope.topic_id
-        )
+  defp progress_mapping_keys(%Job{} = job) do
+    if is_binary(job.session_key) and job.session_key != "" do
+      [job.session_key]
     else
-      _ -> :ok
+      []
     end
   end
 
   defp maybe_update_progress(_state, _render_action), do: :ok
 
-  defp enqueue_telegram_progress_edit(chat_id, message_id, text, opts) do
-    delivery_mod = Module.concat([LemonChannels, Telegram, Delivery])
-
-    if Code.ensure_loaded?(delivery_mod) and function_exported?(delivery_mod, :enqueue_edit, 4) do
-      _ = apply(delivery_mod, :enqueue_edit, [chat_id, message_id, text, opts])
-      :ok
-    else
-      :ok
-    end
-  rescue
-    _ -> :ok
-  end
-
   # Telemetry emission helpers for run lifecycle events
   # Uses LemonCore.Telemetry for consistent event naming across the umbrella
 
   defp emit_telemetry_start(run_id, meta) do
-    # Emit both legacy [:lemon_gateway, :run, :start] and new [:lemon, :run, :start]
-    # for backwards compatibility during migration
-    LemonCore.Telemetry.emit(
-      [:lemon_gateway, :run, :start],
-      %{system_time: System.system_time()},
-      %{
-        run_id: run_id,
-        session_key: meta[:session_key],
-        engine: meta[:engine],
-        origin: meta[:origin]
-      }
-    )
-
-    # New canonical telemetry via LemonCore.Telemetry
     if Code.ensure_loaded?(LemonCore.Telemetry) do
       LemonCore.Telemetry.run_start(run_id, %{
         session_key: meta[:session_key],
@@ -831,19 +756,7 @@ defmodule LemonGateway.Run do
     end
   end
 
-  defp emit_telemetry_first_token(run_id, meta, latency_ms) do
-    # Legacy event
-    LemonCore.Telemetry.emit(
-      [:lemon_gateway, :run, :first_token],
-      %{latency_ms: latency_ms, system_time: System.system_time()},
-      %{
-        run_id: run_id,
-        session_key: meta[:session_key],
-        engine: meta[:engine]
-      }
-    )
-
-    # New canonical telemetry
+  defp emit_telemetry_first_token(run_id, _meta, latency_ms) do
     if Code.ensure_loaded?(LemonCore.Telemetry) do
       # Calculate start time from latency
       start_ts_ms = System.system_time(:millisecond) - latency_ms
@@ -851,20 +764,7 @@ defmodule LemonGateway.Run do
     end
   end
 
-  defp emit_telemetry_stop(run_id, meta, duration_ms, ok?) do
-    # Legacy event
-    LemonCore.Telemetry.emit(
-      [:lemon_gateway, :run, :stop],
-      %{duration_ms: duration_ms, system_time: System.system_time()},
-      %{
-        run_id: run_id,
-        session_key: meta[:session_key],
-        engine: meta[:engine],
-        ok: ok?
-      }
-    )
-
-    # New canonical telemetry
+  defp emit_telemetry_stop(run_id, _meta, duration_ms, ok?) do
     if Code.ensure_loaded?(LemonCore.Telemetry) do
       LemonCore.Telemetry.run_stop(run_id, duration_ms, ok?)
     end

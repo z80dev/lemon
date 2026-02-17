@@ -91,8 +91,7 @@ defmodule LemonGateway.Engines.CliAdapter do
         _ -> nil
       end
 
-    # Use Job.get_prompt/1 to get effective prompt (handles legacy text field)
-    prompt = LemonGateway.Types.Job.get_prompt(job)
+    prompt = job.prompt
 
     start_opts = [
       prompt: prompt,

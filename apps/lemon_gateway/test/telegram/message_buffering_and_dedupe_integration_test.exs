@@ -215,8 +215,8 @@ defmodule LemonGateway.Telegram.MessageBufferingAndDedupeIntegrationTest do
     assert_receive {:job_captured, %Job{} = job}, 2_000
 
     assert job.prompt == "hello\n\nworld"
-    assert job.text == "hello\n\nworld"
-    assert job.user_msg_id == 2
+    assert job.prompt == "hello\n\nworld"
+    assert job.meta.user_msg_id == 2
 
     # Ensure we didn't accidentally submit a second run for the first message.
     refute_receive {:job_captured, %Job{}}, 200

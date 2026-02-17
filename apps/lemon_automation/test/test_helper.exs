@@ -6,8 +6,7 @@ Application.put_env(:lemon_gateway, LemonGateway.Config, %{
 
 Application.delete_env(:lemon_gateway, :telegram)
 
-# LemonAutomation uses LemonCore.Store, which currently delegates to LemonGateway.Store.
-# Ensure the gateway app (and Store) is running for these tests.
+# Ensure runtime dependencies are started for automation tests.
 _ = Application.stop(:lemon_gateway)
 {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 

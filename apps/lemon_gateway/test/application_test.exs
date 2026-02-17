@@ -979,17 +979,16 @@ defmodule LemonGateway.ApplicationTest do
     test "can submit a job after startup" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-      alias LemonGateway.Types.{ChatScope, Job}
+      alias LemonGateway.Types.Job
 
-      scope = %ChatScope{transport: :test, chat_id: 1, topic_id: nil}
+      session_key = "test:1"
 
       job = %Job{
-        scope: scope,
-        user_msg_id: 1,
-        text: "test message",
+        session_key: session_key,
+        prompt: "test message",
         resume: nil,
-        engine_hint: "echo",
-        meta: %{notify_pid: self()}
+        engine_id: "echo",
+        meta: %{notify_pid: self(), user_msg_id: 1}
       }
 
       # Submit should succeed

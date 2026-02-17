@@ -3,34 +3,18 @@ defmodule LemonCore.SessionKeyTest do
 
   alias LemonCore.SessionKey
 
-  describe "parse/1 legacy telegram format" do
-    test "parses legacy key without extras" do
-      assert %{
-               agent_id: "default",
-               kind: :channel_peer,
-               channel_id: "telegram",
-               account_id: "bot123",
-               peer_kind: :dm,
-               peer_id: "chat456",
-               thread_id: nil,
-               sub_id: nil
-             } = SessionKey.parse("channel:telegram:bot123:chat456")
-    end
+  describe "parse/1 validation" do
+    test "rejects non-canonical legacy telegram format" do
+      assert {:error, :invalid} = SessionKey.parse("channel:telegram:bot123:chat456")
 
-    test "parses legacy key with thread and sub extras" do
-      assert %{
-               thread_id: "topic42",
-               sub_id: "msg123"
-             } = SessionKey.parse("channel:telegram:bot123:chat456:thread:topic42:sub:msg123")
+      assert {:error, :invalid} =
+               SessionKey.parse("channel:telegram:bot123:chat456:thread:topic42:sub:msg123")
     end
   end
 
   describe "extras handling" do
-    test "ignores unknown key/value extras" do
-      assert %{
-               thread_id: "topic42",
-               sub_id: "msg123"
-             } =
+    test "rejects unknown key/value extras" do
+      assert {:error, :invalid} ==
                SessionKey.parse(
                  "agent:a:telegram:bot:dm:peer42:future_key:future_value:thread:topic42:sub:msg123"
                )
@@ -41,6 +25,11 @@ defmodule LemonCore.SessionKeyTest do
 
       assert {:error, :invalid} =
                SessionKey.parse("agent:a:telegram:bot:dm:peer42:sub:msg123:extra")
+    end
+
+    test "returns invalid for duplicate extras" do
+      assert {:error, :invalid} =
+               SessionKey.parse("agent:a:telegram:bot:dm:peer42:thread:topic42:thread:topic99")
     end
   end
 

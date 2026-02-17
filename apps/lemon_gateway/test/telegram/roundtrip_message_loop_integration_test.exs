@@ -441,6 +441,23 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
     opts[:message_thread_id] || opts["message_thread_id"]
   end
 
+  defp telegram_session_key(chat_id, topic_id \\ nil) do
+    opts = %{
+      agent_id: "default",
+      channel_id: "telegram",
+      account_id: "default",
+      peer_kind: "dm",
+      peer_id: Integer.to_string(chat_id)
+    }
+
+    opts =
+      if is_nil(topic_id),
+        do: opts,
+        else: Map.put(opts, :thread_id, Integer.to_string(topic_id))
+
+    LemonCore.SessionKey.channel_peer(opts)
+  end
+
   test "incoming message produces final reply" do
     start_system!()
 
@@ -556,12 +573,12 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
     assert_receive {:telegram_api_call, {:send_message, ^chat_id, "Running…", _opts, _pm}}, 2_000
 
     # Wait until the gateway indexes the progress message id so cancel-by-reply can resolve it.
-    scope = %LemonGateway.Types.ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
+    session_key = telegram_session_key(chat_id)
 
     assert :ok ==
              wait_until(
                fn ->
-                 is_pid(LemonGateway.Store.get_run_by_progress(scope, running_msg_id))
+                 is_pid(LemonGateway.Store.get_run_by_progress(session_key, running_msg_id))
                end,
                5_000
              )

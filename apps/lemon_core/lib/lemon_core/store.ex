@@ -202,17 +202,17 @@ defmodule LemonCore.Store do
   # Run History API
 
   @doc """
-  Get run history for a scope, ordered by most recent first.
+  Get run history for a session key, ordered by most recent first.
 
   ## Options
 
     * `:limit` - Maximum number of runs to return (default: 10)
 
-  Returns a list of `{run_id, %{events: [...], summary: %{...}, scope: scope, started_at: ts}}`.
+  Returns a list of `{run_id, %{events: [...], summary: %{...}, session_key: key, started_at: ts}}`.
   """
   @spec get_run_history(term(), keyword()) :: [{term(), map()}]
-  def get_run_history(scope, opts \\ []) do
-    GenServer.call(__MODULE__, {:get_run_history, scope, opts})
+  def get_run_history(session_key, opts \\ []) do
+    GenServer.call(__MODULE__, {:get_run_history, session_key, opts})
   end
 
   @doc """
@@ -227,27 +227,7 @@ defmodule LemonCore.Store do
 
   @impl true
   def init(_opts) do
-    # Primary config lives under :lemon_core. We also support a legacy config
-    # key (`config :lemon_gateway, LemonGateway.Store, ...`) so older configs
-    # continue to work during migration.
-    config =
-      case Application.get_env(:lemon_core, __MODULE__) do
-        nil ->
-          legacy = Application.get_env(:lemon_gateway, :"Elixir.LemonGateway.Store", [])
-
-          if legacy != [] do
-            require Logger
-
-            Logger.warning(
-              "Using legacy store config from :lemon_gateway, LemonGateway.Store; please migrate to :lemon_core, LemonCore.Store"
-            )
-          end
-
-          legacy
-
-        cfg ->
-          cfg
-      end
+    config = Application.get_env(:lemon_core, __MODULE__, [])
 
     backend = Keyword.get(config, :backend, @default_backend)
     backend_opts = Keyword.get(config, :backend_opts, [])
@@ -310,41 +290,30 @@ defmodule LemonCore.Store do
     {:reply, value, %{state | backend_state: backend_state}}
   end
 
-  def handle_call({:get_run_history, scope_or_session_key, opts}, _from, state) do
+  def handle_call({:get_run_history, session_key, opts}, _from, state) do
     limit = Keyword.get(opts, :limit, 10)
 
     {:ok, all_history, backend_state} = state.backend.list(state.backend_state, :run_history)
 
-    # Filter by scope OR session_key and sort by timestamp (most recent first)
-    # Support both legacy scope-based keys and new session_key-based keys
+    # Canonical run history key format: {session_key, started_at_ms, run_id}
     history =
       all_history
       |> Enum.filter(fn
-        # Tuple key format: {scope_or_session_key, ts, run_id}
-        {{key, _ts, _run_id}, data} ->
-          key == scope_or_session_key or data[:session_key] == scope_or_session_key or
-            data[:scope] == scope_or_session_key
+        {{key, _ts, _run_id}, _data} ->
+          key == session_key
 
-        # New session_key based format (string key)
-        {key, data} when is_binary(key) ->
-          key == scope_or_session_key or data[:session_key] == scope_or_session_key or
-            data[:scope] == scope_or_session_key
-
-        {key, data} ->
-          data[:session_key] == scope_or_session_key or data[:scope] == scope_or_session_key or
-            key == scope_or_session_key
+        _ ->
+          false
       end)
       |> Enum.sort_by(
         fn
           {{_s, ts, _run_id}, _data} -> ts
-          {_key, data} -> data[:started_at] || 0
         end,
         :desc
       )
       |> Enum.take(limit)
       |> Enum.map(fn
         {{_scope, _ts, run_id}, data} -> {run_id, data}
-        {_key, data} -> {data[:run_id], data}
       end)
 
     {:reply, history, %{state | backend_state: backend_state}}
@@ -412,45 +381,26 @@ defmodule LemonCore.Store do
 
     {:ok, backend_state} = state.backend.put(backend_state, :runs, run_id, record)
 
-    # Extract both scope and session_key for backward compatibility
-    scope = Map.get(summary, :scope)
     session_key = Map.get(summary, :session_key)
     started_at = record.started_at
 
-    # Store by session_key if available, otherwise fall back to scope
+    # Store by session_key.
     backend_state =
       cond do
-        session_key ->
-          # Primary: Store by session_key
+        is_binary(session_key) and session_key != "" ->
           history_key = {session_key, started_at, run_id}
 
           history_data = %{
             events: record.events,
             summary: summary,
             session_key: session_key,
-            scope: scope,
             run_id: run_id,
             started_at: started_at
           }
 
           {:ok, bs} = state.backend.put(backend_state, :run_history, history_key, history_data)
 
-          # Update sessions_index for sessions.list
           bs = update_sessions_index(state.backend, bs, session_key, summary, started_at)
-          maybe_index_telegram_message_resume(state.backend, bs, summary)
-
-        scope ->
-          # Legacy: Store by scope
-          history_key = {scope, started_at, run_id}
-
-          history_data = %{
-            events: record.events,
-            summary: summary,
-            scope: scope,
-            started_at: started_at
-          }
-
-          {:ok, bs} = state.backend.put(backend_state, :run_history, history_key, history_data)
           maybe_index_telegram_message_resume(state.backend, bs, summary)
 
         true ->
@@ -523,7 +473,7 @@ defmodule LemonCore.Store do
     with true <- resume_token_like?(resume),
          %{kind: :channel_peer, channel_id: "telegram", account_id: account_id} <-
            parse_session_key(session_key),
-         {chat_id, topic_id} <- telegram_scope_ids(summary),
+         {chat_id, topic_id} <- telegram_ids_from_meta(meta),
          true <- is_integer(chat_id) do
       progress_msg_id = meta[:progress_msg_id] || meta["progress_msg_id"]
       user_msg_id = meta[:user_msg_id] || meta["user_msg_id"]
@@ -586,18 +536,20 @@ defmodule LemonCore.Store do
 
   defp parse_session_key(_), do: :error
 
-  defp telegram_scope_ids(summary) when is_map(summary) do
-    scope = summary[:scope] || summary["scope"]
+  defp telegram_ids_from_meta(meta) when is_map(meta) do
+    chat_id =
+      meta[:chat_id] ||
+        meta["chat_id"] ||
+        get_in(meta, [:peer, :id]) ||
+        get_in(meta, ["peer", "id"])
 
-    cond do
-      is_map(scope) and
-          (Map.get(scope, :transport) || Map.get(scope, "transport")) in [:telegram, "telegram"] ->
-        {Map.get(scope, :chat_id) || Map.get(scope, "chat_id"),
-         Map.get(scope, :topic_id) || Map.get(scope, "topic_id")}
+    topic_id =
+      meta[:topic_id] ||
+        meta["topic_id"] ||
+        get_in(meta, [:peer, :thread_id]) ||
+        get_in(meta, ["peer", "thread_id"])
 
-      true ->
-        {nil, nil}
-    end
+    {normalize_msg_id(chat_id), normalize_msg_id(topic_id)}
   rescue
     _ -> {nil, nil}
   end

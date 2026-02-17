@@ -3,7 +3,6 @@ defmodule LemonCore.SessionKey do
   Session key generation and parsing.
 
   Session keys provide a stable identifier for routing and state management.
-  They are compatible with the OpenClaw session key format.
 
   ## Canonical Formats
 
@@ -12,9 +11,7 @@ defmodule LemonCore.SessionKey do
 
   ## Notes
 
-  This module also supports parsing a legacy Telegram format:
-
-  - `channel:telegram:<transport>:<chat_id>[:thread:<thread_id>]`
+  Session keys are strictly validated against the canonical formats above.
   """
 
   # Allowed peer_kind values - whitelist to prevent atom exhaustion
@@ -125,25 +122,6 @@ defmodule LemonCore.SessionKey do
             {:error, :invalid_peer_kind}
         end
 
-      # Legacy format support (Telegram)
-      ["channel", "telegram", transport, chat_id | rest] ->
-        {thread_id, sub_id} =
-          case parse_extras(rest) do
-            {:ok, extras} -> {Map.get(extras, "thread"), Map.get(extras, "sub")}
-            _ -> {nil, nil}
-          end
-
-        %{
-          agent_id: "default",
-          kind: :channel_peer,
-          channel_id: "telegram",
-          account_id: transport,
-          peer_kind: :dm,
-          peer_id: chat_id,
-          thread_id: thread_id,
-          sub_id: sub_id
-        }
-
       _ ->
         {:error, :invalid}
     end
@@ -201,8 +179,6 @@ defmodule LemonCore.SessionKey do
   # Current supported keys:
   # - thread:<thread_id>
   # - sub:<sub_id>
-  #
-  # Unknown keys are ignored (forward compatibility).
   defp parse_extras([]), do: {:ok, %{}}
   defp parse_extras(nil), do: {:ok, %{}}
 
@@ -210,22 +186,19 @@ defmodule LemonCore.SessionKey do
     if rem(length(rest), 2) != 0 do
       {:error, :invalid}
     else
-      extras =
-        rest
-        |> Enum.chunk_every(2)
-        |> Enum.reduce(%{}, fn
-          [k, v], acc when is_binary(k) and is_binary(v) ->
-            if k in ["thread", "sub"] do
-              Map.put(acc, k, v)
-            else
-              acc
-            end
+      rest
+      |> Enum.chunk_every(2)
+      |> Enum.reduce_while({:ok, %{}}, fn
+        [k, v], {:ok, acc} when is_binary(k) and is_binary(v) and k in ["thread", "sub"] ->
+          if Map.has_key?(acc, k) do
+            {:halt, {:error, :invalid}}
+          else
+            {:cont, {:ok, Map.put(acc, k, v)}}
+          end
 
-          _other, acc ->
-            acc
-        end)
-
-      {:ok, extras}
+        _other, _acc ->
+          {:halt, {:error, :invalid}}
+      end)
     end
   end
 

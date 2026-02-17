@@ -381,8 +381,8 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
 
       # Verify queue_mode from binding
       assert job.queue_mode == :followup
-      assert job.scope.chat_id == 12345
-      assert job.text == "test message"
+      assert job.meta.chat_id == 12345
+      assert job.prompt == "test message"
     end
 
     test "job gets queue_mode: :interrupt from binding" do
@@ -413,7 +413,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       assert_receive {:job_captured, %Job{} = job}, 2000
 
       assert job.queue_mode == :followup
-      assert job.scope.topic_id == 100
+      assert job.meta.topic_id == 100
     end
 
     test "chat without topic falls back to chat binding queue_mode" do
@@ -430,7 +430,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       assert_receive {:job_captured, %Job{} = job}, 2000
 
       assert job.queue_mode == :interrupt
-      assert job.scope.topic_id == nil
+      assert job.meta.topic_id == nil
     end
   end
 
@@ -559,7 +559,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
 
       # Not treated as a queue override
       assert job.queue_mode == :collect
-      assert job.text == "/steerable should not override"
+      assert job.prompt == "/steerable should not override"
     end
 
     @doc """
@@ -583,7 +583,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       # After ThreadWorker processing, :steer becomes :followup (no active run)
       assert job.queue_mode == :followup
       # Queue override prefix is stripped from the text
-      assert job.text == "please do this urgently"
+      assert job.prompt == "please do this urgently"
     end
 
     test "queue override stripping preserves engine routing on subsequent /engine" do
@@ -598,11 +598,11 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
 
       # /steer override applied, then /capture is still visible to routing
       assert job.queue_mode == :followup
-      assert job.engine_hint == "capture"
-      assert job.text == "/capture hello"
+      assert job.engine_id == "capture"
+      assert job.prompt == "/capture hello"
     end
 
-    test "/followup prefix is stripped from job.text" do
+    test "/followup prefix is stripped from job.prompt" do
       start_gateway_with_config(%{
         allow_queue_override: true,
         bindings: []
@@ -613,10 +613,10 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       assert_receive {:job_captured, %Job{} = job}, 2000
 
       assert job.queue_mode == :followup
-      assert job.text == "add this context"
+      assert job.prompt == "add this context"
     end
 
-    test "/interrupt prefix is stripped from job.text" do
+    test "/interrupt prefix is stripped from job.prompt" do
       start_gateway_with_config(%{
         allow_queue_override: true,
         bindings: []
@@ -627,7 +627,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       assert_receive {:job_captured, %Job{} = job}, 2000
 
       assert job.queue_mode == :interrupt
-      assert job.text == "stop everything now"
+      assert job.prompt == "stop everything now"
     end
 
     test "queue override prefix stripping is case-insensitive" do
@@ -641,7 +641,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       assert_receive {:job_captured, %Job{} = job}, 2000
 
       assert job.queue_mode == :followup
-      assert job.text == "UPPERCASE MESSAGE"
+      assert job.prompt == "UPPERCASE MESSAGE"
     end
 
     test "queue override with only command and no text results in empty text" do
@@ -655,7 +655,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       assert_receive {:job_captured, %Job{} = job}, 2000
 
       assert job.queue_mode == :interrupt
-      assert job.text == ""
+      assert job.prompt == ""
     end
 
     test "queue override prefix is NOT stripped when allow_queue_override is false" do
@@ -671,7 +671,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       # queue_mode defaults to :collect (override not recognized)
       assert job.queue_mode == :collect
       # Text should remain unchanged since override was not applied
-      assert job.text == "/interrupt not actually an override"
+      assert job.prompt == "/interrupt not actually an override"
     end
   end
 
@@ -747,9 +747,9 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       assert_receive {:job_captured, %Job{} = job}, 2000
 
       assert job.queue_mode == :followup
-      assert job.scope.transport == :telegram
-      assert job.scope.chat_id == 12121
-      assert job.text == "end to end test"
+      assert job.meta.channel_id == "telegram"
+      assert job.meta.chat_id == 12121
+      assert job.prompt == "end to end test"
     end
 
     test "messages with different bindings get correct queue_modes" do
@@ -764,19 +764,19 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       MockTelegramAPI.enqueue_message(1001, "collect message")
 
       assert_receive {:job_captured, %Job{} = job1}, 2000
-      assert job1.scope.chat_id == 1001
+      assert job1.meta.chat_id == 1001
       assert job1.queue_mode == :collect
 
       MockTelegramAPI.enqueue_message(1002, "followup message")
 
       assert_receive {:job_captured, %Job{} = job2}, 2000
-      assert job2.scope.chat_id == 1002
+      assert job2.meta.chat_id == 1002
       assert job2.queue_mode == :followup
 
       MockTelegramAPI.enqueue_message(1003, "interrupt message")
 
       assert_receive {:job_captured, %Job{} = job3}, 2000
-      assert job3.scope.chat_id == 1003
+      assert job3.meta.chat_id == 1003
       assert job3.queue_mode == :interrupt
     end
   end
@@ -863,8 +863,8 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       MockTelegramAPI.enqueue_message(12345, "part two", message_id: 112)
 
       assert_receive {:job_captured, %Job{} = job}, 2000
-      assert job.text == "part one\n\npart two"
-      assert job.user_msg_id == 112
+      assert job.prompt == "part one\n\npart two"
+      assert job.meta.user_msg_id == 112
       assert is_integer(job.meta[:progress_msg_id])
     end
 
@@ -920,29 +920,13 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       MockTelegramAPI.enqueue_message(12345, "allowed (bound)")
 
       assert_receive {:job_captured, %Job{} = job}, 2000
-      assert job.text == "allowed (bound)"
+      assert job.prompt == "allowed (bound)"
     end
 
     test "/new records memories (when history exists) and then clears auto-resume chat state" do
       start_gateway_with_config(%{})
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345, topic_id: nil}
-
-      session_key =
-        LemonCore.SessionKey.channel_peer(%{
-          agent_id: "default",
-          channel_id: "telegram",
-          account_id: "default",
-          peer_kind: :dm,
-          peer_id: "12345",
-          thread_id: nil
-        })
-
-      LemonGateway.Store.put_chat_state(scope, %{
-        last_engine: "capture",
-        last_resume_token: "resume_1",
-        updated_at: System.system_time(:millisecond)
-      })
+      session_key = telegram_session_key(12345)
 
       LemonGateway.Store.put_chat_state(session_key, %{
         last_engine: "capture",
@@ -950,13 +934,11 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         updated_at: System.system_time(:millisecond)
       })
 
-      assert LemonGateway.Store.get_chat_state(scope) != nil
       assert LemonGateway.Store.get_chat_state(session_key) != nil
 
       # Seed minimal run history so /new has something to reflect on.
       LemonGateway.Store.finalize_run("seed_run_1", %{
         run_id: "seed_run_1",
-        scope: scope,
         session_key: session_key,
         prompt: "Earlier prompt",
         completed: %{ok: true, answer: "Earlier answer"},
@@ -966,8 +948,8 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       MockTelegramAPI.enqueue_message(12345, "/new", message_id: 500)
 
       assert_receive {:job_captured, %Job{} = job}, 2000
-      assert is_binary(job.text)
-      assert String.contains?(job.text, "Transcript")
+      assert is_binary(job.prompt)
+      assert String.contains?(job.prompt, "Transcript")
 
       assert_receive {:telegram_api_call,
                       {:send_message, 12345, "Recording memories, then starting a new session…",
@@ -979,7 +961,6 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
                        %{"reply_to_message_id" => 500}, _parse_mode}},
                      2000
 
-      assert eventually(fn -> LemonGateway.Store.get_chat_state(scope) == nil end)
       assert eventually(fn -> LemonGateway.Store.get_chat_state(session_key) == nil end)
     end
 
@@ -1071,13 +1052,13 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
     test "/resume lists prior sessions and /resume <n> selects one for subsequent messages" do
       start_gateway_with_config(%{})
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345, topic_id: nil}
+      session_key = telegram_session_key(12345)
 
       MockTelegramAPI.enqueue_message(12345, "first", message_id: 601)
       assert_receive {:job_captured, %Job{} = _job1}, 2000
 
-      assert eventually(fn -> LemonGateway.Store.get_chat_state(scope) != nil end)
-      state1 = LemonGateway.Store.get_chat_state(scope)
+      assert eventually(fn -> LemonGateway.Store.get_chat_state(session_key) != nil end)
+      state1 = LemonGateway.Store.get_chat_state(session_key)
 
       token1 =
         state1.last_resume_token || state1[:last_resume_token] || state1["last_resume_token"]
@@ -1094,14 +1075,14 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       assert_receive {:job_captured, %Job{} = _job2}, 2000
 
       assert eventually(fn ->
-               st = LemonGateway.Store.get_chat_state(scope)
+               st = LemonGateway.Store.get_chat_state(session_key)
 
                st != nil and
                  (st.last_resume_token || st[:last_resume_token] || st["last_resume_token"]) !=
                    token1
              end)
 
-      state2 = LemonGateway.Store.get_chat_state(scope)
+      state2 = LemonGateway.Store.get_chat_state(session_key)
 
       token2 =
         state2.last_resume_token || state2[:last_resume_token] || state2["last_resume_token"]
@@ -1135,13 +1116,13 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
     test "replying to a message from an older session switches and resumes that session" do
       start_gateway_with_config(%{})
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345, topic_id: nil}
+      session_key = telegram_session_key(12345)
 
       MockTelegramAPI.enqueue_message(12345, "first", message_id: 701)
       assert_receive {:job_captured, %Job{} = _job1}, 2000
 
-      assert eventually(fn -> LemonGateway.Store.get_chat_state(scope) != nil end)
-      state1 = LemonGateway.Store.get_chat_state(scope)
+      assert eventually(fn -> LemonGateway.Store.get_chat_state(session_key) != nil end)
+      state1 = LemonGateway.Store.get_chat_state(session_key)
 
       token1 =
         state1.last_resume_token || state1[:last_resume_token] || state1["last_resume_token"]
@@ -1173,6 +1154,23 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
                  false
              end)
     end
+  end
+
+  defp telegram_session_key(chat_id, topic_id \\ nil) do
+    opts = %{
+      agent_id: "default",
+      channel_id: "telegram",
+      account_id: "default",
+      peer_kind: "dm",
+      peer_id: Integer.to_string(chat_id)
+    }
+
+    opts =
+      if is_nil(topic_id),
+        do: opts,
+        else: Map.put(opts, :thread_id, Integer.to_string(topic_id))
+
+    LemonCore.SessionKey.channel_peer(opts)
   end
 
   defp eventually(fun, attempts_left \\ 40)

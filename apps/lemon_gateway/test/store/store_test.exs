@@ -116,22 +116,22 @@ defmodule LemonGateway.StoreTest do
   end
 
   describe "run history" do
-    test "get_run_history returns finalized runs for scope" do
-      scope = %ChatScope{transport: :test, chat_id: unique_chat_id(), topic_id: nil}
+    test "get_run_history returns finalized runs for session key" do
+      session_key = "test:#{unique_chat_id()}"
 
       # Create multiple runs
       run1 = "run_#{System.unique_integer()}"
       run2 = "run_#{System.unique_integer()}"
 
       Store.append_run_event(run1, %{type: :started})
-      Store.finalize_run(run1, %{ok: true, answer: "first", scope: scope})
+      Store.finalize_run(run1, %{ok: true, answer: "first", session_key: session_key})
       Process.sleep(20)
 
       Store.append_run_event(run2, %{type: :started})
-      Store.finalize_run(run2, %{ok: true, answer: "second", scope: scope})
+      Store.finalize_run(run2, %{ok: true, answer: "second", session_key: session_key})
       Process.sleep(20)
 
-      history = Store.get_run_history(scope)
+      history = Store.get_run_history(session_key)
 
       assert length(history) == 2
 
@@ -142,39 +142,39 @@ defmodule LemonGateway.StoreTest do
     end
 
     test "get_run_history respects limit" do
-      scope = %ChatScope{transport: :test, chat_id: unique_chat_id(), topic_id: nil}
+      session_key = "test:#{unique_chat_id()}"
 
       # Create 5 runs
       for i <- 1..5 do
         run_id = "run_limit_#{unique_id()}_#{i}"
         Store.append_run_event(run_id, %{type: :started})
-        Store.finalize_run(run_id, %{ok: true, answer: "run #{i}", scope: scope})
+        Store.finalize_run(run_id, %{ok: true, answer: "run #{i}", session_key: session_key})
         Process.sleep(5)
       end
 
       Process.sleep(20)
 
-      history = Store.get_run_history(scope, limit: 3)
+      history = Store.get_run_history(session_key, limit: 3)
       assert length(history) == 3
     end
 
-    test "get_run_history filters by scope" do
-      scope_a = %ChatScope{transport: :test, chat_id: unique_chat_id(), topic_id: nil}
-      scope_b = %ChatScope{transport: :test, chat_id: unique_chat_id(), topic_id: nil}
+    test "get_run_history filters by session key" do
+      session_key_a = "test:#{unique_chat_id()}"
+      session_key_b = "test:#{unique_chat_id()}"
 
       run_a = "run_a_#{unique_id()}"
       run_b = "run_b_#{unique_id()}"
 
       Store.append_run_event(run_a, %{type: :started})
-      Store.finalize_run(run_a, %{ok: true, scope: scope_a})
+      Store.finalize_run(run_a, %{ok: true, session_key: session_key_a})
 
       Store.append_run_event(run_b, %{type: :started})
-      Store.finalize_run(run_b, %{ok: true, scope: scope_b})
+      Store.finalize_run(run_b, %{ok: true, session_key: session_key_b})
 
       Process.sleep(20)
 
-      history_a = Store.get_run_history(scope_a)
-      history_b = Store.get_run_history(scope_b)
+      history_a = Store.get_run_history(session_key_a)
+      history_b = Store.get_run_history(session_key_b)
 
       assert length(history_a) == 1
       assert length(history_b) == 1
@@ -187,8 +187,8 @@ defmodule LemonGateway.StoreTest do
     end
 
     test "get_run_history returns empty list for no runs" do
-      scope = %ChatScope{transport: :test, chat_id: unique_chat_id(), topic_id: nil}
-      assert Store.get_run_history(scope) == []
+      session_key = "test:#{unique_chat_id()}"
+      assert Store.get_run_history(session_key) == []
     end
   end
 

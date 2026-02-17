@@ -1,9 +1,8 @@
 defmodule LemonGatewayTest do
   use ExUnit.Case
-  import ExUnit.CaptureLog
 
   alias LemonGateway.Event.Completed
-  alias LemonGateway.Types.{ChatScope, Job}
+  alias LemonGateway.Types.Job
 
   setup do
     # Isolate Telegram poller file locks from any locally running gateway process (and from other tests).
@@ -384,15 +383,14 @@ defmodule LemonGatewayTest do
   end
 
   test "submits a job and receives completion" do
-    scope = %ChatScope{transport: :test, chat_id: 1, topic_id: nil}
+    session_key = "test:1"
 
     job = %Job{
-      scope: scope,
-      user_msg_id: 1,
-      text: "hello",
+      session_key: session_key,
+      prompt: "hello",
       resume: nil,
-      engine_hint: nil,
-      meta: %{notify_pid: self()}
+      engine_id: nil,
+      meta: %{notify_pid: self(), user_msg_id: 1}
     }
 
     LemonGateway.submit(job)
@@ -433,24 +431,22 @@ defmodule LemonGatewayTest do
   end
 
   test "thread worker frees slot when run crashes" do
-    scope = %ChatScope{transport: :test, chat_id: 2, topic_id: nil}
+    session_key = "test:2"
 
     crash_job = %Job{
-      scope: scope,
-      user_msg_id: 10,
-      text: "boom",
+      session_key: session_key,
+      prompt: "boom",
       resume: nil,
-      engine_hint: "crash",
-      meta: %{notify_pid: self()}
+      engine_id: "crash",
+      meta: %{notify_pid: self(), user_msg_id: 10}
     }
 
     ok_job = %Job{
-      scope: scope,
-      user_msg_id: 11,
-      text: "ok",
+      session_key: session_key,
+      prompt: "ok",
       resume: nil,
-      engine_hint: "echo",
-      meta: %{notify_pid: self()}
+      engine_id: "echo",
+      meta: %{notify_pid: self(), user_msg_id: 11}
     }
 
     LemonGateway.submit(crash_job)
@@ -462,24 +458,22 @@ defmodule LemonGatewayTest do
   end
 
   test "scheduler handles back-to-back submits for same thread" do
-    scope = %ChatScope{transport: :test, chat_id: 3, topic_id: nil}
+    session_key = "test:3"
 
     job1 = %Job{
-      scope: scope,
-      user_msg_id: 20,
-      text: "first",
+      session_key: session_key,
+      prompt: "first",
       resume: nil,
-      engine_hint: "echo",
-      meta: %{notify_pid: self()}
+      engine_id: "echo",
+      meta: %{notify_pid: self(), user_msg_id: 20}
     }
 
     job2 = %Job{
-      scope: scope,
-      user_msg_id: 21,
-      text: "second",
+      session_key: session_key,
+      prompt: "second",
       resume: nil,
-      engine_hint: "echo",
-      meta: %{notify_pid: self()}
+      engine_id: "echo",
+      meta: %{notify_pid: self(), user_msg_id: 21}
     }
 
     Task.async(fn -> LemonGateway.submit(job1) end)
@@ -495,24 +489,22 @@ defmodule LemonGatewayTest do
   end
 
   test "scheduler re-creates worker after idle stop" do
-    scope = %ChatScope{transport: :test, chat_id: 4, topic_id: nil}
+    session_key = "test:4"
 
     job1 = %Job{
-      scope: scope,
-      user_msg_id: 30,
-      text: "one",
+      session_key: session_key,
+      prompt: "one",
       resume: nil,
-      engine_hint: "echo",
-      meta: %{notify_pid: self()}
+      engine_id: "echo",
+      meta: %{notify_pid: self(), user_msg_id: 30}
     }
 
     job2 = %Job{
-      scope: scope,
-      user_msg_id: 31,
-      text: "two",
+      session_key: session_key,
+      prompt: "two",
       resume: nil,
-      engine_hint: "echo",
-      meta: %{notify_pid: self()}
+      engine_id: "echo",
+      meta: %{notify_pid: self(), user_msg_id: 31}
     }
 
     LemonGateway.submit(job1)
@@ -532,15 +524,14 @@ defmodule LemonGatewayTest do
   end
 
   test "engine start error still notifies completion" do
-    scope = %ChatScope{transport: :test, chat_id: 5, topic_id: nil}
+    session_key = "test:5"
 
     job = %Job{
-      scope: scope,
-      user_msg_id: 40,
-      text: "fail",
+      session_key: session_key,
+      prompt: "fail",
       resume: nil,
-      engine_hint: "error",
-      meta: %{notify_pid: self()}
+      engine_id: "error",
+      meta: %{notify_pid: self(), user_msg_id: 40}
     }
 
     LemonGateway.submit(job)
@@ -553,491 +544,4 @@ defmodule LemonGatewayTest do
     assert :ok = LemonGateway.Telegram.Dedupe.init()
   end
 
-  test "telegram debounce waits for quiet period" do
-    updates_a = [
-      %{
-        "update_id" => 1,
-        "message" => %{
-          "text" => "hello",
-          "chat" => %{"id" => 1},
-          "message_id" => 1
-        }
-      }
-    ]
-
-    updates_b = [
-      %{
-        "update_id" => 2,
-        "message" => %{
-          "text" => "world",
-          "chat" => %{"id" => 1},
-          "message_id" => 2
-        }
-      }
-    ]
-
-    {:ok, _} =
-      start_supervised({TestTelegramAPI, [updates_queue: [updates_a], notify_pid: self()]})
-
-    Application.put_env(:lemon_gateway, :telegram, %{
-      bot_token: "token",
-      api_mod: TestTelegramAPI,
-      poll_interval_ms: 20,
-      debounce_ms: 80,
-      allowed_chat_ids: [1]
-    })
-
-    {:ok, _} = start_supervised({LemonGateway.Telegram.Transport, [force: true]})
-
-    assert_receive {:api_get_updates, ^updates_a, _t1}, 500
-    Process.sleep(60)
-    TestTelegramAPI.set_updates_queue([updates_b])
-    assert_receive {:api_get_updates, ^updates_b, t2}, 500
-    assert_receive {:api_send_message, 1, "Running…", 2, t_send}, 1_000
-
-    assert t_send - t2 >= 50
-  end
-
-  test "telegram allowed_chat_ids accepts string and integer values" do
-    updates = [
-      %{
-        "update_id" => 10,
-        "message" => %{
-          "text" => "allowed-one",
-          "chat" => %{"id" => 1},
-          "message_id" => 101
-        }
-      },
-      %{
-        "update_id" => 11,
-        "message" => %{
-          "text" => "allowed-two",
-          "chat" => %{"id" => 2},
-          "message_id" => 102
-        }
-      },
-      %{
-        "update_id" => 12,
-        "message" => %{
-          "text" => "blocked",
-          "chat" => %{"id" => 3},
-          "message_id" => 103
-        }
-      }
-    ]
-
-    {:ok, _} = start_supervised({TestTelegramAPI, [updates_queue: [updates], notify_pid: self()]})
-
-    Application.put_env(:lemon_gateway, :telegram, %{
-      bot_token: "token",
-      api_mod: TestTelegramAPI,
-      poll_interval_ms: 20,
-      debounce_ms: 0,
-      allowed_chat_ids: ["1", 2]
-    })
-
-    {:ok, _} = start_supervised({LemonGateway.Telegram.Transport, [force: true]})
-
-    assert_receive {:api_get_updates, ^updates, _t1}, 500
-    assert_receive {:api_send_message, 1, "Running…", 101, _t_send_1}, 1_000
-    assert_receive {:api_send_message, 2, "Running…", 102, _t_send_2}, 1_000
-    refute_receive {:api_send_message, 3, "Running…", 103, _t_send_3}, 300
-  end
-
-  test "telegram poll failure logging is throttled for repeated errors" do
-    responses = [
-      {:error, :econnrefused},
-      {:error, :econnrefused},
-      {:error, :econnrefused}
-    ]
-
-    log =
-      capture_log(fn ->
-        {:ok, _} =
-          start_supervised(
-            {PollingFailureTelegramAPI, [responses: responses, notify_pid: self()]}
-          )
-
-        Application.put_env(:lemon_gateway, :telegram, %{
-          bot_token: "token",
-          api_mod: PollingFailureTelegramAPI,
-          poll_interval_ms: 20,
-          debounce_ms: 0
-        })
-
-        {:ok, _} = start_supervised({LemonGateway.Telegram.Transport, [force: true]})
-
-        assert_receive {:poll_response, {:error, :econnrefused}}, 500
-        assert_receive {:poll_response, {:error, :econnrefused}}, 500
-        assert_receive {:poll_response, {:error, :econnrefused}}, 500
-      end)
-
-    assert length(Regex.scan(~r/Telegram getUpdates failed: :econnrefused/, log)) == 1
-  end
-
-  test "telegram poll logging includes non-ok responses and throttles duplicates" do
-    non_ok = {:ok, %{"ok" => false, "error_code" => 429, "description" => "Too Many Requests"}}
-    responses = [non_ok, non_ok]
-
-    log =
-      capture_log(fn ->
-        {:ok, _} =
-          start_supervised(
-            {PollingFailureTelegramAPI, [responses: responses, notify_pid: self()]}
-          )
-
-        Application.put_env(:lemon_gateway, :telegram, %{
-          bot_token: "token",
-          api_mod: PollingFailureTelegramAPI,
-          poll_interval_ms: 20,
-          debounce_ms: 0
-        })
-
-        {:ok, _} = start_supervised({LemonGateway.Telegram.Transport, [force: true]})
-
-        assert_receive {:poll_response, ^non_ok}, 500
-        assert_receive {:poll_response, ^non_ok}, 500
-      end)
-
-    assert String.contains?(
-             log,
-             "Telegram getUpdates returned ok=false (error_code=429): Too Many Requests"
-           )
-
-    assert length(
-             Regex.scan(
-               ~r/Telegram getUpdates returned ok=false \(error_code=429\): Too Many Requests/,
-               log
-             )
-           ) == 1
-  end
-
-  test "telegram outbox edits progress message for final result" do
-    {:ok, _} = start_supervised({TestTelegramAPI, [notify_pid: self()]})
-    TestTelegramAPI.set_notify_pid(self())
-    assert is_pid(Process.whereis(TestTelegramAPI))
-
-    if pid = Process.whereis(LemonGateway.Telegram.Outbox) do
-      GenServer.stop(pid)
-    end
-
-    {:ok, _} =
-      start_supervised(
-        {LemonGateway.Telegram.Outbox,
-         [bot_token: "token", api_mod: TestTelegramAPI, edit_throttle_ms: 0]}
-      )
-
-    assert is_pid(Process.whereis(LemonGateway.Telegram.Outbox))
-    assert :sys.get_state(LemonGateway.Telegram.Outbox).api_mod == TestTelegramAPI
-
-    scope = %ChatScope{transport: :telegram, chat_id: 1, topic_id: nil}
-
-    job = %Job{
-      scope: scope,
-      user_msg_id: 10,
-      text: "run",
-      resume: nil,
-      engine_hint: "action",
-      meta: %{
-        notify_pid: self(),
-        chat_id: 1,
-        progress_msg_id: 99,
-        user_msg_id: 10
-      }
-    }
-
-    LemonGateway.submit(job)
-
-    assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 1_000
-
-    wait_for(
-      fn ->
-        Enum.any?(TestTelegramAPI.calls(), fn
-          {:edit, 1, 99, text, _t} -> String.contains?(text, "Done.")
-          _ -> false
-        end)
-      end,
-      "expected final edit for progress_msg_id 99"
-    )
-
-    # Verify streaming edits occurred for the progress message during the run
-    wait_for(
-      fn ->
-        Enum.any?(TestTelegramAPI.calls(), fn
-          {:edit, 1, 99, text, _t} -> String.contains?(text, "Running")
-          _ -> false
-        end)
-      end,
-      "expected running edit for progress_msg_id 99"
-    )
-  end
-
-  test "telegram streaming edits progress message during run" do
-    {:ok, _} = start_supervised({TestTelegramAPI, [notify_pid: self()]})
-    TestTelegramAPI.set_notify_pid(self())
-
-    if pid = Process.whereis(LemonGateway.Telegram.Outbox) do
-      GenServer.stop(pid)
-    end
-
-    {:ok, _} =
-      start_supervised(
-        {LemonGateway.Telegram.Outbox,
-         [bot_token: "token", api_mod: TestTelegramAPI, edit_throttle_ms: 0]}
-      )
-
-    scope = %ChatScope{transport: :telegram, chat_id: 10, topic_id: nil}
-
-    job = %Job{
-      scope: scope,
-      user_msg_id: 100,
-      text: "stream",
-      resume: nil,
-      engine_hint: "streaming",
-      meta: %{
-        notify_pid: self(),
-        chat_id: 10,
-        progress_msg_id: 200,
-        user_msg_id: 100
-      }
-    }
-
-    LemonGateway.submit(job)
-
-    assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2_000
-
-    # Wait for final edit
-    wait_for(
-      fn ->
-        Enum.any?(TestTelegramAPI.calls(), fn
-          {:edit, 10, 200, text, _t_send} -> String.contains?(text, "Done.")
-          _ -> false
-        end)
-      end,
-      "expected final edit for chat 10 progress_msg_id 200"
-    )
-
-    # Verify edit operations were enqueued for the progress message
-    edit_calls =
-      TestTelegramAPI.calls()
-      |> Enum.filter(fn
-        {:edit, 10, 200, _text, _t} -> true
-        _ -> false
-      end)
-
-    # Should have at least one edit for running updates
-    assert length(edit_calls) >= 1, "Expected at least one edit call, got #{inspect(edit_calls)}"
-
-    running_edits =
-      Enum.filter(edit_calls, fn {:edit, _chat, _msg_id, text, _t} ->
-        String.contains?(text, "Running")
-      end)
-
-    assert length(running_edits) >= 1,
-           "Expected at least one running edit, got #{inspect(edit_calls)}"
-  end
-
-  test "telegram streaming edits use stable key for coalescing" do
-    {:ok, _} = start_supervised({TestTelegramAPI, [notify_pid: self()]})
-    TestTelegramAPI.set_notify_pid(self())
-
-    if pid = Process.whereis(LemonGateway.Telegram.Outbox) do
-      GenServer.stop(pid)
-    end
-
-    # Use a longer throttle so rapid updates get coalesced
-    {:ok, _} =
-      start_supervised(
-        {LemonGateway.Telegram.Outbox,
-         [bot_token: "token", api_mod: TestTelegramAPI, edit_throttle_ms: 100]}
-      )
-
-    scope = %ChatScope{transport: :telegram, chat_id: 20, topic_id: nil}
-
-    job = %Job{
-      scope: scope,
-      user_msg_id: 200,
-      text: "coalesce",
-      resume: nil,
-      engine_hint: "streaming",
-      meta: %{
-        notify_pid: self(),
-        chat_id: 20,
-        progress_msg_id: 300,
-        user_msg_id: 200
-      }
-    }
-
-    LemonGateway.submit(job)
-
-    assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2_000
-
-    # Wait a bit for throttled edits to complete
-    Process.sleep(200)
-
-    # With throttling, rapid updates should be coalesced, so we should have fewer
-    # edits than there were events (started + 4 action events = 5 running renders)
-    edit_calls =
-      TestTelegramAPI.calls()
-      |> Enum.filter(fn
-        {:edit, 20, 300, _text, _t} -> true
-        _ -> false
-      end)
-
-    # The key {chat_id, progress_msg_id, :edit} should coalesce rapid updates
-    # We expect fewer actual API calls than the 5 render events
-    assert length(edit_calls) <= 5,
-           "Edits should be coalesced, got #{length(edit_calls)} calls"
-  end
-
-  test "telegram edits progress message when engine start fails" do
-    {:ok, _} = start_supervised({TestTelegramAPI, [notify_pid: self()]})
-    TestTelegramAPI.set_notify_pid(self())
-    assert is_pid(Process.whereis(TestTelegramAPI))
-
-    if pid = Process.whereis(LemonGateway.Telegram.Outbox) do
-      GenServer.stop(pid)
-    end
-
-    {:ok, _} =
-      start_supervised(
-        {LemonGateway.Telegram.Outbox,
-         [bot_token: "token", api_mod: TestTelegramAPI, edit_throttle_ms: 0]}
-      )
-
-    assert is_pid(Process.whereis(LemonGateway.Telegram.Outbox))
-    assert :sys.get_state(LemonGateway.Telegram.Outbox).api_mod == TestTelegramAPI
-
-    scope = %ChatScope{transport: :telegram, chat_id: 3, topic_id: nil}
-
-    job = %Job{
-      scope: scope,
-      user_msg_id: 70,
-      text: "fail",
-      resume: nil,
-      engine_hint: "error",
-      meta: %{
-        notify_pid: self(),
-        chat_id: 3,
-        progress_msg_id: 100,
-        user_msg_id: 70
-      }
-    }
-
-    LemonGateway.submit(job)
-
-    assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: false}}, 1_000
-
-    wait_for(
-      fn ->
-        Enum.any?(TestTelegramAPI.calls(), fn
-          {:edit, 3, 100, _text, _t_send} -> true
-          _ -> false
-        end)
-      end,
-      "expected error edit for chat 3 message 100"
-    )
-
-    refute_receive {:api_send_message, _, _, _, _}, 200
-  end
-
-  defp wait_for(predicate, message), do: wait_for(predicate, message, 2_000)
-
-  defp wait_for(predicate, message, timeout_ms) do
-    deadline = System.monotonic_time(:millisecond) + timeout_ms
-    do_wait_for(predicate, deadline, message)
-  end
-
-  defp do_wait_for(predicate, deadline, message) do
-    if predicate.() do
-      :ok
-    else
-      if System.monotonic_time(:millisecond) > deadline do
-        flunk("#{message}. calls=#{inspect(TestTelegramAPI.calls())}")
-      else
-        Process.sleep(10)
-        do_wait_for(predicate, deadline, message)
-      end
-    end
-  end
-
-  test "telegram dedupe skips duplicate update" do
-    updates = [
-      %{
-        "update_id" => 5,
-        "message" => %{
-          "text" => "hello",
-          "chat" => %{"id" => 1},
-          "message_id" => 50
-        }
-      }
-    ]
-
-    {:ok, _} =
-      start_supervised({TestTelegramAPI, [updates_queue: [updates, updates], notify_pid: self()]})
-
-    Application.put_env(:lemon_gateway, :telegram, %{
-      bot_token: "token",
-      api_mod: TestTelegramAPI,
-      poll_interval_ms: 20,
-      debounce_ms: 10,
-      allowed_chat_ids: [1]
-    })
-
-    {:ok, _} = start_supervised({LemonGateway.Telegram.Transport, [force: true]})
-
-    assert_receive {:api_get_updates, ^updates, _t1}, 500
-    assert_receive {:api_get_updates, ^updates, _t2}, 500
-    assert_receive {:api_send_message, 1, "Running…", 50, _t_send}, 1_000
-    refute_receive {:api_send_message, 1, "Running…", 50, _t_send2}, 200
-  end
-
-  test "telegram command bypasses debounce" do
-    updates = [
-      %{
-        "update_id" => 6,
-        "message" => %{
-          "text" => "/status",
-          "chat" => %{"id" => 2},
-          "message_id" => 60
-        }
-      }
-    ]
-
-    {:ok, _} = start_supervised({TestTelegramAPI, [updates_queue: [updates], notify_pid: self()]})
-
-    Application.put_env(:lemon_gateway, :telegram, %{
-      bot_token: "token",
-      api_mod: TestTelegramAPI,
-      poll_interval_ms: 20,
-      # Use a large debounce so the test is robust on loaded CI/dev machines.
-      # The command path should bypass buffering entirely, so send should happen well
-      # before this debounce would have elapsed.
-      debounce_ms: 5_000,
-      allowed_chat_ids: [2]
-    })
-
-    {:ok, _} = start_supervised({LemonGateway.Telegram.Transport, [force: true]})
-
-    assert_receive {:api_get_updates, ^updates, t_poll}, 2_000
-
-    wait_for(
-      fn ->
-        Enum.any?(TestTelegramAPI.calls(), fn
-          {:send, 2, "Running…", 60, _t_send} -> true
-          _ -> false
-        end)
-      end,
-      "expected immediate progress send for /status command"
-    )
-
-    {:send, 2, "Running…", 60, t_send} =
-      TestTelegramAPI.calls()
-      |> Enum.find(fn
-        {:send, 2, "Running…", 60, _t_send} -> true
-        _ -> false
-      end)
-
-    assert t_send - t_poll < 2_000
-  end
 end

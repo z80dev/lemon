@@ -241,7 +241,6 @@ defmodule LemonGateway.Scheduler do
     {engine, value}
   end
 
-  defp thread_key(%Job{scope: scope}) when not is_nil(scope), do: {:scope, scope}
   defp thread_key(_), do: {:default, :global}
 
   defp maybe_apply_auto_resume(%Job{} = job) do
@@ -261,7 +260,7 @@ defmodule LemonGateway.Scheduler do
 
   defp maybe_apply_auto_resume_inner(%Job{session_key: session_key} = job)
        when is_binary(session_key) do
-    if Config.get(:auto_resume) do
+    if auto_resume_enabled?() do
       case Store.get_chat_state(session_key) do
         %ChatState{last_engine: engine, last_resume_token: token}
         when is_binary(engine) and is_binary(token) ->
@@ -288,6 +287,18 @@ defmodule LemonGateway.Scheduler do
   end
 
   defp maybe_apply_auto_resume_inner(job), do: job
+
+  defp auto_resume_enabled? do
+    if is_pid(Process.whereis(Config)) do
+      Config.get(:auto_resume) == true
+    else
+      false
+    end
+  rescue
+    _ -> false
+  catch
+    :exit, _ -> false
+  end
 
   defp apply_resume_if_compatible(%Job{} = job, engine, token) do
     # Only apply auto-resume if engine matches (or no engine selected yet).

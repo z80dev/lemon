@@ -3,13 +3,7 @@ defmodule LemonGateway.Telegram.TransportSharedTest do
 
   alias LemonGateway.Telegram.TransportShared
 
-  test "legacy_start_decision/2 keeps legacy as fallback-only ownership" do
-    assert :disabled == TransportShared.legacy_start_decision(false, false)
-    assert :channels_running == TransportShared.legacy_start_decision(true, true)
-    assert :start == TransportShared.legacy_start_decision(true, false)
-  end
-
-  test "legacy transport force-start is ignored when channels transport is running" do
+  test "channels_transport_running?/0 reflects adapter process presence" do
     existing_channels = Process.whereis(LemonChannels.Adapters.Telegram.Transport)
 
     spawned_channels =
@@ -29,7 +23,14 @@ defmodule LemonGateway.Telegram.TransportSharedTest do
       end
     end)
 
-    assert :channels_running == TransportShared.legacy_start_decision(force: true)
-    assert :ignore == LemonGateway.Telegram.Transport.start_link(force: true)
+    assert TransportShared.channels_transport_running?()
+  end
+
+  test "channels dedupe marks new then seen" do
+    :ok = TransportShared.init_dedupe(:channels)
+    key = {"chat-1", "topic-1", "msg-1"}
+
+    assert :new == TransportShared.check_and_mark_dedupe(:channels, key, 60_000)
+    assert :seen == TransportShared.check_and_mark_dedupe(:channels, key, 60_000)
   end
 end

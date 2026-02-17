@@ -1,6 +1,6 @@
 defmodule LemonGateway.Store.JsonlBackend do
   @moduledoc """
-  Backwards-compatible alias for `LemonCore.Store.JsonlBackend`.
+  JSONL store backend adapter for gateway callers.
   """
 
   @behaviour LemonCore.Store.Backend

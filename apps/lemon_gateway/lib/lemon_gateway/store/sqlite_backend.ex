@@ -1,6 +1,6 @@
 defmodule LemonGateway.Store.SqliteBackend do
   @moduledoc """
-  Backwards-compatible alias for `LemonCore.Store.SqliteBackend`.
+  SQLite store backend adapter for gateway callers.
   """
 
   @behaviour LemonCore.Store.Backend

@@ -2,7 +2,7 @@ defmodule LemonGateway.EngineLockTest do
   use ExUnit.Case, async: false
 
   alias LemonGateway.Event.Completed
-  alias LemonGateway.Types.{ChatScope, Job, ResumeToken}
+  alias LemonGateway.Types.{Job, ResumeToken}
 
   # ============================================================================
   # Unit Tests for EngineLock GenServer
@@ -984,15 +984,14 @@ defmodule LemonGateway.EngineLockTest do
   end
 
   test "lock is acquired and released during normal run" do
-    scope = %ChatScope{transport: :test, chat_id: 100, topic_id: nil}
+    session_key = "test:100"
 
     job = %Job{
-      scope: scope,
-      user_msg_id: 1,
-      text: "test",
+      session_key: session_key,
+      prompt: "test",
       resume: nil,
-      engine_hint: "echo",
-      meta: %{notify_pid: self()}
+      engine_id: "echo",
+      meta: %{notify_pid: self(), user_msg_id: 1}
     }
 
     LemonGateway.submit(job)
@@ -1003,12 +1002,11 @@ defmodule LemonGateway.EngineLockTest do
 
     # Lock should be released - another job for same scope should proceed immediately
     job2 = %Job{
-      scope: scope,
-      user_msg_id: 2,
-      text: "test2",
+      session_key: session_key,
+      prompt: "test2",
       resume: nil,
-      engine_hint: "echo",
-      meta: %{notify_pid: self()}
+      engine_id: "echo",
+      meta: %{notify_pid: self(), user_msg_id: 2}
     }
 
     LemonGateway.submit(job2)
@@ -1016,24 +1014,22 @@ defmodule LemonGateway.EngineLockTest do
   end
 
   test "concurrent runs for same scope are serialized by lock" do
-    scope = %ChatScope{transport: :test, chat_id: 101, topic_id: nil}
+    session_key = "test:101"
 
     job1 = %Job{
-      scope: scope,
-      user_msg_id: 1,
-      text: "first",
+      session_key: session_key,
+      prompt: "first",
       resume: nil,
-      engine_hint: "slow",
-      meta: %{notify_pid: self(), delay_ms: 100}
+      engine_id: "slow",
+      meta: %{notify_pid: self(), delay_ms: 100, user_msg_id: 1}
     }
 
     job2 = %Job{
-      scope: scope,
-      user_msg_id: 2,
-      text: "second",
+      session_key: session_key,
+      prompt: "second",
       resume: nil,
-      engine_hint: "slow",
-      meta: %{notify_pid: self(), delay_ms: 50}
+      engine_id: "slow",
+      meta: %{notify_pid: self(), delay_ms: 50, user_msg_id: 2}
     }
 
     # Submit both concurrently
@@ -1047,30 +1043,28 @@ defmodule LemonGateway.EngineLockTest do
     assert length(completions) == 2
     # First job submitted should complete first due to lock serialization
     [{first_job, _}, {second_job, _}] = completions
-    assert first_job.text == "first"
-    assert second_job.text == "second"
+    assert first_job.prompt == "first"
+    assert second_job.prompt == "second"
   end
 
   test "concurrent runs for different scopes proceed in parallel" do
-    scope1 = %ChatScope{transport: :test, chat_id: 102, topic_id: nil}
-    scope2 = %ChatScope{transport: :test, chat_id: 103, topic_id: nil}
+    session_key1 = "test:102"
+    session_key2 = "test:103"
 
     job1 = %Job{
-      scope: scope1,
-      user_msg_id: 1,
-      text: "scope1",
+      session_key: session_key1,
+      prompt: "scope1",
       resume: nil,
-      engine_hint: "slow",
-      meta: %{notify_pid: self(), delay_ms: 100}
+      engine_id: "slow",
+      meta: %{notify_pid: self(), delay_ms: 100, user_msg_id: 1}
     }
 
     job2 = %Job{
-      scope: scope2,
-      user_msg_id: 2,
-      text: "scope2",
+      session_key: session_key2,
+      prompt: "scope2",
       resume: nil,
-      engine_hint: "slow",
-      meta: %{notify_pid: self(), delay_ms: 100}
+      engine_id: "slow",
+      meta: %{notify_pid: self(), delay_ms: 100, user_msg_id: 2}
     }
 
     t_start = System.monotonic_time(:millisecond)
@@ -1089,27 +1083,25 @@ defmodule LemonGateway.EngineLockTest do
   end
 
   test "lock uses resume token value as key when present" do
-    scope1 = %ChatScope{transport: :test, chat_id: 104, topic_id: nil}
-    scope2 = %ChatScope{transport: :test, chat_id: 105, topic_id: nil}
+    session_key1 = "test:104"
+    session_key2 = "test:105"
     resume = %ResumeToken{engine: "slow", value: "shared-session-123"}
 
     # Two jobs with different scopes but same resume token should be serialized
     job1 = %Job{
-      scope: scope1,
-      user_msg_id: 1,
-      text: "resume1",
+      session_key: session_key1,
+      prompt: "resume1",
       resume: resume,
-      engine_hint: "slow",
-      meta: %{notify_pid: self(), delay_ms: 100}
+      engine_id: "slow",
+      meta: %{notify_pid: self(), delay_ms: 100, user_msg_id: 1}
     }
 
     job2 = %Job{
-      scope: scope2,
-      user_msg_id: 2,
-      text: "resume2",
+      session_key: session_key2,
+      prompt: "resume2",
       resume: resume,
-      engine_hint: "slow",
-      meta: %{notify_pid: self(), delay_ms: 50}
+      engine_id: "slow",
+      meta: %{notify_pid: self(), delay_ms: 50, user_msg_id: 2}
     }
 
     t_start = System.monotonic_time(:millisecond)
@@ -1149,24 +1141,22 @@ defmodule LemonGateway.EngineLockTest do
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-    scope = %ChatScope{transport: :test, chat_id: 106, topic_id: nil}
+    session_key = "test:106"
 
     crash_job = %Job{
-      scope: scope,
-      user_msg_id: 1,
-      text: "crash",
+      session_key: session_key,
+      prompt: "crash",
       resume: nil,
-      engine_hint: "crash",
-      meta: %{notify_pid: self()}
+      engine_id: "crash",
+      meta: %{notify_pid: self(), user_msg_id: 1}
     }
 
     ok_job = %Job{
-      scope: scope,
-      user_msg_id: 2,
-      text: "ok",
+      session_key: session_key,
+      prompt: "ok",
       resume: nil,
-      engine_hint: "echo",
-      meta: %{notify_pid: self()}
+      engine_id: "echo",
+      meta: %{notify_pid: self(), user_msg_id: 2}
     }
 
     # Submit crash job first, then ok job
@@ -1196,25 +1186,23 @@ defmodule LemonGateway.EngineLockTest do
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
-    scope = %ChatScope{transport: :test, chat_id: 107, topic_id: nil}
+    session_key = "test:107"
 
     # With locking disabled, two jobs for same scope should run in parallel
     job1 = %Job{
-      scope: scope,
-      user_msg_id: 1,
-      text: "no-lock-1",
+      session_key: session_key,
+      prompt: "no-lock-1",
       resume: nil,
-      engine_hint: "slow",
-      meta: %{notify_pid: self(), delay_ms: 100}
+      engine_id: "slow",
+      meta: %{notify_pid: self(), delay_ms: 100, user_msg_id: 1}
     }
 
     job2 = %Job{
-      scope: scope,
-      user_msg_id: 2,
-      text: "no-lock-2",
+      session_key: session_key,
+      prompt: "no-lock-2",
       resume: nil,
-      engine_hint: "slow",
-      meta: %{notify_pid: self(), delay_ms: 100}
+      engine_id: "slow",
+      meta: %{notify_pid: self(), delay_ms: 100, user_msg_id: 2}
     }
 
     t_start = System.monotonic_time(:millisecond)

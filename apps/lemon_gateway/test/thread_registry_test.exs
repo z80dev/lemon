@@ -729,23 +729,18 @@ defmodule LemonGateway.ThreadRegistryTest do
       # This tests that ThreadWorker properly integrates with ThreadRegistry
       # by checking that we can look up thread workers through the registry
 
-      alias LemonGateway.Types.{ChatScope, Job}
+      alias LemonGateway.Types.Job
 
-      scope = %ChatScope{
-        transport: :test,
-        chat_id: System.unique_integer([:positive]),
-        topic_id: nil
-      }
+      session_key = "test:#{System.unique_integer([:positive])}"
 
-      thread_key = {:scope, scope}
+      thread_key = {:session, session_key}
 
       # Submit a job to create a thread worker
       job = %Job{
-        scope: scope,
-        user_msg_id: 1,
-        text: "test",
+        session_key: session_key,
+        prompt: "test",
         queue_mode: :collect,
-        meta: %{notify_pid: self()}
+        meta: %{notify_pid: self(), user_msg_id: 1}
       }
 
       LemonGateway.submit(job)
@@ -765,23 +760,22 @@ defmodule LemonGateway.ThreadRegistryTest do
     end
 
     test "multiple thread workers register independently" do
-      alias LemonGateway.Types.{ChatScope, Job}
+      alias LemonGateway.Types.Job
 
       # Create multiple scopes
-      scopes =
+      session_keys =
         for i <- 1..3 do
-          %ChatScope{transport: :test, chat_id: 10000 + i, topic_id: nil}
+          "test:#{10000 + i}"
         end
 
       # Submit jobs to each scope
       jobs =
-        for scope <- scopes do
+        for session_key <- session_keys do
           job = %Job{
-            scope: scope,
-            user_msg_id: 1,
-            text: "test",
+            session_key: session_key,
+            prompt: "test",
             queue_mode: :collect,
-            meta: %{notify_pid: self()}
+            meta: %{notify_pid: self(), user_msg_id: 1}
           }
 
           LemonGateway.submit(job)
@@ -792,8 +786,8 @@ defmodule LemonGateway.ThreadRegistryTest do
 
       # All workers should be registered with different pids
       pids =
-        for scope <- scopes do
-          thread_key = {:scope, scope}
+        for session_key <- session_keys do
+          thread_key = {:session, session_key}
           ThreadRegistry.whereis(thread_key)
         end
 
@@ -810,23 +804,18 @@ defmodule LemonGateway.ThreadRegistryTest do
     end
 
     test "new worker can register after previous worker dies" do
-      alias LemonGateway.Types.{ChatScope, Job}
+      alias LemonGateway.Types.Job
 
-      scope = %ChatScope{
-        transport: :test,
-        chat_id: System.unique_integer([:positive]),
-        topic_id: nil
-      }
+      session_key = "test:#{System.unique_integer([:positive])}"
 
-      thread_key = {:scope, scope}
+      thread_key = {:session, session_key}
 
       # First job
       job1 = %Job{
-        scope: scope,
-        user_msg_id: 1,
-        text: "first",
+        session_key: session_key,
+        prompt: "first",
         queue_mode: :collect,
-        meta: %{notify_pid: self()}
+        meta: %{notify_pid: self(), user_msg_id: 1}
       }
 
       LemonGateway.submit(job1)
@@ -837,11 +826,10 @@ defmodule LemonGateway.ThreadRegistryTest do
 
       # Second job should create new worker
       job2 = %Job{
-        scope: scope,
-        user_msg_id: 2,
-        text: "second",
+        session_key: session_key,
+        prompt: "second",
         queue_mode: :collect,
-        meta: %{notify_pid: self()}
+        meta: %{notify_pid: self(), user_msg_id: 2}
       }
 
       LemonGateway.submit(job2)

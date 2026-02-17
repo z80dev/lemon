@@ -1,23 +1,15 @@
 defmodule LemonGateway.Store do
   @moduledoc """
-  Backwards-compatible wrapper for the canonical store.
+  Gateway-facing store API.
 
-  The canonical implementation now lives in `LemonCore.Store` so other umbrella
-  apps can depend on storage without depending on `:lemon_gateway`.
-
-  This module remains to avoid churn in the gateway code and callers.
+  Storage is implemented by `LemonCore.Store`; this module keeps gateway code
+  organized around a domain-specific namespace.
   """
 
   @type table :: atom()
 
-  # Keep a start_link/1 for older tests/callers. LemonCore.Store is normally
-  # started as part of the :lemon_core application.
   def start_link(opts) do
-    case LemonCore.Store.start_link(opts) do
-      {:ok, pid} -> {:ok, pid}
-      {:error, {:already_started, pid}} -> {:ok, pid}
-      other -> other
-    end
+    LemonCore.Store.start_link(opts)
   end
 
   defdelegate put_chat_state(scope, state), to: LemonCore.Store
@@ -36,6 +28,6 @@ defmodule LemonGateway.Store do
   defdelegate delete(table, key), to: LemonCore.Store
   defdelegate list(table), to: LemonCore.Store
 
-  defdelegate get_run_history(scope_or_session_key, opts \\ []), to: LemonCore.Store
+  defdelegate get_run_history(session_key, opts \\ []), to: LemonCore.Store
   defdelegate get_run(run_id), to: LemonCore.Store
 end

@@ -15,7 +15,7 @@ defmodule LemonGateway.RunTest do
   use ExUnit.Case, async: false
 
   alias LemonGateway.Run
-  alias LemonGateway.Types.{ChatScope, Job, ResumeToken}
+  alias LemonGateway.Types.{Job, ResumeToken}
   alias LemonGateway.Event
 
   # ============================================================================
@@ -52,7 +52,7 @@ defmodule LemonGateway.RunTest do
       {:ok, task_pid} =
         Task.start(fn ->
           send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
-          answer = "Test: #{job.text}"
+          answer = "Test: #{job.prompt}"
 
           send(
             sink_pid,
@@ -399,18 +399,28 @@ defmodule LemonGateway.RunTest do
   end
 
   defp make_scope(chat_id \\ System.unique_integer([:positive])) do
-    %ChatScope{transport: :test, chat_id: chat_id, topic_id: nil}
+    "test:#{chat_id}"
   end
 
-  defp make_job(scope, opts \\ []) do
+  defp make_job(session_key, opts \\ []) do
+    user_msg_id = Keyword.get(opts, :user_msg_id, 1)
+    base_meta = %{notify_pid: self(), user_msg_id: user_msg_id}
+    meta_opt = Keyword.get(opts, :meta, %{})
+
+    meta =
+      cond do
+        is_nil(meta_opt) -> nil
+        is_map(meta_opt) -> Map.merge(base_meta, meta_opt)
+        true -> meta_opt
+      end
+
     %Job{
-      scope: scope,
-      user_msg_id: Keyword.get(opts, :user_msg_id, 1),
-      text: Keyword.get(opts, :text, "test message"),
+      session_key: session_key,
+      prompt: Keyword.get(opts, :prompt, Keyword.get(opts, :text, "test message")),
       queue_mode: Keyword.get(opts, :queue_mode, :collect),
-      engine_hint: Keyword.get(opts, :engine_hint, "test"),
+      engine_id: Keyword.get(opts, :engine_id, Keyword.get(opts, :engine_hint, "test")),
       resume: Keyword.get(opts, :resume),
-      meta: Keyword.get(opts, :meta, %{notify_pid: self()})
+      meta: meta
     }
   end
 
@@ -465,12 +475,11 @@ defmodule LemonGateway.RunTest do
       scope = make_scope()
 
       job = %Job{
-        scope: scope,
-        user_msg_id: 1,
-        text: "test",
+        session_key: scope,
+        prompt: "test",
         queue_mode: :collect,
-        engine_hint: nil,
-        meta: %{notify_pid: self()}
+        engine_id: nil,
+        meta: %{notify_pid: self(), user_msg_id: 1}
       }
 
       {:ok, pid} = start_run_direct(job)
@@ -479,15 +488,14 @@ defmodule LemonGateway.RunTest do
       assert_receive {:run_complete, ^pid, %Event.Completed{ok: true, engine: "test"}}, 2000
     end
 
-    test "uses resume token engine when resume is provided" do
+    test "explicit engine_id takes precedence over resume token engine" do
       scope = make_scope()
       resume = %ResumeToken{engine: "echo", value: "abc123"}
       job = make_job(scope, resume: resume, engine_hint: "test")
 
       {:ok, pid} = start_run_direct(job)
 
-      # Should use echo engine from resume token, not test engine from hint
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true, engine: "echo"}}, 2000
+      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true, engine: "test"}}, 2000
     end
 
     test "handles engine start_run failure" do
@@ -1093,8 +1101,13 @@ defmodule LemonGateway.RunTest do
         value: "shared_session_#{System.unique_integer([:positive])}"
       }
 
-      # Both jobs have same resume token - engine_hint is ignored when resume is present
-      job1 = make_job(scope1, resume: resume, meta: %{notify_pid: self(), controller_pid: self()})
+      # Both jobs share the same resume value; first run uses controllable engine to hold the lock.
+      job1 =
+        make_job(scope1,
+          resume: resume,
+          engine_id: "controllable",
+          meta: %{notify_pid: self(), controller_pid: self()}
+        )
 
       {:ok, pid1} = start_run_direct(job1)
 
@@ -2238,15 +2251,14 @@ defmodule LemonGateway.RunTest do
       assert chat_state.last_resume_token == resume.value
     end
 
-    test "resume token in job determines engine selection" do
+    test "resume token does not override explicit engine selection" do
       scope = make_scope()
       resume = %ResumeToken{engine: "echo", value: "existing_session"}
       job = make_job(scope, resume: resume, engine_hint: "test", meta: %{notify_pid: self()})
 
       {:ok, pid} = start_run_direct(job)
 
-      # Should use echo engine (from resume), not test engine (from hint)
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true, engine: "echo"}}, 2000
+      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true, engine: "test"}}, 2000
     end
 
     test "resume token value is used for lock key" do
@@ -2281,7 +2293,12 @@ defmodule LemonGateway.RunTest do
       resume = %ResumeToken{engine: "controllable", value: resume_value}
 
       # First job holds the lock via resume token
-      job1 = make_job(scope1, resume: resume, meta: %{notify_pid: self(), controller_pid: self()})
+      job1 =
+        make_job(scope1,
+          resume: resume,
+          engine_id: "controllable",
+          meta: %{notify_pid: self(), controller_pid: self()}
+        )
       {:ok, _pid1} = start_run_direct(job1)
 
       assert_receive {:engine_started, _run_ref}, 5000
@@ -2442,7 +2459,7 @@ defmodule LemonGateway.RunTest do
 
       :telemetry.attach(
         "test-run-start-#{inspect(ref)}",
-        [:lemon_gateway, :run, :start],
+        [:lemon, :run, :start],
         fn _event, measurements, metadata, _config ->
           send(test_pid, {:telemetry_start, measurements, metadata})
         end,
@@ -2453,7 +2470,7 @@ defmodule LemonGateway.RunTest do
 
       # Should receive telemetry event
       assert_receive {:telemetry_start, measurements, metadata}, 2000
-      assert is_integer(measurements.system_time)
+      assert is_integer(measurements.ts_ms)
       assert metadata.engine == "test"
       assert is_binary(metadata.run_id)
 
@@ -2473,7 +2490,7 @@ defmodule LemonGateway.RunTest do
 
       :telemetry.attach(
         "test-run-stop-#{inspect(ref)}",
-        [:lemon_gateway, :run, :stop],
+        [:lemon, :run, :stop],
         fn _event, measurements, metadata, _config ->
           send(test_pid, {:telemetry_stop, measurements, metadata})
         end,
@@ -2488,8 +2505,7 @@ defmodule LemonGateway.RunTest do
       assert_receive {:telemetry_stop, measurements, metadata}, 2000
       assert is_integer(measurements.duration_ms)
       assert measurements.duration_ms >= 0
-      assert metadata.engine == "test"
-      assert metadata.ok == true
+      assert measurements.ok == true
       assert is_binary(metadata.run_id)
 
       :telemetry.detach("test-run-stop-#{inspect(ref)}")
@@ -2507,7 +2523,7 @@ defmodule LemonGateway.RunTest do
 
       :telemetry.attach(
         "test-run-stop-error-#{inspect(ref)}",
-        [:lemon_gateway, :run, :stop],
+        [:lemon, :run, :stop],
         fn _event, measurements, metadata, _config ->
           send(test_pid, {:telemetry_stop, measurements, metadata})
         end,
@@ -2519,8 +2535,8 @@ defmodule LemonGateway.RunTest do
       assert_receive {:run_complete, ^pid, %Event.Completed{ok: false}}, 2000
 
       # Should receive telemetry event with ok: false
-      assert_receive {:telemetry_stop, _measurements, metadata}, 2000
-      assert metadata.ok == false
+      assert_receive {:telemetry_stop, measurements, _metadata}, 2000
+      assert measurements.ok == false
 
       :telemetry.detach("test-run-stop-error-#{inspect(ref)}")
     end
@@ -2540,7 +2556,7 @@ defmodule LemonGateway.RunTest do
 
       :telemetry.attach(
         "test-run-duration-#{inspect(ref)}",
-        [:lemon_gateway, :run, :stop],
+        [:lemon, :run, :stop],
         fn _event, measurements, _metadata, _config ->
           send(test_pid, {:telemetry_stop_duration, measurements.duration_ms})
         end,
@@ -2578,7 +2594,7 @@ defmodule LemonGateway.RunTest do
 
       :telemetry.attach(
         "test-first-token-#{inspect(ref)}",
-        [:lemon_gateway, :run, :first_token],
+        [:lemon, :run, :first_token],
         fn _event, measurements, metadata, _config ->
           send(test_pid, {:telemetry_first_token, measurements, metadata})
         end,
@@ -2593,7 +2609,6 @@ defmodule LemonGateway.RunTest do
       assert_receive {:telemetry_first_token, measurements, metadata}, 2000
       assert is_integer(measurements.latency_ms)
       assert measurements.latency_ms >= 0
-      assert metadata.engine == "streaming"
       assert is_binary(metadata.run_id)
 
       :telemetry.detach("test-first-token-#{inspect(ref)}")
@@ -2611,7 +2626,7 @@ defmodule LemonGateway.RunTest do
 
       :telemetry.attach(
         "test-first-token-once-#{inspect(ref)}",
-        [:lemon_gateway, :run, :first_token],
+        [:lemon, :run, :first_token],
         fn _event, _measurements, _metadata, _config ->
           send(test_pid, :first_token_emitted)
         end,

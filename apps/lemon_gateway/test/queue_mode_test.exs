@@ -1,28 +1,28 @@
 defmodule LemonGateway.QueueModeTest do
   use ExUnit.Case
 
-  alias LemonGateway.Types.{ChatScope, Job}
+  alias LemonGateway.Types.Job
 
   describe "Job struct" do
     test "default queue_mode is :collect" do
-      scope = %ChatScope{transport: :test, chat_id: 1, topic_id: nil}
+      scope = "test:1"
 
       job = %Job{
-        scope: scope,
-        user_msg_id: 1,
-        text: "test"
+        session_key: scope,
+        meta: %{user_msg_id: 1},
+        prompt: "test"
       }
 
       assert job.queue_mode == :collect
     end
 
     test "can set queue_mode to :followup" do
-      scope = %ChatScope{transport: :test, chat_id: 1, topic_id: nil}
+      scope = "test:1"
 
       job = %Job{
-        scope: scope,
-        user_msg_id: 1,
-        text: "test",
+        session_key: scope,
+        meta: %{user_msg_id: 1},
+        prompt: "test",
         queue_mode: :followup
       }
 
@@ -30,12 +30,12 @@ defmodule LemonGateway.QueueModeTest do
     end
 
     test "can set queue_mode to :steer" do
-      scope = %ChatScope{transport: :test, chat_id: 1, topic_id: nil}
+      scope = "test:1"
 
       job = %Job{
-        scope: scope,
-        user_msg_id: 1,
-        text: "test",
+        session_key: scope,
+        meta: %{user_msg_id: 1},
+        prompt: "test",
         queue_mode: :steer
       }
 
@@ -43,12 +43,12 @@ defmodule LemonGateway.QueueModeTest do
     end
 
     test "can set queue_mode to :interrupt" do
-      scope = %ChatScope{transport: :test, chat_id: 1, topic_id: nil}
+      scope = "test:1"
 
       job = %Job{
-        scope: scope,
-        user_msg_id: 1,
-        text: "test",
+        session_key: scope,
+        meta: %{user_msg_id: 1},
+        prompt: "test",
         queue_mode: :interrupt
       }
 
@@ -61,7 +61,7 @@ defmodule LemonGateway.QueueModeTest do
     # This avoids needing the full Scheduler infrastructure
 
     test "collect mode appends to queue" do
-      scope = %ChatScope{transport: :test, chat_id: 1, topic_id: nil}
+      scope = "test:1"
 
       state = %{
         jobs: :queue.new(),
@@ -69,9 +69,9 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      job1 = %Job{scope: scope, user_msg_id: 1, text: "first", queue_mode: :collect}
-      job2 = %Job{scope: scope, user_msg_id: 2, text: "second", queue_mode: :collect}
-      job3 = %Job{scope: scope, user_msg_id: 3, text: "third", queue_mode: :collect}
+      job1 = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "first", queue_mode: :collect}
+      job2 = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "second", queue_mode: :collect}
+      job3 = %Job{session_key: scope, meta: %{user_msg_id: 3}, prompt: "third", queue_mode: :collect}
 
       state = enqueue_by_mode(job1, state)
       state = enqueue_by_mode(job2, state)
@@ -80,13 +80,13 @@ defmodule LemonGateway.QueueModeTest do
       jobs = :queue.to_list(state.jobs)
 
       assert length(jobs) == 3
-      assert Enum.at(jobs, 0).text == "first"
-      assert Enum.at(jobs, 1).text == "second"
-      assert Enum.at(jobs, 2).text == "third"
+      assert Enum.at(jobs, 0).prompt == "first"
+      assert Enum.at(jobs, 1).prompt == "second"
+      assert Enum.at(jobs, 2).prompt == "third"
     end
 
     test "steer mode inserts at front of queue" do
-      scope = %ChatScope{transport: :test, chat_id: 1, topic_id: nil}
+      scope = "test:1"
 
       state = %{
         jobs: :queue.new(),
@@ -94,9 +94,9 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      job1 = %Job{scope: scope, user_msg_id: 1, text: "first", queue_mode: :collect}
-      job2 = %Job{scope: scope, user_msg_id: 2, text: "second", queue_mode: :collect}
-      job_steer = %Job{scope: scope, user_msg_id: 3, text: "urgent", queue_mode: :steer}
+      job1 = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "first", queue_mode: :collect}
+      job2 = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "second", queue_mode: :collect}
+      job_steer = %Job{session_key: scope, meta: %{user_msg_id: 3}, prompt: "urgent", queue_mode: :steer}
 
       state = enqueue_by_mode(job1, state)
       state = enqueue_by_mode(job2, state)
@@ -106,13 +106,13 @@ defmodule LemonGateway.QueueModeTest do
 
       # steer job should be at front
       assert length(jobs) == 3
-      assert Enum.at(jobs, 0).text == "urgent"
-      assert Enum.at(jobs, 1).text == "first"
-      assert Enum.at(jobs, 2).text == "second"
+      assert Enum.at(jobs, 0).prompt == "urgent"
+      assert Enum.at(jobs, 1).prompt == "first"
+      assert Enum.at(jobs, 2).prompt == "second"
     end
 
     test "interrupt mode inserts at front of queue" do
-      scope = %ChatScope{transport: :test, chat_id: 1, topic_id: nil}
+      scope = "test:1"
 
       state = %{
         jobs: :queue.new(),
@@ -120,13 +120,13 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      job1 = %Job{scope: scope, user_msg_id: 1, text: "first", queue_mode: :collect}
-      job2 = %Job{scope: scope, user_msg_id: 2, text: "second", queue_mode: :collect}
+      job1 = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "first", queue_mode: :collect}
+      job2 = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "second", queue_mode: :collect}
 
       job_interrupt = %Job{
-        scope: scope,
-        user_msg_id: 3,
-        text: "interrupt",
+        session_key: scope,
+        meta: %{user_msg_id: 3},
+        prompt: "interrupt",
         queue_mode: :interrupt
       }
 
@@ -138,13 +138,13 @@ defmodule LemonGateway.QueueModeTest do
 
       # interrupt job should be at front
       assert length(jobs) == 3
-      assert Enum.at(jobs, 0).text == "interrupt"
-      assert Enum.at(jobs, 1).text == "first"
-      assert Enum.at(jobs, 2).text == "second"
+      assert Enum.at(jobs, 0).prompt == "interrupt"
+      assert Enum.at(jobs, 1).prompt == "first"
+      assert Enum.at(jobs, 2).prompt == "second"
     end
 
     test "multiple steer jobs maintain LIFO order at front" do
-      scope = %ChatScope{transport: :test, chat_id: 1, topic_id: nil}
+      scope = "test:1"
 
       state = %{
         jobs: :queue.new(),
@@ -152,9 +152,9 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      job1 = %Job{scope: scope, user_msg_id: 1, text: "normal", queue_mode: :collect}
-      steer1 = %Job{scope: scope, user_msg_id: 2, text: "steer1", queue_mode: :steer}
-      steer2 = %Job{scope: scope, user_msg_id: 3, text: "steer2", queue_mode: :steer}
+      job1 = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "normal", queue_mode: :collect}
+      steer1 = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "steer1", queue_mode: :steer}
+      steer2 = %Job{session_key: scope, meta: %{user_msg_id: 3}, prompt: "steer2", queue_mode: :steer}
 
       state = enqueue_by_mode(job1, state)
       state = enqueue_by_mode(steer1, state)
@@ -164,16 +164,16 @@ defmodule LemonGateway.QueueModeTest do
 
       # steer2 should be first (LIFO for steer), then steer1, then normal
       assert length(jobs) == 3
-      assert Enum.at(jobs, 0).text == "steer2"
-      assert Enum.at(jobs, 1).text == "steer1"
-      assert Enum.at(jobs, 2).text == "normal"
+      assert Enum.at(jobs, 0).prompt == "steer2"
+      assert Enum.at(jobs, 1).prompt == "steer1"
+      assert Enum.at(jobs, 2).prompt == "normal"
     end
 
     test "followup mode merges with previous followup within debounce window" do
       # Set a long debounce window for testing
       Application.put_env(:lemon_gateway, :followup_debounce_ms, 5000)
 
-      scope = %ChatScope{transport: :test, chat_id: 1, topic_id: nil}
+      scope = "test:1"
 
       state = %{
         jobs: :queue.new(),
@@ -181,8 +181,8 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      followup1 = %Job{scope: scope, user_msg_id: 1, text: "part1", queue_mode: :followup}
-      followup2 = %Job{scope: scope, user_msg_id: 2, text: "part2", queue_mode: :followup}
+      followup1 = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "part1", queue_mode: :followup}
+      followup2 = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "part2", queue_mode: :followup}
 
       state = enqueue_by_mode(followup1, state)
       # Enqueue immediately (within debounce window)
@@ -192,14 +192,14 @@ defmodule LemonGateway.QueueModeTest do
 
       # Should be merged into one job
       assert length(jobs) == 1
-      assert Enum.at(jobs, 0).text == "part1\npart2"
+      assert Enum.at(jobs, 0).prompt == "part1\npart2"
     end
 
     test "followup mode does not merge outside debounce window" do
       # Set a very short debounce window
       Application.put_env(:lemon_gateway, :followup_debounce_ms, 1)
 
-      scope = %ChatScope{transport: :test, chat_id: 1, topic_id: nil}
+      scope = "test:1"
 
       state = %{
         jobs: :queue.new(),
@@ -207,8 +207,8 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      followup1 = %Job{scope: scope, user_msg_id: 1, text: "part1", queue_mode: :followup}
-      followup2 = %Job{scope: scope, user_msg_id: 2, text: "part2", queue_mode: :followup}
+      followup1 = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "part1", queue_mode: :followup}
+      followup2 = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "part2", queue_mode: :followup}
 
       state = enqueue_by_mode(followup1, state)
       # Outside debounce window (1ms)
@@ -219,14 +219,14 @@ defmodule LemonGateway.QueueModeTest do
 
       # Should NOT be merged - two separate jobs
       assert length(jobs) == 2
-      assert Enum.at(jobs, 0).text == "part1"
-      assert Enum.at(jobs, 1).text == "part2"
+      assert Enum.at(jobs, 0).prompt == "part1"
+      assert Enum.at(jobs, 1).prompt == "part2"
     end
 
     test "followup does not merge with non-followup job" do
       Application.put_env(:lemon_gateway, :followup_debounce_ms, 5000)
 
-      scope = %ChatScope{transport: :test, chat_id: 1, topic_id: nil}
+      scope = "test:1"
 
       state = %{
         jobs: :queue.new(),
@@ -234,8 +234,8 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      collect_job = %Job{scope: scope, user_msg_id: 1, text: "collect", queue_mode: :collect}
-      followup = %Job{scope: scope, user_msg_id: 2, text: "followup", queue_mode: :followup}
+      collect_job = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "collect", queue_mode: :collect}
+      followup = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "followup", queue_mode: :followup}
 
       state = enqueue_by_mode(collect_job, state)
       state = enqueue_by_mode(followup, state)
@@ -244,14 +244,14 @@ defmodule LemonGateway.QueueModeTest do
 
       # Should NOT merge - different modes
       assert length(jobs) == 2
-      assert Enum.at(jobs, 0).text == "collect"
-      assert Enum.at(jobs, 1).text == "followup"
+      assert Enum.at(jobs, 0).prompt == "collect"
+      assert Enum.at(jobs, 1).prompt == "followup"
     end
 
     test "multiple followups merge consecutively" do
       Application.put_env(:lemon_gateway, :followup_debounce_ms, 5000)
 
-      scope = %ChatScope{transport: :test, chat_id: 1, topic_id: nil}
+      scope = "test:1"
 
       state = %{
         jobs: :queue.new(),
@@ -259,9 +259,9 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      followup1 = %Job{scope: scope, user_msg_id: 1, text: "a", queue_mode: :followup}
-      followup2 = %Job{scope: scope, user_msg_id: 2, text: "b", queue_mode: :followup}
-      followup3 = %Job{scope: scope, user_msg_id: 3, text: "c", queue_mode: :followup}
+      followup1 = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "a", queue_mode: :followup}
+      followup2 = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "b", queue_mode: :followup}
+      followup3 = %Job{session_key: scope, meta: %{user_msg_id: 3}, prompt: "c", queue_mode: :followup}
 
       state = enqueue_by_mode(followup1, state)
       state = enqueue_by_mode(followup2, state)
@@ -271,13 +271,13 @@ defmodule LemonGateway.QueueModeTest do
 
       # All three should be merged
       assert length(jobs) == 1
-      assert Enum.at(jobs, 0).text == "a\nb\nc"
+      assert Enum.at(jobs, 0).prompt == "a\nb\nc"
     end
   end
 
   describe "mode interactions" do
     test "interrupt after steer - interrupt goes to front" do
-      scope = %ChatScope{transport: :test, chat_id: 1, topic_id: nil}
+      scope = "test:1"
 
       state = %{
         jobs: :queue.new(),
@@ -285,13 +285,13 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      job_normal = %Job{scope: scope, user_msg_id: 1, text: "normal", queue_mode: :collect}
-      job_steer = %Job{scope: scope, user_msg_id: 2, text: "steer", queue_mode: :steer}
+      job_normal = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "normal", queue_mode: :collect}
+      job_steer = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "steer", queue_mode: :steer}
 
       job_interrupt = %Job{
-        scope: scope,
-        user_msg_id: 3,
-        text: "interrupt",
+        session_key: scope,
+        meta: %{user_msg_id: 3},
+        prompt: "interrupt",
         queue_mode: :interrupt
       }
 
@@ -303,13 +303,13 @@ defmodule LemonGateway.QueueModeTest do
 
       # Order should be: interrupt, steer, normal
       assert length(jobs) == 3
-      assert Enum.at(jobs, 0).text == "interrupt"
-      assert Enum.at(jobs, 1).text == "steer"
-      assert Enum.at(jobs, 2).text == "normal"
+      assert Enum.at(jobs, 0).prompt == "interrupt"
+      assert Enum.at(jobs, 1).prompt == "steer"
+      assert Enum.at(jobs, 2).prompt == "normal"
     end
 
     test "steer after interrupt - steer goes after interrupt" do
-      scope = %ChatScope{transport: :test, chat_id: 1, topic_id: nil}
+      scope = "test:1"
 
       state = %{
         jobs: :queue.new(),
@@ -317,16 +317,16 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      job_normal = %Job{scope: scope, user_msg_id: 1, text: "normal", queue_mode: :collect}
+      job_normal = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "normal", queue_mode: :collect}
 
       job_interrupt = %Job{
-        scope: scope,
-        user_msg_id: 2,
-        text: "interrupt",
+        session_key: scope,
+        meta: %{user_msg_id: 2},
+        prompt: "interrupt",
         queue_mode: :interrupt
       }
 
-      job_steer = %Job{scope: scope, user_msg_id: 3, text: "steer", queue_mode: :steer}
+      job_steer = %Job{session_key: scope, meta: %{user_msg_id: 3}, prompt: "steer", queue_mode: :steer}
 
       state = enqueue_by_mode(job_normal, state)
       state = enqueue_by_mode(job_interrupt, state)
@@ -336,15 +336,15 @@ defmodule LemonGateway.QueueModeTest do
 
       # Order should be: steer, interrupt, normal (both went to front, steer last)
       assert length(jobs) == 3
-      assert Enum.at(jobs, 0).text == "steer"
-      assert Enum.at(jobs, 1).text == "interrupt"
-      assert Enum.at(jobs, 2).text == "normal"
+      assert Enum.at(jobs, 0).prompt == "steer"
+      assert Enum.at(jobs, 1).prompt == "interrupt"
+      assert Enum.at(jobs, 2).prompt == "normal"
     end
 
     test "followup between collect jobs" do
       Application.put_env(:lemon_gateway, :followup_debounce_ms, 5000)
 
-      scope = %ChatScope{transport: :test, chat_id: 1, topic_id: nil}
+      scope = "test:1"
 
       state = %{
         jobs: :queue.new(),
@@ -352,9 +352,9 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      job1 = %Job{scope: scope, user_msg_id: 1, text: "collect1", queue_mode: :collect}
-      followup = %Job{scope: scope, user_msg_id: 2, text: "followup", queue_mode: :followup}
-      job2 = %Job{scope: scope, user_msg_id: 3, text: "collect2", queue_mode: :collect}
+      job1 = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "collect1", queue_mode: :collect}
+      followup = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "followup", queue_mode: :followup}
+      job2 = %Job{session_key: scope, meta: %{user_msg_id: 3}, prompt: "collect2", queue_mode: :collect}
 
       state = enqueue_by_mode(job1, state)
       state = enqueue_by_mode(followup, state)
@@ -364,15 +364,15 @@ defmodule LemonGateway.QueueModeTest do
 
       # All appended in order (no merge because followup is after collect, not followup)
       assert length(jobs) == 3
-      assert Enum.at(jobs, 0).text == "collect1"
-      assert Enum.at(jobs, 1).text == "followup"
-      assert Enum.at(jobs, 2).text == "collect2"
+      assert Enum.at(jobs, 0).prompt == "collect1"
+      assert Enum.at(jobs, 1).prompt == "followup"
+      assert Enum.at(jobs, 2).prompt == "collect2"
     end
 
     test "followup after steer does not merge" do
       Application.put_env(:lemon_gateway, :followup_debounce_ms, 5000)
 
-      scope = %ChatScope{transport: :test, chat_id: 1, topic_id: nil}
+      scope = "test:1"
 
       state = %{
         jobs: :queue.new(),
@@ -380,8 +380,8 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      job_steer = %Job{scope: scope, user_msg_id: 1, text: "steer", queue_mode: :steer}
-      followup = %Job{scope: scope, user_msg_id: 2, text: "followup", queue_mode: :followup}
+      job_steer = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "steer", queue_mode: :steer}
+      followup = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "followup", queue_mode: :followup}
 
       state = enqueue_by_mode(job_steer, state)
       state = enqueue_by_mode(followup, state)
@@ -390,14 +390,14 @@ defmodule LemonGateway.QueueModeTest do
 
       # No merge - steer is not a followup
       assert length(jobs) == 2
-      assert Enum.at(jobs, 0).text == "steer"
-      assert Enum.at(jobs, 1).text == "followup"
+      assert Enum.at(jobs, 0).prompt == "steer"
+      assert Enum.at(jobs, 1).prompt == "followup"
     end
 
     test "mixed mode complex scenario" do
       Application.put_env(:lemon_gateway, :followup_debounce_ms, 5000)
 
-      scope = %ChatScope{transport: :test, chat_id: 1, topic_id: nil}
+      scope = "test:1"
 
       state = %{
         jobs: :queue.new(),
@@ -406,11 +406,11 @@ defmodule LemonGateway.QueueModeTest do
       }
 
       # Sequence: collect1, followup1, followup2 (merge), steer, collect2
-      collect1 = %Job{scope: scope, user_msg_id: 1, text: "collect1", queue_mode: :collect}
-      followup1 = %Job{scope: scope, user_msg_id: 2, text: "follow1", queue_mode: :followup}
-      followup2 = %Job{scope: scope, user_msg_id: 3, text: "follow2", queue_mode: :followup}
-      steer = %Job{scope: scope, user_msg_id: 4, text: "steer", queue_mode: :steer}
-      collect2 = %Job{scope: scope, user_msg_id: 5, text: "collect2", queue_mode: :collect}
+      collect1 = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "collect1", queue_mode: :collect}
+      followup1 = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "follow1", queue_mode: :followup}
+      followup2 = %Job{session_key: scope, meta: %{user_msg_id: 3}, prompt: "follow2", queue_mode: :followup}
+      steer = %Job{session_key: scope, meta: %{user_msg_id: 4}, prompt: "steer", queue_mode: :steer}
+      collect2 = %Job{session_key: scope, meta: %{user_msg_id: 5}, prompt: "collect2", queue_mode: :collect}
 
       state = enqueue_by_mode(collect1, state)
       state = enqueue_by_mode(followup1, state)
@@ -422,10 +422,10 @@ defmodule LemonGateway.QueueModeTest do
 
       # Expected order: steer, collect1, merged_followup, collect2
       assert length(jobs) == 4
-      assert Enum.at(jobs, 0).text == "steer"
-      assert Enum.at(jobs, 1).text == "collect1"
-      assert Enum.at(jobs, 2).text == "follow1\nfollow2"
-      assert Enum.at(jobs, 3).text == "collect2"
+      assert Enum.at(jobs, 0).prompt == "steer"
+      assert Enum.at(jobs, 1).prompt == "collect1"
+      assert Enum.at(jobs, 2).prompt == "follow1\nfollow2"
+      assert Enum.at(jobs, 3).prompt == "collect2"
     end
   end
 
@@ -473,7 +473,7 @@ defmodule LemonGateway.QueueModeTest do
     case :queue.out_r(queue) do
       {{:value, %Job{queue_mode: :followup} = last_job}, rest_queue} ->
         # Merge by concatenating text with newline separator
-        merged_job = %{last_job | text: last_job.text <> "\n" <> new_job.text}
+        merged_job = %{last_job | prompt: last_job.prompt <> "\n" <> new_job.prompt}
         {:merged, :queue.in(merged_job, rest_queue)}
 
       _ ->
