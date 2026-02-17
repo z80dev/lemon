@@ -11,11 +11,11 @@ Lemon enforces direct umbrella dependencies by app. This keeps the harness modul
 | `coding_agent` | `agent_core`, `ai`, `lemon_core`, `lemon_skills` |
 | `coding_agent_ui` | `coding_agent` |
 | `lemon_automation` | `lemon_core`, `lemon_router` |
-| `lemon_channels` | `lemon_core`, `lemon_gateway` |
-| `lemon_control_plane` | `ai`, `lemon_automation`, `lemon_channels`, `lemon_core`, `lemon_router`, `lemon_skills` |
+| `lemon_channels` | `lemon_core` |
+| `lemon_control_plane` | `ai`, `coding_agent`, `lemon_automation`, `lemon_channels`, `lemon_core`, `lemon_router`, `lemon_skills` |
 | `lemon_core` | *(none)* |
-| `lemon_gateway` | `agent_core`, `coding_agent`, `lemon_core` |
-| `lemon_router` | `agent_core`, `coding_agent`, `lemon_channels`, `lemon_core`, `lemon_gateway` |
+| `lemon_gateway` | `agent_core`, `ai`, `coding_agent`, `lemon_automation`, `lemon_channels`, `lemon_core` |
+| `lemon_router` | `agent_core`, `ai`, `coding_agent`, `lemon_channels`, `lemon_core`, `lemon_gateway` |
 | `lemon_skills` | `agent_core`, `ai`, `lemon_core` |
 
 ## Enforcement
@@ -26,4 +26,8 @@ Run:
 mix lemon.quality
 ```
 
-The architecture checker reads `apps/*/mix.exs` and fails if any app introduces a direct `in_umbrella: true` dependency outside this policy.
+The architecture checker enforces both:
+- direct umbrella dependencies from `apps/*/mix.exs`
+- namespace references in `apps/*/lib/**/*.ex` (forbidden cross-app module usage)
+
+It fails if any app introduces either an out-of-policy direct dependency or an out-of-policy cross-app namespace reference.
