@@ -1,9 +1,6 @@
 defmodule LemonChannels.Adapters.Telegram do
   @moduledoc """
   Telegram channel adapter.
-
-  Wraps the existing LemonGateway.Telegram modules to provide
-  the LemonChannels.Plugin interface.
   """
 
   @behaviour LemonChannels.Plugin

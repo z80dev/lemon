@@ -1,33 +1,21 @@
 defmodule LemonChannels.GatewayConfig do
   @moduledoc false
 
-  # lemon_channels is allowed to run in isolation in tests. Many components
-  # historically read configuration from the LemonGateway.Config GenServer.
-  # This module now provides a process-independent boundary for channels by
-  # reading canonical LemonCore config plus runtime app-env overrides.
+  # Channels read canonical gateway settings from LemonCore config and allow
+  # explicit runtime overrides under the :lemon_channels app env.
 
   @spec get(atom(), term()) :: term()
   def get(key, default \\ nil) when is_atom(key) do
-    gateway = merged_gateway_config()
+    gateway = merged_config()
     fetch(gateway, key, default)
   rescue
     _ -> default
   end
 
-  defp merged_gateway_config do
-    gateway_source_config()
+  defp merged_config do
+    base_gateway_config()
+    |> deep_merge(runtime_gateway_overrides())
     |> merge_telegram_overrides()
-  end
-
-  defp gateway_source_config do
-    case Application.get_env(:lemon_gateway, LemonGateway.Config) do
-      nil ->
-        base_gateway_config()
-
-      runtime ->
-        runtime
-        |> normalize_gateway_env()
-    end
   end
 
   defp base_gateway_config do
@@ -35,59 +23,37 @@ defmodule LemonChannels.GatewayConfig do
       %{gateway: gateway} when is_map(gateway) -> gateway
       _ -> %{}
     end
+  rescue
+    _ -> %{}
   end
 
-  # Keep compatibility with LemonGateway.ConfigLoader override semantics:
-  # - map -> map
-  # - keyword list -> map
-  # - non-keyword list -> bindings list
-  defp normalize_gateway_env(config) when is_map(config), do: config
-  defp normalize_gateway_env(config) when is_list(config) and config == [], do: %{}
-
-  defp normalize_gateway_env(config) when is_list(config) do
-    if Keyword.keyword?(config) do
-      Enum.into(config, %{})
-    else
-      %{bindings: config}
-    end
+  defp runtime_gateway_overrides do
+    Application.get_env(:lemon_channels, :gateway, %{})
+    |> normalize_map()
   end
-
-  defp normalize_gateway_env(_), do: %{}
-
-  defp normalize_map(config) when is_map(config), do: config
-  defp normalize_map(config) when is_list(config) and config == [], do: %{}
-
-  defp normalize_map(config) when is_list(config) do
-    if Keyword.keyword?(config) do
-      Enum.into(config, %{})
-    else
-      %{}
-    end
-  end
-
-  defp normalize_map(_), do: %{}
 
   defp merge_telegram_overrides(gateway) when is_map(gateway) do
-    telegram_runtime = Application.get_env(:lemon_gateway, :telegram)
+    telegram_runtime = Application.get_env(:lemon_channels, :telegram, %{})
 
     telegram_base =
       gateway
       |> fetch(:telegram, %{})
       |> normalize_map()
 
-    merged_telegram =
-      case telegram_runtime do
-        nil ->
-          telegram_base
-
-        runtime ->
-          deep_merge(telegram_base, normalize_map(runtime))
-      end
+    merged_telegram = deep_merge(telegram_base, normalize_map(telegram_runtime))
 
     gateway
     |> Map.delete("telegram")
     |> Map.put(:telegram, merged_telegram)
   end
+
+  defp normalize_map(config) when is_map(config), do: config
+
+  defp normalize_map(config) when is_list(config) do
+    if Keyword.keyword?(config), do: Enum.into(config, %{}), else: %{}
+  end
+
+  defp normalize_map(_), do: %{}
 
   defp deep_merge(left, right) when is_map(left) and is_map(right) do
     Enum.reduce(right, left, fn {right_key, right_value}, acc ->

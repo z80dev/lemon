@@ -1,28 +1,24 @@
 defmodule LemonChannels.Adapters.Telegram.Transport do
   @moduledoc """
   Telegram polling transport that normalizes messages and forwards them to the router.
-
-  This transport wraps the existing LemonGateway.Telegram.Transport polling logic
-  but routes messages through the new lemon_channels -> lemon_router pipeline.
   """
 
   use GenServer
 
   require Logger
 
-  alias LemonGateway.BindingResolver
-  alias LemonGateway.Cwd
-  alias LemonGateway.EngineRegistry
-  alias LemonGateway.Store
-  alias LemonGateway.Telegram.TriggerMode
-  alias LemonGateway.Telegram.TransportShared
-  alias LemonGateway.Types.ChatScope
-  alias LemonGateway.Types.ResumeToken
+  alias LemonChannels.BindingResolver
+  alias LemonChannels.Cwd
+  alias LemonChannels.EngineRegistry
+  alias LemonChannels.Telegram.TriggerMode
+  alias LemonChannels.Telegram.TransportShared
+  alias LemonChannels.Types.ChatScope
+  alias LemonChannels.Types.ResumeToken
   alias LemonCore.SessionKey
   alias LemonCore.Store, as: CoreStore
   alias LemonChannels.Adapters.Telegram.Inbound
-  alias LemonGateway.Telegram.OffsetStore
-  alias LemonGateway.Telegram.PollerLock
+  alias LemonChannels.Telegram.OffsetStore
+  alias LemonChannels.Telegram.PollerLock
 
   @default_poll_interval 1_000
   @default_dedupe_ttl 600_000
@@ -36,13 +32,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   @impl true
   def init(opts) do
-    # Source of truth is TOML-backed LemonGateway.Config (when running), but allow
-    # Application env overrides (tests/dev) and per-process opts.
+    # Source of truth is TOML-backed LemonCore config, with explicit
+    # :lemon_channels runtime overrides and per-process opts.
     base = LemonChannels.GatewayConfig.get(:telegram, %{})
 
     config =
       base
-      |> merge_config(Application.get_env(:lemon_gateway, :telegram))
+      |> merge_config(Application.get_env(:lemon_channels, :telegram))
       |> merge_config(Keyword.get(opts, :config))
       |> merge_config(Keyword.drop(opts, [:config]))
 
@@ -50,10 +46,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
     if is_binary(token) and token != "" do
       account_id = config[:account_id] || config["account_id"] || "default"
-
-      # Prefer the lemon_channels transport. If the legacy poller is already running
-      # (transient startup ordering), stop it so we don't double-submit jobs.
-      _ = TransportShared.stop_legacy_transport()
 
       case PollerLock.acquire(account_id, token) do
         :ok ->
@@ -75,13 +67,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             resolve_bot_identity(
               config[:bot_id] || config["bot_id"],
               config[:bot_username] || config["bot_username"],
-              config[:api_mod] || LemonGateway.Telegram.API,
+              config[:api_mod] || LemonChannels.Telegram.API,
               token
             )
 
           state = %{
             token: token,
-            api_mod: config[:api_mod] || LemonGateway.Telegram.API,
+            api_mod: config[:api_mod] || LemonChannels.Telegram.API,
             poll_interval_ms: config[:poll_interval_ms] || @default_poll_interval,
             dedupe_ttl_ms: config[:dedupe_ttl_ms] || @default_dedupe_ttl,
             debounce_ms: config[:debounce_ms] || config["debounce_ms"] || @default_debounce_ms,
@@ -121,7 +113,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             drop_pending_done?: false,
             buffers: %{},
             media_groups: %{},
-            # run_id => %{scope, session_key, chat_id, thread_id, user_msg_id}
+            # run_id => %{session_key, chat_id, thread_id, user_msg_id}
             pending_new: %{},
             bot_id: bot_id,
             bot_username: bot_username,
@@ -207,10 +199,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   # Best-effort second pass to clear chat state in case a late write races with the first delete.
   def handle_info(
-        {:new_session_cleanup, %ChatScope{} = scope, session_key, chat_id, thread_id},
+        {:new_session_cleanup, session_key, chat_id, thread_id},
         state
       ) do
-    _ = safe_delete_chat_state(scope)
     _ = safe_delete_chat_state(session_key)
     _ = safe_delete_selected_resume(state, chat_id, thread_id)
     _ = safe_clear_thread_message_indices(state, chat_id, thread_id)
@@ -225,13 +216,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
     case run_id && Map.get(state.pending_new, run_id) do
       %{
-        scope: %ChatScope{} = scope,
         session_key: session_key,
         chat_id: chat_id,
         thread_id: thread_id,
         user_msg_id: user_msg_id
       } = pending ->
-        _ = safe_delete_chat_state(scope)
         _ = safe_delete_chat_state(session_key)
         _ = safe_delete_selected_resume(state, chat_id, thread_id)
         _ = safe_clear_thread_message_indices(state, chat_id, thread_id)
@@ -239,7 +228,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         # Store writes are async; do a second delete shortly after to win races.
         Process.send_after(
           self(),
-          {:new_session_cleanup, scope, session_key, chat_id, thread_id},
+          {:new_session_cleanup, session_key, chat_id, thread_id},
           50
         )
 
@@ -645,15 +634,19 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     if is_integer(chat_id) and reply_to_id do
       case Integer.parse(to_string(reply_to_id)) do
         {progress_msg_id, _} ->
-          scope = %LemonGateway.Types.ChatScope{
+          scope = %LemonChannels.Types.ChatScope{
             transport: :telegram,
             chat_id: chat_id,
             topic_id: thread_id
           }
 
-          if Code.ensure_loaded?(LemonGateway.Runtime) and
-               function_exported?(LemonGateway.Runtime, :cancel_by_progress_msg, 2) do
-            LemonGateway.Runtime.cancel_by_progress_msg(scope, progress_msg_id)
+          session_key =
+            lookup_session_key_for_reply(state, scope, progress_msg_id) ||
+              build_session_key(state, inbound, scope)
+
+          if Code.ensure_loaded?(LemonChannels.Runtime) and
+               function_exported?(LemonChannels.Runtime, :cancel_by_progress_msg, 2) do
+            LemonChannels.Runtime.cancel_by_progress_msg(session_key, progress_msg_id)
           end
 
           :ok
@@ -1536,10 +1529,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           id = Path.basename(expanded)
           root = expanded
 
-          if Code.ensure_loaded?(Store) and function_exported?(Store, :put, 3) do
-            Store.put(:gateway_projects_dynamic, id, %{root: root, default_engine: nil})
-            Store.put(:gateway_project_overrides, scope, id)
-          end
+          CoreStore.put(:gateway_projects_dynamic, id, %{root: root, default_engine: nil})
+          CoreStore.put(:gateway_project_overrides, scope, id)
 
           {:ok, %{id: id, root: root}}
         else
@@ -1554,9 +1545,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             root = Path.expand(root)
 
             if File.dir?(root) do
-              if Code.ensure_loaded?(Store) and function_exported?(Store, :put, 3) do
-                Store.put(:gateway_project_overrides, scope, id)
-              end
+              CoreStore.put(:gateway_project_overrides, scope, id)
 
               {:ok, %{id: id, root: root}}
             else
@@ -1625,7 +1614,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           {resume, source} = resume_from_reply(state, inbound, chat_id, thread_id, reply_to_id)
 
           if match?(%ResumeToken{}, resume) do
-            current = safe_get_chat_state(session_key) || safe_get_chat_state(scope)
+            current = safe_get_chat_state(session_key)
 
             if switching_session?(current, resume) do
               set_chat_resume(scope, session_key, resume)
@@ -1670,17 +1659,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       true ->
         key = {state.account_id || "default", chat_id, thread_id, reply_to_id}
 
-        token =
-          cond do
-            Code.ensure_loaded?(Store) and function_exported?(Store, :get, 2) ->
-              Store.get(:telegram_msg_resume, key)
-
-            Code.ensure_loaded?(CoreStore) and function_exported?(CoreStore, :get, 2) ->
-              CoreStore.get(:telegram_msg_resume, key)
-
-            true ->
-              nil
-          end
+        token = CoreStore.get(:telegram_msg_resume, key)
 
         case token do
           %ResumeToken{} = tok -> {tok, :msg_index}
@@ -1738,7 +1717,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
       cond do
         args == "" ->
-          sessions = list_recent_sessions(scope, limit: 20)
+          sessions = list_recent_sessions(session_key, limit: 20)
 
           text =
             case sessions do
@@ -1769,7 +1748,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
               _ -> {args, ""}
             end
 
-          sessions = list_recent_sessions(scope, limit: 50)
+          sessions = list_recent_sessions(session_key, limit: 50)
           resume = resolve_resume_selector(selector, sessions)
 
           if match?(%ResumeToken{}, resume) do
@@ -1865,16 +1844,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     end)
   end
 
-  defp list_recent_sessions(%ChatScope{} = scope, opts) do
+  defp list_recent_sessions(session_key, opts) when is_binary(session_key) do
     limit = Keyword.get(opts, :limit, 20)
 
-    history =
-      if Code.ensure_loaded?(LemonGateway.Store) and
-           function_exported?(LemonGateway.Store, :get_run_history, 2) do
-        LemonGateway.Store.get_run_history(scope, limit: limit * 5)
-      else
-        []
-      end
+    history = CoreStore.get_run_history(session_key, limit: limit * 5)
 
     history
     |> Enum.map(fn {_run_id, data} ->
@@ -1896,6 +1869,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     _ -> []
   end
 
+  defp list_recent_sessions(_other, _opts), do: []
+
   defp extract_resume_from_history(data) when is_map(data) do
     summary = data[:summary] || data["summary"] || %{}
     completed = summary[:completed] || summary["completed"]
@@ -1914,6 +1889,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
     case resume do
       %ResumeToken{} = r -> r
+      %{engine: engine, value: value} when is_binary(engine) and is_binary(value) -> %ResumeToken{engine: engine, value: value}
+      %{"engine" => engine, "value" => value} when is_binary(engine) and is_binary(value) -> %ResumeToken{engine: engine, value: value}
       _ -> nil
     end
   rescue
@@ -1988,7 +1965,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
                 _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
 
                 pending = %{
-                  scope: scope,
                   session_key: session_key,
                   chat_id: chat_id,
                   thread_id: thread_id,
@@ -2003,7 +1979,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
                 %{state | pending_new: Map.put(state.pending_new, run_id, pending)}
 
               _ ->
-                safe_delete_chat_state(scope)
                 safe_delete_chat_state(session_key)
                 safe_delete_selected_resume(state, chat_id, thread_id)
                 safe_clear_thread_message_indices(state, chat_id, thread_id)
@@ -2052,7 +2027,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       progress_msg_id = nil
       status_msg_id = nil
 
-      engine_id = last_engine_hint(scope, session_key) || (inbound.meta || %{})[:engine_id]
+      engine_id = last_engine_hint(session_key) || (inbound.meta || %{})[:engine_id]
       agent_id = (inbound.meta || %{})[:agent_id] || "default"
 
       meta =
@@ -2071,15 +2046,18 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           raw: inbound.raw
         })
 
-      case LemonCore.RouterBridge.submit_run(%{
-             origin: :channel,
-             session_key: session_key,
-             agent_id: agent_id,
-             prompt: prompt,
-             queue_mode: :interrupt,
-             engine_id: engine_id,
-             meta: meta
-           }) do
+      request =
+        LemonCore.RunRequest.new(%{
+          origin: :channel,
+          session_key: session_key,
+          agent_id: agent_id,
+          prompt: prompt,
+          queue_mode: :interrupt,
+          engine_id: engine_id,
+          meta: meta
+        })
+
+      case LemonCore.RouterBridge.submit_run(request) do
         {:ok, run_id} when is_binary(run_id) -> {:ok, run_id, state}
         _ -> :skip
       end
@@ -2099,16 +2077,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
        ),
        do: :skip
 
-  defp fetch_run_history_for_memory(session_key, %ChatScope{} = scope, opts) do
+  defp fetch_run_history_for_memory(session_key, _scope, opts) do
     limit = Keyword.get(opts, :limit, 8)
 
-    if Code.ensure_loaded?(LemonGateway.Store) and
-         function_exported?(LemonGateway.Store, :get_run_history, 2) do
-      history = LemonGateway.Store.get_run_history(session_key, limit: limit)
-      if history == [], do: LemonGateway.Store.get_run_history(scope, limit: limit), else: history
-    else
-      []
-    end
+    CoreStore.get_run_history(session_key, limit: limit)
   rescue
     _ -> []
   end
@@ -2178,18 +2150,17 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     |> String.trim()
   end
 
-  defp last_engine_hint(%ChatScope{} = scope, session_key) do
+  defp last_engine_hint(session_key) when is_binary(session_key) do
     s1 = safe_get_chat_state(session_key)
-    s2 = safe_get_chat_state(scope)
 
-    engine =
-      (s1 && (s1[:last_engine] || s1["last_engine"] || s1.last_engine)) ||
-        (s2 && (s2[:last_engine] || s2["last_engine"] || s2.last_engine))
+    engine = s1 && (s1[:last_engine] || s1["last_engine"] || s1.last_engine)
 
     if is_binary(engine) and engine != "", do: engine, else: nil
   rescue
     _ -> nil
   end
+
+  defp last_engine_hint(_), do: nil
 
   defp drop_buffer_for(state, inbound) do
     key = scope_key(inbound)
@@ -2205,11 +2176,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp safe_delete_chat_state(key) do
-    if Code.ensure_loaded?(LemonGateway.Store) and
-         function_exported?(LemonGateway.Store, :delete_chat_state, 1) do
-      LemonGateway.Store.delete_chat_state(key)
-    end
-
+    CoreStore.delete_chat_state(key)
     :ok
   rescue
     _ -> :ok
@@ -2264,42 +2231,20 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp list_store_table(table) when is_atom(table) do
-    cond do
-      Code.ensure_loaded?(CoreStore) and function_exported?(CoreStore, :list, 1) ->
-        CoreStore.list(table)
-
-      Code.ensure_loaded?(Store) and function_exported?(Store, :list, 1) ->
-        Store.list(table)
-
-      true ->
-        []
-    end
+    CoreStore.list(table)
   rescue
     _ -> []
   end
 
   defp delete_store_key(table, key) when is_atom(table) do
-    cond do
-      Code.ensure_loaded?(CoreStore) and function_exported?(CoreStore, :delete, 2) ->
-        CoreStore.delete(table, key)
-
-      Code.ensure_loaded?(Store) and function_exported?(Store, :delete, 2) ->
-        Store.delete(table, key)
-
-      true ->
-        :ok
-    end
+    CoreStore.delete(table, key)
+    :ok
   rescue
     _ -> :ok
   end
 
   defp safe_get_chat_state(key) do
-    if Code.ensure_loaded?(LemonGateway.Store) and
-         function_exported?(LemonGateway.Store, :get_chat_state, 1) do
-      LemonGateway.Store.get_chat_state(key)
-    else
-      nil
-    end
+    CoreStore.get_chat_state(key)
   rescue
     _ -> nil
   end
@@ -2314,14 +2259,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       updated_at: now
     }
 
-    if Code.ensure_loaded?(LemonGateway.Store) and
-         function_exported?(LemonGateway.Store, :put_chat_state, 2) do
-      LemonGateway.Store.put_chat_state(scope, payload)
-      LemonGateway.Store.put_chat_state(session_key, payload)
-    end
+    CoreStore.put_chat_state(session_key, payload)
 
     # Persist the explicitly selected session for subsequent messages, even if
-    # LemonGateway.Config.auto_resume is disabled.
+    # auto-resume is disabled.
     account_id = state_account_id_from_session_key(session_key)
 
     _ =
@@ -2365,10 +2306,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp format_resume_line(%ResumeToken{} = resume) do
-    case EngineRegistry.get_engine(resume.engine) do
-      nil -> "#{resume.engine} resume #{resume.value}"
-      mod -> mod.format_resume(resume)
-    end
+    EngineRegistry.format_resume(resume)
   rescue
     _ -> "#{resume.engine} resume #{resume.value}"
   end
@@ -2599,29 +2537,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp session_busy?(session_key) when is_binary(session_key) and session_key != "" do
-    thread_key = {:session, session_key}
-
-    case LemonGateway.ThreadRegistry.whereis(thread_key) do
-      pid when is_pid(pid) ->
-        st = :sys.get_state(pid)
-        current_run = Map.get(st, :current_run) || Map.get(st, "current_run")
-        jobs = Map.get(st, :jobs) || Map.get(st, "jobs")
-        slot_pending = Map.get(st, :slot_pending) || Map.get(st, "slot_pending")
-
-        queued? =
-          cond do
-            is_tuple(jobs) and tuple_size(jobs) == 2 ->
-              :queue.len(jobs) > 0
-
-            true ->
-              false
-          end
-
-        is_pid(current_run) or slot_pending == true or queued?
-
-      _ ->
-        false
-    end
+    LemonChannels.Runtime.session_busy?(session_key)
   rescue
     _ -> false
   end
@@ -3373,10 +3289,23 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
         if is_integer(chat_id) and is_integer(message_id) do
           scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: topic_id}
+          chat_type = get_in(msg, ["chat", "type"])
+          peer_kind = peer_kind_from_chat_type(chat_type)
 
-          if Code.ensure_loaded?(LemonGateway.Runtime) and
-               function_exported?(LemonGateway.Runtime, :cancel_by_progress_msg, 2) do
-            LemonGateway.Runtime.cancel_by_progress_msg(scope, message_id)
+          session_key =
+            lookup_session_key_for_reply(state, scope, message_id) ||
+              SessionKey.channel_peer(%{
+                agent_id: BindingResolver.resolve_agent_id(scope) || "default",
+                channel_id: "telegram",
+                account_id: state.account_id || "default",
+                peer_kind: peer_kind,
+                peer_id: to_string(chat_id),
+                thread_id: if(is_integer(topic_id), do: to_string(topic_id), else: nil)
+              })
+
+          if Code.ensure_loaded?(LemonChannels.Runtime) and
+               function_exported?(LemonChannels.Runtime, :cancel_by_progress_msg, 2) do
+            LemonChannels.Runtime.cancel_by_progress_msg(session_key, message_id)
           end
         end
 
@@ -3386,9 +3315,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       String.starts_with?(data, @cancel_callback_prefix <> ":") ->
         run_id = String.trim_leading(data, @cancel_callback_prefix <> ":")
 
-        if is_binary(run_id) and run_id != "" and Code.ensure_loaded?(LemonGateway.Runtime) and
-             function_exported?(LemonGateway.Runtime, :cancel_by_run_id, 2) do
-          LemonGateway.Runtime.cancel_by_run_id(run_id, :user_requested)
+        if is_binary(run_id) and run_id != "" and Code.ensure_loaded?(LemonChannels.Runtime) and
+             function_exported?(LemonChannels.Runtime, :cancel_by_run_id, 2) do
+          LemonChannels.Runtime.cancel_by_run_id(run_id, :user_requested)
         end
 
         _ = state.api_mod.answer_callback_query(state.token, cb_id, %{"text" => "cancelling..."})
@@ -3446,7 +3375,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp decision_label(:deny), do: "deny"
   defp decision_label(other), do: inspect(other)
 
-  # Apply Telegram-specific behavior parity with the legacy transport:
+  defp peer_kind_from_chat_type("private"), do: :dm
+  defp peer_kind_from_chat_type("group"), do: :group
+  defp peer_kind_from_chat_type("supergroup"), do: :group
+  defp peer_kind_from_chat_type("channel"), do: :channel
+  defp peer_kind_from_chat_type(_), do: :unknown
+
+  # Apply Telegram-specific transport behavior:
   # - binding-based queue_mode/agent selection
   # - optional queue override commands (/steer, /followup, /interrupt)
   # - optional engine directives (/claude, /codex, /lemon) and engine hint commands (e.g. /capture)
@@ -3482,13 +3417,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     queue_mode = override_mode || base_queue_mode || :collect
     text_after_queue = if override_mode, do: stripped_after_override, else: inbound.message.text
 
-    {directive_engine, text_after_directive} =
-      if Code.ensure_loaded?(LemonGateway.Telegram.Transport) and
-           function_exported?(LemonGateway.Telegram.Transport, :strip_engine_directive, 1) do
-        LemonGateway.Telegram.Transport.strip_engine_directive(text_after_queue)
-      else
-        {nil, text_after_queue}
-      end
+    {directive_engine, text_after_directive} = strip_engine_directive(text_after_queue)
 
     engine_id = directive_engine || extract_command_hint(text_after_directive)
 
@@ -3504,6 +3433,17 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
     %{inbound | message: message, meta: meta}
   end
+
+  defp strip_engine_directive(text) when is_binary(text) do
+    trimmed = String.trim(text)
+
+    case Regex.run(~r{^/(lemon|codex|claude|opencode|pi|echo)\b\s*(.*)$}is, trimmed) do
+      [_, engine, rest] -> {String.downcase(engine), String.trim(rest)}
+      _ -> {nil, trimmed}
+    end
+  end
+
+  defp strip_engine_directive(_), do: {nil, ""}
 
   defp maybe_transcribe_voice(state, inbound) do
     voice = inbound.meta && inbound.meta[:voice]
@@ -3674,9 +3614,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       [_, cmd] ->
         cmd_lower = String.downcase(cmd)
 
-        if Code.ensure_loaded?(LemonGateway.EngineRegistry) and
-             function_exported?(LemonGateway.EngineRegistry, :get_engine, 1) and
-             LemonGateway.EngineRegistry.get_engine(cmd_lower) do
+        if Code.ensure_loaded?(LemonChannels.EngineRegistry) and
+             function_exported?(LemonChannels.EngineRegistry, :get_engine, 1) and
+             LemonChannels.EngineRegistry.get_engine(cmd_lower) do
           cmd_lower
         else
           nil

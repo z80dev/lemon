@@ -1,7 +1,7 @@
 defmodule LemonChannels.Adapters.Telegram.TransportSharedDedupeTest do
   use ExUnit.Case, async: false
 
-  alias LemonGateway.Telegram.TransportShared
+  alias LemonChannels.Telegram.TransportShared
 
   setup do
     :ok = TransportShared.init_dedupe(:channels)

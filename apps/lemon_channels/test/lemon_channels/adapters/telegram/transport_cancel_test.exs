@@ -1,13 +1,28 @@
 defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
   use ExUnit.Case, async: false
 
-  alias LemonGateway.Store
-  alias LemonGateway.Types.ChatScope
+  alias LemonCore.Store
 
   defmodule TestRouter do
     def handle_inbound(msg) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
         send(pid, {:inbound, msg})
+      end
+
+      :ok
+    end
+
+    def abort(session_key, reason) do
+      if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
+        send(pid, {:abort_session, session_key, reason})
+      end
+
+      :ok
+    end
+
+    def abort_run(run_id, reason) do
+      if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
+        send(pid, {:abort_run, run_id, reason})
       end
 
       :ok
@@ -67,13 +82,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     stop_transport()
 
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
-    old_gateway_config_env = Application.get_env(:lemon_gateway, LemonGateway.Config)
-
-    old_gateway_config_state =
-      case Process.whereis(LemonGateway.Config) do
-        pid when is_pid(pid) -> :sys.get_state(pid)
-        _ -> nil
-      end
+    old_gateway_config_env = Application.get_env(:lemon_channels, :gateway)
 
     :persistent_term.put({TestRouter, :pid}, self())
     MockAPI.register_test(self())
@@ -86,7 +95,6 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       :persistent_term.erase({MockAPI, :pid})
       :persistent_term.erase({TestRouter, :pid})
       restore_router_bridge(old_router_bridge)
-      restore_gateway_config_state(old_gateway_config_state)
       restore_gateway_config_env(old_gateway_config_env)
     end)
 
@@ -125,18 +133,17 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     chat_id = 333_002
     progress_msg_id = 555
     cb_id = "cb-1"
-    scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
 
-    test_pid = self()
+    session_key =
+      LemonCore.SessionKey.channel_peer(%{
+        agent_id: "default",
+        channel_id: "telegram",
+        account_id: "default",
+        peer_kind: :dm,
+        peer_id: Integer.to_string(chat_id)
+      })
 
-    run_pid =
-      spawn(fn ->
-        receive do
-          msg -> send(test_pid, {:run_received, msg})
-        end
-      end)
-
-    Store.put_progress_mapping(scope, progress_msg_id, run_pid)
+    _ = Store.put(:telegram_msg_session, {"default", chat_id, nil, progress_msg_id}, session_key)
 
     MockAPI.set_updates([cancel_callback_update(chat_id, cb_id, progress_msg_id, "lemon:cancel")])
 
@@ -147,7 +154,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
              })
 
     assert_receive {:answer_callback, ^cb_id, %{"text" => "cancelling..."}}, 400
-    assert_receive {:run_received, {:"$gen_cast", {:cancel, :user_requested}}}, 400
+    assert_receive {:abort_session, ^session_key, :user_requested}, 400
   end
 
   test "cancel callback with a run id cancels the run registered under that id" do
@@ -155,19 +162,6 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     progress_msg_id = 777
     cb_id = "cb-2"
     run_id = "run_#{System.unique_integer([:positive])}"
-
-    test_pid = self()
-
-    run_pid =
-      spawn(fn ->
-        Registry.register(LemonGateway.RunRegistry, run_id, %{})
-
-        receive do
-          msg -> send(test_pid, {:run_received, msg})
-        end
-      end)
-
-    assert Process.alive?(run_pid)
 
     MockAPI.set_updates([
       cancel_callback_update(chat_id, cb_id, progress_msg_id, "lemon:cancel:" <> run_id)
@@ -180,7 +174,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
              })
 
     assert_receive {:answer_callback, ^cb_id, %{"text" => "cancelling..."}}, 400
-    assert_receive {:run_received, {:"$gen_cast", {:cancel, :user_requested}}}, 400
+    assert_receive {:abort_run, ^run_id, :user_requested}, 400
   end
 
   defp start_transport(overrides) when is_map(overrides) do
@@ -227,43 +221,22 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
   end
 
   defp set_bindings(bindings) do
-    case Process.whereis(LemonGateway.Config) do
-      pid when is_pid(pid) ->
-        :sys.replace_state(pid, fn state ->
-          Map.put(state, :bindings, bindings)
-        end)
+    cfg =
+      case Application.get_env(:lemon_channels, :gateway) do
+        map when is_map(map) -> map
+        list when is_list(list) -> Enum.into(list, %{})
+        _ -> %{}
+      end
 
-      _ ->
-        cfg =
-          case Application.get_env(:lemon_gateway, LemonGateway.Config) do
-            map when is_map(map) -> map
-            list when is_list(list) -> Enum.into(list, %{})
-            _ -> %{}
-          end
-
-        Application.put_env(
-          :lemon_gateway,
-          LemonGateway.Config,
-          Map.put(cfg, :bindings, bindings)
-        )
-    end
-  end
-
-  defp restore_gateway_config_state(nil), do: :ok
-
-  defp restore_gateway_config_state(old_state) do
-    case Process.whereis(LemonGateway.Config) do
-      pid when is_pid(pid) -> :sys.replace_state(pid, fn _ -> old_state end)
-      _ -> :ok
-    end
+    Application.put_env(:lemon_channels, :gateway, Map.put(cfg, :bindings, bindings))
   end
 
   defp restore_gateway_config_env(nil) do
-    Application.delete_env(:lemon_gateway, LemonGateway.Config)
+    Application.delete_env(:lemon_channels, :gateway)
   end
 
   defp restore_gateway_config_env(env) do
-    Application.put_env(:lemon_gateway, LemonGateway.Config, env)
+    Application.put_env(:lemon_channels, :gateway, env)
   end
 
   defp restore_router_bridge(nil), do: Application.delete_env(:lemon_core, :router_bridge)
@@ -279,4 +252,3 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     :exit, _ -> :ok
   end
 end
-

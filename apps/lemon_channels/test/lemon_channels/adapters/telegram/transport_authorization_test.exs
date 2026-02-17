@@ -58,13 +58,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
     stop_transport()
 
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
-    old_gateway_config_env = Application.get_env(:lemon_gateway, LemonGateway.Config)
-
-    old_gateway_config_state =
-      case Process.whereis(LemonGateway.Config) do
-        pid when is_pid(pid) -> :sys.get_state(pid)
-        _ -> nil
-      end
+    old_gateway_config_env = Application.get_env(:lemon_channels, :gateway)
 
     :persistent_term.put({TestRouter, :pid}, self())
     MockAPI.register_test(self())
@@ -77,7 +71,6 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
       :persistent_term.erase({MockAPI, :pid})
       :persistent_term.erase({TestRouter, :pid})
       restore_router_bridge(old_router_bridge)
-      restore_gateway_config_state(old_gateway_config_state)
       restore_gateway_config_env(old_gateway_config_env)
     end)
 
@@ -184,43 +177,22 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
   end
 
   defp set_bindings(bindings) do
-    case Process.whereis(LemonGateway.Config) do
-      pid when is_pid(pid) ->
-        :sys.replace_state(pid, fn state ->
-          Map.put(state, :bindings, bindings)
-        end)
+    cfg =
+      case Application.get_env(:lemon_channels, :gateway) do
+        map when is_map(map) -> map
+        list when is_list(list) -> Enum.into(list, %{})
+        _ -> %{}
+      end
 
-      _ ->
-        cfg =
-          case Application.get_env(:lemon_gateway, LemonGateway.Config) do
-            map when is_map(map) -> map
-            list when is_list(list) -> Enum.into(list, %{})
-            _ -> %{}
-          end
-
-        Application.put_env(
-          :lemon_gateway,
-          LemonGateway.Config,
-          Map.put(cfg, :bindings, bindings)
-        )
-    end
-  end
-
-  defp restore_gateway_config_state(nil), do: :ok
-
-  defp restore_gateway_config_state(old_state) do
-    case Process.whereis(LemonGateway.Config) do
-      pid when is_pid(pid) -> :sys.replace_state(pid, fn _ -> old_state end)
-      _ -> :ok
-    end
+    Application.put_env(:lemon_channels, :gateway, Map.put(cfg, :bindings, bindings))
   end
 
   defp restore_gateway_config_env(nil) do
-    Application.delete_env(:lemon_gateway, LemonGateway.Config)
+    Application.delete_env(:lemon_channels, :gateway)
   end
 
   defp restore_gateway_config_env(env) do
-    Application.put_env(:lemon_gateway, LemonGateway.Config, env)
+    Application.put_env(:lemon_channels, :gateway, env)
   end
 
   defp restore_router_bridge(nil), do: Application.delete_env(:lemon_core, :router_bridge)

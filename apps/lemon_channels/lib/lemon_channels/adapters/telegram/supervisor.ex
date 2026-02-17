@@ -13,12 +13,12 @@ defmodule LemonChannels.Adapters.Telegram.Supervisor do
 
   @impl true
   def init(opts) do
-    # Check if Telegram is configured (allow running without lemon_gateway started).
+    # Allow running lemon_channels without any Telegram token configured.
     base = LemonChannels.GatewayConfig.get(:telegram, %{}) || %{}
 
     config =
       base
-      |> merge_config(Application.get_env(:lemon_gateway, :telegram))
+      |> merge_config(Application.get_env(:lemon_channels, :telegram))
       |> merge_config(Keyword.get(opts, :config))
 
     token = config[:bot_token] || config["bot_token"]

@@ -1,5 +1,5 @@
 defmodule LemonChannels.Adapters.Telegram.OutboundTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias LemonChannels.Adapters.Telegram.Outbound
   alias LemonChannels.OutboundPayload
@@ -112,14 +112,14 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
   end
 
   setup do
-    old = Application.get_env(:lemon_gateway, :telegram)
+    old = Application.get_env(:lemon_channels, :telegram)
     MockApiPhotoRateLimitedOnce.reset()
 
     on_exit(fn ->
       if old == nil do
-        Application.delete_env(:lemon_gateway, :telegram)
+        Application.delete_env(:lemon_channels, :telegram)
       else
-        Application.put_env(:lemon_gateway, :telegram, old)
+        Application.put_env(:lemon_channels, :telegram, old)
       end
 
       MockApiPhotoRateLimitedOnce.clear()
@@ -456,7 +456,7 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
 
   defp put_telegram_config(config) when is_map(config) do
     base = %{files: %{outbound_send_delay_ms: 0}}
-    Application.put_env(:lemon_gateway, :telegram, deep_merge(base, config))
+    Application.put_env(:lemon_channels, :telegram, deep_merge(base, config))
   end
 
   defp deep_merge(left, right) when is_map(left) and is_map(right) do

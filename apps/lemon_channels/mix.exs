@@ -26,8 +26,8 @@ defmodule LemonChannels.MixProject do
   defp deps do
     [
       {:lemon_core, in_umbrella: true},
-      {:lemon_gateway, in_umbrella: true},
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+      {:earmark_parser, "~> 1.4"}
     ]
   end
 end

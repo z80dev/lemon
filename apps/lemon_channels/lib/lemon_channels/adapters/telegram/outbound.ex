@@ -2,11 +2,11 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   @moduledoc """
   Outbound message delivery for Telegram.
 
-  Wraps the existing LemonGateway.Telegram.API for message delivery.
+  Wraps the existing LemonChannels.Telegram.API for message delivery.
   """
 
   alias LemonChannels.OutboundPayload
-  alias LemonGateway.Telegram.Formatter
+  alias LemonChannels.Telegram.Formatter
   @telegram_media_group_max_items 10
   @default_telegram_outbound_send_delay_ms 1_000
   @default_retry_after_ms 1_000
@@ -505,12 +505,12 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     end
   end
 
-  # Transport merges runtime overrides from `Application.get_env(:lemon_gateway, :telegram)`;
+  # Transport merges runtime overrides from `Application.get_env(:lemon_channels, :telegram)`;
   # do the same here so tests can inject a mock api module without hitting the network.
   defp telegram_config do
     config = telegram_runtime_config()
     token = config[:bot_token] || config["bot_token"]
-    api_mod = config[:api_mod] || config["api_mod"] || LemonGateway.Telegram.API
+    api_mod = config[:api_mod] || config["api_mod"] || LemonChannels.Telegram.API
     {token, api_mod}
   end
 
@@ -534,7 +534,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     base = LemonChannels.GatewayConfig.get(:telegram, %{}) || %{}
 
     overrides =
-      case Application.get_env(:lemon_gateway, :telegram) do
+      case Application.get_env(:lemon_channels, :telegram) do
         nil ->
           %{}
 

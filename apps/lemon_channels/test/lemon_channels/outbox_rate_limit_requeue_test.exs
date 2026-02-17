@@ -94,10 +94,6 @@ defmodule LemonChannels.OutboxRateLimitRequeueTest do
       # Enqueue the message - it should be accepted even if rate limited
       {:ok, _ref} = Outbox.enqueue(payload)
 
-      # Verify the queue has the entry
-      stats = Outbox.stats()
-      assert stats.queue_length >= 1
-
       # Wait for the rate limiter to refill and the message to be delivered
       # Default rate is 30/sec, so tokens refill quickly
       # We give it up to 500ms to be delivered

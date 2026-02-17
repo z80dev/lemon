@@ -1,4 +1,4 @@
-defmodule LemonGateway.Telegram.TransportShared do
+defmodule LemonChannels.Telegram.TransportShared do
   @moduledoc false
 
   @channels_transport LemonChannels.Adapters.Telegram.Transport
@@ -9,7 +9,13 @@ defmodule LemonGateway.Telegram.TransportShared do
     Code.ensure_loaded?(@channels_transport) and is_pid(Process.whereis(@channels_transport))
   end
 
-  def init_dedupe(:channels), do: LemonCore.Dedupe.Ets.init(@channels_dedupe_table)
+  def init_dedupe(:channels) do
+    :ok = LemonCore.Dedupe.Ets.init(@channels_dedupe_table)
+    _ = :ets.delete_all_objects(@channels_dedupe_table)
+    :ok
+  rescue
+    _ -> :ok
+  end
 
   def check_and_mark_dedupe(:channels, key, ttl_ms) do
     LemonCore.Dedupe.Ets.check_and_mark(@channels_dedupe_table, key, ttl_ms)

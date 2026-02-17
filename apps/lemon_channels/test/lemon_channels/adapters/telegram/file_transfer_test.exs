@@ -83,14 +83,14 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
   end
 
   defp bind_project!(chat_id, root) do
-    scope = %LemonGateway.Types.ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
+    scope = %LemonChannels.Types.ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
 
-    LemonGateway.Store.put(:gateway_projects_dynamic, "testproj", %{
+    LemonCore.Store.put(:channels_projects_dynamic, "testproj", %{
       root: root,
       default_engine: nil
     })
 
-    LemonGateway.Store.put(:gateway_project_overrides, scope, "testproj")
+    LemonCore.Store.put(:channels_project_overrides, scope, "testproj")
   end
 
   defp document_update(chat_id, caption) do
@@ -184,9 +184,9 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     assert File.read!(Path.join(root, "incoming/example.txt")) == "FILE_BYTES"
   end
 
-  test "/file put defaults to gateway.default_cwd when no project is bound" do
+  test "/file put defaults to channels.default_cwd when no project is bound" do
     chat_id = 12_346
-    root = LemonGateway.Cwd.default_cwd()
+    root = LemonChannels.Cwd.default_cwd()
 
     rel =
       Path.join("incoming", "lemon-file-put-default-#{System.unique_integer([:positive])}.txt")
@@ -246,9 +246,9 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     assert String.ends_with?(path, "/out.txt")
   end
 
-  test "/file get defaults to gateway.default_cwd when no project is bound" do
+  test "/file get defaults to channels.default_cwd when no project is bound" do
     chat_id = 22_223
-    root = LemonGateway.Cwd.default_cwd()
+    root = LemonChannels.Cwd.default_cwd()
 
     rel =
       Path.join("incoming", "lemon-file-get-default-#{System.unique_integer([:positive])}.txt")
