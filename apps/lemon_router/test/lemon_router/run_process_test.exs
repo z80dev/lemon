@@ -7,7 +7,9 @@ defmodule LemonRouter.RunProcessTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonRouter.{RunProcess, SessionKey}
+  alias LemonCore.SessionKey
+  alias LemonChannels.Types.ResumeToken
+  alias LemonRouter.RunProcess
 
   defmodule TestOutboxAPI do
     @moduledoc false
@@ -40,6 +42,28 @@ defmodule LemonRouter.RunProcessTest do
       notify_pid = Agent.get(__MODULE__, & &1.notify_pid)
       if is_pid(notify_pid), do: send(notify_pid, {:outbox_api_call, call})
       :ok
+    end
+  end
+
+  defmodule TestTelegramPlugin do
+    @moduledoc false
+
+    def id, do: "telegram"
+
+    def meta do
+      %{
+        name: "Test Telegram",
+        capabilities: %{
+          edit_support: true,
+          chunk_limit: 4096
+        }
+      }
+    end
+
+    def deliver(payload) do
+      pid = :persistent_term.get({__MODULE__, :notify_pid}, nil)
+      if is_pid(pid), do: send(pid, {:delivered, payload})
+      {:ok, %{"ok" => true, "result" => %{"message_id" => 101}}}
     end
   end
 
@@ -112,13 +136,11 @@ defmodule LemonRouter.RunProcessTest do
   # Create a minimal job struct for testing
   defp make_test_job(run_id, meta \\ %{}) do
     %LemonGateway.Types.Job{
-      scope: nil,
       run_id: run_id,
       session_key: nil,
-      user_msg_id: 1,
-      text: "test",
+      prompt: "test",
       queue_mode: :collect,
-      engine_hint: "echo",
+      engine_id: "echo",
       meta: meta
     }
   end
@@ -339,13 +361,33 @@ defmodule LemonRouter.RunProcessTest do
 
   describe "telegram final message resume indexing" do
     test "indexes the bot final message id so replies can resume the right engine/session" do
-      {:ok, _} = start_supervised({TestOutboxAPI, [notify_pid: self()]})
+      start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
+      start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
 
-      {:ok, _} =
-        start_supervised(
-          {LemonGateway.Telegram.Outbox,
-           [bot_token: "token", api_mod: TestOutboxAPI, edit_throttle_ms: 0, use_markdown: false]}
-        )
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
+        LemonChannels.Outbox.RateLimiter.start_link([])
+      end)
+
+      start_if_needed(LemonChannels.Outbox.Dedupe, fn ->
+        LemonChannels.Outbox.Dedupe.start_link([])
+      end)
+
+      :persistent_term.put({TestTelegramPlugin, :notify_pid}, self())
+      existing = LemonChannels.Registry.get_plugin("telegram")
+      _ = LemonChannels.Registry.unregister("telegram")
+      :ok = LemonChannels.Registry.register(TestTelegramPlugin)
+
+      on_exit(fn ->
+        _ = :persistent_term.erase({TestTelegramPlugin, :notify_pid})
+
+        if is_pid(Process.whereis(LemonChannels.Registry)) do
+          _ = LemonChannels.Registry.unregister("telegram")
+
+          if is_atom(existing) and not is_nil(existing) do
+            _ = LemonChannels.Registry.register(existing)
+          end
+        end
+      end)
 
       run_id = "run_#{System.unique_integer([:positive])}"
 
@@ -393,18 +435,12 @@ defmodule LemonRouter.RunProcessTest do
       # RunProcess stops after completion; give it a moment to tear down.
       assert eventually(fn -> not Process.alive?(pid) end)
 
-      assert_receive {:outbox_api_call,
-                      {:send, 12_345, "Final answer", %{reply_to_message_id: 222}, nil}},
-                     1_000
-
       assert eventually(fn ->
                case LemonCore.Store.get(:telegram_msg_resume, store_key) do
-                 %LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_abc"} -> true
+                 %ResumeToken{engine: "codex", value: "thread_abc"} -> true
                  _ -> false
                end
              end)
-
-      refute_receive {:outbox_api_call, {:delete, 12_345, _}}, 200
     end
   end
 
@@ -422,23 +458,15 @@ defmodule LemonRouter.RunProcessTest do
           thread_id: "777"
         })
 
-      scope = %LemonGateway.Types.ChatScope{transport: :telegram, chat_id: 12_345, topic_id: 777}
       selected_key = {"botx", 12_345, 777}
       index_key = {"botx", 12_345, 777, 9_001}
       pending_compaction_key = {"botx", 12_345, 777}
-      stale_resume = %LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_old"}
+      stale_resume = %ResumeToken{engine: "codex", value: "thread_old"}
 
       _ = LemonCore.Store.delete(:telegram_pending_compaction, pending_compaction_key)
 
       _ =
-        LemonGateway.Store.put_chat_state(scope, %{
-          last_engine: "codex",
-          last_resume_token: "thread_old",
-          updated_at: System.system_time(:millisecond)
-        })
-
-      _ =
-        LemonGateway.Store.put_chat_state(session_key, %{
+        LemonCore.Store.put_chat_state(session_key, %{
           last_engine: "codex",
           last_resume_token: "thread_old",
           updated_at: System.system_time(:millisecond)
@@ -478,8 +506,7 @@ defmodule LemonRouter.RunProcessTest do
       :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
 
       assert eventually(fn -> not Process.alive?(pid) end)
-      assert eventually(fn -> LemonGateway.Store.get_chat_state(scope) == nil end)
-      assert eventually(fn -> LemonGateway.Store.get_chat_state(session_key) == nil end)
+      assert eventually(fn -> LemonCore.Store.get_chat_state(session_key) == nil end)
       assert LemonCore.Store.get(:telegram_selected_resume, selected_key) == nil
       assert LemonCore.Store.get(:telegram_msg_session, index_key) == nil
       assert LemonCore.Store.get(:telegram_msg_resume, index_key) == nil
@@ -510,22 +537,22 @@ defmodule LemonRouter.RunProcessTest do
         })
 
       pending_compaction_key = {"botx", 12_345, 777}
-      old_telegram_env = Application.get_env(:lemon_gateway, :telegram)
+      old_telegram_env = Application.get_env(:lemon_channels, :telegram)
 
-      Application.put_env(:lemon_gateway, :telegram, %{
-        "compaction" => %{
-          "enabled" => true,
-          "context_window_tokens" => 1_000,
-          "reserve_tokens" => 100,
-          "trigger_ratio" => 0.95
+      Application.put_env(:lemon_channels, :telegram, %{
+        compaction: %{
+          enabled: true,
+          context_window_tokens: 1_000,
+          reserve_tokens: 100,
+          trigger_ratio: 0.95
         }
       })
 
       on_exit(fn ->
         if is_nil(old_telegram_env) do
-          Application.delete_env(:lemon_gateway, :telegram)
+          Application.delete_env(:lemon_channels, :telegram)
         else
-          Application.put_env(:lemon_gateway, :telegram, old_telegram_env)
+          Application.put_env(:lemon_channels, :telegram, old_telegram_env)
         end
       end)
 

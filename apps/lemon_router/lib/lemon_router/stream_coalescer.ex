@@ -20,6 +20,7 @@ defmodule LemonRouter.StreamCoalescer do
 
   require Logger
 
+  alias LemonChannels.Types.ResumeToken
   alias LemonRouter.ChannelContext
   alias LemonRouter.ChannelsDelivery
 
@@ -887,21 +888,21 @@ defmodule LemonRouter.StreamCoalescer do
 
   defp normalize_resume_token(nil), do: nil
 
-  defp normalize_resume_token(%LemonGateway.Types.ResumeToken{} = tok), do: tok
+  defp normalize_resume_token(%ResumeToken{} = tok), do: tok
 
   defp normalize_resume_token(%{engine: engine, value: value})
        when is_binary(engine) and is_binary(value) do
-    %LemonGateway.Types.ResumeToken{engine: engine, value: value}
+    %ResumeToken{engine: engine, value: value}
   end
 
   defp normalize_resume_token(%{"engine" => engine, "value" => value})
        when is_binary(engine) and is_binary(value) do
-    %LemonGateway.Types.ResumeToken{engine: engine, value: value}
+    %ResumeToken{engine: engine, value: value}
   end
 
   defp normalize_resume_token(_), do: nil
 
-  defp resume_token_like?(%LemonGateway.Types.ResumeToken{engine: e, value: v})
+  defp resume_token_like?(%ResumeToken{engine: e, value: v})
        when is_binary(e) and is_binary(v),
        do: true
 
@@ -941,20 +942,17 @@ defmodule LemonRouter.StreamCoalescer do
   defp maybe_append_resume_line(text, _resume), do: text
 
   defp resume_token_present?(text) when is_binary(text) do
-    case AgentCore.CliRunners.Types.ResumeToken.extract_resume(text) do
-      %AgentCore.CliRunners.Types.ResumeToken{} -> true
-      _ -> false
-    end
+    match?({:ok, %ResumeToken{}}, LemonChannels.EngineRegistry.extract_resume(text))
   rescue
     _ -> false
   end
 
-  defp format_resume_line(%LemonGateway.Types.ResumeToken{engine: engine, value: value})
+  defp format_resume_line(%ResumeToken{engine: engine, value: value})
        when is_binary(engine) and is_binary(value) do
-    engine = String.downcase(engine)
-
-    AgentCore.CliRunners.Types.ResumeToken.new(engine, value)
-    |> AgentCore.CliRunners.Types.ResumeToken.format()
+    LemonChannels.EngineRegistry.format_resume(%ResumeToken{
+      engine: String.downcase(engine),
+      value: value
+    })
   rescue
     _ -> "`#{engine} resume #{value}`"
   end
@@ -1322,7 +1320,7 @@ defmodule LemonRouter.StreamCoalescer do
   defp cap_full_text(text), do: text
 
   defp truncate_for_channel("telegram", text) when is_binary(text) do
-    LemonGateway.Telegram.Truncate.truncate_for_telegram(text)
+    LemonChannels.Telegram.Truncate.truncate_for_telegram(text)
   rescue
     _ -> text
   end

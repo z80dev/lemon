@@ -74,7 +74,7 @@ defmodule LemonRouter.PolicyTest do
     test "returns empty map for channel origin without channel context" do
       result = Policy.resolve_for_run(%{
         agent_id: "channel-agent",
-        session_key: "channel:telegram:bot:123:user:456",
+        session_key: "agent:channel-agent:telegram:bot:dm:456",
         origin: :channel,
         channel_context: nil
       })

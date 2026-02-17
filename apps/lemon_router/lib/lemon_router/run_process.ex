@@ -15,6 +15,7 @@ defmodule LemonRouter.RunProcess do
   require Logger
 
   alias LemonCore.Bus
+  alias LemonChannels.Types.ResumeToken
   alias LemonRouter.ChannelContext
 
   @default_auto_send_generated_max_files 3
@@ -507,11 +508,6 @@ defmodule LemonRouter.RunProcess do
   defp extract_completed_answer(%LemonCore.Event{payload: %{completed: %{answer: answer}}}),
     do: answer
 
-  defp extract_completed_answer(%LemonCore.Event{
-         payload: %LemonGateway.Event.Completed{answer: answer}
-       }),
-       do: answer
-
   defp extract_completed_answer(%LemonCore.Event{payload: %{answer: answer}}), do: answer
   defp extract_completed_answer(_), do: nil
 
@@ -520,25 +516,20 @@ defmodule LemonRouter.RunProcess do
 
   defp extract_completed_resume(%LemonCore.Event{payload: %{resume: resume}}), do: resume
 
-  defp extract_completed_resume(%LemonCore.Event{
-         payload: %LemonGateway.Event.Completed{resume: resume}
-       }),
-       do: resume
-
   defp extract_completed_resume(_), do: nil
 
   defp normalize_resume_token(nil), do: nil
 
-  defp normalize_resume_token(%LemonGateway.Types.ResumeToken{} = tok), do: tok
+  defp normalize_resume_token(%ResumeToken{} = tok), do: tok
 
   defp normalize_resume_token(%{engine: engine, value: value})
        when is_binary(engine) and is_binary(value) do
-    %LemonGateway.Types.ResumeToken{engine: engine, value: value}
+    %ResumeToken{engine: engine, value: value}
   end
 
   defp normalize_resume_token(%{"engine" => engine, "value" => value})
        when is_binary(engine) and is_binary(value) do
-    %LemonGateway.Types.ResumeToken{engine: engine, value: value}
+    %ResumeToken{engine: engine, value: value}
   end
 
   defp normalize_resume_token(_), do: nil
@@ -553,12 +544,6 @@ defmodule LemonRouter.RunProcess do
     {ok, Map.get(p, :error) || Map.get(p, "error")}
   end
 
-  defp extract_completed_ok_and_error(%LemonCore.Event{
-         payload: %LemonGateway.Event.Completed{ok: ok, error: err}
-       })
-       when is_boolean(ok),
-       do: {ok, err}
-
   defp extract_completed_ok_and_error(_), do: {true, nil}
 
   defp extract_completed_usage(%LemonCore.Event{payload: %{completed: %{usage: usage}}})
@@ -567,12 +552,6 @@ defmodule LemonRouter.RunProcess do
 
   defp extract_completed_usage(%LemonCore.Event{payload: %{usage: usage}}) when is_map(usage),
     do: usage
-
-  defp extract_completed_usage(%LemonCore.Event{
-         payload: %LemonGateway.Event.Completed{usage: usage}
-       })
-       when is_map(usage),
-       do: usage
 
   defp extract_completed_usage(_), do: nil
 
@@ -664,16 +643,9 @@ defmodule LemonRouter.RunProcess do
       chat_id = ChannelContext.parse_int(parsed.peer_id)
       thread_id = ChannelContext.parse_int(parsed.thread_id)
 
-      _ = safe_delete_gateway_chat_state(session_key)
+      _ = safe_delete_chat_state(session_key)
 
       if is_integer(chat_id) do
-        scope = %LemonGateway.Types.ChatScope{
-          transport: :telegram,
-          chat_id: chat_id,
-          topic_id: thread_id
-        }
-
-        _ = safe_delete_gateway_chat_state(scope)
         _ = safe_delete_selected_resume(account_id, chat_id, thread_id)
         _ = safe_clear_thread_index(:telegram_msg_session, account_id, chat_id, thread_id)
         _ = safe_clear_thread_index(:telegram_msg_resume, account_id, chat_id, thread_id)
@@ -890,7 +862,7 @@ defmodule LemonRouter.RunProcess do
       extract_completed_engine(event) ||
         case Map.get(state, :job) do
           %LemonGateway.Types.Job{} = job ->
-            job.engine_id || job.engine_hint
+            job.engine_id
 
           _ ->
             nil
@@ -974,22 +946,11 @@ defmodule LemonRouter.RunProcess do
 
   defp compaction_marker_details(_), do: %{}
 
-  defp safe_delete_gateway_chat_state(key) do
-    if Code.ensure_loaded?(LemonGateway.Store) and
-         function_exported?(LemonGateway.Store, :delete_chat_state, 1) do
-      LemonGateway.Store.delete_chat_state(key)
-    end
-
-    :ok
-  rescue
-    _ -> :ok
-  end
+  defp safe_delete_chat_state(key), do: LemonCore.Store.delete_chat_state(key)
 
   defp safe_delete_selected_resume(account_id, chat_id, thread_id)
        when is_binary(account_id) and is_integer(chat_id) do
-    if Code.ensure_loaded?(LemonCore.Store) and function_exported?(LemonCore.Store, :delete, 2) do
-      LemonCore.Store.delete(:telegram_selected_resume, {account_id, chat_id, thread_id})
-    end
+    LemonCore.Store.delete(:telegram_selected_resume, {account_id, chat_id, thread_id})
 
     :ok
   rescue
@@ -1000,17 +961,15 @@ defmodule LemonRouter.RunProcess do
 
   defp safe_clear_thread_index(table, account_id, chat_id, thread_id)
        when is_atom(table) and is_binary(account_id) and is_integer(chat_id) do
-    if Code.ensure_loaded?(LemonCore.Store) and function_exported?(LemonCore.Store, :list, 1) do
-      LemonCore.Store.list(table)
-      |> Enum.each(fn
-        {{acc, cid, tid, _msg_id} = key, _value}
-        when acc == account_id and cid == chat_id and tid == thread_id ->
-          _ = LemonCore.Store.delete(table, key)
+    LemonCore.Store.list(table)
+    |> Enum.each(fn
+      {{acc, cid, tid, _msg_id} = key, _value}
+      when acc == account_id and cid == chat_id and tid == thread_id ->
+        _ = LemonCore.Store.delete(table, key)
 
-        _ ->
-          :ok
-      end)
-    end
+      _ ->
+        :ok
+    end)
 
     :ok
   rescue

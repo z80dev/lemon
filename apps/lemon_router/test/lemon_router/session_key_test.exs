@@ -1,7 +1,7 @@
 defmodule LemonRouter.SessionKeyTest do
   use ExUnit.Case, async: true
 
-  alias LemonRouter.SessionKey
+  alias LemonCore.SessionKey
 
   describe "main/1" do
     test "generates main session key" do

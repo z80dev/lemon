@@ -6,8 +6,7 @@ defmodule LemonCore.RouterBridge do
   runs without depending on `:lemon_router`. `:lemon_router` configures the
   bridge at runtime.
 
-  `submit_run/1` accepts either `%LemonCore.RunRequest{}` or a legacy map and
-  normalizes map submissions through `LemonCore.RunRequest`.
+  `submit_run/1` accepts a canonical `%LemonCore.RunRequest{}`.
   """
 
   @bridge_key :router_bridge
@@ -30,7 +29,7 @@ defmodule LemonCore.RouterBridge do
   Configure bridge modules with merge/guard modes.
 
   Modes:
-  - `:replace` - replace configured keys directly (legacy behavior)
+  - `:replace` - replace configured keys directly
   - `:merge` - merge with existing config, preserving unspecified keys
   - `:safe_merge` - like merge, but rejects conflicting non-nil overrides
   """
@@ -54,16 +53,10 @@ defmodule LemonCore.RouterBridge do
     configure(opts, mode: :safe_merge)
   end
 
-  @spec submit_run(RunRequest.t() | map()) ::
+  @spec submit_run(RunRequest.t()) ::
           {:ok, binary()} | {:error, :unavailable} | {:error, term()}
   def submit_run(%RunRequest{} = params) do
     do_submit_run(params)
-  end
-
-  def submit_run(params) when is_map(params) do
-    params
-    |> RunRequest.normalize()
-    |> do_submit_run()
   end
 
   defp do_submit_run(params) do
@@ -109,6 +102,24 @@ defmodule LemonCore.RouterBridge do
       mod ->
         if Code.ensure_loaded?(mod) and function_exported?(mod, :abort, 2) do
           _ = apply(mod, :abort, [session_key, reason])
+          :ok
+        else
+          {:error, :unavailable}
+        end
+    end
+  rescue
+    e -> {:error, e}
+  end
+
+  @spec abort_run(binary(), term()) :: :ok | {:error, :unavailable} | {:error, term()}
+  def abort_run(run_id, reason \\ :user_requested) when is_binary(run_id) do
+    case impl(:router) do
+      nil ->
+        {:error, :unavailable}
+
+      mod ->
+        if Code.ensure_loaded?(mod) and function_exported?(mod, :abort_run, 2) do
+          _ = apply(mod, :abort_run, [run_id, reason])
           :ok
         else
           {:error, :unavailable}

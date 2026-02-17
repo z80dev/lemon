@@ -10,7 +10,7 @@ defmodule LemonRouter.ChannelsDelivery do
 
   @spec telegram_outbox_available?() :: boolean()
   def telegram_outbox_available? do
-    TelegramDelivery.legacy_outbox_available?()
+    is_pid(Process.whereis(LemonChannels.Outbox))
   end
 
   @spec enqueue(OutboundPayload.t(), keyword()) :: {:ok, reference()} | {:error, term()}
@@ -26,7 +26,7 @@ defmodule LemonRouter.ChannelsDelivery do
           opts :: keyword()
         ) :: {:ok, reference()} | {:error, term()}
   def telegram_enqueue(key, priority, op, %OutboundPayload{} = fallback_payload, opts \\ []) do
-    TelegramDelivery.enqueue_legacy_fallback(
+    TelegramDelivery.enqueue_fallback(
       key,
       priority,
       op,
@@ -57,7 +57,7 @@ defmodule LemonRouter.ChannelsDelivery do
         opts \\ []
       )
       when is_pid(notify_pid) and is_reference(notify_ref) and is_atom(notify_tag) do
-    TelegramDelivery.enqueue_legacy_fallback(
+    TelegramDelivery.enqueue_fallback(
       key,
       priority,
       op,

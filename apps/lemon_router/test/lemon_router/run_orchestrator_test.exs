@@ -2,6 +2,7 @@ defmodule LemonRouter.RunOrchestratorTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.RunRequest
+  alias LemonChannels.Types.ResumeToken
   alias LemonRouter.RunOrchestrator
 
   @moduledoc """
@@ -78,13 +79,15 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       # We expect this to fail since RunSupervisor isn't started
       result =
-        RunOrchestrator.submit(%{
-          origin: :control_plane,
-          session_key: "agent:test:main",
-          agent_id: "test",
-          prompt: "Hello",
-          queue_mode: :collect
-        })
+        RunOrchestrator.submit(
+          request(%{
+            origin: :control_plane,
+            session_key: "agent:test:main",
+            agent_id: "test",
+            prompt: "Hello",
+            queue_mode: :collect
+          })
+        )
 
       # Either succeeds with run_id or fails with meaningful error
       case result do
@@ -111,26 +114,23 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert match?({:ok, _}, result) or match?({:error, _}, result)
     end
 
-    test "accepts and normalizes string-keyed map input" do
-      result =
-        RunOrchestrator.submit(%{
-          "origin" => :control_plane,
-          "session_key" => "agent:test:main",
-          "prompt" => "Hello from string keys",
-          "queue_mode" => :collect,
-          "meta" => %{"source" => "test"}
-        })
-
-      assert match?({:ok, _}, result) or match?({:error, _}, result)
+    test "rejects map input" do
+      assert_raise FunctionClauseError, fn ->
+        apply(RunOrchestrator, :submit, [
+          %{
+            origin: :control_plane,
+            session_key: "agent:test:main",
+            prompt: "Hello from map input"
+          }
+        ])
+      end
     end
   end
 
   describe "admission control" do
     test "returns :run_capacity_reached when bounded run supervisor is saturated" do
       run_supervisor =
-        start_supervised!(
-          {DynamicSupervisor, strategy: :one_for_one, max_children: 1}
-        )
+        start_supervised!({DynamicSupervisor, strategy: :one_for_one, max_children: 1})
 
       {:ok, orchestrator_pid} =
         GenServer.start_link(
@@ -157,8 +157,10 @@ defmodule LemonRouter.RunOrchestratorTest do
         prompt: "second"
       }
 
-      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, params_1)
-      assert {:error, :run_capacity_reached} = RunOrchestrator.submit(orchestrator_pid, params_2)
+      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params_1))
+
+      assert {:error, :run_capacity_reached} =
+               RunOrchestrator.submit(orchestrator_pid, request(params_2))
     end
   end
 
@@ -177,7 +179,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       # The orchestrator should accept the cwd parameter without error
       # Even if the full submission fails, no crash should occur
-      result = RunOrchestrator.submit(params)
+      result = RunOrchestrator.submit(request(params))
       assert match?({:ok, _}, result) or match?({:error, _}, result)
     end
 
@@ -190,7 +192,7 @@ defmodule LemonRouter.RunOrchestratorTest do
         meta: %{cwd: "/meta/working/dir"}
       }
 
-      result = RunOrchestrator.submit(params)
+      result = RunOrchestrator.submit(request(params))
       assert match?({:ok, _}, result) or match?({:error, _}, result)
     end
 
@@ -204,7 +206,7 @@ defmodule LemonRouter.RunOrchestratorTest do
         meta: %{cwd: "/meta/dir"}
       }
 
-      result = RunOrchestrator.submit(params)
+      result = RunOrchestrator.submit(request(params))
       assert match?({:ok, _}, result) or match?({:error, _}, result)
     end
   end
@@ -222,7 +224,7 @@ defmodule LemonRouter.RunOrchestratorTest do
         }
       }
 
-      result = RunOrchestrator.submit(params)
+      result = RunOrchestrator.submit(request(params))
       assert match?({:ok, _}, result) or match?({:error, _}, result)
     end
 
@@ -235,7 +237,7 @@ defmodule LemonRouter.RunOrchestratorTest do
         tool_policy: %{sandbox: true}
       }
 
-      result = RunOrchestrator.submit(params)
+      result = RunOrchestrator.submit(request(params))
       assert match?({:ok, _}, result) or match?({:error, _}, result)
     end
 
@@ -248,7 +250,7 @@ defmodule LemonRouter.RunOrchestratorTest do
         tool_policy: %{}
       }
 
-      result = RunOrchestrator.submit(params)
+      result = RunOrchestrator.submit(request(params))
       assert match?({:ok, _}, result) or match?({:error, _}, result)
     end
 
@@ -261,7 +263,7 @@ defmodule LemonRouter.RunOrchestratorTest do
         tool_policy: nil
       }
 
-      result = RunOrchestrator.submit(params)
+      result = RunOrchestrator.submit(request(params))
       assert match?({:ok, _}, result) or match?({:error, _}, result)
     end
   end
@@ -279,7 +281,7 @@ defmodule LemonRouter.RunOrchestratorTest do
         }
       }
 
-      result = RunOrchestrator.submit(params)
+      result = RunOrchestrator.submit(request(params))
       assert match?({:ok, _}, result) or match?({:error, _}, result)
     end
   end
@@ -301,7 +303,7 @@ defmodule LemonRouter.RunOrchestratorTest do
       }
 
       # The orchestrator should pick up the model from session config
-      result = RunOrchestrator.submit(params)
+      result = RunOrchestrator.submit(request(params))
       assert match?({:ok, _}, result) or match?({:error, _}, result)
     end
 
@@ -319,7 +321,7 @@ defmodule LemonRouter.RunOrchestratorTest do
         prompt: "Hello"
       }
 
-      result = RunOrchestrator.submit(params)
+      result = RunOrchestrator.submit(request(params))
       assert match?({:ok, _}, result) or match?({:error, _}, result)
     end
 
@@ -339,7 +341,7 @@ defmodule LemonRouter.RunOrchestratorTest do
         engine_id: "explicit:engine"
       }
 
-      result = RunOrchestrator.submit(params)
+      result = RunOrchestrator.submit(request(params))
       assert match?({:ok, _}, result) or match?({:error, _}, result)
     end
 
@@ -355,7 +357,7 @@ defmodule LemonRouter.RunOrchestratorTest do
         prompt: "Hello"
       }
 
-      result = RunOrchestrator.submit(params)
+      result = RunOrchestrator.submit(request(params))
       assert match?({:ok, _}, result) or match?({:error, _}, result)
     end
   end
@@ -366,7 +368,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       {resume, stripped} = RunOrchestrator.extract_resume_and_strip_prompt(prompt, %{})
 
-      assert %LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_abc123"} = resume
+      assert %ResumeToken{engine: "codex", value: "thread_abc123"} = resume
       assert stripped == "Please continue with this task."
     end
 
@@ -376,7 +378,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       {resume, stripped} = RunOrchestrator.extract_resume_and_strip_prompt(prompt, meta)
 
-      assert %LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_reply_123"} = resume
+      assert %ResumeToken{engine: "codex", value: "thread_reply_123"} = resume
       assert stripped == "Continue with changes."
     end
 
@@ -385,7 +387,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       {resume, stripped} = RunOrchestrator.extract_resume_and_strip_prompt(prompt, %{})
 
-      assert %LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_only_resume"} =
+      assert %ResumeToken{engine: "codex", value: "thread_only_resume"} =
                resume
 
       assert stripped == "Continue."
@@ -404,4 +406,6 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert stripped == "Keep this line\nand this one too"
     end
   end
+
+  defp request(attrs), do: RunRequest.new(attrs)
 end

@@ -19,6 +19,11 @@ defmodule LemonCore.RouterBridgeTest do
       send(self(), {:aborted, session_key, reason})
       :ok
     end
+
+    def abort_run(run_id, reason) do
+      send(self(), {:run_aborted, run_id, reason})
+      :ok
+    end
   end
 
   defmodule AlternativeRunOrchestrator do
@@ -42,15 +47,17 @@ defmodule LemonCore.RouterBridgeTest do
   end
 
   describe "submit_run/1" do
-    test "normalizes map params into RunRequest before submit" do
+    test "forwards RunRequest params to orchestrator" do
       :ok = RouterBridge.configure(run_orchestrator: TestRunOrchestrator)
 
-      assert {:ok, "run_test"} =
-               RouterBridge.submit_run(%{
-                 "origin" => :control_plane,
-                 "session_key" => "agent:bridge:main",
-                 "prompt" => "hello"
-               })
+      request =
+        RunRequest.new(%{
+          origin: :control_plane,
+          session_key: "agent:bridge:main",
+          prompt: "hello"
+        })
+
+      assert {:ok, "run_test"} = RouterBridge.submit_run(request)
 
       assert_receive {:submitted,
                       %RunRequest{
@@ -81,7 +88,16 @@ defmodule LemonCore.RouterBridgeTest do
 
     test "returns unavailable when no orchestrator is configured" do
       :ok = RouterBridge.configure(router: TestRouter)
-      assert {:error, :unavailable} = RouterBridge.submit_run(%{session_key: "agent:x:main"})
+
+      request =
+        %RunRequest{
+          origin: :channel,
+          session_key: "agent:x:main",
+          agent_id: "x",
+          prompt: "ping"
+        }
+
+      assert {:error, :unavailable} = RouterBridge.submit_run(request)
     end
   end
 
@@ -96,6 +112,20 @@ defmodule LemonCore.RouterBridgeTest do
     test "returns unavailable when no router is configured" do
       :ok = RouterBridge.configure(run_orchestrator: TestRunOrchestrator)
       assert {:error, :unavailable} = RouterBridge.abort_session("agent:x:main")
+    end
+  end
+
+  describe "abort_run/2" do
+    test "delegates to router abort_run when configured" do
+      :ok = RouterBridge.configure(router: TestRouter)
+
+      assert :ok = RouterBridge.abort_run("run-123", :user_requested)
+      assert_receive {:run_aborted, "run-123", :user_requested}
+    end
+
+    test "returns unavailable when no router is configured" do
+      :ok = RouterBridge.configure(run_orchestrator: TestRunOrchestrator)
+      assert {:error, :unavailable} = RouterBridge.abort_run("run-x")
     end
   end
 
@@ -120,7 +150,15 @@ defmodule LemonCore.RouterBridgeTest do
 
       :ok = RouterBridge.configure([router: TestRouter], mode: :merge)
 
-      assert {:ok, "run_test"} = RouterBridge.submit_run(%{session_key: "agent:merge:main"})
+      request =
+        %RunRequest{
+          origin: :channel,
+          session_key: "agent:merge:main",
+          agent_id: "merge",
+          prompt: "test"
+        }
+
+      assert {:ok, "run_test"} = RouterBridge.submit_run(request)
       assert_receive {:submitted, %RunRequest{}}
     end
   end

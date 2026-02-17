@@ -18,21 +18,21 @@ defmodule LemonRouter.ChannelContextTest do
     test "falls back to :unknown peer kind for invalid values" do
       parsed = ChannelContext.parse_session_key("agent:a1:telegram:bot:not_real:123")
 
-      assert parsed.kind == :channel_peer
-      assert parsed.channel_id == "telegram"
+      assert parsed.kind == :unknown
+      assert parsed.channel_id == nil
       assert parsed.peer_kind == :unknown
-      assert parsed.peer_id == "123"
+      assert parsed.peer_id == "agent:a1:telegram:bot:not_real:123"
     end
 
-    test "parses legacy telegram format" do
+    test "rejects non-canonical legacy telegram format" do
       parsed = ChannelContext.parse_session_key("channel:telegram:bot:12345:thread:9")
 
-      assert parsed.kind == :channel_peer
-      assert parsed.channel_id == "telegram"
-      assert parsed.account_id == "bot"
-      assert parsed.peer_kind == :dm
-      assert parsed.peer_id == "12345"
-      assert parsed.thread_id == "9"
+      assert parsed.kind == :unknown
+      assert parsed.channel_id == nil
+      assert parsed.account_id == "unknown"
+      assert parsed.peer_kind == :unknown
+      assert parsed.peer_id == "channel:telegram:bot:12345:thread:9"
+      assert parsed.thread_id == nil
     end
   end
 

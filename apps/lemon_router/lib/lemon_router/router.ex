@@ -9,7 +9,8 @@ defmodule LemonRouter.Router do
   """
 
   alias LemonCore.RunRequest
-  alias LemonRouter.{RunOrchestrator, SessionKey}
+  alias LemonCore.SessionKey
+  alias LemonRouter.RunOrchestrator
 
   require Logger
 

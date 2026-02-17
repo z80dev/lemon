@@ -15,10 +15,11 @@ defmodule LemonRouter.RunOrchestrator do
 
   require Logger
 
-  alias LemonRouter.{Policy, SessionKey, RunProcess}
-  alias LemonCore.RunRequest
+  alias LemonRouter.{Policy, RunProcess}
+  alias LemonCore.{RunRequest, SessionKey}
+  alias LemonChannels.Types.ResumeToken
   alias LemonGateway.Cwd, as: GatewayCwd
-  alias LemonGateway.EngineRegistry
+  alias LemonChannels.EngineRegistry
   alias AgentCore.CliRunners.Types.ResumeToken, as: CliResume
 
   def start_link(opts \\ []) do
@@ -31,7 +32,7 @@ defmodule LemonRouter.RunOrchestrator do
 
   ## Parameters
 
-  Accepts either `%LemonCore.RunRequest{}` or a legacy map with these fields:
+  Accepts a `%LemonCore.RunRequest{}` with these fields:
 
   - `:origin` - Source of the request (:channel, :control_plane, :cron, :node)
   - `:session_key` - Session key for routing
@@ -47,16 +48,14 @@ defmodule LemonRouter.RunOrchestrator do
 
   `{:ok, run_id}` on success, `{:error, reason}` on failure.
   """
-  @spec submit(RunRequest.t() | map()) :: {:ok, binary()} | {:error, term()}
+  @spec submit(RunRequest.t()) :: {:ok, binary()} | {:error, term()}
   def submit(%RunRequest{} = request), do: submit(__MODULE__, request)
-  def submit(params) when is_map(params), do: submit(__MODULE__, params)
 
   @doc """
   Submit a run request to a specific orchestrator server.
   """
-  @spec submit(GenServer.server(), RunRequest.t() | map()) :: {:ok, binary()} | {:error, term()}
+  @spec submit(GenServer.server(), RunRequest.t()) :: {:ok, binary()} | {:error, term()}
   def submit(server, %RunRequest{} = request), do: GenServer.call(server, {:submit, request})
-  def submit(server, params) when is_map(params), do: GenServer.call(server, {:submit, params})
 
   @doc """
   Lightweight run counts for status UIs.
@@ -98,10 +97,13 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   @impl true
-  def handle_call({:submit, params}, _from, state) do
-    params = RunRequest.normalize(params)
+  def handle_call({:submit, %RunRequest{} = params}, _from, state) do
     result = do_submit(params, state)
     {:reply, result, state}
+  end
+
+  def handle_call({:submit, _invalid}, _from, state) do
+    {:reply, {:error, :invalid_run_request}, state}
   end
 
   defp do_submit(%RunRequest{} = params, orchestrator_state) do
@@ -161,7 +163,7 @@ defmodule LemonRouter.RunOrchestrator do
     # Session config can set model which maps to engine_id
     resolved_engine_id =
       cond do
-        match?(%LemonGateway.Types.ResumeToken{}, resume) ->
+        match?(%ResumeToken{}, resume) ->
           # Resume must win; otherwise scheduler won't apply the resume token.
           resume.engine
 
@@ -172,26 +174,17 @@ defmodule LemonRouter.RunOrchestrator do
     # Resolve thinking_level from session config
     thinking_level = session_config[:thinking_level] || session_config["thinking_level"]
 
-    # Backward compatibility: a lot of legacy gateway code and tests still expect
-    # `job.text`, `job.engine_hint`, and (for Telegram) `job.scope/user_msg_id`.
-    legacy_scope = legacy_scope_from_meta(meta)
-    legacy_user_msg_id = meta[:user_msg_id] || meta["user_msg_id"]
-
     # Build gateway job
     job = %LemonGateway.Types.Job{
       run_id: run_id,
       session_key: session_key,
       prompt: prompt,
-      text: prompt,
       engine_id: resolved_engine_id,
-      engine_hint: resolved_engine_id,
       cwd: cwd,
       resume: resume,
       queue_mode: queue_mode,
       lane: meta[:lane] || :main,
       tool_policy: tool_policy,
-      scope: legacy_scope,
-      user_msg_id: legacy_user_msg_id,
       meta:
         Map.merge(meta, %{
           origin: origin,
@@ -322,58 +315,9 @@ defmodule LemonRouter.RunOrchestrator do
 
   defp normalize_cwd(_), do: nil
 
-  defp legacy_scope_from_meta(meta) when is_map(meta) do
-    channel_id = meta[:channel_id] || meta["channel_id"]
-
-    if channel_id == "telegram" do
-      chat_id =
-        cond do
-          is_integer(meta[:chat_id]) -> meta[:chat_id]
-          is_integer(meta["chat_id"]) -> meta["chat_id"]
-          is_binary(meta[:chat_id]) -> parse_int(meta[:chat_id])
-          is_binary(meta["chat_id"]) -> parse_int(meta["chat_id"])
-          is_map(meta[:peer]) -> parse_int(meta[:peer][:id] || meta[:peer]["id"])
-          is_map(meta["peer"]) -> parse_int(meta["peer"][:id] || meta["peer"]["id"])
-          true -> nil
-        end
-
-      topic_id =
-        cond do
-          is_integer(meta[:topic_id]) -> meta[:topic_id]
-          is_integer(meta["topic_id"]) -> meta["topic_id"]
-          is_binary(meta[:topic_id]) -> parse_int(meta[:topic_id])
-          is_binary(meta["topic_id"]) -> parse_int(meta["topic_id"])
-          is_map(meta[:peer]) -> parse_int(meta[:peer][:thread_id] || meta[:peer]["thread_id"])
-          is_map(meta["peer"]) -> parse_int(meta["peer"][:thread_id] || meta["peer"]["thread_id"])
-          true -> nil
-        end
-
-      if is_integer(chat_id) do
-        %LemonGateway.Types.ChatScope{transport: :telegram, chat_id: chat_id, topic_id: topic_id}
-      else
-        nil
-      end
-    end
-  rescue
-    _ -> nil
-  end
-
-  defp legacy_scope_from_meta(_), do: nil
-
-  defp parse_int(nil), do: nil
-
-  defp parse_int(i) when is_integer(i), do: i
-
-  defp parse_int(s) when is_binary(s) do
-    case Integer.parse(s) do
-      {i, _} -> i
-      :error -> nil
-    end
-  end
-
   @doc false
   @spec extract_resume_and_strip_prompt(String.t() | nil, map()) ::
-          {LemonGateway.Types.ResumeToken.t() | nil, String.t()}
+          {ResumeToken.t() | nil, String.t()}
   def extract_resume_and_strip_prompt(prompt, meta) do
     prompt = prompt || ""
 

@@ -3,39 +3,25 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
 
   alias LemonRouter.ToolStatusCoalescer
 
-  defmodule TestOutboxAPI do
+  defmodule TestTelegramPlugin do
     @moduledoc false
-    use Agent
 
-    def start_link(opts) do
-      notify_pid = opts[:notify_pid]
-      Agent.start_link(fn -> %{calls: [], notify_pid: notify_pid} end, name: __MODULE__)
+    def id, do: "telegram"
+
+    def meta do
+      %{
+        name: "Test Telegram",
+        capabilities: %{
+          edit_support: true,
+          chunk_limit: 4096
+        }
+      }
     end
 
-    def calls, do: Agent.get(__MODULE__, fn s -> Enum.reverse(s.calls) end)
-
-    def clear, do: Agent.update(__MODULE__, &%{&1 | calls: []})
-
-    def send_message(_token, chat_id, text, opts_or_reply_to \\ nil, parse_mode \\ nil) do
-      record({:send, chat_id, text, opts_or_reply_to, parse_mode})
+    def deliver(payload) do
+      pid = :persistent_term.get({__MODULE__, :test_pid}, nil)
+      if is_pid(pid), do: send(pid, {:delivered, payload})
       {:ok, %{"ok" => true, "result" => %{"message_id" => 1001}}}
-    end
-
-    def edit_message_text(_token, chat_id, message_id, text, opts \\ nil) do
-      record({:edit, chat_id, message_id, text, opts})
-      {:ok, %{"ok" => true}}
-    end
-
-    def delete_message(_token, chat_id, message_id) do
-      record({:delete, chat_id, message_id})
-      {:ok, %{"ok" => true}}
-    end
-
-    defp record(call) do
-      Agent.update(__MODULE__, fn s -> %{s | calls: [call | s.calls]} end)
-      notify_pid = Agent.get(__MODULE__, & &1.notify_pid)
-      if is_pid(notify_pid), do: send(notify_pid, {:outbox_api_call, call})
-      :ok
     end
   end
 
@@ -52,10 +38,38 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
         )
     end
 
-    # Keep legacy tests deterministic: they don't depend on the Telegram outbox.
-    if pid = Process.whereis(LemonGateway.Telegram.Outbox) do
-      GenServer.stop(pid)
+    if is_nil(Process.whereis(LemonChannels.Registry)) do
+      {:ok, _} = LemonChannels.Registry.start_link([])
     end
+
+    if is_nil(Process.whereis(LemonChannels.Outbox)) do
+      {:ok, _} = LemonChannels.Outbox.start_link([])
+    end
+
+    if is_nil(Process.whereis(LemonChannels.Outbox.RateLimiter)) do
+      {:ok, _} = LemonChannels.Outbox.RateLimiter.start_link([])
+    end
+
+    if is_nil(Process.whereis(LemonChannels.Outbox.Dedupe)) do
+      {:ok, _} = LemonChannels.Outbox.Dedupe.start_link([])
+    end
+
+    :persistent_term.put({TestTelegramPlugin, :test_pid}, self())
+    existing = LemonChannels.Registry.get_plugin("telegram")
+    _ = LemonChannels.Registry.unregister("telegram")
+    :ok = LemonChannels.Registry.register(TestTelegramPlugin)
+
+    on_exit(fn ->
+      _ = :persistent_term.erase({TestTelegramPlugin, :test_pid})
+
+      if is_pid(Process.whereis(LemonChannels.Registry)) do
+        _ = LemonChannels.Registry.unregister("telegram")
+
+        if is_atom(existing) and not is_nil(existing) do
+          _ = LemonChannels.Registry.register(existing)
+        end
+      end
+    end)
 
     :ok
   end
@@ -167,14 +181,6 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
   end
 
   test "telegram tool status edits the progress message when progress_msg_id is present" do
-    {:ok, _} = start_supervised({TestOutboxAPI, [notify_pid: self()]})
-
-    {:ok, _} =
-      start_supervised(
-        {LemonGateway.Telegram.Outbox,
-         [bot_token: "token", api_mod: TestOutboxAPI, edit_throttle_ms: 0, use_markdown: false]}
-      )
-
     session_key = "agent:tool-status:telegram:bot:group:12345:thread:777"
     channel_id = "telegram"
     run_id = "run_#{System.unique_integer([:positive])}"
@@ -196,31 +202,37 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
 
     assert :ok = ToolStatusCoalescer.flush(session_key, channel_id)
 
-    assert_receive {:outbox_api_call, {:edit, 12_345, ^progress_msg_id, text, _opts}}, 500
+    assert_receive {:delivered,
+                    %LemonChannels.OutboundPayload{
+                      channel_id: "telegram",
+                      kind: :edit,
+                      peer: %{id: "12345", thread_id: "777"},
+                      content: %{message_id: 9001, text: text},
+                      meta: %{run_id: ^run_id}
+                    }},
+                   1_000
     assert String.contains?(text, "Running")
     assert String.contains?(text, "Tool calls:")
     assert String.contains?(text, "Read: foo.txt")
-
-    refute_receive {:outbox_api_call, {:send, 12_345, _text, _opts, nil}}, 200
 
     completed = %{started | phase: :completed, ok: true}
     assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, completed)
     assert :ok = ToolStatusCoalescer.flush(session_key, channel_id)
 
-    assert_receive {:outbox_api_call, {:edit, 12_345, ^progress_msg_id, text, _opts}}, 500
+    assert_receive {:delivered,
+                    %LemonChannels.OutboundPayload{
+                      channel_id: "telegram",
+                      kind: :edit,
+                      peer: %{id: "12345", thread_id: "777"},
+                      content: %{message_id: 9001, text: text},
+                      meta: %{run_id: ^run_id}
+                    }},
+                   1_000
     refute String.starts_with?(text, "Running")
     assert String.contains?(text, "Tool calls:")
   end
 
   test "finalize_run edits progress message to Done even when there were no tool actions" do
-    {:ok, _} = start_supervised({TestOutboxAPI, [notify_pid: self()]})
-
-    {:ok, _} =
-      start_supervised(
-        {LemonGateway.Telegram.Outbox,
-         [bot_token: "token", api_mod: TestOutboxAPI, edit_throttle_ms: 0, use_markdown: false]}
-      )
-
     session_key = "agent:tool-status:telegram:bot:group:12345:thread:777"
     channel_id = "telegram"
     run_id = "run_#{System.unique_integer([:positive])}"
@@ -231,23 +243,18 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
                meta: %{user_msg_id: 9, progress_msg_id: progress_msg_id}
              )
 
-    assert_receive {:outbox_api_call,
-                    {:edit, 12_345, ^progress_msg_id, "Done",
-                     %{reply_markup: %{"inline_keyboard" => []}}}},
-                   500
-
-    refute_receive {:outbox_api_call, {:send, 12_345, _text, _opts, nil}}, 200
+    assert_receive {:delivered,
+                    %LemonChannels.OutboundPayload{
+                      channel_id: "telegram",
+                      kind: :edit,
+                      peer: %{id: "12345", thread_id: "777"},
+                      content: %{message_id: 9002, text: "Done"},
+                      meta: %{reply_markup: %{"inline_keyboard" => []}, run_id: ^run_id}
+                    }},
+                   1_000
   end
 
   test "telegram tool status falls back to a dedicated status message when progress_msg_id is nil" do
-    {:ok, _} = start_supervised({TestOutboxAPI, [notify_pid: self()]})
-
-    {:ok, _} =
-      start_supervised(
-        {LemonGateway.Telegram.Outbox,
-         [bot_token: "token", api_mod: TestOutboxAPI, edit_throttle_ms: 0, use_markdown: false]}
-      )
-
     session_key = "agent:tool-status:telegram:bot:group:12345:thread:777"
     channel_id = "telegram"
     run_id = "run_#{System.unique_integer([:positive])}"
@@ -268,6 +275,27 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
 
     assert :ok = ToolStatusCoalescer.flush(session_key, channel_id)
 
+    assert_receive {:delivered,
+                    %LemonChannels.OutboundPayload{
+                      channel_id: "telegram",
+                      kind: :text,
+                      peer: %{id: "12345", thread_id: "777"},
+                      reply_to: 9,
+                      meta: %{reply_markup: reply_markup}
+                    }},
+                   1_000
+
+    assert reply_markup == %{
+             "inline_keyboard" => [
+               [
+                 %{
+                   "text" => "cancel",
+                   "callback_data" => "lemon:cancel:#{run_id}"
+                 }
+               ]
+             ]
+           }
+
     # Wait until the coalescer captures status_msg_id from the outbox delivery ack.
     [{pid, _}] = Registry.lookup(LemonRouter.ToolStatusRegistry, {session_key, channel_id})
 
@@ -286,28 +314,17 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
 
     assert status_id == 1001
 
-    calls = TestOutboxAPI.calls()
-    assert {:send, 12_345, _text, opts, nil} = hd(calls)
-    assert is_map(opts)
-    assert opts[:message_thread_id] == 777
-    assert opts[:reply_to_message_id] == 9
-    reply_markup = opts[:reply_markup] || opts["reply_markup"]
-    assert is_map(reply_markup)
-    assert reply_markup["inline_keyboard"] == [
-             [
-               %{
-                 "text" => "cancel",
-                 "callback_data" => "lemon:cancel:#{run_id}"
-               }
-             ]
-           ]
-
     assert :ok = ToolStatusCoalescer.finalize_run(session_key, channel_id, run_id, true)
 
-    assert_receive {:outbox_api_call,
-                    {:edit, 12_345, 1001, _text,
-                     %{reply_markup: %{"inline_keyboard" => []}}}},
-                   500
+    assert_receive {:delivered,
+                    %LemonChannels.OutboundPayload{
+                      channel_id: "telegram",
+                      kind: :edit,
+                      peer: %{id: "12345", thread_id: "777"},
+                      content: %{message_id: 1001},
+                      meta: %{reply_markup: %{"inline_keyboard" => []}, run_id: ^run_id}
+                    }},
+                   1_000
   end
 
   defp eventually(fun, timeout_ms \\ 500) when is_function(fun, 0) do

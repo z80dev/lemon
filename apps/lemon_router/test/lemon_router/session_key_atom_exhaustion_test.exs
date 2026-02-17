@@ -3,7 +3,7 @@ defmodule LemonRouter.SessionKeyAtomExhaustionTest do
   # test activity. Keep it synchronous to avoid flakiness.
   use ExUnit.Case, async: false
 
-  alias LemonRouter.SessionKey
+  alias LemonCore.SessionKey
 
   test "does not create new atoms for invalid peer_kind values" do
     initial_count = :erlang.system_info(:atom_count)
@@ -18,4 +18,3 @@ defmodule LemonRouter.SessionKeyAtomExhaustionTest do
            "Atom count increased by #{final_count - initial_count}, possible atom leak"
   end
 end
-

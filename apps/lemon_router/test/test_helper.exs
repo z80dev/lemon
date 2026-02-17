@@ -21,6 +21,14 @@ Application.put_env(:lemon_gateway, :engines, [
 
 Application.delete_env(:lemon_gateway, :telegram)
 
+Application.put_env(:lemon_channels, :telegram, %{
+  bot_token: nil,
+  allowed_chat_ids: nil,
+  deny_unbound_chats: false,
+  drop_pending_updates: false,
+  files: %{}
+})
+
 _ = Application.stop(:lemon_channels)
 _ = Application.stop(:coding_agent)
 _ = Application.stop(:lemon_router)
@@ -37,4 +45,5 @@ ExUnit.after_suite(fn _ ->
   _ = Application.stop(:lemon_gateway)
 
   Application.delete_env(:lemon_gateway, :engines)
+  Application.delete_env(:lemon_channels, :telegram)
 end)

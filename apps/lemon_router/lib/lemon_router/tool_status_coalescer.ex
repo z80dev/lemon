@@ -717,7 +717,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
   defp extract_message_id_from_delivery(_), do: nil
 
   defp truncate_for_channel("telegram", text) when is_binary(text) do
-    LemonGateway.Telegram.Truncate.truncate_for_telegram(text)
+    LemonChannels.Telegram.Truncate.truncate_for_telegram(text)
   rescue
     _ -> text
   end
