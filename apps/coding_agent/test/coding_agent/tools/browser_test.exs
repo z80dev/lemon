@@ -142,6 +142,45 @@ defmodule CodingAgent.Tools.BrowserTest do
     assert result.details.screenshot == out
   end
 
+  test "snapshot payloads are untrusted and use wrapped snapshot field", %{tmp_dir: tmp_dir} do
+    snapshot = "URL: https://example.com\n\n" <> String.duplicate("A", 80)
+
+    Process.put(@server_key, fn method, args, timeout_ms ->
+      assert method == "browser.snapshot"
+      assert args == %{"maxChars" => 30}
+      assert timeout_ms == 30_000
+
+      {:ok,
+       %{
+         "mode" => "dom-snapshot",
+         "snapshot" => snapshot,
+         "displayedNodes" => 12
+       }}
+    end)
+
+    tool = Browser.tool(tmp_dir, browser_server: BrowserServerStub)
+
+    result =
+      tool.execute.(
+        "call_4",
+        %{"method" => "snapshot", "args" => %{"maxChars" => 30}},
+        nil,
+        nil
+      )
+
+    assert %AgentToolResult{} = result
+    assert result.trust == :untrusted
+
+    payload = decode_payload(result)
+
+    assert payload["ok"] == true
+    assert payload["result"]["mode"] == "dom-snapshot"
+    assert payload["result"]["snapshot"] == String.slice(snapshot, 0, 30) <> "..."
+    assert payload["result"]["truncated"] == true
+    assert payload["trustMetadata"]["wrappedFields"] == ["result.snapshot"]
+    assert payload["trust_metadata"]["wrapped_fields"] == ["result.snapshot"]
+  end
+
   defp decode_payload(result) do
     [content] = result.content
     Jason.decode!(content.text)

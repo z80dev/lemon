@@ -89,7 +89,12 @@ defmodule CodingAgent.Session do
     :hooks,
     :extension_status_report,
     :auto_compaction_in_progress,
-    :auto_compaction_signature
+    :auto_compaction_signature,
+    :overflow_recovery_in_progress,
+    :overflow_recovery_attempted,
+    :overflow_recovery_signature,
+    :overflow_recovery_error_reason,
+    :overflow_recovery_partial_state
   ]
 
   @type session_signature ::
@@ -126,7 +131,12 @@ defmodule CodingAgent.Session do
           hooks: keyword([function()]),
           extension_status_report: Extensions.extension_status_report() | nil,
           auto_compaction_in_progress: boolean(),
-          auto_compaction_signature: session_signature() | nil
+          auto_compaction_signature: session_signature() | nil,
+          overflow_recovery_in_progress: boolean(),
+          overflow_recovery_attempted: boolean(),
+          overflow_recovery_signature: session_signature() | nil,
+          overflow_recovery_error_reason: term() | nil,
+          overflow_recovery_partial_state: term() | nil
         }
 
   @type event_handler_callbacks :: %{
@@ -644,7 +654,12 @@ defmodule CodingAgent.Session do
       hooks: hooks,
       extension_status_report: extension_status_report,
       auto_compaction_in_progress: false,
-      auto_compaction_signature: nil
+      auto_compaction_signature: nil,
+      overflow_recovery_in_progress: false,
+      overflow_recovery_attempted: false,
+      overflow_recovery_signature: nil,
+      overflow_recovery_error_reason: nil,
+      overflow_recovery_partial_state: nil
     }
 
     maybe_register_session(session_manager, cwd, register_session, session_registry)
@@ -703,7 +718,12 @@ defmodule CodingAgent.Session do
         state
         | is_streaming: true,
           pending_prompt_timer_ref: timer_ref,
-          turn_index: state.turn_index + 1
+          turn_index: state.turn_index + 1,
+          overflow_recovery_in_progress: false,
+          overflow_recovery_attempted: false,
+          overflow_recovery_signature: nil,
+          overflow_recovery_error_reason: nil,
+          overflow_recovery_partial_state: nil
       }
 
       {:reply, :ok, new_state}
@@ -922,7 +942,12 @@ defmodule CodingAgent.Session do
         steering_queue: :queue.new(),
         follow_up_queue: :queue.new(),
         auto_compaction_in_progress: false,
-        auto_compaction_signature: nil
+        auto_compaction_signature: nil,
+        overflow_recovery_in_progress: false,
+        overflow_recovery_attempted: false,
+        overflow_recovery_signature: nil,
+        overflow_recovery_error_reason: nil,
+        overflow_recovery_partial_state: nil
     }
 
     {:reply, :ok, new_state}
@@ -954,7 +979,7 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call({:compact, opts}, _from, state) do
-    state = clear_auto_compaction_state(state)
+    state = state |> clear_auto_compaction_state() |> clear_overflow_recovery_state()
     custom_summary = Keyword.get(opts, :summary)
 
     # Show working message before compaction
@@ -1102,7 +1127,7 @@ defmodule CodingAgent.Session do
 
   def handle_cast(:abort, state) do
     had_pending_prompt = not is_nil(state.pending_prompt_timer_ref)
-    state = cancel_pending_prompt(state)
+    state = state |> cancel_pending_prompt() |> clear_overflow_recovery_state()
     AgentCore.Agent.abort(state.agent)
 
     if had_pending_prompt do
@@ -1131,6 +1156,21 @@ defmodule CodingAgent.Session do
   end
 
   @impl true
+  def handle_info({:agent_event, {:error, reason, partial_state} = event}, state) do
+    case maybe_start_overflow_recovery(state, reason, partial_state) do
+      {:ok, new_state} ->
+        {:noreply, new_state}
+
+      :no_recovery ->
+        # Broadcast to listeners FIRST (before state changes that might clear streams)
+        broadcast_event(state, event)
+
+        # Process the event and update state
+        new_state = handle_agent_event(event, state)
+        {:noreply, clear_overflow_recovery_state_on_terminal(event, new_state)}
+    end
+  end
+
   def handle_info({:agent_event, event}, state) do
     # Broadcast to listeners FIRST (before state changes that might clear streams)
     broadcast_event(state, event)
@@ -1138,7 +1178,7 @@ defmodule CodingAgent.Session do
     # Process the event and update state
     new_state = handle_agent_event(event, state)
 
-    {:noreply, new_state}
+    {:noreply, clear_overflow_recovery_state_on_terminal(event, new_state)}
   end
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
@@ -1165,7 +1205,13 @@ defmodule CodingAgent.Session do
 
   def handle_info({:EXIT, pid, reason}, state) when pid == state.agent do
     Logger.warning("Agent process exited: #{inspect(reason)}")
-    state = state |> Map.put(:is_streaming, false) |> cancel_pending_prompt()
+
+    state =
+      state
+      |> Map.put(:is_streaming, false)
+      |> cancel_pending_prompt()
+      |> clear_overflow_recovery_state()
+
     {:noreply, state}
   end
 
@@ -1212,6 +1258,48 @@ defmodule CodingAgent.Session do
 
           {:error, _reason, new_state} ->
             {:noreply, new_state}
+        end
+    end
+  end
+
+  def handle_info({:overflow_recovery_result, signature, result}, state) do
+    cond do
+      not state.overflow_recovery_in_progress ->
+        {:noreply, state}
+
+      state.overflow_recovery_signature != signature ->
+        {:noreply, state}
+
+      signature != session_signature(state) ->
+        {:noreply, clear_overflow_recovery_task_state(state)}
+
+      true ->
+        state = clear_overflow_recovery_task_state(state)
+
+        case apply_compaction_result(state, result, nil) do
+          {:ok, compacted_state} ->
+            case continue_after_overflow_compaction(compacted_state) do
+              {:ok, resumed_state} ->
+                {:noreply, resumed_state}
+
+              {:error, reason, failed_state} ->
+                ui_notify(
+                  failed_state,
+                  "Auto-retry failed after compaction: #{inspect(reason)}",
+                  :error
+                )
+
+                {:noreply, finalize_overflow_recovery_failure(failed_state, reason)}
+            end
+
+          {:error, reason, failed_state} ->
+            ui_notify(
+              failed_state,
+              "Overflow compaction failed: #{inspect(reason)}",
+              :error
+            )
+
+            {:noreply, finalize_overflow_recovery_failure(failed_state, reason)}
         end
     end
   end
@@ -1955,6 +2043,168 @@ defmodule CodingAgent.Session do
   @spec clear_auto_compaction_state(t()) :: t()
   defp clear_auto_compaction_state(state) do
     %{state | auto_compaction_in_progress: false, auto_compaction_signature: nil}
+  end
+
+  @spec clear_overflow_recovery_task_state(t()) :: t()
+  defp clear_overflow_recovery_task_state(state) do
+    %{
+      state
+      | overflow_recovery_in_progress: false,
+        overflow_recovery_signature: nil
+    }
+  end
+
+  @spec clear_overflow_recovery_state(t()) :: t()
+  defp clear_overflow_recovery_state(state) do
+    %{
+      clear_overflow_recovery_task_state(state)
+      | overflow_recovery_attempted: false,
+        overflow_recovery_error_reason: nil,
+        overflow_recovery_partial_state: nil
+    }
+  end
+
+  @spec clear_overflow_recovery_state_on_terminal(AgentCore.Types.agent_event(), t()) :: t()
+  defp clear_overflow_recovery_state_on_terminal(event, state) do
+    case event do
+      {:agent_end, _messages} -> clear_overflow_recovery_state(state)
+      {:canceled, _reason} -> clear_overflow_recovery_state(state)
+      {:error, _reason, _partial_state} -> clear_overflow_recovery_state(state)
+      _ -> state
+    end
+  end
+
+  @spec maybe_start_overflow_recovery(t(), term(), term()) :: {:ok, t()} | :no_recovery
+  defp maybe_start_overflow_recovery(state, reason, partial_state) do
+    cond do
+      not state.is_streaming ->
+        :no_recovery
+
+      state.overflow_recovery_in_progress ->
+        :no_recovery
+
+      state.overflow_recovery_attempted ->
+        :no_recovery
+
+      not context_length_exceeded_error?(reason) ->
+        :no_recovery
+
+      true ->
+        signature = session_signature(state)
+        session_pid = self()
+        session_manager = state.session_manager
+        model = state.model
+        compaction_opts = overflow_recovery_compaction_opts(state)
+
+        ui_notify(state, "Context window exceeded. Compacting and retrying...", :info)
+        ui_set_working_message(state, "Context overflow detected. Compacting and retrying...")
+
+        _ =
+          start_background_task(fn ->
+            result =
+              overflow_recovery_compaction_task_result(session_manager, model, compaction_opts)
+
+            send(session_pid, {:overflow_recovery_result, signature, result})
+          end)
+
+        {:ok,
+         %{
+           state
+           | overflow_recovery_in_progress: true,
+             overflow_recovery_attempted: true,
+             overflow_recovery_signature: signature,
+             overflow_recovery_error_reason: reason,
+             overflow_recovery_partial_state: partial_state
+         }}
+    end
+  end
+
+  @spec overflow_recovery_compaction_opts(t()) :: keyword()
+  defp overflow_recovery_compaction_opts(state) do
+    keep_recent_tokens =
+      state.settings_manager
+      |> get_compaction_settings()
+      |> Map.get(:keep_recent_tokens)
+
+    opts = [force: true]
+
+    if is_integer(keep_recent_tokens) and keep_recent_tokens > 0 do
+      Keyword.put(opts, :keep_recent_tokens, keep_recent_tokens)
+    else
+      opts
+    end
+  end
+
+  @spec overflow_recovery_compaction_task_result(Session.t(), Ai.Types.Model.t(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  defp overflow_recovery_compaction_task_result(session_manager, model, opts) do
+    try do
+      CodingAgent.Compaction.compact(session_manager, model, opts)
+    rescue
+      exception ->
+        {:error, {:exception, exception}}
+    catch
+      kind, reason ->
+        {:error, {kind, reason}}
+    end
+  end
+
+  @spec continue_after_overflow_compaction(t()) :: {:ok, t()} | {:error, term(), t()}
+  defp continue_after_overflow_compaction(state) do
+    case AgentCore.Agent.wait_for_idle(state.agent, timeout: 5_000) do
+      :ok ->
+        ui_set_working_message(state, "Retrying after compaction...")
+
+        case AgentCore.Agent.continue(state.agent) do
+          :ok ->
+            {:ok,
+             %{
+               state
+               | is_streaming: true,
+                 overflow_recovery_error_reason: nil,
+                 overflow_recovery_partial_state: nil
+             }}
+
+          {:error, reason} ->
+            {:error, reason, state}
+        end
+
+      {:error, :timeout} ->
+        {:error, :wait_for_idle_timeout, state}
+    end
+  end
+
+  @spec finalize_overflow_recovery_failure(t(), term()) :: t()
+  defp finalize_overflow_recovery_failure(state, fallback_reason) do
+    reason = state.overflow_recovery_error_reason || fallback_reason
+    event = {:error, reason, state.overflow_recovery_partial_state}
+
+    broadcast_event(state, event)
+    state = handle_agent_event(event, state)
+    clear_overflow_recovery_state_on_terminal(event, state)
+  end
+
+  @spec context_length_exceeded_error?(term()) :: boolean()
+  defp context_length_exceeded_error?(reason) do
+    text =
+      cond do
+        is_binary(reason) ->
+          reason
+
+        is_atom(reason) ->
+          Atom.to_string(reason)
+
+        true ->
+          inspect(reason, limit: 200, printable_limit: 8_000)
+      end
+      |> String.downcase()
+
+    String.contains?(text, "context_length_exceeded") or
+      String.contains?(text, "context length exceeded") or
+      String.contains?(text, "context window") or
+      String.contains?(text, "maximum context length")
+  rescue
+    _ -> false
   end
 
   @spec apply_compaction_result(t(), {:ok, map()} | {:error, term()}, String.t() | nil) ::

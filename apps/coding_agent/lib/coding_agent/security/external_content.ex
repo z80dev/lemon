@@ -103,7 +103,7 @@ defmodule CodingAgent.Security.ExternalContent do
 
   @spec untrusted_json_result(map()) :: AgentToolResult.t()
   def untrusted_json_result(payload) when is_map(payload) do
-    text = Jason.encode!(payload, pretty: true)
+    text = Jason.encode!(payload)
 
     %AgentToolResult{
       content: [%TextContent{text: text}],

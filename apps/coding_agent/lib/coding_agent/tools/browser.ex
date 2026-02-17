@@ -9,7 +9,8 @@ defmodule CodingAgent.Tools.Browser do
   alias CodingAgent.Security.ExternalContent
 
   @default_timeout_ms 30_000
-  @default_max_chars 50_000
+  @default_max_chars 20_000
+  @default_snapshot_max_chars 12_000
   @default_screenshot_dir ".lemon/browser/screenshots"
 
   @spec tool(cwd :: String.t(), opts :: keyword()) :: AgentTool.t()
@@ -27,8 +28,9 @@ defmodule CodingAgent.Tools.Browser do
           "method" => %{
             "type" => "string",
             "description" =>
-              "Browser method: navigate, screenshot, click, type, evaluate, waitForSelector, getContent, getCookies, setCookies. " <>
-                "Examples: navigate args={url}, click args={selector}, type args={selector,text,clear?,useFill?}, screenshot args={fullPage?}."
+              "Browser method: navigate, snapshot, screenshot, click, type, evaluate, waitForSelector, getContent, getCookies, setCookies. " <>
+                "Prefer snapshot for page understanding (compact text). Use getContent only when raw HTML is required. " <>
+                "Examples: navigate args={url}, snapshot args={maxChars?,maxNodes?,interactiveOnly?}, click args={selector}, type args={selector,text,clear?,useFill?}, screenshot args={fullPage?}."
           },
           "args" => %{
             "type" => "object",
@@ -88,24 +90,68 @@ defmodule CodingAgent.Tools.Browser do
 
   defp handle_ok_result(_cwd, "browser.getContent", args, %{"html" => html} = result)
        when is_binary(html) do
-    max_chars =
-      case Map.get(args, "maxChars") || Map.get(args, :maxChars) do
-        n when is_integer(n) and n > 0 -> n
-        _ -> @default_max_chars
-      end
+    max_chars = read_positive_int(args, ["maxChars", :maxChars], @default_max_chars)
 
-    {final_html, truncated?} = maybe_truncate(html, max_chars)
+    text_max_chars =
+      read_positive_int(
+        args,
+        ["textMaxChars", :textMaxChars],
+        min(max_chars, @default_snapshot_max_chars)
+      )
+
+    {final_result, wrapped_fields} =
+      normalize_get_content_result(result, max_chars, text_max_chars)
 
     json_result(
       %{
         "ok" => true,
-        "result" =>
-          result
-          |> Map.put("html", final_html)
-          |> maybe_put("truncated", truncated?)
-          |> maybe_put("originalChars", String.length(html))
+        "result" => final_result
       },
-      wrapped_fields: ["result.html"]
+      wrapped_fields: wrapped_fields
+    )
+  end
+
+  defp handle_ok_result(_cwd, "browser.getContent", args, %{} = result) do
+    max_chars = read_positive_int(args, ["maxChars", :maxChars], @default_max_chars)
+
+    text_max_chars =
+      read_positive_int(
+        args,
+        ["textMaxChars", :textMaxChars],
+        min(max_chars, @default_snapshot_max_chars)
+      )
+
+    {final_result, wrapped_fields} =
+      normalize_get_content_result(result, max_chars, text_max_chars)
+
+    json_result(
+      %{
+        "ok" => true,
+        "result" => final_result
+      },
+      wrapped_fields: wrapped_fields
+    )
+  end
+
+  defp handle_ok_result(_cwd, "browser.snapshot", args, %{"snapshot" => snapshot} = result)
+       when is_binary(snapshot) do
+    max_chars = read_positive_int(args, ["maxChars", :maxChars], @default_snapshot_max_chars)
+    original_chars = read_result_original_chars(result, snapshot, "originalChars")
+    existing_truncated = Map.get(result, "truncated") == true
+    {final_snapshot, truncated_now?} = maybe_truncate(snapshot, max_chars)
+
+    final_result =
+      result
+      |> Map.put("snapshot", final_snapshot)
+      |> Map.put("originalChars", original_chars)
+      |> maybe_put("truncated", existing_truncated or truncated_now?)
+
+    json_result(
+      %{
+        "ok" => true,
+        "result" => final_result
+      },
+      wrapped_fields: ["result.snapshot"]
     )
   end
 
@@ -242,6 +288,85 @@ defmodule CodingAgent.Tools.Browser do
   end
 
   defp screenshot_caption(_), do: "Browser screenshot"
+
+  defp normalize_get_content_result(result, max_chars, text_max_chars) do
+    {result, wrapped_fields} = normalize_get_content_html(result, max_chars, [])
+    {result, wrapped_fields} = normalize_get_content_text(result, text_max_chars, wrapped_fields)
+
+    wrapped_fields =
+      case wrapped_fields do
+        [] -> ["result"]
+        fields -> Enum.reverse(fields) |> Enum.map(&"result.#{&1}")
+      end
+
+    {result, wrapped_fields}
+  end
+
+  defp normalize_get_content_html(result, max_chars, wrapped_fields) do
+    case Map.get(result, "html") do
+      html when is_binary(html) ->
+        existing_truncated = Map.get(result, "truncated") == true
+        original_chars = read_result_original_chars(result, html, "originalChars")
+        {final_html, truncated_now?} = maybe_truncate(html, max_chars)
+
+        result =
+          result
+          |> Map.put("html", final_html)
+          |> Map.put("originalChars", original_chars)
+          |> maybe_put("truncated", existing_truncated or truncated_now?)
+
+        {result, ["html" | wrapped_fields]}
+
+      _ ->
+        {result, wrapped_fields}
+    end
+  end
+
+  defp normalize_get_content_text(result, text_max_chars, wrapped_fields) do
+    case Map.get(result, "text") do
+      text when is_binary(text) ->
+        existing_truncated = Map.get(result, "textTruncated") == true
+        original_chars = read_result_original_chars(result, text, "originalTextChars")
+        {final_text, truncated_now?} = maybe_truncate(text, text_max_chars)
+
+        result =
+          result
+          |> Map.put("text", final_text)
+          |> Map.put("originalTextChars", original_chars)
+          |> maybe_put("textTruncated", existing_truncated or truncated_now?)
+
+        {result, ["text" | wrapped_fields]}
+
+      _ ->
+        {result, wrapped_fields}
+    end
+  end
+
+  defp read_result_original_chars(result, text, key) do
+    case Map.get(result, key) do
+      n when is_integer(n) and n > 0 -> n
+      _ -> String.length(text)
+    end
+  end
+
+  defp read_positive_int(args, keys, default)
+       when is_map(args) and is_list(keys) and is_integer(default) and default > 0 do
+    Enum.find_value(keys, default, fn key ->
+      case Map.get(args, key) do
+        n when is_integer(n) and n > 0 ->
+          n
+
+        n when is_binary(n) ->
+          case Integer.parse(String.trim(n)) do
+            {value, _rest} when value > 0 -> value
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+    end)
+  end
 
   defp maybe_truncate(text, max_chars) when is_binary(text) and is_integer(max_chars) do
     if max_chars > 0 and String.length(text) > max_chars do
