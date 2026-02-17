@@ -57,6 +57,7 @@ defmodule CodingAgent.ToolRegistry do
     {:websearch, Tools.WebSearch},
     {:todo, Tools.Todo},
     {:task, Tools.Task},
+    {:agent, Tools.Agent},
     {:extensions_status, Tools.ExtensionsStatus}
   ]
 

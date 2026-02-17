@@ -33,6 +33,7 @@ defmodule CodingAgent.ToolPolicyTest do
       assert ToolPolicy.allowed?(policy, "patch")
       assert ToolPolicy.allowed?(policy, "todo")
       assert ToolPolicy.allowed?(policy, "task")
+      assert ToolPolicy.allowed?(policy, "agent")
       assert ToolPolicy.allowed?(policy, "extensions_status")
 
       refute ToolPolicy.allowed?(policy, "restart")
@@ -58,6 +59,7 @@ defmodule CodingAgent.ToolPolicyTest do
 
       refute ToolPolicy.allowed?(policy, "write")
       refute ToolPolicy.allowed?(policy, "bash")
+      refute ToolPolicy.allowed?(policy, "agent")
       assert ToolPolicy.requires_approval?(policy, "write")
       assert ToolPolicy.requires_approval?(policy, "edit")
     end
@@ -184,6 +186,7 @@ defmodule CodingAgent.ToolPolicyTest do
       policy = ToolPolicy.subagent_policy(:codex, [])
 
       refute ToolPolicy.allowed?(policy, "bash")
+      refute ToolPolicy.allowed?(policy, "agent")
     end
 
     test "applies additional restrictions from opts" do

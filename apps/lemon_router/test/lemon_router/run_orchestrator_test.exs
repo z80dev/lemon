@@ -34,6 +34,35 @@ defmodule LemonRouter.RunOrchestratorTest do
     end
   end
 
+  defmodule CapturingRunProcess do
+    @moduledoc false
+    use GenServer
+
+    def child_spec(opts) do
+      run_id = opts[:run_id] || System.unique_integer([:positive])
+
+      %{
+        id: {__MODULE__, run_id},
+        start: {__MODULE__, :start_link, [opts]},
+        restart: :temporary,
+        shutdown: 5_000
+      }
+    end
+
+    def start_link(opts) do
+      GenServer.start_link(__MODULE__, opts)
+    end
+
+    @impl true
+    def init(opts) do
+      if is_pid(opts[:notify_pid]) do
+        send(opts[:notify_pid], {:captured_job, opts[:job]})
+      end
+
+      {:ok, opts}
+    end
+  end
+
   setup do
     {engine_registry_started_here?, engine_pid} =
       case Process.whereis(LemonGateway.EngineRegistry) do
@@ -407,5 +436,105 @@ defmodule LemonRouter.RunOrchestratorTest do
     end
   end
 
+  describe "agent profile defaults" do
+    setup do
+      original_state = :sys.get_state(LemonRouter.AgentProfiles)
+
+      on_exit(fn ->
+        :sys.replace_state(LemonRouter.AgentProfiles, fn _ -> original_state end)
+      end)
+
+      :ok
+    end
+
+    test "applies system_prompt, model and tool_policy from agent profile" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+
+      {:ok, orchestrator_pid} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: run_supervisor,
+          run_process_module: CapturingRunProcess,
+          run_process_opts: %{notify_pid: self()}
+        )
+
+      on_exit(fn ->
+        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+      end)
+
+      :sys.replace_state(LemonRouter.AgentProfiles, fn state ->
+        %{state | profiles: profile_map_with_oracle()}
+      end)
+
+      params = %{
+        origin: :control_plane,
+        session_key: "agent:oracle:main",
+        agent_id: "oracle",
+        prompt: "Hello oracle"
+      }
+
+      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params))
+      assert_receive {:captured_job, job}, 500
+
+      assert job.engine_id == "openai:gpt-4o"
+      assert job.meta[:model] == "gpt-4o"
+      assert job.meta[:system_prompt] == "You are the oracle."
+      assert "bash" in (job.tool_policy[:blocked_tools] || [])
+    end
+
+    test "explicit engine_id still overrides profile defaults" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+
+      {:ok, orchestrator_pid} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: run_supervisor,
+          run_process_module: CapturingRunProcess,
+          run_process_opts: %{notify_pid: self()}
+        )
+
+      on_exit(fn ->
+        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+      end)
+
+      :sys.replace_state(LemonRouter.AgentProfiles, fn state ->
+        %{state | profiles: profile_map_with_oracle()}
+      end)
+
+      params = %{
+        origin: :control_plane,
+        session_key: "agent:oracle:main",
+        agent_id: "oracle",
+        prompt: "Hello oracle",
+        engine_id: "explicit:engine"
+      }
+
+      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params))
+      assert_receive {:captured_job, job}, 500
+      assert job.engine_id == "explicit:engine"
+    end
+  end
+
   defp request(attrs), do: RunRequest.new(attrs)
+
+  defp profile_map_with_oracle do
+    %{
+      "default" => %{
+        id: "default",
+        name: "Default Agent",
+        default_engine: "lemon",
+        tool_policy: nil,
+        system_prompt: nil,
+        model: nil
+      },
+      "oracle" => %{
+        id: "oracle",
+        name: "Oracle",
+        default_engine: "echo",
+        tool_policy: %{blocked_tools: ["bash"]},
+        system_prompt: "You are the oracle.",
+        model: "gpt-4o"
+      }
+    }
+  end
 end

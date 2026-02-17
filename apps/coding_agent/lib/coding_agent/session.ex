@@ -566,6 +566,9 @@ defmodule CodingAgent.Session do
       |> Keyword.put(:thinking_level, thinking_level)
       |> Keyword.put(:parent_session, session_manager.header.id)
       |> Keyword.put(:session_id, session_manager.header.id)
+      |> Keyword.put(:session_pid, self())
+      |> Keyword.put(:session_key, Keyword.get(opts, :session_key, session_manager.header.id))
+      |> Keyword.put(:agent_id, Keyword.get(opts, :agent_id, "default"))
       |> Keyword.put(:settings_manager, settings_manager)
       |> Keyword.put(:workspace_dir, workspace_dir)
       |> Keyword.put(:ui_context, ui_context)
@@ -838,6 +841,9 @@ defmodule CodingAgent.Session do
         thinking_level: state.thinking_level,
         parent_session: state.session_manager.header.id,
         session_id: state.session_manager.header.id,
+        session_pid: self(),
+        session_key: state.session_manager.header.id,
+        agent_id: "default",
         settings_manager: state.settings_manager,
         workspace_dir: state.workspace_dir,
         ui_context: state.ui_context

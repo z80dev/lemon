@@ -3,12 +3,13 @@ defmodule CodingAgent.Tools do
   Tool registry and factory functions for coding agent tools.
 
   Provides pre-configured tool sets for different use cases:
-  - `coding_tools/2` - Full access tools (read, write, edit, patch, bash, grep, find, ls, webfetch, websearch, todo, task, extensions_status)
+  - `coding_tools/2` - Full access tools (browser, read, write, edit, patch, bash, grep, find, ls, webfetch, websearch, todo, task, agent, extensions_status)
   - `read_only_tools/2` - Exploration tools (read only)
   - `all_tools/2` - All available tools as a map
   """
 
   alias CodingAgent.Tools.{
+    Agent,
     Browser,
     Read,
     Write,
@@ -27,7 +28,7 @@ defmodule CodingAgent.Tools do
   }
 
   @doc """
-  Get the default coding tools (read, write, edit, patch, bash, grep, find, ls, webfetch, websearch, todo, task, extensions_status).
+  Get the default coding tools (browser, read, write, edit, patch, bash, grep, find, ls, webfetch, websearch, todo, task, agent, extensions_status).
 
   ## Options
   - Any options are passed through to individual tools
@@ -48,6 +49,7 @@ defmodule CodingAgent.Tools do
       WebSearch.tool(cwd, opts),
       Todo.tool(cwd, opts),
       Task.tool(cwd, opts),
+      Agent.tool(cwd, opts),
       ExtensionsStatus.tool(cwd, opts)
     ]
   end
@@ -85,6 +87,7 @@ defmodule CodingAgent.Tools do
       "todo" => Todo.tool(cwd, opts),
       "truncate" => Truncate.tool(opts),
       "task" => Task.tool(cwd, opts),
+      "agent" => Agent.tool(cwd, opts),
       "extensions_status" => ExtensionsStatus.tool(cwd, opts)
     }
   end

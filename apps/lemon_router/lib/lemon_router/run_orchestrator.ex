@@ -15,7 +15,7 @@ defmodule LemonRouter.RunOrchestrator do
 
   require Logger
 
-  alias LemonRouter.{Policy, RunProcess}
+  alias LemonRouter.{AgentProfiles, Policy, RunProcess}
   alias LemonCore.{RunRequest, SessionKey}
   alias LemonChannels.Types.ResumeToken
   alias LemonGateway.Cwd, as: GatewayCwd
@@ -124,6 +124,7 @@ defmodule LemonRouter.RunOrchestrator do
 
     # Get session policies (includes model, thinkingLevel, and tool_policy)
     session_config = get_session_config(session_key)
+    agent_profile = get_agent_profile(agent_id)
 
     # Resolve base tool policy from agent/session/channel
     base_tool_policy =
@@ -133,6 +134,16 @@ defmodule LemonRouter.RunOrchestrator do
         origin: origin,
         channel_context: meta[:channel_context]
       })
+
+    # Merge agent profile tool policy before operator overrides.
+    profile_tool_policy = normalize_profile_tool_policy(agent_profile)
+
+    base_tool_policy =
+      if is_map(profile_tool_policy) and map_size(profile_tool_policy) > 0 do
+        Policy.merge(base_tool_policy, profile_tool_policy)
+      else
+        base_tool_policy
+      end
 
     # Merge in operator-provided tool_policy override
     # Operator overrides take highest precedence
@@ -159,6 +170,19 @@ defmodule LemonRouter.RunOrchestrator do
         prompt
       end
 
+    session_model = session_config[:model] || session_config["model"]
+    session_thinking_level = session_config[:thinking_level] || session_config["thinking_level"]
+    profile_model = map_get(agent_profile, :model)
+    profile_default_engine = map_get(agent_profile, :default_engine)
+    profile_system_prompt = map_get(agent_profile, :system_prompt)
+
+    explicit_model = map_get(meta, :model)
+    explicit_system_prompt = map_get(meta, :system_prompt)
+
+    resolved_model = explicit_model || session_model || profile_model
+    resolved_thinking_level = session_thinking_level
+    resolved_system_prompt = explicit_system_prompt || profile_system_prompt
+
     # Resolve engine_id: explicit param > session config model > nil
     # Session config can set model which maps to engine_id
     resolved_engine_id =
@@ -167,14 +191,30 @@ defmodule LemonRouter.RunOrchestrator do
           # Resume must win; otherwise scheduler won't apply the resume token.
           resume.engine
 
+        is_binary(engine_id) and engine_id != "" ->
+          engine_id
+
+        is_binary(resolved_model) and resolved_model != "" ->
+          map_model_to_engine(resolved_model)
+
+        is_binary(profile_default_engine) and profile_default_engine != "" ->
+          profile_default_engine
+
         true ->
-          engine_id || resolve_engine_from_session(session_config)
+          nil
       end
 
-    # Resolve thinking_level from session config
-    thinking_level = session_config[:thinking_level] || session_config["thinking_level"]
-
     # Build gateway job
+    enriched_meta =
+      meta
+      |> Map.merge(%{
+        origin: origin,
+        agent_id: agent_id,
+        thinking_level: resolved_thinking_level,
+        model: resolved_model
+      })
+      |> maybe_put(:system_prompt, resolved_system_prompt)
+
     job = %LemonGateway.Types.Job{
       run_id: run_id,
       session_key: session_key,
@@ -185,13 +225,7 @@ defmodule LemonRouter.RunOrchestrator do
       queue_mode: queue_mode,
       lane: meta[:lane] || :main,
       tool_policy: tool_policy,
-      meta:
-        Map.merge(meta, %{
-          origin: origin,
-          agent_id: agent_id,
-          thinking_level: thinking_level,
-          model: session_config[:model] || session_config["model"]
-        })
+      meta: enriched_meta
     }
 
     # Start run process
@@ -201,7 +235,7 @@ defmodule LemonRouter.RunOrchestrator do
         subscribe_event_bridge(run_id)
 
         # Emit telemetry
-        LemonCore.Telemetry.run_submit(session_key, origin, engine_id || "default")
+        LemonCore.Telemetry.run_submit(session_key, origin, resolved_engine_id || "default")
         {:ok, run_id}
 
       {:error, reason} ->
@@ -262,21 +296,6 @@ defmodule LemonRouter.RunOrchestrator do
     _ -> %{}
   end
 
-  # Resolve engine_id from session config's model setting
-  defp resolve_engine_from_session(nil), do: nil
-
-  defp resolve_engine_from_session(config) when is_map(config) do
-    model = config[:model] || config["model"]
-
-    if model do
-      # Map common model names to engine_ids
-      # This allows sessions.patch to set model: "claude-3-opus" etc.
-      map_model_to_engine(model)
-    else
-      nil
-    end
-  end
-
   # Map model name to engine ID
   # This provides a flexible mapping layer between user-friendly model names
   # and internal engine identifiers
@@ -302,6 +321,26 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   defp map_model_to_engine(_), do: nil
+
+  defp get_agent_profile(nil), do: %{}
+
+  defp get_agent_profile(agent_id) do
+    case AgentProfiles.get(agent_id) do
+      profile when is_map(profile) -> profile
+      _ -> %{}
+    end
+  rescue
+    _ -> %{}
+  end
+
+  defp normalize_profile_tool_policy(profile) when is_map(profile) do
+    case map_get(profile, :tool_policy) do
+      policy when is_map(policy) -> policy
+      _ -> %{}
+    end
+  end
+
+  defp normalize_profile_tool_policy(_), do: %{}
 
   defp resolve_effective_cwd(cwd_override, meta) do
     normalize_cwd(cwd_override) || normalize_cwd(meta[:cwd] || meta["cwd"]) ||
@@ -373,4 +412,13 @@ defmodule LemonRouter.RunOrchestrator do
   defp normalize_run_process_opts(opts) when is_map(opts), do: opts
   defp normalize_run_process_opts(opts) when is_list(opts), do: Map.new(opts)
   defp normalize_run_process_opts(_), do: %{}
+
+  defp map_get(map, key) when is_map(map) and is_atom(key) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  end
+
+  defp map_get(_map, _key), do: nil
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 end

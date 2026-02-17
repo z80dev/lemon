@@ -61,12 +61,13 @@ defmodule CodingAgent.ToolPolicy do
     "websearch",
     "todo",
     "task",
+    "agent",
     "extensions_status"
   ]
 
   @external_tools ["browser", "webfetch", "websearch"]
 
-  @dangerous_tools ["write", "edit", "patch", "bash", "exec", "process"]
+  @dangerous_tools ["write", "edit", "patch", "bash", "exec", "process", "agent"]
 
   # ============================================================================
   # Profile Creation
