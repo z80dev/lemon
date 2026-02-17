@@ -67,4 +67,52 @@ defmodule LemonRouter.ToolStatusRendererTest do
     assert String.contains?(text, "Tool 1")
     assert String.contains?(text, "Tool 6")
   end
+
+  test "telegram command actions show bash command details" do
+    actions = %{
+      "a1" => %{
+        title: "Bash",
+        kind: :command,
+        phase: :started,
+        detail: %{name: "Bash", args: %{"command" => "npm test -- --watch=false"}}
+      }
+    }
+
+    text = ToolStatusRenderer.render("telegram", actions, ["a1"])
+
+    assert String.contains?(text, "cmd: \"npm test -- --watch=false\"")
+  end
+
+  test "telegram completed command actions show status metadata" do
+    actions = %{
+      "a1" => %{
+        title: "Bash",
+        kind: :command,
+        phase: :completed,
+        ok: false,
+        detail: %{status: "failed", exit_code: 127, command: "nonexistent_command"}
+      }
+    }
+
+    text = ToolStatusRenderer.render("telegram", actions, ["a1"])
+
+    assert String.contains?(text, "(status=failed exit=127)")
+    assert String.contains?(text, "cmd: \"nonexistent_command\"")
+  end
+
+  test "does not duplicate command text when already in title" do
+    actions = %{
+      "a1" => %{
+        title: "$ ls -la",
+        kind: :command,
+        phase: :started,
+        detail: %{name: "Bash", command: "ls -la"}
+      }
+    }
+
+    text = ToolStatusRenderer.render("telegram", actions, ["a1"])
+
+    refute String.contains?(text, "cmd:")
+    assert String.contains?(text, "$ ls -la")
+  end
 end

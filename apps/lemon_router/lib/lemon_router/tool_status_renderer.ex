@@ -52,9 +52,22 @@ defmodule LemonRouter.ToolStatusRenderer do
   defp tool_word(1), do: "tool"
   defp tool_word(_n), do: "tools"
 
+  defp format_telegram_extra(action, rendered_title) do
+    [
+      format_task_extra(action, rendered_title),
+      format_command_extra(action, rendered_title)
+    ]
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.join("")
+    |> case do
+      "" -> nil
+      text -> text
+    end
+  end
+
   defp format_action_line(channel_id, action) when is_map(action) do
     title = truncate_one_line(action[:title] || action["title"] || "", 80)
-    extra = if channel_id == "telegram", do: format_task_extra(action, title), else: nil
+    extra = if channel_id == "telegram", do: format_telegram_extra(action, title), else: nil
 
     case action[:phase] || action["phase"] do
       :started ->
@@ -156,6 +169,101 @@ defmodule LemonRouter.ToolStatusRenderer do
   rescue
     _ -> nil
   end
+
+  defp format_command_extra(action, rendered_title) do
+    kind = normalize_kind(action[:kind] || action["kind"])
+    phase = action[:phase] || action["phase"]
+    detail = action[:detail] || action["detail"] || %{}
+
+    tool_name =
+      normalize_optional_string(map_get_any(detail, [:name, "name"]))
+      |> case do
+        s when is_binary(s) -> String.downcase(s)
+        _ -> ""
+      end
+
+    command_like? =
+      kind == "command" or
+        tool_name in ["bash", "shell", "killshell", "command", "exec"]
+
+    if not command_like? do
+      nil
+    else
+      cmd = extract_command_text(detail)
+      status = normalize_optional_string(map_get_any(detail, [:status, "status"]))
+      exit_code = map_get_any(detail, [:exit_code, "exit_code"])
+
+      status_meta =
+        []
+        |> maybe_add_kv("status", status)
+        |> maybe_add_kv("exit", normalize_exit_code(exit_code))
+        |> Enum.join(" ")
+
+      status_part =
+        if status_meta == "" or phase not in [:completed, "completed"],
+          do: "",
+          else: " (#{status_meta})"
+
+      cmd_part =
+        cond do
+          not is_binary(cmd) or String.trim(cmd) == "" ->
+            ""
+
+          title_already_shows_command?(rendered_title, cmd) ->
+            ""
+
+          true ->
+            " cmd: " <> quote_snip(cmd, 120)
+        end
+
+      out = status_part <> cmd_part
+      if out == "", do: nil, else: out
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp extract_command_text(detail) when is_map(detail) do
+    args = map_get_any(detail, [:args, "args"])
+    input = map_get_any(detail, [:input, "input"])
+    arguments = map_get_any(detail, [:arguments, "arguments"])
+
+    command =
+      map_get_any(detail, [:command, "command"]) ||
+        map_get_any(detail, [:cmd, "cmd"]) ||
+        (is_map(args) &&
+           (map_get_any(args, [:command, "command"]) || map_get_any(args, [:cmd, "cmd"]))) ||
+        (is_map(input) &&
+           (map_get_any(input, [:command, "command"]) || map_get_any(input, [:cmd, "cmd"]))) ||
+        (is_map(arguments) &&
+           (map_get_any(arguments, [:command, "command"]) || map_get_any(arguments, [:cmd, "cmd"])))
+
+    normalize_optional_string(command)
+  end
+
+  defp extract_command_text(_), do: nil
+
+  defp normalize_exit_code(code) when is_integer(code), do: Integer.to_string(code)
+
+  defp normalize_exit_code(code) when is_binary(code) do
+    code = String.trim(code)
+    if code == "", do: nil, else: code
+  end
+
+  defp normalize_exit_code(_), do: nil
+
+  defp title_already_shows_command?(title, cmd) when is_binary(title) and is_binary(cmd) do
+    normalized_title = String.downcase(String.trim_leading(title, "$ ") |> String.trim())
+    normalized_cmd = String.downcase(cmd |> truncate_one_line(120))
+
+    normalized_title != "" and normalized_cmd != "" and
+      (String.contains?(normalized_title, normalized_cmd) or
+         String.starts_with?(normalized_title, String.slice(normalized_cmd, 0, 30)))
+  rescue
+    _ -> false
+  end
+
+  defp title_already_shows_command?(_, _), do: false
 
   defp maybe_add_kv(parts, _k, v) when v in [nil, ""], do: parts
   defp maybe_add_kv(parts, k, v), do: parts ++ ["#{k}=#{v}"]
