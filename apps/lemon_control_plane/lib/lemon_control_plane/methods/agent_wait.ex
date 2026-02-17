@@ -54,16 +54,12 @@ defmodule LemonControlPlane.Methods.AgentWait do
   end
 
   defp check_run_completed(run_id) do
-    if Code.ensure_loaded?(LemonGateway.Store) do
-      case LemonGateway.Store.get_run(run_id) do
-        %{summary: %{completed: completed}} when not is_nil(completed) ->
-          {:ok, format_result(completed)}
+    case LemonCore.Store.get_run(run_id) do
+      %{summary: %{completed: completed}} when not is_nil(completed) ->
+        {:ok, format_result(completed)}
 
-        _ ->
-          :running
-      end
-    else
-      :running
+      _ ->
+        :running
     end
   rescue
     _ -> :running

@@ -38,17 +38,7 @@ defmodule LemonControlPlane.Methods.SessionsList do
   end
 
   defp get_sessions_index do
-    # Try LemonGateway.Store first (primary), fall back to LemonCore.Store
-    cond do
-      Code.ensure_loaded?(LemonGateway.Store) ->
-        LemonGateway.Store.list(:sessions_index)
-
-      Code.ensure_loaded?(LemonCore.Store) ->
-        LemonCore.Store.list(:sessions_index)
-
-      true ->
-        []
-    end
+    LemonCore.Store.list(:sessions_index)
   rescue
     _ -> []
   end

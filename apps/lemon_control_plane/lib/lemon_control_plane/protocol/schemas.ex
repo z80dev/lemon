@@ -486,7 +486,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
       }
     },
 
-    # Optional parity methods
+    # Optional capability-gated methods
     "update.run" => %{
       optional: %{
         "force" => :boolean

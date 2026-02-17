@@ -20,17 +20,16 @@ defmodule LemonControlPlane.Methods.ChannelsStatus do
   end
 
   defp get_channels_status do
-    # Get status from LemonChannels.Registry if available
     if Code.ensure_loaded?(LemonChannels.Registry) do
       case LemonChannels.Registry.list() do
         adapters when is_list(adapters) ->
           Enum.map(adapters, &format_channel_status/1)
+
         _ ->
           []
       end
     else
-      # Fallback: check for legacy Telegram transport
-      get_legacy_telegram_status()
+      []
     end
   rescue
     _ -> []
@@ -56,24 +55,4 @@ defmodule LemonControlPlane.Methods.ChannelsStatus do
     }
   end
 
-  defp get_legacy_telegram_status do
-    # Check if legacy Telegram transport is running
-    if Code.ensure_loaded?(LemonGateway.Telegram.Transport) do
-      case Process.whereis(LemonGateway.Telegram.Transport) do
-        nil -> []
-        _pid ->
-          [%{
-            "channelId" => "telegram",
-            "type" => "telegram",
-            "status" => "running",
-            "accountId" => nil,
-            "capabilities" => %{"edits" => true, "markdown" => true}
-          }]
-      end
-    else
-      []
-    end
-  rescue
-    _ -> []
-  end
 end

@@ -208,8 +208,6 @@ If you want explicit local defaults:
 ```bash
 export LEMON_GATEWAY_NODE_NAME=lemon_gateway
 export LEMON_GATEWAY_NODE_COOKIE="change-me"
-# legacy cookie env var still works as fallback:
-export LEMON_GATEWAY_COOKIE="change-me"
 
 ./bin/lemon-gateway --sname "$LEMON_GATEWAY_NODE_NAME" --cookie "$LEMON_GATEWAY_NODE_COOKIE"
 ```
@@ -601,7 +599,7 @@ lemon/
 │   │       │   ├── pi.ex        # Pi CLI engine
 │   │       │   ├── echo.ex      # Echo stub engine (testing)
 │   │       │   └── cli_adapter.ex
-│   │       └── telegram/        # Legacy Telegram transport (disabled by default; kept for tests/dev)
+│   │       └── telegram/        # Gateway Telegram utilities
 │   │
 │   ├── lemon_router/            # Run orchestration and routing
 │   │   └── lib/lemon_router/
@@ -688,8 +686,7 @@ lemon/
 │   ├── telemetry.md             # Observability
 │   ├── benchmarks.md            # Performance
 │   ├── context.md               # Context management
-│   ├── config.md                # Configuration
-│   └── openclaw_parity.md       # OpenClaw compatibility
+│   └── config.md                # Configuration
 │
 └── examples/
     ├── config.example.toml
@@ -1194,7 +1191,7 @@ jobs = LemonAutomation.list_jobs()
 
 ### LemonControlPlane
 
-`LemonControlPlane` is an OpenClaw-compatible WebSocket/HTTP server providing centralized control:
+`LemonControlPlane` is a WebSocket/HTTP server providing centralized control:
 
 ```elixir
 # The control plane starts automatically and listens on port 4040
@@ -1498,7 +1495,7 @@ node clients/lemon-web/server/dist/index.js \
 
 ## Orchestration Runtime
 
-Lemon includes a comprehensive orchestration runtime that coordinates subagents, background processes, and async work with unified scheduling, budget controls, and durability. This system was designed to exceed OpenClaw's orchestration capabilities.
+Lemon includes a comprehensive orchestration runtime that coordinates subagents, background processes, and async work with unified scheduling, budget controls, and durability.
 
 ![Orchestration Runtime](docs/diagrams/orchestration.svg)
 
@@ -1519,7 +1516,7 @@ Within the CodingAgent runtime, work routes through a unified **LaneQueue** with
 
 - **LaneQueue** (`CodingAgent.LaneQueue`): FIFO queue with O(1) task lookups and configurable per-lane caps
 - **RunGraph** (`CodingAgent.RunGraph`): Tracks parent/child relationships between runs with DETS persistence
-- `LemonGateway.UnifiedScheduler` exists but is currently not the default production scheduler (it’s primarily covered by tests).
+- **LemonGateway.Scheduler**: Single authority for gateway run admission, cancellation, and per-session serialization.
 
 ```elixir
 # Submit work to a specific lane
@@ -1576,7 +1573,7 @@ The **Task tool** supports async spawn/poll/join patterns for coordinating multi
 
 ### Durable Background Processes
 
-Unlike OpenClaw (which loses background sessions on restart), Lemon persists all background process state to DETS:
+Lemon persists all background process state to DETS:
 
 Note: `exec`/`process` tool modules currently exist for custom integrations and tests, but they are not enabled in the default `CodingAgent.ToolRegistry` tool set.
 
@@ -1950,7 +1947,6 @@ Notes:
 - `--sname` is best for local/same-LAN use and requires matching short host naming.
 - `--name` is best when you want explicit FQDN-style hostnames.
 - `--no-distribution` disables remote attach entirely.
-- `LEMON_GATEWAY_COOKIE` is supported as a legacy fallback for cookie configuration.
 - `LEMON_GATEWAY_NODE_NAME` and `LEMON_GATEWAY_NODE_COOKIE` set defaults for `./bin/lemon-gateway`.
 
 Attach to the running gateway node from another terminal:
@@ -2337,7 +2333,6 @@ Detailed documentation is available in the `docs/` directory:
 | [benchmarks.md](docs/benchmarks.md) | Performance benchmarks and baselines |
 | [context.md](docs/context.md) | Context management, truncation strategies, token counting |
 | [config.md](docs/config.md) | Canonical TOML configuration (global + project overrides) |
-| [openclaw_parity.md](docs/openclaw_parity.md) | OpenClaw protocol compatibility status |
 
 ---
 
@@ -2368,10 +2363,6 @@ Thank you, Mario, for open-sourcing pi and advancing the state of agent framewor
 Lemon was influenced by ideas from **takopi**, especially around responsiveness, practical defaults, and interface design.
 
 Thank you to **banteg** for sharing that work publicly. It has been a helpful reference while building Lemon.
-
-### Thanks to the OpenClaw Project
-
-Thank you to the OpenClaw maintainers and contributors. Lemon's protocol and compatibility work benefited from their published interfaces and implementation details.
 
 ### Additional Thanks
 

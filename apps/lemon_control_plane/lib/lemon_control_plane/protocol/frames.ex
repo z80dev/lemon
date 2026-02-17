@@ -1,6 +1,6 @@
 defmodule LemonControlPlane.Protocol.Frames do
   @moduledoc """
-  Frame types for the OpenClaw-compatible WebSocket protocol.
+  Frame types for the Lemon control-plane WebSocket protocol.
 
   The protocol uses JSON-encoded frames with the following types:
 

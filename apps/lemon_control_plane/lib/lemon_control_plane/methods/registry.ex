@@ -132,6 +132,35 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.UsageCost
   ]
 
+  @capability_methods %{
+    voicewake: [
+      LemonControlPlane.Methods.VoicewakeGet,
+      LemonControlPlane.Methods.VoicewakeSet
+    ],
+    tts: [
+      LemonControlPlane.Methods.TtsStatus,
+      LemonControlPlane.Methods.TtsProviders,
+      LemonControlPlane.Methods.TtsEnable,
+      LemonControlPlane.Methods.TtsDisable,
+      LemonControlPlane.Methods.TtsConvert,
+      LemonControlPlane.Methods.TtsSetProvider
+    ],
+    updates: [
+      LemonControlPlane.Methods.UpdateRun
+    ],
+    device_pairing: [
+      LemonControlPlane.Methods.DevicePairRequest,
+      LemonControlPlane.Methods.DevicePairApprove,
+      LemonControlPlane.Methods.DevicePairReject,
+      LemonControlPlane.Methods.ConnectChallenge
+    ],
+    wizard: [
+      LemonControlPlane.Methods.WizardStart,
+      LemonControlPlane.Methods.WizardStep,
+      LemonControlPlane.Methods.WizardCancel
+    ]
+  }
+
   ## Client API
 
   @doc """
@@ -222,7 +251,7 @@ defmodule LemonControlPlane.Methods.Registry do
     table = :ets.new(@table, [:named_table, :set, :public, read_concurrency: true])
 
     # Register built-in methods
-    for module <- @builtin_methods do
+    for module <- enabled_builtin_methods() do
       :ets.insert(table, {module.name(), module})
     end
 
@@ -240,6 +269,56 @@ defmodule LemonControlPlane.Methods.Registry do
   def handle_call({:unregister, method}, _from, state) do
     :ets.delete(state.table, method)
     {:reply, :ok, state}
+  end
+
+  defp enabled_builtin_methods do
+    disabled_modules =
+      enabled_capabilities()
+      |> disabled_capabilities()
+      |> Enum.flat_map(fn capability -> Map.get(@capability_methods, capability, []) end)
+      |> MapSet.new()
+
+    @builtin_methods
+    |> Enum.reject(&MapSet.member?(disabled_modules, &1))
+    |> Enum.uniq()
+  end
+
+  defp enabled_capabilities do
+    defaults = @capability_methods |> Map.keys() |> MapSet.new()
+
+    case Application.get_env(:lemon_control_plane, :capabilities, :default) do
+      :default ->
+        defaults
+
+      list when is_list(list) ->
+        list
+        |> Enum.filter(&is_atom/1)
+        |> MapSet.new()
+
+      map when is_map(map) ->
+        known = Map.keys(@capability_methods)
+
+        map
+        |> Enum.reduce(MapSet.new(), fn
+          {capability, true}, acc when is_atom(capability) -> MapSet.put(acc, capability)
+          {capability, value}, acc when is_binary(capability) and value in [true, "true", 1] ->
+            case Enum.find(known, &(Atom.to_string(&1) == capability)) do
+              nil -> acc
+              cap -> MapSet.put(acc, cap)
+            end
+
+          _, acc -> acc
+        end)
+
+      _ ->
+        defaults
+    end
+  end
+
+  defp disabled_capabilities(enabled) do
+    @capability_methods
+    |> Map.keys()
+    |> Enum.reject(&MapSet.member?(enabled, &1))
   end
 end
 

@@ -8,6 +8,7 @@ defmodule LemonControlPlane.Methods.Wake do
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.Protocol.Errors
+  alias LemonCore.RunRequest
 
   @impl true
   def name, do: "wake"
@@ -32,11 +33,12 @@ defmodule LemonControlPlane.Methods.Wake do
                session_key: session_key
              }) do
           {:ok, run_id} ->
-            {:ok, %{
-              "runId" => run_id,
-              "agentId" => agent_id,
-              "triggered" => true
-            }}
+            {:ok,
+             %{
+               "runId" => run_id,
+               "agentId" => agent_id,
+               "triggered" => true
+             }}
 
           {:error, reason} ->
             {:error, Errors.internal_error("Wake failed", inspect(reason))}
@@ -44,22 +46,26 @@ defmodule LemonControlPlane.Methods.Wake do
       else
         # Fallback: submit directly via router
         if Code.ensure_loaded?(LemonRouter.RunOrchestrator) do
-          session_key = session_key || LemonRouter.SessionKey.main(agent_id)
+          session_key = session_key || LemonCore.SessionKey.main(agent_id)
 
-          case LemonRouter.RunOrchestrator.submit(%{
-                 origin: :control_plane,
-                 session_key: session_key,
-                 agent_id: agent_id,
-                 prompt: prompt,
-                 queue_mode: :collect,
-                 meta: %{triggered_by: :wake}
-               }) do
+          request =
+            RunRequest.new(%{
+              origin: :control_plane,
+              session_key: session_key,
+              agent_id: agent_id,
+              prompt: prompt,
+              queue_mode: :collect,
+              meta: %{triggered_by: :wake}
+            })
+
+          case LemonRouter.RunOrchestrator.submit(request) do
             {:ok, run_id} ->
-              {:ok, %{
-                "runId" => run_id,
-                "agentId" => agent_id,
-                "triggered" => true
-              }}
+              {:ok,
+               %{
+                 "runId" => run_id,
+                 "agentId" => agent_id,
+                 "triggered" => true
+               }}
 
             {:error, reason} ->
               {:error, Errors.internal_error("Wake failed", inspect(reason))}

@@ -28,18 +28,13 @@ defmodule LemonControlPlane.Methods.ChatHistory do
   end
 
   defp get_chat_history(session_key, limit, before_id) do
-    # Get run history and extract messages
-    if Code.ensure_loaded?(LemonGateway.Store) do
-      runs = LemonGateway.Store.get_run_history(session_key, limit: limit * 2)
+    runs = LemonCore.Store.get_run_history(session_key, limit: limit * 2)
 
-      runs
-      |> Enum.flat_map(fn {run_id, data} ->
-        extract_messages(run_id, data, before_id)
-      end)
-      |> Enum.take(limit)
-    else
-      []
-    end
+    runs
+    |> Enum.flat_map(fn {run_id, data} ->
+      extract_messages(run_id, data, before_id)
+    end)
+    |> Enum.take(limit)
   rescue
     _ -> []
   end

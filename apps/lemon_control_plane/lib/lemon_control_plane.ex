@@ -1,10 +1,9 @@
 defmodule LemonControlPlane do
   @moduledoc """
-  OpenClaw-compatible Gateway WebSocket/HTTP server for Lemon.
+  Lemon control-plane WebSocket/HTTP server.
 
   LemonControlPlane provides a WebSocket and HTTP API for controlling and
-  monitoring the Lemon agent system. It implements the OpenClaw Gateway
-  protocol for compatibility with existing clients.
+  monitoring the Lemon agent system.
 
   ## Protocol Overview
 

@@ -2,7 +2,7 @@ defmodule LemonControlPlane.WS.Connection do
   @moduledoc """
   WebSocket connection handler for the control plane.
 
-  Implements the OpenClaw-compatible WebSocket protocol with:
+  Implements the Lemon control-plane WebSocket protocol with:
 
   - Handshake via `connect` method followed by `hello-ok` frame
   - Request/response frame handling
@@ -153,7 +153,7 @@ defmodule LemonControlPlane.WS.Connection do
         # Register with presence
         register_presence(state)
 
-        # Build hello-ok response - parity requires ONLY hello-ok, not a normal res frame
+        # Build hello-ok response - connect uses a dedicated hello-ok handshake frame.
         hello_ok =
           Frames.encode_hello_ok(%{
             conn_id: state.conn_id,
@@ -165,7 +165,7 @@ defmodule LemonControlPlane.WS.Connection do
 
         Logger.info("WebSocket connection established: #{state.conn_id}, role: #{auth.role}")
 
-        # Only send hello-ok, NOT an additional res frame (parity requirement)
+        # Only send hello-ok, NOT an additional res frame.
         {:push, {:text, hello_ok}, state}
 
       {:error, reason} ->

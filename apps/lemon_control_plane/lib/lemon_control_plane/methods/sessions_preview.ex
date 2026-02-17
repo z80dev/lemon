@@ -32,13 +32,8 @@ defmodule LemonControlPlane.Methods.SessionsPreview do
   end
 
   defp get_session_history(session_key, limit) do
-    # Use LemonGateway.Store.get_run_history which now supports session_key
-    if Code.ensure_loaded?(LemonGateway.Store) do
-      LemonGateway.Store.get_run_history(session_key, limit: limit)
-      |> Enum.map(fn {run_id, data} -> format_history_entry(run_id, data) end)
-    else
-      []
-    end
+    LemonCore.Store.get_run_history(session_key, limit: limit)
+    |> Enum.map(fn {run_id, data} -> format_history_entry(run_id, data) end)
   rescue
     _ -> []
   end

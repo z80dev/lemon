@@ -41,6 +41,7 @@ defmodule LemonControlPlane.Methods.Agent do
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.Protocol.Errors
+  alias LemonCore.RunRequest
 
   @impl true
   def name, do: "agent"
@@ -131,21 +132,22 @@ defmodule LemonControlPlane.Methods.Agent do
   end
 
   defp submit_via_router(params, session_key, ctx) do
-    submit_params = %{
-      origin: :control_plane,
-      session_key: session_key,
-      agent_id: params.agent_id,
-      prompt: params.prompt,
-      queue_mode: params.queue_mode,
-      engine_id: params.engine_id,
-      cwd: params.cwd,
-      tool_policy: params.tool_policy,
-      meta: %{
+    submit_params =
+      RunRequest.new(%{
         origin: :control_plane,
-        conn_id: ctx[:conn_id],
-        conn_pid: ctx[:conn_pid]
-      }
-    }
+        session_key: session_key,
+        agent_id: params.agent_id,
+        prompt: params.prompt,
+        queue_mode: params.queue_mode,
+        engine_id: params.engine_id,
+        cwd: params.cwd,
+        tool_policy: params.tool_policy,
+        meta: %{
+          origin: :control_plane,
+          conn_id: ctx[:conn_id],
+          conn_pid: ctx[:conn_pid]
+        }
+      })
 
     case LemonRouter.RunOrchestrator.submit(submit_params) do
       {:ok, run_id} ->

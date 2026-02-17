@@ -16,7 +16,7 @@ defmodule LemonControlPlane.EventBridge do
 
   ## Event Mapping
 
-  Bus events are mapped to OpenClaw-compatible event names:
+  Bus events are mapped to control-plane event names:
 
   | Bus Event                | WS Event                  |
   |--------------------------|---------------------------|
