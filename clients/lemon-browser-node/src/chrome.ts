@@ -40,6 +40,22 @@ export class ChromeSession {
     this.page = await ensurePage(this.browser);
   }
 
+  async withPage<T>(operation: (page: Page) => Promise<T>): Promise<T> {
+    const page = await this.getPage();
+
+    try {
+      return await operation(page);
+    } catch (err) {
+      if (!isClosedTargetError(err)) {
+        throw err;
+      }
+
+      await this.reconnect();
+      const retryPage = await this.getPage();
+      return operation(retryPage);
+    }
+  }
+
   async stop(): Promise<void> {
     try {
       await this.browser?.close();
@@ -59,16 +75,25 @@ export class ChromeSession {
     }
   }
 
-  getPage(): Page {
-    if (!this.page) throw new Error('browser not started');
+  async getPage(): Promise<Page> {
+    if (!this.browser || !this.browser.isConnected()) {
+      await this.reconnect();
+    }
+
+    if (!this.browser) {
+      throw new Error('browser not started');
+    }
+
+    if (!this.page || this.page.isClosed()) {
+      this.page = await ensurePage(this.browser);
+    }
+
     return this.page;
   }
 
-  getContext(): BrowserContext {
-    if (!this.browser) throw new Error('browser not started');
-    const contexts = this.browser.contexts();
-    if (contexts.length > 0) return contexts[0]!;
-    throw new Error('no browser context available');
+  async getContext(): Promise<BrowserContext> {
+    const page = await this.getPage();
+    return page.context();
   }
 
   private async launchChrome(): Promise<void> {
@@ -117,6 +142,11 @@ export class ChromeSession {
         HOME: os.homedir(),
       },
     });
+  }
+
+  private async reconnect(): Promise<void> {
+    await this.stop();
+    await this.start();
   }
 }
 
@@ -176,3 +206,15 @@ function defaultChromeExecutable(): string | null {
   return pathCandidates[0] ?? null;
 }
 
+function isClosedTargetError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err ?? '');
+  const normalized = message.toLowerCase();
+
+  return (
+    normalized.includes('target page, context or browser has been closed') ||
+    normalized.includes('target closed') ||
+    normalized.includes('browser has been closed') ||
+    normalized.includes('context closed') ||
+    normalized.includes('page closed')
+  );
+}
