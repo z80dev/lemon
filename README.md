@@ -221,11 +221,11 @@ Other launch modes:
 
 ### 6. Use Lemon from Telegram
 
-- Engine override (put at the start of a message): `/lemon`, `/claude`, `/codex`
+- Engine override (put at the start of a message): `/lemon`, `/claude`, `/codex`, `/opencode`, `/pi`
 - Queue mode override: `/steer`, `/followup`, `/interrupt`
 - Start a new session: `/new`
   - Optional: bind this chat to a repo for subsequent runs: `/new <project_id|path>`
-- Resume a previous CLI session (when you have a resume token): `/resume <token>`
+- Resume previous sessions: `/resume` (list), then `/resume <number>` or `/resume <engine token>`
 - Cancel a running run: reply to the bot's `Running...` message with `/cancel` (or send `/cancel` in a DM)
 - Approvals: when a tool needs approval, Telegram will show inline buttons (Once / Session / Agent / Global / Deny).
 
@@ -1016,9 +1016,13 @@ end)
 ```elixir
 # Submit a job
 job = %LemonGateway.Types.Job{
-  scope: %LemonGateway.Types.ChatScope{transport: :telegram, chat_id: 123},
-  text: "Explain this code",
-  engine_hint: "claude"  # or "codex", "lemon", "opencode", "pi"
+  run_id: "run_123",
+  session_key: "agent:default:main",
+  prompt: "Explain this code",
+  engine_id: "claude",  # or "codex", "lemon", "opencode", "pi"
+  queue_mode: :collect,
+  lane: :main,
+  meta: %{origin: :channel, agent_id: "default"}
 }
 
 LemonGateway.submit(job)
@@ -1706,7 +1710,7 @@ end, priority: :high)
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/lemon.git
+git clone https://github.com/z80dev/lemon.git
 cd lemon
 
 # Install Elixir dependencies
@@ -2046,10 +2050,10 @@ agent_id = "default"
 ```
 
 From Telegram:
-- Engine override: `/lemon`, `/claude`, `/codex` (at the start of a message)
+- Engine override: `/lemon`, `/claude`, `/codex`, `/opencode`, `/pi` (at the start of a message)
 - Queue mode override: `/steer`, `/followup`, `/interrupt`
 - Start a new session: `/new` (optional: `/new <project_id|path>` to bind the chat to a repo)
-- Resume a previous CLI session (when you have a resume token): `/resume <token>`
+- Resume previous sessions: `/resume` (list), then `/resume <number>` or `/resume <engine token>`
 - Cancel a running run: reply to the bot's `Running...` message with `/cancel` (or send `/cancel` in a DM)
 - Approvals: when a tool needs approval, you'll get inline approval buttons
 
@@ -2134,7 +2138,7 @@ default_model = "claude-sonnet-4-20250514"
 api_key = "sk-ant-..."
 ```
 
-All three formats are equivalent and will be normalized to the internal representation.
+At runtime, Lemon merges global + project TOML and then applies environment/CLI overrides.
 
 ---
 
@@ -2218,15 +2222,13 @@ defmodule CodingAgent.Tools.MyTool do
 end
 ```
 
-Then register it in `CodingAgent.Tools`:
+Then register it in the default built-in tool set (`CodingAgent.ToolRegistry`):
 
 ```elixir
-def coding_tools(cwd, opts) do
-  [
-    # ... existing tools
-    CodingAgent.Tools.MyTool.tool(cwd, opts)
-  ]
-end
+@builtin_tools [
+  # ... existing tools
+  {:my_tool, Tools.MyTool}
+]
 ```
 
 ### Adding a New LLM Provider
@@ -2247,10 +2249,11 @@ See existing providers for examples.
    @callback cancel(cancel_ctx) :: :ok
    @callback format_resume(ResumeToken.t()) :: String.t()
    @callback extract_resume(String.t()) :: ResumeToken.t() | nil
+   @callback is_resume_line(String.t()) :: boolean()
    @callback supports_steer?() :: boolean()
    @callback steer(cancel_ctx, text) :: :ok | {:error, term()}
    ```
-3. Register in `LemonGateway.EngineRegistry`
+3. Register it in the engine list (either `config :lemon_gateway, :engines, [...]` or the defaults in `LemonGateway.EngineRegistry`)
 
 ### Adding a New Channel Adapter
 
