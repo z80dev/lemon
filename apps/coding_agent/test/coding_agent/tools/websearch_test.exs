@@ -35,6 +35,9 @@ defmodule CodingAgent.Tools.WebSearchTest do
     assert Map.has_key?(tool.parameters["properties"], "max_results")
     assert Map.has_key?(tool.parameters["properties"], "region")
     assert Map.has_key?(tool.parameters["properties"], "freshness")
+    assert Map.has_key?(tool.parameters["properties"], "maxChars")
+    assert Map.has_key?(tool.parameters["properties"], "snippetMaxChars")
+    assert Map.has_key?(tool.parameters["properties"], "maxCitations")
   end
 
   test "returns error when query is missing" do
@@ -398,6 +401,57 @@ defmodule CodingAgent.Tools.WebSearchTest do
     assert payload["trust_metadata"]["source"] == "web_search"
     assert payload["trust_metadata"]["wrapped_fields"] == ["content"]
     assert_received {:http_post, _, _}
+  end
+
+  test "applies compact limits to perplexity content and citations" do
+    long_content = String.duplicate("Lemon ", 300)
+    long_citation = "https://example.com/" <> String.duplicate("a", 200)
+
+    http_post = fn _url, _opts ->
+      {:ok,
+       %Req.Response{
+         status: 200,
+         headers: [{"content-type", "application/json"}],
+         body: %{
+           "choices" => [%{"message" => %{"content" => long_content}}],
+           "citations" => [long_citation, long_citation, long_citation]
+         }
+       }}
+    end
+
+    tool =
+      WebSearch.tool("/tmp",
+        http_post: http_post,
+        settings_manager: %{
+          tools: %{
+            web: %{
+              search: %{
+                provider: "perplexity",
+                perplexity: %{api_key: "pplx-key"}
+              }
+            }
+          }
+        }
+      )
+
+    payload =
+      tool.execute.(
+        "id",
+        %{
+          "query" => "compact output",
+          "maxChars" => 120,
+          "maxCitations" => 2,
+          "citationMaxChars" => 50
+        },
+        nil,
+        nil
+      )
+      |> decode_payload()
+
+    assert length(payload["citations"]) == 2
+    assert Enum.all?(payload["citations"], &(String.length(&1) <= 53))
+    assert String.length(payload["content"]) < 1000
+    assert payload["content"] =~ "EXTERNAL_UNTRUSTED_CONTENT"
   end
 
   test "handles already-aborted signal" do

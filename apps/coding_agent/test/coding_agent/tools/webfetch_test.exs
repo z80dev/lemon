@@ -352,6 +352,30 @@ defmodule CodingAgent.Tools.WebFetchTest do
     assert payload["text"] =~ "<h1>Raw HTML</h1>"
   end
 
+  test "keeps JSON extraction compact (non-pretty)" do
+    http_get = fn _url, _opts ->
+      {:ok,
+       %Req.Response{
+         status: 200,
+         headers: [{"content-type", "application/json"}],
+         body: ~s({"hello":"world","nested":{"a":1}})
+       }}
+    end
+
+    tool =
+      build_tool(
+        http_get: http_get,
+        settings_manager: %{tools: %{web: %{fetch: %{allow_private_network: true}}}}
+      )
+
+    result = tool.execute.("id", %{"url" => "https://8.8.8.8/json"}, nil, nil)
+    payload = decode_payload(result)
+
+    assert payload["extractor"] == "json"
+    assert payload["text"] =~ ~s({"hello":"world","nested":{"a":1}})
+    refute payload["text"] =~ ~s(\n  "hello")
+  end
+
   test "handles already-aborted signal" do
     signal = AbortSignal.new()
     AbortSignal.abort(signal)

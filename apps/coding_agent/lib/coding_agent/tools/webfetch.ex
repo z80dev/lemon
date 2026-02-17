@@ -12,7 +12,7 @@ defmodule CodingAgent.Tools.WebFetch do
   alias CodingAgent.Tools.WebCache
   alias CodingAgent.Tools.WebGuard
 
-  @default_fetch_max_chars 50_000
+  @default_fetch_max_chars 20_000
   @default_fetch_max_redirects 3
   @default_timeout_seconds 30
   @default_cache_ttl_minutes 15
@@ -295,7 +295,7 @@ defmodule CodingAgent.Tools.WebFetch do
       is_binary(content_type) and String.contains?(content_type, "application/json") ->
         text =
           case Jason.decode(body) do
-            {:ok, decoded} -> Jason.encode!(decoded, pretty: true)
+            {:ok, decoded} -> Jason.encode!(decoded)
             _ -> body
           end
 

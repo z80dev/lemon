@@ -20,6 +20,14 @@ defmodule CodingAgent.Tools.WebSearch do
   @default_perplexity_base_url "https://openrouter.ai/api/v1"
   @perplexity_direct_base_url "https://api.perplexity.ai"
   @default_perplexity_model "perplexity/sonar-pro"
+  @default_content_max_chars 12_000
+  @default_snippet_max_chars 600
+  @default_max_citations 8
+  @default_citation_max_chars 300
+  @max_content_max_chars 50_000
+  @max_snippet_max_chars 5_000
+  @max_citation_max_chars 2_000
+  @max_citations 20
   @brave_search_endpoint "https://api.search.brave.com/res/v1/web/search"
   @rate_limit_window_ms 1_000
   @rate_limit_max_requests 5
@@ -75,6 +83,19 @@ defmodule CodingAgent.Tools.WebSearch do
           "freshness" => %{
             "type" => "string",
             "description" => "Brave-only time filter: pd, pw, pm, py, or YYYY-MM-DDtoYYYY-MM-DD."
+          },
+          "maxChars" => %{
+            "type" => "integer",
+            "description" =>
+              "Maximum characters for long response content (Perplexity content and result descriptions)."
+          },
+          "snippetMaxChars" => %{
+            "type" => "integer",
+            "description" => "Maximum characters per short result snippet/title."
+          },
+          "maxCitations" => %{
+            "type" => "integer",
+            "description" => "Maximum number of citations to return for Perplexity responses."
           }
         },
         "required" => ["query"]
@@ -299,7 +320,7 @@ defmodule CodingAgent.Tools.WebSearch do
 
         mapped =
           raw_results
-          |> Enum.map(&map_brave_result/1)
+          |> Enum.map(&map_brave_result(&1, request.snippet_max_chars, request.max_chars))
           |> Enum.reject(&is_nil/1)
 
         {:ok,
@@ -327,7 +348,7 @@ defmodule CodingAgent.Tools.WebSearch do
     end
   end
 
-  defp run_perplexity_search(provider, query, _request, api_cfg, runtime, start_ms) do
+  defp run_perplexity_search(provider, query, request, api_cfg, runtime, start_ms) do
     endpoint = String.trim_trailing(api_cfg.base_url, "/") <> "/chat/completions"
 
     request_body = %{
@@ -355,8 +376,12 @@ defmodule CodingAgent.Tools.WebSearch do
     case runtime.http_post.(endpoint, request_opts) do
       {:ok, %Req.Response{status: status} = response} when status in 200..299 ->
         body = decode_json_body(response.body)
-        content = get_in(body, ["choices", Access.at(0), "message", "content"]) || "No response"
-        citations = Map.get(body, "citations", [])
+
+        raw_content =
+          get_in(body, ["choices", Access.at(0), "message", "content"]) || "No response"
+
+        content = truncate_text(to_string(raw_content), request.max_chars)
+        citations = normalize_citations(Map.get(body, "citations", []), request)
 
         {:ok,
          %{
@@ -364,7 +389,7 @@ defmodule CodingAgent.Tools.WebSearch do
            "provider" => provider,
            "model" => api_cfg.model,
            "took_ms" => elapsed_ms(start_ms),
-           "content" => ExternalContent.wrap_web_content(to_string(content), :web_search),
+           "content" => ExternalContent.wrap_web_content(content, :web_search),
            "citations" => citations,
            "trust_metadata" => web_search_trust_metadata(["content"])
          }}
@@ -383,9 +408,17 @@ defmodule CodingAgent.Tools.WebSearch do
     end
   end
 
-  defp map_brave_result(entry) when is_map(entry) do
-    title = normalize_optional_string(Map.get(entry, "title"))
-    description = normalize_optional_string(Map.get(entry, "description"))
+  defp map_brave_result(entry, snippet_max_chars, content_max_chars) when is_map(entry) do
+    title =
+      Map.get(entry, "title")
+      |> normalize_optional_string()
+      |> truncate_optional_text(snippet_max_chars)
+
+    description =
+      Map.get(entry, "description")
+      |> normalize_optional_string()
+      |> truncate_optional_text(content_max_chars)
+
     url = normalize_optional_string(Map.get(entry, "url"))
     published = normalize_optional_string(Map.get(entry, "age"))
     site_name = site_name(url)
@@ -400,7 +433,7 @@ defmodule CodingAgent.Tools.WebSearch do
     }
   end
 
-  defp map_brave_result(_), do: nil
+  defp map_brave_result(_, _snippet_max_chars, _content_max_chars), do: nil
 
   defp web_search_trust_metadata(wrapped_fields) do
     ExternalContent.web_trust_metadata(:web_search, wrapped_fields, warning_included: false)
@@ -517,10 +550,12 @@ defmodule CodingAgent.Tools.WebSearch do
     key =
       if provider == "brave" do
         "#{provider}:#{query}:#{request.count}:#{request.country || "default"}:" <>
-          "#{request.search_lang || "default"}:#{request.ui_lang || "default"}:#{freshness || "default"}"
+          "#{request.search_lang || "default"}:#{request.ui_lang || "default"}:#{freshness || "default"}:" <>
+          "#{request.max_chars}:#{request.snippet_max_chars}:#{request.max_citations}:#{request.citation_max_chars}"
       else
         "#{provider}:#{query}:#{request.count}:#{request.country || "default"}:" <>
-          "#{request.search_lang || "default"}:#{request.ui_lang || "default"}"
+          "#{request.search_lang || "default"}:#{request.ui_lang || "default"}:" <>
+          "#{request.max_chars}:#{request.snippet_max_chars}:#{request.max_citations}:#{request.citation_max_chars}"
       end
 
     WebCache.normalize_cache_key(key)
@@ -614,6 +649,22 @@ defmodule CodingAgent.Tools.WebSearch do
     ui_lang = read_string(params, ["ui_lang"])
     region = read_string(params, ["region"])
 
+    max_chars =
+      read_integer(params, ["maxChars", "max_chars"], runtime.max_chars)
+      |> normalize_limit(runtime.max_chars, @max_content_max_chars)
+
+    snippet_max_chars =
+      read_integer(params, ["snippetMaxChars", "snippet_max_chars"], runtime.snippet_max_chars)
+      |> normalize_limit(runtime.snippet_max_chars, @max_snippet_max_chars)
+
+    max_citations =
+      read_integer(params, ["maxCitations", "max_citations"], runtime.max_citations)
+      |> normalize_limit(runtime.max_citations, @max_citations)
+
+    citation_max_chars =
+      read_integer(params, ["citationMaxChars", "citation_max_chars"], runtime.citation_max_chars)
+      |> normalize_limit(runtime.citation_max_chars, @max_citation_max_chars)
+
     {country, search_lang, ui_lang} =
       apply_region_alias(%{
         country: country,
@@ -626,7 +677,11 @@ defmodule CodingAgent.Tools.WebSearch do
       count: count,
       country: country,
       search_lang: search_lang,
-      ui_lang: ui_lang
+      ui_lang: ui_lang,
+      max_chars: max_chars,
+      snippet_max_chars: snippet_max_chars,
+      max_citations: max_citations,
+      citation_max_chars: citation_max_chars
     }
   end
 
@@ -790,6 +845,22 @@ defmodule CodingAgent.Tools.WebSearch do
   defp maybe_put_query_param(params, _key, ""), do: params
   defp maybe_put_query_param(params, key, value), do: params ++ [{key, value}]
 
+  defp normalize_citations(citations, request) do
+    citations
+    |> ensure_list()
+    |> Enum.map(fn citation ->
+      citation
+      |> to_string()
+      |> normalize_optional_string()
+      |> case do
+        nil -> nil
+        value -> truncate_text(value, request.citation_max_chars)
+      end
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.take(request.max_citations)
+  end
+
   defp read_integer(params, keys, fallback) do
     keys
     |> Enum.find_value(fn key ->
@@ -823,6 +894,18 @@ defmodule CodingAgent.Tools.WebSearch do
   end
 
   defp normalize_integer(_), do: nil
+
+  defp normalize_limit(nil, fallback, _max_allowed), do: fallback
+
+  defp normalize_limit(value, fallback, max_allowed) do
+    value
+    |> case do
+      n when is_integer(n) -> n
+      _ -> fallback
+    end
+    |> max(1)
+    |> min(max_allowed)
+  end
 
   defp clamp(value, min_value, max_value) do
     value
@@ -859,6 +942,20 @@ defmodule CodingAgent.Tools.WebSearch do
   end
 
   defp normalize_optional_string(_), do: nil
+
+  defp truncate_optional_text(nil, _max_chars), do: nil
+  defp truncate_optional_text(text, max_chars), do: truncate_text(text, max_chars)
+
+  defp truncate_text(text, max_chars)
+       when is_binary(text) and is_integer(max_chars) and max_chars > 0 do
+    if String.length(text) <= max_chars do
+      text
+    else
+      String.slice(text, 0, max_chars) <> "..."
+    end
+  end
+
+  defp truncate_text(text, _max_chars) when is_binary(text), do: text
 
   defp normalize_provider(value, fallback) when is_binary(value) do
     case String.downcase(String.trim(value)) do
@@ -993,6 +1090,30 @@ defmodule CodingAgent.Tools.WebSearch do
           1,
           @max_search_count
         ),
+      max_chars:
+        normalize_limit(
+          normalize_integer(get_map_value(search_cfg, :max_chars, nil)),
+          @default_content_max_chars,
+          @max_content_max_chars
+        ),
+      snippet_max_chars:
+        normalize_limit(
+          normalize_integer(get_map_value(search_cfg, :snippet_max_chars, nil)),
+          @default_snippet_max_chars,
+          @max_snippet_max_chars
+        ),
+      max_citations:
+        normalize_limit(
+          normalize_integer(get_map_value(search_cfg, :max_citations, nil)),
+          @default_max_citations,
+          @max_citations
+        ),
+      citation_max_chars:
+        normalize_limit(
+          normalize_integer(get_map_value(search_cfg, :citation_max_chars, nil)),
+          @default_citation_max_chars,
+          @max_citation_max_chars
+        ),
       timeout_ms: timeout_seconds * 1_000,
       cache_ttl_ms: cache_ttl_ms,
       cache_max_entries: cache_max_entries,
@@ -1026,6 +1147,9 @@ defmodule CodingAgent.Tools.WebSearch do
 
   defp ensure_map(value) when is_map(value), do: value
   defp ensure_map(_), do: %{}
+
+  defp ensure_list(value) when is_list(value), do: value
+  defp ensure_list(_), do: []
 
   defp truthy?(value) when value in [false, "false", "0", 0], do: false
   defp truthy?(_), do: true

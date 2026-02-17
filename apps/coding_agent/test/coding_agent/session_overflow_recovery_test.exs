@@ -1,5 +1,5 @@
 defmodule CodingAgent.SessionOverflowRecoveryTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias AgentCore.Test.Mocks
   alias CodingAgent.Session
@@ -100,5 +100,36 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
     refute state_after.overflow_recovery_in_progress
     refute state_after.overflow_recovery_attempted
     refute state_after.is_streaming
+  end
+
+  test "emits failure telemetry when overflow recovery fails" do
+    session = start_session()
+    state = Session.get_state(session)
+    signature = current_signature(state)
+    mark_overflow_recovery_state(session, signature)
+
+    handler_id = "overflow-recovery-failure-#{System.unique_integer([:positive])}"
+    test_pid = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:coding_agent, :session, :overflow_recovery, :failure],
+        fn event, measurements, metadata, _config ->
+          send(test_pid, {:telemetry_event, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    send(session, {:overflow_recovery_result, signature, {:error, :cannot_compact}})
+
+    assert_receive {:telemetry_event, [:coding_agent, :session, :overflow_recovery, :failure],
+                    %{count: 1}, metadata},
+                   1_000
+
+    assert metadata.session_id == state.session_manager.header.id
+    assert metadata.reason =~ "cannot_compact"
   end
 end

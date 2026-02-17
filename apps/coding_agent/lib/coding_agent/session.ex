@@ -93,6 +93,7 @@ defmodule CodingAgent.Session do
     :overflow_recovery_in_progress,
     :overflow_recovery_attempted,
     :overflow_recovery_signature,
+    :overflow_recovery_started_at_ms,
     :overflow_recovery_error_reason,
     :overflow_recovery_partial_state
   ]
@@ -135,6 +136,7 @@ defmodule CodingAgent.Session do
           overflow_recovery_in_progress: boolean(),
           overflow_recovery_attempted: boolean(),
           overflow_recovery_signature: session_signature() | nil,
+          overflow_recovery_started_at_ms: non_neg_integer() | nil,
           overflow_recovery_error_reason: term() | nil,
           overflow_recovery_partial_state: term() | nil
         }
@@ -658,6 +660,7 @@ defmodule CodingAgent.Session do
       overflow_recovery_in_progress: false,
       overflow_recovery_attempted: false,
       overflow_recovery_signature: nil,
+      overflow_recovery_started_at_ms: nil,
       overflow_recovery_error_reason: nil,
       overflow_recovery_partial_state: nil
     }
@@ -722,6 +725,7 @@ defmodule CodingAgent.Session do
           overflow_recovery_in_progress: false,
           overflow_recovery_attempted: false,
           overflow_recovery_signature: nil,
+          overflow_recovery_started_at_ms: nil,
           overflow_recovery_error_reason: nil,
           overflow_recovery_partial_state: nil
       }
@@ -946,6 +950,7 @@ defmodule CodingAgent.Session do
         overflow_recovery_in_progress: false,
         overflow_recovery_attempted: false,
         overflow_recovery_signature: nil,
+        overflow_recovery_started_at_ms: nil,
         overflow_recovery_error_reason: nil,
         overflow_recovery_partial_state: nil
     }
@@ -1280,6 +1285,10 @@ defmodule CodingAgent.Session do
           {:ok, compacted_state} ->
             case continue_after_overflow_compaction(compacted_state) do
               {:ok, resumed_state} ->
+                emit_overflow_recovery_telemetry(:success, resumed_state, %{
+                  duration_ms: overflow_recovery_duration_ms(state)
+                })
+
                 {:noreply, resumed_state}
 
               {:error, reason, failed_state} ->
@@ -1288,6 +1297,11 @@ defmodule CodingAgent.Session do
                   "Auto-retry failed after compaction: #{inspect(reason)}",
                   :error
                 )
+
+                emit_overflow_recovery_telemetry(:failure, failed_state, %{
+                  duration_ms: overflow_recovery_duration_ms(state),
+                  reason: normalize_overflow_reason(reason)
+                })
 
                 {:noreply, finalize_overflow_recovery_failure(failed_state, reason)}
             end
@@ -1298,6 +1312,11 @@ defmodule CodingAgent.Session do
               "Overflow compaction failed: #{inspect(reason)}",
               :error
             )
+
+            emit_overflow_recovery_telemetry(:failure, failed_state, %{
+              duration_ms: overflow_recovery_duration_ms(state),
+              reason: normalize_overflow_reason(reason)
+            })
 
             {:noreply, finalize_overflow_recovery_failure(failed_state, reason)}
         end
@@ -2050,7 +2069,8 @@ defmodule CodingAgent.Session do
     %{
       state
       | overflow_recovery_in_progress: false,
-        overflow_recovery_signature: nil
+        overflow_recovery_signature: nil,
+        overflow_recovery_started_at_ms: nil
     }
   end
 
@@ -2094,10 +2114,15 @@ defmodule CodingAgent.Session do
         session_pid = self()
         session_manager = state.session_manager
         model = state.model
+        started_at_ms = System.monotonic_time(:millisecond)
         compaction_opts = overflow_recovery_compaction_opts(state)
 
         ui_notify(state, "Context window exceeded. Compacting and retrying...", :info)
         ui_set_working_message(state, "Context overflow detected. Compacting and retrying...")
+
+        emit_overflow_recovery_telemetry(:attempt, state, %{
+          reason: normalize_overflow_reason(reason)
+        })
 
         _ =
           start_background_task(fn ->
@@ -2113,6 +2138,7 @@ defmodule CodingAgent.Session do
            | overflow_recovery_in_progress: true,
              overflow_recovery_attempted: true,
              overflow_recovery_signature: signature,
+             overflow_recovery_started_at_ms: started_at_ms,
              overflow_recovery_error_reason: reason,
              overflow_recovery_partial_state: partial_state
          }}
@@ -2206,6 +2232,42 @@ defmodule CodingAgent.Session do
   rescue
     _ -> false
   end
+
+  @spec overflow_recovery_duration_ms(t()) :: non_neg_integer() | nil
+  defp overflow_recovery_duration_ms(state) do
+    case state.overflow_recovery_started_at_ms do
+      started when is_integer(started) and started > 0 ->
+        max(System.monotonic_time(:millisecond) - started, 0)
+
+      _ ->
+        nil
+    end
+  end
+
+  @spec emit_overflow_recovery_telemetry(:attempt | :success | :failure, t(), map()) :: :ok
+  defp emit_overflow_recovery_telemetry(stage, state, extra_meta)
+       when stage in [:attempt, :success, :failure] and is_map(extra_meta) do
+    metadata =
+      %{
+        session_id: state.session_manager.header.id,
+        provider: state.model.provider,
+        model: state.model.id
+      }
+      |> Map.merge(extra_meta)
+
+    LemonCore.Telemetry.emit(
+      [:coding_agent, :session, :overflow_recovery, stage],
+      %{count: 1},
+      metadata
+    )
+  rescue
+    _ -> :ok
+  end
+
+  @spec normalize_overflow_reason(term()) :: String.t()
+  defp normalize_overflow_reason(reason) when is_binary(reason), do: reason
+  defp normalize_overflow_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp normalize_overflow_reason(reason), do: inspect(reason)
 
   @spec apply_compaction_result(t(), {:ok, map()} | {:error, term()}, String.t() | nil) ::
           {:ok, t()} | {:error, term(), t()}
