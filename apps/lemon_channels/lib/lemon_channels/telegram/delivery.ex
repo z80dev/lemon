@@ -100,7 +100,12 @@ defmodule LemonChannels.Telegram.Delivery do
 
   defp enqueue_channels(payload) do
     if channels_outbox_available?() do
-      Outbox.enqueue(payload)
+      try do
+        Outbox.enqueue(payload)
+      catch
+        :exit, {:timeout, _} -> {:error, :channels_outbox_timeout}
+        :exit, reason -> {:error, {:channels_outbox_exit, reason}}
+      end
     else
       {:error, :channels_outbox_unavailable}
     end

@@ -77,6 +77,9 @@ defmodule LemonGateway.Telegram.ApprovalsTest do
   setup do
     _ = Application.stop(:lemon_gateway)
     _ = Application.stop(:lemon_channels)
+    _ = Application.stop(:lemon_control_plane)
+    _ = Application.stop(:lemon_automation)
+    _ = Application.stop(:lemon_core)
 
     MockTelegramAPI.stop()
     {:ok, _} = start_supervised({MockTelegramAPI, notify_pid: self()})
@@ -87,35 +90,48 @@ defmodule LemonGateway.Telegram.ApprovalsTest do
     Application.delete_env(:lemon_gateway, :transports)
     Application.delete_env(:lemon_gateway, :engines)
     Application.delete_env(:lemon_gateway, :commands)
+    Application.delete_env(:lemon_channels, :gateway)
+    Application.delete_env(:lemon_channels, :telegram)
+    Application.delete_env(:lemon_channels, :engines)
 
     on_exit(fn ->
       MockTelegramAPI.stop()
       _ = Application.stop(:lemon_gateway)
       _ = Application.stop(:lemon_channels)
+      _ = Application.stop(:lemon_control_plane)
+      _ = Application.stop(:lemon_automation)
+      _ = Application.stop(:lemon_core)
       Application.delete_env(:lemon_gateway, LemonGateway.Config)
       Application.delete_env(:lemon_gateway, :config_path)
       Application.delete_env(:lemon_gateway, :telegram)
       Application.delete_env(:lemon_gateway, :transports)
       Application.delete_env(:lemon_gateway, :engines)
       Application.delete_env(:lemon_gateway, :commands)
+      Application.delete_env(:lemon_channels, :gateway)
+      Application.delete_env(:lemon_channels, :telegram)
+      Application.delete_env(:lemon_channels, :engines)
     end)
 
     :ok
   end
 
   defp start_gateway do
-    Application.put_env(:lemon_gateway, :config_path, "/nonexistent/path.toml")
-
-    Application.put_env(:lemon_gateway, Config, %{
+    config = %{
       max_concurrent_runs: 1,
       default_engine: "echo",
       enable_telegram: true,
       bindings: [],
       telegram: %{
         bot_token: "test_token",
-        poll_interval_ms: 20
+        poll_interval_ms: 20,
+        allowed_chat_ids: nil,
+        deny_unbound_chats: false
       }
-    })
+    }
+
+    Application.put_env(:lemon_gateway, :config_path, "/nonexistent/path.toml")
+
+    Application.put_env(:lemon_gateway, Config, config)
 
     Application.put_env(:lemon_gateway, :engines, [
       LemonGateway.Engines.Echo
@@ -128,12 +144,26 @@ defmodule LemonGateway.Telegram.ApprovalsTest do
       account_id: "default"
     })
 
+    Application.put_env(:lemon_channels, :gateway, config)
+
+    Application.put_env(:lemon_channels, :telegram, %{
+      api_mod: MockTelegramAPI,
+      poll_interval_ms: config.telegram.poll_interval_ms,
+      allowed_chat_ids: config.telegram.allowed_chat_ids,
+      deny_unbound_chats: config.telegram.deny_unbound_chats
+    })
+
+    Application.put_env(:lemon_channels, :engines, [
+      LemonGateway.Engines.Echo
+    ])
+
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
     {:ok, _} = Application.ensure_all_started(:lemon_channels)
 
     # Wait for channels-based Telegram poller to come up and pick up the mock API module.
     poller_pid =
-      wait_until(fn -> Process.whereis(LemonChannels.Adapters.Telegram.Transport) end, 2_000)
+      wait_until(fn -> Process.whereis(LemonChannels.Adapters.Telegram.Transport) end, 5_000) ||
+        Process.whereis(LemonChannels.Adapters.Telegram.Transport)
 
     assert is_pid(poller_pid)
 

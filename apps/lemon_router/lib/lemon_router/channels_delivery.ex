@@ -70,7 +70,15 @@ defmodule LemonRouter.ChannelsDelivery do
 
   defp do_channels_enqueue(%OutboundPayload{} = payload, context) do
     if is_pid(Process.whereis(LemonChannels.Outbox)) do
-      case LemonChannels.Outbox.enqueue(payload) do
+      enqueue_result =
+        try do
+          LemonChannels.Outbox.enqueue(payload)
+        catch
+          :exit, {:timeout, _} -> {:error, :channels_outbox_timeout}
+          :exit, reason -> {:error, {:channels_outbox_exit, reason}}
+        end
+
+      case enqueue_result do
         {:ok, ref} ->
           {:ok, ref}
 
