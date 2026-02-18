@@ -76,6 +76,18 @@ defmodule LemonCore.Config do
           "path" => nil,
           "max_entries" => 100
         }
+      },
+      "wasm" => %{
+        "enabled" => false,
+        "auto_build" => true,
+        "runtime_path" => "",
+        "tool_paths" => [],
+        "default_memory_limit" => 10_485_760,
+        "default_timeout_ms" => 60_000,
+        "default_fuel_limit" => 10_000_000,
+        "cache_compiled" => true,
+        "cache_dir" => "",
+        "max_tool_invoke_depth" => 4
       }
     },
     "extension_paths" => [],
@@ -598,6 +610,34 @@ defmodule LemonCore.Config do
         _ -> []
       end
 
+    approvals =
+      case map["approvals"] do
+        approvals when is_map(approvals) ->
+          approvals
+          |> stringify_keys()
+          |> Enum.reduce(%{}, fn {tool_name, mode}, acc ->
+            mode =
+              case mode do
+                :always -> :always
+                "always" -> :always
+                true -> :always
+                :never -> :never
+                "never" -> :never
+                false -> :never
+                _ -> nil
+              end
+
+            if mode do
+              Map.put(acc, tool_name, mode)
+            else
+              acc
+            end
+          end)
+
+        _ ->
+          %{}
+      end
+
     profile =
       case map["profile"] do
         "full_access" -> :full_access
@@ -614,6 +654,7 @@ defmodule LemonCore.Config do
       allow: allow,
       deny: deny,
       require_approval: require_approval,
+      approvals: approvals,
       no_reply: parse_boolean(map["no_reply"], false),
       profile: profile
     }
@@ -655,7 +696,25 @@ defmodule LemonCore.Config do
 
     %{
       auto_resize_images: parse_boolean(map["auto_resize_images"], true),
-      web: parse_web_tools(map["web"] || %{})
+      web: parse_web_tools(map["web"] || %{}),
+      wasm: parse_wasm_tools(map["wasm"] || %{})
+    }
+  end
+
+  defp parse_wasm_tools(map) do
+    map = stringify_keys(map)
+
+    %{
+      enabled: parse_boolean(map["enabled"], false),
+      auto_build: parse_boolean(map["auto_build"], true),
+      runtime_path: normalize_optional_string(map["runtime_path"]),
+      tool_paths: parse_string_list(map["tool_paths"]),
+      default_memory_limit: parse_positive_integer(map["default_memory_limit"], 10_485_760),
+      default_timeout_ms: parse_positive_integer(map["default_timeout_ms"], 60_000),
+      default_fuel_limit: parse_positive_integer(map["default_fuel_limit"], 10_000_000),
+      cache_compiled: parse_boolean(map["cache_compiled"], true),
+      cache_dir: normalize_optional_string(map["cache_dir"]),
+      max_tool_invoke_depth: parse_positive_integer(map["max_tool_invoke_depth"], 4)
     }
   end
 
@@ -894,6 +953,30 @@ defmodule LemonCore.Config do
             [:cli, :claude, :dangerously_skip_permissions],
             parse_boolean(value, true)
           )
+      end
+
+    agent =
+      case System.get_env("LEMON_WASM_ENABLED") do
+        nil -> agent
+        value -> put_in(agent, [:tools, :wasm, :enabled], parse_boolean(value, false))
+      end
+
+    agent =
+      case normalize_optional_string(System.get_env("LEMON_WASM_RUNTIME_PATH")) do
+        nil -> agent
+        runtime_path -> put_in(agent, [:tools, :wasm, :runtime_path], runtime_path)
+      end
+
+    agent =
+      case System.get_env("LEMON_WASM_TOOL_PATHS") do
+        nil -> agent
+        paths -> put_in(agent, [:tools, :wasm, :tool_paths], parse_string_list(paths))
+      end
+
+    agent =
+      case System.get_env("LEMON_WASM_AUTO_BUILD") do
+        nil -> agent
+        value -> put_in(agent, [:tools, :wasm, :auto_build], parse_boolean(value, true))
       end
 
     %{config | agent: agent}

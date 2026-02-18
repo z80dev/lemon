@@ -111,6 +111,14 @@ defmodule CodingAgent.ToolPolicyTest do
 
       assert ToolPolicy.no_reply?(policy)
     end
+
+    test "creates custom policy with explicit approvals map" do
+      policy = ToolPolicy.custom(approvals: %{"bash" => :always, "read" => :never})
+
+      assert ToolPolicy.approval_mode(policy, "bash") == :always
+      assert ToolPolicy.approval_mode(policy, "read") == :never
+      assert ToolPolicy.approval_mode(policy, "write") == :inherit
+    end
   end
 
   describe "allowed?/2" do
@@ -135,6 +143,25 @@ defmodule CodingAgent.ToolPolicyTest do
 
       refute ToolPolicy.allowed?(policy, "read")
       refute ToolPolicy.allowed?(policy, "write")
+    end
+  end
+
+  describe "requires_approval?/2 with approvals map" do
+    test "supports router-style approvals map" do
+      policy = %{allow: :all, deny: [], require_approval: [], approvals: %{"bash" => "always"}}
+      assert ToolPolicy.requires_approval?(policy, "bash")
+      refute ToolPolicy.requires_approval?(policy, "read")
+    end
+
+    test "list takes precedence for explicit required tools" do
+      policy = %{
+        allow: :all,
+        deny: [],
+        require_approval: ["write"],
+        approvals: %{"write" => "never"}
+      }
+
+      assert ToolPolicy.requires_approval?(policy, "write")
     end
   end
 

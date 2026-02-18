@@ -20,6 +20,12 @@ jobs:
           otp-version: "27.2"
           elixir-version: "1.19.0"
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run WASM runtime tests
+        run: cargo test --manifest-path native/lemon-wasm-runtime/Cargo.toml
+
       - name: Install deps
         run: mix deps.get
 

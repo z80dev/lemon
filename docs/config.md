@@ -64,6 +64,18 @@ allowed_hostnames = []
 [agent.tools.web.fetch.firecrawl]
 enabled = true
 
+[agent.tools.wasm]
+enabled = false
+auto_build = true
+runtime_path = ""
+tool_paths = []
+default_memory_limit = 10485760
+default_timeout_ms = 60000
+default_fuel_limit = 10000000
+cache_compiled = true
+cache_dir = ""
+max_tool_invoke_depth = 4
+
 [tui]
 theme = "lemon"
 debug = false
@@ -114,6 +126,7 @@ Environment variables override file values. Common overrides:
 - `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`)
 - `LEMON_CODEX_EXTRA_ARGS`, `LEMON_CODEX_AUTO_APPROVE`
 - `LEMON_CLAUDE_YOLO`
+- `LEMON_WASM_ENABLED`, `LEMON_WASM_RUNTIME_PATH`, `LEMON_WASM_TOOL_PATHS`, `LEMON_WASM_AUTO_BUILD`
 - `LEMON_LOG_FILE`, `LEMON_LOG_LEVEL`
 - `BRAVE_API_KEY`, `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, `FIRECRAWL_API_KEY`
 
@@ -197,11 +210,31 @@ path = "~/.lemon/cache/web_tools"
 max_entries = 100
 ```
 
+## WASM Tools
+
+WASM tools are disabled by default and run in a per-session Rust sidecar.
+See [`docs/tools/wasm.md`](tools/wasm.md) for runtime behavior and troubleshooting.
+
+```toml
+[agent.tools.wasm]
+enabled = false
+auto_build = true
+runtime_path = ""
+tool_paths = []
+default_memory_limit = 10485760
+default_timeout_ms = 60000
+default_fuel_limit = 10000000
+cache_compiled = true
+cache_dir = ""
+max_tool_invoke_depth = 4
+```
+
 ## Sections
 
 - `providers.<name>`: API keys and base URLs per provider.
 - `agent`: default model/provider and agent behavior.
 - `agent.tools.web`: `websearch` / `webfetch` providers, guardrails, cache, and Firecrawl fallback.
+- `agent.tools.wasm`: WASM sidecar runtime controls and discovery paths.
 - `agents.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
 - `agent.compaction`: context compaction settings.
 - `agent.retry`: retry settings.

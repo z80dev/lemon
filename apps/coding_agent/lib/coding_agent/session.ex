@@ -49,6 +49,10 @@ defmodule CodingAgent.Session do
   alias CodingAgent.ResourceLoader
   alias CodingAgent.Session.EventHandler
   alias CodingAgent.Workspace
+  alias CodingAgent.Wasm.Config, as: WasmConfig
+  alias CodingAgent.Wasm.SidecarSession
+  alias CodingAgent.Wasm.SidecarSupervisor
+  alias CodingAgent.Wasm.ToolFactory
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.{Session, SessionEntry}
   alias CodingAgent.UI.Context, as: UIContext
@@ -85,9 +89,14 @@ defmodule CodingAgent.Session do
     :register_session,
     :session_registry,
     :convert_to_llm,
+    :tool_policy,
+    :approval_context,
     :extensions,
     :hooks,
     :extension_status_report,
+    :wasm_sidecar_pid,
+    :wasm_tool_names,
+    :wasm_status,
     :auto_compaction_in_progress,
     :auto_compaction_signature,
     :overflow_recovery_in_progress,
@@ -128,9 +137,14 @@ defmodule CodingAgent.Session do
           register_session: boolean(),
           session_registry: atom(),
           convert_to_llm: (list() -> list()),
+          tool_policy: map() | nil,
+          approval_context: map() | nil,
           extensions: [module()],
           hooks: keyword([function()]),
           extension_status_report: Extensions.extension_status_report() | nil,
+          wasm_sidecar_pid: pid() | nil,
+          wasm_tool_names: [String.t()],
+          wasm_status: map() | nil,
           auto_compaction_in_progress: boolean(),
           auto_compaction_signature: session_signature() | nil,
           overflow_recovery_in_progress: boolean(),
@@ -561,6 +575,15 @@ defmodule CodingAgent.Session do
       end
 
     # Build tool options for ToolRegistry
+    wasm_boot =
+      maybe_start_wasm_sidecar(
+        cwd,
+        settings_manager,
+        session_manager.header.id,
+        tool_policy,
+        approval_context
+      )
+
     tool_opts =
       opts
       |> Keyword.put(:model, model)
@@ -575,6 +598,8 @@ defmodule CodingAgent.Session do
       |> Keyword.put(:ui_context, ui_context)
       |> Keyword.put(:tool_policy, tool_policy)
       |> Keyword.put(:approval_context, approval_context)
+      |> Keyword.put(:wasm_tools, wasm_boot.wasm_tools)
+      |> Keyword.put(:wasm_status, wasm_boot.wasm_status)
 
     lifecycle =
       ExtensionLifecycle.initialize(
@@ -583,6 +608,8 @@ defmodule CodingAgent.Session do
         tool_opts: tool_opts,
         custom_tools: custom_tools,
         extra_tools: extra_tools,
+        wasm_tools: wasm_boot.wasm_tools,
+        wasm_status: wasm_boot.wasm_status,
         tool_policy: tool_policy,
         approval_context: approval_context
       )
@@ -656,9 +683,14 @@ defmodule CodingAgent.Session do
       register_session: register_session,
       session_registry: session_registry,
       convert_to_llm: convert_to_llm,
+      tool_policy: tool_policy,
+      approval_context: approval_context,
       extensions: extensions,
       hooks: hooks,
       extension_status_report: extension_status_report,
+      wasm_sidecar_pid: wasm_boot.sidecar_pid,
+      wasm_tool_names: wasm_boot.wasm_tool_names,
+      wasm_status: wasm_boot.wasm_status,
       auto_compaction_in_progress: false,
       auto_compaction_signature: nil,
       overflow_recovery_in_progress: false,
@@ -829,12 +861,42 @@ defmodule CodingAgent.Session do
     {:reply, state.extension_status_report, state}
   end
 
+  def handle_call({:wasm_host_tool_invoke, tool_name, params_json}, _from, state) do
+    result =
+      case find_host_tool(state, tool_name) do
+        nil ->
+          {:error, :tool_not_found}
+
+        tool ->
+          params = decode_wasm_params(params_json)
+          call_id = "wasm_host_#{System.unique_integer([:positive, :monotonic])}"
+
+          case tool.execute.(call_id, params, nil, nil) do
+            %AgentCore.Types.AgentToolResult{} = tool_result ->
+              {:ok, encode_wasm_host_output(tool_result)}
+
+            {:ok, %AgentCore.Types.AgentToolResult{} = tool_result} ->
+              {:ok, encode_wasm_host_output(tool_result)}
+
+            {:error, reason} ->
+              {:error, reason}
+
+            other ->
+              {:error, {:invalid_host_tool_result, other}}
+          end
+      end
+
+    {:reply, result, state}
+  end
+
   def handle_call(:reload_extensions, _from, state) do
     if state.is_streaming do
       {:reply, {:error, :already_streaming}, state}
     else
       # Show working message
       ui_set_working_message(state, "Reloading extensions...")
+
+      wasm_reload = reload_wasm_tools(state)
 
       # Build tool options
       tool_opts = [
@@ -847,7 +909,11 @@ defmodule CodingAgent.Session do
         agent_id: "default",
         settings_manager: state.settings_manager,
         workspace_dir: state.workspace_dir,
-        ui_context: state.ui_context
+        ui_context: state.ui_context,
+        tool_policy: state.tool_policy,
+        approval_context: state.approval_context,
+        wasm_tools: wasm_reload.wasm_tools,
+        wasm_status: wasm_reload.wasm_status
       ]
 
       lifecycle =
@@ -856,6 +922,10 @@ defmodule CodingAgent.Session do
           settings_manager: state.settings_manager,
           tool_opts: tool_opts,
           extra_tools: state.extra_tools,
+          wasm_tools: wasm_reload.wasm_tools,
+          wasm_status: wasm_reload.wasm_status,
+          tool_policy: state.tool_policy,
+          approval_context: state.approval_context,
           previous_status_report: state.extension_status_report
         )
 
@@ -885,7 +955,10 @@ defmodule CodingAgent.Session do
         | extensions: extensions,
           hooks: hooks,
           tools: tools,
-          extension_status_report: extension_status_report
+          extension_status_report: extension_status_report,
+          wasm_sidecar_pid: wasm_reload.sidecar_pid,
+          wasm_tool_names: wasm_reload.wasm_tool_names,
+          wasm_status: wasm_reload.wasm_status
       }
 
       {:reply, {:ok, extension_status_report}, new_state}
@@ -1350,6 +1423,10 @@ defmodule CodingAgent.Session do
     # Stop the underlying agent when the session terminates
     if state.agent && Process.alive?(state.agent) do
       GenServer.stop(state.agent, :normal)
+    end
+
+    if state.wasm_sidecar_pid && Process.alive?(state.wasm_sidecar_pid) do
+      _ = SidecarSupervisor.stop_sidecar(state.wasm_sidecar_pid)
     end
 
     :ok
@@ -2471,6 +2548,215 @@ defmodule CodingAgent.Session do
       state
     end
   end
+
+  defp maybe_start_wasm_sidecar(cwd, settings_manager, session_id, tool_policy, approval_context) do
+    wasm_config = WasmConfig.load(cwd, settings_manager)
+
+    if wasm_config.enabled do
+      session_pid = self()
+
+      host_invoke_fun = fn tool_name, params_json ->
+        GenServer.call(session_pid, {:wasm_host_tool_invoke, tool_name, params_json}, :infinity)
+      end
+
+      sidecar_opts = [
+        cwd: cwd,
+        session_id: session_id,
+        settings_manager: settings_manager,
+        wasm_config: wasm_config,
+        host_invoke_fun: host_invoke_fun
+      ]
+
+      case start_wasm_sidecar_process(sidecar_opts) do
+        {:ok, sidecar_pid} ->
+          case SidecarSession.discover(sidecar_pid) do
+            {:ok, discover} ->
+              wasm_tools =
+                ToolFactory.build_inventory(sidecar_pid, discover.tools,
+                  cwd: cwd,
+                  session_id: session_id
+                )
+
+              wasm_tool_names = Enum.map(wasm_tools, &elem(&1, 0))
+
+              wasm_status =
+                SidecarSession.status(sidecar_pid)
+                |> Map.put(:discover_warnings, discover.warnings)
+                |> Map.put(:discover_errors, discover.errors)
+                |> Map.put(:tool_names, wasm_tool_names)
+                |> Map.put(:policy, summarize_wasm_policy(tool_policy, approval_context))
+
+              %{
+                sidecar_pid: sidecar_pid,
+                wasm_tools: wasm_tools,
+                wasm_tool_names: wasm_tool_names,
+                wasm_status: wasm_status
+              }
+
+            {:error, reason} ->
+              _ = SidecarSupervisor.stop_sidecar(sidecar_pid)
+
+              Logger.warning(
+                "WASM runtime unavailable for session #{session_id}: #{inspect(reason)}"
+              )
+
+              %{
+                sidecar_pid: nil,
+                wasm_tools: [],
+                wasm_tool_names: [],
+                wasm_status: wasm_disabled_status(reason)
+              }
+          end
+
+        {:error, reason} ->
+          Logger.warning("WASM runtime unavailable for session #{session_id}: #{inspect(reason)}")
+
+          %{
+            sidecar_pid: nil,
+            wasm_tools: [],
+            wasm_tool_names: [],
+            wasm_status: wasm_disabled_status(reason)
+          }
+      end
+    else
+      %{
+        sidecar_pid: nil,
+        wasm_tools: [],
+        wasm_tool_names: [],
+        wasm_status: wasm_disabled_status(:disabled_in_config)
+      }
+    end
+  end
+
+  defp reload_wasm_tools(state) do
+    cond do
+      is_pid(state.wasm_sidecar_pid) and Process.alive?(state.wasm_sidecar_pid) ->
+        case SidecarSession.discover(state.wasm_sidecar_pid) do
+          {:ok, discover} ->
+            wasm_tools =
+              ToolFactory.build_inventory(state.wasm_sidecar_pid, discover.tools,
+                cwd: state.cwd,
+                session_id: state.session_manager.header.id
+              )
+
+            wasm_tool_names = Enum.map(wasm_tools, &elem(&1, 0))
+
+            wasm_status =
+              SidecarSession.status(state.wasm_sidecar_pid)
+              |> Map.put(:discover_warnings, discover.warnings)
+              |> Map.put(:discover_errors, discover.errors)
+              |> Map.put(:tool_names, wasm_tool_names)
+              |> Map.put(
+                :policy,
+                summarize_wasm_policy(state.tool_policy, state.approval_context)
+              )
+
+            %{
+              sidecar_pid: state.wasm_sidecar_pid,
+              wasm_tools: wasm_tools,
+              wasm_tool_names: wasm_tool_names,
+              wasm_status: wasm_status
+            }
+
+          {:error, reason} ->
+            Logger.warning("WASM discover failed during reload: #{inspect(reason)}")
+
+            %{
+              sidecar_pid: state.wasm_sidecar_pid,
+              wasm_tools: [],
+              wasm_tool_names: [],
+              wasm_status:
+                (state.wasm_status || %{})
+                |> Map.put(:discover_errors, [to_string(reason)])
+                |> Map.put(:tool_names, [])
+            }
+        end
+
+      true ->
+        maybe_start_wasm_sidecar(
+          state.cwd,
+          state.settings_manager,
+          state.session_manager.header.id,
+          state.tool_policy,
+          state.approval_context
+        )
+    end
+  end
+
+  defp start_wasm_sidecar_process(opts) do
+    case SidecarSupervisor.start_sidecar(opts) do
+      {:ok, pid} -> {:ok, pid}
+      {:error, {:already_started, pid}} -> {:ok, pid}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp summarize_wasm_policy(nil, _approval_context), do: %{approval_wrapping: false}
+
+  defp summarize_wasm_policy(tool_policy, approval_context) do
+    %{
+      approval_wrapping: not is_nil(approval_context),
+      require_approval:
+        Map.get(tool_policy, :require_approval) || Map.get(tool_policy, "require_approval"),
+      approvals: Map.get(tool_policy, :approvals) || Map.get(tool_policy, "approvals")
+    }
+  end
+
+  defp wasm_disabled_status(reason) do
+    %{
+      enabled: false,
+      running: false,
+      hello_ok: false,
+      runtime_path: nil,
+      tool_count: 0,
+      tool_names: [],
+      discover_warnings: [],
+      discover_errors: [inspect(reason)],
+      reason: reason
+    }
+  end
+
+  defp find_host_tool(state, tool_name) when is_binary(tool_name) do
+    Enum.find(state.tools, fn tool ->
+      tool.name == tool_name and tool.name not in state.wasm_tool_names
+    end)
+  end
+
+  defp find_host_tool(_state, _tool_name), do: nil
+
+  defp decode_wasm_params(params_json) when is_binary(params_json) do
+    case Jason.decode(params_json) do
+      {:ok, map} when is_map(map) -> map
+      _ -> %{}
+    end
+  end
+
+  defp decode_wasm_params(_), do: %{}
+
+  defp encode_wasm_host_output(%AgentCore.Types.AgentToolResult{} = tool_result) do
+    payload =
+      cond do
+        is_map(tool_result.details) and map_size(tool_result.details) > 0 ->
+          tool_result.details
+
+        true ->
+          %{"text" => extract_text_from_tool_result(tool_result.content)}
+      end
+
+    Jason.encode!(payload)
+  end
+
+  defp extract_text_from_tool_result(content) when is_list(content) do
+    content
+    |> Enum.map(fn
+      %{text: text} when is_binary(text) -> text
+      _ -> ""
+    end)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n")
+  end
+
+  defp extract_text_from_tool_result(_), do: ""
 
   @spec get_compaction_settings(CodingAgent.SettingsManager.t() | nil) :: map()
   defp get_compaction_settings(nil), do: %{}

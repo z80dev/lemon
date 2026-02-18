@@ -62,6 +62,23 @@ defmodule CodingAgent.ToolRegistryTest do
     |> String.to_integer()
   end
 
+  defp wasm_tool(name, opts) do
+    description = Keyword.get(opts, :description, "WASM #{name}")
+    label = Keyword.get(opts, :label, "WASM #{name}")
+    capabilities = Keyword.get(opts, :capabilities, %{})
+    path = Keyword.get(opts, :path, "/tmp/#{name}.wasm")
+
+    tool = %AgentCore.Types.AgentTool{
+      name: name,
+      description: description,
+      parameters: %{"type" => "object", "properties" => %{}, "required" => []},
+      label: label,
+      execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+    }
+
+    {name, tool, {:wasm, %{name: name, path: path, capabilities: capabilities}}}
+  end
+
   describe "get_tools/2" do
     test "returns built-in tools", %{tmp_dir: tmp_dir} do
       tools = ToolRegistry.get_tools(tmp_dir)
@@ -338,6 +355,116 @@ defmodule CodingAgent.ToolRegistryTest do
     end
   end
 
+  describe "wasm precedence and conflict reporting" do
+    test "built-in tools win over wasm tools", %{tmp_dir: tmp_dir} do
+      wasm_inventory = [wasm_tool("read", label: "WASM Read")]
+
+      assert {:ok, tool} = ToolRegistry.get_tool(tmp_dir, "read", wasm_tools: wasm_inventory)
+      refute tool.label == "WASM Read"
+    end
+
+    test "wasm tools shadow extension tools", %{tmp_dir: tmp_dir} do
+      ext_dir = Path.join(tmp_dir, ".lemon/extensions")
+      File.mkdir_p!(ext_dir)
+
+      extension_code = """
+      defmodule WasmShadowedExtension do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "wasm-shadowed"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def tools(_cwd) do
+          [
+            %AgentCore.Types.AgentTool{
+              name: "wasm_shadow_test",
+              description: "From extension",
+              parameters: %{},
+              label: "Extension Tool",
+              execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+            }
+          ]
+        end
+      end
+      """
+
+      File.write!(Path.join(ext_dir, "wasm_shadowed_extension.ex"), extension_code)
+
+      wasm_inventory =
+        [wasm_tool("wasm_shadow_test", description: "From wasm", label: "WASM Tool")]
+
+      assert {:ok, tool} =
+               ToolRegistry.get_tool(tmp_dir, "wasm_shadow_test", wasm_tools: wasm_inventory)
+
+      assert tool.label == "WASM Tool"
+
+      :code.purge(WasmShadowedExtension)
+      :code.delete(WasmShadowedExtension)
+    end
+
+    test "tool_conflict_report includes wasm counts and sources", %{tmp_dir: tmp_dir} do
+      ext_dir = Path.join(tmp_dir, ".lemon/extensions")
+      File.mkdir_p!(ext_dir)
+
+      extension_code = """
+      defmodule WasmConflictExtension do
+        @behaviour CodingAgent.Extensions.Extension
+
+        @impl true
+        def name, do: "wasm-conflict"
+
+        @impl true
+        def version, do: "1.0.0"
+
+        @impl true
+        def tools(_cwd) do
+          [
+            %AgentCore.Types.AgentTool{
+              name: "shared_wasm_name",
+              description: "From extension",
+              parameters: %{},
+              label: "Extension Shared",
+              execute: fn _, _, _, _ -> %AgentCore.Types.AgentToolResult{content: []} end
+            }
+          ]
+        end
+      end
+      """
+
+      File.write!(Path.join(ext_dir, "wasm_conflict_extension.ex"), extension_code)
+
+      wasm_inventory = [
+        wasm_tool("read", label: "WASM Read"),
+        wasm_tool("shared_wasm_name", label: "WASM Shared")
+      ]
+
+      report =
+        ToolRegistry.tool_conflict_report(tmp_dir,
+          wasm_tools: wasm_inventory,
+          wasm_status: %{enabled: true, running: true}
+        )
+
+      assert report.wasm_count >= 1
+      assert report.wasm.enabled == true
+
+      assert Enum.any?(report.conflicts, fn conflict ->
+               conflict.tool_name == "shared_wasm_name" and
+                 match?({:wasm, _}, conflict.winner)
+             end)
+
+      assert Enum.any?(report.conflicts, fn conflict ->
+               conflict.tool_name == "read" and conflict.winner == :builtin
+             end)
+
+      :code.purge(WasmConflictExtension)
+      :code.delete(WasmConflictExtension)
+    end
+  end
+
   describe "tool conflict detection" do
     import ExUnit.CaptureLog
 
@@ -387,7 +514,7 @@ defmodule CodingAgent.ToolRegistryTest do
       assert log =~ "Tool name conflict"
       assert log =~ "read"
       assert log =~ "ConflictBuiltinExtension"
-      assert log =~ "shadowed by built-in tool"
+      assert log =~ "shadowed by built-in"
 
       # Cleanup
       :code.purge(ConflictBuiltinExtension)
@@ -467,7 +594,7 @@ defmodule CodingAgent.ToolRegistryTest do
       assert log =~ "Tool name conflict"
       assert log =~ "custom_tool"
       assert log =~ "BConflictExtension"
-      assert log =~ "shadowed by earlier extension"
+      assert log =~ "shadowed by extension"
 
       # Cleanup
       :code.purge(AConflictExtension)

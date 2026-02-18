@@ -26,6 +26,10 @@ docs/agent-loop/runs/
 # Also ignore archive artifacts (built via "mix archive.build").
 *.ez
 
+# Local Rust sidecar build artifacts
+native/lemon-wasm-runtime/target/
+native/wasm-tools/json-transform/target/
+
 
 .agent/
 

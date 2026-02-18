@@ -72,6 +72,12 @@
     max_age_days: 90
   },
   %{
+    path: "docs/tools/wasm.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-02-17],
+    max_age_days: 90
+  },
+  %{
     path: "docs/telemetry.md",
     owner: "@z80",
     last_reviewed: ~D[2026-02-13],

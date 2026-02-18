@@ -22,6 +22,7 @@ This folder is the canonical navigation map for Lemon runtime and harness behavi
 - [`docs/benchmarks.md`](benchmarks.md)
 - [`docs/tools/web.md`](tools/web.md)
 - [`docs/tools/firecrawl.md`](tools/firecrawl.md)
+- [`docs/tools/wasm.md`](tools/wasm.md)
 
 ## Continuous Improvement Loop
 

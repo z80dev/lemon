@@ -18,6 +18,7 @@ defmodule CodingAgent.Application do
       {Registry, keys: :unique, name: CodingAgent.ProcessRegistry},
       CodingAgent.Tools.TodoStoreOwner,
       CodingAgent.SessionSupervisor,
+      CodingAgent.Wasm.SidecarSupervisor,
       {Task.Supervisor, name: CodingAgent.TaskSupervisor},
       {CodingAgent.TaskStoreServer, name: CodingAgent.TaskStoreServer},
       {CodingAgent.RunGraphServer, name: CodingAgent.RunGraphServer},

@@ -331,6 +331,70 @@ defmodule LemonCore.ConfigTest do
     assert tools.web.cache.max_entries == 250
   end
 
+  test "parses wasm tool configuration under agent.tools", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [agent.tools.wasm]
+    enabled = true
+    auto_build = false
+    runtime_path = "/tmp/lemon-wasm-runtime"
+    tool_paths = ["/tmp/project-tools", "/tmp/global-tools"]
+    default_memory_limit = 20971520
+    default_timeout_ms = 45000
+    default_fuel_limit = 9000000
+    cache_compiled = false
+    cache_dir = "/tmp/wasm-cache"
+    max_tool_invoke_depth = 6
+    """)
+
+    config = Config.load()
+    wasm = config.agent.tools.wasm
+
+    assert wasm.enabled == true
+    assert wasm.auto_build == false
+    assert wasm.runtime_path == "/tmp/lemon-wasm-runtime"
+    assert wasm.tool_paths == ["/tmp/project-tools", "/tmp/global-tools"]
+    assert wasm.default_memory_limit == 20_971_520
+    assert wasm.default_timeout_ms == 45_000
+    assert wasm.default_fuel_limit == 9_000_000
+    assert wasm.cache_compiled == false
+    assert wasm.cache_dir == "/tmp/wasm-cache"
+    assert wasm.max_tool_invoke_depth == 6
+  end
+
+  test "env overrides wasm tool configuration", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [agent.tools.wasm]
+    enabled = false
+    auto_build = true
+    runtime_path = "/tmp/from-file"
+    tool_paths = ["/tmp/file-tools"]
+    """)
+
+    System.put_env("LEMON_WASM_ENABLED", "true")
+    System.put_env("LEMON_WASM_RUNTIME_PATH", "/tmp/from-env")
+    System.put_env("LEMON_WASM_TOOL_PATHS", "/tmp/env-a,/tmp/env-b")
+    System.put_env("LEMON_WASM_AUTO_BUILD", "0")
+
+    config = Config.load()
+    wasm = config.agent.tools.wasm
+
+    assert wasm.enabled == true
+    assert wasm.runtime_path == "/tmp/from-env"
+    assert wasm.tool_paths == ["/tmp/env-a", "/tmp/env-b"]
+    assert wasm.auto_build == false
+  after
+    System.delete_env("LEMON_WASM_ENABLED")
+    System.delete_env("LEMON_WASM_RUNTIME_PATH")
+    System.delete_env("LEMON_WASM_TOOL_PATHS")
+    System.delete_env("LEMON_WASM_AUTO_BUILD")
+  end
+
   test "parses gateway telegram compaction settings", %{home: home} do
     global_dir = Path.join(home, ".lemon")
     File.mkdir_p!(global_dir)

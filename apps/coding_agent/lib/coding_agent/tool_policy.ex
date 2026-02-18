@@ -4,33 +4,15 @@ defmodule CodingAgent.ToolPolicy do
 
   Provides allow/deny lists for tools, per-engine restrictions,
   approval gates for dangerous operations, and NO_REPLY support.
-
-  ## Policy Profiles
-
-  Predefined profiles:
-  - `:full_access` - All tools allowed
-  - `:minimal_core` - Lean core toolset
-  - `:read_only` - Only read/search tools
-  - `:safe_mode` - No write/exec/bash tools
-  - `:subagent_restricted` - Subagent can't run dangerous tools
-  - `:no_external` - No web fetch/search
-
-  ## Usage
-
-      # Create policy from profile
-      policy = ToolPolicy.from_profile(:safe_mode)
-
-      # Check if tool is allowed
-      ToolPolicy.allowed?(policy, "write")
-
-      # Apply policy to tools list
-      allowed_tools = ToolPolicy.apply_policy(policy, all_tools)
   """
+
+  @type approval_mode :: :always | :never
 
   @type policy :: %{
           allow: :all | [String.t()],
           deny: [String.t()],
           require_approval: [String.t()],
+          approvals: %{optional(String.t()) => approval_mode()},
           no_reply: boolean(),
           profile: atom() | nil
         }
@@ -75,15 +57,6 @@ defmodule CodingAgent.ToolPolicy do
 
   @doc """
   Create a policy from a predefined profile.
-
-  ## Profiles
-
-  - `:full_access` - All tools allowed (default)
-  - `:minimal_core` - Core coding/web/task tools only
-  - `:read_only` - Only read/search tools allowed
-  - `:safe_mode` - No write/exec/bash tools allowed
-  - `:subagent_restricted` - Subagent with no dangerous tools
-  - `:no_external` - No web fetch/search allowed
   """
   @spec from_profile(profile()) :: policy()
   def from_profile(:full_access) do
@@ -91,6 +64,7 @@ defmodule CodingAgent.ToolPolicy do
       allow: :all,
       deny: [],
       require_approval: [],
+      approvals: %{},
       no_reply: false,
       profile: :full_access
     }
@@ -101,6 +75,7 @@ defmodule CodingAgent.ToolPolicy do
       allow: @minimal_core_tools,
       deny: [],
       require_approval: [],
+      approvals: %{},
       no_reply: false,
       profile: :minimal_core
     }
@@ -111,6 +86,7 @@ defmodule CodingAgent.ToolPolicy do
       allow: @read_tools,
       deny: [],
       require_approval: [],
+      approvals: %{},
       no_reply: false,
       profile: :read_only
     }
@@ -121,6 +97,7 @@ defmodule CodingAgent.ToolPolicy do
       allow: :all,
       deny: @dangerous_tools,
       require_approval: [],
+      approvals: %{},
       no_reply: false,
       profile: :safe_mode
     }
@@ -131,6 +108,7 @@ defmodule CodingAgent.ToolPolicy do
       allow: :all,
       deny: @dangerous_tools,
       require_approval: ["write", "edit"],
+      approvals: %{},
       no_reply: false,
       profile: :subagent_restricted
     }
@@ -141,6 +119,7 @@ defmodule CodingAgent.ToolPolicy do
       allow: :all,
       deny: @external_tools,
       require_approval: [],
+      approvals: %{},
       no_reply: false,
       profile: :no_external
     }
@@ -151,6 +130,7 @@ defmodule CodingAgent.ToolPolicy do
       allow: :all,
       deny: [],
       require_approval: [],
+      approvals: %{},
       no_reply: false,
       profile: :custom
     }
@@ -166,6 +146,7 @@ defmodule CodingAgent.ToolPolicy do
   - `:allow` - List of allowed tools or :all
   - `:deny` - List of denied tools
   - `:require_approval` - List of tools requiring approval
+  - `:approvals` - Router-style explicit approvals map (tool => always|never)
   - `:no_reply` - Enable NO_REPLY mode
   """
   @spec custom(keyword()) :: policy()
@@ -174,6 +155,7 @@ defmodule CodingAgent.ToolPolicy do
       allow: Keyword.get(opts, :allow, :all),
       deny: Keyword.get(opts, :deny, []),
       require_approval: Keyword.get(opts, :require_approval, []),
+      approvals: normalize_approvals(Keyword.get(opts, :approvals, %{})),
       no_reply: Keyword.get(opts, :no_reply, false),
       profile: :custom
     }
@@ -185,35 +167,67 @@ defmodule CodingAgent.ToolPolicy do
 
   @doc """
   Check if a tool is allowed by the policy.
-
-  ## Examples
-
-      policy = ToolPolicy.from_profile(:read_only)
-      ToolPolicy.allowed?(policy, "read")  # => true
-      ToolPolicy.allowed?(policy, "write") # => false
   """
-  @spec allowed?(policy(), String.t()) :: boolean()
-  def allowed?(%{allow: :all, deny: deny}, tool_name) do
-    tool_name not in deny
+  @spec allowed?(policy() | map(), String.t()) :: boolean()
+  def allowed?(policy, tool_name) when is_map(policy) and is_binary(tool_name) do
+    allow = normalize_allow(Map.get(policy, :allow) || Map.get(policy, "allow"))
+    deny = normalize_string_list(Map.get(policy, :deny) || Map.get(policy, "deny"))
+
+    cond do
+      allow == :all ->
+        tool_name not in deny
+
+      is_list(allow) ->
+        tool_name in allow and tool_name not in deny
+
+      true ->
+        false
+    end
   end
 
-  def allowed?(%{allow: allowed, deny: deny}, tool_name) do
-    tool_name in allowed and tool_name not in deny
-  end
+  def allowed?(_, _), do: true
 
   @doc """
   Check if a tool requires approval.
 
-  Returns false for empty or incomplete policies that don't have
-  a `require_approval` key.
+  Supports both legacy `require_approval` lists and router-style `approvals` maps.
   """
   @spec requires_approval?(policy() | map(), String.t()) :: boolean()
-  def requires_approval?(%{require_approval: approval_list}, tool_name)
-      when is_list(approval_list) do
-    tool_name in approval_list
+  def requires_approval?(policy, tool_name) when is_map(policy) and is_binary(tool_name) do
+    require_approval =
+      normalize_string_list(
+        Map.get(policy, :require_approval) || Map.get(policy, "require_approval")
+      )
+
+    cond do
+      tool_name in require_approval ->
+        true
+
+      approval_mode(policy, tool_name) == :always ->
+        true
+
+      true ->
+        false
+    end
   end
 
   def requires_approval?(_, _tool_name), do: false
+
+  @doc """
+  Resolve explicit approval mode for a tool from router-style approvals maps.
+  """
+  @spec approval_mode(policy() | map(), String.t()) :: :always | :never | :inherit
+  def approval_mode(policy, tool_name) when is_map(policy) and is_binary(tool_name) do
+    approvals = normalize_approvals(Map.get(policy, :approvals) || Map.get(policy, "approvals"))
+
+    case Map.get(approvals, tool_name) do
+      :always -> :always
+      :never -> :never
+      _ -> :inherit
+    end
+  end
+
+  def approval_mode(_, _tool_name), do: :inherit
 
   @doc """
   Check if NO_REPLY mode is enabled.
@@ -224,8 +238,11 @@ defmodule CodingAgent.ToolPolicy do
   @doc """
   Get the reason a tool is denied.
   """
-  @spec denial_reason(policy(), String.t()) :: String.t() | nil
-  def denial_reason(%{allow: allowed, deny: denied}, tool_name) do
+  @spec denial_reason(policy() | map(), String.t()) :: String.t() | nil
+  def denial_reason(policy, tool_name) when is_map(policy) and is_binary(tool_name) do
+    allowed = normalize_allow(Map.get(policy, :allow) || Map.get(policy, "allow"))
+    denied = normalize_string_list(Map.get(policy, :deny) || Map.get(policy, "deny"))
+
     cond do
       tool_name in denied ->
         "Tool '#{tool_name}' is in deny list"
@@ -238,23 +255,16 @@ defmodule CodingAgent.ToolPolicy do
     end
   end
 
+  def denial_reason(_, _), do: nil
+
   # ============================================================================
   # Policy Application
   # ============================================================================
 
   @doc """
   Apply a policy to a list of tools.
-
-  Returns only the tools allowed by the policy.
-
-  ## Examples
-
-      tools = [read_tool, write_tool, bash_tool]
-      policy = ToolPolicy.from_profile(:read_only)
-      allowed = ToolPolicy.apply_policy(policy, tools)
-      # => [read_tool]
   """
-  @spec apply_policy(policy(), [AgentCore.Types.AgentTool.t()]) :: [
+  @spec apply_policy(policy() | map(), [AgentCore.Types.AgentTool.t()]) :: [
           AgentCore.Types.AgentTool.t()
         ]
   def apply_policy(policy, tools) do
@@ -268,7 +278,7 @@ defmodule CodingAgent.ToolPolicy do
 
   Returns `{allowed_tools, denied_tools}` tuple.
   """
-  @spec partition_tools(policy(), [AgentCore.Types.AgentTool.t()]) :: {
+  @spec partition_tools(policy() | map(), [AgentCore.Types.AgentTool.t()]) :: {
           [AgentCore.Types.AgentTool.t()],
           [AgentCore.Types.AgentTool.t()]
         }
@@ -283,9 +293,10 @@ defmodule CodingAgent.ToolPolicy do
 
   Returns a filtered map with only allowed tools.
   """
-  @spec apply_policy_to_map(policy(), %{String.t() => AgentCore.Types.AgentTool.t()}) :: %{
-          String.t() => AgentCore.Types.AgentTool.t()
-        }
+  @spec apply_policy_to_map(policy() | map(), %{String.t() => AgentCore.Types.AgentTool.t()}) ::
+          %{
+            String.t() => AgentCore.Types.AgentTool.t()
+          }
   def apply_policy_to_map(policy, tools_map) do
     Map.filter(tools_map, fn {name, _tool} ->
       allowed?(policy, name)
@@ -298,12 +309,6 @@ defmodule CodingAgent.ToolPolicy do
 
   @doc """
   Get the default policy for an engine.
-
-  Different engines have different default restrictions:
-  - `:internal` - Full access
-  - `:codex` - Subagent restricted (can't run dangerous tools)
-  - `:claude` - Subagent restricted
-  - `:kimi` - Subagent restricted
   """
   @spec engine_policy(atom()) :: policy()
   def engine_policy(:internal), do: from_profile(:full_access)
@@ -321,10 +326,10 @@ defmodule CodingAgent.ToolPolicy do
   def subagent_policy(engine, opts \\ []) do
     base_policy = engine_policy(engine)
 
-    # Merge with any custom restrictions
     custom_allow = Keyword.get(opts, :allow)
     custom_deny = Keyword.get(opts, :deny, [])
     custom_approval = Keyword.get(opts, :require_approval, [])
+    custom_approvals = normalize_approvals(Keyword.get(opts, :approvals, %{}))
     no_reply = Keyword.get(opts, :no_reply, false)
 
     %{
@@ -332,6 +337,7 @@ defmodule CodingAgent.ToolPolicy do
       | allow: custom_allow || base_policy.allow,
         deny: base_policy.deny ++ custom_deny,
         require_approval: base_policy.require_approval ++ custom_approval,
+        approvals: Map.merge(base_policy.approvals, custom_approvals),
         no_reply: no_reply || base_policy.no_reply
     }
   end
@@ -343,21 +349,36 @@ defmodule CodingAgent.ToolPolicy do
   @doc """
   Convert policy to a map for storage/transmission.
   """
-  @spec to_map(policy()) :: map()
+  @spec to_map(policy() | map()) :: map()
   def to_map(policy) do
+    allow = normalize_allow(Map.get(policy, :allow) || Map.get(policy, "allow"))
+    deny = normalize_string_list(Map.get(policy, :deny) || Map.get(policy, "deny"))
+
+    require_approval =
+      normalize_string_list(
+        Map.get(policy, :require_approval) || Map.get(policy, "require_approval")
+      )
+
+    approvals = normalize_approvals(Map.get(policy, :approvals) || Map.get(policy, "approvals"))
+
     %{
       "allow" =>
-        case policy.allow do
+        case allow do
           :all -> "all"
           list -> list
         end,
-      "deny" => policy.deny,
-      "require_approval" => policy.require_approval,
-      "no_reply" => policy.no_reply,
+      "deny" => deny,
+      "require_approval" => require_approval,
+      "approvals" =>
+        approvals
+        |> Enum.into(%{}, fn {tool, mode} -> {tool, Atom.to_string(mode)} end),
+      "no_reply" => Map.get(policy, :no_reply) || Map.get(policy, "no_reply") || false,
       "profile" =>
-        case Map.get(policy, :profile) do
+        case Map.get(policy, :profile) || Map.get(policy, "profile") do
           nil -> nil
-          atom -> Atom.to_string(atom)
+          atom when is_atom(atom) -> Atom.to_string(atom)
+          str when is_binary(str) -> str
+          _ -> nil
         end
     }
   end
@@ -368,19 +389,25 @@ defmodule CodingAgent.ToolPolicy do
   @spec from_map(map()) :: policy()
   def from_map(map) do
     %{
-      allow:
-        case map["allow"] do
-          "all" -> :all
-          list when is_list(list) -> list
-          _ -> :all
-        end,
-      deny: Map.get(map, "deny", []),
-      require_approval: Map.get(map, "require_approval", []),
-      no_reply: Map.get(map, "no_reply", false),
+      allow: normalize_allow(Map.get(map, "allow") || Map.get(map, :allow)),
+      deny: normalize_string_list(Map.get(map, "deny") || Map.get(map, :deny)),
+      require_approval:
+        normalize_string_list(Map.get(map, "require_approval") || Map.get(map, :require_approval)),
+      approvals: normalize_approvals(Map.get(map, "approvals") || Map.get(map, :approvals)),
+      no_reply: Map.get(map, "no_reply") || Map.get(map, :no_reply) || false,
       profile:
-        case Map.get(map, "profile") do
+        case Map.get(map, "profile") || Map.get(map, :profile) do
           nil -> nil
-          str -> String.to_existing_atom(str)
+          atom when is_atom(atom) -> atom
+          "full_access" -> :full_access
+          "minimal_core" -> :minimal_core
+          "read_only" -> :read_only
+          "safe_mode" -> :safe_mode
+          "subagent_restricted" -> :subagent_restricted
+          "no_external" -> :no_external
+          "custom" -> :custom
+          str when is_binary(str) -> if(String.trim(str) == "", do: nil, else: nil)
+          _ -> nil
         end
     }
   end
@@ -391,13 +418,6 @@ defmodule CodingAgent.ToolPolicy do
 
   @doc """
   Mark a message as NO_REPLY.
-
-  NO_REPLY messages are processed but don't generate responses.
-  Useful for background work and silent operations.
-
-  ## Options
-
-  - `:reason` - Reason for NO_REPLY (e.g., "background_task", "compaction")
   """
   @spec mark_no_reply(map(), keyword()) :: map()
   def mark_no_reply(message, opts \\ []) do
@@ -427,4 +447,70 @@ defmodule CodingAgent.ToolPolicy do
       not message_no_reply?(msg)
     end)
   end
+
+  defp normalize_allow(nil), do: :all
+  defp normalize_allow(:all), do: :all
+  defp normalize_allow("all"), do: :all
+
+  defp normalize_allow(value) when is_binary(value) do
+    [String.trim(value)]
+  end
+
+  defp normalize_allow(value) when is_list(value) do
+    normalize_string_list(value)
+  end
+
+  defp normalize_allow(_), do: :all
+
+  defp normalize_string_list(nil), do: []
+
+  defp normalize_string_list(value) when is_binary(value) do
+    [String.trim(value)]
+  end
+
+  defp normalize_string_list(value) when is_list(value) do
+    value
+    |> Enum.map(fn
+      v when is_binary(v) -> String.trim(v)
+      v when is_atom(v) -> v |> Atom.to_string() |> String.trim()
+      v -> v |> to_string() |> String.trim()
+    end)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp normalize_string_list(_), do: []
+
+  defp normalize_approvals(nil), do: %{}
+
+  defp normalize_approvals(approvals) when is_map(approvals) do
+    approvals
+    |> Enum.reduce(%{}, fn {tool, mode}, acc ->
+      tool_name = tool |> to_string() |> String.trim()
+
+      case normalize_approval_mode(mode) do
+        nil -> acc
+        _ when tool_name == "" -> acc
+        normalized -> Map.put(acc, tool_name, normalized)
+      end
+    end)
+  end
+
+  defp normalize_approvals(_), do: %{}
+
+  defp normalize_approval_mode(:always), do: :always
+  defp normalize_approval_mode("always"), do: :always
+  defp normalize_approval_mode(true), do: :always
+  defp normalize_approval_mode(:required), do: :always
+  defp normalize_approval_mode("required"), do: :always
+
+  defp normalize_approval_mode(:never), do: :never
+  defp normalize_approval_mode("never"), do: :never
+  defp normalize_approval_mode(false), do: :never
+  defp normalize_approval_mode(:none), do: :never
+  defp normalize_approval_mode("none"), do: :never
+
+  defp normalize_approval_mode(%{"mode" => mode}), do: normalize_approval_mode(mode)
+  defp normalize_approval_mode(%{mode: mode}), do: normalize_approval_mode(mode)
+
+  defp normalize_approval_mode(_), do: nil
 end
