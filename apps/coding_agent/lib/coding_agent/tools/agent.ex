@@ -17,12 +17,12 @@ defmodule CodingAgent.Tools.Agent do
   alias Ai.Types.TextContent
   alias CodingAgent.TaskStore
   alias LemonCore.{Bus, RunRequest, SessionKey, Store}
-  alias LemonRouter.RunOrchestrator
 
   @valid_actions ["run", "poll"]
   @valid_queue_modes ["collect", "followup", "steer", "steer_backlog", "interrupt"]
   @default_sync_timeout_ms 120_000
   @default_watcher_timeout_ms 30 * 60 * 1000
+  @default_run_orchestrator :"Elixir.LemonRouter.RunOrchestrator"
 
   @doc """
   Returns the agent delegation tool definition.
@@ -301,7 +301,7 @@ defmodule CodingAgent.Tools.Agent do
   end
 
   defp submit_run(request, opts) do
-    router = Keyword.get(opts, :run_orchestrator, RunOrchestrator)
+    router = run_orchestrator(opts)
 
     case router.submit(request) do
       {:ok, run_id} when is_binary(run_id) -> {:ok, run_id}
@@ -415,7 +415,7 @@ defmodule CodingAgent.Tools.Agent do
     parent_agent_id =
       Keyword.get(opts, :agent_id) || SessionKey.agent_id(parent_session_key || "")
 
-    router = Keyword.get(opts, :run_orchestrator, RunOrchestrator)
+    router = run_orchestrator(opts)
     delegated_session_key = request.session_key
 
     if is_binary(parent_session_key) and parent_session_key != "" do
@@ -447,6 +447,10 @@ defmodule CodingAgent.Tools.Agent do
         "Agent tool cannot auto-followup delegated run #{run_id}: parent session key unavailable"
       )
     end
+  end
+
+  defp run_orchestrator(opts) do
+    Keyword.get(opts, :run_orchestrator, @default_run_orchestrator)
   end
 
   defp await_run_completion(run_id, timeout_ms, opts \\ []) do
