@@ -551,9 +551,11 @@ defmodule AgentCore.EventStream do
   defp safe_take(stream) do
     GenServer.call(stream, :take, :infinity)
   catch
-    :exit, {:noproc, _} -> :canceled
-    :exit, {:normal, _} -> :canceled
-    :exit, {:shutdown, _} -> :canceled
+    # If the stream process is already gone (common when canceled), surface a
+    # terminal canceled event so consumers always get an explicit end signal.
+    :exit, {:noproc, _} -> {:event, {:canceled, :stream_closed}}
+    :exit, {:normal, _} -> {:event, {:canceled, :stream_closed}}
+    :exit, {:shutdown, _} -> {:event, {:canceled, :stream_closed}}
   end
 
   defp handle_push(event, state, opts) do
