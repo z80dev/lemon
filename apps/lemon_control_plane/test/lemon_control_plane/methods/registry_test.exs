@@ -128,16 +128,36 @@ defmodule LemonControlPlane.Methods.RegistryTest do
     :ok = Registry.register(module)
 
     on_exit(fn ->
-      :ok = Registry.unregister(method)
+      case Process.whereis(Registry) do
+        pid when is_pid(pid) ->
+          case Registry.unregister(method) do
+            :ok -> :ok
+            {:error, :not_found} -> :ok
+          end
+
+        _ ->
+          :ok
+      end
     end)
 
     method
   end
 
   defp cleanup_test_methods do
-    Registry.list_methods()
-    |> Enum.filter(&String.starts_with?(&1, @test_method_prefix))
-    |> Enum.each(fn method -> :ok = Registry.unregister(method) end)
+    case Process.whereis(Registry) do
+      pid when is_pid(pid) ->
+        Registry.list_methods()
+        |> Enum.filter(&String.starts_with?(&1, @test_method_prefix))
+        |> Enum.each(fn method ->
+          case Registry.unregister(method) do
+            :ok -> :ok
+            {:error, :not_found} -> :ok
+          end
+        end)
+
+      _ ->
+        :ok
+    end
   end
 
   defp ctx_with_scopes(scopes) do
