@@ -117,6 +117,12 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.ConfigSet,
     LemonControlPlane.Methods.ConfigPatch,
     LemonControlPlane.Methods.ConfigSchema,
+    # Secrets
+    LemonControlPlane.Methods.SecretsStatus,
+    LemonControlPlane.Methods.SecretsList,
+    LemonControlPlane.Methods.SecretsSet,
+    LemonControlPlane.Methods.SecretsDelete,
+    LemonControlPlane.Methods.SecretsExists,
     # Device pairing
     LemonControlPlane.Methods.DevicePairRequest,
     LemonControlPlane.Methods.DevicePairApprove,
@@ -201,7 +207,8 @@ defmodule LemonControlPlane.Methods.Registry do
                   module.handle(params, ctx)
                 rescue
                   e ->
-                    {:error, Errors.internal_error("Method execution failed", Exception.message(e))}
+                    {:error,
+                     Errors.internal_error("Method execution failed", Exception.message(e))}
                 end
 
               {:error, reason} ->
@@ -300,14 +307,17 @@ defmodule LemonControlPlane.Methods.Registry do
 
         map
         |> Enum.reduce(MapSet.new(), fn
-          {capability, true}, acc when is_atom(capability) -> MapSet.put(acc, capability)
+          {capability, true}, acc when is_atom(capability) ->
+            MapSet.put(acc, capability)
+
           {capability, value}, acc when is_binary(capability) and value in [true, "true", 1] ->
             case Enum.find(known, &(Atom.to_string(&1) == capability)) do
               nil -> acc
               cap -> MapSet.put(acc, cap)
             end
 
-          _, acc -> acc
+          _, acc ->
+            acc
         end)
 
       _ ->

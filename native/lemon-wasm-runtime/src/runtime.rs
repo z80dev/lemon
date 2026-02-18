@@ -29,6 +29,8 @@ use exports::near::agent::tool as wit_tool;
 const EPOCH_TICK_INTERVAL: Duration = Duration::from_millis(10);
 const MAX_LOG_ENTRIES: usize = 1000;
 const MAX_LOG_MESSAGE_BYTES: usize = 4096;
+const HOST_SECRET_EXISTS_TARGET: &str = "__lemon.secret.exists";
+const HOST_SECRET_RESOLVE_TARGET: &str = "__lemon.secret.resolve";
 
 type HostInvokeFn = Arc<dyn Fn(String, String) -> Result<String, String> + Send + Sync>;
 
@@ -690,9 +692,9 @@ impl StoreData {
                 continue;
             }
 
-            let secret = match std::env::var(&mapping.secret_name) {
-                Ok(secret) if !secret.is_empty() => secret,
-                _ => continue,
+            let secret = match self.resolve_secret_for_host(&mapping.secret_name) {
+                Some(secret) => secret,
+                None => continue,
             };
 
             match &mapping.location {
@@ -724,6 +726,58 @@ impl StoreData {
         }
 
         Ok(())
+    }
+
+    fn env_secret(&self, name: &str) -> Option<String> {
+        match std::env::var(name) {
+            Ok(secret) if !secret.trim().is_empty() => Some(secret),
+            _ => None,
+        }
+    }
+
+    fn env_secret_exists(&self, name: &str) -> bool {
+        self.env_secret(name).is_some()
+    }
+
+    fn host_secret_exists(&self, name: &str) -> Option<bool> {
+        let payload = json!({ "name": name }).to_string();
+
+        let response = (self.host_invoke)(HOST_SECRET_EXISTS_TARGET.to_string(), payload).ok()?;
+        parse_host_secret_exists(&response)
+    }
+
+    fn resolve_secret_for_host(&self, name: &str) -> Option<String> {
+        let payload = json!({ "name": name }).to_string();
+
+        let from_host = (self.host_invoke)(HOST_SECRET_RESOLVE_TARGET.to_string(), payload)
+            .ok()
+            .and_then(|response| parse_host_secret_value(&response));
+
+        from_host.or_else(|| self.env_secret(name))
+    }
+}
+
+fn parse_host_secret_exists(raw: &str) -> Option<bool> {
+    let parsed: Value = serde_json::from_str(raw).ok()?;
+
+    match parsed {
+        Value::Bool(flag) => Some(flag),
+        Value::Object(map) => map.get("exists").and_then(Value::as_bool),
+        _ => None,
+    }
+}
+
+fn parse_host_secret_value(raw: &str) -> Option<String> {
+    let parsed: Value = serde_json::from_str(raw).ok()?;
+
+    match parsed {
+        Value::String(value) if !value.trim().is_empty() => Some(value),
+        Value::Object(map) => map
+            .get("value")
+            .and_then(Value::as_str)
+            .map(|value| value.to_string())
+            .filter(|value| !value.trim().is_empty()),
+        _ => None,
     }
 }
 
@@ -928,9 +982,8 @@ impl near::agent::host::Host for StoreData {
             return false;
         }
 
-        std::env::var(&name)
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false)
+        self.host_secret_exists(&name)
+            .unwrap_or_else(|| self.env_secret_exists(&name))
     }
 }
 
@@ -938,7 +991,9 @@ impl near::agent::host::Host for StoreData {
 mod tests {
     use pretty_assertions::assert_eq;
 
-    use super::{RuntimeDefaults, context_workspace_root};
+    use super::{
+        RuntimeDefaults, context_workspace_root, parse_host_secret_exists, parse_host_secret_value,
+    };
 
     #[test]
     fn defaults_are_sane() {
@@ -953,5 +1008,25 @@ mod tests {
     fn context_workspace_resolves_from_cwd() {
         let root = context_workspace_root(&Some("{\"cwd\":\"/tmp/test\"}".to_string()));
         assert_eq!(root.to_string_lossy(), "/tmp/test");
+    }
+
+    #[test]
+    fn parses_host_secret_exists_payloads() {
+        assert_eq!(parse_host_secret_exists("true"), Some(true));
+        assert_eq!(parse_host_secret_exists("{\"exists\":false}"), Some(false));
+        assert_eq!(parse_host_secret_exists("{\"unexpected\":1}"), None);
+    }
+
+    #[test]
+    fn parses_host_secret_value_payloads() {
+        assert_eq!(
+            parse_host_secret_value("{\"value\":\"secret-token\"}"),
+            Some("secret-token".to_string())
+        );
+        assert_eq!(
+            parse_host_secret_value("\"direct-secret\""),
+            Some("direct-secret".to_string())
+        );
+        assert_eq!(parse_host_secret_value("{\"value\":\"\"}"), None);
     }
 }
