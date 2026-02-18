@@ -161,31 +161,33 @@ defmodule Ai.CircuitBreakerEdgeCasesTest do
 
     test "rapid open -> half-open -> open -> half-open -> closed cycle", %{provider: provider} do
       start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 20}
+        # Use a larger timeout and wider sleep windows so scheduler jitter in full-suite
+        # runs does not skip the intermediate :open assertions.
+        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 200}
       )
 
       # Open
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
+      Process.sleep(50)
       assert_state(provider, :open)
 
       # Wait for half-open
-      Process.sleep(25)
+      Process.sleep(260)
       assert_state(provider, :half_open)
 
       # Fail -> back to open
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
+      Process.sleep(50)
       assert_state(provider, :open)
 
       # Wait for half-open again
-      Process.sleep(30)
+      Process.sleep(260)
       assert_state(provider, :half_open)
 
       # Now succeed twice -> closed
       CircuitBreaker.record_success(provider)
       CircuitBreaker.record_success(provider)
-      Process.sleep(10)
+      Process.sleep(20)
       assert_state(provider, :closed)
     end
 
