@@ -48,9 +48,9 @@ defmodule LemonRouter.AgentProfiles do
   end
 
   @impl true
-  def init(_opts) do
-    profiles = load_profiles(:cached)
-    {:ok, %{profiles: profiles}}
+  def init(opts) do
+    profiles = load_profiles(:cached, opts)
+    {:ok, %{profiles: profiles, opts: opts}}
   end
 
   @impl true
@@ -70,17 +70,19 @@ defmodule LemonRouter.AgentProfiles do
 
   @impl true
   def handle_cast(:reload, state) do
-    profiles = load_profiles(:reload)
+    profiles = load_profiles(:reload, state.opts)
     {:noreply, %{state | profiles: profiles}}
   end
 
-  defp load_profiles(mode) do
-    # Prefer canonical TOML config (global + project). For now, load from global config.
-    # This keeps the control plane agent registry in sync with runtime configuration.
+  defp load_profiles(mode, opts) do
+    cwd = resolve_config_cwd(opts)
+
+    # Use canonical TOML config (global + project) for agent profiles.
+    # Project-local config is resolved from `cwd` and overrides global config.
     cfg =
       case mode do
-        :reload -> LemonCore.Config.reload()
-        _ -> LemonCore.Config.cached()
+        :reload -> LemonCore.Config.reload(cwd)
+        _ -> LemonCore.Config.cached(cwd)
       end
 
     profiles = cfg.agents || %{}
@@ -97,6 +99,15 @@ defmodule LemonRouter.AgentProfiles do
       %{"default" => default_profile()}
     else
       Map.put_new(profiles, "default", default_profile())
+    end
+  end
+
+  defp resolve_config_cwd(opts) when is_list(opts) do
+    case opts[:cwd] ||
+           Application.get_env(:lemon_router, :agent_profiles_cwd) ||
+           System.get_env("LEMON_AGENT_PROFILES_CWD") do
+      cwd when is_binary(cwd) and cwd != "" -> Path.expand(cwd)
+      _ -> File.cwd!()
     end
   end
 
