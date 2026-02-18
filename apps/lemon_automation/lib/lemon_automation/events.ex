@@ -185,13 +185,15 @@ defmodule LemonAutomation.Events do
   @doc """
   Emit alert when a heartbeat returns non-OK status.
   """
-  @spec emit_heartbeat_alert(CronRun.t(), CronJob.t(), binary() | nil) :: :ok
-  def emit_heartbeat_alert(%CronRun{} = run, %CronJob{} = job, response) do
+  @spec emit_heartbeat_alert(CronRun.t() | map(), CronJob.t(), binary() | nil) :: :ok
+  def emit_heartbeat_alert(run, %CronJob{} = job, response) when is_map(run) do
+    run_id = Map.get(run, :id) || Map.get(run, "id")
+
     event =
       Event.new(
         :heartbeat_alert,
         %{
-          run_id: run.id,
+          run_id: run_id,
           job_id: job.id,
           job_name: job.name,
           agent_id: job.agent_id,
@@ -200,7 +202,7 @@ defmodule LemonAutomation.Events do
         },
         %{
           job_id: job.id,
-          run_id: run.id,
+          run_id: run_id,
           agent_id: job.agent_id
         }
       )

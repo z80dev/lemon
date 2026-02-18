@@ -192,4 +192,35 @@ defmodule LemonAutomation.EventsTest do
 
     assert is_integer(ts_ms)
   end
+
+  test "emit_heartbeat_alert/3 accepts map run payloads" do
+    unique = System.unique_integer([:positive])
+    job = sample_job(unique)
+    run = CronRun.to_map(sample_run(job.id, unique))
+    response = "map-not-ok-#{unique}"
+
+    run_id = run[:id]
+    job_id = job.id
+    job_name = job.name
+    agent_id = job.agent_id
+
+    Events.emit_heartbeat_alert(run, job, response)
+
+    assert_receive %Event{
+                     type: :heartbeat_alert,
+                     payload: %{
+                       run_id: ^run_id,
+                       job_id: ^job_id,
+                       job_name: ^job_name,
+                       agent_id: ^agent_id,
+                       response: ^response,
+                       severity: :warning
+                     },
+                     meta: %{job_id: ^job_id, run_id: ^run_id, agent_id: ^agent_id},
+                     ts_ms: ts_ms
+                   },
+                   500
+
+    assert is_integer(ts_ms)
+  end
 end
