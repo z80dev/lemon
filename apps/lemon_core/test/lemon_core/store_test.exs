@@ -3,6 +3,25 @@ defmodule LemonCore.StoreTest do
 
   alias LemonCore.Store
 
+  defmodule BusyBackend do
+    @behaviour LemonCore.Store.Backend
+
+    @impl true
+    def init(_opts), do: {:ok, %{}}
+
+    @impl true
+    def put(_state, _table, _key, _value), do: {:error, :sqlite_busy}
+
+    @impl true
+    def get(_state, _table, _key), do: {:error, :sqlite_busy}
+
+    @impl true
+    def delete(_state, _table, _key), do: {:error, :sqlite_busy}
+
+    @impl true
+    def list(_state, _table), do: {:error, :sqlite_busy}
+  end
+
   defp unique_token do
     System.unique_integer([:positive, :monotonic])
   end
@@ -10,6 +29,16 @@ defmodule LemonCore.StoreTest do
   defp scope(token, name), do: {:store_test, token, name}
   defp run_id(token, name), do: "run_#{token}_#{name}"
   defp session_key(token), do: "agent:store_test_#{token}:main"
+
+  defp swap_store_backend(backend, backend_state) do
+    original_state = :sys.get_state(Store)
+
+    :sys.replace_state(Store, fn state ->
+      %{state | backend: backend, backend_state: backend_state}
+    end)
+
+    original_state
+  end
 
   describe "chat state TTL semantics" do
     test "put_chat_state persists expires_at using configured TTL" do
@@ -210,6 +239,18 @@ defmodule LemonCore.StoreTest do
       :ok = Store.delete_runtime_policy()
       assert Store.get_runtime_policy() == nil
       assert Store.get(:runtime_policy, :global) == nil
+    end
+  end
+
+  describe "backend error handling" do
+    test "generic put returns error and store remains alive on sqlite busy" do
+      original_state = swap_store_backend(BusyBackend, %{})
+      on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
+
+      assert {:error, :sqlite_busy} =
+               Store.put(:cron_runs, "run_busy_#{unique_token()}", %{status: :pending})
+
+      assert Process.alive?(Process.whereis(Store))
     end
   end
 end

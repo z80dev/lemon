@@ -16,6 +16,7 @@ defmodule LemonCore.Store do
   use GenServer
 
   alias LemonCore.Store.EtsBackend
+  require Logger
 
   @default_backend EtsBackend
   # Default TTL: 24 hours in milliseconds
@@ -78,7 +79,7 @@ defmodule LemonCore.Store do
 
   This is a generic API for use by other apps (e.g., lemon_core, lemon_automation).
   """
-  @spec put(table :: atom(), key :: term(), value :: term()) :: :ok
+  @spec put(table :: atom(), key :: term(), value :: term()) :: :ok | {:error, term()}
   def put(table, key, value), do: GenServer.call(__MODULE__, {:generic_put, table, key, value})
 
   @doc """
@@ -92,7 +93,7 @@ defmodule LemonCore.Store do
   @doc """
   Delete a key from a named table.
   """
-  @spec delete(table :: atom(), key :: term()) :: :ok
+  @spec delete(table :: atom(), key :: term()) :: :ok | {:error, term()}
   def delete(table, key), do: GenServer.call(__MODULE__, {:generic_delete, table, key})
 
   @doc """
@@ -227,7 +228,9 @@ defmodule LemonCore.Store do
 
   @impl true
   def init(_opts) do
-    config = Application.get_env(:lemon_core, __MODULE__, [])
+    config =
+      Application.get_env(:lemon_core, __MODULE__, [])
+      |> merge_runtime_override(Application.get_env(:lemon_core, :store_runtime_override, []))
 
     backend = Keyword.get(config, :backend, @default_backend)
     backend_opts = Keyword.get(config, :backend_opts, [])
@@ -254,91 +257,200 @@ defmodule LemonCore.Store do
     Process.send_after(self(), :sweep_expired_chat_states, @sweep_interval_ms)
   end
 
+  defp merge_runtime_override(config, []), do: config
+
+  defp merge_runtime_override(config, override) when is_list(config) and is_list(override) do
+    override_without_backend_opts = Keyword.delete(override, :backend_opts)
+    merged = Keyword.merge(config, override_without_backend_opts)
+
+    case Keyword.fetch(override, :backend_opts) do
+      {:ok, override_backend_opts} ->
+        backend_opts =
+          Keyword.merge(Keyword.get(config, :backend_opts, []), override_backend_opts)
+
+        Keyword.put(merged, :backend_opts, backend_opts)
+
+      :error ->
+        merged
+    end
+  end
+
+  defp merge_runtime_override(config, _override), do: config
+
   @impl true
   def handle_call({:get_chat_state, scope}, _from, state) do
-    {:ok, value, backend_state} = state.backend.get(state.backend_state, :chat, scope)
+    case state.backend.get(state.backend_state, :chat, scope) do
+      {:ok, value, backend_state} ->
+        # Check if chat state is expired (lazy expiry)
+        {result, backend_state} =
+          case value do
+            %{expires_at: expires_at} when is_integer(expires_at) ->
+              now = System.system_time(:millisecond)
 
-    # Check if chat state is expired (lazy expiry)
-    {result, backend_state} =
-      case value do
-        %{expires_at: expires_at} when is_integer(expires_at) ->
-          now = System.system_time(:millisecond)
+              if now > expires_at do
+                # Expired - delete and return nil
+                case state.backend.delete(backend_state, :chat, scope) do
+                  {:ok, next_state} ->
+                    {nil, next_state}
 
-          if now > expires_at do
-            # Expired - delete and return nil
-            {:ok, backend_state} = state.backend.delete(backend_state, :chat, scope)
-            {nil, backend_state}
-          else
-            {value, backend_state}
+                  {:error, reason} ->
+                    log_backend_error(:delete, :chat, scope, reason)
+                    {nil, backend_state}
+
+                  other ->
+                    log_backend_unexpected(:delete, :chat, scope, other)
+                    {nil, backend_state}
+                end
+              else
+                {value, backend_state}
+              end
+
+            _ ->
+              {value, backend_state}
           end
 
-        _ ->
-          {value, backend_state}
-      end
+        {:reply, result, %{state | backend_state: backend_state}}
 
-    {:reply, result, %{state | backend_state: backend_state}}
+      {:error, reason} ->
+        log_backend_error(:get, :chat, scope, reason)
+        {:reply, nil, state}
+
+      other ->
+        log_backend_unexpected(:get, :chat, scope, other)
+        {:reply, nil, state}
+    end
   end
 
   def handle_call({:get_run_by_progress, scope, progress_msg_id}, _from, state) do
     key = {scope, progress_msg_id}
-    {:ok, value, backend_state} = state.backend.get(state.backend_state, :progress, key)
-    {:reply, value, %{state | backend_state: backend_state}}
+
+    case state.backend.get(state.backend_state, :progress, key) do
+      {:ok, value, backend_state} ->
+        {:reply, value, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:get, :progress, key, reason)
+        {:reply, nil, state}
+
+      other ->
+        log_backend_unexpected(:get, :progress, key, other)
+        {:reply, nil, state}
+    end
   end
 
   def handle_call({:get_run, run_id}, _from, state) do
-    {:ok, value, backend_state} = state.backend.get(state.backend_state, :runs, run_id)
-    {:reply, value, %{state | backend_state: backend_state}}
+    case state.backend.get(state.backend_state, :runs, run_id) do
+      {:ok, value, backend_state} ->
+        {:reply, value, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:get, :runs, run_id, reason)
+        {:reply, nil, state}
+
+      other ->
+        log_backend_unexpected(:get, :runs, run_id, other)
+        {:reply, nil, state}
+    end
   end
 
   def handle_call({:get_run_history, session_key, opts}, _from, state) do
     limit = Keyword.get(opts, :limit, 10)
 
-    {:ok, all_history, backend_state} = state.backend.list(state.backend_state, :run_history)
+    case state.backend.list(state.backend_state, :run_history) do
+      {:ok, all_history, backend_state} ->
+        # Canonical run history key format: {session_key, started_at_ms, run_id}
+        history =
+          all_history
+          |> Enum.filter(fn
+            {{key, _ts, _run_id}, _data} ->
+              key == session_key
 
-    # Canonical run history key format: {session_key, started_at_ms, run_id}
-    history =
-      all_history
-      |> Enum.filter(fn
-        {{key, _ts, _run_id}, _data} ->
-          key == session_key
+            _ ->
+              false
+          end)
+          |> Enum.sort_by(
+            fn
+              {{_s, ts, _run_id}, _data} -> ts
+            end,
+            :desc
+          )
+          |> Enum.take(limit)
+          |> Enum.map(fn
+            {{_scope, _ts, run_id}, data} -> {run_id, data}
+          end)
 
-        _ ->
-          false
-      end)
-      |> Enum.sort_by(
-        fn
-          {{_s, ts, _run_id}, _data} -> ts
-        end,
-        :desc
-      )
-      |> Enum.take(limit)
-      |> Enum.map(fn
-        {{_scope, _ts, run_id}, data} -> {run_id, data}
-      end)
+        {:reply, history, %{state | backend_state: backend_state}}
 
-    {:reply, history, %{state | backend_state: backend_state}}
+      {:error, reason} ->
+        log_backend_error(:list, :run_history, session_key, reason)
+        {:reply, [], state}
+
+      other ->
+        log_backend_unexpected(:list, :run_history, session_key, other)
+        {:reply, [], state}
+    end
   end
 
   # Generic table handlers
 
   def handle_call({:generic_put, table, key, value}, _from, state) do
-    {:ok, backend_state} = state.backend.put(state.backend_state, table, key, value)
-    {:reply, :ok, %{state | backend_state: backend_state}}
+    case state.backend.put(state.backend_state, table, key, value) do
+      {:ok, backend_state} ->
+        {:reply, :ok, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:put, table, key, reason)
+        {:reply, {:error, reason}, state}
+
+      other ->
+        log_backend_unexpected(:put, table, key, other)
+        {:reply, {:error, {:unexpected_backend_response, other}}, state}
+    end
   end
 
   def handle_call({:generic_get, table, key}, _from, state) do
-    {:ok, value, backend_state} = state.backend.get(state.backend_state, table, key)
-    {:reply, value, %{state | backend_state: backend_state}}
+    case state.backend.get(state.backend_state, table, key) do
+      {:ok, value, backend_state} ->
+        {:reply, value, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:get, table, key, reason)
+        {:reply, nil, state}
+
+      other ->
+        log_backend_unexpected(:get, table, key, other)
+        {:reply, nil, state}
+    end
   end
 
   def handle_call({:generic_delete, table, key}, _from, state) do
-    {:ok, backend_state} = state.backend.delete(state.backend_state, table, key)
-    {:reply, :ok, %{state | backend_state: backend_state}}
+    case state.backend.delete(state.backend_state, table, key) do
+      {:ok, backend_state} ->
+        {:reply, :ok, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:delete, table, key, reason)
+        {:reply, {:error, reason}, state}
+
+      other ->
+        log_backend_unexpected(:delete, table, key, other)
+        {:reply, {:error, {:unexpected_backend_response, other}}, state}
+    end
   end
 
   def handle_call({:generic_list, table}, _from, state) do
-    {:ok, entries, backend_state} = state.backend.list(state.backend_state, table)
-    {:reply, entries, %{state | backend_state: backend_state}}
+    case state.backend.list(state.backend_state, table) do
+      {:ok, entries, backend_state} ->
+        {:reply, entries, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:list, table, :all, reason)
+        {:reply, [], state}
+
+      other ->
+        log_backend_unexpected(:list, table, :all, other)
+        {:reply, [], state}
+    end
   end
 
   @impl true
@@ -354,100 +466,213 @@ defmodule LemonCore.Store do
         map when is_map(map) -> Map.put(map, :expires_at, expires_at)
       end
 
-    {:ok, backend_state} = state.backend.put(state.backend_state, :chat, scope, value_with_expiry)
-    {:noreply, %{state | backend_state: backend_state}}
+    case state.backend.put(state.backend_state, :chat, scope, value_with_expiry) do
+      {:ok, backend_state} ->
+        {:noreply, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:put, :chat, scope, reason)
+        {:noreply, state}
+
+      other ->
+        log_backend_unexpected(:put, :chat, scope, other)
+        {:noreply, state}
+    end
   end
 
   def handle_cast({:delete_chat_state, scope}, state) do
-    {:ok, backend_state} = state.backend.delete(state.backend_state, :chat, scope)
-    {:noreply, %{state | backend_state: backend_state}}
+    case state.backend.delete(state.backend_state, :chat, scope) do
+      {:ok, backend_state} ->
+        {:noreply, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:delete, :chat, scope, reason)
+        {:noreply, state}
+
+      other ->
+        log_backend_unexpected(:delete, :chat, scope, other)
+        {:noreply, state}
+    end
   end
 
   def handle_cast({:append_run_event, run_id, event}, state) do
-    {:ok, existing, backend_state} = state.backend.get(state.backend_state, :runs, run_id)
+    case state.backend.get(state.backend_state, :runs, run_id) do
+      {:ok, existing, backend_state} ->
+        record =
+          existing || %{events: [], summary: nil, started_at: System.system_time(:millisecond)}
 
-    record = existing || %{events: [], summary: nil, started_at: System.system_time(:millisecond)}
-    record = %{record | events: [event | record.events]}
+        record = %{record | events: [event | record.events]}
 
-    {:ok, backend_state} = state.backend.put(backend_state, :runs, run_id, record)
-    {:noreply, %{state | backend_state: backend_state}}
+        case state.backend.put(backend_state, :runs, run_id, record) do
+          {:ok, backend_state} ->
+            {:noreply, %{state | backend_state: backend_state}}
+
+          {:error, reason} ->
+            log_backend_error(:put, :runs, run_id, reason)
+            {:noreply, %{state | backend_state: backend_state}}
+
+          other ->
+            log_backend_unexpected(:put, :runs, run_id, other)
+            {:noreply, %{state | backend_state: backend_state}}
+        end
+
+      {:error, reason} ->
+        log_backend_error(:get, :runs, run_id, reason)
+        {:noreply, state}
+
+      other ->
+        log_backend_unexpected(:get, :runs, run_id, other)
+        {:noreply, state}
+    end
   end
 
   def handle_cast({:finalize_run, run_id, summary}, state) do
-    {:ok, existing, backend_state} = state.backend.get(state.backend_state, :runs, run_id)
+    case state.backend.get(state.backend_state, :runs, run_id) do
+      {:ok, existing, backend_state} ->
+        record =
+          existing || %{events: [], summary: nil, started_at: System.system_time(:millisecond)}
 
-    record = existing || %{events: [], summary: nil, started_at: System.system_time(:millisecond)}
-    record = %{record | summary: summary}
+        record = %{record | summary: summary}
 
-    {:ok, backend_state} = state.backend.put(backend_state, :runs, run_id, record)
+        case state.backend.put(backend_state, :runs, run_id, record) do
+          {:ok, backend_state} ->
+            session_key = Map.get(summary, :session_key)
+            started_at = record.started_at
 
-    session_key = Map.get(summary, :session_key)
-    started_at = record.started_at
+            # Store by session_key.
+            backend_state =
+              cond do
+                is_binary(session_key) and session_key != "" ->
+                  history_key = {session_key, started_at, run_id}
 
-    # Store by session_key.
-    backend_state =
-      cond do
-        is_binary(session_key) and session_key != "" ->
-          history_key = {session_key, started_at, run_id}
+                  history_data = %{
+                    events: record.events,
+                    summary: summary,
+                    session_key: session_key,
+                    run_id: run_id,
+                    started_at: started_at
+                  }
 
-          history_data = %{
-            events: record.events,
-            summary: summary,
-            session_key: session_key,
-            run_id: run_id,
-            started_at: started_at
-          }
+                  case state.backend.put(backend_state, :run_history, history_key, history_data) do
+                    {:ok, bs} ->
+                      bs =
+                        update_sessions_index(state.backend, bs, session_key, summary, started_at)
 
-          {:ok, bs} = state.backend.put(backend_state, :run_history, history_key, history_data)
+                      maybe_index_telegram_message_resume(state.backend, bs, summary)
 
-          bs = update_sessions_index(state.backend, bs, session_key, summary, started_at)
-          maybe_index_telegram_message_resume(state.backend, bs, summary)
+                    {:error, reason} ->
+                      log_backend_error(:put, :run_history, history_key, reason)
+                      backend_state
 
-        true ->
-          backend_state
-      end
+                    other ->
+                      log_backend_unexpected(:put, :run_history, history_key, other)
+                      backend_state
+                  end
 
-    {:noreply, %{state | backend_state: backend_state}}
+                true ->
+                  backend_state
+              end
+
+            {:noreply, %{state | backend_state: backend_state}}
+
+          {:error, reason} ->
+            log_backend_error(:put, :runs, run_id, reason)
+            {:noreply, %{state | backend_state: backend_state}}
+
+          other ->
+            log_backend_unexpected(:put, :runs, run_id, other)
+            {:noreply, %{state | backend_state: backend_state}}
+        end
+
+      {:error, reason} ->
+        log_backend_error(:get, :runs, run_id, reason)
+        {:noreply, state}
+
+      other ->
+        log_backend_unexpected(:get, :runs, run_id, other)
+        {:noreply, state}
+    end
   end
 
   def handle_cast({:put_progress_mapping, scope, progress_msg_id, run_id}, state) do
     key = {scope, progress_msg_id}
-    {:ok, backend_state} = state.backend.put(state.backend_state, :progress, key, run_id)
-    {:noreply, %{state | backend_state: backend_state}}
+
+    case state.backend.put(state.backend_state, :progress, key, run_id) do
+      {:ok, backend_state} ->
+        {:noreply, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:put, :progress, key, reason)
+        {:noreply, state}
+
+      other ->
+        log_backend_unexpected(:put, :progress, key, other)
+        {:noreply, state}
+    end
   end
 
   def handle_cast({:delete_progress_mapping, scope, progress_msg_id}, state) do
     key = {scope, progress_msg_id}
-    {:ok, backend_state} = state.backend.delete(state.backend_state, :progress, key)
-    {:noreply, %{state | backend_state: backend_state}}
+
+    case state.backend.delete(state.backend_state, :progress, key) do
+      {:ok, backend_state} ->
+        {:noreply, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:delete, :progress, key, reason)
+        {:noreply, state}
+
+      other ->
+        log_backend_unexpected(:delete, :progress, key, other)
+        {:noreply, state}
+    end
   end
 
   # Update sessions_index when a run is finalized
   defp update_sessions_index(backend, backend_state, session_key, summary, timestamp) do
-    {:ok, existing, backend_state} = backend.get(backend_state, :sessions_index, session_key)
+    case backend.get(backend_state, :sessions_index, session_key) do
+      {:ok, existing, backend_state} ->
+        # Parse agent_id from session_key if not in summary
+        agent_id = Map.get(summary, :agent_id) || parse_agent_id(session_key)
+        origin = get_in(summary, [:meta, :origin]) || Map.get(summary, :origin) || :unknown
 
-    # Parse agent_id from session_key if not in summary
-    agent_id = Map.get(summary, :agent_id) || parse_agent_id(session_key)
-    origin = get_in(summary, [:meta, :origin]) || Map.get(summary, :origin) || :unknown
+        session_entry =
+          case existing do
+            nil ->
+              %{
+                session_key: session_key,
+                agent_id: agent_id,
+                origin: origin,
+                created_at_ms: timestamp,
+                updated_at_ms: timestamp,
+                run_count: 1
+              }
 
-    session_entry =
-      case existing do
-        nil ->
-          %{
-            session_key: session_key,
-            agent_id: agent_id,
-            origin: origin,
-            created_at_ms: timestamp,
-            updated_at_ms: timestamp,
-            run_count: 1
-          }
+            entry ->
+              %{entry | updated_at_ms: timestamp, run_count: (entry[:run_count] || 0) + 1}
+          end
 
-        entry ->
-          %{entry | updated_at_ms: timestamp, run_count: (entry[:run_count] || 0) + 1}
-      end
+        case backend.put(backend_state, :sessions_index, session_key, session_entry) do
+          {:ok, backend_state} ->
+            backend_state
 
-    {:ok, backend_state} = backend.put(backend_state, :sessions_index, session_key, session_entry)
-    backend_state
+          {:error, reason} ->
+            log_backend_error(:put, :sessions_index, session_key, reason)
+            backend_state
+
+          other ->
+            log_backend_unexpected(:put, :sessions_index, session_key, other)
+            backend_state
+        end
+
+      {:error, reason} ->
+        log_backend_error(:get, :sessions_index, session_key, reason)
+        backend_state
+
+      other ->
+        log_backend_unexpected(:get, :sessions_index, session_key, other)
+        backend_state
+    end
   end
 
   # Index Telegram message IDs to resume tokens so replying to an old message can
@@ -573,19 +798,53 @@ defmodule LemonCore.Store do
   end
 
   defp sweep_expired_chat_states(backend, backend_state) do
-    {:ok, all_chat_states, backend_state} = backend.list(backend_state, :chat)
-    now = System.system_time(:millisecond)
+    case backend.list(backend_state, :chat) do
+      {:ok, all_chat_states, backend_state} ->
+        now = System.system_time(:millisecond)
 
-    # Find and delete expired entries
-    Enum.reduce(all_chat_states, backend_state, fn {scope, value}, acc_state ->
-      case value do
-        %{expires_at: expires_at} when is_integer(expires_at) and now > expires_at ->
-          {:ok, new_state} = backend.delete(acc_state, :chat, scope)
-          new_state
+        # Find and delete expired entries
+        Enum.reduce(all_chat_states, backend_state, fn {scope, value}, acc_state ->
+          case value do
+            %{expires_at: expires_at} when is_integer(expires_at) and now > expires_at ->
+              case backend.delete(acc_state, :chat, scope) do
+                {:ok, new_state} ->
+                  new_state
 
-        _ ->
-          acc_state
-      end
-    end)
+                {:error, reason} ->
+                  log_backend_error(:delete, :chat, scope, reason)
+                  acc_state
+
+                other ->
+                  log_backend_unexpected(:delete, :chat, scope, other)
+                  acc_state
+              end
+
+            _ ->
+              acc_state
+          end
+        end)
+
+      {:error, reason} ->
+        log_backend_error(:list, :chat, :all, reason)
+        backend_state
+
+      other ->
+        log_backend_unexpected(:list, :chat, :all, other)
+        backend_state
+    end
+  end
+
+  defp log_backend_error(op, table, key, reason) do
+    Logger.warning(
+      "[LemonCore.Store] backend #{op} failed table=#{inspect(table)} key=#{inspect(key)} " <>
+        "reason=#{inspect(reason)}"
+    )
+  end
+
+  defp log_backend_unexpected(op, table, key, response) do
+    Logger.warning(
+      "[LemonCore.Store] backend #{op} returned unexpected response table=#{inspect(table)} " <>
+        "key=#{inspect(key)} response=#{inspect(response)}"
+    )
   end
 end
