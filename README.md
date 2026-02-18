@@ -257,6 +257,7 @@ Other launch modes:
   - [Budget Enforcement](#budget-enforcement)
   - [Tool Policy](#tool-policy)
 - [Installation](#installation)
+  - [Encrypted Secrets Store](#encrypted-secrets-store)
 - [Usage](#usage)
 - [Development](#development)
 - [Documentation](#documentation)
@@ -1807,6 +1808,139 @@ export AZURE_OPENAI_BASE_URL="https://myresource.openai.azure.com/openai/v1"
 export AZURE_OPENAI_RESOURCE_NAME="myresource"
 export AZURE_OPENAI_API_VERSION="2024-12-01-preview"
 ```
+
+### Encrypted Secrets Store
+
+Lemon includes an encrypted local secrets store for:
+
+- LLM provider keys (`api_key_secret` in provider config)
+- WASM host-side credential injection (`<tool>.capabilities.json`)
+
+Secret values are encrypted at rest (AES-256-GCM), and plaintext is never returned by list/status APIs.
+
+#### 1) Initialize the master key
+
+Preferred (macOS Keychain):
+
+```bash
+mix lemon.secrets.init
+```
+
+Fallback (no keychain): set `LEMON_SECRETS_MASTER_KEY`.
+
+```bash
+# Example: generate a 32-byte base64 key
+export LEMON_SECRETS_MASTER_KEY="$(openssl rand -base64 32)"
+```
+
+Master key resolution order is:
+1. Keychain
+2. `LEMON_SECRETS_MASTER_KEY`
+
+#### 2) Store and manage secrets
+
+```bash
+# Set
+mix lemon.secrets.set llm_openai_api_key "sk-..."
+
+# List metadata only (never plaintext)
+mix lemon.secrets.list
+
+# Check status (key source + count)
+mix lemon.secrets.status
+
+# Delete
+mix lemon.secrets.delete llm_openai_api_key
+```
+
+Optional metadata on set:
+
+```bash
+mix lemon.secrets.set github_api_token "ghp_..." --provider github --expires-at 1735689600000
+```
+
+#### 3) Use secrets for LLM providers
+
+Use `api_key_secret` in `~/.lemon/config.toml`:
+
+```toml
+[providers.openai]
+api_key_secret = "llm_openai_api_key"
+```
+
+Runtime key resolution order is:
+1. Provider env vars (for example `OPENAI_API_KEY`)
+2. Plain `api_key` in config
+3. `api_key_secret` from encrypted store
+4. Default secret name fallback: `llm_<provider>_api_key`
+
+Example fallback names:
+- OpenAI: `llm_openai_api_key`
+- Anthropic: `llm_anthropic_api_key`
+- OpenAI Codex: `llm_openai_codex_api_key`
+
+#### 4) Use secrets for WASM HTTP credentials
+
+WASM tools are discovered from `.lemon/wasm-tools`. For `github_fetch.wasm`, create:
+
+- `.lemon/wasm-tools/github_fetch.wasm`
+- `.lemon/wasm-tools/github_fetch.capabilities.json`
+
+Example capabilities file:
+
+```json
+{
+  "secrets": {
+    "allowed_names": ["github_api_token"]
+  },
+  "http": {
+    "allowlist": [
+      {
+        "host": "api.github.com",
+        "path_prefix": "/",
+        "methods": ["GET"]
+      }
+    ],
+    "credentials": {
+      "github_auth": {
+        "secret_name": "github_api_token",
+        "host_patterns": ["api.github.com"],
+        "location": {
+          "type": "header",
+          "name": "Authorization",
+          "prefix": "Bearer "
+        }
+      }
+    }
+  }
+}
+```
+
+Then store the secret:
+
+```bash
+mix lemon.secrets.set github_api_token "ghp_..."
+```
+
+At runtime, the host injects credentials during `http-request` based on capabilities.
+The secret value is resolved at the host boundary and is not exposed in WASM `execute` params/context.
+If the store lookup fails, Lemon keeps env fallback behavior.
+
+#### 5) Control-plane management methods
+
+Lemon control plane exposes:
+- `secrets.status` (read)
+- `secrets.list` (read)
+- `secrets.exists` (read)
+- `secrets.set` (admin)
+- `secrets.delete` (admin)
+
+`secrets.list`/`secrets.status` return metadata only; plaintext values are never returned.
+
+#### 6) Prompt-boundary hardening for untrusted tool output
+
+Lemon wraps all untrusted tool result text blocks at the pre-LLM boundary.
+This is automatic and idempotent (already wrapped content is not double-wrapped).
 
 ### CLI Runner Configuration (Codex/Claude/Kimi/OpenCode/Pi)
 
