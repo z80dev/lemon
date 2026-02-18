@@ -23,7 +23,6 @@ export async function runBrowserNode(cfg: BrowserNodeConfig): Promise<void> {
     attachOnly: cfg.attachOnly,
   });
   await chrome.start();
-  const page = chrome.getPage();
 
   const { socket, hello } = await LemonSocket.connect(cfg.wsUrl, {
     auth: { token: cfg.token },
@@ -54,7 +53,7 @@ export async function runBrowserNode(cfg: BrowserNodeConfig): Promise<void> {
         }
 
         const result = await withTimeout(
-          () => handleBrowserMethod(page, method, args),
+          () => chrome.withPage((page) => handleBrowserMethod(page, method, args)),
           typeof timeoutMs === 'number' && timeoutMs > 0 ? timeoutMs : 30_000,
         );
 
@@ -89,4 +88,3 @@ async function withTimeout<T>(fn: () => Promise<T>, timeoutMs: number): Promise<
     if (t) clearTimeout(t);
   }
 }
-

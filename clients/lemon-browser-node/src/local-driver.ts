@@ -130,7 +130,6 @@ async function main() {
     attachOnly: config.attachOnly,
   });
   await chrome.start();
-  const page = chrome.getPage();
 
   process.stdin.setEncoding('utf8');
   let buf = '';
@@ -146,7 +145,8 @@ async function main() {
 
       void executeLocalDriverRequest({
         line,
-        invoke: (method, methodArgs) => handleBrowserMethod(page, method, methodArgs),
+        invoke: (method, methodArgs) =>
+          chrome.withPage((page) => handleBrowserMethod(page, method, methodArgs)),
       }).then((response) => {
         writeLine(response);
       });
