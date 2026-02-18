@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useLemonStore } from '../store/useLemonStore';
 
 export function Sidebar() {
@@ -57,13 +57,21 @@ export function Sidebar() {
   );
 
   const providerOptions = useMemo(() => models ?? [], [models]);
+  const fallbackProviderId = useMemo(() => {
+    if (providerOptions.length === 0) return '';
+    const preferredProvider = activeStats?.model.provider;
+    const provider =
+      providerOptions.find((item) => item.id === preferredProvider) ?? providerOptions[0];
+    return provider?.id ?? '';
+  }, [providerOptions, activeStats]);
+  const selectedProviderId = newSession.providerId || fallbackProviderId;
+
   const modelOptions = useMemo(() => {
     if (providerOptions.length === 0) return [];
     const selectedProvider =
-      providerOptions.find((provider) => provider.id === newSession.providerId) ??
-      providerOptions[0];
+      providerOptions.find((provider) => provider.id === selectedProviderId) ?? providerOptions[0];
     return selectedProvider?.models ?? [];
-  }, [providerOptions, newSession.providerId]);
+  }, [providerOptions, selectedProviderId]);
 
   const withNewSessionDefaults = useCallback(
     (current: typeof newSession) => {
@@ -93,21 +101,10 @@ export function Sidebar() {
     },
     [activeRunning, runningList, savedSessions, providerOptions, activeStats]
   );
-
-  useEffect(() => {
-    if (!showNewSession) return;
-    setNewSession((current) => {
-      const next = withNewSessionDefaults(current);
-      if (
-        next.cwd === current.cwd &&
-        next.providerId === current.providerId &&
-        next.modelId === current.modelId
-      ) {
-        return current;
-      }
-      return next;
-    });
-  }, [showNewSession, withNewSessionDefaults]);
+  const resolvedNewSession = useMemo(
+    () => withNewSessionDefaults(newSession),
+    [newSession, withNewSessionDefaults]
+  );
 
   return (
     <aside className="sidebar">
@@ -146,18 +143,18 @@ export function Sidebar() {
               event.preventDefault();
               const modelSpec =
                 providerOptions.length > 0
-                  ? newSession.providerId && newSession.modelId
-                    ? `${newSession.providerId}:${newSession.modelId}`
+                  ? resolvedNewSession.providerId && resolvedNewSession.modelId
+                    ? `${resolvedNewSession.providerId}:${resolvedNewSession.modelId}`
                     : ''
-                  : newSession.modelSpec;
-              setAutoActivateNextSession(newSession.autoActivate);
+                  : resolvedNewSession.modelSpec;
+              setAutoActivateNextSession(resolvedNewSession.autoActivate);
               send({
                 type: 'start_session',
-                cwd: newSession.cwd || undefined,
+                cwd: resolvedNewSession.cwd || undefined,
                 model: modelSpec || undefined,
-                system_prompt: newSession.systemPrompt || undefined,
-                session_file: newSession.sessionFile || undefined,
-                parent_session: newSession.parentSession || undefined,
+                system_prompt: resolvedNewSession.systemPrompt || undefined,
+                session_file: resolvedNewSession.sessionFile || undefined,
+                parent_session: resolvedNewSession.parentSession || undefined,
               });
             }}
           >
@@ -165,7 +162,7 @@ export function Sidebar() {
               CWD
               <input
                 list="cwd-suggestions"
-                value={newSession.cwd}
+                value={resolvedNewSession.cwd}
                 onChange={(event) =>
                   setNewSession((prev) => ({ ...prev, cwd: event.target.value }))
                 }
@@ -184,7 +181,7 @@ export function Sidebar() {
                 <label>
                   Provider
                   <select
-                    value={newSession.providerId}
+                    value={resolvedNewSession.providerId}
                     onChange={(event) => {
                       const providerId = event.target.value;
                       const provider =
@@ -208,7 +205,7 @@ export function Sidebar() {
                 <label>
                   Model
                   <select
-                    value={newSession.modelId}
+                    value={resolvedNewSession.modelId}
                     onChange={(event) =>
                       setNewSession((prev) => ({ ...prev, modelId: event.target.value }))
                     }
@@ -225,7 +222,7 @@ export function Sidebar() {
               <label>
                 Model
                 <input
-                  value={newSession.modelSpec}
+                  value={resolvedNewSession.modelSpec}
                   onChange={(event) =>
                     setNewSession((prev) => ({ ...prev, modelSpec: event.target.value }))
                   }
@@ -237,7 +234,7 @@ export function Sidebar() {
               System Prompt
               <textarea
                 rows={3}
-                value={newSession.systemPrompt}
+                value={resolvedNewSession.systemPrompt}
                 onChange={(event) =>
                   setNewSession((prev) => ({ ...prev, systemPrompt: event.target.value }))
                 }
@@ -248,7 +245,7 @@ export function Sidebar() {
               Session File
               <input
                 list="session-file-suggestions"
-                value={newSession.sessionFile}
+                value={resolvedNewSession.sessionFile}
                 onChange={(event) =>
                   setNewSession((prev) => ({ ...prev, sessionFile: event.target.value }))
                 }
@@ -265,7 +262,7 @@ export function Sidebar() {
             <label>
               Parent Session
               <select
-                value={newSession.parentSession}
+                value={resolvedNewSession.parentSession}
                 onChange={(event) =>
                   setNewSession((prev) => ({ ...prev, parentSession: event.target.value }))
                 }
@@ -281,7 +278,7 @@ export function Sidebar() {
             <label className="checkbox-row">
               <input
                 type="checkbox"
-                checked={newSession.autoActivate}
+                checked={resolvedNewSession.autoActivate}
                 onChange={(event) =>
                   setNewSession((prev) => ({ ...prev, autoActivate: event.target.checked }))
                 }

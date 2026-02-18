@@ -3,7 +3,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { WebSocketServer, WebSocket } from 'ws';
+import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import {
   JsonLineDecoder,
   encodeJsonLine,
@@ -396,14 +396,14 @@ bridge.start((message) => {
   broadcast(message);
 });
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws: WebSocket) => {
   clients.add(ws);
 
   if (lastBridgeStatus) {
     ws.send(JSON.stringify(lastBridgeStatus));
   }
 
-  ws.on('message', (data) => {
+  ws.on('message', (data: RawData) => {
     const text = data.toString();
     let parsed: ClientCommand;
     try {
