@@ -979,9 +979,27 @@ defmodule LemonRouter.RunProcess do
   defp safe_clear_thread_index(_table, _account_id, _chat_id, _thread_id), do: :ok
 
   defp format_run_error(nil), do: "unknown error"
+
+  defp format_run_error({:assistant_error, msg}) when is_binary(msg),
+    do: format_assistant_error(msg)
+
+  defp format_run_error({:assistant_error, reason}), do: "assistant error: #{inspect(reason)}"
   defp format_run_error(e) when is_binary(e), do: e
   defp format_run_error(e) when is_atom(e), do: Atom.to_string(e)
   defp format_run_error(e), do: inspect(e)
+
+  defp format_assistant_error(msg) when is_binary(msg) do
+    down = String.downcase(msg)
+
+    cond do
+      String.contains?(down, "bad_record_mac") or
+          (String.contains?(down, "req.transporterror") and String.contains?(down, "tls_alert")) ->
+        "temporary TLS/network error while contacting the model provider; please retry"
+
+      true ->
+        msg
+    end
+  end
 
   defp maybe_finalize_stream_output(state, %LemonCore.Event{} = event) do
     with %{kind: :channel_peer, channel_id: "telegram"} <-

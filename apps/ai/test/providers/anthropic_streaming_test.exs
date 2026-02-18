@@ -24,6 +24,22 @@ defmodule Ai.Providers.AnthropicStreamingTest do
     "event: #{event}\n" <> "data: #{Jason.encode!(data)}\n\n"
   end
 
+  defp model(base_url \\ "https://example.test") do
+    %Model{
+      id: "claude-test",
+      name: "Claude Test",
+      api: :anthropic_messages,
+      provider: :anthropic,
+      base_url: base_url,
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 10.0, output: 20.0, cache_read: 1.0, cache_write: 2.0},
+      context_window: 100_000,
+      max_tokens: 2048,
+      headers: %{}
+    }
+  end
+
   test "usage cost uses model pricing" do
     body =
       sse_event("message_start", %{
@@ -43,23 +59,9 @@ defmodule Ai.Providers.AnthropicStreamingTest do
       Plug.Conn.send_resp(conn, 200, body)
     end)
 
-    model = %Model{
-      id: "claude-test",
-      name: "Claude Test",
-      api: :anthropic_messages,
-      provider: :anthropic,
-      base_url: "https://example.test",
-      reasoning: false,
-      input: [:text],
-      cost: %ModelCost{input: 10.0, output: 20.0, cache_read: 1.0, cache_write: 2.0},
-      context_window: 100_000,
-      max_tokens: 2048,
-      headers: %{}
-    }
-
     context = Context.new(messages: [%UserMessage{content: "Hi"}])
 
-    {:ok, stream} = Anthropic.stream(model, context, %StreamOptions{api_key: "test-key"})
+    {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{api_key: "test-key"})
 
     assert {:ok, result} = EventStream.result(stream, 1000)
 
@@ -154,5 +156,61 @@ defmodule Ai.Providers.AnthropicStreamingTest do
 
     assert body == expected
     assert {:error, _} = EventStream.result(stream, 1000)
+  end
+
+  test "retries retryable HTTP responses and succeeds" do
+    {:ok, attempts} = Agent.start_link(fn -> 0 end)
+
+    on_exit(fn ->
+      if Process.alive?(attempts), do: Agent.stop(attempts)
+    end)
+
+    body =
+      sse_event("message_start", %{"message" => %{"usage" => %{}}}) <>
+        sse_event("content_block_start", %{"index" => 0, "content_block" => %{"type" => "text"}}) <>
+        sse_event("content_block_delta", %{
+          "index" => 0,
+          "delta" => %{"type" => "text_delta", "text" => "ok"}
+        }) <>
+        sse_event("content_block_stop", %{"index" => 0}) <>
+        sse_event("message_delta", %{"delta" => %{"stop_reason" => "end_turn"}, "usage" => %{}}) <>
+        sse_event("message_stop", %{})
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      attempt = Agent.get_and_update(attempts, fn n -> {n + 1, n + 1} end)
+
+      if attempt == 1 do
+        Plug.Conn.send_resp(conn, 503, "temporary outage")
+      else
+        Plug.Conn.send_resp(conn, 200, body)
+      end
+    end)
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+    {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{api_key: "test-key"})
+
+    assert {:ok, result} = EventStream.result(stream, 2_000)
+    assert result.stop_reason == :stop
+    assert [%TextContent{text: "ok"} | _] = result.content
+    assert Agent.get(attempts, & &1) == 2
+  end
+
+  test "does not retry non-retryable HTTP responses" do
+    {:ok, attempts} = Agent.start_link(fn -> 0 end)
+
+    on_exit(fn ->
+      if Process.alive?(attempts), do: Agent.stop(attempts)
+    end)
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      Agent.update(attempts, &(&1 + 1))
+      Plug.Conn.send_resp(conn, 400, "bad request")
+    end)
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+    {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{api_key: "test-key"})
+
+    assert {:error, _} = EventStream.result(stream, 1_000)
+    assert Agent.get(attempts, & &1) == 1
   end
 end

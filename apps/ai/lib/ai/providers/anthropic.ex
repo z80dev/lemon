@@ -37,6 +37,8 @@ defmodule Ai.Providers.Anthropic do
 
   @api_base_url "https://api.anthropic.com"
   @api_version "2023-06-01"
+  @max_retries 2
+  @base_retry_delay_ms 400
 
   # ============================================================================
   # Provider Callbacks
@@ -124,27 +126,7 @@ defmodule Ai.Providers.Anthropic do
         model: model
       }
 
-      # Use Req with streaming - the into function processes chunks as they arrive
-      # and accumulates state
-      result =
-        Req.post(url,
-          headers: headers,
-          json: body,
-          into: fn {:data, data}, {req, resp} ->
-            debug_log("sse_chunk", data)
-            # Get current accumulated state from response private data, or use initial
-            acc_state = resp.private[:sse_state] || initial_state
-
-            # Process the SSE chunk
-            new_state = process_sse_chunk(data, acc_state)
-
-            # Store updated state in response private data
-            resp = put_in(resp.private[:sse_state], new_state)
-
-            {:cont, {req, resp}}
-          end,
-          receive_timeout: 300_000
-        )
+      result = stream_request_with_retries(url, headers, body, initial_state)
 
       case result do
         {:ok, %Req.Response{status: 200, private: %{sse_state: final_state}}} ->
@@ -198,6 +180,119 @@ defmodule Ai.Providers.Anthropic do
         EventStream.complete(stream, output)
     end
   end
+
+  defp stream_request_with_retries(url, headers, body, initial_state, attempt \\ 0) do
+    chunk_key = {__MODULE__, :chunk_seen, make_ref()}
+    Process.put(chunk_key, false)
+
+    result =
+      Req.post(url,
+        headers: headers,
+        json: body,
+        into: fn {:data, data}, {req, resp} ->
+          Process.put(chunk_key, true)
+          debug_log("sse_chunk", data)
+
+          # Get current accumulated state from response private data, or use initial
+          acc_state = resp.private[:sse_state] || initial_state
+
+          # Process the SSE chunk
+          new_state = process_sse_chunk(data, acc_state)
+
+          # Store updated state in response private data
+          resp = put_in(resp.private[:sse_state], new_state)
+
+          {:cont, {req, resp}}
+        end,
+        receive_timeout: 300_000
+      )
+
+    saw_chunk = Process.get(chunk_key, false)
+    Process.delete(chunk_key)
+
+    case result do
+      {:ok, %Req.Response{status: status}} when status in 200..299 ->
+        result
+
+      {:ok, %Req.Response{status: status}} = response ->
+        if attempt < @max_retries and retryable_http_status?(status) do
+          retry_delay = retry_delay_ms(attempt)
+
+          debug_log("retry_http", %{
+            status: status,
+            attempt: attempt + 1,
+            max_retries: @max_retries,
+            delay_ms: retry_delay
+          })
+
+          Process.sleep(retry_delay)
+          stream_request_with_retries(url, headers, body, initial_state, attempt + 1)
+        else
+          response
+        end
+
+      {:error, reason} = error ->
+        if attempt < @max_retries and not saw_chunk and retryable_transport_error?(reason) do
+          retry_delay = retry_delay_ms(attempt)
+
+          debug_log("retry_transport", %{
+            reason: inspect(reason),
+            attempt: attempt + 1,
+            max_retries: @max_retries,
+            delay_ms: retry_delay
+          })
+
+          Process.sleep(retry_delay)
+          stream_request_with_retries(url, headers, body, initial_state, attempt + 1)
+        else
+          error
+        end
+    end
+  end
+
+  defp retry_delay_ms(attempt) when is_integer(attempt) and attempt >= 0 do
+    (@base_retry_delay_ms * :math.pow(2, attempt)) |> trunc()
+  end
+
+  defp retryable_http_status?(status) when is_integer(status) do
+    status in [408, 409, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524]
+  end
+
+  defp retryable_http_status?(_), do: false
+
+  defp retryable_transport_error?(%Req.TransportError{reason: reason}) do
+    retryable_transport_reason?(reason)
+  end
+
+  defp retryable_transport_error?(reason), do: retryable_transport_reason?(reason)
+
+  defp retryable_transport_reason?(reason)
+       when reason in [
+              :timeout,
+              :closed,
+              :econnrefused,
+              :econnreset,
+              :enetdown,
+              :enetwork_unreachable,
+              :nxdomain,
+              :ehostunreach,
+              :unreachable
+            ],
+       do: true
+
+  defp retryable_transport_reason?({:tls_alert, {_alert, _detail}}), do: true
+  defp retryable_transport_reason?({:failed_connect, _}), do: true
+  defp retryable_transport_reason?({:closed, _}), do: true
+
+  defp retryable_transport_reason?(reason) when is_tuple(reason) do
+    reason_text = reason |> inspect() |> String.downcase()
+
+    String.contains?(reason_text, "timeout") or
+      String.contains?(reason_text, "temporarily unavailable") or
+      String.contains?(reason_text, "bad_record_mac")
+  end
+
+  defp retryable_transport_reason?(_), do: false
 
   # ============================================================================
   # SSE Parsing
