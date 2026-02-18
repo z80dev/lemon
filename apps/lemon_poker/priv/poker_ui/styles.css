@@ -1,0 +1,1160 @@
+/* ── Lemon Poker – Elite Spectator UI ── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap');
+
+:root {
+  --bg-deep: #060a13;
+  --bg-main: #0c1220;
+  --bg-panel: rgba(14, 21, 38, 0.82);
+  --glass: rgba(255, 255, 255, 0.04);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --ink: #e4e8f1;
+  --ink-muted: #6b7a94;
+  --ink-dim: #3d4c63;
+  --accent: #22c55e;
+  --accent-glow: rgba(34, 197, 94, 0.35);
+  --red: #ef4444;
+  --amber: #f59e0b;
+  --felt-center: #1a7a52;
+  --felt-edge: #0d4a30;
+  --felt-dark: #082e1e;
+  --card-bg: #ffffff;
+  --card-shadow: rgba(0, 0, 0, 0.35);
+  --suit-red: #dc2626;
+  --suit-black: #1e293b;
+  --drawer-w: 400px;
+  --header-h: 56px;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  color: var(--ink);
+  background: linear-gradient(165deg, var(--bg-deep) 0%, var(--bg-main) 50%, #0a0f1a 100%);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── HEADER ── */
+.header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--header-h);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  background: rgba(10, 14, 23, 0.85);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--glass-border);
+  z-index: 100;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.logo {
+  font-size: 1.1rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  background: linear-gradient(135deg, #22c55e, #4ade80);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.match-info {
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border: 1px solid var(--glass-border);
+  background: var(--glass);
+  color: var(--ink-muted);
+  transition: all var(--transition);
+}
+
+.pill.live {
+  background: rgba(34, 197, 94, 0.15);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: #4ade80;
+}
+
+.pill.live::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #22c55e;
+  animation: pulse-dot 1.8s ease-in-out infinite;
+}
+
+.pill.warn {
+  background: rgba(245, 158, 11, 0.15);
+  border-color: rgba(245, 158, 11, 0.3);
+  color: #fbbf24;
+}
+
+.pill.error {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.25);
+  color: #f87171;
+}
+
+.admin-toggle {
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--glass-border);
+  background: var(--glass);
+  color: var(--ink-muted);
+  cursor: pointer;
+  font-size: 1.1rem;
+  transition: all var(--transition);
+}
+
+.admin-toggle:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--ink);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.drawer-open .admin-toggle {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+/* ── MAIN AREA ── */
+.main {
+  position: fixed;
+  top: var(--header-h);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  transition: right var(--transition);
+}
+
+.drawer-open .main {
+  right: var(--drawer-w);
+}
+
+/* ── POKER TABLE AREA ── */
+.table-area {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+  padding: 20px;
+}
+
+.poker-table {
+  position: relative;
+  width: min(820px, 90vw);
+  height: min(440px, 52vh);
+  border-radius: 50%;
+  background: radial-gradient(ellipse at 50% 42%, var(--felt-center) 0%, var(--felt-edge) 55%, var(--felt-dark) 100%);
+  border: 6px solid #1a3a28;
+  box-shadow:
+    0 0 0 3px rgba(26, 58, 40, 0.6),
+    0 0 60px rgba(13, 74, 48, 0.3),
+    inset 0 0 80px rgba(0, 0, 0, 0.25),
+    inset 0 -10px 40px rgba(0, 0, 0, 0.15);
+}
+
+.poker-table::before {
+  content: '';
+  position: absolute;
+  inset: 12px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.06);
+  pointer-events: none;
+}
+
+/* ── TABLE CENTER (board + pot) ── */
+.table-center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  z-index: 5;
+}
+
+.pot-display {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #fbbf24;
+  font-family: 'JetBrains Mono', monospace;
+  transition: all 0.2s ease;
+}
+
+.board-cards {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  min-height: 58px;
+  align-items: center;
+}
+
+.board-label {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: rgba(255, 255, 255, 0.3);
+  font-weight: 600;
+}
+
+/* ── CARDS ── */
+.card {
+  width: 40px;
+  height: 56px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  background: var(--card-bg);
+  border-radius: 5px;
+  box-shadow: 0 2px 8px var(--card-shadow), 0 0 1px rgba(0, 0, 0, 0.2);
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  line-height: 1;
+  position: relative;
+  /* NO default animation — prevents flicker on re-render */
+}
+
+.card .rank {
+  font-size: 0.85rem;
+}
+
+.card .suit {
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+.card.red {
+  color: var(--suit-red);
+}
+
+.card.black {
+  color: var(--suit-black);
+}
+
+/* Deal animation — only added via JS class, removed after animation */
+.card-new {
+  animation: card-deal 0.35s ease backwards;
+}
+
+.card-back {
+  width: 40px;
+  height: 56px;
+  border-radius: 5px;
+  background: linear-gradient(135deg, #1e40af, #1e3a8a);
+  border: 2px solid #2563eb;
+  box-shadow: 0 2px 8px var(--card-shadow);
+  position: relative;
+  overflow: hidden;
+}
+
+.card-back::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: repeating-linear-gradient(45deg,
+      transparent,
+      transparent 3px,
+      rgba(255, 255, 255, 0.03) 3px,
+      rgba(255, 255, 255, 0.03) 6px);
+}
+
+.card-sm {
+  width: 32px;
+  height: 44px;
+}
+
+.card-sm .rank {
+  font-size: 0.72rem;
+}
+
+.card-sm .suit {
+  font-size: 0.62rem;
+}
+
+.card-back.card-sm {
+  width: 32px;
+  height: 44px;
+}
+
+/* ── POKER CHIPS ── */
+.chip-stack {
+  display: inline-flex;
+  flex-direction: column-reverse;
+  align-items: center;
+  position: relative;
+  height: 24px;
+  width: 18px;
+  flex-shrink: 0;
+}
+
+.chip-stack-pot {
+  height: 28px;
+  width: 22px;
+}
+
+.chip-disc {
+  position: absolute;
+  width: 18px;
+  height: 5px;
+  border-radius: 50%;
+  bottom: calc(var(--i) * 3px);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    inset 0 -1px 1px rgba(0, 0, 0, 0.2),
+    inset 0 1px 1px rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(0, 0, 0, 0.2);
+}
+
+.chip-stack-pot .chip-disc {
+  width: 22px;
+  height: 6px;
+  bottom: calc(var(--i) * 4px);
+}
+
+.chip-gold {
+  background: linear-gradient(to bottom, #fcd34d, #f59e0b);
+  border-color: #d97706;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    inset 0 -1px 1px rgba(0, 0, 0, 0.15),
+    inset 0 1px 1px rgba(255, 255, 255, 0.35);
+}
+
+.chip-black {
+  background: linear-gradient(to bottom, #4a5568, #1a202c);
+  border-color: #0d1117;
+}
+
+.chip-blue {
+  background: linear-gradient(to bottom, #60a5fa, #2563eb);
+  border-color: #1d4ed8;
+}
+
+.chip-green {
+  background: linear-gradient(to bottom, #4ade80, #16a34a);
+  border-color: #15803d;
+}
+
+.chip-red {
+  background: linear-gradient(to bottom, #f87171, #dc2626);
+  border-color: #b91c1c;
+}
+
+.chip-white {
+  background: linear-gradient(to bottom, #f1f5f9, #cbd5e1);
+  border-color: #94a3b8;
+}
+
+/* Stripe edge detail on chips */
+.chip-disc::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: repeating-conic-gradient(transparent 0deg,
+      transparent 15deg,
+      rgba(255, 255, 255, 0.12) 15deg,
+      rgba(255, 255, 255, 0.12) 18deg);
+}
+
+/* Stack chip icon for seat display */
+.stack-chip-icon {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #fbbf24, #f59e0b);
+  border: 1.5px solid #d97706;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  flex-shrink: 0;
+}
+
+/* Bet chip icon */
+.bet-chip-icon {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #60a5fa, #3b82f6);
+  border: 1px solid #2563eb;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  margin-right: 4px;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+/* ── SEATS ── */
+.seat {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  transform: translate(-50%, -50%);
+  z-index: 10;
+  transition: opacity 0.3s ease;
+}
+
+.seat-chip {
+  width: 72px;
+  padding: 8px 4px 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  border-radius: var(--radius);
+  background: rgba(10, 16, 30, 0.85);
+  backdrop-filter: blur(12px);
+  border: 1.5px solid rgba(255, 255, 255, 0.10);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  transition: border-color 0.3s ease, box-shadow 0.3s ease, opacity 0.3s ease;
+}
+
+.seat-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: #fff;
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  flex-shrink: 0;
+}
+
+.seat-name {
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: var(--ink);
+  text-align: center;
+  max-width: 68px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seat-stack-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  justify-content: center;
+}
+
+.seat-stack {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: #fbbf24;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.seat-status {
+  font-size: 0.58rem;
+  font-weight: 500;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.seat-status.folded {
+  color: #ef4444;
+  opacity: 0.7;
+}
+
+.seat-status.all-in {
+  color: #f59e0b;
+}
+
+.seat-cards {
+  display: flex;
+  gap: 3px;
+  margin-top: -2px;
+}
+
+.seat.acting .seat-chip {
+  border-color: rgba(34, 197, 94, 0.5);
+  box-shadow: 0 0 20px var(--accent-glow), 0 4px 20px rgba(0, 0, 0, 0.4);
+  animation: acting-pulse 2s ease-in-out infinite;
+}
+
+.seat.folded .seat-chip {
+  opacity: 0.45;
+}
+
+.seat-bet {
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: #94a3b8;
+  font-family: 'JetBrains Mono', monospace;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+
+/* seat avatar colors */
+.seat-avatar.c0 {
+  background: linear-gradient(135deg, #6366f1, #4f46e5);
+}
+
+.seat-avatar.c1 {
+  background: linear-gradient(135deg, #ec4899, #db2777);
+}
+
+.seat-avatar.c2 {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+}
+
+.seat-avatar.c3 {
+  background: linear-gradient(135deg, #14b8a6, #0d9488);
+}
+
+.seat-avatar.c4 {
+  background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+}
+
+.seat-avatar.c5 {
+  background: linear-gradient(135deg, #f43f5e, #e11d48);
+}
+
+.seat-avatar.c6 {
+  background: linear-gradient(135deg, #06b6d4, #0891b2);
+}
+
+.seat-avatar.c7 {
+  background: linear-gradient(135deg, #84cc16, #65a30d);
+}
+
+.seat-avatar.c8 {
+  background: linear-gradient(135deg, #f97316, #ea580c);
+}
+
+/* ── BOTTOM FEEDS ── */
+.feeds {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--glass-border);
+  border-top: 1px solid var(--glass-border);
+  max-height: 220px;
+}
+
+.feed-panel {
+  background: var(--bg-panel);
+  backdrop-filter: blur(16px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.feed-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--glass-border);
+  flex-shrink: 0;
+}
+
+.feed-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-muted);
+}
+
+.feed-count {
+  font-size: 0.62rem;
+  color: var(--ink-dim);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.feed-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 16px;
+  scroll-behavior: smooth;
+}
+
+.feed-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+
+.feed-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.feed-scroll::-webkit-scrollbar-thumb {
+  background: var(--glass-border);
+  border-radius: 4px;
+}
+
+.feed-item {
+  display: flex;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--ink);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+  animation: feed-in 0.25s ease;
+}
+
+.feed-item .ts {
+  color: var(--ink-dim);
+  font-size: 0.68rem;
+  font-family: 'JetBrains Mono', monospace;
+  flex-shrink: 0;
+  min-width: 58px;
+}
+
+.feed-item.event-hand_started {
+  color: #4ade80;
+}
+
+.feed-item.event-hand_finished {
+  color: #fbbf24;
+}
+
+.feed-item.event-street_changed {
+  color: #60a5fa;
+}
+
+.feed-item.event-action_taken {
+  color: var(--ink);
+}
+
+.feed-item.event-match_started {
+  color: #22c55e;
+  font-weight: 600;
+}
+
+.feed-item.event-match_completed {
+  color: #a78bfa;
+  font-weight: 600;
+}
+
+.feed-item.event-match_error {
+  color: #f87171;
+  font-weight: 600;
+}
+
+.talk-item {
+  display: flex;
+  gap: 8px;
+  padding: 5px 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  animation: feed-in 0.25s ease;
+}
+
+.talk-item .ts {
+  color: var(--ink-dim);
+  font-size: 0.68rem;
+  font-family: 'JetBrains Mono', monospace;
+  flex-shrink: 0;
+  min-width: 58px;
+}
+
+.talk-item .actor {
+  font-weight: 700;
+  color: #60a5fa;
+  flex-shrink: 0;
+}
+
+.talk-item .text {
+  color: var(--ink);
+}
+
+/* ── ADMIN DRAWER ── */
+.admin-drawer {
+  position: fixed;
+  top: var(--header-h);
+  right: 0;
+  bottom: 0;
+  width: var(--drawer-w);
+  background: rgba(8, 12, 22, 0.95);
+  backdrop-filter: blur(24px);
+  border-left: 1px solid var(--glass-border);
+  z-index: 90;
+  transform: translateX(100%);
+  transition: transform var(--transition);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.drawer-open .admin-drawer {
+  transform: translateX(0);
+}
+
+.drawer-header {
+  padding: 20px 20px 12px;
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.drawer-header h2 {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--ink);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.drawer-body {
+  padding: 16px 20px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.drawer-body::-webkit-scrollbar {
+  width: 4px;
+}
+
+.drawer-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.drawer-body::-webkit-scrollbar-thumb {
+  background: var(--glass-border);
+  border-radius: 4px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.form-group.wide {
+  grid-column: span 2;
+}
+
+.form-group label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.form-group input[type="text"],
+.form-group input[type="number"] {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-family: 'JetBrains Mono', monospace;
+  outline: none;
+  transition: border-color var(--transition), background var(--transition);
+}
+
+.form-group input:focus {
+  border-color: rgba(34, 197, 94, 0.4);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.form-group.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  grid-column: span 2;
+}
+
+.form-group.checkbox label {
+  text-transform: none;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.form-group.checkbox input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+}
+
+.drawer-actions {
+  display: flex;
+  gap: 8px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--glass-border);
+  flex-wrap: wrap;
+}
+
+.btn {
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--glass-border);
+  background: var(--glass);
+  color: var(--ink);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition);
+  font-family: 'Inter', sans-serif;
+}
+
+.btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.btn.primary {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  border-color: #16a34a;
+  color: #fff;
+  box-shadow: 0 2px 12px rgba(34, 197, 94, 0.25);
+}
+
+.btn.primary:hover {
+  background: linear-gradient(135deg, #4ade80, #22c55e);
+  box-shadow: 0 4px 20px rgba(34, 197, 94, 0.35);
+}
+
+.btn.danger {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #f87171;
+}
+
+.btn.danger:hover {
+  background: rgba(239, 68, 68, 0.25);
+}
+
+/* ── TALK FORM (in drawer) ── */
+.talk-section {
+  padding: 16px 20px;
+  border-top: 1px solid var(--glass-border);
+}
+
+.talk-section h3 {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 10px;
+}
+
+.talk-form-grid {
+  display: grid;
+  grid-template-columns: 60px 1fr;
+  gap: 8px;
+}
+
+.talk-form-grid input {
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink);
+  font-size: 0.8rem;
+  font-family: 'JetBrains Mono', monospace;
+  outline: none;
+}
+
+.talk-form-grid input:focus {
+  border-color: rgba(34, 197, 94, 0.4);
+}
+
+.talk-msg-row {
+  grid-column: span 2;
+  display: flex;
+  gap: 8px;
+}
+
+.talk-msg-row input {
+  flex: 1;
+}
+
+/* ── IDLE OVERLAY ── */
+.idle-overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  z-index: 20;
+  text-align: center;
+}
+
+.idle-overlay .idle-icon {
+  font-size: 3rem;
+  opacity: 0.3;
+  animation: float 3s ease-in-out infinite;
+}
+
+.idle-overlay .idle-text {
+  font-size: 0.9rem;
+  color: var(--ink-muted);
+  font-weight: 500;
+}
+
+.idle-overlay .idle-hint {
+  font-size: 0.75rem;
+  color: var(--ink-dim);
+}
+
+/* ── WINNER TOAST ── */
+.winner-toast {
+  position: fixed;
+  top: calc(var(--header-h) + 16px);
+  left: 50%;
+  transform: translateX(-50%) translateY(-20px);
+  padding: 10px 24px;
+  border-radius: var(--radius);
+  background: rgba(34, 197, 94, 0.15);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  color: #4ade80;
+  font-size: 0.85rem;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+  z-index: 200;
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.4s ease;
+}
+
+.winner-toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ── HAND INDEX BADGE ── */
+.hand-badge {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 14px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--ink-muted);
+  font-family: 'JetBrains Mono', monospace;
+  z-index: 5;
+}
+
+/* ── ANIMATIONS ── */
+@keyframes pulse-dot {
+
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.4;
+    transform: scale(0.8);
+  }
+}
+
+@keyframes acting-pulse {
+
+  0%,
+  100% {
+    box-shadow: 0 0 15px var(--accent-glow), 0 4px 20px rgba(0, 0, 0, 0.4);
+  }
+
+  50% {
+    box-shadow: 0 0 30px var(--accent-glow), 0 0 50px rgba(34, 197, 94, 0.15), 0 4px 20px rgba(0, 0, 0, 0.4);
+  }
+}
+
+@keyframes feed-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes float {
+
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes card-deal {
+  from {
+    opacity: 0;
+    transform: scale(0.7) translateY(-10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* Note: .card NO LONGER has animation by default.
+   Animation is applied via .card-new class only when new cards appear. */
+
+/* ── RESPONSIVE ── */
+@media (max-width: 900px) {
+  :root {
+    --drawer-w: 320px;
+  }
+
+  .feeds {
+    grid-template-columns: 1fr;
+    max-height: 180px;
+  }
+
+  .poker-table {
+    width: min(95vw, 600px);
+    height: min(48vh, 340px);
+  }
+
+  .seat-chip {
+    width: 60px;
+    padding: 6px 3px 8px;
+  }
+
+  .seat-avatar {
+    width: 26px;
+    height: 26px;
+    font-size: 0.62rem;
+  }
+
+  .seat-name {
+    font-size: 0.56rem;
+  }
+
+  .card-sm {
+    width: 26px;
+    height: 36px;
+  }
+
+  .card-sm .rank {
+    font-size: 0.6rem;
+  }
+
+  .card-sm .suit {
+    font-size: 0.5rem;
+  }
+
+  .chip-disc {
+    width: 14px;
+    height: 4px;
+  }
+
+  .chip-stack-pot .chip-disc {
+    width: 18px;
+    height: 5px;
+  }
+}
+
+@media (max-width: 600px) {
+  :root {
+    --drawer-w: 100vw;
+  }
+
+  .poker-table {
+    width: 96vw;
+    height: 42vh;
+  }
+
+  .header {
+    padding: 0 12px;
+  }
+
+  .match-info {
+    display: none;
+  }
+}

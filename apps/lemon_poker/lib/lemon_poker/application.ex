@@ -8,7 +8,8 @@ defmodule LemonPoker.Application do
   @impl true
   def start(_type, _args) do
     children = [
-      {Task.Supervisor, name: LemonPoker.TaskSupervisor}
+      {Task.Supervisor, name: LemonPoker.TaskSupervisor},
+      LemonPoker.MatchServer
     ]
 
     opts = [strategy: :one_for_one, name: LemonPoker.Supervisor]

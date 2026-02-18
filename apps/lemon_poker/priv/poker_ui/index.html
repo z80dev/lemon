@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lemon Poker Live</title>
+  <meta name="description" content="Live spectator and control panel for AI agent poker matches." />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+
+<body>
+  <!-- ── HEADER ── -->
+  <header class="header">
+    <div class="header-left">
+      <span class="logo">🍋 Lemon Poker</span>
+      <span id="match-info" class="match-info"></span>
+    </div>
+    <div class="header-right">
+      <span id="status-pill" class="pill">idle</span>
+      <span id="ws-pill" class="pill">ws</span>
+      <button id="admin-toggle" class="admin-toggle" title="Admin Panel">⚙</button>
+    </div>
+  </header>
+
+  <!-- ── MAIN CONTENT ── -->
+  <div class="main">
+    <!-- Table Area -->
+    <div class="table-area">
+      <div class="poker-table" id="poker-table">
+        <div id="hand-badge" class="hand-badge" style="display:none;"></div>
+        <div class="table-center">
+          <div id="pot-display" class="pot-display" style="display:none;">
+            <span id="pot-chips"></span>
+            <span id="pot-amount">0</span>
+          </div>
+          <div id="board-cards" class="board-cards"></div>
+          <div id="board-label" class="board-label"></div>
+        </div>
+        <!-- Seats injected here by JS -->
+      </div>
+
+      <!-- Idle overlay -->
+      <div id="idle-overlay" class="idle-overlay">
+        <div class="idle-icon">🃏</div>
+        <div class="idle-text">Waiting for a match to begin</div>
+        <div class="idle-hint">Open the admin panel (⚙) to configure and start a match</div>
+      </div>
+    </div>
+
+    <!-- Feeds -->
+    <div class="feeds">
+      <div class="feed-panel">
+        <div class="feed-header">
+          <span class="feed-title">Action Feed</span>
+          <span id="action-count" class="feed-count">0</span>
+        </div>
+        <div id="action-feed" class="feed-scroll"></div>
+      </div>
+      <div class="feed-panel">
+        <div class="feed-header">
+          <span class="feed-title">Table Talk</span>
+          <span id="talk-count" class="feed-count">0</span>
+        </div>
+        <div id="talk-feed" class="feed-scroll"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── ADMIN DRAWER ── -->
+  <aside class="admin-drawer">
+    <div class="drawer-header">
+      <h2>Match Controls</h2>
+    </div>
+    <form id="start-form" class="drawer-body">
+      <div class="form-grid">
+        <div class="form-group">
+          <label for="f-players">Players (2-9)</label>
+          <input id="f-players" name="players" type="number" min="2" max="9" value="6" />
+        </div>
+        <div class="form-group">
+          <label for="f-hands">Hands</label>
+          <input id="f-hands" name="hands" type="number" min="1" value="20" />
+        </div>
+        <div class="form-group">
+          <label for="f-stack">Stack</label>
+          <input id="f-stack" name="stack" type="number" min="1" value="1000" />
+        </div>
+        <div class="form-group">
+          <label for="f-sb">Small Blind</label>
+          <input id="f-sb" name="smallBlind" type="number" min="1" value="50" />
+        </div>
+        <div class="form-group">
+          <label for="f-bb">Big Blind</label>
+          <input id="f-bb" name="bigBlind" type="number" min="1" value="100" />
+        </div>
+        <div class="form-group">
+          <label for="f-agent">Agent Profile</label>
+          <input id="f-agent" name="agentId" type="text" value="default" />
+        </div>
+        <div class="form-group">
+          <label for="f-seed">Seed</label>
+          <input id="f-seed" name="seed" type="text" placeholder="random" />
+        </div>
+        <div class="form-group">
+          <label for="f-timeout">Timeout ms</label>
+          <input id="f-timeout" name="timeoutMs" type="number" min="1000" value="90000" />
+        </div>
+        <div class="form-group">
+          <label for="f-maxdec">Max Decisions</label>
+          <input id="f-maxdec" name="maxDecisions" type="number" min="1" value="200" />
+        </div>
+        <div class="form-group">
+          <label for="f-tableid">Table ID</label>
+          <input id="f-tableid" name="tableId" type="text" placeholder="auto" />
+        </div>
+        <div class="form-group wide">
+          <label for="f-agentids">Per-seat Agent IDs (csv)</label>
+          <input id="f-agentids" name="playerAgentIds" type="text" placeholder="default,default,…" />
+        </div>
+        <div class="form-group wide">
+          <label for="f-labels">Per-seat Labels (csv)</label>
+          <input id="f-labels" name="playerLabels" type="text" placeholder="agent-1,agent-2,…" />
+        </div>
+        <div class="form-group wide">
+          <label for="f-sysprompt">System Prompt Override</label>
+          <input id="f-sysprompt" name="systemPrompt" type="text" placeholder="optional" />
+        </div>
+        <div class="form-group checkbox">
+          <input id="f-tabletalk" name="tableTalkEnabled" type="checkbox" checked />
+          <label for="f-tabletalk">Enable Table Talk</label>
+        </div>
+      </div>
+    </form>
+    <div class="drawer-actions">
+      <button type="submit" form="start-form" class="btn primary">Start Match</button>
+      <button type="button" id="pause-btn" class="btn">Pause</button>
+      <button type="button" id="resume-btn" class="btn">Resume</button>
+      <button type="button" id="stop-btn" class="btn danger">Stop</button>
+    </div>
+    <div class="talk-section">
+      <h3>Manual Table Talk</h3>
+      <form id="talk-form" class="talk-form-grid">
+        <input name="seat" type="number" min="1" max="9" placeholder="seat" required />
+        <input name="actor" type="text" placeholder="actor" />
+        <div class="talk-msg-row">
+          <input name="text" type="text" placeholder="Send a message…" required />
+          <button type="submit" class="btn">Send</button>
+        </div>
+      </form>
+    </div>
+  </aside>
+
+  <!-- Winner Toast -->
+  <div id="winner-toast" class="winner-toast"></div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+
+</html>

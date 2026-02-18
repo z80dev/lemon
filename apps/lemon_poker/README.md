@@ -31,6 +31,50 @@ mix lemon_poker.play --players 6 --hands 10
 By default this runs 2 `default` profile agent sessions. Set `--players N` for
 `N` seats (`2..9`), and it prints each table action as it happens.
 
+Poker tasks run with runtime overrides that disable Telegram transport and SMS
+webhooks in that process, so they do not contend with an already-running
+`lemon_gateway`.
+
+They also run a startup assertion and fail fast if Telegram transport or SMS
+webhook are unexpectedly active.
+
+By default, poker runtime uses the canonical Lemon store (`~/.lemon/store`),
+so provider API keys from Lemon secrets are available in poker agent runs.
+
+If you want a fully isolated poker store, set:
+
+```bash
+LEMON_POKER_ISOLATE_STORE=true
+```
+
+Optional path override for isolated mode:
+
+```bash
+LEMON_POKER_STORE_PATH=~/.lemon/poker-store
+```
+
+## Run The Browser UI
+
+```bash
+cd /Users/z80/dev/lemon
+mix lemon_poker.server --port 4100
+```
+
+Then open [http://127.0.0.1:4100](http://127.0.0.1:4100).
+
+What you get:
+
+- Live table visualization (seats, stacks, board, pot, acting seat)
+- Real-time action feed and table-talk feed
+- Match controls (start/pause/resume/stop)
+- Runtime config from the browser (`players`, `hands`, blinds, stack, profile, etc.)
+- WebSocket streaming (`/ws`) and JSON control APIs (`/api/*`)
+
+Table-talk policy:
+
+- During an active hand, player table-talk that appears to reveal hole cards
+  (ranks/suits) is blocked, even if the player has folded.
+
 ## Quick Usage
 
 ```elixir

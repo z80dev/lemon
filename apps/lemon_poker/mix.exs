@@ -26,7 +26,10 @@ defmodule LemonPoker.MixProject do
   defp deps do
     [
       {:lemon_core, in_umbrella: true},
-      {:lemon_router, in_umbrella: true}
+      {:lemon_router, in_umbrella: true},
+      {:bandit, "~> 1.0"},
+      {:plug, "~> 1.18"},
+      {:websock_adapter, "~> 0.5"}
     ]
   end
 end

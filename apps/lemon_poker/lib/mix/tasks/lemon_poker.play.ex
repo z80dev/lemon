@@ -30,11 +30,17 @@ defmodule Mix.Tasks.LemonPoker.Play do
 
   @impl true
   def run(args) do
-    Application.put_env(:lemon_control_plane, :port, 0)
-    Application.put_env(:lemon_gateway, :health_port, 0)
-    Application.put_env(:lemon_router, :health_port, 0)
+    LemonPoker.RuntimeConfig.apply_for_local_poker!()
 
-    Mix.Task.run("app.start")
+    case Application.ensure_all_started(:lemon_poker) do
+      {:ok, _apps} ->
+        :ok
+
+      {:error, {app, reason}} ->
+        Mix.raise("Failed to start #{app}: #{inspect(reason)}")
+    end
+
+    LemonPoker.RuntimeConfig.assert_isolated_runtime!()
 
     {opts, _rest, invalid} = OptionParser.parse(args, strict: @switches, aliases: @aliases)
 
