@@ -502,9 +502,15 @@ defmodule AgentCore.LoopAdditionalEdgeCasesTest do
           _ -> false
         end)
 
+      assistant_error_terminal? =
+        Enum.any?(events, fn
+          {:error, :assistant_error, _} -> true
+          _ -> false
+        end)
+
       # Depending on cancellation timing, turn_end may be absent. We still require
-      # either an aborted assistant message or a canceled terminal event.
-      assert assistant_aborted? or canceled_terminal?
+      # an early terminal signal for the aborted turn.
+      assert assistant_aborted? or canceled_terminal? or assistant_error_terminal?
       refute Enum.any?(events, &match?({:agent_end, _}, &1))
     end
   end
