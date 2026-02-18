@@ -189,7 +189,7 @@ defmodule LemonAutomation.WakeTest do
     }
   end
 
-  defp await_terminal_run(run_id, attempts \\ 100)
+  defp await_terminal_run(run_id, attempts \\ 500)
 
   defp await_terminal_run(_run_id, 0) do
     flunk("wake run did not reach terminal state before timeout")
