@@ -41,12 +41,15 @@ defmodule CodingAgent.Session do
   @prompt_defer_ms 10
   @reset_abort_wait_ms 5_000
   @task_supervisor CodingAgent.TaskSupervisor
+  @secret_exists_target "__lemon.secret.exists"
+  @secret_resolve_target "__lemon.secret.resolve"
 
   alias AgentCore.Types.AgentTool
   alias CodingAgent.Config
   alias CodingAgent.ExtensionLifecycle
   alias CodingAgent.Extensions
   alias CodingAgent.ResourceLoader
+  alias CodingAgent.Security.UntrustedToolBoundary
   alias CodingAgent.Session.EventHandler
   alias CodingAgent.Workspace
   alias CodingAgent.Wasm.Config, as: WasmConfig
@@ -89,6 +92,7 @@ defmodule CodingAgent.Session do
     :register_session,
     :session_registry,
     :convert_to_llm,
+    :transform_context,
     :tool_policy,
     :approval_context,
     :extensions,
@@ -137,6 +141,8 @@ defmodule CodingAgent.Session do
           register_session: boolean(),
           session_registry: atom(),
           convert_to_llm: (list() -> list()),
+          transform_context: (list(), reference() | nil ->
+                                list() | {:ok, list()} | {:error, term()}),
           tool_policy: map() | nil,
           approval_context: map() | nil,
           extensions: [module()],
@@ -621,6 +627,7 @@ defmodule CodingAgent.Session do
 
     # Create the convert_to_llm function
     convert_to_llm = &CodingAgent.Messages.to_llm/1
+    transform_context = build_transform_context(Keyword.get(opts, :transform_context))
 
     # Start the AgentCore.Agent
     get_api_key = Keyword.get(opts, :get_api_key) || build_get_api_key(settings_manager)
@@ -640,6 +647,7 @@ defmodule CodingAgent.Session do
         convert_to_llm: convert_to_llm,
         stream_fn: Keyword.get(opts, :stream_fn),
         stream_options: Keyword.get(opts, :stream_options),
+        transform_context: transform_context,
         get_api_key: get_api_key,
         session_id: session_manager.header.id,
         name: AgentCore.AgentRegistry.via(agent_registry_key)
@@ -683,6 +691,7 @@ defmodule CodingAgent.Session do
       register_session: register_session,
       session_registry: session_registry,
       convert_to_llm: convert_to_llm,
+      transform_context: transform_context,
       tool_policy: tool_policy,
       approval_context: approval_context,
       extensions: extensions,
@@ -863,26 +872,35 @@ defmodule CodingAgent.Session do
 
   def handle_call({:wasm_host_tool_invoke, tool_name, params_json}, _from, state) do
     result =
-      case find_host_tool(state, tool_name) do
-        nil ->
-          {:error, :tool_not_found}
+      case maybe_handle_reserved_host_target(tool_name, params_json) do
+        {:ok, payload} ->
+          {:ok, payload}
 
-        tool ->
-          params = decode_wasm_params(params_json)
-          call_id = "wasm_host_#{System.unique_integer([:positive, :monotonic])}"
+        {:error, reason} ->
+          {:error, reason}
 
-          case tool.execute.(call_id, params, nil, nil) do
-            %AgentCore.Types.AgentToolResult{} = tool_result ->
-              {:ok, encode_wasm_host_output(tool_result)}
+        :not_reserved ->
+          case find_host_tool(state, tool_name) do
+            nil ->
+              {:error, :tool_not_found}
 
-            {:ok, %AgentCore.Types.AgentToolResult{} = tool_result} ->
-              {:ok, encode_wasm_host_output(tool_result)}
+            tool ->
+              params = decode_wasm_params(params_json)
+              call_id = "wasm_host_#{System.unique_integer([:positive, :monotonic])}"
 
-            {:error, reason} ->
-              {:error, reason}
+              case tool.execute.(call_id, params, nil, nil) do
+                %AgentCore.Types.AgentToolResult{} = tool_result ->
+                  {:ok, encode_wasm_host_output(tool_result)}
 
-            other ->
-              {:error, {:invalid_host_tool_result, other}}
+                {:ok, %AgentCore.Types.AgentToolResult{} = tool_result} ->
+                  {:ok, encode_wasm_host_output(tool_result)}
+
+                {:error, reason} ->
+                  {:error, reason}
+
+                other ->
+                  {:error, {:invalid_host_tool_result, other}}
+              end
           end
       end
 
@@ -1662,17 +1680,127 @@ defmodule CodingAgent.Session do
     end
   end
 
+  defp build_transform_context(nil), do: &UntrustedToolBoundary.transform/2
+
+  defp build_transform_context(transform_fn) when is_function(transform_fn, 2) do
+    fn messages, signal ->
+      with {:ok, wrapped} <-
+             normalize_transform_result(UntrustedToolBoundary.transform(messages, signal)),
+           {:ok, transformed} <- normalize_transform_result(transform_fn.(wrapped, signal)) do
+        {:ok, transformed}
+      end
+    end
+  end
+
+  defp normalize_transform_result({:ok, transformed}) when is_list(transformed),
+    do: {:ok, transformed}
+
+  defp normalize_transform_result({:error, reason}), do: {:error, reason}
+  defp normalize_transform_result(transformed) when is_list(transformed), do: {:ok, transformed}
+  defp normalize_transform_result(_), do: {:error, :invalid_transform_result}
+
   defp build_get_api_key(%CodingAgent.SettingsManager{providers: providers}) do
     fn provider ->
-      provider_cfg =
-        case provider do
-          p when is_atom(p) -> Map.get(providers, Atom.to_string(p))
-          p when is_binary(p) -> Map.get(providers, p)
-          _ -> nil
-        end
+      provider_name = normalize_provider_key(provider)
+      provider_cfg = provider_config(providers, provider_name)
 
-      provider_cfg && Map.get(provider_cfg, :api_key)
+      env_key =
+        provider_name
+        |> provider_env_vars()
+        |> env_first()
+
+      cond do
+        is_binary(env_key) and env_key != "" ->
+          env_key
+
+        is_binary(plain_api_key = provider_config_value(provider_cfg, :api_key)) and
+            plain_api_key != "" ->
+          plain_api_key
+
+        is_binary(api_key_secret = provider_config_value(provider_cfg, :api_key_secret)) and
+            api_key_secret != "" ->
+          resolve_secret_api_key(api_key_secret)
+
+        is_binary(default_secret = provider_default_secret_name(provider_name)) and
+            default_secret != "" ->
+          resolve_secret_api_key(default_secret)
+
+        true ->
+          nil
+      end
     end
+  end
+
+  defp provider_config(providers, provider_name) when is_binary(provider_name) do
+    Map.get(providers, provider_name) ||
+      Enum.find_value(providers, fn
+        {key, value} when is_atom(key) ->
+          if Atom.to_string(key) == provider_name, do: value, else: nil
+
+        _ ->
+          nil
+      end)
+  end
+
+  defp provider_config(_providers, _provider_name), do: nil
+
+  defp provider_config_value(nil, _key), do: nil
+
+  defp provider_config_value(cfg, key) when is_map(cfg) do
+    Map.get(cfg, key) || Map.get(cfg, Atom.to_string(key))
+  end
+
+  defp normalize_provider_key(provider) when is_atom(provider), do: Atom.to_string(provider)
+
+  defp normalize_provider_key(provider) when is_binary(provider) do
+    provider
+    |> String.trim()
+    |> case do
+      "" -> nil
+      value -> value
+    end
+  end
+
+  defp normalize_provider_key(_), do: nil
+
+  defp provider_env_vars("anthropic"), do: ["ANTHROPIC_API_KEY"]
+  defp provider_env_vars("openai"), do: ["OPENAI_API_KEY"]
+  defp provider_env_vars("openai-codex"), do: ["OPENAI_CODEX_API_KEY", "CHATGPT_TOKEN"]
+  defp provider_env_vars("kimi"), do: ["KIMI_API_KEY"]
+
+  defp provider_env_vars("google"),
+    do: ["GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"]
+
+  defp provider_env_vars(_), do: []
+
+  defp provider_default_secret_name(nil), do: nil
+
+  defp provider_default_secret_name(provider_name) when is_binary(provider_name) do
+    sanitized =
+      provider_name
+      |> String.downcase()
+      |> String.replace(~r/[^a-z0-9]+/, "_")
+      |> String.trim("_")
+
+    if sanitized == "", do: nil, else: "llm_#{sanitized}_api_key"
+  end
+
+  defp resolve_secret_api_key(secret_name) when is_binary(secret_name) do
+    case LemonCore.Secrets.resolve(secret_name, prefer_env: false, env_fallback: true) do
+      {:ok, value, _source} -> value
+      _ -> nil
+    end
+  end
+
+  defp resolve_secret_api_key(_), do: nil
+
+  defp env_first(names) when is_list(names) do
+    Enum.find_value(names, fn name ->
+      case System.get_env(name) do
+        value when is_binary(value) and value != "" -> value
+        _ -> nil
+      end
+    end)
   end
 
   # Compose system prompt from multiple sources:
@@ -2716,6 +2844,39 @@ defmodule CodingAgent.Session do
     }
   end
 
+  defp maybe_handle_reserved_host_target(@secret_exists_target, params_json) do
+    params = decode_wasm_params(params_json)
+
+    case extract_secret_name(params) do
+      {:ok, secret_name} ->
+        exists? = LemonCore.Secrets.exists?(secret_name, prefer_env: false, env_fallback: true)
+        {:ok, Jason.encode!(%{"exists" => exists?})}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp maybe_handle_reserved_host_target(@secret_resolve_target, params_json) do
+    params = decode_wasm_params(params_json)
+
+    case extract_secret_name(params) do
+      {:ok, secret_name} ->
+        case LemonCore.Secrets.resolve(secret_name, prefer_env: false, env_fallback: true) do
+          {:ok, value, source} ->
+            {:ok, Jason.encode!(%{"value" => value, "source" => to_string(source)})}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp maybe_handle_reserved_host_target(_tool_name, _params_json), do: :not_reserved
+
   defp find_host_tool(state, tool_name) when is_binary(tool_name) do
     Enum.find(state.tools, fn tool ->
       tool.name == tool_name and tool.name not in state.wasm_tool_names
@@ -2732,6 +2893,18 @@ defmodule CodingAgent.Session do
   end
 
   defp decode_wasm_params(_), do: %{}
+
+  defp extract_secret_name(params) when is_map(params) do
+    value = params["name"] || params[:name]
+
+    if is_binary(value) and String.trim(value) != "" do
+      {:ok, String.trim(value)}
+    else
+      {:error, :invalid_secret_name}
+    end
+  end
+
+  defp extract_secret_name(_), do: {:error, :invalid_secret_name}
 
   defp encode_wasm_host_output(%AgentCore.Types.AgentToolResult{} = tool_result) do
     payload =

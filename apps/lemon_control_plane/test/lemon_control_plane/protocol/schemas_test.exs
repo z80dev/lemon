@@ -108,10 +108,11 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
 
     test "ignores unknown fields" do
       # Extra fields are not validated
-      assert :ok = Schemas.validate("sessions.preview", %{
-        "sessionKey" => "test",
-        "unknownField" => "ignored"
-      })
+      assert :ok =
+               Schemas.validate("sessions.preview", %{
+                 "sessionKey" => "test",
+                 "unknownField" => "ignored"
+               })
     end
 
     test "handles nil params" do
@@ -122,27 +123,30 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
     test "validates chat.send schema" do
       assert {:error, _} = Schemas.validate("chat.send", %{})
 
-      assert :ok = Schemas.validate("chat.send", %{
-        "sessionKey" => "test",
-        "prompt" => "hello"
-      })
+      assert :ok =
+               Schemas.validate("chat.send", %{
+                 "sessionKey" => "test",
+                 "prompt" => "hello"
+               })
 
       # With optional fields
-      assert :ok = Schemas.validate("chat.send", %{
-        "sessionKey" => "test",
-        "prompt" => "hello",
-        "agentId" => "agent-1",
-        "queueMode" => "append"
-      })
+      assert :ok =
+               Schemas.validate("chat.send", %{
+                 "sessionKey" => "test",
+                 "prompt" => "hello",
+                 "agentId" => "agent-1",
+                 "queueMode" => "append"
+               })
     end
 
     test "validates exec.approval.resolve schema" do
       assert {:error, _} = Schemas.validate("exec.approval.resolve", %{})
 
-      assert :ok = Schemas.validate("exec.approval.resolve", %{
-        "approvalId" => "approval-123",
-        "decision" => "approve_once"
-      })
+      assert :ok =
+               Schemas.validate("exec.approval.resolve", %{
+                 "approvalId" => "approval-123",
+                 "decision" => "approve_once"
+               })
     end
 
     test "validates agent schema" do
@@ -150,12 +154,13 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
 
       assert :ok = Schemas.validate("agent", %{"prompt" => "hello"})
 
-      assert :ok = Schemas.validate("agent", %{
-        "prompt" => "hello",
-        "sessionKey" => "session-1",
-        "agentId" => "agent-1",
-        "engineId" => "claude"
-      })
+      assert :ok =
+               Schemas.validate("agent", %{
+                 "prompt" => "hello",
+                 "sessionKey" => "session-1",
+                 "agentId" => "agent-1",
+                 "engineId" => "claude"
+               })
     end
 
     # New tests for parity methods
@@ -175,6 +180,7 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
         "payload" => %{"key" => "value"},
         "target" => "system"
       }
+
       assert :ok = Schemas.validate("system-event", params)
     end
 
@@ -193,6 +199,7 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
         "peerId" => "peer456",
         "idempotencyKey" => "key789"
       }
+
       assert :ok = Schemas.validate("send", params)
     end
 
@@ -226,6 +233,33 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
     test "validates config.patch method requires patch" do
       assert {:error, _} = Schemas.validate("config.patch", %{})
       assert :ok = Schemas.validate("config.patch", %{"patch" => %{"key" => "value"}})
+    end
+
+    test "validates secrets methods" do
+      assert :ok = Schemas.validate("secrets.status", %{})
+      assert :ok = Schemas.validate("secrets.list", %{"owner" => "default"})
+
+      assert {:error, _} = Schemas.validate("secrets.set", %{})
+
+      assert :ok =
+               Schemas.validate("secrets.set", %{
+                 "name" => "demo",
+                 "value" => "abc",
+                 "provider" => "manual",
+                 "expiresAt" => 1_700_000_000_000
+               })
+
+      assert {:error, _} = Schemas.validate("secrets.delete", %{})
+      assert :ok = Schemas.validate("secrets.delete", %{"name" => "demo"})
+
+      assert {:error, _} = Schemas.validate("secrets.exists", %{})
+
+      assert :ok =
+               Schemas.validate("secrets.exists", %{
+                 "name" => "demo",
+                 "preferEnv" => true,
+                 "envFallback" => true
+               })
     end
 
     test "validates device.pair.request method" do

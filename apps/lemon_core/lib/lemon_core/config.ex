@@ -155,7 +155,11 @@ defmodule LemonCore.Config do
 
   defstruct providers: %{}, agent: %{}, tui: %{}, logging: %{}, gateway: %{}, agents: %{}
 
-  @type provider_config :: %{api_key: String.t() | nil, base_url: String.t() | nil}
+  @type provider_config :: %{
+          optional(:api_key) => String.t() | nil,
+          optional(:base_url) => String.t() | nil,
+          optional(:api_key_secret) => String.t() | nil
+        }
   @type t :: %__MODULE__{
           providers: %{optional(String.t()) => provider_config()},
           agent: map(),
@@ -321,7 +325,8 @@ defmodule LemonCore.Config do
 
     %{
       api_key: map["api_key"],
-      base_url: map["base_url"]
+      base_url: map["base_url"],
+      api_key_secret: normalize_optional_string(map["api_key_secret"])
     }
     |> reject_nil_values()
   end

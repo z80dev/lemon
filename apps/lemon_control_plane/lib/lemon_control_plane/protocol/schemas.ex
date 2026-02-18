@@ -451,6 +451,36 @@ defmodule LemonControlPlane.Protocol.Schemas do
       }
     },
     "config.schema" => %{optional: %{}},
+    "secrets.status" => %{optional: %{}},
+    "secrets.list" => %{
+      optional: %{
+        "owner" => :string
+      }
+    },
+    "secrets.set" => %{
+      required: %{
+        "name" => :string,
+        "value" => :string
+      },
+      optional: %{
+        "provider" => :string,
+        "expiresAt" => :integer
+      }
+    },
+    "secrets.delete" => %{
+      required: %{
+        "name" => :string
+      }
+    },
+    "secrets.exists" => %{
+      required: %{
+        "name" => :string
+      },
+      optional: %{
+        "preferEnv" => :boolean,
+        "envFallback" => :boolean
+      }
+    },
 
     # Usage methods
     "usage.status" => %{optional: %{}},

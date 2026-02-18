@@ -140,6 +140,20 @@ defmodule LemonCore.ConfigTest do
     System.delete_env("ANTHROPIC_BASE_URL")
   end
 
+  test "parses provider api_key_secret", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [providers.openai]
+    api_key_secret = "llm_openai_api_key"
+    """)
+
+    config = Config.load()
+
+    assert config.providers["openai"].api_key_secret == "llm_openai_api_key"
+  end
+
   test "parses agents from config (including tool_policy)", %{home: home} do
     global_dir = Path.join(home, ".lemon")
     File.mkdir_p!(global_dir)

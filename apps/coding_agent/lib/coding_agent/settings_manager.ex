@@ -23,7 +23,11 @@ defmodule CodingAgent.SettingsManager do
 
           # Provider settings
           providers: %{
-            optional(String.t()) => %{api_key: String.t() | nil, base_url: String.t() | nil}
+            optional(String.t()) => %{
+              optional(:api_key) => String.t() | nil,
+              optional(:base_url) => String.t() | nil,
+              optional(:api_key_secret) => String.t() | nil
+            }
           },
 
           # Compaction settings
