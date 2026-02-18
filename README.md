@@ -13,6 +13,7 @@ If you're here for the architecture deep-dive, jump to [What is Lemon?](#what-is
 - Elixir 1.19+ and Erlang/OTP 27+
 - A model provider API key (Anthropic/OpenAI/etc.)
 - Optional for web tools: Brave Search API key or Perplexity/OpenRouter API key
+- Optional for WASM tools: Rust toolchain (`cargo`) when `auto_build = true`
 
 Node.js is only required for the TUI/Web clients; the Telegram gateway is Elixir-only.
 
@@ -257,6 +258,7 @@ Other launch modes:
   - [Budget Enforcement](#budget-enforcement)
   - [Tool Policy](#tool-policy)
 - [Installation](#installation)
+  - [WASM Tool Support](#wasm-tool-support)
   - [Encrypted Secrets Store](#encrypted-secrets-store)
 - [Usage](#usage)
 - [Development](#development)
@@ -1706,6 +1708,7 @@ end, priority: :high)
 - Elixir 1.19+ and Erlang/OTP 27+
 - Node.js 20+ (for TUI/Web)
 - Python 3.10+ (for debug CLI, optional)
+- Rust/Cargo (optional, for WASM runtime auto-build)
 
 ### Clone and Build
 
@@ -1808,6 +1811,29 @@ export AZURE_OPENAI_BASE_URL="https://myresource.openai.azure.com/openai/v1"
 export AZURE_OPENAI_RESOURCE_NAME="myresource"
 export AZURE_OPENAI_API_VERSION="2024-12-01-preview"
 ```
+
+### WASM Tool Support
+
+Lemon supports Ironclaw-compatible WASM tools through a per-session Rust sidecar runtime.
+WASM tools are opt-in and disabled by default.
+
+```toml
+[agent.tools.wasm]
+enabled = true
+auto_build = true
+runtime_path = ""
+tool_paths = []
+```
+
+Tool discovery order:
+1. `<cwd>/.lemon/wasm-tools`
+2. `~/.lemon/agent/wasm-tools`
+3. Paths in `agent.tools.wasm.tool_paths`
+
+Each tool is discovered as `<name>.wasm` with an optional `<name>.capabilities.json`.
+
+If `runtime_path` is empty and `auto_build = true`, Lemon attempts to build the runtime via Cargo automatically.
+For full config and troubleshooting, see [`docs/tools/wasm.md`](docs/tools/wasm.md) and [`docs/config.md`](docs/config.md).
 
 ### Encrypted Secrets Store
 
@@ -2470,6 +2496,7 @@ Detailed documentation is available in the `docs/` directory:
 | [benchmarks.md](docs/benchmarks.md) | Performance benchmarks and baselines |
 | [context.md](docs/context.md) | Context management, truncation strategies, token counting |
 | [config.md](docs/config.md) | Canonical TOML configuration (global + project overrides) |
+| [tools/wasm.md](docs/tools/wasm.md) | WASM runtime behavior, discovery, security model, and troubleshooting |
 
 ---
 
