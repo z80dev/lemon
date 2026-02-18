@@ -23,6 +23,9 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install WASM target
+        run: rustup target add wasm32-wasip2
+
       - name: Run WASM runtime tests
         run: cargo test --manifest-path native/lemon-wasm-runtime/Cargo.toml
 
@@ -31,6 +34,9 @@ jobs:
 
       - name: Compile
         run: mix compile
+
+      - name: Run WASM integration tests
+        run: RUSTUP_HOME="$HOME/.rustup" CARGO_HOME="$HOME/.cargo" mix test apps/coding_agent/test/coding_agent/wasm_integration_test.exs --include integration
 
       - name: Run quality checks
         run: mix lemon.quality

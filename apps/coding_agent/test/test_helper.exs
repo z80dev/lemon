@@ -11,6 +11,8 @@ if build_path = System.get_env("MIX_BUILD_PATH") do
 end
 
 # Isolate HOME to avoid leaking user-level config (CLAUDE.md, config.toml, extensions)
+original_home = System.get_env("HOME")
+
 home =
   Path.join(
     System.tmp_dir!(),
@@ -19,6 +21,18 @@ home =
 
 File.mkdir_p!(home)
 System.put_env("HOME", home)
+
+# Keep rustup/cargo toolchain paths stable after HOME isolation so tests that call
+# cargo via rustup shims can still resolve installed toolchains and targets.
+if original_home do
+  if is_nil(System.get_env("RUSTUP_HOME")) do
+    System.put_env("RUSTUP_HOME", Path.join(original_home, ".rustup"))
+  end
+
+  if is_nil(System.get_env("CARGO_HOME")) do
+    System.put_env("CARGO_HOME", Path.join(original_home, ".cargo"))
+  end
+end
 
 # Ensure agent directories exist under the isolated HOME
 CodingAgent.Config.ensure_dirs!()
