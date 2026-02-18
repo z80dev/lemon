@@ -16,13 +16,13 @@ defmodule CodingAgent.Tools.Agent do
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent
   alias CodingAgent.TaskStore
-  alias LemonCore.{Bus, RunRequest, SessionKey, Store}
+  alias LemonCore.{Bus, RouterBridge, RunRequest, SessionKey, Store}
 
   @valid_actions ["run", "poll"]
   @valid_queue_modes ["collect", "followup", "steer", "steer_backlog", "interrupt"]
   @default_sync_timeout_ms 120_000
   @default_watcher_timeout_ms 30 * 60 * 1000
-  @default_run_orchestrator :"Elixir.LemonRouter.RunOrchestrator"
+  @default_run_orchestrator RouterBridge
 
   @doc """
   Returns the agent delegation tool definition.
@@ -303,11 +303,24 @@ defmodule CodingAgent.Tools.Agent do
   defp submit_run(request, opts) do
     router = run_orchestrator(opts)
 
-    case router.submit(request) do
+    case submit_with_orchestrator(router, request) do
       {:ok, run_id} when is_binary(run_id) -> {:ok, run_id}
       {:ok, other} -> {:error, "Unexpected run id: #{inspect(other)}"}
       {:error, {:unknown_agent_id, agent_id}} -> {:error, "Unknown agent_id: #{agent_id}"}
       {:error, reason} -> {:error, "Delegated run submission failed: #{inspect(reason)}"}
+    end
+  end
+
+  defp submit_with_orchestrator(router, request) do
+    cond do
+      function_exported?(router, :submit_run, 1) ->
+        router.submit_run(request)
+
+      function_exported?(router, :submit, 1) ->
+        router.submit(request)
+
+      true ->
+        {:error, :unavailable}
     end
   end
 

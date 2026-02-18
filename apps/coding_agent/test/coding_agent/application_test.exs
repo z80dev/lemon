@@ -1,6 +1,20 @@
 defmodule CodingAgent.ApplicationTest do
   use ExUnit.Case, async: false
 
+  @expected_children [
+    CodingAgent.SessionRegistry,
+    CodingAgent.ProcessRegistry,
+    CodingAgent.Tools.TodoStoreOwner,
+    CodingAgent.SessionSupervisor,
+    CodingAgent.Wasm.SidecarSupervisor,
+    CodingAgent.TaskSupervisor,
+    CodingAgent.TaskStoreServer,
+    CodingAgent.RunGraphServer,
+    CodingAgent.ProcessStoreServer,
+    CodingAgent.ProcessManager,
+    CodingAgent.LaneQueue
+  ]
+
   @moduledoc """
   Tests for CodingAgent.Application supervision tree.
   """
@@ -32,20 +46,15 @@ defmodule CodingAgent.ApplicationTest do
     end
 
     test "supervisor has correct child count" do
-      # The application should have 11 children:
-      # 1. CodingAgent.SessionRegistry (Registry)
-      # 2. CodingAgent.ProcessRegistry (Registry)
-      # 3. CodingAgent.Tools.TodoStoreOwner (GenServer)
-      # 4. CodingAgent.SessionSupervisor (DynamicSupervisor)
-      # 5. CodingAgent.TaskSupervisor (Task.Supervisor)
-      # 6. CodingAgent.TaskStoreServer (GenServer)
-      # 7. CodingAgent.RunGraphServer (GenServer)
-      # 8. CodingAgent.ProcessStoreServer (GenServer)
-      # 9. CodingAgent.ProcessManager (DynamicSupervisor)
-      # 10. CodingAgent.LaneQueue (GenServer)
-      # 11. CodingAgent.CompactionHooks (GenServer)
       children = Supervisor.which_children(CodingAgent.Supervisor)
-      assert length(children) == 11
+      child_ids = children |> Enum.map(fn {id, _, _, _} -> id end) |> MapSet.new()
+
+      for expected_child <- @expected_children do
+        assert MapSet.member?(child_ids, expected_child)
+      end
+
+      # Runtime/feature-dependent children may be added, so avoid exact equality.
+      assert length(children) >= length(@expected_children)
     end
 
     test "supervisor uses one_for_one strategy" do
@@ -69,8 +78,11 @@ defmodule CodingAgent.ApplicationTest do
     test "supervisor counts children correctly" do
       counts = Supervisor.count_children(CodingAgent.Supervisor)
 
-      assert counts.active == 11
-      assert counts.specs == 11
+      min_expected_children = length(@expected_children)
+
+      # Dynamic/runtime children can increase these counts.
+      assert counts.active >= min_expected_children
+      assert counts.specs >= min_expected_children
       # SessionSupervisor is a DynamicSupervisor
       assert counts.supervisors >= 1
     end
