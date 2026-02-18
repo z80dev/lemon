@@ -166,6 +166,7 @@ defmodule LemonCore.Secrets do
       source: key_status.source,
       keychain_available: key_status.keychain_available,
       env_fallback: key_status.env_fallback,
+      keychain_error: key_status.keychain_error,
       owner: owner_from_opts(opts),
       count: length(entries)
     }

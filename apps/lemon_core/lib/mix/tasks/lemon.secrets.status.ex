@@ -20,6 +20,11 @@ defmodule Mix.Tasks.Lemon.Secrets.Status do
     Mix.shell().info("source: #{status.source || "none"}")
     Mix.shell().info("keychain_available: #{status.keychain_available}")
     Mix.shell().info("env_fallback: #{status.env_fallback}")
+
+    if status.keychain_error do
+      Mix.shell().info("keychain_error: #{inspect(status.keychain_error)}")
+    end
+
     Mix.shell().info("owner: #{status.owner}")
     Mix.shell().info("count: #{status.count}")
   end

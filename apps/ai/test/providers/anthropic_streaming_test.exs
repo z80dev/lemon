@@ -40,6 +40,22 @@ defmodule Ai.Providers.AnthropicStreamingTest do
     }
   end
 
+  defp kimi_model(base_url \\ "https://example.test") do
+    %Model{
+      id: "kimi-for-coding",
+      name: "Kimi for Coding",
+      api: :anthropic_messages,
+      provider: :kimi,
+      base_url: base_url,
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 10.0, output: 20.0, cache_read: 1.0, cache_write: 2.0},
+      context_window: 128_000,
+      max_tokens: 16_384,
+      headers: %{}
+    }
+  end
+
   test "usage cost uses model pricing" do
     body =
       sse_event("message_start", %{
@@ -158,6 +174,54 @@ defmodule Ai.Providers.AnthropicStreamingTest do
     assert {:error, _} = EventStream.result(stream, 1000)
   end
 
+  test "kimi model reports provider-specific missing key guidance" do
+    with_env(
+      %{
+        "KIMI_API_KEY" => nil,
+        "MOONSHOT_API_KEY" => nil,
+        "ANTHROPIC_API_KEY" => nil
+      },
+      fn ->
+        context = Context.new(messages: [%UserMessage{content: "Hi"}])
+        {:ok, stream} = Anthropic.stream(kimi_model(), context, %StreamOptions{})
+
+        assert {:error, %{error_message: msg}} = EventStream.result(stream, 1_000)
+        assert msg =~ "No API key provided for Kimi"
+        assert msg =~ "KIMI_API_KEY"
+      end
+    )
+  end
+
+  test "kimi model can fall back to ANTHROPIC_API_KEY for compatibility" do
+    body =
+      sse_event("message_start", %{"message" => %{"usage" => %{}}}) <>
+        sse_event("message_delta", %{"delta" => %{"stop_reason" => "end_turn"}, "usage" => %{}}) <>
+        sse_event("message_stop", %{})
+
+    test_pid = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      send(test_pid, {:kimi_req_headers, conn.req_headers})
+      Plug.Conn.send_resp(conn, 200, body)
+    end)
+
+    with_env(
+      %{
+        "KIMI_API_KEY" => nil,
+        "MOONSHOT_API_KEY" => nil,
+        "ANTHROPIC_API_KEY" => "anthropic-fallback-key"
+      },
+      fn ->
+        context = Context.new(messages: [%UserMessage{content: "Hi"}])
+        {:ok, stream} = Anthropic.stream(kimi_model(), context, %StreamOptions{})
+        assert {:ok, _result} = EventStream.result(stream, 1_000)
+      end
+    )
+
+    assert_receive {:kimi_req_headers, headers}, 1_000
+    assert {"x-api-key", "anthropic-fallback-key"} in headers
+  end
+
   test "retries retryable HTTP responses and succeeds" do
     {:ok, attempts} = Agent.start_link(fn -> 0 end)
 
@@ -212,5 +276,26 @@ defmodule Ai.Providers.AnthropicStreamingTest do
 
     assert {:error, _} = EventStream.result(stream, 1_000)
     assert Agent.get(attempts, & &1) == 1
+  end
+
+  defp with_env(env_map, fun) when is_map(env_map) and is_function(fun, 0) do
+    previous =
+      Enum.into(env_map, %{}, fn {name, _value} ->
+        {name, System.get_env(name)}
+      end)
+
+    Enum.each(env_map, fn
+      {name, value} when is_binary(value) -> System.put_env(name, value)
+      {name, _} -> System.delete_env(name)
+    end)
+
+    try do
+      fun.()
+    after
+      Enum.each(previous, fn
+        {name, value} when is_binary(value) -> System.put_env(name, value)
+        {name, _} -> System.delete_env(name)
+      end)
+    end
   end
 end

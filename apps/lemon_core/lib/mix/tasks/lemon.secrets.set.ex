@@ -39,6 +39,13 @@ defmodule Mix.Tasks.Lemon.Secrets.Set do
           "Missing secrets master key. Run mix lemon.secrets.init or set LEMON_SECRETS_MASTER_KEY."
         )
 
+      {:error, {:keychain_failed, reason}} ->
+        Mix.raise(
+          "Failed to read secrets master key from keychain: #{inspect(reason)}. " <>
+            "Run mix lemon.secrets.status for diagnostics, then re-run mix lemon.secrets.init " <>
+            "or set LEMON_SECRETS_MASTER_KEY."
+        )
+
       {:error, reason} ->
         Mix.raise("Failed to store secret: #{inspect(reason)}")
     end

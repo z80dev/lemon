@@ -124,6 +124,18 @@ fi
 
 export LEMON_DOTENV_DIR="${LEMON_DOTENV_DIR:-$LAUNCH_CWD}"
 
+# Some macOS environments deny keychain reads from long-lived BEAM processes
+# (security error code 36: user interaction not allowed). Preloading the
+# master key into env before boot makes secrets resolution deterministic.
+if [[ -z "${LEMON_SECRETS_MASTER_KEY:-}" ]] && command -v security >/dev/null 2>&1; then
+  if MASTER_KEY_FROM_KEYCHAIN="$(security find-generic-password -s "Lemon Secrets" -a default -w 2>/dev/null)"; then
+    if [[ -n "$MASTER_KEY_FROM_KEYCHAIN" ]]; then
+      export LEMON_SECRETS_MASTER_KEY="$MASTER_KEY_FROM_KEYCHAIN"
+      echo "[lemon-gateway] Loaded secrets master key from keychain."
+    fi
+  fi
+fi
+
 mix deps.get
 mix compile
 

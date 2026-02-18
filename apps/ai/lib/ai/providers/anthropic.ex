@@ -89,10 +89,10 @@ defmodule Ai.Providers.Anthropic do
     output = init_assistant_message(model)
 
     try do
-      api_key = opts.api_key || get_env_api_key() || ""
+      api_key = resolve_api_key(model, opts)
 
       if api_key == "" do
-        raise "No API key provided for Anthropic. Set ANTHROPIC_API_KEY or pass api_key in options."
+        raise missing_api_key_error(model.provider)
       end
 
       base_url =
@@ -159,6 +159,50 @@ defmodule Ai.Providers.Anthropic do
         EventStream.error(stream, error_output)
     end
   end
+
+  defp resolve_api_key(model, opts) do
+    cond do
+      is_binary(opts.api_key) and opts.api_key != "" ->
+        opts.api_key
+
+      api_key = get_provider_env_api_key(model.provider) ->
+        api_key
+
+      api_key = get_env_api_key() ->
+        api_key
+
+      true ->
+        ""
+    end
+  end
+
+  defp get_provider_env_api_key(provider) do
+    provider
+    |> provider_env_vars()
+    |> Enum.find_value(&env_value/1)
+  end
+
+  defp provider_env_vars(:kimi), do: ["KIMI_API_KEY", "MOONSHOT_API_KEY", "ANTHROPIC_API_KEY"]
+  defp provider_env_vars("kimi"), do: ["KIMI_API_KEY", "MOONSHOT_API_KEY", "ANTHROPIC_API_KEY"]
+  defp provider_env_vars(_), do: ["ANTHROPIC_API_KEY"]
+
+  defp env_value(name) when is_binary(name) do
+    case System.get_env(name) do
+      value when is_binary(value) and value != "" -> value
+      _ -> nil
+    end
+  end
+
+  defp missing_api_key_error(:kimi),
+    do:
+      "No API key provided for Kimi. Set KIMI_API_KEY (or MOONSHOT_API_KEY) or pass api_key in options."
+
+  defp missing_api_key_error("kimi"),
+    do:
+      "No API key provided for Kimi. Set KIMI_API_KEY (or MOONSHOT_API_KEY) or pass api_key in options."
+
+  defp missing_api_key_error(_),
+    do: "No API key provided for Anthropic. Set ANTHROPIC_API_KEY or pass api_key in options."
 
   defp flush_sse_buffer(%{sse_buffer: ""} = state), do: state
 
