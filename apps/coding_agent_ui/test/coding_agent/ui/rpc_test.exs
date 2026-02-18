@@ -661,8 +661,8 @@ defmodule CodingAgent.UI.RPCTest do
           RPC.select("Choose", [%{label: "A", value: "a", description: nil}], server: rpc)
         end)
 
-      # Give it time to send request and start waiting
-      Process.sleep(50)
+      # Ensure request is actually in-flight before closing input.
+      assert [_request_json | _] = wait_for_output(output, 2_000)
 
       # Close the input - this should fail pending requests
       MockIO.close(input)
