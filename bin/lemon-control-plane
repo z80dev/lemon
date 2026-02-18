@@ -1,0 +1,246 @@
+#!/bin/bash
+#
+# lemon-control-plane - Launch Lemon control plane runtime from source.
+#
+# Usage:
+#   ./bin/lemon-control-plane [options]
+#
+# This starts a dedicated control plane instance intended for external clients.
+# It supports an isolated HOME/config, store path, and project-local profile cwd.
+#
+set -e
+
+LAUNCH_CWD="$(pwd)"
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+LEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+export LEMON_PATH="$LEMON_ROOT"
+
+show_help() {
+  cat << 'EOF'
+Usage: ./bin/lemon-control-plane [options]
+
+Options:
+  --port <port>           Control plane port (default: 4040)
+  --config-cwd <path>     CWD used for project-local .lemon/config.toml merge
+                          when loading agent profiles (default: launch cwd)
+  --home <path>           Override HOME for this process (isolates ~/.lemon)
+  --store-path <path>     Override LEMON_STORE_PATH for this process
+  --dotenv-dir <path>     Directory for .env autoload (default: launch cwd)
+  --debug                 Enable debug logging
+  --name <name@host>      Start as a distributed long-name node
+  --sname <name>          Start as a distributed short-name node (default: lemon_control_plane)
+  --cookie <cookie>       Distributed Erlang cookie (default: $LEMON_GATEWAY_NODE_COOKIE or lemon_gateway_dev_cookie)
+  --no-distribution       Disable distributed node startup
+  --help, -h              Show this help
+
+Environment fallbacks:
+  LEMON_CONTROL_PLANE_PORT
+  LEMON_AGENT_PROFILES_CWD
+  LEMON_DOTENV_DIR
+  LEMON_STORE_PATH
+  LEMON_GATEWAY_NODE_NAME
+  LEMON_GATEWAY_NODE_COOKIE
+  LEMON_GATEWAY_COOKIE
+EOF
+}
+
+DEBUG=""
+PORT="${LEMON_CONTROL_PLANE_PORT:-4040}"
+CONFIG_CWD="${LEMON_AGENT_PROFILES_CWD:-$LAUNCH_CWD}"
+DOTENV_DIR="${LEMON_DOTENV_DIR:-$LAUNCH_CWD}"
+HOME_OVERRIDE=""
+STORE_PATH_OVERRIDE=""
+
+NODE_MODE=""
+NODE_NAME="${LEMON_GATEWAY_NODE_NAME:-lemon_control_plane}"
+NODE_COOKIE="${LEMON_GATEWAY_NODE_COOKIE:-${LEMON_GATEWAY_COOKIE:-lemon_gateway_dev_cookie}}"
+DISTRIBUTED=1
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --port)
+      if [[ -z "${2:-}" ]]; then
+        echo "Missing value for --port" >&2
+        exit 1
+      fi
+      PORT="$2"
+      shift 2
+      ;;
+    --config-cwd)
+      if [[ -z "${2:-}" ]]; then
+        echo "Missing value for --config-cwd" >&2
+        exit 1
+      fi
+      CONFIG_CWD="$2"
+      shift 2
+      ;;
+    --home)
+      if [[ -z "${2:-}" ]]; then
+        echo "Missing value for --home" >&2
+        exit 1
+      fi
+      HOME_OVERRIDE="$2"
+      shift 2
+      ;;
+    --store-path)
+      if [[ -z "${2:-}" ]]; then
+        echo "Missing value for --store-path" >&2
+        exit 1
+      fi
+      STORE_PATH_OVERRIDE="$2"
+      shift 2
+      ;;
+    --dotenv-dir)
+      if [[ -z "${2:-}" ]]; then
+        echo "Missing value for --dotenv-dir" >&2
+        exit 1
+      fi
+      DOTENV_DIR="$2"
+      shift 2
+      ;;
+    --debug)
+      DEBUG="1"
+      shift
+      ;;
+    --name)
+      if [[ -z "${2:-}" ]]; then
+        echo "Missing value for --name" >&2
+        exit 1
+      fi
+      NODE_MODE="name"
+      NODE_NAME="$2"
+      shift 2
+      ;;
+    --sname)
+      if [[ -z "${2:-}" ]]; then
+        echo "Missing value for --sname" >&2
+        exit 1
+      fi
+      NODE_MODE="sname"
+      NODE_NAME="$2"
+      shift 2
+      ;;
+    --cookie)
+      if [[ -z "${2:-}" ]]; then
+        echo "Missing value for --cookie" >&2
+        exit 1
+      fi
+      NODE_COOKIE="$2"
+      shift 2
+      ;;
+    --no-distribution)
+      DISTRIBUTED=0
+      shift
+      ;;
+    --help|-h)
+      show_help
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      show_help >&2
+      exit 1
+      ;;
+  esac
+done
+
+if ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
+  echo "Invalid --port value: $PORT" >&2
+  exit 1
+fi
+
+if [[ -n "$HOME_OVERRIDE" ]]; then
+  mkdir -p "$HOME_OVERRIDE"
+  export HOME="$HOME_OVERRIDE"
+fi
+
+if [[ -n "$STORE_PATH_OVERRIDE" ]]; then
+  export LEMON_STORE_PATH="$STORE_PATH_OVERRIDE"
+fi
+
+export LEMON_CONTROL_PLANE_PORT="$PORT"
+export LEMON_AGENT_PROFILES_CWD="$CONFIG_CWD"
+export LEMON_DOTENV_DIR="$DOTENV_DIR"
+
+if [[ -n "$DEBUG" ]]; then
+  export LEMON_DEBUG=1
+fi
+
+if [[ -z "$NODE_MODE" ]]; then
+  if [[ "$NODE_NAME" == *"@"* ]]; then
+    NODE_MODE="name"
+  else
+    NODE_MODE="sname"
+  fi
+fi
+
+if [[ "$DISTRIBUTED" == "1" ]] && [[ -z "$NODE_COOKIE" ]]; then
+  echo "Distributed mode requires a non-empty cookie. Pass --cookie or set LEMON_GATEWAY_NODE_COOKIE." >&2
+  exit 1
+fi
+
+cd "$LEMON_ROOT"
+
+mix deps.get
+mix compile
+
+echo "[lemon-control-plane] Starting control plane runtime (Ctrl-C to stop)..."
+echo "[lemon-control-plane] Port: $LEMON_CONTROL_PLANE_PORT"
+echo "[lemon-control-plane] Agent profiles cwd: $LEMON_AGENT_PROFILES_CWD"
+if [[ -n "${LEMON_STORE_PATH:-}" ]]; then
+  echo "[lemon-control-plane] Store path: $LEMON_STORE_PATH"
+fi
+echo "[lemon-control-plane] WS endpoint: ws://localhost:$LEMON_CONTROL_PLANE_PORT/ws"
+
+EVAL='
+LemonCore.Dotenv.load_and_log(System.get_env("LEMON_DOTENV_DIR"))
+
+case System.get_env("LEMON_CONTROL_PLANE_PORT") do
+  nil ->
+    :ok
+
+  "" ->
+    :ok
+
+  raw ->
+    case Integer.parse(raw) do
+      {port, ""} -> Application.put_env(:lemon_control_plane, :port, port)
+      _ -> IO.puts("[lemon-control-plane] Invalid LEMON_CONTROL_PLANE_PORT=#{inspect(raw)}; using configured default.")
+    end
+end
+
+case System.get_env("LEMON_AGENT_PROFILES_CWD") do
+  nil -> :ok
+  "" -> :ok
+  cwd -> Application.put_env(:lemon_router, :agent_profiles_cwd, cwd)
+end
+
+Application.ensure_all_started(:lemon_control_plane)
+Application.ensure_all_started(:lemon_router)
+Application.ensure_all_started(:lemon_gateway)
+'
+
+if [[ "$DISTRIBUTED" == "1" ]]; then
+  if [[ "$NODE_MODE" == "name" ]]; then
+    REMSH_TARGET="$NODE_NAME"
+  else
+    SHORT_HOST="$(hostname -s 2>/dev/null || hostname)"
+    REMSH_TARGET="${NODE_NAME}@${SHORT_HOST}"
+  fi
+
+  echo "[lemon-control-plane] Distributed node: --$NODE_MODE $NODE_NAME"
+  echo "[lemon-control-plane] Remote shell target: $REMSH_TARGET"
+  exec elixir "--$NODE_MODE" "$NODE_NAME" --cookie "$NODE_COOKIE" -S mix run --no-start --no-halt -e "$EVAL"
+else
+  echo "[lemon-control-plane] Distribution disabled (--no-distribution)."
+  exec mix run --no-start --no-halt -e "$EVAL"
+fi
