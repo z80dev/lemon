@@ -7,6 +7,7 @@ Lemon supports Ironclaw-compatible WASM tools through a per-session Rust sidecar
 - ABI: strict `tool.wit` parity (copied from Ironclaw).
 - Sidecar lifecycle: one runtime process per `CodingAgent.Session`.
 - Tool registration: one Lemon tool per discovered WASM module.
+- Capabilities schema: Ironclaw-style top-level `http`, `secrets`, `tool_invoke`, `workspace`, `auth`.
 - Precedence: built-in > WASM > extension.
 - Output trust: all WASM tool results are marked `trust: :untrusted`.
 
@@ -70,7 +71,8 @@ CARGO_TARGET_DIR=_build/lemon-wasm-runtime cargo build --release --manifest-path
 
 ## Security Model (v1)
 
-- `secret-exists` checks env vars only.
+- `tool_auth` reads WASM `auth` metadata and helps set up credentials.
+- `secret-exists` checks Lemon secret store first, then environment fallback.
 - `workspace-read` is path-normalized and restricted by allowed prefixes.
 - `http-request` is allowlist/rate-limited by capabilities.
 - `tool-invoke` is alias-based and depth/rate-limited.

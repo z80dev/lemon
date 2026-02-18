@@ -60,6 +60,19 @@ pub struct ToolCapabilitiesSummary {
     pub http: bool,
     pub tool_invoke: bool,
     pub secrets: bool,
+    pub auth: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveredToolAuth {
+    pub secret_name: String,
+    pub display_name: Option<String>,
+    pub instructions: Option<String>,
+    pub setup_url: Option<String>,
+    pub token_hint: Option<String>,
+    pub env_var: Option<String>,
+    pub provider: Option<String>,
+    pub has_oauth: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +82,8 @@ pub struct DiscoveredTool {
     pub description: String,
     pub schema_json: String,
     pub capabilities: ToolCapabilitiesSummary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<DiscoveredToolAuth>,
     pub warnings: Vec<String>,
 }
 

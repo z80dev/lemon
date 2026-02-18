@@ -17,6 +17,8 @@ pub struct CapabilitiesFile {
     pub tool_invoke: Option<ToolInvokeCapabilitySchema>,
     #[serde(default)]
     pub workspace: Option<WorkspaceCapabilitySchema>,
+    #[serde(default)]
+    pub auth: Option<AuthCapabilitySchema>,
 }
 
 impl CapabilitiesFile {
@@ -34,6 +36,7 @@ impl CapabilitiesFile {
             http: self.http.is_some(),
             tool_invoke: self.tool_invoke.is_some(),
             secrets: self.secrets.is_some(),
+            auth: self.auth.is_some(),
         }
     }
 
@@ -127,6 +130,10 @@ impl CapabilitiesFile {
     pub fn http_config(&self) -> Option<&HttpCapabilitySchema> {
         self.http.as_ref()
     }
+
+    pub fn auth_config(&self) -> Option<&AuthCapabilitySchema> {
+        self.auth.as_ref()
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -210,12 +217,80 @@ pub struct WorkspaceCapabilitySchema {
     pub allowed_prefixes: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AuthCapabilitySchema {
+    pub secret_name: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub oauth: Option<OAuthConfigSchema>,
+    #[serde(default)]
+    pub instructions: Option<String>,
+    #[serde(default)]
+    pub setup_url: Option<String>,
+    #[serde(default)]
+    pub token_hint: Option<String>,
+    #[serde(default)]
+    pub env_var: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub validation_endpoint: Option<ValidationEndpointSchema>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OAuthConfigSchema {
+    pub authorization_url: String,
+    pub token_url: String,
+    #[serde(default)]
+    pub client_id: Option<String>,
+    #[serde(default)]
+    pub client_id_env: Option<String>,
+    #[serde(default)]
+    pub client_secret: Option<String>,
+    #[serde(default)]
+    pub client_secret_env: Option<String>,
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    #[serde(default = "default_true")]
+    pub use_pkce: bool,
+    #[serde(default)]
+    pub extra_params: HashMap<String, String>,
+    #[serde(default = "default_access_token_field")]
+    pub access_token_field: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ValidationEndpointSchema {
+    pub url: String,
+    #[serde(default = "default_method")]
+    pub method: String,
+    #[serde(default = "default_success_status")]
+    pub success_status: u16,
+}
+
 fn default_requests_per_minute() -> u32 {
     60
 }
 
 fn default_requests_per_hour() -> u32 {
     1000
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_access_token_field() -> String {
+    "access_token".to_string()
+}
+
+fn default_method() -> String {
+    "GET".to_string()
+}
+
+fn default_success_status() -> u16 {
+    200
 }
 
 pub fn host_matches_pattern(host: &str, pattern: &str) -> bool {
@@ -317,6 +392,7 @@ mod tests {
             http: Some(Default::default()),
             tool_invoke: None,
             secrets: Some(Default::default()),
+            auth: Some(Default::default()),
         };
 
         let summary = caps.summary();
@@ -324,5 +400,39 @@ mod tests {
         assert_eq!(summary.http, true);
         assert_eq!(summary.tool_invoke, false);
         assert_eq!(summary.secrets, true);
+        assert_eq!(summary.auth, true);
+    }
+
+    #[test]
+    fn parses_auth_schema() {
+        let parsed: CapabilitiesFile = serde_json::from_str(
+            r#"{
+                "auth": {
+                    "secret_name": "github_token",
+                    "display_name": "GitHub",
+                    "instructions": "Create a personal access token",
+                    "setup_url": "https://github.com/settings/tokens",
+                    "env_var": "GITHUB_TOKEN",
+                    "oauth": {
+                        "authorization_url": "https://github.com/login/oauth/authorize",
+                        "token_url": "https://github.com/login/oauth/access_token",
+                        "client_id": "abc123"
+                    }
+                }
+            }"#,
+        )
+        .expect("auth should parse");
+
+        let auth = parsed.auth.expect("auth section");
+        assert_eq!(auth.secret_name, "github_token");
+        assert_eq!(auth.display_name.as_deref(), Some("GitHub"));
+        assert_eq!(auth.env_var.as_deref(), Some("GITHUB_TOKEN"));
+        assert_eq!(
+            auth.oauth
+                .expect("oauth section")
+                .access_token_field
+                .as_str(),
+            "access_token"
+        );
     }
 }

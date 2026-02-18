@@ -19,6 +19,7 @@ defmodule CodingAgent.Wasm.SidecarSession do
           description: String.t(),
           schema_json: String.t(),
           capabilities: map(),
+          auth: map() | nil,
           warnings: [String.t()]
         }
 
@@ -473,6 +474,7 @@ defmodule CodingAgent.Wasm.SidecarSession do
           description: to_string(tool["description"] || ""),
           schema_json: to_string(tool["schema_json"] || "{}"),
           capabilities: normalize_capabilities(tool["capabilities"] || %{}),
+          auth: normalize_auth_metadata(tool["auth"]),
           warnings: normalize_string_list(tool["warnings"] || [])
         }
       end)
@@ -511,12 +513,36 @@ defmodule CodingAgent.Wasm.SidecarSession do
       workspace_read: truthy?(capabilities["workspace_read"] || capabilities[:workspace_read]),
       http: truthy?(capabilities["http"] || capabilities[:http]),
       tool_invoke: truthy?(capabilities["tool_invoke"] || capabilities[:tool_invoke]),
-      secrets: truthy?(capabilities["secrets"] || capabilities[:secrets])
+      secrets: truthy?(capabilities["secrets"] || capabilities[:secrets]),
+      auth: truthy?(capabilities["auth"] || capabilities[:auth])
     }
   end
 
   defp normalize_capabilities(_),
-    do: %{workspace_read: false, http: false, tool_invoke: false, secrets: false}
+    do: %{workspace_read: false, http: false, tool_invoke: false, secrets: false, auth: false}
+
+  defp normalize_auth_metadata(nil), do: nil
+
+  defp normalize_auth_metadata(auth) when is_map(auth) do
+    secret_name = auth["secret_name"] || auth[:secret_name]
+
+    if is_binary(secret_name) and String.trim(secret_name) != "" do
+      %{
+        secret_name: String.trim(secret_name),
+        display_name: normalize_optional_string(auth["display_name"] || auth[:display_name]),
+        instructions: normalize_optional_string(auth["instructions"] || auth[:instructions]),
+        setup_url: normalize_optional_string(auth["setup_url"] || auth[:setup_url]),
+        token_hint: normalize_optional_string(auth["token_hint"] || auth[:token_hint]),
+        env_var: normalize_optional_string(auth["env_var"] || auth[:env_var]),
+        provider: normalize_optional_string(auth["provider"] || auth[:provider]),
+        has_oauth: truthy?(auth["has_oauth"] || auth[:has_oauth])
+      }
+    else
+      nil
+    end
+  end
+
+  defp normalize_auth_metadata(_), do: nil
 
   defp normalize_string_list(list) when is_list(list) do
     list

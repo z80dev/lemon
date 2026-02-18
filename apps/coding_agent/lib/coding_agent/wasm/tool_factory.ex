@@ -24,6 +24,7 @@ defmodule CodingAgent.Wasm.ToolFactory do
         path: tool.path,
         warnings: tool.warnings,
         capabilities: tool.capabilities,
+        auth: tool.auth,
         source: :wasm
       }
 

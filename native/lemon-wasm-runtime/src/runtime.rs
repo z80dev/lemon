@@ -15,7 +15,9 @@ use wasmtime::{Config, Engine as WasmEngine, OptLevel, ResourceLimiter, Store};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiView};
 
 use crate::capabilities::{CapabilitiesFile, CredentialLocationSchema, host_matches_pattern};
-use crate::protocol::{DiscoverDefaults, DiscoverResult, DiscoveredTool, InvokeResult, RuntimeLog};
+use crate::protocol::{
+    DiscoverDefaults, DiscoverResult, DiscoveredTool, DiscoveredToolAuth, InvokeResult, RuntimeLog,
+};
 
 wasmtime::component::bindgen!({
     path: "wit/tool.wit",
@@ -223,6 +225,7 @@ impl Runtime {
                         description: prepared.description.clone(),
                         schema_json: prepared.schema_json.clone(),
                         capabilities: prepared.capabilities.summary(),
+                        auth: discovered_tool_auth(&prepared.capabilities),
                         warnings: Vec::new(),
                     });
 
@@ -430,6 +433,26 @@ fn context_workspace_root(context_json: &Option<String>) -> PathBuf {
     from_context
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+}
+
+fn discovered_tool_auth(capabilities: &CapabilitiesFile) -> Option<DiscoveredToolAuth> {
+    let auth = capabilities.auth_config()?;
+    let secret_name = auth.secret_name.trim().to_string();
+
+    if secret_name.is_empty() {
+        return None;
+    }
+
+    Some(DiscoveredToolAuth {
+        secret_name,
+        display_name: auth.display_name.clone(),
+        instructions: auth.instructions.clone(),
+        setup_url: auth.setup_url.clone(),
+        token_hint: auth.token_hint.clone(),
+        env_var: auth.env_var.clone(),
+        provider: auth.provider.clone(),
+        has_oauth: auth.oauth.is_some(),
+    })
 }
 
 fn invoke_tool_internal(

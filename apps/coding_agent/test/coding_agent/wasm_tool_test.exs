@@ -42,6 +42,7 @@ defmodule CodingAgent.WasmToolTest do
             "description": "Echo fake wasm",
             "schema_json": json.dumps({"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}),
             "capabilities": {"workspace_read": False, "http": False, "tool_invoke": False, "secrets": False},
+            "auth": {"secret_name": "echo_token", "display_name": "Echo", "has_oauth": False},
             "warnings": []
           },
           {
@@ -113,7 +114,7 @@ defmodule CodingAgent.WasmToolTest do
     inventory =
       ToolFactory.build_inventory(sidecar, discover.tools, cwd: tmp_dir, session_id: "s1")
 
-    {"echo_wasm", tool, _source} =
+    {"echo_wasm", tool, {:wasm, source_meta}} =
       Enum.find(inventory, fn {name, _, _} -> name == "echo_wasm" end)
 
     result = tool.execute.("call-1", %{"text" => "hello"}, nil, nil)
@@ -122,6 +123,8 @@ defmodule CodingAgent.WasmToolTest do
     assert result.trust == :untrusted
     assert [%TextContent{text: text}] = result.content
     assert text =~ "echo"
+    assert source_meta.auth.secret_name == "echo_token"
+    assert source_meta.capabilities.auth == false
   end
 
   test "wasm tool error payload is converted to text", %{tmp_dir: tmp_dir} do
