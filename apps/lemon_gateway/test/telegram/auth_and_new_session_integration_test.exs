@@ -32,7 +32,7 @@ defmodule LemonGateway.Telegram.AuthAndNewSessionIntegrationTest do
     end
 
     @impl true
-    def id, do: "count"
+    def id, do: "lemon"
 
     @impl true
     def format_resume(%ResumeToken{value: v}), do: "count resume #{v}"
@@ -85,6 +85,8 @@ defmodule LemonGateway.Telegram.AuthAndNewSessionIntegrationTest do
     _ = Application.stop(:lemon_gateway)
     _ = Application.stop(:lemon_router)
     _ = Application.stop(:lemon_channels)
+    _ = Application.stop(:lemon_control_plane)
+    _ = Application.stop(:lemon_automation)
     _ = Application.stop(:lemon_core)
 
     MockTelegramAPI.reset!(notify_pid: self())
@@ -107,6 +109,9 @@ defmodule LemonGateway.Telegram.AuthAndNewSessionIntegrationTest do
       Application.delete_env(:lemon_gateway, :telegram)
       Application.delete_env(:lemon_gateway, :transports)
       Application.delete_env(:lemon_gateway, :engines)
+      Application.delete_env(:lemon_channels, :gateway)
+      Application.delete_env(:lemon_channels, :telegram)
+      Application.delete_env(:lemon_channels, :engines)
     end)
 
     :ok
@@ -120,7 +125,7 @@ defmodule LemonGateway.Telegram.AuthAndNewSessionIntegrationTest do
 
     base_config = %{
       max_concurrent_runs: 10,
-      default_engine: "count",
+      default_engine: "lemon",
       enable_telegram: true,
       require_engine_lock: false,
       bindings: [],
@@ -155,11 +160,36 @@ defmodule LemonGateway.Telegram.AuthAndNewSessionIntegrationTest do
       poll_interval_ms: config.telegram.poll_interval_ms
     })
 
+    Application.put_env(:lemon_channels, :gateway, config)
+
+    Application.put_env(:lemon_channels, :telegram, %{
+      api_mod: MockTelegramAPI,
+      poll_interval_ms: config.telegram.poll_interval_ms
+    })
+
+    Application.put_env(:lemon_channels, :engines, [
+      CountingEngine,
+      LemonGateway.Engines.Echo
+    ])
+
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
     {:ok, _} = Application.ensure_all_started(:lemon_router)
+    :ok =
+      LemonCore.RouterBridge.configure(
+        router: LemonRouter.Router,
+        run_orchestrator: LemonRouter.RunOrchestrator
+      )
+
     {:ok, _} = Application.ensure_all_started(:lemon_channels)
 
-    assert is_pid(wait_for_pid(LemonChannels.Adapters.Telegram.Transport, 2_000))
+    poller_pid =
+      wait_for_pid(LemonChannels.Adapters.Telegram.Transport, 5_000) ||
+        Process.whereis(LemonChannels.Adapters.Telegram.Transport)
+
+    assert is_pid(poller_pid)
+
+    poller_state = :sys.get_state(LemonChannels.Adapters.Telegram.Transport)
+    assert poller_state.api_mod == MockTelegramAPI
   end
 
   defp wait_for_pid(name, timeout_ms) do

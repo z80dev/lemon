@@ -157,7 +157,7 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
     alias LemonGateway.Event
 
     @impl true
-    def id, do: "reply"
+    def id, do: "lemon"
 
     @impl true
     def format_resume(%ResumeToken{value: sid}), do: "reply resume #{sid}"
@@ -208,7 +208,7 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
     alias LemonGateway.Event
 
     @impl true
-    def id, do: "fail"
+    def id, do: "lemon"
 
     @impl true
     def format_resume(%ResumeToken{value: sid}), do: "fail resume #{sid}"
@@ -259,7 +259,7 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
     alias LemonGateway.Event
 
     @impl true
-    def id, do: "slow_reply"
+    def id, do: "lemon"
 
     @impl true
     def format_resume(%ResumeToken{value: sid}), do: "slow reply resume #{sid}"
@@ -306,6 +306,8 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
     _ = Application.stop(:lemon_gateway)
     _ = Application.stop(:lemon_router)
     _ = Application.stop(:lemon_channels)
+    _ = Application.stop(:lemon_control_plane)
+    _ = Application.stop(:lemon_automation)
     _ = Application.stop(:lemon_core)
 
     MockTelegramAPI.stop()
@@ -326,6 +328,9 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
       Application.delete_env(:lemon_gateway, :telegram)
       Application.delete_env(:lemon_gateway, :transports)
       Application.delete_env(:lemon_gateway, :engines)
+      Application.delete_env(:lemon_channels, :gateway)
+      Application.delete_env(:lemon_channels, :telegram)
+      Application.delete_env(:lemon_channels, :engines)
     end)
 
     :ok
@@ -338,9 +343,18 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
 
     System.put_env("LEMON_LOCK_DIR", lock_dir)
 
+    engine_selector = Map.get(overrides, :default_engine, "reply")
+
+    engine_mod =
+      case engine_selector do
+        "fail" -> FailEngine
+        "slow_reply" -> SlowReplyEngine
+        _ -> ReplyEngine
+      end
+
     base_config = %{
       max_concurrent_runs: 10,
-      default_engine: "reply",
+      default_engine: "lemon",
       enable_telegram: true,
       require_engine_lock: false,
       bindings: [],
@@ -355,7 +369,12 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
       }
     }
 
-    config = Map.merge(base_config, overrides)
+    config_overrides = Map.delete(overrides, :default_engine)
+
+    config =
+      base_config
+      |> Map.merge(config_overrides)
+      |> Map.update(:telegram, %{}, fn tg -> Map.merge(base_config.telegram, tg || %{}) end)
 
     Application.put_env(:lemon_gateway, :config_path, "/nonexistent/path.toml")
     Application.put_env(:lemon_gateway, Config, config)
@@ -364,9 +383,7 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
     Application.put_env(:lemon_core, LemonCore.Store, backend: LemonCore.Store.EtsBackend)
 
     Application.put_env(:lemon_gateway, :engines, [
-      ReplyEngine,
-      SlowReplyEngine,
-      FailEngine,
+      engine_mod,
       LemonGateway.Engines.Echo
     ])
 
@@ -376,11 +393,32 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
       poll_interval_ms: 25
     })
 
+    Application.put_env(:lemon_channels, :gateway, config)
+
+    Application.put_env(:lemon_channels, :telegram, %{
+      api_mod: MockTelegramAPI,
+      poll_interval_ms: config.telegram.poll_interval_ms
+    })
+
+    Application.put_env(:lemon_channels, :engines, [
+      engine_mod,
+      LemonGateway.Engines.Echo
+    ])
+
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
     {:ok, _} = Application.ensure_all_started(:lemon_router)
+    :ok =
+      LemonCore.RouterBridge.configure(
+        router: LemonRouter.Router,
+        run_orchestrator: LemonRouter.RunOrchestrator
+      )
+
     {:ok, _} = Application.ensure_all_started(:lemon_channels)
 
-    poller_pid = wait_for_pid(LemonChannels.Adapters.Telegram.Transport, 2_000)
+    poller_pid =
+      wait_for_pid(LemonChannels.Adapters.Telegram.Transport, 5_000) ||
+        Process.whereis(LemonChannels.Adapters.Telegram.Transport)
+
     assert is_pid(poller_pid)
 
     poller_state = :sys.get_state(LemonChannels.Adapters.Telegram.Transport)

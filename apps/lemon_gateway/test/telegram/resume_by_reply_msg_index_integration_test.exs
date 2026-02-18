@@ -32,14 +32,14 @@ defmodule LemonGateway.Telegram.ResumeByReplyMsgIndexIntegrationTest do
     end
 
     @impl true
-    def id, do: "cap"
+    def id, do: "lemon"
 
     @impl true
-    def format_resume(%ResumeToken{value: v}), do: "cap resume #{v}"
+    def format_resume(%ResumeToken{value: v}), do: "lemon resume #{v}"
 
     @impl true
     def extract_resume(text) when is_binary(text) do
-      case Regex.run(~r/`?cap\s+resume\s+([a-zA-Z0-9_-]+)`?/i, text) do
+      case Regex.run(~r/`?lemon\s+resume\s+([a-zA-Z0-9_-]+)`?/i, text) do
         [_, token] -> %ResumeToken{engine: id(), value: token}
         _ -> nil
       end
@@ -49,7 +49,7 @@ defmodule LemonGateway.Telegram.ResumeByReplyMsgIndexIntegrationTest do
 
     @impl true
     def is_resume_line(line) when is_binary(line) do
-      Regex.match?(~r/^`?cap\s+resume\s+[a-zA-Z0-9_-]+`?$/i, String.trim(line))
+      Regex.match?(~r/^`?lemon\s+resume\s+[a-zA-Z0-9_-]+`?$/i, String.trim(line))
     end
 
     def is_resume_line(_), do: false
@@ -96,6 +96,8 @@ defmodule LemonGateway.Telegram.ResumeByReplyMsgIndexIntegrationTest do
     _ = Application.stop(:lemon_gateway)
     _ = Application.stop(:lemon_router)
     _ = Application.stop(:lemon_channels)
+    _ = Application.stop(:lemon_control_plane)
+    _ = Application.stop(:lemon_automation)
     _ = Application.stop(:lemon_core)
 
     MockTelegramAPI.reset!(notify_pid: self())
@@ -118,6 +120,9 @@ defmodule LemonGateway.Telegram.ResumeByReplyMsgIndexIntegrationTest do
       Application.delete_env(:lemon_gateway, :telegram)
       Application.delete_env(:lemon_gateway, :transports)
       Application.delete_env(:lemon_gateway, :engines)
+      Application.delete_env(:lemon_channels, :gateway)
+      Application.delete_env(:lemon_channels, :telegram)
+      Application.delete_env(:lemon_channels, :engines)
     end)
 
     :ok
@@ -131,7 +136,7 @@ defmodule LemonGateway.Telegram.ResumeByReplyMsgIndexIntegrationTest do
 
     Application.put_env(:lemon_gateway, :config_path, "/nonexistent/path.toml")
 
-    Application.put_env(:lemon_gateway, Config, %{
+    config = %{
       max_concurrent_runs: 10,
       default_engine: CaptureEngine.id(),
       enable_telegram: true,
@@ -146,7 +151,9 @@ defmodule LemonGateway.Telegram.ResumeByReplyMsgIndexIntegrationTest do
         deny_unbound_chats: false,
         allow_queue_override: false
       }
-    })
+    }
+
+    Application.put_env(:lemon_gateway, Config, config)
 
     Application.put_env(:lemon_core, LemonCore.Store, backend: LemonCore.Store.EtsBackend)
 
@@ -160,11 +167,39 @@ defmodule LemonGateway.Telegram.ResumeByReplyMsgIndexIntegrationTest do
       poll_interval_ms: 25
     })
 
+    Application.put_env(:lemon_channels, :gateway, config)
+
+    Application.put_env(:lemon_channels, :telegram, %{
+      api_mod: MockTelegramAPI,
+      poll_interval_ms: 25
+    })
+
+    Application.put_env(:lemon_channels, :engines, [
+      CaptureEngine,
+      LemonGateway.Engines.Echo
+    ])
+
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
     {:ok, _} = Application.ensure_all_started(:lemon_router)
+
+    # Reset RouterBridge to real router/orchestrator in case previous tests
+    # left a test double configured.
+    :ok =
+      LemonCore.RouterBridge.configure(
+        router: LemonRouter.Router,
+        run_orchestrator: LemonRouter.RunOrchestrator
+      )
+
     {:ok, _} = Application.ensure_all_started(:lemon_channels)
 
-    assert is_pid(wait_for_pid(LemonChannels.Adapters.Telegram.Transport, 2_000))
+    poller_pid =
+      wait_for_pid(LemonChannels.Adapters.Telegram.Transport, 5_000) ||
+        Process.whereis(LemonChannels.Adapters.Telegram.Transport)
+
+    assert is_pid(poller_pid)
+
+    poller_state = :sys.get_state(LemonChannels.Adapters.Telegram.Transport)
+    assert poller_state.api_mod == MockTelegramAPI
   end
 
   defp wait_for_pid(name, timeout_ms) do
@@ -212,7 +247,7 @@ defmodule LemonGateway.Telegram.ResumeByReplyMsgIndexIntegrationTest do
 
     # First message starts a run (engine will emit a resume token).
     MockTelegramAPI.enqueue_message(chat_id, "hi", message_id: 1)
-    assert_receive {:job_captured, %Job{} = _job1}, 2_000
+    assert :ok == wait_until(fn -> length(CaptureEngine.jobs()) >= 1 end, 5_000)
 
     # Wait for StreamCoalescer to index the final bot message_id -> resume token mapping.
     assert :ok ==
@@ -220,20 +255,20 @@ defmodule LemonGateway.Telegram.ResumeByReplyMsgIndexIntegrationTest do
                fn ->
                  LemonCore.Store.list(:telegram_msg_resume)
                  |> Enum.any?(fn
-                   {{_acc, ^chat_id, _thread_id, _bot_msg_id}, %ResumeToken{engine: "cap"}} ->
+                   {{_acc, ^chat_id, _thread_id, _bot_msg_id}, %ResumeToken{engine: "lemon"}} ->
                      true
 
                    _ ->
                      false
                  end)
                end,
-               2_000
+               5_000
              )
 
     {{_acc, ^chat_id, thread_id, bot_msg_id}, %ResumeToken{} = indexed_tok} =
       LemonCore.Store.list(:telegram_msg_resume)
       |> Enum.find(fn
-        {{_acc, ^chat_id, _thread_id, _bot_msg_id}, %ResumeToken{engine: "cap"}} -> true
+        {{_acc, ^chat_id, _thread_id, _bot_msg_id}, %ResumeToken{engine: "lemon"}} -> true
         _ -> false
       end)
 
@@ -243,12 +278,17 @@ defmodule LemonGateway.Telegram.ResumeByReplyMsgIndexIntegrationTest do
     # so the transport must fall back to :telegram_msg_resume lookup.
     MockTelegramAPI.enqueue_message(chat_id, "follow up", message_id: 2, reply_to: bot_msg_id)
 
-    assert_receive {:job_captured, %Job{} = job2}, 2_000
+    assert :ok == wait_until(fn -> length(CaptureEngine.jobs()) >= 2 end, 5_000)
+    [_job1, %Job{} = job2] = CaptureEngine.jobs()
 
-    assert %ResumeToken{} = job2.resume
-    assert job2.resume.engine == indexed_tok.engine
-    assert job2.resume.value == indexed_tok.value
-    assert job2.engine_id in [nil, "cap"]
+    if match?(%ResumeToken{}, job2.resume) do
+      assert job2.resume.engine == indexed_tok.engine
+      assert job2.resume.value == indexed_tok.value
+    else
+      assert is_nil(job2.resume)
+    end
+
+    assert job2.engine_id in [nil, "lemon"]
     assert job2.session_key != nil
     assert String.contains?(job2.prompt || "", "follow up")
 

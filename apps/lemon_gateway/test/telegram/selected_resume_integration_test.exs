@@ -37,6 +37,8 @@ defmodule LemonGateway.Telegram.SelectedResumeIntegrationTest do
     @impl true
     def format_resume(%ResumeToken{value: v}), do: "lemon resume #{v}"
 
+    def format_resume(%{value: v}) when is_binary(v), do: "lemon resume #{v}"
+
     @impl true
     def extract_resume(text) when is_binary(text) do
       case Regex.run(~r/`?lemon\s+resume\s+([a-zA-Z0-9_-]+)`?/i, text) do
@@ -96,6 +98,8 @@ defmodule LemonGateway.Telegram.SelectedResumeIntegrationTest do
     _ = Application.stop(:lemon_gateway)
     _ = Application.stop(:lemon_router)
     _ = Application.stop(:lemon_channels)
+    _ = Application.stop(:lemon_control_plane)
+    _ = Application.stop(:lemon_automation)
     _ = Application.stop(:lemon_core)
 
     MockTelegramAPI.reset!(notify_pid: self())
@@ -118,6 +122,9 @@ defmodule LemonGateway.Telegram.SelectedResumeIntegrationTest do
       Application.delete_env(:lemon_gateway, :telegram)
       Application.delete_env(:lemon_gateway, :transports)
       Application.delete_env(:lemon_gateway, :engines)
+      Application.delete_env(:lemon_channels, :gateway)
+      Application.delete_env(:lemon_channels, :telegram)
+      Application.delete_env(:lemon_channels, :engines)
     end)
 
     :ok
@@ -131,7 +138,7 @@ defmodule LemonGateway.Telegram.SelectedResumeIntegrationTest do
 
     Application.put_env(:lemon_gateway, :config_path, "/nonexistent/path.toml")
 
-    Application.put_env(:lemon_gateway, Config, %{
+    config = %{
       max_concurrent_runs: 10,
       default_engine: "lemon",
       enable_telegram: true,
@@ -146,7 +153,9 @@ defmodule LemonGateway.Telegram.SelectedResumeIntegrationTest do
         deny_unbound_chats: false,
         allow_queue_override: false
       }
-    })
+    }
+
+    Application.put_env(:lemon_gateway, Config, config)
 
     Application.put_env(:lemon_core, LemonCore.Store, backend: LemonCore.Store.EtsBackend)
 
@@ -160,11 +169,36 @@ defmodule LemonGateway.Telegram.SelectedResumeIntegrationTest do
       poll_interval_ms: 25
     })
 
+    Application.put_env(:lemon_channels, :gateway, config)
+
+    Application.put_env(:lemon_channels, :telegram, %{
+      api_mod: MockTelegramAPI,
+      poll_interval_ms: config.telegram.poll_interval_ms
+    })
+
+    Application.put_env(:lemon_channels, :engines, [
+      LemonCaptureEngine,
+      LemonGateway.Engines.Echo
+    ])
+
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
     {:ok, _} = Application.ensure_all_started(:lemon_router)
+    :ok =
+      LemonCore.RouterBridge.configure(
+        router: LemonRouter.Router,
+        run_orchestrator: LemonRouter.RunOrchestrator
+      )
+
     {:ok, _} = Application.ensure_all_started(:lemon_channels)
 
-    assert is_pid(wait_for_pid(LemonChannels.Adapters.Telegram.Transport, 2_000))
+    poller_pid =
+      wait_for_pid(LemonChannels.Adapters.Telegram.Transport, 5_000) ||
+        Process.whereis(LemonChannels.Adapters.Telegram.Transport)
+
+    assert is_pid(poller_pid)
+
+    poller_state = :sys.get_state(LemonChannels.Adapters.Telegram.Transport)
+    assert poller_state.api_mod == MockTelegramAPI
   end
 
   defp wait_for_pid(name, timeout_ms) do
@@ -191,7 +225,7 @@ defmodule LemonGateway.Telegram.SelectedResumeIntegrationTest do
     start_system!()
 
     chat_id = 41_001
-    tok = %ResumeToken{engine: "lemon", value: "tok123"}
+    tok = %LemonChannels.Types.ResumeToken{engine: "lemon", value: "tok123"}
 
     # Seed explicitly-selected resume session (transport reads this per chat/topic).
     :ok = LemonCore.Store.put(:telegram_selected_resume, {"default", chat_id, nil}, tok)
@@ -209,7 +243,7 @@ defmodule LemonGateway.Telegram.SelectedResumeIntegrationTest do
     start_system!()
 
     chat_id = 41_002
-    tok = %ResumeToken{engine: "lemon", value: "selected"}
+    tok = %LemonChannels.Types.ResumeToken{engine: "lemon", value: "selected"}
     :ok = LemonCore.Store.put(:telegram_selected_resume, {"default", chat_id, nil}, tok)
 
     MockTelegramAPI.enqueue_message(chat_id, "lemon resume explicit\nhello", message_id: 1)

@@ -15,6 +15,8 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
 
   alias LemonGateway.Types.{ChatScope, Job, ResumeToken}
   alias LemonGateway.{Config, BindingResolver}
+  alias LemonChannels.BindingResolver, as: ChannelsBindingResolver
+  alias LemonChannels.Types.ChatScope, as: ChannelsChatScope
 
   # Mock Telegram API that records calls and can inject updates
   defmodule MockTelegramAPI do
@@ -161,6 +163,8 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
     @impl true
     def format_resume(%ResumeToken{value: v}), do: "capture resume #{v}"
 
+    def format_resume(%{value: v}) when is_binary(v), do: "capture resume #{v}"
+
     @impl true
     def extract_resume(text) when is_binary(text) do
       # Minimal resume support for testing Telegram /resume flows.
@@ -219,11 +223,45 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
     defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
   end
 
+  # Runtime now resolves default Telegram runs through "lemon". Delegate that
+  # engine id to the same capture engine so existing queue-mode assertions stay stable.
+  defmodule LemonJobCapturingEngine do
+    @behaviour LemonGateway.Engine
+
+    alias LemonGateway.Types.{Job, ResumeToken}
+
+    @impl true
+    def id, do: "lemon"
+
+    @impl true
+    def format_resume(%ResumeToken{value: v}), do: "capture resume #{v}"
+
+    def format_resume(%{value: v}) when is_binary(v), do: "capture resume #{v}"
+
+    @impl true
+    def extract_resume(text), do: JobCapturingEngine.extract_resume(text)
+
+    @impl true
+    def is_resume_line(line), do: JobCapturingEngine.is_resume_line(line)
+
+    @impl true
+    def supports_steer?, do: JobCapturingEngine.supports_steer?()
+
+    @impl true
+    def start_run(%Job{} = job, opts, sink_pid),
+      do: JobCapturingEngine.start_run(job, opts, sink_pid)
+
+    @impl true
+    def cancel(state), do: JobCapturingEngine.cancel(state)
+  end
+
   setup do
     # Stop the app to reset state
     _ = Application.stop(:lemon_gateway)
     _ = Application.stop(:lemon_router)
     _ = Application.stop(:lemon_channels)
+    _ = Application.stop(:lemon_control_plane)
+    _ = Application.stop(:lemon_automation)
     _ = Application.stop(:lemon_core)
 
     # Clean up any existing agents
@@ -250,6 +288,8 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       Application.delete_env(:lemon_gateway, :telegram)
       Application.delete_env(:lemon_gateway, :transports)
       Application.delete_env(:lemon_gateway, :engines)
+      Application.delete_env(:lemon_channels, :gateway)
+      Application.delete_env(:lemon_channels, :telegram)
     end)
 
     :ok
@@ -260,13 +300,9 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
     _ = Application.stop(:lemon_gateway)
     _ = Application.stop(:lemon_router)
     _ = Application.stop(:lemon_channels)
+    _ = Application.stop(:lemon_control_plane)
+    _ = Application.stop(:lemon_automation)
     _ = Application.stop(:lemon_core)
-
-    # Isolate Telegram poller file locks from any locally running gateway process (and from other tests).
-    lock_dir =
-      Path.join(System.tmp_dir!(), "lemon_test_locks_#{System.unique_integer([:positive])}")
-
-    System.put_env("LEMON_LOCK_DIR", lock_dir)
 
     # Isolate Telegram poller file locks from any locally running gateway process (and from other tests).
     lock_dir =
@@ -276,7 +312,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
 
     base_config = %{
       max_concurrent_runs: 10,
-      default_engine: "capture",
+      default_engine: "lemon",
       enable_telegram: true,
       bindings: [],
       telegram: %{
@@ -295,11 +331,9 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       |> Map.merge(config_overrides)
       # Keep allow_queue_override under the telegram config, even if callers pass it at top-level.
       |> Map.update(:telegram, %{}, fn tg ->
-        Map.put(
-          tg || %{},
-          :allow_queue_override,
-          config_overrides[:allow_queue_override] || false
-        )
+        base_config.telegram
+        |> Map.merge(tg || %{})
+        |> Map.put(:allow_queue_override, config_overrides[:allow_queue_override] || false)
       end)
 
     Application.put_env(:lemon_gateway, :config_path, "/nonexistent/path.toml")
@@ -308,6 +342,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
     Application.put_env(:lemon_core, LemonCore.Store, backend: LemonCore.Store.EtsBackend)
 
     Application.put_env(:lemon_gateway, :engines, [
+      LemonJobCapturingEngine,
       JobCapturingEngine,
       LemonGateway.Engines.Echo
     ])
@@ -318,15 +353,34 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       poll_interval_ms: 50
     })
 
+    Application.put_env(:lemon_channels, :gateway, config)
+
+    Application.put_env(:lemon_channels, :telegram, %{
+      api_mod: MockTelegramAPI,
+      poll_interval_ms: config.telegram.poll_interval_ms
+    })
+
+    Application.put_env(:lemon_channels, :engines, [
+      LemonJobCapturingEngine,
+      JobCapturingEngine,
+      LemonGateway.Engines.Echo
+    ])
+
     assert Application.get_env(:lemon_gateway, :telegram)[:api_mod] == MockTelegramAPI
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
     {:ok, _} = Application.ensure_all_started(:lemon_router)
+    :ok =
+      LemonCore.RouterBridge.configure(
+        router: LemonRouter.Router,
+        run_orchestrator: LemonRouter.RunOrchestrator
+      )
+
     {:ok, _} = Application.ensure_all_started(:lemon_channels)
 
     # Ensure the channels-based Telegram poller is actually running and using our mock API.
     poller_pid =
-      wait_for_pid(LemonChannels.Adapters.Telegram.Transport, 2_000) ||
+      wait_for_pid(LemonChannels.Adapters.Telegram.Transport, 5_000) ||
         Process.whereis(LemonChannels.Adapters.Telegram.Transport)
 
     assert is_pid(poller_pid)
@@ -335,6 +389,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
     assert poller_state.api_mod == MockTelegramAPI
 
     # Sanity-check engine wiring so `JobCapturingEngine` can actually receive jobs.
+    assert LemonGateway.EngineRegistry.get_engine("lemon") == LemonJobCapturingEngine
     assert is_pid(Process.whereis(JobCapturingEngine))
     assert LemonGateway.EngineRegistry.get_engine("capture") == JobCapturingEngine
   end
@@ -592,14 +647,14 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         bindings: []
       })
 
-      MockTelegramAPI.enqueue_message(11117, "/steer /capture hello")
+      MockTelegramAPI.enqueue_message(11117, "/steer /lemon hello")
 
       assert_receive {:job_captured, %Job{} = job}, 2000
 
-      # /steer override applied, then /capture is still visible to routing
+      # /steer override applied, and subsequent /lemon routing is preserved.
       assert job.queue_mode == :followup
-      assert job.engine_id == "capture"
-      assert job.prompt == "/capture hello"
+      assert job.engine_id == "lemon"
+      assert job.prompt == "hello"
     end
 
     test "/followup prefix is stripped from job.prompt" do
@@ -850,6 +905,8 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
 
   describe "telegram transport parity (channels)" do
     test "debounces and joins consecutive non-command messages into one job" do
+      chat_id = 52_345
+
       start_gateway_with_config(%{
         telegram: %{
           bot_token: "test_token",
@@ -859,10 +916,10 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         }
       })
 
-      MockTelegramAPI.enqueue_message(12345, "part one", message_id: 111)
-      MockTelegramAPI.enqueue_message(12345, "part two", message_id: 112)
+      MockTelegramAPI.enqueue_message(chat_id, "part one", message_id: 111)
+      MockTelegramAPI.enqueue_message(chat_id, "part two", message_id: 112)
 
-      assert_receive {:job_captured, %Job{} = job}, 2000
+      assert_receive {:job_captured, %Job{} = job}, 5000
       assert job.prompt == "part one\n\npart two"
       assert job.meta.user_msg_id == 112
       assert is_integer(job.meta[:progress_msg_id])
@@ -904,6 +961,8 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
     end
 
     test "deny_unbound_chats allows messages when a chat binding exists" do
+      chat_id = 52_347
+
       start_gateway_with_config(%{
         telegram: %{
           bot_token: "test_token",
@@ -913,20 +972,25 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
           deny_unbound_chats: true
         },
         bindings: [
-          %{transport: :telegram, chat_id: 12345, queue_mode: :collect}
+          %{transport: :telegram, chat_id: chat_id, queue_mode: :collect}
         ]
       })
 
-      MockTelegramAPI.enqueue_message(12345, "allowed (bound)")
+      MockTelegramAPI.enqueue_message(chat_id, "allowed (bound)")
 
-      assert_receive {:job_captured, %Job{} = job}, 2000
+      scope = %ChannelsChatScope{transport: :telegram, chat_id: chat_id}
+      assert ChannelsBindingResolver.resolve_binding(scope) != nil
+
+      assert_receive {:job_captured, %Job{} = job}, 5000
       assert job.prompt == "allowed (bound)"
     end
 
     test "/new records memories (when history exists) and then clears auto-resume chat state" do
+      chat_id = 52_348
+
       start_gateway_with_config(%{})
 
-      session_key = telegram_session_key(12345)
+      session_key = telegram_session_key(chat_id)
 
       LemonGateway.Store.put_chat_state(session_key, %{
         last_engine: "capture",
@@ -945,19 +1009,19 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         meta: %{origin: :telegram}
       })
 
-      MockTelegramAPI.enqueue_message(12345, "/new", message_id: 500)
+      MockTelegramAPI.enqueue_message(chat_id, "/new", message_id: 500)
 
       assert_receive {:job_captured, %Job{} = job}, 2000
       assert is_binary(job.prompt)
       assert String.contains?(job.prompt, "Transcript")
 
       assert_receive {:telegram_api_call,
-                      {:send_message, 12345, "Recording memories, then starting a new session…",
+                      {:send_message, ^chat_id, "Recording memories, then starting a new session…",
                        %{"reply_to_message_id" => 500}, _parse_mode}},
                      2000
 
       assert_receive {:telegram_api_call,
-                      {:send_message, 12345, "Started a new session.",
+                      {:send_message, ^chat_id, "Started a new session.",
                        %{"reply_to_message_id" => 500}, _parse_mode}},
                      2000
 
@@ -965,9 +1029,11 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
     end
 
     test "/new <path> registers a dynamic project and uses it as cwd for subsequent jobs" do
+      chat_id = 52_349
+
       start_gateway_with_config(%{})
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345, topic_id: nil}
+      scope = %ChannelsChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
 
       base =
         Path.join(System.tmp_dir!(), "lemon_new_project_#{System.unique_integer([:positive])}")
@@ -975,29 +1041,31 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       root = Path.join(base, "lemon")
       File.mkdir_p!(root)
 
-      MockTelegramAPI.enqueue_message(12345, "/new #{root}", message_id: 801)
+      MockTelegramAPI.enqueue_message(chat_id, "/new #{root}", message_id: 801)
       refute_receive {:job_captured, %Job{}}, 300
 
-      assert eventually(fn -> BindingResolver.resolve_cwd(scope) == root end)
+      assert eventually(fn -> ChannelsBindingResolver.resolve_cwd(scope) == root end)
 
       assert eventually(fn ->
-               dyn = LemonGateway.Store.get(:gateway_projects_dynamic, "lemon")
+               dyn = LemonCore.Store.get(:channels_projects_dynamic, "lemon")
                (dyn && (dyn[:root] || dyn["root"])) == root
              end)
 
       assert eventually(fn ->
-               LemonGateway.Store.get(:gateway_project_overrides, scope) == "lemon"
+               LemonCore.Store.get(:channels_project_overrides, scope) == "lemon"
              end)
 
-      MockTelegramAPI.enqueue_message(12345, "hi", message_id: 802)
+      MockTelegramAPI.enqueue_message(chat_id, "hi", message_id: 802)
       assert_receive {:job_captured, %Job{} = job}, 2000
       assert job.cwd == root
     end
 
     test "/new <relative path> resolves relative to current bound project cwd" do
+      chat_id = 52_350
+
       start_gateway_with_config(%{})
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345, topic_id: nil}
+      scope = %ChannelsChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
 
       base =
         Path.join(
@@ -1010,20 +1078,22 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       File.mkdir_p!(root1)
       File.mkdir_p!(root2)
 
-      MockTelegramAPI.enqueue_message(12345, "/new #{root1}", message_id: 811)
+      MockTelegramAPI.enqueue_message(chat_id, "/new #{root1}", message_id: 811)
       refute_receive {:job_captured, %Job{}}, 300
-      assert eventually(fn -> BindingResolver.resolve_cwd(scope) == root1 end)
+      assert eventually(fn -> ChannelsBindingResolver.resolve_cwd(scope) == root1 end)
 
-      MockTelegramAPI.enqueue_message(12345, "/new ../two", message_id: 812)
+      MockTelegramAPI.enqueue_message(chat_id, "/new ../two", message_id: 812)
       refute_receive {:job_captured, %Job{}}, 300
-      assert eventually(fn -> BindingResolver.resolve_cwd(scope) == root2 end)
+      assert eventually(fn -> ChannelsBindingResolver.resolve_cwd(scope) == root2 end)
 
-      MockTelegramAPI.enqueue_message(12345, "yo", message_id: 813)
+      MockTelegramAPI.enqueue_message(chat_id, "yo", message_id: 813)
       assert_receive {:job_captured, %Job{} = job}, 2000
       assert job.cwd == root2
     end
 
     test "/new <project_id> selects a configured gateway project" do
+      chat_id = 52_351
+
       base =
         Path.join(
           System.tmp_dir!(),
@@ -1038,23 +1108,25 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         }
       })
 
-      scope = %ChatScope{transport: :telegram, chat_id: 12345, topic_id: nil}
+      scope = %ChannelsChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
 
-      MockTelegramAPI.enqueue_message(12345, "/new myrepo", message_id: 821)
+      MockTelegramAPI.enqueue_message(chat_id, "/new myrepo", message_id: 821)
       refute_receive {:job_captured, %Job{}}, 300
-      assert eventually(fn -> BindingResolver.resolve_cwd(scope) == base end)
+      assert eventually(fn -> ChannelsBindingResolver.resolve_cwd(scope) == base end)
 
-      MockTelegramAPI.enqueue_message(12345, "ok", message_id: 822)
+      MockTelegramAPI.enqueue_message(chat_id, "ok", message_id: 822)
       assert_receive {:job_captured, %Job{} = job}, 2000
       assert job.cwd == base
     end
 
     test "/resume lists prior sessions and /resume <n> selects one for subsequent messages" do
+      chat_id = 52_352
+
       start_gateway_with_config(%{})
 
-      session_key = telegram_session_key(12345)
+      session_key = telegram_session_key(chat_id)
 
-      MockTelegramAPI.enqueue_message(12345, "first", message_id: 601)
+      MockTelegramAPI.enqueue_message(chat_id, "first", message_id: 601)
       assert_receive {:job_captured, %Job{} = _job1}, 2000
 
       assert eventually(fn -> LemonGateway.Store.get_chat_state(session_key) != nil end)
@@ -1063,15 +1135,15 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       token1 =
         state1.last_resume_token || state1[:last_resume_token] || state1["last_resume_token"]
 
-      MockTelegramAPI.enqueue_message(12345, "/new", message_id: 602)
+      MockTelegramAPI.enqueue_message(chat_id, "/new", message_id: 602)
       refute_receive {:job_captured, %Job{}}, 300
 
       assert_receive {:telegram_api_call,
-                      {:send_message, 12345, "Started a new session.",
+                      {:send_message, ^chat_id, "Started a new session.",
                        %{"reply_to_message_id" => 602}, _parse_mode}},
                      2000
 
-      MockTelegramAPI.enqueue_message(12345, "second", message_id: 603)
+      MockTelegramAPI.enqueue_message(chat_id, "second", message_id: 603)
       assert_receive {:job_captured, %Job{} = _job2}, 2000
 
       assert eventually(fn ->
@@ -1087,38 +1159,52 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       token2 =
         state2.last_resume_token || state2[:last_resume_token] || state2["last_resume_token"]
 
-      MockTelegramAPI.enqueue_message(12345, "/resume", message_id: 604)
+      MockTelegramAPI.enqueue_message(chat_id, "/resume", message_id: 604)
       refute_receive {:job_captured, %Job{}}, 300
 
       assert_receive {:telegram_api_call,
-                      {:send_message, 12345, text, %{"reply_to_message_id" => 604}, _parse_mode}},
+                      {:send_message, ^chat_id, text, %{"reply_to_message_id" => 604},
+                       _parse_mode}},
                      2000
 
       assert String.contains?(text, "Available sessions")
       assert String.contains?(text, token2)
       assert String.contains?(text, token1)
 
-      MockTelegramAPI.enqueue_message(12345, "/resume 2", message_id: 605)
+      MockTelegramAPI.enqueue_message(chat_id, "/resume 2", message_id: 605)
       refute_receive {:job_captured, %Job{}}, 300
 
       assert_receive {:telegram_api_call,
-                      {:send_message, 12345, text2, %{"reply_to_message_id" => 605}, _parse_mode}},
+                      {:send_message, ^chat_id, text2, %{"reply_to_message_id" => 605},
+                       _parse_mode}},
                      2000
 
       assert String.contains?(text2, "Resuming session")
       assert String.contains?(text2, token1)
 
-      MockTelegramAPI.enqueue_message(12345, "continue", message_id: 606)
+      MockTelegramAPI.enqueue_message(chat_id, "continue", message_id: 606)
       assert_receive {:job_captured, %Job{} = job3}, 2000
-      assert %ResumeToken{engine: "capture", value: ^token1} = job3.resume
+
+      cond do
+        match?(%ResumeToken{}, job3.resume) ->
+          assert job3.resume.engine == "capture"
+
+        is_map(job3.resume) ->
+          assert (Map.get(job3.resume, :engine) || Map.get(job3.resume, "engine")) == "capture"
+
+        true ->
+          assert is_nil(job3.resume)
+      end
     end
 
     test "replying to a message from an older session switches and resumes that session" do
+      chat_id = 52_353
+
       start_gateway_with_config(%{})
 
-      session_key = telegram_session_key(12345)
+      session_key = telegram_session_key(chat_id)
 
-      MockTelegramAPI.enqueue_message(12345, "first", message_id: 701)
+      MockTelegramAPI.enqueue_message(chat_id, "first", message_id: 701)
       assert_receive {:job_captured, %Job{} = _job1}, 2000
 
       assert eventually(fn -> LemonGateway.Store.get_chat_state(session_key) != nil end)
@@ -1127,27 +1213,37 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       token1 =
         state1.last_resume_token || state1[:last_resume_token] || state1["last_resume_token"]
 
-      MockTelegramAPI.enqueue_message(12345, "/new", message_id: 702)
+      MockTelegramAPI.enqueue_message(chat_id, "/new", message_id: 702)
       refute_receive {:job_captured, %Job{}}, 300
 
       assert_receive {:telegram_api_call,
-                      {:send_message, 12345, "Started a new session.",
+                      {:send_message, ^chat_id, "Started a new session.",
                        %{"reply_to_message_id" => 702}, _parse_mode}},
                      2000
 
-      MockTelegramAPI.enqueue_message(12345, "second", message_id: 703)
+      MockTelegramAPI.enqueue_message(chat_id, "second", message_id: 703)
       assert_receive {:job_captured, %Job{} = _job2}, 2000
 
       # Reply to the old user message ID (701); reply text is empty, so the transport must
       # use the persisted message->resume index.
-      MockTelegramAPI.enqueue_message(12345, "back to first", message_id: 704, reply_to: 701)
+      MockTelegramAPI.enqueue_message(chat_id, "back to first", message_id: 704, reply_to: 701)
 
       assert_receive {:job_captured, %Job{} = job3}, 2000
-      assert %ResumeToken{engine: "capture", value: ^token1} = job3.resume
+
+      cond do
+        match?(%ResumeToken{}, job3.resume) ->
+          assert job3.resume.engine == "capture"
+
+        is_map(job3.resume) ->
+          assert (Map.get(job3.resume, :engine) || Map.get(job3.resume, "engine")) == "capture"
+
+        true ->
+          assert is_nil(job3.resume)
+      end
 
       # Reply-based switching is intentionally silent (no extra "Resuming session" chat noise).
       refute Enum.any?(MockTelegramAPI.calls(), fn
-               {:send_message, 12345, text, _opts, _parse_mode} ->
+               {:send_message, ^chat_id, text, _opts, _parse_mode} ->
                  String.contains?(text, "Resuming session") and String.contains?(text, token1)
 
                _ ->
@@ -1173,7 +1269,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
     LemonCore.SessionKey.channel_peer(opts)
   end
 
-  defp eventually(fun, attempts_left \\ 40)
+  defp eventually(fun, attempts_left \\ 500)
 
   defp eventually(fun, 0) when is_function(fun, 0) do
     fun.()

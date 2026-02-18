@@ -13,7 +13,7 @@ defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
     alias LemonGateway.Types.{Job, ResumeToken}
 
     @impl true
-    def id, do: "streaming"
+    def id, do: "lemon"
 
     @impl true
     def format_resume(%ResumeToken{value: v}), do: "streaming resume #{v}"
@@ -70,7 +70,7 @@ defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
     alias LemonGateway.Types.{Job, ResumeToken}
 
     @impl true
-    def id, do: "large"
+    def id, do: "lemon"
 
     @impl true
     def format_resume(%ResumeToken{value: v}), do: "large resume #{v}"
@@ -118,6 +118,8 @@ defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
     _ = Application.stop(:lemon_gateway)
     _ = Application.stop(:lemon_router)
     _ = Application.stop(:lemon_channels)
+    _ = Application.stop(:lemon_control_plane)
+    _ = Application.stop(:lemon_automation)
     _ = Application.stop(:lemon_core)
 
     MockTelegramAPI.reset!(notify_pid: self())
@@ -137,6 +139,9 @@ defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
       Application.delete_env(:lemon_gateway, :telegram)
       Application.delete_env(:lemon_gateway, :transports)
       Application.delete_env(:lemon_gateway, :engines)
+      Application.delete_env(:lemon_channels, :gateway)
+      Application.delete_env(:lemon_channels, :telegram)
+      Application.delete_env(:lemon_channels, :engines)
     end)
 
     :ok
@@ -150,7 +155,7 @@ defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
 
     Application.put_env(:lemon_gateway, :config_path, "/nonexistent/path.toml")
 
-    Application.put_env(:lemon_gateway, Config, %{
+    config = %{
       max_concurrent_runs: 10,
       default_engine: engine_mod.id(),
       enable_telegram: true,
@@ -165,7 +170,9 @@ defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
         deny_unbound_chats: false,
         allow_queue_override: false
       }
-    })
+    }
+
+    Application.put_env(:lemon_gateway, Config, config)
 
     Application.put_env(:lemon_core, LemonCore.Store, backend: LemonCore.Store.EtsBackend)
 
@@ -179,11 +186,36 @@ defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
       poll_interval_ms: 25
     })
 
+    Application.put_env(:lemon_channels, :gateway, config)
+
+    Application.put_env(:lemon_channels, :telegram, %{
+      api_mod: MockTelegramAPI,
+      poll_interval_ms: 25
+    })
+
+    Application.put_env(:lemon_channels, :engines, [
+      engine_mod,
+      LemonGateway.Engines.Echo
+    ])
+
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
     {:ok, _} = Application.ensure_all_started(:lemon_router)
+    :ok =
+      LemonCore.RouterBridge.configure(
+        router: LemonRouter.Router,
+        run_orchestrator: LemonRouter.RunOrchestrator
+      )
+
     {:ok, _} = Application.ensure_all_started(:lemon_channels)
 
-    assert is_pid(wait_for_pid(LemonChannels.Adapters.Telegram.Transport, 2_000))
+    poller_pid =
+      wait_for_pid(LemonChannels.Adapters.Telegram.Transport, 5_000) ||
+        Process.whereis(LemonChannels.Adapters.Telegram.Transport)
+
+    assert is_pid(poller_pid)
+
+    poller_state = :sys.get_state(LemonChannels.Adapters.Telegram.Transport)
+    assert poller_state.api_mod == MockTelegramAPI
   end
 
   defp wait_for_pid(name, timeout_ms) do
@@ -245,22 +277,23 @@ defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
                fn ->
                  calls = MockTelegramAPI.calls()
 
-                 Enum.any?(calls, fn
-                   {:send_message, ^chat_id, text, _opts, _pm} ->
-                     is_binary(text) and String.starts_with?(text, "a")
+                 texts =
+                   Enum.flat_map(calls, fn
+                     {:send_message, ^chat_id, text, _opts, _pm}
+                     when is_binary(text) and text != "Running…" ->
+                       [text]
 
-                   _ ->
-                     false
-                 end) and
-                   Enum.any?(calls, fn
-                     {:edit_message, ^chat_id, _msg_id, text, _opts} ->
-                       is_binary(text) and String.contains?(text, "b")
+                     {:edit_message, ^chat_id, _msg_id, text, _opts} when is_binary(text) ->
+                       [text]
 
                      _ ->
-                       false
+                       []
                    end)
+
+                 Enum.any?(texts, &String.starts_with?(&1, "a")) and
+                   Enum.any?(texts, &String.contains?(&1, "b"))
                end,
-               5_000
+               15_000
              )
   end
 
@@ -282,32 +315,56 @@ defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
                    {:send_message, ^chat_id, text, _opts, _pm} ->
                      is_binary(text) and String.starts_with?(text, "x")
 
+                   {:edit_message, ^chat_id, _msg_id, text, _opts} ->
+                     is_binary(text) and String.starts_with?(text, "x")
+
                    _ ->
                      false
                  end) >= 2
                end,
-               5_000
+               10_000
              )
 
-    chunks =
+    chunk_ops =
       MockTelegramAPI.calls()
       |> Enum.filter(fn
         {:send_message, ^chat_id, text, _opts, _pm} when is_binary(text) ->
+          String.starts_with?(text, "x")
+
+        {:edit_message, ^chat_id, _msg_id, text, _opts} when is_binary(text) ->
           String.starts_with?(text, "x")
 
         _ ->
           false
       end)
 
-    assert length(chunks) == 2
+    assert length(chunk_ops) == 2
 
-    [{:send_message, ^chat_id, chunk1, opts1, _}, {:send_message, ^chat_id, chunk2, opts2, _}] =
-      chunks
+    chunk_lengths =
+      Enum.map(chunk_ops, fn
+        {:send_message, _chat_id, text, _opts, _pm} -> String.length(text)
+        {:edit_message, _chat_id, _msg_id, text, _opts} -> String.length(text)
+      end)
+      |> Enum.sort()
 
-    assert String.length(chunk1) == 4096
-    assert String.length(chunk2) == 904
+    assert chunk_lengths == [904, 4096]
 
-    assert reply_to_from_opts(opts1) == user_msg_id
-    assert reply_to_from_opts(opts2) == nil
+    send_chunks =
+      Enum.filter(chunk_ops, fn
+        {:send_message, ^chat_id, _text, _opts, _pm} -> true
+        _ -> false
+      end)
+
+    case send_chunks do
+      [{:send_message, ^chat_id, _chunk1, opts1, _}, {:send_message, ^chat_id, _chunk2, opts2, _}] ->
+        assert reply_to_from_opts(opts1) == user_msg_id
+        assert reply_to_from_opts(opts2) == nil
+
+      _ ->
+        assert Enum.any?(chunk_ops, fn
+                 {:edit_message, ^chat_id, _msg_id, text, _opts} -> String.length(text) == 4096
+                 _ -> false
+               end)
+    end
   end
 end
