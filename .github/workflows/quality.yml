@@ -23,6 +23,16 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache Mix deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-quality-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-quality-
+
       - name: Install WASM target
         run: rustup target add wasm32-wasip2
 
@@ -46,3 +56,75 @@ jobs:
 
       - name: Run quality test suite
         run: mix test apps/lemon_core/test/lemon_core/quality apps/coding_agent/test/coding_agent/evals/harness_test.exs
+
+  elixir-test-suite:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27.2"
+          elixir-version: "1.19.0"
+
+      - name: Cache Mix deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-test-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-test-
+
+      - name: Install deps
+        run: mix deps.get
+
+      - name: Compile
+        run: mix compile
+
+      - name: Run umbrella tests
+        run: mix test --exclude integration
+
+  clients:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            clients/lemon-web/package-lock.json
+            clients/lemon-tui/package-lock.json
+
+      - name: Install lemon-web deps
+        working-directory: clients/lemon-web
+        run: npm ci
+
+      - name: lemon-web typecheck
+        working-directory: clients/lemon-web
+        run: npm run typecheck
+
+      - name: lemon-web lint
+        working-directory: clients/lemon-web
+        run: npm --workspace web run lint
+
+      - name: lemon-web tests
+        working-directory: clients/lemon-web
+        run: npm --workspace web run test
+
+      - name: Install lemon-tui deps
+        working-directory: clients/lemon-tui
+        run: npm ci
+
+      - name: lemon-tui tests
+        working-directory: clients/lemon-tui
+        run: npm test

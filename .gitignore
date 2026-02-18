@@ -37,3 +37,8 @@ native/wasm-tools/json-transform/target/
 .env*
 !.env.example
 lemon.zip
+
+# Python generated artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
