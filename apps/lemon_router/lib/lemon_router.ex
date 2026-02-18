@@ -28,10 +28,22 @@ defmodule LemonRouter do
   ```
   """
 
+  alias LemonCore.RunRequest
+
   @doc """
   Submit a run request to the router.
+
+  Accepts either a normalized `%LemonCore.RunRequest{}` or a legacy map/keyword
+  payload that can be normalized into one.
   """
-  defdelegate submit(params), to: LemonRouter.RunOrchestrator
+  @spec submit(RunRequest.t() | map() | keyword()) :: {:ok, binary()} | {:error, term()}
+  def submit(%RunRequest{} = params), do: LemonRouter.RunOrchestrator.submit(params)
+
+  def submit(params) when is_map(params) or is_list(params) do
+    params
+    |> RunRequest.new()
+    |> LemonRouter.RunOrchestrator.submit()
+  end
 
   @doc """
   Abort a session's active run.

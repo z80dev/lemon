@@ -48,14 +48,25 @@ defmodule LemonRouter.RunOrchestrator do
 
   `{:ok, run_id}` on success, `{:error, reason}` on failure.
   """
-  @spec submit(RunRequest.t()) :: {:ok, binary()} | {:error, term()}
+  @spec submit(RunRequest.t() | map() | keyword()) :: {:ok, binary()} | {:error, term()}
   def submit(%RunRequest{} = request), do: submit(__MODULE__, request)
+
+  def submit(request) when is_map(request) or is_list(request) do
+    normalized = RunRequest.new(request)
+    submit(__MODULE__, normalized)
+  end
 
   @doc """
   Submit a run request to a specific orchestrator server.
   """
-  @spec submit(GenServer.server(), RunRequest.t()) :: {:ok, binary()} | {:error, term()}
+  @spec submit(GenServer.server(), RunRequest.t() | map() | keyword()) ::
+          {:ok, binary()} | {:error, term()}
   def submit(server, %RunRequest{} = request), do: GenServer.call(server, {:submit, request})
+
+  def submit(server, request) when is_map(request) or is_list(request) do
+    normalized = RunRequest.new(request)
+    submit(server, normalized)
+  end
 
   @doc """
   Lightweight run counts for status UIs.

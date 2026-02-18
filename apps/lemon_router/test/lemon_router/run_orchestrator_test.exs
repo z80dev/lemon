@@ -159,16 +159,28 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert match?({:ok, _}, result) or match?({:error, _}, result)
     end
 
-    test "rejects map input" do
-      assert_raise FunctionClauseError, fn ->
-        apply(RunOrchestrator, :submit, [
-          %{
-            origin: :control_plane,
-            session_key: "agent:test:main",
-            prompt: "Hello from map input"
-          }
-        ])
-      end
+    test "accepts map input and normalizes to RunRequest" do
+      result =
+        RunOrchestrator.submit(%{
+          origin: :control_plane,
+          session_key: "agent:test:main",
+          agent_id: "test",
+          prompt: "Hello from map input"
+        })
+
+      assert match?({:ok, _}, result) or match?({:error, _}, result)
+    end
+
+    test "accepts keyword input and normalizes to RunRequest" do
+      result =
+        RunOrchestrator.submit(
+          origin: :control_plane,
+          session_key: "agent:test:main",
+          agent_id: "test",
+          prompt: "Hello from keyword input"
+        )
+
+      assert match?({:ok, _}, result) or match?({:error, _}, result)
     end
 
     test "returns unknown_agent_id error for unconfigured agent" do
