@@ -134,3 +134,47 @@ Each entry records what was done, what worked, and what to focus on next.
 - Eventually split config.ex into multiple focused modules like Ironclaw's config/
 - Add Config.Helpers to other apps in the umbrella
 - Look at Ironclaw's benchmark suite for performance testing inspiration
+
+### 2025-02-19 - Config Refactoring: Extract Tools Config Module
+**Work Area**: Refactoring / Feature Enhancement
+
+**What was done:**
+- Created `LemonCore.Config.Tools` module following Ironclaw's modular config pattern
+- Extracted tools-specific configuration from the monolithic `config.ex` (1253 lines)
+- Tools config includes:
+  - `auto_resize_images` - automatic image resizing setting
+  - `web.search` - web search provider configuration (brave, perplexity)
+    - `failover` settings for search provider fallback
+    - `perplexity` specific configuration
+  - `web.fetch` - web fetch configuration (max_chars, readability, firecrawl)
+    - `firecrawl` integration settings
+    - `allowed_hostnames` for private network access
+  - `web.cache` - caching configuration (persistent, path, max_entries)
+  - `wasm` - WASM runtime configuration
+    - memory limits, timeout, fuel limits
+    - tool paths, cache settings
+- Uses `Config.Helpers` for consistent env var resolution
+- Supports byte size parsing for memory limits (e.g., "10MB", "1GB")
+- Priority: environment variables > TOML config > defaults
+- Added `defaults/0` function for the base configuration
+- Created comprehensive tests (`tools_test.exs`) with 25 test cases
+- All 25 new tests pass
+- Total test count: 227 (up from 202)
+- Existing tests still pass (1 pre-existing architecture check failure unrelated)
+
+**Files changed:**
+- `apps/lemon_core/lib/lemon_core/config/tools.ex` (new file - 350 lines)
+- `apps/lemon_core/test/lemon_core/config/tools_test.exs` (new file - 25 tests)
+
+**What worked:**
+- Complex nested config structures work well with the modular pattern
+- Using `Config.Helpers.get_env_bytes/2` for memory limits is elegant
+- Firecrawl's tri-state `enabled` (true/false/nil) handled correctly
+- Environment variable lists (comma-separated) work well for hostnames and paths
+
+**Next run should focus on:**
+- Extract remaining config sections: `LemonCore.Config.Gateway`, `LemonCore.Config.Logging`, `LemonCore.Config.TUI`
+- Start using the new modular config modules in the main Config module
+- Consider creating a Config.LLM module for provider-specific settings
+- Eventually the main config.ex should just orchestrate the sub-modules
+- Add Config.Helpers to other apps in the umbrella
