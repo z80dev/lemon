@@ -221,3 +221,57 @@ Each entry records what was done, what worked, and what to focus on next.
 - Consider creating a Config.LLM module for provider-specific settings
 - Eventually the main config.ex should just orchestrate the sub-modules
 - Add Config.Helpers to other apps in the umbrella
+
+### 2025-02-19 - Config Refactoring: Extract Logging and TUI Config Modules
+**Work Area**: Refactoring / Feature Enhancement
+
+**What was done:**
+- Created `LemonCore.Config.Logging` module for logging configuration:
+  - `file` - log file path
+  - `level` - log level (:debug, :info, :warning, :error)
+  - `max_no_bytes` - maximum log file size before rotation
+  - `max_no_files` - number of rotated files to keep
+  - `compress_on_rotate` - whether to compress rotated files
+  - `filesync_repeat_interval` - disk sync interval in milliseconds
+  - Supports log level parsing (including "warn" -> :warning)
+  - Handles invalid integer env vars gracefully
+- Created `LemonCore.Config.TUI` module for TUI configuration:
+  - `theme` - TUI theme (separate from agent theme)
+  - `debug` - debug mode flag
+  - Simple configuration with sensible defaults
+- Both modules use `Config.Helpers` for consistent env var resolution
+- Priority: environment variables > TOML config > defaults
+- Added `defaults/0` functions for base configurations
+- Created comprehensive tests:
+  - `logging_test.exs` with 20 test cases
+  - `tui_test.exs` with 12 test cases
+- All 32 new tests pass
+- Total test count: 281 (up from 249)
+- Existing tests still pass (1 pre-existing architecture check failure unrelated)
+
+**Files changed:**
+- `apps/lemon_core/lib/lemon_core/config/logging.ex` (new file - 130 lines)
+- `apps/lemon_core/test/lemon_core/config/logging_test.exs` (new file - 20 tests)
+- `apps/lemon_core/lib/lemon_core/config/tui.ex` (new file - 60 lines)
+- `apps/lemon_core/test/lemon_core/config/tui_test.exs` (new file - 12 tests)
+
+**What worked:**
+- Log level normalization (warn -> warning) improves user experience
+- Nil defaults for optional settings allow flexible configuration
+- The modular pattern works well for both simple and complex configs
+- Clear separation between TUI theme and agent theme avoids confusion
+
+**Config modules created so far:**
+- ✅ `LemonCore.Config.Helpers` - env var utilities
+- ✅ `LemonCore.Config.Agent` - agent behavior settings
+- ✅ `LemonCore.Config.Tools` - web tools and WASM settings
+- ✅ `LemonCore.Config.Gateway` - Telegram, SMS, engine bindings
+- ✅ `LemonCore.Config.Logging` - log file and rotation settings
+- ✅ `LemonCore.Config.TUI` - terminal UI theme and debug
+
+**Next run should focus on:**
+- Create `LemonCore.Config.Providers` for LLM provider configurations
+- Start integrating all modular config modules into the main Config module
+- Refactor main config.ex to use the new modules (reduce from 1253 lines)
+- Eventually config.ex should just orchestrate sub-modules like Ironclaw's config/mod.rs
+- Add Config.Helpers to other apps in the umbrella
