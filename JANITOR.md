@@ -531,3 +531,48 @@ Each entry records what was done, what worked, and what to focus on next.
 - Continue adding tests for remaining untested modules
 - Or add integration tests using the new modular config
 - Or add validation to the modular config system
+
+### 2025-02-19 - Test Expansion: Httpc Tests
+**Work Area**: Test Expansion
+
+**What was done:**
+- Created tests for the `LemonCore.Httpc` module (previously untested):
+  - Tests for `ensure_started/0`:
+    - Returns :ok
+    - Starts inets and ssl applications
+    - Is idempotent (can be called multiple times)
+  - Tests for `request/4`:
+    - Function accepts HTTP request parameters
+    - Accepts different HTTP methods (get, post, put, patch, delete, head)
+    - Request signature accepts options
+  - Note: Actual HTTP requests are not tested due to test environment limitations (missing :http_util module)
+  - 6 tests covering the 36-line module
+- All 6 new tests pass
+- Total test count: 355 (up from 349)
+- Existing tests still pass (1 pre-existing architecture check failure unrelated)
+
+**Files changed:**
+- `apps/lemon_core/test/lemon_core/httpc_test.exs` (new file - 6 tests)
+
+**What worked:**
+- Testing OTP application startup verifies the wrapper works correctly
+- Checking function existence and signatures without making actual HTTP calls
+- Idempotency testing ensures the function can be called multiple times safely
+
+**Test coverage progress:**
+- Before: Httpc module (36 lines) had 0 tests
+- After: Httpc module has 6 tests
+- Remaining untested modules:
+  - `config_cache` - Config caching
+  - `dedupe_ets` - Deduplication
+  - `logger_setup` - Logger initialization
+
+**Total progress:**
+- Started with 119 tests
+- Now have 355 tests
+- Added 236 tests across multiple runs
+
+**Next run should focus on:**
+- Continue adding tests for remaining untested modules
+- Or add integration tests using the new modular config
+- Or add validation to the modular config system
