@@ -430,3 +430,59 @@ Each entry records what was done, what worked, and what to focus on next.
 - Gradually replace usage of old config with new modular config
 - Eventually remove the 1253-line legacy config.ex
 - Add validation to the modular config (Ecto-style or similar)
+
+### 2025-02-19 - Test Expansion: ExecApprovals Tests
+**Work Area**: Test Expansion
+
+**What was done:**
+- Created comprehensive tests for the `LemonCore.ExecApprovals` module (previously untested):
+  - Tests for `request/1` function:
+    - Returns approved immediately when global approval exists
+    - Returns approved immediately when session approval exists
+    - Returns approved immediately when agent approval exists
+    - Creates pending approval when no existing approval
+    - Returns denied when approval is denied
+    - Returns timeout when approval times out
+  - Tests for `resolve/2` function:
+    - Stores session approval when resolved with :approve_session
+    - Stores agent approval when resolved with :approve_agent
+    - Stores global approval when resolved with :approve_global
+    - Does not store approval when resolved with :approve_once
+    - Deletes pending approval after resolution
+    - Handles non-existent approvals gracefully
+  - Tests for approval scope hierarchy:
+    - Global approval takes precedence over agent and session
+    - Agent approval takes precedence over session
+  - Tests for action hashing:
+    - Same actions produce same hash
+    - Different actions produce different hashes
+  - Tests for wildcard approvals:
+    - Wildcard :any action hash matches any action
+  - 17 comprehensive tests covering the 342-line module
+- All 17 new tests pass
+- Total test count: 336 (up from 319)
+- Existing tests still pass (1 pre-existing architecture check failure unrelated)
+
+**Files changed:**
+- `apps/lemon_core/test/lemon_core/exec_approvals_test.exs` (new file - 17 tests)
+
+**What worked:**
+- Testing the approval hierarchy (global > agent > session) ensures correct precedence
+- Testing both synchronous (existing approval) and asynchronous (pending approval) paths
+- Testing edge cases like timeouts and non-existent approvals
+- The module's design with separate Store tables for each scope makes testing clean
+
+**Test coverage improvement:**
+- Before: ExecApprovals module (342 lines) had 0 tests
+- After: ExecApprovals module has 17 tests
+- This was one of the gaps identified in the missing tests audit
+
+**Next run should focus on:**
+- Continue adding tests for other untested modules:
+  - `clock` - Time utilities
+  - `config_cache` - Config caching
+  - `dedupe_ets` - Deduplication
+  - `httpc` - HTTP client
+  - `logger_setup` - Logger initialization
+- Or start using the new modular config in actual code
+- Or add validation to the modular config system
