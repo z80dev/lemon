@@ -1,0 +1,317 @@
+---
+title: Project Structure
+description: 'Directory layout and organization of the Lemon codebase'
+---
+
+## Directory Layout
+
+```
+lemon/
+├── README.md                    # Main documentation
+├── mix.exs                      # Umbrella project configuration
+├── mix.lock                     # Dependency lock file
+├── .formatter.exs               # Elixir formatter configuration
+├── .gitignore                   # Git ignore rules
+│
+├── config/
+│   └── config.exs               # Application configuration
+│
+├── bin/                         # Executable scripts
+│   ├── lemon-dev                # Development launcher (builds + launches TUI)
+│   ├── lemon-gateway            # Telegram runtime launcher
+│   ├── lemon-telegram-send-test # Telegram delivery smoke test
+│   ├── lemon-telegram-webhook   # Telegram webhook helper
+│   └── diag                     # Diagnostic helper (Python)
+│
+├── apps/                        # Umbrella applications (11 apps)
+│   │
+│   │  # ─── Core Foundation ───────────────────────────────────
+│   │
+│   ├── ai/                      # LLM provider abstraction layer
+│   ├── agent_core/              # Core agent framework
+│   │
+│   │  # ─── Agent Execution ───────────────────────────────────
+│   │
+│   ├── coding_agent/            # Complete coding agent implementation
+│   ├── coding_agent_ui/         # UI abstraction layer
+│   │
+│   │  # ─── Infrastructure ────────────────────────────────────
+│   │
+│   ├── lemon_core/              # Shared primitives and utilities
+│   ├── lemon_gateway/           # Multi-engine execution gateway
+│   ├── lemon_router/            # Run orchestration and routing
+│   ├── lemon_channels/          # Pluggable channel adapters
+│   ├── lemon_automation/        # Scheduling and automation
+│   ├── lemon_control_plane/     # HTTP/WebSocket control server
+│   └── lemon_skills/            # Skill registry and management
+│
+├── clients/                     # Client applications
+│   ├── lemon-tui/               # Terminal UI (TypeScript/Node.js)
+│   ├── lemon-web/               # Web UI (React + WebSocket)
+│   └── lemon-browser-node/      # Browser automation client
+│
+├── scripts/                     # Utility scripts
+│   ├── debug_agent_rpc.exs      # RPC debugging
+│   ├── cron_lemon_loop.sh       # Scheduled execution
+│   └── setup_telegram_bot.py    # Telegram bot setup helper
+│
+├── docs/                        # Documentation
+│   ├── beam_agents.md           # BEAM architecture
+│   ├── extensions.md            # Extension system
+│   ├── skills.md                # Skills system
+│   ├── telemetry.md             # Observability
+│   ├── benchmarks.md            # Performance
+│   ├── context.md               # Context management
+│   └── config.md                # Configuration
+│
+└── examples/
+    ├── config.example.toml
+    └── extensions/
+```
+
+## Application Details
+
+### Core Foundation
+
+#### `apps/ai/`
+
+LLM provider abstraction layer:
+
+```
+ai/lib/ai/
+├── providers/           # Anthropic, OpenAI, Google, Azure, Bedrock
+├── event_stream.ex      # Streaming with backpressure
+├── models.ex            # Model registry and definitions
+└── types.ex             # Context, Message, Model types
+```
+
+#### `apps/agent_core/`
+
+Core agent framework (provider-agnostic):
+
+```
+agent_core/lib/agent_core/
+├── agent.ex             # GenServer-based stateful agents
+├── loop.ex              # Stateless agent execution loop
+├── context.ex           # Context management and truncation
+├── event_stream.ex      # Bounded event streams
+└── cli_runners/         # CLI runner infrastructure
+    ├── codex_runner.ex, codex_schema.ex, codex_subagent.ex
+    ├── claude_runner.ex, claude_schema.ex, claude_subagent.ex
+    ├── kimi_runner.ex, kimi_schema.ex, kimi_subagent.ex
+    ├── opencode_runner.ex, opencode_schema.ex, opencode_subagent.ex
+    ├── pi_runner.ex, pi_schema.ex, pi_subagent.ex
+    └── jsonl_runner.ex  # Base JSONL subprocess runner
+```
+
+### Agent Execution
+
+#### `apps/coding_agent/`
+
+Complete coding agent implementation:
+
+```
+coding_agent/lib/coding_agent/
+├── session.ex           # Session GenServer
+├── session_manager.ex   # JSONL persistence (v3 format)
+├── tool_registry.ex     # Dynamic tool management
+├── tool_policy.ex       # Per-agent tool allow/deny
+├── tool_executor.ex     # Approval gating
+├── extensions.ex        # Plugin system
+├── compaction.ex        # Context compaction
+├── lane_queue.ex        # Lane-aware scheduling
+├── coordinator.ex       # Subagent coordination
+├── process_manager.ex   # Background process supervision
+├── budget_tracker.ex    # Token/cost tracking
+├── cli_runners/         # Lemon CLI runner
+└── tools/               # Default built-ins + optional tool modules
+    ├── bash.ex, browser.ex, edit.ex, memory_topic.ex, read.ex, write.ex
+    ├── grep.ex, find.ex, glob.ex, ls.ex, patch.ex
+    ├── task.ex, todo.ex, extensions_status.ex
+    ├── webfetch.ex, websearch.ex, webdownload.ex, web_cache.ex, web_guard.ex
+    └── exec.ex, process.ex, restart.ex, truncate.ex
+```
+
+#### `apps/coding_agent_ui/`
+
+UI abstraction layer:
+
+```
+coding_agent_ui/lib/coding_agent/ui/
+├── rpc.ex               # JSON-RPC interface
+├── debug_rpc.ex         # JSONL debug protocol
+└── headless.ex          # Headless mode
+```
+
+### Infrastructure
+
+#### `apps/lemon_core/`
+
+Shared primitives and utilities:
+
+```
+lemon_core/lib/lemon_core/
+├── bus.ex               # Phoenix.PubSub wrapper for events
+├── event.ex             # Canonical event envelope
+├── store.ex             # Persistent key-value storage
+├── id.ex                # Prefixed UUID generation
+├── idempotency.ex       # At-most-once execution
+├── telemetry.ex         # Observability events
+├── clock.ex             # Time utilities
+└── config.ex            # Runtime configuration
+```
+
+#### `apps/lemon_gateway/`
+
+Multi-engine execution gateway:
+
+```
+lemon_gateway/lib/lemon_gateway/
+├── run.ex               # Run lifecycle GenServer
+├── scheduler.ex         # Global concurrency control
+├── thread_worker.ex     # Per-thread job queues
+├── store.ex             # Pluggable storage
+├── engines/             # Execution engines
+│   ├── lemon.ex         # Native CodingAgent engine
+│   ├── claude.ex        # Claude CLI engine
+│   ├── codex.ex         # Codex CLI engine
+│   ├── opencode.ex      # OpenCode CLI engine
+│   ├── pi.ex            # Pi CLI engine
+│   ├── echo.ex          # Echo stub engine (testing)
+│   └── cli_adapter.ex
+└── telegram/            # Gateway Telegram utilities
+```
+
+#### `apps/lemon_router/`
+
+Run orchestration and routing:
+
+```
+lemon_router/lib/lemon_router/
+├── router.ex            # Inbound message handling
+├── run_orchestrator.ex  # Run submission lifecycle
+├── run_process.ex       # Individual run management
+├── session_key.ex       # Session key generation
+├── policy.ex            # Hierarchical policy merging
+├── approvals_bridge.ex  # Approval request/resolution
+├── stream_coalescer.ex  # Output buffering
+└── agent_profiles.ex    # Agent configuration
+```
+
+#### `apps/lemon_channels/`
+
+Pluggable channel adapters:
+
+```
+lemon_channels/lib/lemon_channels/
+├── plugin.ex            # Channel adapter behaviour
+├── registry.ex          # Adapter registration
+├── outbox.ex            # Message delivery queue
+├── outbox/
+│   ├── chunker.ex       # Smart message splitting
+│   ├── dedupe.ex        # Idempotency tracking
+│   └── rate_limiter.ex  # Token bucket limiting
+└── adapters/
+    └── telegram/        # Telegram adapter
+```
+
+#### `apps/lemon_automation/`
+
+Scheduling and automation:
+
+```
+lemon_automation/lib/lemon_automation/
+├── cron_manager.ex      # Cron job orchestration
+├── cron_schedule.ex     # Cron expression parsing
+├── cron_job.ex          # Job data structure
+├── cron_run.ex          # Execution record
+├── cron_store.ex        # Persistent storage
+├── heartbeat_manager.ex # Health monitoring
+├── wake.ex              # On-demand triggering
+└── events.ex            # Event broadcasting
+```
+
+#### `apps/lemon_control_plane/`
+
+HTTP/WebSocket control server:
+
+```
+lemon_control_plane/lib/lemon_control_plane/
+├── http/router.ex       # HTTP routes (/healthz, /ws)
+├── ws/connection.ex     # WebSocket protocol handler
+├── presence.ex          # Connection tracking
+├── event_bridge.ex      # Bus → WebSocket events
+├── auth/                # Token-based authentication
+├── protocol/            # Frame encoding, schemas
+└── methods/             # 81+ RPC methods
+    ├── agent.ex, sessions.ex, chat.ex
+    ├── cron.ex, skills.ex, channels.ex
+    ├── node.ex, device.ex, exec.ex
+    └── ...
+```
+
+#### `apps/lemon_skills/`
+
+Skill registry and management:
+
+```
+lemon_skills/lib/lemon_skills/
+├── registry.ex          # In-memory skill cache
+├── entry.ex             # Skill data structure
+├── manifest.ex          # YAML/TOML frontmatter parsing
+├── status.ex            # Dependency verification
+├── config.ex            # Enable/disable, paths
+├── installer.ex         # Install/update/uninstall
+└── tools/
+    └── read_skill.ex    # Agent tool for skill access
+```
+
+## Clients
+
+### `clients/lemon-tui/`
+
+Terminal UI (TypeScript/Node.js):
+
+```
+lemon-tui/src/
+├── index.ts             # Main TUI application
+├── cli.ts               # CLI entry point
+├── agent-connection.ts  # Agent connection handling
+├── state.ts             # Multi-session state
+├── types.ts             # Type definitions
+├── theme.ts             # Theme management
+├── config.ts            # Configuration loading
+├── message-renderer.ts  # Message rendering
+├── autocomplete.ts      # Auto-completion
+├── git-utils.ts         # Git integration
+├── constants.ts         # Constants
+└── components/          # UI components
+└── formatters/          # Output formatters
+```
+
+### `clients/lemon-web/`
+
+Web UI (React + WebSocket):
+
+```
+lemon-web/
+├── web/                 # Vite/React frontend
+│   ├── src/
+│   ├── public/
+│   └── package.json
+├── server/              # Node WS bridge
+│   └── src/
+└── shared/              # Shared types
+    └── src/
+```
+
+## Why an Umbrella Project?
+
+The umbrella structure separates concerns while maintaining tight integration:
+
+1. **Independent Testing**: Each app can be tested independently
+2. **Clear Boundaries**: Dependencies are explicit and enforced
+3. **Selective Deployment**: Not all apps are required for every use case
+4. **Potential Extraction**: Apps could become separate libraries
+
+See [Architecture Boundaries](/docs/architecture-overview) for dependency rules between apps.

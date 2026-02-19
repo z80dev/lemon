@@ -1,0 +1,258 @@
+---
+title: Supervision Trees
+description: 'OTP supervision structure and fault tolerance'
+---
+
+Lemon's supervision trees ensure fault isolation and system resilience.
+
+## Top-Level Structure
+
+```
+LemonSupervisor (one_for_one)
+│
+├── Ai.Supervisor
+│   ├── ProviderRegistry
+│   └── Provider processes
+│
+├── AgentCore.Supervisor
+│   ├── AgentRegistry
+│   └── Agent processes
+│
+├── CodingAgent.Supervisor
+│   ├── SessionManager
+│   ├── SessionRegistry
+│   ├── LaneQueue
+│   ├── BudgetTracker
+│   └── SessionSupervisor (dynamic)
+│       └── Session processes
+│
+├── CodingAgentUI.Supervisor
+│   └── UI adapter processes
+│
+├── LemonCore.Supervisor
+│   ├── Bus (PubSub)
+│   ├── Store
+│   └── Telemetry
+│
+├── LemonGateway.Supervisor
+│   ├── Scheduler
+│   ├── ThreadWorkerSupervisor (dynamic)
+│   │   └── ThreadWorker processes
+│   └── RunSupervisor (dynamic)
+│       └── Run processes
+│
+├── LemonRouter.Supervisor
+│   ├── Router
+│   ├── RunOrchestrator
+│   └── StreamCoalescer
+│
+├── LemonChannels.Supervisor
+│   ├── Registry
+│   ├── Outbox
+│   └── AdapterSupervisor (dynamic)
+│       └── Adapter processes
+│
+├── LemonAutomation.Supervisor
+│   ├── CronManager
+│   ├── CronStore
+│   └── HeartbeatManager
+│
+├── LemonControlPlane.Supervisor
+│   ├── HTTPServer
+│   ├── WSSupervisor (dynamic)
+│   │   └── Connection processes
+│   └── Presence
+│
+└── LemonSkills.Supervisor
+    ├── Registry
+    └── Installer
+```
+
+## Restart Strategies
+
+### One-for-One
+
+Most supervisors use `one_for_one`:
+
+```elixir
+def init(_) do
+  children = [
+    Worker1,
+    Worker2,
+    Worker3
+  ]
+  
+  Supervisor.init(children, strategy: :one_for_one)
+end
+```
+
+If one child crashes, only that child is restarted.
+
+### Dynamic Supervisors
+
+For runtime-spawned processes:
+
+```elixir
+# SessionSupervisor
+DynamicSupervisor.start_child(
+  CodingAgent.SessionSupervisor,
+  {CodingAgent.Session, opts}
+)
+```
+
+Children are added/removed dynamically.
+
+### Temporary Restarts
+
+Some processes shouldn't be restarted:
+
+```elixir
+# Subagent processes
+%{id: session_id, start: {...}, restart: :temporary}
+```
+
+`:temporary` - Never restart (let the parent handle it)
+
+## Fault Isolation
+
+### Per-Application Supervision
+
+Each OTP app has its own supervision tree:
+
+```
+Ai.Supervisor
+  └─ Isolated from other apps
+
+AgentCore.Supervisor
+  └─ Isolated from other apps
+```
+
+A crash in `Ai` doesn't affect `AgentCore`.
+
+### Per-Session Isolation
+
+Each session is a separate process:
+
+```elixir
+# Session 1 crashes
+Process.exit(session1_pid, :kill)
+
+# Session 2 continues unaffected
+CodingAgent.Session.prompt(session2_pid, "Hello")
+```
+
+### Tool Execution Isolation
+
+Tools run in separate processes:
+
+```elixir
+Task.async(fn ->
+  BashExecutor.execute(command, cwd, opts)
+end)
+```
+
+A crashing bash command doesn't kill the agent.
+
+## Recovery Strategies
+
+### Max Restarts
+
+Prevent restart loops:
+
+```elixir
+Supervisor.init(children, 
+  strategy: :one_for_one,
+  max_restarts: 10,
+  max_seconds: 60
+)
+```
+
+If more than 10 restarts in 60 seconds, the supervisor gives up.
+
+### Graceful Degradation
+
+Components can fail gracefully:
+
+```elixir
+# If web search fails, continue without it
+case WebSearch.search(query) do
+  {:ok, results} -> results
+  {:error, _} -> []  # Degrade gracefully
+end
+```
+
+### Circuit Breakers
+
+Prevent cascading failures:
+
+```elixir
+# If provider is failing, temporarily stop using it
+if CircuitBreaker.open?(:anthropic) do
+  fallback_to_alternative_provider()
+end
+```
+
+## Monitoring
+
+### Process Monitoring
+
+Monitor linked processes:
+
+```elixir
+# Monitor a stream
+ref = Process.monitor(stream_pid)
+
+receive do
+  {:DOWN, ^ref, :process, _pid, reason} ->
+    handle_stream_death(reason)
+end
+```
+
+### Health Checks
+
+Periodic health checks:
+
+```elixir
+# HeartbeatManager checks component health
+if HeartbeatManager.healthy?(:gateway) do
+  :ok
+else
+  Logger.warning("Gateway unhealthy")
+end
+```
+
+## Supervision Best Practices
+
+1. **Isolate by function** - Separate supervisors for different concerns
+2. **Use appropriate restart strategies** - Match to the component's needs
+3. **Set max restart limits** - Prevent restart loops
+4. **Monitor important processes** - Know when things fail
+5. **Fail fast** - Crash quickly to trigger supervision
+6. **Let it crash** - Don't catch exceptions you can't handle
+
+## Debugging Supervision
+
+### View Supervision Tree
+
+```elixir
+# In IEx
+:observer.start()  # GUI observer
+
+# Or programmatically
+Supervisor.which_children(LemonSupervisor)
+```
+
+### Check Process Status
+
+```elixir
+Process.alive?(pid)
+Process.info(pid, :links)
+Process.info(pid, :monitors)
+```
+
+### Trace Process Deaths
+
+```elixir
+# Enable SASL logging
+:logger.add_primary_filter(:sasl, {&:logger_filters.domain/2, {:stop, :equal, [:otp, :sasl]}})
+```
