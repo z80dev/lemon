@@ -576,3 +576,72 @@ Each entry records what was done, what worked, and what to focus on next.
 - Continue adding tests for remaining untested modules
 - Or add integration tests using the new modular config
 - Or add validation to the modular config system
+
+### 2025-02-19 - Test Expansion: Dedupe.Ets Tests
+**Work Area**: Test Expansion
+
+**What was done:**
+- Created comprehensive tests for the `LemonCore.Dedupe.Ets` module (previously untested):
+  - Tests for `init/2`:
+    - Creates new ETS table
+    - Is idempotent (returns :ok if table exists)
+    - Creates named table for atom names
+    - Accepts protection and type options
+    - Sets concurrency options by default
+  - Tests for `mark/2`:
+    - Marks key as seen
+    - Updates timestamp on re-mark
+    - Handles non-existent table gracefully
+    - Marks multiple different keys
+  - Tests for `seen?/3`:
+    - Returns false for unseen key
+    - Returns true for recently seen key
+    - Returns false and deletes expired key
+    - Handles non-existent table gracefully
+    - Returns false for invalid TTL
+  - Tests for `check_and_mark/3`:
+    - Returns :new and marks for first time
+    - Returns :seen for already seen key
+    - Returns :new for expired key and re-marks
+    - Handles errors gracefully
+  - Tests for `cleanup_expired/2`:
+    - Removes expired entries and returns count
+    - Does not remove non-expired entries
+    - Returns 0 when no entries to clean
+    - Handles errors gracefully
+  - Tests for TTL semantics:
+    - Exact boundary behavior
+    - Monotonic time prevents clock skew
+  - Tests for concurrent access:
+    - Handles concurrent marks
+    - Handles concurrent check_and_mark
+  - 30 comprehensive tests covering the 136-line module
+- All 30 new tests pass
+- Total test count: 385 (up from 355)
+- Existing tests still pass (1 pre-existing architecture check failure unrelated)
+
+**Files changed:**
+- `apps/lemon_core/test/lemon_core/dedupe_ets_test.exs` (new file - 30 tests)
+
+**What worked:**
+- Testing ETS-based modules requires careful setup/teardown
+- Concurrent access tests verify thread-safety
+- TTL boundary tests ensure correct expiration semantics
+- Error handling tests verify graceful degradation
+
+**Test coverage progress:**
+- Before: Dedupe.Ets module (136 lines) had 0 tests
+- After: Dedupe.Ets module has 30 tests
+- Remaining untested modules:
+  - `config_cache` - Config caching
+  - `logger_setup` - Logger initialization
+
+**Total progress:**
+- Started with 119 tests
+- Now have 385 tests
+- Added 266 tests across multiple runs
+
+**Next run should focus on:**
+- Continue adding tests for remaining 2 untested modules
+- Or add integration tests using the new modular config
+- Or add validation to the modular config system
