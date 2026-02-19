@@ -1,0 +1,128 @@
+{
+  "$schema": "https://mintlify.com/schema.json",
+  "name": "Lemon",
+  "logo": {
+    "dark": "/logo/dark.svg",
+    "light": "/logo/light.svg"
+  },
+  "favicon": "/favicon.svg",
+  "colors": {
+    "primary": "#fbbf24",
+    "light": "#fcd34d",
+    "dark": "#d97706",
+    "anchors": {
+      "from": "#fbbf24",
+      "to": "#f59e0b"
+    }
+  },
+  "topbarLinks": [
+    {
+      "name": "GitHub",
+      "url": "https://github.com/z80dev/lemon"
+    }
+  ],
+  "topbarCtaButton": {
+    "name": "Get Started",
+    "url": "/quickstart"
+  },
+  "tabs": [
+    {
+      "name": "Documentation",
+      "url": "docs"
+    },
+    {
+      "name": "API Reference",
+      "url": "api"
+    },
+    {
+      "name": "Architecture",
+      "url": "architecture"
+    }
+  ],
+  "anchors": [
+    {
+      "name": "GitHub",
+      "icon": "github",
+      "url": "https://github.com/z80dev/lemon"
+    }
+  ],
+  "navigation": [
+    {
+      "group": "Get Started",
+      "pages": [
+        "introduction",
+        "quickstart",
+        "installation"
+      ]
+    },
+    {
+      "group": "Core Concepts",
+      "pages": [
+        "docs/why-beam",
+        "docs/architecture-overview",
+        "docs/project-structure"
+      ]
+    },
+    {
+      "group": "Components",
+      "pages": [
+        "docs/components/ai-library",
+        "docs/components/agent-core",
+        "docs/components/coding-agent",
+        "docs/components/lemon-core",
+        "docs/components/lemon-gateway",
+        "docs/components/lemon-router",
+        "docs/components/lemon-channels",
+        "docs/components/lemon-automation",
+        "docs/components/lemon-control-plane",
+        "docs/components/lemon-skills"
+      ]
+    },
+    {
+      "group": "Clients",
+      "pages": [
+        "docs/clients/tui",
+        "docs/clients/web",
+        "docs/clients/telegram"
+      ]
+    },
+    {
+      "group": "Configuration",
+      "pages": [
+        "docs/config/overview",
+        "docs/config/providers",
+        "docs/config/gateway",
+        "docs/config/secrets"
+      ]
+    },
+    {
+      "group": "Advanced",
+      "pages": [
+        "docs/advanced/orchestration",
+        "docs/advanced/extensions",
+        "docs/advanced/skills",
+        "docs/advanced/wasm-tools"
+      ]
+    },
+    {
+      "group": "API Reference",
+      "pages": [
+        "api/overview",
+        "api/methods",
+        "api/events"
+      ]
+    },
+    {
+      "group": "Architecture Deep Dive",
+      "pages": [
+        "architecture/beam-patterns",
+        "architecture/supervision",
+        "architecture/event-bus",
+        "architecture/tool-execution"
+      ]
+    }
+  ],
+  "footerSocials": {
+    "github": "https://github.com/z80dev/lemon"
+  }
+}
