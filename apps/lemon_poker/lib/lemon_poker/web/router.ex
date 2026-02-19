@@ -3,7 +3,7 @@ defmodule LemonPoker.Web.Router do
 
   use Plug.Router
 
-  alias LemonPoker.MatchServer
+  alias LemonPoker.{MatchServer, Persona}
 
   plug(Plug.Logger, log: :debug)
 
@@ -28,6 +28,10 @@ defmodule LemonPoker.Web.Router do
 
   get "/api/state" do
     json(conn, 200, MatchServer.snapshot())
+  end
+
+  get "/api/personas" do
+    json(conn, 200, %{ok: true, personas: Persona.list()})
   end
 
   post "/api/match/start" do
@@ -112,9 +116,12 @@ defmodule LemonPoker.Web.Router do
       timeout_ms: parse_positive_integer(payload["timeoutMs"], 90_000),
       max_decisions: parse_positive_integer(payload["maxDecisions"], 200),
       seed: parse_optional_integer(payload["seed"]),
-      agent_id: blank_to_default(payload["agentId"], "default"),
+      agent_id: blank_to_default(payload["agentId"], "poker_default"),
+      model: blank_to_nil(payload["model"]),
       player_agent_ids: parse_string_list(payload["playerAgentIds"]),
+      player_models: parse_optional_string_list(payload["playerModels"]),
       player_labels: parse_string_list(payload["playerLabels"]),
+      player_personas: parse_optional_string_list(payload["playerPersonas"]),
       player_system_prompts: parse_string_list(payload["playerSystemPrompts"]),
       system_prompt: blank_to_nil(payload["systemPrompt"]),
       table_talk_enabled: parse_boolean(payload["tableTalkEnabled"], true)
@@ -209,6 +216,18 @@ defmodule LemonPoker.Web.Router do
 
   defp parse_string_list(_), do: []
 
+  defp parse_optional_string_list(list) when is_list(list) do
+    Enum.map(list, &optional_string_or_nil/1)
+  end
+
+  defp parse_optional_string_list(value) when is_binary(value) do
+    value
+    |> String.split(",")
+    |> Enum.map(&optional_string_or_nil/1)
+  end
+
+  defp parse_optional_string_list(_), do: []
+
   defp blank_to_default(value, default) do
     case blank_to_nil(value) do
       nil -> default
@@ -222,4 +241,15 @@ defmodule LemonPoker.Web.Router do
   end
 
   defp blank_to_nil(_), do: nil
+
+  defp optional_string_or_nil(value) when is_binary(value) do
+    trimmed = String.trim(value)
+    if trimmed == "", do: nil, else: trimmed
+  end
+
+  defp optional_string_or_nil(nil), do: nil
+
+  defp optional_string_or_nil(value) do
+    value |> to_string() |> optional_string_or_nil()
+  end
 end

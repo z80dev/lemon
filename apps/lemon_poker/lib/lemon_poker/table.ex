@@ -620,10 +620,13 @@ defmodule LemonPoker.Table do
         end),
       showdown:
         Enum.into(ranked_hands, %{}, fn {seat, rank} ->
+          player = Map.fetch!(showdown_hand.players, seat)
+
           {seat,
            %{
              category: rank.category,
-             tiebreaker: rank.tiebreaker
+             tiebreaker: rank.tiebreaker,
+             hole_cards: Enum.map(player.hole_cards, &Card.to_short_string/1)
            }}
         end),
       ended_by: :showdown

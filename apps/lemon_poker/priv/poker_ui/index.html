@@ -10,6 +10,8 @@
 </head>
 
 <body>
+  <!-- ── 3D BACKGROUND SCENE ── -->
+  <canvas id="bg-3d"></canvas>
   <!-- ── HEADER ── -->
   <header class="header">
     <div class="header-left">
@@ -23,6 +25,9 @@
     </div>
   </header>
 
+  <!-- ── SCOREBOARD ── -->
+  <div id="scoreboard" class="scoreboard" style="display:none;"></div>
+
   <!-- ── MAIN CONTENT ── -->
   <div class="main">
     <!-- Table Area -->
@@ -34,6 +39,7 @@
             <span id="pot-chips"></span>
             <span id="pot-amount">0</span>
           </div>
+          <div id="side-pots" class="side-pots" style="display:none;"></div>
           <div id="board-cards" class="board-cards"></div>
           <div id="board-label" class="board-label"></div>
         </div>
@@ -96,7 +102,11 @@
         </div>
         <div class="form-group">
           <label for="f-agent">Agent Profile</label>
-          <input id="f-agent" name="agentId" type="text" value="default" />
+          <input id="f-agent" name="agentId" type="text" value="poker_default" />
+        </div>
+        <div class="form-group">
+          <label for="f-model">Model Override</label>
+          <input id="f-model" name="model" type="text" placeholder="optional (e.g. gpt-5.3-codex)" />
         </div>
         <div class="form-group">
           <label for="f-seed">Seed</label>
@@ -121,6 +131,16 @@
         <div class="form-group wide">
           <label for="f-labels">Per-seat Labels (csv)</label>
           <input id="f-labels" name="playerLabels" type="text" placeholder="agent-1,agent-2,…" />
+        </div>
+        <div class="form-group wide">
+          <label for="persona-grid">Per-seat Personas</label>
+          <div id="persona-grid" class="persona-grid"></div>
+          <p class="form-note">Defaults are auto-assigned by seat. You can override each seat below.</p>
+        </div>
+        <div class="form-group wide">
+          <label for="model-grid">Per-seat Models</label>
+          <div id="model-grid" class="persona-grid"></div>
+          <p class="form-note">Leave blank to inherit the global model/profile for that seat.</p>
         </div>
         <div class="form-group wide">
           <label for="f-sysprompt">System Prompt Override</label>
@@ -154,6 +174,16 @@
   <!-- Winner Toast -->
   <div id="winner-toast" class="winner-toast"></div>
 
+  <!-- Showdown Overlay -->
+  <div id="showdown-overlay" class="showdown-overlay">
+    <div class="showdown-content">
+      <div class="showdown-title">Showdown</div>
+      <div id="showdown-board" class="showdown-board"></div>
+      <div id="showdown-hands" class="showdown-hands"></div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script type="module" src="/app.js"></script>
 </body>
 

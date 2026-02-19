@@ -335,6 +335,9 @@ defmodule LemonPoker.MatchServer do
       small_blind: Keyword.get(opts, :small_blind),
       big_blind: Keyword.get(opts, :big_blind),
       agent_id: Keyword.get(opts, :agent_id),
+      model: Keyword.get(opts, :model),
+      player_models: Keyword.get(opts, :player_models),
+      player_personas: Keyword.get(opts, :player_personas),
       table_talk_enabled: Keyword.get(opts, :table_talk_enabled, true)
     }
   end

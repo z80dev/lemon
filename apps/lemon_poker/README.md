@@ -28,7 +28,7 @@ mix lemon_poker.play --hands 1 --seed 42
 mix lemon_poker.play --players 6 --hands 10
 ```
 
-By default this runs 2 `default` profile agent sessions. Set `--players N` for
+By default this runs 2 `poker_default` profile agent sessions. Set `--players N` for
 `N` seats (`2..9`), and it prints each table action as it happens.
 
 Poker tasks run with runtime overrides that disable Telegram transport and SMS
@@ -40,6 +40,22 @@ webhook are unexpectedly active.
 
 By default, poker runtime uses the canonical Lemon store (`~/.lemon/store`),
 so provider API keys from Lemon secrets are available in poker agent runs.
+
+Poker runtime also isolates poker-agent context by default:
+
+- Uses poker-local agent profiles from
+  `apps/lemon_poker/priv/agent_profiles/.lemon/config.toml`
+- Runs sessions from a dedicated cwd (`~/.lemon/poker-cwd`) so repo AGENTS/system
+  context does not leak into poker agents
+- Uses a dedicated CodingAgent dir (`~/.lemon/poker-agent`)
+- Applies a restrictive no-tools policy for poker decisions (can be overridden)
+
+Optional overrides:
+
+```bash
+LEMON_POKER_AGENT_CWD=/path/to/poker-cwd
+LEMON_POKER_AGENT_DIR=/path/to/poker-agent-dir
+```
 
 If you want a fully isolated poker store, set:
 
@@ -72,8 +88,10 @@ What you get:
 
 Table-talk policy:
 
-- During an active hand, player table-talk that appears to reveal hole cards
-  (ranks/suits) is blocked, even if the player has folded.
+- During an active hand, player table-talk that reveals cards/hand strength is
+  blocked, even if the player has folded.
+- During an active hand, strategy/action commentary is also blocked; table talk
+  is restricted to social banter.
 
 ## Quick Usage
 

@@ -1,12 +1,16 @@
 defmodule LemonPoker.RuntimeConfig do
   @moduledoc false
 
+  @default_agent_dir "~/.lemon/poker-agent"
+  @default_agent_cwd "~/.lemon/poker-cwd"
+
   @doc """
   Applies runtime overrides for poker-only local runs.
 
   Goals:
   - avoid port collisions with an already-running Lemon runtime
   - prevent Telegram polling transport from starting in this process
+  - isolate poker agent context from repo/global coding context
   - optionally isolate store writes only when explicitly requested
   """
   @spec apply_for_local_poker!() :: :ok
@@ -17,6 +21,18 @@ defmodule LemonPoker.RuntimeConfig do
     # Store override is opt-in (LEMON_POKER_ISOLATE_STORE=true). Default behavior
     # keeps canonical Lemon store access so encrypted provider secrets resolve.
     LemonPoker.Store.install_runtime_override!()
+
+    # Run poker agents from dedicated config/cwd roots so their prompts/tools are
+    # not polluted by unrelated repository context.
+    System.put_env("LEMON_AGENT_DIR", poker_agent_dir())
+    Application.put_env(:coding_agent, :agent_dir, poker_agent_dir(), persistent: true)
+
+    File.mkdir_p!(poker_agent_dir())
+    File.mkdir_p!(poker_agent_cwd())
+
+    Application.put_env(:lemon_router, :agent_profiles_cwd, poker_profiles_cwd(),
+      persistent: true
+    )
 
     # Avoid health/control-plane port collisions with another runtime.
     Application.put_env(:lemon_control_plane, :port, 0, persistent: true)
@@ -81,5 +97,35 @@ defmodule LemonPoker.RuntimeConfig do
       true ->
         :ok
     end
+  end
+
+  @doc """
+  Dedicated cwd for poker agent sessions.
+  """
+  @spec poker_agent_cwd() :: String.t()
+  def poker_agent_cwd do
+    case System.get_env("LEMON_POKER_AGENT_CWD") do
+      cwd when is_binary(cwd) and cwd != "" -> Path.expand(cwd)
+      _ -> Path.expand(@default_agent_cwd)
+    end
+  end
+
+  @doc """
+  Dedicated CodingAgent dir for poker runs.
+  """
+  @spec poker_agent_dir() :: String.t()
+  def poker_agent_dir do
+    case System.get_env("LEMON_POKER_AGENT_DIR") do
+      dir when is_binary(dir) and dir != "" -> Path.expand(dir)
+      _ -> Path.expand(@default_agent_dir)
+    end
+  end
+
+  @doc """
+  CWD used by LemonRouter.AgentProfiles for poker-local profile config.
+  """
+  @spec poker_profiles_cwd() :: String.t()
+  def poker_profiles_cwd do
+    Application.app_dir(:lemon_poker, "priv/agent_profiles")
   end
 end

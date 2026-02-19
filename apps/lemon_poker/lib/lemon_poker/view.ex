@@ -42,7 +42,9 @@ defmodule LemonPoker.View do
         seat: seat,
         label: cfg.label,
         agent_id: cfg.agent_id,
-        session_key: cfg.session_key
+        session_key: cfg.session_key,
+        persona: cfg.persona,
+        model: cfg.model
       }
     end)
     |> Enum.sort_by(& &1.seat)
@@ -158,7 +160,8 @@ defmodule LemonPoker.View do
       %{
         seat: normalize_seat(seat),
         category: fetch(rank, :category),
-        tiebreaker: fetch(rank, :tiebreaker) || []
+        tiebreaker: fetch(rank, :tiebreaker) || [],
+        hole_cards: fetch(rank, :hole_cards) || []
       }
     end)
     |> Enum.sort_by(& &1.seat)

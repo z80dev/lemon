@@ -1,5 +1,5 @@
 defmodule Mix.Tasks.LemonPoker.Play do
-  @shortdoc "Run a multi-player poker match between default-profile agents"
+  @shortdoc "Run a multi-player poker match between poker-profile agents"
   @moduledoc """
   Runs a no-limit holdem match in-process and prints actions as they happen.
 

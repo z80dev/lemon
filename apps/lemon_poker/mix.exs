@@ -29,7 +29,9 @@ defmodule LemonPoker.MixProject do
       {:lemon_router, in_umbrella: true},
       {:bandit, "~> 1.0"},
       {:plug, "~> 1.18"},
-      {:websock_adapter, "~> 0.5"}
+      {:websock_adapter, "~> 0.5"},
+      {:req, "~> 0.5"},
+      {:floki, "~> 0.36"}
     ]
   end
 end

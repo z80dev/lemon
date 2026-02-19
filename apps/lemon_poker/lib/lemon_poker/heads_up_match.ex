@@ -14,6 +14,7 @@ defmodule LemonPoker.HeadsUpMatch do
   @max_players 9
   @default_timeout_ms 90_000
   @default_max_decisions 200
+  @default_agent_id "poker_default"
 
   @type action ::
           :fold
@@ -328,7 +329,7 @@ defmodule LemonPoker.HeadsUpMatch do
   end
 
   defp seat_configs(table_id, opts, player_count) do
-    agent_id = Keyword.get(opts, :agent_id, "default")
+    agent_id = Keyword.get(opts, :agent_id, @default_agent_id)
 
     Enum.into(1..player_count, %{}, fn seat ->
       {seat,
