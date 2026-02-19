@@ -67,8 +67,39 @@ Each entry records what was done, what worked, and what to focus on next.
 - Using `ExUnit.Callbacks.on_exit` for cleanup works correctly
 - The Harness struct provides a clean container for test resources
 
+### 2025-02-19 - Config Infrastructure: Config.Helpers Module
+**Work Area**: Feature Enhancement / Refactoring
+
+**What was done:**
+- Created `LemonCore.Config.Helpers` module inspired by Ironclaw's `config/helpers.rs`
+- Provides consistent environment variable handling with proper type conversion:
+  - `get_env/1,2` - Get optional env vars with default support
+  - `get_env_int/2` - Parse integers with fallback
+  - `get_env_float/2` - Parse floats with fallback
+  - `get_env_bool/2` - Parse booleans (true/1/yes/on vs false/0/no/off)
+  - `get_env_atom/2` - Convert to snake_case atoms
+  - `get_env_list/2` - Split comma-separated values
+  - `require_env!/1,2` - Require env vars with helpful error messages
+  - `get_feature_env/3` - Feature-flag conditional env vars
+  - `parse_duration/2, get_env_duration/2` - Parse durations (ms/s/m/h/d)
+  - `parse_bytes/2, get_env_bytes/2` - Parse byte sizes (B/KB/MB/GB/TB)
+- Created comprehensive tests (`helpers_test.exs`) with 66 test cases
+- All 66 new tests pass
+- Total test count: 185 (up from 119)
+- Existing tests still pass (1 pre-existing architecture check failure unrelated)
+
+**Files changed:**
+- `apps/lemon_core/lib/lemon_core/config/helpers.ex` (new file - 280 lines)
+- `apps/lemon_core/test/lemon_core/config/helpers_test.exs` (new file - 66 tests)
+
+**What worked:**
+- Ironclaw's helper pattern translates well to Elixir
+- Comprehensive type conversion with sensible defaults
+- Duration and byte parsing are particularly useful for config
+
 **Next run should focus on:**
-- Refactor existing tests to use the new Testing harness (especially `config_test.exs`, `secrets_test.exs`, `store_test.exs`)
-- Look at Ironclaw's `config/` module restructuring for ideas on organizing lemon's config
-- Consider adding similar testing infrastructure to other apps in the umbrella (`agent_core`, `lemon_gateway`, etc.)
-- Look at Ironclaw's benchmark suite for inspiration on performance testing
+- Start refactoring `config.ex` (1253 lines) into smaller modules like Ironclaw's config/
+- Create `LemonCore.Config.LLM`, `LemonCore.Config.Agent`, etc. following Ironclaw's pattern
+- Use the new Helpers module in existing config code
+- Add Config.Helpers to other apps in the umbrella
+- Look at Ironclaw's benchmark suite for performance testing inspiration
