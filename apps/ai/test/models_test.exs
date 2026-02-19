@@ -317,6 +317,41 @@ defmodule Ai.ModelsTest do
       assert model.cost.output == 60.0
       assert model.cost.cache_read == 7.5
     end
+
+    test "claude sonnet 4.6 has correct pricing" do
+      model = Models.get_model(:anthropic, "claude-sonnet-4-6")
+
+      assert model.cost.input == 3.0
+      assert model.cost.output == 15.0
+      assert model.cost.cache_read == 0.3
+      assert model.cost.cache_write == 3.75
+      assert model.context_window == 200_000
+      assert model.max_tokens == 64_000
+      assert model.reasoning == true
+    end
+
+    test "claude opus 4.6 has correct pricing" do
+      model = Models.get_model(:anthropic, "claude-opus-4-6")
+
+      assert model.cost.input == 5.0
+      assert model.cost.output == 25.0
+      assert model.cost.cache_read == 0.5
+      assert model.cost.cache_write == 6.25
+      assert model.context_window == 200_000
+      assert model.max_tokens == 128_000
+      assert model.reasoning == true
+    end
+
+    test "gemini 3.1 pro preview has correct specs" do
+      model = Models.get_model(:google, "gemini-3.1-pro-preview")
+
+      assert model.cost.input == 2.0
+      assert model.cost.output == 12.0
+      assert model.cost.cache_read == 0.2
+      assert model.context_window == 1_048_576
+      assert model.max_tokens == 65_536
+      assert model.reasoning == true
+    end
   end
 
   describe "model context windows" do
@@ -343,6 +378,8 @@ defmodule Ai.ModelsTest do
       assert Models.get_model(:anthropic, "claude-opus-4-5-20251101") != nil
       assert Models.get_model(:anthropic, "claude-3-5-haiku-20241022") != nil
       assert Models.get_model(:anthropic, "claude-haiku-4-5-20251001") != nil
+      assert Models.get_model(:anthropic, "claude-sonnet-4-6") != nil
+      assert Models.get_model(:anthropic, "claude-opus-4-6") != nil
     end
 
     test "openai flagship models" do
@@ -359,6 +396,7 @@ defmodule Ai.ModelsTest do
       assert Models.get_model(:google, "gemini-2.5-flash") != nil
       assert Models.get_model(:google, "gemini-2.0-flash") != nil
       assert Models.get_model(:google, "gemini-1.5-pro") != nil
+      assert Models.get_model(:google, "gemini-3.1-pro-preview") != nil
     end
   end
 end

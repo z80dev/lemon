@@ -645,3 +645,48 @@ Each entry records what was done, what worked, and what to focus on next.
 - Continue adding tests for remaining 2 untested modules
 - Or add integration tests using the new modular config
 - Or add validation to the modular config system
+
+### 2025-02-19 - Pi Upstream Sync: Add Claude 4.6 and Gemini 3.1 Models
+**Work Area**: Feature Enhancement / Pi Upstream Sync
+
+**What was done:**
+- Synced with Pi upstream (github.com/badlogic/pi-mono) to get latest model updates
+- Added new Claude 4.6 models to `Ai.Models`:
+  - `claude-sonnet-4-6` - Claude Sonnet 4.6 with reasoning, 200k context, 64k max tokens
+  - `claude-opus-4-6` - Claude Opus 4.6 with reasoning, 200k context, 128k max tokens
+- Added new Gemini 3.1 model:
+  - `gemini-3.1-pro-preview` - Gemini 3.1 Pro Preview with reasoning, 1M context, 65k max tokens
+- All models include:
+  - Correct pricing from Pi upstream
+  - Proper context windows and max tokens
+  - Reasoning and vision support flags
+  - Cache pricing where applicable
+- Added comprehensive tests for new models:
+  - Tests for model existence in flagship models list
+  - Tests for correct pricing (input/output/cache)
+  - Tests for context windows and max tokens
+  - Tests for reasoning support
+  - 3 new test cases for the new models
+- All 1301 tests pass (up from 1298)
+- Existing tests still pass
+
+**Files changed:**
+- `apps/ai/lib/ai/models.ex` - Added 3 new model definitions
+- `apps/ai/test/models_test.exs` - Added 3 new test cases
+
+**What worked:**
+- Pi upstream model definitions are well-structured and easy to port
+- Testing model properties ensures correctness
+- Keeping pricing in sync with upstream ensures accuracy
+
+**Models added:**
+| Model | Provider | Context | Max Tokens | Reasoning |
+|-------|----------|---------|------------|-----------|
+| claude-sonnet-4-6 | Anthropic | 200k | 64k | Yes |
+| claude-opus-4-6 | Anthropic | 200k | 128k | Yes |
+| gemini-3.1-pro-preview | Google | 1M | 65k | Yes |
+
+**Next run should focus on:**
+- Continue adding tests for remaining 2 untested modules (config_cache, logger_setup)
+- Or check Pi upstream for more new models/features
+- Or add Bedrock variants of the new Claude 4.6 models
