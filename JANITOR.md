@@ -178,3 +178,46 @@ Each entry records what was done, what worked, and what to focus on next.
 - Consider creating a Config.LLM module for provider-specific settings
 - Eventually the main config.ex should just orchestrate the sub-modules
 - Add Config.Helpers to other apps in the umbrella
+
+### 2025-02-19 - Config Refactoring: Extract Gateway Config Module
+**Work Area**: Refactoring / Feature Enhancement
+
+**What was done:**
+- Created `LemonCore.Config.Gateway` module following Ironclaw's modular config pattern
+- Extracted gateway-specific configuration from the monolithic `config.ex` (1253 lines)
+- Gateway config includes:
+  - Core settings: `max_concurrent_runs`, `default_engine`, `default_cwd`, `auto_resume`
+  - Telegram settings: `enable_telegram`, `require_engine_lock`, `engine_lock_timeout_ms`
+  - `bindings` - list of transport bindings (telegram chat_id to agent_id mappings)
+  - `projects` - project-specific configuration map
+  - `sms` - SMS provider configuration
+  - `queue` - queue management settings (mode, cap, drop strategy)
+  - `telegram` - Telegram bot configuration with:
+    - Token resolution (supports ${ENV_VAR} syntax)
+    - Compaction settings (context_window_tokens, reserve_tokens, trigger_ratio)
+  - `engines` - engine-specific configuration map
+- Uses `Config.Helpers` for consistent env var resolution
+- Supports env var interpolation for sensitive values like tokens (${TELEGRAM_BOT_TOKEN})
+- Priority: environment variables > TOML config > defaults
+- Added `defaults/0` function for the base configuration
+- Created comprehensive tests (`gateway_test.exs`) with 22 test cases
+- All 22 new tests pass
+- Total test count: 249 (up from 227)
+- Existing tests still pass (1 pre-existing architecture check failure unrelated)
+
+**Files changed:**
+- `apps/lemon_core/lib/lemon_core/config/gateway.ex` (new file - 230 lines)
+- `apps/lemon_core/test/lemon_core/config/gateway_test.exs` (new file - 22 tests)
+
+**What worked:**
+- Env var interpolation (${VAR}) pattern works well for sensitive config like tokens
+- The modular pattern scales well to complex nested configurations
+- Telegram compaction settings follow the same pattern as agent compaction
+- Queue configuration with nil defaults allows for optional feature enablement
+
+**Next run should focus on:**
+- Extract remaining config sections: `LemonCore.Config.Logging`, `LemonCore.Config.TUI`, `LemonCore.Config.Providers`
+- Start integrating the modular config modules into the main Config module
+- Consider creating a Config.LLM module for provider-specific settings
+- Eventually the main config.ex should just orchestrate the sub-modules
+- Add Config.Helpers to other apps in the umbrella
