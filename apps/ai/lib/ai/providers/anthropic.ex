@@ -33,6 +33,7 @@ defmodule Ai.Providers.Anthropic do
     TextContent,
     ThinkingContent,
     ToolCall,
+    ToolResultMessage,
     Usage
   }
 
@@ -40,6 +41,8 @@ defmodule Ai.Providers.Anthropic do
   @api_version "2023-06-01"
   @max_retries 2
   @base_retry_delay_ms 400
+  @kimi_history_limit_env "LEMON_KIMI_MAX_REQUEST_MESSAGES"
+  @kimi_default_history_limit 200
 
   # ============================================================================
   # Provider Callbacks
@@ -106,12 +109,12 @@ defmodule Ai.Providers.Anthropic do
       url = "#{base_url}/v1/messages"
 
       headers = build_headers(api_key, model.headers, opts.headers)
-      body = build_request_body(model, context, opts)
+      {body, history_info} = build_request_body(model, context, opts)
       trace_id = HttpTrace.new_trace_id("anthropic")
       messages = Map.get(body, "messages", [])
 
       request_summary =
-        summarize_http_request(trace_id, model, context, opts, url, body, messages)
+        summarize_http_request(trace_id, model, context, opts, url, body, messages, history_info)
 
       HttpTrace.log("anthropic", "request_start", request_summary)
 
@@ -634,7 +637,7 @@ defmodule Ai.Providers.Anthropic do
     end)
   end
 
-  defp summarize_http_request(trace_id, model, context, opts, url, body, messages) do
+  defp summarize_http_request(trace_id, model, context, opts, url, body, messages, history_info) do
     %{
       trace_id: trace_id,
       model: model.id,
@@ -646,7 +649,11 @@ defmodule Ai.Providers.Anthropic do
       agent_id: trace_header(opts.headers, "x-lemon-agent-id"),
       url: url,
       raw_message_count: length(context.messages || []),
+      prepared_message_count: Map.get(history_info, :prepared_message_count),
       converted_message_count: length(messages),
+      history_limit: Map.get(history_info, :max_messages),
+      history_dropped: Map.get(history_info, :dropped_count, 0),
+      history_dropped_orphan_tool_results: Map.get(history_info, :dropped_orphan_tool_results, 0),
       converted_message_summary: summarize_messages(messages),
       system_prompt_bytes: HttpTrace.summarize_text_size(context.system_prompt),
       tools_count: length(context.tools || []),
@@ -862,9 +869,11 @@ defmodule Ai.Providers.Anthropic do
   end
 
   defp build_request_body(model, context, opts) do
+    {history_messages, history_info} = limit_history_for_provider(context.messages || [], model)
+
     body = %{
       "model" => model.id,
-      "messages" => convert_messages(context.messages, model),
+      "messages" => convert_messages(history_messages, model),
       "max_tokens" => opts.max_tokens || div(model.max_tokens, 3),
       "stream" => true
     }
@@ -912,7 +921,57 @@ defmodule Ai.Providers.Anthropic do
         body
       end
 
-    body
+    {body, history_info}
+  end
+
+  defp limit_history_for_provider(messages, %Model{provider: :kimi}) when is_list(messages) do
+    max_messages = kimi_history_limit()
+    trimmed = Enum.take(messages, -max_messages)
+    dropped_by_limit = max(length(messages) - length(trimmed), 0)
+    {trimmed, dropped_orphans} = drop_leading_tool_result_messages(trimmed)
+
+    {trimmed,
+     %{
+       max_messages: max_messages,
+       prepared_message_count: length(trimmed),
+       dropped_count: dropped_by_limit + dropped_orphans,
+       dropped_orphan_tool_results: dropped_orphans
+     }}
+  end
+
+  defp limit_history_for_provider(messages, _model) when is_list(messages) do
+    {messages,
+     %{
+       max_messages: nil,
+       prepared_message_count: length(messages),
+       dropped_count: 0,
+       dropped_orphan_tool_results: 0
+     }}
+  end
+
+  defp limit_history_for_provider(_messages, model), do: limit_history_for_provider([], model)
+
+  defp drop_leading_tool_result_messages(messages) do
+    {dropped, rest} =
+      Enum.split_while(messages, fn
+        %ToolResultMessage{} -> true
+        _ -> false
+      end)
+
+    {rest, length(dropped)}
+  end
+
+  defp kimi_history_limit do
+    case System.get_env(@kimi_history_limit_env) do
+      nil ->
+        @kimi_default_history_limit
+
+      value when is_binary(value) ->
+        case Integer.parse(String.trim(value)) do
+          {limit, ""} when limit > 0 -> limit
+          _ -> @kimi_default_history_limit
+        end
+    end
   end
 
   defp convert_messages(messages, model) do

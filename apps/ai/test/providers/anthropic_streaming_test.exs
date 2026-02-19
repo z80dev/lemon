@@ -222,6 +222,40 @@ defmodule Ai.Providers.AnthropicStreamingTest do
     assert {"x-api-key", "anthropic-fallback-key"} in headers
   end
 
+  test "kimi request limits oversized message history before sending" do
+    with_env(
+      %{
+        "LEMON_KIMI_MAX_REQUEST_MESSAGES" => nil
+      },
+      fn ->
+        test_pid = self()
+
+        Req.Test.stub(__MODULE__, fn conn ->
+          {:ok, raw, conn} = Plug.Conn.read_body(conn)
+          send(test_pid, {:kimi_limited_request_body, Jason.decode!(raw)})
+          Plug.Conn.send_resp(conn, 400, "bad request")
+        end)
+
+        messages =
+          for idx <- 1..230 do
+            %UserMessage{content: "message #{idx}"}
+          end
+
+        context = Context.new(messages: messages)
+
+        {:ok, stream} =
+          Anthropic.stream(kimi_model(), context, %StreamOptions{api_key: "test-key"})
+
+        assert_receive {:kimi_limited_request_body, body}, 1_000
+
+        assert length(body["messages"]) == 200
+        assert hd(body["messages"])["content"] == "message 31"
+        assert List.last(body["messages"])["content"] == "message 230"
+        assert {:error, _} = EventStream.result(stream, 1_000)
+      end
+    )
+  end
+
   test "retries retryable HTTP responses and succeeds" do
     {:ok, attempts} = Agent.start_link(fn -> 0 end)
 
