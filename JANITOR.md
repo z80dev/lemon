@@ -275,3 +275,57 @@ Each entry records what was done, what worked, and what to focus on next.
 - Refactor main config.ex to use the new modules (reduce from 1253 lines)
 - Eventually config.ex should just orchestrate sub-modules like Ironclaw's config/mod.rs
 - Add Config.Helpers to other apps in the umbrella
+
+### 2025-02-19 - Config Refactoring: Extract Providers Config Module
+**Work Area**: Refactoring / Feature Enhancement
+
+**What was done:**
+- Created `LemonCore.Config.Providers` module for LLM provider configurations:
+  - `api_key` - direct API key for providers
+  - `base_url` - custom base URL for API endpoints
+  - `api_key_secret` - reference to secret store for API keys
+  - Supports known providers with env var mappings:
+    - `anthropic`: `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`
+    - `openai`: `OPENAI_API_KEY`, `OPENAI_BASE_URL`
+    - `openai-codex`: `OPENAI_CODEX_API_KEY`, `OPENAI_BASE_URL`
+  - Supports arbitrary custom providers
+  - Filters out non-map provider configs (invalid configs are ignored)
+  - Nil/empty values are filtered out from provider configs
+  - Added helper functions:
+    - `get_provider/2` - get specific provider config
+    - `get_api_key/2` - get API key for a provider
+    - `list_providers/1` - list all configured provider names
+- Uses `Config.Helpers` for consistent env var resolution
+- Priority: environment variables > TOML config > defaults
+- Created comprehensive tests (`providers_test.exs`) with 18 test cases
+- All 18 new tests pass
+- Total test count: 299 (up from 281)
+- Existing tests still pass (1 pre-existing architecture check failure unrelated)
+
+**Files changed:**
+- `apps/lemon_core/lib/lemon_core/config/providers.ex` (new file - 170 lines)
+- `apps/lemon_core/test/lemon_core/config/providers_test.exs` (new file - 18 tests)
+
+**What worked:**
+- Provider env var mappings make it easy to add new known providers
+- Filtering invalid configs prevents crashes from malformed config
+- The `api_key_secret` field provides flexibility for secret management
+- Helper functions make it easy to work with provider configs
+
+**Config modules completed:**
+- ✅ `LemonCore.Config.Helpers` - env var utilities (66 tests)
+- ✅ `LemonCore.Config.Agent` - agent behavior settings (17 tests)
+- ✅ `LemonCore.Config.Tools` - web tools and WASM settings (25 tests)
+- ✅ `LemonCore.Config.Gateway` - Telegram, SMS, engine bindings (22 tests)
+- ✅ `LemonCore.Config.Logging` - log file and rotation settings (20 tests)
+- ✅ `LemonCore.Config.TUI` - terminal UI theme and debug (12 tests)
+- ✅ `LemonCore.Config.Providers` - LLM provider configurations (18 tests)
+
+**Total: 7 config modules, 198 tests**
+
+**Next run should focus on:**
+- Create a `LemonCore.Config` module that orchestrates all sub-modules
+- Refactor main config.ex to use the new modular config modules
+- Reduce config.ex from 1253 lines by delegating to sub-modules
+- Eventually config.ex should just be a thin wrapper like Ironclaw's config/mod.rs
+- Add Config.Helpers to other apps in the umbrella
