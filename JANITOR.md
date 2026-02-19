@@ -97,9 +97,40 @@ Each entry records what was done, what worked, and what to focus on next.
 - Comprehensive type conversion with sensible defaults
 - Duration and byte parsing are particularly useful for config
 
+### 2025-02-19 - Config Refactoring: Extract Agent Config Module
+**Work Area**: Refactoring / Feature Enhancement
+
+**What was done:**
+- Created `LemonCore.Config.Agent` module following Ironclaw's `config/agent.rs` pattern
+- Extracted agent-specific configuration from the monolithic `config.ex` (1253 lines)
+- Agent config includes:
+  - `default_provider`, `default_model`, `default_thinking_level`
+  - `compaction` settings (enabled, reserve_tokens, keep_recent_tokens)
+  - `retry` settings (enabled, max_retries, base_delay_ms)
+  - `shell` settings (path, command_prefix)
+  - `extension_paths` list
+  - `theme` selection
+- Uses `Config.Helpers` for consistent env var resolution
+- Priority: environment variables > TOML config > defaults
+- Added `defaults/0` function for the base configuration
+- Created comprehensive tests (`agent_test.exs`) with 17 test cases
+- All 17 new tests pass
+- Total test count: 202 (up from 185)
+- Existing tests still pass (1 pre-existing architecture check failure unrelated)
+
+**Files changed:**
+- `apps/lemon_core/lib/lemon_core/config/agent.ex` (new file - 180 lines)
+- `apps/lemon_core/test/lemon_core/config/agent_test.exs` (new file - 17 tests)
+
+**What worked:**
+- Ironclaw's modular config pattern works well in Elixir
+- Using `Config.Helpers` keeps the code clean and consistent
+- The `resolve/1` pattern provides clear separation of concerns
+- Proper handling of `false` values (not falsy like `||` would treat them)
+
 **Next run should focus on:**
-- Start refactoring `config.ex` (1253 lines) into smaller modules like Ironclaw's config/
-- Create `LemonCore.Config.LLM`, `LemonCore.Config.Agent`, etc. following Ironclaw's pattern
-- Use the new Helpers module in existing config code
+- Extract more config sections: `LemonCore.Config.Tools`, `LemonCore.Config.Gateway`, `LemonCore.Config.Logging`
+- Gradually migrate `config.ex` to use the new modular config modules
+- Eventually split config.ex into multiple focused modules like Ironclaw's config/
 - Add Config.Helpers to other apps in the umbrella
 - Look at Ironclaw's benchmark suite for performance testing inspiration
