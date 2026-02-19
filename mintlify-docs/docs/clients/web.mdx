@@ -1,0 +1,78 @@
+---
+title: Web UI
+description: 'React-based web interface for Lemon'
+---
+
+The Web UI is a React client with a small Node.js WebSocket bridge that spawns `scripts/debug_agent_rpc.exs`.
+
+## Development
+
+```bash
+cd clients/lemon-web
+npm install
+npm run dev
+```
+
+By default this starts:
+- Web server (Vite) for the React UI on port 5173
+- Node bridge that spawns `mix run scripts/debug_agent_rpc.exs --` on port 3939
+
+## Bridge Server Options
+
+The server accepts these flags:
+
+| Flag | Description |
+|------|-------------|
+| `--cwd <path>` | Working directory for the agent session |
+| `--model <provider:model>` | Override model |
+| `--base-url <url>` | Override provider base URL |
+| `--system-prompt <text>` | Set a system prompt |
+| `--session-file <path>` | Resume a saved session |
+| `--debug` | Enable RPC stderr forwarding |
+| `--no-ui` | Disable UI signals |
+| `--lemon-path <path>` | Set Lemon repo root |
+| `--port <port>` | Server port (default 3939) |
+| `--static-dir <path>` | Serve prebuilt UI from custom directory |
+
+### Example
+
+```bash
+node clients/lemon-web/server/dist/index.js \
+  --cwd /path/to/project \
+  --model anthropic:claude-sonnet-4-20250514 \
+  --port 3939
+```
+
+If the server cannot find the Lemon repo root automatically, set `LEMON_PATH` or pass `--lemon-path`.
+
+## Project Structure
+
+```
+lemon-web/
+├── web/                 # Vite/React frontend
+│   ├── src/
+│   ├── public/
+│   └── package.json
+├── server/              # Node WS bridge
+│   └── src/
+└── shared/              # Shared types
+    └── src/
+```
+
+## Features
+
+- **Real-time streaming** via WebSocket
+- **Multi-session support**
+- **Markdown rendering** with syntax highlighting
+- **Tool execution display**
+- **Session persistence**
+- **Settings management**
+
+## Production Build
+
+```bash
+cd clients/lemon-web
+npm run build
+```
+
+This creates a production build in `web/dist/` that can be served statically.
