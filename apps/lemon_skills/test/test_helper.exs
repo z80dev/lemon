@@ -10,4 +10,7 @@ home =
 File.mkdir_p!(home)
 System.put_env("HOME", home)
 
+# Keep X adapter resolution deterministic in tests; individual tests can override.
+Application.put_env(:lemon_channels, :x_api_use_secrets, false)
+
 Application.ensure_all_started(:lemon_skills)

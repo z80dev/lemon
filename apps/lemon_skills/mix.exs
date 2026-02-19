@@ -28,6 +28,7 @@ defmodule LemonSkills.MixProject do
       {:lemon_core, in_umbrella: true},
       {:agent_core, in_umbrella: true},
       {:ai, in_umbrella: true},
+      {:lemon_channels, in_umbrella: true},
       {:jason, "~> 1.4"}
     ]
   end
