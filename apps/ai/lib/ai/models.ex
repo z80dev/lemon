@@ -628,6 +628,18 @@ defmodule Ai.Models do
       context_window: 400_000,
       max_tokens: 128_000
     },
+    "gpt-5.3-codex-spark" => %Model{
+      id: "gpt-5.3-codex-spark",
+      name: "GPT-5.3 Codex Spark",
+      api: :openai_responses,
+      provider: :openai,
+      base_url: "https://api.openai.com/v1",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 1.75, output: 14.0, cache_read: 0.175, cache_write: 0.0},
+      context_window: 128_000,
+      max_tokens: 32_000
+    },
     "gpt-5.2-pro" => %Model{
       id: "gpt-5.2-pro",
       name: "GPT-5.2 Pro",

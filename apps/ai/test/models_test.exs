@@ -352,6 +352,18 @@ defmodule Ai.ModelsTest do
       assert model.max_tokens == 65_536
       assert model.reasoning == true
     end
+
+    test "gpt 5.3 codex spark has correct specs" do
+      model = Models.get_model(:openai, "gpt-5.3-codex-spark")
+
+      assert model.cost.input == 1.75
+      assert model.cost.output == 14.0
+      assert model.cost.cache_read == 0.175
+      assert model.cost.cache_write == 0.0
+      assert model.context_window == 128_000
+      assert model.max_tokens == 32_000
+      assert model.reasoning == true
+    end
   end
 
   describe "model context windows" do
@@ -389,6 +401,9 @@ defmodule Ai.ModelsTest do
       assert Models.get_model(:openai, "o1") != nil
       assert Models.get_model(:openai, "o3") != nil
       assert Models.get_model(:openai, "o3-mini") != nil
+      assert Models.get_model(:openai, "gpt-5.2-codex") != nil
+      assert Models.get_model(:openai, "gpt-5.3-codex") != nil
+      assert Models.get_model(:openai, "gpt-5.3-codex-spark") != nil
     end
 
     test "google flagship models" do
