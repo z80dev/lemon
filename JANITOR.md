@@ -486,3 +486,48 @@ Each entry records what was done, what worked, and what to focus on next.
   - `logger_setup` - Logger initialization
 - Or start using the new modular config in actual code
 - Or add validation to the modular config system
+
+### 2025-02-19 - Test Expansion: Clock Tests
+**Work Area**: Test Expansion
+
+**What was done:**
+- Created comprehensive tests for the `LemonCore.Clock` module (previously untested):
+  - Tests for `now_ms/0`: returns current time in milliseconds
+  - Tests for `now_sec/0`: returns current time in seconds
+  - Tests for `now_utc/0`: returns current UTC datetime
+  - Tests for `from_ms/1`: converts milliseconds to DateTime, handles zero
+  - Tests for `to_ms/1`: converts DateTime to milliseconds, round-trip with from_ms
+  - Tests for `expired?/2`: expired timestamps, non-expired, exact boundary, past boundary
+  - Tests for `elapsed_ms/1`: elapsed time since timestamp, zero for current timestamp
+  - 13 comprehensive tests covering the 64-line module
+- All 13 new tests pass
+- Total test count: 349 (up from 336)
+- Existing tests still pass (1 pre-existing architecture check failure unrelated)
+
+**Files changed:**
+- `apps/lemon_core/test/lemon_core/clock_test.exs` (new file - 13 tests)
+
+**What worked:**
+- Testing time functions requires careful timing assertions
+- Round-trip testing (ms -> DateTime -> ms) verifies correctness
+- Boundary testing for expiration logic catches edge cases
+- Simple modules are quick to test but still important for coverage
+
+**Test coverage progress:**
+- Before: Clock module (64 lines) had 0 tests
+- After: Clock module has 13 tests
+- Remaining untested modules:
+  - `config_cache` - Config caching
+  - `dedupe_ets` - Deduplication
+  - `httpc` - HTTP client
+  - `logger_setup` - Logger initialization
+
+**Total progress:**
+- Started with 119 tests
+- Now have 349 tests
+- Added 230 tests across multiple runs
+
+**Next run should focus on:**
+- Continue adding tests for remaining untested modules
+- Or add integration tests using the new modular config
+- Or add validation to the modular config system
