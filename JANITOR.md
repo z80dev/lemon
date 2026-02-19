@@ -375,3 +375,58 @@ Each entry records what was done, what worked, and what to focus on next.
 - Add deprecation warnings for old config patterns
 - Eventually replace config.ex with the new modular implementation
 - Consider adding validation (Ecto-style or similar)
+
+### 2025-02-19 - Feature: Modular Config Interface
+**Work Area**: Feature Enhancement
+
+**What was done:**
+- Created `LemonCore.Config.Modular` module as the new configuration interface:
+  - Provides a unified `load/1` function that orchestrates all sub-modules
+  - Loads and merges global config (`~/.lemon/config.toml`) and project config (`.lemon/config.toml`)
+  - Uses `Toml.decode/1` for parsing TOML files
+  - Deep merges configuration maps (project overrides global)
+  - Delegates to each modular config module for resolution:
+    - `Agent.resolve/1` for agent settings
+    - `Tools.resolve/1` for tools configuration
+    - `Gateway.resolve/1` for gateway settings
+    - `Logging.resolve/1` for logging configuration
+    - `TUI.resolve/1` for TUI settings
+    - `Providers.resolve/1` for provider configurations
+  - Returns a unified struct with all configuration sections
+  - Helper functions:
+    - `global_path/0` - returns path to global config
+    - `project_path/1` - returns path to project config
+- Created comprehensive tests (`modular_test.exs`):
+  - Tests for loading configuration
+  - Tests for default values
+  - Tests for environment variable overrides
+  - Tests for path helpers
+  - Tests for integration with all sub-modules
+  - 12 comprehensive tests
+- All 12 new tests pass
+- Total test count: 319 (up from 307)
+- Existing tests still pass (1 pre-existing architecture check failure unrelated)
+
+**Files changed:**
+- `apps/lemon_core/lib/lemon_core/config/modular.ex` (new file - 160 lines)
+- `apps/lemon_core/test/lemon_core/config/modular_test.exs` (new file - 12 tests)
+
+**What worked:**
+- The modular interface provides a clean migration path from the old config
+- Deep merge allows project configs to override specific fields without replacing entire sections
+- Error handling for missing/invalid config files prevents crashes
+- The new interface can coexist with the legacy config during transition
+
+**Config system status:**
+- ✅ 7 config modules extracted (198 tests)
+- ✅ Documentation complete with examples (8 tests)
+- ✅ New modular interface ready (12 tests)
+- ✅ 218 tests for config system
+- 🔄 Next: Gradually migrate usage from legacy config to modular config
+
+**Next run should focus on:**
+- Start using `LemonCore.Config.Modular` in new code
+- Add deprecation notices to legacy config functions
+- Gradually replace usage of old config with new modular config
+- Eventually remove the 1253-line legacy config.ex
+- Add validation to the modular config (Ecto-style or similar)
