@@ -42,7 +42,9 @@ defmodule CodingAgent.ToolsTest do
         "task",
         "agent",
         "tool_auth",
-        "extensions_status"
+        "extensions_status",
+        "post_to_x",
+        "get_x_mentions"
       ]
 
       Enum.each(expected_tools, fn expected_name ->
@@ -50,9 +52,9 @@ defmodule CodingAgent.ToolsTest do
       end)
     end
 
-    test "returns exactly 16 tools" do
+    test "returns exactly 18 tools" do
       tools = Tools.coding_tools(@test_cwd)
-      assert length(tools) == 16
+      assert length(tools) == 18
     end
 
     test "passes cwd to each tool" do
@@ -71,7 +73,7 @@ defmodule CodingAgent.ToolsTest do
 
       # Should not raise any errors
       assert is_list(tools)
-      assert length(tools) == 16
+      assert length(tools) == 18
     end
   end
 
@@ -154,7 +156,9 @@ defmodule CodingAgent.ToolsTest do
         "task",
         "agent",
         "tool_auth",
-        "extensions_status"
+        "extensions_status",
+        "post_to_x",
+        "get_x_mentions"
       ]
 
       Enum.each(expected_tools, fn expected_name ->
@@ -163,9 +167,9 @@ defmodule CodingAgent.ToolsTest do
       end)
     end
 
-    test "returns 17 tools (includes truncate, plus tool_auth)" do
+    test "returns 19 tools (includes truncate plus X tools)" do
       tools_map = Tools.all_tools(@test_cwd)
-      assert map_size(tools_map) == 17
+      assert map_size(tools_map) == 19
     end
 
     test "tool names match map keys" do
@@ -214,6 +218,7 @@ defmodule CodingAgent.ToolsTest do
 
     test "can retrieve all known tools" do
       known_tools = [
+        "browser",
         "read",
         "write",
         "edit",
@@ -229,7 +234,9 @@ defmodule CodingAgent.ToolsTest do
         "task",
         "agent",
         "tool_auth",
-        "extensions_status"
+        "extensions_status",
+        "post_to_x",
+        "get_x_mentions"
       ]
 
       Enum.each(known_tools, fn name ->
@@ -285,6 +292,7 @@ defmodule CodingAgent.ToolsTest do
 
     test "returns all tools when all names are valid" do
       all_names = [
+        "browser",
         "read",
         "write",
         "edit",
@@ -299,7 +307,10 @@ defmodule CodingAgent.ToolsTest do
         "truncate",
         "task",
         "agent",
-        "extensions_status"
+        "tool_auth",
+        "extensions_status",
+        "post_to_x",
+        "get_x_mentions"
       ]
 
       tools = Tools.get_tools(all_names, @test_cwd)

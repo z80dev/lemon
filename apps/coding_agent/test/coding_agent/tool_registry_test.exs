@@ -91,6 +91,8 @@ defmodule CodingAgent.ToolRegistryTest do
       assert "bash" in names
       assert "todo" in names
       assert "grep" in names
+      assert "post_to_x" in names
+      assert "get_x_mentions" in names
     end
 
     test "all tools have required fields", %{tmp_dir: tmp_dir} do
@@ -195,6 +197,8 @@ defmodule CodingAgent.ToolRegistryTest do
       assert :write in names
       assert :edit in names
       assert :bash in names
+      assert :post_to_x in names
+      assert :get_x_mentions in names
       assert Enum.all?(names, &is_atom/1)
     end
   end

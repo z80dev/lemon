@@ -48,7 +48,9 @@ defmodule CodingAgent.ToolRegistry do
     {:task, Tools.Task},
     {:agent, Tools.Agent},
     {:tool_auth, Tools.ToolAuth},
-    {:extensions_status, Tools.ExtensionsStatus}
+    {:extensions_status, Tools.ExtensionsStatus},
+    {:post_to_x, Tools.PostToX},
+    {:get_x_mentions, Tools.GetXMentions}
   ]
 
   @doc """
