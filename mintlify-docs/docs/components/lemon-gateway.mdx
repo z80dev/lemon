@@ -1,0 +1,148 @@
+---
+title: LemonGateway
+description: 'Multi-engine execution gateway with job scheduling'
+---
+
+`LemonGateway` provides job orchestration and multi-engine execution for Lemon.
+
+## Quick Start
+
+```elixir
+# Submit a job
+job = %LemonGateway.Types.Job{
+  run_id: "run_123",
+  session_key: "agent:default:main",
+  prompt: "Explain this code",
+  engine_id: "claude",
+  queue_mode: :collect,
+  lane: :main,
+  meta: %{origin: :channel, agent_id: "default"}
+}
+
+LemonGateway.submit(job)
+
+# Events flow through the system:
+# Job → Scheduler → ThreadWorker → Run → Engine → Events
+```
+
+## Key Features
+
+### Multi-Engine Support
+
+| Engine | ID | Description |
+|--------|-----|-------------|
+| Lemon | `lemon` | Native CodingAgent.Session with full tool support |
+| Claude | `claude` | Claude CLI via subprocess |
+| Codex | `codex` | Codex CLI via subprocess |
+| OpenCode | `opencode` | OpenCode CLI via subprocess |
+| Pi | `pi` | Pi CLI via subprocess |
+| Echo | `echo` | Echo stub engine (testing) |
+
+### Job Scheduling
+
+Configurable concurrency with slot-based allocation:
+
+```elixir
+# Global concurrency limit
+config :lemon_gateway, :max_concurrent_runs, 10
+
+# Per-thread serialization ensures messages in a conversation
+# are processed in order
+```
+
+### Thread Workers
+
+Per-conversation job queues with sequential execution:
+
+```elixir
+# Each session gets its own thread worker
+# Jobs for the same session are processed sequentially
+# Different sessions run concurrently
+```
+
+### Resume Tokens
+
+Persist and continue sessions across restarts:
+
+```elixir
+# Get resume token from completed run
+# Use token to continue conversation later
+{:ok, run} = LemonGateway.Run.resume(resume_token)
+```
+
+### Event Streaming
+
+Unified event format across all engines:
+
+```elixir
+# All engines produce the same event types
+{:run_started, run_id}
+{:delta, text}
+{:tool_call, tool_name, args}
+{:tool_result, result}
+{:run_completed, run_id, result}
+```
+
+## Configuration
+
+```toml
+[gateway]
+enable_telegram = true
+auto_resume = true
+default_engine = "lemon"
+default_cwd = "~/"
+max_concurrent_runs = 10
+
+[gateway.telegram]
+bot_token = "123456:token"
+allowed_chat_ids = [123456789]
+deny_unbound_chats = true
+```
+
+## Launch Modes
+
+```bash
+# Default (distributed BEAM node)
+./bin/lemon-gateway
+
+# With explicit settings
+./bin/lemon-gateway --sname lemon_gateway --cookie "change-me"
+
+# Long-name mode
+./bin/lemon-gateway --name lemon_gateway@my-host.example.com --cookie "change-me"
+
+# Disable distribution
+./bin/lemon-gateway --no-distribution
+```
+
+## Remote Attach
+
+Attach to a running gateway from another terminal:
+
+```bash
+# Short-name mode
+iex --sname lemon_attach --cookie lemon_gateway_dev_cookie \
+  --remsh "lemon_gateway@$(hostname -s)"
+
+# Long-name mode
+iex --name lemon_attach@my-host.example.com --cookie "change-me" \
+  --remsh lemon_gateway@my-host.example.com
+```
+
+Once attached, run code in the live runtime:
+
+```elixir
+node()
+Application.started_applications() |> Enum.map(&elem(&1, 0))
+LemonGateway.Config.get()
+```
+
+## One-off Remote Execution
+
+Run code without opening an interactive shell:
+
+```bash
+elixir --sname lemon_probe --cookie lemon_gateway_dev_cookie \
+  --rpc-eval "lemon_gateway@$(hostname -s)" \
+  "IO.inspect(LemonGateway.Config.get(:default_engine))"
+```

@@ -1,0 +1,146 @@
+---
+title: LemonControlPlane
+description: 'HTTP/WebSocket control server with 81+ RPC methods'
+---
+
+`LemonControlPlane` is a WebSocket/HTTP server providing centralized control for all Lemon operations.
+
+## Quick Start
+
+The control plane starts automatically and listens on port 4040:
+
+```bash
+# Start everything in IEx
+iex -S mix
+
+# Or start only required pieces
+mix run --no-start --no-halt -e '
+  Application.ensure_all_started(:lemon_control_plane)
+  Application.ensure_all_started(:lemon_router)
+  Application.ensure_all_started(:lemon_gateway)
+'
+
+# Health check
+curl http://localhost:4040/healthz
+
+# WebSocket
+ws://localhost:4040/ws
+```
+
+## WebSocket Protocol
+
+### Request Frame
+
+```json
+{
+  "type": "req",
+  "id": "abc123",
+  "method": "chat.send",
+  "params": {
+    "session_key": "agent:my-agent:main",
+    "prompt": "Hello!"
+  }
+}
+```
+
+### Response Frame
+
+```json
+{
+  "type": "resp",
+  "id": "abc123",
+  "result": {...}
+}
+```
+
+## Key Features
+
+### 81+ RPC Methods
+
+Comprehensive API for all Lemon operations:
+
+| Category | Methods | Description |
+|----------|---------|-------------|
+| Agent | `agent`, `agent.wait`, `agents.list` | Agent invocation and management |
+| Sessions | `sessions.list`, `sessions.patch`, `sessions.reset` | Session lifecycle |
+| Chat | `chat.send`, `chat.abort`, `chat.history` | Conversation operations |
+| Cron | `cron.add`, `cron.list`, `cron.run` | Scheduled job management |
+| Skills | `skills.status`, `skills.install`, `skills.update` | Skill management |
+| Exec | `exec.approval.request`, `exec.approval.resolve` | Approval workflow |
+| Nodes | `node.pair.*`, `node.invoke`, `node.list` | Node pairing and RPC |
+| Channels | `channels.status`, `channels.logout` | Channel management |
+| System | `health`, `status`, `system.presence` | System information |
+
+### Role-Based Access
+
+Three roles with scoped permissions:
+
+| Role | Permissions |
+|------|-------------|
+| `operator` | Full control |
+| `node` | Node operations |
+| `device` | Limited device operations |
+
+### Real-Time Events
+
+Event bridge broadcasts system events to connected clients:
+
+```elixir
+# Subscribe to events
+{"type": "sub", "topics": ["run:abc123"]}
+
+# Receive events
+{"type": "event", "topic": "run:abc123", "payload": {...}}
+```
+
+### Token Authentication
+
+Secure pairing with challenge-response flow:
+
+```elixir
+# 1. Request pairing
+{"method": "system.pair.request", "params": {"client_id": "my-client"}}
+
+# 2. Approve (on already-paired client)
+{"method": "system.pair.approve", "params": {"request_id": "..."}}
+
+# 3. Use token for subsequent connections
+```
+
+## Event Mapping
+
+Bus events are mapped to WebSocket events:
+
+| Bus Event | WebSocket Event |
+|-----------|-----------------|
+| `run_started/completed` | `agent` |
+| `delta` | `chat` |
+| `approval_requested/resolved` | `exec.approval.*` |
+| `cron_run_started/completed` | `cron` |
+| `node_pair_*` | `node.pair.*` |
+
+## Configuration
+
+```elixir
+# config/config.exs
+config :lemon_control_plane, :port, 4040
+```
+
+## HTTP Routes
+
+| Route | Description |
+|-------|-------------|
+| `GET /healthz` | Health check |
+| `GET /ws` | WebSocket endpoint |
+
+## Key Modules
+
+| Module | Purpose |
+|--------|---------|
+| `LemonControlPlane.HTTP.Router` | HTTP routes |
+| `LemonControlPlane.WS.Connection` | WebSocket protocol handler |
+| `LemonControlPlane.Presence` | Connection tracking |
+| `LemonControlPlane.EventBridge` | Bus → WebSocket events |
+| `LemonControlPlane.Auth` | Token-based authentication |
+| `LemonControlPlane.Protocol` | Frame encoding, schemas |
+| `LemonControlPlane.Methods` | 81+ RPC method implementations |

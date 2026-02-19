@@ -1,0 +1,157 @@
+---
+title: LemonAutomation
+description: 'Cron-based scheduling and automation for agent tasks'
+---
+
+`LemonAutomation` provides cron-based scheduling and automation for agent tasks.
+
+## Quick Start
+
+```elixir
+# Create a scheduled job
+{:ok, job} = LemonAutomation.add_job(%{
+  name: "Daily Report",
+  schedule: "0 9 * * *",  # 9 AM daily
+  agent_id: "analyst_bot",
+  session_key: "agent:analyst_bot:main",
+  prompt: "Generate today's status report",
+  timezone: "America/New_York"
+})
+
+# Trigger immediately (for testing)
+{:ok, run} = LemonAutomation.wake(job.id)
+
+# List all jobs
+jobs = LemonAutomation.list_jobs()
+
+# Get run history
+LemonAutomation.runs(job.id, limit: 10)
+```
+
+## Cron Expression Format
+
+```
+* * * * *
+| | | | +-- Day of week (0-7, 0 and 7 = Sunday)
+| | | +---- Month (1-12)
+| | +------ Day of month (1-31)
+| +-------- Hour (0-23)
++---------- Minute (0-59)
+```
+
+### Examples
+
+| Expression | Description |
+|------------|-------------|
+| `0 9 * * *` | Daily at 9 AM |
+| `*/15 * * * *` | Every 15 minutes |
+| `0 0 1 * *` | First of each month |
+| `30 8 * * 1-5` | Weekdays at 8:30 AM |
+| `0 0 * * 0` | Weekly on Sunday |
+
+## Key Features
+
+### Cron Jobs
+
+Standard cron expressions with timezone support:
+
+```elixir
+%{
+  name: "Job name",
+  schedule: "0 9 * * *",
+  timezone: "America/New_York",  # IANA timezone
+  agent_id: "my_agent",
+  prompt: "What to do",
+  enabled: true
+}
+```
+
+### Heartbeats
+
+Health checks with smart response suppression:
+
+```elixir
+# Heartbeat jobs return "HEARTBEAT_OK" when healthy
+# Suppressed from normal output to reduce noise
+```
+
+### Wake Triggers
+
+On-demand job execution:
+
+```elixir
+# Trigger a job immediately
+{:ok, run} = LemonAutomation.wake(job.id)
+
+# Pattern-based wake
+LemonAutomation.wake_matching(pattern: "daily_*")
+```
+
+### Jitter
+
+Random delay for load spreading:
+
+```toml
+[cron.jobs.my_job]
+schedule = "0 9 * * *"
+jitter_sec = 60  # Random 0-60 second delay
+```
+
+### Run History
+
+Full execution tracking:
+
+```elixir
+# Get runs for a job
+runs = LemonAutomation.runs(job.id, limit: 10)
+
+# Each run includes:
+# - status (pending, running, completed, failed)
+# - started_at, completed_at
+# - output, error
+```
+
+## Key Modules
+
+| Module | Purpose |
+|--------|---------|
+| `CronManager` | Central job scheduling and execution |
+| `CronSchedule` | Cron expression parsing and next-run calculation |
+| `CronJob` | Job definition with metadata |
+| `CronRun` | Execution record |
+| `CronStore` | Persistent storage |
+| `HeartbeatManager` | Health monitoring with suppression |
+| `Wake` | Manual/pattern-based triggering |
+| `Events` | Event broadcasting on `"cron"` topic |
+
+## Configuration
+
+```toml
+[cron]
+enabled = true
+
+[[cron.jobs]]
+name = "Daily Cleanup"
+schedule = "0 3 * * *"
+agent_id = "maintenance_bot"
+session_key = "agent:maintenance_bot:main"
+prompt = "Run daily cleanup tasks"
+timezone = "UTC"
+enabled = true
+```
+
+## Event Broadcasting
+
+Cron events are broadcast on the `"cron"` topic:
+
+```elixir
+# Subscribe to cron events
+LemonCore.Bus.subscribe("cron")
+
+# Events:
+{:cron_job_added, job}
+{:cron_job_updated, job}
+{:cron_job_deleted, job_id}
+{:cron_run_started, run}
+{:cron_run_completed, run}
+```

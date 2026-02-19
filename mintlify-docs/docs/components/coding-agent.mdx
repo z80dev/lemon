@@ -1,0 +1,201 @@
+---
+title: CodingAgent
+description: 'Complete coding agent with tools, persistence, and orchestration'
+---
+
+`CodingAgent` is a complete coding assistant built on `AgentCore`, providing a full-featured agent with built-in tools, session persistence, and advanced orchestration features.
+
+## Quick Start
+
+```elixir
+# Start a session
+{:ok, session} = CodingAgent.start_session(
+  cwd: "/path/to/project",
+  model: Ai.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+)
+
+# Subscribe to events
+unsubscribe = CodingAgent.Session.subscribe(session)
+
+# Send a prompt
+:ok = CodingAgent.Session.prompt(session, "Refactor the User module")
+
+# Navigate session tree
+:ok = CodingAgent.Session.navigate_tree(session, entry_id, direction: :parent)
+
+# Compact context when it gets too long
+:ok = CodingAgent.Session.compact(session)
+```
+
+## Key Features
+
+### Session Persistence (JSONL v3)
+
+Sessions are saved to JSONL files with tree structure:
+
+```
+~/.lemon/sessions/
+└── <session_id>.jsonl
+```
+
+Each entry in the JSONL represents an event in the conversation tree, enabling:
+- Full conversation history
+- Branch navigation
+- Session resumption
+- Tree-structured conversations
+
+### 15+ Built-in Tools
+
+| Tool | Description |
+|------|-------------|
+| `read` | Read file contents |
+| `write` | Write files |
+| `edit` | Edit file contents |
+| `patch` | Apply unified diffs |
+| `bash` | Execute shell commands |
+| `grep` | Search file contents |
+| `find` | Find files |
+| `ls` | List directories |
+| `browser` | Browser automation |
+| `webfetch` | Fetch web pages |
+| `websearch` | Web search |
+| `todo` | Todo list management |
+| `task` | Delegate to subagents |
+| `memory_topic` | Create topic memory files |
+| `extensions_status` | Check extension status |
+
+### Context Compaction
+
+When conversations get too long, Lemon can compact context:
+
+```elixir
+# Compact automatically or manually
+:CodingAgent.Session.compact(session)
+
+# Strategies include:
+# - Summarization of old messages
+# - Branch pruning
+# - Token-aware truncation
+```
+
+### Extension System
+
+Load custom tools dynamically:
+
+```elixir
+# Extensions are discovered from:
+# - <cwd>/.lemon/extensions/
+# - ~/.lemon/agent/extensions/
+
+# Check loaded extensions
+CodingAgent.Extensions.status()
+```
+
+### Orchestration Runtime
+
+Advanced coordination features:
+
+- **Lane-aware scheduling**: Per-lane concurrency caps
+- **Async subagents**: Spawn/poll/join patterns
+- **Durable background processes**: Persistent state across restarts
+- **Budget tracking**: Token/cost limits per run
+
+## Tool Policy Profiles
+
+Per-agent tool restrictions:
+
+```elixir
+# Predefined profiles
+:full_access        # All tools allowed
+:minimal_core       # Lean core set
+:read_only          # Only read operations
+:safe_mode          # No write/edit/patch/bash
+:subagent_restricted # Limited tools for subagents
+:no_external        # No browser/web fetch/search
+
+# Per-engine defaults
+%{
+  "codex" => :subagent_restricted,
+  "claude" => :subagent_restricted,
+  "internal" => :full_access
+}
+```
+
+## Task Tool Integration
+
+Delegate to subagents with different engines:
+
+```elixir
+# Synchronous task (default)
+%{
+  "description" => "Implement authentication",
+  "prompt" => "Add JWT authentication to the User controller",
+  "engine" => "codex"
+}
+
+# Async task - returns immediately with task_id
+%{
+  "action" => "run",
+  "async" => true,
+  "prompt" => "Add tests for authentication",
+  "engine" => "internal"
+}
+
+# Poll task status
+%{"action" => "poll", "task_id" => "abc123"}
+
+# Join multiple tasks
+%{
+  "action" => "join",
+  "task_ids" => ["abc123", "def456"],
+  "mode" => "wait_all",  # or "wait_any"
+  "timeout_ms" => 30000
+}
+```
+
+## Lane-Aware Scheduling
+
+Work routes through lanes with concurrency caps:
+
+```elixir
+# Default configuration
+%{
+  main: 4,           # Main agent runs
+  subagent: 8,       # Task tool subagent spawns
+  background_exec: 2 # Background OS processes
+}
+```
+
+## Budget Enforcement
+
+Per-run token and cost tracking:
+
+```elixir
+# BudgetTracker tracks usage
+CodingAgent.BudgetTracker.record_usage(run_id, %{
+  tokens_in: 1000,
+  tokens_out: 500,
+  cost_usd: 0.05
+})
+
+# BudgetEnforcer validates before spawning
+case CodingAgent.BudgetEnforcer.check_subagent_spawn(parent_run_id, opts) do
+  :ok -> spawn_subagent()
+  {:error, :budget_exceeded} -> return_error()
+end
+```
+
+## Settings Management
+
+Configuration hierarchy:
+
+1. Global: `~/.lemon/config.toml`
+2. Project: `<project>/.lemon/config.toml`
+3. Environment variables
+4. CLI arguments
+
+```toml
+[agent]
+default_provider = "anthropic"
+default_model = "claude-sonnet-4-20250514"
+```

@@ -1,0 +1,152 @@
+---
+title: AI Library
+description: 'Unified LLM provider abstraction layer'
+---
+
+The `Ai` library provides a unified interface for interacting with multiple LLM providers.
+
+## Quick Start
+
+```elixir
+# Create a context
+context = Ai.new_context(system_prompt: "You are a helpful assistant")
+context = Ai.Types.Context.add_user_message(context, "Hello!")
+
+# Get a model
+model = Ai.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+
+# Stream a response
+{:ok, stream} = Ai.stream(model, context)
+
+for event <- Ai.EventStream.events(stream) do
+  case event do
+    {:text_delta, _idx, delta, _partial_message} -> IO.write(delta)
+    {:done, _reason, message} -> IO.puts("\nDone!")
+    _ -> :ok
+  end
+end
+```
+
+## Supported Providers
+
+| Provider | Module | Key |
+|----------|--------|-----|
+| Anthropic | `Ai.Providers.Anthropic` | `:anthropic` |
+| OpenAI | `Ai.Providers.OpenAI` | `:openai` |
+| Google | `Ai.Providers.Google` | `:google` |
+| Azure OpenAI | `Ai.Providers.AzureOpenAI` | `:azure_openai` |
+| AWS Bedrock | `Ai.Providers.Bedrock` | `:bedrock` |
+
+## Key Features
+
+### Provider-Agnostic API
+
+The same code works across all providers:
+
+```elixir
+# Works with any provider
+model = Ai.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+# or
+model = Ai.Models.get_model(:openai, "gpt-4-turbo")
+# or
+model = Ai.Models.get_model(:google, "gemini-pro")
+
+# Same streaming interface
+{:ok, stream} = Ai.stream(model, context)
+```
+
+### Automatic Cost Calculation
+
+Token usage and costs are tracked automatically:
+
+```elixir
+# In the final message
+{:done, :completed, message} = event
+message.usage
+# => %{tokens_in: 100, tokens_out: 50, cost_usd: 0.0025}
+```
+
+### Streaming with Backpressure
+
+Event streams handle backpressure automatically:
+
+```elixir
+{:ok, stream} = Ai.stream(model, context)
+
+# Consumer controls consumption rate
+for event <- Ai.EventStream.events(stream) do
+  process_event(event)
+  # Slow consumer automatically applies backpressure
+end
+```
+
+### Session Caching Support
+
+Providers that support prompt caching (like Anthropic):
+
+```elixir
+# Cache control in messages
+message = %{
+  role: :user,
+  content: [Ai.text_content(large_context)],
+  cache_control: %{type: "ephemeral"}
+}
+```
+
+## Configuration
+
+### Provider Config
+
+```toml
+[providers.anthropic]
+api_key = "sk-ant-..."
+
+[providers.openai]
+api_key = "sk-..."
+
+[providers.google]
+api_key = "your-google-api-key"
+
+[providers.azure-openai-responses]
+api_key = "your-azure-key"
+```
+
+### Environment Variables
+
+```bash
+ANTHROPIC_API_KEY="sk-ant-..."
+OPENAI_API_KEY="sk-..."
+GOOGLE_GENERATIVE_AI_API_KEY="..."
+AZURE_OPENAI_API_KEY="..."
+AWS_ACCESS_KEY_ID="..."
+AWS_SECRET_ACCESS_KEY="..."
+```
+
+## Event Types
+
+The streaming API produces these events:
+
+| Event | Description |
+|-------|-------------|
+| `{:text_delta, idx, delta, partial}` | Text chunk from LLM |
+| `{:tool_call, idx, tool_call}` | Tool call request |
+| `{:done, reason, message}` | Stream completed |
+| `{:error, error}` | Error occurred |
+
+## Model Registry
+
+Models are registered with metadata:
+
+```elixir
+# List available models
+Ai.Models.list()
+
+# Get model info
+model = Ai.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+# => %Ai.Types.Model{
+#   provider: :anthropic,
+#   id: "claude-sonnet-4-20250514",
+#   context_window: 200_000,
+#   pricing: %{input: 3.0, output: 15.0}  # per 1M tokens
+# }
+```
