@@ -43,6 +43,8 @@ defmodule AgentCore.Loop do
   Check for abort by monitoring the signal or using Process messages.
   """
 
+  require Logger
+
   alias AgentCore.EventStream
   alias AgentCore.Loop.{Streaming, ToolCalls}
   alias AgentCore.Types.{AgentContext, AgentLoopConfig}
@@ -464,6 +466,15 @@ defmodule AgentCore.Loop do
 
           :error ->
             EventStream.push(stream, {:turn_end, message, []})
+
+            Logger.error(
+              "AgentCore loop assistant_error " <>
+                "provider=#{inspect(message.provider)} " <>
+                "api=#{inspect(message.api)} " <>
+                "model=#{inspect(message.model)} " <>
+                "error_message=#{inspect(message.error_message)} " <>
+                "content_blocks=#{length(message.content || [])}"
+            )
 
             reason =
               case message.error_message do

@@ -44,9 +44,8 @@ defmodule Ai.Providers.OpenAIResponses do
   }
 
   alias Ai.EventStream
+  alias Ai.Providers.HttpTrace
   alias Ai.Providers.OpenAIResponsesShared
-
-  require Logger
 
   # Providers that use OpenAI-style tool call IDs
   @tool_call_providers MapSet.new([:openai, :"openai-codex", :opencode])
@@ -82,6 +81,7 @@ defmodule Ai.Providers.OpenAIResponses do
     {:ok, task_pid} =
       Task.Supervisor.start_child(Ai.StreamTaskSupervisor, fn ->
         output = initial_output(model)
+        trace_id = HttpTrace.new_trace_id("openai-responses")
 
         try do
           api_key = opts.api_key || get_env_api_key()
@@ -93,10 +93,16 @@ defmodule Ai.Providers.OpenAIResponses do
           # Build request
           {url, headers, body} = build_request(model, context, opts, api_key)
 
+          HttpTrace.log(
+            "openai-responses",
+            "request_start",
+            summarize_http_request(trace_id, model, context, opts, url, body)
+          )
+
           EventStream.push_async(stream, {:start, output})
 
           # Make streaming request
-          case stream_request(url, headers, body) do
+          case stream_request(url, headers, body, trace_id) do
             {:ok, event_stream} ->
               # Process stream events
               case OpenAIResponsesShared.process_stream(
@@ -114,16 +120,38 @@ defmodule Ai.Providers.OpenAIResponses do
                   EventStream.complete(stream, final_output)
 
                 {:error, reason} ->
+                  HttpTrace.log_error("openai-responses", "stream_processing_error", %{
+                    trace_id: trace_id,
+                    error: reason,
+                    model: model.id,
+                    session_id: opts.session_id
+                  })
+
                   output = %{output | stop_reason: :error, error_message: reason}
                   EventStream.error(stream, output)
               end
 
             {:error, reason} ->
+              HttpTrace.log_error("openai-responses", "request_error", %{
+                trace_id: trace_id,
+                error: reason,
+                model: model.id,
+                session_id: opts.session_id
+              })
+
               output = %{output | stop_reason: :error, error_message: reason}
               EventStream.error(stream, output)
           end
         rescue
           e ->
+            HttpTrace.log_error("openai-responses", "stream_exception", %{
+              trace_id: trace_id,
+              error: Exception.message(e),
+              exception: inspect(e, limit: 20, printable_limit: 2_000),
+              model: model.id,
+              session_id: opts.session_id
+            })
+
             output = %{output | stop_reason: :error, error_message: Exception.message(e)}
             EventStream.error(stream, output)
         end
@@ -297,7 +325,7 @@ defmodule Ai.Providers.OpenAIResponses do
   # HTTP Streaming
   # ============================================================================
 
-  defp stream_request(url, headers, body) do
+  defp stream_request(url, headers, body, trace_id) do
     # Use Finch or Req for HTTP streaming
     # This is a simplified implementation - in production you'd want proper
     # streaming with backpressure handling
@@ -313,13 +341,115 @@ defmodule Ai.Providers.OpenAIResponses do
       {:ok, %Req.Response{status: status}} when status in 200..299 ->
         {:ok, receive_sse_events()}
 
-      {:ok, %Req.Response{status: status, body: body}} ->
-        {:error, "HTTP #{status}: #{inspect(body)}"}
+      {:ok, %Req.Response{status: status, body: response_body, headers: response_headers}} ->
+        HttpTrace.log_error("openai-responses", "http_error", %{
+          trace_id: trace_id,
+          status: status,
+          provider_request_id:
+            HttpTrace.response_header_value(response_headers, [
+              "x-request-id",
+              "request-id",
+              "openai-request-id"
+            ]),
+          body_bytes: HttpTrace.body_bytes(response_body),
+          body_preview: HttpTrace.body_preview(response_body),
+          model: Map.get(body, "model"),
+          input_items: count_input_items(Map.get(body, "input"))
+        })
+
+        {:error, "HTTP #{status}: #{inspect(response_body)}"}
 
       {:error, reason} ->
+        HttpTrace.log_error("openai-responses", "transport_error", %{
+          trace_id: trace_id,
+          error: inspect(reason, limit: 50, printable_limit: 8_000),
+          model: Map.get(body, "model"),
+          input_items: count_input_items(Map.get(body, "input"))
+        })
+
         {:error, "Request failed: #{inspect(reason)}"}
     end
   end
+
+  defp summarize_http_request(trace_id, model, context, opts, url, body) do
+    %{
+      trace_id: trace_id,
+      model: model.id,
+      provider: model.provider,
+      api: model.api,
+      session_id: opts.session_id,
+      run_id: trace_header(opts.headers, "x-lemon-run-id"),
+      session_key: trace_header(opts.headers, "x-lemon-session-key"),
+      agent_id: trace_header(opts.headers, "x-lemon-agent-id"),
+      url: url,
+      input_items: count_input_items(Map.get(body, "input")),
+      input_summary: summarize_input(Map.get(body, "input")),
+      tools_count: length(context.tools || []),
+      system_prompt_bytes: HttpTrace.summarize_text_size(context.system_prompt),
+      max_output_tokens: Map.get(body, "max_output_tokens"),
+      temperature: Map.get(body, "temperature"),
+      service_tier: Map.get(body, "service_tier")
+    }
+  end
+
+  defp count_input_items(input) when is_list(input), do: length(input)
+  defp count_input_items(_), do: 0
+
+  defp summarize_input(input) when is_list(input) do
+    input
+    |> Enum.take(20)
+    |> Enum.map(fn
+      item when is_map(item) ->
+        %{
+          type: Map.get(item, "type"),
+          role: Map.get(item, "role"),
+          content_items: count_content_items(Map.get(item, "content")),
+          text_bytes: summarize_text_bytes(Map.get(item, "content"))
+        }
+
+      other ->
+        %{type: "unknown", role: "unknown", content_items: 0, text_bytes: 0, raw: inspect(other)}
+    end)
+  end
+
+  defp summarize_input(_), do: []
+
+  defp count_content_items(content) when is_list(content), do: length(content)
+  defp count_content_items(content) when is_binary(content), do: 1
+  defp count_content_items(_), do: 0
+
+  defp summarize_text_bytes(content) when is_binary(content), do: byte_size(content)
+
+  defp summarize_text_bytes(content) when is_list(content) do
+    Enum.reduce(content, 0, fn
+      %{"text" => text}, acc when is_binary(text) ->
+        acc + byte_size(text)
+
+      %{"type" => "input_text", "text" => text}, acc when is_binary(text) ->
+        acc + byte_size(text)
+
+      _, acc ->
+        acc
+    end)
+  end
+
+  defp summarize_text_bytes(_), do: 0
+
+  defp trace_header(headers, key) when is_map(headers), do: Map.get(headers, key)
+
+  defp trace_header(headers, key) when is_list(headers) do
+    key_down = String.downcase(key)
+
+    Enum.find_value(headers, fn
+      {k, v} when is_binary(k) and is_binary(v) ->
+        if String.downcase(k) == key_down, do: v, else: nil
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp trace_header(_headers, _key), do: nil
 
   defp receive_sse_events do
     Stream.resource(

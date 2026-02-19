@@ -7,7 +7,7 @@ defmodule LemonRouter.RunProcessTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonCore.SessionKey
+  alias LemonCore.{RunRequest, SessionKey}
   alias LemonChannels.Types.ResumeToken
   alias LemonRouter.RunProcess
 
@@ -87,6 +87,34 @@ defmodule LemonRouter.RunProcessTest do
     def handle_cast({:submit, job}, state) do
       if is_pid(state.notify_pid), do: send(state.notify_pid, {:test_scheduler_submit, job})
       {:noreply, state}
+    end
+  end
+
+  defmodule TestRunOrchestrator do
+    @moduledoc false
+    use GenServer
+
+    def start_link(opts) do
+      notify_pid = opts[:notify_pid]
+      GenServer.start_link(__MODULE__, %{notify_pid: notify_pid, count: 0}, name: __MODULE__)
+    end
+
+    def submit(%RunRequest{} = request) do
+      GenServer.call(__MODULE__, {:submit, request})
+    end
+
+    @impl true
+    def init(state), do: {:ok, state}
+
+    @impl true
+    def handle_call({:submit, request}, _from, state) do
+      next = state.count + 1
+
+      if is_pid(state.notify_pid) do
+        send(state.notify_pid, {:test_run_orchestrator_submit, request, next})
+      end
+
+      {:reply, {:ok, "run_retry_#{next}"}, %{state | count: next}}
     end
   end
 
@@ -356,6 +384,129 @@ defmodule LemonRouter.RunProcessTest do
       refute_receive {:test_scheduler_submit, %LemonGateway.Types.Job{run_id: ^run_id}}, 400
 
       GenServer.stop(pid)
+    end
+  end
+
+  describe "zero-answer assistant retries" do
+    test "auto-retries once with retry context in prompt" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+      session_key = SessionKey.main("test-agent")
+
+      job =
+        %{make_test_job(run_id, %{origin: :channel}) | prompt: "Collect the latest status report"}
+
+      {:ok, _} = start_supervised({TestRunOrchestrator, [notify_pid: self()]})
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false,
+                 run_orchestrator: TestRunOrchestrator
+               })
+
+      completed_event =
+        LemonCore.Event.new(
+          :run_completed,
+          %{
+            completed: %{
+              ok: false,
+              error: {:assistant_error, "HTTP 400: "},
+              answer: ""
+            }
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+
+      assert_receive {:test_run_orchestrator_submit, %RunRequest{} = retry_request, 1}, 1_000
+      assert retry_request.session_key == session_key
+      assert retry_request.prompt =~ "Retry notice:"
+      assert retry_request.prompt =~ "check for partially completed work"
+      assert retry_request.prompt =~ "Original request:"
+      assert retry_request.prompt =~ "Collect the latest status report"
+      assert retry_request.meta[:zero_answer_retry_attempt] == 1
+      assert retry_request.meta[:zero_answer_retry_of_run] == run_id
+      assert retry_request.meta[:zero_answer_retry_reason] =~ "HTTP 400"
+
+      assert eventually(fn -> not Process.alive?(pid) end)
+    end
+
+    test "does not auto-retry when there is non-empty answer text" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+      session_key = SessionKey.main("test-agent")
+      job = %{make_test_job(run_id, %{origin: :channel}) | prompt: "Do work"}
+
+      {:ok, _} = start_supervised({TestRunOrchestrator, [notify_pid: self()]})
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false,
+                 run_orchestrator: TestRunOrchestrator
+               })
+
+      completed_event =
+        LemonCore.Event.new(
+          :run_completed,
+          %{
+            completed: %{
+              ok: false,
+              error: {:assistant_error, "HTTP 400: "},
+              answer: "partial output"
+            }
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+
+      refute_receive {:test_run_orchestrator_submit, %RunRequest{}, _}, 300
+      assert eventually(fn -> not Process.alive?(pid) end)
+    end
+
+    test "does not auto-retry when retry limit is already reached" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+      session_key = SessionKey.main("test-agent")
+
+      job =
+        %{
+          make_test_job(run_id, %{origin: :channel, zero_answer_retry_attempt: 1})
+          | prompt: "Do work"
+        }
+
+      {:ok, _} = start_supervised({TestRunOrchestrator, [notify_pid: self()]})
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false,
+                 run_orchestrator: TestRunOrchestrator
+               })
+
+      completed_event =
+        LemonCore.Event.new(
+          :run_completed,
+          %{
+            completed: %{
+              ok: false,
+              error: {:assistant_error, "HTTP 400: "},
+              answer: ""
+            }
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+
+      refute_receive {:test_run_orchestrator_submit, %RunRequest{}, _}, 300
+      assert eventually(fn -> not Process.alive?(pid) end)
     end
   end
 

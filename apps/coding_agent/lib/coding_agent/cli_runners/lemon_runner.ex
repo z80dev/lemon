@@ -60,6 +60,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
   }
 
   alias AgentCore.EventStream
+  alias Ai.Types.StreamOptions
 
   require Logger
 
@@ -228,6 +229,14 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     session_key = Keyword.get(opts, :session_key)
     agent_id = Keyword.get(opts, :agent_id)
 
+    trace_stream_options =
+      build_trace_stream_options(
+        Keyword.get(opts, :stream_options),
+        run_id,
+        session_key,
+        agent_id
+      )
+
     # Build approval context if policy provided
     approval_context =
       if tool_policy do
@@ -251,6 +260,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
       |> maybe_add_opt(:approval_context, approval_context)
       |> maybe_add_opt(:session_key, session_key)
       |> maybe_add_opt(:agent_id, agent_id)
+      |> maybe_add_opt(:stream_options, trace_stream_options)
       |> maybe_add_opt(:extra_tools, normalize_extra_tools_opt(extra_tools))
 
     # Start or resume session
@@ -534,6 +544,17 @@ defmodule CodingAgent.CliRunners.LemonRunner do
 
   defp translate_and_emit({:error, reason, _partial_state}, state) do
     error_msg = format_error(reason)
+
+    Logger.error(
+      "LemonRunner stream error " <>
+        "run_id=#{inspect(state.run_id)} " <>
+        "session_id=#{inspect(state.session_id)} " <>
+        "error=#{error_msg} " <>
+        "reason=#{inspect(reason, limit: 80, printable_limit: 8_000)} " <>
+        "answer_bytes=#{byte_size(state.accumulated_text || "")} " <>
+        "pending_actions=#{map_size(state.pending_actions || %{})}"
+    )
+
     emit_completed_error(state, error_msg)
   end
 
@@ -843,4 +864,35 @@ defmodule CodingAgent.CliRunners.LemonRunner do
 
   defp maybe_add_opt(opts, _key, nil), do: opts
   defp maybe_add_opt(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp build_trace_stream_options(base, run_id, session_key, agent_id) do
+    base =
+      case base do
+        %StreamOptions{} = opts -> opts
+        _ -> %StreamOptions{}
+      end
+
+    trace_headers =
+      %{}
+      |> maybe_put_trace_header("x-lemon-run-id", run_id)
+      |> maybe_put_trace_header("x-lemon-session-key", session_key)
+      |> maybe_put_trace_header("x-lemon-agent-id", agent_id)
+
+    merged_headers = Map.merge(base.headers || %{}, trace_headers)
+
+    if map_size(merged_headers) == 0 do
+      nil
+    else
+      %StreamOptions{base | headers: merged_headers}
+    end
+  end
+
+  defp maybe_put_trace_header(headers, _key, nil), do: headers
+  defp maybe_put_trace_header(headers, _key, ""), do: headers
+
+  defp maybe_put_trace_header(headers, key, value) when is_binary(value) do
+    Map.put(headers, key, value)
+  end
+
+  defp maybe_put_trace_header(headers, _key, _value), do: headers
 end
