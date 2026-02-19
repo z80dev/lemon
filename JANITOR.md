@@ -329,3 +329,49 @@ Each entry records what was done, what worked, and what to focus on next.
 - Reduce config.ex from 1253 lines by delegating to sub-modules
 - Eventually config.ex should just be a thin wrapper like Ironclaw's config/mod.rs
 - Add Config.Helpers to other apps in the umbrella
+
+### 2025-02-19 - Documentation: Config Module README
+**Work Area**: Documentation
+
+**What was done:**
+- Created comprehensive README for the new modular config system (`config/README.md`):
+  - Overview of all 7 config modules with test counts
+  - Architecture explanation with priority order
+  - Module structure pattern documentation
+  - Usage examples for each module
+  - Configuration file examples (TOML)
+  - Environment variable documentation for all modules
+  - Migration guide for using new modules directly
+  - Testing instructions
+  - Future work checklist
+- Created `readme_test.exs` to verify all README examples work correctly:
+  - Tests for each config module's basic usage
+  - Tests for helper functions
+  - Tests for environment variable priority
+  - 8 comprehensive tests
+- All 8 new tests pass
+- Total test count: 307 (up from 299)
+- Existing tests still pass (1 pre-existing architecture check failure unrelated)
+
+**Files changed:**
+- `apps/lemon_core/lib/lemon_core/config/README.md` (new file - 260 lines)
+- `apps/lemon_core/test/lemon_core/config/readme_test.exs` (new file - 8 tests)
+
+**What worked:**
+- Documentation-driven development ensures examples are correct
+- README tests catch documentation drift
+- Comprehensive docs help users understand the new modular structure
+- The modular pattern is now well-documented for future contributors
+
+**Config system status:**
+- ✅ 7 config modules extracted (198 tests)
+- ✅ Documentation complete with examples
+- ✅ All examples tested and verified
+- 🔄 Next: Integration into main Config module
+
+**Next run should focus on:**
+- Create a new `LemonCore.Config.New` module that orchestrates all sub-modules
+- Gradually migrate functionality from the 1253-line config.ex
+- Add deprecation warnings for old config patterns
+- Eventually replace config.ex with the new modular implementation
+- Consider adding validation (Ecto-style or similar)
