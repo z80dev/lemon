@@ -1,0 +1,220 @@
+---
+title: Orchestration Runtime
+description: 'Lane-aware scheduling, async subagents, and durable background processes'
+---
+
+Lemon includes a comprehensive orchestration runtime that coordinates subagents, background processes, and async work.
+
+## Lane-Aware Scheduling
+
+Work routes through a unified **LaneQueue** with per-lane concurrency caps.
+
+### Default Configuration
+
+```elixir
+%{
+  main: 4,           # Main agent runs
+  subagent: 8,       # Task tool subagent spawns
+  background_exec: 2 # Background OS processes
+}
+```
+
+### Submitting Work
+
+```elixir
+# Submit to a specific lane
+CodingAgent.LaneQueue.run(CodingAgent.LaneQueue, :subagent, fn ->
+  do_work()
+end, %{task_id: id})
+
+# All subagent spawns automatically route through :subagent lane
+# All background processes route through :background_exec lane
+```
+
+### Key Components
+
+| Component | Purpose |
+|-----------|---------|
+| `LaneQueue` | FIFO queue with O(1) task lookups |
+| `RunGraph` | Tracks parent/child relationships with DETS persistence |
+| `LemonGateway.Scheduler` | Global run admission and per-session serialization |
+
+## Async Subagent Semantics
+
+The **Task tool** supports async spawn/poll/join patterns.
+
+### Async Spawn
+
+```elixir
+%{
+  "action" => "run",
+  "async" => true,
+  "prompt" => "Implement feature X",
+  "engine" => "internal"
+}
+# Returns: %{task_id: "abc123", run_id: "def456", status: "queued"}
+```
+
+### Poll Task Status
+
+```elixir
+%{
+  "action" => "poll",
+  "task_id" => "abc123"
+}
+# Returns: %{status: :running, events: [...], result: nil}
+```
+
+### Join Multiple Tasks
+
+```elixir
+%{
+  "action" => "join",
+  "task_ids" => ["abc123", "def456"],
+  "mode" => "wait_all",      # or "wait_any"
+  "timeout_ms" => 30000
+}
+# Returns: %{task_id => %{status, result, error}, ...}
+```
+
+### Join Patterns
+
+- **`wait_all`**: Wait for ALL tasks to complete (default)
+- **`wait_any`**: Return as soon as ANY task completes
+
+### Supported Engines
+
+- `internal`: Native CodingAgent.Session
+- `codex`: Codex CLI via subprocess
+- `claude`: Claude CLI via subprocess
+- `kimi`: Kimi CLI via subprocess
+- `opencode`: OpenCode CLI via subprocess
+- `pi`: Pi CLI via subprocess
+
+## Durable Background Processes
+
+Process state persists to DETS across restarts.
+
+### Exec Tool
+
+Start background processes:
+
+```elixir
+%{
+  "command" => "npm test",
+  "timeout_sec" => 300,      # Auto-kill after timeout
+  "yield_ms" => 1000,        # Auto-background after 1 second
+  "background" => true       # Force background mode
+}
+# Returns: %{process_id: "hex123", status: :running}
+```
+
+### Process Tool
+
+Manage background processes:
+
+```elixir
+# List all processes
+%{"action" => "list", "status" => "running"}
+
+# Poll status and logs
+%{"action" => "poll", "process_id" => "hex123", "lines" => 50}
+
+# Write to stdin
+%{"action" => "write", "process_id" => "hex123", "data" => "y\n"}
+
+# Kill a process
+%{"action" => "kill", "process_id" => "hex123", "signal" => "sigterm"}
+
+# Clear completed process
+%{"action" => "clear", "process_id" => "hex123"}
+```
+
+### Durability Features
+
+- Process metadata persists across restarts (command, cwd, env, timestamps)
+- Rolling log buffer (default 1000 lines) preserved in DETS
+- Exit codes and completion status tracked
+- Processes marked as `:lost` on restart (OS PIDs can't be reattached)
+- TTL-based cleanup prevents unbounded growth (default 24 hours)
+
+## Budget Enforcement
+
+Per-run token and cost tracking.
+
+### Recording Usage
+
+```elixir
+CodingAgent.BudgetTracker.record_usage(run_id, %{
+  tokens_in: 1000,
+  tokens_out: 500,
+  cost_usd: 0.05
+})
+```
+
+### Enforcing Limits
+
+```elixir
+case CodingAgent.BudgetEnforcer.check_subagent_spawn(parent_run_id, opts) do
+  :ok -> spawn_subagent()
+  {:error, :budget_exceeded} -> return_error()
+  {:error, :max_children_reached} -> return_error()
+end
+```
+
+### Budget Limits
+
+- Token limits (input + output)
+- Cost limits (USD)
+- Per-parent child concurrency caps
+- Budget inheritance from parent to child
+
+## Tool Policy
+
+Per-agent tool policies with allow/deny lists.
+
+### Predefined Profiles
+
+| Profile | Description |
+|---------|-------------|
+| `:full_access` | All tools allowed |
+| `:minimal_core` | Lean core set |
+| `:read_only` | Only read operations |
+| `:safe_mode` | No write/edit/patch/bash/exec/process |
+| `:subagent_restricted` | Limited tools for subagents |
+| `:no_external` | No browser/web fetch/search |
+
+### Per-Engine Defaults
+
+```elixir
+%{
+  "codex" => :subagent_restricted,
+  "claude" => :subagent_restricted,
+  "kimi" => :subagent_restricted,
+  "opencode" => :subagent_restricted,
+  "pi" => :subagent_restricted,
+  "internal" => :full_access
+}
+```
+
+### Policy Features
+
+- Allow/deny lists with precedence rules
+- Per-engine tool restrictions
+- Approval gates for dangerous operations
+- NO_REPLY silent turn support
+- Policy serialization for persistence
+
+## Compaction Hooks
+
+Pre-compaction flush hooks preserve state:
+
+```elixir
+# Register a hook
+CodingAgent.CompactionHooks.register(:my_hook, fn ->
+  flush_important_state()
+end, priority: :high)
+
+# Hooks execute in priority order: :high -> :normal -> :low
+# Failed hooks don't block compaction
+```

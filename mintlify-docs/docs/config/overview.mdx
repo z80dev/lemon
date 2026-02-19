@@ -1,0 +1,129 @@
+---
+title: Configuration Overview
+description: 'How to configure Lemon'
+---
+
+Lemon uses TOML configuration files with a hierarchical override system.
+
+## Configuration Hierarchy
+
+Configuration is loaded in this order (later overrides earlier):
+
+1. **Global config**: `~/.lemon/config.toml`
+2. **Project config**: `<project>/.lemon/config.toml`
+3. **Environment variables**
+4. **CLI arguments** (highest priority)
+
+## Basic Config File
+
+```toml
+# ~/.lemon/config.toml
+
+# Provider keys (pick one or more)
+[providers.anthropic]
+api_key = "sk-ant-..."
+
+[providers.openai]
+api_key = "sk-..."
+
+# Default model behavior
+[agent]
+default_provider = "anthropic"
+default_model = "claude-sonnet-4-20250514"
+
+# Optional web tool config
+[agent.tools.web.search]
+provider = "brave" # or "perplexity"
+
+# Telegram gateway
+[gateway]
+enable_telegram = true
+auto_resume = true
+default_engine = "lemon"
+
+[gateway.telegram]
+bot_token = "123456:token"
+allowed_chat_ids = [123456789]
+deny_unbound_chats = true
+```
+
+## Sections
+
+| Section | Description |
+|---------|-------------|
+| `[providers.*]` | LLM provider API keys |
+| `[agent]` | Default agent behavior |
+| `[agent.tools.*]` | Tool-specific settings |
+| `[tui]` | Terminal UI settings |
+| `[gateway]` | Gateway configuration |
+| `[gateway.telegram]` | Telegram bot settings |
+| `[gateway.bindings]` | Chat-to-agent bindings |
+| `[gateway.projects.*]` | Project definitions |
+| `[cron]` | Automation settings |
+| `[logging]` | Log file settings |
+| `[control_plane]` | WebSocket client settings |
+
+## Environment Variables
+
+Most config options can be set via environment variables:
+
+```bash
+# Providers
+ANTHROPIC_API_KEY="sk-ant-..."
+OPENAI_API_KEY="sk-..."
+GOOGLE_GENERATIVE_AI_API_KEY="..."
+
+# Agent defaults
+LEMON_DEFAULT_PROVIDER="anthropic"
+LEMON_DEFAULT_MODEL="claude-sonnet-4-20250514"
+
+# TUI
+LEMON_THEME="lemon"
+LEMON_DEBUG="true"
+
+# Logging
+LEMON_LOG_FILE="~/.lemon/log/lemon.log"
+LEMON_LOG_LEVEL="debug"
+
+# Control plane (for TUI in server mode)
+LEMON_WS_URL="ws://localhost:4040/ws"
+LEMON_WS_TOKEN="..."
+```
+
+## Project-Level Config
+
+Create `.lemon/config.toml` in your project:
+
+```toml
+# /path/to/project/.lemon/config.toml
+[agent]
+default_model = "claude-sonnet-4-20250514"
+
+# Project-specific agent
+[agents.project-agent]
+name = "Project Assistant"
+system_prompt = "You are helping with this specific project."
+```
+
+## Config Directory Structure
+
+```
+~/.lemon/
+├── config.toml          # Main config
+├── log/
+│   └── lemon.log       # Log files
+├── sessions/           # Saved sessions
+│   └── *.jsonl
+├── agent/
+│   ├── skill/         # Global skills
+│   └── extensions/    # Global extensions
+└── secrets/           # Encrypted secrets store
+```
+
+## Validation
+
+Lemon validates config on startup and reports errors:
+
+```
+[error] Invalid config: providers.anthropic.api_key is required
+```
