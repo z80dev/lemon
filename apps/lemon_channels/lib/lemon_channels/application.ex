@@ -47,6 +47,19 @@ defmodule LemonChannels.Application do
       end
     end
 
+    # Register X API adapter if configured
+    if LemonChannels.Adapters.XAPI.configured?() do
+      case register_and_start_adapter(LemonChannels.Adapters.XAPI) do
+        :ok ->
+          Logger.info("X API adapter registered and started")
+
+        {:error, reason} ->
+          Logger.warning("Failed to start X API adapter: #{inspect(reason)}")
+      end
+    else
+      Logger.info("X API adapter not configured, skipping")
+    end
+
     # Future: register other adapters here (Discord, Slack, etc.)
     :ok
   end

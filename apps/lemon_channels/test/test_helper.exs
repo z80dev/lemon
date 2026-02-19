@@ -12,7 +12,14 @@ Application.put_env(:lemon_channels, :gateway, %{
   default_engine: "lemon"
 })
 
-Application.put_env(:lemon_channels, :engines, ["lemon", "echo", "codex", "claude", "opencode", "pi"])
+Application.put_env(:lemon_channels, :engines, [
+  "lemon",
+  "echo",
+  "codex",
+  "claude",
+  "opencode",
+  "pi"
+])
 
 # Remove any prior test overrides that could trigger Telegram polling, and
 # neutralize TOML-derived defaults from local developer config.
@@ -23,6 +30,9 @@ Application.put_env(:lemon_channels, :telegram, %{
   drop_pending_updates: false,
   files: %{}
 })
+
+# Keep X adapter tests deterministic by default; specific tests can opt in.
+Application.put_env(:lemon_channels, :x_api_use_secrets, false)
 
 _ = Application.stop(:lemon_channels)
 _ = Application.stop(:lemon_gateway)
@@ -39,4 +49,5 @@ ExUnit.after_suite(fn _ ->
   Application.delete_env(:lemon_channels, :gateway)
   Application.delete_env(:lemon_channels, :engines)
   Application.delete_env(:lemon_channels, :telegram)
+  Application.delete_env(:lemon_channels, :x_api_use_secrets)
 end)
