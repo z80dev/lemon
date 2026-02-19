@@ -22,6 +22,7 @@ defmodule Ai.Providers.Anthropic do
   @behaviour Ai.Provider
 
   alias Ai.EventStream
+  alias Ai.Providers.HttpTrace
 
   alias Ai.Types.{
     AssistantMessage,
@@ -106,55 +107,108 @@ defmodule Ai.Providers.Anthropic do
 
       headers = build_headers(api_key, model.headers, opts.headers)
       body = build_request_body(model, context, opts)
+      trace_id = HttpTrace.new_trace_id("anthropic")
+      messages = Map.get(body, "messages", [])
 
-      debug_log("request", %{
-        url: url,
-        model: model.id,
-        base_url: base_url,
-        headers: redact_headers(headers),
-        body: body
-      })
+      request_summary =
+        summarize_http_request(trace_id, model, context, opts, url, body, messages)
 
-      EventStream.push_async(stream, {:start, output})
+      HttpTrace.log("anthropic", "request_start", request_summary)
 
-      # Initial state for SSE parsing and block tracking
-      initial_state = %{
-        output: output,
-        stream: stream,
-        blocks: [],
-        sse_buffer: "",
-        model: model
-      }
+      if messages == [] do
+        HttpTrace.log_error("anthropic", "request_invalid_empty_messages", request_summary)
 
-      result = stream_request_with_retries(url, headers, body, initial_state)
+        error_output =
+          %{
+            output
+            | stop_reason: :error,
+              error_message: "No text remained after provider message filtering."
+          }
 
-      case result do
-        {:ok, %Req.Response{status: 200, private: %{sse_state: final_state}}} ->
-          debug_log("response", %{status: 200, streamed: true})
-          # Process any remaining buffer
-          final_state = flush_sse_buffer(final_state)
-          finalize_stream(final_state)
+        EventStream.error(stream, error_output)
+      else
+        debug_log("request", %{
+          trace_id: trace_id,
+          url: url,
+          model: model.id,
+          base_url: base_url,
+          headers: redact_headers(headers),
+          body: body
+        })
 
-        {:ok, %Req.Response{status: 200} = resp} ->
-          debug_log("response", %{status: 200, streamed: false})
-          # No streaming occurred (empty response or single chunk)
-          final_state = resp.private[:sse_state] || initial_state
-          final_state = flush_sse_buffer(final_state)
-          finalize_stream(final_state)
+        EventStream.push_async(stream, {:start, output})
 
-        {:ok, %Req.Response{status: status, body: body}} ->
-          debug_log("response_error", %{status: status, body: body})
-          error_msg = extract_error_message(body, status)
-          error_output = %{output | stop_reason: :error, error_message: error_msg}
-          EventStream.error(stream, error_output)
+        # Initial state for SSE parsing and block tracking
+        initial_state = %{
+          output: output,
+          stream: stream,
+          blocks: [],
+          sse_buffer: "",
+          model: model
+        }
 
-        {:error, reason} ->
-          debug_log("response_error", %{error: inspect(reason)})
-          error_output = %{output | stop_reason: :error, error_message: inspect(reason)}
-          EventStream.error(stream, error_output)
+        result = stream_request_with_retries(url, headers, body, initial_state, trace_id)
+
+        case result do
+          {:ok, %Req.Response{status: 200, private: %{sse_state: final_state}}} ->
+            debug_log("response", %{status: 200, streamed: true})
+            # Process any remaining buffer
+            final_state = flush_sse_buffer(final_state)
+            finalize_stream(final_state)
+
+          {:ok, %Req.Response{status: 200} = resp} ->
+            debug_log("response", %{status: 200, streamed: false})
+            # No streaming occurred (empty response or single chunk)
+            final_state = resp.private[:sse_state] || initial_state
+            final_state = flush_sse_buffer(final_state)
+            finalize_stream(final_state)
+
+          {:ok, %Req.Response{status: status, body: body, headers: response_headers}} ->
+            debug_log("response_error", %{status: status, body: body})
+
+            HttpTrace.log_error("anthropic", "response_error", %{
+              trace_id: trace_id,
+              status: status,
+              provider_request_id:
+                HttpTrace.response_header_value(response_headers, [
+                  "x-request-id",
+                  "request-id",
+                  "anthropic-request-id"
+                ]),
+              body_bytes: HttpTrace.body_bytes(body),
+              body_preview: HttpTrace.body_preview(body),
+              model: model.id,
+              session_id: opts.session_id,
+              converted_messages: length(messages)
+            })
+
+            error_msg = extract_error_message(body, status)
+            error_output = %{output | stop_reason: :error, error_message: error_msg}
+            EventStream.error(stream, error_output)
+
+          {:error, reason} ->
+            debug_log("response_error", %{error: inspect(reason)})
+
+            HttpTrace.log_error("anthropic", "transport_error", %{
+              trace_id: trace_id,
+              error: inspect(reason, limit: 50, printable_limit: 8_000),
+              model: model.id,
+              session_id: opts.session_id
+            })
+
+            error_output = %{output | stop_reason: :error, error_message: inspect(reason)}
+            EventStream.error(stream, error_output)
+        end
       end
     rescue
       e ->
+        HttpTrace.log_error("anthropic", "stream_exception", %{
+          error: Exception.message(e),
+          exception: inspect(e, limit: 20, printable_limit: 2_000),
+          model: model.id,
+          session_id: opts.session_id
+        })
+
         error_output = %{output | stop_reason: :error, error_message: Exception.message(e)}
         EventStream.error(stream, error_output)
     end
@@ -225,7 +279,7 @@ defmodule Ai.Providers.Anthropic do
     end
   end
 
-  defp stream_request_with_retries(url, headers, body, initial_state, attempt \\ 0) do
+  defp stream_request_with_retries(url, headers, body, initial_state, trace_id, attempt \\ 0) do
     chunk_key = {__MODULE__, :chunk_seen, make_ref()}
     Process.put(chunk_key, false)
 
@@ -269,8 +323,16 @@ defmodule Ai.Providers.Anthropic do
             delay_ms: retry_delay
           })
 
+          HttpTrace.log("anthropic", "retry_http", %{
+            trace_id: trace_id,
+            status: status,
+            attempt: attempt + 1,
+            max_retries: @max_retries,
+            delay_ms: retry_delay
+          })
+
           Process.sleep(retry_delay)
-          stream_request_with_retries(url, headers, body, initial_state, attempt + 1)
+          stream_request_with_retries(url, headers, body, initial_state, trace_id, attempt + 1)
         else
           response
         end
@@ -286,8 +348,16 @@ defmodule Ai.Providers.Anthropic do
             delay_ms: retry_delay
           })
 
+          HttpTrace.log("anthropic", "retry_transport", %{
+            trace_id: trace_id,
+            reason: inspect(reason, limit: 50, printable_limit: 8_000),
+            attempt: attempt + 1,
+            max_retries: @max_retries,
+            delay_ms: retry_delay
+          })
+
           Process.sleep(retry_delay)
-          stream_request_with_retries(url, headers, body, initial_state, attempt + 1)
+          stream_request_with_retries(url, headers, body, initial_state, trace_id, attempt + 1)
         else
           error
         end
@@ -563,6 +633,103 @@ defmodule Ai.Providers.Anthropic do
       {k, v} -> {k, v}
     end)
   end
+
+  defp summarize_http_request(trace_id, model, context, opts, url, body, messages) do
+    %{
+      trace_id: trace_id,
+      model: model.id,
+      provider: model.provider,
+      api: model.api,
+      session_id: opts.session_id,
+      run_id: trace_header(opts.headers, "x-lemon-run-id"),
+      session_key: trace_header(opts.headers, "x-lemon-session-key"),
+      agent_id: trace_header(opts.headers, "x-lemon-agent-id"),
+      url: url,
+      raw_message_count: length(context.messages || []),
+      converted_message_count: length(messages),
+      converted_message_summary: summarize_messages(messages),
+      system_prompt_bytes: HttpTrace.summarize_text_size(context.system_prompt),
+      tools_count: length(context.tools || []),
+      max_tokens: Map.get(body, "max_tokens"),
+      temperature: opts.temperature
+    }
+  end
+
+  defp summarize_messages(messages) when is_list(messages) do
+    messages
+    |> Enum.take(20)
+    |> Enum.map(fn
+      message when is_map(message) ->
+        content = Map.get(message, "content")
+
+        %{
+          role: Map.get(message, "role"),
+          content_items:
+            if(is_list(content),
+              do: length(content),
+              else: if(is_binary(content), do: 1, else: 0)
+            ),
+          content_types: summarize_content_types(content),
+          text_bytes: summarize_text_bytes(content)
+        }
+
+      other ->
+        %{
+          role: "unknown",
+          content_items: 0,
+          content_types: %{},
+          text_bytes: 0,
+          raw: inspect(other)
+        }
+    end)
+  end
+
+  defp summarize_messages(_), do: []
+
+  defp trace_header(headers, key) when is_map(headers), do: Map.get(headers, key)
+
+  defp trace_header(headers, key) when is_list(headers) do
+    key_down = String.downcase(key)
+
+    Enum.find_value(headers, fn
+      {k, v} when is_binary(k) and is_binary(v) ->
+        if String.downcase(k) == key_down, do: v, else: nil
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp trace_header(_headers, _key), do: nil
+
+  defp summarize_content_types(content) when is_list(content) do
+    content
+    |> Enum.map(fn
+      %{"type" => type} -> type
+      _ -> "unknown"
+    end)
+    |> Enum.frequencies()
+  end
+
+  defp summarize_content_types(content) when is_binary(content), do: %{"text" => 1}
+  defp summarize_content_types(_), do: %{}
+
+  defp summarize_text_bytes(content) when is_binary(content), do: byte_size(content)
+
+  defp summarize_text_bytes(content) when is_list(content) do
+    Enum.reduce(content, 0, fn
+      %{"text" => text}, acc when is_binary(text) ->
+        acc + byte_size(text)
+
+      %{"type" => "text", "text" => text}, acc when is_binary(text) ->
+        acc + byte_size(text)
+
+      _, acc ->
+        acc
+    end)
+  end
+
+  defp summarize_text_bytes(_), do: 0
 
   # ============================================================================
   # Block Update Helpers

@@ -14,7 +14,7 @@ defmodule LemonRouter.RunProcess do
 
   require Logger
 
-  alias LemonCore.Bus
+  alias LemonCore.{Bus, RunRequest, SessionKey}
   alias LemonChannels.Types.ResumeToken
   alias LemonRouter.ChannelContext
 
@@ -27,6 +27,11 @@ defmodule LemonRouter.RunProcess do
   @gateway_submit_retry_max_ms 2_000
   @session_register_retry_ms 25
   @session_register_retry_max_ms 250
+  @zero_answer_retry_max_attempts 1
+  @zero_answer_retry_prefix """
+  Retry notice: the previous attempt failed before producing an answer.
+  Before taking new actions, first check for partially completed work from the prior attempt and continue from current state instead of repeating completed steps.
+  """
 
   def start_link(opts) do
     run_id = opts[:run_id]
@@ -71,6 +76,7 @@ defmodule LemonRouter.RunProcess do
     session_key = opts[:session_key]
     job = opts[:job]
     gateway_scheduler = opts[:gateway_scheduler] || LemonGateway.Scheduler
+    run_orchestrator = opts[:run_orchestrator] || LemonRouter.RunOrchestrator
 
     # For tests and partial-boot scenarios, allow skipping gateway submission.
     submit_to_gateway? =
@@ -96,6 +102,7 @@ defmodule LemonRouter.RunProcess do
       session_register_retry_attempt: 0,
       submit_to_gateway?: submit_to_gateway?,
       gateway_scheduler: gateway_scheduler,
+      run_orchestrator: run_orchestrator,
       gateway_submit_attempt: 0,
       gateway_submitted?: false,
       gateway_run_pid: nil,
@@ -195,6 +202,7 @@ defmodule LemonRouter.RunProcess do
     # the next message can start fresh instead of immediately failing again.
     maybe_reset_telegram_resume_on_context_overflow(state, event)
     maybe_mark_telegram_pending_compaction_near_limit(state, event)
+    retried? = maybe_retry_zero_answer_failure(state, event)
 
     # Mark any still-running tool calls as completed so the editable "Tool calls"
     # status message (Telegram) can't get stuck at [running] if a final action
@@ -207,15 +215,17 @@ defmodule LemonRouter.RunProcess do
       flush_tool_status(state)
     end
 
-    # Telegram: StreamCoalescer finalizes by sending/editing a dedicated answer message; the
-    # progress message is reserved for tool-call status + cancel UI and is never overwritten.
-    maybe_finalize_stream_output(state, event)
+    unless retried? do
+      # Telegram: StreamCoalescer finalizes by sending/editing a dedicated answer message; the
+      # progress message is reserved for tool-call status + cancel UI and is never overwritten.
+      maybe_finalize_stream_output(state, event)
 
-    # If no streaming deltas were emitted, emit a final output chunk so channels respond.
-    #
-    # Note: Telegram final output is handled by maybe_finalize_stream_output/2 instead to avoid
-    # producing a terminal :edit update to the progress message.
-    maybe_emit_final_output(state, event)
+      # If no streaming deltas were emitted, emit a final output chunk so channels respond.
+      #
+      # Note: Telegram final output is handled by maybe_finalize_stream_output/2 instead to avoid
+      # producing a terminal :edit update to the progress message.
+      maybe_emit_final_output(state, event)
+    end
 
     {:stop, :normal, %{state | completed: true}}
   end
@@ -977,6 +987,143 @@ defmodule LemonRouter.RunProcess do
   end
 
   defp safe_clear_thread_index(_table, _account_id, _chat_id, _thread_id), do: :ok
+
+  defp maybe_retry_zero_answer_failure(state, %LemonCore.Event{} = event) do
+    with {:retry, %RunRequest{} = request, error_text, attempt} <-
+           build_zero_answer_retry_request(state, event),
+         {:ok, retry_run_id} <- submit_retry_request(state.run_orchestrator, request) do
+      Logger.warning(
+        "RunProcess #{state.run_id} auto-retrying empty-answer failure " <>
+          "(attempt=#{attempt}/#{@zero_answer_retry_max_attempts}) " <>
+          "new_run_id=#{inspect(retry_run_id)} reason=#{error_text}"
+      )
+
+      true
+    else
+      :skip ->
+        false
+
+      {:error, reason} ->
+        Logger.warning(
+          "RunProcess #{state.run_id} auto-retry submission failed: #{inspect(reason)}"
+        )
+
+        false
+    end
+  rescue
+    error ->
+      Logger.warning("RunProcess #{state.run_id} auto-retry crashed: #{Exception.message(error)}")
+
+      false
+  end
+
+  defp build_zero_answer_retry_request(state, %LemonCore.Event{} = event) do
+    {ok?, error} = extract_completed_ok_and_error(event)
+    answer = extract_completed_answer(event)
+    meta = normalize_retry_meta(state.job.meta)
+    prior_attempt = retry_attempt_from_meta(meta)
+    prompt = state.job.prompt
+
+    cond do
+      ok? == true ->
+        :skip
+
+      not empty_answer?(answer) ->
+        :skip
+
+      not retryable_zero_answer_error?(error) ->
+        :skip
+
+      not (is_binary(prompt) and String.trim(prompt) != "") ->
+        :skip
+
+      prior_attempt >= @zero_answer_retry_max_attempts ->
+        :skip
+
+      true ->
+        attempt = prior_attempt + 1
+        reason_text = format_run_error(error)
+
+        retry_meta =
+          meta
+          |> Map.put(:zero_answer_retry_attempt, attempt)
+          |> Map.put(:zero_answer_retry_of_run, state.run_id)
+          |> Map.put(:zero_answer_retry_reason, reason_text)
+
+        retry_prompt = build_zero_answer_retry_prompt(prompt, state.run_id, reason_text)
+
+        request =
+          RunRequest.new(%{
+            origin: retry_origin_from_meta(meta),
+            session_key: state.session_key,
+            agent_id: SessionKey.agent_id(state.session_key || "") || "default",
+            prompt: retry_prompt,
+            queue_mode: state.job.queue_mode,
+            engine_id: state.job.engine_id,
+            cwd: state.job.cwd,
+            tool_policy: state.job.tool_policy,
+            meta: retry_meta
+          })
+
+        {:retry, request, reason_text, attempt}
+    end
+  end
+
+  defp submit_retry_request(run_orchestrator, %RunRequest{} = request) do
+    cond do
+      function_exported?(run_orchestrator, :submit, 1) ->
+        run_orchestrator.submit(request)
+
+      function_exported?(run_orchestrator, :submit_run, 1) ->
+        run_orchestrator.submit_run(request)
+
+      true ->
+        {:error, :run_orchestrator_unavailable}
+    end
+  end
+
+  defp normalize_retry_meta(meta) when is_map(meta), do: meta
+  defp normalize_retry_meta(_), do: %{}
+
+  defp retry_attempt_from_meta(meta) when is_map(meta) do
+    case Map.get(meta, :zero_answer_retry_attempt) || Map.get(meta, "zero_answer_retry_attempt") do
+      attempt when is_integer(attempt) and attempt >= 0 -> attempt
+      _ -> 0
+    end
+  end
+
+  defp retry_origin_from_meta(meta) when is_map(meta) do
+    Map.get(meta, :origin) || Map.get(meta, "origin") || :unknown
+  end
+
+  defp empty_answer?(answer) when is_binary(answer), do: String.trim(answer) == ""
+  defp empty_answer?(_), do: true
+
+  defp retryable_zero_answer_error?(error)
+       when error in [:user_requested, :interrupted, :new_session, :timeout],
+       do: false
+
+  defp retryable_zero_answer_error?({:assistant_error, _reason}), do: true
+
+  defp retryable_zero_answer_error?(error) when is_binary(error) do
+    down = String.downcase(error)
+    String.contains?(down, "assistant_error") or String.contains?(down, "assistant error")
+  end
+
+  defp retryable_zero_answer_error?(error) when is_map(error) do
+    text = error |> inspect(limit: 50, printable_limit: 2_000) |> String.downcase()
+    String.contains?(text, "assistant_error") or String.contains?(text, "assistant error")
+  end
+
+  defp retryable_zero_answer_error?(_), do: false
+
+  defp build_zero_answer_retry_prompt(prompt, failed_run_id, reason_text)
+       when is_binary(prompt) and is_binary(reason_text) do
+    @zero_answer_retry_prefix <>
+      "\nPrevious run: #{failed_run_id}\nFailure: #{reason_text}\n\n" <>
+      "Original request:\n" <>
+      prompt
+  end
 
   defp format_run_error(nil), do: "unknown error"
 

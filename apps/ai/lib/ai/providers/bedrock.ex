@@ -25,6 +25,7 @@ defmodule Ai.Providers.Bedrock do
   @behaviour Ai.Provider
 
   alias Ai.EventStream
+  alias Ai.Providers.HttpTrace
   alias Ai.Types.{AssistantMessage, Context, Cost, Model, StreamOptions, Usage}
   alias Ai.Types.{TextContent, ThinkingContent, ToolCall}
   alias Ai.Types.{UserMessage, ToolResultMessage}
@@ -76,20 +77,43 @@ defmodule Ai.Providers.Bedrock do
 
   defp do_stream(stream, model, context, opts) do
     output = init_output(model)
+    trace_id = HttpTrace.new_trace_id("bedrock")
 
     region = get_region(opts)
     credentials = get_credentials(opts)
 
     case credentials do
       {:error, reason} ->
+        HttpTrace.log_error("bedrock", "credentials_error", %{
+          trace_id: trace_id,
+          model: model.id,
+          region: region,
+          error: reason
+        })
+
         output = %{output | stop_reason: :error, error_message: reason}
         EventStream.error(stream, output)
 
       {:ok, access_key, secret_key, session_token} ->
         endpoint = build_endpoint(region, model.id)
         body = build_request_body(model, context, opts)
+        message_list = Map.get(body, "messages", [])
 
-        case make_signed_request(endpoint, body, region, access_key, secret_key, session_token) do
+        HttpTrace.log(
+          "bedrock",
+          "request_start",
+          summarize_http_request(trace_id, model, context, opts, endpoint, body, message_list)
+        )
+
+        case make_signed_request(
+               endpoint,
+               body,
+               region,
+               access_key,
+               secret_key,
+               session_token,
+               trace_id
+             ) do
           {:ok, response} ->
             EventStream.push_async(stream, {:start, output})
             output = process_event_stream(response.body, output, stream)
@@ -100,13 +124,39 @@ defmodule Ai.Providers.Bedrock do
               EventStream.complete(stream, output)
             end
 
-          {:error, %{status: status, body: body}} ->
+          {:error, %{status: status, body: body, headers: response_headers}} ->
+            HttpTrace.log_error("bedrock", "http_error", %{
+              trace_id: trace_id,
+              status: status,
+              provider_request_id:
+                HttpTrace.response_header_value(response_headers, [
+                  "x-amzn-requestid",
+                  "x-amz-request-id",
+                  "x-request-id"
+                ]),
+              body_bytes: HttpTrace.body_bytes(body),
+              body_preview: HttpTrace.body_preview(body),
+              model: model.id,
+              region: region,
+              session_id: opts.session_id,
+              converted_messages: length(message_list)
+            })
+
             error_msg = extract_error_message(body, status)
             output = %{output | stop_reason: :error, error_message: error_msg}
             EventStream.push_async(stream, {:start, output})
             EventStream.error(stream, output)
 
           {:error, reason} ->
+            HttpTrace.log_error("bedrock", "transport_error", %{
+              trace_id: trace_id,
+              error: inspect(reason, limit: 50, printable_limit: 8_000),
+              model: model.id,
+              region: region,
+              session_id: opts.session_id,
+              converted_messages: length(message_list)
+            })
+
             error_msg = "Request failed: #{inspect(reason)}"
             output = %{output | stop_reason: :error, error_message: error_msg}
             EventStream.push_async(stream, {:start, output})
@@ -541,7 +591,15 @@ defmodule Ai.Providers.Bedrock do
   # AWS Signature V4
   # ============================================================================
 
-  defp make_signed_request(endpoint, body, region, access_key, secret_key, session_token) do
+  defp make_signed_request(
+         endpoint,
+         body,
+         region,
+         access_key,
+         secret_key,
+         session_token,
+         trace_id
+       ) do
     url = "https://#{endpoint.host}#{endpoint.path}"
     json_body = Jason.encode!(body)
 
@@ -565,17 +623,116 @@ defmodule Ai.Providers.Bedrock do
     # Use Req for HTTP request with streaming
     case Req.post(url, body: json_body, headers: headers, into: :self, receive_timeout: 600_000) do
       {:ok, %Req.Response{status: status} = response} when status in 200..299 ->
+        HttpTrace.log("bedrock", "response_headers", %{
+          trace_id: trace_id,
+          status: status,
+          provider_request_id:
+            HttpTrace.response_header_value(response.headers, [
+              "x-amzn-requestid",
+              "x-amz-request-id",
+              "x-request-id"
+            ])
+        })
+
         # Stream the response body
         body_stream = stream_response_body(response)
-        {:ok, %{status: status, body: body_stream}}
+        {:ok, %{status: status, body: body_stream, headers: response.headers}}
 
-      {:ok, %Req.Response{status: status, body: body}} ->
-        {:error, %{status: status, body: body}}
+      {:ok, %Req.Response{status: status, body: body, headers: response_headers}} ->
+        {:error, %{status: status, body: body, headers: response_headers}}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
+
+  defp summarize_http_request(trace_id, model, context, opts, endpoint, _body, messages) do
+    %{
+      trace_id: trace_id,
+      model: model.id,
+      provider: model.provider,
+      api: model.api,
+      region: endpoint.region,
+      endpoint: endpoint.host <> endpoint.path,
+      session_id: opts.session_id,
+      run_id: trace_header(opts.headers, "x-lemon-run-id"),
+      session_key: trace_header(opts.headers, "x-lemon-session-key"),
+      agent_id: trace_header(opts.headers, "x-lemon-agent-id"),
+      raw_message_count: length(context.messages || []),
+      converted_message_count: length(messages),
+      converted_message_summary: summarize_messages(messages),
+      tools_count: length(context.tools || []),
+      system_prompt_bytes: HttpTrace.summarize_text_size(context.system_prompt)
+    }
+  end
+
+  defp summarize_messages(messages) when is_list(messages) do
+    messages
+    |> Enum.take(20)
+    |> Enum.map(fn
+      message when is_map(message) ->
+        content = Map.get(message, "content")
+
+        %{
+          role: Map.get(message, "role"),
+          content_items: if(is_list(content), do: length(content), else: 0),
+          content_types: summarize_content_types(content),
+          text_bytes: summarize_text_bytes(content)
+        }
+
+      other ->
+        %{
+          role: "unknown",
+          content_items: 0,
+          content_types: %{},
+          text_bytes: 0,
+          raw: inspect(other)
+        }
+    end)
+  end
+
+  defp summarize_messages(_), do: []
+
+  defp summarize_content_types(content) when is_list(content) do
+    content
+    |> Enum.map(fn
+      %{"text" => _} -> "text"
+      %{"toolUse" => _} -> "toolUse"
+      %{"toolResult" => _} -> "toolResult"
+      _ -> "unknown"
+    end)
+    |> Enum.frequencies()
+  end
+
+  defp summarize_content_types(_), do: %{}
+
+  defp summarize_text_bytes(content) when is_list(content) do
+    Enum.reduce(content, 0, fn
+      %{"text" => text}, acc when is_binary(text) ->
+        acc + byte_size(text)
+
+      _, acc ->
+        acc
+    end)
+  end
+
+  defp summarize_text_bytes(_), do: 0
+
+  defp trace_header(headers, key) when is_map(headers), do: Map.get(headers, key)
+
+  defp trace_header(headers, key) when is_list(headers) do
+    key_down = String.downcase(key)
+
+    Enum.find_value(headers, fn
+      {k, v} when is_binary(k) and is_binary(v) ->
+        if String.downcase(k) == key_down, do: v, else: nil
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp trace_header(_headers, _key), do: nil
 
   defp stream_response_body(response) do
     Stream.resource(
