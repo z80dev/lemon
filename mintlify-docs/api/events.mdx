@@ -1,0 +1,309 @@
+---
+title: Events
+description: 'WebSocket event types and payloads'
+---
+
+## Event Format
+
+Events are sent over WebSocket after subscribing to topics:
+
+```json
+{
+  "type": "event",
+  "topic": "run:abc123",
+  "payload": {
+    "type": "delta",
+    "text": "Hello world"
+  }
+}
+```
+
+## Run Events
+
+### `run_started`
+
+A new run has started.
+
+```json
+{
+  "type": "run_started",
+  "run_id": "run_abc123",
+  "session_key": "agent:default:main",
+  "engine": "lemon",
+  "timestamp": "2024-01-15T10:30:00Z"
+}
+```
+
+### `run_completed`
+
+A run has completed.
+
+```json
+{
+  "type": "run_completed",
+  "run_id": "run_abc123",
+  "session_key": "agent:default:main",
+  "status": "completed",
+  "timestamp": "2024-01-15T10:30:30Z"
+}
+```
+
+### `delta`
+
+Text delta from the LLM.
+
+```json
+{
+  "type": "delta",
+  "run_id": "run_abc123",
+  "text": "Hello",
+  "index": 0
+}
+```
+
+### `tool_call`
+
+A tool is being called.
+
+```json
+{
+  "type": "tool_call",
+  "run_id": "run_abc123",
+  "tool_call_id": "call_abc123",
+  "tool_name": "read",
+  "arguments": {
+    "path": "/path/to/file"
+  }
+}
+```
+
+### `tool_result`
+
+A tool has returned a result.
+
+```json
+{
+  "type": "tool_result",
+  "run_id": "run_abc123",
+  "tool_call_id": "call_abc123",
+  "tool_name": "read",
+  "result": {
+    "content": "file contents..."
+  },
+  "is_error": false
+}
+```
+
+### `message_complete`
+
+A message has been completed.
+
+```json
+{
+  "type": "message_complete",
+  "run_id": "run_abc123",
+  "message": {
+    "role": "assistant",
+    "content": "Hello! How can I help?"
+  },
+  "usage": {
+    "tokens_in": 100,
+    "tokens_out": 50,
+    "cost_usd": 0.0025
+  }
+}
+```
+
+## Approval Events
+
+### `approval_requested`
+
+An approval has been requested.
+
+```json
+{
+  "type": "approval_requested",
+  "approval_id": "appr_abc123",
+  "run_id": "run_abc123",
+  "tool": "bash",
+  "command": "rm -rf node_modules",
+  "timeout_ms": 300000,
+  "requested_at": "2024-01-15T10:30:00Z"
+}
+```
+
+### `approval_resolved`
+
+An approval has been resolved.
+
+```json
+{
+  "type": "approval_resolved",
+  "approval_id": "appr_abc123",
+  "resolution": "approved",
+  "scope": "session",
+  "resolved_at": "2024-01-15T10:30:05Z"
+}
+```
+
+## Cron Events
+
+### `cron_run_started`
+
+A cron job has started.
+
+```json
+{
+  "type": "cron_run_started",
+  "job_id": "cron_abc123",
+  "run_id": "run_def456",
+  "started_at": "2024-01-15T10:30:00Z"
+}
+```
+
+### `cron_run_completed`
+
+A cron job has completed.
+
+```json
+{
+  "type": "cron_run_completed",
+  "job_id": "cron_abc123",
+  "run_id": "run_def456",
+  "status": "completed",
+  "completed_at": "2024-01-15T10:30:30Z"
+}
+```
+
+## Node Events
+
+### `node_pair_requested`
+
+A node pairing has been requested.
+
+```json
+{
+  "type": "node_pair_requested",
+  "request_id": "req_abc123",
+  "client_id": "my-client",
+  "requested_at": "2024-01-15T10:30:00Z"
+}
+```
+
+### `node_pair_approved`
+
+A node pairing has been approved.
+
+```json
+{
+  "type": "node_pair_approved",
+  "node_id": "node_abc123",
+  "client_id": "my-client",
+  "token": "...",
+  "approved_at": "2024-01-15T10:30:05Z"
+}
+```
+
+### `node_pair_rejected`
+
+A node pairing has been rejected.
+
+```json
+{
+  "type": "node_pair_rejected",
+  "request_id": "req_abc123",
+  "reason": "rejected_by_user",
+  "rejected_at": "2024-01-15T10:30:05Z"
+}
+```
+
+## Session Events
+
+### `session_created`
+
+A new session has been created.
+
+```json
+{
+  "type": "session_created",
+  "session_key": "agent:default:main",
+  "agent_id": "default",
+  "created_at": "2024-01-15T10:30:00Z"
+}
+```
+
+### `session_reset`
+
+A session has been reset.
+
+```json
+{
+  "type": "session_reset",
+  "session_key": "agent:default:main",
+  "reset_at": "2024-01-15T10:30:00Z"
+}
+```
+
+## System Events
+
+### `presence_update`
+
+Presence information update.
+
+```json
+{
+  "type": "presence_update",
+  "clients": [
+    {
+      "client_id": "tui-1",
+      "role": "operator",
+      "connected_at": "2024-01-15T10:00:00Z"
+    }
+  ]
+}
+```
+
+### `error`
+
+An error occurred.
+
+```json
+{
+  "type": "error",
+  "run_id": "run_abc123",
+  "error": {
+    "code": "tool_execution_failed",
+    "message": "Failed to execute bash command"
+  }
+}
+```
+
+## Event Topics
+
+Subscribe to these topics to receive events:
+
+| Topic | Events |
+|-------|--------|
+| `run:<run_id>` | Run lifecycle events |
+| `session:<session_key>` | Session events |
+| `channels` | Channel events |
+| `cron` | Cron job events |
+| `exec_approvals` | Approval events |
+| `nodes` | Node pairing events |
+| `system` | System-wide events |
+
+## Subscription Example
+
+```json
+// Subscribe
+{
+  "type": "sub",
+  "topics": ["run:abc123", "session:agent:default:main"]
+}
+
+// Unsubscribe
+{
+  "type": "unsub",
+  "topics": ["run:abc123"]
+}
+```
