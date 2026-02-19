@@ -690,3 +690,59 @@ Each entry records what was done, what worked, and what to focus on next.
 - Continue adding tests for remaining 2 untested modules (config_cache, logger_setup)
 - Or check Pi upstream for more new models/features
 - Or add Bedrock variants of the new Claude 4.6 models
+
+### 2025-02-19 - Test Expansion: ConfigCache Tests
+**Work Area**: Test Expansion
+
+**What was done:**
+- Created comprehensive tests for the `LemonCore.ConfigCache` module (previously untested):
+  - Tests for `start_link/1`:
+    - Starts the ConfigCache GenServer
+  - Tests for `available?/0`:
+    - Returns true when cache is running
+  - Tests for `get/2`:
+    - Returns config for empty cwd (global only)
+    - Returns config with project override
+    - Caches config and returns cached version on subsequent calls
+    - Reloads config when TTL expires and file changed
+  - Tests for `reload/2`:
+    - Force reloads config from disk
+  - Tests for `invalidate/1`:
+    - Removes cached entry
+    - Invalidate is idempotent
+  - Tests for error handling:
+    - Handles missing config files gracefully
+  - Tests for concurrent access:
+    - Handles concurrent get calls
+    - Handles concurrent reload calls
+  - Tests for config paths:
+    - Uses different cache keys for different cwd
+  - 14 comprehensive tests covering the 200-line module
+- All 14 new tests pass
+- Total test count: 399 (up from 385)
+- Existing tests still pass (1 pre-existing architecture check failure unrelated)
+
+**Files changed:**
+- `apps/lemon_core/test/lemon_core/config_cache_test.exs` (new file - 14 tests)
+
+**What worked:**
+- Testing GenServer-based modules requires careful setup
+- Using temporary HOME directories isolates tests
+- TTL-based caching tests require timing control
+- Concurrent access tests verify thread-safety
+
+**Test coverage progress:**
+- Before: ConfigCache module (200 lines) had 0 tests
+- After: ConfigCache module has 14 tests
+- Remaining untested modules:
+  - `logger_setup` - Logger initialization
+
+**Total progress:**
+- Started with 119 tests
+- Now have 399 tests
+- Added 280 tests across multiple runs
+
+**Next run should focus on:**
+- Add tests for the final untested module: `logger_setup`
+- Or add integration tests using the new modular config
+- Or add validation to the modular config system
