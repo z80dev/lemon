@@ -83,6 +83,14 @@ defmodule CodingAgent.Tools.Task do
             "description" =>
               "Execution engine: internal (default), codex, claude, kimi, opencode, or pi"
           },
+          "model" => %{
+            "type" => "string",
+            "description" => "Optional model override (especially for internal engine)"
+          },
+          "thinking_level" => %{
+            "type" => "string",
+            "description" => "Optional thinking level override for internal engine"
+          },
           "role" => %{
             "type" => "string",
             "description" =>
@@ -90,7 +98,7 @@ defmodule CodingAgent.Tools.Task do
           },
           "async" => %{
             "type" => "boolean",
-            "description" => "When true, run task asynchronously and return a task_id"
+            "description" => "When true (recommended), run in background and return task_id immediately. Use async=true by default to keep user conversations responsive. Only use async=false for simple tasks that complete instantly."
           }
         },
         "required" => []
@@ -193,7 +201,7 @@ defmodule CodingAgent.Tools.Task do
             execute_via_coordinator(coordinator, prompt, description, role_id)
 
           true ->
-            start_opts = build_session_opts(cwd, opts)
+            start_opts = build_session_opts(cwd, opts, validated)
 
             case maybe_apply_role_prompt(prompt, role_id, cwd) do
               {:error, _} = err ->
@@ -281,6 +289,8 @@ defmodule CodingAgent.Tools.Task do
     prompt = Map.get(params, "prompt")
     role_id = normalize_optional_string(Map.get(params, "role"))
     engine = Map.get(params, "engine")
+    model = normalize_optional_string(Map.get(params, "model"))
+    thinking_level = normalize_optional_string(Map.get(params, "thinking_level"))
     async? = Map.get(params, "async", false)
 
     cond do
@@ -309,6 +319,12 @@ defmodule CodingAgent.Tools.Task do
           engine not in ["internal", "codex", "claude", "kimi", "opencode", "pi"] ->
         {:error, "Engine must be one of: internal, codex, claude, kimi, opencode, pi"}
 
+      not is_nil(model) and not is_binary(model) ->
+        {:error, "Model must be a string"}
+
+      not is_nil(thinking_level) and not is_binary(thinking_level) ->
+        {:error, "thinking_level must be a string"}
+
       not is_nil(role_id) and Subagents.get(cwd, role_id) == nil ->
         {:error, "Unknown role: #{role_id}"}
 
@@ -324,6 +340,8 @@ defmodule CodingAgent.Tools.Task do
            prompt: prompt,
            role_id: role_id,
            engine: normalized_engine,
+           model: model,
+           thinking_level: thinking_level,
            async: async?
          }}
     end
@@ -1023,10 +1041,18 @@ defmodule CodingAgent.Tools.Task do
 
   defp build_description(cwd) do
     base =
-      "Run a focused subtask and return the final response.\n\n" <>
-        "Parameters:\n" <>
+      "Run a focused subtask. **Use async=true by default** to avoid blocking the user conversation.\n\n" <>
+        "**When to use task vs agent tool:**\n" <>
+        "- task: For coding work within this session's context (same project, files, tools)\n" <>
+        "- agent: For delegating to a different agent profile or for cross-agent workflows\n\n" <>
+        "**Async-first pattern (recommended):**\n" <>
+        "1. Launch with async=true → get task_id immediately\n" <>
+        "2. Continue the user conversation without waiting\n" <>
+        "3. Poll with action=poll and task_id to check status, OR\n" <>
+        "4. Use action=join with multiple task_ids to wait for completion\n\n" <>
+        "**Parameters:**\n" <>
         "- action: run (default), poll, or join\n" <>
-        "- async: when true, run in background and return task_id\n" <>
+        "- async: true (recommended) = non-blocking, false = wait for completion\n" <>
         "- task_id: required when action=poll\n" <>
         "- task_ids: required when action=join\n" <>
         "- mode: join mode for action=join (wait_all or wait_any)\n" <>
@@ -1037,6 +1063,8 @@ defmodule CodingAgent.Tools.Task do
         "  - \"kimi\": Kimi CLI\n" <>
         "  - \"opencode\": Opencode CLI\n" <>
         "  - \"pi\": Pi (pi-coding-agent) CLI\n" <>
+        "- model: Optional model override (e.g., \"gemini-2.5-pro\" for complex tasks)\n" <>
+        "- thinking_level: Optional thinking level override for internal engine\n" <>
         "- role: Optional specialization that applies to ANY engine\n\n" <>
         "The role prepends a system prompt to focus the executor on a specific type of work. " <>
         "You can combine any engine with any role."
@@ -1066,7 +1094,7 @@ defmodule CodingAgent.Tools.Task do
     %{tool | parameters: Map.put(params, "properties", props)}
   end
 
-  defp build_session_opts(cwd, opts) do
+  defp build_session_opts(cwd, opts, validated) do
     base_opts =
       opts
       |> Keyword.take([
@@ -1084,8 +1112,16 @@ defmodule CodingAgent.Tools.Task do
       ])
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)
 
-    [{:cwd, cwd}, {:register, true} | base_opts]
+    override_opts =
+      []
+      |> maybe_put_kw(:model, validated[:model])
+      |> maybe_put_kw(:thinking_level, validated[:thinking_level])
+
+    [{:cwd, cwd}, {:register, true} | Keyword.merge(base_opts, override_opts)]
   end
+
+  defp maybe_put_kw(list, _key, nil), do: list
+  defp maybe_put_kw(list, key, value), do: Keyword.put(list, key, value)
 
   defp await_result(
          session,

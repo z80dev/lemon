@@ -25,6 +25,72 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-20 - Integration Review: Kimi Task Merge Stabilization
+**Work Area**: Integration / Review / Bug Fixes
+
+**What was done:**
+- Reviewed and integrated the 3 Kimi task streams:
+  - **Feature Enhancement (Pi/Oh-My-Pi sync)**: validated new provider/model additions and related refactors.
+  - **Test Expansion & Documentation**: validated added coverage for previously untested modules and JANITOR updates.
+  - **Refactoring & Bug Fixes**: validated `elem/2` refactor in task tooling path and associated test/doc updates.
+- Ran umbrella `mix test` and identified integration regressions introduced by the combined changes.
+- Applied integration fixes:
+  - Restored `Ai.Error.parse_reset_time/1` behavior to preserve invalid Unix timestamp reason atoms (fixes `Ai.ErrorProviderTest` failure).
+  - Removed unused alias warning in new provider tests.
+  - Reworked optional-callback assertions in extension tests to avoid compile warnings from undefined direct calls.
+  - Stabilized new singleton server tests (`TaskStoreServer`, `RunGraphServer`) by removing destructive stop behavior that interfered with app-supervised singleton DETS ownership.
+  - Updated DETS assertions in `TaskStoreServer` tests to validate via `dets_status/1` in singleton context.
+- Re-ran focused and full test suites to verify integration health.
+
+**Files changed (reviewed + integrated):**
+- `JANITOR.md`
+- `apps/ai/lib/ai/error.ex`
+- `apps/ai/lib/ai/models.ex`
+- `apps/ai/lib/ai/providers/bedrock.ex`
+- `apps/ai/test/models_new_providers_test.exs`
+- `apps/coding_agent/lib/coding_agent/tools/task.ex`
+- `apps/coding_agent/test/coding_agent/budget_enforcer_test.exs`
+- `apps/coding_agent/test/coding_agent/extensions/extension_test.exs`
+- `apps/coding_agent/test/coding_agent/run_graph_server_test.exs`
+- `apps/coding_agent/test/coding_agent/settings_manager_test.exs`
+- `apps/coding_agent/test/coding_agent/task_store_server_test.exs`
+- `apps/lemon_core/test/lemon_core/config_cache_error_test.exs`
+- `apps/lemon_router/lib/lemon_router/run_process.ex`
+
+**Commits made/reviewed:**
+- `8518dc1a` - Add new LLM model providers: Mistral, Cerebras, DeepSeek, Qwen, MiniMax, Z.ai
+- `b949de45` - Update JANITOR.md with new LLM provider feature enhancement log
+- `ee2ee7db` - test: Add tests for previously untested modules
+- `77e79387` - docs: Update JANITOR.md with test expansion work log
+- `d9edca5e` - refactor: Replace elem/2 anti-patterns with pattern matching
+- `3e056434` - docs: Update JANITOR.md with elem/2 refactoring
+- `60b4ef83` - fix: resolve issues from Kimi tasks
+
+**Total progress (verification):**
+- Full umbrella run: `mix test` passed.
+- Per-app totals from passing run:
+  - `lemon_core`: 765 tests
+  - `lemon_channels`: 121 tests
+  - `ai`: 1,368 tests
+  - `agent_core`: 165 properties, 1,552 tests
+  - `lemon_skills`: 106 tests
+  - `coding_agent`: 2,910 tests
+  - `market_intel`: 2 tests
+  - `coding_agent_ui`: 152 tests
+  - `lemon_gateway`: 1,407 tests
+  - `lemon_router`: 176 tests
+  - `lemon_web`: 4 tests
+  - `lemon_automation`: 124 tests
+  - `lemon_control_plane`: 435 tests
+- Aggregate tests: **9,122 tests**, **0 failures** (plus **165 properties** passing).
+
+**Next run should focus on:**
+- Harden singleton server APIs to avoid DETS ownership ambiguity when secondary named servers are started in tests.
+- Add explicit regression tests for `Ai.Error` rate-limit timestamp parsing semantics.
+- Continue reducing warning/noise in umbrella test output to make true regressions easier to spot.
+
+---
+
 ### 2025-02-20 - Feature Enhancement: Port New LLM Model Providers from Pi
 **Work Area**: Feature Enhancement
 

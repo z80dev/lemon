@@ -19,6 +19,7 @@ defmodule LemonCore.RunRequest do
           prompt: term(),
           queue_mode: queue_mode(),
           engine_id: term(),
+          model: term(),
           meta: map(),
           cwd: term(),
           tool_policy: map() | nil
@@ -30,6 +31,7 @@ defmodule LemonCore.RunRequest do
             prompt: nil,
             queue_mode: :collect,
             engine_id: nil,
+            model: nil,
             meta: %{},
             cwd: nil,
             tool_policy: nil
@@ -63,6 +65,7 @@ defmodule LemonCore.RunRequest do
       prompt: normalize_prompt(field(params, :prompt)),
       queue_mode: normalize_queue_mode(field(params, :queue_mode)),
       engine_id: normalize_engine_id(field(params, :engine_id)),
+      model: normalize_model(field(params, :model)),
       meta: normalize_meta(field(params, :meta)),
       cwd: normalize_cwd(field(params, :cwd)),
       tool_policy: normalize_tool_policy(field(params, :tool_policy))
@@ -96,6 +99,10 @@ defmodule LemonCore.RunRequest do
   @spec normalize_engine_id(term()) :: term()
   def normalize_engine_id(engine_id) when engine_id in [nil, false], do: nil
   def normalize_engine_id(engine_id), do: engine_id
+
+  @spec normalize_model(term()) :: term()
+  def normalize_model(model) when model in [nil, false], do: nil
+  def normalize_model(model), do: model
 
   @spec normalize_meta(term()) :: map()
   def normalize_meta(meta) when is_map(meta), do: meta

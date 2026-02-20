@@ -65,6 +65,9 @@ defmodule LemonChannels.Adapters.XAPI.ClientTest do
       send(test_pid, {:req, conn.request_path, conn.query_string})
 
       case conn.request_path do
+        "/2/oauth2/token" ->
+          oauth_refresh_response(conn)
+
         "/2/users/2022351619589873664/mentions" ->
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
@@ -93,6 +96,9 @@ defmodule LemonChannels.Adapters.XAPI.ClientTest do
       send(test_pid, {:req, conn.request_path, conn.query_string})
 
       case conn.request_path do
+        "/2/oauth2/token" ->
+          oauth_refresh_response(conn)
+
         "/2/users/me" ->
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
@@ -129,6 +135,9 @@ defmodule LemonChannels.Adapters.XAPI.ClientTest do
       send(test_pid, {:req, conn.request_path, conn.query_string})
 
       case conn.request_path do
+        "/2/oauth2/token" ->
+          oauth_refresh_response(conn)
+
         "/2/users/by/username/samplebot" ->
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
@@ -166,6 +175,9 @@ defmodule LemonChannels.Adapters.XAPI.ClientTest do
       send(test_pid, {:req, conn.request_path, conn.query_string})
 
       case conn.request_path do
+        "/2/oauth2/token" ->
+          oauth_refresh_response(conn)
+
         "/2/users/by/username/configured_handle" ->
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
@@ -192,6 +204,20 @@ defmodule LemonChannels.Adapters.XAPI.ClientTest do
 
     refute_received {:req, "/2/users/me"}
     refute_received {:req, "/2/users/me/mentions"}
+  end
+
+  defp oauth_refresh_response(conn) do
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.send_resp(
+      200,
+      Jason.encode!(%{
+        "access_token" => "refreshed-access-token",
+        "refresh_token" => "refreshed-refresh-token",
+        "token_type" => "Bearer",
+        "expires_in" => 7200
+      })
+    )
   end
 
   defp configure_oauth2(opts \\ []) do

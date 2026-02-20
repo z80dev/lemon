@@ -54,7 +54,7 @@ defmodule CodingAgent.Tools.Agent do
           },
           "async" => %{
             "type" => "boolean",
-            "description" => "When true (default), return immediately with task_id"
+            "description" => "When true (default), run in background and return task_id immediately. ALWAYS use async=true unless you absolutely must wait for the result before continuing."
           },
           "auto_followup" => %{
             "type" => "boolean",
@@ -79,6 +79,10 @@ defmodule CodingAgent.Tools.Agent do
           "engine_id" => %{
             "type" => "string",
             "description" => "Optional engine override for delegated run"
+          },
+          "model" => %{
+            "type" => "string",
+            "description" => "Optional model override for delegated run"
           },
           "tool_policy" => %{
             "type" => "object",
@@ -292,6 +296,7 @@ defmodule CodingAgent.Tools.Agent do
         prompt: validated.prompt,
         queue_mode: validated.queue_mode,
         engine_id: validated.engine_id,
+        model: validated.model,
         cwd: validated.cwd || cwd,
         tool_policy: validated.tool_policy,
         meta: meta
@@ -605,6 +610,7 @@ defmodule CodingAgent.Tools.Agent do
     meta = Map.get(params, "meta")
     cwd = Map.get(params, "cwd")
     engine_id = Map.get(params, "engine_id")
+    model = Map.get(params, "model")
 
     cond do
       not is_binary(agent_id) ->
@@ -643,6 +649,9 @@ defmodule CodingAgent.Tools.Agent do
       not is_nil(engine_id) and not is_binary(engine_id) ->
         {:error, "engine_id must be a string"}
 
+      not is_nil(model) and not is_binary(model) ->
+        {:error, "model must be a string"}
+
       true ->
         {:ok,
          %{
@@ -658,7 +667,8 @@ defmodule CodingAgent.Tools.Agent do
            tool_policy: tool_policy,
            meta: meta || %{},
            cwd: cwd,
-           engine_id: engine_id
+           engine_id: engine_id,
+           model: normalize_optional_string(model)
          }}
     end
   end
@@ -833,8 +843,27 @@ defmodule CodingAgent.Tools.Agent do
 
   defp build_description do
     """
-    Delegate work to another configured Lemon agent. Supports async submit+poll and sync submit+wait.
-    Useful for oracle/reviewer-style agent-to-agent workflows.
+    Delegate work to another Lemon agent. **PREFERRED for most work** - use this instead of doing tasks yourself.
+
+    **Default behavior (recommended):** async=true means the task runs in background and notifies you when done. This keeps the user conversation flowing smoothly without blocking.
+
+    **Agent selection:**
+    - Default: use the same agent_id as the current session (matches your profile/capabilities)
+    - Specialized tasks: choose a different agent if the work requires different tools/privileges
+    - Review/oracle patterns: delegate to a specific agent for independent verification
+
+    **Usage patterns:**
+    - Fire-and-forget: async=true, auto_followup=true (you'll get notified when done)
+    - Check later: async=true, then poll with action=poll and task_id
+    - Wait for result: async=false (blocks until completion - use sparingly for simple/quick tasks only)
+
+    **Key parameters:**
+    - async: true (default) = non-blocking, false = blocking/wait
+    - auto_followup: true (default) = completion forwards back to this session
+    - queue_mode: collect (default), followup, steer, steer_backlog, interrupt
+    - model: optional model override (e.g., "gemini-2.5-pro" for complex tasks)
+
+    Use this tool liberally to parallelize work and keep user interactions responsive.
     """
     |> String.trim()
   end
@@ -844,7 +873,7 @@ defmodule CodingAgent.Tools.Agent do
 
     base = %{
       "type" => "string",
-      "description" => "Target agent id for action=run"
+      "description" => "Target agent id for action=run. DEFAULT: use the same agent_id as this session (inherits your profile, tools, and capabilities)."
     }
 
     if ids == [] do

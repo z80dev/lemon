@@ -112,6 +112,7 @@ defmodule LemonRouter.Router do
         prompt: control_param(params, :prompt),
         queue_mode: control_param(params, :queue_mode),
         engine_id: control_param(params, :engine_id),
+        model: control_param(params, :model),
         cwd: control_param(params, :cwd),
         tool_policy: control_param(params, :tool_policy),
         meta:

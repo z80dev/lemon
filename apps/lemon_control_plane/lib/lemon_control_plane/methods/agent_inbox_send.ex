@@ -49,6 +49,7 @@ defmodule LemonControlPlane.Methods.AgentInboxSend do
       session: session_selector,
       queue_mode: parse_queue_mode(get_param(params, "queueMode")),
       engine_id: get_param(params, "engineId"),
+      model: get_param(params, "model"),
       cwd: get_param(params, "cwd"),
       tool_policy: get_param(params, "toolPolicy"),
       meta: normalize_map(get_param(params, "meta")),

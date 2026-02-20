@@ -59,6 +59,7 @@ defmodule CodingAgent.Tools.AgentTest do
     assert tool.label == "Delegate To Agent"
     assert is_function(tool.execute, 4)
     assert tool.parameters["properties"]["action"]["enum"] == ["run", "poll"]
+    assert Map.has_key?(tool.parameters["properties"], "model")
     assert tool.parameters["properties"]["agent_id"]["enum"] == ["coder", "default", "oracle"]
   end
 
@@ -69,6 +70,7 @@ defmodule CodingAgent.Tools.AgentTest do
         %{
           "agent_id" => "oracle",
           "prompt" => "Answer with hello",
+          "model" => "openai:gpt-4.1",
           "async" => true,
           "auto_followup" => false
         },
@@ -89,6 +91,7 @@ defmodule CodingAgent.Tools.AgentTest do
     assert_receive {:router_submit, %RunRequest{} = req, 1}
     assert req.agent_id == "oracle"
     assert req.prompt == "Answer with hello"
+    assert req.model == "openai:gpt-4.1"
     assert req.session_key == result.details.session_key
 
     completed =

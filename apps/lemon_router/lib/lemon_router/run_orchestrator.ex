@@ -15,7 +15,7 @@ defmodule LemonRouter.RunOrchestrator do
 
   require Logger
 
-  alias LemonRouter.{AgentProfiles, Policy, RunProcess}
+  alias LemonRouter.{AgentProfiles, ModelSelection, Policy, RunProcess}
   alias LemonCore.{RunRequest, SessionKey}
   alias LemonChannels.Types.ResumeToken
   alias LemonGateway.Cwd, as: GatewayCwd
@@ -40,6 +40,7 @@ defmodule LemonRouter.RunOrchestrator do
   - `:prompt` - User prompt text
   - `:queue_mode` - Queue mode (:collect, :followup, :steer, :steer_backlog, :interrupt)
   - `:engine_id` - Optional engine override
+  - `:model` - Optional model override (independent of profile binding)
   - `:meta` - Additional metadata
   - `:cwd` - Optional cwd override
   - `:tool_policy` - Optional tool policy override
@@ -124,6 +125,7 @@ defmodule LemonRouter.RunOrchestrator do
     prompt = params.prompt
     queue_mode = params.queue_mode || :collect
     engine_id = params.engine_id
+    request_model = params.model
     meta = params.meta || %{}
 
     # Extract cwd and tool_policy overrides from params
@@ -186,34 +188,34 @@ defmodule LemonRouter.RunOrchestrator do
       profile_model = map_get(agent_profile, :model)
       profile_default_engine = map_get(agent_profile, :default_engine)
       profile_system_prompt = map_get(agent_profile, :system_prompt)
+      default_model = Application.get_env(:lemon_router, :default_model)
 
-      explicit_model = map_get(meta, :model)
+      explicit_model = request_model || map_get(meta, :model)
       explicit_system_prompt = map_get(meta, :system_prompt)
 
-      resolved_model = explicit_model || session_model || profile_model
-      resolved_model_engine = map_model_to_engine(resolved_model)
+      selection =
+        ModelSelection.resolve(%{
+          explicit_model: explicit_model,
+          meta_model: map_get(meta, :model),
+          session_model: session_model,
+          profile_model: profile_model,
+          default_model: default_model,
+          explicit_engine_id: engine_id,
+          profile_default_engine: profile_default_engine,
+          resume_engine: resume && resume.engine
+        })
+
+      resolved_model = selection.model
       resolved_thinking_level = session_thinking_level
       resolved_system_prompt = explicit_system_prompt || profile_system_prompt
 
-      # Resolve engine_id: explicit param > model-as-engine (if engine-like) > profile default > nil
-      resolved_engine_id =
-        cond do
-          match?(%ResumeToken{}, resume) ->
-            # Resume must win; otherwise scheduler won't apply the resume token.
-            resume.engine
+      if is_binary(selection.warning) do
+        Logger.warning(
+          "Model/engine mismatch for run_id=#{inspect(run_id)}: #{selection.warning}"
+        )
+      end
 
-          is_binary(engine_id) and engine_id != "" ->
-            engine_id
-
-          is_binary(resolved_model_engine) and resolved_model_engine != "" ->
-            resolved_model_engine
-
-          is_binary(profile_default_engine) and profile_default_engine != "" ->
-            profile_default_engine
-
-          true ->
-            nil
-        end
+      resolved_engine_id = selection.engine_id
 
       # Build gateway job
       enriched_meta =
@@ -224,6 +226,7 @@ defmodule LemonRouter.RunOrchestrator do
           thinking_level: resolved_thinking_level,
           model: resolved_model
         })
+        |> maybe_put(:model_resolution_warning, selection.warning)
         |> maybe_put(:system_prompt, resolved_system_prompt)
 
       job = %LemonGateway.Types.Job{
@@ -307,45 +310,6 @@ defmodule LemonRouter.RunOrchestrator do
   rescue
     _ -> %{}
   end
-
-  # Treat model strings as engine IDs only when they clearly target a configured
-  # engine ("codex", "codex:model", etc.). Provider/model specs like
-  # "openai-codex:gpt-5.3-codex" should not be interpreted as engine IDs.
-  defp map_model_to_engine(model) when is_binary(model) do
-    normalized = String.trim(model)
-
-    cond do
-      normalized == "" ->
-        nil
-
-      known_engine_id?(normalized) ->
-        normalized
-
-      true ->
-        case String.split(normalized, ":", parts: 2) do
-          [prefix, _rest] when is_binary(prefix) and byte_size(prefix) > 0 ->
-            if known_engine_id?(prefix), do: normalized, else: nil
-
-          _ ->
-            nil
-        end
-    end
-  end
-
-  defp map_model_to_engine(_), do: nil
-
-  defp known_engine_id?(engine_id) when is_binary(engine_id) do
-    case LemonGateway.EngineRegistry.get_engine(engine_id) do
-      nil -> false
-      _ -> true
-    end
-  rescue
-    _ -> false
-  catch
-    :exit, _ -> false
-  end
-
-  defp known_engine_id?(_), do: false
 
   defp get_agent_profile(agent_id) when is_binary(agent_id) do
     if agent_profile_exists?(agent_id) do

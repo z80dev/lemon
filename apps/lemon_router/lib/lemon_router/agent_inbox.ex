@@ -40,7 +40,7 @@ defmodule LemonRouter.AgentInbox do
   - `:session` - `:latest | :new | session_key` (default: `:latest`)
   - `:to` / `:endpoint` / `:route` - primary destination
   - `:deliver_to` - optional fanout destinations (endpoint aliases, shorthand, or route maps)
-  - `:queue_mode`, `:engine_id`, `:cwd`, `:tool_policy`, `:meta`, `:source`
+  - `:queue_mode`, `:engine_id`, `:model`, `:cwd`, `:tool_policy`, `:meta`, `:source`
   """
   @spec send(binary(), binary(), keyword()) ::
           {:ok,
@@ -360,6 +360,7 @@ defmodule LemonRouter.AgentInbox do
         prompt: prompt,
         queue_mode: normalize_queue_mode(opts[:queue_mode]),
         engine_id: opts[:engine_id],
+        model: opts[:model],
         cwd: opts[:cwd],
         tool_policy: opts[:tool_policy],
         meta: meta

@@ -589,6 +589,72 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert_receive {:captured_job, job}, 500
       assert job.engine_id == "explicit:engine"
     end
+
+    test "top-level request model overrides profile model without requiring meta" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+
+      {:ok, orchestrator_pid} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: run_supervisor,
+          run_process_module: CapturingRunProcess,
+          run_process_opts: %{notify_pid: self()}
+        )
+
+      on_exit(fn ->
+        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+      end)
+
+      :sys.replace_state(LemonRouter.AgentProfiles, fn state ->
+        %{state | profiles: profile_map_with_oracle("profile-model")}
+      end)
+
+      params = %{
+        origin: :control_plane,
+        session_key: "agent:oracle:main",
+        agent_id: "oracle",
+        prompt: "Hello oracle",
+        model: "request-model"
+      }
+
+      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params))
+      assert_receive {:captured_job, job}, 500
+      assert job.meta[:model] == "request-model"
+    end
+
+    test "records warning when explicit engine conflicts with model-implied engine" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+
+      {:ok, orchestrator_pid} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: run_supervisor,
+          run_process_module: CapturingRunProcess,
+          run_process_opts: %{notify_pid: self()}
+        )
+
+      on_exit(fn ->
+        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+      end)
+
+      :sys.replace_state(LemonRouter.AgentProfiles, fn state ->
+        %{state | profiles: profile_map_with_oracle()}
+      end)
+
+      params = %{
+        origin: :control_plane,
+        session_key: "agent:oracle:main",
+        agent_id: "oracle",
+        prompt: "Hello oracle",
+        engine_id: "claude",
+        model: "codex:gpt-5"
+      }
+
+      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params))
+      assert_receive {:captured_job, job}, 500
+      assert job.engine_id == "claude"
+      assert is_binary(job.meta[:model_resolution_warning])
+    end
   end
 
   defp request(attrs), do: RunRequest.new(attrs)

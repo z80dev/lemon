@@ -48,6 +48,12 @@
     max_age_days: 60
   },
   %{
+    path: "docs/model-selection-decoupling.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-02-20],
+    max_age_days: 90
+  },
+  %{
     path: "docs/quality_harness.md",
     owner: "@z80",
     last_reviewed: ~D[2026-02-13],

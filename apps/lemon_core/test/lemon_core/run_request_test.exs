@@ -17,6 +17,7 @@ defmodule LemonCore.RunRequestTest do
       assert request.prompt == "hello"
       assert request.queue_mode == :collect
       assert request.engine_id == nil
+      assert request.model == nil
       assert request.meta == %{}
       assert request.cwd == nil
       assert request.tool_policy == nil
@@ -31,6 +32,7 @@ defmodule LemonCore.RunRequestTest do
           "prompt" => "go",
           "queue_mode" => :interrupt,
           "engine_id" => "openai:gpt-4o",
+          "model" => "openai:gpt-4.1",
           "meta" => %{"foo" => "bar"},
           "cwd" => "/tmp",
           "tool_policy" => %{"sandbox" => true}
@@ -42,6 +44,7 @@ defmodule LemonCore.RunRequestTest do
       assert request.prompt == "go"
       assert request.queue_mode == :interrupt
       assert request.engine_id == "openai:gpt-4o"
+      assert request.model == "openai:gpt-4.1"
       assert request.meta == %{"foo" => "bar"}
       assert request.cwd == "/tmp"
       assert request.tool_policy == %{"sandbox" => true}
@@ -61,6 +64,12 @@ defmodule LemonCore.RunRequestTest do
       assert request.queue_mode == :collect
       assert request.meta == %{}
       assert request.tool_policy == nil
+    end
+
+    test "normalizes blank or false model to nil" do
+      assert RunRequest.normalize(%{model: nil}).model == nil
+      assert RunRequest.normalize(%{model: false}).model == nil
+      assert RunRequest.normalize(%{"model" => "gpt-5"}).model == "gpt-5"
     end
 
     test "falls back to default agent_id when session_key is missing/invalid" do

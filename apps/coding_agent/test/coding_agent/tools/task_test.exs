@@ -26,6 +26,8 @@ defmodule CodingAgent.Tools.TaskTest do
       assert Map.has_key?(props, "prompt")
       assert Map.has_key?(props, "task_id")
       assert Map.has_key?(props, "engine")
+      assert Map.has_key?(props, "model")
+      assert Map.has_key?(props, "thinking_level")
       assert Map.has_key?(props, "role")
       assert Map.has_key?(props, "async")
       assert props["description"]["description"] =~ "3-5 words"
@@ -208,6 +210,42 @@ defmodule CodingAgent.Tools.TaskTest do
 
       assert {:error, "Engine must be one of: internal, codex, claude, kimi, opencode, pi"} =
                result
+    end
+
+    test "returns error when model is not a string" do
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Test task",
+            "prompt" => "do something",
+            "model" => 123
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
+
+      assert {:error, "Model must be a string"} = result
+    end
+
+    test "returns error when thinking_level is not a string" do
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Test task",
+            "prompt" => "do something",
+            "thinking_level" => 42
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
+
+      assert {:error, "thinking_level must be a string"} = result
     end
   end
 

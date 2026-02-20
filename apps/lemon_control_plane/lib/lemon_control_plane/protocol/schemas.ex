@@ -92,7 +92,8 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "sessionKey" => :string,
         "agentId" => :string,
         "queueMode" => :string,
-        "engineId" => :string
+        "engineId" => :string,
+        "model" => :string
       }
     },
     "agent.identity.get" => %{
@@ -117,6 +118,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "sessionTag" => :string,
         "queueMode" => :string,
         "engineId" => :string,
+        "model" => :string,
         "cwd" => :string,
         "toolPolicy" => :map,
         "meta" => :map,

@@ -13,7 +13,8 @@ defmodule LemonControlPlane.Methods.Agent do
         "prompt" => "What is the weather?",           # Required: the prompt text
         "agent_id" => "default",                      # Optional: agent ID (default: "default")
         "session_key" => "agent:default:main",        # Optional: session key (auto-generated if not provided)
-        "engine_id" => "claude-sonnet",               # Optional: engine/model override
+        "engine_id" => "claude",                      # Optional: engine override
+        "model" => "openai:gpt-4.1",                 # Optional: model override
         "queue_mode" => "collect",                    # Optional: queue mode (collect, followup, steer, interrupt)
         "cwd" => "/path/to/project",                  # Optional: working directory
         "tool_policy" => %{...},                      # Optional: tool policy overrides
@@ -73,6 +74,7 @@ defmodule LemonControlPlane.Methods.Agent do
            agent_id: Map.get(params, "agent_id", "default"),
            session_key: Map.get(params, "session_key"),
            engine_id: Map.get(params, "engine_id"),
+           model: Map.get(params, "model"),
            queue_mode: parse_queue_mode(Map.get(params, "queue_mode")),
            cwd: Map.get(params, "cwd"),
            tool_policy: Map.get(params, "tool_policy"),
@@ -140,6 +142,7 @@ defmodule LemonControlPlane.Methods.Agent do
         prompt: params.prompt,
         queue_mode: params.queue_mode,
         engine_id: params.engine_id,
+        model: params.model,
         cwd: params.cwd,
         tool_policy: params.tool_policy,
         meta: %{

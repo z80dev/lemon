@@ -172,6 +172,21 @@ defmodule CodingAgent.SessionExtensionsTest do
     :code.delete(module)
   end
 
+  defp tool_names(tools), do: Enum.map(tools, & &1.name)
+
+  defp eventually(fun, attempts \\ 25, sleep_ms \\ 20)
+
+  defp eventually(fun, attempts, _sleep_ms) when attempts <= 0, do: fun.()
+
+  defp eventually(fun, attempts, sleep_ms) do
+    if fun.() do
+      true
+    else
+      Process.sleep(sleep_ms)
+      eventually(fun, attempts - 1, sleep_ms)
+    end
+  end
+
   # ============================================================================
   # Extension Loading Tests
   # ============================================================================
@@ -579,8 +594,12 @@ defmodule CodingAgent.SessionExtensionsTest do
       module = create_extension_file(tmp_dir, "TestReloadExtension", tools: v1_tools)
 
       session = start_session(cwd: tmp_dir)
-      initial_tool_names = Session.get_state(session).tools |> Enum.map(& &1.name)
-      assert "reload_tool_v1" in initial_tool_names
+
+      assert eventually(fn ->
+               Session.get_state(session).tools
+               |> tool_names()
+               |> Enum.member?("reload_tool_v1")
+             end)
 
       v2_tools = """
       [
@@ -599,9 +618,18 @@ defmodule CodingAgent.SessionExtensionsTest do
       assert {:ok, report} = Session.reload_extensions(session)
       assert report.total_loaded >= 1
 
-      reloaded_tool_names = Session.get_state(session).tools |> Enum.map(& &1.name)
-      assert "reload_tool_v2" in reloaded_tool_names
-      refute "reload_tool_v1" in reloaded_tool_names
+      assert eventually(fn ->
+               Session.get_state(session).tools
+               |> tool_names()
+               |> Enum.member?("reload_tool_v2")
+             end)
+
+      assert eventually(fn ->
+               Session.get_state(session).tools
+               |> tool_names()
+               |> Enum.member?("reload_tool_v1")
+               |> Kernel.not()
+             end)
 
       cleanup_module(module)
     end
