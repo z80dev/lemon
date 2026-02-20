@@ -539,6 +539,10 @@ defmodule Ai.ModelsTest do
       assert Models.get_model(:xai, "grok-3-mini-fast") != nil
       assert Models.get_model(:xai, "grok-3-mini-fast-latest") != nil
       assert Models.get_model(:xai, "grok-3-mini-latest") != nil
+      assert Models.get_model(:xai, "grok-4") != nil
+      assert Models.get_model(:xai, "grok-4-1-fast") != nil
+      assert Models.get_model(:xai, "grok-4-1-fast-non-reasoning") != nil
+      assert Models.get_model(:xai, "grok-4-fast") != nil
     end
   end
 
@@ -684,6 +688,78 @@ defmodule Ai.ModelsTest do
       assert model.cost.input == 0.6
       assert model.cost.output == 4.0
       assert model.cost.cache_read == 0.15
+      assert model.cost.cache_write == 0.0
+      assert model.context_window == 131_072
+      assert model.max_tokens == 8192
+    end
+
+    test "grok 4 has correct specs" do
+      model = Models.get_model(:xai, "grok-4")
+
+      assert model.id == "grok-4"
+      assert model.name == "Grok 4"
+      assert model.provider == :xai
+      assert model.api == :openai_completions
+      assert model.base_url == "https://api.x.ai/v1"
+      assert model.reasoning == true
+      assert model.input == [:text]
+      assert model.cost.input == 3.0
+      assert model.cost.output == 15.0
+      assert model.cost.cache_read == 0.75
+      assert model.cost.cache_write == 0.0
+      assert model.context_window == 256_000
+      assert model.max_tokens == 64_000
+    end
+
+    test "grok 4.1 fast has correct specs" do
+      model = Models.get_model(:xai, "grok-4-1-fast")
+
+      assert model.id == "grok-4-1-fast"
+      assert model.name == "Grok 4.1 Fast"
+      assert model.provider == :xai
+      assert model.api == :openai_completions
+      assert model.base_url == "https://api.x.ai/v1"
+      assert model.reasoning == true
+      assert model.input == [:text, :image]
+      assert model.cost.input == 0.2
+      assert model.cost.output == 0.5
+      assert model.cost.cache_read == 0.05
+      assert model.cost.cache_write == 0.0
+      assert model.context_window == 2_000_000
+      assert model.max_tokens == 30_000
+    end
+
+    test "grok 4.1 fast non-reasoning has correct specs" do
+      model = Models.get_model(:xai, "grok-4-1-fast-non-reasoning")
+
+      assert model.id == "grok-4-1-fast-non-reasoning"
+      assert model.name == "Grok 4.1 Fast (Non-Reasoning)"
+      assert model.provider == :xai
+      assert model.api == :openai_completions
+      assert model.base_url == "https://api.x.ai/v1"
+      assert model.reasoning == false
+      assert model.input == [:text, :image]
+      assert model.cost.input == 0.2
+      assert model.cost.output == 0.5
+      assert model.cost.cache_read == 0.05
+      assert model.cost.cache_write == 0.0
+      assert model.context_window == 2_000_000
+      assert model.max_tokens == 30_000
+    end
+
+    test "grok 4 fast has correct specs" do
+      model = Models.get_model(:xai, "grok-4-fast")
+
+      assert model.id == "grok-4-fast"
+      assert model.name == "Grok 4 Fast"
+      assert model.provider == :xai
+      assert model.api == :openai_completions
+      assert model.base_url == "https://api.x.ai/v1"
+      assert model.reasoning == true
+      assert model.input == [:text, :image]
+      assert model.cost.input == 5.0
+      assert model.cost.output == 25.0
+      assert model.cost.cache_read == 1.25
       assert model.cost.cache_write == 0.0
       assert model.context_window == 131_072
       assert model.max_tokens == 8192

@@ -1276,6 +1276,54 @@ defmodule Ai.Models do
       cost: %ModelCost{input: 0.3, output: 0.5, cache_read: 0.075, cache_write: 0.0},
       context_window: 131_072,
       max_tokens: 8192
+    },
+    "grok-4" => %Model{
+      id: "grok-4",
+      name: "Grok 4",
+      api: :openai_completions,
+      provider: :xai,
+      base_url: "https://api.x.ai/v1",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 3.0, output: 15.0, cache_read: 0.75, cache_write: 0.0},
+      context_window: 256_000,
+      max_tokens: 64_000
+    },
+    "grok-4-1-fast" => %Model{
+      id: "grok-4-1-fast",
+      name: "Grok 4.1 Fast",
+      api: :openai_completions,
+      provider: :xai,
+      base_url: "https://api.x.ai/v1",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.2, output: 0.5, cache_read: 0.05, cache_write: 0.0},
+      context_window: 2_000_000,
+      max_tokens: 30_000
+    },
+    "grok-4-1-fast-non-reasoning" => %Model{
+      id: "grok-4-1-fast-non-reasoning",
+      name: "Grok 4.1 Fast (Non-Reasoning)",
+      api: :openai_completions,
+      provider: :xai,
+      base_url: "https://api.x.ai/v1",
+      reasoning: false,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.2, output: 0.5, cache_read: 0.05, cache_write: 0.0},
+      context_window: 2_000_000,
+      max_tokens: 30_000
+    },
+    "grok-4-fast" => %Model{
+      id: "grok-4-fast",
+      name: "Grok 4 Fast",
+      api: :openai_completions,
+      provider: :xai,
+      base_url: "https://api.x.ai/v1",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 5.0, output: 25.0, cache_read: 1.25, cache_write: 0.0},
+      context_window: 131_072,
+      max_tokens: 8192
     }
   }
 
