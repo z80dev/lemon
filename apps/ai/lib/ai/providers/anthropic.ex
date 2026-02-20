@@ -116,10 +116,10 @@ defmodule Ai.Providers.Anthropic do
       request_summary =
         summarize_http_request(trace_id, model, context, opts, url, body, messages, history_info)
 
-      HttpTrace.log("anthropic", "request_start", request_summary)
+      _ = HttpTrace.log("anthropic", "request_start", request_summary)
 
       if messages == [] do
-        HttpTrace.log_error("anthropic", "request_invalid_empty_messages", request_summary)
+        _ = HttpTrace.log_error("anthropic", "request_invalid_empty_messages", request_summary)
 
         error_output =
           %{

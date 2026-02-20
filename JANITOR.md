@@ -3220,3 +3220,118 @@ Refactored the MarketIntel Commentary Pipeline module (`apps/market_intel/lib/ma
 - Add property-based tests for prompt generation
 - Consider adding dialyzer for static type checking
 - Add integration tests with mocked AI responses
+
+
+### 2026-02-20 - Test Expansion: Additional Untested Modules
+**Work Area**: Test Expansion
+
+**What was done:**
+- Created tests for previously untested modules in lemon_core:
+
+**New test files created:**
+- **`LemonCore`** (13 tests):
+  - Module existence and documentation verification
+  - All referenced sub-modules existence (Event, Bus, Id, Idempotency, Store, Telemetry, Clock, Config)
+  - OTP application verification
+
+- **`LemonCore.Store.Backend`** (18 tests):
+  - Behaviour callback verification (init, put, get, delete, list)
+  - Mock backend implementation for testing the behaviour contract
+  - CRUD operation tests through mock backend
+  - State immutability tests
+  - Edge cases (nil values, complex key types, complex value types)
+
+- **`Mix.Tasks.Lemon.Secrets.Init`** (11 tests):
+  - Module attribute verification
+  - Error handling tests
+  - Mix.Task integration tests
+  - MasterKey integration tests
+
+- **`Mix.Tasks.Lemon.Secrets.Set`** (25 tests):
+  - Argument parsing with positional and named args
+  - Success cases with mocked Secrets
+  - Error cases (missing name/value, empty strings, master key errors)
+  - Edge cases (extra arguments, mixed positional/named)
+
+- **`Mix.Tasks.Lemon.Secrets.List`** (12 tests):
+  - Empty secrets list output
+  - Listing with mocked entries
+  - Output format verification
+  - Expiration display handling
+
+- **`Mix.Tasks.Lemon.Secrets.Delete`** (13 tests):
+  - Argument parsing with positional and named args
+  - Successful deletion
+  - Error cases (missing name, empty strings)
+  - Usage error verification
+
+- **`Mix.Tasks.Lemon.Secrets.Status`** (10 tests):
+  - Status output formatting
+  - Boolean field display
+  - Different source types (keychain, file, none)
+
+- **`Mix.Tasks.Lemon.Cleanup`** (17 tests):
+  - Module attribute verification
+  - Dry-run mode output
+  - --apply mode output
+  - --retention-days option
+  - --root option
+  - Empty and non-empty results handling
+
+- **`Mix.Tasks.Lemon.Store.MigrateJsonlToSqlite`** (12 tests):
+  - Module metadata verification
+  - --dry-run mode
+  - --include-runs flag
+  - --replace flag
+  - Error handling for missing paths
+  - Custom paths with --jsonl-path and --sqlite-path
+  - Environment variable handling (LEMON_STORE_PATH)
+
+**Bug fixes made:**
+- Fixed compilation error in `apps/ai/lib/ai/providers/anthropic.ex` - unused variable warning
+- Fixed `Code.fetch_docs` tuple pattern matching in existing tests (7-tuple vs 6-tuple)
+
+**Total: 131 new tests added**
+
+**Files changed:**
+- `apps/lemon_core/test/lemon_core_test.exs` (new - 13 tests)
+- `apps/lemon_core/test/lemon_core/store/backend_test.exs` (new - 18 tests)
+- `apps/lemon_core/test/mix/tasks/lemon.secrets.init_test.exs` (new - 11 tests)
+- `apps/lemon_core/test/mix/tasks/lemon.secrets.set_test.exs` (new - 25 tests)
+- `apps/lemon_core/test/mix/tasks/lemon.secrets.list_test.exs` (new - 12 tests)
+- `apps/lemon_core/test/mix/tasks/lemon.secrets.delete_test.exs` (new - 13 tests)
+- `apps/lemon_core/test/mix/tasks/lemon.secrets.status_test.exs` (new - 10 tests)
+- `apps/lemon_core/test/mix/tasks/lemon.cleanup_test.exs` (new - 17 tests)
+- `apps/lemon_core/test/mix/tasks/lemon.store.migrate_jsonl_to_sqlite_test.exs` (new - 12 tests)
+- `apps/lemon_core/test/mix/tasks/lemon.quality_test.exs` (fixed - Code.fetch_docs tuple)
+- `apps/lemon_core/test/mix/tasks/lemon.secrets.delete_test.exs` (fixed - Code.fetch_docs tuple)
+- `apps/ai/lib/ai/providers/anthropic.ex` (fixed - unused variable)
+
+**Commits:**
+- (to be committed)
+
+**What worked:**
+- Following existing test patterns from similar modules
+- Using ExUnit.CaptureIO for testing Mix shell output
+- Using temporary directories for test isolation
+- Mocking external dependencies (MasterKey, Secrets)
+- Proper setup/teardown with on_exit callbacks
+
+**Test coverage improvements:**
+| Module | Tests Added |
+|--------|-------------|
+| LemonCore | 13 |
+| Store.Backend | 18 |
+| Mix.Tasks.Lemon.Secrets.Init | 11 |
+| Mix.Tasks.Lemon.Secrets.Set | 25 |
+| Mix.Tasks.Lemon.Secrets.List | 12 |
+| Mix.Tasks.Lemon.Secrets.Delete | 13 |
+| Mix.Tasks.Lemon.Secrets.Status | 10 |
+| Mix.Tasks.Lemon.Cleanup | 17 |
+| Mix.Tasks.Lemon.Store.MigrateJsonlToSqlite | 12 |
+| **Total** | **131** |
+
+**Next run should focus on:**
+- Continue adding tests for remaining untested modules
+- Add integration tests for store migration
+- Add tests for Store.Backend with actual backends (EtsBackend, JsonlBackend, SqliteBackend)

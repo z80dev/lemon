@@ -129,7 +129,7 @@ defmodule Mix.Tasks.Lemon.QualityTest do
       moduledoc = Code.fetch_docs(Mix.Tasks.Lemon.Quality)
 
       case moduledoc do
-        {:docs_v1, _, _, _, %{} = module_doc, _} ->
+        {:docs_v1, _, _, _, %{} = module_doc, _, _} ->
           doc = module_doc["en"]
           assert doc =~ "--validate-config"
 
