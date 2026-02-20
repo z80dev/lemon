@@ -62,6 +62,48 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ---
 
+### 2025-02-20 - Test Expansion: Tests for Untested Modules
+**Work Area**: Test Expansion
+
+**What was done:**
+- Identified untested modules in lemon_core and coding_agent apps
+- Created comprehensive tests for previously untested modules:
+
+| Module | Tests | Key Coverage |
+|--------|-------|--------------|
+| `LemonCore.ConfigCacheError` | 18 tests | Exception raising, rescue, struct fields |
+| `CodingAgent.SettingsManager` | 35 tests | Config loading, settings extraction, defaults |
+| `CodingAgent.BudgetEnforcer` | 9 tests | Budget checks, API call validation, error handling |
+| `CodingAgent.Extensions.Extension` | 15 tests | Behaviour callbacks, provider specs, optional callbacks |
+| `CodingAgent.RunGraphServer` | 37 tests | Server lifecycle, ETS/DETS management, cleanup |
+| `CodingAgent.TaskStoreServer` | 22 tests | Table management, persistence, concurrent access |
+
+**Total: 136 new tests added**
+
+**Files changed:**
+- `apps/lemon_core/test/lemon_core/config_cache_error_test.exs` (new - 18 tests)
+- `apps/coding_agent/test/coding_agent/settings_manager_test.exs` (new - 35 tests)
+- `apps/coding_agent/test/coding_agent/budget_enforcer_test.exs` (new - 9 tests)
+- `apps/coding_agent/test/coding_agent/extensions/extension_test.exs` (new - 15 tests)
+- `apps/coding_agent/test/coding_agent/run_graph_server_test.exs` (new - 37 tests)
+- `apps/coding_agent/test/coding_agent/task_store_server_test.exs` (new - 22 tests)
+
+**Commits:**
+- `ee2ee7db` - test: Add tests for previously untested modules
+
+**What worked:**
+- Using parallel subagents to create multiple test files simultaneously
+- Following existing test patterns (ExUnit.Case, async: false for stateful tests)
+- Proper setup/teardown with RunGraph.clear() for budget-related tests
+- Testing both success and error paths for GenServer-based modules
+
+**Notes:**
+- Some modules like BudgetEnforcer depend on RunGraph state - tests must create runs first
+- ETS tables with :named_table survive process exits in BEAM
+- DETS persistence tests require careful setup of temp directories
+
+---
+
 ### 2025-01-XX - Initial Setup
 - Created JANITOR.md log file
 - Scheduled cron job to run every 30 minutes
