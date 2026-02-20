@@ -261,6 +261,7 @@ Other launch modes:
   - [WASM Tool Support](#wasm-tool-support)
   - [Encrypted Secrets Store](#encrypted-secrets-store)
 - [Usage](#usage)
+- [Agent Inbox Messaging System](#agent-inbox-messaging-system)
 - [Development](#development)
 - [Documentation](#documentation)
 - [License](#license)
@@ -2155,6 +2156,162 @@ Long-name one-off eval:
 ```bash
 elixir --name lemon_probe@my-host.example.com --cookie "change-me" --rpc-eval "lemon_gateway@my-host.example.com" "IO.inspect(LemonGateway.Config.get(:default_engine))"
 ```
+
+## Agent Inbox Messaging System
+
+Lemon now has a BEAM-local inbox API and control-plane methods so you can message an agent from anywhere connected to the running node (remote shell, RPC eval, control plane client), while keeping output routing tied to channel context (for example Telegram chat/topic).
+
+### Core Concepts
+
+- **Agent identity**: every message targets an `agent_id` (for example `"default"`).
+- **Session selectors**:
+  - `:latest` picks the latest session for that agent/route.
+  - `:new` creates a new sub-session that preserves route context.
+  - explicit session key targets exactly one session.
+- **Routing target**:
+  - shorthand target string (for example `tg:-100123456/77`)
+  - endpoint alias (friendly name you define, like `"ops-room"`)
+  - route map (`%{channel_id: ..., peer_id: ..., thread_id: ...}`)
+- **Fanout**: `deliver_to` duplicates final output to extra routes.
+- **Queue semantics**: inbox messages default to `:followup` (same behavior class as async delegated completion pings), and can be overridden with `queue_mode: :collect | :steer | :interrupt`.
+
+### Discoverability and Phonebook
+
+List known Telegram rooms/topics (learned from inbound traffic) so aliases are easy to create:
+
+```elixir
+LemonRouter.list_agent_targets(channel_id: "telegram")
+# => [%{target: "tg:-100123456/77", label: "Release Room / Shipit", ...}]
+```
+
+List agent directory entries/sessions:
+
+```elixir
+LemonRouter.list_agent_directory(agent_id: "default", include_sessions: true, limit: 20)
+LemonRouter.list_agent_sessions(agent_id: "default", limit: 20)
+```
+
+Define friendly endpoint aliases:
+
+```elixir
+{:ok, endpoint} =
+  LemonRouter.set_agent_endpoint("default", "ops room", "tg:-100123456/77",
+    description: "Ops notifications"
+  )
+
+LemonRouter.list_agent_endpoints(agent_id: "default")
+LemonRouter.delete_agent_endpoint("default", "ops-room")
+```
+
+### Sending Inbox Messages (Elixir API)
+
+Send to latest Telegram conversation for the route:
+
+```elixir
+{:ok, result} =
+  LemonRouter.send_to_agent("default", "Status update: deploy done",
+    session: :latest,
+    to: "tg:-100123456/77",
+    source: :ops_console
+  )
+```
+
+Start a fresh sub-session on the same route:
+
+```elixir
+LemonRouter.send_to_agent("default", "Handle this as a new thread",
+  session: :new,
+  to: "tg:-100123456/77"
+)
+```
+
+Use alias + fanout:
+
+```elixir
+LemonRouter.send_to_agent("default", "Post-mortem summary is ready",
+  session: :latest,
+  to: "ops-room",
+  deliver_to: ["tg:123456789", "tg:-100987654/12"]
+)
+```
+
+Force immediate collect-mode behavior instead of follow-up:
+
+```elixir
+LemonRouter.send_to_agent("default", "Process immediately", queue_mode: :collect)
+```
+
+### Sending from Another Terminal
+
+Terminal 1:
+
+```bash
+./bin/lemon-gateway
+```
+
+Terminal 2 (interactive remote shell):
+
+```bash
+iex --sname lemon_attach --cookie lemon_gateway_dev_cookie --remsh "lemon_gateway@$(hostname -s)"
+```
+
+Then in the attached shell:
+
+```elixir
+LemonRouter.list_agent_targets(channel_id: "telegram")
+
+LemonRouter.send_to_agent("default", "Ping from remsh",
+  session: :latest,
+  to: "tg:-100123456/77",
+  source: :remsh
+)
+```
+
+One-off non-interactive send from terminal 2:
+
+```bash
+elixir --sname lemon_probe --cookie lemon_gateway_dev_cookie \
+  --rpc-eval "lemon_gateway@$(hostname -s)" \
+  'LemonRouter.send_to_agent("default", "Ping via rpc-eval", session: :latest, to: "tg:-100123456/77") |> IO.inspect()'
+```
+
+### Control Plane Methods
+
+These methods are available over LemonControlPlane RPC:
+
+- `agent.inbox.send`
+- `agent.targets.list`
+- `agent.directory.list`
+- `agent.endpoints.list`
+- `agent.endpoints.set`
+- `agent.endpoints.delete`
+
+`agent.inbox.send` example payload:
+
+```json
+{
+  "method": "agent.inbox.send",
+  "params": {
+    "agentId": "default",
+    "prompt": "Ping from control plane",
+    "sessionTag": "latest",
+    "to": "tg:-100123456/77",
+    "deliverTo": ["tg:123456789"]
+  }
+}
+```
+
+### Message Metadata (for Integrations)
+
+Inbox-submitted runs include metadata markers for downstream logic:
+
+- `meta.agent_inbox_message = true`
+- `meta.agent_inbox_followup = true|false`
+- `meta.agent_inbox.queue_mode`
+- `meta.agent_inbox.selector` (`latest`, `new`, or explicit)
+- `meta.agent_inbox.target`, `meta.agent_inbox.fanout_targets`
+
+This lets adapters/UIs identify externally injected inbox traffic and handle it similarly to async completion follow-ups.
 
 #### Remote attach troubleshooting
 
