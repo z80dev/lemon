@@ -1505,8 +1505,43 @@ results = LemonSkills.Registry.discover("github")
 - Now have 1396+ tests (AI app: 48, lemon_core: 488+, lemon_skills: 89)
 - All tests passing (0 failures)
 
+### 2025-02-20 - Documentation: Online Skill Discovery
+**Work Area**: Documentation
+
+**What was done:**
+- Created comprehensive documentation for the online skill discovery system:
+  - `apps/lemon_skills/lib/lemon_skills/discovery/README.md` (200+ lines)
+  - Usage examples for `Registry.discover/2` and `Registry.search/2`
+  - Scoring algorithm documentation with detailed weights table
+  - Architecture diagram showing components and search flow
+  - GitHub search and registry probing details
+  - Configuration options and rate limiting information
+  - Future enhancements roadmap
+- Added `discovery_readme_test.exs` to verify documentation examples:
+  - Tests for Registry.discover/2 and Registry.search/2
+  - Tests for Discovery.discover/2 with options
+  - Tests for result structure verification
+  - Tests for scoring weights documentation
+  - 6 tests total (1 skipped due to HTTP client limitations)
+- All 95 lemon_skills tests passing (0 failures, 12 skipped)
+
+**Files changed:**
+- `apps/lemon_skills/lib/lemon_skills/discovery/README.md` (new file - 200+ lines)
+- `apps/lemon_skills/test/lemon_skills/discovery_readme_test.exs` (new file - 6 tests)
+
+**What worked:**
+- Documentation-driven development ensures examples stay correct
+- README tests catch documentation drift
+- Comprehensive docs help users understand the discovery system
+- The modular pattern is now well-documented for future contributors
+
+**Total progress:**
+- Started with 119 tests
+- Now have 1402+ tests across all apps
+- All tests passing (0 failures)
+
 **Next run should focus on:**
 - Check for more Pi upstream features to port
-- Add more comprehensive documentation for the discovery system
-- Consider adding validation for other transport configs (Web Dashboard, etc.)
+- Add validation for other transport configs (Web Dashboard, Farcaster, XMTP, Email)
 - Explore Ironclaw's extension manager for install/activate workflow
+- Add more comprehensive documentation for other features
