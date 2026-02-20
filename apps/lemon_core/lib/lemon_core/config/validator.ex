@@ -96,9 +96,11 @@ defmodule LemonCore.Config.Validator do
     |> validate_positive_integer(Map.get(gateway, :max_concurrent_runs), "gateway.max_concurrent_runs")
     |> validate_boolean(Map.get(gateway, :auto_resume), "gateway.auto_resume")
     |> validate_boolean(Map.get(gateway, :enable_telegram), "gateway.enable_telegram")
+    |> validate_boolean(Map.get(gateway, :enable_discord), "gateway.enable_discord")
     |> validate_boolean(Map.get(gateway, :require_engine_lock), "gateway.require_engine_lock")
     |> validate_non_negative_integer(Map.get(gateway, :engine_lock_timeout_ms), "gateway.engine_lock_timeout_ms")
     |> validate_telegram_config(Map.get(gateway, :telegram))
+    |> validate_discord_config(Map.get(gateway, :discord))
     |> validate_queue_config(Map.get(gateway, :queue))
   end
 
@@ -148,6 +150,71 @@ defmodule LemonCore.Config.Validator do
 
   defp validate_telegram_compaction(errors, _),
     do: ["gateway.telegram.compaction: must be a map" | errors]
+
+  @doc """
+  Validates Discord configuration.
+  """
+  @spec validate_discord_config([String.t()], map() | nil) :: [String.t()]
+  def validate_discord_config(errors, nil), do: errors
+
+  def validate_discord_config(errors, discord) when is_map(discord) do
+    errors
+    |> validate_discord_token(Map.get(discord, :bot_token))
+    |> validate_discord_id_list(Map.get(discord, :allowed_guild_ids), "gateway.discord.allowed_guild_ids")
+    |> validate_discord_id_list(Map.get(discord, :allowed_channel_ids), "gateway.discord.allowed_channel_ids")
+    |> validate_boolean(Map.get(discord, :deny_unbound_channels), "gateway.discord.deny_unbound_channels")
+  end
+
+  def validate_discord_config(errors, _),
+    do: ["gateway.discord: must be a map" | errors]
+
+  defp validate_discord_token(errors, nil), do: errors
+
+  defp validate_discord_token(errors, token) when is_binary(token) do
+    if String.starts_with?(token, "${") and String.ends_with?(token, "}") do
+      # Token references an env var, which is valid
+      errors
+    else
+      # Basic Discord bot token format validation
+      # Discord tokens are base64-encoded and typically have 3 parts separated by dots
+      # Format: XXXXXX.YYYYYY.ZZZZZZ (where each part is base64url encoded)
+      parts = String.split(token, ".")
+
+      # Discord tokens have 3 parts, each part should be reasonably long
+      # The user ID part (first) is typically 17-20 digits
+      # The timestamp part (second) is base64 encoded
+      # The signature part (third) is base64 encoded
+      if length(parts) == 3 do
+        [user_id, timestamp, signature] = parts
+
+        if String.length(user_id) >= 10 and
+             String.length(timestamp) >= 5 and
+             String.length(signature) >= 5 do
+          errors
+        else
+          ["gateway.discord.bot_token: invalid format (expected Discord bot token format)" | errors]
+        end
+      else
+        ["gateway.discord.bot_token: invalid format (expected Discord bot token format)" | errors]
+      end
+    end
+  end
+
+  defp validate_discord_token(errors, _), do: ["gateway.discord.bot_token: must be a string" | errors]
+
+  defp validate_discord_id_list(errors, nil, _path), do: errors
+
+  defp validate_discord_id_list(errors, ids, path) when is_list(ids) do
+    if Enum.all?(ids, &is_integer/1) do
+      errors
+    else
+      ["#{path}: must be a list of integers (Discord snowflake IDs)" | errors]
+    end
+  end
+
+  defp validate_discord_id_list(errors, _ids, path) do
+    ["#{path}: must be a list of integers" | errors]
+  end
 
   @doc """
   Validates queue configuration.

@@ -394,4 +394,78 @@ defmodule LemonCore.Config.ValidatorTest do
       assert errors == []
     end
   end
+
+  describe "validate_discord_config/2" do
+    test "validates discord bot token format" do
+      # Valid Discord token format (3 parts separated by dots)
+      errors = Validator.validate_discord_config([], %{
+        bot_token: "MTA5ODc2NTQzMjEwOTg3NjU0MzIx.ABC123.XYZ789abc123def456"
+      })
+      assert errors == []
+
+      # Invalid token format
+      errors = Validator.validate_discord_config([], %{
+        bot_token: "invalid-token"
+      })
+      assert Enum.any?(errors, &String.contains?(&1, "bot_token"))
+    end
+
+    test "accepts env var references in discord token" do
+      errors = Validator.validate_discord_config([], %{
+        bot_token: "${DISCORD_BOT_TOKEN}"
+      })
+      assert errors == []
+    end
+
+    test "validates discord allowed_guild_ids" do
+      errors = Validator.validate_discord_config([], %{
+        allowed_guild_ids: [123_456_789, 987_654_321]
+      })
+      assert errors == []
+
+      errors = Validator.validate_discord_config([], %{
+        allowed_guild_ids: ["123", "456"]
+      })
+      assert Enum.any?(errors, &String.contains?(&1, "allowed_guild_ids"))
+    end
+
+    test "validates discord allowed_channel_ids" do
+      errors = Validator.validate_discord_config([], %{
+        allowed_channel_ids: [123_456_789]
+      })
+      assert errors == []
+
+      errors = Validator.validate_discord_config([], %{
+        allowed_channel_ids: "not-a-list"
+      })
+      assert Enum.any?(errors, &String.contains?(&1, "allowed_channel_ids"))
+    end
+
+    test "validates discord deny_unbound_channels" do
+      errors = Validator.validate_discord_config([], %{
+        deny_unbound_channels: true
+      })
+      assert errors == []
+
+      errors = Validator.validate_discord_config([], %{
+        deny_unbound_channels: "yes"
+      })
+      assert Enum.any?(errors, &String.contains?(&1, "deny_unbound_channels"))
+    end
+
+    test "accepts nil discord config" do
+      errors = Validator.validate_discord_config([], nil)
+      assert errors == []
+    end
+
+    test "validates complete discord config" do
+      errors = Validator.validate_discord_config([], %{
+        bot_token: "MTA5ODc2NTQzMjEwOTg3NjU0MzIx.ABC123.XYZ789abc123def456",
+        allowed_guild_ids: [123_456_789],
+        allowed_channel_ids: [987_654_321],
+        deny_unbound_channels: true
+      })
+      assert errors == []
+    end
+  end
 end
