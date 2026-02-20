@@ -949,3 +949,65 @@ end
 - Add config validation to CLI commands
 - Add validation warnings to config reloading
 - Or start working on architecture check failures
+
+### 2025-02-19 - Feature Enhancement: Config Validation CLI Command
+**Work Area**: Feature Enhancement
+
+**What was done:**
+- Created `mix lemon.config` CLI command for configuration validation and inspection:
+  - `mix lemon.config validate` - Validates current configuration
+  - `mix lemon.config validate --verbose` - Shows detailed config summary on success
+  - `mix lemon.config validate --project-dir PATH` - Validates specific project
+  - `mix lemon.config show` - Displays current configuration without validation
+- Features:
+  - Color-coded output (green ✓ for valid, red ✗ for errors)
+  - Detailed error messages with bullet points
+  - Shows configuration file paths in verbose mode
+  - Exits with error code on validation failure (Mix.raise)
+  - Displays all config sections: Agent, Gateway, Logging, TUI, Providers
+- Created comprehensive tests (`lemon.config_test.exs`):
+  - Tests for validate command with valid/invalid configs
+  - Tests for --verbose flag
+  - Tests for --project-dir option
+  - Tests for show command
+  - Tests for help/usage display
+  - Tests for error handling (Mix.Error)
+  - 11 comprehensive tests
+- All 11 new tests pass
+- Total test count: 465 (up from 454)
+- Existing tests still pass (1 pre-existing architecture check failure unrelated)
+
+**Files changed:**
+- `apps/lemon_core/lib/mix/tasks/lemon.config.ex` (new file - 160 lines)
+- `apps/lemon_core/test/mix/tasks/lemon.config_test.exs` (new file - 11 tests)
+
+**Usage examples:**
+```bash
+# Validate current configuration
+mix lemon.config validate
+
+# Validate with detailed output
+mix lemon.config validate --verbose
+
+# Validate specific project
+mix lemon.config validate --project-dir ~/my-project
+
+# Show current configuration
+mix lemon.config show
+```
+
+**What worked:**
+- Using Mix.shell().info/error for proper output handling
+- Mix.raise for proper error exit codes
+- Testing with capture_io for both stdout/stderr
+- Integration with existing Modular.load_with_validation/1
+
+**Total progress:**
+- Started with 119 tests
+- Now have 465 tests
+- Added 346 tests across multiple runs
+
+**Next run should focus on:**
+- Add config validation to other mix tasks (lemon.quality, etc.)
+- Add validation warnings to config reloading
+- Or start working on architecture check failures
