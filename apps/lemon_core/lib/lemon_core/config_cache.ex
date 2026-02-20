@@ -217,7 +217,8 @@ defmodule LemonCore.ConfigCache do
     if available?() do
       :ok
     else
-      raise "LemonCore.ConfigCache is not available (application not started)"
+      raise LemonCore.ConfigCacheError,
+        message: "LemonCore.ConfigCache is not available (application not started)"
     end
   end
 
