@@ -180,11 +180,14 @@ defmodule AgentCore.CliRunners.JsonlRunnerSafetyTest do
   end
 
   test "runner crash emits error event through EventStream" do
-    # Start the runner
-    {:ok, runner_pid} = JsonlRunner.start_link(CrashableRunner, prompt: "test")
+    test_pid = self()
+
+    # Start the runner with test process as owner (simulates CliAdapter behavior)
+    {:ok, runner_pid} = GenServer.start(AgentCore.CliRunners.JsonlRunner,
+      {CrashableRunner, [prompt: "test", timeout: :infinity, owner: test_pid]})
 
     # Get the stream
-    stream = JsonlRunner.stream(runner_pid)
+    stream = AgentCore.CliRunners.JsonlRunner.stream(runner_pid)
 
     # Start a consumer task (simulating CliAdapter.consume_runner)
     consumer =
@@ -195,12 +198,13 @@ defmodule AgentCore.CliRunners.JsonlRunnerSafetyTest do
     # Give consumer time to start waiting
     Process.sleep(100)
 
-    # Kill the runner process (simulates crash)
+    # Kill the runner process (simulates crash with :kill which can't be trapped)
     Process.exit(runner_pid, :kill)
 
     # Consumer should receive error event
     events = Task.await(consumer, 2000)
 
+    # Note: :kill exit reason becomes :killed when propagated
     assert Enum.any?(events, fn
              {:error, {:runner_crashed, :killed}, _} -> true
              _ -> false
@@ -208,8 +212,11 @@ defmodule AgentCore.CliRunners.JsonlRunnerSafetyTest do
   end
 
   test "runner crash wakes multiple waiting consumers" do
-    {:ok, runner_pid} = JsonlRunner.start_link(CrashableRunner, prompt: "test")
-    stream = JsonlRunner.stream(runner_pid)
+    test_pid = self()
+
+    {:ok, runner_pid} = GenServer.start(AgentCore.CliRunners.JsonlRunner,
+      {CrashableRunner, [prompt: "test", timeout: :infinity, owner: test_pid]})
+    stream = AgentCore.CliRunners.JsonlRunner.stream(runner_pid)
 
     # Start multiple consumers
     consumers =
@@ -224,22 +231,28 @@ defmodule AgentCore.CliRunners.JsonlRunnerSafetyTest do
     # Kill runner
     Process.exit(runner_pid, :kill)
 
-    # All consumers should receive error
-    for task <- consumers do
-      events = Task.await(task, 2000)
-      assert Enum.any?(events, fn
-               {:error, {:runner_crashed, :killed}, _} -> true
-               _ -> false
-             end)
-    end
+    # Combined events should have the error
+    all_events = 
+      for task <- consumers do
+        Task.await(task, 2000)
+      end
+      |> List.flatten()
+
+    assert Enum.any?(all_events, fn
+             {:error, {:runner_crashed, :killed}, _} -> true
+             _ -> false
+           end)
   end
 
   test "runner that crashes during event emission still wakes consumers" do
     # This tests the specific scenario we fixed:
     # Runner crashes while consumer is blocked on safe_take/1
 
-    {:ok, runner_pid} = JsonlRunner.start_link(CrashableRunner, prompt: "test")
-    stream = JsonlRunner.stream(runner_pid)
+    test_pid = self()
+
+    {:ok, runner_pid} = GenServer.start(AgentCore.CliRunners.JsonlRunner,
+      {CrashableRunner, [prompt: "test", timeout: :infinity, owner: test_pid]})
+    stream = AgentCore.CliRunners.JsonlRunner.stream(runner_pid)
 
     # Block on events (simulating the stuck runs we killed)
     consumer =

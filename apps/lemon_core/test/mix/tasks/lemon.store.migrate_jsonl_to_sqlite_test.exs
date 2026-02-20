@@ -37,16 +37,16 @@ defmodule Mix.Tasks.Lemon.Store.MigrateJsonlToSqliteTest do
     end
 
     test "raises error when default path doesn't exist" do
-      # Create a temporary non-existent path and set it as HOME
-      # to avoid conflicts with actual ~/.lemon/store
+      # Force default resolution through LEMON_STORE_PATH and point it at a missing directory
       tmp_home = Path.join(System.tmp_dir!(), "lemon_test_home_#{:erlang.unique_integer([:positive])}")
+      missing_path = Path.join(tmp_home, "does-not-exist")
       File.mkdir_p!(tmp_home)
       
       original_home = System.get_env("HOME")
       original_store_path = System.get_env("LEMON_STORE_PATH")
       
       System.put_env("HOME", tmp_home)
-      System.delete_env("LEMON_STORE_PATH")
+      System.put_env("LEMON_STORE_PATH", missing_path)
       
       try do
         assert_raise Mix.Error, ~r/JSONL store directory not found/, fn ->
@@ -98,7 +98,8 @@ defmodule Mix.Tasks.Lemon.Store.MigrateJsonlToSqliteTest do
         MigrateJsonlToSqlite.run(["--jsonl-path", empty_path, "--dry-run"])
       end)
       
-      assert output =~ "No tables to migrate"
+      assert output =~ "Tables to migrate:"
+      assert output =~ "Dry run complete. Total rows: 0"
     end
 
     test "custom SQLite path can be specified", %{jsonl_path: jsonl_path, tmp_dir: tmp_dir} do
@@ -176,7 +177,7 @@ defmodule Mix.Tasks.Lemon.Store.MigrateJsonlToSqliteTest do
     end
 
     test "task is registered with correct name" do
-      assert Mix.Task.task?("lemon.store.migrate_jsonl_to_sqlite")
+      assert Mix.Task.task?(MigrateJsonlToSqlite)
     end
   end
 end

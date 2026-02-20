@@ -58,7 +58,7 @@ defmodule Mix.Tasks.Lemon.Secrets.ListTest do
   describe "module attributes" do
     test "has proper @shortdoc" do
       {:docs_v1, _, _, _, %{} = module_doc, _, _} = Code.fetch_docs(Mix.Tasks.Lemon.Secrets.List)
-      assert module_doc["en"] =~ "List stored secret metadata"
+      assert module_doc["en"] =~ "Lists stored secrets"
     end
 
     test "task module exists and has run/1 function" do
@@ -165,7 +165,7 @@ defmodule Mix.Tasks.Lemon.Secrets.ListTest do
     end
 
     test "converts integer values to string" do
-      timestamp = 1_700_000_000_000
+      timestamp = System.system_time(:millisecond) + 86_400_000
       assert {:ok, _} = Secrets.set("int_expiry_test", "value", expires_at: timestamp)
 
       output =
@@ -174,7 +174,7 @@ defmodule Mix.Tasks.Lemon.Secrets.ListTest do
         end)
 
       assert output =~ "int_expiry_test"
-      assert output =~ "expires_at=1700000000000"
+      assert output =~ "expires_at=#{timestamp}"
     end
   end
 

@@ -133,6 +133,19 @@ defmodule AgentCore.EventStream do
   end
 
   @doc """
+  Start a new event stream without linking to the caller.
+
+  This is useful when the stream should outlive the calling process,
+  such as when the caller is a short-lived runner process.
+
+  See `start_link/1` for options.
+  """
+  @spec start([option()]) :: GenServer.on_start()
+  def start(opts \\ []) do
+    GenServer.start(__MODULE__, opts)
+  end
+
+  @doc """
   Attach a task to this event stream.
 
   When the stream is canceled or the owner dies, the attached task will be
@@ -505,11 +518,12 @@ defmodule AgentCore.EventStream do
   end
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{runner_ref: ref} = state) do
-    # Runner died - this is a producer crash, emit error but keep stream alive
+    # Runner died (detected via monitor) - emit error but keep stream alive
     # so consumers can read the error event. Stream will be cleaned up by owner
     # monitoring or timeout.
     Logger.warning("AgentCore.EventStream runner died: #{inspect(reason)}, emitting error")
 
+    # Clear runner state to prevent double-handling EXIT message
     state = %{state | runner: nil, runner_ref: nil}
 
     unless state.done or state.canceled do

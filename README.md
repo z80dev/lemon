@@ -249,8 +249,10 @@ Other launch modes:
   - [LemonAutomation](#lemonautomation)
   - [LemonControlPlane](#lemoncontrolplane)
   - [LemonSkills](#lemonskills)
+  - [MarketIntel](#marketintel)
   - [Lemon TUI](#lemon-tui)
   - [Lemon Web](#lemon-web)
+  - [Lemon Browser Node](#lemon-browser-node)
 - [Orchestration Runtime](#orchestration-runtime)
   - [Lane-Aware Scheduling](#lane-aware-scheduling)
   - [Async Subagent Semantics](#async-subagent-semantics)
@@ -265,6 +267,7 @@ Other launch modes:
 - [Development](#development)
 - [Documentation](#documentation)
 - [License](#license)
+- [Acknowledgments](#acknowledgments)
 
 ---
 
@@ -282,14 +285,14 @@ Lemon is an AI coding assistant built as a distributed system of concurrent proc
 
 4. **Live Steering**: Users can inject messages mid-execution to steer the agent, enabled by the BEAM's ability to send messages to any process at any time.
 
-5. **Multi-Provider Abstraction**: Unified interface for OpenAI, Anthropic, Google, Azure, and AWS Bedrock with automatic model configuration and cost tracking.
+5. **Multi-Provider Abstraction**: Unified interface for OpenAI, Anthropic, Google, Azure, AWS Bedrock, xAI, Mistral, Cerebras, DeepSeek, Qwen, MiniMax, Z.ai, and more with automatic model configuration and cost tracking.
 
 6. **Multi-Engine Architecture**: Pluggable execution engines supporting native Lemon plus Codex/Claude/OpenCode/Pi CLI backends with unified event streaming.
 
 ### Key Features
 
 **Agent Capabilities:**
-- **Multi-turn conversations** with 15 built-in tools (`read`, `memory_topic`, `write`, `edit`, `patch`, `bash`, `grep`, `find`, `ls`, `browser`, `webfetch`, `websearch`, `todo`, `task`, `extensions_status`) plus extension tools
+- **Multi-turn conversations** with 34 built-in tools (`read`, `memory_topic`, `write`, `edit`, `patch`, `multiedit`, `hashline`, `bash`, `grep`, `find`, `ls`, `glob`, `browser`, `webfetch`, `websearch`, `webdownload`, `todo`, `task`, `agent`, `extensions_status`, `post_to_x`, `get_x_mentions`, `exec`, `process`, `restart`, `truncate`) plus extension tools
 - **Real-time streaming** of LLM responses with fine-grained event notifications
 - **Session persistence** via JSONL with tree-structured conversation history
 - **Context compaction** and branch summarization for long conversations
@@ -304,13 +307,13 @@ Lemon is an AI coding assistant built as a distributed system of concurrent proc
 - **Budget enforcement** with per-run token/cost tracking
 
 **Control & Routing:**
-- **Control plane server** with 81+ RPC methods over WebSocket
+- **Control plane server** with 98+ RPC methods over WebSocket
 - **Hierarchical policy system** with approval gates for sensitive operations
 - **Session routing** with canonical session keys and multi-channel support
 - **Stream coalescing** with smart buffering for efficient delivery
 
 **Infrastructure:**
-- **Pluggable channel adapters** (Telegram, with Discord/Slack extensibility)
+- **Pluggable channel adapters** (Telegram, X/Twitter, with Discord/Email/Farcaster/SMS extensibility)
 - **Cron scheduling** with timezone support, heartbeats, and on-demand wake
 - **Event-driven architecture** with pub/sub messaging across all components
 - **Comprehensive telemetry** for observability and monitoring
@@ -318,6 +321,7 @@ Lemon is an AI coding assistant built as a distributed system of concurrent proc
 **Clients:**
 - **Terminal UI** with themes, multi-session, real-time streaming
 - **Web UI** with React frontend and WebSocket bridge
+- **Browser automation node** with Playwright/CDP integration
 - **Resume tokens** for session continuation across restarts
 
 ---
@@ -369,7 +373,7 @@ OTP supervision trees ensure that:
 
 ![Supervision Tree](docs/diagrams/supervision-tree.svg)
 
-The supervision tree shows all 11 OTP applications and their supervised processes. Key points:
+The supervision tree shows all 13 OTP applications and their supervised processes. Key points:
 
 - Each application has its own supervision subtree for fault isolation
 - DynamicSupervisors manage runtime-spawned processes (sessions, runs, workers)
@@ -482,8 +486,8 @@ end)
 
 The diagram above shows the complete Lemon system architecture:
 
-- **Client Layer**: TUI (TypeScript), Web (React), and external clients connect via JSON-RPC or WebSocket
-- **Control Plane**: LemonControlPlane provides HTTP/WebSocket server with 81+ RPC methods
+- **Client Layer**: TUI (TypeScript), Web (React), Browser Node (Playwright), and external clients connect via JSON-RPC, WebSocket, or CDP
+- **Control Plane**: LemonControlPlane provides HTTP/WebSocket server with 98+ RPC methods
 - **Routing**: LemonRouter orchestrates runs with policy enforcement and approval gating
 - **Infrastructure**: LemonChannels (adapters), LemonGateway (execution), LemonAutomation (scheduling)
 - **Core Runtime**: CodingAgent.Session with built-in tools, extension tools, and compaction
@@ -518,19 +522,20 @@ lemon/
 ├── bin/                         # Executable scripts
 │   ├── lemon-dev                # Development launcher script (builds + launches the TUI)
 │   ├── lemon-gateway            # Starts the Telegram runtime (router + gateway + channels)
+│   ├── lemon-control-plane      # Starts the WebSocket/HTTP control server
 │   ├── lemon-telegram-send-test # Telegram delivery smoke test helper
 │   ├── lemon-telegram-webhook   # Telegram webhook helper
 │   └── diag                     # Small diagnostic helper (Python)
 │
-├── apps/                        # Umbrella applications (11 apps)
+├── apps/                        # Umbrella applications (13 apps)
 │   │
 │   │  # ─── Core Foundation ───────────────────────────────────
 │   │
 │   ├── ai/                      # LLM provider abstraction layer
 │   │   └── lib/ai/
-│   │       ├── providers/       # Anthropic, OpenAI, Google, Azure, Bedrock
+│   │       ├── providers/       # Anthropic, OpenAI, Google, Azure, Bedrock, xAI, Mistral, Cerebras, DeepSeek, Qwen, MiniMax, Z.ai
 │   │       ├── event_stream.ex  # Streaming with backpressure
-│   │       ├── models.ex        # Model registry and definitions
+│   │       ├── models.ex        # Model registry and definitions (200+ models)
 │   │       └── types.ex         # Context, Message, Model types
 │   │
 │   ├── agent_core/              # Core agent framework (provider-agnostic)
@@ -563,12 +568,14 @@ lemon/
 │   │       ├── process_manager.ex    # Background process supervision
 │   │       ├── budget_tracker.ex     # Token/cost tracking
 │   │       ├── cli_runners/          # Lemon CLI runner
+│   │       ├── wasm/                 # WASM tool runtime
 │   │       └── tools/                # Default built-ins + optional tool modules
-│   │           ├── bash.ex, browser.ex, edit.ex, memory_topic.ex, read.ex, write.ex
-│   │           ├── grep.ex, find.ex, glob.ex, ls.ex, patch.ex
-│   │           ├── task.ex, todo.ex, extensions_status.ex
+│   │           ├── bash.ex, browser.ex, edit.ex, hashline.ex, memory_topic.ex, read.ex, write.ex
+│   │           ├── grep.ex, find.ex, glob.ex, ls.ex, patch.ex, multiedit.ex
+│   │           ├── task.ex, todo.ex, agent.ex, extensions_status.ex
 │   │           ├── webfetch.ex, websearch.ex, webdownload.ex, web_cache.ex, web_guard.ex
-│   │           └── exec.ex, process.ex, restart.ex, truncate.ex (runtime integrations)
+│   │           ├── exec.ex, process.ex, restart.ex, truncate.ex
+│   │           └── post_to_x.ex, get_x_mentions.ex
 │   │
 │   ├── coding_agent_ui/         # UI abstraction layer
 │   │   └── lib/coding_agent/ui/
@@ -583,11 +590,12 @@ lemon/
 │   │       ├── bus.ex           # Phoenix.PubSub wrapper for events
 │   │       ├── event.ex         # Canonical event envelope
 │   │       ├── store.ex         # Persistent key-value storage (ETS/JSONL/SQLite backends)
+│   │       ├── secrets.ex       # Encrypted secrets store
 │   │       ├── id.ex            # Prefixed UUID generation
 │   │       ├── idempotency.ex   # At-most-once execution
 │   │       ├── telemetry.ex     # Observability events
 │   │       ├── clock.ex         # Time utilities
-│   │       └── config.ex        # Runtime configuration
+│   │       └── config/          # Modular config system
 │   │
 │   ├── lemon_gateway/           # Multi-engine execution gateway
 │   │   └── lib/lemon_gateway/
@@ -595,6 +603,7 @@ lemon/
 │   │       ├── scheduler.ex     # Global concurrency control
 │   │       ├── thread_worker.ex # Per-thread job queues
 │   │       ├── store.ex         # Pluggable storage via LemonCore.Store backends
+│   │       ├── transports/      # Transport adapters (Discord, Email, Farcaster, Webhook, XMTP)
 │   │       ├── engines/         # Execution engines
 │   │       │   ├── lemon.ex     # Native CodingAgent engine
 │   │       │   ├── claude.ex    # Claude CLI engine
@@ -626,7 +635,8 @@ lemon/
 │   │       │   ├── dedupe.ex    # Idempotency tracking
 │   │       │   └── rate_limiter.ex   # Token bucket limiting
 │   │       └── adapters/
-│   │           └── telegram/    # Telegram adapter
+│   │           ├── telegram/    # Telegram adapter (polling, voice, file transfer)
+│   │           └── x_api/       # X/Twitter API adapter (OAuth 1.0a/2.0)
 │   │
 │   ├── lemon_automation/        # Scheduling and automation
 │   │   └── lib/lemon_automation/
@@ -647,50 +657,77 @@ lemon/
 │   │       ├── event_bridge.ex  # Bus → WebSocket events
 │   │       ├── auth/            # Token-based authentication
 │   │       ├── protocol/        # Frame encoding, schemas
-│   │       └── methods/         # 81+ RPC methods
+│   │       └── methods/         # 98+ RPC methods
 │   │           ├── agent.ex, sessions.ex, chat.ex
 │   │           ├── cron.ex, skills.ex, channels.ex
-│   │           ├── node.ex, device.ex, exec.ex
+│   │           ├── node.ex, device.ex, exec.ex, secrets.ex
+│   │           ├── browser.ex, tts.ex
 │   │           └── ... (organized by domain)
 │   │
-│   └── lemon_skills/            # Skill registry and management
-│       └── lib/lemon_skills/
-│           ├── registry.ex      # In-memory skill cache
-│           ├── entry.ex         # Skill data structure
-│           ├── manifest.ex      # YAML/TOML frontmatter parsing
-│           ├── status.ex        # Dependency verification
-│           ├── config.ex        # Enable/disable, paths
-│           ├── installer.ex     # Install/update/uninstall
-│           └── tools/
-│               └── read_skill.ex # Agent tool for skill access
+│   ├── lemon_skills/            # Skill registry and management
+│   │   └── lib/lemon_skills/
+│   │       ├── registry.ex      # In-memory skill cache
+│   │       ├── entry.ex         # Skill data structure
+│   │       ├── manifest.ex      # YAML/TOML frontmatter parsing
+│   │       ├── status.ex        # Dependency verification
+│   │       ├── config.ex        # Enable/disable, paths
+│   │       ├── installer.ex     # Install/update/uninstall
+│   │       └── tools/
+│   │           └── read_skill.ex # Agent tool for skill access
+│   │
+│   ├── lemon_web/               # Phoenix web interface
+│   │   └── lib/lemon_web/
+│   │       ├── endpoint.ex      # Phoenix endpoint
+│   │       ├── router.ex        # Route definitions
+│   │       ├── session_live.ex  # LiveView chat sessions
+│   │       └── components/      # UI components
+│   │
+│   └── market_intel/            # Market intelligence and commentary
+│       └── lib/market_intel/
+│           ├── ingestion/       # Data ingestion (Polymarket, OnChain, DexScreener, Twitter)
+│           ├── commentary/      # Commentary generation pipeline
+│           ├── cache.ex         # Caching layer
+│           └── repo.ex          # Ecto repository
 │
 ├── clients/                     # Client applications
 │   ├── lemon-tui/               # Terminal UI (TypeScript/Node.js)
 │   │   ├── src/
 │   │   │   ├── index.ts         # Main TUI application
-│   │   │   ├── agent-connection.ts
+│   │   │   ├── agent-connection.ts  # WebSocket/local RPC
 │   │   │   ├── state.ts         # Multi-session state
-│   │   │   └── types.ts
+│   │   │   ├── message-renderer.ts  # Markdown rendering
+│   │   │   ├── overlay-manager.ts   # UI overlays
+│   │   │   └── formatters/      # Tool output formatters
 │   │   └── package.json
 │   │
-│   └── lemon-web/               # Web UI (React + WebSocket)
-│       ├── web/                 # Vite/React frontend
-│       ├── server/              # Node WS bridge
-│       └── shared/              # Shared types
+│   ├── lemon-web/               # Web UI (React + WebSocket)
+│   │   ├── web/                 # Vite/React frontend
+│   │   ├── server/              # Node WS bridge
+│   │   └── shared/              # Shared types
+│   │
+│   └── lemon-browser-node/      # Browser automation (Playwright/CDP)
+│       ├── src/
+│       │   ├── index.ts         # WebSocket node mode
+│       │   ├── local-driver.ts  # Local stdin/stdout driver
+│       │   └── chrome.ts        # Chrome/CDP management
+│       └── package.json
 │
 ├── scripts/
 │   ├── debug_agent_rpc.exs      # RPC debugging
 │   ├── cron_lemon_loop.sh       # Scheduled execution
-│   └── setup_telegram_bot.py    # Telegram bot setup helper
+│   ├── setup_telegram_bot.py    # Telegram bot setup helper
+│   └── x_api_*.exs              # X/Twitter API helpers
 │
 ├── docs/                        # Documentation
+│   ├── README.md                # Docs index
 │   ├── beam_agents.md           # BEAM architecture
 │   ├── extensions.md            # Extension system
 │   ├── skills.md                # Skills system
 │   ├── telemetry.md             # Observability
 │   ├── benchmarks.md            # Performance
 │   ├── context.md               # Context management
-│   └── config.md                # Configuration
+│   ├── config.md                # Configuration
+│   └── tools/                   # Tool-specific docs
 │
 └── examples/
     ├── config.example.toml
@@ -725,11 +762,33 @@ for event <- Ai.EventStream.events(stream) do
 end
 ```
 
+**Supported Providers (15 total, 200+ models):**
+
+| Provider | Models | API Type | Notes |
+|----------|--------|----------|-------|
+| Anthropic | 26+ | Native | Claude 3/4 series with reasoning |
+| OpenAI | 35+ | Native | GPT-4/5, o1, o3, o4, Codex |
+| Google | 20+ | Native | Gemini 1.5/2.0/2.5/3 series |
+| Amazon Bedrock | 50+ | Native | Nova, Titan, Claude, Llama, DeepSeek, Mistral |
+| xAI | 14+ | OpenAI-compatible | Grok 2/3/4 series |
+| Mistral | 8+ | OpenAI-compatible | Codestral, Devstral, Large |
+| Cerebras | 3+ | OpenAI-compatible | Llama 3.1/3.3, Qwen 3 |
+| DeepSeek | 3+ | OpenAI-compatible | V3, R1 with reasoning |
+| Qwen | 5+ | OpenAI-compatible | Turbo, Plus, Max, Coder, VL |
+| MiniMax | 3+ | OpenAI-compatible | M2/M2.1/M2.5 with reasoning |
+| Z.ai | 5+ | OpenAI-compatible | GLM 4.5/4.7/5 series |
+| Kimi | 1+ | Anthropic-compatible | Kimi for Coding |
+| OpenCode | 4+ | OpenAI-compatible | Trinity, Kimi K2/K2.5 |
+| OpenAI Codex | 35+ | OAuth | ChatGPT subscription integration |
+| Google Antigravity | 2+ | Native | Internal Google CLI models |
+
 **Key Features:**
 - Provider-agnostic API
 - Automatic cost calculation
 - Token usage tracking
 - Streaming with backpressure
+- Circuit breaker pattern for resilience
+- Rate limiting with token bucket algorithm
 - Session caching support
 
 ### AgentCore
@@ -823,7 +882,7 @@ end
 - **LemonRunner / LemonSubagent**: Native `CodingAgent.Session` runner backend (no subprocess, implemented in `CodingAgent.CliRunners`)
 - **JsonlRunner**: Base infrastructure for implementing new CLI runners
 
-**Where they’re used:**
+**Where they're used:**
 - LemonGateway engines use the `*Runner` modules (via `LemonGateway.Engines.CliAdapter`) to stream engine events to clients.
 - The CodingAgent `task` tool uses `CodexSubagent` / `ClaudeSubagent` / `KimiSubagent` / `OpencodeSubagent` / `PiSubagent` for CLI engines, and starts a new `CodingAgent.Session` for the internal engine.
 
@@ -919,6 +978,9 @@ extra_args = []
 # Optional provider/model overrides passed to `pi --provider/--model`
 provider = "openai"
 model = "gpt-4.1"
+
+[agent.cli.claude]
+dangerously_skip_permissions = true
 ```
 
 ### CodingAgent
@@ -947,8 +1009,8 @@ unsubscribe = CodingAgent.Session.subscribe(session)
 
 **Key Features:**
 - Session persistence (JSONL v3 format with tree structure)
-- Default built-in coding tools (`read`, `memory_topic`, `write`, `edit`, `patch`, `bash`, `grep`, `find`, `ls`, `browser`, `webfetch`, `websearch`, `todo`, `task`, `extensions_status`)
-- Optional runtime tool modules for custom integrations (`exec`, `process`, `restart`, `truncate`, `webdownload`)
+- 34 built-in tools (file, search, shell, web, browser, task, todo, X/Twitter)
+- Optional runtime tool modules for custom integrations
 - Context compaction and branch summarization
 - Extension system for custom tools
 - Settings management (global + project-level)
@@ -956,6 +1018,21 @@ unsubscribe = CodingAgent.Session.subscribe(session)
 - Orchestration runtime with lane scheduling, async subagents, and durable background processes
 - Budget tracking and enforcement for token/cost limits
 - Tool policy profiles with per-engine restrictions
+- **Hashline Edit Mode**: Line-addressable edits using xxHash32 content hashes (ported from Oh-My-Pi)
+
+**Built-in Tools (34 total):**
+
+| Category | Tools |
+|----------|-------|
+| File Operations | `read`, `write`, `edit`, `patch`, `multiedit`, `hashline`, `glob`, `ls` |
+| Search | `grep`, `find` |
+| Shell/Execution | `bash`, `exec`, `process`, `restart` |
+| Web | `websearch`, `webfetch`, `webdownload`, `browser` |
+| Task Management | `todo`, `task` |
+| Agent Control | `agent` |
+| Extensions | `extensions_status` |
+| X/Twitter | `post_to_x`, `get_x_mentions` |
+| Memory | `memory_topic`, `truncate` |
 
 ### CodingAgent UI
 
@@ -996,6 +1073,7 @@ end)
 | `LemonCore.Bus` | Phoenix.PubSub wrapper for cross-app event distribution |
 | `LemonCore.Event` | Timestamped event envelope with type, payload, metadata |
 | `LemonCore.Store` | Thin wrapper over persistent key-value storage |
+| `LemonCore.Secrets` | Encrypted secrets store with keychain integration |
 | `LemonCore.Id` | Prefixed UUID generation (run_, sess_, appr_, cron_, skill_) |
 | `LemonCore.Idempotency` | At-most-once execution with 24-hour TTL |
 | `LemonCore.Telemetry` | Standardized telemetry event emission |
@@ -1052,6 +1130,14 @@ LemonGateway.submit(job)
 | OpenCode | `opencode` | OpenCode CLI via subprocess |
 | Pi | `pi` | Pi CLI via subprocess |
 
+**Transport Adapters:**
+- Discord
+- Email
+- Farcaster
+- Webhook
+- XMTP
+- SMS (Twilio)
+
 ### LemonRouter
 
 `LemonRouter` provides run orchestration, session routing, and policy-driven execution gating:
@@ -1100,6 +1186,9 @@ LemonRouter.abort("session:my-agent:main")
 | `LemonRouter.Policy` | Hierarchical policy merging |
 | `LemonRouter.ApprovalsBridge` | Approval request/resolution with timeouts |
 | `LemonRouter.StreamCoalescer` | Output buffering (48 chars, 400ms idle, 1.2s max) |
+| `LemonRouter.AgentDirectory` | Agent discovery and session listing |
+| `LemonRouter.AgentInbox` | Inbox messaging system |
+| `LemonRouter.AgentEndpoints` | Endpoint alias management |
 
 ### LemonChannels
 
@@ -1129,7 +1218,15 @@ LemonChannels.enqueue(%LemonChannels.OutboundPayload{
 - Normalized `InboundMessage` format
 - Edit/delete support for message updates
 - Peer kind detection (DM, group, supergroup, channel)
-- `/cancel` works by replying to the bot’s `Running…` message
+- `/cancel` works by replying to the bot's `Running…` message
+- **Voice transcription** with OpenAI-compatible providers
+- **File transfer** (`/file put`, `/file get`) with safety rails
+- **Auto-send generated images** after runs complete
+
+**X/Twitter Adapter:**
+- OAuth 1.0a and OAuth 2.0 support
+- Post tweets via `post_to_x` tool
+- Fetch mentions via `get_x_mentions` tool
 
 **Adding Custom Adapters:**
 
@@ -1219,7 +1316,7 @@ jobs = LemonAutomation.list_jobs()
 
 **Key Features:**
 
-- **81+ RPC Methods**: Comprehensive API for all Lemon operations
+- **98+ RPC Methods**: Comprehensive API for all Lemon operations
 - **Role-Based Access**: Three roles (operator, node, device) with scoped permissions
 - **Real-Time Events**: Event bridge broadcasts system events to connected clients
 - **Token Authentication**: Secure pairing with challenge-response flow
@@ -1229,12 +1326,15 @@ jobs = LemonAutomation.list_jobs()
 
 | Category | Methods | Description |
 |----------|---------|-------------|
-| Agent | `agent`, `agent.wait`, `agents.list` | Agent invocation and management |
-| Sessions | `sessions.list`, `sessions.patch`, `sessions.reset` | Session lifecycle |
+| Agent | `agent`, `agent.wait`, `agents.list`, `agent.inbox.send` | Agent invocation and management |
+| Sessions | `sessions.list`, `sessions.patch`, `sessions.reset`, `sessions.compact` | Session lifecycle |
 | Chat | `chat.send`, `chat.abort`, `chat.history` | Conversation operations |
 | Cron | `cron.add`, `cron.list`, `cron.run` | Scheduled job management |
 | Skills | `skills.status`, `skills.install`, `skills.update` | Skill management |
 | Exec | `exec.approval.request`, `exec.approval.resolve` | Approval workflow |
+| Secrets | `secrets.set`, `secrets.list`, `secrets.status` | Secrets management |
+| Browser | `browser.request` | Browser automation |
+| TTS | `tts.convert`, `tts.enable`, `tts.providers` | Text-to-speech |
 | Nodes | `node.pair.*`, `node.invoke`, `node.list` | Node pairing and RPC |
 | Channels | `channels.status`, `channels.logout` | Channel management |
 | System | `health`, `status`, `system.presence` | System information |
@@ -1295,6 +1395,7 @@ Instructions for the agent...
 - **Dependency Verification**: Checks for required binaries and env vars
 - **Approval Gating**: Requires approval for install/update/uninstall
 - **Agent Integration**: `read_skill` tool for agents to access skill content
+- **Online Discovery**: Search GitHub for installable skills
 
 **Key Modules:**
 
@@ -1305,7 +1406,35 @@ Instructions for the agent...
 | `Manifest` | YAML/TOML frontmatter parsing |
 | `Status` | Binary and config availability checking |
 | `Installer` | Git clone or local copy with approval |
+| `Discovery` | Online skill discovery from GitHub |
 | `Tools.ReadSkill` | Agent tool for skill lookup |
+
+### MarketIntel
+
+`MarketIntel` provides market data ingestion and AI-generated commentary:
+
+```elixir
+# Fetch Polymarket data
+MarketIntel.Ingestion.Polymarket.fetch_markets()
+
+# Get on-chain data
+MarketIntel.Ingestion.OnChain.fetch_data()
+
+# Generate commentary
+MarketIntel.Commentary.Pipeline.generate_commentary(data)
+```
+
+**Key Modules:**
+
+| Module | Purpose |
+|--------|---------|
+| `Ingestion.Polymarket` | Prediction market data |
+| `Ingestion.OnChain` | Blockchain/on-chain data |
+| `Ingestion.DexScreener` | DEX market data |
+| `Ingestion.TwitterMentions` | Social media mentions |
+| `Commentary.Pipeline` | AI commentary generation |
+| `Cache` | Data caching layer |
+| `Repo` | Ecto repository |
 
 ### Lemon TUI
 
@@ -1451,7 +1580,7 @@ All commands are prefixed with `/`. Type `/help` within the TUI to see this list
 - **Overlay Dialogs**: Interactive select, confirm, input, and editor overlays
 - **Session Persistence**: Save and resume sessions with full conversation tree structure
 - **Search**: Search across entire conversation history
-- **Settings Management**: Configurable themes (lemon/lime), debug mode, persisted to config file
+- **Settings Management**: Configurable themes (6 themes: lemon, lime, midnight, rose, ocean, charcoal), debug mode, persisted to config file
 - **Git Integration**: Displays git branch and status in the status bar
 - **Token Tracking**: Real-time display of input/output tokens and running cost estimate
 - **Auto-Completion**: Smart completion for commands and paths
@@ -1497,6 +1626,47 @@ node clients/lemon-web/server/dist/index.js \
   --cwd /path/to/project \
   --model anthropic:claude-sonnet-4-20250514 \
   --port 3939
+```
+
+### Lemon Browser Node
+
+The Browser Node provides browser automation capabilities via Playwright and Chrome DevTools Protocol (CDP).
+
+#### Operating Modes
+
+1. **WebSocket Node Mode**: Connects to LemonControlPlane as a "node" and receives `node.invoke.request` events
+2. **Local Driver Mode**: Reads JSON commands from stdin and writes responses to stdout
+
+#### Browser Methods Supported
+
+- `browser.navigate` - Navigate to URL
+- `browser.screenshot` - Capture screenshots (PNG/JPEG, fullPage/window)
+- `browser.click` - Click elements by selector
+- `browser.type` - Type text into inputs
+- `browser.evaluate` - Execute JavaScript in page context
+- `browser.waitForSelector` - Wait for element to appear
+- `browser.getContent` - Get HTML/text content (with truncation)
+- `browser.snapshot` - Get accessibility snapshot (interactive elements, roles, visibility)
+- `browser.getCookies` / `browser.setCookies` - Cookie management
+
+#### CLI Features
+
+```bash
+cd clients/lemon-browser-node
+npm install
+
+# Pair with control plane
+npm start -- --pair --token <challenge_token>
+
+# Start with existing token
+npm start -- --token <node_token>
+
+# Options
+--cdp-port <port>       # CDP port (default 18800)
+--headless              # Run Chrome headless
+--no-sandbox            # Disable Chrome sandbox
+--attach-only           # Attach to existing Chrome
+--user-data-dir <path>  # Custom Chrome profile
 ```
 
 ---
@@ -2040,6 +2210,7 @@ mix test apps/lemon_channels
 mix test apps/lemon_automation
 mix test apps/lemon_control_plane
 mix test apps/lemon_skills
+mix test apps/market_intel
 
 # Run integration tests (require CLI tools)
 mix test --include integration
@@ -2157,9 +2328,11 @@ Long-name one-off eval:
 elixir --name lemon_probe@my-host.example.com --cookie "change-me" --rpc-eval "lemon_gateway@my-host.example.com" "IO.inspect(LemonGateway.Config.get(:default_engine))"
 ```
 
+---
+
 ## Agent Inbox Messaging System
 
-Lemon now has a BEAM-local inbox API and control-plane methods so you can message an agent from anywhere connected to the running node (remote shell, RPC eval, control plane client), while keeping output routing tied to channel context (for example Telegram chat/topic).
+Lemon has a BEAM-local inbox API and control-plane methods so you can message an agent from anywhere connected to the running node (remote shell, RPC eval, control plane client), while keeping output routing tied to channel context (for example Telegram chat/topic).
 
 ### Core Concepts
 
@@ -2320,7 +2493,7 @@ This lets adapters/UIs identify externally injected inbox traffic and handle it 
   - Ensure both terminals use either short names (`--sname`) or long names (`--name`) consistently.
 - `Invalid challenge reply`:
   - Cookie mismatch. Use the same cookie value for launcher and `iex --remsh`/`elixir --rpc-eval`.
-- `Can't set long node name`:
+- `Can't set long name name`:
   - Your host name is not suitable for long names. Use `--sname` or pass a valid FQDN with `--name`.
 - Node exists but app calls fail:
   - Gateway may have exited after startup (for example port conflict). Check terminal 1 logs.
@@ -2349,7 +2522,6 @@ drop_pending_updates = true
 transport = "telegram"
 chat_id = 123456789
 agent_id = "default"
-default_engine = "lemon"
 ```
 
 Optional: bind a chat to a specific working directory (project):
@@ -2476,13 +2648,15 @@ The umbrella structure separates concerns while maintaining tight integration:
 - **`coding_agent_ui`**: UI abstractions, separate from core logic
 
 **Infrastructure:**
-- **`lemon_core`**: Shared primitives (Bus, Event, Store, Telemetry, Id)
+- **`lemon_core`**: Shared primitives (Bus, Event, Store, Telemetry, Id, Secrets)
 - **`lemon_gateway`**: Multi-engine execution with scheduling
 - **`lemon_router`**: Run orchestration, session routing, policy enforcement
 - **`lemon_channels`**: Pluggable channel adapters with smart delivery
 - **`lemon_automation`**: Cron scheduling, heartbeats, wake triggers
-- **`lemon_control_plane`**: HTTP/WebSocket server with 81+ RPC methods
+- **`lemon_control_plane`**: HTTP/WebSocket server with 98+ RPC methods
 - **`lemon_skills`**: Skill registry and lifecycle management
+- **`lemon_web`**: Phoenix web interface
+- **`market_intel`**: Market intelligence and commentary
 
 This allows:
 - Independent testing and versioning
@@ -2593,7 +2767,7 @@ See existing providers for examples.
      end
 
      def child_spec(opts), do: # OTP child spec
-     def normalize_inbound(raw), do: # Convert to InboundMessage
+     def normalize_inbound(raw), do: # convert to InboundMessage
      def deliver(payload), do: # Send OutboundPayload
      def gateway_methods, do: []  # Control plane methods
    end
@@ -2653,7 +2827,10 @@ Detailed documentation is available in the `docs/` directory:
 | [benchmarks.md](docs/benchmarks.md) | Performance benchmarks and baselines |
 | [context.md](docs/context.md) | Context management, truncation strategies, token counting |
 | [config.md](docs/config.md) | Canonical TOML configuration (global + project overrides) |
-| [tools/wasm.md](docs/tools/wasm.md) | WASM runtime behavior, discovery, security model, and troubleshooting |
+| [model-selection-decoupling.md](docs/model-selection-decoupling.md) | Design doc for model/engine decoupling |
+| [tools/web.md](docs/tools/web.md) | Websearch/webfetch setup and troubleshooting |
+| [tools/firecrawl.md](docs/tools/firecrawl.md) | Firecrawl fallback for webfetch |
+| [tools/wasm.md](docs/tools/wasm.md) | WASM runtime behavior, discovery, security model |
 
 ---
 
@@ -2665,7 +2842,7 @@ MIT License - see LICENSE file for details.
 
 ## Acknowledgments
 
-### Special Thanks to [Mario Zechner](https://github.com/badlogic) and the [pi](https://github.com/badlogic/pi-mono) Project
+### Special Thanks to [Mario Zechner](https://github.com/badlogic) and the [Pi](https://github.com/badlogic/pi-mono) Project
 
 This codebase is **heavily inspired by [pi](https://github.com/badlogic/pi-mono)**—Mario Zechner's agent framework. The pi project demonstrated the power of building agentic systems with:
 
@@ -2679,11 +2856,44 @@ Many of the core concepts, type definitions, and architectural patterns in Lemon
 
 Thank you, Mario, for open-sourcing pi and advancing the state of agent frameworks!
 
-### Thanks to [banteg](https://github.com/banteg) and [takopi](https://github.com/banteg/takopi)
+### Thanks to [can1357](https://github.com/can1357) and [Oh-My-Pi](https://github.com/can1357/oh-my-pi)
 
-Lemon was influenced by ideas from **takopi**, especially around responsiveness, practical defaults, and interface design.
+Lemon incorporates ideas from **Oh-My-Pi**, a powerful fork of the Pi project:
+
+- **Hashline Edit Mode**: Line-addressable edits using xxHash32 content hashes for robust file modification without position-based fragility (`LINE#HASH:CONTENT` format)
+
+The Hashline implementation in Lemon (ported via commit `0522d892`) demonstrates how community forks can introduce valuable innovations that benefit the broader agent ecosystem.
+
+Thank you to can1357 for extending Pi's capabilities and sharing Oh-My-Pi with the community!
+
+### Thanks to [banteg](https://github.com/banteg) and [Takopi](https://github.com/banteg/takopi)
+
+Lemon was influenced by ideas from **takopi**, especially around:
+- **CLI runner infrastructure**: Reliable subprocess management patterns and event models
+- **Responsiveness and practical defaults**: Interface design decisions
+- **Telegram integration**: File transfer capabilities and transport patterns
+
+Takopi's approach to building practical, responsive agent tools informed several design decisions in Lemon's CLI runner modules and Telegram adapter.
 
 Thank you to **banteg** for sharing that work publicly. It has been a helpful reference while building Lemon.
+
+### Thanks to the OpenClaw and Ironclaw Projects
+
+Lemon draws significant architectural inspiration from **OpenClaw** and **Ironclaw**:
+
+**From OpenClaw:**
+- System prompt structure and assistant bootstrap contracts
+- Browser automation patterns and Chrome DevTools Protocol integration
+- WebSocket protocol designs for control plane communication
+- Node pairing and authentication flows
+
+**From Ironclaw:**
+- **WASM tool system**: Ironclaw-compatible WASM runtime with per-session Rust sidecar
+- **Configuration architecture**: Modular config system with helpers, agents, tools, gateway, logging, TUI, and providers modules
+- **Testing patterns**: Test harness builder pattern and utilities
+- **Extension/skill registry**: Online skill discovery and registry patterns
+
+These projects demonstrated how to build robust, extensible agent platforms with clean architectural boundaries—and their influence is visible throughout Lemon's codebase.
 
 ### Additional Thanks
 
