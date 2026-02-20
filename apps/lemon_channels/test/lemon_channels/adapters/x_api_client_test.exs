@@ -20,6 +20,7 @@ defmodule LemonChannels.Adapters.XAPI.ClientTest do
     previous_req_defaults = Req.default_options()
     previous_config = Application.get_env(:lemon_channels, XAPI)
     previous_use_secrets = Application.get_env(:lemon_channels, :x_api_use_secrets)
+
     previous_env =
       Enum.into(@x_api_env_keys, %{}, fn key ->
         {key, System.get_env(key)}

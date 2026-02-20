@@ -637,11 +637,22 @@ defmodule CodingAgent.Tools.Hashline do
     [first | rest] = inserted
     {init, [last]} = Enum.split(inserted, -1)
 
+    first_matches = equals_ignoring_whitespace?(first, after_line)
+    last_matches = equals_ignoring_whitespace?(last, before_line)
+
     cond do
-      length(inserted) > 1 and equals_ignoring_whitespace?(first, after_line) ->
+      # Both boundaries match - strip both
+      length(inserted) > 2 and first_matches and last_matches ->
+        # Remove first from init (which includes last)
+        [_ | middle] = init
+        middle
+
+      # Only first matches
+      length(inserted) > 1 and first_matches ->
         rest
 
-      length(inserted) > 1 and equals_ignoring_whitespace?(last, before_line) ->
+      # Only last matches
+      length(inserted) > 1 and last_matches ->
         init
 
       true ->

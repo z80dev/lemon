@@ -148,19 +148,19 @@ defmodule CodingAgent.Tools.HashlineTest do
     test "parses basic tag format" do
       result = Hashline.parse_tag("5#ZZ")
       assert result.line == 5
-      assert result.hash == "ab"
+      assert result.hash == "ZZ"
     end
 
     test "parses tag with whitespace" do
-      result = Hashline.parse_tag("  5  #  ab  ")
+      result = Hashline.parse_tag("  5  #  ZZ  ")
       assert result.line == 5
-      assert result.hash == "ab"
+      assert result.hash == "ZZ"
     end
 
     test "parses tag with prefix markers" do
       result = Hashline.parse_tag(">>> 5#ZZ")
       assert result.line == 5
-      assert result.hash == "ab"
+      assert result.hash == "ZZ"
     end
 
     test "parses tag with plus/minus markers" do
