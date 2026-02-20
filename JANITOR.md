@@ -25,6 +25,54 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-20 - Test Expansion: Add Tests for Untested Modules
+**Work Area**: Test Expansion / Code Quality
+
+**What was done:**
+- Analyzed test coverage gaps in `lemon_core` and `coding_agent` apps
+- Identified 7 modules without test coverage
+- Created comprehensive tests for each untested module
+
+**New test files added:**
+
+| Test File | Module | Tests | Coverage |
+|-----------|--------|-------|----------|
+| `lemon.secrets.set_test.exs` | `Mix.Tasks.Lemon.Secrets.Set` | 20 | Argument parsing, error handling, Mix integration |
+| `lemon.secrets.status_test.exs` | `Mix.Tasks.Lemon.Secrets.Status` | 14 | Status output, MasterKey integration |
+| `todo_write_test.exs` | `CodingAgent.Tools.TodoWrite` | 12 | Todo validation, CRUD operations |
+| `todo_store_owner_test.exs` | `CodingAgent.Tools.TodoStoreOwner` | 11 | ETS table lifecycle, process isolation |
+| `wasm/protocol_test.exs` | `CodingAgent.Wasm.Protocol` | 14 | JSONL encoding/decoding, ID generation |
+| `wasm/config_test.exs` | `CodingAgent.Wasm.Config` | 32 | Configuration parsing, type coercion |
+| `process_store_server_test.exs` | `CodingAgent.ProcessStoreServer` | 13 | Process tracking, cleanup, DETS persistence |
+
+**Total: 116 new tests, all passing**
+
+**Files changed:**
+- `apps/lemon_core/test/mix/tasks/lemon.secrets.set_test.exs` (new)
+- `apps/lemon_core/test/mix/tasks/lemon.secrets.status_test.exs` (new)
+- `apps/coding_agent/test/coding_agent/tools/todo_write_test.exs` (new)
+- `apps/coding_agent/test/coding_agent/tools/todo_store_owner_test.exs` (new)
+- `apps/coding_agent/test/coding_agent/wasm/protocol_test.exs` (new)
+- `apps/coding_agent/test/coding_agent/wasm/config_test.exs` (new)
+- `apps/coding_agent/test/coding_agent/process_store_server_test.exs` (new)
+
+**Commits:**
+- `fb2af89b` - test: add tests for previously untested modules
+
+**What worked:**
+- Parallel test development using task delegation
+- Following existing test patterns for consistency
+- Using async: false for tests that interact with named ETS tables
+- Comprehensive edge case coverage for validation logic
+
+**Next run should focus on:**
+- Remaining untested modules in `lemon_core` (Store.Backend behaviour)
+- Remaining Mix tasks (lemon.store.migrate_jsonl_to_sqlite)
+- Remaining coding_agent modules (WASM sidecar, UI components)
+- Adding inline documentation to public functions
+
+---
+
 ### 2026-02-20 - Refactoring: Error Handling and Code Organization
 **Work Area**: Refactoring / Code Quality / Bug Fixes
 
