@@ -1,7 +1,8 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import {
@@ -12,6 +13,7 @@ import {
   type BridgeErrorMessage,
   type BridgeStatusMessage,
   type BridgeStderrMessage,
+  type RunningSessionInfo,
 } from '@lemon-web/shared';
 import { loadDotenvFromDir } from './dotenv.js';
 
@@ -174,7 +176,7 @@ class RpcBridge {
 }
 
 function buildRpcArgs(opts: BridgeOptions): string[] {
-  const args = ['run', 'scripts/debug_agent_rpc.exs', '--'];
+  const args = ['run', '--no-start', 'scripts/debug_agent_rpc.exs', '--'];
 
   if (opts.cwd) {
     args.push('--cwd', opts.cwd);
@@ -257,6 +259,170 @@ function parseArgs(argv: string[]): BridgeOptions {
 
 function withServerTime<T extends object>(message: T): T & { server_time: number } {
   return { ...message, server_time: Date.now() };
+}
+
+function inferGatewayNodeName(): string {
+  const explicit = process.env.LEMON_GATEWAY_NODE;
+  if (explicit && explicit.trim() !== '') {
+    return explicit;
+  }
+
+  const shortHost = os.hostname().split('.')[0] || 'localhost';
+  return `lemon_gateway@${shortHost}`;
+}
+
+function decodeBase64Url(value: string): string {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+  const missingPadding = normalized.length % 4;
+  const padded =
+    missingPadding === 0 ? normalized : normalized + '='.repeat(4 - missingPadding);
+  return Buffer.from(padded, 'base64').toString('utf8');
+}
+
+function fetchGatewayRunningSessions(): { sessions: RunningSessionInfo[]; error: string | null } {
+  const gatewayNode = inferGatewayNodeName();
+  const cookie =
+    process.env.LEMON_GATEWAY_NODE_COOKIE ||
+    process.env.LEMON_GATEWAY_COOKIE ||
+    'lemon_gateway_dev_cookie';
+  const probeNode = `lemon_web_probe_${process.pid}_${Math.floor(Math.random() * 100_000)}`;
+
+  const script = `
+    node_name = "${gatewayNode}"
+    node_atom = String.to_atom(node_name)
+
+    connect_ok =
+      try do
+        Node.connect(node_atom)
+      rescue
+        _ -> false
+      end
+
+    if connect_ok do
+      selector = [{{:"$1", :"$2", :_}, [], [{{:"$1", :"$2"}}]}]
+      entries = :rpc.call(node_atom, Registry, :select, [LemonGateway.ThreadRegistry, selector], 2000)
+
+      list =
+        case entries do
+          value when is_list(value) -> value
+          _ -> []
+        end
+
+      safe_get_state = fn pid ->
+        try do
+          :rpc.call(node_atom, :sys, :get_state, [pid], 1500)
+        catch
+          _, _ -> %{}
+        end
+      end
+
+      safe_job_cwd = fn job ->
+        case job do
+          %{cwd: cwd} when is_binary(cwd) and byte_size(cwd) > 0 -> cwd
+          _ -> nil
+        end
+      end
+
+      line_for = fn session_key, worker_pid ->
+        worker_state =
+          case safe_get_state.(worker_pid) do
+            state when is_map(state) -> state
+            _ -> %{}
+          end
+
+        current_run = Map.get(worker_state, :current_run)
+        is_streaming = is_pid(current_run)
+        jobs = Map.get(worker_state, :jobs, :queue.new())
+
+        cwd =
+          cond do
+            is_pid(current_run) ->
+              run_state =
+                case safe_get_state.(current_run) do
+                  state when is_map(state) -> state
+                  _ -> %{}
+                end
+
+              run_job = Map.get(run_state, :job)
+              safe_job_cwd.(run_job) || ("gateway://" <> session_key)
+
+            true ->
+              queue_head =
+                case :queue.out(jobs) do
+                  {{:value, job}, _rest} -> job
+                  _ -> nil
+                end
+
+              safe_job_cwd.(queue_head) || ("gateway://" <> session_key)
+          end
+
+        sid = Base.url_encode64(session_key, padding: false)
+        cwd64 = Base.url_encode64(cwd, padding: false)
+        flag = if is_streaming, do: "1", else: "0"
+        sid <> "|" <> cwd64 <> "|" <> flag
+      end
+
+      list
+      |> Enum.map(fn
+        {{:session, session_key}, worker_pid} when is_binary(session_key) and is_pid(worker_pid) ->
+          line_for.(session_key, worker_pid)
+
+        _ ->
+          nil
+      end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.each(&IO.puts/1)
+    else
+      IO.puts("__ERROR__|connect_failed|" <> node_name)
+    end
+  `;
+
+  const result = spawnSync(
+    'elixir',
+    ['--sname', probeNode, '--cookie', cookie, '-e', script],
+    {
+      encoding: 'utf8',
+      timeout: 6000,
+      maxBuffer: 1024 * 1024,
+    }
+  );
+
+  if (result.error) {
+    return { sessions: [], error: result.error.message };
+  }
+  if (result.status !== 0) {
+    const err = (result.stderr || result.stdout || '').trim();
+    return { sessions: [], error: err || `probe exited with status ${result.status}` };
+  }
+
+  const sessions: RunningSessionInfo[] = [];
+  const lines = (result.stdout || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  for (const line of lines) {
+    if (line.startsWith('__ERROR__|')) {
+      const parts = line.split('|');
+      return { sessions: [], error: parts.slice(1).join('|') || 'gateway probe error' };
+    }
+
+    const parts = line.split('|');
+    if (parts.length !== 3) {
+      continue;
+    }
+
+    try {
+      const session_id = decodeBase64Url(parts[0]);
+      const cwd = decodeBase64Url(parts[1]);
+      const is_streaming = parts[2] === '1';
+      sessions.push({ session_id, cwd, is_streaming });
+    } catch {
+      continue;
+    }
+  }
+
+  return { sessions, error: null };
 }
 
 function findLemonPath(): string | null {
@@ -416,6 +582,20 @@ wss.on('connection', (ws: WebSocket) => {
       };
       ws.send(JSON.stringify(withServerTime(error)));
       return;
+    }
+
+    if (parsed.type === 'list_running_sessions') {
+      const gatewaySessions = fetchGatewayRunningSessions();
+      const runningSessionsMessage = withServerTime({
+        type: 'running_sessions' as const,
+        sessions: gatewaySessions.sessions,
+        error: gatewaySessions.error,
+      });
+      ws.send(JSON.stringify(runningSessionsMessage));
+
+      if (gatewaySessions.error === null) {
+        return;
+      }
     }
 
     bridge.send(parsed);

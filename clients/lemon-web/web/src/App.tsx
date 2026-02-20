@@ -7,6 +7,7 @@ import { Sidebar } from './components/Sidebar';
 import { ChatView } from './components/ChatView';
 import { ToolTimeline } from './components/ToolTimeline';
 import { StatusBar } from './components/StatusBar';
+import { AgentRobots } from './components/AgentRobots';
 import { WidgetDock } from './components/WidgetDock';
 import { Composer } from './components/Composer';
 import { WorkingBanner } from './components/WorkingBanner';
@@ -40,6 +41,7 @@ function App() {
         <Sidebar />
         <main className="main">
           <StatusBar />
+          <AgentRobots />
           <WidgetDock />
           <div className="main-grid">
             <ChatView />

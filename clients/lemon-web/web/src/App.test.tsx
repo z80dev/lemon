@@ -29,6 +29,10 @@ vi.mock('./components/StatusBar', () => ({
   StatusBar: () => <div data-testid="mock-status-bar">StatusBar</div>,
 }));
 
+vi.mock('./components/AgentRobots', () => ({
+  AgentRobots: () => <div data-testid="mock-agent-robots">AgentRobots</div>,
+}));
+
 vi.mock('./components/WidgetDock', () => ({
   WidgetDock: () => <div data-testid="mock-widget-dock">WidgetDock</div>,
 }));
@@ -174,6 +178,13 @@ describe('App', () => {
       expect(screen.getByTestId('mock-status-bar')).toBeInTheDocument();
     });
 
+    it('renders AgentRobots component', () => {
+      setupStore();
+      render(<App />);
+
+      expect(screen.getByTestId('mock-agent-robots')).toBeInTheDocument();
+    });
+
     it('renders WidgetDock component', () => {
       setupStore();
       render(<App />);
@@ -213,12 +224,13 @@ describe('App', () => {
       setupStore();
       render(<App />);
 
-      // All 10 major child components should be rendered
+      // All 11 major child components should be rendered
       expect(screen.getByTestId('mock-top-bar')).toBeInTheDocument();
       expect(screen.getByTestId('mock-sidebar')).toBeInTheDocument();
       expect(screen.getByTestId('mock-chat-view')).toBeInTheDocument();
       expect(screen.getByTestId('mock-tool-timeline')).toBeInTheDocument();
       expect(screen.getByTestId('mock-status-bar')).toBeInTheDocument();
+      expect(screen.getByTestId('mock-agent-robots')).toBeInTheDocument();
       expect(screen.getByTestId('mock-widget-dock')).toBeInTheDocument();
       expect(screen.getByTestId('mock-composer')).toBeInTheDocument();
       expect(screen.getByTestId('mock-working-banner')).toBeInTheDocument();
@@ -763,15 +775,17 @@ describe('App', () => {
       expect(toastStackInLayout).toBeNull();
     });
 
-    it('places StatusBar and WidgetDock inside main', () => {
+    it('places StatusBar, AgentRobots, and WidgetDock inside main', () => {
       setupStore();
       const { container } = render(<App />);
 
       const main = container.querySelector('main.main');
       const statusBar = main?.querySelector('[data-testid="mock-status-bar"]');
+      const agentRobots = main?.querySelector('[data-testid="mock-agent-robots"]');
       const widgetDock = main?.querySelector('[data-testid="mock-widget-dock"]');
 
       expect(statusBar).toBeInTheDocument();
+      expect(agentRobots).toBeInTheDocument();
       expect(widgetDock).toBeInTheDocument();
     });
 
