@@ -2128,8 +2128,47 @@ causing the quality check to fail with:
 - Now have 1320+ tests (AI app: 69, lemon_core: 488+, lemon_skills: 106)
 - All tests passing (0 failures)
 
+### 2025-02-20 - Infrastructure: Add Oh-My-Pi to Inspiration Repos
+**Work Area**: Infrastructure / Process Improvement
+
+**What was done:**
+- Added oh-my-pi (github.com/can1357/oh-my-pi) to the cron job's inspiration repo rotation
+- Oh-my-pi is a fork of Pi with innovative tooling worth analyzing:
+  - **Hashline Edit Mode**: Line-addressable edits using xxHash32 content hashes
+    - Format: `LINENUM#HASH:CONTENT` for stable line references
+    - Each line identified by 1-indexed line number + 2-char hex hash
+    - Prevents stale edits by validating hashes before mutation
+    - Supports operations: set, replace, append, prepend, insert
+    - Hash computation: xxHash32 on whitespace-normalized line, truncated to 2 hex chars
+  - **Write Tool with LSP**: Automatic formatting and diagnostics on file write
+  - **Tool Renderers**: Rich TUI rendering for tool calls and results
+  - **Streaming Support**: Incremental output for large files with configurable chunk sizes
+- Updated `lemon-janitor-codex` cron job to pull and analyze oh-my-pi
+- Added documentation to cron job prompt about specific features to look for
+
+**Files changed:**
+- Cron job `lemon-janitor-codex` updated via cron update API
+
+**What worked:**
+- Oh-my-pi's hashline system provides robust line addressing that survives file mutations
+- The hash-based approach is superior to simple line numbers for concurrent editing scenarios
+- LSP integration on write provides immediate feedback on code quality
+
+**Potential features to port from oh-my-pi:**
+- Hashline-based edit tool for more reliable file modifications
+- Streaming file renderer for large file operations
+- LSP writethrough for automatic formatting on file changes
+- Enhanced tool result rendering in TUI
+
+**Total progress:**
+- Started with 119 tests
+- Now have 1320+ tests (AI app: 69, lemon_core: 488+, lemon_skills: 106)
+- All tests passing (0 failures)
+- 4 inspiration repos now in rotation: openclaw, ironclaw, pi, oh-my-pi
+
 **Next run should focus on:**
 - Check for more Pi upstream features to port (Claude models through OpenCode, Gemini models)
+- Analyze oh-my-pi for hashline edit tool implementation
 - Add more comprehensive documentation for other features
 - Add skill management to the web dashboard
 - Expand web dashboard tests with LiveView testing
