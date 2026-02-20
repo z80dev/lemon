@@ -2077,6 +2077,57 @@ causing the quality check to fail with:
 - Now have 1316+ tests (AI app: 61, lemon_core: 488+, lemon_skills: 106)
 - All tests passing (0 failures)
 
+### 2025-02-20 - Pi Sync: Add xAI Grok 4 Models
+**Work Area**: Pi Upstream Sync
+
+**What was done:**
+- Synced with Pi upstream (github.com/pi-coding-agent/pi) to check for new models
+- Found Pi has xAI Grok 4 models that Lemon was missing
+- Added 4 new xAI Grok 4 models to Lemon's model registry:
+  - `grok-4`: Base reasoning model, 256k context, 64k max tokens, $3.0/$15.0 per million tokens
+  - `grok-4-1-fast`: Fast vision model with 2M context window, 30k max tokens, $0.2/$0.5 per million tokens
+  - `grok-4-1-fast-non-reasoning`: Non-reasoning vision variant, same specs as fast
+  - `grok-4-fast`: Fast reasoning model, 131k context, 8k max tokens, $5.0/$25.0 per million tokens
+- All models feature:
+  - xAI OpenAI-compatible API
+  - Various context windows (131k to 2M)
+  - Vision support (grok-4-1-fast variants and grok-4-fast)
+  - Reasoning support (except non-reasoning variant)
+- Added comprehensive tests for all 4 models:
+  - `grok 4 has correct specs` - verifies base model pricing, context, reasoning
+  - `grok 4.1 fast has correct specs` - verifies fast vision model specs
+  - `grok 4.1 fast non-reasoning has correct specs` - verifies non-reasoning variant
+  - `grok 4 fast has correct specs` - verifies fast reasoning model
+  - Updated flagship models test to include new models
+- All 69 AI model tests pass (up from 65)
+- No regressions
+
+**Files changed:**
+- `apps/ai/lib/ai/models.ex` - Added 4 new xAI Grok 4 model definitions
+- `apps/ai/test/models_test.exs` - Added 5 new test cases for Grok 4 models
+
+**Commit:**
+- `4ee35548` - feat(models): Add xAI Grok 4 models from Pi upstream
+
+**What worked:**
+- Pi's model structure maps cleanly to Lemon's Model struct
+- xAI models use the existing `:openai_completions` API pattern
+- grok-4-1-fast has impressive 2M token context window
+- Pricing and specs synced directly from Pi upstream
+
+**Models added:**
+| Model | Provider | Context | Max Tokens | Reasoning | Vision |
+|-------|----------|---------|------------|-----------|--------|
+| grok-4 | xai | 256k | 64,000 | Yes | No |
+| grok-4-1-fast | xai | 2M | 30,000 | Yes | Yes |
+| grok-4-1-fast-non-reasoning | xai | 2M | 30,000 | No | Yes |
+| grok-4-fast | xai | 131k | 8,192 | Yes | Yes |
+
+**Total progress:**
+- Started with 119 tests
+- Now have 1320+ tests (AI app: 69, lemon_core: 488+, lemon_skills: 106)
+- All tests passing (0 failures)
+
 **Next run should focus on:**
 - Check for more Pi upstream features to port (Claude models through OpenCode, Gemini models)
 - Add more comprehensive documentation for other features
