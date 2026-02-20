@@ -1616,8 +1616,47 @@ results = LemonSkills.Registry.discover("github")
 - Now have 504+ tests across lemon_core
 - All validator tests passing (0 failures)
 
+### 2025-02-20 - Feature Enhancement: XMTP Config Validation
+**Work Area**: Feature Enhancement
+
+**What was done:**
+- Added XMTP configuration validation to `LemonCore.Config.Validator`:
+  - `validate_xmtp_config/2` function for XMTP config section
+  - wallet_key validation: 64-character hex string (Ethereum private key), with optional 0x prefix
+  - environment validation: must be one of "production", "dev", "local"
+  - api_url validation: must start with http:// or https://
+  - max_connections validation: positive integer
+  - enable_relay boolean validation
+  - All fields support environment variable references (${VAR_NAME})
+- Added `enable_xmtp` boolean validation to gateway config
+- Updated moduledoc with XMTP validation rules
+- Added comprehensive tests (10 new test cases):
+  - wallet_key validation (valid hex, with/without 0x prefix, too short, non-hex, env var)
+  - environment validation (valid values, invalid value, non-string)
+  - api_url validation (valid URLs, invalid format, non-string)
+  - max_connections validation (valid, zero, negative, non-integer)
+  - enable_relay boolean validation
+  - Complete config validation
+  - enable_xmtp boolean validation
+- All 63 validator tests passing (0 failures)
+
+**Files changed:**
+- `apps/lemon_core/lib/lemon_core/config/validator.ex` - Added XMTP validation functions
+- `apps/lemon_core/test/lemon_core/config/validator_test.exs` - Added 10 new tests
+
+**What worked:**
+- Consistent validation patterns with other transport configs (Telegram, Discord, Web Dashboard, Farcaster)
+- Env var references (${VAR}) are validated as acceptable
+- Security-focused validation (proper Ethereum private key format)
+- All 63 validator tests passing
+
+**Total progress:**
+- Started with 119 tests
+- Now have 514+ tests across lemon_core
+- All validator tests passing (0 failures)
+
 **Next run should focus on:**
-- Add validation for remaining transport configs (XMTP, Email)
+- Add validation for Email transport config
 - Check for more Pi upstream features to port
 - Explore Ironclaw's extension manager for install/activate workflow
 - Add more comprehensive documentation for other features
