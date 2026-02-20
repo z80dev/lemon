@@ -535,6 +535,10 @@ defmodule Ai.ModelsTest do
       assert Models.get_model(:xai, "grok-2-vision") != nil
       assert Models.get_model(:xai, "grok-3") != nil
       assert Models.get_model(:xai, "grok-3-fast") != nil
+      assert Models.get_model(:xai, "grok-3-mini") != nil
+      assert Models.get_model(:xai, "grok-3-mini-fast") != nil
+      assert Models.get_model(:xai, "grok-3-mini-fast-latest") != nil
+      assert Models.get_model(:xai, "grok-3-mini-latest") != nil
     end
   end
 
@@ -644,6 +648,42 @@ defmodule Ai.ModelsTest do
       assert model.cost.input == 5.0
       assert model.cost.output == 25.0
       assert model.cost.cache_read == 1.25
+      assert model.cost.cache_write == 0.0
+      assert model.context_window == 131_072
+      assert model.max_tokens == 8192
+    end
+
+    test "grok 3 mini has correct specs" do
+      model = Models.get_model(:xai, "grok-3-mini")
+
+      assert model.id == "grok-3-mini"
+      assert model.name == "Grok 3 Mini"
+      assert model.provider == :xai
+      assert model.api == :openai_completions
+      assert model.base_url == "https://api.x.ai/v1"
+      assert model.reasoning == true
+      assert model.input == [:text]
+      assert model.cost.input == 0.3
+      assert model.cost.output == 0.5
+      assert model.cost.cache_read == 0.075
+      assert model.cost.cache_write == 0.0
+      assert model.context_window == 131_072
+      assert model.max_tokens == 8192
+    end
+
+    test "grok 3 mini fast has correct specs" do
+      model = Models.get_model(:xai, "grok-3-mini-fast")
+
+      assert model.id == "grok-3-mini-fast"
+      assert model.name == "Grok 3 Mini Fast"
+      assert model.provider == :xai
+      assert model.api == :openai_completions
+      assert model.base_url == "https://api.x.ai/v1"
+      assert model.reasoning == true
+      assert model.input == [:text]
+      assert model.cost.input == 0.6
+      assert model.cost.output == 4.0
+      assert model.cost.cache_read == 0.15
       assert model.cost.cache_write == 0.0
       assert model.context_window == 131_072
       assert model.max_tokens == 8192

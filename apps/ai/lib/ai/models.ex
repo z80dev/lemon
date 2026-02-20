@@ -1228,6 +1228,54 @@ defmodule Ai.Models do
       cost: %ModelCost{input: 5.0, output: 25.0, cache_read: 1.25, cache_write: 0.0},
       context_window: 131_072,
       max_tokens: 8192
+    },
+    "grok-3-mini" => %Model{
+      id: "grok-3-mini",
+      name: "Grok 3 Mini",
+      api: :openai_completions,
+      provider: :xai,
+      base_url: "https://api.x.ai/v1",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.3, output: 0.5, cache_read: 0.075, cache_write: 0.0},
+      context_window: 131_072,
+      max_tokens: 8192
+    },
+    "grok-3-mini-fast" => %Model{
+      id: "grok-3-mini-fast",
+      name: "Grok 3 Mini Fast",
+      api: :openai_completions,
+      provider: :xai,
+      base_url: "https://api.x.ai/v1",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.6, output: 4.0, cache_read: 0.15, cache_write: 0.0},
+      context_window: 131_072,
+      max_tokens: 8192
+    },
+    "grok-3-mini-fast-latest" => %Model{
+      id: "grok-3-mini-fast-latest",
+      name: "Grok 3 Mini Fast Latest",
+      api: :openai_completions,
+      provider: :xai,
+      base_url: "https://api.x.ai/v1",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.6, output: 4.0, cache_read: 0.15, cache_write: 0.0},
+      context_window: 131_072,
+      max_tokens: 8192
+    },
+    "grok-3-mini-latest" => %Model{
+      id: "grok-3-mini-latest",
+      name: "Grok 3 Mini Latest",
+      api: :openai_completions,
+      provider: :xai,
+      base_url: "https://api.x.ai/v1",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.3, output: 0.5, cache_read: 0.075, cache_write: 0.0},
+      context_window: 131_072,
+      max_tokens: 8192
     }
   }
 
