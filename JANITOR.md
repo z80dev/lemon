@@ -2207,6 +2207,52 @@ causing the quality check to fail with:
 - Now have 1321+ tests (AI app: 70, lemon_core: 488+, lemon_skills: 106)
 - All tests passing (0 failures)
 
+### 2025-02-20 - Pi Sync: Add Amazon Bedrock Nova Models
+**Work Area**: Pi Upstream Sync
+
+**What was done:**
+- Synced with Pi upstream (github.com/pi-coding-agent/pi) to check for new models
+- Found Pi has Amazon Nova models via Bedrock that Lemon was missing
+- Added new `:amazon_bedrock` provider with 5 Nova models:
+  - `amazon.nova-2-lite-v1:0`: 128k context, text+image, $0.33/$2.75 per million
+  - `amazon.nova-lite-v1:0`: 300k context, text+image, $0.06/$0.24 per million
+  - `amazon.nova-micro-v1:0`: 128k context, text only, $0.035/$0.14 per million
+  - `amazon.nova-premier-v1:0`: 1M context, text+image, reasoning, $2.5/$12.5 per million
+  - `amazon.nova-pro-v1:0`: 300k context, text+image, $0.8/$3.2 per million
+- All models use the `:bedrock_converse_stream` API
+- Nova Micro is extremely cost-effective for simple text tasks
+- Nova Premier has 1M context window with reasoning capabilities
+- Added comprehensive tests for all 5 models
+- All 72 AI model tests pass (up from 70)
+- No regressions
+
+**Files changed:**
+- `apps/ai/lib/ai/models.ex` - Added @amazon_bedrock_models section with 5 Nova models
+- `apps/ai/test/models_test.exs` - Added 7 new tests for Amazon Bedrock models
+
+**Commit:**
+- `5d3ed6c2` - feat(models): Add Amazon Bedrock Nova models from Pi upstream
+
+**What worked:**
+- Pi's model structure maps cleanly to Lemon's Model struct
+- Amazon Nova models offer competitive pricing vs other providers
+- Nova Micro at $0.035/$0.14 is one of the most cost-effective options
+- Nova Premier's 1M context window matches Gemini's capabilities
+
+**Models added:**
+| Model | Provider | Context | Max Tokens | Reasoning | Vision | Cost (in/out) |
+|-------|----------|---------|------------|-----------|--------|---------------|
+| amazon.nova-2-lite-v1:0 | amazon_bedrock | 128k | 4,096 | No | Yes | $0.33/$2.75 |
+| amazon.nova-lite-v1:0 | amazon_bedrock | 300k | 8,192 | No | Yes | $0.06/$0.24 |
+| amazon.nova-micro-v1:0 | amazon_bedrock | 128k | 8,192 | No | No | $0.035/$0.14 |
+| amazon.nova-premier-v1:0 | amazon_bedrock | 1M | 16,384 | Yes | Yes | $2.5/$12.5 |
+| amazon.nova-pro-v1:0 | amazon_bedrock | 300k | 8,192 | No | Yes | $0.8/$3.2 |
+
+**Total progress:**
+- Started with 119 tests
+- Now have 1323+ tests (AI app: 72, lemon_core: 488+, lemon_skills: 106)
+- All tests passing (0 failures)
+
 **Next run should focus on:**
 - Check for more Pi upstream features to port (Claude models through OpenCode, Gemini models)
 - Analyze oh-my-pi for hashline edit tool implementation
