@@ -360,8 +360,10 @@ defmodule CodingAgent.Tools.Task do
 
     case budget_check do
       {:error, :budget_exceeded, details} ->
-        {:error,
-         BudgetEnforcer.handle_budget_exceeded(parent_run_id || "unknown", details) |> elem(1)}
+        {_action, message} =
+          BudgetEnforcer.handle_budget_exceeded(parent_run_id || "unknown", details)
+
+        {:error, message}
 
       _ ->
         # Check tool policy for engine
