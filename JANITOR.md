@@ -1655,8 +1655,56 @@ results = LemonSkills.Registry.discover("github")
 - Now have 514+ tests across lemon_core
 - All validator tests passing (0 failures)
 
+### 2025-02-20 - Feature Enhancement: Email Config Validation
+**Work Area**: Feature Enhancement
+
+**What was done:**
+- Added Email configuration validation to `LemonCore.Config.Validator`:
+  - `validate_email_config/2` function for Email config section
+  - Inbound config validation: bind_host, bind_port, token, max_body_bytes
+  - Outbound config validation: relay, port, username, password, hostname, from_address
+  - TLS config validation: boolean or string (true/false/always/never/if_available)
+  - Auth config validation: boolean or string (true/false/always/if_available)
+  - attachment_max_bytes validation: positive integer
+  - inbound_enabled and webhook_enabled boolean validation
+- Added `enable_email` boolean validation to gateway config
+- Updated moduledoc with Email validation rules
+- Added comprehensive tests (12 new test cases):
+  - Email inbound config validation (valid, invalid port, empty host)
+  - Email outbound config validation (valid, invalid port, empty relay)
+  - TLS config validation (boolean values, string values, invalid value)
+  - Auth config validation (boolean values, string values, invalid value)
+  - attachment_max_bytes validation (valid, zero, negative)
+  - inbound_enabled boolean validation
+  - webhook_enabled boolean validation
+  - Complete email config validation
+  - enable_email boolean validation
+- All 73 validator tests passing (0 failures)
+
+**Files changed:**
+- `apps/lemon_core/lib/lemon_core/config/validator.ex` - Added Email validation functions
+- `apps/lemon_core/test/lemon_core/config/validator_test.exs` - Added 12 new tests
+
+**What worked:**
+- Consistent validation patterns with other transport configs (Telegram, Discord, Web Dashboard, Farcaster, XMTP)
+- Support for both boolean and string TLS/auth configurations (matches gen_smtp behavior)
+- Port validation helper reused across multiple config sections
+- All 73 validator tests passing
+
+**Transport config validation status:**
+- ✅ Telegram: token format, compaction settings
+- ✅ Discord: token format, guild/channel IDs
+- ✅ Web Dashboard: port, host, secret key base, access token
+- ✅ Farcaster: hub URL, signer key, app key, frame URL, state secret
+- ✅ XMTP: wallet key, environment, API URL, max connections
+- ✅ Email: SMTP relay, inbound webhook, TLS/auth settings
+
+**Total progress:**
+- Started with 119 tests
+- Now have 524+ tests across lemon_core
+- All validator tests passing (0 failures)
+
 **Next run should focus on:**
-- Add validation for Email transport config
 - Check for more Pi upstream features to port
 - Explore Ironclaw's extension manager for install/activate workflow
 - Add more comprehensive documentation for other features
