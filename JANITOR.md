@@ -1913,8 +1913,64 @@ causing the quality check to fail with:
 - Now have 1307+ tests (AI app: 54, lemon_core: 488+, lemon_skills: 89)
 - All tests passing (0 failures)
 
+### 2025-02-20 - Pi Sync: Add xAI Grok Model Series
+**Work Area**: Pi Upstream Sync
+
+**What was done:**
+- Synced with Pi upstream (github.com/pi-coding-agent/pi) to check for new models
+- Found Pi has xAI Grok models that Lemon was missing
+- Added 7 new xAI Grok models to Lemon's model registry:
+  - `grok-2`: Base Grok 2 model, 128k context, $2.0/$10.0 per million tokens
+  - `grok-2-latest`: Latest Grok 2 variant
+  - `grok-2-vision`: Vision-capable Grok 2, 8k context, $2.0/$10.0 per million tokens
+  - `grok-2-vision-latest`: Latest vision variant
+  - `grok-3`: Base Grok 3 model, 128k context, $3.0/$15.0 per million tokens
+  - `grok-3-fast`: Fast Grok 3 variant, $5.0/$25.0 per million tokens
+  - `grok-3-fast-latest`: Latest fast variant
+- All models use xAI's OpenAI-compatible API at `api.x.ai/v1`
+- Vision models support image input
+- No reasoning support for any Grok models
+- Added new `:xai` provider to the models registry
+- Added comprehensive tests for all 7 models:
+  - `xai grok models` - flagship test verifying all models exist
+  - `grok 2 has correct specs` - verifies pricing, context window, capabilities
+  - `grok 2 vision has correct specs` - verifies vision model specs
+  - `grok 3 has correct specs` - verifies pricing, context window, capabilities
+  - `grok 3 fast has correct specs` - verifies fast variant specs
+- All 59 AI model tests pass (up from 54)
+- No regressions
+
+**Files changed:**
+- `apps/ai/lib/ai/models.ex` - Added 7 new xAI Grok model definitions and provider registry entry
+- `apps/ai/test/models_test.exs` - Added 5 new test cases for xAI models
+
+**Commit:**
+- `8ca6e9c9` - feat(models): Add xAI Grok model series
+
+**What worked:**
+- Pi's model structure maps cleanly to Lemon's Model struct
+- xAI models use the existing `:openai_completions` API pattern
+- Pricing and specs synced directly from Pi upstream
+- Using separate `@xai_models` attribute keeps the code organized
+
+**Models added:**
+| Model | Provider | Context | Max Tokens | Reasoning | Vision |
+|-------|----------|---------|------------|-----------|--------|
+| grok-2 | xai | 128k | 8,192 | No | No |
+| grok-2-latest | xai | 128k | 8,192 | No | No |
+| grok-2-vision | xai | 8k | 4,096 | No | Yes |
+| grok-2-vision-latest | xai | 8k | 4,096 | No | Yes |
+| grok-3 | xai | 128k | 8,192 | No | No |
+| grok-3-fast | xai | 128k | 8,192 | No | No |
+| grok-3-fast-latest | xai | 128k | 8,192 | No | No |
+
+**Total progress:**
+- Started with 119 tests
+- Now have 1312+ tests (AI app: 59, lemon_core: 488+, lemon_skills: 89)
+- All tests passing (0 failures)
+
 **Next run should focus on:**
-- Check for more Pi upstream features to port
+- Check for more Pi upstream features to port (Claude models through OpenCode, Gemini models)
 - Add more comprehensive documentation for other features
 - Add skill management to the web dashboard
 - Expand web dashboard tests with LiveView testing
