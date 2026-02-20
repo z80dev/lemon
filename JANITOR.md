@@ -1796,6 +1796,36 @@ mix lemon.skill remove my-skill --force
 - Now have 524+ tests across lemon_core, plus 7 skill CLI tests, plus 4 web dashboard tests
 - All tests passing (0 failures)
 
+### 2025-02-20 - Bug Fix: Architecture Check Boundary Policy
+**Work Area**: Bug Fix / Architecture
+
+**What was done:**
+- Fixed failing architecture check test (`architecture_check_test.exs`)
+- Added missing `lemon_web` app to boundary policy configuration:
+  - Added to `@allowed_direct_deps` with `[:lemon_core, :lemon_router]`
+  - Added to `@app_namespaces` with `["LemonWeb"]`
+- Added `lemon_gateway` to `lemon_control_plane`'s allowed dependencies
+  (required because `transports_status.ex` references `LemonGateway.TransportRegistry`)
+
+**Root cause:**
+The `lemon_web` app was added without updating the architecture boundary policy,
+causing the quality check to fail with:
+- `:unknown_app` for lemon_web
+- `:forbidden_dependency` for lemon_web's umbrella deps
+- `:forbidden_namespace_reference` for lemon_control_plane -> lemon_gateway
+
+**Files changed:**
+- `apps/lemon_core/lib/lemon_core/quality/architecture_check.ex` (3 lines added)
+
+**Validation:**
+- `mix test apps/lemon_core/test/lemon_core/quality/architecture_check_test.exs` ✅
+- Full test suite: 522 tests, 0 failures ✅
+
+**Total progress:**
+- Started with 119 tests
+- Now have 524+ tests across lemon_core (522 passing), plus 7 skill CLI tests, plus 4 web dashboard tests
+- All tests passing (0 failures)
+
 **Next run should focus on:**
 - Check for more Pi upstream features to port
 - Add more comprehensive documentation for other features
