@@ -100,6 +100,14 @@ defmodule Ai.ModelsTest do
     test "returns empty list for unknown provider" do
       assert Models.get_models(:unknown_provider) == []
     end
+
+    test "returns all opencode models" do
+      models = Models.get_models(:opencode)
+
+      assert is_list(models)
+      assert length(models) > 0
+      assert Enum.all?(models, &match?(%Model{provider: :opencode}, &1))
+    end
   end
 
   describe "get_providers/0" do
@@ -111,6 +119,7 @@ defmodule Ai.ModelsTest do
       assert :openai in providers
       assert :"openai-codex" in providers
       assert :google in providers
+      assert :opencode in providers
     end
   end
 
@@ -424,6 +433,10 @@ defmodule Ai.ModelsTest do
       assert Models.get_model(:google, "gemini-1.5-pro") != nil
       assert Models.get_model(:google, "gemini-3.1-pro") != nil
       assert Models.get_model(:google, "gemini-3.1-pro-preview") != nil
+    end
+
+    test "opencode models" do
+      assert Models.get_model(:opencode, "trinity-large-preview-free") != nil
     end
   end
 end

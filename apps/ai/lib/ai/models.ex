@@ -1005,6 +1005,25 @@ defmodule Ai.Models do
   }
 
   # ============================================================================
+  # OpenCode Models (OpenAI-compatible API)
+  # ============================================================================
+
+  @opencode_models %{
+    "trinity-large-preview-free" => %Model{
+      id: "trinity-large-preview-free",
+      name: "Trinity Large Preview",
+      api: :openai_completions,
+      provider: :opencode,
+      base_url: "https://opencode.ai/zen/v1",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 131_072,
+      max_tokens: 131_072
+    }
+  }
+
+  # ============================================================================
   # Combined Registry
   # ============================================================================
 
@@ -1032,7 +1051,8 @@ defmodule Ai.Models do
     :openai => @openai_models,
     :"openai-codex" => @openai_codex_models,
     :google => @google_models,
-    :kimi => @kimi_models
+    :kimi => @kimi_models,
+    :opencode => @opencode_models
   }
 
   @providers Map.keys(@models)

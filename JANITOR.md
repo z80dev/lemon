@@ -1200,3 +1200,50 @@ LemonCore.ConfigCache.reload("/path/to/project", validate: true)
 - Explore Ironclaw's extension registry pattern for Lemon
 - Check for more Pi upstream features to port
 - Add more validation rules to the Validator module
+
+### 2025-02-20 - Pi Sync: Add OpenCode Trinity Model
+**Work Area**: Pi Upstream Sync
+
+**What was done:**
+- Synced with Pi upstream (github.com/pi-coding-agent/pi)
+- Checked for new LLM models in Pi's models.generated.ts
+- Added missing `trinity-large-preview-free` model from OpenCode
+- Created new `@opencode_models` section in `Ai.Models`
+- Added model specs:
+  - id: "trinity-large-preview-free"
+  - name: "Trinity Large Preview"
+  - api: :openai_completions
+  - provider: :opencode
+  - base_url: "https://opencode.ai/zen/v1"
+  - context_window: 131_072
+  - max_tokens: 131_072
+  - Free model (cost: 0.0 for all)
+- Added `:opencode` to the combined models registry
+- Added comprehensive tests:
+  - `returns opencode model by id` - verifies all model fields
+  - `returns all opencode models` - verifies provider filtering
+  - `assert :opencode in providers` - verifies provider registration
+  - `test "opencode models"` - verifies model existence
+
+**Files changed:**
+- `apps/ai/lib/ai/models.ex` - Added `@opencode_models` section and registry entry
+- `apps/ai/test/models_test.exs` - Added 4 new tests for OpenCode models
+
+**What worked:**
+- Pi's model structure maps cleanly to Lemon's Model struct
+- OpenCode uses OpenAI-compatible API (`:openai_completions`)
+- Tests follow existing patterns for other providers
+
+**Total progress:**
+- Started with 1303 tests
+- Now have 1305 tests (AI app)
+- All tests passing (0 failures)
+
+**Next run should focus on:**
+- Explore Ironclaw's extension registry pattern for Lemon
+  - Curated registry with built-in entries
+  - Fuzzy search with scoring
+  - Online discovery capabilities
+  - Extension kinds (MCP servers, WASM tools, etc.)
+- Or add more validation rules to the Validator module
+- Or check for more Pi upstream features to port
