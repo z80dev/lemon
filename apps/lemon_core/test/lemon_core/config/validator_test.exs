@@ -664,4 +664,112 @@ defmodule LemonCore.Config.ValidatorTest do
       assert Enum.any?(errors, &String.contains?(&1, "enable_farcaster"))
     end
   end
+
+  describe "validate_xmtp_config/2" do
+    test "validates xmtp wallet_key" do
+      # Valid Ethereum private key (64 hex chars without 0x prefix)
+      valid_key = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
+      errors = Validator.validate_xmtp_config([], %{wallet_key: valid_key})
+      assert errors == []
+
+      # Valid Ethereum private key (with 0x prefix)
+      valid_key_with_prefix = "0xa1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
+      errors = Validator.validate_xmtp_config([], %{wallet_key: valid_key_with_prefix})
+      assert errors == []
+
+      # Invalid format (too short)
+      short_key = "a1b2c3d4"
+      errors = Validator.validate_xmtp_config([], %{wallet_key: short_key})
+      assert Enum.any?(errors, &String.contains?(&1, "wallet_key"))
+
+      # Invalid format (non-hex characters)
+      invalid_key = "g1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
+      errors = Validator.validate_xmtp_config([], %{wallet_key: invalid_key})
+      assert Enum.any?(errors, &String.contains?(&1, "wallet_key"))
+
+      # Env var reference is valid
+      errors = Validator.validate_xmtp_config([], %{wallet_key: "${XMTP_WALLET_KEY}"})
+      assert errors == []
+    end
+
+    test "validates xmtp environment" do
+      errors = Validator.validate_xmtp_config([], %{environment: "production"})
+      assert errors == []
+
+      errors = Validator.validate_xmtp_config([], %{environment: "dev"})
+      assert errors == []
+
+      errors = Validator.validate_xmtp_config([], %{environment: "local"})
+      assert errors == []
+
+      errors = Validator.validate_xmtp_config([], %{environment: "invalid"})
+      assert Enum.any?(errors, &String.contains?(&1, "environment"))
+
+      errors = Validator.validate_xmtp_config([], %{environment: 123})
+      assert Enum.any?(errors, &String.contains?(&1, "environment"))
+    end
+
+    test "validates xmtp api_url" do
+      errors = Validator.validate_xmtp_config([], %{api_url: "https://api.xmtp.network"})
+      assert errors == []
+
+      errors = Validator.validate_xmtp_config([], %{api_url: "http://localhost:5555"})
+      assert errors == []
+
+      errors = Validator.validate_xmtp_config([], %{api_url: "invalid-url"})
+      assert Enum.any?(errors, &String.contains?(&1, "api_url"))
+
+      errors = Validator.validate_xmtp_config([], %{api_url: 123})
+      assert Enum.any?(errors, &String.contains?(&1, "api_url"))
+    end
+
+    test "validates xmtp max_connections" do
+      errors = Validator.validate_xmtp_config([], %{max_connections: 10})
+      assert errors == []
+
+      errors = Validator.validate_xmtp_config([], %{max_connections: 0})
+      assert Enum.any?(errors, &String.contains?(&1, "max_connections"))
+
+      errors = Validator.validate_xmtp_config([], %{max_connections: -1})
+      assert Enum.any?(errors, &String.contains?(&1, "max_connections"))
+
+      errors = Validator.validate_xmtp_config([], %{max_connections: "not-an-integer"})
+      assert Enum.any?(errors, &String.contains?(&1, "max_connections"))
+    end
+
+    test "validates xmtp enable_relay boolean" do
+      errors = Validator.validate_xmtp_config([], %{enable_relay: true})
+      assert errors == []
+
+      errors = Validator.validate_xmtp_config([], %{enable_relay: false})
+      assert errors == []
+
+      errors = Validator.validate_xmtp_config([], %{enable_relay: "yes"})
+      assert Enum.any?(errors, &String.contains?(&1, "enable_relay"))
+    end
+
+    test "accepts nil xmtp config" do
+      errors = Validator.validate_xmtp_config([], nil)
+      assert errors == []
+    end
+
+    test "validates complete xmtp config" do
+      errors = Validator.validate_xmtp_config([], %{
+        wallet_key: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2",
+        environment: "production",
+        api_url: "https://api.xmtp.network",
+        max_connections: 10,
+        enable_relay: false
+      })
+      assert errors == []
+    end
+
+    test "validates enable_xmtp boolean" do
+      errors = Validator.validate_gateway(%{enable_xmtp: true}, [])
+      refute Enum.any?(errors, &String.contains?(&1, "enable_xmtp"))
+
+      errors = Validator.validate_gateway(%{enable_xmtp: "yes"}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "enable_xmtp"))
+    end
+  end
 end

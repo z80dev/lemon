@@ -21,6 +21,7 @@ defmodule LemonCore.Config.Validator do
   - Discord: token format, guild/channel IDs
   - Web Dashboard: port, host, secret key base, access token
   - Farcaster: hub URL, signer key, app key, frame URL, state secret
+  - XMTP: wallet key, environment, API URL, max connections
   - Logging: valid log levels, writable paths
   - Providers: valid API key formats
   - Tools: valid timeout values
@@ -103,12 +104,14 @@ defmodule LemonCore.Config.Validator do
     |> validate_boolean(Map.get(gateway, :enable_discord), "gateway.enable_discord")
     |> validate_boolean(Map.get(gateway, :enable_web_dashboard), "gateway.enable_web_dashboard")
     |> validate_boolean(Map.get(gateway, :enable_farcaster), "gateway.enable_farcaster")
+    |> validate_boolean(Map.get(gateway, :enable_xmtp), "gateway.enable_xmtp")
     |> validate_boolean(Map.get(gateway, :require_engine_lock), "gateway.require_engine_lock")
     |> validate_non_negative_integer(Map.get(gateway, :engine_lock_timeout_ms), "gateway.engine_lock_timeout_ms")
     |> validate_telegram_config(Map.get(gateway, :telegram))
     |> validate_discord_config(Map.get(gateway, :discord))
     |> validate_web_dashboard_config(Map.get(gateway, :web_dashboard))
     |> validate_farcaster_config(Map.get(gateway, :farcaster))
+    |> validate_xmtp_config(Map.get(gateway, :xmtp))
     |> validate_queue_config(Map.get(gateway, :queue))
   end
 
@@ -397,6 +400,71 @@ defmodule LemonCore.Config.Validator do
   end
 
   defp validate_farcaster_state_secret(errors, _), do: ["gateway.farcaster.state_secret: must be a string" | errors]
+
+  @doc """
+  Validates XMTP configuration.
+  """
+  @spec validate_xmtp_config([String.t()], map() | nil) :: [String.t()]
+  def validate_xmtp_config(errors, nil), do: errors
+
+  def validate_xmtp_config(errors, xmtp) when is_map(xmtp) do
+    errors
+    |> validate_xmtp_wallet_key(Map.get(xmtp, :wallet_key))
+    |> validate_xmtp_environment(Map.get(xmtp, :environment))
+    |> validate_xmtp_api_url(Map.get(xmtp, :api_url))
+    |> validate_positive_integer(Map.get(xmtp, :max_connections), "gateway.xmtp.max_connections")
+    |> validate_boolean(Map.get(xmtp, :enable_relay), "gateway.xmtp.enable_relay")
+  end
+
+  def validate_xmtp_config(errors, _),
+    do: ["gateway.xmtp: must be a map" | errors]
+
+  defp validate_xmtp_wallet_key(errors, nil), do: errors
+
+  defp validate_xmtp_wallet_key(errors, key) when is_binary(key) do
+    if String.starts_with?(key, "${") and String.ends_with?(key, "}") do
+      # References an env var, which is valid
+      errors
+    else
+      # XMTP wallet keys are Ethereum private keys (64 hex characters, with or without 0x prefix)
+      # Remove 0x prefix if present
+      key_without_prefix = String.replace_prefix(key, "0x", "")
+
+      if Regex.match?(~r/^[0-9a-fA-F]{64}$/, key_without_prefix) do
+        errors
+      else
+        ["gateway.xmtp.wallet_key: invalid format (expected 64-character hex string, optionally with 0x prefix)" | errors]
+      end
+    end
+  end
+
+  defp validate_xmtp_wallet_key(errors, _), do: ["gateway.xmtp.wallet_key: must be a string" | errors]
+
+  defp validate_xmtp_environment(errors, nil), do: errors
+
+  defp validate_xmtp_environment(errors, env) when is_binary(env) do
+    valid_envs = ["production", "dev", "local"]
+
+    if env in valid_envs do
+      errors
+    else
+      ["gateway.xmtp.environment: invalid environment '#{env}'. Valid: #{Enum.join(valid_envs, ", ")}" | errors]
+    end
+  end
+
+  defp validate_xmtp_environment(errors, _), do: ["gateway.xmtp.environment: must be a string" | errors]
+
+  defp validate_xmtp_api_url(errors, nil), do: errors
+
+  defp validate_xmtp_api_url(errors, url) when is_binary(url) do
+    if String.starts_with?(url, ["http://", "https://"]) do
+      errors
+    else
+      ["gateway.xmtp.api_url: must start with http:// or https://" | errors]
+    end
+  end
+
+  defp validate_xmtp_api_url(errors, _), do: ["gateway.xmtp.api_url: must be a string" | errors]
 
   @doc """
   Validates queue configuration.
