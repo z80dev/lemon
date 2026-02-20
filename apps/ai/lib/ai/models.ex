@@ -1141,6 +1141,97 @@ defmodule Ai.Models do
   }
 
   # ============================================================================
+  # xAI Models (Grok series via OpenAI-compatible API)
+  # ============================================================================
+
+  @xai_models %{
+    "grok-2" => %Model{
+      id: "grok-2",
+      name: "Grok 2",
+      api: :openai_completions,
+      provider: :xai,
+      base_url: "https://api.x.ai/v1",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 2.0, output: 10.0, cache_read: 2.0, cache_write: 0.0},
+      context_window: 131_072,
+      max_tokens: 8192
+    },
+    "grok-2-latest" => %Model{
+      id: "grok-2-latest",
+      name: "Grok 2 Latest",
+      api: :openai_completions,
+      provider: :xai,
+      base_url: "https://api.x.ai/v1",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 2.0, output: 10.0, cache_read: 2.0, cache_write: 0.0},
+      context_window: 131_072,
+      max_tokens: 8192
+    },
+    "grok-2-vision" => %Model{
+      id: "grok-2-vision",
+      name: "Grok 2 Vision",
+      api: :openai_completions,
+      provider: :xai,
+      base_url: "https://api.x.ai/v1",
+      reasoning: false,
+      input: [:text, :image],
+      cost: %ModelCost{input: 2.0, output: 10.0, cache_read: 2.0, cache_write: 0.0},
+      context_window: 8192,
+      max_tokens: 4096
+    },
+    "grok-2-vision-latest" => %Model{
+      id: "grok-2-vision-latest",
+      name: "Grok 2 Vision Latest",
+      api: :openai_completions,
+      provider: :xai,
+      base_url: "https://api.x.ai/v1",
+      reasoning: false,
+      input: [:text, :image],
+      cost: %ModelCost{input: 2.0, output: 10.0, cache_read: 2.0, cache_write: 0.0},
+      context_window: 8192,
+      max_tokens: 4096
+    },
+    "grok-3" => %Model{
+      id: "grok-3",
+      name: "Grok 3",
+      api: :openai_completions,
+      provider: :xai,
+      base_url: "https://api.x.ai/v1",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 3.0, output: 15.0, cache_read: 0.75, cache_write: 0.0},
+      context_window: 131_072,
+      max_tokens: 8192
+    },
+    "grok-3-fast" => %Model{
+      id: "grok-3-fast",
+      name: "Grok 3 Fast",
+      api: :openai_completions,
+      provider: :xai,
+      base_url: "https://api.x.ai/v1",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 5.0, output: 25.0, cache_read: 1.25, cache_write: 0.0},
+      context_window: 131_072,
+      max_tokens: 8192
+    },
+    "grok-3-fast-latest" => %Model{
+      id: "grok-3-fast-latest",
+      name: "Grok 3 Fast Latest",
+      api: :openai_completions,
+      provider: :xai,
+      base_url: "https://api.x.ai/v1",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 5.0, output: 25.0, cache_read: 1.25, cache_write: 0.0},
+      context_window: 131_072,
+      max_tokens: 8192
+    }
+  }
+
+  # ============================================================================
   # Combined Registry
   # ============================================================================
 
@@ -1170,7 +1261,8 @@ defmodule Ai.Models do
     :google => @google_models,
     :google_antigravity => @google_antigravity_models,
     :kimi => @kimi_models,
-    :opencode => @opencode_models
+    :opencode => @opencode_models,
+    :xai => @xai_models
   }
 
   @providers Map.keys(@models)
