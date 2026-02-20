@@ -140,4 +140,130 @@ defmodule AgentCore.CliRunners.JsonlRunnerSafetyTest do
 
   defp restore_env(app, key, :__unset__), do: Application.delete_env(app, key)
   defp restore_env(app, key, value), do: Application.put_env(app, key, value)
+
+  # ============================================================================
+  # Runner Crash and EventStream Integration
+  # ============================================================================
+
+  defmodule CrashableRunner do
+    @behaviour AgentCore.CliRunners.JsonlRunner
+
+    @impl true
+    def engine, do: "crashable"
+
+    @impl true
+    def build_command(_prompt, _resume, _state) do
+      # Start a long-running process that we can kill
+      {"sleep", ["30"]}
+    end
+
+    @impl true
+    def init_state(_prompt, _resume), do: %{}
+
+    @impl true
+    def stdin_payload(_prompt, _resume, _state), do: nil
+
+    @impl true
+    def decode_line(_line), do: {:error, :noop}
+
+    @impl true
+    def translate_event(_data, state), do: {[], state, []}
+
+    @impl true
+    def handle_exit_error(_exit_code, state), do: {[], state}
+
+    @impl true
+    def handle_stream_end(state), do: {[], state}
+
+    @impl true
+    def env(_state), do: nil
+  end
+
+  test "runner crash emits error event through EventStream" do
+    # Start the runner
+    {:ok, runner_pid} = JsonlRunner.start_link(CrashableRunner, prompt: "test")
+
+    # Get the stream
+    stream = JsonlRunner.stream(runner_pid)
+
+    # Start a consumer task (simulating CliAdapter.consume_runner)
+    consumer =
+      Task.async(fn ->
+        AgentCore.EventStream.events(stream) |> Enum.to_list()
+      end)
+
+    # Give consumer time to start waiting
+    Process.sleep(100)
+
+    # Kill the runner process (simulates crash)
+    Process.exit(runner_pid, :kill)
+
+    # Consumer should receive error event
+    events = Task.await(consumer, 2000)
+
+    assert Enum.any?(events, fn
+             {:error, {:runner_crashed, :killed}, _} -> true
+             _ -> false
+           end)
+  end
+
+  test "runner crash wakes multiple waiting consumers" do
+    {:ok, runner_pid} = JsonlRunner.start_link(CrashableRunner, prompt: "test")
+    stream = JsonlRunner.stream(runner_pid)
+
+    # Start multiple consumers
+    consumers =
+      for _ <- 1..3 do
+        Task.async(fn ->
+          AgentCore.EventStream.events(stream) |> Enum.to_list()
+        end)
+      end
+
+    Process.sleep(100)
+
+    # Kill runner
+    Process.exit(runner_pid, :kill)
+
+    # All consumers should receive error
+    for task <- consumers do
+      events = Task.await(task, 2000)
+      assert Enum.any?(events, fn
+               {:error, {:runner_crashed, :killed}, _} -> true
+               _ -> false
+             end)
+    end
+  end
+
+  test "runner that crashes during event emission still wakes consumers" do
+    # This tests the specific scenario we fixed:
+    # Runner crashes while consumer is blocked on safe_take/1
+
+    {:ok, runner_pid} = JsonlRunner.start_link(CrashableRunner, prompt: "test")
+    stream = JsonlRunner.stream(runner_pid)
+
+    # Block on events (simulating the stuck runs we killed)
+    consumer =
+      Task.async(fn ->
+        # This would block forever before the fix
+        AgentCore.EventStream.events(stream) |> Enum.to_list()
+      end)
+
+    # Wait for consumer to be blocked
+    Process.sleep(200)
+
+    # Verify consumer is still alive (blocked)
+    assert Process.alive?(consumer.pid)
+
+    # Kill runner
+    Process.exit(runner_pid, :kill)
+
+    # Consumer should now complete (not block forever)
+    events = Task.await(consumer, 2000)
+
+    # Should have terminal error
+    assert Enum.any?(events, fn
+             {:error, {:runner_crashed, :killed}, _} -> true
+             _ -> false
+           end)
+  end
 end

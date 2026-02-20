@@ -422,7 +422,10 @@ defmodule AgentCore.CliRunners.JsonlRunner do
         # drain all queued events (especially final exit/cleanup events). If we set
         # the owner to the runner itself, the stream will cancel as soon as the
         # runner terminates, which can race with the consumer and drop events.
-        {:ok, stream} = AgentCore.EventStream.start_link(owner: owner, timeout: :infinity)
+        #
+        # We set both owner (caller) and runner (self). If the runner crashes,
+        # the stream will emit an error event to wake up waiting consumers.
+        {:ok, stream} = AgentCore.EventStream.start_link(owner: owner, runner: self(), timeout: :infinity)
 
         # Initialize runner state
         runner_state =

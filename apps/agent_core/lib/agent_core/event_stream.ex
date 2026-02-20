@@ -96,6 +96,7 @@ defmodule AgentCore.EventStream do
 
   @type option ::
           {:owner, pid()}
+          | {:runner, pid()}
           | {:max_queue, pos_integer()}
           | {:drop_strategy, drop_strategy()}
           | {:timeout, timeout()}
@@ -110,6 +111,8 @@ defmodule AgentCore.EventStream do
   ## Options
 
   - `:owner` - Process to monitor. Stream cancels if owner dies. Default: `self()`
+  - `:runner` - Process producing events (e.g., CLI runner). Stream errors if runner dies.
+    This ensures consumers are woken up if the producer crashes.
   - `:max_queue` - Maximum events to buffer. Default: #{@default_max_queue}
   - `:drop_strategy` - What to do on overflow: `:drop_oldest`, `:drop_newest`, or `:error`.
     Default: `:error`
@@ -333,12 +336,16 @@ defmodule AgentCore.EventStream do
   @impl true
   def init(opts) do
     owner = Keyword.get(opts, :owner, self())
+    runner = Keyword.get(opts, :runner)
     max_queue = Keyword.get(opts, :max_queue, @default_max_queue)
     drop_strategy = Keyword.get(opts, :drop_strategy, :error)
     timeout = Keyword.get(opts, :timeout, @default_timeout)
 
     # Monitor the owner process (unless it's self, which is the stream itself)
     owner_ref = if owner != self(), do: Process.monitor(owner), else: nil
+
+    # Monitor the runner process if provided (ensures we error if producer dies)
+    runner_ref = if runner, do: Process.monitor(runner), else: nil
 
     # Set up stream timeout
     timeout_ref =
@@ -358,6 +365,8 @@ defmodule AgentCore.EventStream do
       cancel_reason: nil,
       owner: owner,
       owner_ref: owner_ref,
+      runner: runner,
+      runner_ref: runner_ref,
       task_pid: nil,
       task_ref: nil,
       timeout_ref: timeout_ref
@@ -495,6 +504,27 @@ defmodule AgentCore.EventStream do
     {:stop, :normal, state}
   end
 
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{runner_ref: ref} = state) do
+    # Runner died - this is a producer crash, emit error but keep stream alive
+    # so consumers can read the error event. Stream will be cleaned up by owner
+    # monitoring or timeout.
+    Logger.warning("AgentCore.EventStream runner died: #{inspect(reason)}, emitting error")
+
+    state = %{state | runner: nil, runner_ref: nil}
+
+    unless state.done or state.canceled do
+      # Runner crashed before completing - this is an error
+      error_event = {:error, {:runner_crashed, reason}, nil}
+
+      state = push_terminal(error_event, state)
+      state = %{state | result: {:error, {:runner_crashed, reason}, nil}, done: true}
+      state = notify_result_waiters(state)
+      {:noreply, state}
+    else
+      {:noreply, state}
+    end
+  end
+
   def handle_info({:DOWN, ref, :process, pid, reason}, %{task_pid: pid, task_ref: ref} = state) do
     # Attached task died
     Logger.debug("AgentCore.EventStream task died: #{inspect(reason)}")
@@ -538,6 +568,11 @@ defmodule AgentCore.EventStream do
 
     if state.task_ref do
       Process.demonitor(state.task_ref, [:flush])
+    end
+
+    # Demonitor runner to avoid leaking monitor
+    if state.runner_ref do
+      Process.demonitor(state.runner_ref, [:flush])
     end
 
     :ok

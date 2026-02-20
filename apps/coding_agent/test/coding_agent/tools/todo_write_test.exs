@@ -104,13 +104,19 @@ defmodule CodingAgent.Tools.TodoWriteTest do
       valid_priorities = ["high", "medium", "low"]
 
       for priority <- valid_priorities do
-        todos = [%{"id" => "1", "content" => "Test", "status" => "pending", "priority" => priority}]
+        todos = [
+          %{"id" => "1", "content" => "Test", "status" => "pending", "priority" => priority}
+        ]
+
         result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
         assert %AgentToolResult{} = result
       end
 
       # Invalid priority
-      todos = [%{"id" => "1", "content" => "Test", "status" => "pending", "priority" => "invalid"}]
+      todos = [
+        %{"id" => "1", "content" => "Test", "status" => "pending", "priority" => "invalid"}
+      ]
+
       result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
       assert {:error, _} = result
     end

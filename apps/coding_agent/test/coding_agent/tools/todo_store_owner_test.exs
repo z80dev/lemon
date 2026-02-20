@@ -186,10 +186,11 @@ defmodule CodingAgent.Tools.TodoStoreOwnerTest do
       assert {:ok, pid} = TodoStoreOwner.start_link(name: test_name)
 
       # Simulate a client process that uses the table
-      client = Task.async(fn ->
-        :ets.insert(@table, {"test_key", "test_value"})
-        :ok
-      end)
+      client =
+        Task.async(fn ->
+          :ets.insert(@table, {"test_key", "test_value"})
+          :ok
+        end)
 
       assert Task.await(client) == :ok
 

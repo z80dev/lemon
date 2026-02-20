@@ -471,169 +471,183 @@ defmodule CodingAgent.Coordinator do
     remaining = deadline - System.monotonic_time(:millisecond)
 
     if remaining <= 0 do
-      # Timeout - abort remaining and return timeout results
-      timeout_results =
-        Enum.reduce(pending_ids, results, fn id, acc ->
-          subagent = Map.get(state.active_subagents, id)
-          session_id = if subagent, do: subagent.session_id, else: nil
-
-          Map.put(acc, id, %{
-            id: id,
-            status: :timeout,
-            result: nil,
-            error: :timeout,
-            session_id: session_id
-          })
-        end)
-
-      # Abort all pending
-      new_state =
-        Enum.reduce(pending_ids, state, fn id, st ->
-          cleanup_subagent(id, st)
-        end)
-
-      await_cleanup_completion(timeout_results, new_state)
+      handle_await_timeout(pending_ids, results, state)
     else
       receive do
-        {:"$gen_call", from, :list_active} ->
-          GenServer.reply(from, Map.keys(state.active_subagents))
-          await_subagents(pending_ids, deadline, results, state)
+        msg ->
+          case handle_await_message(msg, pending_ids, results, state) do
+            {:continue, new_pending, new_results, new_state} ->
+              await_subagents(new_pending, deadline, new_results, new_state)
 
-        {:"$gen_call", from, :abort_all} ->
-          GenServer.reply(from, :ok)
+            {:done, final_results, final_state} ->
+              {final_results, final_state}
 
-          aborted_results =
-            Enum.reduce(pending_ids, results, fn id, acc ->
-              subagent = Map.get(state.active_subagents, id)
-              session_id = if subagent, do: subagent.session_id, else: nil
-
-              Map.put(acc, id, %{
-                id: id,
-                status: :aborted,
-                result: nil,
-                error: :aborted,
-                session_id: session_id
-              })
-            end)
-
-          new_state = abort_all_subagents(state)
-          {aborted_results, new_state}
-
-        :abort_all ->
-          aborted_results =
-            Enum.reduce(pending_ids, results, fn id, acc ->
-              subagent = Map.get(state.active_subagents, id)
-              session_id = if subagent, do: subagent.session_id, else: nil
-
-              Map.put(acc, id, %{
-                id: id,
-                status: :aborted,
-                result: nil,
-                error: :aborted,
-                session_id: session_id
-              })
-            end)
-
-          new_state = abort_all_subagents(state)
-          {aborted_results, new_state}
-
-        {:system, from, {:terminate, reason}} ->
-          GenServer.reply(from, :ok)
-          exit(reason)
-
-        {:session_event, session_id, {:agent_end, messages}} ->
-          case find_subagent_by_session(state, session_id) do
-            {id, _subagent_state} ->
-              if id in pending_ids do
-                # Extract final text from messages
-                result_text = extract_final_text(messages)
-
-                result = %{
-                  id: id,
-                  status: :completed,
-                  result: result_text,
-                  error: nil,
-                  session_id: session_id
-                }
-
-                # Cleanup the subagent
-                new_state = cleanup_subagent(id, state)
-                new_pending = List.delete(pending_ids, id)
-                new_results = Map.put(results, id, result)
-
-                await_subagents(new_pending, deadline, new_results, new_state)
-              else
-                await_subagents(pending_ids, deadline, results, state)
-              end
-
-            _ ->
-              await_subagents(pending_ids, deadline, results, state)
+            :exit ->
+              exit(:terminate)
           end
-
-        {:session_event, session_id, {:error, reason, _partial}} ->
-          case find_subagent_by_session(state, session_id) do
-            {id, _subagent_state} ->
-              if id in pending_ids do
-                result = %{
-                  id: id,
-                  status: :error,
-                  result: nil,
-                  error: reason,
-                  session_id: session_id
-                }
-
-                new_state = cleanup_subagent(id, state)
-                new_pending = List.delete(pending_ids, id)
-                new_results = Map.put(results, id, result)
-
-                await_subagents(new_pending, deadline, new_results, new_state)
-              else
-                await_subagents(pending_ids, deadline, results, state)
-              end
-
-            _ ->
-              await_subagents(pending_ids, deadline, results, state)
-          end
-
-        {:DOWN, ref, :process, _pid, reason} ->
-          case find_subagent_by_monitor(state, ref) do
-            {id, subagent_state} ->
-              cond do
-                subagent_state.status == :stopping ->
-                  new_state = remove_subagent(id, state)
-                  new_pending = List.delete(pending_ids, id)
-                  await_subagents(new_pending, deadline, results, new_state)
-
-                id in pending_ids ->
-                  result = %{
-                    id: id,
-                    status: :error,
-                    result: nil,
-                    error: {:crashed, reason},
-                    session_id: subagent_state.session_id
-                  }
-
-                  new_state = remove_subagent(id, state)
-                  new_pending = List.delete(pending_ids, id)
-                  new_results = Map.put(results, id, result)
-
-                  await_subagents(new_pending, deadline, new_results, new_state)
-
-                true ->
-                  await_subagents(pending_ids, deadline, results, state)
-              end
-
-            _ ->
-              await_subagents(pending_ids, deadline, results, state)
-          end
-
-        _other ->
-          await_subagents(pending_ids, deadline, results, state)
       after
         min(remaining, 1000) ->
           await_subagents(pending_ids, deadline, results, state)
       end
     end
+  end
+
+  # Handle timeout case
+  defp handle_await_timeout(pending_ids, results, state) do
+    timeout_results = build_timeout_results(pending_ids, results, state)
+    new_state = Enum.reduce(pending_ids, state, &cleanup_subagent/2)
+    await_cleanup_completion(timeout_results, new_state)
+  end
+
+  defp build_timeout_results(pending_ids, results, state) do
+    Enum.reduce(pending_ids, results, fn id, acc ->
+      subagent = Map.get(state.active_subagents, id)
+      session_id = if subagent, do: subagent.session_id, else: nil
+
+      Map.put(acc, id, %{
+        id: id,
+        status: :timeout,
+        result: nil,
+        error: :timeout,
+        session_id: session_id
+      })
+    end)
+  end
+
+  # Handle different message types during await
+  defp handle_await_message({:"$gen_call", from, :list_active}, pending_ids, results, state) do
+    GenServer.reply(from, Map.keys(state.active_subagents))
+    {:continue, pending_ids, results, state}
+  end
+
+  defp handle_await_message({:"$gen_call", from, :abort_all}, pending_ids, results, state) do
+    GenServer.reply(from, :ok)
+    aborted_results = build_aborted_results(pending_ids, results, state)
+    new_state = abort_all_subagents(state)
+    {:done, aborted_results, new_state}
+  end
+
+  defp handle_await_message(:abort_all, pending_ids, results, state) do
+    aborted_results = build_aborted_results(pending_ids, results, state)
+    new_state = abort_all_subagents(state)
+    {:done, aborted_results, new_state}
+  end
+
+  defp handle_await_message({:system, from, {:terminate, _reason}}, _pending_ids, _results, _state) do
+    GenServer.reply(from, :ok)
+    :exit
+  end
+
+  defp handle_await_message(
+         {:session_event, session_id, {:agent_end, messages}},
+         pending_ids,
+         results,
+         state
+       ) do
+    case find_subagent_by_session(state, session_id) do
+      {id, _subagent_state} ->
+        if id in pending_ids do
+          result = build_completed_result(id, session_id, messages)
+          new_state = cleanup_subagent(id, state)
+          {:continue, List.delete(pending_ids, id), Map.put(results, id, result), new_state}
+        else
+          {:continue, pending_ids, results, state}
+        end
+
+      _ ->
+        {:continue, pending_ids, results, state}
+    end
+  end
+
+  defp handle_await_message(
+         {:session_event, session_id, {:error, reason, _partial}},
+         pending_ids,
+         results,
+         state
+       ) do
+    case find_subagent_by_session(state, session_id) do
+      {id, _subagent_state} ->
+        if id in pending_ids do
+          result = build_error_result(id, session_id, reason)
+          new_state = cleanup_subagent(id, state)
+          {:continue, List.delete(pending_ids, id), Map.put(results, id, result), new_state}
+        else
+          {:continue, pending_ids, results, state}
+        end
+
+      _ ->
+        {:continue, pending_ids, results, state}
+    end
+  end
+
+  defp handle_await_message({:DOWN, ref, :process, _pid, reason}, pending_ids, results, state) do
+    case find_subagent_by_monitor(state, ref) do
+      {id, %{status: :stopping}} ->
+        new_state = remove_subagent(id, state)
+        {:continue, List.delete(pending_ids, id), results, new_state}
+
+      {id, subagent_state} ->
+        if id in pending_ids do
+          result = build_crashed_result(id, subagent_state.session_id, reason)
+          new_state = remove_subagent(id, state)
+          {:continue, List.delete(pending_ids, id), Map.put(results, id, result), new_state}
+        else
+          {:continue, pending_ids, results, state}
+        end
+
+      _ ->
+        {:continue, pending_ids, results, state}
+    end
+  end
+
+  defp handle_await_message(_other, pending_ids, results, state) do
+    {:continue, pending_ids, results, state}
+  end
+
+  # Result builders
+  defp build_aborted_results(pending_ids, results, state) do
+    Enum.reduce(pending_ids, results, fn id, acc ->
+      subagent = Map.get(state.active_subagents, id)
+      session_id = if subagent, do: subagent.session_id, else: nil
+
+      Map.put(acc, id, %{
+        id: id,
+        status: :aborted,
+        result: nil,
+        error: :aborted,
+        session_id: session_id
+      })
+    end)
+  end
+
+  defp build_completed_result(id, session_id, messages) do
+    %{
+      id: id,
+      status: :completed,
+      result: extract_final_text(messages),
+      error: nil,
+      session_id: session_id
+    }
+  end
+
+  defp build_error_result(id, session_id, reason) do
+    %{
+      id: id,
+      status: :error,
+      result: nil,
+      error: reason,
+      session_id: session_id
+    }
+  end
+
+  defp build_crashed_result(id, session_id, reason) do
+    %{
+      id: id,
+      status: :error,
+      result: nil,
+      error: {:crashed, reason},
+      session_id: session_id
+    }
   end
 
   @spec await_cleanup_completion(%{String.t() => subagent_result()}, t()) ::
@@ -646,59 +660,80 @@ defmodule CodingAgent.Coordinator do
   @spec do_await_cleanup_completion(%{String.t() => subagent_result()}, t(), integer()) ::
           {%{String.t() => subagent_result()}, t()}
   defp do_await_cleanup_completion(results, state, deadline) do
-    if cleanup_pending?(state) do
-      remaining = deadline - System.monotonic_time(:millisecond)
-
-      if remaining <= 0 do
+    cond do
+      not cleanup_pending?(state) ->
         {results, state}
-      else
+
+      deadline_exceeded?(deadline) ->
+        {results, state}
+
+      true ->
         receive do
-          {:"$gen_call", from, :list_active} ->
-            GenServer.reply(from, Map.keys(state.active_subagents))
-            do_await_cleanup_completion(results, state, deadline)
+          msg ->
+            case handle_cleanup_message(msg, state) do
+              {:continue, new_state} ->
+                do_await_cleanup_completion(results, new_state, deadline)
 
-          {:"$gen_call", from, :abort_all} ->
-            GenServer.reply(from, :ok)
-            new_state = abort_all_subagents(state)
-            do_await_cleanup_completion(results, new_state, deadline)
-
-          :abort_all ->
-            new_state = abort_all_subagents(state)
-            do_await_cleanup_completion(results, new_state, deadline)
-
-          {:system, from, {:terminate, reason}} ->
-            GenServer.reply(from, :ok)
-            exit(reason)
-
-          {:DOWN, ref, :process, _pid, reason} ->
-            new_state =
-              case find_subagent_by_monitor(state, ref) do
-                {id, %{status: :stopping}} ->
-                  remove_subagent(id, state)
-
-                {id, subagent_state} ->
-                  Logger.warning(
-                    "Subagent #{id} (#{subagent_state.session_id}) crashed: #{inspect(reason)}"
-                  )
-
-                  remove_subagent(id, state)
-
-                nil ->
-                  state
-              end
-
-            do_await_cleanup_completion(results, new_state, deadline)
-
-          _other ->
-            do_await_cleanup_completion(results, state, deadline)
+              :exit ->
+                exit(:terminate)
+            end
         after
-          min(remaining, 1000) ->
+          cleanup_poll_interval(deadline) ->
             do_await_cleanup_completion(results, state, deadline)
         end
-      end
-    else
-      {results, state}
     end
+  end
+
+  defp deadline_exceeded?(deadline) do
+    deadline - System.monotonic_time(:millisecond) <= 0
+  end
+
+  defp cleanup_poll_interval(deadline) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+    min(max(remaining, 0), 1000)
+  end
+
+  defp handle_cleanup_message({:"$gen_call", from, :list_active}, state) do
+    GenServer.reply(from, Map.keys(state.active_subagents))
+    {:continue, state}
+  end
+
+  defp handle_cleanup_message({:"$gen_call", from, :abort_all}, state) do
+    GenServer.reply(from, :ok)
+    {:continue, abort_all_subagents(state)}
+  end
+
+  defp handle_cleanup_message(:abort_all, state) do
+    {:continue, abort_all_subagents(state)}
+  end
+
+  defp handle_cleanup_message({:system, from, {:terminate, _reason}}, _state) do
+    GenServer.reply(from, :ok)
+    :exit
+  end
+
+  defp handle_cleanup_message({:DOWN, ref, :process, _pid, reason}, state) do
+    new_state =
+      case find_subagent_by_monitor(state, ref) do
+        {id, %{status: :stopping}} ->
+          remove_subagent(id, state)
+
+        {id, subagent_state} ->
+          Logger.warning(
+            "Subagent #{id} (#{subagent_state.session_id}) crashed: #{inspect(reason)}"
+          )
+
+          remove_subagent(id, state)
+
+        nil ->
+          state
+      end
+
+    {:continue, new_state}
+  end
+
+  defp handle_cleanup_message(_other, state) do
+    {:continue, state}
   end
 
   @spec cleanup_pending?(t()) :: boolean()

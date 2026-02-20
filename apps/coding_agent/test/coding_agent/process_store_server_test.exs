@@ -9,7 +9,10 @@ defmodule CodingAgent.ProcessStoreServerTest do
   setup do
     # Use a unique name for each test to avoid conflicts
     name = :"process_store_server_test_#{System.unique_integer([:positive])}"
-    tmp_dir = Path.join(System.tmp_dir!(), "process_store_test_#{System.unique_integer([:positive])}")
+
+    tmp_dir =
+      Path.join(System.tmp_dir!(), "process_store_test_#{System.unique_integer([:positive])}")
+
     File.mkdir_p!(tmp_dir)
     dets_path = Path.join(tmp_dir, "test.dets")
 

@@ -632,4 +632,71 @@ defmodule CodingAgent.Tools.WriteTest do
       assert File.read!(path) == "content"
     end
   end
+
+  # ============================================================================
+  # LSP Auto-formatting
+  # ============================================================================
+
+  describe "execute/6 - auto-formatting" do
+    test "does not format when format option is false", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "no_format.txt")
+
+      result =
+        Write.execute(
+          "call_1",
+          %{"path" => path, "content" => "content"},
+          nil,
+          nil,
+          tmp_dir,
+          format: false
+        )
+
+      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
+      assert text =~ "Successfully wrote"
+      refute text =~ "formatted"
+      assert details.formatted == false
+    end
+
+    test "formats when format parameter is true", %{tmp_dir: tmp_dir} do
+      # Create a mock Elixir file that would be formatable
+      # Note: Actual formatting requires mix to be available
+      path = Path.join(tmp_dir, "test.ex")
+
+      result =
+        Write.execute(
+          "call_1",
+          %{"path" => path, "content" => "content", "format" => true},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
+
+      assert %AgentToolResult{} = result
+      # The file should exist but formatting result depends on mix availability
+      assert File.exists?(path)
+    end
+
+    test "tool description includes format info when format is enabled" do
+      tool = Write.tool("/tmp", format: true)
+      assert tool.description =~ "format"
+    end
+
+    test "tool parameter includes format option", %{tmp_dir: tmp_dir} do
+      tool = Write.tool(tmp_dir)
+
+      assert tool.parameters["properties"]["format"]["type"] == "boolean"
+      assert tool.parameters["properties"]["format"]["description"] =~ "format"
+    end
+
+    test "format parameter defaults to false in tool definition", %{tmp_dir: tmp_dir} do
+      tool = Write.tool(tmp_dir)
+      assert tool.parameters["properties"]["format"]["default"] == false
+    end
+
+    test "format parameter can be overridden via opts", %{tmp_dir: tmp_dir} do
+      tool = Write.tool(tmp_dir, format: true)
+      assert tool.parameters["properties"]["format"]["default"] == true
+    end
+  end
 end

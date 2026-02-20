@@ -263,87 +263,83 @@ defmodule Ai.Providers.OpenAICompletions do
   defp build_params(model, context, opts) do
     compat = get_compat(model)
 
-    params = %{
-      "model" => model.id,
-      "messages" => convert_messages(model, context, compat),
-      "stream" => true
-    }
-
-    # Add stream_options for usage tracking
-    params =
-      if compat.supports_usage_in_streaming do
-        Map.put(params, "stream_options", %{"include_usage" => true})
-      else
-        params
-      end
-
-    # Add store: false if supported
-    params =
-      if compat.supports_store do
-        Map.put(params, "store", false)
-      else
-        params
-      end
-
-    # Add max_tokens
-    params =
-      if opts.max_tokens && opts.max_tokens > 0 do
-        field = compat.max_tokens_field
-        Map.put(params, field, opts.max_tokens)
-      else
-        params
-      end
-
-    # Add temperature
-    params =
-      if opts.temperature do
-        Map.put(params, "temperature", opts.temperature)
-      else
-        params
-      end
-
-    # Add tools
-    params =
-      if context.tools && length(context.tools) > 0 do
-        Map.put(params, "tools", convert_tools(context.tools))
-      else
-        if has_tool_history?(context.messages) do
-          # Some providers require tools param when history has tool_calls
-          Map.put(params, "tools", [])
-        else
-          params
-        end
-      end
-
-    # Add reasoning_effort if model supports reasoning
-    params =
-      if opts.reasoning && model.reasoning && compat.supports_reasoning_effort do
-        case compat.thinking_format do
-          "zai" ->
-            Map.put(params, "thinking", %{"type" => "enabled"})
-
-          _ ->
-            Map.put(params, "reasoning_effort", to_string(opts.reasoning))
-        end
-      else
-        if compat.thinking_format == "zai" && model.reasoning do
-          # Z.ai requires explicit disable if no reasoning requested
-          Map.put(params, "thinking", %{"type" => "disabled"})
-        else
-          params
-        end
-      end
-
-    # OpenRouter routing preferences
-    params =
-      if String.contains?(model.base_url, "openrouter.ai") && compat.open_router_routing do
-        Map.put(params, "provider", compat.open_router_routing)
-      else
-        params
-      end
-
-    params
+    %{"model" => model.id, "messages" => convert_messages(model, context, compat), "stream" => true}
+    |> maybe_add_stream_options(compat)
+    |> maybe_add_store(compat)
+    |> maybe_add_max_tokens(opts, compat)
+    |> maybe_add_temperature(opts)
+    |> maybe_add_tools(context, compat)
+    |> maybe_add_reasoning(model, opts, compat)
+    |> maybe_add_openrouter_routing(model, compat)
   end
+
+  defp maybe_add_stream_options(params, %{supports_usage_in_streaming: true}) do
+    Map.put(params, "stream_options", %{"include_usage" => true})
+  end
+
+  defp maybe_add_stream_options(params, _compat), do: params
+
+  defp maybe_add_store(params, %{supports_store: true}) do
+    Map.put(params, "store", false)
+  end
+
+  defp maybe_add_store(params, _compat), do: params
+
+  defp maybe_add_max_tokens(params, %{max_tokens: max_tokens}, _compat) when is_nil(max_tokens) or max_tokens <= 0, do: params
+
+  defp maybe_add_max_tokens(params, %{max_tokens: max_tokens}, %{max_tokens_field: field}) do
+    Map.put(params, field, max_tokens)
+  end
+
+  defp maybe_add_temperature(params, %{temperature: nil}), do: params
+  defp maybe_add_temperature(params, %{temperature: temp}), do: Map.put(params, "temperature", temp)
+
+  defp maybe_add_tools(params, %{tools: tools}, _compat) when is_list(tools) and length(tools) > 0 do
+    Map.put(params, "tools", convert_tools(tools))
+  end
+
+  defp maybe_add_tools(params, %{messages: messages}, _compat) do
+    if has_tool_history?(messages) do
+      Map.put(params, "tools", [])
+    else
+      params
+    end
+  end
+
+  defp maybe_add_reasoning(params, %{reasoning: false}, _opts, _compat), do: params
+  defp maybe_add_reasoning(params, _model, %{reasoning: nil}, _compat), do: params
+
+  defp maybe_add_reasoning(params, model, %{reasoning: _reasoning}, %{thinking_format: "zai"}) do
+    if model.reasoning do
+      Map.put(params, "thinking", %{"type" => "enabled"})
+    else
+      params
+    end
+  end
+
+  defp maybe_add_reasoning(params, model, %{reasoning: reasoning}, %{supports_reasoning_effort: true}) do
+    if model.reasoning do
+      Map.put(params, "reasoning_effort", to_string(reasoning))
+    else
+      params
+    end
+  end
+
+  defp maybe_add_reasoning(params, %{reasoning: true}, _opts, %{thinking_format: "zai"}) do
+    Map.put(params, "thinking", %{"type" => "disabled"})
+  end
+
+  defp maybe_add_reasoning(params, _model, _opts, _compat), do: params
+
+  defp maybe_add_openrouter_routing(params, %{base_url: base_url}, %{open_router_routing: routing}) do
+    if String.contains?(base_url, "openrouter.ai") && routing do
+      Map.put(params, "provider", routing)
+    else
+      params
+    end
+  end
+
+  defp maybe_add_openrouter_routing(params, _model, _compat), do: params
 
   defp has_tool_history?(messages) do
     Enum.any?(messages, fn
@@ -439,137 +435,12 @@ defmodule Ai.Providers.OpenAICompletions do
   end
 
   defp convert_single_message(%AssistantMessage{content: content}, rest, model, compat) do
-    assistant_msg = %{
-      "role" => "assistant",
-      "content" => if(compat.requires_assistant_after_tool_result, do: "", else: nil)
-    }
+    assistant_msg = build_assistant_base_message(compat)
+    assistant_msg = add_text_blocks_to_message(assistant_msg, content, model)
+    assistant_msg = add_thinking_blocks_to_message(assistant_msg, content, compat)
+    assistant_msg = add_tool_calls_to_message(assistant_msg, content, model, compat)
 
-    # Handle text blocks
-    text_blocks =
-      content
-      |> Enum.filter(&match?(%TextContent{}, &1))
-      |> Enum.filter(fn %TextContent{text: text} -> String.trim(text) != "" end)
-
-    assistant_msg =
-      if length(text_blocks) > 0 do
-        if model.provider in [:github_copilot, "github-copilot"] do
-          # Copilot requires content as string
-          text = text_blocks |> Enum.map(& &1.text) |> Enum.join("") |> sanitize_surrogates()
-          Map.put(assistant_msg, "content", text)
-        else
-          parts =
-            Enum.map(text_blocks, fn %TextContent{text: text} ->
-              %{"type" => "text", "text" => sanitize_surrogates(text)}
-            end)
-
-          Map.put(assistant_msg, "content", parts)
-        end
-      else
-        assistant_msg
-      end
-
-    # Handle thinking blocks
-    thinking_blocks =
-      content
-      |> Enum.filter(&match?(%ThinkingContent{}, &1))
-      |> Enum.filter(fn %ThinkingContent{thinking: t} -> String.trim(t) != "" end)
-
-    assistant_msg =
-      if length(thinking_blocks) > 0 do
-        if compat.requires_thinking_as_text do
-          # Convert thinking to plain text prepended to content
-          thinking_text = thinking_blocks |> Enum.map(& &1.thinking) |> Enum.join("\n\n")
-
-          current_content = assistant_msg["content"]
-
-          new_content =
-            case current_content do
-              nil ->
-                [%{"type" => "text", "text" => thinking_text}]
-
-              "" ->
-                [%{"type" => "text", "text" => thinking_text}]
-
-              text when is_binary(text) ->
-                [
-                  %{"type" => "text", "text" => thinking_text},
-                  %{"type" => "text", "text" => text}
-                ]
-
-              parts when is_list(parts) ->
-                [%{"type" => "text", "text" => thinking_text} | parts]
-            end
-
-          Map.put(assistant_msg, "content", new_content)
-        else
-          # Use signature field if available (for llama.cpp, etc.)
-          first_thinking = List.first(thinking_blocks)
-
-          if first_thinking.thinking_signature && first_thinking.thinking_signature != "" do
-            thinking_text = thinking_blocks |> Enum.map(& &1.thinking) |> Enum.join("\n")
-            Map.put(assistant_msg, first_thinking.thinking_signature, thinking_text)
-          else
-            assistant_msg
-          end
-        end
-      else
-        assistant_msg
-      end
-
-    # Handle tool calls
-    tool_calls =
-      content
-      |> Enum.filter(&match?(%ToolCall{}, &1))
-
-    assistant_msg =
-      if length(tool_calls) > 0 do
-        converted_calls =
-          Enum.map(tool_calls, fn tc ->
-            %{
-              "id" => normalize_tool_call_id(tc.id, model, compat),
-              "type" => "function",
-              "function" => %{
-                "name" => tc.name,
-                "arguments" => Jason.encode!(tc.arguments)
-              }
-            }
-          end)
-
-        # Add reasoning_details for tool calls with thought signatures
-        reasoning_details =
-          tool_calls
-          |> Enum.filter(& &1.thought_signature)
-          |> Enum.map(fn tc ->
-            case Jason.decode(tc.thought_signature) do
-              {:ok, detail} -> detail
-              _ -> nil
-            end
-          end)
-          |> Enum.filter(& &1)
-
-        assistant_msg = Map.put(assistant_msg, "tool_calls", converted_calls)
-
-        if length(reasoning_details) > 0 do
-          Map.put(assistant_msg, "reasoning_details", reasoning_details)
-        else
-          assistant_msg
-        end
-      else
-        assistant_msg
-      end
-
-    # Skip empty assistant messages
-    has_content =
-      case assistant_msg["content"] do
-        nil -> false
-        "" -> false
-        text when is_binary(text) -> String.length(text) > 0
-        parts when is_list(parts) -> length(parts) > 0
-      end
-
-    has_tool_calls = Map.has_key?(assistant_msg, "tool_calls")
-
-    if has_content || has_tool_calls do
+    if assistant_message_valid?(assistant_msg) do
       {assistant_msg, rest, :assistant}
     else
       {nil, rest, :assistant}
@@ -577,48 +448,177 @@ defmodule Ai.Providers.OpenAICompletions do
   end
 
   defp convert_single_message(%ToolResultMessage{} = msg, rest, model, compat) do
-    # Process consecutive tool results
     {tool_results, remaining, image_blocks} =
       collect_tool_results([msg | rest], model, compat, [], [])
 
-    converted = tool_results
-
-    # Add image blocks as a user message if needed
-    converted =
-      if length(image_blocks) > 0 do
-        # Add synthetic assistant message if required
-        converted =
-          if compat.requires_assistant_after_tool_result do
-            converted ++
-              [%{"role" => "assistant", "content" => "I have processed the tool results."}]
-          else
-            converted
-          end
-
-        user_msg = %{
-          "role" => "user",
-          "content" =>
-            [%{"type" => "text", "text" => "Attached image(s) from tool result:"}] ++
-              image_blocks
-        }
-
-        converted ++ [user_msg]
-      else
-        converted
-      end
-
-    last_role =
-      if length(image_blocks) > 0 do
-        :user
-      else
-        :tool_result
-      end
+    converted = maybe_add_image_messages(tool_results, image_blocks, compat)
+    last_role = if length(image_blocks) > 0, do: :user, else: :tool_result
 
     case converted do
       [] -> {nil, remaining, last_role}
       list -> {list, remaining, last_role}
     end
   end
+
+  defp maybe_add_image_messages(tool_results, [], _compat), do: tool_results
+
+  defp maybe_add_image_messages(tool_results, image_blocks, compat) do
+    tool_results = maybe_add_synthetic_assistant_message(tool_results, compat)
+    user_msg = build_image_user_message(image_blocks)
+    tool_results ++ [user_msg]
+  end
+
+  defp maybe_add_synthetic_assistant_message(messages, %{requires_assistant_after_tool_result: true}) do
+    messages ++ [%{"role" => "assistant", "content" => "I have processed the tool results."}]
+  end
+
+  defp maybe_add_synthetic_assistant_message(messages, _compat), do: messages
+
+  defp build_image_user_message(image_blocks) do
+    %{
+      "role" => "user",
+      "content" => [%{"type" => "text", "text" => "Attached image(s) from tool result:"}] ++ image_blocks
+    }
+  end
+
+  # Helper functions for convert_single_message (AssistantMessage)
+  defp build_assistant_base_message(compat) do
+    %{
+      "role" => "assistant",
+      "content" => if(compat.requires_assistant_after_tool_result, do: "", else: nil)
+    }
+  end
+
+  defp add_text_blocks_to_message(assistant_msg, content, model) do
+    text_blocks =
+      content
+      |> Enum.filter(&match?(%TextContent{}, &1))
+      |> Enum.filter(fn %TextContent{text: text} -> String.trim(text) != "" end)
+
+    if length(text_blocks) == 0 do
+      assistant_msg
+    else
+      add_text_content(assistant_msg, text_blocks, model.provider)
+    end
+  end
+
+  defp add_text_content(assistant_msg, text_blocks, provider) when provider in [:github_copilot, "github-copilot"] do
+    text = text_blocks |> Enum.map(& &1.text) |> Enum.join("") |> sanitize_surrogates()
+    Map.put(assistant_msg, "content", text)
+  end
+
+  defp add_text_content(assistant_msg, text_blocks, _provider) do
+    parts =
+      Enum.map(text_blocks, fn %TextContent{text: text} ->
+        %{"type" => "text", "text" => sanitize_surrogates(text)}
+      end)
+
+    Map.put(assistant_msg, "content", parts)
+  end
+
+  defp add_thinking_blocks_to_message(assistant_msg, content, compat) do
+    thinking_blocks =
+      content
+      |> Enum.filter(&match?(%ThinkingContent{}, &1))
+      |> Enum.filter(fn %ThinkingContent{thinking: t} -> String.trim(t) != "" end)
+
+    if length(thinking_blocks) == 0 do
+      assistant_msg
+    else
+      add_thinking_content(assistant_msg, thinking_blocks, compat)
+    end
+  end
+
+  defp add_thinking_content(assistant_msg, thinking_blocks, %{requires_thinking_as_text: true}) do
+    thinking_text = thinking_blocks |> Enum.map(& &1.thinking) |> Enum.join("\n\n")
+    current_content = assistant_msg["content"]
+    new_content = merge_thinking_with_content(current_content, thinking_text)
+    Map.put(assistant_msg, "content", new_content)
+  end
+
+  defp add_thinking_content(assistant_msg, thinking_blocks, _compat) do
+    first_thinking = List.first(thinking_blocks)
+
+    if first_thinking.thinking_signature && first_thinking.thinking_signature != "" do
+      thinking_text = thinking_blocks |> Enum.map(& &1.thinking) |> Enum.join("\n")
+      Map.put(assistant_msg, first_thinking.thinking_signature, thinking_text)
+    else
+      assistant_msg
+    end
+  end
+
+  defp merge_thinking_with_content(nil, thinking_text) do
+    [%{"type" => "text", "text" => thinking_text}]
+  end
+
+  defp merge_thinking_with_content("", thinking_text) do
+    [%{"type" => "text", "text" => thinking_text}]
+  end
+
+  defp merge_thinking_with_content(text, thinking_text) when is_binary(text) do
+    [
+      %{"type" => "text", "text" => thinking_text},
+      %{"type" => "text", "text" => text}
+    ]
+  end
+
+  defp merge_thinking_with_content(parts, thinking_text) when is_list(parts) do
+    [%{"type" => "text", "text" => thinking_text} | parts]
+  end
+
+  defp add_tool_calls_to_message(assistant_msg, content, model, compat) do
+    tool_calls = Enum.filter(content, &match?(%ToolCall{}, &1))
+
+    if length(tool_calls) == 0 do
+      assistant_msg
+    else
+      build_tool_call_message(assistant_msg, tool_calls, model, compat)
+    end
+  end
+
+  defp build_tool_call_message(assistant_msg, tool_calls, model, compat) do
+    converted_calls =
+      Enum.map(tool_calls, fn tc ->
+        %{
+          "id" => normalize_tool_call_id(tc.id, model, compat),
+          "type" => "function",
+          "function" => %{
+            "name" => tc.name,
+            "arguments" => Jason.encode!(tc.arguments)
+          }
+        }
+      end)
+
+    reasoning_details = extract_reasoning_details(tool_calls)
+    assistant_msg = Map.put(assistant_msg, "tool_calls", converted_calls)
+
+    if length(reasoning_details) > 0 do
+      Map.put(assistant_msg, "reasoning_details", reasoning_details)
+    else
+      assistant_msg
+    end
+  end
+
+  defp extract_reasoning_details(tool_calls) do
+    tool_calls
+    |> Enum.filter(& &1.thought_signature)
+    |> Enum.map(fn tc ->
+      case Jason.decode(tc.thought_signature) do
+        {:ok, detail} -> detail
+        _ -> nil
+      end
+    end)
+    |> Enum.filter(& &1)
+  end
+
+  defp assistant_message_valid?(assistant_msg) do
+    has_content?(assistant_msg["content"]) or Map.has_key?(assistant_msg, "tool_calls")
+  end
+
+  defp has_content?(nil), do: false
+  defp has_content?("") , do: false
+  defp has_content?(text) when is_binary(text), do: String.length(text) > 0
+  defp has_content?(parts) when is_list(parts), do: length(parts) > 0
 
   defp collect_tool_results([], _model, _compat, acc, images) do
     {Enum.reverse(acc), [], images}

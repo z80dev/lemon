@@ -37,6 +37,60 @@ defmodule CodingAgent.Tools.WebSearch do
   @openrouter_key_prefixes ["sk-or-"]
   @brave_freshness_shortcuts MapSet.new(["pd", "pw", "pm", "py"])
 
+  @tool_description "Search the web using Brave Search API (default) or Perplexity Sonar. Returns structured JSON."
+
+  @tool_parameters %{
+    "type" => "object",
+    "properties" => %{
+      "query" => %{
+        "type" => "string",
+        "description" => "Search query string."
+      },
+      "count" => %{
+        "type" => "integer",
+        "description" => "Number of results to return (1-10)."
+      },
+      "max_results" => %{
+        "type" => "integer",
+        "description" => "Backward-compatible alias for count."
+      },
+      "country" => %{
+        "type" => "string",
+        "description" => "2-letter country code (e.g., US, DE) for Brave."
+      },
+      "search_lang" => %{
+        "type" => "string",
+        "description" => "ISO language code for results."
+      },
+      "ui_lang" => %{
+        "type" => "string",
+        "description" => "ISO language code for UI elements."
+      },
+      "region" => %{
+        "type" => "string",
+        "description" => "Backward-compatible alias (e.g., us-en)."
+      },
+      "freshness" => %{
+        "type" => "string",
+        "description" => "Brave-only time filter: pd, pw, pm, py, or YYYY-MM-DDtoYYYY-MM-DD."
+      },
+      "maxChars" => %{
+        "type" => "integer",
+        "description" =>
+          "Maximum characters for long response content (Perplexity content and result descriptions)."
+      },
+      "snippetMaxChars" => %{
+        "type" => "integer",
+        "description" => "Maximum characters per short result snippet/title."
+      },
+      "maxCitations" => %{
+        "type" => "integer",
+        "description" => "Maximum number of citations to return for Perplexity responses."
+      }
+    },
+    "required" => ["query"]
+  }
+
   @doc """
   Returns the WebSearch tool definition.
   """
@@ -46,64 +100,17 @@ defmodule CodingAgent.Tools.WebSearch do
 
     %AgentTool{
       name: "websearch",
-      description:
-        "Search the web using Brave Search API (default) or Perplexity Sonar. Returns structured JSON.",
+      description: @tool_description,
       label: "Web Search",
-      parameters: %{
-        "type" => "object",
-        "properties" => %{
-          "query" => %{
-            "type" => "string",
-            "description" => "Search query string."
-          },
-          "count" => %{
-            "type" => "integer",
-            "description" => "Number of results to return (1-10)."
-          },
-          "max_results" => %{
-            "type" => "integer",
-            "description" => "Backward-compatible alias for count."
-          },
-          "country" => %{
-            "type" => "string",
-            "description" => "2-letter country code (e.g., US, DE) for Brave."
-          },
-          "search_lang" => %{
-            "type" => "string",
-            "description" => "ISO language code for results."
-          },
-          "ui_lang" => %{
-            "type" => "string",
-            "description" => "ISO language code for UI elements."
-          },
-          "region" => %{
-            "type" => "string",
-            "description" => "Backward-compatible alias (e.g., us-en)."
-          },
-          "freshness" => %{
-            "type" => "string",
-            "description" => "Brave-only time filter: pd, pw, pm, py, or YYYY-MM-DDtoYYYY-MM-DD."
-          },
-          "maxChars" => %{
-            "type" => "integer",
-            "description" =>
-              "Maximum characters for long response content (Perplexity content and result descriptions)."
-          },
-          "snippetMaxChars" => %{
-            "type" => "integer",
-            "description" => "Maximum characters per short result snippet/title."
-          },
-          "maxCitations" => %{
-            "type" => "integer",
-            "description" => "Maximum number of citations to return for Perplexity responses."
-          }
-        },
-        "required" => ["query"]
-      },
-      execute: fn tool_call_id, params, signal, on_update ->
-        execute(tool_call_id, params, signal, on_update, runtime)
-      end
+      parameters: @tool_parameters,
+      execute: build_execute_fn(runtime)
     }
+  end
+
+  defp build_execute_fn(runtime) do
+    fn tool_call_id, params, signal, on_update ->
+      execute(tool_call_id, params, signal, on_update, runtime)
+    end
   end
 
   @spec execute(
@@ -349,19 +356,35 @@ defmodule CodingAgent.Tools.WebSearch do
   end
 
   defp run_perplexity_search(provider, query, request, api_cfg, runtime, start_ms) do
-    endpoint = String.trim_trailing(api_cfg.base_url, "/") <> "/chat/completions"
+    endpoint = build_perplexity_endpoint(api_cfg)
+    request_opts = build_perplexity_request_opts(api_cfg, query, runtime)
 
+    case runtime.http_post.(endpoint, request_opts) do
+      {:ok, %Req.Response{status: status} = response} when status in 200..299 ->
+        {:ok, build_perplexity_success_response(response, provider, api_cfg.model, query, request, start_ms)}
+
+      {:ok, %Req.Response{status: status} = response} ->
+        {:error, format_perplexity_api_error(status, response.body)}
+
+      {:error, reason} ->
+        {:error, "Perplexity request failed: #{format_reason(reason)}"}
+
+      other ->
+        {:error, "Unexpected Perplexity result: #{inspect(other)}"}
+    end
+  end
+
+  defp build_perplexity_endpoint(api_cfg) do
+    String.trim_trailing(api_cfg.base_url, "/") <> "/chat/completions"
+  end
+
+  defp build_perplexity_request_opts(api_cfg, query, runtime) do
     request_body = %{
       "model" => api_cfg.model,
-      "messages" => [
-        %{
-          "role" => "user",
-          "content" => query
-        }
-      ]
+      "messages" => [%{"role" => "user", "content" => query}]
     }
 
-    request_opts = [
+    [
       headers: [
         {"content-type", "application/json"},
         {"authorization", "Bearer #{api_cfg.api_key}"},
@@ -372,40 +395,31 @@ defmodule CodingAgent.Tools.WebSearch do
       connect_options: [timeout: runtime.timeout_ms],
       receive_timeout: runtime.timeout_ms
     ]
+  end
 
-    case runtime.http_post.(endpoint, request_opts) do
-      {:ok, %Req.Response{status: status} = response} when status in 200..299 ->
-        body = decode_json_body(response.body)
+  defp build_perplexity_success_response(response, provider, model, query, request, start_ms) do
+    body = decode_json_body(response.body)
 
-        raw_content =
-          get_in(body, ["choices", Access.at(0), "message", "content"]) || "No response"
+    raw_content =
+      get_in(body, ["choices", Access.at(0), "message", "content"]) || "No response"
 
-        content = truncate_text(to_string(raw_content), request.max_chars)
-        citations = normalize_citations(Map.get(body, "citations", []), request)
+    content = truncate_text(to_string(raw_content), request.max_chars)
+    citations = normalize_citations(Map.get(body, "citations", []), request)
 
-        {:ok,
-         %{
-           "query" => query,
-           "provider" => provider,
-           "model" => api_cfg.model,
-           "took_ms" => elapsed_ms(start_ms),
-           "content" => ExternalContent.wrap_web_content(content, :web_search),
-           "citations" => citations,
-           "trust_metadata" => web_search_trust_metadata(["content"])
-         }}
+    %{
+      "query" => query,
+      "provider" => provider,
+      "model" => model,
+      "took_ms" => elapsed_ms(start_ms),
+      "content" => ExternalContent.wrap_web_content(content, :web_search),
+      "citations" => citations,
+      "trust_metadata" => web_search_trust_metadata(["content"])
+    }
+  end
 
-      {:ok, %Req.Response{status: status} = response} ->
-        detail = response.body |> to_string_safe() |> String.trim()
-
-        {:error,
-         "Perplexity API error (#{status}): #{if(detail == "", do: "request failed", else: detail)}"}
-
-      {:error, reason} ->
-        {:error, "Perplexity request failed: #{format_reason(reason)}"}
-
-      other ->
-        {:error, "Unexpected Perplexity result: #{inspect(other)}"}
-    end
+  defp format_perplexity_api_error(status, body) do
+    detail = body |> to_string_safe() |> String.trim()
+    "Perplexity API error (#{status}): #{if(detail == "", do: "request failed", else: detail)}"
   end
 
   defp map_brave_result(entry, snippet_max_chars, content_max_chars) when is_map(entry) do
@@ -1030,18 +1044,70 @@ defmodule CodingAgent.Tools.WebSearch do
 
   defp build_runtime(opts) do
     settings_manager = Keyword.get(opts, :settings_manager)
-    tools_cfg = settings_manager |> get_struct_field(:tools, %{}) |> ensure_map()
-    web_cfg = tools_cfg |> get_map_value(:web, %{}) |> ensure_map()
-    search_cfg = web_cfg |> get_map_value(:search, %{}) |> ensure_map()
-    perplexity_cfg = search_cfg |> get_map_value(:perplexity, %{}) |> ensure_map()
-    failover_cfg = search_cfg |> get_map_value(:failover, %{}) |> ensure_map()
-    cache_cfg = web_cfg |> get_map_value(:cache, %{}) |> ensure_map()
+    search_cfg = extract_search_config(settings_manager)
+    cache_cfg = extract_cache_config(settings_manager)
+    failover_cfg = extract_failover_config(settings_manager)
+    perplexity_cfg = extract_perplexity_config(search_cfg)
 
-    provider =
-      search_cfg
-      |> get_map_value(:provider, "brave")
-      |> normalize_provider("brave")
+    provider = resolve_provider(search_cfg)
+    secondary_provider = resolve_failover_provider(provider, failover_cfg)
+    cache_settings = build_cache_settings(cache_cfg, search_cfg)
+    http_functions = build_http_functions(opts)
 
+    Map.merge(
+      %{
+        provider: provider,
+        secondary_provider: secondary_provider,
+        enabled: truthy?(get_map_value(search_cfg, :enabled, true)),
+        api_key: normalize_optional_string(get_map_value(search_cfg, :api_key, nil)),
+        max_results: resolve_max_results(search_cfg),
+        timeout_ms: cache_settings.timeout_ms,
+        cache_ttl_ms: cache_settings.cache_ttl_ms,
+        cache_max_entries: cache_settings.cache_max_entries,
+        cache_opts: cache_settings.cache_opts
+      },
+      Map.merge(build_char_limits(search_cfg), build_perplexity_config(perplexity_cfg))
+    )
+    |> Map.merge(http_functions)
+  end
+
+  # Extract nested configuration maps from settings
+  defp extract_search_config(settings_manager) do
+    settings_manager
+    |> get_struct_field(:tools, %{})
+    |> ensure_map()
+    |> get_map_value(:web, %{})
+    |> ensure_map()
+    |> get_map_value(:search, %{})
+    |> ensure_map()
+  end
+
+  defp extract_cache_config(settings_manager) do
+    settings_manager
+    |> get_struct_field(:tools, %{})
+    |> ensure_map()
+    |> get_map_value(:web, %{})
+    |> ensure_map()
+    |> get_map_value(:cache, %{})
+    |> ensure_map()
+  end
+
+  defp extract_failover_config(search_cfg) do
+    search_cfg |> get_map_value(:failover, %{}) |> ensure_map()
+  end
+
+  defp extract_perplexity_config(search_cfg) do
+    search_cfg |> get_map_value(:perplexity, %{}) |> ensure_map()
+  end
+
+  # Provider resolution
+  defp resolve_provider(search_cfg) do
+    search_cfg
+    |> get_map_value(:provider, "brave")
+    |> normalize_provider("brave")
+  end
+
+  defp resolve_failover_provider(primary, failover_cfg) do
     failover_enabled = truthy?(get_map_value(failover_cfg, :enabled, @default_failover_enabled))
 
     configured_secondary =
@@ -1049,20 +1115,16 @@ defmodule CodingAgent.Tools.WebSearch do
       |> get_map_value(:provider, get_map_value(failover_cfg, :secondary_provider, nil))
       |> normalize_provider_optional()
 
-    secondary_provider =
-      resolve_secondary_provider(provider, failover_enabled, configured_secondary)
+    resolve_secondary_provider(primary, failover_enabled, configured_secondary)
+  end
 
+  # Cache settings
+  defp build_cache_settings(cache_cfg, search_cfg) do
     cache_max_entries =
       WebCache.resolve_cache_max_entries(
         get_map_value(cache_cfg, :max_entries, @default_cache_max_entries),
         @default_cache_max_entries
       )
-
-    cache_opts = %{
-      "persistent" => truthy?(get_map_value(cache_cfg, :persistent, true)),
-      "path" => normalize_optional_string(get_map_value(cache_cfg, :path, nil)),
-      "max_entries" => cache_max_entries
-    }
 
     timeout_seconds =
       WebCache.resolve_timeout_seconds(
@@ -1076,20 +1138,23 @@ defmodule CodingAgent.Tools.WebSearch do
         @default_cache_ttl_minutes
       )
 
-    http_get = Keyword.get(opts, :http_get, &Req.get/2)
-    http_post = Keyword.get(opts, :http_post, &Req.post/2)
+    cache_opts = %{
+      "persistent" => truthy?(get_map_value(cache_cfg, :persistent, true)),
+      "path" => normalize_optional_string(get_map_value(cache_cfg, :path, nil)),
+      "max_entries" => cache_max_entries
+    }
 
     %{
-      provider: provider,
-      secondary_provider: secondary_provider,
-      enabled: truthy?(get_map_value(search_cfg, :enabled, true)),
-      api_key: normalize_optional_string(get_map_value(search_cfg, :api_key, nil)),
-      max_results:
-        clamp(
-          normalize_integer(get_map_value(search_cfg, :max_results, nil)) || @default_search_count,
-          1,
-          @max_search_count
-        ),
+      timeout_ms: timeout_seconds * 1_000,
+      cache_ttl_ms: cache_ttl_ms,
+      cache_max_entries: cache_max_entries,
+      cache_opts: cache_opts
+    }
+  end
+
+  # Character limit settings
+  defp build_char_limits(search_cfg) do
+    %{
       max_chars:
         normalize_limit(
           normalize_integer(get_map_value(search_cfg, :max_chars, nil)),
@@ -1113,11 +1178,21 @@ defmodule CodingAgent.Tools.WebSearch do
           normalize_integer(get_map_value(search_cfg, :citation_max_chars, nil)),
           @default_citation_max_chars,
           @max_citation_max_chars
-        ),
-      timeout_ms: timeout_seconds * 1_000,
-      cache_ttl_ms: cache_ttl_ms,
-      cache_max_entries: cache_max_entries,
-      cache_opts: cache_opts,
+        )
+    }
+  end
+
+  defp resolve_max_results(search_cfg) do
+    clamp(
+      normalize_integer(get_map_value(search_cfg, :max_results, nil)) || @default_search_count,
+      1,
+      @max_search_count
+    )
+  end
+
+  # Perplexity configuration
+  defp build_perplexity_config(perplexity_cfg) do
+    %{
       perplexity: %{
         api_key: normalize_optional_string(get_map_value(perplexity_cfg, :api_key, nil)),
         base_url: normalize_optional_string(get_map_value(perplexity_cfg, :base_url, nil)),
@@ -1125,9 +1200,15 @@ defmodule CodingAgent.Tools.WebSearch do
           normalize_optional_string(
             get_map_value(perplexity_cfg, :model, @default_perplexity_model)
           )
-      },
-      http_get: http_get,
-      http_post: http_post
+      }
+    }
+  end
+
+  # HTTP functions
+  defp build_http_functions(opts) do
+    %{
+      http_get: Keyword.get(opts, :http_get, &Req.get/2),
+      http_post: Keyword.get(opts, :http_post, &Req.post/2)
     }
   end
 
