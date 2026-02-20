@@ -301,4 +301,97 @@ defmodule LemonCore.Config.ValidatorTest do
       assert :ok = Validator.validate(config)
     end
   end
+
+  describe "validate_telegram_config/2" do
+    test "validates telegram token format" do
+      errors = Validator.validate_telegram_config([], %{
+        token: "123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
+      })
+      assert errors == []
+
+      errors = Validator.validate_telegram_config([], %{
+        token: "invalid-token"
+      })
+      assert Enum.any?(errors, &String.contains?(&1, "token"))
+    end
+
+    test "accepts env var references in token" do
+      errors = Validator.validate_telegram_config([], %{
+        token: "${TELEGRAM_BOT_TOKEN}"
+      })
+      assert errors == []
+    end
+
+    test "validates telegram compaction settings" do
+      errors = Validator.validate_telegram_config([], %{
+        compaction: %{
+          enabled: true,
+          context_window_tokens: 400_000,
+          reserve_tokens: 16_384,
+          trigger_ratio: 0.9
+        }
+      })
+      assert errors == []
+
+      errors = Validator.validate_telegram_config([], %{
+        compaction: %{
+          enabled: "yes",
+          trigger_ratio: 1.5
+        }
+      })
+      assert Enum.any?(errors, &String.contains?(&1, "enabled"))
+      assert Enum.any?(errors, &String.contains?(&1, "trigger_ratio"))
+    end
+
+    test "accepts nil telegram config" do
+      errors = Validator.validate_telegram_config([], nil)
+      assert errors == []
+    end
+  end
+
+  describe "validate_queue_config/2" do
+    test "validates queue mode" do
+      errors = Validator.validate_queue_config([], %{mode: "fifo"})
+      assert errors == []
+
+      errors = Validator.validate_queue_config([], %{mode: "lifo"})
+      assert errors == []
+
+      errors = Validator.validate_queue_config([], %{mode: "priority"})
+      assert errors == []
+
+      errors = Validator.validate_queue_config([], %{mode: "invalid"})
+      assert Enum.any?(errors, &String.contains?(&1, "mode"))
+    end
+
+    test "validates queue drop policy" do
+      errors = Validator.validate_queue_config([], %{drop: "oldest"})
+      assert errors == []
+
+      errors = Validator.validate_queue_config([], %{drop: "newest"})
+      assert errors == []
+
+      errors = Validator.validate_queue_config([], %{drop: "reject"})
+      assert errors == []
+
+      errors = Validator.validate_queue_config([], %{drop: "invalid"})
+      assert Enum.any?(errors, &String.contains?(&1, "drop"))
+    end
+
+    test "validates queue cap" do
+      errors = Validator.validate_queue_config([], %{cap: 100})
+      assert errors == []
+
+      errors = Validator.validate_queue_config([], %{cap: 0})
+      assert Enum.any?(errors, &String.contains?(&1, "cap"))
+
+      errors = Validator.validate_queue_config([], %{cap: nil})
+      assert errors == []
+    end
+
+    test "accepts nil queue config" do
+      errors = Validator.validate_queue_config([], nil)
+      assert errors == []
+    end
+  end
 end

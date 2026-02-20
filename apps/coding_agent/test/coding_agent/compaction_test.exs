@@ -40,6 +40,21 @@ defmodule CodingAgent.CompactionTest do
     end
   end
 
+  describe "message window compaction" do
+    test "returns false when there is no provider message budget" do
+      model = %Ai.Types.Model{provider: :openai}
+      assert Compaction.message_budget(model, %{}) == nil
+    end
+
+    test "triggers when message count reaches provider threshold" do
+      budget = %{request_limit: 200, trigger_count: 180, keep_recent_messages: 120}
+
+      refute Compaction.should_compact_for_message_limit?(179, budget, %{enabled: true})
+      assert Compaction.should_compact_for_message_limit?(180, budget, %{enabled: true})
+      refute Compaction.should_compact_for_message_limit?(180, budget, %{enabled: false})
+    end
+  end
+
   describe "estimate_message_tokens/1" do
     test "estimates based on text length / 4 for UserMessage" do
       msg = %Messages.UserMessage{content: String.duplicate("a", 400), timestamp: 0}
@@ -1031,6 +1046,50 @@ defmodule CodingAgent.CompactionTest do
       # entry3 (custom_message) is also valid
       # The custom_message should not break the tool call pairing rules
       assert cut_id in ["entry1", "entry2", "entry3"]
+    end
+
+    test "finds cut point using keep_recent_messages when token threshold is too high" do
+      branch = [
+        %SessionEntry{
+          id: "entry1",
+          parent_id: nil,
+          type: :message,
+          message: %{"role" => "user", "content" => "one"},
+          timestamp: 0
+        },
+        %SessionEntry{
+          id: "entry2",
+          parent_id: "entry1",
+          type: :message,
+          message: %{"role" => "user", "content" => "two"},
+          timestamp: 1
+        },
+        %SessionEntry{
+          id: "entry3",
+          parent_id: "entry2",
+          type: :message,
+          message: %{"role" => "user", "content" => "three"},
+          timestamp: 2
+        },
+        %SessionEntry{
+          id: "entry4",
+          parent_id: "entry3",
+          type: :message,
+          message: %{"role" => "user", "content" => "four"},
+          timestamp: 3
+        },
+        %SessionEntry{
+          id: "entry5",
+          parent_id: "entry4",
+          type: :message,
+          message: %{"role" => "user", "content" => "five"},
+          timestamp: 4
+        }
+      ]
+
+      # keep_recent_tokens is intentionally too high to trigger on tokens.
+      assert {:ok, "entry2"} =
+               Compaction.find_cut_point(branch, 99_999, keep_recent_messages: 3)
     end
   end
 

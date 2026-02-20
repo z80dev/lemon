@@ -90,7 +90,10 @@ defmodule CodingAgent.Compaction do
           )
 
         keep_ratio =
-          ratio_or(Map.get(settings, :message_limit_keep_ratio), @default_message_limit_keep_ratio)
+          ratio_or(
+            Map.get(settings, :message_limit_keep_ratio),
+            @default_message_limit_keep_ratio
+          )
 
         trigger_count =
           floor(limit * trigger_ratio)
@@ -144,6 +147,8 @@ defmodule CodingAgent.Compaction do
   - `branch_entries` - List of session entries on the current branch (path from root to leaf)
   - `keep_recent_tokens` - Number of tokens to keep uncompacted
   - `opts` - Options:
+    - `:keep_recent_messages` - Number of recent messages to keep (optional).
+      When set, compaction can trigger by message count even if token count is low.
     - `:force` - When true, use fallback cut point if no valid cut point found based on tokens.
       The fallback keeps at least the last N messages (default 5) to preserve essential context.
 
@@ -173,6 +178,7 @@ defmodule CodingAgent.Compaction do
   def find_cut_point(branch_entries, keep_recent_tokens, opts) do
     force = Keyword.get(opts, :force, false)
     min_keep_messages = Keyword.get(opts, :min_keep_messages, @default_min_keep_messages)
+    keep_recent_messages = Keyword.get(opts, :keep_recent_messages)
 
     # Include both :message and :custom_message entries as valid candidates
     message_entries =
@@ -186,7 +192,7 @@ defmodule CodingAgent.Compaction do
     if Enum.empty?(message_entries) do
       {:error, :cannot_compact}
     else
-      case do_find_cut_point(message_entries, keep_recent_tokens) do
+      case do_find_cut_point(message_entries, keep_recent_tokens, keep_recent_messages) do
         {:ok, _} = result ->
           result
 
@@ -200,31 +206,45 @@ defmodule CodingAgent.Compaction do
     end
   end
 
-  defp do_find_cut_point(message_entries, keep_recent_tokens) do
-    # Work backwards, accumulating tokens
-    reversed = Enum.reverse(message_entries)
+  defp do_find_cut_point(message_entries, keep_recent_tokens, keep_recent_messages) do
+    token_threshold_enabled = is_integer(keep_recent_tokens)
+    message_threshold_enabled = is_integer(keep_recent_messages)
 
-    {_total_tokens, cut_index} =
-      Enum.reduce_while(reversed, {0, nil}, fn entry, {acc_tokens, _cut_idx} ->
-        msg_tokens = estimate_entry_tokens(entry)
-        new_total = acc_tokens + msg_tokens
+    if not token_threshold_enabled and not message_threshold_enabled do
+      {:error, :cannot_compact}
+    else
+      # Work backwards, accumulating tokens
+      reversed = Enum.reverse(message_entries)
 
-        if new_total >= keep_recent_tokens do
-          # We've accumulated enough tokens to keep, find valid cut point
-          {:halt, {new_total, entry}}
-        else
-          {:cont, {new_total, entry}}
-        end
-      end)
+      {_total_tokens, _total_messages, cut_entry} =
+        Enum.reduce_while(reversed, {0, 0, nil}, fn entry, {acc_tokens, acc_messages, _cut} ->
+          msg_tokens = estimate_entry_tokens(entry)
+          new_total_tokens = acc_tokens + msg_tokens
+          new_total_messages = acc_messages + 1
 
-    case cut_index do
-      nil ->
-        # Not enough tokens to warrant compaction
-        {:error, :cannot_compact}
+          reached_token_threshold =
+            token_threshold_enabled and new_total_tokens >= keep_recent_tokens
 
-      entry ->
-        # Find a valid cut point at or before this entry
-        find_valid_cut_point(message_entries, entry)
+          reached_message_threshold =
+            message_threshold_enabled and new_total_messages >= keep_recent_messages
+
+          if reached_token_threshold or reached_message_threshold do
+            # We've accumulated enough recent context to keep, now find a valid cut point.
+            {:halt, {new_total_tokens, new_total_messages, entry}}
+          else
+            {:cont, {new_total_tokens, new_total_messages, nil}}
+          end
+        end)
+
+      case cut_entry do
+        nil ->
+          # Not enough tokens/messages to warrant compaction
+          {:error, :cannot_compact}
+
+        entry ->
+          # Find a valid cut point at or before this entry
+          find_valid_cut_point(message_entries, entry)
+      end
     end
   end
 
@@ -804,6 +824,7 @@ defmodule CodingAgent.Compaction do
   - `model` - The Ai.Types.Model to use for summarization
   - `opts` - Options:
     - `:keep_recent_tokens` - Number of tokens to keep (default: 20000)
+    - `:keep_recent_messages` - Number of messages to keep (optional)
     - `:force` - When true, forces compaction even if there isn't enough context
       to meet the keep_recent_tokens threshold. Falls back to keeping at least
       the last 5 messages (or fewer if not enough valid cut points exist).
@@ -845,7 +866,7 @@ defmodule CodingAgent.Compaction do
     messages = context.messages
 
     # Build options for find_cut_point
-    cut_point_opts = Keyword.take(opts, [:force, :min_keep_messages])
+    cut_point_opts = Keyword.take(opts, [:force, :min_keep_messages, :keep_recent_messages])
 
     with {:ok, first_kept_id} <- find_cut_point(branch, keep_recent_tokens, cut_point_opts),
          :ok <- check_abort(signal),
@@ -1000,6 +1021,40 @@ defmodule CodingAgent.Compaction do
 
       acc + div(String.length(text || ""), 4)
     end)
+  end
+
+  defp provider_request_message_limit(model) do
+    if function_exported?(Ai.Providers.Anthropic, :request_history_limit, 1) do
+      Ai.Providers.Anthropic.request_history_limit(model)
+    else
+      nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp ratio_or(value, default) when is_number(value) do
+    if value > 0 and value <= 1 do
+      value
+    else
+      default
+    end
+  end
+
+  defp ratio_or(value, default) when is_binary(value) do
+    case Float.parse(String.trim(value)) do
+      {parsed, ""} -> ratio_or(parsed, default)
+      _ -> default
+    end
+  end
+
+  defp ratio_or(_value, default), do: default
+
+  defp clamp_int(value, min_value, max_value)
+       when is_integer(value) and is_integer(min_value) and is_integer(max_value) do
+    value
+    |> max(min_value)
+    |> min(max_value)
   end
 
   # ============================================================================

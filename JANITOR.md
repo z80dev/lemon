@@ -1334,3 +1334,49 @@ LemonCore.ConfigCache.reload("/path/to/project", validate: true)
 - Add more validation rules to the Validator module
 - Check for more Pi upstream features to port
 - Explore adding online skill discovery (like Ironclaw's OnlineDiscovery)
+
+### 2025-02-20 - Feature Enhancement: Extended Config Validator
+**Work Area**: Feature Enhancement
+
+**What was done:**
+- Extended the Config.Validator module with comprehensive validation rules
+- Added validation for Telegram configuration:
+  - Token format validation (matches Telegram bot token pattern)
+  - Support for environment variable references (`${VAR_NAME}`)
+  - Compaction settings validation (enabled, context_window_tokens, reserve_tokens, trigger_ratio)
+- Added validation for Queue configuration:
+  - Mode validation (fifo, lifo, priority)
+  - Drop policy validation (oldest, newest, reject)
+  - Cap validation (positive integer)
+- Added helper validation functions:
+  - `validate_optional_positive_integer/3` - for optional positive integer fields
+  - `validate_ratio/3` - for ratio values between 0.0 and 1.0
+
+**New validation rules:**
+- Telegram token format: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`
+- Telegram compaction trigger_ratio: must be between 0.0 and 1.0
+- Queue mode: must be one of "fifo", "lifo", "priority"
+- Queue drop: must be one of "oldest", "newest", "reject"
+- Queue cap: must be a positive integer (if specified)
+
+**Files changed:**
+- `apps/lemon_core/lib/lemon_core/config/validator.ex` - Added new validation functions
+- `apps/lemon_core/test/lemon_core/config/validator_test.exs` - Added 12 new tests
+
+**New tests:**
+- Telegram token format validation
+- Telegram env var reference support
+- Telegram compaction settings validation
+- Queue mode validation (fifo, lifo, priority)
+- Queue drop policy validation (oldest, newest, reject)
+- Queue cap validation
+
+**Total progress:**
+- Started with 473 tests
+- Now have 481 tests (lemon_core app)
+- All tests passing (0 failures)
+
+**Next run should focus on:**
+- Check for more Pi upstream features to port
+- Explore adding online skill discovery (like Ironclaw's OnlineDiscovery)
+- Add more comprehensive documentation

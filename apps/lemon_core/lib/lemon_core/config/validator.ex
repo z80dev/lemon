@@ -98,7 +98,99 @@ defmodule LemonCore.Config.Validator do
     |> validate_boolean(Map.get(gateway, :enable_telegram), "gateway.enable_telegram")
     |> validate_boolean(Map.get(gateway, :require_engine_lock), "gateway.require_engine_lock")
     |> validate_non_negative_integer(Map.get(gateway, :engine_lock_timeout_ms), "gateway.engine_lock_timeout_ms")
+    |> validate_telegram_config(Map.get(gateway, :telegram))
+    |> validate_queue_config(Map.get(gateway, :queue))
   end
+
+  @doc """
+  Validates Telegram configuration.
+  """
+  @spec validate_telegram_config([String.t()], map() | nil) :: [String.t()]
+  def validate_telegram_config(errors, nil), do: errors
+
+  def validate_telegram_config(errors, telegram) when is_map(telegram) do
+    errors
+    |> validate_telegram_token(Map.get(telegram, :token))
+    |> validate_telegram_compaction(Map.get(telegram, :compaction))
+  end
+
+  def validate_telegram_config(errors, _),
+    do: ["gateway.telegram: must be a map" | errors]
+
+  defp validate_telegram_token(errors, nil), do: errors
+
+  defp validate_telegram_token(errors, token) when is_binary(token) do
+    if String.starts_with?(token, "${") and String.ends_with?(token, "}") do
+      # Token references an env var, which is valid
+      errors
+    else
+      # Basic Telegram bot token format validation
+      # Format: 123456789:ABCdefGHIjklMNOpqrsTUVwxyz
+      if Regex.match?(~r/^\d+:[A-Za-z0-9_-]+$/, token) do
+        errors
+      else
+        ["gateway.telegram.token: invalid format (expected '123456789:ABCdef...')" | errors]
+      end
+    end
+  end
+
+  defp validate_telegram_token(errors, _), do: ["gateway.telegram.token: must be a string" | errors]
+
+  defp validate_telegram_compaction(errors, nil), do: errors
+
+  defp validate_telegram_compaction(errors, compaction) when is_map(compaction) do
+    errors
+    |> validate_boolean(Map.get(compaction, :enabled), "gateway.telegram.compaction.enabled")
+    |> validate_positive_integer(Map.get(compaction, :context_window_tokens), "gateway.telegram.compaction.context_window_tokens")
+    |> validate_positive_integer(Map.get(compaction, :reserve_tokens), "gateway.telegram.compaction.reserve_tokens")
+    |> validate_ratio(Map.get(compaction, :trigger_ratio), "gateway.telegram.compaction.trigger_ratio")
+  end
+
+  defp validate_telegram_compaction(errors, _),
+    do: ["gateway.telegram.compaction: must be a map" | errors]
+
+  @doc """
+  Validates queue configuration.
+  """
+  @spec validate_queue_config([String.t()], map() | nil) :: [String.t()]
+  def validate_queue_config(errors, nil), do: errors
+
+  def validate_queue_config(errors, queue) when is_map(queue) do
+    errors
+    |> validate_queue_mode(Map.get(queue, :mode))
+    |> validate_optional_positive_integer(Map.get(queue, :cap), "gateway.queue.cap")
+    |> validate_queue_drop(Map.get(queue, :drop))
+  end
+
+  def validate_queue_config(errors, _), do: ["gateway.queue: must be a map" | errors]
+
+  defp validate_queue_mode(errors, nil), do: errors
+
+  defp validate_queue_mode(errors, mode) when is_binary(mode) do
+    valid_modes = ["fifo", "lifo", "priority"]
+
+    if mode in valid_modes do
+      errors
+    else
+      ["gateway.queue.mode: invalid mode '#{mode}'. Valid: #{Enum.join(valid_modes, ", ")}" | errors]
+    end
+  end
+
+  defp validate_queue_mode(errors, _), do: ["gateway.queue.mode: must be a string" | errors]
+
+  defp validate_queue_drop(errors, nil), do: errors
+
+  defp validate_queue_drop(errors, drop) when is_binary(drop) do
+    valid_drops = ["oldest", "newest", "reject"]
+
+    if drop in valid_drops do
+      errors
+    else
+      ["gateway.queue.drop: invalid drop policy '#{drop}'. Valid: #{Enum.join(valid_drops, ", ")}" | errors]
+    end
+  end
+
+  defp validate_queue_drop(errors, _), do: ["gateway.queue.drop: must be a string" | errors]
 
   @doc """
   Validates logging configuration.
@@ -194,6 +286,34 @@ defmodule LemonCore.Config.Validator do
 
   defp validate_non_negative_integer(errors, _value, path) do
     ["#{path}: must be a non-negative integer" | errors]
+  end
+
+  defp validate_optional_positive_integer(errors, nil, _path), do: errors
+
+  defp validate_optional_positive_integer(errors, value, path) when is_integer(value) do
+    if value > 0 do
+      errors
+    else
+      ["#{path}: must be a positive integer" | errors]
+    end
+  end
+
+  defp validate_optional_positive_integer(errors, _value, path) do
+    ["#{path}: must be a positive integer" | errors]
+  end
+
+  defp validate_ratio(errors, nil, _path), do: errors
+
+  defp validate_ratio(errors, value, path) when is_float(value) or is_integer(value) do
+    if value >= 0.0 and value <= 1.0 do
+      errors
+    else
+      ["#{path}: must be between 0.0 and 1.0" | errors]
+    end
+  end
+
+  defp validate_ratio(errors, _value, path) do
+    ["#{path}: must be a number between 0.0 and 1.0" | errors]
   end
 
   defp validate_boolean(errors, nil, _path), do: errors

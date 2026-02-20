@@ -1084,11 +1084,12 @@ defmodule CodingAgent.Session do
   def handle_call({:compact, opts}, _from, state) do
     state = state |> clear_auto_compaction_state() |> clear_overflow_recovery_state()
     custom_summary = Keyword.get(opts, :summary)
+    compaction_opts = normalize_compaction_opts(state, opts)
 
     # Show working message before compaction
     ui_set_working_message(state, "Compacting context...")
 
-    result = CodingAgent.Compaction.compact(state.session_manager, state.model, opts)
+    result = CodingAgent.Compaction.compact(state.session_manager, state.model, compaction_opts)
 
     case apply_compaction_result(state, result, custom_summary) do
       {:ok, new_state} ->
@@ -2453,18 +2454,7 @@ defmodule CodingAgent.Session do
 
   @spec overflow_recovery_compaction_opts(t()) :: keyword()
   defp overflow_recovery_compaction_opts(state) do
-    keep_recent_tokens =
-      state.settings_manager
-      |> get_compaction_settings()
-      |> Map.get(:keep_recent_tokens)
-
-    opts = [force: true]
-
-    if is_integer(keep_recent_tokens) and keep_recent_tokens > 0 do
-      Keyword.put(opts, :keep_recent_tokens, keep_recent_tokens)
-    else
-      opts
-    end
+    normalize_compaction_opts(state, force: true)
   end
 
   @spec overflow_recovery_compaction_task_result(Session.t(), Ai.Types.Model.t(), keyword()) ::
@@ -2624,11 +2614,11 @@ defmodule CodingAgent.Session do
     {:error, reason, state}
   end
 
-  @spec auto_compaction_task_result(Session.t(), Ai.Types.Model.t()) ::
+  @spec auto_compaction_task_result(Session.t(), Ai.Types.Model.t(), keyword()) ::
           {:ok, map()} | {:error, term()}
-  defp auto_compaction_task_result(session_manager, model) do
+  defp auto_compaction_task_result(session_manager, model, opts) do
     try do
-      CodingAgent.Compaction.compact(session_manager, model, [])
+      CodingAgent.Compaction.compact(session_manager, model, opts)
     rescue
       exception ->
         {:error, {:exception, exception}}
@@ -2644,26 +2634,40 @@ defmodule CodingAgent.Session do
   defp maybe_trigger_compaction(state) do
     # Get context usage from agent state
     agent_state = AgentCore.Agent.get_state(state.agent)
-    context_tokens = CodingAgent.Compaction.estimate_context_tokens(agent_state.messages)
+    context_messages = agent_state.messages || []
+    context_tokens = CodingAgent.Compaction.estimate_context_tokens(context_messages)
+    context_message_count = length(context_messages)
 
     # Get model's context_window
     context_window = state.model.context_window
 
     # Get compaction settings from settings_manager (or use defaults)
     compaction_settings = get_compaction_settings(state.settings_manager)
+    message_budget = CodingAgent.Compaction.message_budget(state.model, compaction_settings)
+
+    should_compact_by_tokens =
+      CodingAgent.Compaction.should_compact?(context_tokens, context_window, compaction_settings)
+
+    should_compact_by_message_limit =
+      CodingAgent.Compaction.should_compact_for_message_limit?(
+        context_message_count,
+        message_budget,
+        compaction_settings
+      )
 
     # Check if compaction should be triggered
-    if CodingAgent.Compaction.should_compact?(context_tokens, context_window, compaction_settings) do
+    if should_compact_by_tokens or should_compact_by_message_limit do
       signature = session_signature(state)
       session_pid = self()
       session_manager = state.session_manager
       model = state.model
+      compaction_opts = normalize_compaction_opts(state, [])
 
       ui_set_working_message(state, "Compacting context...")
 
       _ =
         start_background_task(fn ->
-          result = auto_compaction_task_result(session_manager, model)
+          result = auto_compaction_task_result(session_manager, model, compaction_opts)
           send(session_pid, {:auto_compaction_result, signature, result})
         end)
 
@@ -2930,6 +2934,49 @@ defmodule CodingAgent.Session do
   end
 
   defp extract_text_from_tool_result(_), do: ""
+
+  @spec normalize_compaction_opts(t(), keyword()) :: keyword()
+  defp normalize_compaction_opts(state, opts) do
+    compaction_settings = get_compaction_settings(state.settings_manager)
+    message_budget = CodingAgent.Compaction.message_budget(state.model, compaction_settings)
+
+    opts
+    |> maybe_put_keep_recent_tokens(compaction_settings)
+    |> maybe_put_keep_recent_messages(message_budget)
+  end
+
+  @spec maybe_put_keep_recent_tokens(keyword(), map()) :: keyword()
+  defp maybe_put_keep_recent_tokens(opts, compaction_settings) do
+    keep_recent_tokens = Map.get(compaction_settings, :keep_recent_tokens)
+
+    cond do
+      Keyword.has_key?(opts, :keep_recent_tokens) ->
+        opts
+
+      is_integer(keep_recent_tokens) and keep_recent_tokens > 0 ->
+        Keyword.put(opts, :keep_recent_tokens, keep_recent_tokens)
+
+      true ->
+        opts
+    end
+  end
+
+  @spec maybe_put_keep_recent_messages(keyword(), CodingAgent.Compaction.message_budget() | nil) ::
+          keyword()
+  defp maybe_put_keep_recent_messages(opts, nil), do: opts
+
+  defp maybe_put_keep_recent_messages(opts, %{keep_recent_messages: keep_recent_messages}) do
+    cond do
+      Keyword.has_key?(opts, :keep_recent_messages) ->
+        opts
+
+      is_integer(keep_recent_messages) and keep_recent_messages > 0 ->
+        Keyword.put(opts, :keep_recent_messages, keep_recent_messages)
+
+      true ->
+        opts
+    end
+  end
 
   @spec get_compaction_settings(CodingAgent.SettingsManager.t() | nil) :: map()
   defp get_compaction_settings(nil), do: %{}

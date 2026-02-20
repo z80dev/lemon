@@ -930,7 +930,8 @@ defmodule Ai.Providers.Anthropic do
   def request_history_limit(%Model{provider: "kimi"}), do: kimi_history_limit()
   def request_history_limit(_), do: nil
 
-  defp limit_history_for_provider(messages, %Model{provider: :kimi} = model) when is_list(messages) do
+  defp limit_history_for_provider(messages, %Model{provider: :kimi} = model)
+       when is_list(messages) do
     max_messages = request_history_limit(model) || @kimi_default_history_limit
     trimmed = Enum.take(messages, -max_messages)
     dropped_by_limit = max(length(messages) - length(trimmed), 0)

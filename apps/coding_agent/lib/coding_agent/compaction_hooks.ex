@@ -145,10 +145,8 @@ defmodule CodingAgent.CompactionHooks do
           map()
         ) :: boolean()
   def should_compact_with_hooks?(context_tokens, context_window, session_id, settings) do
-    enabled = Map.get(settings, :enabled, true)
-    reserve_tokens = Map.get(settings, :reserve_tokens, 16384)
-
-    should_compact = enabled && context_tokens > context_window - reserve_tokens
+    should_compact =
+      CodingAgent.Compaction.should_compact?(context_tokens, context_window, settings)
 
     if should_compact do
       Logger.info(
