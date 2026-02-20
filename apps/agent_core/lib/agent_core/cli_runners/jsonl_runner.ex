@@ -80,6 +80,9 @@ defmodule AgentCore.CliRunners.JsonlRunner do
           | {:cwd, String.t()}
           | {:env, [{String.t(), String.t()}]}
           | {:timeout, timeout()}
+          | {:model, String.t()}
+          | {:system_prompt, String.t()}
+          | {:extra_tools, [term()]}
           | {:owner, pid()}
 
   @type runner_state :: term()
@@ -105,6 +108,14 @@ defmodule AgentCore.CliRunners.JsonlRunner do
   @doc "Create initial runner state with cwd context"
   @callback init_state(prompt :: String.t(), resume :: resume_option(), cwd :: String.t()) ::
               runner_state()
+
+  @doc "Create initial runner state with cwd + raw options context"
+  @callback init_state(
+              prompt :: String.t(),
+              resume :: resume_option(),
+              cwd :: String.t(),
+              opts :: keyword()
+            ) :: runner_state()
 
   @doc "Return bytes to send to stdin (or nil for no input)"
   @callback stdin_payload(
@@ -139,7 +150,7 @@ defmodule AgentCore.CliRunners.JsonlRunner do
   @doc "Optional environment variables"
   @callback env(state :: runner_state()) :: [{String.t(), String.t()}] | nil
 
-  @optional_callbacks [env: 1, init_state: 3]
+  @optional_callbacks [env: 1, init_state: 3, init_state: 4]
 
   # ============================================================================
   # Using Macro
@@ -160,6 +171,12 @@ defmodule AgentCore.CliRunners.JsonlRunner do
       def init_state(_prompt, _resume), do: %{}
 
       @impl true
+      def init_state(prompt, resume, _cwd), do: init_state(prompt, resume)
+
+      @impl true
+      def init_state(prompt, resume, cwd, _opts), do: init_state(prompt, resume, cwd)
+
+      @impl true
       def stdin_payload(prompt, _resume, _state), do: prompt
 
       @impl true
@@ -170,7 +187,12 @@ defmodule AgentCore.CliRunners.JsonlRunner do
       @impl true
       def env(_state), do: nil
 
-      defoverridable init_state: 2, stdin_payload: 3, decode_line: 1, env: 1
+      defoverridable init_state: 2,
+                     init_state: 3,
+                     init_state: 4,
+                     stdin_payload: 3,
+                     decode_line: 1,
+                     env: 1
 
       # Public API
 
@@ -368,6 +390,26 @@ defmodule AgentCore.CliRunners.JsonlRunner do
     end
   end
 
+  defp init_runner_state(module, prompt, resume, cwd, opts) do
+    cond do
+      function_exported?(module, :init_state, 4) ->
+        module.init_state(prompt, resume, cwd, opts)
+
+      function_exported?(module, :init_state, 3) ->
+        module.init_state(prompt, resume, cwd)
+
+      function_exported?(module, :init_state, 2) ->
+        module.init_state(prompt, resume)
+
+      true ->
+        raise UndefinedFunctionError,
+          module: module,
+          function: :init_state,
+          arity: 2,
+          reason: nil
+    end
+  end
+
   # ============================================================================
   # GenServer Implementation
   # ============================================================================
@@ -425,15 +467,15 @@ defmodule AgentCore.CliRunners.JsonlRunner do
         #
         # We set both owner (caller) and runner (self). If the runner crashes,
         # the stream will emit an error event to wake up waiting consumers.
-        {:ok, stream} = AgentCore.EventStream.start_link(owner: owner, runner: self(), timeout: :infinity)
+        #
+        # We use start (not start_link) to avoid the link - the runner monitoring
+        # via the :runner option is sufficient and prevents EXIT signals from
+        # causing the stream to terminate before emitting the error event.
+        {:ok, stream} =
+          AgentCore.EventStream.start(owner: owner, runner: self(), timeout: :infinity)
 
-        # Initialize runner state
-        runner_state =
-          if function_exported?(module, :init_state, 3) do
-            module.init_state(prompt, resume, cwd)
-          else
-            module.init_state(prompt, resume)
-          end
+        # Initialize runner state using the highest-arity callback the runner supports.
+        runner_state = init_runner_state(module, prompt, resume, cwd, opts)
 
         state = %State{
           module: module,

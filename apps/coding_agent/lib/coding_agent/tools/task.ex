@@ -98,7 +98,8 @@ defmodule CodingAgent.Tools.Task do
           },
           "async" => %{
             "type" => "boolean",
-            "description" => "When true (recommended), run in background and return task_id immediately. Use async=true by default to keep user conversations responsive. Only use async=false for simple tasks that complete instantly."
+            "description" =>
+              "When true (recommended), run in background and return task_id immediately. Use async=true by default to keep user conversations responsive. Only use async=false for simple tasks that complete instantly."
           }
         },
         "required" => []
@@ -193,6 +194,7 @@ defmodule CodingAgent.Tools.Task do
               cwd,
               description,
               role_id,
+              validated.model,
               on_update_safe,
               signal
             )
@@ -725,7 +727,7 @@ defmodule CodingAgent.Tools.Task do
     RunGraph.fail(run_id, reason)
   end
 
-  defp execute_via_cli_engine(engine, prompt, cwd, description, role_id, on_update, signal) do
+  defp execute_via_cli_engine(engine, prompt, cwd, description, role_id, model, on_update, signal) do
     {module, engine_label} =
       case engine do
         "codex" -> {CodexSubagent, "codex"}
@@ -738,7 +740,8 @@ defmodule CodingAgent.Tools.Task do
     # Get role prompt if role_id is specified
     role_prompt = if role_id, do: get_role_prompt(cwd, role_id), else: nil
 
-    with {:ok, session} <- module.start(prompt: prompt, cwd: cwd, role_prompt: role_prompt) do
+    with {:ok, session} <-
+           module.start(prompt: prompt, cwd: cwd, role_prompt: role_prompt, model: model) do
       abort_monitor = maybe_start_abort_monitor(signal, session.pid)
 
       result =
@@ -751,6 +754,7 @@ defmodule CodingAgent.Tools.Task do
         status: if(result.error, do: "error", else: "completed"),
         engine: engine_label,
         role: role_id,
+        model: model,
         resume_token: result.resume_token,
         error: result.error,
         stderr: result[:stderr]

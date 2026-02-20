@@ -100,16 +100,18 @@ defmodule AgentCore.CliRunners.CodexRunner do
       :final_answer,
       :turn_index,
       :found_session,
-      :config
+      :config,
+      :model_override
     ]
 
-    def new(config \\ nil) do
+    def new(config \\ nil, model_override \\ nil) do
       %__MODULE__{
         factory: EventFactory.new("codex"),
         final_answer: nil,
         turn_index: 0,
         found_session: nil,
-        config: config
+        config: config,
+        model_override: model_override
       }
     end
   end
@@ -132,14 +134,23 @@ defmodule AgentCore.CliRunners.CodexRunner do
   end
 
   @impl true
+  def init_state(_prompt, _resume, cwd, opts) do
+    model_override = normalize_codex_model(Keyword.get(opts, :model))
+    RunnerState.new(LemonConfig.load(cwd), model_override)
+  end
+
+  @impl true
   def build_command(_prompt, resume, state) do
     base_args =
       [
         "exec",
+        "--model",
+        codex_model(state),
         "--json",
         "--skip-git-repo-check",
         "--color=never"
       ]
+      |> maybe_drop_model_flag()
       |> maybe_add_auto_approve(state)
 
     extra_args = codex_extra_args(state)
@@ -653,4 +664,56 @@ defmodule AgentCore.CliRunners.CodexRunner do
       _ -> ["-c", "notify=[]"]
     end
   end
+
+  defp codex_model(state) do
+    state_model =
+      case state do
+        %RunnerState{model_override: model} -> normalize_codex_model(model)
+        _ -> nil
+      end
+
+    state_model ||
+      normalize_codex_model(get_codex_config(state, :model, nil))
+  end
+
+  defp maybe_drop_model_flag(args) do
+    case Enum.find_index(args, &(&1 == "--model")) do
+      nil ->
+        args
+
+      model_idx ->
+        model_value_idx = model_idx + 1
+        model_value = Enum.at(args, model_value_idx)
+
+        if is_binary(model_value) and String.trim(model_value) != "" do
+          args
+        else
+          args
+          |> List.delete_at(model_value_idx)
+          |> List.delete_at(model_idx)
+        end
+    end
+  end
+
+  defp normalize_codex_model(model) when is_binary(model) do
+    trimmed = String.trim(model)
+
+    cond do
+      trimmed == "" ->
+        nil
+
+      true ->
+        case String.split(trimmed, ":", parts: 2) do
+          [prefix, id]
+          when prefix in ["codex", "openai-codex", "openai", "chatgpt"] and is_binary(id) ->
+            normalized = String.trim(id)
+            if normalized == "", do: nil, else: normalized
+
+          _ ->
+            trimmed
+        end
+    end
+  end
+
+  defp normalize_codex_model(_), do: nil
 end

@@ -107,6 +107,25 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
              ]
     end
 
+    test "passes model override to codex exec via --model" do
+      state = RunnerState.new(nil, "openai-codex:gpt-5.3-codex")
+      {_cmd, args} = CodexRunner.build_command("Hello", nil, state)
+
+      assert "--model" in args
+      model_idx = Enum.find_index(args, &(&1 == "--model"))
+      assert Enum.at(args, model_idx + 1) == "gpt-5.3-codex"
+    end
+
+    test "passes config model via --model when no override is present" do
+      config = %LemonCore.Config{agent: %{cli: %{codex: %{model: "gpt-5.2-codex"}}}}
+      state = RunnerState.new(config)
+      {_cmd, args} = CodexRunner.build_command("Hello", nil, state)
+
+      assert "--model" in args
+      model_idx = Enum.find_index(args, &(&1 == "--model"))
+      assert Enum.at(args, model_idx + 1) == "gpt-5.2-codex"
+    end
+
     test "adds auto-approve flag when enabled via config" do
       config = %LemonCore.Config{agent: %{cli: %{codex: %{auto_approve: true}}}}
       state = RunnerState.new(config)
@@ -190,6 +209,11 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
       # Both should have same initial structure
       assert state1.turn_index == state2.turn_index
       assert state1.final_answer == state2.final_answer
+    end
+
+    test "captures model override from init_state/4 options" do
+      state = CodexRunner.init_state("Prompt 1", nil, File.cwd!(), model: "codex:gpt-5.1-codex")
+      assert state.model_override == "gpt-5.1-codex"
     end
   end
 

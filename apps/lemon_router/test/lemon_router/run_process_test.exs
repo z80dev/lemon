@@ -508,6 +508,89 @@ defmodule LemonRouter.RunProcessTest do
       refute_receive {:test_run_orchestrator_submit, %RunRequest{}, _}, 300
       assert eventually(fn -> not Process.alive?(pid) end)
     end
+
+    test "does not auto-retry when assistant error is context overflow" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+      session_key = SessionKey.main("test-agent")
+      job = %{make_test_job(run_id, %{origin: :channel}) | prompt: "Do work"}
+
+      {:ok, _} = start_supervised({TestRunOrchestrator, [notify_pid: self()]})
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false,
+                 run_orchestrator: TestRunOrchestrator
+               })
+
+      completed_event =
+        LemonCore.Event.new(
+          :run_completed,
+          %{
+            completed: %{
+              ok: false,
+              error:
+                {:assistant_error,
+                 "Codex error: %{\\\"error\\\" => %{\\\"code\\\" => \\\"context_length_exceeded\\\"}}"},
+              answer: ""
+            }
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+
+      refute_receive {:test_run_orchestrator_submit, %RunRequest{}, _}, 300
+      assert eventually(fn -> not Process.alive?(pid) end)
+    end
+  end
+
+  describe "context overflow recovery" do
+    test "context_length_exceeded clears generic chat-state resume for non-telegram sessions" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+      session_key = SessionKey.main("test-agent")
+
+      _ =
+        LemonCore.Store.put_chat_state(session_key, %{
+          last_engine: "codex",
+          last_resume_token: "thread_old",
+          updated_at: System.system_time(:millisecond)
+        })
+
+      job = make_test_job(run_id, %{origin: :channel})
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false
+               })
+
+      completed_event =
+        LemonCore.Event.new(
+          :run_completed,
+          %{
+            completed: %{
+              ok: false,
+              error: %{
+                "error" => %{
+                  "code" => "context_length_exceeded",
+                  "message" => "Your input exceeds the context window of this model."
+                }
+              }
+            }
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+
+      assert eventually(fn -> not Process.alive?(pid) end)
+      assert eventually(fn -> LemonCore.Store.get_chat_state(session_key) == nil end)
+    end
   end
 
   describe "final answer fanout delivery" do

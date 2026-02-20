@@ -721,6 +721,8 @@ defmodule LemonRouter.RunProcess do
     case extract_completed_ok_and_error(event) do
       {false, err} ->
         if context_length_exceeded_error?(err) do
+          # Clear generic chat-state resume for all sessions so the next run can start fresh.
+          _ = safe_delete_chat_state(state.session_key)
           reset_telegram_resume_state(state.session_key)
           mark_telegram_pending_compaction(state.session_key, :overflow)
         end
@@ -1255,16 +1257,22 @@ defmodule LemonRouter.RunProcess do
        when error in [:user_requested, :interrupted, :new_session, :timeout],
        do: false
 
-  defp retryable_zero_answer_error?({:assistant_error, _reason}), do: true
+  defp retryable_zero_answer_error?({:assistant_error, reason}) do
+    not context_length_exceeded_error?(reason)
+  end
 
   defp retryable_zero_answer_error?(error) when is_binary(error) do
     down = String.downcase(error)
-    String.contains?(down, "assistant_error") or String.contains?(down, "assistant error")
+
+    (String.contains?(down, "assistant_error") or String.contains?(down, "assistant error")) and
+      not context_length_exceeded_error?(error)
   end
 
   defp retryable_zero_answer_error?(error) when is_map(error) do
     text = error |> inspect(limit: 50, printable_limit: 2_000) |> String.downcase()
-    String.contains?(text, "assistant_error") or String.contains?(text, "assistant error")
+
+    (String.contains?(text, "assistant_error") or String.contains?(text, "assistant error")) and
+      not context_length_exceeded_error?(error)
   end
 
   defp retryable_zero_answer_error?(_), do: false
