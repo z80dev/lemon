@@ -543,5 +543,4 @@ defmodule LemonGatewayTest do
     assert :ok = LemonGateway.Telegram.Dedupe.init()
     assert :ok = LemonGateway.Telegram.Dedupe.init()
   end
-
 end

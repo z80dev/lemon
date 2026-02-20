@@ -156,9 +156,10 @@ defmodule CodingAgent.BashExecutorTest do
 
       # Should complete without hanging (deadlock)
       # Set a timeout to detect deadlock
-      task = Task.async(fn ->
-        BashExecutor.execute(command, "/tmp", max_bytes: 10_000)
-      end)
+      task =
+        Task.async(fn ->
+          BashExecutor.execute(command, "/tmp", max_bytes: 10_000)
+        end)
 
       # Wait for result with timeout - if it deadlocks, this will timeout
       case Task.yield(task, 10_000) do

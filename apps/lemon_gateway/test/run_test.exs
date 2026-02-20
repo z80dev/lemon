@@ -2299,6 +2299,7 @@ defmodule LemonGateway.RunTest do
           engine_id: "controllable",
           meta: %{notify_pid: self(), controller_pid: self()}
         )
+
       {:ok, _pid1} = start_run_direct(job1)
 
       assert_receive {:engine_started, _run_ref}, 5000

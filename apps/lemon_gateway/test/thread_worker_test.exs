@@ -224,7 +224,10 @@ defmodule LemonGateway.ThreadWorkerTest do
   defp make_job(scope, opts) do
     user_msg_id = Keyword.get(opts, :user_msg_id)
     base_meta = %{notify_pid: self()}
-    base_meta = if is_nil(user_msg_id), do: base_meta, else: Map.put(base_meta, :user_msg_id, user_msg_id)
+
+    base_meta =
+      if is_nil(user_msg_id), do: base_meta, else: Map.put(base_meta, :user_msg_id, user_msg_id)
+
     meta = Map.merge(base_meta, Keyword.get(opts, :meta, %{}))
 
     %Job{
@@ -429,7 +432,11 @@ defmodule LemonGateway.ThreadWorkerTest do
         )
 
       steer_job =
-        make_job(scope, prompt: "injected message", queue_mode: :steer, meta: %{notify_pid: self()})
+        make_job(scope,
+          prompt: "injected message",
+          queue_mode: :steer,
+          meta: %{notify_pid: self()}
+        )
 
       LemonGateway.submit(running_job)
       # Wait for run to start
@@ -455,7 +462,8 @@ defmodule LemonGateway.ThreadWorkerTest do
           meta: %{notify_pid: self(), delay_ms: 200}
         )
 
-      steer_job = make_job(scope, prompt: "steer", queue_mode: :steer, meta: %{notify_pid: self()})
+      steer_job =
+        make_job(scope, prompt: "steer", queue_mode: :steer, meta: %{notify_pid: self()})
 
       LemonGateway.submit(running_job)
       Process.sleep(50)
@@ -472,7 +480,8 @@ defmodule LemonGateway.ThreadWorkerTest do
       scope = make_scope()
 
       # Submit only a steer job with no active run
-      steer_job = make_job(scope, prompt: "steer", queue_mode: :steer, meta: %{notify_pid: self()})
+      steer_job =
+        make_job(scope, prompt: "steer", queue_mode: :steer, meta: %{notify_pid: self()})
 
       LemonGateway.submit(steer_job)
 
@@ -520,7 +529,8 @@ defmodule LemonGateway.ThreadWorkerTest do
           meta: %{notify_pid: self(), cancel_notify_pid: self()}
         )
 
-      steer_job = make_job(scope, prompt: "steer", queue_mode: :steer, meta: %{notify_pid: self()})
+      steer_job =
+        make_job(scope, prompt: "steer", queue_mode: :steer, meta: %{notify_pid: self()})
 
       LemonGateway.submit(running_job)
       Process.sleep(50)
@@ -1988,8 +1998,11 @@ defmodule LemonGateway.ThreadWorkerTest do
       Process.sleep(50)
 
       # Submit followups and an interrupt concurrently
-      followup1 = make_job(scope, prompt: "f1", queue_mode: :followup, meta: %{notify_pid: self()})
-      followup2 = make_job(scope, prompt: "f2", queue_mode: :followup, meta: %{notify_pid: self()})
+      followup1 =
+        make_job(scope, prompt: "f1", queue_mode: :followup, meta: %{notify_pid: self()})
+
+      followup2 =
+        make_job(scope, prompt: "f2", queue_mode: :followup, meta: %{notify_pid: self()})
 
       interrupt =
         make_job(scope, prompt: "int", queue_mode: :interrupt, meta: %{notify_pid: self()})

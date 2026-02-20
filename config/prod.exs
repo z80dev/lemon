@@ -14,3 +14,5 @@ config :lemon_core, LemonCore.Store,
 
 # In prod, the node model is preferred, but local fallback is still useful for single-box installs.
 config :lemon_control_plane, :browser_local_fallback, true
+
+config :lemon_web, LemonWeb.Endpoint, cache_static_manifest: "priv/static/cache_manifest.json"

@@ -141,6 +141,7 @@ defmodule LemonGateway.Telegram.ResumeFooterIntegrationTest do
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
     {:ok, _} = Application.ensure_all_started(:lemon_router)
+
     :ok =
       LemonCore.RouterBridge.configure(
         router: LemonRouter.Router,

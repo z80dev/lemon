@@ -71,6 +71,21 @@ defmodule LemonGateway.ConfigLoader do
       |> fetch(:telegram)
       |> parse_telegram()
 
+    discord =
+      gateway
+      |> fetch(:discord)
+      |> parse_discord()
+
+    farcaster =
+      gateway
+      |> fetch(:farcaster)
+      |> parse_farcaster()
+
+    email =
+      gateway
+      |> fetch(:email)
+      |> parse_email()
+
     engines =
       gateway
       |> fetch(:engines)
@@ -82,6 +97,9 @@ defmodule LemonGateway.ConfigLoader do
       default_cwd: fetch(gateway, :default_cwd),
       auto_resume: fetch(gateway, :auto_resume),
       enable_telegram: fetch(gateway, :enable_telegram),
+      enable_discord: fetch(gateway, :enable_discord),
+      enable_farcaster: fetch(gateway, :enable_farcaster),
+      enable_email: fetch(gateway, :enable_email),
       require_engine_lock: fetch(gateway, :require_engine_lock),
       engine_lock_timeout_ms: fetch(gateway, :engine_lock_timeout_ms)
     }
@@ -92,6 +110,9 @@ defmodule LemonGateway.ConfigLoader do
     |> Map.put(:queue, queue)
     |> Map.put(:sms, sms)
     |> Map.put(:telegram, telegram)
+    |> Map.put(:discord, discord)
+    |> Map.put(:farcaster, farcaster)
+    |> Map.put(:email, email)
     |> Map.put(:engines, engines)
   end
 
@@ -187,6 +208,105 @@ defmodule LemonGateway.ConfigLoader do
 
   defp parse_telegram(_), do: %{}
 
+  defp parse_discord(discord) when is_map(discord) do
+    %{
+      bot_token: fetch(discord, :bot_token),
+      allowed_guild_ids: fetch(discord, :allowed_guild_ids),
+      allowed_channel_ids: fetch(discord, :allowed_channel_ids),
+      deny_unbound_channels: fetch(discord, :deny_unbound_channels)
+    }
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.new()
+  end
+
+  defp parse_discord(_), do: %{}
+
+  defp parse_farcaster(farcaster) when is_map(farcaster) do
+    %{
+      frame_enabled: fetch(farcaster, :frame_enabled),
+      port: fetch(farcaster, :port),
+      bind: fetch(farcaster, :bind),
+      action_path: fetch(farcaster, :action_path),
+      frame_base_url: fetch(farcaster, :frame_base_url),
+      image_url: fetch(farcaster, :image_url),
+      input_label: fetch(farcaster, :input_label),
+      button_1: fetch(farcaster, :button_1),
+      button_2: fetch(farcaster, :button_2),
+      account_id: fetch(farcaster, :account_id),
+      state_secret: fetch(farcaster, :state_secret),
+      verify_trusted_data: default_true(fetch(farcaster, :verify_trusted_data)),
+      hub_validate_url: fetch(farcaster, :hub_validate_url),
+      api_key: fetch(farcaster, :api_key),
+      signer_uuid: fetch(farcaster, :signer_uuid)
+    }
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.new()
+  end
+
+  defp parse_farcaster(_), do: %{}
+
+  defp parse_email(email) when is_map(email) do
+    %{
+      inbound_enabled: fetch(email, :inbound_enabled),
+      webhook_enabled: fetch(email, :webhook_enabled),
+      webhook_port: fetch(email, :webhook_port),
+      webhook_bind: fetch(email, :webhook_bind),
+      webhook_path: fetch(email, :webhook_path),
+      webhook_token: fetch(email, :webhook_token),
+      reply_to: fetch(email, :reply_to),
+      from: fetch(email, :from),
+      relay: fetch(email, :relay),
+      smtp_relay: fetch(email, :smtp_relay),
+      smtp_port: fetch(email, :smtp_port),
+      smtp_username: fetch(email, :smtp_username),
+      smtp_password: fetch(email, :smtp_password),
+      smtp_tls: fetch(email, :smtp_tls),
+      smtp_ssl: fetch(email, :smtp_ssl),
+      smtp_auth: fetch(email, :smtp_auth),
+      smtp_hostname: fetch(email, :smtp_hostname),
+      inbound: parse_email_inbound(fetch(email, :inbound)),
+      outbound: parse_email_outbound(fetch(email, :outbound))
+    }
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.new()
+  end
+
+  defp parse_email(_), do: %{}
+
+  defp parse_email_inbound(inbound) when is_map(inbound) do
+    %{
+      enabled: fetch(inbound, :enabled),
+      bind: fetch(inbound, :bind),
+      port: fetch(inbound, :port),
+      path: fetch(inbound, :path),
+      token: fetch(inbound, :token)
+    }
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.new()
+  end
+
+  defp parse_email_inbound(_), do: %{}
+
+  defp parse_email_outbound(outbound) when is_map(outbound) do
+    %{
+      from: fetch(outbound, :from),
+      reply_to: fetch(outbound, :reply_to),
+      relay: fetch(outbound, :relay),
+      port: fetch(outbound, :port),
+      username: fetch(outbound, :username),
+      password: fetch(outbound, :password),
+      tls: fetch(outbound, :tls),
+      tls_versions: fetch(outbound, :tls_versions),
+      ssl: fetch(outbound, :ssl),
+      auth: fetch(outbound, :auth),
+      hostname: fetch(outbound, :hostname)
+    }
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.new()
+  end
+
+  defp parse_email_outbound(_), do: %{}
+
   defp parse_telegram_compaction(compaction) when is_map(compaction) do
     %{
       enabled: fetch(compaction, :enabled),
@@ -271,4 +391,7 @@ defmodule LemonGateway.ConfigLoader do
   defp fetch(list, key) when is_list(list) do
     Keyword.get(list, key) || Keyword.get(list, to_string(key))
   end
+
+  defp default_true(nil), do: true
+  defp default_true(value), do: value
 end

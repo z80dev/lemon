@@ -1,6 +1,8 @@
 defmodule LemonGateway.TransportRegistryTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias LemonGateway.TransportRegistry
 
   defmodule MockTransport do
@@ -255,6 +257,87 @@ defmodule LemonGateway.TransportRegistryTest do
 
     assert "telegram" in enabled_ids
     assert "mock" in enabled_ids
+  end
+
+  test "discord transport disabled when enable_discord is false" do
+    Application.put_env(:lemon_gateway, :transports, [
+      LemonGateway.Transports.Discord,
+      MockTransport
+    ])
+
+    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+      max_concurrent_runs: 1,
+      default_engine: "echo",
+      enable_telegram: false,
+      enable_discord: false
+    })
+
+    {:ok, _} = restart_config_and_registry()
+
+    enabled_ids =
+      TransportRegistry.enabled_transports()
+      |> Enum.map(fn {id, _mod} -> id end)
+
+    refute "discord" in enabled_ids
+    assert "mock" in enabled_ids
+  end
+
+  test "discord transport enabled when enable_discord is true" do
+    Application.put_env(:lemon_gateway, :transports, [
+      LemonGateway.Transports.Discord,
+      MockTransport
+    ])
+
+    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+      max_concurrent_runs: 1,
+      default_engine: "echo",
+      enable_telegram: false,
+      enable_discord: true
+    })
+
+    {:ok, _} = restart_config_and_registry()
+
+    enabled_ids =
+      TransportRegistry.enabled_transports()
+      |> Enum.map(fn {id, _mod} -> id end)
+
+    assert "discord" in enabled_ids
+    assert "mock" in enabled_ids
+  end
+
+  test "logs warning when farcaster is enabled but transport is missing" do
+    Application.put_env(:lemon_gateway, :transports, [MockTransport])
+
+    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+      max_concurrent_runs: 1,
+      default_engine: "echo",
+      enable_farcaster: true
+    })
+
+    log =
+      capture_log(fn ->
+        {:ok, _} = restart_config_and_registry()
+      end)
+
+    assert log =~
+             "enable_farcaster is true but Farcaster transport is not registered in :transports"
+  end
+
+  test "logs warning when email is enabled but transport is missing" do
+    Application.put_env(:lemon_gateway, :transports, [MockTransport])
+
+    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+      max_concurrent_runs: 1,
+      default_engine: "echo",
+      enable_email: true
+    })
+
+    log =
+      capture_log(fn ->
+        {:ok, _} = restart_config_and_registry()
+      end)
+
+    assert log =~ "enable_email is true but Email transport is not registered in :transports"
   end
 
   # ===========================================================================

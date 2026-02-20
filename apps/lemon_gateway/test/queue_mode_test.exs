@@ -69,9 +69,26 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      job1 = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "first", queue_mode: :collect}
-      job2 = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "second", queue_mode: :collect}
-      job3 = %Job{session_key: scope, meta: %{user_msg_id: 3}, prompt: "third", queue_mode: :collect}
+      job1 = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 1},
+        prompt: "first",
+        queue_mode: :collect
+      }
+
+      job2 = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 2},
+        prompt: "second",
+        queue_mode: :collect
+      }
+
+      job3 = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 3},
+        prompt: "third",
+        queue_mode: :collect
+      }
 
       state = enqueue_by_mode(job1, state)
       state = enqueue_by_mode(job2, state)
@@ -94,9 +111,26 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      job1 = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "first", queue_mode: :collect}
-      job2 = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "second", queue_mode: :collect}
-      job_steer = %Job{session_key: scope, meta: %{user_msg_id: 3}, prompt: "urgent", queue_mode: :steer}
+      job1 = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 1},
+        prompt: "first",
+        queue_mode: :collect
+      }
+
+      job2 = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 2},
+        prompt: "second",
+        queue_mode: :collect
+      }
+
+      job_steer = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 3},
+        prompt: "urgent",
+        queue_mode: :steer
+      }
 
       state = enqueue_by_mode(job1, state)
       state = enqueue_by_mode(job2, state)
@@ -120,8 +154,19 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      job1 = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "first", queue_mode: :collect}
-      job2 = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "second", queue_mode: :collect}
+      job1 = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 1},
+        prompt: "first",
+        queue_mode: :collect
+      }
+
+      job2 = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 2},
+        prompt: "second",
+        queue_mode: :collect
+      }
 
       job_interrupt = %Job{
         session_key: scope,
@@ -152,9 +197,26 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      job1 = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "normal", queue_mode: :collect}
-      steer1 = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "steer1", queue_mode: :steer}
-      steer2 = %Job{session_key: scope, meta: %{user_msg_id: 3}, prompt: "steer2", queue_mode: :steer}
+      job1 = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 1},
+        prompt: "normal",
+        queue_mode: :collect
+      }
+
+      steer1 = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 2},
+        prompt: "steer1",
+        queue_mode: :steer
+      }
+
+      steer2 = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 3},
+        prompt: "steer2",
+        queue_mode: :steer
+      }
 
       state = enqueue_by_mode(job1, state)
       state = enqueue_by_mode(steer1, state)
@@ -181,8 +243,19 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      followup1 = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "part1", queue_mode: :followup}
-      followup2 = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "part2", queue_mode: :followup}
+      followup1 = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 1},
+        prompt: "part1",
+        queue_mode: :followup
+      }
+
+      followup2 = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 2},
+        prompt: "part2",
+        queue_mode: :followup
+      }
 
       state = enqueue_by_mode(followup1, state)
       # Enqueue immediately (within debounce window)
@@ -207,8 +280,19 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      followup1 = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "part1", queue_mode: :followup}
-      followup2 = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "part2", queue_mode: :followup}
+      followup1 = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 1},
+        prompt: "part1",
+        queue_mode: :followup
+      }
+
+      followup2 = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 2},
+        prompt: "part2",
+        queue_mode: :followup
+      }
 
       state = enqueue_by_mode(followup1, state)
       # Outside debounce window (1ms)
@@ -234,8 +318,19 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      collect_job = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "collect", queue_mode: :collect}
-      followup = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "followup", queue_mode: :followup}
+      collect_job = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 1},
+        prompt: "collect",
+        queue_mode: :collect
+      }
+
+      followup = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 2},
+        prompt: "followup",
+        queue_mode: :followup
+      }
 
       state = enqueue_by_mode(collect_job, state)
       state = enqueue_by_mode(followup, state)
@@ -259,9 +354,26 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      followup1 = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "a", queue_mode: :followup}
-      followup2 = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "b", queue_mode: :followup}
-      followup3 = %Job{session_key: scope, meta: %{user_msg_id: 3}, prompt: "c", queue_mode: :followup}
+      followup1 = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 1},
+        prompt: "a",
+        queue_mode: :followup
+      }
+
+      followup2 = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 2},
+        prompt: "b",
+        queue_mode: :followup
+      }
+
+      followup3 = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 3},
+        prompt: "c",
+        queue_mode: :followup
+      }
 
       state = enqueue_by_mode(followup1, state)
       state = enqueue_by_mode(followup2, state)
@@ -285,8 +397,19 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      job_normal = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "normal", queue_mode: :collect}
-      job_steer = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "steer", queue_mode: :steer}
+      job_normal = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 1},
+        prompt: "normal",
+        queue_mode: :collect
+      }
+
+      job_steer = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 2},
+        prompt: "steer",
+        queue_mode: :steer
+      }
 
       job_interrupt = %Job{
         session_key: scope,
@@ -317,7 +440,12 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      job_normal = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "normal", queue_mode: :collect}
+      job_normal = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 1},
+        prompt: "normal",
+        queue_mode: :collect
+      }
 
       job_interrupt = %Job{
         session_key: scope,
@@ -326,7 +454,12 @@ defmodule LemonGateway.QueueModeTest do
         queue_mode: :interrupt
       }
 
-      job_steer = %Job{session_key: scope, meta: %{user_msg_id: 3}, prompt: "steer", queue_mode: :steer}
+      job_steer = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 3},
+        prompt: "steer",
+        queue_mode: :steer
+      }
 
       state = enqueue_by_mode(job_normal, state)
       state = enqueue_by_mode(job_interrupt, state)
@@ -352,9 +485,26 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      job1 = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "collect1", queue_mode: :collect}
-      followup = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "followup", queue_mode: :followup}
-      job2 = %Job{session_key: scope, meta: %{user_msg_id: 3}, prompt: "collect2", queue_mode: :collect}
+      job1 = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 1},
+        prompt: "collect1",
+        queue_mode: :collect
+      }
+
+      followup = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 2},
+        prompt: "followup",
+        queue_mode: :followup
+      }
+
+      job2 = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 3},
+        prompt: "collect2",
+        queue_mode: :collect
+      }
 
       state = enqueue_by_mode(job1, state)
       state = enqueue_by_mode(followup, state)
@@ -380,8 +530,19 @@ defmodule LemonGateway.QueueModeTest do
         last_followup_at: nil
       }
 
-      job_steer = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "steer", queue_mode: :steer}
-      followup = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "followup", queue_mode: :followup}
+      job_steer = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 1},
+        prompt: "steer",
+        queue_mode: :steer
+      }
+
+      followup = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 2},
+        prompt: "followup",
+        queue_mode: :followup
+      }
 
       state = enqueue_by_mode(job_steer, state)
       state = enqueue_by_mode(followup, state)
@@ -406,11 +567,40 @@ defmodule LemonGateway.QueueModeTest do
       }
 
       # Sequence: collect1, followup1, followup2 (merge), steer, collect2
-      collect1 = %Job{session_key: scope, meta: %{user_msg_id: 1}, prompt: "collect1", queue_mode: :collect}
-      followup1 = %Job{session_key: scope, meta: %{user_msg_id: 2}, prompt: "follow1", queue_mode: :followup}
-      followup2 = %Job{session_key: scope, meta: %{user_msg_id: 3}, prompt: "follow2", queue_mode: :followup}
-      steer = %Job{session_key: scope, meta: %{user_msg_id: 4}, prompt: "steer", queue_mode: :steer}
-      collect2 = %Job{session_key: scope, meta: %{user_msg_id: 5}, prompt: "collect2", queue_mode: :collect}
+      collect1 = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 1},
+        prompt: "collect1",
+        queue_mode: :collect
+      }
+
+      followup1 = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 2},
+        prompt: "follow1",
+        queue_mode: :followup
+      }
+
+      followup2 = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 3},
+        prompt: "follow2",
+        queue_mode: :followup
+      }
+
+      steer = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 4},
+        prompt: "steer",
+        queue_mode: :steer
+      }
+
+      collect2 = %Job{
+        session_key: scope,
+        meta: %{user_msg_id: 5},
+        prompt: "collect2",
+        queue_mode: :collect
+      }
 
       state = enqueue_by_mode(collect1, state)
       state = enqueue_by_mode(followup1, state)

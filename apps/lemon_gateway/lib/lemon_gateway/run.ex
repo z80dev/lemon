@@ -716,7 +716,9 @@ defmodule LemonGateway.Run do
     status_msg_id = meta && meta[:status_msg_id]
 
     Enum.each(keys, fn key ->
-      if progress_msg_id, do: LemonGateway.Store.put_progress_mapping(key, progress_msg_id, run_pid)
+      if progress_msg_id,
+        do: LemonGateway.Store.put_progress_mapping(key, progress_msg_id, run_pid)
+
       if status_msg_id, do: LemonGateway.Store.put_progress_mapping(key, status_msg_id, run_pid)
     end)
   end

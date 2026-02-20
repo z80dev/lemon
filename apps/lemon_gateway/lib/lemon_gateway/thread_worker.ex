@@ -192,7 +192,7 @@ defmodule LemonGateway.ThreadWorker do
 
   # Try to merge a followup job with the last followup job in the queue
   defp merge_with_last_followup(queue, new_job) do
-      case :queue.out_r(queue) do
+    case :queue.out_r(queue) do
       {{:value, %Job{queue_mode: :followup} = last_job}, rest_queue} ->
         merged_job = %{
           last_job

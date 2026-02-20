@@ -370,6 +370,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
     {:ok, _} = Application.ensure_all_started(:lemon_router)
+
     :ok =
       LemonCore.RouterBridge.configure(
         router: LemonRouter.Router,
@@ -1016,7 +1017,8 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       assert String.contains?(job.prompt, "Transcript")
 
       assert_receive {:telegram_api_call,
-                      {:send_message, ^chat_id, "Recording memories, then starting a new session…",
+                      {:send_message, ^chat_id,
+                       "Recording memories, then starting a new session…",
                        %{"reply_to_message_id" => 500}, _parse_mode}},
                      2000
 

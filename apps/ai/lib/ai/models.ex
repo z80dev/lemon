@@ -923,6 +923,18 @@ defmodule Ai.Models do
       context_window: 1_048_576,
       max_tokens: 65_536
     },
+    "gemini-3-flash" => %Model{
+      id: "gemini-3-flash",
+      name: "Gemini 3 Flash",
+      api: :google_generative_ai,
+      provider: :google,
+      base_url: "https://generativelanguage.googleapis.com/v1beta",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.5, output: 3.0, cache_read: 0.5, cache_write: 0.0},
+      context_window: 1_048_576,
+      max_tokens: 65_536
+    },
     "gemini-3-flash-preview" => %Model{
       id: "gemini-3-flash-preview",
       name: "Gemini 3 Flash Preview",
@@ -932,6 +944,18 @@ defmodule Ai.Models do
       reasoning: true,
       input: [:text, :image],
       cost: %ModelCost{input: 0.5, output: 3.0, cache_read: 0.05, cache_write: 0.0},
+      context_window: 1_048_576,
+      max_tokens: 65_536
+    },
+    "gemini-3-pro" => %Model{
+      id: "gemini-3-pro",
+      name: "Gemini 3 Pro",
+      api: :google_generative_ai,
+      provider: :google,
+      base_url: "https://generativelanguage.googleapis.com/v1beta",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 2.0, output: 12.0, cache_read: 0.2, cache_write: 0.0},
       context_window: 1_048_576,
       max_tokens: 65_536
     },

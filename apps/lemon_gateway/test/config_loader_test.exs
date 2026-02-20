@@ -2,6 +2,7 @@ defmodule LemonGateway.ConfigLoaderTest do
   use ExUnit.Case, async: false
 
   alias LemonGateway.{Binding, ConfigLoader, Project}
+  alias LemonGateway.Transports.Email.Outbound
 
   setup do
     original_home = System.get_env("HOME")
@@ -122,5 +123,108 @@ defmodule LemonGateway.ConfigLoaderTest do
     assert config.telegram.files.auto_send_generated_images == true
     assert config.telegram.files.auto_send_generated_max_files == 4
     assert config.telegram.files.outbound_send_delay_ms == 800
+  end
+
+  test "parses farcaster hardening options from override config" do
+    Application.put_env(
+      :lemon_gateway,
+      LemonGateway.Config,
+      %{
+        "farcaster" => %{
+          "frame_enabled" => true,
+          "port" => 4044,
+          "bind" => "127.0.0.1",
+          "action_path" => "/frames/farcaster/actions",
+          "frame_base_url" => "https://example.test",
+          "image_url" => "https://example.test/frame.png",
+          "input_label" => "Ask Lemon",
+          "button_1" => "Run",
+          "button_2" => "Reset",
+          "account_id" => "bot",
+          "state_secret" => "test-secret",
+          "verify_trusted_data" => true,
+          "hub_validate_url" => "https://hub.example.test/validate"
+        }
+      }
+    )
+
+    config = ConfigLoader.load()
+
+    assert config.farcaster.frame_enabled == true
+    assert config.farcaster.port == 4044
+    assert config.farcaster.bind == "127.0.0.1"
+    assert config.farcaster.action_path == "/frames/farcaster/actions"
+    assert config.farcaster.frame_base_url == "https://example.test"
+    assert config.farcaster.image_url == "https://example.test/frame.png"
+    assert config.farcaster.input_label == "Ask Lemon"
+    assert config.farcaster.button_1 == "Run"
+    assert config.farcaster.button_2 == "Reset"
+    assert config.farcaster.account_id == "bot"
+    assert config.farcaster.state_secret == "test-secret"
+    assert config.farcaster.verify_trusted_data == true
+    assert config.farcaster.hub_validate_url == "https://hub.example.test/validate"
+  end
+
+  test "defaults farcaster trusted-data verification to true when key is omitted" do
+    Application.put_env(
+      :lemon_gateway,
+      LemonGateway.Config,
+      %{
+        "farcaster" => %{
+          "frame_enabled" => true
+        }
+      }
+    )
+
+    config = ConfigLoader.load()
+
+    assert config.farcaster.verify_trusted_data == true
+  end
+
+  test "parses email outbound config and normalizes smtp options from nested values" do
+    Application.put_env(
+      :lemon_gateway,
+      LemonGateway.Config,
+      %{
+        "enable_email" => true,
+        "email" => %{
+          "smtp_relay" => "flat-relay.example.test",
+          "smtp_port" => "2525",
+          "smtp_ssl" => true,
+          "smtp_tls" => "always",
+          "smtp_auth" => "never",
+          "smtp_username" => "flat-user",
+          "smtp_password" => "flat-pass",
+          "outbound" => %{
+            "relay" => " nested-relay.example.test ",
+            "port" => "587",
+            "ssl" => false,
+            "tls" => "never",
+            "auth" => "if_available",
+            "username" => " nested-user ",
+            "password" => " nested-pass ",
+            "hostname" => " mail.example.test ",
+            "tls_versions" => ["tlsv1.2", "tlsv1.3"]
+          }
+        }
+      }
+    )
+
+    config = ConfigLoader.load()
+
+    assert config.enable_email == true
+    assert config.email.outbound.relay == " nested-relay.example.test "
+    assert config.email.smtp_relay == "flat-relay.example.test"
+
+    assert {:ok, smtp_opts} = Outbound.smtp_options(config.email)
+    assert Keyword.fetch!(smtp_opts, :relay) == "nested-relay.example.test"
+    assert Keyword.fetch!(smtp_opts, :port) == 587
+    assert Keyword.fetch!(smtp_opts, :ssl) == false
+    assert Keyword.fetch!(smtp_opts, :tls) == :never
+    assert Keyword.fetch!(smtp_opts, :auth) == :if_available
+    assert Keyword.fetch!(smtp_opts, :username) == "nested-user"
+    assert Keyword.fetch!(smtp_opts, :password) == "nested-pass"
+    assert Keyword.fetch!(smtp_opts, :hostname) == "mail.example.test"
+    assert {:tls_options, [versions: [:"tlsv1.2", :"tlsv1.3"]]} in smtp_opts
   end
 end

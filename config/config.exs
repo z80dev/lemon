@@ -9,6 +9,8 @@
 # move said applications out of the umbrella.
 import Config
 
+config :phoenix, :json_library, Jason
+
 # Lane concurrency caps for CodingAgent.LaneQueue
 config :coding_agent, :lane_caps,
   main: 4,
@@ -19,6 +21,18 @@ config :coding_agent, :lane_caps,
 config :lemon_core, LemonCore.Store,
   backend: LemonCore.Store.EtsBackend,
   backend_opts: []
+
+config :lemon_web, LemonWeb.Endpoint,
+  url: [host: "localhost"],
+  render_errors: [
+    formats: [html: LemonWeb.ErrorHTML, json: LemonWeb.ErrorJSON],
+    layout: false
+  ],
+  pubsub_server: LemonCore.PubSub,
+  live_view: [signing_salt: "lemonwebsigningsalt"]
+
+config :lemon_web, :access_token, nil
+config :lemon_web, :uploads_dir, Path.join(System.tmp_dir!(), "lemon_web_uploads")
 
 # Sample configuration:
 #

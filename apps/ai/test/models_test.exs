@@ -398,6 +398,58 @@ defmodule Ai.ModelsTest do
       assert model.name == "Gemini 3.1 Pro Preview (Custom Tools)"
     end
 
+    test "gemini 3 flash has correct specs" do
+      model = Models.get_model(:google, "gemini-3-flash")
+
+      assert model.cost.input == 0.5
+      assert model.cost.output == 3.0
+      assert model.cost.cache_read == 0.5
+      assert model.cost.cache_write == 0.0
+      assert model.context_window == 1_048_576
+      assert model.max_tokens == 65_536
+      assert model.reasoning == true
+      assert model.name == "Gemini 3 Flash"
+    end
+
+    test "gemini 3 flash preview has correct specs" do
+      model = Models.get_model(:google, "gemini-3-flash-preview")
+
+      assert model.cost.input == 0.5
+      assert model.cost.output == 3.0
+      assert model.cost.cache_read == 0.05
+      assert model.cost.cache_write == 0.0
+      assert model.context_window == 1_048_576
+      assert model.max_tokens == 65_536
+      assert model.reasoning == true
+      assert model.name == "Gemini 3 Flash Preview"
+    end
+
+    test "gemini 3 pro has correct specs" do
+      model = Models.get_model(:google, "gemini-3-pro")
+
+      assert model.cost.input == 2.0
+      assert model.cost.output == 12.0
+      assert model.cost.cache_read == 0.2
+      assert model.cost.cache_write == 0.0
+      assert model.context_window == 1_048_576
+      assert model.max_tokens == 65_536
+      assert model.reasoning == true
+      assert model.name == "Gemini 3 Pro"
+    end
+
+    test "gemini 3 pro preview has correct specs" do
+      model = Models.get_model(:google, "gemini-3-pro-preview")
+
+      assert model.cost.input == 2.0
+      assert model.cost.output == 12.0
+      assert model.cost.cache_read == 0.2
+      assert model.cost.cache_write == 0.0
+      assert model.context_window == 1_000_000
+      assert model.max_tokens == 64_000
+      assert model.reasoning == true
+      assert model.name == "Gemini 3 Pro Preview"
+    end
+
     test "gpt 5.3 codex spark has correct specs" do
       model = Models.get_model(:openai, "gpt-5.3-codex-spark")
 
@@ -460,6 +512,10 @@ defmodule Ai.ModelsTest do
       assert Models.get_model(:google, "gemini-3.1-pro") != nil
       assert Models.get_model(:google, "gemini-3.1-pro-preview") != nil
       assert Models.get_model(:google, "gemini-3.1-pro-preview-customtools") != nil
+      assert Models.get_model(:google, "gemini-3-flash") != nil
+      assert Models.get_model(:google, "gemini-3-flash-preview") != nil
+      assert Models.get_model(:google, "gemini-3-pro") != nil
+      assert Models.get_model(:google, "gemini-3-pro-preview") != nil
     end
 
     test "opencode models" do

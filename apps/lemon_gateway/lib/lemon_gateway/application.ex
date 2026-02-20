@@ -13,6 +13,7 @@ defmodule LemonGateway.Application do
         LemonGateway.Telegram.StartupNotifier,
         LemonGateway.EngineRegistry,
         LemonGateway.TransportRegistry,
+        LemonGateway.TransportSupervisor,
         LemonGateway.CommandRegistry,
         LemonGateway.EngineLock,
         {Registry, keys: :unique, name: LemonGateway.RunRegistry},

@@ -14,10 +14,15 @@ defmodule LemonGateway.Config do
     default_cwd: nil,
     auto_resume: false,
     enable_telegram: false,
+    enable_discord: false,
+    enable_farcaster: false,
+    enable_email: false,
     require_engine_lock: true,
     engine_lock_timeout_ms: 60_000,
     projects: %{},
-    bindings: []
+    bindings: [],
+    farcaster: %{},
+    email: %{}
   }
 
   def start_link(_opts) do

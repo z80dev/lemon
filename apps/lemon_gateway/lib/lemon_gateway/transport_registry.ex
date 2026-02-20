@@ -1,6 +1,7 @@
 defmodule LemonGateway.TransportRegistry do
   @moduledoc false
   use GenServer
+  require Logger
 
   @type transport_id :: String.t()
   @type transport_mod :: module()
@@ -38,6 +39,8 @@ defmodule LemonGateway.TransportRegistry do
         validate_id!(id)
         Map.put(acc, id, mod)
       end)
+
+    maybe_warn_dual_gate(map)
 
     {:ok, map}
   end
@@ -79,6 +82,22 @@ defmodule LemonGateway.TransportRegistry do
     end
   end
 
+  defp maybe_warn_dual_gate(state) when is_map(state) do
+    if transport_enabled?("farcaster") and not Map.has_key?(state, "farcaster") do
+      Logger.warning(
+        "enable_farcaster is true but Farcaster transport is not registered in :transports; add LemonGateway.Transports.Farcaster to :transports or disable enable_farcaster"
+      )
+    end
+
+    if transport_enabled?("email") and not Map.has_key?(state, "email") do
+      Logger.warning(
+        "enable_email is true but Email transport is not registered in :transports; add LemonGateway.Transports.Email to :transports or disable enable_email"
+      )
+    end
+  end
+
+  defp maybe_warn_dual_gate(_), do: :ok
+
   defp transport_enabled?("telegram") do
     # Primary source of truth: LemonGateway.Config (TOML-backed GenServer).
     # Fallback: application env override (used in tests).
@@ -91,6 +110,48 @@ defmodule LemonGateway.TransportRegistry do
         Keyword.get(cfg, :enable_telegram, false)
       else
         Map.get(cfg, :enable_telegram, false)
+      end
+    end
+  end
+
+  defp transport_enabled?("discord") do
+    if is_pid(Process.whereis(LemonGateway.Config)) do
+      LemonGateway.Config.get(:enable_discord) == true
+    else
+      cfg = Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
+
+      if is_list(cfg) do
+        Keyword.get(cfg, :enable_discord, false)
+      else
+        Map.get(cfg, :enable_discord, false)
+      end
+    end
+  end
+
+  defp transport_enabled?("farcaster") do
+    if is_pid(Process.whereis(LemonGateway.Config)) do
+      LemonGateway.Config.get(:enable_farcaster) == true
+    else
+      cfg = Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
+
+      if is_list(cfg) do
+        Keyword.get(cfg, :enable_farcaster, false)
+      else
+        Map.get(cfg, :enable_farcaster, false)
+      end
+    end
+  end
+
+  defp transport_enabled?("email") do
+    if is_pid(Process.whereis(LemonGateway.Config)) do
+      LemonGateway.Config.get(:enable_email) == true
+    else
+      cfg = Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
+
+      if is_list(cfg) do
+        Keyword.get(cfg, :enable_email, false)
+      else
+        Map.get(cfg, :enable_email, false)
       end
     end
   end

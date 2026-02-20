@@ -109,7 +109,11 @@ defmodule LemonGateway.SchedulerTest do
     }
   end
 
-  defp scope_to_session_key(%ChatScope{transport: transport, chat_id: chat_id, topic_id: topic_id}) do
+  defp scope_to_session_key(%ChatScope{
+         transport: transport,
+         chat_id: chat_id,
+         topic_id: topic_id
+       }) do
     topic = if is_nil(topic_id), do: "main", else: topic_id
     "#{transport}:#{chat_id}:#{topic}"
   end

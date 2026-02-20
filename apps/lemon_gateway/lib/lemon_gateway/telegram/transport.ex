@@ -9,7 +9,10 @@ defmodule LemonGateway.Telegram.Transport do
 
   @impl LemonGateway.Transport
   def start_link(_opts) do
-    Logger.warning("Legacy LemonGateway Telegram transport is removed; use lemon_channels adapter")
+    Logger.warning(
+      "Legacy LemonGateway Telegram transport is removed; use lemon_channels adapter"
+    )
+
     :ignore
   end
 
