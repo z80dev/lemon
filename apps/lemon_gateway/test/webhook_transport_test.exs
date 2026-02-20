@@ -25,6 +25,25 @@ defmodule LemonGateway.WebhookTransportTest do
     :ok
   end
 
+  test "idempotency helper reserves key and returns processing duplicate while pending" do
+    integration_id = "demo-pending-#{System.unique_integer([:positive])}"
+    idempotency_key = "idem-pending-#{System.unique_integer([:positive])}"
+
+    conn =
+      Test.conn(:post, "/webhooks/#{integration_id}", "")
+      |> Conn.put_req_header("idempotency-key", idempotency_key)
+
+    assert {:ok, %{store_key: store_key}} =
+             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+
+    assert %{} = Store.get(Webhook.idempotency_table_for_test(), store_key)
+
+    assert {:duplicate, 202, response_payload} =
+             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+
+    assert response_payload.status == "processing"
+  end
+
   test "normalizes prompt, attachments, and metadata from webhook payloads" do
     payload = %{
       "content" => %{"text" => "Ship this"},

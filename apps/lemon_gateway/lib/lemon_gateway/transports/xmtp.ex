@@ -130,6 +130,19 @@ defmodule LemonGateway.Transports.Xmtp do
     |> placeholder_response_text()
   end
 
+  @doc false
+  def inbound_dedupe_key_for_test(event) when is_map(event) do
+    normalized = normalize_inbound(event)
+    inbound_dedupe_key(normalized, event)
+  end
+
+  @doc false
+  def reply_metadata_for_test(event) when is_map(event) do
+    event
+    |> normalize_inbound()
+    |> xmtp_reply_metadata()
+  end
+
   defp handle_bridge_event(%{"type" => "connected"} = event, state) do
     Logger.info("xmtp bridge connected: #{inspect(event)}")
     %{state | connected?: true}
@@ -215,13 +228,7 @@ defmodule LemonGateway.Transports.Xmtp do
         notify_pid: self(),
         origin: :xmtp,
         xmtp: xmtp_meta,
-        xmtp_reply: %{
-          wallet_address: normalized.wallet_address,
-          conversation_id: normalized.conversation_id,
-          is_group: normalized.is_group,
-          group_id: normalized.group_id,
-          reply_to_message_id: normalized.message_id
-        }
+        xmtp_reply: xmtp_reply_metadata(normalized)
       }
     }
 
@@ -349,7 +356,7 @@ defmodule LemonGateway.Transports.Xmtp do
            normalized.wallet_address, normalized.raw_content_type,
            raw_content_digest(normalized.raw_content)}
           |> :erlang.term_to_binary()
-          |> :crypto.hash(:sha256)
+          |> then(&:crypto.hash(:sha256, &1))
           |> Base.encode16(case: :lower)
           |> binary_part(0, 24)
 
@@ -389,7 +396,7 @@ defmodule LemonGateway.Transports.Xmtp do
   defp raw_content_digest(value) do
     value
     |> :erlang.term_to_binary()
-    |> :crypto.hash(:sha256)
+    |> then(&:crypto.hash(:sha256, &1))
     |> Base.encode16(case: :lower)
     |> binary_part(0, 24)
   rescue
@@ -606,7 +613,7 @@ defmodule LemonGateway.Transports.Xmtp do
         fetch_nested(event, ["conversation", "is_group"]) ||
         fetch_nested(event, ["conversation_type"])
 
-    truthy?(value) or to_string(value || "") == "group"
+    truthy?(value) or String.downcase(String.trim(to_string(value || ""))) == "group"
   end
 
   defp truthy?(value) when is_boolean(value), do: value
@@ -783,6 +790,16 @@ defmodule LemonGateway.Transports.Xmtp do
   end
 
   defp maybe_put_group(meta, _), do: meta
+
+  defp xmtp_reply_metadata(normalized) do
+    %{
+      wallet_address: normalized.wallet_address,
+      conversation_id: normalized.conversation_id,
+      is_group: normalized.is_group,
+      group_id: normalized.group_id,
+      reply_to_message_id: normalized.message_id
+    }
+  end
 
   defp fetch_nested(nil, _keys), do: nil
 

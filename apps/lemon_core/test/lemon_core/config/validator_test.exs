@@ -468,4 +468,86 @@ defmodule LemonCore.Config.ValidatorTest do
       assert errors == []
     end
   end
+
+  describe "validate_web_dashboard_config/2" do
+    test "validates web dashboard port" do
+      errors = Validator.validate_web_dashboard_config([], %{port: 4080})
+      assert errors == []
+
+      errors = Validator.validate_web_dashboard_config([], %{port: 0})
+      assert Enum.any?(errors, &String.contains?(&1, "port"))
+
+      errors = Validator.validate_web_dashboard_config([], %{port: 70_000})
+      assert Enum.any?(errors, &String.contains?(&1, "port"))
+
+      errors = Validator.validate_web_dashboard_config([], %{port: "not-an-integer"})
+      assert Enum.any?(errors, &String.contains?(&1, "port"))
+    end
+
+    test "validates web dashboard host" do
+      errors = Validator.validate_web_dashboard_config([], %{host: "localhost"})
+      assert errors == []
+
+      errors = Validator.validate_web_dashboard_config([], %{host: ""})
+      assert Enum.any?(errors, &String.contains?(&1, "host"))
+
+      errors = Validator.validate_web_dashboard_config([], %{host: 123})
+      assert Enum.any?(errors, &String.contains?(&1, "host"))
+    end
+
+    test "validates web dashboard secret_key_base" do
+      # Valid secret key (64+ characters)
+      long_key = String.duplicate("a", 64)
+      errors = Validator.validate_web_dashboard_config([], %{secret_key_base: long_key})
+      assert errors == []
+
+      # Too short secret key
+      short_key = String.duplicate("a", 32)
+      errors = Validator.validate_web_dashboard_config([], %{secret_key_base: short_key})
+      assert Enum.any?(errors, &String.contains?(&1, "secret_key_base"))
+
+      # Env var reference is valid
+      errors = Validator.validate_web_dashboard_config([], %{secret_key_base: "${LEMON_WEB_SECRET_KEY_BASE}"})
+      assert errors == []
+    end
+
+    test "validates web dashboard access_token" do
+      # Valid access token (16+ characters)
+      long_token = String.duplicate("a", 16)
+      errors = Validator.validate_web_dashboard_config([], %{access_token: long_token})
+      assert errors == []
+
+      # Short access token (warning)
+      short_token = String.duplicate("a", 8)
+      errors = Validator.validate_web_dashboard_config([], %{access_token: short_token})
+      assert Enum.any?(errors, &String.contains?(&1, "access_token"))
+
+      # Env var reference is valid
+      errors = Validator.validate_web_dashboard_config([], %{access_token: "${LEMON_WEB_ACCESS_TOKEN}"})
+      assert errors == []
+    end
+
+    test "accepts nil web dashboard config" do
+      errors = Validator.validate_web_dashboard_config([], nil)
+      assert errors == []
+    end
+
+    test "validates complete web dashboard config" do
+      errors = Validator.validate_web_dashboard_config([], %{
+        port: 4080,
+        host: "localhost",
+        secret_key_base: String.duplicate("a", 64),
+        access_token: String.duplicate("b", 16)
+      })
+      assert errors == []
+    end
+
+    test "validates enable_web_dashboard boolean" do
+      errors = Validator.validate_gateway(%{enable_web_dashboard: true}, [])
+      refute Enum.any?(errors, &String.contains?(&1, "enable_web_dashboard"))
+
+      errors = Validator.validate_gateway(%{enable_web_dashboard: "yes"}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "enable_web_dashboard"))
+    end
+  end
 end

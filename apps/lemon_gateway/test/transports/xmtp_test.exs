@@ -86,6 +86,145 @@ defmodule LemonGateway.Transports.XmtpTest do
     assert String.contains?(reply, "...")
   end
 
+  test "normalizes reply content prompt with reference when present" do
+    event = %{
+      "conversation_id" => "conv-reply-1",
+      "sender_inbox_id" => "inbox-reply-1",
+      "message_id" => "msg-reply-1",
+      "content_type" => "reply",
+      "content" => %{
+        "text" => "acknowledged",
+        "reply_to_message_id" => "msg-reference-1"
+      }
+    }
+
+    normalized = Xmtp.normalize_inbound_for_test(event)
+
+    assert normalized.content_type == "reply"
+    assert normalized.prompt == "Reply to msg-reference-1: acknowledged"
+    assert normalized.prompt_is_placeholder == false
+  end
+
+  test "normalizes reaction content prompt" do
+    event = %{
+      "conversation_id" => "conv-reaction-1",
+      "sender_inbox_id" => "inbox-reaction-1",
+      "message_id" => "msg-reaction-1",
+      "content_type" => "reaction",
+      "content" => %{
+        "emoji" => "🔥",
+        "reference" => "msg-target-1"
+      }
+    }
+
+    normalized = Xmtp.normalize_inbound_for_test(event)
+
+    assert normalized.content_type == "reaction"
+    assert normalized.prompt == "Reaction 🔥 to message msg-target-1"
+    assert normalized.prompt_is_placeholder == false
+  end
+
+  test "preserves group fields and includes them in normalized reply metadata" do
+    event = %{
+      "conversation_id" => "conv-group-1",
+      "sender_inbox_id" => "inbox-group-1",
+      "message_id" => "msg-group-1",
+      "is_group" => true,
+      "group_id" => "group-abc-1",
+      "content" => %{"text" => "hello group"}
+    }
+
+    normalized = Xmtp.normalize_inbound_for_test(event)
+    reply_meta = Xmtp.reply_metadata_for_test(event)
+
+    assert normalized.is_group == true
+    assert normalized.group_id == "group-abc-1"
+    assert reply_meta.is_group == true
+    assert reply_meta.group_id == "group-abc-1"
+    assert reply_meta.conversation_id == normalized.conversation_id
+    assert reply_meta.reply_to_message_id == normalized.message_id
+    assert reply_meta.wallet_address == normalized.wallet_address
+  end
+
+  test "detects group conversation_type values case-insensitively with whitespace trimmed" do
+    base_event = %{
+      "conversation_id" => "conv-group-type-1",
+      "sender_inbox_id" => "inbox-group-type-1",
+      "content" => %{"text" => "hello"}
+    }
+
+    assert Xmtp.normalize_inbound_for_test(Map.put(base_event, "conversation_type", "group")).is_group ==
+             true
+
+    assert Xmtp.normalize_inbound_for_test(Map.put(base_event, "conversation_type", "GROUP")).is_group ==
+             true
+
+    assert Xmtp.normalize_inbound_for_test(Map.put(base_event, "conversation_type", " Group ")).is_group ==
+             true
+  end
+
+  test "does not mark non-group conversation_type as group" do
+    event = %{
+      "conversation_id" => "conv-group-type-2",
+      "sender_inbox_id" => "inbox-group-type-2",
+      "conversation_type" => "dm",
+      "content" => %{"text" => "hello"}
+    }
+
+    assert Xmtp.normalize_inbound_for_test(event).is_group == false
+  end
+
+  test "dedupe key remains stable for same message_id in same conversation" do
+    base_event = %{
+      "conversation_id" => "conv-dedupe-msg-1",
+      "sender_inbox_id" => "inbox-dedupe-msg-1",
+      "message_id" => "msg-dedupe-1",
+      "content" => %{"text" => "first payload"}
+    }
+
+    variant_event = Map.put(base_event, "content", %{"text" => "second payload"})
+
+    assert Xmtp.inbound_dedupe_key_for_test(base_event) ==
+             Xmtp.inbound_dedupe_key_for_test(variant_event)
+  end
+
+  test "fallback dedupe key stays stable for identical payload when message_id is missing" do
+    event = %{
+      "conversation_id" => "conv-dedupe-fallback-1",
+      "sender_inbox_id" => "inbox-dedupe-fallback-1",
+      "sent_at_ns" => "1700000000000000000",
+      "content_type" => "text",
+      "content" => %{"text" => "same payload"}
+    }
+
+    first = Xmtp.inbound_dedupe_key_for_test(event)
+    second = Xmtp.inbound_dedupe_key_for_test(event)
+
+    assert first == second
+    assert String.starts_with?(first, "conversation:conv-dedupe-fallback-1:fallback:")
+  end
+
+  test "fallback dedupe key changes when payload fingerprint changes" do
+    first_event = %{
+      "conversation_id" => "conv-dedupe-fallback-2",
+      "sender_inbox_id" => "inbox-dedupe-fallback-2",
+      "sent_at_ns" => "1700000000000000001",
+      "content_type" => "text",
+      "content" => %{"text" => "payload one"}
+    }
+
+    second_event = %{
+      "conversation_id" => "conv-dedupe-fallback-2",
+      "sender_inbox_id" => "inbox-dedupe-fallback-2",
+      "sent_at_ns" => "1700000000000000001",
+      "content_type" => "text",
+      "content" => %{"text" => "payload two"}
+    }
+
+    refute Xmtp.inbound_dedupe_key_for_test(first_event) ==
+             Xmtp.inbound_dedupe_key_for_test(second_event)
+  end
+
   test "replays connect command after bridge port restart" do
     if System.find_executable("node") == nil do
       assert true

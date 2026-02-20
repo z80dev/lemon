@@ -46,10 +46,16 @@ defmodule LemonGateway.Transports.Farcaster do
   @spec config() :: map()
   def config do
     cfg =
-      if is_pid(Process.whereis(LemonGateway.Config)) do
-        LemonGateway.Config.get(:farcaster) || %{}
-      else
-        Application.get_env(:lemon_gateway, :farcaster, %{})
+      case Process.get({__MODULE__, :config_override}) do
+        nil ->
+          if is_pid(Process.whereis(LemonGateway.Config)) do
+            LemonGateway.Config.get(:farcaster) || %{}
+          else
+            Application.get_env(:lemon_gateway, :farcaster, %{})
+          end
+
+        override ->
+          override
       end
 
     cond do

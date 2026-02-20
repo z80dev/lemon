@@ -10,12 +10,31 @@ const state = {
   identity: { wallet_address: null, inbox_id: null },
   connectConfig: {},
   seenMessageKeys: new Set(),
+  seenMessageOrder: [],
   conversationCache: new Map(),
 };
+
+const MAX_SEEN_MESSAGE_KEYS = 5000;
 
 function emit(event) {
   const line = JSON.stringify(event);
   process.stdout.write(line + "\n");
+}
+
+function rememberSeenMessageKey(key) {
+  if (!key || state.seenMessageKeys.has(key)) {
+    return;
+  }
+
+  state.seenMessageKeys.add(key);
+  state.seenMessageOrder.push(key);
+
+  while (state.seenMessageOrder.length > MAX_SEEN_MESSAGE_KEYS) {
+    const oldest = state.seenMessageOrder.shift();
+    if (oldest) {
+      state.seenMessageKeys.delete(oldest);
+    }
+  }
 }
 
 function emitError(message, extra = {}) {
@@ -408,6 +427,8 @@ async function handleConnect(command) {
   state.connectConfig = { ...command };
   state.connected = false;
   state.client = null;
+  state.seenMessageKeys.clear();
+  state.seenMessageOrder = [];
   state.conversationCache.clear();
   state.identity = resolveIdentity(command, null);
 
@@ -543,7 +564,7 @@ async function handlePoll() {
           continue;
         }
 
-        state.seenMessageKeys.add(dedupeKey);
+        rememberSeenMessageKey(dedupeKey);
 
         if (isSelfAuthoredMessage(message)) {
           continue;

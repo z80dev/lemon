@@ -17,6 +17,9 @@ defmodule LemonCore.Config.Validator do
 
   - Agent: valid model names, provider names
   - Gateway: valid port numbers, boolean flags
+  - Telegram: token format, compaction settings
+  - Discord: token format, guild/channel IDs
+  - Web Dashboard: port, host, secret key base, access token
   - Logging: valid log levels, writable paths
   - Providers: valid API key formats
   - Tools: valid timeout values
@@ -97,10 +100,12 @@ defmodule LemonCore.Config.Validator do
     |> validate_boolean(Map.get(gateway, :auto_resume), "gateway.auto_resume")
     |> validate_boolean(Map.get(gateway, :enable_telegram), "gateway.enable_telegram")
     |> validate_boolean(Map.get(gateway, :enable_discord), "gateway.enable_discord")
+    |> validate_boolean(Map.get(gateway, :enable_web_dashboard), "gateway.enable_web_dashboard")
     |> validate_boolean(Map.get(gateway, :require_engine_lock), "gateway.require_engine_lock")
     |> validate_non_negative_integer(Map.get(gateway, :engine_lock_timeout_ms), "gateway.engine_lock_timeout_ms")
     |> validate_telegram_config(Map.get(gateway, :telegram))
     |> validate_discord_config(Map.get(gateway, :discord))
+    |> validate_web_dashboard_config(Map.get(gateway, :web_dashboard))
     |> validate_queue_config(Map.get(gateway, :queue))
   end
 
@@ -215,6 +220,83 @@ defmodule LemonCore.Config.Validator do
   defp validate_discord_id_list(errors, _ids, path) do
     ["#{path}: must be a list of integers" | errors]
   end
+
+  @doc """
+  Validates Web Dashboard configuration.
+  """
+  @spec validate_web_dashboard_config([String.t()], map() | nil) :: [String.t()]
+  def validate_web_dashboard_config(errors, nil), do: errors
+
+  def validate_web_dashboard_config(errors, web_dashboard) when is_map(web_dashboard) do
+    errors
+    |> validate_web_dashboard_port(Map.get(web_dashboard, :port))
+    |> validate_web_dashboard_host(Map.get(web_dashboard, :host))
+    |> validate_web_dashboard_secret_key_base(Map.get(web_dashboard, :secret_key_base))
+    |> validate_web_dashboard_access_token(Map.get(web_dashboard, :access_token))
+  end
+
+  def validate_web_dashboard_config(errors, _),
+    do: ["gateway.web_dashboard: must be a map" | errors]
+
+  defp validate_web_dashboard_port(errors, nil), do: errors
+
+  defp validate_web_dashboard_port(errors, port) when is_integer(port) do
+    if port > 0 and port <= 65535 do
+      errors
+    else
+      ["gateway.web_dashboard.port: must be between 1 and 65535" | errors]
+    end
+  end
+
+  defp validate_web_dashboard_port(errors, _), do: ["gateway.web_dashboard.port: must be an integer" | errors]
+
+  defp validate_web_dashboard_host(errors, nil), do: errors
+
+  defp validate_web_dashboard_host(errors, host) when is_binary(host) do
+    if String.trim(host) == "" do
+      ["gateway.web_dashboard.host: cannot be empty" | errors]
+    else
+      errors
+    end
+  end
+
+  defp validate_web_dashboard_host(errors, _), do: ["gateway.web_dashboard.host: must be a string" | errors]
+
+  defp validate_web_dashboard_secret_key_base(errors, nil), do: errors
+
+  defp validate_web_dashboard_secret_key_base(errors, key) when is_binary(key) do
+    if String.starts_with?(key, "${") and String.ends_with?(key, "}") do
+      # References an env var, which is valid
+      errors
+    else
+      # Secret key base should be at least 64 characters for security
+      if String.length(key) >= 64 do
+        errors
+      else
+        ["gateway.web_dashboard.secret_key_base: must be at least 64 characters (use LEMON_WEB_SECRET_KEY_BASE env var)" | errors]
+      end
+    end
+  end
+
+  defp validate_web_dashboard_secret_key_base(errors, _), do: ["gateway.web_dashboard.secret_key_base: must be a string" | errors]
+
+  defp validate_web_dashboard_access_token(errors, nil), do: errors
+
+  defp validate_web_dashboard_access_token(errors, token) when is_binary(token) do
+    if String.starts_with?(token, "${") and String.ends_with?(token, "}") do
+      # References an env var, which is valid
+      errors
+    else
+      # Access token should be reasonably strong (at least 16 characters)
+      if String.length(token) >= 16 do
+        errors
+      else
+        ["gateway.web_dashboard.access_token: should be at least 16 characters for security" | errors]
+      end
+    end
+  end
+
+  defp validate_web_dashboard_access_token(errors, _), do: ["gateway.web_dashboard.access_token: must be a string" | errors]
 
   @doc """
   Validates queue configuration.

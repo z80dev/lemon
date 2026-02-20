@@ -121,14 +121,11 @@ defmodule LemonSkills.Config do
   """
   @spec project_skills_dirs(String.t()) :: [String.t()]
   def project_skills_dirs(cwd) do
-    resolved_cwd = Path.expand(cwd)
-    git_root = find_git_root(resolved_cwd)
-
     # Start with the primary project skills directory
     dirs = [project_skills_dir(cwd)]
 
     # Collect .agents/skills directories from cwd up to git root or filesystem root
-    dirs = dirs ++ collect_ancestor_agents_skill_dirs(resolved_cwd, git_root)
+    dirs = dirs ++ collect_ancestor_agents_skill_dirs(cwd)
 
     dirs
     |> Enum.uniq()
@@ -139,12 +136,38 @@ defmodule LemonSkills.Config do
   # Private Functions - Ancestor Skills Discovery
   # ============================================================================
 
-  # Find the git repository root starting from the given directory.
-  # Returns nil if not in a git repository.
-  defp find_git_root(start_dir) do
-    dir = Path.expand(start_dir)
-    find_git_root_recursive(dir)
+  @doc """
+  Find the git repository root from a starting directory.
+
+  Returns the absolute path to the nearest ancestor containing `.git`, or `nil`
+  when no git repository root is found.
+  """
+  @spec find_git_repo_root(String.t()) :: String.t() | nil
+  def find_git_repo_root(start_dir) when is_binary(start_dir) do
+    start_dir
+    |> Path.expand()
+    |> find_git_root_recursive()
   end
+
+  def find_git_repo_root(_), do: nil
+
+  @doc """
+  Collect `.agents/skills` directories from the given directory up to git root.
+
+  If no git repo root is found, it walks to filesystem root.
+  Returns paths in precedence order (closest first).
+  """
+  @spec collect_ancestor_agents_skill_dirs(String.t()) :: [String.t()]
+  def collect_ancestor_agents_skill_dirs(start_dir) when is_binary(start_dir) do
+    resolved_start = Path.expand(start_dir)
+    git_root = find_git_repo_root(resolved_start)
+
+    resolved_start
+    |> collect_ancestors(git_root)
+    |> Enum.map(fn dir -> Path.join([dir, ".agents", "skills"]) end)
+  end
+
+  def collect_ancestor_agents_skill_dirs(_), do: []
 
   defp find_git_root_recursive(dir) do
     git_dir = Path.join(dir, ".git")
@@ -159,14 +182,6 @@ defmodule LemonSkills.Config do
       true ->
         find_git_root_recursive(Path.dirname(dir))
     end
-  end
-
-  # Collect .agents/skills directories from start_dir up to git_root (or filesystem root).
-  # Returns a list of paths in order from closest to farthest from start_dir.
-  defp collect_ancestor_agents_skill_dirs(start_dir, git_root) do
-    start_dir
-    |> collect_ancestors(git_root)
-    |> Enum.map(fn dir -> Path.join([dir, ".agents", "skills"]) end)
   end
 
   # Collect ancestor directories from start_dir up to git_root or filesystem root.

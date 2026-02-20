@@ -1076,18 +1076,30 @@ defmodule LemonGateway.Transports.Webhook do
         {:ok, nil}
 
       idempotency_key ->
-        case idempotency_response(integration_id, idempotency_key) do
-          {:duplicate, _status, _payload} = duplicate ->
-            duplicate
+        store_key = idempotency_store_key(integration_id, idempotency_key)
 
-          nil ->
-            {:ok,
-             %{
-               integration_id: integration_id,
-               idempotency_key: idempotency_key,
-               store_key: idempotency_store_key(integration_id, idempotency_key)
-             }}
-        end
+        :global.trans({{__MODULE__, :idempotency, store_key}, self()}, fn ->
+          case idempotency_response(integration_id, idempotency_key) do
+            {:duplicate, _status, _payload} = duplicate ->
+              duplicate
+
+            nil ->
+              _ =
+                Store.put(@idempotency_table, store_key, %{
+                  idempotency_key: idempotency_key,
+                  integration_id: integration_id,
+                  state: "pending",
+                  updated_at_ms: System.system_time(:millisecond)
+                })
+
+              {:ok,
+               %{
+                 integration_id: integration_id,
+                 idempotency_key: idempotency_key,
+                 store_key: store_key
+               }}
+          end
+        end)
     end
   end
 
@@ -1121,10 +1133,21 @@ defmodule LemonGateway.Transports.Webhook do
       %{} = entry ->
         response_status = int_value(fetch(entry, :response_status), nil)
         response_payload = fetch(entry, :response_payload)
+        state = normalize_blank(fetch(entry, :state))
 
         cond do
           is_integer(response_status) and is_map(response_payload) ->
             {:duplicate, response_status, response_payload}
+
+          state == "pending" ->
+            pending_payload =
+              idempotency_fallback_payload(entry)
+              |> case do
+                %{} = payload -> Map.put_new(payload, :status, "processing")
+                _ -> %{status: "processing"}
+              end
+
+            {:duplicate, 202, pending_payload}
 
           true ->
             case idempotency_fallback_payload(entry) do
@@ -1167,7 +1190,9 @@ defmodule LemonGateway.Transports.Webhook do
         session_key: session_key,
         mode: normalize_mode_string(mode),
         idempotency_key: idempotency_ctx.idempotency_key,
-        integration_id: idempotency_ctx.integration_id
+        integration_id: idempotency_ctx.integration_id,
+        state: "submitted",
+        updated_at_ms: System.system_time(:millisecond)
       }
 
     merge_store_idempotency_entry(idempotency_ctx, entry)
@@ -1181,7 +1206,9 @@ defmodule LemonGateway.Transports.Webhook do
        when is_integer(status) and is_map(payload) do
     merge_store_idempotency_entry(idempotency_ctx, %{
       response_status: status,
-      response_payload: payload
+      response_payload: payload,
+      state: "completed",
+      updated_at_ms: System.system_time(:millisecond)
     })
   end
 
