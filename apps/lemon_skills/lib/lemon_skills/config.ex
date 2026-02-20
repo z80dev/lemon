@@ -9,19 +9,51 @@ defmodule LemonSkills.Config do
 
   ## Directory Structure
 
+  ### Global Skills
+
+  Global skills are discovered from multiple locations (in precedence order):
+
       ~/.lemon/agent/
-      ├── skill/              # Global skills
+      ├── skill/              # Primary global skills directory
       │   ├── bun-file-io/
       │   │   └── SKILL.md
       │   └── git-workflow/
       │       └── SKILL.md
       └── skills.json         # Global skill configuration
 
+      ~/.agents/skills/       # Harness-compatible global skills (optional)
+      ├── some-skill/
+      │   └── SKILL.md
+
+  ### Project Skills
+
+  Project skills are discovered from:
+
       <project>/.lemon/
       ├── skill/              # Project-specific skills
       │   └── my-custom-skill/
       │       └── SKILL.md
       └── skills.json         # Project skill configuration
+
+      <project>/.agents/skills/  # Harness-compatible project skills (optional)
+      └── another-skill/
+          └── SKILL.md
+
+  ### Ancestor Discovery
+
+  Skills in `.agents/skills` directories are discovered automatically from the
+  current working directory up to the git repository root (or filesystem root
+  when not in a git repo). This allows organizing skills at different levels
+  of a project hierarchy.
+
+  For example, in a monorepo at `/home/user/myrepo` with cwd at
+  `/home/user/myrepo/packages/feature`, the following skill directories
+  would be discovered (in precedence order):
+
+      1. /home/user/myrepo/packages/feature/.lemon/skill
+      2. /home/user/myrepo/packages/feature/.agents/skills
+      3. /home/user/myrepo/packages/.agents/skills
+      4. /home/user/myrepo/.agents/skills
 
   ## Overrides
 
