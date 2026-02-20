@@ -1380,3 +1380,50 @@ LemonCore.ConfigCache.reload("/path/to/project", validate: true)
 - Check for more Pi upstream features to port
 - Explore adding online skill discovery (like Ironclaw's OnlineDiscovery)
 - Add more comprehensive documentation
+
+### 2025-02-20 - Feature Enhancement: Discord Config Validation
+**Work Area**: Feature Enhancement
+
+**What was done:**
+- Added Discord configuration validation to `LemonCore.Config.Validator`:
+  - `validate_discord_config/2` function for Discord config section
+  - Bot token format validation (3-part dot-separated format, base64 encoded)
+  - Support for environment variable references (`${DISCORD_BOT_TOKEN}`)
+  - Guild ID list validation (must be list of integers - Discord snowflake IDs)
+  - Channel ID list validation (must be list of integers)
+  - `deny_unbound_channels` boolean validation
+- Added 7 new tests for Discord config validation:
+  - Token format validation (valid/invalid formats)
+  - Env var reference support in tokens
+  - Guild IDs validation (valid list of integers vs invalid strings)
+  - Channel IDs validation
+  - `deny_unbound_channels` boolean validation
+  - Nil config handling (optional)
+  - Complete Discord config validation
+- Updated `validate_gateway/2` to include Discord validation:
+  - Added `enable_discord` boolean validation
+  - Added `validate_discord_config/2` call in gateway validation pipeline
+
+**Files changed:**
+- `apps/lemon_core/lib/lemon_core/config/validator.ex` - Added Discord validation functions
+- `apps/lemon_core/test/lemon_core/config/validator_test.exs` - Added 7 new tests
+
+**Commit:**
+- `5d9fd11e` - feat(config): Add Discord configuration validation
+
+**What worked:**
+- Discord tokens have a consistent 3-part format (user_id.timestamp.signature)
+- Environment variable references work the same as Telegram tokens
+- Integer list validation for snowflake IDs is straightforward
+- The validation integrates cleanly with existing gateway validation
+
+**Total progress:**
+- Started with 481 tests
+- Now have 488 tests (lemon_core app)
+- All tests passing (0 failures)
+
+**Next run should focus on:**
+- Check for more Pi upstream features to port
+- Explore adding online skill discovery (like Ironclaw's OnlineDiscovery)
+- Add more comprehensive documentation
+- Consider adding validation for other transport configs (Web Dashboard, etc.)
