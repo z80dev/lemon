@@ -834,4 +834,84 @@ defmodule Ai.ModelsTest do
       assert model.max_tokens == 262_144
     end
   end
+
+  describe "amazon bedrock nova models" do
+    test "returns amazon bedrock model by id" do
+      model = Models.get_model(:amazon_bedrock, "amazon.nova-pro-v1:0")
+
+      assert %Model{} = model
+      assert model.id == "amazon.nova-pro-v1:0"
+      assert model.name == "Nova Pro"
+      assert model.api == :bedrock_converse_stream
+      assert model.provider == :amazon_bedrock
+      assert model.base_url == "https://bedrock-runtime.us-east-1.amazonaws.com"
+      assert model.reasoning == false
+      assert model.input == [:text, :image]
+      assert model.context_window == 300_000
+      assert model.max_tokens == 8192
+    end
+
+    test "returns all amazon bedrock models" do
+      models = Models.get_models(:amazon_bedrock)
+
+      assert is_list(models)
+      assert length(models) == 5
+      assert Enum.all?(models, &match?(%Model{provider: :amazon_bedrock}, &1))
+    end
+
+    test "nova lite has correct specs" do
+      model = Models.get_model(:amazon_bedrock, "amazon.nova-lite-v1:0")
+
+      assert model.id == "amazon.nova-lite-v1:0"
+      assert model.name == "Nova Lite"
+      assert model.provider == :amazon_bedrock
+      assert model.api == :bedrock_converse_stream
+      assert model.reasoning == false
+      assert model.input == [:text, :image]
+      assert model.cost.input == 0.06
+      assert model.cost.output == 0.24
+      assert model.cost.cache_read == 0.015
+      assert model.context_window == 300_000
+      assert model.max_tokens == 8192
+    end
+
+    test "nova micro has correct specs" do
+      model = Models.get_model(:amazon_bedrock, "amazon.nova-micro-v1:0")
+
+      assert model.id == "amazon.nova-micro-v1:0"
+      assert model.name == "Nova Micro"
+      assert model.provider == :amazon_bedrock
+      assert model.api == :bedrock_converse_stream
+      assert model.reasoning == false
+      assert model.input == [:text]
+      assert model.cost.input == 0.035
+      assert model.cost.output == 0.14
+      assert model.cost.cache_read == 0.00875
+      assert model.context_window == 128_000
+      assert model.max_tokens == 8192
+    end
+
+    test "nova premier has correct specs" do
+      model = Models.get_model(:amazon_bedrock, "amazon.nova-premier-v1:0")
+
+      assert model.id == "amazon.nova-premier-v1:0"
+      assert model.name == "Nova Premier"
+      assert model.provider == :amazon_bedrock
+      assert model.api == :bedrock_converse_stream
+      assert model.reasoning == true
+      assert model.input == [:text, :image]
+      assert model.cost.input == 2.5
+      assert model.cost.output == 12.5
+      assert model.context_window == 1_000_000
+      assert model.max_tokens == 16384
+    end
+
+    test "amazon bedrock flagship models" do
+      assert Models.get_model(:amazon_bedrock, "amazon.nova-2-lite-v1:0") != nil
+      assert Models.get_model(:amazon_bedrock, "amazon.nova-lite-v1:0") != nil
+      assert Models.get_model(:amazon_bedrock, "amazon.nova-micro-v1:0") != nil
+      assert Models.get_model(:amazon_bedrock, "amazon.nova-premier-v1:0") != nil
+      assert Models.get_model(:amazon_bedrock, "amazon.nova-pro-v1:0") != nil
+    end
+  end
 end

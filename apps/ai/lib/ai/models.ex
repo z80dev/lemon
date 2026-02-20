@@ -763,6 +763,73 @@ defmodule Ai.Models do
   }
 
   # ============================================================================
+  # Amazon Bedrock Models
+  # ============================================================================
+
+  @amazon_bedrock_models %{
+    "amazon.nova-2-lite-v1:0" => %Model{
+      id: "amazon.nova-2-lite-v1:0",
+      name: "Nova 2 Lite",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: false,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.33, output: 2.75, cache_read: 0.0, cache_write: 0.0},
+      context_window: 128_000,
+      max_tokens: 4096
+    },
+    "amazon.nova-lite-v1:0" => %Model{
+      id: "amazon.nova-lite-v1:0",
+      name: "Nova Lite",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: false,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.06, output: 0.24, cache_read: 0.015, cache_write: 0.0},
+      context_window: 300_000,
+      max_tokens: 8192
+    },
+    "amazon.nova-micro-v1:0" => %Model{
+      id: "amazon.nova-micro-v1:0",
+      name: "Nova Micro",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 0.035, output: 0.14, cache_read: 0.00875, cache_write: 0.0},
+      context_window: 128_000,
+      max_tokens: 8192
+    },
+    "amazon.nova-premier-v1:0" => %Model{
+      id: "amazon.nova-premier-v1:0",
+      name: "Nova Premier",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 2.5, output: 12.5, cache_read: 0.0, cache_write: 0.0},
+      context_window: 1_000_000,
+      max_tokens: 16384
+    },
+    "amazon.nova-pro-v1:0" => %Model{
+      id: "amazon.nova-pro-v1:0",
+      name: "Nova Pro",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: false,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.8, output: 3.2, cache_read: 0.2, cache_write: 0.0},
+      context_window: 300_000,
+      max_tokens: 8192
+    }
+  }
+
+  # ============================================================================
   # Google Models
   # ============================================================================
 
@@ -1366,6 +1433,7 @@ defmodule Ai.Models do
     :anthropic => @anthropic_models,
     :openai => @openai_models,
     :"openai-codex" => @openai_codex_models,
+    :amazon_bedrock => @amazon_bedrock_models,
     :google => @google_models,
     :google_antigravity => @google_antigravity_models,
     :kimi => @kimi_models,
