@@ -178,15 +178,16 @@ defmodule MarketIntel.Commentary.Pipeline do
   defp generate_tweet(prompt) do
     # Try AI generation if configured
     # Note: AI providers currently return {:error, :not_implemented} as placeholders
+    # TODO: When AI integration is implemented, use generate_with_ai/1 result
     case generate_with_ai(prompt) do
-      {:ok, tweet} when is_binary(tweet) and tweet != "" -> {:ok, tweet}
-      {:error, reason} -> 
-        Logger.warning("[MarketIntel] AI generation failed: #{inspect(reason)}, using fallback")
+      {:ok, tweet} when is_binary(tweet) and tweet != "" -> 
+        {:ok, tweet}
+      _ -> 
         {:ok, generate_fallback_tweet()}
     end
   end
 
-  @spec generate_with_ai(String.t()) :: {:ok, String.t()} | {:error, atom()} | nil
+  @spec generate_with_ai(String.t()) :: {:ok, String.t()} | {:error, atom()}
   defp generate_with_ai(prompt) do
     # Try OpenAI first, then Anthropic
     cond do
@@ -198,7 +199,7 @@ defmodule MarketIntel.Commentary.Pipeline do
 
       true ->
         Logger.info("[MarketIntel] No AI provider configured, using fallback tweets")
-        nil
+        {:error, :no_provider_configured}
     end
   end
 
