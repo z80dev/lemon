@@ -142,9 +142,9 @@ defmodule LemonCore.ConfigCache do
     end
   end
 
-  def handle_call({:reload, cwd}, _from, state) do
+  def handle_call({:reload, cwd}, from, state) do
     # Backward compatibility: call without opts
-    handle_call({:reload, cwd, []}, _from, state)
+    handle_call({:reload, cwd, []}, from, state)
   end
 
   def handle_call({:reload, cwd, opts}, _from, state) do
