@@ -1087,3 +1087,57 @@ mix lemon.config show
 - Add validation warnings to config reloading
 - Or explore Ironclaw's extension registry pattern for Lemon
 - Or check for more Pi upstream features to port
+
+### 2025-02-19 - Feature Enhancement: Config Validation in lemon.quality
+**Work Area**: Feature Enhancement
+
+**What was done:**
+- Added `--validate-config` flag to `mix lemon.quality` task
+- When provided, validates Lemon configuration before running quality checks
+- Updated moduledoc with new option documentation
+- Added `validate_config/0` private function that:
+  - Uses `Modular.load_with_validation/1` to validate config
+  - Reports success or failure with detailed error messages
+  - Returns boolean for success tracking
+- Created comprehensive tests (`lemon.quality_test.exs`):
+  - Test for valid config with `--validate-config`
+  - Test for invalid config with `--validate-config`
+  - Test that config validation doesn't run without the flag
+  - Test for moduledoc including the new option
+  - 4 tests total, all passing
+- Also fixed architecture check to include `market_intel` app:
+  - Added to `@allowed_direct_deps` with `:agent_core` and `:lemon_core`
+  - Added to `@app_namespaces` with `["MarketIntel"]`
+- All 469 tests now pass (0 failures)
+
+**Files changed:**
+- `apps/lemon_core/lib/mix/tasks/lemon.quality.ex` - Added --validate-config flag and validation logic
+- `apps/lemon_core/lib/lemon_core/quality/architecture_check.ex` - Added market_intel app
+- `apps/lemon_core/test/mix/tasks/lemon.quality_test.exs` - New test file (4 tests)
+
+**Usage:**
+```bash
+# Run quality checks with config validation
+mix lemon.quality --validate-config
+
+# Run quality checks without config validation (default)
+mix lemon.quality
+
+# With custom root
+mix lemon.quality --validate-config --root /path/to/repo
+```
+
+**What worked:**
+- Using `Mix.Task.run("app.start")` to ensure the app is started before validation
+- Consistent output formatting with other quality checks
+- Tests properly mock HOME directory for isolated config testing
+
+**Total progress:**
+- Started with 119 tests
+- Now have 469 tests (lemon_core) and 1303+ tests (AI app)
+- All tests passing (0 failures)
+
+**Next run should focus on:**
+- Add validation warnings to config reloading
+- Or explore Ironclaw's extension registry pattern for Lemon
+- Or check for more Pi upstream features to port

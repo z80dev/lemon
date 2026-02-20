@@ -1,6 +1,7 @@
 defmodule Mix.Tasks.Lemon.Quality do
   use Mix.Task
 
+  alias LemonCore.Config.Modular
   alias LemonCore.Quality.{ArchitectureCheck, DocsCheck}
 
   @shortdoc "Run docs and architecture quality checks"
@@ -10,17 +11,32 @@ defmodule Mix.Tasks.Lemon.Quality do
   Usage:
     mix lemon.quality
     mix lemon.quality --root /path/to/repo
+    mix lemon.quality --validate-config
+
+  Options:
+    --root PATH          Root directory to run checks from (default: current directory)
+    --validate-config    Also validate Lemon configuration before running checks
   """
 
   @impl true
   def run(args) do
+    Mix.Task.run("app.start")
+
     {opts, _rest, _invalid} =
       OptionParser.parse(args,
-        switches: [root: :string],
+        switches: [root: :string, validate_config: :boolean],
         aliases: [r: :root]
       )
 
     root = opts[:root] || File.cwd!()
+
+    # Optionally validate config first
+    config_valid? =
+      if opts[:validate_config] do
+        validate_config()
+      else
+        true
+      end
 
     checks = [
       {:docs, fn -> DocsCheck.run(root: root) end},
@@ -40,10 +56,37 @@ defmodule Mix.Tasks.Lemon.Quality do
         end
       end)
 
+    # Add config validation to failures if it failed
+    failures =
+      if opts[:validate_config] && !config_valid? do
+        [{:config, %{issue_count: 1, issues: []}} | failures]
+      else
+        failures
+      end
+
     if failures == [] do
       Mix.shell().info("All quality checks passed.")
     else
       Mix.raise("Quality checks failed (#{length(failures)} failing checks).")
+    end
+  end
+
+  defp validate_config do
+    Mix.shell().info("Validating Lemon configuration...")
+
+    case Modular.load_with_validation([]) do
+      {:ok, _config} ->
+        Mix.shell().info("[ok] config validation passed")
+        true
+
+      {:error, errors} ->
+        Mix.shell().info("[error] config validation failed")
+
+        Enum.each(errors, fn error ->
+          Mix.shell().info("  • #{error}")
+        end)
+
+        false
     end
   end
 
