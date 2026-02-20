@@ -1417,9 +1417,39 @@ LemonCore.ConfigCache.reload("/path/to/project", validate: true)
 - Integer list validation for snowflake IDs is straightforward
 - The validation integrates cleanly with existing gateway validation
 
+### 2025-02-20 - Pi Sync: Add Gemini 3 Flash and Gemini 3 Pro Models
+**Work Area**: Pi Upstream Sync
+
+**What was done:**
+- Synced with Pi upstream (github.com/pi-coding-agent/pi) to check for new models
+- Found Pi has `gemini-3-flash` and `gemini-3-pro` (non-preview versions) that Lemon was missing
+- Added two new Google models to Lemon's model registry:
+  - `gemini-3-flash`: 1M context, 65k max tokens, reasoning support, $0.5/$3.0 per million tokens
+  - `gemini-3-pro`: 1M context, 65k max tokens, reasoning support, $2.0/$12.0 per million tokens
+- Added comprehensive tests for all Gemini 3 model variants:
+  - `gemini 3 flash has correct specs`
+  - `gemini 3 flash preview has correct specs`
+  - `gemini 3 pro has correct specs`
+  - `gemini 3 pro preview has correct specs`
+  - Updated flagship models test to include new models
+- All 48 AI model tests pass
+- No regressions
+
+**Files changed:**
+- `apps/ai/lib/ai/models.ex` - Added gemini-3-flash and gemini-3-pro model definitions
+- `apps/ai/test/models_test.exs` - Added 4 new test cases for Gemini 3 models
+
+**Commit:**
+- `ef03d3c0` - feat(models): Add Gemini 3 Flash and Gemini 3 Pro models
+
+**What worked:**
+- Pi's model structure maps cleanly to Lemon's Model struct
+- Model specs (pricing, context windows) were consistent with existing models
+- Tests follow existing patterns for other providers
+
 **Total progress:**
-- Started with 481 tests
-- Now have 488 tests (lemon_core app)
+- Started with 119 tests (initial)
+- Now have 1307+ tests (AI app: 48, lemon_core: 488+)
 - All tests passing (0 failures)
 
 **Next run should focus on:**
