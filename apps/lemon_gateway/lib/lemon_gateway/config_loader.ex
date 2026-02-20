@@ -345,7 +345,16 @@ defmodule LemonGateway.ConfigLoader do
       port: fetch(webhook, :port),
       mode: parse_webhook_mode(fetch(webhook, :mode)),
       timeout_ms: fetch(webhook, :timeout_ms),
+      callback_wait_timeout_ms: fetch(webhook, :callback_wait_timeout_ms),
       callback_url: fetch(webhook, :callback_url),
+      allow_callback_override: fetch(webhook, :allow_callback_override),
+      allow_private_callback_hosts: fetch(webhook, :allow_private_callback_hosts),
+      allow_query_token: fetch(webhook, :allow_query_token),
+      allow_payload_token: fetch(webhook, :allow_payload_token),
+      allow_payload_idempotency_key: fetch(webhook, :allow_payload_idempotency_key),
+      callback_max_attempts: fetch(webhook, :callback_max_attempts),
+      callback_backoff_ms: fetch(webhook, :callback_backoff_ms),
+      callback_backoff_max_ms: fetch(webhook, :callback_backoff_max_ms),
       integrations:
         webhook
         |> fetch(:integrations)
@@ -374,8 +383,17 @@ defmodule LemonGateway.ConfigLoader do
       default_engine: fetch(integration, :default_engine),
       cwd: fetch(integration, :cwd),
       callback_url: fetch(integration, :callback_url),
+      allow_callback_override: fetch(integration, :allow_callback_override),
+      allow_private_callback_hosts: fetch(integration, :allow_private_callback_hosts),
+      allow_query_token: fetch(integration, :allow_query_token),
+      allow_payload_token: fetch(integration, :allow_payload_token),
+      allow_payload_idempotency_key: fetch(integration, :allow_payload_idempotency_key),
+      callback_max_attempts: fetch(integration, :callback_max_attempts),
+      callback_backoff_ms: fetch(integration, :callback_backoff_ms),
+      callback_backoff_max_ms: fetch(integration, :callback_backoff_max_ms),
       mode: parse_webhook_mode(fetch(integration, :mode)),
-      timeout_ms: fetch(integration, :timeout_ms)
+      timeout_ms: fetch(integration, :timeout_ms),
+      callback_wait_timeout_ms: fetch(integration, :callback_wait_timeout_ms)
     }
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
     |> Map.new()

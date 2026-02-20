@@ -239,6 +239,15 @@ defmodule LemonGateway.ConfigLoaderTest do
           "port" => 9090,
           "mode" => "sync",
           "timeout_ms" => 45_000,
+          "callback_wait_timeout_ms" => 600_000,
+          "allow_callback_override" => true,
+          "allow_private_callback_hosts" => true,
+          "allow_query_token" => true,
+          "allow_payload_token" => false,
+          "allow_payload_idempotency_key" => true,
+          "callback_max_attempts" => 4,
+          "callback_backoff_ms" => 750,
+          "callback_backoff_max_ms" => 6_000,
           "integrations" => %{
             "n8n-demo" => %{
               "token" => "secret-token",
@@ -248,8 +257,17 @@ defmodule LemonGateway.ConfigLoaderTest do
               "default_engine" => "codex",
               "cwd" => "/tmp/n8n",
               "callback_url" => "https://example.test/callback",
+              "allow_callback_override" => false,
+              "allow_private_callback_hosts" => false,
+              "allow_query_token" => false,
+              "allow_payload_token" => true,
+              "allow_payload_idempotency_key" => false,
+              "callback_max_attempts" => 2,
+              "callback_backoff_ms" => 250,
+              "callback_backoff_max_ms" => 1_000,
               "mode" => "async",
-              "timeout_ms" => 12_000
+              "timeout_ms" => 12_000,
+              "callback_wait_timeout_ms" => 300_000
             }
           }
         }
@@ -263,6 +281,15 @@ defmodule LemonGateway.ConfigLoaderTest do
     assert config.webhook.port == 9090
     assert config.webhook.mode == :sync
     assert config.webhook.timeout_ms == 45_000
+    assert config.webhook.callback_wait_timeout_ms == 600_000
+    assert config.webhook.allow_callback_override == true
+    assert config.webhook.allow_private_callback_hosts == true
+    assert config.webhook.allow_query_token == true
+    assert config.webhook.allow_payload_token == false
+    assert config.webhook.allow_payload_idempotency_key == true
+    assert config.webhook.callback_max_attempts == 4
+    assert config.webhook.callback_backoff_ms == 750
+    assert config.webhook.callback_backoff_max_ms == 6_000
     assert config.webhook.integrations["n8n-demo"].token == "secret-token"
     assert config.webhook.integrations["n8n-demo"].session_key == "agent:n8n:main"
     assert config.webhook.integrations["n8n-demo"].agent_id == "n8n"
@@ -270,8 +297,17 @@ defmodule LemonGateway.ConfigLoaderTest do
     assert config.webhook.integrations["n8n-demo"].default_engine == "codex"
     assert config.webhook.integrations["n8n-demo"].cwd == "/tmp/n8n"
     assert config.webhook.integrations["n8n-demo"].callback_url == "https://example.test/callback"
+    assert config.webhook.integrations["n8n-demo"].allow_callback_override == false
+    assert config.webhook.integrations["n8n-demo"].allow_private_callback_hosts == false
+    assert config.webhook.integrations["n8n-demo"].allow_query_token == false
+    assert config.webhook.integrations["n8n-demo"].allow_payload_token == true
+    assert config.webhook.integrations["n8n-demo"].allow_payload_idempotency_key == false
+    assert config.webhook.integrations["n8n-demo"].callback_max_attempts == 2
+    assert config.webhook.integrations["n8n-demo"].callback_backoff_ms == 250
+    assert config.webhook.integrations["n8n-demo"].callback_backoff_max_ms == 1_000
     assert config.webhook.integrations["n8n-demo"].mode == :async
     assert config.webhook.integrations["n8n-demo"].timeout_ms == 12_000
+    assert config.webhook.integrations["n8n-demo"].callback_wait_timeout_ms == 300_000
   end
 
   test "parses xmtp gateway settings from override config" do
