@@ -11,8 +11,11 @@ defmodule LemonSkills.Registry do
   1. Global (primary): `~/.lemon/agent/skill/*/SKILL.md`
   2. Global (compat): `~/.agents/skills/*/SKILL.md`
   3. Project: `<cwd>/.lemon/skill/*/SKILL.md`
+  4. Ancestor `.agents/skills`: `.agents/skills/*/SKILL.md` from cwd up to git root
 
   Project skills override global skills with the same key.
+  Ancestor `.agents/skills` directories are discovered automatically,
+  following Pi's package-manager pattern.
   """
 
   use GenServer
@@ -277,8 +280,18 @@ defmodule LemonSkills.Registry do
   end
 
   defp load_project_skills(state, cwd) when is_binary(cwd) do
-    dir = Config.project_skills_dir(cwd)
-    skills = load_skills_from_dir(dir, :project)
+    # Load skills from all project directories including .agents/skills paths
+    skills =
+      Config.project_skills_dirs(cwd)
+      |> Enum.reduce(%{}, fn dir, acc ->
+        dir_skills = load_skills_from_dir(dir, :project)
+
+        # Keep first-seen entries so directory order controls precedence.
+        # Project .lemon/skill has highest precedence, then .agents/skills
+        # from cwd up to git root.
+        Map.merge(acc, dir_skills, fn _key, existing, _incoming -> existing end)
+      end)
+
     project_skills = Map.put(state.project_skills, cwd, skills)
     %{state | project_skills: project_skills}
   end

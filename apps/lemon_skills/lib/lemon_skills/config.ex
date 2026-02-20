@@ -90,6 +90,109 @@ defmodule LemonSkills.Config do
   end
 
   @doc """
+  Get all project skills directories including `.agents/skills` paths.
+
+  Discovers skills in `.agents/skills` directories from cwd up to git repo root
+  (or filesystem root if not in a git repo), following Pi's package-manager pattern.
+
+  Directories are returned in precedence order (first wins on key collisions):
+  1. Project `.lemon/skill` (highest precedence)
+  2. `.agents/skills` directories from cwd up to git root
+
+  ## Parameters
+
+  - `cwd` - The project working directory
+
+  ## Examples
+
+      # In a git repo at /home/user/myrepo with cwd at /home/user/myrepo/packages/feature
+      # and skills in:
+      #   - /home/user/myrepo/packages/.agents/skills/nested-skill
+      #   - /home/user/myrepo/.agents/skills/repo-skill
+      # Returns: ["/home/user/myrepo/packages/.lemon/skill",
+      #           "/home/user/myrepo/packages/.agents/skills",
+      #           "/home/user/myrepo/.agents/skills"]
+
+      # Outside a git repo at /home/user/project with cwd at /home/user/project/a/b
+      # Returns: ["/home/user/project/a/b/.lemon/skill",
+      #           "/home/user/project/a/b/.agents/skills",
+      #           "/home/user/project/a/.agents/skills",
+      #           "/home/user/project/.agents/skills"]
+  """
+  @spec project_skills_dirs(String.t()) :: [String.t()]
+  def project_skills_dirs(cwd) do
+    resolved_cwd = Path.expand(cwd)
+    git_root = find_git_root(resolved_cwd)
+
+    # Start with the primary project skills directory
+    dirs = [project_skills_dir(cwd)]
+
+    # Collect .agents/skills directories from cwd up to git root or filesystem root
+    dirs = dirs ++ collect_ancestor_agents_skill_dirs(resolved_cwd, git_root)
+
+    dirs
+    |> Enum.uniq()
+    |> Enum.filter(&File.dir?/1)
+  end
+
+  # ============================================================================
+  # Private Functions - Ancestor Skills Discovery
+  # ============================================================================
+
+  # Find the git repository root starting from the given directory.
+  # Returns nil if not in a git repository.
+  defp find_git_root(start_dir) do
+    dir = Path.expand(start_dir)
+    find_git_root_recursive(dir)
+  end
+
+  defp find_git_root_recursive(dir) do
+    git_dir = Path.join(dir, ".git")
+
+    cond do
+      File.dir?(git_dir) or File.regular?(git_dir) ->
+        dir
+
+      Path.dirname(dir) == dir ->
+        nil
+
+      true ->
+        find_git_root_recursive(Path.dirname(dir))
+    end
+  end
+
+  # Collect .agents/skills directories from start_dir up to git_root (or filesystem root).
+  # Returns a list of paths in order from closest to farthest from start_dir.
+  defp collect_ancestor_agents_skill_dirs(start_dir, git_root) do
+    start_dir
+    |> collect_ancestors(git_root)
+    |> Enum.map(fn dir -> Path.join([dir, ".agents", "skills"]) end)
+  end
+
+  # Collect ancestor directories from start_dir up to git_root or filesystem root.
+  defp collect_ancestors(start_dir, git_root) do
+    collect_ancestors_recursive(Path.expand(start_dir), git_root, [])
+  end
+
+  defp collect_ancestors_recursive(dir, git_root, acc) do
+    new_acc = [dir | acc]
+
+    cond do
+      # Stop if we've reached the git repo root
+      git_root && dir == git_root ->
+        Enum.reverse(new_acc)
+
+      # Stop if we've reached the filesystem root
+      Path.dirname(dir) == dir ->
+        Enum.reverse(new_acc)
+
+      # Continue to parent
+      true ->
+        collect_ancestors_recursive(Path.dirname(dir), git_root, new_acc)
+    end
+  end
+
+  @doc """
   Get the global skills configuration file path.
   """
   @spec global_config_file() :: String.t()
