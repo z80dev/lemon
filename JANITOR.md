@@ -25,6 +25,43 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2025-02-20 - Feature Enhancement: Port New LLM Model Providers from Pi
+**Work Area**: Feature Enhancement
+
+**What was done:**
+- Studied Pi upstream (`packages/ai/src/models.generated.ts`) for new models and providers
+- Studied Oh-My-Pi upstream for hashline edit mode and LSP write tool patterns
+- Added 6 new model providers to `Ai.Models` (26 new models total):
+
+| Provider | Models | API Type | Notes |
+|----------|--------|----------|-------|
+| **Mistral** | 7 models | `openai_completions` | Codestral, Devstral, Mistral Large/Medium/Small, Pixtral |
+| **Cerebras** | 3 models | `openai_completions` | Llama 3.1/3.3, Qwen 3 |
+| **DeepSeek** | 3 models | `openai_completions` | V3, R1 (with reasoning support) |
+| **Qwen** | 5 models | `openai_completions` | Turbo, Plus, Max, Coder, VL variants |
+| **MiniMax** | 3 models | `openai_completions` | M2, M2.1, M2.5 (with reasoning) |
+| **Z.ai** | 5 models | `openai_completions` | GLM 4.5/4.7/5 series |
+
+**Files changed:**
+- `apps/ai/lib/ai/models.ex` - Added 362 lines of new model definitions
+- `apps/ai/test/models_new_providers_test.exs` - New test file with 33 comprehensive tests
+
+**Commits:**
+- `8518dc1a` - Add new LLM model providers: Mistral, Cerebras, DeepSeek, Qwen, MiniMax, Z.ai
+
+**What worked:**
+- All 33 new tests pass
+- Existing AI module tests still pass (28 tests)
+- Hashline edit mode already well-implemented in Lemon (836 lines, 836 test lines)
+- Provider registry pattern scales well for adding new providers
+
+**Notes on Oh-My-Pi features:**
+- Hashline edit mode is already comprehensively implemented in Lemon
+- LSP write tool integration is more complex and would require significant architecture changes
+- Pi's models.generated.ts has 12,788 lines covering 22 providers - Lemon now has 9 providers
+
+---
+
 ### 2025-01-XX - Initial Setup
 - Created JANITOR.md log file
 - Scheduled cron job to run every 30 minutes
