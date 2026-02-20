@@ -2294,3 +2294,51 @@ causing the quality check to fail with:
 - Add skill management to the web dashboard
 - Expand web dashboard tests with LiveView testing
 - Continue adding tests for other untested modules
+
+### 2025-02-20 - Refactoring: Fix Compiler Warnings and Bug Fixes
+**Work Area**: Refactoring / Bug Fixes
+
+**What was done:**
+- Fixed critical syntax error in `CodingAgent.Tools.Hashline`:
+  - `after` is a reserved word in Elixir - renamed to `rest` in 3 places
+  - Added missing `import Bitwise` for `>>>` and `&&&` operators
+  - Fixed 4 unused variable warnings by prefixing with underscore
+- Fixed compiler warning in `LemonCore.ConfigCache`:
+  - Renamed `_from` to `from` since the variable was being used
+- Improved error handling in `LemonCore.ConfigCache`:
+  - Created new `ConfigCacheError` exception module for structured errors
+  - Replaced generic `raise "string"` with proper exception struct
+- Minor improvements:
+  - Updated `Clock.elapsed_ms/1` spec from `non_neg_integer()` to `integer()` (can be negative)
+  - Extracted `@nibble_chars` to module attribute in hashline.ex
+  - Updated hashline documentation with correct examples
+
+**Files changed:**
+- `apps/coding_agent/lib/coding_agent/tools/hashline.ex` - Fixed syntax errors and warnings
+- `apps/lemon_core/lib/lemon_core/config_cache.ex` - Fixed warning, improved error handling
+- `apps/lemon_core/lib/lemon_core/config_cache_error.ex` - New exception module
+- `apps/lemon_core/lib/lemon_core/clock.ex` - Updated spec
+
+**Commits:**
+- `e921a3c0` - fix: resolve compiler warnings and syntax errors in hashline.ex
+- `7607ed4a` - refactor: improve error handling in ConfigCache
+- `2b63014a` - refactor: minor improvements to clock and hashline
+
+**Code quality improvements:**
+- Eliminated all compiler warnings
+- Fixed critical syntax error that would prevent compilation
+- Added structured error handling for ConfigCache
+- Improved type specs for accuracy
+
+**Total progress:**
+- Started with 119 tests
+- Now have 1337+ tests (AI app: 72, lemon_core: 502+, lemon_skills: 106)
+- All tests passing (0 failures)
+- All compiler warnings resolved
+
+**Next run should focus on:**
+- Continue modularizing the large config.ex (1253 lines)
+- Add tests for ConfigCacheError exception
+- Look for more code duplication in large modules (task.ex, websearch.ex)
+- Extract common patterns into reusable functions
+- Add validation to the modular config system
