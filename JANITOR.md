@@ -1287,3 +1287,50 @@ LemonCore.ConfigCache.reload("/path/to/project", validate: true)
   - Online discovery capabilities
 - Or add more validation rules to the Validator module
 - Or check for more Pi upstream features to port
+
+### 2025-02-20 - Feature Enhancement: Improved Skill Relevance Scoring
+**Work Area**: Feature Enhancement
+
+**What was done:**
+- Enhanced Lemon's skill relevance scoring algorithm inspired by Ironclaw's extension registry
+- Ironclaw's scoring system has weighted signals for different match types
+- Improved Lemon's `calculate_relevance/3` function with better scoring:
+
+**New scoring weights (inspired by Ironclaw):**
+- Exact name match: 100 points (strongest signal)
+- Partial name match: 50 points
+- Context in name match: 30 points
+- Exact keyword match: 40 points
+- Partial keyword match: 20 points
+- Description word match: 10 points per word
+- Body content match: 2 points per word (weakest signal)
+
+**Key improvements:**
+- Added keyword extraction from skill manifest
+- Multiple name match signals with `max()` selection
+- Better weight distribution across match types
+- Maintained project skill priority bonus (1000 points)
+
+**Files changed:**
+- `apps/lemon_skills/lib/lemon_skills/registry.ex` - Improved scoring algorithm
+- `apps/lemon_skills/test/lemon_skills/registry_relevance_test.exs` - Added 3 new tests
+
+**New tests:**
+- `prioritizes exact name matches` - verifies exact match beats partial match
+- `scores keywords highly` - verifies keyword matching works
+- `prefers project skills over global` - verifies project priority bonus
+
+**What worked:**
+- Ironclaw's scoring approach maps well to Lemon's skill system
+- Keywords from SKILL.md frontmatter provide strong signals
+- Project skill priority (1000 point bonus) still dominates relevance
+
+**Total progress:**
+- Started with 65 tests
+- Now have 68 tests (lemon_skills app)
+- All tests passing (0 failures)
+
+**Next run should focus on:**
+- Add more validation rules to the Validator module
+- Check for more Pi upstream features to port
+- Explore adding online skill discovery (like Ironclaw's OnlineDiscovery)

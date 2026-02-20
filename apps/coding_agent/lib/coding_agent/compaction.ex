@@ -32,6 +32,15 @@ defmodule CodingAgent.Compaction do
 
   @default_reserve_tokens 16384
   @default_keep_recent_tokens 20000
+  @default_message_limit_trigger_ratio 0.9
+  @default_message_limit_keep_ratio 0.6
+  @default_message_limit_min_keep_messages 20
+
+  @type message_budget :: %{
+          request_limit: pos_integer(),
+          trigger_count: pos_integer(),
+          keep_recent_messages: pos_integer()
+        }
 
   # ============================================================================
   # Compaction Decision
@@ -61,6 +70,59 @@ defmodule CodingAgent.Compaction do
     reserve_tokens = Map.get(settings, :reserve_tokens, @default_reserve_tokens)
 
     enabled && context_tokens > context_window - reserve_tokens
+  end
+
+  @doc """
+  Build provider-specific message budget for preemptive compaction.
+
+  Some providers cap request history by message count. When that limit is
+  known, this returns thresholds that can trigger compaction before provider
+  trimming starts dropping early context.
+  """
+  @spec message_budget(Ai.Types.Model.t() | map(), map()) :: message_budget() | nil
+  def message_budget(model, settings \\ %{}) do
+    case provider_request_message_limit(model) do
+      limit when is_integer(limit) and limit > 1 ->
+        trigger_ratio =
+          ratio_or(
+            Map.get(settings, :message_limit_trigger_ratio),
+            @default_message_limit_trigger_ratio
+          )
+
+        keep_ratio =
+          ratio_or(Map.get(settings, :message_limit_keep_ratio), @default_message_limit_keep_ratio)
+
+        trigger_count =
+          floor(limit * trigger_ratio)
+          |> clamp_int(1, max(limit - 1, 1))
+
+        keep_recent_messages =
+          floor(limit * keep_ratio)
+          |> max(@default_message_limit_min_keep_messages)
+          |> min(max(trigger_count - 1, 1))
+
+        %{
+          request_limit: limit,
+          trigger_count: trigger_count,
+          keep_recent_messages: keep_recent_messages
+        }
+
+      _ ->
+        nil
+    end
+  end
+
+  @doc """
+  Check if compaction should trigger based on provider message window limits.
+  """
+  @spec should_compact_for_message_limit?(non_neg_integer(), message_budget() | nil, map()) ::
+          boolean()
+  def should_compact_for_message_limit?(_message_count, nil, _settings), do: false
+
+  def should_compact_for_message_limit?(message_count, %{trigger_count: trigger_count}, settings)
+      when is_integer(message_count) do
+    enabled = Map.get(settings, :enabled, true)
+    enabled && message_count >= trigger_count
   end
 
   # ============================================================================

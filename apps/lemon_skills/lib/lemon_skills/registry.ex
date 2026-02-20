@@ -364,20 +364,69 @@ defmodule LemonSkills.Registry do
           ""
       end
 
-    name_score =
-      if String.contains?(context_lower, key_lower) or String.contains?(context_lower, name_lower),
-        do: 10,
+    # Extract keywords from manifest if available
+    keywords_lower =
+      case entry.manifest do
+        %{keywords: keywords} when is_list(keywords) ->
+          Enum.map(keywords, &String.downcase/1)
+
+        _ ->
+          []
+      end
+
+    # Calculate name scores (strongest signal)
+    exact_name_match =
+      if key_lower == context_lower or name_lower == context_lower,
+        do: 100,
         else: 0
 
+    partial_name_match =
+      if exact_name_match == 0 and
+           (String.contains?(key_lower, context_lower) or String.contains?(name_lower, context_lower)),
+         do: 50,
+         else: 0
+
+    context_in_name_match =
+      if String.contains?(context_lower, key_lower) or String.contains?(context_lower, name_lower),
+        do: 30,
+        else: 0
+
+    name_score =
+      exact_name_match
+      |> max(partial_name_match)
+      |> max(context_in_name_match)
+
+    # Keyword matches (strong signal for curated skills)
+    keyword_score =
+      Enum.reduce(context_words, 0, fn word, acc ->
+        exact_keyword_match =
+          Enum.any?(keywords_lower, fn kw -> kw == word end)
+
+        partial_keyword_match =
+          Enum.any?(keywords_lower, fn kw -> String.contains?(kw, word) end)
+
+        cond do
+          exact_keyword_match -> acc + 40
+          partial_keyword_match -> acc + 20
+          true -> acc
+        end
+      end)
+
+    # Description word matches (medium signal)
     desc_word_matches =
       context_words
       |> Enum.count(fn word -> String.contains?(desc_lower, word) end)
 
+    desc_score = desc_word_matches * 10
+
+    # Body content matches (weakest signal)
     body_word_matches =
       context_words
       |> Enum.count(fn word -> String.contains?(body_lower, word) end)
 
-    name_score + desc_word_matches * 3 + body_word_matches
+    body_score = body_word_matches * 2
+
+    name_score + keyword_score + desc_score + body_score
   end
 
   # Prefer project-local skills over global ones when both are relevant.
