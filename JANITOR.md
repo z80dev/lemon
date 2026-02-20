@@ -2507,3 +2507,62 @@ edits = [
 - Add streaming support for large files
 - Check for more Oh-My-Pi features to port (Write Tool with LSP, Tool Renderers)
 
+### 2026-02-20 - Parallel Kimi Tasks + Codex Review
+**Work Area**: Multi-Area Improvements
+
+**Task 1 (Kimi - Features):**
+- Ported Hashline Edit Mode from Oh-My-Pi with hash-addressed line edits and mutation validation.
+- Files changed:
+  - `apps/coding_agent/lib/coding_agent/tools/hashline.ex`
+  - `apps/coding_agent/test/coding_agent/tools/hashline_test.exs`
+  - `apps/lemon_channels/test/lemon_channels/adapters/x_api_client_test.exs`
+  - `apps/lemon_core/test/lemon_core/secrets/keychain_test.exs`
+- Commits:
+  - `0522d892` - feat(coding_agent): port Hashline Edit Mode from Oh-My-Pi
+
+**Task 2 (Kimi - Tests/Docs):**
+- Added and documented expanded lemon_core test coverage, including Browser LocalServer and SqliteBackend suites.
+- Verified the two previously-untracked test files are valid improvements and are tracked in git:
+  - `apps/lemon_core/test/lemon_core/browser/local_server_test.exs`
+  - `apps/lemon_core/test/lemon_core/store/sqlite_backend_test.exs`
+- Files changed:
+  - `apps/lemon_core/test/lemon_core/browser/local_server_test.exs`
+  - `apps/lemon_core/test/lemon_core/store/sqlite_backend_test.exs`
+  - `JANITOR.md`
+- Commits:
+  - `ebb25b81` - docs(janitor): Add Hashline Edit Mode port entry
+  - `6ff29923` - docs(janitor): Log comprehensive test expansion for 7 untested modules
+
+**Task 3 (Kimi - Refactoring):**
+- Fixed hashline/compiler issues, improved ConfigCache error handling, and made follow-up code quality improvements.
+- Files changed:
+  - `apps/coding_agent/lib/coding_agent/tools/hashline.ex`
+  - `apps/lemon_core/lib/lemon_core/config_cache.ex`
+  - `apps/lemon_core/lib/lemon_core/config_cache_error.ex`
+  - `apps/lemon_core/lib/lemon_core/clock.ex`
+  - Related tests and JANITOR updates in refactor follow-ups
+- Commits:
+  - `e921a3c0` - fix: resolve compiler warnings and syntax errors in hashline.ex
+  - `7607ed4a` - refactor: improve error handling in ConfigCache
+  - `2b63014a` - refactor: minor improvements to clock and hashline
+  - `083f16c5` - docs(janitor): Log compiler warning fixes and bug fixes
+
+**Codex Review:**
+- Issues found and fixed:
+  - Updated gateway application tests to match current supervision tree behavior (TransportSupervisor started by default).
+  - Fixed flaky waiter-order assertion in engine lock chain test (now validates one-at-a-time handoff without scheduler-order dependence).
+  - Added default engine fallback in binding resolver when `LemonGateway.Config` is unavailable.
+  - Stabilized browser local server tests by isolating named server instances and avoiding global env/cwd leakage.
+  - Added named-process support in X API token manager and updated tests to avoid global process collisions.
+  - Hardened quality task moduledoc test fallback by ensuring module load before fallback assertion.
+- Final test results:
+  - `mix test` passes (exit code `0`).
+  - Focused reruns also pass:
+    - `mix test apps/lemon_gateway/test/application_test.exs apps/lemon_gateway/test/engine_lock_test.exs`
+    - `mix test apps/lemon_gateway/test/engine_lock_test.exs`
+
+**Total Progress:**
+- Test count:
+  - Umbrella suite revalidated with all app suites passing (including `lemon_core` 747 tests, `lemon_channels` 121 tests, `coding_agent` 2783 tests, `agent_core` 1552 tests + 165 properties, `coding_agent_ui` 152 tests, `lemon_control_plane` 435 tests, `lemon_skills` 106 tests, `market_intel` 2 tests, plus full `lemon_gateway` suite).
+- All tests passing:
+  - Yes (`mix test` green).

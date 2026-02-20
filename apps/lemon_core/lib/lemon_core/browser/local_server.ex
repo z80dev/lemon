@@ -21,15 +21,23 @@ defmodule LemonCore.Browser.LocalServer do
   @name __MODULE__
 
   @type result :: {:ok, term()} | {:error, String.t()}
+  @type server :: GenServer.server()
 
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: @name)
+    name = Keyword.get(opts, :name, @name)
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
 
   @spec request(String.t(), map(), pos_integer()) :: result()
   def request(method, args \\ %{}, timeout_ms \\ 30_000)
       when is_binary(method) and is_map(args) do
-    GenServer.call(@name, {:request, method, args, timeout_ms}, timeout_ms + 5_000)
+    request(@name, method, args, timeout_ms)
+  end
+
+  @spec request(server(), String.t(), map(), pos_integer()) :: result()
+  def request(server, method, args, timeout_ms)
+      when is_binary(method) and is_map(args) do
+    GenServer.call(server, {:request, method, args, timeout_ms}, timeout_ms + 5_000)
   end
 
   @impl true

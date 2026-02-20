@@ -35,10 +35,6 @@ defmodule LemonChannels.Adapters.XAPI.TokenManagerTest do
 
     start_supervised!(SecretSink)
 
-    if pid = Process.whereis(TokenManager) do
-      GenServer.stop(pid, :normal)
-    end
-
     on_exit(fn ->
       if is_nil(previous_config) do
         Application.delete_env(:lemon_channels, XAPI)
@@ -56,10 +52,6 @@ defmodule LemonChannels.Adapters.XAPI.TokenManagerTest do
         Application.delete_env(:lemon_channels, :x_api_secrets_module)
       else
         Application.put_env(:lemon_channels, :x_api_secrets_module, previous_secrets_module)
-      end
-
-      if pid = Process.whereis(TokenManager) do
-        GenServer.stop(pid, :normal)
       end
 
       Req.default_options(previous_req_defaults)
@@ -92,9 +84,10 @@ defmodule LemonChannels.Adapters.XAPI.TokenManagerTest do
       )
     end)
 
-    start_supervised!({TokenManager, [secrets_module: SecretSink]})
+    manager_name = token_manager_name()
+    start_supervised!({TokenManager, [name: manager_name, secrets_module: SecretSink]})
 
-    assert {:ok, "new-access"} = TokenManager.get_access_token()
+    assert {:ok, "new-access"} = TokenManager.get_access_token(manager_name)
 
     persisted = SecretSink.values()
     assert persisted["X_API_ACCESS_TOKEN"] == "new-access"
@@ -162,9 +155,10 @@ defmodule LemonChannels.Adapters.XAPI.TokenManagerTest do
       )
     end)
 
-    start_supervised!({TokenManager, []})
+    manager_name = token_manager_name()
+    start_supervised!({TokenManager, [name: manager_name]})
 
-    assert {:ok, "new-access-default"} = TokenManager.get_access_token()
+    assert {:ok, "new-access-default"} = TokenManager.get_access_token(manager_name)
 
     persisted = SecretSink.values()
     assert persisted["X_API_ACCESS_TOKEN"] == "new-access-default"
@@ -203,5 +197,9 @@ defmodule LemonChannels.Adapters.XAPI.TokenManagerTest do
     ]
 
     Application.put_env(:lemon_channels, XAPI, Keyword.merge(base, config))
+  end
+
+  defp token_manager_name do
+    {:global, {:x_api_token_manager_test, self(), System.unique_integer([:positive])}}
   end
 end

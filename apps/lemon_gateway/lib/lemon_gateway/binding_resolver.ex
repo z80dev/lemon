@@ -20,7 +20,7 @@ defmodule LemonGateway.BindingResolver do
   Bindings map transport/chat/topic combinations to projects, engines, and queue modes.
   """
 
-  alias LemonGateway.{Binding, Config}
+  alias LemonGateway.{Binding, Config, ConfigLoader}
   alias LemonGateway.Store
   alias LemonGateway.Types.ChatScope
 
@@ -69,7 +69,7 @@ defmodule LemonGateway.BindingResolver do
     if is_pid(Process.whereis(Config)) do
       Config.get(:bindings) || []
     else
-      LemonGateway.ConfigLoader.load()
+      ConfigLoader.load()
       |> Map.get(:bindings, [])
       |> List.wrap()
     end
@@ -137,7 +137,7 @@ defmodule LemonGateway.BindingResolver do
     cond do
       resume && resume.engine -> resume.engine
       is_binary(engine_hint) -> engine_hint
-      true -> Config.get(:default_engine)
+      true -> default_engine()
     end
   end
 
@@ -158,8 +158,20 @@ defmodule LemonGateway.BindingResolver do
             nil
           end
 
-        project_engine || agent_default_engine(binding, scope) || Config.get(:default_engine)
+        project_engine || agent_default_engine(binding, scope) || default_engine()
     end
+  end
+
+  defp default_engine do
+    if is_pid(Process.whereis(Config)) do
+      Config.get(:default_engine) || "lemon"
+    else
+      ConfigLoader.load()
+      |> Map.get(:default_engine, "lemon")
+      |> Kernel.||("lemon")
+    end
+  rescue
+    _ -> "lemon"
   end
 
   defp agent_default_engine(%Binding{agent_id: agent_id} = _binding, scope)

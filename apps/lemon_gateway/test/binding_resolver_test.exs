@@ -407,6 +407,23 @@ defmodule LemonGateway.BindingResolverTest do
       assert BindingResolver.resolve_engine(scope, nil, nil) == "lemon"
     end
 
+    test "uses ConfigLoader default_engine when Config process is not running" do
+      assert Process.whereis(Config) == nil
+      Application.put_env(:lemon_gateway, Config, default_engine: "loader_default")
+
+      scope = %ChatScope{transport: :telegram, chat_id: 99999}
+
+      assert BindingResolver.resolve_engine(scope, nil, nil) == "loader_default"
+    end
+
+    test "falls back to lemon when Config process is not running and loader has no default" do
+      assert Process.whereis(Config) == nil
+
+      scope = %ChatScope{transport: :telegram, chat_id: 99999}
+
+      assert BindingResolver.resolve_engine(scope, nil, nil) == "lemon"
+    end
+
     test "binding with project but no project engine falls back to global" do
       File.mkdir_p!("/tmp/test_project_no_engine")
 

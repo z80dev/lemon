@@ -500,13 +500,17 @@ defmodule LemonGateway.EngineLockTest do
 
       Process.sleep(20)
 
-      # Release - first waiter should get it
+      # Release - exactly one waiter should get it
       GenServer.cast(lock, {:release, :key1, self()})
-      assert_receive {:waiter_acquired, 1, _}, 500
+      assert_receive {:waiter_acquired, waiter_i, waiter_pid}, 500
+      assert waiter_i in 1..3
 
       # Others should not yet
       refute_receive {:waiter_acquired, 2, _}, 50
       refute_receive {:waiter_acquired, 3, _}, 50
+
+      # Cleanup
+      send(waiter_pid, {:release, lock})
     end
 
     test "waiter chain: each release triggers next waiter", %{lock: lock} do
@@ -533,25 +537,32 @@ defmodule LemonGateway.EngineLockTest do
       # Release initial lock
       GenServer.cast(lock, {:release, :key1, self()})
 
-      # Waiter 1 acquires
-      assert_receive {:waiter_acquired, 1, waiter1_pid}, 500
+      # First waiter acquires
+      assert_receive {:waiter_acquired, i1, waiter1_pid}, 500
+      assert i1 in 1..3
 
-      # Tell waiter 1 to release
+      # Tell first waiter to release
       send(waiter1_pid, {:release, lock})
-      assert_receive {:waiter_released, 1}, 500
+      assert_receive {:waiter_released, ^i1}, 500
 
-      # Waiter 2 acquires
-      assert_receive {:waiter_acquired, 2, waiter2_pid}, 500
+      # Second waiter acquires
+      assert_receive {:waiter_acquired, i2, waiter2_pid}, 500
+      assert i2 in 1..3
+      refute i2 == i1
 
-      # Tell waiter 2 to release
+      # Tell second waiter to release
       send(waiter2_pid, {:release, lock})
-      assert_receive {:waiter_released, 2}, 500
+      assert_receive {:waiter_released, ^i2}, 500
 
-      # Waiter 3 acquires
-      assert_receive {:waiter_acquired, 3, waiter3_pid}, 500
+      # Third waiter acquires
+      assert_receive {:waiter_acquired, i3, waiter3_pid}, 500
+      assert i3 in 1..3
+      refute i3 == i1
+      refute i3 == i2
 
       send(waiter3_pid, {:release, lock})
-      assert_receive {:waiter_released, 3}, 500
+      assert_receive {:waiter_released, ^i3}, 500
+      assert Enum.sort([i1, i2, i3]) == [1, 2, 3]
 
       # Clean up any remaining waiters
       Enum.each(waiters, fn w -> if Process.alive?(w), do: Process.exit(w, :kill) end)

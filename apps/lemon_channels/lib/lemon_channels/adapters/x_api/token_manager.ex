@@ -19,6 +19,7 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
   @refresh_buffer_seconds 300
   @default_expires_in 7200
   @x_api_app LemonChannels.Adapters.XAPI
+  @name __MODULE__
   @x_api_token_keys [
     access_token: "X_API_ACCESS_TOKEN",
     refresh_token: "X_API_REFRESH_TOKEN",
@@ -47,7 +48,8 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
   ## Client API
 
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    name = Keyword.get(opts, :name, @name)
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
 
   @doc """
@@ -55,21 +57,33 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
   Automatically refreshes if expired or about to expire.
   """
   def get_access_token do
-    GenServer.call(__MODULE__, :get_access_token)
+    get_access_token(@name)
+  end
+
+  def get_access_token(server) do
+    GenServer.call(server, :get_access_token)
   end
 
   @doc """
   Get the full token state.
   """
   def get_state do
-    GenServer.call(__MODULE__, :get_state)
+    get_state(@name)
+  end
+
+  def get_state(server) do
+    GenServer.call(server, :get_state)
   end
 
   @doc """
   Manually update tokens (e.g., after initial OAuth flow).
   """
   def update_tokens(attrs) do
-    GenServer.call(__MODULE__, {:update_tokens, attrs})
+    update_tokens(@name, attrs)
+  end
+
+  def update_tokens(server, attrs) do
+    GenServer.call(server, {:update_tokens, attrs})
   end
 
   @doc """

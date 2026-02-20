@@ -47,7 +47,10 @@ defmodule Mix.Tasks.Lemon.QualityTest do
   end
 
   describe "config validation" do
-    test "--validate-config passes when config is valid", %{mock_home: mock_home, repo_root: repo_root} do
+    test "--validate-config passes when config is valid", %{
+      mock_home: mock_home,
+      repo_root: repo_root
+    } do
       # Create a valid config
       global_config = Path.join(mock_home, ".lemon")
       File.mkdir_p!(global_config)
@@ -74,7 +77,10 @@ defmodule Mix.Tasks.Lemon.QualityTest do
       assert output =~ "[ok] config validation passed"
     end
 
-    test "--validate-config fails when config is invalid", %{mock_home: mock_home, repo_root: repo_root} do
+    test "--validate-config fails when config is invalid", %{
+      mock_home: mock_home,
+      repo_root: repo_root
+    } do
       # Create an invalid config
       global_config = Path.join(mock_home, ".lemon")
       File.mkdir_p!(global_config)
@@ -129,6 +135,7 @@ defmodule Mix.Tasks.Lemon.QualityTest do
 
         _ ->
           # If docs aren't available in test, at least verify module loads
+          assert Code.ensure_loaded?(Mix.Tasks.Lemon.Quality)
           assert function_exported?(Mix.Tasks.Lemon.Quality, :run, 1)
       end
     end

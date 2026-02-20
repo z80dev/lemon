@@ -11,6 +11,7 @@ defmodule LemonGateway.ApplicationTest do
     LemonGateway.Config,
     LemonGateway.EngineRegistry,
     LemonGateway.TransportRegistry,
+    LemonGateway.TransportSupervisor,
     LemonGateway.CommandRegistry,
     LemonGateway.EngineLock,
     LemonGateway.RunRegistry,
@@ -199,12 +200,12 @@ defmodule LemonGateway.ApplicationTest do
       assert type == :supervisor
     end
 
-    test "TransportSupervisor is not started by default (channels-first)" do
+    test "TransportSupervisor is started by default" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       children = Supervisor.which_children(LemonGateway.Supervisor)
 
-      assert Enum.find(children, fn {id, _, _, _} -> id == LemonGateway.TransportSupervisor end) ==
+      assert Enum.find(children, fn {id, _, _, _} -> id == LemonGateway.TransportSupervisor end) !=
                nil
     end
 
@@ -951,11 +952,12 @@ defmodule LemonGateway.ApplicationTest do
       assert result == nil
     end
 
-    test "TransportSupervisor is not registered by default (channels-first)" do
+    test "TransportSupervisor is registered by default" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       pid = Process.whereis(LemonGateway.TransportSupervisor)
-      assert pid == nil
+      assert is_pid(pid)
+      assert Process.alive?(pid)
     end
   end
 
