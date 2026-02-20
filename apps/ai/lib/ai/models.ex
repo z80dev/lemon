@@ -1068,6 +1068,42 @@ defmodule Ai.Models do
       cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
       context_window: 131_072,
       max_tokens: 131_072
+    },
+    "kimi-k2" => %Model{
+      id: "kimi-k2",
+      name: "Kimi K2",
+      api: :openai_completions,
+      provider: :opencode,
+      base_url: "https://opencode.ai/zen/v1",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 0.4, output: 2.5, cache_read: 0.4, cache_write: 0.0},
+      context_window: 262_144,
+      max_tokens: 262_144
+    },
+    "kimi-k2-thinking" => %Model{
+      id: "kimi-k2-thinking",
+      name: "Kimi K2 Thinking",
+      api: :openai_completions,
+      provider: :opencode,
+      base_url: "https://opencode.ai/zen/v1",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.4, output: 2.5, cache_read: 0.4, cache_write: 0.0},
+      context_window: 262_144,
+      max_tokens: 262_144
+    },
+    "kimi-k2.5" => %Model{
+      id: "kimi-k2.5",
+      name: "Kimi K2.5",
+      api: :openai_completions,
+      provider: :opencode,
+      base_url: "https://opencode.ai/zen/v1",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.6, output: 3.0, cache_read: 0.08, cache_write: 0.0},
+      context_window: 262_144,
+      max_tokens: 262_144
     }
   }
 

@@ -520,6 +520,59 @@ defmodule Ai.ModelsTest do
 
     test "opencode models" do
       assert Models.get_model(:opencode, "trinity-large-preview-free") != nil
+      assert Models.get_model(:opencode, "kimi-k2") != nil
+      assert Models.get_model(:opencode, "kimi-k2-thinking") != nil
+      assert Models.get_model(:opencode, "kimi-k2.5") != nil
+    end
+  end
+
+  describe "kimi k2 models" do
+    test "kimi k2 has correct specs" do
+      model = Models.get_model(:opencode, "kimi-k2")
+
+      assert model.id == "kimi-k2"
+      assert model.name == "Kimi K2"
+      assert model.provider == :opencode
+      assert model.api == :openai_completions
+      assert model.base_url == "https://opencode.ai/zen/v1"
+      assert model.reasoning == false
+      assert model.input == [:text]
+      assert model.cost.input == 0.4
+      assert model.cost.output == 2.5
+      assert model.cost.cache_read == 0.4
+      assert model.context_window == 262_144
+      assert model.max_tokens == 262_144
+    end
+
+    test "kimi k2 thinking has correct specs" do
+      model = Models.get_model(:opencode, "kimi-k2-thinking")
+
+      assert model.id == "kimi-k2-thinking"
+      assert model.name == "Kimi K2 Thinking"
+      assert model.provider == :opencode
+      assert model.api == :openai_completions
+      assert model.reasoning == true
+      assert model.input == [:text]
+      assert model.cost.input == 0.4
+      assert model.cost.output == 2.5
+      assert model.context_window == 262_144
+      assert model.max_tokens == 262_144
+    end
+
+    test "kimi k2.5 has correct specs" do
+      model = Models.get_model(:opencode, "kimi-k2.5")
+
+      assert model.id == "kimi-k2.5"
+      assert model.name == "Kimi K2.5"
+      assert model.provider == :opencode
+      assert model.api == :openai_completions
+      assert model.reasoning == true
+      assert model.input == [:text, :image]
+      assert model.cost.input == 0.6
+      assert model.cost.output == 3.0
+      assert model.cost.cache_read == 0.08
+      assert model.context_window == 262_144
+      assert model.max_tokens == 262_144
     end
   end
 end
