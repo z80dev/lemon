@@ -1247,3 +1247,43 @@ LemonCore.ConfigCache.reload("/path/to/project", validate: true)
   - Extension kinds (MCP servers, WASM tools, etc.)
 - Or add more validation rules to the Validator module
 - Or check for more Pi upstream features to port
+
+### 2025-02-20 - Ironclaw Sync: Add Pipe Deadlock Regression Test
+**Work Area**: Test Expansion / Bug Prevention
+
+**What was done:**
+- Synced with Ironclaw upstream (commit 9906190)
+- Found critical bug fix: prevent pipe deadlock in shell command execution
+- Ironclaw's fix: Drain stdout/stderr concurrently with child.wait() using tokio::join
+  - Prevents deadlocks when command output exceeds OS pipe buffer (64KB Linux, 16KB macOS)
+  - Uses AsyncReadExt::take() for memory-bounded reads
+- Analyzed Lemon's BashExecutor to check for similar issues
+  - Lemon uses Erlang Ports with `:stream` option which handles pipes differently
+  - Port mechanism should handle pipe buffer issues automatically
+- Added regression test to verify Lemon doesn't have this issue:
+  - `handles output exceeding OS pipe buffer without deadlock`
+  - Generates 128KB of output (exceeds both Linux and macOS pipe buffers)
+  - Uses Python or dd to generate large output
+  - Wraps execution in Task with 10-second timeout
+  - Fails test with "possible pipe deadlock" message if timeout occurs
+
+**Files changed:**
+- `apps/coding_agent/test/coding_agent/bash_executor_test.exs` - Added regression test
+
+**What worked:**
+- Erlang Ports with `:stream` option handle pipe draining automatically
+- Test confirms Lemon doesn't suffer from the same deadlock issue as Ironclaw's old implementation
+- Using Task.yield/2 with timeout allows detecting deadlocks without hanging test suite
+
+**Total progress:**
+- Started with 2712 tests
+- Now have 2713 tests (coding_agent app)
+- All tests passing (0 failures)
+
+**Next run should focus on:**
+- Explore Ironclaw's extension registry pattern for Lemon
+  - Curated registry with built-in entries
+  - Fuzzy search with scoring
+  - Online discovery capabilities
+- Or add more validation rules to the Validator module
+- Or check for more Pi upstream features to port

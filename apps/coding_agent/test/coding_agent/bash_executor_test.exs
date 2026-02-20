@@ -139,6 +139,50 @@ defmodule CodingAgent.BashExecutorTest do
       File.rm(result.full_output_path)
     end
 
+    test "handles output exceeding OS pipe buffer without deadlock" do
+      # Generate output larger than OS pipe buffer (64KB on Linux, 16KB on macOS).
+      # This is a regression test for pipe deadlock issues.
+      # Using Python if available, otherwise use a shell loop
+      command = """
+      if command -v python3 >/dev/null 2>&1; then
+        python3 -c "print('A' * 131072)"
+      elif command -v python >/dev/null 2>&1; then
+        python -c "print('A' * 131072)"
+      else
+        # Fallback: use dd to generate large output
+        dd if=/dev/zero bs=1024 count=130 2>/dev/null | tr '\\0' 'A'
+      fi
+      """
+
+      # Should complete without hanging (deadlock)
+      # Set a timeout to detect deadlock
+      task = Task.async(fn ->
+        BashExecutor.execute(command, "/tmp", max_bytes: 10_000)
+      end)
+
+      # Wait for result with timeout - if it deadlocks, this will timeout
+      case Task.yield(task, 10_000) do
+        {:ok, {:ok, result}} ->
+          assert result.exit_code == 0
+          assert result.truncated == true
+          assert result.output =~ "[Output truncated."
+          # Should contain the 'A' characters
+          assert result.output =~ "AAAA"
+
+          # Cleanup temp file if created
+          if result.full_output_path do
+            File.rm(result.full_output_path)
+          end
+
+        {:ok, {:error, reason}} ->
+          flunk("Command failed: #{inspect(reason)}")
+
+        nil ->
+          Task.shutdown(task, :brutal_kill)
+          flunk("Command timed out - possible pipe deadlock")
+      end
+    end
+
     test "does not truncate small output" do
       {:ok, result} = BashExecutor.execute("echo small", "/tmp")
       assert result.truncated == false
