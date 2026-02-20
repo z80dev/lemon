@@ -1324,6 +1324,18 @@ defmodule Ai.Models do
       cost: %ModelCost{input: 5.0, output: 25.0, cache_read: 1.25, cache_write: 0.0},
       context_window: 131_072,
       max_tokens: 8192
+    },
+    "grok-4-fast-non-reasoning" => %Model{
+      id: "grok-4-fast-non-reasoning",
+      name: "Grok 4 Fast (Non-Reasoning)",
+      api: :openai_completions,
+      provider: :xai,
+      base_url: "https://api.x.ai/v1",
+      reasoning: false,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.2, output: 0.5, cache_read: 0.05, cache_write: 0.0},
+      context_window: 2_000_000,
+      max_tokens: 30_000
     }
   }
 
