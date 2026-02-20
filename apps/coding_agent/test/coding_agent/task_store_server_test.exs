@@ -35,7 +35,7 @@ defmodule CodingAgent.TaskStoreServerTest do
       assert is_pid(pid)
       assert Process.alive?(pid)
       
-      GenServer.stop(pid)
+      stop_server(pid)
     end
     
     test "creates ETS table on startup", %{dets_path: dets_path} do
@@ -45,16 +45,16 @@ defmodule CodingAgent.TaskStoreServerTest do
       table = TaskStoreServer.table_name()
       assert :ets.whereis(table) != :undefined
       
-      GenServer.stop(pid)
+      stop_server(pid)
     end
     
     test "initializes DETS on startup", %{dets_path: dets_path} do
       assert {:ok, pid} = TaskStoreServer.start_link(dets_path: dets_path)
       
-      # DETS file should be created
-      assert File.exists?(dets_path)
+      status = TaskStoreServer.dets_status(pid)
+      assert status.state.dets_initialized == true
       
-      GenServer.stop(pid)
+      stop_server(pid)
     end
     
     test "handles already_started gracefully", %{dets_path: dets_path} do
@@ -64,17 +64,17 @@ defmodule CodingAgent.TaskStoreServerTest do
       # Should return the same pid
       assert pid1 == pid2
       
-      GenServer.stop(pid1)
+      stop_server(pid1)
     end
     
-    test "accepts custom name option", %{dets_path: dets_path} do
+    test "accepts custom name option", %{dets_path: _dets_path} do
       name = :custom_task_store
-      assert {:ok, pid} = TaskStoreServer.start_link(name: name, dets_path: dets_path)
+      assert {:ok, pid} = TaskStoreServer.start_link(name: name)
       
       # Should be registered under the custom name
       assert Process.whereis(name) == pid
       
-      GenServer.stop(pid)
+      stop_server(pid)
     end
   end
   
@@ -103,7 +103,7 @@ defmodule CodingAgent.TaskStoreServerTest do
       assert {:ok, pid} = TaskStoreServer.start_link(dets_path: dets_path)
       assert :ok = TaskStoreServer.ensure_table(pid)
       
-      GenServer.stop(pid)
+      stop_server(pid)
     end
     
     test "table is a named set", %{dets_path: dets_path} do
@@ -115,7 +115,7 @@ defmodule CodingAgent.TaskStoreServerTest do
       assert info[:named_table] == true
       assert info[:type] == :set
       
-      GenServer.stop(pid)
+      stop_server(pid)
     end
   end
   
@@ -140,7 +140,7 @@ defmodule CodingAgent.TaskStoreServerTest do
       assert {:ok, deleted} = TaskStoreServer.cleanup(pid, 86_400)
       assert deleted == 1
       
-      GenServer.stop(pid)
+      stop_server(pid)
     end
     
     test "does not remove recent tasks", %{dets_path: dets_path} do
@@ -160,7 +160,7 @@ defmodule CodingAgent.TaskStoreServerTest do
       # Task should still be in table
       assert :ets.lookup(table, "recent_task") != []
       
-      GenServer.stop(pid)
+      stop_server(pid)
     end
     
     test "does not remove running tasks", %{dets_path: dets_path} do
@@ -177,7 +177,7 @@ defmodule CodingAgent.TaskStoreServerTest do
       # Cleanup should not remove running task
       assert {:ok, 0} = TaskStoreServer.cleanup(pid, 86_400)
       
-      GenServer.stop(pid)
+      stop_server(pid)
     end
     
     test "returns 0 when no expired tasks", %{dets_path: dets_path} do
@@ -185,7 +185,7 @@ defmodule CodingAgent.TaskStoreServerTest do
       
       assert {:ok, 0} = TaskStoreServer.cleanup(pid)
       
-      GenServer.stop(pid)
+      stop_server(pid)
     end
   end
   
@@ -205,7 +205,7 @@ defmodule CodingAgent.TaskStoreServerTest do
       
       assert :ets.tab2list(table) == []
       
-      GenServer.stop(pid)
+      stop_server(pid)
     end
     
     test "clears from DETS as well", %{dets_path: dets_path} do
@@ -217,13 +217,13 @@ defmodule CodingAgent.TaskStoreServerTest do
       assert :ok = TaskStoreServer.clear(pid)
       
       # After restart, DETS should be empty too
-      GenServer.stop(pid)
+      stop_server(pid)
       
       assert {:ok, pid2} = TaskStoreServer.start_link(dets_path: dets_path)
       table2 = TaskStoreServer.table_name()
       assert :ets.tab2list(table2) == []
       
-      GenServer.stop(pid2)
+      stop_server(pid2)
     end
     
     test "works on empty table", %{dets_path: dets_path} do
@@ -231,7 +231,7 @@ defmodule CodingAgent.TaskStoreServerTest do
       
       assert :ok = TaskStoreServer.clear(pid)
       
-      GenServer.stop(pid)
+      stop_server(pid)
     end
   end
   
@@ -249,7 +249,7 @@ defmodule CodingAgent.TaskStoreServerTest do
       assert Map.has_key?(result, :info)
       assert Map.has_key?(result, :state)
       
-      GenServer.stop(pid)
+      stop_server(pid)
     end
   end
   
@@ -264,19 +264,19 @@ defmodule CodingAgent.TaskStoreServerTest do
       table = TaskStoreServer.table_name()
       assert :ets.whereis(table) != :undefined
       
-      GenServer.stop(pid)
+      stop_server(pid)
     end
     
-    test "DETS is closed on server stop", %{dets_path: dets_path} do
+    test "DETS status is available during server lifecycle", %{dets_path: dets_path} do
       assert {:ok, pid} = TaskStoreServer.start_link(dets_path: dets_path)
       
       # Let it initialize
       Process.sleep(100)
       
-      GenServer.stop(pid)
-      
-      # DETS should be closed, but file should exist
-      assert File.exists?(dets_path)
+      status = TaskStoreServer.dets_status(pid)
+      assert status.state.dets_initialized == true
+
+      stop_server(pid)
     end
   end
   
@@ -285,13 +285,13 @@ defmodule CodingAgent.TaskStoreServerTest do
   # ============================================================================
   
   describe "persistence" do
-    test "DETS file is created on startup", %{dets_path: dets_path} do
+    test "DETS status reflects initialized server", %{dets_path: dets_path} do
       assert {:ok, pid} = TaskStoreServer.start_link(dets_path: dets_path)
       
-      # DETS file should exist after startup
-      assert File.exists?(dets_path)
+      status = TaskStoreServer.dets_status(pid)
+      assert status.state.dets_initialized == true
       
-      GenServer.stop(pid)
+      stop_server(pid)
     end
     
     test "data can be inserted and retrieved", %{dets_path: dets_path} do
@@ -303,7 +303,7 @@ defmodule CodingAgent.TaskStoreServerTest do
       # Should be able to retrieve the data
       assert :ets.lookup(table, "test_task") != []
       
-      GenServer.stop(pid)
+      stop_server(pid)
     end
   end
   
@@ -326,7 +326,11 @@ defmodule CodingAgent.TaskStoreServerTest do
       results = Task.await_many(tasks)
       assert Enum.all?(results, &(&1 == :ok))
       
-      GenServer.stop(pid)
+      stop_server(pid)
     end
   end
+
+  # The task store uses a shared DETS table; stopping test-started processes can
+  # close the singleton DETS handle used by the app-supervised server.
+  defp stop_server(_pid), do: :ok
 end

@@ -35,7 +35,7 @@ defmodule CodingAgent.RunGraphServerTest do
 
       # Stop if already running
       try do
-        GenServer.stop(server_name)
+        stop_server(server_name)
       catch
         _, _ -> :ok
       end
@@ -46,7 +46,7 @@ defmodule CodingAgent.RunGraphServerTest do
       assert Process.alive?(pid)
       assert Process.whereis(server_name) == pid
 
-      GenServer.stop(server_name)
+      stop_server(server_name)
     end
   end
 
@@ -558,4 +558,8 @@ defmodule CodingAgent.RunGraphServerTest do
       assert deleted_count >= 5
     end
   end
+
+  # The run graph server shares DETS resources globally; stopping test servers
+  # can disrupt the app-supervised singleton during umbrella runs.
+  defp stop_server(_server), do: :ok
 end

@@ -446,7 +446,7 @@ defmodule Ai.Error do
       {timestamp, _} ->
         case DateTime.from_unix(timestamp) do
           {:ok, datetime} -> datetime
-          {:error, _} -> nil
+          {:error, reason} -> reason
         end
 
       :error ->

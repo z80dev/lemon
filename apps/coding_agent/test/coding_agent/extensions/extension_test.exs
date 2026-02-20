@@ -136,7 +136,7 @@ defmodule CodingAgent.Extensions.ExtensionTest do
     
     test "minimal extension raises when tools/1 called" do
       assert_raise UndefinedFunctionError, fn ->
-        MinimalExtension.tools("/path")
+        apply(MinimalExtension, :tools, ["/path"])
       end
     end
   end
@@ -318,15 +318,15 @@ defmodule CodingAgent.Extensions.ExtensionTest do
   describe "error handling" do
     test "calling optional callback on minimal extension raises" do
       assert_raise UndefinedFunctionError, fn ->
-        MinimalExtension.tools("/path")
+        apply(MinimalExtension, :tools, ["/path"])
       end
-      
+
       assert_raise UndefinedFunctionError, fn ->
-        MinimalExtension.hooks()
+        apply(MinimalExtension, :hooks, [])
       end
-      
+
       assert_raise UndefinedFunctionError, fn ->
-        MinimalExtension.capabilities()
+        apply(MinimalExtension, :capabilities, [])
       end
     end
     

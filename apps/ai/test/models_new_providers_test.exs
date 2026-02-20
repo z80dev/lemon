@@ -5,7 +5,6 @@ defmodule Ai.ModelsNewProvidersTest do
   use ExUnit.Case, async: true
 
   alias Ai.Models
-  alias Ai.Types.Model
 
   describe "Mistral models" do
     test "codestral-latest is available" do
