@@ -25,6 +25,53 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-20 - Feature Enhancement: Port Amazon Bedrock Models from Pi
+**Work Area**: Feature Enhancement / Pi Upstream Sync
+
+**What was done:**
+- Checked Pi upstream (`github.com/pi-coding-agent/pi`) for new models in `packages/ai/src/models.generated.ts`
+- Checked Oh-My-Pi upstream (`github.com/can1357/oh-my-pi`) for new features - hashline edit mode already present
+- Analyzed model gap: Pi has 746 models vs Lemon's 137 models
+- Focused on Amazon Bedrock models: Lemon had 5, Pi has 84
+
+**Added 35 new Amazon Bedrock models to `Ai.Models`:**
+
+| Vendor | Models Added | Key Capabilities |
+|--------|--------------|------------------|
+| **Anthropic** | 15 | Claude 3/3.5/3.7/4/4.5/4.6 (Haiku, Sonnet, Opus) with reasoning |
+| **Meta** | 10 | Llama 3.1, 3.2, 3.3, 4 Scout/Maverick with vision |
+| **DeepSeek** | 3 | R1, V3.1, V3.2 with reasoning support |
+| **Cohere** | 2 | Command R, Command R+ |
+| **Mistral** | 5 | Large 24.02, Ministral 8B/14B, Voxtral Mini/Small |
+| **Amazon** | 1 | Titan Text Express |
+
+**Total Bedrock models now: 40** (up from 5)
+
+**Files changed:**
+- `apps/ai/lib/ai/models.ex` - Added 433 lines of new Bedrock model definitions
+- `apps/ai/test/models_test.exs` - Updated test to reflect new model count
+
+**Commits:**
+- `46c205d9` - feat(ai): add 35 Amazon Bedrock models from Pi upstream
+
+**What worked:**
+- All 72 AI module tests pass
+- All 33 new provider tests pass
+- Model registry pattern scales well for adding new providers
+- Using the same structure as existing models ensures consistency
+
+**Notes on Oh-My-Pi features:**
+- Hashline Edit Mode is already comprehensively implemented in Lemon
+- The `CodingAgent.Tools.Hashline` module has 836 lines with full test coverage
+- No additional porting needed for this feature
+
+**Next run should focus on:**
+- Continue adding missing models from Pi (746 total vs 172 in Lemon)
+- Consider adding regional variants (us.*, eu.*, global.*) for data residency
+- Look at other providers: Google Gemma, NVIDIA Nemotron, Moonshot Kimi on Bedrock
+
+---
+
 ### 2026-02-20 - Integration Review: Kimi Task Consolidation + Stability Hardening
 **Work Area**: Integration / Review / Test Stabilization
 
@@ -2858,3 +2905,43 @@ edits = [
 **Test Results:**
 - All 435 umbrella tests pass
 - No new test failures introduced
+### 2026-02-20 - Refactoring: OAuth1Client DRY and Typespecs
+**Work Area**: Refactoring / Code Quality
+
+**What was done:**
+- Refactored `LemonChannels.Adapters.XAPI.OAuth1Client` to reduce code duplication and improve maintainability:
+  - Created `with_credentials/1` helper to eliminate repetitive credential checking pattern across all public functions
+  - Simplified `get_credentials/0` from verbose case statement to pattern-matching with `validate_credentials/1` helper
+  - Added comprehensive typespecs for all public and private functions:
+    - `@type credentials` - OAuth1 credential struct
+    - `@type tweet_result` - Standardized tweet result map
+    - `@type api_error` - Union type for API error tuples
+  - Preserved all public function signatures (backward compatible)
+  - Reduced function body duplication in `deliver/1`, `post_text/2`, `reply/2`, `get_mentions/1`, `delete_tweet/1`, `get_me/0`
+
+**Before refactoring:**
+- Each public function had repetitive `with {:ok, credentials} <- get_credentials()` block
+- `get_credentials/0` had verbose 5-clause case statement checking each field
+- No typespecs for documentation or dialyzer support
+
+**After refactoring:**
+- Single `with_credentials/1` helper wraps all credential-dependent operations
+- Clean pattern-matching in `validate_credentials/1` with 5 focused clauses
+- Full typespec coverage for better IDE support and documentation
+- Same behavior, cleaner code (405 → ~408 lines with added typespecs)
+
+**Files changed:**
+- `apps/lemon_channels/lib/lemon_channels/adapters/x_api/oauth1_client.ex` - Refactored with helpers and typespecs
+
+**Validation:**
+- Code compiles without warnings: `mix compile --warnings-as-errors` ✅
+- All 121 lemon_channels tests pass ✅
+- No changes to public API - all function signatures preserved ✅
+
+**What worked:**
+- Using higher-order functions (`with_credentials/1`) for cross-cutting concerns
+- Pattern matching is more idiomatic than nested case statements
+- Typespecs improve documentation and catch type errors at compile time
+
+---
+
