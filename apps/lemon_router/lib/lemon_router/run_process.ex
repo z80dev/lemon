@@ -1714,17 +1714,18 @@ defmodule LemonRouter.RunProcess do
   defp resolve_generated_path(_path, _cwd), do: nil
 
   defp merge_files(first, second) when is_list(first) and is_list(second) do
-    (first ++ second)
-    |> Enum.reduce({[], MapSet.new()}, fn file, {acc, seen} ->
-      key = {Map.get(file, :path), Map.get(file, :caption)}
+    {merged, _seen} =
+      Enum.reduce(first ++ second, {[], MapSet.new()}, fn file, {acc, seen} ->
+        key = {Map.get(file, :path), Map.get(file, :caption)}
 
-      if MapSet.member?(seen, key) do
-        {acc, seen}
-      else
-        {acc ++ [file], MapSet.put(seen, key)}
-      end
-    end)
-    |> elem(0)
+        if MapSet.member?(seen, key) do
+          {acc, seen}
+        else
+          {acc ++ [file], MapSet.put(seen, key)}
+        end
+      end)
+
+    merged
   end
 
   defp merge_files(first, second) when is_list(first), do: first ++ List.wrap(second)

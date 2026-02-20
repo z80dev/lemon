@@ -1407,6 +1407,360 @@ defmodule Ai.Models do
   }
 
   # ============================================================================
+  # Mistral Models
+  # ============================================================================
+
+  @mistral_models %{
+    "codestral-latest" => %Model{
+      id: "codestral-latest",
+      name: "Codestral",
+      api: :openai_completions,
+      provider: :mistral,
+      base_url: "https://api.mistral.ai/v1",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 0.3, output: 0.9, cache_read: 0.0, cache_write: 0.0},
+      context_window: 256_000,
+      max_tokens: 8192
+    },
+    "codestral-2501" => %Model{
+      id: "codestral-2501",
+      name: "Codestral 2501",
+      api: :openai_completions,
+      provider: :mistral,
+      base_url: "https://api.mistral.ai/v1",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 0.3, output: 0.9, cache_read: 0.0, cache_write: 0.0},
+      context_window: 256_000,
+      max_tokens: 8192
+    },
+    "devstral-latest" => %Model{
+      id: "devstral-latest",
+      name: "Devstral",
+      api: :openai_completions,
+      provider: :mistral,
+      base_url: "https://api.mistral.ai/v1",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.5, output: 1.5, cache_read: 0.0, cache_write: 0.0},
+      context_window: 128_000,
+      max_tokens: 8192
+    },
+    "mistral-large-latest" => %Model{
+      id: "mistral-large-latest",
+      name: "Mistral Large",
+      api: :openai_completions,
+      provider: :mistral,
+      base_url: "https://api.mistral.ai/v1",
+      reasoning: false,
+      input: [:text, :image],
+      cost: %ModelCost{input: 2.0, output: 6.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 128_000,
+      max_tokens: 8192
+    },
+    "mistral-medium-latest" => %Model{
+      id: "mistral-medium-latest",
+      name: "Mistral Medium",
+      api: :openai_completions,
+      provider: :mistral,
+      base_url: "https://api.mistral.ai/v1",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 1.0, output: 3.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 128_000,
+      max_tokens: 8192
+    },
+    "mistral-small-latest" => %Model{
+      id: "mistral-small-latest",
+      name: "Mistral Small",
+      api: :openai_completions,
+      provider: :mistral,
+      base_url: "https://api.mistral.ai/v1",
+      reasoning: false,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.2, output: 0.6, cache_read: 0.0, cache_write: 0.0},
+      context_window: 128_000,
+      max_tokens: 8192
+    },
+    "pixtral-large-latest" => %Model{
+      id: "pixtral-large-latest",
+      name: "Pixtral Large",
+      api: :openai_completions,
+      provider: :mistral,
+      base_url: "https://api.mistral.ai/v1",
+      reasoning: false,
+      input: [:text, :image],
+      cost: %ModelCost{input: 2.0, output: 6.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 128_000,
+      max_tokens: 8192
+    }
+  }
+
+  # ============================================================================
+  # Cerebras Models
+  # ============================================================================
+
+  @cerebras_models %{
+    "llama-3.1-8b" => %Model{
+      id: "llama-3.1-8b",
+      name: "Llama 3.1 8B",
+      api: :openai_completions,
+      provider: :cerebras,
+      base_url: "https://api.cerebras.ai/v1",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 0.1, output: 0.1, cache_read: 0.0, cache_write: 0.0},
+      context_window: 128_000,
+      max_tokens: 8192
+    },
+    "llama-3.3-70b" => %Model{
+      id: "llama-3.3-70b",
+      name: "Llama 3.3 70B",
+      api: :openai_completions,
+      provider: :cerebras,
+      base_url: "https://api.cerebras.ai/v1",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 0.6, output: 0.9, cache_read: 0.0, cache_write: 0.0},
+      context_window: 128_000,
+      max_tokens: 8192
+    },
+    "qwen-3-32b" => %Model{
+      id: "qwen-3-32b",
+      name: "Qwen 3 32B",
+      api: :openai_completions,
+      provider: :cerebras,
+      base_url: "https://api.cerebras.ai/v1",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.5, output: 0.8, cache_read: 0.0, cache_write: 0.0},
+      context_window: 128_000,
+      max_tokens: 8192
+    }
+  }
+
+  # ============================================================================
+  # DeepSeek Models
+  # ============================================================================
+
+  @deepseek_models %{
+    "deepseek-chat" => %Model{
+      id: "deepseek-chat",
+      name: "DeepSeek V3",
+      api: :openai_completions,
+      provider: :deepseek,
+      base_url: "https://api.deepseek.com/v1",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 0.27, output: 1.1, cache_read: 0.07, cache_write: 0.0},
+      context_window: 64_000,
+      max_tokens: 8192
+    },
+    "deepseek-reasoner" => %Model{
+      id: "deepseek-reasoner",
+      name: "DeepSeek R1",
+      api: :openai_completions,
+      provider: :deepseek,
+      base_url: "https://api.deepseek.com/v1",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.55, output: 2.19, cache_read: 0.14, cache_write: 0.0},
+      context_window: 64_000,
+      max_tokens: 8192
+    },
+    "deepseek-r1" => %Model{
+      id: "deepseek-r1",
+      name: "DeepSeek R1 (Alias)",
+      api: :openai_completions,
+      provider: :deepseek,
+      base_url: "https://api.deepseek.com/v1",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.55, output: 2.19, cache_read: 0.14, cache_write: 0.0},
+      context_window: 64_000,
+      max_tokens: 8192
+    }
+  }
+
+  # ============================================================================
+  # Qwen Models (Alibaba Cloud)
+  # ============================================================================
+
+  @qwen_models %{
+    "qwen-turbo" => %Model{
+      id: "qwen-turbo",
+      name: "Qwen Turbo",
+      api: :openai_completions,
+      provider: :qwen,
+      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      reasoning: false,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.5, output: 2.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 1_000_000,
+      max_tokens: 8192
+    },
+    "qwen-plus" => %Model{
+      id: "qwen-plus",
+      name: "Qwen Plus",
+      api: :openai_completions,
+      provider: :qwen,
+      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      reasoning: false,
+      input: [:text, :image],
+      cost: %ModelCost{input: 0.8, output: 2.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 128_000,
+      max_tokens: 8192
+    },
+    "qwen-max" => %Model{
+      id: "qwen-max",
+      name: "Qwen Max",
+      api: :openai_completions,
+      provider: :qwen,
+      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 2.4, output: 9.6, cache_read: 0.0, cache_write: 0.0},
+      context_window: 32_768,
+      max_tokens: 8192
+    },
+    "qwen-coder-plus" => %Model{
+      id: "qwen-coder-plus",
+      name: "Qwen Coder Plus",
+      api: :openai_completions,
+      provider: :qwen,
+      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 0.35, output: 1.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 128_000,
+      max_tokens: 8192
+    },
+    "qwen-vl-max" => %Model{
+      id: "qwen-vl-max",
+      name: "Qwen VL Max",
+      api: :openai_completions,
+      provider: :qwen,
+      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      reasoning: false,
+      input: [:text, :image],
+      cost: %ModelCost{input: 3.0, output: 9.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 32_768,
+      max_tokens: 8192
+    }
+  }
+
+  # ============================================================================
+  # MiniMax Models
+  # ============================================================================
+
+  @minimax_models %{
+    "minimax-m2" => %Model{
+      id: "minimax-m2",
+      name: "MiniMax M2",
+      api: :openai_completions,
+      provider: :minimax,
+      base_url: "https://api.minimaxi.chat/v1",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.5, output: 2.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 256_000,
+      max_tokens: 8192
+    },
+    "minimax-m2.1" => %Model{
+      id: "minimax-m2.1",
+      name: "MiniMax M2.1",
+      api: :openai_completions,
+      provider: :minimax,
+      base_url: "https://api.minimaxi.chat/v1",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.6, output: 2.4, cache_read: 0.0, cache_write: 0.0},
+      context_window: 256_000,
+      max_tokens: 8192
+    },
+    "minimax-m2.5" => %Model{
+      id: "minimax-m2.5",
+      name: "MiniMax M2.5",
+      api: :openai_completions,
+      provider: :minimax,
+      base_url: "https://api.minimaxi.chat/v1",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.8, output: 3.2, cache_read: 0.0, cache_write: 0.0},
+      context_window: 256_000,
+      max_tokens: 8192
+    }
+  }
+
+  # ============================================================================
+  # Z.ai Models (GLM Series)
+  # ============================================================================
+
+  @zai_models %{
+    "glm-4.5-flash" => %Model{
+      id: "glm-4.5-flash",
+      name: "GLM 4.5 Flash",
+      api: :openai_completions,
+      provider: :zai,
+      base_url: "https://api.z.ai/v1",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 0.1, output: 0.4, cache_read: 0.0, cache_write: 0.0},
+      context_window: 128_000,
+      max_tokens: 8192
+    },
+    "glm-4.5-air" => %Model{
+      id: "glm-4.5-air",
+      name: "GLM 4.5 Air",
+      api: :openai_completions,
+      provider: :zai,
+      base_url: "https://api.z.ai/v1",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 0.3, output: 1.2, cache_read: 0.0, cache_write: 0.0},
+      context_window: 128_000,
+      max_tokens: 8192
+    },
+    "glm-4.5" => %Model{
+      id: "glm-4.5",
+      name: "GLM 4.5",
+      api: :openai_completions,
+      provider: :zai,
+      base_url: "https://api.z.ai/v1",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.5, output: 2.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 128_000,
+      max_tokens: 8192
+    },
+    "glm-4.7" => %Model{
+      id: "glm-4.7",
+      name: "GLM 4.7",
+      api: :openai_completions,
+      provider: :zai,
+      base_url: "https://api.z.ai/v1",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.8, output: 3.2, cache_read: 0.0, cache_write: 0.0},
+      context_window: 128_000,
+      max_tokens: 8192
+    },
+    "glm-5" => %Model{
+      id: "glm-5",
+      name: "GLM 5",
+      api: :openai_completions,
+      provider: :zai,
+      base_url: "https://api.z.ai/v1",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 1.0, output: 4.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 256_000,
+      max_tokens: 16384
+    }
+  }
+
+  # ============================================================================
   # Combined Registry
   # ============================================================================
 
@@ -1438,7 +1792,13 @@ defmodule Ai.Models do
     :google_antigravity => @google_antigravity_models,
     :kimi => @kimi_models,
     :opencode => @opencode_models,
-    :xai => @xai_models
+    :xai => @xai_models,
+    :mistral => @mistral_models,
+    :cerebras => @cerebras_models,
+    :deepseek => @deepseek_models,
+    :qwen => @qwen_models,
+    :minimax => @minimax_models,
+    :zai => @zai_models
   }
 
   @providers Map.keys(@models)

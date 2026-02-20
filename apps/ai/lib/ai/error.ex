@@ -444,7 +444,10 @@ defmodule Ai.Error do
     # Try parsing as Unix timestamp first
     case Integer.parse(value) do
       {timestamp, _} ->
-        DateTime.from_unix(timestamp) |> elem(1)
+        case DateTime.from_unix(timestamp) do
+          {:ok, datetime} -> datetime
+          {:error, _} -> nil
+        end
 
       :error ->
         # Try parsing as ISO 8601
