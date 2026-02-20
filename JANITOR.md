@@ -1996,6 +1996,38 @@ causing the quality check to fail with:
 - Now have 1312+ tests (AI app: 59, lemon_core: 488+, lemon_skills: 106)
 - All tests passing (0 failures)
 
+### 2025-02-20 - Documentation: Improve .agents/skills Discovery Docs
+**Work Area**: Documentation
+
+**What was done:**
+- Checked Pi upstream for new features to port
+- Found that Pi 0.54.0 added `.agents/skills` auto-discovery feature
+- Verified that Lemon already has this feature implemented (ahead of Pi!)
+- Improved documentation in `LemonSkills.Config` module to clearly explain:
+  - Global skills discovery from multiple locations
+  - Project skills discovery including `.agents/skills` paths  
+  - Ancestor discovery behavior (walking up from cwd to git root)
+  - Concrete example of skill directory precedence in a monorepo
+- All 106 lemon_skills tests pass
+- All 435 lemon_core tests pass
+- All 1322 AI app tests pass
+
+**Files changed:**
+- `apps/lemon_skills/lib/lemon_skills/config.ex` - Expanded module documentation
+
+**Commit:**
+- `28796389` - docs(skills): Improve documentation for .agents/skills discovery
+
+**What worked:**
+- Lemon was already ahead of Pi on the `.agents/skills` feature
+- Comprehensive tests already exist for ancestor discovery
+- Documentation improvement makes the feature more discoverable for users
+
+**Total progress:**
+- Started with 119 tests
+- Now have 1312+ tests (AI app: 59, lemon_core: 488+, lemon_skills: 106)
+- All tests passing (0 failures)
+
 **Next run should focus on:**
 - Check for more Pi upstream features to port (Claude models through OpenCode, Gemini models)
 - Add more comprehensive documentation for other features
