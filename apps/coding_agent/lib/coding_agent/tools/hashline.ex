@@ -163,16 +163,18 @@ defmodule CodingAgent.Tools.Hashline do
     end)
   end
 
+  @nibble_chars "ZPMQVRWSNKTXJBYH"
+
   @doc """
-  Parse a line reference string like `"5#ab"` into structured form.
+  Parse a line reference string like `"5#ZZ"` into structured form.
 
   ## Examples
 
-      iex> parse_tag("5#ab")
-      %{line: 5, hash: "ab"}
+      iex> parse_tag("5#ZZ")
+      %{line: 5, hash: "ZZ"}
 
-      iex> parse_tag("  5  #  ab  ")
-      %{line: 5, hash: "ab"}
+      iex> parse_tag("  5  #  ZZ  ")
+      %{line: 5, hash: "ZZ"}
 
   ## Errors
 
@@ -185,8 +187,7 @@ defmodule CodingAgent.Tools.Hashline do
     # 2. line number (1+ digits)
     # 3. "#" with optional surrounding spaces
     # 4. hash (2 chars from our nibble alphabet)
-    nibble_chars = "ZPMQVRWSNKTXJBYH"
-    hash_pattern = "[#{nibble_chars}]{2}"
+    hash_pattern = "[#{@nibble_chars}]{2}"
 
     regex = ~r/^\s*[>+\-]*\s*(\d+)\s*#\s*(#{hash_pattern})/
 
@@ -202,7 +203,7 @@ defmodule CodingAgent.Tools.Hashline do
 
       nil ->
         raise ArgumentError,
-              "Invalid line reference \"#{ref}\". Expected format \"LINE#ID\" (e.g. \"5#aa\")."
+              "Invalid line reference \"#{ref}\". Expected format \"LINE#ID\" (e.g. \"5#ZZ\")."
     end
   end
 

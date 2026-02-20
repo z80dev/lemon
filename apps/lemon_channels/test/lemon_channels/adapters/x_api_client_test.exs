@@ -5,14 +5,30 @@ defmodule LemonChannels.Adapters.XAPI.ClientTest do
   alias LemonChannels.Adapters.XAPI.Client
   alias LemonChannels.Adapters.XAPI.TokenManager
 
+  @x_api_env_keys [
+    "X_API_CLIENT_ID",
+    "X_API_CLIENT_SECRET",
+    "X_API_BEARER_TOKEN",
+    "X_API_ACCESS_TOKEN",
+    "X_API_REFRESH_TOKEN",
+    "X_API_TOKEN_EXPIRES_AT",
+    "X_DEFAULT_ACCOUNT_ID",
+    "X_DEFAULT_ACCOUNT_USERNAME"
+  ]
+
   setup do
     previous_req_defaults = Req.default_options()
     previous_config = Application.get_env(:lemon_channels, XAPI)
     previous_use_secrets = Application.get_env(:lemon_channels, :x_api_use_secrets)
+    previous_env =
+      Enum.into(@x_api_env_keys, %{}, fn key ->
+        {key, System.get_env(key)}
+      end)
 
     Req.default_options(plug: {Req.Test, __MODULE__})
     Req.Test.set_req_test_to_shared(%{})
     Application.put_env(:lemon_channels, :x_api_use_secrets, false)
+    Enum.each(@x_api_env_keys, &System.delete_env/1)
 
     on_exit(fn ->
       if is_nil(previous_config) do
@@ -27,9 +43,10 @@ defmodule LemonChannels.Adapters.XAPI.ClientTest do
         Application.put_env(:lemon_channels, :x_api_use_secrets, previous_use_secrets)
       end
 
-      if pid = Process.whereis(TokenManager) do
-        GenServer.stop(pid, :normal)
-      end
+      Enum.each(previous_env, fn
+        {key, nil} -> System.delete_env(key)
+        {key, value} -> System.put_env(key, value)
+      end)
 
       Req.default_options(previous_req_defaults)
       Req.Test.set_req_test_to_private(%{})
@@ -200,10 +217,15 @@ defmodule LemonChannels.Adapters.XAPI.ClientTest do
   end
 
   defp start_token_manager! do
-    if pid = Process.whereis(TokenManager) do
-      GenServer.stop(pid, :normal)
-    end
+    case Process.whereis(TokenManager) do
+      pid when is_pid(pid) ->
+        pid
 
-    start_supervised!({TokenManager, []})
+      _ ->
+        case start_supervised({TokenManager, []}) do
+          {:ok, pid} -> pid
+          {:error, {:already_started, pid}} -> pid
+        end
+    end
   end
 end

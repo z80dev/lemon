@@ -56,7 +56,7 @@ defmodule LemonCore.Clock do
   @doc """
   Calculate the time elapsed since a timestamp in milliseconds.
   """
-  @spec elapsed_ms(timestamp_ms :: non_neg_integer()) :: non_neg_integer()
+  @spec elapsed_ms(timestamp_ms :: non_neg_integer()) :: integer()
   def elapsed_ms(timestamp_ms) do
     now_ms() - timestamp_ms
   end

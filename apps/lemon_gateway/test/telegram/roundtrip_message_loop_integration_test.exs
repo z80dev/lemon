@@ -331,6 +331,7 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
       Application.delete_env(:lemon_channels, :gateway)
       Application.delete_env(:lemon_channels, :telegram)
       Application.delete_env(:lemon_channels, :engines)
+      System.delete_env("LEMON_LOCK_DIR")
     end)
 
     :ok
@@ -342,6 +343,7 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
       Path.join(System.tmp_dir!(), "lemon_test_locks_#{System.unique_integer([:positive])}")
 
     System.put_env("LEMON_LOCK_DIR", lock_dir)
+    bot_token = "test_token_#{System.unique_integer([:positive])}"
 
     engine_selector = Map.get(overrides, :default_engine, "reply")
 
@@ -359,7 +361,7 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
       require_engine_lock: false,
       bindings: [],
       telegram: %{
-        bot_token: "test_token",
+        bot_token: bot_token,
         poll_interval_ms: 25,
         dedupe_ttl_ms: 60_000,
         debounce_ms: 0,
@@ -390,6 +392,7 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
     # Used by the inbound poller and (via lemon_channels Outbound) outbound delivery.
     Application.put_env(:lemon_gateway, :telegram, %{
       api_mod: MockTelegramAPI,
+      bot_token: bot_token,
       poll_interval_ms: 25
     })
 
@@ -397,6 +400,7 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
 
     Application.put_env(:lemon_channels, :telegram, %{
       api_mod: MockTelegramAPI,
+      bot_token: bot_token,
       poll_interval_ms: config.telegram.poll_interval_ms
     })
 

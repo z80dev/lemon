@@ -32,10 +32,14 @@ defmodule LemonCore.ClockTest do
 
   describe "now_utc/0" do
     test "returns current UTC datetime" do
+      before = DateTime.utc_now()
       now = Clock.now_utc()
+      after_time = DateTime.utc_now()
 
       assert %DateTime{} = now
       assert now.time_zone == "Etc/UTC"
+      assert DateTime.compare(now, before) in [:gt, :eq]
+      assert DateTime.compare(now, after_time) in [:lt, :eq]
     end
   end
 
@@ -57,6 +61,14 @@ defmodule LemonCore.ClockTest do
   end
 
   describe "to_ms/1" do
+    test "converts known timestamp deterministically" do
+      datetime = DateTime.from_unix!(1_700_000_000, :second)
+      ms = Clock.to_ms(datetime)
+
+      assert is_integer(ms)
+      assert ms == 1_700_000_000_000
+    end
+
     test "converts DateTime to milliseconds" do
       datetime = DateTime.utc_now()
       ms = Clock.to_ms(datetime)
@@ -120,6 +132,14 @@ defmodule LemonCore.ClockTest do
 
       assert elapsed >= 0
       assert elapsed < 100
+    end
+
+    test "returns negative for future timestamps" do
+      future = Clock.now_ms() + 5_000
+      elapsed = Clock.elapsed_ms(future)
+
+      assert is_integer(elapsed)
+      assert elapsed < 0
     end
   end
 end
