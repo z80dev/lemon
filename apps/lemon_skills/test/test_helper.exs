@@ -1,4 +1,4 @@
-ExUnit.start()
+ExUnit.start(exclude: [:integration])
 
 # Isolate HOME so lemon_skills tests don't touch user-level skills/config.
 home =
