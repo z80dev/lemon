@@ -54,4 +54,72 @@ defmodule LemonRouter do
   Abort a specific run by ID.
   """
   defdelegate abort_run(run_id, reason \\ :user_requested), to: LemonRouter.Router
+
+  @doc """
+  Send a message to an agent inbox.
+
+  Supports `session: :latest | :new | <session_key>`.
+  """
+  @spec send_to_agent(binary(), binary(), keyword()) ::
+          {:ok, %{run_id: binary(), session_key: binary(), selector: term()}} | {:error, term()}
+  def send_to_agent(agent_id, prompt, opts \\ []) do
+    LemonRouter.AgentInbox.send(agent_id, prompt, opts)
+  end
+
+  @doc """
+  Resolve an agent session selector (`:latest`, `:new`, explicit key) to a concrete session.
+  """
+  @spec resolve_agent_session(binary(), term(), keyword()) :: {:ok, map()} | {:error, term()}
+  def resolve_agent_session(agent_id, selector \\ :latest, opts \\ []) do
+    LemonRouter.AgentInbox.resolve_session(agent_id, selector, opts)
+  end
+
+  @doc """
+  List agent directory entries with routing/session discoverability metadata.
+  """
+  @spec list_agent_directory(keyword()) :: [map()]
+  def list_agent_directory(opts \\ []) do
+    LemonRouter.AgentDirectory.list_agents(opts)
+  end
+
+  @doc """
+  List known sessions from the agent directory/phonebook.
+  """
+  @spec list_agent_sessions(keyword()) :: [map()]
+  def list_agent_sessions(opts \\ []) do
+    LemonRouter.AgentDirectory.list_sessions(opts)
+  end
+
+  @doc """
+  List known channel targets (for example Telegram rooms/topics) with friendly labels.
+  """
+  @spec list_agent_targets(keyword()) :: [map()]
+  def list_agent_targets(opts \\ []) do
+    LemonRouter.AgentDirectory.list_targets(opts)
+  end
+
+  @doc """
+  List persisted endpoint aliases.
+  """
+  @spec list_agent_endpoints(keyword()) :: [map()]
+  def list_agent_endpoints(opts \\ []) do
+    LemonRouter.AgentEndpoints.list(opts)
+  end
+
+  @doc """
+  Upsert an endpoint alias for an agent.
+  """
+  @spec set_agent_endpoint(binary(), binary(), term(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def set_agent_endpoint(agent_id, name, target, opts \\ []) do
+    LemonRouter.AgentEndpoints.put(agent_id, name, target, opts)
+  end
+
+  @doc """
+  Delete an endpoint alias.
+  """
+  @spec delete_agent_endpoint(binary(), binary()) :: :ok | {:error, term()}
+  def delete_agent_endpoint(agent_id, name) do
+    LemonRouter.AgentEndpoints.delete(agent_id, name)
+  end
 end

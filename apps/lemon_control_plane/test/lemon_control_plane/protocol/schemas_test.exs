@@ -280,5 +280,47 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
       assert {:error, _} = Schemas.validate("connect.challenge", %{})
       assert :ok = Schemas.validate("connect.challenge", %{"challenge" => "abc123"})
     end
+
+    test "validates agent routing method schemas" do
+      assert {:error, _} = Schemas.validate("agent.inbox.send", %{})
+
+      assert :ok =
+               Schemas.validate("agent.inbox.send", %{
+                 "prompt" => "hi",
+                 "agentId" => "default",
+                 "sessionTag" => "latest",
+                 "to" => "tg:123",
+                 "deliverTo" => ["tg:456"],
+                 "meta" => %{}
+               })
+
+      assert :ok =
+               Schemas.validate("agent.directory.list", %{
+                 "agentId" => "default",
+                 "includeSessions" => true,
+                 "limit" => 10,
+                 "route" => %{"channelId" => "telegram"}
+               })
+
+      assert :ok =
+               Schemas.validate("agent.targets.list", %{
+                 "channelId" => "telegram",
+                 "accountId" => "default",
+                 "query" => "ops",
+                 "limit" => 20
+               })
+
+      assert :ok = Schemas.validate("agent.endpoints.list", %{"agentId" => "default"})
+      assert {:error, _} = Schemas.validate("agent.endpoints.set", %{})
+
+      assert :ok =
+               Schemas.validate("agent.endpoints.set", %{
+                 "name" => "ops",
+                 "target" => "tg:-100123/7"
+               })
+
+      assert {:error, _} = Schemas.validate("agent.endpoints.delete", %{})
+      assert :ok = Schemas.validate("agent.endpoints.delete", %{"name" => "ops"})
+    end
   end
 end

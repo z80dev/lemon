@@ -27,8 +27,15 @@ IO.puts("\n📋 Configuration:")
 IO.puts("  Consumer Key: #{if config[:consumer_key], do: "✅ set", else: "❌ missing"}")
 IO.puts("  Consumer Secret: #{if config[:consumer_secret], do: "✅ set", else: "❌ missing"}")
 IO.puts("  Access Token: #{if config[:access_token], do: "✅ set", else: "❌ missing"}")
-IO.puts("  Access Token Secret: #{if config[:access_token_secret], do: "✅ set", else: "❌ missing"}")
-IO.puts("  Client ID (OAuth2): #{if config[:client_id], do: "✅ set", else: "❌ not set (OK if using OAuth 1.0a)"}")
+
+IO.puts(
+  "  Access Token Secret: #{if config[:access_token_secret], do: "✅ set", else: "❌ missing"}"
+)
+
+IO.puts(
+  "  Client ID (OAuth2): #{if config[:client_id], do: "✅ set", else: "❌ not set (OK if using OAuth 1.0a)"}"
+)
+
 IO.puts("  Configured?: #{if XAPI.configured?(), do: "✅ yes", else: "❌ no"}")
 IO.puts("  Auth Method: #{XAPI.auth_method()}")
 
@@ -51,6 +58,7 @@ end
 
 # Test getting user info
 IO.puts("\n👤 Testing user lookup:")
+
 case XAPI.OAuth1Client.get_me() do
   {:ok, %{"data" => data}} ->
     IO.puts("  ✅ Authenticated as @#{data["username"]}")
@@ -66,9 +74,11 @@ end
 
 # Test getting mentions
 IO.puts("\n📨 Testing mentions lookup:")
+
 case XAPI.OAuth1Client.get_mentions(limit: 5) do
   {:ok, %{"data" => mentions}} ->
     IO.puts("  ✅ Found #{length(mentions)} mentions")
+
     Enum.each(mentions, fn m ->
       IO.puts("    - @#{m["author_id"]}: #{String.slice(m["text"], 0, 50)}...")
     end)
@@ -87,7 +97,8 @@ end
 # Uncomment to actually post:
 #
 # IO.puts("\n📝 Testing tweet post:")
-# test_text = "Testing X API integration from zeebot on Lemon! 🤖🍋 #{System.system_time(:second)}"
+# account = XAPI.config()[:default_account_username] || XAPI.config()[:default_account_id] || "bot"
+# test_text = "Testing X API integration from #{account} on Lemon! 🤖🍋 #{System.system_time(:second)}"
 # case XAPI.Client.post_text(test_text) do
 #   {:ok, %{"data" => data}} ->
 #     IO.puts("  ✅ Tweet posted!")

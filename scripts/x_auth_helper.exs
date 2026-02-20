@@ -1,25 +1,44 @@
 #!/usr/bin/env elixir
 # X API Authentication Helper
-# 
+#
 # This script helps you get OAuth 2.0 tokens by opening the browser
 # and providing an easy way to paste the code.
 
 Mix.install([:req])
 
-client_id = "RHozTWdxcjZoQ3E0em5JU0xYQTI6MTpjaQ"
-client_secret = "IxhBE1Ssz5ADc9aPEL_j4i5BrNCBF5IufWjy5Mz_sNKb7_siku"
-redirect_uri = "http://localhost:4000/auth/x/callback"
-state = "zeebot_#{:rand.uniform(100000)}"
+client_id = System.get_env("X_API_CLIENT_ID")
+client_secret = System.get_env("X_API_CLIENT_SECRET")
+redirect_uri = System.get_env("X_API_REDIRECT_URI", "http://localhost:4000/auth/x/callback")
+state_prefix = System.get_env("X_API_STATE_PREFIX", "lemon")
+state = "#{state_prefix}_#{:rand.uniform(100_000)}"
 
-auth_url = "https://twitter.com/i/oauth2/authorize?" <> URI.encode_query(%{
-  "response_type" => "code",
-  "client_id" => client_id,
-  "redirect_uri" => redirect_uri,
-  "scope" => "tweet.read tweet.write users.read offline.access",
-  "state" => state,
-  "code_challenge" => "challenge",
-  "code_challenge_method" => "plain"
-})
+if is_nil(client_id) or is_nil(client_secret) do
+  IO.puts("""
+  ❌ Missing required environment variables.
+
+  Set these first:
+    export X_API_CLIENT_ID="your-client-id"
+    export X_API_CLIENT_SECRET="your-client-secret"
+
+  Optional:
+    export X_API_REDIRECT_URI="http://localhost:4000/auth/x/callback"
+    export X_API_STATE_PREFIX="lemon"
+  """)
+
+  System.halt(1)
+end
+
+auth_url =
+  "https://twitter.com/i/oauth2/authorize?" <>
+    URI.encode_query(%{
+      "response_type" => "code",
+      "client_id" => client_id,
+      "redirect_uri" => redirect_uri,
+      "scope" => "tweet.read tweet.write users.read offline.access",
+      "state" => state,
+      "code_challenge" => "challenge",
+      "code_challenge_method" => "plain"
+    })
 
 IO.puts("""
 🐦 X API Authentication Helper
@@ -42,29 +61,32 @@ System.cmd("open", [auth_url])
 url_or_code = IO.gets("URL/Code: ") |> String.trim()
 
 # Extract code from URL if needed
-code = cond do
-  String.contains?(url_or_code, "code=") ->
-    Regex.run(~r/code=([^&]+)/, url_or_code)
-    |> case do
-      [_, c] -> URI.decode_www_form(c)
-      _ -> url_or_code
-    end
-  true ->
-    url_or_code
-end
+code =
+  cond do
+    String.contains?(url_or_code, "code=") ->
+      Regex.run(~r/code=([^&]+)/, url_or_code)
+      |> case do
+        [_, c] -> URI.decode_www_form(c)
+        _ -> url_or_code
+      end
+
+    true ->
+      url_or_code
+  end
 
 IO.puts("")
 IO.puts("Using code: #{String.slice(code, 0, 30)}...")
 IO.puts("")
 
 # Exchange for tokens
-body = URI.encode_query(%{
-  "grant_type" => "authorization_code",
-  "code" => code,
-  "redirect_uri" => redirect_uri,
-  "client_id" => client_id,
-  "code_verifier" => "challenge"
-})
+body =
+  URI.encode_query(%{
+    "grant_type" => "authorization_code",
+    "code" => code,
+    "redirect_uri" => redirect_uri,
+    "client_id" => client_id,
+    "code_verifier" => "challenge"
+  })
 
 auth = Base.encode64("#{client_id}:#{client_secret}")
 

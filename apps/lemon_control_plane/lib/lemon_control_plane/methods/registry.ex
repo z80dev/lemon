@@ -30,6 +30,12 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.Agent,
     LemonControlPlane.Methods.AgentWait,
     LemonControlPlane.Methods.AgentIdentityGet,
+    LemonControlPlane.Methods.AgentInboxSend,
+    LemonControlPlane.Methods.AgentDirectoryList,
+    LemonControlPlane.Methods.AgentTargetsList,
+    LemonControlPlane.Methods.AgentEndpointsList,
+    LemonControlPlane.Methods.AgentEndpointsSet,
+    LemonControlPlane.Methods.AgentEndpointsDelete,
     # Logs
     LemonControlPlane.Methods.LogsTail,
     # Channels

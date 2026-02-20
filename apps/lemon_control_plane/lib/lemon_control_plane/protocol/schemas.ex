@@ -91,6 +91,74 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "timeoutMs" => :integer
       }
     },
+    "agent.inbox.send" => %{
+      required: %{
+        "prompt" => :string
+      },
+      optional: %{
+        "agentId" => :string,
+        "session" => :string,
+        "sessionKey" => :string,
+        "sessionTag" => :string,
+        "queueMode" => :string,
+        "engineId" => :string,
+        "cwd" => :string,
+        "toolPolicy" => :map,
+        "meta" => :map,
+        "to" => :any,
+        "endpoint" => :any,
+        "route" => :any,
+        "deliverTo" => :any,
+        "accountId" => :string,
+        "peerKind" => :string
+      }
+    },
+    "agent.directory.list" => %{
+      optional: %{
+        "agentId" => :string,
+        "includeSessions" => :boolean,
+        "limit" => :integer,
+        "route" => :map
+      }
+    },
+    "agent.targets.list" => %{
+      optional: %{
+        "channelId" => :string,
+        "accountId" => :string,
+        "agentId" => :string,
+        "query" => :string,
+        "limit" => :integer
+      }
+    },
+    "agent.endpoints.list" => %{
+      optional: %{
+        "agentId" => :string,
+        "limit" => :integer
+      }
+    },
+    "agent.endpoints.set" => %{
+      required: %{
+        "name" => :string
+      },
+      optional: %{
+        "agentId" => :string,
+        "target" => :any,
+        "to" => :any,
+        "endpoint" => :any,
+        "route" => :any,
+        "description" => :string,
+        "accountId" => :string,
+        "peerKind" => :string
+      }
+    },
+    "agent.endpoints.delete" => %{
+      required: %{
+        "name" => :string
+      },
+      optional: %{
+        "agentId" => :string
+      }
+    },
 
     # Skill methods
     "skills.status" => %{

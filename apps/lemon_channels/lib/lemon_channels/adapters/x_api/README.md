@@ -50,7 +50,8 @@ export X_API_REFRESH_TOKEN="your-refresh-token"
 
 # Optional
 export X_API_BEARER_TOKEN="app-bearer-token"  # For some read operations
-export X_DEFAULT_ACCOUNT_ID="realzeebot"       # Default posting account
+export X_DEFAULT_ACCOUNT_ID="your_account_id"   # Default posting account ID or username
+export X_DEFAULT_ACCOUNT_USERNAME="your_handle" # Optional explicit account handle
 ```
 
 ### 4. Runtime Config
@@ -63,7 +64,8 @@ config :lemon_channels, LemonChannels.Adapters.XAPI,
   client_secret: System.get_env("X_API_CLIENT_SECRET"),
   access_token: System.get_env("X_API_ACCESS_TOKEN"),
   refresh_token: System.get_env("X_API_REFRESH_TOKEN"),
-  default_account_id: System.get_env("X_DEFAULT_ACCOUNT_ID")
+  default_account_id: System.get_env("X_DEFAULT_ACCOUNT_ID"),
+  default_account_username: System.get_env("X_DEFAULT_ACCOUNT_USERNAME")
 ```
 
 ### 5. Register the Adapter
@@ -90,9 +92,9 @@ LemonChannels.Registry.register(LemonChannels.Adapters.XAPI)
 ```elixir
 payload = LemonChannels.OutboundPayload.text(
   "x_api",
-  "realzeebot",
+  "your_bot_account",
   %{kind: :channel, id: "public", thread_id: nil},
-  "Hello from zeebot on Lemon! 🤖🍋"
+  "Hello from Lemon! 🤖🍋"
 )
 
 LemonChannels.enqueue(payload)

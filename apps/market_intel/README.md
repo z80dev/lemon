@@ -1,6 +1,6 @@
 # MarketIntel
 
-Real-time market data ingestion and commentary generation for zeebot.
+Real-time market data ingestion and commentary generation for configurable agent accounts.
 
 ## Overview
 
@@ -47,7 +47,7 @@ MarketIntel ingests data from multiple sources, caches it in ETS, persists to SQ
 
 - **DexScreener** - Token prices, volume, market cap (every 2 min)
 - **Polymarket** - Prediction market trends, weird markets (every 5 min)
-- **TwitterMentions** - @realzeebot mentions, sentiment (every 2 min)
+- **TwitterMentions** - configured account mentions, sentiment (every 2 min)
 - **OnChain** - Base network stats, large transfers (every 3 min)
 
 ### Commentary Generation
@@ -66,7 +66,7 @@ The commentary rotates through:
 1. **Crypto Commentary** - Market analysis, ETH/Base jokes
 2. **Gaming Jokes** - Retro games, speedrunning metaphors
 3. **Agent Self-Awareness** - BEAM runtime, memory files, being a bot
-4. **Lemon Persona** - Lemonade stand metaphors, $ZEEBOT, z80 as dev
+4. **Lemon Persona** - Lemon house style configured via `:commentary_persona`
 
 ## Usage
 
@@ -92,8 +92,8 @@ MarketIntel.Commentary.Pipeline.trigger(:price_spike, %{change: 15.5})
 ### Check data
 
 ```elixir
-# Get latest ZEEBOT price
-MarketIntel.Ingestion.DexScreener.get_zeebot_data()
+# Get latest tracked token price
+MarketIntel.Ingestion.DexScreener.get_tracked_token_data()
 
 # Get trending Polymarkets
 MarketIntel.Ingestion.Polymarket.get_trending()

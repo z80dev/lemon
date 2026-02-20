@@ -103,7 +103,7 @@ defmodule LemonChannels.Adapters.XAPI.ClientTest do
   end
 
   test "get_mentions resolves username default account id to numeric id first" do
-    configure_oauth2(default_account_id: "realzeebot")
+    configure_oauth2(default_account_id: "samplebot")
     start_token_manager!()
     test_pid = self()
 
@@ -111,7 +111,7 @@ defmodule LemonChannels.Adapters.XAPI.ClientTest do
       send(test_pid, {:req, conn.request_path, conn.query_string})
 
       case conn.request_path do
-        "/2/users/by/username/realzeebot" ->
+        "/2/users/by/username/samplebot" ->
           conn
           |> Plug.Conn.put_resp_content_type("application/json")
           |> Plug.Conn.send_resp(
@@ -130,10 +130,47 @@ defmodule LemonChannels.Adapters.XAPI.ClientTest do
     end)
 
     assert {:ok, %{"data" => []}} = Client.get_mentions(limit: 7)
-    assert_receive {:req, "/2/users/by/username/realzeebot", _}
+    assert_receive {:req, "/2/users/by/username/samplebot", _}
 
     assert_receive {:req, "/2/users/2022351619589873664/mentions", query}
     assert query =~ "max_results=7"
+
+    refute_received {:req, "/2/users/me"}
+    refute_received {:req, "/2/users/me/mentions"}
+  end
+
+  test "get_mentions resolves default_account_username when account id is not set" do
+    configure_oauth2(default_account_username: "configured_handle")
+    start_token_manager!()
+    test_pid = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      send(test_pid, {:req, conn.request_path, conn.query_string})
+
+      case conn.request_path do
+        "/2/users/by/username/configured_handle" ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.send_resp(
+            200,
+            Jason.encode!(%{"data" => %{"id" => "2022351619589873664"}})
+          )
+
+        "/2/users/2022351619589873664/mentions" ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.send_resp(200, Jason.encode!(%{"data" => []}))
+
+        unexpected ->
+          flunk("unexpected request path: #{unexpected}")
+      end
+    end)
+
+    assert {:ok, %{"data" => []}} = Client.get_mentions(limit: 6)
+    assert_receive {:req, "/2/users/by/username/configured_handle", _}
+
+    assert_receive {:req, "/2/users/2022351619589873664/mentions", query}
+    assert query =~ "max_results=6"
 
     refute_received {:req, "/2/users/me"}
     refute_received {:req, "/2/users/me/mentions"}
@@ -151,10 +188,13 @@ defmodule LemonChannels.Adapters.XAPI.ClientTest do
     ]
 
     config =
-      case Keyword.fetch(opts, :default_account_id) do
-        {:ok, account_id} -> Keyword.put(config, :default_account_id, account_id)
-        :error -> config
-      end
+      [:default_account_id, :default_account_username]
+      |> Enum.reduce(config, fn key, acc ->
+        case Keyword.fetch(opts, key) do
+          {:ok, value} -> Keyword.put(acc, key, value)
+          :error -> acc
+        end
+      end)
 
     Application.put_env(:lemon_channels, XAPI, config)
   end

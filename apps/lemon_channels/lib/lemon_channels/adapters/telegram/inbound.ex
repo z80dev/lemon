@@ -83,6 +83,10 @@ defmodule LemonChannels.Adapters.Telegram.Inbound do
           user_msg_id: message["message_id"],
           chat_type: chat["type"],
           chat_title: chat["title"],
+          chat_username: chat["username"],
+          chat_display_name: chat_display_name(chat),
+          topic_id: message["message_thread_id"],
+          topic_name: topic_name(message),
           media_group_id: message["media_group_id"],
           photo: photo,
           document:
@@ -116,6 +120,31 @@ defmodule LemonChannels.Adapters.Telegram.Inbound do
 
   defp forum_topic_created_message?(%{"forum_topic_created" => %{} = _topic}), do: true
   defp forum_topic_created_message?(_), do: false
+
+  defp topic_name(message) when is_map(message) do
+    (message["forum_topic_created"] && message["forum_topic_created"]["name"]) ||
+      (message["forum_topic_edited"] && message["forum_topic_edited"]["name"]) ||
+      get_in(message, ["reply_to_message", "forum_topic_created", "name"]) ||
+      get_in(message, ["reply_to_message", "forum_topic_edited", "name"])
+  end
+
+  defp topic_name(_), do: nil
+
+  defp chat_display_name(%{"type" => "private"} = chat) do
+    [chat["first_name"], chat["last_name"]]
+    |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
+    |> Enum.join(" ")
+    |> case do
+      "" -> chat["username"]
+      name -> name
+    end
+  end
+
+  defp chat_display_name(chat) when is_map(chat) do
+    chat["title"] || chat["username"]
+  end
+
+  defp chat_display_name(_), do: nil
 
   defp select_photo(photos) when is_list(photos) do
     photos

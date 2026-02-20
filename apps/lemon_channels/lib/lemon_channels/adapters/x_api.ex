@@ -17,15 +17,16 @@ defmodule LemonChannels.Adapters.XAPI do
         access_token: System.get_env("X_API_ACCESS_TOKEN"),
         refresh_token: System.get_env("X_API_REFRESH_TOKEN"),
         token_expires_at: System.get_env("X_API_TOKEN_EXPIRES_AT"),
-        default_account_id: System.get_env("X_DEFAULT_ACCOUNT_ID")
+        default_account_id: System.get_env("X_DEFAULT_ACCOUNT_ID"),
+        default_account_username: System.get_env("X_DEFAULT_ACCOUNT_USERNAME")
 
   ## Usage
 
       payload = LemonChannels.OutboundPayload.text(
         "x_api",
-        "realzeebot",
+        "your_bot_account",
         %{kind: :channel, id: "public", thread_id: nil},
-        "Hello from zeebot!"
+        "Hello from Lemon!"
       )
       LemonChannels.Adapters.XAPI.deliver(payload)
 
@@ -53,6 +54,7 @@ defmodule LemonChannels.Adapters.XAPI do
     refresh_token: "X_API_REFRESH_TOKEN",
     token_expires_at: "X_API_TOKEN_EXPIRES_AT",
     default_account_id: "X_DEFAULT_ACCOUNT_ID",
+    default_account_username: "X_DEFAULT_ACCOUNT_USERNAME",
     consumer_key: "X_API_CONSUMER_KEY",
     consumer_secret: "X_API_CONSUMER_SECRET",
     access_token_secret: "X_API_ACCESS_TOKEN_SECRET"

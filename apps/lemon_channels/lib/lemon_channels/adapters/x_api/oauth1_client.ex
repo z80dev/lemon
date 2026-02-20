@@ -224,7 +224,7 @@ defmodule LemonChannels.Adapters.XAPI.OAuth1Client do
   end
 
   defp resolve_mentions_user_id(credentials, opts) do
-    case opts[:user_id] || LemonChannels.Adapters.XAPI.config()[:default_account_id] do
+    case opts[:user_id] || configured_default_account() do
       nil ->
         fetch_authenticated_user_id(credentials)
 
@@ -251,6 +251,11 @@ defmodule LemonChannels.Adapters.XAPI.OAuth1Client do
           lookup_user_id_by_username(account, credentials)
         end
     end
+  end
+
+  defp configured_default_account do
+    config = LemonChannels.Adapters.XAPI.config()
+    config[:default_account_id] || config[:default_account_username]
   end
 
   defp fetch_authenticated_user_id(credentials) do

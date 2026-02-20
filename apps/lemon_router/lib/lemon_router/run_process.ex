@@ -15,8 +15,9 @@ defmodule LemonRouter.RunProcess do
   require Logger
 
   alias LemonCore.{Bus, RunRequest, SessionKey}
+  alias LemonChannels.OutboundPayload
   alias LemonChannels.Types.ResumeToken
-  alias LemonRouter.ChannelContext
+  alias LemonRouter.{ChannelContext, ChannelsDelivery}
 
   @default_auto_send_generated_max_files 3
   @default_max_download_bytes 50 * 1024 * 1024
@@ -225,6 +226,9 @@ defmodule LemonRouter.RunProcess do
       # Note: Telegram final output is handled by maybe_finalize_stream_output/2 instead to avoid
       # producing a terminal :edit update to the progress message.
       maybe_emit_final_output(state, event)
+
+      # Optional fanout: forward the final answer text to additional destinations.
+      maybe_fanout_final_output(state, event)
     end
 
     {:stop, :normal, %{state | completed: true}}
@@ -513,6 +517,154 @@ defmodule LemonRouter.RunProcess do
     end
   rescue
     _ -> :ok
+  end
+
+  # Best-effort final-answer fanout to additional routes supplied by AgentInbox.
+  #
+  # This keeps execution single-run while allowing notifications to multiple destinations.
+  # Fanout routes are expected in `job.meta[:fanout_routes]` with route maps:
+  # `%{channel_id, account_id, peer_kind, peer_id, thread_id}`.
+  defp maybe_fanout_final_output(state, %LemonCore.Event{} = event) do
+    with answer when is_binary(answer) <- extract_completed_answer(event),
+         true <- String.trim(answer) != "",
+         routes when is_list(routes) and routes != [] <- fanout_routes_from_job(state.job) do
+      primary_signature = primary_route_signature(state.session_key)
+
+      routes
+      |> Enum.map(&normalize_fanout_route/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq_by(&fanout_route_signature/1)
+      |> Enum.reject(&(fanout_route_signature(&1) == primary_signature))
+      |> Enum.with_index()
+      |> Enum.each(fn {route, idx} ->
+        payload = fanout_payload(route, state, answer, idx + 1)
+
+        case ChannelsDelivery.enqueue(payload,
+               context: %{component: :run_process, phase: :fanout_final_output}
+             ) do
+          {:ok, _ref} ->
+            :ok
+
+          {:error, :duplicate} ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning(
+              "Failed to enqueue fanout output for run_id=#{inspect(state.run_id)} route=#{inspect(route)} reason=#{inspect(reason)}"
+            )
+        end
+      end)
+    else
+      _ -> :ok
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp maybe_fanout_final_output(_state, _event), do: :ok
+
+  defp fanout_routes_from_job(%LemonGateway.Types.Job{meta: meta}) when is_map(meta) do
+    meta[:fanout_routes] || meta["fanout_routes"] || []
+  rescue
+    _ -> []
+  end
+
+  defp fanout_routes_from_job(_), do: []
+
+  defp primary_route_signature(session_key) when is_binary(session_key) do
+    case SessionKey.parse(session_key) do
+      %{
+        kind: :channel_peer,
+        channel_id: channel_id,
+        account_id: account_id,
+        peer_kind: peer_kind,
+        peer_id: peer_id,
+        thread_id: thread_id
+      } ->
+        {channel_id, account_id, peer_kind, peer_id, thread_id}
+
+      _ ->
+        nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp primary_route_signature(_), do: nil
+
+  defp normalize_fanout_route(route) when is_map(route) do
+    channel_id = fetch(route, :channel_id)
+    account_id = fetch(route, :account_id) || "default"
+    peer_kind = normalize_fanout_peer_kind(fetch(route, :peer_kind))
+    peer_id = fetch(route, :peer_id)
+    thread_id = fetch(route, :thread_id)
+
+    cond do
+      not is_binary(channel_id) or channel_id == "" ->
+        nil
+
+      not is_binary(account_id) or account_id == "" ->
+        nil
+
+      not is_binary(peer_id) or peer_id == "" ->
+        nil
+
+      is_nil(peer_kind) ->
+        nil
+
+      true ->
+        %{
+          channel_id: channel_id,
+          account_id: account_id,
+          peer_kind: peer_kind,
+          peer_id: peer_id,
+          thread_id: if(is_binary(thread_id) and thread_id != "", do: thread_id, else: nil)
+        }
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp normalize_fanout_route(_), do: nil
+
+  defp normalize_fanout_peer_kind(kind) when kind in [:dm, :group, :channel], do: kind
+
+  defp normalize_fanout_peer_kind(kind) when is_binary(kind) do
+    case String.downcase(String.trim(kind)) do
+      "dm" -> :dm
+      "group" -> :group
+      "channel" -> :channel
+      _ -> nil
+    end
+  end
+
+  defp normalize_fanout_peer_kind(_), do: nil
+
+  defp fanout_route_signature(route) when is_map(route) do
+    {route.channel_id, route.account_id, route.peer_kind, route.peer_id, route.thread_id}
+  end
+
+  defp fanout_payload(route, state, answer, index) do
+    %OutboundPayload{
+      channel_id: route.channel_id,
+      account_id: route.account_id,
+      peer: %{
+        kind: route.peer_kind,
+        id: route.peer_id,
+        thread_id: route.thread_id
+      },
+      kind: :text,
+      content: answer,
+      idempotency_key: "#{state.run_id}:fanout:#{index}",
+      meta: %{
+        run_id: state.run_id,
+        session_key: state.session_key,
+        fanout: true,
+        fanout_index: index
+      }
+    }
   end
 
   defp extract_completed_answer(%LemonCore.Event{payload: %{completed: %{answer: answer}}}),

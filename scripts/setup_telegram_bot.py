@@ -14,7 +14,15 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 
 # Load credentials
-creds_path = Path.home() / ".zeebot/api_keys/telegram.txt"
+default_creds_path = Path.home() / ".lemon/api_keys/telegram.txt"
+creds_path = Path(os.environ.get("LEMON_TELEGRAM_CREDS_PATH", str(default_creds_path))).expanduser()
+
+if not creds_path.exists():
+    raise FileNotFoundError(
+        f"Credentials file not found at {creds_path}. "
+        "Set LEMON_TELEGRAM_CREDS_PATH to override."
+    )
+
 creds = {}
 for line in creds_path.read_text().strip().split("\n"):
     if "=" in line:

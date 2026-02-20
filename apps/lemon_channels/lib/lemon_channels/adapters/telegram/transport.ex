@@ -369,6 +369,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     # If updates is empty, keep max_id at offset - 1 so we don't accidentally advance the offset.
     Enum.reduce(updates, {state, state.offset - 1}, fn update, {acc_state, max_id} ->
       id = update["update_id"] || max_id
+      acc_state = maybe_index_known_target(acc_state, update)
 
       cond do
         is_map(update) and Map.has_key?(update, "callback_query") ->
@@ -431,6 +432,97 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       end
     end)
   end
+
+  defp maybe_index_known_target(state, update) when is_map(update) do
+    account_id = state.account_id || "default"
+    message = extract_chat_message(update)
+
+    with true <- is_binary(account_id) and account_id != "",
+         true <- is_map(message),
+         chat when is_map(chat) <- message["chat"],
+         chat_id when is_integer(chat_id) <- parse_int(chat["id"]) do
+      topic_id = parse_int(message["message_thread_id"])
+      key = {account_id, chat_id, topic_id}
+      existing = CoreStore.get(:telegram_known_targets, key) || %{}
+      now = System.system_time(:millisecond)
+
+      entry =
+        %{
+          channel_id: "telegram",
+          account_id: account_id,
+          peer_kind: peer_kind_from_chat_type(chat["type"]),
+          peer_id: to_string(chat_id),
+          thread_id: if(is_integer(topic_id), do: to_string(topic_id), else: nil),
+          chat_id: chat_id,
+          topic_id: topic_id,
+          chat_type: coalesce_text(chat["type"], existing, :chat_type),
+          chat_title: coalesce_text(chat["title"], existing, :chat_title),
+          chat_username: coalesce_text(chat["username"], existing, :chat_username),
+          chat_display_name: coalesce_text(chat_display_name(chat), existing, :chat_display_name),
+          topic_name:
+            coalesce_text(extract_topic_name_from_message(message), existing, :topic_name),
+          updated_at_ms: now,
+          first_seen_at_ms: map_get(existing, :first_seen_at_ms) || now
+        }
+        |> maybe_put(
+          :last_message_id,
+          parse_int(message["message_id"]) || map_get(existing, :last_message_id)
+        )
+
+      _ = CoreStore.put(:telegram_known_targets, key, entry)
+      state
+    else
+      _ -> state
+    end
+  rescue
+    _ -> state
+  end
+
+  defp maybe_index_known_target(state, _), do: state
+
+  defp extract_chat_message(update) when is_map(update) do
+    update["message"] ||
+      update["edited_message"] ||
+      update["channel_post"] ||
+      get_in(update, ["callback_query", "message"])
+  end
+
+  defp extract_chat_message(_), do: nil
+
+  defp extract_topic_name_from_message(message) when is_map(message) do
+    (message["forum_topic_created"] && message["forum_topic_created"]["name"]) ||
+      (message["forum_topic_edited"] && message["forum_topic_edited"]["name"]) ||
+      get_in(message, ["reply_to_message", "forum_topic_created", "name"]) ||
+      get_in(message, ["reply_to_message", "forum_topic_edited", "name"])
+  end
+
+  defp extract_topic_name_from_message(_), do: nil
+
+  defp chat_display_name(%{"type" => "private"} = chat) do
+    [chat["first_name"], chat["last_name"]]
+    |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
+    |> Enum.join(" ")
+    |> case do
+      "" -> chat["username"]
+      name -> name
+    end
+  end
+
+  defp chat_display_name(chat) when is_map(chat) do
+    chat["title"] || chat["username"]
+  end
+
+  defp chat_display_name(_), do: nil
+
+  defp coalesce_text(value, existing, key) do
+    normalize_blank(value) || normalize_blank(map_get(existing, key))
+  end
+
+  defp map_get(map, key) when is_map(map) and is_atom(key) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  end
+
+  defp map_get(_map, _key), do: nil
 
   defp handle_inbound_message(state, inbound) do
     text = inbound.message.text || ""
@@ -1894,10 +1986,17 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       end
 
     case resume do
-      %ResumeToken{} = r -> r
-      %{engine: engine, value: value} when is_binary(engine) and is_binary(value) -> %ResumeToken{engine: engine, value: value}
-      %{"engine" => engine, "value" => value} when is_binary(engine) and is_binary(value) -> %ResumeToken{engine: engine, value: value}
-      _ -> nil
+      %ResumeToken{} = r ->
+        r
+
+      %{engine: engine, value: value} when is_binary(engine) and is_binary(value) ->
+        %ResumeToken{engine: engine, value: value}
+
+      %{"engine" => engine, "value" => value} when is_binary(engine) and is_binary(value) ->
+        %ResumeToken{engine: engine, value: value}
+
+      _ ->
+        nil
     end
   rescue
     _ -> nil

@@ -129,6 +129,18 @@ defmodule Ai.Models do
       context_window: 200_000,
       max_tokens: 128_000
     },
+    "claude-opus-4-6-thinking" => %Model{
+      id: "claude-opus-4-6-thinking",
+      name: "Claude Opus 4.6 (Thinking)",
+      api: :anthropic_messages,
+      provider: :anthropic,
+      base_url: "https://api.anthropic.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 5.0, output: 25.0, cache_read: 0.5, cache_write: 6.25},
+      context_window: 200_000,
+      max_tokens: 128_000
+    },
     "claude-3-haiku-20240307" => %Model{
       id: "claude-3-haiku-20240307",
       name: "Claude Haiku 3",
@@ -950,6 +962,18 @@ defmodule Ai.Models do
     "gemini-3.1-pro-preview" => %Model{
       id: "gemini-3.1-pro-preview",
       name: "Gemini 3.1 Pro Preview",
+      api: :google_generative_ai,
+      provider: :google,
+      base_url: "https://generativelanguage.googleapis.com/v1beta",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 2.0, output: 12.0, cache_read: 0.2, cache_write: 0.0},
+      context_window: 1_048_576,
+      max_tokens: 65_536
+    },
+    "gemini-3.1-pro-preview-customtools" => %Model{
+      id: "gemini-3.1-pro-preview-customtools",
+      name: "Gemini 3.1 Pro Preview (Custom Tools)",
       api: :google_generative_ai,
       provider: :google,
       base_url: "https://generativelanguage.googleapis.com/v1beta",

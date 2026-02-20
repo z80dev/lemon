@@ -166,7 +166,7 @@ MarketIntel.Secrets.all_configured()
 ```elixir
 # Test DEX Screener (no API key needed)
 MarketIntel.Ingestion.DexScreener.fetch()
-MarketIntel.Ingestion.DexScreener.get_zeebot_data()
+MarketIntel.Ingestion.DexScreener.get_tracked_token_data()
 
 # Test BaseScan (requires API key)
 MarketIntel.Ingestion.OnChain.fetch()

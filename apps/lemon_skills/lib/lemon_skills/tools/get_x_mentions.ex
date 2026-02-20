@@ -3,7 +3,7 @@ defmodule LemonSkills.Tools.GetXMentions do
   Tool for agents to get recent mentions on X (Twitter).
 
   This tool allows agents to:
-  - Check recent mentions of @realzeebot
+  - Check recent mentions of the configured X account
   - See who is engaging with the account
   - Find tweets to reply to
 
@@ -26,10 +26,12 @@ defmodule LemonSkills.Tools.GetXMentions do
   """
   @spec tool(keyword()) :: AgentTool.t()
   def tool(_opts \\ []) do
+    account_label = configured_account_label()
+
     %AgentTool{
       name: "get_x_mentions",
       description: """
-      Get recent mentions of @realzeebot on X (Twitter). Use this to check \
+      Get recent mentions of #{account_label} on X (Twitter). Use this to check \
       who is engaging with the account and find tweets to reply to.
       """,
       label: "Get X Mentions",
@@ -217,5 +219,35 @@ defmodule LemonSkills.Tools.GetXMentions do
       content: [%TextContent{text: "❌ #{message}"}],
       details: %{error: message}
     }
+  end
+
+  defp configured_account_label do
+    case x_account_username() do
+      nil -> "the configured X account"
+      username -> "@#{username}"
+    end
+  end
+
+  defp x_account_username do
+    config = LemonChannels.Adapters.XAPI.config()
+    candidate = config[:default_account_username] || config[:default_account_id]
+
+    case candidate do
+      nil ->
+        nil
+
+      value ->
+        normalized =
+          value
+          |> to_string()
+          |> String.trim()
+          |> String.trim_leading("@")
+
+        cond do
+          normalized == "" -> nil
+          Regex.match?(~r/^\d+$/, normalized) -> nil
+          true -> normalized
+        end
+    end
   end
 end

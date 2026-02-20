@@ -10,7 +10,7 @@ defmodule LemonSkills.Tools.PostToX do
   ## Usage
 
   The tool is designed to be used by agents to post updates, respond to
-  mentions, or engage with the community on behalf of @realzeebot.
+  mentions, or engage with the community on behalf of the configured account.
 
   ## Configuration
 
@@ -26,10 +26,12 @@ defmodule LemonSkills.Tools.PostToX do
   """
   @spec tool(keyword()) :: AgentTool.t()
   def tool(_opts \\ []) do
+    account_label = configured_account_label()
+
     %AgentTool{
       name: "post_to_x",
       description: """
-      Post a tweet to X (Twitter) as @realzeebot. Use this to share updates, \
+      Post a tweet to X (Twitter) as #{account_label}. Use this to share updates, \
       thoughts, or engage with the community. Tweets are limited to 280 characters.
       """,
       label: "Post to X",
@@ -166,12 +168,14 @@ defmodule LemonSkills.Tools.PostToX do
   end
 
   defp success_result(tweet_id, tweet_text, reply_to) do
+    url = tweet_url(tweet_id)
+
     text_response = """
     ✅ Tweet posted successfully!
 
     Tweet ID: #{tweet_id}
     Text: #{tweet_text}
-    URL: https://x.com/realzeebot/status/#{tweet_id}
+    URL: #{url}
     """
 
     %AgentToolResult{
@@ -182,5 +186,42 @@ defmodule LemonSkills.Tools.PostToX do
         reply_to: reply_to
       }
     }
+  end
+
+  defp tweet_url(tweet_id) do
+    case x_account_username() do
+      nil -> "https://x.com/i/web/status/#{tweet_id}"
+      username -> "https://x.com/#{username}/status/#{tweet_id}"
+    end
+  end
+
+  defp configured_account_label do
+    case x_account_username() do
+      nil -> "the configured X account"
+      username -> "@#{username}"
+    end
+  end
+
+  defp x_account_username do
+    config = LemonChannels.Adapters.XAPI.config()
+    candidate = config[:default_account_username] || config[:default_account_id]
+
+    case candidate do
+      nil ->
+        nil
+
+      value ->
+        normalized =
+          value
+          |> to_string()
+          |> String.trim()
+          |> String.trim_leading("@")
+
+        cond do
+          normalized == "" -> nil
+          Regex.match?(~r/^\d+$/, normalized) -> nil
+          true -> normalized
+        end
+    end
   end
 end

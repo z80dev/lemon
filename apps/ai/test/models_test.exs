@@ -351,6 +351,19 @@ defmodule Ai.ModelsTest do
       assert model.reasoning == true
     end
 
+    test "claude opus 4.6 thinking has correct specs" do
+      model = Models.get_model(:anthropic, "claude-opus-4-6-thinking")
+
+      assert model.cost.input == 5.0
+      assert model.cost.output == 25.0
+      assert model.cost.cache_read == 0.5
+      assert model.cost.cache_write == 6.25
+      assert model.context_window == 200_000
+      assert model.max_tokens == 128_000
+      assert model.reasoning == true
+      assert model.name == "Claude Opus 4.6 (Thinking)"
+    end
+
     test "gemini 3.1 pro preview has correct specs" do
       model = Models.get_model(:google, "gemini-3.1-pro-preview")
 
@@ -371,6 +384,18 @@ defmodule Ai.ModelsTest do
       assert model.context_window == 1_048_576
       assert model.max_tokens == 65_536
       assert model.reasoning == true
+    end
+
+    test "gemini 3.1 pro preview customtools has correct specs" do
+      model = Models.get_model(:google, "gemini-3.1-pro-preview-customtools")
+
+      assert model.cost.input == 2.0
+      assert model.cost.output == 12.0
+      assert model.cost.cache_read == 0.2
+      assert model.context_window == 1_048_576
+      assert model.max_tokens == 65_536
+      assert model.reasoning == true
+      assert model.name == "Gemini 3.1 Pro Preview (Custom Tools)"
     end
 
     test "gpt 5.3 codex spark has correct specs" do
@@ -412,6 +437,7 @@ defmodule Ai.ModelsTest do
       assert Models.get_model(:anthropic, "claude-haiku-4-5-20251001") != nil
       assert Models.get_model(:anthropic, "claude-sonnet-4-6") != nil
       assert Models.get_model(:anthropic, "claude-opus-4-6") != nil
+      assert Models.get_model(:anthropic, "claude-opus-4-6-thinking") != nil
     end
 
     test "openai flagship models" do
@@ -433,6 +459,7 @@ defmodule Ai.ModelsTest do
       assert Models.get_model(:google, "gemini-1.5-pro") != nil
       assert Models.get_model(:google, "gemini-3.1-pro") != nil
       assert Models.get_model(:google, "gemini-3.1-pro-preview") != nil
+      assert Models.get_model(:google, "gemini-3.1-pro-preview-customtools") != nil
     end
 
     test "opencode models" do

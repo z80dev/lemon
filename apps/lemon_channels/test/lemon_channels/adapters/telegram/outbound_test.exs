@@ -137,12 +137,12 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
         account_id: "acct",
         peer: %{kind: :dm, id: "123", thread_id: nil},
         kind: :text,
-        content: "**zeebot**"
+        content: "**agentbot**"
       }
 
     assert {:ok, _} = Outbound.deliver(payload)
 
-    assert_receive {:send_message, 123, "zeebot", opts, nil}
+    assert_receive {:send_message, 123, "agentbot", opts, nil}
     assert is_map(opts)
     assert is_list(opts[:entities])
     assert Enum.any?(opts[:entities], &(&1["type"] == "bold"))
@@ -161,12 +161,12 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
         account_id: "acct",
         peer: %{kind: :dm, id: "123", thread_id: nil},
         kind: :text,
-        content: "**zeebot**"
+        content: "**agentbot**"
       }
 
     assert {:ok, _} = Outbound.deliver(payload)
 
-    assert_receive {:send_message, 123, "**zeebot**", opts, nil}
+    assert_receive {:send_message, 123, "**agentbot**", opts, nil}
     assert is_map(opts)
     refute Map.has_key?(opts, :entities)
   end
@@ -180,12 +180,12 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
         account_id: "acct",
         peer: %{kind: :dm, id: "123", thread_id: nil},
         kind: :edit,
-        content: %{message_id: "456", text: "Hi **zeebot**"}
+        content: %{message_id: "456", text: "Hi **agentbot**"}
       }
 
     assert {:ok, _} = Outbound.deliver(payload)
 
-    assert_receive {:edit_message_text, 123, 456, "Hi zeebot", opts}
+    assert_receive {:edit_message_text, 123, 456, "Hi agentbot", opts}
     assert is_map(opts)
     assert is_list(opts[:entities])
     assert Enum.any?(opts[:entities], &(&1["type"] == "bold"))

@@ -36,6 +36,11 @@ defmodule LemonChannels.Adapters.Telegram.InboundTest do
              height: 1000,
              file_size: 100_000
            } = inbound.meta.photo
+
+    assert inbound.meta.chat_username == nil
+    assert inbound.meta.chat_display_name == nil
+    assert inbound.meta.topic_id == nil
+    assert inbound.meta.topic_name == nil
   end
 
   test "ignores forum topic creation service messages" do
@@ -61,16 +66,29 @@ defmodule LemonChannels.Adapters.Telegram.InboundTest do
       "message" => %{
         "message_id" => 12,
         "date" => 1_700_000_002,
-        "chat" => %{"id" => -100_123, "type" => "supergroup", "title" => "Lemon"},
+        "chat" => %{
+          "id" => -100_123,
+          "type" => "supergroup",
+          "title" => "Lemon",
+          "username" => "lemonroom"
+        },
         "from" => %{"id" => 456, "username" => "alice", "first_name" => "Alice"},
         "is_topic_message" => true,
         "message_thread_id" => 77,
-        "text" => "hello topic"
+        "text" => "hello topic",
+        "reply_to_message" => %{
+          "forum_topic_created" => %{"name" => "Roadmap"}
+        }
       }
     }
 
     assert {:ok, inbound} = Inbound.normalize(update)
     assert inbound.message.text == "hello topic"
     assert inbound.peer.thread_id == "77"
+    assert inbound.meta.chat_title == "Lemon"
+    assert inbound.meta.chat_username == "lemonroom"
+    assert inbound.meta.chat_display_name == "Lemon"
+    assert inbound.meta.topic_id == 77
+    assert inbound.meta.topic_name == "Roadmap"
   end
 end

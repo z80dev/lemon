@@ -510,6 +510,102 @@ defmodule LemonRouter.RunProcessTest do
     end
   end
 
+  describe "final answer fanout delivery" do
+    test "delivers final answer once per unique fanout route" do
+      start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
+      start_if_needed(LemonChannels.Outbox, fn -> LemonChannels.Outbox.start_link([]) end)
+
+      start_if_needed(LemonChannels.Outbox.RateLimiter, fn ->
+        LemonChannels.Outbox.RateLimiter.start_link([])
+      end)
+
+      start_if_needed(LemonChannels.Outbox.Dedupe, fn ->
+        LemonChannels.Outbox.Dedupe.start_link([])
+      end)
+
+      :persistent_term.put({TestTelegramPlugin, :notify_pid}, self())
+      existing = LemonChannels.Registry.get_plugin("telegram")
+      _ = LemonChannels.Registry.unregister("telegram")
+      :ok = LemonChannels.Registry.register(TestTelegramPlugin)
+
+      on_exit(fn ->
+        _ = :persistent_term.erase({TestTelegramPlugin, :notify_pid})
+
+        if is_pid(Process.whereis(LemonChannels.Registry)) do
+          _ = LemonChannels.Registry.unregister("telegram")
+
+          if is_atom(existing) and not is_nil(existing) do
+            _ = LemonChannels.Registry.register(existing)
+          end
+        end
+      end)
+
+      run_id = "run_#{System.unique_integer([:positive])}"
+      session_key = SessionKey.main("test-agent")
+
+      fanout_routes = [
+        %{channel_id: "telegram", account_id: "default", peer_kind: :dm, peer_id: "111"},
+        %{channel_id: "telegram", account_id: "default", peer_kind: :dm, peer_id: "111"},
+        %{channel_id: "telegram", account_id: "default", peer_kind: :dm, peer_id: "222"}
+      ]
+
+      job = make_test_job(run_id, %{fanout_routes: fanout_routes})
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false
+               })
+
+      completed_event =
+        LemonCore.Event.new(
+          :run_completed,
+          %{
+            completed: %{
+              ok: true,
+              answer: "Fanout answer"
+            }
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+
+      assert eventually(fn -> not Process.alive?(pid) end)
+
+      assert_receive {:delivered,
+                      %LemonChannels.OutboundPayload{
+                        meta: %{run_id: ^run_id, fanout: true} = meta_a
+                      } = payload_a},
+                     3_000
+
+      assert_receive {:delivered,
+                      %LemonChannels.OutboundPayload{
+                        meta: %{run_id: ^run_id, fanout: true} = meta_b
+                      } = payload_b},
+                     3_000
+
+      refute_receive {:delivered,
+                      %LemonChannels.OutboundPayload{meta: %{run_id: ^run_id, fanout: true}}},
+                     500
+
+      assert meta_a[:fanout_index] in [1, 2]
+      assert meta_b[:fanout_index] in [1, 2]
+      assert meta_a[:fanout_index] != meta_b[:fanout_index]
+
+      assert payload_a.content == "Fanout answer"
+      assert payload_b.content == "Fanout answer"
+
+      peer_ids =
+        [payload_a.peer.id, payload_b.peer.id]
+        |> Enum.sort()
+
+      assert peer_ids == ["111", "222"]
+    end
+  end
+
   describe "telegram final message resume indexing" do
     test "indexes the bot final message id so replies can resume the right engine/session" do
       start_if_needed(LemonChannels.Registry, fn -> LemonChannels.Registry.start_link([]) end)
