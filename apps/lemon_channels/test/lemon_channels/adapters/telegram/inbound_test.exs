@@ -37,5 +37,40 @@ defmodule LemonChannels.Adapters.Telegram.InboundTest do
              file_size: 100_000
            } = inbound.meta.photo
   end
-end
 
+  test "ignores forum topic creation service messages" do
+    update = %{
+      "update_id" => 2,
+      "message" => %{
+        "message_id" => 11,
+        "date" => 1_700_000_001,
+        "chat" => %{"id" => -100_123, "type" => "supergroup", "title" => "Lemon"},
+        "from" => %{"id" => 456, "username" => "alice", "first_name" => "Alice"},
+        "is_topic_message" => true,
+        "message_thread_id" => 77,
+        "forum_topic_created" => %{"name" => "New Topic", "icon_color" => 7_326_044}
+      }
+    }
+
+    assert {:error, :forum_topic_created} = Inbound.normalize(update)
+  end
+
+  test "normalizes regular topic messages" do
+    update = %{
+      "update_id" => 3,
+      "message" => %{
+        "message_id" => 12,
+        "date" => 1_700_000_002,
+        "chat" => %{"id" => -100_123, "type" => "supergroup", "title" => "Lemon"},
+        "from" => %{"id" => 456, "username" => "alice", "first_name" => "Alice"},
+        "is_topic_message" => true,
+        "message_thread_id" => 77,
+        "text" => "hello topic"
+      }
+    }
+
+    assert {:ok, inbound} = Inbound.normalize(update)
+    assert inbound.message.text == "hello topic"
+    assert inbound.peer.thread_id == "77"
+  end
+end

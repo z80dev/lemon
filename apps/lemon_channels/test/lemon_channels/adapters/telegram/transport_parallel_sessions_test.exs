@@ -453,6 +453,29 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     assert opts["message_thread_id"] == topic_id
   end
 
+  test "ignores topic creation events and waits for the next topic message" do
+    chat_id = System.unique_integer([:positive])
+    topic_id = 901
+    first_msg_id = System.unique_integer([:positive])
+    second_msg_id = System.unique_integer([:positive])
+
+    MockAPI.set_updates([
+      topic_created_update(chat_id, topic_id, first_msg_id),
+      topic_message_update(chat_id, topic_id, second_msg_id, "hello after create")
+    ])
+
+    assert {:ok, _pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               deny_unbound_chats: false
+             })
+
+    assert_receive {:inbound, msg}, 1_200
+    assert msg.message.text == "hello after create"
+    assert msg.peer.thread_id == Integer.to_string(topic_id)
+    assert msg.meta[:user_msg_id] == second_msg_id
+  end
+
   defp start_transport(overrides) when is_map(overrides) do
     token = "token-" <> Integer.to_string(System.unique_integer([:positive]))
 
@@ -515,6 +538,21 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     %{
       "update_id" => System.unique_integer([:positive]),
       "message" => message
+    }
+  end
+
+  defp topic_created_update(chat_id, topic_id, message_id) do
+    %{
+      "update_id" => System.unique_integer([:positive]),
+      "message" => %{
+        "message_id" => message_id,
+        "date" => 1,
+        "chat" => %{"id" => chat_id, "type" => "supergroup"},
+        "from" => %{"id" => 99, "username" => "tester", "first_name" => "Test"},
+        "is_topic_message" => true,
+        "message_thread_id" => topic_id,
+        "forum_topic_created" => %{"name" => "topic-#{topic_id}", "icon_color" => 7_326_044}
+      }
     }
   end
 
