@@ -153,7 +153,6 @@ defmodule CodingAgent.ToolRegistry do
           :ok
   def prime_extension_cache(cwd, extension_paths, extensions, load_errors \\ [])
       when is_list(extension_paths) and is_list(extensions) and is_list(load_errors) do
-    ensure_cache_table()
     key = cache_key(cwd, extension_paths)
 
     snapshot = %{
@@ -162,7 +161,7 @@ defmodule CodingAgent.ToolRegistry do
       loaded_at: System.system_time(:millisecond)
     }
 
-    :ets.insert(@extension_cache_table, {key, snapshot})
+    cache_insert(key, snapshot)
     :ok
   end
 
@@ -171,8 +170,7 @@ defmodule CodingAgent.ToolRegistry do
   """
   @spec invalidate_extension_cache() :: :ok
   def invalidate_extension_cache do
-    ensure_cache_table()
-    :ets.delete_all_objects(@extension_cache_table)
+    cache_delete_all()
     :ok
   end
 
@@ -181,20 +179,18 @@ defmodule CodingAgent.ToolRegistry do
   """
   @spec invalidate_extension_cache(String.t(), tool_opts()) :: :ok
   def invalidate_extension_cache(cwd, opts \\ []) do
-    ensure_cache_table()
     expanded_cwd = Path.expand(cwd)
     extension_paths = Keyword.get(opts, :extension_paths)
 
     case extension_paths do
       paths when is_list(paths) ->
-        :ets.delete(@extension_cache_table, cache_key(expanded_cwd, paths))
+        cache_delete(cache_key(expanded_cwd, paths))
 
       _ ->
-        @extension_cache_table
-        |> :ets.tab2list()
+        cache_tab2list()
         |> Enum.each(fn {{cached_cwd, _paths} = key, _snapshot} ->
           if cached_cwd == expanded_cwd do
-            :ets.delete(@extension_cache_table, key)
+            cache_delete(key)
           end
         end)
     end
@@ -305,9 +301,7 @@ defmodule CodingAgent.ToolRegistry do
   end
 
   defp lookup_extension_inventory(key) do
-    ensure_cache_table()
-
-    case :ets.lookup(@extension_cache_table, key) do
+    case cache_lookup(key) do
       [{^key, snapshot}] -> {:ok, snapshot}
       [] -> :error
     end
@@ -348,6 +342,51 @@ defmodule CodingAgent.ToolRegistry do
 
       _tid ->
         :ok
+    end
+  end
+
+  defp cache_insert(key, snapshot) do
+    with_cache_table(fn ->
+      :ets.insert(@extension_cache_table, {key, snapshot})
+    end)
+  end
+
+  defp cache_delete_all do
+    with_cache_table(fn ->
+      :ets.delete_all_objects(@extension_cache_table)
+    end)
+  end
+
+  defp cache_delete(key) do
+    with_cache_table(fn ->
+      :ets.delete(@extension_cache_table, key)
+    end)
+  end
+
+  defp cache_tab2list do
+    with_cache_table(fn ->
+      :ets.tab2list(@extension_cache_table)
+    end)
+  end
+
+  defp cache_lookup(key) do
+    with_cache_table(fn ->
+      :ets.lookup(@extension_cache_table, key)
+    end)
+  end
+
+  defp with_cache_table(operation, attempts_left \\ 2) do
+    ensure_cache_table()
+
+    try do
+      operation.()
+    rescue
+      ArgumentError ->
+        if attempts_left > 1 do
+          with_cache_table(operation, attempts_left - 1)
+        else
+          reraise ArgumentError, __STACKTRACE__
+        end
     end
   end
 
