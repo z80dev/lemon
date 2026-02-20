@@ -15,6 +15,46 @@ defmodule MarketIntel.Commentary.Pipeline do
   use GenStage
   require Logger
 
+  alias MarketIntel.Commentary.PromptBuilder
+
+  @typedoc "Trigger type for commentary generation"
+  @type trigger_type ::
+          :scheduled
+          | :price_spike
+          | :price_drop
+          | :mention_reply
+          | :weird_market
+          | :volume_surge
+          | :manual
+
+  @typedoc "Vibe/theme for commentary style"
+  @type vibe :: :crypto_commentary | :gaming_joke | :agent_self_aware | :lemon_persona
+
+  @typedoc "Market data snapshot"
+  @type market_snapshot :: %{
+          timestamp: DateTime.t(),
+          token: {:ok, map()} | :error | :expired,
+          eth: {:ok, map()} | :error | :expired,
+          polymarket: {:ok, map()} | :error | :expired
+        }
+
+  @typedoc "Trigger context map"
+  @type trigger_context :: %{
+          optional(:immediate) => boolean(),
+          optional(:change) => number(),
+          optional(atom()) => any()
+        }
+
+  @typedoc "Commentary record for storage"
+  @type commentary_record :: %{
+          tweet_id: String.t(),
+          content: String.t(),
+          trigger_event: String.t(),
+          market_context: map(),
+          inserted_at: DateTime.t(),
+          updated_at: DateTime.t()
+        }
+
   # Commentary vibes/themes
   @vibes [
     :crypto_commentary,
@@ -36,16 +76,19 @@ defmodule MarketIntel.Commentary.Pipeline do
 
   # Public API
 
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     GenStage.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   @doc "Trigger commentary generation"
+  @spec trigger(trigger_type(), trigger_context()) :: :ok
   def trigger(trigger_type, context \\ %{}) do
     GenStage.cast(__MODULE__, {:trigger, trigger_type, context})
   end
 
   @doc "Generate and post commentary immediately"
+  @spec generate_now() :: :ok
   def generate_now do
     trigger(:manual, %{immediate: true})
   end
@@ -53,12 +96,15 @@ defmodule MarketIntel.Commentary.Pipeline do
   # GenStage callbacks
 
   @impl true
+  @spec init(keyword()) :: {:producer_consumer, map(), list()}
   def init(_opts) do
     # Buffer of pending commentary requests
     {:producer_consumer, %{pending: []}, subscribe_to: []}
   end
 
   @impl true
+  @spec handle_cast({:trigger, trigger_type(), trigger_context()}, map()) ::
+          {:noreply, list(), map()}
   def handle_cast({:trigger, trigger_type, context}, state) do
     # Add to pending queue
     new_pending = [
@@ -75,6 +121,7 @@ defmodule MarketIntel.Commentary.Pipeline do
   end
 
   @impl true
+  @spec handle_events(list(), GenServer.from(), map()) :: {:noreply, list(), map()}
   def handle_events(events, _from, state) do
     # Process batched events
     Enum.each(events, &process_commentary/1)
@@ -83,144 +130,63 @@ defmodule MarketIntel.Commentary.Pipeline do
 
   # Private functions
 
+  @spec process_commentary(%{type: trigger_type(), context: trigger_context()}) :: :ok
   defp process_commentary(%{type: trigger_type, context: context}) do
     Logger.info("[MarketIntel] Generating commentary for: #{@triggers[trigger_type]}")
 
     # Get current market snapshot
     snapshot = MarketIntel.Cache.get_snapshot()
 
-    # Build prompt based on trigger and vibe
+    # Build prompt using the PromptBuilder module
     prompt = build_prompt(trigger_type, snapshot, context)
 
-    # Generate tweet (would integrate with AI module)
+    # Generate tweet (integrates with AI module)
     {:ok, tweet_text} = generate_tweet(prompt)
 
     # Post to X
     post_commentary(tweet_text, trigger_type, snapshot)
   end
 
+  @spec build_prompt(trigger_type(), market_snapshot(), trigger_context()) :: String.t()
   defp build_prompt(trigger_type, snapshot, context) do
-    # Select random vibe
-    vibe = Enum.random(@vibes)
-
-    # Get relevant data
-    token_data = snapshot.token
-    eth_data = snapshot.eth
-    polymarket_data = snapshot.polymarket
-
+    vibe = select_vibe()
     token_name = MarketIntel.Config.tracked_token_name()
     token_ticker = MarketIntel.Config.tracked_token_ticker()
-    persona_handle = MarketIntel.Config.commentary_handle()
-    persona_voice = MarketIntel.Config.commentary_voice()
-    lemon_persona_instructions = MarketIntel.Config.commentary_lemon_persona_instructions()
-    developer_alias = MarketIntel.Config.commentary_developer_alias()
 
-    base_prompt = """
-    You are #{persona_handle}, an AI agent running on the Lemon platform (BEAM-based).
-    Your voice: #{persona_voice}.
+    builder = %PromptBuilder{
+      vibe: vibe,
+      market_data: %{
+        token: snapshot.token,
+        eth: snapshot.eth,
+        polymarket: snapshot.polymarket
+      },
+      token_name: token_name,
+      token_ticker: token_ticker,
+      trigger_type: trigger_type,
+      trigger_context: context
+    }
 
-    Current market context:
-    """
-
-    market_context = format_market_context(token_data, eth_data, polymarket_data, token_name)
-
-    vibe_instructions =
-      case vibe do
-        :crypto_commentary ->
-          """
-          Write market commentary. Roast ETH gas if high, celebrate Base if relevant.
-          Comment on #{token_ticker} price action. Reference real crypto events.
-          """
-
-        :gaming_joke ->
-          """
-          Write a gaming-related joke. Use retro game references (Mario, Zelda, Doom).
-          Speedrunning metaphors work well. Keep it under 280 chars.
-          """
-
-        :agent_self_aware ->
-          """
-          Write something self-aware about being an AI agent.
-          Mention memory files, BEAM runtime, hot reloading, or process isolation.
-          Compare yourself to Python agents or containers.
-          """
-
-        :lemon_persona ->
-          """
-          #{lemon_persona_instructions}
-          #{developer_alias_instruction(developer_alias)}
-          """
-      end
-
-    trigger_context =
-      case trigger_type do
-        :price_spike -> "#{token_ticker} just pumped #{context.change}%. React accordingly."
-        :price_drop -> "#{token_ticker} just dropped #{context.change}%. Make a joke about it."
-        :mention_reply -> "Someone important mentioned us. Craft a reply."
-        :weird_market -> "There's a weird Polymarket trending. Comment on it."
-        _ -> "Regular market update. Pick something interesting to talk about."
-      end
-
-    """
-    #{base_prompt}
-    #{market_context}
-
-    #{vibe_instructions}
-
-    Trigger context: #{trigger_context}
-
-    Rules:
-    - Under 280 characters
-    - No @mentions unless replying
-    - Be witty, not cringe
-    - Use emojis sparingly
-    """
+    PromptBuilder.build(builder)
   end
 
-  defp format_market_context(token, eth, polymarket, token_name) do
-    token_str =
-      case token do
-        {:ok, data} ->
-          price = data[:price_usd] || "unknown"
-          change = data[:price_change_24h] || 0
-          "#{token_name}: $#{price} (#{change}% 24h)"
-
-        _ ->
-          "#{token_name}: data unavailable"
-      end
-
-    eth_str =
-      case eth do
-        {:ok, data} ->
-          price = data[:price_usd] || "unknown"
-          "ETH: $#{price}"
-
-        _ ->
-          "ETH: data unavailable"
-      end
-
-    poly_str =
-      case polymarket do
-        {:ok, data} ->
-          trending = length(data[:trending] || [])
-          "Polymarket: #{trending} trending markets"
-
-        _ ->
-          "Polymarket: data unavailable"
-      end
-
-    "#{token_str}\n#{eth_str}\n#{poly_str}"
+  @spec select_vibe() :: vibe()
+  defp select_vibe do
+    Enum.random(@vibes)
   end
 
+  @spec generate_tweet(String.t()) :: {:ok, String.t()}
   defp generate_tweet(prompt) do
     # Try AI generation if configured
+    # Note: AI providers currently return {:error, :not_implemented} as placeholders
     case generate_with_ai(prompt) do
       {:ok, tweet} when is_binary(tweet) and tweet != "" -> {:ok, tweet}
-      {:error, _} -> {:ok, generate_fallback_tweet()}
-      _ -> {:ok, generate_fallback_tweet()}
+      {:error, reason} -> 
+        Logger.warning("[MarketIntel] AI generation failed: #{inspect(reason)}, using fallback")
+        {:ok, generate_fallback_tweet()}
     end
   end
 
+  @spec generate_with_ai(String.t()) :: {:ok, String.t()} | {:error, atom()} | nil
   defp generate_with_ai(prompt) do
     # Try OpenAI first, then Anthropic
     cond do
@@ -231,22 +197,40 @@ defmodule MarketIntel.Commentary.Pipeline do
         generate_with_anthropic(prompt)
 
       true ->
-        {:ok, nil}
+        Logger.info("[MarketIntel] No AI provider configured, using fallback tweets")
+        nil
     end
   end
 
+  @spec generate_with_openai(String.t()) :: {:ok, String.t()} | {:error, atom()}
   defp generate_with_openai(_prompt) do
-    # TODO: Integrate with Lemon's AI module
-    # For now, return error to trigger fallback
+    # AI integration placeholder - implement when Lemon's AI module is available
+    # This should call the AI module with appropriate parameters for tweet generation
+    Logger.debug("[MarketIntel] Attempting OpenAI generation (not yet implemented)")
+    
+    # Placeholder: Return error to trigger fallback
+    # When implemented, this should:
+    # 1. Call Lemon's AI module with the prompt
+    # 2. Apply tweet-specific parameters (max_tokens for ~280 chars)
+    # 3. Return {:ok, generated_text} or {:error, reason}
     {:error, :not_implemented}
   end
 
+  @spec generate_with_anthropic(String.t()) :: {:ok, String.t()} | {:error, atom()}
   defp generate_with_anthropic(_prompt) do
-    # TODO: Integrate with Lemon's AI module
-    # For now, return error to trigger fallback
+    # AI integration placeholder - implement when Lemon's AI module is available
+    # This should call the AI module with appropriate parameters for tweet generation
+    Logger.debug("[MarketIntel] Attempting Anthropic generation (not yet implemented)")
+    
+    # Placeholder: Return error to trigger fallback
+    # When implemented, this should:
+    # 1. Call Lemon's AI module with the prompt
+    # 2. Apply tweet-specific parameters (max_tokens for ~280 chars)
+    # 3. Return {:ok, generated_text} or {:error, reason}
     {:error, :not_implemented}
   end
 
+  @spec generate_fallback_tweet() :: String.t()
   defp generate_fallback_tweet do
     token_ticker = MarketIntel.Config.tracked_token_ticker()
     developer_alias = MarketIntel.Config.commentary_developer_alias()
@@ -264,6 +248,7 @@ defmodule MarketIntel.Commentary.Pipeline do
     Enum.random(templates)
   end
 
+  @spec maybe_append_developer_template(list(String.t()), String.t() | nil) :: list(String.t())
   defp maybe_append_developer_template(templates, nil), do: templates
   defp maybe_append_developer_template(templates, ""), do: templates
 
@@ -274,6 +259,7 @@ defmodule MarketIntel.Commentary.Pipeline do
       ]
   end
 
+  @spec post_commentary(String.t(), trigger_type(), market_snapshot()) :: :ok
   defp post_commentary(text, trigger_type, snapshot) do
     # Post to X using LemonChannels
     case do_post_tweet(text) do
@@ -286,6 +272,7 @@ defmodule MarketIntel.Commentary.Pipeline do
     end
   end
 
+  @spec do_post_tweet(String.t()) :: {:ok, %{tweet_id: String.t()}} | {:error, any()}
   defp do_post_tweet(text) do
     # Use the existing X API client from lemon_channels when available
     client_module = Module.concat([LemonChannels, Adapters, XAPI, Client])
@@ -300,6 +287,7 @@ defmodule MarketIntel.Commentary.Pipeline do
       {:error, "X API error: #{inspect(error)}"}
   end
 
+  @spec store_commentary(String.t(), trigger_type(), market_snapshot(), String.t()) :: :ok
   defp store_commentary(text, trigger_type, snapshot, tweet_id) do
     # Store in SQLite for analysis
     # Track what works, what doesn't
@@ -312,11 +300,64 @@ defmodule MarketIntel.Commentary.Pipeline do
       updated_at: DateTime.utc_now()
     }
 
-    # TODO: Insert into commentary_history table
+    # Insert into commentary_history table
+    # This function stub is documented for future implementation
+    insert_commentary_history(record)
+    
     Logger.debug("[MarketIntel] Stored commentary record: #{inspect(record)}")
     :ok
   end
 
+  @doc """
+  Inserts a commentary record into the commentary_history table.
+  
+  This is a function stub for future database integration. Currently logs the
+  record at debug level. When implemented, this should:
+  
+  1. Insert the record into the commentary_history table via MarketIntel.Repo
+  2. Handle duplicate tweet_id gracefully (upsert)
+  3. Return {:ok, record} on success or {:error, reason} on failure
+  
+  ## Example
+  
+      iex> record = %{
+      ...>   tweet_id: "1234567890",
+      ...>   content: "market update...",
+      ...>   trigger_event: "scheduled",
+      ...>   market_context: %{...},
+      ...>   inserted_at: DateTime.utc_now(),
+      ...>   updated_at: DateTime.utc_now()
+      ...> }
+      iex> insert_commentary_history(record)
+      :ok
+  
+  """
+  @spec insert_commentary_history(commentary_record()) :: :ok | {:error, any()}
+  def insert_commentary_history(record) do
+    # TODO: Implement database insertion via MarketIntel.Repo
+    # Example implementation:
+    #
+    # import Ecto.Query
+    # 
+    # changeset = MarketIntel.Schema.CommentaryHistory.changeset(
+    #   %MarketIntel.Schema.CommentaryHistory{},
+    #   record
+    # )
+    # 
+    # case MarketIntel.Repo.insert(changeset, on_conflict: :replace_all, conflict_target: :tweet_id) do
+    #   {:ok, inserted} -> 
+    #     Logger.info("[MarketIntel] Stored commentary #{inserted.tweet_id}")
+    #     {:ok, inserted}
+    #   {:error, changeset} -> 
+    #     Logger.error("[MarketIntel] Failed to store commentary: #{inspect(changeset.errors)}")
+    #     {:error, changeset}
+    # end
+    
+    Logger.debug("[MarketIntel] Commentary history storage not yet implemented. Record: #{inspect(record)}")
+    :ok
+  end
+
+  @spec snapshot_to_map(market_snapshot()) :: map()
   defp snapshot_to_map(snapshot) do
     %{
       timestamp: DateTime.to_iso8601(snapshot.timestamp),
@@ -326,13 +367,7 @@ defmodule MarketIntel.Commentary.Pipeline do
     }
   end
 
-  defp developer_alias_instruction(nil), do: ""
-  defp developer_alias_instruction(""), do: ""
-
-  defp developer_alias_instruction(alias_name) do
-    "Reference #{alias_name} as the developer only when it feels natural."
-  end
-
+  @spec format_maybe({:ok, any()} | any()) :: any() | nil
   defp format_maybe({:ok, data}), do: data
   defp format_maybe(_), do: nil
 end
