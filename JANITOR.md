@@ -2028,6 +2028,55 @@ causing the quality check to fail with:
 - Now have 1312+ tests (AI app: 59, lemon_core: 488+, lemon_skills: 106)
 - All tests passing (0 failures)
 
+### 2025-02-20 - Pi Sync: Add Grok 3 Mini Models from xAI
+**Work Area**: Pi Upstream Sync
+
+**What was done:**
+- Synced with Pi upstream (github.com/pi-coding-agent/pi) to check for new models
+- Found Pi has xAI Grok 3 Mini models that Lemon was missing
+- Added 4 new xAI Grok 3 Mini models to Lemon's model registry:
+  - `grok-3-mini`: Cost-effective reasoning model, 131k context, $0.3/$0.5 per million tokens
+  - `grok-3-mini-fast`: Faster variant, 131k context, $0.6/$4.0 per million tokens
+  - `grok-3-mini-latest`: Alias pointing to latest mini version
+  - `grok-3-mini-fast-latest`: Alias pointing to latest fast mini version
+- All models feature:
+  - Reasoning capabilities (unlike base grok-3)
+  - Text-only input
+  - xAI OpenAI-compatible API
+  - 131,072 token context window
+  - 8,192 max output tokens
+- Added comprehensive tests for all 4 models:
+  - `grok 3 mini has correct specs` - verifies pricing, context window, reasoning
+  - `grok 3 mini fast has correct specs` - verifies fast variant pricing
+  - Updated flagship models test to include new models
+- All 61 AI model tests pass (up from 59)
+- No regressions
+
+**Files changed:**
+- `apps/ai/lib/ai/models.ex` - Added 4 new xAI Grok 3 Mini model definitions
+- `apps/ai/test/models_test.exs` - Added 4 new test cases for Grok 3 Mini models
+
+**Commit:**
+- `24328acc` - feat(models): Add Grok 3 Mini models from xAI
+
+**What worked:**
+- Pi's model structure maps cleanly to Lemon's Model struct
+- xAI models use the existing `:openai_completions` API pattern
+- Pricing and specs synced directly from Pi upstream
+
+**Models added:**
+| Model | Provider | Context | Max Tokens | Reasoning | Input |
+|-------|----------|---------|------------|-----------|-------|
+| grok-3-mini | xai | 131k | 8,192 | Yes | text |
+| grok-3-mini-fast | xai | 131k | 8,192 | Yes | text |
+| grok-3-mini-latest | xai | 131k | 8,192 | Yes | text |
+| grok-3-mini-fast-latest | xai | 131k | 8,192 | Yes | text |
+
+**Total progress:**
+- Started with 119 tests
+- Now have 1316+ tests (AI app: 61, lemon_core: 488+, lemon_skills: 106)
+- All tests passing (0 failures)
+
 **Next run should focus on:**
 - Check for more Pi upstream features to port (Claude models through OpenCode, Gemini models)
 - Add more comprehensive documentation for other features
