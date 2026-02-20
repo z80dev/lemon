@@ -2342,3 +2342,80 @@ causing the quality check to fail with:
 - Look for more code duplication in large modules (task.ex, websearch.ex)
 - Extract common patterns into reusable functions
 - Add validation to the modular config system
+
+
+### 2026-02-20 - Feature Enhancement: Hashline Edit Mode from Oh-My-Pi
+**Work Area**: Feature Enhancement / Oh-My-Pi Upstream Sync
+
+**What was done:**
+- Ported Hashline Edit Mode from Oh-My-Pi (packages/coding-agent/src/patch/hashline.ts)
+- Hashline provides stable line-addressable editing using content hashes:
+  - Format: `LINENUM#HASH:CONTENT` for display/reference
+  - Hash computed from whitespace-normalized line content using phash2
+  - 2-character hash using custom nibble alphabet (ZPMQVRWSNKTXJBYH)
+  - Prevents stale edits by validating hashes before any mutations
+- Implemented all 5 edit operations:
+  - `set` - Replace a single line
+  - `replace` - Replace a range of lines (first to last)
+  - `append` - Insert after a line (or at EOF)
+  - `prepend` - Insert before a line (or at BOF)
+  - `insert` - Insert between two lines
+- Key features implemented:
+  - `format_hashlines/2` - Format file content with hashline prefixes
+  - `parse_tag/1` - Parse line reference strings like "5#ab"
+  - `apply_edits/2` - Apply edits with bottom-up sorting
+  - `HashlineMismatchError` - Exception with grep-style error output
+  - Boundary echo stripping for cleaner edits
+  - Edit deduplication for identical changes
+- Created comprehensive tests (68 tests):
+  - Hash computation and normalization
+  - Formatting and parsing
+  - All 5 edit operation types
+  - Hash validation (success and failure)
+  - Multiple edits in sequence
+  - Error handling with mismatches
+
+**Files changed:**
+- `apps/coding_agent/lib/coding_agent/tools/hashline.ex` (565 lines - new file)
+- `apps/coding_agent/test/coding_agent/tools/hashline_test.exs` (771 lines - new file)
+
+**Commit:**
+- `0522d892` - feat(coding_agent): port Hashline Edit Mode from Oh-My-Pi
+
+**What worked:**
+- Oh-My-Pi's TypeScript implementation translated cleanly to Elixir
+- Using `:erlang.phash2/2` as xxHash32 replacement (xxHash32 not native in Elixir)
+- Bottom-up edit sorting prevents line number invalidation
+- Grep-style error messages with context lines match Oh-My-Pi's UX
+- 68 comprehensive tests covering all functionality
+
+**Usage example:**
+```elixir
+# Format file with hashlines
+content = "line 1\nline 2\nline 3"
+formatted = Hashline.format_hashlines(content)
+# "1#XX:line 1\n2#XX:line 2\n3#XX:line 3"
+
+# Apply a set edit
+{:ok, result} = Hashline.apply_edits(content, [
+  %{op: :set, tag: %{line: 2, hash: "XX"}, content: ["new line 2"]}
+])
+
+# Apply multiple edits (validated atomically)
+edits = [
+  %{op: :replace, first: %{line: 1, hash: "XX"}, last: %{line: 2, hash: "YY"}, content: ["replaced"]},
+  %{op: :append, after: %{line: 3, hash: "ZZ"}, content: ["new line"]}
+]
+{:ok, result} = Hashline.apply_edits(content, edits)
+```
+
+**Total progress:**
+- Started with 119 tests
+- Now have 1380+ tests (AI app: 59, lemon_core: 488+, lemon_skills: 106, coding_agent: 68 hashline tests)
+- All tests passing (0 failures)
+
+**Next run should focus on:**
+- Add Hashline Edit Mode to the edit tool for line-based edits
+- Add streaming support for large files
+- Check for more Oh-My-Pi features to port (Write Tool with LSP, Tool Renderers)
+
