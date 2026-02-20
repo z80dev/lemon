@@ -94,7 +94,7 @@ defmodule Ai.ModelsTest do
 
       assert is_list(models)
       assert length(models) > 0
-      assert Enum.all?(models, &match?(%Model{provider: :google}, &1))
+      assert Enum.all?(models, fn %Model{provider: provider} -> provider in [:google, :google_antigravity] end)
     end
 
     test "returns empty list for unknown provider" do
@@ -523,6 +523,49 @@ defmodule Ai.ModelsTest do
       assert Models.get_model(:opencode, "kimi-k2") != nil
       assert Models.get_model(:opencode, "kimi-k2-thinking") != nil
       assert Models.get_model(:opencode, "kimi-k2.5") != nil
+    end
+
+    test "google antigravity models" do
+      assert Models.get_model(:google_antigravity, "gemini-3-pro-high") != nil
+      assert Models.get_model(:google_antigravity, "gemini-3-pro-low") != nil
+    end
+  end
+
+  describe "google antigravity models" do
+    test "gemini 3 pro high has correct specs" do
+      model = Models.get_model(:google_antigravity, "gemini-3-pro-high")
+
+      assert model.id == "gemini-3-pro-high"
+      assert model.name == "Gemini 3 Pro High (Antigravity)"
+      assert model.provider == :google_antigravity
+      assert model.api == :google_gemini_cli
+      assert model.base_url == "https://daily-cloudcode-pa.sandbox.googleapis.com"
+      assert model.reasoning == true
+      assert model.input == [:text, :image]
+      assert model.cost.input == 2.0
+      assert model.cost.output == 12.0
+      assert model.cost.cache_read == 0.2
+      assert model.cost.cache_write == 2.375
+      assert model.context_window == 1_048_576
+      assert model.max_tokens == 65_535
+    end
+
+    test "gemini 3 pro low has correct specs" do
+      model = Models.get_model(:google_antigravity, "gemini-3-pro-low")
+
+      assert model.id == "gemini-3-pro-low"
+      assert model.name == "Gemini 3 Pro Low (Antigravity)"
+      assert model.provider == :google_antigravity
+      assert model.api == :google_gemini_cli
+      assert model.base_url == "https://daily-cloudcode-pa.sandbox.googleapis.com"
+      assert model.reasoning == true
+      assert model.input == [:text, :image]
+      assert model.cost.input == 2.0
+      assert model.cost.output == 12.0
+      assert model.cost.cache_read == 0.2
+      assert model.cost.cache_write == 2.375
+      assert model.context_window == 1_048_576
+      assert model.max_tokens == 65_535
     end
   end
 

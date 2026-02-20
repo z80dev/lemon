@@ -1030,8 +1030,41 @@ defmodule Ai.Models do
       cost: %ModelCost{input: 0.1, output: 0.4, cache_read: 0.025, cache_write: 0.0},
       context_window: 1_048_576,
       max_tokens: 65_536
+    },
+
+    # ============================================================================
+    # Google Antigravity Models (Internal Google CLI)
+    # ============================================================================
+    "gemini-3-pro-high" => %Model{
+      id: "gemini-3-pro-high",
+      name: "Gemini 3 Pro High (Antigravity)",
+      api: :google_gemini_cli,
+      provider: :google_antigravity,
+      base_url: "https://daily-cloudcode-pa.sandbox.googleapis.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 2.0, output: 12.0, cache_read: 0.2, cache_write: 2.375},
+      context_window: 1_048_576,
+      max_tokens: 65_535
+    },
+    "gemini-3-pro-low" => %Model{
+      id: "gemini-3-pro-low",
+      name: "Gemini 3 Pro Low (Antigravity)",
+      api: :google_gemini_cli,
+      provider: :google_antigravity,
+      base_url: "https://daily-cloudcode-pa.sandbox.googleapis.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 2.0, output: 12.0, cache_read: 0.2, cache_write: 2.375},
+      context_window: 1_048_576,
+      max_tokens: 65_535
     }
   }
+
+  # Extract antigravity models into separate attribute for registry
+  @google_antigravity_models Map.filter(@google_models, fn {_id, model} ->
+    model.provider == :google_antigravity
+  end)
 
   # ============================================================================
   # Kimi Models (Anthropic-compatible API)
@@ -1135,6 +1168,7 @@ defmodule Ai.Models do
     :openai => @openai_models,
     :"openai-codex" => @openai_codex_models,
     :google => @google_models,
+    :google_antigravity => @google_antigravity_models,
     :kimi => @kimi_models,
     :opencode => @opencode_models
   }
