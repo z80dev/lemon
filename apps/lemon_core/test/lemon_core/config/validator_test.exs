@@ -772,4 +772,166 @@ defmodule LemonCore.Config.ValidatorTest do
       assert Enum.any?(errors, &String.contains?(&1, "enable_xmtp"))
     end
   end
+
+  describe "validate_email_config/2" do
+    test "validates email inbound config" do
+      errors = Validator.validate_email_config([], %{
+        inbound: %{
+          bind_host: "0.0.0.0",
+          bind_port: 8080,
+          token: "webhook-secret-token",
+          max_body_bytes: 10_000_000
+        }
+      })
+      assert errors == []
+
+      # Invalid port
+      errors = Validator.validate_email_config([], %{
+        inbound: %{bind_port: 70_000}
+      })
+      assert Enum.any?(errors, &String.contains?(&1, "bind_port"))
+
+      # Empty host
+      errors = Validator.validate_email_config([], %{
+        inbound: %{bind_host: ""}
+      })
+      assert Enum.any?(errors, &String.contains?(&1, "bind_host"))
+    end
+
+    test "validates email outbound config" do
+      errors = Validator.validate_email_config([], %{
+        outbound: %{
+          relay: "smtp.gmail.com",
+          port: 587,
+          username: "user@example.com",
+          password: "secret",
+          tls: true,
+          auth: true,
+          hostname: "example.com",
+          from_address: "bot@example.com"
+        }
+      })
+      assert errors == []
+
+      # Invalid port
+      errors = Validator.validate_email_config([], %{
+        outbound: %{port: 0}
+      })
+      assert Enum.any?(errors, &String.contains?(&1, "port"))
+
+      # Empty relay
+      errors = Validator.validate_email_config([], %{
+        outbound: %{relay: ""}
+      })
+      assert Enum.any?(errors, &String.contains?(&1, "relay"))
+    end
+
+    test "validates email tls config" do
+      # Boolean values
+      errors = Validator.validate_email_config([], %{outbound: %{tls: true}})
+      assert errors == []
+
+      errors = Validator.validate_email_config([], %{outbound: %{tls: false}})
+      assert errors == []
+
+      # String values
+      errors = Validator.validate_email_config([], %{outbound: %{tls: "always"}})
+      assert errors == []
+
+      errors = Validator.validate_email_config([], %{outbound: %{tls: "never"}})
+      assert errors == []
+
+      errors = Validator.validate_email_config([], %{outbound: %{tls: "if_available"}})
+      assert errors == []
+
+      # Invalid value
+      errors = Validator.validate_email_config([], %{outbound: %{tls: "invalid"}})
+      assert Enum.any?(errors, &String.contains?(&1, "tls"))
+    end
+
+    test "validates email auth config" do
+      # Boolean values
+      errors = Validator.validate_email_config([], %{outbound: %{auth: true}})
+      assert errors == []
+
+      errors = Validator.validate_email_config([], %{outbound: %{auth: false}})
+      assert errors == []
+
+      # String values
+      errors = Validator.validate_email_config([], %{outbound: %{auth: "always"}})
+      assert errors == []
+
+      errors = Validator.validate_email_config([], %{outbound: %{auth: "if_available"}})
+      assert errors == []
+
+      # Invalid value
+      errors = Validator.validate_email_config([], %{outbound: %{auth: "invalid"}})
+      assert Enum.any?(errors, &String.contains?(&1, "auth"))
+    end
+
+    test "validates email attachment_max_bytes" do
+      errors = Validator.validate_email_config([], %{attachment_max_bytes: 10_000_000})
+      assert errors == []
+
+      errors = Validator.validate_email_config([], %{attachment_max_bytes: 0})
+      assert Enum.any?(errors, &String.contains?(&1, "attachment_max_bytes"))
+
+      errors = Validator.validate_email_config([], %{attachment_max_bytes: -1})
+      assert Enum.any?(errors, &String.contains?(&1, "attachment_max_bytes"))
+    end
+
+    test "validates email inbound_enabled boolean" do
+      errors = Validator.validate_email_config([], %{inbound_enabled: true})
+      assert errors == []
+
+      errors = Validator.validate_email_config([], %{inbound_enabled: "yes"})
+      assert Enum.any?(errors, &String.contains?(&1, "inbound_enabled"))
+    end
+
+    test "validates email webhook_enabled boolean" do
+      errors = Validator.validate_email_config([], %{webhook_enabled: true})
+      assert errors == []
+
+      errors = Validator.validate_email_config([], %{webhook_enabled: "yes"})
+      assert Enum.any?(errors, &String.contains?(&1, "webhook_enabled"))
+    end
+
+    test "accepts nil email config" do
+      errors = Validator.validate_email_config([], nil)
+      assert errors == []
+    end
+
+    test "validates complete email config" do
+      errors = Validator.validate_email_config([], %{
+        inbound: %{
+          bind_host: "0.0.0.0",
+          bind_port: 8080,
+          token: "webhook-secret",
+          max_body_bytes: 10_000_000
+        },
+        outbound: %{
+          relay: "smtp.gmail.com",
+          port: 587,
+          username: "user@example.com",
+          password: "secret",
+          tls: true,
+          auth: true,
+          hostname: "example.com",
+          from_address: "bot@example.com"
+        },
+        attachment_max_bytes: 10_000_000,
+        inbound_enabled: true,
+        webhook_enabled: true
+      })
+      assert errors == []
+    end
+
+    test "validates enable_email boolean" do
+      errors = Validator.validate_gateway(%{enable_email: true}, [])
+      refute Enum.any?(errors, &String.contains?(&1, "enable_email"))
+
+      errors = Validator.validate_gateway(%{enable_email: "yes"}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "enable_email"))
+    end
+  end
 end

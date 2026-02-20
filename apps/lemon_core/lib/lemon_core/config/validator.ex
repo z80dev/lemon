@@ -22,6 +22,7 @@ defmodule LemonCore.Config.Validator do
   - Web Dashboard: port, host, secret key base, access token
   - Farcaster: hub URL, signer key, app key, frame URL, state secret
   - XMTP: wallet key, environment, API URL, max connections
+  - Email: SMTP relay, inbound webhook, TLS/auth settings
   - Logging: valid log levels, writable paths
   - Providers: valid API key formats
   - Tools: valid timeout values
@@ -105,6 +106,7 @@ defmodule LemonCore.Config.Validator do
     |> validate_boolean(Map.get(gateway, :enable_web_dashboard), "gateway.enable_web_dashboard")
     |> validate_boolean(Map.get(gateway, :enable_farcaster), "gateway.enable_farcaster")
     |> validate_boolean(Map.get(gateway, :enable_xmtp), "gateway.enable_xmtp")
+    |> validate_boolean(Map.get(gateway, :enable_email), "gateway.enable_email")
     |> validate_boolean(Map.get(gateway, :require_engine_lock), "gateway.require_engine_lock")
     |> validate_non_negative_integer(Map.get(gateway, :engine_lock_timeout_ms), "gateway.engine_lock_timeout_ms")
     |> validate_telegram_config(Map.get(gateway, :telegram))
@@ -112,6 +114,7 @@ defmodule LemonCore.Config.Validator do
     |> validate_web_dashboard_config(Map.get(gateway, :web_dashboard))
     |> validate_farcaster_config(Map.get(gateway, :farcaster))
     |> validate_xmtp_config(Map.get(gateway, :xmtp))
+    |> validate_email_config(Map.get(gateway, :email))
     |> validate_queue_config(Map.get(gateway, :queue))
   end
 
@@ -465,6 +468,94 @@ defmodule LemonCore.Config.Validator do
   end
 
   defp validate_xmtp_api_url(errors, _), do: ["gateway.xmtp.api_url: must be a string" | errors]
+
+  @doc """
+  Validates Email configuration.
+  """
+  @spec validate_email_config([String.t()], map() | nil) :: [String.t()]
+  def validate_email_config(errors, nil), do: errors
+
+  def validate_email_config(errors, email) when is_map(email) do
+    errors
+    |> validate_email_inbound_config(Map.get(email, :inbound))
+    |> validate_email_outbound_config(Map.get(email, :outbound))
+    |> validate_positive_integer(Map.get(email, :attachment_max_bytes), "gateway.email.attachment_max_bytes")
+    |> validate_boolean(Map.get(email, :inbound_enabled), "gateway.email.inbound_enabled")
+    |> validate_boolean(Map.get(email, :webhook_enabled), "gateway.email.webhook_enabled")
+  end
+
+  def validate_email_config(errors, _),
+    do: ["gateway.email: must be a map" | errors]
+
+  defp validate_email_inbound_config(errors, nil), do: errors
+
+  defp validate_email_inbound_config(errors, inbound) when is_map(inbound) do
+    errors
+    |> validate_non_empty_string(Map.get(inbound, :bind_host), "gateway.email.inbound.bind_host")
+    |> validate_port(Map.get(inbound, :bind_port), "gateway.email.inbound.bind_port")
+    |> validate_non_empty_string(Map.get(inbound, :token), "gateway.email.inbound.token")
+    |> validate_positive_integer(Map.get(inbound, :max_body_bytes), "gateway.email.inbound.max_body_bytes")
+  end
+
+  defp validate_email_inbound_config(errors, _), do: ["gateway.email.inbound: must be a map" | errors]
+
+  defp validate_email_outbound_config(errors, nil), do: errors
+
+  defp validate_email_outbound_config(errors, outbound) when is_map(outbound) do
+    errors
+    |> validate_non_empty_string(Map.get(outbound, :relay), "gateway.email.outbound.relay")
+    |> validate_port(Map.get(outbound, :port), "gateway.email.outbound.port")
+    |> validate_non_empty_string(Map.get(outbound, :username), "gateway.email.outbound.username")
+    |> validate_non_empty_string(Map.get(outbound, :password), "gateway.email.outbound.password")
+    |> validate_email_tls_config(Map.get(outbound, :tls))
+    |> validate_email_auth_config(Map.get(outbound, :auth))
+    |> validate_non_empty_string(Map.get(outbound, :hostname), "gateway.email.outbound.hostname")
+    |> validate_non_empty_string(Map.get(outbound, :from_address), "gateway.email.outbound.from_address")
+  end
+
+  defp validate_email_outbound_config(errors, _), do: ["gateway.email.outbound: must be a map" | errors]
+
+  defp validate_email_tls_config(errors, nil), do: errors
+
+  defp validate_email_tls_config(errors, tls) when is_boolean(tls), do: errors
+
+  defp validate_email_tls_config(errors, tls) when is_binary(tls) do
+    if tls in ["true", "false", "always", "never", "if_available"] do
+      errors
+    else
+      ["gateway.email.outbound.tls: invalid value '#{tls}'. Valid: true, false, always, never, if_available" | errors]
+    end
+  end
+
+  defp validate_email_tls_config(errors, _), do: ["gateway.email.outbound.tls: must be a boolean or string" | errors]
+
+  defp validate_email_auth_config(errors, nil), do: errors
+
+  defp validate_email_auth_config(errors, auth) when is_boolean(auth), do: errors
+
+  defp validate_email_auth_config(errors, auth) when is_binary(auth) do
+    if auth in ["true", "false", "always", "if_available"] do
+      errors
+    else
+      ["gateway.email.outbound.auth: invalid value '#{auth}'. Valid: true, false, always, if_available" | errors]
+    end
+  end
+
+  defp validate_email_auth_config(errors, _), do: ["gateway.email.outbound.auth: must be a boolean or string" | errors]
+
+  defp validate_port(errors, nil, _path), do: errors
+
+  defp validate_port(errors, port, path) when is_integer(port) do
+    if port > 0 and port <= 65535 do
+      errors
+    else
+      ["#{path}: must be between 1 and 65535" | errors]
+    end
+  end
+
+  defp validate_port(errors, _port, path) do
+    ["#{path}: must be an integer" | errors]
+  end
 
   @doc """
   Validates queue configuration.
