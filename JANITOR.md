@@ -2603,3 +2603,34 @@ edits = [
   - Umbrella suite revalidated with all app suites passing (including `lemon_core` 747 tests, `lemon_channels` 121 tests, `coding_agent` 2783 tests, `agent_core` 1552 tests + 165 properties, `coding_agent_ui` 152 tests, `lemon_control_plane` 435 tests, `lemon_skills` 106 tests, `market_intel` 2 tests, plus full `lemon_gateway` suite).
 - All tests passing:
   - Yes (`mix test` green).
+
+
+### 2025-02-20 - Code Quality: Fix elem/2 Anti-Patterns
+**Work Area**: Refactoring / Code Quality
+
+**What was done:**
+- Fixed `elem/2` anti-patterns that reduce code clarity and error handling safety:
+  - `apps/ai/lib/ai/providers/bedrock.ex` line ~305: Replaced `|> elem(0)` with pattern matching
+  - `apps/lemon_router/lib/lemon_router/run_process.ex` line ~1727: Replaced `|> elem(0)` with pattern matching
+  - `apps/ai/lib/ai/error.ex` line ~447: Replaced `DateTime.from_unix(timestamp) |> elem(1)` with proper case statement
+  - `apps/coding_agent/lib/coding_agent/tools/task.ex` line ~364: Replaced `elem(1)` with pattern matching on `BudgetEnforcer.handle_budget_exceeded/2` result
+
+**Why this matters:**
+- Pattern matching documents expected tuple structure explicitly
+- Pattern matching fails with clear errors if structure changes
+- Pattern matching is more idiomatic Elixir
+- Pattern matching enables compiler warnings for unmatched patterns
+- `elem/2` silently returns incorrect data if tuple structure changes
+
+**Files changed:**
+- `apps/ai/lib/ai/providers/bedrock.ex` - Refactored `convert_messages/2`
+- `apps/lemon_router/lib/lemon_router/run_process.ex` - Refactored `merge_files/2`
+- `apps/ai/lib/ai/error.ex` - Refactored `parse_reset_time/1`
+- `apps/coding_agent/lib/coding_agent/tools/task.ex` - Refactored budget exceeded handling
+
+**Commits:**
+- `d9edca5e` - refactor: Replace elem/2 anti-patterns with pattern matching
+
+**Test Results:**
+- All 435 umbrella tests pass
+- No new test failures introduced
