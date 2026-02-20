@@ -1141,3 +1141,62 @@ mix lemon.quality --validate-config --root /path/to/repo
 - Add validation warnings to config reloading
 - Or explore Ironclaw's extension registry pattern for Lemon
 - Or check for more Pi upstream features to port
+
+### 2025-02-19 - Feature Enhancement: Config Validation Warnings on Reload
+**Work Area**: Feature Enhancement
+
+**What was done:**
+- Added optional config validation warnings to `ConfigCache.reload/2`
+- New `validate: true` option validates config after reload and logs warnings
+- Updated `ConfigCache.reload/2` documentation with examples
+- Added `validate_config/1` private function that:
+  - Validates the config using `Validator.validate/1`
+  - Logs warnings via `Logger.warning/1` if validation fails
+  - Works with both modular and legacy config structs
+- Extended `Validator.validate/1` to handle legacy `LemonCore.Config` structs:
+  - Added new function clause for `%LemonCore.Config{}`
+  - Added `validate_legacy_providers/2` for legacy provider map format
+  - Updated `validate_non_empty_string/3` to accept atoms (for enum-like fields)
+- Added backward compatibility clause for `handle_call({:reload, cwd}, ...)`
+- Created comprehensive tests (`config_cache_validation_test.exs`):
+  - Test reload without validation (no warnings)
+  - Test reload with validation and invalid config (logs warnings)
+  - Test reload with validation and valid config (no warnings)
+  - Test get without validation (default behavior)
+  - 4 tests total, all passing
+- Also fixed architecture check for market_intel app:
+  - Added `:lemon_channels` to allowed dependencies
+
+**Files changed:**
+- `apps/lemon_core/lib/lemon_core/config_cache.ex` - Added validate option to reload
+- `apps/lemon_core/lib/lemon_core/config/validator.ex` - Added legacy config support
+- `apps/lemon_core/lib/lemon_core/quality/architecture_check.ex` - Added lemon_channels to market_intel deps
+- `apps/lemon_core/test/lemon_core/config_cache_validation_test.exs` - New test file (4 tests)
+
+**Usage:**
+```elixir
+# Reload without validation (default)
+LemonCore.ConfigCache.reload()
+
+# Reload with validation warnings
+LemonCore.ConfigCache.reload(nil, validate: true)
+
+# With custom cwd
+LemonCore.ConfigCache.reload("/path/to/project", validate: true)
+```
+
+**What worked:**
+- Using pattern matching to support both modular and legacy config structs
+- Backward compatibility via default opts value and separate function clause
+- Logger.warning for non-fatal validation issues
+- Tests properly isolate config via temporary HOME directory
+
+**Total progress:**
+- Started with 119 tests
+- Now have 473 tests (lemon_core) and 1303+ tests (AI app)
+- All tests passing (0 failures)
+
+**Next run should focus on:**
+- Explore Ironclaw's extension registry pattern for Lemon
+- Check for more Pi upstream features to port
+- Add more validation rules to the Validator module

@@ -100,7 +100,8 @@ defmodule MarketIntel.Ingestion.OnChain do
   
   defp fetch_token_transfers(from_block) do
     # Use BaseScan API to get ZEEBOT transfers
-    url = "#{@base_scan_api}?module=account&action=tokentx&contractaddress=#{@zeebot_token}&startblock=#{from_block}&sort=desc&apikey=YourApiKeyToken"
+    api_key = get_basescan_key()
+    url = "#{@base_scan_api}?module=account&action=tokentx&contractaddress=#{@zeebot_token}&startblock=#{from_block}&sort=desc&apikey=#{api_key}"
     
     case HTTPoison.get(url, [], timeout: 15_000) do
       {:ok, %{status_code: 200, body: body}} ->
@@ -162,5 +163,12 @@ defmodule MarketIntel.Ingestion.OnChain do
   
   defp schedule_next do
     Process.send_after(self(), :fetch, :timer.minutes(3))
+  end
+  
+  defp get_basescan_key do
+    case MarketIntel.Secrets.get(:basescan_key) do
+      {:ok, key} -> key
+      _ -> ""
+    end
   end
 end

@@ -71,11 +71,24 @@ defmodule LemonCore.ConfigCache do
 
   @doc """
   Force reload the cached *base* config for `cwd` from disk.
+
+  ## Options
+
+    * `:validate` - Whether to validate the config and log warnings on validation errors
+      (default: false to maintain backward compatibility)
+
+  ## Examples
+
+      # Reload without validation
+      LemonCore.ConfigCache.reload()
+
+      # Reload with validation warnings
+      LemonCore.ConfigCache.reload(validate: true)
   """
   @spec reload(String.t() | nil, keyword()) :: LemonCore.Config.t()
   def reload(cwd \\ nil, opts \\ []) do
     ensure_available!()
-    GenServer.call(__MODULE__, {:reload, cwd}, call_timeout(opts))
+    GenServer.call(__MODULE__, {:reload, cwd, opts}, call_timeout(opts))
   end
 
   @doc """
@@ -130,11 +143,22 @@ defmodule LemonCore.ConfigCache do
   end
 
   def handle_call({:reload, cwd}, _from, state) do
+    # Backward compatibility: call without opts
+    handle_call({:reload, cwd, []}, _from, state)
+  end
+
+  def handle_call({:reload, cwd, opts}, _from, state) do
     paths = config_paths(cwd)
     key = cache_key(paths)
     now = now_ms()
     {base, fp} = load_base(cwd, paths)
     _ = :ets.insert(@table, {key, base, fp, now, now})
+
+    # Optionally validate and log warnings
+    if Keyword.get(opts, :validate, false) do
+      validate_config(base)
+    end
+
     {:reply, base, state}
   end
 
@@ -142,6 +166,23 @@ defmodule LemonCore.ConfigCache do
     base = LemonCore.Config.load_base_from_disk(cwd)
     fp = fingerprint(paths)
     {base, fp}
+  end
+
+  defp validate_config(base_config) do
+    # Validate the legacy config struct directly
+    # The Validator module can handle both modular and legacy configs
+    case LemonCore.Config.Validator.validate(base_config) do
+      :ok ->
+        :ok
+
+      {:error, errors} ->
+        require Logger
+
+        Logger.warning("""
+        Configuration validation warnings after reload:
+        #{Enum.map_join(errors, "\n", &"  - #{&1}")}
+        """)
+    end
   end
 
   defp config_paths(cwd) do

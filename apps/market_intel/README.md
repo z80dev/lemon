@@ -107,14 +107,73 @@ MarketIntel.Cache.get_snapshot()
 
 ## Configuration
 
-Environment variables:
-- `DEXSCREENER_API_KEY` - Optional API key
-- `BASESCAN_API_KEY` - For on-chain data
+MarketIntel uses **LemonCore.Secrets** for secure API key storage. This is more secure than environment variables and integrates with Lemon's existing secret management.
 
-Config in `config/config.exs`:
-- Commentary intervals
-- Token addresses
-- Thresholds for signals
+### Required: X (Twitter) API
+
+The X API credentials are shared with `lemon_channels` and should already be configured. If not, set them via environment variables (for initial setup):
+
+```bash
+export X_API_CLIENT_ID="your_client_id"
+export X_API_CLIENT_SECRET="your_client_secret"
+export X_API_ACCESS_TOKEN="your_access_token"
+export X_API_REFRESH_TOKEN="your_refresh_token"
+```
+
+Get your X API credentials at: https://developer.twitter.com
+
+### Optional: Data Source Secrets
+
+Store these in the secrets store for better security:
+
+```bash
+# Add secrets using the CLI
+elixir scripts/secrets.exs set basescan_key "your_basescan_key"
+elixir scripts/secrets.exs set openai_key "sk-..."
+
+# Or set via environment (fallback)
+export MARKET_INTEL_BASESCAN_KEY="your_key"
+export MARKET_INTEL_OPENAI_KEY="sk-..."
+```
+
+**Available secrets:**
+- `basescan_key` - BaseScan API for on-chain data
+- `dexscreener_key` - DEX Screener API (optional)
+- `openai_key` - OpenAI API for AI commentary
+- `anthropic_key` - Anthropic API (alternative to OpenAI)
+
+### Quick Setup
+
+```bash
+# 1. Check which secrets are configured
+elixir scripts/secrets.exs check
+
+# 2. Add your API keys
+elixir scripts/secrets.exs set basescan_key "your_key"
+elixir scripts/secrets.exs set openai_key "sk-..."
+
+# 3. Verify configuration
+elixir scripts/secrets.exs list
+
+# 4. Run full setup
+elixir scripts/setup.exs
+```
+
+### Managing Secrets
+
+```bash
+# List all configured secrets
+elixir scripts/secrets.exs list
+
+# Check which secrets are available
+elixir scripts/secrets.exs check
+
+# Get a specific secret (masked)
+elixir scripts/secrets.exs get basescan_key
+
+# Set a secret
+elixir scripts/secrets.exs set basescan_key "new_key"
+```
 
 ## Database Schema
 
@@ -123,11 +182,47 @@ Config in `config/config.exs`:
 - **commentary_history** - Generated tweets for analysis
 - **market_signals** - Significant events detected
 
+## File Structure
+
+```
+apps/market_intel/
+├── config/
+│   └── config.exs          # Configuration
+├── lib/
+│   ├── market_intel/
+│   │   ├── application.ex  # OTP app startup
+│   │   ├── cache.ex        # ETS cache
+│   │   ├── repo.ex         # SQLite repo
+│   │   ├── schema.ex       # Ecto schemas
+│   │   ├── scheduler.ex    # Periodic tasks
+│   │   ├── secrets.ex      # Secrets store helper
+│   │   ├── commentary/
+│   │   │   └── pipeline.ex # Tweet generation
+│   │   └── ingestion/
+│   │       ├── dex_screener.ex
+│   │       ├── polymarket.ex
+│   │       ├── twitter_mentions.ex
+│   │       └── on_chain.ex
+│   └── market_intel.ex     # Main module
+├── priv/
+│   └── repo/migrations/    # Database migrations
+├── scripts/
+│   ├── secrets.exs         # Secrets CLI
+│   ├── check_env.exs       # Env var checker
+│   └── setup.exs           # Setup script
+├── README.md               # Full documentation
+├── SETUP.md                # Setup guide
+└── mix.exs                 # App dependencies
+```
+
 ## Future Enhancements
 
-- [ ] Integration with AI module for tweet generation
+- [x] Basic X API integration for posting tweets
+- [ ] Full AI module integration for tweet generation
 - [ ] Farcaster mentions ingestion
 - [ ] Telegram sentiment analysis
 - [ ] Automated thread generation for deep analysis
 - [ ] Performance tracking (which commentary gets best engagement)
 - [ ] Backtesting commentary strategies
+- [ ] Web dashboard for monitoring data ingestion
+- [ ] Alert system for significant market events

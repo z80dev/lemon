@@ -197,11 +197,8 @@ defmodule MarketIntel.Commentary.Pipeline do
   end
   
   defp generate_tweet(prompt) do
-    # Get AI provider from config
-    provider = Application.get_env(:market_intel, :ai_provider, "openai")
-    
-    # Call AI generation (simplified - would use actual AI module)
-    case generate_with_ai(prompt, provider) do
+    # Try AI generation if configured
+    case generate_with_ai(prompt) do
       {:ok, tweet} -> {:ok, tweet}
       {:error, _} -> 
         # Fallback to template-based generation
@@ -209,7 +206,25 @@ defmodule MarketIntel.Commentary.Pipeline do
     end
   end
   
-  defp generate_with_ai(prompt, _provider) do
+  defp generate_with_ai(prompt) do
+    # Try OpenAI first, then Anthropic
+    cond do
+      MarketIntel.Secrets.configured?(:openai_key) ->
+        generate_with_openai(prompt)
+      MarketIntel.Secrets.configured?(:anthropic_key) ->
+        generate_with_anthropic(prompt)
+      true ->
+        {:error, :no_ai_provider}
+    end
+  end
+  
+  defp generate_with_openai(prompt) do
+    # TODO: Integrate with Lemon's AI module
+    # For now, return error to trigger fallback
+    {:error, :not_implemented}
+  end
+  
+  defp generate_with_anthropic(prompt) do
     # TODO: Integrate with Lemon's AI module
     # For now, return error to trigger fallback
     {:error, :not_implemented}

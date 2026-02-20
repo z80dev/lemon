@@ -86,8 +86,9 @@ defmodule MarketIntel.Ingestion.DexScreener do
   
   defp fetch_token(address, key) do
     url = "#{@api_base}/dex/tokens/#{address}"
+    headers = maybe_add_api_key([])
     
-    case HTTPoison.get(url, [], timeout: 10_000) do
+    case HTTPoison.get(url, headers, timeout: 10_000) do
       {:ok, %{status_code: 200, body: body}} ->
         data = Jason.decode!(body)
         {:ok, key, parse_token_data(data)}
@@ -97,6 +98,13 @@ defmodule MarketIntel.Ingestion.DexScreener do
         
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+  
+  defp maybe_add_api_key(headers) do
+    case MarketIntel.Secrets.get(:dexscreener_key) do
+      {:ok, key} -> [{"Authorization", "Bearer #{key}"} | headers]
+      _ -> headers
     end
   end
   

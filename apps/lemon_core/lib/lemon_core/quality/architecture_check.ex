@@ -49,7 +49,7 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     ],
     lemon_router: [:agent_core, :ai, :coding_agent, :lemon_channels, :lemon_core, :lemon_gateway],
     lemon_skills: [:agent_core, :ai, :lemon_channels, :lemon_core],
-    market_intel: [:agent_core, :lemon_core]
+    market_intel: [:agent_core, :lemon_channels, :lemon_core]
   }
 
   @app_namespaces %{

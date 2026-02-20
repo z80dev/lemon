@@ -44,7 +44,7 @@ defmodule LemonCore.Config.Validator do
         "gateway.web_port: must be between 1 and 65535"
       ]}
   """
-  @spec validate(Modular.t()) :: :ok | {:error, [String.t()]}
+  @spec validate(Modular.t() | LemonCore.Config.t()) :: :ok | {:error, [String.t()]}
   def validate(%Modular{} = config) do
     errors = []
     errors = validate_agent(config.agent, errors)
@@ -52,6 +52,22 @@ defmodule LemonCore.Config.Validator do
     errors = validate_logging(config.logging, errors)
     errors = validate_providers(config.providers, errors)
     errors = validate_tools(config.tools, errors)
+    errors = validate_tui(config.tui, errors)
+
+    case errors do
+      [] -> :ok
+      _ -> {:error, Enum.reverse(errors)}
+    end
+  end
+
+  def validate(%LemonCore.Config{} = config) do
+    # Convert legacy config to modular format for validation
+    # Note: legacy config has no 'tools' field
+    errors = []
+    errors = validate_agent(config.agent, errors)
+    errors = validate_gateway(config.gateway, errors)
+    errors = validate_logging(config.logging, errors)
+    errors = validate_legacy_providers(config.providers, errors)
     errors = validate_tui(config.tui, errors)
 
     case errors do
@@ -134,6 +150,15 @@ defmodule LemonCore.Config.Validator do
   defp validate_non_empty_string(errors, value, path) when is_binary(value) do
     if String.trim(value) == "" do
       ["#{path}: cannot be empty" | errors]
+    else
+      errors
+    end
+  end
+
+  defp validate_non_empty_string(errors, value, path) when is_atom(value) do
+    # Atoms are valid for enum-like fields (thinking_level, provider, etc.)
+    if value == nil do
+      ["#{path}: cannot be nil" | errors]
     else
       errors
     end
@@ -243,6 +268,48 @@ defmodule LemonCore.Config.Validator do
 
   defp validate_providers_map(errors, _value) do
     ["providers.providers: must be a map" | errors]
+  end
+
+  @doc """
+  Validates legacy providers configuration (map format).
+  """
+  @spec validate_legacy_providers(map(), [String.t()]) :: [String.t()]
+  def validate_legacy_providers(providers, errors) when is_map(providers) do
+    Enum.reduce(providers, errors, fn {name, config}, acc ->
+      validate_legacy_provider_config(acc, name, config)
+    end)
+  end
+
+  def validate_legacy_providers(_providers, errors), do: errors
+
+  defp validate_legacy_provider_config(errors, name, config) when is_map(config) do
+    # Validate API key if present
+    errors =
+      case Map.get(config, :api_key) do
+        nil -> errors
+        "" -> ["providers.#{name}.api_key: cannot be empty" | errors]
+        _ -> errors
+      end
+
+    # Validate base URL if present
+    errors =
+      case Map.get(config, :base_url) do
+        nil -> errors
+        "" -> ["providers.#{name}.base_url: cannot be empty" | errors]
+        url when is_binary(url) ->
+          if String.starts_with?(url, ["http://", "https://"]) do
+            errors
+          else
+            ["providers.#{name}.base_url: must start with http:// or https://" | errors]
+          end
+        _ -> ["providers.#{name}.base_url: must be a string" | errors]
+      end
+
+    errors
+  end
+
+  defp validate_legacy_provider_config(errors, name, _config) do
+    ["providers.#{name}: must be a map" | errors]
   end
 
   defp validate_provider_config(errors, name, config) when is_map(config) do
