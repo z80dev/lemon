@@ -1762,6 +1762,51 @@ describe('AgentConnection', () => {
       });
     });
 
+    it('maps sessions.active.list responses into running_sessions message', async () => {
+      const conn = new AgentConnection({
+        wsUrl: 'ws://control-plane.test/ws',
+        wsSessionKey: 'agent:test:main',
+      });
+      const ws = await startWebSocketConnection(conn);
+      const messageHandler = vi.fn();
+      conn.on('message', messageHandler);
+
+      conn.listRunningSessions();
+      const reqFrame = readLastFrame(ws);
+      expect(reqFrame.method).toBe('sessions.active.list');
+
+      emitWebSocketMessage(ws, {
+        type: 'res',
+        id: reqFrame.id,
+        ok: true,
+        payload: {
+          sessions: [
+            {
+              sessionKey: 'agent:test:main',
+              updatedAtMs: 4321,
+              cwd: '/repo',
+              model: 'openai:gpt-4o',
+              active: true,
+              runId: 'run-1',
+            },
+          ],
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'running_sessions',
+        sessions: [
+          {
+            session_id: 'agent:test:main',
+            cwd: '/repo',
+            is_streaming: true,
+            model: { provider: 'openai', id: 'gpt-4o' },
+          },
+        ],
+        error: null,
+      });
+    });
+
     it('maps models.list responses into models_list message', async () => {
       const conn = new AgentConnection({
         wsUrl: 'ws://control-plane.test/ws',

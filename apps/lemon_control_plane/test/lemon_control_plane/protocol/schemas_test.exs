@@ -7,6 +7,9 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
     test "returns schema for known methods" do
       assert Schemas.get("connect") != nil
       assert Schemas.get("sessions.list") != nil
+      assert Schemas.get("sessions.active.list") != nil
+      assert Schemas.get("transports.status") != nil
+      assert Schemas.get("introspection.snapshot") != nil
       assert Schemas.get("cron.add") != nil
       assert Schemas.get("chat.send") != nil
       assert Schemas.get("agent") != nil
@@ -279,6 +282,44 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
     test "validates connect.challenge method requires challenge" do
       assert {:error, _} = Schemas.validate("connect.challenge", %{})
       assert :ok = Schemas.validate("connect.challenge", %{"challenge" => "abc123"})
+    end
+
+    test "validates sessions.active.list method schema" do
+      assert :ok = Schemas.validate("sessions.active.list", %{})
+
+      assert :ok =
+               Schemas.validate("sessions.active.list", %{
+                 "agentId" => "default",
+                 "limit" => 25,
+                 "route" => %{"channelId" => "telegram"}
+               })
+
+      assert {:error, _} = Schemas.validate("sessions.active.list", %{"limit" => "many"})
+    end
+
+    test "validates transports.status method schema" do
+      assert :ok = Schemas.validate("transports.status", %{})
+      assert :ok = Schemas.validate("transports.status", nil)
+    end
+
+    test "validates introspection.snapshot method schema" do
+      assert :ok = Schemas.validate("introspection.snapshot", %{})
+
+      assert :ok =
+               Schemas.validate("introspection.snapshot", %{
+                 "agentId" => "default",
+                 "route" => %{"channelId" => "telegram"},
+                 "limit" => 100,
+                 "sessionLimit" => 50,
+                 "activeLimit" => 10,
+                 "includeAgents" => true,
+                 "includeSessions" => true,
+                 "includeActiveSessions" => true,
+                 "includeChannels" => true,
+                 "includeTransports" => true
+               })
+
+      assert {:error, _} = Schemas.validate("introspection.snapshot", %{"includeAgents" => "yes"})
     end
 
     test "validates agent routing method schemas" do

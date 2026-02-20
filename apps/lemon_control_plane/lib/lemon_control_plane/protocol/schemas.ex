@@ -22,6 +22,20 @@ defmodule LemonControlPlane.Protocol.Schemas do
     # System/health methods
     "health" => %{optional: %{}},
     "status" => %{optional: %{}},
+    "introspection.snapshot" => %{
+      optional: %{
+        "agentId" => :string,
+        "route" => :map,
+        "limit" => :integer,
+        "sessionLimit" => :integer,
+        "activeLimit" => :integer,
+        "includeAgents" => :boolean,
+        "includeSessions" => :boolean,
+        "includeActiveSessions" => :boolean,
+        "includeChannels" => :boolean,
+        "includeTransports" => :boolean
+      }
+    },
     "logs.tail" => %{
       optional: %{
         "lines" => :integer,
@@ -31,6 +45,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
 
     # Channel methods
     "channels.status" => %{optional: %{}},
+    "transports.status" => %{optional: %{}},
     "channels.logout" => %{
       optional: %{
         "channelId" => :string
@@ -233,6 +248,13 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "sessions.active" => %{
       required: %{
         "sessionKey" => :string
+      }
+    },
+    "sessions.active.list" => %{
+      optional: %{
+        "agentId" => :string,
+        "limit" => :integer,
+        "route" => :map
       }
     },
 

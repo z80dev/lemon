@@ -27,6 +27,7 @@ defmodule LemonControlPlane.Methods.Registry do
   @builtin_methods [
     LemonControlPlane.Methods.Health,
     LemonControlPlane.Methods.Status,
+    LemonControlPlane.Methods.IntrospectionSnapshot,
     LemonControlPlane.Methods.Agent,
     LemonControlPlane.Methods.AgentWait,
     LemonControlPlane.Methods.AgentIdentityGet,
@@ -40,6 +41,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.LogsTail,
     # Channels
     LemonControlPlane.Methods.ChannelsStatus,
+    LemonControlPlane.Methods.TransportsStatus,
     LemonControlPlane.Methods.ChannelsLogout,
     # Models
     LemonControlPlane.Methods.ModelsList,
@@ -61,6 +63,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.SessionsReset,
     LemonControlPlane.Methods.SessionsCompact,
     LemonControlPlane.Methods.SessionsActive,
+    LemonControlPlane.Methods.SessionsActiveList,
     # Cron
     LemonControlPlane.Methods.CronList,
     LemonControlPlane.Methods.CronAdd,

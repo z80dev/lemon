@@ -276,23 +276,37 @@ function mapOpenClawResponseToMessages(
     }
 
     case 'sessions.list':
-    case 'sessions.list.running': {
+    case 'sessions.list.running':
+    case 'sessions.active.list.running': {
       const sessionsPayload = Array.isArray(payload.sessions) ? payload.sessions : [];
       const mapped = sessionsPayload.map((session) => {
         const sessionPayload = asRecord(session);
+        const isStreaming =
+          method === 'sessions.active.list.running'
+            ? sessionPayload.active !== false
+              || readNonEmptyString(sessionPayload.runId) !== null
+            : false;
+
         return {
           path: String(sessionPayload.sessionKey || sessionPayload.id || ''),
           id: String(sessionPayload.sessionKey || sessionPayload.id || ''),
           timestamp: Number(sessionPayload.updatedAtMs || sessionPayload.createdAtMs || now()),
           cwd: parseSessionCwd(sessionPayload),
           model: parseSessionModel(sessionPayload),
+          is_streaming: isStreaming,
         };
       });
 
       if (method === 'sessions.list') {
         return [{
           type: 'sessions_list',
-          sessions: mapped,
+          sessions: mapped.map((session) => ({
+            path: session.path,
+            id: session.id,
+            timestamp: session.timestamp,
+            cwd: session.cwd,
+            model: session.model,
+          })),
         }];
       }
 
@@ -301,7 +315,7 @@ function mapOpenClawResponseToMessages(
         sessions: mapped.map((session) => ({
           session_id: session.id,
           cwd: session.cwd,
-          is_streaming: false,
+          is_streaming: session.is_streaming,
           model: session.model,
         })),
         error: null,
@@ -840,7 +854,7 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
       }
 
       case 'list_running_sessions': {
-        this.sendOpenClawRequest('sessions.list', { limit: 100, offset: 0 }, null, 'sessions.list.running');
+        this.sendOpenClawRequest('sessions.active.list', { limit: 100 }, null, 'sessions.active.list.running');
         break;
       }
 
