@@ -12,6 +12,8 @@ defmodule LemonGateway.FarcasterTransportTest do
   @session_table :farcaster_frame_sessions
 
   setup do
+    ensure_store_started()
+
     farcaster_cfg = %{
       action_path: @action_path,
       image_url: @frame_image_url,
@@ -196,12 +198,31 @@ defmodule LemonGateway.FarcasterTransportTest do
   end
 
   defp clear_frame_sessions do
-    @session_table
-    |> Store.list()
-    |> Enum.each(fn {key, _value} ->
-      Store.delete(@session_table, key)
-    end)
+    case Process.whereis(LemonCore.Store) do
+      pid when is_pid(pid) ->
+        @session_table
+        |> Store.list()
+        |> Enum.each(fn {key, _value} ->
+          Store.delete(@session_table, key)
+        end)
+
+      _ ->
+        :ok
+    end
   rescue
     _ -> :ok
+  catch
+    :exit, _ -> :ok
+  end
+
+  defp ensure_store_started do
+    if is_nil(Process.whereis(LemonCore.Store)) do
+      case start_supervised(LemonCore.Store) do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+      end
+    end
+
+    :ok
   end
 end

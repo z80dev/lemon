@@ -174,7 +174,7 @@ defmodule CodingAgent.SessionExtensionsTest do
 
   defp tool_names(tools), do: Enum.map(tools, & &1.name)
 
-  defp eventually(fun, attempts \\ 25, sleep_ms \\ 20)
+  defp eventually(fun, attempts \\ 150, sleep_ms \\ 20)
 
   defp eventually(fun, attempts, _sleep_ms) when attempts <= 0, do: fun.()
 

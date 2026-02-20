@@ -12,6 +12,8 @@ defmodule LemonGateway.EmailInboundSecurityTest do
   @thread_state_table :email_thread_state
 
   setup do
+    ensure_store_started()
+
     File.rm_rf(@attachments_dir)
     original_attachment_cap = Application.get_env(:lemon_gateway, :email_attachment_max_bytes)
 
@@ -206,6 +208,19 @@ defmodule LemonGateway.EmailInboundSecurityTest do
     end)
   rescue
     _ -> :ok
+  catch
+    :exit, _ -> :ok
+  end
+
+  defp ensure_store_started do
+    if is_nil(Process.whereis(LemonCore.Store)) do
+      case start_supervised(LemonCore.Store) do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+      end
+    end
+
+    :ok
   end
 
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)

@@ -25,6 +25,122 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-20 - Integration Review: Kimi Task Consolidation + Stability Hardening
+**Work Area**: Integration / Review / Test Stabilization
+
+**What was done:**
+- Reviewed recent Kimi-delivered workstreams and validated integration boundaries:
+  - **Provider/model expansion**: new providers (Mistral, Cerebras, DeepSeek, Qwen, MiniMax, Z.ai) and later model/engine decoupling.
+  - **Test expansion**: new coverage for previously untested coding_agent modules.
+  - **Refactoring + Hashline port**: `elem/2` anti-pattern removals and Hashline Edit Mode port line.
+- Reviewed and validated the model selection integration points:
+  - `apps/lemon_core/lib/lemon_core/run_request.ex` now accepts first-class `:model` and normalizes it.
+  - `apps/lemon_router/lib/lemon_router/model_selection.ex` centralizes precedence:
+    - model: request -> meta -> session -> profile -> default
+    - engine: resume -> explicit -> model-implied -> profile default
+- Ran full umbrella `mix test` repeatedly and fixed integration flakiness/races found during this pass:
+  - relaxed brittle timing bounds in coordinator timeout tests.
+  - added eventual assertions for async cleanup checks.
+  - hardened extension reload wait window.
+  - hardened gateway/automation tests against missing `LemonCore.Store`/`CronManager` process races.
+  - hardened docs catalog missing-file test assumption for seeded harness dirs.
+  - increased timeout for high-concurrency thread worker assertion.
+
+**Files changed across the 3 Kimi workstreams (range `0522d892..df10dfe3`):**
+- `JANITOR.md`
+- `apps/ai/lib/ai/error.ex`
+- `apps/ai/lib/ai/models.ex`
+- `apps/ai/lib/ai/providers/bedrock.ex`
+- `apps/ai/test/models_new_providers_test.exs`
+- `apps/coding_agent/lib/coding_agent/tools/agent.ex`
+- `apps/coding_agent/lib/coding_agent/tools/hashline.ex`
+- `apps/coding_agent/lib/coding_agent/tools/task.ex`
+- `apps/coding_agent/test/coding_agent/budget_enforcer_test.exs`
+- `apps/coding_agent/test/coding_agent/extensions/extension_test.exs`
+- `apps/coding_agent/test/coding_agent/run_graph_server_test.exs`
+- `apps/coding_agent/test/coding_agent/session_extensions_test.exs`
+- `apps/coding_agent/test/coding_agent/settings_manager_test.exs`
+- `apps/coding_agent/test/coding_agent/task_store_server_test.exs`
+- `apps/coding_agent/test/coding_agent/tools/agent_test.exs`
+- `apps/coding_agent/test/coding_agent/tools/hashline_test.exs`
+- `apps/coding_agent/test/coding_agent/tools/task_test.exs`
+- `apps/lemon_channels/lib/lemon_channels/adapters/x_api/token_manager.ex`
+- `apps/lemon_channels/test/lemon_channels/adapters/x_api_client_test.exs`
+- `apps/lemon_channels/test/lemon_channels/adapters/x_api_token_manager_test.exs`
+- `apps/lemon_control_plane/lib/lemon_control_plane/methods/agent.ex`
+- `apps/lemon_control_plane/lib/lemon_control_plane/methods/agent_inbox_send.ex`
+- `apps/lemon_control_plane/lib/lemon_control_plane/protocol/schemas.ex`
+- `apps/lemon_core/lib/lemon_core/browser/local_server.ex`
+- `apps/lemon_core/lib/lemon_core/run_request.ex`
+- `apps/lemon_core/test/lemon_core/browser/local_server_test.exs`
+- `apps/lemon_core/test/lemon_core/config_cache_error_test.exs`
+- `apps/lemon_core/test/lemon_core/run_request_test.exs`
+- `apps/lemon_core/test/lemon_core/secrets/keychain_test.exs`
+- `apps/lemon_core/test/lemon_core/store/sqlite_backend_test.exs`
+- `apps/lemon_core/test/mix/tasks/lemon.quality_test.exs`
+- `apps/lemon_gateway/lib/lemon_gateway/binding_resolver.ex`
+- `apps/lemon_gateway/test/application_test.exs`
+- `apps/lemon_gateway/test/binding_resolver_test.exs`
+- `apps/lemon_gateway/test/engine_lock_test.exs`
+- `apps/lemon_router/lib/lemon_router/agent_inbox.ex`
+- `apps/lemon_router/lib/lemon_router/model_selection.ex`
+- `apps/lemon_router/lib/lemon_router/router.ex`
+- `apps/lemon_router/lib/lemon_router/run_orchestrator.ex`
+- `apps/lemon_router/lib/lemon_router/run_process.ex`
+- `apps/lemon_router/test/lemon_router/model_selection_test.exs`
+- `apps/lemon_router/test/lemon_router/run_orchestrator_test.exs`
+- `docs/catalog.exs`
+- `docs/model-selection-decoupling.md`
+
+**Additional files changed in this integration pass (stability fixes):**
+- `apps/coding_agent/test/coding_agent/coordinator_edge_cases_test.exs`
+- `apps/coding_agent/test/coding_agent/coordinator_test.exs`
+- `apps/coding_agent/test/coding_agent/session_extensions_test.exs`
+- `apps/lemon_automation/test/lemon_automation/wake_test.exs`
+- `apps/lemon_core/test/lemon_core/quality/docs_catalog_test.exs`
+- `apps/lemon_gateway/test/email/inbound_security_test.exs`
+- `apps/lemon_gateway/test/farcaster_transport_test.exs`
+- `apps/lemon_gateway/test/thread_worker_test.exs`
+
+**Commits made/reviewed (Kimi + integration stream):**
+- `0522d892` - feat(coding_agent): port Hashline Edit Mode from Oh-My-Pi
+- `ebb25b81` - docs(janitor): Add Hashline Edit Mode port entry
+- `6ff29923` - docs(janitor): Log comprehensive test expansion for 7 untested modules
+- `789a6797` - chore(integration): review and stabilize Kimi task changes
+- `8518dc1a` - Add new LLM model providers: Mistral, Cerebras, DeepSeek, Qwen, MiniMax, Z.ai
+- `b949de45` - Update JANITOR.md with new LLM provider feature enhancement log
+- `d9edca5e` - refactor: Replace elem/2 anti-patterns with pattern matching
+- `3e056434` - docs: Update JANITOR.md with elem/2 refactoring
+- `ee2ee7db` - test: Add tests for previously untested modules
+- `77e79387` - docs: Update JANITOR.md with test expansion work log
+- `60b4ef83` - fix: resolve issues from Kimi tasks
+- `df10dfe3` - feat: decouple model selection and update agent/task tool prompts for async-first usage
+
+**Total progress (verification):**
+- Full umbrella run: `mix test` passed.
+- Per-app totals from passing run:
+  - `lemon_core`: 766 tests
+  - `lemon_channels`: 121 tests
+  - `ai`: 1,368 tests
+  - `agent_core`: 165 properties, 1,552 tests
+  - `lemon_skills`: 106 tests
+  - `coding_agent`: 2,912 tests
+  - `market_intel`: 2 tests
+  - `coding_agent_ui`: 152 tests
+  - `lemon_gateway`: 1,407 tests
+  - `lemon_router`: 182 tests
+  - `lemon_web`: 4 tests
+  - `lemon_automation`: 124 tests
+  - `lemon_control_plane`: 435 tests
+- Aggregate tests: **9,131 tests**, **0 failures** (plus **165 properties** passing).
+
+**Next run should focus on:**
+- Convert remaining timing-sensitive assertions in concurrency-heavy suites to bounded eventual checks.
+- Reduce global app start/stop coupling in tests that currently rely on named singleton processes.
+- Add focused regression tests around model/engine conflict warnings and control-plane model override paths.
+
+---
+
 ### 2026-02-20 - Integration Review: Kimi Task Merge Stabilization
 **Work Area**: Integration / Review / Bug Fixes
 

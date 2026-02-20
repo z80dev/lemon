@@ -18,7 +18,7 @@ defmodule LemonCore.Quality.DocsCatalogTest do
     test "returns path with correct structure for nested root", %{harness: harness} do
       nested_root = Path.join(harness.tmp_dir, "some/nested/path")
       File.mkdir_p!(nested_root)
-      
+
       expected_path = Path.join(nested_root, @catalog_path)
       assert DocsCatalog.catalog_file(nested_root) == expected_path
     end
@@ -27,8 +27,10 @@ defmodule LemonCore.Quality.DocsCatalogTest do
   describe "load/1" do
     test "returns error when catalog file is missing", %{harness: harness} do
       root = harness.tmp_dir
-      # Ensure no catalog file exists
       catalog_file = Path.join(root, @catalog_path)
+
+      # The harness may provide a seeded docs tree; force the missing-file case.
+      File.rm(catalog_file)
       refute File.exists?(catalog_file)
 
       assert {:error, message} = DocsCatalog.load(root: root)
@@ -61,13 +63,13 @@ defmodule LemonCore.Quality.DocsCatalogTest do
 
       assert {:ok, loaded_entries} = DocsCatalog.load(root: root)
       assert length(loaded_entries) == 2
-      
+
       [first, second] = loaded_entries
       assert first.path == "docs/getting_started.md"
       assert first.owner == "@team-docs"
       assert first.last_reviewed == ~D[2026-01-15]
       assert first.max_age_days == 90
-      
+
       assert second.path == "docs/api_reference.md"
       assert second.owner == "@team-api"
     end

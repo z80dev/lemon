@@ -74,6 +74,24 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
     end)
   end
 
+  defp assert_eventually(fun, timeout_ms \\ 2_000) when is_function(fun, 0) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_assert_eventually(fun, deadline)
+  end
+
+  defp do_assert_eventually(fun, deadline) do
+    if fun.() do
+      :ok
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        flunk("condition was not met within timeout")
+      else
+        Process.sleep(10)
+        do_assert_eventually(fun, deadline)
+      end
+    end
+  end
+
   # ============================================================================
   # 1. Session Lifecycle Tests
   # ============================================================================
@@ -505,11 +523,10 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
       # Abort
       :ok = Coordinator.abort_all(coordinator)
 
-      # Wait for cleanup
-      Process.sleep(100)
-
       # Verify state is clean
-      assert Coordinator.list_active(coordinator) == []
+      assert_eventually(fn ->
+        Coordinator.list_active(coordinator) == []
+      end)
 
       # Can start new work
       specs = [%{prompt: "New task"}]

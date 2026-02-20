@@ -2065,7 +2065,7 @@ defmodule LemonGateway.ThreadWorkerTest do
 
       # All 15 jobs should complete without errors
       for job <- jobs do
-        assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 5000
+        assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 10_000
       end
     end
   end

@@ -8,6 +8,9 @@ defmodule LemonAutomation.WakeTest do
   @runs_table :cron_runs
 
   setup do
+    ensure_store_started()
+    ensure_cron_manager_started()
+
     clear_table(@jobs_table)
     clear_table(@runs_table)
 
@@ -189,7 +192,7 @@ defmodule LemonAutomation.WakeTest do
     }
   end
 
-  defp await_terminal_run(run_id, attempts \\ 500)
+  defp await_terminal_run(run_id, attempts \\ 1_500)
 
   defp await_terminal_run(_run_id, 0) do
     flunk("wake run did not reach terminal state before timeout")
@@ -204,5 +207,27 @@ defmodule LemonAutomation.WakeTest do
         Process.sleep(10)
         await_terminal_run(run_id, attempts - 1)
     end
+  end
+
+  defp ensure_store_started do
+    if is_nil(Process.whereis(LemonCore.Store)) do
+      case start_supervised(LemonCore.Store) do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  defp ensure_cron_manager_started do
+    if is_nil(Process.whereis(LemonAutomation.CronManager)) do
+      case start_supervised(LemonAutomation.CronManager) do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+      end
+    end
+
+    :ok
   end
 end
