@@ -1826,6 +1826,49 @@ causing the quality check to fail with:
 - Now have 524+ tests across lemon_core (522 passing), plus 7 skill CLI tests, plus 4 web dashboard tests
 - All tests passing (0 failures)
 
+### 2025-02-20 - Pi Sync: Add Kimi K2 Models from OpenCode
+**Work Area**: Pi Upstream Sync
+
+**What was done:**
+- Synced with Pi upstream (github.com/pi-coding-agent/pi) to check for new models
+- Found Pi has Kimi K2 models available through OpenCode that Lemon was missing
+- Added three new Kimi K2 models to Lemon's OpenCode model registry:
+  - `kimi-k2`: Base model, text-only, 262k context, $0.4/$2.5 per million tokens
+  - `kimi-k2-thinking`: Reasoning variant, text-only, 262k context, $0.4/$2.5 per million tokens
+  - `kimi-k2.5`: Latest version with vision support, 262k context, $0.6/$3.0 per million tokens
+- All models use OpenCode's OpenAI-compatible API at `https://opencode.ai/zen/v1`
+- Added comprehensive tests for all three models:
+  - `kimi k2 has correct specs` - verifies pricing, context window, capabilities
+  - `kimi k2 thinking has correct specs` - verifies reasoning support
+  - `kimi k2.5 has correct specs` - verifies vision support and updated pricing
+  - Updated flagship models test to include new models
+- All 51 AI model tests pass
+- No regressions
+
+**Files changed:**
+- `apps/ai/lib/ai/models.ex` - Added 3 new Kimi K2 model definitions
+- `apps/ai/test/models_test.exs` - Added 4 new test cases for Kimi K2 models
+
+**Commit:**
+- `229a6c7e` - feat(models): Add Kimi K2 models from OpenCode
+
+**What worked:**
+- Pi's model structure maps cleanly to Lemon's Model struct
+- OpenCode models use the same OpenAI-compatible API pattern as existing models
+- Pricing and specs synced directly from Pi upstream
+
+**Models added:**
+| Model | Provider | Context | Max Tokens | Reasoning | Vision |
+|-------|----------|---------|------------|-----------|--------|
+| kimi-k2 | OpenCode | 262k | 262k | No | No |
+| kimi-k2-thinking | OpenCode | 262k | 262k | Yes | No |
+| kimi-k2.5 | OpenCode | 262k | 262k | Yes | Yes |
+
+**Total progress:**
+- Started with 119 tests
+- Now have 1305+ tests (AI app: 51, lemon_core: 488+, lemon_skills: 89)
+- All tests passing (0 failures)
+
 **Next run should focus on:**
 - Check for more Pi upstream features to port
 - Add more comprehensive documentation for other features
