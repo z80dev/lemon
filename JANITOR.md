@@ -1575,8 +1575,49 @@ results = LemonSkills.Registry.discover("github")
 - Now have 495+ tests across lemon_core
 - All tests passing (0 failures)
 
+### 2025-02-20 - Feature Enhancement: Farcaster Config Validation
+**Work Area**: Feature Enhancement
+
+**What was done:**
+- Added Farcaster configuration validation to `LemonCore.Config.Validator`:
+  - `validate_farcaster_config/2` function for Farcaster config section
+  - hub_url validation: must start with http:// or https://
+  - signer_key validation: 64-character hex string (ed25519 private key format)
+  - app_key validation: at least 8 characters
+  - frame_url validation: must start with http:// or https://
+  - verify_trusted_data boolean validation
+  - state_secret validation: at least 32 characters for security
+  - All fields support environment variable references (${VAR_NAME})
+- Added `enable_farcaster` boolean validation to gateway config
+- Updated moduledoc with Farcaster validation rules
+- Added comprehensive tests (10 new test cases):
+  - hub_url validation (valid URLs, invalid format, non-string)
+  - signer_key validation (valid hex, too short, non-hex, env var)
+  - app_key validation (valid length, too short, env var)
+  - frame_url validation (valid, invalid)
+  - verify_trusted_data boolean validation
+  - state_secret validation (valid length, too short, env var)
+  - Complete config validation
+  - enable_farcaster boolean validation
+- All 55 validator tests passing (0 failures)
+
+**Files changed:**
+- `apps/lemon_core/lib/lemon_core/config/validator.ex` - Added Farcaster validation functions
+- `apps/lemon_core/test/lemon_core/config/validator_test.exs` - Added 10 new tests
+
+**What worked:**
+- Consistent validation patterns with other transport configs (Telegram, Discord, Web Dashboard)
+- Env var references (${VAR}) are validated as acceptable
+- Security-focused validation (minimum key lengths, hex format for ed25519 keys)
+- All 55 validator tests passing
+
+**Total progress:**
+- Started with 119 tests
+- Now have 504+ tests across lemon_core
+- All validator tests passing (0 failures)
+
 **Next run should focus on:**
-- Add validation for remaining transport configs (Farcaster, XMTP, Email)
+- Add validation for remaining transport configs (XMTP, Email)
 - Check for more Pi upstream features to port
 - Explore Ironclaw's extension manager for install/activate workflow
 - Add more comprehensive documentation for other features
