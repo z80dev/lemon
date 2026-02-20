@@ -855,7 +855,8 @@ defmodule Ai.ModelsTest do
       models = Models.get_models(:amazon_bedrock)
 
       assert is_list(models)
-      assert length(models) == 5
+      # Currently 40 Bedrock models (5 Nova + 35 third-party models)
+      assert length(models) == 40
       assert Enum.all?(models, &match?(%Model{provider: :amazon_bedrock}, &1))
     end
 
