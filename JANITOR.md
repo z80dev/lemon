@@ -1053,3 +1053,37 @@ mix lemon.config show
 - Add validation warnings to config reloading
 - Or start working on architecture check failures
 - Or check for more Pi upstream features to port
+
+### 2025-02-19 - Bug Fix: Architecture Check Failure
+**Work Area**: Bug Fix
+
+**What was done:**
+- Fixed the pre-existing architecture check failure that was failing CI
+- Root cause: `lemon_skills` app had a dependency on `lemon_channels` but it wasn't in the allowed dependencies list
+- The app was referencing `LemonChannels.Adapters.XAPI` and `LemonChannels.Adapters.XAPI.Client` in:
+  - `apps/lemon_skills/lib/lemon_skills/tools/get_x_mentions.ex`
+  - `apps/lemon_skills/lib/lemon_skills/tools/post_to_x.ex`
+- Updated `@allowed_direct_deps` in `architecture_check.ex`:
+  - Changed `lemon_skills: [:agent_core, :ai, :lemon_core]`
+  - To: `lemon_skills: [:agent_core, :ai, :lemon_channels, :lemon_core]`
+- All 465 tests now pass (0 failures)
+- Architecture check now passes
+
+**Files changed:**
+- `apps/lemon_core/lib/lemon_core/quality/architecture_check.ex` - Added `:lemon_channels` to lemon_skills allowed deps
+
+**What worked:**
+- The architecture check tool correctly identified the dependency violation
+- The fix was simple - just updating the policy to match actual usage
+- No code changes needed in the apps themselves
+
+**Total progress:**
+- Started with 119 tests
+- Now have 465+ tests (lemon_core) and 1303+ tests (AI app)
+- All tests passing (0 failures)
+
+**Next run should focus on:**
+- Add config validation to other mix tasks (lemon.quality, etc.)
+- Add validation warnings to config reloading
+- Or explore Ironclaw's extension registry pattern for Lemon
+- Or check for more Pi upstream features to port
