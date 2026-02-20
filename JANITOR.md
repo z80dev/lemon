@@ -1011,3 +1011,45 @@ mix lemon.config show
 - Add config validation to other mix tasks (lemon.quality, etc.)
 - Add validation warnings to config reloading
 - Or start working on architecture check failures
+
+### 2025-02-19 - Pi Sync: Add Gemini 3.1 Pro Model
+**Work Area**: Pi Upstream Sync
+
+**What was done:**
+- Synced with Pi upstream (github.com/pi-coding-agent/pi) to check for new models
+- Found Pi commit 18c7ab8a: "chore(models): update Gemini 3.1 provider catalogs and antigravity opus 4.6"
+- Added missing `gemini-3.1-pro` model to Lemon's model registry:
+  - ID: "gemini-3.1-pro"
+  - Name: "Gemini 3.1 Pro"
+  - Provider: :google
+  - API: :google_generative_ai
+  - Reasoning: true
+  - Input: [:text, :image]
+  - Cost: $2.0 input, $12.0 output per million tokens
+  - Context window: 1,048,576 tokens
+  - Max tokens: 65,536
+- Added test for new model in `models_test.exs`:
+  - Tests pricing, context window, max tokens, reasoning capability
+  - Added to flagship models existence test
+- All 40 model tests pass
+- All 1303 AI app tests pass
+- No regressions
+
+**Files changed:**
+- `apps/ai/lib/ai/models.ex` - Added gemini-3.1-pro model definition
+- `apps/ai/test/models_test.exs` - Added test for new model
+
+**What worked:**
+- Pi's model structure is similar to Lemon's, making sync straightforward
+- Model specs (pricing, context windows) were consistent
+
+**Total progress:**
+- Started with 119 tests
+- Now have 1303+ tests (AI app) and 465+ tests (lemon_core)
+- Added 1184+ tests across all runs
+
+**Next run should focus on:**
+- Add config validation to other mix tasks (lemon.quality, etc.)
+- Add validation warnings to config reloading
+- Or start working on architecture check failures
+- Or check for more Pi upstream features to port

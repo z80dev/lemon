@@ -353,6 +353,17 @@ defmodule Ai.ModelsTest do
       assert model.reasoning == true
     end
 
+    test "gemini 3.1 pro has correct specs" do
+      model = Models.get_model(:google, "gemini-3.1-pro")
+
+      assert model.cost.input == 2.0
+      assert model.cost.output == 12.0
+      assert model.cost.cache_read == 0.2
+      assert model.context_window == 1_048_576
+      assert model.max_tokens == 65_536
+      assert model.reasoning == true
+    end
+
     test "gpt 5.3 codex spark has correct specs" do
       model = Models.get_model(:openai, "gpt-5.3-codex-spark")
 
@@ -411,6 +422,7 @@ defmodule Ai.ModelsTest do
       assert Models.get_model(:google, "gemini-2.5-flash") != nil
       assert Models.get_model(:google, "gemini-2.0-flash") != nil
       assert Models.get_model(:google, "gemini-1.5-pro") != nil
+      assert Models.get_model(:google, "gemini-3.1-pro") != nil
       assert Models.get_model(:google, "gemini-3.1-pro-preview") != nil
     end
   end

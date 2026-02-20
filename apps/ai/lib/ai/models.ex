@@ -935,6 +935,18 @@ defmodule Ai.Models do
       context_window: 1_000_000,
       max_tokens: 64_000
     },
+    "gemini-3.1-pro" => %Model{
+      id: "gemini-3.1-pro",
+      name: "Gemini 3.1 Pro",
+      api: :google_generative_ai,
+      provider: :google,
+      base_url: "https://generativelanguage.googleapis.com/v1beta",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 2.0, output: 12.0, cache_read: 0.2, cache_write: 0.0},
+      context_window: 1_048_576,
+      max_tokens: 65_536
+    },
     "gemini-3.1-pro-preview" => %Model{
       id: "gemini-3.1-pro-preview",
       name: "Gemini 3.1 Pro Preview",
