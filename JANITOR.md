@@ -2166,6 +2166,47 @@ causing the quality check to fail with:
 - All tests passing (0 failures)
 - 4 inspiration repos now in rotation: openclaw, ironclaw, pi, oh-my-pi
 
+### 2025-02-20 - Pi Sync: Add Grok 4 Fast Non-Reasoning Model
+**Work Area**: Pi Upstream Sync
+
+**What was done:**
+- Synced with Pi upstream (github.com/pi-coding-agent/pi) to check for new models
+- Found Pi has `grok-4-fast-non-reasoning` model that Lemon was missing
+- Added the new model to Lemon's xAI model registry:
+  - `grok-4-fast-non-reasoning`: Cost-effective non-reasoning variant
+  - 2M token context window (same as grok-4-1-fast)
+  - 30k max output tokens
+  - Vision support (text + image input)
+  - Pricing: $0.2/$0.5 per million tokens (very cost-effective)
+  - No reasoning capabilities
+- This model complements the existing Grok 4 lineup with a cost-effective option
+- Added comprehensive test for the new model
+- Updated flagship models test to include the new model
+- All 70 AI model tests pass (up from 69)
+- No regressions
+
+**Files changed:**
+- `apps/ai/lib/ai/models.ex` - Added grok-4-fast-non-reasoning model definition
+- `apps/ai/test/models_test.exs` - Added test for new model + updated flagship test
+
+**Commit:**
+- `4131c262` - feat(models): Add Grok 4 Fast Non-Reasoning model from Pi upstream
+
+**What worked:**
+- Pi's model structure maps cleanly to Lemon's Model struct
+- The grok-4-fast-non-reasoning offers an interesting cost-effective option with large context
+- Same 2M context window as grok-4-1-fast but at much lower price point
+
+**Models added:**
+| Model | Provider | Context | Max Tokens | Reasoning | Vision | Cost (in/out) |
+|-------|----------|---------|------------|-----------|--------|---------------|
+| grok-4-fast-non-reasoning | xai | 2M | 30,000 | No | Yes | $0.2/$0.5 |
+
+**Total progress:**
+- Started with 119 tests
+- Now have 1321+ tests (AI app: 70, lemon_core: 488+, lemon_skills: 106)
+- All tests passing (0 failures)
+
 **Next run should focus on:**
 - Check for more Pi upstream features to port (Claude models through OpenCode, Gemini models)
 - Analyze oh-my-pi for hashline edit tool implementation
