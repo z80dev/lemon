@@ -550,4 +550,118 @@ defmodule LemonCore.Config.ValidatorTest do
       assert Enum.any?(errors, &String.contains?(&1, "enable_web_dashboard"))
     end
   end
+
+  describe "validate_farcaster_config/2" do
+    test "validates farcaster hub_url" do
+      errors = Validator.validate_farcaster_config([], %{hub_url: "https://hub.farcaster.xyz"})
+      assert errors == []
+
+      errors = Validator.validate_farcaster_config([], %{hub_url: "http://localhost:2281"})
+      assert errors == []
+
+      errors = Validator.validate_farcaster_config([], %{hub_url: "invalid-url"})
+      assert Enum.any?(errors, &String.contains?(&1, "hub_url"))
+
+      errors = Validator.validate_farcaster_config([], %{hub_url: 123})
+      assert Enum.any?(errors, &String.contains?(&1, "hub_url"))
+    end
+
+    test "validates farcaster signer_key" do
+      # Valid hex-encoded ed25519 private key (64 hex chars)
+      valid_key = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
+      errors = Validator.validate_farcaster_config([], %{signer_key: valid_key})
+      assert errors == []
+
+      # Invalid format (too short)
+      short_key = "a1b2c3d4"
+      errors = Validator.validate_farcaster_config([], %{signer_key: short_key})
+      assert Enum.any?(errors, &String.contains?(&1, "signer_key"))
+
+      # Invalid format (non-hex characters)
+      invalid_key = "g1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
+      errors = Validator.validate_farcaster_config([], %{signer_key: invalid_key})
+      assert Enum.any?(errors, &String.contains?(&1, "signer_key"))
+
+      # Env var reference is valid
+      errors = Validator.validate_farcaster_config([], %{signer_key: "${FARCASTER_SIGNER_KEY}"})
+      assert errors == []
+    end
+
+    test "validates farcaster app_key" do
+      # Valid app key (8+ characters)
+      errors = Validator.validate_farcaster_config([], %{app_key: "my-app-key-123"})
+      assert errors == []
+
+      # Too short app key
+      errors = Validator.validate_farcaster_config([], %{app_key: "short"})
+      assert Enum.any?(errors, &String.contains?(&1, "app_key"))
+
+      # Env var reference is valid
+      errors = Validator.validate_farcaster_config([], %{app_key: "${FARCASTER_APP_KEY}"})
+      assert errors == []
+    end
+
+    test "validates farcaster frame_url" do
+      errors = Validator.validate_farcaster_config([], %{frame_url: "https://frames.example.com"})
+      assert errors == []
+
+      errors = Validator.validate_farcaster_config([], %{frame_url: "http://localhost:3000/frame"})
+      assert errors == []
+
+      errors = Validator.validate_farcaster_config([], %{frame_url: "invalid-url"})
+      assert Enum.any?(errors, &String.contains?(&1, "frame_url"))
+    end
+
+    test "validates farcaster verify_trusted_data boolean" do
+      errors = Validator.validate_farcaster_config([], %{verify_trusted_data: true})
+      assert errors == []
+
+      errors = Validator.validate_farcaster_config([], %{verify_trusted_data: false})
+      assert errors == []
+
+      errors = Validator.validate_farcaster_config([], %{verify_trusted_data: "yes"})
+      assert Enum.any?(errors, &String.contains?(&1, "verify_trusted_data"))
+    end
+
+    test "validates farcaster state_secret" do
+      # Valid state secret (32+ characters)
+      valid_secret = String.duplicate("a", 32)
+      errors = Validator.validate_farcaster_config([], %{state_secret: valid_secret})
+      assert errors == []
+
+      # Too short state secret
+      short_secret = String.duplicate("a", 16)
+      errors = Validator.validate_farcaster_config([], %{state_secret: short_secret})
+      assert Enum.any?(errors, &String.contains?(&1, "state_secret"))
+
+      # Env var reference is valid
+      errors = Validator.validate_farcaster_config([], %{state_secret: "${FARCASTER_STATE_SECRET}"})
+      assert errors == []
+    end
+
+    test "accepts nil farcaster config" do
+      errors = Validator.validate_farcaster_config([], nil)
+      assert errors == []
+    end
+
+    test "validates complete farcaster config" do
+      errors = Validator.validate_farcaster_config([], %{
+        hub_url: "https://hub.farcaster.xyz",
+        signer_key: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2",
+        app_key: "my-farcaster-app",
+        frame_url: "https://frames.example.com",
+        verify_trusted_data: true,
+        state_secret: String.duplicate("s", 32)
+      })
+      assert errors == []
+    end
+
+    test "validates enable_farcaster boolean" do
+      errors = Validator.validate_gateway(%{enable_farcaster: true}, [])
+      refute Enum.any?(errors, &String.contains?(&1, "enable_farcaster"))
+
+      errors = Validator.validate_gateway(%{enable_farcaster: "yes"}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "enable_farcaster"))
+    end
+  end
 end

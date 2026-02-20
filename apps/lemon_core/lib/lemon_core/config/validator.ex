@@ -20,6 +20,7 @@ defmodule LemonCore.Config.Validator do
   - Telegram: token format, compaction settings
   - Discord: token format, guild/channel IDs
   - Web Dashboard: port, host, secret key base, access token
+  - Farcaster: hub URL, signer key, app key, frame URL, state secret
   - Logging: valid log levels, writable paths
   - Providers: valid API key formats
   - Tools: valid timeout values
@@ -101,11 +102,13 @@ defmodule LemonCore.Config.Validator do
     |> validate_boolean(Map.get(gateway, :enable_telegram), "gateway.enable_telegram")
     |> validate_boolean(Map.get(gateway, :enable_discord), "gateway.enable_discord")
     |> validate_boolean(Map.get(gateway, :enable_web_dashboard), "gateway.enable_web_dashboard")
+    |> validate_boolean(Map.get(gateway, :enable_farcaster), "gateway.enable_farcaster")
     |> validate_boolean(Map.get(gateway, :require_engine_lock), "gateway.require_engine_lock")
     |> validate_non_negative_integer(Map.get(gateway, :engine_lock_timeout_ms), "gateway.engine_lock_timeout_ms")
     |> validate_telegram_config(Map.get(gateway, :telegram))
     |> validate_discord_config(Map.get(gateway, :discord))
     |> validate_web_dashboard_config(Map.get(gateway, :web_dashboard))
+    |> validate_farcaster_config(Map.get(gateway, :farcaster))
     |> validate_queue_config(Map.get(gateway, :queue))
   end
 
@@ -297,6 +300,103 @@ defmodule LemonCore.Config.Validator do
   end
 
   defp validate_web_dashboard_access_token(errors, _), do: ["gateway.web_dashboard.access_token: must be a string" | errors]
+
+  @doc """
+  Validates Farcaster configuration.
+  """
+  @spec validate_farcaster_config([String.t()], map() | nil) :: [String.t()]
+  def validate_farcaster_config(errors, nil), do: errors
+
+  def validate_farcaster_config(errors, farcaster) when is_map(farcaster) do
+    errors
+    |> validate_farcaster_hub_url(Map.get(farcaster, :hub_url))
+    |> validate_farcaster_signer_key(Map.get(farcaster, :signer_key))
+    |> validate_farcaster_app_key(Map.get(farcaster, :app_key))
+    |> validate_farcaster_frame_url(Map.get(farcaster, :frame_url))
+    |> validate_boolean(Map.get(farcaster, :verify_trusted_data), "gateway.farcaster.verify_trusted_data")
+    |> validate_farcaster_state_secret(Map.get(farcaster, :state_secret))
+  end
+
+  def validate_farcaster_config(errors, _),
+    do: ["gateway.farcaster: must be a map" | errors]
+
+  defp validate_farcaster_hub_url(errors, nil), do: errors
+
+  defp validate_farcaster_hub_url(errors, url) when is_binary(url) do
+    if String.starts_with?(url, ["http://", "https://"]) do
+      errors
+    else
+      ["gateway.farcaster.hub_url: must start with http:// or https://" | errors]
+    end
+  end
+
+  defp validate_farcaster_hub_url(errors, _), do: ["gateway.farcaster.hub_url: must be a string" | errors]
+
+  defp validate_farcaster_signer_key(errors, nil), do: errors
+
+  defp validate_farcaster_signer_key(errors, key) when is_binary(key) do
+    if String.starts_with?(key, "${") and String.ends_with?(key, "}") do
+      # References an env var, which is valid
+      errors
+    else
+      # Farcaster signer keys are hex-encoded ed25519 private keys (64 hex chars)
+      if Regex.match?(~r/^[0-9a-fA-F]{64}$/, key) do
+        errors
+      else
+        ["gateway.farcaster.signer_key: invalid format (expected 64-character hex string)" | errors]
+      end
+    end
+  end
+
+  defp validate_farcaster_signer_key(errors, _), do: ["gateway.farcaster.signer_key: must be a string" | errors]
+
+  defp validate_farcaster_app_key(errors, nil), do: errors
+
+  defp validate_farcaster_app_key(errors, key) when is_binary(key) do
+    if String.starts_with?(key, "${") and String.ends_with?(key, "}") do
+      # References an env var, which is valid
+      errors
+    else
+      # Farcaster app keys are typically UUIDs or similar identifiers
+      if String.length(key) >= 8 do
+        errors
+      else
+        ["gateway.farcaster.app_key: must be at least 8 characters" | errors]
+      end
+    end
+  end
+
+  defp validate_farcaster_app_key(errors, _), do: ["gateway.farcaster.app_key: must be a string" | errors]
+
+  defp validate_farcaster_frame_url(errors, nil), do: errors
+
+  defp validate_farcaster_frame_url(errors, url) when is_binary(url) do
+    if String.starts_with?(url, ["http://", "https://"]) do
+      errors
+    else
+      ["gateway.farcaster.frame_url: must start with http:// or https://" | errors]
+    end
+  end
+
+  defp validate_farcaster_frame_url(errors, _), do: ["gateway.farcaster.frame_url: must be a string" | errors]
+
+  defp validate_farcaster_state_secret(errors, nil), do: errors
+
+  defp validate_farcaster_state_secret(errors, secret) when is_binary(secret) do
+    if String.starts_with?(secret, "${") and String.ends_with?(secret, "}") do
+      # References an env var, which is valid
+      errors
+    else
+      # State secret should be reasonably strong (at least 32 characters)
+      if String.length(secret) >= 32 do
+        errors
+      else
+        ["gateway.farcaster.state_secret: must be at least 32 characters for security" | errors]
+      end
+    end
+  end
+
+  defp validate_farcaster_state_secret(errors, _), do: ["gateway.farcaster.state_secret: must be a string" | errors]
 
   @doc """
   Validates queue configuration.
