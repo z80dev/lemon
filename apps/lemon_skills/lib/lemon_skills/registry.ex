@@ -16,11 +16,24 @@ defmodule LemonSkills.Registry do
   Project skills override global skills with the same key.
   Ancestor `.agents/skills` directories are discovered automatically,
   following Pi's package-manager pattern.
+
+  ## Online Discovery
+
+  The registry also supports discovering skills from online sources:
+
+      # Search GitHub for skills matching a query
+      results = LemonSkills.Registry.discover("github")
+
+      # Search both local and online skills
+      %{local: local_skills, online: online_skills} =
+        LemonSkills.Registry.search("api")
+
+  See `LemonSkills.Discovery` for more details on online discovery.
   """
 
   use GenServer
 
-  alias LemonSkills.{Entry, Manifest, Config}
+  alias LemonSkills.{Entry, Manifest, Config, Discovery}
 
   @type state :: %{
           global_skills: %{String.t() => Entry.t()},
@@ -164,6 +177,70 @@ defmodule LemonSkills.Registry do
   @spec unregister(String.t(), atom(), String.t() | nil) :: :ok
   def unregister(key, source, cwd \\ nil) do
     GenServer.call(__MODULE__, {:unregister, key, source, cwd})
+  end
+
+  @doc """
+  Discover skills from online sources.
+
+  Searches GitHub and other registries for skills matching the query.
+  Returns discovered skills that can be installed.
+
+  ## Parameters
+
+  - `query` - Search query string (e.g., "github", "web search")
+
+  ## Options
+
+  - `:timeout` - Overall timeout in milliseconds (default: 10000)
+  - `:max_results` - Maximum results to return (default: 10)
+  - `:github_token` - GitHub personal access token for higher rate limits
+
+  ## Returns
+
+  List of discovery results with entry, source, validated status, and URL.
+
+  ## Examples
+
+      # Discover GitHub-related skills
+      results = LemonSkills.Registry.discover("github")
+
+      # Each result can be installed
+      [%{entry: %Entry{}, source: :github, validated: false, url: "..."}, ...]
+  """
+  @spec discover(String.t(), keyword()) :: [Discovery.discovery_result()]
+  def discover(query, opts \\ []) do
+    Discovery.discover(query, opts)
+  end
+
+  @doc """
+  Search both local and online skills for a query.
+
+  Combines local skill search with online discovery for comprehensive results.
+
+  ## Options
+
+  - `:cwd` - Project working directory (optional)
+  - `:max_local` - Maximum local results (default: 3)
+  - `:max_online` - Maximum online results (default: 5)
+  - `:include_online` - Whether to include online discovery (default: true)
+  """
+  @spec search(String.t(), keyword()) :: %{local: [Entry.t()], online: [Discovery.discovery_result()]}
+  def search(query, opts \\ []) do
+    cwd = Keyword.get(opts, :cwd)
+    max_local = Keyword.get(opts, :max_local, 3)
+    max_online = Keyword.get(opts, :max_online, 5)
+    include_online = Keyword.get(opts, :include_online, true)
+
+    local = find_relevant(query, cwd: cwd, max_results: max_local)
+
+    online =
+      if include_online do
+        Discovery.discover(query, max_results: max_online)
+      else
+        []
+      end
+
+    %{local: local, online: online}
   end
 
   # ============================================================================

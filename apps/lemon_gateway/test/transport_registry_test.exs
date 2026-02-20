@@ -25,6 +25,16 @@ defmodule LemonGateway.TransportRegistryTest do
     def start_link(_opts), do: :ignore
   end
 
+  defmodule MockWebhookTransport do
+    use LemonGateway.Transport
+
+    @impl true
+    def id, do: "webhook"
+
+    @impl true
+    def start_link(_opts), do: :ignore
+  end
+
   defmodule ThirdTransport do
     use LemonGateway.Transport
 
@@ -340,6 +350,41 @@ defmodule LemonGateway.TransportRegistryTest do
     assert log =~ "enable_email is true but Email transport is not registered in :transports"
   end
 
+  test "logs warning when xmtp is enabled but transport is missing" do
+    Application.put_env(:lemon_gateway, :transports, [MockTransport])
+
+    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+      max_concurrent_runs: 1,
+      default_engine: "echo",
+      enable_xmtp: true
+    })
+
+    log =
+      capture_log(fn ->
+        {:ok, _} = restart_config_and_registry()
+      end)
+
+    assert log =~ "enable_xmtp is true but XMTP transport is not registered in :transports"
+  end
+
+  test "logs warning when webhook is enabled but transport is missing" do
+    Application.put_env(:lemon_gateway, :transports, [MockTransport])
+
+    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+      max_concurrent_runs: 1,
+      default_engine: "echo",
+      enable_webhook: true
+    })
+
+    log =
+      capture_log(fn ->
+        {:ok, _} = restart_config_and_registry()
+      end)
+
+    assert log =~
+             "enable_webhook is true but Webhook transport is not registered in :transports"
+  end
+
   # ===========================================================================
   # transport_enabled?/1 with different config formats
   # ===========================================================================
@@ -581,6 +626,23 @@ defmodule LemonGateway.TransportRegistryTest do
       enabled = TransportRegistry.enabled_transports()
 
       assert [{"mock", MockTransport}] == enabled
+    end
+
+    test "filters webhook transport when enable_webhook is false" do
+      Application.put_env(:lemon_gateway, :transports, [MockWebhookTransport, MockTransport])
+
+      Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+        enable_webhook: false
+      })
+
+      {:ok, _} = restart_config_and_registry()
+
+      enabled_ids =
+        TransportRegistry.enabled_transports()
+        |> Enum.map(fn {id, _mod} -> id end)
+
+      refute "webhook" in enabled_ids
+      assert "mock" in enabled_ids
     end
 
     test "returns all transports when all are enabled" do

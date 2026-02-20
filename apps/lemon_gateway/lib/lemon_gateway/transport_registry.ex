@@ -94,6 +94,18 @@ defmodule LemonGateway.TransportRegistry do
         "enable_email is true but Email transport is not registered in :transports; add LemonGateway.Transports.Email to :transports or disable enable_email"
       )
     end
+
+    if transport_enabled?("xmtp") and not Map.has_key?(state, "xmtp") do
+      Logger.warning(
+        "enable_xmtp is true but XMTP transport is not registered in :transports; add LemonGateway.Transports.Xmtp to :transports or disable enable_xmtp"
+      )
+    end
+
+    if transport_enabled?("webhook") and not Map.has_key?(state, "webhook") do
+      Logger.warning(
+        "enable_webhook is true but Webhook transport is not registered in :transports; add LemonGateway.Transports.Webhook to :transports or disable enable_webhook"
+      )
+    end
   end
 
   defp maybe_warn_dual_gate(_), do: :ok
@@ -152,6 +164,34 @@ defmodule LemonGateway.TransportRegistry do
         Keyword.get(cfg, :enable_email, false)
       else
         Map.get(cfg, :enable_email, false)
+      end
+    end
+  end
+
+  defp transport_enabled?("xmtp") do
+    if is_pid(Process.whereis(LemonGateway.Config)) do
+      LemonGateway.Config.get(:enable_xmtp) == true
+    else
+      cfg = Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
+
+      if is_list(cfg) do
+        Keyword.get(cfg, :enable_xmtp, false)
+      else
+        Map.get(cfg, :enable_xmtp, false)
+      end
+    end
+  end
+
+  defp transport_enabled?("webhook") do
+    if is_pid(Process.whereis(LemonGateway.Config)) do
+      LemonGateway.Config.get(:enable_webhook) == true
+    else
+      cfg = Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
+
+      if is_list(cfg) do
+        Keyword.get(cfg, :enable_webhook, false)
+      else
+        Map.get(cfg, :enable_webhook, false)
       end
     end
   end

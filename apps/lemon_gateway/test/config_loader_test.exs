@@ -227,4 +227,84 @@ defmodule LemonGateway.ConfigLoaderTest do
     assert Keyword.fetch!(smtp_opts, :hostname) == "mail.example.test"
     assert {:tls_options, [versions: [:"tlsv1.2", :"tlsv1.3"]]} in smtp_opts
   end
+
+  test "parses webhook gateway settings and nested integrations from override config" do
+    Application.put_env(
+      :lemon_gateway,
+      LemonGateway.Config,
+      %{
+        "enable_webhook" => true,
+        "webhook" => %{
+          "bind" => "0.0.0.0",
+          "port" => 9090,
+          "mode" => "sync",
+          "timeout_ms" => 45_000,
+          "integrations" => %{
+            "n8n-demo" => %{
+              "token" => "secret-token",
+              "session_key" => "agent:n8n:main",
+              "agent_id" => "n8n",
+              "queue_mode" => "followup",
+              "default_engine" => "codex",
+              "cwd" => "/tmp/n8n",
+              "callback_url" => "https://example.test/callback",
+              "mode" => "async",
+              "timeout_ms" => 12_000
+            }
+          }
+        }
+      }
+    )
+
+    config = ConfigLoader.load()
+
+    assert config.enable_webhook == true
+    assert config.webhook.bind == "0.0.0.0"
+    assert config.webhook.port == 9090
+    assert config.webhook.mode == :sync
+    assert config.webhook.timeout_ms == 45_000
+    assert config.webhook.integrations["n8n-demo"].token == "secret-token"
+    assert config.webhook.integrations["n8n-demo"].session_key == "agent:n8n:main"
+    assert config.webhook.integrations["n8n-demo"].agent_id == "n8n"
+    assert config.webhook.integrations["n8n-demo"].queue_mode == :followup
+    assert config.webhook.integrations["n8n-demo"].default_engine == "codex"
+    assert config.webhook.integrations["n8n-demo"].cwd == "/tmp/n8n"
+    assert config.webhook.integrations["n8n-demo"].callback_url == "https://example.test/callback"
+    assert config.webhook.integrations["n8n-demo"].mode == :async
+    assert config.webhook.integrations["n8n-demo"].timeout_ms == 12_000
+  end
+
+  test "parses xmtp gateway settings from override config" do
+    Application.put_env(
+      :lemon_gateway,
+      LemonGateway.Config,
+      %{
+        "enable_xmtp" => true,
+        "xmtp" => %{
+          "env" => "dev",
+          "poll_interval_ms" => 1200,
+          "wallet_address" => "0xABCDEFabcdefABCDEFabcdefABCDEFabcdefABCD",
+          "wallet_key" => "wallet-key",
+          "private_key" => "private-key",
+          "inbox_id" => "inbox-123",
+          "db_path" => "/tmp/xmtp-db",
+          "bridge_script" => "/tmp/xmtp_bridge.mjs",
+          "mock_mode" => true
+        }
+      }
+    )
+
+    config = ConfigLoader.load()
+
+    assert config.enable_xmtp == true
+    assert config.xmtp.env == "dev"
+    assert config.xmtp.poll_interval_ms == 1200
+    assert config.xmtp.wallet_address == "0xABCDEFabcdefABCDEFabcdefABCDEFabcdefABCD"
+    assert config.xmtp.wallet_key == "wallet-key"
+    assert config.xmtp.private_key == "private-key"
+    assert config.xmtp.inbox_id == "inbox-123"
+    assert config.xmtp.db_path == "/tmp/xmtp-db"
+    assert config.xmtp.bridge_script == "/tmp/xmtp_bridge.mjs"
+    assert config.xmtp.mock_mode == true
+  end
 end

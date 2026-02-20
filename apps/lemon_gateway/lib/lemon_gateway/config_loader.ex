@@ -86,6 +86,16 @@ defmodule LemonGateway.ConfigLoader do
       |> fetch(:email)
       |> parse_email()
 
+    xmtp =
+      gateway
+      |> fetch(:xmtp)
+      |> parse_xmtp()
+
+    webhook =
+      gateway
+      |> fetch(:webhook)
+      |> parse_webhook()
+
     engines =
       gateway
       |> fetch(:engines)
@@ -100,6 +110,8 @@ defmodule LemonGateway.ConfigLoader do
       enable_discord: fetch(gateway, :enable_discord),
       enable_farcaster: fetch(gateway, :enable_farcaster),
       enable_email: fetch(gateway, :enable_email),
+      enable_xmtp: fetch(gateway, :enable_xmtp),
+      enable_webhook: fetch(gateway, :enable_webhook),
       require_engine_lock: fetch(gateway, :require_engine_lock),
       engine_lock_timeout_ms: fetch(gateway, :engine_lock_timeout_ms)
     }
@@ -113,6 +125,8 @@ defmodule LemonGateway.ConfigLoader do
     |> Map.put(:discord, discord)
     |> Map.put(:farcaster, farcaster)
     |> Map.put(:email, email)
+    |> Map.put(:xmtp, xmtp)
+    |> Map.put(:webhook, webhook)
     |> Map.put(:engines, engines)
   end
 
@@ -307,6 +321,68 @@ defmodule LemonGateway.ConfigLoader do
 
   defp parse_email_outbound(_), do: %{}
 
+  defp parse_xmtp(xmtp) when is_map(xmtp) do
+    %{
+      env: fetch(xmtp, :env),
+      poll_interval_ms: fetch(xmtp, :poll_interval_ms),
+      wallet_address: fetch(xmtp, :wallet_address),
+      wallet_key: fetch(xmtp, :wallet_key),
+      private_key: fetch(xmtp, :private_key),
+      inbox_id: fetch(xmtp, :inbox_id),
+      db_path: fetch(xmtp, :db_path),
+      bridge_script: fetch(xmtp, :bridge_script),
+      mock_mode: fetch(xmtp, :mock_mode)
+    }
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.new()
+  end
+
+  defp parse_xmtp(_), do: %{}
+
+  defp parse_webhook(webhook) when is_map(webhook) do
+    %{
+      bind: fetch(webhook, :bind),
+      port: fetch(webhook, :port),
+      mode: parse_webhook_mode(fetch(webhook, :mode)),
+      timeout_ms: fetch(webhook, :timeout_ms),
+      callback_url: fetch(webhook, :callback_url),
+      integrations:
+        webhook
+        |> fetch(:integrations)
+        |> parse_webhook_integrations()
+    }
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.new()
+  end
+
+  defp parse_webhook(_), do: %{}
+
+  defp parse_webhook_integrations(integrations) when is_map(integrations) do
+    for {integration_id, integration} <- integrations, into: %{} do
+      {to_string(integration_id), parse_webhook_integration(integration)}
+    end
+  end
+
+  defp parse_webhook_integrations(_), do: %{}
+
+  defp parse_webhook_integration(integration) when is_map(integration) do
+    %{
+      token: fetch(integration, :token),
+      session_key: fetch(integration, :session_key),
+      agent_id: fetch(integration, :agent_id),
+      queue_mode: parse_webhook_queue_mode(fetch(integration, :queue_mode)),
+      default_engine: fetch(integration, :default_engine),
+      cwd: fetch(integration, :cwd),
+      callback_url: fetch(integration, :callback_url),
+      mode: parse_webhook_mode(fetch(integration, :mode)),
+      timeout_ms: fetch(integration, :timeout_ms)
+    }
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.new()
+  end
+
+  defp parse_webhook_integration(_), do: %{}
+
   defp parse_telegram_compaction(compaction) when is_map(compaction) do
     %{
       enabled: fetch(compaction, :enabled),
@@ -367,6 +443,25 @@ defmodule LemonGateway.ConfigLoader do
   defp parse_queue_mode("steer_backlog"), do: :steer_backlog
   defp parse_queue_mode("interrupt"), do: :interrupt
   defp parse_queue_mode(mode) when is_atom(mode), do: mode
+
+  defp parse_webhook_queue_mode(nil), do: nil
+  defp parse_webhook_queue_mode("collect"), do: :collect
+  defp parse_webhook_queue_mode("followup"), do: :followup
+  defp parse_webhook_queue_mode("steer"), do: :steer
+  defp parse_webhook_queue_mode("steer_backlog"), do: :steer_backlog
+  defp parse_webhook_queue_mode("interrupt"), do: :interrupt
+
+  defp parse_webhook_queue_mode(mode)
+       when mode in [:collect, :followup, :steer, :steer_backlog, :interrupt], do: mode
+
+  defp parse_webhook_queue_mode(_), do: nil
+
+  defp parse_webhook_mode(nil), do: nil
+  defp parse_webhook_mode("sync"), do: :sync
+  defp parse_webhook_mode("async"), do: :async
+  defp parse_webhook_mode(:sync), do: :sync
+  defp parse_webhook_mode(:async), do: :async
+  defp parse_webhook_mode(_), do: nil
 
   defp parse_drop_policy(nil), do: nil
   defp parse_drop_policy("oldest"), do: :oldest

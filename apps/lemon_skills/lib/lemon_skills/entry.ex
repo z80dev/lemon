@@ -167,4 +167,45 @@ defmodule LemonSkills.Entry do
     |> skill_file()
     |> File.read()
   end
+
+  @doc """
+  Create a new skill entry from a discovered manifest.
+
+  Used by the Discovery module to create entries from online sources.
+
+  ## Parameters
+
+  - `manifest` - The parsed manifest data
+  - `url` - The URL where the skill was discovered
+  - `opts` - Additional options
+
+  ## Options
+
+  - `:source` - The source type (:github, :registry, etc.)
+  - `:metadata` - Additional metadata for the entry
+
+  ## Examples
+
+      entry = LemonSkills.Entry.from_manifest(manifest, "https://example.com/skill", source: :github)
+  """
+  @spec from_manifest(map(), String.t(), keyword()) :: t()
+  def from_manifest(manifest, url, opts \\ []) when is_map(manifest) do
+    key = Map.get(manifest, "key") || Map.get(manifest, "name", "discovered") |> String.downcase() |> String.replace(" ", "-")
+    source = Keyword.get(opts, :source, :discovered)
+    metadata = Keyword.get(opts, :metadata, %{})
+
+    # Store metadata in the manifest for discovered skills
+    manifest_with_meta = Map.put(manifest, "_discovery_metadata", metadata)
+
+    %__MODULE__{
+      key: key,
+      name: Map.get(manifest, "name", key),
+      description: Map.get(manifest, "description", ""),
+      source: source,
+      path: url,
+      enabled: true,
+      manifest: manifest_with_meta,
+      status: :ready
+    }
+  end
 end
