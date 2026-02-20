@@ -43,7 +43,8 @@ defmodule LemonCore.Config.Modular do
     Logging,
     Providers,
     Tools,
-    TUI
+    TUI,
+    Validator
   }
 
   @global_config_path "~/.lemon/config.toml"
@@ -74,21 +75,24 @@ defmodule LemonCore.Config.Modular do
   ## Options
 
     * `:project_dir` - Project directory to load config from (default: current directory)
+    * `:validate` - Whether to validate the config (default: false)
 
   ## Examples
 
       config = LemonCore.Config.Modular.load()
       config = LemonCore.Config.Modular.load(project_dir: "~/my-project")
+      config = LemonCore.Config.Modular.load(validate: true)
   """
   @spec load(keyword()) :: t()
   def load(opts \\ []) do
     project_dir = Keyword.get(opts, :project_dir, File.cwd!())
+    validate? = Keyword.get(opts, :validate, false)
 
     # Load and merge configs
     settings = load_merged_settings(project_dir)
 
     # Resolve each section using modular config modules
-    %__MODULE__{
+    config = %__MODULE__{
       agent: Agent.resolve(settings),
       tools: Tools.resolve(settings),
       gateway: Gateway.resolve(settings),
@@ -96,6 +100,80 @@ defmodule LemonCore.Config.Modular do
       tui: TUI.resolve(settings),
       providers: Providers.resolve(settings)
     }
+
+    # Validate if requested
+    if validate? do
+      case Validator.validate(config) do
+        :ok ->
+          config
+
+        {:error, errors} ->
+          require Logger
+
+          Logger.warning("""
+          Configuration validation failed:
+          #{Enum.map_join(errors, "\n", &"  - #{&1}")}
+          """)
+
+          config
+      end
+    else
+      config
+    end
+  end
+
+  @doc """
+  Loads and validates configuration, raising on validation errors.
+
+  ## Options
+
+    * `:project_dir` - Project directory to load config from (default: current directory)
+
+  ## Examples
+
+      config = LemonCore.Config.Modular.load!()
+
+  ## Raises
+
+    * `LemonCore.Config.ValidationError` - If configuration is invalid
+  """
+  @spec load!(keyword()) :: t()
+  def load!(opts \\ []) do
+    config = load(opts)
+
+    case Validator.validate(config) do
+      :ok ->
+        config
+
+      {:error, errors} ->
+        raise LemonCore.Config.ValidationError,
+          message: "Configuration validation failed",
+          errors: errors
+    end
+  end
+
+  @doc """
+  Loads configuration with validation, returning ok/error tuple.
+
+  ## Options
+
+    * `:project_dir` - Project directory to load config from (default: current directory)
+
+  ## Examples
+
+      case LemonCore.Config.Modular.load_with_validation() do
+        {:ok, config} -> use_config(config)
+        {:error, errors} -> handle_errors(errors)
+      end
+  """
+  @spec load_with_validation(keyword()) :: {:ok, t()} | {:error, [String.t()]}
+  def load_with_validation(opts \\ []) do
+    config = load(opts)
+
+    case Validator.validate(config) do
+      :ok -> {:ok, config}
+      {:error, errors} -> {:error, errors}
+    end
   end
 
   @doc """

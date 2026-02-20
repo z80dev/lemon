@@ -12,21 +12,22 @@ defmodule LemonCore.Config.ValidatorTest do
       config = %Modular{
         agent: %{
           default_model: "claude-sonnet-4",
-          max_iterations: 50,
-          timeout_seconds: 300,
-          enable_approval: true
+          default_provider: "anthropic",
+          default_thinking_level: "medium"
         },
         gateway: %{
-          web_port: 4000,
+          max_concurrent_runs: 5,
+          auto_resume: false,
           enable_telegram: false,
-          enable_sms: false,
-          enable_discord: false
+          require_engine_lock: true,
+          engine_lock_timeout_ms: 30000
         },
         logging: %{
           level: :info,
-          file_path: "/tmp/test.log",
-          max_size_mb: 100,
-          max_files: 5
+          file: "/tmp/test.log",
+          max_no_bytes: 100_000_000,
+          max_no_files: 5,
+          compress_on_rotate: true
         },
         providers: %{
           providers: %{
@@ -37,15 +38,11 @@ defmodule LemonCore.Config.ValidatorTest do
           }
         },
         tools: %{
-          timeout_ms: 30_000,
-          enable_web_search: true,
-          enable_file_access: true,
-          max_file_size_mb: 10
+          auto_resize_images: true
         },
         tui: %{
           theme: :default,
-          debug: false,
-          compact: false
+          debug: false
         }
       }
 
@@ -56,17 +53,13 @@ defmodule LemonCore.Config.ValidatorTest do
       config = %Modular{
         agent: %{
           default_model: "",
-          max_iterations: -1,
-          timeout_seconds: -5,
-          enable_approval: "yes"
+          default_provider: ""
         },
         gateway: %{
-          web_port: 100_000,
-          enable_telegram: "true"
+          max_concurrent_runs: -1
         },
         logging: %{
-          level: :invalid_level,
-          max_size_mb: 0
+          level: :invalid_level
         },
         providers: %{
           providers: %{
@@ -76,9 +69,7 @@ defmodule LemonCore.Config.ValidatorTest do
             }
           }
         },
-        tools: %{
-          timeout_ms: -100
-        },
+        tools: %{},
         tui: %{
           theme: :invalid_theme
         }
@@ -90,8 +81,7 @@ defmodule LemonCore.Config.ValidatorTest do
 
       # Check for specific errors
       assert Enum.any?(errors, &String.contains?(&1, "agent.default_model"))
-      assert Enum.any?(errors, &String.contains?(&1, "agent.max_iterations"))
-      assert Enum.any?(errors, &String.contains?(&1, "gateway.web_port"))
+      assert Enum.any?(errors, &String.contains?(&1, "gateway.max_concurrent_runs"))
       assert Enum.any?(errors, &String.contains?(&1, "logging.level"))
     end
   end
@@ -105,49 +95,63 @@ defmodule LemonCore.Config.ValidatorTest do
       refute Enum.any?(errors, &String.contains?(&1, "agent.default_model"))
     end
 
-    test "validates max_iterations" do
-      errors = Validator.validate_agent(%{max_iterations: -1}, [])
-      assert Enum.any?(errors, &String.contains?(&1, "agent.max_iterations"))
+    test "validates default_provider" do
+      errors = Validator.validate_agent(%{default_provider: ""}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "agent.default_provider"))
 
-      errors = Validator.validate_agent(%{max_iterations: 0}, [])
-      assert Enum.any?(errors, &String.contains?(&1, "agent.max_iterations"))
-
-      errors = Validator.validate_agent(%{max_iterations: 50}, [])
-      refute Enum.any?(errors, &String.contains?(&1, "agent.max_iterations"))
+      errors = Validator.validate_agent(%{default_provider: "anthropic"}, [])
+      refute Enum.any?(errors, &String.contains?(&1, "agent.default_provider"))
     end
 
-    test "validates timeout_seconds" do
-      errors = Validator.validate_agent(%{timeout_seconds: -1}, [])
-      assert Enum.any?(errors, &String.contains?(&1, "agent.timeout_seconds"))
+    test "validates default_thinking_level" do
+      errors = Validator.validate_agent(%{default_thinking_level: ""}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "agent.default_thinking_level"))
 
-      errors = Validator.validate_agent(%{timeout_seconds: 0}, [])
-      refute Enum.any?(errors, &String.contains?(&1, "agent.timeout_seconds"))
+      errors = Validator.validate_agent(%{default_thinking_level: "medium"}, [])
+      refute Enum.any?(errors, &String.contains?(&1, "agent.default_thinking_level"))
     end
 
-    test "validates enable_approval" do
-      errors = Validator.validate_agent(%{enable_approval: "yes"}, [])
-      assert Enum.any?(errors, &String.contains?(&1, "agent.enable_approval"))
-
-      errors = Validator.validate_agent(%{enable_approval: true}, [])
-      refute Enum.any?(errors, &String.contains?(&1, "agent.enable_approval"))
+    test "accepts nil values" do
+      errors = Validator.validate_agent(%{}, [])
+      assert errors == []
     end
   end
 
   describe "validate_gateway/2" do
-    test "validates web_port" do
-      errors = Validator.validate_gateway(%{web_port: 0}, [])
-      assert Enum.any?(errors, &String.contains?(&1, "gateway.web_port"))
+    test "validates max_concurrent_runs" do
+      errors = Validator.validate_gateway(%{max_concurrent_runs: -1}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "gateway.max_concurrent_runs"))
 
-      errors = Validator.validate_gateway(%{web_port: 100_000}, [])
-      assert Enum.any?(errors, &String.contains?(&1, "gateway.web_port"))
+      errors = Validator.validate_gateway(%{max_concurrent_runs: 0}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "gateway.max_concurrent_runs"))
 
-      errors = Validator.validate_gateway(%{web_port: 4000}, [])
-      refute Enum.any?(errors, &String.contains?(&1, "gateway.web_port"))
+      errors = Validator.validate_gateway(%{max_concurrent_runs: 5}, [])
+      refute Enum.any?(errors, &String.contains?(&1, "gateway.max_concurrent_runs"))
     end
 
-    test "accepts nil port" do
-      errors = Validator.validate_gateway(%{web_port: nil}, [])
-      refute Enum.any?(errors, &String.contains?(&1, "gateway.web_port"))
+    test "validates engine_lock_timeout_ms" do
+      errors = Validator.validate_gateway(%{engine_lock_timeout_ms: -1}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "gateway.engine_lock_timeout_ms"))
+
+      errors = Validator.validate_gateway(%{engine_lock_timeout_ms: 0}, [])
+      refute Enum.any?(errors, &String.contains?(&1, "gateway.engine_lock_timeout_ms"))
+    end
+
+    test "validates boolean fields" do
+      errors = Validator.validate_gateway(%{auto_resume: "yes"}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "gateway.auto_resume"))
+
+      errors = Validator.validate_gateway(%{enable_telegram: "true"}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "gateway.enable_telegram"))
+
+      errors = Validator.validate_gateway(%{auto_resume: true, enable_telegram: false}, [])
+      refute Enum.any?(errors, &String.contains?(&1, "gateway.auto_resume"))
+      refute Enum.any?(errors, &String.contains?(&1, "gateway.enable_telegram"))
+    end
+
+    test "accepts nil values" do
+      errors = Validator.validate_gateway(%{}, [])
+      assert errors == []
     end
   end
 
@@ -165,12 +169,33 @@ defmodule LemonCore.Config.ValidatorTest do
       assert Enum.any?(errors, &String.contains?(&1, "logging.level"))
     end
 
-    test "validates file_path" do
-      errors = Validator.validate_logging(%{file_path: ""}, [])
-      assert Enum.any?(errors, &String.contains?(&1, "logging.file_path"))
+    test "validates file path" do
+      errors = Validator.validate_logging(%{file: ""}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "logging.file"))
 
-      errors = Validator.validate_logging(%{file_path: "/valid/path.log"}, [])
-      refute Enum.any?(errors, &String.contains?(&1, "logging.file_path"))
+      errors = Validator.validate_logging(%{file: "/valid/path.log"}, [])
+      refute Enum.any?(errors, &String.contains?(&1, "logging.file"))
+    end
+
+    test "validates max_no_bytes" do
+      errors = Validator.validate_logging(%{max_no_bytes: 0}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "logging.max_no_bytes"))
+
+      errors = Validator.validate_logging(%{max_no_bytes: 100_000_000}, [])
+      refute Enum.any?(errors, &String.contains?(&1, "logging.max_no_bytes"))
+    end
+
+    test "validates compress_on_rotate" do
+      errors = Validator.validate_logging(%{compress_on_rotate: "yes"}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "logging.compress_on_rotate"))
+
+      errors = Validator.validate_logging(%{compress_on_rotate: true}, [])
+      refute Enum.any?(errors, &String.contains?(&1, "logging.compress_on_rotate"))
+    end
+
+    test "accepts nil values" do
+      errors = Validator.validate_logging(%{}, [])
+      assert errors == []
     end
   end
 
@@ -204,26 +229,23 @@ defmodule LemonCore.Config.ValidatorTest do
   end
 
   describe "validate_tools/2" do
-    test "validates timeout_ms" do
-      errors = Validator.validate_tools(%{timeout_ms: -1}, [])
-      assert Enum.any?(errors, &String.contains?(&1, "tools.timeout_ms"))
+    test "validates auto_resize_images" do
+      errors = Validator.validate_tools(%{auto_resize_images: "yes"}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "tools.auto_resize_images"))
 
-      errors = Validator.validate_tools(%{timeout_ms: 0}, [])
-      refute Enum.any?(errors, &String.contains?(&1, "tools.timeout_ms"))
+      errors = Validator.validate_tools(%{auto_resize_images: true}, [])
+      refute Enum.any?(errors, &String.contains?(&1, "tools.auto_resize_images"))
     end
 
-    test "validates max_file_size_mb" do
-      errors = Validator.validate_tools(%{max_file_size_mb: 0}, [])
-      assert Enum.any?(errors, &String.contains?(&1, "tools.max_file_size_mb"))
-
-      errors = Validator.validate_tools(%{max_file_size_mb: 10}, [])
-      refute Enum.any?(errors, &String.contains?(&1, "tools.max_file_size_mb"))
+    test "accepts nil values" do
+      errors = Validator.validate_tools(%{}, [])
+      assert errors == []
     end
   end
 
   describe "validate_tui/2" do
     test "validates theme" do
-      valid_themes = [:default, :dark, :light, :high_contrast]
+      valid_themes = [:default, :dark, :light, :high_contrast, :lemon]
 
       for theme <- valid_themes do
         errors = Validator.validate_tui(%{theme: theme}, [])
@@ -234,6 +256,19 @@ defmodule LemonCore.Config.ValidatorTest do
       errors = Validator.validate_tui(%{theme: :invalid}, [])
       assert Enum.any?(errors, &String.contains?(&1, "tui.theme"))
     end
+
+    test "validates debug" do
+      errors = Validator.validate_tui(%{debug: "yes"}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "tui.debug"))
+
+      errors = Validator.validate_tui(%{debug: true}, [])
+      refute Enum.any?(errors, &String.contains?(&1, "tui.debug"))
+    end
+
+    test "accepts nil values" do
+      errors = Validator.validate_tui(%{}, [])
+      assert errors == []
+    end
   end
 
   describe "nil values" do
@@ -241,25 +276,25 @@ defmodule LemonCore.Config.ValidatorTest do
       config = %Modular{
         agent: %{
           default_model: "test-model",
-          max_iterations: nil,
-          timeout_seconds: nil,
-          enable_approval: nil
+          default_provider: nil,
+          default_thinking_level: nil
         },
         gateway: %{
-          web_port: nil
+          max_concurrent_runs: nil
         },
         logging: %{
           level: nil,
-          file_path: nil
+          file: nil
         },
         providers: %{
           providers: nil
         },
         tools: %{
-          timeout_ms: nil
+          auto_resize_images: nil
         },
         tui: %{
-          theme: nil
+          theme: nil,
+          debug: nil
         }
       }
 

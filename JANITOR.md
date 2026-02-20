@@ -874,3 +874,78 @@ end
 - Integrate validation into config loading flow
 - Add config validation to CLI commands
 - Or start working on architecture check failures
+
+### 2025-02-19 - Feature Enhancement: Config Validation Integration
+**Work Area**: Feature Enhancement
+
+**What was done:**
+- Integrated validation into modular config loading:
+  - Updated `LemonCore.Config.Modular.load/1` with `:validate` option (default: false)
+  - Added `LemonCore.Config.Modular.load!/1` that raises on validation errors
+  - Added `LemonCore.Config.Modular.load_with_validation/1` returning ok/error tuples
+  - Created `LemonCore.Config.ValidationError` exception with detailed error messages
+- Updated validator to match actual config module fields:
+  - Agent: default_model, default_provider, default_thinking_level
+  - Gateway: max_concurrent_runs, auto_resume, enable_telegram, require_engine_lock, engine_lock_timeout_ms
+  - Logging: level, file, max_no_bytes, max_no_files, compress_on_rotate
+  - Tools: auto_resize_images
+  - TUI: theme (including :lemon), debug
+  - Providers: providers map with api_key and base_url validation
+- Created comprehensive integration tests (`modular_integration_test.exs`):
+  - Tests for `load/1` with and without validation
+  - Tests for `load!/1` raising ValidationError
+  - Tests for `load_with_validation/1` returning ok/error tuples
+  - Tests for project directory option
+  - Tests for empty/missing config handling
+  - 13 integration tests
+- Updated validator tests to match actual config fields:
+  - 24 validator tests covering all config sections
+  - Tests for valid and invalid values
+  - Tests for nil handling
+- All 37 new tests pass (13 integration + 24 validator updates)
+- Total test count: 454 (up from 434)
+- Existing tests still pass (1 pre-existing architecture check failure unrelated)
+
+**Files changed:**
+- `apps/lemon_core/lib/lemon_core/config/modular.ex` - Added validation integration
+- `apps/lemon_core/lib/lemon_core/config/validation_error.ex` - New exception module
+- `apps/lemon_core/lib/lemon_core/config/validator.ex` - Updated to match actual config fields
+- `apps/lemon_core/test/lemon_core/config/validator_test.exs` - Updated tests
+- `apps/lemon_core/test/lemon_core/config/modular_integration_test.exs` - New integration tests
+
+**Usage examples:**
+```elixir
+# Load with optional validation (logs warnings)
+config = LemonCore.Config.Modular.load(validate: true)
+
+# Load with validation, raising on errors
+try do
+  config = LemonCore.Config.Modular.load!()
+rescue
+  e in LemonCore.Config.ValidationError ->
+    IO.puts("Config errors:")
+    Enum.each(e.errors, &IO.puts/1)
+end
+
+# Load with validation, returning ok/error tuple
+case LemonCore.Config.Modular.load_with_validation() do
+  {:ok, config} -> use_config(config)
+  {:error, errors} -> handle_errors(errors)
+end
+```
+
+**What worked:**
+- Three different validation modes provide flexibility
+- ValidationError exception provides detailed error context
+- Integration tests verify end-to-end behavior
+- Nil values are gracefully handled as optional
+
+**Total progress:**
+- Started with 119 tests
+- Now have 454 tests
+- Added 335 tests across multiple runs
+
+**Next run should focus on:**
+- Add config validation to CLI commands
+- Add validation warnings to config reloading
+- Or start working on architecture check failures

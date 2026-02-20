@@ -15,18 +15,18 @@ defmodule LemonCore.Config.Validator do
 
   ## Validation Rules
 
-  - Agent: valid model names, positive integers for limits
+  - Agent: valid model names, provider names
   - Gateway: valid port numbers, boolean flags
   - Logging: valid log levels, writable paths
   - Providers: valid API key formats
-  - Tools: valid timeout values, positive integers
+  - Tools: valid timeout values
   - TUI: valid theme names
   """
 
   alias LemonCore.Config.Modular
 
   @valid_log_levels [:debug, :info, :notice, :warning, :error, :critical, :alert, :emergency]
-  @valid_themes [:default, :dark, :light, :high_contrast]
+  @valid_themes [:default, :dark, :light, :high_contrast, :lemon]
 
   @doc """
   Validates a complete modular configuration.
@@ -67,9 +67,8 @@ defmodule LemonCore.Config.Validator do
   def validate_agent(agent, errors) do
     errors
     |> validate_non_empty_string(Map.get(agent, :default_model), "agent.default_model")
-    |> validate_positive_integer(Map.get(agent, :max_iterations), "agent.max_iterations")
-    |> validate_non_negative_integer(Map.get(agent, :timeout_seconds), "agent.timeout_seconds")
-    |> validate_boolean(Map.get(agent, :enable_approval), "agent.enable_approval")
+    |> validate_non_empty_string(Map.get(agent, :default_provider), "agent.default_provider")
+    |> validate_non_empty_string(Map.get(agent, :default_thinking_level), "agent.default_thinking_level")
   end
 
   @doc """
@@ -78,10 +77,11 @@ defmodule LemonCore.Config.Validator do
   @spec validate_gateway(map(), [String.t()]) :: [String.t()]
   def validate_gateway(gateway, errors) do
     errors
-    |> validate_port(Map.get(gateway, :web_port), "gateway.web_port")
+    |> validate_positive_integer(Map.get(gateway, :max_concurrent_runs), "gateway.max_concurrent_runs")
+    |> validate_boolean(Map.get(gateway, :auto_resume), "gateway.auto_resume")
     |> validate_boolean(Map.get(gateway, :enable_telegram), "gateway.enable_telegram")
-    |> validate_boolean(Map.get(gateway, :enable_sms), "gateway.enable_sms")
-    |> validate_boolean(Map.get(gateway, :enable_discord), "gateway.enable_discord")
+    |> validate_boolean(Map.get(gateway, :require_engine_lock), "gateway.require_engine_lock")
+    |> validate_non_negative_integer(Map.get(gateway, :engine_lock_timeout_ms), "gateway.engine_lock_timeout_ms")
   end
 
   @doc """
@@ -91,9 +91,10 @@ defmodule LemonCore.Config.Validator do
   def validate_logging(logging, errors) do
     errors
     |> validate_log_level(Map.get(logging, :level), "logging.level")
-    |> validate_optional_path(Map.get(logging, :file_path), "logging.file_path")
-    |> validate_positive_integer(Map.get(logging, :max_size_mb), "logging.max_size_mb")
-    |> validate_positive_integer(Map.get(logging, :max_files), "logging.max_files")
+    |> validate_optional_path(Map.get(logging, :file), "logging.file")
+    |> validate_positive_integer(Map.get(logging, :max_no_bytes), "logging.max_no_bytes")
+    |> validate_positive_integer(Map.get(logging, :max_no_files), "logging.max_no_files")
+    |> validate_boolean(Map.get(logging, :compress_on_rotate), "logging.compress_on_rotate")
   end
 
   @doc """
@@ -111,10 +112,7 @@ defmodule LemonCore.Config.Validator do
   @spec validate_tools(map(), [String.t()]) :: [String.t()]
   def validate_tools(tools, errors) do
     errors
-    |> validate_non_negative_integer(Map.get(tools, :timeout_ms), "tools.timeout_ms")
-    |> validate_boolean(Map.get(tools, :enable_web_search), "tools.enable_web_search")
-    |> validate_boolean(Map.get(tools, :enable_file_access), "tools.enable_file_access")
-    |> validate_positive_integer(Map.get(tools, :max_file_size_mb), "tools.max_file_size_mb")
+    |> validate_boolean(Map.get(tools, :auto_resize_images), "tools.auto_resize_images")
   end
 
   @doc """
@@ -125,13 +123,12 @@ defmodule LemonCore.Config.Validator do
     errors
     |> validate_theme(Map.get(tui, :theme), "tui.theme")
     |> validate_boolean(Map.get(tui, :debug), "tui.debug")
-    |> validate_boolean(Map.get(tui, :compact), "tui.compact")
   end
 
   # Private validation helpers
 
-  defp validate_non_empty_string(errors, nil, path) do
-    ["#{path}: cannot be nil" | errors]
+  defp validate_non_empty_string(errors, nil, _path) do
+    errors
   end
 
   defp validate_non_empty_string(errors, value, path) when is_binary(value) do
@@ -180,20 +177,6 @@ defmodule LemonCore.Config.Validator do
 
   defp validate_boolean(errors, _value, path) do
     ["#{path}: must be a boolean" | errors]
-  end
-
-  defp validate_port(errors, nil, _path), do: errors
-
-  defp validate_port(errors, value, path) when is_integer(value) do
-    if value >= 1 and value <= 65_535 do
-      errors
-    else
-      ["#{path}: must be between 1 and 65535" | errors]
-    end
-  end
-
-  defp validate_port(errors, _value, path) do
-    ["#{path}: must be a valid port number" | errors]
   end
 
   defp validate_log_level(errors, nil, _path), do: errors
