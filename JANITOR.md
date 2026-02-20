@@ -1869,6 +1869,50 @@ causing the quality check to fail with:
 - Now have 1305+ tests (AI app: 51, lemon_core: 488+, lemon_skills: 89)
 - All tests passing (0 failures)
 
+### 2025-02-20 - Pi Sync: Add Google Antigravity Gemini 3 Pro Models
+**Work Area**: Pi Upstream Sync
+
+**What was done:**
+- Synced with Pi upstream (github.com/pi-coding-agent/pi) to check for new models
+- Found Pi has Google Antigravity Gemini 3 Pro models that Lemon was missing
+- Added two new Google Antigravity models to Lemon's model registry:
+  - `gemini-3-pro-high`: High quality variant, 1M context, 65k max tokens, $2.0/$12.0 per million tokens
+  - `gemini-3-pro-low`: Low latency variant, 1M context, 65k max tokens, $2.0/$12.0 per million tokens
+- Both models use Google's internal Antigravity CLI API at `daily-cloudcode-pa.sandbox.googleapis.com`
+- Both models support reasoning and vision capabilities
+- Added new `:google_antigravity` provider to the models registry
+- Added comprehensive tests for both models:
+  - `gemini 3 pro high has correct specs` - verifies pricing, context window, capabilities
+  - `gemini 3 pro low has correct specs` - verifies pricing, context window, capabilities
+  - Updated flagship models test to include new models
+- Updated existing test to handle both `:google` and `:google_antigravity` providers
+- All 54 AI model tests pass
+- No regressions
+
+**Files changed:**
+- `apps/ai/lib/ai/models.ex` - Added 2 new Antigravity model definitions and provider registry entry
+- `apps/ai/test/models_test.exs` - Added 3 new test cases for Antigravity models
+
+**Commit:**
+- `1c038821` - feat(models): Add Google Antigravity Gemini 3 Pro models
+
+**What worked:**
+- Pi's model structure maps cleanly to Lemon's Model struct
+- Antigravity models use the existing `:google_gemini_cli` API pattern
+- Pricing and specs synced directly from Pi upstream
+- Using `Map.filter/2` to extract antigravity models keeps the code DRY
+
+**Models added:**
+| Model | Provider | Context | Max Tokens | Reasoning | Vision |
+|-------|----------|---------|------------|-----------|--------|
+| gemini-3-pro-high | google_antigravity | 1M | 65,535 | Yes | Yes |
+| gemini-3-pro-low | google_antigravity | 1M | 65,535 | Yes | Yes |
+
+**Total progress:**
+- Started with 119 tests
+- Now have 1307+ tests (AI app: 54, lemon_core: 488+, lemon_skills: 89)
+- All tests passing (0 failures)
+
 **Next run should focus on:**
 - Check for more Pi upstream features to port
 - Add more comprehensive documentation for other features
