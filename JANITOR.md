@@ -2414,6 +2414,94 @@ edits = [
 - Now have 1380+ tests (AI app: 59, lemon_core: 488+, lemon_skills: 106, coding_agent: 68 hashline tests)
 - All tests passing (0 failures)
 
+### 2026-02-20 - Test Expansion: Comprehensive Store and Core Module Tests
+**Work Area**: Test Expansion
+
+**What was done:**
+- Parallelized test creation across multiple untested modules in lemon_core:
+- **`LemonCore.Config.ValidationError`** (20 tests):
+  - Exception creation with default/custom messages
+  - Raise and rescue behavior
+  - Struct fields verification
+  - Edge cases (nil, empty strings, special characters, newlines, long messages)
+  - Usage examples from moduledoc
+- **`LemonCore.Quality.DocsCatalog`** (12 tests):
+  - Catalog file path generation
+  - Loading valid/invalid catalog files
+  - Error handling for missing files and syntax errors
+  - Integration test with actual repository catalog
+- **`LemonCore.Store.EtsBackend`** (37 tests):
+  - Initialization with core tables (chat, progress, runs, run_history)
+  - CRUD operations (put, get, delete, list)
+  - Dynamic table creation
+  - Data type support (strings, atoms, tuples, maps, lists, nested structures)
+  - Ordered_set table behavior
+- **`LemonCore.Store.JsonlBackend`** (52 tests):
+  - Directory creation and file persistence
+  - Core and parity table loading
+  - Complex data type encoding/decoding (atoms, tuples, structs)
+  - Persistence across re-initialization
+  - File format verification
+  - Multiple table operations
+- **`LemonCore.Store.SqliteBackend`** (64 tests):
+  - SQLite database creation with path normalization
+  - Ephemeral table support (ETS-backed)
+  - CRUD operations for both persistent and ephemeral tables
+  - Complex data type serialization
+  - Persistence across close/reopen
+  - Error handling for invalid paths
+- **`LemonCore.Secrets.Keychain`** (26 tests):
+  - macOS availability detection
+  - Get/put/delete master key operations
+  - Mock command runner for isolated testing
+  - Error handling (missing, timeout, unavailable)
+  - Custom service and account options
+- **`LemonCore.Browser.LocalServer`** (23 tests):
+  - GenServer startup and state management
+  - Error handling when node/driver not found
+  - Line splitting and JSON parsing logic
+  - Port exit handling
+  - Request timeout handling
+- **Total: 234 new tests added**
+- All tests passing (0 failures)
+- lemon_core test count: 488+ → 722+
+
+**Files changed:**
+- `apps/lemon_core/test/lemon_core/config/validation_error_test.exs` (new - 20 tests)
+- `apps/lemon_core/test/lemon_core/quality/docs_catalog_test.exs` (new - 12 tests)
+- `apps/lemon_core/test/lemon_core/store/ets_backend_test.exs` (new - 37 tests)
+- `apps/lemon_core/test/lemon_core/store/jsonl_backend_test.exs` (new - 52 tests)
+- `apps/lemon_core/test/lemon_core/store/sqlite_backend_test.exs` (new - 64 tests)
+- `apps/lemon_core/test/lemon_core/secrets/keychain_test.exs` (new - 26 tests)
+- `apps/lemon_core/test/lemon_core/browser/local_server_test.exs` (new - 23 tests)
+
+**Commits:**
+- Test files committed as part of parallel subagent work
+
+**What worked:**
+- Parallel test creation using subagents significantly increased throughput
+- Each module got comprehensive coverage including edge cases
+- Mock patterns allowed testing platform-specific code (Keychain) and external dependencies (Browser)
+- Temporary directory patterns ensured test isolation
+- Both sync and async test modes used appropriately
+
+**Test coverage improvements:**
+| Module | Lines | Tests Added |
+|--------|-------|-------------|
+| Config.ValidationError | 37 | 20 |
+| Quality.DocsCatalog | 54 | 12 |
+| Store.EtsBackend | 66 | 37 |
+| Store.JsonlBackend | 329 | 52 |
+| Store.SqliteBackend | 310 | 64 |
+| Secrets.Keychain | 98 | 26 |
+| Browser.LocalServer | 214 | 23 |
+| **Total** | **1108** | **234** |
+
+**Total progress:**
+- Started with 119 tests
+- Now have 1614+ tests (AI app: 72, lemon_core: 722+, lemon_skills: 106, coding_agent: 715+)
+- All tests passing (0 failures)
+
 **Next run should focus on:**
 - Add Hashline Edit Mode to the edit tool for line-based edits
 - Add streaming support for large files
