@@ -178,13 +178,9 @@ defmodule MarketIntel.Commentary.Pipeline do
   defp generate_tweet(prompt) do
     # Try AI generation if configured
     # Note: AI providers currently return {:error, :not_implemented} as placeholders
-    # TODO: When AI integration is implemented, use generate_with_ai/1 result
-    case generate_with_ai(prompt) do
-      {:ok, tweet} when is_binary(tweet) and tweet != "" -> 
-        {:ok, tweet}
-      _ -> 
-        {:ok, generate_fallback_tweet()}
-    end
+    # When AI integration is implemented, replace this with case statement handling {:ok, tweet}
+    _result = generate_with_ai(prompt)
+    {:ok, generate_fallback_tweet()}
   end
 
   @spec generate_with_ai(String.t()) :: {:ok, String.t()} | {:error, atom()}

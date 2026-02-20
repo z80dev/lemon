@@ -12,23 +12,18 @@ defmodule MarketIntel.Ingestion.DexScreener do
   use GenServer
   require Logger
 
-  @api_base "https://api.dexscreener.com/latest"
+  alias MarketIntel.Ingestion.HttpClient
+  alias MarketIntel.Errors
 
-  # GenServer setup
+  @api_base "https://api.dexscreener.com/latest"
+  @source_name "DEX Screener"
+  @fetch_interval :timer.minutes(2)
+
+  # Client API
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
-
-  @impl true
-  def init(_opts) do
-    # Initial fetch
-    send(self(), :fetch)
-
-    {:ok, %{last_fetch: nil}}
-  end
-
-  # Public API
 
   @doc "Manually trigger a fetch"
   def fetch do
@@ -40,7 +35,13 @@ defmodule MarketIntel.Ingestion.DexScreener do
     MarketIntel.Cache.get(MarketIntel.Config.tracked_token_price_cache_key())
   end
 
-  # GenServer callbacks
+  # Server Callbacks
+
+  @impl true
+  def init(_opts) do
+    send(self(), :fetch)
+    {:ok, %{last_fetch: nil}}
+  end
 
   @impl true
   def handle_cast(:fetch, state) do
@@ -55,16 +56,15 @@ defmodule MarketIntel.Ingestion.DexScreener do
     {:noreply, %{state | last_fetch: DateTime.utc_now()}}
   end
 
-  # Private functions
+  # Private Functions
 
   defp do_fetch do
-    Logger.info("[MarketIntel] Fetching DEX Screener data...")
+    HttpClient.log_info(@source_name, "fetching data...")
 
     tracked_token_address = MarketIntel.Config.tracked_token_address()
     tracked_token_signal_key = MarketIntel.Config.tracked_token_signal_key()
     eth_address = MarketIntel.Config.eth_address()
 
-    # Fetch concurrently
     tasks =
       [
         maybe_fetch_token_task(tracked_token_address, tracked_token_signal_key),
@@ -81,8 +81,8 @@ defmodule MarketIntel.Ingestion.DexScreener do
         MarketIntel.Cache.put(key, data)
         persist_to_db(key, data)
 
-      {:error, reason} ->
-        Logger.warning("[MarketIntel] Fetch failed: #{inspect(reason)}")
+      {:error, _} = error ->
+        HttpClient.log_error(@source_name, Errors.format_for_log(error))
     end)
 
     # Check for significant price movements
@@ -91,77 +91,84 @@ defmodule MarketIntel.Ingestion.DexScreener do
 
   defp maybe_fetch_token_task(nil, _key), do: nil
   defp maybe_fetch_token_task("", _key), do: nil
-  defp maybe_fetch_token_task(address, key), do: Task.async(fn -> fetch_token(address, key) end)
+
+  defp maybe_fetch_token_task(address, key) do
+    Task.async(fn -> fetch_token(address, key) end)
+  end
 
   defp fetch_token(address, key) do
     url = "#{@api_base}/dex/tokens/#{address}"
-    headers = maybe_add_api_key([])
+    headers = build_auth_headers()
 
-    case HTTPoison.get(url, headers, timeout: 10_000) do
-      {:ok, %{status_code: 200, body: body}} ->
-        data = Jason.decode!(body)
-        {:ok, key, parse_token_data(data)}
-
-      {:ok, %{status_code: status}} ->
-        {:error, "HTTP #{status}"}
-
-      {:error, reason} ->
-        {:error, reason}
+    with {:ok, data} <- HttpClient.get(url, headers, source: @source_name),
+         {:ok, parsed} <- parse_token_data(data) do
+      {:ok, key, parsed}
     end
   end
 
-  defp maybe_add_api_key(headers) do
+  defp build_auth_headers do
     case MarketIntel.Secrets.get(:dexscreener_key) do
-      {:ok, key} -> [{"Authorization", "Bearer #{key}"} | headers]
-      _ -> headers
+      {:ok, key} -> [{"Authorization", "Bearer #{key}"}]
+      _ -> []
     end
   end
 
   defp fetch_base_ecosystem do
-    # Fetch top Base tokens for context
     url = "#{@api_base}/dex/search?q=base"
 
-    case HTTPoison.get(url, [], timeout: 10_000) do
-      {:ok, %{status_code: 200, body: body}} ->
-        data = Jason.decode!(body)
-        {:ok, :base_ecosystem, parse_ecosystem_data(data)}
-
-      _ ->
-        {:error, :fetch_failed}
+    with {:ok, data} <- HttpClient.get(url, [], source: @source_name),
+         {:ok, parsed} <- parse_ecosystem_data(data) do
+      {:ok, :base_ecosystem, parsed}
     end
   end
 
-  defp parse_token_data(%{"pairs" => pairs}) when is_list(pairs) do
+  defp parse_token_data(%{"pairs" => pairs}) when is_list(pairs) and length(pairs) > 0 do
     # Get the highest liquidity pair
-    best_pair = Enum.max_by(pairs, & &1["liquidity"]["usd"])
+    best_pair = Enum.max_by(pairs, &get_in(&1, ["liquidity", "usd"]) || 0)
 
-    %{
-      price_usd: best_pair["priceUsd"],
-      price_change_24h: best_pair["priceChange"]["h24"],
-      volume_24h: best_pair["volume"]["h24"],
-      liquidity_usd: best_pair["liquidity"]["usd"],
-      market_cap: best_pair["marketCap"],
-      fdv: best_pair["fdv"],
-      dex: best_pair["dexId"],
-      pair_address: best_pair["pairAddress"],
-      fetched_at: DateTime.utc_now()
-    }
+    {:ok,
+     %{
+       price_usd: best_pair["priceUsd"],
+       price_change_24h: get_in(best_pair, ["priceChange", "h24"]),
+       volume_24h: get_in(best_pair, ["volume", "h24"]),
+       liquidity_usd: get_in(best_pair, ["liquidity", "usd"]),
+       market_cap: best_pair["marketCap"],
+       fdv: best_pair["fdv"],
+       dex: best_pair["dexId"],
+       pair_address: best_pair["pairAddress"],
+       fetched_at: DateTime.utc_now()
+     }}
   end
 
-  defp parse_ecosystem_data(%{"pairs" => pairs}) do
+  defp parse_token_data(%{"pairs" => []}) do
+    Errors.parse_error("no trading pairs found")
+  end
+
+  defp parse_token_data(_) do
+    Errors.parse_error("unexpected response format")
+  end
+
+  defp parse_ecosystem_data(%{"pairs" => pairs}) when is_list(pairs) do
     # Top 10 Base tokens by volume
-    pairs
-    |> Enum.filter(&(&1["chainId"] == "base"))
-    |> Enum.sort_by(& &1["volume"]["h24"], :desc)
-    |> Enum.take(10)
-    |> Enum.map(fn p ->
-      %{
-        symbol: p["baseToken"]["symbol"],
-        price: p["priceUsd"],
-        volume_24h: p["volume"]["h24"],
-        change_24h: p["priceChange"]["h24"]
-      }
-    end)
+    tokens =
+      pairs
+      |> Enum.filter(&(&1["chainId"] == "base"))
+      |> Enum.sort_by(&get_in(&1, ["volume", "h24"]) || 0, :desc)
+      |> Enum.take(10)
+      |> Enum.map(fn p ->
+        %{
+          symbol: get_in(p, ["baseToken", "symbol"]),
+          price: p["priceUsd"],
+          volume_24h: get_in(p, ["volume", "h24"]),
+          change_24h: get_in(p, ["priceChange", "h24"])
+        }
+      end)
+
+    {:ok, tokens}
+  end
+
+  defp parse_ecosystem_data(_) do
+    Errors.parse_error("unexpected ecosystem response format")
   end
 
   defp persist_to_db(_key, _data) do
@@ -174,24 +181,26 @@ defmodule MarketIntel.Ingestion.DexScreener do
     token_key = MarketIntel.Config.tracked_token_signal_key()
     threshold = MarketIntel.Config.tracked_token_price_change_signal_threshold_pct()
 
-    case List.keyfind(results, token_key, 1) do
-      {:ok, ^token_key, %{price_change_24h: change}} when is_number(change) ->
-        if abs(change) > threshold do
-          MarketIntel.Commentary.Pipeline.trigger(:price_spike, %{
-            token: token_key,
-            change: change
-          })
-        else
-          :ok
-        end
+    case find_result(results, token_key) do
+      {:ok, %{price_change_24h: change}} when is_number(change) and abs(change) > threshold ->
+        MarketIntel.Commentary.Pipeline.trigger(:price_spike, %{
+          token: token_key,
+          change: change
+        })
 
       _ ->
         :ok
     end
   end
 
+  defp find_result(results, key) do
+    case List.keyfind(results, key, 1) do
+      {:ok, ^key, data} -> {:ok, data}
+      _ -> {:error, :not_found}
+    end
+  end
+
   defp schedule_next_fetch do
-    # Fetch every 2 minutes
-    Process.send_after(self(), :fetch, :timer.minutes(2))
+    HttpClient.schedule_next_fetch(self(), :fetch, @fetch_interval)
   end
 end

@@ -12,21 +12,19 @@ defmodule MarketIntel.Ingestion.OnChain do
   use GenServer
   require Logger
 
-  # Base RPC endpoints
+  alias MarketIntel.Ingestion.HttpClient
+  alias MarketIntel.Errors
+
   @base_rpc "https://mainnet.base.org"
   @base_scan_api "https://api.basescan.org/api"
+  @source_name "OnChain"
+  @fetch_interval :timer.minutes(3)
+
+  # Client API
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
-
-  @impl true
-  def init(_opts) do
-    send(self(), :fetch)
-    {:ok, %{last_block: nil}}
-  end
-
-  # Public API
 
   def fetch, do: GenServer.cast(__MODULE__, :fetch)
 
@@ -38,7 +36,13 @@ defmodule MarketIntel.Ingestion.OnChain do
     MarketIntel.Cache.get(MarketIntel.Config.tracked_token_large_transfers_cache_key())
   end
 
-  # GenServer callbacks
+  # Server Callbacks
+
+  @impl true
+  def init(_opts) do
+    send(self(), :fetch)
+    {:ok, %{last_block: nil}}
+  end
 
   @impl true
   def handle_cast(:fetch, state) do
@@ -53,10 +57,10 @@ defmodule MarketIntel.Ingestion.OnChain do
     {:noreply, %{state | last_block: new_block}}
   end
 
-  # Private
+  # Private Functions
 
   defp do_fetch(last_block) do
-    Logger.info("[MarketIntel] Fetching on-chain data...")
+    HttpClient.log_info(@source_name, "fetching data...")
 
     tasks = [
       Task.async(fn -> fetch_gas_prices() end),
@@ -70,8 +74,8 @@ defmodule MarketIntel.Ingestion.OnChain do
       {:ok, key, data} ->
         MarketIntel.Cache.put(key, data)
 
-      {:error, reason} ->
-        Logger.warning("[MarketIntel] On-chain fetch failed: #{inspect(reason)}")
+      {:error, _} = error ->
+        HttpClient.log_error(@source_name, Errors.format_for_log(error))
     end)
 
     # Return latest block number
@@ -80,7 +84,7 @@ defmodule MarketIntel.Ingestion.OnChain do
 
   defp fetch_gas_prices do
     # Get current gas prices from Base
-    case HTTPoison.get("#{@base_rpc}", [], timeout: 10_000) do
+    case HTTPoison.get(@base_rpc, [], timeout: 10_000) do
       {:ok, %{status_code: 200, body: body}} ->
         {:ok, :base_network_stats,
          %{
@@ -89,8 +93,11 @@ defmodule MarketIntel.Ingestion.OnChain do
            fetched_at: DateTime.utc_now()
          }}
 
-      _ ->
-        {:error, :gas_fetch_failed}
+      {:ok, %{status_code: status}} ->
+        Errors.api_error("Base RPC", "HTTP #{status}")
+
+      {:error, %HTTPoison.Error{reason: reason}} ->
+        Errors.network_error(reason)
     end
   end
 
@@ -102,39 +109,49 @@ defmodule MarketIntel.Ingestion.OnChain do
   defp fetch_token_transfers(from_block) do
     token_address = MarketIntel.Config.tracked_token_address()
 
-    if token_address in [nil, ""] do
-      {:error, :missing_tracked_token_address}
+    if missing_config?(token_address) do
+      Errors.config_error("missing tracked_token address")
     else
       do_fetch_token_transfers(token_address, from_block)
     end
   end
 
   defp do_fetch_token_transfers(token_address, from_block) do
-    # Use BaseScan API to get tracked token transfers
-    api_key = get_basescan_key()
+    api_key_result = get_basescan_key()
     transfers_key = MarketIntel.Config.tracked_token_transfers_cache_key()
     large_transfers_key = MarketIntel.Config.tracked_token_large_transfers_cache_key()
 
+    with {:ok, api_key} <- api_key_result,
+         {:ok, data} <- fetch_basescan_transfers(token_address, from_block, api_key),
+         transfers = parse_transfers(data["result"] || []),
+         large_transfers = Enum.filter(transfers, &large_transfer?/1) do
+      # Cache large transfers separately
+      MarketIntel.Cache.put(large_transfers_key, large_transfers)
+
+      {:ok, transfers_key,
+       %{
+         recent: Enum.take(transfers, 20),
+         large: large_transfers,
+         count_24h: length(transfers)
+       }}
+    end
+  end
+
+  defp fetch_basescan_transfers(token_address, from_block, api_key) do
     url =
-      "#{@base_scan_api}?module=account&action=tokentx&contractaddress=#{token_address}&startblock=#{from_block}&sort=desc&apikey=#{api_key}"
+      "#{@base_scan_api}?module=account&action=tokentx" <> 
+      "&contractaddress=#{token_address}&startblock=#{from_block}&sort=desc&apikey=#{api_key}"
 
-    case HTTPoison.get(url, [], timeout: 15_000) do
-      {:ok, %{status_code: 200, body: body}} ->
-        data = Jason.decode!(body)
-        transfers = parse_transfers(data["result"] || [])
+    HttpClient.get(url, [], source: "BaseScan")
+  end
 
-        large_transfers = Enum.filter(transfers, &large_transfer?/1)
-        MarketIntel.Cache.put(large_transfers_key, large_transfers)
-
-        {:ok, transfers_key,
-         %{
-           recent: Enum.take(transfers, 20),
-           large: large_transfers,
-           count_24h: length(transfers)
-         }}
+  defp get_basescan_key do
+    case MarketIntel.Secrets.get(:basescan_key) do
+      {:ok, key} when is_binary(key) and key != "" ->
+        {:ok, key}
 
       _ ->
-        {:error, :transfers_fetch_failed}
+        Errors.config_error("missing BASESCAN_KEY secret")
     end
   end
 
@@ -180,14 +197,11 @@ defmodule MarketIntel.Ingestion.OnChain do
     end
   end
 
-  defp schedule_next do
-    Process.send_after(self(), :fetch, :timer.minutes(3))
-  end
+  defp missing_config?(nil), do: true
+  defp missing_config?(""), do: true
+  defp missing_config?(_), do: false
 
-  defp get_basescan_key do
-    case MarketIntel.Secrets.get(:basescan_key) do
-      {:ok, key} -> key
-      _ -> ""
-    end
+  defp schedule_next do
+    HttpClient.schedule_next_fetch(self(), :fetch, @fetch_interval)
   end
 end

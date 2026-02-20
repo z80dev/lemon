@@ -12,18 +12,21 @@ defmodule MarketIntel.Ingestion.TwitterMentions do
   use GenServer
   require Logger
 
+  alias MarketIntel.Ingestion.HttpClient
+
+  @source_name "TwitterMentions"
+  @fetch_interval :timer.minutes(2)
+
+  # Sentiment keywords
+  @positive_keywords ["🚀", "moon", "pump", "bullish", "based", "great", "awesome", "love"]
+  @negative_keywords ["📉", "dump", "bearish", "scam", "rug", "hate", "terrible", "bad"]
+  @question_keywords ["?", "how", "what", "why", "when", "where", "who"]
+
+  # Client API
+
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
-
-  @impl true
-  def init(_opts) do
-    # Check for mentions every 2 minutes
-    send(self(), :check_mentions)
-    {:ok, %{last_mention_id: nil, mention_history: []}}
-  end
-
-  # Public API
 
   def get_recent_mentions do
     MarketIntel.Cache.get(:recent_mentions)
@@ -33,7 +36,13 @@ defmodule MarketIntel.Ingestion.TwitterMentions do
     MarketIntel.Cache.get(:mention_sentiment)
   end
 
-  # GenServer callbacks
+  # Server Callbacks
+
+  @impl true
+  def init(_opts) do
+    send(self(), :check_mentions)
+    {:ok, %{last_mention_id: nil, mention_history: []}}
+  end
 
   @impl true
   def handle_info(:check_mentions, state) do
@@ -42,35 +51,36 @@ defmodule MarketIntel.Ingestion.TwitterMentions do
     {:noreply, new_state}
   end
 
-  # Private
+  # Private Functions
 
   defp do_check_mentions(state) do
-    Logger.info("[MarketIntel] Checking Twitter mentions...")
+    HttpClient.log_info(@source_name, "checking mentions...")
 
-    # This would use the X API via the existing x tool
-    # For now, placeholder that could integrate with get_x_mentions
+    case fetch_mentions(state.last_mention_id) do
+      [] ->
+        state
 
-    mentions = fetch_mentions(state.last_mention_id)
-
-    if length(mentions) > 0 do
-      # Analyze sentiment
-      analyzed = Enum.map(mentions, &analyze_mention/1)
-
-      # Store in cache
-      MarketIntel.Cache.put(:recent_mentions, analyzed)
-
-      # Update sentiment summary
-      update_sentiment_summary(analyzed)
-
-      # Check for reply-worthy mentions
-      check_reply_opportunities(analyzed)
-
-      # Update last seen
-      last_id = List.first(mentions)["id"]
-      %{state | last_mention_id: last_id, mention_history: mentions ++ state.mention_history}
-    else
-      state
+      mentions ->
+        process_mentions(mentions, state)
     end
+  end
+
+  defp process_mentions(mentions, state) do
+    # Analyze sentiment
+    analyzed = Enum.map(mentions, &analyze_mention/1)
+
+    # Store in cache
+    MarketIntel.Cache.put(:recent_mentions, analyzed)
+
+    # Update sentiment summary
+    update_sentiment_summary(analyzed)
+
+    # Check for reply-worthy mentions
+    check_reply_opportunities(analyzed)
+
+    # Update last seen
+    last_id = List.first(mentions)["id"]
+    %{state | last_mention_id: last_id, mention_history: mentions ++ state.mention_history}
   end
 
   defp fetch_mentions(_since_id) do
@@ -82,13 +92,7 @@ defmodule MarketIntel.Ingestion.TwitterMentions do
   defp analyze_mention(mention) do
     text = mention["text"] || ""
 
-    sentiment =
-      cond do
-        String.contains?(text, ["🚀", "moon", "pump", "bullish", "based"]) -> :positive
-        String.contains?(text, ["📉", "dump", "bearish", "scam", "rug"]) -> :negative
-        true -> :neutral
-      end
-
+    sentiment = classify_sentiment(text)
     engagement = calculate_engagement(mention)
 
     Map.merge(mention, %{
@@ -98,11 +102,23 @@ defmodule MarketIntel.Ingestion.TwitterMentions do
     })
   end
 
-  defp calculate_engagement(mention) do
-    likes = mention["public_metrics"]["like_count"] || 0
-    retweets = mention["public_metrics"]["retweet_count"] || 0
-    replies = mention["public_metrics"]["reply_count"] || 0
+  defp classify_sentiment(text) do
+    downcased = String.downcase(text)
 
+    cond do
+      contains_any?(downcased, @positive_keywords) -> :positive
+      contains_any?(downcased, @negative_keywords) -> :negative
+      true -> :neutral
+    end
+  end
+
+  defp calculate_engagement(mention) do
+    metrics = mention["public_metrics"] || %{}
+    likes = metrics["like_count"] || 0
+    retweets = metrics["retweet_count"] || 0
+    replies = metrics["reply_count"] || 0
+
+    # Weighted engagement score
     likes + retweets * 2 + replies * 3
   end
 
@@ -116,9 +132,9 @@ defmodule MarketIntel.Ingestion.TwitterMentions do
 
     summary = %{
       total_mentions: total,
-      positive_pct: div(counts.positive * 100, total),
-      negative_pct: div(counts.negative * 100, total),
-      neutral_pct: div(counts.neutral * 100, total),
+      positive_pct: percentage(counts.positive, total),
+      negative_pct: percentage(counts.negative, total),
+      neutral_pct: percentage(counts.neutral, total),
       top_mentions: Enum.take(mentions, 5),
       updated_at: DateTime.utc_now()
     }
@@ -127,11 +143,9 @@ defmodule MarketIntel.Ingestion.TwitterMentions do
   end
 
   defp check_reply_opportunities(mentions) do
-    # Find high-engagement or interesting mentions that deserve replies
     reply_worthy =
       Enum.filter(mentions, fn m ->
-        m.engagement_score > 10 or
-          String.contains?(m["text"], ["?", "how", "what", "why"])
+        m.engagement_score > 10 or contains_any?(m["text"] || "", @question_keywords)
       end)
 
     if length(reply_worthy) > 0 do
@@ -141,7 +155,14 @@ defmodule MarketIntel.Ingestion.TwitterMentions do
     end
   end
 
+  defp percentage(_count, 0), do: 0
+  defp percentage(count, total), do: div(count * 100, total)
+
+  defp contains_any?(text, keywords) do
+    Enum.any?(keywords, &String.contains?(text, &1))
+  end
+
   defp schedule_next do
-    Process.send_after(self(), :check_mentions, :timer.minutes(2))
+    HttpClient.schedule_next_fetch(self(), :check_mentions, @fetch_interval)
   end
 end
