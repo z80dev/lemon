@@ -25,6 +25,57 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-21 - Refactoring: Break Down Long Functions in StreamCoalescer & Telegram Transport
+**Work Area**: Refactoring / Code Quality
+
+**What was done:**
+- Broke down 8 long functions (>50 lines) across `stream_coalescer.ex` and `telegram/transport.ex`
+- Extracted 5 shared helper functions to eliminate duplicated patterns
+- Reduced nesting depth from 4-5 levels to max 2 levels
+- Fixed path concatenation anti-pattern with `Path.relative_to/2`
+- Net reduction: 106 lines (-661/+555)
+
+**StreamCoalescer Refactoring:**
+
+| Function | Before | After | Helpers Extracted |
+|----------|--------|-------|-------------------|
+| `do_finalize/2` | 183 lines | ~30 lines | `finalize_edit_answer/8`, `finalize_send_answer/8` |
+| `emit_output/1` | 127 lines | ~25 lines | `emit_telegram_edit_output/4`, `emit_channels_outbox_output/4` |
+| `emit_telegram_answer_output/2` | 108 lines | ~20 lines | `emit_telegram_answer_edit/5`, `emit_telegram_answer_create/6` |
+
+**Shared Helpers Extracted:**
+- `build_telegram_payload/5` - Replaced 6 duplicated OutboundPayload struct constructions
+- `meta_get/2` - Replaced 7 verbose `(state.meta || %{})[:key] || (state.meta || %{})["key"]` patterns
+
+**Telegram Transport Refactoring:**
+
+| Function | Before | After | Helpers Extracted |
+|----------|--------|-------|-------------------|
+| `handle_trigger_command/2` | 144 lines | ~30 lines | `apply_trigger_mode/3`, `apply_trigger_clear/1` |
+| `handle_file_put_media_group/6` | 111 lines | ~20 lines | `validate_multi_file_dest/2`, `upload_media_group_items/6`, `format_upload_results/1` |
+| `handle_new_session/3` | 105 lines | ~25 lines | `normalize_selector/1`, `start_new_session/6`, `maybe_subscribe_to_run/1`, `new_session_message/2`, `extract_project_info/1` |
+
+**Shared Helpers Extracted:**
+- `extract_message_ids/1` - Replaced 18 duplicated chat_id/thread_id/user_msg_id extractions
+- `extract_chat_ids/1` - Replaced 10 two-tuple extractions
+- `cfg_get/3` - Replaced ~25 atom/string key access patterns (`cfg[:key] || cfg["key"]`)
+
+**Anti-pattern Fixed:**
+- `within_root?/2`: Replaced `String.starts_with?(abs, root <> "/")` with `Path.relative_to(abs, root) != abs`
+
+**Commits:**
+- `7cd2f919` - refactor: break down long functions in stream_coalescer and telegram transport
+
+**Result:** All 435 tests pass. Zero compiler warnings.
+
+**Next run should focus on:**
+- Refactor `lemon_gateway/transports/webhook.ex` (1504 lines, `submit_run/5` at 71 lines, nested `idempotency_response/2`)
+- Refactor `lemon_router/run_process.ex` (1922 lines, nested `resolve_explicit_send_file/3`)
+- Refactor `lemon_channels/adapters/xmtp/transport.ex` (1400 lines)
+- Add @spec type signatures to extracted helper functions
+
+---
+
 ### 2026-02-21 - Feature Enhancement: Port HTTP Inspector, Model Cache, and Smart Routing
 **Work Area**: Feature Enhancement
 
