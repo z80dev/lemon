@@ -1,5 +1,9 @@
 defmodule LemonGateway.Transports.Webhook do
-  @moduledoc false
+  @moduledoc """
+  HTTP webhook transport for LemonGateway. Accepts prompt submissions via
+  POST requests with support for synchronous and asynchronous response modes,
+  callback delivery with retries, token-based authentication, and idempotency keys.
+  """
 
   use Plug.Router
   use LemonGateway.Transport
@@ -264,49 +268,57 @@ defmodule LemonGateway.Transports.Webhook do
              attachments: normalized.attachments,
              callback_retry: callback_retry
            }) do
-      job = %Job{
+      job =
+        build_submit_job(conn, integration_id, integration, normalized, run_id, session_key, queue_mode)
+
+      run_ctx = %{
+        integration_id: integration_id,
         run_id: run_id,
         session_key: session_key,
-        prompt: normalized.prompt,
-        engine_id: resolve_engine(integration),
-        cwd: normalize_blank(fetch(integration, :cwd)),
-        queue_mode: queue_mode,
-        meta: %{
-          origin: :webhook,
-          webhook: %{
-            integration_id: integration_id,
-            metadata: normalized.metadata,
-            attachments: normalized.attachments,
-            request: request_metadata(conn),
-            integration: integration_metadata(integration)
-          }
-        }
+        mode: mode,
+        timeout_ms: timeout_ms,
+        callback_wait_timeout_ms: callback_wait_timeout_ms,
+        callback_url: callback_url,
+        metadata: normalized.metadata,
+        attachments: normalized.attachments,
+        callback_retry: callback_retry,
+        callback_status: callback_status
       }
 
-      try do
-        :ok = Runtime.submit(job)
-        maybe_store_idempotency_submission(idempotency_ctx, run_id, session_key, mode)
+      perform_submit(job, run_ctx, wait_setup, idempotency_ctx)
+    end
+  end
 
-        {:ok,
-         %{
-           integration_id: integration_id,
-           run_id: run_id,
-           session_key: session_key,
-           mode: mode,
-           timeout_ms: timeout_ms,
-           callback_wait_timeout_ms: callback_wait_timeout_ms,
-           callback_url: callback_url,
-           metadata: normalized.metadata,
-           attachments: normalized.attachments,
-           callback_retry: callback_retry,
-           callback_status: callback_status
-         }
-         |> Map.merge(wait_setup)}
-      rescue
-        error ->
-          cleanup_wait_setup(wait_setup)
-          {:error, {:submit_failed, Exception.message(error)}}
-      end
+  defp build_submit_job(conn, integration_id, integration, normalized, run_id, session_key, queue_mode) do
+    %Job{
+      run_id: run_id,
+      session_key: session_key,
+      prompt: normalized.prompt,
+      engine_id: resolve_engine(integration),
+      cwd: normalize_blank(fetch(integration, :cwd)),
+      queue_mode: queue_mode,
+      meta: %{
+        origin: :webhook,
+        webhook: %{
+          integration_id: integration_id,
+          metadata: normalized.metadata,
+          attachments: normalized.attachments,
+          request: request_metadata(conn),
+          integration: integration_metadata(integration)
+        }
+      }
+    }
+  end
+
+  defp perform_submit(job, run_ctx, wait_setup, idempotency_ctx) do
+    try do
+      :ok = Runtime.submit(job)
+      maybe_store_idempotency_submission(idempotency_ctx, run_ctx.run_id, run_ctx.session_key, run_ctx.mode)
+      {:ok, Map.merge(run_ctx, wait_setup)}
+    rescue
+      error ->
+        cleanup_wait_setup(wait_setup)
+        {:error, {:submit_failed, Exception.message(error)}}
     end
   end
 
@@ -696,45 +708,23 @@ defmodule LemonGateway.Transports.Webhook do
     ])
   end
 
-  defp allow_callback_override?(integration) do
-    resolve_boolean(
-      [fetch(integration, :allow_callback_override), fetch(config(), :allow_callback_override)],
-      false
-    )
-  end
+  defp allow_callback_override?(integration),
+    do: resolve_integration_flag(integration, :allow_callback_override)
 
-  defp allow_private_callback_hosts?(integration) do
-    resolve_boolean(
-      [
-        fetch(integration, :allow_private_callback_hosts),
-        fetch(config(), :allow_private_callback_hosts)
-      ],
-      false
-    )
-  end
+  defp allow_private_callback_hosts?(integration),
+    do: resolve_integration_flag(integration, :allow_private_callback_hosts)
 
-  defp allow_query_token?(integration) do
-    resolve_boolean(
-      [fetch(integration, :allow_query_token), fetch(config(), :allow_query_token)],
-      false
-    )
-  end
+  defp allow_query_token?(integration),
+    do: resolve_integration_flag(integration, :allow_query_token)
 
-  defp allow_payload_token?(integration) do
-    resolve_boolean(
-      [fetch(integration, :allow_payload_token), fetch(config(), :allow_payload_token)],
-      false
-    )
-  end
+  defp allow_payload_token?(integration),
+    do: resolve_integration_flag(integration, :allow_payload_token)
 
-  defp allow_payload_idempotency_key?(integration) do
-    resolve_boolean(
-      [
-        fetch(integration, :allow_payload_idempotency_key),
-        fetch(config(), :allow_payload_idempotency_key)
-      ],
-      false
-    )
+  defp allow_payload_idempotency_key?(integration),
+    do: resolve_integration_flag(integration, :allow_payload_idempotency_key)
+
+  defp resolve_integration_flag(integration, key) do
+    resolve_boolean([fetch(integration, key), fetch(config(), key)], false)
   end
 
   defp validate_callback_url(callback_url, allow_private_hosts) do
@@ -1140,20 +1130,10 @@ defmodule LemonGateway.Transports.Webhook do
             {:duplicate, response_status, response_payload}
 
           state == "pending" ->
-            pending_payload =
-              idempotency_fallback_payload(entry)
-              |> case do
-                %{} = payload -> Map.put_new(payload, :status, "processing")
-                _ -> %{status: "processing"}
-              end
-
-            {:duplicate, 202, pending_payload}
+            idempotency_pending_response(entry)
 
           true ->
-            case idempotency_fallback_payload(entry) do
-              %{} = payload -> {:duplicate, 202, payload}
-              _ -> nil
-            end
+            idempotency_fallback_response(entry)
         end
 
       _ ->
@@ -1164,6 +1144,23 @@ defmodule LemonGateway.Transports.Webhook do
   end
 
   defp idempotency_response(_, _), do: nil
+
+  defp idempotency_pending_response(entry) do
+    pending_payload =
+      case idempotency_fallback_payload(entry) do
+        %{} = payload -> Map.put_new(payload, :status, "processing")
+        _ -> %{status: "processing"}
+      end
+
+    {:duplicate, 202, pending_payload}
+  end
+
+  defp idempotency_fallback_response(entry) do
+    case idempotency_fallback_payload(entry) do
+      %{} = payload -> {:duplicate, 202, payload}
+      _ -> nil
+    end
+  end
 
   defp idempotency_fallback_payload(entry) when is_map(entry) do
     run_id = normalize_blank(fetch(entry, :run_id))

@@ -547,6 +547,53 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
   end
 
   defp normalize_inbound(event) do
+    identifiers = extract_identifiers(event)
+
+    raw_content = fetch_nested(event, ["content"])
+    raw_content_type = raw_content_type(event)
+    content_type = infer_content_type(event)
+
+    {wallet_address, sender_identity_source} =
+      resolve_wallet_and_source(%{
+        event: event,
+        sender_inbox_id: identifiers.sender_inbox_id,
+        conversation_id: identifiers.conversation_id,
+        message_id: identifiers.message_id,
+        raw_content_type: raw_content_type,
+        raw_content: raw_content
+      })
+
+    is_group = group_conversation?(event)
+
+    group_id =
+      if is_group do
+        fetch_nested(event, ["group_id"]) || fetch_nested(event, ["conversation", "group_id"])
+      else
+        nil
+      end
+
+    {prompt, prompt_is_placeholder} = decode_prompt(event, content_type)
+
+    %{
+      wallet_address: wallet_address,
+      sender_inbox_id: identifiers.sender_inbox_id,
+      sender_identity_source: sender_identity_source,
+      conversation_id: to_string(identifiers.conversation_id),
+      message_id: identifiers.message_id,
+      content_type: content_type,
+      raw_content_type: raw_content_type,
+      raw_content: raw_content,
+      prompt: prompt,
+      prompt_is_placeholder: prompt_is_placeholder,
+      is_group: is_group,
+      group_id: normalize_blank(group_id),
+      session_key: "xmtp:#{wallet_address}:#{identifiers.conversation_id}",
+      timestamp: extract_timestamp(event),
+      raw_event: event
+    }
+  end
+
+  defp extract_identifiers(event) do
     conversation_id =
       fetch_nested(event, ["conversation_id"]) ||
         fetch_nested(event, ["conversation", "id"]) ||
@@ -567,63 +614,39 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
     sender_inbox_id = normalize_inbox_id(sender_inbox_id)
 
     message_id =
-      fetch_nested(event, ["message_id"]) ||
-        fetch_nested(event, ["id"]) ||
-        fetch_nested(event, ["message", "id"])
-
-    raw_content = fetch_nested(event, ["content"])
-    raw_content_type = raw_content_type(event)
-    content_type = infer_content_type(event)
-
-    wallet_candidate =
-      fetch_nested(event, ["sender_address"]) ||
-        fetch_nested(event, ["sender_wallet"]) ||
-        fetch_nested(event, ["wallet_address"]) ||
-        fetch_nested(event, ["peer_address"])
-
-    {wallet_address, sender_identity_source} =
-      case normalize_wallet(wallet_candidate) do
-        wallet when is_binary(wallet) ->
-          {wallet, "wallet"}
-
-        _ ->
-          {stable_identity_wallet(%{
-             sender_inbox_id: sender_inbox_id,
-             conversation_id: conversation_id,
-             message_id: normalize_blank(message_id),
-             raw_content_type: raw_content_type,
-             raw_content: raw_content
-           }), fallback_identity_source(sender_inbox_id, conversation_id)}
-      end
-
-    is_group = group_conversation?(event)
-
-    group_id =
-      if is_group do
-        fetch_nested(event, ["group_id"]) || fetch_nested(event, ["conversation", "group_id"])
-      else
-        nil
-      end
-
-    {prompt, prompt_is_placeholder} = decode_prompt(event, content_type)
+      normalize_blank(
+        fetch_nested(event, ["message_id"]) ||
+          fetch_nested(event, ["id"]) ||
+          fetch_nested(event, ["message", "id"])
+      )
 
     %{
-      wallet_address: wallet_address,
+      conversation_id: conversation_id,
       sender_inbox_id: sender_inbox_id,
-      sender_identity_source: sender_identity_source,
-      conversation_id: to_string(conversation_id),
-      message_id: normalize_blank(message_id),
-      content_type: content_type,
-      raw_content_type: raw_content_type,
-      raw_content: raw_content,
-      prompt: prompt,
-      prompt_is_placeholder: prompt_is_placeholder,
-      is_group: is_group,
-      group_id: normalize_blank(group_id),
-      session_key: "xmtp:#{wallet_address}:#{conversation_id}",
-      timestamp: extract_timestamp(event),
-      raw_event: event
+      message_id: message_id
     }
+  end
+
+  defp resolve_wallet_and_source(%{} = ctx) do
+    wallet_candidate =
+      fetch_nested(ctx.event, ["sender_address"]) ||
+        fetch_nested(ctx.event, ["sender_wallet"]) ||
+        fetch_nested(ctx.event, ["wallet_address"]) ||
+        fetch_nested(ctx.event, ["peer_address"])
+
+    case normalize_wallet(wallet_candidate) do
+      wallet when is_binary(wallet) ->
+        {wallet, "wallet"}
+
+      _ ->
+        {stable_identity_wallet(%{
+           sender_inbox_id: ctx.sender_inbox_id,
+           conversation_id: ctx.conversation_id,
+           message_id: ctx.message_id,
+           raw_content_type: ctx.raw_content_type,
+           raw_content: ctx.raw_content
+         }), fallback_identity_source(ctx.sender_inbox_id, ctx.conversation_id)}
+    end
   end
 
   defp decode_prompt(event, "reply") do
@@ -1140,33 +1163,8 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
         thread_id: conversation_id
       })
 
-    xmtp_meta =
-      %{
-        wallet_address: normalized.wallet_address,
-        sender_inbox_id: normalized.sender_inbox_id,
-        sender_identity_source: normalized.sender_identity_source,
-        conversation_id: normalized.conversation_id,
-        message_id: normalized.message_id,
-        content_type: normalized.content_type,
-        raw_content_type: normalized.raw_content_type,
-        raw_content: normalized.raw_content,
-        prompt_is_placeholder: normalized.prompt_is_placeholder,
-        is_group: normalized.is_group,
-        session_key: normalized.session_key
-      }
-      |> maybe_put_group(normalized)
-
-    meta =
-      %{
-        agent_id: agent_id,
-        engine_id: normalize_blank(fetch_meta(extra, :engine_id)),
-        queue_mode: fetch_meta(extra, :queue_mode),
-        cwd: normalize_blank(fetch_meta(extra, :cwd)),
-        session_key: session_key,
-        xmtp: xmtp_meta,
-        xmtp_reply: xmtp_reply_metadata(normalized)
-      }
-      |> drop_nil_values()
+    xmtp_meta = build_xmtp_meta(normalized)
+    meta = build_inbound_meta(agent_id, session_key, extra, normalized, xmtp_meta)
 
     %InboundMessage{
       channel_id: "xmtp",
@@ -1190,6 +1188,36 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
       raw: normalized.raw_event || normalized,
       meta: meta
     }
+  end
+
+  defp build_xmtp_meta(normalized) do
+    %{
+      wallet_address: normalized.wallet_address,
+      sender_inbox_id: normalized.sender_inbox_id,
+      sender_identity_source: normalized.sender_identity_source,
+      conversation_id: normalized.conversation_id,
+      message_id: normalized.message_id,
+      content_type: normalized.content_type,
+      raw_content_type: normalized.raw_content_type,
+      raw_content: normalized.raw_content,
+      prompt_is_placeholder: normalized.prompt_is_placeholder,
+      is_group: normalized.is_group,
+      session_key: normalized.session_key
+    }
+    |> maybe_put_group(normalized)
+  end
+
+  defp build_inbound_meta(agent_id, session_key, extra, normalized, xmtp_meta) do
+    %{
+      agent_id: agent_id,
+      engine_id: normalize_blank(fetch_meta(extra, :engine_id)),
+      queue_mode: fetch_meta(extra, :queue_mode),
+      cwd: normalize_blank(fetch_meta(extra, :cwd)),
+      session_key: session_key,
+      xmtp: xmtp_meta,
+      xmtp_reply: xmtp_reply_metadata(normalized)
+    }
+    |> drop_nil_values()
   end
 
   defp route_to_router(%InboundMessage{} = inbound) do
@@ -1383,8 +1411,12 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
   defp maybe_existing_atom(key) when is_atom(key), do: key
   defp maybe_existing_atom(_), do: nil
 
-  defp fetch_meta(map, key) when is_map(map) do
-    Map.get(map, key) || Map.get(map, to_string(key))
+  defp fetch_meta(map, key) when is_map(map) and is_atom(key) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  end
+
+  defp fetch_meta(map, key) when is_map(map) and is_binary(key) do
+    Map.get(map, key) || Map.get(map, maybe_existing_atom(key))
   end
 
   defp fetch_meta(_, _), do: nil

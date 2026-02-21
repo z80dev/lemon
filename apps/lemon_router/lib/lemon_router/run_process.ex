@@ -472,7 +472,7 @@ defmodule LemonRouter.RunProcess do
         {pid, run_id}
 
       [{pid, value}] when is_pid(pid) and is_map(value) ->
-        run_id = value[:run_id] || value["run_id"]
+        run_id = fetch(value, :run_id)
         {pid, run_id}
 
       [{pid, _value}] when is_pid(pid) ->
@@ -613,7 +613,7 @@ defmodule LemonRouter.RunProcess do
   defp maybe_fanout_final_output(_state, _event), do: :ok
 
   defp fanout_routes_from_job(%LemonGateway.Types.Job{meta: meta}) when is_map(meta) do
-    meta[:fanout_routes] || meta["fanout_routes"] || []
+    fetch(meta, :fanout_routes) || []
   rescue
     _ -> []
   end
@@ -745,12 +745,12 @@ defmodule LemonRouter.RunProcess do
 
   defp extract_completed_ok_and_error(%LemonCore.Event{payload: %{completed: %{ok: ok} = c}})
        when is_boolean(ok) do
-    {ok, Map.get(c, :error) || Map.get(c, "error")}
+    {ok, fetch(c, :error)}
   end
 
   defp extract_completed_ok_and_error(%LemonCore.Event{payload: %{ok: ok} = p})
        when is_boolean(ok) do
-    {ok, Map.get(p, :error) || Map.get(p, "error")}
+    {ok, fetch(p, :error)}
   end
 
   defp extract_completed_ok_and_error(_), do: {true, nil}
@@ -854,11 +854,7 @@ defmodule LemonRouter.RunProcess do
   defp reset_telegram_resume_state(session_key) when is_binary(session_key) do
     with %{kind: :channel_peer, channel_id: "telegram"} = parsed <-
            ChannelContext.parse_session_key(session_key) do
-      account_id =
-        case parsed.account_id do
-          account when is_binary(account) and account != "" -> account
-          _ -> "default"
-        end
+      account_id = normalize_telegram_account_id(parsed)
 
       chat_id = ChannelContext.parse_int(parsed.peer_id)
       thread_id = ChannelContext.parse_int(parsed.thread_id)
@@ -895,11 +891,7 @@ defmodule LemonRouter.RunProcess do
        when is_binary(session_key) and is_map(details) do
     with %{kind: :channel_peer, channel_id: "telegram"} = parsed <-
            ChannelContext.parse_session_key(session_key) do
-      account_id =
-        case parsed.account_id do
-          account when is_binary(account) and account != "" -> account
-          _ -> "default"
-        end
+      account_id = normalize_telegram_account_id(parsed)
 
       chat_id = ChannelContext.parse_int(parsed.peer_id)
       thread_id = ChannelContext.parse_int(parsed.thread_id)
@@ -931,16 +923,51 @@ defmodule LemonRouter.RunProcess do
 
   defp mark_telegram_pending_compaction(_session_key, _reason, _details), do: :ok
 
-  defp usage_input_tokens(usage) when is_map(usage) do
-    [:input_tokens, :input, :prompt_tokens]
-    |> Enum.find_value(fn key ->
-      value = fetch(usage, key)
+  defp normalize_telegram_account_id(parsed) do
+    case parsed.account_id do
+      account when is_binary(account) and account != "" -> account
+      _ -> "default"
+    end
+  end
 
-      case maybe_parse_positive_int(value) do
-        nil -> nil
-        parsed -> parsed
+  defp usage_input_tokens(usage) when is_map(usage) do
+    {primary_key, primary_tokens} =
+      cond do
+        is_integer(maybe_parse_positive_int(fetch(usage, :input_tokens))) ->
+          {:input_tokens, maybe_parse_positive_int(fetch(usage, :input_tokens))}
+
+        is_integer(maybe_parse_positive_int(fetch(usage, :input))) ->
+          {:input, maybe_parse_positive_int(fetch(usage, :input))}
+
+        is_integer(maybe_parse_positive_int(fetch(usage, :prompt_tokens))) ->
+          {:prompt_tokens, maybe_parse_positive_int(fetch(usage, :prompt_tokens))}
+
+        true ->
+          {nil, nil}
       end
-    end)
+
+    cached_tokens =
+      [:cached_input_tokens, :cache_read_input_tokens, :cache_creation_input_tokens]
+      |> Enum.reduce(0, fn key, acc ->
+        case maybe_parse_positive_int(fetch(usage, key)) do
+          value when is_integer(value) -> acc + value
+          _ -> acc
+        end
+      end)
+
+    cond do
+      is_integer(primary_tokens) and primary_key in [:input_tokens, :input] ->
+        primary_tokens + cached_tokens
+
+      is_integer(primary_tokens) ->
+        primary_tokens
+
+      cached_tokens > 0 ->
+        cached_tokens
+
+      true ->
+        nil
+    end
   rescue
     _ -> nil
   end
@@ -1302,14 +1329,14 @@ defmodule LemonRouter.RunProcess do
   defp normalize_retry_meta(_), do: %{}
 
   defp retry_attempt_from_meta(meta) when is_map(meta) do
-    case Map.get(meta, :zero_answer_retry_attempt) || Map.get(meta, "zero_answer_retry_attempt") do
+    case fetch(meta, :zero_answer_retry_attempt) do
       attempt when is_integer(attempt) and attempt >= 0 -> attempt
       _ -> 0
     end
   end
 
   defp retry_origin_from_meta(meta) when is_map(meta) do
-    Map.get(meta, :origin) || Map.get(meta, "origin") || :unknown
+    fetch(meta, :origin) || :unknown
   end
 
   defp empty_answer?(answer) when is_binary(answer), do: String.trim(answer) == ""
@@ -1720,27 +1747,7 @@ defmodule LemonRouter.RunProcess do
     caption = fetch(file, :caption)
     filename = fetch(file, :filename)
 
-    resolved_path =
-      cond do
-        is_binary(cwd) and cwd != "" ->
-          case resolve_generated_path(path, cwd) do
-            nil ->
-              if is_binary(path) and Path.type(path) == :absolute do
-                Path.expand(path)
-              else
-                nil
-              end
-
-            resolved ->
-              resolved
-          end
-
-        is_binary(path) and Path.type(path) == :absolute ->
-          Path.expand(path)
-
-        true ->
-          nil
-      end
+    resolved_path = resolve_file_path(path, cwd)
 
     with path when is_binary(path) and path != "" <- path,
          resolved when is_binary(resolved) <- resolved_path,
@@ -1764,6 +1771,23 @@ defmodule LemonRouter.RunProcess do
   end
 
   defp resolve_explicit_send_file(_, _cwd, _max_bytes), do: nil
+
+  defp resolve_file_path(path, cwd) do
+    cond do
+      is_binary(cwd) and cwd != "" ->
+        resolve_generated_path(path, cwd) || absolute_path_or_nil(path)
+
+      is_binary(path) and Path.type(path) == :absolute ->
+        Path.expand(path)
+
+      true ->
+        nil
+    end
+  end
+
+  defp absolute_path_or_nil(path) do
+    if is_binary(path) and Path.type(path) == :absolute, do: Path.expand(path)
+  end
 
   defp resolve_generated_path(path, _cwd) when not is_binary(path), do: nil
 
