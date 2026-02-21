@@ -3446,3 +3446,35 @@ Refactored the MarketIntel Commentary Pipeline module (`apps/market_intel/lib/ma
 - Continue adding tests for remaining untested modules
 - Add integration tests for store migration
 - Add tests for Store.Backend with actual backends (EtsBackend, JsonlBackend, SqliteBackend)
+
+### 2026-02-21 - Test Expansion: market_intel & coding_agent Coverage
+**Work Area**: Test Expansion
+
+**What was done:**
+- Added comprehensive tests for 10 previously untested modules across market_intel and coding_agent
+- Brought market_intel from ~63% to ~94% source-to-test coverage
+- Added WASM subsystem and session event handler tests to coding_agent
+
+**New test files created:**
+
+| File | Module Under Test | Tests Added |
+|------|-------------------|-------------|
+| `market_intel/cache_test.exs` | MarketIntel.Cache | 10 |
+| `market_intel/config_test.exs` | MarketIntel.Config | 22 |
+| `market_intel/scheduler_test.exs` | MarketIntel.Scheduler | 5 |
+| `market_intel/schema_test.exs` | MarketIntel.Schema (4 schemas) | 21 |
+| `market_intel/secrets_test.exs` | MarketIntel.Secrets | 18 |
+| `coding_agent/wasm/builder_test.exs` | CodingAgent.Wasm.Builder | 7 |
+| `coding_agent/wasm/policy_test.exs` | CodingAgent.Wasm.Policy | 10 |
+| `coding_agent/session/event_handler_test.exs` | CodingAgent.Session.EventHandler | 12 |
+| `coding_agent/tools/post_to_x_test.exs` | CodingAgent.Tools.PostToX | 2 |
+| `coding_agent/tools/get_x_mentions_test.exs` | CodingAgent.Tools.GetXMentions | 2 |
+| **Total** | **10 modules** | **109** |
+
+**Notable findings:**
+- MarketIntel.Config has a latent bug: `normalize_optional_string/1` matches `nil` as atom before the explicit nil clause, converting it to the string `"nil"` instead of returning `nil`. This affects `x_account_handle` backfill logic.
+
+**Next run should focus on:**
+- Fix the `normalize_optional_string` nil-handling bug in MarketIntel.Config
+- Add tests for remaining untested apps (agent_core, lemon_automation, lemon_channels, etc.)
+- Add integration tests for WASM sidecar lifecycle
