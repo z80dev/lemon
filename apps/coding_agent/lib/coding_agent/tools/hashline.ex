@@ -483,7 +483,22 @@ defmodule CodingAgent.Tools.Hashline do
 
       {file_lines, first_changed, [noop | noop_edits]}
     else
-      new_lines = List.replace_at(file_lines, tag.line - 1, hd(content))
+      idx = tag.line - 1
+
+      new_lines =
+        case content do
+          [] ->
+            List.delete_at(file_lines, idx)
+
+          [single_line] ->
+            List.replace_at(file_lines, idx, single_line)
+
+          _multiple_lines ->
+            {before, after_parts} = Enum.split(file_lines, idx)
+            {_removed, after_rest} = Enum.split(after_parts, 1)
+            before ++ content ++ after_rest
+        end
+
       {new_lines, min_line(first_changed, tag.line), noop_edits}
     end
   end
@@ -664,6 +679,76 @@ defmodule CodingAgent.Tools.Hashline do
     normalize_line(a) == normalize_line(b)
   end
 
+  # ============================================================================
+  # Streaming Hashline Formatter
+  # ============================================================================
+
+  @doc """
+  Stream hashline-formatted output from file content.
+
+  Yields chunks of formatted lines, suitable for large files where callers
+  want incremental output rather than allocating a single large string.
+
+  ## Options
+
+    - `:start_line` - First line number (1-indexed, defaults to 1)
+    - `:max_chunk_lines` - Maximum formatted lines per yielded chunk (default: 200)
+    - `:max_chunk_bytes` - Maximum UTF-8 bytes per yielded chunk (default: 65536)
+
+  ## Returns
+
+  An Elixir `Stream` that yields `String.t()` chunks, each containing one or
+  more `\\n`-joined hashline-formatted lines.
+
+  ## Examples
+
+      "line1\\nline2\\nline3"
+      |> Hashline.stream_hashlines(max_chunk_lines: 1)
+      |> Enum.to_list()
+      # => ["1#XX:line1", "2#YY:line2", "3#ZZ:line3"]
+  """
+  @spec stream_hashlines(String.t(), keyword()) :: Enumerable.t()
+  def stream_hashlines(content, opts \\ []) do
+    start_line = Keyword.get(opts, :start_line, 1)
+    max_chunk_lines = Keyword.get(opts, :max_chunk_lines, 200)
+    max_chunk_bytes = Keyword.get(opts, :max_chunk_bytes, 65_536)
+
+    lines = String.split(content, "\n")
+
+    lines
+    |> Stream.with_index(start_line)
+    |> Stream.chunk_while(
+      {[], 0, 0},
+      fn {line, num}, {acc, acc_lines, acc_bytes} ->
+        formatted = "#{format_line_tag(num, line)}:#{line}"
+        line_bytes = byte_size(formatted)
+        sep_bytes = if acc_lines == 0, do: 0, else: 1
+
+        cond do
+          # First line in chunk always goes in
+          acc_lines == 0 ->
+            {:cont, {[formatted], 1, line_bytes}}
+
+          # Would exceed limits - emit current chunk, start new one
+          acc_lines >= max_chunk_lines or
+              acc_bytes + sep_bytes + line_bytes > max_chunk_bytes ->
+            chunk = Enum.reverse(acc) |> Enum.join("\n")
+            {:cont, chunk, {[formatted], 1, line_bytes}}
+
+          # Add to current chunk
+          true ->
+            {:cont, {[formatted | acc], acc_lines + 1, acc_bytes + sep_bytes + line_bytes}}
+        end
+      end,
+      fn
+        {[], _, _} -> {:cont, {[], 0, 0}}
+        {acc, _, _} ->
+          chunk = Enum.reverse(acc) |> Enum.join("\n")
+          {:cont, chunk, {[], 0, 0}}
+      end
+    )
+  end
+
   @doc """
   Format a mismatch error message with context lines.
 
@@ -689,7 +774,7 @@ defmodule CodingAgent.Tools.Hashline do
       |> Enum.sort()
 
     lines = [
-      "#{length(mismatches)} line#{if length(mismatches) > 1, do: "s have", else: " has"} changed since last read. Use the updated LINE#ID references shown below (>>> marks changed lines).",
+      "#{length(mismatches)} line#{if length(mismatches) > 1, do: "s have", else: " has"} changed since last read. Line references may have changed. Use the updated LINE#ID references shown below (>>> marks changed lines).",
       ""
     ]
 

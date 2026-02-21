@@ -25,6 +25,59 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-21 - Feature Enhancement: Hashline Edit Tool & Streaming Support
+**Work Area**: Feature Enhancement (Pi/Oh-My-Pi Sync)
+
+**Sources Checked**:
+- Pi (github.com/pi-coding-agent/pi) - LLM models and providers
+- Oh-My-Pi (github.com/can1357/oh-my-pi) - Hashline edit mode, LSP tools
+
+**Findings**:
+- **Models**: Lemon's AI model registry is fully up-to-date with Pi (601 models vs Pi's 586). No new models to port.
+- **Hashline Edit Mode**: Oh-my-pi has a 961-line hashline.ts with line-addressable editing via xxHash32 hashes. Lemon already had a core `Hashline` utility module ported in a previous run, but was missing the streaming formatter and the registered tool.
+
+**Changes Made**:
+
+1. **Added `stream_hashlines/2` to `CodingAgent.Tools.Hashline`** (`apps/coding_agent/lib/coding_agent/tools/hashline.ex`)
+   - Elixir Stream-based chunked hashline formatter for large files
+   - Configurable chunk sizes (`:max_chunk_lines`, `:max_chunk_bytes`)
+   - Configurable start line (`:start_line`)
+   - Yields `\n`-joined chunks of formatted `LINENUM#HASH:CONTENT` lines
+
+2. **Created `CodingAgent.Tools.HashlineEdit`** (`apps/coding_agent/lib/coding_agent/tools/hashline_edit.ex`)
+   - Full tool implementation following existing Edit/Patch tool patterns
+   - Parses JSON edit params into internal hashline edit structs
+   - Supports all 5 operations: set, replace, append, prepend, insert
+   - BOM preservation, CRLF/LF detection and restoration
+   - File access validation, abort signal support
+   - Rich error messages with hash remap hints on stale edits
+
+3. **Registered hashline_edit as builtin tool**
+   - Added to `@builtin_tools` in `CodingAgent.ToolRegistry`
+   - Added to `coding_tools/2` and `all_tools/2` in `CodingAgent.Tools`
+
+4. **Tests**:
+   - 30 new tests in `hashline_edit_test.exs` covering all operations, error cases, BOM/CRLF preservation
+   - Updated tool count assertions in `coding_agent_test.exs` and `tools_test.exs` (18->19, 19->20)
+   - All 76 hashline+hashline_edit tests pass; 0 new failures introduced
+
+**Files Created**:
+- `apps/coding_agent/lib/coding_agent/tools/hashline_edit.ex` (263 lines)
+- `apps/coding_agent/test/coding_agent/tools/hashline_edit_test.exs` (306 lines)
+
+**Files Modified**:
+- `apps/coding_agent/lib/coding_agent/tools/hashline.ex` (added stream_hashlines/2)
+- `apps/coding_agent/lib/coding_agent/tool_registry.ex` (registered hashline_edit)
+- `apps/coding_agent/lib/coding_agent/tools.ex` (added HashlineEdit to tool sets)
+- `apps/coding_agent/test/coding_agent_test.exs` (tool count 18->19)
+- `apps/coding_agent/test/coding_agent/tools_test.exs` (tool counts updated)
+
+**Pre-existing Issues Noted**:
+- 5 pre-existing failures in WriteTest (auto-formatting feature tests)
+- Compilation error in `LemonGateway.Voice.TwilioWebSocket` (imported `get_in/2` conflicts with local)
+
+---
+
 ### 2026-02-21 - Test Expansion: Wasm.ToolFactory & Session.EventHandler
 **Work Area**: Test Expansion / Coverage Improvement
 

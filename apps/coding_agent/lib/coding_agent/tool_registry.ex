@@ -50,7 +50,8 @@ defmodule CodingAgent.ToolRegistry do
     {:tool_auth, Tools.ToolAuth},
     {:extensions_status, Tools.ExtensionsStatus},
     {:post_to_x, Tools.PostToX},
-    {:get_x_mentions, Tools.GetXMentions}
+    {:get_x_mentions, Tools.GetXMentions},
+    {:hashline_edit, Tools.HashlineEdit}
   ]
 
   @doc """
