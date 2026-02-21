@@ -42,6 +42,78 @@ if is_binary(uploads_dir) and uploads_dir != "" do
   config :lemon_web, :uploads_dir, uploads_dir
 end
 
+# Load voice API keys from ~/.zeebot/api_keys/ in dev
+if config_env() == :dev do
+  keys_dir = Path.expand("~/.zeebot/api_keys")
+
+  parse_twilio = fn path ->
+    with {:ok, content} <- File.read(path),
+         [_ | _] = lines <- String.split(content, "\n") do
+      sid =
+        Enum.find_value(lines, fn line ->
+          case String.split(line, "Account SID ", parts: 2) do
+            [_, value] -> String.trim(value)
+            _ -> nil
+          end
+        end)
+
+      token =
+        Enum.find_value(lines, fn line ->
+          case String.split(line, "Auth token ", parts: 2) do
+            [_, value] -> String.trim(value)
+            _ -> nil
+          end
+        end)
+
+      if sid && token, do: {sid, token}
+    else
+      _ -> nil
+    end
+  end
+
+  parse_key_file = fn path ->
+    with {:ok, content} <- File.read(path) do
+      content
+      |> String.split("\n", trim: true)
+      |> List.last()
+      |> case do
+        nil -> nil
+        key -> String.trim(key)
+      end
+    else
+      _ -> nil
+    end
+  end
+
+  voice_config =
+    []
+    |> then(fn acc ->
+      case parse_twilio.(Path.join(keys_dir, "twilio.txt")) do
+        {sid, token} ->
+          [{:twilio_account_sid, sid}, {:twilio_auth_token, token} | acc]
+
+        _ ->
+          acc
+      end
+    end)
+    |> then(fn acc ->
+      case parse_key_file.(Path.join(keys_dir, "deepgram.txt")) do
+        nil -> acc
+        key -> [{:deepgram_api_key, key} | acc]
+      end
+    end)
+    |> then(fn acc ->
+      case parse_key_file.(Path.join(keys_dir, "elevenlabs.txt")) do
+        nil -> acc
+        key -> [{:elevenlabs_api_key, key} | acc]
+      end
+    end)
+
+  if voice_config != [] do
+    config :lemon_gateway, voice_config
+  end
+end
+
 if config_env() == :prod do
   host = System.get_env("LEMON_WEB_HOST") || "localhost"
   port = String.to_integer(System.get_env("LEMON_WEB_PORT") || "4080")
