@@ -145,9 +145,11 @@ defmodule LemonChannels.Outbox do
               {:noreply, %{state | queue: queue}}
             else
               reason = finalize_failure_reason(reason)
+              failure_meta = outbox_failure_meta(entry)
 
               Logger.warning(
-                "Delivery failed after #{entry.attempts} attempts: #{inspect(reason)}"
+                "Delivery failed after #{entry.attempts} attempts: #{inspect(reason)} " <>
+                  "meta=#{inspect(failure_meta)}"
               )
 
               maybe_notify_delivery(entry.payload, {:error, reason})
@@ -181,9 +183,11 @@ defmodule LemonChannels.Outbox do
           {:noreply, %{state | queue: queue}}
         else
           reason = finalize_failure_reason(reason)
+          failure_meta = outbox_failure_meta(entry)
 
           Logger.warning(
-            "Delivery worker exited after #{entry.attempts} attempts: #{inspect(reason)}"
+            "Delivery worker exited after #{entry.attempts} attempts: #{inspect(reason)} " <>
+              "meta=#{inspect(failure_meta)}"
           )
 
           maybe_notify_delivery(entry.payload, {:error, reason})
@@ -212,6 +216,20 @@ defmodule LemonChannels.Outbox do
   end
 
   defp maybe_notify_delivery(_payload, _result), do: :ok
+
+  defp outbox_failure_meta(entry) do
+    payload = entry.payload
+    meta = payload.meta || %{}
+
+    %{
+      channel_id: payload.channel_id,
+      account_id: payload.account_id,
+      kind: payload.kind,
+      peer: payload.peer,
+      run_id: meta[:run_id] || meta["run_id"],
+      session_key: meta[:session_key] || meta["session_key"]
+    }
+  end
 
   # Chunk a payload if its content exceeds the channel's chunk limit
   defp maybe_chunk_payload(%OutboundPayload{content: content, channel_id: channel_id} = payload)

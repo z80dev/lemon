@@ -39,6 +39,7 @@ defmodule LemonRouter.ChannelContextTest do
   describe "helpers" do
     test "channel_id/1 returns channel only for channel peer sessions" do
       assert ChannelContext.channel_id("agent:a1:telegram:bot:dm:42") == {:ok, "telegram"}
+      assert ChannelContext.channel_id("agent:coder:delegate:agent:main:p123:thread:oracle") == :error
       assert ChannelContext.channel_id("agent:a1:main") == :error
     end
 

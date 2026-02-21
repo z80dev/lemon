@@ -1,5 +1,6 @@
 defmodule LemonRouter.ChannelContext do
   @moduledoc false
+  @internal_channel_ids MapSet.new(["delegate"])
 
   def parse_session_key(session_key) when is_binary(session_key) do
     case LemonCore.SessionKey.parse(session_key) do
@@ -50,11 +51,15 @@ defmodule LemonRouter.ChannelContext do
       when is_binary(channel_id) and
              channel_id !=
                "" ->
-        {:ok, channel_id}
+        if internal_channel_id?(channel_id), do: :error, else: {:ok, channel_id}
 
       _ ->
         :error
     end
+  end
+
+  defp internal_channel_id?(channel_id) when is_binary(channel_id) do
+    MapSet.member?(@internal_channel_ids, channel_id)
   end
 
   def channel_supports_edit?(channel_id) when is_binary(channel_id) do
