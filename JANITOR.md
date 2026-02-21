@@ -25,6 +25,51 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-21 - Test Expansion: Untested Module Coverage
+**Work Area**: Test Expansion
+
+**Analysis**:
+- Comprehensive coverage gap analysis across all 13 apps
+- Identified 272+ untested modules across the codebase
+- Focused on pure-function modules and recently refactored code
+
+**New Test Files Created (5 files, 106 new tests)**:
+
+1. **`apps/ai/test/providers/http_trace_test.exs`** (27 tests)
+   - Tests for `Ai.Providers.HttpTrace` - previously completely untested
+   - Covers: `new_trace_id/1`, `body_bytes/1`, `body_preview/2`, `response_header_value/2`, `summarize_text_size/1`, `log/4`, `log_error/4`, `enabled?/0`
+   - Tests header normalization with maps, keyword lists, atom keys, case-insensitive lookup
+
+2. **`apps/ai/test/models_core_test.exs`** (25 tests)
+   - Tests for `Ai.Models` core API - no prior tests for these functions
+   - Covers: `get_model/2`, `get_models/1`, `get_providers/0`, `list_models/0`, `find_by_id/1`, `supports_vision?/1`, `supports_reasoning?/1`, `get_model_ids/1`
+   - Includes model struct integrity validation (all models have required fields, valid costs)
+
+3. **`apps/lemon_router/test/lemon_router/tool_preview_test.exs`** (22 tests)
+   - Tests for `LemonRouter.ToolPreview` - previously completely untested
+   - Covers: nil handling, plain text passthrough, inspected struct extraction, TextContent struct, list input joining, map key extraction, other type inspection
+   - Tests escaped character handling in inspected struct strings
+
+4. **`apps/lemon_gateway/test/lemon_gateway/telegram/truncate_test.exs`** (14 tests)
+   - Tests for `LemonGateway.Telegram.Truncate` - previously completely untested
+   - Covers: short messages (passthrough), long message truncation, resume line preservation (lemon/codex/claude patterns), multi-byte character handling (emoji, CJK)
+
+5. **`apps/lemon_gateway/test/lemon_gateway/telegram/markdown_test.exs`** (18 tests)
+   - Tests for `LemonGateway.Telegram.Markdown` - previously completely untested
+   - Covers: plain text, bold/italic/strikethrough/code entities, fenced code blocks with language, links with text_link entities, headings as bold, ordered/unordered lists, blockquotes, entity offset correctness, complex mixed markdown
+
+**Coverage Improvements**:
+- AI app: 36% → improved (HttpTrace + Models core now tested)
+- lemon_router: ToolPreview now has tests
+- lemon_gateway: Telegram Truncate + Markdown now have tests
+- All 106 new tests pass
+
+**Key Findings** (for future runs):
+- `lemon_control_plane` has 95+ untested method handlers (24% coverage)
+- `lemon_gateway` still has 70+ untested modules (engines, SMS, voice, stores)
+- `lemon_channels` has 30+ untested adapter modules
+- AI provider modules (anthropic.ex, bedrock.ex, openai_completions.ex) lack direct unit tests despite recent refactoring - integration tests exist but helper functions need coverage
+
 ### 2026-02-21 - Review & Integration: Claude Task Batch Validation
 **Work Area**: Review / Integration / Bug Fixes
 
