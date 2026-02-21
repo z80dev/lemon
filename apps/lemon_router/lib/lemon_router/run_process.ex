@@ -29,6 +29,7 @@ defmodule LemonRouter.RunProcess do
   @session_register_retry_ms 25
   @session_register_retry_max_ms 250
   @zero_answer_retry_max_attempts 1
+  @image_extensions MapSet.new(~w(.png .jpg .jpeg .gif .webp .bmp .svg .tif .tiff .heic .heif))
   @context_overflow_error_markers [
     "context_length_exceeded",
     "context length exceeded",
@@ -1534,15 +1535,8 @@ defmodule LemonRouter.RunProcess do
   end
 
   defp merge_paths(existing, new_paths) do
-    Enum.reduce(new_paths, existing, fn path, acc ->
-      if path in acc do
-        acc
-      else
-        acc ++ [path]
-      end
-    end)
+    Enum.uniq(existing ++ new_paths)
   end
-
   defp extract_requested_send_files(action_ev) do
     action = fetch(action_ev, :action)
     phase = fetch(action_ev, :phase)
@@ -1661,22 +1655,11 @@ defmodule LemonRouter.RunProcess do
   defp deleted_change_kind?(kind) when kind in [:deleted, "deleted", :remove, "remove"], do: true
   defp deleted_change_kind?(_), do: false
 
-  defp image_path?(path) when is_binary(path) do
-    case Path.extname(path) |> String.downcase() do
-      ".png" -> true
-      ".jpg" -> true
-      ".jpeg" -> true
-      ".gif" -> true
-      ".webp" -> true
-      ".bmp" -> true
-      ".svg" -> true
-      ".tif" -> true
-      ".tiff" -> true
-      ".heic" -> true
-      ".heif" -> true
-      _ -> false
-    end
-  end
+  @spec image_path?(term()) :: boolean()
+  defp image_path?(path) when is_binary(path),
+    do: path |> Path.extname() |> String.downcase() |> then(&MapSet.member?(@image_extensions, &1))
+
+  defp image_path?(_), do: false
 
   defp maybe_add_auto_send_generated_files(meta, state) when is_map(meta) do
     explicit_files =
@@ -1816,11 +1799,11 @@ defmodule LemonRouter.RunProcess do
         if MapSet.member?(seen, key) do
           {acc, seen}
         else
-          {acc ++ [file], MapSet.put(seen, key)}
+          {[file | acc], MapSet.put(seen, key)}
         end
       end)
 
-    merged
+    Enum.reverse(merged)
   end
 
   defp merge_files(first, second) when is_list(first), do: first ++ List.wrap(second)

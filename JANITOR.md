@@ -25,6 +25,67 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-21 - Refactoring: Performance, Nesting, and Anti-Pattern Cleanup
+**Work Area**: Refactoring
+
+**Analysis**:
+- Scanned all 14 apps for O(n²) list operations, deep nesting, inconsistent key access, and performance anti-patterns
+- Found 8+ files with `acc ++ [item]` in reduce loops (O(n²) complexity)
+- Found 9 instances of nested `if` env-var checks in config/validator.ex (3+ levels deep)
+- Found inconsistent atom/string key access patterns in wasm/policy.ex and tools/agent.ex
+- Found inefficient `String.length(x) > 0` check and sequential `Enum.filter` calls
+
+**Refactoring Done**:
+
+1. **O(n²) list concatenation → O(n)** (`lemon_router/run_process.ex`)
+   - `merge_paths/2`: Replaced `Enum.reduce` with `acc ++ [path]` → simple `Enum.uniq(existing ++ new_paths)`
+   - `merge_files/2`: Changed `acc ++ [file]` → `[file | acc]` with final `Enum.reverse`
+   - Net: O(n) instead of O(n²) for both functions
+
+2. **O(n²) list concatenation → O(n)** (`lemon_gateway/thread_worker.ex`)
+   - `extract_collect_jobs/2`: Changed `acc ++ [job]` → `[job | acc]` with `Enum.reverse` at return
+   - Net: O(n) recursive extraction instead of O(n²)
+
+3. **O(n²) list concatenation → O(n) + code deduplication** (`ai/providers/openai_responses_shared.ex`)
+   - `convert_messages/4`: Changed `acc ++ converted` → `[converted | acc]` with final `Enum.reverse`
+   - `insert_synthetic_tool_results/1`: Replaced 6 `result ++ [msg]` patterns → `[msg | result]` with `Enum.reverse`
+   - Extracted `flush_pending_synthetic/3` helper to deduplicate 3 identical "flush orphaned tool calls" blocks
+   - Fixed `String.length(text_result) > 0` → `text_result != ""` (avoids O(n) character count)
+   - Net: O(n) message conversion, -15 lines of duplicated code
+
+4. **Deep nesting flattened** (`lemon_core/config/validator.ex`)
+   - Extracted `env_var_reference?/1` helper to replace 9 identical `String.starts_with?(x, "${") and String.ends_with?(x, "}")` patterns
+   - Refactored 9 validators from nested `if/if` (3 levels) → flat `cond` (1 level): telegram_token, discord_token, secret_key_base, access_token, signer_key, app_key, state_secret, wallet_key, wallet_address
+   - Extracted `valid_discord_token_format?/1` helper for discord token 3-part validation
+   - Net: -40 lines, max nesting depth 1 instead of 3
+
+5. **Inconsistent key access cleanup** (`coding_agent/wasm/policy.ex`)
+   - Extracted `get_cap/2` helper for atom/string key capability lookup
+   - Simplified `capability_requires_approval?/1` from 4 lines to 1 line
+   - Net: cleaner, DRY capability access
+
+6. **Inconsistent key access cleanup** (`coding_agent/tools/agent.ex`)
+   - Added `map_get_default/3` helper alongside existing `map_get/2`
+   - Refactored `normalize_completion/2` to use helpers instead of inline `Map.get(m, :k, Map.get(m, "k", default))`
+   - Net: consistent key access pattern, reusable helper
+
+7. **Sequential Enum.filter consolidation** (`lemon_router/agent_directory.ex`)
+   - Combined two sequential `Enum.filter` calls into single filter with `and` logic
+   - Net: 1 list traversal instead of 2
+
+**Test Results**: All 435 tests pass. Zero compilation warnings (`mix compile --warnings-as-errors`).
+
+**Files Changed**: 7 files across 5 apps
+- `apps/lemon_router/lib/lemon_router/run_process.ex` - merge_paths, merge_files perf fix
+- `apps/lemon_gateway/lib/lemon_gateway/thread_worker.ex` - extract_collect_jobs perf fix
+- `apps/ai/lib/ai/providers/openai_responses_shared.ex` - list concat, flush_pending_synthetic, String.length
+- `apps/lemon_core/lib/lemon_core/config/validator.ex` - env_var_reference?, valid_discord_token_format?, cond flattening
+- `apps/coding_agent/lib/coding_agent/wasm/policy.ex` - get_cap helper
+- `apps/coding_agent/lib/coding_agent/tools/agent.ex` - map_get_default helper
+- `apps/lemon_router/lib/lemon_router/agent_directory.ex` - filter consolidation
+
+---
+
 ### 2026-02-21 - Test Expansion & Documentation: Coverage Gaps Filled
 **Work Area**: Test Expansion + Documentation
 

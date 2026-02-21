@@ -451,11 +451,11 @@ defmodule LemonGateway.ThreadWorker do
   defp extract_collect_jobs(queue, acc) do
     case :queue.out(queue) do
       {{:value, %Job{queue_mode: :collect} = job}, rest} ->
-        extract_collect_jobs(rest, acc ++ [job])
+        extract_collect_jobs(rest, [job | acc])
 
       _ ->
         # No more :collect jobs or queue is empty
-        {acc, queue}
+        {Enum.reverse(acc), queue}
     end
   end
 

@@ -136,17 +136,10 @@ defmodule LemonCore.Config.Validator do
   defp validate_telegram_token(errors, nil), do: errors
 
   defp validate_telegram_token(errors, token) when is_binary(token) do
-    if String.starts_with?(token, "${") and String.ends_with?(token, "}") do
-      # Token references an env var, which is valid
-      errors
-    else
-      # Basic Telegram bot token format validation
-      # Format: 123456789:ABCdefGHIjklMNOpqrsTUVwxyz
-      if Regex.match?(~r/^\d+:[A-Za-z0-9_-]+$/, token) do
-        errors
-      else
-        ["gateway.telegram.token: invalid format (expected '123456789:ABCdef...')" | errors]
-      end
+    cond do
+      env_var_reference?(token) -> errors
+      Regex.match?(~r/^\d+:[A-Za-z0-9_-]+$/, token) -> errors
+      true -> ["gateway.telegram.token: invalid format (expected '123456789:ABCdef...')" | errors]
     end
   end
 
@@ -185,36 +178,31 @@ defmodule LemonCore.Config.Validator do
   defp validate_discord_token(errors, nil), do: errors
 
   defp validate_discord_token(errors, token) when is_binary(token) do
-    if String.starts_with?(token, "${") and String.ends_with?(token, "}") do
-      # Token references an env var, which is valid
-      errors
-    else
-      # Basic Discord bot token format validation
-      # Discord tokens are base64-encoded and typically have 3 parts separated by dots
-      # Format: XXXXXX.YYYYYY.ZZZZZZ (where each part is base64url encoded)
-      parts = String.split(token, ".")
+    cond do
+      env_var_reference?(token) ->
+        errors
 
-      # Discord tokens have 3 parts, each part should be reasonably long
-      # The user ID part (first) is typically 17-20 digits
-      # The timestamp part (second) is base64 encoded
-      # The signature part (third) is base64 encoded
-      if length(parts) == 3 do
-        [user_id, timestamp, signature] = parts
+      valid_discord_token_format?(token) ->
+        errors
 
-        if String.length(user_id) >= 10 and
-             String.length(timestamp) >= 5 and
-             String.length(signature) >= 5 do
-          errors
-        else
-          ["gateway.discord.bot_token: invalid format (expected Discord bot token format)" | errors]
-        end
-      else
+      true ->
         ["gateway.discord.bot_token: invalid format (expected Discord bot token format)" | errors]
-      end
     end
   end
 
   defp validate_discord_token(errors, _), do: ["gateway.discord.bot_token: must be a string" | errors]
+
+  defp valid_discord_token_format?(token) do
+    case String.split(token, ".") do
+      [user_id, timestamp, signature] ->
+        String.length(user_id) >= 10 and
+          String.length(timestamp) >= 5 and
+          String.length(signature) >= 5
+
+      _ ->
+        false
+    end
+  end
 
   defp validate_discord_id_list(errors, nil, _path), do: errors
 
@@ -274,16 +262,10 @@ defmodule LemonCore.Config.Validator do
   defp validate_web_dashboard_secret_key_base(errors, nil), do: errors
 
   defp validate_web_dashboard_secret_key_base(errors, key) when is_binary(key) do
-    if String.starts_with?(key, "${") and String.ends_with?(key, "}") do
-      # References an env var, which is valid
-      errors
-    else
-      # Secret key base should be at least 64 characters for security
-      if String.length(key) >= 64 do
-        errors
-      else
-        ["gateway.web_dashboard.secret_key_base: must be at least 64 characters (use LEMON_WEB_SECRET_KEY_BASE env var)" | errors]
-      end
+    cond do
+      env_var_reference?(key) -> errors
+      String.length(key) >= 64 -> errors
+      true -> ["gateway.web_dashboard.secret_key_base: must be at least 64 characters (use LEMON_WEB_SECRET_KEY_BASE env var)" | errors]
     end
   end
 
@@ -292,16 +274,10 @@ defmodule LemonCore.Config.Validator do
   defp validate_web_dashboard_access_token(errors, nil), do: errors
 
   defp validate_web_dashboard_access_token(errors, token) when is_binary(token) do
-    if String.starts_with?(token, "${") and String.ends_with?(token, "}") do
-      # References an env var, which is valid
-      errors
-    else
-      # Access token should be reasonably strong (at least 16 characters)
-      if String.length(token) >= 16 do
-        errors
-      else
-        ["gateway.web_dashboard.access_token: should be at least 16 characters for security" | errors]
-      end
+    cond do
+      env_var_reference?(token) -> errors
+      String.length(token) >= 16 -> errors
+      true -> ["gateway.web_dashboard.access_token: should be at least 16 characters for security" | errors]
     end
   end
 
@@ -341,16 +317,10 @@ defmodule LemonCore.Config.Validator do
   defp validate_farcaster_signer_key(errors, nil), do: errors
 
   defp validate_farcaster_signer_key(errors, key) when is_binary(key) do
-    if String.starts_with?(key, "${") and String.ends_with?(key, "}") do
-      # References an env var, which is valid
-      errors
-    else
-      # Farcaster signer keys are hex-encoded ed25519 private keys (64 hex chars)
-      if Regex.match?(~r/^[0-9a-fA-F]{64}$/, key) do
-        errors
-      else
-        ["gateway.farcaster.signer_key: invalid format (expected 64-character hex string)" | errors]
-      end
+    cond do
+      env_var_reference?(key) -> errors
+      Regex.match?(~r/^[0-9a-fA-F]{64}$/, key) -> errors
+      true -> ["gateway.farcaster.signer_key: invalid format (expected 64-character hex string)" | errors]
     end
   end
 
@@ -359,16 +329,10 @@ defmodule LemonCore.Config.Validator do
   defp validate_farcaster_app_key(errors, nil), do: errors
 
   defp validate_farcaster_app_key(errors, key) when is_binary(key) do
-    if String.starts_with?(key, "${") and String.ends_with?(key, "}") do
-      # References an env var, which is valid
-      errors
-    else
-      # Farcaster app keys are typically UUIDs or similar identifiers
-      if String.length(key) >= 8 do
-        errors
-      else
-        ["gateway.farcaster.app_key: must be at least 8 characters" | errors]
-      end
+    cond do
+      env_var_reference?(key) -> errors
+      String.length(key) >= 8 -> errors
+      true -> ["gateway.farcaster.app_key: must be at least 8 characters" | errors]
     end
   end
 
@@ -389,16 +353,10 @@ defmodule LemonCore.Config.Validator do
   defp validate_farcaster_state_secret(errors, nil), do: errors
 
   defp validate_farcaster_state_secret(errors, secret) when is_binary(secret) do
-    if String.starts_with?(secret, "${") and String.ends_with?(secret, "}") do
-      # References an env var, which is valid
-      errors
-    else
-      # State secret should be reasonably strong (at least 32 characters)
-      if String.length(secret) >= 32 do
-        errors
-      else
-        ["gateway.farcaster.state_secret: must be at least 32 characters for security" | errors]
-      end
+    cond do
+      env_var_reference?(secret) -> errors
+      String.length(secret) >= 32 -> errors
+      true -> ["gateway.farcaster.state_secret: must be at least 32 characters for security" | errors]
     end
   end
 
@@ -432,19 +390,15 @@ defmodule LemonCore.Config.Validator do
   defp validate_xmtp_wallet_key(errors, nil), do: errors
 
   defp validate_xmtp_wallet_key(errors, key) when is_binary(key) do
-    if String.starts_with?(key, "${") and String.ends_with?(key, "}") do
-      # References an env var, which is valid
-      errors
-    else
-      # XMTP wallet keys are Ethereum private keys (64 hex characters, with or without 0x prefix)
-      # Remove 0x prefix if present
-      key_without_prefix = String.replace_prefix(key, "0x", "")
-
-      if Regex.match?(~r/^[0-9a-fA-F]{64}$/, key_without_prefix) do
+    cond do
+      env_var_reference?(key) ->
         errors
-      else
+
+      key |> String.replace_prefix("0x", "") |> then(&Regex.match?(~r/^[0-9a-fA-F]{64}$/, &1)) ->
+        errors
+
+      true ->
         ["gateway.xmtp.wallet_key: invalid format (expected 64-character hex string, optionally with 0x prefix)" | errors]
-      end
     end
   end
 
@@ -453,20 +407,16 @@ defmodule LemonCore.Config.Validator do
   defp validate_xmtp_wallet_address(errors, nil), do: errors
 
   defp validate_xmtp_wallet_address(errors, address) when is_binary(address) do
-    if String.starts_with?(address, "${") and String.ends_with?(address, "}") do
-      errors
-    else
-      normalized =
-        address
-        |> String.trim()
-        |> String.downcase()
-        |> String.trim_leading("0x")
-
-      if Regex.match?(~r/^[0-9a-f]{40}$/, normalized) do
+    cond do
+      env_var_reference?(address) ->
         errors
-      else
+
+      address |> String.trim() |> String.downcase() |> String.trim_leading("0x")
+      |> then(&Regex.match?(~r/^[0-9a-f]{40}$/, &1)) ->
+        errors
+
+      true ->
         ["gateway.xmtp.wallet_address: invalid format (expected 40-character hex Ethereum address)" | errors]
-      end
     end
   end
 
@@ -898,4 +848,11 @@ defmodule LemonCore.Config.Validator do
   defp validate_provider_config(errors, name, _config) do
     ["providers.providers.#{name}: must be a map" | errors]
   end
+
+  # Checks if a string references an environment variable (e.g. "${MY_VAR}")
+  defp env_var_reference?(str) when is_binary(str) do
+    String.starts_with?(str, "${") and String.ends_with?(str, "}")
+  end
+
+  defp env_var_reference?(_), do: false
 end

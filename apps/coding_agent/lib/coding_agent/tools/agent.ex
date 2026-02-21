@@ -518,9 +518,9 @@ defmodule CodingAgent.Tools.Agent do
         payload["completed"] ||
         payload
 
-    ok = Map.get(completed, :ok, Map.get(completed, "ok", true))
-    answer = Map.get(completed, :answer, Map.get(completed, "answer", acc_answer || ""))
-    error = Map.get(completed, :error, Map.get(completed, "error"))
+    ok = map_get_default(completed, :ok, true)
+    answer = map_get_default(completed, :answer, acc_answer || "")
+    error = map_get(completed, :error)
     duration_ms = payload[:duration_ms] || payload["duration_ms"]
 
     %{
@@ -950,4 +950,10 @@ defmodule CodingAgent.Tools.Agent do
   end
 
   defp map_get(_, _), do: nil
+
+  defp map_get_default(map, key, default) when is_map(map) do
+    Map.get(map, key, Map.get(map, Atom.to_string(key), default))
+  end
+
+  defp map_get_default(_, _, default), do: default
 end

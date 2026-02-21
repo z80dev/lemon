@@ -69,8 +69,7 @@ defmodule LemonRouter.AgentDirectory do
 
     indexed_sessions()
     |> merge_sessions(active_sessions())
-    |> Enum.filter(&matches_agent?(&1, agent_id_filter))
-    |> Enum.filter(&matches_route?(&1, route_filter))
+    |> Enum.filter(&(matches_agent?(&1, agent_id_filter) and matches_route?(&1, route_filter)))
     |> sort_sessions()
     |> maybe_take(limit)
   end

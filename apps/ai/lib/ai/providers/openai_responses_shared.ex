@@ -113,12 +113,12 @@ defmodule Ai.Providers.OpenAIResponsesShared do
         case convert_message(msg, model, idx, allowed_tool_call_providers) do
           nil -> {acc, idx + 1}
           [] -> {acc, idx + 1}
-          converted when is_list(converted) -> {acc ++ converted, idx + 1}
-          converted -> {acc ++ [converted], idx + 1}
+          converted when is_list(converted) -> {Enum.reverse(converted) ++ acc, idx + 1}
+          converted -> {[converted | acc], idx + 1}
         end
       end)
 
-    converted
+    Enum.reverse(converted)
   end
 
   defp convert_message(%UserMessage{content: content}, _model, _idx, _providers)
@@ -179,7 +179,7 @@ defmodule Ai.Providers.OpenAIResponsesShared do
       |> Enum.join("\n")
 
     has_images = Enum.any?(msg.content, &match?(%ImageContent{}, &1))
-    has_text = String.length(text_result) > 0
+    has_text = text_result != ""
 
     # Extract call_id from tool_call_id (format: "call_id|item_id")
     [call_id | _] = String.split(msg.tool_call_id, "|")
@@ -520,59 +520,40 @@ defmodule Ai.Providers.OpenAIResponsesShared do
         case msg do
           %AssistantMessage{} = assistant_msg ->
             # Insert synthetic results for pending orphaned tool calls
-            result =
-              if pending_tool_calls != [] do
-                synthetic =
-                  pending_tool_calls
-                  |> Enum.reject(&MapSet.member?(existing_ids, &1.id))
-                  |> Enum.map(&synthetic_tool_result/1)
-
-                result ++ synthetic
-              else
-                result
-              end
+            result = flush_pending_synthetic(result, pending_tool_calls, existing_ids)
 
             # Extract tool calls from this message
             tool_calls =
               assistant_msg.content
               |> Enum.filter(&match?(%ToolCall{}, &1))
 
-            {result ++ [msg], tool_calls, MapSet.new()}
+            {[msg | result], tool_calls, MapSet.new()}
 
           %ToolResultMessage{tool_call_id: id} = tool_result ->
-            {result ++ [tool_result], pending_tool_calls, MapSet.put(existing_ids, id)}
+            {[tool_result | result], pending_tool_calls, MapSet.put(existing_ids, id)}
 
           %UserMessage{} = user_msg ->
             # User message interrupts tool flow
-            result =
-              if pending_tool_calls != [] do
-                synthetic =
-                  pending_tool_calls
-                  |> Enum.reject(&MapSet.member?(existing_ids, &1.id))
-                  |> Enum.map(&synthetic_tool_result/1)
-
-                result ++ synthetic
-              else
-                result
-              end
-
-            {result ++ [user_msg], [], MapSet.new()}
+            result = flush_pending_synthetic(result, pending_tool_calls, existing_ids)
+            {[user_msg | result], [], MapSet.new()}
 
           other ->
-            {result ++ [other], pending_tool_calls, existing_ids}
+            {[other | result], pending_tool_calls, existing_ids}
         end
       end)
 
-    if pending_tool_calls != [] do
-      synthetic =
-        pending_tool_calls
-        |> Enum.reject(&MapSet.member?(existing_ids, &1.id))
-        |> Enum.map(&synthetic_tool_result/1)
+    result
+    |> flush_pending_synthetic(pending_tool_calls, existing_ids)
+    |> Enum.reverse()
+  end
 
-      result ++ synthetic
-    else
-      result
-    end
+  defp flush_pending_synthetic(acc, [], _existing_ids), do: acc
+
+  defp flush_pending_synthetic(acc, pending_tool_calls, existing_ids) do
+    pending_tool_calls
+    |> Enum.reject(&MapSet.member?(existing_ids, &1.id))
+    |> Enum.map(&synthetic_tool_result/1)
+    |> Enum.reduce(acc, fn synthetic, a -> [synthetic | a] end)
   end
 
   defp synthetic_tool_result(%ToolCall{} = tc) do

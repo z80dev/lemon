@@ -18,7 +18,7 @@ defmodule CodingAgent.Wasm.Policy do
 
     default_required =
       wasm_metadata
-      |> Map.get(:capabilities, Map.get(wasm_metadata, "capabilities", %{}))
+      |> then(&Map.get(&1, :capabilities, Map.get(&1, "capabilities", %{})))
       |> capability_requires_approval?()
 
     cond do
@@ -32,13 +32,12 @@ defmodule CodingAgent.Wasm.Policy do
 
   @spec capability_requires_approval?(map() | nil) :: boolean()
   def capability_requires_approval?(capabilities) when is_map(capabilities) do
-    http = Map.get(capabilities, :http, Map.get(capabilities, "http", false))
-
-    tool_invoke =
-      Map.get(capabilities, :tool_invoke, Map.get(capabilities, "tool_invoke", false))
-
-    http or tool_invoke
+    get_cap(capabilities, :http) or get_cap(capabilities, :tool_invoke)
   end
 
   def capability_requires_approval?(_), do: false
+
+  defp get_cap(capabilities, key) when is_atom(key) do
+    Map.get(capabilities, key, Map.get(capabilities, Atom.to_string(key), false))
+  end
 end
