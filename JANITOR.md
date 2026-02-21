@@ -25,6 +25,42 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-21 - Feature Enhancement: Pi/Oh-My-Pi Sync (kimi-coding, Hashline Autocorrect)
+**Work Area**: Feature Enhancement
+
+**Analysis**:
+- Compared Pi (746 models, 22 providers) and Oh-My-Pi hashline against Lemon
+- Found `kimi-coding` provider (2 models: k2p5, kimi-k2-thinking) in Pi not in Lemon
+- Found 4 hashline autocorrect features in Oh-My-Pi missing from Lemon
+
+**Features Ported**:
+
+1. **kimi-coding models** (from Pi's models.generated.ts)
+   - `k2p5` (Kimi K2.5): Anthropic-compatible, reasoning, text+image, 262K context
+   - `kimi-k2-thinking` (Kimi K2 Thinking): text-only reasoning, 262K context
+   - Added to existing `:kimi` provider (shared base_url with kimi-for-coding)
+
+2. **Hashline autocorrect mode** (from Oh-My-Pi's hashline.ts)
+   - `restore_indent_for_paired_replacement/2`: Restores indentation stripped by LLM on paired line replacements
+   - `restore_old_wrapped_lines/2`: Undoes formatting rewrites where model reflows a single line into multiple
+   - `strip_range_boundary_echo/4`: Strips echoed boundary context lines from range replacements
+   - Gated behind `:coding_agent, :hashline_autocorrect` config flag (off by default)
+   - Applies to both `set` and `replace` edit operations
+
+**Tests Added (10 new tests)**:
+- `models_test.exs`: 3 tests (k2p5 specs, kimi-k2-thinking specs, kimi provider model count)
+- `hashline_test.exs`: 7 tests (indent restore on set/replace, boundary echo strip on set/replace, wrapped line reflow, autocorrect disabled by default, indentation preservation)
+
+**Test Results**: 435 tests, 0 failures (full suite)
+
+**Files Modified**:
+- `apps/ai/lib/ai/models.ex` - 2 new kimi-coding model entries
+- `apps/ai/test/models_test.exs` - 3 new tests
+- `apps/coding_agent/lib/coding_agent/tools/hashline.ex` - autocorrect helpers + set/replace integration
+- `apps/coding_agent/test/coding_agent/tools/hashline_test.exs` - 7 new tests
+
+---
+
 ### 2026-02-21 - Feature Enhancement: Pi/Oh-My-Pi Sync (replaceText, Thinking Levels)
 **Work Area**: Feature Enhancement
 
