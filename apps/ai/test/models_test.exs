@@ -843,6 +843,52 @@ defmodule Ai.ModelsTest do
     end
   end
 
+  describe "kimi-coding models (from Pi upstream)" do
+    test "k2p5 has correct specs" do
+      model = Models.get_model(:kimi, "k2p5")
+
+      assert model != nil
+      assert model.id == "k2p5"
+      assert model.name == "Kimi K2.5"
+      assert model.api == :anthropic_messages
+      assert model.provider == :kimi
+      assert model.base_url == "https://api.kimi.com/coding"
+      assert model.reasoning == true
+      assert model.input == [:text, :image]
+      assert model.cost.input == 0.0
+      assert model.cost.output == 0.0
+      assert model.context_window == 262_144
+      assert model.max_tokens == 32_768
+    end
+
+    test "kimi-k2-thinking has correct specs" do
+      model = Models.get_model(:kimi, "kimi-k2-thinking")
+
+      assert model != nil
+      assert model.id == "kimi-k2-thinking"
+      assert model.name == "Kimi K2 Thinking"
+      assert model.api == :anthropic_messages
+      assert model.provider == :kimi
+      assert model.base_url == "https://api.kimi.com/coding"
+      assert model.reasoning == true
+      assert model.input == [:text]
+      assert model.cost.input == 0.0
+      assert model.cost.output == 0.0
+      assert model.context_window == 262_144
+      assert model.max_tokens == 32_768
+    end
+
+    test "kimi provider includes all 3 models" do
+      models = Models.get_models(:kimi)
+      ids = Enum.map(models, & &1.id)
+
+      assert "kimi-for-coding" in ids
+      assert "k2p5" in ids
+      assert "kimi-k2-thinking" in ids
+      assert length(models) == 3
+    end
+  end
+
   describe "opencode zen mixed api models" do
     test "anthropic-compatible opencode models use anthropic_messages api" do
       model = Models.get_model(:opencode, "claude-sonnet-4-6")

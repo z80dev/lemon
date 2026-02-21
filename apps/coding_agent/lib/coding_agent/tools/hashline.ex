@@ -71,6 +71,15 @@ defmodule CodingAgent.Tools.Hashline do
   # Number of context lines shown above/below each mismatched line
   @mismatch_context 2
 
+  # Check whether autocorrect mode is enabled.
+  # When enabled, applies heuristics to fix common LLM edit artifacts:
+  # - Restores indentation stripped by the model
+  # - Undoes formatting rewrites where the model reflows lines
+  # - Strips echoed boundary context lines from range replacements
+  defp autocorrect_enabled? do
+    Application.get_env(:coding_agent, :hashline_autocorrect, false)
+  end
+
   @doc """
   Compute a short hexadecimal hash of a single line.
 
@@ -495,6 +504,17 @@ defmodule CodingAgent.Tools.Hashline do
   defp apply_single_edit(%{op: :set, tag: tag, content: content}, file_lines, original_lines, first_changed, noop_edits) do
     orig_lines = [Enum.at(original_lines, tag.line - 1)]
 
+    # Apply autocorrect transformations if enabled
+    content =
+      if autocorrect_enabled?() do
+        content
+        |> strip_range_boundary_echo(original_lines, tag.line, tag.line)
+        |> restore_old_wrapped_lines(orig_lines)
+        |> restore_indent_for_paired_replacement(orig_lines)
+      else
+        content
+      end
+
     if lines_equal?(orig_lines, content) do
       noop = %{
         edit_index: tag.line,
@@ -527,6 +547,17 @@ defmodule CodingAgent.Tools.Hashline do
   defp apply_single_edit(%{op: :replace, first: first, last: last, content: content}, file_lines, original_lines, first_changed, noop_edits) do
     count = last.line - first.line + 1
     orig_lines = Enum.slice(original_lines, first.line - 1, count)
+
+    # Apply autocorrect transformations if enabled
+    content =
+      if autocorrect_enabled?() do
+        content
+        |> strip_range_boundary_echo(original_lines, first.line, last.line)
+        |> restore_old_wrapped_lines(orig_lines)
+        |> restore_indent_for_paired_replacement(orig_lines)
+      else
+        content
+      end
 
     if lines_equal?(orig_lines, content) do
       noop = %{
@@ -735,6 +766,153 @@ defmodule CodingAgent.Tools.Hashline do
 
   defp equals_ignoring_whitespace?(a, b) do
     normalize_line(a) == normalize_line(b)
+  end
+
+  # ============================================================================
+  # Autocorrect Helpers (ported from Oh-My-Pi hashline.ts)
+  # ============================================================================
+
+  @doc false
+  # Extract leading whitespace from a string.
+  defp leading_whitespace(s) do
+    case Regex.run(~r/^\s*/, s) do
+      [match] -> match
+      _ -> ""
+    end
+  end
+
+  @doc false
+  # Restore leading indentation from a template line onto a replacement line.
+  # If the replacement line has no indentation but the template does,
+  # the template's indentation is prepended.
+  defp restore_leading_indent(_template, ""), do: ""
+
+  defp restore_leading_indent(template, line) do
+    template_indent = leading_whitespace(template)
+
+    if template_indent == "" do
+      line
+    else
+      line_indent = leading_whitespace(line)
+
+      if line_indent != "" do
+        line
+      else
+        template_indent <> line
+      end
+    end
+  end
+
+  @doc false
+  # Restore indentation for paired line replacements.
+  # When old and new line counts match, restores the original indentation
+  # on each corresponding replacement line that lost its whitespace.
+  defp restore_indent_for_paired_replacement(new_lines, old_lines) do
+    if length(old_lines) != length(new_lines) do
+      new_lines
+    else
+      restored =
+        Enum.zip(old_lines, new_lines)
+        |> Enum.map(fn {old, new} -> restore_leading_indent(old, new) end)
+
+      if restored == new_lines, do: new_lines, else: restored
+    end
+  end
+
+  @doc false
+  # Undo pure formatting rewrites where the model reflows a single logical line
+  # into multiple lines (or similar), but the non-whitespace content is identical.
+  defp restore_old_wrapped_lines(new_lines, old_lines) do
+    if Enum.empty?(old_lines) or length(new_lines) < 2 do
+      new_lines
+    else
+      # Build canonical form -> original line mapping (only unique canonical forms)
+      canon_to_old =
+        Enum.reduce(old_lines, %{}, fn line, acc ->
+          canon = normalize_line(line)
+          Map.update(acc, canon, {line, 1}, fn {l, c} -> {l, c + 1} end)
+        end)
+
+      # Find candidates: spans of 2-10 new lines whose join matches one old line
+      max_idx = length(new_lines) - 1
+
+      candidates =
+        for start <- 0..max_idx,
+            max_len = min(10, length(new_lines) - start),
+            max_len >= 2,
+            len <- 2..max_len,
+            span = Enum.slice(new_lines, start, len),
+            canon_span = normalize_line(Enum.join(span, "")),
+            String.length(canon_span) >= 6,
+            old = Map.get(canon_to_old, canon_span),
+            match?({_, 1}, old) do
+          {old_line, _} = old
+          %{start: start, len: len, replacement: old_line, canon: canon_span}
+        end
+
+      if Enum.empty?(candidates) do
+        new_lines
+      else
+        # Only keep spans whose canonical match is unique in the new output
+        canon_counts =
+          Enum.reduce(candidates, %{}, fn c, acc ->
+            Map.update(acc, c.canon, 1, &(&1 + 1))
+          end)
+
+        unique = Enum.filter(candidates, fn c -> Map.get(canon_counts, c.canon, 0) == 1 end)
+
+        if Enum.empty?(unique) do
+          new_lines
+        else
+          # Apply replacements back-to-front so indices remain stable
+          unique
+          |> Enum.sort_by(& &1.start, :desc)
+          |> Enum.reduce(new_lines, fn c, lines ->
+            {before, rest} = Enum.split(lines, c.start)
+            {_removed, after_rest} = Enum.split(rest, c.len)
+            before ++ [c.replacement] ++ after_rest
+          end)
+        end
+      end
+    end
+  end
+
+  @doc false
+  # Strip echoed boundary context lines from range replacements.
+  # The model sometimes echoes the line before/after the range as extra context.
+  # Only strips when the replacement grew (has more lines than the original range).
+  defp strip_range_boundary_echo(dst_lines, file_lines, start_line, end_line) do
+    count = end_line - start_line + 1
+
+    if length(dst_lines) <= 1 or length(dst_lines) <= count do
+      dst_lines
+    else
+      # Check if first dst line matches line before range
+      before_idx = start_line - 2
+
+      out =
+        if before_idx >= 0 and
+             equals_ignoring_whitespace?(hd(dst_lines), Enum.at(file_lines, before_idx)) do
+          tl(dst_lines)
+        else
+          dst_lines
+        end
+
+      # Check if last dst line matches line after range
+      after_idx = end_line
+
+      if after_idx < length(file_lines) and length(out) > 0 do
+        last = List.last(out)
+
+        if equals_ignoring_whitespace?(last, Enum.at(file_lines, after_idx)) do
+          Enum.drop(out, -1)
+        else
+          out
+        end
+      else
+        out
+      end
+    end
   end
 
   # ============================================================================

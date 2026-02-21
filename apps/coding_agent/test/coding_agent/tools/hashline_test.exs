@@ -549,6 +549,154 @@ defmodule CodingAgent.Tools.HashlineTest do
   end
 
   # ============================================================================
+  # apply_edits/2 - autocorrect features (ported from Oh-My-Pi)
+  # ============================================================================
+
+  describe "apply_edits/2 - autocorrect: restore indent for paired replacement" do
+    setup do
+      Application.put_env(:coding_agent, :hashline_autocorrect, true)
+
+      on_exit(fn ->
+        Application.delete_env(:coding_agent, :hashline_autocorrect)
+      end)
+    end
+
+    test "restores stripped indentation on set operation" do
+      content = "  def foo do\n    :bar\n  end"
+      hash = Hashline.compute_line_hash("    :bar")
+
+      # Model returns content without indentation
+      edits = [%{op: :set, tag: %{line: 2, hash: hash}, content: [":baz"]}]
+
+      assert {:ok, result} = Hashline.apply_edits(content, edits)
+      # Autocorrect should restore the original indentation
+      assert result.content == "  def foo do\n    :baz\n  end"
+    end
+
+    test "does not modify lines that already have indentation" do
+      content = "  def foo do\n    :bar\n  end"
+      hash = Hashline.compute_line_hash("    :bar")
+
+      edits = [%{op: :set, tag: %{line: 2, hash: hash}, content: ["    :baz"]}]
+
+      assert {:ok, result} = Hashline.apply_edits(content, edits)
+      assert result.content == "  def foo do\n    :baz\n  end"
+    end
+
+    test "restores indentation on replace operation" do
+      content = "  line1\n    line2\n    line3\n  end"
+      first_hash = Hashline.compute_line_hash("    line2")
+      last_hash = Hashline.compute_line_hash("    line3")
+
+      # Model returns replacement without indentation
+      edits = [
+        %{
+          op: :replace,
+          first: %{line: 2, hash: first_hash},
+          last: %{line: 3, hash: last_hash},
+          content: ["new_line2", "new_line3"]
+        }
+      ]
+
+      assert {:ok, result} = Hashline.apply_edits(content, edits)
+      assert result.content == "  line1\n    new_line2\n    new_line3\n  end"
+    end
+  end
+
+  describe "apply_edits/2 - autocorrect: strip range boundary echo" do
+    setup do
+      Application.put_env(:coding_agent, :hashline_autocorrect, true)
+
+      on_exit(fn ->
+        Application.delete_env(:coding_agent, :hashline_autocorrect)
+      end)
+    end
+
+    test "strips echoed boundary lines on set when content grew" do
+      content = "before\ntarget\nafter"
+      hash = Hashline.compute_line_hash("target")
+
+      # Model echoes the line before and after the target
+      edits = [%{op: :set, tag: %{line: 2, hash: hash}, content: ["before", "new_target", "after"]}]
+
+      assert {:ok, result} = Hashline.apply_edits(content, edits)
+      assert result.content == "before\nnew_target\nafter"
+    end
+
+    test "strips echoed boundary on replace when content grew" do
+      content = "ctx_before\nline1\nline2\nctx_after"
+      first_hash = Hashline.compute_line_hash("line1")
+      last_hash = Hashline.compute_line_hash("line2")
+
+      # Model echoes boundary context lines
+      edits = [
+        %{
+          op: :replace,
+          first: %{line: 2, hash: first_hash},
+          last: %{line: 3, hash: last_hash},
+          content: ["ctx_before", "new1", "new2", "new3", "ctx_after"]
+        }
+      ]
+
+      assert {:ok, result} = Hashline.apply_edits(content, edits)
+      assert result.content == "ctx_before\nnew1\nnew2\nnew3\nctx_after"
+    end
+
+    test "does not strip when content did not grow" do
+      content = "before\ntarget\nafter"
+      hash = Hashline.compute_line_hash("target")
+
+      # Single line replacement - should not strip
+      edits = [%{op: :set, tag: %{line: 2, hash: hash}, content: ["new_target"]}]
+
+      assert {:ok, result} = Hashline.apply_edits(content, edits)
+      assert result.content == "before\nnew_target\nafter"
+    end
+  end
+
+  describe "apply_edits/2 - autocorrect: restore old wrapped lines" do
+    setup do
+      Application.put_env(:coding_agent, :hashline_autocorrect, true)
+
+      on_exit(fn ->
+        Application.delete_env(:coding_agent, :hashline_autocorrect)
+      end)
+    end
+
+    test "undoes model line reflow that splits one line into two" do
+      original_line = "def very_long_function_name(arg1, arg2, arg3)"
+      content = "start\n#{original_line}\nend"
+      hash = Hashline.compute_line_hash(original_line)
+
+      # Model splits the line into two but content is same (ignoring whitespace)
+      edits = [
+        %{
+          op: :set,
+          tag: %{line: 2, hash: hash},
+          content: ["def very_long_function_name(arg1,", " arg2, arg3)"]
+        }
+      ]
+
+      assert {:ok, result} = Hashline.apply_edits(content, edits)
+      # Autocorrect should restore the original single line
+      assert result.content == "start\n#{original_line}\nend"
+    end
+  end
+
+  describe "apply_edits/2 - autocorrect disabled by default" do
+    test "does not restore indentation when autocorrect is off" do
+      content = "  def foo do\n    :bar\n  end"
+      hash = Hashline.compute_line_hash("    :bar")
+
+      # Without autocorrect, the stripped indentation should stay
+      edits = [%{op: :set, tag: %{line: 2, hash: hash}, content: [":baz"]}]
+
+      assert {:ok, result} = Hashline.apply_edits(content, edits)
+      assert result.content == "  def foo do\n:baz\n  end"
+    end
+  end
+
+  # ============================================================================
   # apply_edits/2 - replace_text operation
   # ============================================================================
 
