@@ -11,6 +11,8 @@ defmodule CodingAgent.Tools.Bash do
   alias Ai.Types.TextContent
   alias CodingAgent.BashExecutor
 
+  @default_timeout_ms 60_000
+
   @doc """
   Returns the bash tool definition.
 
@@ -66,27 +68,31 @@ defmodule CodingAgent.Tools.Bash do
           cwd :: String.t(),
           opts :: keyword()
         ) :: AgentToolResult.t() | {:error, term()}
-  def execute(_tool_call_id, params, signal, on_update, cwd, _opts) do
+  def execute(_tool_call_id, params, signal, on_update, cwd, opts) do
     # Check abort signal before starting
     if signal && AbortSignal.aborted?(signal) do
       %AgentToolResult{
         content: [%TextContent{text: "Command cancelled."}]
       }
     else
-      do_execute(params, signal, on_update, cwd)
+      do_execute(params, signal, on_update, cwd, opts)
     end
   end
 
-  defp do_execute(params, signal, on_update, cwd) do
+  defp do_execute(params, signal, on_update, cwd, opts) do
     command = Map.fetch!(params, "command")
 
     # Set up streaming callback if on_update is provided
     {accumulator_pid, streaming_callback} = build_streaming_callback(on_update)
 
+    timeout_ms =
+      Keyword.get(opts, :timeout_ms, Keyword.get(opts, :bash_timeout_ms, @default_timeout_ms))
+
     executor_opts =
       [
         on_chunk: streaming_callback,
-        signal: signal
+        signal: signal,
+        timeout: timeout_ms
       ]
 
     try do

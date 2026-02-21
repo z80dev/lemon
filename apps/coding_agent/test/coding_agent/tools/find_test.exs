@@ -1423,6 +1423,54 @@ defmodule CodingAgent.Tools.FindTest do
     end
   end
 
+  describe "elixir fallback safeguards" do
+    test "times out wildcard fallback instead of hanging", %{tmp_dir: tmp_dir} do
+      result =
+        Find.execute(
+          "call_1",
+          %{"pattern" => "*.txt"},
+          nil,
+          nil,
+          tmp_dir,
+          fd_available?: false,
+          elixir_timeout_ms: 20,
+          wildcard_fun: fn _pattern, _opts ->
+            Process.sleep(200)
+            []
+          end
+        )
+
+      assert {:error, msg} = result
+      assert msg =~ "timed out"
+    end
+
+    test "respects abort while wildcard fallback is running", %{tmp_dir: tmp_dir} do
+      signal = AgentCore.AbortSignal.new()
+
+      Task.start(fn ->
+        Process.sleep(20)
+        AgentCore.AbortSignal.abort(signal)
+      end)
+
+      result =
+        Find.execute(
+          "call_1",
+          %{"pattern" => "*.txt"},
+          signal,
+          nil,
+          tmp_dir,
+          fd_available?: false,
+          elixir_timeout_ms: 2_000,
+          wildcard_fun: fn _pattern, _opts ->
+            Process.sleep(500)
+            []
+          end
+        )
+
+      assert {:error, "Operation aborted"} = result
+    end
+  end
+
   describe "path resolution edge cases" do
     test "handles empty path parameter", %{tmp_dir: tmp_dir} do
       File.write!(Path.join(tmp_dir, "root.txt"), "")

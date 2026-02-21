@@ -11,6 +11,7 @@ defmodule CodingAgent.Tools.Find do
   alias Ai.Types.TextContent
 
   @default_max_results 100
+  @elixir_find_timeout_ms 30_000
 
   @doc """
   Returns the Find tool definition.
@@ -121,7 +122,8 @@ defmodule CodingAgent.Tools.Find do
         max_results,
         include_hidden,
         signal,
-        cwd
+        cwd,
+        opts
       )
     end
   end
@@ -191,9 +193,10 @@ defmodule CodingAgent.Tools.Find do
          max_results,
          include_hidden,
          signal,
-         cwd
+         cwd,
+         opts
        ) do
-    case fd_available?() do
+    case Keyword.get(opts, :fd_available?, fd_available?()) do
       true ->
         find_with_fd(
           pattern,
@@ -203,7 +206,8 @@ defmodule CodingAgent.Tools.Find do
           max_results,
           include_hidden,
           signal,
-          cwd
+          cwd,
+          opts
         )
 
       false ->
@@ -215,7 +219,8 @@ defmodule CodingAgent.Tools.Find do
           max_results,
           include_hidden,
           signal,
-          cwd
+          cwd,
+          opts
         )
     end
   end
@@ -239,7 +244,8 @@ defmodule CodingAgent.Tools.Find do
          max_results,
          include_hidden,
          signal,
-         cwd
+         cwd,
+         opts
        ) do
     args = build_fd_args(pattern, search_path, entry_type, max_depth, max_results, include_hidden)
 
@@ -262,7 +268,8 @@ defmodule CodingAgent.Tools.Find do
                max_results,
                include_hidden,
                signal,
-               cwd
+               cwd,
+               opts
              ) do
           {:error, _} -> {:error, reason}
           result -> result
@@ -271,7 +278,10 @@ defmodule CodingAgent.Tools.Find do
   end
 
   defp build_fd_args(pattern, search_path, entry_type, max_depth, max_results, include_hidden) do
-    args = []
+    # Match fallback semantics more closely:
+    # - follow symlinked directories
+    # - do not hide results due .gitignore/.ignore/global ignore rules
+    args = ["--follow", "--no-ignore"]
 
     # Use glob mode if pattern contains glob characters
     args =
@@ -370,24 +380,71 @@ defmodule CodingAgent.Tools.Find do
          max_results,
          include_hidden,
          signal,
-         cwd
+         cwd,
+         opts
        ) do
     glob_pattern = build_glob_pattern(pattern, search_path, max_depth)
+    wildcard_fun = Keyword.get(opts, :wildcard_fun, &Path.wildcard/2)
+    timeout_ms = Keyword.get(opts, :elixir_timeout_ms, @elixir_find_timeout_ms)
 
-    results =
-      glob_pattern
-      |> Path.wildcard(match_dot: include_hidden)
-      |> filter_by_type(entry_type)
-      |> Enum.take(max_results)
+    with :ok <- check_abort(signal),
+         {:ok, wildcard_results} <-
+           run_wildcard_with_timeout(
+             glob_pattern,
+             include_hidden,
+             wildcard_fun,
+             signal,
+             timeout_ms
+           ),
+         :ok <- check_abort(signal) do
+      results =
+        wildcard_results
+        |> filter_by_type(entry_type)
+        |> Enum.take(max_results)
 
-    if aborted?(signal) do
-      {:error, "Operation aborted"}
-    else
       format_results(results, cwd, max_results)
     end
   rescue
     e ->
       {:error, "Find operation failed: #{Exception.message(e)}"}
+  end
+
+  defp run_wildcard_with_timeout(glob_pattern, include_hidden, wildcard_fun, signal, timeout_ms) do
+    task =
+      Task.Supervisor.async_nolink(CodingAgent.TaskSupervisor, fn ->
+        wildcard_fun.(glob_pattern, match_dot: include_hidden)
+      end)
+
+    started_at_ms = System.monotonic_time(:millisecond)
+    await_wildcard_result(task, signal, timeout_ms, started_at_ms)
+  end
+
+  defp await_wildcard_result(task, signal, timeout_ms, started_at_ms) do
+    if aborted?(signal) do
+      _ = Task.shutdown(task, :brutal_kill)
+      {:error, "Operation aborted"}
+    else
+      case Task.yield(task, 100) do
+        {:ok, results} when is_list(results) ->
+          {:ok, results}
+
+        {:ok, other} ->
+          {:error, "Find operation failed: unexpected wildcard result #{inspect(other)}"}
+
+        {:exit, reason} ->
+          {:error, "Find operation failed: #{Exception.format_exit(reason)}"}
+
+        nil ->
+          elapsed_ms = System.monotonic_time(:millisecond) - started_at_ms
+
+          if elapsed_ms >= timeout_ms do
+            _ = Task.shutdown(task, :brutal_kill)
+            {:error, "Find operation timed out after #{timeout_ms}ms"}
+          else
+            await_wildcard_result(task, signal, timeout_ms, started_at_ms)
+          end
+      end
+    end
   end
 
   defp build_glob_pattern(pattern, search_path, nil) do

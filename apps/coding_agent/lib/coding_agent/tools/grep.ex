@@ -22,6 +22,7 @@ defmodule CodingAgent.Tools.Grep do
 
   @default_max_results 100
   @default_context_lines 0
+  @ripgrep_timeout_ms 30_000
 
   @doc """
   Returns the Grep tool definition.
@@ -126,10 +127,12 @@ defmodule CodingAgent.Tools.Grep do
         case_sensitive: case_sensitive,
         context_lines: context_lines,
         max_results: max_results,
-        signal: signal
+        signal: signal,
+        timeout_ms: Keyword.get(opts, :ripgrep_timeout_ms, @ripgrep_timeout_ms),
+        rg_cmd_fun: Keyword.get(opts, :rg_cmd_fun, &System.cmd/3)
       }
 
-      if ripgrep_available?() do
+      if Keyword.get(opts, :ripgrep_available?, ripgrep_available?()) do
         search_with_ripgrep(search_opts)
       else
         search_with_elixir(search_opts)
@@ -279,11 +282,11 @@ defmodule CodingAgent.Tools.Grep do
   defp search_with_ripgrep(opts) do
     args = build_ripgrep_args(opts)
 
-    case System.cmd("rg", args, stderr_to_stdout: true, cd: Path.dirname(opts.path)) do
-      {output, 0} ->
+    case run_ripgrep_command(args, opts) do
+      {:ok, {output, 0}} ->
         parse_ripgrep_output(output, opts)
 
-      {output, 1} ->
+      {:ok, {output, 1}} ->
         # Exit code 1 means no matches found
         %AgentToolResult{
           content: [%TextContent{text: "No matches found."}],
@@ -294,12 +297,57 @@ defmodule CodingAgent.Tools.Grep do
           }
         }
 
-      {output, 2} ->
+      {:ok, {output, 2}} ->
         # Exit code 2 means error
         {:error, "Search error: #{String.trim(output)}"}
 
-      {output, code} ->
+      {:ok, {output, code}} ->
         {:error, "ripgrep exited with code #{code}: #{String.trim(output)}"}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp run_ripgrep_command(args, opts) do
+    cmd_fun = Map.get(opts, :rg_cmd_fun, &System.cmd/3)
+    timeout_ms = Map.get(opts, :timeout_ms, @ripgrep_timeout_ms)
+    signal = Map.get(opts, :signal)
+
+    task =
+      Task.Supervisor.async_nolink(CodingAgent.TaskSupervisor, fn ->
+        cmd_fun.("rg", args, stderr_to_stdout: true, cd: Path.dirname(opts.path))
+      end)
+
+    started_at_ms = System.monotonic_time(:millisecond)
+    await_ripgrep_result(task, signal, timeout_ms, started_at_ms)
+  end
+
+  defp await_ripgrep_result(task, signal, timeout_ms, started_at_ms) do
+    if aborted?(signal) do
+      _ = Task.shutdown(task, :brutal_kill)
+      {:error, "Operation aborted"}
+    else
+      case Task.yield(task, 100) do
+        {:ok, {output, code}} when is_binary(output) and is_integer(code) ->
+          {:ok, {output, code}}
+
+        {:ok, other} ->
+          {:error, "Search error: unexpected ripgrep result #{inspect(other)}"}
+
+        {:exit, reason} ->
+          {:error, "Search error: #{Exception.format_exit(reason)}"}
+
+        nil ->
+          elapsed_ms = System.monotonic_time(:millisecond) - started_at_ms
+
+          if elapsed_ms >= timeout_ms do
+            _ = Task.shutdown(task, :brutal_kill)
+            {:error, "Search timed out after #{timeout_ms}ms"}
+          else
+            await_ripgrep_result(task, signal, timeout_ms, started_at_ms)
+          end
+      end
     end
   end
 

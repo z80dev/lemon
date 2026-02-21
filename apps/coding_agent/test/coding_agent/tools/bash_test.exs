@@ -305,6 +305,24 @@ defmodule CodingAgent.Tools.BashTest do
       AbortSignal.clear(signal)
     end
 
+    test "timeout option cancels long-running command", %{tmp_dir: tmp_dir} do
+      result =
+        Bash.execute(
+          "call_1",
+          %{"command" => "echo 'started'; sleep 10; echo 'finished'"},
+          nil,
+          nil,
+          tmp_dir,
+          timeout_ms: 100
+        )
+
+      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
+      assert text =~ "cancelled"
+      assert text =~ "started"
+      refute text =~ "finished"
+      assert details.exit_code == nil
+    end
+
     test "cleanup after abort does not leak resources", %{tmp_dir: tmp_dir} do
       signal = AbortSignal.new()
 

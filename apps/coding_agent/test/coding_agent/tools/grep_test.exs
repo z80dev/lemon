@@ -481,6 +481,54 @@ defmodule CodingAgent.Tools.GrepTest do
     end
   end
 
+  describe "ripgrep execution safeguards" do
+    test "times out ripgrep command instead of hanging", %{tmp_dir: tmp_dir} do
+      result =
+        Grep.execute(
+          "call_1",
+          %{"pattern" => "test", "path" => tmp_dir},
+          nil,
+          nil,
+          tmp_dir,
+          ripgrep_available?: true,
+          ripgrep_timeout_ms: 20,
+          rg_cmd_fun: fn "rg", _args, _opts ->
+            Process.sleep(200)
+            {"", 0}
+          end
+        )
+
+      assert {:error, msg} = result
+      assert msg =~ "timed out"
+    end
+
+    test "respects abort while ripgrep command is running", %{tmp_dir: tmp_dir} do
+      signal = AgentCore.AbortSignal.new()
+
+      Task.start(fn ->
+        Process.sleep(20)
+        AgentCore.AbortSignal.abort(signal)
+      end)
+
+      result =
+        Grep.execute(
+          "call_1",
+          %{"pattern" => "test", "path" => tmp_dir},
+          signal,
+          nil,
+          tmp_dir,
+          ripgrep_available?: true,
+          ripgrep_timeout_ms: 2_000,
+          rg_cmd_fun: fn "rg", _args, _opts ->
+            Process.sleep(500)
+            {"", 0}
+          end
+        )
+
+      assert {:error, "Operation aborted"} = result
+    end
+  end
+
   describe "execute/6 - binary file handling" do
     test "skips binary files", %{tmp_dir: tmp_dir} do
       # Create a text file and a binary file
