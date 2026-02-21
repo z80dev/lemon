@@ -542,8 +542,7 @@ defmodule LemonRouter.RunProcess do
   defp maybe_emit_final_output(state, %LemonCore.Event{} = event) do
     with false <- state.saw_delta,
          answer when is_binary(answer) and answer != "" <- extract_completed_answer(event),
-         %{kind: :channel_peer, channel_id: channel_id} when not is_nil(channel_id) <-
-           ChannelContext.parse_session_key(state.session_key) do
+         {:ok, channel_id} <- ChannelContext.channel_id(state.session_key) do
       # Telegram final output is handled via StreamCoalescer.finalize_run/4
       # so we avoid emitting a terminal :edit update to the progress message.
       if channel_id == "telegram" do
@@ -1413,24 +1412,27 @@ defmodule LemonRouter.RunProcess do
   end
 
   defp finalize_tool_status(state, %LemonCore.Event{} = event) do
-    with %{kind: :channel_peer, channel_id: channel_id} when not is_nil(channel_id) <-
-           ChannelContext.parse_session_key(state.session_key) do
-      ok? =
-        case event.payload do
-          %{completed: %{ok: ok}} -> ok == true
-          %{ok: ok} -> ok == true
-          _ -> false
-        end
+    case ChannelContext.channel_id(state.session_key) do
+      {:ok, channel_id} ->
+        ok? =
+          case event.payload do
+            %{completed: %{ok: ok}} -> ok == true
+            %{ok: ok} -> ok == true
+            _ -> false
+          end
 
-      meta = ChannelContext.coalescer_meta_from_job(state.job)
+        meta = ChannelContext.coalescer_meta_from_job(state.job)
 
-      LemonRouter.ToolStatusCoalescer.finalize_run(
-        state.session_key,
-        channel_id,
-        state.run_id,
-        ok?,
-        meta: meta
-      )
+        LemonRouter.ToolStatusCoalescer.finalize_run(
+          state.session_key,
+          channel_id,
+          state.run_id,
+          ok?,
+          meta: meta
+        )
+
+      _ ->
+        :ok
     end
 
     :ok

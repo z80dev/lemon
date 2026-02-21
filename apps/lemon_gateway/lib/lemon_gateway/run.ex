@@ -32,6 +32,12 @@ defmodule LemonGateway.Run do
   alias LemonGateway.Types.{Job, ResumeToken}
 
   @max_logged_error_bytes 4_096
+  @context_overflow_error_markers [
+    "context_length_exceeded",
+    "context length exceeded",
+    "input exceeds the context window",
+    "context window"
+  ]
 
   def start_link(args) do
     # Allow cancel-by-run-id (used by router/control-plane) by registering the run
@@ -525,6 +531,8 @@ defmodule LemonGateway.Run do
       log_run_failure(state, completed)
     end
 
+    maybe_clear_chat_state_on_context_overflow(state.session_key, completed)
+
     # Emit completion event to bus (channel delivery handled by subscribers)
     duration_ms = System.system_time(:millisecond) - state.start_ts_ms
 
@@ -748,11 +756,55 @@ defmodule LemonGateway.Run do
     }
   end
 
-  defp maybe_store_chat_state(%Job{} = job, %Event.Completed{resume: %ResumeToken{} = resume}) do
-    store_chat_state(job.session_key, resume)
+  defp maybe_store_chat_state(
+         %Job{} = job,
+         %Event.Completed{resume: %ResumeToken{} = resume} = completed
+       ) do
+    if context_length_exceeded_error?(completed.error) do
+      :ok
+    else
+      store_chat_state(job.session_key, resume)
+    end
   end
 
   defp maybe_store_chat_state(_job, _completed), do: :ok
+
+  defp maybe_clear_chat_state_on_context_overflow(
+         session_key,
+         %Event.Completed{ok: ok, error: error, run_id: run_id}
+       )
+       when is_binary(session_key) do
+    if ok != true and context_length_exceeded_error?(error) do
+      Store.delete_chat_state(session_key)
+
+      Logger.warning(
+        "Gateway run reset chat state after context overflow run_id=#{inspect(run_id)} " <>
+          "session_key=#{inspect(session_key)} error=#{inspect(error)}"
+      )
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp maybe_clear_chat_state_on_context_overflow(_session_key, _completed), do: :ok
+
+  defp context_length_exceeded_error?(nil), do: false
+
+  defp context_length_exceeded_error?(error) do
+    text =
+      cond do
+        is_binary(error) -> error
+        is_atom(error) -> Atom.to_string(error)
+        true -> inspect(error, limit: 200, printable_limit: 8_000)
+      end
+      |> String.downcase()
+
+    Enum.any?(@context_overflow_error_markers, &String.contains?(text, &1))
+  rescue
+    _ -> false
+  end
 
   defp store_chat_state(nil, _resume), do: :ok
 

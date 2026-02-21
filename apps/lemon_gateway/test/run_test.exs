@@ -1322,7 +1322,16 @@ defmodule LemonGateway.RunTest do
       assert_receive {:engine_started, _run_ref}, 2000
 
       # Verify mapping exists
-      assert LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == pid
+      assert Enum.any?(1..20, fn _attempt ->
+               case LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) do
+                 ^pid ->
+                   true
+
+                 _ ->
+                   Process.sleep(10)
+                   false
+               end
+             end)
 
       # Cancel
       GenServer.cast(pid, {:cancel, :user_requested})
@@ -2174,7 +2183,16 @@ defmodule LemonGateway.RunTest do
       assert_receive {:engine_started, _run_ref}, 2000
 
       # Verify mapping exists
-      assert LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == pid
+      assert Enum.any?(1..20, fn _attempt ->
+               case LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) do
+                 ^pid ->
+                   true
+
+                 _ ->
+                   Process.sleep(10)
+                   false
+               end
+             end)
 
       # Cancel
       GenServer.cast(pid, {:cancel, :user_requested})
@@ -2249,6 +2267,45 @@ defmodule LemonGateway.RunTest do
       assert chat_state != nil
       assert chat_state.last_engine == "controllable"
       assert chat_state.last_resume_token == resume.value
+    end
+
+    test "context overflow clears ChatState and does not persist failing resume" do
+      scope = make_scope()
+
+      LemonGateway.Store.put_chat_state(scope, %LemonGateway.ChatState{
+        last_engine: "controllable",
+        last_resume_token: "stale_token",
+        updated_at: System.system_time(:millisecond)
+      })
+
+      job =
+        make_job(scope,
+          engine_hint: "controllable",
+          meta: %{notify_pid: self(), controller_pid: self()}
+        )
+
+      {:ok, pid} = start_run_direct(job)
+      assert_receive {:engine_started, run_ref}, 2000
+
+      resume = %ResumeToken{
+        engine: "controllable",
+        value: "overflow_resume_#{System.unique_integer([:positive])}"
+      }
+
+      send(
+        pid,
+        {:engine_event, run_ref,
+         %Event.Completed{
+           engine: "controllable",
+           ok: false,
+           error: "Codex error: %{\\\"error\\\" => %{\\\"code\\\" => \\\"context_length_exceeded\\\"}}",
+           resume: resume
+         }}
+      )
+
+      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false}}, 2000
+      Process.sleep(100)
+      assert LemonGateway.Store.get_chat_state(scope) == nil
     end
 
     test "resume token does not override explicit engine selection" do

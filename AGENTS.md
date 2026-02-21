@@ -69,11 +69,24 @@ Convenience:
   - `TELEGRAM_API_ID`
   - `TELEGRAM_API_HASH`
   - `TELEGRAM_SESSION_STRING`
+- Minimal repeatable debug flow:
+  - Start gateway in one terminal:
+    - `LOG_LEVEL=debug ./bin/lemon-gateway --debug --sname lemon_gateway_debug`
+  - Attach from another terminal:
+    - `iex --sname lemon_attach --cookie lemon_gateway_dev_cookie --remsh lemon_gateway_debug@$(hostname -s)`
+  - In attached shell, inspect likely stuck points:
+    - `:sys.get_state(LemonGateway.Scheduler)`
+    - `:sys.get_state(LemonGateway.EngineLock)`
+    - `DynamicSupervisor.which_children(LemonGateway.ThreadWorkerSupervisor)`
 - Use Telethon via uv (no global install needed):
   - `uv run --with telethon python <script.py>`
 - Typical message send from script:
   - Create `TelegramClient(StringSession(session), api_id, api_hash)`
   - `send_message(chat_id, text, reply_to=thread_id)` to target a forum topic thread.
+- Creating a dedicated Telegram topic for debugging:
+  - Use Telethon to create a new forum topic in Lemonade Stand, then post all probes in that topic only.
+  - Drive repros with prompts that force async delegation, e.g. ask for background codex tasks, `agent_id=coder` usage, async poll loops, and multi-step coding/tool runs.
+  - Observe gateway logs for delivery failures (`:unknown_channel`), lock/scheduler stalls, and context overflow errors while those delegated tasks run.
 - In Lemonade Stand debugging:
   - Group chat id used in practice: `-1003842984060`
   - Topic/thread id can be discovered from message metadata; reply into that thread for scoped session testing.
