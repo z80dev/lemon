@@ -15,7 +15,7 @@ defmodule LemonRouter.RunOrchestrator do
 
   require Logger
 
-  alias LemonRouter.{AgentProfiles, ModelSelection, Policy, RunProcess}
+  alias LemonRouter.{AgentProfiles, ModelSelection, Policy, RunProcess, StickyEngine}
   alias LemonCore.{RunRequest, SessionKey}
   alias LemonChannels.Types.ResumeToken
   alias LemonGateway.Cwd, as: GatewayCwd
@@ -132,8 +132,8 @@ defmodule LemonRouter.RunOrchestrator do
     cwd_override = params.cwd
     tool_policy_override = params.tool_policy
 
-    # Generate run_id
-    run_id = LemonCore.Id.run_id()
+    # Generate run_id (honor caller-provided run_id for cron jobs to avoid race conditions)
+    run_id = params.run_id || LemonCore.Id.run_id()
 
     # Get session policies (includes model, thinkingLevel, and tool_policy)
     session_config = get_session_config(session_key)
@@ -185,6 +185,7 @@ defmodule LemonRouter.RunOrchestrator do
 
       session_model = session_config[:model] || session_config["model"]
       session_thinking_level = session_config[:thinking_level] || session_config["thinking_level"]
+      session_preferred_engine = session_config[:preferred_engine] || session_config["preferred_engine"]
       profile_model = map_get(agent_profile, :model)
       profile_default_engine = map_get(agent_profile, :default_engine)
       profile_system_prompt = map_get(agent_profile, :system_prompt)
@@ -193,6 +194,20 @@ defmodule LemonRouter.RunOrchestrator do
       explicit_model = request_model || map_get(meta, :model)
       explicit_system_prompt = map_get(meta, :system_prompt)
 
+      # Resolve sticky engine: explicit request > prompt directive > session preference
+      {sticky_engine_id, sticky_session_updates} =
+        StickyEngine.resolve(%{
+          explicit_engine_id: engine_id,
+          prompt: prompt,
+          session_preferred_engine: session_preferred_engine
+        })
+
+      # Persist sticky engine preference to session policy if changed
+      persist_sticky_engine(session_key, sticky_session_updates)
+
+      # Use sticky engine as explicit_engine_id if no request-level override was given
+      effective_engine_id = engine_id || sticky_engine_id
+
       selection =
         ModelSelection.resolve(%{
           explicit_model: explicit_model,
@@ -200,7 +215,7 @@ defmodule LemonRouter.RunOrchestrator do
           session_model: session_model,
           profile_model: profile_model,
           default_model: default_model,
-          explicit_engine_id: engine_id,
+          explicit_engine_id: effective_engine_id,
           profile_default_engine: profile_default_engine,
           resume_engine: resume && resume.engine
         })
@@ -299,6 +314,21 @@ defmodule LemonRouter.RunOrchestrator do
     LemonCore.EventBridge.subscribe_run(run_id)
   end
 
+  # Persist sticky engine preference updates to session policy
+  defp persist_sticky_engine(nil, _updates), do: :ok
+  defp persist_sticky_engine(_session_key, updates) when map_size(updates) == 0, do: :ok
+
+  defp persist_sticky_engine(session_key, updates) do
+    existing = LemonCore.Store.get_session_policy(session_key) || %{}
+    updated = Map.merge(existing, updates)
+    LemonCore.Store.put_session_policy(session_key, updated)
+  rescue
+    e ->
+      Logger.warning(
+        "Failed to persist sticky engine for session=#{inspect(session_key)}: #{Exception.message(e)}"
+      )
+  end
+
   # Get session configuration from store (includes model, thinking_level, tool_policy)
   defp get_session_config(nil), do: %{}
 
@@ -393,22 +423,12 @@ defmodule LemonRouter.RunOrchestrator do
         get_in(meta, [:raw, "message", "reply_to_message", "caption"])
 
     resume =
-      cond do
-        true ->
-          case EngineRegistry.extract_resume(prompt) do
-            {:ok, token} ->
-              token
+      case EngineRegistry.extract_resume(prompt) do
+        {:ok, token} ->
+          token
 
-            :none ->
-              if is_binary(reply_to_text) and reply_to_text != "" do
-                case EngineRegistry.extract_resume(reply_to_text) do
-                  {:ok, token} -> token
-                  :none -> nil
-                end
-              else
-                nil
-              end
-          end
+        :none ->
+          extract_resume_from_reply(reply_to_text)
       end
 
     stripped = strip_strict_resume_lines(prompt)
@@ -425,6 +445,16 @@ defmodule LemonRouter.RunOrchestrator do
   rescue
     _ -> {nil, prompt}
   end
+
+  @spec extract_resume_from_reply(binary() | nil) :: ResumeToken.t() | nil
+  defp extract_resume_from_reply(text) when is_binary(text) and text != "" do
+    case EngineRegistry.extract_resume(text) do
+      {:ok, token} -> token
+      :none -> nil
+    end
+  end
+
+  defp extract_resume_from_reply(_), do: nil
 
   defp strip_strict_resume_lines(text) when is_binary(text) do
     text

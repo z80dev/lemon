@@ -122,6 +122,71 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
     end
   end
 
+  describe "preferred_engine" do
+    test "stores preferred_engine override" do
+      session_key = "session_#{System.unique_integer()}"
+
+      params = %{
+        "sessionKey" => session_key,
+        "preferredEngine" => "codex"
+      }
+
+      ctx = %{auth: %{role: :operator}}
+
+      {:ok, _result} = SessionsPatch.handle(params, ctx)
+
+      stored = LemonCore.Store.get_session_policy(session_key)
+      assert stored[:preferred_engine] == "codex"
+
+      # Cleanup
+      LemonCore.Store.delete_session_policy(session_key)
+    end
+
+    test "nil preferredEngine is not stored" do
+      session_key = "session_#{System.unique_integer()}"
+
+      params = %{
+        "sessionKey" => session_key,
+        "preferredEngine" => nil,
+        "model" => "test-model"
+      }
+
+      ctx = %{auth: %{role: :operator}}
+
+      {:ok, _result} = SessionsPatch.handle(params, ctx)
+
+      stored = LemonCore.Store.get_session_policy(session_key)
+      assert stored[:model] == "test-model"
+      assert not Map.has_key?(stored, :preferred_engine)
+
+      # Cleanup
+      LemonCore.Store.delete_session_policy(session_key)
+    end
+
+    test "preferred_engine merges with existing session policy" do
+      session_key = "session_#{System.unique_integer()}"
+
+      # Pre-populate
+      LemonCore.Store.put_session_policy(session_key, %{model: "existing-model"})
+
+      params = %{
+        "sessionKey" => session_key,
+        "preferredEngine" => "claude"
+      }
+
+      ctx = %{auth: %{role: :operator}}
+
+      {:ok, _result} = SessionsPatch.handle(params, ctx)
+
+      stored = LemonCore.Store.get_session_policy(session_key)
+      assert stored[:preferred_engine] == "claude"
+      assert stored[:model] == "existing-model"
+
+      # Cleanup
+      LemonCore.Store.delete_session_policy(session_key)
+    end
+  end
+
   describe "integration with LemonRouter.Policy" do
     test "session policy is accessible from router policy resolution" do
       session_key = "session_#{System.unique_integer()}"

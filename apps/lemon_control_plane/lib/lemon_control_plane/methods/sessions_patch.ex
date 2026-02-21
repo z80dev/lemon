@@ -24,7 +24,8 @@ defmodule LemonControlPlane.Methods.SessionsPatch do
         %{
           tool_policy: params["toolPolicy"],
           model: params["model"],
-          thinking_level: params["thinkingLevel"]
+          thinking_level: params["thinkingLevel"],
+          preferred_engine: params["preferredEngine"]
         }
         |> Enum.reject(fn {_k, v} -> is_nil(v) end)
         |> Map.new()

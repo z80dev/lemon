@@ -657,6 +657,182 @@ defmodule LemonRouter.RunOrchestratorTest do
     end
   end
 
+  describe "sticky engine preference" do
+    setup do
+      original_state = :sys.get_state(LemonRouter.AgentProfiles)
+
+      on_exit(fn ->
+        :sys.replace_state(LemonRouter.AgentProfiles, fn _ -> original_state end)
+      end)
+
+      :ok
+    end
+
+    test "applies sticky engine from session policy when no explicit engine given" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+
+      {:ok, orchestrator_pid} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: run_supervisor,
+          run_process_module: CapturingRunProcess,
+          run_process_opts: %{notify_pid: self()}
+        )
+
+      on_exit(fn ->
+        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+      end)
+
+      session_key = "test:sticky:#{System.unique_integer()}"
+
+      # Set preferred_engine in session policy
+      LemonCore.Store.put_session_policy(session_key, %{
+        preferred_engine: "echo"
+      })
+
+      params = %{
+        origin: :control_plane,
+        session_key: session_key,
+        agent_id: "test",
+        prompt: "Hello"
+      }
+
+      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params))
+      assert_receive {:captured_job, job}, 500
+
+      # The sticky engine from session should be used
+      assert job.engine_id == "echo"
+
+      # Cleanup
+      LemonCore.Store.delete_session_policy(session_key)
+    end
+
+    test "prompt engine directive overrides session sticky engine" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+
+      {:ok, orchestrator_pid} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: run_supervisor,
+          run_process_module: CapturingRunProcess,
+          run_process_opts: %{notify_pid: self()}
+        )
+
+      on_exit(fn ->
+        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+      end)
+
+      session_key = "test:sticky:prompt:#{System.unique_integer()}"
+
+      # Set a different preferred_engine in session policy
+      LemonCore.Store.put_session_policy(session_key, %{
+        preferred_engine: "lemon"
+      })
+
+      params = %{
+        origin: :control_plane,
+        session_key: session_key,
+        agent_id: "test",
+        prompt: "use echo then help me"
+      }
+
+      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params))
+      assert_receive {:captured_job, job}, 500
+
+      # The prompt-detected engine should override the session preference
+      assert job.engine_id == "echo"
+
+      # Verify the session policy was updated with the new preference
+      stored = LemonCore.Store.get_session_policy(session_key)
+      assert stored[:preferred_engine] == "echo"
+
+      # Cleanup
+      LemonCore.Store.delete_session_policy(session_key)
+    end
+
+    test "explicit engine_id persists as sticky preference" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+
+      {:ok, orchestrator_pid} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: run_supervisor,
+          run_process_module: CapturingRunProcess,
+          run_process_opts: %{notify_pid: self()}
+        )
+
+      on_exit(fn ->
+        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+      end)
+
+      session_key = "test:sticky:explicit:#{System.unique_integer()}"
+
+      params = %{
+        origin: :control_plane,
+        session_key: session_key,
+        agent_id: "test",
+        prompt: "Hello",
+        engine_id: "echo"
+      }
+
+      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params))
+      assert_receive {:captured_job, job}, 500
+      assert job.engine_id == "echo"
+
+      # Verify engine was persisted to session policy
+      stored = LemonCore.Store.get_session_policy(session_key)
+      assert stored[:preferred_engine] == "echo"
+
+      # Cleanup
+      LemonCore.Store.delete_session_policy(session_key)
+    end
+
+    test "sticky engine persists across multiple runs" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+
+      {:ok, orchestrator_pid} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: run_supervisor,
+          run_process_module: CapturingRunProcess,
+          run_process_opts: %{notify_pid: self()}
+        )
+
+      on_exit(fn ->
+        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+      end)
+
+      session_key = "test:sticky:persist:#{System.unique_integer()}"
+
+      # First run: set engine via prompt directive
+      params1 = %{
+        origin: :control_plane,
+        session_key: session_key,
+        agent_id: "test",
+        prompt: "use echo then help me"
+      }
+
+      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params1))
+      assert_receive {:captured_job, job1}, 500
+      assert job1.engine_id == "echo"
+
+      # Second run: no engine directive, should still use echo
+      params2 = %{
+        origin: :control_plane,
+        session_key: session_key,
+        agent_id: "test",
+        prompt: "Help me with something else"
+      }
+
+      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params2))
+      assert_receive {:captured_job, job2}, 500
+      assert job2.engine_id == "echo"
+
+      # Cleanup
+      LemonCore.Store.delete_session_policy(session_key)
+    end
+  end
+
   defp request(attrs), do: RunRequest.new(attrs)
 
   defp test_profile do
