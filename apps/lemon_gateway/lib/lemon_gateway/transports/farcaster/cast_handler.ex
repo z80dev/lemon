@@ -117,7 +117,7 @@ defmodule LemonGateway.Transports.Farcaster.CastHandler do
            }}
 
         prompt ->
-          {engine_hint, prompt} = LemonGateway.Telegram.Transport.strip_engine_directive(prompt)
+          {engine_hint, prompt} = LemonGateway.EngineDirective.strip(prompt)
 
           case submit_job(scope, session_key, session_ref, prompt, engine_hint, action) do
             {:ok, run_id} ->

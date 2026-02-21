@@ -120,7 +120,6 @@ defmodule LemonChannels.StartupTest do
 
     # Ensure we did not also start the legacy poller/outbox.
     assert Process.whereis(LemonGateway.TransportSupervisor) == nil
-    assert Process.whereis(LemonGateway.Telegram.Transport) == nil
     assert Process.whereis(LemonGateway.Telegram.Outbox) == nil
   end
 

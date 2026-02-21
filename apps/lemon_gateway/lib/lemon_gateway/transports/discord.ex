@@ -265,7 +265,7 @@ defmodule LemonGateway.Transports.Discord do
   end
 
   defp extract_engine_directive(text) do
-    LemonGateway.Telegram.Transport.strip_engine_directive(text)
+    LemonGateway.EngineDirective.strip(text)
   end
 
   defp build_session_key(nil, channel_id, user_id, project) do

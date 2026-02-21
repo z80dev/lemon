@@ -141,8 +141,7 @@ defmodule LemonGateway.Transports.Email.Inbound do
           value -> value
         end
 
-      {engine_hint, stripped_body} =
-        LemonGateway.Telegram.Transport.strip_engine_directive(base_body)
+      {engine_hint, stripped_body} = LemonGateway.EngineDirective.strip(base_body)
 
       prompt = build_prompt(email, stripped_body)
 

@@ -25,6 +25,16 @@ defmodule LemonGateway.ApplicationTest do
     LemonGateway.Health.Server
   ]
 
+  defmodule MockTelegramTransport do
+    use LemonGateway.Transport
+
+    @impl true
+    def id, do: "telegram"
+
+    @impl true
+    def start_link(_opts), do: :ignore
+  end
+
   # ---------------------------------------------------------------------
   # Test setup helpers
   # ---------------------------------------------------------------------
@@ -460,7 +470,7 @@ defmodule LemonGateway.ApplicationTest do
       })
 
       Application.put_env(:lemon_gateway, :engines, [LemonGateway.Engines.Echo])
-      Application.put_env(:lemon_gateway, :transports, [LemonGateway.Telegram.Transport])
+      Application.put_env(:lemon_gateway, :transports, [MockTelegramTransport])
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 

@@ -1,7 +1,7 @@
 defmodule LemonGateway.Telegram.RoutingTest do
   use ExUnit.Case
 
-  alias LemonGateway.Telegram.Transport
+  alias LemonGateway.EngineDirective
   alias LemonGateway.Types.ResumeToken
 
   setup do
@@ -24,69 +24,69 @@ defmodule LemonGateway.Telegram.RoutingTest do
     :ok
   end
 
-  describe "strip_engine_directive/1" do
+  describe "EngineDirective.strip/1" do
     test "strips /claude directive and returns engine hint" do
       assert {"claude", "What is the weather?"} =
-               Transport.strip_engine_directive("/claude\nWhat is the weather?")
+               EngineDirective.strip("/claude\nWhat is the weather?")
     end
 
     test "strips /codex directive and returns engine hint" do
       assert {"codex", "Do something"} =
-               Transport.strip_engine_directive("/codex\nDo something")
+               EngineDirective.strip("/codex\nDo something")
     end
 
     test "strips /lemon directive and returns engine hint" do
       assert {"lemon", "Run a task"} =
-               Transport.strip_engine_directive("/lemon\nRun a task")
+               EngineDirective.strip("/lemon\nRun a task")
     end
 
     test "returns nil engine_hint for text without directive" do
       assert {nil, "What is the weather?"} =
-               Transport.strip_engine_directive("What is the weather?")
+               EngineDirective.strip("What is the weather?")
     end
 
     test "returns empty string when only directive present" do
-      assert {"codex", ""} = Transport.strip_engine_directive("/codex")
+      assert {"codex", ""} = EngineDirective.strip("/codex")
     end
 
     test "handles directive with trailing whitespace only" do
-      assert {"claude", ""} = Transport.strip_engine_directive("/claude   ")
+      assert {"claude", ""} = EngineDirective.strip("/claude   ")
     end
 
     test "preserves multiline content after directive" do
       input = "/claude\nLine 1\nLine 2\nLine 3"
-      assert {"claude", "Line 1\nLine 2\nLine 3"} = Transport.strip_engine_directive(input)
+      assert {"claude", "Line 1\nLine 2\nLine 3"} = EngineDirective.strip(input)
     end
 
     test "handles leading whitespace before directive" do
       assert {"codex", "Task here"} =
-               Transport.strip_engine_directive("  /codex\nTask here")
+               EngineDirective.strip("  /codex\nTask here")
     end
 
     test "is case-insensitive for directive" do
-      assert {"claude", "Test"} = Transport.strip_engine_directive("/Claude\nTest")
-      assert {"codex", "Test"} = Transport.strip_engine_directive("/CODEX\nTest")
-      assert {"lemon", "Test"} = Transport.strip_engine_directive("/LEMON\nTest")
+      assert {"claude", "Test"} = EngineDirective.strip("/Claude\nTest")
+      assert {"codex", "Test"} = EngineDirective.strip("/CODEX\nTest")
+      assert {"lemon", "Test"} = EngineDirective.strip("/LEMON\nTest")
     end
 
     test "does not strip non-engine directives" do
       assert {nil, "/other\nSome text"} =
-               Transport.strip_engine_directive("/other\nSome text")
+               EngineDirective.strip("/other\nSome text")
     end
 
     test "handles directive with content on same line" do
       # When there's content after the directive on the same line, preserve it
       assert {"claude", "inline content"} =
-               Transport.strip_engine_directive("/claude inline content")
+               EngineDirective.strip("/claude inline content")
     end
 
     test "handles nil input" do
-      assert {nil, ""} = Transport.strip_engine_directive(nil)
+      assert {nil, ""} = EngineDirective.strip(nil)
     end
 
     test "handles Windows-style line endings" do
       assert {"claude", "Content"} =
-               Transport.strip_engine_directive("/claude\r\nContent")
+               EngineDirective.strip("/claude\r\nContent")
     end
   end
 
