@@ -614,7 +614,34 @@ defmodule LemonRouter.StreamCoalescerTest do
                         meta: %{run_id: ^run_id}
                       }},
                      1_000
+
       assert String.contains?(text, "Hello world")
+    end
+
+    test "duplicate answer-create enqueue does not leave answer_create_ref pending" do
+      session_key = "agent:test:telegram:bot:dm:12355"
+      channel_id = "telegram"
+      run_id = "run_#{System.unique_integer([:positive])}"
+      create_key = "#{run_id}:answer:create"
+
+      StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 1, "Hello")
+      assert :ok = StreamCoalescer.flush(session_key, channel_id)
+      assert_receive {:delivered, %{idempotency_key: ^create_key}}, 1_000
+
+      [{pid, _}] = Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id})
+
+      :sys.replace_state(pid, fn state ->
+        meta = Map.delete(state.meta || %{}, :answer_msg_id)
+        %{state | meta: meta, answer_create_ref: nil, last_sent_text: nil}
+      end)
+
+      StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 2, " world")
+      assert :ok = StreamCoalescer.flush(session_key, channel_id)
+
+      assert eventually(fn ->
+               state = :sys.get_state(pid)
+               is_nil(state.answer_create_ref)
+             end)
     end
 
     test "telegram finalize sends a final answer message and indexes resume by that message id" do
@@ -650,7 +677,6 @@ defmodule LemonRouter.StreamCoalescerTest do
                  _ -> false
                end
              end)
-
     end
 
     test "telegram finalize still sends when progress_msg_id is nil (no delete attempted)" do

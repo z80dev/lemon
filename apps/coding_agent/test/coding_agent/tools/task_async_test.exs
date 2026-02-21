@@ -4,8 +4,43 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
   alias CodingAgent.Tools.Task
   alias CodingAgent.TaskStore
   alias CodingAgent.RunGraph
+  alias LemonCore.RunRequest
+
+  defmodule StubRunOrchestrator do
+    use Agent
+
+    def start_link(_opts) do
+      Agent.start_link(fn -> %{owner: nil, count: 0} end, name: __MODULE__)
+    end
+
+    def configure(owner) when is_pid(owner) do
+      Agent.update(__MODULE__, fn _ -> %{owner: owner, count: 0} end)
+    end
+
+    def submit(%RunRequest{} = request) do
+      Agent.get_and_update(__MODULE__, fn %{owner: owner, count: count} = state ->
+        next = count + 1
+
+        if is_pid(owner) do
+          send(owner, {:router_submit, request, next})
+        end
+
+        {{:ok, "run_stub_#{next}"}, %{state | count: next}}
+      end)
+    end
+  end
+
+  defmodule SessionSpy do
+    def follow_up(pid, text) do
+      send(pid, {:session_follow_up, text})
+      :ok
+    end
+  end
 
   setup do
+    start_supervised!(StubRunOrchestrator)
+    StubRunOrchestrator.configure(self())
+
     # Clear stores before each test
     try do
       TaskStore.clear()
@@ -20,6 +55,114 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
     end
 
     :ok
+  end
+
+  describe "execute/6 - async auto followup" do
+    test "posts completion into the live session when session pid is available" do
+      result =
+        Task.execute(
+          "call_live_followup",
+          %{
+            "description" => "Live followup task",
+            "prompt" => "Return completion",
+            "async" => true,
+            "auto_followup" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          run_override: fn _on_update, _signal ->
+            %AgentCore.Types.AgentToolResult{
+              content: [%Ai.Types.TextContent{text: "task output"}],
+              details: %{status: "completed"}
+            }
+          end,
+          session_module: SessionSpy,
+          session_pid: self(),
+          session_key: "agent:main:main",
+          agent_id: "main",
+          run_orchestrator: StubRunOrchestrator
+        )
+
+      assert %AgentCore.Types.AgentToolResult{} = result
+      assert result.details.status == "queued"
+
+      assert_receive {:session_follow_up, text}, 1_000
+      assert text =~ "[task #{result.details.task_id}]"
+      assert text =~ "Live followup task"
+      assert text =~ "task output"
+      refute_receive {:router_submit, %RunRequest{}, _}, 150
+    end
+
+    test "falls back to router followup when session pid is unavailable" do
+      dead_pid = spawn(fn -> :ok end)
+      ref = Process.monitor(dead_pid)
+      assert_receive {:DOWN, ^ref, :process, ^dead_pid, _}
+
+      result =
+        Task.execute(
+          "call_router_followup",
+          %{
+            "description" => "Router followup task",
+            "prompt" => "Return completion",
+            "async" => true,
+            "auto_followup" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          run_override: fn _on_update, _signal ->
+            %AgentCore.Types.AgentToolResult{
+              content: [%Ai.Types.TextContent{text: "router output"}],
+              details: %{status: "completed"}
+            }
+          end,
+          session_module: SessionSpy,
+          session_pid: dead_pid,
+          session_key: "agent:main:main",
+          agent_id: "main",
+          run_orchestrator: StubRunOrchestrator
+        )
+
+      assert %AgentCore.Types.AgentToolResult{} = result
+      assert result.details.status == "queued"
+
+      assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 1}, 1_000
+      assert followup.session_key == "agent:main:main"
+      assert followup.agent_id == "main"
+      assert followup.prompt =~ "Router followup task"
+      assert followup.prompt =~ "router output"
+    end
+
+    test "does not send followup when auto_followup is false" do
+      _result =
+        Task.execute(
+          "call_no_followup",
+          %{
+            "description" => "No followup task",
+            "prompt" => "Return completion",
+            "async" => true,
+            "auto_followup" => false
+          },
+          nil,
+          nil,
+          "/tmp",
+          run_override: fn _on_update, _signal ->
+            %AgentCore.Types.AgentToolResult{
+              content: [%Ai.Types.TextContent{text: "silent output"}],
+              details: %{status: "completed"}
+            }
+          end,
+          session_module: SessionSpy,
+          session_pid: self(),
+          session_key: "agent:main:main",
+          agent_id: "main",
+          run_orchestrator: StubRunOrchestrator
+        )
+
+      refute_receive {:session_follow_up, _text}, 200
+      refute_receive {:router_submit, %RunRequest{}, _}, 200
+    end
   end
 
   describe "execute/6 - async: true" do

@@ -112,7 +112,10 @@ defmodule LemonGateway.Voice.TwilioWebSocket do
 
   def handle_info(:speech_complete, state) do
     # Notify call session that speech finished
-    CallSession.handle_info(:speech_complete, state.session_pid)
+    if is_pid(state.session_pid) do
+      send(state.session_pid, :speech_complete)
+    end
+
     {:ok, state}
   end
 

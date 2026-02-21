@@ -23,6 +23,7 @@ defmodule CodingAgent.Tools.Agent do
   @default_sync_timeout_ms 120_000
   @default_watcher_timeout_ms 30 * 60 * 1000
   @default_run_orchestrator RouterBridge
+  @completion_poll_interval_ms 250
 
   @doc """
   Returns the agent delegation tool definition.
@@ -54,7 +55,8 @@ defmodule CodingAgent.Tools.Agent do
           },
           "async" => %{
             "type" => "boolean",
-            "description" => "When true (default), run in background and return task_id immediately. ALWAYS use async=true unless you absolutely must wait for the result before continuing."
+            "description" =>
+              "When true (default), run in background and return task_id immediately. ALWAYS use async=true unless you absolutely must wait for the result before continuing."
           },
           "auto_followup" => %{
             "type" => "boolean",
@@ -472,45 +474,88 @@ defmodule CodingAgent.Tools.Agent do
   end
 
   defp await_run_completion(run_id, timeout_ms, opts \\ []) do
-    topic = Bus.run_topic(run_id)
-    :ok = Bus.subscribe(topic)
-    on_subscribed = Keyword.get(opts, :on_subscribed)
+    case completion_from_store(run_id, "") do
+      {:ok, completion} ->
+        {:ok, completion}
 
-    if is_function(on_subscribed, 0) do
-      on_subscribed.()
-    end
+      :pending ->
+        topic = Bus.run_topic(run_id)
+        :ok = Bus.subscribe(topic)
+        on_subscribed = Keyword.get(opts, :on_subscribed)
 
-    deadline_ms = System.monotonic_time(:millisecond) + max(timeout_ms, 0)
+        if is_function(on_subscribed, 0) do
+          on_subscribed.()
+        end
 
-    try do
-      await_completion_loop(deadline_ms, "")
-    after
-      _ = Bus.unsubscribe(topic)
+        deadline_ms = System.monotonic_time(:millisecond) + max(timeout_ms, 0)
+
+        try do
+          await_completion_loop(run_id, deadline_ms, "")
+        after
+          _ = Bus.unsubscribe(topic)
+        end
     end
   end
 
-  defp await_completion_loop(deadline_ms, acc_answer) do
+  defp await_completion_loop(run_id, deadline_ms, acc_answer) do
     remaining_ms = deadline_ms - System.monotonic_time(:millisecond)
 
     if remaining_ms <= 0 do
-      {:error, :timeout}
+      case completion_from_store(run_id, acc_answer) do
+        {:ok, completion} -> {:ok, completion}
+        :pending -> {:error, :timeout}
+      end
     else
       receive do
         %LemonCore.Event{type: :delta, payload: payload} ->
           delta = delta_text(payload)
-          await_completion_loop(deadline_ms, acc_answer <> delta)
+          await_completion_loop(run_id, deadline_ms, acc_answer <> delta)
 
         %LemonCore.Event{type: :run_completed, payload: payload} ->
           {:ok, normalize_completion(payload, acc_answer)}
 
         _ ->
-          await_completion_loop(deadline_ms, acc_answer)
+          await_completion_loop(run_id, deadline_ms, acc_answer)
       after
-        remaining_ms ->
-          {:error, :timeout}
+        min(remaining_ms, @completion_poll_interval_ms) ->
+          case completion_from_store(run_id, acc_answer) do
+            {:ok, completion} ->
+              {:ok, completion}
+
+            :pending ->
+              await_completion_loop(run_id, deadline_ms, acc_answer)
+          end
       end
     end
   end
+
+  defp completion_from_store(run_id, acc_answer) when is_binary(run_id) do
+    case Store.get_run(run_id) do
+      %{summary: summary} when is_map(summary) ->
+        case completion_from_summary(summary) do
+          %{ok: _ok} = completion -> {:ok, merge_completion_answer(completion, acc_answer)}
+          _ -> :pending
+        end
+
+      _ ->
+        :pending
+    end
+  rescue
+    _ -> :pending
+  end
+
+  defp completion_from_store(_run_id, _acc_answer), do: :pending
+
+  defp merge_completion_answer(%{answer: answer} = completion, _acc_answer)
+       when is_binary(answer) and answer != "" do
+    completion
+  end
+
+  defp merge_completion_answer(completion, acc_answer) when is_binary(acc_answer) do
+    Map.put(completion, :answer, acc_answer)
+  end
+
+  defp merge_completion_answer(completion, _acc_answer), do: completion
 
   defp normalize_completion(payload, acc_answer) when is_map(payload) do
     completed =
@@ -873,7 +918,8 @@ defmodule CodingAgent.Tools.Agent do
 
     base = %{
       "type" => "string",
-      "description" => "Target agent id for action=run. DEFAULT: use the same agent_id as this session (inherits your profile, tools, and capabilities)."
+      "description" =>
+        "Target agent id for action=run. DEFAULT: use the same agent_id as this session (inherits your profile, tools, and capabilities)."
     }
 
     if ids == [] do

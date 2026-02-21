@@ -391,10 +391,13 @@ defmodule CodingAgent.SessionExtensionsTest do
       module2 = Module.concat(["TestHook2Extension"])
 
       session = start_session(cwd: tmp_dir)
-      state = Session.get_state(session)
 
-      # Should have two on_message_end hooks
-      assert length(state.hooks[:on_message_end]) == 2
+      # Extension compilation/loading can complete shortly after session start.
+      # Poll until both hooks are visible to avoid a startup race.
+      assert eventually(fn ->
+               state = Session.get_state(session)
+               length(state.hooks[:on_message_end] || []) == 2
+             end)
 
       cleanup_module(module1)
       cleanup_module(module2)

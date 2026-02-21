@@ -22,7 +22,8 @@ defmodule LemonCore.RunRequest do
           model: term(),
           meta: map(),
           cwd: term(),
-          tool_policy: map() | nil
+          tool_policy: map() | nil,
+          run_id: binary() | nil
         }
 
   defstruct origin: :unknown,
@@ -34,7 +35,8 @@ defmodule LemonCore.RunRequest do
             model: nil,
             meta: %{},
             cwd: nil,
-            tool_policy: nil
+            tool_policy: nil,
+            run_id: nil
 
   @doc """
   Build a normalized run request from a keyword list or map.
@@ -68,7 +70,8 @@ defmodule LemonCore.RunRequest do
       model: normalize_model(field(params, :model)),
       meta: normalize_meta(field(params, :meta)),
       cwd: normalize_cwd(field(params, :cwd)),
-      tool_policy: normalize_tool_policy(field(params, :tool_policy))
+      tool_policy: normalize_tool_policy(field(params, :tool_policy)),
+      run_id: normalize_run_id(field(params, :run_id))
     }
   end
 
@@ -114,6 +117,10 @@ defmodule LemonCore.RunRequest do
   @spec normalize_tool_policy(term()) :: map() | nil
   def normalize_tool_policy(tool_policy) when is_map(tool_policy), do: tool_policy
   def normalize_tool_policy(_), do: nil
+
+  @spec normalize_run_id(term()) :: binary() | nil
+  def normalize_run_id(run_id) when is_binary(run_id) and run_id != "", do: run_id
+  def normalize_run_id(_), do: nil
 
   defp field(params, key) when is_map(params) and is_atom(key) do
     Map.get(params, key) || Map.get(params, Atom.to_string(key))

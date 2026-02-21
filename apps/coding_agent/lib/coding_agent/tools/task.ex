@@ -28,6 +28,9 @@ defmodule CodingAgent.Tools.Task do
   alias CodingAgent.Subagents
   alias CodingAgent.TaskStore
   alias CodingAgent.ToolPolicy
+  alias LemonCore.{RunRequest, SessionKey}
+
+  @default_run_orchestrator LemonRouter.RunOrchestrator
 
   @doc """
   Returns the Task tool definition.
@@ -100,6 +103,11 @@ defmodule CodingAgent.Tools.Task do
             "type" => "boolean",
             "description" =>
               "When true (recommended), run in background and return task_id immediately. Use async=true by default to keep user conversations responsive. Only use async=false for simple tasks that complete instantly."
+          },
+          "auto_followup" => %{
+            "type" => "boolean",
+            "description" =>
+              "When true (default), async task completion is automatically posted back into this session."
           }
         },
         "required" => []
@@ -148,6 +156,7 @@ defmodule CodingAgent.Tools.Task do
       role_id = validated.role_id
       engine = validated.engine
       async? = validated.async
+      auto_followup = validated.auto_followup
       coordinator = Keyword.get(opts, :coordinator)
       parent_run_id = Keyword.get(opts, :parent_run_id)
 
@@ -228,7 +237,17 @@ defmodule CodingAgent.Tools.Task do
             "task_id=#{inspect(task_id)} run_id=#{inspect(run_id)} parent_run_id=#{inspect(parent_run_id)}"
         )
 
-        run_async(task_id, run_id, run_fun)
+        followup_context = %{
+          auto_followup: auto_followup,
+          description: description,
+          parent_session_key: Keyword.get(opts, :session_key),
+          parent_agent_id: Keyword.get(opts, :agent_id),
+          session_module: Keyword.get(opts, :session_module, CodingAgent.Session),
+          session_pid: Keyword.get(opts, :session_pid),
+          run_orchestrator: run_orchestrator(opts)
+        }
+
+        run_async(task_id, run_id, run_fun, followup_context)
         build_async_result(task_id, description, run_id)
       else
         run_sync(run_fun)
@@ -299,6 +318,7 @@ defmodule CodingAgent.Tools.Task do
     model = normalize_optional_string(Map.get(params, "model"))
     thinking_level = normalize_optional_string(Map.get(params, "thinking_level"))
     async? = Map.get(params, "async", false)
+    auto_followup = Map.get(params, "auto_followup", true)
 
     cond do
       not Map.has_key?(params, "description") ->
@@ -338,6 +358,9 @@ defmodule CodingAgent.Tools.Task do
       not is_boolean(async?) ->
         {:error, "Async must be a boolean"}
 
+      not is_boolean(auto_followup) ->
+        {:error, "auto_followup must be a boolean"}
+
       true ->
         normalized_engine = if engine == "internal", do: nil, else: engine
 
@@ -349,7 +372,8 @@ defmodule CodingAgent.Tools.Task do
            engine: normalized_engine,
            model: model,
            thinking_level: thinking_level,
-           async: async?
+           async: async?,
+           auto_followup: auto_followup
          }}
     end
   end
@@ -421,6 +445,10 @@ defmodule CodingAgent.Tools.Task do
 
   defp coordinator_alive?(_), do: false
 
+  defp run_orchestrator(opts) do
+    Keyword.get(opts, :run_orchestrator, @default_run_orchestrator)
+  end
+
   defp execute_via_coordinator(coordinator, prompt, description, role_id) do
     # Generate a unique ID for tracking this task run
     task_run_id = generate_task_run_id()
@@ -450,11 +478,11 @@ defmodule CodingAgent.Tools.Task do
     end
   end
 
-  defp run_async(task_id, run_id, run_fun) do
+  defp run_async(task_id, run_id, run_fun, followup_context) do
     Task.start(fn ->
       Logger.debug("Task tool async start task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}")
       result = safe_run(task_id, run_id, run_fun)
-      finalize_async(task_id, run_id, result)
+      finalize_async(task_id, run_id, result, followup_context)
     end)
 
     :ok
@@ -482,7 +510,7 @@ defmodule CodingAgent.Tools.Task do
     end
   end
 
-  defp finalize_async(task_id, run_id, result) do
+  defp finalize_async(task_id, run_id, result, followup_context) do
     Logger.info(
       "Task tool async finalize task_id=#{inspect(task_id)} run_id=#{inspect(run_id)} " <>
         "result_type=#{inspect(async_result_type(result))}"
@@ -493,28 +521,182 @@ defmodule CodingAgent.Tools.Task do
         TaskStore.finish(task_id, tool_result)
         maybe_finish_run(run_id, tool_result)
         maybe_record_budget_completion(run_id, tool_result)
+        maybe_send_async_followup(followup_context, task_id, run_id, {:ok, tool_result})
 
       {:ok, {:error, reason}} ->
         TaskStore.fail(task_id, reason)
         maybe_fail_run(run_id, reason)
         maybe_record_budget_completion(run_id, %{error: reason})
+        maybe_send_async_followup(followup_context, task_id, run_id, {:error, reason})
 
       {:error, reason} ->
         TaskStore.fail(task_id, reason)
         maybe_fail_run(run_id, reason)
         maybe_record_budget_completion(run_id, %{error: reason})
+        maybe_send_async_followup(followup_context, task_id, run_id, {:error, reason})
 
       {:ok, other} ->
         TaskStore.finish(task_id, other)
         maybe_finish_run(run_id, other)
         maybe_record_budget_completion(run_id, other)
+        maybe_send_async_followup(followup_context, task_id, run_id, {:ok, other})
 
       other ->
         TaskStore.fail(task_id, other)
         maybe_fail_run(run_id, other)
         maybe_record_budget_completion(run_id, %{error: other})
+        maybe_send_async_followup(followup_context, task_id, run_id, {:error, other})
     end
   end
+
+  defp maybe_send_async_followup(%{auto_followup: false}, _task_id, _run_id, _outcome), do: :ok
+
+  defp maybe_send_async_followup(followup_context, task_id, run_id, outcome)
+       when is_map(followup_context) do
+    text = task_auto_followup_text(followup_context, task_id, run_id, outcome)
+
+    session_module = Map.get(followup_context, :session_module, CodingAgent.Session)
+    session_pid = Map.get(followup_context, :session_pid)
+
+    sent_to_live_session? =
+      if is_pid(session_pid) and Process.alive?(session_pid) and
+           function_exported?(session_module, :follow_up, 2) do
+        _ = session_module.follow_up(session_pid, text)
+        true
+      else
+        false
+      end
+
+    if not sent_to_live_session? do
+      submit_async_followup_via_router(followup_context, task_id, run_id, text)
+    end
+  rescue
+    error ->
+      Logger.warning(
+        "Task tool failed to auto-followup task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}: #{inspect(error)}"
+      )
+
+      :ok
+  end
+
+  defp maybe_send_async_followup(_followup_context, _task_id, _run_id, _outcome), do: :ok
+
+  defp submit_async_followup_via_router(followup_context, task_id, run_id, text) do
+    parent_session_key = Map.get(followup_context, :parent_session_key)
+
+    if is_binary(parent_session_key) and parent_session_key != "" do
+      parent_agent_id =
+        Map.get(followup_context, :parent_agent_id) ||
+          SessionKey.agent_id(parent_session_key) ||
+          "default"
+
+      run_orchestrator = Map.get(followup_context, :run_orchestrator, @default_run_orchestrator)
+
+      followup =
+        RunRequest.new(%{
+          origin: :node,
+          session_key: parent_session_key,
+          agent_id: parent_agent_id,
+          prompt: text,
+          queue_mode: :followup,
+          meta: %{
+            task_auto_followup: true,
+            task_id: task_id,
+            run_id: run_id
+          }
+        })
+
+      case run_orchestrator.submit(followup) do
+        {:ok, _run_id} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "Task tool followup submit failed for task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}: #{inspect(reason)}"
+          )
+      end
+    else
+      Logger.debug(
+        "Task tool skipping auto-followup task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}: parent session key unavailable"
+      )
+    end
+  end
+
+  defp task_auto_followup_text(followup_context, task_id, run_id, outcome) do
+    description =
+      followup_context
+      |> Map.get(:description)
+      |> normalize_optional_string()
+
+    summary =
+      cond do
+        is_binary(description) and description != "" -> description
+        true -> "background task"
+      end
+
+    base =
+      "[task #{task_id}] #{summary}" <>
+        if(is_binary(run_id) and run_id != "", do: " (run #{run_id})", else: "")
+
+    case normalize_followup_outcome(outcome) do
+      %{ok: true, answer: answer} when is_binary(answer) ->
+        trimmed = String.trim(answer)
+
+        if trimmed == "" do
+          "#{base} completed."
+        else
+          "#{base} completed.\n\n#{answer}"
+        end
+
+      %{ok: false, error: error, answer: answer} ->
+        trimmed = if is_binary(answer), do: String.trim(answer), else: ""
+
+        if trimmed == "" do
+          "#{base} failed: #{format_cli_error(error)}"
+        else
+          "#{base} failed: #{format_cli_error(error)}\n\nPartial output:\n#{answer}"
+        end
+    end
+  end
+
+  defp normalize_followup_outcome({:ok, %AgentToolResult{} = result}) do
+    answer = AgentCore.get_text(result)
+    details = result.details || %{}
+    status = details[:status] || details["status"]
+    error = details[:error] || details["error"]
+
+    if status == "error" or not is_nil(error) do
+      %{ok: false, error: error || "task failed", answer: answer || ""}
+    else
+      %{ok: true, answer: answer || ""}
+    end
+  end
+
+  defp normalize_followup_outcome({:ok, {:error, reason}}) do
+    %{ok: false, error: reason, answer: ""}
+  end
+
+  defp normalize_followup_outcome({:error, reason}) do
+    %{ok: false, error: reason, answer: ""}
+  end
+
+  defp normalize_followup_outcome({:ok, other}) do
+    %{ok: true, answer: normalize_followup_answer(other)}
+  end
+
+  defp normalize_followup_outcome(other) do
+    %{ok: false, error: other, answer: ""}
+  end
+
+  defp normalize_followup_answer(answer) when is_binary(answer), do: answer
+
+  defp normalize_followup_answer(%AgentToolResult{} = result) do
+    AgentCore.get_text(result) || ""
+  end
+
+  defp normalize_followup_answer(%{answer: answer}) when is_binary(answer), do: answer
+  defp normalize_followup_answer(%{"answer" => answer}) when is_binary(answer), do: answer
+  defp normalize_followup_answer(other), do: inspect(other)
 
   defp async_result_type({:ok, %AgentToolResult{details: %{status: "completed"}}}), do: :completed
   defp async_result_type({:ok, %AgentToolResult{details: %{status: "error"}}}), do: :error

@@ -69,7 +69,8 @@ defmodule LemonGateway.Voice.Config do
   """
   @spec websocket_port() :: integer()
   def websocket_port do
-    Application.get_env(:lemon_gateway, :voice_websocket_port, 4047)
+    Application.get_env(:lemon_gateway, :voice_websocket_port, default_websocket_port())
+    |> maybe_test_websocket_port()
   end
 
   @doc """
@@ -129,5 +130,23 @@ defmodule LemonGateway.Voice.Config do
     - Performing tasks via tools
     - Having casual conversation
     """
+  end
+
+  defp default_websocket_port do
+    if test_env?() do
+      0
+    else
+      4047
+    end
+  end
+
+  defp maybe_test_websocket_port(4047) do
+    if test_env?(), do: 0, else: 4047
+  end
+
+  defp maybe_test_websocket_port(port), do: port
+
+  defp test_env? do
+    Code.ensure_loaded?(Mix) and Mix.env() == :test
   end
 end

@@ -434,6 +434,27 @@ defmodule LemonGateway.RunTest do
     Run.start_link(args)
   end
 
+  defp wait_for(fun, timeout_ms, interval_ms) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_for(fun, deadline, interval_ms)
+  end
+
+  defp do_wait_for(fun, deadline, interval_ms) do
+    value = fun.()
+
+    cond do
+      not is_nil(value) ->
+        value
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        nil
+
+      true ->
+        Process.sleep(interval_ms)
+        do_wait_for(fun, deadline, interval_ms)
+    end
+  end
+
   # ============================================================================
   # 1. Run Initialization
   # ============================================================================
@@ -1262,7 +1283,13 @@ defmodule LemonGateway.RunTest do
       assert_receive {:engine_started, _run_ref}, 2000
 
       # Check mapping exists
-      run_pid = LemonGateway.Store.get_run_by_progress(scope, progress_msg_id)
+      run_pid =
+        wait_for(
+          fn -> LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) end,
+          500,
+          10
+        )
+
       assert run_pid == pid
 
       # Cancel to complete

@@ -1200,6 +1200,7 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     end
 
     test "run/1 API is available" do
+      assert Code.ensure_loaded?(ClaudeRunner)
       assert function_exported?(ClaudeRunner, :run, 1)
     end
   end

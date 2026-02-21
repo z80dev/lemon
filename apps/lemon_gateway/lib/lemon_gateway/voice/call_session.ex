@@ -242,24 +242,29 @@ defmodule LemonGateway.Voice.CallSession do
   end
 
   def handle_info(:generate_response, state) do
+    owner = self()
+    history = state.conversation_history
+
     # Call LLM to generate response
     Task.start(fn ->
-      response = generate_llm_response(state.conversation_history)
-      speak(self(), response)
+      response = generate_llm_response(history)
+      speak(owner, response)
     end)
 
     {:noreply, %{state | is_processing: true}}
   end
 
   def handle_info({:synthesize_speech, text}, state) do
+    owner = self()
+
     # Synthesize speech using ElevenLabs
     Task.start(fn ->
       case synthesize_speech(text) do
         {:ok, audio_data} ->
-          send(self(), {:audio_ready, audio_data, text})
+          send(owner, {:audio_ready, audio_data, text})
         {:error, reason} ->
           Logger.error("TTS failed: #{inspect(reason)}")
-          send(self(), :speech_complete)
+          send(owner, :speech_complete)
       end
     end)
 

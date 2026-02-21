@@ -28,6 +28,7 @@ defmodule LemonRouter.StreamCoalescer do
   @default_idle_ms 400
   @default_max_latency_ms 1200
   @pending_resume_cleanup_base_ms 2_000
+  @image_extensions MapSet.new(~w(.png .jpg .jpeg .gif .webp .bmp .svg .tif .tiff .heic .heif))
   @pending_resume_cleanup_max_attempts 4
   @pending_resume_cleanup_max_backoff_ms 30_000
   @telegram_media_group_max_items 10
@@ -329,11 +330,13 @@ defmodule LemonRouter.StreamCoalescer do
                     :edit,
                     %{message_id: mid, text: text},
                     "#{state.run_id}:answer:deferred",
-                    %{meta: %{
-                      run_id: state.run_id,
-                      session_key: state.session_key,
-                      seq: state.last_seq
-                    }}
+                    %{
+                      meta: %{
+                        run_id: state.run_id,
+                        session_key: state.session_key,
+                        seq: state.last_seq
+                      }
+                    }
                   )
 
                 case ChannelsDelivery.telegram_enqueue(
@@ -526,11 +529,13 @@ defmodule LemonRouter.StreamCoalescer do
                 :edit,
                 %{message_id: msg_id, text: text},
                 "#{state.run_id}:#{state.last_seq}",
-                %{meta: %{
-                  run_id: state.run_id,
-                  session_key: state.session_key,
-                  seq: state.last_seq
-                }}
+                %{
+                  meta: %{
+                    run_id: state.run_id,
+                    session_key: state.session_key,
+                    seq: state.last_seq
+                  }
+                }
               )
 
             case ChannelsDelivery.telegram_enqueue(
@@ -646,11 +651,13 @@ defmodule LemonRouter.StreamCoalescer do
           :edit,
           %{message_id: answer_msg_id, text: text},
           "#{state.run_id}:answer:#{state.last_seq}",
-          %{meta: %{
-            run_id: state.run_id,
-            session_key: state.session_key,
-            seq: state.last_seq
-          }}
+          %{
+            meta: %{
+              run_id: state.run_id,
+              session_key: state.session_key,
+              seq: state.last_seq
+            }
+          }
         )
 
       case ChannelsDelivery.telegram_enqueue(
@@ -708,12 +715,15 @@ defmodule LemonRouter.StreamCoalescer do
       {:ok, _ref} ->
         %{state | answer_create_ref: notify_ref}
 
+      {:error, :duplicate} ->
+        state
+
       {:error, :channels_outbox_unavailable} ->
         state
 
       {:error, reason} ->
         Logger.warning("Failed to enqueue answer create: #{inspect(reason)}")
-        %{state | answer_create_ref: notify_ref}
+        state
     end
   end
 
@@ -752,7 +762,16 @@ defmodule LemonRouter.StreamCoalescer do
           cond do
             # If we streamed deltas, finalize by editing the dedicated answer message.
             is_integer(chat_id) and is_integer(answer_msg_id) ->
-              finalize_edit_answer(state, parsed, chat_id, thread_id, account_id, answer_msg_id, text, resume)
+              finalize_edit_answer(
+                state,
+                parsed,
+                chat_id,
+                thread_id,
+                account_id,
+                answer_msg_id,
+                text,
+                resume
+              )
 
             # Answer message creation is still in flight; ensure it ends up with final text.
             is_integer(chat_id) and is_reference(state.answer_create_ref) ->
@@ -760,7 +779,16 @@ defmodule LemonRouter.StreamCoalescer do
 
             # No streamed deltas: send a new answer message and index its message_id for reply-based resumes.
             text != "" ->
-              finalize_send_answer(state, parsed, chat_id, thread_id, account_id, text, reply_to, resume)
+              finalize_send_answer(
+                state,
+                parsed,
+                chat_id,
+                thread_id,
+                account_id,
+                text,
+                reply_to,
+                resume
+              )
 
             true ->
               state
@@ -786,7 +814,16 @@ defmodule LemonRouter.StreamCoalescer do
   end
 
   # Finalize by editing the dedicated answer message that was created during streaming.
-  defp finalize_edit_answer(state, parsed, chat_id, thread_id, account_id, answer_msg_id, text, resume) do
+  defp finalize_edit_answer(
+         state,
+         parsed,
+         chat_id,
+         thread_id,
+         account_id,
+         answer_msg_id,
+         text,
+         resume
+       ) do
     edit_text = truncate_for_channel("telegram", text)
 
     payload =
@@ -795,11 +832,13 @@ defmodule LemonRouter.StreamCoalescer do
         :edit,
         %{message_id: answer_msg_id, text: edit_text},
         "#{state.run_id}:final:answer_edit",
-        %{meta: %{
-          run_id: state.run_id,
-          session_key: state.session_key,
-          final: true
-        }}
+        %{
+          meta: %{
+            run_id: state.run_id,
+            session_key: state.session_key,
+            final: true
+          }
+        }
       )
 
     case ChannelsDelivery.telegram_enqueue(
@@ -874,9 +913,7 @@ defmodule LemonRouter.StreamCoalescer do
         payload
         |> Map.put(:notify_pid, self())
         |> Map.put(:notify_ref, notify_ref)
-        |> ChannelsDelivery.enqueue(
-          context: %{component: :stream_coalescer, phase: :final_send}
-        )
+        |> ChannelsDelivery.enqueue(context: %{component: :stream_coalescer, phase: :final_send})
       end
 
     case delivery_result do
@@ -1251,22 +1288,10 @@ defmodule LemonRouter.StreamCoalescer do
   defp flush_image_batch(batches, []), do: batches
   defp flush_image_batch(batches, pending_images), do: [Enum.reverse(pending_images) | batches]
 
-  defp image_file?(path) when is_binary(path) do
-    case Path.extname(path) |> String.downcase() do
-      ".png" -> true
-      ".jpg" -> true
-      ".jpeg" -> true
-      ".gif" -> true
-      ".webp" -> true
-      ".bmp" -> true
-      ".svg" -> true
-      ".tif" -> true
-      ".tiff" -> true
-      ".heic" -> true
-      ".heif" -> true
-      _ -> false
-    end
-  end
+  @spec image_file?(term()) :: boolean()
+  defp image_file?(path) when is_binary(path),
+    do:
+      path |> Path.extname() |> String.downcase() |> then(&MapSet.member?(@image_extensions, &1))
 
   defp image_file?(_), do: false
 

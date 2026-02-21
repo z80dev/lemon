@@ -12,8 +12,6 @@ defmodule LemonGateway.Voice.WebhookRouter do
 
   require Logger
 
-  alias LemonGateway.Voice.Config
-
   plug(Plug.Logger, log: :debug)
 
   plug(Plug.Parsers,
@@ -32,7 +30,8 @@ defmodule LemonGateway.Voice.WebhookRouter do
     Logger.info("Incoming Twilio voice call: #{inspect(Map.take(params, ["CallSid", "From", "To"]))}")
 
     # Generate TwiML to connect to Media Stream
-    twiml = generate_twiml()
+    # Use the host from the incoming request so Twilio connects back to the same URL
+    twiml = generate_twiml(conn)
 
     conn
     |> Plug.Conn.put_resp_content_type("application/xml")
@@ -58,6 +57,8 @@ defmodule LemonGateway.Voice.WebhookRouter do
     from_number = conn.params["from"] || "unknown"
     to_number = conn.params["to"] || "unknown"
 
+    Logger.info("WebSocket connection request for call #{call_sid}")
+
     # Upgrade to WebSocket using WebSockAdapter
     conn
     |> WebSockAdapter.upgrade(
@@ -74,16 +75,31 @@ defmodule LemonGateway.Voice.WebhookRouter do
 
   # Private Functions
 
-  defp generate_twiml do
-    public_url = Config.public_url()
-
-    stream_url =
-      if public_url do
-        "wss://#{public_url}/webhooks/twilio/voice/stream"
-      else
-        # Fallback for local development
-        "ws://localhost:#{Config.websocket_port()}/webhooks/twilio/voice/stream"
+  defp generate_twiml(conn) do
+    # Get the host from the incoming request
+    # Check for X-Forwarded-Host header first (set by proxies/tunnels)
+    host = 
+      conn
+      |> Plug.Conn.get_req_header("x-forwarded-host")
+      |> List.first()
+      |> case do
+        nil -> conn.host || "localhost"
+        forwarded -> forwarded
       end
+    
+    # Check for X-Forwarded-Proto to determine if we're behind HTTPS
+    proto = 
+      conn
+      |> Plug.Conn.get_req_header("x-forwarded-proto")
+      |> List.first()
+      |> case do
+        "https" -> "wss"
+        _ -> if conn.scheme == :https, do: "wss", else: "ws"
+      end
+    
+    stream_url = "#{proto}://#{host}/webhooks/twilio/voice/stream"
+
+    Logger.info("TwiML Stream URL: #{stream_url} (host=#{host}, proto=#{proto})")
 
     """
     <?xml version="1.0" encoding="UTF-8"?>

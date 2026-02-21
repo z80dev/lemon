@@ -30,6 +30,7 @@ defmodule CodingAgent.Tools.TaskTest do
       assert Map.has_key?(props, "thinking_level")
       assert Map.has_key?(props, "role")
       assert Map.has_key?(props, "async")
+      assert Map.has_key?(props, "auto_followup")
       assert props["description"]["description"] =~ "3-5 words"
     end
   end
@@ -246,6 +247,24 @@ defmodule CodingAgent.Tools.TaskTest do
         )
 
       assert {:error, "thinking_level must be a string"} = result
+    end
+
+    test "returns error when auto_followup is not a boolean" do
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Test task",
+            "prompt" => "do something",
+            "auto_followup" => "yes"
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
+
+      assert {:error, "auto_followup must be a boolean"} = result
     end
   end
 

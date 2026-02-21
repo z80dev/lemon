@@ -40,7 +40,8 @@ defmodule LemonGateway.AI do
   end
 
   defp openai_chat_completion(model, messages, opts) do
-    api_key = System.get_env("OPENAI_API_KEY")
+    api_key = System.get_env("OPENAI_API_KEY") ||
+              Application.get_env(:lemon_gateway, :openai_api_key)
 
     if is_nil(api_key) or api_key == "" do
       {:error, :missing_api_key}

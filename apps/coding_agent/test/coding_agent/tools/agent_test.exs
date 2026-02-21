@@ -3,7 +3,7 @@ defmodule CodingAgent.Tools.AgentTest do
 
   alias CodingAgent.TaskStore
   alias CodingAgent.Tools.Agent, as: AgentTool
-  alias LemonCore.{Bus, Event, RunRequest}
+  alias LemonCore.{Bus, Event, RunRequest, Store}
 
   defmodule StubRunOrchestrator do
     use Agent
@@ -19,12 +19,13 @@ defmodule CodingAgent.Tools.AgentTest do
     def submit(%RunRequest{} = request) do
       Agent.get_and_update(__MODULE__, fn %{owner: owner, count: count} = state ->
         next = count + 1
+        run_id = "run_stub_#{next}_#{System.unique_integer([:positive])}"
 
         if is_pid(owner) do
           send(owner, {:router_submit, request, next})
         end
 
-        {{:ok, "run_stub_#{next}"}, %{state | count: next}}
+        {{:ok, run_id}, %{state | count: next}}
       end)
     end
   end
@@ -219,6 +220,37 @@ defmodule CodingAgent.Tools.AgentTest do
     assert followup.session_key == "agent:main:main"
     assert followup.agent_id == "main"
     assert followup.prompt =~ "oracle update"
+  end
+
+  test "async completion can recover from missed bus events via run summary store polling" do
+    result =
+      AgentTool.execute(
+        "call_1",
+        %{
+          "agent_id" => "oracle",
+          "prompt" => "Answer from store",
+          "async" => true,
+          "auto_followup" => false
+        },
+        nil,
+        nil,
+        "/tmp",
+        run_orchestrator: StubRunOrchestrator,
+        session_key: "agent:main:main",
+        session_id: "sess_main",
+        agent_id: "main"
+      )
+
+    assert_receive {:router_submit, %RunRequest{}, 1}
+
+    :ok =
+      Store.finalize_run(result.details.run_id, %{
+        completed: %{ok: true, answer: "hello from store"}
+      })
+
+    poll = wait_for_completed(result.details.task_id)
+    assert poll.details.status == "completed"
+    assert AgentCore.get_text(poll) == "hello from store"
   end
 
   test "poll returns error for unknown task id" do
