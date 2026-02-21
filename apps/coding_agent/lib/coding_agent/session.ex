@@ -1603,7 +1603,8 @@ defmodule CodingAgent.Session do
     normalized = String.downcase(String.trim(provider))
 
     Enum.find(Ai.Models.get_providers(), fn known ->
-      Atom.to_string(known) == normalized
+      known_str = Atom.to_string(known)
+      known_str == normalized or String.replace(known_str, "_", "-") == normalized
     end)
   end
 
@@ -1767,6 +1768,7 @@ defmodule CodingAgent.Session do
   defp provider_env_vars("anthropic"), do: ["ANTHROPIC_API_KEY"]
   defp provider_env_vars("openai"), do: ["OPENAI_API_KEY"]
   defp provider_env_vars("openai-codex"), do: ["OPENAI_CODEX_API_KEY", "CHATGPT_TOKEN"]
+  defp provider_env_vars("opencode"), do: ["OPENCODE_API_KEY"]
   defp provider_env_vars("kimi"), do: ["KIMI_API_KEY"]
 
   defp provider_env_vars("google"),

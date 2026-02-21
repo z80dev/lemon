@@ -11,11 +11,13 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     master_key = :crypto.strong_rand_bytes(32) |> Base.encode64()
     System.put_env("LEMON_SECRETS_MASTER_KEY", master_key)
     System.delete_env("OPENAI_API_KEY")
+    System.delete_env("OPENCODE_API_KEY")
 
     on_exit(fn ->
       clear_secrets_table()
       System.delete_env("LEMON_SECRETS_MASTER_KEY")
       System.delete_env("OPENAI_API_KEY")
+      System.delete_env("OPENCODE_API_KEY")
     end)
 
     :ok
@@ -49,6 +51,22 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     assert :ok = Session.prompt(session, "hello")
 
     assert_receive {:stream_api_key, "from-plain"}, 1_000
+    GenServer.stop(session)
+  end
+
+  test "opencode env key overrides plain and secret-backed provider keys" do
+    assert {:ok, _} = Secrets.set("llm_opencode_api_key", "from-secret")
+    System.put_env("OPENCODE_API_KEY", "from-env")
+
+    settings =
+      settings(%{
+        "opencode" => %{api_key: "from-plain", api_key_secret: "llm_opencode_api_key"}
+      })
+
+    session = start_session(self(), settings, mock_model(:opencode))
+    assert :ok = Session.prompt(session, "hello")
+
+    assert_receive {:stream_api_key, "from-env"}, 1_000
     GenServer.stop(session)
   end
 
@@ -90,11 +108,11 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     }
   end
 
-  defp start_session(test_pid, settings_manager) do
+  defp start_session(test_pid, settings_manager, model \\ mock_model()) do
     {:ok, session} =
       Session.start_link(
         cwd: System.tmp_dir!(),
-        model: mock_model(),
+        model: model,
         settings_manager: settings_manager,
         stream_fn: stream_fn(test_pid)
       )
@@ -122,12 +140,12 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     stream
   end
 
-  defp mock_model do
+  defp mock_model(provider \\ :openai) do
     %Model{
-      id: "mock-openai-model",
-      name: "Mock OpenAI",
+      id: "mock-#{provider}-model",
+      name: "Mock #{provider}",
       api: :mock,
-      provider: :openai,
+      provider: provider,
       base_url: "https://api.mock.test",
       reasoning: false,
       input: [:text],

@@ -327,4 +327,49 @@ defmodule Ai.Providers.OpenAIResponsesTest do
 
     refute_received {:request_called, _}
   end
+
+  test "uses OPENCODE_API_KEY for opencode provider when api_key option is missing" do
+    test_pid = self()
+    prev_opencode = System.get_env("OPENCODE_API_KEY")
+    prev_openai = System.get_env("OPENAI_API_KEY")
+
+    on_exit(fn ->
+      if is_binary(prev_opencode) do
+        System.put_env("OPENCODE_API_KEY", prev_opencode)
+      else
+        System.delete_env("OPENCODE_API_KEY")
+      end
+
+      if is_binary(prev_openai) do
+        System.put_env("OPENAI_API_KEY", prev_openai)
+      else
+        System.delete_env("OPENAI_API_KEY")
+      end
+    end)
+
+    System.put_env("OPENCODE_API_KEY", "opencode-env-key")
+    System.put_env("OPENAI_API_KEY", "openai-env-key")
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      send(test_pid, {:request_headers, conn.req_headers})
+      Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+    end)
+
+    model = %Model{
+      id: "gpt-5",
+      name: "GPT-5",
+      api: :openai_responses,
+      provider: :opencode,
+      base_url: "https://opencode.ai/zen/v1",
+      reasoning: true
+    }
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+    {:ok, stream} = OpenAIResponses.stream(model, context, %StreamOptions{})
+
+    assert_receive {:request_headers, headers}, 1000
+    assert Map.new(headers)["authorization"] == "Bearer opencode-env-key"
+    assert {:ok, _} = EventStream.result(stream, 1000)
+  end
 end

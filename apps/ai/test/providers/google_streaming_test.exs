@@ -64,6 +64,50 @@ defmodule Ai.Providers.GoogleStreamingTest do
     assert result.stop_reason == :stop
   end
 
+  test "uses OPENCODE_API_KEY for opencode provider when api_key option is missing" do
+    test_pid = self()
+    prev_opencode = System.get_env("OPENCODE_API_KEY")
+    prev_google = System.get_env("GOOGLE_GENERATIVE_AI_API_KEY")
+
+    on_exit(fn ->
+      if is_binary(prev_opencode) do
+        System.put_env("OPENCODE_API_KEY", prev_opencode)
+      else
+        System.delete_env("OPENCODE_API_KEY")
+      end
+
+      if is_binary(prev_google) do
+        System.put_env("GOOGLE_GENERATIVE_AI_API_KEY", prev_google)
+      else
+        System.delete_env("GOOGLE_GENERATIVE_AI_API_KEY")
+      end
+    end)
+
+    System.put_env("OPENCODE_API_KEY", "opencode-env-key")
+    System.put_env("GOOGLE_GENERATIVE_AI_API_KEY", "google-env-key")
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      send(test_pid, {:request_headers, conn.req_headers})
+      Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+    end)
+
+    model = %Model{
+      id: "gemini-3-pro",
+      name: "Gemini 3 Pro",
+      api: :google_generative_ai,
+      provider: :opencode,
+      base_url: "https://opencode.ai/zen/v1"
+    }
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+    {:ok, stream} = Google.stream(model, context, %StreamOptions{})
+
+    assert_receive {:request_headers, headers}, 1000
+    assert {"x-goog-api-key", "opencode-env-key"} in headers
+    assert {:ok, _} = EventStream.result(stream, 1000)
+  end
+
   test "request body snapshot includes tools, system, and thinking config" do
     test_pid = self()
 

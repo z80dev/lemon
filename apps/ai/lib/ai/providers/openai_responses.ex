@@ -84,10 +84,10 @@ defmodule Ai.Providers.OpenAIResponses do
         trace_id = HttpTrace.new_trace_id("openai-responses")
 
         try do
-          api_key = opts.api_key || get_env_api_key()
+          api_key = get_api_key(model, opts)
 
           if !api_key || api_key == "" do
-            raise "OpenAI API key is required. Set OPENAI_API_KEY environment variable or pass it as an argument."
+            raise missing_api_key_error(model.provider)
           end
 
           # Build request
@@ -162,6 +162,45 @@ defmodule Ai.Providers.OpenAIResponses do
 
     {:ok, stream}
   end
+
+  defp get_api_key(model, opts) do
+    cond do
+      is_binary(opts.api_key) and opts.api_key != "" ->
+        opts.api_key
+
+      api_key = get_provider_env_key(model.provider) ->
+        api_key
+
+      api_key = get_env_api_key() ->
+        api_key
+
+      true ->
+        nil
+    end
+  end
+
+  defp get_provider_env_key(provider) do
+    env_var =
+      case provider do
+        :opencode -> "OPENCODE_API_KEY"
+        "opencode" -> "OPENCODE_API_KEY"
+        _ -> nil
+      end
+
+    if env_var, do: System.get_env(env_var), else: nil
+  end
+
+  defp missing_api_key_error(:opencode),
+    do:
+      "OpenCode API key is required. Set OPENCODE_API_KEY environment variable or pass it as an argument."
+
+  defp missing_api_key_error("opencode"),
+    do:
+      "OpenCode API key is required. Set OPENCODE_API_KEY environment variable or pass it as an argument."
+
+  defp missing_api_key_error(_),
+    do:
+      "OpenAI API key is required. Set OPENAI_API_KEY environment variable or pass it as an argument."
 
   # ============================================================================
   # Request Building

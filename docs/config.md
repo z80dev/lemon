@@ -16,6 +16,10 @@ api_key = "sk-ant-..."
 [providers.openai]
 api_key = "sk-..."
 
+[providers.opencode]
+api_key = "opencode-..."
+base_url = "https://opencode.ai/zen/v1"
+
 [agent]
 default_provider = "anthropic"
 default_model = "claude-sonnet-4-20250514"
@@ -123,7 +127,7 @@ Environment variables override file values. Common overrides:
 
 - `LEMON_DEFAULT_PROVIDER`, `LEMON_DEFAULT_MODEL`
 - `LEMON_THEME`, `LEMON_DEBUG`
-- `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`)
+- `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENCODE_API_KEY`)
 - `LEMON_CODEX_EXTRA_ARGS`, `LEMON_CODEX_AUTO_APPROVE`
 - `LEMON_CLAUDE_YOLO`
 - `LEMON_WASM_ENABLED`, `LEMON_WASM_RUNTIME_PATH`, `LEMON_WASM_TOOL_PATHS`, `LEMON_WASM_AUTO_BUILD`

@@ -220,6 +220,14 @@ defmodule CodingAgent.SessionTest do
       assert state.model.id == "gpt-5.3-codex"
     end
 
+    test "accepts hyphenated provider aliases for underscored providers" do
+      session = start_session(model: "google-vertex:gemini-2.5-pro")
+      state = Session.get_state(session)
+
+      assert state.model.provider == :google_vertex
+      assert state.model.id == "gemini-2.5-pro"
+    end
+
     test "accepts bare model_id string specs" do
       session = start_session(model: "gpt-5.3-codex")
       state = Session.get_state(session)

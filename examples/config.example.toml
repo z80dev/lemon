@@ -4,6 +4,10 @@ api_key = "sk-ant-your-api-key-here"
 [providers.openai]
 api_key = "sk-your-openai-key-here"
 
+[providers.opencode]
+api_key = "opencode-your-api-key-here"
+base_url = "https://opencode.ai/zen/v1"
+
 [providers.kimi]
 api_key = "sk-kimi-your-kimi-key-here"
 base_url = "https://api.kimi.com/coding/"

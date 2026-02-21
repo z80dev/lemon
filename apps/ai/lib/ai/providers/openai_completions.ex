@@ -172,11 +172,13 @@ defmodule Ai.Providers.OpenAICompletions do
         :xai -> "XAI_API_KEY"
         :cerebras -> "CEREBRAS_API_KEY"
         :openrouter -> "OPENROUTER_API_KEY"
+        :opencode -> "OPENCODE_API_KEY"
         "groq" -> "GROQ_API_KEY"
         "mistral" -> "MISTRAL_API_KEY"
         "xai" -> "XAI_API_KEY"
         "cerebras" -> "CEREBRAS_API_KEY"
         "openrouter" -> "OPENROUTER_API_KEY"
+        "opencode" -> "OPENCODE_API_KEY"
         _ -> nil
       end
 
@@ -263,7 +265,11 @@ defmodule Ai.Providers.OpenAICompletions do
   defp build_params(model, context, opts) do
     compat = get_compat(model)
 
-    %{"model" => model.id, "messages" => convert_messages(model, context, compat), "stream" => true}
+    %{
+      "model" => model.id,
+      "messages" => convert_messages(model, context, compat),
+      "stream" => true
+    }
     |> maybe_add_stream_options(compat)
     |> maybe_add_store(compat)
     |> maybe_add_max_tokens(opts, compat)
@@ -285,16 +291,20 @@ defmodule Ai.Providers.OpenAICompletions do
 
   defp maybe_add_store(params, _compat), do: params
 
-  defp maybe_add_max_tokens(params, %{max_tokens: max_tokens}, _compat) when is_nil(max_tokens) or max_tokens <= 0, do: params
+  defp maybe_add_max_tokens(params, %{max_tokens: max_tokens}, _compat)
+       when is_nil(max_tokens) or max_tokens <= 0, do: params
 
   defp maybe_add_max_tokens(params, %{max_tokens: max_tokens}, %{max_tokens_field: field}) do
     Map.put(params, field, max_tokens)
   end
 
   defp maybe_add_temperature(params, %{temperature: nil}), do: params
-  defp maybe_add_temperature(params, %{temperature: temp}), do: Map.put(params, "temperature", temp)
 
-  defp maybe_add_tools(params, %{tools: tools}, _compat) when is_list(tools) and length(tools) > 0 do
+  defp maybe_add_temperature(params, %{temperature: temp}),
+    do: Map.put(params, "temperature", temp)
+
+  defp maybe_add_tools(params, %{tools: tools}, _compat)
+       when is_list(tools) and length(tools) > 0 do
     Map.put(params, "tools", convert_tools(tools))
   end
 
@@ -317,7 +327,9 @@ defmodule Ai.Providers.OpenAICompletions do
     end
   end
 
-  defp maybe_add_reasoning(params, model, %{reasoning: reasoning}, %{supports_reasoning_effort: true}) do
+  defp maybe_add_reasoning(params, model, %{reasoning: reasoning}, %{
+         supports_reasoning_effort: true
+       }) do
     if model.reasoning do
       Map.put(params, "reasoning_effort", to_string(reasoning))
     else
@@ -468,7 +480,9 @@ defmodule Ai.Providers.OpenAICompletions do
     tool_results ++ [user_msg]
   end
 
-  defp maybe_add_synthetic_assistant_message(messages, %{requires_assistant_after_tool_result: true}) do
+  defp maybe_add_synthetic_assistant_message(messages, %{
+         requires_assistant_after_tool_result: true
+       }) do
     messages ++ [%{"role" => "assistant", "content" => "I have processed the tool results."}]
   end
 
@@ -477,7 +491,8 @@ defmodule Ai.Providers.OpenAICompletions do
   defp build_image_user_message(image_blocks) do
     %{
       "role" => "user",
-      "content" => [%{"type" => "text", "text" => "Attached image(s) from tool result:"}] ++ image_blocks
+      "content" =>
+        [%{"type" => "text", "text" => "Attached image(s) from tool result:"}] ++ image_blocks
     }
   end
 
@@ -502,7 +517,8 @@ defmodule Ai.Providers.OpenAICompletions do
     end
   end
 
-  defp add_text_content(assistant_msg, text_blocks, provider) when provider in [:github_copilot, "github-copilot"] do
+  defp add_text_content(assistant_msg, text_blocks, provider)
+       when provider in [:github_copilot, "github-copilot"] do
     text = text_blocks |> Enum.map(& &1.text) |> Enum.join("") |> sanitize_surrogates()
     Map.put(assistant_msg, "content", text)
   end
@@ -616,7 +632,7 @@ defmodule Ai.Providers.OpenAICompletions do
   end
 
   defp has_content?(nil), do: false
-  defp has_content?("") , do: false
+  defp has_content?(""), do: false
   defp has_content?(text) when is_binary(text), do: String.length(text) > 0
   defp has_content?(parts) when is_list(parts), do: length(parts) > 0
 

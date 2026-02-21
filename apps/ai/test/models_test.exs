@@ -94,7 +94,10 @@ defmodule Ai.ModelsTest do
 
       assert is_list(models)
       assert length(models) > 0
-      assert Enum.all?(models, fn %Model{provider: provider} -> provider in [:google, :google_antigravity] end)
+
+      assert Enum.all?(models, fn %Model{provider: provider} ->
+               provider in [:google, :google_antigravity]
+             end)
     end
 
     test "returns empty list for unknown provider" do
@@ -519,6 +522,11 @@ defmodule Ai.ModelsTest do
     end
 
     test "opencode models" do
+      assert Models.get_model(:opencode, "big-pickle") != nil
+      assert Models.get_model(:opencode, "claude-sonnet-4-6") != nil
+      assert Models.get_model(:opencode, "gemini-3-pro") != nil
+      assert Models.get_model(:opencode, "gpt-5.2-codex") != nil
+      assert Models.get_model(:opencode, "minimax-m2.5") != nil
       assert Models.get_model(:opencode, "trinity-large-preview-free") != nil
       assert Models.get_model(:opencode, "kimi-k2") != nil
       assert Models.get_model(:opencode, "kimi-k2-thinking") != nil
@@ -835,6 +843,26 @@ defmodule Ai.ModelsTest do
     end
   end
 
+  describe "opencode zen mixed api models" do
+    test "anthropic-compatible opencode models use anthropic_messages api" do
+      model = Models.get_model(:opencode, "claude-sonnet-4-6")
+      assert model.api == :anthropic_messages
+      assert model.base_url == "https://opencode.ai/zen"
+    end
+
+    test "google-compatible opencode models use google_generative_ai api" do
+      model = Models.get_model(:opencode, "gemini-3-pro")
+      assert model.api == :google_generative_ai
+      assert model.base_url == "https://opencode.ai/zen/v1"
+    end
+
+    test "openai responses opencode models use openai_responses api" do
+      model = Models.get_model(:opencode, "gpt-5.2-codex")
+      assert model.api == :openai_responses
+      assert model.base_url == "https://opencode.ai/zen/v1"
+    end
+  end
+
   describe "amazon bedrock nova models" do
     test "returns amazon bedrock model by id" do
       model = Models.get_model(:amazon_bedrock, "amazon.nova-pro-v1:0")
@@ -855,8 +883,8 @@ defmodule Ai.ModelsTest do
       models = Models.get_models(:amazon_bedrock)
 
       assert is_list(models)
-      # Currently 40 Bedrock models (5 Nova + 35 third-party models)
-      assert length(models) == 40
+      # Synced from Pi catalog: currently 83 Bedrock models
+      assert length(models) == 83
       assert Enum.all?(models, &match?(%Model{provider: :amazon_bedrock}, &1))
     end
 

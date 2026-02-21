@@ -87,7 +87,7 @@ defmodule Ai.Providers.Google do
     output = init_output(model)
 
     try do
-      api_key = opts.api_key || get_env_api_key() || ""
+      api_key = resolve_api_key(model, opts)
       base_url = build_base_url(model)
       url = "#{base_url}/models/#{model.id}:streamGenerateContent?alt=sse"
 
@@ -106,6 +106,26 @@ defmodule Ai.Providers.Google do
         handle_error(stream, output, Exception.message(e), opts)
     end
   end
+
+  defp resolve_api_key(model, opts) do
+    cond do
+      is_binary(opts.api_key) and opts.api_key != "" ->
+        opts.api_key
+
+      api_key = get_provider_env_key(model.provider) ->
+        api_key
+
+      api_key = get_env_api_key() ->
+        api_key
+
+      true ->
+        ""
+    end
+  end
+
+  defp get_provider_env_key(:opencode), do: System.get_env("OPENCODE_API_KEY")
+  defp get_provider_env_key("opencode"), do: System.get_env("OPENCODE_API_KEY")
+  defp get_provider_env_key(_), do: nil
 
   defp init_output(model) do
     %AssistantMessage{

@@ -1018,6 +1018,10 @@ defmodule LemonCore.Config do
         api_key: env_first(["OPENAI_CODEX_API_KEY", "CHATGPT_TOKEN"]),
         base_url: env_first(["OPENAI_BASE_URL"])
       )
+      |> put_provider_env_override("opencode",
+        api_key: env_first(["OPENCODE_API_KEY"]),
+        base_url: env_first(["OPENCODE_BASE_URL"])
+      )
       |> put_provider_env_override("kimi",
         api_key: env_first(["KIMI_API_KEY"]),
         base_url: env_first(["KIMI_BASE_URL"])

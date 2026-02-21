@@ -72,6 +72,28 @@ defmodule LemonCore.ConfigTest do
     System.delete_env("OPENAI_API_KEY")
   end
 
+  test "env overrides opencode provider key and base_url", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [providers.opencode]
+    api_key = "file-opencode-key"
+    base_url = "https://config.opencode.local/v1"
+    """)
+
+    System.put_env("OPENCODE_API_KEY", "env-opencode-key")
+    System.put_env("OPENCODE_BASE_URL", "https://opencode.ai/zen/v1")
+
+    config = Config.load()
+
+    assert config.providers["opencode"].api_key == "env-opencode-key"
+    assert config.providers["opencode"].base_url == "https://opencode.ai/zen/v1"
+  after
+    System.delete_env("OPENCODE_API_KEY")
+    System.delete_env("OPENCODE_BASE_URL")
+  end
+
   test "env overrides TUI settings", %{home: home} do
     global_dir = Path.join(home, ".lemon")
     File.mkdir_p!(global_dir)

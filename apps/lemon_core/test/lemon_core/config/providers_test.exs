@@ -17,7 +17,9 @@ defmodule LemonCore.Config.ProvidersTest do
         "ANTHROPIC_BASE_URL",
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
-        "OPENAI_CODEX_API_KEY"
+        "OPENAI_CODEX_API_KEY",
+        "OPENCODE_API_KEY",
+        "OPENCODE_BASE_URL"
       ]
       |> Enum.each(&System.delete_env/1)
 
@@ -128,6 +130,25 @@ defmodule LemonCore.Config.ProvidersTest do
       assert config.providers["openai-codex"][:api_key] == "sk-codex-env"
     end
 
+    test "opencode uses OPENCODE_API_KEY env var" do
+      System.put_env("OPENCODE_API_KEY", "sk-opencode-env")
+      System.put_env("OPENCODE_BASE_URL", "https://opencode.ai/zen/v1")
+
+      settings = %{
+        "providers" => %{
+          "opencode" => %{
+            "api_key" => "sk-opencode-config",
+            "base_url" => "https://config.opencode.local/v1"
+          }
+        }
+      }
+
+      config = Providers.resolve(settings)
+
+      assert config.providers["opencode"][:api_key] == "sk-opencode-env"
+      assert config.providers["opencode"][:base_url] == "https://opencode.ai/zen/v1"
+    end
+
     test "openai and openai-codex share OPENAI_BASE_URL" do
       System.put_env("OPENAI_BASE_URL", "https://custom.openai.com")
 
@@ -177,9 +198,10 @@ defmodule LemonCore.Config.ProvidersTest do
 
   describe "get_provider/2" do
     test "returns provider config when exists" do
-      config = Providers.resolve(%{
-        "providers" => %{"anthropic" => %{"api_key" => "sk-test"}}
-      })
+      config =
+        Providers.resolve(%{
+          "providers" => %{"anthropic" => %{"api_key" => "sk-test"}}
+        })
 
       provider = Providers.get_provider(config, "anthropic")
 
@@ -197,9 +219,10 @@ defmodule LemonCore.Config.ProvidersTest do
 
   describe "get_api_key/2" do
     test "returns api_key when present" do
-      config = Providers.resolve(%{
-        "providers" => %{"anthropic" => %{"api_key" => "sk-test"}}
-      })
+      config =
+        Providers.resolve(%{
+          "providers" => %{"anthropic" => %{"api_key" => "sk-test"}}
+        })
 
       assert Providers.get_api_key(config, "anthropic") == "sk-test"
     end
@@ -211,9 +234,10 @@ defmodule LemonCore.Config.ProvidersTest do
     end
 
     test "returns nil when api_key not present" do
-      config = Providers.resolve(%{
-        "providers" => %{"openai" => %{"api_key_secret" => "secret_name"}}
-      })
+      config =
+        Providers.resolve(%{
+          "providers" => %{"openai" => %{"api_key_secret" => "secret_name"}}
+        })
 
       # api_key_secret is not resolved here (would need Secrets module)
       assert Providers.get_api_key(config, "openai") == nil
@@ -222,13 +246,14 @@ defmodule LemonCore.Config.ProvidersTest do
 
   describe "list_providers/1" do
     test "returns list of provider names" do
-      config = Providers.resolve(%{
-        "providers" => %{
-          "anthropic" => %{},
-          "openai" => %{},
-          "ollama" => %{}
-        }
-      })
+      config =
+        Providers.resolve(%{
+          "providers" => %{
+            "anthropic" => %{},
+            "openai" => %{},
+            "ollama" => %{}
+          }
+        })
 
       providers = Providers.list_providers(config)
 

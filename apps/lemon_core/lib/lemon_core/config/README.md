@@ -73,7 +73,7 @@ tools_config = LemonCore.Config.Tools.resolve(settings)
 Each module documents its environment variables. Common patterns:
 
 - `LEMON_*` - General lemon settings
-- `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` - Provider-specific API keys
+- `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENCODE_API_KEY` - Provider-specific API keys
 - `LEMON_GATEWAY_*` - Gateway settings
 - `LEMON_LOG_*` - Logging settings
 
@@ -212,6 +212,7 @@ Environment variables:
 - `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`
 - `OPENAI_API_KEY`, `OPENAI_BASE_URL`
 - `OPENAI_CODEX_API_KEY`
+- `OPENCODE_API_KEY`, `OPENCODE_BASE_URL`
 
 Helper functions:
 - `get_provider/2` - Get provider config

@@ -22,6 +22,7 @@ defmodule LemonCore.Config.Providers do
   - `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`
   - `OPENAI_API_KEY`, `OPENAI_BASE_URL`
   - `OPENAI_CODEX_API_KEY`
+  - `OPENCODE_API_KEY`, `OPENCODE_BASE_URL`
 
   The `api_key_secret` field allows referencing secrets from the secret store
   instead of hardcoding API keys in config files.
@@ -47,7 +48,8 @@ defmodule LemonCore.Config.Providers do
   @provider_env_mappings %{
     "anthropic" => %{api_key: "ANTHROPIC_API_KEY", base_url: "ANTHROPIC_BASE_URL"},
     "openai" => %{api_key: "OPENAI_API_KEY", base_url: "OPENAI_BASE_URL"},
-    "openai-codex" => %{api_key: "OPENAI_CODEX_API_KEY", base_url: "OPENAI_BASE_URL"}
+    "openai-codex" => %{api_key: "OPENAI_CODEX_API_KEY", base_url: "OPENAI_BASE_URL"},
+    "opencode" => %{api_key: "OPENCODE_API_KEY", base_url: "OPENCODE_BASE_URL"}
   }
 
   @doc """
