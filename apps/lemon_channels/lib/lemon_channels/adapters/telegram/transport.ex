@@ -23,6 +23,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   @default_poll_interval 1_000
   @default_dedupe_ttl 600_000
   @default_debounce_ms 1_000
+  @webhook_clear_retry_ms 5 * 60 * 1000
   @pending_compaction_ttl_ms 12 * 60 * 60 * 1000
   @cancel_callback_prefix "lemon:cancel"
 
@@ -119,7 +120,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             bot_username: bot_username,
             files: config[:files] || config["files"] || %{},
             last_poll_error: nil,
-            last_poll_error_log_ts: nil
+            last_poll_error_log_ts: nil,
+            last_webhook_clear_ts: nil
           }
 
           maybe_subscribe_exec_approvals()
@@ -313,6 +315,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp maybe_log_poll_error(state, reason) do
+    state = maybe_attempt_webhook_clear(state, reason)
+
     now = System.monotonic_time(:millisecond)
     last_ts = state.last_poll_error_log_ts
     last_reason = state.last_poll_error
@@ -354,6 +358,42 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   rescue
     _ -> state
   end
+
+  defp maybe_attempt_webhook_clear(state, {:http_error, 409, _body}) do
+    now = System.monotonic_time(:millisecond)
+    last_attempt = state[:last_webhook_clear_ts]
+
+    should_attempt? =
+      is_nil(last_attempt) or
+        (is_integer(last_attempt) and now - last_attempt >= @webhook_clear_retry_ms)
+
+    if should_attempt? do
+      result =
+        try do
+          state.api_mod.delete_webhook(state.token, drop_pending_updates: false)
+        rescue
+          e -> {:error, e}
+        end
+
+      case result do
+        {:ok, %{"ok" => true}} ->
+          Logger.warning(
+            "Telegram auto-recovery: deleteWebhook succeeded after getUpdates 409 conflict"
+          )
+
+        other ->
+          Logger.warning(
+            "Telegram auto-recovery: deleteWebhook failed after getUpdates 409 conflict: #{inspect(other)}"
+          )
+      end
+
+      %{state | last_webhook_clear_ts: now}
+    else
+      state
+    end
+  end
+
+  defp maybe_attempt_webhook_clear(state, _reason), do: state
 
   defp safe_get_updates(state) do
     try do

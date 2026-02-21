@@ -25,6 +25,19 @@ defmodule LemonChannels.Telegram.API do
     request(token, "getMe", %{}, @default_timeout)
   end
 
+  def delete_webhook(token, opts \\ %{}) do
+    opts = if is_map(opts), do: opts, else: Enum.into(opts, %{})
+
+    params =
+      %{}
+      |> maybe_put(
+        "drop_pending_updates",
+        opts[:drop_pending_updates] || opts["drop_pending_updates"]
+      )
+
+    request(token, "deleteWebhook", params, @default_timeout)
+  end
+
   def get_chat_member(token, chat_id, user_id) do
     params = %{
       "chat_id" => chat_id,
