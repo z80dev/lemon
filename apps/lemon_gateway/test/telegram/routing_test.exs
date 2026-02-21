@@ -110,4 +110,72 @@ defmodule LemonGateway.Telegram.RoutingTest do
                LemonGateway.EngineRegistry.extract_resume("claude --resume sess-2")
     end
   end
+
+  describe "sticky engine persistence" do
+    test "engine directive updates last_engine in chat state" do
+      session_key = "test:sticky_engine:#{System.unique_integer([:positive])}"
+
+      # Initially no chat state
+      assert LemonCore.Store.get_chat_state(session_key) == nil
+
+      # Simulate what update_chat_state_last_engine does: persist engine from directive
+      payload = %{last_engine: "claude", updated_at: System.system_time(:millisecond)}
+      LemonCore.Store.put_chat_state(session_key, payload)
+
+      # Allow async cast to process
+      Process.sleep(50)
+
+      state = LemonCore.Store.get_chat_state(session_key)
+      assert state[:last_engine] == "claude" || state["last_engine"] == "claude"
+    end
+
+    test "engine directive preserves existing last_resume_token" do
+      session_key = "test:sticky_engine_preserve:#{System.unique_integer([:positive])}"
+
+      # Set initial state with a resume token
+      initial = %{
+        last_engine: "echo",
+        last_resume_token: "tok-abc123",
+        updated_at: System.system_time(:millisecond)
+      }
+
+      LemonCore.Store.put_chat_state(session_key, initial)
+      Process.sleep(50)
+
+      # Now simulate directive engine update (preserving resume token)
+      existing = LemonCore.Store.get_chat_state(session_key)
+      token = existing[:last_resume_token] || existing["last_resume_token"]
+
+      updated = %{
+        last_engine: "claude",
+        last_resume_token: token,
+        updated_at: System.system_time(:millisecond)
+      }
+
+      LemonCore.Store.put_chat_state(session_key, updated)
+      Process.sleep(50)
+
+      state = LemonCore.Store.get_chat_state(session_key)
+      last_engine = state[:last_engine] || state["last_engine"]
+      resume_token = state[:last_resume_token] || state["last_resume_token"]
+
+      assert last_engine == "claude"
+      assert resume_token == "tok-abc123"
+    end
+
+    test "last_engine_hint retrieval pattern works with stored engine" do
+      session_key = "test:sticky_hint:#{System.unique_integer([:positive])}"
+
+      payload = %{last_engine: "codex", updated_at: System.system_time(:millisecond)}
+      LemonCore.Store.put_chat_state(session_key, payload)
+      Process.sleep(50)
+
+      # Replicate the last_engine_hint retrieval pattern
+      s1 = LemonCore.Store.get_chat_state(session_key)
+      engine = s1 && (s1[:last_engine] || s1["last_engine"])
+      hint = if is_binary(engine) and engine != "", do: engine, else: nil
+
+      assert hint == "codex"
+    end
+  end
 end

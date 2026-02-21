@@ -711,6 +711,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         "forked=#{inspect(forked?)} progress_msg_id=#{inspect(progress_msg_id)}"
     )
 
+    # Persist engine preference immediately when an explicit directive was used,
+    # so subsequent messages pick it up via last_engine_hint/1.
+    directive_engine = meta0[:directive_engine]
+
+    if is_binary(directive_engine) and directive_engine != "" and is_binary(session_key) do
+      update_chat_state_last_engine(session_key, directive_engine)
+    end
+
     meta =
       meta0
       |> Map.put(:session_key, session_key)
@@ -2355,6 +2363,28 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     _ -> nil
   end
 
+  # Update only last_engine in chat state, preserving last_resume_token and other fields.
+  defp update_chat_state_last_engine(session_key, engine) when is_binary(session_key) do
+    now = System.system_time(:millisecond)
+    existing = safe_get_chat_state(session_key)
+
+    payload =
+      case existing do
+        %{last_resume_token: token} ->
+          %{last_engine: engine, last_resume_token: token, updated_at: now}
+
+        %{"last_resume_token" => token} ->
+          %{last_engine: engine, last_resume_token: token, updated_at: now}
+
+        _ ->
+          %{last_engine: engine, updated_at: now}
+      end
+
+    CoreStore.put_chat_state(session_key, payload)
+  rescue
+    _ -> :ok
+  end
+
   defp set_chat_resume(%ChatScope{} = scope, session_key, %ResumeToken{} = resume)
        when is_binary(session_key) do
     now = System.system_time(:millisecond)
@@ -3482,6 +3512,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       |> Map.put(:agent_id, agent_id || (inbound.meta && inbound.meta[:agent_id]) || "default")
       |> Map.put(:queue_mode, queue_mode)
       |> Map.put(:engine_id, engine_id)
+      |> Map.put(:directive_engine, directive_engine)
       |> Map.put(:topic_id, topic_id)
       |> maybe_put(:cwd, cwd)
 
