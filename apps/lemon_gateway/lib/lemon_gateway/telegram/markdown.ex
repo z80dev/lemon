@@ -1,5 +1,11 @@
 defmodule LemonGateway.Telegram.Markdown do
-  @moduledoc false
+  @moduledoc """
+  Converts CommonMark markdown into Telegram-ready `{text, entities}` tuples.
+
+  Parses markdown via EarmarkParser, emits plain text, and produces Telegram
+  message entities with correct UTF-16 offsets and lengths. Avoids MarkdownV2
+  escaping entirely by relying on the entities API.
+  """
 
   # Renders CommonMark-ish markdown into Telegram-ready {text, entities}.
   #

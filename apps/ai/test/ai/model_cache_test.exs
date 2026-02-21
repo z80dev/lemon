@@ -4,7 +4,10 @@ defmodule Ai.ModelCacheTest do
   alias Ai.ModelCache
 
   setup do
-    start_supervised!(ModelCache)
+    if Process.whereis(ModelCache) == nil do
+      start_supervised!(ModelCache)
+    end
+
     ModelCache.invalidate_all()
     :ok
   end

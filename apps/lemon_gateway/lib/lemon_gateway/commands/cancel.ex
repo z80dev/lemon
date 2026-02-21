@@ -1,5 +1,10 @@
 defmodule LemonGateway.Commands.Cancel do
-  @moduledoc false
+  @moduledoc """
+  Implements the `/cancel` slash command.
+
+  Cancels a running job by replying to its progress message. The user must reply
+  to the active progress message for the cancellation to target the correct job.
+  """
   use LemonGateway.Command
 
   @impl true

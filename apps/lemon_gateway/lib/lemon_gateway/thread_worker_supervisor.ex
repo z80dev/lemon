@@ -1,5 +1,9 @@
 defmodule LemonGateway.ThreadWorkerSupervisor do
-  @moduledoc false
+  @moduledoc """
+  DynamicSupervisor that manages `LemonGateway.ThreadWorker` processes.
+
+  Provides dynamic child management for thread workers using a one-for-one strategy.
+  """
   use DynamicSupervisor
 
   def start_link(_opts) do

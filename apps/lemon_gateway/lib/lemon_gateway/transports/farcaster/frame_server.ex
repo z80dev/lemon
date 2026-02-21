@@ -1,5 +1,9 @@
 defmodule LemonGateway.Transports.Farcaster.FrameServer do
-  @moduledoc false
+  @moduledoc """
+  HTTP server (Plug/Bandit) that serves Farcaster Frame endpoints. Handles
+  GET requests for the initial frame HTML and POST requests for frame actions,
+  delegating action processing to `CastHandler`.
+  """
 
   use Plug.Router
 

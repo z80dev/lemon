@@ -1,5 +1,10 @@
 defmodule LemonGateway.Binding do
-  @moduledoc false
+  @moduledoc """
+  Struct representing a binding between a transport chat/topic and a project configuration.
+
+  Maps a transport, chat, and optional topic to a project, agent, default engine,
+  and queue mode used by `LemonGateway.BindingResolver` for scope resolution.
+  """
   defstruct [:transport, :chat_id, :topic_id, :project, :agent_id, :default_engine, :queue_mode]
 
   @type t :: %__MODULE__{

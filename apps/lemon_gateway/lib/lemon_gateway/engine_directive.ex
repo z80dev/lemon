@@ -1,5 +1,11 @@
 defmodule LemonGateway.EngineDirective do
-  @moduledoc false
+  @moduledoc """
+  Parses and strips leading engine directives from user input text.
+
+  An engine directive is a slash prefix such as `/claude` or `/codex` that selects
+  which engine should handle the request. The directive is stripped and the
+  engine name and remaining text are returned separately.
+  """
 
   @doc """
   Strip a leading engine directive from text.

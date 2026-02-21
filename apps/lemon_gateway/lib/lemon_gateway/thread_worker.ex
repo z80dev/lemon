@@ -1,5 +1,19 @@
 defmodule LemonGateway.ThreadWorker do
-  @moduledoc false
+  @moduledoc """
+  Per-session job queue worker.
+
+  Each `ThreadWorker` manages a queue of jobs for a single session key.
+  It supports multiple queue modes:
+
+  - `:collect` - appends to queue, coalesces consecutive collect jobs
+  - `:followup` - appends with debounce merging of rapid-fire messages
+  - `:steer` - attempts to inject text into an active run via engine steering
+  - `:steer_backlog` - like steer, but falls back to collect on rejection
+  - `:interrupt` - cancels the current run and inserts at front of queue
+
+  Workers are started on-demand by the `Scheduler` and terminate when their
+  queue is empty and no run is active.
+  """
   use GenServer
 
   require Logger

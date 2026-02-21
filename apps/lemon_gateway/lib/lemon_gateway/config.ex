@@ -33,9 +33,11 @@ defmodule LemonGateway.Config do
     GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
   end
 
+  @doc "Returns the full configuration map."
   @spec get() :: map()
   def get, do: GenServer.call(__MODULE__, :get)
 
+  @doc "Returns the value for a specific configuration key."
   @spec get(atom()) :: term()
   def get(key), do: GenServer.call(__MODULE__, {:get, key})
 

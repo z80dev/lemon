@@ -1,5 +1,10 @@
 defmodule LemonGateway.Engines.Opencode do
-  @moduledoc false
+  @moduledoc """
+  Engine adapter for the Opencode CLI tool.
+
+  Delegates to `LemonGateway.Engines.CliAdapter` to manage an
+  `AgentCore.CliRunners.OpencodeRunner` subprocess for each run.
+  """
   @behaviour LemonGateway.Engine
 
   alias LemonGateway.Engines.CliAdapter

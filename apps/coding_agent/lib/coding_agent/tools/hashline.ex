@@ -52,8 +52,11 @@ defmodule CodingAgent.Tools.Hashline do
   @typedoc "Insert operation - insert between two lines"
   @type insert_edit :: %{op: :insert, after: line_tag(), before: line_tag(), content: [String.t()]}
 
+  @typedoc "ReplaceText operation - substring-based search and replace"
+  @type replace_text_edit :: %{op: :replace_text, old_text: String.t(), new_text: String.t(), all: boolean()}
+
   @typedoc "Any hashline edit operation"
-  @type edit :: set_edit() | replace_edit() | append_edit() | prepend_edit() | insert_edit()
+  @type edit :: set_edit() | replace_edit() | append_edit() | prepend_edit() | insert_edit() | replace_text_edit()
 
   @typedoc "Result of applying edits"
   @type apply_result :: %{
@@ -376,6 +379,20 @@ defmodule CodingAgent.Tools.Hashline do
     end
   end
 
+  defp validate_edit(%{op: :replace_text, old_text: old_text}, file_lines) do
+    if old_text == "" do
+      raise ArgumentError, "replaceText edit requires non-empty old_text"
+    end
+
+    content = Enum.join(file_lines, "\n")
+
+    if not String.contains?(content, old_text) do
+      raise ArgumentError, "replaceText old_text not found in file content"
+    end
+
+    :ok
+  end
+
   defp validate_edit_ref(tag, file_lines) do
     if tag.line < 1 or tag.line > length(file_lines) do
       raise ArgumentError, "Line #{tag.line} does not exist (file has #{length(file_lines)} lines)"
@@ -424,6 +441,9 @@ defmodule CodingAgent.Tools.Hashline do
   defp edit_key(%{op: :insert, after: after_tag, before: before_tag}, _file_lines),
     do: "ix:#{after_tag.line}:#{before_tag.line}"
 
+  defp edit_key(%{op: :replace_text, old_text: old_text}, _file_lines), do: "rt:#{old_text}"
+
+  defp edit_content_key(%{op: :replace_text, old_text: old, new_text: new}), do: "#{old}->#{new}"
   defp edit_content_key(%{content: content}), do: Enum.join(content, "\n")
 
   @doc """
@@ -459,6 +479,7 @@ defmodule CodingAgent.Tools.Hashline do
   defp edit_sort_key(%{op: :prepend, before: nil}, _file_lines), do: {0, 2}
   defp edit_sort_key(%{op: :prepend, before: tag}, _file_lines), do: {tag.line, 2}
   defp edit_sort_key(%{op: :insert, before: before}, _file_lines), do: {before.line, 3}
+  defp edit_sort_key(%{op: :replace_text}, _file_lines), do: {0, 4}
 
   # Apply sorted edits to file lines
   defp apply_sorted_edits([], file_lines, _original_lines, first_changed, noop_edits),
@@ -607,6 +628,43 @@ defmodule CodingAgent.Tools.Hashline do
       new_lines = before ++ inserted ++ rest
       {new_lines, min_line(first_changed, before_tag.line), noop_edits}
     end
+  end
+
+  defp apply_single_edit(%{op: :replace_text, old_text: old_text, new_text: new_text, all: replace_all}, file_lines, _original_lines, first_changed, noop_edits) do
+    content = Enum.join(file_lines, "\n")
+
+    if not String.contains?(content, old_text) do
+      noop = %{
+        edit_index: 0,
+        loc: "replaceText",
+        current_content: "old_text not found in file"
+      }
+      {file_lines, first_changed, [noop | noop_edits]}
+    else
+      new_content = if replace_all do
+        String.replace(content, old_text, new_text)
+      else
+        String.replace(content, old_text, new_text, global: false)
+      end
+
+      new_lines = String.split(new_content, "\n")
+
+      # Find first changed line
+      changed_line = find_first_diff_line(file_lines, new_lines)
+
+      {new_lines, min_line(first_changed, changed_line), noop_edits}
+    end
+  end
+
+  defp apply_single_edit(%{op: :replace_text, old_text: _old_text, new_text: _new_text} = edit, file_lines, original_lines, first_changed, noop_edits) do
+    apply_single_edit(Map.put(edit, :all, false), file_lines, original_lines, first_changed, noop_edits)
+  end
+
+  defp find_first_diff_line(old_lines, new_lines) do
+    old_lines
+    |> Stream.zip(new_lines)
+    |> Stream.with_index(1)
+    |> Enum.find_value(1, fn {{old, new}, idx} -> if old != new, do: idx end)
   end
 
   defp lines_equal?(a, b) when length(a) != length(b), do: false

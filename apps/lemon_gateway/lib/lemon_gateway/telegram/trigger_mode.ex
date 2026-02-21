@@ -1,5 +1,11 @@
 defmodule LemonGateway.Telegram.TriggerMode do
-  @moduledoc false
+  @moduledoc """
+  Manages per-chat and per-topic trigger modes for Telegram bots.
+
+  Each chat or topic can be set to `:all` (respond to every message) or
+  `:mentions` (respond only when the bot is explicitly mentioned). Topic-level
+  settings take precedence over chat-level settings, which default to `:all`.
+  """
 
   alias LemonCore.Store
   alias LemonGateway.Types.ChatScope

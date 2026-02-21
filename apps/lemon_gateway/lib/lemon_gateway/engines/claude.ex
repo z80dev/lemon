@@ -1,5 +1,10 @@
 defmodule LemonGateway.Engines.Claude do
-  @moduledoc false
+  @moduledoc """
+  Engine adapter for the Claude Code CLI tool.
+
+  Delegates to `LemonGateway.Engines.CliAdapter` to manage a
+  `AgentCore.CliRunners.ClaudeRunner` subprocess for each run.
+  """
   @behaviour LemonGateway.Engine
 
   alias LemonGateway.Engines.CliAdapter

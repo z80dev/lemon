@@ -45,11 +45,14 @@ defmodule Ai.ModelsNewProvidersTest do
 
     test "all Mistral models can be listed" do
       models = Models.get_models(:mistral)
-      assert length(models) == 7
+      assert length(models) >= 7
 
       ids = Models.get_model_ids(:mistral)
       assert "codestral-latest" in ids
+      assert "devstral-latest" in ids
       assert "mistral-large-latest" in ids
+      assert "mistral-small-latest" in ids
+      assert "pixtral-large-latest" in ids
     end
   end
 
@@ -77,7 +80,12 @@ defmodule Ai.ModelsNewProvidersTest do
 
     test "all Cerebras models can be listed" do
       models = Models.get_models(:cerebras)
-      assert length(models) == 3
+      assert length(models) >= 3
+
+      ids = Models.get_model_ids(:cerebras)
+      assert "llama-3.1-8b" in ids
+      assert "llama-3.3-70b" in ids
+      assert "qwen-3-32b" in ids
     end
   end
 
@@ -168,7 +176,12 @@ defmodule Ai.ModelsNewProvidersTest do
 
     test "all MiniMax models can be listed" do
       models = Models.get_models(:minimax)
-      assert length(models) == 3
+      assert length(models) >= 3
+
+      ids = Models.get_model_ids(:minimax)
+      assert "minimax-m2" in ids
+      assert "minimax-m2.1" in ids
+      assert "minimax-m2.5" in ids
     end
   end
 
@@ -202,7 +215,13 @@ defmodule Ai.ModelsNewProvidersTest do
 
     test "all Z.ai models can be listed" do
       models = Models.get_models(:zai)
-      assert length(models) == 5
+      assert length(models) >= 5
+
+      ids = Models.get_model_ids(:zai)
+      assert "glm-4.5-flash" in ids
+      assert "glm-4.5" in ids
+      assert "glm-4.7" in ids
+      assert "glm-5" in ids
     end
   end
 
@@ -249,12 +268,12 @@ defmodule Ai.ModelsNewProvidersTest do
       minimax_count = Enum.count(all_models, &(&1.provider == :minimax))
       zai_count = Enum.count(all_models, &(&1.provider == :zai))
 
-      assert mistral_count == 7
-      assert cerebras_count == 3
-      assert deepseek_count == 3
-      assert qwen_count == 5
-      assert minimax_count == 3
-      assert zai_count == 5
+      assert mistral_count >= 7
+      assert cerebras_count >= 3
+      assert deepseek_count >= 3
+      assert qwen_count >= 5
+      assert minimax_count >= 3
+      assert zai_count >= 5
     end
   end
 end

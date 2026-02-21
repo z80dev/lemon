@@ -1,5 +1,34 @@
 defmodule LemonGateway.Engine do
-  @moduledoc false
+  @moduledoc """
+  Behaviour for AI engine plugins.
+
+  An engine wraps an AI backend (CLI tool, API, or native integration) and
+  provides a uniform interface for starting runs, streaming output, cancellation,
+  session resumption, and mid-run steering.
+
+  ## Implementing an Engine
+
+      defmodule MyEngine do
+        @behaviour LemonGateway.Engine
+
+        @impl true
+        def id, do: "myengine"
+
+        @impl true
+        def start_run(job, opts, sink_pid) do
+          # Start the AI run, send events to sink_pid
+          {:ok, make_ref(), cancel_context}
+        end
+
+        # ... implement remaining callbacks
+      end
+
+  ## Event Protocol
+
+  Engines send events to `sink_pid` as `{:engine_event, run_ref, event}` messages
+  where event is one of `Event.Started`, `Event.ActionEvent`, or `Event.Completed`.
+  Streaming text is sent as `{:engine_delta, run_ref, text}`.
+  """
 
   alias LemonGateway.Types.{Job, ResumeToken}
 

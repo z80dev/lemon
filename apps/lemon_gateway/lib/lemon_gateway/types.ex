@@ -1,10 +1,20 @@
 defmodule LemonGateway.Types do
-  @moduledoc false
+  @moduledoc """
+  Core type definitions for the LemonGateway domain.
+
+  Defines the foundational structs and types used throughout the gateway:
+  `Job`, `ChatScope`, and `ResumeToken`.
+  """
 
   @type engine_id :: String.t()
 
   defmodule ResumeToken do
-    @moduledoc false
+    @moduledoc """
+    Token for resuming a conversation session with an engine.
+
+    Contains the engine identifier and an opaque value that the engine
+    uses to restore conversation context.
+    """
     @enforce_keys [:engine, :value]
     defstruct [:engine, :value]
 

@@ -167,7 +167,7 @@ defmodule CodingAgent.Tools.LspFormatterTest do
     end
 
     test "handles paths with spaces", %{tmp_dir: tmp_dir} do
-      path = Path.join(tmp_dir, "path with spaces", "test.ex")
+      path = Path.join([tmp_dir, "path with spaces", "test.ex"])
       File.mkdir_p!(Path.dirname(path))
       File.write!(path, "content")
 

@@ -1,5 +1,11 @@
 defmodule LemonGateway.Tools.SmsClaimMessage do
-  @moduledoc false
+  @moduledoc """
+  AgentCore tool for claiming an inbound SMS message by its Twilio MessageSid.
+
+  Marks a message in the inbox as owned by the current session, preventing other
+  sessions from consuming it. Typically used when `sms_wait_for_code` auto-claim
+  is disabled.
+  """
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent

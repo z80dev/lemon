@@ -1,5 +1,11 @@
 defmodule LemonGateway.EngineLock do
-  @moduledoc false
+  @moduledoc """
+  Mutex lock preventing concurrent engine runs on the same session.
+
+  Provides fair FIFO queueing with configurable timeouts. Monitors lock
+  holders and automatically releases locks when processes die. Periodically
+  sweeps stale locks that exceed `max_lock_age_ms`.
+  """
   use GenServer
   require Logger
 
@@ -11,6 +17,13 @@ defmodule LemonGateway.EngineLock do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
+  @doc """
+  Acquires the engine lock for the given thread key.
+
+  Returns `{:ok, release_fn}` where `release_fn` is a zero-arity function
+  that must be called to release the lock. Returns `{:error, :timeout}`
+  if the lock cannot be acquired within `timeout_ms`.
+  """
   @spec acquire(thread_key(), non_neg_integer()) ::
           {:ok, (-> :ok)} | {:error, :timeout}
   def acquire(thread_key, timeout_ms \\ 60_000) do

@@ -1,5 +1,9 @@
 defmodule LemonGateway.Transports.Xmtp.PortServer do
-  @moduledoc false
+  @moduledoc """
+  GenServer that manages a Node.js bridge subprocess for the XMTP SDK.
+  Communicates with the child process over stdio using newline-delimited JSON,
+  handles automatic restarts on crash, and replays the connect command.
+  """
 
   use GenServer
 

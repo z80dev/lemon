@@ -6,6 +6,8 @@ defmodule LemonCore.ClockTest do
 
   alias LemonCore.Clock
 
+  doctest LemonCore.Clock
+
   describe "now_ms/0" do
     test "returns current time in milliseconds" do
       before = System.system_time(:millisecond)

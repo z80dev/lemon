@@ -1,5 +1,10 @@
 defmodule LemonGateway.Engines.Codex do
-  @moduledoc false
+  @moduledoc """
+  Engine adapter for the OpenAI Codex CLI tool.
+
+  Delegates to `LemonGateway.Engines.CliAdapter` to manage a
+  `AgentCore.CliRunners.CodexRunner` subprocess for each run.
+  """
   @behaviour LemonGateway.Engine
 
   alias LemonGateway.Engines.CliAdapter

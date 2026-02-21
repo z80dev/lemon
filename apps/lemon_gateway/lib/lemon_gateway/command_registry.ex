@@ -1,5 +1,11 @@
 defmodule LemonGateway.CommandRegistry do
-  @moduledoc false
+  @moduledoc """
+  Registry of slash command modules.
+
+  Maintains a mapping of command names to their implementing modules.
+  Commands are invoked when users send `/command_name` messages through
+  any transport channel.
+  """
   use GenServer
 
   @type command_name :: String.t()
@@ -12,9 +18,11 @@ defmodule LemonGateway.CommandRegistry do
     GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
   end
 
+  @doc "Returns a list of all registered command names."
   @spec list_commands() :: [command_name()]
   def list_commands, do: GenServer.call(__MODULE__, :list)
 
+  @doc "Returns the command module for the given name, or raises if not found."
   @spec get_command!(command_name()) :: command_mod()
   def get_command!(name) do
     case get_command(name) do
@@ -23,9 +31,11 @@ defmodule LemonGateway.CommandRegistry do
     end
   end
 
+  @doc "Returns the command module for the given name, or `nil` if not registered."
   @spec get_command(command_name()) :: command_mod() | nil
   def get_command(name), do: GenServer.call(__MODULE__, {:get_or_nil, name})
 
+  @doc "Returns all registered commands as `{name, module}` tuples."
   @spec all_commands() :: [{command_name(), command_mod()}]
   def all_commands, do: GenServer.call(__MODULE__, :all)
 

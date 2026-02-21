@@ -119,7 +119,7 @@ defmodule AgentCore.CliRunners.KimiSubagent do
   def collect_answer(session) do
     session
     |> events()
-    |> Enum.reduce(nil, fn
+    |> Enum.reduce("", fn
       {:completed, answer, _opts}, _acc -> answer
       _, acc -> acc
     end)

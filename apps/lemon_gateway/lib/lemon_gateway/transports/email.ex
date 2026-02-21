@@ -1,5 +1,9 @@
 defmodule LemonGateway.Transports.Email do
-  @moduledoc false
+  @moduledoc """
+  Email transport for LemonGateway. Supervises the inbound webhook server
+  for receiving emails and dispatches completed run results to the outbound
+  SMTP delivery module.
+  """
 
   use GenServer
   use LemonGateway.Transport

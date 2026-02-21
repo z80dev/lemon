@@ -1,5 +1,11 @@
 defmodule LemonGateway.Health do
-  @moduledoc false
+  @moduledoc """
+  Health check system for the gateway.
+
+  Runs built-in checks (supervisor, scheduler, run_supervisor, engine_lock)
+  and optional custom checks configured via `:health_checks` application env.
+  Returns a structured health status map consumed by `Health.Router`.
+  """
 
   @default_custom_check_name "custom"
 
@@ -11,6 +17,7 @@ defmodule LemonGateway.Health do
           | {module(), atom(), [term()]}
           | {atom() | String.t(), {module(), atom(), [term()]}}
 
+  @doc "Returns a map with `:ok` (boolean), `:timestamp`, and `:checks` (list of individual check results)."
   @spec status() :: map()
   def status do
     checks = built_in_checks() ++ custom_checks()

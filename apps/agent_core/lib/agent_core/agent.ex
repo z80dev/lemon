@@ -954,7 +954,7 @@ defmodule AgentCore.Agent do
     end
   end
 
-  defp aborted?(_agent_pid, abort_ref), do: AbortSignal.aborted?(abort_ref)
+  defp aborted?(abort_ref), do: AbortSignal.aborted?(abort_ref)
 
   defp track_partial_message({:message_start, message}, _partial), do: message
   defp track_partial_message({:message_update, message, _delta}, _partial), do: message
@@ -970,7 +970,7 @@ defmodule AgentCore.Agent do
       send(agent_pid, {:agent_event, {:message_end, partial}})
     else
       # Check if aborted
-      if aborted?(agent_pid, abort_ref) do
+      if aborted?(abort_ref) do
         error_msg = build_error_message("Request was aborted", config, :aborted)
         send(agent_pid, {:agent_event, {:message_end, error_msg}})
       end

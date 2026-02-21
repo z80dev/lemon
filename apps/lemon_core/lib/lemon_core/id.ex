@@ -17,6 +17,13 @@ defmodule LemonCore.Id do
   Generate a run ID.
 
   Run IDs are UUID v4 with a "run_" prefix for easy identification.
+
+  ## Examples
+
+      iex> id = LemonCore.Id.run_id()
+      iex> String.starts_with?(id, "run_")
+      true
+
   """
   @spec run_id() :: binary()
   def run_id do
@@ -27,6 +34,13 @@ defmodule LemonCore.Id do
   Generate a session ID.
 
   Session IDs are UUID v4 with a "sess_" prefix for easy identification.
+
+  ## Examples
+
+      iex> id = LemonCore.Id.session_id()
+      iex> String.starts_with?(id, "sess_")
+      true
+
   """
   @spec session_id() :: binary()
   def session_id do
@@ -59,6 +73,13 @@ defmodule LemonCore.Id do
 
   @doc """
   Generate an idempotency key for a scope and operation.
+
+  ## Examples
+
+      iex> key = LemonCore.Id.idempotency_key("messages", "send")
+      iex> String.starts_with?(key, "messages:send:")
+      true
+
   """
   @spec idempotency_key(scope :: binary(), operation :: binary()) :: binary()
   def idempotency_key(scope, operation) do

@@ -49,6 +49,7 @@ defmodule Mix.Tasks.Lemon.Secrets.DeleteTest do
       end
 
       # Verify the shortdoc is set (Mix.Task provides this via module attribute)
+      assert {:module, Delete} = Code.ensure_loaded(Delete)
       assert function_exported?(Delete, :run, 1)
     end
   end

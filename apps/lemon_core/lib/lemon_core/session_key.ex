@@ -34,7 +34,15 @@ defmodule LemonCore.SessionKey do
           sub_id: binary() | nil
         }
 
-  @doc "Generate a main session key for an agent."
+  @doc """
+  Generate a main session key for an agent.
+
+  ## Examples
+
+      iex> LemonCore.SessionKey.main("my_agent")
+      "agent:my_agent:main"
+
+  """
   @spec main(agent_id :: binary()) :: binary()
   def main(agent_id) when is_binary(agent_id) do
     "agent:#{agent_id}:main"
@@ -127,7 +135,18 @@ defmodule LemonCore.SessionKey do
     end
   end
 
-  @doc "Check if a session key is valid."
+  @doc """
+  Check if a session key is valid.
+
+  ## Examples
+
+      iex> LemonCore.SessionKey.valid?("agent:test:main")
+      true
+
+      iex> LemonCore.SessionKey.valid?("invalid")
+      false
+
+  """
   @spec valid?(binary()) :: boolean()
   def valid?(session_key) do
     case parse(session_key) do
@@ -140,7 +159,18 @@ defmodule LemonCore.SessionKey do
   @spec allowed_peer_kinds() :: [String.t()]
   def allowed_peer_kinds, do: Map.keys(@allowed_peer_kinds)
 
-  @doc "Extract the agent ID from a session key."
+  @doc """
+  Extract the agent ID from a session key.
+
+  ## Examples
+
+      iex> LemonCore.SessionKey.agent_id("agent:my_bot:main")
+      "my_bot"
+
+      iex> LemonCore.SessionKey.agent_id("invalid")
+      nil
+
+  """
   @spec agent_id(binary()) :: binary() | nil
   def agent_id(session_key) do
     case parse(session_key) do

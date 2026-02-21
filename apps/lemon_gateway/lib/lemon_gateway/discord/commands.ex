@@ -1,5 +1,8 @@
 defmodule LemonGateway.Discord.Commands do
-  @moduledoc false
+  @moduledoc """
+  Registers Discord slash commands (`/lemon`, `/session`) as global application
+  commands and dispatches incoming interaction events to the appropriate handlers.
+  """
 
   require Logger
   alias Nostrum.Api.ApplicationCommand

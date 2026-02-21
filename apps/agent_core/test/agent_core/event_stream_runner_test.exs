@@ -16,7 +16,12 @@ defmodule AgentCore.EventStreamRunnerTest do
 
   describe "runner monitoring" do
     test "stream with runner option starts successfully" do
-      runner = spawn(fn -> receive do :done -> :ok end end)
+      runner =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
 
       {:ok, stream} = EventStream.start_link(runner: runner)
       assert is_pid(stream)
@@ -26,8 +31,19 @@ defmodule AgentCore.EventStreamRunnerTest do
     end
 
     test "stream can have both owner and runner" do
-      owner = spawn(fn -> receive do :done -> :ok end end)
-      runner = spawn(fn -> receive do :done -> :ok end end)
+      owner =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
+
+      runner =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
 
       {:ok, stream} = EventStream.start_link(owner: owner, runner: runner)
       assert is_pid(stream)
@@ -38,7 +54,13 @@ defmodule AgentCore.EventStreamRunnerTest do
     end
 
     test "stream works normally when runner stays alive" do
-      runner = spawn(fn -> receive do :done -> :ok end end)
+      runner =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
+
       {:ok, stream} = EventStream.start_link(runner: runner)
 
       # Push events and complete normally
@@ -61,7 +83,13 @@ defmodule AgentCore.EventStreamRunnerTest do
 
   describe "runner crash wakes waiting consumer" do
     test "consumer blocked on events/1 receives error when runner crashes" do
-      runner = spawn(fn -> receive do :done -> :ok end end)
+      runner =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
+
       {:ok, stream} = EventStream.start_link(runner: runner)
 
       # Start consumer that will block waiting for events
@@ -81,13 +109,19 @@ defmodule AgentCore.EventStreamRunnerTest do
 
       # Should have terminal error event
       assert Enum.any?(events, fn
-        {:error, {:runner_crashed, :killed}, _} -> true
-        _ -> false
-      end)
+               {:error, {:runner_crashed, :killed}, _} -> true
+               _ -> false
+             end)
     end
 
     test "result/1 waiter receives error when runner crashes" do
-      runner = spawn(fn -> receive do :done -> :ok end end)
+      runner =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
+
       {:ok, stream} = EventStream.start_link(runner: runner)
 
       # Start result waiter
@@ -106,7 +140,13 @@ defmodule AgentCore.EventStreamRunnerTest do
     end
 
     test "multiple consumers all complete when runner crashes" do
-      runner = spawn(fn -> receive do :done -> :ok end end)
+      runner =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
+
       {:ok, stream} = EventStream.start_link(runner: runner)
 
       # Start multiple consumers
@@ -123,7 +163,7 @@ defmodule AgentCore.EventStreamRunnerTest do
       Process.exit(runner, :kill)
 
       # All consumers should complete (at least one gets the error)
-      all_events = 
+      all_events =
         for task <- consumers do
           Task.await(task, 1000)
         end
@@ -131,13 +171,19 @@ defmodule AgentCore.EventStreamRunnerTest do
 
       # Combined events should have the error
       assert Enum.any?(all_events, fn
-        {:error, {:runner_crashed, :killed}, _} -> true
-        _ -> false
-      end)
+               {:error, {:runner_crashed, :killed}, _} -> true
+               _ -> false
+             end)
     end
 
     test "multiple result waiters all receive error when runner crashes" do
-      runner = spawn(fn -> receive do :done -> :ok end end)
+      runner =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
+
       {:ok, stream} = EventStream.start_link(runner: runner)
 
       # Start multiple result waiters
@@ -166,7 +212,13 @@ defmodule AgentCore.EventStreamRunnerTest do
 
   describe "runner crash before consumer starts" do
     test "consumer receives error when runner crashed before events/1" do
-      runner = spawn(fn -> receive do :done -> :ok end end)
+      runner =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
+
       {:ok, stream} = EventStream.start_link(runner: runner)
 
       # Push some events first
@@ -181,13 +233,19 @@ defmodule AgentCore.EventStreamRunnerTest do
 
       # Should still receive error event
       assert Enum.any?(events, fn
-        {:error, {:runner_crashed, :killed}, _} -> true
-        _ -> false
-      end)
+               {:error, {:runner_crashed, :killed}, _} -> true
+               _ -> false
+             end)
     end
 
     test "result/1 receives error when runner crashed before call" do
-      runner = spawn(fn -> receive do :done -> :ok end end)
+      runner =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
+
       {:ok, stream} = EventStream.start_link(runner: runner)
 
       # Kill the runner
@@ -206,7 +264,13 @@ defmodule AgentCore.EventStreamRunnerTest do
   describe "runner crash reasons are preserved" do
     test "normal exit is reported as :normal" do
       # Use a runner that we can control the exit of
-      runner = spawn(fn -> receive do :exit -> :ok end end)
+      runner =
+        spawn(fn ->
+          receive do
+            :exit -> :ok
+          end
+        end)
+
       {:ok, stream} = EventStream.start_link(runner: runner)
 
       consumer = Task.async(fn -> EventStream.events(stream) |> Enum.to_list() end)
@@ -216,14 +280,21 @@ defmodule AgentCore.EventStreamRunnerTest do
       send(runner, :exit)
 
       events = Task.await(consumer, 2000)
+
       assert Enum.any?(events, fn
-        {:error, {:runner_crashed, :normal}, _} -> true
-        _ -> false
-      end)
+               {:error, {:runner_crashed, :normal}, _} -> true
+               _ -> false
+             end)
     end
 
     test "shutdown exit is reported as :shutdown" do
-      runner = spawn(fn -> receive do :done -> :ok end end)
+      runner =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
+
       {:ok, stream} = EventStream.start_link(runner: runner)
 
       consumer = Task.async(fn -> EventStream.events(stream) |> Enum.to_list() end)
@@ -232,14 +303,21 @@ defmodule AgentCore.EventStreamRunnerTest do
       Process.exit(runner, :shutdown)
 
       events = Task.await(consumer, 1000)
+
       assert Enum.any?(events, fn
-        {:error, {:runner_crashed, :shutdown}, _} -> true
-        _ -> false
-      end)
+               {:error, {:runner_crashed, :shutdown}, _} -> true
+               _ -> false
+             end)
     end
 
     test "custom reason is preserved" do
-      runner = spawn(fn -> receive do :done -> :ok end end)
+      runner =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
+
       {:ok, stream} = EventStream.start_link(runner: runner)
 
       consumer = Task.async(fn -> EventStream.events(stream) |> Enum.to_list() end)
@@ -248,10 +326,11 @@ defmodule AgentCore.EventStreamRunnerTest do
       Process.exit(runner, :my_custom_reason)
 
       events = Task.await(consumer, 1000)
+
       assert Enum.any?(events, fn
-        {:error, {:runner_crashed, :my_custom_reason}, _} -> true
-        _ -> false
-      end)
+               {:error, {:runner_crashed, :my_custom_reason}, _} -> true
+               _ -> false
+             end)
     end
   end
 
@@ -261,7 +340,13 @@ defmodule AgentCore.EventStreamRunnerTest do
 
   describe "runner crash after completion is ignored" do
     test "runner crash after complete/1 does not emit error" do
-      runner = spawn(fn -> receive do :done -> :ok end end)
+      runner =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
+
       {:ok, stream} = EventStream.start_link(runner: runner)
 
       # Complete normally
@@ -274,14 +359,21 @@ defmodule AgentCore.EventStreamRunnerTest do
 
       # Should only have completion, not error
       assert {:agent_end, ["result"]} in events
+
       refute Enum.any?(events, fn
-        {:error, {:runner_crashed, _}, _} -> true
-        _ -> false
-      end)
+               {:error, {:runner_crashed, _}, _} -> true
+               _ -> false
+             end)
     end
 
     test "runner crash after error/1 does not emit another error" do
-      runner = spawn(fn -> receive do :done -> :ok end end)
+      runner =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
+
       {:ok, stream} = EventStream.start_link(runner: runner)
 
       # Emit error first
@@ -294,14 +386,21 @@ defmodule AgentCore.EventStreamRunnerTest do
 
       # Should only have the original error
       assert {:error, :my_error, nil} in events
+
       refute Enum.any?(events, fn
-        {:error, {:runner_crashed, _}, _} -> true
-        _ -> false
-      end)
+               {:error, {:runner_crashed, _}, _} -> true
+               _ -> false
+             end)
     end
 
     test "runner crash after cancel/1 does not emit error" do
-      runner = spawn(fn -> receive do :done -> :ok end end)
+      runner =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
+
       {:ok, stream} = EventStream.start_link(runner: runner)
 
       # Cancel first
@@ -324,8 +423,19 @@ defmodule AgentCore.EventStreamRunnerTest do
 
   describe "runner and owner interaction" do
     test "owner dying cancels stream even if runner is alive" do
-      owner = spawn(fn -> receive do :done -> :ok end end)
-      runner = spawn(fn -> receive do :done -> :ok end end)
+      owner =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
+
+      runner =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
 
       {:ok, stream} = EventStream.start_link(owner: owner, runner: runner)
 
@@ -337,18 +447,30 @@ defmodule AgentCore.EventStreamRunnerTest do
 
       # Consumer should receive canceled
       events = Task.await(consumer, 1000)
+
       assert Enum.any?(events, fn
-        {:canceled, :owner_down} -> true
-        _ -> false
-      end)
+               {:canceled, :owner_down} -> true
+               _ -> false
+             end)
 
       # Clean up
       send(runner, :done)
     end
 
     test "runner dying errors stream even if owner is alive" do
-      owner = spawn(fn -> receive do :done -> :ok end end)
-      runner = spawn(fn -> receive do :done -> :ok end end)
+      owner =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
+
+      runner =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
 
       {:ok, stream} = EventStream.start_link(owner: owner, runner: runner)
 
@@ -360,10 +482,11 @@ defmodule AgentCore.EventStreamRunnerTest do
 
       # Consumer should receive error
       events = Task.await(consumer, 1000)
+
       assert Enum.any?(events, fn
-        {:error, {:runner_crashed, :killed}, _} -> true
-        _ -> false
-      end)
+               {:error, {:runner_crashed, :killed}, _} -> true
+               _ -> false
+             end)
 
       # Clean up
       send(owner, :done)
@@ -377,7 +500,13 @@ defmodule AgentCore.EventStreamRunnerTest do
   describe "runner monitoring edge cases" do
     test "runner that exits normally is treated as crashed" do
       # Use a runner that waits for signal then exits normally
-      runner = spawn(fn -> receive do :exit -> :ok end end)
+      runner =
+        spawn(fn ->
+          receive do
+            :exit -> :ok
+          end
+        end)
+
       {:ok, stream} = EventStream.start_link(runner: runner)
 
       # Signal normal exit
@@ -386,15 +515,22 @@ defmodule AgentCore.EventStreamRunnerTest do
 
       # Consumer should receive error even for normal exit
       events = EventStream.events(stream) |> Enum.to_list()
+
       assert Enum.any?(events, fn
-        {:error, {:runner_crashed, :normal}, _} -> true
-        _ -> false
-      end)
+               {:error, {:runner_crashed, :normal}, _} -> true
+               _ -> false
+             end)
     end
 
     test "dead runner at start time emits error immediately" do
       # Start runner and signal it to exit, then create stream
-      runner = spawn(fn -> receive do :exit -> :ok end end)
+      runner =
+        spawn(fn ->
+          receive do
+            :exit -> :ok
+          end
+        end)
+
       send(runner, :exit)
       Process.sleep(50)
       refute Process.alive?(runner)
@@ -406,14 +542,21 @@ defmodule AgentCore.EventStreamRunnerTest do
       # Consumer should still receive error (monitor fires immediately for dead process)
       # Note: reason will be :noproc since process was already dead
       events = EventStream.events(stream) |> Enum.to_list()
+
       assert Enum.any?(events, fn
-        {:error, {:runner_crashed, _}, _} -> true
-        _ -> false
-      end)
+               {:error, {:runner_crashed, _}, _} -> true
+               _ -> false
+             end)
     end
 
     test "events pushed before runner crash are still received" do
-      runner = spawn(fn -> receive do :done -> :ok end end)
+      runner =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
+
       {:ok, stream} = EventStream.start_link(runner: runner)
 
       # Push some events
@@ -430,14 +573,21 @@ defmodule AgentCore.EventStreamRunnerTest do
       assert {:event, 1} in events
       assert {:event, 2} in events
       assert {:event, 3} in events
+
       assert Enum.any?(events, fn
-        {:error, {:runner_crashed, :killed}, _} -> true
-        _ -> false
-      end)
+               {:error, {:runner_crashed, :killed}, _} -> true
+               _ -> false
+             end)
     end
 
     test "stream stays alive after runner crash for consumers to read" do
-      runner = spawn(fn -> receive do :done -> :ok end end)
+      runner =
+        spawn(fn ->
+          receive do
+            :done -> :ok
+          end
+        end)
+
       {:ok, stream} = EventStream.start_link(runner: runner)
 
       Process.exit(runner, :kill)
@@ -448,10 +598,11 @@ defmodule AgentCore.EventStreamRunnerTest do
 
       # Consumer can still read the error
       events = EventStream.events(stream) |> Enum.to_list()
+
       assert Enum.any?(events, fn
-        {:error, {:runner_crashed, :killed}, _} -> true
-        _ -> false
-      end)
+               {:error, {:runner_crashed, :killed}, _} -> true
+               _ -> false
+             end)
     end
   end
 
@@ -474,26 +625,27 @@ defmodule AgentCore.EventStreamRunnerTest do
       {:ok, stream_holder} = Agent.start(fn -> nil end)
 
       # Simulate runner process (without trap_exit - like real JsonlRunner)
-      runner = spawn(fn ->
-        # Use start (not start_link) to avoid link, just like JsonlRunner
-        {:ok, stream} = EventStream.start(runner: self())
+      runner =
+        spawn(fn ->
+          # Use start (not start_link) to avoid link, just like JsonlRunner
+          {:ok, stream} = EventStream.start(runner: self())
 
-        # Push some events
-        EventStream.push(stream, {:cli_event, %{type: :started}})
-        EventStream.push(stream, {:cli_event, %{type: :thinking}})
+          # Push some events
+          EventStream.push(stream, {:cli_event, %{type: :started}})
+          EventStream.push(stream, {:cli_event, %{type: :thinking}})
 
-        # Store stream pid
-        Agent.update(stream_holder, fn _ -> stream end)
-        send(test_pid, :stream_ready)
+          # Store stream pid
+          Agent.update(stream_holder, fn _ -> stream end)
+          send(test_pid, :stream_ready)
 
-        # Wait for crash signal - when we get it, we'll raise an exception
-        # (not using Process.exit because that behaves differently with trap_exit)
-        receive do
-          :crash ->
-            # Simulate a real crash (like a bug in the runner)
-            raise "Simulated runner crash"
-        end
-      end)
+          # Wait for crash signal - when we get it, we'll raise an exception
+          # (not using Process.exit because that behaves differently with trap_exit)
+          receive do
+            :crash ->
+              # Simulate a real crash (like a bug in the runner)
+              raise "Simulated runner crash"
+          end
+        end)
 
       # Wait for stream to be created
       assert_receive :stream_ready, 1000
@@ -521,9 +673,13 @@ defmodule AgentCore.EventStreamRunnerTest do
       assert {:cli_event, %{type: :thinking}} in events
       # The error reason will be the exception tuple
       assert Enum.any?(events, fn
-        {:error, {:runner_crashed, {%RuntimeError{message: "Simulated runner crash"}, _}}, _} -> true
-        _ -> false
-      end)
+               {:error, {:runner_crashed, {%RuntimeError{message: "Simulated runner crash"}, _}},
+                _} ->
+                 true
+
+               _ ->
+                 false
+             end)
 
       Agent.stop(stream_holder)
     end

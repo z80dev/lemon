@@ -26,13 +26,21 @@ defmodule LemonGateway.Event do
   end
 
   defmodule Action do
-    @moduledoc false
+    @moduledoc """
+    Describes a discrete action (tool use, file edit, etc.) performed during a run.
+
+    Used inside `ActionEvent` to identify the action by id, kind, and title.
+    """
     @enforce_keys [:id, :kind, :title]
     defstruct [:id, :kind, :title, :detail]
   end
 
   defmodule ActionEvent do
-    @moduledoc false
+    @moduledoc """
+    Emitted when an action transitions between phases (e.g. started, completed, errored).
+
+    Wraps an `Action` struct along with the current phase, success flag, and optional message.
+    """
     @enforce_keys [:engine, :action, :phase]
     defstruct [:engine, :action, :phase, :ok, :message, :level]
   end

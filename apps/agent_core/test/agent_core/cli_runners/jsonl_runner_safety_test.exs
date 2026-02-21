@@ -183,8 +183,11 @@ defmodule AgentCore.CliRunners.JsonlRunnerSafetyTest do
     test_pid = self()
 
     # Start the runner with test process as owner (simulates CliAdapter behavior)
-    {:ok, runner_pid} = GenServer.start(AgentCore.CliRunners.JsonlRunner,
-      {CrashableRunner, [prompt: "test", timeout: :infinity, owner: test_pid]})
+    {:ok, runner_pid} =
+      GenServer.start(
+        AgentCore.CliRunners.JsonlRunner,
+        {CrashableRunner, [prompt: "test", timeout: :infinity, owner: test_pid]}
+      )
 
     # Get the stream
     stream = AgentCore.CliRunners.JsonlRunner.stream(runner_pid)
@@ -214,8 +217,12 @@ defmodule AgentCore.CliRunners.JsonlRunnerSafetyTest do
   test "runner crash wakes multiple waiting consumers" do
     test_pid = self()
 
-    {:ok, runner_pid} = GenServer.start(AgentCore.CliRunners.JsonlRunner,
-      {CrashableRunner, [prompt: "test", timeout: :infinity, owner: test_pid]})
+    {:ok, runner_pid} =
+      GenServer.start(
+        AgentCore.CliRunners.JsonlRunner,
+        {CrashableRunner, [prompt: "test", timeout: :infinity, owner: test_pid]}
+      )
+
     stream = AgentCore.CliRunners.JsonlRunner.stream(runner_pid)
 
     # Start multiple consumers
@@ -232,7 +239,7 @@ defmodule AgentCore.CliRunners.JsonlRunnerSafetyTest do
     Process.exit(runner_pid, :kill)
 
     # Combined events should have the error
-    all_events = 
+    all_events =
       for task <- consumers do
         Task.await(task, 2000)
       end
@@ -250,8 +257,12 @@ defmodule AgentCore.CliRunners.JsonlRunnerSafetyTest do
 
     test_pid = self()
 
-    {:ok, runner_pid} = GenServer.start(AgentCore.CliRunners.JsonlRunner,
-      {CrashableRunner, [prompt: "test", timeout: :infinity, owner: test_pid]})
+    {:ok, runner_pid} =
+      GenServer.start(
+        AgentCore.CliRunners.JsonlRunner,
+        {CrashableRunner, [prompt: "test", timeout: :infinity, owner: test_pid]}
+      )
+
     stream = AgentCore.CliRunners.JsonlRunner.stream(runner_pid)
 
     # Block on events (simulating the stuck runs we killed)

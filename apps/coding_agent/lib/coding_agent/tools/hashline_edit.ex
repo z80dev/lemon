@@ -41,7 +41,8 @@ defmodule CodingAgent.Tools.HashlineEdit do
         "Edit a file using line-addressable edits with hash-based staleness detection. " <>
           "Each line is referenced by LINENUM#HASH (e.g. \"5#ZZ\"). " <>
           "Supports: set (replace line), replace (replace range), append (insert after), " <>
-          "prepend (insert before), insert (between two lines).",
+          "prepend (insert before), insert (between two lines), " <>
+          "replaceText (substring search-and-replace, no line refs needed).",
       label: "Hashline Edit",
       parameters: %{
         "type" => "object",
@@ -58,7 +59,7 @@ defmodule CodingAgent.Tools.HashlineEdit do
               "properties" => %{
                 "op" => %{
                   "type" => "string",
-                  "enum" => ["set", "replace", "append", "prepend", "insert"],
+                  "enum" => ["set", "replace", "append", "prepend", "insert", "replaceText"],
                   "description" => "The edit operation"
                 },
                 "tag" => %{
@@ -85,9 +86,21 @@ defmodule CodingAgent.Tools.HashlineEdit do
                   "type" => "array",
                   "items" => %{"type" => "string"},
                   "description" => "Lines of content for the edit"
+                },
+                "old_text" => %{
+                  "type" => "string",
+                  "description" => "Text to search for (replaceText op only)"
+                },
+                "new_text" => %{
+                  "type" => "string",
+                  "description" => "Replacement text (replaceText op only)"
+                },
+                "all" => %{
+                  "type" => "boolean",
+                  "description" => "Replace all occurrences (replaceText op, default false)"
                 }
               },
-              "required" => ["op", "content"]
+              "required" => ["op"]
             }
           }
         },

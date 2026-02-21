@@ -1,5 +1,10 @@
 defmodule LemonGateway.Telegram.API do
-  @moduledoc false
+  @moduledoc """
+  Low-level HTTP wrapper for the Telegram Bot API.
+
+  Provides functions for common Bot API methods (sending, editing, and deleting
+  messages, uploading files and photos) using JSON and multipart/form-data requests.
+  """
 
   @default_timeout 10_000
 

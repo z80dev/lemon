@@ -1,5 +1,8 @@
 defmodule LemonGateway.Transports.Xmtp.Bridge do
-  @moduledoc false
+  @moduledoc """
+  Command helpers for the XMTP Node.js bridge subprocess. Provides functions
+  to send connect, poll, and send-message commands to the `PortServer`.
+  """
 
   alias LemonGateway.Transports.Xmtp.PortServer
 

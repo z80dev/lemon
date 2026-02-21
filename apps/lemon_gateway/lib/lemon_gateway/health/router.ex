@@ -1,5 +1,10 @@
 defmodule LemonGateway.Health.Router do
-  @moduledoc false
+  @moduledoc """
+  Plug router that serves the `/healthz` HTTP health-check endpoint.
+
+  Returns a JSON payload with HTTP 200 when healthy or 503 when unhealthy.
+  All other routes return a 404 JSON error.
+  """
 
   use Plug.Router
 

@@ -3,6 +3,8 @@ defmodule LemonCore.IdTest do
 
   alias LemonCore.Id
 
+  doctest LemonCore.Id
+
   describe "uuid/0" do
     test "generates valid UUID v4" do
       uuid = Id.uuid()

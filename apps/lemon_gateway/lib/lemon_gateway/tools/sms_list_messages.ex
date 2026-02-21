@@ -1,5 +1,10 @@
 defmodule LemonGateway.Tools.SmsListMessages do
-  @moduledoc false
+  @moduledoc """
+  AgentCore tool for listing and filtering inbound SMS messages.
+
+  Queries the SMS inbox with optional filters (sender, recipient, body content,
+  timestamp, claimed status) and returns a formatted summary of matching messages.
+  """
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent

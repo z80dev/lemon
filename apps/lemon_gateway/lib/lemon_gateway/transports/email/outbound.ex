@@ -1,5 +1,9 @@
 defmodule LemonGateway.Transports.Email.Outbound do
-  @moduledoc false
+  @moduledoc """
+  Sends email responses for completed runs via SMTP relay. Builds multipart
+  messages with plain text and HTML bodies, manages threading headers
+  (In-Reply-To, References), and attaches output files when present.
+  """
 
   require Logger
 

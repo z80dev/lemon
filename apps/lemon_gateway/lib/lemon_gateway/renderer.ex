@@ -1,5 +1,10 @@
 defmodule LemonGateway.Renderer do
-  @moduledoc false
+  @moduledoc """
+  Behaviour for rendering engine events into user-facing text.
+
+  Renderers transform engine lifecycle events (started, action, completed)
+  into formatted text suitable for display in transport channels.
+  """
 
   @type state :: term()
   @type render_out :: %{text: String.t(), status: :running | :done | :error | :cancelled}

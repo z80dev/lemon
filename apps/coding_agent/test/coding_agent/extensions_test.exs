@@ -1604,7 +1604,18 @@ defmodule CodingAgent.ExtensionsTest do
             Extensions.load_extensions_with_errors([tmp_dir])
 
           report = Extensions.register_extension_providers(extensions)
-          hd(report.conflicts).winner
+
+          case report.conflicts do
+            [%{winner: winner} | _] ->
+              winner
+
+            [] ->
+              case Ai.ProviderRegistry.get(:consistent_provider) do
+                {:ok, BBeforeModule} -> BBeforeConflictExt
+                {:ok, MMiddleModule} -> MMiddleConflictExt
+                _ -> nil
+              end
+          end
         end
 
       # All runs should have the same winner

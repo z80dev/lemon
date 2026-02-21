@@ -1,5 +1,11 @@
 defmodule LemonGateway.Telegram.StartupNotifier do
-  @moduledoc false
+  @moduledoc """
+  Sends a startup notification message to bound Telegram chats on boot.
+
+  Runs as a temporary task that resolves the configured bindings and allowed
+  chat IDs, then delivers a configurable greeting (or a default timestamp
+  message) to each destination chat and topic.
+  """
 
   require Logger
 

@@ -1,5 +1,10 @@
 defmodule LemonGateway.TransportSupervisor do
-  @moduledoc false
+  @moduledoc """
+  Supervisor that starts all enabled transport modules registered in `TransportRegistry`.
+
+  Transport-specific supporting processes (e.g. `Telegram.Outbox`) are started
+  alongside their transport module automatically.
+  """
   use Supervisor
 
   alias LemonGateway.TransportRegistry

@@ -1,5 +1,11 @@
 defmodule LemonGateway.Telegram.OffsetStore do
-  @moduledoc false
+  @moduledoc """
+  Persists Telegram long-polling offsets per bot account.
+
+  Stores and retrieves the last processed `getUpdates` offset so that polling
+  can resume from where it left off after restarts. Keys are derived from
+  the account ID and a SHA-256 fingerprint of the bot token.
+  """
 
   @table :telegram_offsets
 

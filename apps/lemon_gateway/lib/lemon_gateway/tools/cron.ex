@@ -1,5 +1,11 @@
 defmodule LemonGateway.Tools.Cron do
-  @moduledoc false
+  @moduledoc """
+  AgentCore tool for managing Lemon internal cron/scheduled jobs.
+
+  Supports actions to list, add, update, remove, and trigger cron jobs, as well
+  as viewing run history. Delegates to `LemonAutomation.CronManager` for
+  persistence and scheduling.
+  """
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent

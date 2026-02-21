@@ -1,5 +1,9 @@
 defmodule LemonGateway.Transports.Farcaster.CastHandler do
-  @moduledoc false
+  @moduledoc """
+  Processes Farcaster frame actions by verifying trusted data, resolving
+  sessions, submitting prompts to the runtime, and building the response
+  HTML with frame metadata (image, buttons, state).
+  """
 
   require Logger
 

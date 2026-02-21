@@ -9,6 +9,7 @@ defmodule CodingAgent.Tools.Write do
   alias AgentCore.AbortSignal
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent
+  alias CodingAgent.Tools.LspFormatter
 
   @doc """
   Returns the write file tool definition.
@@ -20,10 +21,13 @@ defmodule CodingAgent.Tools.Write do
   """
   @spec tool(cwd :: String.t(), opts :: keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
+    format_default = Keyword.get(opts, :format, false)
+
     %AgentTool{
       name: "write",
       description:
-        "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Creates parent directories as needed.",
+        "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Creates parent directories as needed." <>
+          if(format_default, do: " Can optionally format supported files after writing.", else: ""),
       label: "Write File",
       parameters: %{
         "type" => "object",
@@ -35,6 +39,12 @@ defmodule CodingAgent.Tools.Write do
           "content" => %{
             "type" => "string",
             "description" => "The content to write to the file"
+          },
+          "format" => %{
+            "type" => "boolean",
+            "default" => format_default,
+            "description" =>
+              "Whether to auto-format the file after writing (if a formatter is available for the file extension)"
           }
         },
         "required" => ["path", "content"]
@@ -75,9 +85,10 @@ defmodule CodingAgent.Tools.Write do
       {:error, :aborted}
     else
       with {:ok, path} <- get_path(params),
-           {:ok, content} <- get_content(params) do
+           {:ok, content} <- get_content(params),
+           {:ok, format?} <- get_format(params, opts) do
         resolved_path = resolve_path(path, cwd, opts)
-        write_file(resolved_path, content, signal)
+        write_file(resolved_path, content, signal, format?, cwd, opts)
       end
     end
   end
@@ -99,6 +110,16 @@ defmodule CodingAgent.Tools.Write do
 
   defp get_content(%{"content" => _}), do: {:error, "content must be a string"}
   defp get_content(_), do: {:error, "missing required parameter: content"}
+
+  defp get_format(params, opts) do
+    value = Map.get(params, "format", Keyword.get(opts, :format, false))
+
+    case value do
+      true -> {:ok, true}
+      false -> {:ok, false}
+      _ -> {:error, "format must be a boolean"}
+    end
+  end
 
   @doc false
   @spec resolve_path(path :: String.t(), cwd :: String.t(), opts :: keyword()) :: String.t()
@@ -140,7 +161,7 @@ defmodule CodingAgent.Tools.Write do
       String.starts_with?(path, ".\\") or String.starts_with?(path, "..\\")
   end
 
-  defp write_file(path, content, signal) do
+  defp write_file(path, content, signal, format?, cwd, opts) do
     # Check for abort before write
     if AbortSignal.aborted?(signal) do
       {:error, :aborted}
@@ -154,18 +175,23 @@ defmodule CodingAgent.Tools.Write do
         File.write!(path, content)
 
         byte_count = byte_size(content)
+        {formatted, format_error} = maybe_format_file(path, format?, cwd, opts)
+        success_text = success_message(path, byte_count, formatted)
 
         %AgentToolResult{
           content: [
             %TextContent{
               type: :text,
-              text: "Successfully wrote #{byte_count} bytes to #{path}"
+              text: success_text
             }
           ],
-          details: %{
-            path: path,
-            bytes_written: byte_count
-          }
+          details:
+            %{
+              path: path,
+              bytes_written: byte_count,
+              formatted: formatted
+            }
+            |> maybe_put_format_error(format_error)
         }
       rescue
         e in File.Error ->
@@ -176,4 +202,25 @@ defmodule CodingAgent.Tools.Write do
       end
     end
   end
+
+  defp maybe_format_file(_path, false, _cwd, _opts), do: {false, nil}
+
+  defp maybe_format_file(path, true, cwd, opts) do
+    timeout_ms = Keyword.get(opts, :format_timeout_ms, 5_000)
+
+    case LspFormatter.format_file(path, cwd: cwd, timeout_ms: timeout_ms) do
+      {:ok, :formatted} -> {true, nil}
+      {:ok, :unchanged} -> {false, nil}
+      {:error, reason} -> {false, to_string(reason)}
+    end
+  end
+
+  defp success_message(path, byte_count, true),
+    do: "Successfully wrote #{byte_count} bytes to #{path} and formatted the file"
+
+  defp success_message(path, byte_count, false),
+    do: "Successfully wrote #{byte_count} bytes to #{path}"
+
+  defp maybe_put_format_error(details, nil), do: details
+  defp maybe_put_format_error(details, reason), do: Map.put(details, :format_error, reason)
 end

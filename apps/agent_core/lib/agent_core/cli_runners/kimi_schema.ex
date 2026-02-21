@@ -89,14 +89,8 @@ defmodule AgentCore.CliRunners.KimiSchema do
   # Internal decoding helpers
   # ============================================================================
 
-  defp decode_map(%{"message" => message} = map) when is_map(message) do
-    type =
-      case Map.get(map, "type") do
-        "message" -> :message
-        _ -> :message
-      end
-
-    {:ok, %StreamMessage{type: type, message: decode_message(message)}}
+  defp decode_map(%{"message" => message}) when is_map(message) do
+    {:ok, %StreamMessage{type: :message, message: decode_message(message)}}
   end
 
   defp decode_map(%{"role" => _role} = message) do

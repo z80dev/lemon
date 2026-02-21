@@ -1,5 +1,11 @@
 defmodule LemonGateway.TransportRegistry do
-  @moduledoc false
+  @moduledoc """
+  Registry of available transport modules.
+
+  Maintains a mapping of transport ID strings to their implementing modules.
+  Tracks which transports are enabled via configuration and warns about
+  misconfigured transports at startup.
+  """
   use GenServer
   require Logger
 
@@ -13,12 +19,15 @@ defmodule LemonGateway.TransportRegistry do
     GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
   end
 
+  @doc "Returns a list of all registered transport IDs."
   @spec list_transports() :: [transport_id()]
   def list_transports, do: GenServer.call(__MODULE__, :list)
 
+  @doc "Returns the transport module for the given ID, or raises if not found."
   @spec get_transport!(transport_id()) :: transport_mod()
   def get_transport!(id), do: GenServer.call(__MODULE__, {:get, id})
 
+  @doc "Returns the transport module for the given ID, or `nil` if not registered."
   @spec get_transport(transport_id()) :: transport_mod() | nil
   def get_transport(id), do: GenServer.call(__MODULE__, {:get_or_nil, id})
 

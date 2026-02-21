@@ -1,5 +1,9 @@
 defmodule LemonGateway.Discord.Formatter do
-  @moduledoc false
+  @moduledoc """
+  Formats messages for Discord delivery, splitting text into chunks that
+  respect Discord's 2000-character limit and providing color-coded embed
+  helpers for tool call status indicators.
+  """
 
   @discord_message_limit 2_000
 

@@ -1,5 +1,11 @@
 defmodule LemonGateway.Sms.Config do
-  @moduledoc false
+  @moduledoc """
+  Configuration reader for SMS webhook settings.
+
+  Reads values from environment variables (e.g. `LEMON_SMS_WEBHOOK_PORT`,
+  `TWILIO_AUTH_TOKEN`) with fallback to the application `:sms` config map.
+  Provides accessors for webhook port, bind IP, auth token, inbox number, and TTL.
+  """
 
   @default_port 4041
 

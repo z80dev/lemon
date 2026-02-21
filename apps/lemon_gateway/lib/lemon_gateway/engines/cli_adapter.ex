@@ -1,5 +1,11 @@
 defmodule LemonGateway.Engines.CliAdapter do
-  @moduledoc false
+  @moduledoc """
+  Shared CLI subprocess runner used by the Claude, Codex, Opencode, and Pi engines.
+
+  Provides common logic for starting a CLI runner process, consuming its event
+  stream, translating `AgentCore` events into `LemonGateway.Event` structs,
+  and handling cancellation and resume token formatting.
+  """
 
   alias AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
   alias LemonGateway.Event

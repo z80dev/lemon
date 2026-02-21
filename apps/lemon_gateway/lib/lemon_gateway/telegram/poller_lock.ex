@@ -1,5 +1,11 @@
 defmodule LemonGateway.Telegram.PollerLock do
-  @moduledoc false
+  @moduledoc """
+  Distributed lock to prevent duplicate Telegram polling instances.
+
+  Combines an Erlang `:global` lock with a best-effort on-disk file lock so
+  that only one poller per (account, token) pair runs, even across separate
+  OS processes that are not connected as distributed Erlang nodes.
+  """
 
   # Telegram getUpdates is "at least once" if you have multiple pollers. Running two pollers
   # (e.g. legacy LemonGateway transport + lemon_channels adapter) will double-submit inbound

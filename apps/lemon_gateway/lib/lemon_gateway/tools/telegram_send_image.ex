@@ -1,5 +1,11 @@
 defmodule LemonGateway.Tools.TelegramSendImage do
-  @moduledoc false
+  @moduledoc """
+  AgentCore tool definition for sending images to Telegram.
+
+  Resolves the image path relative to the project or workspace root, validates
+  the file type and size, and queues it for delivery to the active Telegram chat
+  with an optional caption.
+  """
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent

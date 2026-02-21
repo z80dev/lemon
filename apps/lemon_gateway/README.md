@@ -124,7 +124,21 @@ cli_path = "/usr/local/bin/claude"
 | `lemon` | `LemonGateway.Engines.Lemon` | Native CodingAgent engine |
 | `codex` | `LemonGateway.Engines.Codex` | OpenAI Codex via CLI adapter |
 | `claude` | `LemonGateway.Engines.Claude` | Claude Code via CLI adapter |
+| `opencode` | `LemonGateway.Engines.Opencode` | Opencode via CLI adapter |
+| `pi` | `LemonGateway.Engines.Pi` | Pi runner via CLI adapter |
 | `echo` | `LemonGateway.Engines.Echo` | Echo engine for testing |
+
+## Available Transports
+
+| Transport | Module | Description |
+|-----------|--------|-------------|
+| Telegram | `LemonGateway.Telegram.*` | Long-polling Telegram bot with threading and streaming |
+| Discord | `LemonGateway.Transports.Discord` | Discord bot via Nostrum with slash commands |
+| Email | `LemonGateway.Transports.Email` | SMTP inbound/outbound email transport |
+| Farcaster | `LemonGateway.Transports.Farcaster` | Farcaster Frame-based interactions |
+| XMTP | `LemonGateway.Transports.Xmtp` | XMTP messaging via Node.js bridge |
+| Webhook | `LemonGateway.Transports.Webhook` | HTTP webhook with sync/async modes |
+| SMS | `LemonGateway.Sms.*` | Twilio SMS webhooks with verification code tools |
 
 ## Adding a New Engine
 
@@ -242,3 +256,20 @@ claude resume abc-def-123
 ```
 
 The gateway extracts the token, routes to the correct engine, and continues the conversation thread.
+
+## Key Modules
+
+| Module | Purpose |
+|--------|---------|
+| `LemonGateway` | Public API entry point (`submit/1`) |
+| `LemonGateway.Scheduler` | Concurrency-limited job scheduler with auto-resume |
+| `LemonGateway.ThreadWorker` | Per-session job queue (collect, followup, steer, interrupt modes) |
+| `LemonGateway.Run` | Engine run lifecycle (start, stream, cancel, complete) |
+| `LemonGateway.Engine` | Behaviour for AI engine plugins |
+| `LemonGateway.Transport` | Behaviour for transport plugins |
+| `LemonGateway.Command` | Behaviour for slash command plugins |
+| `LemonGateway.Config` | Centralized TOML-backed configuration |
+| `LemonGateway.BindingResolver` | Maps chat scopes to projects, engines, and queue modes |
+| `LemonGateway.EngineLock` | Mutex lock preventing concurrent runs per session |
+| `LemonGateway.Store` | Gateway-facing storage API (delegates to `LemonCore.Store`) |
+| `LemonGateway.Health` | Health check system with `/healthz` endpoint |

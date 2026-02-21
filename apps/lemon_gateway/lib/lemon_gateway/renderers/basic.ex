@@ -1,5 +1,10 @@
 defmodule LemonGateway.Renderers.Basic do
-  @moduledoc false
+  @moduledoc """
+  Basic plain-text renderer implementing the `LemonGateway.Renderer` behaviour.
+
+  Renders run lifecycle events (started, action, completed) into simple textual
+  status messages with action lists and resume information.
+  """
   @behaviour LemonGateway.Renderer
 
   alias LemonGateway.Event

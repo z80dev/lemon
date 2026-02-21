@@ -1,5 +1,11 @@
 defmodule LemonGateway.Sms.Inbox do
-  @moduledoc false
+  @moduledoc """
+  GenServer that stores and queries inbound SMS messages.
+
+  Ingests Twilio SMS webhook payloads, extracts verification codes (4-8 digit
+  sequences), and supports filtering, claiming, and waiting for incoming codes.
+  Expired messages are periodically cleaned up based on a configurable TTL.
+  """
 
   use GenServer
 

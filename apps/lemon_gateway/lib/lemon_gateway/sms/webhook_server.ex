@@ -1,5 +1,11 @@
 defmodule LemonGateway.Sms.WebhookServer do
-  @moduledoc false
+  @moduledoc """
+  Starts a Bandit HTTP server to host the SMS webhook endpoint.
+
+  Reads the port and bind IP from `LemonGateway.Sms.Config` and serves
+  `LemonGateway.Sms.WebhookRouter`. The server is only started when the
+  webhook is enabled via configuration.
+  """
 
   require Logger
 

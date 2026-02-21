@@ -1,5 +1,9 @@
 defmodule LemonGateway.Transports.Email.Inbound do
-  @moduledoc false
+  @moduledoc """
+  HTTP webhook server that receives inbound emails, parses both raw RFC 2822
+  and structured JSON payloads, persists attachments, resolves email threads,
+  and submits prompts to the LemonGateway runtime.
+  """
 
   use Plug.Router
 

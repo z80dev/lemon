@@ -10561,6 +10561,121 @@ defmodule Ai.Models do
   end
 
   @doc """
+  Check if a model supports the xhigh thinking level.
+
+  Supported models:
+  - GPT-5.2 / GPT-5.3 model families
+  - Anthropic Opus 4.6 models (xhigh maps to adaptive effort "max")
+
+  Ported from Pi's model-resolver.
+
+  ## Examples
+
+      iex> model = Ai.Models.get_model(:openai, "gpt-5.2")
+      iex> Ai.Models.supports_xhigh?(model)
+      true
+
+      iex> model = Ai.Models.get_model(:anthropic, "claude-opus-4-6-20250514")
+      iex> Ai.Models.supports_xhigh?(model)
+      true
+
+      iex> model = Ai.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      iex> Ai.Models.supports_xhigh?(model)
+      false
+  """
+  @spec supports_xhigh?(Model.t()) :: boolean()
+  def supports_xhigh?(%Model{id: id, api: api}) do
+    cond do
+      String.contains?(id, "gpt-5.2") or String.contains?(id, "gpt-5.3") ->
+        true
+      api == :anthropic_messages and
+          (String.contains?(id, "opus-4-6") or String.contains?(id, "opus-4.6")) ->
+        true
+      true ->
+        false
+    end
+  end
+
+  @default_thinking_budgets %{
+    minimal: 1024,
+    low: 2048,
+    medium: 8192,
+    high: 16384
+  }
+
+  @doc """
+  Adjust max tokens to accommodate a thinking budget for a given reasoning level.
+
+  Computes the thinking token budget for the requested level (clamping xhigh
+  to high), then increases `base_max_tokens` by that amount without exceeding
+  `model_max_tokens`. If the resulting max is smaller than the budget, the
+  budget is reduced to leave at least 1024 output tokens.
+
+  Ported from Pi's adjustMaxTokensForThinking.
+
+  ## Parameters
+
+    - `base_max_tokens` - The base output token limit before thinking
+    - `model_max_tokens` - The model's hard maximum token limit
+    - `reasoning_level` - One of `:minimal`, `:low`, `:medium`, `:high`, `:xhigh`
+    - `custom_budgets` - Optional map overriding default budgets per level
+
+  ## Returns
+
+  A tuple `{max_tokens, thinking_budget}`.
+
+  ## Examples
+
+      iex> Ai.Models.adjust_max_tokens_for_thinking(8192, 200_000, :high)
+      {24576, 16384}
+
+      iex> Ai.Models.adjust_max_tokens_for_thinking(8192, 200_000, :medium, %{medium: 4096})
+      {12288, 4096}
+  """
+  @spec adjust_max_tokens_for_thinking(
+          non_neg_integer(),
+          non_neg_integer(),
+          atom(),
+          map()
+        ) :: {non_neg_integer(), non_neg_integer()}
+  def adjust_max_tokens_for_thinking(base_max_tokens, model_max_tokens, reasoning_level, custom_budgets \\ %{}) do
+    min_output_tokens = 1024
+    level = clamp_reasoning(reasoning_level)
+    budgets = Map.merge(@default_thinking_budgets, custom_budgets)
+    thinking_budget = Map.get(budgets, level, 0)
+    max_tokens = min(base_max_tokens + thinking_budget, model_max_tokens)
+
+    thinking_budget = if max_tokens <= thinking_budget do
+      max(0, max_tokens - min_output_tokens)
+    else
+      thinking_budget
+    end
+
+    {max_tokens, thinking_budget}
+  end
+
+  @doc """
+  Clamp a reasoning level, mapping `:xhigh` to `:high` for providers that
+  don't support it.
+
+  ## Examples
+
+      iex> Ai.Models.clamp_reasoning(:xhigh)
+      :high
+
+      iex> Ai.Models.clamp_reasoning(:medium)
+      :medium
+
+      iex> Ai.Models.clamp_reasoning(nil)
+      nil
+  """
+  @spec clamp_reasoning(atom() | nil) :: atom() | nil
+  def clamp_reasoning(nil), do: nil
+  def clamp_reasoning(:xhigh), do: :high
+  def clamp_reasoning(level) when level in [:minimal, :low, :medium, :high], do: level
+  def clamp_reasoning(_), do: nil
+
+  @doc """
   Find a model by ID across all providers.
 
   Returns the first matching model found, or nil if no match.

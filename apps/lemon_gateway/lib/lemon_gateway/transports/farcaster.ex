@@ -1,5 +1,9 @@
 defmodule LemonGateway.Transports.Farcaster do
-  @moduledoc false
+  @moduledoc """
+  Farcaster transport plugin for LemonGateway. Manages configuration and
+  lifecycle for the Farcaster Frame server, enabling inbound frame interactions
+  and optional outbound cast posting.
+  """
 
   use LemonGateway.Transport
 

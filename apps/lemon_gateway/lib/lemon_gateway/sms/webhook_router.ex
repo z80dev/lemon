@@ -1,5 +1,11 @@
 defmodule LemonGateway.Sms.WebhookRouter do
-  @moduledoc false
+  @moduledoc """
+  Plug router that handles inbound Twilio SMS webhooks.
+
+  Exposes a `POST /webhooks/twilio/sms` endpoint that validates the request
+  signature (when configured), ingests the message into the SMS inbox, and
+  responds with an empty TwiML `<Response>`.
+  """
 
   use Plug.Router
 

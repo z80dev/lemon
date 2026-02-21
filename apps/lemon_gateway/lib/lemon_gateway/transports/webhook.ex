@@ -899,35 +899,7 @@ defmodule LemonGateway.Transports.Webhook do
         send(parent, {ready_ref, :subscribed})
 
         try do
-          case wait_for_run_completion(
-                 run_ctx.run_id,
-                 run_ctx.callback_wait_timeout_ms,
-                 subscribe?: false
-               ) do
-            {:ok, run_payload} ->
-              case send_callback_with_retry(
-                     run_ctx.callback_url,
-                     callback_payload(run_ctx, run_payload),
-                     run_ctx.timeout_ms,
-                     run_ctx.callback_retry
-                   ) do
-                {:ok, _status} ->
-                  :ok
-
-                {:error, reason} ->
-                  Logger.warning(
-                    "webhook callback delivery failed run_id=#{run_ctx.run_id}: #{inspect(reason)}"
-                  )
-              end
-
-            {:error, :timeout} ->
-              Logger.warning("webhook callback wait timed out for run_id=#{run_ctx.run_id}")
-
-            {:error, reason} ->
-              Logger.warning(
-                "webhook callback wait failed for run_id=#{run_ctx.run_id}: #{inspect(reason)}"
-              )
-          end
+          deliver_callback_after_completion(run_ctx)
         after
           _ = LemonCore.Bus.unsubscribe(topic)
         end
@@ -938,6 +910,31 @@ defmodule LemonGateway.Transports.Webhook do
   rescue
     error ->
       send(parent, {ready_ref, {:error, {:callback_waiter_failed, Exception.message(error)}}})
+  end
+
+  @spec deliver_callback_after_completion(map()) :: :ok | {:error, term()}
+  defp deliver_callback_after_completion(run_ctx) do
+    with {:ok, run_payload} <-
+           wait_for_run_completion(run_ctx.run_id, run_ctx.callback_wait_timeout_ms,
+             subscribe?: false
+           ),
+         {:ok, _status} <-
+           send_callback_with_retry(
+             run_ctx.callback_url,
+             callback_payload(run_ctx, run_payload),
+             run_ctx.timeout_ms,
+             run_ctx.callback_retry
+           ) do
+      :ok
+    else
+      {:error, :timeout} ->
+        Logger.warning("webhook callback wait timed out for run_id=#{run_ctx.run_id}")
+
+      {:error, reason} ->
+        Logger.warning(
+          "webhook callback failed for run_id=#{run_ctx.run_id}: #{inspect(reason)}"
+        )
+    end
   end
 
   defp cleanup_wait_setup(%{sync_topic: topic}) when is_binary(topic) do

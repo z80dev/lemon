@@ -1046,7 +1046,7 @@ defmodule CodingAgent.Tools.WebSearch do
     settings_manager = Keyword.get(opts, :settings_manager)
     search_cfg = extract_search_config(settings_manager)
     cache_cfg = extract_cache_config(settings_manager)
-    failover_cfg = extract_failover_config(settings_manager)
+    failover_cfg = extract_failover_config(search_cfg)
     perplexity_cfg = extract_perplexity_config(search_cfg)
 
     provider = resolve_provider(search_cfg)

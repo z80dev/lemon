@@ -25,6 +25,69 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-21 - Review & Integration: Claude Task Batch Validation
+**Work Area**: Review / Integration / Bug Fixes
+
+**Reviewed Claude outputs (3-task batch):**
+- Reviewed recent Claude task commits and the full uncommitted change batch in `~/dev/lemon` (100 tracked changed files + new files across `agent_core`, `ai`, `coding_agent`, `lemon_core`, `lemon_gateway`, `lemon_router`).
+- Verified refactor, feature, and test-expansion changes for integration regressions.
+
+**What was done:**
+- Ran full validation gates:
+  - `mix compile --warnings-as-errors`
+  - `mix test` (umbrella)
+- Fixed integration breakages uncovered during review:
+  - `apps/lemon_core/test/mix/tasks/lemon.secrets.delete_test.exs`:
+    - ensured module load before `function_exported?/3` check to avoid false negatives.
+  - `apps/lemon_gateway/test/application_test.exs`:
+    - updated supervision tree expectations for new voice infrastructure children.
+    - made expected child list config-aware for optional health/voice server children.
+    - removed unstable expectation for temporary `LemonGateway.Telegram.StartupNotifier` child.
+- Confirmed prior coding_agent integration fixes remain green in full suite:
+  - `websearch` failover config wiring
+  - `write` tool formatting contract
+  - `hashline` edit edge cases
+  - `lsp_formatter` tool behavior and tests
+
+**Files created/modified (this integration pass):**
+- Modified:
+  - `apps/lemon_core/test/mix/tasks/lemon.secrets.delete_test.exs`
+  - `apps/lemon_gateway/test/application_test.exs`
+- Included in reviewed/validated Claude batch (already present in working tree):
+  - 100 tracked changed files across:
+    - `apps/agent_core/**`
+    - `apps/ai/**`
+    - `apps/coding_agent/**`
+    - `apps/lemon_core/**`
+    - `apps/lemon_gateway/**`
+    - `apps/lemon_router/**`
+    - `mix.lock`
+  - New files validated in batch:
+    - `apps/ai/test/models_core_test.exs`
+    - `apps/ai/test/providers/http_trace_test.exs`
+    - `apps/coding_agent/lib/coding_agent/tools/lsp_formatter.ex`
+    - `apps/lemon_gateway/lib/lemon_gateway/transports/voice.ex`
+    - `apps/lemon_gateway/lib/lemon_gateway/voice/*`
+    - `apps/lemon_gateway/README_VOICE.md`
+    - `apps/lemon_gateway/VOICE_INTEGRATION_SUMMARY.md`
+    - `apps/lemon_gateway/priv/voice_setup.sh`
+    - `apps/lemon_router/test/lemon_router/tool_preview_test.exs`
+
+**Tests added:**
+- No brand-new tests authored in this integration pass.
+- Integrated and validated Claude-added tests/new test files listed above.
+- Updated 2 existing tests for correctness with current runtime behavior.
+
+**Result:**
+- `mix compile --warnings-as-errors`: PASS
+- `mix test` (umbrella): PASS (exit code 0)
+- Integration failures resolved; no remaining failing suites in final run.
+
+**Next run recommendations:**
+- Add dedicated tests for voice transport/session runtime paths (`LemonGateway.Voice.*`) beyond compile/startup coverage.
+- Consider splitting future large Claude batches into smaller thematic commits to simplify review/rollback.
+- Continue converting unstable process-tree assertions to behavior-oriented checks for temporary/optional children.
+
 ### 2026-02-21 - Feature Enhancement: Hashline Edit Tool & Streaming Support
 **Work Area**: Feature Enhancement (Pi/Oh-My-Pi Sync)
 

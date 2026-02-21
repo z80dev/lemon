@@ -6,8 +6,9 @@ defmodule LemonGateway.ApplicationTest do
   and configuration loading.
   """
 
-  # Expected children in the supervision tree (in order)
-  @expected_children [
+  # Base children in the supervision tree (in order).
+  # Optional health/voice websocket servers are appended based on config.
+  @base_expected_children [
     LemonGateway.Config,
     LemonGateway.EngineRegistry,
     LemonGateway.TransportRegistry,
@@ -18,11 +19,14 @@ defmodule LemonGateway.ApplicationTest do
     LemonGateway.ThreadRegistry,
     LemonGateway.Sms.Inbox,
     LemonGateway.Sms.WebhookServer,
+    LemonGateway.Voice.CallRegistry,
+    LemonGateway.Voice.DeepgramRegistry,
+    LemonGateway.Voice.CallSessionSupervisor,
+    LemonGateway.Voice.DeepgramSupervisor,
     LemonGateway.RunSupervisor,
     LemonGateway.ThreadWorkerSupervisor,
     LemonGateway.TaskSupervisor,
-    LemonGateway.Scheduler,
-    LemonGateway.Health.Server
+    LemonGateway.Scheduler
   ]
 
   defmodule MockTelegramTransport do
@@ -62,6 +66,23 @@ defmodule LemonGateway.ApplicationTest do
     Application.delete_env(:lemon_gateway, :commands)
     Application.delete_env(:lemon_gateway, :config_path)
     Application.delete_env(:lemon_core, LemonCore.Store)
+  end
+
+  defp expected_children do
+    children = @base_expected_children
+
+    children =
+      if Application.get_env(:lemon_gateway, :health_enabled, true) do
+        children ++ [LemonGateway.Health.Server]
+      else
+        children
+      end
+
+    if Application.get_env(:lemon_gateway, :voice_enabled, false) do
+      children ++ [LemonGateway.Voice.Server]
+    else
+      children
+    end
   end
 
   # ---------------------------------------------------------------------
@@ -144,7 +165,7 @@ defmodule LemonGateway.ApplicationTest do
       children = Supervisor.which_children(LemonGateway.Supervisor)
       child_ids = Enum.map(children, fn {id, _pid, _type, _modules} -> id end)
 
-      for expected <- @expected_children do
+      for expected <- expected_children() do
         assert expected in child_ids,
                "Expected #{inspect(expected)} in supervision tree, got: #{inspect(child_ids)}"
       end
@@ -154,7 +175,7 @@ defmodule LemonGateway.ApplicationTest do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       children = Supervisor.which_children(LemonGateway.Supervisor)
-      assert length(children) == length(@expected_children)
+      assert length(children) == length(expected_children())
     end
 
     test "all child processes are running" do

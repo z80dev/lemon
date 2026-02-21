@@ -1,5 +1,11 @@
 defmodule LemonGateway.EngineRegistry do
-  @moduledoc false
+  @moduledoc """
+  Registry of available AI engine modules.
+
+  Maintains a mapping of engine ID strings to their implementing modules.
+  Validates engine IDs on registration and provides lookup and resume
+  token extraction across all registered engines.
+  """
   use GenServer
 
   @type engine_id :: String.t()
@@ -12,9 +18,11 @@ defmodule LemonGateway.EngineRegistry do
     GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
   end
 
+  @doc "Returns a list of all registered engine IDs."
   @spec list_engines() :: [engine_id()]
   def list_engines, do: GenServer.call(__MODULE__, :list)
 
+  @doc "Returns the engine module for the given ID, or raises if not found."
   @spec get_engine!(engine_id()) :: engine_mod()
   def get_engine!(id) do
     case get_engine(id) do
@@ -23,6 +31,7 @@ defmodule LemonGateway.EngineRegistry do
     end
   end
 
+  @doc "Returns the engine module for the given ID, or `nil` if not registered."
   @spec get_engine(engine_id()) :: engine_mod() | nil
   def get_engine(id), do: GenServer.call(__MODULE__, {:get_or_nil, id})
 

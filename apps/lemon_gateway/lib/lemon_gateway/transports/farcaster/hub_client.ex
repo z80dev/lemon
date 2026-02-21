@@ -1,5 +1,8 @@
 defmodule LemonGateway.Transports.Farcaster.HubClient do
-  @moduledoc false
+  @moduledoc """
+  HTTP client for verifying Farcaster frame message signatures against a
+  Farcaster Hub validation endpoint. Returns the verified FID on success.
+  """
 
   @default_timeout_ms 5_000
 

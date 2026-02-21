@@ -1,5 +1,10 @@
 defmodule LemonGateway.Telegram.Dedupe do
-  @moduledoc false
+  @moduledoc """
+  ETS-based deduplication for Telegram message processing.
+
+  Wraps `LemonCore.Dedupe.Ets` with a dedicated table to track previously
+  seen message keys and prevent duplicate processing within a configurable TTL.
+  """
 
   @table :lemon_gateway_telegram_dedupe
 

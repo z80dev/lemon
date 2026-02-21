@@ -1,5 +1,11 @@
 defmodule LemonGateway.Tools.SmsWaitForCode do
-  @moduledoc false
+  @moduledoc """
+  AgentCore tool that polls the SMS inbox for incoming verification codes.
+
+  Waits up to a configurable timeout for a new SMS containing a numeric code
+  (default 4-8 digits, or a custom regex). Automatically claims the matched
+  message for the current session to prevent duplicate consumption.
+  """
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent

@@ -1,5 +1,11 @@
 defmodule LemonGateway.Telegram.Outbox do
-  @moduledoc false
+  @moduledoc """
+  Throttled Telegram message send/edit/delete queue with retry logic.
+
+  Implements a GenServer-based priority queue that coalesces rapid edits,
+  respects Telegram rate limits (HTTP 429), and retries transient failures
+  with exponential backoff up to a configurable maximum.
+  """
   use GenServer
 
   alias LemonGateway.Telegram.API

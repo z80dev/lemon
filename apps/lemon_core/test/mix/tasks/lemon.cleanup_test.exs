@@ -7,7 +7,6 @@ defmodule Mix.Tasks.Lemon.CleanupTest do
   import ExUnit.CaptureIO
 
   alias Mix.Tasks.Lemon.Cleanup
-  alias LemonCore.Quality.Cleanup, as: CleanupModule
 
   setup do
     # Create a temporary directory for test

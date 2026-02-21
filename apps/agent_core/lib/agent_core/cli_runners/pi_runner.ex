@@ -145,10 +145,10 @@ defmodule AgentCore.CliRunners.PiRunner do
 
   @impl true
   def env(_state) do
-    env = System.get_env()
-    env = Map.put_new(env, "NO_COLOR", "1")
-    env = Map.put_new(env, "CI", "1")
-    Enum.to_list(env)
+    System.get_env()
+    |> Map.put_new("NO_COLOR", "1")
+    |> Map.put_new("CI", "1")
+    |> Enum.to_list()
   end
 
   @impl true
@@ -280,10 +280,11 @@ defmodule AgentCore.CliRunners.PiRunner do
         do: tool_id,
         else: "pi.tool.#{:erlang.unique_integer([:positive])}"
 
-    args = if is_map(args), do: stringify_keys(args), else: %{}
+    args = if is_map(args), do: ToolActionHelpers.stringify_keys(args), else: %{}
     name = if is_binary(tool_name) and tool_name != "", do: tool_name, else: "tool"
 
-    {kind, title} = tool_kind_and_title(name, args, path_keys: ["path"], cwd: state.cwd)
+    {kind, title} =
+      ToolActionHelpers.tool_kind_and_title(name, args, path_keys: ["path"], cwd: state.cwd)
 
     detail =
       %{
@@ -518,15 +519,8 @@ defmodule AgentCore.CliRunners.PiRunner do
     end
   end
 
-  defp stringify_keys(map) when is_map(map) do
-    Map.new(map, fn
-      {k, v} when is_atom(k) -> {Atom.to_string(k), v}
-      {k, v} -> {k, v}
-    end)
-  end
-
   defp maybe_put_changes(detail, :file_change, args, keys) do
-    case tool_input_path(args, keys) do
+    case ToolActionHelpers.tool_input_path(args, keys) do
       path when is_binary(path) and path != "" ->
         Map.put(detail, "changes", [%{"path" => path, "kind" => "update"}])
 
@@ -536,81 +530,4 @@ defmodule AgentCore.CliRunners.PiRunner do
   end
 
   defp maybe_put_changes(detail, _kind, _args, _keys), do: detail
-
-  defp tool_input_path(input, keys) when is_map(input) do
-    Enum.find_value(keys, fn k ->
-      v = Map.get(input, k)
-      if is_binary(v) and v != "", do: v, else: nil
-    end)
-  end
-
-  defp tool_input_path(_input, _keys), do: nil
-
-  defp tool_kind_and_title(name, input, opts) do
-    name_lower = name |> to_string() |> String.downcase()
-    cwd = Keyword.get(opts, :cwd)
-    path_keys = Keyword.fetch!(opts, :path_keys)
-
-    cond do
-      name_lower in ["bash", "shell", "killshell"] ->
-        command = Map.get(input, "command") || Map.get(input, "cmd") || name
-        {:command, String.slice(to_string(command), 0, 80)}
-
-      name_lower in ["edit", "write", "multiedit", "notebookedit"] ->
-        path = tool_input_path(input, path_keys)
-        title = if path, do: maybe_relativize_path(path, cwd), else: name
-        {:file_change, title}
-
-      name_lower == "read" ->
-        path = tool_input_path(input, path_keys)
-        if path, do: {:tool, "read: `#{maybe_relativize_path(path, cwd)}`"}, else: {:tool, "read"}
-
-      name_lower == "glob" ->
-        pattern = Map.get(input, "pattern")
-        if pattern, do: {:tool, "glob: `#{pattern}`"}, else: {:tool, "glob"}
-
-      name_lower == "grep" ->
-        pattern = Map.get(input, "pattern")
-        if pattern, do: {:tool, "grep: #{pattern}"}, else: {:tool, "grep"}
-
-      name_lower == "find" ->
-        pattern = Map.get(input, "pattern")
-        if pattern, do: {:tool, "find: #{pattern}"}, else: {:tool, "find"}
-
-      name_lower == "ls" ->
-        path = tool_input_path(input, path_keys)
-        if path, do: {:tool, "ls: `#{maybe_relativize_path(path, cwd)}`"}, else: {:tool, "ls"}
-
-      name_lower in ["websearch", "web_search"] ->
-        query = Map.get(input, "query")
-        {:web_search, to_string(query || "search")}
-
-      name_lower in ["webfetch", "web_fetch"] ->
-        url = Map.get(input, "url")
-        {:web_search, to_string(url || "fetch")}
-
-      name_lower in ["task", "agent"] ->
-        desc = Map.get(input, "description") || Map.get(input, "prompt")
-        {:subagent, to_string(desc || name)}
-
-      true ->
-        {:tool, name}
-    end
-  end
-
-  defp maybe_relativize_path(path, nil), do: path
-
-  defp maybe_relativize_path(path, cwd) when is_binary(path) and is_binary(cwd) do
-    expanded_path = Path.expand(path)
-    expanded_cwd = Path.expand(cwd)
-
-    try do
-      rel = Path.relative_to(expanded_path, expanded_cwd)
-      if String.starts_with?(rel, ".."), do: path, else: rel
-    rescue
-      _ -> path
-    end
-  end
-
-  defp maybe_relativize_path(path, _cwd), do: path
 end

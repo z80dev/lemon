@@ -219,7 +219,7 @@ defmodule AgentCore.CliRunners.OpencodeRunner do
   defp translate_tool_use(part, state) when not is_map(part), do: {[], state}
 
   defp translate_tool_use(part, state) do
-    part = stringify_keys(part)
+    part = ToolActionHelpers.stringify_keys(part)
     tool_state = Map.get(part, "state") |> ensure_map()
     status = Map.get(tool_state, "status")
 
@@ -234,7 +234,7 @@ defmodule AgentCore.CliRunners.OpencodeRunner do
     tool_input = Map.get(tool_state, "input") |> ensure_map()
 
     {kind, title} =
-      tool_kind_and_title(to_string(tool_name), tool_input,
+      ToolActionHelpers.tool_kind_and_title(to_string(tool_name), tool_input,
         path_keys: ["file_path", "filePath"],
         cwd: state.cwd
       )
@@ -381,21 +381,14 @@ defmodule AgentCore.CliRunners.OpencodeRunner do
     end
   end
 
-  defp ensure_map(v) when is_map(v), do: stringify_keys(v)
+  defp ensure_map(v) when is_map(v), do: ToolActionHelpers.stringify_keys(v)
   defp ensure_map(_), do: %{}
-
-  defp stringify_keys(map) when is_map(map) do
-    Map.new(map, fn
-      {k, v} when is_atom(k) -> {Atom.to_string(k), v}
-      {k, v} -> {k, v}
-    end)
-  end
 
   defp maybe_put(map, _k, nil), do: map
   defp maybe_put(map, k, v), do: Map.put(map, k, v)
 
   defp maybe_put_changes(detail, :file_change, input, path_keys) do
-    case tool_input_path(input, path_keys) do
+    case ToolActionHelpers.tool_input_path(input, path_keys) do
       path when is_binary(path) and path != "" ->
         Map.put(detail, "changes", [%{"path" => path, "kind" => "update"}])
 
@@ -418,22 +411,13 @@ defmodule AgentCore.CliRunners.OpencodeRunner do
     if byte_size(s) > 500, do: binary_part(s, 0, 500), else: s
   end
 
-  defp tool_input_path(input, keys) when is_map(input) do
-    Enum.find_value(keys, fn k ->
-      v = Map.get(input, k)
-      if is_binary(v) and v != "", do: v, else: nil
-    end)
-  end
-
-  defp tool_input_path(_input, _keys), do: nil
-
   defp normalize_tool_title(title, tool_input, cwd) do
     if String.contains?(title, "`") do
       title
     else
-      case tool_input_path(tool_input, ["file_path", "filePath"]) do
+      case ToolActionHelpers.tool_input_path(tool_input, ["file_path", "filePath"]) do
         path when is_binary(path) and path != "" ->
-          rel = maybe_relativize_path(path, cwd)
+          rel = ToolActionHelpers.maybe_relativize_path(path, cwd)
 
           if title in [path, rel] do
             "`#{rel}`"
@@ -446,72 +430,4 @@ defmodule AgentCore.CliRunners.OpencodeRunner do
       end
     end
   end
-
-  defp tool_kind_and_title(name, input, opts) do
-    name_lower = name |> to_string() |> String.downcase()
-    cwd = Keyword.get(opts, :cwd)
-    path_keys = Keyword.fetch!(opts, :path_keys)
-
-    cond do
-      name_lower in ["bash", "shell", "killshell"] ->
-        command = Map.get(input, "command") || Map.get(input, "cmd") || name
-        {:command, String.slice(to_string(command), 0, 80)}
-
-      name_lower in ["edit", "write", "multiedit", "notebookedit"] ->
-        path = tool_input_path(input, path_keys)
-        title = if path, do: maybe_relativize_path(path, cwd), else: name
-        {:file_change, title}
-
-      name_lower == "read" ->
-        path = tool_input_path(input, path_keys)
-        if path, do: {:tool, "read: `#{maybe_relativize_path(path, cwd)}`"}, else: {:tool, "read"}
-
-      name_lower == "glob" ->
-        pattern = Map.get(input, "pattern")
-        if pattern, do: {:tool, "glob: `#{pattern}`"}, else: {:tool, "glob"}
-
-      name_lower == "grep" ->
-        pattern = Map.get(input, "pattern")
-        if pattern, do: {:tool, "grep: #{pattern}"}, else: {:tool, "grep"}
-
-      name_lower == "find" ->
-        pattern = Map.get(input, "pattern")
-        if pattern, do: {:tool, "find: #{pattern}"}, else: {:tool, "find"}
-
-      name_lower == "ls" ->
-        path = tool_input_path(input, path_keys)
-        if path, do: {:tool, "ls: `#{maybe_relativize_path(path, cwd)}`"}, else: {:tool, "ls"}
-
-      name_lower in ["websearch", "web_search"] ->
-        query = Map.get(input, "query")
-        {:web_search, to_string(query || "search")}
-
-      name_lower in ["webfetch", "web_fetch"] ->
-        url = Map.get(input, "url")
-        {:web_search, to_string(url || "fetch")}
-
-      name_lower in ["task", "agent"] ->
-        desc = Map.get(input, "description") || Map.get(input, "prompt")
-        {:subagent, to_string(desc || name)}
-
-      true ->
-        {:tool, name}
-    end
-  end
-
-  defp maybe_relativize_path(path, nil), do: path
-
-  defp maybe_relativize_path(path, cwd) when is_binary(path) and is_binary(cwd) do
-    expanded_path = Path.expand(path)
-    expanded_cwd = Path.expand(cwd)
-
-    try do
-      rel = Path.relative_to(expanded_path, expanded_cwd)
-      if String.starts_with?(rel, ".."), do: path, else: rel
-    rescue
-      _ -> path
-    end
-  end
-
-  defp maybe_relativize_path(path, _cwd), do: path
 end

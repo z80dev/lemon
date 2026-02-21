@@ -1,5 +1,9 @@
 defmodule LemonGateway.Transports.Discord do
-  @moduledoc false
+  @moduledoc """
+  Discord transport for LemonGateway. Connects to Discord via the Nostrum
+  library, handles incoming messages and slash command interactions, submits
+  prompts to the runtime, and delivers chunked responses back to channels.
+  """
 
   use GenServer
   use LemonGateway.Transport

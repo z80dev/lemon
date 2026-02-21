@@ -1085,6 +1085,86 @@ defmodule LemonRouter.RunProcessTest do
                end
              end)
     end
+
+    test "counts cached input tokens toward preemptive compaction threshold" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      session_key =
+        SessionKey.channel_peer(%{
+          agent_id: "test-agent",
+          channel_id: "telegram",
+          account_id: "botx",
+          peer_kind: :group,
+          peer_id: "12345",
+          thread_id: "777"
+        })
+
+      pending_compaction_key = {"botx", 12_345, 777}
+      old_telegram_env = Application.get_env(:lemon_channels, :telegram)
+
+      Application.put_env(:lemon_channels, :telegram, %{
+        compaction: %{
+          enabled: true,
+          context_window_tokens: 1_000,
+          reserve_tokens: 100,
+          trigger_ratio: 0.95
+        }
+      })
+
+      on_exit(fn ->
+        if is_nil(old_telegram_env) do
+          Application.delete_env(:lemon_channels, :telegram)
+        else
+          Application.put_env(:lemon_channels, :telegram, old_telegram_env)
+        end
+      end)
+
+      _ = LemonCore.Store.delete(:telegram_pending_compaction, pending_compaction_key)
+
+      job = make_test_job(run_id, %{progress_msg_id: 111, user_msg_id: 222})
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false
+               })
+
+      completed_event =
+        LemonCore.Event.new(
+          :run_completed,
+          %{
+            completed: %{
+              ok: true,
+              answer: "done",
+              usage: %{input_tokens: 200, cached_input_tokens: 750, output_tokens: 50}
+            }
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+
+      assert eventually(fn -> not Process.alive?(pid) end)
+
+      assert eventually(fn ->
+               case LemonCore.Store.get(:telegram_pending_compaction, pending_compaction_key) do
+                 %{
+                   reason: "near_limit",
+                   input_tokens: 950,
+                   threshold_tokens: threshold,
+                   context_window_tokens: 1_000,
+                   session_key: ^session_key
+                 }
+                 when is_integer(threshold) and threshold <= 950 ->
+                   true
+
+                 _ ->
+                   false
+               end
+             end)
+    end
   end
 
   describe "generated image tracking" do

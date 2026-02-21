@@ -1,5 +1,10 @@
 defmodule LemonGateway.Engines.Echo do
-  @moduledoc false
+  @moduledoc """
+  A test and debug engine that echoes the job prompt back as the output.
+
+  Implements the `LemonGateway.Engine` behaviour without spawning any
+  external process, making it useful for integration testing and diagnostics.
+  """
   @behaviour LemonGateway.Engine
 
   alias LemonGateway.Types.{Job, ResumeToken}

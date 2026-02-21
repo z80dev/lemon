@@ -714,19 +714,24 @@ defmodule LemonRouter.RunProcess do
     }
   end
 
-  defp extract_completed_answer(%LemonCore.Event{payload: %{completed: %{answer: answer}}}),
-    do: answer
+  @spec extract_from_completed_or_payload(LemonCore.Event.t() | term(), atom()) :: term()
+  defp extract_from_completed_or_payload(%LemonCore.Event{payload: payload}, field)
+       when is_map(payload) do
+    completed = fetch(payload, :completed)
 
-  defp extract_completed_answer(%LemonCore.Event{payload: %{answer: answer}}), do: answer
-  defp extract_completed_answer(_), do: nil
+    value = if is_map(completed), do: fetch(completed, field), else: nil
+    if is_nil(value), do: fetch(payload, field), else: value
+  end
 
-  defp extract_completed_resume(%LemonCore.Event{payload: %{completed: %{resume: resume}}}),
-    do: resume
+  defp extract_from_completed_or_payload(_, _), do: nil
 
-  defp extract_completed_resume(%LemonCore.Event{payload: %{resume: resume}}), do: resume
+  @spec extract_completed_answer(LemonCore.Event.t() | term()) :: binary() | nil
+  defp extract_completed_answer(event), do: extract_from_completed_or_payload(event, :answer)
 
-  defp extract_completed_resume(_), do: nil
+  @spec extract_completed_resume(LemonCore.Event.t() | term()) :: term()
+  defp extract_completed_resume(event), do: extract_from_completed_or_payload(event, :resume)
 
+  @spec normalize_resume_token(term()) :: ResumeToken.t() | nil
   defp normalize_resume_token(nil), do: nil
 
   defp normalize_resume_token(%ResumeToken{} = tok), do: tok
@@ -743,26 +748,25 @@ defmodule LemonRouter.RunProcess do
 
   defp normalize_resume_token(_), do: nil
 
-  defp extract_completed_ok_and_error(%LemonCore.Event{payload: %{completed: %{ok: ok} = c}})
-       when is_boolean(ok) do
-    {ok, fetch(c, :error)}
+  @spec extract_completed_ok_and_error(LemonCore.Event.t() | term()) :: {boolean(), term()}
+  defp extract_completed_ok_and_error(event) do
+    ok = extract_from_completed_or_payload(event, :ok)
+
+    if is_boolean(ok) do
+      error = extract_from_completed_or_payload(event, :error)
+      {ok, error}
+    else
+      {true, nil}
+    end
   end
 
-  defp extract_completed_ok_and_error(%LemonCore.Event{payload: %{ok: ok} = p})
-       when is_boolean(ok) do
-    {ok, fetch(p, :error)}
+  @spec extract_completed_usage(LemonCore.Event.t() | term()) :: map() | nil
+  defp extract_completed_usage(event) do
+    case extract_from_completed_or_payload(event, :usage) do
+      usage when is_map(usage) -> usage
+      _ -> nil
+    end
   end
-
-  defp extract_completed_ok_and_error(_), do: {true, nil}
-
-  defp extract_completed_usage(%LemonCore.Event{payload: %{completed: %{usage: usage}}})
-       when is_map(usage),
-       do: usage
-
-  defp extract_completed_usage(%LemonCore.Event{payload: %{usage: usage}}) when is_map(usage),
-    do: usage
-
-  defp extract_completed_usage(_), do: nil
 
   defp maybe_reset_telegram_resume_on_context_overflow(state, %LemonCore.Event{} = event) do
     case extract_completed_ok_and_error(event) do
@@ -832,6 +836,7 @@ defmodule LemonRouter.RunProcess do
 
   defp maybe_mark_telegram_pending_compaction_near_limit(_state, _event), do: :ok
 
+  @spec context_length_exceeded_error?(term()) :: boolean()
   defp context_length_exceeded_error?(err) do
     text =
       cond do
@@ -930,50 +935,50 @@ defmodule LemonRouter.RunProcess do
     end
   end
 
+  @spec usage_input_tokens(map() | term()) :: non_neg_integer() | nil
   defp usage_input_tokens(usage) when is_map(usage) do
-    {primary_key, primary_tokens} =
-      cond do
-        is_integer(maybe_parse_positive_int(fetch(usage, :input_tokens))) ->
-          {:input_tokens, maybe_parse_positive_int(fetch(usage, :input_tokens))}
-
-        is_integer(maybe_parse_positive_int(fetch(usage, :input))) ->
-          {:input, maybe_parse_positive_int(fetch(usage, :input))}
-
-        is_integer(maybe_parse_positive_int(fetch(usage, :prompt_tokens))) ->
-          {:prompt_tokens, maybe_parse_positive_int(fetch(usage, :prompt_tokens))}
-
-        true ->
-          {nil, nil}
-      end
-
-    cached_tokens =
-      [:cached_input_tokens, :cache_read_input_tokens, :cache_creation_input_tokens]
-      |> Enum.reduce(0, fn key, acc ->
-        case maybe_parse_positive_int(fetch(usage, key)) do
-          value when is_integer(value) -> acc + value
-          _ -> acc
-        end
-      end)
-
-    cond do
-      is_integer(primary_tokens) and primary_key in [:input_tokens, :input] ->
-        primary_tokens + cached_tokens
-
-      is_integer(primary_tokens) ->
-        primary_tokens
-
-      cached_tokens > 0 ->
-        cached_tokens
-
-      true ->
-        nil
-    end
+    {primary_key, primary_tokens} = find_primary_token_count(usage)
+    cached_tokens = sum_cached_tokens(usage)
+    compute_total_input_tokens(primary_key, primary_tokens, cached_tokens)
   rescue
     _ -> nil
   end
 
   defp usage_input_tokens(_), do: nil
 
+  @primary_token_keys [:input_tokens, :input, :prompt_tokens]
+  @cached_token_keys [:cached_input_tokens, :cache_read_input_tokens, :cache_creation_input_tokens]
+
+  @spec find_primary_token_count(map()) :: {atom() | nil, non_neg_integer() | nil}
+  defp find_primary_token_count(usage) do
+    Enum.find_value(@primary_token_keys, {nil, nil}, fn key ->
+      case maybe_parse_positive_int(fetch(usage, key)) do
+        value when is_integer(value) -> {key, value}
+        _ -> nil
+      end
+    end)
+  end
+
+  @spec sum_cached_tokens(map()) :: non_neg_integer()
+  defp sum_cached_tokens(usage) do
+    Enum.reduce(@cached_token_keys, 0, fn key, acc ->
+      case maybe_parse_positive_int(fetch(usage, key)) do
+        value when is_integer(value) -> acc + value
+        _ -> acc
+      end
+    end)
+  end
+
+  @spec compute_total_input_tokens(atom() | nil, non_neg_integer() | nil, non_neg_integer()) ::
+          non_neg_integer() | nil
+  defp compute_total_input_tokens(key, tokens, cached) when is_integer(tokens) and key in [:input_tokens, :input],
+    do: tokens + cached
+
+  defp compute_total_input_tokens(_key, tokens, _cached) when is_integer(tokens), do: tokens
+  defp compute_total_input_tokens(_key, _tokens, cached) when cached > 0, do: cached
+  defp compute_total_input_tokens(_key, _tokens, _cached), do: nil
+
+  @spec maybe_parse_positive_int(term()) :: pos_integer() | nil
   defp maybe_parse_positive_int(value) when is_integer(value) and value > 0, do: value
 
   defp maybe_parse_positive_int(value) when is_binary(value) do
@@ -1127,22 +1132,15 @@ defmodule LemonRouter.RunProcess do
     _ -> nil
   end
 
-  defp extract_completed_engine(%LemonCore.Event{payload: %{completed: completed}})
-       when is_map(completed) do
-    engine = fetch(completed, :engine)
-    if is_binary(engine) and engine != "", do: engine, else: nil
+  @spec extract_completed_engine(LemonCore.Event.t() | term()) :: binary() | nil
+  defp extract_completed_engine(event) do
+    case extract_from_completed_or_payload(event, :engine) do
+      engine when is_binary(engine) and engine != "" -> engine
+      _ -> nil
+    end
   rescue
     _ -> nil
   end
-
-  defp extract_completed_engine(%LemonCore.Event{payload: payload}) when is_map(payload) do
-    engine = fetch(payload, :engine)
-    if is_binary(engine) and engine != "", do: engine, else: nil
-  rescue
-    _ -> nil
-  end
-
-  defp extract_completed_engine(_), do: nil
 
   defp preemptive_compaction_threshold(context_window, reserve_tokens, trigger_ratio)
        when is_integer(context_window) and context_window > 0 and is_integer(reserve_tokens) and
@@ -1889,6 +1887,7 @@ defmodule LemonRouter.RunProcess do
 
   defp fetch(_, _), do: nil
 
+  @spec normalize_map(term()) :: map()
   defp normalize_map(value) when is_map(value), do: value
 
   defp normalize_map(value) when is_list(value) do
@@ -1901,9 +1900,11 @@ defmodule LemonRouter.RunProcess do
 
   defp normalize_map(_), do: %{}
 
+  @spec truthy?(term()) :: boolean()
   defp truthy?(value) when value in [true, "true", "1", 1], do: true
   defp truthy?(_), do: false
 
+  @spec positive_int_or(term(), term()) :: pos_integer() | term()
   defp positive_int_or(value, _default) when is_integer(value) and value > 0, do: value
 
   defp positive_int_or(value, default) when is_binary(value) do
@@ -1931,6 +1932,7 @@ defmodule LemonRouter.RunProcess do
     LemonCore.EventBridge.unsubscribe_run(run_id)
   end
 
+  @spec scheduler_available?(term()) :: boolean()
   defp scheduler_available?(scheduler) do
     case GenServer.whereis(scheduler) do
       pid when is_pid(pid) -> true
@@ -1938,6 +1940,7 @@ defmodule LemonRouter.RunProcess do
     end
   end
 
+  @spec gateway_submit_retry_delay_ms(non_neg_integer()) :: non_neg_integer()
   defp gateway_submit_retry_delay_ms(attempt) when is_integer(attempt) and attempt >= 0 do
     exponential = @gateway_submit_retry_base_ms * :math.pow(2, attempt)
     delay_ms = round(exponential)

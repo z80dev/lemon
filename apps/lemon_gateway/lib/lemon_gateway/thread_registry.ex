@@ -1,5 +1,10 @@
 defmodule LemonGateway.ThreadRegistry do
-  @moduledoc false
+  @moduledoc """
+  Process registry for `ThreadWorker` processes.
+
+  Wraps an Elixir `Registry` to provide unique-key registration and
+  lookup for thread workers by their thread key.
+  """
 
   def child_spec(opts) do
     %{
@@ -13,6 +18,7 @@ defmodule LemonGateway.ThreadRegistry do
     Registry.start_link(keys: :unique, name: __MODULE__)
   end
 
+  @doc "Looks up the PID of the thread worker for the given key, or returns `nil`."
   @spec whereis(term()) :: pid() | nil
   def whereis(thread_key) do
     case Registry.lookup(__MODULE__, thread_key) do
@@ -21,6 +27,7 @@ defmodule LemonGateway.ThreadRegistry do
     end
   end
 
+  @doc "Registers the calling process under the given thread key."
   @spec register(term()) :: {:ok, pid()} | {:error, {:already_registered, pid()}}
   def register(thread_key) do
     case Registry.register(__MODULE__, thread_key, :ok) do

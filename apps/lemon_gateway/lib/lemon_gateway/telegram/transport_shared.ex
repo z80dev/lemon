@@ -1,5 +1,11 @@
 defmodule LemonGateway.Telegram.TransportShared do
-  @moduledoc false
+  @moduledoc """
+  Shared utilities for Telegram transport deduplication and message processing.
+
+  Provides helpers to check whether the channels transport is running, build
+  deduplication keys from inbound messages, and perform ETS-based check-and-mark
+  deduplication for the channels adapter.
+  """
 
   @channels_transport LemonChannels.Adapters.Telegram.Transport
 

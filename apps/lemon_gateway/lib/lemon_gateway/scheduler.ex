@@ -1,5 +1,11 @@
 defmodule LemonGateway.Scheduler do
-  @moduledoc false
+  @moduledoc """
+  Concurrency-limited job scheduler.
+
+  Manages a pool of execution slots (`max_concurrent_runs`) and routes incoming
+  jobs to `ThreadWorker` processes keyed by session. Handles auto-resume by
+  restoring conversation tokens from stored chat state.
+  """
   use GenServer
   require Logger
 
@@ -10,21 +16,25 @@ defmodule LemonGateway.Scheduler do
     GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
   end
 
+  @doc "Submits a job for scheduling. Applies auto-resume and routes to the appropriate thread worker."
   @spec submit(Job.t()) :: :ok
   def submit(%Job{} = job) do
     GenServer.cast(__MODULE__, {:submit, job})
   end
 
+  @doc "Requests an execution slot for the given worker. Grants immediately or queues the request."
   @spec request_slot(pid(), term()) :: :ok
   def request_slot(worker_pid, thread_key) do
     GenServer.cast(__MODULE__, {:request_slot, worker_pid, thread_key})
   end
 
+  @doc "Releases an execution slot, allowing the next queued worker to proceed."
   @spec release_slot(reference()) :: :ok
   def release_slot(slot_ref) do
     GenServer.cast(__MODULE__, {:release_slot, slot_ref})
   end
 
+  @doc "Cancels a running job by sending a cancel cast to the run process."
   @spec cancel(pid(), term()) :: :ok
   def cancel(run_pid, reason \\ :user_requested) do
     if is_pid(run_pid) and Process.alive?(run_pid) do

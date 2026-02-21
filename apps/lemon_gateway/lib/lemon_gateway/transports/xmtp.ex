@@ -1,5 +1,9 @@
 defmodule LemonGateway.Transports.Xmtp do
-  @moduledoc false
+  @moduledoc """
+  XMTP messaging transport stub. The legacy gateway implementation has been
+  removed; this module delegates to the `LemonChannels.Adapters.Xmtp` adapter
+  and provides configuration and status helpers.
+  """
 
   use LemonGateway.Transport
 

@@ -1,5 +1,11 @@
 defmodule LemonGateway.Sms.TwilioSignature do
-  @moduledoc false
+  @moduledoc """
+  Validates Twilio webhook request signatures using HMAC-SHA1.
+
+  Computes the expected signature from the auth token, request URL, and POST
+  parameters, then performs a constant-time comparison against the provided
+  `X-Twilio-Signature` header value.
+  """
 
   # Twilio signature:
   # - data = url + concat(sorted(params), key <> value)

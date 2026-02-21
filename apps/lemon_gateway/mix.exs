@@ -38,6 +38,9 @@ defmodule LemonGateway.MixProject do
       {:mail, "~> 0.4"},
       # Markdown -> Telegram rendering uses entities (no parse_mode) for robust formatting.
       {:earmark_parser, "~> 1.4"},
+      # WebSocket support
+      {:websockex, "~> 0.4"},
+      {:websock_adapter, "~> 0.5"},
       {:agent_core, in_umbrella: true},
       {:coding_agent, in_umbrella: true},
       {:lemon_core, in_umbrella: true}

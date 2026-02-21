@@ -60,14 +60,15 @@ defmodule Ai.ApplicationTest do
     end
 
     test "supervisor has correct child count" do
-      # The application should have 5 children:
+      # The application should have 6 children:
       # 1. Ai.StreamTaskSupervisor (Task.Supervisor)
       # 2. Ai.RateLimiterRegistry (Registry)
       # 3. Ai.CircuitBreakerRegistry (Registry)
       # 4. Ai.ProviderSupervisor (DynamicSupervisor)
       # 5. Ai.CallDispatcher (GenServer)
+      # 6. Ai.ModelCache (GenServer)
       children = Supervisor.which_children(Ai.Supervisor)
-      assert length(children) == 5
+      assert length(children) == 6
     end
 
     test "supervisor uses one_for_one strategy" do
@@ -91,12 +92,12 @@ defmodule Ai.ApplicationTest do
     test "supervisor counts children correctly" do
       counts = Supervisor.count_children(Ai.Supervisor)
 
-      assert counts.active == 5
-      assert counts.specs == 5
+      assert counts.active == 6
+      assert counts.specs == 6
       # ProviderSupervisor and StreamTaskSupervisor are supervisors
       assert counts.supervisors >= 2
-      # CallDispatcher is a worker
-      assert counts.workers >= 1
+      # CallDispatcher and ModelCache are workers
+      assert counts.workers >= 2
     end
   end
 
