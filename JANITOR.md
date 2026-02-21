@@ -25,6 +25,46 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-21 - Feature Enhancement: Port HTTP Inspector, Model Cache, and Smart Routing
+**Work Area**: Feature Enhancement
+
+**What was done**:
+- Ported `Ai.HttpInspector` from Oh-My-Pi's `http-inspector.ts` (114 lines)
+  - Captures HTTP request metadata (provider, api, model, method, url, headers, body)
+  - On 400-level errors, saves sanitized request dumps as JSON to `~/.lemon/logs/http-errors/`
+  - Redacts sensitive headers (authorization, x-api-key, cookie, proxy-authorization)
+  - Integrates with existing `Ai.Providers.HttpTrace` for enhanced error diagnostics
+
+- Ported `Ai.ModelCache` from Oh-My-Pi's `model-cache.ts` (79 lines)
+  - ETS-backed cache for model availability per provider (replaces SQLite approach)
+  - TTL-based freshness with authoritative flag
+  - Public read, GenServer-owned table for crash resilience
+  - Added to supervision tree in `Ai.Application`
+
+- Ported `LemonRouter.SmartRouting` from Ironclaw's `smart_routing.rs` (124 lines)
+  - Task complexity classification (simple/moderate/complex) based on keywords, code blocks, length
+  - Routes requests to cheap vs primary models for cost optimization
+  - Uncertainty detection for cascade escalation
+  - Agent-based stats tracking for observability
+  - Complements `LemonRouter.ModelSelection` (which resolves config → model, while SmartRouting decides cheap vs primary)
+
+**Files created**:
+- `apps/ai/lib/ai/http_inspector.ex` - HTTP error inspection and dump persistence
+- `apps/ai/lib/ai/model_cache.ex` - ETS-based model availability cache
+- `apps/lemon_router/lib/lemon_router/smart_routing.ex` - Complexity-based model routing
+
+**Files modified**:
+- `apps/ai/lib/ai/application.ex` - Added `Ai.ModelCache` to supervision tree
+
+**Tests added**: 42 new tests
+- `apps/ai/test/ai/http_inspector_test.exs` - 10 tests (capture, sanitize, status codes, error handling)
+- `apps/ai/test/ai/model_cache_test.exs` - 13 tests (read/write, TTL, invalidation, stats)
+- `apps/lemon_router/test/lemon_router/smart_routing_test.exs` - 19 tests (classification, routing, uncertainty, stats)
+
+**All tests pass**: 42/42
+
+---
+
 ### 2026-02-20 - Refactoring: Fix Compiler Warnings & Break Down Long Functions
 **Work Area**: Refactoring / Code Quality
 

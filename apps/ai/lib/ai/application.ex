@@ -41,7 +41,9 @@ defmodule Ai.Application do
       # Dynamic supervisor for per-provider services
       Ai.ProviderSupervisor,
       # Central call dispatcher
-      {Ai.CallDispatcher, []}
+      {Ai.CallDispatcher, []},
+      # Model availability cache (ETS-backed)
+      Ai.ModelCache
     ]
 
     opts = [strategy: :one_for_one, name: Ai.Supervisor]
