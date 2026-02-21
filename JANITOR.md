@@ -25,6 +25,50 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-21 - Test Expansion: Wasm.ToolFactory & Session.EventHandler
+**Work Area**: Test Expansion / Coverage Improvement
+
+**What was done:**
+- Added comprehensive test suite for `CodingAgent.Wasm.ToolFactory` (7 tests, new file)
+- Enhanced `CodingAgent.Session.EventHandler` tests with 9 new test cases covering aborted message paths
+
+**New test file: `wasm/tool_factory_test.exs` (7 tests)**
+
+| Test Case | What It Covers |
+|-----------|----------------|
+| builds inventory entries from discovered tools | Full happy-path: struct fields, execute fn, metadata |
+| handles multiple discovered tools | Multi-tool inventory building |
+| returns empty list for empty discovered tools | Empty input edge case |
+| handles invalid schema_json | JSON parse fallback to empty object schema |
+| handles nil schema_json | nil input edge case |
+| passes cwd and session_id opts through | Options propagation to metadata |
+| non-object JSON falls back to empty schema | Array/string JSON schema fallback |
+
+**Enhanced test file: `session/event_handler_test.exs` (+9 tests)**
+
+| Test Case | What It Covers |
+|-----------|----------------|
+| {:turn_end} with aborted AssistantMessage | Clears streaming state on abort |
+| {:turn_end} with non-aborted message | State unchanged for normal messages |
+| {:turn_end} with plain map message | Guard clause for non-struct messages |
+| {:message_end} with aborted AssistantMessage | Persist + clear streaming + cancel event |
+| {:message_end} with normal message | Persist only, keep streaming active |
+| {:message_start} returns state unchanged | Passthrough behavior |
+| {:agent_end} drains non-empty steering queue | Queue cleanup on agent end |
+| refute_receive for non-aborted turn_end | No spurious callback invocations |
+| steering_queue from_list in aborted paths | Queue draining under non-empty conditions |
+
+**Test results:**
+- All 22 tests pass (7 ToolFactory + 15 EventHandler)
+- Full coding_agent suite: 3074 tests, 10 pre-existing failures (unrelated to changes)
+- Zero new failures introduced
+
+**Coverage gaps addressed:**
+- `CodingAgent.Wasm.ToolFactory` had zero test coverage → now fully covered
+- `CodingAgent.Session.EventHandler` had no tests for aborted message lifecycle paths → now covered
+
+---
+
 ### 2026-02-21 - Refactoring: webhook.ex, run_process.ex, xmtp/transport.ex
 **Work Area**: Refactoring / Code Quality
 
