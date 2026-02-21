@@ -42,3 +42,11 @@ lemon.zip
 __pycache__/
 *.py[cod]
 *.egg-info/
+
+# JavaScript/node artifacts
+node_modules/
+
+# Local generated SQLite/SQLite WAL artifacts
+*.db3
+*.db3-shm
+*.db3-wal
