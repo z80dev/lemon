@@ -93,11 +93,21 @@ defmodule LemonCore.EventBridge do
     configure(mod, mode: :if_unset)
   end
 
+  @doc """
+  Subscribe to events for the given run ID.
+
+  Dispatches to the configured implementation module. No-op if unconfigured.
+  """
   @spec subscribe_run(binary()) :: :ok
   def subscribe_run(run_id) when is_binary(run_id) do
     dispatch(:subscribe_run, [run_id])
   end
 
+  @doc """
+  Unsubscribe from events for the given run ID.
+
+  Dispatches to the configured implementation module. No-op if unconfigured.
+  """
   @spec unsubscribe_run(binary()) :: :ok
   def unsubscribe_run(run_id) when is_binary(run_id) do
     dispatch(:unsubscribe_run, [run_id])

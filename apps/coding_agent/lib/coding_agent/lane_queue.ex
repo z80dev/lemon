@@ -10,6 +10,15 @@ defmodule CodingAgent.LaneQueue do
 
   @type lane :: atom() | {:session, term()}
 
+  @doc """
+  Start a LaneQueue process.
+
+  Options:
+  - `:name` - registered name (defaults to `__MODULE__`)
+  - `:caps` - map or keyword list of `lane => max_concurrency` (required)
+  - `:task_supervisor` - PID or name of a `Task.Supervisor` (required)
+  """
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     name = Keyword.get(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, opts, name: name)

@@ -1,5 +1,10 @@
 defmodule CodingAgent.Tools.LspFormatter do
-  @moduledoc false
+  @moduledoc """
+  Auto-formatter abstraction supporting multiple languages.
+
+  Detects the appropriate formatter (mix format, prettier, black, rustfmt, gofmt)
+  based on file extension and runs it if the executable is available.
+  """
 
   @default_timeout_ms 15_000
 
@@ -31,9 +36,15 @@ defmodule CodingAgent.Tools.LspFormatter do
     }
   }
 
+  @doc """
+  Return the map of supported language formatters and their configuration.
+  """
   @spec list_formatters() :: map()
   def list_formatters, do: @formatters
 
+  @doc """
+  Check whether a file path has a known formatter based on its extension.
+  """
   @spec formatable?(String.t()) :: boolean()
   def formatable?(path) when is_binary(path) do
     ext = normalize_extension(path)
@@ -42,6 +53,12 @@ defmodule CodingAgent.Tools.LspFormatter do
 
   def formatable?(_), do: false
 
+  @doc """
+  Format a file using the appropriate language formatter.
+
+  Returns `{:ok, :formatted}` when the file was modified, `{:ok, :unchanged}`
+  when no changes were needed or no formatter is available, or `{:error, reason}`.
+  """
   @spec format_file(String.t(), keyword()) :: {:ok, :formatted | :unchanged} | {:error, term()}
   def format_file(path, opts \\ [])
 

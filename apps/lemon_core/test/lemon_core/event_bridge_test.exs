@@ -15,6 +15,17 @@ defmodule LemonCore.EventBridgeTest do
     def unsubscribe_run(run_id), do: send(self(), {:impl_b_unsubscribe, run_id})
   end
 
+  defmodule ImplNoFunctions do
+    @moduledoc false
+    # This module deliberately does not export subscribe_run or unsubscribe_run
+  end
+
+  defmodule ImplRaises do
+    @moduledoc false
+    def subscribe_run(_run_id), do: raise("boom")
+    def unsubscribe_run(_run_id), do: raise("boom")
+  end
+
   setup do
     original = Application.get_env(:lemon_core, :event_bridge_impl)
 
@@ -51,5 +62,79 @@ defmodule LemonCore.EventBridgeTest do
   test "if_unset mode allows idempotent configure with same module" do
     :ok = EventBridge.configure(ImplA)
     assert :ok = EventBridge.configure(ImplA, mode: :if_unset)
+  end
+
+  test "subscribe_run and unsubscribe_run are no-ops when no impl is configured" do
+    Application.delete_env(:lemon_core, :event_bridge_impl)
+
+    assert :ok = EventBridge.subscribe_run("run_noop")
+    refute_receive {:impl_a_subscribe, "run_noop"}
+    refute_receive {:impl_b_subscribe, "run_noop"}
+
+    assert :ok = EventBridge.unsubscribe_run("run_noop")
+    refute_receive {:impl_a_unsubscribe, "run_noop"}
+    refute_receive {:impl_b_unsubscribe, "run_noop"}
+  end
+
+  test "configure with nil clears impl so dispatching becomes a no-op" do
+    :ok = EventBridge.configure(ImplA)
+    assert :ok = EventBridge.subscribe_run("run_clear_1")
+    assert_receive {:impl_a_subscribe, "run_clear_1"}
+
+    :ok = EventBridge.configure(nil)
+
+    assert :ok = EventBridge.subscribe_run("run_clear_2")
+    refute_receive {:impl_a_subscribe, "run_clear_2"}
+
+    assert :ok = EventBridge.unsubscribe_run("run_clear_2")
+    refute_receive {:impl_a_unsubscribe, "run_clear_2"}
+  end
+
+  test "replace mode overwrites previously configured impl" do
+    :ok = EventBridge.configure(ImplA)
+    assert :ok = EventBridge.subscribe_run("run_replace_1")
+    assert_receive {:impl_a_subscribe, "run_replace_1"}
+
+    :ok = EventBridge.configure(ImplB, mode: :replace)
+
+    assert :ok = EventBridge.subscribe_run("run_replace_2")
+    assert_receive {:impl_b_subscribe, "run_replace_2"}
+    refute_receive {:impl_a_subscribe, "run_replace_2"}
+
+    assert :ok = EventBridge.unsubscribe_run("run_replace_2")
+    assert_receive {:impl_b_unsubscribe, "run_replace_2"}
+    refute_receive {:impl_a_unsubscribe, "run_replace_2"}
+  end
+
+  test "if_unset mode with nil returns error when already configured" do
+    :ok = EventBridge.configure(ImplA)
+
+    assert {:error, :already_configured} = EventBridge.configure(nil, mode: :if_unset)
+
+    # Original impl should still be in place
+    assert :ok = EventBridge.subscribe_run("run_if_unset_nil")
+    assert_receive {:impl_a_subscribe, "run_if_unset_nil"}
+  end
+
+  test "invalid mode returns error tuple" do
+    assert {:error, {:invalid_mode, :garbage}} =
+             EventBridge.configure(ImplA, mode: :garbage)
+
+    assert {:error, {:invalid_mode, :garbage}} =
+             EventBridge.configure(nil, mode: :garbage)
+  end
+
+  test "dispatch handles module without subscribe_run/unsubscribe_run gracefully" do
+    :ok = EventBridge.configure(ImplNoFunctions)
+
+    assert :ok = EventBridge.subscribe_run("run_missing_fn")
+    assert :ok = EventBridge.unsubscribe_run("run_missing_fn")
+  end
+
+  test "dispatch handles module that raises gracefully" do
+    :ok = EventBridge.configure(ImplRaises)
+
+    assert :ok = EventBridge.subscribe_run("run_raises")
+    assert :ok = EventBridge.unsubscribe_run("run_raises")
   end
 end

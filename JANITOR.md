@@ -25,6 +25,48 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-21 - Test Expansion & Documentation: Coverage Gaps Filled
+**Work Area**: Test Expansion + Documentation
+
+**Analysis**:
+- Surveyed all modules in `lemon_core`, `coding_agent`, and `ai` apps
+- Identified 5 modules with critically thin test coverage (<3 tests each)
+- Identified 9 public functions across 6 files missing `@doc` annotations
+
+**Tests Expanded (41 new tests across 5 modules)**:
+
+1. **LemonCore.EventBridge** (`event_bridge_test.exs`): 3 → 10 tests
+   - Added: no-op when unconfigured, configure(nil) clears impl, replace mode overwrites, if_unset with nil rejects, invalid mode returns error, dispatch handles missing functions, dispatch handles raised errors
+
+2. **LemonCore.InboundMessage** (`inbound_message_test.exs`): 3 → 12 tests
+   - Added: new/1 with all optional fields, raises on missing required fields, from_telegram with nil sender/no reply/no thread/no message_id/missing text key, integer chat_id conversion, raw message preservation
+
+3. **CodingAgent.LaneQueue** (`lane_queue_test.exs`): 3 → 11 tests
+   - Added: concurrent execution respects cap, multiple independent lanes, error/throw handling, empty queue health, FIFO order with cap 1, session lane support, large batch completion
+
+4. **CodingAgent.Security.UntrustedToolBoundary** (`untrusted_tool_boundary_test.exs`): 2 → 11 tests
+   - Added: string "untrusted" trust value, empty/nil content lists, map-style/atom-style content blocks, non-text block passthrough, mixed message list, empty list transform, multiple content blocks in single message
+
+5. **CodingAgent.SystemPrompt** (`system_prompt_test.exs`): 3 → 10 tests
+   - Added: empty workspace produces no context section, SOUL.md persona trigger/absence, invalid session scope defaults to main, string "subagent" normalization, runtime section scope display, workspace dir display
+
+**Documentation Added (9 functions across 6 files)**:
+
+1. `EventBridge.subscribe_run/1` - @doc added
+2. `EventBridge.unsubscribe_run/1` - @doc added
+3. `LaneQueue.start_link/1` - @doc and @spec added
+4. `UntrustedToolBoundary.transform/2` - @doc added
+5. `SystemPrompt.build/2` - @doc added
+6. `LspFormatter.list_formatters/0` - @doc added
+7. `LspFormatter.formatable?/1` - @doc added
+8. `LspFormatter.format_file/2` - @doc added
+9. `TodoWrite.execute/5` - @doc added
+10. `LspFormatter` module - @moduledoc upgraded from `false` to descriptive doc
+
+**Test Results**: All tests pass (exit code 0). 54 tests in expanded files: 22 in lemon_core, 32 in coding_agent, 0 failures.
+
+**Files Changed**: 11 files across 2 apps (5 test files, 6 source files)
+
 ### 2026-02-21 - Refactoring: Code Smell Cleanup (Duplication, Deep Nesting, Helpers)
 **Work Area**: Refactoring
 

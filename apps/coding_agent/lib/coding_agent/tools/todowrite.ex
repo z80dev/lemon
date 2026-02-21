@@ -54,6 +54,9 @@ defmodule CodingAgent.Tools.TodoWrite do
     }
   end
 
+  @doc """
+  Execute the TodoWrite tool, validating and storing the todo list.
+  """
   @spec execute(
           tool_call_id :: String.t(),
           params :: map(),

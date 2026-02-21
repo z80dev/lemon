@@ -17,6 +17,12 @@ defmodule CodingAgent.SystemPrompt do
           optional(:session_scope) => :main | :subagent | String.t()
         }
 
+  @doc """
+  Build the system prompt for a Lemon coding agent session.
+
+  Assembles workspace context files, skills, memory workflow guidance,
+  and runtime metadata into a single prompt string.
+  """
   @spec build(String.t(), opts()) :: String.t()
   def build(cwd, opts \\ %{}) do
     workspace_dir = Map.get(opts, :workspace_dir, Workspace.workspace_dir())

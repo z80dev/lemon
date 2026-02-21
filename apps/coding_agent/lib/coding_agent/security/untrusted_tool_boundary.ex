@@ -12,6 +12,12 @@ defmodule CodingAgent.Security.UntrustedToolBoundary do
   @external_start "<<<EXTERNAL_UNTRUSTED_CONTENT>>>"
   @external_end "<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>"
 
+  @doc """
+  Wrap untrusted tool result text blocks with external content markers.
+
+  Only wraps `ToolResultMessage` entries where `trust` is `:untrusted` or
+  `"untrusted"`. Already-wrapped text is not double-wrapped.
+  """
   @spec transform([term()], reference() | nil) :: {:ok, [term()]}
   def transform(messages, _signal \\ nil) when is_list(messages) do
     {:ok, Enum.map(messages, &wrap_message/1)}

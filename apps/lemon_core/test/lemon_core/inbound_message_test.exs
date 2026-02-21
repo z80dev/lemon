@@ -23,6 +23,37 @@ defmodule LemonCore.InboundMessageTest do
                meta: nil
              } = inbound
     end
+
+    test "builds struct with all optional fields" do
+      sender = %{id: "42", username: "alice", display_name: "Alice"}
+      raw = %{"original" => "data"}
+      meta = %{chat_id: 123, user_msg_id: 456}
+
+      inbound =
+        InboundMessage.new(
+          channel_id: "telegram",
+          account_id: "bot",
+          peer: %{kind: :dm, id: "123", thread_id: nil},
+          message: %{id: "456", text: "hello", timestamp: 1_700_000_000, reply_to_id: nil},
+          sender: sender,
+          raw: raw,
+          meta: meta
+        )
+
+      assert inbound.sender == sender
+      assert inbound.raw == raw
+      assert inbound.meta == meta
+    end
+
+    test "raises on missing required fields" do
+      assert_raise ArgumentError, fn ->
+        InboundMessage.new(
+          account_id: "bot",
+          peer: %{kind: :dm, id: "123", thread_id: nil},
+          message: %{id: "456", text: "hello", timestamp: 1_700_000_000, reply_to_id: nil}
+        )
+      end
+    end
   end
 
   describe "from_telegram/3" do
@@ -91,6 +122,86 @@ defmodule LemonCore.InboundMessageTest do
                chat_id: -100_123,
                user_msg_id: 901
              }
+
+      assert inbound.raw == raw_message
+    end
+
+    test "maps nil sender when from field is nil" do
+      inbound =
+        InboundMessage.from_telegram(:polling, 100, %{
+          "chat" => %{"type" => "private"},
+          "date" => 1_700_000_000
+        })
+
+      assert inbound.sender == nil
+    end
+
+    test "reply_to_id is nil when reply_to_message is absent" do
+      inbound =
+        InboundMessage.from_telegram(:polling, 100, %{
+          "chat" => %{"type" => "private"},
+          "message_id" => 1,
+          "text" => "hi",
+          "date" => 1_700_000_000
+        })
+
+      assert inbound.message.reply_to_id == nil
+    end
+
+    test "thread_id is nil when message_thread_id is absent" do
+      inbound =
+        InboundMessage.from_telegram(:polling, 100, %{
+          "chat" => %{"type" => "private"},
+          "message_id" => 1,
+          "text" => "hi",
+          "date" => 1_700_000_000
+        })
+
+      assert inbound.peer.thread_id == nil
+    end
+
+    test "message id is nil when message_id is absent" do
+      inbound =
+        InboundMessage.from_telegram(:polling, 100, %{
+          "chat" => %{"type" => "private"},
+          "text" => "hi",
+          "date" => 1_700_000_000
+        })
+
+      assert inbound.message.id == nil
+    end
+
+    test "text defaults to empty string when text key is missing" do
+      inbound =
+        InboundMessage.from_telegram(:polling, 100, %{
+          "chat" => %{"type" => "private"},
+          "date" => 1_700_000_000
+        })
+
+      assert inbound.message.text == ""
+    end
+
+    test "integer chat_id is converted to string in peer" do
+      inbound =
+        InboundMessage.from_telegram(:polling, 999, %{
+          "chat" => %{"type" => "private"},
+          "date" => 1_700_000_000
+        })
+
+      assert inbound.peer.id == "999"
+      assert is_binary(inbound.peer.id)
+    end
+
+    test "preserves raw message in raw field" do
+      raw_message = %{
+        "chat" => %{"type" => "private"},
+        "from" => %{"id" => 1, "username" => "bob", "first_name" => "Bob"},
+        "message_id" => 10,
+        "text" => "test",
+        "date" => 1_700_000_000
+      }
+
+      inbound = InboundMessage.from_telegram(:polling, 100, raw_message)
 
       assert inbound.raw == raw_message
     end
