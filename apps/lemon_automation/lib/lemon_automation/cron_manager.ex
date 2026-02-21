@@ -223,6 +223,10 @@ defmodule LemonAutomation.CronManager do
         CronStore.delete_job(job_id)
         Events.emit_job_deleted(job)
 
+        # If this is a heartbeat job, also clear the heartbeat config
+        # to prevent it from being recreated on restart
+        maybe_clear_heartbeat_config(job)
+
         Logger.info("[CronManager] Removed job: #{job_id}")
         {:reply, :ok, %{state | jobs: Map.delete(state.jobs, job_id)}}
 
@@ -388,5 +392,25 @@ defmodule LemonAutomation.CronManager do
       keys ->
         {:error, {:missing_keys, keys}}
     end
+  end
+
+  # If removing a heartbeat job, also clear the heartbeat config
+  # to prevent it from being recreated on restart
+  defp maybe_clear_heartbeat_config(%CronJob{} = job) do
+    # Check if this is a heartbeat job by looking at meta
+    is_heartbeat =
+      is_map(job.meta) and
+        (job.meta[:heartbeat] == true or job.meta["heartbeat"] == true)
+
+    if is_heartbeat do
+      agent_id = job.meta[:agent_id] || job.meta["agent_id"] || job.agent_id
+
+      if agent_id do
+        Logger.info("[CronManager] Clearing heartbeat config for agent: #{agent_id}")
+        LemonCore.Store.delete(:heartbeat_config, agent_id)
+      end
+    end
+  rescue
+    _ -> :ok
   end
 end

@@ -262,7 +262,6 @@ defmodule LemonAutomation.HeartbeatManager do
   # Schedule a heartbeat cron job when enabled, or remove it when disabled
   # Supports both cron-based scheduling (>=60s) and timer-based scheduling (<60s)
   defp schedule_heartbeat_job(agent_id, config, state) do
-    _job_id = heartbeat_job_id(agent_id)
     enabled = config[:enabled] || config["enabled"]
 
     if enabled do
@@ -406,21 +405,19 @@ defmodule LemonAutomation.HeartbeatManager do
 
   # Find an existing heartbeat job for an agent
   defp find_heartbeat_job(agent_id) do
-    job_id = heartbeat_job_id(agent_id)
     name = "heartbeat-#{agent_id}"
 
     CronManager.list()
     |> Enum.find(fn job ->
-      job.id == job_id or job.name == name or
-        (is_map(job.meta) and job.meta[:agent_id] == agent_id and job.meta[:heartbeat] == true)
+      # Match by name (most reliable)
+      job.name == name or
+        # Match by meta - handle both atom and string keys (JSONL round-trip)
+        (is_map(job.meta) and
+           (job.meta[:heartbeat] == true or job.meta["heartbeat"] == true) and
+           (job.meta[:agent_id] == agent_id or job.meta["agent_id"] == agent_id))
     end)
   rescue
     _ -> nil
-  end
-
-  # Generate a consistent job ID for an agent's heartbeat
-  defp heartbeat_job_id(agent_id) do
-    "heartbeat:#{agent_id}"
   end
 
   # Build a cron schedule from interval in milliseconds

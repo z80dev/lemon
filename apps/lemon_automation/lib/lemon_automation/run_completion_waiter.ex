@@ -14,27 +14,50 @@ defmodule LemonAutomation.RunCompletionWaiter do
     bus_mod.subscribe(topic)
 
     try do
-      receive do
-        %LemonCore.Event{type: :run_completed, payload: payload} ->
-          extract_output_from_completion(payload)
-
-        {:run_completed, payload} ->
-          extract_output_from_completion(payload)
-
-        %{type: :run_completed, payload: payload} ->
-          extract_output_from_completion(payload)
-
-        %{completed: %{answer: answer, ok: true}} ->
-          {:ok, truncate_output(answer)}
-
-        %{completed: %{ok: false, error: error}} ->
-          {:error, inspect(error)}
-      after
-        timeout_ms ->
-          :timeout
-      end
+      do_wait(timeout_ms)
     after
       bus_mod.unsubscribe(topic)
+    end
+  end
+
+  @doc """
+  Wait for run completion when already subscribed to the bus topic.
+  Used by RunSubmitter to avoid race condition where run completes
+  before subscription.
+  """
+  @spec wait_already_subscribed(binary(), non_neg_integer(), keyword()) :: wait_result()
+  def wait_already_subscribed(run_id, timeout_ms \\ @default_timeout_ms, opts \\ []) when is_binary(run_id) do
+    bus_mod = Keyword.get(opts, :bus_mod, LemonCore.Bus)
+    topic = "run:#{run_id}"
+
+    # Caller is already subscribed, just wait and unsubscribe when done
+    try do
+      do_wait(timeout_ms)
+    after
+      bus_mod.unsubscribe(topic)
+    end
+  end
+
+  # Shared wait logic
+  defp do_wait(timeout_ms) do
+    receive do
+      %LemonCore.Event{type: :run_completed, payload: payload} ->
+        extract_output_from_completion(payload)
+
+      {:run_completed, payload} ->
+        extract_output_from_completion(payload)
+
+      %{type: :run_completed, payload: payload} ->
+        extract_output_from_completion(payload)
+
+      %{completed: %{answer: answer, ok: true}} ->
+        {:ok, truncate_output(answer)}
+
+      %{completed: %{ok: false, error: error}} ->
+        {:error, inspect(error)}
+    after
+      timeout_ms ->
+        :timeout
     end
   end
 
