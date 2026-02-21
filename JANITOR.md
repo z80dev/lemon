@@ -3832,3 +3832,49 @@ Refactored the MarketIntel Commentary Pipeline module (`apps/market_intel/lib/ma
 - Fix the `normalize_optional_string` nil-handling bug in MarketIntel.Config
 - Add tests for remaining untested apps (agent_core, lemon_automation, lemon_channels, etc.)
 - Add integration tests for WASM sidecar lifecycle
+
+---
+
+### 2026-02-21 - Test Expansion: Deep Coverage for Types, Tools, OAuth, and ProcessSession
+**Work Area**: Test Expansion
+
+**Analysis**:
+- Thorough coverage gap analysis using exact file-path matching (not just name heuristics)
+- Identified 5 truly untested modules after eliminating false positives from previous runs
+- Focused on: `Ai.Types`, `CodingAgent.Tools.TodoRead`, `Ai.Auth.OpenAICodexOAuth`, `CodingAgent.ProcessSession`
+- Excluded: `CodingAgent.Wasm.SidecarSession` (complex infrastructure, needs integration tests), `Mix.Tasks.Lemon.Eval`/`Workspace` (thin wrappers)
+
+**New Test Files Created (4 files, 56 new tests)**:
+
+1. **`apps/ai/test/ai/types_test.exs`** (31 tests)
+   - Tests all `Ai.Types` structs: TextContent, ThinkingContent, ImageContent, ToolCall, UserMessage, AssistantMessage, ToolResultMessage, Cost, Usage, Tool, Context, ModelCost, Model, StreamOptions
+   - Tests `Context.new/1`, `add_user_message/2`, `add_assistant_message/2`, `add_tool_result/2`
+   - Covers struct creation, default values, field types
+
+2. **`apps/coding_agent/test/coding_agent/tools/todoread_test.exs`** (6 tests)
+   - Tests `CodingAgent.Tools.TodoRead` tool definition and execute behavior
+   - Uses `async: false` (global ETS table dependency)
+   - Covers: tool definition fields, empty session, stored todos rendering, non-completed counting, empty session_id error
+
+3. **`apps/ai/test/ai/auth/openai_codex_oauth_test.exs`** (1 test)
+   - Tests `Ai.Auth.OpenAICodexOAuth.resolve_access_token/0`
+   - Verifies nil return when no credentials available in clean test environment
+
+4. **`apps/coding_agent/test/coding_agent/process_session_test.exs`** (19 tests, `async: false`)
+   - Tests full `CodingAgent.ProcessSession` GenServer lifecycle via Port
+   - Covers: `start_link/1`, `get_process_id/1`, `poll/2`, `kill/2`, `alive?/1`, `write_stdin/2`, `get_state/1`
+   - Tests process exit handling (exit code 0 → completed, non-zero → error)
+   - Tests `on_exit` callback invocation, log buffer with `max_log_lines`, timeout, working directory (`cwd`)
+
+**Test Results**: 56 tests, 0 failures
+
+**Files Created**:
+- `apps/ai/test/ai/types_test.exs` - 31 tests
+- `apps/coding_agent/test/coding_agent/tools/todoread_test.exs` - 6 tests
+- `apps/ai/test/ai/auth/openai_codex_oauth_test.exs` - 1 test
+- `apps/coding_agent/test/coding_agent/process_session_test.exs` - 19 tests
+
+**Next run should focus on:**
+- Add integration tests for WASM sidecar lifecycle (`CodingAgent.Wasm.SidecarSession`)
+- Fix the `normalize_optional_string` nil-handling bug in MarketIntel.Config
+- Add tests for remaining untested apps (agent_core, lemon_automation, lemon_channels)
