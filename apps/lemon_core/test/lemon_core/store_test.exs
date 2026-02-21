@@ -22,6 +22,67 @@ defmodule LemonCore.StoreTest do
     def list(_state, _table), do: {:error, :sqlite_busy}
   end
 
+  defmodule BlobTooBigBackend do
+    @behaviour LemonCore.Store.Backend
+
+    @impl true
+    def init(_opts) do
+      tid = :ets.new(:store_blob_too_big_backend, [:set, :public])
+      :ets.insert(tid, {:run_history_put_count, 0})
+      {:ok, %{tid: tid}}
+    end
+
+    @impl true
+    def put(%{tid: tid} = state, table, key, value) do
+      case table do
+        :run_history ->
+          [{:run_history_put_count, count}] = :ets.lookup(tid, :run_history_put_count)
+          :ets.insert(tid, {:run_history_put_count, count + 1})
+
+          if count == 0 do
+            {:error, {:sqlite_bind_failed, :blob_too_big}}
+          else
+            :ets.insert(tid, {{table, key}, value})
+            {:ok, state}
+          end
+
+        _ ->
+          :ets.insert(tid, {{table, key}, value})
+          {:ok, state}
+      end
+    end
+
+    @impl true
+    def get(%{tid: tid} = state, table, key) do
+      value =
+        case :ets.lookup(tid, {table, key}) do
+          [{{^table, ^key}, found}] -> found
+          _ -> nil
+        end
+
+      {:ok, value, state}
+    end
+
+    @impl true
+    def delete(%{tid: tid} = state, table, key) do
+      :ets.delete(tid, {table, key})
+      {:ok, state}
+    end
+
+    @impl true
+    def list(%{tid: tid} = state, table) do
+      items =
+        tid
+        |> :ets.tab2list()
+        |> Enum.flat_map(fn
+          {{^table, key}, value} -> [{key, value}]
+          _ -> []
+        end)
+
+      {:ok, items, state}
+    end
+  end
+
   defp unique_token do
     System.unique_integer([:positive, :monotonic])
   end
@@ -251,6 +312,48 @@ defmodule LemonCore.StoreTest do
                Store.put(:cron_runs, "run_busy_#{unique_token()}", %{status: :pending})
 
       assert Process.alive?(Process.whereis(Store))
+    end
+
+    test "finalize_run retries run_history write with compact payload on blob-too-big errors" do
+      {:ok, backend_state} = BlobTooBigBackend.init([])
+      original_state = swap_store_backend(BlobTooBigBackend, backend_state)
+      on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
+
+      token = unique_token()
+      key = session_key(token)
+      rid = run_id(token, :blob_retry)
+      long_text = String.duplicate("x", 25_000)
+
+      assert :ok =
+               Store.put(:runs, rid, %{
+                 events: [%{type: :prompt, text: long_text}],
+                 summary: nil,
+                 started_at: 1_000
+               })
+
+      assert :ok =
+               Store.finalize_run(rid, %{
+                 session_key: key,
+                 prompt: long_text,
+                 completed: %{ok: true, answer: long_text}
+               })
+
+      history = Store.get_run_history(key, limit: 5)
+      assert [{^rid, data}] = history
+      assert data.events == []
+
+      summary = data.summary || %{}
+      completed = summary[:completed] || summary["completed"] || %{}
+      answer = completed[:answer] || completed["answer"] || ""
+      prompt = summary[:prompt] || summary["prompt"] || ""
+
+      assert is_binary(answer)
+      assert is_binary(prompt)
+      assert String.contains?(answer, "[truncated")
+      assert String.contains?(prompt, "[truncated")
+
+      store_state = :sys.get_state(Store)
+      [{:run_history_put_count, 2}] = :ets.lookup(store_state.backend_state.tid, :run_history_put_count)
     end
   end
 end

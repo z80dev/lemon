@@ -56,6 +56,22 @@ defmodule Ai.Providers.AnthropicStreamingTest do
     }
   end
 
+  defp opencode_model(base_url \\ "https://opencode.ai/zen") do
+    %Model{
+      id: "claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
+      api: :anthropic_messages,
+      provider: :opencode,
+      base_url: base_url,
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{input: 3.0, output: 15.0, cache_read: 0.3, cache_write: 3.75},
+      context_window: 1_000_000,
+      max_tokens: 64_000,
+      headers: %{}
+    }
+  end
+
   test "usage cost uses model pricing" do
     body =
       sse_event("message_start", %{
@@ -222,6 +238,35 @@ defmodule Ai.Providers.AnthropicStreamingTest do
     assert {"x-api-key", "anthropic-fallback-key"} in headers
   end
 
+  test "opencode model can use OPENCODE_API_KEY" do
+    body =
+      sse_event("message_start", %{"message" => %{"usage" => %{}}}) <>
+        sse_event("message_delta", %{"delta" => %{"stop_reason" => "end_turn"}, "usage" => %{}}) <>
+        sse_event("message_stop", %{})
+
+    test_pid = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      send(test_pid, {:opencode_req_headers, conn.req_headers})
+      Plug.Conn.send_resp(conn, 200, body)
+    end)
+
+    with_env(
+      %{
+        "OPENCODE_API_KEY" => "opencode-fallback-key",
+        "ANTHROPIC_API_KEY" => nil
+      },
+      fn ->
+        context = Context.new(messages: [%UserMessage{content: "Hi"}])
+        {:ok, stream} = Anthropic.stream(opencode_model(), context, %StreamOptions{})
+        assert {:ok, _result} = EventStream.result(stream, 1_000)
+      end
+    )
+
+    assert_receive {:opencode_req_headers, headers}, 1_000
+    assert {"x-api-key", "opencode-fallback-key"} in headers
+  end
+
   test "kimi request limits oversized message history before sending" do
     with_env(
       %{
@@ -275,12 +320,16 @@ defmodule Ai.Providers.AnthropicStreamingTest do
         sse_event("message_stop", %{})
 
     Req.Test.stub(__MODULE__, fn conn ->
-      attempt = Agent.get_and_update(attempts, fn n -> {n + 1, n + 1} end)
+      if conn.host == "example.test" and conn.request_path == "/v1/messages" do
+        attempt = Agent.get_and_update(attempts, fn n -> {n + 1, n + 1} end)
 
-      if attempt == 1 do
-        Plug.Conn.send_resp(conn, 503, "temporary outage")
+        if attempt == 1 do
+          Plug.Conn.send_resp(conn, 503, "temporary outage")
+        else
+          Plug.Conn.send_resp(conn, 200, body)
+        end
       else
-        Plug.Conn.send_resp(conn, 200, body)
+        Plug.Conn.send_resp(conn, 404, "not found")
       end
     end)
 
@@ -301,8 +350,12 @@ defmodule Ai.Providers.AnthropicStreamingTest do
     end)
 
     Req.Test.stub(__MODULE__, fn conn ->
-      Agent.update(attempts, &(&1 + 1))
-      Plug.Conn.send_resp(conn, 400, "bad request")
+      if conn.host == "example.test" and conn.request_path == "/v1/messages" do
+        Agent.update(attempts, &(&1 + 1))
+        Plug.Conn.send_resp(conn, 400, "bad request")
+      else
+        Plug.Conn.send_resp(conn, 404, "not found")
+      end
     end)
 
     context = Context.new(messages: [%UserMessage{content: "Hi"}])
@@ -310,6 +363,47 @@ defmodule Ai.Providers.AnthropicStreamingTest do
 
     assert {:error, _} = EventStream.result(stream, 1_000)
     assert Agent.get(attempts, & &1) == 1
+  end
+
+  test "retries empty HTTP 400 responses for kimi and succeeds" do
+    {:ok, attempts} = Agent.start_link(fn -> 0 end)
+
+    on_exit(fn ->
+      if Process.alive?(attempts), do: Agent.stop(attempts)
+    end)
+
+    body =
+      sse_event("message_start", %{"message" => %{"usage" => %{}}}) <>
+        sse_event("content_block_start", %{"index" => 0, "content_block" => %{"type" => "text"}}) <>
+        sse_event("content_block_delta", %{
+          "index" => 0,
+          "delta" => %{"type" => "text_delta", "text" => "ok"}
+        }) <>
+        sse_event("content_block_stop", %{"index" => 0}) <>
+        sse_event("message_delta", %{"delta" => %{"stop_reason" => "end_turn"}, "usage" => %{}}) <>
+        sse_event("message_stop", %{})
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      if conn.host == "example.test" and conn.request_path == "/v1/messages" do
+        attempt = Agent.get_and_update(attempts, fn n -> {n + 1, n + 1} end)
+
+        if attempt == 1 do
+          Plug.Conn.send_resp(conn, 400, "")
+        else
+          Plug.Conn.send_resp(conn, 200, body)
+        end
+      else
+        Plug.Conn.send_resp(conn, 404, "not found")
+      end
+    end)
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+    {:ok, stream} = Anthropic.stream(kimi_model(), context, %StreamOptions{api_key: "test-key"})
+
+    assert {:ok, result} = EventStream.result(stream, 2_000)
+    assert result.stop_reason == :stop
+    assert [%TextContent{text: "ok"} | _] = result.content
+    assert Agent.get(attempts, & &1) == 2
   end
 
   defp with_env(env_map, fun) when is_map(env_map) and is_function(fun, 0) do

@@ -15,6 +15,7 @@ defmodule LemonCore.Store.SqliteBackend do
   @behaviour LemonCore.Store.Backend
 
   alias Exqlite.Sqlite3
+  alias Exqlite.Error, as: ExqliteError
 
   @default_ephemeral_tables [:runs]
   @default_filename "store.sqlite3"
@@ -299,9 +300,27 @@ defmodule LemonCore.Store.SqliteBackend do
   end
 
   defp bind_statement(statement, params) do
-    with :ok <- Sqlite3.reset(statement),
-         :ok <- Sqlite3.bind(statement, params) do
-      :ok
+    try do
+      with :ok <- Sqlite3.reset(statement),
+           :ok <- Sqlite3.bind(statement, params) do
+        :ok
+      end
+    rescue
+      e in ExqliteError ->
+        {:error, classify_bind_error(e)}
+
+      e ->
+        {:error, {:sqlite_bind_failed, Exception.message(e)}}
+    end
+  end
+
+  defp classify_bind_error(%ExqliteError{} = error) do
+    message = Exception.message(error)
+
+    if String.contains?(String.downcase(message), "too big") do
+      {:sqlite_bind_failed, :blob_too_big}
+    else
+      {:sqlite_bind_failed, message}
     end
   end
 

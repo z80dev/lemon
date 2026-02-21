@@ -241,6 +241,8 @@ defmodule Ai.Providers.Anthropic do
 
   defp provider_env_vars(:kimi), do: ["KIMI_API_KEY", "MOONSHOT_API_KEY", "ANTHROPIC_API_KEY"]
   defp provider_env_vars("kimi"), do: ["KIMI_API_KEY", "MOONSHOT_API_KEY", "ANTHROPIC_API_KEY"]
+  defp provider_env_vars(:opencode), do: ["OPENCODE_API_KEY", "ANTHROPIC_API_KEY"]
+  defp provider_env_vars("opencode"), do: ["OPENCODE_API_KEY", "ANTHROPIC_API_KEY"]
   defp provider_env_vars(_), do: ["ANTHROPIC_API_KEY"]
 
   defp env_value(name) when is_binary(name) do
@@ -257,6 +259,14 @@ defmodule Ai.Providers.Anthropic do
   defp missing_api_key_error("kimi"),
     do:
       "No API key provided for Kimi. Set KIMI_API_KEY (or MOONSHOT_API_KEY) or pass api_key in options."
+
+  defp missing_api_key_error(:opencode),
+    do:
+      "No API key provided for OpenCode. Set OPENCODE_API_KEY (or ANTHROPIC_API_KEY) or pass api_key in options."
+
+  defp missing_api_key_error("opencode"),
+    do:
+      "No API key provided for OpenCode. Set OPENCODE_API_KEY (or ANTHROPIC_API_KEY) or pass api_key in options."
 
   defp missing_api_key_error(_),
     do: "No API key provided for Anthropic. Set ANTHROPIC_API_KEY or pass api_key in options."
@@ -284,7 +294,9 @@ defmodule Ai.Providers.Anthropic do
 
   defp stream_request_with_retries(url, headers, body, initial_state, trace_id, attempt \\ 0) do
     chunk_key = {__MODULE__, :chunk_seen, make_ref()}
+    output_seen_key = {__MODULE__, :meaningful_output_seen, make_ref()}
     Process.put(chunk_key, false)
+    Process.put(output_seen_key, false)
 
     result =
       Req.post(url,
@@ -300,6 +312,10 @@ defmodule Ai.Providers.Anthropic do
           # Process the SSE chunk
           new_state = process_sse_chunk(data, acc_state)
 
+          if meaningful_output_transition?(acc_state, new_state) do
+            Process.put(output_seen_key, true)
+          end
+
           # Store updated state in response private data
           resp = put_in(resp.private[:sse_state], new_state)
 
@@ -308,15 +324,18 @@ defmodule Ai.Providers.Anthropic do
         receive_timeout: 300_000
       )
 
-    saw_chunk = Process.get(chunk_key, false)
+    _saw_chunk = Process.get(chunk_key, false)
+    saw_meaningful_output = Process.get(output_seen_key, false)
     Process.delete(chunk_key)
+    Process.delete(output_seen_key)
 
     case result do
       {:ok, %Req.Response{status: status}} when status in 200..299 ->
         result
 
-      {:ok, %Req.Response{status: status}} = response ->
-        if attempt < @max_retries and retryable_http_status?(status) do
+      {:ok, %Req.Response{status: status} = response} = wrapped_response ->
+        if attempt < @max_retries and
+             retryable_http_response?(response, initial_state.model) do
           retry_delay = retry_delay_ms(attempt)
 
           debug_log("retry_http", %{
@@ -337,11 +356,12 @@ defmodule Ai.Providers.Anthropic do
           Process.sleep(retry_delay)
           stream_request_with_retries(url, headers, body, initial_state, trace_id, attempt + 1)
         else
-          response
+          wrapped_response
         end
 
       {:error, reason} = error ->
-        if attempt < @max_retries and not saw_chunk and retryable_transport_error?(reason) do
+        if attempt < @max_retries and not saw_meaningful_output and
+             retryable_transport_error?(reason) do
           retry_delay = retry_delay_ms(attempt)
 
           debug_log("retry_transport", %{
@@ -367,6 +387,17 @@ defmodule Ai.Providers.Anthropic do
     end
   end
 
+  defp meaningful_output_transition?(acc_state, new_state) do
+    acc_size = content_size(acc_state)
+    new_size = content_size(new_state)
+    new_size > acc_size
+  rescue
+    _ -> false
+  end
+
+  defp content_size(%{output: %{content: content}}) when is_list(content), do: length(content)
+  defp content_size(_), do: 0
+
   defp retry_delay_ms(attempt) when is_integer(attempt) and attempt >= 0 do
     (@base_retry_delay_ms * :math.pow(2, attempt)) |> trunc()
   end
@@ -376,6 +407,32 @@ defmodule Ai.Providers.Anthropic do
   end
 
   defp retryable_http_status?(_), do: false
+
+  defp retryable_http_response?(%Req.Response{status: status} = response, model) do
+    retryable_http_status?(status) or retryable_kimi_empty_400?(response, model)
+  end
+
+  defp retryable_kimi_empty_400?(%Req.Response{status: 400} = response, %Model{provider: provider})
+       when provider in [:kimi, "kimi"] do
+    empty_http_response?(response)
+  end
+
+  defp retryable_kimi_empty_400?(_response, _model), do: false
+
+  defp empty_http_body?(nil), do: true
+  defp empty_http_body?(body) when is_binary(body), do: String.trim(body) == ""
+  defp empty_http_body?(%{} = body), do: map_size(body) == 0
+  defp empty_http_body?(_), do: false
+
+  defp empty_http_response?(%Req.Response{body: body, private: private}) do
+    empty_http_body?(body) and empty_stream_buffer?(private)
+  end
+
+  defp empty_stream_buffer?(%{sse_state: %{sse_buffer: buffer}}) when is_binary(buffer) do
+    String.trim(buffer) == ""
+  end
+
+  defp empty_stream_buffer?(_), do: true
 
   defp retryable_transport_error?(%Req.TransportError{reason: reason}) do
     retryable_transport_reason?(reason)

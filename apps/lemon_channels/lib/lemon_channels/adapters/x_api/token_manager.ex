@@ -18,6 +18,8 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
   # Refresh 5 minutes before expiry
   @refresh_buffer_seconds 300
   @default_expires_in 7200
+  @default_refresh_retry_ms 60_000
+  @invalid_refresh_retry_ms 15 * 60_000
   @x_api_app LemonChannels.Adapters.XAPI
   @name __MODULE__
   @x_api_token_keys [
@@ -153,9 +155,18 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
         {:noreply, new_state}
 
       {:error, reason} ->
-        Logger.error("[XAPI] Token refresh failed: #{inspect(reason)}")
-        # Retry in 60 seconds
-        Process.send_after(self(), :refresh_token, 60_000)
+        retry_ms = refresh_retry_delay_ms(reason)
+
+        if retry_ms == @invalid_refresh_retry_ms do
+          Logger.error(
+            "[XAPI] Token refresh failed with non-recoverable auth error #{inspect(reason)}; " <>
+              "retrying in #{div(retry_ms, 1000)}s. Re-auth may be required."
+          )
+        else
+          Logger.error("[XAPI] Token refresh failed: #{inspect(reason)}")
+        end
+
+        Process.send_after(self(), :refresh_token, retry_ms)
         {:noreply, state}
     end
   end
@@ -272,6 +283,40 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
       true -> {:ok, client_id, client_secret}
     end
   end
+
+  defp refresh_retry_delay_ms(reason) do
+    if non_recoverable_refresh_error?(reason) do
+      @invalid_refresh_retry_ms
+    else
+      @default_refresh_retry_ms
+    end
+  end
+
+  defp non_recoverable_refresh_error?({:refresh_failed, status, body})
+       when status in [400, 401] do
+    text =
+      body
+      |> refresh_error_text()
+      |> String.downcase()
+
+    String.contains?(text, "invalid_request") or
+      String.contains?(text, "invalid_grant") or
+      String.contains?(text, "token was invalid") or
+      String.contains?(text, "token is invalid")
+  rescue
+    _ -> false
+  end
+
+  defp non_recoverable_refresh_error?(_), do: false
+
+  defp refresh_error_text(%{} = body) do
+    [Map.get(body, "error"), Map.get(body, "error_description"), inspect(body)]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" ")
+  end
+
+  defp refresh_error_text(body) when is_binary(body), do: body
+  defp refresh_error_text(body), do: inspect(body)
 
   defp persist_runtime_tokens(%__MODULE__{} = state) do
     persist_app_config(state)
