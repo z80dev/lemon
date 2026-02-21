@@ -25,6 +25,57 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-21 - Feature Enhancement: Pi/Oh-My-Pi Sync (replaceText, Thinking Levels)
+**Work Area**: Feature Enhancement
+
+**Analysis**:
+- Compared Lemon's codebase against Pi (746 models, 39+ providers) and Oh-My-Pi (hashline, LSP tools)
+- Models/providers already well-synced: GPT-5.x, openai-codex, mistral (devstral/pixtral/magistral) all present
+- Identified 3 missing features worth porting
+
+**Features Ported**:
+
+1. **`replaceText` hashline operation** (from oh-my-pi's hashline.ts)
+   - New edit operation for substring-based search-and-replace without line references
+   - Supports `all: true/false` for single or global replacement
+   - Handles multi-line old_text, cross-line-boundary replacements
+   - Integrated into both `Hashline.apply_edits/2` and `HashlineEdit` tool
+   - Full validation (empty old_text, text not found), deduplication, and noop detection
+   - Files: `hashline.ex` (+type, +validate, +sort, +apply), `hashline_edit.ex` (+parse, +schema)
+
+2. **`supports_xhigh?/1` model capability checker** (from Pi's model-resolver.ts)
+   - Checks if a model supports the `xhigh` thinking level
+   - Returns true for GPT-5.2/5.3 families and Anthropic Opus 4.6 models
+   - File: `models.ex`
+
+3. **`adjust_max_tokens_for_thinking/4` utility** (from Pi's simple-options.ts)
+   - Centralized thinking budget computation with default budgets per level
+   - Default budgets: minimal=1024, low=2048, medium=8192, high=16384
+   - Clamps xhigh→high, respects model max tokens, reserves 1024 min output tokens
+   - File: `models.ex`
+
+4. **`clamp_reasoning/1` utility** (from Pi's simple-options.ts)
+   - Maps `:xhigh` → `:high`, passes through valid levels, nil for unknown
+   - Centralizes logic previously only in `GoogleShared.clamp_reasoning/1`
+   - File: `models.ex`
+
+**Tests Added (22 new tests)**:
+- `hashline_test.exs`: 6 tests for replaceText (first occurrence, all, empty old_text, not found, multi-line, line count change)
+- `hashline_edit_test.exs`: 4 tests for replaceText tool integration (execute first, execute all, parse, error)
+- `models_test.exs`: 12 tests (6 supports_xhigh?, 6 adjust_max_tokens_for_thinking, 4 clamp_reasoning) [sic: 16]
+
+**Test Results**: 435 tests, 0 failures (full suite)
+
+**Files Modified**:
+- `apps/coding_agent/lib/coding_agent/tools/hashline.ex` - replaceText operation
+- `apps/coding_agent/lib/coding_agent/tools/hashline_edit.ex` - replaceText tool support
+- `apps/ai/lib/ai/models.ex` - supports_xhigh?, adjust_max_tokens_for_thinking, clamp_reasoning
+- `apps/coding_agent/test/coding_agent/tools/hashline_test.exs` - 6 new tests
+- `apps/coding_agent/test/coding_agent/tools/hashline_edit_test.exs` - 4 new tests
+- `apps/ai/test/models_test.exs` - 16 new tests
+
+---
+
 ### 2026-02-21 - Test Expansion: Untested Module Coverage
 **Work Area**: Test Expansion
 

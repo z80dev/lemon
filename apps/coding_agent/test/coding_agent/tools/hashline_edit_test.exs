@@ -339,6 +339,24 @@ defmodule CodingAgent.Tools.HashlineEditTest do
       assert edit.before == nil
     end
 
+    test "parses replaceText edit" do
+      {:ok, [edit]} =
+        HashlineEdit.parse_edits([
+          %{"op" => "replaceText", "old_text" => "hello", "new_text" => "world", "all" => true}
+        ])
+
+      assert edit == %{op: :replace_text, old_text: "hello", new_text: "world", all: true}
+    end
+
+    test "returns error for replaceText with empty old_text" do
+      assert {:error, msg} =
+               HashlineEdit.parse_edits([
+                 %{"op" => "replaceText", "old_text" => "", "new_text" => "world"}
+               ])
+
+      assert msg =~ "replaceText requires non-empty 'old_text'"
+    end
+
     test "returns error for unknown op" do
       assert {:error, _} = HashlineEdit.parse_edits([%{"op" => "unknown", "content" => []}])
     end
@@ -383,6 +401,60 @@ defmodule CodingAgent.Tools.HashlineEditTest do
 
       written = File.read!(Path.join(cwd, "test.txt"))
       assert <<0xEF, 0xBB, 0xBF, _rest::binary>> = written
+    end
+  end
+
+  # ============================================================================
+  # replaceText Operation
+  # ============================================================================
+
+  describe "replaceText operation" do
+    test "executes replaceText with first occurrence", %{cwd: cwd} do
+      write_test_file(cwd, "rt.txt", "foo bar\nfoo baz")
+
+      params = %{
+        "path" => "rt.txt",
+        "edits" => [
+          %{"op" => "replaceText", "old_text" => "foo", "new_text" => "hello"}
+        ]
+      }
+
+      result = HashlineEdit.execute("call1", params, nil, nil, cwd, [])
+      assert %AgentCore.Types.AgentToolResult{} = result
+      assert hd(result.content).text =~ "Applied 1 hashline edit"
+
+      assert File.read!(Path.join(cwd, "rt.txt")) == "hello bar\nfoo baz"
+    end
+
+    test "executes replaceText with all occurrences", %{cwd: cwd} do
+      write_test_file(cwd, "rt_all.txt", "foo bar\nfoo baz")
+
+      params = %{
+        "path" => "rt_all.txt",
+        "edits" => [
+          %{"op" => "replaceText", "old_text" => "foo", "new_text" => "hello", "all" => true}
+        ]
+      }
+
+      result = HashlineEdit.execute("call2", params, nil, nil, cwd, [])
+      assert %AgentCore.Types.AgentToolResult{} = result
+      assert File.read!(Path.join(cwd, "rt_all.txt")) == "hello bar\nhello baz"
+    end
+
+    test "parse_edits handles replaceText" do
+      raw = [%{"op" => "replaceText", "old_text" => "find", "new_text" => "replace", "all" => true}]
+      {:ok, edits} = HashlineEdit.parse_edits(raw)
+      assert length(edits) == 1
+      [edit] = edits
+      assert edit.op == :replace_text
+      assert edit.old_text == "find"
+      assert edit.new_text == "replace"
+      assert edit.all == true
+    end
+
+    test "parse_edits returns error for empty old_text" do
+      raw = [%{"op" => "replaceText", "old_text" => "", "new_text" => "replace"}]
+      assert {:error, _} = HashlineEdit.parse_edits(raw)
     end
   end
 end

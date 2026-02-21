@@ -242,6 +242,18 @@ defmodule CodingAgent.Tools.HashlineEdit do
     end
   end
 
+  defp parse_single_edit(%{"op" => "replaceText"} = raw) do
+    old_text = Map.get(raw, "old_text", "")
+    new_text = Map.get(raw, "new_text", "")
+    replace_all = Map.get(raw, "all", false)
+
+    if old_text == "" do
+      {:error, "replaceText requires non-empty 'old_text'"}
+    else
+      {:ok, %{op: :replace_text, old_text: old_text, new_text: new_text, all: replace_all == true}}
+    end
+  end
+
   defp parse_single_edit(%{"op" => op}), do: {:error, "Unknown edit operation: #{op}"}
   defp parse_single_edit(_), do: {:error, "Edit missing required 'op' field"}
 

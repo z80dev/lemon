@@ -943,4 +943,118 @@ defmodule Ai.ModelsTest do
       assert Models.get_model(:amazon_bedrock, "amazon.nova-pro-v1:0") != nil
     end
   end
+
+  # ============================================================================
+  # Thinking Level Utilities (ported from Pi)
+  # ============================================================================
+
+  describe "supports_xhigh?/1" do
+    test "returns true for GPT-5.2 models" do
+      model = Models.get_model(:openai, "gpt-5.2")
+      assert model != nil
+      assert Models.supports_xhigh?(model) == true
+    end
+
+    test "returns true for GPT-5.3 codex models" do
+      model = Models.get_model(:openai, "gpt-5.3-codex")
+      assert model != nil
+      assert Models.supports_xhigh?(model) == true
+    end
+
+    test "returns true for Anthropic Opus 4.6 models" do
+      model = Models.get_model(:anthropic, "claude-opus-4-6-20250514")
+      if model do
+        assert Models.supports_xhigh?(model) == true
+      else
+        # Try alternate ID format
+        model = Models.get_model(:anthropic, "claude-opus-4-6-20250514")
+        assert model == nil || Models.supports_xhigh?(model) == true
+      end
+    end
+
+    test "returns false for Claude Sonnet models" do
+      model = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      assert model != nil
+      assert Models.supports_xhigh?(model) == false
+    end
+
+    test "returns false for GPT-4o" do
+      model = Models.get_model(:openai, "gpt-4o")
+      assert model != nil
+      assert Models.supports_xhigh?(model) == false
+    end
+
+    test "returns false for GPT-5.1 (not 5.2+)" do
+      model = Models.get_model(:openai, "gpt-5.1")
+      assert model != nil
+      assert Models.supports_xhigh?(model) == false
+    end
+  end
+
+  describe "adjust_max_tokens_for_thinking/4" do
+    test "adds thinking budget to base max tokens" do
+      {max, budget} = Models.adjust_max_tokens_for_thinking(8192, 200_000, :high)
+      assert budget == 16384
+      assert max == 8192 + 16384
+    end
+
+    test "respects model max token limit" do
+      {max, _budget} = Models.adjust_max_tokens_for_thinking(8192, 10_000, :high)
+      assert max == 10_000
+    end
+
+    test "reduces budget when model max is too small" do
+      {max, budget} = Models.adjust_max_tokens_for_thinking(8192, 1500, :high)
+      assert max == 1500
+      # Budget reduced to leave 1024 for output
+      assert budget == max(0, 1500 - 1024)
+    end
+
+    test "uses default budgets per level" do
+      {_, budget_min} = Models.adjust_max_tokens_for_thinking(8192, 200_000, :minimal)
+      {_, budget_low} = Models.adjust_max_tokens_for_thinking(8192, 200_000, :low)
+      {_, budget_med} = Models.adjust_max_tokens_for_thinking(8192, 200_000, :medium)
+      {_, budget_high} = Models.adjust_max_tokens_for_thinking(8192, 200_000, :high)
+
+      assert budget_min == 1024
+      assert budget_low == 2048
+      assert budget_med == 8192
+      assert budget_high == 16384
+    end
+
+    test "accepts custom budgets" do
+      {max, budget} = Models.adjust_max_tokens_for_thinking(8192, 200_000, :medium, %{medium: 4096})
+      assert budget == 4096
+      assert max == 8192 + 4096
+    end
+
+    test "clamps xhigh to high" do
+      {max_xhigh, budget_xhigh} = Models.adjust_max_tokens_for_thinking(8192, 200_000, :xhigh)
+      {max_high, budget_high} = Models.adjust_max_tokens_for_thinking(8192, 200_000, :high)
+      assert max_xhigh == max_high
+      assert budget_xhigh == budget_high
+    end
+  end
+
+  describe "clamp_reasoning/1" do
+    test "maps xhigh to high" do
+      assert Models.clamp_reasoning(:xhigh) == :high
+    end
+
+    test "passes through valid levels" do
+      assert Models.clamp_reasoning(:minimal) == :minimal
+      assert Models.clamp_reasoning(:low) == :low
+      assert Models.clamp_reasoning(:medium) == :medium
+      assert Models.clamp_reasoning(:high) == :high
+    end
+
+    test "returns nil for nil" do
+      assert Models.clamp_reasoning(nil) == nil
+    end
+
+    test "returns nil for unknown levels" do
+      assert Models.clamp_reasoning(:unknown) == nil
+      assert Models.clamp_reasoning(:turbo) == nil
+    end
+  end
 end

@@ -547,4 +547,55 @@ defmodule CodingAgent.Tools.HashlineTest do
       end
     end
   end
+
+  # ============================================================================
+  # apply_edits/2 - replace_text operation
+  # ============================================================================
+
+  describe "apply_edits/2 with replace_text" do
+    test "replaces first occurrence by default" do
+      content = "foo bar\nfoo baz\nfoo qux"
+      edits = [%{op: :replace_text, old_text: "foo", new_text: "hello", all: false}]
+      {:ok, result} = Hashline.apply_edits(content, edits)
+      assert result.content == "hello bar\nfoo baz\nfoo qux"
+      assert result.first_changed_line == 1
+    end
+
+    test "replaces all occurrences when all is true" do
+      content = "foo bar\nfoo baz\nfoo qux"
+      edits = [%{op: :replace_text, old_text: "foo", new_text: "hello", all: true}]
+      {:ok, result} = Hashline.apply_edits(content, edits)
+      assert result.content == "hello bar\nhello baz\nhello qux"
+    end
+
+    test "raises ArgumentError when old_text is empty" do
+      content = "hello world"
+      edits = [%{op: :replace_text, old_text: "", new_text: "bye", all: false}]
+      assert_raise ArgumentError, ~r/non-empty/, fn ->
+        Hashline.apply_edits(content, edits)
+      end
+    end
+
+    test "raises ArgumentError when old_text not found" do
+      content = "hello world"
+      edits = [%{op: :replace_text, old_text: "missing", new_text: "found", all: false}]
+      assert_raise ArgumentError, ~r/not found/, fn ->
+        Hashline.apply_edits(content, edits)
+      end
+    end
+
+    test "replaces text spanning multiple lines" do
+      content = "hello\nworld"
+      edits = [%{op: :replace_text, old_text: "hello\nworld", new_text: "goodbye\nplanet", all: false}]
+      {:ok, result} = Hashline.apply_edits(content, edits)
+      assert result.content == "goodbye\nplanet"
+    end
+
+    test "handles replacement that changes line count" do
+      content = "line1\nline2\nline3"
+      edits = [%{op: :replace_text, old_text: "line2", new_text: "new2a\nnew2b", all: false}]
+      {:ok, result} = Hashline.apply_edits(content, edits)
+      assert result.content == "line1\nnew2a\nnew2b\nline3"
+    end
+  end
 end
