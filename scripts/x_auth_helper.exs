@@ -3,20 +3,42 @@
 #
 # This script helps you get OAuth 2.0 tokens by opening the browser
 # and providing an easy way to paste the code.
+#
+# Credentials are loaded from (in order of priority):
+# 1. Lemon secrets store (via mix lemon.secrets.set X_API_CLIENT_ID ...)
+# 2. Environment variables
 
 Mix.install([:req])
 
-client_id = System.get_env("X_API_CLIENT_ID")
-client_secret = System.get_env("X_API_CLIENT_SECRET")
+# Start lemon_core to access secrets store
+Mix.Task.run("loadpaths")
+{:ok, _} = Application.ensure_all_started(:lemon_core)
+
+defmodule XAuthHelper do
+  def load_credential(name) do
+    # Try secrets store first
+    case LemonCore.Secrets.resolve(name, prefer_env: false) do
+      {:ok, value, :store} -> value
+      _ -> System.get_env(name)
+    end
+  end
+end
+
+client_id = XAuthHelper.load_credential("X_API_CLIENT_ID")
+client_secret = XAuthHelper.load_credential("X_API_CLIENT_SECRET")
 redirect_uri = System.get_env("X_API_REDIRECT_URI", "http://localhost:4000/auth/x/callback")
 state_prefix = System.get_env("X_API_STATE_PREFIX", "lemon")
 state = "#{state_prefix}_#{:rand.uniform(100_000)}"
 
 if is_nil(client_id) or is_nil(client_secret) do
   IO.puts("""
-  ❌ Missing required environment variables.
+  ❌ Missing required credentials.
 
-  Set these first:
+  Set these via secrets store (recommended):
+    mix lemon.secrets.set X_API_CLIENT_ID "your-client-id"
+    mix lemon.secrets.set X_API_CLIENT_SECRET "your-client-secret"
+
+  Or via environment variables:
     export X_API_CLIENT_ID="your-client-id"
     export X_API_CLIENT_SECRET="your-client-secret"
 

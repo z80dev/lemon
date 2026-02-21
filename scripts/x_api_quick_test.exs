@@ -1,11 +1,29 @@
 #!/usr/bin/env elixir
 # Quick test for X API without starting the full application
+#
+# Credentials are loaded from (in order of priority):
+# 1. Lemon secrets store (via mix lemon.secrets.set X_API_CLIENT_ID ...)
+# 2. Environment variables
 
 Mix.install([:req])
 
-client_id = System.get_env("X_API_CLIENT_ID")
-client_secret = System.get_env("X_API_CLIENT_SECRET")
-access_token = System.get_env("X_API_ACCESS_TOKEN")
+# Start lemon_core to access secrets store
+Mix.Task.run("loadpaths")
+{:ok, _} = Application.ensure_all_started(:lemon_core)
+
+defmodule XAPITestHelper do
+  def load_credential(name) do
+    # Try secrets store first
+    case LemonCore.Secrets.resolve(name, prefer_env: false) do
+      {:ok, value, :store} -> value
+      _ -> System.get_env(name)
+    end
+  end
+end
+
+client_id = XAPITestHelper.load_credential("X_API_CLIENT_ID")
+client_secret = XAPITestHelper.load_credential("X_API_CLIENT_SECRET")
+access_token = XAPITestHelper.load_credential("X_API_ACCESS_TOKEN")
 
 IO.puts("🐦 X API Quick Test")
 IO.puts("=" |> String.duplicate(50))
@@ -14,7 +32,12 @@ unless client_id && client_secret && access_token do
   IO.puts("""
   ❌ Missing credentials!
 
-  Please set:
+  Set these via secrets store (recommended):
+    mix lemon.secrets.set X_API_CLIENT_ID "..."
+    mix lemon.secrets.set X_API_CLIENT_SECRET "..."
+    mix lemon.secrets.set X_API_ACCESS_TOKEN "..."
+
+  Or via environment variables:
     export X_API_CLIENT_ID="..."
     export X_API_CLIENT_SECRET="..."
     export X_API_ACCESS_TOKEN="..."

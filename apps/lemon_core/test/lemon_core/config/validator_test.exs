@@ -696,6 +696,9 @@ defmodule LemonCore.Config.ValidatorTest do
       errors = Validator.validate_xmtp_config([], %{environment: "production"})
       assert errors == []
 
+      errors = Validator.validate_xmtp_config([], %{env: "production"})
+      assert errors == []
+
       errors = Validator.validate_xmtp_config([], %{environment: "dev"})
       assert errors == []
 
@@ -707,6 +710,18 @@ defmodule LemonCore.Config.ValidatorTest do
 
       errors = Validator.validate_xmtp_config([], %{environment: 123})
       assert Enum.any?(errors, &String.contains?(&1, "environment"))
+    end
+
+    test "validates xmtp wallet_address" do
+      errors =
+        Validator.validate_xmtp_config([], %{
+          wallet_address: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+        })
+
+      assert errors == []
+
+      errors = Validator.validate_xmtp_config([], %{wallet_address: "abcdef"})
+      assert Enum.any?(errors, &String.contains?(&1, "wallet_address"))
     end
 
     test "validates xmtp api_url" do
@@ -737,6 +752,22 @@ defmodule LemonCore.Config.ValidatorTest do
       assert Enum.any?(errors, &String.contains?(&1, "max_connections"))
     end
 
+    test "validates xmtp poll_interval_ms and connect_timeout_ms" do
+      errors =
+        Validator.validate_xmtp_config([], %{
+          poll_interval_ms: 1000,
+          connect_timeout_ms: 5000
+        })
+
+      assert errors == []
+
+      errors = Validator.validate_xmtp_config([], %{poll_interval_ms: 0})
+      assert Enum.any?(errors, &String.contains?(&1, "poll_interval_ms"))
+
+      errors = Validator.validate_xmtp_config([], %{connect_timeout_ms: -1})
+      assert Enum.any?(errors, &String.contains?(&1, "connect_timeout_ms"))
+    end
+
     test "validates xmtp enable_relay boolean" do
       errors = Validator.validate_xmtp_config([], %{enable_relay: true})
       assert errors == []
@@ -748,6 +779,17 @@ defmodule LemonCore.Config.ValidatorTest do
       assert Enum.any?(errors, &String.contains?(&1, "enable_relay"))
     end
 
+    test "validates xmtp mock_mode and require_live booleans" do
+      errors = Validator.validate_xmtp_config([], %{mock_mode: false, require_live: true})
+      assert errors == []
+
+      errors = Validator.validate_xmtp_config([], %{mock_mode: "yes"})
+      assert Enum.any?(errors, &String.contains?(&1, "mock_mode"))
+
+      errors = Validator.validate_xmtp_config([], %{require_live: "yes"})
+      assert Enum.any?(errors, &String.contains?(&1, "require_live"))
+    end
+
     test "accepts nil xmtp config" do
       errors = Validator.validate_xmtp_config([], nil)
       assert errors == []
@@ -756,8 +798,13 @@ defmodule LemonCore.Config.ValidatorTest do
     test "validates complete xmtp config" do
       errors = Validator.validate_xmtp_config([], %{
         wallet_key: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2",
-        environment: "production",
+        wallet_address: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+        env: "production",
         api_url: "https://api.xmtp.network",
+        poll_interval_ms: 1000,
+        connect_timeout_ms: 5000,
+        mock_mode: false,
+        require_live: true,
         max_connections: 10,
         enable_relay: false
       })

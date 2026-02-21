@@ -25,12 +25,18 @@ defmodule LemonGateway.Health do
   end
 
   defp built_in_checks do
-    [
+    checks = [
       {"supervisor", fn -> process_alive_check(LemonGateway.Supervisor) end},
       {"scheduler", fn -> scheduler_check() end},
       {"run_supervisor", fn -> dynamic_supervisor_check(LemonGateway.RunSupervisor) end},
       {"engine_lock", fn -> process_alive_check(LemonGateway.EngineLock) end}
     ]
+
+    if xmtp_enabled?() do
+      checks ++ [{"xmtp_transport", fn -> xmtp_transport_check() end}]
+    else
+      checks
+    end
   end
 
   defp custom_checks do
@@ -131,5 +137,41 @@ defmodule LemonGateway.Health do
   rescue
     error ->
       {:error, error}
+  end
+
+  defp xmtp_transport_check do
+    with true <- Code.ensure_loaded?(LemonGateway.Transports.Xmtp),
+         {:ok, status} <- LemonGateway.Transports.Xmtp.status(),
+         true <- status[:connected?] == true,
+         true <- status[:healthy?] == true do
+      {:ok,
+       %{
+         mode: status[:mode],
+         require_live: status[:require_live],
+         connected: status[:connected?]
+       }}
+    else
+      false ->
+        {:error, :xmtp_not_live}
+
+      {:error, reason} ->
+        {:error, reason}
+
+      other ->
+        {:error, {:unexpected_xmtp_status, other}}
+    end
+  rescue
+    error ->
+      {:error, error}
+  end
+
+  defp xmtp_enabled? do
+    if Code.ensure_loaded?(LemonGateway.Transports.Xmtp) do
+      LemonGateway.Transports.Xmtp.enabled?()
+    else
+      false
+    end
+  rescue
+    _ -> false
   end
 end

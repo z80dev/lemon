@@ -7,22 +7,42 @@
 #   1. Set up a callback URL in X Developer Portal (can be http://localhost:4000/auth/x/callback)
 #   2. Have your Client ID and Client Secret ready
 #
+# Credentials are loaded from (in order of priority):
+# 1. Lemon secrets store (via mix lemon.secrets.set X_API_CLIENT_ID ...)
+# 2. Environment variables
+#
 # Usage:
-#   export X_API_CLIENT_ID="RHozTWdxcjZoQ3E0em5JU0xYQTI6MTpjaQ"
-#   export X_API_CLIENT_SECRET="IxhBE1Ssz5ADc9aPEL_j4i5BrNCBF5IufWjy5Mz_sNKb7_siku"
 #   mix run scripts/x_oauth2_setup.exs
+
+# Start lemon_core to access secrets store
+Mix.Task.run("loadpaths")
+{:ok, _} = Application.ensure_all_started(:lemon_core)
+
+defmodule XOAuthSetupHelper do
+  def load_credential(name) do
+    # Try secrets store first
+    case LemonCore.Secrets.resolve(name, prefer_env: false) do
+      {:ok, value, :store} -> value
+      _ -> System.get_env(name)
+    end
+  end
+end
 
 IO.puts("🐦 X API OAuth 2.0 Setup")
 IO.puts("=" |> String.duplicate(50))
 
-client_id = System.get_env("X_API_CLIENT_ID")
-client_secret = System.get_env("X_API_CLIENT_SECRET")
+client_id = XOAuthSetupHelper.load_credential("X_API_CLIENT_ID")
+client_secret = XOAuthSetupHelper.load_credential("X_API_CLIENT_SECRET")
 
 unless client_id && client_secret do
   IO.puts("""
   ❌ Missing credentials!
 
-  Please set:
+  Set these via secrets store (recommended):
+    mix lemon.secrets.set X_API_CLIENT_ID "your-client-id"
+    mix lemon.secrets.set X_API_CLIENT_SECRET "your-client-secret"
+
+  Or via environment variables:
     export X_API_CLIENT_ID="your-client-id"
     export X_API_CLIENT_SECRET="your-client-secret"
 

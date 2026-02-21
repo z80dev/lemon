@@ -48,6 +48,7 @@ defmodule LemonGateway.ConfigLoaderTest do
     default_engine = "lemon"
     default_cwd = "/tmp/lemon-home"
     enable_telegram = true
+    enable_xmtp = true
 
     [gateway.sms]
     webhook_port = 8786
@@ -72,6 +73,12 @@ defmodule LemonGateway.ConfigLoaderTest do
     [gateway.engines.lemon]
     cli_path = "lemon"
     enabled = true
+
+    [gateway.xmtp]
+    env = "production"
+    wallet_address = "0x97a90100d77d05e309cdeb7e2aaf91f0ef8ca5ac"
+    wallet_key = "pk-test"
+    poll_interval_ms = 1500
     """)
 
     config = ConfigLoader.load()
@@ -80,10 +87,15 @@ defmodule LemonGateway.ConfigLoaderTest do
     assert config.default_engine == "lemon"
     assert config.default_cwd == "/tmp/lemon-home"
     assert config.enable_telegram == true
+    assert config.enable_xmtp == true
     assert config.sms.webhook_port == 8786
     assert config.queue.mode == :collect
     assert config.queue.cap == 10
     assert config.queue.drop == :oldest
+    assert config.xmtp.env == "production"
+    assert config.xmtp.wallet_address == "0x97a90100d77d05e309cdeb7e2aaf91f0ef8ca5ac"
+    assert config.xmtp.wallet_key == "pk-test"
+    assert config.xmtp.poll_interval_ms == 1500
 
     assert %{"demo" => %Project{root: "/tmp/demo"}} = config.projects
     assert [%Binding{transport: :telegram, chat_id: 123, project: "demo"}] = config.bindings
@@ -317,15 +329,19 @@ defmodule LemonGateway.ConfigLoaderTest do
       %{
         "enable_xmtp" => true,
         "xmtp" => %{
-          "env" => "dev",
+          "environment" => "dev",
+          "api_url" => "https://api.dev.xmtp.network",
           "poll_interval_ms" => 1200,
+          "connect_timeout_ms" => 7000,
+          "require_live" => true,
           "wallet_address" => "0xABCDEFabcdefABCDEFabcdefABCDEFabcdefABCD",
           "wallet_key" => "wallet-key",
           "private_key" => "private-key",
           "inbox_id" => "inbox-123",
           "db_path" => "/tmp/xmtp-db",
           "bridge_script" => "/tmp/xmtp_bridge.mjs",
-          "mock_mode" => true
+          "mock_mode" => true,
+          "sdk_module" => "@xmtp/node-sdk"
         }
       }
     )
@@ -334,7 +350,10 @@ defmodule LemonGateway.ConfigLoaderTest do
 
     assert config.enable_xmtp == true
     assert config.xmtp.env == "dev"
+    assert config.xmtp.api_url == "https://api.dev.xmtp.network"
     assert config.xmtp.poll_interval_ms == 1200
+    assert config.xmtp.connect_timeout_ms == 7000
+    assert config.xmtp.require_live == true
     assert config.xmtp.wallet_address == "0xABCDEFabcdefABCDEFabcdefABCDEFabcdefABCD"
     assert config.xmtp.wallet_key == "wallet-key"
     assert config.xmtp.private_key == "private-key"
@@ -342,5 +361,47 @@ defmodule LemonGateway.ConfigLoaderTest do
     assert config.xmtp.db_path == "/tmp/xmtp-db"
     assert config.xmtp.bridge_script == "/tmp/xmtp_bridge.mjs"
     assert config.xmtp.mock_mode == true
+    assert config.xmtp.sdk_module == "@xmtp/node-sdk"
+  end
+
+  test "resolves xmtp env refs from canonical TOML", %{home: home} do
+    config_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(config_dir)
+
+    original_wallet_address = System.get_env("XMTP_WALLET_ADDRESS")
+    original_wallet_key = System.get_env("XMTP_WALLET_KEY")
+
+    System.put_env("XMTP_WALLET_ADDRESS", "0x97a90100d77d05e309cdeb7e2aaf91f0ef8ca5ac")
+    System.put_env("XMTP_WALLET_KEY", "pk-from-env")
+
+    on_exit(fn ->
+      if is_nil(original_wallet_address) do
+        System.delete_env("XMTP_WALLET_ADDRESS")
+      else
+        System.put_env("XMTP_WALLET_ADDRESS", original_wallet_address)
+      end
+
+      if is_nil(original_wallet_key) do
+        System.delete_env("XMTP_WALLET_KEY")
+      else
+        System.put_env("XMTP_WALLET_KEY", original_wallet_key)
+      end
+    end)
+
+    File.write!(Path.join(config_dir, "config.toml"), """
+    [gateway]
+    enable_xmtp = true
+
+    [gateway.xmtp]
+    env = "production"
+    wallet_address = "${XMTP_WALLET_ADDRESS}"
+    wallet_key = "${XMTP_WALLET_KEY}"
+    """)
+
+    config = ConfigLoader.load()
+
+    assert config.enable_xmtp == true
+    assert config.xmtp.wallet_address == "0x97a90100d77d05e309cdeb7e2aaf91f0ef8ca5ac"
+    assert config.xmtp.wallet_key == "pk-from-env"
   end
 end

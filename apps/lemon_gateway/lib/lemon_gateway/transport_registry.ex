@@ -39,6 +39,7 @@ defmodule LemonGateway.TransportRegistry do
         validate_id!(id)
         Map.put(acc, id, mod)
       end)
+      |> maybe_register_builtin_xmtp()
 
     maybe_warn_dual_gate(map)
 
@@ -109,6 +110,29 @@ defmodule LemonGateway.TransportRegistry do
   end
 
   defp maybe_warn_dual_gate(_), do: :ok
+
+  defp maybe_register_builtin_xmtp(state) when is_map(state) do
+    cond do
+      Map.has_key?(state, "xmtp") ->
+        state
+
+      not transport_enabled?("xmtp") ->
+        state
+
+      Code.ensure_loaded?(LemonGateway.Transports.Xmtp) ->
+        Logger.info("auto-registering built-in XMTP transport because enable_xmtp=true")
+        Map.put(state, "xmtp", LemonGateway.Transports.Xmtp)
+
+      true ->
+        Logger.warning(
+          "enable_xmtp is true but LemonGateway.Transports.Xmtp is unavailable; check build artifacts"
+        )
+
+        state
+    end
+  end
+
+  defp maybe_register_builtin_xmtp(state), do: state
 
   defp transport_enabled?("telegram") do
     # Primary source of truth: LemonGateway.Config (TOML-backed GenServer).

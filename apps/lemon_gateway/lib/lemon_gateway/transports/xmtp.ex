@@ -11,6 +11,8 @@ defmodule LemonGateway.Transports.Xmtp do
   alias LemonGateway.Types.{ChatScope, Job}
 
   @default_poll_interval_ms 1_500
+  @default_connect_timeout_ms 15_000
+  @default_require_live true
   @max_inbound_dedupe_entries 2_000
   @max_placeholder_type_len 24
   @max_placeholder_detail_len 80
@@ -40,13 +42,24 @@ defmodule LemonGateway.Transports.Xmtp do
     Bridge.connect(port_server, cfg)
 
     poll_interval_ms = poll_interval_ms(cfg)
-    schedule_poll(poll_interval_ms)
+    connect_timeout_ms = connect_timeout_ms(cfg)
+    require_live = require_live?(cfg)
+    connect_timer_ref = schedule_connect_timeout(connect_timeout_ms)
 
     {:ok,
      %{
        port_server: port_server,
+       connect_cfg: cfg,
        poll_interval_ms: poll_interval_ms,
+       connect_timeout_ms: connect_timeout_ms,
+       require_live: require_live,
        connected?: false,
+       connection_mode: nil,
+       last_connected_at: nil,
+       last_error: nil,
+       fatal_error: nil,
+       poll_timer_ref: nil,
+       connect_timer_ref: connect_timer_ref,
        seen_inbound_keys: MapSet.new(),
        seen_inbound_order: :queue.new()
      }}
@@ -58,9 +71,39 @@ defmodule LemonGateway.Transports.Xmtp do
 
   @impl true
   def handle_info(:poll, state) do
-    Bridge.poll(state.port_server)
-    schedule_poll(state.poll_interval_ms)
+    state = %{state | poll_timer_ref: nil}
+
+    if ready_for_poll?(state) do
+      Bridge.poll(state.port_server)
+    end
+
+    state = maybe_schedule_poll(state)
     {:noreply, state}
+  end
+
+  def handle_info(:connect_timeout, state) do
+    state = %{state | connect_timer_ref: nil}
+
+    if state.connected? do
+      {:noreply, state}
+    else
+      message =
+        "xmtp bridge did not connect within #{state.connect_timeout_ms}ms; transport is unavailable"
+
+      log_connection_failure(message, state.require_live)
+
+      Bridge.connect(state.port_server, state.connect_cfg)
+
+      state =
+        state
+        |> mark_unavailable(%{
+          code: "connect_timeout",
+          message: message
+        })
+        |> ensure_connect_timeout()
+
+      {:noreply, state}
+    end
   end
 
   def handle_info({:xmtp_bridge_event, %{} = event}, state) do
@@ -77,6 +120,34 @@ defmodule LemonGateway.Transports.Xmtp do
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
+
+  @impl true
+  def handle_call(:status, _from, state) do
+    {:reply,
+     {:ok,
+      %{
+        enabled?: enabled?(),
+        connected?: state.connected?,
+        mode: format_mode(state.connection_mode),
+        healthy?: healthy?(state),
+        require_live: state.require_live,
+        connect_timeout_ms: state.connect_timeout_ms,
+        poll_interval_ms: state.poll_interval_ms,
+        last_connected_at: state.last_connected_at,
+        fatal_error: map_error(state.fatal_error),
+        last_error: map_error(state.last_error)
+      }}, state}
+  end
+
+  @spec status() :: {:ok, map()} | {:error, term()}
+  def status do
+    case Process.whereis(__MODULE__) do
+      pid when is_pid(pid) -> GenServer.call(__MODULE__, :status, 2_000)
+      _ -> {:error, :not_running}
+    end
+  catch
+    :exit, reason -> {:error, reason}
+  end
 
   @spec enabled?() :: boolean()
   def enabled? do
@@ -144,24 +215,81 @@ defmodule LemonGateway.Transports.Xmtp do
   end
 
   defp handle_bridge_event(%{"type" => "connected"} = event, state) do
-    Logger.info("xmtp bridge connected: #{inspect(event)}")
-    %{state | connected?: true}
+    mode = event_mode(event)
+    state = cancel_connect_timeout(state)
+
+    state =
+      %{
+        state
+        | connected?: true,
+          connection_mode: mode,
+          last_connected_at: DateTime.utc_now() |> DateTime.to_iso8601(),
+          last_error: nil
+      }
+      |> maybe_clear_fatal_for_live()
+
+    case {mode, state.require_live} do
+      {:live, _} ->
+        Logger.info("xmtp bridge connected (mode=live): #{inspect(event)}")
+        maybe_schedule_poll(state)
+
+      {:mock, false} ->
+        Logger.warning("xmtp bridge connected in mock mode: #{inspect(event)}")
+        maybe_schedule_poll(state)
+
+      {:mock, true} ->
+        message =
+          "xmtp bridge connected in mock mode while require_live=true; transport remains unavailable"
+
+        Logger.error("#{message}: #{inspect(event)}")
+
+        state
+        |> cancel_poll_timer()
+        |> mark_unavailable(%{
+          code: "mock_mode",
+          message: message,
+          details: event
+        })
+
+      {:unknown, true} ->
+        message =
+          "xmtp bridge connected with unknown mode while require_live=true; transport remains unavailable"
+
+        Logger.error("#{message}: #{inspect(event)}")
+
+        state
+        |> cancel_poll_timer()
+        |> mark_unavailable(%{
+          code: "unknown_mode",
+          message: message,
+          details: event
+        })
+
+      {:unknown, false} ->
+        Logger.warning("xmtp bridge connected with unknown mode: #{inspect(event)}")
+        maybe_schedule_poll(state)
+    end
   end
 
   defp handle_bridge_event(%{"type" => "message"} = event, state) do
-    normalized = normalize_inbound(event)
-    dedupe_key = inbound_dedupe_key(normalized, event)
+    if receive_available?(state) do
+      normalized = normalize_inbound(event)
+      dedupe_key = inbound_dedupe_key(normalized, event)
 
-    case remember_inbound_key(state, dedupe_key) do
-      {:duplicate, state} ->
-        Logger.debug(
-          "xmtp duplicate inbound ignored: conversation_id=#{normalized.conversation_id} message_id=#{normalized.message_id || "missing"}"
-        )
+      case remember_inbound_key(state, dedupe_key) do
+        {:duplicate, state} ->
+          Logger.debug(
+            "xmtp duplicate inbound ignored: conversation_id=#{normalized.conversation_id} message_id=#{normalized.message_id || "missing"}"
+          )
 
-        state
+          state
 
-      {:ok, state} ->
-        handle_inbound(normalized, state)
+        {:ok, state} ->
+          handle_inbound(normalized, state)
+      end
+    else
+      Logger.warning("xmtp inbound ignored because transport is unavailable")
+      state
     end
   end
 
@@ -172,7 +300,18 @@ defmodule LemonGateway.Transports.Xmtp do
 
   defp handle_bridge_event(%{"type" => "error"} = event, state) do
     Logger.warning("xmtp bridge error: #{inspect(event)}")
-    state
+
+    state =
+      state
+      |> Map.put(:last_error, normalize_bridge_error(event))
+      |> maybe_mark_disconnected_on_bridge_exit(event)
+      |> maybe_mark_unavailable_for_live_requirement(event)
+
+    if state.connected? do
+      maybe_schedule_poll(state)
+    else
+      ensure_connect_timeout(state)
+    end
   end
 
   defp handle_bridge_event(_event, state), do: state
@@ -198,6 +337,7 @@ defmodule LemonGateway.Transports.Xmtp do
 
   defp submit_inbound(normalized) when is_map(normalized) do
     scope = %ChatScope{transport: :xmtp, chat_id: normalized.wallet_address, topic_id: nil}
+    agent_id = BindingResolver.resolve_agent_id(scope)
 
     {engine_hint, stripped_prompt} =
       LemonGateway.Telegram.Transport.strip_engine_directive(normalized.prompt)
@@ -227,10 +367,15 @@ defmodule LemonGateway.Transports.Xmtp do
       meta: %{
         notify_pid: self(),
         origin: :xmtp,
+        agent_id: agent_id,
         xmtp: xmtp_meta,
         xmtp_reply: xmtp_reply_metadata(normalized)
       }
     }
+
+    Logger.info(
+      "xmtp inbound submitted: conversation_id=#{normalized.conversation_id} sender=#{normalized.wallet_address} agent_id=#{agent_id} engine=#{job.engine_id || "default"}"
+    )
 
     Runtime.submit(job)
   end
@@ -406,7 +551,7 @@ defmodule LemonGateway.Transports.Xmtp do
   defp maybe_send_completion(%Job{} = job, completed, state) do
     reply = fetch_meta(job.meta, :xmtp_reply)
 
-    if is_map(reply) do
+    if is_map(reply) and send_available?(state) do
       payload =
         %{
           "conversation_id" => fetch_meta(reply, :conversation_id),
@@ -420,6 +565,8 @@ defmodule LemonGateway.Transports.Xmtp do
         |> Map.new()
 
       Bridge.send_message(state.port_server, payload)
+    else
+      maybe_log_completion_drop(reply, state)
     end
   end
 
@@ -765,23 +912,218 @@ defmodule LemonGateway.Transports.Xmtp do
     Process.send_after(self(), :poll, interval_ms)
   end
 
+  defp schedule_connect_timeout(timeout_ms) do
+    Process.send_after(self(), :connect_timeout, timeout_ms)
+  end
+
+  defp maybe_schedule_poll(state) do
+    if ready_for_poll?(state) and is_nil(state.poll_timer_ref) do
+      %{state | poll_timer_ref: schedule_poll(state.poll_interval_ms)}
+    else
+      state
+    end
+  end
+
+  defp ready_for_poll?(state) do
+    state.connected? and send_available?(state)
+  end
+
+  defp send_available?(state) do
+    cond do
+      not state.connected? -> false
+      not is_nil(state.fatal_error) -> false
+      state.connection_mode == :live -> true
+      state.require_live -> false
+      state.connection_mode in [:mock, :unknown] -> true
+      true -> false
+    end
+  end
+
+  defp receive_available?(state), do: send_available?(state)
+
+  defp connect_timeout_ms(cfg) do
+    cfg
+    |> fetch_meta(:connect_timeout_ms)
+    |> positive_integer_or_default(@default_connect_timeout_ms)
+  end
+
+  defp require_live?(cfg) do
+    cfg
+    |> fetch_meta(:require_live)
+    |> normalize_boolean(@default_require_live)
+  end
+
   defp poll_interval_ms(cfg) do
     cfg
     |> fetch_meta(:poll_interval_ms)
-    |> case do
-      value when is_integer(value) and value > 0 ->
-        value
+    |> positive_integer_or_default(@default_poll_interval_ms)
+  end
 
+  defp positive_integer_or_default(value, _default) when is_integer(value) and value > 0,
+    do: value
+
+  defp positive_integer_or_default(value, default) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {parsed, _} when parsed > 0 -> parsed
+      _ -> default
+    end
+  end
+
+  defp positive_integer_or_default(_value, default), do: default
+
+  defp normalize_boolean(value, _default) when is_boolean(value), do: value
+  defp normalize_boolean(value, _default) when is_integer(value), do: value != 0
+
+  defp normalize_boolean(value, default) when is_binary(value) do
+    case String.downcase(String.trim(value)) do
+      "1" -> true
+      "true" -> true
+      "yes" -> true
+      "on" -> true
+      "0" -> false
+      "false" -> false
+      "no" -> false
+      "off" -> false
+      _ -> default
+    end
+  end
+
+  defp normalize_boolean(_value, default), do: default
+
+  defp map_error(nil), do: nil
+
+  defp map_error(value) when is_map(value) do
+    value
+    |> Enum.map(fn {k, v} -> {to_string(k), v} end)
+    |> Map.new()
+  end
+
+  defp map_error(value), do: %{detail: inspect(value)}
+
+  defp format_mode(:live), do: "live"
+  defp format_mode(:mock), do: "mock"
+  defp format_mode(:unknown), do: "unknown"
+  defp format_mode(_), do: nil
+
+  defp healthy?(state) do
+    send_available?(state) and
+      (state.connection_mode == :live or
+         (not state.require_live and state.connection_mode in [:mock, :unknown]))
+  end
+
+  defp event_mode(event) do
+    case fetch_meta(event, :mode) |> normalize_blank() do
       value when is_binary(value) ->
-        case Integer.parse(String.trim(value)) do
-          {parsed, _} when parsed > 0 -> parsed
-          _ -> @default_poll_interval_ms
+        case String.downcase(value) do
+          "live" -> :live
+          "mock" -> :mock
+          _ -> :unknown
         end
 
       _ ->
-        @default_poll_interval_ms
+        :unknown
     end
   end
+
+  defp normalize_bridge_error(event) do
+    %{
+      code: fetch_meta(event, :code) || "bridge_error",
+      message: fetch_meta(event, :message) || "xmtp bridge error",
+      details: Map.drop(event, ["type"])
+    }
+  end
+
+  defp mark_unavailable(state, error_map) when is_map(error_map) do
+    state =
+      state
+      |> Map.put(:last_error, error_map)
+      |> ensure_connect_timeout()
+
+    if state.require_live do
+      Map.put(state, :fatal_error, error_map)
+    else
+      state
+    end
+  end
+
+  defp maybe_clear_fatal_for_live(%{connection_mode: :live} = state) do
+    %{state | fatal_error: nil}
+  end
+
+  defp maybe_clear_fatal_for_live(state), do: state
+
+  defp maybe_mark_disconnected_on_bridge_exit(state, event) do
+    message =
+      fetch_meta(event, :message)
+      |> normalize_blank()
+      |> case do
+        value when is_binary(value) -> value
+        _ -> nil
+      end
+
+    if message == "xmtp bridge exited" do
+      state
+      |> cancel_poll_timer()
+      |> Map.put(:connected?, false)
+      |> Map.put(:connection_mode, nil)
+    else
+      state
+    end
+  end
+
+  defp maybe_mark_unavailable_for_live_requirement(state, event) do
+    code =
+      fetch_meta(event, :code)
+      |> normalize_blank()
+      |> case do
+        value when is_binary(value) -> value
+        _ -> ""
+      end
+
+    message = fetch_meta(event, :message) || "xmtp bridge error"
+
+    if state.require_live and
+         code in ["sdk_unavailable", "client_init_failed", "identity_unavailable"] do
+      mark_unavailable(state, %{
+        code: code,
+        message: message,
+        details: Map.drop(event, ["type"])
+      })
+    else
+      state
+    end
+  end
+
+  defp ensure_connect_timeout(%{connect_timer_ref: nil} = state) do
+    %{state | connect_timer_ref: schedule_connect_timeout(state.connect_timeout_ms)}
+  end
+
+  defp ensure_connect_timeout(state), do: state
+
+  defp cancel_connect_timeout(%{connect_timer_ref: nil} = state), do: state
+
+  defp cancel_connect_timeout(%{connect_timer_ref: ref} = state) do
+    _ = Process.cancel_timer(ref)
+    %{state | connect_timer_ref: nil}
+  end
+
+  defp cancel_poll_timer(%{poll_timer_ref: nil} = state), do: state
+
+  defp cancel_poll_timer(%{poll_timer_ref: ref} = state) do
+    _ = Process.cancel_timer(ref)
+    %{state | poll_timer_ref: nil}
+  end
+
+  defp maybe_log_completion_drop(reply, state) do
+    if is_map(reply) and not send_available?(state) do
+      Logger.warning(
+        "xmtp completion skipped because transport is unavailable (mode=#{format_mode(state.connection_mode) || "nil"}, require_live=#{state.require_live})"
+      )
+    end
+  end
+
+  defp log_connection_failure(message, true), do: Logger.error(message)
+  defp log_connection_failure(message, false), do: Logger.warning(message)
 
   defp maybe_put_group(meta, %{is_group: true} = normalized) do
     Map.put(meta, :group, %{

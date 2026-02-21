@@ -1,0 +1,10 @@
+{
+  "name": "lemon-gateway-bridges",
+  "private": true,
+  "type": "module",
+  "description": "Node bridge dependencies for Lemon gateway transports",
+  "dependencies": {
+    "@xmtp/node-sdk": "5.3.0",
+    "viem": "2.31.7"
+  }
+}

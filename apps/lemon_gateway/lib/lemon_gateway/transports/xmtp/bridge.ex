@@ -8,13 +8,15 @@ defmodule LemonGateway.Transports.Xmtp.Bridge do
     payload =
       %{
         "op" => "connect",
-        "env" => cfg_value(cfg, :env),
+        "env" => cfg_value(cfg, :env) || cfg_value(cfg, :environment),
+        "api_url" => cfg_value(cfg, :api_url),
         "wallet_address" => cfg_value(cfg, :wallet_address),
         "wallet_key" => cfg_value(cfg, :wallet_key),
         "private_key" => cfg_value(cfg, :private_key),
         "inbox_id" => cfg_value(cfg, :inbox_id),
         "db_path" => cfg_value(cfg, :db_path),
-        "mock_mode" => cfg_value(cfg, :mock_mode)
+        "mock_mode" => cfg_value(cfg, :mock_mode),
+        "sdk_module" => cfg_value(cfg, :sdk_module)
       }
       |> drop_nil_values()
 

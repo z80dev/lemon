@@ -96,10 +96,21 @@ max_concurrent_runs = 2
 default_engine = "lemon"
 auto_resume = false
 enable_telegram = false
+enable_xmtp = false
 
 [gateway.telegram]
 bot_token = "123456:token"
 allowed_chat_ids = [12345678]
+
+[gateway.xmtp]
+env = "production"                  # production | dev | local
+wallet_address = "${XMTP_WALLET_ADDRESS}"
+wallet_key = "${XMTP_WALLET_KEY}"
+db_path = "~/.lemon/xmtp-db"
+poll_interval_ms = 1500
+connect_timeout_ms = 15000
+require_live = true
+mock_mode = false
 
 [agents.default]
 name = "Daily Assistant"
@@ -244,7 +255,7 @@ max_tool_invoke_depth = 4
 - `agent.retry`: retry settings.
 - `agent.cli`: CLI runner settings (`codex`, `claude`, `kimi`, `opencode`, `pi`).
 - `tui`: terminal UI settings.
-- `gateway`: Lemon gateway settings, including `queue`, `telegram`, `projects`, `bindings`, and `engines`.
+- `gateway`: Lemon gateway settings, including `queue`, `telegram`, `xmtp`, `projects`, `bindings`, and `engines`.
 - `logging`: optional file logging configuration.
 
 ## Gateway Projects and Bindings
@@ -307,6 +318,44 @@ default_cwd = "~/"
 Tip:
 - In Telegram, you can switch the current chat's working directory at runtime with `/new <project_id|path>`. If you pass a
   path, Lemon will register it as a project named after the last path segment (e.g. `~/dev/lemon` => project `lemon`).
+
+## XMTP (Base App / Wallet Chats)
+
+Lemon can run as an XMTP bot through `LemonGateway.Transports.Xmtp`.
+
+### 1. Install XMTP bridge dependencies
+
+```bash
+./bin/lemon-xmtp-bootstrap
+```
+
+This installs bridge dependencies in `apps/lemon_gateway/priv/node_modules` (where `xmtp_bridge.mjs` resolves imports).
+
+### 2. Configure gateway XMTP
+
+```toml
+[gateway]
+enable_xmtp = true
+
+[gateway.xmtp]
+env = "production"                  # production | dev | local
+wallet_address = "${XMTP_WALLET_ADDRESS}"
+wallet_key = "${XMTP_WALLET_KEY}"   # 64-char hex private key (or 0x-prefixed)
+db_path = "~/.lemon/xmtp-db"
+poll_interval_ms = 1500
+connect_timeout_ms = 15000
+require_live = true                 # production default: do not allow mock fallback
+mock_mode = false                   # set true only for local bridge testing
+# Optional:
+# api_url = "https://api.xmtp.network"
+# inbox_id = "..."
+# sdk_module = "@xmtp/node-sdk"
+```
+
+Notes:
+- When `enable_xmtp = true`, Lemon auto-registers the built-in XMTP transport.
+- `require_live = true` keeps health/readiness red unless the bridge is truly live (not mock mode).
+- Non-text XMTP messages currently receive a text-only fallback response.
 
 ## Telegram Voice Transcription
 

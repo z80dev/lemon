@@ -13,7 +13,7 @@ defmodule LemonGateway.ConfigLoader do
         parse_gateway(config)
 
       :error ->
-        gateway = load_from_path() || (LemonConfig.load().gateway || %{})
+        gateway = load_from_path() || load_gateway_from_canonical_toml()
         parse_gateway(gateway)
     end
   end
@@ -51,6 +51,35 @@ defmodule LemonGateway.ConfigLoader do
         nil
     end
   end
+
+  defp load_gateway_from_canonical_toml do
+    global =
+      LemonConfig.global_path()
+      |> LemonConfig.load_file()
+
+    project =
+      case File.cwd() do
+        {:ok, cwd} ->
+          cwd
+          |> LemonConfig.project_path()
+          |> LemonConfig.load_file()
+
+        _ ->
+          %{}
+      end
+
+    global
+    |> deep_merge_maps(project)
+    |> Map.get("gateway", %{})
+  end
+
+  defp deep_merge_maps(left, right) when is_map(left) and is_map(right) do
+    Map.merge(left, right, fn _key, left_value, right_value ->
+      deep_merge_maps(left_value, right_value)
+    end)
+  end
+
+  defp deep_merge_maps(_left, right), do: right
 
   defp parse_gateway(gateway) when is_map(gateway) do
     projects = parse_projects(fetch(gateway, :projects) || %{})
@@ -323,15 +352,19 @@ defmodule LemonGateway.ConfigLoader do
 
   defp parse_xmtp(xmtp) when is_map(xmtp) do
     %{
-      env: fetch(xmtp, :env),
+      env: fetch(xmtp, :env) || fetch(xmtp, :environment),
+      api_url: resolve_env_ref(fetch(xmtp, :api_url)),
       poll_interval_ms: fetch(xmtp, :poll_interval_ms),
-      wallet_address: fetch(xmtp, :wallet_address),
-      wallet_key: fetch(xmtp, :wallet_key),
-      private_key: fetch(xmtp, :private_key),
-      inbox_id: fetch(xmtp, :inbox_id),
-      db_path: fetch(xmtp, :db_path),
-      bridge_script: fetch(xmtp, :bridge_script),
-      mock_mode: fetch(xmtp, :mock_mode)
+      connect_timeout_ms: fetch(xmtp, :connect_timeout_ms),
+      require_live: fetch(xmtp, :require_live),
+      wallet_address: resolve_env_ref(fetch(xmtp, :wallet_address)),
+      wallet_key: resolve_env_ref(fetch(xmtp, :wallet_key)),
+      private_key: resolve_env_ref(fetch(xmtp, :private_key)),
+      inbox_id: resolve_env_ref(fetch(xmtp, :inbox_id)),
+      db_path: resolve_env_ref(fetch(xmtp, :db_path)),
+      bridge_script: resolve_env_ref(fetch(xmtp, :bridge_script)),
+      mock_mode: fetch(xmtp, :mock_mode),
+      sdk_module: resolve_env_ref(fetch(xmtp, :sdk_module))
     }
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
     |> Map.new()
@@ -504,6 +537,19 @@ defmodule LemonGateway.ConfigLoader do
   defp fetch(list, key) when is_list(list) do
     Keyword.get(list, key) || Keyword.get(list, to_string(key))
   end
+
+  defp resolve_env_ref(value) when is_binary(value) do
+    value = String.trim(value)
+
+    if String.starts_with?(value, "${") and String.ends_with?(value, "}") do
+      var = String.slice(value, 2..-2//1) |> String.trim()
+      System.get_env(var) || value
+    else
+      value
+    end
+  end
+
+  defp resolve_env_ref(value), do: value
 
   defp default_true(nil), do: true
   defp default_true(value), do: value

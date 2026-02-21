@@ -54,6 +54,7 @@ default_engine = "lemon"
 default_cwd = "~/"
 auto_resume = false
 enable_telegram = false
+enable_xmtp = false
 require_engine_lock = true
 engine_lock_timeout_ms = 60000
 
@@ -72,6 +73,27 @@ allow_queue_override = false
 account_id = "default"
 offset = 0
 drop_pending_updates = false
+
+[gateway.xmtp]
+# XMTP network: production | dev | local
+env = "production"
+# Optional custom API URL (leave unset for SDK defaults)
+# api_url = "https://api.xmtp.network"
+# Bot wallet credentials (prefer env vars)
+wallet_address = "${XMTP_WALLET_ADDRESS}"
+wallet_key = "${XMTP_WALLET_KEY}"
+# Optional explicit inbox id (typically discovered by SDK)
+# inbox_id = ""
+# Local SDK storage path
+db_path = "~/.lemon/xmtp-db"
+# Poll cadence for inbound messages
+poll_interval_ms = 1500
+# Fail readiness if live mode is unavailable
+require_live = true
+# Max time to wait for bridge connect before marking unavailable
+connect_timeout_ms = 15000
+# Set true only for local development without live XMTP
+mock_mode = false
 
 [gateway.projects.example]
 root = "/path/to/project"

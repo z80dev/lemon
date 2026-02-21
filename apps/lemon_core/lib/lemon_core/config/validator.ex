@@ -411,10 +411,17 @@ defmodule LemonCore.Config.Validator do
   def validate_xmtp_config(errors, nil), do: errors
 
   def validate_xmtp_config(errors, xmtp) when is_map(xmtp) do
+    environment = Map.get(xmtp, :env) || Map.get(xmtp, :environment)
+
     errors
     |> validate_xmtp_wallet_key(Map.get(xmtp, :wallet_key))
-    |> validate_xmtp_environment(Map.get(xmtp, :environment))
+    |> validate_xmtp_wallet_address(Map.get(xmtp, :wallet_address))
+    |> validate_xmtp_environment(environment)
     |> validate_xmtp_api_url(Map.get(xmtp, :api_url))
+    |> validate_positive_integer(Map.get(xmtp, :poll_interval_ms), "gateway.xmtp.poll_interval_ms")
+    |> validate_positive_integer(Map.get(xmtp, :connect_timeout_ms), "gateway.xmtp.connect_timeout_ms")
+    |> validate_boolean(Map.get(xmtp, :mock_mode), "gateway.xmtp.mock_mode")
+    |> validate_boolean(Map.get(xmtp, :require_live), "gateway.xmtp.require_live")
     |> validate_positive_integer(Map.get(xmtp, :max_connections), "gateway.xmtp.max_connections")
     |> validate_boolean(Map.get(xmtp, :enable_relay), "gateway.xmtp.enable_relay")
   end
@@ -442,6 +449,28 @@ defmodule LemonCore.Config.Validator do
   end
 
   defp validate_xmtp_wallet_key(errors, _), do: ["gateway.xmtp.wallet_key: must be a string" | errors]
+
+  defp validate_xmtp_wallet_address(errors, nil), do: errors
+
+  defp validate_xmtp_wallet_address(errors, address) when is_binary(address) do
+    if String.starts_with?(address, "${") and String.ends_with?(address, "}") do
+      errors
+    else
+      normalized =
+        address
+        |> String.trim()
+        |> String.downcase()
+        |> String.trim_leading("0x")
+
+      if Regex.match?(~r/^[0-9a-f]{40}$/, normalized) do
+        errors
+      else
+        ["gateway.xmtp.wallet_address: invalid format (expected 40-character hex Ethereum address)" | errors]
+      end
+    end
+  end
+
+  defp validate_xmtp_wallet_address(errors, _), do: ["gateway.xmtp.wallet_address: must be a string" | errors]
 
   defp validate_xmtp_environment(errors, nil), do: errors
 

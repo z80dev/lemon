@@ -232,6 +232,7 @@ defmodule LemonGateway.Transports.XmtpTest do
       tmp_dir =
         Path.join(System.tmp_dir!(), "xmtp_port_server_#{System.unique_integer([:positive])}")
 
+      File.rm_rf!(tmp_dir)
       :ok = File.mkdir_p(tmp_dir)
 
       counter_path = Path.join(tmp_dir, "bridge_start_count.txt")
@@ -248,15 +249,19 @@ defmodule LemonGateway.Transports.XmtpTest do
         "wallet_address" => "0x1111111111111111111111111111111111111111"
       })
 
-      assert_receive {:xmtp_bridge_event, %{"type" => "bridge_test_connect", "generation" => 1}},
+      assert_receive {:xmtp_bridge_event,
+                      %{"type" => "bridge_test_connect", "generation" => first_generation}},
                      2_000
 
       assert_receive {:xmtp_bridge_event,
                       %{"type" => "error", "message" => "xmtp bridge exited"}},
                      4_000
 
-      assert_receive {:xmtp_bridge_event, %{"type" => "bridge_test_connect", "generation" => 2}},
+      assert_receive {:xmtp_bridge_event,
+                      %{"type" => "bridge_test_connect", "generation" => second_generation}},
                      8_000
+
+      assert second_generation == first_generation + 1
     end
   end
 
