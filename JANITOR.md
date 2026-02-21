@@ -25,6 +25,53 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-21 - Refactoring: webhook.ex, run_process.ex, xmtp/transport.ex
+**Work Area**: Refactoring / Code Quality
+
+**What was done:**
+- Broke down 3 long functions (>50 lines) across `webhook.ex`, `run_process.ex`, and `xmtp/transport.ex`
+- Extracted 11 helper functions to reduce complexity and nesting
+- Unified inconsistent atom/string key access patterns (8 locations)
+- Net change: +258/-205 lines across 3 files
+
+**webhook.ex Refactoring:**
+
+| Function | Before | After | Helpers Extracted |
+|----------|--------|-------|-------------------|
+| `submit_run/5` | 71 lines | ~25 lines | `build_submit_job/7`, `perform_submit/4` |
+| `idempotency_response/2` | 37 lines, 4 levels nested | ~15 lines, 2 levels | `idempotency_pending_response/1`, `idempotency_fallback_response/1` |
+| 5 `allow_*?` functions | 40 lines, duplicated pattern | 18 lines | `resolve_integration_flag/2` |
+
+**run_process.ex Refactoring:**
+
+| Function | Before | After | Helpers Extracted |
+|----------|--------|-------|-------------------|
+| `resolve_explicit_send_file/3` | 49 lines, 5 levels nested | ~30 lines, 2 levels | `resolve_file_path/2`, `absolute_path_or_nil/1` |
+| telegram account_id normalization | 2× identical 5-line blocks | 1 helper | `normalize_telegram_account_id/1` |
+| 6 inline atom/string fallbacks | verbose inline patterns | consistent `fetch/2` calls | (uses existing helper) |
+
+**xmtp/transport.ex Refactoring:**
+
+| Function | Before | After | Helpers Extracted |
+|----------|--------|-------|-------------------|
+| `normalize_inbound/1` | 79 lines | ~35 lines | `extract_identifiers/1`, `resolve_wallet_and_source/1` |
+| `to_inbound_message/3` | 70 lines | ~40 lines | `build_xmtp_meta/1`, `build_inbound_meta/5` |
+| `fetch_meta/2` | inconsistent with `fetch_nested/2` | unified direction | (fixed existing function) |
+
+**Commits:**
+- `cf4e8974` - refactor: break down long functions, reduce nesting, unify key access patterns
+
+**Result:** All 435 tests pass. Zero compiler warnings.
+
+**Next run should focus on:**
+- Add @spec type signatures to all extracted helper functions (across all 3 files + previous run's helpers)
+- Refactor `lemon_router/run_process.ex` `usage_input_tokens/1` (43 lines, complex cond)
+- Refactor `lemon_router/run_process.ex` completion field extraction functions (4 similar patterns at lines 717-765)
+- Look at `lemon_gateway/transports/webhook.ex` `async_callback_waiter/3` (lines 908-955, 4 levels nesting)
+- Continue reducing `run_process.ex` from 1922 lines — look for more extractable patterns
+
+---
+
 ### 2026-02-21 - Refactoring: Break Down Long Functions in StreamCoalescer & Telegram Transport
 **Work Area**: Refactoring / Code Quality
 
