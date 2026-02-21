@@ -223,6 +223,11 @@ defmodule CodingAgent.Tools.Task do
       end
 
       if async? do
+        Logger.info(
+          "Task tool queue async description=#{inspect(description)} engine=#{inspect(engine || "internal")} " <>
+            "task_id=#{inspect(task_id)} run_id=#{inspect(run_id)} parent_run_id=#{inspect(parent_run_id)}"
+        )
+
         run_async(task_id, run_id, run_fun)
         build_async_result(task_id, description, run_id)
       else
@@ -447,6 +452,7 @@ defmodule CodingAgent.Tools.Task do
 
   defp run_async(task_id, run_id, run_fun) do
     Task.start(fn ->
+      Logger.debug("Task tool async start task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}")
       result = safe_run(task_id, run_id, run_fun)
       finalize_async(task_id, run_id, result)
     end)
@@ -477,6 +483,11 @@ defmodule CodingAgent.Tools.Task do
   end
 
   defp finalize_async(task_id, run_id, result) do
+    Logger.info(
+      "Task tool async finalize task_id=#{inspect(task_id)} run_id=#{inspect(run_id)} " <>
+        "result_type=#{inspect(async_result_type(result))}"
+    )
+
     case result do
       {:ok, %AgentToolResult{} = tool_result} ->
         TaskStore.finish(task_id, tool_result)
@@ -504,6 +515,13 @@ defmodule CodingAgent.Tools.Task do
         maybe_record_budget_completion(run_id, %{error: other})
     end
   end
+
+  defp async_result_type({:ok, %AgentToolResult{details: %{status: "completed"}}}), do: :completed
+  defp async_result_type({:ok, %AgentToolResult{details: %{status: "error"}}}), do: :error
+  defp async_result_type({:ok, %AgentToolResult{}}), do: :ok_tool_result
+  defp async_result_type({:ok, {:error, _}}), do: :error_tuple
+  defp async_result_type({:error, _}), do: :error
+  defp async_result_type(_), do: :other
 
   defp maybe_record_budget_completion(nil, _result), do: :ok
 
@@ -740,6 +758,10 @@ defmodule CodingAgent.Tools.Task do
     # Get role prompt if role_id is specified
     role_prompt = if role_id, do: get_role_prompt(cwd, role_id), else: nil
 
+    Logger.info(
+      "Task tool cli engine start engine=#{engine_label} description=#{inspect(description)} role=#{inspect(role_id)} model=#{inspect(model)} cwd=#{inspect(cwd)}"
+    )
+
     with {:ok, session} <-
            module.start(prompt: prompt, cwd: cwd, role_prompt: role_prompt, model: model) do
       abort_monitor = maybe_start_abort_monitor(signal, session.pid)
@@ -766,6 +788,11 @@ defmodule CodingAgent.Tools.Task do
       }
 
       if result.error do
+        Logger.warning(
+          "Task tool cli engine error engine=#{engine_label} description=#{inspect(description)} " <>
+            "error=#{inspect(result.error)}"
+        )
+
         # Include stderr in error message if available and different from error
         error_msg = format_cli_error(result.error)
 
@@ -778,6 +805,11 @@ defmodule CodingAgent.Tools.Task do
 
         {:error, %{message: error_msg, details: details, answer: result.answer || ""}}
       else
+        Logger.info(
+          "Task tool cli engine completed engine=#{engine_label} description=#{inspect(description)} " <>
+            "answer_bytes=#{byte_size(result.answer || "")}"
+        )
+
         tool_result
       end
     end

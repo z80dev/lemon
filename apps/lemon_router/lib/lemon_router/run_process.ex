@@ -29,6 +29,18 @@ defmodule LemonRouter.RunProcess do
   @session_register_retry_ms 25
   @session_register_retry_max_ms 250
   @zero_answer_retry_max_attempts 1
+  @context_overflow_error_markers [
+    "context_length_exceeded",
+    "context length exceeded",
+    "context window",
+    "http 413",
+    "payload too large",
+    "request entity too large",
+    "string too long",
+    "maximum length",
+    "invalid 'input[",
+    "input["
+  ]
   @zero_answer_retry_prefix """
   Retry notice: the previous attempt failed before producing an answer.
   Before taking new actions, first check for partially completed work from the prior attempt and continue from current state instead of repeating completed steps.
@@ -112,6 +124,12 @@ defmodule LemonRouter.RunProcess do
       requested_send_files: []
     }
 
+    Logger.debug(
+      "RunProcess init run_id=#{inspect(run_id)} session_key=#{inspect(session_key)} " <>
+        "engine=#{inspect(job && job.engine_id)} queue_mode=#{inspect(job && job.queue_mode)} " <>
+        "submit_to_gateway?=#{inspect(submit_to_gateway?)}"
+    )
+
     # Submit to gateway
     if submit_to_gateway? do
       send(self(), :submit_to_gateway)
@@ -128,6 +146,12 @@ defmodule LemonRouter.RunProcess do
 
       scheduler_available?(state.gateway_scheduler) ->
         state.gateway_scheduler.submit(state.job)
+
+        Logger.debug(
+          "RunProcess submitted to gateway run_id=#{inspect(state.run_id)} " <>
+            "session_key=#{inspect(state.session_key)}"
+        )
+
         {:noreply, %{state | gateway_submitted?: true, gateway_submit_attempt: 0}}
 
       true ->
@@ -157,6 +181,10 @@ defmodule LemonRouter.RunProcess do
              run_id: state.run_id
            }) do
         {:ok, _pid} ->
+          Logger.debug(
+            "RunProcess session registered run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)}"
+          )
+
           Bus.broadcast(Bus.session_topic(state.session_key), event)
           state = %{state | session_registered?: true} |> maybe_monitor_gateway_run()
           {:noreply, state}
@@ -186,6 +214,15 @@ defmodule LemonRouter.RunProcess do
   end
 
   def handle_info(%LemonCore.Event{type: :run_completed} = event, state) do
+    {ok?, err} = extract_completed_ok_and_error(event)
+    usage = extract_completed_usage(event)
+
+    Logger.info(
+      "RunProcess completed run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)} " <>
+        "ok=#{inspect(ok?)} error=#{inspect(err)} saw_delta=#{inspect(state.saw_delta)} " <>
+        "usage_input_tokens=#{inspect(usage_input_tokens(usage))}"
+    )
+
     Logger.debug("RunProcess #{state.run_id} completed")
 
     # Free the session key ASAP so the next queued run can become active without
@@ -321,6 +358,11 @@ defmodule LemonRouter.RunProcess do
     if state.completed do
       {:noreply, state}
     else
+      Logger.warning(
+        "RunProcess observed gateway run down run_id=#{inspect(state.run_id)} " <>
+          "session_key=#{inspect(state.session_key)} reason=#{inspect(reason)}"
+      )
+
       event =
         LemonCore.Event.new(
           :run_completed,
@@ -458,6 +500,12 @@ defmodule LemonRouter.RunProcess do
     attempt = (state.session_register_retry_attempt || 0) + 1
     delay_ms = min(@session_register_retry_ms * attempt, @session_register_retry_max_ms)
     ref = Process.send_after(self(), :retry_session_register, delay_ms)
+
+    Logger.debug(
+      "RunProcess session register retry scheduled run_id=#{inspect(state.run_id)} " <>
+        "session_key=#{inspect(state.session_key)} attempt=#{attempt} delay_ms=#{delay_ms}"
+    )
+
     %{state | session_register_retry_ref: ref, session_register_retry_attempt: attempt}
   end
 
@@ -721,6 +769,11 @@ defmodule LemonRouter.RunProcess do
     case extract_completed_ok_and_error(event) do
       {false, err} ->
         if context_length_exceeded_error?(err) do
+          Logger.warning(
+            "RunProcess context overflow run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)} " <>
+              "error=#{inspect(err)}"
+          )
+
           # Clear generic chat-state resume for all sessions so the next run can start fresh.
           _ = safe_delete_chat_state(state.session_key)
           reset_telegram_resume_state(state.session_key)
@@ -754,6 +807,12 @@ defmodule LemonRouter.RunProcess do
              cfg.trigger_ratio
            ),
          true <- input_tokens >= threshold do
+      Logger.warning(
+        "RunProcess pending compaction marker run_id=#{inspect(state.run_id)} " <>
+          "session_key=#{inspect(state.session_key)} input_tokens=#{input_tokens} " <>
+          "threshold=#{threshold} context_window=#{context_window}"
+      )
+
       mark_telegram_pending_compaction(
         state.session_key,
         :near_limit,
@@ -788,9 +847,7 @@ defmodule LemonRouter.RunProcess do
       end
       |> String.downcase()
 
-    String.contains?(text, "context_length_exceeded") or
-      String.contains?(text, "context length exceeded") or
-      String.contains?(text, "context window")
+    Enum.any?(@context_overflow_error_markers, &String.contains?(text, &1))
   rescue
     _ -> false
   end
@@ -876,9 +933,15 @@ defmodule LemonRouter.RunProcess do
   defp mark_telegram_pending_compaction(_session_key, _reason, _details), do: :ok
 
   defp usage_input_tokens(usage) when is_map(usage) do
-    usage
-    |> fetch(:input_tokens)
-    |> maybe_parse_positive_int()
+    [:input_tokens, :input, :prompt_tokens]
+    |> Enum.find_value(fn key ->
+      value = fetch(usage, key)
+
+      case maybe_parse_positive_int(value) do
+        nil -> nil
+        parsed -> parsed
+      end
+    end)
   rescue
     _ -> nil
   end

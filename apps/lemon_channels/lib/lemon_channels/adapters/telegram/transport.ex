@@ -678,6 +678,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
     {session_key, forked?} = resolve_session_key(state, inbound, scope, meta0)
 
+    Logger.debug(
+      "Telegram submit inbound chat_id=#{inspect(chat_id)} thread_id=#{inspect(thread_id)} " <>
+        "user_msg_id=#{inspect(user_msg_id)} session_key=#{inspect(session_key)} " <>
+        "forked=#{inspect(forked?)} progress_msg_id=#{inspect(progress_msg_id)}"
+    )
+
     meta =
       meta0
       |> Map.put(:session_key, session_key)
@@ -1715,6 +1721,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             current = safe_get_chat_state(session_key)
 
             if switching_session?(current, resume) do
+              Logger.debug(
+                "Telegram switching session from reply chat_id=#{inspect(chat_id)} thread_id=#{inspect(thread_id)} " <>
+                  "source=#{inspect(source)} resume=#{inspect(resume)} session_key=#{inspect(session_key)}"
+              )
+
               set_chat_resume(scope, session_key, resume)
 
               # Keep automatic reply-based session switching silent. The user
@@ -2471,12 +2482,23 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
                   _ = CoreStore.delete(:telegram_pending_compaction, key)
                   text = build_pending_compaction_prompt(transcript, inbound.message.text || "")
                   meta = Map.put(inbound.meta || %{}, :auto_compacted, true)
+
+                  Logger.warning(
+                    "Telegram applying pending compaction chat_id=#{inspect(chat_id)} thread_id=#{inspect(thread_id)} " <>
+                      "session_key=#{inspect(session_key)} transcript_chars=#{byte_size(transcript)}"
+                  )
+
                   %{inbound | message: Map.put(inbound.message, :text, text), meta: meta}
                 else
                   inbound
                 end
               else
                 _ = CoreStore.delete(:telegram_pending_compaction, key)
+
+                Logger.debug(
+                  "Telegram cleared stale pending compaction chat_id=#{inspect(chat_id)} thread_id=#{inspect(thread_id)}"
+                )
+
                 inbound
               end
 
@@ -2597,8 +2619,16 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           key = {state.account_id || "default", chat_id, thread_id}
 
           case CoreStore.get(:telegram_selected_resume, key) do
-            %ResumeToken{} = token -> maybe_prefix_resume_to_prompt(inbound, token)
-            _ -> inbound
+            %ResumeToken{} = token ->
+              Logger.debug(
+                "Telegram applying selected resume chat_id=#{inspect(chat_id)} thread_id=#{inspect(thread_id)} " <>
+                  "resume=#{inspect(token)}"
+              )
+
+              maybe_prefix_resume_to_prompt(inbound, token)
+
+            _ ->
+              inbound
           end
         else
           inbound
@@ -2628,6 +2658,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           base_session_key = build_session_key(state, inbound, scope)
 
           if is_binary(base_session_key) and session_busy?(base_session_key) do
+            Logger.warning(
+              "Telegram auto-forking busy session chat_id=#{inspect(chat_id)} thread_id=#{inspect(thread_id)} " <>
+                "base_session_key=#{inspect(base_session_key)} user_msg_id=#{inspect(inbound.meta[:user_msg_id])}"
+            )
+
             meta = Map.put(inbound.meta || %{}, :fork_when_busy, true)
             %{inbound | meta: meta}
           else

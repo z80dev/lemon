@@ -47,3 +47,36 @@ Convenience:
 - Start with `docs/README.md` for the docs index and canonical entry points.
 - Keep docs metadata in `docs/catalog.exs` (`owner`, `last_reviewed`, `max_age_days`).
 - Run `mix lemon.quality` after docs edits or umbrella dependency changes.
+
+## Gateway Debugging Playbook
+- Bring up the gateway with debug logs:
+  - `cd /Users/z80/dev/lemon`
+  - `./bin/lemon-gateway --debug --sname lemon_gateway_debug`
+- Attach to the running BEAM node (remote shell):
+  - `iex --sname lemon_attach --cookie lemon_gateway_dev_cookie --remsh lemon_gateway_debug@$(hostname -s)`
+  - If prompted, use the same cookie shown in startup logs.
+- Quick non-interactive BEAM introspection (without full remsh):
+  - `elixir --sname probe --cookie lemon_gateway_dev_cookie -e 'IO.inspect(Node.ping(:"lemon_gateway_debug@chico"))'`
+  - Then `:rpc.call/4` into modules like `LemonCore.Store`, `LemonGateway.Scheduler`, and `LemonGateway.EngineLock`.
+- Useful runtime checks for "stuck" reports:
+  - Scheduler queue/in-flight: `:sys.get_state(LemonGateway.Scheduler)`
+  - Engine lock waiters: `:sys.get_state(LemonGateway.EngineLock)`
+  - Thread workers: `DynamicSupervisor.which_children(LemonGateway.ThreadWorkerSupervisor)`
+  - Session run history: `LemonCore.Store.get_run_history(session_key, limit: n)`
+
+## Telegram + Telethon Debug Loop
+- Credentials are in `~/.zeebot/api_keys/telegram.txt`:
+  - `TELEGRAM_API_ID`
+  - `TELEGRAM_API_HASH`
+  - `TELEGRAM_SESSION_STRING`
+- Use Telethon via uv (no global install needed):
+  - `uv run --with telethon python <script.py>`
+- Typical message send from script:
+  - Create `TelegramClient(StringSession(session), api_id, api_hash)`
+  - `send_message(chat_id, text, reply_to=thread_id)` to target a forum topic thread.
+- In Lemonade Stand debugging:
+  - Group chat id used in practice: `-1003842984060`
+  - Topic/thread id can be discovered from message metadata; reply into that thread for scoped session testing.
+- Reauth flow:
+  - If session expires/invalid, sign in again with Telethon and update only local secret files.
+  - Never commit API keys, session strings, OTPs, or phone numbers.

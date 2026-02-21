@@ -39,6 +39,11 @@ defmodule LemonGateway.EngineLock do
     case Map.get(state.locks, thread_key) do
       nil ->
         {state, release_fun} = grant_lock(state, thread_key, pid)
+
+        Logger.debug(
+          "EngineLock granted immediately key=#{inspect(thread_key)} owner=#{inspect(pid)}"
+        )
+
         {:reply, {:ok, release_fun}, state}
 
       _locked ->
@@ -53,6 +58,10 @@ defmodule LemonGateway.EngineLock do
             &:queue.in(waiter, &1)
           )
 
+        Logger.debug(
+          "EngineLock queued waiter key=#{inspect(thread_key)} owner=#{inspect(pid)} timeout_ms=#{timeout_ms}"
+        )
+
         {:noreply, %{state | waiters: waiters}}
     end
   end
@@ -62,6 +71,7 @@ defmodule LemonGateway.EngineLock do
     case Map.get(state.locks, thread_key) do
       %{owner: ^pid, mon_ref: mon_ref} ->
         Process.demonitor(mon_ref, [:flush])
+        Logger.debug("EngineLock released key=#{inspect(thread_key)} owner=#{inspect(pid)}")
         {:noreply, release_and_next(state, thread_key)}
 
       _ ->
@@ -79,6 +89,10 @@ defmodule LemonGateway.EngineLock do
         {queue, found} = drop_waiter(queue, from)
 
         if found do
+          Logger.warning(
+            "EngineLock waiter timeout key=#{inspect(thread_key)} from=#{inspect(from)}"
+          )
+
           GenServer.reply(from, {:error, :timeout})
         end
 

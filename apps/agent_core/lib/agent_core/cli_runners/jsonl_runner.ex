@@ -299,12 +299,24 @@ defmodule AgentCore.CliRunners.JsonlRunner do
 
     case :ets.insert_new(@lock_table, lock_entry) do
       true ->
+        Logger.debug(
+          "JsonlRunner acquired session lock key=#{inspect(key)} owner=#{inspect(self())}"
+        )
+
         :ok
 
       false ->
         if reclaim_stale_session_lock(key, now_ms) and :ets.insert_new(@lock_table, lock_entry) do
+          Logger.warning(
+            "JsonlRunner reclaimed and acquired session lock key=#{inspect(key)} owner=#{inspect(self())}"
+          )
+
           :ok
         else
+          Logger.warning(
+            "JsonlRunner failed to acquire session lock key=#{inspect(key)} owner=#{inspect(self())}"
+          )
+
           {:error, :session_locked}
         end
     end
@@ -320,6 +332,8 @@ defmodule AgentCore.CliRunners.JsonlRunner do
     catch
       :error, :badarg -> :ok
     end
+
+    Logger.debug("JsonlRunner released session lock key=#{inspect(key)} owner=#{inspect(self())}")
 
     :ok
   end
@@ -517,6 +531,11 @@ defmodule AgentCore.CliRunners.JsonlRunner do
     # Build command
     {cmd, args} = module.build_command(state.prompt, state.resume, state.runner_state)
 
+    Logger.debug(
+      "JsonlRunner starting subprocess engine=#{module.engine()} cmd=#{inspect(cmd)} args=#{inspect(args)} " <>
+        "cwd=#{inspect(state.cwd)} timeout=#{inspect(state.timeout)} resume=#{inspect(state.resume)}"
+    )
+
     # Get stdin payload
     stdin = module.stdin_payload(state.prompt, state.resume, state.runner_state)
 
@@ -686,12 +705,20 @@ defmodule AgentCore.CliRunners.JsonlRunner do
       end
 
     AgentCore.EventStream.complete(state.stream, [])
+
+    Logger.debug(
+      "JsonlRunner finalized subprocess engine=#{state.module.engine()} exit_code=#{exit_code} done=#{inspect(state.done)}"
+    )
+
     cleanup(state)
     {:stop, :normal, %{state | pending_exit_code: nil}}
   end
 
   def handle_info(:timeout, state) do
-    Logger.warning("Subprocess timed out")
+    Logger.warning(
+      "JsonlRunner subprocess timeout engine=#{state.module.engine()} cwd=#{inspect(state.cwd)} resume=#{inspect(state.resume)}"
+    )
+
     terminate_subprocess(state, :kill)
     AgentCore.EventStream.error(state.stream, :timeout)
     cleanup(state)
@@ -721,6 +748,10 @@ defmodule AgentCore.CliRunners.JsonlRunner do
 
   @impl true
   def handle_cast({:cancel, reason}, state) do
+    Logger.warning(
+      "JsonlRunner cancel engine=#{state.module.engine()} reason=#{inspect(reason)} resume=#{inspect(state.resume)}"
+    )
+
     terminate_subprocess(state, :term)
     cancel_kill_ref = schedule_cancel_kill(state)
     AgentCore.EventStream.cancel(state.stream, reason)

@@ -1,6 +1,7 @@
 defmodule LemonGateway.Scheduler do
   @moduledoc false
   use GenServer
+  require Logger
 
   alias LemonGateway.{ChatState, Config, Store}
   alias LemonGateway.Types.{Job, ResumeToken}
@@ -52,6 +53,11 @@ defmodule LemonGateway.Scheduler do
     job = maybe_apply_auto_resume(job)
     thread_key = thread_key(job)
 
+    Logger.debug(
+      "Scheduler submit run_id=#{inspect(job.run_id)} session_key=#{inspect(job.session_key)} " <>
+        "queue_mode=#{inspect(job.queue_mode)} thread_key=#{inspect(thread_key)}"
+    )
+
     :ok = enqueue_job(thread_key, job)
 
     {:noreply, state}
@@ -70,12 +76,23 @@ defmodule LemonGateway.Scheduler do
         })
 
       send(worker_pid, {:slot_granted, slot_ref})
+
+      Logger.debug(
+        "Scheduler granted slot worker=#{inspect(worker_pid)} thread_key=#{inspect(thread_key)} " <>
+          "in_flight=#{map_size(in_flight)}/#{state.max}"
+      )
+
       {:noreply, %{state | in_flight: in_flight}}
     else
       {state, mon_ref} = ensure_monitor(state, worker_pid)
 
       waitq =
         :queue.in(%{worker: worker_pid, thread_key: thread_key, mon_ref: mon_ref}, state.waitq)
+
+      Logger.debug(
+        "Scheduler queued slot request worker=#{inspect(worker_pid)} thread_key=#{inspect(thread_key)} " <>
+          "in_flight=#{map_size(state.in_flight)}/#{state.max} waitq=#{:queue.len(waitq)}"
+      )
 
       {:noreply, %{state | waitq: waitq}}
     end
@@ -84,6 +101,11 @@ defmodule LemonGateway.Scheduler do
   def handle_cast({:release_slot, slot_ref}, state) do
     {state, removed} = pop_in_flight(state, slot_ref)
     state = maybe_demonitor_worker(state, removed)
+
+    Logger.debug(
+      "Scheduler released slot slot_ref=#{inspect(slot_ref)} in_flight=#{map_size(state.in_flight)}/#{state.max}"
+    )
+
     {:noreply, grant_until_full(state)}
   end
 

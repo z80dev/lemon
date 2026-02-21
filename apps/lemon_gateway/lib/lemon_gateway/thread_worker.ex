@@ -33,12 +33,22 @@ defmodule LemonGateway.ThreadWorker do
 
   @impl true
   def handle_cast({:enqueue, %Job{} = job}, state) do
+    Logger.debug(
+      "ThreadWorker enqueue(cast) thread_key=#{inspect(state.thread_key)} run_id=#{inspect(job.run_id)} " <>
+        "mode=#{inspect(job.queue_mode)} queue_len_before=#{:queue.len(state.jobs)}"
+    )
+
     state = enqueue_by_mode(job, state)
     {:noreply, maybe_request_slot(state)}
   end
 
   @impl true
   def handle_call({:enqueue, %Job{} = job}, _from, state) do
+    Logger.debug(
+      "ThreadWorker enqueue(call) thread_key=#{inspect(state.thread_key)} run_id=#{inspect(job.run_id)} " <>
+        "mode=#{inspect(job.queue_mode)} queue_len_before=#{:queue.len(state.jobs)}"
+    )
+
     state = enqueue_by_mode(job, state)
     {:reply, :ok, maybe_request_slot(state)}
   end
@@ -267,6 +277,11 @@ defmodule LemonGateway.ThreadWorker do
       true ->
         {{:value, job}, jobs} = :queue.out(state.jobs)
 
+        Logger.debug(
+          "ThreadWorker slot granted thread_key=#{inspect(state.thread_key)} " <>
+            "run_id=#{inspect(job.run_id)} remaining_queue=#{:queue.len(jobs)}"
+        )
+
         {:ok, run_pid} =
           LemonGateway.RunSupervisor.start_run(%{
             job: job,
@@ -297,6 +312,11 @@ defmodule LemonGateway.ThreadWorker do
           Process.demonitor(state.run_mon_ref, [:flush])
         end
 
+        Logger.debug(
+          "ThreadWorker run complete thread_key=#{inspect(state.thread_key)} run_pid=#{inspect(run_pid)} " <>
+            "queue_len=#{:queue.len(state.jobs)}"
+        )
+
         %{state | current_run: nil, current_slot_ref: nil, run_mon_ref: nil, jobs: state.jobs}
       else
         state
@@ -316,6 +336,11 @@ defmodule LemonGateway.ThreadWorker do
       if state.current_slot_ref do
         LemonGateway.Scheduler.release_slot(state.current_slot_ref)
       end
+
+      Logger.warning(
+        "ThreadWorker observed run down thread_key=#{inspect(state.thread_key)} run_pid=#{inspect(pid)} " <>
+          "pending_steers=#{length(Map.get(state.pending_steers, pid, []))}"
+      )
 
       # Flush any pending steers for this run - they were cast but never processed
       state = flush_pending_steers(state, pid)
@@ -366,6 +391,10 @@ defmodule LemonGateway.ThreadWorker do
 
   defp maybe_request_slot(state) do
     if state.current_run == nil and not state.slot_pending and not :queue.is_empty(state.jobs) do
+      Logger.debug(
+        "ThreadWorker requesting slot thread_key=#{inspect(state.thread_key)} queue_len=#{:queue.len(state.jobs)}"
+      )
+
       LemonGateway.Scheduler.request_slot(self(), state.thread_key)
       %{state | slot_pending: true}
     else

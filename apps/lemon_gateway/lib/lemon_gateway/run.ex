@@ -56,6 +56,11 @@ defmodule LemonGateway.Run do
 
     case lock_result do
       {:ok, release_fn} ->
+        Logger.debug(
+          "Gateway run init lock acquired run_id=#{inspect(job.run_id)} session_key=#{inspect(job.session_key)} " <>
+            "engine=#{inspect(engine_id_for(job))} queue_mode=#{inspect(job.queue_mode)}"
+        )
+
         # Generate run_id if not provided
         run_id = job.run_id || generate_run_id()
         session_key = job.session_key || session_key_from_job(job)
@@ -87,6 +92,11 @@ defmodule LemonGateway.Run do
 
       {:error, :timeout} ->
         # Lock acquisition timed out - fail fast
+        Logger.warning(
+          "Gateway run lock timeout run_id=#{inspect(job.run_id)} session_key=#{inspect(job.session_key)} " <>
+            "engine=#{inspect(engine_id_for(job))}"
+        )
+
         run_id = job.run_id || generate_run_id()
 
         completed = %Event.Completed{
@@ -160,6 +170,11 @@ defmodule LemonGateway.Run do
     engine_id = engine_id_for(job)
     engine = resolve_engine(engine_id)
 
+    Logger.debug(
+      "Gateway run start run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)} " <>
+        "engine=#{inspect(engine_id)} resume=#{inspect(job.resume)} cwd=#{inspect(job.cwd)}"
+    )
+
     if is_nil(engine) do
       completed = %Event.Completed{
         engine: engine_id,
@@ -214,6 +229,11 @@ defmodule LemonGateway.Run do
 
       case engine.start_run(state.job, opts, self()) do
         {:ok, run_ref, cancel_ctx} ->
+          Logger.debug(
+            "Gateway run engine started run_id=#{inspect(state.run_id)} run_ref=#{inspect(run_ref)} " <>
+              "engine=#{inspect(engine_id)}"
+          )
+
           register_progress_mapping(job, self())
 
           {:noreply,
@@ -226,6 +246,11 @@ defmodule LemonGateway.Run do
            }}
 
         {:error, reason} ->
+          Logger.warning(
+            "Gateway run engine start failed run_id=#{inspect(state.run_id)} engine=#{inspect(engine_id)} " <>
+              "reason=#{inspect(reason)}"
+          )
+
           completed = %Event.Completed{
             engine: engine_id,
             ok: false,
@@ -265,6 +290,28 @@ defmodule LemonGateway.Run do
   @impl true
   def handle_info({:engine_event, run_ref, event}, %{run_ref: run_ref} = state) do
     LemonGateway.Store.append_run_event(run_ref, event)
+
+    case event do
+      %Event.Started{} ->
+        Logger.debug(
+          "Gateway run engine_event started run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)}"
+        )
+
+      %Event.Completed{} = ev ->
+        Logger.info(
+          "Gateway run engine_event completed run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)} " <>
+            "ok=#{inspect(ev.ok)} error=#{inspect(ev.error)} answer_bytes=#{byte_size(ev.answer || "")}"
+        )
+
+      %Event.ActionEvent{} = ev ->
+        Logger.debug(
+          "Gateway run action run_id=#{inspect(state.run_id)} phase=#{inspect(ev.phase)} kind=#{inspect(ev.action && ev.action.kind)} " <>
+            "ok=#{inspect(ev.ok)}"
+        )
+
+      _ ->
+        :ok
+    end
 
     # Emit event to bus
     emit_engine_event_to_bus(state, event)
@@ -414,6 +461,10 @@ defmodule LemonGateway.Run do
     if state.completed do
       {:noreply, state}
     else
+      Logger.warning(
+        "Gateway run cancel run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)} reason=#{inspect(reason)}"
+      )
+
       if state.engine && state.cancel_ctx do
         _ = state.engine.cancel(state.cancel_ctx)
       end
@@ -463,6 +514,12 @@ defmodule LemonGateway.Run do
         session_key: state.session_key,
         answer: if(completed.answer == "", do: state.accumulated_text, else: completed.answer)
     }
+
+    Logger.info(
+      "Gateway run finalize run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)} " <>
+        "engine=#{inspect(engine_id_for(state.job))} ok=#{inspect(completed.ok)} " <>
+        "error=#{inspect(completed.error)} answer_bytes=#{byte_size(completed.answer || "")}"
+    )
 
     if completed.ok != true do
       log_run_failure(state, completed)
