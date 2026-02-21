@@ -399,67 +399,52 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     Enum.reduce(updates, {state, state.offset - 1}, fn update, {acc_state, max_id} ->
       id = update["update_id"] || max_id
       acc_state = maybe_index_known_target(acc_state, update)
-
-      cond do
-        is_map(update) and Map.has_key?(update, "callback_query") ->
-          if authorized_callback_query?(acc_state, update["callback_query"]) do
-            handle_callback_query(acc_state, update["callback_query"])
-          end
-
-          {acc_state, max(max_id, id)}
-
-        true ->
-          # Normalize and route through lemon_router
-          case Inbound.normalize(update) do
-            {:ok, inbound} ->
-              # Set account_id from config
-              inbound =
-                inbound
-                |> Map.put(:account_id, acc_state.account_id)
-                |> then(fn inbound ->
-                  # Preserve update_id for troubleshooting/log correlation.
-                  meta = Map.put(inbound.meta || %{}, :update_id, id)
-                  %{inbound | meta: meta}
-                end)
-
-              inbound = inbound |> maybe_put_reply_to_text(update)
-
-              case maybe_transcribe_voice(acc_state, inbound) do
-                {:ok, inbound} ->
-                  inbound = enrich_for_router(inbound, acc_state)
-                  key = TransportShared.inbound_message_dedupe_key(inbound)
-
-                  case authorized_inbound_reason(acc_state, inbound) do
-                    :ok ->
-                      case TransportShared.check_and_mark_dedupe(
-                             :channels,
-                             key,
-                             acc_state.dedupe_ttl_ms
-                           ) do
-                        :seen ->
-                          maybe_log_drop(acc_state, inbound, :dedupe)
-                          {acc_state, max(max_id, id)}
-
-                        :new ->
-                          acc_state = handle_inbound_message(acc_state, inbound)
-                          {acc_state, max(max_id, id)}
-                      end
-
-                    {:drop, why} ->
-                      maybe_log_drop(acc_state, inbound, why)
-                      {acc_state, max(max_id, id)}
-                  end
-
-                {:skip, acc_state} ->
-                  {acc_state, max(max_id, id)}
-              end
-
-            {:error, _reason} ->
-              # Unsupported update type, skip
-              {acc_state, max(max_id, id)}
-          end
-      end
+      acc_state = process_single_update(acc_state, update, id)
+      {acc_state, max(max_id, id)}
     end)
+  end
+
+  defp process_single_update(state, %{"callback_query" => cb} = _update, _id) do
+    if authorized_callback_query?(state, cb), do: handle_callback_query(state, cb)
+    state
+  end
+
+  defp process_single_update(state, update, id) do
+    with {:ok, inbound} <- Inbound.normalize(update),
+         inbound <- prepare_inbound(inbound, state, update, id),
+         {:ok, inbound} <- maybe_transcribe_voice(state, inbound) do
+      route_authorized_inbound(state, inbound)
+    else
+      {:error, _reason} -> state
+      {:skip, new_state} -> new_state
+    end
+  end
+
+  defp route_authorized_inbound(state, inbound) do
+    inbound = enrich_for_router(inbound, state)
+    key = TransportShared.inbound_message_dedupe_key(inbound)
+
+    with :ok <- authorized_inbound_reason(state, inbound),
+         :new <- TransportShared.check_and_mark_dedupe(:channels, key, state.dedupe_ttl_ms) do
+      handle_inbound_message(state, inbound)
+    else
+      {:drop, why} ->
+        maybe_log_drop(state, inbound, why)
+        state
+
+      :seen ->
+        maybe_log_drop(state, inbound, :dedupe)
+        state
+    end
+  end
+
+  defp prepare_inbound(inbound, state, update, id) do
+    meta = Map.put(inbound.meta || %{}, :update_id, id)
+
+    inbound
+    |> Map.put(:account_id, state.account_id)
+    |> Map.put(:meta, meta)
+    |> maybe_put_reply_to_text(update)
   end
 
   defp maybe_index_known_target(state, update) when is_map(update) do

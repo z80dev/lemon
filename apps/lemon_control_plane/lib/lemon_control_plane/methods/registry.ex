@@ -379,4 +379,18 @@ defmodule LemonControlPlane.Method do
               {:ok, term()}
               | {:error, {atom(), String.t()}}
               | {:error, {atom(), String.t(), term()}}
+
+  @doc """
+  Extracts a required parameter from the params map.
+
+  Returns `{:ok, value}` if present, or an `{:error, ...}` tuple suitable for
+  returning directly from `handle/2`.
+  """
+  @spec require_param(map(), String.t()) :: {:ok, term()} | {:error, {atom(), String.t(), nil}}
+  def require_param(params, key) do
+    case params[key] do
+      nil -> {:error, {:invalid_request, "#{key} is required", nil}}
+      value -> {:ok, value}
+    end
+  end
 end

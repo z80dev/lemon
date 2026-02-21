@@ -129,18 +129,7 @@ defmodule LemonAutomation.CronStore do
   """
   @spec list_runs(binary(), keyword()) :: [CronRun.t()]
   def list_runs(job_id, opts \\ []) do
-    limit = Keyword.get(opts, :limit, 100)
-    status_filter = Keyword.get(opts, :status)
-    since_ms = Keyword.get(opts, :since_ms)
-
-    @runs_table
-    |> LemonCore.Store.list()
-    |> Enum.map(fn {_id, map} -> CronRun.from_map(map) end)
-    |> Enum.filter(fn run -> run.job_id == job_id end)
-    |> maybe_filter_status(status_filter)
-    |> maybe_filter_since(since_ms)
-    |> Enum.sort_by(& &1.started_at_ms, :desc)
-    |> Enum.take(limit)
+    query_runs(opts, fn run -> run.job_id == job_id end)
   end
 
   @doc """
@@ -154,17 +143,7 @@ defmodule LemonAutomation.CronStore do
   """
   @spec list_all_runs(keyword()) :: [CronRun.t()]
   def list_all_runs(opts \\ []) do
-    limit = Keyword.get(opts, :limit, 100)
-    status_filter = Keyword.get(opts, :status)
-    since_ms = Keyword.get(opts, :since_ms)
-
-    @runs_table
-    |> LemonCore.Store.list()
-    |> Enum.map(fn {_id, map} -> CronRun.from_map(map) end)
-    |> maybe_filter_status(status_filter)
-    |> maybe_filter_since(since_ms)
-    |> Enum.sort_by(& &1.started_at_ms, :desc)
-    |> Enum.take(limit)
+    query_runs(opts)
   end
 
   @doc """
@@ -198,6 +177,24 @@ defmodule LemonAutomation.CronStore do
   # ============================================================================
   # Private Helpers
   # ============================================================================
+
+  defp query_runs(opts, extra_filter \\ nil) do
+    limit = Keyword.get(opts, :limit, 100)
+    status_filter = Keyword.get(opts, :status)
+    since_ms = Keyword.get(opts, :since_ms)
+
+    @runs_table
+    |> LemonCore.Store.list()
+    |> Enum.map(fn {_id, map} -> CronRun.from_map(map) end)
+    |> maybe_filter(extra_filter)
+    |> maybe_filter_status(status_filter)
+    |> maybe_filter_since(since_ms)
+    |> Enum.sort_by(& &1.started_at_ms, :desc)
+    |> Enum.take(limit)
+  end
+
+  defp maybe_filter(runs, nil), do: runs
+  defp maybe_filter(runs, filter_fn), do: Enum.filter(runs, filter_fn)
 
   defp maybe_filter_status(runs, nil), do: runs
 

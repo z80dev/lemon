@@ -97,52 +97,31 @@ defmodule LemonCore.Config.Logging do
 
   defp parse_log_level(_), do: nil
 
-  defp resolve_max_no_bytes(settings) do
-    env_val = Helpers.get_env("LEMON_LOG_MAX_NO_BYTES")
+  defp resolve_max_no_bytes(settings),
+    do: resolve_env_integer("LEMON_LOG_MAX_NO_BYTES", settings["max_no_bytes"])
 
-    if env_val do
-      case Integer.parse(env_val) do
-        {val, ""} -> val
-        _ -> settings["max_no_bytes"]
-      end
-    else
-      settings["max_no_bytes"]
-    end
-  end
-
-  defp resolve_max_no_files(settings) do
-    env_val = Helpers.get_env("LEMON_LOG_MAX_NO_FILES")
-
-    if env_val do
-      case Integer.parse(env_val) do
-        {val, ""} -> val
-        _ -> settings["max_no_files"]
-      end
-    else
-      settings["max_no_files"]
-    end
-  end
+  defp resolve_max_no_files(settings),
+    do: resolve_env_integer("LEMON_LOG_MAX_NO_FILES", settings["max_no_files"])
 
   defp resolve_compress_on_rotate(settings) do
-    env_val = Helpers.get_env("LEMON_LOG_COMPRESS_ON_ROTATE")
-
-    if env_val do
+    if Helpers.get_env("LEMON_LOG_COMPRESS_ON_ROTATE") do
       Helpers.get_env_bool("LEMON_LOG_COMPRESS_ON_ROTATE", false)
     else
       settings["compress_on_rotate"]
     end
   end
 
-  defp resolve_filesync_repeat_interval(settings) do
-    env_val = Helpers.get_env("LEMON_LOG_FILESYNC_REPEAT_INTERVAL")
+  defp resolve_filesync_repeat_interval(settings),
+    do: resolve_env_integer("LEMON_LOG_FILESYNC_REPEAT_INTERVAL", settings["filesync_repeat_interval"])
 
-    if env_val do
-      case Integer.parse(env_val) do
-        {val, ""} -> val
-        _ -> settings["filesync_repeat_interval"]
-      end
-    else
-      settings["filesync_repeat_interval"]
+  defp resolve_env_integer(env_var, fallback) do
+    case Helpers.get_env(env_var) do
+      nil -> fallback
+      val ->
+        case Integer.parse(val) do
+          {int, ""} -> int
+          _ -> fallback
+        end
     end
   end
 

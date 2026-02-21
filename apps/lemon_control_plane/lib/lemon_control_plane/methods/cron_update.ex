@@ -15,11 +15,7 @@ defmodule LemonControlPlane.Methods.CronUpdate do
 
   @impl true
   def handle(params, _ctx) do
-    job_id = params["id"]
-
-    if is_nil(job_id) do
-      {:error, {:invalid_request, "id is required", nil}}
-    else
+    with {:ok, job_id} <- LemonControlPlane.Method.require_param(params, "id") do
       patch = build_patch(params)
 
       case LemonAutomation.CronManager.update(job_id, patch) do

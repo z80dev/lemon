@@ -15,11 +15,7 @@ defmodule LemonControlPlane.Methods.CronRemove do
 
   @impl true
   def handle(params, _ctx) do
-    job_id = params["id"]
-
-    if is_nil(job_id) do
-      {:error, {:invalid_request, "id is required", nil}}
-    else
+    with {:ok, job_id} <- LemonControlPlane.Method.require_param(params, "id") do
       case LemonAutomation.CronManager.remove(job_id) do
         :ok ->
           {:ok, %{"removed" => true, "id" => job_id}}

@@ -25,6 +25,47 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-21 - Refactoring: Code Smell Cleanup (Duplication, Deep Nesting, Helpers)
+**Work Area**: Refactoring
+
+**Analysis**:
+- Scanned all 13 apps for long functions (>50 lines), deep nesting (3+ levels), duplicated code patterns, and anti-patterns
+- Compilation passes with zero warnings (`mix compile --warnings-as-errors`)
+- Identified 20+ long functions, 6 deeply nested patterns, and 15+ code duplication instances
+
+**Refactoring Done**:
+
+1. **Logging config deduplication** (`lemon_core/config/logging.ex`)
+   - Extracted `resolve_env_integer/2` helper to eliminate 3 identical `if env → Integer.parse → fallback` patterns
+   - Reduced `resolve_max_no_bytes`, `resolve_max_no_files`, `resolve_filesync_repeat_interval` to one-liners
+   - Net: -20 lines of duplicated code
+
+2. **Cron store pipeline consolidation** (`lemon_automation/cron_store.ex`)
+   - Extracted `query_runs/2` private helper to consolidate shared pipeline between `list_runs/2` and `list_all_runs/1`
+   - Added generic `maybe_filter/2` helper for optional filter functions
+   - Net: -10 lines of duplicated pipeline code
+
+3. **Telegram transport nesting reduction** (`lemon_channels/adapters/telegram/transport.ex`)
+   - Refactored `handle_updates` from 6 levels of nesting to max 2 levels
+   - Extracted `process_single_update/3`, `route_authorized_inbound/2`, `prepare_inbound/4`
+   - Used `with` chains to flatten the nested case statements
+   - Preserved `maybe_log_drop` behavior in all failure paths
+   - Net: cleaner control flow, better readability
+
+4. **CronJob attribute access helper** (`lemon_automation/cron_job.ex`)
+   - Extracted `get_attr/3` to replace repetitive `Map.get(map, :key, Map.get(map, "key", default))` pattern
+   - Applied to `new/1`, `update/2`, and `from_map/1` (27 call sites consolidated)
+   - Net: -15 lines, consistent atom/string key lookup
+
+5. **Control plane param validation** (`lemon_control_plane/methods/registry.ex` + 4 cron methods)
+   - Added `LemonControlPlane.Method.require_param/2` helper to the behaviour module
+   - Refactored `cron_update`, `cron_remove`, `cron_run`, `cron_runs` to use `with` + `require_param`
+   - Eliminates duplicated `if is_nil(param)` boilerplate across 4 method handlers
+
+**Test Results**: All tests pass (lemon_core: 950 tests, lemon_automation: 124 tests, lemon_control_plane: 435 tests). One pre-existing failure in architecture check (unrelated `lemon_services` boundary policy).
+
+**Files Changed**: 9 files across 4 apps
+
 ### 2026-02-21 - Feature Enhancement: Pi/Oh-My-Pi Sync (kimi-coding, Hashline Autocorrect)
 **Work Area**: Feature Enhancement
 

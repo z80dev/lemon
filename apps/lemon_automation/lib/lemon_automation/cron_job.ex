@@ -94,20 +94,20 @@ defmodule LemonAutomation.CronJob do
 
     %__MODULE__{
       id: attrs[:id] || LemonCore.Id.cron_id(),
-      name: attrs[:name] || attrs["name"],
-      schedule: attrs[:schedule] || attrs["schedule"],
-      enabled: Map.get(attrs, :enabled, Map.get(attrs, "enabled", true)),
-      agent_id: attrs[:agent_id] || attrs["agent_id"],
-      session_key: attrs[:session_key] || attrs["session_key"],
-      prompt: attrs[:prompt] || attrs["prompt"],
-      timezone: Map.get(attrs, :timezone, Map.get(attrs, "timezone", "UTC")),
-      jitter_sec: Map.get(attrs, :jitter_sec, Map.get(attrs, "jitter_sec", 0)),
-      timeout_ms: Map.get(attrs, :timeout_ms, Map.get(attrs, "timeout_ms", 300_000)),
+      name: get_attr(attrs, :name),
+      schedule: get_attr(attrs, :schedule),
+      enabled: get_attr(attrs, :enabled, true),
+      agent_id: get_attr(attrs, :agent_id),
+      session_key: get_attr(attrs, :session_key),
+      prompt: get_attr(attrs, :prompt),
+      timezone: get_attr(attrs, :timezone, "UTC"),
+      jitter_sec: get_attr(attrs, :jitter_sec, 0),
+      timeout_ms: get_attr(attrs, :timeout_ms, 300_000),
       created_at_ms: now,
       updated_at_ms: now,
       last_run_at_ms: nil,
       next_run_at_ms: nil,
-      meta: Map.get(attrs, :meta, Map.get(attrs, "meta"))
+      meta: get_attr(attrs, :meta)
     }
   end
 
@@ -120,14 +120,14 @@ defmodule LemonAutomation.CronJob do
 
     %{
       job
-      | name: Map.get(attrs, :name, Map.get(attrs, "name", job.name)),
-        schedule: Map.get(attrs, :schedule, Map.get(attrs, "schedule", job.schedule)),
-        enabled: Map.get(attrs, :enabled, Map.get(attrs, "enabled", job.enabled)),
-        prompt: Map.get(attrs, :prompt, Map.get(attrs, "prompt", job.prompt)),
-        timezone: Map.get(attrs, :timezone, Map.get(attrs, "timezone", job.timezone)),
-        jitter_sec: Map.get(attrs, :jitter_sec, Map.get(attrs, "jitter_sec", job.jitter_sec)),
-        timeout_ms: Map.get(attrs, :timeout_ms, Map.get(attrs, "timeout_ms", job.timeout_ms)),
-        meta: Map.get(attrs, :meta, Map.get(attrs, "meta", job.meta)),
+      | name: get_attr(attrs, :name, job.name),
+        schedule: get_attr(attrs, :schedule, job.schedule),
+        enabled: get_attr(attrs, :enabled, job.enabled),
+        prompt: get_attr(attrs, :prompt, job.prompt),
+        timezone: get_attr(attrs, :timezone, job.timezone),
+        jitter_sec: get_attr(attrs, :jitter_sec, job.jitter_sec),
+        timeout_ms: get_attr(attrs, :timeout_ms, job.timeout_ms),
+        meta: get_attr(attrs, :meta, job.meta),
         updated_at_ms: now
     }
   end
@@ -190,21 +190,26 @@ defmodule LemonAutomation.CronJob do
   @spec from_map(map()) :: t()
   def from_map(map) when is_map(map) do
     %__MODULE__{
-      id: map[:id] || map["id"],
-      name: map[:name] || map["name"],
-      schedule: map[:schedule] || map["schedule"],
-      enabled: Map.get(map, :enabled, Map.get(map, "enabled", true)),
-      agent_id: map[:agent_id] || map["agent_id"],
-      session_key: map[:session_key] || map["session_key"],
-      prompt: map[:prompt] || map["prompt"],
-      timezone: Map.get(map, :timezone, Map.get(map, "timezone", "UTC")),
-      jitter_sec: Map.get(map, :jitter_sec, Map.get(map, "jitter_sec", 0)),
-      timeout_ms: Map.get(map, :timeout_ms, Map.get(map, "timeout_ms", 300_000)),
-      created_at_ms: map[:created_at_ms] || map["created_at_ms"],
-      updated_at_ms: map[:updated_at_ms] || map["updated_at_ms"],
-      last_run_at_ms: map[:last_run_at_ms] || map["last_run_at_ms"],
-      next_run_at_ms: map[:next_run_at_ms] || map["next_run_at_ms"],
-      meta: map[:meta] || map["meta"]
+      id: get_attr(map, :id),
+      name: get_attr(map, :name),
+      schedule: get_attr(map, :schedule),
+      enabled: get_attr(map, :enabled, true),
+      agent_id: get_attr(map, :agent_id),
+      session_key: get_attr(map, :session_key),
+      prompt: get_attr(map, :prompt),
+      timezone: get_attr(map, :timezone, "UTC"),
+      jitter_sec: get_attr(map, :jitter_sec, 0),
+      timeout_ms: get_attr(map, :timeout_ms, 300_000),
+      created_at_ms: get_attr(map, :created_at_ms),
+      updated_at_ms: get_attr(map, :updated_at_ms),
+      last_run_at_ms: get_attr(map, :last_run_at_ms),
+      next_run_at_ms: get_attr(map, :next_run_at_ms),
+      meta: get_attr(map, :meta)
     }
+  end
+
+  # Looks up an attribute by atom key first, then string key, with optional default.
+  defp get_attr(map, key, default \\ nil) do
+    Map.get(map, key, Map.get(map, to_string(key), default))
   end
 end

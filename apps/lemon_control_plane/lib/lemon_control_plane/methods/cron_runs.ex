@@ -15,16 +15,10 @@ defmodule LemonControlPlane.Methods.CronRuns do
 
   @impl true
   def handle(params, _ctx) do
-    job_id = params["id"]
-    limit = params["limit"] || 100
-
-    if is_nil(job_id) do
-      {:error, {:invalid_request, "id is required", nil}}
-    else
+    with {:ok, job_id} <- LemonControlPlane.Method.require_param(params, "id") do
+      limit = params["limit"] || 100
       runs = LemonAutomation.CronManager.runs(job_id, limit: limit)
-
       formatted_runs = Enum.map(runs, &format_run/1)
-
       {:ok, %{"jobId" => job_id, "runs" => formatted_runs}}
     end
   end
