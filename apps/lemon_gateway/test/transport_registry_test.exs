@@ -352,21 +352,6 @@ defmodule LemonGateway.TransportRegistryTest do
     assert log =~ "enable_email is true but Email transport is not registered in :transports"
   end
 
-  test "auto-registers built-in xmtp transport when enabled" do
-    Application.put_env(:lemon_gateway, :transports, [MockTransport])
-
-    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
-      max_concurrent_runs: 1,
-      default_engine: "echo",
-      enable_xmtp: true
-    })
-
-    log = capture_log(fn -> {:ok, _} = restart_config_and_registry() end)
-
-    assert log =~ "auto-registering built-in XMTP transport"
-    assert TransportRegistry.get_transport("xmtp") == LemonGateway.Transports.Xmtp
-  end
-
   test "logs warning when webhook is enabled but transport is missing" do
     Application.put_env(:lemon_gateway, :transports, [MockTransport])
 

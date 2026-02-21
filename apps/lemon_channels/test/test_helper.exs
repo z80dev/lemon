@@ -8,6 +8,7 @@
 Application.put_env(:lemon_channels, :gateway, %{
   # Keep lemon_channels from auto-starting Telegram adapter during unit tests.
   enable_telegram: false,
+  enable_xmtp: false,
   max_concurrent_runs: 1,
   default_engine: "lemon"
 })
@@ -31,6 +32,8 @@ Application.put_env(:lemon_channels, :telegram, %{
   files: %{}
 })
 
+Application.put_env(:lemon_channels, :xmtp, %{})
+
 # Keep X adapter tests deterministic by default; specific tests can opt in.
 Application.put_env(:lemon_channels, :x_api_use_secrets, false)
 
@@ -49,5 +52,6 @@ ExUnit.after_suite(fn _ ->
   Application.delete_env(:lemon_channels, :gateway)
   Application.delete_env(:lemon_channels, :engines)
   Application.delete_env(:lemon_channels, :telegram)
+  Application.delete_env(:lemon_channels, :xmtp)
   Application.delete_env(:lemon_channels, :x_api_use_secrets)
 end)

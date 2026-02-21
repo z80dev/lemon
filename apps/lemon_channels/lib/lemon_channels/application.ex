@@ -60,6 +60,17 @@ defmodule LemonChannels.Application do
       Logger.info("X API adapter not configured, skipping")
     end
 
+    # Register XMTP adapter if configured
+    if LemonChannels.GatewayConfig.get(:enable_xmtp, false) == true do
+      case register_and_start_adapter(LemonChannels.Adapters.Xmtp) do
+        :ok ->
+          Logger.info("XMTP adapter registered and started")
+
+        {:error, reason} ->
+          Logger.warning("Failed to start XMTP adapter: #{inspect(reason)}")
+      end
+    end
+
     # Future: register other adapters here (Discord, Slack, etc.)
     :ok
   end
@@ -97,7 +108,10 @@ defmodule LemonChannels.Application do
 
     enabled? =
       case adapter_id do
+        "telegram" -> LemonChannels.GatewayConfig.get(:enable_telegram, false) == true
         :telegram -> LemonChannels.GatewayConfig.get(:enable_telegram, false) == true
+        "xmtp" -> LemonChannels.GatewayConfig.get(:enable_xmtp, false) == true
+        :xmtp -> LemonChannels.GatewayConfig.get(:enable_xmtp, false) == true
         _ -> true
       end
 

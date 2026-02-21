@@ -16,6 +16,7 @@ defmodule LemonChannels.GatewayConfig do
     base_gateway_config()
     |> deep_merge(runtime_gateway_overrides())
     |> merge_telegram_overrides()
+    |> merge_xmtp_overrides()
   end
 
   defp base_gateway_config do
@@ -33,18 +34,27 @@ defmodule LemonChannels.GatewayConfig do
   end
 
   defp merge_telegram_overrides(gateway) when is_map(gateway) do
-    telegram_runtime = Application.get_env(:lemon_channels, :telegram, %{})
+    merge_nested_runtime_overrides(gateway, :telegram)
+  end
 
-    telegram_base =
+  defp merge_xmtp_overrides(gateway) when is_map(gateway) do
+    merge_nested_runtime_overrides(gateway, :xmtp)
+  end
+
+  defp merge_nested_runtime_overrides(gateway, key) when is_map(gateway) and is_atom(key) do
+    runtime = Application.get_env(:lemon_channels, key, %{})
+
+    base =
       gateway
-      |> fetch(:telegram, %{})
+      |> fetch(key, %{})
       |> normalize_map()
 
-    merged_telegram = deep_merge(telegram_base, normalize_map(telegram_runtime))
+    merged = deep_merge(base, normalize_map(runtime))
+    string_key = Atom.to_string(key)
 
     gateway
-    |> Map.delete("telegram")
-    |> Map.put(:telegram, merged_telegram)
+    |> Map.delete(string_key)
+    |> Map.put(key, merged)
   end
 
   defp normalize_map(config) when is_map(config), do: config

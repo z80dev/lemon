@@ -140,8 +140,11 @@ defmodule LemonGateway.Health do
   end
 
   defp xmtp_transport_check do
-    with true <- Code.ensure_loaded?(LemonGateway.Transports.Xmtp),
-         {:ok, status} <- LemonGateway.Transports.Xmtp.status(),
+    xmtp_transport_mod = LemonChannels.Adapters.Xmtp.Transport
+
+    with true <- Code.ensure_loaded?(xmtp_transport_mod),
+         true <- function_exported?(xmtp_transport_mod, :status, 0),
+         {:ok, status} <- xmtp_transport_mod.status(),
          true <- status[:connected?] == true,
          true <- status[:healthy?] == true do
       {:ok,
@@ -166,10 +169,16 @@ defmodule LemonGateway.Health do
   end
 
   defp xmtp_enabled? do
-    if Code.ensure_loaded?(LemonGateway.Transports.Xmtp) do
-      LemonGateway.Transports.Xmtp.enabled?()
+    if is_pid(Process.whereis(LemonGateway.Config)) do
+      LemonGateway.Config.get(:enable_xmtp) == true
     else
-      false
+      cfg = Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
+
+      if is_list(cfg) do
+        Keyword.get(cfg, :enable_xmtp, false)
+      else
+        Map.get(cfg, :enable_xmtp, false)
+      end
     end
   rescue
     _ -> false

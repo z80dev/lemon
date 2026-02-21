@@ -321,7 +321,7 @@ Tip:
 
 ## XMTP (Base App / Wallet Chats)
 
-Lemon can run as an XMTP bot through `LemonGateway.Transports.Xmtp`.
+Lemon can run as an XMTP bot through the `lemon_channels` XMTP adapter.
 
 ### 1. Install XMTP bridge dependencies
 
@@ -353,7 +353,7 @@ mock_mode = false                   # set true only for local bridge testing
 ```
 
 Notes:
-- When `enable_xmtp = true`, Lemon auto-registers the built-in XMTP transport.
+- When `enable_xmtp = true`, Lemon auto-registers and starts the XMTP channel adapter.
 - `require_live = true` keeps health/readiness red unless the bridge is truly live (not mock mode).
 - Non-text XMTP messages currently receive a text-only fallback response.
 

@@ -84,11 +84,19 @@ defmodule LemonChannels.StartupTest do
       # intentionally stops applications as part of boot validation.
       Application.put_env(:lemon_channels, :gateway, %{
         enable_telegram: false,
+        enable_xmtp: false,
         max_concurrent_runs: 1,
         default_engine: "lemon"
       })
 
-      Application.put_env(:lemon_channels, :engines, ["lemon", "echo", "codex", "claude", "opencode", "pi"])
+      Application.put_env(:lemon_channels, :engines, [
+        "lemon",
+        "echo",
+        "codex",
+        "claude",
+        "opencode",
+        "pi"
+      ])
 
       Application.put_env(:lemon_channels, :telegram, %{
         bot_token: nil,

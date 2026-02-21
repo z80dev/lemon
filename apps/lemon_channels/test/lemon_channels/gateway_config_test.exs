@@ -9,15 +9,18 @@ defmodule LemonChannels.GatewayConfigTest do
   setup do
     old_gateway_env = Application.get_env(:lemon_channels, :gateway)
     old_telegram_env = Application.get_env(:lemon_channels, :telegram)
+    old_xmtp_env = Application.get_env(:lemon_channels, :xmtp)
 
     _ = Application.stop(:lemon_channels)
 
     Application.delete_env(:lemon_channels, :gateway)
     Application.delete_env(:lemon_channels, :telegram)
+    Application.delete_env(:lemon_channels, :xmtp)
 
     on_exit(fn ->
       restore_env(:lemon_channels, :gateway, old_gateway_env)
       restore_env(:lemon_channels, :telegram, old_telegram_env)
+      restore_env(:lemon_channels, :xmtp, old_xmtp_env)
       _ = Application.ensure_all_started(:lemon_channels)
     end)
 
@@ -68,6 +71,26 @@ defmodule LemonChannels.GatewayConfigTest do
     baseline = GatewayConfig.get(:bindings, :missing)
     Application.put_env(:lemon_channels, :gateway, [:not, :a, :map])
     assert GatewayConfig.get(:bindings, :missing) == baseline
+  end
+
+  test "merges :xmtp runtime overrides on top of gateway xmtp config" do
+    Application.put_env(:lemon_channels, :gateway, %{
+      xmtp: %{
+        connect_timeout_ms: 1000,
+        require_live: true
+      }
+    })
+
+    Application.put_env(:lemon_channels, :xmtp, %{
+      connect_timeout_ms: 2500,
+      poll_interval_ms: 300
+    })
+
+    xmtp = GatewayConfig.get(:xmtp, %{})
+
+    assert fetch(xmtp, :require_live) == true
+    assert fetch(xmtp, :connect_timeout_ms) == 2500
+    assert fetch(xmtp, :poll_interval_ms) == 300
   end
 
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)
