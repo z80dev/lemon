@@ -324,22 +324,16 @@ defmodule LemonRouter.StreamCoalescer do
               {cid, mid, text}
               when is_integer(cid) and is_integer(mid) and is_binary(text) and text != "" ->
                 payload =
-                  struct!(LemonChannels.OutboundPayload,
-                    channel_id: "telegram",
-                    account_id: parsed.account_id || "default",
-                    peer: %{
-                      kind: parsed.peer_kind,
-                      id: parsed.peer_id,
-                      thread_id: parsed.thread_id
-                    },
-                    kind: :edit,
-                    content: %{message_id: mid, text: text},
-                    idempotency_key: "#{state.run_id}:answer:deferred",
-                    meta: %{
+                  build_telegram_payload(
+                    parsed,
+                    :edit,
+                    %{message_id: mid, text: text},
+                    "#{state.run_id}:answer:deferred",
+                    %{meta: %{
                       run_id: state.run_id,
                       session_key: state.session_key,
                       seq: state.last_seq
-                    }
+                    }}
                   )
 
                 case ChannelsDelivery.telegram_enqueue(
@@ -366,7 +360,7 @@ defmodule LemonRouter.StreamCoalescer do
                 state
             end
 
-          resume = (state.meta || %{})[:resume] || (state.meta || %{})["resume"]
+          resume = meta_get(state, :resume)
 
           if state.finalized == true and is_integer(chat_id) and is_integer(message_id) and
                resume_token_like?(resume) do
@@ -423,6 +417,28 @@ defmodule LemonRouter.StreamCoalescer do
 
   # Avoid overriding previously-known message ids with nils coming from upstream meta.
   defp compact_meta(meta), do: ChannelContext.compact_meta(meta)
+
+  defp meta_get(state, key) when is_atom(key) do
+    meta = state.meta || %{}
+    meta[key] || meta[Atom.to_string(key)]
+  end
+
+  defp build_telegram_payload(parsed, kind, content, idempotency_key, opts) do
+    struct!(LemonChannels.OutboundPayload,
+      channel_id: "telegram",
+      account_id: parsed.account_id || "default",
+      peer: %{
+        kind: parsed.peer_kind,
+        id: parsed.peer_id,
+        thread_id: parsed.thread_id
+      },
+      kind: kind,
+      content: content,
+      idempotency_key: idempotency_key,
+      reply_to: Map.get(opts, :reply_to),
+      meta: Map.get(opts, :meta, %{})
+    )
+  end
 
   defp maybe_flush(state, now) do
     buffer_len = String.length(state.buffer)
@@ -487,107 +503,108 @@ defmodule LemonRouter.StreamCoalescer do
       # Determine output kind and content based on channel capabilities
       {kind, content} = get_output_kind_and_content(state)
 
-      state =
-        case {state.channel_id, kind, content} do
-          {"telegram", :edit, %{message_id: msg_id, text: text}}
-          when is_integer(msg_id) and is_binary(text) ->
-            # Skip redundant edits (saves rate limit + improves perceived snappiness).
-            if text == state.last_sent_text do
-              state
-            else
-              chat_id = parse_int(parsed.peer_id)
+      state = emit_telegram_edit_output(state, parsed, kind, content)
+      emit_channels_outbox_output(state, parsed, kind, content)
+    end
+  end
 
-              if is_integer(chat_id) do
-                payload =
-                  struct!(LemonChannels.OutboundPayload,
-                    channel_id: "telegram",
-                    account_id: parsed.account_id || "default",
-                    peer: %{
-                      kind: parsed.peer_kind,
-                      id: parsed.peer_id,
-                      thread_id: parsed.thread_id
-                    },
-                    kind: :edit,
-                    content: %{message_id: msg_id, text: text},
-                    idempotency_key: "#{state.run_id}:#{state.last_seq}",
-                    meta: %{
-                      run_id: state.run_id,
-                      session_key: state.session_key,
-                      seq: state.last_seq
-                    }
-                  )
+  # Telegram edit fast-path: enqueue via the Telegram-specific outbox for lower latency.
+  defp emit_telegram_edit_output(state, parsed, kind, content) do
+    case {state.channel_id, kind, content} do
+      {"telegram", :edit, %{message_id: msg_id, text: text}}
+      when is_integer(msg_id) and is_binary(text) ->
+        # Skip redundant edits (saves rate limit + improves perceived snappiness).
+        if text == state.last_sent_text do
+          state
+        else
+          chat_id = parse_int(parsed.peer_id)
 
-                case ChannelsDelivery.telegram_enqueue(
-                       {chat_id, msg_id, :edit},
-                       0,
-                       {:edit, chat_id, msg_id, %{text: text}},
-                       payload,
-                       context: %{component: :stream_coalescer, phase: :emit_output_telegram_edit}
-                     ) do
-                  {:ok, _ref} ->
-                    %{state | last_sent_text: text}
+          if is_integer(chat_id) do
+            payload =
+              build_telegram_payload(
+                parsed,
+                :edit,
+                %{message_id: msg_id, text: text},
+                "#{state.run_id}:#{state.last_seq}",
+                %{meta: %{
+                  run_id: state.run_id,
+                  session_key: state.session_key,
+                  seq: state.last_seq
+                }}
+              )
 
-                  {:error, reason} ->
-                    Logger.warning("Failed to enqueue telegram edit output: #{inspect(reason)}")
-                    state
-                end
-              else
+            case ChannelsDelivery.telegram_enqueue(
+                   {chat_id, msg_id, :edit},
+                   0,
+                   {:edit, chat_id, msg_id, %{text: text}},
+                   payload,
+                   context: %{component: :stream_coalescer, phase: :emit_output_telegram_edit}
+                 ) do
+              {:ok, _ref} ->
+                %{state | last_sent_text: text}
+
+              {:error, reason} ->
+                Logger.warning("Failed to enqueue telegram edit output: #{inspect(reason)}")
                 state
-              end
             end
-
-          _ ->
+          else
             state
+          end
         end
 
-      skip_channels_outbox? =
-        case {state.channel_id, kind, content} do
-          {"telegram", :edit, %{message_id: _msg_id, text: _text}} ->
-            chat_id = parse_int(parsed.peer_id)
-            is_integer(chat_id) and ChannelsDelivery.telegram_outbox_available?()
+      _ ->
+        state
+    end
+  end
 
-          _ ->
-            false
-        end
+  # Fallback: enqueue to the channels delivery abstraction (used for non-Telegram channels and as a
+  # safety net if the Telegram outbox isn't running).
+  defp emit_channels_outbox_output(state, parsed, kind, content) do
+    skip_channels_outbox? =
+      case {state.channel_id, kind, content} do
+        {"telegram", :edit, %{message_id: _msg_id, text: _text}} ->
+          chat_id = parse_int(parsed.peer_id)
+          is_integer(chat_id) and ChannelsDelivery.telegram_outbox_available?()
 
-      # Fallback: enqueue to the channels delivery abstraction (used for non-Telegram channels and as a
-      # safety net if the Telegram outbox isn't running).
-      if not skip_channels_outbox? do
-        payload =
-          struct!(LemonChannels.OutboundPayload,
-            channel_id: state.channel_id,
-            account_id: parsed.account_id,
-            peer: %{
-              kind: parsed.peer_kind,
-              id: parsed.peer_id,
-              thread_id: parsed.thread_id
-            },
-            kind: kind,
-            content: content,
-            idempotency_key: "#{state.run_id}:#{state.last_seq}",
-            meta: %{
-              run_id: state.run_id,
-              session_key: state.session_key,
-              seq: state.last_seq
-            }
-          )
-
-        case ChannelsDelivery.enqueue(payload,
-               context: %{component: :stream_coalescer, phase: :emit_output}
-             ) do
-          {:ok, _ref} ->
-            :ok
-
-          {:error, :duplicate} ->
-            :ok
-
-          {:error, reason} ->
-            Logger.warning("Failed to enqueue coalesced output: #{inspect(reason)}")
-        end
+        _ ->
+          false
       end
 
-      state
+    if not skip_channels_outbox? do
+      payload =
+        struct!(LemonChannels.OutboundPayload,
+          channel_id: state.channel_id,
+          account_id: parsed.account_id,
+          peer: %{
+            kind: parsed.peer_kind,
+            id: parsed.peer_id,
+            thread_id: parsed.thread_id
+          },
+          kind: kind,
+          content: content,
+          idempotency_key: "#{state.run_id}:#{state.last_seq}",
+          meta: %{
+            run_id: state.run_id,
+            session_key: state.session_key,
+            seq: state.last_seq
+          }
+        )
+
+      case ChannelsDelivery.enqueue(payload,
+             context: %{component: :stream_coalescer, phase: :emit_output}
+           ) do
+        {:ok, _ref} ->
+          :ok
+
+        {:error, :duplicate} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("Failed to enqueue coalesced output: #{inspect(reason)}")
+      end
     end
+
+    state
   end
 
   # Telegram: stream the answer into a separate message (not the progress/tool-calls message).
@@ -597,8 +614,8 @@ defmodule LemonRouter.StreamCoalescer do
     chat_id = parse_int(parsed.peer_id)
     thread_id = parse_int(parsed.thread_id)
 
-    reply_to = (state.meta || %{})[:user_msg_id] || (state.meta || %{})["user_msg_id"]
-    answer_msg_id = (state.meta || %{})[:answer_msg_id] || (state.meta || %{})["answer_msg_id"]
+    reply_to = meta_get(state, :user_msg_id)
+    answer_msg_id = meta_get(state, :answer_msg_id)
 
     text = truncate_for_channel("telegram", state.full_text)
 
@@ -607,99 +624,97 @@ defmodule LemonRouter.StreamCoalescer do
         state
 
       is_integer(answer_msg_id) ->
-        if text == state.last_sent_text do
-          state
-        else
-          payload =
-            struct!(LemonChannels.OutboundPayload,
-              channel_id: "telegram",
-              account_id: parsed.account_id || "default",
-              peer: %{
-                kind: parsed.peer_kind,
-                id: parsed.peer_id,
-                thread_id: parsed.thread_id
-              },
-              kind: :edit,
-              content: %{message_id: answer_msg_id, text: text},
-              idempotency_key: "#{state.run_id}:answer:#{state.last_seq}",
-              meta: %{
-                run_id: state.run_id,
-                session_key: state.session_key,
-                seq: state.last_seq
-              }
-            )
-
-          case ChannelsDelivery.telegram_enqueue(
-                 {chat_id, answer_msg_id, :edit},
-                 0,
-                 {:edit, chat_id, answer_msg_id, %{text: text}},
-                 payload,
-                 context: %{component: :stream_coalescer, phase: :answer_edit}
-               ) do
-            {:ok, _ref} ->
-              :ok
-
-            {:error, reason} ->
-              Logger.warning("Failed to enqueue answer edit: #{inspect(reason)}")
-          end
-
-          %{state | last_sent_text: text}
-        end
+        emit_telegram_answer_edit(state, parsed, chat_id, answer_msg_id, text)
 
       is_reference(state.answer_create_ref) ->
         %{state | deferred_answer_text: text}
 
       true ->
-        notify_ref = make_ref()
-
-        payload =
-          struct!(LemonChannels.OutboundPayload,
-            channel_id: "telegram",
-            account_id: parsed.account_id || "default",
-            peer: %{
-              kind: parsed.peer_kind,
-              id: parsed.peer_id,
-              thread_id: parsed.thread_id
-            },
-            kind: :text,
-            content: text,
-            reply_to: reply_to,
-            idempotency_key: "#{state.run_id}:answer:create",
-            meta: %{
-              run_id: state.run_id,
-              session_key: state.session_key,
-              seq: state.last_seq
-            }
-          )
-
-        case ChannelsDelivery.telegram_enqueue_with_notify(
-               {chat_id, state.run_id, :answer_create},
-               1,
-               {:send, chat_id,
-                %{
-                  text: text,
-                  reply_to_message_id: reply_to,
-                  message_thread_id: thread_id
-                }},
-               payload,
-               self(),
-               notify_ref,
-               :outbox_delivered,
-               context: %{component: :stream_coalescer, phase: :answer_create}
-             ) do
-          {:ok, _ref} ->
-            %{state | answer_create_ref: notify_ref}
-
-          {:error, :channels_outbox_unavailable} ->
-            state
-
-          {:error, reason} ->
-            Logger.warning("Failed to enqueue answer create: #{inspect(reason)}")
-            %{state | answer_create_ref: notify_ref}
-        end
+        emit_telegram_answer_create(state, parsed, chat_id, thread_id, text, reply_to)
     end
   rescue
     _ -> state
+  end
+
+  defp emit_telegram_answer_edit(state, parsed, chat_id, answer_msg_id, text) do
+    if text == state.last_sent_text do
+      state
+    else
+      payload =
+        build_telegram_payload(
+          parsed,
+          :edit,
+          %{message_id: answer_msg_id, text: text},
+          "#{state.run_id}:answer:#{state.last_seq}",
+          %{meta: %{
+            run_id: state.run_id,
+            session_key: state.session_key,
+            seq: state.last_seq
+          }}
+        )
+
+      case ChannelsDelivery.telegram_enqueue(
+             {chat_id, answer_msg_id, :edit},
+             0,
+             {:edit, chat_id, answer_msg_id, %{text: text}},
+             payload,
+             context: %{component: :stream_coalescer, phase: :answer_edit}
+           ) do
+        {:ok, _ref} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("Failed to enqueue answer edit: #{inspect(reason)}")
+      end
+
+      %{state | last_sent_text: text}
+    end
+  end
+
+  defp emit_telegram_answer_create(state, parsed, chat_id, thread_id, text, reply_to) do
+    notify_ref = make_ref()
+
+    payload =
+      build_telegram_payload(
+        parsed,
+        :text,
+        text,
+        "#{state.run_id}:answer:create",
+        %{
+          reply_to: reply_to,
+          meta: %{
+            run_id: state.run_id,
+            session_key: state.session_key,
+            seq: state.last_seq
+          }
+        }
+      )
+
+    case ChannelsDelivery.telegram_enqueue_with_notify(
+           {chat_id, state.run_id, :answer_create},
+           1,
+           {:send, chat_id,
+            %{
+              text: text,
+              reply_to_message_id: reply_to,
+              message_thread_id: thread_id
+            }},
+           payload,
+           self(),
+           notify_ref,
+           :outbox_delivered,
+           context: %{component: :stream_coalescer, phase: :answer_create}
+         ) do
+      {:ok, _ref} ->
+        %{state | answer_create_ref: notify_ref}
+
+      {:error, :channels_outbox_unavailable} ->
+        state
+
+      {:error, reason} ->
+        Logger.warning("Failed to enqueue answer create: #{inspect(reason)}")
+        %{state | answer_create_ref: notify_ref}
+    end
   end
 
   defp do_finalize(state, final_text) do
@@ -709,7 +724,7 @@ defmodule LemonRouter.StreamCoalescer do
         state
 
       true ->
-        resume = (state.meta || %{})[:resume] || (state.meta || %{})["resume"]
+        resume = meta_get(state, :resume)
 
         text =
           cond do
@@ -723,10 +738,9 @@ defmodule LemonRouter.StreamCoalescer do
         text =
           if telegram_show_resume_line?(), do: maybe_append_resume_line(text, resume), else: text
 
-        reply_to = (state.meta || %{})[:user_msg_id]
+        reply_to = meta_get(state, :user_msg_id)
 
-        answer_msg_id =
-          (state.meta || %{})[:answer_msg_id] || (state.meta || %{})["answer_msg_id"]
+        answer_msg_id = meta_get(state, :answer_msg_id)
 
         parsed = parse_session_key(state.session_key)
 
@@ -738,43 +752,7 @@ defmodule LemonRouter.StreamCoalescer do
           cond do
             # If we streamed deltas, finalize by editing the dedicated answer message.
             is_integer(chat_id) and is_integer(answer_msg_id) ->
-              edit_text = truncate_for_channel("telegram", text)
-
-              payload =
-                struct!(LemonChannels.OutboundPayload,
-                  channel_id: "telegram",
-                  account_id: parsed.account_id || "default",
-                  peer: %{
-                    kind: parsed.peer_kind,
-                    id: parsed.peer_id,
-                    thread_id: parsed.thread_id
-                  },
-                  kind: :edit,
-                  content: %{message_id: answer_msg_id, text: edit_text},
-                  idempotency_key: "#{state.run_id}:final:answer_edit",
-                  meta: %{
-                    run_id: state.run_id,
-                    session_key: state.session_key,
-                    final: true
-                  }
-                )
-
-              case ChannelsDelivery.telegram_enqueue(
-                     {chat_id, answer_msg_id, :edit},
-                     0,
-                     {:edit, chat_id, answer_msg_id, %{text: edit_text}},
-                     payload,
-                     context: %{component: :stream_coalescer, phase: :final_answer_edit}
-                   ) do
-                {:ok, _ref} ->
-                  :ok
-
-                {:error, reason} ->
-                  Logger.warning("Failed to enqueue final answer edit: #{inspect(reason)}")
-              end
-
-              _ = maybe_index_resume(account_id, chat_id, thread_id, answer_msg_id, resume)
-              %{state | last_sent_text: edit_text}
+              finalize_edit_answer(state, parsed, chat_id, thread_id, account_id, answer_msg_id, text, resume)
 
             # Answer message creation is still in flight; ensure it ends up with final text.
             is_integer(chat_id) and is_reference(state.answer_create_ref) ->
@@ -782,86 +760,7 @@ defmodule LemonRouter.StreamCoalescer do
 
             # No streamed deltas: send a new answer message and index its message_id for reply-based resumes.
             text != "" ->
-              send_text = truncate_for_channel("telegram", text)
-              notify_ref = make_ref()
-              base_pending = state.pending_resume_indices || %{}
-
-              pending = fn ->
-                maybe_track_pending_resume(
-                  base_pending,
-                  notify_ref,
-                  account_id,
-                  chat_id,
-                  thread_id,
-                  resume
-                )
-              end
-
-              payload =
-                struct!(LemonChannels.OutboundPayload,
-                  channel_id: "telegram",
-                  account_id: parsed.account_id || "default",
-                  peer: %{
-                    kind: parsed.peer_kind,
-                    id: parsed.peer_id,
-                    thread_id: parsed.thread_id
-                  },
-                  kind: :text,
-                  content: text,
-                  reply_to: reply_to,
-                  idempotency_key: "#{state.run_id}:final:send",
-                  meta: %{
-                    run_id: state.run_id,
-                    session_key: state.session_key,
-                    final: true
-                  }
-                )
-
-              delivery_result =
-                if is_integer(chat_id) do
-                  ChannelsDelivery.telegram_enqueue_with_notify(
-                    {chat_id, state.run_id, :final_send},
-                    1,
-                    {:send, chat_id,
-                     %{
-                       text: send_text,
-                       reply_to_message_id: reply_to,
-                       message_thread_id: thread_id
-                     }},
-                    payload,
-                    self(),
-                    notify_ref,
-                    :outbox_delivered,
-                    context: %{component: :stream_coalescer, phase: :final_send}
-                  )
-                else
-                  payload
-                  |> Map.put(:notify_pid, self())
-                  |> Map.put(:notify_ref, notify_ref)
-                  |> ChannelsDelivery.enqueue(
-                    context: %{component: :stream_coalescer, phase: :final_send}
-                  )
-                end
-
-              case delivery_result do
-                {:ok, _ref} ->
-                  %{state | pending_resume_indices: pending.()}
-
-                {:error, :duplicate} ->
-                  Logger.debug(
-                    "Skipping pending resume index tracking for duplicate final answer send " <>
-                      "(chat_id=#{inspect(chat_id)} thread_id=#{inspect(thread_id)} run_id=#{inspect(state.run_id)})"
-                  )
-
-                  state
-
-                {:error, :channels_outbox_unavailable} ->
-                  state
-
-                {:error, reason} ->
-                  Logger.warning("Failed to enqueue final answer send: #{inspect(reason)}")
-                  state
-              end
+              finalize_send_answer(state, parsed, chat_id, thread_id, account_id, text, reply_to, resume)
 
             true ->
               state
@@ -884,6 +783,121 @@ defmodule LemonRouter.StreamCoalescer do
   rescue
     _ ->
       state
+  end
+
+  # Finalize by editing the dedicated answer message that was created during streaming.
+  defp finalize_edit_answer(state, parsed, chat_id, thread_id, account_id, answer_msg_id, text, resume) do
+    edit_text = truncate_for_channel("telegram", text)
+
+    payload =
+      build_telegram_payload(
+        parsed,
+        :edit,
+        %{message_id: answer_msg_id, text: edit_text},
+        "#{state.run_id}:final:answer_edit",
+        %{meta: %{
+          run_id: state.run_id,
+          session_key: state.session_key,
+          final: true
+        }}
+      )
+
+    case ChannelsDelivery.telegram_enqueue(
+           {chat_id, answer_msg_id, :edit},
+           0,
+           {:edit, chat_id, answer_msg_id, %{text: edit_text}},
+           payload,
+           context: %{component: :stream_coalescer, phase: :final_answer_edit}
+         ) do
+      {:ok, _ref} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed to enqueue final answer edit: #{inspect(reason)}")
+    end
+
+    _ = maybe_index_resume(account_id, chat_id, thread_id, answer_msg_id, resume)
+    %{state | last_sent_text: edit_text}
+  end
+
+  # Send a new answer message when no deltas were streamed, and track for resume indexing.
+  defp finalize_send_answer(state, parsed, chat_id, thread_id, account_id, text, reply_to, resume) do
+    send_text = truncate_for_channel("telegram", text)
+    notify_ref = make_ref()
+    base_pending = state.pending_resume_indices || %{}
+
+    pending = fn ->
+      maybe_track_pending_resume(
+        base_pending,
+        notify_ref,
+        account_id,
+        chat_id,
+        thread_id,
+        resume
+      )
+    end
+
+    payload =
+      build_telegram_payload(
+        parsed,
+        :text,
+        text,
+        "#{state.run_id}:final:send",
+        %{
+          reply_to: reply_to,
+          meta: %{
+            run_id: state.run_id,
+            session_key: state.session_key,
+            final: true
+          }
+        }
+      )
+
+    delivery_result =
+      if is_integer(chat_id) do
+        ChannelsDelivery.telegram_enqueue_with_notify(
+          {chat_id, state.run_id, :final_send},
+          1,
+          {:send, chat_id,
+           %{
+             text: send_text,
+             reply_to_message_id: reply_to,
+             message_thread_id: thread_id
+           }},
+          payload,
+          self(),
+          notify_ref,
+          :outbox_delivered,
+          context: %{component: :stream_coalescer, phase: :final_send}
+        )
+      else
+        payload
+        |> Map.put(:notify_pid, self())
+        |> Map.put(:notify_ref, notify_ref)
+        |> ChannelsDelivery.enqueue(
+          context: %{component: :stream_coalescer, phase: :final_send}
+        )
+      end
+
+    case delivery_result do
+      {:ok, _ref} ->
+        %{state | pending_resume_indices: pending.()}
+
+      {:error, :duplicate} ->
+        Logger.debug(
+          "Skipping pending resume index tracking for duplicate final answer send " <>
+            "(chat_id=#{inspect(chat_id)} thread_id=#{inspect(thread_id)} run_id=#{inspect(state.run_id)})"
+        )
+
+        state
+
+      {:error, :channels_outbox_unavailable} ->
+        state
+
+      {:error, reason} ->
+        Logger.warning("Failed to enqueue final answer send: #{inspect(reason)}")
+        state
+    end
   end
 
   defp normalize_resume_token(nil), do: nil
@@ -1098,7 +1112,7 @@ defmodule LemonRouter.StreamCoalescer do
   # For :edit kind, content must be %{message_id, text} per Telegram outbound contract
   defp get_output_kind_and_content(state) do
     supports_edit = channel_supports_edit?(state.channel_id)
-    progress_msg_id = (state.meta || %{})[:progress_msg_id]
+    progress_msg_id = meta_get(state, :progress_msg_id)
 
     cond do
       supports_edit and progress_msg_id != nil ->

@@ -43,20 +43,19 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       |> merge_config(Keyword.get(opts, :config))
       |> merge_config(Keyword.drop(opts, [:config]))
 
-    token = config[:bot_token] || config["bot_token"]
+    token = cfg_get(config, :bot_token)
 
     if is_binary(token) and token != "" do
-      account_id = config[:account_id] || config["account_id"] || "default"
+      account_id = cfg_get(config, :account_id, "default")
 
       case PollerLock.acquire(account_id, token) do
         :ok ->
           :ok = TransportShared.init_dedupe(:channels)
 
-          config_offset = config[:offset] || config["offset"]
+          config_offset = cfg_get(config, :offset)
           stored_offset = OffsetStore.get(account_id, token)
 
-          drop_pending_updates =
-            config[:drop_pending_updates] || config["drop_pending_updates"] || false
+          drop_pending_updates = cfg_get(config, :drop_pending_updates, false)
 
           # If enabled, drop any pending Telegram updates on every boot unless an explicit offset is set.
           # This prevents the bot from replying to historical messages after downtime.
@@ -66,8 +65,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
           {bot_id, bot_username} =
             resolve_bot_identity(
-              config[:bot_id] || config["bot_id"],
-              config[:bot_username] || config["bot_username"],
+              cfg_get(config, :bot_id),
+              cfg_get(config, :bot_username),
               config[:api_mod] || LemonChannels.Telegram.API,
               token
             )
@@ -77,33 +76,23 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             api_mod: config[:api_mod] || LemonChannels.Telegram.API,
             poll_interval_ms: config[:poll_interval_ms] || @default_poll_interval,
             dedupe_ttl_ms: config[:dedupe_ttl_ms] || @default_dedupe_ttl,
-            debounce_ms: config[:debounce_ms] || config["debounce_ms"] || @default_debounce_ms,
+            debounce_ms: cfg_get(config, :debounce_ms, @default_debounce_ms),
             # When true, emit debug logs for inbound decisions (drops, routing, etc).
-            debug_inbound: config[:debug_inbound] || config["debug_inbound"] || false,
+            debug_inbound: cfg_get(config, :debug_inbound, false),
             # When true, log drop/ignore reasons even if debug_inbound is false.
-            log_drops: config[:log_drops] || config["log_drops"] || false,
-            allow_queue_override:
-              config[:allow_queue_override] || config["allow_queue_override"] || false,
-            allowed_chat_ids:
-              parse_allowed_chat_ids(config[:allowed_chat_ids] || config["allowed_chat_ids"]),
-            deny_unbound_chats:
-              config[:deny_unbound_chats] || config["deny_unbound_chats"] || false,
+            log_drops: cfg_get(config, :log_drops, false),
+            allow_queue_override: cfg_get(config, :allow_queue_override, false),
+            allowed_chat_ids: parse_allowed_chat_ids(cfg_get(config, :allowed_chat_ids)),
+            deny_unbound_chats: cfg_get(config, :deny_unbound_chats, false),
             account_id: account_id,
-            voice_transcription:
-              config[:voice_transcription] || config["voice_transcription"] || false,
+            voice_transcription: cfg_get(config, :voice_transcription, false),
             voice_transcription_model:
-              config[:voice_transcription_model] || config["voice_transcription_model"] ||
-                "gpt-4o-mini-transcribe",
+              cfg_get(config, :voice_transcription_model, "gpt-4o-mini-transcribe"),
             voice_transcription_base_url:
-              normalize_blank(
-                config[:voice_transcription_base_url] || config["voice_transcription_base_url"]
-              ) || openai_base_url,
+              normalize_blank(cfg_get(config, :voice_transcription_base_url)) || openai_base_url,
             voice_transcription_api_key:
-              normalize_blank(
-                config[:voice_transcription_api_key] || config["voice_transcription_api_key"]
-              ) || openai_api_key,
-            voice_max_bytes:
-              config[:voice_max_bytes] || config["voice_max_bytes"] || 10 * 1024 * 1024,
+              normalize_blank(cfg_get(config, :voice_transcription_api_key)) || openai_api_key,
+            voice_max_bytes: cfg_get(config, :voice_max_bytes, 10 * 1024 * 1024),
             voice_transcriber:
               config[:voice_transcriber] || LemonChannels.Adapters.Telegram.VoiceTranscriber,
             # If we're configured to drop pending updates on boot, start from 0 so we can
@@ -118,7 +107,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             pending_new: %{},
             bot_id: bot_id,
             bot_username: bot_username,
-            files: config[:files] || config["files"] || %{},
+            files: cfg_get(config, :files, %{}),
             last_poll_error: nil,
             last_poll_error_log_ts: nil,
             last_webhook_clear_ts: nil
@@ -690,9 +679,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp submit_inbound_now(state, inbound) do
-    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
-    thread_id = parse_int(inbound.peer.thread_id)
-    user_msg_id = inbound.meta[:user_msg_id] || parse_int(inbound.message.id)
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
 
     progress_msg_id =
       if is_integer(chat_id) and is_integer(user_msg_id) do
@@ -765,8 +752,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp maybe_cancel_by_reply(state, inbound) do
-    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
-    thread_id = parse_int(inbound.peer.thread_id)
+    {chat_id, thread_id} = extract_chat_ids(inbound)
     reply_to_id = inbound.message.reply_to_id || inbound.meta[:reply_to_id]
 
     if is_integer(chat_id) and reply_to_id do
@@ -850,8 +836,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp media_group_key(state, inbound) do
     account_id = state.account_id || "default"
-    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
-    thread_id = parse_int(inbound.peer.thread_id)
+    {chat_id, thread_id} = extract_chat_ids(inbound)
     mg = inbound.meta && (inbound.meta[:media_group_id] || inbound.meta["media_group_id"])
 
     {account_id, chat_id, thread_id, mg}
@@ -866,7 +851,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp media_group_debounce_ms(state) do
     cfg = files_cfg(state)
-    parse_int(cfg[:media_group_debounce_ms] || cfg["media_group_debounce_ms"]) || 1_000
+    parse_int(cfg_get(cfg, :media_group_debounce_ms)) || 1_000
   rescue
     _ -> 1_000
   end
@@ -948,7 +933,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     with :ok <- ensure_files_enabled(cfg),
          true <- files_sender_allowed?(state, List.first(items), chat_id),
          {:ok, root} <- files_project_root(List.first(items), chat_id, thread_id) do
-      uploads_dir = cfg[:uploads_dir] || cfg["uploads_dir"] || "incoming"
+      uploads_dir = cfg_get(cfg, :uploads_dir, "incoming")
 
       results =
         Enum.map(items, fn inbound ->
@@ -1034,89 +1019,73 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     with :ok <- ensure_files_enabled(cfg),
          true <- files_sender_allowed?(state, file_put_inbound, chat_id),
          {:ok, root} <- ensure_project_root(root),
-         {:ok, force, dest_rel0} <- parse_file_put_args(cfg, file_put_inbound, rest) do
-      # For multiple files, require a directory destination: `incoming/`
-      dest_rel =
-        if String.ends_with?(dest_rel0, "/") do
-          dest_rel0
-        else
-          dest_rel0
-        end
-
-      if length(items) > 1 and not String.ends_with?(dest_rel, "/") do
-        _ =
-          send_system_message(
-            state,
-            chat_id,
-            thread_id,
-            user_msg_id,
-            "For multiple files, use a directory path ending with '/'. Example: /file put incoming/"
-          )
-
-        :ok
-      else
-        results =
-          Enum.map(items, fn inbound ->
-            doc = (inbound.meta && (inbound.meta[:document] || inbound.meta["document"])) || %{}
-            filename = doc[:file_name] || doc["file_name"] || "upload.bin"
-
-            rel =
-              if String.ends_with?(dest_rel, "/") do
-                Path.join(dest_rel, filename)
-              else
-                dest_rel
-              end
-
-            with {:ok, abs} <- resolve_dest_abs(root, rel),
-                 :ok <- ensure_not_denied(root, rel, cfg),
-                 {:ok, bytes} <- download_document_bytes(state, inbound),
-                 :ok <- enforce_bytes_limit(bytes, cfg, :max_upload_bytes, 20 * 1024 * 1024),
-                 {:ok, final_rel, _} <- write_document(rel, abs, bytes, force: force) do
-              {:ok, final_rel}
-            else
-              {:error, msg} -> {:error, msg}
-              _ -> {:error, "upload failed"}
-            end
-          end)
-
-        ok_paths = for {:ok, p} <- results, do: p
-        err_count = Enum.count(results, fn r -> match?({:error, _}, r) end)
-
-        msg =
-          cond do
-            ok_paths == [] ->
-              "Upload failed."
-
-            err_count == 0 ->
-              "Saved #{length(ok_paths)} files:\n" <> Enum.map_join(ok_paths, "\n", &"- #{&1}")
-
-            true ->
-              "Saved #{length(ok_paths)} files (#{err_count} failed):\n" <>
-                Enum.map_join(ok_paths, "\n", &"- #{&1}")
-          end
-
-        _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
-        :ok
-      end
+         {:ok, force, dest_rel} <- parse_file_put_args(cfg, file_put_inbound, rest),
+         :ok <- validate_multi_file_dest(items, dest_rel) do
+      results = upload_media_group_items(state, items, root, dest_rel, cfg, force)
+      msg = format_upload_results(results)
+      _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
+      :ok
     else
       {:error, msg} when is_binary(msg) ->
         _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
         :ok
 
       false ->
-        _ =
-          send_system_message(
-            state,
-            chat_id,
-            thread_id,
-            user_msg_id,
-            "File uploads are restricted."
-          )
-
+        _ = send_system_message(state, chat_id, thread_id, user_msg_id, "File uploads are restricted.")
         :ok
 
       _ ->
         :ok
+    end
+  end
+
+  defp validate_multi_file_dest(items, dest_rel) do
+    if length(items) > 1 and not String.ends_with?(dest_rel, "/") do
+      {:error, "For multiple files, use a directory path ending with '/'. Example: /file put incoming/"}
+    else
+      :ok
+    end
+  end
+
+  defp upload_media_group_items(state, items, root, dest_rel, cfg, force) do
+    Enum.map(items, fn inbound ->
+      doc = (inbound.meta && (inbound.meta[:document] || inbound.meta["document"])) || %{}
+      filename = doc[:file_name] || doc["file_name"] || "upload.bin"
+
+      rel =
+        if String.ends_with?(dest_rel, "/") do
+          Path.join(dest_rel, filename)
+        else
+          dest_rel
+        end
+
+      with {:ok, abs} <- resolve_dest_abs(root, rel),
+           :ok <- ensure_not_denied(root, rel, cfg),
+           {:ok, bytes} <- download_document_bytes(state, inbound),
+           :ok <- enforce_bytes_limit(bytes, cfg, :max_upload_bytes, 20 * 1024 * 1024),
+           {:ok, final_rel, _} <- write_document(rel, abs, bytes, force: force) do
+        {:ok, final_rel}
+      else
+        {:error, msg} -> {:error, msg}
+        _ -> {:error, "upload failed"}
+      end
+    end)
+  end
+
+  defp format_upload_results(results) do
+    ok_paths = for {:ok, p} <- results, do: p
+    err_count = Enum.count(results, fn r -> match?({:error, _}, r) end)
+
+    cond do
+      ok_paths == [] ->
+        "Upload failed."
+
+      err_count == 0 ->
+        "Saved #{length(ok_paths)} files:\n" <> Enum.map_join(ok_paths, "\n", &"- #{&1}")
+
+      true ->
+        "Saved #{length(ok_paths)} files (#{err_count} failed):\n" <>
+          Enum.map_join(ok_paths, "\n", &"- #{&1}")
     end
   end
 
@@ -1127,8 +1096,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp should_auto_put_document?(state, inbound) do
     cfg = files_cfg(state)
 
-    enabled? = truthy(cfg[:enabled] || cfg["enabled"])
-    auto_put? = truthy(cfg[:auto_put] || cfg["auto_put"])
+    enabled? = truthy(cfg_get(cfg, :enabled))
+    auto_put? = truthy(cfg_get(cfg, :auto_put))
 
     doc = inbound.meta && (inbound.meta[:document] || inbound.meta["document"])
 
@@ -1140,9 +1109,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp handle_document_auto_put(state, inbound) do
     cfg = files_cfg(state)
-    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
-    thread_id = parse_int(inbound.peer.thread_id)
-    user_msg_id = inbound.meta[:user_msg_id] || parse_int(inbound.message.id)
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
 
     with true <- is_integer(chat_id),
          :ok <- ensure_files_enabled(cfg),
@@ -1156,7 +1123,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
          {:ok, final_rel, _final_abs} <- write_document(dest_rel, dest_abs, bytes, force: false) do
       _ = send_system_message(state, chat_id, thread_id, user_msg_id, "Uploaded: #{final_rel}")
 
-      mode = cfg[:auto_put_mode] || cfg["auto_put_mode"] || "upload"
+      mode = cfg_get(cfg, :auto_put_mode, "upload")
       caption = String.trim(inbound.message.text || "")
 
       cond do
@@ -1204,9 +1171,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp handle_file_command(state, inbound) do
     cfg = files_cfg(state)
-    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
-    thread_id = parse_int(inbound.peer.thread_id)
-    user_msg_id = inbound.meta[:user_msg_id] || parse_int(inbound.message.id)
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
     args = telegram_command_args(inbound.message.text, "file") || ""
 
     if not is_integer(chat_id) do
@@ -1318,7 +1283,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp truthy(v), do: v in [true, "true", 1, "1", true]
 
   defp ensure_files_enabled(cfg) do
-    if truthy(cfg[:enabled] || cfg["enabled"]) do
+    if truthy(cfg_get(cfg, :enabled)) do
       :ok
     else
       {:error, "File transfer is disabled. Enable it under [gateway.telegram.files]."}
@@ -1327,7 +1292,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp files_sender_allowed?(state, inbound, chat_id) do
     cfg = files_cfg(state)
-    allowed = cfg[:allowed_user_ids] || cfg["allowed_user_ids"] || []
+    allowed = cfg_get(cfg, :allowed_user_ids, [])
     allowed = if is_list(allowed), do: allowed, else: []
 
     sender_id = parse_int(inbound.sender && inbound.sender.id)
@@ -1370,7 +1335,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp auto_put_destination(cfg, inbound) do
-    uploads_dir = cfg[:uploads_dir] || cfg["uploads_dir"] || "incoming"
+    uploads_dir = cfg_get(cfg, :uploads_dir, "incoming")
     doc = (inbound.meta && (inbound.meta[:document] || inbound.meta["document"])) || %{}
     filename = doc[:file_name] || doc["file_name"] || "upload.bin"
     {:ok, Path.join(uploads_dir, filename)}
@@ -1391,7 +1356,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           path
 
         _ ->
-          uploads_dir = cfg[:uploads_dir] || cfg["uploads_dir"] || "incoming"
+          uploads_dir = cfg_get(cfg, :uploads_dir, "incoming")
           doc = (inbound.meta && (inbound.meta[:document] || inbound.meta["document"])) || %{}
           filename = doc[:file_name] || doc["file_name"] || "upload.bin"
           Path.join(uploads_dir, filename)
@@ -1441,11 +1406,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp within_root?(root, abs) when is_binary(root) and is_binary(abs) do
     root = Path.expand(root)
     abs = Path.expand(abs)
-    abs == root or String.starts_with?(abs, root <> "/")
+    abs == root or Path.relative_to(abs, root) != abs
   end
 
   defp ensure_not_denied(root, rel, cfg) do
-    globs = cfg[:deny_globs] || cfg["deny_globs"] || []
+    globs = cfg_get(cfg, :deny_globs, [])
     globs = if is_list(globs), do: globs, else: []
 
     if denied_by_globs?(root, rel, globs) do
@@ -1746,8 +1711,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         {state, inbound}
 
       true ->
-        chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
-        thread_id = parse_int(inbound.peer.thread_id)
+        {chat_id, thread_id} = extract_chat_ids(inbound)
 
         if not is_integer(chat_id) do
           {state, inbound}
@@ -1851,9 +1815,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp handle_resume_command(state, inbound) do
-    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
-    thread_id = parse_int(inbound.peer.thread_id)
-    user_msg_id = inbound.meta[:user_msg_id] || parse_int(inbound.message.id)
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
 
     if not is_integer(chat_id) do
       state
@@ -2056,110 +2018,98 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp extract_resume_from_history(_), do: nil
 
   defp handle_new_session(state, inbound, raw_selector) do
-    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
-    thread_id = parse_int(inbound.peer.thread_id)
-    user_msg_id = inbound.meta[:user_msg_id] || parse_int(inbound.message.id)
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
 
     state = drop_buffer_for(state, inbound)
 
-    state =
-      if is_integer(chat_id) do
-        scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
-        session_key = build_session_key(state, inbound, scope)
+    if not is_integer(chat_id) do
+      state
+    else
+      scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
+      session_key = build_session_key(state, inbound, scope)
+      selector = normalize_selector(raw_selector)
 
-        selector =
-          if is_binary(raw_selector) do
-            case String.trim(raw_selector || "") do
-              "" -> nil
-              other -> other
-            end
-          else
-            nil
-          end
-
-        project_result =
-          case selector do
-            nil -> :noop
-            sel -> maybe_select_project_for_scope(scope, sel)
-          end
-
-        case project_result do
-          {:error, msg} when is_binary(msg) ->
-            _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
-            state
-
-          _ ->
-            _ = safe_abort_session(session_key, :new_session)
-            _ = safe_delete_selected_resume(state, chat_id, thread_id)
-            _ = safe_clear_thread_message_indices(state, chat_id, thread_id)
-
-            case submit_memory_reflection_before_new(
-                   state,
-                   inbound,
-                   scope,
-                   session_key,
-                   chat_id,
-                   thread_id,
-                   user_msg_id
-                 ) do
-              {:ok, run_id, state} when is_binary(run_id) ->
-                if Code.ensure_loaded?(LemonCore.Bus) and
-                     function_exported?(LemonCore.Bus, :subscribe, 1) do
-                  topic = LemonCore.Bus.run_topic(run_id)
-                  _ = LemonCore.Bus.subscribe(topic)
-                end
-
-                msg =
-                  case project_result do
-                    {:ok, %{id: id, root: root}} ->
-                      "Recording memories, then starting a new session…\nProject: #{id} (#{root})"
-
-                    _ ->
-                      "Recording memories, then starting a new session…"
-                  end
-
-                _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
-
-                pending = %{
-                  session_key: session_key,
-                  chat_id: chat_id,
-                  thread_id: thread_id,
-                  user_msg_id: user_msg_id,
-                  project:
-                    case project_result do
-                      {:ok, %{id: id, root: root}} -> %{id: id, root: root}
-                      _ -> nil
-                    end
-                }
-
-                %{state | pending_new: Map.put(state.pending_new, run_id, pending)}
-
-              _ ->
-                safe_delete_chat_state(session_key)
-                safe_delete_selected_resume(state, chat_id, thread_id)
-                safe_clear_thread_message_indices(state, chat_id, thread_id)
-
-                msg =
-                  case project_result do
-                    {:ok, %{id: id, root: root}} ->
-                      "Started a new session.\nProject: #{id} (#{root})"
-
-                    _ ->
-                      "Started a new session."
-                  end
-
-                _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
-                state
-            end
+      project_result =
+        case selector do
+          nil -> :noop
+          sel -> maybe_select_project_for_scope(scope, sel)
         end
-      else
-        state
-      end
 
-    state
+      case project_result do
+        {:error, msg} when is_binary(msg) ->
+          _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
+          state
+
+        _ ->
+          start_new_session(state, inbound, scope, session_key, project_result,
+            chat_id: chat_id, thread_id: thread_id, user_msg_id: user_msg_id)
+      end
+    end
   rescue
     _ -> state
   end
+
+  defp normalize_selector(raw_selector) when is_binary(raw_selector) do
+    case String.trim(raw_selector) do
+      "" -> nil
+      other -> other
+    end
+  end
+
+  defp normalize_selector(_), do: nil
+
+  defp start_new_session(state, inbound, scope, session_key, project_result, ids) do
+    chat_id = ids[:chat_id]
+    thread_id = ids[:thread_id]
+    user_msg_id = ids[:user_msg_id]
+
+    _ = safe_abort_session(session_key, :new_session)
+    _ = safe_delete_selected_resume(state, chat_id, thread_id)
+    _ = safe_clear_thread_message_indices(state, chat_id, thread_id)
+
+    case submit_memory_reflection_before_new(state, inbound, scope, session_key, chat_id, thread_id, user_msg_id) do
+      {:ok, run_id, state} when is_binary(run_id) ->
+        maybe_subscribe_to_run(run_id)
+        msg = new_session_message(project_result, "Recording memories, then starting a new session…")
+        _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
+
+        pending = %{
+          session_key: session_key,
+          chat_id: chat_id,
+          thread_id: thread_id,
+          user_msg_id: user_msg_id,
+          project: extract_project_info(project_result)
+        }
+
+        %{state | pending_new: Map.put(state.pending_new, run_id, pending)}
+
+      _ ->
+        safe_delete_chat_state(session_key)
+        safe_delete_selected_resume(state, chat_id, thread_id)
+        safe_clear_thread_message_indices(state, chat_id, thread_id)
+        msg = new_session_message(project_result, "Started a new session.")
+        _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
+        state
+    end
+  end
+
+  defp maybe_subscribe_to_run(run_id) do
+    if Code.ensure_loaded?(LemonCore.Bus) and
+         function_exported?(LemonCore.Bus, :subscribe, 1) do
+      topic = LemonCore.Bus.run_topic(run_id)
+      _ = LemonCore.Bus.subscribe(topic)
+    end
+  end
+
+  defp new_session_message(project_result, base_msg) do
+    case project_result do
+      {:ok, %{id: id, root: root}} -> "#{base_msg}\nProject: #{id} (#{root})"
+      _ -> base_msg
+    end
+  end
+
+  defp extract_project_info({:ok, %{id: id, root: root}}), do: %{id: id, root: root}
+  defp extract_project_info(_), do: nil
 
   defp submit_memory_reflection_before_new(
          state,
@@ -2498,8 +2448,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         inbound
 
       true ->
-        chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
-        thread_id = parse_int(inbound.peer.thread_id)
+        {chat_id, thread_id} = extract_chat_ids(inbound)
         account_id = state.account_id || "default"
 
         if is_integer(chat_id) do
@@ -2594,8 +2543,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp build_pending_compaction_prompt(_transcript, user_text), do: user_text
 
   defp maybe_mark_new_session_pending(state, inbound) do
-    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
-    thread_id = parse_int(inbound.peer.thread_id)
+    {chat_id, thread_id} = extract_chat_ids(inbound)
 
     if pending_new_for_scope?(state, chat_id, thread_id) do
       meta =
@@ -2652,8 +2600,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         inbound
 
       true ->
-        chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
-        thread_id = parse_int(inbound.peer.thread_id)
+        {chat_id, thread_id} = extract_chat_ids(inbound)
 
         if is_integer(chat_id) do
           key = {state.account_id || "default", chat_id, thread_id}
@@ -2690,8 +2637,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         inbound
 
       true ->
-        chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
-        thread_id = parse_int(inbound.peer.thread_id)
+        {chat_id, thread_id} = extract_chat_ids(inbound)
 
         if is_integer(chat_id) do
           scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
@@ -2888,8 +2834,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp trigger_mode_for(state, inbound) do
-    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
-    topic_id = parse_int(inbound.peer.thread_id)
+    {chat_id, topic_id} = extract_chat_ids(inbound)
     account_id = state.account_id || "default"
 
     if is_integer(chat_id) do
@@ -2995,9 +2940,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp message_entities(_), do: []
 
   defp handle_trigger_command(state, inbound) do
-    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
-    thread_id = parse_int(inbound.peer.thread_id)
-    user_msg_id = inbound.meta[:user_msg_id] || parse_int(inbound.message.id)
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
     args = telegram_command_args(inbound.message.text, "trigger") || ""
     arg = String.downcase(String.trim(args || ""))
     account_id = state.account_id || "default"
@@ -3006,137 +2949,60 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       state
     else
       scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
-      current = TriggerMode.resolve(account_id, chat_id, thread_id)
+      ctx = {state, chat_id, thread_id, user_msg_id, account_id, scope, inbound}
 
       case arg do
         "" ->
-          _ =
-            send_system_message(
-              state,
-              chat_id,
-              thread_id,
-              user_msg_id,
-              render_trigger_mode_status(current)
-            )
-
+          current = TriggerMode.resolve(account_id, chat_id, thread_id)
+          _ = send_system_message(state, chat_id, thread_id, user_msg_id, render_trigger_mode_status(current))
           state
 
-        "mentions" ->
-          with true <- trigger_change_allowed?(state, inbound, chat_id),
-               :ok <- TriggerMode.set(scope, account_id, :mentions) do
-            _ =
-              send_system_message(
-                state,
-                chat_id,
-                thread_id,
-                user_msg_id,
-                render_trigger_mode_set("mentions", scope)
-              )
-
-            state
-          else
-            false ->
-              _ =
-                send_system_message(
-                  state,
-                  chat_id,
-                  thread_id,
-                  user_msg_id,
-                  "Trigger mode can only be changed by a group admin."
-                )
-
-              state
-
-            _ ->
-              state
-          end
-
-        "all" ->
-          with true <- trigger_change_allowed?(state, inbound, chat_id),
-               :ok <- TriggerMode.set(scope, account_id, :all) do
-            _ =
-              send_system_message(
-                state,
-                chat_id,
-                thread_id,
-                user_msg_id,
-                render_trigger_mode_set("all", scope)
-              )
-
-            state
-          else
-            false ->
-              _ =
-                send_system_message(
-                  state,
-                  chat_id,
-                  thread_id,
-                  user_msg_id,
-                  "Trigger mode can only be changed by a group admin."
-                )
-
-              state
-
-            _ ->
-              state
-          end
+        mode when mode in ~w(mentions all) ->
+          apply_trigger_mode(ctx, String.to_existing_atom(mode), mode)
 
         "clear" ->
-          cond do
-            is_nil(thread_id) ->
-              _ =
-                send_system_message(
-                  state,
-                  chat_id,
-                  thread_id,
-                  user_msg_id,
-                  "No topic override to clear. Use /trigger all or /trigger mentions to set chat defaults."
-                )
-
-              state
-
-            trigger_change_allowed?(state, inbound, chat_id) ->
-              :ok = TriggerMode.clear_topic(account_id, chat_id, thread_id)
-
-              _ =
-                send_system_message(
-                  state,
-                  chat_id,
-                  thread_id,
-                  user_msg_id,
-                  "Cleared topic trigger override."
-                )
-
-              state
-
-            true ->
-              _ =
-                send_system_message(
-                  state,
-                  chat_id,
-                  thread_id,
-                  user_msg_id,
-                  "Trigger mode can only be changed by a group admin."
-                )
-
-              state
-          end
+          apply_trigger_clear(ctx)
 
         _ ->
-          _ =
-            send_system_message(
-              state,
-              chat_id,
-              thread_id,
-              user_msg_id,
-              "Usage: /trigger [mentions|all|clear]"
-            )
-
+          _ = send_system_message(state, chat_id, thread_id, user_msg_id, "Usage: /trigger [mentions|all|clear]")
           state
       end
     end
   rescue
     _ -> state
+  end
+
+  defp apply_trigger_mode({state, chat_id, thread_id, user_msg_id, account_id, scope, inbound}, mode_atom, mode_str) do
+    with true <- trigger_change_allowed?(state, inbound, chat_id),
+         :ok <- TriggerMode.set(scope, account_id, mode_atom) do
+      _ = send_system_message(state, chat_id, thread_id, user_msg_id, render_trigger_mode_set(mode_str, scope))
+      state
+    else
+      false ->
+        _ = send_system_message(state, chat_id, thread_id, user_msg_id, "Trigger mode can only be changed by a group admin.")
+        state
+
+      _ ->
+        state
+    end
+  end
+
+  defp apply_trigger_clear({state, chat_id, thread_id, user_msg_id, account_id, _scope, inbound}) do
+    cond do
+      is_nil(thread_id) ->
+        _ = send_system_message(state, chat_id, thread_id, user_msg_id,
+          "No topic override to clear. Use /trigger all or /trigger mentions to set chat defaults.")
+        state
+
+      trigger_change_allowed?(state, inbound, chat_id) ->
+        :ok = TriggerMode.clear_topic(account_id, chat_id, thread_id)
+        _ = send_system_message(state, chat_id, thread_id, user_msg_id, "Cleared topic trigger override.")
+        state
+
+      true ->
+        _ = send_system_message(state, chat_id, thread_id, user_msg_id, "Trigger mode can only be changed by a group admin.")
+        state
+    end
   end
 
   defp trigger_change_allowed?(state, inbound, chat_id) do
@@ -3206,7 +3072,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp authorized_inbound_reason(state, inbound) do
-    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
+    {chat_id, _thread_id} = extract_chat_ids(inbound)
 
     cond do
       not is_integer(chat_id) ->
@@ -3577,8 +3443,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   # - optional queue override commands (/steer, /followup, /interrupt)
   # - optional engine directives (/claude, /codex, /lemon) and engine hint commands (e.g. /capture)
   defp enrich_for_router(inbound, state) do
-    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
-    topic_id = parse_int(inbound.peer.thread_id)
+    {chat_id, topic_id} = extract_chat_ids(inbound)
 
     scope =
       if is_integer(chat_id) do
@@ -3729,9 +3594,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp maybe_send_voice_error(state, inbound, text) when is_binary(text) do
-    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
-    thread_id = parse_int(inbound.peer.thread_id)
-    user_msg_id = inbound.meta[:user_msg_id] || parse_int(inbound.message.id)
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
 
     if is_integer(chat_id) do
       send_system_message(state, chat_id, thread_id, user_msg_id, text)
@@ -3840,6 +3703,23 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp normalize_blank(nil), do: nil
   defp normalize_blank(""), do: nil
   defp normalize_blank(value), do: value
+
+  defp cfg_get(cfg, key, default \\ nil) when is_atom(key) do
+    cfg[key] || cfg[Atom.to_string(key)] || default
+  end
+
+  defp extract_message_ids(inbound) do
+    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
+    thread_id = parse_int(inbound.peer.thread_id)
+    user_msg_id = inbound.meta[:user_msg_id] || parse_int(inbound.message.id)
+    {chat_id, thread_id, user_msg_id}
+  end
+
+  defp extract_chat_ids(inbound) do
+    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
+    thread_id = parse_int(inbound.peer.thread_id)
+    {chat_id, thread_id}
+  end
 
   defp parse_int(nil), do: nil
 
