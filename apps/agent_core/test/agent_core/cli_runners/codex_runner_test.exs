@@ -83,6 +83,8 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
                "--json",
                "--skip-git-repo-check",
                "--color=never",
+               "-c",
+               "model_auto_compact_token_limit=0.85",
                "-"
              ]
     end
@@ -101,6 +103,8 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
                "--json",
                "--skip-git-repo-check",
                "--color=never",
+               "-c",
+               "model_auto_compact_token_limit=0.85",
                "resume",
                "thread_123",
                "-"
@@ -160,7 +164,8 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
 
       assert "--custom" in args
       assert "value" in args
-      refute "-c" in args
+      # -c is still present from the auto-compact config flag
+      refute "notify=[]" in args
     end
   end
 

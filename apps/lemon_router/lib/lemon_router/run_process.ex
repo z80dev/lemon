@@ -237,10 +237,10 @@ defmodule LemonRouter.RunProcess do
     # Emit router-level completion event
     Bus.broadcast(Bus.session_topic(state.session_key), event)
 
-    # If the engine reports a context-window overflow, clear Telegram resume state so
+    # If the engine reports a context-window overflow, clear resume state so
     # the next message can start fresh instead of immediately failing again.
-    maybe_reset_telegram_resume_on_context_overflow(state, event)
-    maybe_mark_telegram_pending_compaction_near_limit(state, event)
+    maybe_reset_resume_on_context_overflow(state, event)
+    maybe_mark_pending_compaction_near_limit(state, event)
     retried? = maybe_retry_zero_answer_failure(state, event)
 
     # Mark any still-running tool calls as completed so the editable "Tool calls"
@@ -769,7 +769,7 @@ defmodule LemonRouter.RunProcess do
     end
   end
 
-  defp maybe_reset_telegram_resume_on_context_overflow(state, %LemonCore.Event{} = event) do
+  defp maybe_reset_resume_on_context_overflow(state, %LemonCore.Event{} = event) do
     case extract_completed_ok_and_error(event) do
       {false, err} ->
         if context_length_exceeded_error?(err) do
@@ -780,6 +780,15 @@ defmodule LemonRouter.RunProcess do
 
           # Clear generic chat-state resume for all sessions so the next run can start fresh.
           _ = safe_delete_chat_state(state.session_key)
+
+          # Mark a generic pending compaction for any channel type.
+          LemonCore.Store.put(:pending_compaction, state.session_key, %{
+            reason: "overflow",
+            session_key: state.session_key,
+            set_at_ms: System.system_time(:millisecond)
+          })
+
+          # Telegram-specific: reset resume state and mark Telegram pending compaction.
           reset_telegram_resume_state(state.session_key)
           mark_telegram_pending_compaction(state.session_key, :overflow)
         end
@@ -793,14 +802,14 @@ defmodule LemonRouter.RunProcess do
     _ -> :ok
   end
 
-  defp maybe_reset_telegram_resume_on_context_overflow(_state, _event), do: :ok
+  defp maybe_reset_resume_on_context_overflow(_state, _event), do: :ok
 
-  defp maybe_mark_telegram_pending_compaction_near_limit(state, %LemonCore.Event{} = event) do
+  defp maybe_mark_pending_compaction_near_limit(state, %LemonCore.Event{} = event) do
     with {true, _} <- extract_completed_ok_and_error(event),
          usage when is_map(usage) <- extract_completed_usage(event),
          input_tokens when is_integer(input_tokens) and input_tokens > 0 <-
            usage_input_tokens(usage),
-         cfg <- telegram_preemptive_compaction_config(),
+         cfg <- preemptive_compaction_config(state.session_key),
          true <- cfg.enabled,
          context_window when is_integer(context_window) and context_window > 0 <-
            resolve_preemptive_compaction_context_window(state, event, cfg),
@@ -817,14 +826,27 @@ defmodule LemonRouter.RunProcess do
           "threshold=#{threshold} context_window=#{context_window}"
       )
 
+      compaction_details = %{
+        input_tokens: input_tokens,
+        threshold_tokens: threshold,
+        context_window_tokens: context_window
+      }
+
+      # Generic compaction marker for all session types
+      LemonCore.Store.put(:pending_compaction, state.session_key, %{
+        reason: "near_limit",
+        session_key: state.session_key,
+        set_at_ms: System.system_time(:millisecond),
+        input_tokens: input_tokens,
+        threshold_tokens: threshold,
+        context_window_tokens: context_window
+      })
+
+      # Telegram-specific compaction marker (preserves existing behavior)
       mark_telegram_pending_compaction(
         state.session_key,
         :near_limit,
-        %{
-          input_tokens: input_tokens,
-          threshold_tokens: threshold,
-          context_window_tokens: context_window
-        }
+        compaction_details
       )
     else
       _ -> :ok
@@ -835,7 +857,7 @@ defmodule LemonRouter.RunProcess do
     _ -> :ok
   end
 
-  defp maybe_mark_telegram_pending_compaction_near_limit(_state, _event), do: :ok
+  defp maybe_mark_pending_compaction_near_limit(_state, _event), do: :ok
 
   @spec context_length_exceeded_error?(term()) :: boolean()
   defp context_length_exceeded_error?(err) do
@@ -991,10 +1013,23 @@ defmodule LemonRouter.RunProcess do
 
   defp maybe_parse_positive_int(_), do: nil
 
-  defp telegram_preemptive_compaction_config do
-    telegram_cfg = LemonChannels.GatewayConfig.get(:telegram, %{}) || %{}
-    telegram_cfg = normalize_map(telegram_cfg)
-    cfg = fetch(telegram_cfg, :compaction) |> normalize_map()
+  defp preemptive_compaction_config(session_key) when is_binary(session_key) do
+    channel_cfg =
+      case ChannelContext.parse_session_key(session_key) do
+        %{channel_id: channel_id} when is_binary(channel_id) and channel_id != "" ->
+          try do
+            channel_atom = String.to_existing_atom(channel_id)
+            LemonChannels.GatewayConfig.get(channel_atom, %{}) || %{}
+          rescue
+            _ -> %{}
+          end
+
+        _ ->
+          %{}
+      end
+
+    channel_cfg = normalize_map(channel_cfg)
+    cfg = fetch(channel_cfg, :compaction) |> normalize_map()
 
     enabled =
       case fetch(cfg, :enabled) do
@@ -1019,6 +1054,23 @@ defmodule LemonRouter.RunProcess do
         enabled: true,
         context_window_tokens: nil,
         reserve_tokens: default_compaction_reserve_tokens(),
+        trigger_ratio: @default_preemptive_compaction_trigger_ratio
+      }
+  end
+
+  defp preemptive_compaction_config(_session_key) do
+    %{
+      enabled: true,
+      context_window_tokens: nil,
+      reserve_tokens: default_compaction_reserve_tokens(),
+      trigger_ratio: @default_preemptive_compaction_trigger_ratio
+    }
+  rescue
+    _ ->
+      %{
+        enabled: true,
+        context_window_tokens: nil,
+        reserve_tokens: @default_compaction_reserve_tokens,
         trigger_ratio: @default_preemptive_compaction_trigger_ratio
       }
   end

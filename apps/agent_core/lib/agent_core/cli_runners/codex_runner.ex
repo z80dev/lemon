@@ -130,11 +130,13 @@ defmodule AgentCore.CliRunners.CodexRunner do
 
   @impl true
   def init_state(_prompt, _resume, cwd) do
+    maybe_ensure_codexignore(cwd)
     RunnerState.new(LemonConfig.load(cwd))
   end
 
   @impl true
   def init_state(_prompt, _resume, cwd, opts) do
+    maybe_ensure_codexignore(cwd)
     model_override = normalize_codex_model(Keyword.get(opts, :model))
     RunnerState.new(LemonConfig.load(cwd), model_override)
   end
@@ -152,6 +154,7 @@ defmodule AgentCore.CliRunners.CodexRunner do
       ]
       |> maybe_drop_model_flag()
       |> maybe_add_auto_approve(state)
+      |> maybe_add_auto_compact()
 
     extra_args = codex_extra_args(state)
 
@@ -637,6 +640,10 @@ defmodule AgentCore.CliRunners.CodexRunner do
     end
   end
 
+  defp maybe_add_auto_compact(args) do
+    args ++ ["-c", "model_auto_compact_token_limit=0.85"]
+  end
+
   defp codex_auto_approve?(state) do
     case get_codex_config(state, :auto_approve, nil) do
       nil ->
@@ -716,4 +723,14 @@ defmodule AgentCore.CliRunners.CodexRunner do
   end
 
   defp normalize_codex_model(_), do: nil
+
+  defp maybe_ensure_codexignore(cwd) when is_binary(cwd) do
+    if Code.ensure_loaded?(CodingAgent.Project.Codexignore) do
+      CodingAgent.Project.Codexignore.ensure_codexignore(cwd)
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp maybe_ensure_codexignore(_), do: :ok
 end
