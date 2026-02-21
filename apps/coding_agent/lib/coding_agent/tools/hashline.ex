@@ -288,9 +288,10 @@ defmodule CodingAgent.Tools.Hashline do
       with :ok <- validate_all_edits(edits, file_lines) do
         edits = deduplicate_edits(edits, file_lines)
         sorted_edits = sort_edits(edits, file_lines)
+        touched_lines = build_touched_lines(sorted_edits)
 
         {result_lines, first_changed, noop_edits} =
-          apply_sorted_edits(sorted_edits, file_lines, original_file_lines, nil, [])
+          apply_sorted_edits(sorted_edits, file_lines, original_file_lines, nil, [], touched_lines)
 
         result = %{
           content: Enum.join(result_lines, "\n"),
@@ -491,60 +492,80 @@ defmodule CodingAgent.Tools.Hashline do
   defp edit_sort_key(%{op: :replace_text}, _file_lines), do: {0, 4}
 
   # Apply sorted edits to file lines
-  defp apply_sorted_edits([], file_lines, _original_lines, first_changed, noop_edits),
+  defp apply_sorted_edits([], file_lines, _original_lines, first_changed, noop_edits, _touched),
     do: {file_lines, first_changed, noop_edits}
 
-  defp apply_sorted_edits([edit | rest], file_lines, original_lines, first_changed, noop_edits) do
+  defp apply_sorted_edits([edit | rest], file_lines, original_lines, first_changed, noop_edits, touched) do
     {new_lines, new_first, new_noop} =
-      apply_single_edit(edit, file_lines, original_lines, first_changed, noop_edits)
+      apply_single_edit(edit, file_lines, original_lines, first_changed, noop_edits, touched)
 
-    apply_sorted_edits(rest, new_lines, original_lines, new_first, new_noop)
+    apply_sorted_edits(rest, new_lines, original_lines, new_first, new_noop, touched)
   end
 
-  defp apply_single_edit(%{op: :set, tag: tag, content: content}, file_lines, original_lines, first_changed, noop_edits) do
+  defp apply_single_edit(%{op: :set, tag: tag, content: content}, file_lines, original_lines, first_changed, noop_edits, touched) do
     orig_lines = [Enum.at(original_lines, tag.line - 1)]
 
-    # Apply autocorrect transformations if enabled
-    content =
-      if autocorrect_enabled?() do
-        content
-        |> strip_range_boundary_echo(original_lines, tag.line, tag.line)
-        |> restore_old_wrapped_lines(orig_lines)
-        |> restore_indent_for_paired_replacement(orig_lines)
-      else
-        content
-      end
-
-    if lines_equal?(orig_lines, content) do
-      noop = %{
-        edit_index: tag.line,
-        loc: "#{tag.line}##{tag.hash}",
-        current_content: Enum.join(orig_lines, "\n")
-      }
-
-      {file_lines, first_changed, [noop | noop_edits]}
+    # Check merge detection FIRST on raw content (before other autocorrect transforms).
+    # If a merge is detected, the other transforms (indent restore, etc.) are not
+    # applicable since the line context has changed.
+    merge_expansion = if autocorrect_enabled?() do
+      maybe_expand_single_line_merge(tag.line, content, original_lines, touched)
     else
-      idx = tag.line - 1
+      nil
+    end
 
-      new_lines =
-        case content do
-          [] ->
-            List.delete_at(file_lines, idx)
+    case merge_expansion do
+      %{start_line: start, delete_count: del_count, new_lines: new_content} ->
+        # Expanded merge: replace del_count lines starting at start with new_content
+        idx = start - 1
+        {before, after_parts} = Enum.split(file_lines, idx)
+        {_removed, after_rest} = Enum.split(after_parts, del_count)
+        new_lines = before ++ new_content ++ after_rest
+        {new_lines, min_line(first_changed, start), noop_edits}
 
-          [single_line] ->
-            List.replace_at(file_lines, idx, single_line)
+      nil ->
+        # No merge - apply standard autocorrect transformations
+        content =
+          if autocorrect_enabled?() do
+            content
+            |> strip_range_boundary_echo(original_lines, tag.line, tag.line)
+            |> restore_old_wrapped_lines(orig_lines)
+            |> restore_indent_for_paired_replacement(orig_lines)
+          else
+            content
+          end
 
-          _multiple_lines ->
-            {before, after_parts} = Enum.split(file_lines, idx)
-            {_removed, after_rest} = Enum.split(after_parts, 1)
-            before ++ content ++ after_rest
+        if lines_equal?(orig_lines, content) do
+          noop = %{
+            edit_index: tag.line,
+            loc: "#{tag.line}##{tag.hash}",
+            current_content: Enum.join(orig_lines, "\n")
+          }
+
+          {file_lines, first_changed, [noop | noop_edits]}
+        else
+          idx = tag.line - 1
+
+          new_lines =
+            case content do
+              [] ->
+                List.delete_at(file_lines, idx)
+
+              [single_line] ->
+                List.replace_at(file_lines, idx, single_line)
+
+              _multiple_lines ->
+                {before, after_parts} = Enum.split(file_lines, idx)
+                {_removed, after_rest} = Enum.split(after_parts, 1)
+                before ++ content ++ after_rest
+            end
+
+          {new_lines, min_line(first_changed, tag.line), noop_edits}
         end
-
-      {new_lines, min_line(first_changed, tag.line), noop_edits}
     end
   end
 
-  defp apply_single_edit(%{op: :replace, first: first, last: last, content: content}, file_lines, original_lines, first_changed, noop_edits) do
+  defp apply_single_edit(%{op: :replace, first: first, last: last, content: content}, file_lines, original_lines, first_changed, noop_edits, _touched) do
     count = last.line - first.line + 1
     orig_lines = Enum.slice(original_lines, first.line - 1, count)
 
@@ -575,7 +596,7 @@ defmodule CodingAgent.Tools.Hashline do
     end
   end
 
-  defp apply_single_edit(%{op: :append, after: nil, content: content}, file_lines, _original_lines, first_changed, noop_edits) do
+  defp apply_single_edit(%{op: :append, after: nil, content: content}, file_lines, _original_lines, first_changed, noop_edits, _touched) do
     # Append at EOF
     if length(file_lines) == 1 and hd(file_lines) == "" do
       # Empty file case
@@ -587,7 +608,7 @@ defmodule CodingAgent.Tools.Hashline do
     end
   end
 
-  defp apply_single_edit(%{op: :append, after: tag, content: content}, file_lines, original_lines, first_changed, noop_edits) do
+  defp apply_single_edit(%{op: :append, after: tag, content: content}, file_lines, original_lines, first_changed, noop_edits, _touched) do
     orig_line = Enum.at(original_lines, tag.line - 1)
 
     # Strip echo of anchor line if present
@@ -608,7 +629,7 @@ defmodule CodingAgent.Tools.Hashline do
     end
   end
 
-  defp apply_single_edit(%{op: :prepend, before: nil, content: content}, file_lines, _original_lines, first_changed, noop_edits) do
+  defp apply_single_edit(%{op: :prepend, before: nil, content: content}, file_lines, _original_lines, first_changed, noop_edits, _touched) do
     # Prepend at BOF
     if length(file_lines) == 1 and hd(file_lines) == "" do
       {content, min_line(first_changed, 1), noop_edits}
@@ -618,7 +639,7 @@ defmodule CodingAgent.Tools.Hashline do
     end
   end
 
-  defp apply_single_edit(%{op: :prepend, before: tag, content: content}, file_lines, original_lines, first_changed, noop_edits) do
+  defp apply_single_edit(%{op: :prepend, before: tag, content: content}, file_lines, original_lines, first_changed, noop_edits, _touched) do
     orig_line = Enum.at(original_lines, tag.line - 1)
 
     # Strip echo of anchor line if present
@@ -639,7 +660,7 @@ defmodule CodingAgent.Tools.Hashline do
     end
   end
 
-  defp apply_single_edit(%{op: :insert, after: after_tag, before: before_tag, content: content}, file_lines, original_lines, first_changed, noop_edits) do
+  defp apply_single_edit(%{op: :insert, after: after_tag, before: before_tag, content: content}, file_lines, original_lines, first_changed, noop_edits, _touched) do
     after_line = Enum.at(original_lines, after_tag.line - 1)
     before_line = Enum.at(original_lines, before_tag.line - 1)
 
@@ -661,7 +682,7 @@ defmodule CodingAgent.Tools.Hashline do
     end
   end
 
-  defp apply_single_edit(%{op: :replace_text, old_text: old_text, new_text: new_text, all: replace_all}, file_lines, _original_lines, first_changed, noop_edits) do
+  defp apply_single_edit(%{op: :replace_text, old_text: old_text, new_text: new_text, all: replace_all}, file_lines, _original_lines, first_changed, noop_edits, _touched) do
     content = Enum.join(file_lines, "\n")
 
     if not String.contains?(content, old_text) do
@@ -687,8 +708,8 @@ defmodule CodingAgent.Tools.Hashline do
     end
   end
 
-  defp apply_single_edit(%{op: :replace_text, old_text: _old_text, new_text: _new_text} = edit, file_lines, original_lines, first_changed, noop_edits) do
-    apply_single_edit(Map.put(edit, :all, false), file_lines, original_lines, first_changed, noop_edits)
+  defp apply_single_edit(%{op: :replace_text, old_text: _old_text, new_text: _new_text} = edit, file_lines, original_lines, first_changed, noop_edits, touched) do
+    apply_single_edit(Map.put(edit, :all, false), file_lines, original_lines, first_changed, noop_edits, touched)
   end
 
   defp find_first_diff_line(old_lines, new_lines) do
@@ -911,6 +932,132 @@ defmodule CodingAgent.Tools.Hashline do
         end
       else
         out
+      end
+    end
+  end
+
+  # ============================================================================
+  # Single-Line Merge Detection (ported from Oh-My-Pi hashline.ts)
+  # ============================================================================
+
+  # Build the set of line numbers explicitly targeted by edits.
+  # Used by merge detection to avoid absorbing lines that are targeted
+  # by another edit in the same batch.
+  defp build_touched_lines(edits) do
+    Enum.reduce(edits, MapSet.new(), fn edit, acc ->
+      case edit do
+        %{op: :set, tag: tag} -> MapSet.put(acc, tag.line)
+        %{op: :replace, first: first, last: last} ->
+          Enum.reduce(first.line..last.line, acc, &MapSet.put(&2, &1))
+        %{op: :append, after: %{line: line}} -> MapSet.put(acc, line)
+        %{op: :prepend, before: %{line: line}} -> MapSet.put(acc, line)
+        %{op: :insert, after: after_tag, before: before_tag} ->
+          acc |> MapSet.put(after_tag.line) |> MapSet.put(before_tag.line)
+        _ -> acc
+      end
+    end)
+  end
+
+  @doc false
+  # Strip trailing continuation tokens (operators that commonly end continuation lines).
+  # Used by merge detection when the LLM merges adjacent lines while changing
+  # the trailing operator (e.g. `&&` → `||`).
+  def strip_trailing_continuation_tokens(s) do
+    Regex.replace(~r/(?:&&|\|\||\?\?|\?|:|=|,|\+|-|\*|\/|\.|\()\s*$/u, s, "")
+  end
+
+  @doc false
+  # Strip merge operator characters (|, &, ?) for fuzzy merge detection
+  # when the model changes a logical operator while also merging lines.
+  def strip_merge_operator_chars(s) do
+    String.replace(s, ~r/[|&?]/, "")
+  end
+
+  @doc false
+  # Detect when the LLM merged 2 adjacent lines into 1.
+  #
+  # Case A: The model absorbed the next continuation line into the current line.
+  #   e.g. `foo &&` + `bar` → `foo && bar`
+  #
+  # Case B: The model absorbed the previous declaration/continuation line.
+  #   e.g. `let x =` + `getValue()` → `let x = getValue()`
+  #
+  # Returns %{start_line, delete_count, new_lines} if merge detected, nil otherwise.
+  defp maybe_expand_single_line_merge(line, content, file_lines, touched_lines) do
+    if length(content) != 1 do
+      nil
+    else
+      total_lines = length(file_lines)
+      if line < 1 or line > total_lines do
+        nil
+      else
+        [new_line] = content
+        new_canon = normalize_line(new_line)
+
+        if String.length(new_canon) == 0 do
+          nil
+        else
+          orig = Enum.at(file_lines, line - 1)
+          orig_canon = normalize_line(orig)
+
+          if String.length(orig_canon) == 0 do
+            nil
+          else
+            new_canon_for_merge_ops = strip_merge_operator_chars(new_canon)
+            orig_canon_for_match = strip_trailing_continuation_tokens(orig_canon)
+            orig_canon_for_merge_ops = strip_merge_operator_chars(orig_canon)
+            orig_looks_like_continuation = String.length(orig_canon_for_match) < String.length(orig_canon)
+
+            next_idx = line  # 0-indexed index of line+1
+            prev_idx = line - 2  # 0-indexed index of line-1
+
+            # Case A: dst absorbed the next continuation line
+            case_a = if orig_looks_like_continuation and next_idx < total_lines and
+                        not MapSet.member?(touched_lines, line + 1) do
+              next = Enum.at(file_lines, next_idx)
+              next_canon = normalize_line(next)
+              a = :binary.match(new_canon, orig_canon_for_match)
+              b = :binary.match(new_canon, next_canon)
+
+              with {a_pos, _} <- a,
+                   {b_pos, _} <- b do
+                if a_pos < b_pos and
+                   String.length(new_canon) <= String.length(orig_canon) + String.length(next_canon) + 32 do
+                  %{start_line: line, delete_count: 2, new_lines: [new_line]}
+                end
+              else
+                _ -> nil
+              end
+            end
+
+            case_a || (
+              # Case B: dst absorbed the previous declaration/continuation line
+              if prev_idx >= 0 and not MapSet.member?(touched_lines, line - 1) do
+                prev = Enum.at(file_lines, prev_idx)
+                prev_canon = normalize_line(prev)
+                prev_canon_for_match = strip_trailing_continuation_tokens(prev_canon)
+                prev_looks_like_continuation = String.length(prev_canon_for_match) < String.length(prev_canon)
+
+                if not prev_looks_like_continuation do
+                  nil
+                else
+                  a = :binary.match(new_canon_for_merge_ops, strip_merge_operator_chars(prev_canon_for_match))
+                  b = :binary.match(new_canon_for_merge_ops, orig_canon_for_merge_ops)
+
+                  with {a_pos, _} <- a,
+                       {b_pos, _} <- b do
+                    if a_pos < b_pos and
+                       String.length(new_canon) <= String.length(prev_canon) + String.length(orig_canon) + 32 do
+                      %{start_line: line - 1, delete_count: 2, new_lines: [new_line]}
+                    end
+                  else
+                    _ -> nil
+                  end
+                end
+              end
+            )
+          end
+        end
       end
     end
   end

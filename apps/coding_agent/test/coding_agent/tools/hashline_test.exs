@@ -697,6 +697,158 @@ defmodule CodingAgent.Tools.HashlineTest do
   end
 
   # ============================================================================
+  # apply_edits/2 - autocorrect: single-line merge detection
+  # ============================================================================
+
+  describe "apply_edits/2 - autocorrect: single-line merge detection" do
+    setup do
+      Application.put_env(:coding_agent, :hashline_autocorrect, true)
+
+      on_exit(fn ->
+        Application.delete_env(:coding_agent, :hashline_autocorrect)
+      end)
+    end
+
+    test "Case A: detects merge of line with next continuation line" do
+      # Line 1 ends with `&&` (continuation), line 2 is the continuation.
+      # The LLM merges them into a single line.
+      content = "if foo &&\n  bar do\n  :ok\nend"
+      hash = Hashline.compute_line_hash("if foo &&")
+
+      # The LLM replaced line 1 with the merged content of lines 1+2
+      edits = [%{op: :set, tag: %{line: 1, hash: hash}, content: ["if foo && bar do"]}]
+      {:ok, result} = Hashline.apply_edits(content, edits)
+
+      # Should detect the merge and delete line 2 as well
+      assert result.content == "if foo && bar do\n  :ok\nend"
+      assert result.first_changed_line == 1
+    end
+
+    test "Case B: detects merge of previous continuation line into current" do
+      # Line 1 ends with `=` (continuation), line 2 is the value.
+      # The LLM merges them by absorbing line 1 into its replacement of line 2.
+      content = "let x =\n  getValue()\nreturn x"
+      hash = Hashline.compute_line_hash("  getValue()")
+
+      # The LLM replaced line 2 with the merged content of lines 1+2
+      edits = [%{op: :set, tag: %{line: 2, hash: hash}, content: ["let x = getValue()"]}]
+      {:ok, result} = Hashline.apply_edits(content, edits)
+
+      # Should detect the merge and delete line 1 as well
+      assert result.content == "let x = getValue()\nreturn x"
+      assert result.first_changed_line == 1
+    end
+
+    test "does not merge when content has multiple lines" do
+      content = "if foo &&\n  bar do\n  :ok\nend"
+      hash = Hashline.compute_line_hash("if foo &&")
+
+      # Multi-line replacement - should NOT trigger merge detection
+      edits = [%{op: :set, tag: %{line: 1, hash: hash}, content: ["if foo &&", "  baz do"]}]
+      {:ok, result} = Hashline.apply_edits(content, edits)
+
+      assert result.content == "if foo &&\n  baz do\n  bar do\n  :ok\nend"
+    end
+
+    test "does not merge when adjacent line is also targeted by an edit" do
+      content = "if foo &&\n  bar do\n  :ok\nend"
+      hash1 = Hashline.compute_line_hash("if foo &&")
+      hash2 = Hashline.compute_line_hash("  bar do")
+
+      # Both lines 1 and 2 are targeted - merge should not absorb line 2
+      edits = [
+        %{op: :set, tag: %{line: 1, hash: hash1}, content: ["if foo && bar do"]},
+        %{op: :set, tag: %{line: 2, hash: hash2}, content: ["  baz do"]}
+      ]
+      {:ok, result} = Hashline.apply_edits(content, edits)
+
+      # Line 2 should NOT be absorbed by merge; both edits apply independently
+      lines = String.split(result.content, "\n")
+      assert length(lines) == 4
+    end
+
+    test "does not merge when original line has no trailing continuation token" do
+      content = "complete_statement\nanother_line\nend"
+      hash = Hashline.compute_line_hash("complete_statement")
+
+      edits = [%{op: :set, tag: %{line: 1, hash: hash}, content: ["complete_statement_modified"]}]
+      {:ok, result} = Hashline.apply_edits(content, edits)
+
+      # No merge: the original line has no continuation token
+      lines = String.split(result.content, "\n")
+      assert length(lines) == 3
+      assert hd(lines) == "complete_statement_modified"
+    end
+
+    test "does not merge when autocorrect is disabled" do
+      Application.delete_env(:coding_agent, :hashline_autocorrect)
+
+      content = "if foo &&\n  bar do\n  :ok\nend"
+      hash = Hashline.compute_line_hash("if foo &&")
+
+      edits = [%{op: :set, tag: %{line: 1, hash: hash}, content: ["if foo && bar do"]}]
+      {:ok, result} = Hashline.apply_edits(content, edits)
+
+      # Without autocorrect, merge detection is off - simple replacement
+      lines = String.split(result.content, "\n")
+      assert length(lines) == 4
+      assert hd(lines) == "if foo && bar do"
+    end
+
+    test "handles merge with operator change (|| to ??)" do
+      # Case B with operator change: prev has `||`, new content uses `??`
+      content = "val x =\n  fallback || default\nreturn x"
+      hash = Hashline.compute_line_hash("  fallback || default")
+
+      edits = [%{op: :set, tag: %{line: 2, hash: hash}, content: ["val x = fallback ?? default"]}]
+      {:ok, result} = Hashline.apply_edits(content, edits)
+
+      # Should detect merge with operator change via strip_merge_operator_chars
+      assert result.content == "val x = fallback ?? default\nreturn x"
+    end
+  end
+
+  # ============================================================================
+  # strip_trailing_continuation_tokens/1 and strip_merge_operator_chars/1
+  # ============================================================================
+
+  describe "strip_trailing_continuation_tokens/1" do
+    test "strips trailing &&" do
+      assert Hashline.strip_trailing_continuation_tokens("foo &&") == "foo "
+    end
+
+    test "strips trailing ||" do
+      assert Hashline.strip_trailing_continuation_tokens("bar ||") == "bar "
+    end
+
+    test "strips trailing comma" do
+      assert Hashline.strip_trailing_continuation_tokens("arg1,") == "arg1"
+    end
+
+    test "strips trailing =" do
+      assert Hashline.strip_trailing_continuation_tokens("let x =") == "let x "
+    end
+
+    test "leaves non-continuation strings unchanged" do
+      assert Hashline.strip_trailing_continuation_tokens("complete") == "complete"
+    end
+  end
+
+  describe "strip_merge_operator_chars/1" do
+    test "strips pipe and ampersand characters" do
+      assert Hashline.strip_merge_operator_chars("foo || bar && baz") == "foo  bar  baz"
+    end
+
+    test "strips question marks" do
+      assert Hashline.strip_merge_operator_chars("x ?? y") == "x  y"
+    end
+
+    test "leaves non-operator strings unchanged" do
+      assert Hashline.strip_merge_operator_chars("hello world") == "hello world"
+    end
+  end
+
+  # ============================================================================
   # apply_edits/2 - replace_text operation
   # ============================================================================
 

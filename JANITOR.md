@@ -3997,3 +3997,52 @@ Refactored the MarketIntel Commentary Pipeline module (`apps/market_intel/lib/ma
 - Add integration tests for WASM sidecar lifecycle (`CodingAgent.Wasm.SidecarSession`)
 - Fix the `normalize_optional_string` nil-handling bug in MarketIntel.Config
 - Add tests for remaining untested apps (agent_core, lemon_automation, lemon_channels)
+
+---
+
+### 2026-02-21 - Feature Enhancement: Pi/Oh-My-Pi Sync (Single-Line Merge Detection)
+**Work Area**: Feature Enhancement (Pi/Oh-My-Pi Sync)
+
+**Sources Checked**:
+- Pi (`~/dev/pi/packages/ai/src/models.generated.ts`) - 746 models, 22 providers
+- Oh-My-Pi (`~/dev/oh-my-pi/packages/coding-agent/src/patch/hashline.ts`) - Hashline edit mode
+- Oh-My-Pi (`~/dev/oh-my-pi/packages/coding-agent/src/lsp/`) - LSP write tool patterns
+
+**Findings**:
+- **Models**: Lemon's AI model registry (766 models, 23 providers) is fully up-to-date with Pi. Lemon has 20 MORE models than Pi, including DeepSeek, Qwen, Claude 4.6, and Gemini 3 families. The `openai-codex` provider (ChatGPT backend API) already exists via auto-generation from `@openai_models`. No new models to port.
+- **Hashline**: Oh-My-Pi has a single-line merge detection feature (`maybeExpandSingleLineMerge`) that was missing from Lemon. This detects when an LLM merges 2 adjacent lines into 1 during a `set` operation.
+- **LSP**: Oh-My-Pi has significantly more sophisticated LSP integration (batching, server multiplexing, custom linter clients, diagnostic deduplication). Too large for this session; noted for future work.
+
+**Feature Ported**:
+
+1. **Single-Line Merge Detection** (from Oh-My-Pi's `hashline.ts:915-960`)
+   - `maybe_expand_single_line_merge/4`: Detects when the LLM merged 2 adjacent lines into 1
+   - Case A: Model absorbed the next continuation line (e.g. `foo &&\n  bar` → `foo && bar`)
+   - Case B: Model absorbed the previous declaration line (e.g. `let x =\n  getValue()` → `let x = getValue()`)
+   - Uses `build_touched_lines/1` to avoid absorbing lines targeted by other edits in the batch
+   - Merge detection runs BEFORE other autocorrect transforms (indent restore, etc.) since merged content has different line context
+   - Gated behind `:coding_agent, :hashline_autocorrect` config flag (same as existing autocorrect)
+
+2. **Supporting Helpers**:
+   - `strip_trailing_continuation_tokens/1`: Strips `&&`, `||`, `??`, `=`, `,`, etc. from line endings
+   - `strip_merge_operator_chars/1`: Strips `|`, `&`, `?` for fuzzy matching when operators change
+   - `build_touched_lines/1`: Computes MapSet of line numbers targeted by all edits in batch
+
+**Tests Added (17 new tests)**:
+- 7 merge detection tests: Case A (next continuation), Case B (previous declaration), multi-line skip, touched-line skip, no-continuation skip, autocorrect-off skip, operator change
+- 5 `strip_trailing_continuation_tokens/1` tests: `&&`, `||`, `,`, `=`, non-continuation passthrough
+- 3 `strip_merge_operator_chars/1` tests: pipes/ampersands, question marks, passthrough
+- 2 implicit tests via existing autocorrect suite (regression)
+
+**Test Results**: 435 tests, 0 failures (full umbrella suite). 79 hashline tests, 0 failures.
+
+**Files Modified**:
+- `apps/coding_agent/lib/coding_agent/tools/hashline.ex` - merge detection + helpers, touched_lines threading
+- `apps/coding_agent/test/coding_agent/tools/hashline_test.exs` - 17 new tests
+
+**Architecture Note**: Threading `touched_lines` through `apply_sorted_edits` required adding a `touched` parameter to all 10 `apply_single_edit` clauses. Only the `:set` clause uses it; others pass it through as `_touched`. This is the cleanest functional approach without process dictionary hacks.
+
+**Future Work (from this analysis)**:
+- **LSP Batching**: Oh-My-Pi's batched LSP processing amortizes server startup across multi-file writes. High-impact, medium-effort port.
+- **Custom Linter Clients**: Oh-My-Pi supports Biome, SwiftLint, and generic LSP linter clients via an extensible interface.
+- **LSP Operations**: Oh-My-Pi supports hover, definition, references, rename, code actions, workspace symbols beyond just formatting.
