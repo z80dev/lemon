@@ -1,0 +1,50 @@
+{
+  "timestamp": "2026-02-22T21:43:40.100375+00:00",
+  "chat_id": -1003842984060,
+  "results": [
+    {
+      "test_id": "T25",
+      "name": "Tool use message",
+      "status": "partial",
+      "topic_id": 3756,
+      "duration_seconds": 123.11,
+      "error_message": "Bot replied but no tool status message found in topic",
+      "evidence": {
+        "sent_ids": [
+          3757
+        ],
+        "received_ids": [
+          3758
+        ],
+        "sent_texts": [
+          "/claude Run this bash command and tell me its output: sleep 5 && echo TOOL_STATUS_CHECK_OK"
+        ],
+        "received_texts": [
+          "The output is:\n\n```TOOL_STATUS_CHECK_OK```\n\nThe command slept for 5 seconds and then successfully printed the status message."
+        ],
+        "timestamps": {
+          "start": "2026-02-22T21:41:36.987532+00:00",
+          "end": "2026-02-22T21:43:40.099288+00:00"
+        },
+        "extra": {
+          "msg_3758": "The output is:\n\n```TOOL_STATUS_CHECK_OK```\n\nThe command slept for 5 seconds and then successfully printed the status message.",
+          "reply_count": "1",
+          "fetched_bot_msgs": "1",
+          "has_tool_calls_header": "False",
+          "has_running_status": "False",
+          "has_ok_status": "False",
+          "has_done_status": "False",
+          "has_multiple_msgs": "False"
+        }
+      }
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "passed": 0,
+    "partial": 1,
+    "failed": 0,
+    "error": 0,
+    "skipped": 0
+  }
+}

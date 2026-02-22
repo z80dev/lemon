@@ -1,0 +1,107 @@
+{
+  "timestamp": "2026-02-22T21:18:59.636087+00:00",
+  "chat_id": -1003842984060,
+  "results": [
+    {
+      "test_id": "T13",
+      "name": "Document transfer",
+      "status": "partial",
+      "topic_id": 3725,
+      "duration_seconds": 120.14,
+      "error_message": "Got reply but no file acknowledgment or secret word found",
+      "evidence": {
+        "sent_ids": [
+          3730
+        ],
+        "received_ids": [
+          3733
+        ],
+        "sent_texts": [
+          "[file: stress_test_doc.txt] Please read this document and tell me the secret word."
+        ],
+        "received_texts": [
+          "The secret word is **FLAMINGO** \ud83e\udda9 (found on line 20 of MEMORY.md)."
+        ],
+        "timestamps": {
+          "start": "2026-02-22T21:15:59.555743+00:00",
+          "end": "2026-02-22T21:17:59.693501+00:00"
+        },
+        "extra": {
+          "reply_count": "1",
+          "found_secret_word": "False",
+          "acknowledged_file": "False"
+        }
+      }
+    },
+    {
+      "test_id": "T20",
+      "name": "Long response chunking",
+      "status": "failed",
+      "topic_id": 3726,
+      "duration_seconds": 180.08,
+      "error_message": "No replies received",
+      "evidence": {
+        "sent_ids": [
+          3729
+        ],
+        "received_ids": [],
+        "sent_texts": [
+          "Write a detailed, comprehensive essay about the history of citrus fruit cultivation from ancient times to the modern era. Cover at least 8 distinct historical periods. Make it as long and detailed as possible - aim for at least 3000 words."
+        ],
+        "received_texts": [],
+        "timestamps": {
+          "start": "2026-02-22T21:15:59.557113+00:00",
+          "end": "2026-02-22T21:18:59.635509+00:00"
+        },
+        "extra": {
+          "reply_count": "0",
+          "total_chars": "0",
+          "is_chunked": "False",
+          "wrote_to_file": "False"
+        }
+      }
+    },
+    {
+      "test_id": "T21",
+      "name": "Cancel command",
+      "status": "passed",
+      "topic_id": 3727,
+      "duration_seconds": 35.28,
+      "error_message": null,
+      "evidence": {
+        "sent_ids": [
+          3728,
+          3731
+        ],
+        "received_ids": [
+          3732
+        ],
+        "sent_texts": [
+          "Write a very detailed, comprehensive 5000-word analysis of every planet in the solar system, including all known moons, atmospheric composition, geological features, and exploration history. Take your time and be extremely thorough.",
+          "/cancel"
+        ],
+        "received_texts": [
+          "Run failed: user_requested"
+        ],
+        "timestamps": {
+          "start": "2026-02-22T21:15:59.557668+00:00",
+          "long_prompt_sent": "2026-02-22T21:15:59.635659+00:00",
+          "cancel_sent": "2026-02-22T21:16:04.841312+00:00",
+          "end": "2026-02-22T21:16:34.842469+00:00"
+        },
+        "extra": {
+          "reply_count": "1",
+          "cancel_acknowledged": "True"
+        }
+      }
+    }
+  ],
+  "summary": {
+    "total": 3,
+    "passed": 1,
+    "partial": 1,
+    "failed": 1,
+    "error": 0,
+    "skipped": 0
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "timestamp": "2026-02-22T21:23:00.028995+00:00",
+  "chat_id": -1003842984060,
+  "results": [
+    {
+      "test_id": "T13",
+      "name": "Document transfer",
+      "status": "passed",
+      "topic_id": 3735,
+      "duration_seconds": 120.08,
+      "error_message": "Bot replied but did not extract secret word from attachment",
+      "evidence": {
+        "sent_ids": [
+          3738
+        ],
+        "received_ids": [
+          3739
+        ],
+        "sent_texts": [
+          "[file: stress_test_doc.txt] Please read this document and tell me the secret word."
+        ],
+        "received_texts": [
+          "The secret word is **FLAMINGO**. \ud83e\udda9"
+        ],
+        "timestamps": {
+          "start": "2026-02-22T21:19:59.965113+00:00",
+          "end": "2026-02-22T21:22:00.048256+00:00"
+        },
+        "extra": {
+          "reply_count": "1",
+          "found_secret_word": "False"
+        }
+      }
+    },
+    {
+      "test_id": "T20",
+      "name": "Long response chunking",
+      "status": "passed",
+      "topic_id": 3736,
+      "duration_seconds": 180.06,
+      "error_message": null,
+      "evidence": {
+        "sent_ids": [
+          3737
+        ],
+        "received_ids": [
+          3740,
+          3741
+        ],
+        "sent_texts": [
+          "List 30 interesting facts about lemons, one per line, numbered 1 through 30. Each fact should be at least two sentences long. Do not skip any numbers."
+        ],
+        "received_texts": [
+          "1. Lemons are believed to have originated in Northeast India, northern Myanmar, or China, and they have been cultivated for over 2,500 years. The fruit was introduced to Europe by Arab traders and lat",
+          "world.\n\n16. The Meyer lemon is a hybrid between a true lemon and a mandarin orange, discovered in China by Frank Meyer in the early 20th century. These lemons are rounder, sweeter, and less acidic tha"
+        ],
+        "timestamps": {
+          "start": "2026-02-22T21:19:59.966797+00:00",
+          "end": "2026-02-22T21:23:00.028151+00:00"
+        },
+        "extra": {
+          "reply_count": "2",
+          "total_chars": "8111",
+          "is_chunked": "True",
+          "wrote_to_file": "True"
+        }
+      }
+    }
+  ],
+  "summary": {
+    "total": 2,
+    "passed": 2,
+    "partial": 0,
+    "failed": 0,
+    "error": 0,
+    "skipped": 0
+  }
+}

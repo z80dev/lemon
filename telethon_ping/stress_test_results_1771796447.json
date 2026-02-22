@@ -1,0 +1,50 @@
+{
+  "timestamp": "2026-02-22T21:40:47.234181+00:00",
+  "chat_id": -1003842984060,
+  "results": [
+    {
+      "test_id": "T25",
+      "name": "Tool use message",
+      "status": "partial",
+      "topic_id": 3753,
+      "duration_seconds": 123.15,
+      "error_message": "Bot replied but no tool status message found in topic",
+      "evidence": {
+        "sent_ids": [
+          3754
+        ],
+        "received_ids": [
+          3755
+        ],
+        "sent_texts": [
+          "/claude Run `echo TOOL_STATUS_CHECK` in bash and tell me the output."
+        ],
+        "received_texts": [
+          "The output is:\n\n```TOOL_STATUS_CHECK```"
+        ],
+        "timestamps": {
+          "start": "2026-02-22T21:38:44.070599+00:00",
+          "end": "2026-02-22T21:40:47.233388+00:00"
+        },
+        "extra": {
+          "msg_3755": "The output is:\n\n```TOOL_STATUS_CHECK```",
+          "reply_count": "1",
+          "fetched_bot_msgs": "1",
+          "has_tool_calls_header": "False",
+          "has_running_status": "False",
+          "has_ok_status": "False",
+          "has_done_status": "False",
+          "has_multiple_msgs": "False"
+        }
+      }
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "passed": 0,
+    "partial": 1,
+    "failed": 0,
+    "error": 0,
+    "skipped": 0
+  }
+}

@@ -33,11 +33,7 @@ defmodule LemonControlPlane.Methods.SystemPresence do
 
   defp count_connections do
     if Code.ensure_loaded?(LemonControlPlane.WS.ConnectionSup) do
-      try do
-        DynamicSupervisor.count_children(LemonControlPlane.WS.ConnectionSup)[:active] || 0
-      rescue
-        _ -> 0
-      end
+      safe_active_count(LemonControlPlane.WS.ConnectionSup)
     else
       0
     end
@@ -45,13 +41,25 @@ defmodule LemonControlPlane.Methods.SystemPresence do
 
   defp count_active_runs do
     if Code.ensure_loaded?(LemonRouter.RunSupervisor) do
-      try do
-        DynamicSupervisor.count_children(LemonRouter.RunSupervisor)[:active] || 0
-      rescue
-        _ -> 0
-      end
+      safe_active_count(LemonRouter.RunSupervisor)
     else
       0
+    end
+  end
+
+  defp safe_active_count(supervisor) do
+    case Process.whereis(supervisor) do
+      pid when is_pid(pid) ->
+        try do
+          DynamicSupervisor.count_children(pid)[:active] || 0
+        rescue
+          _ -> 0
+        catch
+          :exit, _ -> 0
+        end
+
+      _ ->
+        0
     end
   end
 

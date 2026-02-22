@@ -19,7 +19,7 @@ defmodule CodingAgent.Tools.PollJobs do
   Returns the tool definition for the tool registry.
   """
   @spec tool(String.t()) :: map()
-  def tool(_cwd) do
+  def tool(cwd) do
     %{
       name: "poll_jobs",
       description: """
@@ -45,7 +45,7 @@ defmodule CodingAgent.Tools.PollJobs do
         },
         "required" => []
       },
-      execute: &execute(&1, &2, &3, &4, _cwd, [])
+      execute: &execute(&1, &2, &3, &4, cwd, [])
     }
   end
 
@@ -65,7 +65,7 @@ defmodule CodingAgent.Tools.PollJobs do
         ) :: AgentToolResult.t()
   def execute(_call_id, params, signal, _on_update, _cwd, _opts) do
     job_ids = Map.get(params, "job_ids", [])
-    timeout_ms = Map.get(params, "timeout", 60) * 1_000
+    timeout_ms = Map.get(params, "timeout", div(@default_timeout_ms, 1000)) * 1_000
 
     # Normalize job_ids to a list of strings
     job_ids =
