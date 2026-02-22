@@ -1,3 +1,51 @@
+### 2026-02-22 - Refactoring: O(n²) List Operations & Code Duplication
+**Work Area**: Refactoring / Performance / Code Quality
+
+**Summary**:
+Scanned codebase for code smells and performance anti-patterns. Fixed O(n²) list concatenations and extracted duplicated key access patterns.
+
+**Code Smells Found**:
+1. **O(n²) list concatenation** in Telegram transport: `buffer.messages ++ [entry]` in debounce buffer
+2. **O(n²) list concatenation** in Telegram API: `parts ++ [...]` in multipart body builders
+3. **O(n²) list concatenation** in email inbound: `header_lines ++ [references_line]`
+4. **Duplicated key access pattern**: `Map.get(map, key) || Map.get(map, Atom.to_string(key))` in 10+ files
+
+**Refactoring Done**:
+
+1. **Telegram Transport** (`434cd375`):
+   - Fixed debounce buffer: prepend + Enum.reverse at consumption
+   - Fixed media group buffer: prepend + Enum.reverse
+   - Consolidated duplicate `get_field/2` into existing `map_get/2`
+   - Files: `apps/lemon_channels/lib/lemon_channels/adapters/telegram/transport.ex`
+
+2. **Telegram API** (`c4718751`):
+   - Fixed `build_media_group_multipart/5`: prepend pattern instead of `++`
+   - Fixed `build_media_multipart/6`: prepend pattern instead of `++`
+   - Files: `apps/lemon_channels/lib/lemon_channels/telegram/api.ex`
+
+3. **Email Inbound** (`9ef1f031`):
+   - Fixed `build_prompt/3`: use `Enum.concat/1` instead of multiple `++`
+   - Files: `apps/lemon_gateway/lib/lemon_gateway/transports/email/inbound.ex`
+
+4. **MapHelpers Extraction** (`0be92a74`):
+   - Created `LemonCore.MapHelpers` with `get_key/2` helper
+   - Replaced usages in: `secrets.ex`, `session_live.ex`, `tool_call_component.ex`, `telegram/transport.ex`
+   - Added 31 comprehensive tests
+   - Files: `apps/lemon_core/lib/lemon_core/map_helpers.ex` (NEW), `apps/lemon_core/test/lemon_core/map_helpers_test.exs` (NEW)
+
+**Test Results**:
+- MapHelpers tests: 31 tests, 0 failures
+- Telegram tests: 57 tests, 0 failures
+- All existing tests pass
+
+**Commits**:
+- `c4718751` - perf(telegram): fix O(n²) list concatenation in multipart body builders
+- `434cd375` - perf(telegram): fix O(n²) list concatenation in debounce and media group buffers
+- `9ef1f031` - perf(email): fix O(n²) list concatenation in inbound build_prompt
+- `0be92a74` - refactor(core): extract LemonCore.MapHelpers to eliminate map key access duplication
+
+---
+
 ### 2026-02-22 - Feature Enhancement: Pi/Oh-My-Pi Sync (Hashline + Missing Features)
 **Work Area**: Pi/Oh-My-Pi Upstream Sync
 

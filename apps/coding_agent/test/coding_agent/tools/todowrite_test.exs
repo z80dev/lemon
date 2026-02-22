@@ -1,4 +1,4 @@
-defmodule CodingAgent.Tools.TodoWriteTest do
+defmodule CodingAgent.Tools.TodoWriteToolTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.Tools.TodoWrite
