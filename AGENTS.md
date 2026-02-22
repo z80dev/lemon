@@ -27,6 +27,41 @@
 
 ---
 
+## Parallel Work & Git Worktrees
+
+When working on multiple tasks in parallel (either as the same agent or multiple agents), **use Git worktrees to avoid file editing conflicts**.
+
+### Workflow:
+
+1. **Create a worktree for each parallel task:**
+   ```bash
+   git worktree add ../lemon-task-name -b feature/task-name
+   cd ../lemon-task-name
+   ```
+
+2. **Work in isolation** — Each worktree is an independent checkout with its own branch, working directory, and Elixir build artifacts.
+
+3. **Merge when complete** — Once the work is done and tested, merge back to the main branch:
+   ```bash
+   cd /path/to/main/lemon
+   git merge feature/task-name
+   git worktree remove ../lemon-task-name
+   git branch -d feature/task-name
+   ```
+
+### Why Worktrees?
+
+- **No file lock conflicts** — Multiple agents can edit different files simultaneously without stepping on each other
+- **Clean build contexts** — Each worktree maintains separate `_build/` and `deps/` (symlinked or independent)
+- **Easy cleanup** — Remove worktrees when done without affecting the main repo
+- **Git-native** — No special tooling required, works with standard Git workflows
+
+### Golden Rule:
+
+> **Never have multiple agents editing the same working directory simultaneously.** Always use worktrees for parallel tasks.
+
+---
+
 ## Documentation Contract ⚠️
 
 > **Work is not complete until it is adequately documented.**
