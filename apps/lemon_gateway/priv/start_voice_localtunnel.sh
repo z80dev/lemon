@@ -4,17 +4,17 @@
 #
 # Usage: ./start_voice_localtunnel.sh [subdomain]
 #
-# Loads API keys from ~/.lemon/secrets/ and starts:
+# Starts:
 #   1. localtunnel on port 4047
-#   2. Configures Twilio webhook to the tunnel URL
-#   3. Starts Lemon with voice enabled
+#   2. Configures Twilio webhook to the tunnel URL (requires TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN env vars)
+#   3. Starts Lemon with voice enabled (loads secrets via LemonCore.Secrets)
 #
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LEMON_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-SUBDOMAIN="${1:-zeebot-voice}"
+SUBDOMAIN="${1:-lemon-voice}"
 
 # Colors
 GREEN='\033[0;32m'
@@ -37,50 +37,20 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # ---------------------------------------------------------------------------
-# Load secrets from ~/.lemon/secrets/
+# Check Twilio credentials (needed for the webhook API call)
+# The app itself loads secrets via LemonCore.Secrets at runtime.
 # ---------------------------------------------------------------------------
-load_secrets() {
-    local secrets_dir="$HOME/.lemon/secrets"
-
-    # Load Twilio credentials
-    if [[ -f "$secrets_dir/twilio_account_sid" ]]; then
-        TWILIO_ACCOUNT_SID=$(cat "$secrets_dir/twilio_account_sid" | tr -d '[:space:]')
-    fi
-    if [[ -f "$secrets_dir/twilio_auth_token" ]]; then
-        TWILIO_AUTH_TOKEN=$(cat "$secrets_dir/twilio_auth_token" | tr -d '[:space:]')
-    fi
+check_twilio_creds() {
     if [[ -z "$TWILIO_ACCOUNT_SID" || -z "$TWILIO_AUTH_TOKEN" ]]; then
         echo -e "${RED}ERROR: Twilio credentials not found${NC}"
-        echo "  Run: mix lemon.secrets.init"
-        echo "  Expected files: $secrets_dir/twilio_account_sid, $secrets_dir/twilio_auth_token"
-        echo "  Or set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN env vars"
+        echo "  Set these env vars for the webhook API call:"
+        echo "    export TWILIO_ACCOUNT_SID=your_account_sid"
+        echo "    export TWILIO_AUTH_TOKEN=your_auth_token"
+        echo ""
+        echo "  The app loads its own secrets via LemonCore.Secrets."
+        echo "  Store them with: mix lemon.voice.secrets"
         exit 1
     fi
-
-    # Load Deepgram
-    if [[ -f "$secrets_dir/deepgram_api_key" ]]; then
-        DEEPGRAM_API_KEY=$(cat "$secrets_dir/deepgram_api_key" | tr -d '[:space:]')
-    elif [[ -z "$DEEPGRAM_API_KEY" ]]; then
-        echo -e "${RED}ERROR: Deepgram API key not found${NC}"
-        echo "  Run: mix lemon.secrets.init"
-        echo "  Expected file: $secrets_dir/deepgram_api_key"
-        echo "  Or set DEEPGRAM_API_KEY env var"
-        exit 1
-    fi
-
-    # Load ElevenLabs
-    if [[ -f "$secrets_dir/elevenlabs_api_key" ]]; then
-        ELEVENLABS_API_KEY=$(cat "$secrets_dir/elevenlabs_api_key" | tr -d '[:space:]')
-    elif [[ -z "$ELEVENLABS_API_KEY" ]]; then
-        echo -e "${RED}ERROR: ElevenLabs API key not found${NC}"
-        echo "  Run: mix lemon.secrets.init"
-        echo "  Expected file: $secrets_dir/elevenlabs_api_key"
-        echo "  Or set ELEVENLABS_API_KEY env var"
-        exit 1
-    fi
-
-    # Export for Lemon to use
-    export TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN DEEPGRAM_API_KEY ELEVENLABS_API_KEY
 }
 
 # ---------------------------------------------------------------------------
@@ -158,14 +128,11 @@ echo -e "${BLUE}========================================${NC}"
 echo ""
 
 check_tools
-load_secrets
+check_twilio_creds
 
-# Show loaded secrets (masked)
-echo -e "${GREEN}Secrets loaded:${NC}"
-echo "  Twilio SID:    ${TWILIO_ACCOUNT_SID:0:8}..."
-echo "  Twilio Token:  ${TWILIO_AUTH_TOKEN:0:4}..."
-echo "  Deepgram:      ${DEEPGRAM_API_KEY:0:8}..."
-echo "  ElevenLabs:    ${ELEVENLABS_API_KEY:0:8}..."
+echo -e "${GREEN}Twilio credentials loaded (for webhook setup):${NC}"
+echo "  Account SID: ${TWILIO_ACCOUNT_SID:0:8}..."
+echo "  Voice secrets will be loaded by the app via LemonCore.Secrets"
 echo ""
 
 # Start localtunnel

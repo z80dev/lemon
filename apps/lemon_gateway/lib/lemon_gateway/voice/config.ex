@@ -16,8 +16,7 @@ defmodule LemonGateway.Voice.Config do
   """
   @spec twilio_account_sid() :: String.t() | nil
   def twilio_account_sid do
-    Application.get_env(:lemon_gateway, :twilio_account_sid) ||
-      System.get_env("TWILIO_ACCOUNT_SID")
+    resolve_secret("twilio_account_sid", :twilio_account_sid, "TWILIO_ACCOUNT_SID")
   end
 
   @doc """
@@ -25,8 +24,7 @@ defmodule LemonGateway.Voice.Config do
   """
   @spec twilio_auth_token() :: String.t() | nil
   def twilio_auth_token do
-    Application.get_env(:lemon_gateway, :twilio_auth_token) ||
-      System.get_env("TWILIO_AUTH_TOKEN")
+    resolve_secret("twilio_auth_token", :twilio_auth_token, "TWILIO_AUTH_TOKEN")
   end
 
   @doc """
@@ -43,8 +41,7 @@ defmodule LemonGateway.Voice.Config do
   """
   @spec deepgram_api_key() :: String.t() | nil
   def deepgram_api_key do
-    Application.get_env(:lemon_gateway, :deepgram_api_key) ||
-      System.get_env("DEEPGRAM_API_KEY")
+    resolve_secret("deepgram_api_key", :deepgram_api_key, "DEEPGRAM_API_KEY")
   end
 
   @doc """
@@ -52,8 +49,7 @@ defmodule LemonGateway.Voice.Config do
   """
   @spec elevenlabs_api_key() :: String.t() | nil
   def elevenlabs_api_key do
-    Application.get_env(:lemon_gateway, :elevenlabs_api_key) ||
-      System.get_env("ELEVENLABS_API_KEY")
+    resolve_secret("elevenlabs_api_key", :elevenlabs_api_key, "ELEVENLABS_API_KEY")
   end
 
   @doc """
@@ -148,5 +144,16 @@ defmodule LemonGateway.Voice.Config do
 
   defp test_env? do
     Code.ensure_loaded?(Mix) and Mix.env() == :test
+  end
+
+  defp resolve_secret(secret_name, app_key, env_var) do
+    case LemonCore.Secrets.resolve(secret_name) do
+      {:ok, value, _source} ->
+        value
+
+      {:error, _} ->
+        Application.get_env(:lemon_gateway, app_key) ||
+          System.get_env(env_var)
+    end
   end
 end

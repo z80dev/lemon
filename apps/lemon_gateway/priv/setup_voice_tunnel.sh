@@ -11,7 +11,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SUBDOMAIN="${1:-zeebot-voice}"
+SUBDOMAIN="${1:-lemon-voice}"
 
 # Colors
 GREEN='\033[0;32m'
@@ -34,27 +34,19 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # ---------------------------------------------------------------------------
-# Load secrets from ~/.lemon/secrets/
+# Check Twilio credentials (needed for the webhook API call)
 # ---------------------------------------------------------------------------
-load_secrets() {
-    local secrets_dir="$HOME/.lemon/secrets"
-
-    # Load Twilio credentials
-    if [[ -f "$secrets_dir/twilio_account_sid" ]]; then
-        TWILIO_ACCOUNT_SID=$(cat "$secrets_dir/twilio_account_sid" | tr -d '[:space:]')
-    fi
-    if [[ -f "$secrets_dir/twilio_auth_token" ]]; then
-        TWILIO_AUTH_TOKEN=$(cat "$secrets_dir/twilio_auth_token" | tr -d '[:space:]')
-    fi
+check_twilio_creds() {
     if [[ -z "$TWILIO_ACCOUNT_SID" || -z "$TWILIO_AUTH_TOKEN" ]]; then
         echo -e "${RED}ERROR: Twilio credentials not found${NC}"
-        echo "  Run: mix lemon.secrets.init"
-        echo "  Expected files: $secrets_dir/twilio_account_sid, $secrets_dir/twilio_auth_token"
-        echo "  Or set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN env vars"
+        echo "  Set these env vars for the webhook API call:"
+        echo "    export TWILIO_ACCOUNT_SID=your_account_sid"
+        echo "    export TWILIO_AUTH_TOKEN=your_auth_token"
+        echo ""
+        echo "  Or store them with: mix lemon.secrets.set twilio_account_sid VALUE"
+        echo "  and retrieve with:  mix lemon.secrets.get twilio_account_sid"
         exit 1
     fi
-
-    export TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN
 }
 
 # ---------------------------------------------------------------------------
@@ -127,7 +119,7 @@ echo -e "${BLUE}========================================${NC}"
 echo ""
 
 check_tools
-load_secrets
+check_twilio_creds
 
 # Show loaded secrets (masked)
 echo -e "${GREEN}Twilio credentials loaded:${NC}"

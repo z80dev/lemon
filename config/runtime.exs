@@ -42,31 +42,6 @@ if is_binary(uploads_dir) and uploads_dir != "" do
   config :lemon_web, :uploads_dir, uploads_dir
 end
 
-# Load voice API keys from ~/.lemon/secrets/ in dev
-if config_env() == :dev do
-  secrets_dir = Path.expand("~/.lemon/secrets")
-
-  read_secret = fn name ->
-    case File.read(Path.join(secrets_dir, name)) do
-      {:ok, content} -> String.trim(content)
-      _ -> nil
-    end
-  end
-
-  voice_config =
-    [
-      twilio_account_sid: read_secret.("twilio_account_sid"),
-      twilio_auth_token: read_secret.("twilio_auth_token"),
-      deepgram_api_key: read_secret.("deepgram_api_key"),
-      elevenlabs_api_key: read_secret.("elevenlabs_api_key")
-    ]
-    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
-
-  if voice_config != [] do
-    config :lemon_gateway, voice_config
-  end
-end
-
 if config_env() == :prod do
   host = System.get_env("LEMON_WEB_HOST") || "localhost"
   port = String.to_integer(System.get_env("LEMON_WEB_PORT") || "4080")
