@@ -368,16 +368,14 @@ defmodule LemonChannels.Telegram.API do
 
     media_json = Jason.encode!(Enum.map(media_entries, & &1.media))
 
-    parts = []
-
-    parts =
-      parts ++
-        [
-          boundary_line,
-          "Content-Disposition: form-data; name=\"chat_id\"\r\n\r\n",
-          to_string(chat_id),
-          "\r\n"
-        ]
+    parts = [
+      [
+        boundary_line,
+        "Content-Disposition: form-data; name=\"chat_id\"\r\n\r\n",
+        to_string(chat_id),
+        "\r\n"
+      ]
+    ]
 
     parts =
       case opts[:reply_to_message_id] || opts["reply_to_message_id"] do
@@ -385,13 +383,15 @@ defmodule LemonChannels.Telegram.API do
           parts
 
         v ->
-          parts ++
+          [
             [
               boundary_line,
               "Content-Disposition: form-data; name=\"reply_to_message_id\"\r\n\r\n",
               to_string(v),
               "\r\n"
             ]
+            | parts
+          ]
       end
 
     parts =
@@ -400,31 +400,34 @@ defmodule LemonChannels.Telegram.API do
           parts
 
         v ->
-          parts ++
+          [
             [
               boundary_line,
               "Content-Disposition: form-data; name=\"message_thread_id\"\r\n\r\n",
               to_string(v),
               "\r\n"
             ]
+            | parts
+          ]
       end
 
+    parts = [
+      [
+        boundary_line,
+        "Content-Disposition: form-data; name=\"media\"\r\n\r\n",
+        media_json,
+        "\r\n"
+      ]
+      | parts
+    ]
+
     parts =
-      parts ++
+      Enum.reduce(media_entries, parts, fn %{attachment: attachment, path: path}, acc ->
+        filename = Path.basename(path)
+        mime_type = mime_type_for_path(path, "image/png")
+        bytes = File.read!(path)
+
         [
-          boundary_line,
-          "Content-Disposition: form-data; name=\"media\"\r\n\r\n",
-          media_json,
-          "\r\n"
-        ]
-
-    parts =
-      parts ++
-        Enum.flat_map(media_entries, fn %{attachment: attachment, path: path} ->
-          filename = Path.basename(path)
-          mime_type = mime_type_for_path(path, "image/png")
-          bytes = File.read!(path)
-
           [
             boundary_line,
             "Content-Disposition: form-data; name=\"",
@@ -438,27 +441,27 @@ defmodule LemonChannels.Telegram.API do
             bytes,
             "\r\n"
           ]
-        end)
+          | acc
+        ]
+      end)
 
-    parts = parts ++ [end_boundary]
+    parts = [end_boundary | parts]
 
-    {IO.iodata_to_binary(parts), "multipart/form-data; boundary=#{boundary}"}
+    {IO.iodata_to_binary(Enum.reverse(parts)), "multipart/form-data; boundary=#{boundary}"}
   end
 
   defp build_media_multipart(boundary, chat_id, field_name, file, opts, default_mime) do
     boundary_line = "--" <> boundary <> "\r\n"
     end_boundary = "--" <> boundary <> "--\r\n"
 
-    parts = []
-
-    parts =
-      parts ++
-        [
-          boundary_line,
-          "Content-Disposition: form-data; name=\"chat_id\"\r\n\r\n",
-          to_string(chat_id),
-          "\r\n"
-        ]
+    parts = [
+      [
+        boundary_line,
+        "Content-Disposition: form-data; name=\"chat_id\"\r\n\r\n",
+        to_string(chat_id),
+        "\r\n"
+      ]
+    ]
 
     parts =
       case opts[:reply_to_message_id] || opts["reply_to_message_id"] do
@@ -466,13 +469,15 @@ defmodule LemonChannels.Telegram.API do
           parts
 
         v ->
-          parts ++
+          [
             [
               boundary_line,
               "Content-Disposition: form-data; name=\"reply_to_message_id\"\r\n\r\n",
               to_string(v),
               "\r\n"
             ]
+            | parts
+          ]
       end
 
     parts =
@@ -481,13 +486,15 @@ defmodule LemonChannels.Telegram.API do
           parts
 
         v ->
-          parts ++
+          [
             [
               boundary_line,
               "Content-Disposition: form-data; name=\"message_thread_id\"\r\n\r\n",
               to_string(v),
               "\r\n"
             ]
+            | parts
+          ]
       end
 
     parts =
@@ -496,13 +503,15 @@ defmodule LemonChannels.Telegram.API do
           parts
 
         v when is_binary(v) and v != "" ->
-          parts ++
+          [
             [
               boundary_line,
               "Content-Disposition: form-data; name=\"caption\"\r\n\r\n",
               v,
               "\r\n"
             ]
+            | parts
+          ]
 
         _ ->
           parts
@@ -520,24 +529,25 @@ defmodule LemonChannels.Telegram.API do
           {"file.bin", default_mime, ""}
       end
 
-    parts =
-      parts ++
-        [
-          boundary_line,
-          "Content-Disposition: form-data; name=\"",
-          field_name,
-          "\"; filename=\"",
-          filename,
-          "\"\r\n",
-          "Content-Type: ",
-          mime_type,
-          "\r\n\r\n",
-          bytes,
-          "\r\n",
-          end_boundary
-        ]
+    parts = [
+      end_boundary,
+      [
+        boundary_line,
+        "Content-Disposition: form-data; name=\"",
+        field_name,
+        "\"; filename=\"",
+        filename,
+        "\"\r\n",
+        "Content-Type: ",
+        mime_type,
+        "\r\n\r\n",
+        bytes,
+        "\r\n"
+      ]
+      | parts
+    ]
 
-    {IO.iodata_to_binary(parts), "multipart/form-data; boundary=#{boundary}"}
+    {IO.iodata_to_binary(Enum.reverse(parts)), "multipart/form-data; boundary=#{boundary}"}
   end
 
   defp mime_type_for_path(path, default_mime) when is_binary(path) and is_binary(default_mime) do
