@@ -1,4 +1,4 @@
-defmodule Ai.ProviderRegistryTest do
+defmodule Ai.ProviderRegistryComprehensiveTest do
   @moduledoc """
   Comprehensive tests for the Ai.ProviderRegistry module.
 
@@ -337,10 +337,10 @@ defmodule Ai.ProviderRegistryTest do
     test "handles special characters in api_id atoms" do
       special_ids = [
         :"api-with-dashes",
-        :"api_with_underscores",
+        :api_with_underscores,
         :"api.with.dots",
-        :"api123",
-        :"API_UPPERCASE"
+        :api123,
+        :API_UPPERCASE
       ]
 
       for {api_id, idx} <- Enum.with_index(special_ids) do
@@ -379,7 +379,7 @@ defmodule Ai.ProviderRegistryTest do
     end
 
     test "registry survives multiple clear/init cycles" do
-      for i <- 1..10 do
+      for _i <- 1..10 do
         ProviderRegistry.register(:test_api, TestProvider1)
         assert {:ok, TestProvider1} = ProviderRegistry.get(:test_api)
 

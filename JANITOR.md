@@ -1,3 +1,101 @@
+### 2026-02-22 - Integration Review: Parallel Task Validation + Cleanup
+**Work Area**: Integration Review / Refactoring
+
+**Scope Reviewed**:
+- Task 1 (`cef40529`): Pi/Oh-My-Pi sync verification
+- Task 2 (`fc324e6c`): AI test expansion
+- Task 3: Refactoring follow-up (original run failed with HTTP 400)
+
+**Findings**:
+- Task 1 was accurate: no missing upstream sync work identified, no additional code changes required.
+- Task 2 delivered expected coverage in the three target files:
+  - `apps/ai/test/ai/provider_registry_test.exs`: 39 tests
+  - `apps/ai/test/ai/provider_test.exs`: 19 tests
+  - `apps/ai/test/providers/google_shared_test.exs`: 84 tests
+  - Total: 142 tests
+- No high-impact code smell remained in these additions; only low-risk cleanup was needed.
+
+**Refactoring Follow-up Applied**:
+- `apps/ai/test/ai/provider_registry_test.exs`
+  - Renamed module to avoid duplicate test-module redefinition conflicts.
+  - Replaced quoted atom literals with standard atom syntax.
+  - Removed unused loop variable.
+- `apps/ai/test/ai/provider_test.exs`
+  - Removed unused local bindings in stream options test.
+- `apps/ai/test/providers/google_shared_test.exs`
+  - Renamed module to avoid duplicate test-module redefinition conflicts.
+  - Removed unused aliases.
+- Ran `mix format` on all three reviewed test files.
+
+**Validation Results**:
+- `mix compile --warnings-as-errors`: pass
+- Targeted AI tests:
+  - `mix test apps/ai/test/ai/provider_registry_test.exs apps/ai/test/ai/provider_test.exs apps/ai/test/providers/google_shared_test.exs`
+  - Result: 142 tests, 0 failures
+- Full suite:
+  - `mix test`
+  - Result: pass (0 failures)
+
+**Files Updated in This Integration Pass**:
+- `apps/ai/test/ai/provider_registry_test.exs`
+- `apps/ai/test/ai/provider_test.exs`
+- `apps/ai/test/providers/google_shared_test.exs`
+- `JANITOR.md`
+
+---
+
+### 2026-02-24 - Test Expansion: AI Module Coverage
+**Work Area**: Test Expansion
+
+**Analysis**:
+- Scanned lemon_core, coding_agent, and ai apps for untested modules
+- Found 3 AI modules without corresponding test files:
+  - `Ai.Provider` - behaviour definition module
+  - `Ai.ProviderRegistry` - persistent_term-based registry
+  - `Ai.Providers.GoogleShared` - shared utilities for Google providers
+
+**New Test Files Created (3 files, 142 new tests)**:
+
+1. **`apps/ai/test/ai/provider_registry_test.exs`** (39 tests)
+   - Tests for `Ai.ProviderRegistry` - persistent_term-based provider registry
+   - Covers: init/0, register/2, get/1, get!/1, list/0, registered?/1, unregister/1, clear/0, initialized?/0
+   - Tests initialization, registration, lookup, listing, unregistration
+   - Tests edge cases: many registrations, special characters in api_id atoms, concurrent reads
+   - Tests real-world usage patterns: typical provider registration workflow, provider lookup with fallback
+
+2. **`apps/ai/test/ai/provider_test.exs`** (19 tests)
+   - Tests for `Ai.Provider` behaviour contract
+   - Covers: behaviour callbacks (stream/3, provider_id/0, api_id/0, get_env_api_key/0)
+   - Tests with ValidProvider and MinimalProvider test implementations
+   - Tests real provider implementations: Anthropic, OpenAIResponses, Google, GoogleVertex, GoogleGeminiCli, Bedrock, AzureOpenAIResponses, OpenAICompletions, OpenAICodexResponses
+   - Tests provider metadata consistency: unique api_ids, provider_id/api_id semantics
+   - Tests StreamOptions handling
+
+3. **`apps/ai/test/providers/google_shared_test.exs`** (84 tests)
+   - Tests for `Ai.Providers.GoogleShared` - shared utilities for Google providers
+   - Covers: thinking_part?/1, retain_thought_signature/2, valid_thought_signature?/1, resolve_thought_signature/2
+   - Covers: requires_tool_call_id?/1, convert_messages/2, convert_tools/1, map_tool_choice/1
+   - Covers: map_stop_reason/1, sanitize_surrogates/1, normalize_sse_message/1
+   - Covers: default_budgets_2_5_pro/0, default_budgets_2_5_flash/0, get_thinking_budget/3
+   - Covers: gemini_3_pro?/1, gemini_3_flash?/1, get_gemini_3_thinking_level/2, clamp_reasoning/1
+   - Covers: extract_retry_delay/2, retryable_error?/2, extract_error_message/1, calculate_cost/2
+   - Tests content conversion, tool conversion, stop reason mapping, unicode sanitization
+   - Tests SSE helpers, thinking budget helpers, retry helpers, cost calculation
+
+**Test Results**: All 142 new tests pass
+- ProviderRegistry tests: 39 tests, 0 failures
+- Provider tests: 19 tests, 0 failures
+- GoogleShared tests: 84 tests, 0 failures
+
+**Files Changed**: 3 new test files across 1 app
+- `apps/ai/test/ai/provider_registry_test.exs` - NEW (39 tests)
+- `apps/ai/test/ai/provider_test.exs` - NEW (19 tests)
+- `apps/ai/test/providers/google_shared_test.exs` - NEW (84 tests)
+
+**Commit**: `fc324e6c` - test: add comprehensive tests for untested AI modules
+
+---
+
 ### 2026-02-24 - Pi/Oh-My-Pi Upstream Sync: Verification Complete
 **Work Area**: Feature Enhancement (Pi/Oh-My-Pi Sync)
 

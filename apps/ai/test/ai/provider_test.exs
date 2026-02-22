@@ -222,6 +222,7 @@ defmodule Ai.ProviderTest do
 
       for provider <- providers do
         api_id = provider.api_id()
+
         assert api_id in expected_api_ids,
                "#{provider}.api_id() returned unexpected value: #{inspect(api_id)}"
       end
@@ -234,20 +235,6 @@ defmodule Ai.ProviderTest do
 
   describe "stream options handling" do
     test "providers accept StreamOptions struct" do
-      model = %Model{
-        id: "test-model",
-        name: "Test",
-        api: :test,
-        provider: :test,
-        reasoning: false,
-        input: [:text],
-        cost: %{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
-        context_window: 1000,
-        max_tokens: 100
-      }
-
-      context = %Context{messages: []}
-
       opts = %StreamOptions{
         temperature: 0.7,
         max_tokens: 100,
@@ -293,6 +280,7 @@ defmodule Ai.ProviderTest do
     # Check optional callback
     if {:get_env_api_key, 0} in exports do
       result = provider_module.get_env_api_key()
+
       assert is_binary(result) or is_nil(result),
              "get_env_api_key/0 must return a string or nil"
     end

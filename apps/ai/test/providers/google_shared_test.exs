@@ -1,4 +1,4 @@
-defmodule Ai.Providers.GoogleSharedTest do
+defmodule Ai.Providers.GoogleSharedComprehensiveTest do
   @moduledoc """
   Comprehensive tests for the Ai.Providers.GoogleShared module.
 
@@ -8,7 +8,7 @@ defmodule Ai.Providers.GoogleSharedTest do
   use ExUnit.Case, async: true
 
   alias Ai.Providers.GoogleShared
-  alias Ai.Types.{Model, Context, UserMessage, AssistantMessage, ToolResultMessage, TextContent, ThinkingContent, ImageContent, Tool, ToolCall}
+  alias Ai.Types.{Model, Context, UserMessage, AssistantMessage, TextContent, ImageContent, Tool}
 
   # ============================================================================
   # Thinking Part Detection
@@ -140,7 +140,7 @@ defmodule Ai.Providers.GoogleSharedTest do
         reasoning: true,
         input: [:text, :image],
         cost: %{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
-        context_window: 1000000,
+        context_window: 1_000_000,
         max_tokens: 8192
       }
 
@@ -161,7 +161,9 @@ defmodule Ai.Providers.GoogleSharedTest do
 
     test "converts user message with multiple text parts", %{model: model} do
       context = %Context{
-        messages: [%UserMessage{content: [%TextContent{text: "Part 1"}, %TextContent{text: "Part 2"}]}],
+        messages: [
+          %UserMessage{content: [%TextContent{text: "Part 1"}, %TextContent{text: "Part 2"}]}
+        ],
         system_prompt: nil,
         tools: []
       }
@@ -284,7 +286,9 @@ defmodule Ai.Providers.GoogleSharedTest do
       result = GoogleShared.convert_tools(tools)
 
       assert [%{"functionDeclarations" => declarations}] = result
-      assert [%{"name" => "get_weather", "description" => "Get weather information"}] = declarations
+
+      assert [%{"name" => "get_weather", "description" => "Get weather information"}] =
+               declarations
     end
 
     test "converts multiple tools" do
@@ -399,7 +403,8 @@ defmodule Ai.Providers.GoogleSharedTest do
     end
 
     test "normalizes nested data tuple" do
-      assert GoogleShared.normalize_sse_message({:something, {:data, "hello"}}) == {:data, "hello"}
+      assert GoogleShared.normalize_sse_message({:something, {:data, "hello"}}) ==
+               {:data, "hello"}
     end
 
     test "normalizes :done messages" do
@@ -454,7 +459,7 @@ defmodule Ai.Providers.GoogleSharedTest do
         reasoning: true,
         input: [:text],
         cost: %{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
-        context_window: 1000000,
+        context_window: 1_000_000,
         max_tokens: 8192
       }
 
@@ -485,6 +490,7 @@ defmodule Ai.Providers.GoogleSharedTest do
         headers: %{},
         compat: nil
       }
+
       assert GoogleShared.get_thinking_budget(unknown_model, :medium, %{}) == -1
     end
 
@@ -691,7 +697,7 @@ defmodule Ai.Providers.GoogleSharedTest do
           cache_read: 0.5,
           cache_write: 1.5
         },
-        context_window: 100000,
+        context_window: 100_000,
         max_tokens: 4096
       }
 
@@ -725,7 +731,7 @@ defmodule Ai.Providers.GoogleSharedTest do
     end
 
     test "calculates total cost correctly", %{model: model} do
-      usage = %{input: 1000000, output: 500000, cache_read: 2000000, cache_write: 1000000}
+      usage = %{input: 1_000_000, output: 500_000, cache_read: 2_000_000, cache_write: 1_000_000}
       result = GoogleShared.calculate_cost(model, usage)
 
       # input: $1.00, output: $1.00, cache_read: $1.00, cache_write: $1.50
