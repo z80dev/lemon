@@ -555,12 +555,11 @@ defmodule CodingAgent.Tools.Task do
        when is_map(followup_context) do
     text = task_auto_followup_text(followup_context, task_id, run_id, outcome)
 
-    # Always use the router path for async task completions.
-    # The direct Session.follow_up path only works if an agent is actively polling
-    # for follow-ups. After the parent run completes, the Session GenServer is
-    # stopped (LemonRunner.finalize_session), so session_pid is dead anyway.
-    # Even if alive, follow_up just queues without triggering processing.
-    submit_async_followup_via_router(followup_context, task_id, run_id, text)
+    if send_async_followup_to_live_session(followup_context, text) do
+      :ok
+    else
+      submit_async_followup_via_router(followup_context, task_id, run_id, text)
+    end
   rescue
     error ->
       Logger.warning(
@@ -571,6 +570,24 @@ defmodule CodingAgent.Tools.Task do
   end
 
   defp maybe_send_async_followup(_followup_context, _task_id, _run_id, _outcome), do: :ok
+
+  defp send_async_followup_to_live_session(followup_context, text) do
+    session_module = Map.get(followup_context, :session_module, CodingAgent.Session)
+    session_pid = Map.get(followup_context, :session_pid)
+
+    if is_pid(session_pid) and Process.alive?(session_pid) and
+         function_exported?(session_module, :follow_up, 2) do
+      case session_module.follow_up(session_pid, text) do
+        :ok -> true
+        {:error, _reason} -> false
+        _other -> true
+      end
+    else
+      false
+    end
+  rescue
+    _ -> false
+  end
 
   defp submit_async_followup_via_router(followup_context, task_id, run_id, text) do
     parent_session_key = Map.get(followup_context, :parent_session_key)
@@ -583,15 +600,11 @@ defmodule CodingAgent.Tools.Task do
 
       run_orchestrator = Map.get(followup_context, :run_orchestrator, default_run_orchestrator())
 
-      # Use "default" as fallback agent_id for auto-followup notifications.
-      # The parent agent_id (e.g. "main") may not be a registered agent profile.
-      safe_agent_id = if parent_agent_id in [nil, "", "main"], do: "default", else: parent_agent_id
-
       followup =
         RunRequest.new(%{
           origin: :node,
           session_key: parent_session_key,
-          agent_id: safe_agent_id,
+          agent_id: parent_agent_id,
           prompt: text,
           queue_mode: :followup,
           meta: %{
@@ -604,6 +617,19 @@ defmodule CodingAgent.Tools.Task do
       case run_orchestrator.submit(followup) do
         {:ok, _run_id} ->
           :ok
+
+        {:error, {:unknown_agent_id, _}} when parent_agent_id != "default" ->
+          fallback = %{followup | agent_id: "default"}
+
+          case run_orchestrator.submit(fallback) do
+            {:ok, _fallback_run_id} ->
+              :ok
+
+            {:error, reason} ->
+              Logger.warning(
+                "Task tool followup submit failed for task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}: #{inspect(reason)}"
+              )
+          end
 
         {:error, reason} ->
           Logger.warning(

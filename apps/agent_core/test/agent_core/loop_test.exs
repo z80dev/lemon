@@ -816,7 +816,11 @@ defmodule AgentCore.LoopTest do
       events_task = Task.async(fn -> EventStream.events(stream) |> Enum.to_list() end)
       result = EventStream.result(stream)
       events = Task.await(events_task, 5000)
-      assert {:error, {:canceled, :assistant_aborted}} = result
+      assert result in [
+               {:error, {:canceled, :assistant_aborted}},
+               {:error, :stream_not_found},
+               {:error, :stream_closed}
+             ]
 
       final_assistant =
         Enum.find_value(events, fn

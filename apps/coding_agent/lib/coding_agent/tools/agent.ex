@@ -407,7 +407,6 @@ defmodule CodingAgent.Tools.Agent do
 
   defp maybe_send_auto_followup(completion, run_id, task_id, target_agent_id, request, opts) do
     text = auto_followup_text(completion, run_id, target_agent_id)
-    session_module = Keyword.get(opts, :session_module, CodingAgent.Session)
     session_pid = Keyword.get(opts, :session_pid)
 
     Logger.info(
@@ -416,13 +415,11 @@ defmodule CodingAgent.Tools.Agent do
         "parent_session_key=#{inspect(Keyword.get(opts, :session_key))}"
     )
 
-    # Always use the router path for async agent completions.
-    # The direct session.follow_up path only works if a run is actively processing
-    # the follow_up queue. If the session's run has completed and the Session GenServer
-    # is stopped (LemonRunner.finalize_session), session_pid is dead anyway.
-    # Even if session_pid happens to be alive, follow_up just queues the message
-    # without triggering processing, so the notification would be lost.
-    send_followup_via_router(text, run_id, task_id, target_agent_id, request, opts)
+    if send_followup_via_live_session(text, opts) do
+      :ok
+    else
+      send_followup_via_router(text, run_id, task_id, target_agent_id, request, opts)
+    end
   rescue
     error ->
       Logger.warning(
@@ -432,24 +429,41 @@ defmodule CodingAgent.Tools.Agent do
       :ok
   end
 
+  defp send_followup_via_live_session(text, opts) do
+    session_module = Keyword.get(opts, :session_module, CodingAgent.Session)
+    session_pid = Keyword.get(opts, :session_pid)
+
+    if is_pid(session_pid) and Process.alive?(session_pid) and
+         function_exported?(session_module, :follow_up, 2) do
+      case session_module.follow_up(session_pid, text) do
+        :ok -> true
+        {:error, _reason} -> false
+        _other -> true
+      end
+    else
+      false
+    end
+  rescue
+    _ -> false
+  end
+
   defp send_followup_via_router(text, run_id, task_id, target_agent_id, request, opts) do
     parent_session_key = Keyword.get(opts, :session_key)
-
-    parent_agent_id =
-      Keyword.get(opts, :agent_id) || SessionKey.agent_id(parent_session_key || "")
 
     router = run_orchestrator(opts)
     delegated_session_key = request.session_key
 
     if is_binary(parent_session_key) and parent_session_key != "" do
+      parent_agent_id =
+        Keyword.get(opts, :agent_id) ||
+          SessionKey.agent_id(parent_session_key) ||
+          "default"
+
       followup =
         RunRequest.new(%{
           origin: :node,
           session_key: parent_session_key,
-          # Use "default" as fallback agent_id for auto-followup notifications.
-          # The parent agent_id (e.g. "main") may not be a registered agent profile,
-          # which would cause the orchestrator to reject the submission.
-          agent_id: "default",
+          agent_id: parent_agent_id,
           prompt: text,
           queue_mode: :followup,
           meta: %{
@@ -465,8 +479,22 @@ defmodule CodingAgent.Tools.Agent do
         {:ok, _} ->
           Logger.info(
             "Agent tool followup submitted for task_id=#{task_id} " <>
-              "session_key=#{inspect(parent_session_key)}"
+              "session_key=#{inspect(parent_session_key)} agent_id=#{inspect(parent_agent_id)}"
           )
+
+        {:error, {:unknown_agent_id, _}} when parent_agent_id != "default" ->
+          fallback = %{followup | agent_id: "default"}
+
+          case submit_with_orchestrator(router, fallback) do
+            {:ok, _} ->
+              Logger.info(
+                "Agent tool followup submitted with fallback agent_id=\"default\" " <>
+                  "for task_id=#{task_id} session_key=#{inspect(parent_session_key)}"
+              )
+
+            {:error, reason} ->
+              Logger.warning("Agent tool followup submit failed: #{inspect(reason)}")
+          end
 
         {:error, reason} ->
           Logger.warning("Agent tool followup submit failed: #{inspect(reason)}")

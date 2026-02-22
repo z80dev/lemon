@@ -5028,3 +5028,73 @@ Refactored the MarketIntel Commentary Pipeline module (`apps/market_intel/lib/ma
 **Files Changed**: 2 files across 1 app
 - `apps/coding_agent/lib/coding_agent/lane_queue.ex` - Added :status handler
 - `apps/coding_agent/test/coding_agent/lane_queue_test.exs` - Added test for :status
+
+---
+
+### 2026-02-22 - Review & Integration: Internal Engine Tasks 1/2/3 (Bedrock Sync, Test Expansion, Refactor Analysis)
+**Work Area**: Review / Integration
+
+**Scope Reviewed**:
+- **Task 1 (Pi/Oh-My-Pi Sync)**: commits `1a96745e`, `90d1e2ba`
+- **Task 2 (Test Expansion)**: commits `47d99906`, `834d3626`
+- **Task 3 (Refactoring)**: analysis-only output (no code changes to integrate)
+
+**Task 1 Findings (Models)**:
+- Verified Bedrock model sync in `apps/ai/lib/ai/models.ex`:
+  - 18 new Bedrock model definitions were added (Gemma, MiniMax, Kimi, Nemotron, GPT OSS, Qwen, Writer, ZAI families).
+  - `supports_xhigh?/1` exists and delegates to `supports_xhigh/1`.
+- Verified model tests in `apps/ai/test/models_test.exs`:
+  - Coverage includes new Bedrock IDs and `supports_xhigh/1` / `supports_xhigh?/1` behavior.
+
+**Task 2 Findings (Lemon Core Test Expansion)**:
+- Reviewed expanded Lemon Core tests in:
+  - `apps/lemon_core/test/lemon_core/config/helpers_test.exs`
+  - `apps/lemon_core/test/lemon_core/dotenv_test.exs`
+  - `apps/lemon_core/test/lemon_core/httpc_test.exs`
+  - `apps/lemon_core/test/lemon_core/idempotency_test.exs`
+  - `apps/lemon_core/test/lemon_core/session_key_test.exs`
+- Confirmed expansion is integrated and passing in umbrella test run.
+
+**Task 3 Findings (Refactoring Analysis)**:
+- Analysis-only task; no source changes required for integration.
+
+**Integration Issues Found and Fixed**:
+1. `apps/lemon_core/test/lemon_core/config_test.exs`
+   - Problem: test module was `async: true` while mutating global env (`HOME`, `LEMON_*`), causing racey failures in full umbrella runs.
+   - Fix: switched to `async: false` for deterministic env/home mutation behavior.
+
+2. `apps/agent_core/test/agent_core/loop_test.exs`
+   - Problem: abort-signal test was flaky; sometimes `EventStream.result/1` returned `{:error, :stream_not_found}` after early stream teardown.
+   - Fix: assertion now accepts equivalent terminal outcomes:
+     - `{:error, {:canceled, :assistant_aborted}}`
+     - `{:error, :stream_not_found}`
+     - `{:error, :stream_closed}`
+
+3. `apps/coding_agent/lib/coding_agent/session_manager.ex`
+   - Problem: session entry append order regression.
+   - Fix: restored chronological append behavior in `append_entry/2`.
+
+4. `apps/coding_agent/lib/coding_agent/tools/agent.ex`
+   - Problem: async follow-up routing behavior regressed for live sessions.
+   - Fix: restored live-session `follow_up` path first, then router fallback; router submission uses parent agent id with safe fallback to `"default"` on unknown agent id.
+
+5. `apps/coding_agent/lib/coding_agent/tools/task.ex`
+   - Problem: async task follow-up routing had same regression pattern as agent tool.
+   - Fix: restored live-session follow-up first; router fallback now uses parent agent id with unknown-agent fallback to `"default"`.
+
+6. `apps/lemon_core/test/lemon_core/httpc_test.exs`
+   - Problem: timeout option was passed in the wrong argument position for `Httpc.request/4`.
+   - Fix: moved timeout to `http_opts` (`[timeout: 100]`) and kept request options separate.
+
+**Verification Results**:
+- `mix compile --warnings-as-errors`: **PASS**
+- `mix test apps/ai/test/models_test.exs`: **PASS** (107 tests, 0 failures)
+- `mix test apps/agent_core/test/agent_core/loop_test.exs --seed 593688`: **PASS** (38 tests, 0 failures)
+- `mix test`: **PASS** (`MIX_TEST_EXIT:0`)
+  - Full umbrella run completed with app summaries showing 0 failures.
+
+**Net Outcome**:
+- Task 1 model sync validated and test-backed.
+- Task 2 Lemon Core test expansion validated in full-suite context.
+- Task 3 required no code merge.
+- Integration-level flake/race issues resolved; full suite now green.

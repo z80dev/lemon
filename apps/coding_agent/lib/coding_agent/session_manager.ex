@@ -365,8 +365,7 @@ defmodule CodingAgent.SessionManager do
 
     %{
       session
-      # Use pattern match to append efficiently
-      | entries: [entry | session.entries],
+      | entries: session.entries ++ [entry],
         by_id: Map.put(session.by_id, new_id, entry),
         leaf_id: new_id
     }

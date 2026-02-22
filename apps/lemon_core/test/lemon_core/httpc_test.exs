@@ -274,7 +274,7 @@ defmodule LemonCore.HttpcTest do
       url = "#{@httpbin_url}/delay/10"
       request = {String.to_charlist(url), []}
 
-      result = Httpc.request(:get, request, [], timeout: 100)
+      result = Httpc.request(:get, request, [timeout: 100], [])
 
       # Should timeout
       assert match?({:error, :timeout}, result) or
