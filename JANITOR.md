@@ -26,6 +26,58 @@ Each entry records what was done, what worked, and what to focus on next.
 ## Log Entries
 
 ### 2026-02-22 - Additional O(n²) List Concatenation Fixes
+
+### 2026-02-22 - Test Expansion: Untested Module Coverage
+
+**Work Area**: Test Expansion
+
+**Analysis**:
+- Scanned lemon_core, coding_agent, and ai apps for untested modules
+- Found several modules without corresponding test files
+- Focused on pure-function modules and modules with simple side effects
+
+**New Test Files Created (4 files, 28 new tests)**:
+
+1. **`apps/coding_agent/test/coding_agent/project/codexignore_test.exs`** (6 tests)
+   - Tests for `CodingAgent.Project.Codexignore` - previously completely untested
+   - Covers: .codexignore file creation, default patterns, existing file preservation
+   - Pattern categories: dependencies, build artifacts, version control, logs, binaries
+
+2. **`apps/coding_agent/test/coding_agent/session_root_supervisor_test.exs`** (11 tests)
+   - Tests for `CodingAgent.SessionRootSupervisor` - previously completely untested
+   - Covers: supervisor startup with/without coordinator, session retrieval, coordinator retrieval
+   - Child listing, rest_for_one strategy verification
+
+3. **`apps/coding_agent/test/coding_agent/wasm/sidecar_supervisor_test.exs`** (5 tests)
+   - Tests for `CodingAgent.Wasm.SidecarSupervisor` - previously completely untested
+   - Covers: dynamic supervisor startup, custom naming, error handling for invalid config
+   - Sidecar process termination
+
+4. **`apps/coding_agent/test/mix/tasks/lemon.workspace_test.exs`** (6 tests)
+   - Tests for `Mix.Tasks.Lemon.Workspace` - previously completely untested
+   - Covers: init command, workspace directory option, usage info for invalid commands
+
+**Documentation Added**:
+
+1. `CodingAgent.Tools.TodoRead.execute/5` - Added @doc annotation
+
+**Test Results**: All 28 new tests pass
+- Codexignore tests: 6 tests, 0 failures
+- SessionRootSupervisor tests: 11 tests, 0 failures
+- SidecarSupervisor tests: 5 tests, 0 failures
+- Workspace task tests: 6 tests, 0 failures
+
+**Files Changed**: 5 files across 1 app
+- `apps/coding_agent/test/coding_agent/project/codexignore_test.exs` - NEW (6 tests)
+- `apps/coding_agent/test/coding_agent/session_root_supervisor_test.exs` - NEW (11 tests)
+- `apps/coding_agent/test/coding_agent/wasm/sidecar_supervisor_test.exs` - NEW (5 tests)
+- `apps/coding_agent/test/mix/tasks/lemon.workspace_test.exs` - NEW (6 tests)
+- `apps/coding_agent/lib/coding_agent/tools/todoread.ex` - Added @doc to execute/5
+
+**Commit**: `66dc9334` - test: Add comprehensive tests for previously untested modules
+
+---
+
 **Work Area**: Refactoring
 
 **Analysis**:
