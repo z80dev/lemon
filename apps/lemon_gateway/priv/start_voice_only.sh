@@ -4,7 +4,7 @@
 #
 # Usage: ./start_voice_only.sh
 #
-# Loads API keys from ~/.zeebot/api_keys/ and starts the Lemon
+# Loads API keys from ~/.lemon/secrets/ and starts the Lemon
 # application with voice enabled. Useful for testing voice without
 # the full Lemon stack or when running the tunnel separately.
 #
@@ -22,38 +22,44 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 # ---------------------------------------------------------------------------
-# Load secrets from ~/.zeebot/api_keys/
+# Load secrets from ~/.lemon/secrets/
 # ---------------------------------------------------------------------------
 load_secrets() {
-    local keys_dir="$HOME/.zeebot/api_keys"
+    local secrets_dir="$HOME/.lemon/secrets"
 
     # Load Twilio credentials
-    if [[ -f "$keys_dir/twilio.txt" ]]; then
-        TWILIO_ACCOUNT_SID=$(grep "Account SID" "$keys_dir/twilio.txt" | sed 's/Account SID //')
-        TWILIO_AUTH_TOKEN=$(grep "Auth token" "$keys_dir/twilio.txt" | sed 's/Auth token //')
-    elif [[ -z "$TWILIO_ACCOUNT_SID" || -z "$TWILIO_AUTH_TOKEN" ]]; then
+    if [[ -f "$secrets_dir/twilio_account_sid" ]]; then
+        TWILIO_ACCOUNT_SID=$(cat "$secrets_dir/twilio_account_sid" | tr -d '[:space:]')
+    fi
+    if [[ -f "$secrets_dir/twilio_auth_token" ]]; then
+        TWILIO_AUTH_TOKEN=$(cat "$secrets_dir/twilio_auth_token" | tr -d '[:space:]')
+    fi
+    if [[ -z "$TWILIO_ACCOUNT_SID" || -z "$TWILIO_AUTH_TOKEN" ]]; then
         echo -e "${RED}ERROR: Twilio credentials not found${NC}"
-        echo "  Expected file: $keys_dir/twilio.txt"
+        echo "  Run: mix lemon.secrets.init"
+        echo "  Expected files: $secrets_dir/twilio_account_sid, $secrets_dir/twilio_auth_token"
         echo "  Or set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN env vars"
         exit 1
     fi
 
     # Load Deepgram
-    if [[ -f "$keys_dir/deepgram.txt" ]]; then
-        DEEPGRAM_API_KEY=$(tail -1 "$keys_dir/deepgram.txt" | tr -d '[:space:]')
+    if [[ -f "$secrets_dir/deepgram_api_key" ]]; then
+        DEEPGRAM_API_KEY=$(cat "$secrets_dir/deepgram_api_key" | tr -d '[:space:]')
     elif [[ -z "$DEEPGRAM_API_KEY" ]]; then
         echo -e "${RED}ERROR: Deepgram API key not found${NC}"
-        echo "  Expected file: $keys_dir/deepgram.txt"
+        echo "  Run: mix lemon.secrets.init"
+        echo "  Expected file: $secrets_dir/deepgram_api_key"
         echo "  Or set DEEPGRAM_API_KEY env var"
         exit 1
     fi
 
     # Load ElevenLabs
-    if [[ -f "$keys_dir/elevenlabs.txt" ]]; then
-        ELEVENLABS_API_KEY=$(tail -1 "$keys_dir/elevenlabs.txt" | tr -d '[:space:]')
+    if [[ -f "$secrets_dir/elevenlabs_api_key" ]]; then
+        ELEVENLABS_API_KEY=$(cat "$secrets_dir/elevenlabs_api_key" | tr -d '[:space:]')
     elif [[ -z "$ELEVENLABS_API_KEY" ]]; then
         echo -e "${RED}ERROR: ElevenLabs API key not found${NC}"
-        echo "  Expected file: $keys_dir/elevenlabs.txt"
+        echo "  Run: mix lemon.secrets.init"
+        echo "  Expected file: $secrets_dir/elevenlabs_api_key"
         echo "  Or set ELEVENLABS_API_KEY env var"
         exit 1
     fi

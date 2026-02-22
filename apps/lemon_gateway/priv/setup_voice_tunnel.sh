@@ -34,18 +34,22 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # ---------------------------------------------------------------------------
-# Load secrets from ~/.zeebot/api_keys/
+# Load secrets from ~/.lemon/secrets/
 # ---------------------------------------------------------------------------
 load_secrets() {
-    local keys_dir="$HOME/.zeebot/api_keys"
+    local secrets_dir="$HOME/.lemon/secrets"
 
     # Load Twilio credentials
-    if [[ -f "$keys_dir/twilio.txt" ]]; then
-        TWILIO_ACCOUNT_SID=$(grep "Account SID" "$keys_dir/twilio.txt" | sed 's/Account SID //')
-        TWILIO_AUTH_TOKEN=$(grep "Auth token" "$keys_dir/twilio.txt" | sed 's/Auth token //')
-    elif [[ -z "$TWILIO_ACCOUNT_SID" || -z "$TWILIO_AUTH_TOKEN" ]]; then
+    if [[ -f "$secrets_dir/twilio_account_sid" ]]; then
+        TWILIO_ACCOUNT_SID=$(cat "$secrets_dir/twilio_account_sid" | tr -d '[:space:]')
+    fi
+    if [[ -f "$secrets_dir/twilio_auth_token" ]]; then
+        TWILIO_AUTH_TOKEN=$(cat "$secrets_dir/twilio_auth_token" | tr -d '[:space:]')
+    fi
+    if [[ -z "$TWILIO_ACCOUNT_SID" || -z "$TWILIO_AUTH_TOKEN" ]]; then
         echo -e "${RED}ERROR: Twilio credentials not found${NC}"
-        echo "  Expected file: $keys_dir/twilio.txt"
+        echo "  Run: mix lemon.secrets.init"
+        echo "  Expected files: $secrets_dir/twilio_account_sid, $secrets_dir/twilio_auth_token"
         echo "  Or set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN env vars"
         exit 1
     fi
