@@ -53,3 +53,6 @@ node_modules/
 *.db3-wal
 apps/lemon_gateway/priv/.env
 telethon_ping/test_session.session
+
+# Stress test results
+telethon_ping/stress_test_results_*.json
