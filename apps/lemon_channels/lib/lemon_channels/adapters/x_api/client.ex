@@ -20,6 +20,10 @@ defmodule LemonChannels.Adapters.XAPI.Client do
   @max_retries 3
   @base_backoff_ms 1000
 
+  @upload_base "https://upload.twitter.com/1.1"
+  # 5 MB per chunk — the X API maximum for APPEND segments
+  @chunk_size 5 * 1024 * 1024
+
   @doc """
   Deliver an outbound payload to X.
   """
@@ -218,11 +222,160 @@ defmodule LemonChannels.Adapters.XAPI.Client do
     end
   end
 
-  defp upload_media(%{data: _data, mime_type: _mime_type}, _token) do
-    # X API v2 media upload is complex - requires INIT, APPEND, FINALIZE
-    # For now, return error indicating manual upload needed
-    # TODO: Implement chunked media upload
-    {:error, :media_upload_not_implemented}
+  defp upload_media(%{data: data, mime_type: mime_type}, token) do
+    total_bytes = byte_size(data)
+
+    with {:ok, media_id} <- upload_init(total_bytes, mime_type, token),
+         :ok <- upload_append_chunks(media_id, data, token),
+         {:ok, media_id} <- upload_finalize(media_id, token) do
+      {:ok, media_id}
+    end
+  end
+
+  # ── Chunked upload helpers ────────────────────────────────────────────
+
+  defp upload_init(total_bytes, mime_type, token) do
+    form_body =
+      URI.encode_query(%{
+        "command" => "INIT",
+        "total_bytes" => total_bytes,
+        "media_type" => mime_type
+      })
+
+    case upload_request(:post, "#{@upload_base}/media/upload.json", token,
+           body: form_body,
+           content_type: "application/x-www-form-urlencoded"
+         ) do
+      {:ok, %{status: status, body: %{"media_id_string" => media_id}}}
+      when status in [200, 201, 202] ->
+        {:ok, media_id}
+
+      {:ok, %{status: status, body: body}} ->
+        Logger.error("[XAPI] Media INIT failed: HTTP #{status} - #{inspect(body)}")
+        {:error, {:upload_init_failed, status, body}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp upload_append_chunks(media_id, data, token) do
+    chunks = chunk_binary(data, @chunk_size)
+
+    chunks
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn {chunk, index}, :ok ->
+      case upload_append(media_id, chunk, index, token) do
+        :ok -> {:cont, :ok}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp upload_append(media_id, chunk, segment_index, token) do
+    boundary = "----ElixirMultipart#{System.unique_integer([:positive])}"
+    body = build_multipart_body(boundary, media_id, segment_index, chunk)
+    content_type = "multipart/form-data; boundary=#{boundary}"
+
+    case upload_request(:post, "#{@upload_base}/media/upload.json", token,
+           body: body,
+           content_type: content_type
+         ) do
+      {:ok, %{status: status}} when status in 200..299 ->
+        :ok
+
+      {:ok, %{status: status, body: resp_body}} ->
+        Logger.error(
+          "[XAPI] Media APPEND (segment #{segment_index}) failed: HTTP #{status} - #{inspect(resp_body)}"
+        )
+
+        {:error, {:upload_append_failed, segment_index, status, resp_body}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp build_multipart_body(boundary, media_id, segment_index, chunk) do
+    parts = [
+      multipart_text_field(boundary, "command", "APPEND"),
+      multipart_text_field(boundary, "media_id", media_id),
+      multipart_text_field(boundary, "segment_index", to_string(segment_index)),
+      multipart_file_field(boundary, "media_data", chunk)
+    ]
+
+    IO.iodata_to_binary([parts, "--#{boundary}--\r\n"])
+  end
+
+  defp multipart_text_field(boundary, name, value) do
+    "--#{boundary}\r\n" <>
+      "Content-Disposition: form-data; name=\"#{name}\"\r\n\r\n" <>
+      "#{value}\r\n"
+  end
+
+  defp multipart_file_field(boundary, name, data) do
+    "--#{boundary}\r\n" <>
+      "Content-Disposition: form-data; name=\"#{name}\"; filename=\"blob\"\r\n" <>
+      "Content-Type: application/octet-stream\r\n\r\n" <>
+      data <>
+      "\r\n"
+  end
+
+  defp upload_finalize(media_id, token) do
+    form_body =
+      URI.encode_query(%{
+        "command" => "FINALIZE",
+        "media_id" => media_id
+      })
+
+    case upload_request(:post, "#{@upload_base}/media/upload.json", token,
+           body: form_body,
+           content_type: "application/x-www-form-urlencoded"
+         ) do
+      {:ok, %{status: status, body: %{"media_id_string" => finalized_id}}}
+      when status in [200, 201] ->
+        {:ok, finalized_id}
+
+      {:ok, %{status: status, body: body}} ->
+        Logger.error("[XAPI] Media FINALIZE failed: HTTP #{status} - #{inspect(body)}")
+        {:error, {:upload_finalize_failed, status, body}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc false
+  def chunk_binary(data, chunk_size) when is_binary(data) and is_integer(chunk_size) and chunk_size > 0 do
+    do_chunk_binary(data, chunk_size, [])
+  end
+
+  defp do_chunk_binary(<<>>, _chunk_size, acc), do: Enum.reverse(acc)
+
+  defp do_chunk_binary(data, chunk_size, acc) when byte_size(data) <= chunk_size do
+    Enum.reverse([data | acc])
+  end
+
+  defp do_chunk_binary(data, chunk_size, acc) do
+    <<chunk::binary-size(chunk_size), rest::binary>> = data
+    do_chunk_binary(rest, chunk_size, [chunk | acc])
+  end
+
+  defp upload_request(method, url, token, opts) do
+    headers = [
+      {"Authorization", "Bearer #{token}"},
+      {"Content-Type", opts[:content_type] || "application/x-www-form-urlencoded"}
+    ]
+
+    req_opts = [
+      method: method,
+      url: url,
+      headers: headers,
+      body: opts[:body],
+      retry: false
+    ]
+
+    Req.request(req_opts)
   end
 
   defp request(method, url, token, opts \\ []) do
