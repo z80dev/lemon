@@ -194,6 +194,10 @@ defmodule LemonControlPlane.EventBridge do
     error ->
       emit_dispatch_drop(event_name, {:exception, error}, length(clients))
       dispatch_inline(clients, event_name, payload, state_version)
+  catch
+    :exit, reason ->
+      emit_dispatch_drop(event_name, {:exit, reason}, length(clients))
+      dispatch_inline(clients, event_name, payload, state_version)
   end
 
   defp dispatch_inline(clients, event_name, payload, state_version) do
