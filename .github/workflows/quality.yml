@@ -51,6 +51,9 @@ jobs:
       - name: Run quality checks
         run: mix lemon.quality
 
+      - name: Check for duplicate test modules
+        run: mix lemon.check_duplicate_tests
+
       - name: Run eval harness
         run: mix lemon.eval --iterations 20
 

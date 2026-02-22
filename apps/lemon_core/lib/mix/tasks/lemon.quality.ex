@@ -49,6 +49,9 @@ defmodule Mix.Tasks.Lemon.Quality do
         true
       end
 
+    # Run duplicate test module guard
+    duplicate_test_result = run_duplicate_test_check()
+
     checks = [
       {:docs, fn -> DocsCheck.run(root: root) end},
       {:architecture, fn -> ArchitectureCheck.run(root: root) end}
@@ -67,6 +70,14 @@ defmodule Mix.Tasks.Lemon.Quality do
         end
       end)
 
+    # Add duplicate test check to failures if it failed
+    failures =
+      if duplicate_test_result == :error do
+        [{:duplicate_tests, %{issue_count: 1, issues: []}} | failures]
+      else
+        failures
+      end
+
     # Add config validation to failures if it failed
     failures =
       if opts[:validate_config] && !config_valid? do
@@ -79,6 +90,19 @@ defmodule Mix.Tasks.Lemon.Quality do
       Mix.shell().info("All quality checks passed.")
     else
       Mix.raise("Quality checks failed (#{length(failures)} failing checks).")
+    end
+  end
+
+  defp run_duplicate_test_check do
+    Mix.shell().info("Running duplicate test module check...")
+    try do
+      Mix.Task.rerun("lemon.check_duplicate_tests")
+      Mix.shell().info("[ok] duplicate test module check passed")
+      :ok
+    rescue
+      e in Mix.Error ->
+        Mix.shell().error("[error] duplicate test module check failed: #{Exception.message(e)}")
+        :error
     end
   end
 
