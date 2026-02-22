@@ -1,5 +1,12 @@
 defmodule Ai.Providers.HttpTrace do
-  @moduledoc false
+  @moduledoc """
+  HTTP request/response tracing utilities for AI provider integrations.
+
+  Provides functions for generating trace IDs, logging HTTP interactions,
+  inspecting response headers, and producing size-limited previews of
+  request and response bodies. Tracing is gated by the `LEMON_AI_HTTP_TRACE`
+  environment variable — set it to `"1"` to enable trace-level logging.
+  """
 
   require Logger
 
