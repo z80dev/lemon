@@ -1,4 +1,4 @@
-defmodule CodingAgent.SessionRootSupervisorTest do
+defmodule CodingAgent.SessionRootSupervisorAdditionalTest do
   @moduledoc """
   Tests for the SessionRootSupervisor module.
 

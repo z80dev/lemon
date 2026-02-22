@@ -1,0 +1,114 @@
+[
+  {
+    "test_name": "async_task_nonblock",
+    "status": "PASS",
+    "spawn_ack_time": 12.99291706085205,
+    "followup_reply_time": 20.98188018798828,
+    "async_result_time": 68.38406300544739,
+    "spawn_ack_text": "Done! I've spawned the async subtask (ID: 12d5b51e7cc9161b) to research the BEAM VM history. It's now running in the background.\n\nI'm still here and available for anything else you need while that tas",
+    "followup_reply_text": "The capital of France is Paris.",
+    "async_result_text": "The research task completed successfully! Here's the comprehensive 500-word summary on the BEAM virtual machine:\n\nThe BEAM Virtual Machine: A Comprehensive History\n\nThe BEAM (Bogdan/Bj\u00f6rn's Erlang Abs",
+    "timeline": [
+      {
+        "event": "spawn_sent",
+        "t": 1.0976850986480713
+      },
+      {
+        "event": "bot_msg",
+        "t": 12.992906093597412,
+        "msg_id": 3367,
+        "chars": 212,
+        "preview": "Done! I've spawned the async subtask (ID: 12d5b51e7cc9161b) to research the BEAM"
+      },
+      {
+        "event": "followup_sent",
+        "t": 15.042993307113647
+      },
+      {
+        "event": "bot_msg",
+        "t": 20.981877088546753,
+        "msg_id": 3369,
+        "chars": 31,
+        "preview": "The capital of France is Paris."
+      },
+      {
+        "event": "bot_msg",
+        "t": 68.38399004936218,
+        "msg_id": 3370,
+        "chars": 3671,
+        "preview": "The research task completed successfully! Here's the comprehensive 500-word summ"
+      }
+    ],
+    "notes": "Follow-up answered at 21.0s, async result at 68.4s \u2014 non-blocking confirmed!"
+  },
+  {
+    "test_name": "async_agent_nonblock",
+    "status": "PARTIAL",
+    "spawn_ack_time": 13.536782026290894,
+    "followup_reply_time": 21.553553104400635,
+    "async_result_time": 0.0,
+    "spawn_ack_text": "Done! I've delegated the task to the coder agent asynchronously (task ID: 3d7b186c1ce08147).\n\nI'm still here and available. The work is running in the background, so I can help you with other things w",
+    "followup_reply_text": "7 times 8 is 56.",
+    "async_result_text": "",
+    "timeline": [
+      {
+        "event": "spawn_sent",
+        "t": 1.1248571872711182
+      },
+      {
+        "event": "bot_msg",
+        "t": 13.536767959594727,
+        "msg_id": 3373,
+        "chars": 252,
+        "preview": "Done! I've delegated the task to the coder agent asynchronously (task ID: 3d7b18"
+      },
+      {
+        "event": "followup_sent",
+        "t": 15.582587242126465
+      },
+      {
+        "event": "bot_msg",
+        "t": 21.553546905517578,
+        "msg_id": 3375,
+        "chars": 16,
+        "preview": "7 times 8 is 56."
+      }
+    ],
+    "notes": "Follow-up answered at 21.6s but async result never received within timeout"
+  },
+  {
+    "test_name": "multi_async_nonblock",
+    "status": "PARTIAL",
+    "spawn_ack_time": 13.629820108413696,
+    "followup_reply_time": 21.61581015586853,
+    "async_result_time": 0.0,
+    "spawn_ack_text": "Both async tasks are now running in the background:\n\n1. File listing task (76139cdf8175199d) - counting files in ~/dev/lemon/apps/\n2. Bitcoin price search (65dfe3d935827e66) - finding current BTC pric",
+    "followup_reply_text": "When you mix red and blue, you get purple (or violet)!\n\nIt's a secondary color on the traditional RYB (red-yellow-blue) color wheel. The exact shade depends on the proportions \u2014 more red gives you a r",
+    "async_result_text": "",
+    "timeline": [
+      {
+        "event": "spawn_sent",
+        "t": 1.0892910957336426
+      },
+      {
+        "event": "bot_msg",
+        "t": 13.629814147949219,
+        "msg_id": 3381,
+        "chars": 332,
+        "preview": "Both async tasks are now running in the background:\n\n1. File listing task (76139"
+      },
+      {
+        "event": "followup_sent",
+        "t": 15.675894975662231
+      },
+      {
+        "event": "bot_msg",
+        "t": 21.615800142288208,
+        "msg_id": 3383,
+        "chars": 266,
+        "preview": "When you mix red and blue, you get purple (or violet)!\n\nIt's a secondary color o"
+      }
+    ],
+    "notes": "Follow-up answered at 21.6s but async result never received within timeout"
+  }
+]

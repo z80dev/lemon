@@ -57,6 +57,7 @@ defmodule Mix.Tasks.Lemon.CleanupTest do
     end
 
     test "module has run/1 function exported" do
+      assert Code.ensure_loaded?(Cleanup)
       assert function_exported?(Cleanup, :run, 1)
     end
   end

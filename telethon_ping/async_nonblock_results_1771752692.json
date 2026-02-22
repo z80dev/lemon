@@ -1,0 +1,114 @@
+[
+  {
+    "test_name": "async_task_nonblock",
+    "status": "PARTIAL",
+    "spawn_ack_time": 13.274710893630981,
+    "followup_reply_time": 21.414680004119873,
+    "async_result_time": 0.0,
+    "spawn_ack_text": "\u2705 Task spawned successfully! The BEAM VM research is now running in the background (task ID: 02652f3906b641c1).\n\nI'm still here and available for anything else you need while that runs. What can I hel",
+    "followup_reply_text": "The capital of France is Paris \ud83c\uddeb\ud83c\uddf7",
+    "async_result_text": "",
+    "timeline": [
+      {
+        "event": "spawn_sent",
+        "t": 1.1456639766693115
+      },
+      {
+        "event": "bot_msg",
+        "t": 13.274682998657227,
+        "msg_id": 3386,
+        "chars": 211,
+        "preview": "\u2705 Task spawned successfully! The BEAM VM research is now running in the backgrou"
+      },
+      {
+        "event": "followup_sent",
+        "t": 15.31938910484314
+      },
+      {
+        "event": "bot_msg",
+        "t": 21.414666891098022,
+        "msg_id": 3388,
+        "chars": 33,
+        "preview": "The capital of France is Paris \ud83c\uddeb\ud83c\uddf7"
+      }
+    ],
+    "notes": "Follow-up answered at 21.4s but async result never received within timeout"
+  },
+  {
+    "test_name": "async_agent_nonblock",
+    "status": "PASS",
+    "spawn_ack_time": 12.589812994003296,
+    "followup_reply_time": 21.18961000442505,
+    "async_result_time": 26.007746696472168,
+    "spawn_ack_text": "Task delegated to the coder agent! Task ID: 003000e802249521\n\nI'm still here and available. The Sieve of Eratosthenes implementation is being worked on asynchronously by the coder agent. What else can",
+    "followup_reply_text": "7 times 8 is 56.",
+    "async_result_text": "The coder agent has completed the task! The Sieve of Eratosthenes implementation has been saved to ~/dev/lemon/content/sieve.py with:\n\n- Typed function signature: sieve_of_eratosthenes(n: int = 10_000",
+    "timeline": [
+      {
+        "event": "spawn_sent",
+        "t": 1.1552088260650635
+      },
+      {
+        "event": "bot_msg",
+        "t": 12.58980679512024,
+        "msg_id": 3393,
+        "chars": 217,
+        "preview": "Task delegated to the coder agent! Task ID: 003000e802249521\n\nI'm still here and"
+      },
+      {
+        "event": "followup_sent",
+        "t": 14.638210773468018
+      },
+      {
+        "event": "bot_msg",
+        "t": 21.189607858657837,
+        "msg_id": 3395,
+        "chars": 16,
+        "preview": "7 times 8 is 56."
+      },
+      {
+        "event": "bot_msg",
+        "t": 26.00774097442627,
+        "msg_id": 3396,
+        "chars": 337,
+        "preview": "The coder agent has completed the task! The Sieve of Eratosthenes implementation"
+      }
+    ],
+    "notes": "Follow-up answered at 21.2s, async result at 26.0s \u2014 non-blocking confirmed!"
+  },
+  {
+    "test_name": "multi_async_nonblock",
+    "status": "FAIL",
+    "spawn_ack_time": 12.463768005371094,
+    "followup_reply_time": 0.0,
+    "async_result_time": 32.06874895095825,
+    "spawn_ack_text": "Both tasks are now running in the background:\n\n1. File listing task (3e2d7931efafc128) - counting files in ~/dev/lemon/apps/\n2. Bitcoin price search (1f3e0545887ba84a) - finding current BTC price\nI'm ",
+    "followup_reply_text": "",
+    "async_result_text": "Both tasks are now complete! Here's the summary:\n\nTask 1: File Count in ~/dev/lemon/apps/\n\n13,260 total files across Elixir/Phoenix apps including:\n\n- lemon_web (Phoenix web interface)\n- coding_agent_",
+    "timeline": [
+      {
+        "event": "spawn_sent",
+        "t": 1.0981500148773193
+      },
+      {
+        "event": "bot_msg",
+        "t": 12.463757991790771,
+        "msg_id": 3400,
+        "chars": 266,
+        "preview": "Both tasks are now running in the background:\n\n1. File listing task (3e2d7931efa"
+      },
+      {
+        "event": "followup_sent",
+        "t": 14.505088806152344
+      },
+      {
+        "event": "bot_msg",
+        "t": 32.06873106956482,
+        "msg_id": 3402,
+        "chars": 546,
+        "preview": "Both tasks are now complete! Here's the summary:\n\nTask 1: File Count in ~/dev/le"
+      }
+    ],
+    "notes": "Async result received but follow-up was never answered \u2014 BLOCKED"
+  }
+]

@@ -348,7 +348,9 @@ defmodule CodingAgent.Tools.Agent do
       opts: opts
     }
 
-    Task.start(fn -> monitor_completion(watcher_opts) end)
+    Task.Supervisor.start_child(CodingAgent.TaskSupervisor, fn ->
+      monitor_completion(watcher_opts)
+    end)
 
     receive do
       {:agent_tool_watcher_ready, ^ready_ref} -> :ok
@@ -408,18 +410,19 @@ defmodule CodingAgent.Tools.Agent do
     session_module = Keyword.get(opts, :session_module, CodingAgent.Session)
     session_pid = Keyword.get(opts, :session_pid)
 
-    sent_to_live_session? =
-      if is_pid(session_pid) and Process.alive?(session_pid) and
-           function_exported?(session_module, :follow_up, 2) do
-        _ = session_module.follow_up(session_pid, text)
-        true
-      else
-        false
-      end
+    Logger.info(
+      "Agent tool auto-followup: task_id=#{task_id} run_id=#{run_id} " <>
+        "session_pid=#{inspect(session_pid)} alive=#{is_pid(session_pid) and Process.alive?(session_pid)} " <>
+        "parent_session_key=#{inspect(Keyword.get(opts, :session_key))}"
+    )
 
-    if not sent_to_live_session? do
-      send_followup_via_router(text, run_id, task_id, target_agent_id, request, opts)
-    end
+    # Always use the router path for async agent completions.
+    # The direct session.follow_up path only works if a run is actively processing
+    # the follow_up queue. If the session's run has completed and the Session GenServer
+    # is stopped (LemonRunner.finalize_session), session_pid is dead anyway.
+    # Even if session_pid happens to be alive, follow_up just queues the message
+    # without triggering processing, so the notification would be lost.
+    send_followup_via_router(text, run_id, task_id, target_agent_id, request, opts)
   rescue
     error ->
       Logger.warning(
@@ -443,7 +446,10 @@ defmodule CodingAgent.Tools.Agent do
         RunRequest.new(%{
           origin: :node,
           session_key: parent_session_key,
-          agent_id: parent_agent_id || "default",
+          # Use "default" as fallback agent_id for auto-followup notifications.
+          # The parent agent_id (e.g. "main") may not be a registered agent profile,
+          # which would cause the orchestrator to reject the submission.
+          agent_id: "default",
           prompt: text,
           queue_mode: :followup,
           meta: %{
@@ -455,9 +461,12 @@ defmodule CodingAgent.Tools.Agent do
           }
         })
 
-      case router.submit(followup) do
+      case submit_with_orchestrator(router, followup) do
         {:ok, _} ->
-          :ok
+          Logger.info(
+            "Agent tool followup submitted for task_id=#{task_id} " <>
+              "session_key=#{inspect(parent_session_key)}"
+          )
 
         {:error, reason} ->
           Logger.warning("Agent tool followup submit failed: #{inspect(reason)}")
@@ -474,19 +483,25 @@ defmodule CodingAgent.Tools.Agent do
   end
 
   defp await_run_completion(run_id, timeout_ms, opts \\ []) do
+    # Subscribe BEFORE checking the store to avoid race condition:
+    # if the run completes between our store check and subscribe call,
+    # we'd miss the Bus event and the store might not be finalized yet
+    # (Store.finalize_run is an async cast).
+    topic = Bus.run_topic(run_id)
+    :ok = Bus.subscribe(topic)
+    on_subscribed = Keyword.get(opts, :on_subscribed)
+
+    if is_function(on_subscribed, 0) do
+      on_subscribed.()
+    end
+
+    # Now check the store — if already complete, return immediately
     case completion_from_store(run_id, "") do
       {:ok, completion} ->
+        _ = Bus.unsubscribe(topic)
         {:ok, completion}
 
       :pending ->
-        topic = Bus.run_topic(run_id)
-        :ok = Bus.subscribe(topic)
-        on_subscribed = Keyword.get(opts, :on_subscribed)
-
-        if is_function(on_subscribed, 0) do
-          on_subscribed.()
-        end
-
         deadline_ms = System.monotonic_time(:millisecond) + max(timeout_ms, 0)
 
         try do

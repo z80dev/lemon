@@ -202,17 +202,27 @@ defmodule Ai.Types do
         timestamp: System.system_time(:millisecond)
       }
 
-      %{ctx | messages: ctx.messages ++ [message]}
+      %{ctx | messages: [message | ctx.messages]}
     end
 
     @doc "Add an assistant message to the context"
     def add_assistant_message(%__MODULE__{} = ctx, %Ai.Types.AssistantMessage{} = message) do
-      %{ctx | messages: ctx.messages ++ [message]}
+      %{ctx | messages: [message | ctx.messages]}
     end
 
     @doc "Add a tool result to the context"
     def add_tool_result(%__MODULE__{} = ctx, %Ai.Types.ToolResultMessage{} = result) do
-      %{ctx | messages: ctx.messages ++ [result]}
+      %{ctx | messages: [result | ctx.messages]}
+    end
+
+    @doc """
+    Returns messages in chronological order (oldest first).
+
+    Messages are stored internally in reverse order for O(1) append performance.
+    Use this function when you need messages in chronological order for LLM APIs.
+    """
+    def get_messages_chronological(%__MODULE__{} = ctx) do
+      Enum.reverse(ctx.messages)
     end
   end
 

@@ -72,6 +72,20 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     market_intel: ["MarketIntel"]
   }
 
+  @doc """
+  Runs all architecture boundary checks for the umbrella project.
+
+  Checks include:
+    * Unknown app detection - apps in apps/ without policy configuration
+    * Missing app detection - expected apps that don't exist in apps/
+    * Dependency violations - umbrella deps that exceed allowed boundaries
+    * Namespace violations - module references to apps not in deps
+
+  Returns `{:ok, report}` if no issues found, `{:error, report}` otherwise.
+
+  ## Options
+    * `:root` - root directory of the umbrella project (defaults to current working directory)
+  """
   @spec run(keyword()) :: {:ok, report()} | {:error, report()}
   def run(opts \\ []) do
     root = Keyword.get(opts, :root, File.cwd!())
@@ -99,6 +113,12 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     end
   end
 
+  @doc """
+  Returns the allowed direct dependencies map for all umbrella apps.
+
+  This map defines which umbrella dependencies each app is allowed to have.
+  Used for validating the architecture boundary constraints.
+  """
   @spec allowed_direct_deps() :: %{optional(atom()) => [atom()]}
   def allowed_direct_deps, do: @allowed_direct_deps
 

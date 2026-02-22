@@ -206,9 +206,8 @@ async def run_test(client, test_name, spawn_prompt, followup_prompt, followup_ch
                 log.info(f"[{test_name}] Follow-up answered at t={result.followup_reply_time:.1f}s "
                          f"(latency={followup_latency:.1f}s from send)")
 
-            # Check if this is the async task result
-            # (longer message, mentions result/completed/finished, or comes much later)
-            elif not async_result_received and len(text) > 100:
+            # Check if this is the async task result (independently — same msg can be both)
+            if not async_result_received and len(text) > 100:
                 result_indicators = ["result", "completed", "finished", "done",
                                      "output", "returned", "answer is", "count"]
                 if any(ind in text.lower() for ind in result_indicators):

@@ -24,6 +24,22 @@ defmodule LemonCore.Quality.DocsCheck do
           issues: [issue()]
         }
 
+  @doc """
+  Runs all documentation quality checks.
+
+  Checks include:
+    * Catalog coverage - all tracked docs are in catalog
+    * Entry shape validation - all required fields present and valid
+    * File existence - catalog entries point to existing files
+    * Freshness - documents reviewed within max_age_days
+    * Link integrity - local markdown links resolve to existing files
+
+  Returns `{:ok, report}` if no issues found, `{:error, report}` otherwise.
+
+  ## Options
+    * `:root` - root directory to check (defaults to current working directory)
+    * `:today` - date to use for freshness checks (defaults to today)
+  """
   @spec run(keyword()) :: {:ok, report()} | {:error, report()}
   def run(opts \\ []) do
     root = Keyword.get(opts, :root, File.cwd!())

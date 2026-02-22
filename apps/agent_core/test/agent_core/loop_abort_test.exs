@@ -822,13 +822,18 @@ defmodule AgentCore.LoopAbortTest do
       context = simple_context()
       response1 = Mocks.assistant_message("First response")
       response2 = Mocks.assistant_message("Second response")
+      follow_up_calls = :counters.new(1, [])
 
       config =
         simple_config(
           stream_fn: Mocks.mock_stream_fn([response1, response2]),
           get_follow_up_messages: fn ->
-            Process.sleep(50)
-            [user_message("Follow up")]
+            # Keep the follow-up fetch slower than abort timing so the abort is
+            # set before the next turn attempts to stream.
+            Process.sleep(200)
+            :ok = :counters.add(follow_up_calls, 1, 1)
+            call_num = :counters.get(follow_up_calls, 1)
+            if call_num == 1, do: [user_message("Follow up")], else: []
           end
         )
 
@@ -852,7 +857,8 @@ defmodule AgentCore.LoopAbortTest do
           Map.get(msg, :role) == :assistant
         end)
 
-      assert length(assistant_msgs) <= 3
+      assert length(assistant_msgs) >= 1
+      assert length(assistant_msgs) <= 2
     end
 
     test "abort signal state persists across multiple checks" do

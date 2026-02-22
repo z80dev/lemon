@@ -62,6 +62,7 @@ defmodule LemonGateway.ThreadWorker do
         "mode=#{inspect(job.queue_mode)} queue_len_before=#{queue_len_safe(state.jobs)}"
     )
 
+    job = maybe_promote_auto_followup(job, state)
     state = enqueue_by_mode(job, state)
     {:noreply, maybe_request_slot(state)}
   end
@@ -73,6 +74,7 @@ defmodule LemonGateway.ThreadWorker do
         "mode=#{inspect(job.queue_mode)} queue_len_before=#{queue_len_safe(state.jobs)}"
     )
 
+    job = maybe_promote_auto_followup(job, state)
     state = enqueue_by_mode(job, state)
     {:reply, :ok, maybe_request_slot(state)}
   end
@@ -253,6 +255,33 @@ defmodule LemonGateway.ThreadWorker do
     Logger.warning("ThreadWorker received unexpected message: #{inspect(msg)}")
     {:noreply, state}
   end
+
+  # When an async task/agent auto-followup arrives with queue_mode: :followup,
+  # promote it to :steer_backlog if there's an active run. This allows the result
+  # to be injected into the current LLM run (e.g., if the user's follow-up message
+  # is being processed) instead of queuing as a separate run that would block
+  # subsequent user messages.
+  defp maybe_promote_auto_followup(
+         %Job{queue_mode: :followup, meta: meta} = job,
+         %{current_run: pid}
+       )
+       when is_pid(pid) and is_map(meta) do
+    is_auto = Map.get(meta, :task_auto_followup, false) or
+              Map.get(meta, :delegated_auto_followup, false)
+
+    if is_auto do
+      Logger.info(
+        "ThreadWorker: promoting auto-followup to steer_backlog (active run exists) " <>
+          "thread_key=#{inspect(job.session_key)}"
+      )
+
+      %{job | queue_mode: :steer_backlog}
+    else
+      job
+    end
+  end
+
+  defp maybe_promote_auto_followup(job, _state), do: job
 
   # Insert job into queue based on queue_mode
   defp enqueue_by_mode(%Job{queue_mode: :collect} = job, state) do

@@ -65,6 +65,11 @@ defmodule CodingAgent.LaneQueue do
   end
 
   @impl true
+  def handle_call(:status, _from, st) do
+    {:reply, %{caps: st.caps, lanes: st.lanes, jobs_count: map_size(st.jobs)}, st}
+  end
+
+  @impl true
   def handle_info({ref, {:ok, result}}, st) do
     {:noreply, complete_job(ref, {:ok, result}, st)}
   end

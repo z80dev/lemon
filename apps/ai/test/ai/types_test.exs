@@ -258,15 +258,16 @@ defmodule Ai.TypesTest do
       assert %UserMessage{content: "Hello"} = hd(ctx.messages)
     end
 
-    test "preserves existing messages" do
+    test "preserves existing messages (in chronological order)" do
       ctx =
         Context.new()
         |> Context.add_user_message("First")
         |> Context.add_user_message("Second")
 
-      assert length(ctx.messages) == 2
-      assert %UserMessage{content: "First"} = Enum.at(ctx.messages, 0)
-      assert %UserMessage{content: "Second"} = Enum.at(ctx.messages, 1)
+      messages = Context.get_messages_chronological(ctx)
+      assert length(messages) == 2
+      assert %UserMessage{content: "First"} = Enum.at(messages, 0)
+      assert %UserMessage{content: "Second"} = Enum.at(messages, 1)
     end
 
     test "sets timestamp" do

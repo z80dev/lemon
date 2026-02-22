@@ -479,7 +479,7 @@ defmodule CodingAgent.Tools.Task do
   end
 
   defp run_async(task_id, run_id, run_fun, followup_context) do
-    Task.start(fn ->
+    Task.Supervisor.start_child(CodingAgent.TaskSupervisor, fn ->
       Logger.debug("Task tool async start task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}")
       result = safe_run(task_id, run_id, run_fun)
       finalize_async(task_id, run_id, result, followup_context)
@@ -555,21 +555,12 @@ defmodule CodingAgent.Tools.Task do
        when is_map(followup_context) do
     text = task_auto_followup_text(followup_context, task_id, run_id, outcome)
 
-    session_module = Map.get(followup_context, :session_module, CodingAgent.Session)
-    session_pid = Map.get(followup_context, :session_pid)
-
-    sent_to_live_session? =
-      if is_pid(session_pid) and Process.alive?(session_pid) and
-           function_exported?(session_module, :follow_up, 2) do
-        _ = session_module.follow_up(session_pid, text)
-        true
-      else
-        false
-      end
-
-    if not sent_to_live_session? do
-      submit_async_followup_via_router(followup_context, task_id, run_id, text)
-    end
+    # Always use the router path for async task completions.
+    # The direct Session.follow_up path only works if an agent is actively polling
+    # for follow-ups. After the parent run completes, the Session GenServer is
+    # stopped (LemonRunner.finalize_session), so session_pid is dead anyway.
+    # Even if alive, follow_up just queues without triggering processing.
+    submit_async_followup_via_router(followup_context, task_id, run_id, text)
   rescue
     error ->
       Logger.warning(
@@ -592,11 +583,15 @@ defmodule CodingAgent.Tools.Task do
 
       run_orchestrator = Map.get(followup_context, :run_orchestrator, default_run_orchestrator())
 
+      # Use "default" as fallback agent_id for auto-followup notifications.
+      # The parent agent_id (e.g. "main") may not be a registered agent profile.
+      safe_agent_id = if parent_agent_id in [nil, "", "main"], do: "default", else: parent_agent_id
+
       followup =
         RunRequest.new(%{
           origin: :node,
           session_key: parent_session_key,
-          agent_id: parent_agent_id,
+          agent_id: safe_agent_id,
           prompt: text,
           queue_mode: :followup,
           meta: %{

@@ -82,6 +82,7 @@ defmodule Mix.Tasks.Lemon.Secrets.SetTest do
     end
 
     test "module has run/1 function exported" do
+      assert Code.ensure_loaded?(Set)
       assert function_exported?(Set, :run, 1)
     end
   end

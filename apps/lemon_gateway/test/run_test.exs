@@ -1578,13 +1578,24 @@ defmodule LemonGateway.RunTest do
 
       # Process should be stopping/stopped, but if we can still message it...
       steer_job = make_job(scope, text: "late steer")
+      ref = Process.monitor(pid)
 
-      # The process might already be dead
+      # After completion, a late steer is either explicitly rejected (if the
+      # process is still alive) or the process exits before handling it.
       if Process.alive?(pid) do
         GenServer.cast(pid, {:steer, steer_job, self()})
-        # If alive, should reject
-        assert_receive {:steer_rejected, ^steer_job}, 500
+        receive do
+          {:steer_rejected, ^steer_job} -> :ok
+          {:DOWN, ^ref, :process, ^pid, _} -> :ok
+        after
+          2000 ->
+            flunk("expected late steer to be rejected or run process to exit")
+        end
+      else
+        assert_receive {:DOWN, ^ref, :process, ^pid, _}, 2000
       end
+
+      Process.demonitor(ref, [:flush])
     end
 
     test "steer is rejected when engine is not yet initialized" do

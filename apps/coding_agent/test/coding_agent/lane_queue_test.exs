@@ -329,4 +329,19 @@ defmodule CodingAgent.LaneQueueTest do
     values = Enum.map(results, fn {:ok, v} -> v end) |> Enum.sort()
     assert values == Enum.map(1..10, &(&1 * 10))
   end
+
+  test "status call returns queue state", %{task_sup: sup} do
+    {:ok, pid} =
+      LaneQueue.start_link(
+        name: :lane_queue_status,
+        caps: %{main: 3, subagent: 5},
+        task_supervisor: sup
+      )
+
+    status = GenServer.call(pid, :status)
+
+    assert status.caps == %{main: 3, subagent: 5}
+    assert status.jobs_count == 0
+    assert is_map(status.lanes)
+  end
 end

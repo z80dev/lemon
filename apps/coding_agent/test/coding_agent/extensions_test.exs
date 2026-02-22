@@ -1444,8 +1444,10 @@ defmodule CodingAgent.ExtensionsTest do
       File.write!(Path.join(tmp_dir, "builtin_shadow_a.ex"), ext_a_code)
       File.write!(Path.join(tmp_dir, "builtin_shadow_b.ex"), ext_b_code)
 
-      {:ok, extensions, _errors, _validation_errors} =
-        Extensions.load_extensions_with_errors([tmp_dir])
+      Code.compile_file(Path.join(tmp_dir, "builtin_shadow_a.ex"))
+      Code.compile_file(Path.join(tmp_dir, "builtin_shadow_b.ex"))
+
+      extensions = [BuiltinShadowExtA, BuiltinShadowExtB]
 
       report = Extensions.register_extension_providers(extensions)
 

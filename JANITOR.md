@@ -4753,3 +4753,65 @@ Refactored the MarketIntel Commentary Pipeline module (`apps/market_intel/lib/ma
   - `lemon_web`: 4 tests, 0 failures
   - `lemon_automation`: 124 tests, 0 failures
   - `lemon_channels`: 438 tests, 0 failures
+
+---
+
+### 2026-02-23 - Refactoring: O(n²) List Operations in Ai.Types.Context
+**Work Area**: Refactoring
+
+**Analysis**:
+- Identified O(n²) list concatenation patterns in `Ai.Types.Context` message append functions
+- The pattern `list ++ [item]` in `add_user_message/2`, `add_assistant_message/2`, and `add_tool_result/2` caused quadratic complexity when building contexts message-by-message
+- This is a follow-up to previous O(n²) refactoring work
+
+**Refactoring Done**:
+
+1. **O(n²) list concatenation → O(n)** (`apps/ai/lib/ai/types.ex`)
+   - `add_user_message/2`: Changed `ctx.messages ++ [message]` → `[message | ctx.messages]` (prepend)
+   - `add_assistant_message/2`: Changed `ctx.messages ++ [message]` → `[message | ctx.messages]` (prepend)
+   - `add_tool_result/2`: Changed `ctx.messages ++ [result]` → `[result | ctx.messages]` (prepend)
+   - Added `get_messages_chronological/1` helper to return messages in chronological order (oldest first) via `Enum.reverse`
+   - Net: O(1) message append instead of O(n), with O(n) reversal only when needed for LLM APIs
+
+**Trade-offs**:
+- Messages are now stored internally in reverse chronological order (newest first)
+- Callers needing chronological order should use `Context.get_messages_chronological/1`
+- This is a performance vs. convenience trade-off - O(1) append is critical for long contexts
+
+**Test Updates**:
+- Updated `apps/ai/test/ai/types_test.exs`: Modified "preserves existing messages" test to use `get_messages_chronological/1`
+- Updated `apps/agent_core/test/agent_core/property_test.exs`: Updated property test to expect prepended messages and verify chronological order via new helper
+
+**Test Results**: All tests pass
+- `ai` app: 1515 tests, 0 failures (32 excluded)
+- `agent_core` app: 1580 tests, 0 failures (12 excluded)
+
+**Files Changed**: 3 files across 2 apps
+- `apps/ai/lib/ai/types.ex` - O(1) message append, added get_messages_chronological/1
+- `apps/ai/test/ai/types_test.exs` - Updated test for reverse storage order
+- `apps/agent_core/test/agent_core/property_test.exs` - Updated property test for reverse storage order
+
+---
+
+### 2026-02-23 - Bug Fix: LaneQueue :status message handling
+**Work Area**: Bug Fix
+
+**Issue**:
+- `CodingAgent.LaneQueue` crashed with `FunctionClauseError` when receiving `:status` message
+- Error: `no function clause matching in CodingAgent.LaneQueue.handle_call/3`
+- The `:status` message was being sent to the LaneQueue process but there was no handler for it
+
+**Fix**:
+- Added `handle_call(:status, _from, st)` clause to `LaneQueue`
+- Returns queue state including caps, lanes, and jobs count
+- This makes the module more robust against health checks and monitoring calls
+
+**Test Added**:
+- Added test "status call returns queue state" to verify the new functionality
+
+**Test Results**: All tests pass
+- `coding_agent` app: 12 lane_queue tests, 0 failures
+
+**Files Changed**: 2 files across 1 app
+- `apps/coding_agent/lib/coding_agent/lane_queue.ex` - Added :status handler
+- `apps/coding_agent/test/coding_agent/lane_queue_test.exs` - Added test for :status

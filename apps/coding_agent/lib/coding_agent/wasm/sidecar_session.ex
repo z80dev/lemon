@@ -120,36 +120,49 @@ defmodule CodingAgent.Wasm.SidecarSession do
     cwd = opts |> Keyword.fetch!(:cwd) |> Path.expand()
     session_id = to_string(Keyword.get(opts, :session_id, "unknown"))
 
-    config =
-      Keyword.get_lazy(opts, :wasm_config, fn ->
-        Config.load(cwd, Keyword.get(opts, :settings_manager))
-      end)
+    with :ok <- validate_cwd(cwd) do
+      config =
+        Keyword.get_lazy(opts, :wasm_config, fn ->
+          Config.load(cwd, Keyword.get(opts, :settings_manager))
+        end)
 
-    host_invoke_fun = Keyword.get(opts, :host_invoke_fun, &default_host_invoke/2)
+      host_invoke_fun = Keyword.get(opts, :host_invoke_fun, &default_host_invoke/2)
 
-    with {:ok, runtime_path, build_report} <- Builder.ensure_runtime_binary(config),
-         {:ok, port} <- start_port(runtime_path, cwd) do
-      state = %__MODULE__{
-        session_id: session_id,
-        cwd: cwd,
-        config: config,
-        runtime_path: runtime_path,
-        build_report: build_report,
-        port: port,
-        buffer: "",
-        host_invoke_fun: host_invoke_fun,
-        hello_ok: false,
-        inflight_invoke_id: nil,
-        discovered: [],
-        discover_warnings: [],
-        discover_errors: [],
-        pending: %{}
-      }
+      with {:ok, runtime_path, build_report} <- Builder.ensure_runtime_binary(config),
+           {:ok, port} <- start_port(runtime_path, cwd) do
+        state = %__MODULE__{
+          session_id: session_id,
+          cwd: cwd,
+          config: config,
+          runtime_path: runtime_path,
+          build_report: build_report,
+          port: port,
+          buffer: "",
+          host_invoke_fun: host_invoke_fun,
+          hello_ok: false,
+          inflight_invoke_id: nil,
+          discovered: [],
+          discover_warnings: [],
+          discover_errors: [],
+          pending: %{}
+        }
 
-      {:ok, send_hello(state)}
+        {:ok, send_hello(state)}
+      else
+        {:error, reason} ->
+          {:stop, reason}
+      end
     else
       {:error, reason} ->
         {:stop, reason}
+    end
+  end
+
+  defp validate_cwd(cwd) do
+    if File.dir?(cwd) do
+      :ok
+    else
+      {:error, {:invalid_cwd, cwd}}
     end
   end
 

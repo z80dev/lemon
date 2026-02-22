@@ -735,8 +735,15 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
           |> Enum.to_list()
         end)
 
-      # Give consumer time to start
-      Process.sleep(10)
+      # Wait until consumer is actually blocked on EventStream.take/1 to avoid
+      # a race where the stream is canceled before subscription is active.
+      assert wait_until(
+               fn ->
+                 state = :sys.get_state(stream)
+                 :queue.len(state.take_waiters) > 0
+               end,
+               1000
+             )
 
       # Cancel the stream
       EventStream.cancel(stream, :test_cancel)
@@ -887,6 +894,24 @@ defmodule CodingAgent.CliRunners.LemonSubagentTest do
       assert ResumeToken.is_resume_line("lemon resume abc123")
       assert ResumeToken.is_resume_line("`lemon resume abc123`")
       refute ResumeToken.is_resume_line("please run lemon resume abc123")
+    end
+  end
+
+  defp wait_until(fun, timeout_ms) when is_function(fun, 0) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_until(fun, deadline)
+  end
+
+  defp do_wait_until(fun, deadline_ms) do
+    if fun.() do
+      true
+    else
+      if System.monotonic_time(:millisecond) < deadline_ms do
+        Process.sleep(10)
+        do_wait_until(fun, deadline_ms)
+      else
+        false
+      end
     end
   end
 end

@@ -19,6 +19,21 @@ defmodule LemonCore.Quality.Cleanup do
           deleted_files: [String.t()]
         }
 
+  @doc """
+  Scans for stale docs and old run files without deleting anything.
+
+  Returns a report with the following keys:
+    * `:root` - the root directory scanned
+    * `:retention_days` - the retention period used
+    * `:old_run_files` - list of file paths older than retention_days
+    * `:stale_docs` - list of stale documentation entries
+    * `:deleted_files` - empty list (always empty for scan)
+
+  ## Options
+    * `:root` - root directory to scan (defaults to current working directory)
+    * `:retention_days` - number of days to retain files (defaults to 14)
+    * `:today` - date to use as reference (defaults to today, useful for testing)
+  """
   @spec scan(keyword()) :: report()
   def scan(opts \\ []) do
     root = Keyword.get(opts, :root, File.cwd!())
@@ -37,6 +52,25 @@ defmodule LemonCore.Quality.Cleanup do
     }
   end
 
+  @doc """
+  Scans and optionally deletes stale docs and old run files.
+
+  When `:apply` is `true`, actually deletes the old run files found.
+  When `:apply` is `false` (default), performs a dry run.
+
+  Returns a report with the following keys:
+    * `:root` - the root directory scanned
+    * `:retention_days` - the retention period used
+    * `:old_run_files` - list of file paths older than retention_days
+    * `:stale_docs` - list of stale documentation entries
+    * `:deleted_files` - list of files actually deleted (only when apply: true)
+
+  ## Options
+    * `:root` - root directory to scan (defaults to current working directory)
+    * `:retention_days` - number of days to retain files (defaults to 14)
+    * `:today` - date to use as reference (defaults to today, useful for testing)
+    * `:apply` - if true, actually delete files; if false, dry run (defaults to false)
+  """
   @spec prune(keyword()) :: report()
   def prune(opts \\ []) do
     report = scan(opts)
