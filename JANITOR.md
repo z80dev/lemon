@@ -1,3 +1,45 @@
+### 2026-02-22 - Test Expansion: InternalUrls, Watcher, GoogleShared, TodoRead
+**Work Area**: Test Expansion
+
+**Summary**:
+Scanned lemon_core, coding_agent, and ai apps for untested modules. Added comprehensive tests for 4 modules.
+
+**Modules Tested**:
+
+1. **CodingAgent.InternalUrls** (`f64eccfd`):
+   - File: `apps/coding_agent/test/coding_agent/internal_urls_test.exs` (NEW)
+   - Tests: 34 tests, 0 failures
+   - Coverage: resolve/2, internal_url?/1, parse/1 for notes:// protocol
+   - Edge cases: unknown protocols, http/https/file URLs, nil/empty strings
+
+2. **LemonCore.ConfigReloader.Watcher** (`9efceffc`):
+   - File: `apps/lemon_core/test/lemon_core/config_reloader/watcher_test.exs` (NEW)
+   - Tests: 107 tests, 0 failures
+   - Coverage: GenServer lifecycle, init options, watch_directories, debounce_reload, polling
+   - Edge cases: nil cwd, custom intervals, timer cancellation
+
+3. **Ai.Providers.GoogleShared** (`a22d87d9`):
+   - File: `apps/ai/test/ai/providers/google_shared_test.exs` (NEW)
+   - Tests: 87 tests, 0 failures
+   - Coverage: convert_messages, convert_tools, map_tool_choice, map_stop_reason
+   - Coverage: thinking budgets, model detection, retry helpers, cost calculation
+
+4. **CodingAgent.Tools.TodoRead** (`e7eeaee3`):
+   - File: `apps/coding_agent/test/coding_agent/tools/todo_read_test.exs` (NEW)
+   - Tests: 59 tests, 0 failures
+   - Coverage: tool definition, execute with empty/mixed todos, session isolation
+   - Coverage: abort signal handling, missing session_id errors
+
+**Total New Tests**: 287 tests, 0 failures
+
+**Commits**:
+- `f64eccfd` - test(coding_agent): add comprehensive tests for InternalUrls module
+- `e7eeaee3` - Add comprehensive tests for CodingAgent.Tools.TodoRead
+- `a22d87d9` - test(ai): add comprehensive tests for GoogleShared provider utilities
+- `9efceffc` - test(lemon_core): add comprehensive tests for ConfigReloader.Watcher
+
+---
+
 ### 2026-02-22 - Pi/Oh-My-Pi Sync: Hashline Format Simplification
 **Work Area**: Pi/Oh-My-Pi Upstream Sync / Hashline
 
