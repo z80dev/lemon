@@ -62,3 +62,15 @@ config :lemon_web, LemonWeb.Endpoint,
   secret_key_base:
     "test_secret_key_base_test_secret_key_base_test_secret_key_base_test_secret_key_base",
   server: false
+
+# Disable all MarketIntel ingestors and workers in test.
+# Prevents Exqlite connection errors and external API polling during test runs.
+# Individual MarketIntel test suites can override specific flags as needed.
+config :market_intel, :ingestion, %{
+  enable_dex: false,
+  enable_polymarket: false,
+  enable_twitter: false,
+  enable_onchain: false,
+  enable_commentary: false,
+  enable_scheduler: false
+}

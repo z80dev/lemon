@@ -34,6 +34,18 @@ config :lemon_web, LemonWeb.Endpoint,
 config :lemon_web, :access_token, nil
 config :lemon_web, :uploads_dir, Path.join(System.tmp_dir!(), "lemon_web_uploads")
 
+# MarketIntel ingestion feature flags.
+# Each flag gates the corresponding worker in the supervision tree.
+# Core infrastructure (Cache, Repo) always starts regardless.
+config :market_intel, :ingestion, %{
+  enable_dex: true,
+  enable_polymarket: true,
+  enable_twitter: true,
+  enable_onchain: true,
+  enable_commentary: true,
+  enable_scheduler: true
+}
+
 # Sample configuration:
 #
 #     config :logger, :default_handler,

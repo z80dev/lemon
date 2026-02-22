@@ -19,12 +19,6 @@ config :market_intel,
   min_commentary_interval: 1_200_000,
   max_commentary_per_hour: 3,
 
-  # Enable/disable ingestors
-  enable_dex: true,
-  enable_polymarket: true,
-  enable_twitter: true,
-  enable_onchain: true,
-
   # Token and signal configuration
   tracked_token: [
     name: "ZEEBOT",
@@ -53,3 +47,8 @@ config :market_intel,
       "Use lemonade stand metaphors lightly and keep market commentary grounded in real events.",
     developer_alias: "z80"
   ]
+
+# Ingestion feature flags have moved to the root config (config/config.exs).
+# See `config :market_intel, :ingestion, %{...}` in the umbrella root.
+# The old flat keys (enable_dex, enable_polymarket, etc.) are no longer read
+# by MarketIntel.Application — use the :ingestion map instead.
