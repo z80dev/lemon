@@ -23,6 +23,7 @@ defmodule LemonControlPlane.EventBridge do
   | :run_started             | agent                     |
   | :run_completed           | agent                     |
   | :delta                   | chat                      |
+  | :engine_action           | agent (type: tool_use)    |
   | :approval_requested      | exec.approval.requested   |
   | :approval_resolved       | exec.approval.resolved    |
   | :cron_run_started        | cron                      |
@@ -51,6 +52,8 @@ defmodule LemonControlPlane.EventBridge do
 
   alias LemonCore.Bus
   alias LemonControlPlane.Presence
+
+  @fanout_supervisor LemonControlPlane.EventBridge.FanoutSupervisor
 
   @bus_topics [
     "exec_approvals",
@@ -83,16 +86,19 @@ defmodule LemonControlPlane.EventBridge do
 
   @impl true
   def init(_opts) do
+    _ = ensure_fanout_supervisor_started()
+
     # Subscribe to static topics
     Enum.each(@bus_topics, &Bus.subscribe/1)
 
     # Initialize state version counters
     state_versions = Map.new(@state_version_keys, fn key -> {key, 0} end)
 
-    {:ok, %{
-      run_subscriptions: MapSet.new(),
-      state_versions: state_versions
-    }}
+    {:ok,
+     %{
+       run_subscriptions: MapSet.new(),
+       state_versions: state_versions
+     }}
   end
 
   @impl true
@@ -152,11 +158,72 @@ defmodule LemonControlPlane.EventBridge do
       {event_name, payload} ->
         # Get all connected clients from presence
         clients = get_connected_clients()
-
-        Enum.each(clients, fn {_conn_id, %{pid: pid}} ->
-          send(pid, {:event, event_name, payload, state_version})
-        end)
+        dispatch_event(clients, event_name, payload, state_version)
     end
+  end
+
+  defp dispatch_event(clients, event_name, payload, state_version) do
+    payload_meta = %{event: event_name, recipients: length(clients)}
+
+    LemonCore.Telemetry.emit(
+      [:lemon, :control_plane, :event_bridge, :broadcast],
+      %{count: 1, recipients: length(clients)},
+      payload_meta
+    )
+
+    case ensure_fanout_supervisor_started() do
+      :ok ->
+        case Task.Supervisor.start_child(@fanout_supervisor, fn ->
+               Enum.each(clients, fn {_conn_id, %{pid: pid}} ->
+                 send(pid, {:event, event_name, payload, state_version})
+               end)
+             end) do
+          {:ok, _pid} ->
+            :ok
+
+          {:error, reason} ->
+            emit_dispatch_drop(event_name, reason, length(clients))
+            dispatch_inline(clients, event_name, payload, state_version)
+        end
+
+      {:error, reason} ->
+        emit_dispatch_drop(event_name, reason, length(clients))
+        dispatch_inline(clients, event_name, payload, state_version)
+    end
+  rescue
+    error ->
+      emit_dispatch_drop(event_name, {:exception, error}, length(clients))
+      dispatch_inline(clients, event_name, payload, state_version)
+  end
+
+  defp dispatch_inline(clients, event_name, payload, state_version) do
+    Enum.each(clients, fn {_conn_id, %{pid: pid}} ->
+      send(pid, {:event, event_name, payload, state_version})
+    end)
+  end
+
+  defp ensure_fanout_supervisor_started do
+    case Process.whereis(@fanout_supervisor) do
+      nil ->
+        case Task.Supervisor.start_link(name: @fanout_supervisor) do
+          {:ok, _pid} -> :ok
+          {:error, {:already_started, _pid}} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+
+      _pid ->
+        :ok
+    end
+  end
+
+  defp emit_dispatch_drop(event_name, reason, recipients) do
+    LemonCore.Telemetry.emit(
+      [:lemon, :control_plane, :event_bridge, :dropped],
+      %{count: 1, recipients: recipients},
+      %{event: event_name, reason: inspect(reason, limit: 80)}
+    )
+  rescue
+    _ -> :ok
   end
 
   defp get_connected_clients do
@@ -182,78 +249,108 @@ defmodule LemonControlPlane.EventBridge do
 
   # Run events
   defp map_event_type(:run_started, payload, meta) do
-    {"agent", %{
-      "type" => "started",
-      "runId" => payload[:run_id] || meta[:run_id],
-      "sessionKey" => payload[:session_key] || meta[:session_key],
-      "engine" => payload[:engine]
-    }}
+    {"agent",
+     %{
+       "type" => "started",
+       "runId" => payload[:run_id] || meta[:run_id],
+       "sessionKey" => payload[:session_key] || meta[:session_key],
+       "engine" => payload[:engine]
+     }}
   end
 
   defp map_event_type(:run_completed, payload, meta) do
     completed = payload[:completed] || payload
-    {"agent", %{
-      "type" => "completed",
-      "runId" => meta[:run_id],
-      "sessionKey" => meta[:session_key],
-      "ok" => get_field(completed, :ok),
-      "answer" => truncate(get_field(completed, :answer), 500),
-      "durationMs" => payload[:duration_ms]
-    }}
+
+    {"agent",
+     %{
+       "type" => "completed",
+       "runId" => meta[:run_id],
+       "sessionKey" => meta[:session_key],
+       "ok" => get_field(completed, :ok),
+       "answer" => truncate(get_field(completed, :answer), 500),
+       "durationMs" => payload[:duration_ms]
+     }}
   end
 
   defp map_event_type(:delta, payload, meta) do
-    {"chat", %{
-      "type" => "delta",
-      "runId" => get_field(payload, :run_id) || meta[:run_id],
-      "sessionKey" => meta[:session_key],
-      "seq" => get_field(payload, :seq),
-      "text" => get_field(payload, :text)
-    }}
+    {"chat",
+     %{
+       "type" => "delta",
+       "runId" => get_field(payload, :run_id) || meta[:run_id],
+       "sessionKey" => meta[:session_key],
+       "seq" => get_field(payload, :seq),
+       "text" => get_field(payload, :text)
+     }}
+  end
+
+  # Engine action events (tool_use)
+  defp map_event_type(:engine_action, payload, meta) do
+    {"agent",
+     %{
+       "type" => "tool_use",
+       "runId" => meta[:run_id],
+       "sessionKey" => meta[:session_key],
+       "action" => %{
+         "id" => payload[:id],
+         "kind" => payload[:kind],
+         "title" => payload[:title],
+         "detail" => payload[:detail]
+       },
+       "phase" => payload[:phase],
+       "ok" => payload[:ok],
+       "message" => payload[:message]
+     }}
   end
 
   # Approval events
   defp map_event_type(:approval_requested, payload, _meta) do
     pending = payload[:pending] || payload
-    {"exec.approval.requested", %{
-      "approvalId" => pending[:id] || payload[:approval_id],
-      "runId" => pending[:run_id],
-      "sessionKey" => pending[:session_key],
-      "agentId" => pending[:agent_id],
-      "tool" => pending[:tool],
-      "rationale" => pending[:rationale],
-      "expiresAtMs" => pending[:expires_at_ms]
-    }}
+
+    {"exec.approval.requested",
+     %{
+       "approvalId" => pending[:id] || payload[:approval_id],
+       "runId" => pending[:run_id],
+       "sessionKey" => pending[:session_key],
+       "agentId" => pending[:agent_id],
+       "tool" => pending[:tool],
+       "rationale" => pending[:rationale],
+       "expiresAtMs" => pending[:expires_at_ms]
+     }}
   end
 
   defp map_event_type(:approval_resolved, payload, _meta) do
-    {"exec.approval.resolved", %{
-      "approvalId" => payload[:approval_id],
-      "decision" => to_string(payload[:decision])
-    }}
+    {"exec.approval.resolved",
+     %{
+       "approvalId" => payload[:approval_id],
+       "decision" => to_string(payload[:decision])
+     }}
   end
 
   # Cron events
   defp map_event_type(:cron_run_started, payload, _meta) do
     run = payload[:run] || payload
     job = payload[:job] || %{}
-    {"cron", %{
-      "type" => "started",
-      "runId" => run[:id],
-      "jobId" => run[:job_id],
-      "jobName" => job[:name] || payload[:job_name]
-    }}
+
+    {"cron",
+     %{
+       "type" => "started",
+       "runId" => run[:id],
+       "jobId" => run[:job_id],
+       "jobName" => job[:name] || payload[:job_name]
+     }}
   end
 
   defp map_event_type(:cron_run_completed, payload, _meta) do
     run = payload[:run] || payload
-    {"cron", %{
-      "type" => "completed",
-      "runId" => run[:id],
-      "jobId" => run[:job_id],
-      "status" => to_string(run[:status]),
-      "suppressed" => run[:suppressed] || false
-    }}
+
+    {"cron",
+     %{
+       "type" => "completed",
+       "runId" => run[:id],
+       "jobId" => run[:job_id],
+       "status" => to_string(run[:status]),
+       "suppressed" => run[:suppressed] || false
+     }}
   end
 
   # Tick events - handle both :tick and :cron_tick
@@ -269,76 +366,84 @@ defmodule LemonControlPlane.EventBridge do
 
   # Presence events
   defp map_event_type(:presence_changed, payload, _meta) do
-    {"presence", %{
-      "connections" => payload[:connections] || [],
-      "count" => payload[:count] || 0
-    }}
+    {"presence",
+     %{
+       "connections" => payload[:connections] || [],
+       "count" => payload[:count] || 0
+     }}
   end
 
   # Talk mode events
   defp map_event_type(:talk_mode_changed, payload, _meta) do
-    {"talk.mode", %{
-      "sessionKey" => payload[:session_key],
-      "mode" => to_string(payload[:mode])
-    }}
+    {"talk.mode",
+     %{
+       "sessionKey" => payload[:session_key],
+       "mode" => to_string(payload[:mode])
+     }}
   end
 
   # Heartbeat events
   defp map_event_type(:heartbeat, payload, _meta) do
-    {"heartbeat", %{
-      "agentId" => payload[:agent_id],
-      "status" => to_string(payload[:status] || :ok),
-      "timestampMs" => payload[:timestamp_ms] || System.system_time(:millisecond)
-    }}
+    {"heartbeat",
+     %{
+       "agentId" => payload[:agent_id],
+       "status" => to_string(payload[:status] || :ok),
+       "timestampMs" => payload[:timestamp_ms] || System.system_time(:millisecond)
+     }}
   end
 
   defp map_event_type(:heartbeat_alert, payload, _meta) do
-    {"heartbeat", %{
-      "agentId" => payload[:agent_id],
-      "status" => "alert",
-      "response" => payload[:response],
-      "timestampMs" => payload[:timestamp_ms] || System.system_time(:millisecond)
-    }}
+    {"heartbeat",
+     %{
+       "agentId" => payload[:agent_id],
+       "status" => "alert",
+       "response" => payload[:response],
+       "timestampMs" => payload[:timestamp_ms] || System.system_time(:millisecond)
+     }}
   end
 
   # Node events
   defp map_event_type(:node_pair_requested, payload, _meta) do
-    {"node.pair.requested", %{
-      "pairingId" => payload[:pairing_id],
-      "code" => payload[:code],
-      "nodeType" => payload[:node_type],
-      "nodeName" => payload[:node_name],
-      "expiresAtMs" => payload[:expires_at_ms]
-    }}
+    {"node.pair.requested",
+     %{
+       "pairingId" => payload[:pairing_id],
+       "code" => payload[:code],
+       "nodeType" => payload[:node_type],
+       "nodeName" => payload[:node_name],
+       "expiresAtMs" => payload[:expires_at_ms]
+     }}
   end
 
   defp map_event_type(:node_pair_resolved, payload, _meta) do
-    {"node.pair.resolved", %{
-      "pairingId" => payload[:pairing_id],
-      "nodeId" => payload[:node_id],
-      "approved" => payload[:approved] || false,
-      "rejected" => payload[:rejected] || false
-    }}
+    {"node.pair.resolved",
+     %{
+       "pairingId" => payload[:pairing_id],
+       "nodeId" => payload[:node_id],
+       "approved" => payload[:approved] || false,
+       "rejected" => payload[:rejected] || false
+     }}
   end
 
   defp map_event_type(:node_invoke_request, payload, _meta) do
-    {"node.invoke.request", %{
-      "invokeId" => payload[:invoke_id],
-      "nodeId" => payload[:node_id],
-      "method" => payload[:method],
-      "args" => payload[:args],
-      "timeoutMs" => payload[:timeout_ms]
-    }}
+    {"node.invoke.request",
+     %{
+       "invokeId" => payload[:invoke_id],
+       "nodeId" => payload[:node_id],
+       "method" => payload[:method],
+       "args" => payload[:args],
+       "timeoutMs" => payload[:timeout_ms]
+     }}
   end
 
   defp map_event_type(:node_invoke_completed, payload, _meta) do
-    {"node.invoke.completed", %{
-      "invokeId" => payload[:invoke_id],
-      "nodeId" => payload[:node_id],
-      "ok" => payload[:ok],
-      "result" => payload[:result],
-      "error" => payload[:error]
-    }}
+    {"node.invoke.completed",
+     %{
+       "invokeId" => payload[:invoke_id],
+       "nodeId" => payload[:node_id],
+       "ok" => payload[:ok],
+       "result" => payload[:result],
+       "error" => payload[:error]
+     }}
   end
 
   # System events
@@ -352,29 +457,32 @@ defmodule LemonControlPlane.EventBridge do
 
   # Device pairing events
   defp map_event_type(:device_pair_requested, payload, _meta) do
-    {"device.pair.requested", %{
-      "pairingId" => payload[:pairing_id],
-      "deviceType" => payload[:device_type],
-      "deviceName" => payload[:device_name]
-    }}
+    {"device.pair.requested",
+     %{
+       "pairingId" => payload[:pairing_id],
+       "deviceType" => payload[:device_type],
+       "deviceName" => payload[:device_name]
+     }}
   end
 
   defp map_event_type(:device_pair_resolved, payload, _meta) do
-    {"device.pair.resolved", %{
-      "pairingId" => payload[:pairing_id],
-      "status" => to_string(payload[:status]),
-      "deviceType" => payload[:device_type],
-      "deviceName" => payload[:device_name]
-    }}
+    {"device.pair.resolved",
+     %{
+       "pairingId" => payload[:pairing_id],
+       "status" => to_string(payload[:status]),
+       "deviceType" => payload[:device_type],
+       "deviceName" => payload[:device_name]
+     }}
   end
 
   # Voicewake events
   defp map_event_type(:voicewake_changed, payload, _meta) do
-    {"voicewake.changed", %{
-      "enabled" => payload[:enabled],
-      "keyword" => payload[:keyword],
-      "backend" => payload[:backend]
-    }}
+    {"voicewake.changed",
+     %{
+       "enabled" => payload[:enabled],
+       "keyword" => payload[:keyword],
+       "backend" => payload[:backend]
+     }}
   end
 
   # Custom events (from system-event with custom_* types)
@@ -382,11 +490,12 @@ defmodule LemonControlPlane.EventBridge do
     # Extract the original custom event type from meta or payload
     custom_type = meta[:original_event_type] || payload[:custom_event_type] || "custom"
 
-    {"custom", %{
-      "type" => custom_type,
-      "payload" => payload,
-      "timestampMs" => System.system_time(:millisecond)
-    }}
+    {"custom",
+     %{
+       "type" => custom_type,
+       "payload" => payload,
+       "timestampMs" => System.system_time(:millisecond)
+     }}
   end
 
   # Catch-all for unmapped events
