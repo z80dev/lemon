@@ -1,4 +1,5 @@
-defmodule CodingAgent.Extensions.ExtensionTest do
+defmodule Elixir.CodingAgent.Extensions.ExtensionTest do
+  alias Elixir.CodingAgent, as: CodingAgent
   @moduledoc """
   Tests for the Extension behaviour module.
   
@@ -8,7 +9,7 @@ defmodule CodingAgent.Extensions.ExtensionTest do
   
   use ExUnit.Case, async: true
   
-  alias CodingAgent.Extensions.Extension
+  alias Elixir.CodingAgent.Extensions.Extension
   
   # Example extension that implements all callbacks
   defmodule FullExtension do
@@ -66,7 +67,7 @@ defmodule CodingAgent.Extensions.ExtensionTest do
   end
   
   # Minimal extension implementing only required callbacks
-  defmodule CodingAgent.Extensions.ExtensionTest.MinimalExtension do
+  defmodule Elixir.CodingAgent.Extensions.ExtensionTest.MinimalExtension do
     @behaviour Extension
     
     @impl true
@@ -100,12 +101,12 @@ defmodule CodingAgent.Extensions.ExtensionTest do
   describe "required callbacks" do
     test "name/0 returns extension name" do
       assert FullExtension.name() == "full-extension"
-      assert CodingAgent.Extensions.ExtensionTest.MinimalExtension.name() == "minimal-extension"
+      assert Elixir.CodingAgent.Extensions.ExtensionTest.MinimalExtension.name() == "minimal-extension"
     end
     
     test "version/0 returns version string" do
       assert FullExtension.version() == "1.0.0"
-      assert CodingAgent.Extensions.ExtensionTest.MinimalExtension.version() == "0.1.0"
+      assert Elixir.CodingAgent.Extensions.ExtensionTest.MinimalExtension.version() == "0.1.0"
     end
     
     test "required callbacks are enforced by behaviour" do
@@ -136,7 +137,7 @@ defmodule CodingAgent.Extensions.ExtensionTest do
     
     test "minimal extension raises when tools/1 called" do
       assert_raise UndefinedFunctionError, fn ->
-        apply(CodingAgent.Extensions.ExtensionTest.MinimalExtension, :tools, ["/path"])
+        apply(Elixir.CodingAgent.Extensions.ExtensionTest.MinimalExtension, :tools, ["/path"])
       end
     end
   end
@@ -318,22 +319,22 @@ defmodule CodingAgent.Extensions.ExtensionTest do
   describe "error handling" do
     test "calling optional callback on minimal extension raises" do
       assert_raise UndefinedFunctionError, fn ->
-        apply(CodingAgent.Extensions.ExtensionTest.MinimalExtension, :tools, ["/path"])
+        apply(Elixir.CodingAgent.Extensions.ExtensionTest.MinimalExtension, :tools, ["/path"])
       end
 
       assert_raise UndefinedFunctionError, fn ->
-        apply(CodingAgent.Extensions.ExtensionTest.MinimalExtension, :hooks, [])
+        apply(Elixir.CodingAgent.Extensions.ExtensionTest.MinimalExtension, :hooks, [])
       end
 
       assert_raise UndefinedFunctionError, fn ->
-        apply(CodingAgent.Extensions.ExtensionTest.MinimalExtension, :capabilities, [])
+        apply(Elixir.CodingAgent.Extensions.ExtensionTest.MinimalExtension, :capabilities, [])
       end
     end
     
     test "implementing only required callbacks is valid" do
       # Should be able to use minimal extension for basic operations
-      assert CodingAgent.Extensions.ExtensionTest.MinimalExtension.name() == "minimal-extension"
-      assert CodingAgent.Extensions.ExtensionTest.MinimalExtension.version() == "0.1.0"
+      assert Elixir.CodingAgent.Extensions.ExtensionTest.MinimalExtension.name() == "minimal-extension"
+      assert Elixir.CodingAgent.Extensions.ExtensionTest.MinimalExtension.version() == "0.1.0"
     end
   end
 end

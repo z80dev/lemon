@@ -1,6 +1,7 @@
-defmodule LemonGateway.ThreadWorkerSupervisorTest do
+defmodule Elixir.LemonGateway.ThreadWorkerSupervisorTest do
+  alias Elixir.LemonGateway, as: LemonGateway
   @moduledoc """
-  Comprehensive tests for LemonGateway.ThreadWorkerSupervisor DynamicSupervisor.
+  Comprehensive tests for Elixir.LemonGateway.ThreadWorkerSupervisor DynamicSupervisor.
 
   Tests cover:
   - Supervisor startup and initialization
@@ -16,20 +17,20 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonGateway.ThreadWorkerSupervisor
-  alias LemonGateway.ThreadWorker
-  alias LemonGateway.Types.Job
-  alias LemonGateway.Event.Completed
+  alias Elixir.LemonGateway.ThreadWorkerSupervisor
+  alias Elixir.LemonGateway.ThreadWorker
+  alias Elixir.LemonGateway.Types.Job
+  alias Elixir.LemonGateway.Event.Completed
 
   # ============================================================================
   # Test Engine
   # ============================================================================
 
-  defmodule LemonGateway.ThreadWorkerSupervisorTest.TestEngine do
-    @behaviour LemonGateway.Engine
+  defmodule Elixir.LemonGateway.ThreadWorkerSupervisorTest.TestEngine do
+    @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
-    alias LemonGateway.Event
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Event
 
     @impl true
     def id, do: "test_engine"
@@ -84,7 +85,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
   setup do
     _ = Application.stop(:lemon_gateway)
 
-    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+    Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 10,
       default_engine: "test_engine",
       enable_telegram: false,
@@ -92,8 +93,8 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
     })
 
     Application.put_env(:lemon_gateway, :engines, [
-      LemonGateway.ThreadWorkerSupervisorTest.TestEngine,
-      LemonGateway.Engines.Echo
+      Elixir.LemonGateway.ThreadWorkerSupervisorTest.TestEngine,
+      Elixir.LemonGateway.Engines.Echo
     ])
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
@@ -156,8 +157,8 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       job1 = make_job(scope1, text: "worker1")
       job2 = make_job(scope2, text: "worker2")
 
-      LemonGateway.submit(job1)
-      LemonGateway.submit(job2)
+      Elixir.LemonGateway.submit(job1)
+      Elixir.LemonGateway.submit(job2)
 
       assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true}}, 2000
       assert_receive {:lemon_gateway_run_completed, ^job2, %Completed{ok: true}}, 2000
@@ -191,7 +192,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, spec)
 
       # Verify registration
-      assert LemonGateway.ThreadRegistry.whereis(key) == pid
+      assert Elixir.LemonGateway.ThreadRegistry.whereis(key) == pid
 
       # Clean up
       DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
@@ -231,13 +232,13 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       scope = make_scope()
       job = make_job(scope)
 
-      LemonGateway.submit(job)
+      Elixir.LemonGateway.submit(job)
 
       # Give time for worker to start
       Process.sleep(50)
 
       key = thread_key(scope)
-      worker_pid = LemonGateway.ThreadRegistry.whereis(key)
+      worker_pid = Elixir.LemonGateway.ThreadRegistry.whereis(key)
 
       if worker_pid do
         children = DynamicSupervisor.which_children(ThreadWorkerSupervisor)
@@ -261,7 +262,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       spec = {ThreadWorker, [thread_key: key]}
       {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, spec)
 
-      assert LemonGateway.ThreadRegistry.whereis(key) == pid
+      assert Elixir.LemonGateway.ThreadRegistry.whereis(key) == pid
 
       DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
     end
@@ -273,12 +274,12 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       spec = {ThreadWorker, [thread_key: key]}
       {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, spec)
 
-      assert LemonGateway.ThreadRegistry.whereis(key) == pid
+      assert Elixir.LemonGateway.ThreadRegistry.whereis(key) == pid
 
       DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
 
       Process.sleep(50)
-      assert LemonGateway.ThreadRegistry.whereis(key) == nil
+      assert Elixir.LemonGateway.ThreadRegistry.whereis(key) == nil
     end
 
     test "duplicate thread_key registration fails" do
@@ -309,8 +310,8 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       {:ok, pid2} =
         DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key2]})
 
-      assert LemonGateway.ThreadRegistry.whereis(key1) == pid1
-      assert LemonGateway.ThreadRegistry.whereis(key2) == pid2
+      assert Elixir.LemonGateway.ThreadRegistry.whereis(key1) == pid1
+      assert Elixir.LemonGateway.ThreadRegistry.whereis(key2) == pid2
       assert pid1 != pid2
 
       DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid1)
@@ -380,12 +381,12 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       spec = {ThreadWorker, [thread_key: key]}
       {:ok, pid} = DynamicSupervisor.start_child(ThreadWorkerSupervisor, spec)
 
-      assert LemonGateway.ThreadRegistry.whereis(key) == pid
+      assert Elixir.LemonGateway.ThreadRegistry.whereis(key) == pid
 
       DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
 
       Process.sleep(50)
-      assert LemonGateway.ThreadRegistry.whereis(key) == nil
+      assert Elixir.LemonGateway.ThreadRegistry.whereis(key) == nil
     end
   end
 
@@ -413,7 +414,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
 
       # Second worker should still be alive
       assert Process.alive?(pid2)
-      assert LemonGateway.ThreadRegistry.whereis(key2) == pid2
+      assert Elixir.LemonGateway.ThreadRegistry.whereis(key2) == pid2
 
       DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid2)
     end
@@ -515,7 +516,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
           Task.async(fn ->
             scope = make_scope()
             job = make_job(scope, text: "concurrent #{i}", meta: %{notify_pid: test_pid})
-            LemonGateway.submit(job)
+            Elixir.LemonGateway.submit(job)
             job
           end)
         end
@@ -555,7 +556,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       key = thread_key(scope)
 
       job = make_job(scope)
-      LemonGateway.submit(job)
+      Elixir.LemonGateway.submit(job)
 
       assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2000
 
@@ -568,7 +569,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       key = thread_key(scope)
 
       job1 = make_job(scope, text: "first")
-      LemonGateway.submit(job1)
+      Elixir.LemonGateway.submit(job1)
 
       assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true}}, 2000
 
@@ -577,7 +578,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
 
       # Submit another job - should create new worker (or reuse existing)
       job2 = make_job(scope, text: "second")
-      LemonGateway.submit(job2)
+      Elixir.LemonGateway.submit(job2)
 
       assert_receive {:lemon_gateway_run_completed, ^job2, %Completed{ok: true}}, 2000
     end
@@ -587,14 +588,14 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
 
       # Submit first job and wait for completion before next
       job1 = make_job(scope, text: "job 1")
-      LemonGateway.submit(job1)
+      Elixir.LemonGateway.submit(job1)
       assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true}}, 2000
 
       # Wait a moment then submit next job
       Process.sleep(50)
 
       job2 = make_job(scope, text: "job 2")
-      LemonGateway.submit(job2)
+      Elixir.LemonGateway.submit(job2)
       assert_receive {:lemon_gateway_run_completed, ^job2, %Completed{ok: true}}, 2000
     end
   end
@@ -605,7 +606,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
   end
 
   defp do_wait_for_worker_stop(key, deadline) do
-    case LemonGateway.ThreadRegistry.whereis(key) do
+    case Elixir.LemonGateway.ThreadRegistry.whereis(key) do
       nil ->
         :ok
 
@@ -648,12 +649,12 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       {:ok, pid} =
         DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
 
-      assert LemonGateway.ThreadRegistry.whereis(key) == pid
+      assert Elixir.LemonGateway.ThreadRegistry.whereis(key) == pid
 
       DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
       Process.sleep(50)
 
-      assert LemonGateway.ThreadRegistry.whereis(key) == nil
+      assert Elixir.LemonGateway.ThreadRegistry.whereis(key) == nil
     end
 
     test "crashed workers are cleaned up from supervisor" do
@@ -706,7 +707,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
         for i <- 1..10 do
           scope = make_scope()
           job = make_job(scope, text: "rapid #{i}")
-          LemonGateway.submit(job)
+          Elixir.LemonGateway.submit(job)
           job
         end
 
@@ -729,7 +730,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
 
       # Submit job - should create new worker
       job = make_job(scope)
-      LemonGateway.submit(job)
+      Elixir.LemonGateway.submit(job)
 
       assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2000
     end
@@ -835,21 +836,21 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
   end
 
   # ============================================================================
-  # 12. Integration with LemonGateway.submit
+  # 12. Integration with Elixir.LemonGateway.submit
   # ============================================================================
 
-  describe "integration with LemonGateway.submit" do
+  describe "integration with Elixir.LemonGateway.submit" do
     test "submit creates supervised worker" do
       scope = make_scope()
       job = make_job(scope)
 
-      LemonGateway.submit(job)
+      Elixir.LemonGateway.submit(job)
 
       # Wait for job to start processing
       Process.sleep(50)
 
       key = thread_key(scope)
-      worker_pid = LemonGateway.ThreadRegistry.whereis(key)
+      worker_pid = Elixir.LemonGateway.ThreadRegistry.whereis(key)
 
       if worker_pid do
         children = DynamicSupervisor.which_children(ThreadWorkerSupervisor)
@@ -866,18 +867,18 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
 
       # Submit first job to create worker
       job1 = make_job(scope, text: "first", meta: %{notify_pid: self(), delay_ms: 200})
-      LemonGateway.submit(job1)
+      Elixir.LemonGateway.submit(job1)
 
       Process.sleep(50)
-      worker_pid1 = LemonGateway.ThreadRegistry.whereis(key)
+      worker_pid1 = Elixir.LemonGateway.ThreadRegistry.whereis(key)
       assert is_pid(worker_pid1)
 
       # Submit second job while first is running
       job2 = make_job(scope, text: "second")
-      LemonGateway.submit(job2)
+      Elixir.LemonGateway.submit(job2)
 
       # Should still be same worker
-      worker_pid2 = LemonGateway.ThreadRegistry.whereis(key)
+      worker_pid2 = Elixir.LemonGateway.ThreadRegistry.whereis(key)
       assert worker_pid1 == worker_pid2
 
       assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true}}, 2000
@@ -894,13 +895,13 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       job1 = make_job(scope1, text: "scope1", meta: %{notify_pid: self(), delay_ms: 200})
       job2 = make_job(scope2, text: "scope2", meta: %{notify_pid: self(), delay_ms: 200})
 
-      LemonGateway.submit(job1)
-      LemonGateway.submit(job2)
+      Elixir.LemonGateway.submit(job1)
+      Elixir.LemonGateway.submit(job2)
 
       Process.sleep(50)
 
-      worker_pid1 = LemonGateway.ThreadRegistry.whereis(key1)
-      worker_pid2 = LemonGateway.ThreadRegistry.whereis(key2)
+      worker_pid1 = Elixir.LemonGateway.ThreadRegistry.whereis(key1)
+      worker_pid2 = Elixir.LemonGateway.ThreadRegistry.whereis(key2)
 
       assert is_pid(worker_pid1)
       assert is_pid(worker_pid2)
@@ -989,7 +990,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
         DynamicSupervisor.start_child(ThreadWorkerSupervisor, {ThreadWorker, [thread_key: key]})
 
       # Verify via tuple works
-      via_name = {:via, Registry, {LemonGateway.ThreadRegistry, key}}
+      via_name = {:via, Registry, {Elixir.LemonGateway.ThreadRegistry, key}}
       assert GenServer.whereis(via_name) == pid
 
       DynamicSupervisor.terminate_child(ThreadWorkerSupervisor, pid)
@@ -1006,7 +1007,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
 
       Process.sleep(50)
 
-      via_name = {:via, Registry, {LemonGateway.ThreadRegistry, key}}
+      via_name = {:via, Registry, {Elixir.LemonGateway.ThreadRegistry, key}}
       assert GenServer.whereis(via_name) == nil
     end
   end
@@ -1039,7 +1040,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       # A new worker with the same key may or may not exist depending on restart strategy
       # The key behavior is that the supervisor remains stable
       Process.sleep(100)
-      new_pid = LemonGateway.ThreadRegistry.whereis(key)
+      new_pid = Elixir.LemonGateway.ThreadRegistry.whereis(key)
 
       # If restarted, it should be a different pid
       if new_pid do

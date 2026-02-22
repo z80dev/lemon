@@ -1,10 +1,11 @@
-defmodule LemonChannels.Telegram.DeliveryTest do
+defmodule Elixir.LemonChannels.Telegram.DeliveryTest do
+  alias Elixir.LemonChannels, as: LemonChannels
   use ExUnit.Case, async: false
 
-  alias LemonChannels.OutboundPayload
-  alias LemonChannels.Telegram.Delivery
+  alias Elixir.LemonChannels.OutboundPayload
+  alias Elixir.LemonChannels.Telegram.Delivery
 
-  defmodule LemonChannels.Telegram.DeliveryTest.TestTelegramPlugin do
+  defmodule Elixir.LemonChannels.Telegram.DeliveryTest.TestTelegramPlugin do
     def id, do: "telegram"
 
     def meta do
@@ -26,20 +27,20 @@ defmodule LemonChannels.Telegram.DeliveryTest do
 
   setup do
     {:ok, _} = Application.ensure_all_started(:lemon_channels)
-    :persistent_term.put({LemonChannels.Telegram.DeliveryTest.TestTelegramPlugin, :notify_pid}, self())
+    :persistent_term.put({Elixir.LemonChannels.Telegram.DeliveryTest.TestTelegramPlugin, :notify_pid}, self())
 
-    existing = LemonChannels.Registry.get_plugin("telegram")
-    _ = LemonChannels.Registry.unregister("telegram")
-    :ok = LemonChannels.Registry.register(LemonChannels.Telegram.DeliveryTest.TestTelegramPlugin)
+    existing = Elixir.LemonChannels.Registry.get_plugin("telegram")
+    _ = Elixir.LemonChannels.Registry.unregister("telegram")
+    :ok = Elixir.LemonChannels.Registry.register(Elixir.LemonChannels.Telegram.DeliveryTest.TestTelegramPlugin)
 
     on_exit(fn ->
-      :persistent_term.erase({LemonChannels.Telegram.DeliveryTest.TestTelegramPlugin, :notify_pid})
+      :persistent_term.erase({Elixir.LemonChannels.Telegram.DeliveryTest.TestTelegramPlugin, :notify_pid})
 
-      if is_pid(Process.whereis(LemonChannels.Registry)) do
-        _ = LemonChannels.Registry.unregister("telegram")
+      if is_pid(Process.whereis(Elixir.LemonChannels.Registry)) do
+        _ = Elixir.LemonChannels.Registry.unregister("telegram")
 
         if is_atom(existing) and not is_nil(existing) do
-          _ = LemonChannels.Registry.register(existing)
+          _ = Elixir.LemonChannels.Registry.register(existing)
         end
       end
     end)

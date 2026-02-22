@@ -1,7 +1,8 @@
-defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
+defmodule Elixir.LemonChannels.Adapters.Telegram.FileTransferTest do
+  alias Elixir.LemonChannels, as: LemonChannels
   use ExUnit.Case, async: false
 
-  defmodule LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI do
+  defmodule Elixir.LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI do
     @updates_key {__MODULE__, :updates}
     @sent_key {__MODULE__, :sent}
 
@@ -58,10 +59,10 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
   end
 
   setup do
-    LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.register_sent(self())
+    Elixir.LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.register_sent(self())
 
     on_exit(fn ->
-      if pid = Process.whereis(LemonChannels.Adapters.Telegram.Transport) do
+      if pid = Process.whereis(Elixir.LemonChannels.Adapters.Telegram.Transport) do
         Process.unlink(pid)
 
         if Process.alive?(pid) do
@@ -75,15 +76,15 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
         end
       end
 
-      :persistent_term.erase({LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI, :sent})
-      :persistent_term.erase({LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI, :updates})
+      :persistent_term.erase({Elixir.LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI, :sent})
+      :persistent_term.erase({Elixir.LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI, :updates})
     end)
 
     :ok
   end
 
   defp bind_project!(chat_id, root) do
-    scope = %LemonChannels.Types.ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
+    scope = %Elixir.LemonChannels.Types.ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
 
     LemonCore.Store.put(:channels_projects_dynamic, "testproj", %{
       root: root,
@@ -161,13 +162,13 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     root = fresh_root!("lemon-file-put")
     bind_project!(chat_id, root)
 
-    LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.set_updates([document_update(chat_id, "/file put incoming/example.txt")])
+    Elixir.LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.set_updates([document_update(chat_id, "/file put incoming/example.txt")])
 
     {:ok, _pid} =
-      LemonChannels.Adapters.Telegram.Transport.start_link(
+      Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
           bot_token: "token",
-          api_mod: LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI,
+          api_mod: Elixir.LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI,
           poll_interval_ms: 10,
           files: %{
             enabled: true,
@@ -186,7 +187,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
   test "/file put defaults to channels.default_cwd when no project is bound" do
     chat_id = 12_346
-    root = LemonChannels.Cwd.default_cwd()
+    root = Elixir.LemonChannels.Cwd.default_cwd()
 
     rel =
       Path.join("incoming", "lemon-file-put-default-#{System.unique_integer([:positive])}.txt")
@@ -195,13 +196,13 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
       _ = File.rm(Path.join(root, rel))
     end)
 
-    LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.set_updates([document_update(chat_id, "/file put #{rel}")])
+    Elixir.LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.set_updates([document_update(chat_id, "/file put #{rel}")])
 
     {:ok, _pid} =
-      LemonChannels.Adapters.Telegram.Transport.start_link(
+      Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
           bot_token: "token",
-          api_mod: LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI,
+          api_mod: Elixir.LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI,
           poll_interval_ms: 10,
           files: %{enabled: true, auto_put: false, uploads_dir: "incoming"}
         }
@@ -219,7 +220,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
     File.write!(Path.join(root, "out.txt"), "hello")
 
-    LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.set_updates([
+    Elixir.LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.set_updates([
       %{
         "update_id" => 1,
         "message" => %{
@@ -233,10 +234,10 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     ])
 
     {:ok, _pid} =
-      LemonChannels.Adapters.Telegram.Transport.start_link(
+      Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
           bot_token: "token",
-          api_mod: LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI,
+          api_mod: Elixir.LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI,
           poll_interval_ms: 10,
           files: %{enabled: true}
         }
@@ -248,7 +249,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
   test "/file get defaults to channels.default_cwd when no project is bound" do
     chat_id = 22_223
-    root = LemonChannels.Cwd.default_cwd()
+    root = Elixir.LemonChannels.Cwd.default_cwd()
 
     rel =
       Path.join("incoming", "lemon-file-get-default-#{System.unique_integer([:positive])}.txt")
@@ -261,7 +262,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
       _ = File.rm(full)
     end)
 
-    LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.set_updates([
+    Elixir.LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.set_updates([
       %{
         "update_id" => 2,
         "message" => %{
@@ -275,10 +276,10 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     ])
 
     {:ok, _pid} =
-      LemonChannels.Adapters.Telegram.Transport.start_link(
+      Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
           bot_token: "token",
-          api_mod: LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI,
+          api_mod: Elixir.LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI,
           poll_interval_ms: 10,
           files: %{enabled: true}
         }
@@ -294,13 +295,13 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     root = fresh_root!("lemon-auto-put")
     bind_project!(chat_id, root)
 
-    LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.set_updates([document_update(chat_id, nil)])
+    Elixir.LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.set_updates([document_update(chat_id, nil)])
 
     {:ok, _pid} =
-      LemonChannels.Adapters.Telegram.Transport.start_link(
+      Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
           bot_token: "token",
-          api_mod: LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI,
+          api_mod: Elixir.LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI,
           poll_interval_ms: 10,
           files: %{enabled: true, auto_put: true, uploads_dir: "incoming"}
         }
@@ -318,16 +319,16 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
     mg = "mg-1"
 
-    LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.set_updates([
+    Elixir.LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.set_updates([
       document_update_media_group(chat_id, mg, "a.txt"),
       document_update_media_group(chat_id, mg, "b.txt")
     ])
 
     {:ok, _pid} =
-      LemonChannels.Adapters.Telegram.Transport.start_link(
+      Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
           bot_token: "token",
-          api_mod: LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI,
+          api_mod: Elixir.LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI,
           poll_interval_ms: 10,
           files: %{
             enabled: true,
@@ -351,16 +352,16 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
     mg = "mg-2"
 
-    LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.set_updates([
+    Elixir.LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.set_updates([
       document_update_media_group(chat_id, mg, "c.txt", "/file put incoming/"),
       document_update_media_group(chat_id, mg, "d.txt")
     ])
 
     {:ok, _pid} =
-      LemonChannels.Adapters.Telegram.Transport.start_link(
+      Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
           bot_token: "token",
-          api_mod: LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI,
+          api_mod: Elixir.LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI,
           poll_interval_ms: 10,
           files: %{
             enabled: true,

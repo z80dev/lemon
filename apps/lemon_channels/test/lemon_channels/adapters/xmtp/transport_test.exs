@@ -1,12 +1,13 @@
-defmodule LemonChannels.Adapters.Xmtp.TransportTest do
+defmodule Elixir.LemonChannels.Adapters.Xmtp.TransportTest do
+  alias Elixir.LemonChannels, as: LemonChannels
   use ExUnit.Case, async: false
 
-  alias LemonChannels.Adapters.Xmtp.PortServer
-  alias LemonChannels.Adapters.Xmtp.Transport
-  alias LemonChannels.OutboundPayload
+  alias Elixir.LemonChannels.Adapters.Xmtp.PortServer
+  alias Elixir.LemonChannels.Adapters.Xmtp.Transport
+  alias Elixir.LemonChannels.OutboundPayload
   alias LemonCore.InboundMessage
 
-  defmodule LemonChannels.Adapters.Xmtp.TransportTest.TestRouter do
+  defmodule Elixir.LemonChannels.Adapters.Xmtp.TransportTest.TestRouter do
     def handle_inbound(msg) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
         send(pid, {:inbound, msg})
@@ -23,8 +24,8 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
     old_gateway_env = Application.get_env(:lemon_channels, :gateway)
     old_xmtp_env = Application.get_env(:lemon_channels, :xmtp)
 
-    :persistent_term.put({LemonChannels.Adapters.Xmtp.TransportTest.TestRouter, :pid}, self())
-    LemonCore.RouterBridge.configure(router: LemonChannels.Adapters.Xmtp.TransportTest.TestRouter)
+    :persistent_term.put({Elixir.LemonChannels.Adapters.Xmtp.TransportTest.TestRouter, :pid}, self())
+    LemonCore.RouterBridge.configure(router: Elixir.LemonChannels.Adapters.Xmtp.TransportTest.TestRouter)
 
     Application.put_env(:lemon_channels, :gateway, %{
       enable_xmtp: true,
@@ -40,7 +41,7 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
 
     on_exit(fn ->
       stop_transport()
-      :persistent_term.erase({LemonChannels.Adapters.Xmtp.TransportTest.TestRouter, :pid})
+      :persistent_term.erase({Elixir.LemonChannels.Adapters.Xmtp.TransportTest.TestRouter, :pid})
       restore_env(:lemon_core, :router_bridge, old_router_bridge)
       restore_env(:lemon_channels, :gateway, old_gateway_env)
       restore_env(:lemon_channels, :xmtp, old_xmtp_env)

@@ -1,18 +1,19 @@
-defmodule LemonGateway.ThreadWorkerTest do
+defmodule Elixir.LemonGateway.ThreadWorkerTest do
+  alias Elixir.LemonGateway, as: LemonGateway
   @moduledoc """
-  Comprehensive tests for LemonGateway.ThreadWorker queue modes and behavior.
+  Comprehensive tests for Elixir.LemonGateway.ThreadWorker queue modes and behavior.
   """
   use ExUnit.Case, async: false
 
-  alias LemonGateway.Types.Job
-  alias LemonGateway.Event.Completed
+  alias Elixir.LemonGateway.Types.Job
+  alias Elixir.LemonGateway.Event.Completed
 
   # A slow engine that allows us to observe queueing behavior
-  defmodule LemonGateway.ThreadWorkerTest.SlowEngine do
-    @behaviour LemonGateway.Engine
+  defmodule Elixir.LemonGateway.ThreadWorkerTest.SlowEngine do
+    @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
-    alias LemonGateway.Event
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Event
 
     @impl true
     def id, do: "slow"
@@ -62,10 +63,10 @@ defmodule LemonGateway.ThreadWorkerTest do
 
   # Engine that can be cancelled and reports the reason
   defmodule CancellableEngine do
-    @behaviour LemonGateway.Engine
+    @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
-    alias LemonGateway.Event
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Event
 
     @impl true
     def id, do: "cancellable"
@@ -124,10 +125,10 @@ defmodule LemonGateway.ThreadWorkerTest do
 
   # Engine that supports steering and records steer calls
   defmodule SteerableEngine do
-    @behaviour LemonGateway.Engine
+    @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
-    alias LemonGateway.Event
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Event
 
     @impl true
     def id, do: "steerable"
@@ -195,15 +196,15 @@ defmodule LemonGateway.ThreadWorkerTest do
     # Stop and restart the application with our test engines
     _ = Application.stop(:lemon_gateway)
 
-    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+    Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 10,
       default_engine: "echo",
       enable_telegram: false
     })
 
     Application.put_env(:lemon_gateway, :engines, [
-      LemonGateway.Engines.Echo,
-      LemonGateway.ThreadWorkerTest.SlowEngine,
+      Elixir.LemonGateway.Engines.Echo,
+      Elixir.LemonGateway.ThreadWorkerTest.SlowEngine,
       CancellableEngine,
       SteerableEngine
     ])
@@ -251,9 +252,9 @@ defmodule LemonGateway.ThreadWorkerTest do
       job2 = make_job(scope, prompt: "second", queue_mode: :collect)
       job3 = make_job(scope, prompt: "third", queue_mode: :collect)
 
-      LemonGateway.submit(job1)
-      LemonGateway.submit(job2)
-      LemonGateway.submit(job3)
+      Elixir.LemonGateway.submit(job1)
+      Elixir.LemonGateway.submit(job2)
+      Elixir.LemonGateway.submit(job3)
 
       assert_receive {:lemon_gateway_run_completed, ^job1,
                       %Completed{ok: true, answer: "Echo: first"}},
@@ -275,7 +276,7 @@ defmodule LemonGateway.ThreadWorkerTest do
       jobs =
         for i <- 1..5 do
           job = make_job(scope, prompt: "job#{i}", queue_mode: :collect)
-          LemonGateway.submit(job)
+          Elixir.LemonGateway.submit(job)
           job
         end
 
@@ -306,7 +307,7 @@ defmodule LemonGateway.ThreadWorkerTest do
         )
 
       # Submit first job (this starts processing)
-      LemonGateway.submit(job1)
+      Elixir.LemonGateway.submit(job1)
 
       # Let it start processing (can't merge once started)
       assert_receive {:lemon_gateway_run_completed, _,
@@ -345,11 +346,11 @@ defmodule LemonGateway.ThreadWorkerTest do
           meta: %{notify_pid: self()}
         )
 
-      LemonGateway.submit(blocking_job)
+      Elixir.LemonGateway.submit(blocking_job)
       # Small delay to ensure blocking job starts
       Process.sleep(50)
-      LemonGateway.submit(followup1)
-      LemonGateway.submit(followup2)
+      Elixir.LemonGateway.submit(followup1)
+      Elixir.LemonGateway.submit(followup2)
 
       # Wait for blocking job
       assert_receive {:lemon_gateway_run_completed, ^blocking_job, %Completed{ok: true}}, 2000
@@ -396,12 +397,12 @@ defmodule LemonGateway.ThreadWorkerTest do
           meta: %{notify_pid: self()}
         )
 
-      LemonGateway.submit(blocking_job)
+      Elixir.LemonGateway.submit(blocking_job)
       Process.sleep(50)
-      LemonGateway.submit(followup1)
+      Elixir.LemonGateway.submit(followup1)
       # Wait longer than debounce window
       Process.sleep(50)
-      LemonGateway.submit(followup2)
+      Elixir.LemonGateway.submit(followup2)
 
       assert_receive {:lemon_gateway_run_completed, ^blocking_job, %Completed{ok: true}}, 2000
 
@@ -438,10 +439,10 @@ defmodule LemonGateway.ThreadWorkerTest do
           meta: %{notify_pid: self()}
         )
 
-      LemonGateway.submit(running_job)
+      Elixir.LemonGateway.submit(running_job)
       # Wait for run to start
       Process.sleep(50)
-      LemonGateway.submit(steer_job)
+      Elixir.LemonGateway.submit(steer_job)
 
       # Should receive steer notification from the engine
       assert_receive {:engine_steered, "injected message"}, 2000
@@ -465,9 +466,9 @@ defmodule LemonGateway.ThreadWorkerTest do
       steer_job =
         make_job(scope, prompt: "steer", queue_mode: :steer, meta: %{notify_pid: self()})
 
-      LemonGateway.submit(running_job)
+      Elixir.LemonGateway.submit(running_job)
       Process.sleep(50)
-      LemonGateway.submit(steer_job)
+      Elixir.LemonGateway.submit(steer_job)
 
       # Wait for running job to complete
       assert_receive {:lemon_gateway_run_completed, ^running_job, %Completed{ok: true}}, 2000
@@ -483,7 +484,7 @@ defmodule LemonGateway.ThreadWorkerTest do
       steer_job =
         make_job(scope, prompt: "steer", queue_mode: :steer, meta: %{notify_pid: self()})
 
-      LemonGateway.submit(steer_job)
+      Elixir.LemonGateway.submit(steer_job)
 
       # Should complete (converted to followup since no active run)
       assert_receive {:lemon_gateway_run_completed, _, %Completed{ok: true}}, 2000
@@ -503,10 +504,10 @@ defmodule LemonGateway.ThreadWorkerTest do
       steer1 = make_job(scope, prompt: "msg1", queue_mode: :steer, meta: %{notify_pid: self()})
       steer2 = make_job(scope, prompt: "msg2", queue_mode: :steer, meta: %{notify_pid: self()})
 
-      LemonGateway.submit(running_job)
+      Elixir.LemonGateway.submit(running_job)
       Process.sleep(50)
-      LemonGateway.submit(steer1)
-      LemonGateway.submit(steer2)
+      Elixir.LemonGateway.submit(steer1)
+      Elixir.LemonGateway.submit(steer2)
 
       # Both steers should be injected
       assert_receive {:engine_steered, "msg1"}, 2000
@@ -532,9 +533,9 @@ defmodule LemonGateway.ThreadWorkerTest do
       steer_job =
         make_job(scope, prompt: "steer", queue_mode: :steer, meta: %{notify_pid: self()})
 
-      LemonGateway.submit(running_job)
+      Elixir.LemonGateway.submit(running_job)
       Process.sleep(50)
-      LemonGateway.submit(steer_job)
+      Elixir.LemonGateway.submit(steer_job)
 
       # Should NOT receive cancel notification for steer mode
       refute_receive {:engine_cancelled, _}, 500
@@ -565,9 +566,9 @@ defmodule LemonGateway.ThreadWorkerTest do
           meta: %{notify_pid: self()}
         )
 
-      LemonGateway.submit(running_job)
+      Elixir.LemonGateway.submit(running_job)
       Process.sleep(50)
-      LemonGateway.submit(steer_job)
+      Elixir.LemonGateway.submit(steer_job)
 
       # Blocking job completes first
       assert_receive {:lemon_gateway_run_completed, ^running_job,
@@ -602,9 +603,9 @@ defmodule LemonGateway.ThreadWorkerTest do
           meta: %{notify_pid: self()}
         )
 
-      LemonGateway.submit(running_job)
+      Elixir.LemonGateway.submit(running_job)
       Process.sleep(30)
-      LemonGateway.submit(steer_job)
+      Elixir.LemonGateway.submit(steer_job)
 
       # Both jobs should complete successfully (no crashes or dropped jobs)
       completions = receive_completions(2, 3000)
@@ -653,10 +654,10 @@ defmodule LemonGateway.ThreadWorkerTest do
           meta: %{notify_pid: self()}
         )
 
-      LemonGateway.submit(running_job)
+      Elixir.LemonGateway.submit(running_job)
       Process.sleep(50)
-      LemonGateway.submit(steer1)
-      LemonGateway.submit(steer2)
+      Elixir.LemonGateway.submit(steer1)
+      Elixir.LemonGateway.submit(steer2)
 
       # Blocking job completes
       assert_receive {:lemon_gateway_run_completed, ^running_job, %Completed{ok: true}}, 2000
@@ -686,7 +687,7 @@ defmodule LemonGateway.ThreadWorkerTest do
           meta: %{notify_pid: self()}
         )
 
-      LemonGateway.submit(steer_job)
+      Elixir.LemonGateway.submit(steer_job)
 
       # Should complete as followup since there's no active run
       assert_receive {:lemon_gateway_run_completed, _job,
@@ -754,9 +755,9 @@ defmodule LemonGateway.ThreadWorkerTest do
       interrupt_job =
         make_job(scope, prompt: "interrupt", queue_mode: :interrupt, meta: %{notify_pid: self()})
 
-      LemonGateway.submit(running_job)
+      Elixir.LemonGateway.submit(running_job)
       Process.sleep(50)
-      LemonGateway.submit(interrupt_job)
+      Elixir.LemonGateway.submit(interrupt_job)
 
       # Should receive cancel notification
       assert_receive {:engine_cancelled, _}, 2000
@@ -782,10 +783,10 @@ defmodule LemonGateway.ThreadWorkerTest do
       interrupt_job =
         make_job(scope, prompt: "interrupt", queue_mode: :interrupt, meta: %{notify_pid: self()})
 
-      LemonGateway.submit(blocking_job)
+      Elixir.LemonGateway.submit(blocking_job)
       Process.sleep(50)
-      LemonGateway.submit(collect_job)
-      LemonGateway.submit(interrupt_job)
+      Elixir.LemonGateway.submit(collect_job)
+      Elixir.LemonGateway.submit(interrupt_job)
 
       # Blocking job gets cancelled or completes
       # Interrupt should complete before collect
@@ -800,7 +801,7 @@ defmodule LemonGateway.ThreadWorkerTest do
       interrupt_job =
         make_job(scope, prompt: "interrupt", queue_mode: :interrupt, meta: %{notify_pid: self()})
 
-      LemonGateway.submit(interrupt_job)
+      Elixir.LemonGateway.submit(interrupt_job)
 
       assert_receive {:lemon_gateway_run_completed, ^interrupt_job, %Completed{ok: true}}, 2000
     end
@@ -914,9 +915,9 @@ defmodule LemonGateway.ThreadWorkerTest do
       interrupt_job =
         make_job(scope, prompt: "interrupt", queue_mode: :interrupt, meta: %{notify_pid: self()})
 
-      LemonGateway.submit(running_job)
+      Elixir.LemonGateway.submit(running_job)
       Process.sleep(50)
-      LemonGateway.submit(interrupt_job)
+      Elixir.LemonGateway.submit(interrupt_job)
 
       assert_receive {:engine_cancelled, _task_pid}, 2000
     end
@@ -932,7 +933,7 @@ defmodule LemonGateway.ThreadWorkerTest do
       thread_key = {:session, scope}
 
       job = make_job(scope, prompt: "only", meta: %{notify_pid: self()})
-      LemonGateway.submit(job)
+      Elixir.LemonGateway.submit(job)
 
       assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2000
 
@@ -945,7 +946,7 @@ defmodule LemonGateway.ThreadWorkerTest do
       thread_key = {:session, scope}
 
       job1 = make_job(scope, prompt: "first", meta: %{notify_pid: self()})
-      LemonGateway.submit(job1)
+      Elixir.LemonGateway.submit(job1)
 
       assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true}}, 2000
 
@@ -954,7 +955,7 @@ defmodule LemonGateway.ThreadWorkerTest do
 
       # Submit another job - should create new worker
       job2 = make_job(scope, prompt: "second", meta: %{notify_pid: self()})
-      LemonGateway.submit(job2)
+      Elixir.LemonGateway.submit(job2)
 
       assert_receive {:lemon_gateway_run_completed, ^job2, %Completed{ok: true}}, 2000
     end
@@ -968,7 +969,7 @@ defmodule LemonGateway.ThreadWorkerTest do
         end
 
       # Submit all jobs
-      Enum.each(jobs, &LemonGateway.submit/1)
+      Enum.each(jobs, &Elixir.LemonGateway.submit/1)
 
       # All should complete
       for job <- jobs do
@@ -987,7 +988,7 @@ defmodule LemonGateway.ThreadWorkerTest do
       scope = make_scope()
 
       job = make_job(scope, prompt: "test", meta: %{notify_pid: self()})
-      LemonGateway.submit(job)
+      Elixir.LemonGateway.submit(job)
 
       assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2000
     end
@@ -1012,8 +1013,8 @@ defmodule LemonGateway.ThreadWorkerTest do
         )
 
       t1 = System.monotonic_time(:millisecond)
-      LemonGateway.submit(job1)
-      LemonGateway.submit(job2)
+      Elixir.LemonGateway.submit(job1)
+      Elixir.LemonGateway.submit(job2)
 
       assert_receive {:lemon_gateway_run_completed, _, %Completed{ok: true}}, 2000
       assert_receive {:lemon_gateway_run_completed, _, %Completed{ok: true}}, 2000
@@ -1033,7 +1034,7 @@ defmodule LemonGateway.ThreadWorkerTest do
       scope = make_scope()
 
       job = make_job(scope, prompt: "test", meta: %{notify_pid: self()})
-      LemonGateway.submit(job)
+      Elixir.LemonGateway.submit(job)
 
       # Should receive completion
       assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2000
@@ -1047,8 +1048,8 @@ defmodule LemonGateway.ThreadWorkerTest do
       job1 = make_job(scope, prompt: "first", meta: %{notify_pid: self()})
       job2 = make_job(scope, prompt: "second", meta: %{notify_pid: self()})
 
-      LemonGateway.submit(job1)
-      LemonGateway.submit(job2)
+      Elixir.LemonGateway.submit(job1)
+      Elixir.LemonGateway.submit(job2)
 
       # Both should complete correctly
       assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true}}, 2000
@@ -1068,8 +1069,8 @@ defmodule LemonGateway.ThreadWorkerTest do
       job1 = make_job(scope, prompt: "first", meta: %{notify_pid: self()})
       job2 = make_job(scope, prompt: "second", meta: %{notify_pid: self()})
 
-      LemonGateway.submit(job1)
-      LemonGateway.submit(job2)
+      Elixir.LemonGateway.submit(job1)
+      Elixir.LemonGateway.submit(job2)
 
       # Both should complete - proving worker processes multiple jobs
       assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true}}, 2000
@@ -1085,7 +1086,7 @@ defmodule LemonGateway.ThreadWorkerTest do
           make_job(scope, prompt: "job#{i}", meta: %{notify_pid: self()})
         end
 
-      Enum.each(jobs, &LemonGateway.submit/1)
+      Enum.each(jobs, &Elixir.LemonGateway.submit/1)
 
       # All should complete
       for job <- jobs do
@@ -1100,8 +1101,8 @@ defmodule LemonGateway.ThreadWorkerTest do
       job1 = make_job(scope, prompt: "first", meta: %{notify_pid: self()})
       job2 = make_job(scope, prompt: "second", meta: %{notify_pid: self()})
 
-      LemonGateway.submit(job1)
-      LemonGateway.submit(job2)
+      Elixir.LemonGateway.submit(job1)
+      Elixir.LemonGateway.submit(job2)
 
       # Both should complete, proving slot was released
       assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true}}, 2000
@@ -1134,7 +1135,7 @@ defmodule LemonGateway.ThreadWorkerTest do
   end
 
   defp do_wait_for_worker_stop(thread_key, deadline) do
-    case LemonGateway.ThreadRegistry.whereis(thread_key) do
+    case Elixir.LemonGateway.ThreadRegistry.whereis(thread_key) do
       nil ->
         :ok
 
@@ -1302,7 +1303,7 @@ defmodule LemonGateway.ThreadWorkerTest do
 
     test "preserves other job fields during merge" do
       scope = make_scope()
-      resume = %LemonGateway.Types.ResumeToken{engine: "test", value: "123"}
+      resume = %Elixir.LemonGateway.Types.ResumeToken{engine: "test", value: "123"}
 
       first_job = %Job{
         session_key: scope,
@@ -1801,7 +1802,7 @@ defmodule LemonGateway.ThreadWorkerTest do
       thread_key = {:session, scope}
 
       job = make_job(scope, prompt: "single job", meta: %{notify_pid: self()})
-      LemonGateway.submit(job)
+      Elixir.LemonGateway.submit(job)
 
       assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2000
 
@@ -1827,14 +1828,14 @@ defmodule LemonGateway.ThreadWorkerTest do
 
       job2 = make_job(scope, prompt: "fast", meta: %{notify_pid: self()})
 
-      LemonGateway.submit(job1)
-      LemonGateway.submit(job2)
+      Elixir.LemonGateway.submit(job1)
+      Elixir.LemonGateway.submit(job2)
 
       # After first job, worker should still exist (second job queued)
       assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true}}, 2000
 
       # Worker should still be running for second job
-      assert LemonGateway.ThreadRegistry.whereis(thread_key) != nil
+      assert Elixir.LemonGateway.ThreadRegistry.whereis(thread_key) != nil
 
       # Wait for second job
       assert_receive {:lemon_gateway_run_completed, ^job2, %Completed{ok: true}}, 2000
@@ -1847,7 +1848,7 @@ defmodule LemonGateway.ThreadWorkerTest do
       scope = make_scope()
 
       job1 = make_job(scope, prompt: "first", meta: %{notify_pid: self()})
-      LemonGateway.submit(job1)
+      Elixir.LemonGateway.submit(job1)
 
       assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true}}, 2000
 
@@ -1856,7 +1857,7 @@ defmodule LemonGateway.ThreadWorkerTest do
 
       # New job should be able to get a slot
       job2 = make_job(scope, prompt: "second", meta: %{notify_pid: self()})
-      LemonGateway.submit(job2)
+      Elixir.LemonGateway.submit(job2)
 
       assert_receive {:lemon_gateway_run_completed, ^job2, %Completed{ok: true}}, 2000
     end
@@ -1865,7 +1866,7 @@ defmodule LemonGateway.ThreadWorkerTest do
       scope = make_scope()
 
       job = make_job(scope, prompt: "monitored", meta: %{notify_pid: self()})
-      LemonGateway.submit(job)
+      Elixir.LemonGateway.submit(job)
 
       assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2000
 
@@ -1883,7 +1884,7 @@ defmodule LemonGateway.ThreadWorkerTest do
           make_job(scope, prompt: "burst#{i}", meta: %{notify_pid: self()})
         end
 
-      Enum.each(jobs, &LemonGateway.submit/1)
+      Enum.each(jobs, &Elixir.LemonGateway.submit/1)
 
       # All should complete
       for job <- jobs do
@@ -1913,7 +1914,7 @@ defmodule LemonGateway.ThreadWorkerTest do
               meta: %{notify_pid: self(), delay_ms: 100}
             )
 
-          LemonGateway.submit(job)
+          Elixir.LemonGateway.submit(job)
           job
         end
 
@@ -1943,7 +1944,7 @@ defmodule LemonGateway.ThreadWorkerTest do
               meta: %{notify_pid: self(), delay_ms: 50}
             )
 
-          LemonGateway.submit(job)
+          Elixir.LemonGateway.submit(job)
           job
         end
 
@@ -1969,7 +1970,7 @@ defmodule LemonGateway.ThreadWorkerTest do
         for i <- 1..10 do
           Task.async(fn ->
             job = make_job(scope, prompt: "concurrent#{i}", meta: %{notify_pid: test_pid})
-            LemonGateway.submit(job)
+            Elixir.LemonGateway.submit(job)
             job
           end)
         end
@@ -1994,7 +1995,7 @@ defmodule LemonGateway.ThreadWorkerTest do
           meta: %{notify_pid: self(), delay_ms: 300}
         )
 
-      LemonGateway.submit(blocking)
+      Elixir.LemonGateway.submit(blocking)
       Process.sleep(50)
 
       # Submit followups and an interrupt concurrently
@@ -2007,9 +2008,9 @@ defmodule LemonGateway.ThreadWorkerTest do
       interrupt =
         make_job(scope, prompt: "int", queue_mode: :interrupt, meta: %{notify_pid: self()})
 
-      LemonGateway.submit(followup1)
-      LemonGateway.submit(followup2)
-      LemonGateway.submit(interrupt)
+      Elixir.LemonGateway.submit(followup1)
+      Elixir.LemonGateway.submit(followup2)
+      Elixir.LemonGateway.submit(interrupt)
 
       # Collect completions
       completions = receive_completions(3, 5000)
@@ -2030,7 +2031,7 @@ defmodule LemonGateway.ThreadWorkerTest do
           meta: %{notify_pid: self(), delay_ms: 100}
         )
 
-      LemonGateway.submit(job1)
+      Elixir.LemonGateway.submit(job1)
 
       # Small delay to ensure processing starts
       Process.sleep(20)
@@ -2041,7 +2042,7 @@ defmodule LemonGateway.ThreadWorkerTest do
       # This should not hang - worker should handle the call
       thread_key = {:session, scope}
 
-      case LemonGateway.ThreadRegistry.whereis(thread_key) do
+      case Elixir.LemonGateway.ThreadRegistry.whereis(thread_key) do
         # Worker may have finished
         nil -> :ok
         pid -> GenServer.call(pid, {:enqueue, job2}, 5000)
@@ -2059,7 +2060,7 @@ defmodule LemonGateway.ThreadWorkerTest do
       jobs =
         for _ <- 1..3, scope <- scopes do
           job = make_job(scope, prompt: "interleaved", meta: %{notify_pid: self()})
-          LemonGateway.submit(job)
+          Elixir.LemonGateway.submit(job)
           job
         end
 
@@ -2086,7 +2087,7 @@ defmodule LemonGateway.ThreadWorkerTest do
       # Submit and complete multiple jobs
       for i <- 1..5 do
         job = make_job(scope, prompt: "job#{i}", meta: %{notify_pid: self()})
-        LemonGateway.submit(job)
+        Elixir.LemonGateway.submit(job)
         assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2000
         # Allow cleanup
         Process.sleep(50)
@@ -2094,7 +2095,7 @@ defmodule LemonGateway.ThreadWorkerTest do
 
       # If slots weren't released, this would hang
       final_job = make_job(scope, prompt: "final", meta: %{notify_pid: self()})
-      LemonGateway.submit(final_job)
+      Elixir.LemonGateway.submit(final_job)
       assert_receive {:lemon_gateway_run_completed, ^final_job, %Completed{ok: true}}, 2000
     end
 
@@ -2113,8 +2114,8 @@ defmodule LemonGateway.ThreadWorkerTest do
 
       job2 = make_job(scope, prompt: "second", meta: %{notify_pid: self()})
 
-      LemonGateway.submit(job1)
-      LemonGateway.submit(job2)
+      Elixir.LemonGateway.submit(job1)
+      Elixir.LemonGateway.submit(job2)
 
       # Both should complete
       assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true}}, 3000
@@ -2135,8 +2136,8 @@ defmodule LemonGateway.ThreadWorkerTest do
       job1 = make_job(scope, prompt: "first", meta: %{notify_pid: self()})
       job2 = make_job(scope, prompt: "second", meta: %{notify_pid: self()})
 
-      LemonGateway.submit(job1)
-      LemonGateway.submit(job2)
+      Elixir.LemonGateway.submit(job1)
+      Elixir.LemonGateway.submit(job2)
 
       # Both should complete
       assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true}}, 2000
@@ -2154,7 +2155,7 @@ defmodule LemonGateway.ThreadWorkerTest do
           meta: %{notify_pid: self(), delay_ms: 100}
         )
 
-      LemonGateway.submit(job)
+      Elixir.LemonGateway.submit(job)
 
       # Spawn and kill an unrelated process - worker should ignore its DOWN
       _pid = spawn(fn -> :ok end)

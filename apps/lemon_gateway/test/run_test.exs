@@ -1,6 +1,7 @@
-defmodule LemonGateway.RunTest do
+defmodule Elixir.LemonGateway.RunTest do
+  alias Elixir.LemonGateway, as: LemonGateway
   @moduledoc """
-  Comprehensive tests for LemonGateway.Run GenServer.
+  Comprehensive tests for Elixir.LemonGateway.Run GenServer.
 
   Tests cover:
   - Run initialization and state setup
@@ -14,20 +15,20 @@ defmodule LemonGateway.RunTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonGateway.Run
-  alias LemonGateway.Types.{Job, ResumeToken}
-  alias LemonGateway.Event
+  alias Elixir.LemonGateway.Run
+  alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+  alias Elixir.LemonGateway.Event
 
   # ============================================================================
   # Test Engines
   # ============================================================================
 
   # A basic engine for simple tests
-  defmodule LemonGateway.RunTest.TestEngine do
-    @behaviour LemonGateway.Engine
+  defmodule Elixir.LemonGateway.RunTest.TestEngine do
+    @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
-    alias LemonGateway.Event
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Event
 
     @impl true
     def id, do: "test"
@@ -75,10 +76,10 @@ defmodule LemonGateway.RunTest do
 
   # An engine that allows control over when it completes
   defmodule ControllableEngine do
-    @behaviour LemonGateway.Engine
+    @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
-    alias LemonGateway.Event
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Event
 
     @impl true
     def id, do: "controllable"
@@ -144,9 +145,9 @@ defmodule LemonGateway.RunTest do
 
   # An engine that fails on start_run
   defmodule FailingEngine do
-    @behaviour LemonGateway.Engine
+    @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
 
     @impl true
     def id, do: "failing"
@@ -175,10 +176,10 @@ defmodule LemonGateway.RunTest do
 
   # An engine that supports steering
   defmodule SteerableTestEngine do
-    @behaviour LemonGateway.Engine
+    @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
-    alias LemonGateway.Event
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Event
 
     @impl true
     def id, do: "steerable_test"
@@ -245,11 +246,11 @@ defmodule LemonGateway.RunTest do
   end
 
   # An engine that emits deltas for streaming tests
-  defmodule LemonGateway.RunTest.StreamingEngine do
-    @behaviour LemonGateway.Engine
+  defmodule Elixir.LemonGateway.RunTest.StreamingEngine do
+    @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
-    alias LemonGateway.Event
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Event
 
     @impl true
     def id, do: "streaming"
@@ -305,10 +306,10 @@ defmodule LemonGateway.RunTest do
 
   # An engine that fails on steer
   defmodule SteerFailEngine do
-    @behaviour LemonGateway.Engine
+    @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
-    alias LemonGateway.Event
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Event
 
     @impl true
     def id, do: "steer_fail"
@@ -376,7 +377,7 @@ defmodule LemonGateway.RunTest do
     # Stop and restart the application with our test engines
     _ = Application.stop(:lemon_gateway)
 
-    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+    Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 10,
       default_engine: "test",
       enable_telegram: false,
@@ -384,13 +385,13 @@ defmodule LemonGateway.RunTest do
     })
 
     Application.put_env(:lemon_gateway, :engines, [
-      LemonGateway.RunTest.TestEngine,
+      Elixir.LemonGateway.RunTest.TestEngine,
       ControllableEngine,
       FailingEngine,
       SteerableTestEngine,
       SteerFailEngine,
-      LemonGateway.RunTest.StreamingEngine,
-      LemonGateway.Engines.Echo
+      Elixir.LemonGateway.RunTest.StreamingEngine,
+      Elixir.LemonGateway.Engines.Echo
     ])
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
@@ -1027,7 +1028,7 @@ defmodule LemonGateway.RunTest do
       # Enable engine lock for these tests
       _ = Application.stop(:lemon_gateway)
 
-      Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 10,
         default_engine: "test",
         enable_telegram: false,
@@ -1036,13 +1037,13 @@ defmodule LemonGateway.RunTest do
       })
 
       Application.put_env(:lemon_gateway, :engines, [
-        LemonGateway.RunTest.TestEngine,
+        Elixir.LemonGateway.RunTest.TestEngine,
         ControllableEngine,
         FailingEngine,
         SteerableTestEngine,
         SteerFailEngine,
-        LemonGateway.RunTest.StreamingEngine,
-        LemonGateway.Engines.Echo
+        Elixir.LemonGateway.RunTest.StreamingEngine,
+        Elixir.LemonGateway.Engines.Echo
       ])
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
@@ -1158,7 +1159,7 @@ defmodule LemonGateway.RunTest do
       # Enable engine lock with very short timeout for these tests
       _ = Application.stop(:lemon_gateway)
 
-      Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 10,
         default_engine: "test",
         enable_telegram: false,
@@ -1168,13 +1169,13 @@ defmodule LemonGateway.RunTest do
       })
 
       Application.put_env(:lemon_gateway, :engines, [
-        LemonGateway.RunTest.TestEngine,
+        Elixir.LemonGateway.RunTest.TestEngine,
         ControllableEngine,
         FailingEngine,
         SteerableTestEngine,
         SteerFailEngine,
-        LemonGateway.RunTest.StreamingEngine,
-        LemonGateway.Engines.Echo
+        Elixir.LemonGateway.RunTest.StreamingEngine,
+        Elixir.LemonGateway.Engines.Echo
       ])
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
@@ -1285,7 +1286,7 @@ defmodule LemonGateway.RunTest do
       # Check mapping exists
       run_pid =
         wait_for(
-          fn -> LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) end,
+          fn -> Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) end,
           500,
           10
         )
@@ -1302,7 +1303,7 @@ defmodule LemonGateway.RunTest do
       Process.sleep(50)
 
       # Mapping should be removed
-      assert LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil
+      assert Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil
     end
 
     test "does not register mapping when progress_msg_id is nil" do
@@ -1314,7 +1315,7 @@ defmodule LemonGateway.RunTest do
       assert_receive {:run_complete, ^pid, _}, 2000
 
       # No mapping should exist
-      assert LemonGateway.Store.get_run_by_progress(scope, nil) == nil
+      assert Elixir.LemonGateway.Store.get_run_by_progress(scope, nil) == nil
     end
 
     test "unregisters progress mapping on completion" do
@@ -1331,7 +1332,7 @@ defmodule LemonGateway.RunTest do
       Process.sleep(100)
 
       # Mapping should be removed
-      assert LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil
+      assert Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil
     end
 
     test "unregisters progress mapping on cancellation" do
@@ -1350,7 +1351,7 @@ defmodule LemonGateway.RunTest do
 
       # Verify mapping exists
       assert Enum.any?(1..20, fn _attempt ->
-               case LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) do
+               case Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) do
                  ^pid ->
                    true
 
@@ -1369,7 +1370,7 @@ defmodule LemonGateway.RunTest do
       Process.sleep(100)
 
       # Mapping should be removed
-      assert LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil
+      assert Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil
     end
   end
 
@@ -1688,7 +1689,7 @@ defmodule LemonGateway.RunTest do
     setup do
       _ = Application.stop(:lemon_gateway)
 
-      Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 10,
         default_engine: "test",
         enable_telegram: false,
@@ -1698,13 +1699,13 @@ defmodule LemonGateway.RunTest do
       })
 
       Application.put_env(:lemon_gateway, :engines, [
-        LemonGateway.RunTest.TestEngine,
+        Elixir.LemonGateway.RunTest.TestEngine,
         ControllableEngine,
         FailingEngine,
         SteerableTestEngine,
         SteerFailEngine,
-        LemonGateway.RunTest.StreamingEngine,
-        LemonGateway.Engines.Echo
+        Elixir.LemonGateway.RunTest.StreamingEngine,
+        Elixir.LemonGateway.Engines.Echo
       ])
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
@@ -2042,7 +2043,7 @@ defmodule LemonGateway.RunTest do
       Process.sleep(100)
 
       # Events should be stored
-      run_data = LemonGateway.Store.get_run(run_ref)
+      run_data = Elixir.LemonGateway.Store.get_run(run_ref)
       assert run_data != nil
       assert length(run_data.events) >= 2
     end
@@ -2163,7 +2164,7 @@ defmodule LemonGateway.RunTest do
       # Setup with lock enabled
       _ = Application.stop(:lemon_gateway)
 
-      Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 10,
         default_engine: "test",
         enable_telegram: false,
@@ -2172,13 +2173,13 @@ defmodule LemonGateway.RunTest do
       })
 
       Application.put_env(:lemon_gateway, :engines, [
-        LemonGateway.RunTest.TestEngine,
+        Elixir.LemonGateway.RunTest.TestEngine,
         ControllableEngine,
         FailingEngine,
         SteerableTestEngine,
         SteerFailEngine,
-        LemonGateway.RunTest.StreamingEngine,
-        LemonGateway.Engines.Echo
+        Elixir.LemonGateway.RunTest.StreamingEngine,
+        Elixir.LemonGateway.Engines.Echo
       ])
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
@@ -2222,7 +2223,7 @@ defmodule LemonGateway.RunTest do
 
       # Verify mapping exists
       assert Enum.any?(1..20, fn _attempt ->
-               case LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) do
+               case Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) do
                  ^pid ->
                    true
 
@@ -2240,7 +2241,7 @@ defmodule LemonGateway.RunTest do
       Process.sleep(100)
 
       # Mapping should be removed
-      assert LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil
+      assert Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil
     end
   end
 
@@ -2261,7 +2262,7 @@ defmodule LemonGateway.RunTest do
       Process.sleep(100)
 
       # ChatState should have the resume token
-      chat_state = LemonGateway.Store.get_chat_state(scope)
+      chat_state = Elixir.LemonGateway.Store.get_chat_state(scope)
       assert chat_state != nil
       assert chat_state.last_engine == "test"
       assert is_binary(chat_state.last_resume_token)
@@ -2301,7 +2302,7 @@ defmodule LemonGateway.RunTest do
       Process.sleep(100)
 
       # ChatState should have the completed resume token
-      chat_state = LemonGateway.Store.get_chat_state(scope)
+      chat_state = Elixir.LemonGateway.Store.get_chat_state(scope)
       assert chat_state != nil
       assert chat_state.last_engine == "controllable"
       assert chat_state.last_resume_token == resume.value
@@ -2310,7 +2311,7 @@ defmodule LemonGateway.RunTest do
     test "context overflow clears ChatState and does not persist failing resume" do
       scope = make_scope()
 
-      LemonGateway.Store.put_chat_state(scope, %LemonGateway.ChatState{
+      Elixir.LemonGateway.Store.put_chat_state(scope, %Elixir.LemonGateway.ChatState{
         last_engine: "controllable",
         last_resume_token: "stale_token",
         updated_at: System.system_time(:millisecond)
@@ -2343,7 +2344,7 @@ defmodule LemonGateway.RunTest do
 
       assert_receive {:run_complete, ^pid, %Event.Completed{ok: false}}, 2000
       Process.sleep(100)
-      assert LemonGateway.Store.get_chat_state(scope) == nil
+      assert Elixir.LemonGateway.Store.get_chat_state(scope) == nil
     end
 
     test "resume token does not override explicit engine selection" do
@@ -2361,7 +2362,7 @@ defmodule LemonGateway.RunTest do
       # Setup with lock enabled and short timeout
       _ = Application.stop(:lemon_gateway)
 
-      Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 10,
         default_engine: "test",
         enable_telegram: false,
@@ -2370,13 +2371,13 @@ defmodule LemonGateway.RunTest do
       })
 
       Application.put_env(:lemon_gateway, :engines, [
-        LemonGateway.RunTest.TestEngine,
+        Elixir.LemonGateway.RunTest.TestEngine,
         ControllableEngine,
         FailingEngine,
         SteerableTestEngine,
         SteerFailEngine,
-        LemonGateway.RunTest.StreamingEngine,
-        LemonGateway.Engines.Echo
+        Elixir.LemonGateway.RunTest.StreamingEngine,
+        Elixir.LemonGateway.Engines.Echo
       ])
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
@@ -2427,7 +2428,7 @@ defmodule LemonGateway.RunTest do
       Process.sleep(100)
 
       # ChatState should not be updated on Started to avoid concurrent resumes
-      chat_state1 = LemonGateway.Store.get_chat_state(scope)
+      chat_state1 = Elixir.LemonGateway.Store.get_chat_state(scope)
       assert chat_state1 == nil
 
       # Now complete with a different resume token
@@ -2442,7 +2443,7 @@ defmodule LemonGateway.RunTest do
 
       # The ChatState should have been updated
       Process.sleep(100)
-      chat_state2 = LemonGateway.Store.get_chat_state(scope)
+      chat_state2 = Elixir.LemonGateway.Store.get_chat_state(scope)
       assert chat_state2 != nil
 
       # Token should exist (may be same as first if cancellation doesn't provide new token)
@@ -2463,7 +2464,7 @@ defmodule LemonGateway.RunTest do
       Process.sleep(100)
 
       # ChatState should still be nil or unchanged
-      chat_state = LemonGateway.Store.get_chat_state(scope)
+      chat_state = Elixir.LemonGateway.Store.get_chat_state(scope)
       # Failing engine doesn't set resume, so no ChatState should be stored
       assert chat_state == nil
     end
@@ -2497,7 +2498,7 @@ defmodule LemonGateway.RunTest do
       Process.sleep(100)
 
       # Run history should include this run
-      history = LemonGateway.Store.get_run_history(scope)
+      history = Elixir.LemonGateway.Store.get_run_history(scope)
       assert length(history) >= 1
     end
 

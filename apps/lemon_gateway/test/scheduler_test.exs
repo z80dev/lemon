@@ -1,14 +1,15 @@
-defmodule LemonGateway.SchedulerTest do
+defmodule Elixir.LemonGateway.SchedulerTest do
+  alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case, async: false
 
-  alias LemonGateway.Scheduler
-  alias LemonGateway.Types.{ChatScope, Job, ResumeToken}
+  alias Elixir.LemonGateway.Scheduler
+  alias Elixir.LemonGateway.Types.{ChatScope, Job, ResumeToken}
 
-  defmodule LemonGateway.SchedulerTest.SlowEngine do
-    @behaviour LemonGateway.Engine
+  defmodule Elixir.LemonGateway.SchedulerTest.SlowEngine do
+    @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonGateway.Event
-    alias LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Event
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
 
     @impl true
     def id, do: "slow"
@@ -59,7 +60,7 @@ defmodule LemonGateway.SchedulerTest do
     @moduledoc false
     use GenServer
 
-    alias LemonGateway.Types.Job
+    alias Elixir.LemonGateway.Types.Job
 
     def start_link(opts) do
       GenServer.start_link(__MODULE__, opts)
@@ -71,7 +72,7 @@ defmodule LemonGateway.SchedulerTest do
       notify_pid = Keyword.fetch!(opts, :notify_pid)
       delay_ms = Keyword.get(opts, :delay_ms, 300)
 
-      {:ok, _} = Registry.register(LemonGateway.ThreadRegistry, thread_key, :ok)
+      {:ok, _} = Registry.register(Elixir.LemonGateway.ThreadRegistry, thread_key, :ok)
 
       {:ok, %{notify_pid: notify_pid, delay_ms: delay_ms}}
     end
@@ -208,8 +209,8 @@ defmodule LemonGateway.SchedulerTest do
     end
 
     test "submit path does not block on worker enqueue" do
-      if is_nil(Process.whereis(LemonGateway.ThreadRegistry)) do
-        {:ok, _} = start_supervised({Registry, keys: :unique, name: LemonGateway.ThreadRegistry})
+      if is_nil(Process.whereis(Elixir.LemonGateway.ThreadRegistry)) do
+        {:ok, _} = start_supervised({Registry, keys: :unique, name: Elixir.LemonGateway.ThreadRegistry})
       end
 
       session_key = "blocking_enqueue:#{System.unique_integer([:positive])}"
@@ -668,7 +669,7 @@ defmodule LemonGateway.SchedulerTest do
       # Stop any existing lemon_gateway
       _ = Application.stop(:lemon_gateway)
 
-      Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 2,
         default_engine: "echo",
         enable_telegram: false,
@@ -676,8 +677,8 @@ defmodule LemonGateway.SchedulerTest do
       })
 
       Application.put_env(:lemon_gateway, :engines, [
-        LemonGateway.SchedulerTest.SlowEngine,
-        LemonGateway.Engines.Echo
+        Elixir.LemonGateway.SchedulerTest.SlowEngine,
+        Elixir.LemonGateway.Engines.Echo
       ])
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
@@ -984,7 +985,7 @@ defmodule LemonGateway.SchedulerTest do
     setup do
       _ = Application.stop(:lemon_gateway)
 
-      Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
         max_concurrent_runs: 10,
         default_engine: "echo",
         enable_telegram: false,
@@ -992,8 +993,8 @@ defmodule LemonGateway.SchedulerTest do
       })
 
       Application.put_env(:lemon_gateway, :engines, [
-        LemonGateway.SchedulerTest.SlowEngine,
-        LemonGateway.Engines.Echo
+        Elixir.LemonGateway.SchedulerTest.SlowEngine,
+        Elixir.LemonGateway.Engines.Echo
       ])
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
@@ -1023,7 +1024,7 @@ defmodule LemonGateway.SchedulerTest do
       session_key = "session_#{System.unique_integer([:positive])}"
 
       resume = %ResumeToken{
-        engine: LemonGateway.SchedulerTest.SlowEngine.id(),
+        engine: Elixir.LemonGateway.SchedulerTest.SlowEngine.id(),
         value: "resume_#{System.unique_integer([:positive])}"
       }
 
@@ -1031,17 +1032,17 @@ defmodule LemonGateway.SchedulerTest do
         session_key: session_key,
         prompt: "test",
         resume: resume,
-        engine_id: LemonGateway.SchedulerTest.SlowEngine.id(),
+        engine_id: Elixir.LemonGateway.SchedulerTest.SlowEngine.id(),
         meta: %{delay_ms: 200}
       }
 
       assert :ok == Scheduler.submit(job)
 
       assert eventually(fn ->
-               is_pid(LemonGateway.ThreadRegistry.whereis({:session, session_key}))
+               is_pid(Elixir.LemonGateway.ThreadRegistry.whereis({:session, session_key}))
              end)
 
-      assert LemonGateway.ThreadRegistry.whereis({resume.engine, resume.value}) == nil
+      assert Elixir.LemonGateway.ThreadRegistry.whereis({resume.engine, resume.value}) == nil
     end
 
     test "job without resume token creates thread_key from session_key" do

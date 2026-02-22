@@ -1,9 +1,10 @@
-defmodule LemonRouter.ToolStatusCoalescerTest do
+defmodule Elixir.LemonRouter.ToolStatusCoalescerTest do
+  alias Elixir.LemonRouter, as: LemonRouter
   use ExUnit.Case, async: false
 
-  alias LemonRouter.ToolStatusCoalescer
+  alias Elixir.LemonRouter.ToolStatusCoalescer
 
-  defmodule LemonRouter.ToolStatusCoalescerTest.TestTelegramPlugin do
+  defmodule Elixir.LemonRouter.ToolStatusCoalescerTest.TestTelegramPlugin do
     @moduledoc false
 
     def id, do: "telegram"
@@ -26,15 +27,15 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
   end
 
   setup do
-    if is_nil(Process.whereis(LemonRouter.ToolStatusRegistry)) do
-      {:ok, _} = Registry.start_link(keys: :unique, name: LemonRouter.ToolStatusRegistry)
+    if is_nil(Process.whereis(Elixir.LemonRouter.ToolStatusRegistry)) do
+      {:ok, _} = Registry.start_link(keys: :unique, name: Elixir.LemonRouter.ToolStatusRegistry)
     end
 
-    if is_nil(Process.whereis(LemonRouter.ToolStatusSupervisor)) do
+    if is_nil(Process.whereis(Elixir.LemonRouter.ToolStatusSupervisor)) do
       {:ok, _} =
         DynamicSupervisor.start_link(
           strategy: :one_for_one,
-          name: LemonRouter.ToolStatusSupervisor
+          name: Elixir.LemonRouter.ToolStatusSupervisor
         )
     end
 
@@ -54,13 +55,13 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
       {:ok, _} = LemonChannels.Outbox.Dedupe.start_link([])
     end
 
-    :persistent_term.put({LemonRouter.ToolStatusCoalescerTest.TestTelegramPlugin, :test_pid}, self())
+    :persistent_term.put({Elixir.LemonRouter.ToolStatusCoalescerTest.TestTelegramPlugin, :test_pid}, self())
     existing = LemonChannels.Registry.get_plugin("telegram")
     _ = LemonChannels.Registry.unregister("telegram")
-    :ok = LemonChannels.Registry.register(LemonRouter.ToolStatusCoalescerTest.TestTelegramPlugin)
+    :ok = LemonChannels.Registry.register(Elixir.LemonRouter.ToolStatusCoalescerTest.TestTelegramPlugin)
 
     on_exit(fn ->
-      _ = :persistent_term.erase({LemonRouter.ToolStatusCoalescerTest.TestTelegramPlugin, :test_pid})
+      _ = :persistent_term.erase({Elixir.LemonRouter.ToolStatusCoalescerTest.TestTelegramPlugin, :test_pid})
 
       if is_pid(Process.whereis(LemonChannels.Registry)) do
         _ = LemonChannels.Registry.unregister("telegram")
@@ -99,7 +100,7 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
              )
 
     assert [{_pid, _}] =
-             Registry.lookup(LemonRouter.ToolStatusRegistry, {session_key, channel_id})
+             Registry.lookup(Elixir.LemonRouter.ToolStatusRegistry, {session_key, channel_id})
   end
 
   test "filters note actions" do
@@ -139,7 +140,7 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
                meta: %{status_msg_id: 111}
              )
 
-    [{pid, _}] = Registry.lookup(LemonRouter.ToolStatusRegistry, {session_key, channel_id})
+    [{pid, _}] = Registry.lookup(Elixir.LemonRouter.ToolStatusRegistry, {session_key, channel_id})
     state = :sys.get_state(pid)
     assert state.meta[:status_msg_id] == 111
 
@@ -168,7 +169,7 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
 
     assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, started)
 
-    [{pid, _}] = Registry.lookup(LemonRouter.ToolStatusRegistry, {session_key, channel_id})
+    [{pid, _}] = Registry.lookup(Elixir.LemonRouter.ToolStatusRegistry, {session_key, channel_id})
     state = :sys.get_state(pid)
     assert state.actions["a1"].phase == :started
 
@@ -297,7 +298,7 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
            }
 
     # Wait until the coalescer captures status_msg_id from the outbox delivery ack.
-    [{pid, _}] = Registry.lookup(LemonRouter.ToolStatusRegistry, {session_key, channel_id})
+    [{pid, _}] = Registry.lookup(Elixir.LemonRouter.ToolStatusRegistry, {session_key, channel_id})
 
     status_id =
       Enum.reduce_while(1..50, nil, fn _, _ ->

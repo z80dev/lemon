@@ -1,11 +1,12 @@
-defmodule CodingAgent.Tools.AgentTest do
+defmodule Elixir.CodingAgent.Tools.AgentTest do
+  alias Elixir.CodingAgent, as: CodingAgent
   use ExUnit.Case, async: false
 
-  alias CodingAgent.TaskStore
-  alias CodingAgent.Tools.Agent, as: AgentTool
+  alias Elixir.CodingAgent.TaskStore
+  alias Elixir.CodingAgent.Tools.Agent, as: AgentTool
   alias LemonCore.{Bus, Event, RunRequest, Store}
 
-  defmodule CodingAgent.Tools.AgentTest.StubRunOrchestrator do
+  defmodule Elixir.CodingAgent.Tools.AgentTest.StubRunOrchestrator do
     use Agent
 
     def start_link(_opts) do
@@ -30,7 +31,7 @@ defmodule CodingAgent.Tools.AgentTest do
     end
   end
 
-  defmodule CodingAgent.Tools.AgentTest.SessionSpy do
+  defmodule Elixir.CodingAgent.Tools.AgentTest.SessionSpy do
     def follow_up(pid, text) do
       send(pid, {:session_follow_up, text})
       :ok
@@ -42,8 +43,8 @@ defmodule CodingAgent.Tools.AgentTest do
   end
 
   setup do
-    start_supervised!(CodingAgent.Tools.AgentTest.StubRunOrchestrator)
-    CodingAgent.Tools.AgentTest.StubRunOrchestrator.configure(self())
+    start_supervised!(Elixir.CodingAgent.Tools.AgentTest.StubRunOrchestrator)
+    Elixir.CodingAgent.Tools.AgentTest.StubRunOrchestrator.configure(self())
 
     try do
       TaskStore.clear()
@@ -78,7 +79,7 @@ defmodule CodingAgent.Tools.AgentTest do
         nil,
         nil,
         "/tmp",
-        run_orchestrator: CodingAgent.Tools.AgentTest.StubRunOrchestrator,
+        run_orchestrator: Elixir.CodingAgent.Tools.AgentTest.StubRunOrchestrator,
         session_key: "agent:main:main",
         session_id: "sess_main",
         agent_id: "main"
@@ -124,7 +125,7 @@ defmodule CodingAgent.Tools.AgentTest do
         nil,
         nil,
         "/tmp",
-        run_orchestrator: CodingAgent.Tools.AgentTest.StubRunOrchestrator,
+        run_orchestrator: Elixir.CodingAgent.Tools.AgentTest.StubRunOrchestrator,
         session_key: "agent:main:main",
         session_id: "sess_main",
         agent_id: "main"
@@ -139,7 +140,7 @@ defmodule CodingAgent.Tools.AgentTest do
         nil,
         nil,
         "/tmp",
-        run_orchestrator: CodingAgent.Tools.AgentTest.StubRunOrchestrator,
+        run_orchestrator: Elixir.CodingAgent.Tools.AgentTest.StubRunOrchestrator,
         session_key: "agent:main:main",
         session_id: "sess_main",
         agent_id: "main"
@@ -162,8 +163,8 @@ defmodule CodingAgent.Tools.AgentTest do
         nil,
         nil,
         "/tmp",
-        run_orchestrator: CodingAgent.Tools.AgentTest.StubRunOrchestrator,
-        session_module: CodingAgent.Tools.AgentTest.SessionSpy,
+        run_orchestrator: Elixir.CodingAgent.Tools.AgentTest.StubRunOrchestrator,
+        session_module: Elixir.CodingAgent.Tools.AgentTest.SessionSpy,
         session_pid: self(),
         session_key: "agent:main:main",
         session_id: "sess_main",
@@ -200,8 +201,8 @@ defmodule CodingAgent.Tools.AgentTest do
         nil,
         nil,
         "/tmp",
-        run_orchestrator: CodingAgent.Tools.AgentTest.StubRunOrchestrator,
-        session_module: CodingAgent.Tools.AgentTest.SessionSpy,
+        run_orchestrator: Elixir.CodingAgent.Tools.AgentTest.StubRunOrchestrator,
+        session_module: Elixir.CodingAgent.Tools.AgentTest.SessionSpy,
         session_pid: dead_pid,
         session_key: "agent:main:main",
         session_id: "sess_main",
@@ -235,7 +236,7 @@ defmodule CodingAgent.Tools.AgentTest do
         nil,
         nil,
         "/tmp",
-        run_orchestrator: CodingAgent.Tools.AgentTest.StubRunOrchestrator,
+        run_orchestrator: Elixir.CodingAgent.Tools.AgentTest.StubRunOrchestrator,
         session_key: "agent:main:main",
         session_id: "sess_main",
         agent_id: "main"

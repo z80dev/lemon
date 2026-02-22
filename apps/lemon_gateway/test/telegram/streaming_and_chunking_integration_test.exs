@@ -1,16 +1,17 @@
-defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
+defmodule Elixir.LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
+  alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case, async: false
 
-  alias LemonGateway.Config
-  alias LemonGateway.Event
-  alias LemonGateway.TestSupport.MockTelegramAPI
-  alias LemonGateway.Types.{Job, ResumeToken}
+  alias Elixir.LemonGateway.Config
+  alias Elixir.LemonGateway.Event
+  alias Elixir.LemonGateway.TestSupport.MockTelegramAPI
+  alias Elixir.LemonGateway.Types.{Job, ResumeToken}
 
-  defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest.StreamingEngine do
-    @behaviour LemonGateway.Engine
+  defmodule Elixir.LemonGateway.Telegram.StreamingAndChunkingIntegrationTest.StreamingEngine do
+    @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonGateway.Event
-    alias LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Event
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
 
     @impl true
     def id, do: "lemon"
@@ -64,10 +65,10 @@ defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
   end
 
   defmodule LargeAnswerEngine do
-    @behaviour LemonGateway.Engine
+    @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonGateway.Event
-    alias LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Event
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
 
     @impl true
     def id, do: "lemon"
@@ -133,7 +134,7 @@ defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
       _ = Application.stop(:lemon_core)
 
       MockTelegramAPI.stop()
-      Application.delete_env(:lemon_gateway, LemonGateway.Config)
+      Application.delete_env(:lemon_gateway, Elixir.LemonGateway.Config)
       Application.delete_env(:lemon_core, LemonCore.Store)
       Application.delete_env(:lemon_gateway, :config_path)
       Application.delete_env(:lemon_gateway, :telegram)
@@ -178,7 +179,7 @@ defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
 
     Application.put_env(:lemon_gateway, :engines, [
       engine_mod,
-      LemonGateway.Engines.Echo
+      Elixir.LemonGateway.Engines.Echo
     ])
 
     Application.put_env(:lemon_gateway, :telegram, %{
@@ -195,7 +196,7 @@ defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
 
     Application.put_env(:lemon_channels, :engines, [
       engine_mod,
-      LemonGateway.Engines.Echo
+      Elixir.LemonGateway.Engines.Echo
     ])
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
@@ -265,7 +266,7 @@ defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
   defp reply_to_from_opts(_), do: nil
 
   test "streaming deltas update the answer message (progress reaction is set on user message)" do
-    start_system!(LemonGateway.Telegram.StreamingAndChunkingIntegrationTest.StreamingEngine)
+    start_system!(Elixir.LemonGateway.Telegram.StreamingAndChunkingIntegrationTest.StreamingEngine)
 
     chat_id = 31_001
     user_msg_id = 11

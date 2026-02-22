@@ -1,12 +1,13 @@
-defmodule CodingAgent.Tools.TaskAsyncTest do
+defmodule Elixir.CodingAgent.Tools.TaskAsyncTest do
+  alias Elixir.CodingAgent, as: CodingAgent
   use ExUnit.Case, async: false
 
-  alias CodingAgent.Tools.Task
-  alias CodingAgent.TaskStore
-  alias CodingAgent.RunGraph
+  alias Elixir.CodingAgent.Tools.Task
+  alias Elixir.CodingAgent.TaskStore
+  alias Elixir.CodingAgent.RunGraph
   alias LemonCore.RunRequest
 
-  defmodule CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator do
+  defmodule Elixir.CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator do
     use Agent
 
     def start_link(_opts) do
@@ -30,7 +31,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
     end
   end
 
-  defmodule CodingAgent.Tools.TaskAsyncTest.SessionSpy do
+  defmodule Elixir.CodingAgent.Tools.TaskAsyncTest.SessionSpy do
     def follow_up(pid, text) do
       send(pid, {:session_follow_up, text})
       :ok
@@ -38,8 +39,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
   end
 
   setup do
-    start_supervised!(CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator)
-    CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator.configure(self())
+    start_supervised!(Elixir.CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator)
+    Elixir.CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator.configure(self())
 
     # Clear stores before each test
     try do
@@ -77,11 +78,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "completed"}
             }
           end,
-          session_module: CodingAgent.Tools.TaskAsyncTest.SessionSpy,
+          session_module: Elixir.CodingAgent.Tools.TaskAsyncTest.SessionSpy,
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
+          run_orchestrator: Elixir.CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
         )
 
       assert %AgentCore.Types.AgentToolResult{} = result
@@ -117,11 +118,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "completed"}
             }
           end,
-          session_module: CodingAgent.Tools.TaskAsyncTest.SessionSpy,
+          session_module: Elixir.CodingAgent.Tools.TaskAsyncTest.SessionSpy,
           session_pid: dead_pid,
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
+          run_orchestrator: Elixir.CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
         )
 
       assert %AgentCore.Types.AgentToolResult{} = result
@@ -153,11 +154,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "completed"}
             }
           end,
-          session_module: CodingAgent.Tools.TaskAsyncTest.SessionSpy,
+          session_module: Elixir.CodingAgent.Tools.TaskAsyncTest.SessionSpy,
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
+          run_orchestrator: Elixir.CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
         )
 
       refute_receive {:session_follow_up, _text}, 200
@@ -733,11 +734,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "completed"}
             }
           end,
-          session_module: CodingAgent.Tools.TaskAsyncTest.SessionSpy,
+          session_module: Elixir.CodingAgent.Tools.TaskAsyncTest.SessionSpy,
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
+          run_orchestrator: Elixir.CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
         )
 
       task_id = result.details.task_id
@@ -767,11 +768,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_override: fn _on_update, _signal ->
             {:error, "connection refused"}
           end,
-          session_module: CodingAgent.Tools.TaskAsyncTest.SessionSpy,
+          session_module: Elixir.CodingAgent.Tools.TaskAsyncTest.SessionSpy,
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
+          run_orchestrator: Elixir.CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
         )
 
       task_id = result.details.task_id
@@ -802,11 +803,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "completed"}
             }
           end,
-          session_module: CodingAgent.Tools.TaskAsyncTest.SessionSpy,
+          session_module: Elixir.CodingAgent.Tools.TaskAsyncTest.SessionSpy,
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
+          run_orchestrator: Elixir.CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
         )
 
       task_id = result.details.task_id
@@ -837,11 +838,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "error", error: "timeout"}
             }
           end,
-          session_module: CodingAgent.Tools.TaskAsyncTest.SessionSpy,
+          session_module: Elixir.CodingAgent.Tools.TaskAsyncTest.SessionSpy,
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
+          run_orchestrator: Elixir.CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
         )
 
       task_id = result.details.task_id
@@ -893,7 +894,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
+          run_orchestrator: Elixir.CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
         )
 
       assert %AgentCore.Types.AgentToolResult{} = result
@@ -926,7 +927,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
+          run_orchestrator: Elixir.CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
         )
 
       assert %AgentCore.Types.AgentToolResult{} = result
@@ -955,11 +956,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "completed"}
             }
           end,
-          session_module: CodingAgent.Tools.TaskAsyncTest.SessionSpy,
+          session_module: Elixir.CodingAgent.Tools.TaskAsyncTest.SessionSpy,
           session_pid: nil,
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
+          run_orchestrator: Elixir.CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
         )
 
       assert %AgentCore.Types.AgentToolResult{} = result
@@ -1048,7 +1049,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "completed"}
             }
           end,
-          session_module: CodingAgent.Tools.TaskAsyncTest.SessionSpy,
+          session_module: Elixir.CodingAgent.Tools.TaskAsyncTest.SessionSpy,
           session_pid: dead_pid,
           session_key: "agent:unknown_agent:main",
           agent_id: "unknown_agent",

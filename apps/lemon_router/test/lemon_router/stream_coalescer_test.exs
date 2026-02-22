@@ -1,12 +1,13 @@
-defmodule LemonRouter.StreamCoalescerTest do
+defmodule Elixir.LemonRouter.StreamCoalescerTest do
+  alias Elixir.LemonRouter, as: LemonRouter
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
 
   alias LemonChannels.Types.ResumeToken
-  alias LemonRouter.StreamCoalescer
+  alias Elixir.LemonRouter.StreamCoalescer
 
-  defmodule LemonRouter.StreamCoalescerTest.TestTelegramPlugin do
+  defmodule Elixir.LemonRouter.StreamCoalescerTest.TestTelegramPlugin do
     @moduledoc false
 
     def id, do: "telegram"
@@ -28,7 +29,7 @@ defmodule LemonRouter.StreamCoalescerTest do
     end
   end
 
-  defmodule LemonRouter.StreamCoalescerTest.TestOutboxAPI do
+  defmodule Elixir.LemonRouter.StreamCoalescerTest.TestOutboxAPI do
     @moduledoc false
     use Agent
 
@@ -79,15 +80,15 @@ defmodule LemonRouter.StreamCoalescerTest do
 
   setup do
     # Start the coalescer registry and supervisor if not running
-    if is_nil(Process.whereis(LemonRouter.CoalescerRegistry)) do
-      {:ok, _} = Registry.start_link(keys: :unique, name: LemonRouter.CoalescerRegistry)
+    if is_nil(Process.whereis(Elixir.LemonRouter.CoalescerRegistry)) do
+      {:ok, _} = Registry.start_link(keys: :unique, name: Elixir.LemonRouter.CoalescerRegistry)
     end
 
-    if is_nil(Process.whereis(LemonRouter.CoalescerSupervisor)) do
+    if is_nil(Process.whereis(Elixir.LemonRouter.CoalescerSupervisor)) do
       {:ok, _} =
         DynamicSupervisor.start_link(
           strategy: :one_for_one,
-          name: LemonRouter.CoalescerSupervisor
+          name: Elixir.LemonRouter.CoalescerSupervisor
         )
     end
 
@@ -112,14 +113,14 @@ defmodule LemonRouter.StreamCoalescerTest do
       GenServer.stop(pid)
     end
 
-    :persistent_term.put({LemonRouter.StreamCoalescerTest.TestTelegramPlugin, :test_pid}, self())
+    :persistent_term.put({Elixir.LemonRouter.StreamCoalescerTest.TestTelegramPlugin, :test_pid}, self())
 
     existing = LemonChannels.Registry.get_plugin("telegram")
     _ = LemonChannels.Registry.unregister("telegram")
-    :ok = LemonChannels.Registry.register(LemonRouter.StreamCoalescerTest.TestTelegramPlugin)
+    :ok = LemonChannels.Registry.register(Elixir.LemonRouter.StreamCoalescerTest.TestTelegramPlugin)
 
     on_exit(fn ->
-      _ = :persistent_term.erase({LemonRouter.StreamCoalescerTest.TestTelegramPlugin, :test_pid})
+      _ = :persistent_term.erase({Elixir.LemonRouter.StreamCoalescerTest.TestTelegramPlugin, :test_pid})
       # on_exit callbacks can run after the test process has terminated; avoid
       # failing tests on cleanup if the registry is already gone.
       if is_pid(Process.whereis(LemonChannels.Registry)) do
@@ -172,7 +173,7 @@ defmodule LemonRouter.StreamCoalescerTest do
       # Verify coalescer was started
       assert [{_pid, _}] =
                Registry.lookup(
-                 LemonRouter.CoalescerRegistry,
+                 Elixir.LemonRouter.CoalescerRegistry,
                  {session_key, channel_id}
                )
     end
@@ -193,7 +194,7 @@ defmodule LemonRouter.StreamCoalescerTest do
 
       assert [{_pid, _}] =
                Registry.lookup(
-                 LemonRouter.CoalescerRegistry,
+                 Elixir.LemonRouter.CoalescerRegistry,
                  {session_key, channel_id}
                )
     end
@@ -230,7 +231,7 @@ defmodule LemonRouter.StreamCoalescerTest do
 
       assert [{_pid, _}] =
                Registry.lookup(
-                 LemonRouter.CoalescerRegistry,
+                 Elixir.LemonRouter.CoalescerRegistry,
                  {session_key, channel_id}
                )
     end
@@ -295,7 +296,7 @@ defmodule LemonRouter.StreamCoalescerTest do
       # The coalescer should have started with peer_kind = :unknown
       assert [{_pid, _}] =
                Registry.lookup(
-                 LemonRouter.CoalescerRegistry,
+                 Elixir.LemonRouter.CoalescerRegistry,
                  {session_key, channel_id}
                )
     end
@@ -384,7 +385,7 @@ defmodule LemonRouter.StreamCoalescerTest do
                  meta: %{progress_msg_id: 123}
                )
 
-      [{pid, _}] = Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id})
+      [{pid, _}] = Registry.lookup(Elixir.LemonRouter.CoalescerRegistry, {session_key, channel_id})
       state = :sys.get_state(pid)
       assert state.meta[:progress_msg_id] == 123
 
@@ -628,7 +629,7 @@ defmodule LemonRouter.StreamCoalescerTest do
       assert :ok = StreamCoalescer.flush(session_key, channel_id)
       assert_receive {:delivered, %{idempotency_key: ^create_key}}, 1_000
 
-      [{pid, _}] = Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id})
+      [{pid, _}] = Registry.lookup(Elixir.LemonRouter.CoalescerRegistry, {session_key, channel_id})
 
       :sys.replace_state(pid, fn state ->
         meta = Map.delete(state.meta || %{}, :answer_msg_id)
@@ -740,7 +741,7 @@ defmodule LemonRouter.StreamCoalescerTest do
                       }},
                      1_000
 
-      [{pid, _}] = Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id})
+      [{pid, _}] = Registry.lookup(Elixir.LemonRouter.CoalescerRegistry, {session_key, channel_id})
       state = :sys.get_state(pid)
       assert state.run_id == run_id_2
     end
@@ -758,7 +759,7 @@ defmodule LemonRouter.StreamCoalescerTest do
                  final_text: "Final answer"
                )
 
-      [{pid, _}] = Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id})
+      [{pid, _}] = Registry.lookup(Elixir.LemonRouter.CoalescerRegistry, {session_key, channel_id})
 
       assert eventually(fn ->
                state = :sys.get_state(pid)
@@ -789,7 +790,7 @@ defmodule LemonRouter.StreamCoalescerTest do
 
       assert :ok = StreamCoalescer.flush(session_key, channel_id)
 
-      [{pid, _}] = Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id})
+      [{pid, _}] = Registry.lookup(Elixir.LemonRouter.CoalescerRegistry, {session_key, channel_id})
       ref = make_ref()
 
       :sys.replace_state(pid, fn state ->

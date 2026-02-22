@@ -1,8 +1,9 @@
-defmodule LemonGateway.EngineLockTest do
+defmodule Elixir.LemonGateway.EngineLockTest do
+  alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case, async: false
 
-  alias LemonGateway.Event.Completed
-  alias LemonGateway.Types.{Job, ResumeToken}
+  alias Elixir.LemonGateway.Event.Completed
+  alias Elixir.LemonGateway.Types.{Job, ResumeToken}
 
   # ============================================================================
   # Unit Tests for EngineLock GenServer
@@ -862,7 +863,7 @@ defmodule LemonGateway.EngineLockTest do
     # Start a new EngineLock with a unique name for isolation
     name = :"engine_lock_#{:erlang.unique_integer([:positive])}"
     opts = Map.get(context, :engine_lock_opts, %{})
-    {:ok, pid} = GenServer.start_link(LemonGateway.EngineLock, opts, name: name)
+    {:ok, pid} = GenServer.start_link(Elixir.LemonGateway.EngineLock, opts, name: name)
 
     on_exit(fn ->
       if Process.alive?(pid), do: GenServer.stop(pid)
@@ -891,11 +892,11 @@ defmodule LemonGateway.EngineLockTest do
   # Integration Tests (existing tests using full application)
   # ============================================================================
 
-  defmodule LemonGateway.EngineLockTest.SlowEngine do
-    @behaviour LemonGateway.Engine
+  defmodule Elixir.LemonGateway.EngineLockTest.SlowEngine do
+    @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
-    alias LemonGateway.Event
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Event
 
     @impl true
     def id, do: "slow"
@@ -935,11 +936,11 @@ defmodule LemonGateway.EngineLockTest do
     def cancel(_ctx), do: :ok
   end
 
-  defmodule LemonGateway.EngineLockTest.CrashEngine do
-    @behaviour LemonGateway.Engine
+  defmodule Elixir.LemonGateway.EngineLockTest.CrashEngine do
+    @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
-    alias LemonGateway.Event
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Event
 
     @impl true
     def id, do: "crash"
@@ -977,7 +978,7 @@ defmodule LemonGateway.EngineLockTest do
   setup do
     _ = Application.stop(:lemon_gateway)
 
-    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+    Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 10,
       default_engine: "echo",
       enable_telegram: false,
@@ -986,8 +987,8 @@ defmodule LemonGateway.EngineLockTest do
     })
 
     Application.put_env(:lemon_gateway, :engines, [
-      LemonGateway.Engines.Echo,
-      LemonGateway.EngineLockTest.SlowEngine
+      Elixir.LemonGateway.Engines.Echo,
+      Elixir.LemonGateway.EngineLockTest.SlowEngine
     ])
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
@@ -1005,7 +1006,7 @@ defmodule LemonGateway.EngineLockTest do
       meta: %{notify_pid: self(), user_msg_id: 1}
     }
 
-    LemonGateway.submit(job)
+    Elixir.LemonGateway.submit(job)
     assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 1_000
 
     # Wait a bit for lock release to propagate (cast is async)
@@ -1020,7 +1021,7 @@ defmodule LemonGateway.EngineLockTest do
       meta: %{notify_pid: self(), user_msg_id: 2}
     }
 
-    LemonGateway.submit(job2)
+    Elixir.LemonGateway.submit(job2)
     assert_receive {:lemon_gateway_run_completed, ^job2, %Completed{ok: true}}, 1_000
   end
 
@@ -1044,9 +1045,9 @@ defmodule LemonGateway.EngineLockTest do
     }
 
     # Submit both concurrently
-    Task.async(fn -> LemonGateway.submit(job1) end)
+    Task.async(fn -> Elixir.LemonGateway.submit(job1) end)
     Process.sleep(10)
-    Task.async(fn -> LemonGateway.submit(job2) end)
+    Task.async(fn -> Elixir.LemonGateway.submit(job2) end)
 
     # Jobs should complete in order due to locking
     completions = collect_completions(2, 2_000)
@@ -1080,8 +1081,8 @@ defmodule LemonGateway.EngineLockTest do
 
     t_start = System.monotonic_time(:millisecond)
 
-    Task.async(fn -> LemonGateway.submit(job1) end)
-    Task.async(fn -> LemonGateway.submit(job2) end)
+    Task.async(fn -> Elixir.LemonGateway.submit(job1) end)
+    Task.async(fn -> Elixir.LemonGateway.submit(job2) end)
 
     completions = collect_completions(2, 2_000)
     t_end = System.monotonic_time(:millisecond)
@@ -1117,9 +1118,9 @@ defmodule LemonGateway.EngineLockTest do
 
     t_start = System.monotonic_time(:millisecond)
 
-    Task.async(fn -> LemonGateway.submit(job1) end)
+    Task.async(fn -> Elixir.LemonGateway.submit(job1) end)
     Process.sleep(10)
-    Task.async(fn -> LemonGateway.submit(job2) end)
+    Task.async(fn -> Elixir.LemonGateway.submit(job2) end)
 
     completions = collect_completions(2, 2_000)
     t_end = System.monotonic_time(:millisecond)
@@ -1136,7 +1137,7 @@ defmodule LemonGateway.EngineLockTest do
     # Restart app with crash engine included
     _ = Application.stop(:lemon_gateway)
 
-    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+    Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 10,
       default_engine: "echo",
       enable_telegram: false,
@@ -1145,9 +1146,9 @@ defmodule LemonGateway.EngineLockTest do
     })
 
     Application.put_env(:lemon_gateway, :engines, [
-      LemonGateway.Engines.Echo,
-      LemonGateway.EngineLockTest.SlowEngine,
-      LemonGateway.EngineLockTest.CrashEngine
+      Elixir.LemonGateway.Engines.Echo,
+      Elixir.LemonGateway.EngineLockTest.SlowEngine,
+      Elixir.LemonGateway.EngineLockTest.CrashEngine
     ])
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
@@ -1171,9 +1172,9 @@ defmodule LemonGateway.EngineLockTest do
     }
 
     # Submit crash job first, then ok job
-    LemonGateway.submit(crash_job)
+    Elixir.LemonGateway.submit(crash_job)
     Process.sleep(50)
-    LemonGateway.submit(ok_job)
+    Elixir.LemonGateway.submit(ok_job)
 
     # The ok_job should complete even after crash_job's process dies
     # because EngineLock monitors the process and releases on :DOWN
@@ -1183,7 +1184,7 @@ defmodule LemonGateway.EngineLockTest do
   test "lock can be disabled via config" do
     _ = Application.stop(:lemon_gateway)
 
-    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+    Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 10,
       default_engine: "echo",
       enable_telegram: false,
@@ -1191,8 +1192,8 @@ defmodule LemonGateway.EngineLockTest do
     })
 
     Application.put_env(:lemon_gateway, :engines, [
-      LemonGateway.Engines.Echo,
-      LemonGateway.EngineLockTest.SlowEngine
+      Elixir.LemonGateway.Engines.Echo,
+      Elixir.LemonGateway.EngineLockTest.SlowEngine
     ])
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
@@ -1218,8 +1219,8 @@ defmodule LemonGateway.EngineLockTest do
 
     t_start = System.monotonic_time(:millisecond)
 
-    Task.async(fn -> LemonGateway.submit(job1) end)
-    Task.async(fn -> LemonGateway.submit(job2) end)
+    Task.async(fn -> Elixir.LemonGateway.submit(job1) end)
+    Task.async(fn -> Elixir.LemonGateway.submit(job2) end)
 
     completions = collect_completions(2, 2_000)
     t_end = System.monotonic_time(:millisecond)

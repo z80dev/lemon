@@ -1,8 +1,9 @@
-defmodule LemonChannels.StartupTest do
+defmodule Elixir.LemonChannels.StartupTest do
+  alias Elixir.LemonChannels, as: LemonChannels
   use ExUnit.Case, async: false
 
   # Minimal mock Telegram API for boot validation.
-  defmodule LemonChannels.StartupTest.MockTelegramAPI do
+  defmodule Elixir.LemonChannels.StartupTest.MockTelegramAPI do
     use Agent
 
     def start_link(opts \\ []) do
@@ -51,8 +52,8 @@ defmodule LemonChannels.StartupTest do
     _ = File.mkdir_p(lock_dir)
     System.put_env("LEMON_LOCK_DIR", lock_dir)
 
-    LemonChannels.StartupTest.MockTelegramAPI.stop()
-    {:ok, _} = LemonChannels.StartupTest.MockTelegramAPI.start_link()
+    Elixir.LemonChannels.StartupTest.MockTelegramAPI.stop()
+    {:ok, _} = Elixir.LemonChannels.StartupTest.MockTelegramAPI.start_link()
 
     Application.put_env(:lemon_channels, :gateway, %{
       max_concurrent_runs: 1,
@@ -68,12 +69,12 @@ defmodule LemonChannels.StartupTest do
     })
 
     Application.put_env(:lemon_channels, :telegram, %{
-      api_mod: LemonChannels.StartupTest.MockTelegramAPI,
+      api_mod: Elixir.LemonChannels.StartupTest.MockTelegramAPI,
       poll_interval_ms: 50
     })
 
     on_exit(fn ->
-      LemonChannels.StartupTest.MockTelegramAPI.stop()
+      Elixir.LemonChannels.StartupTest.MockTelegramAPI.stop()
       _ = Application.stop(:lemon_channels)
       _ = Application.stop(:lemon_router)
       _ = Application.stop(:lemon_gateway)
@@ -116,7 +117,7 @@ defmodule LemonChannels.StartupTest do
     assert {:ok, _apps} = Application.ensure_all_started(:lemon_channels)
 
     # Wait for channels transport to come up.
-    assert is_pid(wait_for_pid(LemonChannels.Adapters.Telegram.Transport, 2_000))
+    assert is_pid(wait_for_pid(Elixir.LemonChannels.Adapters.Telegram.Transport, 2_000))
 
     # Ensure we did not also start the legacy poller/outbox.
     assert Process.whereis(LemonGateway.TransportSupervisor) == nil

@@ -1,6 +1,7 @@
-defmodule LemonGateway.TransportSupervisorTest do
+defmodule Elixir.LemonGateway.TransportSupervisorTest do
+  alias Elixir.LemonGateway, as: LemonGateway
   @moduledoc """
-  Comprehensive tests for LemonGateway.TransportSupervisor.
+  Comprehensive tests for Elixir.LemonGateway.TransportSupervisor.
 
   Tests cover:
   - Supervisor startup and initialization
@@ -16,8 +17,8 @@ defmodule LemonGateway.TransportSupervisorTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonGateway.TransportSupervisor
-  alias LemonGateway.TransportRegistry
+  alias Elixir.LemonGateway.TransportSupervisor
+  alias Elixir.LemonGateway.TransportRegistry
 
   setup_all do
     # `mix test` starts the current application by default. This test suite is a
@@ -33,14 +34,14 @@ defmodule LemonGateway.TransportSupervisorTest do
   # Mock Transports for Testing
   # ============================================================================
 
-  defmodule LemonGateway.TransportSupervisorTest.MockTelegramTransport do
-    use LemonGateway.Transport
+  defmodule Elixir.LemonGateway.TransportSupervisorTest.MockTelegramTransport do
+    use Elixir.LemonGateway.Transport
     use GenServer
 
-    @impl LemonGateway.Transport
+    @impl Elixir.LemonGateway.Transport
     def id, do: "telegram"
 
-    @impl LemonGateway.Transport
+    @impl Elixir.LemonGateway.Transport
     def start_link(_opts) do
       GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
     end
@@ -50,13 +51,13 @@ defmodule LemonGateway.TransportSupervisorTest do
   end
 
   defmodule MockTransportA do
-    use LemonGateway.Transport
+    use Elixir.LemonGateway.Transport
     use GenServer
 
-    @impl LemonGateway.Transport
+    @impl Elixir.LemonGateway.Transport
     def id, do: "mock-a"
 
-    @impl LemonGateway.Transport
+    @impl Elixir.LemonGateway.Transport
     def start_link(_opts) do
       GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
     end
@@ -69,13 +70,13 @@ defmodule LemonGateway.TransportSupervisorTest do
   end
 
   defmodule MockTransportB do
-    use LemonGateway.Transport
+    use Elixir.LemonGateway.Transport
     use GenServer
 
-    @impl LemonGateway.Transport
+    @impl Elixir.LemonGateway.Transport
     def id, do: "mock-b"
 
-    @impl LemonGateway.Transport
+    @impl Elixir.LemonGateway.Transport
     def start_link(_opts) do
       GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
     end
@@ -88,13 +89,13 @@ defmodule LemonGateway.TransportSupervisorTest do
   end
 
   defmodule MockTransportC do
-    use LemonGateway.Transport
+    use Elixir.LemonGateway.Transport
     use GenServer
 
-    @impl LemonGateway.Transport
+    @impl Elixir.LemonGateway.Transport
     def id, do: "mock-c"
 
-    @impl LemonGateway.Transport
+    @impl Elixir.LemonGateway.Transport
     def start_link(_opts) do
       GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
     end
@@ -107,13 +108,13 @@ defmodule LemonGateway.TransportSupervisorTest do
   end
 
   defmodule FailingTransport do
-    use LemonGateway.Transport
+    use Elixir.LemonGateway.Transport
     use GenServer
 
-    @impl LemonGateway.Transport
+    @impl Elixir.LemonGateway.Transport
     def id, do: "failing"
 
-    @impl LemonGateway.Transport
+    @impl Elixir.LemonGateway.Transport
     def start_link(_opts) do
       GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
     end
@@ -133,13 +134,13 @@ defmodule LemonGateway.TransportSupervisorTest do
   end
 
   defmodule SlowStartTransport do
-    use LemonGateway.Transport
+    use Elixir.LemonGateway.Transport
     use GenServer
 
-    @impl LemonGateway.Transport
+    @impl Elixir.LemonGateway.Transport
     def id, do: "slow-start"
 
-    @impl LemonGateway.Transport
+    @impl Elixir.LemonGateway.Transport
     def start_link(_opts) do
       GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
     end
@@ -155,12 +156,12 @@ defmodule LemonGateway.TransportSupervisorTest do
   end
 
   defmodule IgnoreTransport do
-    use LemonGateway.Transport
+    use Elixir.LemonGateway.Transport
 
-    @impl LemonGateway.Transport
+    @impl Elixir.LemonGateway.Transport
     def id, do: "ignore"
 
-    @impl LemonGateway.Transport
+    @impl Elixir.LemonGateway.Transport
     def start_link(_opts) do
       :ignore
     end
@@ -197,7 +198,7 @@ defmodule LemonGateway.TransportSupervisorTest do
   defp setup_app(transports, config \\ %{}, telegram \\ %{}) do
     # These are globally named processes. Ensure a clean slate even if another
     # test module started them.
-    stop_if_running(LemonGateway.Telegram.Outbox)
+    stop_if_running(Elixir.LemonGateway.Telegram.Outbox)
     stop_if_running(TransportSupervisor)
     stop_if_running(TransportRegistry)
 
@@ -205,7 +206,7 @@ defmodule LemonGateway.TransportSupervisorTest do
       enable_telegram: false
     }
 
-    Application.put_env(:lemon_gateway, LemonGateway.Config, Map.merge(base_config, config))
+    Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, Map.merge(base_config, config))
     Application.put_env(:lemon_gateway, :transports, transports)
     Application.put_env(:lemon_gateway, :telegram, telegram)
 
@@ -283,11 +284,11 @@ defmodule LemonGateway.TransportSupervisorTest do
     end
 
     test "does not start telegram transport when enable_telegram is false" do
-      setup_app([LemonGateway.TransportSupervisorTest.MockTelegramTransport], %{enable_telegram: false}, %{bot_token: "test"})
+      setup_app([Elixir.LemonGateway.TransportSupervisorTest.MockTelegramTransport], %{enable_telegram: false}, %{bot_token: "test"})
 
       # Telegram transport should not be started
-      assert Process.whereis(LemonGateway.TransportSupervisorTest.MockTelegramTransport) == nil
-      assert Process.whereis(LemonGateway.Telegram.Outbox) == nil
+      assert Process.whereis(Elixir.LemonGateway.TransportSupervisorTest.MockTelegramTransport) == nil
+      assert Process.whereis(Elixir.LemonGateway.Telegram.Outbox) == nil
     end
 
     test "non-telegram transports are enabled by default" do
@@ -312,14 +313,14 @@ defmodule LemonGateway.TransportSupervisorTest do
 
   describe "telegram transport special handling" do
     test "telegram transport includes Outbox child" do
-      setup_app([LemonGateway.TransportSupervisorTest.MockTelegramTransport], %{enable_telegram: true}, %{bot_token: "test_token_123"})
+      setup_app([Elixir.LemonGateway.TransportSupervisorTest.MockTelegramTransport], %{enable_telegram: true}, %{bot_token: "test_token_123"})
 
       # Check that Outbox is started
       children = Supervisor.which_children(TransportSupervisor)
       child_ids = Enum.map(children, fn {id, _, _, _} -> id end)
 
-      assert LemonGateway.Telegram.Outbox in child_ids
-      assert LemonGateway.TransportSupervisorTest.MockTelegramTransport in child_ids
+      assert Elixir.LemonGateway.Telegram.Outbox in child_ids
+      assert Elixir.LemonGateway.TransportSupervisorTest.MockTelegramTransport in child_ids
     end
 
     test "non-telegram transports do not include Outbox" do
@@ -328,7 +329,7 @@ defmodule LemonGateway.TransportSupervisorTest do
       children = Supervisor.which_children(TransportSupervisor)
       child_ids = Enum.map(children, fn {id, _, _, _} -> id end)
 
-      refute LemonGateway.Telegram.Outbox in child_ids
+      refute Elixir.LemonGateway.Telegram.Outbox in child_ids
     end
   end
 
@@ -502,11 +503,11 @@ defmodule LemonGateway.TransportSupervisorTest do
       _ = Application.stop(:lemon_channels)
       _ = Application.stop(:lemon_control_plane)
 
-      stop_if_running(LemonGateway.Telegram.Outbox)
+      stop_if_running(Elixir.LemonGateway.Telegram.Outbox)
       stop_if_running(TransportSupervisor)
       stop_if_running(TransportRegistry)
 
-      Application.put_env(:lemon_gateway, LemonGateway.Config, %{enable_telegram: false})
+      Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{enable_telegram: false})
       Application.put_env(:lemon_gateway, :transports, [MockTransportA])
       Application.put_env(:lemon_gateway, :telegram, %{})
 
@@ -514,7 +515,7 @@ defmodule LemonGateway.TransportSupervisorTest do
       {:ok, _} = TransportSupervisor.start_link([])
 
       on_exit(fn ->
-        stop_if_running(LemonGateway.Telegram.Outbox)
+        stop_if_running(Elixir.LemonGateway.Telegram.Outbox)
         stop_if_running(TransportSupervisor)
         stop_if_running(TransportRegistry)
       end)
@@ -601,7 +602,7 @@ defmodule LemonGateway.TransportSupervisorTest do
 
     test "handles empty enabled transports list" do
       # All transports disabled
-      setup_app([LemonGateway.TransportSupervisorTest.MockTelegramTransport], %{enable_telegram: false}, %{bot_token: "test"})
+      setup_app([Elixir.LemonGateway.TransportSupervisorTest.MockTelegramTransport], %{enable_telegram: false}, %{bot_token: "test"})
 
       # Supervisor should still be running but have fewer children
       assert Process.alive?(Process.whereis(TransportSupervisor))
@@ -610,7 +611,7 @@ defmodule LemonGateway.TransportSupervisorTest do
       # No telegram children since it's disabled
       transport_children =
         Enum.filter(children, fn {id, _, _, _} ->
-          id == LemonGateway.TransportSupervisorTest.MockTelegramTransport or id == LemonGateway.Telegram.Outbox
+          id == Elixir.LemonGateway.TransportSupervisorTest.MockTelegramTransport or id == Elixir.LemonGateway.Telegram.Outbox
         end)
 
       assert length(transport_children) == 0

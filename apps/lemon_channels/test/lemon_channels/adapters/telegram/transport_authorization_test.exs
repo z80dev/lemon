@@ -1,7 +1,8 @@
-defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
+defmodule Elixir.LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
+  alias Elixir.LemonChannels, as: LemonChannels
   use ExUnit.Case, async: false
 
-  defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest.TestRouter do
+  defmodule Elixir.LemonChannels.Adapters.Telegram.TransportAuthorizationTest.TestRouter do
     def handle_inbound(msg) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
         send(pid, {:inbound, msg})
@@ -11,7 +12,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
     end
   end
 
-  defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI do
+  defmodule Elixir.LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI do
     @updates_key {__MODULE__, :updates}
     @pid_key {__MODULE__, :pid}
 
@@ -60,16 +61,16 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
     old_gateway_config_env = Application.get_env(:lemon_channels, :gateway)
 
-    :persistent_term.put({LemonChannels.Adapters.Telegram.TransportAuthorizationTest.TestRouter, :pid}, self())
-    LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI.register_test(self())
-    LemonCore.RouterBridge.configure(router: LemonChannels.Adapters.Telegram.TransportAuthorizationTest.TestRouter)
+    :persistent_term.put({Elixir.LemonChannels.Adapters.Telegram.TransportAuthorizationTest.TestRouter, :pid}, self())
+    Elixir.LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI.register_test(self())
+    LemonCore.RouterBridge.configure(router: Elixir.LemonChannels.Adapters.Telegram.TransportAuthorizationTest.TestRouter)
     set_bindings([])
 
     on_exit(fn ->
       stop_transport()
-      :persistent_term.erase({LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI, :updates})
-      :persistent_term.erase({LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI, :pid})
-      :persistent_term.erase({LemonChannels.Adapters.Telegram.TransportAuthorizationTest.TestRouter, :pid})
+      :persistent_term.erase({Elixir.LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI, :updates})
+      :persistent_term.erase({Elixir.LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI, :pid})
+      :persistent_term.erase({Elixir.LemonChannels.Adapters.Telegram.TransportAuthorizationTest.TestRouter, :pid})
       restore_router_bridge(old_router_bridge)
       restore_gateway_config_env(old_gateway_config_env)
     end)
@@ -79,7 +80,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
 
   test "drops message updates when chat is not in allowed_chat_ids" do
     chat_id = 100_001
-    LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI.set_updates([message_update(chat_id, "hello from disallowed chat")])
+    Elixir.LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI.set_updates([message_update(chat_id, "hello from disallowed chat")])
 
     assert {:ok, _pid} =
              start_transport(%{
@@ -93,7 +94,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
   test "drops message updates when deny_unbound_chats is true and no binding exists" do
     chat_id = 100_002
     set_bindings([])
-    LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI.set_updates([message_update(chat_id, "hello from unbound chat")])
+    Elixir.LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI.set_updates([message_update(chat_id, "hello from unbound chat")])
 
     assert {:ok, _pid} =
              start_transport(%{
@@ -107,7 +108,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
   test "allows message updates from bound chats when deny_unbound_chats is true" do
     chat_id = 100_003
     set_bindings([scope_binding(chat_id)])
-    LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI.set_updates([message_update(chat_id, "hello from bound chat")])
+    Elixir.LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI.set_updates([message_update(chat_id, "hello from bound chat")])
 
     assert {:ok, _pid} =
              start_transport(%{
@@ -122,7 +123,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
 
   test "ignores callback queries when chat is not in allowed_chat_ids" do
     chat_id = 200_001
-    LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI.set_updates([callback_update(chat_id, "unknown|decision")])
+    Elixir.LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI.set_updates([callback_update(chat_id, "unknown|decision")])
 
     assert {:ok, _pid} =
              start_transport(%{
@@ -136,7 +137,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
   test "ignores callback queries when deny_unbound_chats is true and no binding exists" do
     chat_id = 200_002
     set_bindings([])
-    LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI.set_updates([callback_update(chat_id, "unknown|decision")])
+    Elixir.LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI.set_updates([callback_update(chat_id, "unknown|decision")])
 
     assert {:ok, _pid} =
              start_transport(%{
@@ -150,7 +151,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
   test "handles callback queries from bound chats when guards pass" do
     chat_id = 200_003
     set_bindings([scope_binding(chat_id)])
-    LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI.set_updates([callback_update(chat_id, "unknown|decision")])
+    Elixir.LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI.set_updates([callback_update(chat_id, "unknown|decision")])
 
     assert {:ok, _pid} =
              start_transport(%{
@@ -167,13 +168,13 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
     config =
       %{
         bot_token: token,
-        api_mod: LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI,
+        api_mod: Elixir.LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI,
         poll_interval_ms: 10,
         debounce_ms: 10
       }
       |> Map.merge(overrides)
 
-    LemonChannels.Adapters.Telegram.Transport.start_link(config: config)
+    Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(config: config)
   end
 
   defp set_bindings(bindings) do
@@ -239,7 +240,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
   end
 
   defp stop_transport do
-    if pid = Process.whereis(LemonChannels.Adapters.Telegram.Transport) do
+    if pid = Process.whereis(Elixir.LemonChannels.Adapters.Telegram.Transport) do
       if Process.alive?(pid) do
         GenServer.stop(pid, :normal)
       end

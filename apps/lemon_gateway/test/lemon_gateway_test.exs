@@ -1,8 +1,9 @@
 defmodule LemonGatewayTest do
+  alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case
 
-  alias LemonGateway.Event.Completed
-  alias LemonGateway.Types.Job
+  alias Elixir.LemonGateway.Event.Completed
+  alias Elixir.LemonGateway.Types.Job
 
   setup do
     # Isolate Telegram poller file locks from any locally running gateway process (and from other tests).
@@ -20,10 +21,10 @@ defmodule LemonGatewayTest do
   end
 
   defmodule LemonGatewayTest.CrashEngine do
-    @behaviour LemonGateway.Engine
+    @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
-    alias LemonGateway.Event
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Event
 
     @impl true
     def id, do: "crash"
@@ -58,10 +59,10 @@ defmodule LemonGatewayTest do
   end
 
   defmodule ErrorEngine do
-    @behaviour LemonGateway.Engine
+    @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
-    alias LemonGateway.Event
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Event
 
     @impl true
     def id, do: "error"
@@ -88,10 +89,10 @@ defmodule LemonGatewayTest do
   end
 
   defmodule ActionEngine do
-    @behaviour LemonGateway.Engine
+    @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
-    alias LemonGateway.Event
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Event
 
     @impl true
     def id, do: "action"
@@ -138,10 +139,10 @@ defmodule LemonGatewayTest do
 
   defmodule LemonGatewayTest.StreamingEngine do
     @moduledoc "Test engine that emits multiple action events to test streaming edits"
-    @behaviour LemonGateway.Engine
+    @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
-    alias LemonGateway.Event
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Event
 
     @impl true
     def id, do: "streaming"
@@ -359,14 +360,14 @@ defmodule LemonGatewayTest do
   setup do
     _ = Application.stop(:lemon_gateway)
 
-    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+    Application.put_env(:lemon_gateway, Elixir.LemonGateway.Config, %{
       max_concurrent_runs: 1,
       default_engine: "echo",
       enable_telegram: false
     })
 
     Application.put_env(:lemon_gateway, :engines, [
-      LemonGateway.Engines.Echo,
+      Elixir.LemonGateway.Engines.Echo,
       LemonGatewayTest.CrashEngine,
       ErrorEngine,
       ActionEngine,
@@ -393,7 +394,7 @@ defmodule LemonGatewayTest do
       meta: %{notify_pid: self(), user_msg_id: 1}
     }
 
-    LemonGateway.submit(job)
+    Elixir.LemonGateway.submit(job)
 
     assert_receive {:lemon_gateway_run_completed, ^job,
                     %Completed{ok: true, answer: "Echo: hello"}},
@@ -405,7 +406,7 @@ defmodule LemonGatewayTest do
 
     _worker_a =
       spawn(fn ->
-        LemonGateway.Scheduler.request_slot(self(), :thread_a)
+        Elixir.LemonGateway.Scheduler.request_slot(self(), :thread_a)
 
         receive do
           {:slot_granted, _slot_ref} ->
@@ -416,7 +417,7 @@ defmodule LemonGatewayTest do
 
     worker_b =
       spawn(fn ->
-        LemonGateway.Scheduler.request_slot(self(), :thread_b)
+        Elixir.LemonGateway.Scheduler.request_slot(self(), :thread_b)
 
         receive do
           {:slot_granted, _slot_ref} ->
@@ -449,8 +450,8 @@ defmodule LemonGatewayTest do
       meta: %{notify_pid: self(), user_msg_id: 11}
     }
 
-    LemonGateway.submit(crash_job)
-    LemonGateway.submit(ok_job)
+    Elixir.LemonGateway.submit(crash_job)
+    Elixir.LemonGateway.submit(ok_job)
 
     assert_receive {:lemon_gateway_run_completed, ^ok_job,
                     %Completed{ok: true, answer: "Echo: ok"}},
@@ -476,8 +477,8 @@ defmodule LemonGatewayTest do
       meta: %{notify_pid: self(), user_msg_id: 21}
     }
 
-    Task.async(fn -> LemonGateway.submit(job1) end)
-    Task.async(fn -> LemonGateway.submit(job2) end)
+    Task.async(fn -> Elixir.LemonGateway.submit(job1) end)
+    Task.async(fn -> Elixir.LemonGateway.submit(job2) end)
 
     assert_receive {:lemon_gateway_run_completed, ^job1,
                     %Completed{ok: true, answer: "Echo: first"}},
@@ -507,7 +508,7 @@ defmodule LemonGatewayTest do
       meta: %{notify_pid: self(), user_msg_id: 31}
     }
 
-    LemonGateway.submit(job1)
+    Elixir.LemonGateway.submit(job1)
 
     assert_receive {:lemon_gateway_run_completed, ^job1,
                     %Completed{ok: true, answer: "Echo: one"}},
@@ -516,7 +517,7 @@ defmodule LemonGatewayTest do
     # Allow worker to stop when idle.
     Process.sleep(50)
 
-    LemonGateway.submit(job2)
+    Elixir.LemonGateway.submit(job2)
 
     assert_receive {:lemon_gateway_run_completed, ^job2,
                     %Completed{ok: true, answer: "Echo: two"}},
@@ -534,13 +535,13 @@ defmodule LemonGatewayTest do
       meta: %{notify_pid: self(), user_msg_id: 40}
     }
 
-    LemonGateway.submit(job)
+    Elixir.LemonGateway.submit(job)
 
     assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: false}}, 1_000
   end
 
   test "telegram dedupe init is idempotent" do
-    assert :ok = LemonGateway.Telegram.Dedupe.init()
-    assert :ok = LemonGateway.Telegram.Dedupe.init()
+    assert :ok = Elixir.LemonGateway.Telegram.Dedupe.init()
+    assert :ok = Elixir.LemonGateway.Telegram.Dedupe.init()
   end
 end

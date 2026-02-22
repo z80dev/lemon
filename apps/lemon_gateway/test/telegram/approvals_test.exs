@@ -1,10 +1,11 @@
-defmodule LemonGateway.Telegram.ApprovalsTest do
+defmodule Elixir.LemonGateway.Telegram.ApprovalsTest do
+  alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case, async: false
 
-  alias LemonGateway.Config
+  alias Elixir.LemonGateway.Config
   alias LemonCore.SessionKey
 
-  defmodule LemonGateway.Telegram.ApprovalsTest.MockTelegramAPI do
+  defmodule Elixir.LemonGateway.Telegram.ApprovalsTest.MockTelegramAPI do
     use Agent
 
     def start_link(opts \\ []) do
@@ -81,10 +82,10 @@ defmodule LemonGateway.Telegram.ApprovalsTest do
     _ = Application.stop(:lemon_automation)
     _ = Application.stop(:lemon_core)
 
-    LemonGateway.Telegram.ApprovalsTest.MockTelegramAPI.stop()
-    {:ok, _} = start_supervised({LemonGateway.Telegram.ApprovalsTest.MockTelegramAPI, notify_pid: self()})
+    Elixir.LemonGateway.Telegram.ApprovalsTest.MockTelegramAPI.stop()
+    {:ok, _} = start_supervised({Elixir.LemonGateway.Telegram.ApprovalsTest.MockTelegramAPI, notify_pid: self()})
 
-    Application.delete_env(:lemon_gateway, LemonGateway.Config)
+    Application.delete_env(:lemon_gateway, Elixir.LemonGateway.Config)
     Application.delete_env(:lemon_gateway, :config_path)
     Application.delete_env(:lemon_gateway, :telegram)
     Application.delete_env(:lemon_gateway, :transports)
@@ -95,13 +96,13 @@ defmodule LemonGateway.Telegram.ApprovalsTest do
     Application.delete_env(:lemon_channels, :engines)
 
     on_exit(fn ->
-      LemonGateway.Telegram.ApprovalsTest.MockTelegramAPI.stop()
+      Elixir.LemonGateway.Telegram.ApprovalsTest.MockTelegramAPI.stop()
       _ = Application.stop(:lemon_gateway)
       _ = Application.stop(:lemon_channels)
       _ = Application.stop(:lemon_control_plane)
       _ = Application.stop(:lemon_automation)
       _ = Application.stop(:lemon_core)
-      Application.delete_env(:lemon_gateway, LemonGateway.Config)
+      Application.delete_env(:lemon_gateway, Elixir.LemonGateway.Config)
       Application.delete_env(:lemon_gateway, :config_path)
       Application.delete_env(:lemon_gateway, :telegram)
       Application.delete_env(:lemon_gateway, :transports)
@@ -134,27 +135,27 @@ defmodule LemonGateway.Telegram.ApprovalsTest do
     Application.put_env(:lemon_gateway, Config, config)
 
     Application.put_env(:lemon_gateway, :engines, [
-      LemonGateway.Engines.Echo
+      Elixir.LemonGateway.Engines.Echo
     ])
 
     Application.put_env(:lemon_gateway, :commands, [])
 
     Application.put_env(:lemon_gateway, :telegram, %{
-      api_mod: LemonGateway.Telegram.ApprovalsTest.MockTelegramAPI,
+      api_mod: Elixir.LemonGateway.Telegram.ApprovalsTest.MockTelegramAPI,
       account_id: "default"
     })
 
     Application.put_env(:lemon_channels, :gateway, config)
 
     Application.put_env(:lemon_channels, :telegram, %{
-      api_mod: LemonGateway.Telegram.ApprovalsTest.MockTelegramAPI,
+      api_mod: Elixir.LemonGateway.Telegram.ApprovalsTest.MockTelegramAPI,
       poll_interval_ms: config.telegram.poll_interval_ms,
       allowed_chat_ids: config.telegram.allowed_chat_ids,
       deny_unbound_chats: config.telegram.deny_unbound_chats
     })
 
     Application.put_env(:lemon_channels, :engines, [
-      LemonGateway.Engines.Echo
+      Elixir.LemonGateway.Engines.Echo
     ])
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
@@ -168,7 +169,7 @@ defmodule LemonGateway.Telegram.ApprovalsTest do
     assert is_pid(poller_pid)
 
     poller_state = :sys.get_state(LemonChannels.Adapters.Telegram.Transport)
-    assert poller_state.api_mod == LemonGateway.Telegram.ApprovalsTest.MockTelegramAPI
+    assert poller_state.api_mod == Elixir.LemonGateway.Telegram.ApprovalsTest.MockTelegramAPI
   end
 
   defp wait_until(fun, timeout_ms) when is_function(fun, 0) and is_integer(timeout_ms) do
@@ -237,7 +238,7 @@ defmodule LemonGateway.Telegram.ApprovalsTest do
     assert Map.has_key?(opts, "reply_markup")
 
     # Simulate button click (callback_query)
-    LemonGateway.Telegram.ApprovalsTest.MockTelegramAPI.enqueue_update(%{
+    Elixir.LemonGateway.Telegram.ApprovalsTest.MockTelegramAPI.enqueue_update(%{
       "callback_query" => %{
         "id" => "cb_1",
         "data" => "#{approval_id}|once",

@@ -1,10 +1,11 @@
-defmodule AgentCore.CliRunners.CodexRunnerTest do
+defmodule Elixir.AgentCore.CliRunners.CodexRunnerTest do
+  alias Elixir.AgentCore, as: AgentCore
   use ExUnit.Case, async: false
 
-  alias AgentCore.CliRunners.CodexRunner
-  alias AgentCore.CliRunners.CodexRunner.RunnerState
+  alias Elixir.AgentCore.CliRunners.CodexRunner
+  alias Elixir.AgentCore.CliRunners.CodexRunner.RunnerState
 
-  alias AgentCore.CliRunners.CodexSchema.{
+  alias Elixir.AgentCore.CliRunners.CodexSchema.{
     AgentMessageItem,
     CommandExecutionItem,
     ErrorItem,
@@ -28,8 +29,8 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
     WebSearchItem
   }
 
-  alias AgentCore.CliRunners.CodexSchema.ThreadError
-  alias AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
+  alias Elixir.AgentCore.CliRunners.CodexSchema.ThreadError
+  alias Elixir.AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
 
   # ============================================================================
   # Engine Identity
@@ -1139,7 +1140,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
   end
 end
 
-defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
+defmodule Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest do
   @moduledoc """
   Integration tests for CodexRunner GenServer lifecycle and process management.
 
@@ -1148,8 +1149,8 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
   """
   use ExUnit.Case, async: false
 
-  alias AgentCore.CliRunners.JsonlRunner
-  alias AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
+  alias Elixir.AgentCore.CliRunners.JsonlRunner
+  alias Elixir.AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
 
   @moduletag timeout: 30_000
 
@@ -1157,12 +1158,12 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
   # Mock Runner for Integration Tests
   # ============================================================================
 
-  defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner do
+  defmodule Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner do
     @moduledoc "Mock runner that uses bash scripts directly"
-    use AgentCore.CliRunners.JsonlRunner
+    use Elixir.AgentCore.CliRunners.JsonlRunner
 
-    alias AgentCore.CliRunners.CodexRunner
-    alias AgentCore.CliRunners.CodexRunner.RunnerState
+    alias Elixir.AgentCore.CliRunners.CodexRunner
+    alias Elixir.AgentCore.CliRunners.CodexRunner.RunnerState
 
     @impl true
     def engine, do: "codex"
@@ -1247,7 +1248,7 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
       Application.put_env(:agent_core, :mock_codex_script, script)
 
       {:ok, pid} =
-        AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
+        Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
           prompt: "test",
           cwd: System.tmp_dir!(),
           timeout: 10_000
@@ -1256,8 +1257,8 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
       assert Process.alive?(pid)
 
       # Wait for completion
-      stream = AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.stream(pid)
-      events = AgentCore.EventStream.events(stream) |> Enum.to_list()
+      stream = Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.stream(pid)
+      events = Elixir.AgentCore.EventStream.events(stream) |> Enum.to_list()
 
       # Verify we got the expected events
       cli_events = Enum.filter(events, &match?({:cli_event, _}, &1))
@@ -1268,7 +1269,7 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
       # start_link without prompt will fail in init with KeyError
       # Need to trap exits since we're using start_link
       Process.flag(:trap_exit, true)
-      result = AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(cwd: "/tmp")
+      result = Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(cwd: "/tmp")
 
       # Check that it fails or we receive an exit message
       case result do
@@ -1293,17 +1294,17 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
       Application.put_env(:agent_core, :mock_codex_script, script)
 
       {:ok, pid} =
-        AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
+        Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
           prompt: "test",
           cwd: System.tmp_dir!(),
           timeout: 5_000
         )
 
       ref = Process.monitor(pid)
-      stream = AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.stream(pid)
+      stream = Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.stream(pid)
 
       # Consume all events
-      _events = AgentCore.EventStream.events(stream) |> Enum.to_list()
+      _events = Elixir.AgentCore.EventStream.events(stream) |> Enum.to_list()
 
       # Wait for process to terminate
       assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 5_000
@@ -1322,7 +1323,7 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
       Application.put_env(:agent_core, :mock_codex_script, script)
 
       {:ok, pid} =
-        AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
+        Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
           prompt: "test",
           cwd: System.tmp_dir!(),
           timeout: 10_000
@@ -1331,8 +1332,8 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
       # Process should be alive during execution
       assert Process.alive?(pid)
 
-      stream = AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.stream(pid)
-      _events = AgentCore.EventStream.events(stream) |> Enum.to_list()
+      stream = Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.stream(pid)
+      _events = Elixir.AgentCore.EventStream.events(stream) |> Enum.to_list()
     end
 
     test "handles subprocess that exits with error code" do
@@ -1340,14 +1341,14 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
       Application.put_env(:agent_core, :mock_codex_script, script)
 
       {:ok, pid} =
-        AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
+        Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
           prompt: "test",
           cwd: System.tmp_dir!(),
           timeout: 5_000
         )
 
-      stream = AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.stream(pid)
-      events = AgentCore.EventStream.events(stream) |> Enum.to_list()
+      stream = Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.stream(pid)
+      events = Elixir.AgentCore.EventStream.events(stream) |> Enum.to_list()
 
       # Should have error-related events
       cli_events = for {:cli_event, e} <- events, do: e
@@ -1373,7 +1374,7 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
         end)
 
       {:ok, pid} =
-        AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
+        Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
           prompt: "test",
           cwd: System.tmp_dir!(),
           owner: owner,
@@ -1408,14 +1409,14 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
       Application.put_env(:agent_core, :mock_codex_script, script)
 
       {:ok, pid} =
-        AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
+        Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
           prompt: "test",
           cwd: System.tmp_dir!(),
           timeout: 10_000
         )
 
-      stream = AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.stream(pid)
-      events = AgentCore.EventStream.events(stream) |> Enum.to_list()
+      stream = Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.stream(pid)
+      events = Elixir.AgentCore.EventStream.events(stream) |> Enum.to_list()
 
       cli_events = for {:cli_event, e} <- events, do: e
 
@@ -1446,14 +1447,14 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
       Application.put_env(:agent_core, :mock_codex_script, script)
 
       {:ok, pid} =
-        AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
+        Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
           prompt: "test",
           cwd: System.tmp_dir!(),
           timeout: 10_000
         )
 
-      stream = AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.stream(pid)
-      events = AgentCore.EventStream.events(stream) |> Enum.to_list()
+      stream = Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.stream(pid)
+      events = Elixir.AgentCore.EventStream.events(stream) |> Enum.to_list()
 
       cli_events = for {:cli_event, e} <- events, do: e
 
@@ -1487,24 +1488,24 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
       Application.put_env(:agent_core, :mock_codex_script, script)
 
       {:ok, pid} =
-        AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
+        Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
           prompt: "test",
           cwd: System.tmp_dir!(),
           owner: self(),
           timeout: 30_000
         )
 
-      stream = AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.stream(pid)
+      stream = Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.stream(pid)
       ref = Process.monitor(pid)
 
       # Wait a bit for the process to start and emit the thread.started event
       Process.sleep(200)
 
       # Cancel the runner
-      AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.cancel(pid, :test_cancel)
+      Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.cancel(pid, :test_cancel)
 
       # Collect events
-      events = AgentCore.EventStream.events(stream) |> Enum.to_list()
+      events = Elixir.AgentCore.EventStream.events(stream) |> Enum.to_list()
 
       # Should have cancel event
       assert Enum.any?(events, fn
@@ -1529,17 +1530,17 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
       Application.put_env(:agent_core, :mock_codex_script, script)
 
       {:ok, pid} =
-        AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
+        Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
           prompt: "test",
           cwd: System.tmp_dir!(),
           # Very short timeout
           timeout: 500
         )
 
-      stream = AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.stream(pid)
+      stream = Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.stream(pid)
       ref = Process.monitor(pid)
 
-      events = AgentCore.EventStream.events(stream) |> Enum.to_list()
+      events = Elixir.AgentCore.EventStream.events(stream) |> Enum.to_list()
 
       # Should have timeout error (can be {:error, :timeout} or {:error, :timeout, nil})
       assert Enum.any?(events, fn
@@ -1565,14 +1566,14 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
       Application.put_env(:agent_core, :mock_codex_script, script)
 
       {:ok, pid} =
-        AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
+        Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
           prompt: "test",
           cwd: System.tmp_dir!(),
           timeout: 10_000
         )
 
-      stream = AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.stream(pid)
-      events = AgentCore.EventStream.events(stream) |> Enum.to_list()
+      stream = Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.stream(pid)
+      events = Elixir.AgentCore.EventStream.events(stream) |> Enum.to_list()
 
       cli_events = for {:cli_event, e} <- events, do: e
 
@@ -1595,14 +1596,14 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
       Application.put_env(:agent_core, :mock_codex_script, script)
 
       {:ok, pid} =
-        AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
+        Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
           prompt: "test",
           cwd: System.tmp_dir!(),
           timeout: 10_000
         )
 
-      stream = AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.stream(pid)
-      events = AgentCore.EventStream.events(stream) |> Enum.to_list()
+      stream = Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.stream(pid)
+      events = Elixir.AgentCore.EventStream.events(stream) |> Enum.to_list()
 
       cli_events = for {:cli_event, e} <- events, do: e
 
@@ -1636,7 +1637,7 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
 
       # Start first runner with resume token
       {:ok, pid1} =
-        AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
+        Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
           prompt: "test",
           resume: token,
           cwd: System.tmp_dir!(),
@@ -1648,7 +1649,7 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
 
       # Try to start second runner with same session - should fail
       result =
-        AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
+        Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.start_link(
           prompt: "test",
           resume: token,
           cwd: System.tmp_dir!(),
@@ -1658,7 +1659,7 @@ defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
       assert {:error, {:error, :session_locked}} = result
 
       # Clean up first runner
-      AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.cancel(pid1)
+      Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner.cancel(pid1)
 
       # Wait for cleanup and trap the exit
       receive do

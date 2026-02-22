@@ -1,4 +1,5 @@
-defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
+defmodule Elixir.LemonGateway.Telegram.QueueModeIntegrationTest do
+  alias Elixir.LemonGateway, as: LemonGateway
   @moduledoc """
   Integration tests for queue_mode application through Telegram transport.
 
@@ -13,13 +14,13 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonGateway.Types.{ChatScope, Job, ResumeToken}
-  alias LemonGateway.{Config, BindingResolver}
+  alias Elixir.LemonGateway.Types.{ChatScope, Job, ResumeToken}
+  alias Elixir.LemonGateway.{Config, BindingResolver}
   alias LemonChannels.BindingResolver, as: ChannelsBindingResolver
   alias LemonChannels.Types.ChatScope, as: ChannelsChatScope
 
   # Mock Telegram API that records calls and can inject updates
-  defmodule LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI do
+  defmodule Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI do
     use Agent
 
     def start_link(opts \\ []) do
@@ -130,12 +131,12 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
   # Test engine that captures submitted jobs for inspection
   # This captures jobs as they arrive at the engine (after ThreadWorker processing)
   defmodule JobCapturingEngine do
-    @behaviour LemonGateway.Engine
+    @behaviour Elixir.LemonGateway.Engine
 
     use Agent
 
-    alias LemonGateway.Types.{Job, ResumeToken}
-    alias LemonGateway.Event
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Event
 
     def start_link(opts \\ []) do
       Agent.start_link(fn -> %{jobs: [], notify_pid: opts[:notify_pid]} end, name: __MODULE__)
@@ -231,9 +232,9 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
   # Runtime now resolves default Telegram runs through "lemon". Delegate that
   # engine id to the same capture engine so existing queue-mode assertions stay stable.
   defmodule LemonJobCapturingEngine do
-    @behaviour LemonGateway.Engine
+    @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
 
     @impl true
     def id, do: "lemon"
@@ -270,11 +271,11 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
     _ = Application.stop(:lemon_core)
 
     # Clean up any existing agents
-    LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.stop()
+    Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.stop()
     JobCapturingEngine.stop()
 
     # Start our mock agents
-    {:ok, _} = LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.start_link(notify_pid: self())
+    {:ok, _} = Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.start_link(notify_pid: self())
     {:ok, _} = JobCapturingEngine.start_link(notify_pid: self())
 
     on_exit(fn ->
@@ -285,9 +286,9 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       _ = Application.stop(:lemon_automation)
       _ = Application.stop(:lemon_core)
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.stop()
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.stop()
       JobCapturingEngine.stop()
-      Application.delete_env(:lemon_gateway, LemonGateway.Config)
+      Application.delete_env(:lemon_gateway, Elixir.LemonGateway.Config)
       Application.delete_env(:lemon_core, LemonCore.Store)
       Application.delete_env(:lemon_gateway, :config_path)
       Application.delete_env(:lemon_gateway, :telegram)
@@ -349,11 +350,11 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
     Application.put_env(:lemon_gateway, :engines, [
       LemonJobCapturingEngine,
       JobCapturingEngine,
-      LemonGateway.Engines.Echo
+      Elixir.LemonGateway.Engines.Echo
     ])
 
     Application.put_env(:lemon_gateway, :telegram, %{
-      api_mod: LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI,
+      api_mod: Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI,
       # The adapter transport merges these into TOML-backed config (used in tests).
       poll_interval_ms: 50
     })
@@ -361,17 +362,17 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
     Application.put_env(:lemon_channels, :gateway, config)
 
     Application.put_env(:lemon_channels, :telegram, %{
-      api_mod: LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI,
+      api_mod: Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI,
       poll_interval_ms: config.telegram.poll_interval_ms
     })
 
     Application.put_env(:lemon_channels, :engines, [
       LemonJobCapturingEngine,
       JobCapturingEngine,
-      LemonGateway.Engines.Echo
+      Elixir.LemonGateway.Engines.Echo
     ])
 
-    assert Application.get_env(:lemon_gateway, :telegram)[:api_mod] == LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI
+    assert Application.get_env(:lemon_gateway, :telegram)[:api_mod] == Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
     {:ok, _} = Application.ensure_all_started(:lemon_router)
@@ -392,12 +393,12 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
     assert is_pid(poller_pid)
 
     poller_state = :sys.get_state(LemonChannels.Adapters.Telegram.Transport)
-    assert poller_state.api_mod == LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI
+    assert poller_state.api_mod == Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI
 
     # Sanity-check engine wiring so `JobCapturingEngine` can actually receive jobs.
-    assert LemonGateway.EngineRegistry.get_engine("lemon") == LemonJobCapturingEngine
+    assert Elixir.LemonGateway.EngineRegistry.get_engine("lemon") == LemonJobCapturingEngine
     assert is_pid(Process.whereis(JobCapturingEngine))
-    assert LemonGateway.EngineRegistry.get_engine("capture") == JobCapturingEngine
+    assert Elixir.LemonGateway.EngineRegistry.get_engine("capture") == JobCapturingEngine
   end
 
   defp wait_for_pid(name, timeout_ms) do
@@ -435,7 +436,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       })
 
       # Inject a message
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(12345, "test message")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(12345, "test message")
 
       # Wait for job to be captured
       assert_receive {:job_captured, %Job{} = job}, 2000
@@ -453,7 +454,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         ]
       })
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(33333, "interrupt test")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(33333, "interrupt test")
 
       assert_receive {:job_captured, %Job{} = job}, 2000
 
@@ -469,7 +470,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       })
 
       # Message in topic should get topic binding queue_mode
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(44444, "topic message", topic_id: 100)
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(44444, "topic message", topic_id: 100)
 
       assert_receive {:job_captured, %Job{} = job}, 2000
 
@@ -486,7 +487,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       })
 
       # Message without topic should get chat binding queue_mode
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(55555, "chat message")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(55555, "chat message")
 
       assert_receive {:job_captured, %Job{} = job}, 2000
 
@@ -505,7 +506,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         bindings: []
       })
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(99999, "no binding message")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(99999, "no binding message")
 
       assert_receive {:job_captured, %Job{} = job}, 2000
 
@@ -519,7 +520,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         ]
       })
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(88888, "binding without queue_mode")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(88888, "binding without queue_mode")
 
       assert_receive {:job_captured, %Job{} = job}, 2000
 
@@ -540,7 +541,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         ]
       })
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(22221, "/followup add this to the previous")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(22221, "/followup add this to the previous")
 
       assert_receive {:job_captured, %Job{} = job}, 2000
 
@@ -555,7 +556,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         ]
       })
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(33331, "/interrupt stop everything!")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(33331, "/interrupt stop everything!")
 
       assert_receive {:job_captured, %Job{} = job}, 2000
 
@@ -571,7 +572,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       })
 
       # /interrupt should be ignored when not allowed
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(44441, "/interrupt this should not interrupt")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(44441, "/interrupt this should not interrupt")
 
       assert_receive {:job_captured, %Job{} = job}, 2000
 
@@ -588,7 +589,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       })
 
       # Binding says :followup, but /interrupt should override
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(55551, "/interrupt urgent!")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(55551, "/interrupt urgent!")
 
       assert_receive {:job_captured, %Job{} = job}, 2000
 
@@ -601,7 +602,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         bindings: []
       })
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(77771, "  /followup with spaces")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(77771, "  /followup with spaces")
 
       assert_receive {:job_captured, %Job{} = job}, 2000
 
@@ -614,7 +615,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         bindings: []
       })
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(11110, "/steerable should not override")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(11110, "/steerable should not override")
 
       assert_receive {:job_captured, %Job{} = job}, 2000
 
@@ -637,7 +638,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
 
       # /steer should be parsed by transport as :steer, then converted to :followup
       # by ThreadWorker since there's no active run
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(11111, "/steer please do this urgently")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(11111, "/steer please do this urgently")
 
       assert_receive {:job_captured, %Job{} = job}, 2000
 
@@ -653,7 +654,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         bindings: []
       })
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(11117, "/steer /lemon hello")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(11117, "/steer /lemon hello")
 
       assert_receive {:job_captured, %Job{} = job}, 2000
 
@@ -669,7 +670,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         bindings: []
       })
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(11112, "/followup add this context")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(11112, "/followup add this context")
 
       assert_receive {:job_captured, %Job{} = job}, 2000
 
@@ -683,7 +684,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         bindings: []
       })
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(11113, "/interrupt stop everything now")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(11113, "/interrupt stop everything now")
 
       assert_receive {:job_captured, %Job{} = job}, 2000
 
@@ -697,7 +698,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         bindings: []
       })
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(11114, "/FOLLOWUP UPPERCASE MESSAGE")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(11114, "/FOLLOWUP UPPERCASE MESSAGE")
 
       assert_receive {:job_captured, %Job{} = job}, 2000
 
@@ -711,7 +712,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         bindings: []
       })
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(11115, "/interrupt")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(11115, "/interrupt")
 
       assert_receive {:job_captured, %Job{} = job}, 2000
 
@@ -725,7 +726,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         bindings: []
       })
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(11116, "/interrupt not actually an override")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(11116, "/interrupt not actually an override")
 
       assert_receive {:job_captured, %Job{} = job}, 2000
 
@@ -802,7 +803,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       })
 
       # Simulate a real Telegram update flow
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(12121, "end to end test")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(12121, "end to end test")
 
       # Verify job is captured with all expected fields
       assert_receive {:job_captured, %Job{} = job}, 2000
@@ -822,19 +823,19 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         ]
       })
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(1001, "collect message")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(1001, "collect message")
 
       assert_receive {:job_captured, %Job{} = job1}, 2000
       assert job1.meta.chat_id == 1001
       assert job1.queue_mode == :collect
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(1002, "followup message")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(1002, "followup message")
 
       assert_receive {:job_captured, %Job{} = job2}, 2000
       assert job2.meta.chat_id == 1002
       assert job2.queue_mode == :followup
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(1003, "interrupt message")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(1003, "interrupt message")
 
       assert_receive {:job_captured, %Job{} = job3}, 2000
       assert job3.meta.chat_id == 1003
@@ -860,7 +861,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
 
       # The job arrives with :followup because ThreadWorker converts :steer
       # when there's no active run
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(66666, "/steer urgent")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(66666, "/steer urgent")
 
       assert_receive {:job_captured, %Job{} = job}, 2000
 
@@ -874,7 +875,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         bindings: []
       })
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(77777, "/STEER uppercase")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(77777, "/STEER uppercase")
 
       assert_receive {:job_captured, %Job{} = job}, 2000
 
@@ -888,7 +889,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         bindings: []
       })
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(88888, "/INTERRUPT stop!")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(88888, "/INTERRUPT stop!")
 
       assert_receive {:job_captured, %Job{} = job}, 2000
 
@@ -901,7 +902,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         bindings: []
       })
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(99991, "/FOLLOWUP add more")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(99991, "/FOLLOWUP add more")
 
       assert_receive {:job_captured, %Job{} = job}, 2000
 
@@ -922,8 +923,8 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         }
       })
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "part one", message_id: 111)
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "part two", message_id: 112)
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "part one", message_id: 111)
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "part two", message_id: 112)
 
       assert_receive {:job_captured, %Job{} = job}, 5000
       assert job.prompt == "part one\n\npart two"
@@ -943,10 +944,10 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         }
       })
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(99999, "should be dropped")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(99999, "should be dropped")
 
       refute_receive {:job_captured, %Job{}}, 300
-      assert LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.calls() == []
+      assert Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.calls() == []
     end
 
     test "deny_unbound_chats drops messages when no binding exists" do
@@ -961,10 +962,10 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         bindings: []
       })
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(12345, "should be dropped (unbound)")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(12345, "should be dropped (unbound)")
 
       refute_receive {:job_captured, %Job{}}, 300
-      assert LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.calls() == []
+      assert Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.calls() == []
     end
 
     test "deny_unbound_chats allows messages when a chat binding exists" do
@@ -983,7 +984,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         ]
       })
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "allowed (bound)")
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "allowed (bound)")
 
       scope = %ChannelsChatScope{transport: :telegram, chat_id: chat_id}
       assert ChannelsBindingResolver.resolve_binding(scope) != nil
@@ -999,16 +1000,16 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
 
       session_key = telegram_session_key(chat_id)
 
-      LemonGateway.Store.put_chat_state(session_key, %{
+      Elixir.LemonGateway.Store.put_chat_state(session_key, %{
         last_engine: "capture",
         last_resume_token: "resume_1",
         updated_at: System.system_time(:millisecond)
       })
 
-      assert LemonGateway.Store.get_chat_state(session_key) != nil
+      assert Elixir.LemonGateway.Store.get_chat_state(session_key) != nil
 
       # Seed minimal run history so /new has something to reflect on.
-      LemonGateway.Store.finalize_run("seed_run_1", %{
+      Elixir.LemonGateway.Store.finalize_run("seed_run_1", %{
         run_id: "seed_run_1",
         session_key: session_key,
         prompt: "Earlier prompt",
@@ -1016,7 +1017,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
         meta: %{origin: :telegram}
       })
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "/new", message_id: 500)
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "/new", message_id: 500)
 
       assert_receive {:job_captured, %Job{} = job}, 2000
       assert is_binary(job.prompt)
@@ -1033,7 +1034,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
                        %{"reply_to_message_id" => 500}, _parse_mode}},
                      2000
 
-      assert eventually(fn -> LemonGateway.Store.get_chat_state(session_key) == nil end)
+      assert eventually(fn -> Elixir.LemonGateway.Store.get_chat_state(session_key) == nil end)
     end
 
     test "/new <path> registers a dynamic project and uses it as cwd for subsequent jobs" do
@@ -1049,7 +1050,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       root = Path.join(base, "lemon")
       File.mkdir_p!(root)
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "/new #{root}", message_id: 801)
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "/new #{root}", message_id: 801)
       refute_receive {:job_captured, %Job{}}, 300
 
       assert eventually(fn -> ChannelsBindingResolver.resolve_cwd(scope) == root end)
@@ -1063,7 +1064,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
                LemonCore.Store.get(:channels_project_overrides, scope) == "lemon"
              end)
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "hi", message_id: 802)
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "hi", message_id: 802)
       assert_receive {:job_captured, %Job{} = job}, 2000
       assert job.cwd == root
     end
@@ -1086,15 +1087,15 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       File.mkdir_p!(root1)
       File.mkdir_p!(root2)
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "/new #{root1}", message_id: 811)
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "/new #{root1}", message_id: 811)
       refute_receive {:job_captured, %Job{}}, 300
       assert eventually(fn -> ChannelsBindingResolver.resolve_cwd(scope) == root1 end)
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "/new ../two", message_id: 812)
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "/new ../two", message_id: 812)
       refute_receive {:job_captured, %Job{}}, 300
       assert eventually(fn -> ChannelsBindingResolver.resolve_cwd(scope) == root2 end)
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "yo", message_id: 813)
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "yo", message_id: 813)
       assert_receive {:job_captured, %Job{} = job}, 2000
       assert job.cwd == root2
     end
@@ -1118,11 +1119,11 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
 
       scope = %ChannelsChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "/new myrepo", message_id: 821)
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "/new myrepo", message_id: 821)
       refute_receive {:job_captured, %Job{}}, 300
       assert eventually(fn -> ChannelsBindingResolver.resolve_cwd(scope) == base end)
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "ok", message_id: 822)
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "ok", message_id: 822)
       assert_receive {:job_captured, %Job{} = job}, 2000
       assert job.cwd == base
     end
@@ -1134,16 +1135,16 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
 
       session_key = telegram_session_key(chat_id)
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "first", message_id: 601)
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "first", message_id: 601)
       assert_receive {:job_captured, %Job{} = _job1}, 2000
 
-      assert eventually(fn -> LemonGateway.Store.get_chat_state(session_key) != nil end)
-      state1 = LemonGateway.Store.get_chat_state(session_key)
+      assert eventually(fn -> Elixir.LemonGateway.Store.get_chat_state(session_key) != nil end)
+      state1 = Elixir.LemonGateway.Store.get_chat_state(session_key)
 
       token1 =
         state1.last_resume_token || state1[:last_resume_token] || state1["last_resume_token"]
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "/new", message_id: 602)
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "/new", message_id: 602)
       refute_receive {:job_captured, %Job{}}, 300
 
       assert_receive {:telegram_api_call,
@@ -1151,23 +1152,23 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
                        %{"reply_to_message_id" => 602}, _parse_mode}},
                      2000
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "second", message_id: 603)
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "second", message_id: 603)
       assert_receive {:job_captured, %Job{} = _job2}, 2000
 
       assert eventually(fn ->
-               st = LemonGateway.Store.get_chat_state(session_key)
+               st = Elixir.LemonGateway.Store.get_chat_state(session_key)
 
                st != nil and
                  (st.last_resume_token || st[:last_resume_token] || st["last_resume_token"]) !=
                    token1
              end)
 
-      state2 = LemonGateway.Store.get_chat_state(session_key)
+      state2 = Elixir.LemonGateway.Store.get_chat_state(session_key)
 
       token2 =
         state2.last_resume_token || state2[:last_resume_token] || state2["last_resume_token"]
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "/resume", message_id: 604)
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "/resume", message_id: 604)
       refute_receive {:job_captured, %Job{}}, 300
 
       assert_receive {:telegram_api_call,
@@ -1179,7 +1180,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       assert String.contains?(text, token2)
       assert String.contains?(text, token1)
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "/resume 2", message_id: 605)
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "/resume 2", message_id: 605)
       refute_receive {:job_captured, %Job{}}, 300
 
       assert_receive {:telegram_api_call,
@@ -1190,7 +1191,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       assert String.contains?(text2, "Resuming session")
       assert String.contains?(text2, token1)
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "continue", message_id: 606)
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "continue", message_id: 606)
       assert_receive {:job_captured, %Job{} = job3}, 2000
 
       cond do
@@ -1212,16 +1213,16 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
 
       session_key = telegram_session_key(chat_id)
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "first", message_id: 701)
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "first", message_id: 701)
       assert_receive {:job_captured, %Job{} = _job1}, 2000
 
-      assert eventually(fn -> LemonGateway.Store.get_chat_state(session_key) != nil end)
-      state1 = LemonGateway.Store.get_chat_state(session_key)
+      assert eventually(fn -> Elixir.LemonGateway.Store.get_chat_state(session_key) != nil end)
+      state1 = Elixir.LemonGateway.Store.get_chat_state(session_key)
 
       token1 =
         state1.last_resume_token || state1[:last_resume_token] || state1["last_resume_token"]
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "/new", message_id: 702)
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "/new", message_id: 702)
       refute_receive {:job_captured, %Job{}}, 300
 
       assert_receive {:telegram_api_call,
@@ -1229,12 +1230,12 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
                        %{"reply_to_message_id" => 702}, _parse_mode}},
                      2000
 
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "second", message_id: 703)
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "second", message_id: 703)
       assert_receive {:job_captured, %Job{} = _job2}, 2000
 
       # Reply to the old user message ID (701); reply text is empty, so the transport must
       # use the persisted message->resume index.
-      LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "back to first", message_id: 704, reply_to: 701)
+      Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "back to first", message_id: 704, reply_to: 701)
 
       assert_receive {:job_captured, %Job{} = job3}, 2000
 
@@ -1250,7 +1251,7 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       end
 
       # Reply-based switching is intentionally silent (no extra "Resuming session" chat noise).
-      refute Enum.any?(LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.calls(), fn
+      refute Enum.any?(Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.calls(), fn
                {:send_message, ^chat_id, text, _opts, _parse_mode} ->
                  String.contains?(text, "Resuming session") and String.contains?(text, token1)
 
