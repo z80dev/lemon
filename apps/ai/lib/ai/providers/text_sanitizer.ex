@@ -1,5 +1,11 @@
 defmodule Ai.Providers.TextSanitizer do
-  @moduledoc false
+  @moduledoc """
+  Sanitizes text for safe use with AI providers.
+
+  Handles invalid or incomplete UTF-8 sequences by replacing them with the
+  Unicode replacement character (U+FFFD), converts non-binary terms to strings,
+  and normalizes nil input to an empty string.
+  """
 
   @spec sanitize(binary() | nil | term()) :: String.t()
   def sanitize(nil), do: ""
