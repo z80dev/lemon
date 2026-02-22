@@ -16,6 +16,13 @@ NC='\033[0m' # No Color
 
 echo -e "${BLUE}🔒 Running pre-push security review...${NC}"
 
+# Check if kimi is available
+if ! command -v kimi &> /dev/null; then
+    echo -e "${YELLOW}⚠️  kimi not found in PATH - skipping security review${NC}"
+    echo -e "${YELLOW}   To install: https://github.com/moonshotai/kimi-cli${NC}"
+    exit 0
+fi
+
 # Get the range of commits being pushed
 # $1 = remote name, $2 = remote url
 remote="$1"
@@ -53,24 +60,20 @@ while read local_ref local_sha remote_ref remote_sha; do
     echo "$diff_output"
     echo ""
 
-    # Create a temporary file with the full diff
-    tmpfile=$(mktemp)
-    git diff "$range" > "$tmpfile"
-
     # Count lines to review
-    line_count=$(wc -l < "$tmpfile")
+    line_count=$(git diff "$range" | wc -l)
     echo -e "${BLUE}🔍 Reviewing ${line_count} lines of changes with kimi...${NC}"
     echo ""
 
     # Invoke kimi for security review
-    # We use a prompt that asks kimi to check for sensitive data
-    review_result=$(kimi --no-tools -m default "
-You are a security review assistant. Review the following git diff for any sensitive information that should NOT be pushed to a repository.
+    # We pipe the diff to kimi via stdin and ask it to check for sensitive data
+    review_result=$(git diff "$range" | kimi --print --quiet --input-format text -p "
+You are a security review assistant. Review the git diff provided via stdin for any sensitive information that should NOT be pushed to a repository.
 
 Look for:
-1. API keys (OpenAI, Anthropic, AWS, etc.)
+1. API keys (OpenAI, Anthropic, AWS, etc.) - patterns like sk-ant-*, sk-*, AKIA*
 2. Passwords or authentication tokens
-3. Private keys (SSH, SSL, JWT secrets)
+3. Private keys (SSH, SSL, JWT secrets) - patterns like -----BEGIN RSA PRIVATE KEY-----
 4. Database connection strings with credentials
 5. Environment files (.env) containing secrets
 6. Hardcoded secrets in configuration files
@@ -87,20 +90,7 @@ If sensitive information IS found, respond with:
 BLOCK_PUSH
 
 Followed by the list of issues found.
-
----
-
-GIT DIFF TO REVIEW:
-
-$(cat "$tmpfile")
-
----
-
-Respond with either SAFE_TO_PUSH or BLOCK_PUSH followed by findings.
-" 2>/dev/null || echo "KIMI_REVIEW_FAILED")
-
-    # Clean up temp file
-    rm -f "$tmpfile"
+" 2>&1 || echo "KIMI_REVIEW_FAILED")
 
     # Check the review result
     if echo "$review_result" | grep -q "BLOCK_PUSH"; then
