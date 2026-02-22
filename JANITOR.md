@@ -25,6 +25,51 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-22 - Pi/Oh-My-Pi Upstream Sync: New Models and Hashline Improvements
+**Work Area**: Feature Enhancement (Pi/Oh-My-Pi Sync)
+
+**Analysis**:
+- Checked Pi upstream (`~/dev/pi`) for new LLM models, providers, and features
+- Checked Oh-My-Pi (`~/dev/oh-my-pi`) for hashline improvements, LSP tools, streaming enhancements
+- Compared model registries and identified gaps
+
+**Findings**:
+
+1. **New Bedrock Models (18 models)** - Already present in Lemon:
+   - NVIDIA Nemotron models (nano-12b-v2, nano-9b-v2)
+   - OpenAI GPT OSS models (120b, 20b, safeguard variants)
+   - Qwen3 models (235b, 32b, coder-30b, coder-480b, next-80b, vl-235b)
+   - Writer Palmyra models (x4, x5)
+   - ZAI GLM models (4.7, 4.7-flash)
+   - Moonshot Kimi models (k2-thinking, k2.5)
+
+2. **kimi-coding Provider** - Analysis:
+   - Pi has separate `kimi-coding` provider with 2 models (k2p5, kimi-k2-thinking)
+   - Lemon's `:kimi` provider already uses `https://api.kimi.com/coding` endpoint
+   - Models are functionally equivalent - no porting needed
+
+3. **Hashline Improvements from Oh-My-Pi** - Status:
+   - Edit deduplication: Already implemented (`deduplicate_edits/2` in hashline.ex)
+   - Noop edit tracking: Already implemented (returns `noop_edits` in result)
+   - Streaming formatters: Already implemented (`stream_hashlines_from_enumerable/2`)
+   - Autocorrect features: Already implemented (indent restoration, echo stripping)
+
+4. **LSP Write Tool from Oh-My-Pi** - Not ported:
+   - Requires significant new infrastructure (LSP client management, lspmux)
+   - Would add substantial complexity - defer for future consideration
+
+5. **Streaming Enhancements from Oh-My-Pi** - Not ported:
+   - TTSR (Time-Traveling Stream Rules) - complex mid-stream rule injection
+   - TailBuffer and OutputSink - memory-efficient streaming for massive outputs
+   - Would require architectural changes - defer for future consideration
+
+**Conclusion**:
+Lemon is already well-synchronized with Pi/Oh-My-Pi upstream. Most features identified in the research phase were already ported in previous runs. No new commits needed for this sync.
+
+**Status**: No changes required - Lemon is up-to-date with upstream.
+
+---
+
 ### 2026-02-22 - Additional O(n²) List Concatenation Fixes
 
 ### 2026-02-22 - Test Expansion: Untested Module Coverage
