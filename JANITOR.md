@@ -25,6 +25,63 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-22 - Pi/Oh-My-Pi Upstream Sync Review
+**Work Area**: Feature Enhancement (Pi/Oh-My-Pi Sync)
+
+**Analysis**:
+- Checked Pi upstream (`~/dev/pi`) for new LLM models and providers
+- Checked Oh-My-Pi (`~/dev/oh-my-pi`) for hashline improvements, LSP tools, and streaming enhancements
+- Compared model registries: Lemon has 601 models vs Pi's 586 - Lemon is actually ahead
+
+**Findings**:
+
+1. **Models**: Lemon is more up-to-date than Pi
+   - Lemon has newer Google models: `gemini-2.5-flash-preview-09-2025`, `gemini-3-flash`
+   - Pi has some Bedrock region variants (EU/Global/US) that Lemon already has
+   - Pi has additional niche providers (Cerebras GPT-OSS, GitHub Copilot models) not in Lemon
+   - No critical models missing - Lemon's registry is comprehensive
+
+2. **Hashline Edit Mode**: Already fully ported
+   - All autocorrect features from Oh-My-Pi are present in Lemon:
+     - `restore_indent_for_paired_replacement/2`
+     - `restore_old_wrapped_lines/2`
+     - `strip_range_boundary_echo/4`
+     - `maybe_expand_single_line_merge/4`
+   - Streaming formatters already implemented: `stream_hashlines/2`, `stream_hashlines_from_enumerable/2`
+   - `replaceText` operation already ported
+
+3. **LSP Write Tool**: Oh-My-Pi has sophisticated LSP integration
+   - LSP client management with lspmux multiplexing support
+   - Write-through with formatting and diagnostics
+   - Batch processing for multiple edits
+   - Custom linter client support
+   - **Not ported**: Would require significant new infrastructure
+
+4. **Streaming Enhancements**: Oh-My-Pi has TTSR (Time-Traveling Stream Rules)
+   - Mid-stream rule injection when patterns match
+   - Streaming edit abort capabilities
+   - **Not ported**: Complex feature requiring architectural changes
+
+**Changes Made**:
+
+1. **Added `models_equal?/2` function** (ported from Pi's `modelsAreEqual`)
+   - Compares two models by id and provider
+   - Returns false if either model is nil
+   - File: `apps/ai/lib/ai/models.ex`
+   - Tests: 8 new tests in `apps/ai/test/models_test.exs`
+
+**Tests Added**: 8 new tests
+- `models_equal?/2`: identical models, different models, different providers, nil handling
+
+**Test Results**: All tests pass (102 tests in models_test.exs, 1502 tests in ai app)
+
+**Commit**: `468f0346` - feat(ai): port models_equal?/2 from Pi upstream
+
+**Conclusion**:
+Lemon's codebase is well-synchronized with Pi/Oh-My-Pi. The hashline edit mode is fully ported with all autocorrect features. The models registry is actually more comprehensive than Pi's. The main gaps are the LSP write tool and TTSR streaming features, which would require significant new infrastructure to implement.
+
+---
+
 ### 2026-02-22 - Review & Integration: Claude 3-Task Batch (Follow-up)
 **Work Area**: Review / Integration
 
