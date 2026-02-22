@@ -1,103 +1,260 @@
-# Repository Guidelines
+# Lemon Agent Guide
 
-## Project Structure & Module Organization
-This is an Elixir umbrella project with multiple apps under `apps/`. Core runtime lives in `apps/agent_core`, `apps/ai`, and `apps/coding_agent`; infrastructure apps include `apps/lemon_gateway`, `apps/lemon_router`, `apps/lemon_channels`, and `apps/lemon_control_plane`. Shared primitives are in `apps/lemon_core`. UI clients are in `clients/` with a TUI in `clients/lemon-tui` and a web workspace in `clients/lemon-web` (workspaces `shared`, `server`, `web`). Root configs include `mix.exs`, `mix.lock`, `.formatter.exs`, and `config/config.exs`.
+> **Effective agent context for the Lemon AI assistant platform.**  
+> Lemon is a local-first assistant and coding agent system with a multi-engine architecture supporting Claude, Codex, OpenCode, Pi, and native Lemon engines.
 
-## Build, Test, and Development Commands
-Elixir umbrella:
-- `mix deps.get` installs Elixir dependencies.
-- `mix compile` builds all umbrella apps.
-- `mix test` runs all Elixir tests.
-- `mix test apps/ai` runs tests for a single app (replace path as needed).
-- `mix test --include integration` runs integration tests that depend on external CLIs.
+---
 
-TUI client:
-- `cd clients/lemon-tui && npm install` installs dependencies.
-- `npm run build` builds the TUI bundle.
-- `npm run dev` runs TUI build in watch mode.
+## Quick Navigation
 
-Web client:
-- `cd clients/lemon-web && npm install` installs workspace deps.
-- `npm run dev` starts the web server and frontend.
-- `npm run build` builds shared/server/web packages.
+| If you want to... | Look in... |
+|-------------------|------------|
+| Add/modify AI provider support | `apps/ai/` |
+| Work on coding tools or session management | `apps/coding_agent/` |
+| Modify Telegram/Discord/voice transports | `apps/lemon_gateway/` |
+| Add new messaging channels (X, XMTP, etc.) | `apps/lemon_channels/` |
+| Work on agent routing or message flow | `apps/lemon_router/` |
+| Build HTTP/WebSocket API features | `apps/lemon_control_plane/` |
+| Manage configuration, secrets, or storage | `apps/lemon_core/` |
+| Work with CLI runners/subagent spawning | `apps/agent_core/` |
+| Create or modify skills | `apps/lemon_skills/` |
+| Build cron jobs or automation | `apps/lemon_automation/` |
+| Work on the web UI | `apps/lemon_web/` |
+| Debug coding agent via RPC | `apps/coding_agent_ui/` |
+| Market data ingestion | `apps/market_intel/` |
 
-Convenience:
-- `./bin/lemon-dev` bootstraps deps, builds, and launches the TUI.
+---
 
-## Coding Style & Naming Conventions
-- Format Elixir with `mix format` (umbrella uses `.formatter.exs`).
-- Keep Elixir file names in `snake_case` and modules in `CamelCase`, following the existing `apps/<app>/lib/<app_name>/` layout.
-- TypeScript follows workspace tooling: `eslint` for `clients/lemon-web/web` and `tsc`/`tsup` for builds.
+## Project Structure
 
-## Testing Guidelines
-- Elixir tests live under `apps/<app>/test` and use `*_test.exs` naming.
-- Web/TUI tests use Vitest with `*.test.ts` or `*.test.tsx` naming.
-- Prefer targeted app-level tests before running the full suite.
+```
+apps/
+├── agent_core/          # Core agent runtime, CLI runners, subagent management
+├── ai/                  # AI provider abstraction (Anthropic, OpenAI, etc.)
+├── coding_agent/        # Main coding agent with 30+ tools
+├── coding_agent_ui/     # Debug RPC interface for coding agent
+├── lemon_automation/    # Cron jobs, heartbeats, automation
+├── lemon_channels/      # Channel adapters (Telegram, X API, XMTP)
+├── lemon_control_plane/ # HTTP/WebSocket API, JSON-RPC methods
+├── lemon_core/          # Shared primitives, config, store, secrets
+├── lemon_gateway/       # Gateway transports, engines, message handling
+├── lemon_router/        # Message routing, agent directory
+├── lemon_services/      # External service management
+├── lemon_skills/        # Skill registry, installation
+├── lemon_web/           # Phoenix web interface
+└── market_intel/        # Market data ingestion, analysis
 
-## Commit & Pull Request Guidelines
-- Recent commit subjects are short, imperative, and sometimes use a `chore:` prefix. Follow that pattern (e.g., `Fix gateway timeout`, `chore: update docs`).
-- PRs should include a brief summary, key design notes, and test coverage. Add screenshots or recordings for UI changes in `clients/`.
+clients/
+├── lemon-tui/           # Terminal UI client (TypeScript)
+└── lemon-web/           # Web workspace (shared, server, web)
 
-## Configuration & Secrets
-- Project settings live in `.lemon/config.toml`; global settings in `~/.lemon/config.toml`.
-- Prefer environment variables for API keys (e.g., `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). Never commit secrets.
+docs/                    # Architecture docs, design decisions
+config/                  # Umbrella configuration
+scripts/                 # Utility scripts
+```
 
-## Docs Navigation & Quality
-- Treat this file as a navigation map, not a full manual. Durable implementation details belong in `docs/`.
-- Start with `docs/README.md` for the docs index and canonical entry points.
-- Keep docs metadata in `docs/catalog.exs` (`owner`, `last_reviewed`, `max_age_days`).
-- Run `mix lemon.quality` after docs edits or umbrella dependency changes.
+---
 
-## Preferred Debug + Stress-Test Method
-- For gateway/chat debugging, the default approach is to run both sides of the conversation:
-  - Side A: run `lemon-gateway` locally with debug logging and inspect BEAM runtime state.
-  - Side B: use Telethon with real Telegram user credentials to send/reply as the user.
-- This is the highest-signal way to reproduce real delivery, scheduling, locking, and context issues.
-- Keep these probes scoped to a dedicated Telegram topic/thread to avoid cross-session noise.
-- Local reusable skill for this workflow: `.lemon/skill/telegram-gateway-debug-loop/SKILL.md`.
+## Build, Test & Development
 
-## Gateway Debugging Playbook
-- Bring up the gateway with debug logs:
-  - `cd /Users/z80/dev/lemon`
-  - `./bin/lemon-gateway --debug --sname lemon_gateway_debug`
-- Attach to the running BEAM node (remote shell):
-  - `iex --sname lemon_attach --cookie lemon_gateway_dev_cookie --remsh lemon_gateway_debug@$(hostname -s)`
-  - If prompted, use the same cookie shown in startup logs.
-- Quick non-interactive BEAM introspection (without full remsh):
-  - `elixir --sname probe --cookie lemon_gateway_dev_cookie -e 'IO.inspect(Node.ping(:"lemon_gateway_debug@chico"))'`
-  - Then `:rpc.call/4` into modules like `LemonCore.Store`, `LemonGateway.Scheduler`, and `LemonGateway.EngineLock`.
-- Useful runtime checks for "stuck" reports:
-  - Scheduler queue/in-flight: `:sys.get_state(LemonGateway.Scheduler)`
-  - Engine lock waiters: `:sys.get_state(LemonGateway.EngineLock)`
-  - Thread workers: `DynamicSupervisor.which_children(LemonGateway.ThreadWorkerSupervisor)`
-  - Session run history: `LemonCore.Store.get_run_history(session_key, limit: n)`
+### Elixir Umbrella
 
-## Telegram + Telethon Debug Loop
-- Credentials are in `~/.zeebot/api_keys/telegram.txt` (under `~/.zeebot/api_keys/`):
-  - `TELEGRAM_API_ID`
-  - `TELEGRAM_API_HASH`
-  - `TELEGRAM_SESSION_STRING`
-- Minimal repeatable debug flow:
-  - Start gateway in one terminal:
-    - `LOG_LEVEL=debug ./bin/lemon-gateway --debug --sname lemon_gateway_debug`
-  - Attach from another terminal:
-    - `iex --sname lemon_attach --cookie lemon_gateway_dev_cookie --remsh lemon_gateway_debug@$(hostname -s)`
-  - In attached shell, inspect likely stuck points:
-    - `:sys.get_state(LemonGateway.Scheduler)`
-    - `:sys.get_state(LemonGateway.EngineLock)`
-    - `DynamicSupervisor.which_children(LemonGateway.ThreadWorkerSupervisor)`
-- Use Telethon via uv (no global install needed):
-  - `uv run --with telethon python <script.py>`
-- Typical message send from script:
-  - Create `TelegramClient(StringSession(session), api_id, api_hash)`
-  - `send_message(chat_id, text, reply_to=thread_id)` to target a forum topic thread.
-- Creating a dedicated Telegram topic for debugging:
-  - Use Telethon to create a new forum topic in Lemonade Stand, then post all probes in that topic only.
-  - Drive repros with prompts that force async delegation, e.g. ask for background codex tasks, `agent_id=coder` usage, async poll loops, and multi-step coding/tool runs.
-  - Observe gateway logs for delivery failures (`:unknown_channel`), lock/scheduler stalls, and context overflow errors while those delegated tasks run.
-- In Lemonade Stand debugging:
-  - Group chat id used in practice: `-1003842984060`
-  - Topic/thread id can be discovered from message metadata; reply into that thread for scoped session testing.
-- Reauth flow:
-  - If session expires/invalid, sign in again with Telethon and update only local secret files.
-  - Never commit API keys, session strings, OTPs, or phone numbers.
+```bash
+# Install dependencies
+mix deps.get
+
+# Compile all apps
+mix compile
+
+# Run all tests
+mix test
+
+# Run tests for specific app
+mix test apps/ai
+mix test apps/coding_agent
+
+# Run integration tests
+mix test --include integration
+
+# Format code
+mix format
+
+# Quality checks after docs/dependency changes
+mix lemon.quality
+```
+
+### TUI Client (TypeScript)
+
+```bash
+cd clients/lemon-tui
+npm install
+npm run build
+npm run dev      # Watch mode
+```
+
+### Web Client
+
+```bash
+cd clients/lemon-web
+npm install
+npm run dev      # Start web server + frontend
+npm run build    # Build shared/server/web packages
+```
+
+### Quick Dev Bootstrap
+
+```bash
+./bin/lemon-dev    # Installs deps, builds, launches TUI
+```
+
+---
+
+## Architecture Overview
+
+### Message Flow
+
+```
+[User via Telegram/Discord/Email/SMS] 
+    ↓
+[lemon_gateway] - Transport layer, engines
+    ↓
+[lemon_router] - Route to appropriate agent
+    ↓
+[coding_agent] - Execute tools, manage sessions
+    ↓
+[agent_core] - CLI runners, subagent spawning
+    ↓
+[ai] - LLM provider calls
+```
+
+### Key Dependencies Between Apps
+
+```
+lemon_control_plane ──→ lemon_router, lemon_channels, lemon_skills, coding_agent
+lemon_router ─────────→ lemon_gateway, lemon_channels, coding_agent, agent_core
+lemon_gateway ────────→ agent_core, coding_agent, lemon_channels, lemon_core
+lemon_channels ───────→ lemon_core
+coding_agent ─────────→ agent_core, ai, lemon_skills, lemon_core
+agent_core ───────────→ ai, lemon_core
+lemon_skills ─────────→ agent_core, ai, lemon_channels
+market_intel ─────────→ lemon_core, agent_core, lemon_channels
+```
+
+---
+
+## Configuration
+
+- **User config**: `~/.lemon/config.toml`
+- **Project config**: `.lemon/config.toml` (in repo root)
+- **Secrets**: Managed via `mix lemon.secrets.*` tasks
+
+Key env vars:
+- `ANTHROPIC_API_KEY` - Claude provider
+- `OPENAI_API_KEY` - OpenAI provider
+- `LEMON_TELEGRAM_BOT_TOKEN` - Telegram transport
+
+---
+
+## Key Patterns
+
+### Adding a New Tool
+
+1. Create module in `apps/coding_agent/lib/coding_agent/tools/`
+2. Implement `CodingAgent.Tool` behaviour
+3. Add to `CodingAgent.Tools` registry
+4. Update tool policy if needed
+
+### Adding an AI Provider
+
+1. Create provider module in `apps/ai/lib/ai/providers/`
+2. Implement `Ai.Provider` behaviour
+3. Register in `Ai.ProviderRegistry`
+
+### Adding a Transport
+
+1. Create transport module in `apps/lemon_gateway/lib/lemon_gateway/transports/`
+2. Implement transport behaviour
+3. Register in `LemonGateway.TransportRegistry`
+
+---
+
+## Testing & Debugging
+
+### Gateway Debugging (Telegram)
+
+```bash
+# Terminal 1: Start gateway with debug logs
+LOG_LEVEL=debug ./bin/lemon-gateway --debug --sname lemon_gateway_debug
+
+# Terminal 2: Attach to BEAM node
+iex --sname lemon_attach --cookie lemon_gateway_dev_cookie \
+    --remsh lemon_gateway_debug@$(hostname -s)
+```
+
+Useful runtime checks:
+```elixir
+# Scheduler state
+:sys.get_state(LemonGateway.Scheduler)
+
+# Engine lock waiters
+:sys.get_state(LemonGateway.EngineLock)
+
+# Thread workers
+DynamicSupervisor.which_children(LemonGateway.ThreadWorkerSupervisor)
+
+# Session history
+LemonCore.Store.get_run_history(session_key, limit: 10)
+```
+
+### Telethon Debug Loop
+
+See `.claude/skills/telegram-gateway-debug-loop/SKILL.md` for detailed instructions on using Telethon with real Telegram credentials for testing.
+
+---
+
+## Documentation Index
+
+- `docs/architecture_boundaries.md` - Dependency boundaries
+- `docs/config.md` - Runtime configuration reference
+- `docs/skills.md` - Skill system documentation
+- `docs/quality_harness.md` - Quality checks and cleanup
+- `docs/assistant_bootstrap_contract.md` - Bootstrap contract
+- `docs/context.md` - Context management
+- `docs/telemetry.md` - Telemetry and observability
+
+---
+
+## Coding Conventions
+
+- **Elixir**: snake_case files, CamelCase modules
+- **TypeScript**: Follow workspace ESLint config
+- **Format**: Run `mix format` before committing
+- **Tests**: `*_test.exs` for Elixir, `*.test.ts` for TypeScript
+- **Commits**: Short, imperative style (`Fix gateway timeout`, `chore: update docs`)
+
+---
+
+## App-Specific Guides
+
+Each app has its own `AGENTS.md` with detailed context:
+
+| App | Location |
+|-----|----------|
+| agent_core | `apps/agent_core/AGENTS.md` |
+| ai | `apps/ai/AGENTS.md` |
+| coding_agent | `apps/coding_agent/AGENTS.md` |
+| lemon_core | `apps/lemon_core/AGENTS.md` |
+| lemon_gateway | `apps/lemon_gateway/AGENTS.md` |
+| lemon_channels | `apps/lemon_channels/AGENTS.md` |
+| lemon_router | `apps/lemon_router/AGENTS.md` |
+| lemon_control_plane | `apps/lemon_control_plane/AGENTS.md` |
+| lemon_skills | `apps/lemon_skills/AGENTS.md` |
+| lemon_automation | `apps/lemon_automation/AGENTS.md` |
+| lemon_services | `apps/lemon_services/AGENTS.md` |
+| lemon_web | `apps/lemon_web/AGENTS.md` |
+| market_intel | `apps/market_intel/AGENTS.md` |
+| coding_agent_ui | `apps/coding_agent_ui/AGENTS.md` |
+
+---
+
+*Last updated: 2026-02-22*
