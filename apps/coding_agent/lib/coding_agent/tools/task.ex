@@ -23,6 +23,7 @@ defmodule CodingAgent.Tools.Task do
   alias CodingAgent.BudgetEnforcer
   alias CodingAgent.Coordinator
   alias CodingAgent.LaneQueue
+  alias CodingAgent.Parallel
   alias CodingAgent.RunGraph
   alias CodingAgent.Session
   alias CodingAgent.Subagents
@@ -495,18 +496,25 @@ defmodule CodingAgent.Tools.Task do
     end
 
     try do
-      if lane_queue_available?() do
-        LaneQueue.run(CodingAgent.LaneQueue, :subagent, wrapped, %{
-          task_id: task_id,
-          run_id: run_id
-        })
-      else
-        {:ok, wrapped.()}
-      end
+      maybe_acquire_task_semaphore()
+
+      result =
+        if lane_queue_available?() do
+          LaneQueue.run(CodingAgent.LaneQueue, :subagent, wrapped, %{
+            task_id: task_id,
+            run_id: run_id
+          })
+        else
+          {:ok, wrapped.()}
+        end
+
+      result
     rescue
       e -> {:error, {e, __STACKTRACE__}}
     catch
       kind, reason -> {:error, {kind, reason}}
+    after
+      maybe_release_task_semaphore()
     end
   end
 
@@ -1565,5 +1573,19 @@ defmodule CodingAgent.Tools.Task do
     end
 
     :ok
+  end
+
+  defp maybe_acquire_task_semaphore do
+    case Process.whereis(CodingAgent.TaskSemaphore) do
+      nil -> :ok
+      _pid -> Parallel.Semaphore.acquire(CodingAgent.TaskSemaphore)
+    end
+  end
+
+  defp maybe_release_task_semaphore do
+    case Process.whereis(CodingAgent.TaskSemaphore) do
+      nil -> :ok
+      _pid -> Parallel.Semaphore.release(CodingAgent.TaskSemaphore)
+    end
   end
 end

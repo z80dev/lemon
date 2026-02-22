@@ -60,37 +60,46 @@ while read local_ref local_sha remote_ref remote_sha; do
     echo "$diff_output"
     echo ""
 
+    # Create a temporary file with the full diff
+    tmpfile=$(mktemp)
+    git diff "$range" > "$tmpfile"
+
     # Count lines to review
-    line_count=$(git diff "$range" | wc -l)
+    line_count=$(wc -l < "$tmpfile")
     echo -e "${BLUE}🔍 Reviewing ${line_count} lines of changes with kimi...${NC}"
     echo ""
 
     # Invoke kimi for security review
-    # We pipe the diff to kimi via stdin and ask it to check for sensitive data
-    review_result=$(git diff "$range" | kimi --print --quiet --input-format text -p "
-You are a security review assistant. Review the git diff provided via stdin for any sensitive information that should NOT be pushed to a repository.
+    # We pass the diff content directly in the prompt since stdin piping doesn't work in hooks
+    review_result=$(kimi --print --quiet -p "
+You are a security review assistant. Review the following git diff for any sensitive information that should NOT be pushed to a repository.
 
-Look for:
-1. API keys (OpenAI, Anthropic, AWS, etc.) - patterns like sk-ant-*, sk-*, AKIA*
-2. Passwords or authentication tokens
-3. Private keys (SSH, SSL, JWT secrets) - patterns like -----BEGIN RSA PRIVATE KEY-----
-4. Database connection strings with credentials
-5. Environment files (.env) containing secrets
-6. Hardcoded secrets in configuration files
-7. Session tokens or cookies
+CRITICAL: Respond with EXACTLY one of these two responses:
 
-For each issue found, provide:
-- The specific line or pattern found
-- The severity (HIGH, MEDIUM, LOW)
-- A brief explanation of why it's problematic
+1. If NO sensitive information is found, respond with ONLY:
+SAFE_TO_PUSH
 
-If NO sensitive information is found, respond with exactly: SAFE_TO_PUSH
-
-If sensitive information IS found, respond with:
+2. If sensitive information IS found, respond with:
 BLOCK_PUSH
 
-Followed by the list of issues found.
+Followed by:
+- The specific line(s) containing sensitive data
+- The severity (HIGH, MEDIUM, LOW)  
+- A brief explanation
+
+---
+
+GIT DIFF TO REVIEW:
+
+$(cat "$tmpfile")
+
+---
+
+Remember: ONLY respond with SAFE_TO_PUSH or BLOCK_PUSH followed by details.
 " 2>&1 || echo "KIMI_REVIEW_FAILED")
+
+    # Clean up temp file
+    rm -f "$tmpfile"
 
     # Check the review result
     if echo "$review_result" | grep -q "BLOCK_PUSH"; then

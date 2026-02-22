@@ -13,6 +13,13 @@ defmodule CodingAgent.Application do
         background_exec: 2
       })
 
+    task_max_concurrency =
+      Application.get_env(
+        :coding_agent,
+        :task_max_concurrency,
+        CodingAgent.Parallel.default_max_concurrency()
+      )
+
     children = [
       {Registry, keys: :unique, name: CodingAgent.SessionRegistry},
       {Registry, keys: :unique, name: CodingAgent.ProcessRegistry},
@@ -26,6 +33,8 @@ defmodule CodingAgent.Application do
       {CodingAgent.ProcessManager, name: CodingAgent.ProcessManager},
       {CodingAgent.LaneQueue,
        name: CodingAgent.LaneQueue, caps: lane_caps, task_supervisor: CodingAgent.TaskSupervisor},
+      {CodingAgent.Parallel.Semaphore,
+       max: task_max_concurrency, name: CodingAgent.TaskSemaphore},
       {CodingAgent.CompactionHooks, name: CodingAgent.CompactionHooks}
     ]
 
