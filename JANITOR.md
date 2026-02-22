@@ -1,3 +1,41 @@
+### 2026-02-22 - Janitor Continuation: Pending Refactor Review + Final Validation
+**Work Area**: Integration Review / Final Validation / Documentation
+
+**Summary**:
+- Verified previously reported pending files are now committed:
+  - `301d167f` includes `jsonl_runner.ex` and `openai_completions.ex` `Enum.map_join/3` refactors
+  - `0e622d79` includes `binding_resolver.ex` non-empty-binary helper cleanup
+- Reviewed current working-tree changes and committed safe follow-up refactors:
+  - Replaced repeated mixed atom/string key lookups with `LemonCore.MapHelpers.get_key/2` in:
+    - `apps/lemon_core/lib/lemon_core/logger_setup.ex`
+    - `apps/lemon_core/lib/lemon_core/run_request.ex`
+    - `apps/lemon_core/lib/lemon_core/secrets/crypto.ex`
+    - `apps/lemon_core/lib/lemon_core/store.ex`
+- Committed docs updates for worktree guidance and planning docs:
+  - `AGENTS.md`, `ROADMAP.md`, `debt_plan.md`
+- Committed callback `@spec` additions in `CodingAgent.Session`:
+  - `init/1`, `handle_call/3`, `handle_cast/2`, `handle_info/2`, `terminate/2`
+
+**Commits**:
+- `862571a4` - refactor(lemon_core): reuse MapHelpers for mixed-key map access
+- `d009efb2` - docs: add roadmap/debt plan and worktree guidance
+- `5e271fa7` - chore(coding_agent): add callback specs to Session GenServer
+
+**Validation**:
+- `mix compile --warnings-as-errors`: pass
+- `mix test` (key files): pass
+  - `apps/agent_core/test/agent_core/cli_runners/jsonl_runner_test.exs` (36 tests)
+  - `apps/ai/test/providers/openai_completions_test.exs` (14 tests)
+  - `apps/lemon_gateway/test/binding_resolver_test.exs` (81 tests)
+  - `apps/lemon_core/test/lemon_core/run_request_test.exs`
+  - `apps/lemon_core/test/lemon_core/logger_setup_test.exs`
+  - `apps/lemon_core/test/lemon_core/secrets/crypto_test.exs`
+  - `apps/lemon_core/test/lemon_core/store_test.exs`
+  - `apps/coding_agent/test/coding_agent/session_test.exs` (87 tests)
+  - Total across the run output: 268 tests, 0 failures
+
+---
+
 ### 2026-02-22 - Test Expansion: InternalUrls, Watcher, GoogleShared, TodoRead
 **Work Area**: Test Expansion
 
