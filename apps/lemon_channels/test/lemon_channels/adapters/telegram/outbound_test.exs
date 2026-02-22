@@ -148,6 +148,27 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
     assert Enum.any?(opts[:entities], &(&1["type"] == "bold"))
   end
 
+  test "text: accepts api_mod configured as module path string" do
+    put_telegram_config(%{
+      bot_token: "token",
+      api_mod: "LemonChannels.Adapters.Telegram.OutboundTest.MockApiCapture",
+      use_markdown: false
+    })
+
+    payload =
+      %OutboundPayload{
+        channel_id: "telegram",
+        account_id: "acct",
+        peer: %{kind: :dm, id: "123", thread_id: nil},
+        kind: :text,
+        content: "string api mod"
+      }
+
+    assert {:ok, _} = Outbound.deliver(payload)
+    assert_receive {:send_message, 123, "string api mod", opts, nil}
+    assert is_map(opts)
+  end
+
   test "text: respects use_markdown = false and sends literal markdown" do
     put_telegram_config(%{
       bot_token: "token",

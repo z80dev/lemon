@@ -74,7 +74,7 @@ defmodule LemonGateway.Telegram.Outbox do
   def init(config) do
     state = %{
       token: config[:bot_token] || config["bot_token"],
-      api_mod: config[:api_mod] || API,
+      api_mod: resolve_api_mod(config),
       edit_throttle_ms: config[:edit_throttle_ms] || @default_edit_throttle,
       # Default to true now that we render via Telegram entities (robust, no MarkdownV2 escaping).
       use_markdown:
@@ -436,6 +436,33 @@ defmodule LemonGateway.Telegram.Outbox do
   end
 
   defp maybe_notify(_op, _result), do: :ok
+
+  defp resolve_api_mod(config) do
+    config
+    |> fetch_config(:api_mod, API)
+    |> normalize_api_mod()
+  end
+
+  defp fetch_config(config, key, default) when is_map(config) and is_atom(key) do
+    Map.get(config, key) || Map.get(config, Atom.to_string(key)) || default
+  end
+
+  defp normalize_api_mod(mod) when is_atom(mod), do: mod
+  defp normalize_api_mod(""), do: API
+
+  defp normalize_api_mod(mod) when is_binary(mod) do
+    try do
+      if String.starts_with?(mod, "Elixir.") do
+        String.to_existing_atom(mod)
+      else
+        String.to_existing_atom("Elixir." <> mod)
+      end
+    rescue
+      _ -> API
+    end
+  end
+
+  defp normalize_api_mod(_), do: API
 
   defp merge_config(config, nil), do: config
 

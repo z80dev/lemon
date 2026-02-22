@@ -117,6 +117,30 @@ defmodule LemonGateway.Telegram.OutboxTest do
     :ok
   end
 
+  describe "api_mod normalization" do
+    setup do
+      {:ok, _} = start_supervised({MockOutboxAPI, [notify_pid: self()]})
+      :ok
+    end
+
+    test "accepts api_mod configured as module path string" do
+      {:ok, _} =
+        start_supervised(
+          {Outbox,
+           [
+             bot_token: "token",
+             api_mod: "LemonGateway.Telegram.OutboxTest.MockOutboxAPI",
+             edit_throttle_ms: 0,
+             use_markdown: false
+           ]}
+        )
+
+      Outbox.enqueue({1, :send}, 0, {:send, 1, %{text: "string api mod"}})
+
+      assert_receive {:outbox_api_call, {:send, 1, "string api mod", %{}, nil}}, 200
+    end
+  end
+
   describe "coalescing" do
     setup do
       {:ok, _} = start_supervised({MockOutboxAPI, [notify_pid: self()]})

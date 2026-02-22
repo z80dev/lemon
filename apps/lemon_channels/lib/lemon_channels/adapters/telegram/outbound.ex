@@ -608,7 +608,14 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   defp telegram_config do
     config = telegram_runtime_config()
     token = config[:bot_token] || config["bot_token"]
-    api_mod = config[:api_mod] || config["api_mod"] || LemonChannels.Telegram.API
+
+    api_mod =
+      case fetch_config(config, :api_mod) do
+        {:ok, value} -> value
+        :error -> LemonChannels.Telegram.API
+      end
+      |> normalize_api_mod()
+
     {token, api_mod}
   end
 
@@ -673,6 +680,23 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   end
 
   defp parse_non_neg_int(_), do: nil
+
+  defp normalize_api_mod(mod) when is_atom(mod), do: mod
+  defp normalize_api_mod(""), do: LemonChannels.Telegram.API
+
+  defp normalize_api_mod(mod) when is_binary(mod) do
+    try do
+      if String.starts_with?(mod, "Elixir.") do
+        String.to_existing_atom(mod)
+      else
+        String.to_existing_atom("Elixir." <> mod)
+      end
+    rescue
+      _ -> LemonChannels.Telegram.API
+    end
+  end
+
+  defp normalize_api_mod(_), do: LemonChannels.Telegram.API
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
