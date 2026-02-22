@@ -1,3 +1,40 @@
+### 2026-02-22 - Feature Enhancement: Pi/Oh-My-Pi Sync (Hashline + Missing Features)
+**Work Area**: Pi/Oh-My-Pi Upstream Sync
+
+**Summary**:
+Analyzed Pi and Oh-My-Pi upstream for new features to port to Lemon. Key findings:
+
+**Pi Upstream (models)**:
+- Already up to date - models including `claude-sonnet-4-6`, `gemini-3.1-pro`, `claude-opus-4-6` were previously ported in commit 421ad1a7
+- No new model additions since last sync
+
+**Oh-My-Pi Upstream (tools/features)**:
+- Hashline: Oh-My-Pi REMOVED experimental features (replaceText, autocorrect heuristics) that Lemon still has - no action needed
+- Hashline format v2 uses colon separator (`:`) - already matches Lemon's implementation
+- Hash encoding: Oh-My-Pi uses xxHash32 with custom 2-char encoding, Lemon uses `:erlang.phash2/2` - acceptable difference
+
+**Features Ported**:
+1. `poll_jobs` tool - Blocks until background jobs complete (already existed, verified working)
+2. Per-command `pty` control in bash tool - Fine-grained PTY mode (already existed, verified working)
+3. `notes://` protocol - Session-scoped artifact storage (NEW - implemented)
+4. Task concurrency control - Semaphore-based limiting for parallel execution (NEW - implemented)
+
+**Files Changed**:
+- `apps/coding_agent/lib/coding_agent/internal_urls/notes_protocol.ex` (NEW)
+- `apps/coding_agent/lib/coding_agent/internal_urls.ex` (NEW)
+- `apps/coding_agent/lib/coding_agent/parallel.ex` (NEW)
+- `apps/coding_agent/lib/coding_agent/tools/task.ex` (updated for concurrency control)
+- `apps/coding_agent/test/coding_agent/internal_urls/notes_protocol_test.exs` (NEW)
+- `apps/coding_agent/test/coding_agent/parallel_test.exs` (NEW)
+
+**Tests**:
+- `poll_jobs_test.exs`: 14 tests, 0 failures
+- `bash_test.exs`: 55 tests, 0 failures (includes PTY tests)
+- `notes_protocol_test.exs`: 23 tests, 0 failures
+- `parallel_test.exs`: 30 tests, 0 failures
+
+---
+
 ### 2026-02-22 - Janitor Continuation: Task 1/2/3 Review on f3e5f269 + Validation Fix
 **Work Area**: Integration Review / Validation / Bug Fix
 
