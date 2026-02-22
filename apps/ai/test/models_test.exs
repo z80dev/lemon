@@ -55,6 +55,19 @@ defmodule Ai.ModelsTest do
       assert model.reasoning == true
     end
 
+    test "returns kimi-coding model by id" do
+      model = Models.get_model(:kimi_coding, "kimi-k2-coding")
+
+      assert %Model{} = model
+      assert model.id == "kimi-k2-coding"
+      assert model.name == "Kimi K2 Coding"
+      assert model.api == :anthropic_messages
+      assert model.provider == :kimi_coding
+      assert model.base_url == "https://api.moonshot.ai/anthropic"
+      assert model.reasoning == true
+      assert model.input == [:text]
+    end
+
     test "returns newly added amazon bedrock models by id" do
       model_ids = [
         "moonshot.kimi-k2-thinking",
@@ -144,6 +157,14 @@ defmodule Ai.ModelsTest do
       assert length(models) > 0
       assert Enum.all?(models, &match?(%Model{provider: :opencode}, &1))
     end
+
+    test "returns all kimi-coding models" do
+      models = Models.get_models(:kimi_coding)
+
+      assert is_list(models)
+      assert length(models) == 2
+      assert Enum.all?(models, &match?(%Model{provider: :kimi_coding}, &1))
+    end
   end
 
   describe "get_providers/0" do
@@ -155,6 +176,7 @@ defmodule Ai.ModelsTest do
       assert :openai in providers
       assert :"openai-codex" in providers
       assert :google in providers
+      assert :kimi_coding in providers
       assert :opencode in providers
     end
   end
@@ -172,6 +194,7 @@ defmodule Ai.ModelsTest do
       assert :openai in providers
       assert :"openai-codex" in providers
       assert :google in providers
+      assert :kimi_coding in providers
     end
   end
 

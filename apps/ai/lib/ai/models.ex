@@ -324,6 +324,37 @@ defmodule Ai.Models do
   }
 
   # ============================================================================
+  # Kimi Coding Models (Moonshot API)
+  # ============================================================================
+
+  @kimi_coding_models %{
+    "kimi-k2-coding" => %Model{
+      id: "kimi-k2-coding",
+      name: "Kimi K2 Coding",
+      api: :anthropic_messages,
+      provider: :kimi_coding,
+      base_url: "https://api.moonshot.ai/anthropic",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 262_144,
+      max_tokens: 32_768
+    },
+    "kimi-k2.5-coding" => %Model{
+      id: "kimi-k2.5-coding",
+      name: "Kimi K2.5 Coding",
+      api: :anthropic_messages,
+      provider: :kimi_coding,
+      base_url: "https://api.moonshot.ai/anthropic",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
+      context_window: 262_144,
+      max_tokens: 32_768
+    }
+  }
+
+  # ============================================================================
   # OpenAI Models
   # ============================================================================
 
@@ -10406,6 +10437,7 @@ defmodule Ai.Models do
     :google => @google_models,
     :google_antigravity => @google_antigravity_models,
     :kimi => @kimi_models,
+    :kimi_coding => @kimi_coding_models,
     :opencode => @opencode_models,
     :xai => @xai_models,
     :mistral => @mistral_models,
@@ -10436,6 +10468,7 @@ defmodule Ai.Models do
     :google,
     :google_antigravity,
     :kimi,
+    :kimi_coding,
     :opencode,
     :xai,
     :mistral,
