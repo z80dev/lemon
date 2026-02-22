@@ -136,27 +136,41 @@ defmodule Ai.CircuitBreakerEdgeCasesTest do
   describe "rapid state transitions (open -> half-open -> open)" do
     test "immediate failure in half-open returns to open", %{provider: provider} do
       start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 20}
+        # Use a wider timeout and polling assertions to avoid races under full-suite load.
+        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 200}
       )
 
       # Open the circuit
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
-      # Wait just past recovery timeout
-      Process.sleep(25)
+      wait_until(
+        fn ->
+          {:ok, state} = CircuitBreaker.get_state(provider)
+          state.circuit_state == :open
+        end,
+        150
+      )
 
-      # Check we're in half-open
-      {:ok, state} = CircuitBreaker.get_state(provider)
-      assert state.circuit_state == :half_open
+      # Wait just past recovery timeout and confirm half-open.
+      wait_until(
+        fn ->
+          {:ok, state} = CircuitBreaker.get_state(provider)
+          state.circuit_state == :half_open
+        end,
+        500
+      )
 
       # Immediately record failure
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
-      # Should be back to open
-      {:ok, state} = CircuitBreaker.get_state(provider)
-      assert state.circuit_state == :open
+      # Should be back to open (and remain open long enough to observe it reliably).
+      wait_until(
+        fn ->
+          {:ok, state} = CircuitBreaker.get_state(provider)
+          state.circuit_state == :open
+        end,
+        150
+      )
     end
 
     test "rapid open -> half-open -> open -> half-open -> closed cycle", %{provider: provider} do
@@ -193,29 +207,51 @@ defmodule Ai.CircuitBreakerEdgeCasesTest do
 
     test "failure after one success in half-open resets to open", %{provider: provider} do
       start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 20}
+        # Use a wider recovery timeout so the post-failure :open state is observable
+        # even under full-suite scheduler jitter.
+        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 200}
       )
 
       # Open -> half-open
       CircuitBreaker.record_failure(provider)
-      Process.sleep(35)
 
-      {:ok, state} = CircuitBreaker.get_state(provider)
-      assert state.circuit_state == :half_open
+      wait_until(
+        fn ->
+          {:ok, state} = CircuitBreaker.get_state(provider)
+          state.circuit_state == :open
+        end,
+        150
+      )
+
+      wait_until(
+        fn ->
+          {:ok, state} = CircuitBreaker.get_state(provider)
+          state.circuit_state == :half_open
+        end,
+        500
+      )
 
       # One success (not enough)
       CircuitBreaker.record_success(provider)
-      Process.sleep(10)
 
-      {:ok, state} = CircuitBreaker.get_state(provider)
-      assert state.circuit_state == :half_open
+      wait_until(
+        fn ->
+          {:ok, state} = CircuitBreaker.get_state(provider)
+          state.circuit_state == :half_open
+        end,
+        150
+      )
 
       # Then failure -> reopen
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
-      {:ok, state} = CircuitBreaker.get_state(provider)
-      assert state.circuit_state == :open
+      wait_until(
+        fn ->
+          {:ok, state} = CircuitBreaker.get_state(provider)
+          state.circuit_state == :open
+        end,
+        150
+      )
     end
 
     test "multiple rapid failures in half-open keep circuit open", %{provider: provider} do
@@ -850,7 +886,8 @@ defmodule Ai.CircuitBreakerEdgeCasesTest do
 
     test "state transitions generate expected sequence", %{provider: provider} do
       start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 20}
+        # Use a wider timeout so :open is observed before :half_open under suite load.
+        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 200}
       )
 
       # Track state sequence
@@ -863,19 +900,42 @@ defmodule Ai.CircuitBreakerEdgeCasesTest do
 
       # Failure -> open
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
+
+      wait_until(
+        fn ->
+          {:ok, state} = CircuitBreaker.get_state(provider)
+          state.circuit_state == :open
+        end,
+        150
+      )
+
       {:ok, state} = CircuitBreaker.get_state(provider)
       states = states ++ [state.circuit_state]
 
       # Wait -> half-open
-      Process.sleep(25)
+      wait_until(
+        fn ->
+          {:ok, state} = CircuitBreaker.get_state(provider)
+          state.circuit_state == :half_open
+        end,
+        500
+      )
+
       {:ok, state} = CircuitBreaker.get_state(provider)
       states = states ++ [state.circuit_state]
 
       # Success x2 -> closed
       CircuitBreaker.record_success(provider)
       CircuitBreaker.record_success(provider)
-      Process.sleep(10)
+
+      wait_until(
+        fn ->
+          {:ok, state} = CircuitBreaker.get_state(provider)
+          state.circuit_state == :closed
+        end,
+        150
+      )
+
       {:ok, state} = CircuitBreaker.get_state(provider)
       states = states ++ [state.circuit_state]
 
@@ -1019,13 +1079,16 @@ defmodule Ai.CircuitBreakerEdgeCasesTest do
 
   defp wait_until(fun, timeout_ms, step_ms \\ 10) when is_function(fun, 0) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
+    wait_until_deadline(fun, deadline, timeout_ms, step_ms)
+  end
 
+  defp wait_until_deadline(fun, deadline, timeout_ms, step_ms) do
     if fun.() do
       :ok
     else
       if System.monotonic_time(:millisecond) < deadline do
         Process.sleep(step_ms)
-        wait_until(fun, timeout_ms, step_ms)
+        wait_until_deadline(fun, deadline, timeout_ms, step_ms)
       else
         flunk("condition not met within #{timeout_ms}ms")
       end

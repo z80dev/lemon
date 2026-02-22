@@ -379,9 +379,11 @@ defmodule LemonGateway.Telegram.OutboxTest do
     end
 
     test "first operation executes immediately" do
+      throttle_ms = 200
+
       {:ok, _} =
         start_supervised(
-          {Outbox, [bot_token: "token", api_mod: TimingMockAPI, edit_throttle_ms: 200]}
+          {Outbox, [bot_token: "token", api_mod: TimingMockAPI, edit_throttle_ms: throttle_ms]}
         )
 
       start_time = System.monotonic_time(:millisecond)
@@ -390,8 +392,9 @@ defmodule LemonGateway.Telegram.OutboxTest do
       # Wait for the first message with enough timeout
       assert_receive {:outbox_api_call, {:edit, 1, 1, "first", ts}}, 100
 
-      # First operation should execute quickly (within 50ms)
-      assert ts - start_time < 50
+      # Allow scheduler jitter but ensure this was not delayed by a full throttle interval.
+      max_immediate_ms = div(throttle_ms, 2) + 50
+      assert ts - start_time < max_immediate_ms
     end
   end
 

@@ -4616,3 +4616,47 @@ Refactored the MarketIntel Commentary Pipeline module (`apps/market_intel/lib/ma
 - apps/lemon_core/lib/lemon_core/application.ex - @moduledoc added
 
 **Note**: The CodingAgent.Tools.Process module already has comprehensive tests in process_tool_test.exs (76 tests). The CodingAgent.UI module is a behaviour definition with no implementation to test.
+
+---
+
+### 2026-02-22 - Review & Integration: Internal Engine Tasks 1/2/3
+**Work Area**: Review / Integration
+
+**Scope Reviewed**:
+- **Task 1 (Pi/Oh-My-Pi Sync)**: `models_equal?/2` in `Ai.Models`
+- **Task 2 (Test Expansion)**: untested-module analysis report (no code changes)
+- **Task 3 (Refactoring)**: prior O(n²) list-operation fixes (already committed before this integration run)
+
+**Findings**:
+- `models_equal?/2` implementation is correct and matches intended semantics: compares model `id` + `provider`, returns `false` if either side is `nil`.
+- `apps/ai/test/models_test.exs` includes comprehensive coverage for `models_equal?/2` (identical models, different models, cross-provider mismatch, nil cases, multiple providers).
+- Task 2 introduced no code-level integration risk (analysis-only output).
+- Task 3 changes remained stable in this integration pass; no new regressions attributed to the prior refactor set.
+
+**Integration Fixes Applied During Full-Suite Verification**:
+- `apps/ai/test/ai/circuit_breaker_edge_cases_test.exs`
+  - Stabilized timing-sensitive assertions by replacing fixed sleeps with polling.
+  - Increased specific `recovery_timeout` values in flaky edge-case tests so `:open` and `:half_open` transitions are observable under load.
+  - Updated `wait_until/3` to use a fixed deadline in recursion (prevents timeout drift).
+- `apps/coding_agent_ui/test/coding_agent/ui/rpc_test.exs`
+  - Added `wait_for_output_count/3` helper.
+  - Reworked `"timeout clears pending request"` test to await and answer the second request deterministically (removed race on `List.last/1`).
+- `apps/lemon_gateway/test/thread_worker_test.exs`
+  - Replaced order-sensitive `assert_receive` loop in rapid scope-switching test with order-independent completion-set assertion.
+- `apps/market_intel/test/market_intel/commentary/pipeline_test.exs`
+  - Added `wait_for_pipeline_pid/1` helper for startup race between test assertions and process registration.
+- `apps/lemon_gateway/test/telegram/outbox_test.exs`
+  - Relaxed immediate-timing assertion to allow scheduler jitter while still enforcing "not throttled by full interval."
+
+**Verification Results**:
+- `mix compile --warnings-as-errors`: **PASS**
+- `mix test`: **PASS** (`EXIT_CODE:0`)
+- Key umbrella summaries from the successful run:
+  - `ai`: 1510 tests, 0 failures (32 excluded)
+  - `coding_agent_ui`: 152 tests, 0 failures
+  - `market_intel`: 362 tests, 0 failures
+  - `lemon_gateway`: 1554 tests, 0 failures (4 excluded)
+  - `lemon_router`: 251 tests, 0 failures
+  - `lemon_web`: 4 tests, 0 failures
+  - `lemon_automation`: 124 tests, 0 failures
+  - `lemon_channels`: 438 tests, 0 failures

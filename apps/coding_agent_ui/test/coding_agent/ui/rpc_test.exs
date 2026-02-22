@@ -212,6 +212,26 @@ defmodule CodingAgent.UI.RPCTest do
     end
   end
 
+  defp wait_for_output_count(output, min_count, timeout_ms \\ 1000) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_for_output_count(output, min_count, deadline)
+  end
+
+  defp do_wait_for_output_count(output, min_count, deadline) do
+    output_lines = MockIO.get_output(output)
+
+    if length(output_lines) >= min_count do
+      output_lines
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        output_lines
+      else
+        Process.sleep(10)
+        do_wait_for_output_count(output, min_count, deadline)
+      end
+    end
+  end
+
   # ============================================================================
   # Setup
   # ============================================================================
@@ -1408,23 +1428,22 @@ defmodule CodingAgent.UI.RPCTest do
       assert result1 == {:error, :timeout}
 
       # Late response arrives for first request (should be ignored)
-      Process.sleep(10)
-      [request_json | _] = MockIO.get_output(output)
+      [request_json | _] = wait_for_output(output, 1000)
       request = Jason.decode!(request_json)
       MockIO.put_input(input, Jason.encode!(%{id: request["id"], result: "late"}))
 
       # Second request should work independently
-      spawn(fn ->
-        Process.sleep(30)
-        output_lines = MockIO.get_output(output)
-        # Get the second request (skip the first)
-        second_request_json = List.last(output_lines)
-        second_request = Jason.decode!(second_request_json)
-        MockIO.put_input(input, Jason.encode!(%{id: second_request["id"], result: "second"}))
-      end)
+      task =
+        Task.async(fn ->
+          RPC.select("Second", [%{label: "B", value: "b", description: nil}], server: rpc)
+        end)
 
-      result2 = RPC.select("Second", [%{label: "B", value: "b", description: nil}], server: rpc)
-      assert result2 == {:ok, "second"}
+      output_lines = wait_for_output_count(output, 2, 1000)
+      second_request_json = List.last(output_lines)
+      second_request = Jason.decode!(second_request_json)
+      MockIO.put_input(input, Jason.encode!(%{id: second_request["id"], result: "second"}))
+
+      assert Task.await(task, 1000) == {:ok, "second"}
 
       GenServer.stop(rpc)
     end

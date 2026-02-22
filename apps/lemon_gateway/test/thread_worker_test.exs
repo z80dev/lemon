@@ -2064,9 +2064,12 @@ defmodule LemonGateway.ThreadWorkerTest do
         end
 
       # All 15 jobs should complete without errors
-      for job <- jobs do
-        assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 10_000
-      end
+      completions = receive_completions(length(jobs), 10_000)
+      assert length(completions) == length(jobs)
+
+      completed_jobs = completions |> Enum.map(fn {job, _completed} -> job end) |> MapSet.new()
+      assert completed_jobs == MapSet.new(jobs)
+      assert Enum.all?(completions, fn {_job, %Completed{ok: ok}} -> ok end)
     end
   end
 

@@ -392,6 +392,7 @@ defmodule MarketIntel.Commentary.PipelineTest do
       ]
 
       assert length(templates) == 5
+
       Enum.each(templates, fn template ->
         assert is_binary(template)
         assert String.length(template) <= 280
@@ -400,16 +401,21 @@ defmodule MarketIntel.Commentary.PipelineTest do
 
     test "developer alias adds extra template" do
       developer_alias = "TestDev"
+
       templates = [
         "template 1",
         "template 2"
       ]
 
-      extended = if developer_alias && developer_alias != "" do
-        templates ++ ["runtime status: green. #{developer_alias} gave me another market loop and i survived 🍋"]
-      else
-        templates
-      end
+      extended =
+        if developer_alias && developer_alias != "" do
+          templates ++
+            [
+              "runtime status: green. #{developer_alias} gave me another market loop and i survived 🍋"
+            ]
+        else
+          templates
+        end
 
       assert length(extended) == 3
       assert hd(Enum.take(extended, -1)) =~ developer_alias
@@ -449,7 +455,15 @@ defmodule MarketIntel.Commentary.PipelineTest do
     end
 
     test "handles all trigger event types" do
-      events = ["scheduled", "price_spike", "price_drop", "mention_reply", "weird_market", "volume_surge", "manual"]
+      events = [
+        "scheduled",
+        "price_spike",
+        "price_drop",
+        "mention_reply",
+        "weird_market",
+        "volume_surge",
+        "manual"
+      ]
 
       Enum.each(events, fn event ->
         record = %{
@@ -481,7 +495,7 @@ defmodule MarketIntel.Commentary.PipelineTest do
 
   describe "GenStage behavior" do
     test "pipeline is a producer_consumer" do
-      pid = Process.whereis(Pipeline)
+      pid = wait_for_pipeline_pid()
       assert is_pid(pid)
       assert Process.alive?(pid)
     end
@@ -489,7 +503,7 @@ defmodule MarketIntel.Commentary.PipelineTest do
     test "init returns correct structure" do
       # The init callback returns {:producer_consumer, state, opts}
       # We verify by checking the process is running with correct type
-      pid = Process.whereis(Pipeline)
+      pid = wait_for_pipeline_pid()
       assert is_pid(pid)
     end
 
@@ -502,6 +516,26 @@ defmodule MarketIntel.Commentary.PipelineTest do
       # Non-immediate triggers queue for later
       assert :ok = Pipeline.trigger(:scheduled, %{immediate: false})
     end
+
+    defp wait_for_pipeline_pid(timeout_ms \\ 250) do
+      deadline = System.monotonic_time(:millisecond) + timeout_ms
+      do_wait_for_pipeline_pid(deadline)
+    end
+
+    defp do_wait_for_pipeline_pid(deadline) do
+      case Process.whereis(Pipeline) do
+        pid when is_pid(pid) ->
+          pid
+
+        _ ->
+          if System.monotonic_time(:millisecond) >= deadline do
+            nil
+          else
+            Process.sleep(10)
+            do_wait_for_pipeline_pid(deadline)
+          end
+      end
+    end
   end
 
   describe "tweet posting" do
@@ -512,11 +546,13 @@ defmodule MarketIntel.Commentary.PipelineTest do
       client_module = Module.concat([LemonChannels, Adapters, XAPI, Client])
 
       loaded = Code.ensure_loaded?(client_module)
-      has_function = if loaded do
-        function_exported?(client_module, :post_text, 1)
-      else
-        false
-      end
+
+      has_function =
+        if loaded do
+          function_exported?(client_module, :post_text, 1)
+        else
+          false
+        end
 
       # If not available, posting would fail
       if not loaded or not has_function do
