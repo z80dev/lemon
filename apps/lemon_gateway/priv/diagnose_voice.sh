@@ -49,7 +49,7 @@ echo ""
 echo -e "${BLUE}Twilio Webhook Configuration:${NC}"
 TWILIO_ACCOUNT_SID="${TWILIO_ACCOUNT_SID:-""}"
 TWILIO_AUTH_TOKEN="${TWILIO_AUTH_TOKEN:-""}"
-PHONE_SID="PNe361b5a5e62be98f70fd41115c127814"
+PHONE_SID="${TWILIO_PHONE_SID:-""}"
 
 curl -s "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/IncomingPhoneNumbers/$PHONE_SID.json" \
   -u "$TWILIO_ACCOUNT_SID:$TWILIO_AUTH_TOKEN" | jq -r '{voice_url: .voice_url, voice_method: .voice_method}'
