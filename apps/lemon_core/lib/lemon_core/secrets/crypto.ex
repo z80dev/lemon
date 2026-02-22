@@ -1,4 +1,6 @@
 defmodule LemonCore.Secrets.Crypto do
+  alias LemonCore.MapHelpers
+
   @moduledoc """
   Cryptographic helpers for encrypted secret storage.
 
@@ -96,7 +98,7 @@ defmodule LemonCore.Secrets.Crypto do
   end
 
   defp decode_field(payload, field) do
-    value = Map.get(payload, field) || Map.get(payload, Atom.to_string(field))
+    value = MapHelpers.get_key(payload, field)
 
     cond do
       not is_binary(value) ->

@@ -15,6 +15,7 @@ defmodule LemonCore.Store do
 
   use GenServer
 
+  alias LemonCore.MapHelpers
   alias LemonCore.Store.EtsBackend
   require Logger
 
@@ -744,8 +745,8 @@ defmodule LemonCore.Store do
   # We persist resume tokens as-is (often a struct from another app). To avoid
   # compile-time coupling, detect by shape.
   defp resume_token_like?(resume) when is_map(resume) do
-    engine = Map.get(resume, :engine) || Map.get(resume, "engine")
-    value = Map.get(resume, :value) || Map.get(resume, "value")
+    engine = MapHelpers.get_key(resume, :engine)
+    value = MapHelpers.get_key(resume, :value)
     is_binary(engine) and is_binary(value)
   rescue
     _ -> false

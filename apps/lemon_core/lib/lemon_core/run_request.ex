@@ -7,6 +7,7 @@ defmodule LemonCore.RunRequest do
   the router orchestrator.
   """
 
+  alias LemonCore.MapHelpers
   alias LemonCore.SessionKey
 
   @type origin :: :channel | :control_plane | :cron | :node | :unknown | atom()
@@ -123,7 +124,7 @@ defmodule LemonCore.RunRequest do
   def normalize_run_id(_), do: nil
 
   defp field(params, key) when is_map(params) and is_atom(key) do
-    Map.get(params, key) || Map.get(params, Atom.to_string(key))
+    MapHelpers.get_key(params, key)
   end
 
   defp session_agent_id(session_key) when is_binary(session_key),

@@ -4,6 +4,7 @@ defmodule LemonCore.LoggerSetup do
   # NOTE: We intentionally do not fail hard if file logging cannot be enabled.
   # When debugging dropped messages, the gateway must keep running.
 
+  alias LemonCore.MapHelpers
   require Logger
 
   @handler_id :lemon_file
@@ -23,8 +24,8 @@ defmodule LemonCore.LoggerSetup do
   @spec setup_from_config(LemonCore.Config.t()) :: :ok
   def setup_from_config(%LemonCore.Config{} = cfg) do
     logging = Map.get(cfg, :logging) || %{}
-    file_path = Map.get(logging, :file_path) || Map.get(logging, "file_path")
-    level = Map.get(logging, :level) || Map.get(logging, "level")
+    file_path = MapHelpers.get_key(logging, :file_path)
+    level = MapHelpers.get_key(logging, :level)
 
     case normalize_path(file_path) do
       nil ->
