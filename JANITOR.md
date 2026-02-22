@@ -25,6 +25,47 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-21 - Feature Enhancement: Pi/Oh-My-Pi Sync Verification
+**Work Area**: Feature Enhancement (Pi/Oh-My-Pi Sync)
+
+**Analysis**:
+- Checked Pi upstream (`~/dev/pi`) for new LLM models, providers, and features to port
+- Checked Oh-My-Pi upstream (`~/dev/oh-my-pi`) for innovative tools (hashline edit mode, LSP write tool)
+- Compared model counts: Lemon has 764 models vs Pi's 746 models - Lemon is AHEAD
+- Verified hashline edit mode implementation against Oh-My-Pi reference
+
+**Findings**:
+
+1. **Hashline Edit Mode**: Already fully ported from Oh-My-Pi
+   - `CodingAgent.Tools.Hashline` - Core hashline operations with xxHash32 line addressing
+   - `CodingAgent.Tools.HashlineEdit` - Full tool implementation with all 6 operations
+   - Format: `LINENUM#HASH:CONTENT` for stable line references
+   - Supports: set, replace, append, prepend, insert, replaceText operations
+   - Staleness detection via hash validation before mutation
+   - Streaming support: `stream_hashlines/2` and `stream_hashlines_from_enumerable/2`
+   - Autocorrect features: indent restoration, wrapped line detection, boundary echo stripping
+   - 122 tests, all passing
+
+2. **Write Tool with LSP**: Already implemented
+   - `CodingAgent.Tools.Write` - File writing with optional auto-formatting
+   - `CodingAgent.Tools.LspFormatter` - Multi-language formatter detection (mix, prettier, black, rustfmt, gofmt)
+   - Integration: Write tool calls LspFormatter when `format: true` is specified
+
+3. **Models**: Lemon is ahead of Pi
+   - Lemon: 764 unique model IDs
+   - Pi: 746 unique model IDs
+   - No new models to port from Pi
+
+**Test Results**:
+- Hashline tests: 122 tests, 0 failures
+- Full coding_agent suite: 205 tests, 0 failures
+- No code changes required - features already fully implemented
+
+**Conclusion**:
+All features from the Pi/Oh-My-Pi sync task have already been ported in previous runs. The hashline edit mode with xxHash32 line addressing is complete and fully tested.
+
+---
+
 ### 2026-02-21 - Test Expansion & Documentation: 188 New Tests Across 4 Modules
 **Work Area**: Test Expansion + Documentation
 
