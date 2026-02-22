@@ -516,6 +516,7 @@ defmodule CodingAgent.Session do
   # GenServer Callbacks
   # ============================================================================
 
+  @spec init(keyword()) :: {:ok, t()}
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
@@ -739,6 +740,7 @@ defmodule CodingAgent.Session do
     {:ok, state}
   end
 
+  @spec handle_call(term(), GenServer.from(), t()) :: {:reply, term(), t()}
   @impl true
   def handle_call({:prompt, text, opts}, _from, state) do
     if state.is_streaming do
@@ -1218,6 +1220,7 @@ defmodule CodingAgent.Session do
     end
   end
 
+  @spec handle_cast(term(), t()) :: {:noreply, t()}
   @impl true
   def handle_cast({:steer, text}, state) do
     state = refresh_system_prompt(state)
@@ -1279,6 +1282,7 @@ defmodule CodingAgent.Session do
     {:noreply, %{state | event_listeners: new_listeners}}
   end
 
+  @spec handle_info(term(), t()) :: {:noreply, t()}
   @impl true
   def handle_info({:agent_event, {:error, reason, partial_state} = event}, state) do
     case maybe_start_overflow_recovery(state, reason, partial_state) do
@@ -1508,6 +1512,7 @@ defmodule CodingAgent.Session do
     {:noreply, state}
   end
 
+  @spec terminate(term(), t()) :: :ok
   @impl true
   def terminate(_reason, state) do
     # Stop the underlying agent when the session terminates
