@@ -25,6 +25,59 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-21 - Test Expansion & Documentation: 188 New Tests Across 4 Modules
+**Work Area**: Test Expansion + Documentation
+
+**Analysis**:
+- Cross-referenced all source modules against test files across 14 apps
+- Found 3 pure-function modules with zero tests and 1 module with only 3 tests
+- Identified 2 public functions missing `@doc`/`@spec` and 1 module with `@moduledoc false`
+
+**Tests Added (188 new tests across 4 modules)**:
+
+1. **LemonGateway.EngineDirective** (`engine_directive_test.exs`): 0 → 72 tests
+   - All 6 engine names (/lemon, /codex, /claude, /opencode, /pi, /echo)
+   - Case insensitivity, whitespace handling, word boundary edge cases
+   - Non-matching prefixes, nil/non-string input, embedded directives
+
+2. **LemonGateway.Sms.TwilioSignature** (`twilio_signature_test.exs`): 0 → 46 tests
+   - signature/3: empty params, sorted keys, atom/string keys, integer/float/nil/list values
+   - valid?/4: correct inputs, wrong token/url/signature/params
+   - Edge cases: nil/empty/whitespace/non-string for all arguments
+   - Constant-time compare: different lengths, truncated, single-bit flip
+   - Cross-verification: independently computed HMAC-SHA1 round-trip
+
+3. **LemonChannels.Telegram.Markdown** (`markdown_test.exs`): 0 → 54 tests
+   - All entity types: bold, italic, code, pre, text_link, strikethrough
+   - Headings, unordered/ordered lists, blockquotes
+   - Nested formatting, entity offset/length correctness
+   - UTF-16 offsets for emoji/unicode (surrogate pairs)
+   - Edge cases: empty bold, links with empty URLs, mixed content
+
+4. **LemonGateway.Discord.Formatter** (`formatter_test.exs`): 3 → 19 tests
+   - chunk_text: nil, empty, short text, newline/space splits, custom limit, boundary
+   - format_error: string errors, integer errors
+   - tool_call_embed: string keys, defaults, all color codes, footer/description
+
+**Documentation Added (3 functions across 2 files)**:
+
+1. `TwilioSignature.valid?/4` - @doc and @spec added
+2. `TwilioSignature.signature/3` - @doc and @spec added
+3. `Telegram.Markdown` module - @moduledoc upgraded from `false` to descriptive doc
+4. `Telegram.Markdown.render/1` - @doc and @spec added
+
+**Test Results**: All 191 new tests pass. 2 pre-existing failures unrelated (architecture check, run orchestrator).
+
+**Files Changed**: 6 files across 3 apps (4 test files, 2 source files)
+- `apps/lemon_gateway/test/engine_directive_test.exs` - NEW (72 tests)
+- `apps/lemon_gateway/test/sms/twilio_signature_test.exs` - NEW (46 tests)
+- `apps/lemon_channels/test/lemon_channels/telegram/markdown_test.exs` - NEW (54 tests)
+- `apps/lemon_gateway/test/discord/formatter_test.exs` - EXPANDED (3 → 19 tests)
+- `apps/lemon_gateway/lib/lemon_gateway/sms/twilio_signature.ex` - @doc/@spec added
+- `apps/lemon_channels/lib/lemon_channels/telegram/markdown.ex` - @moduledoc/@doc/@spec added
+
+---
+
 ### 2026-02-21 - Test Expansion: stream_hashlines_from_enumerable coverage
 **Work Area**: Test Expansion
 
