@@ -1,0 +1,76 @@
+[
+  {
+    "mission_id": "M12",
+    "name": "ClipForge: AI video",
+    "category": "clipforge",
+    "status": "TIMEOUT",
+    "topic_id": 3203,
+    "sent_ids": [
+      3207
+    ],
+    "recv_ids": [],
+    "recv_texts": [],
+    "duration": 600.6102468967438,
+    "notes": "No substantive reply within timeout"
+  },
+  {
+    "mission_id": "M13",
+    "name": "ClipForge: Crypto video",
+    "category": "clipforge",
+    "status": "TIMEOUT",
+    "topic_id": 3200,
+    "sent_ids": [
+      3204
+    ],
+    "recv_ids": [],
+    "recv_texts": [],
+    "duration": 600.6031119823456,
+    "notes": "No substantive reply within timeout"
+  },
+  {
+    "mission_id": "M20",
+    "name": "Multi-engine stress test",
+    "category": "infra",
+    "status": "TIMEOUT",
+    "topic_id": 3201,
+    "sent_ids": [
+      3206
+    ],
+    "recv_ids": [],
+    "recv_texts": [],
+    "duration": 600.6100399494171,
+    "notes": "No substantive reply within timeout"
+  },
+  {
+    "mission_id": "M21",
+    "name": "Cron market commentary",
+    "category": "infra",
+    "status": "TIMEOUT",
+    "topic_id": 3202,
+    "sent_ids": [
+      3205
+    ],
+    "recv_ids": [],
+    "recv_texts": [],
+    "duration": 600.6100997924805,
+    "notes": "No substantive reply within timeout"
+  },
+  {
+    "mission_id": "M22",
+    "name": "Long context handling",
+    "category": "infra",
+    "status": "PASS",
+    "topic_id": 3225,
+    "sent_ids": [
+      3226
+    ],
+    "recv_ids": [
+      3233
+    ],
+    "recv_texts": [
+      "I appreciate you testing my long context handling! However, I notice the \"specification\" you've provided is quite short and repetitive (the title is repeated 5 times). The actual technical content is only about 3 short sections totaling roughly 300 words.\n\nLet me analyze what's actually here:\n\n1. Three Key Architectural Components\n\n1. ThreadWorker - A GenServer process per conversation that manages state, message queuing, and LLM interaction lifecycle\n2. Engine Abstraction Layer - Routes to diff"
+    ],
+    "duration": 308.1850960254669,
+    "notes": "Got 1 replies, 1663 total chars"
+  }
+]

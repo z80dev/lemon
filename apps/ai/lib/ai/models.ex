@@ -10750,6 +10750,35 @@ defmodule Ai.Models do
   end
 
   @doc """
+  Check if two models are equal by comparing both their id and provider.
+  Returns false if either model is nil.
+
+  Ported from Pi's modelsAreEqual.
+
+  ## Examples
+
+      iex> model1 = Ai.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      iex> model2 = Ai.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      iex> Ai.Models.models_equal?(model1, model2)
+      true
+
+      iex> model1 = Ai.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      iex> model2 = Ai.Models.get_model(:openai, "gpt-4o")
+      iex> Ai.Models.models_equal?(model1, model2)
+      false
+
+      iex> Ai.Models.models_equal?(nil, model1)
+      false
+
+  """
+  @spec models_equal?(Model.t() | nil, Model.t() | nil) :: boolean()
+  def models_equal?(nil, _b), do: false
+  def models_equal?(_a, nil), do: false
+  def models_equal?(%Model{id: id_a, provider: provider_a}, %Model{id: id_b, provider: provider_b}) do
+    id_a == id_b and provider_a == provider_b
+  end
+
+  @doc """
   Get model IDs for a provider.
 
   ## Examples

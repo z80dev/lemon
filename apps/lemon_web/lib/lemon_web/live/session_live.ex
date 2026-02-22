@@ -403,12 +403,21 @@ defmodule LemonWeb.SessionLive do
   defp maybe_append_system(socket, _), do: socket
 
   defp append_message(socket, message) do
-    messages = (socket.assigns.messages ++ [message]) |> trim_messages()
+    # Prepend for O(1) then reverse to maintain order
+    messages = [message | socket.assigns.messages] |> trim_messages_prepend()
     assign(socket, :messages, messages)
   end
 
-  defp trim_messages(messages) when length(messages) <= @max_messages, do: messages
-  defp trim_messages(messages), do: Enum.take(messages, -@max_messages)
+  defp trim_messages_prepend(messages) when length(messages) <= @max_messages,
+    do: Enum.reverse(messages)
+
+  defp trim_messages_prepend(messages) do
+    messages |> Enum.take(@max_messages) |> Enum.reverse()
+  end
+
+  # Old function kept for compatibility - now uses prepend-based approach
+  # defp trim_messages(messages) when length(messages) <= @max_messages, do: messages
+  # defp trim_messages(messages), do: Enum.take(messages, -@max_messages)
 
   defp resolve_session_key(params) when is_map(params) do
     candidate = params["session_key"]

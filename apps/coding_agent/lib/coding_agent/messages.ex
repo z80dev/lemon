@@ -517,28 +517,31 @@ defmodule CodingAgent.Messages do
   defp normalize_trust(_), do: :trusted
 
   defp format_bash_output(%BashExecutionMessage{} = msg) do
-    parts = ["$ #{msg.command}"]
+    # Build list in reverse for O(n) performance, then reverse at end
+    parts = []
 
     parts =
-      if msg.output != "" do
-        parts ++ [msg.output]
+      if msg.exit_code && msg.exit_code != 0 do
+        ["[exit code: #{msg.exit_code}]" | parts]
       else
         parts
       end
 
     parts =
       cond do
-        msg.cancelled -> parts ++ ["[cancelled]"]
-        msg.truncated -> parts ++ ["[truncated]"]
+        msg.cancelled -> ["[cancelled]" | parts]
+        msg.truncated -> ["[truncated]" | parts]
         true -> parts
       end
 
     parts =
-      if msg.exit_code && msg.exit_code != 0 do
-        parts ++ ["[exit code: #{msg.exit_code}]"]
+      if msg.output != "" do
+        [msg.output | parts]
       else
         parts
       end
+
+    parts = ["$ #{msg.command}" | parts]
 
     Enum.join(parts, "\n")
   end

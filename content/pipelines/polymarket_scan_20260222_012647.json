@@ -1,0 +1,1162 @@
+{
+  "generated_at": "2026-02-22T01:26:47.765329",
+  "markets_analyzed": 200,
+  "high_volume_markets": [
+    {
+      "market": {
+        "id": "93",
+        "slug": "will-donald-trump-be-inaugurated-for-his-second-term-as-president-of-the-usa-on-inauguration-day-january-20th-2021",
+        "question": "Will Donald Trump be inaugurated for his second term as President of the USA on Inauguration Day, January 20th, 2021?",
+        "description": "This is a market on if Donald Trump will be inaugurated for his second term as President of the United States of America, on Inauguration Day\u2014January 20th, 2021. At the time of market creation, AP, CN...",
+        "volume_24h": 0.0,
+        "volume_total": 30207577.413504,
+        "liquidity": 43.468918,
+        "yes_price": 2.0626664460443175e-08,
+        "no_price": 0.9999999793733355,
+        "spread": 0.0,
+        "implied_probability": 2.0626664460443175e-08,
+        "end_date": "2021-02-01T00:00:00Z",
+        "days_to_resolution": -1847.0602750623377,
+        "category": "US-current-affairs"
+      },
+      "score": 105,
+      "signals": [
+        "High total volume: $30,207,577",
+        "High turnover ratio: 694923.6x"
+      ]
+    },
+    {
+      "market": {
+        "id": "40",
+        "slug": "will-trump-win-the-2020-us-presidential-election",
+        "question": "Will Trump win the 2020 U.S. presidential election?",
+        "description": "This is a market on if Donald Trump will win the 2020 US presidential election. This is not about the popular vote - it's particularly about if Trump will win the election, as defined by the electoral...",
+        "volume_24h": 0.0,
+        "volume_total": 10802601.987023,
+        "liquidity": 68.283267,
+        "yes_price": 4.3643034980462864e-08,
+        "no_price": 0.999999956356965,
+        "spread": 0.0,
+        "implied_probability": 4.3643034980462864e-08,
+        "end_date": "2020-11-20T00:00:00Z",
+        "days_to_resolution": -1920.0602750625696,
+        "category": "US-current-affairs"
+      },
+      "score": 105,
+      "signals": [
+        "High total volume: $10,802,602",
+        "High turnover ratio: 158202.8x"
+      ]
+    },
+    {
+      "market": {
+        "id": "13107",
+        "slug": "will-joe-biden-be-inaugurated-as-president-of-the-usa-on-january-20th-2021-1",
+        "question": "Will Joe Biden be inaugurated as President of the USA on January 20th, 2021?",
+        "description": "This is a market on if Joe Biden will be inaugurated as President of the United States of America on Inauguration Day\u2014January 20th, 2021. At the time of market creation, AP, CNN, WSJ, Fox, and more ha...",
+        "volume_24h": 0.0,
+        "volume_total": 8582604.040652,
+        "liquidity": 40.886614,
+        "yes_price": 0.9999999819574147,
+        "no_price": 1.804258530658439e-08,
+        "spread": 0.0,
+        "implied_probability": 0.9999999819574147,
+        "end_date": "2021-01-20T00:00:00Z",
+        "days_to_resolution": -1859.0602750626852,
+        "category": "US-current-affairs"
+      },
+      "score": 90.83,
+      "signals": [
+        "High total volume: $8,582,604",
+        "High turnover ratio: 209912.3x"
+      ]
+    },
+    {
+      "market": {
+        "id": "11991",
+        "slug": "will-100-million-people-have-received-a-dose-of-an-approved-covid-19-vaccine-in-the-us-by-april-1-2021",
+        "question": "Will 100 million people have received a dose of an approved COVID-19 vaccine in the US by April 1, 2021?",
+        "description": "This is a market on whether 100 million people in The United States of America will have initiated vaccination, according to the CDC COVID tracker, by the resolution date, April 1, 2021, 12 PM EST / 1...",
+        "volume_24h": 0.0,
+        "volume_total": 7116763.863114,
+        "liquidity": 83.003653,
+        "yes_price": 9.045141609489103e-08,
+        "no_price": 0.9999999095485839,
+        "spread": 0.0,
+        "implied_probability": 9.045141609489103e-08,
+        "end_date": "2021-04-01T00:00:00Z",
+        "days_to_resolution": -1788.0602750629166,
+        "category": "Coronavirus"
+      },
+      "score": 76.17,
+      "signals": [
+        "High total volume: $7,116,764",
+        "High turnover ratio: 85740.4x"
+      ]
+    },
+    {
+      "market": {
+        "id": "47250",
+        "slug": "will-donald-trump-be-president-of-the-usa-on-march-31-2021",
+        "question": "Will Donald Trump be President of the USA on March 31, 2021?",
+        "description": "This is a market on if Donald Trump will be President of the United States on March 31, 2021, 12pm EST. This market will resolve to \u201cYes\u201c if, on the resolution date, Donald Trump is the current Presid...",
+        "volume_24h": 0.0,
+        "volume_total": 6253674.443228,
+        "liquidity": 1.442885,
+        "yes_price": 9.05368623123752e-08,
+        "no_price": 0.9999999094631377,
+        "spread": 0.0,
+        "implied_probability": 9.05368623123752e-08,
+        "end_date": "2021-04-01T00:00:00Z",
+        "days_to_resolution": -1788.0602750630555,
+        "category": "US-current-affairs"
+      },
+      "score": 67.54,
+      "signals": [
+        "High total volume: $6,253,674",
+        "High turnover ratio: 4334146.1x"
+      ]
+    },
+    {
+      "market": {
+        "id": "30941",
+        "slug": "will-joe-biden-be-president-of-the-usa-on-march-1-2021",
+        "question": "Will Joe Biden be President of the USA on March 1, 2021?",
+        "description": "This is a market on if Joe Biden will be President of the United States on March 1, 2021, 11:59 PM EST. This market will resolve to \u201cYes\u201c if, on the resolution date, Joe Biden is listed as being the c...",
+        "volume_24h": 0.0,
+        "volume_total": 5603735.590555,
+        "liquidity": 0.104587,
+        "yes_price": 0.9999991427648631,
+        "no_price": 8.572351369235186e-07,
+        "spread": 0.0,
+        "implied_probability": 0.9999991427648631,
+        "end_date": "2021-03-02T00:00:00Z",
+        "days_to_resolution": -1818.0602750631947,
+        "category": "US-current-affairs"
+      },
+      "score": 61.04,
+      "signals": [
+        "High total volume: $5,603,736",
+        "High turnover ratio: 53579657.0x"
+      ]
+    },
+    {
+      "market": {
+        "id": "101857",
+        "slug": "will-150-million-people-have-received-a-dose-of-an-approved-covid-19-vaccine-in-the-us-by-may-1-2021",
+        "question": "Will 150 million people have received a dose of an approved COVID-19 vaccine in the US by May 1, 2021?",
+        "description": "This is a market on whether 150 million people in The United States of America will have initiated vaccination, according to the CDC COVID tracker, by the resolution date, May 1, 2021, 12 PM ET. This ...",
+        "volume_24h": 0.0,
+        "volume_total": 2075247.199489,
+        "liquidity": 104.905113,
+        "yes_price": 5.88640973366119e-08,
+        "no_price": 0.9999999411359026,
+        "spread": 0.0,
+        "implied_probability": 5.88640973366119e-08,
+        "end_date": "2021-05-01T00:00:00Z",
+        "days_to_resolution": -1758.0602750633332,
+        "category": "Coronavirus"
+      },
+      "score": 25.75,
+      "signals": [
+        "High total volume: $2,075,247",
+        "High turnover ratio: 19782.1x"
+      ]
+    },
+    {
+      "market": {
+        "id": "72",
+        "slug": "which-party-will-win-arizona-in-the-2020-presidential-election",
+        "question": "Which party will win Arizona in the 2020 Presidential Election?",
+        "description": "This is a market on which party will win Arizona in the 2020 presidential election. This market will resolve based on the information made available by the Elections Division of the Arizona Secretary ...",
+        "volume_24h": 0.0,
+        "volume_total": 1506034.746644,
+        "liquidity": 5.470261,
+        "yes_price": 0.5,
+        "no_price": 0.5,
+        "spread": 0.0,
+        "implied_probability": 0.5,
+        "end_date": null,
+        "days_to_resolution": null,
+        "category": "US-current-affairs"
+      },
+      "score": 20.06,
+      "signals": [
+        "High total volume: $1,506,035",
+        "High turnover ratio: 275313.1x"
+      ]
+    },
+    {
+      "market": {
+        "id": "76",
+        "slug": "will-btc-break-20k-before-2021",
+        "question": "Will $BTC break $20k before 2021?",
+        "description": "This is a market on if the USD price of Bitcoin $BTC will be above $20,000 at any point before January 1st, 2021, 12:00am EST, according to Coinmarketcap.com/currencies/bitcoin. This market starts on ...",
+        "volume_24h": 0.0,
+        "volume_total": 1467610.681134,
+        "liquidity": 1170.706736,
+        "yes_price": 0.9999998888806887,
+        "no_price": 1.1111931131046978e-07,
+        "spread": 0.0,
+        "implied_probability": 0.9999998888806887,
+        "end_date": "2021-01-01T00:00:00Z",
+        "days_to_resolution": -1878.0602750634723,
+        "category": "Crypto"
+      },
+      "score": 19.68,
+      "signals": [
+        "High total volume: $1,467,611",
+        "High turnover ratio: 1253.6x"
+      ]
+    },
+    {
+      "market": {
+        "id": "96",
+        "slug": "will-trump-win-any-of-pennsylvania-arizona-or-georgia",
+        "question": "Will Trump win any of Pennsylvania, Arizona or Georgia?",
+        "description": "This is a market on whether Donald Trump will win the popular vote in the 2020 general election for U.S. President in one or more of the states of Pennsylvania, Arizona or Georgia. The linked PredictI...",
+        "volume_24h": 0.0,
+        "volume_total": 1376323.081579,
+        "liquidity": 2.945378,
+        "yes_price": 1.2565989785062253e-05,
+        "no_price": 0.999987434010215,
+        "spread": 0.0,
+        "implied_probability": 1.2565989785062253e-05,
+        "end_date": "2021-01-23T00:00:00Z",
+        "days_to_resolution": -1856.0602750635878,
+        "category": "US-current-affairs"
+      },
+      "score": 18.76,
+      "signals": [
+        "High total volume: $1,376,323",
+        "High turnover ratio: 467282.3x"
+      ]
+    }
+  ],
+  "near_resolution_markets": [],
+  "price_swing_markets": [
+    {
+      "market": {
+        "id": "103",
+        "slug": "will-btc-break-20k-before-thanksgiving",
+        "question": "Will $BTC break $20k before Thanksgiving?",
+        "description": "This is a market on if the USD price of Bitcoin $BTC will be above $20,000 at any point before Thanksgiving - defined as before November 26th, 2020, 12:00am EST - according to Coinmarketcap.com/curren...",
+        "volume_24h": 0.0,
+        "volume_total": 457360.180333,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2020-11-26T00:00:00Z",
+        "days_to_resolution": -1914.0602750637152,
+        "category": "Crypto"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "market": {
+        "id": "7740",
+        "slug": "will-any-electoral-certificates-be-formally-challenged-in-congress",
+        "question": "Will any Electoral College Certificates of Vote be formally challenged in Congress?",
+        "description": "This market is on if any Electoral College Certificate of Vote will be the subject of formal objection when Congress meets in joint Session to count the electoral votes cast for President and Vice Pre...",
+        "volume_24h": 0.0,
+        "volume_total": 265340.926545,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2021-02-01T00:00:00Z",
+        "days_to_resolution": -1847.060275063854,
+        "category": "US-current-affairs"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "market": {
+        "id": "74",
+        "slug": "will-the-associated-press-publish-a-tweet-calling-the-2020-us-presidential-election-before-november-6",
+        "question": "Will the Associated Press publish a tweet calling the 2020 US presidential election before November 6?",
+        "description": "This is a market on whether the Associated Press twitter account, https://twitter.com/AP, will publish a tweet declaring a definitive winner of the 2020 US presidential election prior to 11:59PM EST o...",
+        "volume_24h": 0.0,
+        "volume_total": 261432.197705,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2020-11-06T00:00:00Z",
+        "days_to_resolution": -1934.06027506397,
+        "category": "US-current-affairs"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "market": {
+        "id": "63",
+        "slug": "will-btc-break-15k-before-2021-1",
+        "question": "Will BTC break $15k before 2021?",
+        "description": "This is a market on whether BTC (bitcoin) will reach a price higher than USD $15,000 before the end of the 2020 calendar year according to coinmarketcap.com. If bitcoin reaches a price higher than $15...",
+        "volume_24h": 0.0,
+        "volume_total": 224706.488667,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2021-01-01T00:00:00Z",
+        "days_to_resolution": -1878.0602750640855,
+        "category": "Crypto"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "market": {
+        "id": "114",
+        "slug": "will-coinbase-reach-1-in-i-os-app-store-finance-category-before-2021",
+        "question": "Will Coinbase reach #1 in the Finance category on the US iOS App Store before 2021?",
+        "description": "This is a market on if the Coinbase iOS app will reach #1 in the United States iPhone Apple App Store in the Finance category, under \"Free Apps\". It does not matter how long the app remains #1, if it ...",
+        "volume_24h": 0.0,
+        "volume_total": 195420.953091,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2021-01-02T00:00:00Z",
+        "days_to_resolution": -1877.0602750641897,
+        "category": "Crypto"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "market": {
+        "id": "1499",
+        "slug": "will-donald-trump-join-parler-before-inauguration-day",
+        "question": "Will Donald Trump join Parler before Inauguration Day?",
+        "description": "This is a market on whether Donald J. Trump will join Parler prior to January 20th, 2021, at 12pm EST. The market will resolve to Yes if Donald Trump joins Parler (https://parler.com/) and has an offi...",
+        "volume_24h": 0.0,
+        "volume_total": 172744.38442,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2021-01-20T00:00:00Z",
+        "days_to_resolution": -1859.0602750643056,
+        "category": "US-current-affairs"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "market": {
+        "id": "101",
+        "slug": "will-pfizer-s-covid-19-vaccine-be-the-first-to-receive-fda-approval-or-emergency-use-authorization-eua",
+        "question": "Will Pfizer's COVID-19 vaccine be the first to receive FDA approval or Emergency Use Authorization (EUA)?",
+        "description": "This is a market on whether Pfizer's COVID-19 vaccine will be the first vaccine to receive regulatory approval in the USA, in the form of either FDA approval OR Emergency Use Authorization, whichever ...",
+        "volume_24h": 0.0,
+        "volume_total": 151822.615733,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": null,
+        "days_to_resolution": null,
+        "category": "Coronavirus"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "market": {
+        "id": "78",
+        "slug": "will-lamelo-ball-be-the-first-pick-in-the-2020-nba-draft",
+        "question": "Will LaMelo Ball be the first pick in the 2020 NBA draft?",
+        "description": "This is a market on if LaMelo Ball will be chosen/drafted with the 1st pick of the 2020 NBA Draft, currently owned by the Minnesota Timberwolves. This market will resolve to \u201cYes\u201d if he is chosen 1st,...",
+        "volume_24h": 0.0,
+        "volume_total": 143938.782615,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2020-11-19T00:00:00Z",
+        "days_to_resolution": -1921.0602750644791,
+        "category": "Sports"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "market": {
+        "id": "102",
+        "slug": "will-sushiswap-have-more-tvl-than-uniswap-at-any-time-before-november-24th-according-to-defipulse",
+        "question": "Will Sushiswap have more TVL than Uniswap at any time before November 24th, according to DefiPulse?",
+        "description": "This is a market on if Sushiswap will have more Total Value Locked (TVL) than Uniswap, at any time before November 24th, 2020, 12:00am EST. This market\u2019s inception date is November 18th, 2020, and thu...",
+        "volume_24h": 0.0,
+        "volume_total": 139390.060805,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2020-11-24T00:00:00Z",
+        "days_to_resolution": -1916.060275064618,
+        "category": "Crypto"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "market": {
+        "id": "18286",
+        "slug": "will-donald-trump-pardon-a-family-member-before-inauguration-day-2",
+        "question": "Will Donald Trump pardon a family member before Inauguration Day?",
+        "description": "This is a market on if Donald Trump will pardon an immediate family member prior to the end of his current presidential term (January 21st, 2021). In the event that Donald Trump does pardon an immedia...",
+        "volume_24h": 0.0,
+        "volume_total": 122101.594931,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2021-01-22T00:00:00Z",
+        "days_to_resolution": -1857.0602750647338,
+        "category": "US-current-affairs"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    }
+  ],
+  "arbitrage_opportunities": [
+    {
+      "market": {
+        "id": "76",
+        "slug": "will-btc-break-20k-before-2021",
+        "question": "Will $BTC break $20k before 2021?",
+        "description": "This is a market on if the USD price of Bitcoin $BTC will be above $20,000 at any point before January 1st, 2021, 12:00am EST, according to Coinmarketcap.com/currencies/bitcoin. This market starts on ...",
+        "volume_24h": 0.0,
+        "volume_total": 1467610.681134,
+        "liquidity": 1170.706736,
+        "yes_price": 0.9999998888806887,
+        "no_price": 1.1111931131046978e-07,
+        "spread": 0.0,
+        "implied_probability": 0.9999998888806887,
+        "end_date": "2021-01-01T00:00:00Z",
+        "days_to_resolution": -1878.0602750648495,
+        "category": "Crypto"
+      },
+      "score": 50.0,
+      "signals": [
+        "Similar markets with 100.0% price divergence",
+        "Market 1: 1.00",
+        "Market 2: 0.00"
+      ]
+    },
+    {
+      "market": {
+        "id": "101786",
+        "slug": "will-bitcoin-btc-be-above-55k-on-april-1-2021",
+        "question": "Will Bitcoin ($BTC) be above $55k on April 1, 2021?",
+        "description": "This is a market on if the USD price of Bitcoin $BTC will be above $55000 on April 1, 2021, 12:00 PM ET, according to coinmarketcap.com/currencies/bitcoin/. This market will resolve to \u201cYes\u201c if BTC is...",
+        "volume_24h": 0.0,
+        "volume_total": 787378.95026,
+        "liquidity": 37.896699,
+        "yes_price": 0.9999999091184348,
+        "no_price": 9.08815651819408e-08,
+        "spread": 0.0,
+        "implied_probability": 0.9999999091184348,
+        "end_date": "2021-04-01T00:00:00Z",
+        "days_to_resolution": -1788.060275065,
+        "category": "Crypto"
+      },
+      "score": 50.0,
+      "signals": [
+        "Similar markets with 100.0% price divergence",
+        "Market 1: 1.00",
+        "Market 2: 0.00"
+      ]
+    },
+    {
+      "market": {
+        "id": "97181",
+        "slug": "will-bitcoin-btc-be-above-55k-on-march-15-2021",
+        "question": "Will Bitcoin ($BTC) be above $55k on March 15, 2021?",
+        "description": "This is a market on if the USD price of Bitcoin $BTC will be above $55000 on March 15, 2021, 12:00pm EST, according to coinmarketcap.com/currencies/bitcoin/. This market will resolve to \u201cYes\u201c if BTC i...",
+        "volume_24h": 0.0,
+        "volume_total": 554530.927652,
+        "liquidity": 0.000333,
+        "yes_price": 0.9999998766266189,
+        "no_price": 1.233733810297113e-07,
+        "spread": 0.0,
+        "implied_probability": 0.9999998766266189,
+        "end_date": "2021-03-15T00:00:00Z",
+        "days_to_resolution": -1805.0602750651622,
+        "category": "Crypto"
+      },
+      "score": 50.0,
+      "signals": [
+        "Similar markets with 100.0% price divergence",
+        "Market 1: 1.00",
+        "Market 2: 0.00"
+      ]
+    },
+    {
+      "market": {
+        "id": "71914",
+        "slug": "will-eth-be-above-2000-on-march-1st-2021",
+        "question": "Will ETH be above $2000 on March 1st, 2021?",
+        "description": "This is a market on if the USD price of Ether $ETH will be above $2000 on March 1st, 2021, 12:00pm EST, according to coinmarketcap.com/currencies/ethereum/. This market will resolve to \u201cYes\u201c if ETH is...",
+        "volume_24h": 0.0,
+        "volume_total": 747989.597477,
+        "liquidity": 20.479524,
+        "yes_price": 8.593621343575977e-07,
+        "no_price": 0.9999991406378657,
+        "spread": 0.0,
+        "implied_probability": 8.593621343575977e-07,
+        "end_date": "2021-03-01T00:00:00Z",
+        "days_to_resolution": -1819.0602750652895,
+        "category": "Crypto"
+      },
+      "score": 50.0,
+      "signals": [
+        "Similar markets with 100.0% price divergence",
+        "Market 1: 0.00",
+        "Market 2: 1.00"
+      ]
+    },
+    {
+      "market": {
+        "id": "12017",
+        "slug": "will-kim-kardashian-or-kanye-west-file-for-divorce-before-march-1-2021",
+        "question": "Will Kim Kardashian or Kanye West file for divorce before March 1, 2021?",
+        "description": "This is a market on whether Kanye West or Kim Kardashian will officially file for a divorce before March 1st 2021. Filing for divorce, in the context of this market, can be defined empirically as eith...",
+        "volume_24h": 0.0,
+        "volume_total": 40940.904626,
+        "liquidity": 962.430075,
+        "yes_price": 0.9999998448945476,
+        "no_price": 1.5510545233269986e-07,
+        "spread": 0.0,
+        "implied_probability": 0.9999998448945476,
+        "end_date": "2021-03-02T00:00:00Z",
+        "days_to_resolution": -1818.0602750654284,
+        "category": "Pop-Culture "
+      },
+      "score": 50.0,
+      "signals": [
+        "Similar markets with 100.0% price divergence",
+        "Market 1: 1.00",
+        "Market 2: 0.00"
+      ]
+    },
+    {
+      "market": {
+        "id": "29919",
+        "slug": "will-trump-complete-his-first-term",
+        "question": "Will Trump complete his first term?",
+        "description": "This is a market on if Donald Trump will complete his first four-year term as President of the United States without consideration for temporary incapacity. The resolution source for this market will ...",
+        "volume_24h": 0.0,
+        "volume_total": 692311.018313,
+        "liquidity": 3.3e-05,
+        "yes_price": 0.9999989280581413,
+        "no_price": 1.0719418587670583e-06,
+        "spread": 0.0,
+        "implied_probability": 0.9999989280581413,
+        "end_date": "2021-01-20T00:00:00Z",
+        "days_to_resolution": -1859.0602750655326,
+        "category": "US-current-affairs"
+      },
+      "score": 50.0,
+      "signals": [
+        "Similar markets with 100.0% price divergence",
+        "Market 1: 1.00",
+        "Market 2: 0.00"
+      ]
+    },
+    {
+      "market": {
+        "id": "71914",
+        "slug": "will-eth-be-above-2000-on-march-1st-2021",
+        "question": "Will ETH be above $2000 on March 1st, 2021?",
+        "description": "This is a market on if the USD price of Ether $ETH will be above $2000 on March 1st, 2021, 12:00pm EST, according to coinmarketcap.com/currencies/ethereum/. This market will resolve to \u201cYes\u201c if ETH is...",
+        "volume_24h": 0.0,
+        "volume_total": 747989.597477,
+        "liquidity": 20.479524,
+        "yes_price": 8.593621343575977e-07,
+        "no_price": 0.9999991406378657,
+        "spread": 0.0,
+        "implied_probability": 8.593621343575977e-07,
+        "end_date": "2021-03-01T00:00:00Z",
+        "days_to_resolution": -1819.0602750656367,
+        "category": "Crypto"
+      },
+      "score": 50.0,
+      "signals": [
+        "Similar markets with 100.0% price divergence",
+        "Market 1: 0.00",
+        "Market 2: 1.00"
+      ]
+    },
+    {
+      "market": {
+        "id": "78",
+        "slug": "will-lamelo-ball-be-the-first-pick-in-the-2020-nba-draft",
+        "question": "Will LaMelo Ball be the first pick in the 2020 NBA draft?",
+        "description": "This is a market on if LaMelo Ball will be chosen/drafted with the 1st pick of the 2020 NBA Draft, currently owned by the Minnesota Timberwolves. This market will resolve to \u201cYes\u201d if he is chosen 1st,...",
+        "volume_24h": 0.0,
+        "volume_total": 143938.782615,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2020-11-19T00:00:00Z",
+        "days_to_resolution": -1921.0602750657522,
+        "category": "Sports"
+      },
+      "score": 10.3,
+      "signals": [
+        "Potential inverse correlation (sum=0.90)",
+        "Price divergence: 89.7%"
+      ]
+    },
+    {
+      "market": {
+        "id": "3339",
+        "slug": "will-floyd-mayweather-beat-logan-paul-in-their-boxing-exhibition-match",
+        "question": "Will Floyd Mayweather beat Logan Paul in their boxing exhibition match?",
+        "description": "This is a market on whether Floyd Mayweather will win his boxing exhibition match against Logan Paul set to take place on February 20th, 2021. If Floyd Mayweather is declared the winner of this bout, ...",
+        "volume_24h": 0.0,
+        "volume_total": 101440.222822,
+        "liquidity": 1.159156,
+        "yes_price": 0.896991319879671,
+        "no_price": 0.103008680120329,
+        "spread": 0.0,
+        "implied_probability": 0.896991319879671,
+        "end_date": "2021-02-21T00:00:00Z",
+        "days_to_resolution": -1827.0602750658913,
+        "category": "Sports"
+      },
+      "score": 10.3,
+      "signals": [
+        "Potential inverse correlation (sum=0.90)",
+        "Price divergence: 89.7%"
+      ]
+    },
+    {
+      "market": {
+        "id": "3339",
+        "slug": "will-floyd-mayweather-beat-logan-paul-in-their-boxing-exhibition-match",
+        "question": "Will Floyd Mayweather beat Logan Paul in their boxing exhibition match?",
+        "description": "This is a market on whether Floyd Mayweather will win his boxing exhibition match against Logan Paul set to take place on February 20th, 2021. If Floyd Mayweather is declared the winner of this bout, ...",
+        "volume_24h": 0.0,
+        "volume_total": 101440.222822,
+        "liquidity": 1.159156,
+        "yes_price": 0.896991319879671,
+        "no_price": 0.103008680120329,
+        "spread": 0.0,
+        "implied_probability": 0.896991319879671,
+        "end_date": "2021-02-21T00:00:00Z",
+        "days_to_resolution": -1827.0602750660187,
+        "category": "Sports"
+      },
+      "score": 10.3,
+      "signals": [
+        "Potential inverse correlation (sum=0.90)",
+        "Price divergence: 89.7%"
+      ]
+    }
+  ],
+  "top_opportunities": [
+    {
+      "category": "high_volume",
+      "market": {
+        "id": "93",
+        "slug": "will-donald-trump-be-inaugurated-for-his-second-term-as-president-of-the-usa-on-inauguration-day-january-20th-2021",
+        "question": "Will Donald Trump be inaugurated for his second term as President of the USA on Inauguration Day, January 20th, 2021?",
+        "description": "This is a market on if Donald Trump will be inaugurated for his second term as President of the United States of America, on Inauguration Day\u2014January 20th, 2021. At the time of market creation, AP, CN...",
+        "volume_24h": 0.0,
+        "volume_total": 30207577.413504,
+        "liquidity": 43.468918,
+        "yes_price": 2.0626664460443175e-08,
+        "no_price": 0.9999999793733355,
+        "spread": 0.0,
+        "implied_probability": 2.0626664460443175e-08,
+        "end_date": "2021-02-01T00:00:00Z",
+        "days_to_resolution": -1847.0602750665626,
+        "category": "US-current-affairs"
+      },
+      "score": 105,
+      "signals": [
+        "High total volume: $30,207,577",
+        "High turnover ratio: 694923.6x"
+      ]
+    },
+    {
+      "category": "high_volume",
+      "market": {
+        "id": "40",
+        "slug": "will-trump-win-the-2020-us-presidential-election",
+        "question": "Will Trump win the 2020 U.S. presidential election?",
+        "description": "This is a market on if Donald Trump will win the 2020 US presidential election. This is not about the popular vote - it's particularly about if Trump will win the election, as defined by the electoral...",
+        "volume_24h": 0.0,
+        "volume_total": 10802601.987023,
+        "liquidity": 68.283267,
+        "yes_price": 4.3643034980462864e-08,
+        "no_price": 0.999999956356965,
+        "spread": 0.0,
+        "implied_probability": 4.3643034980462864e-08,
+        "end_date": "2020-11-20T00:00:00Z",
+        "days_to_resolution": -1920.0602750667479,
+        "category": "US-current-affairs"
+      },
+      "score": 105,
+      "signals": [
+        "High total volume: $10,802,602",
+        "High turnover ratio: 158202.8x"
+      ]
+    },
+    {
+      "category": "price_swings",
+      "market": {
+        "id": "103",
+        "slug": "will-btc-break-20k-before-thanksgiving",
+        "question": "Will $BTC break $20k before Thanksgiving?",
+        "description": "This is a market on if the USD price of Bitcoin $BTC will be above $20,000 at any point before Thanksgiving - defined as before November 26th, 2020, 12:00am EST - according to Coinmarketcap.com/curren...",
+        "volume_24h": 0.0,
+        "volume_total": 457360.180333,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2020-11-26T00:00:00Z",
+        "days_to_resolution": -1914.060275066852,
+        "category": "Crypto"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "category": "price_swings",
+      "market": {
+        "id": "7740",
+        "slug": "will-any-electoral-certificates-be-formally-challenged-in-congress",
+        "question": "Will any Electoral College Certificates of Vote be formally challenged in Congress?",
+        "description": "This market is on if any Electoral College Certificate of Vote will be the subject of formal objection when Congress meets in joint Session to count the electoral votes cast for President and Vice Pre...",
+        "volume_24h": 0.0,
+        "volume_total": 265340.926545,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2021-02-01T00:00:00Z",
+        "days_to_resolution": -1847.0602750669793,
+        "category": "US-current-affairs"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "category": "price_swings",
+      "market": {
+        "id": "74",
+        "slug": "will-the-associated-press-publish-a-tweet-calling-the-2020-us-presidential-election-before-november-6",
+        "question": "Will the Associated Press publish a tweet calling the 2020 US presidential election before November 6?",
+        "description": "This is a market on whether the Associated Press twitter account, https://twitter.com/AP, will publish a tweet declaring a definitive winner of the 2020 US presidential election prior to 11:59PM EST o...",
+        "volume_24h": 0.0,
+        "volume_total": 261432.197705,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2020-11-06T00:00:00Z",
+        "days_to_resolution": -1934.0602750670948,
+        "category": "US-current-affairs"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "category": "price_swings",
+      "market": {
+        "id": "63",
+        "slug": "will-btc-break-15k-before-2021-1",
+        "question": "Will BTC break $15k before 2021?",
+        "description": "This is a market on whether BTC (bitcoin) will reach a price higher than USD $15,000 before the end of the 2020 calendar year according to coinmarketcap.com. If bitcoin reaches a price higher than $15...",
+        "volume_24h": 0.0,
+        "volume_total": 224706.488667,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2021-01-01T00:00:00Z",
+        "days_to_resolution": -1878.0602750672106,
+        "category": "Crypto"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "category": "price_swings",
+      "market": {
+        "id": "114",
+        "slug": "will-coinbase-reach-1-in-i-os-app-store-finance-category-before-2021",
+        "question": "Will Coinbase reach #1 in the Finance category on the US iOS App Store before 2021?",
+        "description": "This is a market on if the Coinbase iOS app will reach #1 in the United States iPhone Apple App Store in the Finance category, under \"Free Apps\". It does not matter how long the app remains #1, if it ...",
+        "volume_24h": 0.0,
+        "volume_total": 195420.953091,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2021-01-02T00:00:00Z",
+        "days_to_resolution": -1877.060275067303,
+        "category": "Crypto"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "category": "price_swings",
+      "market": {
+        "id": "1499",
+        "slug": "will-donald-trump-join-parler-before-inauguration-day",
+        "question": "Will Donald Trump join Parler before Inauguration Day?",
+        "description": "This is a market on whether Donald J. Trump will join Parler prior to January 20th, 2021, at 12pm EST. The market will resolve to Yes if Donald Trump joins Parler (https://parler.com/) and has an offi...",
+        "volume_24h": 0.0,
+        "volume_total": 172744.38442,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2021-01-20T00:00:00Z",
+        "days_to_resolution": -1859.0602750674072,
+        "category": "US-current-affairs"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "category": "price_swings",
+      "market": {
+        "id": "101",
+        "slug": "will-pfizer-s-covid-19-vaccine-be-the-first-to-receive-fda-approval-or-emergency-use-authorization-eua",
+        "question": "Will Pfizer's COVID-19 vaccine be the first to receive FDA approval or Emergency Use Authorization (EUA)?",
+        "description": "This is a market on whether Pfizer's COVID-19 vaccine will be the first vaccine to receive regulatory approval in the USA, in the form of either FDA approval OR Emergency Use Authorization, whichever ...",
+        "volume_24h": 0.0,
+        "volume_total": 151822.615733,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": null,
+        "days_to_resolution": null,
+        "category": "Coronavirus"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "category": "price_swings",
+      "market": {
+        "id": "78",
+        "slug": "will-lamelo-ball-be-the-first-pick-in-the-2020-nba-draft",
+        "question": "Will LaMelo Ball be the first pick in the 2020 NBA draft?",
+        "description": "This is a market on if LaMelo Ball will be chosen/drafted with the 1st pick of the 2020 NBA Draft, currently owned by the Minnesota Timberwolves. This market will resolve to \u201cYes\u201d if he is chosen 1st,...",
+        "volume_24h": 0.0,
+        "volume_total": 143938.782615,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2020-11-19T00:00:00Z",
+        "days_to_resolution": -1921.0602750675232,
+        "category": "Sports"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "category": "price_swings",
+      "market": {
+        "id": "102",
+        "slug": "will-sushiswap-have-more-tvl-than-uniswap-at-any-time-before-november-24th-according-to-defipulse",
+        "question": "Will Sushiswap have more TVL than Uniswap at any time before November 24th, according to DefiPulse?",
+        "description": "This is a market on if Sushiswap will have more Total Value Locked (TVL) than Uniswap, at any time before November 24th, 2020, 12:00am EST. This market\u2019s inception date is November 18th, 2020, and thu...",
+        "volume_24h": 0.0,
+        "volume_total": 139390.060805,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2020-11-24T00:00:00Z",
+        "days_to_resolution": -1916.0602750676273,
+        "category": "Crypto"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "category": "price_swings",
+      "market": {
+        "id": "18286",
+        "slug": "will-donald-trump-pardon-a-family-member-before-inauguration-day-2",
+        "question": "Will Donald Trump pardon a family member before Inauguration Day?",
+        "description": "This is a market on if Donald Trump will pardon an immediate family member prior to the end of his current presidential term (January 21st, 2021). In the event that Donald Trump does pardon an immedia...",
+        "volume_24h": 0.0,
+        "volume_total": 122101.594931,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2021-01-22T00:00:00Z",
+        "days_to_resolution": -1857.0602750677315,
+        "category": "US-current-affairs"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "category": "price_swings",
+      "market": {
+        "id": "17",
+        "slug": "will-airbnb-begin-publicly-trading-before-jan-1-2021",
+        "question": "Will Airbnb begin publicly trading before Jan 1, 2021?",
+        "description": "This market is on whether or not Airbnb will be a publicly traded company by January 1, 2021. This market will resolve to Yes if Airbnb starts publicly trading on NASDAQ or NYSE before January 1st 202...",
+        "volume_24h": 0.0,
+        "volume_total": 89665.252158,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2021-01-02T00:00:00Z",
+        "days_to_resolution": -1877.0602750678127,
+        "category": "Tech"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "category": "price_swings",
+      "market": {
+        "id": "98",
+        "slug": "will-uniswap-v3-launch-before-2021",
+        "question": "Will Uniswap v3 launch before 2021?",
+        "description": "This is a market on if Uniswap v3 will launch before January 1st, 2021, 12:00am EST. \u201cLaunch\u201d in this context can be defined as being deployed and usable on the Ethereum mainnet and publicly announced...",
+        "volume_24h": 0.0,
+        "volume_total": 87371.439296,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2021-01-01T00:00:00Z",
+        "days_to_resolution": -1878.060275067905,
+        "category": "Crypto"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "category": "price_swings",
+      "market": {
+        "id": "65",
+        "slug": "will-538-outperform-the-economist-in-forecasting-the-2020-presidential-election",
+        "question": "Will 538 outperform The Economist in forecasting the 2020 Presidential Election?",
+        "description": "This is a market on whether 538 will outperform The Economist in forecasting the 2020 Presidential Election. This market will be resolved by comparing the Brier score of 538 and the Economist averaged...",
+        "volume_24h": 0.0,
+        "volume_total": 81312.461764,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2020-11-20T00:00:00Z",
+        "days_to_resolution": -1920.0602750679861,
+        "category": "US-current-affairs"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "category": "price_swings",
+      "market": {
+        "id": "7715",
+        "slug": "will-donald-trump-pardon-ross-ulbricht",
+        "question": "Will Donald Trump pardon Ross Ulbricht?",
+        "description": "This is a market on if Donald Trump will pardon Ross Ulbricht prior to the end of his current presidential term (January 21st, 2021). In the event that Donald Trump does pardon Ross Ulbricht, this wil...",
+        "volume_24h": 0.0,
+        "volume_total": 77843.512628,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2021-01-22T00:00:00Z",
+        "days_to_resolution": -1857.0602750680785,
+        "category": "US-current-affairs"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "category": "price_swings",
+      "market": {
+        "id": "107",
+        "slug": "will-figueiredo-win-his-ufc-255-match",
+        "question": "Will Deiveson Figueiredo win his UFC 255 match?",
+        "description": "This is a market on whether Deiveson Figueiredo will win his UFC 255 fight against Alex Perez. If Dievson Figueiredo is declared the winner of this bout, either by knockout or by judgement, this marke...",
+        "volume_24h": 0.0,
+        "volume_total": 69325.229436,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2020-11-22T00:00:00Z",
+        "days_to_resolution": -1918.0602750681828,
+        "category": "Sports"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "category": "price_swings",
+      "market": {
+        "id": "5790",
+        "slug": "will-playboi-carti-release-a-new-album-before-2021",
+        "question": "Will Playboi Carti release a new album before 2021?",
+        "description": "This is a market on if Playboi Carti will release a new studio album before the end of 2020. A studio album in this case can be defined as a new project on his Spotify page in the Albums section, with...",
+        "volume_24h": 0.0,
+        "volume_total": 56571.134485,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2021-01-01T00:00:00Z",
+        "days_to_resolution": -1878.0602750682986,
+        "category": "Pop-Culture "
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "category": "price_swings",
+      "market": {
+        "id": "86",
+        "slug": "will-kanye-west-release-a-new-studio-album-before-2021",
+        "question": "Will Kanye West release a new studio album before 2021?",
+        "description": "This is a market on if Kanye West will release a new studio album before December 31st, 11:59pm EST. A studio album in this case can be defined as a new project on his Spotify page in the Albums secti...",
+        "volume_24h": 0.0,
+        "volume_total": 54154.420953,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2021-01-01T00:00:00Z",
+        "days_to_resolution": -1878.0602750684259,
+        "category": "Pop-Culture "
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    },
+    {
+      "category": "price_swings",
+      "market": {
+        "id": "105",
+        "slug": "will-liverpool-win-their-match-against-leicester-this-weekend",
+        "question": "Will Liverpool beat Leicester City in their Matchday 9 game?",
+        "description": "This is a market on whether Liverpool will be the winner of their Matchday 9 match against Leicester City, scheduled for November 22nd, 2020. If Liverpool wins this match, the market will resolve to \"...",
+        "volume_24h": 0.0,
+        "volume_total": 50163.470657,
+        "liquidity": 0.0,
+        "yes_price": 0.0,
+        "no_price": 0.0,
+        "spread": 1.0,
+        "implied_probability": 0.0,
+        "end_date": "2020-11-23T00:00:00Z",
+        "days_to_resolution": -1917.06027506853,
+        "category": "Sports"
+      },
+      "score": 100.0,
+      "signals": [
+        "Wide spread: 1.000"
+      ]
+    }
+  ]
+}

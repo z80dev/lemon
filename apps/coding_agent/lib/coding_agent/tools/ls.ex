@@ -283,15 +283,16 @@ defmodule CodingAgent.Tools.Ls do
   defp should_continue_recursion?(current_depth, max_depth), do: current_depth < max_depth
 
   defp collect_recursive(entries, show_all, max_depth, max_entries, current_depth, base_path) do
-    # Start with current entries
-    {final_entries, total_count, truncated} =
+    # Start with current entries - build list in reverse for O(n) performance
+    {rev_entries, total_count, truncated} =
       Enum.reduce_while(entries, {[], 0, false}, fn entry, {acc_entries, acc_count, _truncated} ->
         new_count = acc_count + 1
 
         if new_count > max_entries do
           {:halt, {acc_entries, new_count, true}}
         else
-          new_entries = acc_entries ++ [entry]
+          # Prepend for O(1) operation instead of O(n) append
+          new_entries = [entry | acc_entries]
 
           # Recurse into directories
           if entry.type == :directory do
@@ -311,9 +312,10 @@ defmodule CodingAgent.Tools.Ls do
                   take_count = max_entries - new_count
 
                   {:halt,
-                   {new_entries ++ Enum.take(sub_entries, take_count), combined_count, true}}
+                   {Enum.take(sub_entries, take_count) ++ new_entries, combined_count, true}}
                 else
-                  {:cont, {new_entries ++ sub_entries, combined_count, sub_truncated}}
+                  # Prepend sub_entries in reverse for O(n) concatenation
+                  {:cont, {Enum.reverse(sub_entries) ++ new_entries, combined_count, sub_truncated}}
                 end
 
               {:error, _reason} ->
@@ -326,7 +328,8 @@ defmodule CodingAgent.Tools.Ls do
         end
       end)
 
-    {:ok, final_entries, total_count, truncated}
+    # Reverse once at the end to restore original order
+    {:ok, Enum.reverse(rev_entries), total_count, truncated}
   end
 
   # ============================================================================

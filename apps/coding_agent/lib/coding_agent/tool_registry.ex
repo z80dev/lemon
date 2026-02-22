@@ -399,8 +399,8 @@ defmodule CodingAgent.ToolRegistry do
       |> Enum.map(fn {name, _tool, source} -> {name, source} end)
       |> Map.new()
 
-    {resolved, _winners, conflicts} =
-      Enum.reduce([wasm_tools, extension_tools], {builtin_tools, initial_winners, %{}}, fn tools,
+    {rev_resolved, _winners, conflicts} =
+      Enum.reduce([wasm_tools, extension_tools], {Enum.reverse(builtin_tools), initial_winners, %{}}, fn tools,
                                                                                            {resolved_acc,
                                                                                             winners_acc,
                                                                                             conflicts_acc} ->
@@ -409,7 +409,8 @@ defmodule CodingAgent.ToolRegistry do
                                                                            conflicts} ->
           case Map.get(winners, name) do
             nil ->
-              {resolved ++ [{name, tool, source}], Map.put(winners, name, source), conflicts}
+              # Prepend for O(1) instead of O(n) append
+              {[{name, tool, source} | resolved], Map.put(winners, name, source), conflicts}
 
             winner_source ->
               if log_conflicts? do
@@ -420,6 +421,9 @@ defmodule CodingAgent.ToolRegistry do
           end
         end)
       end)
+
+    # Reverse to restore original order
+    resolved = Enum.reverse(rev_resolved)
 
     conflict_entries =
       conflicts
@@ -436,7 +440,8 @@ defmodule CodingAgent.ToolRegistry do
       tool_name,
       %{tool_name: tool_name, winner: winner_source, shadowed: [shadowed_source]},
       fn existing ->
-        %{existing | shadowed: existing.shadowed ++ [shadowed_source]}
+        # Prepend for O(1) instead of O(n) append - order doesn't matter for conflicts
+        %{existing | shadowed: [shadowed_source | existing.shadowed]}
       end
     )
   end

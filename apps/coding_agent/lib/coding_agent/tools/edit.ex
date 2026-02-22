@@ -711,12 +711,14 @@ defmodule CodingAgent.Tools.Edit do
           last_in_hunk = List.last(current_hunk)
 
           if idx - last_in_hunk <= 1 do
-            [current_hunk ++ [idx] | rest]
+            # Prepend to hunk for O(1) instead of O(n) append
+            [[idx | current_hunk] | rest]
           else
-            [[idx], current_hunk | rest]
+            [[idx], Enum.reverse(current_hunk) | rest]
           end
       end
     end)
+    |> Enum.map(&Enum.reverse/1)
     |> Enum.reverse()
   end
 

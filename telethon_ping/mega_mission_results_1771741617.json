@@ -1,0 +1,134 @@
+[
+  {
+    "mission_id": "M12",
+    "name": "ClipForge: AI video",
+    "category": "clipforge",
+    "status": "PARTIAL",
+    "topic_id": 3261,
+    "sent_ids": [
+      3268
+    ],
+    "recv_ids": [
+      3274
+    ],
+    "recv_texts": [
+      "Run failed: max_concurrency"
+    ],
+    "duration": 31.381403923034668,
+    "notes": "Got replies but only 27 chars"
+  },
+  {
+    "mission_id": "M13",
+    "name": "ClipForge: Crypto video",
+    "category": "clipforge",
+    "status": "TIMEOUT",
+    "topic_id": 3264,
+    "sent_ids": [
+      3272
+    ],
+    "recv_ids": [],
+    "recv_texts": [],
+    "duration": 600.7447328567505,
+    "notes": "No substantive reply within timeout"
+  },
+  {
+    "mission_id": "M15",
+    "name": "Polymarket scanner",
+    "category": "profit",
+    "status": "TIMEOUT",
+    "topic_id": 3260,
+    "sent_ids": [
+      3271
+    ],
+    "recv_ids": [],
+    "recv_texts": [],
+    "duration": 600.7380888462067,
+    "notes": "No substantive reply within timeout"
+  },
+  {
+    "mission_id": "M16",
+    "name": "DEXScreener signal pipeline",
+    "category": "profit",
+    "status": "TIMEOUT",
+    "topic_id": 3263,
+    "sent_ids": [
+      3270
+    ],
+    "recv_ids": [],
+    "recv_texts": [],
+    "duration": 600.7379159927368,
+    "notes": "No substantive reply within timeout"
+  },
+  {
+    "mission_id": "M17",
+    "name": "Crypto sentiment tracker",
+    "category": "profit",
+    "status": "PASS",
+    "topic_id": 3262,
+    "sent_ids": [
+      3269
+    ],
+    "recv_ids": [
+      3284
+    ],
+    "recv_texts": [
+      "Done! I've built a complete crypto sentiment analysis pipeline at ~/dev/lemon/content/pipelines/sentiment_tracker.py.\n\nWhat It Does\n\n1. Data Sources:\n\n- Fetches Fear & Greed Index from alternative.me API (currently showing 9/100 - Extreme Fear)\n- Pulls top 10 tokens by market cap from CoinGecko (BTC, ETH, USDT, XRP, BNB, USDC, SOL, TRX, DOGE, FIGR)\n2. Sentiment Analysis:- Calculates weighted sentiment scores (0-100) using:- Price momentum (35%)\n- Market cap trend (25%)\n- Trading volume (20%)\n- F"
+    ],
+    "duration": 237.580500125885,
+    "notes": "Got 1 replies, 1280 total chars"
+  },
+  {
+    "mission_id": "M18",
+    "name": "Revenue ideas doc",
+    "category": "profit",
+    "status": "PASS",
+    "topic_id": 3258,
+    "sent_ids": [
+      3266
+    ],
+    "recv_ids": [
+      3283
+    ],
+    "recv_texts": [
+      "I've written a comprehensive revenue ideas document to ~/dev/lemon/content/business/revenue-ideas.md. Here's a summary of the 10 monetization strategies:\n\nOverview of the 10 Ideas\n\n#IdeaRevenue ModelEffortRisk Level1x402 API WrappingPer-query ($0.01-$5)LowMedium2Crypto-Native Data ServicesPer-query + streamingMediumMed-High3Managed Agent HostingTiered subscriptions ($49-$999/mo)HighMedium4Agent-to-Agent Marketplace5-10% transaction feesHighHigh5Trading/DeFi AgentsSubscriptions + performance fees"
+    ],
+    "duration": 223.75151896476746,
+    "notes": "Got 1 replies, 1597 total chars"
+  },
+  {
+    "mission_id": "M20",
+    "name": "Multi-engine stress test",
+    "category": "infra",
+    "status": "PASS",
+    "topic_id": 3259,
+    "sent_ids": [
+      3267
+    ],
+    "recv_ids": [
+      3282
+    ],
+    "recv_texts": [
+      "All confirmed. The multi-engine delegation system is working across all three paths:\n\nEngineResultTimeInternal4~immediate (after retry)Codex9~immediateCoder AgentRust hello world~30-40sKey takeaway: Internal engine has concurrency limits. For fire-and-forget parallel tasks, Codex or dedicated agents may be more reliable under load."
+    ],
+    "duration": 156.9032759666443,
+    "notes": "Got 1 replies, 333 total chars"
+  },
+  {
+    "mission_id": "M21",
+    "name": "Cron market commentary",
+    "category": "infra",
+    "status": "PASS",
+    "topic_id": 3257,
+    "sent_ids": [
+      3265
+    ],
+    "recv_ids": [
+      3275
+    ],
+    "recv_texts": [
+      "\u2705 Crypto Market Commentary cron job created and triggered!\n\nHere's the job details:\n\nFieldValueNameCrypto Market CommentaryIDcron_ad185818-e677-4a62-841d-645bfe8a4700Schedule*/30 * * * * (every 30 minutes)Status\u2705 EnabledNext Run~12 minutes from nowTimezoneUTCWhat it does:\n\n1. Searches for current crypto market data (Bitcoin, Ethereum prices)\n2. Generates a 2-3 sentence market commentary with a friendly, crypto-native tone\n3. Posts the commentary directly to this chat\nThe job has been triggered i"
+    ],
+    "duration": 47.20597791671753,
+    "notes": "Got 1 replies, 877 total chars"
+  }
+]

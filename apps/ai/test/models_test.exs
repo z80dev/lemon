@@ -1103,4 +1103,51 @@ defmodule Ai.ModelsTest do
       assert Models.clamp_reasoning(:turbo) == nil
     end
   end
+
+  describe "models_equal?/2 (ported from Pi)" do
+    test "returns true for identical models" do
+      model1 = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      model2 = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      assert Models.models_equal?(model1, model2) == true
+    end
+
+    test "returns false for different models from same provider" do
+      model1 = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      model2 = Models.get_model(:anthropic, "claude-opus-4-20250514")
+      assert Models.models_equal?(model1, model2) == false
+    end
+
+    test "returns false for same model id from different providers" do
+      # This scenario shouldn't happen in practice but test the logic
+      model1 = Models.get_model(:openai, "gpt-4o")
+      model2 = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      assert Models.models_equal?(model1, model2) == false
+    end
+
+    test "returns false when first model is nil" do
+      model = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      assert Models.models_equal?(nil, model) == false
+    end
+
+    test "returns false when second model is nil" do
+      model = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      assert Models.models_equal?(model, nil) == false
+    end
+
+    test "returns false when both models are nil" do
+      assert Models.models_equal?(nil, nil) == false
+    end
+
+    test "works with openai models" do
+      model1 = Models.get_model(:openai, "gpt-4o")
+      model2 = Models.get_model(:openai, "gpt-4o")
+      assert Models.models_equal?(model1, model2) == true
+    end
+
+    test "works with google models" do
+      model1 = Models.get_model(:google, "gemini-2.5-pro")
+      model2 = Models.get_model(:google, "gemini-2.5-pro")
+      assert Models.models_equal?(model1, model2) == true
+    end
+  end
 end
