@@ -21,9 +21,8 @@ defmodule Mix.Tasks.Lemon.CheckDuplicateTests do
     test_files = Path.wildcard(Path.join(root, "apps/*/test/**/*_test.exs"))
 
     # Build map of module_name -> [file1, file2, ...]
-    # Only count module names that appear as real source-level defmodule
-    # (not inside string literals). We use a simple heuristic: the line
-    # must not be inside a heredoc block.
+    # Module names are extracted via AST parsing so that defmodule inside
+    # string literals, heredocs, and comments are never matched.
     module_to_files =
       Enum.reduce(test_files, %{}, fn file, acc ->
         modules = extract_module_names(file)
@@ -64,52 +63,56 @@ defmodule Mix.Tasks.Lemon.CheckDuplicateTests do
     end
   end
 
-  # Extract module names from a file, skipping lines inside heredoc strings.
+  # Extract module names by parsing the file into an Elixir AST and walking
+  # all defmodule nodes. This avoids false positives from defmodule appearing
+  # inside string literals, heredocs, and comments.
   defp extract_module_names(file) do
-    file
-    |> File.read!()
-    |> String.split("\n")
-    |> reject_heredoc_lines()
-    |> Enum.flat_map(fn line ->
-      case Regex.run(~r/^\s*defmodule\s+([A-Z][A-Za-z0-9._]*)\s+do/, line) do
-        [_, mod_name] -> [mod_name]
-        _ -> []
-      end
-    end)
-    |> Enum.uniq()
+    source = File.read!(file)
+
+    case Code.string_to_quoted(source, file: file, columns: true) do
+      {:ok, ast} ->
+        ast
+        |> collect_defmodule_names([])
+        |> Enum.uniq()
+
+      {:error, _} ->
+        # If the file can't be parsed (syntax error), fall back to empty
+        # rather than crashing the whole scan.
+        []
+    end
   end
 
-  # Remove lines that are inside heredoc blocks (between """ ... """)
-  defp reject_heredoc_lines(lines) do
-    {result, _} =
-      Enum.reduce(lines, {[], false}, fn line, {acc, in_heredoc} ->
-        cond do
-          in_heredoc ->
-            # Check if this line ends the heredoc
-            if String.contains?(line, ~s["""]) do
-              {acc, false}
-            else
-              {acc, true}
-            end
-
-          String.contains?(line, ~s["""]) ->
-            # Opening a heredoc - skip this line and enter heredoc mode
-            # (unless it opens and closes on same line, which is unusual)
-            count = line |> String.split(~s["""]) |> length() |> Kernel.-(1)
-
-            if rem(count, 2) == 0 do
-              # Even number of triple-quotes: balanced on one line, not in heredoc
-              {[line | acc], false}
-            else
-              # Odd number: we've entered a heredoc
-              {acc, true}
-            end
-
-          true ->
-            {[line | acc], false}
-        end
-      end)
-
-    Enum.reverse(result)
+  # Match a defmodule node, record its name, and continue walking its body
+  # so that nested defmodules are also collected.
+  defp collect_defmodule_names(
+         {:defmodule, _meta, [{:__aliases__, _, parts} | rest]},
+         acc
+       )
+       when is_list(parts) do
+    module_name = parts |> Enum.map(&to_string/1) |> Enum.join(".")
+    Enum.reduce(rest, [module_name | acc], &collect_defmodule_names/2)
   end
+
+  # Walk any other AST node that has a children list.
+  defp collect_defmodule_names({_form, _meta, children}, acc) when is_list(children) do
+    Enum.reduce(children, acc, &collect_defmodule_names/2)
+  end
+
+  # Walk two-element tuples (keyword pairs inside AST).
+  defp collect_defmodule_names({left, right}, acc) do
+    acc
+    |> collect_defmodule_names_in(left)
+    |> collect_defmodule_names_in(right)
+  end
+
+  # Walk plain lists.
+  defp collect_defmodule_names(list, acc) when is_list(list) do
+    Enum.reduce(list, acc, &collect_defmodule_names/2)
+  end
+
+  # Leaf nodes (atoms, numbers, strings, etc.) — nothing to collect.
+  defp collect_defmodule_names(_other, acc), do: acc
+
+  # Helper to keep argument order consistent when called from tuple walking.
+  defp collect_defmodule_names_in(acc, node), do: collect_defmodule_names(node, acc)
 end
