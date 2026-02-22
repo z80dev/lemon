@@ -1,15 +1,21 @@
 defmodule LemonChannels.Telegram.Markdown do
-  @moduledoc false
+  @moduledoc """
+  Renders CommonMark-ish markdown into Telegram-ready `{text, entities}` tuples.
 
-  # Renders CommonMark-ish markdown into Telegram-ready {text, entities}.
-  #
-  # We intentionally avoid Telegram MarkdownV2 escaping. Instead we parse markdown,
-  # emit plain text, and attach Telegram "entities" with UTF-16 offsets/lengths.
-  #
-  # Supported entities: bold, italic, underline, strikethrough, code, pre, text_link.
+  Instead of using Telegram MarkdownV2 escaping, this module parses markdown via
+  EarmarkParser, emits plain text, and attaches Telegram "entities" with UTF-16
+  offsets and lengths. Supported entity types: bold, italic, underline,
+  strikethrough, code, pre, and text_link.
+  """
 
   @type entity :: map()
 
+  @doc """
+  Render a markdown string into `{plain_text, entities}` for the Telegram Bot API.
+
+  Returns `{"", []}` when given `nil`.
+  """
+  @spec render(String.t() | nil) :: {String.t(), [entity()]}
   def render(md) when is_binary(md) do
     ast = parse_ast(md)
 

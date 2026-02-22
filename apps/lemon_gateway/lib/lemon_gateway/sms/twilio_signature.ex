@@ -15,6 +15,14 @@ defmodule LemonGateway.Sms.TwilioSignature do
   # When running behind tunnels/proxies, prefer configuring TWILIO_WEBHOOK_URL
   # to the exact public URL set in Twilio.
 
+  @doc """
+  Validate a Twilio webhook request signature.
+
+  Returns `true` when the provided `X-Twilio-Signature` header matches the
+  expected HMAC-SHA1 digest of the `auth_token`, `url`, and POST `params`.
+  Uses constant-time comparison to mitigate timing attacks.
+  """
+  @spec valid?(String.t() | nil, String.t() | nil, map() | nil, String.t() | nil) :: boolean()
   def valid?(auth_token, url, params, provided) do
     auth_token = normalize(auth_token)
     url = normalize(url)
@@ -36,6 +44,12 @@ defmodule LemonGateway.Sms.TwilioSignature do
     end
   end
 
+  @doc """
+  Compute the Twilio signature for a request.
+
+  The signature is `Base64(HMAC-SHA1(auth_token, url <> sorted_params))`.
+  """
+  @spec signature(String.t(), String.t(), map()) :: String.t()
   def signature(auth_token, url, params) when is_map(params) do
     data = url <> canonical_param_string(params)
     mac = :crypto.mac(:hmac, :sha, auth_token, data)
