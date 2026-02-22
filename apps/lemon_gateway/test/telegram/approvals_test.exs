@@ -1,11 +1,11 @@
-defmodule Elixir.LemonGateway.Telegram.ApprovalsTest do
+defmodule LemonGateway.Telegram.ApprovalsTest do
   alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case, async: false
 
   alias Elixir.LemonGateway.Config
   alias LemonCore.SessionKey
 
-  defmodule Elixir.LemonGateway.Telegram.ApprovalsTest.MockTelegramAPI do
+  defmodule LemonGateway.Telegram.ApprovalsTest.MockTelegramAPI do
     use Agent
 
     def start_link(opts \\ []) do

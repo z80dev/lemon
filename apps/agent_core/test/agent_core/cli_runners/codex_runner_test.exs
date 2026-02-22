@@ -1,4 +1,4 @@
-defmodule Elixir.AgentCore.CliRunners.CodexRunnerTest do
+defmodule AgentCore.CliRunners.CodexRunnerTest do
   alias Elixir.AgentCore, as: AgentCore
   use ExUnit.Case, async: false
 
@@ -1140,7 +1140,7 @@ defmodule Elixir.AgentCore.CliRunners.CodexRunnerTest do
   end
 end
 
-defmodule Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest do
+defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest do
   @moduledoc """
   Integration tests for CodexRunner GenServer lifecycle and process management.
 
@@ -1158,7 +1158,7 @@ defmodule Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest do
   # Mock Runner for Integration Tests
   # ============================================================================
 
-  defmodule Elixir.AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner do
+  defmodule AgentCore.CliRunners.CodexRunnerIntegrationTest.MockCodexRunner do
     @moduledoc "Mock runner that uses bash scripts directly"
     use Elixir.AgentCore.CliRunners.JsonlRunner
 

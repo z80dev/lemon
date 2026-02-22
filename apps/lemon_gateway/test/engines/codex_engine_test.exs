@@ -1,4 +1,4 @@
-defmodule Elixir.LemonGateway.Engines.CodexEngineTest do
+defmodule LemonGateway.Engines.CodexEngineTest do
   alias Elixir.LemonGateway, as: LemonGateway
   @moduledoc """
   Comprehensive tests for the Codex engine implementation.
@@ -219,7 +219,7 @@ defmodule Elixir.LemonGateway.Engines.CodexEngineTest do
       pid = spawn(fn -> receive do: (:stop -> :ok) end)
 
       # Create a mock runner module for testing
-      defmodule Elixir.LemonGateway.Engines.CodexEngineTest.MockCodexRunner do
+      defmodule LemonGateway.Engines.CodexEngineTest.MockCodexRunner do
         def cancel(pid, _reason) do
           send(pid, :stop)
           :ok

@@ -1,10 +1,10 @@
-defmodule Elixir.LemonRouter.ToolStatusCoalescerTest do
+defmodule LemonRouter.ToolStatusCoalescerTest do
   alias Elixir.LemonRouter, as: LemonRouter
   use ExUnit.Case, async: false
 
   alias Elixir.LemonRouter.ToolStatusCoalescer
 
-  defmodule Elixir.LemonRouter.ToolStatusCoalescerTest.TestTelegramPlugin do
+  defmodule LemonRouter.ToolStatusCoalescerTest.TestTelegramPlugin do
     @moduledoc false
 
     def id, do: "telegram"

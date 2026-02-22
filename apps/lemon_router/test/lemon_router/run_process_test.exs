@@ -1,4 +1,4 @@
-defmodule Elixir.LemonRouter.RunProcessTest do
+defmodule LemonRouter.RunProcessTest do
   alias Elixir.LemonRouter, as: LemonRouter
   @moduledoc """
   Tests for Elixir.LemonRouter.RunProcess.
@@ -12,7 +12,7 @@ defmodule Elixir.LemonRouter.RunProcessTest do
   alias LemonChannels.Types.ResumeToken
   alias Elixir.LemonRouter.RunProcess
 
-  defmodule Elixir.LemonRouter.RunProcessTest.TestOutboxAPI do
+  defmodule LemonRouter.RunProcessTest.TestOutboxAPI do
     @moduledoc false
     use Agent
 
@@ -46,7 +46,7 @@ defmodule Elixir.LemonRouter.RunProcessTest do
     end
   end
 
-  defmodule Elixir.LemonRouter.RunProcessTest.TestTelegramPlugin do
+  defmodule LemonRouter.RunProcessTest.TestTelegramPlugin do
     @moduledoc false
 
     def id, do: "telegram"
@@ -91,7 +91,7 @@ defmodule Elixir.LemonRouter.RunProcessTest do
     end
   end
 
-  defmodule Elixir.LemonRouter.RunProcessTest.TestRunOrchestrator do
+  defmodule LemonRouter.RunProcessTest.TestRunOrchestrator do
     @moduledoc false
     use GenServer
 

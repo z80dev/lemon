@@ -1,4 +1,4 @@
-defmodule Elixir.LemonGateway.TransportSupervisorTest do
+defmodule LemonGateway.TransportSupervisorTest do
   alias Elixir.LemonGateway, as: LemonGateway
   @moduledoc """
   Comprehensive tests for Elixir.LemonGateway.TransportSupervisor.
@@ -34,7 +34,7 @@ defmodule Elixir.LemonGateway.TransportSupervisorTest do
   # Mock Transports for Testing
   # ============================================================================
 
-  defmodule Elixir.LemonGateway.TransportSupervisorTest.MockTelegramTransport do
+  defmodule LemonGateway.TransportSupervisorTest.MockTelegramTransport do
     use Elixir.LemonGateway.Transport
     use GenServer
 

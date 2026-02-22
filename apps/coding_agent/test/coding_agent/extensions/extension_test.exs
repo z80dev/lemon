@@ -1,4 +1,4 @@
-defmodule Elixir.CodingAgent.Extensions.ExtensionTest do
+defmodule CodingAgent.Extensions.ExtensionTest do
   alias Elixir.CodingAgent, as: CodingAgent
   @moduledoc """
   Tests for the Extension behaviour module.
@@ -67,7 +67,7 @@ defmodule Elixir.CodingAgent.Extensions.ExtensionTest do
   end
   
   # Minimal extension implementing only required callbacks
-  defmodule Elixir.CodingAgent.Extensions.ExtensionTest.MinimalExtension do
+  defmodule CodingAgent.Extensions.ExtensionTest.MinimalExtension do
     @behaviour Extension
     
     @impl true

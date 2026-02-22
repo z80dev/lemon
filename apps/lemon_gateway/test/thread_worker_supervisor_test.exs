@@ -1,4 +1,4 @@
-defmodule Elixir.LemonGateway.ThreadWorkerSupervisorTest do
+defmodule LemonGateway.ThreadWorkerSupervisorTest do
   alias Elixir.LemonGateway, as: LemonGateway
   @moduledoc """
   Comprehensive tests for Elixir.LemonGateway.ThreadWorkerSupervisor DynamicSupervisor.
@@ -26,7 +26,7 @@ defmodule Elixir.LemonGateway.ThreadWorkerSupervisorTest do
   # Test Engine
   # ============================================================================
 
-  defmodule Elixir.LemonGateway.ThreadWorkerSupervisorTest.TestEngine do
+  defmodule LemonGateway.ThreadWorkerSupervisorTest.TestEngine do
     @behaviour Elixir.LemonGateway.Engine
 
     alias Elixir.LemonGateway.Types.{Job, ResumeToken}

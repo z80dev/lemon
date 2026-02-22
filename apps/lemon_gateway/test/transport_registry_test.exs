@@ -1,4 +1,4 @@
-defmodule Elixir.LemonGateway.TransportRegistryTest do
+defmodule LemonGateway.TransportRegistryTest do
   alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case, async: false
 
@@ -16,7 +16,7 @@ defmodule Elixir.LemonGateway.TransportRegistryTest do
     def start_link(_opts), do: :ignore
   end
 
-  defmodule Elixir.LemonGateway.TransportRegistryTest.MockTelegramTransport do
+  defmodule LemonGateway.TransportRegistryTest.MockTelegramTransport do
     use Elixir.LemonGateway.Transport
 
     @impl true

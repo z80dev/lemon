@@ -1,4 +1,4 @@
-defmodule Elixir.CodingAgent.Tools.AgentTest do
+defmodule CodingAgent.Tools.AgentTest do
   alias Elixir.CodingAgent, as: CodingAgent
   use ExUnit.Case, async: false
 
@@ -6,7 +6,7 @@ defmodule Elixir.CodingAgent.Tools.AgentTest do
   alias Elixir.CodingAgent.Tools.Agent, as: AgentTool
   alias LemonCore.{Bus, Event, RunRequest, Store}
 
-  defmodule Elixir.CodingAgent.Tools.AgentTest.StubRunOrchestrator do
+  defmodule CodingAgent.Tools.AgentTest.StubRunOrchestrator do
     use Agent
 
     def start_link(_opts) do
@@ -31,7 +31,7 @@ defmodule Elixir.CodingAgent.Tools.AgentTest do
     end
   end
 
-  defmodule Elixir.CodingAgent.Tools.AgentTest.SessionSpy do
+  defmodule CodingAgent.Tools.AgentTest.SessionSpy do
     def follow_up(pid, text) do
       send(pid, {:session_follow_up, text})
       :ok

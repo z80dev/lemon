@@ -1,11 +1,11 @@
-defmodule Elixir.LemonChannels.Telegram.DeliveryTest do
+defmodule LemonChannels.Telegram.DeliveryTest do
   alias Elixir.LemonChannels, as: LemonChannels
   use ExUnit.Case, async: false
 
   alias Elixir.LemonChannels.OutboundPayload
   alias Elixir.LemonChannels.Telegram.Delivery
 
-  defmodule Elixir.LemonChannels.Telegram.DeliveryTest.TestTelegramPlugin do
+  defmodule LemonChannels.Telegram.DeliveryTest.TestTelegramPlugin do
     def id, do: "telegram"
 
     def meta do

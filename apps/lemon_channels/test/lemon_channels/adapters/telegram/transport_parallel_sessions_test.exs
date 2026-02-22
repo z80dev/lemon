@@ -1,11 +1,11 @@
-defmodule Elixir.LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
+defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
   alias Elixir.LemonChannels, as: LemonChannels
   use ExUnit.Case, async: false
 
   alias LemonCore.Store, as: CoreStore
   alias LemonCore.SessionKey
 
-  defmodule Elixir.LemonChannels.Adapters.Telegram.TransportParallelSessionsTest.TestRouter do
+  defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest.TestRouter do
     def handle_inbound(msg) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
         send(pid, {:inbound, msg})
@@ -23,7 +23,7 @@ defmodule Elixir.LemonChannels.Adapters.Telegram.TransportParallelSessionsTest d
     end
   end
 
-  defmodule Elixir.LemonChannels.Adapters.Telegram.TransportParallelSessionsTest.MockAPI do
+  defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest.MockAPI do
     @updates_key {__MODULE__, :updates}
     @pid_key {__MODULE__, :pid}
 

@@ -1,11 +1,11 @@
-defmodule Elixir.LemonGateway.SchedulerTest do
+defmodule LemonGateway.SchedulerTest do
   alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case, async: false
 
   alias Elixir.LemonGateway.Scheduler
   alias Elixir.LemonGateway.Types.{ChatScope, Job, ResumeToken}
 
-  defmodule Elixir.LemonGateway.SchedulerTest.SlowEngine do
+  defmodule LemonGateway.SchedulerTest.SlowEngine do
     @behaviour Elixir.LemonGateway.Engine
 
     alias Elixir.LemonGateway.Event

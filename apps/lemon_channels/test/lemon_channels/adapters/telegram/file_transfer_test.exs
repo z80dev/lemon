@@ -1,8 +1,8 @@
-defmodule Elixir.LemonChannels.Adapters.Telegram.FileTransferTest do
+defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
   alias Elixir.LemonChannels, as: LemonChannels
   use ExUnit.Case, async: false
 
-  defmodule Elixir.LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI do
+  defmodule LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI do
     @updates_key {__MODULE__, :updates}
     @sent_key {__MODULE__, :sent}
 

@@ -1,4 +1,4 @@
-defmodule Elixir.LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
+defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
   alias Elixir.LemonGateway, as: LemonGateway
   @moduledoc """
   Integration tests for a synthetic Telegram message flowing through:
@@ -16,7 +16,7 @@ defmodule Elixir.LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
   alias Elixir.LemonGateway.Event
 
   # Mock Telegram API that records calls and can inject updates.
-  defmodule Elixir.LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest.MockTelegramAPI do
+  defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest.MockTelegramAPI do
     use Agent
 
     def start_link(opts \\ []) do

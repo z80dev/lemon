@@ -1,10 +1,10 @@
-defmodule Elixir.LemonCore.RouterBridgeTest do
+defmodule LemonCore.RouterBridgeTest do
   alias Elixir.LemonCore, as: LemonCore
   use ExUnit.Case, async: false
 
   alias Elixir.LemonCore.{RouterBridge, RunRequest}
 
-  defmodule Elixir.LemonCore.RouterBridgeTest.TestRunOrchestrator do
+  defmodule LemonCore.RouterBridgeTest.TestRunOrchestrator do
     @moduledoc false
 
     def submit(params) do
@@ -13,7 +13,7 @@ defmodule Elixir.LemonCore.RouterBridgeTest do
     end
   end
 
-  defmodule Elixir.LemonCore.RouterBridgeTest.TestRouter do
+  defmodule LemonCore.RouterBridgeTest.TestRouter do
     @moduledoc false
 
     def abort(session_key, reason) do

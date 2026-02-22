@@ -1,4 +1,4 @@
-defmodule Elixir.LemonGateway.Renderers.BasicTest do
+defmodule LemonGateway.Renderers.BasicTest do
   alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case, async: true
 
@@ -6,7 +6,7 @@ defmodule Elixir.LemonGateway.Renderers.BasicTest do
   alias Elixir.LemonGateway.Event.{Started, Completed}
   alias Elixir.LemonGateway.Types.ResumeToken
 
-  defmodule Elixir.LemonGateway.Renderers.BasicTest.TestEngine do
+  defmodule LemonGateway.Renderers.BasicTest.TestEngine do
     def format_resume(%ResumeToken{value: value}), do: "test resume #{value}"
   end
 

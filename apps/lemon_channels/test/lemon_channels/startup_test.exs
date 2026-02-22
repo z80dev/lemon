@@ -1,9 +1,9 @@
-defmodule Elixir.LemonChannels.StartupTest do
+defmodule LemonChannels.StartupTest do
   alias Elixir.LemonChannels, as: LemonChannels
   use ExUnit.Case, async: false
 
   # Minimal mock Telegram API for boot validation.
-  defmodule Elixir.LemonChannels.StartupTest.MockTelegramAPI do
+  defmodule LemonChannels.StartupTest.MockTelegramAPI do
     use Agent
 
     def start_link(opts \\ []) do

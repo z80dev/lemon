@@ -1,8 +1,8 @@
-defmodule Elixir.LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
+defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
   alias Elixir.LemonChannels, as: LemonChannels
   use ExUnit.Case, async: false
 
-  defmodule Elixir.LemonChannels.Adapters.Telegram.TransportAuthorizationTest.TestRouter do
+  defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest.TestRouter do
     def handle_inbound(msg) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
         send(pid, {:inbound, msg})
@@ -12,7 +12,7 @@ defmodule Elixir.LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
     end
   end
 
-  defmodule Elixir.LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI do
+  defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest.MockAPI do
     @updates_key {__MODULE__, :updates}
     @pid_key {__MODULE__, :pid}
 

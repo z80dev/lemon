@@ -1,4 +1,4 @@
-defmodule Elixir.LemonChannels.Adapters.Xmtp.TransportTest do
+defmodule LemonChannels.Adapters.Xmtp.TransportTest do
   alias Elixir.LemonChannels, as: LemonChannels
   use ExUnit.Case, async: false
 
@@ -7,7 +7,7 @@ defmodule Elixir.LemonChannels.Adapters.Xmtp.TransportTest do
   alias Elixir.LemonChannels.OutboundPayload
   alias LemonCore.InboundMessage
 
-  defmodule Elixir.LemonChannels.Adapters.Xmtp.TransportTest.TestRouter do
+  defmodule LemonChannels.Adapters.Xmtp.TransportTest.TestRouter do
     def handle_inbound(msg) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
         send(pid, {:inbound, msg})

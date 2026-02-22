@@ -1,4 +1,4 @@
-defmodule Elixir.LemonRouter.StreamCoalescerTest do
+defmodule LemonRouter.StreamCoalescerTest do
   alias Elixir.LemonRouter, as: LemonRouter
   use ExUnit.Case, async: false
 
@@ -7,7 +7,7 @@ defmodule Elixir.LemonRouter.StreamCoalescerTest do
   alias LemonChannels.Types.ResumeToken
   alias Elixir.LemonRouter.StreamCoalescer
 
-  defmodule Elixir.LemonRouter.StreamCoalescerTest.TestTelegramPlugin do
+  defmodule LemonRouter.StreamCoalescerTest.TestTelegramPlugin do
     @moduledoc false
 
     def id, do: "telegram"
@@ -29,7 +29,7 @@ defmodule Elixir.LemonRouter.StreamCoalescerTest do
     end
   end
 
-  defmodule Elixir.LemonRouter.StreamCoalescerTest.TestOutboxAPI do
+  defmodule LemonRouter.StreamCoalescerTest.TestOutboxAPI do
     @moduledoc false
     use Agent
 

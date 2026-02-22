@@ -1,4 +1,4 @@
-defmodule Elixir.LemonGateway.RunTest do
+defmodule LemonGateway.RunTest do
   alias Elixir.LemonGateway, as: LemonGateway
   @moduledoc """
   Comprehensive tests for Elixir.LemonGateway.Run GenServer.
@@ -24,7 +24,7 @@ defmodule Elixir.LemonGateway.RunTest do
   # ============================================================================
 
   # A basic engine for simple tests
-  defmodule Elixir.LemonGateway.RunTest.TestEngine do
+  defmodule LemonGateway.RunTest.TestEngine do
     @behaviour Elixir.LemonGateway.Engine
 
     alias Elixir.LemonGateway.Types.{Job, ResumeToken}
@@ -246,7 +246,7 @@ defmodule Elixir.LemonGateway.RunTest do
   end
 
   # An engine that emits deltas for streaming tests
-  defmodule Elixir.LemonGateway.RunTest.StreamingEngine do
+  defmodule LemonGateway.RunTest.StreamingEngine do
     @behaviour Elixir.LemonGateway.Engine
 
     alias Elixir.LemonGateway.Types.{Job, ResumeToken}

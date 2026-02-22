@@ -1,8 +1,8 @@
-defmodule Elixir.LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
+defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
   alias Elixir.LemonChannels, as: LemonChannels
   use ExUnit.Case, async: false
 
-  defmodule Elixir.LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.TestRouter do
+  defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.TestRouter do
     def handle_inbound(msg) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
         send(pid, {:inbound, msg})
@@ -12,7 +12,7 @@ defmodule Elixir.LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
     end
   end
 
-  defmodule Elixir.LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.MockAPI do
+  defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.MockAPI do
     @updates_key {__MODULE__, :updates}
     @sent_key {__MODULE__, :sent}
 

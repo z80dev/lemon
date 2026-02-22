@@ -1,4 +1,4 @@
-defmodule Elixir.LemonGateway.ApplicationTest do
+defmodule LemonGateway.ApplicationTest do
   alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case, async: false
 
@@ -30,7 +30,7 @@ defmodule Elixir.LemonGateway.ApplicationTest do
     Elixir.LemonGateway.Scheduler
   ]
 
-  defmodule Elixir.LemonGateway.ApplicationTest.MockTelegramTransport do
+  defmodule LemonGateway.ApplicationTest.MockTelegramTransport do
     use Elixir.LemonGateway.Transport
 
     @impl true

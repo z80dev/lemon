@@ -1,4 +1,4 @@
-defmodule Elixir.LemonGateway.EngineLockTest do
+defmodule LemonGateway.EngineLockTest do
   alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case, async: false
 
@@ -892,7 +892,7 @@ defmodule Elixir.LemonGateway.EngineLockTest do
   # Integration Tests (existing tests using full application)
   # ============================================================================
 
-  defmodule Elixir.LemonGateway.EngineLockTest.SlowEngine do
+  defmodule LemonGateway.EngineLockTest.SlowEngine do
     @behaviour Elixir.LemonGateway.Engine
 
     alias Elixir.LemonGateway.Types.{Job, ResumeToken}
@@ -936,7 +936,7 @@ defmodule Elixir.LemonGateway.EngineLockTest do
     def cancel(_ctx), do: :ok
   end
 
-  defmodule Elixir.LemonGateway.EngineLockTest.CrashEngine do
+  defmodule LemonGateway.EngineLockTest.CrashEngine do
     @behaviour Elixir.LemonGateway.Engine
 
     alias Elixir.LemonGateway.Types.{Job, ResumeToken}

@@ -1,4 +1,4 @@
-defmodule Elixir.LemonGateway.Telegram.QueueModeIntegrationTest do
+defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
   alias Elixir.LemonGateway, as: LemonGateway
   @moduledoc """
   Integration tests for queue_mode application through Telegram transport.
@@ -20,7 +20,7 @@ defmodule Elixir.LemonGateway.Telegram.QueueModeIntegrationTest do
   alias LemonChannels.Types.ChatScope, as: ChannelsChatScope
 
   # Mock Telegram API that records calls and can inject updates
-  defmodule Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI do
+  defmodule LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI do
     use Agent
 
     def start_link(opts \\ []) do

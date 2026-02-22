@@ -1,4 +1,4 @@
-defmodule Elixir.LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
+defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
   alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case, async: false
 
@@ -7,7 +7,7 @@ defmodule Elixir.LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
   alias Elixir.LemonGateway.TestSupport.MockTelegramAPI
   alias Elixir.LemonGateway.Types.{Job, ResumeToken}
 
-  defmodule Elixir.LemonGateway.Telegram.StreamingAndChunkingIntegrationTest.StreamingEngine do
+  defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest.StreamingEngine do
     @behaviour Elixir.LemonGateway.Engine
 
     alias Elixir.LemonGateway.Event

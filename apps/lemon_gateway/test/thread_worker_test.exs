@@ -1,4 +1,4 @@
-defmodule Elixir.LemonGateway.ThreadWorkerTest do
+defmodule LemonGateway.ThreadWorkerTest do
   alias Elixir.LemonGateway, as: LemonGateway
   @moduledoc """
   Comprehensive tests for Elixir.LemonGateway.ThreadWorker queue modes and behavior.
@@ -9,7 +9,7 @@ defmodule Elixir.LemonGateway.ThreadWorkerTest do
   alias Elixir.LemonGateway.Event.Completed
 
   # A slow engine that allows us to observe queueing behavior
-  defmodule Elixir.LemonGateway.ThreadWorkerTest.SlowEngine do
+  defmodule LemonGateway.ThreadWorkerTest.SlowEngine do
     @behaviour Elixir.LemonGateway.Engine
 
     alias Elixir.LemonGateway.Types.{Job, ResumeToken}

@@ -1,4 +1,4 @@
-defmodule Elixir.CodingAgent.Tools.TaskAsyncTest do
+defmodule CodingAgent.Tools.TaskAsyncTest do
   alias Elixir.CodingAgent, as: CodingAgent
   use ExUnit.Case, async: false
 
@@ -7,7 +7,7 @@ defmodule Elixir.CodingAgent.Tools.TaskAsyncTest do
   alias Elixir.CodingAgent.RunGraph
   alias LemonCore.RunRequest
 
-  defmodule Elixir.CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator do
+  defmodule CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator do
     use Agent
 
     def start_link(_opts) do
@@ -31,7 +31,7 @@ defmodule Elixir.CodingAgent.Tools.TaskAsyncTest do
     end
   end
 
-  defmodule Elixir.CodingAgent.Tools.TaskAsyncTest.SessionSpy do
+  defmodule CodingAgent.Tools.TaskAsyncTest.SessionSpy do
     def follow_up(pid, text) do
       send(pid, {:session_follow_up, text})
       :ok

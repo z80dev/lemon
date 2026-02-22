@@ -1,10 +1,10 @@
-defmodule Elixir.LemonChannels.Adapters.Telegram.TransportCancelTest do
+defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
   alias Elixir.LemonChannels, as: LemonChannels
   use ExUnit.Case, async: false
 
   alias LemonCore.Store
 
-  defmodule Elixir.LemonChannels.Adapters.Telegram.TransportCancelTest.TestRouter do
+  defmodule LemonChannels.Adapters.Telegram.TransportCancelTest.TestRouter do
     def handle_inbound(msg) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
         send(pid, {:inbound, msg})
@@ -30,7 +30,7 @@ defmodule Elixir.LemonChannels.Adapters.Telegram.TransportCancelTest do
     end
   end
 
-  defmodule Elixir.LemonChannels.Adapters.Telegram.TransportCancelTest.MockAPI do
+  defmodule LemonChannels.Adapters.Telegram.TransportCancelTest.MockAPI do
     @updates_key {__MODULE__, :updates}
     @pid_key {__MODULE__, :pid}
 
