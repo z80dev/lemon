@@ -2,26 +2,25 @@ defmodule CodingAgent.Tools.HashlineEdit do
   @moduledoc """
   Hashline Edit tool for the coding agent.
 
-  Uses line-addressable editing with xxHash32-compatible content hashes for
-  staleness detection. Each line is identified by `LINENUM#HASH`, preventing
-  stale edits by validating hashes before any mutation.
+  Uses line-addressable editing with content hashes for staleness detection.
+  Each line is identified by `LINENUM#HASH`, preventing stale edits by
+  validating hashes before any mutation.
 
   Ported from oh-my-pi's hashline edit mode.
 
   ## Supported Operations
 
-  - `set` - Replace a single line by reference
-  - `replace` - Replace a range of lines (first to last)
-  - `append` - Insert after a line (or at EOF if no anchor)
-  - `prepend` - Insert before a line (or at BOF if no anchor)
-  - `insert` - Insert between two anchor lines
+  - `replace` - Replace a single line or range of lines
+  - `append` - Insert after a line (or at EOF if pos is nil)
+  - `prepend` - Insert before a line (or at BOF if pos is nil)
 
   ## Edit Format
 
   Each edit is a JSON object with:
-  - `op` - Operation name (set, replace, append, prepend, insert)
-  - `tag` / `first` / `last` / `after` / `before` - Line references as `"LINE#HASH"`
-  - `content` - Array of replacement/insertion lines
+  - `op` - Operation name (replace, append, prepend)
+  - `pos` - Line reference as `"LINE#HASH"` (start of range or anchor)
+  - `end` - Optional end line reference for range replace
+  - `lines` - Array of replacement/insertion lines
   """
 
   alias AgentCore.Types.{AgentTool, AgentToolResult}
@@ -40,9 +39,8 @@ defmodule CodingAgent.Tools.HashlineEdit do
       description:
         "Edit a file using line-addressable edits with hash-based staleness detection. " <>
           "Each line is referenced by LINENUM#HASH (e.g. \"5#ZZ\"). " <>
-          "Supports: set (replace line), replace (replace range), append (insert after), " <>
-          "prepend (insert before), insert (between two lines), " <>
-          "replaceText (substring search-and-replace, no line refs needed).",
+          "Supports: replace (single line or range), append (insert after), " <>
+          "prepend (insert before).",
       label: "Hashline Edit",
       parameters: %{
         "type" => "object",
@@ -59,45 +57,23 @@ defmodule CodingAgent.Tools.HashlineEdit do
               "properties" => %{
                 "op" => %{
                   "type" => "string",
-                  "enum" => ["set", "replace", "append", "prepend", "insert", "replaceText"],
+                  "enum" => ["replace", "append", "prepend"],
                   "description" => "The edit operation"
                 },
-                "tag" => %{
+                "pos" => %{
                   "type" => "string",
-                  "description" => "Line reference for set op (e.g. \"5#ZZ\")"
+                  "description" =>
+                    "Line reference (e.g. \"5#ZZ\"). For replace: the target line (or range start). " <>
+                      "For append/prepend: the anchor line (omit for EOF/BOF)."
                 },
-                "first" => %{
+                "end" => %{
                   "type" => "string",
-                  "description" => "Start line reference for replace op"
+                  "description" => "End line reference for range replace (e.g. \"8#ZZ\")"
                 },
-                "last" => %{
-                  "type" => "string",
-                  "description" => "End line reference for replace op"
-                },
-                "after" => %{
-                  "type" => "string",
-                  "description" => "Line reference for append/insert op anchor"
-                },
-                "before" => %{
-                  "type" => "string",
-                  "description" => "Line reference for prepend/insert op anchor"
-                },
-                "content" => %{
+                "lines" => %{
                   "type" => "array",
                   "items" => %{"type" => "string"},
                   "description" => "Lines of content for the edit"
-                },
-                "old_text" => %{
-                  "type" => "string",
-                  "description" => "Text to search for (replaceText op only)"
-                },
-                "new_text" => %{
-                  "type" => "string",
-                  "description" => "Replacement text (replaceText op only)"
-                },
-                "all" => %{
-                  "type" => "boolean",
-                  "description" => "Replace all occurrences (replaceText op, default false)"
                 }
               },
               "required" => ["op"]
@@ -215,46 +191,27 @@ defmodule CodingAgent.Tools.HashlineEdit do
     end
   end
 
-  defp parse_single_edit(%{"op" => "set"} = raw) do
-    with {:ok, tag} <- parse_tag_field(raw, "tag") do
-      {:ok, %{op: :set, tag: tag, content: parse_content(raw)}}
-    end
-  end
-
   defp parse_single_edit(%{"op" => "replace"} = raw) do
-    with {:ok, first} <- parse_tag_field(raw, "first"),
-         {:ok, last} <- parse_tag_field(raw, "last") do
-      {:ok, %{op: :replace, first: first, last: last, content: parse_content(raw)}}
+    with {:ok, pos} <- parse_tag_field(raw, "pos") do
+      end_tag = parse_optional_tag(raw, "end")
+      lines = parse_lines(raw)
+
+      if end_tag do
+        {:ok, %{op: :replace, pos: pos, end: end_tag, lines: lines}}
+      else
+        {:ok, %{op: :replace, pos: pos, lines: lines}}
+      end
     end
   end
 
   defp parse_single_edit(%{"op" => "append"} = raw) do
-    after_tag = parse_optional_tag(raw, "after")
-    {:ok, %{op: :append, after: after_tag, content: parse_content(raw)}}
+    pos = parse_optional_tag(raw, "pos")
+    {:ok, %{op: :append, pos: pos, lines: parse_lines(raw)}}
   end
 
   defp parse_single_edit(%{"op" => "prepend"} = raw) do
-    before_tag = parse_optional_tag(raw, "before")
-    {:ok, %{op: :prepend, before: before_tag, content: parse_content(raw)}}
-  end
-
-  defp parse_single_edit(%{"op" => "insert"} = raw) do
-    with {:ok, after_tag} <- parse_tag_field(raw, "after"),
-         {:ok, before_tag} <- parse_tag_field(raw, "before") do
-      {:ok, %{op: :insert, after: after_tag, before: before_tag, content: parse_content(raw)}}
-    end
-  end
-
-  defp parse_single_edit(%{"op" => "replaceText"} = raw) do
-    old_text = Map.get(raw, "old_text", "")
-    new_text = Map.get(raw, "new_text", "")
-    replace_all = Map.get(raw, "all", false)
-
-    if old_text == "" do
-      {:error, "replaceText requires non-empty 'old_text'"}
-    else
-      {:ok, %{op: :replace_text, old_text: old_text, new_text: new_text, all: replace_all == true}}
-    end
+    pos = parse_optional_tag(raw, "pos")
+    {:ok, %{op: :prepend, pos: pos, lines: parse_lines(raw)}}
   end
 
   defp parse_single_edit(%{"op" => op}), do: {:error, "Unknown edit operation: #{op}"}
@@ -286,8 +243,8 @@ defmodule CodingAgent.Tools.HashlineEdit do
     end
   end
 
-  defp parse_content(raw) do
-    case Map.get(raw, "content", []) do
+  defp parse_lines(raw) do
+    case Map.get(raw, "lines", []) do
       lines when is_list(lines) -> Enum.map(lines, &to_string/1)
       _ -> []
     end

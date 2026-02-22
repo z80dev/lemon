@@ -46,6 +46,12 @@ defmodule CodingAgent.Tools.HashlineEditTest do
       assert "path" in required
       assert "edits" in required
     end
+
+    test "schema has replace, append, prepend ops", %{cwd: cwd} do
+      tool = HashlineEdit.tool(cwd)
+      op_enum = tool.parameters["properties"]["edits"]["items"]["properties"]["op"]["enum"]
+      assert op_enum == ["replace", "append", "prepend"]
+    end
   end
 
   # ============================================================================
@@ -54,7 +60,7 @@ defmodule CodingAgent.Tools.HashlineEditTest do
 
   describe "parameter validation" do
     test "rejects missing path", %{cwd: cwd} do
-      result = HashlineEdit.execute("call-1", %{"edits" => [%{"op" => "set"}]}, nil, nil, cwd, [])
+      result = HashlineEdit.execute("call-1", %{"edits" => [%{"op" => "replace"}]}, nil, nil, cwd, [])
       assert {:error, "Missing required parameter: path"} = result
     end
 
@@ -71,17 +77,17 @@ defmodule CodingAgent.Tools.HashlineEditTest do
   end
 
   # ============================================================================
-  # Set Operation
+  # Replace Operation (Single Line)
   # ============================================================================
 
-  describe "set operation" do
+  describe "replace single line" do
     test "replaces a single line", %{cwd: cwd} do
       write_test_file(cwd, "test.txt", "aaa\nbbb\nccc")
-      tag = make_tag(2, "bbb")
+      pos = make_tag(2, "bbb")
 
       params = %{
         "path" => "test.txt",
-        "edits" => [%{"op" => "set", "tag" => tag, "content" => ["BBB"]}]
+        "edits" => [%{"op" => "replace", "pos" => pos, "lines" => ["BBB"]}]
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
@@ -91,11 +97,11 @@ defmodule CodingAgent.Tools.HashlineEditTest do
 
     test "reports noop when content unchanged", %{cwd: cwd} do
       write_test_file(cwd, "test.txt", "aaa\nbbb\nccc")
-      tag = make_tag(2, "bbb")
+      pos = make_tag(2, "bbb")
 
       params = %{
         "path" => "test.txt",
-        "edits" => [%{"op" => "set", "tag" => tag, "content" => ["bbb"]}]
+        "edits" => [%{"op" => "replace", "pos" => pos, "lines" => ["bbb"]}]
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
@@ -108,28 +114,42 @@ defmodule CodingAgent.Tools.HashlineEditTest do
 
       params = %{
         "path" => "test.txt",
-        "edits" => [%{"op" => "set", "tag" => "2#ZZ", "content" => ["BBB"]}]
+        "edits" => [%{"op" => "replace", "pos" => "2#ZZ", "lines" => ["BBB"]}]
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
       assert {:error, msg} = result
       assert msg =~ "changed since last read"
     end
-  end
 
-  # ============================================================================
-  # Replace Operation
-  # ============================================================================
-
-  describe "replace operation" do
-    test "replaces a range of lines", %{cwd: cwd} do
-      write_test_file(cwd, "test.txt", "aaa\nbbb\nccc\nddd")
-      first = make_tag(2, "bbb")
-      last = make_tag(3, "ccc")
+    test "expands a single line to multiple", %{cwd: cwd} do
+      write_test_file(cwd, "test.txt", "aaa\nbbb\nccc")
+      pos = make_tag(2, "bbb")
 
       params = %{
         "path" => "test.txt",
-        "edits" => [%{"op" => "replace", "first" => first, "last" => last, "content" => ["XXX"]}]
+        "edits" => [%{"op" => "replace", "pos" => pos, "lines" => ["x", "y", "z"]}]
+      }
+
+      result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
+      assert %AgentCore.Types.AgentToolResult{} = result
+      assert File.read!(Path.join(cwd, "test.txt")) == "aaa\nx\ny\nz\nccc"
+    end
+  end
+
+  # ============================================================================
+  # Replace Operation (Range)
+  # ============================================================================
+
+  describe "replace range" do
+    test "replaces a range of lines", %{cwd: cwd} do
+      write_test_file(cwd, "test.txt", "aaa\nbbb\nccc\nddd")
+      pos = make_tag(2, "bbb")
+      end_tag = make_tag(3, "ccc")
+
+      params = %{
+        "path" => "test.txt",
+        "edits" => [%{"op" => "replace", "pos" => pos, "end" => end_tag, "lines" => ["XXX"]}]
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
@@ -137,19 +157,19 @@ defmodule CodingAgent.Tools.HashlineEditTest do
       assert File.read!(Path.join(cwd, "test.txt")) == "aaa\nXXX\nddd"
     end
 
-    test "expands a single line to multiple", %{cwd: cwd} do
-      write_test_file(cwd, "test.txt", "aaa\nbbb\nccc")
-      first = make_tag(2, "bbb")
-      last = make_tag(2, "bbb")
+    test "deletes a range when lines is empty", %{cwd: cwd} do
+      write_test_file(cwd, "test.txt", "aaa\nbbb\nccc\nddd")
+      pos = make_tag(2, "bbb")
+      end_tag = make_tag(3, "ccc")
 
       params = %{
         "path" => "test.txt",
-        "edits" => [%{"op" => "replace", "first" => first, "last" => last, "content" => ["x", "y", "z"]}]
+        "edits" => [%{"op" => "replace", "pos" => pos, "end" => end_tag, "lines" => []}]
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
       assert %AgentCore.Types.AgentToolResult{} = result
-      assert File.read!(Path.join(cwd, "test.txt")) == "aaa\nx\ny\nz\nccc"
+      assert File.read!(Path.join(cwd, "test.txt")) == "aaa\nddd"
     end
   end
 
@@ -160,11 +180,11 @@ defmodule CodingAgent.Tools.HashlineEditTest do
   describe "append operation" do
     test "inserts after a line", %{cwd: cwd} do
       write_test_file(cwd, "test.txt", "aaa\nbbb\nccc")
-      after_tag = make_tag(1, "aaa")
+      pos = make_tag(1, "aaa")
 
       params = %{
         "path" => "test.txt",
-        "edits" => [%{"op" => "append", "after" => after_tag, "content" => ["NEW"]}]
+        "edits" => [%{"op" => "append", "pos" => pos, "lines" => ["NEW"]}]
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
@@ -177,7 +197,7 @@ defmodule CodingAgent.Tools.HashlineEditTest do
 
       params = %{
         "path" => "test.txt",
-        "edits" => [%{"op" => "append", "content" => ["NEW"]}]
+        "edits" => [%{"op" => "append", "lines" => ["NEW"]}]
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
@@ -193,11 +213,11 @@ defmodule CodingAgent.Tools.HashlineEditTest do
   describe "prepend operation" do
     test "inserts before a line", %{cwd: cwd} do
       write_test_file(cwd, "test.txt", "aaa\nbbb\nccc")
-      before_tag = make_tag(2, "bbb")
+      pos = make_tag(2, "bbb")
 
       params = %{
         "path" => "test.txt",
-        "edits" => [%{"op" => "prepend", "before" => before_tag, "content" => ["NEW"]}]
+        "edits" => [%{"op" => "prepend", "pos" => pos, "lines" => ["NEW"]}]
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
@@ -210,33 +230,12 @@ defmodule CodingAgent.Tools.HashlineEditTest do
 
       params = %{
         "path" => "test.txt",
-        "edits" => [%{"op" => "prepend", "content" => ["NEW"]}]
+        "edits" => [%{"op" => "prepend", "lines" => ["NEW"]}]
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
       assert %AgentCore.Types.AgentToolResult{} = result
       assert File.read!(Path.join(cwd, "test.txt")) == "NEW\naaa\nbbb"
-    end
-  end
-
-  # ============================================================================
-  # Insert Operation
-  # ============================================================================
-
-  describe "insert operation" do
-    test "inserts between two lines", %{cwd: cwd} do
-      write_test_file(cwd, "test.txt", "aaa\nbbb\nccc")
-      after_tag = make_tag(1, "aaa")
-      before_tag = make_tag(2, "bbb")
-
-      params = %{
-        "path" => "test.txt",
-        "edits" => [%{"op" => "insert", "after" => after_tag, "before" => before_tag, "content" => ["NEW"]}]
-      }
-
-      result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
-      assert %AgentCore.Types.AgentToolResult{} = result
-      assert File.read!(Path.join(cwd, "test.txt")) == "aaa\nNEW\nbbb\nccc"
     end
   end
 
@@ -247,14 +246,14 @@ defmodule CodingAgent.Tools.HashlineEditTest do
   describe "multiple edits" do
     test "applies multiple non-overlapping edits", %{cwd: cwd} do
       write_test_file(cwd, "test.txt", "aaa\nbbb\nccc\nddd\neee")
-      tag2 = make_tag(2, "bbb")
-      tag4 = make_tag(4, "ddd")
+      pos2 = make_tag(2, "bbb")
+      pos4 = make_tag(4, "ddd")
 
       params = %{
         "path" => "test.txt",
         "edits" => [
-          %{"op" => "set", "tag" => tag2, "content" => ["BBB"]},
-          %{"op" => "set", "tag" => tag4, "content" => ["DDD"]}
+          %{"op" => "replace", "pos" => pos2, "lines" => ["BBB"]},
+          %{"op" => "replace", "pos" => pos4, "lines" => ["DDD"]}
         ]
       }
 
@@ -272,7 +271,7 @@ defmodule CodingAgent.Tools.HashlineEditTest do
     test "returns error for non-existent file", %{cwd: cwd} do
       params = %{
         "path" => "nonexistent.txt",
-        "edits" => [%{"op" => "set", "tag" => "1#ZZ", "content" => ["x"]}]
+        "edits" => [%{"op" => "replace", "pos" => "1#ZZ", "lines" => ["x"]}]
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
@@ -284,24 +283,24 @@ defmodule CodingAgent.Tools.HashlineEditTest do
 
       params = %{
         "path" => "test.txt",
-        "edits" => [%{"op" => "delete_all", "content" => []}]
+        "edits" => [%{"op" => "delete_all", "lines" => []}]
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
       assert {:error, "Unknown edit operation: delete_all"} = result
     end
 
-    test "returns error for missing tag in set op", %{cwd: cwd} do
+    test "returns error for missing pos in replace op", %{cwd: cwd} do
       write_test_file(cwd, "test.txt", "hello")
 
       params = %{
         "path" => "test.txt",
-        "edits" => [%{"op" => "set", "content" => ["x"]}]
+        "edits" => [%{"op" => "replace", "lines" => ["x"]}]
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
       assert {:error, msg} = result
-      assert msg =~ "Missing required field 'tag'"
+      assert msg =~ "Missing required field 'pos'"
     end
   end
 
@@ -310,55 +309,52 @@ defmodule CodingAgent.Tools.HashlineEditTest do
   # ============================================================================
 
   describe "parse_edits/1" do
-    test "parses set edit" do
-      tag = make_tag(1, "hello")
-      {:ok, [edit]} = HashlineEdit.parse_edits([%{"op" => "set", "tag" => tag, "content" => ["world"]}])
-      assert edit.op == :set
-      assert edit.tag.line == 1
-      assert edit.content == ["world"]
+    test "parses single-line replace edit" do
+      pos = make_tag(1, "hello")
+      {:ok, [edit]} = HashlineEdit.parse_edits([%{"op" => "replace", "pos" => pos, "lines" => ["world"]}])
+      assert edit.op == :replace
+      assert edit.pos.line == 1
+      assert edit.lines == ["world"]
+      refute Map.has_key?(edit, :end)
     end
 
-    test "parses replace edit" do
-      first = make_tag(1, "a")
-      last = make_tag(3, "c")
-      {:ok, [edit]} = HashlineEdit.parse_edits([%{"op" => "replace", "first" => first, "last" => last, "content" => ["x"]}])
+    test "parses range replace edit" do
+      pos = make_tag(1, "a")
+      end_tag = make_tag(3, "c")
+      {:ok, [edit]} = HashlineEdit.parse_edits([%{"op" => "replace", "pos" => pos, "end" => end_tag, "lines" => ["x"]}])
       assert edit.op == :replace
-      assert edit.first.line == 1
-      assert edit.last.line == 3
+      assert edit.pos.line == 1
+      assert edit.end.line == 3
     end
 
     test "parses append without anchor" do
-      {:ok, [edit]} = HashlineEdit.parse_edits([%{"op" => "append", "content" => ["new"]}])
+      {:ok, [edit]} = HashlineEdit.parse_edits([%{"op" => "append", "lines" => ["new"]}])
       assert edit.op == :append
-      assert edit.after == nil
+      assert edit.pos == nil
+    end
+
+    test "parses append with anchor" do
+      pos = make_tag(1, "hello")
+      {:ok, [edit]} = HashlineEdit.parse_edits([%{"op" => "append", "pos" => pos, "lines" => ["new"]}])
+      assert edit.op == :append
+      assert edit.pos.line == 1
     end
 
     test "parses prepend without anchor" do
-      {:ok, [edit]} = HashlineEdit.parse_edits([%{"op" => "prepend", "content" => ["new"]}])
+      {:ok, [edit]} = HashlineEdit.parse_edits([%{"op" => "prepend", "lines" => ["new"]}])
       assert edit.op == :prepend
-      assert edit.before == nil
+      assert edit.pos == nil
     end
 
-    test "parses replaceText edit" do
-      {:ok, [edit]} =
-        HashlineEdit.parse_edits([
-          %{"op" => "replaceText", "old_text" => "hello", "new_text" => "world", "all" => true}
-        ])
-
-      assert edit == %{op: :replace_text, old_text: "hello", new_text: "world", all: true}
-    end
-
-    test "returns error for replaceText with empty old_text" do
-      assert {:error, msg} =
-               HashlineEdit.parse_edits([
-                 %{"op" => "replaceText", "old_text" => "", "new_text" => "world"}
-               ])
-
-      assert msg =~ "replaceText requires non-empty 'old_text'"
+    test "parses prepend with anchor" do
+      pos = make_tag(2, "world")
+      {:ok, [edit]} = HashlineEdit.parse_edits([%{"op" => "prepend", "pos" => pos, "lines" => ["new"]}])
+      assert edit.op == :prepend
+      assert edit.pos.line == 2
     end
 
     test "returns error for unknown op" do
-      assert {:error, _} = HashlineEdit.parse_edits([%{"op" => "unknown", "content" => []}])
+      assert {:error, _} = HashlineEdit.parse_edits([%{"op" => "unknown", "lines" => []}])
     end
   end
 
@@ -370,11 +366,11 @@ defmodule CodingAgent.Tools.HashlineEditTest do
     test "preserves CRLF line endings", %{cwd: cwd} do
       write_test_file(cwd, "test.txt", "aaa\r\nbbb\r\nccc")
       # Hash is computed on LF-normalized content
-      tag = make_tag(2, "bbb")
+      pos = make_tag(2, "bbb")
 
       params = %{
         "path" => "test.txt",
-        "edits" => [%{"op" => "set", "tag" => tag, "content" => ["BBB"]}]
+        "edits" => [%{"op" => "replace", "pos" => pos, "lines" => ["BBB"]}]
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
@@ -389,11 +385,11 @@ defmodule CodingAgent.Tools.HashlineEditTest do
       bom = <<0xEF, 0xBB, 0xBF>>
       content = bom <> "aaa\nbbb\nccc"
       write_test_file(cwd, "test.txt", content)
-      tag = make_tag(2, "bbb")
+      pos = make_tag(2, "bbb")
 
       params = %{
         "path" => "test.txt",
-        "edits" => [%{"op" => "set", "tag" => tag, "content" => ["BBB"]}]
+        "edits" => [%{"op" => "replace", "pos" => pos, "lines" => ["BBB"]}]
       }
 
       result = HashlineEdit.execute("call-1", params, nil, nil, cwd, [])
@@ -401,60 +397,6 @@ defmodule CodingAgent.Tools.HashlineEditTest do
 
       written = File.read!(Path.join(cwd, "test.txt"))
       assert <<0xEF, 0xBB, 0xBF, _rest::binary>> = written
-    end
-  end
-
-  # ============================================================================
-  # replaceText Operation
-  # ============================================================================
-
-  describe "replaceText operation" do
-    test "executes replaceText with first occurrence", %{cwd: cwd} do
-      write_test_file(cwd, "rt.txt", "foo bar\nfoo baz")
-
-      params = %{
-        "path" => "rt.txt",
-        "edits" => [
-          %{"op" => "replaceText", "old_text" => "foo", "new_text" => "hello"}
-        ]
-      }
-
-      result = HashlineEdit.execute("call1", params, nil, nil, cwd, [])
-      assert %AgentCore.Types.AgentToolResult{} = result
-      assert hd(result.content).text =~ "Applied 1 hashline edit"
-
-      assert File.read!(Path.join(cwd, "rt.txt")) == "hello bar\nfoo baz"
-    end
-
-    test "executes replaceText with all occurrences", %{cwd: cwd} do
-      write_test_file(cwd, "rt_all.txt", "foo bar\nfoo baz")
-
-      params = %{
-        "path" => "rt_all.txt",
-        "edits" => [
-          %{"op" => "replaceText", "old_text" => "foo", "new_text" => "hello", "all" => true}
-        ]
-      }
-
-      result = HashlineEdit.execute("call2", params, nil, nil, cwd, [])
-      assert %AgentCore.Types.AgentToolResult{} = result
-      assert File.read!(Path.join(cwd, "rt_all.txt")) == "hello bar\nhello baz"
-    end
-
-    test "parse_edits handles replaceText" do
-      raw = [%{"op" => "replaceText", "old_text" => "find", "new_text" => "replace", "all" => true}]
-      {:ok, edits} = HashlineEdit.parse_edits(raw)
-      assert length(edits) == 1
-      [edit] = edits
-      assert edit.op == :replace_text
-      assert edit.old_text == "find"
-      assert edit.new_text == "replace"
-      assert edit.all == true
-    end
-
-    test "parse_edits returns error for empty old_text" do
-      raw = [%{"op" => "replaceText", "old_text" => "", "new_text" => "replace"}]
-      assert {:error, _} = HashlineEdit.parse_edits(raw)
     end
   end
 end
