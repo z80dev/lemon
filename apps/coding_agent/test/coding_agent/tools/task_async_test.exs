@@ -708,4 +708,360 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert {:error, "Unknown task_id: "} = result
     end
   end
+
+  # ============================================================================
+  # Follow-up Text Formatting Tests
+  # ============================================================================
+
+  describe "task_auto_followup_text formatting" do
+    test "formats successful completion with answer" do
+      result =
+        Task.execute(
+          "call_fmt_success",
+          %{
+            "description" => "Build widget",
+            "prompt" => "Build it",
+            "async" => true,
+            "auto_followup" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          run_override: fn _on_update, _signal ->
+            %AgentCore.Types.AgentToolResult{
+              content: [%Ai.Types.TextContent{text: "Widget built successfully"}],
+              details: %{status: "completed"}
+            }
+          end,
+          session_module: SessionSpy,
+          session_pid: self(),
+          session_key: "agent:main:main",
+          agent_id: "main",
+          run_orchestrator: StubRunOrchestrator
+        )
+
+      task_id = result.details.task_id
+      run_id = result.details.run_id
+
+      assert_receive {:session_follow_up, text}, 1_000
+      assert text =~ "[task #{task_id}]"
+      assert text =~ "Build widget"
+      assert text =~ "(run #{run_id})"
+      assert text =~ "completed."
+      assert text =~ "Widget built successfully"
+    end
+
+    test "formats failed task with error" do
+      result =
+        Task.execute(
+          "call_fmt_fail",
+          %{
+            "description" => "Broken task",
+            "prompt" => "Do broken thing",
+            "async" => true,
+            "auto_followup" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          run_override: fn _on_update, _signal ->
+            {:error, "connection refused"}
+          end,
+          session_module: SessionSpy,
+          session_pid: self(),
+          session_key: "agent:main:main",
+          agent_id: "main",
+          run_orchestrator: StubRunOrchestrator
+        )
+
+      task_id = result.details.task_id
+
+      assert_receive {:session_follow_up, text}, 1_000
+      assert text =~ "[task #{task_id}]"
+      assert text =~ "Broken task"
+      assert text =~ "failed:"
+      assert text =~ "connection refused"
+    end
+
+    test "formats completion with empty answer" do
+      result =
+        Task.execute(
+          "call_fmt_empty",
+          %{
+            "description" => "Silent task",
+            "prompt" => "Do silent thing",
+            "async" => true,
+            "auto_followup" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          run_override: fn _on_update, _signal ->
+            %AgentCore.Types.AgentToolResult{
+              content: [%Ai.Types.TextContent{text: ""}],
+              details: %{status: "completed"}
+            }
+          end,
+          session_module: SessionSpy,
+          session_pid: self(),
+          session_key: "agent:main:main",
+          agent_id: "main",
+          run_orchestrator: StubRunOrchestrator
+        )
+
+      task_id = result.details.task_id
+
+      assert_receive {:session_follow_up, text}, 1_000
+      assert text =~ "[task #{task_id}]"
+      assert text =~ "completed."
+      # Should NOT contain trailing content after "completed."
+      refute text =~ "completed.\n\n\n"
+    end
+
+    test "formats failure with partial output" do
+      result =
+        Task.execute(
+          "call_fmt_partial",
+          %{
+            "description" => "Partial task",
+            "prompt" => "Partially complete",
+            "async" => true,
+            "auto_followup" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          run_override: fn _on_update, _signal ->
+            %AgentCore.Types.AgentToolResult{
+              content: [%Ai.Types.TextContent{text: "Got halfway done"}],
+              details: %{status: "error", error: "timeout"}
+            }
+          end,
+          session_module: SessionSpy,
+          session_pid: self(),
+          session_key: "agent:main:main",
+          agent_id: "main",
+          run_orchestrator: StubRunOrchestrator
+        )
+
+      task_id = result.details.task_id
+
+      assert_receive {:session_follow_up, text}, 1_000
+      assert text =~ "[task #{task_id}]"
+      assert text =~ "failed:"
+      assert text =~ "timeout"
+      assert text =~ "Partial output:"
+      assert text =~ "Got halfway done"
+    end
+  end
+
+  # ============================================================================
+  # Error Resilience Tests
+  # ============================================================================
+
+  describe "follow-up error resilience" do
+    defmodule CrashingSession do
+      def follow_up(_pid, _text) do
+        raise "session exploded"
+      end
+    end
+
+    defmodule NoFollowUpSession do
+      # This module intentionally does NOT export follow_up/2
+    end
+
+    test "handles session crash during follow_up gracefully" do
+      result =
+        Task.execute(
+          "call_crash",
+          %{
+            "description" => "Crash resilience test",
+            "prompt" => "Test crash",
+            "async" => true,
+            "auto_followup" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          run_override: fn _on_update, _signal ->
+            %AgentCore.Types.AgentToolResult{
+              content: [%Ai.Types.TextContent{text: "done"}],
+              details: %{status: "completed"}
+            }
+          end,
+          session_module: CrashingSession,
+          session_pid: self(),
+          session_key: "agent:main:main",
+          agent_id: "main",
+          run_orchestrator: StubRunOrchestrator
+        )
+
+      assert %AgentCore.Types.AgentToolResult{} = result
+      assert result.details.status == "queued"
+
+      # Session crashes, so it should fall back to router
+      assert_receive {:router_submit, %RunRequest{queue_mode: :followup}, _}, 1_000
+    end
+
+    test "falls back to router when session module lacks follow_up/2" do
+      result =
+        Task.execute(
+          "call_no_func",
+          %{
+            "description" => "No follow_up func test",
+            "prompt" => "Test missing func",
+            "async" => true,
+            "auto_followup" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          run_override: fn _on_update, _signal ->
+            %AgentCore.Types.AgentToolResult{
+              content: [%Ai.Types.TextContent{text: "output"}],
+              details: %{status: "completed"}
+            }
+          end,
+          session_module: NoFollowUpSession,
+          session_pid: self(),
+          session_key: "agent:main:main",
+          agent_id: "main",
+          run_orchestrator: StubRunOrchestrator
+        )
+
+      assert %AgentCore.Types.AgentToolResult{} = result
+      assert result.details.status == "queued"
+
+      # Session module doesn't have follow_up/2, so it should route via router
+      assert_receive {:router_submit, %RunRequest{queue_mode: :followup}, _}, 1_000
+    end
+
+    test "falls back to router when session_pid is nil" do
+      result =
+        Task.execute(
+          "call_nil_pid",
+          %{
+            "description" => "Nil pid test",
+            "prompt" => "Test nil",
+            "async" => true,
+            "auto_followup" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          run_override: fn _on_update, _signal ->
+            %AgentCore.Types.AgentToolResult{
+              content: [%Ai.Types.TextContent{text: "output"}],
+              details: %{status: "completed"}
+            }
+          end,
+          session_module: SessionSpy,
+          session_pid: nil,
+          session_key: "agent:main:main",
+          agent_id: "main",
+          run_orchestrator: StubRunOrchestrator
+        )
+
+      assert %AgentCore.Types.AgentToolResult{} = result
+
+      # nil session_pid should fall back to router
+      assert_receive {:router_submit, %RunRequest{queue_mode: :followup}, _}, 1_000
+    end
+  end
+
+  # ============================================================================
+  # Router Fallback for Unknown Agent ID
+  # ============================================================================
+
+  describe "router fallback for unknown agent_id" do
+    defmodule UnknownAgentOrchestrator do
+      use Agent
+
+      def start_link(_opts) do
+        Agent.start_link(fn -> %{owner: nil, submissions: []} end, name: __MODULE__)
+      end
+
+      def configure(owner) when is_pid(owner) do
+        Agent.update(__MODULE__, fn _ -> %{owner: owner, submissions: []} end)
+      end
+
+      def submit(%RunRequest{agent_id: "unknown_agent"} = request) do
+        Agent.get_and_update(__MODULE__, fn state ->
+          new_state = %{state | submissions: state.submissions ++ [{:rejected, request}]}
+
+          if is_pid(state.owner) do
+            send(state.owner, {:router_rejected, request})
+          end
+
+          {{:error, {:unknown_agent_id, "unknown_agent"}}, new_state}
+        end)
+      end
+
+      def submit(%RunRequest{agent_id: "default"} = request) do
+        Agent.get_and_update(__MODULE__, fn state ->
+          new_state = %{state | submissions: state.submissions ++ [{:fallback, request}]}
+
+          if is_pid(state.owner) do
+            send(state.owner, {:router_fallback, request})
+          end
+
+          {{:ok, "fallback_run_1"}, new_state}
+        end)
+      end
+
+      def submit(%RunRequest{} = request) do
+        Agent.get_and_update(__MODULE__, fn state ->
+          new_state = %{state | submissions: state.submissions ++ [{:ok, request}]}
+
+          if is_pid(state.owner) do
+            send(state.owner, {:router_submit, request})
+          end
+
+          {{:ok, "run_1"}, new_state}
+        end)
+      end
+    end
+
+    test "falls back to default agent_id when original agent_id is unknown" do
+      start_supervised!(UnknownAgentOrchestrator)
+      UnknownAgentOrchestrator.configure(self())
+
+      dead_pid = spawn(fn -> :ok end)
+      ref = Process.monitor(dead_pid)
+      assert_receive {:DOWN, ^ref, :process, ^dead_pid, _}
+
+      result =
+        Task.execute(
+          "call_unknown_agent",
+          %{
+            "description" => "Unknown agent fallback",
+            "prompt" => "Test fallback",
+            "async" => true,
+            "auto_followup" => true
+          },
+          nil,
+          nil,
+          "/tmp",
+          run_override: fn _on_update, _signal ->
+            %AgentCore.Types.AgentToolResult{
+              content: [%Ai.Types.TextContent{text: "done"}],
+              details: %{status: "completed"}
+            }
+          end,
+          session_module: SessionSpy,
+          session_pid: dead_pid,
+          session_key: "agent:unknown_agent:main",
+          agent_id: "unknown_agent",
+          run_orchestrator: UnknownAgentOrchestrator
+        )
+
+      assert %AgentCore.Types.AgentToolResult{} = result
+
+      # First attempt with "unknown_agent" should be rejected
+      assert_receive {:router_rejected, %RunRequest{agent_id: "unknown_agent"}}, 1_000
+
+      # Fallback to "default" should succeed
+      assert_receive {:router_fallback, %RunRequest{agent_id: "default"}}, 1_000
+    end
+  end
 end

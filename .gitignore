@@ -52,3 +52,4 @@ node_modules/
 *.db3-shm
 *.db3-wal
 apps/lemon_gateway/priv/.env
+telethon_ping/test_session.session
