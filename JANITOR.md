@@ -175,6 +175,54 @@ Lemon is already well-synchronized with Pi/Oh-My-Pi upstream. Most features iden
 
 ---
 
+### 2026-02-22 - Pi/Oh-My-Pi Upstream Sync Review (Latest)
+**Work Area**: Feature Enhancement (Pi/Oh-My-Pi Sync)
+
+**Analysis**:
+- Checked Pi upstream (`~/dev/pi`) for new LLM models and providers
+- Checked Oh-My-Pi (`~/dev/oh-my-pi`) for hashline improvements, LSP tools, and streaming enhancements
+- Compared model registries: Lemon has 764 models vs Pi's 746 - **Lemon is ahead!**
+
+**Findings**:
+
+1. **Models**: Lemon is more up-to-date than Pi
+   - Lemon has 764 models vs Pi's 746
+   - All major model families present: GPT-5.x, Claude 4.x, Gemini 2.5/3, etc.
+   - No critical models missing
+
+2. **Hashline Edit Mode**: Already fully ported
+   - All autocorrect features from Oh-My-Pi are present:
+     - `restore_indent_for_paired_replacement/2` ✅
+     - `restore_old_wrapped_lines/2` ✅
+     - `strip_range_boundary_echo/4` ✅
+     - `maybe_expand_single_line_merge/4` ✅
+   - `replaceText` operation already ported ✅
+   - Streaming formatters already implemented ✅
+
+3. **LSP Write Tool**: Oh-My-Pi has sophisticated LSP integration
+   - Full LSP client management with lspmux multiplexing
+   - Write-through with formatting and diagnostics
+   - Batch processing for multiple edits
+   - Custom linter client support
+   - **Lemon has**: Basic `LspFormatter` tool (mix format, prettier, black, rustfmt, gofmt)
+   - **Gap**: Would require significant new infrastructure to fully port
+
+4. **Streaming Enhancements**: Oh-My-Pi has TTSR (Time-Traveling Stream Rules)
+   - Mid-stream rule injection when patterns match
+   - Streaming edit abort capabilities
+   - Tool renderers (`renderCall`, `renderResult`) for rich TUI visualization
+   - **Not ported**: Complex features requiring architectural changes
+
+5. **Tool Renderers**: Oh-My-Pi has rich TUI renderers for 15+ tools
+   - `renderCall`: Shows tool execution in progress
+   - `renderResult`: Shows formatted tool results
+   - **Lemon's gap**: No equivalent tool renderer system
+
+**Conclusion**:
+Lemon's codebase is well-synchronized with Pi/Oh-My-Pi. The hashline edit mode is fully ported with all autocorrect features. The models registry is actually more comprehensive than Pi's. The main gaps are the LSP write tool and TTSR streaming features, which would require significant new infrastructure to implement.
+
+---
+
 ### 2026-02-22 - Pi/Oh-My-Pi Upstream Sync Review
 **Work Area**: Feature Enhancement (Pi/Oh-My-Pi Sync)
 
