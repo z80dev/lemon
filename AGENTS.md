@@ -27,6 +27,36 @@
 
 ---
 
+## Documentation Contract ⚠️
+
+> **Work is not complete until it is adequately documented.**
+
+**Any code change must be accompanied by updates to all relevant documentation.** This is non-negotiable. Outdated documentation is technical debt that compounds and confuses future developers (including yourself).
+
+### When You Modify Code, You MUST:
+
+1. **Update `AGENTS.md` files** — If you change architecture, patterns, dependencies, or behaviors described in any `AGENTS.md`, update it immediately.
+2. **Update `README.md` files** — If your change affects setup, usage, APIs, or public interfaces, update the relevant README.
+3. **Update architecture docs in `docs/`** — If your change affects design decisions, addendums to existing docs, or new architectural patterns, update or add docs.
+4. **Update inline comments** — Complex logic, public functions, and non-obvious behaviors must have accurate, up-to-date comments.
+5. **Update configuration examples** — If you add/remove config options, update `.lemon/config.toml` examples and config documentation.
+
+### Examples of Documentation Debt to Avoid:
+
+- Changing a module's behavior without updating its `@moduledoc` or `AGENTS.md`
+- Adding a new tool/config/API without documenting how to use it
+- Refactoring architecture while leaving stale dependency diagrams
+- Modifying environment variables without updating `.env.example` or docs
+- Changing a behavior but leaving old instructions in guides
+
+### The Golden Rule:
+
+> If you changed how something works, you must change the documentation that describes how it works. **No exceptions.**
+
+Future agents (and humans) depend on accurate documentation to be effective. Don't make their job harder by leaving stale docs.
+
+---
+
 ## Project Structure
 
 ```
@@ -309,6 +339,7 @@ This repository includes an optional pre-push hook that uses **kimi** to review 
 - **Format**: Run `mix format` before committing
 - **Tests**: `*_test.exs` for Elixir, `*.test.ts` for TypeScript
 - **Commits**: Short, imperative style (`Fix gateway timeout`, `chore: update docs`)
+- **Documentation**: See [Documentation Contract](#documentation-contract-) above — code changes require doc updates
 
 ---
 
