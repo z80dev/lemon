@@ -26,9 +26,34 @@ defmodule Ai.ProviderRegistryComprehensiveTest do
   # ============================================================================
 
   setup do
+    previous_registry = snapshot_registry()
+
     # Clear the registry before each test to ensure isolation
     ProviderRegistry.clear()
+
+    on_exit(fn ->
+      restore_registry(previous_registry)
+    end)
+
     :ok
+  end
+
+  defp snapshot_registry do
+    ProviderRegistry.list()
+    |> Enum.reduce(%{}, fn api_id, acc ->
+      case ProviderRegistry.get(api_id) do
+        {:ok, module} -> Map.put(acc, api_id, module)
+        {:error, :not_found} -> acc
+      end
+    end)
+  end
+
+  defp restore_registry(previous_registry) do
+    ProviderRegistry.clear()
+
+    Enum.each(previous_registry, fn {api_id, module} ->
+      ProviderRegistry.register(api_id, module)
+    end)
   end
 
   # ============================================================================

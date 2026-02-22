@@ -1,3 +1,38 @@
+### 2026-02-22 - Pi/Oh-My-Pi Sync: Hashline Format Simplification
+**Work Area**: Pi/Oh-My-Pi Upstream Sync / Hashline
+
+**Summary**:
+Ported Oh-My-Pi commit 6c52f8cf which simplifies hashline edit operations and improves hash collision resistance.
+
+**Changes Made**:
+1. **Simplified operation structure** (`c38ca472`):
+   - `tag` → `pos` (anchor position)
+   - `content` → `lines` (array of line strings)
+   - `first`/`last` → `pos`/`end` (for range replace)
+   - Removed `:set`, `:insert`, `:replace_text` operations (consolidated into `:replace`)
+
+2. **Improved hash collision resistance**:
+   - For lines with no alphanumeric chars, mix in line number
+   - Uses Unicode regex `[\p{L}\p{N}]` to detect significant characters
+   - Updated `compute_line_hash/2` to accept line index parameter
+
+3. **Updated operations**:
+   - `:replace` - Now handles both single line (pos only) and range (pos + end)
+   - `:append` - Uses `pos` instead of `after`, nil for EOF
+   - `:prepend` - Uses `pos` instead of `before`, nil for BOF
+
+**Files Changed**:
+- `apps/coding_agent/lib/coding_agent/tools/hashline.ex` - Core implementation
+- `apps/coding_agent/lib/coding_agent/tools/hashline_edit.ex` - Edit operations
+- `apps/coding_agent/test/coding_agent/tools/hashline_test.exs` - Updated tests
+- `apps/coding_agent/test/coding_agent/tools/hashline_edit_test.exs` - Updated tests
+
+**Test Results**:
+- Hashline tests: 101 tests, 0 failures
+- Code reduction: ~850 lines removed (simpler API)
+
+---
+
 ### 2026-02-22 - Refactoring: O(n²) List Operations & Code Duplication
 **Work Area**: Refactoring / Performance / Code Quality
 

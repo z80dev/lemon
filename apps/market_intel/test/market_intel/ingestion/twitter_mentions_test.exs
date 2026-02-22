@@ -25,6 +25,10 @@ defmodule MarketIntel.Ingestion.TwitterMentionsTest do
       start_supervised!(MarketIntel.Cache)
     end
 
+    unless Process.whereis(TwitterMentions) do
+      start_supervised!(TwitterMentions)
+    end
+
     :ok
   end
 

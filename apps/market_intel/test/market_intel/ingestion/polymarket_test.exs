@@ -25,6 +25,10 @@ defmodule MarketIntel.Ingestion.PolymarketTest do
       start_supervised!(MarketIntel.Cache)
     end
 
+    unless Process.whereis(Polymarket) do
+      start_supervised!(Polymarket)
+    end
+
     :ok
   end
 

@@ -26,6 +26,10 @@ defmodule MarketIntel.Ingestion.OnChainTest do
       start_supervised!(MarketIntel.Cache)
     end
 
+    unless Process.whereis(OnChain) do
+      start_supervised!(OnChain)
+    end
+
     :ok
   end
 

@@ -27,6 +27,10 @@ defmodule MarketIntel.Ingestion.DexScreenerTest do
       start_supervised!(MarketIntel.Cache)
     end
 
+    unless Process.whereis(DexScreener) do
+      start_supervised!(DexScreener)
+    end
+
     :ok
   end
 

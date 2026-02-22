@@ -1,6 +1,14 @@
 defmodule MarketIntel.SchedulerTest do
   use ExUnit.Case, async: false
 
+  setup do
+    unless Process.whereis(MarketIntel.Scheduler) do
+      start_supervised!(MarketIntel.Scheduler)
+    end
+
+    :ok
+  end
+
   describe "module structure" do
     test "exports start_link/1" do
       assert function_exported?(MarketIntel.Scheduler, :start_link, 1)

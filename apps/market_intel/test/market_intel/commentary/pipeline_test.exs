@@ -26,6 +26,10 @@ defmodule MarketIntel.Commentary.PipelineTest do
       start_supervised!(MarketIntel.Cache)
     end
 
+    unless Process.whereis(Pipeline) do
+      start_supervised!(Pipeline)
+    end
+
     # Set up test market data in cache
     MarketIntel.Cache.put(:tracked_token_price, %{
       price_usd: "1.23",
