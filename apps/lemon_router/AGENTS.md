@@ -90,30 +90,36 @@ The directory merges active sessions from `SessionRegistry` with durable metadat
 
 ### Key Modules
 
-- `LemonRouter.AgentDirectory` - Session discovery and listing
-- `LemonRouter.AgentProfiles` - Agent configuration (engine, model, tool_policy)
-- `LemonRouter.AgentEndpoints` - Endpoint aliases for routing
-- `LemonRouter.AgentInbox` - BEAM-local inbox API
+- `LemonRouter.AgentDirectory` - Session discovery and listing (merges Store index + active registry)
+- `LemonRouter.AgentProfiles` - Agent configuration GenServer (engine, model, tool_policy, system_prompt)
+- `LemonRouter.AgentEndpoints` - Endpoint alias CRUD and shorthand resolution (e.g. `tg:<chat_id>`)
+- `LemonRouter.AgentInbox` - BEAM-local inbox API with fanout support
 
 ### Common Operations
 
 ```elixir
 # List all known agents with stats
 LemonRouter.list_agent_directory()
-# => [%{agent_id: "...", name: "...", active_session_count: 1, ...}]
+# => [%{agent_id: "...", name: "...", active_session_count: 1, route_count: 2, ...}]
 
 # List sessions for an agent
 LemonRouter.AgentDirectory.list_sessions(agent_id: "my_agent")
 
-# Get latest session
+# Get latest session (returns {:ok, session_entry} | {:error, :not_found})
 LemonRouter.AgentDirectory.latest_session("my_agent")
+
+# Get latest route-backed (channel_peer) session
+LemonRouter.AgentDirectory.latest_route_session("my_agent")
 
 # List known targets (for UI discovery)
 LemonRouter.list_agent_targets(query: "group name")
 
 # Send to agent inbox
+# Returns {:ok, %{run_id, session_key, selector, fanout_count}} | {:error, term()}
 LemonRouter.send_to_agent("my_agent", "Hello", session: :latest)
 LemonRouter.send_to_agent("my_agent", "Hello", session: :new, to: "tg:chat_id")
+# Fanout to multiple destinations
+LemonRouter.send_to_agent("my_agent", "Hello", to: "tg:111", deliver_to: ["standup", "tg:222"])
 ```
 
 ### Endpoint Aliases
@@ -189,7 +195,7 @@ Registry.lookup(LemonRouter.SessionRegistry, session_key)
 
 ### Smart Routing
 
-`LemonRouter.SmartRouting` classifies message complexity:
+`LemonRouter.SmartRouting` classifies message complexity and can route to cheap vs primary models:
 
 ```elixir
 LemonRouter.SmartRouting.classify_message("What is 2+2?")
@@ -197,42 +203,74 @@ LemonRouter.SmartRouting.classify_message("What is 2+2?")
 
 LemonRouter.SmartRouting.classify_message("Implement a distributed consensus algorithm...")
 # => :complex
+# Returns :simple | :moderate | :complex
 ```
 
-Classification uses keywords, message length, and code block detection.
+Classification uses keywords, message length, and code block detection. `:moderate` messages
+route to the cheap model. Use `route/4` to select a model based on complexity:
+
+```elixir
+{:ok, model, complexity} = LemonRouter.SmartRouting.route(message, primary_model, cheap_model)
+```
+
+Also provides `uncertain_response?/1` to detect uncertain engine output for cascade escalation.
 
 ### Model Selection
 
-`LemonRouter.ModelSelection` resolves models with precedence:
+`LemonRouter.ModelSelection` resolves models with two independent precedence chains:
 
 ```elixir
-# Precedence (highest to lowest):
-# 1. Request-level explicit model
-# 2. Meta model from request
-# 3. Session model from policy
-# 4. Profile model from agent config
-# 5. Router default model
+# Model precedence (highest to lowest):
+# 1. explicit_model (request-level)
+# 2. meta_model (from run meta)
+# 3. session_model (from session policy)
+# 4. profile_model (from agent profile config)
+# 5. default_model (router application config)
+
+# Engine precedence (highest to lowest):
+# 1. resume_engine (from resume token)
+# 2. explicit_engine_id (from StickyEngine resolution)
+# 3. model-implied engine (inferred from model name prefix, e.g. "claude:..." => "claude")
+# 4. profile_default_engine (from agent profile)
 
 LemonRouter.ModelSelection.resolve(%{
   explicit_model: "claude-3-opus",
   session_model: "gpt-4",
   profile_model: "claude-3-sonnet",
-  default_model: "gpt-3.5"
+  default_model: "gpt-3.5",
+  explicit_engine_id: nil,
+  profile_default_engine: nil,
+  resume_engine: nil
 })
-# => %{model: "claude-3-opus", engine_id: "claude", ...}
+# => %{model: "claude-3-opus", engine_id: nil, model_engine: nil, warning: nil}
 ```
+
+If `explicit_engine_id` conflicts with a model-implied engine, the explicit engine wins and a
+`warning` string is populated in the result.
 
 ### Sticky Engine Affinity
 
-`LemonRouter.StickyEngine` extracts engine preferences from prompts:
+`LemonRouter.StickyEngine` extracts and persists engine preferences. Two public functions:
 
 ```elixir
-# User says: "use codex to refactor this"
+# Low-level: extract engine from a prompt string
 LemonRouter.StickyEngine.extract_from_prompt("use codex to refactor this")
-# => {:ok, "codex"}
+# => {:ok, "codex"} | :none
+# Patterns matched: "use <engine>", "switch to <engine>", "with <engine>"
+# Only matches engines known to LemonChannels.EngineRegistry
+
+# High-level: used by RunOrchestrator - resolves sticky engine for a run
+{effective_engine_id, session_updates} = LemonRouter.StickyEngine.resolve(%{
+  explicit_engine_id: nil,   # from run request
+  prompt: "use codex for this",
+  session_preferred_engine: "claude"  # from session policy
+})
+# => {"codex", %{preferred_engine: "codex"}}
+# Priority: explicit request engine > prompt directive > session sticky preference
 ```
 
-The engine preference is persisted to session policy and used for subsequent runs.
+Engine preferences are persisted to session policy via `LemonCore.Store` and used for all
+subsequent runs on that session until a different engine is requested.
 
 ### Policy Resolution
 
@@ -244,7 +282,7 @@ policy = LemonRouter.Policy.resolve_for_run(%{
   agent_id: "my_agent",
   session_key: session_key,
   origin: :channel,
-  channel_context: %{...}
+  channel_context: %{channel_id: "telegram", peer_kind: :group}
 })
 ```
 
@@ -252,7 +290,20 @@ Policy fields:
 - `approvals` - Approval requirements per tool (`:always`, `:dangerous`, `:never`)
 - `blocked_tools` - List of blocked tool names
 - `allowed_commands`/`blocked_commands` - Command whitelist/blacklist
+- `max_file_size` - Max bytes for write operations
 - `sandbox` - Sandbox mode boolean
+
+Policy also exposes helpers:
+
+```elixir
+LemonRouter.Policy.approval_required?(policy, "bash")   # => :always | :dangerous | :never | :default
+LemonRouter.Policy.tool_blocked?(policy, "exec_raw")    # => boolean
+LemonRouter.Policy.command_allowed?(policy, "git push") # => boolean
+LemonRouter.Policy.merge(policy_a, policy_b)            # => merged map
+```
+
+Note: Channel context `:group`/`:supergroup`/`:channel` peer kinds automatically apply
+stricter approval defaults (`bash`, `write`, `process` => `:always`).
 
 ## Stream Coalescing
 
@@ -365,11 +416,11 @@ lemon:cancel:<run_id>
 ### Custom Queue Mode
 
 ```elixir
-# :collect - Queue behind existing runs (default for channels)
-# :followup - Start immediately, replaceable
-# :steer - High priority, replaces queued runs
+# :collect      - Queue behind existing runs (default for channel inbound)
+# :followup     - Start immediately, replaceable (default for AgentInbox.send/3)
+# :steer        - High priority, replaces queued runs
 # :steer_backlog - Steer but preserve backlog
-# :interrupt - Cancel active run and start immediately
+# :interrupt    - Cancel active run and start immediately
 
 LemonRouter.submit(%{queue_mode: :steer, ...})
 ```
@@ -377,13 +428,13 @@ LemonRouter.submit(%{queue_mode: :steer, ...})
 ### Handle Resume Tokens
 
 ```elixir
-# RunOrchestrator extracts resume tokens from prompts
+# RunOrchestrator extracts resume tokens from prompts (or from reply_to_text in meta)
 {resume, stripped_prompt} = LemonRouter.RunOrchestrator.extract_resume_and_strip_prompt(
   "codex resume abc123",
-  meta
+  meta  # may contain :reply_to_text for Telegram reply context
 )
-# resume => %{engine: "codex", value: "abc123"}
-# stripped_prompt => ""
+# resume => %LemonChannels.Types.ResumeToken{engine: "codex", value: "abc123"} | nil
+# stripped_prompt => "" (resume lines stripped; "Continue." substituted if empty)
 ```
 
 ### Listen to Run Events
@@ -473,8 +524,9 @@ test "run completes successfully" do
     agent_id: "test",
     prompt: "echo hello"
   })
-  
-  # Wait for completion
+
+  # Subscribe to run events before submitting, or subscribe to session topic
+  Bus.subscribe(Bus.run_topic(run_id))
   assert_receive %LemonCore.Event{type: :run_completed}, 5000
 end
 ```
@@ -484,6 +536,18 @@ end
 ```elixir
 # Configure test to use Echo engine
 Application.put_env(:lemon_router, :default_model, "echo")
+```
+
+**Bypassing gateway in unit tests:**
+
+```elixir
+# Start RunProcess without submitting to gateway
+{:ok, pid} = LemonRouter.RunProcess.start_link(
+  run_id: run_id,
+  session_key: session_key,
+  job: job,
+  submit_to_gateway?: false
+)
 ```
 
 **Testing Registry Operations:**
@@ -514,11 +578,22 @@ end
 | `run_process_test.exs` | Lifecycle, abort, event handling |
 | `stream_coalescer_test.exs` | Delta aggregation, flushing |
 | `tool_status_coalescer_test.exs` | Action coalescing, finalization |
+| `tool_status_renderer_test.exs` | Status message formatting |
+| `tool_preview_test.exs` | Tool result text normalization |
 | `agent_directory_test.exs` | Session discovery, filtering |
 | `agent_inbox_test.exs` | Inbox API, selectors, fanout |
-| `policy_test.exs` | Policy merging, resolution |
+| `agent_endpoints_test.exs` | Endpoint alias CRUD, resolution |
+| `agent_profiles_test.exs` | Profile loading, existence checks |
+| `policy_test.exs` | Policy merging helpers |
+| `policy_resolution_test.exs` | End-to-end policy resolution |
 | `model_selection_test.exs` | Model/engine resolution |
+| `smart_routing_test.exs` | Complexity classification, routing |
 | `sticky_engine_test.exs` | Engine extraction, affinity |
+| `router_test.exs` | Inbound message handling, control plane |
+| `channel_context_test.exs` | Session key parsing, channel context |
+| `session_key_test.exs` | SessionKey construction and parsing |
+| `session_key_atom_exhaustion_test.exs` | Atom exhaustion safety |
+| `health_test.exs` | Health endpoint responses |
 
 ### Debugging Tips
 
@@ -533,8 +608,8 @@ Logger.configure(level: :debug)
 **Inspect registry state:**
 
 ```elixir
-Registry.select(LemonRouter.RunRegistry, [{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2", :"$3"}}}])
-Registry.select(LemonRouter.SessionRegistry, [{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2", :"$3"}}}])
+Registry.select(LemonRouter.RunRegistry, [{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2", :"$3"}}]}])
+Registry.select(LemonRouter.SessionRegistry, [{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2", :"$3"}}]}])
 ```
 
 **Check coalescer state:**
@@ -543,12 +618,47 @@ Registry.select(LemonRouter.SessionRegistry, [{{:"$1", :"$2", :"$3"}, [], [{{:"$
 :sys.get_state({:via, Registry, {LemonRouter.CoalescerRegistry, {session_key, "telegram"}}})
 ```
 
+## Internal Helper Modules
+
+These modules are not part of the public API but are used throughout:
+
+- `LemonRouter.ChannelContext` - Session key parsing utilities, coalescer meta extraction, channel edit-support detection
+- `LemonRouter.ChannelsDelivery` - Wraps `LemonChannels` outbox enqueueing; used by RunProcess and StreamCoalescer for output delivery
+- `LemonRouter.ToolPreview` - Normalizes tool result values (structs, lists, maps) to human-readable text for channel rendering
+
+## Startup and RouterBridge
+
+On startup (`LemonRouter.Application`), after supervisor children are running, the app
+registers itself with `LemonCore.RouterBridge`:
+
+```elixir
+LemonCore.RouterBridge.configure_guarded(
+  run_orchestrator: LemonRouter.RunOrchestrator,
+  router: LemonRouter.Router
+)
+```
+
+This lets other umbrella apps (e.g., channels) call into the router without a hard dep on
+`lemon_router`. Do not call `RouterBridge.configure/1` manually in tests.
+
+## RunProcess Resilience Features
+
+Beyond the basic lifecycle, RunProcess handles several edge cases:
+
+- **Gateway retry** - Retries `submit_to_gateway` with exponential backoff if the gateway scheduler is not yet available (100ms base, 2s max)
+- **SessionRegistry single-flight** - If another run is still registered for the session when `:run_started` arrives, retries registration with backoff (25ms–250ms) rather than dropping the run
+- **Gateway process monitoring** - Monitors the gateway run PID; if it dies without a `:run_completed` event, synthesizes a failure completion event (with a 200ms grace window for normal exits)
+- **Zero-answer auto-retry** - If a run fails with an `assistant_error` and returns an empty answer, automatically retries once with a context-aware prompt prefix (not for context overflow, user abort, timeout, or interrupt errors)
+- **Context overflow handling** - On context-length errors, clears resume state, marks `:pending_compaction` in Store, resets Telegram-specific chat state
+- **Preemptive compaction** - After successful runs, checks token usage against context window; if near the limit, marks `:pending_compaction` for proactive context management
+- **Auto file sending** - Tracks generated image paths and requested send files during a run; sends them to Telegram at run completion
+
 ## Dependencies
 
 **Umbrella deps:**
-- `lemon_core` - Core types, SessionKey, Store, Bus, Telemetry
-- `lemon_gateway` - Gateway scheduler, engines, runtime
-- `lemon_channels` - Channel delivery, Telegram outbox
+- `lemon_core` - Core types, SessionKey, Store, Bus, Telemetry, EventBridge, RouterBridge
+- `lemon_gateway` - Gateway scheduler, engines, runtime, RunRegistry
+- `lemon_channels` - Channel delivery, Telegram outbox, EngineRegistry, GatewayConfig
 - `coding_agent` - Coding agent types
 - `agent_core` - CLI resume types
 

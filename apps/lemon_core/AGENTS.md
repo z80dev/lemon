@@ -21,11 +21,14 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 |--------|---------|
 | `LemonCore` | Main module with module list |
 | `LemonCore.Config` | TOML config loading from `~/.lemon/config.toml` and project `.lemon/config.toml` |
+| `LemonCore.Config.Modular` | Alternative modular config loader with typed sub-structs per section |
 | `LemonCore.ConfigCache` | ETS-backed config cache with mtime-based invalidation |
 | `LemonCore.ConfigReloader` | Hot reload orchestrator with diff computation and Bus broadcast |
+| `LemonCore.ConfigReloader.Watcher` | FileSystem watcher that triggers config reload on TOML changes |
 | `LemonCore.Secrets` | Encrypted secrets API (get/set/list/delete) |
 | `LemonCore.Secrets.Crypto` | AES-256-GCM encryption with HKDF key derivation |
 | `LemonCore.Secrets.Keychain` | macOS keychain integration for master key storage |
+| `LemonCore.Secrets.MasterKey` | Master key resolution (keychain first, then env var) |
 | `LemonCore.Store` | Storage GenServer with pluggable backends |
 | `LemonCore.Store.EtsBackend` | In-memory ETS (ephemeral, default) |
 | `LemonCore.Store.SqliteBackend` | SQLite with WAL mode (persistent) |
@@ -33,13 +36,21 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Bus` | PubSub wrapper with topic helpers |
 | `LemonCore.Event` | Canonical event struct for Bus and persistence |
 | `LemonCore.EventBridge` | Cross-app event translation |
+| `LemonCore.InboundMessage` | Normalized inbound message from any channel (Telegram, SMS, etc.) |
+| `LemonCore.RunRequest` | Canonical run submission struct used by router-facing callers |
+| `LemonCore.RouterBridge` | Runtime bridge to `:lemon_router` without compile-time coupling |
 | `LemonCore.SessionKey` | Session key generation and parsing |
-| `LemonCore.Idempotency` | Deduplication with TTL support |
-| `LemonCore.ExecApprovals` | Tool execution approval flow |
+| `LemonCore.Idempotency` | At-most-once deduplication backed by `LemonCore.Store` with 24h TTL |
+| `LemonCore.Dedupe.Ets` | Low-level ETS-backed TTL deduplication (`:seen?`, `:check_and_mark`) |
+| `LemonCore.ExecApprovals` | Tool execution approval flow with scope-based persistence |
 | `LemonCore.Telemetry` | Telemetry event helpers |
 | `LemonCore.Httpc` | `:httpc` wrapper ensuring `:inets`/`:ssl` started |
 | `LemonCore.Clock` | Time utilities (monotonic timestamps) |
 | `LemonCore.Id` | UUID and unique ID generation |
+| `LemonCore.Dotenv` | `.env` file loader; preserves existing env vars by default |
+| `LemonCore.Logging` | Runtime log-to-file handler setup from `[logging]` config |
+| `LemonCore.Browser.LocalServer` | Local browser automation via Node/Playwright (line-delimited JSON protocol) |
+| `LemonCore.Testing` | Test harness builder (`Harness`, `Case`, `Helpers`) for lemon_core tests |
 
 ## Configuration System Architecture
 
@@ -65,24 +76,51 @@ LemonCore.ConfigReloader.reload/1
 ### Access Patterns
 
 ```elixir
-# Cached read (default, hot path)
+# Cached read (default, hot path) - delegates to ConfigCache when available
 config = LemonCore.Config.load(cwd)
 
-# Force reload from disk
+# Force reload from disk (also updates cache)
 config = LemonCore.Config.reload(cwd)
 
 # Access nested values
 provider = LemonCore.Config.get(config, [:agent, :default_provider], "anthropic")
+
+# Modular config interface (typed sub-structs, validation support)
+config = LemonCore.Config.Modular.load(project_dir: cwd)
+config = LemonCore.Config.Modular.load!(project_dir: cwd)  # raises on invalid
+{:ok, config} = LemonCore.Config.Modular.load_with_validation(project_dir: cwd)
 ```
 
 ### Config Sections
 
-- `providers` - LLM API keys and base URLs
-- `agent` - Default model, thinking level, retry config, tool settings
+- `providers` - LLM API keys and base URLs (anthropic, openai, openai-codex, opencode, kimi, google)
+- `agent` - Default model, thinking level, retry config, tool settings, CLI tool configs (claude, codex, kimi, opencode, pi)
 - `tui` - Theme, debug mode
 - `logging` - File logging, level, rotation
-- `gateway` - Max concurrent runs, engine bindings, Telegram settings
+- `gateway` - Max concurrent runs, engine bindings, Telegram settings, SMS, queue, projects
 - `agents` - Per-agent profiles with tool policies
+
+### Environment Variable Overrides
+
+| Env Var | Overrides |
+|---------|-----------|
+| `LEMON_DEFAULT_PROVIDER` | `agent.default_provider` |
+| `LEMON_DEFAULT_MODEL` | `agent.default_model` |
+| `LEMON_DEBUG` | `tui.debug` |
+| `LEMON_THEME` | `tui.theme` |
+| `LEMON_LOG_FILE` | `logging.file` |
+| `LEMON_LOG_LEVEL` | `logging.level` |
+| `LEMON_CODEX_EXTRA_ARGS` | `agent.cli.codex.extra_args` (space-separated) |
+| `LEMON_CODEX_AUTO_APPROVE` | `agent.cli.codex.auto_approve` |
+| `LEMON_CLAUDE_YOLO` | `agent.cli.claude.dangerously_skip_permissions` |
+| `LEMON_WASM_ENABLED` | `agent.tools.wasm.enabled` |
+| `LEMON_WASM_RUNTIME_PATH` | `agent.tools.wasm.runtime_path` |
+| `LEMON_WASM_TOOL_PATHS` | `agent.tools.wasm.tool_paths` |
+| `LEMON_WASM_AUTO_BUILD` | `agent.tools.wasm.auto_build` |
+| `LEMON_BROWSER_DRIVER_PATH` | Path to local browser driver JS file |
+| `ANTHROPIC_API_KEY` | `providers.anthropic.api_key` |
+| `OPENAI_API_KEY` | `providers.openai.api_key` |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | `providers.google.api_key` |
 
 ## Secrets Management Flow
 
@@ -92,8 +130,8 @@ Secrets are encrypted at rest with AES-256-GCM. The encryption key is derived vi
 
 ### Master Key Resolution (in order)
 
-1. `LEMON_SECRETS_MASTER_KEY` env var
-2. macOS Keychain (if available)
+1. macOS Keychain (preferred; tried first)
+2. `LEMON_SECRETS_MASTER_KEY` env var (fallback)
 3. Fail with `:missing_master_key`
 
 ### API Usage
@@ -151,18 +189,29 @@ items = LemonCore.Store.list(:my_table)
 ### Specialized APIs
 
 ```elixir
-# Chat state (with TTL)
+# Chat state (with 24h TTL, auto-swept every 5 minutes)
 :ok = LemonCore.Store.put_chat_state(scope, state)
 state = LemonCore.Store.get_chat_state(scope)
+:ok = LemonCore.Store.delete_chat_state(scope)
 
 # Run history
 :ok = LemonCore.Store.append_run_event(run_id, event)
 :ok = LemonCore.Store.finalize_run(run_id, summary)
 history = LemonCore.Store.get_run_history(session_key, limit: 10)
+run = LemonCore.Store.get_run(run_id)
 
-# Policies
+# Policies (agent, channel, session, runtime)
 :ok = LemonCore.Store.put_agent_policy(agent_id, policy)
 policy = LemonCore.Store.get_agent_policy(agent_id)
+:ok = LemonCore.Store.put_channel_policy(channel_id, policy)
+:ok = LemonCore.Store.put_session_policy(session_key, policy)
+:ok = LemonCore.Store.put_runtime_policy(policy)  # global override
+policy = LemonCore.Store.get_runtime_policy()
+
+# Progress mapping (scope + Telegram message ID -> run_id)
+:ok = LemonCore.Store.put_progress_mapping(scope, progress_msg_id, run_id)
+run_id = LemonCore.Store.get_run_by_progress(scope, progress_msg_id)
+:ok = LemonCore.Store.delete_progress_mapping(scope, progress_msg_id)
 ```
 
 ## Event Bus Usage Patterns
@@ -361,23 +410,27 @@ end)
 ### Execution Approvals
 
 ```elixir
-# Request approval (blocks until resolved)
+# Request approval (blocks until resolved; default timeout is :infinity)
 case LemonCore.ExecApprovals.request(%{
   run_id: run_id,
   session_key: session_key,
   agent_id: agent_id,
   tool: "shell",
   action: %{command: "rm -rf /"},
-  rationale: "Cleanup old files"
+  rationale: "Cleanup old files",
+  expires_in_ms: 60_000  # optional
 }) do
-  {:ok, :approved, scope} -> proceed()
+  {:ok, :approved, scope} -> proceed()  # scope: :approve_once/:approve_session/:approve_agent/:approve_global
   {:ok, :denied} -> halt()
   {:error, :timeout} -> handle_timeout()
 end
 
 # Resolve approval (called by UI/admin)
+# Scopes: :approve_once (not persisted), :approve_session, :approve_agent, :approve_global
 :ok = LemonCore.ExecApprovals.resolve(approval_id, :approve_once)
 :ok = LemonCore.ExecApprovals.resolve(approval_id, :approve_session)
+:ok = LemonCore.ExecApprovals.resolve(approval_id, :approve_agent)
+:ok = LemonCore.ExecApprovals.resolve(approval_id, :approve_global)
 :ok = LemonCore.ExecApprovals.resolve(approval_id, :deny)
 ```
 
@@ -394,6 +447,77 @@ end)
 LemonCore.Telemetry.emit([:lemon, :custom], %{count: 1}, %{detail: "info"})
 ```
 
+### InboundMessage and RunRequest
+
+```elixir
+# InboundMessage: normalized message from any channel
+msg = %LemonCore.InboundMessage{
+  channel_id: "telegram",
+  account_id: "bot123",
+  peer: %{kind: :dm, id: "456", thread_id: nil},
+  sender: %{id: "789", username: "alice", display_name: "Alice"},
+  message: %{id: "1", text: "hello", timestamp: 1234567890, reply_to_id: nil},
+  raw: %{},  # original update
+  meta: %{}
+}
+
+# Build from Telegram update
+msg = LemonCore.InboundMessage.from_telegram(:my_bot, chat_id, telegram_message_map)
+
+# RunRequest: canonical run submission (accepted by RouterBridge.submit_run/1)
+req = LemonCore.RunRequest.new(%{
+  origin: :channel,
+  session_key: session_key,
+  agent_id: "default",
+  prompt: "Hello",
+  queue_mode: :collect,  # :collect | :followup | :steer | :interrupt
+  engine_id: nil,
+  model: nil,
+  cwd: "/path/to/project",
+  tool_policy: nil,
+  meta: %{}
+})
+```
+
+### RouterBridge
+
+Channel adapters and other producers forward runs to `:lemon_router` without a compile-time dependency. `:lemon_router` registers itself at startup.
+
+```elixir
+# Submit a run (returns {:ok, run_id} or {:error, :unavailable})
+{:ok, run_id} = LemonCore.RouterBridge.submit_run(run_request)
+
+# Forward inbound message to router
+:ok = LemonCore.RouterBridge.handle_inbound(inbound_message)
+
+# Abort a session or run
+:ok = LemonCore.RouterBridge.abort_session(session_key, :user_requested)
+:ok = LemonCore.RouterBridge.abort_run(run_id, :user_requested)
+```
+
+### Dotenv
+
+```elixir
+# Load <dir>/.env into process environment (does not override existing vars)
+:ok = LemonCore.Dotenv.load("/path/to/project")
+:ok = LemonCore.Dotenv.load("/path/to/project", override: true)
+
+# Load and swallow errors (logs warnings)
+:ok = LemonCore.Dotenv.load_and_log("/path/to/project")
+```
+
+### Low-level ETS Deduplication
+
+`LemonCore.Dedupe.Ets` is a lightweight TTL dedup that operates directly on ETS tables (no GenServer). Use it for high-frequency dedup within a single process or supervisor.
+
+```elixir
+:ok = LemonCore.Dedupe.Ets.init(:my_dedup_table)
+:ok = LemonCore.Dedupe.Ets.mark(:my_dedup_table, key)
+true = LemonCore.Dedupe.Ets.seen?(:my_dedup_table, key, ttl_ms)
+:seen | :new = LemonCore.Dedupe.Ets.check_and_mark(:my_dedup_table, key, ttl_ms)
+count = LemonCore.Dedupe.Ets.cleanup_expired(:my_dedup_table, ttl_ms)
+```
+
 ### HTTP Requests
 
 ```elixir
@@ -401,17 +525,32 @@ LemonCore.Telemetry.emit([:lemon, :custom], %{count: 1}, %{detail: "info"})
 LemonCore.Httpc.request(:get, {"https://api.example.com/data", []}, [], [])
 ```
 
-## External Dependencies
+## Test Utilities
 
-- `jason` - JSON encoding/decoding
-- `toml` - TOML parsing
-- `uuid` - UUID generation
-- `phoenix_pubsub` - PubSub infrastructure
-- `telemetry` - Metrics and instrumentation
-- `exqlite` - SQLite driver
-- `file_system` - File watching (optional, for config reload)
+`LemonCore.Testing` provides a test harness for writing isolated tests.
 
-## Testing
+```elixir
+# In test files, use the Case template
+defmodule MyTest do
+  use LemonCore.Testing.Case, async: true  # or with_store: true
+
+  test "example", %{harness: harness, tmp_dir: tmp_dir} do
+    path = temp_file!(harness, "config.toml", "[agent]\ndefault_model = \"test\"")
+    key = unique_session_key("mytest")
+  end
+end
+
+# Available helpers (imported automatically by LemonCore.Testing.Case):
+unique_token()             # unique integer
+unique_scope()             # {prefix, integer}
+unique_session_key()       # "agent:test_<n>:main"
+unique_run_id()            # "run_<n>"
+temp_file!(harness, name, content)   # create file in tmp_dir
+temp_dir!(harness, name)             # create subdir in tmp_dir
+clear_store_table(table)             # empty a Store table
+mock_home!(harness)                  # redirect HOME to tmp subdir
+random_master_key()                  # 32-byte base64 key for secrets tests
+```
 
 ```bash
 # Run all tests for lemon_core
@@ -424,11 +563,35 @@ mix test apps/lemon_core/test/lemon_core/config_test.exs
 mix test --cover apps/lemon_core
 ```
 
+## External Dependencies
+
+- `jason` - JSON encoding/decoding
+- `toml` - TOML parsing
+- `uuid` - UUID generation
+- `phoenix_pubsub` - PubSub infrastructure
+- `telemetry` - Metrics and instrumentation
+- `exqlite` - SQLite driver
+- `file_system` - File watching (optional, for config reload)
+
+## Supervised Process Tree
+
+The `LemonCore.Application` supervisor starts (`:one_for_one`):
+
+1. `Phoenix.PubSub` (name: `LemonCore.PubSub`) - PubSub backbone
+2. `LemonCore.ConfigCache` - ETS-backed config cache
+3. `LemonCore.Store` - Storage GenServer
+4. `LemonCore.ConfigReloader` - Reload orchestrator
+5. `LemonCore.ConfigReloader.Watcher` - File-system watcher (optional, requires `file_system` dep)
+6. `LemonCore.Browser.LocalServer` - Local browser driver
+
 ## Important Notes
 
 - **Never** add umbrella app dependencies to lemon_core - it's the base layer
 - Keep module interfaces stable - other apps depend on them
-- Use `LemonCore.ConfigCache` for hot-path config reads
+- `LemonCore.Config.load/2` uses the cache by default; `LemonCore.Config.reload/2` forces a disk read and updates the cache
 - Secrets values are never logged or returned by list/status APIs
-- Store backends auto-serialize with `:erlang.term_to_binary/1`
+- Store backends serialize with `:erlang.term_to_binary/1`; keys and values can be any Erlang term
 - Events use millisecond timestamps from `System.system_time(:millisecond)`
+- `LemonCore.RouterBridge` returns `{:error, :unavailable}` when `:lemon_router` has not registered itself; callers must handle this gracefully
+- `LemonCore.Dedupe.Ets` uses monotonic time for TTL; `LemonCore.Idempotency` uses wall-clock time
+- The `LemonCore.Config.Modular` interface is the newer typed approach; the older `LemonCore.Config` struct is still the primary interface used by most of the codebase

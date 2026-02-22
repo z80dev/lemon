@@ -4,12 +4,12 @@ This app manages the skill system for extending Lemon's capabilities. Skills are
 
 ## Purpose and Responsibilities
 
-- **Skill Registry**: Centralized registration and caching of all available skills
-- **Skill Discovery**: Online discovery from GitHub and registries
-- **Installation/Updates**: Install from Git repos, local paths, or skill registries
-- **Manifest Management**: Parse YAML/TOML frontmatter in SKILL.md files
-- **Built-in Seeding**: Distribute bundled skills to user directories
-- **Status Tracking**: Verify required binaries and configuration
+- **Skill Registry**: Centralized GenServer-based caching of all available skills
+- **Skill Discovery**: Online discovery from GitHub (repos with `lemon-skill` or `lemon-agent-skill` topics)
+- **Installation/Updates**: Install from Git repos or local paths (approval-gated via `LemonCore.ExecApprovals`)
+- **Manifest Management**: Parse YAML or TOML frontmatter in SKILL.md files (hand-rolled parser, no external YAML/TOML deps)
+- **Built-in Seeding**: Distribute bundled skills to user directories on app start
+- **Status Tracking**: Verify required binaries and environment variables
 - **Skill Tools**: Agent-accessible tools for skill operations
 
 ## Skill Structure
@@ -25,7 +25,7 @@ my-skill/
 
 ### Manifest Format
 
-SKILL.md supports YAML or TOML frontmatter:
+SKILL.md supports YAML frontmatter (recommended) or TOML frontmatter (`+++` delimiters):
 
 ```yaml
 ---
@@ -34,6 +34,7 @@ description: Brief description for relevance matching
 version: "1.0.0"
 author: "Author Name"
 tags: [automation, api]
+keywords: [deploy, kubernetes, k8s]
 requires:
   bins:
     - kubectl
@@ -57,8 +58,38 @@ Instructions, examples, and usage patterns...
 | `version` | Semantic version | No |
 | `author` | Skill author | No |
 | `tags` | List of categorization tags | No |
-| `requires.bins` | Required binaries (checked via `which`) | No |
-| `requires.config` | Required env vars | No |
+| `keywords` | Keywords for relevance scoring (weighted above description, below name) | No |
+| `requires.bins` | Required binaries (checked via `System.find_executable/1`) | No |
+| `requires.config` | Required environment variables (checked via `System.get_env/1`) | No |
+
+**Note:** The manifest parser is hand-rolled and handles basic YAML/TOML structures. It does not support anchors, references, or complex YAML features.
+
+## Directory Structure for Skills
+
+Skills are loaded from these locations, with later sources overriding earlier ones on key collision:
+
+### Global (precedence order, first wins)
+1. `~/.lemon/agent/skill/*/SKILL.md` — primary global skills
+2. `~/.agents/skills/*/SKILL.md` — harness-compatible global skills
+
+The agent dir defaults to `~/.lemon/agent` but can be overridden via:
+- `LEMON_AGENT_DIR` environment variable
+- `config :lemon_skills, :agent_dir, "/path"`
+- Falls back to `config :coding_agent, :agent_dir, ...` if `:lemon_skills` doesn't define it
+
+### Project (when `cwd` is provided, project overrides global)
+1. `<cwd>/.lemon/skill/` — project-specific skills (highest precedence)
+2. `.agents/skills/` directories from `cwd` up to git repository root (or filesystem root)
+
+The ancestor `.agents/skills` discovery walks up the directory tree, stopping at the git root (detected via `.git` file/directory). This allows monorepos to share skills at different hierarchy levels.
+
+Example for cwd at `/repo/packages/feature`:
+```
+/repo/packages/feature/.lemon/skill     (highest)
+/repo/packages/feature/.agents/skills
+/repo/packages/.agents/skills
+/repo/.agents/skills                    (stops at git root)
+```
 
 ## How to Add a New Skill
 
@@ -104,7 +135,7 @@ LemonSkills.status("my-skill")
 ## Skill Installation Flow
 
 ```
-Source (Git/Local/Registry)
+Source (Git URL / Local Path)
     ↓
 Resolve Source Type
     ↓
@@ -112,7 +143,7 @@ Validate SKILL.md Exists
     ↓
 Check for Existing Installation
     ↓
-Request Approval (if enabled)
+Request Approval (via LemonCore.ExecApprovals, if :require_approval is true)
     ↓
 Clone/Copy to Target Directory
     ↓
@@ -123,11 +154,13 @@ Register with Registry
 Return Entry
 ```
 
-Installation requires user approval by default (configurable via `:require_approval` app env).
+Installation requires user approval by default (configurable via `config :lemon_skills, :require_approval, true`). Pass `approve: true` to skip. If the approvals infrastructure is unavailable, install proceeds anyway.
+
+Git installs use `git clone --depth 1` and then remove the `.git` directory to save space. Updates attempt `git pull` only if `.git` still exists; otherwise they re-clone.
 
 ## Built-in Skills
 
-Located in `priv/builtin_skills/`, these are seeded on first run:
+Located in `priv/builtin_skills/`, seeded on app start (via `LemonSkills.Application`):
 
 | Skill | Description |
 |-------|-------------|
@@ -140,15 +173,15 @@ Located in `priv/builtin_skills/`, these are seeded on first run:
 | `session-logs` | Session logging patterns |
 | `peekaboo` | UI/hidden window management |
 
-Built-in skills are copied to `~/.lemon/agent/skill/` only if missing (never overwritten).
+Built-in skills are copied to `~/.lemon/agent/skill/` only if the destination directory is missing (never overwritten). Seeding can be disabled via `config :lemon_skills, :seed_builtin_skills, false`.
 
 ## Skill Tools
 
-Agents can access skills via these tools:
+Agents can access skills via these tools (defined in `LemonSkills.Tools`):
 
 ### `read_skill`
 
-Fetch skill content and metadata:
+Fetch skill content and metadata. Returns not-found suggestions when the skill doesn't exist.
 
 ```elixir
 LemonSkills.Tools.ReadSkill.tool(cwd: "/project/path")
@@ -157,7 +190,7 @@ LemonSkills.Tools.ReadSkill.tool(cwd: "/project/path")
 
 ### `post_to_x`
 
-Post to X (Twitter):
+Post to X (Twitter). Returns a helpful error if credentials are missing.
 
 ```elixir
 LemonSkills.Tools.PostToX.tool()
@@ -168,7 +201,7 @@ Requires: `X_API_CLIENT_ID`, `X_API_CLIENT_SECRET`, `X_API_ACCESS_TOKEN`, `X_API
 
 ### `get_x_mentions`
 
-Check recent X mentions:
+Check recent X mentions (default: 10, max: 100).
 
 ```elixir
 LemonSkills.Tools.GetXMentions.tool()
@@ -215,7 +248,7 @@ mix lemon.skill info my-skill
 # All skills (global + project)
 LemonSkills.list()
 
-# Project-specific only
+# Project-specific included
 LemonSkills.list(cwd: "/path/to/project")
 
 # With refresh
@@ -229,10 +262,11 @@ LemonSkills.list(refresh: true)
 skill.key           # "github"
 skill.name          # Display name
 skill.description   # Brief description
-skill.source        # :global, :project, or URL
+skill.source        # :global, :project, or URL string
 skill.path          # Absolute path
 skill.enabled       # Boolean
-skill.manifest      # Parsed manifest map
+skill.manifest      # Parsed manifest map (string keys, e.g. "name", "requires")
+skill.status        # :ready | :missing_deps | :missing_config | :disabled | :error
 ```
 
 ### Check Skill Status
@@ -243,17 +277,17 @@ LemonSkills.status("my-skill")
 # => %{ready: true, missing_bins: [], missing_config: [], disabled: false, error: nil}
 
 LemonSkills.status("k8s-skill")
-# => %{ready: false, missing_bins: ["kubectl"], missing_config: [], ...}
+# => %{ready: false, missing_bins: ["kubectl"], missing_config: [], disabled: false, error: nil}
 ```
 
 ### Install Skills Programmatically
 
 ```elixir
-# From GitHub
+# From GitHub (git clone --depth 1)
 {:ok, entry} = LemonSkills.install("https://github.com/user/skill-repo")
 
 # From local path (global)
-{:ok, entry} = LemonSkills.install("/path/to/skill", global: true)
+{:ok, entry} = LemonSkills.install("/path/to/skill")
 
 # Project-local install
 {:ok, entry} = LemonSkills.install("/path/to/skill", global: false, cwd: "/project")
@@ -285,7 +319,11 @@ LemonSkills.disable("my-skill")
 LemonSkills.disable("my-skill", global: false, cwd: "/project")
 ```
 
+Disabled state is stored in `~/.lemon/agent/skills.json` (global) or `<cwd>/.lemon/skills.json` (project).
+
 ### Find Relevant Skills
+
+Relevance scoring: exact name match (100) > partial name (50) > context-in-name (30) > exact keyword (40/word) > partial keyword (20/word) > description words (10/word) > body words (2/word). Project-source skills get a +1000 bonus so they rank above global skills when both match.
 
 ```elixir
 # Find skills matching context
@@ -296,7 +334,17 @@ skills = LemonSkills.find_relevant("kubernetes deployment")
 skills = LemonSkills.find_relevant("docker", max_results: 5)
 ```
 
+### Registry Counts
+
+```elixir
+# Get installed/enabled counts (useful for status UIs)
+%{installed: 8, enabled: 7} = LemonSkills.Registry.counts()
+%{installed: 3, enabled: 2} = LemonSkills.Registry.counts(cwd: "/project")
+```
+
 ### Online Discovery
+
+Searches GitHub for repos with `lemon-skill` or `lemon-agent-skill` topics. All sources run concurrently with per-source timeouts.
 
 ```elixir
 # Search GitHub for skills
@@ -306,6 +354,10 @@ results = LemonSkills.Registry.discover("github")
 # Combined local + online search
 %{local: local_skills, online: online_skills} =
   LemonSkills.Registry.search("api", max_local: 3, max_online: 5)
+
+# Local only
+%{local: skills, online: []} =
+  LemonSkills.Registry.search("api", include_online: false)
 ```
 
 ### Working with Entries
@@ -313,6 +365,9 @@ results = LemonSkills.Registry.discover("github")
 ```elixir
 # Create entry from path
 entry = LemonSkills.Entry.new("/path/to/skill", source: :global)
+
+# Create entry from discovered manifest (used by Discovery)
+entry = LemonSkills.Entry.from_manifest(manifest, "https://github.com/...", source: :github)
 
 # Get skill file path
 skill_file = LemonSkills.Entry.skill_file(entry)
@@ -334,39 +389,64 @@ entry = LemonSkills.Entry.with_status(entry, :missing_deps)
 ### Manifest Parsing
 
 ```elixir
-# Parse SKILL.md content
+# Parse SKILL.md content (returns {:ok, manifest, body} or :error)
 {:ok, manifest, body} = LemonSkills.Manifest.parse(content)
 
 # Parse frontmatter only
 {:ok, manifest} = LemonSkills.Manifest.parse_frontmatter(content)
 
-# Get body only
+# Get body only (strips frontmatter)
 body = LemonSkills.Manifest.parse_body(content)
 
 # Validate manifest
 :ok = LemonSkills.Manifest.validate(manifest)
 
-# Get requirements
-bins = LemonSkills.Manifest.required_bins(manifest)
-config = LemonSkills.Manifest.required_config(manifest)
+# Get requirements (manifest keys are strings)
+bins = LemonSkills.Manifest.required_bins(manifest)   # ["kubectl", "jq"]
+config = LemonSkills.Manifest.required_config(manifest) # ["API_KEY"]
+```
+
+### Status Checking
+
+```elixir
+# Check by key
+status = LemonSkills.Status.check("my-skill", cwd: "/project")
+
+# Check an entry directly
+status = LemonSkills.Status.check_entry(entry, cwd: "/project")
+
+# Individual checks
+LemonSkills.Status.binary_available?("kubectl")   # => false
+LemonSkills.Status.config_available?("API_KEY")   # => true
+
+# Get lists of missing items
+LemonSkills.Status.missing_binaries(entry)  # => ["kubectl"]
+LemonSkills.Status.missing_config(entry)    # => ["API_KEY"]
 ```
 
 ### Configuration Management
 
 ```elixir
 # Get directories
-LemonSkills.Config.global_skills_dir()
-LemonSkills.Config.project_skills_dir("/project/path")
-LemonSkills.Config.agent_dir()
+LemonSkills.Config.global_skills_dir()        # ~/.lemon/agent/skill
+LemonSkills.Config.global_skills_dirs()       # [~/.lemon/agent/skill, ~/.agents/skills]
+LemonSkills.Config.project_skills_dir("/project/path")  # /project/path/.lemon/skill
+LemonSkills.Config.project_skills_dirs("/project/path") # includes ancestor .agents/skills
+LemonSkills.Config.agent_dir()                # ~/.lemon/agent
+
+# Git root discovery (used for ancestor skill walking)
+LemonSkills.Config.find_git_repo_root("/project/packages/feature")  # => "/project" or nil
+LemonSkills.Config.collect_ancestor_agents_skill_dirs("/project/packages/feature")
+# => ["/project/packages/feature/.agents/skills", "/project/packages/.agents/skills", ...]
 
 # Load/save config
-config = LemonSkills.Config.load_config("/project/path")
-:ok = LemonSkills.Config.save_config(config, true)  # Global
+config = LemonSkills.Config.load_config("/project/path")  # deep-merges global + project
+:ok = LemonSkills.Config.save_config(config, true)         # Global
 :ok = LemonSkills.Config.save_config(config, false, "/project")  # Project
 
 # Per-skill config
 skill_config = LemonSkills.Config.get_skill_config("my-skill", "/project")
-:ok = LemonSkills.Config.set_skill_config("my-skill", %{key: "value"}, global: false, cwd: "/project")
+:ok = LemonSkills.Config.set_skill_config("my-skill", %{"key" => "value"}, global: false, cwd: "/project")
 
 # Check if disabled
 LemonSkills.Config.skill_disabled?("my-skill", "/project")
@@ -381,27 +461,34 @@ LemonSkills.Config.skill_disabled?("my-skill", "/project")
 mix test apps/lemon_skills
 
 # Specific test files
-mix test apps/lemon_skills/test/lemon_skills/registry_test.exs
+mix test apps/lemon_skills/test/lemon_skills/registry_relevance_test.exs
 mix test apps/lemon_skills/test/lemon_skills/manifest_test.exs
 mix test apps/lemon_skills/test/lemon_skills/installer_test.exs
+mix test apps/lemon_skills/test/lemon_skills/ancestor_skills_test.exs
 ```
 
 ### Test Structure
 
 ```
 test/lemon_skills/
-├── registry_test.exs          # Registry operations
-├── manifest_test.exs          # Manifest parsing
-├── entry_test.exs             # Entry struct
-├── status_test.exs            # Status checking
-├── installer_test.exs         # Installation
-├── builtin_seeder_test.exs    # Built-in seeding
-├── discovery_test.exs         # Online discovery
-├── config_test.exs            # Configuration
-└── tools/                     # Tool tests
+├── registry_relevance_test.exs    # find_relevant scoring and filtering
+├── registry_global_dirs_test.exs  # Global directory precedence
+├── ancestor_discovery_test.exs    # find_git_root, collect_ancestor_dirs
+├── ancestor_skills_test.exs       # Integration: .agents/skills ancestor walking
+├── manifest_test.exs              # Manifest parsing (YAML + TOML)
+├── entry_test.exs                 # Entry struct
+├── status_test.exs                # Status checking
+├── installer_test.exs             # Installation (local path, approval gating)
+├── builtin_seeder_test.exs        # Built-in seeding behavior
+├── discovery_test.exs             # Online discovery
+├── discovery_readme_test.exs      # Discovery README documentation tests
+├── config_test.exs                # Configuration load/save/merge
+└── tools/
     ├── post_to_x_test.exs
     ├── get_x_mentions_test.exs
     └── read_skill_test.exs
+test/mix/tasks/
+└── lemon.skill_test.exs           # Mix task CLI
 ```
 
 ### Common Test Patterns
@@ -419,35 +506,35 @@ on_exit(fn -> File.rm_rf!(skill_dir) end)
 
 ### Test Helpers
 
-- Tests use temporary directories under `tmp/`
-- Mock external APIs using `Mox` or bypass
-- Built-in skill tests verify seeding behavior
-- Installer tests use isolated temp directories
+- Tests use isolated temp directories under `apps/lemon_skills/tmp/` (leftover dirs from test runs are normal)
+- Installer tests override the agent dir via `:lemon_skills, :agent_dir` app env
+- Approval gating is disabled in tests via `config :lemon_skills, :require_approval, false`
+- Discovery tests stub HTTP calls; actual GitHub requests are not made in unit tests
 
 ## Directory Structure
 
 ```
 apps/lemon_skills/
 ├── lib/
-│   ├── lemon_skills.ex              # Main API module
+│   ├── lemon_skills.ex              # Main public API (delegates to sub-modules)
 │   ├── lemon_skills/
-│   │   ├── application.ex           # OTP app
-│   │   ├── registry.ex              # GenServer registry
+│   │   ├── application.ex           # OTP app: seeds builtins, starts Registry
+│   │   ├── registry.ex              # GenServer registry (list, get, find_relevant, discover, search, counts)
 │   │   ├── entry.ex                 # Skill entry struct
-│   │   ├── manifest.ex              # Manifest parsing
+│   │   ├── manifest.ex              # Manifest parsing (hand-rolled YAML/TOML)
 │   │   ├── status.ex                # Status checking
-│   │   ├── installer.ex             # Installation logic
-│   │   ├── config.ex                # Configuration
+│   │   ├── installer.ex             # Installation logic (approval via LemonCore.ExecApprovals)
+│   │   ├── config.ex                # Directory paths, config load/save, ancestor discovery
 │   │   ├── builtin_seeder.ex        # Built-in skill seeding
-│   │   ├── discovery.ex             # Online discovery
+│   │   ├── discovery.ex             # Online discovery (GitHub topic search)
 │   │   └── tools/
 │   │       ├── post_to_x.ex
 │   │       ├── get_x_mentions.ex
 │   │       └── read_skill.ex
 │   └── mix/tasks/
-│       └── lemon.skill.ex           # Mix task
+│       └── lemon.skill.ex           # Mix task CLI
 ├── priv/
-│   └── builtin_skills/              # Bundled skills
+│   └── builtin_skills/              # Bundled skills (seeded to ~/.lemon/agent/skill/)
 │       ├── github/
 │       ├── tmux/
 │       └── ...
@@ -457,23 +544,23 @@ apps/lemon_skills/
 
 ## Dependencies
 
-- `lemon_core` - Shared primitives
-- `agent_core` - Agent types and tool definitions
-- `ai` - AI types (TextContent)
-- `lemon_channels` - X API integration
-- `jason` - JSON encoding/decoding
+- `lemon_core` - Shared primitives, including `LemonCore.ExecApprovals` for approval gating
+- `agent_core` - Agent types (`AgentTool`, `AgentToolResult`)
+- `ai` - AI types (`TextContent`)
+- `lemon_channels` - X API integration (`LemonChannels.Adapters.XAPI`)
+- `jason` - JSON encoding/decoding for `skills.json` config files
 
 ## Key Modules Reference
 
 | Module | Purpose |
 |--------|---------|
-| `LemonSkills` | Main public API |
-| `LemonSkills.Registry` | GenServer for skill caching |
-| `LemonSkills.Entry` | Skill entry struct |
-| `LemonSkills.Manifest` | Parse YAML/TOML frontmatter |
-| `LemonSkills.Installer` | Install/update/uninstall |
-| `LemonSkills.Status` | Check requirements |
-| `LemonSkills.Config` | Directory and config management |
-| `LemonSkills.BuiltinSeeder` | Seed built-in skills |
-| `LemonSkills.Discovery` | Online skill discovery |
+| `LemonSkills` | Main public API (delegates to sub-modules) |
+| `LemonSkills.Registry` | GenServer: list, get, find_relevant, discover, search, counts, register, unregister |
+| `LemonSkills.Entry` | Skill entry struct; `new/2`, `from_manifest/3`, `with_manifest/2`, `with_status/2`, `content/1`, `skill_file/1`, `ready?/1` |
+| `LemonSkills.Manifest` | Hand-rolled YAML/TOML parser; `parse/1`, `parse_frontmatter/1`, `parse_body/1`, `validate/1`, `required_bins/1`, `required_config/1` |
+| `LemonSkills.Installer` | Install/update/uninstall with approval gating |
+| `LemonSkills.Status` | `check/2`, `check_entry/2`, `binary_available?/1`, `config_available?/1`, `missing_binaries/1`, `missing_config/1` |
+| `LemonSkills.Config` | Directory paths, config load/save, ancestor `.agents/skills` discovery, `find_git_repo_root/1` |
+| `LemonSkills.BuiltinSeeder` | Seed built-in skills on app start (idempotent, never overwrites) |
+| `LemonSkills.Discovery` | Online GitHub topic search for skills |
 | `Mix.Tasks.Lemon.Skill` | CLI interface |

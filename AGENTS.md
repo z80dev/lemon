@@ -11,17 +11,19 @@
 |-------------------|------------|
 | Add/modify AI provider support | `apps/ai/` |
 | Work on coding tools or session management | `apps/coding_agent/` |
-| Modify Telegram/Discord/voice transports | `apps/lemon_gateway/` |
-| Add new messaging channels (X, XMTP, etc.) | `apps/lemon_channels/` |
+| Modify Telegram/SMS/Discord/voice transports | `apps/lemon_gateway/` |
+| Add new messaging channel adapters (X, XMTP, etc.) | `apps/lemon_channels/` |
 | Work on agent routing or message flow | `apps/lemon_router/` |
 | Build HTTP/WebSocket API features | `apps/lemon_control_plane/` |
 | Manage configuration, secrets, or storage | `apps/lemon_core/` |
 | Work with CLI runners/subagent spawning | `apps/agent_core/` |
 | Create or modify skills | `apps/lemon_skills/` |
 | Build cron jobs or automation | `apps/lemon_automation/` |
+| Manage long-running external processes | `apps/lemon_services/` |
 | Work on the web UI | `apps/lemon_web/` |
 | Debug coding agent via RPC | `apps/coding_agent_ui/` |
 | Market data ingestion | `apps/market_intel/` |
+| Browser automation via CDP/Playwright | `clients/lemon-browser-node/` |
 
 ---
 
@@ -29,27 +31,28 @@
 
 ```
 apps/
-├── agent_core/          # Core agent runtime, CLI runners, subagent management
-├── ai/                  # AI provider abstraction (Anthropic, OpenAI, etc.)
-├── coding_agent/        # Main coding agent with 30+ tools
-├── coding_agent_ui/     # Debug RPC interface for coding agent
-├── lemon_automation/    # Cron jobs, heartbeats, automation
-├── lemon_channels/      # Channel adapters (Telegram, X API, XMTP)
-├── lemon_control_plane/ # HTTP/WebSocket API, JSON-RPC methods
-├── lemon_core/          # Shared primitives, config, store, secrets
-├── lemon_gateway/       # Gateway transports, engines, message handling
-├── lemon_router/        # Message routing, agent directory
-├── lemon_services/      # External service management
-├── lemon_skills/        # Skill registry, installation
-├── lemon_web/           # Phoenix web interface
-└── market_intel/        # Market data ingestion, analysis
+├── agent_core/          # Core agent runtime, CLI runners (claude, codex, pi, kimi, opencode), subagent management
+├── ai/                  # AI provider abstraction (Anthropic, OpenAI, Google, Azure, Bedrock)
+├── coding_agent/        # Main coding agent with 35+ tools, session management, budget enforcement
+├── coding_agent_ui/     # Thin wrapper that exposes coding_agent via RPC (mostly empty, used for tooling)
+├── lemon_automation/    # Cron jobs, heartbeat manager, run submitter
+├── lemon_channels/      # Channel adapters for outbound delivery (Telegram, X API, XMTP)
+├── lemon_control_plane/ # HTTP/WebSocket API server with 80+ JSON-RPC methods
+├── lemon_core/          # Shared primitives: config, store (ETS/JSONL/SQLite), secrets, PubSub bus
+├── lemon_gateway/       # Gateway engines (claude, codex, pi, lemon, echo), Telegram/SMS/Discord transports
+├── lemon_router/        # Message routing, agent directory, run orchestration
+├── lemon_services/      # Long-running external process management (OTP-based, no umbrella deps)
+├── lemon_skills/        # Skill registry, discovery, installation
+├── lemon_web/           # Phoenix LiveView web interface
+└── market_intel/        # Market data ingestion, analysis (Ecto/SQLite, GenStage)
 
 clients/
+├── lemon-browser-node/  # Browser automation node via CDP/Playwright (TypeScript)
 ├── lemon-tui/           # Terminal UI client (TypeScript)
-└── lemon-web/           # Web workspace (shared, server, web)
+└── lemon-web/           # Web workspace (shared, server, web packages)
 
 docs/                    # Architecture docs, design decisions
-config/                  # Umbrella configuration
+config/                  # Umbrella configuration (config.exs, runtime.exs, dev.exs, prod.exs)
 scripts/                 # Utility scripts
 ```
 
@@ -101,6 +104,15 @@ npm run dev      # Start web server + frontend
 npm run build    # Build shared/server/web packages
 ```
 
+### Browser Node Client (TypeScript)
+
+```bash
+cd clients/lemon-browser-node
+npm install
+npm run build
+npm run dev      # Watch mode
+```
+
 ### Quick Dev Bootstrap
 
 ```bash
@@ -114,31 +126,43 @@ npm run build    # Build shared/server/web packages
 ### Message Flow
 
 ```
-[User via Telegram/Discord/Email/SMS] 
+[User via Telegram / SMS (Twilio) / Discord / XMTP / X]
     ↓
-[lemon_gateway] - Transport layer, engines
+[lemon_gateway] - Transport layer, engine selection
     ↓
-[lemon_router] - Route to appropriate agent
+[lemon_router] - Route to appropriate agent, run orchestration
     ↓
-[coding_agent] - Execute tools, manage sessions
+[coding_agent] - Execute tools, manage sessions, budget enforcement
     ↓
-[agent_core] - CLI runners, subagent spawning
+[agent_core] - CLI runners (claude/codex/pi/kimi/opencode), subagent spawning
     ↓
-[ai] - LLM provider calls
+[ai] - LLM provider calls (Anthropic, OpenAI, Google, Azure, Bedrock)
 ```
+
+Outbound message delivery goes through `lemon_channels` (Telegram, X API, XMTP adapters).
+The control plane (`lemon_control_plane`) provides the JSON-RPC API used by TUI/web clients.
 
 ### Key Dependencies Between Apps
 
+Derived from mix.exs files and enforced by `mix lemon.quality` (architecture boundary check):
+
 ```
-lemon_control_plane ──→ lemon_router, lemon_channels, lemon_skills, coding_agent
-lemon_router ─────────→ lemon_gateway, lemon_channels, coding_agent, agent_core
-lemon_gateway ────────→ agent_core, coding_agent, lemon_channels, lemon_core
+lemon_control_plane ──→ lemon_core, lemon_router, lemon_channels, lemon_skills, lemon_automation, lemon_gateway, ai, coding_agent*
+lemon_router ─────────→ lemon_core, lemon_gateway, lemon_channels, coding_agent, agent_core
+lemon_gateway ────────→ lemon_core, agent_core, ai, coding_agent, lemon_channels*
+lemon_automation ─────→ lemon_core, lemon_router
 lemon_channels ───────→ lemon_core
-coding_agent ─────────→ agent_core, ai, lemon_skills, lemon_core
-agent_core ───────────→ ai, lemon_core
-lemon_skills ─────────→ agent_core, ai, lemon_channels
-market_intel ─────────→ lemon_core, agent_core, lemon_channels
+coding_agent ─────────→ lemon_core, agent_core, ai, lemon_skills
+agent_core ───────────→ lemon_core, ai
+lemon_skills ─────────→ lemon_core, agent_core, ai, lemon_channels
+lemon_web ────────────→ lemon_core, lemon_router
+market_intel ─────────→ lemon_core, agent_core, lemon_channels*
+lemon_services ───────→ (no umbrella deps - standalone OTP service manager)
+coding_agent_ui ──────→ coding_agent
+ai ───────────────────→ lemon_core
 ```
+
+`*` = runtime: false (compile-time only dependency)
 
 ---
 
@@ -146,12 +170,21 @@ market_intel ─────────→ lemon_core, agent_core, lemon_channe
 
 - **User config**: `~/.lemon/config.toml`
 - **Project config**: `.lemon/config.toml` (in repo root)
-- **Secrets**: Managed via `mix lemon.secrets.*` tasks
+- **Secrets**: Managed via `mix lemon.secrets.*` tasks (`set`, `list`, `delete`, `status`, `init`)
+- **Config inspection**: `mix lemon.config` - show resolved runtime config
+- **Store migration**: `mix lemon.store.migrate_jsonl_to_sqlite`
 
 Key env vars:
 - `ANTHROPIC_API_KEY` - Claude provider
 - `OPENAI_API_KEY` - OpenAI provider
-- `LEMON_TELEGRAM_BOT_TOKEN` - Telegram transport
+- `LEMON_LOG_LEVEL` - Log level (debug/info/warning/error)
+- `LEMON_STORE_PATH` - Persistent store path
+- `LEMON_WEB_ACCESS_TOKEN` - Web UI auth token
+- `LEMON_WEB_HOST` / `LEMON_WEB_PORT` - Web server binding (prod)
+- `LEMON_WEB_SECRET_KEY_BASE` - Required in prod
+- `DEEPGRAM_API_KEY` - Speech-to-text
+- `ELEVENLABS_API_KEY` / `ELEVENLABS_VOICE_ID` - TTS
+- `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_PHONE_NUMBER` - SMS
 
 ---
 
@@ -172,9 +205,18 @@ Key env vars:
 
 ### Adding a Transport
 
-1. Create transport module in `apps/lemon_gateway/lib/lemon_gateway/transports/`
-2. Implement transport behaviour
-3. Register in `LemonGateway.TransportRegistry`
+Transports live in `apps/lemon_gateway/`. Current transports: Telegram (`telegram/`), SMS/Twilio (`sms/`), Discord (`discord/`).
+
+1. Create transport module in `apps/lemon_gateway/lib/lemon_gateway/`
+2. Implement appropriate behaviour (see existing transports for patterns)
+3. Wire up in `LemonGateway.Application`
+
+### Adding a Gateway Engine
+
+Engines are in `apps/lemon_gateway/lib/lemon_gateway/engines/`. Current: `claude.ex`, `codex.ex`, `pi.ex`, `lemon.ex`, `opencode.ex`, `echo.ex`.
+
+1. Create engine module implementing `LemonGateway.Engine` behaviour
+2. Register in engine registry
 
 ---
 
@@ -243,13 +285,20 @@ This repository includes an optional pre-push hook that uses **kimi** to review 
 
 ## Documentation Index
 
-- `docs/architecture_boundaries.md` - Dependency boundaries
+- `docs/architecture_boundaries.md` - Dependency boundaries and allowed cross-app references
 - `docs/config.md` - Runtime configuration reference
 - `docs/skills.md` - Skill system documentation
-- `docs/quality_harness.md` - Quality checks and cleanup
+- `docs/quality_harness.md` - Quality checks and cleanup (`mix lemon.quality`, `mix lemon.cleanup`)
 - `docs/assistant_bootstrap_contract.md` - Bootstrap contract
 - `docs/context.md` - Context management
 - `docs/telemetry.md` - Telemetry and observability
+- `docs/extensions.md` - Extension system
+- `docs/beam_agents.md` - BEAM agent architecture
+- `docs/benchmarks.md` - Performance benchmarks
+- `docs/model-selection-decoupling.md` - Model selection design
+- `docs/agent-loop/` - Agent loop design docs
+- `docs/testing/` - Testing guides
+- `docs/tools/` - Tool documentation
 
 ---
 

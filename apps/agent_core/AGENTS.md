@@ -10,7 +10,7 @@ AgentCore provides the runtime foundation for AI agents in the Lemon project:
 - **CLI Runners**: Subprocess wrappers for external AI engines (Claude, Codex, Kimi, OpenCode, Pi)
 - **Subagent Spawning**: Supervised dynamic spawning of child agents
 - **Event Streaming**: Async producer/consumer event streams for real-time UI updates
-- **Context Management**: Message history, tool definitions, and conversation state
+- **Context Management**: Message history sizing, truncation, and token estimation
 - **Abort Handling**: Cooperative cancellation signals for long-running operations
 
 ## Architecture
@@ -35,23 +35,34 @@ AgentCore provides the runtime foundation for AI agents in the Lemon project:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+## Supervision Tree
+
+```
+AgentCore.Supervisor (:one_for_one)
+├── AgentCore.AbortSignal.TableOwner  (owns the abort ETS table)
+├── AgentCore.AgentRegistry           (Registry, :unique keys)
+├── AgentCore.SubagentSupervisor      (DynamicSupervisor)
+├── AgentCore.LoopTaskSupervisor      (Task.Supervisor for loop tasks)
+└── AgentCore.ToolTaskSupervisor      (Task.Supervisor for tool execution)
+```
+
 ## Key Modules
 
 ### Core Agent
 
 | Module | Purpose |
 |--------|---------|
-| `AgentCore` | Main API - delegates to Agent GenServer and Loop |
-| `AgentCore.Agent` | GenServer for stateful agent management, subscriptions, queuing |
-| `AgentCore.AgentRegistry` | Registry for agent lookup by `{session_id, role, index}` keys |
-| `AgentCore.SubagentSupervisor` | DynamicSupervisor for spawning subagent processes |
+| `AgentCore` | Main API - convenience wrappers, `new_agent/1`, `new_tool/1`, `new_tool_result/1`, `text_content/1`, `image_content/2`, `get_text/1`, `agent_loop/4`, `agent_loop_continue/3` |
+| `AgentCore.Agent` | GenServer for stateful agent management, subscriptions, steering/follow-up queues |
+| `AgentCore.AgentRegistry` | Registry wrapper for agent lookup by `{session_id, role, index}` keys |
+| `AgentCore.SubagentSupervisor` | DynamicSupervisor for spawning subagent processes (`:temporary` children) |
 | `AgentCore.Application` | OTP application with supervision tree |
 
 ### Loop and Execution
 
 | Module | Purpose |
 |--------|---------|
-| `AgentCore.Loop` | Stateless agent loop: streaming, tool calls, steering |
+| `AgentCore.Loop` | Stateless agent loop: `agent_loop/6`, `agent_loop_continue/5`, `stream/4`, `stream_continue/3` |
 | `AgentCore.Loop.Streaming` | LLM response streaming with content block handling |
 | `AgentCore.Loop.ToolCalls` | Concurrent tool execution with result collection |
 
@@ -59,25 +70,26 @@ AgentCore provides the runtime foundation for AI agents in the Lemon project:
 
 | Module | Purpose |
 |--------|---------|
-| `AgentCore.EventStream` | Async event producer/consumer with backpressure |
-| `AgentCore.Context` | Context window management and message transformation |
-| `AgentCore.AbortSignal` | ETS-based abort signal coordination |
-| `AgentCore.Proxy` | Stream proxy for event transformation |
+| `AgentCore.EventStream` | Async event producer/consumer with backpressure, owner monitoring, task linking |
+| `AgentCore.Context` | Context size estimation, truncation, and `make_transform/1` for `AgentLoopConfig` |
+| `AgentCore.AbortSignal` | ETS-based abort signal coordination (`new/0`, `abort/1`, `aborted?/1`, `clear/1`) |
+| `AgentCore.Proxy` | SSE proxy stream function for routing LLM calls through a server |
 
 ### Types
 
 | Module | Purpose |
 |--------|---------|
-| `AgentCore.Types` | Core structs: `AgentState`, `AgentContext`, `AgentTool`, `AgentLoopConfig` |
+| `AgentCore.Types` | Core types: `AgentState`, `AgentContext`, `AgentTool`, `AgentLoopConfig`, `agent_event()` |
 | `AgentCore.Types.AgentTool` | Tool definition with `execute/4` callback |
-| `AgentCore.Types.AgentToolResult` | Result with content blocks and trust level |
+| `AgentCore.Types.AgentToolResult` | Result with content blocks, details, and trust level |
+| `AgentCore.Types.AgentLoopConfig` | Loop config: model, convert_to_llm, transform_context, get_api_key, max_tool_concurrency, stream_fn |
 
 ### CLI Runners
 
 | Module | Purpose |
 |--------|---------|
-| `AgentCore.CliRunners.JsonlRunner` | Base behaviour for JSONL-streaming CLI tools |
-| `AgentCore.CliRunners.Types` | Unified event types: `ResumeToken`, `Action`, `StartedEvent`, etc. |
+| `AgentCore.CliRunners.JsonlRunner` | Base `use` macro and GenServer for JSONL-streaming CLI subprocesses |
+| `AgentCore.CliRunners.Types` | Event types: `ResumeToken`, `Action`, `StartedEvent`, `ActionEvent`, `CompletedEvent`, `EventFactory` |
 | `AgentCore.CliRunners.ToolActionHelpers` | Helpers for tool/action event translation |
 
 ### Engine-Specific Runners
@@ -92,6 +104,58 @@ Each engine has a runner, schema, and subagent module:
 | OpenCode | `opencode_runner.ex` | `opencode_schema.ex` | `opencode_subagent.ex` |
 | Pi | `pi_runner.ex` | `pi_schema.ex` | `pi_subagent.ex` |
 
+## AgentCore.Agent - Full API
+
+Beyond what `AgentCore` delegates, `AgentCore.Agent` exposes:
+
+**Lifecycle:**
+- `start_link(opts)` - Start the GenServer
+- `prompt(agent, message)` - Start a run; returns `{:error, :already_streaming}` if busy
+- `continue(agent)` - Continue from existing context (retry/after tool results)
+- `abort(agent)` - Send abort signal (async, cooperative)
+- `wait_for_idle(agent, opts \\ [])` - Block until idle; accepts `timeout:` option
+- `reset(agent)` - Clear messages, queues, and error state
+
+**Subscriptions:**
+- `subscribe(agent, pid)` - Returns an unsubscribe function; subscriber gets `{:agent_event, event}` messages
+
+**Steering and Follow-up:**
+- `steer(agent, message)` - Inject message mid-run (delivered after current tool batch, skipping remaining tools)
+- `follow_up(agent, message)` - Queue message for after the agent would naturally stop
+- `clear_steering_queue(agent)` / `clear_follow_up_queue(agent)` / `clear_all_queues(agent)`
+- `set_steering_mode(agent, :all | :one_at_a_time)` - Default: `:one_at_a_time`
+- `set_follow_up_mode(agent, :all | :one_at_a_time)` - Default: `:one_at_a_time`
+
+**State Mutators (callable while idle):**
+- `set_system_prompt(agent, prompt)` / `set_model(agent, model)` / `set_thinking_level(agent, level)`
+- `set_tools(agent, tools)` / `replace_messages(agent, messages)` / `append_message(agent, message)`
+- `set_session_id(agent, id)` / `get_session_id(agent)`
+
+**Getters:**
+- `get_state(agent)` - Returns `AgentState` struct with `messages`, `tools`, `is_streaming`, `error`, etc.
+- `get_steering_mode(agent)` / `get_follow_up_mode(agent)`
+
+**Note:** `steer/2` and `follow_up/2` are on `AgentCore.Agent`, not on the top-level `AgentCore` module.
+
+## AgentLoopConfig Fields
+
+```elixir
+%AgentCore.Types.AgentLoopConfig{
+  # Required
+  model: my_model,
+  convert_to_llm: fn messages -> {:ok, llm_messages} end,
+
+  # Optional
+  transform_context: fn messages, signal -> {:ok, transformed} end,
+  get_api_key: fn provider -> api_key end,
+  get_steering_messages: fn -> [] end,
+  get_follow_up_messages: fn -> [] end,
+  max_tool_concurrency: nil,   # nil/:infinity = unbounded, or pos_integer
+  stream_options: %Ai.Types.StreamOptions{},
+  stream_fn: nil               # custom stream function, defaults to Ai.stream_simple/3
+}
+```
+
 ## Adding a New CLI Runner
 
 To add support for a new AI CLI tool:
@@ -101,42 +165,40 @@ To add support for a new AI CLI tool:
 ```elixir
 defmodule AgentCore.CliRunners.MyEngineRunner do
   @moduledoc "MyEngine CLI runner"
-  
+
   use AgentCore.CliRunners.JsonlRunner
-  
+
   alias AgentCore.CliRunners.Types.{EventFactory, ResumeToken}
-  
+
   @engine "myengine"
-  
+
   @impl true
   def engine, do: @engine
-  
+
   @impl true
   def init_state(_prompt, _resume, cwd, _opts) do
-    # Return initial state struct
     %{factory: EventFactory.new(@engine), last_text: nil}
   end
-  
+
   @impl true
   def build_command(prompt, resume, _state) do
     base_args = ["--json", "--output-format", "jsonl"]
-    
+
     args = if resume do
       base_args ++ ["--resume", resume.value]
     else
       base_args
     end
-    
+
     args = args ++ ["--", prompt]
     {"myengine", args}
   end
-  
+
   @impl true
   def decode_line(line) do
-    # Parse JSONL line
     Jason.decode(line)
   end
-  
+
   @impl true
   def translate_event(data, state) do
     case data do
@@ -145,11 +207,11 @@ defmodule AgentCore.CliRunners.MyEngineRunner do
         {started_event, factory} = EventFactory.started(state.factory, token)
         state = %{state | factory: factory}
         {[started_event], state, [found_session: token]}
-        
+
       %{"type" => "text", "content" => text} ->
         state = %{state | last_text: text}
         {[], state, []}
-        
+
       %{"type" => "done", "result" => result} ->
         {completed_event, factory} = EventFactory.completed_ok(
           state.factory,
@@ -158,19 +220,19 @@ defmodule AgentCore.CliRunners.MyEngineRunner do
         )
         state = %{state | factory: factory}
         {[completed_event], state, [done: true]}
-        
+
       _ ->
         {[], state, []}
     end
   end
-  
+
   @impl true
   def handle_exit_error(exit_code, state) do
     message = "myengine failed (rc=#{exit_code})"
     {event, factory} = EventFactory.completed_error(state.factory, message)
     {[event], %{state | factory: factory}}
   end
-  
+
   @impl true
   def handle_stream_end(state) do
     {event, factory} = EventFactory.completed_error(
@@ -183,63 +245,7 @@ defmodule AgentCore.CliRunners.MyEngineRunner do
 end
 ```
 
-### 2. Create the Schema Module (if needed)
-
-Parse engine-specific JSON output:
-
-```elixir
-defmodule AgentCore.CliRunners.MyEngineSchema do
-  @moduledoc "JSON decoding for MyEngine output"
-  
-  def decode_event(json) do
-    case Jason.decode(json) do
-      {:ok, %{"type" => "init"} = data} -> 
-        {:ok, struct(StreamInitMessage, data)}
-      {:ok, data} -> 
-        {:ok, data}
-      error -> 
-        error
-    end
-  end
-  
-  defmodule StreamInitMessage do
-    defstruct [:type, :session_id, :tools, :model]
-  end
-end
-```
-
-### 3. Create the Subagent Module
-
-Wrap the runner as an AgentCore subagent:
-
-```elixir
-defmodule AgentCore.CliRunners.MyEngineSubagent do
-  @moduledoc "MyEngine subagent integration"
-  
-  alias AgentCore.CliRunners.MyEngineRunner
-  
-  def run(prompt, opts \\ []) do
-    resume = Keyword.get(opts, :resume)
-    cwd = Keyword.get(opts, :cwd, File.cwd!())
-    
-    {:ok, pid} = MyEngineRunner.start_link(
-      prompt: prompt,
-      resume: resume,
-      cwd: cwd,
-      owner: self()
-    )
-    
-    stream = MyEngineRunner.stream(pid)
-    
-    # Process events
-    MyEngineRunner.stream(pid)
-    |> AgentCore.EventStream.events()
-    |> Enum.to_list()
-  end
-end
-```
-
-### 4. Add Resume Token Support
+### 2. Add Resume Token Support
 
 Update `AgentCore.CliRunners.Types.ResumeToken`:
 
@@ -254,32 +260,44 @@ Update `AgentCore.CliRunners.Types.ResumeToken`:
 ~r/^`?myengine\s+--resume\s+[a-zA-Z0-9_-]+`?$/i,
 ```
 
+### 3. CLI Runner Event Format
+
+CLI runner events are wrapped before being pushed to the EventStream:
+
+```elixir
+{:cli_event, %StartedEvent{...}}
+{:cli_event, %ActionEvent{...}}
+{:cli_event, %CompletedEvent{...}}
+```
+
+Consumers receive `{:cli_event, event}` tuples when iterating `EventStream.events/1`.
+
 ## Subagent Spawning Patterns
 
 ### Basic Subagent Spawn
 
 ```elixir
-# Spawn and wait
 {:ok, pid} = AgentCore.SubagentSupervisor.start_subagent(
   model: model,
   system_prompt: "You are a research assistant",
-  tools: tools
+  tools: tools,
+  convert_to_llm: &MyApp.convert/1
 )
 
-AgentCore.prompt(pid, "Research this topic")
-:ok = AgentCore.wait_for_idle(pid)
-state = AgentCore.get_state(pid)
+AgentCore.Agent.prompt(pid, "Research this topic")
+:ok = AgentCore.Agent.wait_for_idle(pid)
+state = AgentCore.Agent.get_state(pid)
 AgentCore.SubagentSupervisor.stop_subagent(pid)
 ```
 
 ### Registered Subagent with Registry Key
 
 ```elixir
-# Spawn with registry key for lookup
 {:ok, pid} = AgentCore.SubagentSupervisor.start_subagent(
   registry_key: {session_id, :research, 0},
   model: model,
-  system_prompt: "Research assistant"
+  system_prompt: "Research assistant",
+  convert_to_llm: &MyApp.convert/1
 )
 
 # Look up later
@@ -291,22 +309,21 @@ AgentCore.SubagentSupervisor.stop_subagent(pid)
 ```elixir
 {:ok, pid} = AgentCore.SubagentSupervisor.start_subagent(
   model: model,
-  system_prompt: "Coding assistant"
+  system_prompt: "Coding assistant",
+  convert_to_llm: &MyApp.convert/1
 )
 
-# Subscribe parent to subagent events
-unsubscribe = AgentCore.subscribe(pid, parent_pid)
+unsubscribe = AgentCore.Agent.subscribe(pid, self())
+AgentCore.Agent.prompt(pid, "Write a function")
 
-AgentCore.prompt(pid, "Write a function")
-
-# Receive events in parent
 receive do
   {:agent_event, {:message_update, _msg, delta}} ->
-    # Stream subagent output to UI
     send_ui_update(delta)
   {:agent_event, {:agent_end, _messages}} ->
     :done
 end
+
+unsubscribe.()
 ```
 
 ### Concurrent Subagents
@@ -317,15 +334,14 @@ tasks = for i <- 0..2 do
     {:ok, pid} = AgentCore.SubagentSupervisor.start_subagent(
       registry_key: {session_id, :worker, i},
       model: model,
-      system_prompt: "Parallel worker #{i}"
+      system_prompt: "Parallel worker #{i}",
+      convert_to_llm: &MyApp.convert/1
     )
-    
-    AgentCore.prompt(pid, "Process chunk #{i}")
-    :ok = AgentCore.wait_for_idle(pid)
-    
-    state = AgentCore.get_state(pid)
+
+    AgentCore.Agent.prompt(pid, "Process chunk #{i}")
+    :ok = AgentCore.Agent.wait_for_idle(pid)
+    state = AgentCore.Agent.get_state(pid)
     AgentCore.SubagentSupervisor.stop_subagent(pid)
-    
     state.messages
   end)
 end
@@ -338,124 +354,105 @@ results = Task.await_many(tasks)
 ### Basic Stream Consumption
 
 ```elixir
-{:ok, agent} = AgentCore.new_agent(model: model, system_prompt: "Helpful assistant")
+{:ok, agent} = AgentCore.new_agent(
+  model: model,
+  system_prompt: "Helpful assistant",
+  convert_to_llm: &MyApp.convert/1
+)
 AgentCore.subscribe(agent, self())
-
 AgentCore.prompt(agent, "Hello!")
 
-# Process all events
-for event <- AgentCore.EventStream.events(stream) do
-  case event do
-    {:agent_start} ->
-      IO.puts("Agent started")
-      
-    {:message_start, msg} ->
-      IO.puts("Message started: #{msg.role}")
-      
-    {:message_update, _msg, delta} ->
-      IO.write(delta)  # Streaming text
-      
-    {:message_end, msg} ->
-      IO.puts("\nMessage complete")
-      
-    {:tool_execution_start, id, name, args} ->
-      IO.puts("Tool: #{name}(#{inspect(args)})")
-      
-    {:tool_execution_end, id, name, result, is_error} ->
-      IO.puts("Tool #{name} completed")
-      
-    {:turn_end, message, tool_results} ->
-      IO.puts("Turn complete")
-      
-    {:agent_end, messages} ->
-      IO.puts("Agent finished")
-  end
+# Receive events as messages
+receive do
+  {:agent_event, {:agent_start}} -> IO.puts("Agent started")
+  {:agent_event, {:message_update, _msg, delta}} -> IO.write(delta)
+  {:agent_event, {:agent_end, messages}} -> IO.puts("Done")
 end
 ```
+
+### Events Reference
+
+```elixir
+{:agent_start}
+{:turn_start}
+{:message_start, message}
+{:message_update, message, assistant_event}   # streaming text delta
+{:message_end, message}
+{:tool_execution_start, id, name, args}
+{:tool_execution_update, id, name, args, partial_result}
+{:tool_execution_end, id, name, result, is_error}
+{:turn_end, message, tool_results}
+{:agent_end, new_messages}                     # terminal
+{:error, reason, partial_state}                # terminal
+{:canceled, reason}                            # terminal
+```
+
+`new_messages` in `{:agent_end, ...}` contains only messages from the current run, not the full history.
 
 ### Using EventStream Directly
 
 ```elixir
-# Create stream with custom options
 {:ok, stream} = AgentCore.EventStream.start_link(
   owner: self(),
   max_queue: 1000,
   timeout: 60_000
 )
 
-# Producer pushes events
 AgentCore.EventStream.push(stream, {:custom_event, data})
-
-# Async push (fire-and-forget)
 AgentCore.EventStream.push_async(stream, {:agent_start})
-
-# Complete successfully
 AgentCore.EventStream.complete(stream, final_messages)
-
-# Error
 AgentCore.EventStream.error(stream, :reason, partial_state)
-
-# Cancel
 AgentCore.EventStream.cancel(stream, :user_requested)
 
-# Get final result
 {:ok, messages} = AgentCore.EventStream.result(stream, 30_000)
+%{queue_size: n, max_queue: m, dropped: d} = AgentCore.EventStream.stats(stream)
 ```
 
 ### Stream Backpressure
 
 ```elixir
-# Handle backpressure
 case AgentCore.EventStream.push(stream, event) do
-  :ok -> 
-    :continue
-  {:error, :overflow} ->
-    # Queue full, pause production
-    :pause
-  {:error, :canceled} ->
-    # Stream canceled, stop
-    :stop
+  :ok -> :continue
+  {:error, :overflow} -> :pause   # queue full (with :error drop_strategy)
+  {:error, :canceled} -> :stop
 end
 ```
+
+Drop strategies: `:error` (default, returns `{:error, :overflow}`), `:drop_oldest`, `:drop_newest`.
 
 ## Common Tasks and Examples
 
 ### Create a Simple Agent
 
 ```elixir
-# Define a tool
 read_tool = AgentCore.new_tool(
   name: "read_file",
   description: "Read file contents",
   parameters: %{
     "type" => "object",
-    "properties" => %{
-      "path" => %{"type" => "string"}
-    },
+    "properties" => %{"path" => %{"type" => "string"}},
     "required" => ["path"]
   },
   execute: fn _id, %{"path" => path}, _signal, _on_update ->
     case File.read(path) do
       {:ok, content} ->
-        AgentCore.new_tool_result(
-          content: [%Ai.Types.TextContent{text: content}]
-        )
+        AgentCore.new_tool_result(content: [AgentCore.text_content(content)])
       {:error, reason} ->
         {:error, reason}
     end
   end
 )
 
-# Create agent
 {:ok, agent} = AgentCore.new_agent(
   model: %{provider: :anthropic, id: "claude-3-5-sonnet-20241022"},
   system_prompt: "You are a helpful assistant",
-  tools: [read_tool]
+  tools: [read_tool],
+  convert_to_llm: &MyApp.convert/1
 )
 
-# Send prompt
 :ok = AgentCore.prompt(agent, "Read the README.md file")
 :ok = AgentCore.wait_for_idle(agent)
+state = AgentCore.get_state(agent)
 ```
 
 ### Use the Loop Directly
@@ -471,7 +468,7 @@ context = Types.AgentContext.new(
 
 config = %Types.AgentLoopConfig{
   model: model,
-  convert_to_llm: &MyConverter.to_llm/1,
+  convert_to_llm: &MyApp.convert/1,
   stream_options: %Ai.Types.StreamOptions{max_tokens: 4000}
 }
 
@@ -481,39 +478,61 @@ user_msg = %Ai.Types.UserMessage{
   timestamp: System.system_time(:millisecond)
 }
 
-# Stream events
+# Returns an Enumerable of events
 Loop.stream([user_msg], context, config)
 |> Enum.each(&IO.inspect/1)
+
+# Or get the raw EventStream (with signal/owner control)
+event_stream = Loop.agent_loop([user_msg], context, config, signal, stream_fn)
+EventStream.events(event_stream) |> Enum.to_list()
 ```
 
-### Steering Messages
+### Steering and Follow-up Messages
 
 ```elixir
-# Inject message mid-run (interrupts after current tool)
-:ok = AgentCore.steer(agent, %Ai.Types.UserMessage{
+# Inject message mid-run (interrupts after current tool batch)
+:ok = AgentCore.Agent.steer(agent, %Ai.Types.UserMessage{
   role: :user,
   content: "Actually, use a different approach",
   timestamp: System.system_time(:millisecond)
 })
 
-# Follow-up messages processed after agent would stop
-:ok = AgentCore.follow_up(agent, %Ai.Types.UserMessage{
+# Queue message processed after agent would naturally stop
+:ok = AgentCore.Agent.follow_up(agent, %Ai.Types.UserMessage{
   role: :user,
   content: "Now summarize the results",
   timestamp: System.system_time(:millisecond)
 })
 ```
 
+### Context Management
+
+```elixir
+# Use AgentCore.Context for context window management
+transform = AgentCore.Context.make_transform(
+  max_messages: 50,
+  max_chars: 200_000
+)
+
+config = %AgentCore.Types.AgentLoopConfig{
+  transform_context: transform,
+  ...
+}
+
+# Or use standalone
+size = AgentCore.Context.estimate_size(messages, system_prompt)
+{truncated, dropped} = AgentCore.Context.truncate(messages, max_messages: 50)
+stats = AgentCore.Context.stats(messages, system_prompt)
+# => %{message_count: 10, char_count: 5000, estimated_tokens: 1250, by_role: %{user: 5, ...}}
+```
+
 ### Abort Handling
 
 ```elixir
-# Signal abort
 :ok = AgentCore.abort(agent)
-
-# Wait for graceful shutdown
 :ok = AgentCore.wait_for_idle(agent, timeout: 10_000)
 
-# In tools, check abort signal
+# In tool execute functions, check the signal:
 execute: fn _id, params, signal, _on_update ->
   for i <- 1..100 do
     if AgentCore.AbortSignal.aborted?(signal) do
@@ -521,9 +540,24 @@ execute: fn _id, params, signal, _on_update ->
     end
     do_work(i)
   end
-  
-  AgentCore.new_tool_result(content: [...])
+  AgentCore.new_tool_result(content: [AgentCore.text_content("done")])
 end
+```
+
+### Proxy Stream (LLM calls through a server)
+
+```elixir
+config = %AgentLoopConfig{
+  model: model,
+  convert_to_llm: &MyApp.convert/1,
+  stream_fn: fn model, context, opts ->
+    AgentCore.Proxy.stream_proxy(model, context, %AgentCore.Proxy.ProxyStreamOptions{
+      auth_token: get_auth_token(),
+      proxy_url: "https://genai.example.com",
+      reasoning: opts.reasoning
+    })
+  end
+}
 ```
 
 ## Testing Guidance
@@ -545,19 +579,57 @@ mix test apps/agent_core/test/agent_core/cli_runners/claude_integration_test.exs
 
 ```
 apps/agent_core/test/
-├── agent_core_test.exs              # Main API tests
-├── agent_core/
-│   ├── agent_test.exs               # Agent GenServer tests
-│   ├── agent_queue_test.exs         # Steering/follow-up queue tests
-│   ├── loop_test.exs                # Core loop tests
-│   ├── event_stream_test.exs        # Event streaming tests
-│   ├── abort_signal_test.exs        # Abort signal tests
-│   ├── context_test.exs             # Context management tests
-│   └── cli_runners/
-│       ├── jsonl_runner_test.exs    # Base runner tests
-│       ├── claude_runner_test.exs   # Claude-specific tests
-│       └── codex_runner_test.exs    # Codex-specific tests
-└── subagent_supervisor_test.exs     # Subagent supervision tests
+├── agent_core_test.exs
+├── agent_core_module_test.exs
+├── agent_registry_test.exs
+├── subagent_supervisor_test.exs
+├── support/
+└── agent_core/
+    ├── agent_test.exs
+    ├── agent_queue_test.exs
+    ├── abort_signal_test.exs
+    ├── abort_signal_concurrency_test.exs
+    ├── application_test.exs
+    ├── application_supervision_test.exs
+    ├── context_test.exs
+    ├── context_property_test.exs
+    ├── event_stream_test.exs
+    ├── event_stream_concurrency_test.exs
+    ├── event_stream_edge_cases_test.exs
+    ├── event_stream_improvements_test.exs
+    ├── event_stream_runner_test.exs
+    ├── proxy_test.exs
+    ├── proxy_error_test.exs
+    ├── proxy_stream_integration_test.exs
+    ├── telemetry_test.exs
+    ├── types_test.exs
+    ├── property_test.exs
+    ├── supervision_test.exs
+    ├── tool_supervision_test.exs
+    ├── loop/
+    │   ├── loop_test.exs
+    │   ├── loop_abort_test.exs
+    │   ├── loop_edge_cases_test.exs
+    │   └── loop_additional_edge_cases_test.exs
+    └── cli_runners/
+        ├── jsonl_runner_test.exs
+        ├── jsonl_runner_safety_test.exs
+        ├── types_test.exs
+        ├── tool_action_helpers_test.exs
+        ├── claude_runner_test.exs
+        ├── claude_schema_test.exs
+        ├── claude_subagent_test.exs
+        ├── codex_runner_test.exs
+        ├── codex_schema_test.exs
+        ├── codex_subagent_test.exs
+        ├── codex_subagent_comprehensive_test.exs
+        ├── kimi_runner_test.exs
+        ├── kimi_subagent_test.exs
+        ├── opencode_runner_test.exs
+        ├── pi_runner_test.exs
+        ├── claude_integration_test.exs    # @tag :integration
+        ├── codex_integration_test.exs     # @tag :integration
+        └── kimi_integration_test.exs      # @tag :integration
 ```
 
 ### Writing Tests
@@ -565,25 +637,23 @@ apps/agent_core/test/
 ```elixir
 defmodule AgentCore.MyFeatureTest do
   use ExUnit.Case, async: true
-  
+
   alias AgentCore.Types
-  
-  # Use mocks for LLM calls
-  import AgentCore.TestSupport.Mocks
-  
+
   setup do
     {:ok, agent} = AgentCore.new_agent(
       model: %{provider: :mock, id: "test"},
-      system_prompt: "Test"
+      system_prompt: "Test",
+      convert_to_llm: fn msgs -> Enum.filter(msgs, &match?(%{role: role} when role in [:user, :assistant, :tool_result], &1)) end
     )
-    
+
     %{agent: agent}
   end
-  
+
   test "handles streaming events", %{agent: agent} do
     AgentCore.subscribe(agent, self())
     AgentCore.prompt(agent, "Test")
-    
+
     assert_receive {:agent_event, {:agent_start}}, 1000
     assert_receive {:agent_event, {:agent_end, _messages}}, 5000
   end
@@ -597,7 +667,7 @@ Tests requiring external CLIs are tagged with `@tag :integration`:
 ```elixir
 @tag :integration
 test "runs real Claude session" do
-  # This test only runs with: mix test --include integration
+  # Only runs with: mix test --include integration
 end
 ```
 
@@ -605,14 +675,17 @@ end
 
 1. **Separation of Concerns**: `Loop` is stateless logic; `Agent` is stateful GenServer
 2. **Event-Driven**: All execution emits events for UI/observability
-3. **Cooperative Abort**: Abort signals are checked, not forced
-4. **Session Locking**: CLI runners use ETS locks for session consistency
-5. **Registry Pattern**: Agents can be looked up by structured keys
-6. **Backpressure**: EventStream returns `:ok | {:error, :overflow}`
+3. **Cooperative Abort**: Abort signals are checked in tools, not forced
+4. **Session Locking**: CLI runners use ETS locks to prevent concurrent resumption of the same session
+5. **Registry Pattern**: Agents registered by `{session_id, role, index}` tuples for structured lookup
+6. **Backpressure**: `EventStream.push/2` returns `:ok | {:error, :overflow | :canceled}`
+7. **Long-poll Follow-up**: Agent uses a 50ms long-poll to catch follow-up messages queued just as a run ends
+8. **Queue Modes**: Steering/follow-up queues consume `:one_at_a_time` (default) or `:all` per turn
 
 ## Dependencies
 
 - `ai` - Low-level LLM API abstractions
 - `lemon_core` - Shared primitives and telemetry
-- `req` - HTTP client
+- `req` - HTTP client (used by Proxy)
 - `jason` - JSON encoding/decoding
+- `stream_data` - Property-based testing (test only)
