@@ -25,6 +25,61 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-21 - Refactoring: O(n²) List Concat, String.length Checks, Deep Nesting
+**Work Area**: Refactoring
+
+**Analysis**:
+- Scanned all 14 apps for remaining code smells after previous refactoring runs
+- Found 7 files with `acc ++ [item]` in reduce/recursive loops (O(n²) complexity)
+- Found 4 instances of `String.length(x) > 0` used for emptiness checks (should be `x != ""`)
+- Found `maybe_expand_single_line_merge` in hashline.ex with 5 levels of nesting
+- Found 3 copies of config resolution `cond` block in webhook.ex (enabled?, config, default_engine)
+
+**Refactoring Done**:
+
+1. **O(n²) list concatenation → O(n)** (7 files)
+   - `session_manager.ex`: `add_ids_to_entries/1` → `[entry | acc]` + `Enum.reverse`
+   - `session_manager.ex`: `parse_entries/1` → `[data | acc]` + `Enum.reverse`
+   - `multiedit.ex`: `apply_edits/5` → `[result | acc]` + `Enum.reverse`
+   - `hashline.ex`: `format_mismatch_message/2` → `[line | acc]` + `Enum.reverse`
+   - `bedrock.ex`: `convert_messages/2` → `[converted | acc]` + `Enum.reverse`
+   - `openai_completions.ex`: `convert_messages_loop/5` → prepend + `Enum.reverse` at base case
+   - `email/outbound.ex` + `email/inbound.ex`: `merge_reference_ids/1` → replaced manual dedup reduce with `Enum.uniq()`
+
+2. **String.length emptiness checks → direct comparison** (4 files)
+   - `hashline.ex`: `String.length(new_canon) == 0` → `new_canon == ""`
+   - `google_shared.ex`: `String.length(text_content) > 0` → `text_content != ""`
+   - `openai_completions.ex`: `String.length(text) > 0` → `text != ""` (has_content? + text_result check)
+
+3. **Deep nesting flattened** (`hashline.ex`)
+   - Refactored `maybe_expand_single_line_merge/4` from 5-level nesting to max 1 level
+   - Used function clause guard (`when length(content) != 1`) for early exit
+   - Used `with` chain for sequential precondition checks
+   - Extracted `detect_next_line_merge/7` (Case A) and `detect_prev_line_merge/7` (Case B) as flat `with`-based helpers
+
+4. **Config resolution deduplication** (`webhook.ex`)
+   - Extracted `resolve_from_app_config/1` helper to consolidate 3 identical cond blocks
+   - Simplified `enabled?/0`, `config/0`, and `default_engine/0` to use the shared helper
+   - Net: -15 lines of duplicated code
+
+**Test Results**: All tests pass. Zero compilation warnings (`mix compile --warnings-as-errors`).
+- coding_agent: 205 tests, 0 failures
+- ai: 1502 tests, 0 failures
+- lemon_gateway: 1572 tests, 0 failures
+
+**Files Changed**: 9 files across 4 apps
+- `apps/coding_agent/lib/coding_agent/session_manager.ex` - add_ids_to_entries, parse_entries perf fix
+- `apps/coding_agent/lib/coding_agent/tools/multiedit.ex` - apply_edits perf fix
+- `apps/coding_agent/lib/coding_agent/tools/hashline.ex` - format_mismatch_message perf fix, String.length fix, nesting flatten
+- `apps/ai/lib/ai/providers/bedrock.ex` - convert_messages perf fix
+- `apps/ai/lib/ai/providers/google_shared.ex` - String.length fix
+- `apps/ai/lib/ai/providers/openai_completions.ex` - convert_messages_loop perf fix, String.length fixes
+- `apps/lemon_gateway/lib/lemon_gateway/transports/email/outbound.ex` - merge_reference_ids → Enum.uniq
+- `apps/lemon_gateway/lib/lemon_gateway/transports/email/inbound.ex` - merge_reference_ids → Enum.uniq
+- `apps/lemon_gateway/lib/lemon_gateway/transports/webhook.ex` - resolve_from_app_config helper, config dedup
+
+---
+
 ### 2026-02-21 - Refactoring: Performance, Nesting, and Anti-Pattern Cleanup
 **Work Area**: Refactoring
 
