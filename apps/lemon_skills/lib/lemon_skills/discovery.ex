@@ -27,11 +27,19 @@ defmodule LemonSkills.Discovery do
       enabled = true
       github_token = "${GITHUB_TOKEN}"  # Optional, for higher rate limits
       timeout_ms = 10000
+
+  ## HTTP Client
+
+  The HTTP layer is abstracted behind `LemonSkills.HttpClient`. The default
+  implementation (`LemonSkills.HttpClient.Httpc`) uses Erlang's `:httpc`.
+  Override via application config to inject a mock for testing:
+
+      config :lemon_skills, :http_client, LemonSkills.HttpClient.Mock
   """
 
   require Logger
 
-  alias LemonSkills.{Entry, Manifest}
+  alias LemonSkills.{Entry, HttpClient, Manifest}
 
   @default_timeout_ms 10_000
   @user_agent "LemonAgent/1.0"
@@ -326,22 +334,7 @@ defmodule LemonSkills.Discovery do
   end
 
   defp fetch(url, headers) do
-    # Use httpc for simple HTTP requests
-    :inets.start()
-    :ssl.start()
-
-    headers_erl = Enum.map(headers, fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end)
-
-    case :httpc.request(:get, {String.to_charlist(url), headers_erl}, [], []) do
-      {:ok, {{_, status, _}, _resp_headers, body}} when status in 200..299 ->
-        {:ok, to_string(body)}
-
-      {:ok, {{_, status, _}, _, _}} ->
-        {:error, {:http_error, status}}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+    HttpClient.impl().fetch(url, headers)
   end
 
   # ============================================================================
