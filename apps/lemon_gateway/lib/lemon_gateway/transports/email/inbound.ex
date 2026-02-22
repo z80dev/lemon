@@ -513,12 +513,8 @@ defmodule LemonGateway.Transports.Email.Inbound do
           nil
       end
 
-    header_lines =
-      if is_binary(references_line) do
-        header_lines ++ [references_line]
-      else
-        header_lines
-      end
+    references_part =
+      if is_binary(references_line), do: [references_line], else: []
 
     attachment_lines =
       case email.attachments do
@@ -543,7 +539,7 @@ defmodule LemonGateway.Transports.Email.Inbound do
           value
       end
 
-    (header_lines ++ [""] ++ attachment_lines ++ ["", "Body:", body])
+    Enum.concat([header_lines, references_part, [""], attachment_lines, ["", "Body:", body]])
     |> Enum.join("\n")
     |> String.trim()
   end
