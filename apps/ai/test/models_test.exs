@@ -55,6 +55,39 @@ defmodule Ai.ModelsTest do
       assert model.reasoning == true
     end
 
+    test "returns newly added amazon bedrock models by id" do
+      model_ids = [
+        "moonshot.kimi-k2-thinking",
+        "moonshotai.kimi-k2.5",
+        "nvidia.nemotron-nano-12b-v2",
+        "nvidia.nemotron-nano-9b-v2",
+        "openai.gpt-oss-120b-1:0",
+        "openai.gpt-oss-20b-1:0",
+        "openai.gpt-oss-safeguard-120b",
+        "openai.gpt-oss-safeguard-20b",
+        "qwen.qwen3-235b-a22b-2507-v1:0",
+        "qwen.qwen3-32b-v1:0",
+        "qwen.qwen3-coder-30b-a3b-v1:0",
+        "qwen.qwen3-coder-480b-a35b-v1:0",
+        "qwen.qwen3-next-80b-a3b",
+        "qwen.qwen3-vl-235b-a22b",
+        "writer.palmyra-x4-v1:0",
+        "writer.palmyra-x5-v1:0",
+        "zai.glm-4.7",
+        "zai.glm-4.7-flash"
+      ]
+
+      for model_id <- model_ids do
+        model = Models.get_model(:amazon_bedrock, model_id)
+
+        assert %Model{} = model
+        assert model.id == model_id
+        assert model.provider == :amazon_bedrock
+        assert model.api == :bedrock_converse_stream
+        assert %ModelCost{} = model.cost
+      end
+    end
+
     test "returns nil for unknown model" do
       assert Models.get_model(:anthropic, "nonexistent") == nil
     end
@@ -222,6 +255,11 @@ defmodule Ai.ModelsTest do
     test "returns false for text-only models" do
       model = Models.get_model(:openai, "o3-mini")
       assert Models.supports_vision?(model) == false
+    end
+
+    test "returns true for qwen3-vl bedrock model" do
+      model = Models.get_model(:amazon_bedrock, "qwen.qwen3-vl-235b-a22b")
+      assert Models.supports_vision?(model) == true
     end
   end
 
