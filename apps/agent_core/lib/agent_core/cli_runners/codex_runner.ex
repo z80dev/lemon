@@ -725,8 +725,13 @@ defmodule AgentCore.CliRunners.CodexRunner do
   defp normalize_codex_model(_), do: nil
 
   defp maybe_ensure_codexignore(cwd) when is_binary(cwd) do
-    if Code.ensure_loaded?(CodingAgent.Project.Codexignore) do
-      CodingAgent.Project.Codexignore.ensure_codexignore(cwd)
+    module = CodingAgent.Project.Codexignore
+
+    with true <- Code.ensure_loaded?(module),
+         true <- function_exported?(module, :ensure_codexignore, 1) do
+      apply(module, :ensure_codexignore, [cwd])
+    else
+      _ -> :ok
     end
   rescue
     _ -> :ok
