@@ -2,9 +2,12 @@ defmodule LemonCore.Config.HelpersTest do
   @moduledoc """
   Tests for the Config.Helpers module.
   """
-  use LemonCore.Testing.Case, async: false
+  use ExUnit.Case, async: true
 
   alias LemonCore.Config.Helpers
+
+  # Run doctests from the module documentation
+  doctest LemonCore.Config.Helpers
 
   setup do
     # Store original env vars to restore later
@@ -41,7 +44,7 @@ defmodule LemonCore.Config.HelpersTest do
       assert Helpers.get_env("EXISTING_TEST_VAR") == "test_value"
     end
 
-    test "returns value with whitespace trimmed" do
+    test "returns value with whitespace" do
       System.put_env("WHITESPACE_TEST_VAR", "  value  ")
       # Note: get_env doesn't trim, it returns raw value
       assert Helpers.get_env("WHITESPACE_TEST_VAR") == "  value  "
@@ -57,6 +60,11 @@ defmodule LemonCore.Config.HelpersTest do
     test "returns value when variable exists" do
       System.put_env("EXISTING_DEFAULT_VAR", "actual_value")
       assert Helpers.get_env("EXISTING_DEFAULT_VAR", "default") == "actual_value"
+    end
+
+    test "returns nil when default is nil and variable not set" do
+      System.delete_env("NONEXISTENT_NIL_VAR")
+      assert Helpers.get_env("NONEXISTENT_NIL_VAR", nil) == nil
     end
   end
 
@@ -90,6 +98,16 @@ defmodule LemonCore.Config.HelpersTest do
       System.put_env("PARTIAL_INT_VAR", "123abc")
       assert Helpers.get_env_int("PARTIAL_INT_VAR", 0) == 0
     end
+
+    test "parses zero" do
+      System.put_env("ZERO_INT_VAR", "0")
+      assert Helpers.get_env_int("ZERO_INT_VAR", 100) == 0
+    end
+
+    test "parses large integers" do
+      System.put_env("LARGE_INT_VAR", "999999999")
+      assert Helpers.get_env_int("LARGE_INT_VAR", 0) == 999_999_999
+    end
   end
 
   describe "get_env_float/2" do
@@ -106,6 +124,26 @@ defmodule LemonCore.Config.HelpersTest do
     test "returns default for invalid float" do
       System.put_env("INVALID_FLOAT_VAR", "not_a_float")
       assert Helpers.get_env_float("INVALID_FLOAT_VAR", 1.5) == 1.5
+    end
+
+    test "returns default for non-existent variable" do
+      System.delete_env("NONEXISTENT_FLOAT_VAR")
+      assert Helpers.get_env_float("NONEXISTENT_FLOAT_VAR", 1.5) == 1.5
+    end
+
+    test "returns default for empty variable" do
+      System.put_env("EMPTY_FLOAT_VAR", "")
+      assert Helpers.get_env_float("EMPTY_FLOAT_VAR", 2.5) == 2.5
+    end
+
+    test "parses negative floats" do
+      System.put_env("NEGATIVE_FLOAT_VAR", "-3.14")
+      assert Helpers.get_env_float("NEGATIVE_FLOAT_VAR", 0.0) == -3.14
+    end
+
+    test "returns default for partial parse" do
+      System.put_env("PARTIAL_FLOAT_VAR", "3.14abc")
+      assert Helpers.get_env_float("PARTIAL_FLOAT_VAR", 0.0) == 0.0
     end
   end
 
@@ -135,6 +173,11 @@ defmodule LemonCore.Config.HelpersTest do
       assert Helpers.get_env_bool("BOOL_UPPER_VAR", false) == true
     end
 
+    test "returns true for mixed case variants" do
+      System.put_env("BOOL_MIXED_VAR", "True")
+      assert Helpers.get_env_bool("BOOL_MIXED_VAR", false) == true
+    end
+
     test "returns false for 'false'" do
       System.put_env("BOOL_FALSE_VAR", "false")
       assert Helpers.get_env_bool("BOOL_FALSE_VAR", true) == false
@@ -155,6 +198,11 @@ defmodule LemonCore.Config.HelpersTest do
       assert Helpers.get_env_bool("BOOL_OFF_VAR", true) == false
     end
 
+    test "returns false for uppercase false variants" do
+      System.put_env("BOOL_UPPER_FALSE_VAR", "FALSE")
+      assert Helpers.get_env_bool("BOOL_UPPER_FALSE_VAR", true) == false
+    end
+
     test "returns default for unknown value" do
       System.put_env("BOOL_UNKNOWN_VAR", "maybe")
       assert Helpers.get_env_bool("BOOL_UNKNOWN_VAR", true) == true
@@ -164,6 +212,16 @@ defmodule LemonCore.Config.HelpersTest do
     test "returns default for non-existent variable" do
       System.delete_env("NONEXISTENT_BOOL_VAR")
       assert Helpers.get_env_bool("NONEXISTENT_BOOL_VAR", true) == true
+    end
+
+    test "returns default for empty variable" do
+      System.put_env("EMPTY_BOOL_VAR", "")
+      assert Helpers.get_env_bool("EMPTY_BOOL_VAR", false) == false
+    end
+
+    test "handles whitespace in boolean values" do
+      System.put_env("BOOL_WHITESPACE_VAR", "  true  ")
+      assert Helpers.get_env_bool("BOOL_WHITESPACE_VAR", false) == true
     end
   end
 
@@ -178,9 +236,24 @@ defmodule LemonCore.Config.HelpersTest do
       assert Helpers.get_env_atom("ATOM_CAMEL_VAR", :info) == :log_level
     end
 
+    test "converts PascalCase to snake_case" do
+      System.put_env("ATOM_PASCAL_VAR", "LogLevel")
+      assert Helpers.get_env_atom("ATOM_PASCAL_VAR", :info) == :log_level
+    end
+
     test "returns default for non-existent variable" do
       System.delete_env("NONEXISTENT_ATOM_VAR")
       assert Helpers.get_env_atom("NONEXISTENT_ATOM_VAR", :default) == :default
+    end
+
+    test "returns default for empty variable" do
+      System.put_env("EMPTY_ATOM_VAR", "")
+      assert Helpers.get_env_atom("EMPTY_ATOM_VAR", :default) == :default
+    end
+
+    test "handles whitespace" do
+      System.put_env("ATOM_WHITESPACE_VAR", "  debug  ")
+      assert Helpers.get_env_atom("ATOM_WHITESPACE_VAR", :info) == :debug
     end
   end
 
@@ -205,9 +278,29 @@ defmodule LemonCore.Config.HelpersTest do
       assert Helpers.get_env_list("NONEXISTENT_LIST_VAR") == []
     end
 
+    test "returns empty list for empty variable" do
+      System.put_env("EMPTY_LIST_VAR", "")
+      assert Helpers.get_env_list("EMPTY_LIST_VAR") == []
+    end
+
     test "uses custom delimiter" do
       System.put_env("LIST_PIPE_VAR", "a|b|c")
       assert Helpers.get_env_list("LIST_PIPE_VAR", "|") == ["a", "b", "c"]
+    end
+
+    test "uses semicolon delimiter" do
+      System.put_env("LIST_SEMICOLON_VAR", "a;b;c")
+      assert Helpers.get_env_list("LIST_SEMICOLON_VAR", ";") == ["a", "b", "c"]
+    end
+
+    test "handles single item list" do
+      System.put_env("LIST_SINGLE_VAR", "only_one")
+      assert Helpers.get_env_list("LIST_SINGLE_VAR") == ["only_one"]
+    end
+
+    test "handles all empty values" do
+      System.put_env("LIST_ALL_EMPTY_VAR", ",,,")
+      assert Helpers.get_env_list("LIST_ALL_EMPTY_VAR") == []
     end
   end
 
@@ -217,7 +310,7 @@ defmodule LemonCore.Config.HelpersTest do
       assert Helpers.require_env!("REQUIRED_TEST_VAR") == "value"
     end
 
-    test "raises for non-existent variable" do
+    test "raises ArgumentError for non-existent variable" do
       System.delete_env("NONEXISTENT_REQUIRED_VAR")
 
       assert_raise ArgumentError, ~r/Missing required environment variable/, fn ->
@@ -225,7 +318,7 @@ defmodule LemonCore.Config.HelpersTest do
       end
     end
 
-    test "raises for empty variable" do
+    test "raises ArgumentError for empty variable" do
       System.put_env("EMPTY_REQUIRED_VAR", "")
 
       assert_raise ArgumentError, ~r/Missing required environment variable/, fn ->
@@ -235,6 +328,11 @@ defmodule LemonCore.Config.HelpersTest do
   end
 
   describe "require_env!/2" do
+    test "returns value for existing variable" do
+      System.put_env("REQUIRED_HINT_VAR", "value")
+      assert Helpers.require_env!("REQUIRED_HINT_VAR", "Please set this variable") == "value"
+    end
+
     test "includes hint in error message" do
       System.delete_env("NONEXISTENT_HINT_VAR")
 
@@ -242,31 +340,70 @@ defmodule LemonCore.Config.HelpersTest do
         Helpers.require_env!("NONEXISTENT_HINT_VAR", "Please set this variable")
       end
     end
+
+    test "raises ArgumentError with hint for empty variable" do
+      System.put_env("EMPTY_HINT_VAR", "")
+
+      assert_raise ArgumentError, ~r/Hint message/, fn ->
+        Helpers.require_env!("EMPTY_HINT_VAR", "Hint message")
+      end
+    end
   end
 
-  describe "get_feature_env/3" do
-    test "returns value when feature flag is enabled" do
+  describe "get_feature_env/2" do
+    test "returns value when feature flag is enabled with 'true'" do
       System.put_env("FEATURE_X", "true")
       System.put_env("FEATURE_X_KEY", "secret")
       assert Helpers.get_feature_env("FEATURE_X", "FEATURE_X_KEY") == "secret"
     end
 
-    test "returns nil when feature flag is disabled" do
-      System.put_env("FEATURE_Y", "false")
+    test "returns value when feature flag is enabled with '1'" do
+      System.put_env("FEATURE_Y", "1")
       System.put_env("FEATURE_Y_KEY", "secret")
-      assert Helpers.get_feature_env("FEATURE_Y", "FEATURE_Y_KEY") == nil
+      assert Helpers.get_feature_env("FEATURE_Y", "FEATURE_Y_KEY") == "secret"
     end
 
-    test "returns nil when feature flag is not set" do
-      System.delete_env("FEATURE_Z")
+    test "returns nil when feature flag is disabled with 'false'" do
+      System.put_env("FEATURE_Z", "false")
       System.put_env("FEATURE_Z_KEY", "secret")
       assert Helpers.get_feature_env("FEATURE_Z", "FEATURE_Z_KEY") == nil
     end
 
+    test "returns nil when feature flag is disabled with '0'" do
+      System.put_env("FEATURE_W", "0")
+      System.put_env("FEATURE_W_KEY", "secret")
+      assert Helpers.get_feature_env("FEATURE_W", "FEATURE_W_KEY") == nil
+    end
+
+    test "returns nil when feature flag is not set" do
+      System.delete_env("FEATURE_UNSET")
+      System.put_env("FEATURE_UNSET_KEY", "secret")
+      assert Helpers.get_feature_env("FEATURE_UNSET", "FEATURE_UNSET_KEY") == nil
+    end
+
     test "returns default when feature enabled but key not set" do
-      System.put_env("FEATURE_W", "true")
-      System.delete_env("FEATURE_W_KEY")
-      assert Helpers.get_feature_env("FEATURE_W", "FEATURE_W_KEY", "default") == "default"
+      System.put_env("FEATURE_DEFAULT", "true")
+      System.delete_env("FEATURE_DEFAULT_KEY")
+      assert Helpers.get_feature_env("FEATURE_DEFAULT", "FEATURE_DEFAULT_KEY", "default") == "default"
+    end
+
+    test "returns nil when feature enabled but key not set and no default" do
+      System.put_env("FEATURE_NO_DEFAULT", "true")
+      System.delete_env("FEATURE_NO_DEFAULT_KEY")
+      assert Helpers.get_feature_env("FEATURE_NO_DEFAULT", "FEATURE_NO_DEFAULT_KEY") == nil
+    end
+  end
+
+  describe "get_feature_env/3" do
+    test "returns value when feature enabled" do
+      System.put_env("FEATURE_THREE", "true")
+      System.put_env("FEATURE_THREE_KEY", "value")
+      assert Helpers.get_feature_env("FEATURE_THREE", "FEATURE_THREE_KEY", "default") == "value"
+    end
+
+    test "returns nil when feature disabled regardless of default" do
+      System.put_env("FEATURE_DISABLED", "false")
+      assert Helpers.get_feature_env("FEATURE_DISABLED", "FEATURE_DISABLED_KEY", "default") == nil
     end
   end
 
@@ -310,6 +447,24 @@ defmodule LemonCore.Config.HelpersTest do
     test "handles whitespace" do
       assert Helpers.parse_duration("  30  s  ", 0) == 30_000
     end
+
+    test "handles uppercase units" do
+      assert Helpers.parse_duration("30S", 0) == 30_000
+      assert Helpers.parse_duration("5M", 0) == 300_000
+    end
+
+    test "handles mixed case units" do
+      assert Helpers.parse_duration("30Ms", 0) == 30
+      assert Helpers.parse_duration("5mS", 0) == 5
+    end
+
+    test "parses zero duration" do
+      assert Helpers.parse_duration("0s", 1000) == 0
+    end
+
+    test "parses large durations" do
+      assert Helpers.parse_duration("365d", 0) == 31_536_000_000
+    end
   end
 
   describe "get_env_duration/2" do
@@ -322,11 +477,26 @@ defmodule LemonCore.Config.HelpersTest do
       System.delete_env("NONEXISTENT_DURATION_VAR")
       assert Helpers.get_env_duration("NONEXISTENT_DURATION_VAR", 5000) == 5000
     end
+
+    test "returns default for empty variable" do
+      System.put_env("EMPTY_DURATION_VAR", "")
+      assert Helpers.get_env_duration("EMPTY_DURATION_VAR", 5000) == 5000
+    end
+
+    test "parses duration with different units from env" do
+      System.put_env("DURATION_HOURS_VAR", "2h")
+      assert Helpers.get_env_duration("DURATION_HOURS_VAR", 0) == 7_200_000
+    end
   end
 
   describe "parse_bytes/2" do
     test "parses bytes" do
       assert Helpers.parse_bytes("100B", 0) == 100
+    end
+
+    test "returns default for value without unit (bytes unit required)" do
+      # The regex requires a unit suffix (B, KB, MB, etc.), so bare numbers return default
+      assert Helpers.parse_bytes("100", 1024) == 1024
     end
 
     test "parses kilobytes" do
@@ -365,6 +535,19 @@ defmodule LemonCore.Config.HelpersTest do
       assert Helpers.parse_bytes("10mb", 0) == 10_485_760
       assert Helpers.parse_bytes("10Mb", 0) == 10_485_760
       assert Helpers.parse_bytes("10MB", 0) == 10_485_760
+      assert Helpers.parse_bytes("10mB", 0) == 10_485_760
+    end
+
+    test "returns default for unknown unit" do
+      assert Helpers.parse_bytes("10XB", 1024) == 1024
+    end
+
+    test "parses zero bytes" do
+      assert Helpers.parse_bytes("0B", 1024) == 0
+    end
+
+    test "parses small decimal values" do
+      assert Helpers.parse_bytes("0.5KB", 0) == 512
     end
   end
 
@@ -377,6 +560,16 @@ defmodule LemonCore.Config.HelpersTest do
     test "returns default for non-existent variable" do
       System.delete_env("NONEXISTENT_BYTES_VAR")
       assert Helpers.get_env_bytes("NONEXISTENT_BYTES_VAR", 1024) == 1024
+    end
+
+    test "returns default for empty variable" do
+      System.put_env("EMPTY_BYTES_VAR", "")
+      assert Helpers.get_env_bytes("EMPTY_BYTES_VAR", 1024) == 1024
+    end
+
+    test "parses GB from env" do
+      System.put_env("BYTES_GB_VAR", "2GB")
+      assert Helpers.get_env_bytes("BYTES_GB_VAR", 0) == 2_147_483_648
     end
   end
 end

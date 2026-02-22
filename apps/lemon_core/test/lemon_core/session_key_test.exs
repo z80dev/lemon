@@ -1,4 +1,7 @@
 defmodule LemonCore.SessionKeyTest do
+  @moduledoc """
+  Tests for the SessionKey module.
+  """
   use ExUnit.Case, async: true
 
   alias LemonCore.SessionKey
@@ -6,58 +9,125 @@ defmodule LemonCore.SessionKeyTest do
   doctest LemonCore.SessionKey
 
   describe "main/1" do
-    test "generates a main session key with agent prefix" do
-      assert SessionKey.main("my_agent") == "agent:my_agent:main"
+    test "generates main session key for agent" do
+      key = SessionKey.main("my_agent")
+      assert key == "agent:my_agent:main"
+    end
+
+    test "generates main session key with different agent IDs" do
+      assert SessionKey.main("agent_1") == "agent:agent_1:main"
+      assert SessionKey.main("test-bot") == "agent:test-bot:main"
+      assert SessionKey.main("my.agent.id") == "agent:my.agent.id:main"
+    end
+
+    test "generates main session key with special characters in agent ID" do
+      assert SessionKey.main("agent_123_test") == "agent:agent_123_test:main"
+      assert SessionKey.main("UPPER_CASE") == "agent:UPPER_CASE:main"
     end
   end
 
   describe "channel_peer/1" do
-    test "generates a channel peer session key with required fields" do
-      key =
-        SessionKey.channel_peer(%{
-          agent_id: "bot1",
-          channel_id: "telegram",
-          account_id: "acct1",
-          peer_kind: :dm,
-          peer_id: "user42"
-        })
+    test "generates channel peer session key with required fields" do
+      opts = %{
+        agent_id: "my_agent",
+        channel_id: "chan_123",
+        account_id: "acc_456",
+        peer_kind: :dm,
+        peer_id: "peer_789"
+      }
 
-      assert key == "agent:bot1:telegram:acct1:dm:user42"
+      key = SessionKey.channel_peer(opts)
+      assert key == "agent:my_agent:chan_123:acc_456:dm:peer_789"
     end
 
-    test "includes thread_id when provided" do
-      key =
-        SessionKey.channel_peer(%{
-          agent_id: "bot1",
-          channel_id: "telegram",
-          account_id: "acct1",
-          peer_kind: :group,
-          peer_id: "chat99",
-          thread_id: "topic7"
-        })
+    test "generates channel peer session key with different peer kinds" do
+      base_opts = %{
+        agent_id: "agent_1",
+        channel_id: "channel_1",
+        account_id: "account_1",
+        peer_id: "peer_1"
+      }
 
-      assert key == "agent:bot1:telegram:acct1:group:chat99:thread:topic7"
+      assert SessionKey.channel_peer(Map.put(base_opts, :peer_kind, :dm)) ==
+               "agent:agent_1:channel_1:account_1:dm:peer_1"
+
+      assert SessionKey.channel_peer(Map.put(base_opts, :peer_kind, :group)) ==
+               "agent:agent_1:channel_1:account_1:group:peer_1"
+
+      assert SessionKey.channel_peer(Map.put(base_opts, :peer_kind, :channel)) ==
+               "agent:agent_1:channel_1:account_1:channel:peer_1"
+
+      assert SessionKey.channel_peer(Map.put(base_opts, :peer_kind, :unknown)) ==
+               "agent:agent_1:channel_1:account_1:unknown:peer_1"
+
+      assert SessionKey.channel_peer(Map.put(base_opts, :peer_kind, :main)) ==
+               "agent:agent_1:channel_1:account_1:main:peer_1"
     end
 
-    test "includes both thread_id and sub_id when provided" do
-      key =
-        SessionKey.channel_peer(%{
-          agent_id: "bot1",
-          channel_id: "telegram",
-          account_id: "acct1",
-          peer_kind: :dm,
-          peer_id: "user42",
-          thread_id: "topic7",
-          sub_id: "msg123"
-        })
+    test "generates channel peer session key with thread_id" do
+      opts = %{
+        agent_id: "my_agent",
+        channel_id: "chan_123",
+        account_id: "acc_456",
+        peer_kind: :dm,
+        peer_id: "peer_789",
+        thread_id: "thread_abc"
+      }
 
-      assert key == "agent:bot1:telegram:acct1:dm:user42:thread:topic7:sub:msg123"
+      key = SessionKey.channel_peer(opts)
+      assert key == "agent:my_agent:chan_123:acc_456:dm:peer_789:thread:thread_abc"
+    end
+
+    test "generates channel peer session key with sub_id" do
+      opts = %{
+        agent_id: "my_agent",
+        channel_id: "chan_123",
+        account_id: "acc_456",
+        peer_kind: :dm,
+        peer_id: "peer_789",
+        sub_id: "sub_def"
+      }
+
+      key = SessionKey.channel_peer(opts)
+      assert key == "agent:my_agent:chan_123:acc_456:dm:peer_789:sub:sub_def"
+    end
+
+    test "generates channel peer session key with both thread_id and sub_id" do
+      opts = %{
+        agent_id: "my_agent",
+        channel_id: "chan_123",
+        account_id: "acc_456",
+        peer_kind: :dm,
+        peer_id: "peer_789",
+        thread_id: "thread_abc",
+        sub_id: "sub_def"
+      }
+
+      key = SessionKey.channel_peer(opts)
+
+      assert key ==
+               "agent:my_agent:chan_123:acc_456:dm:peer_789:thread:thread_abc:sub:sub_def"
+    end
+
+    test "generates channel peer session key with special characters in IDs" do
+      opts = %{
+        agent_id: "agent-123.test",
+        channel_id: "channel_123",
+        account_id: "account_456",
+        peer_kind: :dm,
+        peer_id: "peer-789_test"
+      }
+
+      key = SessionKey.channel_peer(opts)
+      assert key == "agent:agent-123.test:channel_123:account_456:dm:peer-789_test"
     end
   end
 
   describe "parse/1" do
-    test "parses a main session key" do
-      assert %{
+    test "parses main session key" do
+      result = SessionKey.parse("agent:my_agent:main")
+
+      assert result == %{
                agent_id: "my_agent",
                kind: :main,
                channel_id: nil,
@@ -66,45 +136,120 @@ defmodule LemonCore.SessionKeyTest do
                peer_id: nil,
                thread_id: nil,
                sub_id: nil
-             } = SessionKey.parse("agent:my_agent:main")
+             }
     end
 
-    test "parses a channel peer session key" do
-      assert %{
-               agent_id: "bot1",
+    test "parses channel peer session key" do
+      result = SessionKey.parse("agent:my_agent:chan_123:acc_456:dm:peer_789")
+
+      assert result == %{
+               agent_id: "my_agent",
                kind: :channel_peer,
-               channel_id: "telegram",
-               account_id: "acct1",
+               channel_id: "chan_123",
+               account_id: "acc_456",
                peer_kind: :dm,
-               peer_id: "user42",
+               peer_id: "peer_789",
                thread_id: nil,
                sub_id: nil
-             } = SessionKey.parse("agent:bot1:telegram:acct1:dm:user42")
+             }
     end
 
-    test "parses a channel peer session key with thread and sub" do
-      parsed = SessionKey.parse("agent:bot1:telegram:acct1:group:chat99:thread:topic7:sub:msg1")
+    test "parses channel peer session key with thread_id" do
+      result = SessionKey.parse("agent:my_agent:chan_123:acc_456:dm:peer_789:thread:thread_abc")
 
-      assert parsed.kind == :channel_peer
-      assert parsed.thread_id == "topic7"
-      assert parsed.sub_id == "msg1"
+      assert result == %{
+               agent_id: "my_agent",
+               kind: :channel_peer,
+               channel_id: "chan_123",
+               account_id: "acc_456",
+               peer_kind: :dm,
+               peer_id: "peer_789",
+               thread_id: "thread_abc",
+               sub_id: nil
+             }
     end
 
-    test "rejects non-canonical legacy telegram format" do
-      assert {:error, :invalid} = SessionKey.parse("channel:telegram:bot123:chat456")
+    test "parses channel peer session key with sub_id" do
+      result = SessionKey.parse("agent:my_agent:chan_123:acc_456:dm:peer_789:sub:sub_def")
 
-      assert {:error, :invalid} =
-               SessionKey.parse("channel:telegram:bot123:chat456:thread:topic42:sub:msg123")
+      assert result == %{
+               agent_id: "my_agent",
+               kind: :channel_peer,
+               channel_id: "chan_123",
+               account_id: "acc_456",
+               peer_kind: :dm,
+               peer_id: "peer_789",
+               thread_id: nil,
+               sub_id: "sub_def"
+             }
     end
 
-    test "rejects invalid peer kind" do
-      assert {:error, :invalid_peer_kind} =
-               SessionKey.parse("agent:a:telegram:bot:not_allowed:peer42")
-    end
-  end
+    test "parses channel peer session key with both thread_id and sub_id" do
+      result =
+        SessionKey.parse(
+          "agent:my_agent:chan_123:acc_456:dm:peer_789:thread:thread_abc:sub:sub_def"
+        )
 
-  describe "parse/1 round-trip" do
-    test "main key round-trips through generate and parse" do
+      assert result == %{
+               agent_id: "my_agent",
+               kind: :channel_peer,
+               channel_id: "chan_123",
+               account_id: "acc_456",
+               peer_kind: :dm,
+               peer_id: "peer_789",
+               thread_id: "thread_abc",
+               sub_id: "sub_def"
+             }
+    end
+
+    test "parses all allowed peer kinds" do
+      assert %{peer_kind: :dm} = SessionKey.parse("agent:a:c:acc:dm:p")
+      assert %{peer_kind: :group} = SessionKey.parse("agent:a:c:acc:group:p")
+      assert %{peer_kind: :channel} = SessionKey.parse("agent:a:c:acc:channel:p")
+      assert %{peer_kind: :main} = SessionKey.parse("agent:a:c:acc:main:p")
+      assert %{peer_kind: :unknown} = SessionKey.parse("agent:a:c:acc:unknown:p")
+    end
+
+    test "returns error for invalid peer kind" do
+      result = SessionKey.parse("agent:my_agent:chan_123:acc_456:invalid_kind:peer_789")
+      assert result == {:error, :invalid_peer_kind}
+    end
+
+    test "returns error for empty string" do
+      assert SessionKey.parse("") == {:error, :invalid}
+    end
+
+    test "returns error for malformed keys" do
+      assert SessionKey.parse("invalid") == {:error, :invalid}
+      assert SessionKey.parse("agent") == {:error, :invalid}
+      assert SessionKey.parse("agent:only_one") == {:error, :invalid}
+      assert SessionKey.parse("agent:id:extra:more") == {:error, :invalid}
+    end
+
+    test "returns error for keys with wrong prefix" do
+      assert SessionKey.parse("user:my_agent:main") == {:error, :invalid}
+      assert SessionKey.parse("bot:my_agent:main") == {:error, :invalid}
+    end
+
+    test "returns error for channel peer with missing components" do
+      # Missing peer_id
+      assert SessionKey.parse("agent:my_agent:chan_123:acc_456:dm") == {:error, :invalid}
+      # Missing peer_kind and peer_id
+      assert SessionKey.parse("agent:my_agent:chan_123:acc_456") == {:error, :invalid}
+    end
+
+    test "returns error for invalid extras format" do
+      # Odd number of extra components
+      assert SessionKey.parse("agent:a:c:acc:dm:p:thread") == {:error, :invalid}
+      # Invalid extra key
+      assert SessionKey.parse("agent:a:c:acc:dm:p:invalid:value") == {:error, :invalid}
+      # Duplicate thread key
+      assert SessionKey.parse("agent:a:c:acc:dm:p:thread:t1:thread:t2") == {:error, :invalid}
+      # Duplicate sub key
+      assert SessionKey.parse("agent:a:c:acc:dm:p:sub:s1:sub:s2") == {:error, :invalid}
+    end
+
+    test "round-trip: parse after generating main key" do
       key = SessionKey.main("test_agent")
       parsed = SessionKey.parse(key)
 
@@ -112,121 +257,141 @@ defmodule LemonCore.SessionKeyTest do
       assert parsed.kind == :main
     end
 
-    test "channel_peer key round-trips through generate and parse" do
+    test "round-trip: parse after generating channel peer key" do
       opts = %{
-        agent_id: "bot1",
-        channel_id: "telegram",
-        account_id: "acct1",
+        agent_id: "test_agent",
+        channel_id: "chan_1",
+        account_id: "acc_1",
         peer_kind: :dm,
-        peer_id: "user42",
-        thread_id: "topic7",
-        sub_id: "msg123"
+        peer_id: "peer_1",
+        thread_id: "thread_1",
+        sub_id: "sub_1"
       }
 
       key = SessionKey.channel_peer(opts)
       parsed = SessionKey.parse(key)
 
-      assert parsed.agent_id == "bot1"
-      assert parsed.channel_id == "telegram"
-      assert parsed.account_id == "acct1"
+      assert parsed.agent_id == "test_agent"
+      assert parsed.kind == :channel_peer
+      assert parsed.channel_id == "chan_1"
+      assert parsed.account_id == "acc_1"
       assert parsed.peer_kind == :dm
-      assert parsed.peer_id == "user42"
-      assert parsed.thread_id == "topic7"
-      assert parsed.sub_id == "msg123"
+      assert parsed.peer_id == "peer_1"
+      assert parsed.thread_id == "thread_1"
+      assert parsed.sub_id == "sub_1"
     end
   end
 
   describe "valid?/1" do
     test "returns true for valid main session key" do
-      assert SessionKey.valid?("agent:my_agent:main")
+      assert SessionKey.valid?("agent:my_agent:main") == true
     end
 
     test "returns true for valid channel peer session key" do
-      assert SessionKey.valid?("agent:bot1:telegram:acct1:dm:user42")
+      assert SessionKey.valid?("agent:my_agent:chan_123:acc_456:dm:peer_789") == true
     end
 
-    test "returns false for invalid session key" do
-      refute SessionKey.valid?("")
-      refute SessionKey.valid?("not-a-session-key")
-    end
-  end
-
-  describe "main?/1" do
-    test "returns true for main session keys" do
-      assert SessionKey.main?("agent:test:main")
+    test "returns true for valid channel peer with extras" do
+      assert SessionKey.valid?("agent:a:c:acc:dm:p:thread:t1:sub:s1") == true
     end
 
-    test "returns false for channel peer session keys" do
-      refute SessionKey.main?("agent:bot1:telegram:acct1:dm:user42")
-    end
-  end
-
-  describe "channel_peer?/1" do
-    test "returns true for channel peer session keys" do
-      assert SessionKey.channel_peer?("agent:bot1:telegram:acct1:dm:user42")
+    test "returns false for invalid keys" do
+      assert SessionKey.valid?("invalid") == false
+      assert SessionKey.valid?("") == false
+      assert SessionKey.valid?("agent:only") == false
     end
 
-    test "returns false for main session keys" do
-      refute SessionKey.channel_peer?("agent:test:main")
-    end
-  end
-
-  describe "agent_id/1" do
-    test "extracts agent_id from main session key" do
-      assert SessionKey.agent_id("agent:my_agent:main") == "my_agent"
-    end
-
-    test "extracts agent_id from channel peer session key" do
-      assert SessionKey.agent_id("agent:bot1:telegram:acct1:dm:user42") == "bot1"
-    end
-
-    test "returns nil for invalid session keys" do
-      assert SessionKey.agent_id("invalid") == nil
-    end
-  end
-
-  describe "extras handling" do
-    test "rejects unknown key/value extras" do
-      assert {:error, :invalid} ==
-               SessionKey.parse(
-                 "agent:a:telegram:bot:dm:peer42:future_key:future_value:thread:topic42:sub:msg123"
-               )
-    end
-
-    test "returns invalid for odd trailing extras" do
-      assert {:error, :invalid} = SessionKey.parse("agent:a:telegram:bot:dm:peer42:thread")
-
-      assert {:error, :invalid} =
-               SessionKey.parse("agent:a:telegram:bot:dm:peer42:sub:msg123:extra")
-    end
-
-    test "returns invalid for duplicate extras" do
-      assert {:error, :invalid} =
-               SessionKey.parse("agent:a:telegram:bot:dm:peer42:thread:topic42:thread:topic99")
+    test "returns false for invalid peer kind" do
+      assert SessionKey.valid?("agent:a:c:acc:invalid:p") == false
     end
   end
 
   describe "allowed_peer_kinds/0" do
-    test "includes expected values and excludes dynamic untrusted values" do
-      allowed = SessionKey.allowed_peer_kinds() |> MapSet.new()
+    test "returns list of allowed peer kind strings" do
+      kinds = SessionKey.allowed_peer_kinds()
 
-      assert MapSet.subset?(MapSet.new(["dm", "group", "channel", "main", "unknown"]), allowed)
-      refute MapSet.member?(allowed, "malicious_kind_1")
+      assert is_list(kinds)
+      assert "dm" in kinds
+      assert "group" in kinds
+      assert "channel" in kinds
+      assert "main" in kinds
+      assert "unknown" in kinds
+      assert length(kinds) == 5
+    end
+
+    test "returns strings that can be used in session keys" do
+      kinds = SessionKey.allowed_peer_kinds()
+
+      for kind <- kinds do
+        key = "agent:test:chan:acc:#{kind}:peer"
+        assert SessionKey.valid?(key), "Expected #{kind} to be valid"
+      end
     end
   end
 
-  describe "main?/1, channel_peer?/1 and agent_id/1 for invalid keys" do
-    test "return false/nil for malformed inputs" do
-      for invalid <- [
-            "",
-            "not-a-session-key",
-            "agent:a:telegram:bot:dm:peer42:thread",
-            "agent:a:telegram:bot:not_allowed:peer42"
-          ] do
-        refute SessionKey.main?(invalid)
-        refute SessionKey.channel_peer?(invalid)
-        assert SessionKey.agent_id(invalid) == nil
-      end
+  describe "agent_id/1" do
+    test "extracts agent ID from main session key" do
+      assert SessionKey.agent_id("agent:my_agent:main") == "my_agent"
+    end
+
+    test "extracts agent ID from channel peer session key" do
+      assert SessionKey.agent_id("agent:my_agent:chan_123:acc_456:dm:peer_789") == "my_agent"
+    end
+
+    test "extracts agent ID from channel peer with extras" do
+      assert SessionKey.agent_id("agent:my_agent:chan:acc:dm:peer:thread:t:sub:s") == "my_agent"
+    end
+
+    test "returns nil for invalid keys" do
+      assert SessionKey.agent_id("invalid") == nil
+      assert SessionKey.agent_id("") == nil
+      assert SessionKey.agent_id("agent:only") == nil
+    end
+
+    test "returns nil for keys with invalid peer kind" do
+      assert SessionKey.agent_id("agent:my_agent:chan:acc:invalid:peer") == nil
+    end
+  end
+
+  describe "main?/1" do
+    test "returns true for main session key" do
+      assert SessionKey.main?("agent:my_agent:main") == true
+    end
+
+    test "returns false for channel peer session key" do
+      assert SessionKey.main?("agent:my_agent:chan_123:acc_456:dm:peer_789") == false
+    end
+
+    test "returns false for invalid keys" do
+      assert SessionKey.main?("invalid") == false
+      assert SessionKey.main?("") == false
+    end
+
+    test "returns false for keys with invalid peer kind" do
+      assert SessionKey.main?("agent:my_agent:chan:acc:invalid:peer") == false
+    end
+  end
+
+  describe "channel_peer?/1" do
+    test "returns true for channel peer session key" do
+      assert SessionKey.channel_peer?("agent:my_agent:chan_123:acc_456:dm:peer_789") == true
+    end
+
+    test "returns true for channel peer with extras" do
+      assert SessionKey.channel_peer?("agent:a:c:acc:dm:p:thread:t:sub:s") == true
+    end
+
+    test "returns false for main session key" do
+      assert SessionKey.channel_peer?("agent:my_agent:main") == false
+    end
+
+    test "returns false for invalid keys" do
+      assert SessionKey.channel_peer?("invalid") == false
+      assert SessionKey.channel_peer?("") == false
+    end
+
+    test "returns false for keys with invalid peer kind" do
+      assert SessionKey.channel_peer?("agent:my_agent:chan:acc:invalid:peer") == false
     end
   end
 end
