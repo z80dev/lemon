@@ -371,6 +371,7 @@ defmodule CodingAgent.Tools.HashlineTest do
       assert {:ok, result} = Hashline.apply_edits(content, [])
       assert result.content == content
       assert result.first_changed_line == nil
+      assert result.deduplicated_edits == nil
     end
 
     test "deduplicates identical edits" do
@@ -384,6 +385,38 @@ defmodule CodingAgent.Tools.HashlineTest do
 
       assert {:ok, result} = Hashline.apply_edits(content, edits)
       assert result.content == "aaa\nBBB\nccc"
+      assert length(result.deduplicated_edits) == 1
+      dedup = hd(result.deduplicated_edits)
+      assert dedup.edit_index == 1
+      assert dedup.duplicate_of == 0
+      assert dedup.op == :set
+    end
+
+    test "does not deduplicate edits with same target but different content" do
+      content = "aaa\nbbb\nccc"
+      hash = Hashline.compute_line_hash("bbb")
+
+      edits = [
+        %{op: :set, tag: %{line: 2, hash: hash}, content: ["BBB"]},
+        %{op: :set, tag: %{line: 2, hash: hash}, content: ["BBB2"]}
+      ]
+
+      assert {:ok, result} = Hashline.apply_edits(content, edits)
+      assert result.content == "aaa\nBBB2\nccc"
+      assert result.deduplicated_edits == nil
+    end
+
+    test "deduplication key includes replace_text all flag" do
+      content = "foo foo"
+
+      edits = [
+        %{op: :replace_text, old_text: "foo", new_text: "bar", all: false},
+        %{op: :replace_text, old_text: "foo", new_text: "bar", all: true}
+      ]
+
+      assert {:ok, result} = Hashline.apply_edits(content, edits)
+      assert result.content == "bar bar"
+      assert result.deduplicated_edits == nil
     end
   end
 

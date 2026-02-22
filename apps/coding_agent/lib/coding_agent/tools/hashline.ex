@@ -62,7 +62,8 @@ defmodule CodingAgent.Tools.Hashline do
   @type apply_result :: %{
           content: String.t(),
           first_changed_line: pos_integer() | nil,
-          noop_edits: [map()] | nil
+          noop_edits: [map()] | nil,
+          deduplicated_edits: [map()] | nil
         }
 
   @typedoc "Hash mismatch information"
@@ -280,13 +281,13 @@ defmodule CodingAgent.Tools.Hashline do
   @spec apply_edits(String.t(), [edit()]) :: {:ok, apply_result()} | {:error, HashlineMismatchError.t()}
   def apply_edits(content, edits) when is_list(edits) do
     if Enum.empty?(edits) do
-      {:ok, %{content: content, first_changed_line: nil, noop_edits: nil}}
+      {:ok, %{content: content, first_changed_line: nil, noop_edits: nil, deduplicated_edits: nil}}
     else
       file_lines = String.split(content, "\n")
       original_file_lines = file_lines
 
       with :ok <- validate_all_edits(edits, file_lines) do
-        edits = deduplicate_edits(edits, file_lines)
+        {edits, deduplicated_edits} = deduplicate_edits(edits)
         sorted_edits = sort_edits(edits, file_lines)
         touched_lines = build_touched_lines(sorted_edits)
 
@@ -296,7 +297,9 @@ defmodule CodingAgent.Tools.Hashline do
         result = %{
           content: Enum.join(result_lines, "\n"),
           first_changed_line: first_changed,
-          noop_edits: if(Enum.empty?(noop_edits), do: nil, else: Enum.reverse(noop_edits))
+          noop_edits: if(Enum.empty?(noop_edits), do: nil, else: Enum.reverse(noop_edits)),
+          deduplicated_edits:
+            if(Enum.empty?(deduplicated_edits), do: nil, else: deduplicated_edits)
         }
 
         {:ok, result}
@@ -419,42 +422,54 @@ defmodule CodingAgent.Tools.Hashline do
   end
 
   # Deduplicate identical edits targeting the same line(s)
-  defp deduplicate_edits(edits, file_lines) do
-    {deduped, _} =
+  defp deduplicate_edits(edits) do
+    {deduped, deduplicated, _seen} =
       edits
-      |> Enum.reduce({[], %{}}, fn edit, {acc, seen} ->
-        key = edit_key(edit, file_lines)
-        content_key = edit_content_key(edit)
-        full_key = "#{key}:#{content_key}"
+      |> Enum.with_index()
+      |> Enum.reduce({[], [], %{}}, fn {edit, idx}, {acc, dups, seen} ->
+        key = deduplication_key(edit)
 
-        if Map.has_key?(seen, full_key) do
-          {acc, seen}
-        else
-          {[edit | acc], Map.put(seen, full_key, true)}
+        case Map.get(seen, key) do
+          nil ->
+            {[edit | acc], dups, Map.put(seen, key, idx)}
+
+          first_idx ->
+            dedup = %{edit_index: idx, duplicate_of: first_idx, key: key, op: edit.op}
+            {acc, [dedup | dups], seen}
         end
       end)
 
-    Enum.reverse(deduped)
+    {Enum.reverse(deduped), Enum.reverse(deduplicated)}
   end
 
-  defp edit_key(%{op: :set, tag: tag}, _file_lines), do: "s:#{tag.line}"
+  defp deduplication_key(edit) do
+    op = edit.op
+    line_range = edit_line_range(edit)
+    content_hash = edit_content_hash(edit)
+    "#{op}:#{line_range}:#{content_hash}"
+  end
 
-  defp edit_key(%{op: :replace, first: first, last: last}, _file_lines),
-    do: "r:#{first.line}:#{last.line}"
+  defp edit_line_range(%{op: :set, tag: tag}), do: "#{tag.line}"
+  defp edit_line_range(%{op: :replace, first: first, last: last}), do: "#{first.line}-#{last.line}"
+  defp edit_line_range(%{op: :append, after: nil}), do: "eof"
+  defp edit_line_range(%{op: :append, after: tag}), do: "#{tag.line}"
+  defp edit_line_range(%{op: :prepend, before: nil}), do: "bof"
+  defp edit_line_range(%{op: :prepend, before: tag}), do: "#{tag.line}"
 
-  defp edit_key(%{op: :append, after: nil}, _file_lines), do: "ieof"
-  defp edit_key(%{op: :append, after: tag}, _file_lines), do: "i:#{tag.line}"
+  defp edit_line_range(%{op: :insert, after: after_tag, before: before_tag}),
+    do: "#{after_tag.line}-#{before_tag.line}"
 
-  defp edit_key(%{op: :prepend, before: nil}, _file_lines), do: "ibef"
-  defp edit_key(%{op: :prepend, before: tag}, _file_lines), do: "ib:#{tag.line}"
+  defp edit_line_range(%{op: :replace_text}), do: "global"
 
-  defp edit_key(%{op: :insert, after: after_tag, before: before_tag}, _file_lines),
-    do: "ix:#{after_tag.line}:#{before_tag.line}"
+  defp edit_content_hash(%{op: :replace_text, old_text: old, new_text: new, all: all}) do
+    :erlang.phash2({old, new, all})
+    |> Integer.to_string(16)
+  end
 
-  defp edit_key(%{op: :replace_text, old_text: old_text}, _file_lines), do: "rt:#{old_text}"
-
-  defp edit_content_key(%{op: :replace_text, old_text: old, new_text: new}), do: "#{old}->#{new}"
-  defp edit_content_key(%{content: content}), do: Enum.join(content, "\n")
+  defp edit_content_hash(%{content: content}) do
+    :erlang.phash2(content)
+    |> Integer.to_string(16)
+  end
 
   @doc """
   Sort edits for bottom-up application.

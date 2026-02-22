@@ -147,10 +147,12 @@ defmodule CodingAgent.Tools.HashlineEdit do
          final_content <- finalize_content(result.content, line_ending, bom),
          :ok <- File.write(resolved_path, final_content) do
       noop_count = if result.noop_edits, do: length(result.noop_edits), else: 0
-      applied_count = length(edits) - noop_count
+      dedup_count = if result.deduplicated_edits, do: length(result.deduplicated_edits), else: 0
+      applied_count = length(edits) - noop_count - dedup_count
 
       summary =
         "Applied #{applied_count} hashline edit(s) to #{path}" <>
+          if(dedup_count > 0, do: " (#{dedup_count} deduplicated)", else: "") <>
           if(noop_count > 0, do: " (#{noop_count} no-op)", else: "") <>
           if(result.first_changed_line,
             do: ", first change at line #{result.first_changed_line}",
@@ -162,6 +164,7 @@ defmodule CodingAgent.Tools.HashlineEdit do
         details: %{
           first_changed_line: result.first_changed_line,
           noop_edits: result.noop_edits,
+          deduplicated_edits: result.deduplicated_edits,
           edits_applied: applied_count
         }
       }
