@@ -25,6 +25,34 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-21 - Test Expansion: stream_hashlines_from_enumerable coverage
+**Work Area**: Test Expansion
+
+**Analysis**:
+- Compared Pi upstream and Oh-My-Pi against Lemon for new features to port
+- Pi models: Lemon is AHEAD (601 vs 586 unique model IDs) - no porting needed
+- Oh-My-Pi hashline: All autocorrect features already ported. `stream_hashlines_from_enumerable/2` was ported in prior run but had zero test coverage
+- Identified 10 test scenarios needed for the enumerable streaming function
+
+**Changes Made**:
+
+1. **Added 10 tests for `stream_hashlines_from_enumerable/2`** (`hashline_test.exs`)
+   - Equivalence test: same output as `stream_hashlines/2` for identical content
+   - Chunk boundary handling: content split across arbitrary binary chunks
+   - Newline at chunk boundary
+   - Content ending with newline (final empty line emitted)
+   - Empty enumerable (single empty line emitted)
+   - `max_chunk_lines` option respected
+   - `start_line` option respected
+   - `File.stream!`-style binary chunks simulation
+   - Hash consistency between string and enumerable streaming
+   - Single-character chunks (worst-case fragmentation)
+   - `max_chunk_bytes` limit enforcement
+
+**Result**: All 90 hashline tests pass (80 existing + 10 new). Full suite: 0 new failures.
+
+---
+
 ### 2026-02-21 - Refactoring: O(n²) List Concat, String.length Checks, Deep Nesting
 **Work Area**: Refactoring
 

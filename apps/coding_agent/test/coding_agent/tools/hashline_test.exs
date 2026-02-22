@@ -898,4 +898,184 @@ defmodule CodingAgent.Tools.HashlineTest do
       assert result.content == "line1\nnew2a\nnew2b\nline3"
     end
   end
+
+  # ============================================================================
+  # stream_hashlines_from_enumerable/2 (ported from Oh-My-Pi)
+  # ============================================================================
+
+  describe "stream_hashlines_from_enumerable/2" do
+    test "produces same output as stream_hashlines for simple content" do
+      content = "line1\nline2\nline3"
+
+      expected =
+        content
+        |> Hashline.stream_hashlines(max_chunk_lines: 1)
+        |> Enum.to_list()
+
+      actual =
+        [content]
+        |> Hashline.stream_hashlines_from_enumerable(max_chunk_lines: 1)
+        |> Enum.to_list()
+
+      assert actual == expected
+    end
+
+    test "handles content split across multiple chunks" do
+      # Split "line1\nline2\nline3" across chunk boundaries
+      chunks = ["lin", "e1\nli", "ne2\nline3"]
+
+      result =
+        chunks
+        |> Hashline.stream_hashlines_from_enumerable(max_chunk_lines: 1)
+        |> Enum.to_list()
+
+      assert length(result) == 3
+      assert Enum.at(result, 0) =~ ~r/^1#[ZPMQVRWSNKTXJBYH]{2}:line1$/
+      assert Enum.at(result, 1) =~ ~r/^2#[ZPMQVRWSNKTXJBYH]{2}:line2$/
+      assert Enum.at(result, 2) =~ ~r/^3#[ZPMQVRWSNKTXJBYH]{2}:line3$/
+    end
+
+    test "handles newline at chunk boundary" do
+      chunks = ["hello\n", "world"]
+
+      result =
+        chunks
+        |> Hashline.stream_hashlines_from_enumerable(max_chunk_lines: 1)
+        |> Enum.to_list()
+
+      assert length(result) == 2
+      assert Enum.at(result, 0) =~ "hello"
+      assert Enum.at(result, 1) =~ "world"
+    end
+
+    test "handles content ending with newline" do
+      chunks = ["line1\nline2\n"]
+
+      result =
+        chunks
+        |> Hashline.stream_hashlines_from_enumerable(max_chunk_lines: 1)
+        |> Enum.to_list()
+
+      # Should emit 3 lines: "line1", "line2", and the final empty line
+      assert length(result) == 3
+      assert Enum.at(result, 0) =~ "line1"
+      assert Enum.at(result, 1) =~ "line2"
+      assert Enum.at(result, 2) =~ ~r/^3#[ZPMQVRWSNKTXJBYH]{2}:$/
+    end
+
+    test "handles empty enumerable" do
+      result =
+        []
+        |> Hashline.stream_hashlines_from_enumerable()
+        |> Enum.to_list()
+
+      # Empty source should emit one empty line (like "".split("\n"))
+      assert length(result) == 1
+      assert Enum.at(result, 0) =~ ~r/^1#[ZPMQVRWSNKTXJBYH]{2}:$/
+    end
+
+    test "respects max_chunk_lines option" do
+      content = Enum.map_join(1..20, "\n", &"line#{&1}")
+      chunks = [content]
+
+      result =
+        chunks
+        |> Hashline.stream_hashlines_from_enumerable(max_chunk_lines: 5)
+        |> Enum.to_list()
+
+      assert length(result) == 4
+
+      for chunk <- result do
+        lines = String.split(chunk, "\n")
+        assert length(lines) <= 5
+      end
+    end
+
+    test "respects start_line option" do
+      chunks = ["aaa\nbbb"]
+
+      result =
+        chunks
+        |> Hashline.stream_hashlines_from_enumerable(start_line: 50, max_chunk_lines: 1)
+        |> Enum.to_list()
+
+      assert Enum.at(result, 0) =~ ~r/^50#/
+      assert Enum.at(result, 1) =~ ~r/^51#/
+    end
+
+    test "works with File.stream!-style binary chunks" do
+      # Simulate File.stream! producing binary chunks
+      content = "defmodule Foo do\n  def bar, do: :ok\nend\n"
+      chunk_size = 10
+      chunks = for <<chunk::binary-size(chunk_size) <- content>>, do: chunk
+      # Add remainder
+      remainder_size = rem(byte_size(content), chunk_size)
+      chunks = if remainder_size > 0 do
+        chunks ++ [binary_part(content, byte_size(content) - remainder_size, remainder_size)]
+      else
+        chunks
+      end
+
+      result =
+        chunks
+        |> Hashline.stream_hashlines_from_enumerable(max_chunk_lines: 1)
+        |> Enum.to_list()
+
+      # 4 lines: "defmodule Foo do", "  def bar, do: :ok", "end", ""
+      assert length(result) == 4
+      assert Enum.at(result, 0) =~ "defmodule Foo do"
+      assert Enum.at(result, 1) =~ "def bar, do: :ok"
+      assert Enum.at(result, 2) =~ "end"
+    end
+
+    test "hashes match between stream_hashlines and stream_hashlines_from_enumerable" do
+      content = "alpha\nbeta\ngamma"
+
+      from_string =
+        content
+        |> Hashline.stream_hashlines(max_chunk_lines: 100)
+        |> Enum.to_list()
+        |> Enum.join("\n")
+
+      from_enum =
+        [content]
+        |> Hashline.stream_hashlines_from_enumerable(max_chunk_lines: 100)
+        |> Enum.to_list()
+        |> Enum.join("\n")
+
+      assert from_string == from_enum
+    end
+
+    test "handles single-character chunks" do
+      content = "ab\ncd"
+      chunks = String.graphemes(content)
+
+      result =
+        chunks
+        |> Hashline.stream_hashlines_from_enumerable(max_chunk_lines: 1)
+        |> Enum.to_list()
+
+      assert length(result) == 2
+      assert Enum.at(result, 0) =~ "ab"
+      assert Enum.at(result, 1) =~ "cd"
+    end
+
+    test "handles max_chunk_bytes limit" do
+      # Create lines that are large enough to trigger byte limits
+      long_line = String.duplicate("x", 1000)
+      content = Enum.map_join(1..5, "\n", fn _ -> long_line end)
+
+      result =
+        [content]
+        |> Hashline.stream_hashlines_from_enumerable(max_chunk_bytes: 2048, max_chunk_lines: 100)
+        |> Enum.to_list()
+
+      # Should produce multiple chunks due to byte limit
+      assert length(result) > 1
+
+      for chunk <- result do
+        assert byte_size(chunk) <= 2048 + 1100  # one line can exceed since first line always goes in
+      end
+    end
+  end
 end
