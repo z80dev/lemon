@@ -37,14 +37,33 @@ interface CommandSocketLike {
 
 export function buildWsUrl(
   envUrl: string | undefined = import.meta.env.VITE_LEMON_WS_URL as string | undefined,
-  location: SocketLocation = window.location
+  location: SocketLocation = window.location,
+  wsToken: string | undefined = import.meta.env.VITE_LEMON_WS_TOKEN as string | undefined
 ): string {
+  const token = wsToken?.trim();
+  const appendToken = (rawUrl: string): string => {
+    if (!token) {
+      return rawUrl;
+    }
+
+    try {
+      const parsed = new URL(rawUrl, `${location.protocol}//${location.host}`);
+      if (!parsed.searchParams.has('token')) {
+        parsed.searchParams.set('token', token);
+      }
+      return parsed.toString();
+    } catch {
+      const separator = rawUrl.includes('?') ? '&' : '?';
+      return `${rawUrl}${separator}token=${encodeURIComponent(token)}`;
+    }
+  };
+
   if (envUrl) {
-    return envUrl;
+    return appendToken(envUrl);
   }
 
   const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${wsProto}//${location.host}/ws`;
+  return appendToken(`${wsProto}//${location.host}/ws`);
 }
 
 export function getReconnectDelayMs(retryCount: number): number {

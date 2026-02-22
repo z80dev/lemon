@@ -139,6 +139,36 @@ defmodule LemonChannels.OutboxTest do
     end
   end
 
+  describe "queue backpressure" do
+    test "rejects enqueue when queue is full", %{outbox_pid: outbox_pid} do
+      original_state = :sys.get_state(outbox_pid)
+
+      on_exit(fn ->
+        :sys.replace_state(outbox_pid, fn _ -> original_state end)
+      end)
+
+      filled_queue =
+        :queue.from_list([
+          %{payload: :placeholder_1},
+          %{payload: :placeholder_2}
+        ])
+
+      :sys.replace_state(outbox_pid, fn state ->
+        %{state | queue: filled_queue, processing: %{}, max_queue_size: 2}
+      end)
+
+      payload = %OutboundPayload{
+        channel_id: "test-channel",
+        kind: :text,
+        content: "queue full",
+        account_id: "account-1",
+        peer: %{kind: :dm, id: "user-1", thread_id: nil}
+      }
+
+      assert {:error, :queue_full} = Outbox.enqueue(payload)
+    end
+  end
+
   describe "telemetry" do
     test "emits :start event when processing begins" do
       ref = make_ref()
@@ -240,6 +270,55 @@ defmodule LemonChannels.OutboxTest do
       Process.sleep(50)
 
       # The important thing is the code path exists and doesn't crash
+    end
+
+    test "emits outbox queue rejection telemetry when queue is full", %{outbox_pid: outbox_pid} do
+      original_state = :sys.get_state(outbox_pid)
+
+      on_exit(fn ->
+        :sys.replace_state(outbox_pid, fn _ -> original_state end)
+      end)
+
+      handler_id = "test-outbox-queue-reject-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:lemon, :channels, :outbox, :rejected],
+        fn event, measurements, metadata, _config ->
+          send(test_pid, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      filled_queue =
+        :queue.from_list([
+          %{payload: :placeholder_1}
+        ])
+
+      :sys.replace_state(outbox_pid, fn state ->
+        %{state | queue: filled_queue, processing: %{}, max_queue_size: 1}
+      end)
+
+      payload = %OutboundPayload{
+        channel_id: "test-channel",
+        kind: :text,
+        content: "queue full telemetry",
+        account_id: "account-1",
+        peer: %{kind: :dm, id: "user-1", thread_id: nil}
+      }
+
+      assert {:error, :queue_full} = Outbox.enqueue(payload)
+
+      assert_receive {:telemetry, [:lemon, :channels, :outbox, :rejected], measurements,
+                      metadata},
+                     1_000
+
+      assert measurements.max_queue_size == 1
+      assert measurements.queue_depth >= 1
+      assert metadata.reason == :queue_full
     end
   end
 

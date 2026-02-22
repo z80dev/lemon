@@ -22,18 +22,34 @@ function createQueuedMeta(overrides: Partial<QueuedCommandMeta> = {}): QueuedCom
 
 describe('socketTransport', () => {
   it('builds same-origin websocket URL when no env override is provided', () => {
-    expect(buildWsUrl('', { protocol: 'https:', host: 'lemon.dev' })).toBe(
+    expect(buildWsUrl('', { protocol: 'https:', host: 'lemon.dev' }, undefined)).toBe(
       'wss://lemon.dev/ws'
     );
-    expect(buildWsUrl('', { protocol: 'http:', host: 'localhost:5173' })).toBe(
+    expect(buildWsUrl('', { protocol: 'http:', host: 'localhost:5173' }, undefined)).toBe(
       'ws://localhost:5173/ws'
     );
   });
 
   it('returns env override URL directly', () => {
-    expect(buildWsUrl('wss://custom.example/ws', { protocol: 'http:', host: 'ignored' })).toBe(
+    expect(
+      buildWsUrl('wss://custom.example/ws', { protocol: 'http:', host: 'ignored' }, undefined)
+    ).toBe(
       'wss://custom.example/ws'
     );
+  });
+
+  it('appends websocket token when configured', () => {
+    expect(
+      buildWsUrl('wss://custom.example/ws', { protocol: 'http:', host: 'ignored' }, 'abc123')
+    ).toBe('wss://custom.example/ws?token=abc123');
+
+    expect(
+      buildWsUrl(
+        'wss://custom.example/ws?existing=1',
+        { protocol: 'http:', host: 'ignored' },
+        'abc123'
+      )
+    ).toBe('wss://custom.example/ws?existing=1&token=abc123');
   });
 
   it('calculates reconnect delay with exponential backoff and cap', () => {

@@ -31,7 +31,8 @@ defmodule MarketIntel.MixProject do
       {:gen_stage, "~> 1.2"},
       # Internal deps
       {:lemon_core, in_umbrella: true},
-      {:agent_core, in_umbrella: true}
+      {:agent_core, in_umbrella: true},
+      {:lemon_channels, in_umbrella: true, runtime: false}
     ]
   end
 end

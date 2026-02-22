@@ -106,7 +106,15 @@ type OpenClawFrame =
   | OpenClawEventFrame
   | OpenClawHelloOkFrame;
 
-type OpenClawPendingRequest = { method: string; sessionId?: string | null };
+type OpenClawPendingRequest = {
+  method: string;
+  sessionId?: string | null;
+  meta?: Record<string, unknown>;
+};
+
+const WS_RECONNECT_BASE_DELAY_MS = 500;
+const WS_RECONNECT_MAX_DELAY_MS = 10_000;
+const WS_COMMAND_QUEUE_LIMIT = 200;
 
 type ParsedOpenClawEventAction =
   | {
@@ -330,6 +338,49 @@ function mapOpenClawResponseToMessages(
       }];
     }
 
+    case 'sessions.start': {
+      const session_id =
+        readNonEmptyString(pending?.sessionId)
+        || readNonEmptyString(payload.sessionKey)
+        || '';
+
+      const pendingMeta = asRecord(pending?.meta);
+      const cwd =
+        readNonEmptyString(pendingMeta.cwd)
+        || readNonEmptyString(payload.cwd)
+        || '';
+
+      const model =
+        parseSessionModel(payload)
+        || parseSessionModel(pendingMeta)
+        || { provider: 'unknown', id: 'unknown' };
+
+      return [
+        {
+          type: 'session_started',
+          session_id,
+          cwd,
+          model,
+        },
+        {
+          type: 'active_session',
+          session_id,
+        },
+      ];
+    }
+
+    case 'sessions.active.set': {
+      const session_id =
+        readNonEmptyString(pending?.sessionId)
+        || readNonEmptyString(payload.sessionKey)
+        || null;
+
+      return [{
+        type: 'active_session',
+        session_id,
+      }];
+    }
+
     case 'sessions.reset': {
       return [{
         type: 'ui_notify',
@@ -454,6 +505,10 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
   private wsPendingRequests = new Map<string, OpenClawPendingRequest>();
   private wsRunBuffers = new Map<string, { sessionKey: string | null; text: string }>();
   private wsLastRunBySession = new Map<string, string>();
+  private wsQueuedCommands: ClientCommand[] = [];
+  private wsReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private wsReconnectAttempts = 0;
+  private wsExplicitStop = false;
   private wsSessionKey: string | null = null;
   private restartExitCode: number | null = null;
 
@@ -473,11 +528,13 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
     this.process = null;
   }
 
-  private cleanupSocket(): void {
+  private cleanupSocket(closeSocket = true): void {
     if (this.ws) {
       try {
         this.ws.removeAllListeners();
-        this.ws.close();
+        if (closeSocket) {
+          this.ws.close();
+        }
       } catch {
         // ignore
       }
@@ -694,25 +751,46 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
 
   private buildReadyMessage(): ReadyMessage {
     const sessionKey = this.resolveWsSessionKey();
+    const primarySessionId = this.primarySessionId || sessionKey;
+    const activeSessionId = this.activeSessionId || primarySessionId;
     return {
       type: 'ready',
       cwd: this.options.cwd || process.cwd(),
       model: this.parseModelInfo(),
       debug: Boolean(this.options.debug),
       ui: false,
-      primary_session_id: sessionKey,
-      active_session_id: sessionKey,
+      primary_session_id: primarySessionId,
+      active_session_id: activeSessionId,
     };
   }
 
   private async startWebSocket(): Promise<ReadyMessage> {
-    const wsUrl = this.resolveWsUrl();
+    this.wsExplicitStop = false;
 
     this.readyPromise = new Promise((resolve, reject) => {
       this.readyResolve = resolve;
       this.readyReject = reject;
     });
 
+    this.connectWebSocket();
+
+    const readyMsg = await this.readyPromise;
+    this.ready = true;
+    return readyMsg;
+  }
+
+  private connectWebSocket(): void {
+    if (this.wsExplicitStop) {
+      return;
+    }
+
+    if (this.wsReconnectTimer) {
+      clearTimeout(this.wsReconnectTimer);
+      this.wsReconnectTimer = null;
+    }
+
+    const wsUrl = this.resolveWsUrl();
+    this.cleanupSocket(false);
     this.ws = new WebSocket(wsUrl);
 
     this.ws.on('open', () => {
@@ -737,6 +815,7 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
         this.ws?.send(JSON.stringify(connectFrame));
       } catch (err) {
         this.readyReject?.(err as Error);
+        this.emit('error', err as Error);
       }
     });
 
@@ -745,14 +824,21 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
     });
 
     this.ws.on('close', (code: number) => {
+      const startPending = Boolean(this.readyReject);
       this.ready = false;
-      if (!this.ready && this.readyReject) {
+      this.wsPendingRequests.clear();
+      if (startPending && this.readyReject) {
         this.readyReject(new Error(`WebSocket closed before ready (code: ${code})`));
         this.readyResolve = null;
         this.readyReject = null;
       }
-      this.cleanupSocket();
+
+      this.cleanupSocket(false);
       this.emit('close', code);
+
+      if (!this.wsExplicitStop) {
+        this.scheduleWebSocketReconnect();
+      }
     });
 
     this.ws.on('error', (err: Error) => {
@@ -761,10 +847,60 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
       }
       this.emit('error', err);
     });
+  }
 
-    const readyMsg = await this.readyPromise;
-    this.ready = true;
-    return readyMsg;
+  private scheduleWebSocketReconnect(): void {
+    if (this.wsExplicitStop || this.wsReconnectTimer) {
+      return;
+    }
+
+    const delay = Math.min(
+      WS_RECONNECT_MAX_DELAY_MS,
+      WS_RECONNECT_BASE_DELAY_MS * Math.pow(2, this.wsReconnectAttempts)
+    );
+    this.wsReconnectAttempts += 1;
+
+    this.wsReconnectTimer = setTimeout(() => {
+      this.wsReconnectTimer = null;
+      if (this.ws || this.wsExplicitStop) {
+        return;
+      }
+      this.connectWebSocket();
+    }, delay);
+  }
+
+  private queueWebSocketCommand(command: ClientCommand): void {
+    if (this.wsQueuedCommands.length >= WS_COMMAND_QUEUE_LIMIT) {
+      this.wsQueuedCommands.shift();
+      this.emit('message', {
+        type: 'error',
+        message: 'WebSocket command queue full. Dropped oldest command.',
+      });
+    }
+
+    this.wsQueuedCommands.push(command);
+  }
+
+  private flushQueuedWebSocketCommands(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.ready) {
+      return;
+    }
+
+    if (this.wsQueuedCommands.length === 0) {
+      return;
+    }
+
+    const queued = [...this.wsQueuedCommands];
+    this.wsQueuedCommands = [];
+
+    for (const command of queued) {
+      try {
+        this.sendWebSocketCommand(command);
+      } catch {
+        this.wsQueuedCommands.push(command);
+        break;
+      }
+    }
   }
 
   private decodeWsData(data: RawData): string {
@@ -793,8 +929,15 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
    * Sends a command to the agent.
    */
   send(command: ClientCommand): void {
-    if (this.ws) {
-      this.sendWebSocketCommand(command);
+    if (this.shouldUseWebSocket()) {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN && this.ready) {
+        this.sendWebSocketCommand(command);
+      } else {
+        this.queueWebSocketCommand(command);
+        if (!this.ws) {
+          this.connectWebSocket();
+        }
+      }
       return;
     }
 
@@ -874,14 +1017,23 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
 
       case 'start_session': {
         const sessionId = this.generateSessionKey();
-        const model = this.parseModelInfo();
         const cwd = command.cwd || this.options.cwd || process.cwd();
-        this.emit('message', {
-          type: 'session_started',
-          session_id: sessionId,
-          cwd,
-          model,
-        });
+        const parsedModel = this.parseModelInfo();
+
+        this.sendOpenClawRequest(
+          'sessions.active',
+          { sessionKey: sessionId },
+          sessionId,
+          'sessions.start',
+          {
+            cwd,
+            model:
+              command.model
+              || this.options.model
+              || process.env.LEMON_DEFAULT_MODEL
+              || `${parsedModel.provider}:${parsedModel.id}`,
+          }
+        );
         break;
       }
 
@@ -891,11 +1043,12 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
       }
 
       case 'set_active_session': {
-        this.activeSessionId = command.session_id;
-        this.emit('message', {
-          type: 'active_session',
-          session_id: command.session_id,
-        });
+        this.sendOpenClawRequest(
+          'sessions.active',
+          { sessionKey: command.session_id },
+          command.session_id,
+          'sessions.active.set'
+        );
         break;
       }
 
@@ -916,14 +1069,19 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
     method: string,
     params: Record<string, unknown>,
     sessionId: string | null,
-    pendingMethod?: string
+    pendingMethod?: string,
+    pendingMeta?: Record<string, unknown>
   ): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error('Agent not connected');
     }
 
     const id = randomUUID();
-    this.wsPendingRequests.set(id, { method: pendingMethod || method, sessionId });
+    this.wsPendingRequests.set(id, {
+      method: pendingMethod || method,
+      sessionId,
+      meta: pendingMeta,
+    });
 
     const frame: OpenClawRequestFrame = {
       type: 'req',
@@ -1105,6 +1263,14 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
    * Stops the agent process.
    */
   stop(): void {
+    this.wsExplicitStop = true;
+    if (this.wsReconnectTimer) {
+      clearTimeout(this.wsReconnectTimer);
+      this.wsReconnectTimer = null;
+    }
+    this.wsQueuedCommands = [];
+    this.wsPendingRequests.clear();
+
     if (this.ws) {
       try {
         this.ws.close();
@@ -1218,12 +1384,15 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
         const ready = this.buildReadyMessage();
         this.primarySessionId = ready.primary_session_id;
         this.activeSessionId = ready.active_session_id;
+        this.ready = true;
+        this.wsReconnectAttempts = 0;
         if (this.readyResolve) {
           this.readyResolve(ready);
           this.readyResolve = null;
           this.readyReject = null;
         }
         this.emit('ready', ready);
+        this.flushQueuedWebSocketCommands();
         break;
       }
 
@@ -1249,6 +1418,9 @@ export class AgentConnection extends EventEmitter<AgentConnectionEvents> {
 
     const messages = mapOpenClawResponseToMessages(frame, pending);
     for (const message of messages) {
+      if (message.type === 'active_session') {
+        this.activeSessionId = message.session_id;
+      }
       this.emit('message', message);
     }
   }

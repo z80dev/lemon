@@ -176,6 +176,42 @@ defmodule Ai.CallDispatcherTest do
       end)
     end
 
+    test "stream tracking timeout cancels stalled stream and releases slot", %{provider: provider} do
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
+      start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 5})
+
+      CallDispatcher.set_concurrency_cap(provider, 1)
+
+      previous_dispatcher_config = Application.get_env(:ai, CallDispatcher, [])
+
+      Application.put_env(
+        :ai,
+        CallDispatcher,
+        Keyword.put(previous_dispatcher_config, :stream_result_timeout_ms, 50)
+      )
+
+      on_exit(fn ->
+        Application.put_env(:ai, CallDispatcher, previous_dispatcher_config)
+      end)
+
+      {:ok, stream} =
+        CallDispatcher.dispatch(provider, fn ->
+          EventStream.start_link(owner: self())
+        end)
+
+      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 1 end)
+
+      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 0 end, 1_500)
+
+      assert {:ok, "after_timeout"} =
+               CallDispatcher.dispatch(provider, fn -> {:ok, "after_timeout"} end)
+
+      :ok = EventStream.cancel(stream, :test_cleanup)
+    end
+
     test "set_concurrency_cap works correctly", %{provider: provider} do
       # Default cap is 10
       assert 10 = CallDispatcher.get_concurrency_cap(provider)

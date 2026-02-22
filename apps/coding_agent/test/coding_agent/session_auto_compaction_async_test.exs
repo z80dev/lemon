@@ -126,4 +126,28 @@ defmodule CodingAgent.SessionAutoCompactionAsyncTest do
     assert Map.has_key?(health, :status)
     assert Map.has_key?(health, :session_id)
   end
+
+  test "auto compaction timeout clears in-progress state and task tracking" do
+    session = start_session()
+    state = Session.get_state(session)
+    signature = current_signature(state)
+
+    task_pid = spawn(fn -> Process.sleep(:infinity) end)
+    monitor_ref = Process.monitor(task_pid)
+
+    :sys.replace_state(session, fn current ->
+      current
+      |> Map.put(:auto_compaction_signature, signature)
+      |> Map.put(:auto_compaction_in_progress, true)
+      |> Map.put(:auto_compaction_task_pid, task_pid)
+      |> Map.put(:auto_compaction_task_monitor_ref, monitor_ref)
+    end)
+
+    send(session, {:auto_compaction_task_timeout, monitor_ref})
+
+    state_after = Session.get_state(session)
+    refute state_after.auto_compaction_in_progress
+    assert state_after.auto_compaction_task_pid == nil
+    assert state_after.auto_compaction_task_monitor_ref == nil
+  end
 end

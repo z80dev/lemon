@@ -40,6 +40,8 @@ defmodule CodingAgent.Session do
   # its end-of-run checks (avoids a race in very fast mock runs).
   @prompt_defer_ms 10
   @reset_abort_wait_ms 5_000
+  @default_auto_compaction_task_timeout_ms 120_000
+  @default_overflow_recovery_task_timeout_ms 120_000
   @task_supervisor CodingAgent.TaskSupervisor
   @secret_exists_target "__lemon.secret.exists"
   @secret_resolve_target "__lemon.secret.resolve"
@@ -103,9 +105,15 @@ defmodule CodingAgent.Session do
     :wasm_status,
     :auto_compaction_in_progress,
     :auto_compaction_signature,
+    :auto_compaction_task_pid,
+    :auto_compaction_task_monitor_ref,
+    :auto_compaction_task_timeout_ref,
     :overflow_recovery_in_progress,
     :overflow_recovery_attempted,
     :overflow_recovery_signature,
+    :overflow_recovery_task_pid,
+    :overflow_recovery_task_monitor_ref,
+    :overflow_recovery_task_timeout_ref,
     :overflow_recovery_started_at_ms,
     :overflow_recovery_error_reason,
     :overflow_recovery_partial_state
@@ -153,9 +161,15 @@ defmodule CodingAgent.Session do
           wasm_status: map() | nil,
           auto_compaction_in_progress: boolean(),
           auto_compaction_signature: session_signature() | nil,
+          auto_compaction_task_pid: pid() | nil,
+          auto_compaction_task_monitor_ref: reference() | nil,
+          auto_compaction_task_timeout_ref: reference() | nil,
           overflow_recovery_in_progress: boolean(),
           overflow_recovery_attempted: boolean(),
           overflow_recovery_signature: session_signature() | nil,
+          overflow_recovery_task_pid: pid() | nil,
+          overflow_recovery_task_monitor_ref: reference() | nil,
+          overflow_recovery_task_timeout_ref: reference() | nil,
           overflow_recovery_started_at_ms: non_neg_integer() | nil,
           overflow_recovery_error_reason: term() | nil,
           overflow_recovery_partial_state: term() | nil
@@ -702,9 +716,15 @@ defmodule CodingAgent.Session do
       wasm_status: wasm_boot.wasm_status,
       auto_compaction_in_progress: false,
       auto_compaction_signature: nil,
+      auto_compaction_task_pid: nil,
+      auto_compaction_task_monitor_ref: nil,
+      auto_compaction_task_timeout_ref: nil,
       overflow_recovery_in_progress: false,
       overflow_recovery_attempted: false,
       overflow_recovery_signature: nil,
+      overflow_recovery_task_pid: nil,
+      overflow_recovery_task_monitor_ref: nil,
+      overflow_recovery_task_timeout_ref: nil,
       overflow_recovery_started_at_ms: nil,
       overflow_recovery_error_reason: nil,
       overflow_recovery_partial_state: nil
@@ -1286,25 +1306,34 @@ defmodule CodingAgent.Session do
   end
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
-    # Remove from direct listeners
-    new_listeners =
-      Enum.reject(state.event_listeners, fn {listener_pid, monitor_ref} ->
-        listener_pid == pid or monitor_ref == ref
-      end)
+    cond do
+      state.auto_compaction_task_monitor_ref == ref ->
+        {:noreply, handle_auto_compaction_task_down(state)}
 
-    # Remove from stream subscribers and cancel their streams
-    {streams_for_pid, remaining_streams} =
-      Enum.split_with(state.event_streams, fn {_mon_ref, %{pid: stream_pid}} ->
-        stream_pid == pid
-      end)
+      state.overflow_recovery_task_monitor_ref == ref ->
+        {:noreply, handle_overflow_recovery_task_down(state)}
 
-    Enum.each(streams_for_pid, fn {mon_ref, %{stream: stream}} ->
-      AgentCore.EventStream.cancel(stream, :subscriber_down)
-      Process.demonitor(mon_ref, [:flush])
-    end)
+      true ->
+        # Remove from direct listeners
+        new_listeners =
+          Enum.reject(state.event_listeners, fn {listener_pid, monitor_ref} ->
+            listener_pid == pid or monitor_ref == ref
+          end)
 
-    {:noreply,
-     %{state | event_listeners: new_listeners, event_streams: Map.new(remaining_streams)}}
+        # Remove from stream subscribers and cancel their streams
+        {streams_for_pid, remaining_streams} =
+          Enum.split_with(state.event_streams, fn {_mon_ref, %{pid: stream_pid}} ->
+            stream_pid == pid
+          end)
+
+        Enum.each(streams_for_pid, fn {mon_ref, %{stream: stream}} ->
+          AgentCore.EventStream.cancel(stream, :subscriber_down)
+          Process.demonitor(mon_ref, [:flush])
+        end)
+
+        {:noreply,
+         %{state | event_listeners: new_listeners, event_streams: Map.new(remaining_streams)}}
+    end
   end
 
   def handle_info({:EXIT, pid, reason}, state) when pid == state.agent do
@@ -1419,6 +1448,48 @@ defmodule CodingAgent.Session do
 
             {:noreply, finalize_overflow_recovery_failure(failed_state, reason)}
         end
+    end
+  end
+
+  def handle_info({:auto_compaction_task_timeout, monitor_ref}, state) do
+    if state.auto_compaction_task_monitor_ref == monitor_ref do
+      state =
+        state
+        |> maybe_kill_background_task(state.auto_compaction_task_pid, :auto_compaction_timeout)
+        |> clear_auto_compaction_state()
+
+      if not state.is_streaming do
+        ui_set_working_message(state, nil)
+      end
+
+      {:noreply, state}
+    else
+      {:noreply, state}
+    end
+  end
+
+  def handle_info({:overflow_recovery_task_timeout, monitor_ref}, state) do
+    if state.overflow_recovery_task_monitor_ref == monitor_ref do
+      failure_reason = :overflow_recovery_timeout
+
+      failed_state =
+        state
+        |> maybe_kill_background_task(
+          state.overflow_recovery_task_pid,
+          :overflow_recovery_timeout
+        )
+        |> clear_overflow_recovery_task_state()
+
+      ui_notify(failed_state, "Overflow compaction timed out", :error)
+
+      emit_overflow_recovery_telemetry(:failure, failed_state, %{
+        duration_ms: overflow_recovery_duration_ms(state),
+        reason: normalize_overflow_reason(failure_reason)
+      })
+
+      {:noreply, finalize_overflow_recovery_failure(failed_state, failure_reason)}
+    else
+      {:noreply, state}
     end
   end
 
@@ -2370,11 +2441,14 @@ defmodule CodingAgent.Session do
 
   @spec clear_auto_compaction_state(t()) :: t()
   defp clear_auto_compaction_state(state) do
+    state = clear_auto_compaction_task_tracking(state)
     %{state | auto_compaction_in_progress: false, auto_compaction_signature: nil}
   end
 
   @spec clear_overflow_recovery_task_state(t()) :: t()
   defp clear_overflow_recovery_task_state(state) do
+    state = clear_overflow_recovery_task_tracking(state)
+
     %{
       state
       | overflow_recovery_in_progress: false,
@@ -2391,6 +2465,68 @@ defmodule CodingAgent.Session do
         overflow_recovery_error_reason: nil,
         overflow_recovery_partial_state: nil
     }
+  end
+
+  @spec clear_auto_compaction_task_tracking(t()) :: t()
+  defp clear_auto_compaction_task_tracking(state) do
+    maybe_cancel_timer(state.auto_compaction_task_timeout_ref)
+    maybe_demonitor(state.auto_compaction_task_monitor_ref)
+
+    %{
+      state
+      | auto_compaction_task_pid: nil,
+        auto_compaction_task_monitor_ref: nil,
+        auto_compaction_task_timeout_ref: nil
+    }
+  end
+
+  @spec clear_overflow_recovery_task_tracking(t()) :: t()
+  defp clear_overflow_recovery_task_tracking(state) do
+    maybe_cancel_timer(state.overflow_recovery_task_timeout_ref)
+    maybe_demonitor(state.overflow_recovery_task_monitor_ref)
+
+    %{
+      state
+      | overflow_recovery_task_pid: nil,
+        overflow_recovery_task_monitor_ref: nil,
+        overflow_recovery_task_timeout_ref: nil
+    }
+  end
+
+  @spec handle_auto_compaction_task_down(t()) :: t()
+  defp handle_auto_compaction_task_down(state) do
+    state = clear_auto_compaction_task_tracking(state)
+
+    cond do
+      not state.auto_compaction_in_progress ->
+        state
+
+      true ->
+        clear_auto_compaction_state(state)
+    end
+  end
+
+  @spec handle_overflow_recovery_task_down(t()) :: t()
+  defp handle_overflow_recovery_task_down(state) do
+    state = clear_overflow_recovery_task_tracking(state)
+
+    cond do
+      not state.overflow_recovery_in_progress ->
+        state
+
+      true ->
+        failure_reason = :overflow_recovery_task_down
+        failed_state = clear_overflow_recovery_task_state(state)
+
+        ui_notify(failed_state, "Overflow compaction worker stopped unexpectedly", :error)
+
+        emit_overflow_recovery_telemetry(:failure, failed_state, %{
+          duration_ms: overflow_recovery_duration_ms(state),
+          reason: normalize_overflow_reason(failure_reason)
+        })
+
+        finalize_overflow_recovery_failure(failed_state, failure_reason)
+    end
   end
 
   @spec clear_overflow_recovery_state_on_terminal(AgentCore.Types.agent_event(), t()) :: t()
@@ -2433,24 +2569,42 @@ defmodule CodingAgent.Session do
           reason: normalize_overflow_reason(reason)
         })
 
-        _ =
-          start_background_task(fn ->
-            result =
-              overflow_recovery_compaction_task_result(session_manager, model, compaction_opts)
+        case start_tracked_background_task(
+               fn ->
+                 result =
+                   overflow_recovery_compaction_task_result(
+                     session_manager,
+                     model,
+                     compaction_opts
+                   )
 
-            send(session_pid, {:overflow_recovery_result, signature, result})
-          end)
+                 send(session_pid, {:overflow_recovery_result, signature, result})
+               end,
+               overflow_recovery_task_timeout_ms(),
+               :overflow_recovery_task_timeout
+             ) do
+          {:ok, task_meta} ->
+            {:ok,
+             %{
+               state
+               | overflow_recovery_in_progress: true,
+                 overflow_recovery_attempted: true,
+                 overflow_recovery_signature: signature,
+                 overflow_recovery_task_pid: task_meta.pid,
+                 overflow_recovery_task_monitor_ref: task_meta.monitor_ref,
+                 overflow_recovery_task_timeout_ref: task_meta.timeout_ref,
+                 overflow_recovery_started_at_ms: started_at_ms,
+                 overflow_recovery_error_reason: reason,
+                 overflow_recovery_partial_state: partial_state
+             }}
 
-        {:ok,
-         %{
-           state
-           | overflow_recovery_in_progress: true,
-             overflow_recovery_attempted: true,
-             overflow_recovery_signature: signature,
-             overflow_recovery_started_at_ms: started_at_ms,
-             overflow_recovery_error_reason: reason,
-             overflow_recovery_partial_state: partial_state
-         }}
+          {:error, task_reason} ->
+            Logger.warning(
+              "Overflow recovery background task failed to start: #{inspect(task_reason)}"
+            )
+
+            :no_recovery
+        end
     end
   end
 
@@ -2667,17 +2821,29 @@ defmodule CodingAgent.Session do
 
       ui_set_working_message(state, "Compacting context...")
 
-      _ =
-        start_background_task(fn ->
-          result = auto_compaction_task_result(session_manager, model, compaction_opts)
-          send(session_pid, {:auto_compaction_result, signature, result})
-        end)
+      case start_tracked_background_task(
+             fn ->
+               result = auto_compaction_task_result(session_manager, model, compaction_opts)
+               send(session_pid, {:auto_compaction_result, signature, result})
+             end,
+             auto_compaction_task_timeout_ms(),
+             :auto_compaction_task_timeout
+           ) do
+        {:ok, task_meta} ->
+          %{
+            state
+            | auto_compaction_in_progress: true,
+              auto_compaction_signature: signature,
+              auto_compaction_task_pid: task_meta.pid,
+              auto_compaction_task_monitor_ref: task_meta.monitor_ref,
+              auto_compaction_task_timeout_ref: task_meta.timeout_ref
+          }
 
-      %{
-        state
-        | auto_compaction_in_progress: true,
-          auto_compaction_signature: signature
-      }
+        {:error, reason} ->
+          Logger.warning("Auto compaction task failed to start: #{inspect(reason)}")
+          ui_set_working_message(state, nil)
+          state
+      end
     else
       state
     end
@@ -3006,4 +3172,85 @@ defmodule CodingAgent.Session do
         Task.start(fun)
     end
   end
+
+  @spec start_tracked_background_task((-> any()), non_neg_integer(), atom()) ::
+          {:ok, %{pid: pid(), monitor_ref: reference(), timeout_ref: reference() | nil}}
+          | {:error, term()}
+  defp start_tracked_background_task(fun, timeout_ms, timeout_event)
+       when is_function(fun, 0) and is_atom(timeout_event) do
+    with {:ok, pid} <- start_background_task(fun) do
+      monitor_ref = Process.monitor(pid)
+      timeout_ref = schedule_background_task_timeout(timeout_event, monitor_ref, timeout_ms)
+      {:ok, %{pid: pid, monitor_ref: monitor_ref, timeout_ref: timeout_ref}}
+    end
+  end
+
+  @spec schedule_background_task_timeout(atom(), reference(), non_neg_integer()) ::
+          reference() | nil
+  defp schedule_background_task_timeout(timeout_event, monitor_ref, timeout_ms)
+       when is_atom(timeout_event) and is_reference(monitor_ref) do
+    if is_integer(timeout_ms) and timeout_ms > 0 do
+      Process.send_after(self(), {timeout_event, monitor_ref}, timeout_ms)
+    else
+      nil
+    end
+  end
+
+  @spec auto_compaction_task_timeout_ms() :: non_neg_integer()
+  defp auto_compaction_task_timeout_ms do
+    read_session_task_timeout(
+      :auto_compaction_task_timeout_ms,
+      @default_auto_compaction_task_timeout_ms
+    )
+  end
+
+  @spec overflow_recovery_task_timeout_ms() :: non_neg_integer()
+  defp overflow_recovery_task_timeout_ms do
+    read_session_task_timeout(
+      :overflow_recovery_task_timeout_ms,
+      @default_overflow_recovery_task_timeout_ms
+    )
+  end
+
+  @spec read_session_task_timeout(atom(), non_neg_integer()) :: non_neg_integer()
+  defp read_session_task_timeout(key, default_timeout_ms) do
+    case Application.get_env(:coding_agent, __MODULE__, [])
+         |> Keyword.get(key, default_timeout_ms) do
+      value when is_integer(value) and value > 0 -> value
+      _ -> default_timeout_ms
+    end
+  end
+
+  @spec maybe_cancel_timer(reference() | nil) :: :ok
+  defp maybe_cancel_timer(nil), do: :ok
+
+  defp maybe_cancel_timer(timer_ref) when is_reference(timer_ref) do
+    _ = Process.cancel_timer(timer_ref, async: false, info: false)
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  @spec maybe_demonitor(reference() | nil) :: :ok
+  defp maybe_demonitor(nil), do: :ok
+
+  defp maybe_demonitor(monitor_ref) when is_reference(monitor_ref) do
+    Process.demonitor(monitor_ref, [:flush])
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  @spec maybe_kill_background_task(t(), pid() | nil, term()) :: t()
+  defp maybe_kill_background_task(state, pid, reason) when is_pid(pid) do
+    if Process.alive?(pid) do
+      Process.exit(pid, {:shutdown, reason})
+    end
+
+    state
+  rescue
+    _ -> state
+  end
+
+  defp maybe_kill_background_task(state, _pid, _reason), do: state
 end

@@ -1850,6 +1850,109 @@ describe('AgentConnection', () => {
       });
     });
 
+    it('creates session through control-plane roundtrip before emitting session_started', async () => {
+      const conn = new AgentConnection({
+        wsUrl: 'ws://control-plane.test/ws',
+        wsSessionKey: 'agent:test:main',
+      });
+      const ws = await startWebSocketConnection(conn);
+      const messageHandler = vi.fn();
+      conn.on('message', messageHandler);
+
+      conn.startSession({ cwd: '/tmp/project', model: 'openai:gpt-4o' });
+      const reqFrame = readLastFrame(ws);
+      expect(reqFrame.method).toBe('sessions.active');
+      expect((reqFrame.params as Record<string, unknown>).sessionKey).toBeTypeOf('string');
+
+      emitWebSocketMessage(ws, {
+        type: 'res',
+        id: reqFrame.id,
+        ok: true,
+        payload: {
+          sessionKey: (reqFrame.params as Record<string, unknown>).sessionKey,
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'session_started',
+        session_id: (reqFrame.params as Record<string, unknown>).sessionKey,
+        cwd: '/tmp/project',
+      }));
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'active_session',
+        session_id: (reqFrame.params as Record<string, unknown>).sessionKey,
+      });
+      expect(conn.getActiveSessionId()).toBe((reqFrame.params as Record<string, unknown>).sessionKey);
+    });
+
+    it('sets active session only after control-plane ack', async () => {
+      const conn = new AgentConnection({
+        wsUrl: 'ws://control-plane.test/ws',
+        wsSessionKey: 'agent:test:main',
+      });
+      const ws = await startWebSocketConnection(conn);
+      const messageHandler = vi.fn();
+      conn.on('message', messageHandler);
+
+      conn.setActiveSession('agent:test:other');
+      const reqFrame = readLastFrame(ws);
+      expect(reqFrame.method).toBe('sessions.active');
+      expect(conn.getActiveSessionId()).toBe('agent:test:main');
+
+      emitWebSocketMessage(ws, {
+        type: 'res',
+        id: reqFrame.id,
+        ok: true,
+        payload: {
+          sessionKey: 'agent:test:other',
+          runId: null,
+        },
+      });
+
+      expect(messageHandler).toHaveBeenCalledWith({
+        type: 'active_session',
+        session_id: 'agent:test:other',
+      });
+      expect(conn.getActiveSessionId()).toBe('agent:test:other');
+    });
+
+    it('queues commands while disconnected and flushes after reconnect', async () => {
+      vi.useFakeTimers();
+      try {
+        const conn = new AgentConnection({
+          wsUrl: 'ws://control-plane.test/ws',
+          wsSessionKey: 'agent:test:main',
+        });
+
+        const ws = await startWebSocketConnection(conn);
+        ws.readyState = MockWebSocket.CLOSED;
+        ws.emit('close', 1006);
+
+        conn.prompt('resume work', 'agent:test:main');
+
+        const reconnectWs = getLastWebSocket();
+        openWebSocket(reconnectWs);
+        emitWebSocketMessage(reconnectWs, {
+          type: 'hello-ok',
+          protocol: 1,
+          server: {},
+          features: {},
+          snapshot: {},
+          policy: {},
+        });
+
+        const queuedCommandFrame = readLastFrame(reconnectWs);
+        expect(queuedCommandFrame.method).toBe('chat.send');
+        expect(queuedCommandFrame.params).toEqual({
+          sessionKey: 'agent:test:main',
+          prompt: 'resume work',
+          agentId: 'default',
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('maps chat delta and completion events to message stream updates', async () => {
       const conn = new AgentConnection({
         wsUrl: 'ws://control-plane.test/ws',

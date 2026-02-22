@@ -38,6 +38,8 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
     attempted = Keyword.get(opts, :attempted, true)
     reason = Keyword.get(opts, :reason, {:assistant_error, "context_length_exceeded"})
     partial_state = Keyword.get(opts, :partial_state, %{from: :test})
+    monitor_ref = Keyword.get(opts, :monitor_ref, nil)
+    task_pid = Keyword.get(opts, :task_pid, nil)
 
     :sys.replace_state(session, fn state ->
       %{
@@ -46,6 +48,8 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
           overflow_recovery_in_progress: true,
           overflow_recovery_attempted: attempted,
           overflow_recovery_signature: signature,
+          overflow_recovery_task_pid: task_pid,
+          overflow_recovery_task_monitor_ref: monitor_ref,
           overflow_recovery_error_reason: reason,
           overflow_recovery_partial_state: partial_state
       }
@@ -131,5 +135,22 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
 
     assert metadata.session_id == state.session_manager.header.id
     assert metadata.reason =~ "cannot_compact"
+  end
+
+  test "overflow recovery task timeout finalizes session and clears task tracking" do
+    session = start_session()
+    state = Session.get_state(session)
+    signature = current_signature(state)
+    task_pid = spawn(fn -> Process.sleep(:infinity) end)
+    monitor_ref = Process.monitor(task_pid)
+    mark_overflow_recovery_state(session, signature, task_pid: task_pid, monitor_ref: monitor_ref)
+
+    send(session, {:overflow_recovery_task_timeout, monitor_ref})
+
+    state_after = Session.get_state(session)
+    refute state_after.overflow_recovery_in_progress
+    assert state_after.overflow_recovery_task_pid == nil
+    assert state_after.overflow_recovery_task_monitor_ref == nil
+    refute state_after.is_streaming
   end
 end

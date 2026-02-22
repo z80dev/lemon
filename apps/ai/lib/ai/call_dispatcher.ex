@@ -45,6 +45,8 @@ defmodule Ai.CallDispatcher do
         }
 
   @default_concurrency_cap 10
+  @default_stream_result_timeout_ms 300_000
+  @default_stream_cancel_reason :dispatcher_stream_timeout
 
   # ============================================================================
   # Public API
@@ -298,7 +300,7 @@ defmodule Ai.CallDispatcher do
 
   defp track_stream_result(provider, slot_ref, stream_pid) do
     try do
-      terminal_result = Ai.EventStream.result(stream_pid, :infinity)
+      terminal_result = await_stream_terminal_result(stream_pid)
       record_stream_terminal_result(provider, terminal_result)
     rescue
       error ->
@@ -316,6 +318,31 @@ defmodule Ai.CallDispatcher do
         Ai.CircuitBreaker.record_failure(provider)
     after
       release_slot(slot_ref)
+    end
+  end
+
+  defp await_stream_terminal_result(stream_pid) do
+    timeout_ms = stream_result_timeout_ms()
+
+    case Ai.EventStream.result(stream_pid, timeout_ms) do
+      {:error, :timeout} = timeout_error ->
+        Logger.warning(
+          "CallDispatcher stream tracking timeout after #{timeout_ms}ms stream=#{inspect(stream_pid)}"
+        )
+
+        _ = Ai.EventStream.cancel(stream_pid, @default_stream_cancel_reason)
+        timeout_error
+
+      other ->
+        other
+    end
+  end
+
+  defp stream_result_timeout_ms do
+    case Application.get_env(:ai, __MODULE__, [])
+         |> Keyword.get(:stream_result_timeout_ms, @default_stream_result_timeout_ms) do
+      value when is_integer(value) and value > 0 -> value
+      _ -> @default_stream_result_timeout_ms
     end
   end
 

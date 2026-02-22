@@ -19,6 +19,7 @@ defmodule LemonChannels.Outbox do
 
   @worker_supervisor LemonChannels.Outbox.WorkerSupervisor
   @default_max_attempts 3
+  @default_max_queue_size 5_000
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -51,7 +52,14 @@ defmodule LemonChannels.Outbox do
     # exists so we can safely run supervised delivery tasks.
     _ = ensure_worker_supervisor_started()
 
-    {:ok, %{queue: :queue.new(), processing: %{}, processing_groups: %{}, enqueued_total: 0}}
+    {:ok,
+     %{
+       queue: :queue.new(),
+       processing: %{},
+       processing_groups: %{},
+       enqueued_total: 0,
+       max_queue_size: max_queue_size()
+     }}
   end
 
   @impl true
@@ -66,26 +74,50 @@ defmodule LemonChannels.Outbox do
 
         # Apply chunking if needed
         payloads = maybe_chunk_payload(payload)
+        chunk_count = length(payloads)
 
-        # Check rate limit
-        case RateLimiter.check(payload.channel_id, payload.account_id) do
-          :ok ->
-            # Enqueue all chunks for processing
-            state = enqueue_payloads(state, ref, payloads)
+        if queue_full?(state, chunk_count) do
+          queue_depth = queue_depth(state)
 
-            # Trigger processing
-            send(self(), :process_queue)
+          LemonCore.Telemetry.emit(
+            [:lemon, :channels, :outbox, :rejected],
+            %{count: 1, queue_depth: queue_depth, max_queue_size: state.max_queue_size},
+            %{
+              reason: :queue_full,
+              channel_id: payload.channel_id,
+              account_id: payload.account_id,
+              chunk_count: chunk_count
+            }
+          )
 
-            {:reply, {:ok, ref}, state}
+          {:reply, {:error, :queue_full}, state}
+        else
+          # Check rate limit
+          case RateLimiter.check(payload.channel_id, payload.account_id) do
+            :ok ->
+              # Enqueue all chunks for processing
+              state = enqueue_payloads(state, ref, payloads)
+              emit_queue_depth_telemetry(state, :enqueued, %{chunk_count: chunk_count})
 
-          {:rate_limited, wait_ms} ->
-            # Still enqueue but will be delayed
-            state = enqueue_payloads(state, ref, payloads)
+              # Trigger processing
+              send(self(), :process_queue)
 
-            # Schedule processing after rate limit delay
-            Process.send_after(self(), :process_queue, wait_ms)
+              {:reply, {:ok, ref}, state}
 
-            {:reply, {:ok, ref}, state}
+            {:rate_limited, wait_ms} ->
+              # Still enqueue but will be delayed
+              state = enqueue_payloads(state, ref, payloads)
+
+              emit_queue_depth_telemetry(state, :enqueued_rate_limited, %{
+                chunk_count: chunk_count,
+                wait_ms: wait_ms
+              })
+
+              # Schedule processing after rate limit delay
+              Process.send_after(self(), :process_queue, wait_ms)
+
+              {:reply, {:ok, ref}, state}
+          end
         end
     end
   end
@@ -95,6 +127,8 @@ defmodule LemonChannels.Outbox do
     stats = %{
       queue_length: :queue.len(state.queue),
       processing_count: map_size(state.processing),
+      queue_depth: queue_depth(state),
+      max_queue_size: state.max_queue_size,
       enqueued_total: state.enqueued_total
     }
 
@@ -141,8 +175,16 @@ defmodule LemonChannels.Outbox do
             if retryable_reason?(reason) and entry.attempts < max_attempts() do
               {entry, delay_ms} = schedule_retry(entry, reason)
               queue = :queue.in(entry, state.queue)
+              state = %{state | queue: queue}
+
+              emit_queue_depth_telemetry(state, :retry_scheduled, %{
+                delay_ms: delay_ms,
+                attempts: entry.attempts,
+                reason: inspect(reason, limit: 50)
+              })
+
               Process.send_after(self(), :process_queue, delay_ms)
-              {:noreply, %{state | queue: queue}}
+              {:noreply, state}
             else
               reason = finalize_failure_reason(reason)
               failure_meta = outbox_failure_meta(entry)
@@ -179,8 +221,16 @@ defmodule LemonChannels.Outbox do
         if retryable_reason?(reason) and entry.attempts < max_attempts() do
           {entry, delay_ms} = schedule_retry(entry, reason)
           queue = :queue.in(entry, state.queue)
+          state = %{state | queue: queue}
+
+          emit_queue_depth_telemetry(state, :retry_scheduled, %{
+            delay_ms: delay_ms,
+            attempts: entry.attempts,
+            reason: inspect(reason, limit: 50)
+          })
+
           Process.send_after(self(), :process_queue, delay_ms)
-          {:noreply, %{state | queue: queue}}
+          {:noreply, state}
         else
           reason = finalize_failure_reason(reason)
           failure_meta = outbox_failure_meta(entry)
@@ -520,6 +570,20 @@ defmodule LemonChannels.Outbox do
     end
   end
 
+  defp max_queue_size do
+    case Application.get_env(:lemon_channels, __MODULE__, []) do
+      opts when is_list(opts) ->
+        case Keyword.get(opts, :max_queue_size, @default_max_queue_size) do
+          :infinity -> :infinity
+          value when is_integer(value) and value > 0 -> value
+          _ -> @default_max_queue_size
+        end
+
+      _ ->
+        @default_max_queue_size
+    end
+  end
+
   defp schedule_retry(entry, reason) do
     attempt = entry.attempts + 1
     delay_ms = retry_delay(attempt, reason)
@@ -614,4 +678,34 @@ defmodule LemonChannels.Outbox do
   defp retryable_reason?(:normal), do: true
   defp retryable_reason?(:shutdown), do: true
   defp retryable_reason?(_reason), do: true
+
+  defp queue_full?(state, incoming_count)
+       when is_integer(incoming_count) and incoming_count > 0 do
+    case state.max_queue_size do
+      :infinity ->
+        false
+
+      max when is_integer(max) and max > 0 ->
+        queue_depth(state) + incoming_count > max
+
+      _ ->
+        false
+    end
+  end
+
+  defp queue_full?(_state, _incoming_count), do: false
+
+  defp queue_depth(state) do
+    :queue.len(state.queue) + map_size(state.processing)
+  end
+
+  defp emit_queue_depth_telemetry(state, event, metadata) do
+    LemonCore.Telemetry.emit(
+      [:lemon, :channels, :outbox, :queue],
+      %{depth: queue_depth(state), max_queue_size: state.max_queue_size, count: 1},
+      Map.put(metadata, :event, event)
+    )
+  rescue
+    _ -> :ok
+  end
 end

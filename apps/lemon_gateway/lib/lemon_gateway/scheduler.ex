@@ -92,17 +92,38 @@ defmodule LemonGateway.Scheduler do
           "in_flight=#{map_size(in_flight)}/#{state.max}"
       )
 
+      emit_scheduler_telemetry(:slot_granted, %{
+        in_flight: map_size(in_flight),
+        max: state.max,
+        waitq: :queue.len(state.waitq),
+        wait_ms: 0
+      })
+
       {:noreply, %{state | in_flight: in_flight}}
     else
       {state, mon_ref} = ensure_monitor(state, worker_pid)
 
       waitq =
-        :queue.in(%{worker: worker_pid, thread_key: thread_key, mon_ref: mon_ref}, state.waitq)
+        :queue.in(
+          %{
+            worker: worker_pid,
+            thread_key: thread_key,
+            mon_ref: mon_ref,
+            queued_at_ms: System.monotonic_time(:millisecond)
+          },
+          state.waitq
+        )
 
       Logger.debug(
         "Scheduler queued slot request worker=#{inspect(worker_pid)} thread_key=#{inspect(thread_key)} " <>
           "in_flight=#{map_size(state.in_flight)}/#{state.max} waitq=#{:queue.len(waitq)}"
       )
+
+      emit_scheduler_telemetry(:slot_queued, %{
+        in_flight: map_size(state.in_flight),
+        max: state.max,
+        waitq: :queue.len(waitq)
+      })
 
       {:noreply, %{state | waitq: waitq}}
     end
@@ -115,6 +136,12 @@ defmodule LemonGateway.Scheduler do
     Logger.debug(
       "Scheduler released slot slot_ref=#{inspect(slot_ref)} in_flight=#{map_size(state.in_flight)}/#{state.max}"
     )
+
+    emit_scheduler_telemetry(:slot_released, %{
+      in_flight: map_size(state.in_flight),
+      max: state.max,
+      waitq: :queue.len(state.waitq)
+    })
 
     {:noreply, grant_until_full(state)}
   end
@@ -133,7 +160,10 @@ defmodule LemonGateway.Scheduler do
   defp maybe_grant_next(state) do
     if map_size(state.in_flight) < state.max do
       case :queue.out(state.waitq) do
-        {{:value, %{worker: worker_pid, thread_key: thread_key, mon_ref: mon_ref}}, waitq} ->
+        {{:value, entry}, waitq} ->
+          worker_pid = entry.worker
+          thread_key = entry.thread_key
+          mon_ref = entry.mon_ref
           slot_ref = make_ref()
 
           in_flight =
@@ -144,6 +174,16 @@ defmodule LemonGateway.Scheduler do
             })
 
           send(worker_pid, {:slot_granted, slot_ref})
+
+          wait_ms = wait_time_ms(entry)
+
+          emit_scheduler_telemetry(:slot_granted, %{
+            in_flight: map_size(in_flight),
+            max: state.max,
+            waitq: :queue.len(waitq),
+            wait_ms: wait_ms
+          })
+
           %{state | in_flight: in_flight, waitq: waitq}
 
         {:empty, _} ->
@@ -250,6 +290,26 @@ defmodule LemonGateway.Scheduler do
       end)
 
     {:queue.from_list(kept), length(removed)}
+  end
+
+  defp wait_time_ms(entry) do
+    case Map.get(entry, :queued_at_ms) do
+      queued_at_ms when is_integer(queued_at_ms) and queued_at_ms > 0 ->
+        max(System.monotonic_time(:millisecond) - queued_at_ms, 0)
+
+      _ ->
+        0
+    end
+  end
+
+  defp emit_scheduler_telemetry(event, measurements) do
+    LemonCore.Telemetry.emit(
+      [:lemon, :gateway, :scheduler, event],
+      Map.put(measurements, :count, 1),
+      %{}
+    )
+  rescue
+    _ -> :ok
   end
 
   #
