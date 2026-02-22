@@ -503,8 +503,8 @@ defmodule LemonGateway.Scheduler do
           apply_resume_if_compatible(job, engine, token)
 
         %{} = map ->
-          engine = map.last_engine || map[:last_engine] || map["last_engine"]
-          token = map.last_resume_token || map[:last_resume_token] || map["last_resume_token"]
+          engine = map_get(map, :last_engine)
+          token = map_get(map, :last_resume_token)
 
           if is_binary(engine) and is_binary(token) do
             apply_resume_if_compatible(job, engine, token)
@@ -670,4 +670,9 @@ defmodule LemonGateway.Scheduler do
   defp normalize_enqueue(_result), do: :ok
 
   defp slot_request_times(state), do: Map.get(state, :slot_request_times, %{})
+
+  # Helper for consistent atom/string key access
+  defp map_get(map, key) when is_atom(key) do
+    Map.get(map, key) || Map.get(map, to_string(key))
+  end
 end

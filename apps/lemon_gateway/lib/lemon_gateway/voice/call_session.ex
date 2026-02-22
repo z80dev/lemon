@@ -195,8 +195,8 @@ defmodule LemonGateway.Voice.CallSession do
     if transcript != "" do
       Logger.info("Final transcript for #{state.call_sid}: #{transcript}")
 
-      # Add to conversation history
-      history = state.conversation_history ++ [%{role: "user", content: transcript}]
+      # Add to conversation history (prepend for O(1), reverse when needed)
+      history = [%{role: "user", content: transcript} | state.conversation_history]
 
       # Generate response
       new_state = %{state | conversation_history: history, current_utterance: ""}
@@ -220,8 +220,8 @@ defmodule LemonGateway.Voice.CallSession do
 
   def handle_cast({:speak, text}, state) do
     if state.is_speaking do
-      # Queue the response
-      {:noreply, %{state | response_queue: state.response_queue ++ [text]}}
+      # Queue the response (prepend for O(1), process from end)
+      {:noreply, %{state | response_queue: [text | state.response_queue]}}
     else
       # Start speaking immediately
       send(self(), {:synthesize_speech, text})
@@ -279,21 +279,22 @@ defmodule LemonGateway.Voice.CallSession do
       send(state.twilio_ws_pid, {:send_audio, mulaw_audio})
     end
 
-    # Add assistant response to history
-    history = state.conversation_history ++ [%{role: "assistant", content: text}]
+    # Add assistant response to history (prepend for O(1), reverse when needed)
+    history = [%{role: "assistant", content: text} | state.conversation_history]
 
     {:noreply, %{state | conversation_history: history, is_processing: false}}
   end
 
   def handle_info(:speech_complete, state) do
-    # Check if there are more responses in queue
-    case state.response_queue do
-      [next | rest] ->
+    # Check if there are more responses in queue (FIFO - take from end since we prepend)
+    case List.last(state.response_queue) do
+      nil ->
+        {:noreply, %{state | is_speaking: false}}
+
+      next ->
+        rest = List.delete_at(state.response_queue, -1)
         send(self(), {:synthesize_speech, next})
         {:noreply, %{state | response_queue: rest}}
-
-      [] ->
-        {:noreply, %{state | is_speaking: false}}
     end
   end
 
@@ -333,9 +334,10 @@ defmodule LemonGateway.Voice.CallSession do
   defp get_best_transcript(_), do: ""
 
   defp generate_llm_response(history) do
+    # History is stored in reverse order (prepended), so reverse to get chronological order
     messages = [
       %{role: "system", content: Config.system_prompt()}
-      | Enum.take(history, -10) # Keep last 10 messages for context
+      | history |> Enum.reverse() |> Enum.take(10) # Keep last 10 messages for context
     ]
 
     # Use the AI module to generate response
