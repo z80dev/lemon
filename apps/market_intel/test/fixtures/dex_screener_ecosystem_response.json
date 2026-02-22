@@ -1,0 +1,68 @@
+{
+  "pairs": [
+    {
+      "chainId": "base",
+      "dexId": "uniswap",
+      "pairAddress": "0xbase1",
+      "baseToken": {
+        "symbol": "BASE1",
+        "name": "Base Token One"
+      },
+      "priceUsd": "2.50",
+      "volume": {
+        "h24": 5000000
+      },
+      "priceChange": {
+        "h24": 10.5
+      }
+    },
+    {
+      "chainId": "base",
+      "dexId": "uniswap",
+      "pairAddress": "0xbase2",
+      "baseToken": {
+        "symbol": "BASE2",
+        "name": "Base Token Two"
+      },
+      "priceUsd": "0.75",
+      "volume": {
+        "h24": 3000000
+      },
+      "priceChange": {
+        "h24": -5.2
+      }
+    },
+    {
+      "chainId": "base",
+      "dexId": "sushiswap",
+      "pairAddress": "0xbase3",
+      "baseToken": {
+        "symbol": "BASE3",
+        "name": "Base Token Three"
+      },
+      "priceUsd": "5.00",
+      "volume": {
+        "h24": 2000000
+      },
+      "priceChange": {
+        "h24": 25.0
+      }
+    },
+    {
+      "chainId": "ethereum",
+      "dexId": "uniswap",
+      "pairAddress": "0xeth1",
+      "baseToken": {
+        "symbol": "ETH1",
+        "name": "Eth Token"
+      },
+      "priceUsd": "100.00",
+      "volume": {
+        "h24": 10000000
+      },
+      "priceChange": {
+        "h24": 2.0
+      }
+    }
+  ]
+}

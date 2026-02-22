@@ -723,9 +723,7 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
 
       Process.sleep(50)
       :ok = Coordinator.abort_all(coordinator)
-      Process.sleep(50)
-
-      assert Coordinator.list_active(coordinator) == []
+      assert_eventually(fn -> Coordinator.list_active(coordinator) == [] end, 1_000)
     end
   end
 

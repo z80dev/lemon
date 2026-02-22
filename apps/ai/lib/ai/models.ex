@@ -10425,7 +10425,35 @@ defmodule Ai.Models do
     :vercel_ai_gateway => @vercel_ai_gateway_models
   }
 
-  @providers Map.keys(@models)
+  # Keep provider iteration deterministic for lookups like find_by_id/1 where
+  # duplicate model IDs can exist across providers (e.g. OpenAI vs Azure/OpenAI,
+  # Google vs Vertex). Canonical providers should be checked first.
+  @providers [
+    :anthropic,
+    :openai,
+    :"openai-codex",
+    :amazon_bedrock,
+    :google,
+    :google_antigravity,
+    :kimi,
+    :opencode,
+    :xai,
+    :mistral,
+    :cerebras,
+    :deepseek,
+    :qwen,
+    :minimax,
+    :zai,
+    :azure_openai_responses,
+    :github_copilot,
+    :google_gemini_cli,
+    :google_vertex,
+    :groq,
+    :huggingface,
+    :minimax_cn,
+    :openrouter,
+    :vercel_ai_gateway
+  ]
 
   # ============================================================================
   # Public API

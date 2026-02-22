@@ -29,6 +29,7 @@ defmodule MarketIntel.MixProject do
       {:ecto_sql, "~> 3.10"},
       {:ecto_sqlite3, "~> 0.12"},
       {:gen_stage, "~> 1.2"},
+      {:mox, "~> 1.2", only: :test},
       # Internal deps
       {:lemon_core, in_umbrella: true},
       {:agent_core, in_umbrella: true},

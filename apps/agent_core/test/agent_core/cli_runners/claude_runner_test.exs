@@ -1192,10 +1192,12 @@ defmodule AgentCore.CliRunners.ClaudeRunnerTest do
     test "cancel/2 API is available" do
       # Verify the API exists and can be called
       # We don't actually start a process since that would call the real CLI
+      assert Code.ensure_loaded?(ClaudeRunner)
       assert function_exported?(ClaudeRunner, :cancel, 2)
     end
 
     test "stream/1 API is available" do
+      assert Code.ensure_loaded?(ClaudeRunner)
       assert function_exported?(ClaudeRunner, :stream, 1)
     end
 

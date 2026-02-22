@@ -23,6 +23,12 @@ defmodule LemonGateway.ThreadWorker do
   # Default window for merging consecutive followup jobs (milliseconds)
   @followup_debounce_ms 500
 
+  # Timeout for slot requests - if scheduler doesn't respond, we retry
+  @slot_request_timeout_ms 30_000
+
+  # Maximum attempts to start a run
+  @max_run_start_attempts 3
+
   def start_link(opts) do
     thread_key = Keyword.fetch!(opts, :thread_key)
     name = {:via, Registry, {LemonGateway.ThreadRegistry, thread_key}}
@@ -31,6 +37,9 @@ defmodule LemonGateway.ThreadWorker do
 
   @impl true
   def init(state) do
+    # Schedule slot request timeout check
+    schedule_slot_timeout_check()
+
     {:ok,
      Map.merge(state, %{
        jobs: :queue.new(),
@@ -38,6 +47,7 @@ defmodule LemonGateway.ThreadWorker do
        current_slot_ref: nil,
        run_mon_ref: nil,
        slot_pending: false,
+       slot_requested_at: nil,
        last_followup_at: nil,
        # Track pending steer jobs sent to the run but not yet confirmed/rejected
        # Maps run_pid -> list of {job, fallback_mode} tuples
@@ -49,7 +59,7 @@ defmodule LemonGateway.ThreadWorker do
   def handle_cast({:enqueue, %Job{} = job}, state) do
     Logger.debug(
       "ThreadWorker enqueue(cast) thread_key=#{inspect(state.thread_key)} run_id=#{inspect(job.run_id)} " <>
-        "mode=#{inspect(job.queue_mode)} queue_len_before=#{:queue.len(state.jobs)}"
+        "mode=#{inspect(job.queue_mode)} queue_len_before=#{queue_len_safe(state.jobs)}"
     )
 
     state = enqueue_by_mode(job, state)
@@ -60,11 +70,188 @@ defmodule LemonGateway.ThreadWorker do
   def handle_call({:enqueue, %Job{} = job}, _from, state) do
     Logger.debug(
       "ThreadWorker enqueue(call) thread_key=#{inspect(state.thread_key)} run_id=#{inspect(job.run_id)} " <>
-        "mode=#{inspect(job.queue_mode)} queue_len_before=#{:queue.len(state.jobs)}"
+        "mode=#{inspect(job.queue_mode)} queue_len_before=#{queue_len_safe(state.jobs)}"
     )
 
     state = enqueue_by_mode(job, state)
     {:reply, :ok, maybe_request_slot(state)}
+  end
+
+  @impl true
+  def handle_info({:slot_granted, slot_ref}, state) do
+    cond do
+      state.current_run != nil ->
+        # Already have a run, release the slot
+        safe_release_slot(slot_ref)
+        {:noreply, %{state | slot_pending: false, slot_requested_at: nil}}
+
+      :queue.is_empty(state.jobs) ->
+        # No jobs to run, release slot and stop
+        safe_release_slot(slot_ref)
+        {:stop, :normal, %{state | slot_pending: false, slot_requested_at: nil}}
+
+      true ->
+        case :queue.out(state.jobs) do
+          {{:value, job}, jobs} ->
+            Logger.debug(
+              "ThreadWorker slot granted thread_key=#{inspect(state.thread_key)} " <>
+                "run_id=#{inspect(job.run_id)} remaining_queue=#{queue_len_safe(jobs)}"
+            )
+
+            # Start the run with error handling
+            case start_run_safe(job, slot_ref, state.thread_key) do
+              {:ok, run_pid} ->
+                mon_ref = Process.monitor(run_pid)
+
+                {:noreply,
+                 %{
+                   state
+                   | jobs: jobs,
+                     current_run: run_pid,
+                     current_slot_ref: slot_ref,
+                     run_mon_ref: mon_ref,
+                     slot_pending: false,
+                     slot_requested_at: nil
+                 }}
+
+              {:error, reason} ->
+                Logger.error(
+                  "ThreadWorker: failed to start run for job #{inspect(job.run_id)}, " <>
+                    "reason=#{inspect(reason)}"
+                )
+
+                # Release the slot since we couldn't start the run
+                safe_release_slot(slot_ref)
+
+                # Re-enqueue the job for retry (at front of queue)
+                state = %{state | jobs: :queue.in_r(job, state.jobs)}
+
+                # Clear slot pending and try again
+                state = %{state | slot_pending: false, slot_requested_at: nil}
+                {:noreply, maybe_request_slot(state)}
+            end
+
+          {:empty, _} ->
+            # Queue became empty between check and pop
+            safe_release_slot(slot_ref)
+            {:stop, :normal, %{state | slot_pending: false, slot_requested_at: nil}}
+        end
+    end
+  end
+
+  def handle_info({:run_complete, run_pid, _completed_event}, state) do
+    state =
+      if run_pid == state.current_run do
+        if is_reference(state.run_mon_ref) do
+          Process.demonitor(state.run_mon_ref, [:flush])
+        end
+
+        Logger.debug(
+          "ThreadWorker run complete thread_key=#{inspect(state.thread_key)} run_pid=#{inspect(run_pid)} " <>
+            "queue_len=#{queue_len_safe(state.jobs)}"
+        )
+
+        %{state | current_run: nil, current_slot_ref: nil, run_mon_ref: nil, jobs: state.jobs}
+      else
+        state
+      end
+
+    state = maybe_request_slot(state)
+
+    if state.current_run == nil and :queue.is_empty(state.jobs) do
+      {:stop, :normal, state}
+    else
+      {:noreply, state}
+    end
+  end
+
+  def handle_info({:DOWN, mon_ref, :process, pid, reason}, state) do
+    if state.current_run == pid and state.run_mon_ref == mon_ref do
+      if state.current_slot_ref do
+        safe_release_slot(state.current_slot_ref)
+      end
+
+      Logger.warning(
+        "ThreadWorker observed run down thread_key=#{inspect(state.thread_key)} run_pid=#{inspect(pid)} " <>
+          "reason=#{inspect(reason)} pending_steers=#{length(Map.get(state.pending_steers, pid, []))}"
+      )
+
+      # Flush any pending steers for this run - they were cast but never processed
+      state = flush_pending_steers(state, pid)
+
+      state =
+        %{state | current_run: nil, current_slot_ref: nil, run_mon_ref: nil}
+        |> maybe_request_slot()
+
+      if state.current_run == nil and :queue.is_empty(state.jobs) do
+        {:stop, :normal, state}
+      else
+        {:noreply, state}
+      end
+    else
+      {:noreply, state}
+    end
+  end
+
+  # Handle slot request timeout check
+  def handle_info(:slot_timeout_check, state) do
+    state =
+      if state.slot_pending and state.slot_requested_at != nil do
+        elapsed = System.monotonic_time(:millisecond) - state.slot_requested_at
+
+        if elapsed > @slot_request_timeout_ms do
+          Logger.warning(
+            "ThreadWorker: slot request timed out after #{div(elapsed, 1000)}s, retrying"
+          )
+
+          # Reset slot_pending and try again
+          state = %{state | slot_pending: false, slot_requested_at: nil}
+          maybe_request_slot(state)
+        else
+          state
+        end
+      else
+        state
+      end
+
+    schedule_slot_timeout_check()
+    {:noreply, state}
+  end
+
+  # Handle steer acceptance from Run - remove from pending steers
+  def handle_info({:steer_accepted, %Job{} = job}, state) do
+    state = remove_pending_steer(state, job)
+    {:noreply, state}
+  end
+
+  # Handle steer_backlog acceptance from Run - remove from pending steers
+  def handle_info({:steer_backlog_accepted, %Job{} = job}, state) do
+    state = remove_pending_steer(state, job)
+    {:noreply, state}
+  end
+
+  # Handle steer rejection from Run - re-enqueue as followup
+  def handle_info({:steer_rejected, %Job{} = job}, state) do
+    # Remove from pending steers since the run explicitly rejected it
+    state = remove_pending_steer(state, job)
+    followup_job = %{job | queue_mode: :followup}
+    state = enqueue_by_mode(followup_job, state)
+    {:noreply, maybe_request_slot(state)}
+  end
+
+  # Handle steer_backlog rejection from Run - enqueue at back like :collect
+  def handle_info({:steer_backlog_rejected, %Job{} = job}, state) do
+    # Remove from pending steers since the run explicitly rejected it
+    state = remove_pending_steer(state, job)
+    collect_job = %{job | queue_mode: :collect}
+    state = apply_queue_cap(%{state | jobs: :queue.in(collect_job, state.jobs)}, collect_job)
+    {:noreply, maybe_request_slot(state)}
+  end
+
+  # Catch-all for unknown messages to prevent crashes
+  def handle_info(msg, state) do
+    Logger.warning("ThreadWorker received unexpected message: #{inspect(msg)}")
+    {:noreply, state}
   end
 
   # Insert job into queue based on queue_mode
@@ -106,13 +293,22 @@ defmodule LemonGateway.ThreadWorker do
     # If there's an active run, attempt to steer it directly
     case state.current_run do
       pid when is_pid(pid) ->
-        # Always cast to the run without checking Process.alive?
-        # This avoids a race where the run dies between the check and the cast.
-        # If the run dies before processing, we'll handle it in :DOWN by
-        # converting all pending steers for that run to followup.
-        GenServer.cast(pid, {:steer, job, self()})
-        # Track this pending steer so we can recover it if the run dies
-        add_pending_steer(state, pid, job, :followup)
+        # Safely cast to the run - handle case where run dies
+        case safe_cast_steer(pid, :steer, job) do
+          :ok ->
+            # Track this pending steer so we can recover it if the run dies
+            add_pending_steer(state, pid, job, :followup)
+
+          {:error, reason} ->
+            Logger.warning(
+              "ThreadWorker: steer cast failed for run #{inspect(pid)}, reason=#{inspect(reason)}, " <>
+                "converting to followup"
+            )
+
+            # Run is dead or dying - convert to followup
+            followup_job = %{job | queue_mode: :followup}
+            enqueue_by_mode(followup_job, state)
+        end
 
       nil ->
         # No active run - convert to followup and enqueue
@@ -125,13 +321,22 @@ defmodule LemonGateway.ThreadWorker do
     # Like :steer, but falls back to enqueuing at back (like :collect) instead of converting to followup
     case state.current_run do
       pid when is_pid(pid) ->
-        # Always cast to the run without checking Process.alive?
-        # This avoids a race where the run dies between the check and the cast.
-        # If the run dies before processing, we'll handle it in :DOWN by
-        # converting all pending steers for that run to collect mode.
-        GenServer.cast(pid, {:steer_backlog, job, self()})
-        # Track this pending steer so we can recover it if the run dies
-        add_pending_steer(state, pid, job, :collect)
+        # Safely cast to the run - handle case where run dies
+        case safe_cast_steer(pid, :steer_backlog, job) do
+          :ok ->
+            # Track this pending steer so we can recover it if the run dies
+            add_pending_steer(state, pid, job, :collect)
+
+          {:error, reason} ->
+            Logger.warning(
+              "ThreadWorker: steer_backlog cast failed for run #{inspect(pid)}, reason=#{inspect(reason)}, " <>
+                "converting to collect"
+            )
+
+            # Run is dead or dying - convert to collect
+            collect_job = %{job | queue_mode: :collect}
+            apply_queue_cap(%{state | jobs: :queue.in(collect_job, state.jobs)}, collect_job)
+        end
 
       nil ->
         # No active run - enqueue at back like :collect
@@ -148,12 +353,32 @@ defmodule LemonGateway.ThreadWorker do
     apply_queue_cap(new_state, job)
   end
 
+  # Safely cast a steer message to a run process
+  defp safe_cast_steer(pid, steer_type, job) when is_pid(pid) do
+    try do
+      if Process.alive?(pid) do
+        case steer_type do
+          :steer -> GenServer.cast(pid, {:steer, job, self()})
+          :steer_backlog -> GenServer.cast(pid, {:steer_backlog, job, self()})
+        end
+
+        :ok
+      else
+        {:error, :dead_run}
+      end
+    catch
+      :exit, {:noproc, _} -> {:error, :noproc}
+      :exit, reason -> {:error, {:exit, reason}}
+    end
+  end
+
   # Apply queue cap and drop policy
   # Returns the state with jobs trimmed to cap if configured
   defp apply_queue_cap(state, job_added) do
     queue_config = LemonGateway.Config.get_queue_config()
     cap = queue_config[:cap]
     drop = queue_config[:drop]
+    queue_len = queue_len_safe(state.jobs)
 
     cond do
       # No cap configured or cap is 0 - no enforcement
@@ -161,7 +386,7 @@ defmodule LemonGateway.ThreadWorker do
         state
 
       # Queue is within cap - no action needed
-      :queue.len(state.jobs) <= cap ->
+      queue_len <= cap ->
         state
 
       # Drop policy is :newest - remove the job we just added
@@ -172,13 +397,25 @@ defmodule LemonGateway.ThreadWorker do
         case job_added.queue_mode do
           :interrupt ->
             # Job was added at front, remove from front
-            {{:value, _dropped}, trimmed_jobs} = :queue.out(state.jobs)
-            %{state | jobs: trimmed_jobs}
+            case :queue.out(state.jobs) do
+              {{:value, _dropped}, trimmed_jobs} ->
+                %{state | jobs: trimmed_jobs}
+
+              {:empty, _} ->
+                # Queue became empty between check and removal
+                state
+            end
 
           _ ->
             # Job was added at back, remove from back
-            {{:value, _dropped}, trimmed_jobs} = :queue.out_r(state.jobs)
-            %{state | jobs: trimmed_jobs}
+            case :queue.out_r(state.jobs) do
+              {{:value, _dropped}, trimmed_jobs} ->
+                %{state | jobs: trimmed_jobs}
+
+              {:empty, _} ->
+                # Queue became empty between check and removal
+                state
+            end
         end
 
       # Drop policy is :oldest (default) - remove oldest jobs until at cap
@@ -189,7 +426,7 @@ defmodule LemonGateway.ThreadWorker do
 
   # Drop oldest jobs until queue is at or below cap
   defp drop_oldest_until_cap(state, cap) do
-    queue_len = :queue.len(state.jobs)
+    queue_len = queue_len_safe(state.jobs)
 
     if queue_len <= cap do
       state
@@ -235,7 +472,22 @@ defmodule LemonGateway.ThreadWorker do
   defp maybe_cancel_current_run(%{current_run: nil} = state), do: state
 
   defp maybe_cancel_current_run(%{current_run: run_pid} = state) when is_pid(run_pid) do
-    LemonGateway.Scheduler.cancel(run_pid, :interrupted)
+    try do
+      LemonGateway.Scheduler.cancel(run_pid, :interrupted)
+    catch
+      :exit, {:noproc, _} ->
+        Logger.debug("ThreadWorker: scheduler cancel failed - scheduler not available")
+        :ok
+
+      :exit, reason ->
+        Logger.warning("ThreadWorker: scheduler cancel exited with reason #{inspect(reason)}")
+        :ok
+
+      :error, reason ->
+        Logger.error("ThreadWorker: scheduler cancel raised error: #{inspect(reason)}")
+        :ok
+    end
+
     state
   end
 
@@ -255,11 +507,12 @@ defmodule LemonGateway.ThreadWorker do
 
   # Remove a specific job from pending steers (called when steer is rejected normally)
   defp remove_pending_steer(state, job) do
-    # Find and remove the job from any run's pending list
+    # Use run_id for matching instead of full struct comparison for reliability
     new_pending =
       Map.new(state.pending_steers, fn {pid, jobs} ->
-        {pid, Enum.reject(jobs, fn {j, _mode} -> j == job end)}
+        {pid, Enum.reject(jobs, fn {j, _mode} -> j.run_id == job.run_id end)}
       end)
+      |> Map.filter(fn {_pid, jobs} -> jobs != [] end)  # Remove empty lists
 
     %{state | pending_steers: new_pending}
   end
@@ -277,142 +530,97 @@ defmodule LemonGateway.ThreadWorker do
     end)
   end
 
-  @impl true
-  def handle_info({:slot_granted, slot_ref}, state) do
-    cond do
-      state.current_run != nil ->
-        LemonGateway.Scheduler.release_slot(slot_ref)
-        {:noreply, state}
+  # Safely release a slot with error handling
+  defp safe_release_slot(slot_ref) do
+    try do
+      LemonGateway.Scheduler.release_slot(slot_ref)
+    catch
+      :exit, {:noproc, _} ->
+        Logger.debug("ThreadWorker: scheduler not available for slot release")
+        :ok
 
-      :queue.is_empty(state.jobs) ->
-        LemonGateway.Scheduler.release_slot(slot_ref)
-        {:stop, :normal, %{state | slot_pending: false}}
-
-      true ->
-        {{:value, job}, jobs} = :queue.out(state.jobs)
-
-        Logger.debug(
-          "ThreadWorker slot granted thread_key=#{inspect(state.thread_key)} " <>
-            "run_id=#{inspect(job.run_id)} remaining_queue=#{:queue.len(jobs)}"
-        )
-
-        {:ok, run_pid} =
-          LemonGateway.RunSupervisor.start_run(%{
-            job: job,
-            slot_ref: slot_ref,
-            thread_key: state.thread_key,
-            worker_pid: self()
-          })
-
-        mon_ref = Process.monitor(run_pid)
-
-        {:noreply,
-         %{
-           state
-           | jobs: jobs,
-             current_run: run_pid,
-             current_slot_ref: slot_ref,
-             run_mon_ref: mon_ref,
-             slot_pending: false
-         }}
+      :exit, reason ->
+        Logger.warning("ThreadWorker: scheduler release_slot exited: #{inspect(reason)}")
+        :ok
     end
   end
 
-  @impl true
-  def handle_info({:run_complete, run_pid, _completed_event}, state) do
-    state =
-      if run_pid == state.current_run do
-        if state.run_mon_ref do
-          Process.demonitor(state.run_mon_ref, [:flush])
+  # Safely start a run with error handling and retries
+  defp start_run_safe(job, slot_ref, thread_key, attempt \\ 1) do
+    try do
+      case LemonGateway.RunSupervisor.start_run(%{
+             job: job,
+             slot_ref: slot_ref,
+             thread_key: thread_key,
+             worker_pid: self()
+           }) do
+        {:ok, run_pid} ->
+          {:ok, run_pid}
+
+        {:error, reason} = err ->
+          if attempt < @max_run_start_attempts do
+            Logger.warning(
+              "ThreadWorker: run start attempt #{attempt} failed, retrying: #{inspect(reason)}"
+            )
+
+            Process.sleep(100 * attempt)
+            start_run_safe(job, slot_ref, thread_key, attempt + 1)
+          else
+            err
+          end
+      end
+    catch
+      :exit, {:noproc, _} ->
+        if attempt < @max_run_start_attempts do
+          Logger.warning("ThreadWorker: RunSupervisor not available, retrying (#{attempt})")
+          Process.sleep(100 * attempt)
+          start_run_safe(job, slot_ref, thread_key, attempt + 1)
+        else
+          {:error, :run_supervisor_unavailable}
         end
 
-        Logger.debug(
-          "ThreadWorker run complete thread_key=#{inspect(state.thread_key)} run_pid=#{inspect(run_pid)} " <>
-            "queue_len=#{:queue.len(state.jobs)}"
-        )
+      :exit, reason ->
+        {:error, {:run_start_exit, reason}}
 
-        %{state | current_run: nil, current_slot_ref: nil, run_mon_ref: nil, jobs: state.jobs}
-      else
-        state
-      end
-
-    state = maybe_request_slot(state)
-
-    if state.current_run == nil and :queue.is_empty(state.jobs) do
-      {:stop, :normal, state}
-    else
-      {:noreply, state}
+      error ->
+        {:error, {:run_start_exception, error}}
     end
   end
 
-  def handle_info({:DOWN, mon_ref, :process, pid, _reason}, state) do
-    if state.current_run == pid and state.run_mon_ref == mon_ref do
-      if state.current_slot_ref do
-        LemonGateway.Scheduler.release_slot(state.current_slot_ref)
-      end
-
-      Logger.warning(
-        "ThreadWorker observed run down thread_key=#{inspect(state.thread_key)} run_pid=#{inspect(pid)} " <>
-          "pending_steers=#{length(Map.get(state.pending_steers, pid, []))}"
-      )
-
-      # Flush any pending steers for this run - they were cast but never processed
-      state = flush_pending_steers(state, pid)
-
-      state =
-        %{state | current_run: nil, current_slot_ref: nil, run_mon_ref: nil}
-        |> maybe_request_slot()
-
-      if state.current_run == nil and :queue.is_empty(state.jobs) do
-        {:stop, :normal, state}
-      else
-        {:noreply, state}
-      end
-    else
-      {:noreply, state}
-    end
-  end
-
-  # Handle steer acceptance from Run - remove from pending steers
-  def handle_info({:steer_accepted, %Job{} = job}, state) do
-    state = remove_pending_steer(state, job)
-    {:noreply, state}
-  end
-
-  # Handle steer_backlog acceptance from Run - remove from pending steers
-  def handle_info({:steer_backlog_accepted, %Job{} = job}, state) do
-    state = remove_pending_steer(state, job)
-    {:noreply, state}
-  end
-
-  # Handle steer rejection from Run - re-enqueue as followup
-  def handle_info({:steer_rejected, %Job{} = job}, state) do
-    # Remove from pending steers since the run explicitly rejected it
-    state = remove_pending_steer(state, job)
-    followup_job = %{job | queue_mode: :followup}
-    state = enqueue_by_mode(followup_job, state)
-    {:noreply, maybe_request_slot(state)}
-  end
-
-  # Handle steer_backlog rejection from Run - enqueue at back like :collect
-  def handle_info({:steer_backlog_rejected, %Job{} = job}, state) do
-    # Remove from pending steers since the run explicitly rejected it
-    state = remove_pending_steer(state, job)
-    collect_job = %{job | queue_mode: :collect}
-    state = apply_queue_cap(%{state | jobs: :queue.in(collect_job, state.jobs)}, collect_job)
-    {:noreply, maybe_request_slot(state)}
+  defp schedule_slot_timeout_check do
+    Process.send_after(self(), :slot_timeout_check, 5_000)
   end
 
   defp maybe_request_slot(state) do
     if state.current_run == nil and not state.slot_pending and not :queue.is_empty(state.jobs) do
       Logger.debug(
-        "ThreadWorker requesting slot thread_key=#{inspect(state.thread_key)} queue_len=#{:queue.len(state.jobs)}"
+        "ThreadWorker requesting slot thread_key=#{inspect(state.thread_key)} queue_len=#{queue_len_safe(state.jobs)}"
       )
 
-      LemonGateway.Scheduler.request_slot(self(), state.thread_key)
-      %{state | slot_pending: true}
+      try do
+        LemonGateway.Scheduler.request_slot(self(), state.thread_key)
+        %{state | slot_pending: true, slot_requested_at: System.monotonic_time(:millisecond)}
+      catch
+        :exit, {:noproc, _} ->
+          Logger.error("ThreadWorker: scheduler not available for slot request")
+          # Will retry on next slot timeout check
+          %{state | slot_pending: false, slot_requested_at: nil}
+
+        :exit, reason ->
+          Logger.error("ThreadWorker: scheduler request_slot exited: #{inspect(reason)}")
+          %{state | slot_pending: false, slot_requested_at: nil}
+      end
     else
       state
+    end
+  end
+
+  # Safe queue length check that handles edge cases
+  defp queue_len_safe(queue) do
+    try do
+      :queue.len(queue)
+    rescue
+      _ -> 0
     end
   end
 

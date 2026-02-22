@@ -58,6 +58,7 @@ defmodule CodingAgent.UI.RPC do
           input_device: atom() | pid(),
           output_device: atom() | pid(),
           reader_task: Task.t() | nil,
+          input_closed: boolean(),
           editor_text: String.t()
         }
 
@@ -209,6 +210,7 @@ defmodule CodingAgent.UI.RPC do
       input_device: input_device,
       output_device: output_device,
       reader_task: nil,
+      input_closed: false,
       editor_text: ""
     }
 
@@ -216,6 +218,11 @@ defmodule CodingAgent.UI.RPC do
     state = start_reader_task(state)
 
     {:ok, state}
+  end
+
+  @impl GenServer
+  def handle_call({:request, _method, _params}, _from, %{input_closed: true} = state) do
+    {:reply, {:error, :connection_closed}, state}
   end
 
   @impl GenServer
@@ -310,7 +317,7 @@ defmodule CodingAgent.UI.RPC do
     Logger.warning("[RPC UI] Input stream closed")
     # Fail all pending requests - don't restart reader when closed
     state = fail_all_pending(state, :connection_closed)
-    {:noreply, %{state | reader_task: nil}}
+    {:noreply, %{state | reader_task: nil, input_closed: true}}
   end
 
   @impl GenServer

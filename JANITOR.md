@@ -25,6 +25,38 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-22 - Review & Integration: Claude 3-Task Batch (Follow-up)
+**Work Area**: Review / Integration
+
+**Scope Reviewed:**
+- Gateway scheduling/thread-worker integration changes and related router/orchestrator tests
+- MarketIntel ingestion + commentary test expansion and HTTP client behavior
+- Cross-app integration touch-ups in AI model resolution, CLI runner tests, and coordinator edge-case coverage
+
+**Issues Found and Fixed During Integration:**
+- Removed duplicate test module file causing conflicts:
+  - Deleted `apps/lemon_gateway/test/lemon_gateway/telegram/truncate_test.exs`
+- Removed duplicate/obsolete supervisor test file:
+  - Deleted `apps/coding_agent/test/coding_agent/session_root_supervisor_test.exs`
+- Stabilized `market_intel` tests and warning hygiene:
+  - Added test-only Mox dependency and mock bootstrap in `apps/market_intel/test/test_helper.exs`
+  - Made `MarketIntel.Ingestion.HttpClient` configurable for test HTTP + secrets mocking
+  - Fixed env leakage/async interactions across ingestion tests
+  - Reworked threshold assertions in trigger tests to avoid brittle float comparisons
+
+**Verification Results:**
+- `mix compile --warnings-as-errors`: PASS
+- `mix test`: PASS (all app summaries in umbrella run report 0 failures)
+- Targeted reruns used during triage:
+  - `mix test apps/market_intel/test`: PASS (362 tests, 0 failures)
+  - `mix test apps/lemon_gateway/test`: PASS (1558 tests, 0 failures)
+
+**Outcome:**
+- All three Claude task change sets are integrated and passing.
+- No additional blocking defects found after fixes above.
+
+---
+
 ### 2026-02-22 - Review & Integration: 3-Task Parallel Batch
 **Work Area**: Review / Integration
 

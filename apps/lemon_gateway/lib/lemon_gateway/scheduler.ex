@@ -12,6 +12,12 @@ defmodule LemonGateway.Scheduler do
   alias LemonGateway.{ChatState, Config, Store}
   alias LemonGateway.Types.{Job, ResumeToken}
 
+  # Timeout for slot requests - workers should not wait forever
+  @slot_request_timeout_ms 30_000
+
+  # Timeout for worker startup operations
+  @worker_startup_timeout_ms 5_000
+
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
   end
@@ -37,8 +43,16 @@ defmodule LemonGateway.Scheduler do
   @doc "Cancels a running job by sending a cancel cast to the run process."
   @spec cancel(pid(), term()) :: :ok
   def cancel(run_pid, reason \\ :user_requested) do
-    if is_pid(run_pid) and Process.alive?(run_pid) do
-      GenServer.cast(run_pid, {:cancel, reason})
+    if is_pid(run_pid) do
+      try do
+        if Process.alive?(run_pid) do
+          GenServer.cast(run_pid, {:cancel, reason})
+        end
+      catch
+        :exit, {:noproc, _} ->
+          Logger.debug("Scheduler.cancel: run_pid #{inspect(run_pid)} already dead")
+          :ok
+      end
     end
 
     :ok
@@ -46,7 +60,16 @@ defmodule LemonGateway.Scheduler do
 
   @impl true
   def init(_opts) do
-    max = LemonGateway.Config.get(:max_concurrent_runs)
+    max =
+      case LemonGateway.Config.get(:max_concurrent_runs) do
+        n when is_integer(n) and n > 0 -> n
+        _ ->
+          Logger.warning("Invalid max_concurrent_runs config, using default 10")
+          10
+      end
+
+    # Schedule periodic cleanup of stale slot requests
+    schedule_slot_timeout_check()
 
     {:ok,
      %{
@@ -54,7 +77,9 @@ defmodule LemonGateway.Scheduler do
        in_flight: %{},
        waitq: :queue.new(),
        monitors: %{},
-       worker_counts: %{}
+       worker_counts: %{},
+       # Track when slot requests were queued for timeout handling
+       slot_request_times: %{}
      }}
   end
 
@@ -82,26 +107,39 @@ defmodule LemonGateway.Scheduler do
         Map.put(state.in_flight, slot_ref, %{
           worker: worker_pid,
           thread_key: thread_key,
-          mon_ref: mon_ref
+          mon_ref: mon_ref,
+          granted_at_ms: System.monotonic_time(:millisecond)
         })
 
-      send(worker_pid, {:slot_granted, slot_ref})
+      # Safely send slot grant with error handling
+      case safe_send_slot_granted(worker_pid, slot_ref) do
+        :ok ->
+          Logger.debug(
+            "Scheduler granted slot worker=#{inspect(worker_pid)} thread_key=#{inspect(thread_key)} " <>
+              "in_flight=#{map_size(in_flight)}/#{state.max}"
+          )
 
-      Logger.debug(
-        "Scheduler granted slot worker=#{inspect(worker_pid)} thread_key=#{inspect(thread_key)} " <>
-          "in_flight=#{map_size(in_flight)}/#{state.max}"
-      )
+          emit_scheduler_telemetry(:slot_granted, %{
+            in_flight: map_size(in_flight),
+            max: state.max,
+            waitq: :queue.len(state.waitq),
+            wait_ms: 0
+          })
 
-      emit_scheduler_telemetry(:slot_granted, %{
-        in_flight: map_size(in_flight),
-        max: state.max,
-        waitq: :queue.len(state.waitq),
-        wait_ms: 0
-      })
+          {:noreply, %{state | in_flight: in_flight}}
 
-      {:noreply, %{state | in_flight: in_flight}}
+        {:error, :dead_worker} ->
+          # Worker died before we could send - clean up and try next
+          Logger.warning(
+            "Scheduler: worker #{inspect(worker_pid)} died before slot could be granted, skipping"
+          )
+
+          state = maybe_demonitor_worker(state, %{worker: worker_pid, mon_ref: mon_ref})
+          {:noreply, grant_until_full(state)}
+      end
     else
       {state, mon_ref} = ensure_monitor(state, worker_pid)
+      queued_at_ms = System.monotonic_time(:millisecond)
 
       waitq =
         :queue.in(
@@ -109,10 +147,12 @@ defmodule LemonGateway.Scheduler do
             worker: worker_pid,
             thread_key: thread_key,
             mon_ref: mon_ref,
-            queued_at_ms: System.monotonic_time(:millisecond)
+            queued_at_ms: queued_at_ms
           },
           state.waitq
         )
+
+      slot_request_times = Map.put(slot_request_times(state), worker_pid, queued_at_ms)
 
       Logger.debug(
         "Scheduler queued slot request worker=#{inspect(worker_pid)} thread_key=#{inspect(thread_key)} " <>
@@ -125,7 +165,7 @@ defmodule LemonGateway.Scheduler do
         waitq: :queue.len(waitq)
       })
 
-      {:noreply, %{state | waitq: waitq}}
+      {:noreply, state |> Map.put(:waitq, waitq) |> Map.put(:slot_request_times, slot_request_times)}
     end
   end
 
@@ -147,7 +187,9 @@ defmodule LemonGateway.Scheduler do
   end
 
   @impl true
-  def handle_info({:DOWN, mon_ref, :process, pid, _reason}, state) do
+  def handle_info({:DOWN, mon_ref, :process, pid, reason}, state) do
+    Logger.debug("Scheduler: worker #{inspect(pid)} down with reason #{inspect(reason)}")
+
     state =
       case Map.get(state.monitors, pid) do
         ^mon_ref -> cleanup_worker(state, pid)
@@ -155,6 +197,75 @@ defmodule LemonGateway.Scheduler do
       end
 
     {:noreply, grant_until_full(state)}
+  end
+
+  # Handle slot request timeout check
+  def handle_info(:slot_timeout_check, state) do
+    state = cleanup_stale_slot_requests(state)
+    schedule_slot_timeout_check()
+    {:noreply, state}
+  end
+
+  # Catch-all for unknown messages to prevent crashes
+  def handle_info(msg, state) do
+    Logger.warning("Scheduler received unexpected message: #{inspect(msg)}")
+    {:noreply, state}
+  end
+
+  defp schedule_slot_timeout_check do
+    Process.send_after(self(), :slot_timeout_check, @slot_request_timeout_ms)
+  end
+
+  # Remove slot requests that have been waiting too long
+  defp cleanup_stale_slot_requests(state) do
+    now = System.monotonic_time(:millisecond)
+
+    {fresh_waitq, stale_count, fresh_request_times} =
+      :queue.to_list(state.waitq)
+      |> Enum.reduce({:queue.new(), 0, %{}}, fn
+        %{queued_at_ms: queued_at, worker: worker} = entry, {q, stale_acc, times_acc}
+        when is_integer(queued_at) and is_pid(worker) ->
+          if now - queued_at > @slot_request_timeout_ms do
+            # Stale request - worker has been waiting too long
+            Logger.warning(
+              "Scheduler: dropping stale slot request for worker #{inspect(worker)}, " <>
+                "queued #{div(now - queued_at, 1000)}s ago"
+            )
+
+            # Clean up monitor for this stale request
+            maybe_demonitor_worker(state, entry)
+            {q, stale_acc + 1, times_acc}
+          else
+            {:queue.in(entry, q), stale_acc, Map.put(times_acc, worker, queued_at)}
+          end
+
+        malformed, {q, stale_acc, times_acc} ->
+          Logger.warning("Scheduler: dropping malformed waitq entry: #{inspect(malformed)}")
+          {q, stale_acc + 1, times_acc}
+      end)
+
+    if stale_count > 0 do
+      Logger.warning("Scheduler: cleaned up #{stale_count} stale slot requests")
+    end
+
+    state
+    |> Map.put(:waitq, fresh_waitq)
+    |> Map.put(:slot_request_times, fresh_request_times)
+  end
+
+  # Safely send slot grant message with error handling
+  defp safe_send_slot_granted(worker_pid, slot_ref) do
+    try do
+      if Process.alive?(worker_pid) do
+        send(worker_pid, {:slot_granted, slot_ref})
+        :ok
+      else
+        {:error, :dead_worker}
+      end
+    catch
+      :exit, {:noproc, _} -> {:error, :dead_worker}
+      :exit, _ -> {:error, :dead_worker}
+    end
   end
 
   defp maybe_grant_next(state) do
@@ -166,25 +277,42 @@ defmodule LemonGateway.Scheduler do
           mon_ref = entry.mon_ref
           slot_ref = make_ref()
 
-          in_flight =
-            Map.put(state.in_flight, slot_ref, %{
-              worker: worker_pid,
-              thread_key: thread_key,
-              mon_ref: mon_ref
-            })
+          # Check if worker is still alive before granting
+          case safe_send_slot_granted(worker_pid, slot_ref) do
+            :ok ->
+              in_flight =
+                Map.put(state.in_flight, slot_ref, %{
+                  worker: worker_pid,
+                  thread_key: thread_key,
+                  mon_ref: mon_ref,
+                  granted_at_ms: System.monotonic_time(:millisecond)
+                })
 
-          send(worker_pid, {:slot_granted, slot_ref})
+              wait_ms = wait_time_ms(entry)
+              slot_request_times = Map.delete(slot_request_times(state), worker_pid)
 
-          wait_ms = wait_time_ms(entry)
+              emit_scheduler_telemetry(:slot_granted, %{
+                in_flight: map_size(in_flight),
+                max: state.max,
+                waitq: :queue.len(waitq),
+                wait_ms: wait_ms
+              })
 
-          emit_scheduler_telemetry(:slot_granted, %{
-            in_flight: map_size(in_flight),
-            max: state.max,
-            waitq: :queue.len(waitq),
-            wait_ms: wait_ms
-          })
+              state
+              |> Map.put(:in_flight, in_flight)
+              |> Map.put(:waitq, waitq)
+              |> Map.put(:slot_request_times, slot_request_times)
 
-          %{state | in_flight: in_flight, waitq: waitq}
+            {:error, :dead_worker} ->
+              # Worker died while waiting - clean up and try next
+              Logger.warning(
+                "Scheduler: worker #{inspect(worker_pid)} died while waiting in queue, skipping"
+              )
+
+              state = maybe_demonitor_worker(state, entry)
+              # Recursively try next in queue
+              maybe_grant_next(%{state | waitq: waitq})
+          end
 
         {:empty, _} ->
           state
@@ -195,8 +323,17 @@ defmodule LemonGateway.Scheduler do
   end
 
   defp grant_until_full(state) do
+    grant_until_full(state, 0)
+  end
+
+  defp grant_until_full(state, depth) when depth > 1000 do
+    Logger.warning("grant_until_full exceeded max iterations, deferring remaining grants")
+    state
+  end
+
+  defp grant_until_full(state, depth) do
     if map_size(state.in_flight) < state.max and not :queue.is_empty(state.waitq) do
-      state |> maybe_grant_next() |> grant_until_full()
+      state |> maybe_grant_next() |> grant_until_full(depth + 1)
     else
       state
     end
@@ -277,30 +414,33 @@ defmodule LemonGateway.Scheduler do
       end
 
     monitors = Map.delete(state.monitors, pid)
+    slot_request_times = Map.delete(slot_request_times(state), pid)
 
-    %{state | in_flight: in_flight, waitq: waitq, monitors: monitors, worker_counts: counts}
+    state
+    |> Map.put(:in_flight, in_flight)
+    |> Map.put(:waitq, waitq)
+    |> Map.put(:monitors, monitors)
+    |> Map.put(:worker_counts, counts)
+    |> Map.put(:slot_request_times, slot_request_times)
   end
 
   defp drop_waitq_worker(queue, pid) do
     list = :queue.to_list(queue)
 
     {kept, removed} =
-      Enum.split_with(list, fn entry ->
-        entry.worker != pid
+      Enum.split_with(list, fn
+        %{worker: w} when is_pid(w) -> w != pid
+        _ -> true  # Keep malformed entries for separate cleanup
       end)
 
     {:queue.from_list(kept), length(removed)}
   end
 
-  defp wait_time_ms(entry) do
-    case Map.get(entry, :queued_at_ms) do
-      queued_at_ms when is_integer(queued_at_ms) and queued_at_ms > 0 ->
-        max(System.monotonic_time(:millisecond) - queued_at_ms, 0)
-
-      _ ->
-        0
-    end
+  defp wait_time_ms(%{queued_at_ms: queued_at_ms}) when is_integer(queued_at_ms) and queued_at_ms > 0 do
+    max(System.monotonic_time(:millisecond) - queued_at_ms, 0)
   end
+
+  defp wait_time_ms(_), do: 0
 
   defp emit_scheduler_telemetry(event, measurements) do
     LemonCore.Telemetry.emit(
@@ -310,6 +450,8 @@ defmodule LemonGateway.Scheduler do
     )
   rescue
     _ -> :ok
+  catch
+    _, _ -> :ok
   end
 
   #
@@ -346,6 +488,8 @@ defmodule LemonGateway.Scheduler do
     end
   rescue
     _ -> job
+  catch
+    _, _ -> job
   end
 
   defp maybe_apply_auto_resume_inner(%Job{resume: %ResumeToken{}} = job), do: job
@@ -374,8 +518,9 @@ defmodule LemonGateway.Scheduler do
     else
       job
     end
-  rescue
-    _ -> job
+  catch
+    :exit, _ -> job
+    :error, _ -> job
   end
 
   defp maybe_apply_auto_resume_inner(job), do: job
@@ -386,10 +531,9 @@ defmodule LemonGateway.Scheduler do
     else
       false
     end
-  rescue
-    _ -> false
   catch
     :exit, _ -> false
+    :error, _ -> false
   end
 
   defp apply_resume_if_compatible(%Job{} = job, engine, token) do
@@ -410,48 +554,120 @@ defmodule LemonGateway.Scheduler do
             :ok
 
           {:error, :noproc} ->
+            # First attempt failed, try to create a new worker
+            Logger.warning(
+              "Scheduler: worker #{inspect(worker_pid)} died during first enqueue attempt, retrying"
+            )
+
             case ensure_worker(thread_key) do
-              {:ok, worker_pid2} -> safe_enqueue_async(worker_pid2, job) |> normalize_enqueue()
-              {:error, _} -> :ok
+              {:ok, worker_pid2} ->
+                case safe_enqueue_async(worker_pid2, job) do
+                  :ok ->
+                    :ok
+
+                  {:error, reason} = err ->
+                    Logger.error(
+                      "Scheduler: second enqueue attempt failed for thread_key=#{inspect(thread_key)}, reason=#{inspect(reason)}"
+                    )
+
+                    normalize_enqueue(err)
+                end
+
+              {:error, reason} = err ->
+                Logger.error(
+                  "Scheduler: failed to recreate worker for thread_key=#{inspect(thread_key)}, reason=#{inspect(reason)}"
+                )
+
+                normalize_enqueue(err)
             end
+
+          {:error, reason} = err ->
+            Logger.error(
+              "Scheduler: enqueue failed for thread_key=#{inspect(thread_key)}, reason=#{inspect(reason)}"
+            )
+
+            normalize_enqueue(err)
         end
 
-      {:error, _} ->
-        :ok
+      {:error, reason} = err ->
+        Logger.error(
+          "Scheduler: failed to ensure worker for thread_key=#{inspect(thread_key)}, reason=#{inspect(reason)}"
+        )
+
+        normalize_enqueue(err)
     end
   end
 
   defp ensure_worker(thread_key) do
     case LemonGateway.ThreadRegistry.whereis(thread_key) do
       nil ->
-        case DynamicSupervisor.start_child(
-               LemonGateway.ThreadWorkerSupervisor,
-               {LemonGateway.ThreadWorker, thread_key: thread_key}
-             ) do
-          {:ok, pid} ->
-            {:ok, pid}
+        start_worker_with_timeout(thread_key)
 
-          {:error, {:already_started, pid}} ->
-            {:ok, pid}
+      pid when is_pid(pid) ->
+        if Process.alive?(pid) do
+          {:ok, pid}
+        else
+          # Stale registry entry, start fresh
+          Logger.warning(
+            "Scheduler: found dead worker in registry for thread_key=#{inspect(thread_key)}, starting fresh"
+          )
 
-          {:error, _reason} = err ->
-            err
+          start_worker_with_timeout(thread_key)
         end
+    end
+  end
 
-      pid ->
+  defp start_worker_with_timeout(thread_key) do
+    # Use a task with timeout to avoid hanging on DynamicSupervisor
+    task =
+      Task.async(fn ->
+        DynamicSupervisor.start_child(
+          LemonGateway.ThreadWorkerSupervisor,
+          {LemonGateway.ThreadWorker, thread_key: thread_key}
+        )
+      end)
+
+    case Task.yield(task, @worker_startup_timeout_ms) || Task.shutdown(task) do
+      {:ok, {:ok, pid}} ->
         {:ok, pid}
+
+      {:ok, {:error, {:already_started, pid}}} ->
+        {:ok, pid}
+
+      {:ok, {:error, _} = err} ->
+        err
+
+      nil ->
+        Logger.error(
+          "Scheduler: timeout starting worker for thread_key=#{inspect(thread_key)}"
+        )
+
+        {:error, :worker_startup_timeout}
+
+      {:exit, reason} ->
+        Logger.error(
+          "Scheduler: worker startup task exited for thread_key=#{inspect(thread_key)}, reason=#{inspect(reason)}"
+        )
+
+        {:error, {:worker_startup_exit, reason}}
     end
   end
 
   defp safe_enqueue_async(pid, job) when is_pid(pid) do
-    if Process.alive?(pid) do
-      GenServer.cast(pid, {:enqueue, job})
-      :ok
-    else
-      {:error, :noproc}
+    try do
+      if Process.alive?(pid) do
+        GenServer.cast(pid, {:enqueue, job})
+        :ok
+      else
+        {:error, :noproc}
+      end
+    catch
+      :exit, {:noproc, _} -> {:error, :noproc}
+      :exit, reason -> {:error, {:exit, reason}}
     end
   end
 
-  defp normalize_enqueue(:ok), do: :ok
-  defp normalize_enqueue(_), do: :ok
+  defp normalize_enqueue(_result), do: :ok
+
+  defp slot_request_times(state), do: Map.get(state, :slot_request_times, %{})
 end

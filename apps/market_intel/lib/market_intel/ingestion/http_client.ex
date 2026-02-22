@@ -106,8 +106,10 @@ defmodule MarketIntel.Ingestion.HttpClient do
   """
   @spec maybe_add_auth_header(headers(), atom(), String.t()) :: headers()
   def maybe_add_auth_header(headers, secret_name, prefix \\ "Bearer") do
-    case MarketIntel.Secrets.get(secret_name) do
-      {:ok, key} -> [{"Authorization", "#{prefix} #{key}"} | headers]
+    case secrets_resolver().get(secret_name) do
+      {:ok, key} when is_binary(key) and key != "" ->
+        [{"Authorization", "#{prefix} #{key}"} | headers]
+
       _ -> headers
     end
   end
@@ -154,7 +156,7 @@ defmodule MarketIntel.Ingestion.HttpClient do
   # Private functions
 
   defp do_http_request(:get, url, _body, headers, opts, source) do
-    case HTTPoison.get(url, headers, opts) do
+    case http_client().get(url, headers, opts) do
       {:ok, response} ->
         {:ok, response}
 
@@ -166,7 +168,7 @@ defmodule MarketIntel.Ingestion.HttpClient do
   end
 
   defp do_http_request(:post, url, body, headers, opts, source) do
-    case HTTPoison.post(url, body, headers, opts) do
+    case http_client().post(url, body, headers, opts) do
       {:ok, response} ->
         {:ok, response}
 
@@ -196,4 +198,12 @@ defmodule MarketIntel.Ingestion.HttpClient do
 
   defp format_reason(reason) when is_binary(reason), do: reason
   defp format_reason(reason), do: inspect(reason)
+
+  defp http_client do
+    Application.get_env(:market_intel, :http_client_module, HTTPoison)
+  end
+
+  defp secrets_resolver do
+    Application.get_env(:market_intel, :http_client_secrets_module, MarketIntel.Secrets)
+  end
 end

@@ -492,6 +492,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
     test "applies system_prompt, model and tool_policy from agent profile" do
       run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+      session_key = unique_oracle_session_key()
 
       {:ok, orchestrator_pid} =
         GenServer.start_link(
@@ -503,6 +504,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       on_exit(fn ->
         if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+        LemonCore.Store.delete_session_policy(session_key)
       end)
 
       :sys.replace_state(LemonRouter.AgentProfiles, fn state ->
@@ -511,7 +513,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       params = %{
         origin: :control_plane,
-        session_key: "agent:oracle:main",
+        session_key: session_key,
         agent_id: "oracle",
         prompt: "Hello oracle"
       }
@@ -527,6 +529,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
     test "treats engine-prefixed model as engine override" do
       run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+      session_key = unique_oracle_session_key()
 
       {:ok, orchestrator_pid} =
         GenServer.start_link(
@@ -538,6 +541,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       on_exit(fn ->
         if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+        LemonCore.Store.delete_session_policy(session_key)
       end)
 
       :sys.replace_state(LemonRouter.AgentProfiles, fn state ->
@@ -546,7 +550,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       params = %{
         origin: :control_plane,
-        session_key: "agent:oracle:main",
+        session_key: session_key,
         agent_id: "oracle",
         prompt: "Hello oracle"
       }
@@ -560,6 +564,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
     test "explicit engine_id still overrides profile defaults" do
       run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+      session_key = unique_oracle_session_key()
 
       {:ok, orchestrator_pid} =
         GenServer.start_link(
@@ -571,6 +576,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       on_exit(fn ->
         if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+        LemonCore.Store.delete_session_policy(session_key)
       end)
 
       :sys.replace_state(LemonRouter.AgentProfiles, fn state ->
@@ -579,7 +585,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       params = %{
         origin: :control_plane,
-        session_key: "agent:oracle:main",
+        session_key: session_key,
         agent_id: "oracle",
         prompt: "Hello oracle",
         engine_id: "explicit:engine"
@@ -592,6 +598,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
     test "top-level request model overrides profile model without requiring meta" do
       run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+      session_key = unique_oracle_session_key()
 
       {:ok, orchestrator_pid} =
         GenServer.start_link(
@@ -603,6 +610,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       on_exit(fn ->
         if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+        LemonCore.Store.delete_session_policy(session_key)
       end)
 
       :sys.replace_state(LemonRouter.AgentProfiles, fn state ->
@@ -611,7 +619,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       params = %{
         origin: :control_plane,
-        session_key: "agent:oracle:main",
+        session_key: session_key,
         agent_id: "oracle",
         prompt: "Hello oracle",
         model: "request-model"
@@ -624,6 +632,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
     test "records warning when explicit engine conflicts with model-implied engine" do
       run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+      session_key = unique_oracle_session_key()
 
       {:ok, orchestrator_pid} =
         GenServer.start_link(
@@ -635,6 +644,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       on_exit(fn ->
         if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+        LemonCore.Store.delete_session_policy(session_key)
       end)
 
       :sys.replace_state(LemonRouter.AgentProfiles, fn state ->
@@ -643,7 +653,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       params = %{
         origin: :control_plane,
-        session_key: "agent:oracle:main",
+        session_key: session_key,
         agent_id: "oracle",
         prompt: "Hello oracle",
         engine_id: "claude",
@@ -834,6 +844,10 @@ defmodule LemonRouter.RunOrchestratorTest do
   end
 
   defp request(attrs), do: RunRequest.new(attrs)
+
+  defp unique_oracle_session_key do
+    "agent:oracle:main:#{System.unique_integer([:positive])}"
+  end
 
   defp test_profile do
     %{
