@@ -125,7 +125,7 @@ defmodule LemonChannels.BindingResolver do
         project_id = project_id_for(scope, binding)
 
         project_engine =
-          if is_binary(project_id) and byte_size(project_id) > 0 do
+          if present?(project_id) do
             resolve_project_engine(project_id)
           else
             nil
@@ -144,7 +144,7 @@ defmodule LemonChannels.BindingResolver do
       profile[:default_engine] || profile["default_engine"] ||
         profile[:engine] || profile["engine"]
 
-    if is_binary(engine) and byte_size(engine) > 0, do: engine, else: nil
+    if present?(engine), do: engine, else: nil
   rescue
     _ -> nil
   end
@@ -174,13 +174,13 @@ defmodule LemonChannels.BindingResolver do
     override_id = get_project_override(scope)
 
     cond do
-      is_binary(override_id) and byte_size(override_id) > 0 ->
+      present?(override_id) ->
         case lookup_project(override_id) do
           %{root: root} when is_binary(root) and byte_size(root) > 0 -> Path.expand(root)
           _ -> nil
         end
 
-      binding && is_binary(binding.project) && byte_size(binding.project) > 0 ->
+      binding && present?(binding.project) ->
         case lookup_project(binding.project) do
           %{root: root} when is_binary(root) and byte_size(root) > 0 -> Path.expand(root)
           _ -> nil
@@ -205,15 +205,15 @@ defmodule LemonChannels.BindingResolver do
     override = get_project_override(scope)
 
     cond do
-      is_binary(override) and byte_size(override) > 0 -> override
-      is_binary(binding.project) and byte_size(binding.project) > 0 -> binding.project
+      present?(override) -> override
+      present?(binding.project) -> binding.project
       true -> nil
     end
   end
 
   defp project_id_for(%ChatScope{} = scope, _binding) do
     override = get_project_override(scope)
-    if is_binary(override) and byte_size(override) > 0, do: override, else: nil
+    if present?(override), do: override, else: nil
   end
 
   @doc false
@@ -253,4 +253,9 @@ defmodule LemonChannels.BindingResolver do
   end
 
   def lookup_project(_), do: nil
+
+  defp present?(nil), do: false
+  defp present?(""), do: false
+  defp present?(val) when is_binary(val), do: byte_size(val) > 0
+  defp present?(_), do: false
 end
