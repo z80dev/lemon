@@ -63,17 +63,19 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
           {openai_api_key, openai_base_url} = resolve_openai_provider()
 
+          api_mod = resolve_api_mod(config)
+
           {bot_id, bot_username} =
             resolve_bot_identity(
               cfg_get(config, :bot_id),
               cfg_get(config, :bot_username),
-              config[:api_mod] || LemonChannels.Telegram.API,
+              api_mod,
               token
             )
 
           state = %{
             token: token,
-            api_mod: config[:api_mod] || LemonChannels.Telegram.API,
+            api_mod: api_mod,
             poll_interval_ms: config[:poll_interval_ms] || @default_poll_interval,
             dedupe_ttl_ms: config[:dedupe_ttl_ms] || @default_dedupe_ttl,
             debounce_ms: cfg_get(config, :debounce_ms, @default_debounce_ms),
@@ -2900,12 +2902,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp resolve_bot_identity(bot_id, bot_username, api_mod, token) do
     bot_id = parse_int(bot_id) || bot_id
     bot_username = normalize_bot_username(bot_username)
+    api_mod = normalize_api_mod(api_mod)
 
     cond do
       is_integer(bot_id) and is_binary(bot_username) and bot_username != "" ->
         {bot_id, bot_username}
 
-      function_exported?(api_mod, :get_me, 1) ->
+      Code.ensure_loaded?(api_mod) and function_exported?(api_mod, :get_me, 1) ->
         case api_mod.get_me(token) do
           {:ok, %{"ok" => true, "result" => %{"id" => id, "username" => username}}} ->
             resolved = {parse_int(id) || id, normalize_bot_username(username)}
@@ -2922,7 +2925,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
       true ->
         Logger.warning(
-          "[Telegram] No getMe available and no config bot_id/bot_username; mention detection will be disabled"
+          "[Telegram] No getMe available and no config bot_id/bot_username; mention detection will be disabled (api_mod=#{inspect(api_mod)})"
         )
 
         {bot_id, bot_username}
@@ -3897,6 +3900,33 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp cfg_get(cfg, key, default \\ nil) when is_atom(key) do
     cfg[key] || cfg[Atom.to_string(key)] || default
   end
+
+  defp resolve_api_mod(config) do
+    config
+    |> cfg_get(:api_mod, LemonChannels.Telegram.API)
+    |> normalize_api_mod()
+  end
+
+  defp normalize_api_mod(mod) when is_atom(mod), do: mod
+
+  defp normalize_api_mod(""), do: LemonChannels.Telegram.API
+
+  defp normalize_api_mod(mod) when is_binary(mod) do
+    try do
+      module =
+        if String.starts_with?(mod, "Elixir.") do
+          String.to_existing_atom(mod)
+        else
+          String.to_existing_atom("Elixir." <> mod)
+        end
+
+      module
+    rescue
+      _ -> LemonChannels.Telegram.API
+    end
+  end
+
+  defp normalize_api_mod(_), do: LemonChannels.Telegram.API
 
   defp extract_message_ids(inbound) do
     chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
