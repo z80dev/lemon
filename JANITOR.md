@@ -1,21 +1,34 @@
-### 2026-02-22 - Janitor Run: Test Expansion & Documentation
+### 2026-02-22 - Janitor Run: Test Expansion & Documentation (Coding Agent Tools + AI Providers)
 **Work Area**: Test Expansion + Documentation
 
 **Summary**:
 - TextSanitizer: Added 22 tests, comprehensive @moduledoc
 - HttpTrace: Added 57 tests, @moduledoc added
+- TodoRead: Added 19 tests
+- TodoWrite: Added 35 tests
+- Process tool: Added 71 tests
 
 **Files Changed**:
 - apps/ai/lib/ai/providers/text_sanitizer.ex
 - apps/ai/test/ai/providers/text_sanitizer_test.exs (NEW)
 - apps/ai/lib/ai/providers/http_trace.ex
 - apps/ai/test/ai/providers/http_trace_test.exs (NEW)
+- apps/coding_agent/test/coding_agent/tools/todoread_test.exs (NEW)
+- apps/coding_agent/test/coding_agent/tools/todowrite_test.exs (NEW)
+- apps/coding_agent/test/coding_agent/tools/process_test.exs (NEW)
 
-**Test Results**: 79 tests, 0 failures
+**Test Results**: 204 tests, 0 failures
+- TextSanitizer: 22 tests, 0 failures
+- HttpTrace: 57 tests, 0 failures
+- TodoRead: 19 tests, 0 failures
+- TodoWrite: 35 tests, 0 failures
+- Process: 71 tests, 0 failures
 
 **Commits**:
 - 39c2f6aa - Add comprehensive tests for Ai.Providers.TextSanitizer
 - 60d90727 - Add comprehensive tests for Ai.Providers.HttpTrace
+- c1a5a85d - Add comprehensive tests for TodoRead and TodoWrite tools
+- 09484aeb - Add comprehensive tests for Process tool
 
 **Validation Notes**:
 - `mix compile --warnings-as-errors` failed due pre-existing warnings in `apps/coding_agent/lib/coding_agent/tools/poll_jobs.ex` (underscored variable used after assignment, unused module attribute)
