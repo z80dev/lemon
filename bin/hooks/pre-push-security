@@ -1,0 +1,145 @@
+#!/bin/bash
+#
+# Pre-push hook to review commits for sensitive information (API keys, secrets, etc.)
+# Uses kimi CLI to analyze the diff before pushing.
+#
+# To bypass this check in emergencies: git push --no-verify
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+echo -e "${BLUE}🔒 Running pre-push security review...${NC}"
+
+# Get the range of commits being pushed
+# $1 = remote name, $2 = remote url
+remote="$1"
+url="$2"
+
+z40=0000000000000000000000000000000000000000
+
+# Read local and remote refs from stdin
+while read local_ref local_sha remote_ref remote_sha; do
+    # Determine the range of commits
+    if [ "$local_sha" = $z40 ]; then
+        # Deleting a branch - no need to check
+        continue
+    fi
+
+    if [ "$remote_sha" = $z40 ]; then
+        # New branch - check all commits on this branch
+        range="$local_sha"
+        echo -e "${YELLOW}⚠️  New branch detected - reviewing all commits${NC}"
+    else
+        # Existing branch - check new commits
+        range="$remote_sha..$local_sha"
+        commit_count=$(git rev-list --count "$range")
+        echo -e "${BLUE}📋 Reviewing ${commit_count} commit(s) to push...${NC}"
+    fi
+
+    # Generate the diff for analysis
+    diff_output=$(git diff "$range" --stat)
+    if [ -z "$diff_output" ]; then
+        echo -e "${GREEN}✅ No changes to review${NC}"
+        continue
+    fi
+
+    echo -e "${BLUE}📊 Changes:${NC}"
+    echo "$diff_output"
+    echo ""
+
+    # Create a temporary file with the full diff
+    tmpfile=$(mktemp)
+    git diff "$range" > "$tmpfile"
+
+    # Count lines to review
+    line_count=$(wc -l < "$tmpfile")
+    echo -e "${BLUE}🔍 Reviewing ${line_count} lines of changes with kimi...${NC}"
+    echo ""
+
+    # Invoke kimi for security review
+    # We use a prompt that asks kimi to check for sensitive data
+    review_result=$(kimi --no-tools -m default "
+You are a security review assistant. Review the following git diff for any sensitive information that should NOT be pushed to a repository.
+
+Look for:
+1. API keys (OpenAI, Anthropic, AWS, etc.)
+2. Passwords or authentication tokens
+3. Private keys (SSH, SSL, JWT secrets)
+4. Database connection strings with credentials
+5. Environment files (.env) containing secrets
+6. Hardcoded secrets in configuration files
+7. Session tokens or cookies
+
+For each issue found, provide:
+- The specific line or pattern found
+- The severity (HIGH, MEDIUM, LOW)
+- A brief explanation of why it's problematic
+
+If NO sensitive information is found, respond with exactly: SAFE_TO_PUSH
+
+If sensitive information IS found, respond with:
+BLOCK_PUSH
+
+Followed by the list of issues found.
+
+---
+
+GIT DIFF TO REVIEW:
+
+$(cat "$tmpfile")
+
+---
+
+Respond with either SAFE_TO_PUSH or BLOCK_PUSH followed by findings.
+" 2>/dev/null || echo "KIMI_REVIEW_FAILED")
+
+    # Clean up temp file
+    rm -f "$tmpfile"
+
+    # Check the review result
+    if echo "$review_result" | grep -q "BLOCK_PUSH"; then
+        echo ""
+        echo -e "${RED}╔════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${RED}║                   SECURITY ISSUES DETECTED                     ║${NC}"
+        echo -e "${RED}╚════════════════════════════════════════════════════════════════╝${NC}"
+        echo ""
+        echo -e "${RED}🚨 Push blocked! Sensitive information may have been detected:${NC}"
+        echo ""
+        echo "$review_result"
+        echo ""
+        echo -e "${YELLOW}⚠️  Please remove any sensitive information before pushing.${NC}"
+        echo -e "${YELLOW}   You can use 'git rebase -i' or 'git commit --amend' to fix.${NC}"
+        echo ""
+        echo -e "${BLUE}💡 To bypass this check (emergencies only):${NC}"
+        echo -e "   git push --no-verify"
+        echo ""
+        exit 1
+    elif echo "$review_result" | grep -q "SAFE_TO_PUSH"; then
+        echo -e "${GREEN}✅ Security review passed - no sensitive information detected${NC}"
+    elif echo "$review_result" | grep -q "KIMI_REVIEW_FAILED"; then
+        echo -e "${YELLOW}⚠️  Warning: Could not complete kimi review (kimi may not be available)${NC}"
+        echo -e "${YELLOW}   Proceeding with push...${NC}"
+    else
+        # Ambiguous response - show it and ask user
+        echo -e "${YELLOW}⚠️  Unclear review response from kimi:${NC}"
+        echo "$review_result"
+        echo ""
+        read -p "Continue with push? (y/N) " -n 1 -r < /dev/tty
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo -e "${RED}❌ Push cancelled by user${NC}"
+            exit 1
+        fi
+    fi
+
+done
+
+echo ""
+echo -e "${GREEN}✅ Pre-push security review complete${NC}"
+echo ""

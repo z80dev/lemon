@@ -212,6 +212,35 @@ See `.claude/skills/telegram-gateway-debug-loop/SKILL.md` for detailed instructi
 
 ---
 
+## Security
+
+### Pre-Push Security Hook
+
+This repository includes an optional pre-push hook that uses **kimi** to review commits for sensitive information before pushing.
+
+**What it checks for:**
+- API keys (OpenAI, Anthropic, AWS, etc.)
+- Passwords and authentication tokens
+- Private keys (SSH, SSL, JWT secrets)
+- Database connection strings with credentials
+- Environment files (.env) containing secrets
+- Hardcoded secrets in configuration files
+
+**Installation:**
+```bash
+./bin/install-security-hook
+```
+
+**Usage:**
+- The hook runs automatically on `git push`
+- If sensitive data is detected, the push is blocked
+- To bypass in emergencies: `git push --no-verify`
+- To uninstall: `rm .git/hooks/pre-push`
+
+**Note:** The hook is not installed by default. Each developer must opt-in by running the install script.
+
+---
+
 ## Documentation Index
 
 - `docs/architecture_boundaries.md` - Dependency boundaries

@@ -1,0 +1,30 @@
+#!/bin/bash
+#
+# Install the pre-push security review hook
+# This script copies the shared hook to .git/hooks/
+
+set -e
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+HOOK_SOURCE="${REPO_ROOT}/bin/hooks/pre-push-security"
+HOOK_DEST="${REPO_ROOT}/.git/hooks/pre-push"
+
+echo "🔒 Installing pre-push security hook..."
+
+if [ ! -f "$HOOK_SOURCE" ]; then
+    echo "❌ Hook source not found: $HOOK_SOURCE"
+    exit 1
+fi
+
+cp "$HOOK_SOURCE" "$HOOK_DEST"
+chmod +x "$HOOK_DEST"
+
+echo "✅ Pre-push security hook installed!"
+echo ""
+echo "The hook will:"
+echo "  • Review commits before pushing using kimi"
+echo "  • Check for API keys, passwords, tokens, and secrets"
+echo "  • Block pushes if sensitive data is detected"
+echo ""
+echo "To bypass in emergencies: git push --no-verify"
+echo "To uninstall: rm .git/hooks/pre-push"
