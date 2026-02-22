@@ -22,7 +22,7 @@ defmodule CodingAgent.Tools.HashlineEditTest do
   end
 
   defp make_tag(line, content) do
-    hash = Hashline.compute_line_hash(content)
+    hash = Hashline.compute_line_hash(line, content)
     "#{line}##{hash}"
   end
 

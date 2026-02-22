@@ -25,8 +25,8 @@ defmodule CodingAgent.Tools.Hashline do
 
       content = "Hello\\nWorld\\n"
       edits = [
-        %{op: :set, tag: %{line: 1, hash: compute_line_hash("Hello")}, content: ["Hi"]},
-        %{op: :append, after: %{line: 2, hash: compute_line_hash("World")}, content: ["!"]}
+        %{op: :set, tag: %{line: 1, hash: compute_line_hash(1, "Hello")}, content: ["Hi"]},
+        %{op: :append, after: %{line: 2, hash: compute_line_hash(2, "World")}, content: ["!"]}
       ]
       {:ok, result} = apply_edits(content, edits)
   """
@@ -87,20 +87,37 @@ defmodule CodingAgent.Tools.Hashline do
   Uses `:erlang.phash2/2` on a whitespace-normalized line, truncated to 2
   hex characters. The line input should not include a trailing newline.
 
+  For lines with no significant characters (Unicode letters or numbers),
+  the line number is mixed into the hash input to improve collision
+  resistance for punctuation-only or empty lines.
+
   ## Examples
 
-      iex> compute_line_hash("hello world")
+      iex> compute_line_hash(1, "hello world")
       "a1"  # actual hash will vary
 
-      iex> compute_line_hash("  hello  world  ")
+      iex> compute_line_hash(1, "  hello  world  ")
       "a1"  # same hash after whitespace normalization
   """
-  @spec compute_line_hash(String.t()) :: String.t()
-  def compute_line_hash(line) do
-    line
-    |> normalize_line()
+  @spec compute_line_hash(pos_integer(), String.t()) :: String.t()
+  def compute_line_hash(line_number, line) do
+    normalized = normalize_line(line)
+
+    hash_input =
+      if has_significant_chars?(normalized) do
+        normalized
+      else
+        "#{line_number}:#{normalized}"
+      end
+
+    hash_input
     |> :erlang.phash2(256)
     |> format_hash()
+  end
+
+  # Check if a string contains any Unicode letters or numbers
+  defp has_significant_chars?(str) do
+    Regex.match?(~r/[\p{L}\p{N}]/u, str)
   end
 
   @doc """
@@ -142,7 +159,7 @@ defmodule CodingAgent.Tools.Hashline do
   """
   @spec format_line_tag(pos_integer(), String.t()) :: String.t()
   def format_line_tag(line, content) do
-    hash = compute_line_hash(content)
+    hash = compute_line_hash(line, content)
     "#{line}##{hash}"
   end
 
@@ -244,7 +261,7 @@ defmodule CodingAgent.Tools.Hashline do
     end
 
     actual_line = Enum.at(file_lines, line - 1)
-    actual_hash = compute_line_hash(actual_line)
+    actual_hash = compute_line_hash(line, actual_line)
 
     if actual_hash != expected_hash do
       mismatch = %{line: line, expected: expected_hash, actual: actual_hash}
@@ -412,7 +429,7 @@ defmodule CodingAgent.Tools.Hashline do
     end
 
     actual_line = Enum.at(file_lines, tag.line - 1)
-    actual_hash = compute_line_hash(actual_line)
+    actual_hash = compute_line_hash(tag.line, actual_line)
 
     if actual_hash != tag.hash do
       {:mismatch, [%{line: tag.line, expected: tag.hash, actual: actual_hash}]}
@@ -1291,7 +1308,7 @@ defmodule CodingAgent.Tools.Hashline do
           end
 
         content = Enum.at(file_lines, line_num - 1)
-        hash = compute_line_hash(content)
+        hash = compute_line_hash(line_num, content)
         prefix = "#{line_num}##{hash}"
 
         line =
@@ -1338,7 +1355,7 @@ defmodule CodingAgent.Tools.Hashline.HashlineMismatchError do
     remaps =
       mismatches
       |> Enum.map(fn m ->
-        actual = Hashline.compute_line_hash(Enum.at(file_lines, m.line - 1))
+        actual = Hashline.compute_line_hash(m.line, Enum.at(file_lines, m.line - 1))
         {"#{m.line}##{m.expected}", "#{m.line}##{actual}"}
       end)
       |> Map.new()

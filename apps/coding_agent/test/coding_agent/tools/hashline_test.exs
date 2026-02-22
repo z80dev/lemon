@@ -8,37 +8,58 @@ defmodule CodingAgent.Tools.HashlineTest do
   alias CodingAgent.Tools.Hashline.HashlineMismatchError
 
   # ============================================================================
-  # compute_line_hash/1
+  # compute_line_hash/2
   # ============================================================================
 
-  describe "compute_line_hash/1" do
+  describe "compute_line_hash/2" do
     test "returns consistent hash for same content" do
-      hash1 = Hashline.compute_line_hash("hello")
-      hash2 = Hashline.compute_line_hash("hello")
+      hash1 = Hashline.compute_line_hash(1, "hello")
+      hash2 = Hashline.compute_line_hash(1, "hello")
       assert hash1 == hash2
     end
 
     test "returns different hash for different content" do
-      hash1 = Hashline.compute_line_hash("hello")
-      hash2 = Hashline.compute_line_hash("world")
+      hash1 = Hashline.compute_line_hash(1, "hello")
+      hash2 = Hashline.compute_line_hash(1, "world")
       assert hash1 != hash2
     end
 
     test "normalizes whitespace before hashing" do
-      hash1 = Hashline.compute_line_hash("  hello  world  ")
-      hash2 = Hashline.compute_line_hash("helloworld")
+      hash1 = Hashline.compute_line_hash(1, "  hello  world  ")
+      hash2 = Hashline.compute_line_hash(1, "helloworld")
       assert hash1 == hash2
     end
 
     test "returns 2-character hash" do
-      hash = Hashline.compute_line_hash("any content")
+      hash = Hashline.compute_line_hash(1, "any content")
       assert String.length(hash) == 2
     end
 
     test "uses custom nibble alphabet" do
-      hash = Hashline.compute_line_hash("test")
+      hash = Hashline.compute_line_hash(1, "test")
       # Should only contain characters from the nibble alphabet
       assert hash =~ ~r/^[ZPMQVRWSNKTXJBYH]{2}$/
+    end
+
+    test "mixes in line number for symbol-only lines" do
+      # Lines with only punctuation/whitespace get line number mixed in
+      hash1 = Hashline.compute_line_hash(1, "---")
+      hash2 = Hashline.compute_line_hash(2, "---")
+      # Different line numbers should produce different hashes for symbol-only lines
+      assert hash1 != hash2
+    end
+
+    test "does not mix in line number for lines with alphanumeric chars" do
+      hash1 = Hashline.compute_line_hash(1, "hello")
+      hash2 = Hashline.compute_line_hash(2, "hello")
+      # Same content with significant chars should produce same hash regardless of line number
+      assert hash1 == hash2
+    end
+
+    test "empty line gets line number mixed in" do
+      hash1 = Hashline.compute_line_hash(1, "")
+      hash2 = Hashline.compute_line_hash(2, "")
+      assert hash1 != hash2
     end
   end
 
@@ -49,7 +70,7 @@ defmodule CodingAgent.Tools.HashlineTest do
   describe "format_line_tag/2" do
     test "formats tag with line number and hash" do
       tag = Hashline.format_line_tag(5, "hello")
-      hash = Hashline.compute_line_hash("hello")
+      hash = Hashline.compute_line_hash(5, "hello")
       assert tag == "5##{hash}"
     end
 
@@ -66,7 +87,7 @@ defmodule CodingAgent.Tools.HashlineTest do
   describe "format_hashlines/2" do
     test "formats single line" do
       result = Hashline.format_hashlines("hello")
-      hash = Hashline.compute_line_hash("hello")
+      hash = Hashline.compute_line_hash(1, "hello")
       assert result == "1##{hash}:hello"
     end
 
@@ -90,7 +111,7 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "handles empty content" do
       result = Hashline.format_hashlines("")
-      hash = Hashline.compute_line_hash("")
+      hash = Hashline.compute_line_hash(1, "")
       assert result == "1##{hash}:"
     end
 
@@ -153,7 +174,7 @@ defmodule CodingAgent.Tools.HashlineTest do
   describe "validate_line_ref/2" do
     test "accepts valid reference" do
       lines = ["hello", "world"]
-      hash = Hashline.compute_line_hash("hello")
+      hash = Hashline.compute_line_hash(1, "hello")
 
       assert :ok = Hashline.validate_line_ref(%{line: 1, hash: hash}, lines)
     end
@@ -182,7 +203,7 @@ defmodule CodingAgent.Tools.HashlineTest do
   describe "apply_edits/2 - set operation" do
     test "replaces single line" do
       content = "aaa\nbbb\nccc"
-      edits = [%{op: :set, tag: %{line: 2, hash: Hashline.compute_line_hash("bbb")}, content: ["BBB"]}]
+      edits = [%{op: :set, tag: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")}, content: ["BBB"]}]
 
       assert {:ok, result} = Hashline.apply_edits(content, edits)
       assert result.content == "aaa\nBBB\nccc"
@@ -191,7 +212,7 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "deletes line with empty content" do
       content = "aaa\nbbb\nccc"
-      edits = [%{op: :set, tag: %{line: 2, hash: Hashline.compute_line_hash("bbb")}, content: []}]
+      edits = [%{op: :set, tag: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")}, content: []}]
 
       assert {:ok, result} = Hashline.apply_edits(content, edits)
       assert result.content == "aaa\nccc"
@@ -200,7 +221,7 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "detects noop edits" do
       content = "aaa\nbbb\nccc"
-      edits = [%{op: :set, tag: %{line: 2, hash: Hashline.compute_line_hash("bbb")}, content: ["bbb"]}]
+      edits = [%{op: :set, tag: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")}, content: ["bbb"]}]
 
       assert {:ok, result} = Hashline.apply_edits(content, edits)
       assert result.noop_edits != nil
@@ -218,8 +239,8 @@ defmodule CodingAgent.Tools.HashlineTest do
       edits = [
         %{
           op: :replace,
-          first: %{line: 2, hash: Hashline.compute_line_hash("bbb")},
-          last: %{line: 3, hash: Hashline.compute_line_hash("ccc")},
+          first: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")},
+          last: %{line: 3, hash: Hashline.compute_line_hash(3, "ccc")},
           content: ["XXX"]
         }
       ]
@@ -233,8 +254,8 @@ defmodule CodingAgent.Tools.HashlineTest do
       edits = [
         %{
           op: :replace,
-          first: %{line: 2, hash: Hashline.compute_line_hash("bbb")},
-          last: %{line: 2, hash: Hashline.compute_line_hash("bbb")},
+          first: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")},
+          last: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")},
           content: ["xxx", "yyy", "zzz"]
         }
       ]
@@ -251,7 +272,7 @@ defmodule CodingAgent.Tools.HashlineTest do
   describe "apply_edits/2 - append operation" do
     test "inserts after a line" do
       content = "aaa\nbbb\nccc"
-      edits = [%{op: :append, after: %{line: 1, hash: Hashline.compute_line_hash("aaa")}, content: ["NEW"]}]
+      edits = [%{op: :append, after: %{line: 1, hash: Hashline.compute_line_hash(1, "aaa")}, content: ["NEW"]}]
 
       assert {:ok, result} = Hashline.apply_edits(content, edits)
       assert result.content == "aaa\nNEW\nbbb\nccc"
@@ -281,7 +302,7 @@ defmodule CodingAgent.Tools.HashlineTest do
   describe "apply_edits/2 - prepend operation" do
     test "inserts before a line" do
       content = "aaa\nbbb\nccc"
-      edits = [%{op: :prepend, before: %{line: 2, hash: Hashline.compute_line_hash("bbb")}, content: ["NEW"]}]
+      edits = [%{op: :prepend, before: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")}, content: ["NEW"]}]
 
       assert {:ok, result} = Hashline.apply_edits(content, edits)
       assert result.content == "aaa\nNEW\nbbb\nccc"
@@ -306,8 +327,8 @@ defmodule CodingAgent.Tools.HashlineTest do
       edits = [
         %{
           op: :insert,
-          after: %{line: 1, hash: Hashline.compute_line_hash("aaa")},
-          before: %{line: 2, hash: Hashline.compute_line_hash("bbb")},
+          after: %{line: 1, hash: Hashline.compute_line_hash(1, "aaa")},
+          before: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")},
           content: ["NEW"]
         }
       ]
@@ -321,8 +342,8 @@ defmodule CodingAgent.Tools.HashlineTest do
       edits = [
         %{
           op: :insert,
-          after: %{line: 1, hash: Hashline.compute_line_hash("aaa")},
-          before: %{line: 3, hash: Hashline.compute_line_hash("ccc")},
+          after: %{line: 1, hash: Hashline.compute_line_hash(1, "aaa")},
+          before: %{line: 3, hash: Hashline.compute_line_hash(3, "ccc")},
           content: ["x", "y", "z"]
         }
       ]
@@ -338,8 +359,8 @@ defmodule CodingAgent.Tools.HashlineTest do
         edits = [
           %{
             op: :insert,
-            after: %{line: 3, hash: Hashline.compute_line_hash("ccc")},
-            before: %{line: 1, hash: Hashline.compute_line_hash("aaa")},
+            after: %{line: 3, hash: Hashline.compute_line_hash(3, "ccc")},
+            before: %{line: 1, hash: Hashline.compute_line_hash(1, "aaa")},
             content: ["NEW"]
           }
         ]
@@ -357,8 +378,8 @@ defmodule CodingAgent.Tools.HashlineTest do
     test "applies multiple non-overlapping edits" do
       content = "aaa\nbbb\nccc\nddd\neee"
       edits = [
-        %{op: :set, tag: %{line: 2, hash: Hashline.compute_line_hash("bbb")}, content: ["BBB"]},
-        %{op: :set, tag: %{line: 4, hash: Hashline.compute_line_hash("ddd")}, content: ["DDD"]}
+        %{op: :set, tag: %{line: 2, hash: Hashline.compute_line_hash(2, "bbb")}, content: ["BBB"]},
+        %{op: :set, tag: %{line: 4, hash: Hashline.compute_line_hash(4, "ddd")}, content: ["DDD"]}
       ]
 
       assert {:ok, result} = Hashline.apply_edits(content, edits)
@@ -376,7 +397,7 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "deduplicates identical edits" do
       content = "aaa\nbbb\nccc"
-      hash = Hashline.compute_line_hash("bbb")
+      hash = Hashline.compute_line_hash(2, "bbb")
 
       edits = [
         %{op: :set, tag: %{line: 2, hash: hash}, content: ["BBB"]},
@@ -394,7 +415,7 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "does not deduplicate edits with same target but different content" do
       content = "aaa\nbbb\nccc"
-      hash = Hashline.compute_line_hash("bbb")
+      hash = Hashline.compute_line_hash(2, "bbb")
 
       edits = [
         %{op: :set, tag: %{line: 2, hash: hash}, content: ["BBB"]},
@@ -447,7 +468,7 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "error includes correct hashes" do
       content = "aaa\nbbb\nccc"
-      correct_hash = Hashline.compute_line_hash("bbb")
+      correct_hash = Hashline.compute_line_hash(2, "bbb")
 
       edits = [%{op: :set, tag: %{line: 2, hash: "ZZ"}, content: ["BBB"]}]
 
@@ -596,7 +617,7 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "restores stripped indentation on set operation" do
       content = "  def foo do\n    :bar\n  end"
-      hash = Hashline.compute_line_hash("    :bar")
+      hash = Hashline.compute_line_hash(2, "    :bar")
 
       # Model returns content without indentation
       edits = [%{op: :set, tag: %{line: 2, hash: hash}, content: [":baz"]}]
@@ -608,7 +629,7 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "does not modify lines that already have indentation" do
       content = "  def foo do\n    :bar\n  end"
-      hash = Hashline.compute_line_hash("    :bar")
+      hash = Hashline.compute_line_hash(2, "    :bar")
 
       edits = [%{op: :set, tag: %{line: 2, hash: hash}, content: ["    :baz"]}]
 
@@ -618,8 +639,8 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "restores indentation on replace operation" do
       content = "  line1\n    line2\n    line3\n  end"
-      first_hash = Hashline.compute_line_hash("    line2")
-      last_hash = Hashline.compute_line_hash("    line3")
+      first_hash = Hashline.compute_line_hash(2, "    line2")
+      last_hash = Hashline.compute_line_hash(3, "    line3")
 
       # Model returns replacement without indentation
       edits = [
@@ -647,7 +668,7 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "strips echoed boundary lines on set when content grew" do
       content = "before\ntarget\nafter"
-      hash = Hashline.compute_line_hash("target")
+      hash = Hashline.compute_line_hash(2, "target")
 
       # Model echoes the line before and after the target
       edits = [%{op: :set, tag: %{line: 2, hash: hash}, content: ["before", "new_target", "after"]}]
@@ -658,8 +679,8 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "strips echoed boundary on replace when content grew" do
       content = "ctx_before\nline1\nline2\nctx_after"
-      first_hash = Hashline.compute_line_hash("line1")
-      last_hash = Hashline.compute_line_hash("line2")
+      first_hash = Hashline.compute_line_hash(2, "line1")
+      last_hash = Hashline.compute_line_hash(3, "line2")
 
       # Model echoes boundary context lines
       edits = [
@@ -677,7 +698,7 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "does not strip when content did not grow" do
       content = "before\ntarget\nafter"
-      hash = Hashline.compute_line_hash("target")
+      hash = Hashline.compute_line_hash(2, "target")
 
       # Single line replacement - should not strip
       edits = [%{op: :set, tag: %{line: 2, hash: hash}, content: ["new_target"]}]
@@ -699,7 +720,7 @@ defmodule CodingAgent.Tools.HashlineTest do
     test "undoes model line reflow that splits one line into two" do
       original_line = "def very_long_function_name(arg1, arg2, arg3)"
       content = "start\n#{original_line}\nend"
-      hash = Hashline.compute_line_hash(original_line)
+      hash = Hashline.compute_line_hash(2, original_line)
 
       # Model splits the line into two but content is same (ignoring whitespace)
       edits = [
@@ -719,7 +740,7 @@ defmodule CodingAgent.Tools.HashlineTest do
   describe "apply_edits/2 - autocorrect disabled by default" do
     test "does not restore indentation when autocorrect is off" do
       content = "  def foo do\n    :bar\n  end"
-      hash = Hashline.compute_line_hash("    :bar")
+      hash = Hashline.compute_line_hash(2, "    :bar")
 
       # Without autocorrect, the stripped indentation should stay
       edits = [%{op: :set, tag: %{line: 2, hash: hash}, content: [":baz"]}]
@@ -746,7 +767,7 @@ defmodule CodingAgent.Tools.HashlineTest do
       # Line 1 ends with `&&` (continuation), line 2 is the continuation.
       # The LLM merges them into a single line.
       content = "if foo &&\n  bar do\n  :ok\nend"
-      hash = Hashline.compute_line_hash("if foo &&")
+      hash = Hashline.compute_line_hash(1, "if foo &&")
 
       # The LLM replaced line 1 with the merged content of lines 1+2
       edits = [%{op: :set, tag: %{line: 1, hash: hash}, content: ["if foo && bar do"]}]
@@ -761,7 +782,7 @@ defmodule CodingAgent.Tools.HashlineTest do
       # Line 1 ends with `=` (continuation), line 2 is the value.
       # The LLM merges them by absorbing line 1 into its replacement of line 2.
       content = "let x =\n  getValue()\nreturn x"
-      hash = Hashline.compute_line_hash("  getValue()")
+      hash = Hashline.compute_line_hash(2, "  getValue()")
 
       # The LLM replaced line 2 with the merged content of lines 1+2
       edits = [%{op: :set, tag: %{line: 2, hash: hash}, content: ["let x = getValue()"]}]
@@ -774,7 +795,7 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "does not merge when content has multiple lines" do
       content = "if foo &&\n  bar do\n  :ok\nend"
-      hash = Hashline.compute_line_hash("if foo &&")
+      hash = Hashline.compute_line_hash(1, "if foo &&")
 
       # Multi-line replacement - should NOT trigger merge detection
       edits = [%{op: :set, tag: %{line: 1, hash: hash}, content: ["if foo &&", "  baz do"]}]
@@ -785,8 +806,8 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "does not merge when adjacent line is also targeted by an edit" do
       content = "if foo &&\n  bar do\n  :ok\nend"
-      hash1 = Hashline.compute_line_hash("if foo &&")
-      hash2 = Hashline.compute_line_hash("  bar do")
+      hash1 = Hashline.compute_line_hash(1, "if foo &&")
+      hash2 = Hashline.compute_line_hash(2, "  bar do")
 
       # Both lines 1 and 2 are targeted - merge should not absorb line 2
       edits = [
@@ -802,7 +823,7 @@ defmodule CodingAgent.Tools.HashlineTest do
 
     test "does not merge when original line has no trailing continuation token" do
       content = "complete_statement\nanother_line\nend"
-      hash = Hashline.compute_line_hash("complete_statement")
+      hash = Hashline.compute_line_hash(1, "complete_statement")
 
       edits = [%{op: :set, tag: %{line: 1, hash: hash}, content: ["complete_statement_modified"]}]
       {:ok, result} = Hashline.apply_edits(content, edits)
@@ -817,7 +838,7 @@ defmodule CodingAgent.Tools.HashlineTest do
       Application.delete_env(:coding_agent, :hashline_autocorrect)
 
       content = "if foo &&\n  bar do\n  :ok\nend"
-      hash = Hashline.compute_line_hash("if foo &&")
+      hash = Hashline.compute_line_hash(1, "if foo &&")
 
       edits = [%{op: :set, tag: %{line: 1, hash: hash}, content: ["if foo && bar do"]}]
       {:ok, result} = Hashline.apply_edits(content, edits)
@@ -831,7 +852,7 @@ defmodule CodingAgent.Tools.HashlineTest do
     test "handles merge with operator change (|| to ??)" do
       # Case B with operator change: prev has `||`, new content uses `??`
       content = "val x =\n  fallback || default\nreturn x"
-      hash = Hashline.compute_line_hash("  fallback || default")
+      hash = Hashline.compute_line_hash(2, "  fallback || default")
 
       edits = [%{op: :set, tag: %{line: 2, hash: hash}, content: ["val x = fallback ?? default"]}]
       {:ok, result} = Hashline.apply_edits(content, edits)
