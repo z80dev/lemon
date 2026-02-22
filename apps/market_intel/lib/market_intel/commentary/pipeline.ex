@@ -286,72 +286,82 @@ defmodule MarketIntel.Commentary.Pipeline do
 
   @spec store_commentary(String.t(), trigger_type(), market_snapshot(), String.t()) :: :ok
   defp store_commentary(text, trigger_type, snapshot, tweet_id) do
-    # Store in SQLite for analysis
-    # Track what works, what doesn't
     record = %{
       tweet_id: tweet_id,
       content: text,
       trigger_event: Atom.to_string(trigger_type),
-      market_context: snapshot_to_map(snapshot),
-      inserted_at: DateTime.utc_now(),
-      updated_at: DateTime.utc_now()
+      market_context: snapshot_to_map(snapshot)
     }
 
-    # Insert into commentary_history table
-    # This function stub is documented for future implementation
-    insert_commentary_history(record)
-    
-    Logger.debug("[MarketIntel] Stored commentary record: #{inspect(record)}")
-    :ok
+    case insert_commentary_history(record) do
+      {:ok, _inserted} -> :ok
+      {:error, _reason} -> :ok
+    end
   end
 
   @doc """
   Inserts a commentary record into the commentary_history table.
-  
-  This is a function stub for future database integration. Currently logs the
-  record at debug level. When implemented, this should:
-  
-  1. Insert the record into the commentary_history table via MarketIntel.Repo
-  2. Handle duplicate tweet_id gracefully (upsert)
-  3. Return {:ok, record} on success or {:error, reason} on failure
-  
+
+  Uses `MarketIntel.Repo.insert/2` with upsert semantics: when a record with
+  the same `tweet_id` already exists, all columns except `:id` and
+  `:inserted_at` are replaced.
+
+  Returns `{:ok, schema}` on success or `{:error, reason}` on failure.
+  Degrades gracefully when the Repo process is unavailable.
+
   ## Example
-  
+
       iex> record = %{
       ...>   tweet_id: "1234567890",
       ...>   content: "market update...",
       ...>   trigger_event: "scheduled",
-      ...>   market_context: %{...},
-      ...>   inserted_at: DateTime.utc_now(),
-      ...>   updated_at: DateTime.utc_now()
+      ...>   market_context: %{token: %{price_usd: 1.23}}
       ...> }
-      iex> insert_commentary_history(record)
-      :ok
-  
+      iex> {:ok, %MarketIntel.Schema.CommentaryHistory{}} = insert_commentary_history(record)
+
   """
-  @spec insert_commentary_history(commentary_record()) :: :ok | {:error, any()}
+  @spec insert_commentary_history(commentary_record()) :: {:ok, Ecto.Schema.t()} | {:error, any()}
   def insert_commentary_history(record) do
-    # TODO: Implement database insertion via MarketIntel.Repo
-    # Example implementation:
-    #
-    # import Ecto.Query
-    # 
-    # changeset = MarketIntel.Schema.CommentaryHistory.changeset(
-    #   %MarketIntel.Schema.CommentaryHistory{},
-    #   record
-    # )
-    # 
-    # case MarketIntel.Repo.insert(changeset, on_conflict: :replace_all, conflict_target: :tweet_id) do
-    #   {:ok, inserted} -> 
-    #     Logger.info("[MarketIntel] Stored commentary #{inserted.tweet_id}")
-    #     {:ok, inserted}
-    #   {:error, changeset} -> 
-    #     Logger.error("[MarketIntel] Failed to store commentary: #{inspect(changeset.errors)}")
-    #     {:error, changeset}
-    # end
-    
-    Logger.debug("[MarketIntel] Commentary history storage not yet implemented. Record: #{inspect(record)}")
-    :ok
+    alias MarketIntel.Schema.CommentaryHistory
+
+    changeset =
+      CommentaryHistory.changeset(%CommentaryHistory{}, record)
+
+    case repo_insert(changeset) do
+      {:ok, inserted} ->
+        Logger.info("[MarketIntel] Stored commentary history #{inserted.tweet_id}")
+        {:ok, inserted}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        Logger.error(
+          "[MarketIntel] Failed to store commentary: #{inspect(changeset.errors)}"
+        )
+
+        {:error, changeset}
+
+      {:error, reason} ->
+        Logger.warning(
+          "[MarketIntel] Commentary history storage unavailable: #{inspect(reason)}"
+        )
+
+        {:error, reason}
+    end
+  end
+
+  # Attempt Repo.insert with upsert semantics. Falls back gracefully when the
+  # Repo process is not running (e.g. lightweight test environments).
+  @spec repo_insert(Ecto.Changeset.t()) :: {:ok, Ecto.Schema.t()} | {:error, any()}
+  defp repo_insert(changeset) do
+    MarketIntel.Repo.insert(changeset,
+      on_conflict: {:replace_all_except, [:id, :inserted_at]},
+      conflict_target: :tweet_id
+    )
+  rescue
+    e in [ArgumentError, DBConnection.ConnectionError] ->
+      {:error, {:repo_unavailable, Exception.message(e)}}
+  catch
+    :exit, reason ->
+      {:error, {:repo_unavailable, reason}}
   end
 
   @spec snapshot_to_map(market_snapshot()) :: map()

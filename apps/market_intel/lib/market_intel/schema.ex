@@ -49,9 +49,13 @@ end
 defmodule MarketIntel.Schema.CommentaryHistory do
   @moduledoc false
   use Ecto.Schema
+  import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @timestamps_opts [type: :utc_datetime_usec]
+
+  @castable_fields [:tweet_id, :content, :trigger_event, :market_context, :engagement_metrics]
+  @required_fields [:content, :trigger_event]
 
   schema "commentary_history" do
     field(:tweet_id, :string)
@@ -61,6 +65,15 @@ defmodule MarketIntel.Schema.CommentaryHistory do
     field(:engagement_metrics, :map)
 
     timestamps()
+  end
+
+  @doc "Build a changeset for inserting or updating a commentary history record."
+  @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+  def changeset(struct, params \\ %{}) do
+    struct
+    |> cast(params, @castable_fields)
+    |> validate_required(@required_fields)
+    |> unique_constraint(:tweet_id)
   end
 end
 
