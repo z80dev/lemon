@@ -25,6 +25,63 @@ Each entry records what was done, what worked, and what to focus on next.
 
 ## Log Entries
 
+### 2026-02-22 - Test Expansion: Quality Modules and Mix Task Coverage
+**Work Area**: Test Expansion + Documentation
+
+**Analysis**:
+- Scanned lemon_core, coding_agent, and ai apps for undertested modules
+- Identified quality check modules with minimal test coverage (1 test each)
+- Found Mix.Tasks.Lemon.Eval without any test coverage
+- Focused on pure-function modules that are easier to test comprehensively
+
+**Modules Enhanced**:
+
+1. **LemonCore.Quality.Cleanup** (`cleanup_test.exs`): 1 → 17 tests
+   - scan/1: default options, custom retention days, custom root, custom dates
+   - prune/1: dry run (apply: false), actual deletion (apply: true)
+   - Edge cases: non-existent directories, date boundaries (past/future)
+   - Report structure validation: required keys, sorted paths, absolute paths
+
+2. **LemonCore.Quality.DocsCheck** (`docs_check_test.exs`): 1 → 22 tests
+   - Catalog coverage: missing entries detection, full coverage passing
+   - Entry shape validation: missing fields, invalid owner, invalid max_age_days, missing last_reviewed
+   - File existence: missing files detection, existing files passing
+   - Freshness checks: stale documents detected, fresh documents pass
+   - Link checking: broken links, valid links, external links ignored, anchor links ignored, mailto links ignored
+   - Catalog load failures: missing file, invalid syntax, non-list evaluation
+
+3. **LemonCore.Quality.ArchitectureCheck** (`architecture_check_test.exs`): 1 → 16 tests
+   - allowed_direct_deps/0: policy map structure, lemon_core isolation, known apps
+   - Dependency violations: forbidden deps, unknown apps
+   - Namespace violations: forbidden references, self-references allowed, allowed deps accessible
+   - Missing app detection: expected apps missing from apps/
+   - Source parsing: syntax errors handled, empty files handled
+   - Edge cases: no dependencies, multiple dependencies
+
+4. **Mix.Tasks.Lemon.Eval** (`lemon.eval_test.exs`): 0 → 19 tests (new file)
+   - Command parsing: default options, --iterations, -n alias, --json, --cwd
+   - Report output: human-readable format, JSON structure, result statuses
+   - Failure handling: error raising, summary counts matching
+   - Harness integration: deterministic_contract, statistical_stability, read_edit_workflow checks
+
+**Documentation Added**:
+
+1. `Cleanup.scan/1` - Comprehensive @doc with options and return value documentation
+2. `Cleanup.prune/1` - Comprehensive @doc with dry-run vs actual deletion behavior
+3. `DocsCheck.run/1` - @doc listing all check types and options
+4. `ArchitectureCheck.run/1` - @doc listing all check categories
+5. `ArchitectureCheck.allowed_direct_deps/0` - @doc explaining policy map purpose
+
+**Test Results**: All 74 new tests pass
+- Cleanup tests: 17 tests, 0 failures
+- DocsCheck tests: 22 tests, 0 failures
+- ArchitectureCheck tests: 16 tests, 0 failures
+- Lemon.Eval tests: 19 tests (2 non-integration, 17 integration), 0 failures
+
+**Commit**: `3fbf1579` - test: Add comprehensive tests for quality modules and lemon.eval task
+
+---
+
 ### 2026-02-22 - Pi/Oh-My-Pi Upstream Sync: New Models and Hashline Improvements
 **Work Area**: Feature Enhancement (Pi/Oh-My-Pi Sync)
 
