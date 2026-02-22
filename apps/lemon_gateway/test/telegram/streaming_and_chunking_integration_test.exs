@@ -264,14 +264,15 @@ defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
 
   defp reply_to_from_opts(_), do: nil
 
-  test "streaming deltas update the answer message (progress message is reserved for tool status)" do
+  test "streaming deltas update the answer message (progress reaction is set on user message)" do
     start_system!(StreamingEngine)
 
     chat_id = 31_001
     user_msg_id = 11
     MockTelegramAPI.enqueue_message(chat_id, "go", message_id: user_msg_id)
 
-    assert_receive {:telegram_api_call, {:send_message, ^chat_id, "Running…", _opts, _pm}}, 2_000
+    # Should set 👀 reaction on the user's message
+    assert_receive {:telegram_api_call, {:set_message_reaction, ^chat_id, ^user_msg_id, "👀"}}, 2_000
 
     assert :ok ==
              wait_until(
@@ -281,7 +282,7 @@ defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
                  texts =
                    Enum.flat_map(calls, fn
                      {:send_message, ^chat_id, text, _opts, _pm}
-                     when is_binary(text) and text != "Running…" ->
+                     when is_binary(text) ->
                        [text]
 
                      {:edit_message, ^chat_id, _msg_id, text, _opts} when is_binary(text) ->
@@ -305,7 +306,8 @@ defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
     user_msg_id = 12
     MockTelegramAPI.enqueue_message(chat_id, "go", message_id: user_msg_id)
 
-    assert_receive {:telegram_api_call, {:send_message, ^chat_id, "Running…", _opts, _pm}}, 2_000
+    # Should set 👀 reaction on the user's message
+    assert_receive {:telegram_api_call, {:set_message_reaction, ^chat_id, ^user_msg_id, "👀"}}, 2_000
 
     assert :ok ==
              wait_until(

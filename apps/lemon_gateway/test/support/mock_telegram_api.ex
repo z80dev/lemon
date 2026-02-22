@@ -113,6 +113,11 @@ defmodule LemonGateway.TestSupport.MockTelegramAPI do
     {:ok, %{"ok" => true}}
   end
 
+  def set_message_reaction(_token, chat_id, message_id, emoji, _opts \\ %{}) do
+    record({:set_message_reaction, chat_id, message_id, emoji})
+    {:ok, %{"ok" => true}}
+  end
+
   defp record(call) do
     Agent.update(__MODULE__, fn state ->
       %{state | calls: [call | state.calls]}

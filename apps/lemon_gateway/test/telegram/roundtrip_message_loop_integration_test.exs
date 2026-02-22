@@ -25,12 +25,7 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
             calls: [],
             pending_updates: opts[:updates] || [],
             update_id: opts[:start_update_id] || 1000,
-            notify_pid: opts[:notify_pid],
-            # Deterministic "Running…" message id so tests can reply-to it.
-            running_message_id: opts[:running_message_id] || 90_001,
-            # Controls whether the Running… send_message response includes a message_id.
-            # Values: :ok_with_id | :ok_missing_id
-            running_send_mode: opts[:running_send_mode] || :ok_with_id
+            notify_pid: opts[:notify_pid]
           }
         end,
         name: __MODULE__
@@ -48,14 +43,6 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
 
     def set_notify_pid(pid) do
       Agent.update(__MODULE__, &%{&1 | notify_pid: pid})
-    end
-
-    def set_running_message_id(message_id) when is_integer(message_id) do
-      Agent.update(__MODULE__, &%{&1 | running_message_id: message_id})
-    end
-
-    def set_running_send_mode(mode) when mode in [:ok_with_id, :ok_missing_id] do
-      Agent.update(__MODULE__, &%{&1 | running_send_mode: mode})
     end
 
     def enqueue_update(update) do
@@ -111,21 +98,8 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
 
     def send_message(_token, chat_id, text, reply_to_or_opts \\ nil, parse_mode \\ nil) do
       record({:send_message, chat_id, text, reply_to_or_opts, parse_mode})
-
-      if text == "Running…" do
-        state = Agent.get(__MODULE__, & &1)
-
-        case state.running_send_mode do
-          :ok_with_id ->
-            {:ok, %{"ok" => true, "result" => %{"message_id" => state.running_message_id}}}
-
-          :ok_missing_id ->
-            {:ok, %{"ok" => true, "result" => %{}}}
-        end
-      else
-        msg_id = System.unique_integer([:positive])
-        {:ok, %{"ok" => true, "result" => %{"message_id" => msg_id}}}
-      end
+      msg_id = System.unique_integer([:positive])
+      {:ok, %{"ok" => true, "result" => %{"message_id" => msg_id}}}
     end
 
     def edit_message_text(_token, chat_id, message_id, text, _parse_mode \\ nil) do
@@ -135,6 +109,11 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
 
     def delete_message(_token, chat_id, message_id) do
       record({:delete_message, chat_id, message_id})
+      {:ok, %{"ok" => true}}
+    end
+
+    def set_message_reaction(_token, chat_id, message_id, emoji, _opts \\ %{}) do
+      record({:set_message_reaction, chat_id, message_id, emoji})
       {:ok, %{"ok" => true}}
     end
 
@@ -508,8 +487,8 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
     user_msg_id = 111
     MockTelegramAPI.enqueue_message(chat_id, "/hello", message_id: user_msg_id)
 
-    # Transport progress: send "Running…" (and store its msg id into run meta)
-    assert_receive {:telegram_api_call, {:send_message, ^chat_id, "Running…", _opts, _pm}}, 2_000
+    # Should set 👀 reaction on the user message
+    assert_receive {:telegram_api_call, {:set_message_reaction, ^chat_id, ^user_msg_id, "👀"}}, 2_000
 
     # Wait for the outbox to deliver the finalize payload.
     assert :ok ==
@@ -527,12 +506,7 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
 
     calls = MockTelegramAPI.calls()
 
-    {:send_message, ^chat_id, "Running…", _progress_opts, _} =
-      Enum.find(calls, fn
-        {:send_message, ^chat_id, "Running…", _, _} -> true
-        _ -> false
-      end)
-
+    # Verify final reply is sent and replies to the user message
     {:send_message, ^chat_id, "pong", final_opts, _} =
       Enum.find(calls, fn
         {:send_message, ^chat_id, "pong", _, _} -> true
@@ -554,7 +528,8 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
       topic_id: topic_id
     )
 
-    assert_receive {:telegram_api_call, {:send_message, ^chat_id, "Running…", _opts, _pm}}, 2_000
+    # Should set 👀 reaction on the user message
+    assert_receive {:telegram_api_call, {:set_message_reaction, ^chat_id, ^user_msg_id, "👀"}}, 2_000
 
     assert :ok ==
              wait_until(
@@ -580,7 +555,8 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
     user_msg_id = 12
     MockTelegramAPI.enqueue_message(chat_id, "please fail", message_id: user_msg_id)
 
-    assert_receive {:telegram_api_call, {:send_message, ^chat_id, "Running…", _opts, _pm}}, 2_000
+    # Should set 👀 reaction on the user message
+    assert_receive {:telegram_api_call, {:set_message_reaction, ^chat_id, ^user_msg_id, "👀"}}, 2_000
 
     assert :ok ==
              wait_until(
@@ -603,30 +579,19 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
              )
   end
 
-  test "reply /cancel cancels the run and clears the Running… message UI (no delete)" do
+  test "reply /cancel cancels the run (cancel by reply to user message)" do
     start_system!(%{default_engine: "slow_reply"})
 
     chat_id = 66_666
     user_msg_id = 13
-    running_msg_id = 90_001
-    MockTelegramAPI.set_running_message_id(running_msg_id)
 
     MockTelegramAPI.enqueue_message(chat_id, "slow please", message_id: user_msg_id)
 
-    assert_receive {:telegram_api_call, {:send_message, ^chat_id, "Running…", _opts, _pm}}, 2_000
+    # Should set 👀 reaction on the user message
+    assert_receive {:telegram_api_call, {:set_message_reaction, ^chat_id, ^user_msg_id, "👀"}}, 2_000
 
-    # Wait until the gateway indexes the progress message id so cancel-by-reply can resolve it.
-    session_key = telegram_session_key(chat_id)
-
-    assert :ok ==
-             wait_until(
-               fn ->
-                 is_pid(LemonGateway.Store.get_run_by_progress(session_key, running_msg_id))
-               end,
-               5_000
-             )
-
-    MockTelegramAPI.enqueue_message(chat_id, "/cancel", reply_to_message_id: running_msg_id)
+    # Cancel by replying to the original user message
+    MockTelegramAPI.enqueue_message(chat_id, "/cancel", reply_to_message_id: user_msg_id)
 
     assert :ok ==
              wait_until(
@@ -634,16 +599,12 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
                  calls = MockTelegramAPI.calls()
 
                  Enum.any?(calls, fn
-                   {:edit_message, ^chat_id, ^running_msg_id, "Done"} -> true
-                   _ -> false
-                 end) and
-                   Enum.any?(calls, fn
-                     {:send_message, ^chat_id, text, _opts, _pm} when is_binary(text) ->
-                       String.starts_with?(text, "Run failed:")
+                   {:send_message, ^chat_id, text, _opts, _pm} when is_binary(text) ->
+                     String.starts_with?(text, "Run failed:")
 
-                     _ ->
-                       false
-                   end)
+                   _ ->
+                     false
+                 end)
                end,
                5_000
              )
@@ -656,7 +617,8 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
     user_msg_id = 14
     MockTelegramAPI.enqueue_message(chat_id, "slow please", message_id: user_msg_id)
 
-    assert_receive {:telegram_api_call, {:send_message, ^chat_id, "Running…", _opts, _pm}}, 2_000
+    # Should set 👀 reaction on the user message
+    assert_receive {:telegram_api_call, {:set_message_reaction, ^chat_id, ^user_msg_id, "👀"}}, 2_000
 
     # This /cancel is ignored because it is not a reply to the progress message.
     MockTelegramAPI.enqueue_message(chat_id, "/cancel")
@@ -675,15 +637,15 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
              )
   end
 
-  test "if the Running… send response has no message_id, finalize does not attempt delete" do
+  test "reaction is set on user message and final answer is sent" do
     start_system!()
-    MockTelegramAPI.set_running_send_mode(:ok_missing_id)
 
     chat_id = 88_888
     user_msg_id = 15
     MockTelegramAPI.enqueue_message(chat_id, "hello", message_id: user_msg_id)
 
-    assert_receive {:telegram_api_call, {:send_message, ^chat_id, "Running…", _opts, _pm}}, 2_000
+    # Should set 👀 reaction on the user message
+    assert_receive {:telegram_api_call, {:set_message_reaction, ^chat_id, ^user_msg_id, "👀"}}, 2_000
 
     assert :ok ==
              wait_until(
@@ -698,11 +660,9 @@ defmodule LemonGateway.Telegram.RoundtripMessageLoopIntegrationTest do
                5_000
              )
 
-    # Running… was sent, but without a message_id in the response; progress_msg_id stays nil
-    # and the router cannot delete the progress message.
-    refute Enum.any?(MockTelegramAPI.calls(), fn
-             {:delete_message, ^chat_id, _} -> true
-             _ -> false
-           end)
+    # Verify reaction is set and final answer is sent
+    calls = MockTelegramAPI.calls()
+    assert Enum.any?(calls, fn {:set_message_reaction, ^chat_id, ^user_msg_id, "👀"} -> true; _ -> false end)
+    assert Enum.any?(calls, fn {:send_message, ^chat_id, "pong", _, _} -> true; _ -> false end)
   end
 end

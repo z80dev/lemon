@@ -69,6 +69,11 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       {:ok, %{"ok" => true}}
     end
 
+    def set_message_reaction(_token, chat_id, message_id, emoji, _opts \\ %{}) do
+      notify({:set_message_reaction, chat_id, message_id, emoji})
+      {:ok, %{"ok" => true}}
+    end
+
     defp notify(msg) do
       if pid = :persistent_term.get(@pid_key, nil) do
         send(pid, msg)
@@ -101,7 +106,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     :ok
   end
 
-  test "progress 'Running…' message includes an inline cancel button" do
+  test "progress '👀' reaction is set on user message" do
     chat_id = 333_001
     user_msg_id = 1234
     MockAPI.set_updates([message_update(chat_id, user_msg_id, "hello")])
@@ -112,21 +117,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:send_message, ^chat_id, "Running…", opts, nil}, 400
-    assert is_map(opts)
-    assert opts["reply_to_message_id"] == user_msg_id
-
-    reply_markup = opts["reply_markup"]
-    assert is_map(reply_markup)
-
-    assert reply_markup["inline_keyboard"] == [
-             [
-               %{
-                 "text" => "cancel",
-                 "callback_data" => "lemon:cancel"
-               }
-             ]
-           ]
+    # Should set 👀 reaction on the user's message
+    assert_receive {:set_message_reaction, ^chat_id, ^user_msg_id, "👀"}, 400
   end
 
   test "cancel callback cancels the run mapped to the progress message id" do

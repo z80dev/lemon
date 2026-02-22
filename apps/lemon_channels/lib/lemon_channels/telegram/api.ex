@@ -143,6 +143,34 @@ defmodule LemonChannels.Telegram.API do
     request(token, "deleteMessage", params, @default_timeout)
   end
 
+  @doc """
+  Set a reaction emoji on a message.
+
+  `emoji` should be a single emoji character (e.g., "👀", "✅", "❌").
+  Setting `emoji` to nil or an empty string removes all reactions.
+  """
+  def set_message_reaction(token, chat_id, message_id, emoji, opts \\ %{}) do
+    opts = if is_map(opts), do: opts, else: Enum.into(opts, %{})
+
+    # Build reaction array - empty array removes reactions
+    reaction =
+      if is_binary(emoji) and emoji != "" do
+        [%{"type" => "emoji", "emoji" => emoji}]
+      else
+        []
+      end
+
+    params =
+      %{
+        "chat_id" => chat_id,
+        "message_id" => message_id,
+        "reaction" => reaction
+      }
+      |> maybe_put("is_big", opts[:is_big] || opts["is_big"])
+
+    request(token, "setMessageReaction", params, @default_timeout)
+  end
+
   def get_file(token, file_id) when is_binary(file_id) do
     params = %{"file_id" => file_id}
     request(token, "getFile", params, @default_timeout)

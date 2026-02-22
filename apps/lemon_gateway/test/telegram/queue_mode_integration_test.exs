@@ -111,6 +111,11 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       {:ok, %{"ok" => true}}
     end
 
+    def set_message_reaction(_token, chat_id, message_id, emoji, _opts \\ %{}) do
+      record({:set_message_reaction, chat_id, message_id, emoji})
+      {:ok, %{"ok" => true}}
+    end
+
     defp record(call) do
       Agent.update(__MODULE__, fn state ->
         %{state | calls: [call | state.calls]}
@@ -923,7 +928,8 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       assert_receive {:job_captured, %Job{} = job}, 5000
       assert job.prompt == "part one\n\npart two"
       assert job.meta.user_msg_id == 112
-      assert is_integer(job.meta[:progress_msg_id])
+      # progress_msg_id is now the user_msg_id (reaction is set on user's message)
+      assert job.meta[:progress_msg_id] == 112
     end
 
     test "allowed_chat_ids drops messages from disallowed chats" do

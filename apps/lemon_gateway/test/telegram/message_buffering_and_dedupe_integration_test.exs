@@ -270,13 +270,14 @@ defmodule LemonGateway.Telegram.MessageBufferingAndDedupeIntegrationTest do
                3_000
              )
 
-    running_count =
+    # Should only set one 👀 reaction (dedupe prevents duplicate reactions)
+    reaction_count =
       MockTelegramAPI.calls()
       |> Enum.count(fn
-        {:send_message, ^chat_id, "Running…", _opts, _pm} -> true
+        {:set_message_reaction, ^chat_id, _, "👀"} -> true
         _ -> false
       end)
 
-    assert running_count == 1
+    assert reaction_count == 1
   end
 end

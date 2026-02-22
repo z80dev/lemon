@@ -62,6 +62,11 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
       {:ok, %{"ok" => true}}
     end
 
+    def set_message_reaction(_token, chat_id, message_id, emoji, _opts \\ %{}) do
+      notify({:set_message_reaction, chat_id, message_id, emoji})
+      {:ok, %{"ok" => true}}
+    end
+
     defp notify(msg) do
       if pid = :persistent_term.get(@pid_key, nil) do
         send(pid, msg)
@@ -185,20 +190,13 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     fork_session_key = msg1.meta[:session_key]
     assert is_binary(fork_session_key)
 
-    progress_msg_id =
-      CoreStore.list(:telegram_msg_session)
-      |> Enum.find_value(fn
-        {{account_id, ^chat_id, nil, msg_id}, ^fork_session_key}
-        when account_id in ["default", :default] and msg_id != user_msg_id1 ->
-          msg_id
+    # The user's message ID should be stored in telegram_msg_session for reply routing
+    # (reactions are set on the user's message, not on a separate progress message)
+    stored_session = CoreStore.get(:telegram_msg_session, {"default", chat_id, nil, user_msg_id1})
+    assert stored_session == fork_session_key
 
-        _ ->
-          nil
-      end)
-
-    assert is_integer(progress_msg_id)
-
-    MockAPI.set_updates([reply_update(chat_id, user_msg_id2, "followup", progress_msg_id)])
+    # Reply to the original user message should route to the forked session
+    MockAPI.set_updates([reply_update(chat_id, user_msg_id2, "followup", user_msg_id1)])
 
     assert_receive {:inbound, msg2}, 800
     assert msg2.meta[:session_key] == fork_session_key

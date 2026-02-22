@@ -246,9 +246,9 @@ defmodule LemonGateway.Telegram.AuthAndNewSessionIntegrationTest do
 
     assert_receive {:engine_started, _run_ref}, 2_000
 
-    # At least progress + final should be delivered.
+    # Should set 👀 reaction on the user message
     assert Enum.any?(MockTelegramAPI.calls(), fn
-             {:send_message, 777, "Running…", _opts, _pm} -> true
+             {:set_message_reaction, 777, 1, "👀"} -> true
              _ -> false
            end)
 
@@ -263,9 +263,9 @@ defmodule LemonGateway.Telegram.AuthAndNewSessionIntegrationTest do
 
     Process.sleep(250)
 
-    # No progress message for /new.
+    # No reaction for /new command (it doesn't trigger a run).
     refute Enum.any?(MockTelegramAPI.calls(), fn
-             {:send_message, ^chat_id, "Running…", _opts, _pm} -> true
+             {:set_message_reaction, ^chat_id, _, "👀"} -> true
              _ -> false
            end)
 

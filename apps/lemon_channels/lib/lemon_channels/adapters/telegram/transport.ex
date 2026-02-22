@@ -105,6 +105,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             media_groups: %{},
             # run_id => %{session_key, chat_id, thread_id, user_msg_id}
             pending_new: %{},
+            # run_id => %{chat_id, thread_id, user_msg_id} for reaction tracking
+            reaction_runs: %{},
             bot_id: bot_id,
             bot_username: bot_username,
             files: cfg_get(config, :files, %{}),
@@ -204,58 +206,103 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   # /new triggers an internal "memory reflection" run; only clear auto-resume after it completes.
   def handle_info(%LemonCore.Event{type: :run_completed, meta: meta} = event, state) do
     run_id = (meta || %{})[:run_id] || (meta || %{})["run_id"]
+    session_key = (meta || %{})[:session_key] || (meta || %{})["session_key"]
 
-    case run_id && Map.get(state.pending_new, run_id) do
-      %{
-        session_key: session_key,
-        chat_id: chat_id,
-        thread_id: thread_id,
-        user_msg_id: user_msg_id
-      } = pending ->
-        _ = safe_delete_chat_state(session_key)
-        _ = safe_delete_selected_resume(state, chat_id, thread_id)
-        _ = safe_clear_thread_message_indices(state, chat_id, thread_id)
+    # Check if this is a /new command run first
+    state =
+      case run_id && Map.get(state.pending_new, run_id) do
+        %{
+          session_key: sk,
+          chat_id: chat_id,
+          thread_id: thread_id,
+          user_msg_id: user_msg_id
+        } = pending ->
+          _ = safe_delete_chat_state(sk)
+          _ = safe_delete_selected_resume(state, chat_id, thread_id)
+          _ = safe_clear_thread_message_indices(state, chat_id, thread_id)
 
-        # Store writes are async; do a second delete shortly after to win races.
-        Process.send_after(
-          self(),
-          {:new_session_cleanup, session_key, chat_id, thread_id},
-          50
-        )
+          # Store writes are async; do a second delete shortly after to win races.
+          Process.send_after(
+            self(),
+            {:new_session_cleanup, sk, chat_id, thread_id},
+            50
+          )
 
-        topic = LemonCore.Bus.run_topic(run_id)
-        _ = LemonCore.Bus.unsubscribe(topic)
+          topic = LemonCore.Bus.run_topic(run_id)
+          _ = LemonCore.Bus.unsubscribe(topic)
 
-        ok? =
-          case event.payload do
-            %{completed: %{ok: ok}} when is_boolean(ok) -> ok
-            %{ok: ok} when is_boolean(ok) -> ok
-            _ -> true
+          ok? =
+            case event.payload do
+              %{completed: %{ok: ok}} when is_boolean(ok) -> ok
+              %{ok: ok} when is_boolean(ok) -> ok
+              _ -> true
+            end
+
+          msg0 =
+            if ok? do
+              "Started a new session."
+            else
+              "Started a new session (memory recording failed)."
+            end
+
+          msg =
+            case pending[:project] do
+              %{id: id, root: root} when is_binary(id) and is_binary(root) ->
+                msg0 <> "\nProject: #{id} (#{root})"
+
+              _ ->
+                msg0
+            end
+
+          _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
+
+          %{state | pending_new: Map.delete(state.pending_new, run_id)}
+
+        _ ->
+          state
+      end
+
+    # Handle reaction updates for regular runs
+    state =
+      case session_key && Map.get(state.reaction_runs, session_key) do
+        %{
+          chat_id: chat_id,
+          thread_id: _thread_id,
+          user_msg_id: user_msg_id
+        } = _reaction_run ->
+          ok? =
+            case event.payload do
+              %{completed: %{ok: ok}} when is_boolean(ok) -> ok
+              %{ok: ok} when is_boolean(ok) -> ok
+              _ -> true
+            end
+
+          # Update reaction: ✅ for success, ❌ for failure
+          reaction_emoji = if ok?, do: "✅", else: "❌"
+
+          _ =
+            state.api_mod.set_message_reaction(
+              state.token,
+              chat_id,
+              user_msg_id,
+              reaction_emoji,
+              %{is_big: true}
+            )
+
+          # Unsubscribe from session topic and remove from tracking
+          if Code.ensure_loaded?(LemonCore.Bus) and
+               function_exported?(LemonCore.Bus, :unsubscribe, 1) do
+            topic = LemonCore.Bus.session_topic(session_key)
+            _ = LemonCore.Bus.unsubscribe(topic)
           end
 
-        msg0 =
-          if ok? do
-            "Started a new session."
-          else
-            "Started a new session (memory recording failed)."
-          end
+          %{state | reaction_runs: Map.delete(state.reaction_runs, session_key)}
 
-        msg =
-          case pending[:project] do
-            %{id: id, root: root} when is_binary(id) and is_binary(root) ->
-              msg0 <> "\nProject: #{id} (#{root})"
+        _ ->
+          state
+      end
 
-            _ ->
-              msg0
-          end
-
-        _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
-
-        {:noreply, %{state | pending_new: Map.delete(state.pending_new, run_id)}}
-
-      _ ->
-        {:noreply, state}
-    end
+    {:noreply, state}
   rescue
     _ -> {:noreply, state}
   end
@@ -713,32 +760,45 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     _ =
       maybe_index_telegram_msg_session(state, scope, session_key, [progress_msg_id, user_msg_id])
 
+    # Track this run for reaction updates if we set a progress reaction
+    state =
+      if is_integer(progress_msg_id) and is_binary(session_key) do
+        # Subscribe to session topic to get run completion events
+        maybe_subscribe_to_session(session_key)
+
+        reaction_run = %{
+          chat_id: chat_id,
+          thread_id: thread_id,
+          user_msg_id: user_msg_id,
+          session_key: session_key
+        }
+
+        %{state | reaction_runs: Map.put(state.reaction_runs, session_key, reaction_run)}
+      else
+        state
+      end
+
     inbound = %{inbound | meta: meta}
     route_to_router(inbound)
     state
   end
 
-  defp send_progress(state, chat_id, thread_id, reply_to_message_id) do
-    cancel_markup = %{
-      "inline_keyboard" => [
-        [
-          %{
-            "text" => "cancel",
-            "callback_data" => @cancel_callback_prefix
-          }
-        ]
-      ]
-    }
-
-    opts =
-      %{}
-      |> maybe_put("reply_to_message_id", reply_to_message_id)
-      |> maybe_put("message_thread_id", thread_id)
-      |> maybe_put("reply_markup", cancel_markup)
-
-    case state.api_mod.send_message(state.token, chat_id, "Running…", opts, nil) do
-      {:ok, %{"ok" => true, "result" => %{"message_id" => msg_id}}} -> msg_id
-      _ -> nil
+  defp send_progress(state, chat_id, _thread_id, reply_to_message_id) do
+    # Set 👀 reaction on the user's message to indicate we're processing
+    # The reaction is set on reply_to_message_id (the user's message)
+    if is_integer(reply_to_message_id) do
+      case state.api_mod.set_message_reaction(
+             state.token,
+             chat_id,
+             reply_to_message_id,
+             "👀",
+             %{is_big: true}
+           ) do
+        {:ok, %{"ok" => true}} -> reply_to_message_id
+        _ -> nil
+      end
+    else
+      nil
     end
   rescue
     _ -> nil
@@ -2083,6 +2143,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         msg = new_session_message(project_result, "Started a new session.")
         _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
         state
+    end
+  end
+
+  defp maybe_subscribe_to_session(session_key) when is_binary(session_key) do
+    if Code.ensure_loaded?(LemonCore.Bus) and
+         function_exported?(LemonCore.Bus, :subscribe, 1) do
+      topic = LemonCore.Bus.session_topic(session_key)
+      _ = LemonCore.Bus.subscribe(topic)
     end
   end
 
