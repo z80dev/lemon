@@ -130,7 +130,10 @@ defmodule LemonCore.Store.SqliteBackend do
       with :ok <- bind_statement(state.statements.get, [table_name, {:blob, encoded_key}]) do
         case Sqlite3.step(state.conn, state.statements.get) do
           {:row, [value_blob]} ->
-            {:ok, decode(value_blob), state}
+            case decode(value_blob) do
+              nil -> {:ok, nil, state}
+              value -> {:ok, value, state}
+            end
 
           :done ->
             {:ok, nil, state}
@@ -181,8 +184,15 @@ defmodule LemonCore.Store.SqliteBackend do
       with :ok <- bind_statement(state.statements.list, [table_name]),
            {:ok, rows} <- Sqlite3.fetch_all(state.conn, state.statements.list) do
         items =
-          Enum.map(rows, fn [key_blob, value_blob] ->
-            {decode(key_blob), decode(value_blob)}
+          Enum.flat_map(rows, fn [key_blob, value_blob] ->
+            key = decode(key_blob)
+            value = decode(value_blob)
+            # Filter out corrupted entries
+            if key != nil and value != nil do
+              [{key, value}]
+            else
+              []
+            end
           end)
 
         {:ok, items, state}
@@ -325,5 +335,12 @@ defmodule LemonCore.Store.SqliteBackend do
   end
 
   defp encode(term), do: :erlang.term_to_binary(term)
-  defp decode(binary), do: :erlang.binary_to_term(binary)
+  
+  defp decode(binary) do
+    :erlang.binary_to_term(binary)
+  rescue
+    ArgumentError -> 
+      # Corrupted or invalid binary data
+      nil
+  end
 end

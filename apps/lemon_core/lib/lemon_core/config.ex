@@ -467,6 +467,8 @@ defmodule LemonCore.Config do
       account_id: map["account_id"],
       offset: map["offset"],
       drop_pending_updates: map["drop_pending_updates"],
+      debug_inbound: map["debug_inbound"],
+      log_drops: map["log_drops"],
       compaction: parse_gateway_telegram_compaction(map["compaction"] || %{}),
       files: parse_gateway_telegram_files(map["files"] || %{})
     }
