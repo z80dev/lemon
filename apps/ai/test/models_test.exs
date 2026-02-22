@@ -1055,46 +1055,47 @@ defmodule Ai.ModelsTest do
   # Thinking Level Utilities (ported from Pi)
   # ============================================================================
 
-  describe "supports_xhigh?/1" do
+  describe "supports_xhigh/1" do
     test "returns true for GPT-5.2 models" do
       model = Models.get_model(:openai, "gpt-5.2")
       assert model != nil
-      assert Models.supports_xhigh?(model) == true
+      assert Models.supports_xhigh(model) == true
     end
 
     test "returns true for GPT-5.3 codex models" do
       model = Models.get_model(:openai, "gpt-5.3-codex")
       assert model != nil
-      assert Models.supports_xhigh?(model) == true
+      assert Models.supports_xhigh(model) == true
     end
 
     test "returns true for Anthropic Opus 4.6 models" do
-      model = Models.get_model(:anthropic, "claude-opus-4-6-20250514")
-      if model do
-        assert Models.supports_xhigh?(model) == true
-      else
-        # Try alternate ID format
-        model = Models.get_model(:anthropic, "claude-opus-4-6-20250514")
-        assert model == nil || Models.supports_xhigh?(model) == true
-      end
+      model = Models.get_model(:anthropic, "claude-opus-4-6")
+      assert model != nil
+      assert Models.supports_xhigh(model) == true
     end
 
     test "returns false for Claude Sonnet models" do
       model = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
       assert model != nil
-      assert Models.supports_xhigh?(model) == false
+      assert Models.supports_xhigh(model) == false
     end
 
     test "returns false for GPT-4o" do
       model = Models.get_model(:openai, "gpt-4o")
       assert model != nil
-      assert Models.supports_xhigh?(model) == false
+      assert Models.supports_xhigh(model) == false
     end
 
     test "returns false for GPT-5.1 (not 5.2+)" do
       model = Models.get_model(:openai, "gpt-5.1")
       assert model != nil
-      assert Models.supports_xhigh?(model) == false
+      assert Models.supports_xhigh(model) == false
+    end
+
+    test "supports_xhigh?/1 delegates to supports_xhigh/1" do
+      model = Models.get_model(:openai, "gpt-5.2")
+      assert model != nil
+      assert Models.supports_xhigh?(model) == Models.supports_xhigh(model)
     end
   end
 

@@ -10657,19 +10657,19 @@ defmodule Ai.Models do
   ## Examples
 
       iex> model = Ai.Models.get_model(:openai, "gpt-5.2")
-      iex> Ai.Models.supports_xhigh?(model)
+      iex> Ai.Models.supports_xhigh(model)
       true
 
-      iex> model = Ai.Models.get_model(:anthropic, "claude-opus-4-6-20250514")
-      iex> Ai.Models.supports_xhigh?(model)
+      iex> model = Ai.Models.get_model(:anthropic, "claude-opus-4-6")
+      iex> Ai.Models.supports_xhigh(model)
       true
 
       iex> model = Ai.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
-      iex> Ai.Models.supports_xhigh?(model)
+      iex> Ai.Models.supports_xhigh(model)
       false
   """
-  @spec supports_xhigh?(Model.t()) :: boolean()
-  def supports_xhigh?(%Model{id: id, api: api}) do
+  @spec supports_xhigh(Model.t()) :: boolean()
+  def supports_xhigh(%Model{id: id, api: api}) do
     cond do
       String.contains?(id, "gpt-5.2") or String.contains?(id, "gpt-5.3") ->
         true
@@ -10680,6 +10680,10 @@ defmodule Ai.Models do
         false
     end
   end
+
+  @doc false
+  @spec supports_xhigh?(Model.t()) :: boolean()
+  def supports_xhigh?(model), do: supports_xhigh(model)
 
   @default_thinking_budgets %{
     minimal: 1024,
