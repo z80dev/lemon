@@ -48,9 +48,10 @@ defmodule LemonGateway.AI do
     else
       url = "https://api.openai.com/v1/chat/completions"
 
+      # :httpc expects charlists for headers
       headers = [
-        {"authorization", "Bearer #{api_key}"},
-        {"content-type", "application/json"}
+        {~c"authorization", String.to_charlist("Bearer #{api_key}")},
+        {~c"content-type", ~c"application/json"}
       ]
 
       body = %{
@@ -90,10 +91,11 @@ defmodule LemonGateway.AI do
     else
       url = "https://api.anthropic.com/v1/messages"
 
+      # :httpc expects charlists for headers
       headers = [
-        {"x-api-key", api_key},
-        {"anthropic-version", "2023-06-01"},
-        {"content-type", "application/json"}
+        {~c"x-api-key", String.to_charlist(api_key)},
+        {~c"anthropic-version", ~c"2023-06-01"},
+        {~c"content-type", ~c"application/json"}
       ]
 
       # Convert OpenAI-style messages to Anthropic format

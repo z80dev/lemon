@@ -13,6 +13,7 @@
 # Temporary files, for example, from tests.
 /tmp/
 apps/lemon_skills/tmp/
+.lemon/skill/
 
 # If the VM crashes, it generates a dump, let's ignore it too.
 erl_crash.dump
@@ -50,3 +51,4 @@ node_modules/
 *.db3
 *.db3-shm
 *.db3-wal
+apps/lemon_gateway/priv/.env

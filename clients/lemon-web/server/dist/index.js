@@ -1,5 +1,6 @@
 // src/index.ts
-import { spawn, spawnSync } from "child_process";
+import { spawn } from "child_process";
+import { timingSafeEqual } from "crypto";
 import http from "http";
 import fs2 from "fs";
 import path2 from "path";
@@ -301,7 +302,37 @@ function decodeBase64Url(value) {
   const padded = missingPadding === 0 ? normalized : normalized + "=".repeat(4 - missingPadding);
   return Buffer.from(padded, "base64").toString("utf8");
 }
-function fetchGatewayRunningSessions() {
+function parseGatewayProbeOutput(stdout, stderr, status, processError = null) {
+  if (processError) {
+    return { sessions: [], error: processError.message };
+  }
+  if (status !== null && status !== 0) {
+    const err = (stderr || stdout || "").trim();
+    return { sessions: [], error: err || `probe exited with status ${status}` };
+  }
+  const sessions = [];
+  const lines = (stdout || "").split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+  for (const line of lines) {
+    if (line.startsWith("__ERROR__|")) {
+      const parts2 = line.split("|");
+      return { sessions: [], error: parts2.slice(1).join("|") || "gateway probe error" };
+    }
+    const parts = line.split("|");
+    if (parts.length !== 3) {
+      continue;
+    }
+    try {
+      const session_id = decodeBase64Url(parts[0]);
+      const cwd = decodeBase64Url(parts[1]);
+      const is_streaming = parts[2] === "1";
+      sessions.push({ session_id, cwd, is_streaming });
+    } catch {
+      continue;
+    }
+  }
+  return { sessions, error: null };
+}
+function fetchGatewayRunningSessionsAsync(timeoutMs = 6e3) {
   const gatewayNode = inferGatewayNodeName();
   const cookie = process.env.LEMON_GATEWAY_NODE_COOKIE || process.env.LEMON_GATEWAY_COOKIE || "lemon_gateway_dev_cookie";
   const probeNode = `lemon_web_probe_${process.pid}_${Math.floor(Math.random() * 1e5)}`;
@@ -394,43 +425,83 @@ function fetchGatewayRunningSessions() {
       IO.puts("__ERROR__|connect_failed|" <> node_name)
     end
   `;
-  const result = spawnSync(
-    "elixir",
-    ["--sname", probeNode, "--cookie", cookie, "-e", script],
-    {
-      encoding: "utf8",
-      timeout: 6e3,
-      maxBuffer: 1024 * 1024
-    }
-  );
-  if (result.error) {
-    return { sessions: [], error: result.error.message };
+  return new Promise((resolve) => {
+    const child = spawn("elixir", ["--sname", probeNode, "--cookie", cookie, "-e", script], {
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const finish = (payload) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(payload);
+    };
+    const timer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+      }
+      finish({ sessions: [], error: `gateway probe timed out after ${timeoutMs}ms` });
+    }, timeoutMs);
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", (error) => {
+      finish(parseGatewayProbeOutput(stdout, stderr, null, error));
+    });
+    child.on("close", (status) => {
+      finish(parseGatewayProbeOutput(stdout, stderr, status));
+    });
+  });
+}
+function resolveWsBridgeToken() {
+  const raw = process.env.LEMON_WEB_WS_TOKEN || process.env.LEMON_BRIDGE_WS_TOKEN || "";
+  const token = raw.trim();
+  return token.length > 0 ? token : null;
+}
+function extractClientToken(req) {
+  const headerToken = req.headers["x-lemon-ws-token"];
+  if (typeof headerToken === "string" && headerToken.trim().length > 0) {
+    return headerToken.trim();
   }
-  if (result.status !== 0) {
-    const err = (result.stderr || result.stdout || "").trim();
-    return { sessions: [], error: err || `probe exited with status ${result.status}` };
+  const authorization = req.headers.authorization;
+  if (typeof authorization === "string" && authorization.toLowerCase().startsWith("bearer ")) {
+    return authorization.slice(7).trim();
   }
-  const sessions = [];
-  const lines = (result.stdout || "").split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
-  for (const line of lines) {
-    if (line.startsWith("__ERROR__|")) {
-      const parts2 = line.split("|");
-      return { sessions: [], error: parts2.slice(1).join("|") || "gateway probe error" };
+  try {
+    const requestUrl = new URL(req.url || "/", "http://localhost");
+    const queryToken = requestUrl.searchParams.get("token");
+    if (queryToken && queryToken.trim().length > 0) {
+      return queryToken.trim();
     }
-    const parts = line.split("|");
-    if (parts.length !== 3) {
-      continue;
-    }
-    try {
-      const session_id = decodeBase64Url(parts[0]);
-      const cwd = decodeBase64Url(parts[1]);
-      const is_streaming = parts[2] === "1";
-      sessions.push({ session_id, cwd, is_streaming });
-    } catch {
-      continue;
-    }
+  } catch {
   }
-  return { sessions, error: null };
+  return null;
+}
+function secureTokenCompare(actual, expected) {
+  const left = Buffer.from(actual);
+  const right = Buffer.from(expected);
+  if (left.length !== right.length) {
+    return false;
+  }
+  return timingSafeEqual(left, right);
+}
+function isWsAuthorized(req, expectedToken) {
+  if (!expectedToken) {
+    return true;
+  }
+  const provided = extractClientToken(req);
+  if (!provided) {
+    return false;
+  }
+  return secureTokenCompare(provided, expectedToken);
 }
 function findLemonPath() {
   const cwd = process.cwd();
@@ -537,6 +608,7 @@ var opts = parseArgs(process.argv);
 loadDotenvFromDir(opts.cwd || process.cwd());
 var port = Number.isFinite(opts.port) ? opts.port : DEFAULT_PORT;
 var staticDir = resolveStaticDir(opts.staticDir);
+var wsBridgeToken = resolveWsBridgeToken();
 var server = http.createServer((req, res) => {
   if (staticDir) {
     serveStatic(staticDir, req, res);
@@ -555,7 +627,19 @@ bridge.start((message) => {
   }
   broadcast(message);
 });
-wss.on("connection", (ws) => {
+wss.on("connection", (ws, req) => {
+  if (!isWsAuthorized(req, wsBridgeToken)) {
+    const error = {
+      type: "bridge_error",
+      message: "Unauthorized WebSocket client"
+    };
+    try {
+      ws.send(JSON.stringify(withServerTime(error)));
+    } catch {
+    }
+    ws.close(1008, "unauthorized");
+    return;
+  }
   clients.add(ws);
   if (lastBridgeStatus) {
     ws.send(JSON.stringify(lastBridgeStatus));
@@ -575,16 +659,21 @@ wss.on("connection", (ws) => {
       return;
     }
     if (parsed.type === "list_running_sessions") {
-      const gatewaySessions = fetchGatewayRunningSessions();
-      const runningSessionsMessage = withServerTime({
-        type: "running_sessions",
-        sessions: gatewaySessions.sessions,
-        error: gatewaySessions.error
+      void fetchGatewayRunningSessionsAsync().then((gatewaySessions) => {
+        if (ws.readyState !== WebSocket.OPEN) {
+          return;
+        }
+        const runningSessionsMessage = withServerTime({
+          type: "running_sessions",
+          sessions: gatewaySessions.sessions,
+          error: gatewaySessions.error
+        });
+        ws.send(JSON.stringify(runningSessionsMessage));
+        if (gatewaySessions.error !== null) {
+          bridge.send(parsed);
+        }
       });
-      ws.send(JSON.stringify(runningSessionsMessage));
-      if (gatewaySessions.error === null) {
-        return;
-      }
+      return;
     }
     bridge.send(parsed);
   });

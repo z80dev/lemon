@@ -2019,15 +2019,16 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     end)
     |> Enum.filter(fn %{resume: r} -> match?(%ResumeToken{}, r) end)
     |> Enum.sort_by(& &1.started_at, :desc)
-    |> Enum.reduce([], fn %{resume: r, started_at: ts}, acc ->
+    |> Enum.reduce({[], MapSet.new()}, fn %{resume: r, started_at: ts}, {acc, seen} ->
       key = {r.engine, r.value}
-
-      if Enum.any?(acc, fn %{resume: rr} -> {rr.engine, rr.value} == key end) do
-        acc
+      if MapSet.member?(seen, key) do
+        {acc, seen}
       else
-        acc ++ [%{resume: r, started_at: ts}]
+        {[%{resume: r, started_at: ts} | acc], MapSet.put(seen, key)}
       end
     end)
+    |> elem(0)
+    |> Enum.reverse()
     |> Enum.take(limit)
   rescue
     _ -> []
@@ -2878,17 +2879,26 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       function_exported?(api_mod, :get_me, 1) ->
         case api_mod.get_me(token) do
           {:ok, %{"ok" => true, "result" => %{"id" => id, "username" => username}}} ->
-            {parse_int(id) || id, normalize_bot_username(username)}
+            resolved = {parse_int(id) || id, normalize_bot_username(username)}
+            Logger.info("[Telegram] Bot identity resolved via getMe: #{inspect(resolved)}")
+            resolved
 
-          _ ->
+          other ->
+            Logger.warning(
+              "[Telegram] getMe returned unexpected result, bot_id/bot_username will be nil: #{inspect(other)}"
+            )
+
             {bot_id, bot_username}
         end
 
       true ->
+        Logger.warning("[Telegram] No getMe available and no config bot_id/bot_username; mention detection will be disabled")
         {bot_id, bot_username}
     end
   rescue
-    _ -> {bot_id, bot_username}
+    error ->
+      Logger.error("[Telegram] resolve_bot_identity crashed: #{inspect(error)}; mention detection will be disabled")
+      {bot_id, bot_username}
   end
 
   defp normalize_bot_username(nil), do: nil

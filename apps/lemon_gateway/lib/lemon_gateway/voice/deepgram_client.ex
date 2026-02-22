@@ -113,8 +113,8 @@ defmodule LemonGateway.Voice.DeepgramClient do
   defp build_deepgram_url do
     params = %{
       encoding: "mulaw",
-      sample_rate: 8000,
-      channels: 1,
+      sample_rate: "8000",
+      channels: "1",
       model: "nova-2",
       interim_results: "true",
       punctuate: "true",

@@ -30,7 +30,7 @@ defmodule CodingAgent.Tools.Task do
   alias CodingAgent.ToolPolicy
   alias LemonCore.{RunRequest, SessionKey}
 
-  @default_run_orchestrator LemonRouter.RunOrchestrator
+  @default_run_orchestrator_parts ["LemonRouter", "RunOrchestrator"]
 
   @doc """
   Returns the Task tool definition.
@@ -446,7 +446,7 @@ defmodule CodingAgent.Tools.Task do
   defp coordinator_alive?(_), do: false
 
   defp run_orchestrator(opts) do
-    Keyword.get(opts, :run_orchestrator, @default_run_orchestrator)
+    Keyword.get(opts, :run_orchestrator, default_run_orchestrator())
   end
 
   defp execute_via_coordinator(coordinator, prompt, description, role_id) do
@@ -590,7 +590,7 @@ defmodule CodingAgent.Tools.Task do
           SessionKey.agent_id(parent_session_key) ||
           "default"
 
-      run_orchestrator = Map.get(followup_context, :run_orchestrator, @default_run_orchestrator)
+      run_orchestrator = Map.get(followup_context, :run_orchestrator, default_run_orchestrator())
 
       followup =
         RunRequest.new(%{
@@ -686,6 +686,10 @@ defmodule CodingAgent.Tools.Task do
 
   defp normalize_followup_outcome(other) do
     %{ok: false, error: other, answer: ""}
+  end
+
+  defp default_run_orchestrator do
+    Module.concat(@default_run_orchestrator_parts)
   end
 
   defp normalize_followup_answer(answer) when is_binary(answer), do: answer

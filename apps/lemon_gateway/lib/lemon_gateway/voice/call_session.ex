@@ -355,9 +355,10 @@ defmodule LemonGateway.Voice.CallSession do
 
     url = "https://api.elevenlabs.io/v1/text-to-speech/#{voice_id}/stream"
 
+    # :httpc expects charlists for headers
     headers = [
-      {"xi-api-key", api_key},
-      {"content-type", "application/json"}
+      {~c"xi-api-key", String.to_charlist(api_key)},
+      {~c"content-type", ~c"application/json"}
     ]
 
     body = Jason.encode!(%{
@@ -378,7 +379,9 @@ defmodule LemonGateway.Voice.CallSession do
       {:ok, {{_, 200, _}, _headers, response_body}} ->
         {:ok, response_body}
 
-      {:ok, {{_, status, _}, _headers, response_body}} ->
+      {:ok, {{_, status, _}, headers, response_body}} ->
+        # Log the response headers to debug content-type issues
+        Logger.warning("ElevenLabs TTS error: status=#{status}, headers=#{inspect(headers)}")
         {:error, {:http_error, status, response_body}}
 
       {:error, reason} ->

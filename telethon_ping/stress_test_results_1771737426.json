@@ -1,0 +1,78 @@
+{
+  "timestamp": "2026-02-22T05:17:06.196243+00:00",
+  "chat_id": -1003842984060,
+  "results": [
+    {
+      "test_id": "T13",
+      "name": "Document transfer",
+      "status": "partial",
+      "topic_id": 3127,
+      "duration_seconds": 120.07,
+      "error_message": "Got reply but secret word 'PINEAPPLE' not found",
+      "evidence": {
+        "sent_ids": [
+          3129
+        ],
+        "received_ids": [
+          3130
+        ],
+        "sent_texts": [
+          "[file: stress_test_doc.txt] Please read this document and tell me the secret word."
+        ],
+        "received_texts": [
+          "The secret word is **FLAMINGO**. \ud83e\udda9"
+        ],
+        "timestamps": {
+          "start": "2026-02-22T05:13:04.025409+00:00",
+          "end": "2026-02-22T05:15:04.098986+00:00"
+        },
+        "extra": {
+          "reply_count": "1",
+          "found_secret_word": "False"
+        }
+      }
+    },
+    {
+      "test_id": "T22",
+      "name": "Edit detection",
+      "status": "partial",
+      "topic_id": 3128,
+      "duration_seconds": 122.1,
+      "error_message": "Initial reply received but no response to edit",
+      "evidence": {
+        "sent_ids": [
+          3131
+        ],
+        "received_ids": [
+          3132
+        ],
+        "sent_texts": [
+          "What is the capital of France? Answer in one word.",
+          "[EDITED] What is the capital of Japan? Answer in one word."
+        ],
+        "received_texts": [
+          "Paris"
+        ],
+        "timestamps": {
+          "start": "2026-02-22T05:15:04.099319+00:00",
+          "original_sent": "2026-02-22T05:15:04.147878+00:00",
+          "edit_sent": "2026-02-22T05:16:06.193527+00:00",
+          "end": "2026-02-22T05:17:06.195876+00:00"
+        },
+        "extra": {
+          "edit_detected": "False",
+          "initial_reply_count": "1",
+          "edit_reply_count": "0"
+        }
+      }
+    }
+  ],
+  "summary": {
+    "total": 2,
+    "passed": 0,
+    "partial": 2,
+    "failed": 0,
+    "error": 0,
+    "skipped": 0
+  }
+}

@@ -84,7 +84,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
                "--skip-git-repo-check",
                "--color=never",
                "-c",
-               "model_auto_compact_token_limit=0.85",
+               "model_auto_compact_token_limit=170000",
                "-"
              ]
     end
@@ -104,7 +104,7 @@ defmodule AgentCore.CliRunners.CodexRunnerTest do
                "--skip-git-repo-check",
                "--color=never",
                "-c",
-               "model_auto_compact_token_limit=0.85",
+               "model_auto_compact_token_limit=170000",
                "resume",
                "thread_123",
                "-"

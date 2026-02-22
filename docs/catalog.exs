@@ -66,6 +66,12 @@
     max_age_days: 90
   },
   %{
+    path: "docs/testing/lemonade-stand-stress-test.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-02-22],
+    max_age_days: 30
+  },
+  %{
     path: "docs/tools/firecrawl.md",
     owner: "@z80",
     last_reviewed: ~D[2026-02-13],

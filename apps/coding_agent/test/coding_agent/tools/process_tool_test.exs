@@ -47,7 +47,21 @@ defmodule CodingAgent.Tools.ProcessToolTest do
       assert id2 in process_ids
     end
 
-    test "filters by status" do
+    test "returns empty message when no processes" do
+      # Clear all processes first
+      ProcessStore.clear()
+
+      tool = CodingAgent.Tools.Process.tool([])
+      result = tool.execute.("call_1", %{"action" => "list"}, nil, nil)
+
+      assert result.content != nil
+      text = result.content |> hd() |> Map.get(:text)
+      assert text == "No processes found."
+      assert result.details.count == 0
+      assert result.details.processes == []
+    end
+
+    test "filters by running status" do
       # Create a running process
       {:ok, id} = ProcessManager.exec(command: "sleep 60")
 
@@ -61,6 +75,70 @@ defmodule CodingAgent.Tools.ProcessToolTest do
 
       # Clean up
       ProcessManager.kill(id, :sigkill)
+    end
+
+    test "filters by completed status" do
+      # Create a completed process
+      {:ok, id} = ProcessManager.exec(command: "echo done")
+
+      # Wait for completion
+      Elixir.Process.sleep(200)
+
+      tool = CodingAgent.Tools.Process.tool([])
+
+      result = tool.execute.("call_1", %{"action" => "list", "status" => "completed"}, nil, nil)
+
+      process_ids = Enum.map(result.details.processes, & &1.process_id)
+      assert id in process_ids
+    end
+
+    test "filters by error status" do
+      # Create a process that exits with error
+      {:ok, id} = ProcessManager.exec(command: "exit 1")
+
+      # Wait for completion
+      Elixir.Process.sleep(200)
+
+      tool = CodingAgent.Tools.Process.tool([])
+
+      result = tool.execute.("call_1", %{"action" => "list", "status" => "error"}, nil, nil)
+
+      process_ids = Enum.map(result.details.processes, & &1.process_id)
+      assert id in process_ids
+    end
+
+    test "filters by killed status" do
+      # Create and kill a process
+      {:ok, id} = ProcessManager.exec(command: "sleep 60")
+      Elixir.Process.sleep(100)
+      ProcessManager.kill(id, :sigterm)
+      Elixir.Process.sleep(200)
+
+      tool = CodingAgent.Tools.Process.tool([])
+
+      result = tool.execute.("call_1", %{"action" => "list", "status" => "killed"}, nil, nil)
+
+      process_ids = Enum.map(result.details.processes, & &1.process_id)
+      assert id in process_ids
+    end
+
+    test "default status filter is all" do
+      # Create processes with different statuses
+      {:ok, running_id} = ProcessManager.exec(command: "sleep 60")
+      {:ok, completed_id} = ProcessManager.exec(command: "echo done")
+      Elixir.Process.sleep(200)
+
+      tool = CodingAgent.Tools.Process.tool([])
+
+      # No status filter specified
+      result = tool.execute.("call_1", %{"action" => "list"}, nil, nil)
+
+      process_ids = Enum.map(result.details.processes, & &1.process_id)
+      assert running_id in process_ids
+      assert completed_id in process_ids
+
+      # Clean up
+      ProcessManager.kill(running_id, :sigkill)
     end
   end
 
@@ -103,6 +181,32 @@ defmodule CodingAgent.Tools.ProcessToolTest do
 
       assert {:error, reason} = tool.execute.("call_1", %{"action" => "poll"}, nil, nil)
       assert reason =~ "process_id is required"
+    end
+
+    test "returns error for empty process_id" do
+      tool = CodingAgent.Tools.Process.tool([])
+
+      assert {:error, reason} =
+               tool.execute.("call_1", %{"action" => "poll", "process_id" => ""}, nil, nil)
+
+      assert reason =~ "process_id cannot be empty"
+    end
+
+    test "poll result includes command details" do
+      {:ok, process_id} = ProcessManager.exec(command: "echo test_output")
+
+      # Wait for completion
+      Elixir.Process.sleep(200)
+
+      tool = CodingAgent.Tools.Process.tool([])
+
+      result =
+        tool.execute.("call_1", %{"action" => "poll", "process_id" => process_id}, nil, nil)
+
+      assert result.details.command =~ "echo"
+      assert result.details.exit_code == 0
+      assert result.details.status == :completed
+      assert is_integer(result.details.os_pid) or is_nil(result.details.os_pid)
     end
 
     test "supports line count" do
@@ -155,6 +259,47 @@ defmodule CodingAgent.Tools.ProcessToolTest do
                )
 
       assert reason =~ "not found"
+    end
+
+    test "requires process_id" do
+      tool = CodingAgent.Tools.Process.tool([])
+
+      assert {:error, reason} = tool.execute.("call_1", %{"action" => "log"}, nil, nil)
+      assert reason =~ "process_id is required"
+    end
+
+    test "returns empty logs message when no output" do
+      {:ok, process_id} = ProcessManager.exec(command: "true")
+
+      # Wait for completion
+      Elixir.Process.sleep(200)
+
+      tool = CodingAgent.Tools.Process.tool([])
+      result = tool.execute.("call_1", %{"action" => "log", "process_id" => process_id}, nil, nil)
+
+      assert result.content != nil
+      text = result.content |> hd() |> Map.get(:text)
+      assert text == "[No logs]"
+    end
+
+    test "supports line count parameter" do
+      {:ok, process_id} = ProcessManager.exec(command: "seq 1 20")
+
+      # Wait for completion
+      Elixir.Process.sleep(200)
+
+      tool = CodingAgent.Tools.Process.tool([])
+
+      result =
+        tool.execute.(
+          "call_1",
+          %{"action" => "log", "process_id" => process_id, "lines" => 5},
+          nil,
+          nil
+        )
+
+      # Log action returns line_count, not logs
+      assert result.details.line_count <= 5
     end
   end
 
@@ -212,6 +357,20 @@ defmodule CodingAgent.Tools.ProcessToolTest do
                )
 
       assert reason =~ "not running"
+    end
+
+    test "requires process_id" do
+      tool = CodingAgent.Tools.Process.tool([])
+
+      assert {:error, reason} =
+               tool.execute.(
+                 "call_1",
+                 %{"action" => "write", "data" => "test"},
+                 nil,
+                 nil
+               )
+
+      assert reason =~ "process_id is required"
     end
   end
 
@@ -284,6 +443,35 @@ defmodule CodingAgent.Tools.ProcessToolTest do
 
       assert reason =~ "not found"
     end
+
+    test "requires process_id" do
+      tool = CodingAgent.Tools.Process.tool([])
+
+      assert {:error, reason} = tool.execute.("call_1", %{"action" => "kill"}, nil, nil)
+      assert reason =~ "process_id is required"
+    end
+
+    test "defaults to sigterm when signal not specified" do
+      {:ok, process_id} = ProcessManager.exec(command: "sleep 60")
+
+      # Give it time to start
+      Elixir.Process.sleep(100)
+
+      tool = CodingAgent.Tools.Process.tool([])
+
+      result =
+        tool.execute.(
+          "call_1",
+          %{"action" => "kill", "process_id" => process_id},
+          nil,
+          nil
+        )
+
+      assert result.details.signal == "SIGTERM"
+
+      # Clean up
+      ProcessManager.kill(process_id, :sigkill)
+    end
   end
 
   describe "execute/4 clear action" do
@@ -324,15 +512,90 @@ defmodule CodingAgent.Tools.ProcessToolTest do
 
       assert reason =~ "not found"
     end
+
+    test "requires process_id" do
+      tool = CodingAgent.Tools.Process.tool([])
+
+      assert {:error, reason} = tool.execute.("call_1", %{"action" => "clear"}, nil, nil)
+      assert reason =~ "process_id is required"
+    end
   end
 
   describe "execute/4 with abort signal" do
-    test "returns cancelled when aborted" do
+    test "returns cancelled when aborted for list action" do
       tool = CodingAgent.Tools.Process.tool([])
       signal = AgentCore.AbortSignal.new()
       AgentCore.AbortSignal.abort(signal)
 
       result = tool.execute.("call_1", %{"action" => "list"}, signal, nil)
+
+      assert result.content != nil
+      text = result.content |> hd() |> Map.get(:text)
+      assert text =~ "cancelled"
+    end
+
+    test "returns cancelled when aborted for poll action" do
+      tool = CodingAgent.Tools.Process.tool([])
+      signal = AgentCore.AbortSignal.new()
+      AgentCore.AbortSignal.abort(signal)
+
+      result = tool.execute.("call_1", %{"action" => "poll", "process_id" => "test"}, signal, nil)
+
+      assert result.content != nil
+      text = result.content |> hd() |> Map.get(:text)
+      assert text =~ "cancelled"
+    end
+
+    test "returns cancelled when aborted for log action" do
+      tool = CodingAgent.Tools.Process.tool([])
+      signal = AgentCore.AbortSignal.new()
+      AgentCore.AbortSignal.abort(signal)
+
+      result = tool.execute.("call_1", %{"action" => "log", "process_id" => "test"}, signal, nil)
+
+      assert result.content != nil
+      text = result.content |> hd() |> Map.get(:text)
+      assert text =~ "cancelled"
+    end
+
+    test "returns cancelled when aborted for write action" do
+      tool = CodingAgent.Tools.Process.tool([])
+      signal = AgentCore.AbortSignal.new()
+      AgentCore.AbortSignal.abort(signal)
+
+      result =
+        tool.execute.(
+          "call_1",
+          %{"action" => "write", "process_id" => "test", "data" => "test"},
+          signal,
+          nil
+        )
+
+      assert result.content != nil
+      text = result.content |> hd() |> Map.get(:text)
+      assert text =~ "cancelled"
+    end
+
+    test "returns cancelled when aborted for kill action" do
+      tool = CodingAgent.Tools.Process.tool([])
+      signal = AgentCore.AbortSignal.new()
+      AgentCore.AbortSignal.abort(signal)
+
+      result =
+        tool.execute.("call_1", %{"action" => "kill", "process_id" => "test"}, signal, nil)
+
+      assert result.content != nil
+      text = result.content |> hd() |> Map.get(:text)
+      assert text =~ "cancelled"
+    end
+
+    test "returns cancelled when aborted for clear action" do
+      tool = CodingAgent.Tools.Process.tool([])
+      signal = AgentCore.AbortSignal.new()
+      AgentCore.AbortSignal.abort(signal)
+
+      result =
+        tool.execute.("call_1", %{"action" => "clear", "process_id" => "test"}, signal, nil)
 
       assert result.content != nil
       text = result.content |> hd() |> Map.get(:text)
@@ -361,6 +624,137 @@ defmodule CodingAgent.Tools.ProcessToolTest do
                )
 
       assert reason =~ "Unknown action"
+    end
+
+    test "returns error for nil action" do
+      tool = CodingAgent.Tools.Process.tool([])
+
+      assert {:error, reason} =
+               tool.execute.(
+                 "call_1",
+                 %{"action" => nil},
+                 nil,
+                 nil
+               )
+
+      assert reason =~ "Unknown action"
+    end
+
+    test "error messages include process_id for context" do
+      tool = CodingAgent.Tools.Process.tool([])
+
+      assert {:error, reason} =
+               tool.execute.(
+                 "call_1",
+                 %{"action" => "poll", "process_id" => "specific_id_123"},
+                 nil,
+                 nil
+               )
+
+      assert reason =~ "specific_id_123"
+    end
+  end
+
+  describe "tool struct properties" do
+    test "tool has correct name and label" do
+      tool = CodingAgent.Tools.Process.tool([])
+
+      assert tool.name == "process"
+      assert tool.label == "Manage Background Process"
+    end
+
+    test "tool has description" do
+      tool = CodingAgent.Tools.Process.tool([])
+
+      assert is_binary(tool.description)
+      assert tool.description =~ "process"
+    end
+
+    test "tool parameters schema is correct" do
+      tool = CodingAgent.Tools.Process.tool([])
+
+      assert tool.parameters["type"] == "object"
+      assert "action" in tool.parameters["required"]
+      assert is_map(tool.parameters["properties"])
+      assert "action" in Map.keys(tool.parameters["properties"])
+      assert "process_id" in Map.keys(tool.parameters["properties"])
+      assert "status" in Map.keys(tool.parameters["properties"])
+      assert "lines" in Map.keys(tool.parameters["properties"])
+      assert "data" in Map.keys(tool.parameters["properties"])
+      assert "signal" in Map.keys(tool.parameters["properties"])
+    end
+
+    test "action enum includes all valid actions" do
+      tool = CodingAgent.Tools.Process.tool([])
+
+      action_enum = tool.parameters["properties"]["action"]["enum"]
+      assert "list" in action_enum
+      assert "poll" in action_enum
+      assert "log" in action_enum
+      assert "write" in action_enum
+      assert "kill" in action_enum
+      assert "clear" in action_enum
+    end
+
+    test "signal enum includes valid signals" do
+      tool = CodingAgent.Tools.Process.tool([])
+
+      signal_enum = tool.parameters["properties"]["signal"]["enum"]
+      assert "sigterm" in signal_enum
+      assert "sigkill" in signal_enum
+    end
+
+    test "status enum includes valid statuses" do
+      tool = CodingAgent.Tools.Process.tool([])
+
+      status_enum = tool.parameters["properties"]["status"]["enum"]
+      assert "all" in status_enum
+      assert "running" in status_enum
+      assert "completed" in status_enum
+      assert "error" in status_enum
+      assert "killed" in status_enum
+      assert "lost" in status_enum
+    end
+  end
+
+  describe "result structure" do
+    test "list action returns proper AgentToolResult struct" do
+      tool = CodingAgent.Tools.Process.tool([])
+      result = tool.execute.("call_1", %{"action" => "list"}, nil, nil)
+
+      assert %AgentCore.Types.AgentToolResult{} = result
+      assert is_list(result.content)
+      assert result.content != []
+      assert is_map(result.details)
+      assert result.details.action == "list"
+    end
+
+    test "poll action returns proper AgentToolResult struct" do
+      {:ok, process_id} = ProcessManager.exec(command: "echo test")
+      Elixir.Process.sleep(200)
+
+      tool = CodingAgent.Tools.Process.tool([])
+      result = tool.execute.("call_1", %{"action" => "poll", "process_id" => process_id}, nil, nil)
+
+      assert %AgentCore.Types.AgentToolResult{} = result
+      assert is_list(result.content)
+      assert result.content != []
+      assert is_map(result.details)
+      assert result.details.action == "poll"
+    end
+
+    test "error results are properly formatted" do
+      tool = CodingAgent.Tools.Process.tool([])
+
+      assert {:error, reason} =
+               tool.execute.(
+                 "call_1",
+                 %{"action" => "poll", "process_id" => "nonexistent"},
+                 nil,
+                 nil
+               )
+
+      assert is_binary(reason)
     end
   end
 end

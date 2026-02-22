@@ -1,0 +1,79 @@
+{
+  "timestamp": "2026-02-22T05:05:22.912636+00:00",
+  "chat_id": -1003842984060,
+  "results": [
+    {
+      "test_id": "T23",
+      "name": "Multi-user mention",
+      "status": "passed",
+      "topic_id": 3072,
+      "duration_seconds": 60.04,
+      "error_message": null,
+      "evidence": {
+        "sent_ids": [
+          3074
+        ],
+        "received_ids": [
+          3077
+        ],
+        "sent_texts": [
+          "@lemonade_standbot What is 7 * 8? Answer with just the number."
+        ],
+        "received_texts": [
+          "56"
+        ],
+        "timestamps": {
+          "start": "2026-02-22T05:03:21.803151+00:00",
+          "end": "2026-02-22T05:04:21.843745+00:00"
+        },
+        "extra": {
+          "reply_count": "1",
+          "has_correct_answer": "True"
+        }
+      }
+    },
+    {
+      "test_id": "T24",
+      "name": "Reply-to-bot trigger",
+      "status": "passed",
+      "topic_id": 3073,
+      "duration_seconds": 121.11,
+      "error_message": null,
+      "evidence": {
+        "sent_ids": [
+          3075,
+          3078
+        ],
+        "received_ids": [
+          3076,
+          3079
+        ],
+        "sent_texts": [
+          "Say 'REPLY_TARGET_OK' and nothing else.",
+          "[REPLY-TO:3076] What is 3 + 4? Just give the number."
+        ],
+        "received_texts": [
+          "REPLY_TARGET_OK",
+          "7"
+        ],
+        "timestamps": {
+          "start": "2026-02-22T05:03:21.803431+00:00",
+          "end": "2026-02-22T05:05:22.911740+00:00"
+        },
+        "extra": {
+          "initial_reply_count": "1",
+          "followup_reply_count": "1",
+          "has_correct_answer": "True"
+        }
+      }
+    }
+  ],
+  "summary": {
+    "total": 2,
+    "passed": 2,
+    "partial": 0,
+    "failed": 0,
+    "error": 0,
+    "skipped": 0
+  }
+}

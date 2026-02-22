@@ -48,6 +48,14 @@ Convenience:
 - Keep docs metadata in `docs/catalog.exs` (`owner`, `last_reviewed`, `max_age_days`).
 - Run `mix lemon.quality` after docs edits or umbrella dependency changes.
 
+## Preferred Debug + Stress-Test Method
+- For gateway/chat debugging, the default approach is to run both sides of the conversation:
+  - Side A: run `lemon-gateway` locally with debug logging and inspect BEAM runtime state.
+  - Side B: use Telethon with real Telegram user credentials to send/reply as the user.
+- This is the highest-signal way to reproduce real delivery, scheduling, locking, and context issues.
+- Keep these probes scoped to a dedicated Telegram topic/thread to avoid cross-session noise.
+- Local reusable skill for this workflow: `.lemon/skill/telegram-gateway-debug-loop/SKILL.md`.
+
 ## Gateway Debugging Playbook
 - Bring up the gateway with debug logs:
   - `cd /Users/z80/dev/lemon`
@@ -65,7 +73,7 @@ Convenience:
   - Session run history: `LemonCore.Store.get_run_history(session_key, limit: n)`
 
 ## Telegram + Telethon Debug Loop
-- Credentials are in `~/.zeebot/api_keys/telegram.txt`:
+- Credentials are in `~/.zeebot/api_keys/telegram.txt` (under `~/.zeebot/api_keys/`):
   - `TELEGRAM_API_ID`
   - `TELEGRAM_API_HASH`
   - `TELEGRAM_SESSION_STRING`

@@ -641,7 +641,7 @@ defmodule AgentCore.CliRunners.CodexRunner do
   end
 
   defp maybe_add_auto_compact(args) do
-    args ++ ["-c", "model_auto_compact_token_limit=0.85"]
+    args ++ ["-c", "model_auto_compact_token_limit=170000"]
   end
 
   defp codex_auto_approve?(state) do
@@ -725,7 +725,7 @@ defmodule AgentCore.CliRunners.CodexRunner do
   defp normalize_codex_model(_), do: nil
 
   defp maybe_ensure_codexignore(cwd) when is_binary(cwd) do
-    module = CodingAgent.Project.Codexignore
+    module = Module.concat(["CodingAgent", "Project", "Codexignore"])
 
     with true <- Code.ensure_loaded?(module),
          true <- function_exported?(module, :ensure_codexignore, 1) do

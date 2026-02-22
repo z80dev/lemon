@@ -16,6 +16,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LEMON_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 SUBDOMAIN="${1:-lemon-voice}"
 
+# Load .env file if it exists
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+    source "$SCRIPT_DIR/.env"
+fi
+
 # Colors
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'

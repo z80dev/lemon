@@ -128,12 +128,46 @@ export LEMON_DOTENV_DIR="${LEMON_DOTENV_DIR:-$LAUNCH_CWD}"
 # (security error code 36: user interaction not allowed). Preloading the
 # master key into env before boot makes secrets resolution deterministic.
 if [[ -z "${LEMON_SECRETS_MASTER_KEY:-}" ]] && command -v security >/dev/null 2>&1; then
-  if MASTER_KEY_FROM_KEYCHAIN="$(security find-generic-password -s "Lemon Secrets" -a default -w 2>/dev/null)"; then
-    if [[ -n "$MASTER_KEY_FROM_KEYCHAIN" ]]; then
-      export LEMON_SECRETS_MASTER_KEY="$MASTER_KEY_FROM_KEYCHAIN"
-      echo "[lemon-gateway] Loaded secrets master key from keychain."
+  KEYCHAIN_CANDIDATES=()
+
+  append_keychain_candidate() {
+    local candidate="$1"
+    local existing=""
+
+    candidate="${candidate#"${candidate%%[![:space:]]*}"}"
+    candidate="${candidate%\"}"
+    candidate="${candidate#\"}"
+
+    if [[ -z "$candidate" || ! -f "$candidate" ]]; then
+      return
     fi
-  fi
+
+    for existing in "${KEYCHAIN_CANDIDATES[@]}"; do
+      if [[ "$existing" == "$candidate" ]]; then
+        return
+      fi
+    done
+
+    KEYCHAIN_CANDIDATES+=("$candidate")
+  }
+
+  append_keychain_candidate "$(security default-keychain -d user 2>/dev/null | head -n 1 || true)"
+
+  while IFS= read -r keychain_line; do
+    append_keychain_candidate "$keychain_line"
+  done < <(security list-keychains -d user 2>/dev/null || true)
+
+  append_keychain_candidate "$HOME/Library/Keychains/login.keychain-db"
+
+  for keychain_path in "${KEYCHAIN_CANDIDATES[@]}"; do
+    if MASTER_KEY_FROM_KEYCHAIN="$(security find-generic-password -s "Lemon Secrets" -a default -w "$keychain_path" 2>/dev/null)"; then
+      if [[ -n "$MASTER_KEY_FROM_KEYCHAIN" ]]; then
+        export LEMON_SECRETS_MASTER_KEY="$MASTER_KEY_FROM_KEYCHAIN"
+        echo "[lemon-gateway] Loaded secrets master key from keychain."
+        break
+      fi
+    fi
+  done
 fi
 
 mix deps.get
