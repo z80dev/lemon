@@ -1,3 +1,42 @@
+### 2026-02-22 - Pi/Oh-My-Pi Upstream Sync: New Bedrock Models + supports_xhigh
+**Work Area**: Feature Enhancement (Pi/Oh-My-Pi Sync)
+
+**Analysis**:
+- Checked Pi upstream (`~/dev/pi`) for new LLM models and providers
+- Checked Oh-My-Pi (`~/dev/oh-my-pi`) for hashline improvements, LSP tools, and streaming enhancements
+- Compared model registries and identified 18 new Bedrock models in Pi not yet in Lemon
+
+**Changes Made**:
+
+1. **Added 18 new Amazon Bedrock models** to `Ai.Models`
+   - **Google Gemma**: gemma-3-27b-it, gemma-3-4b-it
+   - **MiniMax**: minimax-m2, minimax-m2.1
+   - **Moonshot**: kimi-k2-thinking, kimi-k2.5
+   - **NVIDIA**: nemotron-nano-12b-v2, nemotron-nano-9b-v2
+   - **OpenAI GPT OSS**: gpt-oss-120b, gpt-oss-20b, safeguard-120b, safeguard-20b
+   - **Qwen**: qwen3-235b, qwen3-32b, qwen3-coder-30b, qwen3-coder-480b, qwen3-next-80b, qwen3-vl-235b
+   - **Writer**: palmyra-x4, palmyra-x5
+   - **ZAI**: glm-4.7, glm-4.7-flash
+
+2. **Added `supports_xhigh?/1` function** (ported from Pi's models.ts)
+   - Checks if a model supports xhigh thinking level
+   - Returns true for GPT-5.2/5.3 families and Anthropic Opus 4.6 models
+   - Added comprehensive tests with 8 test cases
+
+3. **Hashline streaming verification**
+   - Compared Oh-My-Pi's streaming implementations with Lemon's
+   - Lemon's `stream_hashlines_from_enumerable/2` is functionally equivalent
+   - No changes needed - implementation is up-to-date
+
+**Test Results**: All tests pass
+- models_test.exs: 107 tests, 0 failures
+- hashline_test.exs: 124 tests, 0 failures
+- Full suite: 0 new failures
+
+**Commit**: `1a96745e` - feat(models): port new Bedrock models from Pi upstream
+
+---
+
 # JANITOR.md - Automated Code Improvement Log
 
 This file tracks all automated improvements made by the Codex engine cron job.
@@ -24,6 +63,43 @@ Each entry records what was done, what worked, and what to focus on next.
 ---
 
 ## Log Entries
+
+### 2026-02-22 - Code Smell Cleanup: O(n²) Operations and Key Access Patterns
+**Work Area**: Refactoring
+
+**Analysis**:
+- Scanned Lemon codebase for code smells, tech debt, and anti-patterns
+- Found 123 instances of `++ [` patterns (many in non-loop contexts)
+- Found inconsistent atom/string key access in scheduler.ex
+- Identified O(n²) list append patterns in voice call session that could impact long-running calls
+
+**Refactoring Done**:
+
+1. **O(n²) list concatenation → O(n)** (`lemon_gateway/voice/call_session.ex`)
+   - `conversation_history`: Changed from `list ++ [item]` to `[item | list]` prepend pattern
+   - `response_queue`: Changed from `list ++ [item]` to `[item | list]` prepend pattern
+   - Updated `generate_llm_response/1` to reverse history for chronological order before sending to LLM
+   - Updated `speech_complete` to process queue FIFO from end (maintaining correct order)
+   - Net: O(1) append instead of O(n) for voice call operations
+
+2. **Inconsistent key access cleanup** (`lemon_gateway/scheduler.ex`)
+   - Extracted `map_get/2` helper for consistent atom/string key lookup
+   - Replaced `map.key || map[:key] || map["key"]` pattern with single helper call
+   - Applied to `last_engine` and `last_resume_token` lookups in auto-resume logic
+   - Net: cleaner, DRY key access pattern
+
+**Test Results**: All tests pass
+- lemon_gateway: 66 scheduler tests, 0 failures
+- lemon_gateway: 1 call_session test, 0 failures
+- Full suite: 0 new failures introduced
+
+**Files Changed**: 2 files across 1 app
+- `apps/lemon_gateway/lib/lemon_gateway/voice/call_session.ex` - O(n²) → O(n) list operations
+- `apps/lemon_gateway/lib/lemon_gateway/scheduler.ex` - map_get/2 helper, consistent key access
+
+**Commit**: `71a3850c` - refactor: Fix O(n²) list operations and inconsistent key access
+
+---
 
 ### 2026-02-22 - Test Expansion: Quality Modules and Mix Task Coverage
 **Work Area**: Test Expansion + Documentation
