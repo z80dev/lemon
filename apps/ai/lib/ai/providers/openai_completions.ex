@@ -519,7 +519,7 @@ defmodule Ai.Providers.OpenAICompletions do
 
   defp add_text_content(assistant_msg, text_blocks, provider)
        when provider in [:github_copilot, "github-copilot"] do
-    text = text_blocks |> Enum.map(& &1.text) |> Enum.join("") |> sanitize_surrogates()
+    text = text_blocks |> Enum.map_join("", & &1.text) |> sanitize_surrogates()
     Map.put(assistant_msg, "content", text)
   end
 
@@ -546,7 +546,7 @@ defmodule Ai.Providers.OpenAICompletions do
   end
 
   defp add_thinking_content(assistant_msg, thinking_blocks, %{requires_thinking_as_text: true}) do
-    thinking_text = thinking_blocks |> Enum.map(& &1.thinking) |> Enum.join("\n\n")
+    thinking_text = thinking_blocks |> Enum.map_join("\n\n", & &1.thinking)
     current_content = assistant_msg["content"]
     new_content = merge_thinking_with_content(current_content, thinking_text)
     Map.put(assistant_msg, "content", new_content)
@@ -556,7 +556,7 @@ defmodule Ai.Providers.OpenAICompletions do
     first_thinking = List.first(thinking_blocks)
 
     if first_thinking.thinking_signature && first_thinking.thinking_signature != "" do
-      thinking_text = thinking_blocks |> Enum.map(& &1.thinking) |> Enum.join("\n")
+      thinking_text = thinking_blocks |> Enum.map_join("\n", & &1.thinking)
       Map.put(assistant_msg, first_thinking.thinking_signature, thinking_text)
     else
       assistant_msg
@@ -645,8 +645,7 @@ defmodule Ai.Providers.OpenAICompletions do
     text_result =
       msg.content
       |> Enum.filter(&match?(%TextContent{}, &1))
-      |> Enum.map(& &1.text)
-      |> Enum.join("\n")
+      |> Enum.map_join("\n", & &1.text)
 
     has_images = Enum.any?(msg.content, &match?(%ImageContent{}, &1))
 

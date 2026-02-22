@@ -566,7 +566,7 @@ defmodule AgentCore.CliRunners.JsonlRunner do
         tmp_file = write_temp_stdin(stdin)
 
         # Build shell command that pipes temp file to the executable
-        escaped_args = Enum.map(args, &escape_shell_arg/1) |> Enum.join(" ")
+        escaped_args = Enum.map_join(args, " ", &escape_shell_arg/1)
 
         shell_command =
           "cat #{escape_shell_arg(tmp_file)} | #{escape_shell_arg(cmd_path)} #{escaped_args} 2> #{escape_shell_arg(stderr_path)}; rm -f #{escape_shell_arg(tmp_file)}"
@@ -588,7 +588,7 @@ defmodule AgentCore.CliRunners.JsonlRunner do
         # No stdin needed - still use shell wrapper to ensure proper stdout/stderr handling
         # and avoid TTY buffering issues. Important: redirect stdin from /dev/null to ensure
         # the subprocess gets EOF immediately (some CLIs like Claude wait for stdin to close)
-        escaped_args = Enum.map(args, &escape_shell_arg/1) |> Enum.join(" ")
+        escaped_args = Enum.map_join(args, " ", &escape_shell_arg/1)
 
         shell_command =
           "#{escape_shell_arg(cmd_path)} #{escaped_args} </dev/null 2> #{escape_shell_arg(stderr_path)}"

@@ -700,7 +700,7 @@ defmodule LemonGateway.ThreadWorker do
   # Keeps base job identity, concatenates prompt text, and carries latest user message metadata.
   defp merge_collect_jobs([first | _] = jobs) do
     last = List.last(jobs)
-    merged_prompt = jobs |> Enum.map(&(&1.prompt || "")) |> Enum.join("\n")
+    merged_prompt = jobs |> Enum.map_join("\n", &(&1.prompt || ""))
 
     %{
       first
