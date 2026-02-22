@@ -13,6 +13,7 @@ defmodule LemonCore.ApplicationTest do
   describe "application startup" do
     test "application is started" do
       assert {:ok, _} = Application.ensure_all_started(:lemon_core)
+
       assert Application.started_applications()
              |> Enum.any?(fn {app, _, _} -> app == :lemon_core end)
     end
@@ -68,14 +69,16 @@ defmodule LemonCore.ApplicationTest do
       assert Phoenix.PubSub.Supervisor in child_ids
       assert LemonCore.ConfigCache in child_ids
       assert LemonCore.Store in child_ids
+      assert LemonCore.ConfigReloader in child_ids
+      assert LemonCore.ConfigReloader.Watcher in child_ids
       assert LemonCore.Browser.LocalServer in child_ids
     end
 
-    test "supervisor has exactly 4 children" do
+    test "supervisor has exactly 6 children" do
       supervisor_pid = Process.whereis(LemonCore.Supervisor)
       children = Supervisor.which_children(supervisor_pid)
 
-      assert length(children) == 4
+      assert length(children) == 6
     end
 
     test "children include both workers and supervisors" do
@@ -108,6 +111,8 @@ defmodule LemonCore.ApplicationTest do
       # Others are workers
       assert {_, :worker} = child_map[LemonCore.ConfigCache]
       assert {_, :worker} = child_map[LemonCore.Store]
+      assert {_, :worker} = child_map[LemonCore.ConfigReloader]
+      assert {_, :worker} = child_map[LemonCore.ConfigReloader.Watcher]
       assert {_, :worker} = child_map[LemonCore.Browser.LocalServer]
     end
   end

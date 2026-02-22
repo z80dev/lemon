@@ -1084,7 +1084,15 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         :ok
 
       false ->
-        _ = send_system_message(state, chat_id, thread_id, user_msg_id, "File uploads are restricted.")
+        _ =
+          send_system_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            "File uploads are restricted."
+          )
+
         :ok
 
       _ ->
@@ -1094,7 +1102,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp validate_multi_file_dest(items, dest_rel) do
     if length(items) > 1 and not String.ends_with?(dest_rel, "/") do
-      {:error, "For multiple files, use a directory path ending with '/'. Example: /file put incoming/"}
+      {:error,
+       "For multiple files, use a directory path ending with '/'. Example: /file put incoming/"}
     else
       :ok
     end
@@ -2021,6 +2030,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     |> Enum.sort_by(& &1.started_at, :desc)
     |> Enum.reduce({[], MapSet.new()}, fn %{resume: r, started_at: ts}, {acc, seen} ->
       key = {r.engine, r.value}
+
       if MapSet.member?(seen, key) do
         {acc, seen}
       else
@@ -2096,7 +2106,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
         _ ->
           start_new_session(state, inbound, scope, session_key, project_result,
-            chat_id: chat_id, thread_id: thread_id, user_msg_id: user_msg_id)
+            chat_id: chat_id,
+            thread_id: thread_id,
+            user_msg_id: user_msg_id
+          )
       end
     end
   rescue
@@ -2121,10 +2134,21 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     _ = safe_delete_selected_resume(state, chat_id, thread_id)
     _ = safe_clear_thread_message_indices(state, chat_id, thread_id)
 
-    case submit_memory_reflection_before_new(state, inbound, scope, session_key, chat_id, thread_id, user_msg_id) do
+    case submit_memory_reflection_before_new(
+           state,
+           inbound,
+           scope,
+           session_key,
+           chat_id,
+           thread_id,
+           user_msg_id
+         ) do
       {:ok, run_id, state} when is_binary(run_id) ->
         maybe_subscribe_to_run(run_id)
-        msg = new_session_message(project_result, "Recording memories, then starting a new session…")
+
+        msg =
+          new_session_message(project_result, "Recording memories, then starting a new session…")
+
         _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
 
         pending = %{
@@ -2756,13 +2780,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp resolve_session_key(state, inbound, %ChatScope{} = scope, meta0) do
     meta = meta0 || %{}
-
-    explicit =
-      cond do
-        is_binary(meta[:session_key]) and meta[:session_key] != "" -> meta[:session_key]
-        is_binary(meta["session_key"]) and meta["session_key"] != "" -> meta["session_key"]
-        true -> nil
-      end
+    explicit = extract_explicit_session_key(meta)
 
     base_session_key = build_session_key(state, inbound, scope)
 
@@ -2797,16 +2815,27 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp resolve_session_key(_state, _inbound, _scope, meta0) do
     meta = meta0 || %{}
+    explicit = extract_explicit_session_key(meta)
 
-    explicit =
+    {explicit, false}
+  end
+
+  defp extract_explicit_session_key(meta) when is_map(meta) do
+    candidate =
       cond do
         is_binary(meta[:session_key]) and meta[:session_key] != "" -> meta[:session_key]
         is_binary(meta["session_key"]) and meta["session_key"] != "" -> meta["session_key"]
         true -> nil
       end
 
-    {explicit, false}
+    if is_binary(candidate) and SessionKey.valid?(candidate) do
+      candidate
+    else
+      nil
+    end
   end
+
+  defp extract_explicit_session_key(_), do: nil
 
   defp maybe_with_sub_id(session_key, sub_id)
        when is_binary(session_key) and session_key != "" and
@@ -2892,12 +2921,18 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         end
 
       true ->
-        Logger.warning("[Telegram] No getMe available and no config bot_id/bot_username; mention detection will be disabled")
+        Logger.warning(
+          "[Telegram] No getMe available and no config bot_id/bot_username; mention detection will be disabled"
+        )
+
         {bot_id, bot_username}
     end
   rescue
     error ->
-      Logger.error("[Telegram] resolve_bot_identity crashed: #{inspect(error)}; mention detection will be disabled")
+      Logger.error(
+        "[Telegram] resolve_bot_identity crashed: #{inspect(error)}; mention detection will be disabled"
+      )
+
       {bot_id, bot_username}
   end
 
@@ -3047,7 +3082,16 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       case arg do
         "" ->
           current = TriggerMode.resolve(account_id, chat_id, thread_id)
-          _ = send_system_message(state, chat_id, thread_id, user_msg_id, render_trigger_mode_status(current))
+
+          _ =
+            send_system_message(
+              state,
+              chat_id,
+              thread_id,
+              user_msg_id,
+              render_trigger_mode_status(current)
+            )
+
           state
 
         mode when mode in ~w(mentions all) ->
@@ -3057,7 +3101,15 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           apply_trigger_clear(ctx)
 
         _ ->
-          _ = send_system_message(state, chat_id, thread_id, user_msg_id, "Usage: /trigger [mentions|all|clear]")
+          _ =
+            send_system_message(
+              state,
+              chat_id,
+              thread_id,
+              user_msg_id,
+              "Usage: /trigger [mentions|all|clear]"
+            )
+
           state
       end
     end
@@ -3065,14 +3117,34 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     _ -> state
   end
 
-  defp apply_trigger_mode({state, chat_id, thread_id, user_msg_id, account_id, scope, inbound}, mode_atom, mode_str) do
+  defp apply_trigger_mode(
+         {state, chat_id, thread_id, user_msg_id, account_id, scope, inbound},
+         mode_atom,
+         mode_str
+       ) do
     with true <- trigger_change_allowed?(state, inbound, chat_id),
          :ok <- TriggerMode.set(scope, account_id, mode_atom) do
-      _ = send_system_message(state, chat_id, thread_id, user_msg_id, render_trigger_mode_set(mode_str, scope))
+      _ =
+        send_system_message(
+          state,
+          chat_id,
+          thread_id,
+          user_msg_id,
+          render_trigger_mode_set(mode_str, scope)
+        )
+
       state
     else
       false ->
-        _ = send_system_message(state, chat_id, thread_id, user_msg_id, "Trigger mode can only be changed by a group admin.")
+        _ =
+          send_system_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            "Trigger mode can only be changed by a group admin."
+          )
+
         state
 
       _ ->
@@ -3083,17 +3155,41 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp apply_trigger_clear({state, chat_id, thread_id, user_msg_id, account_id, _scope, inbound}) do
     cond do
       is_nil(thread_id) ->
-        _ = send_system_message(state, chat_id, thread_id, user_msg_id,
-          "No topic override to clear. Use /trigger all or /trigger mentions to set chat defaults.")
+        _ =
+          send_system_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            "No topic override to clear. Use /trigger all or /trigger mentions to set chat defaults."
+          )
+
         state
 
       trigger_change_allowed?(state, inbound, chat_id) ->
         :ok = TriggerMode.clear_topic(account_id, chat_id, thread_id)
-        _ = send_system_message(state, chat_id, thread_id, user_msg_id, "Cleared topic trigger override.")
+
+        _ =
+          send_system_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            "Cleared topic trigger override."
+          )
+
         state
 
       true ->
-        _ = send_system_message(state, chat_id, thread_id, user_msg_id, "Trigger mode can only be changed by a group admin.")
+        _ =
+          send_system_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            "Trigger mode can only be changed by a group admin."
+          )
+
         state
     end
   end

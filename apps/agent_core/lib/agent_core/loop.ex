@@ -291,6 +291,11 @@ defmodule AgentCore.Loop do
     Process.put(:agent_loop_start_time, System.monotonic_time())
     maybe_put_loop_abort_signal(signal)
 
+    Logger.info(
+      "AgentCore.Loop starting prompt_count=#{length(prompts)} message_count=#{length(context.messages)} " <>
+        "tool_count=#{length(context.tools)} model=#{get_model_id(config)}"
+    )
+
     LemonCore.Telemetry.emit(
       [:agent_core, :loop, :start],
       %{system_time: System.system_time()},
@@ -328,6 +333,11 @@ defmodule AgentCore.Loop do
     Process.put(:agent_loop_start_time, System.monotonic_time())
     maybe_put_loop_abort_signal(signal)
 
+    Logger.info(
+      "AgentCore.Loop continuing message_count=#{length(context.messages)} " <>
+        "tool_count=#{length(context.tools)} model=#{get_model_id(config)}"
+    )
+
     LemonCore.Telemetry.emit(
       [:agent_core, :loop, :start],
       %{system_time: System.system_time()},
@@ -355,6 +365,8 @@ defmodule AgentCore.Loop do
   defp run_loop(context, new_messages, config, signal, stream_fn, stream) do
     # Check for steering messages at start (user may have typed while waiting)
     pending_messages = get_steering_messages(config) || []
+
+    Logger.debug("AgentCore.Loop run_loop pending_steering=#{length(pending_messages)}")
 
     do_run_loop(context, new_messages, config, signal, stream_fn, stream, pending_messages, true)
   end
@@ -389,6 +401,8 @@ defmodule AgentCore.Loop do
       # Check for follow-up messages
       follow_up_messages = get_follow_up_messages(config) || []
 
+      Logger.debug("AgentCore.Loop do_run_loop continue_outer follow_up=#{length(follow_up_messages)}")
+
       if follow_up_messages != [] do
         # Set as pending so inner loop processes them
         do_run_loop(
@@ -409,6 +423,7 @@ defmodule AgentCore.Loop do
       end
     else
       # Inner loop signaled early exit (error/abort)
+      Logger.info("AgentCore.Loop early exit")
       emit_loop_end_telemetry(new_messages, config, :early_exit)
       :ok
     end
@@ -429,6 +444,7 @@ defmodule AgentCore.Loop do
        )
        when pending_messages == [] do
     # Exit condition: no more tool calls and no pending messages
+    Logger.debug("AgentCore.Loop do_inner_loop exit - no more tool calls or messages")
     {context, new_messages, pending_messages, true}
   end
 
@@ -449,6 +465,8 @@ defmodule AgentCore.Loop do
       EventStream.push(stream, {:turn_start})
     end
 
+    Logger.debug("AgentCore.Loop do_inner_loop turn first_turn=#{first_turn} pending=#{length(pending_messages)}")
+
     # Process pending messages (inject before next assistant response)
     {context, new_messages, _cleared_pending} =
       process_pending_messages(context, new_messages, pending_messages, stream)
@@ -460,6 +478,7 @@ defmodule AgentCore.Loop do
 
         case message.stop_reason do
           :aborted ->
+            Logger.info("AgentCore.Loop turn aborted")
             EventStream.push(stream, {:turn_end, message, []})
             EventStream.cancel(stream, :assistant_aborted)
             {context, new_messages, [], false}
@@ -486,6 +505,7 @@ defmodule AgentCore.Loop do
             {context, new_messages, [], false}
 
           _ ->
+            Logger.debug("AgentCore.Loop turn completed stop_reason=#{message.stop_reason}")
             # Check for tool calls
             tool_calls = get_tool_calls(message)
             has_more_tool_calls = tool_calls != []

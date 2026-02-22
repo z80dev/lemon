@@ -543,6 +543,13 @@ defmodule LemonControlPlane.Protocol.Schemas do
       }
     },
     "config.schema" => %{optional: %{}},
+    "config.reload" => %{
+      optional: %{
+        "sources" => :list,
+        "force" => :boolean,
+        "reason" => :string
+      }
+    },
     "secrets.status" => %{optional: %{}},
     "secrets.list" => %{
       optional: %{

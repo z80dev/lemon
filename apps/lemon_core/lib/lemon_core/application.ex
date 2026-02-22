@@ -8,6 +8,8 @@ defmodule LemonCore.Application do
   - Phoenix.PubSub - PubSub for inter-process communication
   - LemonCore.ConfigCache - Configuration caching service
   - LemonCore.Store - Key-value storage backend
+  - LemonCore.ConfigReloader - Runtime config reload orchestrator
+  - LemonCore.ConfigReloader.Watcher - File-system watcher for config changes
   - LemonCore.Browser.LocalServer - Local browser automation server
 
   The supervisor uses a :one_for_one strategy, meaning if a child process
@@ -43,6 +45,8 @@ defmodule LemonCore.Application do
       {Phoenix.PubSub, name: LemonCore.PubSub},
       {LemonCore.ConfigCache, config_cache_opts},
       LemonCore.Store,
+      LemonCore.ConfigReloader,
+      LemonCore.ConfigReloader.Watcher,
       LemonCore.Browser.LocalServer
     ]
 

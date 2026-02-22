@@ -18,7 +18,17 @@ defmodule CodingAgent.Tools.BashTest do
       assert tool.parameters["type"] == "object"
       assert tool.parameters["required"] == ["command"]
       assert "command" in Map.keys(tool.parameters["properties"])
+      assert "pty" in Map.keys(tool.parameters["properties"])
       assert is_function(tool.execute, 4)
+    end
+
+    test "pty parameter is optional boolean in schema" do
+      tool = Bash.tool("/tmp")
+
+      pty_schema = tool.parameters["properties"]["pty"]
+      assert pty_schema["type"] == "boolean"
+      assert is_binary(pty_schema["description"])
+      refute "pty" in tool.parameters["required"]
     end
 
     test "accepts optional opts parameter" do
@@ -791,6 +801,87 @@ defmodule CodingAgent.Tools.BashTest do
       # Carriage returns should be normalized
       assert text =~ "line1"
       assert text =~ "line2"
+    end
+  end
+
+  # ============================================================================
+  # PTY Mode Tests
+  # ============================================================================
+
+  describe "pty parameter" do
+    test "executes command with pty: true", %{tmp_dir: tmp_dir} do
+      result =
+        Bash.execute(
+          "call_1",
+          %{"command" => "echo pty_test", "pty" => true},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
+
+      assert %AgentToolResult{content: [%TextContent{text: text}]} = result
+      assert text =~ "pty_test"
+    end
+
+    test "executes command with pty: false (same as default)", %{tmp_dir: tmp_dir} do
+      result =
+        Bash.execute(
+          "call_1",
+          %{"command" => "echo no_pty", "pty" => false},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
+
+      assert %AgentToolResult{content: [%TextContent{text: text}]} = result
+      assert text =~ "no_pty"
+    end
+
+    test "defaults to non-pty mode when pty not specified", %{tmp_dir: tmp_dir} do
+      result =
+        Bash.execute(
+          "call_1",
+          %{"command" => "echo default_mode"},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
+
+      assert %AgentToolResult{content: [%TextContent{text: text}]} = result
+      assert text =~ "default_mode"
+    end
+
+    test "pty mode returns exit code 0 for successful command", %{tmp_dir: tmp_dir} do
+      result =
+        Bash.execute(
+          "call_1",
+          %{"command" => "true", "pty" => true},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
+
+      assert %AgentToolResult{details: details} = result
+      assert details.exit_code == 0
+    end
+
+    test "pty mode respects working directory", %{tmp_dir: tmp_dir} do
+      result =
+        Bash.execute(
+          "call_1",
+          %{"command" => "pwd", "pty" => true},
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
+
+      assert %AgentToolResult{content: [%TextContent{text: text}]} = result
+      assert text =~ tmp_dir
     end
   end
 end

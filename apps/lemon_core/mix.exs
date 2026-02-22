@@ -30,7 +30,8 @@ defmodule LemonCore.MixProject do
       {:uuid, "~> 1.1"},
       {:phoenix_pubsub, "~> 2.1"},
       {:telemetry, "~> 1.0"},
-      {:exqlite, "~> 0.34.0"}
+      {:exqlite, "~> 0.34.0"},
+      {:file_system, "~> 1.0", optional: true}
     ]
   end
 end

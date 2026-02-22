@@ -45,6 +45,7 @@ defmodule CodingAgent.BashExecutor do
     * `:signal` - Abort signal reference (check with `AbortSignal.aborted?/1`)
     * `:timeout` - Timeout in milliseconds, or `:infinity` for no timeout (default: #{@default_timeout})
     * `:max_bytes` - Maximum output bytes before truncation (default: #{@default_max_bytes})
+    * `:pty` - When `true`, run the command in a pseudo-terminal (default: `false`)
 
   ## Returns
 
@@ -59,6 +60,7 @@ defmodule CodingAgent.BashExecutor do
     signal = Keyword.get(opts, :signal)
     timeout = Keyword.get(opts, :timeout, @default_timeout)
     max_bytes = Keyword.get(opts, :max_bytes, @default_max_bytes)
+    use_pty = Keyword.get(opts, :pty, false)
 
     # Threshold for writing to temp file (2x max_bytes)
     temp_file_threshold = max_bytes * 2
@@ -67,17 +69,24 @@ defmodule CodingAgent.BashExecutor do
 
     command = wrap_command_with_cwd(command, cwd)
 
+    {spawn_path, spawn_args} =
+      if use_pty do
+        wrap_with_pty(shell_path, shell_args, command)
+      else
+        {shell_path, shell_args ++ [command]}
+      end
+
     port_opts = [
       :stream,
       :binary,
       :exit_status,
       :use_stdio,
       :stderr_to_stdout,
-      {:args, shell_args ++ [command]}
+      {:args, spawn_args}
     ]
 
     try do
-      port = Port.open({:spawn_executable, shell_path}, port_opts)
+      port = Port.open({:spawn_executable, spawn_path}, port_opts)
       os_pid = get_os_pid(port)
 
       # Set up timeout (optional). `Process.send_after/3` requires an integer timeout.
@@ -213,6 +222,33 @@ defmodule CodingAgent.BashExecutor do
       Port.close(state.port)
     catch
       :error, _ -> :ok
+    end
+  end
+
+  # Wrap a command to run inside a pseudo-terminal using the `script` utility.
+  # On macOS, `script -q /dev/null <shell> -c <cmd>` allocates a PTY.
+  # On Linux, `script -qc <cmd> /dev/null` does the same.
+  defp wrap_with_pty(shell_path, shell_args, command) do
+    script_path = System.find_executable("script")
+
+    if script_path do
+      case :os.type() do
+        {:unix, :darwin} ->
+          # macOS: script -q /dev/null <shell> -c <command>
+          {script_path, ["-q", "/dev/null", shell_path] ++ shell_args ++ [command]}
+
+        {:unix, _} ->
+          # Linux: script -qc '<shell> -c <command>' /dev/null
+          inner = Enum.join([shell_path] ++ shell_args ++ [shell_escape(command)], " ")
+          {script_path, ["-qc", inner, "/dev/null"]}
+
+        _ ->
+          # Fallback: no PTY wrapping available
+          {shell_path, shell_args ++ [command]}
+      end
+    else
+      # script not available, fall back to normal execution
+      {shell_path, shell_args ++ [command]}
     end
   end
 

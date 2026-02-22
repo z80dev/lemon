@@ -7,6 +7,7 @@ defmodule CodingAgent.LaneQueue do
   """
 
   use GenServer
+  require Logger
 
   @type lane :: atom() | {:session, term()}
 
@@ -40,6 +41,8 @@ defmodule CodingAgent.LaneQueue do
     caps = opts |> Keyword.fetch!(:caps) |> normalize_caps()
     task_sup = Keyword.fetch!(opts, :task_supervisor)
 
+    Logger.info("LaneQueue initialized caps=#{inspect(caps)}")
+
     {:ok,
      %{
        caps: caps,
@@ -54,6 +57,12 @@ defmodule CodingAgent.LaneQueue do
   @impl true
   def handle_call({:enqueue, lane, fun, meta}, from, st) do
     job_id = make_ref()
+    cap = cap_for_lane(st, lane)
+    ls = lane_state(st, lane)
+    queue_len = :queue.len(ls.q)
+
+    Logger.debug("LaneQueue enqueue lane=#{inspect(lane)} job_id=#{inspect(job_id)} cap=#{cap} queued=#{queue_len} running=#{ls.running}")
+
     st = put_in(st.jobs[job_id], %{from: from, lane: lane, fun: fun, meta: meta, task_ref: nil})
 
     st =
@@ -66,19 +75,23 @@ defmodule CodingAgent.LaneQueue do
 
   @impl true
   def handle_call(:status, _from, st) do
+    Logger.debug("LaneQueue status jobs=#{map_size(st.jobs)} lanes=#{map_size(st.lanes)}")
     {:reply, %{caps: st.caps, lanes: st.lanes, jobs_count: map_size(st.jobs)}, st}
   end
 
   @impl true
   def handle_info({ref, {:ok, result}}, st) do
+    Logger.debug("LaneQueue job completed successfully ref=#{inspect(ref)}")
     {:noreply, complete_job(ref, {:ok, result}, st)}
   end
 
   def handle_info({ref, {:error, reason}}, st) do
+    Logger.warning("LaneQueue job failed ref=#{inspect(ref)} reason=#{inspect(reason)}")
     {:noreply, complete_job(ref, {:error, reason}, st)}
   end
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, st) do
+    Logger.warning("LaneQueue job process down ref=#{inspect(ref)} reason=#{inspect(reason)}")
     {:noreply, complete_job(ref, {:error, reason}, st)}
   end
 
@@ -123,14 +136,22 @@ defmodule CodingAgent.LaneQueue do
         {{:value, job_id}, q2} = :queue.out(ls.q)
         job = st.jobs[job_id]
 
+        Logger.debug("LaneQueue starting job lane=#{inspect(lane)} job_id=#{inspect(job_id)} running=#{ls.running + 1}/#{cap}")
+
         task =
           Task.Supervisor.async_nolink(st.task_sup, fn ->
             try do
-              {:ok, job.fun.()}
+              result = job.fun.()
+              Logger.debug("LaneQueue job function completed job_id=#{inspect(job_id)}")
+              {:ok, result}
             rescue
-              e -> {:error, {e, __STACKTRACE__}}
+              e ->
+                Logger.error("LaneQueue job function exception job_id=#{inspect(job_id)} error=#{inspect(e)}")
+                {:error, {e, __STACKTRACE__}}
             catch
-              kind, err -> {:error, {kind, err}}
+              kind, err ->
+                Logger.error("LaneQueue job function caught error job_id=#{inspect(job_id)} kind=#{inspect(kind)} error=#{inspect(err)}")
+                {:error, {kind, err}}
             end
           end)
 
@@ -153,12 +174,14 @@ defmodule CodingAgent.LaneQueue do
     # O(1) lookup using task_ref_index
     case Map.get(st.task_ref_index, task_ref) do
       nil ->
+        Logger.warning("LaneQueue complete_job unknown task_ref=#{inspect(task_ref)}")
         st
 
       job_id ->
         job = st.jobs[job_id]
 
         if job do
+          Logger.debug("LaneQueue completing job job_id=#{inspect(job_id)} lane=#{inspect(job.lane)} reply=#{elem(reply, 0)}")
           GenServer.reply(job.from, reply)
 
           lane = job.lane

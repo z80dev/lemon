@@ -5,6 +5,8 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   Wraps the existing LemonChannels.Telegram.API for message delivery.
   """
 
+  require Logger
+
   alias LemonChannels.OutboundPayload
   alias LemonChannels.Telegram.Formatter
   @telegram_media_group_max_items 10
@@ -19,6 +21,11 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   """
   @spec deliver(OutboundPayload.t()) :: {:ok, term()} | {:error, term()}
   def deliver(%OutboundPayload{kind: :text} = payload) do
+    Logger.debug(
+      "Telegram outbound delivering text: chat_id=#{payload.peer.id} " <>
+        "text_length=#{String.length(payload.content || "")}"
+    )
+
     chat_id = String.to_integer(payload.peer.id)
     {text, md_opts} = format_text(payload.content, telegram_use_markdown())
     opts = build_send_opts(payload, md_opts)
@@ -28,13 +35,24 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     if Code.ensure_loaded?(api_mod) do
       with token when is_binary(token) and token != "" <- token do
         case api_mod.send_message(token, chat_id, text, opts, nil) do
-          {:ok, result} -> {:ok, result}
-          {:error, reason} -> {:error, reason}
+          {:ok, result} ->
+            Logger.debug("Telegram outbound text sent successfully: chat_id=#{chat_id}")
+            {:ok, result}
+
+          {:error, reason} ->
+            Logger.warning(
+              "Telegram outbound text failed: chat_id=#{chat_id} reason=#{inspect(reason)}"
+            )
+
+            {:error, reason}
         end
       else
-        _ -> {:error, :telegram_not_configured}
+        _ ->
+          Logger.error("Telegram outbound text failed: no bot token configured")
+          {:error, :telegram_not_configured}
       end
     else
+      Logger.error("Telegram outbound text failed: API module not available")
       {:error, :telegram_api_not_available}
     end
   end
@@ -42,6 +60,10 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   def deliver(
         %OutboundPayload{kind: :edit, content: %{message_id: message_id, text: text}} = payload
       ) do
+    Logger.debug(
+      "Telegram outbound editing message: chat_id=#{payload.peer.id} message_id=#{message_id}"
+    )
+
     chat_id = String.to_integer(payload.peer.id)
     msg_id = parse_message_id(message_id)
     {formatted_text, md_opts} = format_text(text, telegram_use_markdown())
@@ -52,18 +74,37 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     if Code.ensure_loaded?(api_mod) do
       with token when is_binary(token) and token != "" <- token do
         case api_mod.edit_message_text(token, chat_id, msg_id, formatted_text, md_opts) do
-          {:ok, result} -> {:ok, result}
-          {:error, reason} -> {:error, reason}
+          {:ok, result} ->
+            Logger.debug(
+              "Telegram outbound edit successful: chat_id=#{chat_id} message_id=#{msg_id}"
+            )
+
+            {:ok, result}
+
+          {:error, reason} ->
+            Logger.warning(
+              "Telegram outbound edit failed: chat_id=#{chat_id} message_id=#{msg_id} " <>
+                "reason=#{inspect(reason)}"
+            )
+
+            {:error, reason}
         end
       else
-        _ -> {:error, :telegram_not_configured}
+        _ ->
+          Logger.error("Telegram outbound edit failed: no bot token configured")
+          {:error, :telegram_not_configured}
       end
     else
+      Logger.error("Telegram outbound edit failed: API module not available")
       {:error, :telegram_api_not_available}
     end
   end
 
   def deliver(%OutboundPayload{kind: :delete, content: %{message_id: message_id}} = payload) do
+    Logger.debug(
+      "Telegram outbound deleting message: chat_id=#{payload.peer.id} message_id=#{message_id}"
+    )
+
     chat_id = String.to_integer(payload.peer.id)
     msg_id = parse_message_id(message_id)
     {token, api_mod} = telegram_config()
@@ -72,6 +113,10 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
       with token when is_binary(token) and token != "" <- token do
         case api_mod.delete_message(token, chat_id, msg_id) do
           {:ok, result} ->
+            Logger.debug(
+              "Telegram outbound delete successful: chat_id=#{chat_id} message_id=#{msg_id}"
+            )
+
             {:ok, result}
 
           # Telegram deleteMessage is effectively idempotent for our purposes. If the progress
@@ -79,23 +124,43 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
           # "message to delete not found". Treat as success so the Outbox won't retry.
           {:error, {:http_error, 400, body}} when is_binary(body) ->
             if telegram_delete_not_found?(body) do
+              Logger.debug(
+                "Telegram outbound delete message already deleted: chat_id=#{chat_id} " <>
+                  "message_id=#{msg_id}"
+              )
+
               {:ok, :already_deleted}
             else
+              Logger.warning(
+                "Telegram outbound delete failed: chat_id=#{chat_id} message_id=#{msg_id} " <>
+                  "reason=400_bad_request"
+              )
+
               {:error, {:http_error, 400, body}}
             end
 
           {:error, reason} ->
+            Logger.warning(
+              "Telegram outbound delete failed: chat_id=#{chat_id} message_id=#{msg_id} " <>
+                "reason=#{inspect(reason)}"
+            )
+
             {:error, reason}
         end
       else
-        _ -> {:error, :telegram_not_configured}
+        _ ->
+          Logger.error("Telegram outbound delete failed: no bot token configured")
+          {:error, :telegram_not_configured}
       end
     else
+      Logger.error("Telegram outbound delete failed: API module not available")
       {:error, :telegram_api_not_available}
     end
   end
 
   def deliver(%OutboundPayload{kind: :file, content: content} = payload) do
+    Logger.debug("Telegram outbound delivering file: chat_id=#{payload.peer.id}")
+
     chat_id = String.to_integer(payload.peer.id)
     {token, api_mod} = telegram_config()
 
@@ -103,19 +168,44 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
       if Code.ensure_loaded?(api_mod) do
         with token when is_binary(token) and token != "" <- token do
           opts = build_send_opts(payload, nil)
-          send_normalized_file(api_mod, token, chat_id, normalized_content, opts)
+
+          file_count = length(normalized_content.files)
+          Logger.debug("Telegram outbound sending #{file_count} file(s): chat_id=#{chat_id}")
+
+          result = send_normalized_file(api_mod, token, chat_id, normalized_content, opts)
+
+          case result do
+            {:ok, _} ->
+              Logger.debug("Telegram outbound file sent successfully: chat_id=#{chat_id}")
+
+            {:error, reason} ->
+              Logger.warning(
+                "Telegram outbound file failed: chat_id=#{chat_id} reason=#{inspect(reason)}"
+              )
+          end
+
+          result
         else
-          _ -> {:error, :telegram_not_configured}
+          _ ->
+            Logger.error("Telegram outbound file failed: no bot token configured")
+            {:error, :telegram_not_configured}
         end
       else
+        Logger.error("Telegram outbound file failed: API module not available")
         {:error, :telegram_api_not_available}
       end
     else
-      {:error, reason} -> {:error, reason}
+      {:error, reason} ->
+        Logger.warning(
+          "Telegram outbound file normalization failed: chat_id=#{chat_id} reason=#{inspect(reason)}"
+        )
+
+        {:error, reason}
     end
   end
 
   def deliver(%OutboundPayload{kind: kind}) do
+    Logger.error("Telegram outbound unsupported payload kind: #{inspect(kind)}")
     {:error, {:unsupported_kind, kind}}
   end
 
@@ -370,10 +460,18 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
       {:error, reason} ->
         case retry_decision(reason, rate_limit_attempts, transient_attempts) do
           {:rate_limit, wait_ms} ->
+            Logger.debug(
+              "Telegram outbound rate limit retry #{rate_limit_attempts + 1}: waiting #{wait_ms}ms"
+            )
+
             maybe_sleep(wait_ms)
             with_retry(fun, rate_limit_attempts + 1, transient_attempts)
 
           {:transient, wait_ms} ->
+            Logger.debug(
+              "Telegram outbound transient retry #{transient_attempts + 1}: waiting #{wait_ms}ms"
+            )
+
             maybe_sleep(wait_ms)
             with_retry(fun, rate_limit_attempts, transient_attempts + 1)
 

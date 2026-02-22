@@ -395,4 +395,61 @@ defmodule CodingAgent.BashExecutorTest do
       assert result.full_output_path == nil
     end
   end
+
+  describe "pty option" do
+    test "executes command with pty: true" do
+      {:ok, result} = BashExecutor.execute("echo pty_hello", "/tmp", pty: true)
+      assert %Result{} = result
+      assert result.output =~ "pty_hello"
+      assert result.exit_code == 0
+      assert result.cancelled == false
+    end
+
+    test "executes command with pty: false" do
+      {:ok, result} = BashExecutor.execute("echo no_pty", "/tmp", pty: false)
+      assert %Result{} = result
+      assert result.output =~ "no_pty"
+      assert result.exit_code == 0
+    end
+
+    test "pty defaults to false when not specified" do
+      {:ok, result} = BashExecutor.execute("echo default", "/tmp")
+      assert result.output =~ "default"
+      assert result.exit_code == 0
+    end
+
+    test "pty mode respects working directory" do
+      {:ok, result} = BashExecutor.execute("pwd", "/tmp", pty: true)
+      assert result.output =~ "/tmp"
+    end
+
+    test "pty mode captures non-zero exit code" do
+      {:ok, result} = BashExecutor.execute("exit 42", "/tmp", pty: true)
+      assert result.cancelled == false
+    end
+
+    test "pty mode works with streaming callback" do
+      chunks = :ets.new(:chunks, [:bag, :public])
+
+      callback = fn chunk ->
+        :ets.insert(chunks, {:chunk, chunk})
+      end
+
+      {:ok, result} =
+        BashExecutor.execute("echo pty_stream", "/tmp", pty: true, on_chunk: callback)
+
+      assert result.output =~ "pty_stream"
+
+      all_chunks = :ets.lookup(chunks, :chunk) |> Enum.map(fn {:chunk, c} -> c end)
+      combined = Enum.join(all_chunks)
+      assert combined =~ "pty_stream"
+
+      :ets.delete(chunks)
+    end
+
+    test "pty mode handles timeout" do
+      {:ok, result} = BashExecutor.execute("sleep 10", "/tmp", pty: true, timeout: 200)
+      assert result.cancelled == true
+    end
+  end
 end

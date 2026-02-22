@@ -35,7 +35,12 @@ defmodule CodingAgent.Tools.Bash do
       parameters: %{
         "type" => "object",
         "properties" => %{
-          "command" => %{"type" => "string", "description" => "The bash command to execute"}
+          "command" => %{"type" => "string", "description" => "The bash command to execute"},
+          "pty" => %{
+            "type" => "boolean",
+            "description" =>
+              "Run in PTY mode when the command needs a real terminal (e.g. sudo, ssh, top, less); default: false"
+          }
         },
         "required" => ["command"]
       },
@@ -81,6 +86,7 @@ defmodule CodingAgent.Tools.Bash do
 
   defp do_execute(params, signal, on_update, cwd, opts) do
     command = Map.fetch!(params, "command")
+    use_pty = Map.get(params, "pty", false)
 
     # Set up streaming callback if on_update is provided
     {accumulator_pid, streaming_callback} = build_streaming_callback(on_update)
@@ -92,7 +98,8 @@ defmodule CodingAgent.Tools.Bash do
       [
         on_chunk: streaming_callback,
         signal: signal,
-        timeout: timeout_ms
+        timeout: timeout_ms,
+        pty: use_pty
       ]
 
     try do

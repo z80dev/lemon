@@ -3,6 +3,8 @@ defmodule LemonChannels.Adapters.Telegram.Inbound do
   Inbound message normalization for Telegram.
   """
 
+  require Logger
+
   alias LemonCore.InboundMessage
 
   @doc """
@@ -10,27 +12,47 @@ defmodule LemonChannels.Adapters.Telegram.Inbound do
   """
   @spec normalize(term()) :: {:ok, InboundMessage.t()} | {:error, term()}
   def normalize(%{"message" => message} = update) do
+    Logger.debug("Telegram inbound normalizing message: message_id=#{message["message_id"]}")
     normalize_message(message, update)
   end
 
   def normalize(%{"edited_message" => message} = update) do
+    Logger.debug(
+      "Telegram inbound normalizing edited_message: message_id=#{message["message_id"]}"
+    )
+
     normalize_message(message, update)
   end
 
   def normalize(%{"channel_post" => message} = update) do
+    Logger.debug("Telegram inbound normalizing channel_post: message_id=#{message["message_id"]}")
     normalize_message(message, update)
   end
 
-  def normalize(_) do
+  def normalize(update) when is_map(update) do
+    Logger.warning("Telegram inbound unsupported update type: #{inspect(Map.keys(update))}")
+    {:error, :unsupported_update_type}
+  end
+
+  def normalize(update) do
+    Logger.warning("Telegram inbound unsupported non-map update: #{inspect(update)}")
     {:error, :unsupported_update_type}
   end
 
   defp normalize_message(message, update) do
     if forum_topic_created_message?(message) do
+      Logger.debug("Telegram inbound skipping forum_topic_created message")
       {:error, :forum_topic_created}
     else
       chat = message["chat"]
       from = message["from"]
+      chat_id = chat["id"]
+      message_id = message["message_id"]
+
+      Logger.debug(
+        "Telegram inbound parsing message: chat_id=#{chat_id} message_id=#{message_id} " <>
+          "chat_type=#{chat["type"]}"
+      )
 
       peer_kind =
         case chat["type"] do
@@ -59,6 +81,13 @@ defmodule LemonChannels.Adapters.Telegram.Inbound do
       voice = message["voice"] || %{}
       document = message["document"] || %{}
       photo = select_photo(message["photo"])
+
+      routing_hint = "telegram:default:#{peer_kind}:#{chat["id"]}"
+
+      Logger.debug(
+        "Telegram inbound routing hint generated: routing_hint=#{routing_hint} " <>
+          "peer_kind=#{peer_kind} sender_id=#{if(sender, do: sender.id, else: "nil")}"
+      )
 
       inbound = %InboundMessage{
         channel_id: "telegram",
@@ -113,6 +142,12 @@ defmodule LemonChannels.Adapters.Telegram.Inbound do
             end
         }
       }
+
+      Logger.debug(
+        "Telegram inbound normalized successfully: message_id=#{message_id} " <>
+          "text_length=#{String.length(text || "")} has_voice=#{voice != %{}} " <>
+          "has_document=#{is_map(document) and map_size(document) > 0}"
+      )
 
       {:ok, inbound}
     end

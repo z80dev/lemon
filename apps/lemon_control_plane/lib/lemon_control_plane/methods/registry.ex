@@ -126,6 +126,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.ConfigSet,
     LemonControlPlane.Methods.ConfigPatch,
     LemonControlPlane.Methods.ConfigSchema,
+    LemonControlPlane.Methods.ConfigReload,
     # Secrets
     LemonControlPlane.Methods.SecretsStatus,
     LemonControlPlane.Methods.SecretsList,

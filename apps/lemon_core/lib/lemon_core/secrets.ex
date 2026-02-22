@@ -59,6 +59,7 @@ defmodule LemonCore.Secrets do
       }
 
       :ok = Store.put(@table, {owner, name}, record)
+      emit_secret_event(owner, name, :set)
       {:ok, metadata(owner, name, record)}
     else
       {:error, :missing_master_key} -> {:error, :missing_master_key}
@@ -128,6 +129,7 @@ defmodule LemonCore.Secrets do
     with {:ok, name} <- normalize_name(name),
          {:ok, owner} <- normalize_owner(opts) do
       :ok = Store.delete(@table, {owner, name})
+      emit_secret_event(owner, name, :delete)
       :ok
     end
   end
@@ -311,4 +313,19 @@ defmodule LemonCore.Secrets do
   end
 
   defp normalize_optional_integer(_), do: nil
+
+  defp emit_secret_event(owner, name, action) do
+    if Code.ensure_loaded?(LemonCore.Bus) do
+      event =
+        LemonCore.Event.new(:secret_changed, %{
+          owner: owner,
+          name: name,
+          action: action
+        })
+
+      LemonCore.Bus.broadcast("system", event)
+    end
+  rescue
+    _ -> :ok
+  end
 end

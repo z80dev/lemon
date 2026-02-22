@@ -111,6 +111,26 @@ defmodule CodingAgent.TaskStore do
   end
 
   @doc """
+  List all tasks with optional status filter.
+  """
+  @spec list(atom()) :: [{task_id(), map()}]
+  def list(status_filter \\ :all) do
+    ensure_table()
+
+    :ets.foldl(
+      fn {task_id, record, _events}, acc ->
+        if status_filter == :all or Map.get(record, :status) == status_filter do
+          [{task_id, record} | acc]
+        else
+          acc
+        end
+      end,
+      [],
+      @table
+    )
+  end
+
+  @doc """
   Clear all tasks (tests).
   """
   @spec clear() :: :ok
