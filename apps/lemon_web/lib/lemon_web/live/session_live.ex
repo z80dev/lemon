@@ -3,7 +3,7 @@ defmodule LemonWeb.SessionLive do
 
   use LemonWeb, :live_view
 
-  alias LemonCore.{Bus, SessionKey}
+  alias LemonCore.{Bus, MapHelpers, SessionKey}
   alias LemonWeb.Live.Components.{FileUploadComponent, MessageComponent}
 
   @max_messages 250
@@ -465,11 +465,7 @@ defmodule LemonWeb.SessionLive do
     |> Enum.any?(fn entry -> not Map.get(entry, :done?, false) end)
   end
 
-  defp read(map, key) when is_map(map) and is_atom(key) do
-    Map.get(map, key) || Map.get(map, Atom.to_string(key))
-  end
-
-  defp read(_map, _key), do: nil
+  defp read(map, key), do: MapHelpers.get_key(map, key)
 
   defp format_error(error) when is_binary(error), do: error
   defp format_error(error) when is_atom(error), do: Atom.to_string(error)

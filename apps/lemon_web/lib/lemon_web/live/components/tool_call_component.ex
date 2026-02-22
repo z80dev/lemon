@@ -3,6 +3,8 @@ defmodule LemonWeb.Live.Components.ToolCallComponent do
 
   use Phoenix.Component
 
+  alias LemonCore.MapHelpers
+
   attr(:event, :map, required: true)
 
   def tool_call(assigns) do
@@ -40,11 +42,7 @@ defmodule LemonWeb.Live.Components.ToolCallComponent do
     """
   end
 
-  defp read(map, key) when is_map(map) and is_atom(key) do
-    Map.get(map, key) || Map.get(map, Atom.to_string(key))
-  end
-
-  defp read(_map, _key), do: nil
+  defp read(map, key), do: MapHelpers.get_key(map, key)
 
   defp format_payload(nil), do: nil
   defp format_payload(value) when is_binary(value), do: value

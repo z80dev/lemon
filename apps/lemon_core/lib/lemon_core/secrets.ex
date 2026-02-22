@@ -6,8 +6,9 @@ defmodule LemonCore.Secrets do
   """
 
   alias LemonCore.Clock
-  alias LemonCore.Store
+  alias LemonCore.MapHelpers
   alias LemonCore.Secrets.{Crypto, MasterKey}
+  alias LemonCore.Store
 
   @table :secrets_v1
   @default_owner "default"
@@ -264,7 +265,7 @@ defmodule LemonCore.Secrets do
   end
 
   defp get_field(map, key) when is_map(map) do
-    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+    MapHelpers.get_key(map, key)
   end
 
   defp put_field(map, key, value) when is_map(map) do

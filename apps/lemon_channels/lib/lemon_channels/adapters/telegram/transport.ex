@@ -14,6 +14,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   alias LemonChannels.Telegram.TransportShared
   alias LemonChannels.Types.ChatScope
   alias LemonChannels.Types.ResumeToken
+  alias LemonCore.MapHelpers
   alias LemonCore.SessionKey
   alias LemonCore.Store, as: CoreStore
   alias LemonChannels.Adapters.Telegram.Inbound
@@ -581,11 +582,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     normalize_blank(value) || normalize_blank(map_get(existing, key))
   end
 
-  defp map_get(map, key) when is_map(map) and is_atom(key) do
-    Map.get(map, key) || Map.get(map, Atom.to_string(key))
-  end
-
-  defp map_get(_map, _key), do: nil
+  defp map_get(map, key), do: MapHelpers.get_key(map, key)
 
   defp handle_inbound_message(state, inbound) do
     text = inbound.message.text || ""
