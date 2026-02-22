@@ -1,3 +1,35 @@
+### 2026-02-22 - Janitor Continuation: Task 1/2/3 Review on f3e5f269 + Validation Fix
+**Work Area**: Integration Review / Validation / Bug Fix
+
+**Scope Reviewed**:
+- Task 1 (`4ff5b1850cfe8b04`): Pi/Oh-My-Pi Sync
+- Task 2 (`910584ee9f51265d`): Test Expansion
+- Task 3 (`5202723bba5e081e`): Refactoring
+
+**Task Review Findings (commit range `f3e5f269..425ab4d7`)**:
+- Task 1 (Pi/Oh-My-Pi Sync): No code changes landed in this range for sync work; upstream docs-only update did not introduce integration conflicts.
+- Task 2 (Test Expansion): Confirmed merged test/docs changes:
+  - `apps/ai/lib/ai/providers/text_sanitizer.ex` now includes a proper `@moduledoc` (reviewed).
+  - Added `apps/ai/test/ai/providers/text_sanitizer_test.exs`.
+  - `apps/ai/lib/ai/providers/http_trace.ex` includes `@moduledoc`.
+  - Added `apps/ai/test/ai/providers/http_trace_test.exs` and removed `apps/ai/test/providers/http_trace_test.exs`.
+  - Added tool coverage in `apps/coding_agent/test/coding_agent/tools/todoread_test.exs`, `apps/coding_agent/test/coding_agent/tools/todowrite_test.exs`, and `apps/coding_agent/test/coding_agent/tools/process_test.exs`.
+- Task 3 (Refactoring): No direct refactoring commit from this task landed in the reviewed range.
+
+**Validation**:
+- `mix compile --warnings-as-errors`: pass
+- `mix test`: pass (umbrella run, exit code 0)
+
+**Continuation Fix Applied**:
+- `apps/lemon_control_plane/lib/lemon_control_plane/event_bridge.ex`
+  - Added `catch :exit` fallback in `dispatch_event/4` so `GenServer.call/3` exits from fanout dispatch degrade to inline dispatch instead of failing the caller/test.
+
+**Files Updated in This Continuation**:
+- `apps/lemon_control_plane/lib/lemon_control_plane/event_bridge.ex`
+- `JANITOR.md`
+
+---
+
 ### 2026-02-22 - Janitor Run: Test Expansion & Documentation (Coding Agent Tools + AI Providers)
 **Work Area**: Test Expansion + Documentation
 
