@@ -8,7 +8,7 @@ defmodule LemonGateway.ThreadWorkerTest do
   alias LemonGateway.Event.Completed
 
   # A slow engine that allows us to observe queueing behavior
-  defmodule SlowEngine do
+  defmodule LemonGateway.ThreadWorkerTest.SlowEngine do
     @behaviour LemonGateway.Engine
 
     alias LemonGateway.Types.{Job, ResumeToken}
@@ -203,7 +203,7 @@ defmodule LemonGateway.ThreadWorkerTest do
 
     Application.put_env(:lemon_gateway, :engines, [
       LemonGateway.Engines.Echo,
-      SlowEngine,
+      LemonGateway.ThreadWorkerTest.SlowEngine,
       CancellableEngine,
       SteerableEngine
     ])

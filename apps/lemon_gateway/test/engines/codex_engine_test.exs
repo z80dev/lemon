@@ -218,14 +218,14 @@ defmodule LemonGateway.Engines.CodexEngineTest do
       pid = spawn(fn -> receive do: (:stop -> :ok) end)
 
       # Create a mock runner module for testing
-      defmodule MockCodexRunner do
+      defmodule LemonGateway.Engines.CodexEngineTest.MockCodexRunner do
         def cancel(pid, _reason) do
           send(pid, :stop)
           :ok
         end
       end
 
-      ctx = %{runner_pid: pid, task_pid: nil, runner_module: MockCodexRunner}
+      ctx = %{runner_pid: pid, task_pid: nil, runner_module: LemonGateway.Engines.CodexEngineTest.MockCodexRunner}
       assert :ok = CliAdapter.cancel(ctx)
     end
 

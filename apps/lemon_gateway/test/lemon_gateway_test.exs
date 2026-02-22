@@ -19,7 +19,7 @@ defmodule LemonGatewayTest do
     :ok
   end
 
-  defmodule CrashEngine do
+  defmodule LemonGatewayTest.CrashEngine do
     @behaviour LemonGateway.Engine
 
     alias LemonGateway.Types.{Job, ResumeToken}
@@ -136,7 +136,7 @@ defmodule LemonGatewayTest do
     def cancel(_ctx), do: :ok
   end
 
-  defmodule StreamingEngine do
+  defmodule LemonGatewayTest.StreamingEngine do
     @moduledoc "Test engine that emits multiple action events to test streaming edits"
     @behaviour LemonGateway.Engine
 
@@ -367,10 +367,10 @@ defmodule LemonGatewayTest do
 
     Application.put_env(:lemon_gateway, :engines, [
       LemonGateway.Engines.Echo,
-      CrashEngine,
+      LemonGatewayTest.CrashEngine,
       ErrorEngine,
       ActionEngine,
-      StreamingEngine
+      LemonGatewayTest.StreamingEngine
     ])
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)

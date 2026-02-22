@@ -6,7 +6,7 @@ defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
   alias LemonGateway.TestSupport.MockTelegramAPI
   alias LemonGateway.Types.{Job, ResumeToken}
 
-  defmodule StreamingEngine do
+  defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest.StreamingEngine do
     @behaviour LemonGateway.Engine
 
     alias LemonGateway.Event
@@ -265,7 +265,7 @@ defmodule LemonGateway.Telegram.StreamingAndChunkingIntegrationTest do
   defp reply_to_from_opts(_), do: nil
 
   test "streaming deltas update the answer message (progress reaction is set on user message)" do
-    start_system!(StreamingEngine)
+    start_system!(LemonGateway.Telegram.StreamingAndChunkingIntegrationTest.StreamingEngine)
 
     chat_id = 31_001
     user_msg_id = 11

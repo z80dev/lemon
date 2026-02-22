@@ -1,7 +1,7 @@
 defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
   use ExUnit.Case, async: false
 
-  defmodule TestRouter do
+  defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.TestRouter do
     def handle_inbound(msg) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
         send(pid, {:inbound, msg})
@@ -11,7 +11,7 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
     end
   end
 
-  defmodule MockAPI do
+  defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.MockAPI do
     @updates_key {__MODULE__, :updates}
     @sent_key {__MODULE__, :sent}
 
@@ -66,10 +66,10 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
   end
 
   setup do
-    :persistent_term.put({TestRouter, :pid}, self())
+    :persistent_term.put({LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.TestRouter, :pid}, self())
     :persistent_term.put({TestTranscriber, :pid}, self())
-    MockAPI.register_sent(self())
-    LemonCore.RouterBridge.configure(router: TestRouter)
+    LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.MockAPI.register_sent(self())
+    LemonCore.RouterBridge.configure(router: LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.TestRouter)
 
     on_exit(fn ->
       if pid = Process.whereis(LemonChannels.Adapters.Telegram.Transport) do
@@ -78,10 +78,10 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
         end
       end
 
-      :persistent_term.erase({TestRouter, :pid})
+      :persistent_term.erase({LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.TestRouter, :pid})
       :persistent_term.erase({TestTranscriber, :pid})
-      :persistent_term.erase({MockAPI, :sent})
-      :persistent_term.erase({MockAPI, :updates})
+      :persistent_term.erase({LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.MockAPI, :sent})
+      :persistent_term.erase({LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.MockAPI, :updates})
     end)
 
     :ok
@@ -106,13 +106,13 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
   end
 
   test "transcribes voice and routes transcript" do
-    MockAPI.set_updates([voice_update()])
+    LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.MockAPI.set_updates([voice_update()])
 
     {:ok, _pid} =
       LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
           bot_token: "token",
-          api_mod: MockAPI,
+          api_mod: LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.MockAPI,
           poll_interval_ms: 10,
           debounce_ms: 10,
           voice_transcription: true,
@@ -131,13 +131,13 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
   end
 
   test "voice disabled replies and skips routing" do
-    MockAPI.set_updates([voice_update()])
+    LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.MockAPI.set_updates([voice_update()])
 
     {:ok, _pid} =
       LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
           bot_token: "token",
-          api_mod: MockAPI,
+          api_mod: LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.MockAPI,
           poll_interval_ms: 10,
           debounce_ms: 10,
           voice_transcription: false,

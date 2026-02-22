@@ -1,7 +1,7 @@
 defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
   use ExUnit.Case, async: false
 
-  defmodule MockAPI do
+  defmodule LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI do
     @updates_key {__MODULE__, :updates}
     @sent_key {__MODULE__, :sent}
 
@@ -58,7 +58,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
   end
 
   setup do
-    MockAPI.register_sent(self())
+    LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.register_sent(self())
 
     on_exit(fn ->
       if pid = Process.whereis(LemonChannels.Adapters.Telegram.Transport) do
@@ -75,8 +75,8 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
         end
       end
 
-      :persistent_term.erase({MockAPI, :sent})
-      :persistent_term.erase({MockAPI, :updates})
+      :persistent_term.erase({LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI, :sent})
+      :persistent_term.erase({LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI, :updates})
     end)
 
     :ok
@@ -161,13 +161,13 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     root = fresh_root!("lemon-file-put")
     bind_project!(chat_id, root)
 
-    MockAPI.set_updates([document_update(chat_id, "/file put incoming/example.txt")])
+    LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.set_updates([document_update(chat_id, "/file put incoming/example.txt")])
 
     {:ok, _pid} =
       LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
           bot_token: "token",
-          api_mod: MockAPI,
+          api_mod: LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI,
           poll_interval_ms: 10,
           files: %{
             enabled: true,
@@ -195,13 +195,13 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
       _ = File.rm(Path.join(root, rel))
     end)
 
-    MockAPI.set_updates([document_update(chat_id, "/file put #{rel}")])
+    LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.set_updates([document_update(chat_id, "/file put #{rel}")])
 
     {:ok, _pid} =
       LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
           bot_token: "token",
-          api_mod: MockAPI,
+          api_mod: LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI,
           poll_interval_ms: 10,
           files: %{enabled: true, auto_put: false, uploads_dir: "incoming"}
         }
@@ -219,7 +219,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
     File.write!(Path.join(root, "out.txt"), "hello")
 
-    MockAPI.set_updates([
+    LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.set_updates([
       %{
         "update_id" => 1,
         "message" => %{
@@ -236,7 +236,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
       LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
           bot_token: "token",
-          api_mod: MockAPI,
+          api_mod: LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI,
           poll_interval_ms: 10,
           files: %{enabled: true}
         }
@@ -261,7 +261,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
       _ = File.rm(full)
     end)
 
-    MockAPI.set_updates([
+    LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.set_updates([
       %{
         "update_id" => 2,
         "message" => %{
@@ -278,7 +278,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
       LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
           bot_token: "token",
-          api_mod: MockAPI,
+          api_mod: LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI,
           poll_interval_ms: 10,
           files: %{enabled: true}
         }
@@ -294,13 +294,13 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     root = fresh_root!("lemon-auto-put")
     bind_project!(chat_id, root)
 
-    MockAPI.set_updates([document_update(chat_id, nil)])
+    LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.set_updates([document_update(chat_id, nil)])
 
     {:ok, _pid} =
       LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
           bot_token: "token",
-          api_mod: MockAPI,
+          api_mod: LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI,
           poll_interval_ms: 10,
           files: %{enabled: true, auto_put: true, uploads_dir: "incoming"}
         }
@@ -318,7 +318,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
     mg = "mg-1"
 
-    MockAPI.set_updates([
+    LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.set_updates([
       document_update_media_group(chat_id, mg, "a.txt"),
       document_update_media_group(chat_id, mg, "b.txt")
     ])
@@ -327,7 +327,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
       LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
           bot_token: "token",
-          api_mod: MockAPI,
+          api_mod: LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI,
           poll_interval_ms: 10,
           files: %{
             enabled: true,
@@ -351,7 +351,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
     mg = "mg-2"
 
-    MockAPI.set_updates([
+    LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI.set_updates([
       document_update_media_group(chat_id, mg, "c.txt", "/file put incoming/"),
       document_update_media_group(chat_id, mg, "d.txt")
     ])
@@ -360,7 +360,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
       LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
           bot_token: "token",
-          api_mod: MockAPI,
+          api_mod: LemonChannels.Adapters.Telegram.FileTransferTest.MockAPI,
           poll_interval_ms: 10,
           files: %{
             enabled: true,

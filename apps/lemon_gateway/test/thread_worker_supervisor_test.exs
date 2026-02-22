@@ -25,7 +25,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
   # Test Engine
   # ============================================================================
 
-  defmodule TestEngine do
+  defmodule LemonGateway.ThreadWorkerSupervisorTest.TestEngine do
     @behaviour LemonGateway.Engine
 
     alias LemonGateway.Types.{Job, ResumeToken}
@@ -92,7 +92,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
     })
 
     Application.put_env(:lemon_gateway, :engines, [
-      TestEngine,
+      LemonGateway.ThreadWorkerSupervisorTest.TestEngine,
       LemonGateway.Engines.Echo
     ])
 

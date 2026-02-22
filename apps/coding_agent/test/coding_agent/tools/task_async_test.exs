@@ -6,7 +6,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
   alias CodingAgent.RunGraph
   alias LemonCore.RunRequest
 
-  defmodule StubRunOrchestrator do
+  defmodule CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator do
     use Agent
 
     def start_link(_opts) do
@@ -30,7 +30,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
     end
   end
 
-  defmodule SessionSpy do
+  defmodule CodingAgent.Tools.TaskAsyncTest.SessionSpy do
     def follow_up(pid, text) do
       send(pid, {:session_follow_up, text})
       :ok
@@ -38,8 +38,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
   end
 
   setup do
-    start_supervised!(StubRunOrchestrator)
-    StubRunOrchestrator.configure(self())
+    start_supervised!(CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator)
+    CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator.configure(self())
 
     # Clear stores before each test
     try do
@@ -77,11 +77,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "completed"}
             }
           end,
-          session_module: SessionSpy,
+          session_module: CodingAgent.Tools.TaskAsyncTest.SessionSpy,
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: StubRunOrchestrator
+          run_orchestrator: CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
         )
 
       assert %AgentCore.Types.AgentToolResult{} = result
@@ -117,11 +117,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "completed"}
             }
           end,
-          session_module: SessionSpy,
+          session_module: CodingAgent.Tools.TaskAsyncTest.SessionSpy,
           session_pid: dead_pid,
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: StubRunOrchestrator
+          run_orchestrator: CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
         )
 
       assert %AgentCore.Types.AgentToolResult{} = result
@@ -153,11 +153,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "completed"}
             }
           end,
-          session_module: SessionSpy,
+          session_module: CodingAgent.Tools.TaskAsyncTest.SessionSpy,
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: StubRunOrchestrator
+          run_orchestrator: CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
         )
 
       refute_receive {:session_follow_up, _text}, 200
@@ -733,11 +733,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "completed"}
             }
           end,
-          session_module: SessionSpy,
+          session_module: CodingAgent.Tools.TaskAsyncTest.SessionSpy,
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: StubRunOrchestrator
+          run_orchestrator: CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
         )
 
       task_id = result.details.task_id
@@ -767,11 +767,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_override: fn _on_update, _signal ->
             {:error, "connection refused"}
           end,
-          session_module: SessionSpy,
+          session_module: CodingAgent.Tools.TaskAsyncTest.SessionSpy,
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: StubRunOrchestrator
+          run_orchestrator: CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
         )
 
       task_id = result.details.task_id
@@ -802,11 +802,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "completed"}
             }
           end,
-          session_module: SessionSpy,
+          session_module: CodingAgent.Tools.TaskAsyncTest.SessionSpy,
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: StubRunOrchestrator
+          run_orchestrator: CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
         )
 
       task_id = result.details.task_id
@@ -837,11 +837,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "error", error: "timeout"}
             }
           end,
-          session_module: SessionSpy,
+          session_module: CodingAgent.Tools.TaskAsyncTest.SessionSpy,
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: StubRunOrchestrator
+          run_orchestrator: CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
         )
 
       task_id = result.details.task_id
@@ -893,7 +893,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: StubRunOrchestrator
+          run_orchestrator: CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
         )
 
       assert %AgentCore.Types.AgentToolResult{} = result
@@ -926,7 +926,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: StubRunOrchestrator
+          run_orchestrator: CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
         )
 
       assert %AgentCore.Types.AgentToolResult{} = result
@@ -955,11 +955,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "completed"}
             }
           end,
-          session_module: SessionSpy,
+          session_module: CodingAgent.Tools.TaskAsyncTest.SessionSpy,
           session_pid: nil,
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: StubRunOrchestrator
+          run_orchestrator: CodingAgent.Tools.TaskAsyncTest.StubRunOrchestrator
         )
 
       assert %AgentCore.Types.AgentToolResult{} = result
@@ -1048,7 +1048,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "completed"}
             }
           end,
-          session_module: SessionSpy,
+          session_module: CodingAgent.Tools.TaskAsyncTest.SessionSpy,
           session_pid: dead_pid,
           session_key: "agent:unknown_agent:main",
           agent_id: "unknown_agent",

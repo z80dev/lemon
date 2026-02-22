@@ -3,7 +3,7 @@ defmodule LemonCore.RouterBridgeTest do
 
   alias LemonCore.{RouterBridge, RunRequest}
 
-  defmodule TestRunOrchestrator do
+  defmodule LemonCore.RouterBridgeTest.TestRunOrchestrator do
     @moduledoc false
 
     def submit(params) do
@@ -12,7 +12,7 @@ defmodule LemonCore.RouterBridgeTest do
     end
   end
 
-  defmodule TestRouter do
+  defmodule LemonCore.RouterBridgeTest.TestRouter do
     @moduledoc false
 
     def abort(session_key, reason) do
@@ -48,7 +48,7 @@ defmodule LemonCore.RouterBridgeTest do
 
   describe "submit_run/1" do
     test "forwards RunRequest params to orchestrator" do
-      :ok = RouterBridge.configure(run_orchestrator: TestRunOrchestrator)
+      :ok = RouterBridge.configure(run_orchestrator: LemonCore.RouterBridgeTest.TestRunOrchestrator)
 
       request =
         RunRequest.new(%{
@@ -70,7 +70,7 @@ defmodule LemonCore.RouterBridgeTest do
     end
 
     test "accepts RunRequest struct directly" do
-      :ok = RouterBridge.configure(run_orchestrator: TestRunOrchestrator)
+      :ok = RouterBridge.configure(run_orchestrator: LemonCore.RouterBridgeTest.TestRunOrchestrator)
 
       request =
         %RunRequest{
@@ -87,7 +87,7 @@ defmodule LemonCore.RouterBridgeTest do
     end
 
     test "returns unavailable when no orchestrator is configured" do
-      :ok = RouterBridge.configure(router: TestRouter)
+      :ok = RouterBridge.configure(router: LemonCore.RouterBridgeTest.TestRouter)
 
       request =
         %RunRequest{
@@ -103,28 +103,28 @@ defmodule LemonCore.RouterBridgeTest do
 
   describe "abort_session/2" do
     test "delegates to router abort when configured" do
-      :ok = RouterBridge.configure(router: TestRouter)
+      :ok = RouterBridge.configure(router: LemonCore.RouterBridgeTest.TestRouter)
 
       assert :ok = RouterBridge.abort_session("agent:bridge:main", :new_session)
       assert_receive {:aborted, "agent:bridge:main", :new_session}
     end
 
     test "returns unavailable when no router is configured" do
-      :ok = RouterBridge.configure(run_orchestrator: TestRunOrchestrator)
+      :ok = RouterBridge.configure(run_orchestrator: LemonCore.RouterBridgeTest.TestRunOrchestrator)
       assert {:error, :unavailable} = RouterBridge.abort_session("agent:x:main")
     end
   end
 
   describe "abort_run/2" do
     test "delegates to router abort_run when configured" do
-      :ok = RouterBridge.configure(router: TestRouter)
+      :ok = RouterBridge.configure(router: LemonCore.RouterBridgeTest.TestRouter)
 
       assert :ok = RouterBridge.abort_run("run-123", :user_requested)
       assert_receive {:run_aborted, "run-123", :user_requested}
     end
 
     test "returns unavailable when no router is configured" do
-      :ok = RouterBridge.configure(run_orchestrator: TestRunOrchestrator)
+      :ok = RouterBridge.configure(run_orchestrator: LemonCore.RouterBridgeTest.TestRunOrchestrator)
       assert {:error, :unavailable} = RouterBridge.abort_run("run-x")
     end
   end
@@ -133,22 +133,22 @@ defmodule LemonCore.RouterBridgeTest do
     test "configure_guarded/1 rejects conflicting non-nil overrides" do
       :ok =
         RouterBridge.configure(
-          run_orchestrator: TestRunOrchestrator,
-          router: TestRouter
+          run_orchestrator: LemonCore.RouterBridgeTest.TestRunOrchestrator,
+          router: LemonCore.RouterBridgeTest.TestRouter
         )
 
-      assert {:error, {:already_configured, :run_orchestrator, TestRunOrchestrator, AlternativeRunOrchestrator}} =
+      assert {:error, {:already_configured, :run_orchestrator, LemonCore.RouterBridgeTest.TestRunOrchestrator, AlternativeRunOrchestrator}} =
                RouterBridge.configure_guarded(run_orchestrator: AlternativeRunOrchestrator)
     end
 
     test "merge mode preserves unspecified keys" do
       :ok =
         RouterBridge.configure(
-          run_orchestrator: TestRunOrchestrator,
-          router: TestRouter
+          run_orchestrator: LemonCore.RouterBridgeTest.TestRunOrchestrator,
+          router: LemonCore.RouterBridgeTest.TestRouter
         )
 
-      :ok = RouterBridge.configure([router: TestRouter], mode: :merge)
+      :ok = RouterBridge.configure([router: LemonCore.RouterBridgeTest.TestRouter], mode: :merge)
 
       request =
         %RunRequest{

@@ -891,7 +891,7 @@ defmodule LemonGateway.EngineLockTest do
   # Integration Tests (existing tests using full application)
   # ============================================================================
 
-  defmodule SlowEngine do
+  defmodule LemonGateway.EngineLockTest.SlowEngine do
     @behaviour LemonGateway.Engine
 
     alias LemonGateway.Types.{Job, ResumeToken}
@@ -935,7 +935,7 @@ defmodule LemonGateway.EngineLockTest do
     def cancel(_ctx), do: :ok
   end
 
-  defmodule CrashEngine do
+  defmodule LemonGateway.EngineLockTest.CrashEngine do
     @behaviour LemonGateway.Engine
 
     alias LemonGateway.Types.{Job, ResumeToken}
@@ -987,7 +987,7 @@ defmodule LemonGateway.EngineLockTest do
 
     Application.put_env(:lemon_gateway, :engines, [
       LemonGateway.Engines.Echo,
-      SlowEngine
+      LemonGateway.EngineLockTest.SlowEngine
     ])
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
@@ -1146,8 +1146,8 @@ defmodule LemonGateway.EngineLockTest do
 
     Application.put_env(:lemon_gateway, :engines, [
       LemonGateway.Engines.Echo,
-      SlowEngine,
-      CrashEngine
+      LemonGateway.EngineLockTest.SlowEngine,
+      LemonGateway.EngineLockTest.CrashEngine
     ])
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
@@ -1192,7 +1192,7 @@ defmodule LemonGateway.EngineLockTest do
 
     Application.put_env(:lemon_gateway, :engines, [
       LemonGateway.Engines.Echo,
-      SlowEngine
+      LemonGateway.EngineLockTest.SlowEngine
     ])
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)

@@ -4,7 +4,7 @@ defmodule LemonChannels.Telegram.DeliveryTest do
   alias LemonChannels.OutboundPayload
   alias LemonChannels.Telegram.Delivery
 
-  defmodule TestTelegramPlugin do
+  defmodule LemonChannels.Telegram.DeliveryTest.TestTelegramPlugin do
     def id, do: "telegram"
 
     def meta do
@@ -26,14 +26,14 @@ defmodule LemonChannels.Telegram.DeliveryTest do
 
   setup do
     {:ok, _} = Application.ensure_all_started(:lemon_channels)
-    :persistent_term.put({TestTelegramPlugin, :notify_pid}, self())
+    :persistent_term.put({LemonChannels.Telegram.DeliveryTest.TestTelegramPlugin, :notify_pid}, self())
 
     existing = LemonChannels.Registry.get_plugin("telegram")
     _ = LemonChannels.Registry.unregister("telegram")
-    :ok = LemonChannels.Registry.register(TestTelegramPlugin)
+    :ok = LemonChannels.Registry.register(LemonChannels.Telegram.DeliveryTest.TestTelegramPlugin)
 
     on_exit(fn ->
-      :persistent_term.erase({TestTelegramPlugin, :notify_pid})
+      :persistent_term.erase({LemonChannels.Telegram.DeliveryTest.TestTelegramPlugin, :notify_pid})
 
       if is_pid(Process.whereis(LemonChannels.Registry)) do
         _ = LemonChannels.Registry.unregister("telegram")

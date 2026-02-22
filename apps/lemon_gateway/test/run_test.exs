@@ -23,7 +23,7 @@ defmodule LemonGateway.RunTest do
   # ============================================================================
 
   # A basic engine for simple tests
-  defmodule TestEngine do
+  defmodule LemonGateway.RunTest.TestEngine do
     @behaviour LemonGateway.Engine
 
     alias LemonGateway.Types.{Job, ResumeToken}
@@ -245,7 +245,7 @@ defmodule LemonGateway.RunTest do
   end
 
   # An engine that emits deltas for streaming tests
-  defmodule StreamingEngine do
+  defmodule LemonGateway.RunTest.StreamingEngine do
     @behaviour LemonGateway.Engine
 
     alias LemonGateway.Types.{Job, ResumeToken}
@@ -384,12 +384,12 @@ defmodule LemonGateway.RunTest do
     })
 
     Application.put_env(:lemon_gateway, :engines, [
-      TestEngine,
+      LemonGateway.RunTest.TestEngine,
       ControllableEngine,
       FailingEngine,
       SteerableTestEngine,
       SteerFailEngine,
-      StreamingEngine,
+      LemonGateway.RunTest.StreamingEngine,
       LemonGateway.Engines.Echo
     ])
 
@@ -1036,12 +1036,12 @@ defmodule LemonGateway.RunTest do
       })
 
       Application.put_env(:lemon_gateway, :engines, [
-        TestEngine,
+        LemonGateway.RunTest.TestEngine,
         ControllableEngine,
         FailingEngine,
         SteerableTestEngine,
         SteerFailEngine,
-        StreamingEngine,
+        LemonGateway.RunTest.StreamingEngine,
         LemonGateway.Engines.Echo
       ])
 
@@ -1168,12 +1168,12 @@ defmodule LemonGateway.RunTest do
       })
 
       Application.put_env(:lemon_gateway, :engines, [
-        TestEngine,
+        LemonGateway.RunTest.TestEngine,
         ControllableEngine,
         FailingEngine,
         SteerableTestEngine,
         SteerFailEngine,
-        StreamingEngine,
+        LemonGateway.RunTest.StreamingEngine,
         LemonGateway.Engines.Echo
       ])
 
@@ -1698,12 +1698,12 @@ defmodule LemonGateway.RunTest do
       })
 
       Application.put_env(:lemon_gateway, :engines, [
-        TestEngine,
+        LemonGateway.RunTest.TestEngine,
         ControllableEngine,
         FailingEngine,
         SteerableTestEngine,
         SteerFailEngine,
-        StreamingEngine,
+        LemonGateway.RunTest.StreamingEngine,
         LemonGateway.Engines.Echo
       ])
 
@@ -2172,12 +2172,12 @@ defmodule LemonGateway.RunTest do
       })
 
       Application.put_env(:lemon_gateway, :engines, [
-        TestEngine,
+        LemonGateway.RunTest.TestEngine,
         ControllableEngine,
         FailingEngine,
         SteerableTestEngine,
         SteerFailEngine,
-        StreamingEngine,
+        LemonGateway.RunTest.StreamingEngine,
         LemonGateway.Engines.Echo
       ])
 
@@ -2370,12 +2370,12 @@ defmodule LemonGateway.RunTest do
       })
 
       Application.put_env(:lemon_gateway, :engines, [
-        TestEngine,
+        LemonGateway.RunTest.TestEngine,
         ControllableEngine,
         FailingEngine,
         SteerableTestEngine,
         SteerFailEngine,
-        StreamingEngine,
+        LemonGateway.RunTest.StreamingEngine,
         LemonGateway.Engines.Echo
       ])
 

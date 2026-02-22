@@ -4,7 +4,7 @@ defmodule LemonGateway.SchedulerTest do
   alias LemonGateway.Scheduler
   alias LemonGateway.Types.{ChatScope, Job, ResumeToken}
 
-  defmodule SlowEngine do
+  defmodule LemonGateway.SchedulerTest.SlowEngine do
     @behaviour LemonGateway.Engine
 
     alias LemonGateway.Event
@@ -676,7 +676,7 @@ defmodule LemonGateway.SchedulerTest do
       })
 
       Application.put_env(:lemon_gateway, :engines, [
-        SlowEngine,
+        LemonGateway.SchedulerTest.SlowEngine,
         LemonGateway.Engines.Echo
       ])
 
@@ -992,7 +992,7 @@ defmodule LemonGateway.SchedulerTest do
       })
 
       Application.put_env(:lemon_gateway, :engines, [
-        SlowEngine,
+        LemonGateway.SchedulerTest.SlowEngine,
         LemonGateway.Engines.Echo
       ])
 
@@ -1023,7 +1023,7 @@ defmodule LemonGateway.SchedulerTest do
       session_key = "session_#{System.unique_integer([:positive])}"
 
       resume = %ResumeToken{
-        engine: SlowEngine.id(),
+        engine: LemonGateway.SchedulerTest.SlowEngine.id(),
         value: "resume_#{System.unique_integer([:positive])}"
       }
 
@@ -1031,7 +1031,7 @@ defmodule LemonGateway.SchedulerTest do
         session_key: session_key,
         prompt: "test",
         resume: resume,
-        engine_id: SlowEngine.id(),
+        engine_id: LemonGateway.SchedulerTest.SlowEngine.id(),
         meta: %{delay_ms: 200}
       }
 

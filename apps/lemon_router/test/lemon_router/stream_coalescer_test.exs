@@ -6,7 +6,7 @@ defmodule LemonRouter.StreamCoalescerTest do
   alias LemonChannels.Types.ResumeToken
   alias LemonRouter.StreamCoalescer
 
-  defmodule TestTelegramPlugin do
+  defmodule LemonRouter.StreamCoalescerTest.TestTelegramPlugin do
     @moduledoc false
 
     def id, do: "telegram"
@@ -28,7 +28,7 @@ defmodule LemonRouter.StreamCoalescerTest do
     end
   end
 
-  defmodule TestOutboxAPI do
+  defmodule LemonRouter.StreamCoalescerTest.TestOutboxAPI do
     @moduledoc false
     use Agent
 
@@ -112,14 +112,14 @@ defmodule LemonRouter.StreamCoalescerTest do
       GenServer.stop(pid)
     end
 
-    :persistent_term.put({TestTelegramPlugin, :test_pid}, self())
+    :persistent_term.put({LemonRouter.StreamCoalescerTest.TestTelegramPlugin, :test_pid}, self())
 
     existing = LemonChannels.Registry.get_plugin("telegram")
     _ = LemonChannels.Registry.unregister("telegram")
-    :ok = LemonChannels.Registry.register(TestTelegramPlugin)
+    :ok = LemonChannels.Registry.register(LemonRouter.StreamCoalescerTest.TestTelegramPlugin)
 
     on_exit(fn ->
-      _ = :persistent_term.erase({TestTelegramPlugin, :test_pid})
+      _ = :persistent_term.erase({LemonRouter.StreamCoalescerTest.TestTelegramPlugin, :test_pid})
       # on_exit callbacks can run after the test process has terminated; avoid
       # failing tests on cleanup if the registry is already gone.
       if is_pid(Process.whereis(LemonChannels.Registry)) do

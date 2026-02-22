@@ -2,7 +2,7 @@ defmodule LemonChannels.StartupTest do
   use ExUnit.Case, async: false
 
   # Minimal mock Telegram API for boot validation.
-  defmodule MockTelegramAPI do
+  defmodule LemonChannels.StartupTest.MockTelegramAPI do
     use Agent
 
     def start_link(opts \\ []) do
@@ -51,8 +51,8 @@ defmodule LemonChannels.StartupTest do
     _ = File.mkdir_p(lock_dir)
     System.put_env("LEMON_LOCK_DIR", lock_dir)
 
-    MockTelegramAPI.stop()
-    {:ok, _} = MockTelegramAPI.start_link()
+    LemonChannels.StartupTest.MockTelegramAPI.stop()
+    {:ok, _} = LemonChannels.StartupTest.MockTelegramAPI.start_link()
 
     Application.put_env(:lemon_channels, :gateway, %{
       max_concurrent_runs: 1,
@@ -68,12 +68,12 @@ defmodule LemonChannels.StartupTest do
     })
 
     Application.put_env(:lemon_channels, :telegram, %{
-      api_mod: MockTelegramAPI,
+      api_mod: LemonChannels.StartupTest.MockTelegramAPI,
       poll_interval_ms: 50
     })
 
     on_exit(fn ->
-      MockTelegramAPI.stop()
+      LemonChannels.StartupTest.MockTelegramAPI.stop()
       _ = Application.stop(:lemon_channels)
       _ = Application.stop(:lemon_router)
       _ = Application.stop(:lemon_gateway)

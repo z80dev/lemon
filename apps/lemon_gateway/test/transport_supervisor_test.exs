@@ -33,7 +33,7 @@ defmodule LemonGateway.TransportSupervisorTest do
   # Mock Transports for Testing
   # ============================================================================
 
-  defmodule MockTelegramTransport do
+  defmodule LemonGateway.TransportSupervisorTest.MockTelegramTransport do
     use LemonGateway.Transport
     use GenServer
 
@@ -283,10 +283,10 @@ defmodule LemonGateway.TransportSupervisorTest do
     end
 
     test "does not start telegram transport when enable_telegram is false" do
-      setup_app([MockTelegramTransport], %{enable_telegram: false}, %{bot_token: "test"})
+      setup_app([LemonGateway.TransportSupervisorTest.MockTelegramTransport], %{enable_telegram: false}, %{bot_token: "test"})
 
       # Telegram transport should not be started
-      assert Process.whereis(MockTelegramTransport) == nil
+      assert Process.whereis(LemonGateway.TransportSupervisorTest.MockTelegramTransport) == nil
       assert Process.whereis(LemonGateway.Telegram.Outbox) == nil
     end
 
@@ -312,14 +312,14 @@ defmodule LemonGateway.TransportSupervisorTest do
 
   describe "telegram transport special handling" do
     test "telegram transport includes Outbox child" do
-      setup_app([MockTelegramTransport], %{enable_telegram: true}, %{bot_token: "test_token_123"})
+      setup_app([LemonGateway.TransportSupervisorTest.MockTelegramTransport], %{enable_telegram: true}, %{bot_token: "test_token_123"})
 
       # Check that Outbox is started
       children = Supervisor.which_children(TransportSupervisor)
       child_ids = Enum.map(children, fn {id, _, _, _} -> id end)
 
       assert LemonGateway.Telegram.Outbox in child_ids
-      assert MockTelegramTransport in child_ids
+      assert LemonGateway.TransportSupervisorTest.MockTelegramTransport in child_ids
     end
 
     test "non-telegram transports do not include Outbox" do
@@ -601,7 +601,7 @@ defmodule LemonGateway.TransportSupervisorTest do
 
     test "handles empty enabled transports list" do
       # All transports disabled
-      setup_app([MockTelegramTransport], %{enable_telegram: false}, %{bot_token: "test"})
+      setup_app([LemonGateway.TransportSupervisorTest.MockTelegramTransport], %{enable_telegram: false}, %{bot_token: "test"})
 
       # Supervisor should still be running but have fewer children
       assert Process.alive?(Process.whereis(TransportSupervisor))
@@ -610,7 +610,7 @@ defmodule LemonGateway.TransportSupervisorTest do
       # No telegram children since it's disabled
       transport_children =
         Enum.filter(children, fn {id, _, _, _} ->
-          id == MockTelegramTransport or id == LemonGateway.Telegram.Outbox
+          id == LemonGateway.TransportSupervisorTest.MockTelegramTransport or id == LemonGateway.Telegram.Outbox
         end)
 
       assert length(transport_children) == 0
