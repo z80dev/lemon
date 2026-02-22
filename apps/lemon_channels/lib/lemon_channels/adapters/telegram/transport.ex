@@ -683,7 +683,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         timer_ref =
           Process.send_after(self(), {:debounce_flush, key, debounce_ref}, state.debounce_ms)
 
-        messages = buffer.messages ++ [message_entry(inbound)]
+        messages = [message_entry(inbound) | buffer.messages]
         inbound_last = inbound
 
         buffer = %{
@@ -699,7 +699,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp submit_buffer(%{messages: messages, inbound: inbound_last}, state) do
-    {joined_text, last_id, last_reply_to_text, last_reply_to_id} = join_messages(messages)
+    {joined_text, last_id, last_reply_to_text, last_reply_to_id} = join_messages(Enum.reverse(messages))
 
     inbound =
       inbound_last
@@ -939,7 +939,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
         group = %{
           group
-          | items: group.items ++ [inbound],
+          | items: [inbound | group.items],
             timer_ref: timer_ref,
             debounce_ref: debounce_ref
         }
@@ -951,7 +951,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp process_media_group(group, state) do
-    items = group.items || []
+    items = Enum.reverse(group.items || [])
     first = List.first(items)
 
     if not is_map(first) do
@@ -3886,11 +3886,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         _ -> %{}
       end
 
-    {get_field(provider, :api_key), get_field(provider, :base_url)}
-  end
-
-  defp get_field(map, key) when is_atom(key) do
-    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+    {map_get(provider, :api_key), map_get(provider, :base_url)}
   end
 
   defp normalize_blank(nil), do: nil
