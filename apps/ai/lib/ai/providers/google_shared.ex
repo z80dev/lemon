@@ -181,7 +181,7 @@ defmodule Ai.Providers.GoogleShared do
         []
       end
 
-    has_text = String.length(text_content) > 0
+    has_text = text_content != ""
     has_images = length(image_content) > 0
     supports_multimodal_response = String.contains?(model.id, "gemini-3")
 

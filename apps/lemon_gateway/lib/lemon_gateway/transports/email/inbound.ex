@@ -658,13 +658,7 @@ defmodule LemonGateway.Transports.Email.Inbound do
   defp merge_reference_ids(reference_sets) when is_list(reference_sets) do
     reference_sets
     |> Enum.flat_map(&normalize_reference_ids/1)
-    |> Enum.reduce([], fn ref, acc ->
-      if ref in acc do
-        acc
-      else
-        acc ++ [ref]
-      end
-    end)
+    |> Enum.uniq()
     |> Enum.take(-@max_references)
   end
 

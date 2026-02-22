@@ -384,14 +384,14 @@ defmodule Ai.Providers.OpenAICompletions do
     convert_messages_loop(messages, context.messages, model, compat, nil)
   end
 
-  defp convert_messages_loop(acc, [], _model, _compat, _last_role), do: acc
+  defp convert_messages_loop(acc, [], _model, _compat, _last_role), do: Enum.reverse(acc)
 
   defp convert_messages_loop(acc, [msg | rest], model, compat, last_role) do
     # Insert synthetic assistant message if needed (after tool result, before user)
     acc =
       if compat.requires_assistant_after_tool_result && last_role == :tool_result &&
            msg.role == :user do
-        acc ++ [%{"role" => "assistant", "content" => "I have processed the tool results."}]
+        [%{"role" => "assistant", "content" => "I have processed the tool results."} | acc]
       else
         acc
       end
@@ -404,10 +404,10 @@ defmodule Ai.Providers.OpenAICompletions do
           acc
 
         is_list(converted) ->
-          acc ++ converted
+          Enum.reverse(converted) ++ acc
 
         true ->
-          acc ++ [converted]
+          [converted | acc]
       end
 
     convert_messages_loop(acc, new_rest, model, compat, new_last_role)
@@ -633,7 +633,7 @@ defmodule Ai.Providers.OpenAICompletions do
 
   defp has_content?(nil), do: false
   defp has_content?(""), do: false
-  defp has_content?(text) when is_binary(text), do: String.length(text) > 0
+  defp has_content?(text) when is_binary(text), do: text != ""
   defp has_content?(parts) when is_list(parts), do: length(parts) > 0
 
   defp collect_tool_results([], _model, _compat, acc, images) do
@@ -652,7 +652,7 @@ defmodule Ai.Providers.OpenAICompletions do
 
     # Build tool result message
     content =
-      if String.length(text_result) > 0 do
+      if text_result != "" do
         sanitize_surrogates(text_result)
       else
         "(see attached image)"

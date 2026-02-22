@@ -94,13 +94,17 @@ defmodule CodingAgent.Tools.MultiEdit do
 
           case Edit.execute("", params, signal, nil, cwd, opts) do
             %AgentToolResult{} = result ->
-              {:cont, acc ++ [result]}
+              {:cont, [result | acc]}
 
             {:error, reason} ->
               {:halt, {:error, reason}}
           end
         end
       end)
+      |> case do
+        {:error, _} = err -> err
+        list when is_list(list) -> Enum.reverse(list)
+      end
 
     case results do
       {:error, reason} ->

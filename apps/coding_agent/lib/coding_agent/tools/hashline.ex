@@ -983,82 +983,62 @@ defmodule CodingAgent.Tools.Hashline do
   #   e.g. `let x =` + `getValue()` → `let x = getValue()`
   #
   # Returns %{start_line, delete_count, new_lines} if merge detected, nil otherwise.
-  defp maybe_expand_single_line_merge(line, content, file_lines, touched_lines) do
-    if length(content) != 1 do
-      nil
+  defp maybe_expand_single_line_merge(_line, content, _file_lines, _touched_lines)
+       when length(content) != 1,
+       do: nil
+
+  defp maybe_expand_single_line_merge(line, [new_line], file_lines, touched_lines) do
+    total_lines = length(file_lines)
+
+    with true <- line >= 1 and line <= total_lines,
+         new_canon = normalize_line(new_line),
+         true <- new_canon != "",
+         orig_canon = normalize_line(Enum.at(file_lines, line - 1)),
+         true <- orig_canon != "" do
+      detect_next_line_merge(line, new_line, new_canon, orig_canon, total_lines, file_lines, touched_lines) ||
+        detect_prev_line_merge(line, new_line, new_canon, orig_canon, file_lines, touched_lines)
     else
-      total_lines = length(file_lines)
-      if line < 1 or line > total_lines do
-        nil
-      else
-        [new_line] = content
-        new_canon = normalize_line(new_line)
+      _ -> nil
+    end
+  end
 
-        if String.length(new_canon) == 0 do
-          nil
-        else
-          orig = Enum.at(file_lines, line - 1)
-          orig_canon = normalize_line(orig)
+  # Case A: dst absorbed the next continuation line
+  # e.g. `foo &&\n  bar` → `foo && bar`
+  defp detect_next_line_merge(line, new_line, new_canon, orig_canon, total_lines, file_lines, touched_lines) do
+    orig_canon_for_match = strip_trailing_continuation_tokens(orig_canon)
 
-          if String.length(orig_canon) == 0 do
-            nil
-          else
-            new_canon_for_merge_ops = strip_merge_operator_chars(new_canon)
-            orig_canon_for_match = strip_trailing_continuation_tokens(orig_canon)
-            orig_canon_for_merge_ops = strip_merge_operator_chars(orig_canon)
-            orig_looks_like_continuation = String.length(orig_canon_for_match) < String.length(orig_canon)
+    with true <- String.length(orig_canon_for_match) < String.length(orig_canon),
+         true <- line < total_lines,
+         false <- MapSet.member?(touched_lines, line + 1),
+         next_canon = normalize_line(Enum.at(file_lines, line)),
+         {a_pos, _} <- :binary.match(new_canon, orig_canon_for_match),
+         {b_pos, _} <- :binary.match(new_canon, next_canon),
+         true <- a_pos < b_pos,
+         true <- String.length(new_canon) <= String.length(orig_canon) + String.length(next_canon) + 32 do
+      %{start_line: line, delete_count: 2, new_lines: [new_line]}
+    else
+      _ -> nil
+    end
+  end
 
-            next_idx = line  # 0-indexed index of line+1
-            prev_idx = line - 2  # 0-indexed index of line-1
+  # Case B: dst absorbed the previous declaration/continuation line
+  # e.g. `let x =\n  getValue()` → `let x = getValue()`
+  defp detect_prev_line_merge(line, new_line, new_canon, orig_canon, file_lines, touched_lines) do
+    prev_idx = line - 2
 
-            # Case A: dst absorbed the next continuation line
-            case_a = if orig_looks_like_continuation and next_idx < total_lines and
-                        not MapSet.member?(touched_lines, line + 1) do
-              next = Enum.at(file_lines, next_idx)
-              next_canon = normalize_line(next)
-              a = :binary.match(new_canon, orig_canon_for_match)
-              b = :binary.match(new_canon, next_canon)
-
-              with {a_pos, _} <- a,
-                   {b_pos, _} <- b do
-                if a_pos < b_pos and
-                   String.length(new_canon) <= String.length(orig_canon) + String.length(next_canon) + 32 do
-                  %{start_line: line, delete_count: 2, new_lines: [new_line]}
-                end
-              else
-                _ -> nil
-              end
-            end
-
-            case_a || (
-              # Case B: dst absorbed the previous declaration/continuation line
-              if prev_idx >= 0 and not MapSet.member?(touched_lines, line - 1) do
-                prev = Enum.at(file_lines, prev_idx)
-                prev_canon = normalize_line(prev)
-                prev_canon_for_match = strip_trailing_continuation_tokens(prev_canon)
-                prev_looks_like_continuation = String.length(prev_canon_for_match) < String.length(prev_canon)
-
-                if not prev_looks_like_continuation do
-                  nil
-                else
-                  a = :binary.match(new_canon_for_merge_ops, strip_merge_operator_chars(prev_canon_for_match))
-                  b = :binary.match(new_canon_for_merge_ops, orig_canon_for_merge_ops)
-
-                  with {a_pos, _} <- a,
-                       {b_pos, _} <- b do
-                    if a_pos < b_pos and
-                       String.length(new_canon) <= String.length(prev_canon) + String.length(orig_canon) + 32 do
-                      %{start_line: line - 1, delete_count: 2, new_lines: [new_line]}
-                    end
-                  else
-                    _ -> nil
-                  end
-                end
-              end
-            )
-          end
-        end
-      end
+    with true <- prev_idx >= 0,
+         false <- MapSet.member?(touched_lines, line - 1),
+         prev_canon = normalize_line(Enum.at(file_lines, prev_idx)),
+         prev_canon_for_match = strip_trailing_continuation_tokens(prev_canon),
+         true <- String.length(prev_canon_for_match) < String.length(prev_canon),
+         new_canon_ops = strip_merge_operator_chars(new_canon),
+         {a_pos, _} <- :binary.match(new_canon_ops, strip_merge_operator_chars(prev_canon_for_match)),
+         {b_pos, _} <- :binary.match(new_canon_ops, strip_merge_operator_chars(orig_canon)),
+         true <- a_pos < b_pos,
+         true <- String.length(new_canon) <= String.length(prev_canon) + String.length(orig_canon) + 32 do
+      %{start_line: line - 1, delete_count: 2, new_lines: [new_line]}
+    else
+      _ -> nil
     end
   end
 
@@ -1133,6 +1113,129 @@ defmodule CodingAgent.Tools.Hashline do
   end
 
   @doc """
+  Stream hashline-formatted output from an enumerable of binary chunks.
+
+  Unlike `stream_hashlines/2` which takes a complete string, this function
+  accepts an `Enumerable.t()` of binary chunks (e.g. from `File.stream!/3`)
+  and streams hashline-formatted output without loading the entire file into
+  memory.  Handles partial-line buffering across chunk boundaries.
+
+  Ported from Oh-My-Pi's `streamHashLinesFromUtf8()`.
+
+  ## Options
+
+    - `:start_line` - First line number (1-indexed, defaults to 1)
+    - `:max_chunk_lines` - Maximum formatted lines per yielded chunk (default: 200)
+    - `:max_chunk_bytes` - Maximum UTF-8 bytes per yielded chunk (default: 65536)
+
+  ## Returns
+
+  An Elixir `Stream` that yields `String.t()` chunks, each containing one or
+  more `\\n`-joined hashline-formatted lines.
+
+  ## Examples
+
+      File.stream!("big_file.ex", [], 8192)
+      |> Hashline.stream_hashlines_from_enumerable(max_chunk_lines: 100)
+      |> Enum.each(&IO.write/1)
+  """
+  @spec stream_hashlines_from_enumerable(Enumerable.t(), keyword()) :: Enumerable.t()
+  def stream_hashlines_from_enumerable(source, opts \\ []) do
+    start_line = Keyword.get(opts, :start_line, 1)
+    max_chunk_lines = Keyword.get(opts, :max_chunk_lines, 200)
+    max_chunk_bytes = Keyword.get(opts, :max_chunk_bytes, 65_536)
+
+    Stream.transform(
+      source,
+      fn ->
+        # {pending_partial_line, line_number, output_acc, acc_line_count, acc_byte_count, saw_any_text, ended_with_newline}
+        {"", start_line, [], 0, 0, false, false}
+      end,
+      fn chunk, {pending, line_num, out_acc, out_lines, out_bytes, _saw_any, _ended_nl} ->
+        text = pending <> IO.iodata_to_binary(chunk)
+
+        {emitted, new_pending, new_line_num, new_out_acc, new_out_lines, new_out_bytes, new_ended_nl} =
+          consume_text(text, line_num, out_acc, out_lines, out_bytes, max_chunk_lines, max_chunk_bytes)
+
+        {emitted, {new_pending, new_line_num, new_out_acc, new_out_lines, new_out_bytes, true, new_ended_nl}}
+      end,
+      fn {pending, line_num, out_acc, out_lines, out_bytes, saw_any, ended_nl} ->
+        # Flush remaining content
+        final_emitted =
+          cond do
+            not saw_any ->
+              # Empty source - emit one empty line (mirrors "".split("\n") behavior)
+              formatted = "#{format_line_tag(line_num, "")}:"
+              [flush_acc([formatted | out_acc])]
+
+            byte_size(pending) > 0 or ended_nl ->
+              # Emit the final line (may be empty if file ended with newline)
+              {extra_emitted, _pending, _ln, final_acc, _ol, _ob, _enl} =
+                consume_text(pending <> "\n", line_num, out_acc, out_lines, out_bytes, max_chunk_lines, max_chunk_bytes)
+
+              last = flush_acc(final_acc)
+              if last, do: extra_emitted ++ [last], else: extra_emitted
+
+            true ->
+              last = flush_acc(out_acc)
+              if last, do: [last], else: []
+          end
+
+        {final_emitted, nil}
+      end,
+      fn _acc -> :ok end
+    )
+  end
+
+  # Consume text, splitting on newlines, accumulating formatted lines into chunks.
+  # Returns {emitted_chunks, remaining_pending, line_num, out_acc, out_lines, out_bytes, ended_with_newline}
+  defp consume_text(text, line_num, out_acc, out_lines, out_bytes, max_chunk_lines, max_chunk_bytes) do
+    case :binary.split(text, "\n") do
+      [^text] ->
+        # No newline found - entire text is pending
+        {[], text, line_num, out_acc, out_lines, out_bytes, false}
+
+      [line, rest] ->
+        formatted = "#{format_line_tag(line_num, line)}:#{line}"
+        line_bytes = byte_size(formatted)
+        sep_bytes = if out_lines == 0, do: 0, else: 1
+
+        # Check if we need to flush before adding this line
+        {pre_emitted, out_acc, out_lines, out_bytes} =
+          if out_lines > 0 and
+               (out_lines >= max_chunk_lines or out_bytes + sep_bytes + line_bytes > max_chunk_bytes) do
+            {[flush_acc(out_acc)], [], 0, 0}
+          else
+            {[], out_acc, out_lines, out_bytes}
+          end
+
+        new_sep = if out_lines == 0, do: 0, else: 1
+        new_out_acc = [formatted | out_acc]
+        new_out_lines = out_lines + 1
+        new_out_bytes = out_bytes + new_sep + line_bytes
+
+        # Check if we should flush after adding
+        {post_emitted, new_out_acc, new_out_lines, new_out_bytes} =
+          if new_out_lines >= max_chunk_lines or new_out_bytes >= max_chunk_bytes do
+            {[flush_acc(new_out_acc)], [], 0, 0}
+          else
+            {[], new_out_acc, new_out_lines, new_out_bytes}
+          end
+
+        # Recurse to consume the rest
+        {rest_emitted, final_pending, final_ln, final_acc, final_ol, final_ob, final_enl} =
+          consume_text(rest, line_num + 1, new_out_acc, new_out_lines, new_out_bytes, max_chunk_lines, max_chunk_bytes)
+
+        ended_nl = if byte_size(rest) == 0, do: true, else: final_enl
+
+        {pre_emitted ++ post_emitted ++ rest_emitted, final_pending, final_ln, final_acc, final_ol, final_ob, ended_nl}
+    end
+  end
+
+  defp flush_acc([]), do: nil
+  defp flush_acc(acc), do: acc |> Enum.reverse() |> Enum.join("\n")
+
+  @doc """
   Format a mismatch error message with context lines.
 
   Shows grep-style output with `>>>` markers on mismatched lines,
@@ -1161,13 +1264,13 @@ defmodule CodingAgent.Tools.Hashline do
       ""
     ]
 
-    {lines_with_context, _} =
+    {lines_with_context_rev, _} =
       display_lines
       |> Enum.reduce({[], nil}, fn line_num, {acc, prev_line} ->
         # Gap separator between non-contiguous regions
         acc =
           if prev_line != nil and line_num > prev_line + 1 do
-            acc ++ ["    ..."]
+            ["    ..." | acc]
           else
             acc
           end
@@ -1183,8 +1286,10 @@ defmodule CodingAgent.Tools.Hashline do
             "    #{prefix}:#{content}"
           end
 
-        {acc ++ [line], line_num}
+        {[line | acc], line_num}
       end)
+
+    lines_with_context = Enum.reverse(lines_with_context_rev)
 
     Enum.join(lines ++ lines_with_context, "\n")
   end

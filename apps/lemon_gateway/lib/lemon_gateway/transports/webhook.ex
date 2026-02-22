@@ -115,14 +115,8 @@ defmodule LemonGateway.Transports.Webhook do
     if is_pid(Process.whereis(LemonGateway.Config)) do
       LemonGateway.Config.get(:enable_webhook) == true
     else
-      cfg = Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
       fallback = Application.get_env(:lemon_gateway, :enable_webhook, false)
-
-      cond do
-        is_list(cfg) -> Keyword.get(cfg, :enable_webhook, fallback)
-        is_map(cfg) -> fetch(cfg, :enable_webhook) || fallback
-        true -> fallback
-      end == true
+      (resolve_from_app_config(:enable_webhook) || fallback) == true
     end
   rescue
     _ -> false
@@ -134,16 +128,7 @@ defmodule LemonGateway.Transports.Webhook do
       if is_pid(Process.whereis(LemonGateway.Config)) do
         LemonGateway.Config.get(:webhook) || %{}
       else
-        override = Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
-
-        from_override =
-          cond do
-            is_list(override) and Keyword.keyword?(override) -> Keyword.get(override, :webhook)
-            is_map(override) -> fetch(override, :webhook)
-            true -> nil
-          end
-
-        from_override || Application.get_env(:lemon_gateway, :webhook, %{})
+        resolve_from_app_config(:webhook) || Application.get_env(:lemon_gateway, :webhook, %{})
       end
 
     normalize_map(cfg)
@@ -1405,16 +1390,22 @@ defmodule LemonGateway.Transports.Webhook do
     if is_pid(Process.whereis(LemonGateway.Config)) do
       LemonGateway.Config.get(:default_engine) || "lemon"
     else
-      cfg = Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
-
-      cond do
-        is_list(cfg) -> Keyword.get(cfg, :default_engine, "lemon")
-        is_map(cfg) -> fetch(cfg, :default_engine) || "lemon"
-        true -> "lemon"
-      end
+      resolve_from_app_config(:default_engine) || "lemon"
     end
   rescue
     _ -> "lemon"
+  end
+
+  # Resolves a config key from the LemonGateway.Config app env (keyword or map)
+  # when the Config GenServer is not running.
+  defp resolve_from_app_config(key) do
+    cfg = Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
+
+    cond do
+      is_list(cfg) and Keyword.keyword?(cfg) -> Keyword.get(cfg, key)
+      is_map(cfg) -> fetch(cfg, key)
+      true -> nil
+    end
   end
 
   defp fetch(map, key) when is_map(map) do

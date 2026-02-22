@@ -295,15 +295,16 @@ defmodule Ai.Providers.Bedrock do
   end
 
   defp convert_messages(context, model) do
-    {converted_messages, _prev_role} =
+    {converted_rev, _prev_role} =
       Enum.reduce(context.messages, {[], nil}, fn msg, {acc, prev_role} ->
         case convert_message(msg, model, prev_role) do
           nil -> {acc, prev_role}
-          converted -> {acc ++ [converted], converted["role"]}
+          converted -> {[converted | acc], converted["role"]}
         end
       end)
 
-    converted_messages
+    converted_rev
+    |> Enum.reverse()
     |> merge_consecutive_tool_results()
     |> add_cache_point_to_last_user_message(model)
   end

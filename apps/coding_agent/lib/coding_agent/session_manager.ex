@@ -599,7 +599,7 @@ defmodule CodingAgent.SessionManager do
   end
 
   defp add_ids_to_entries(entries) do
-    {migrated, _last_id, _ids} =
+    {migrated_rev, _last_id, _ids} =
       Enum.reduce(entries, {[], nil, MapSet.new()}, fn entry, {acc, parent_id, ids} ->
         new_id = generate_id(MapSet.to_list(ids))
 
@@ -607,12 +607,12 @@ defmodule CodingAgent.SessionManager do
           entry
           |> Map.put("id", new_id)
           |> Map.put("parentId", parent_id)
-          |> maybe_migrate_compaction_index(acc)
+          |> maybe_migrate_compaction_index(Enum.reverse(acc))
 
-        {acc ++ [entry_with_id], new_id, MapSet.put(ids, new_id)}
+        {[entry_with_id | acc], new_id, MapSet.put(ids, new_id)}
       end)
 
-    migrated
+    Enum.reverse(migrated_rev)
   end
 
   defp maybe_migrate_compaction_index(
@@ -826,15 +826,16 @@ defmodule CodingAgent.SessionManager do
   defp parse_header(_), do: {:error, :invalid_header}
 
   defp parse_entries(lines) do
-    entries =
-      Enum.reduce_while(lines, {:ok, []}, fn line, {:ok, acc} ->
-        case Jason.decode(line) do
-          {:ok, data} -> {:cont, {:ok, acc ++ [data]}}
-          {:error, reason} -> {:halt, {:error, {:json_parse_error, reason, line}}}
-        end
-      end)
-
-    entries
+    Enum.reduce_while(lines, {:ok, []}, fn line, {:ok, acc} ->
+      case Jason.decode(line) do
+        {:ok, data} -> {:cont, {:ok, [data | acc]}}
+        {:error, reason} -> {:halt, {:error, {:json_parse_error, reason, line}}}
+      end
+    end)
+    |> case do
+      {:ok, reversed} -> {:ok, Enum.reverse(reversed)}
+      error -> error
+    end
   end
 
   defp encode_header(%SessionHeader{} = header) do
