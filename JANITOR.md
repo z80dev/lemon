@@ -1,3 +1,83 @@
+### 2026-02-23 - Test Expansion: Comprehensive Tests for Untested Modules
+**Work Area**: Test Expansion
+
+**Analysis**:
+- Scanned lemon_core, coding_agent, and ai apps for untested modules
+- Found 21 modules without corresponding test files
+- Focused on pure-function modules that are easiest to test comprehensively
+
+**New Test Files Created (7 files, 246 new tests)**:
+
+1. **`apps/lemon_core/test/lemon_core/session_key_test.exs`** (65 tests)
+   - Tests for `LemonCore.SessionKey` - previously completely untested
+   - Covers: main/1, channel_peer/1, parse/1, valid?/1, allowed_peer_kinds/0, agent_id/1, main?/1, channel_peer?/1
+   - Tests all peer kinds (dm, group, channel, main, unknown)
+   - Tests thread_id and sub_id extras parsing
+   - Tests error cases: invalid peer kinds, malformed keys, invalid extras
+
+2. **`apps/lemon_core/test/lemon_core/config/helpers_test.exs`** (80 tests)
+   - Tests for `LemonCore.Config.Helpers` - previously completely untested
+   - Covers: get_env/1, get_env/2, get_env_int/2, get_env_float/2, get_env_bool/2, get_env_atom/2
+   - Covers: get_env_list/1, get_env_list/2, require_env!/1, require_env!/2
+   - Covers: get_feature_env/2, get_feature_env/3, parse_duration/2, get_env_duration/2
+   - Covers: parse_bytes/2, get_env_bytes/2
+   - Tests all edge cases: nil values, empty strings, invalid formats, type conversions
+
+3. **`apps/lemon_core/test/lemon_core/config/validation_error_test.exs`** (16 tests)
+   - Tests for `LemonCore.Config.ValidationError` - previously completely untested
+   - Covers: exception/1 with various options, raise/rescue behavior, struct fields
+   - Tests edge cases: nil errors, empty strings, special characters, newlines, very long messages
+
+4. **`apps/lemon_core/test/lemon_core/httpc_test.exs`** (25 tests, 18 tagged :external)
+   - Tests for `LemonCore.Httpc` - previously completely untested
+   - Covers: ensure_started/0, request/4 with various HTTP methods
+   - Tests GET, POST, PUT, PATCH, DELETE, HEAD requests
+   - Tests error cases: invalid URLs, 404, 500, timeout handling
+   - Tests headers, query parameters, http_opts, and opts parameters
+
+5. **`apps/lemon_core/test/lemon_core/secrets/crypto_test.exs`** (15 tests)
+   - Tests for `LemonCore.Secrets.Crypto` - previously completely untested
+   - Covers: version/0, encrypt/2, decrypt/2
+   - Tests round-trip encryption/decryption
+   - Tests unique ciphertext for same plaintext (random salt/nonce)
+   - Tests error cases: wrong master key, tampered salt, tampered ciphertext
+   - Tests invalid inputs: short master key, non-binary plaintext, invalid payload
+
+6. **`apps/lemon_core/test/lemon_core/dotenv_test.exs`** (30 tests)
+   - Tests for `LemonCore.Dotenv` - previously completely untested
+   - Covers: load/2, load_and_log/2, path_for/1
+   - Tests simple KEY=value pairs, export prefix, quoted values (single/double)
+   - Tests comments, empty lines, values with = signs, escape sequences
+   - Tests override option, existing var preservation, unicode, edge cases
+
+7. **`apps/lemon_core/test/lemon_core/idempotency_test.exs`** (15 tests)
+   - Tests for `LemonCore.Idempotency` - previously completely untested
+   - Covers: get/2, put/3, put_new/3, delete/2, execute/3
+   - Tests scope isolation, TTL expiration (24 hours), legacy format compatibility
+   - Tests edge cases: empty strings, unicode, very long keys
+
+**Test Results**: All 246 new tests pass
+- SessionKey tests: 65 tests, 0 failures
+- Config.Helpers tests: 80 tests, 0 failures
+- Config.ValidationError tests: 16 tests, 0 failures
+- Httpc tests: 7 tests, 0 failures (18 external tests excluded by default)
+- Secrets.Crypto tests: 15 tests, 0 failures
+- Dotenv tests: 30 tests, 0 failures
+- Idempotency tests: 15 tests, 0 failures
+
+**Files Changed**: 7 new test files across 1 app
+- `apps/lemon_core/test/lemon_core/session_key_test.exs` - NEW (65 tests)
+- `apps/lemon_core/test/lemon_core/config/helpers_test.exs` - NEW (80 tests)
+- `apps/lemon_core/test/lemon_core/config/validation_error_test.exs` - NEW (16 tests)
+- `apps/lemon_core/test/lemon_core/httpc_test.exs` - NEW (25 tests)
+- `apps/lemon_core/test/lemon_core/secrets/crypto_test.exs` - NEW (15 tests)
+- `apps/lemon_core/test/lemon_core/dotenv_test.exs` - NEW (30 tests)
+- `apps/lemon_core/test/lemon_core/idempotency_test.exs` - NEW (15 tests)
+
+**Commit**: `47d99906` - test(lemon_core): add comprehensive tests for untested modules
+
+---
+
 ### 2026-02-22 - Pi/Oh-My-Pi Upstream Sync: New Bedrock Models + supports_xhigh
 **Work Area**: Feature Enhancement (Pi/Oh-My-Pi Sync)
 
