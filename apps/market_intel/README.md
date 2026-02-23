@@ -215,14 +215,15 @@ apps/market_intel/
 └── mix.exs                 # App dependencies
 ```
 
-## Future Enhancements
+## Backlog
 
-- [x] Basic X API integration for posting tweets
-- [ ] Full AI module integration for tweet generation
-- [ ] Farcaster mentions ingestion
-- [ ] Telegram sentiment analysis
-- [ ] Automated thread generation for deep analysis
-- [ ] Performance tracking (which commentary gets best engagement)
-- [ ] Backtesting commentary strategies
-- [ ] Web dashboard for monitoring data ingestion
-- [ ] Alert system for significant market events
+Known feature gaps and implementation stubs are tracked in the debt plan:
+`planning/plans/PLN-20260222-debt-phase-10-monolith-footprint-reduction.md` (M1).
+
+Key items:
+- Twitter/X mention fetching is a stub (returns `[]`)
+- DB persistence for commentary history and price snapshots are stub no-ops
+- Deep analysis scheduler callback is a no-op
+- Holder stats always return `:unknown`
+
+See `AGENTS.md` "Implementation Status" section for current stub details.

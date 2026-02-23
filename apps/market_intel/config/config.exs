@@ -48,7 +48,6 @@ config :market_intel,
     developer_alias: "z80"
   ]
 
-# Ingestion feature flags have moved to the root config (config/config.exs).
-# See `config :market_intel, :ingestion, %{...}` in the umbrella root.
-# The old flat keys (enable_dex, enable_polymarket, etc.) are no longer read
-# by MarketIntel.Application — use the :ingestion map instead.
+# Ingestion feature flags live in the umbrella root config (config/config.exs)
+# under `config :market_intel, :ingestion, %{...}`.  MarketIntel.Application
+# reads only the :ingestion map — no per-flag keys are used here.

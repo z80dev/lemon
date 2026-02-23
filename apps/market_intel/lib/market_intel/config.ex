@@ -102,6 +102,11 @@ defmodule MarketIntel.Config do
     Application.get_env(:market_intel, :eth_address, @eth_default_address)
   end
 
+  # Legacy backfill: reads a flat :x_account_id key that predates the nested
+  # :x config structure.  No config file sets this key any more, so the
+  # backfill is effectively a no-op.  Kept for defensive compatibility —
+  # safe to remove once all environments have migrated (tracked in
+  # PLN-20260222-debt-phase-10-monolith-footprint-reduction, M1).
   defp maybe_backfill_legacy_x_account_id(config) do
     case config[:account_id] do
       nil -> Keyword.put(config, :account_id, Application.get_env(:market_intel, :x_account_id))

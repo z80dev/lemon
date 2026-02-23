@@ -59,12 +59,15 @@ The app runs as an OTP application with supervised GenServer workers for each da
 
 ## Implementation Status
 
-Several features are stubs awaiting full implementation:
+Several features are stubs awaiting full implementation.  These are tracked as
+known debt in `planning/plans/PLN-20260222-debt-phase-10-monolith-footprint-reduction.md` (M1).
 
 - **AI generation**: `Commentary.Pipeline.generate_with_provider/3` delegates completion calls through `AgentCore.TextGeneration.complete_text/4` to stay within architecture boundaries.
-- **Twitter fetch**: `TwitterMentions.fetch_mentions/1` returns `[]`. X API integration is not implemented.
-- **DB persistence**: `insert_commentary_history/1` is a public stub that only logs. `DexScreener.persist_to_db/2` is also a no-op stub.
+- **Twitter fetch** (stub): `TwitterMentions.fetch_mentions/1` returns `[]`. X API integration is not implemented.
+- **DB persistence** (stub): `insert_commentary_history/1` is a public stub that only logs. `DexScreener.persist_to_db/2` is also a no-op stub.
 - **X posting**: `lemon_channels` is a `runtime: false` compile-time dep. Posting calls `LemonChannels.Adapters.XAPI.Client.post_text/1` dynamically with `Code.ensure_loaded?`.
+- **Holder stats** (stub): OnChain holder stats always return `:unknown`.
+- **Deep analysis** (stub): Scheduler `handle_info(:deep_analysis, ...)` is a no-op.
 
 ## How to Add a New Data Source
 
