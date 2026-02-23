@@ -39,6 +39,7 @@ defmodule LemonSkills.Discovery do
 
   require Logger
 
+  alias LemonCore.Secrets
   alias LemonSkills.{Entry, HttpClient, Manifest}
 
   @default_timeout_ms 10_000
@@ -155,7 +156,7 @@ defmodule LemonSkills.Discovery do
   # ============================================================================
 
   defp search_github(query, opts) do
-    token = Keyword.get(opts, :github_token, System.get_env("GITHUB_TOKEN"))
+    token = Keyword.get(opts, :github_token, Secrets.fetch_value("GITHUB_TOKEN"))
 
     # Build search query for repositories with lemon-skill topic
     search_query = build_github_search_query(query)

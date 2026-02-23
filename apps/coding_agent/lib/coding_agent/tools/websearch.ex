@@ -9,6 +9,7 @@ defmodule CodingAgent.Tools.WebSearch do
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias CodingAgent.Security.ExternalContent
   alias CodingAgent.Tools.WebCache
+  alias LemonCore.Secrets
 
   @default_search_count 5
   @max_search_count 10
@@ -625,8 +626,8 @@ defmodule CodingAgent.Tools.WebSearch do
   defp perplexity_api_key_source(perplexity_cfg) do
     cond do
       present?(perplexity_cfg.api_key) -> :config
-      present?(System.get_env("PERPLEXITY_API_KEY")) -> :perplexity_env
-      present?(System.get_env("OPENROUTER_API_KEY")) -> :openrouter_env
+      present?(Secrets.fetch_value("PERPLEXITY_API_KEY")) -> :perplexity_env
+      present?(Secrets.fetch_value("OPENROUTER_API_KEY")) -> :openrouter_env
       true -> :none
     end
   end
@@ -1015,7 +1016,7 @@ defmodule CodingAgent.Tools.WebSearch do
     if candidate == primary, do: nil, else: candidate
   end
 
-  defp env_optional(name), do: normalize_optional_string(System.get_env(name))
+  defp env_optional(name), do: normalize_optional_string(Secrets.fetch_value(name))
 
   defp present?(value), do: not is_nil(normalize_optional_string(value))
 

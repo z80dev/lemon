@@ -46,6 +46,8 @@ defmodule LemonChannels.Adapters.XAPI do
 
   require Logger
 
+  alias LemonCore.Secrets
+
   @env_config_keys [
     client_id: "X_API_CLIENT_ID",
     client_secret: "X_API_CLIENT_SECRET",
@@ -202,37 +204,15 @@ defmodule LemonChannels.Adapters.XAPI do
   end
 
   defp resolve_runtime_value(env_var) do
-    resolve_from_secret_store(env_var) || normalize_optional_string(System.get_env(env_var))
-  end
-
-  defp resolve_from_secret_store(name) do
     if use_secrets_resolution?() do
-      module = secrets_module()
-
-      if is_atom(module) and Code.ensure_loaded?(module) and
-           function_exported?(module, :resolve, 2) do
-        case module.resolve(name, prefer_env: false, env_fallback: false) do
-          {:ok, value, :store} -> normalize_optional_string(value)
-          _ -> nil
-        end
-      else
-        nil
-      end
+      normalize_optional_string(Secrets.fetch_value(env_var))
     else
-      nil
+      normalize_optional_string(System.get_env(env_var))
     end
-  rescue
-    _ -> nil
-  catch
-    :exit, _ -> nil
   end
 
   defp use_secrets_resolution? do
     Application.get_env(:lemon_channels, :x_api_use_secrets, true) != false
-  end
-
-  defp secrets_module do
-    Application.get_env(:lemon_channels, :x_api_secrets_module, LemonCore.Secrets)
   end
 
   defp normalize_app_config(config) when is_list(config), do: config

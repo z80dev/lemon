@@ -12,6 +12,7 @@ defmodule CodingAgent.Tools.WebFetch do
   alias CodingAgent.Tools.WebCache
   alias CodingAgent.Tools.WebGuard
   alias CodingAgent.Utils.Http
+  alias LemonCore.Secrets
 
   @default_fetch_max_chars 20_000
   @default_fetch_max_redirects 3
@@ -879,7 +880,7 @@ defmodule CodingAgent.Tools.WebFetch do
 
     firecrawl_api_key =
       normalize_optional_string(get_map_value(firecrawl_cfg, :api_key, nil)) ||
-        normalize_optional_string(System.get_env("FIRECRAWL_API_KEY"))
+        normalize_optional_string(Secrets.fetch_value("FIRECRAWL_API_KEY"))
 
     firecrawl_timeout =
       WebCache.resolve_timeout_seconds(
