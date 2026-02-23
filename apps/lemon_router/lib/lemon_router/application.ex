@@ -31,6 +31,8 @@ defmodule LemonRouter.Application do
         {DynamicSupervisor, strategy: :one_for_one, name: LemonRouter.CoalescerSupervisor},
         # Tool status coalescer supervisor
         {DynamicSupervisor, strategy: :one_for_one, name: LemonRouter.ToolStatusSupervisor},
+        # Run count telemetry tracker (must start before orchestrator)
+        LemonRouter.RunCountTracker,
         # Run orchestrator
         LemonRouter.RunOrchestrator
       ] ++ maybe_health_server_child()
