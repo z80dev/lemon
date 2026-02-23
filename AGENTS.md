@@ -65,6 +65,44 @@ When working on multiple tasks in parallel (either as the same agent or multiple
 
 ---
 
+## Agent Team Composition
+
+When spawning agents for parallel work, **match the agent tier to the task complexity**. Don't use Opus for investigation or Sonnet for architectural decisions.
+
+### Role Model
+
+| Role | Internal Model | External Model | Typical Tasks |
+|------|---------------|----------------|---------------|
+| Junior/Mid Dev | Sonnet | Kimi | Investigation, plan file creation, test running, config cleanup, doc updates, dependency audits, simple refactors |
+| Senior Dev | Opus | — | Complex refactoring, architectural extraction, correctness-critical code, multi-module decomposition |
+| Staff Engineer | Codex (MCP) | — | Plan ownership/review, architectural oversight, cross-cutting design decisions, final validation |
+
+### Guidelines
+
+- **Default to the lowest tier that can do the job** — Use Sonnet for exploration and investigation. Only escalate to Opus when the task involves complex logic, cross-module refactoring, or correctness-critical code.
+- **Codex owns plans** — Matches the existing `owner: codex` / `reviewer: codex` convention in the planning system. Codex reviews architectural decisions and validates decomposition strategies.
+- **Escalation pattern**: Sonnet investigates → Opus implements → Codex reviews. Not every task needs all three tiers.
+- **Kimi for external/security**: Security audits, pre-push hooks, and external review tasks (already established in the pre-push hook workflow).
+- **Planning metadata**: `owner:` and `reviewer:` fields in plan YAML front matter should reference these roles (e.g., `owner: codex`, `reviewer: codex`).
+
+### Spawning Examples
+
+```bash
+# Sonnet for investigation (junior/mid)
+# Use model: "sonnet" in Task tool or --model sonnet in CLI
+
+# Opus for complex implementation (senior)
+# Use model: "opus" in Task tool or default CLI model
+
+# Codex for plan review (staff)
+# Use mcp__codex__codex tool with architectural review prompt
+
+# Kimi for security audit (external)
+# Use kimi CLI runner for pre-push or security review
+```
+
+---
+
 ## Documentation Contract ⚠️
 
 > **Work is not complete until it is adequately documented.**
