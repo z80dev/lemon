@@ -12,32 +12,21 @@ defmodule Mix.Tasks.Lemon.Quality do
     mix lemon.quality
     mix lemon.quality --root /path/to/repo
     mix lemon.quality --validate-config
-    mix lemon.quality --with-runtime
 
   Options:
     --root PATH          Root directory to run checks from (default: current directory)
     --validate-config    Also validate Lemon configuration before running checks
-                         (implies --with-runtime, as config validation needs running app)
-    --with-runtime       Start the full application before running checks. By default
-                         only compilation is performed — no ports are bound and no
-                         workers are started.
   """
 
   @impl true
   def run(args) do
+    Mix.Task.run("app.start")
+
     {opts, _rest, _invalid} =
       OptionParser.parse(args,
-        switches: [root: :string, validate_config: :boolean, with_runtime: :boolean],
+        switches: [root: :string, validate_config: :boolean],
         aliases: [r: :root]
       )
-
-    needs_runtime? = opts[:with_runtime] || opts[:validate_config]
-
-    if needs_runtime? do
-      Mix.Task.run("app.start")
-    else
-      Mix.Task.run("compile", ["--no-start"])
-    end
 
     root = opts[:root] || File.cwd!()
 

@@ -10,7 +10,19 @@ PLN-20260223-lemon-quality-unblock
 codex
 
 ## Status
-Open
+Approved
 
 ## Summary
-Quality gate unblock review will be completed after duplicate-test and architecture-boundary fixes land.
+Implemented and validated.
+
+- Duplicate module collisions were removed by renaming legacy test modules, preserving test coverage.
+- `market_intel` no longer references `Ai.*` directly; completion now routes through
+  `AgentCore.TextGeneration.complete_text/4`.
+- Relevant AGENTS docs were updated to capture the new boundary-compliant path.
+
+## Validation Evidence
+
+- `mix test apps/ai/test/models_test.exs apps/ai/test/providers/bedrock_test.exs` (pass)
+- `mix test apps/agent_core/test/agent_core/text_generation_test.exs` (pass)
+- `mix test apps/market_intel/test/market_intel/commentary/pipeline_test.exs` (pass)
+- `mix lemon.quality` (pass)

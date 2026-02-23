@@ -61,7 +61,7 @@ The app runs as an OTP application with supervised GenServer workers for each da
 
 Several features are stubs awaiting full implementation:
 
-- **AI generation**: `generate_with_openai/1` and `generate_with_anthropic/1` both return `{:error, :not_implemented}`. Commentary uses fallback templates instead.
+- **AI generation**: `Commentary.Pipeline.generate_with_provider/3` delegates completion calls through `AgentCore.TextGeneration.complete_text/4` to stay within architecture boundaries.
 - **Twitter fetch**: `TwitterMentions.fetch_mentions/1` returns `[]`. X API integration is not implemented.
 - **DB persistence**: `insert_commentary_history/1` is a public stub that only logs. `DexScreener.persist_to_db/2` is also a no-op stub.
 - **X posting**: `lemon_channels` is a `runtime: false` compile-time dep. Posting calls `LemonChannels.Adapters.XAPI.Client.post_text/1` dynamically with `Code.ensure_loaded?`.
@@ -135,6 +135,12 @@ children = [
 ## Commentary Pipeline
 
 `Commentary.Pipeline` is a GenStage `:producer_consumer` that generates market commentary tweets. It has no upstream producers — all events enter via `GenStage.cast/2`.
+
+### Architecture Boundary
+
+`market_intel` may depend on `agent_core`, but not on `ai` directly. Keep LLM
+provider/model completion calls behind `AgentCore` helpers (currently
+`AgentCore.TextGeneration.complete_text/4`) so architecture checks remain green.
 
 ### Triggers
 

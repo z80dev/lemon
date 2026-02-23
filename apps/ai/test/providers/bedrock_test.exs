@@ -1,4 +1,4 @@
-defmodule Ai.Providers.BedrockTest do
+defmodule Ai.Providers.BedrockLegacyTest do
   use ExUnit.Case, async: false
 
   alias Ai.EventStream

@@ -1,4 +1,4 @@
-defmodule Ai.ModelsTest do
+defmodule Ai.ModelsLegacyTest do
   use ExUnit.Case
 
   alias Ai.Models
@@ -1131,7 +1131,9 @@ defmodule Ai.ModelsTest do
     end
 
     test "accepts custom budgets" do
-      {max, budget} = Models.adjust_max_tokens_for_thinking(8192, 200_000, :medium, %{medium: 4096})
+      {max, budget} =
+        Models.adjust_max_tokens_for_thinking(8192, 200_000, :medium, %{medium: 4096})
+
       assert budget == 4096
       assert max == 8192 + 4096
     end

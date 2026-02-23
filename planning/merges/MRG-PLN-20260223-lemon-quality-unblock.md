@@ -4,10 +4,10 @@
 PLN-20260223-lemon-quality-unblock
 
 ## Status
-Pending
+Ready
 
 ## Merge Readiness Checklist
-- [ ] Duplicate test module issues resolved
-- [ ] Architecture-boundary violations resolved
-- [ ] `mix lemon.quality` passes
-- [ ] Review artifact complete
+- [x] Duplicate test module issues resolved
+- [x] Architecture-boundary violations resolved
+- [x] `mix lemon.quality` passes
+- [x] Review artifact complete

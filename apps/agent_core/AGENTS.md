@@ -74,6 +74,7 @@ AgentCore.Supervisor (:one_for_one)
 | `AgentCore.Context` | Context size estimation, truncation, and `make_transform/1` for `AgentLoopConfig` |
 | `AgentCore.AbortSignal` | ETS-based abort signal coordination (`new/0`, `abort/1`, `aborted?/1`, `clear/1`) |
 | `AgentCore.Proxy` | SSE proxy stream function for routing LLM calls through a server |
+| `AgentCore.TextGeneration` | Shared helper to run simple provider/model/prompt text completions for umbrella callers while keeping direct `Ai.*` usage inside `agent_core` |
 
 ### Types
 

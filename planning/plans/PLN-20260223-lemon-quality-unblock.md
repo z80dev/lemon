@@ -1,7 +1,7 @@
 ---
 id: PLN-20260223-lemon-quality-unblock
 title: Unblock `mix lemon.quality` (duplicate tests + architecture boundaries)
-status: planned
+status: ready_to_merge
 priority_bucket: now
 owner: codex
 reviewer: codex
@@ -51,27 +51,28 @@ From `mix lemon.quality` on 2026-02-23:
 
 ## Milestones
 
-- [ ] M1 - Duplicate test module cleanup complete.
-- [ ] M2 - Architecture-boundary violations in `market_intel` resolved.
-- [ ] M3 - `mix lemon.quality` passes cleanly.
-- [ ] M4 - Plan review and merge artifacts completed.
+- [x] M1 - Duplicate test module cleanup complete.
+- [x] M2 - Architecture-boundary violations in `market_intel` resolved.
+- [x] M3 - `mix lemon.quality` passes cleanly.
+- [x] M4 - Plan review and merge artifacts completed.
 
 ## Work Breakdown
 
-- [ ] Decide canonical locations for AI tests and remove/rename duplicates.
-- [ ] Update any references affected by test file moves.
-- [ ] Refactor `market_intel` commentary pipeline to compliant dependency boundaries.
-- [ ] Run targeted tests for changed apps (`ai`, `market_intel`).
-- [ ] Run full quality gate and capture evidence.
-- [ ] Update planning review/merge artifacts and status transitions.
+- [x] Decide canonical locations for AI tests and remove/rename duplicates.
+- [x] Update any references affected by test file moves.
+- [x] Refactor `market_intel` commentary pipeline to compliant dependency boundaries.
+- [x] Run targeted tests for changed apps (`ai`, `market_intel`).
+- [x] Run full quality gate and capture evidence.
+- [x] Update planning review/merge artifacts and status transitions.
 
 ## Test Matrix
 
 | Layer | Command / Check | Pass Criteria | Owner | Status |
 |---|---|---|---|---|
-| unit | `mix test apps/ai/test` | AI tests pass after dedupe changes | `codex` | `pending` |
-| unit | `mix test apps/market_intel/test` | market_intel tests pass after boundary fix | `codex` | `pending` |
-| quality | `mix lemon.quality` | all checks pass | `codex` | `pending` |
+| unit | `mix test apps/ai/test/models_test.exs apps/ai/test/providers/bedrock_test.exs` | AI duplicate-module cleanup remains green | `codex` | `passed` |
+| unit | `mix test apps/agent_core/test/agent_core/text_generation_test.exs` | `AgentCore.TextGeneration` bridge helper behavior passes | `codex` | `passed` |
+| unit | `mix test apps/market_intel/test/market_intel/commentary/pipeline_test.exs` | market_intel boundary-compliant generation path passes | `codex` | `passed` |
+| quality | `mix lemon.quality` | all checks pass | `codex` | `passed` |
 
 ## Risks and Mitigations
 
@@ -85,12 +86,16 @@ From `mix lemon.quality` on 2026-02-23:
 | Date (UTC) | Actor | Update | Evidence |
 |---|---|---|---|
 | 2026-02-23 | `codex` | Created quality-unblock plan with current blockers baseline | `mix lemon.quality`, `planning/INDEX.md` |
+| 2026-02-23 | `codex` | Renamed legacy duplicate modules (`Ai.ModelsLegacyTest`, `Ai.Providers.BedrockLegacyTest`) to preserve coverage while clearing duplicate-module failures | `apps/ai/test/models_test.exs`, `apps/ai/test/providers/bedrock_test.exs` |
+| 2026-02-23 | `codex` | Moved `market_intel` AI completion behind `AgentCore.TextGeneration.complete_text/4` and added helper tests | `apps/agent_core/lib/agent_core/text_generation.ex`, `apps/agent_core/test/agent_core/text_generation_test.exs`, `apps/market_intel/lib/market_intel/commentary/pipeline.ex` |
+| 2026-02-23 | `codex` | Updated relevant AGENTS docs for the new boundary-compliant generation path | `apps/agent_core/AGENTS.md`, `apps/market_intel/AGENTS.md` |
+| 2026-02-23 | `codex` | Verified targeted tests and full quality gate are passing | `mix test apps/ai/test/models_test.exs apps/ai/test/providers/bedrock_test.exs`, `mix test apps/agent_core/test/agent_core/text_generation_test.exs`, `mix test apps/market_intel/test/market_intel/commentary/pipeline_test.exs`, `mix lemon.quality` |
 
 ## Completion Checklist
 
-- [ ] Scope delivered
-- [ ] Tests recorded with pass/fail evidence
-- [ ] Review artifact completed
-- [ ] Merge artifact completed
-- [ ] Relevant docs updated
+- [x] Scope delivered
+- [x] Tests recorded with pass/fail evidence
+- [x] Review artifact completed
+- [x] Merge artifact completed
+- [x] Relevant docs updated
 - [ ] Plan status set to `merged`

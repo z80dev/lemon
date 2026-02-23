@@ -15,6 +15,7 @@ defmodule MarketIntel.Commentary.Pipeline do
   use GenStage
   require Logger
 
+  alias AgentCore.TextGeneration
   alias MarketIntel.Commentary.PromptBuilder
 
   @typedoc "Trigger type for commentary generation"
@@ -206,37 +207,33 @@ defmodule MarketIntel.Commentary.Pipeline do
   @spec generate_with_provider(atom(), String.t(), String.t()) ::
           {:ok, String.t()} | {:error, term()}
   def generate_with_provider(provider, model_id, prompt) do
-    case Ai.Models.get_model(provider, model_id) do
-      nil ->
-        Logger.warning("[MarketIntel] Model #{model_id} not found for provider #{provider}")
-        {:error, {:model_not_found, provider, model_id}}
+    system_prompt = "You are a tweet author. Reply with ONLY the tweet text, nothing else."
+    complete_opts = %{max_tokens: 300, temperature: 0.9}
 
-      model ->
-        context =
-          Ai.Types.Context.new(
-            system_prompt: "You are a tweet author. Reply with ONLY the tweet text, nothing else."
-          )
-          |> Ai.Types.Context.add_user_message(prompt)
+    case TextGeneration.complete_text(provider, model_id, prompt,
+           system_prompt: system_prompt,
+           complete_opts: complete_opts
+         ) do
+      {:ok, text} ->
+        text =
+          (text || "")
+          |> String.trim()
+          |> String.trim("\"")
+          |> truncate_to_tweet_length()
 
-        case Ai.complete(model, context, %{max_tokens: 300, temperature: 0.9}) do
-          {:ok, message} ->
-            text =
-              message
-              |> Ai.get_text()
-              |> String.trim()
-              |> String.trim("\"")
-              |> truncate_to_tweet_length()
-
-            if text == "" do
-              {:error, :empty_response}
-            else
-              {:ok, text}
-            end
-
-          {:error, reason} ->
-            Logger.warning("[MarketIntel] AI completion failed: #{inspect(reason)}")
-            {:error, reason}
+        if text == "" do
+          {:error, :empty_response}
+        else
+          {:ok, text}
         end
+
+      {:error, {:model_not_found, _, _} = reason} ->
+        Logger.warning("[MarketIntel] Model #{model_id} not found for provider #{provider}")
+        {:error, reason}
+
+      {:error, reason} ->
+        Logger.warning("[MarketIntel] AI completion failed: #{inspect(reason)}")
+        {:error, reason}
     end
   rescue
     e ->
