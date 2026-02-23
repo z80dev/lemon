@@ -30,6 +30,84 @@ Retention:
 
 - `LemonCore.Store` applies periodic retention sweep for `:introspection_log` (default: 7 days).
 
+## Introspection Event Taxonomy
+
+All event atoms passed as the first argument to `LemonCore.Introspection.record/3`. Grouped by the component that emits them.
+
+### Lemon-Native Events (M2) — `engine: "lemon"`, `provenance: :direct`
+
+#### RunProcess (`LemonRouter.RunProcess`)
+
+| Event Type | When |
+|---|---|
+| `:run_started` | Run process initialised |
+| `:run_completed` | Run finished (ok or error) |
+| `:run_failed` | Run process terminated abnormally |
+
+#### RunOrchestrator (`LemonRouter.RunOrchestrator`)
+
+| Event Type | When |
+|---|---|
+| `:orchestration_started` | Submit received, run_id generated |
+| `:orchestration_resolved` | Engine and model resolved, run process started |
+| `:orchestration_failed` | Engine/model resolution failed |
+
+#### ThreadWorker (`LemonGateway.ThreadWorker`)
+
+| Event Type | When |
+|---|---|
+| `:thread_started` | Thread worker initialised |
+| `:thread_message_dispatched` | Job enqueued to thread |
+| `:thread_terminated` | Thread worker stopped |
+
+#### Scheduler (`LemonGateway.Scheduler`)
+
+| Event Type | When |
+|---|---|
+| `:scheduled_job_triggered` | Job submitted to in-flight pool |
+| `:scheduled_job_completed` | Slot released after job completion |
+
+#### Session (`CodingAgent.Session`)
+
+| Event Type | When |
+|---|---|
+| `:session_started` | Session GenServer initialised |
+| `:session_ended` | Session terminated |
+| `:compaction_triggered` | Context compaction applied |
+
+#### EventHandler (`CodingAgent.Session.EventHandler`)
+
+| Event Type | When |
+|---|---|
+| `:tool_call_dispatched` | Tool call start event observed |
+
+### Agent Loop Events (M3) — `AgentCore.Agent`
+
+| Event Type | Provenance | When |
+|---|---|---|
+| `:agent_loop_started` | `:direct` | Agent loop begins |
+| `:agent_turn_observed` | `:inferred` | Each agent turn completes (streaming end) |
+| `:agent_loop_ended` | `:direct` | Agent loop finishes (idle transition) |
+
+### JSONL Runner Events (M3) — `AgentCore.CliRunners.JsonlRunner`
+
+| Event Type | Provenance | When |
+|---|---|---|
+| `:jsonl_stream_started` | `:direct` | CLI subprocess stream begins |
+| `:tool_use_observed` | `:inferred` | Tool call detected in engine output |
+| `:assistant_turn_observed` | `:inferred` | Assistant text turn detected |
+| `:jsonl_stream_ended` | `:direct` | CLI subprocess stream ends |
+
+### CLI Runner Engine Events (M3) — `provenance: :inferred`
+
+Emitted by each engine-specific runner (Codex, Claude, Kimi, OpenCode, Pi).
+
+| Event Type | Engines | When |
+|---|---|---|
+| `:engine_subprocess_started` | codex, claude, kimi, opencode, pi | Engine session/subprocess initialised |
+| `:engine_output_observed` | codex, kimi, opencode, pi | Engine produces a final answer or output |
+| `:engine_subprocess_exited` | codex, claude, kimi, opencode, pi | Engine subprocess exits with error |
+
 ## Attaching Handlers
 
 ```elixir

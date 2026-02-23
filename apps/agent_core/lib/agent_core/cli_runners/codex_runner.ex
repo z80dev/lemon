@@ -84,6 +84,7 @@ defmodule AgentCore.CliRunners.CodexRunner do
 
   alias AgentCore.CliRunners.Types.{EventFactory, ResumeToken}
   alias LemonCore.Config, as: LemonConfig
+  alias LemonCore.Introspection
 
   require Logger
 
@@ -191,6 +192,15 @@ defmodule AgentCore.CliRunners.CodexRunner do
         token = ResumeToken.new(@engine, thread_id)
         {event, factory} = EventFactory.started(state.factory, token, title: "Codex")
         state = %{state | factory: factory, found_session: token}
+
+        Introspection.record(:engine_subprocess_started, %{
+          engine: @engine,
+          thread_id: thread_id
+        },
+          engine: @engine,
+          provenance: :inferred
+        )
+
         {[event], state, [found_session: token]}
 
       # Turn lifecycle
@@ -209,6 +219,17 @@ defmodule AgentCore.CliRunners.CodexRunner do
           cached_input_tokens: usage.cached_input_tokens,
           output_tokens: usage.output_tokens
         }
+
+        Introspection.record(:engine_output_observed, %{
+          engine: @engine,
+          event_kind: :turn_completed,
+          turn_index: state.turn_index,
+          input_tokens: usage.input_tokens,
+          output_tokens: usage.output_tokens
+        },
+          engine: @engine,
+          provenance: :inferred
+        )
 
         {event, factory} =
           EventFactory.completed_ok(
@@ -286,6 +307,15 @@ defmodule AgentCore.CliRunners.CodexRunner do
 
   @impl true
   def handle_exit_error(exit_code, state) do
+    Introspection.record(:engine_subprocess_exited, %{
+      engine: @engine,
+      exit_code: exit_code,
+      ok: false
+    },
+      engine: @engine,
+      provenance: :inferred
+    )
+
     message = "codex exec failed (rc=#{exit_code})"
     {note_event, factory} = EventFactory.note(state.factory, message, ok: false)
 

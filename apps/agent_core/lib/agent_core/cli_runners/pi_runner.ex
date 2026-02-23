@@ -23,6 +23,7 @@ defmodule AgentCore.CliRunners.PiRunner do
   alias AgentCore.CliRunners.ToolActionHelpers
   alias AgentCore.CliRunners.Types.{EventFactory, ResumeToken}
   alias LemonCore.Config, as: LemonConfig
+  alias LemonCore.Introspection
 
   @engine "pi"
   @session_id_prefix_len 8
@@ -191,6 +192,15 @@ defmodule AgentCore.CliRunners.PiRunner do
     ok = state.last_assistant_error == nil
     answer = state.last_assistant_text || ""
 
+    Introspection.record(:engine_output_observed, %{
+      engine: @engine,
+      ok: ok,
+      has_answer: answer != ""
+    },
+      engine: @engine,
+      provenance: :inferred
+    )
+
     {event, factory} =
       if ok do
         EventFactory.completed_ok(state.factory, answer,
@@ -222,6 +232,15 @@ defmodule AgentCore.CliRunners.PiRunner do
 
   @impl true
   def handle_exit_error(exit_code, state) do
+    Introspection.record(:engine_subprocess_exited, %{
+      engine: @engine,
+      exit_code: exit_code,
+      ok: false
+    },
+      engine: @engine,
+      provenance: :inferred
+    )
+
     message = "pi failed (rc=#{exit_code})"
     {note_event, factory} = EventFactory.note(state.factory, message, ok: false)
 
@@ -262,6 +281,13 @@ defmodule AgentCore.CliRunners.PiRunner do
 
     {event, factory} =
       EventFactory.started(state.factory, state.resume_token, title: title, meta: meta)
+
+    Introspection.record(:engine_subprocess_started, %{
+      engine: @engine
+    },
+      engine: @engine,
+      provenance: :inferred
+    )
 
     {[event], %{state | factory: factory, started_emitted: true}}
   end

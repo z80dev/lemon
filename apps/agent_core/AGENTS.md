@@ -628,6 +628,7 @@ apps/agent_core/test/
         ├── kimi_subagent_test.exs
         ├── opencode_runner_test.exs
         ├── pi_runner_test.exs
+        ├── introspection_test.exs          # M3 introspection events
         ├── claude_integration_test.exs    # @tag :integration
         ├── codex_integration_test.exs     # @tag :integration
         └── kimi_integration_test.exs      # @tag :integration
@@ -683,10 +684,41 @@ end
 7. **Long-poll Follow-up**: Agent uses a 50ms long-poll to catch follow-up messages queued just as a run ends
 8. **Queue Modes**: Steering/follow-up queues consume `:one_at_a_time` (default) or `:all` per turn
 
+## Introspection
+
+AgentCore emits introspection events via `LemonCore.Introspection.record/3` for observability into agent and engine execution. Events are persisted to the introspection store and can be queried via `LemonCore.Introspection.list/1`.
+
+### Agent Loop Events
+
+| Event Type | Provenance | Emitted By | When |
+|---|---|---|---|
+| `:agent_loop_started` | `:direct` | `AgentCore.Agent` | Agent loop begins (`handle_continue`) |
+| `:agent_turn_observed` | `:inferred` | `AgentCore.Agent` | Each agent turn completes (streaming end) |
+| `:agent_loop_ended` | `:direct` | `AgentCore.Agent` | Agent loop finishes (idle transition) |
+
+### JSONL Runner Events
+
+| Event Type | Provenance | Emitted By | When |
+|---|---|---|---|
+| `:jsonl_stream_started` | `:direct` | `JsonlRunner` | CLI subprocess stream begins |
+| `:tool_use_observed` | `:inferred` | `JsonlRunner` | Tool call detected in engine output |
+| `:assistant_turn_observed` | `:inferred` | `JsonlRunner` | Assistant text turn detected |
+| `:jsonl_stream_ended` | `:direct` | `JsonlRunner` | CLI subprocess stream ends |
+
+### CLI Runner Engine Events (provenance: `:inferred`)
+
+| Event Type | Engines | When |
+|---|---|---|
+| `:engine_subprocess_started` | codex, claude, kimi, opencode, pi | Engine session/subprocess initialized |
+| `:engine_output_observed` | codex, kimi, opencode, pi | Engine produces a final answer or output |
+| `:engine_subprocess_exited` | codex, claude, kimi, opencode, pi | Engine subprocess exits with error |
+
+Payloads include engine-relevant metadata (engine name, exit codes, token counts) but never include prompt or response content (auto-redacted by `LemonCore.Introspection`).
+
 ## Dependencies
 
 - `ai` - Low-level LLM API abstractions
-- `lemon_core` - Shared primitives and telemetry
+- `lemon_core` - Shared primitives, telemetry, and introspection
 - `req` - HTTP client (used by Proxy)
 - `jason` - JSON encoding/decoding
 - `stream_data` - Property-based testing (test only)

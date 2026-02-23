@@ -59,7 +59,8 @@ defmodule AgentCore.CliRunners.JsonlRunner do
 
   require Logger
 
-  alias AgentCore.CliRunners.Types.{Action, ActionEvent, ResumeToken, StartedEvent}
+  alias AgentCore.CliRunners.Types.{Action, ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
+  alias LemonCore.Introspection
 
   # `:exit_status` messages can arrive before trailing stdout `:data` chunks.
   # Debounce exit finalization long enough to consistently capture all output
@@ -618,6 +619,18 @@ defmodule AgentCore.CliRunners.JsonlRunner do
           Process.send_after(self(), :timeout, state.timeout)
         end
 
+      # Emit introspection event for stream start
+      engine_name = module.engine()
+
+      Introspection.record(:jsonl_stream_started, %{
+        engine: engine_name,
+        command: cmd,
+        has_resume: state.resume != nil
+      },
+        engine: engine_name,
+        provenance: :direct
+      )
+
       state = %{
         state
         | port: port,
@@ -705,6 +718,18 @@ defmodule AgentCore.CliRunners.JsonlRunner do
       end
 
     AgentCore.EventStream.complete(state.stream, [])
+
+    # Emit introspection event for stream end
+    engine_name = state.module.engine()
+
+    Introspection.record(:jsonl_stream_ended, %{
+      engine: engine_name,
+      exit_code: exit_code,
+      ok: exit_code == 0
+    },
+      engine: engine_name,
+      provenance: :direct
+    )
 
     Logger.debug(
       "JsonlRunner finalized subprocess engine=#{state.module.engine()} exit_code=#{exit_code} done=#{inspect(state.done)}"
@@ -913,6 +938,8 @@ defmodule AgentCore.CliRunners.JsonlRunner do
   end
 
   defp emit_events(events, state) do
+    engine_name = state.module.engine()
+
     Enum.each(events, fn event ->
       # Extract session from StartedEvent
       case event do
@@ -926,9 +953,41 @@ defmodule AgentCore.CliRunners.JsonlRunner do
           :ok
       end
 
+      # Emit introspection events for observable CLI runner events
+      introspect_cli_event(event, engine_name)
+
       AgentCore.EventStream.push_async(state.stream, {:cli_event, event})
     end)
   end
+
+  defp introspect_cli_event(%ActionEvent{action: action, phase: :completed} = event, engine) do
+    case action.kind do
+      kind when kind in [:tool, :command, :file_change, :web_search] ->
+        Introspection.record(:tool_use_observed, %{
+          tool_name: action.title,
+          tool_kind: kind,
+          ok: event.ok
+        },
+          engine: engine,
+          provenance: :inferred
+        )
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp introspect_cli_event(%CompletedEvent{} = event, engine) do
+    Introspection.record(:assistant_turn_observed, %{
+      ok: event.ok,
+      has_answer: event.answer != nil and event.answer != ""
+    },
+      engine: engine,
+      provenance: :inferred
+    )
+  end
+
+  defp introspect_cli_event(_event, _engine), do: :ok
 
   defp terminate_subprocess(%{port: nil}, _mode), do: :ok
 

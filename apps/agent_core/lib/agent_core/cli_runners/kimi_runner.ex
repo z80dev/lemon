@@ -31,6 +31,7 @@ defmodule AgentCore.CliRunners.KimiRunner do
   alias AgentCore.CliRunners.KimiSchema.{ErrorMessage, Message, StreamMessage, ToolCall}
   alias AgentCore.CliRunners.ToolActionHelpers
   alias AgentCore.CliRunners.Types.{EventFactory, ResumeToken}
+  alias LemonCore.Introspection
 
   @engine "kimi"
 
@@ -155,6 +156,15 @@ defmodule AgentCore.CliRunners.KimiRunner do
 
   @impl true
   def handle_exit_error(exit_code, state) do
+    Introspection.record(:engine_subprocess_exited, %{
+      engine: @engine,
+      exit_code: exit_code,
+      ok: false
+    },
+      engine: @engine,
+      provenance: :inferred
+    )
+
     state = maybe_refresh_session(state)
     message = "kimi failed (rc=#{exit_code})"
     {note_event, factory} = EventFactory.note(state.factory, message, ok: false)
@@ -181,6 +191,15 @@ defmodule AgentCore.CliRunners.KimiRunner do
       {event, factory} = EventFactory.completed_error(state.factory, message, answer: "")
       {[event], %{state | factory: factory}}
     else
+      Introspection.record(:engine_output_observed, %{
+        engine: @engine,
+        ok: true,
+        has_answer: true
+      },
+        engine: @engine,
+        provenance: :inferred
+      )
+
       {event, factory} =
         EventFactory.completed_ok(state.factory, answer, resume: state.found_session)
 
@@ -294,6 +313,14 @@ defmodule AgentCore.CliRunners.KimiRunner do
 
   defp maybe_emit_started(%RunnerState{resume_token: %ResumeToken{} = token} = state) do
     {event, factory} = EventFactory.started(state.factory, token, title: "Kimi")
+
+    Introspection.record(:engine_subprocess_started, %{
+      engine: @engine
+    },
+      engine: @engine,
+      provenance: :inferred
+    )
+
     {[event], %{state | factory: factory, started_emitted: true, found_session: token}}
   end
 

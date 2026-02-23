@@ -48,6 +48,7 @@ defmodule AgentCore.Agent do
   alias AgentCore.Types
   alias AgentCore.Types.{AgentLoopConfig, AgentState}
   alias Ai.Types.StreamOptions
+  alias LemonCore.Introspection
 
   @follow_up_poll_timeout_ms 50
 
@@ -872,6 +873,23 @@ defmodule AgentCore.Agent do
     # Build config for the loop
     config = build_loop_config(state, abort_ref, agent_pid)
 
+    # Emit introspection event for loop start
+    model_id =
+      case new_agent_state.model do
+        %{id: id} when is_binary(id) -> id
+        _ -> ""
+      end
+
+    Introspection.record(:agent_loop_started, %{
+      model: model_id,
+      tool_count: length(new_agent_state.tools),
+      message_count: length(new_agent_state.messages),
+      is_continue: messages == nil
+    },
+      session_key: state.session_id,
+      provenance: :direct
+    )
+
     # Spawn a supervised task to run the loop
     task =
       Task.Supervisor.async_nolink(AgentCore.LoopTaskSupervisor, fn ->
@@ -1058,6 +1076,14 @@ defmodule AgentCore.Agent do
   end
 
   defp handle_agent_event({:turn_end, message, _tool_results}, state) do
+    # Emit introspection event for turn observation
+    Introspection.record(:agent_turn_observed, %{
+      has_error: match?(%{error_message: err} when is_binary(err) and err != "", message)
+    },
+      session_key: state.session_id,
+      provenance: :inferred
+    )
+
     # Check for error in the message
     error =
       case message do
@@ -1099,6 +1125,16 @@ defmodule AgentCore.Agent do
       end
 
     AbortSignal.clear(abort_ref)
+
+    # Emit introspection event for loop end
+    Introspection.record(:agent_loop_ended, %{
+      message_count: length(state.agent_state.messages),
+      had_error: state.agent_state.error != nil,
+      was_aborted: match?({:aborted, _}, state.abort_ref)
+    },
+      session_key: state.session_id,
+      provenance: :direct
+    )
 
     # Clear streaming state
     new_agent_state = %{

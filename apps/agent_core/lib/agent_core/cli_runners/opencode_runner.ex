@@ -14,6 +14,7 @@ defmodule AgentCore.CliRunners.OpencodeRunner do
   alias AgentCore.CliRunners.ToolActionHelpers
   alias AgentCore.CliRunners.Types.{EventFactory, ResumeToken}
   alias LemonCore.Config, as: LemonConfig
+  alias LemonCore.Introspection
 
   @engine "opencode"
 
@@ -135,6 +136,15 @@ defmodule AgentCore.CliRunners.OpencodeRunner do
     if reason == "stop" do
       answer = state.last_text || ""
 
+      Introspection.record(:engine_output_observed, %{
+        engine: @engine,
+        ok: true,
+        has_answer: answer != ""
+      },
+        engine: @engine,
+        provenance: :inferred
+      )
+
       {event, factory} =
         EventFactory.completed_ok(state.factory, answer, resume: state.found_session)
 
@@ -169,6 +179,15 @@ defmodule AgentCore.CliRunners.OpencodeRunner do
 
   @impl true
   def handle_exit_error(exit_code, state) do
+    Introspection.record(:engine_subprocess_exited, %{
+      engine: @engine,
+      exit_code: exit_code,
+      ok: false
+    },
+      engine: @engine,
+      provenance: :inferred
+    )
+
     message = "opencode failed (rc=#{exit_code})"
     {note_event, factory} = EventFactory.note(state.factory, message, ok: false)
 
@@ -331,6 +350,14 @@ defmodule AgentCore.CliRunners.OpencodeRunner do
   defp maybe_emit_started(%RunnerState{found_session: %ResumeToken{} = token} = state) do
     title = opencode_title(state)
     {event, factory} = EventFactory.started(state.factory, token, title: title)
+
+    Introspection.record(:engine_subprocess_started, %{
+      engine: @engine
+    },
+      engine: @engine,
+      provenance: :inferred
+    )
+
     {[event], %{state | factory: factory, started_emitted: true}}
   end
 
