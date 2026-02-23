@@ -1,6 +1,6 @@
 # PLN-20260222: Debt Phase 11 — Placeholder and Stub Burn-Down
 
-**Status:** In Progress
+**Status:** Complete
 **Branch:** `feature/pln-20260222-debt-phase-11-placeholder-stub-burndown`
 **Created:** 2026-02-22
 
@@ -13,14 +13,14 @@ implementations or explicitly managed feature flags.
 
 - [x] **M1** — Router status/count placeholder removal
 - [x] **M2** — MarketIntel placeholder replacement (AI commentary + holder stats)
-- [ ] **M3** — Voice/media and adapter TODO closure
+- [x] **M3** — Voice/media and adapter TODO closure
 
 ## Exit Criteria
 
-- No placeholder count values returned by run orchestrator status APIs
-- Commentary generation can succeed through an AI provider path in non-fallback mode
-- Voice path performs valid mulaw conversion suitable for Twilio playback
-- X API TODO list has named owners, target phases, and linked tracking issues
+- [x] No placeholder count values returned by run orchestrator status APIs
+- [x] Commentary generation can succeed through an AI provider path in non-fallback mode
+- [x] Voice path performs valid mulaw conversion suitable for Twilio playback
+- [x] X API TODO list has named owners, target phases, and linked tracking issues
 
 ---
 
@@ -38,4 +38,8 @@ implementations or explicitly managed feature flags.
 | 2026-02-22T19:40 | M2 | Replaced placeholder holder stats with feature-flagged (market_intel.holder_stats_enabled) implementation |
 | 2026-02-22T19:40 | M2 | When enabled, holder stats fetch from BaseScan token info API |
 | 2026-02-22T19:40 | M2 | Updated tests for AI provider integration and feature-flagged holder stats |
+| 2026-02-22T19:43 | M3 | Created AudioConversion module with pure-Elixir ITU-T G.711 mu-law encoder |
+| 2026-02-22T19:43 | M3 | Updated CallSession.convert_pcm_to_mulaw to use AudioConversion; detects MP3 input |
+| 2026-02-22T19:43 | M3 | Converted X API README TODO list into owned backlog table with phases and owners |
+| 2026-02-22T19:43 | M3 | Added comprehensive AudioConversion tests (monotonicity, edge cases, round-trip) |
 
