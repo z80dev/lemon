@@ -60,6 +60,33 @@ defmodule LemonGateway.Tools.CronTest do
 
     assert result.details["sessionKey"] == session_key
     assert result.details["agentId"] == "agent_x"
+    assert is_binary(result.details["memoryFile"])
+    assert String.ends_with?(result.details["memoryFile"], "#{result.details["id"]}.md")
+  end
+
+  test "add accepts memoryFile and list returns it" do
+    tool = Cron.tool(".", session_key: LemonCore.SessionKey.main("default"))
+    memory_file = Path.join(System.tmp_dir!(), "cron_tool_memory_test.md")
+
+    add_result =
+      call_tool(tool, %{
+        "action" => "add",
+        "name" => "Memory job",
+        "schedule" => "*/15 * * * *",
+        "prompt" => "remember progress",
+        "memoryFile" => memory_file
+      })
+
+    assert add_result.details["memoryFile"] == Path.expand(memory_file)
+
+    list_result = call_tool(tool, %{"action" => "list"})
+
+    listed =
+      Enum.find(list_result.details["jobs"], fn job ->
+        job["id"] == add_result.details["id"]
+      end)
+
+    assert listed["memoryFile"] == Path.expand(memory_file)
   end
 
   test "returns an error when required add fields are missing" do

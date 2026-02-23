@@ -139,6 +139,21 @@ defmodule LemonCore.SessionKeyTest do
              }
     end
 
+    test "parses main session key with sub_id" do
+      result = SessionKey.parse("agent:my_agent:main:sub:cron_123")
+
+      assert result == %{
+               agent_id: "my_agent",
+               kind: :main,
+               channel_id: nil,
+               account_id: nil,
+               peer_kind: nil,
+               peer_id: nil,
+               thread_id: nil,
+               sub_id: "cron_123"
+             }
+    end
+
     test "parses channel peer session key" do
       result = SessionKey.parse("agent:my_agent:chan_123:acc_456:dm:peer_789")
 
@@ -224,6 +239,7 @@ defmodule LemonCore.SessionKeyTest do
       assert SessionKey.parse("agent") == {:error, :invalid}
       assert SessionKey.parse("agent:only_one") == {:error, :invalid}
       assert SessionKey.parse("agent:id:extra:more") == {:error, :invalid}
+      assert SessionKey.parse("agent:id:main:sub") == {:error, :invalid}
     end
 
     test "returns error for keys with wrong prefix" do
@@ -285,6 +301,7 @@ defmodule LemonCore.SessionKeyTest do
   describe "valid?/1" do
     test "returns true for valid main session key" do
       assert SessionKey.valid?("agent:my_agent:main") == true
+      assert SessionKey.valid?("agent:my_agent:main:sub:cron_1") == true
     end
 
     test "returns true for valid channel peer session key" do
@@ -356,6 +373,7 @@ defmodule LemonCore.SessionKeyTest do
   describe "main?/1" do
     test "returns true for main session key" do
       assert SessionKey.main?("agent:my_agent:main") == true
+      assert SessionKey.main?("agent:my_agent:main:sub:cron_1") == true
     end
 
     test "returns false for channel peer session key" do

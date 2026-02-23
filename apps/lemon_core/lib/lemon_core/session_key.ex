@@ -6,7 +6,7 @@ defmodule LemonCore.SessionKey do
 
   ## Canonical Formats
 
-  - Main: `agent:<agent_id>:main`
+  - Main: `agent:<agent_id>:main[:sub:<sub_id>]`
   - Channel: `agent:<agent_id>:<channel_id>:<account_id>:<peer_kind>:<peer_id>[:thread:<thread_id>][:sub:<sub_id>]`
 
   ## Notes
@@ -104,6 +104,18 @@ defmodule LemonCore.SessionKey do
           peer_id: nil,
           thread_id: nil,
           sub_id: nil
+        }
+
+      ["agent", agent_id, "main", "sub", sub_id] ->
+        %{
+          agent_id: agent_id,
+          kind: :main,
+          channel_id: nil,
+          account_id: nil,
+          peer_kind: nil,
+          peer_id: nil,
+          thread_id: nil,
+          sub_id: sub_id
         }
 
       ["agent", agent_id, channel_id, account_id, peer_kind, peer_id | rest] ->

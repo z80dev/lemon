@@ -2,6 +2,7 @@ defmodule LemonAutomation.RunSubmitterTest do
   use ExUnit.Case, async: true
 
   alias LemonAutomation.{CronJob, CronRun, RunSubmitter}
+  alias LemonCore.SessionKey
 
   defmodule RouterOk do
     @moduledoc false
@@ -46,6 +47,12 @@ defmodule LemonAutomation.RunSubmitterTest do
   end
 
   defp sample_job(attrs \\ %{}) do
+    memory_file =
+      Path.join(
+        System.tmp_dir!(),
+        "lemon_cron_memory_run_submitter_#{System.unique_integer([:positive])}.md"
+      )
+
     base = %{
       id: "cron_1",
       name: "Test job",
@@ -53,7 +60,8 @@ defmodule LemonAutomation.RunSubmitterTest do
       agent_id: "agent_1",
       session_key: "agent:agent_1:main",
       prompt: "hello",
-      timeout_ms: 42_000
+      timeout_ms: 42_000,
+      memory_file: memory_file
     }
 
     CronJob.new(Map.merge(base, attrs))
@@ -65,16 +73,44 @@ defmodule LemonAutomation.RunSubmitterTest do
   end
 
   test "build_params/2 maps job and run metadata" do
-    job = sample_job(%{id: "cron_build", agent_id: "agent_build", session_key: "agent:build:main"})
+    job =
+      sample_job(%{
+        id: "cron_build",
+        agent_id: "agent_build",
+        session_key: "agent:build:main"
+      })
+
     run = sample_run(%{id: "run_build", triggered_by: :schedule})
 
     assert %{
              origin: :cron,
-             session_key: "agent:build:main",
-             prompt: "hello",
+             prompt: prompt,
              agent_id: "agent_build",
-             meta: %{cron_job_id: "cron_build", cron_run_id: "run_build", triggered_by: :schedule}
+             meta: %{
+               cron_job_id: "cron_build",
+               cron_run_id: "run_build",
+               triggered_by: :schedule,
+               cron_base_session_key: "agent:build:main",
+               cron_memory_file: memory_file
+             }
            } = RunSubmitter.build_params(job, run)
+
+    assert String.starts_with?(prompt, "You are running a scheduled cron task.")
+    assert String.contains?(prompt, "## Task")
+    assert is_binary(memory_file)
+  end
+
+  test "build_params/2 forks the session key for each run" do
+    job = sample_job(%{session_key: "agent:forked:main", agent_id: "forked"})
+    run = sample_run(%{id: "run_1"})
+
+    params1 = RunSubmitter.build_params(job, run)
+    params2 = RunSubmitter.build_params(job, run)
+
+    assert params1.session_key != "agent:forked:main"
+    assert params1.session_key != params2.session_key
+    assert String.starts_with?(params1.session_key, "agent:forked:main:sub:cron_")
+    assert SessionKey.valid?(params1.session_key)
   end
 
   test "submit/3 delegates to router then waiter on success" do
@@ -91,7 +127,13 @@ defmodule LemonAutomation.RunSubmitterTest do
 
     assert_receive {:router_submit, params}
     assert params.meta.cron_run_id == "run_submit"
+    assert params.session_key != job.session_key
+    assert SessionKey.valid?(params.session_key)
     assert_receive {:wait_called, "run_ok", 42_000}
+
+    assert {:ok, memory_text} = File.read(job.memory_file)
+    assert memory_text =~ "## Run run_submit"
+    assert memory_text =~ "done"
   end
 
   test "submit/3 returns inspected router error" do
@@ -100,6 +142,9 @@ defmodule LemonAutomation.RunSubmitterTest do
 
     assert {:error, ":busy"} =
              RunSubmitter.submit(job, run, router_mod: RouterError, waiter_mod: Waiter)
+
+    assert {:ok, memory_text} = File.read(job.memory_file)
+    assert memory_text =~ "status: failed"
   end
 
   test "submit/3 returns descriptive error for unexpected router return" do

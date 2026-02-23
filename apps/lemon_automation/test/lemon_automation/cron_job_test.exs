@@ -45,6 +45,7 @@ defmodule LemonAutomation.CronJobTest do
       assert job.agent_id == "agent_mixed"
       assert job.session_key == "agent:agent_mixed:main"
       assert job.prompt == "ping"
+      assert job.memory_file == nil
       assert job.timezone == "America/New_York"
       assert job.jitter_sec == 9
       assert job.timeout_ms == 120_000
@@ -190,6 +191,7 @@ defmodule LemonAutomation.CronJobTest do
                agent_id: "agent_1",
                session_key: "agent:agent_1:main",
                prompt: "Run daily checks",
+               memory_file: nil,
                timezone: "America/Los_Angeles",
                jitter_sec: 22,
                timeout_ms: 75_000,
@@ -309,6 +311,7 @@ defmodule LemonAutomation.CronJobTest do
       assert job.timezone == "UTC"
       assert job.jitter_sec == 0
       assert job.timeout_ms == 300_000
+      assert job.memory_file == nil
       assert job.created_at_ms == nil
       assert job.updated_at_ms == nil
       assert job.last_run_at_ms == nil

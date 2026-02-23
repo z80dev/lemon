@@ -27,7 +27,7 @@ defmodule LemonAutomation.Wake do
   to distinguish them from scheduled runs.
   """
 
-  alias LemonAutomation.{CronJob, CronRun, CronStore, CronManager, Events}
+  alias LemonAutomation.{CronJob, CronManager, CronRun, CronStore, Events, RunSubmitter}
 
   require Logger
 
@@ -60,7 +60,9 @@ defmodule LemonAutomation.Wake do
 
   Returns a map of job_id => result for each job.
   """
-  @spec trigger_many([binary()], keyword()) :: %{binary() => {:ok, CronRun.t()} | {:error, term()}}
+  @spec trigger_many([binary()], keyword()) :: %{
+          binary() => {:ok, CronRun.t()} | {:error, term()}
+        }
   def trigger_many(job_ids, opts \\ []) when is_list(job_ids) do
     job_ids
     |> Enum.map(fn job_id -> {job_id, trigger(job_id, opts)} end)
@@ -78,7 +80,9 @@ defmodule LemonAutomation.Wake do
       # Trigger all daily report jobs
       Wake.trigger_matching("daily")
   """
-  @spec trigger_matching(binary(), keyword()) :: %{binary() => {:ok, CronRun.t()} | {:error, term()}}
+  @spec trigger_matching(binary(), keyword()) :: %{
+          binary() => {:ok, CronRun.t()} | {:error, term()}
+        }
   def trigger_matching(pattern, opts \\ []) when is_binary(pattern) do
     pattern_downcase = String.downcase(pattern)
 
@@ -93,7 +97,9 @@ defmodule LemonAutomation.Wake do
   @doc """
   Trigger all enabled jobs for a specific agent.
   """
-  @spec trigger_for_agent(binary(), keyword()) :: %{binary() => {:ok, CronRun.t()} | {:error, term()}}
+  @spec trigger_for_agent(binary(), keyword()) :: %{
+          binary() => {:ok, CronRun.t()} | {:error, term()}
+        }
   def trigger_for_agent(agent_id, opts \\ []) when is_binary(agent_id) do
     CronStore.list_enabled_jobs()
     |> Enum.filter(fn job -> job.agent_id == agent_id end)
@@ -145,53 +151,10 @@ defmodule LemonAutomation.Wake do
     # Use CronManager for actual execution to avoid code duplication
     # This is a fire-and-forget - the run completion will be handled by CronManager
     Task.start(fn ->
-      result = submit_to_router(job, run)
+      result = RunSubmitter.submit(job, run)
       send(CronManager, {:run_complete, run.id, result})
     end)
 
     run
   end
-
-  defp submit_to_router(job, run) do
-    params = %{
-      session_key: job.session_key,
-      prompt: job.prompt,
-      agent_id: job.agent_id,
-      meta: %{
-        cron_job_id: job.id,
-        cron_run_id: run.id,
-        triggered_by: :wake
-      }
-    }
-
-    try do
-      case LemonRouter.submit(params) do
-        {:ok, result} ->
-          output = extract_output(result)
-          {:ok, output}
-
-        {:error, reason} ->
-          {:error, inspect(reason)}
-      end
-    rescue
-      e ->
-        {:error, Exception.message(e)}
-    catch
-      :exit, reason ->
-        {:error, "Exit: #{inspect(reason)}"}
-    end
-  end
-
-  defp extract_output(result) when is_map(result) do
-    cond do
-      is_binary(result[:output]) -> result[:output]
-      is_binary(result["output"]) -> result["output"]
-      is_binary(result[:response]) -> result[:response]
-      is_binary(result["response"]) -> result["response"]
-      true -> inspect(result)
-    end
-    |> String.slice(0, 1000)
-  end
-
-  defp extract_output(result), do: inspect(result) |> String.slice(0, 1000)
 end

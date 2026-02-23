@@ -11,6 +11,7 @@ defmodule LemonAutomation.CronJob do
   - `:agent_id` - Target agent for the job
   - `:session_key` - Session key for routing
   - `:prompt` - The prompt to send to the agent
+  - `:memory_file` - Optional markdown file used as persistent cross-run memory
   - `:timezone` - Timezone for schedule interpretation (default: "UTC")
   - `:jitter_sec` - Random delay in seconds to spread load (default: 0)
   - `:timeout_ms` - Maximum execution time in milliseconds
@@ -56,6 +57,7 @@ defmodule LemonAutomation.CronJob do
     :agent_id,
     :session_key,
     :prompt,
+    :memory_file,
     :created_at_ms,
     :updated_at_ms,
     :last_run_at_ms,
@@ -75,6 +77,7 @@ defmodule LemonAutomation.CronJob do
           agent_id: binary(),
           session_key: binary(),
           prompt: binary(),
+          memory_file: binary() | nil,
           timezone: binary(),
           jitter_sec: non_neg_integer(),
           timeout_ms: non_neg_integer(),
@@ -100,6 +103,7 @@ defmodule LemonAutomation.CronJob do
       agent_id: get_attr(attrs, :agent_id),
       session_key: get_attr(attrs, :session_key),
       prompt: get_attr(attrs, :prompt),
+      memory_file: get_attr(attrs, :memory_file),
       timezone: get_attr(attrs, :timezone, "UTC"),
       jitter_sec: get_attr(attrs, :jitter_sec, 0),
       timeout_ms: get_attr(attrs, :timeout_ms, 300_000),
@@ -124,6 +128,7 @@ defmodule LemonAutomation.CronJob do
         schedule: get_attr(attrs, :schedule, job.schedule),
         enabled: get_attr(attrs, :enabled, job.enabled),
         prompt: get_attr(attrs, :prompt, job.prompt),
+        memory_file: get_attr(attrs, :memory_file, job.memory_file),
         timezone: get_attr(attrs, :timezone, job.timezone),
         jitter_sec: get_attr(attrs, :jitter_sec, job.jitter_sec),
         timeout_ms: get_attr(attrs, :timeout_ms, job.timeout_ms),
@@ -173,6 +178,7 @@ defmodule LemonAutomation.CronJob do
       agent_id: job.agent_id,
       session_key: job.session_key,
       prompt: job.prompt,
+      memory_file: job.memory_file,
       timezone: job.timezone,
       jitter_sec: job.jitter_sec,
       timeout_ms: job.timeout_ms,
@@ -197,6 +203,7 @@ defmodule LemonAutomation.CronJob do
       agent_id: get_attr(map, :agent_id),
       session_key: get_attr(map, :session_key),
       prompt: get_attr(map, :prompt),
+      memory_file: get_attr(map, :memory_file),
       timezone: get_attr(map, :timezone, "UTC"),
       jitter_sec: get_attr(map, :jitter_sec, 0),
       timeout_ms: get_attr(map, :timeout_ms, 300_000),

@@ -79,6 +79,11 @@ defmodule LemonGateway.Tools.Cron do
           "type" => "string",
           "description" => "Prompt text to run when the job fires."
         },
+        "memoryFile" => %{
+          "type" => "string",
+          "description" =>
+            "Optional markdown file path used as cross-run memory for cron continuity."
+        },
         "enabled" => %{
           "type" => "boolean",
           "description" => "Whether the job is enabled (add/update)."
@@ -187,6 +192,10 @@ defmodule LemonGateway.Tools.Cron do
             agent_id: agent_id,
             session_key: target_session_key,
             prompt: prompt,
+            memory_file:
+              normalize_string(
+                fetch_param(source, "memoryFile") || fetch_param(source, "memory_file")
+              ),
             enabled: parse_bool(fetch_param(source, "enabled"), true),
             timezone: normalize_string(fetch_param(source, "timezone")) || "UTC",
             jitter_sec:
@@ -234,6 +243,12 @@ defmodule LemonGateway.Tools.Cron do
         :prompt,
         normalize_string(
           fetch_param(patch_source, "prompt") || fetch_param(patch_source, "message")
+        )
+      )
+      |> maybe_put(
+        :memory_file,
+        normalize_string(
+          fetch_param(patch_source, "memoryFile") || fetch_param(patch_source, "memory_file")
         )
       )
       |> maybe_put(:timezone, normalize_string(fetch_param(patch_source, "timezone")))
@@ -449,6 +464,7 @@ defmodule LemonGateway.Tools.Cron do
       "agentId" => Map.get(job, :agent_id),
       "sessionKey" => Map.get(job, :session_key),
       "prompt" => Map.get(job, :prompt),
+      "memoryFile" => resolved_memory_file(job),
       "timezone" => Map.get(job, :timezone) || "UTC",
       "jitterSec" => Map.get(job, :jitter_sec) || 0,
       "timeoutMs" => Map.get(job, :timeout_ms),
@@ -595,6 +611,20 @@ defmodule LemonGateway.Tools.Cron do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp resolved_memory_file(job) do
+    memory_mod = Module.concat([LemonAutomation, CronMemory])
+
+    cond do
+      Code.ensure_loaded?(memory_mod) and function_exported?(memory_mod, :memory_file, 1) ->
+        memory_mod.memory_file(job)
+
+      true ->
+        Map.get(job, :memory_file)
+    end
+  rescue
+    _ -> Map.get(job, :memory_file)
+  end
 
   defp truthy?(value), do: value not in [false, nil]
 end
