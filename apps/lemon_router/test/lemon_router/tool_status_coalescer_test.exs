@@ -181,7 +181,7 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
            end)
   end
 
-  test "telegram tool status edits the progress message when progress_msg_id is present" do
+  test "telegram tool status creates a new message when only progress_msg_id is present (no status_msg_id)" do
     session_key = "agent:tool-status:telegram:bot:group:12345:thread:777"
     channel_id = "telegram"
     run_id = "run_#{System.unique_integer([:positive])}"
@@ -196,6 +196,8 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
       level: nil
     }
 
+    # When only progress_msg_id is provided (without status_msg_id),
+    # the coalescer should create a new status message instead of trying to edit the user's message
     assert :ok =
              ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, started,
                meta: %{user_msg_id: 9, progress_msg_id: progress_msg_id}
@@ -203,19 +205,36 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
 
     assert :ok = ToolStatusCoalescer.flush(session_key, channel_id)
 
+    # Should create a new text message (not edit) since status_msg_id is nil
     assert_receive {:delivered,
                     %LemonChannels.OutboundPayload{
                       channel_id: "telegram",
-                      kind: :edit,
+                      kind: :text,
                       peer: %{id: "12345", thread_id: "777"},
-                      content: %{message_id: 9001, text: text},
+                      reply_to: 9,
                       meta: %{run_id: ^run_id}
                     }},
                    1_000
-    assert String.contains?(text, "Running")
-    assert String.contains?(text, "Tool calls:")
-    assert String.contains?(text, "Read: foo.txt")
 
+    # Wait until the coalescer captures status_msg_id from the outbox delivery ack.
+    [{pid, _}] = Registry.lookup(Elixir.LemonRouter.ToolStatusRegistry, {session_key, channel_id})
+
+    status_id =
+      Enum.reduce_while(1..50, nil, fn _, _ ->
+        state = :sys.get_state(pid)
+        id = state.meta[:status_msg_id]
+
+        if is_integer(id) do
+          {:halt, id}
+        else
+          Process.sleep(10)
+          {:cont, nil}
+        end
+      end)
+
+    assert status_id == 1001
+
+    # Now subsequent updates should edit the status message
     completed = %{started | phase: :completed, ok: true}
     assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, completed)
     assert :ok = ToolStatusCoalescer.flush(session_key, channel_id)
@@ -225,31 +244,33 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
                       channel_id: "telegram",
                       kind: :edit,
                       peer: %{id: "12345", thread_id: "777"},
-                      content: %{message_id: 9001, text: text},
+                      content: %{message_id: 1001, text: text},
                       meta: %{run_id: ^run_id}
                     }},
                    1_000
-    refute String.starts_with?(text, "Running")
     assert String.contains?(text, "Tool calls:")
   end
 
-  test "finalize_run edits progress message to Done even when there were no tool actions" do
+  test "finalize_run creates a new status message when only progress_msg_id is present" do
     session_key = "agent:tool-status:telegram:bot:group:12345:thread:777"
     channel_id = "telegram"
     run_id = "run_#{System.unique_integer([:positive])}"
     progress_msg_id = 9002
 
+    # When only progress_msg_id is provided (without status_msg_id),
+    # finalize_run should create a new status message instead of trying to edit the user's message
     assert :ok =
              ToolStatusCoalescer.finalize_run(session_key, channel_id, run_id, true,
                meta: %{user_msg_id: 9, progress_msg_id: progress_msg_id}
              )
 
+    # Should create a new text message (not edit) since status_msg_id is nil
     assert_receive {:delivered,
                     %LemonChannels.OutboundPayload{
                       channel_id: "telegram",
-                      kind: :edit,
+                      kind: :text,
                       peer: %{id: "12345", thread_id: "777"},
-                      content: %{message_id: 9002, text: "Done"},
+                      reply_to: 9,
                       meta: %{reply_markup: %{"inline_keyboard" => []}, run_id: ^run_id}
                     }},
                    1_000

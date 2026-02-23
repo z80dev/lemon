@@ -385,8 +385,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
     parsed = parse_session_key(state.session_key)
 
     status_msg_id = (state.meta || %{})[:status_msg_id]
-    progress_msg_id = (state.meta || %{})[:progress_msg_id]
-    target_msg_id = status_msg_id || progress_msg_id
+    target_msg_id = status_msg_id
 
     # For Telegram, prefer the Telegram outbox path (coalescing edits by key) via channels delivery.
     if state.channel_id == "telegram" and ChannelsDelivery.telegram_outbox_available?() do
@@ -587,7 +586,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
   defp get_output_kind_and_content(state, text) do
     supports_edit = channel_supports_edit?(state.channel_id)
-    status_msg_id = (state.meta || %{})[:status_msg_id] || (state.meta || %{})[:progress_msg_id]
+    status_msg_id = (state.meta || %{})[:status_msg_id]
 
     cond do
       supports_edit and status_msg_id != nil ->

@@ -69,7 +69,7 @@ defmodule LemonRouter.StreamCoalescer do
 
   ## Options
 
-  - `:meta` - Optional metadata map, can include `:progress_msg_id` for edit mode
+  - `:meta` - Optional metadata map, can include `:answer_msg_id` for edit mode
   """
   @spec ingest_delta(
           session_key :: binary(),
@@ -1147,16 +1147,18 @@ defmodule LemonRouter.StreamCoalescer do
 
   # Determine output kind and content based on channel capabilities
   # For :edit kind, content must be %{message_id, text} per Telegram outbound contract
+  # Note: We don't use progress_msg_id here because that's the user's message ID,
+  # and we can't edit user messages. We only edit our own messages (answer_msg_id).
   defp get_output_kind_and_content(state) do
     supports_edit = channel_supports_edit?(state.channel_id)
-    progress_msg_id = meta_get(state, :progress_msg_id)
+    answer_msg_id = meta_get(state, :answer_msg_id)
 
     cond do
-      supports_edit and progress_msg_id != nil ->
+      supports_edit and answer_msg_id != nil ->
         # Edit mode requires message_id and text
         {:edit,
          %{
-           message_id: progress_msg_id,
+           message_id: answer_msg_id,
            text: truncate_for_channel(state.channel_id, state.full_text)
          }}
 
