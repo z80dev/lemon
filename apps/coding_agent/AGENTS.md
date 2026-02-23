@@ -76,7 +76,7 @@ Tools are divided into two sets. `coding_tools/2` is the default set passed to s
 | `multiedit` | `Tools.MultiEdit` | Multiple sequential edits to one file |
 | `exec` | `Tools.Exec` | Long-running background processes with poll/kill |
 | `process` | `Tools.Process` | Control interface for `exec` background processes |
-| `poll_jobs` | `Tools.PollJobs` | Block until background jobs complete |
+| `await` | `Tools.Await` | Block until background jobs complete |
 | `webdownload` | `Tools.WebDownload` | Download binary content (images, PDFs) to disk |
 | `truncate` | `Tools.Truncate` | Truncate long text with configurable strategies |
 | `todoread` | `Tools.TodoRead` | Low-level todo read (used internally by `todo`) |
@@ -585,7 +585,7 @@ apps/coding_agent/
 │   │   ├── tools/                           # Individual tool modules
 │   │   │   ├── read.ex, write.ex, edit.ex, multiedit.ex
 │   │   │   ├── patch.ex, hashline_edit.ex, hashline.ex
-│   │   │   ├── bash.ex, exec.ex, process.ex, poll_jobs.ex
+│   │   │   ├── bash.ex, exec.ex, process.ex, await.ex
 │   │   │   ├── grep.ex, find.ex, ls.ex, fuzzy.ex
 │   │   │   ├── browser.ex, webfetch.ex, websearch.ex, webdownload.ex
 │   │   │   ├── web_cache.ex, web_guard.ex
@@ -707,5 +707,5 @@ Key config paths (via `CodingAgent.Config`):
 - Clean up sessions with `Process.exit(session, :normal)`
 - For tool tests: assert on both `content` and `details` in results
 - Use `async: false` for tests that modify global state (extensions, ETS tables, ProcessManager)
-- `poll_jobs` and `exec`/`process` tools depend on `ProcessStore` being started; start `ProcessStoreServer` in test setup if needed
+- `await` and `exec`/`process` tools depend on `ProcessStore` being started; start `ProcessStoreServer` in test setup if needed
 - `ToolRegistry` uses an ETS cache for extensions; call `ToolRegistry.invalidate_extension_cache()` in teardown if tests prime the cache

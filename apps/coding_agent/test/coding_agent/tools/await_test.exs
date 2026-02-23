@@ -1,13 +1,13 @@
-defmodule CodingAgent.Tools.PollJobsTest do
+defmodule CodingAgent.Tools.AwaitTest do
   @moduledoc """
-  Tests for the PollJobs tool.
+  Tests for the Await tool.
   """
 
   use ExUnit.Case, async: false
 
   alias AgentCore.Types.AgentToolResult
   alias AgentCore.AbortSignal
-  alias CodingAgent.Tools.PollJobs
+  alias CodingAgent.Tools.Await
   alias CodingAgent.ProcessStore
 
   setup do
@@ -18,9 +18,9 @@ defmodule CodingAgent.Tools.PollJobsTest do
 
   describe "tool/1" do
     test "returns correct tool definition" do
-      tool = PollJobs.tool("/tmp")
+      tool = Await.tool("/tmp")
 
-      assert tool.name == "poll_jobs"
+      assert tool.name == "await"
       assert is_binary(tool.description)
       assert tool.parameters["type"] == "object"
       assert "job_ids" in Map.keys(tool.parameters["properties"])
@@ -29,7 +29,7 @@ defmodule CodingAgent.Tools.PollJobsTest do
     end
 
     test "job_ids parameter is optional array" do
-      tool = PollJobs.tool("/tmp")
+      tool = Await.tool("/tmp")
       job_ids_schema = tool.parameters["properties"]["job_ids"]
 
       assert job_ids_schema["type"] == "array"
@@ -38,7 +38,7 @@ defmodule CodingAgent.Tools.PollJobsTest do
     end
 
     test "timeout parameter is optional integer" do
-      tool = PollJobs.tool("/tmp")
+      tool = Await.tool("/tmp")
       timeout_schema = tool.parameters["properties"]["timeout"]
 
       assert timeout_schema["type"] == "integer"
@@ -48,7 +48,7 @@ defmodule CodingAgent.Tools.PollJobsTest do
 
   describe "execute/6 with no jobs" do
     test "returns no jobs result when no job_ids specified and no active jobs" do
-      result = PollJobs.execute("call_1", %{}, nil, nil, "/tmp", [])
+      result = Await.execute("call_1", %{}, nil, nil, "/tmp", [])
 
       assert %AgentToolResult{content: [%{text: text}]} = result
       assert text =~ "No jobs to watch"
@@ -56,7 +56,7 @@ defmodule CodingAgent.Tools.PollJobsTest do
     end
 
     test "returns no jobs result when specified job_ids don't exist" do
-      result = PollJobs.execute("call_1", %{"job_ids" => ["nonexistent"]}, nil, nil, "/tmp", [])
+      result = Await.execute("call_1", %{"job_ids" => ["nonexistent"]}, nil, nil, "/tmp", [])
 
       assert %AgentToolResult{content: [%{text: text}]} = result
       assert text =~ "No jobs to watch"
@@ -72,7 +72,7 @@ defmodule CodingAgent.Tools.PollJobsTest do
         exit_code: 0
       })
 
-      result = PollJobs.execute("call_1", %{"job_ids" => [process_id]}, nil, nil, "/tmp", [])
+      result = Await.execute("call_1", %{"job_ids" => [process_id]}, nil, nil, "/tmp", [])
 
       assert %AgentToolResult{content: [%{text: text}]} = result
       assert text =~ "1 of 1 job(s) finished"
@@ -88,7 +88,7 @@ defmodule CodingAgent.Tools.PollJobsTest do
         error: "Command failed"
       })
 
-      result = PollJobs.execute("call_1", %{"job_ids" => [process_id]}, nil, nil, "/tmp", [])
+      result = Await.execute("call_1", %{"job_ids" => [process_id]}, nil, nil, "/tmp", [])
 
       assert %AgentToolResult{content: [%{text: text}]} = result
       assert text =~ "1 of 1 job(s) finished"
@@ -101,7 +101,7 @@ defmodule CodingAgent.Tools.PollJobsTest do
         status: :killed
       })
 
-      result = PollJobs.execute("call_1", %{"job_ids" => [process_id]}, nil, nil, "/tmp", [])
+      result = Await.execute("call_1", %{"job_ids" => [process_id]}, nil, nil, "/tmp", [])
 
       assert %AgentToolResult{content: [%{text: text}]} = result
       assert text =~ "1 of 1 job(s) finished"
@@ -112,7 +112,7 @@ defmodule CodingAgent.Tools.PollJobsTest do
       id1 = ProcessStore.new_process(%{command: "echo 1", status: :running})
       id2 = ProcessStore.new_process(%{command: "echo 2", status: :completed, exit_code: 0})
 
-      result = PollJobs.execute("call_1", %{"job_ids" => [id1, id2]}, nil, nil, "/tmp", [])
+      result = Await.execute("call_1", %{"job_ids" => [id1, id2]}, nil, nil, "/tmp", [])
 
       assert %AgentToolResult{content: [%{text: text}]} = result
       assert text =~ "1 of 2 job(s) finished"
@@ -130,7 +130,7 @@ defmodule CodingAgent.Tools.PollJobsTest do
       })
 
       # Poll with 0 second timeout
-      result = PollJobs.execute(
+      result = Await.execute(
         "call_1",
         %{"job_ids" => [process_id], "timeout" => 0},
         nil,
@@ -157,7 +157,7 @@ defmodule CodingAgent.Tools.PollJobsTest do
       signal = AbortSignal.new()
       AbortSignal.abort(signal)
 
-      result = PollJobs.execute("call_1", %{"job_ids" => [process_id]}, signal, nil, "/tmp", [])
+      result = Await.execute("call_1", %{"job_ids" => [process_id]}, signal, nil, "/tmp", [])
 
       assert %AgentToolResult{content: [%{text: text}]} = result
       assert text =~ "Polling aborted"
@@ -171,7 +171,7 @@ defmodule CodingAgent.Tools.PollJobsTest do
       id1 = ProcessStore.new_process(%{command: "echo 1", status: :running})
       id2 = ProcessStore.new_process(%{command: "echo 2", status: :completed, exit_code: 0})
 
-      result = PollJobs.execute("call_1", %{"job_ids" => []}, nil, nil, "/tmp", [])
+      result = Await.execute("call_1", %{"job_ids" => []}, nil, nil, "/tmp", [])
 
       assert %AgentToolResult{content: [%{text: text}]} = result
       assert text =~ "1 of 2 job(s) finished"
@@ -188,7 +188,7 @@ defmodule CodingAgent.Tools.PollJobsTest do
         exit_code: 0
       })
 
-      result = PollJobs.execute("call_1", %{"job_ids" => [process_id]}, nil, nil, "/tmp", [])
+      result = Await.execute("call_1", %{"job_ids" => [process_id]}, nil, nil, "/tmp", [])
 
       assert is_list(result.details.jobs)
       assert length(result.details.jobs) == 1
@@ -210,7 +210,7 @@ defmodule CodingAgent.Tools.PollJobsTest do
         status: :completed
       })
 
-      result = PollJobs.execute("call_1", %{"job_ids" => [process_id]}, nil, nil, "/tmp", [])
+      result = Await.execute("call_1", %{"job_ids" => [process_id]}, nil, nil, "/tmp", [])
 
       assert %AgentToolResult{content: [%{text: text}]} = result
       # Should show truncated command with ...

@@ -1,6 +1,6 @@
-defmodule CodingAgent.Tools.PollJobs do
+defmodule CodingAgent.Tools.Await do
   @moduledoc """
-  Poll Jobs tool - blocks until one or more background jobs complete, fail, or are cancelled.
+  Await tool - blocks until one or more background jobs complete, fail, or are cancelled.
 
   Use this instead of polling `read jobs://` in a loop when you need to wait for
   background task or bash results before continuing.
@@ -21,7 +21,7 @@ defmodule CodingAgent.Tools.PollJobs do
   @spec tool(String.t()) :: map()
   def tool(cwd) do
     %{
-      name: "poll_jobs",
+      name: "await",
       description: """
       Block until one or more background jobs complete, fail, or are cancelled.
 
@@ -50,7 +50,7 @@ defmodule CodingAgent.Tools.PollJobs do
   end
 
   @doc """
-  Execute the poll_jobs tool.
+  Execute the await tool.
 
   Blocks until at least one job completes, fails, or is cancelled, then returns
   the status of all watched jobs.
