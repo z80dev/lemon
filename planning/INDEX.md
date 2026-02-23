@@ -33,6 +33,7 @@ These entries were already completed before the `planning/` workflow was created
 | Plan ID | Title | Status | Owner | Branch | Roadmap Ref | Updated |
 |---|---|---|---|---|---|---|
 | [PLN-20260222-agent-introspection](plans/PLN-20260222-agent-introspection.md) | End-to-end agent introspection | `in_progress` | `codex` | `feature/pln-20260222-agent-introspection-m1` | `ROADMAP.md:74` | 2026-02-23 |
+| [PLN-20260223-lemon-quality-unblock](plans/PLN-20260223-lemon-quality-unblock.md) | Unblock `mix lemon.quality` (duplicate tests + architecture boundaries) | `planned` | `codex` | `feature/pln-20260223-lemon-quality-unblock` | `ROADMAP.md:74` | 2026-02-23 |
 | [PLN-20260223-ai-test-expansion](plans/PLN-20260223-ai-test-expansion.md) | Add tests for untested AI app modules | `in_review` | `zeebot` | — | `ROADMAP.md` | 2026-02-23 |
 | [PLN-20260223-macos-keychain-secrets-audit](plans/PLN-20260223-macos-keychain-secrets-audit.md) | macOS Keychain secrets path audit and hardening | `planned` | `zeebot` | `feature/pln-20260223-macos-keychain-secrets-audit` | `ROADMAP.md` | 2026-02-23 |
 | [PLN-20260222-debt-phase-09-gateway-reliability-decomposition](plans/PLN-20260222-debt-phase-09-gateway-reliability-decomposition.md) | Debt Phase 9 - Gateway runtime reliability decomposition | `planned` | `unassigned` | `feature/pln-20260222-debt-phase-09-gateway-reliability-decomposition` | `debt_plan.md:99` | 2026-02-22 |
