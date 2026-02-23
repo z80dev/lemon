@@ -370,6 +370,39 @@ mix lemon.quality --root /path/to/repo
 mix lemon.store.migrate_jsonl_to_sqlite --from /old/path --to /new/path
 ```
 
+### Introspection Tasks
+
+```bash
+# Show the 20 most recent introspection events (default)
+mix lemon.introspection
+
+# Increase limit
+mix lemon.introspection --limit 100
+
+# Filter by run ID
+mix lemon.introspection --run-id <run_id>
+
+# Filter by session key
+mix lemon.introspection --session-key <session_key>
+
+# Filter by event type
+mix lemon.introspection --event-type tool_completed
+
+# Filter by agent ID
+mix lemon.introspection --agent-id <agent_id>
+
+# Relative time window (h = hours, m = minutes, d = days)
+mix lemon.introspection --since 1h
+mix lemon.introspection --since 30m
+mix lemon.introspection --since 2d
+
+# Absolute time window (ISO 8601)
+mix lemon.introspection --since 2026-02-23T00:00:00Z
+
+# Combine filters
+mix lemon.introspection --run-id <run_id> --event-type tool_completed --limit 50
+```
+
 ### Cleanup Tasks
 
 ```bash

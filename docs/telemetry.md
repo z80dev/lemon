@@ -517,3 +517,200 @@ config :telemetry_poller, :default,
 - Use `:telemetry.span/3` for automatic start/end events
 - Consider sampling high-frequency events in production
 - Use `:telemetry_metrics` for aggregation
+
+---
+
+## Agent Introspection
+
+Agent introspection is a higher-level persistence layer built on top of `:telemetry`. It captures a canonical event envelope for every meaningful agent lifecycle transition and persists it to `LemonCore.Store` for later query by operators.
+
+### What Introspection Events Are
+
+Introspection events are structured records that capture agent execution context at key moments: when a run starts or ends, when a session is created, when a tool executes, when a subprocess (subagent) is spawned, and similar lifecycle transitions. Unlike raw telemetry (which is fire-and-forget), introspection events are **persisted** and **queryable**.
+
+Events are retained for 7 days by default and can be queried with filters for run ID, session key, agent ID, event type, and time range.
+
+### Event Schema
+
+Every introspection event has the following fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `event_id` | `string` | Stable unique identifier (prefixed `evt_`) |
+| `event_type` | `atom` or `string` | Event taxonomy name (see taxonomy below) |
+| `ts_ms` | `integer` | Wall-clock timestamp in milliseconds since Unix epoch |
+| `run_id` | `string` or `nil` | Run identifier |
+| `session_key` | `string` or `nil` | Session identifier |
+| `agent_id` | `string` or `nil` | Agent identifier |
+| `parent_run_id` | `string` or `nil` | Lineage link to parent run when available |
+| `engine` | `string` or `nil` | Engine name (e.g. `"claude"`, `"codex"`, `"lemon"`) |
+| `provenance` | `:direct` or `:inferred` or `:unavailable` | How the context fields were resolved |
+| `payload` | `map` | Event-specific metadata, redacted of secrets |
+
+#### Provenance Values
+
+- `:direct` — context fields (run_id, session_key, etc.) were provided directly by the emitting code.
+- `:inferred` — context fields were derived from surrounding state (e.g. process dictionary or ETS).
+- `:unavailable` — context could not be determined at emit time.
+
+#### Redaction Defaults
+
+The following payload fields are always removed before persistence:
+
+- `api_key`, `apikey`, `authorization`, `password`, `private_key`
+- `prompt`, `response`, `secret`, `secrets`, `stderr`, `stdout`, `token`
+
+Tool argument fields (`arguments`, `input`, `tool_arguments`) are redacted by default. Pass `capture_tool_args: true` to `LemonCore.Introspection.record/3` to retain them.
+
+Result preview fields (`preview`, `result_preview`) are kept by default and truncated to 256 bytes. Pass `capture_result_preview: false` to suppress them.
+
+All other string values are truncated to 4096 bytes.
+
+### Event Taxonomy
+
+Events are organized into three categories:
+
+#### Run Lifecycle
+
+| Event Type | When Emitted |
+|-----------|--------------|
+| `run_started` | A run is accepted and begins processing |
+| `run_completed` | A run finishes successfully |
+| `run_aborted` | A run is aborted (user request or error) |
+| `run_queued` | A run enters the queue awaiting a slot |
+| `run_followup` | A follow-up run is submitted to an active session |
+
+#### Session Lifecycle
+
+| Event Type | When Emitted |
+|-----------|--------------|
+| `session_created` | A new session is established |
+| `session_expired` | A session is cleaned up after TTL expiry |
+| `session_policy_applied` | A policy is applied to a session |
+
+#### Engine / Subprocess Events
+
+| Event Type | When Emitted |
+|-----------|--------------|
+| `tool_started` | A tool begins execution within an agent loop |
+| `tool_completed` | A tool finishes (success or error result) |
+| `subagent_spawned` | A subprocess agent is spawned |
+| `subagent_completed` | A subprocess agent finishes |
+| `engine_loop_started` | An engine's main agent loop iteration begins |
+| `engine_loop_completed` | An engine's main agent loop iteration ends |
+
+### Querying via IEx
+
+Start an IEx session against a running node (or directly with `iex -S mix`) and use `LemonCore.Introspection.list/1`:
+
+```elixir
+# All recent events (default limit: 100)
+LemonCore.Introspection.list([])
+
+# Filter by run ID
+LemonCore.Introspection.list(run_id: "run_abc123", limit: 50)
+
+# Filter by session key
+LemonCore.Introspection.list(session_key: "agent:default:main", limit: 20)
+
+# Filter by event type
+LemonCore.Introspection.list(event_type: :tool_completed, limit: 30)
+
+# Filter by agent
+LemonCore.Introspection.list(agent_id: "my_agent", limit: 50)
+
+# Time range (ms since Unix epoch)
+now_ms = System.system_time(:millisecond)
+one_hour_ago = now_ms - 60 * 60 * 1000
+LemonCore.Introspection.list(since_ms: one_hour_ago, limit: 200)
+
+# Combine filters
+LemonCore.Introspection.list(
+  run_id: "run_abc123",
+  event_type: :tool_completed,
+  limit: 10
+)
+```
+
+Results are returned newest-first as a list of maps. Each map has the fields described in the schema table above.
+
+### Querying via the Mix Task
+
+The `mix lemon.introspection` task provides a human-readable table view for operators:
+
+```bash
+# Show the 20 most recent events (default)
+mix lemon.introspection
+
+# Increase limit
+mix lemon.introspection --limit 100
+
+# Filter by run ID
+mix lemon.introspection --run-id run_abc123
+
+# Filter by session key
+mix lemon.introspection --session-key "agent:default:main"
+
+# Filter by event type
+mix lemon.introspection --event-type tool_completed
+
+# Filter by agent
+mix lemon.introspection --agent-id my_agent
+
+# Relative time window (events in the last hour)
+mix lemon.introspection --since 1h
+
+# Relative time window (last 30 minutes)
+mix lemon.introspection --since 30m
+
+# Absolute time window (ISO 8601)
+mix lemon.introspection --since 2026-02-23T00:00:00Z
+
+# Combine filters
+mix lemon.introspection --run-id run_abc123 --event-type tool_completed --limit 50
+```
+
+The task outputs a table with columns: `Timestamp`, `Event Type`, `Run ID`, `Session Key`, `Agent ID`, `Engine`, `Provenance`. Long identifiers are truncated with a `~` suffix.
+
+### Emitting Introspection Events
+
+Use `LemonCore.Introspection.record/3` to persist an event from any application in the umbrella:
+
+```elixir
+# Basic usage
+LemonCore.Introspection.record(:run_started, %{origin: "telegram"}, run_id: run_id, session_key: session_key)
+
+# With engine and agent context
+LemonCore.Introspection.record(
+  :tool_completed,
+  %{tool_name: "exec", result_preview: "ok"},
+  run_id: run_id,
+  session_key: session_key,
+  agent_id: "default",
+  engine: "codex"
+)
+
+# With custom provenance
+LemonCore.Introspection.record(
+  :run_aborted,
+  %{reason: "user_requested"},
+  run_id: run_id,
+  session_key: session_key,
+  provenance: :inferred
+)
+```
+
+### Disabling Introspection
+
+To disable persistence of introspection events (events are silently dropped), add to your config:
+
+```elixir
+# config/config.exs or config/prod.exs
+config :lemon_core, :introspection, enabled: false
+```
+
+When disabled, `LemonCore.Introspection.record/3` returns `:ok` immediately without touching the store. The `LemonCore.Introspection.enabled?/0` function reflects the current setting.
+
+### Retention
+
+The store applies a periodic retention sweep to the `:introspection_log` table. By default, events older than **7 days** are pruned. This sweep runs at the same interval as the chat-state sweep (every 5 minutes).
