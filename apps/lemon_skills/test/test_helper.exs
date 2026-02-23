@@ -13,4 +13,10 @@ System.put_env("HOME", home)
 # Keep X adapter resolution deterministic in tests; individual tests can override.
 Application.put_env(:lemon_channels, :x_api_use_secrets, false)
 
+# Load test support modules
+Code.require_file("support/http_mock.ex", __DIR__)
+
+# Wire up the deterministic HTTP mock so Discovery tests don't need real HTTP.
+Application.put_env(:lemon_skills, :http_client, LemonSkills.HttpClient.Mock)
+
 Application.ensure_all_started(:lemon_skills)

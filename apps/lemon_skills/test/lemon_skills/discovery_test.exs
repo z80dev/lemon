@@ -5,14 +5,78 @@ defmodule LemonSkills.DiscoveryTest do
   These tests verify that online skill discovery works correctly,
   including GitHub search, URL validation, and result deduplication.
 
-  Note: Many tests are skipped in the test environment because the HTTP
-  client (:httpc) requires the :http_util module which is not available
-  in test mode. These tests can be run manually in a live environment.
+  All HTTP calls are handled by `LemonSkills.HttpClient.Mock`, configured
+  in test_helper.exs, so no real network access is required.
   """
 
   use ExUnit.Case, async: false
 
   alias LemonSkills.Discovery
+  alias LemonSkills.HttpClient.Mock, as: HttpMock
+
+  # ---------------------------------------------------------------------------
+  # Fixtures
+  # ---------------------------------------------------------------------------
+
+  @github_search_one_result Jason.encode!(%{
+                              "items" => [
+                                %{
+                                  "full_name" => "acme/lemon-skill-hello",
+                                  "html_url" => "https://github.com/acme/lemon-skill-hello",
+                                  "name" => "lemon-skill-hello",
+                                  "description" => "A greeting skill for Lemon",
+                                  "stargazers_count" => 42
+                                }
+                              ]
+                            })
+
+  @github_search_multi_result Jason.encode!(%{
+                                "items" => [
+                                  %{
+                                    "full_name" => "acme/lemon-skill-alpha",
+                                    "html_url" => "https://github.com/acme/lemon-skill-alpha",
+                                    "name" => "lemon-skill-alpha",
+                                    "description" => "Alpha skill",
+                                    "stargazers_count" => 100
+                                  },
+                                  %{
+                                    "full_name" => "acme/lemon-skill-beta",
+                                    "html_url" => "https://github.com/acme/lemon-skill-beta",
+                                    "name" => "lemon-skill-beta",
+                                    "description" => "Beta skill",
+                                    "stargazers_count" => 50
+                                  },
+                                  %{
+                                    "full_name" => "acme/lemon-skill-gamma",
+                                    "html_url" => "https://github.com/acme/lemon-skill-gamma",
+                                    "name" => "lemon-skill-gamma",
+                                    "description" => "Gamma skill",
+                                    "stargazers_count" => 10
+                                  }
+                                ]
+                              })
+
+  @github_search_empty Jason.encode!(%{"items" => []})
+
+  @valid_skill_md """
+  ---
+  name: hello-skill
+  description: A test skill
+  ---
+
+  ## When to use
+
+  Use for testing.
+  """
+
+  # ---------------------------------------------------------------------------
+  # Setup
+  # ---------------------------------------------------------------------------
+
+  setup do
+    HttpMock.reset()
+    :ok
+  end
 
   # ============================================================================
   # discover/2 Tests
@@ -29,48 +93,77 @@ defmodule LemonSkills.DiscoveryTest do
       assert results == []
     end
 
-    @tag :skip
     test "returns results within timeout" do
-      # Skipped: requires HTTP client in test environment
+      HttpMock.stub(
+        "https://api.github.com/search/repositories",
+        {:ok, @github_search_one_result}
+      )
+
+      HttpMock.stub("https://skills.lemon.agent/", {:error, :nxdomain})
+
+      HttpMock.stub(
+        "https://raw.githubusercontent.com/lemon-agent/skills/main/",
+        {:error, :nxdomain}
+      )
+
       results = Discovery.discover("test", timeout: 5_000, max_results: 5)
 
-      # Should return a list (may be empty if GitHub is unavailable)
       assert is_list(results)
       assert length(results) <= 5
+      assert length(results) >= 1
     end
 
-    @tag :skip
     test "respects max_results option" do
-      # Skipped: requires HTTP client in test environment
-      results = Discovery.discover("github", timeout: 5_000, max_results: 3)
-      assert length(results) <= 3
+      HttpMock.stub(
+        "https://api.github.com/search/repositories",
+        {:ok, @github_search_multi_result}
+      )
+
+      HttpMock.stub("https://skills.lemon.agent/", {:error, :nxdomain})
+
+      HttpMock.stub(
+        "https://raw.githubusercontent.com/lemon-agent/skills/main/",
+        {:error, :nxdomain}
+      )
+
+      results = Discovery.discover("github", timeout: 5_000, max_results: 2)
+      assert length(results) <= 2
     end
 
-    @tag :skip
     test "returns results with correct structure" do
-      # Skipped: requires HTTP client in test environment
+      HttpMock.stub(
+        "https://api.github.com/search/repositories",
+        {:ok, @github_search_one_result}
+      )
+
+      HttpMock.stub("https://skills.lemon.agent/", {:error, :nxdomain})
+
+      HttpMock.stub(
+        "https://raw.githubusercontent.com/lemon-agent/skills/main/",
+        {:error, :nxdomain}
+      )
+
       results = Discovery.discover("test", timeout: 5_000, max_results: 1)
 
-      if length(results) > 0 do
-        [first | _] = results
+      assert length(results) > 0
+      [first | _] = results
 
-        # Check structure
-        assert is_map(first)
-        assert Map.has_key?(first, :entry)
-        assert Map.has_key?(first, :source)
-        assert Map.has_key?(first, :validated)
-        assert Map.has_key?(first, :url)
+      # Check structure
+      assert is_map(first)
+      assert Map.has_key?(first, :entry)
+      assert Map.has_key?(first, :source)
+      assert Map.has_key?(first, :validated)
+      assert Map.has_key?(first, :url)
 
-        # Source should be an atom
-        assert is_atom(first.source)
-        assert first.source in [:github, :registry, :url]
+      # Source should be an atom
+      assert is_atom(first.source)
+      assert first.source in [:github, :registry, :url]
 
-        # Validated should be boolean
-        assert is_boolean(first.validated)
+      # Validated should be boolean
+      assert is_boolean(first.validated)
 
-        # URL should be string
-        assert is_binary(first.url)
-      end
+      # URL should be string
+      assert is_binary(first.url)
     end
   end
 
@@ -79,25 +172,46 @@ defmodule LemonSkills.DiscoveryTest do
   # ============================================================================
 
   describe "validate_skill/1" do
-    @tag :skip
     test "returns nil for invalid URL" do
-      # Skipped: requires HTTP client in test environment
+      HttpMock.stub("https://invalid.example.com/nonexistent", {:error, :nxdomain})
+
       result = Discovery.validate_skill("https://invalid.example.com/nonexistent")
       assert result == nil
     end
 
-    @tag :skip
     test "returns nil for non-existent skill" do
-      # Skipped: requires HTTP client in test environment
-      result = Discovery.validate_skill("https://raw.githubusercontent.com/nonexistent/repo/main/SKILL.md")
+      HttpMock.stub(
+        "https://raw.githubusercontent.com/nonexistent/repo/main/SKILL.md",
+        {:error, {:http_error, 404}}
+      )
+
+      result =
+        Discovery.validate_skill(
+          "https://raw.githubusercontent.com/nonexistent/repo/main/SKILL.md"
+        )
+
       assert result == nil
     end
 
-    @tag :skip
     test "handles malformed URLs gracefully" do
-      # Skipped: requires HTTP client in test environment
+      HttpMock.stub("not-a-valid-url", {:error, :invalid_url})
+
       result = Discovery.validate_skill("not-a-valid-url")
       assert result == nil
+    end
+
+    test "returns entry for valid SKILL.md" do
+      HttpMock.stub(
+        "https://raw.githubusercontent.com/acme/skill/main/SKILL.md",
+        {:ok, @valid_skill_md}
+      )
+
+      result =
+        Discovery.validate_skill("https://raw.githubusercontent.com/acme/skill/main/SKILL.md")
+
+      assert result != nil
+      assert result.name == "hello-skill"
+      assert result.description == "A test skill"
     end
   end
 
@@ -106,43 +220,64 @@ defmodule LemonSkills.DiscoveryTest do
   # ============================================================================
 
   describe "scoring" do
-    @tag :skip
     test "results are sorted by discovery score" do
-      # Skipped: requires HTTP client in test environment
+      HttpMock.stub(
+        "https://api.github.com/search/repositories",
+        {:ok, @github_search_multi_result}
+      )
+
+      HttpMock.stub("https://skills.lemon.agent/", {:error, :nxdomain})
+
+      HttpMock.stub(
+        "https://raw.githubusercontent.com/lemon-agent/skills/main/",
+        {:error, :nxdomain}
+      )
+
       results = Discovery.discover("github", timeout: 5_000, max_results: 5)
 
       if length(results) >= 2 do
-        scores = Enum.map(results, fn r ->
-          get_in(r.entry.manifest, ["_discovery_metadata", "discovery_score"]) || 0
-        end)
+        scores =
+          Enum.map(results, fn r ->
+            get_in(r.entry.manifest, ["_discovery_metadata", "discovery_score"]) || 0
+          end)
+
         assert scores == Enum.sort(scores, :desc)
       end
     end
 
-    @tag :skip
     test "higher star counts contribute to higher scores" do
-      # Skipped: requires HTTP client in test environment
+      HttpMock.stub(
+        "https://api.github.com/search/repositories",
+        {:ok, @github_search_multi_result}
+      )
+
+      HttpMock.stub("https://skills.lemon.agent/", {:error, :nxdomain})
+
+      HttpMock.stub(
+        "https://raw.githubusercontent.com/lemon-agent/skills/main/",
+        {:error, :nxdomain}
+      )
+
       results = Discovery.discover("api", timeout: 5_000, max_results: 10)
 
-      if length(results) >= 2 do
-        # Check that entries with more stars tend to have higher scores
-        star_score_pairs =
-          Enum.map(results, fn r ->
-            stars = get_in(r.entry.manifest, ["_discovery_metadata", "github_stars"]) || 0
-            score = get_in(r.entry.manifest, ["_discovery_metadata", "discovery_score"]) || 0
-            {stars, score}
-          end)
+      assert length(results) >= 2
 
-        # The highest starred entry should generally be near the top
-        {max_stars, _} = Enum.max_by(star_score_pairs, fn {s, _} -> s end)
-        {_, max_score} = Enum.max_by(star_score_pairs, fn {_, s} -> s end)
+      star_score_pairs =
+        Enum.map(results, fn r ->
+          stars = get_in(r.entry.manifest, ["_discovery_metadata", "github_stars"]) || 0
+          score = get_in(r.entry.manifest, ["_discovery_metadata", "discovery_score"]) || 0
+          {stars, score}
+        end)
 
-        # Entry with max stars should have a reasonably high score
-        {max_star_entry_score, _} =
-          Enum.find(star_score_pairs, fn {s, _} -> s == max_stars end)
+      # The highest starred entry should have the highest score
+      {max_stars, _} = Enum.max_by(star_score_pairs, fn {s, _} -> s end)
+      {_, max_score} = Enum.max_by(star_score_pairs, fn {_, s} -> s end)
 
-        assert max_star_entry_score >= max_score * 0.5
-      end
+      # Entry with max stars should have a reasonably high score
+      {_, max_star_entry_score} =
+        Enum.find(star_score_pairs, fn {s, _} -> s == max_stars end)
+
+      assert max_star_entry_score >= max_score * 0.5
     end
   end
 
@@ -151,9 +286,36 @@ defmodule LemonSkills.DiscoveryTest do
   # ============================================================================
 
   describe "deduplication" do
-    @tag :skip
     test "results do not contain duplicate URLs" do
-      # Skipped: requires HTTP client in test environment
+      # Return items that would produce duplicate URLs
+      duplicate_items =
+        Jason.encode!(%{
+          "items" => [
+            %{
+              "full_name" => "acme/lemon-skill-test",
+              "html_url" => "https://github.com/acme/lemon-skill-test",
+              "name" => "lemon-skill-test",
+              "description" => "Test skill",
+              "stargazers_count" => 5
+            },
+            %{
+              "full_name" => "other/lemon-skill-test2",
+              "html_url" => "https://github.com/other/lemon-skill-test2",
+              "name" => "lemon-skill-test2",
+              "description" => "Test skill 2",
+              "stargazers_count" => 3
+            }
+          ]
+        })
+
+      HttpMock.stub("https://api.github.com/search/repositories", {:ok, duplicate_items})
+      HttpMock.stub("https://skills.lemon.agent/", {:error, :nxdomain})
+
+      HttpMock.stub(
+        "https://raw.githubusercontent.com/lemon-agent/skills/main/",
+        {:error, :nxdomain}
+      )
+
       results = Discovery.discover("test", timeout: 5_000, max_results: 20)
 
       urls = Enum.map(results, fn r -> r.url end)
@@ -168,19 +330,33 @@ defmodule LemonSkills.DiscoveryTest do
   # ============================================================================
 
   describe "error handling" do
-    @tag :skip
     test "handles network timeouts gracefully" do
-      # Skipped: requires HTTP client in test environment
-      # Use a very short timeout to force timeout errors
-      results = Discovery.discover("test", timeout: 1, max_results: 5)
+      # Stub all sources to return timeout errors
+      HttpMock.stub("https://api.github.com/search/repositories", {:error, :timeout})
+      HttpMock.stub("https://skills.lemon.agent/", {:error, :timeout})
 
-      # Should return empty list or partial results, not crash
+      HttpMock.stub(
+        "https://raw.githubusercontent.com/lemon-agent/skills/main/",
+        {:error, :timeout}
+      )
+
+      results = Discovery.discover("test", timeout: 5_000, max_results: 5)
+
+      # Should return empty list, not crash
       assert is_list(results)
+      assert results == []
     end
 
-    @tag :skip
     test "handles missing GitHub token gracefully" do
-      # Skipped: requires HTTP client in test environment
+      # Stub GitHub to return an auth error (simulating no token)
+      HttpMock.stub("https://api.github.com/search/repositories", {:error, {:http_error, 403}})
+      HttpMock.stub("https://skills.lemon.agent/", {:error, :nxdomain})
+
+      HttpMock.stub(
+        "https://raw.githubusercontent.com/lemon-agent/skills/main/",
+        {:error, :nxdomain}
+      )
+
       results = Discovery.discover("test", timeout: 5_000, max_results: 3)
       assert is_list(results)
     end
@@ -193,12 +369,9 @@ defmodule LemonSkills.DiscoveryTest do
   describe "integration" do
     @tag :integration
     test "can discover GitHub-related skills" do
-      # Skipped: requires HTTP client in test environment
       results = Discovery.discover("github", timeout: 10_000, max_results: 5)
 
-      # Should find at least one result for a common term
       if length(results) > 0 do
-        # Check that results have GitHub-related metadata
         first = hd(results)
         assert first.source == :github
         assert is_number(get_in(first.entry.manifest, ["_discovery_metadata", "github_stars"]))
@@ -208,19 +381,16 @@ defmodule LemonSkills.DiscoveryTest do
 
     @tag :integration
     test "entry structure is complete" do
-      # Skipped: requires HTTP client in test environment
       results = Discovery.discover("api", timeout: 10_000, max_results: 3)
 
       for result <- results do
         entry = result.entry
 
-        # Required fields
         assert is_binary(entry.key)
         assert is_binary(entry.name)
         assert is_binary(entry.description)
         assert is_binary(entry.path)
 
-        # Metadata stored in manifest
         assert is_map(entry.manifest)
         assert is_number(get_in(entry.manifest, ["_discovery_metadata", "discovery_score"]))
       end

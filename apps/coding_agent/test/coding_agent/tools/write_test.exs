@@ -288,38 +288,36 @@ defmodule CodingAgent.Tools.WriteTest do
   # ============================================================================
 
   describe "execute/6 - permission denied" do
-    @tag :skip_on_ci
     test "returns error when parent directory is not writable", %{tmp_dir: tmp_dir} do
+      import CodingAgent.TestHelpers.PermissionHelpers
+
       no_write_dir = Path.join(tmp_dir, "no_write")
       File.mkdir_p!(no_write_dir)
-      File.chmod!(no_write_dir, 0o555)
 
-      path = Path.join(no_write_dir, "file.txt")
+      with_unwritable_dir(no_write_dir, fn ->
+        path = Path.join(no_write_dir, "file.txt")
 
-      result =
-        Write.execute("call_1", %{"path" => path, "content" => "test"}, nil, nil, tmp_dir, [])
+        result =
+          Write.execute("call_1", %{"path" => path, "content" => "test"}, nil, nil, tmp_dir, [])
 
-      # Restore permissions for cleanup
-      File.chmod!(no_write_dir, 0o755)
-
-      assert {:error, msg} = result
-      assert msg =~ "Failed to write file"
+        assert {:error, msg} = result
+        assert msg =~ "Failed to write file"
+      end)
     end
 
-    @tag :skip_on_ci
     test "returns error when file is not writable", %{tmp_dir: tmp_dir} do
+      import CodingAgent.TestHelpers.PermissionHelpers
+
       path = Path.join(tmp_dir, "readonly.txt")
       File.write!(path, "original")
-      File.chmod!(path, 0o444)
 
-      result =
-        Write.execute("call_1", %{"path" => path, "content" => "new"}, nil, nil, tmp_dir, [])
+      with_readonly_file(path, fn ->
+        result =
+          Write.execute("call_1", %{"path" => path, "content" => "new"}, nil, nil, tmp_dir, [])
 
-      # Restore permissions for cleanup
-      File.chmod!(path, 0o644)
-
-      assert {:error, msg} = result
-      assert msg =~ "Failed to write file"
+        assert {:error, msg} = result
+        assert msg =~ "Failed to write file"
+      end)
     end
   end
 

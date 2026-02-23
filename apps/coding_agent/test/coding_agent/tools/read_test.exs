@@ -474,20 +474,18 @@ defmodule CodingAgent.Tools.ReadTest do
   end
 
   describe "execute/6 - permission denied" do
-    @tag :skip_on_ci
     test "returns error for unreadable file", %{tmp_dir: tmp_dir} do
+      import CodingAgent.TestHelpers.PermissionHelpers
+
       path = Path.join(tmp_dir, "no_read.txt")
       File.write!(path, "secret")
-      File.chmod!(path, 0o000)
 
-      result = Read.execute("call_1", %{"path" => path}, nil, nil, tmp_dir, [])
+      with_unreadable(path, fn ->
+        result = Read.execute("call_1", %{"path" => path}, nil, nil, tmp_dir, [])
 
-      # Restore permissions for cleanup
-      File.chmod!(path, 0o644)
-
-      assert {:error, msg} = result
-      # Error message may come from stat (Permission denied) or read (eacces)
-      assert msg =~ "Permission denied" or msg =~ "eacces"
+        assert {:error, msg} = result
+        assert msg =~ "Permission denied" or msg =~ "eacces"
+      end)
     end
   end
 
