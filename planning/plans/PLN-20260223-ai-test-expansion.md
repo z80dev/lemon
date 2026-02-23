@@ -2,7 +2,7 @@
 
 ## Metadata
 - **Plan ID**: PLN-20260223-ai-test-expansion
-- **Status**: in_review
+- **Status**: merged
 - **Created**: 2026-02-23
 - **Author**: zeebot
 

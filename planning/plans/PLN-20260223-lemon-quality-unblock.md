@@ -1,7 +1,7 @@
 ---
 id: PLN-20260223-lemon-quality-unblock
 title: Unblock `mix lemon.quality` (duplicate tests + architecture boundaries)
-status: ready_to_merge
+status: merged
 priority_bucket: now
 owner: codex
 reviewer: codex

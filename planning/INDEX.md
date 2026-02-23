@@ -33,8 +33,6 @@ These entries were already completed before the `planning/` workflow was created
 | Plan ID | Title | Status | Owner | Branch | Roadmap Ref | Updated |
 |---|---|---|---|---|---|---|
 | [PLN-20260222-agent-introspection](plans/PLN-20260222-agent-introspection.md) | End-to-end agent introspection | `in_progress` | `codex` | `feature/pln-20260222-agent-introspection-m1` | `ROADMAP.md:74` | 2026-02-23 |
-| [PLN-20260223-lemon-quality-unblock](plans/PLN-20260223-lemon-quality-unblock.md) | Unblock `mix lemon.quality` (duplicate tests + architecture boundaries) | `planned` | `codex` | `feature/pln-20260223-lemon-quality-unblock` | `ROADMAP.md:74` | 2026-02-23 |
-| [PLN-20260223-ai-test-expansion](plans/PLN-20260223-ai-test-expansion.md) | Add tests for untested AI app modules | `in_review` | `zeebot` | — | `ROADMAP.md` | 2026-02-23 |
 | [PLN-20260223-macos-keychain-secrets-audit](plans/PLN-20260223-macos-keychain-secrets-audit.md) | macOS Keychain secrets path audit and hardening | `planned` | `zeebot` | `feature/pln-20260223-macos-keychain-secrets-audit` | `ROADMAP.md` | 2026-02-23 |
 | [PLN-20260222-debt-phase-09-gateway-reliability-decomposition](plans/PLN-20260222-debt-phase-09-gateway-reliability-decomposition.md) | Debt Phase 9 - Gateway runtime reliability decomposition | `planned` | `unassigned` | `feature/pln-20260222-debt-phase-09-gateway-reliability-decomposition` | `debt_plan.md:99` | 2026-02-22 |
 | [PLN-20260222-debt-phase-10-monolith-footprint-reduction](plans/PLN-20260222-debt-phase-10-monolith-footprint-reduction.md) | Debt Phase 10 - Monolith and release footprint reduction | `planned` | `unassigned` | `feature/pln-20260222-debt-phase-10-monolith-footprint-reduction` | `debt_plan.md:123` | 2026-02-22 |
@@ -44,7 +42,6 @@ These entries were already completed before the `planning/` workflow was created
 
 | Plan ID | Title | Review Doc | Owner | Updated |
 |---|---|---|---|---|
-| [PLN-20260223-ai-test-expansion](plans/PLN-20260223-ai-test-expansion.md) | Add tests for untested AI app modules | [RVW-PLN-20260223-ai-test-expansion](reviews/RVW-PLN-20260223-ai-test-expansion.md) | `zeebot` | 2026-02-23 |
 
 ## Ready to Merge
 
@@ -67,6 +64,8 @@ These entries were already completed before the `planning/` workflow was created
 | [PLN-20260222-debt-phase-11-placeholder-stub-burndown](plans/PLN-20260222-debt-phase-11-placeholder-stub-burndown.md) | Debt Phase 11 - Placeholder and stub burn-down | `822cb2f6` | Telemetry counts, AI commentary, mu-law encoder; 45+ tests | 2026-02-23 |
 | [PLN-20260222-debt-phase-12-deterministic-async-test-harness](plans/PLN-20260222-debt-phase-12-deterministic-async-test-harness.md) | Debt Phase 12 - Deterministic async test harness | `a8387a3d` | AsyncHelpers, 33 sleep sites removed, flake CI gate | 2026-02-23 |
 | [PLN-20260223-pi-oh-my-pi-sync](plans/PLN-20260223-pi-oh-my-pi-sync.md) | Pi/Oh-My-Pi Upstream Sync - Models and Tools | `bb34c752` | Upstream parity confirmed; sync plan merged with no additional code deltas | 2026-02-23 |
+| [PLN-20260223-lemon-quality-unblock](plans/PLN-20260223-lemon-quality-unblock.md) | Unblock `mix lemon.quality` | — | Dedupe test modules, TextGeneration bridge, CI quality guard | 2026-02-23 |
+| [PLN-20260223-ai-test-expansion](plans/PLN-20260223-ai-test-expansion.md) | AI app test expansion | `ce421ec8` | 155 tests across Models, Anthropic, Google, Bedrock | 2026-02-23 |
 
 ## Templates
 
