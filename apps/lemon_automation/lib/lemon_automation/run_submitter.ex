@@ -16,7 +16,7 @@ defmodule LemonAutomation.RunSubmitter do
 
     # Pre-generate run_id and subscribe to bus BEFORE submitting to avoid
     # race condition where run completes before we subscribe
-    run_id = LemonCore.Id.run_id()
+    run_id = Keyword.get(opts, :run_id, LemonCore.Id.run_id())
     topic = Bus.run_topic(run_id)
     Bus.subscribe(topic)
 
@@ -73,8 +73,11 @@ defmodule LemonAutomation.RunSubmitter do
       meta: %{
         cron_job_id: job.id,
         cron_run_id: run.id,
+        cron_router_run_id: run_id,
         triggered_by: run.triggered_by,
         cron_base_session_key: job.session_key,
+        cron_session_key: session_key,
+        cron_agent_id: job.agent_id,
         cron_memory_file: memory_file
       }
     }

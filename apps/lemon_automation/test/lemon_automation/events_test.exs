@@ -121,7 +121,8 @@ defmodule LemonAutomation.EventsTest do
                      },
                      meta: %{
                        job_id: ^job_id,
-                       run_id: ^run_id,
+                       run_id: ^router_run_id,
+                       cron_run_id: ^run_id,
                        agent_id: ^agent_id,
                        session_key: ^session_key
                      },
@@ -147,14 +148,20 @@ defmodule LemonAutomation.EventsTest do
     assert_receive %Event{
                      type: :cron_run_completed,
                      payload: %{
-                       run: %{id: ^run_id, job_id: ^job_id, status: :completed, output: ^output},
+                       run: %{
+                         id: ^run_id,
+                         job_id: ^job_id,
+                         run_id: ^router_run_id,
+                         status: :completed,
+                         output: ^output
+                       },
                        status: :completed,
                        duration_ms: 50,
                        output: ^output,
                        error: nil,
                        suppressed: true
                      },
-                     meta: %{job_id: ^job_id, run_id: ^run_id},
+                     meta: %{job_id: ^job_id, run_id: ^router_run_id, cron_run_id: ^run_id},
                      ts_ms: completed_ts_ms
                    },
                    500

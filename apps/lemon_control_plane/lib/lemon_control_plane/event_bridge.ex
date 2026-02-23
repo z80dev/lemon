@@ -154,6 +154,9 @@ defmodule LemonControlPlane.EventBridge do
   defp state_version_key_for(:cron_tick), do: :cron
   defp state_version_key_for(:cron_run_started), do: :cron
   defp state_version_key_for(:cron_run_completed), do: :cron
+  defp state_version_key_for(:cron_job_created), do: :cron
+  defp state_version_key_for(:cron_job_updated), do: :cron
+  defp state_version_key_for(:cron_job_deleted), do: :cron
   defp state_version_key_for(_), do: nil
 
   # Broadcast an event to all connected clients
@@ -328,9 +331,14 @@ defmodule LemonControlPlane.EventBridge do
     {"cron",
      %{
        "type" => "started",
-       "runId" => run[:id],
+       "runId" => run[:run_id] || payload[:router_run_id] || run[:id],
+       "cronRunId" => run[:id] || payload[:cron_run_id],
        "jobId" => run[:job_id],
-       "jobName" => job[:name] || payload[:job_name]
+       "jobName" => job[:name] || payload[:job_name],
+       "agentId" => payload[:agent_id],
+       "sessionKey" => payload[:session_key],
+       "triggeredBy" => to_string(payload[:triggered_by] || run[:triggered_by] || :schedule),
+       "startedAtMs" => run[:started_at_ms]
      }}
   end
 
@@ -340,10 +348,32 @@ defmodule LemonControlPlane.EventBridge do
     {"cron",
      %{
        "type" => "completed",
-       "runId" => run[:id],
+       "runId" => run[:run_id] || payload[:router_run_id] || run[:id],
+       "cronRunId" => run[:id] || payload[:cron_run_id],
        "jobId" => run[:job_id],
        "status" => to_string(run[:status]),
-       "suppressed" => run[:suppressed] || false
+       "suppressed" => run[:suppressed] || false,
+       "agentId" => payload[:agent_id],
+       "sessionKey" => payload[:session_key],
+       "durationMs" => payload[:duration_ms] || run[:duration_ms],
+       "error" => payload[:error] || run[:error]
+     }}
+  end
+
+  defp map_event_type(:cron_job_created, payload, _meta) do
+    map_cron_job_event("created", payload)
+  end
+
+  defp map_event_type(:cron_job_updated, payload, _meta) do
+    map_cron_job_event("updated", payload)
+  end
+
+  defp map_event_type(:cron_job_deleted, payload, _meta) do
+    {"cron.job",
+     %{
+       "type" => "deleted",
+       "jobId" => payload[:job_id],
+       "name" => payload[:name]
      }}
   end
 
@@ -393,6 +423,17 @@ defmodule LemonControlPlane.EventBridge do
        "status" => "alert",
        "response" => payload[:response],
        "timestampMs" => payload[:timestamp_ms] || System.system_time(:millisecond)
+     }}
+  end
+
+  defp map_event_type(:heartbeat_suppressed, payload, _meta) do
+    {"heartbeat",
+     %{
+       "agentId" => payload[:agent_id],
+       "status" => "suppressed",
+       "runId" => payload[:run_id],
+       "jobId" => payload[:job_id],
+       "timestampMs" => System.system_time(:millisecond)
      }}
   end
 
@@ -501,7 +542,10 @@ defmodule LemonControlPlane.EventBridge do
        "runId" => payload[:run_id] || meta[:run_id],
        "sessionKey" => payload[:session_key] || meta[:session_key],
        "agentId" => payload[:agent_id] || meta[:agent_id],
-       "startedAtMs" => payload[:started_at_ms] || System.system_time(:millisecond)
+       "startedAtMs" => payload[:started_at_ms] || System.system_time(:millisecond),
+       "description" => payload[:description],
+       "engine" => payload[:engine],
+       "role" => payload[:role]
      }}
   end
 
@@ -512,8 +556,11 @@ defmodule LemonControlPlane.EventBridge do
        "parentRunId" => payload[:parent_run_id] || meta[:parent_run_id],
        "runId" => payload[:run_id] || meta[:run_id],
        "sessionKey" => payload[:session_key] || meta[:session_key],
+       "agentId" => payload[:agent_id] || meta[:agent_id],
        "ok" => payload[:ok],
        "durationMs" => payload[:duration_ms],
+       "resultPreview" => payload[:result_preview],
+       "description" => payload[:description],
        "completedAtMs" => payload[:completed_at_ms] || System.system_time(:millisecond)
      }}
   end
@@ -525,8 +572,10 @@ defmodule LemonControlPlane.EventBridge do
        "parentRunId" => payload[:parent_run_id] || meta[:parent_run_id],
        "runId" => payload[:run_id] || meta[:run_id],
        "sessionKey" => payload[:session_key] || meta[:session_key],
+       "agentId" => payload[:agent_id] || meta[:agent_id],
        "error" => payload[:error],
-       "durationMs" => payload[:duration_ms]
+       "durationMs" => payload[:duration_ms],
+       "description" => payload[:description]
      }}
   end
 
@@ -537,6 +586,7 @@ defmodule LemonControlPlane.EventBridge do
        "parentRunId" => payload[:parent_run_id] || meta[:parent_run_id],
        "runId" => payload[:run_id] || meta[:run_id],
        "sessionKey" => payload[:session_key] || meta[:session_key],
+       "agentId" => payload[:agent_id] || meta[:agent_id],
        "timeoutMs" => payload[:timeout_ms]
      }}
   end
@@ -548,6 +598,7 @@ defmodule LemonControlPlane.EventBridge do
        "parentRunId" => payload[:parent_run_id] || meta[:parent_run_id],
        "runId" => payload[:run_id] || meta[:run_id],
        "sessionKey" => payload[:session_key] || meta[:session_key],
+       "agentId" => payload[:agent_id] || meta[:agent_id],
        "reason" => payload[:reason]
      }}
   end
@@ -558,6 +609,7 @@ defmodule LemonControlPlane.EventBridge do
        "runId" => payload[:run_id] || meta[:run_id],
        "parentRunId" => payload[:parent_run_id] || meta[:parent_run_id],
        "sessionKey" => payload[:session_key] || meta[:session_key],
+       "status" => normalize_atom_or_binary(payload[:status]),
        "event" => payload[:event],
        "timestampMs" => payload[:timestamp_ms] || System.system_time(:millisecond)
      }}
@@ -586,4 +638,24 @@ defmodule LemonControlPlane.EventBridge do
   end
 
   defp get_field(_, _), do: nil
+
+  defp map_cron_job_event(type, payload) do
+    job = payload[:job] || %{}
+
+    {"cron.job",
+     %{
+       "type" => type,
+       "jobId" => job[:id] || payload[:job_id],
+       "name" => job[:name],
+       "schedule" => job[:schedule],
+       "enabled" => job[:enabled],
+       "agentId" => job[:agent_id],
+       "sessionKey" => job[:session_key],
+       "nextRunAtMs" => job[:next_run_at_ms]
+     }}
+  end
+
+  defp normalize_atom_or_binary(value) when is_atom(value), do: Atom.to_string(value)
+  defp normalize_atom_or_binary(value) when is_binary(value), do: value
+  defp normalize_atom_or_binary(value), do: value
 end

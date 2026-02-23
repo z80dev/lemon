@@ -19,6 +19,7 @@ function makeSession(overrides: Partial<MonitoringSession> = {}): MonitoringSess
     createdAtMs: Date.now() - 60_000,
     updatedAtMs: Date.now() - 10_000,
     route: {},
+    origin: null,
     ...overrides,
   };
 }

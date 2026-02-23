@@ -23,19 +23,31 @@ defmodule LemonControlPlane.Methods.CronStatus do
     # Try LemonAutomation.CronManager if available
     if Code.ensure_loaded?(LemonAutomation.CronManager) do
       jobs = LemonAutomation.CronManager.list()
+      all_runs = LemonAutomation.CronStore.list_all_runs(limit: 2_000)
+      active_runs = Enum.filter(all_runs, &LemonAutomation.CronRun.active?/1)
 
       %{
         "enabled" => true,
         "jobCount" => length(jobs),
         "activeJobs" => Enum.count(jobs, & &1.enabled),
-        "nextRunAtMs" => get_next_run(jobs)
+        "nextRunAtMs" => get_next_run(jobs),
+        "activeRunCount" => length(active_runs),
+        "recentRunCount" => length(all_runs),
+        "lastRunAtMs" =>
+          all_runs
+          |> Enum.map(& &1.started_at_ms)
+          |> Enum.reject(&is_nil/1)
+          |> Enum.max(fn -> nil end)
       }
     else
       %{
         "enabled" => false,
         "jobCount" => 0,
         "activeJobs" => 0,
-        "nextRunAtMs" => nil
+        "nextRunAtMs" => nil,
+        "activeRunCount" => 0,
+        "recentRunCount" => 0,
+        "lastRunAtMs" => nil
       }
     end
   rescue
@@ -44,7 +56,10 @@ defmodule LemonControlPlane.Methods.CronStatus do
         "enabled" => false,
         "jobCount" => 0,
         "activeJobs" => 0,
-        "nextRunAtMs" => nil
+        "nextRunAtMs" => nil,
+        "activeRunCount" => 0,
+        "recentRunCount" => 0,
+        "lastRunAtMs" => nil
       }
   end
 

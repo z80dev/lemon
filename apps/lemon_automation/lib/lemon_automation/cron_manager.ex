@@ -345,14 +345,16 @@ defmodule LemonAutomation.CronManager do
     CronStore.put_run(run)
 
     # Start the run
-    run = CronRun.start(run)
+    router_run_id = LemonCore.Id.run_id()
+    run = %{run | meta: %{agent_id: job.agent_id, session_key: job.session_key, job_name: job.name}}
+    run = CronRun.start(run, router_run_id)
     CronStore.put_run(run)
     Events.emit_run_started(run, job)
 
     # Submit to router asynchronously
     _ =
       start_background_task(fn ->
-        result = RunSubmitter.submit(job, run)
+        result = RunSubmitter.submit(job, run, run_id: router_run_id)
         send(__MODULE__, {:run_complete, run.id, result})
       end)
 

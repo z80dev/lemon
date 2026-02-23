@@ -16,7 +16,11 @@ const EVENT_NAME_COLORS: Record<string, string> = {
   'task.completed': '#00ff88',
   'task.error': '#ff4444',
   'task.timeout': '#ffaa00',
+  'task.aborted': '#888',
+  'run.graph.changed': '#5599ff',
   heartbeat: '#666',
+  cron: '#ffaa00',
+  'cron.job': '#ffaa00',
   presence: '#666',
   health: '#ffaa00',
 };

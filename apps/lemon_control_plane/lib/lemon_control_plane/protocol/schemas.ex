@@ -259,6 +259,86 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "route" => :map
       }
     },
+    "session.detail" => %{
+      required: %{
+        "sessionKey" => :string
+      },
+      optional: %{
+        "limit" => :integer,
+        "historyLimit" => :integer,
+        "eventLimit" => :integer,
+        "toolCallLimit" => :integer,
+        "includeFullText" => :boolean,
+        "includeRawEvents" => :boolean,
+        "includeRunRecord" => :boolean
+      }
+    },
+
+    # Monitoring methods
+    "runs.active.list" => %{
+      optional: %{
+        "agentId" => :string,
+        "sessionKey" => :string,
+        "limit" => :integer
+      }
+    },
+    "runs.recent.list" => %{
+      optional: %{
+        "agentId" => :string,
+        "sessionKey" => :string,
+        "status" => :string,
+        "limit" => :integer
+      }
+    },
+    "run.graph.get" => %{
+      required: %{
+        "runId" => :string
+      },
+      optional: %{
+        "maxDepth" => :integer,
+        "childLimit" => :integer,
+        "includeRunRecord" => :boolean,
+        "includeRunEvents" => :boolean,
+        "runEventLimit" => :integer,
+        "includeIntrospection" => :boolean,
+        "introspectionLimit" => :integer
+      }
+    },
+    "run.introspection.list" => %{
+      required: %{
+        "runId" => :string
+      },
+      optional: %{
+        "limit" => :integer,
+        "eventTypes" => :list,
+        "sinceMs" => :integer,
+        "untilMs" => :integer,
+        "includeRunRecord" => :boolean,
+        "includeRunEvents" => :boolean,
+        "runEventLimit" => :integer
+      }
+    },
+    "tasks.active.list" => %{
+      optional: %{
+        "runId" => :string,
+        "agentId" => :string,
+        "limit" => :integer,
+        "includeEvents" => :boolean,
+        "includeRecord" => :boolean,
+        "eventLimit" => :integer
+      }
+    },
+    "tasks.recent.list" => %{
+      optional: %{
+        "runId" => :string,
+        "agentId" => :string,
+        "status" => :string,
+        "limit" => :integer,
+        "includeEvents" => :boolean,
+        "includeRecord" => :boolean,
+        "eventLimit" => :integer
+      }
+    },
 
     # Cron methods
     "cron.list" => %{
@@ -312,7 +392,14 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "id" => :string
       },
       optional: %{
-        "limit" => :integer
+        "limit" => :integer,
+        "status" => :string,
+        "sinceMs" => :integer,
+        "includeOutput" => :boolean,
+        "includeMeta" => :boolean,
+        "includeRunRecord" => :boolean,
+        "includeIntrospection" => :boolean,
+        "introspectionLimit" => :integer
       }
     },
 
@@ -599,6 +686,31 @@ defmodule LemonControlPlane.Protocol.Schemas do
       optional: %{
         "payload" => :map,
         "target" => :string
+      }
+    },
+    "system.reload" => %{
+      "type" => "object",
+      "required" => ["scope"],
+      "properties" => %{
+        "scope" => %{"type" => "string", "enum" => ["module", "app", "extension", "all"]},
+        "module" => %{"type" => "string"},
+        "app" => %{"type" => "string"},
+        "path" => %{"type" => "string"},
+        "force" => %{"type" => "boolean"},
+        "apps" => %{"type" => "array"},
+        "extensions" => %{"type" => "array"}
+      },
+      "additionalProperties" => true,
+      required: %{
+        "scope" => :string
+      },
+      optional: %{
+        "module" => :string,
+        "app" => :string,
+        "path" => :string,
+        "apps" => :list,
+        "extensions" => :list,
+        "force" => :boolean
       }
     },
 

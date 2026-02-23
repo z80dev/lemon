@@ -109,18 +109,25 @@ defmodule LemonAutomation.Events do
   """
   @spec emit_run_started(CronRun.t(), CronJob.t()) :: :ok
   def emit_run_started(%CronRun{} = run, %CronJob{} = job) do
+    router_run_id = run.run_id || run.id
+
     event =
       Event.new(
         :cron_run_started,
         %{
           run: CronRun.to_map(run),
+          cron_run_id: run.id,
+          router_run_id: router_run_id,
+          job_id: job.id,
           job_name: job.name,
           agent_id: job.agent_id,
+          session_key: job.session_key,
           triggered_by: run.triggered_by
         },
         %{
           job_id: job.id,
-          run_id: run.id,
+          run_id: router_run_id,
+          cron_run_id: run.id,
           agent_id: job.agent_id,
           session_key: job.session_key
         }
@@ -134,11 +141,15 @@ defmodule LemonAutomation.Events do
   """
   @spec emit_run_completed(CronRun.t()) :: :ok
   def emit_run_completed(%CronRun{} = run) do
+    router_run_id = run.run_id || run.id
+
     event =
       Event.new(
         :cron_run_completed,
         %{
           run: CronRun.to_map(run),
+          cron_run_id: run.id,
+          router_run_id: router_run_id,
           status: run.status,
           duration_ms: run.duration_ms,
           output: run.output,
@@ -147,7 +158,10 @@ defmodule LemonAutomation.Events do
         },
         %{
           job_id: run.job_id,
-          run_id: run.id
+          run_id: router_run_id,
+          cron_run_id: run.id,
+          session_key: meta_value(run.meta, :session_key),
+          agent_id: meta_value(run.meta, :agent_id)
         }
       )
 
@@ -209,4 +223,12 @@ defmodule LemonAutomation.Events do
 
     Bus.broadcast(@topic, event)
   end
+
+  defp meta_value(meta, key) when is_map(meta) do
+    Map.get(meta, key) || Map.get(meta, Atom.to_string(key))
+  rescue
+    _ -> nil
+  end
+
+  defp meta_value(_meta, _key), do: nil
 end

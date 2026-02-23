@@ -23,7 +23,7 @@ export function SessionsExplorer() {
   const setSelectedSession = useMonitoringStore((s) => s.setSelectedSession);
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [showAll, setShowAll] = useState(false);
+  const [showAll, setShowAll] = useState(true);
 
   const allSessions = useMemo<MonitoringSession[]>(() => {
     const active = Object.values(activeSessions);

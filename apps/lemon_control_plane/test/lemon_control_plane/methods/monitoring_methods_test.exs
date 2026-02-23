@@ -431,5 +431,46 @@ defmodule LemonControlPlane.Methods.MonitoringMethodsTest do
       {:ok, result} = RunGraphGet.handle(%{"runId" => "run-status-check"}, %{})
       assert is_binary(result["graph"]["status"])
     end
+
+    test "handle/2 supports deep graph options and reflects them in response" do
+      {:ok, result} =
+        RunGraphGet.handle(
+          %{
+            "runId" => "run-options-check",
+            "maxDepth" => 4,
+            "childLimit" => 15,
+            "includeRunRecord" => true,
+            "includeRunEvents" => true,
+            "runEventLimit" => 25,
+            "includeIntrospection" => true,
+            "introspectionLimit" => 30
+          },
+          %{}
+        )
+
+      assert result["options"]["maxDepth"] == 4
+      assert result["options"]["childLimit"] == 15
+      assert result["options"]["includeRunRecord"] == true
+      assert result["options"]["includeRunEvents"] == true
+      assert result["options"]["runEventLimit"] == 25
+      assert result["options"]["includeIntrospection"] == true
+      assert result["options"]["introspectionLimit"] == 30
+    end
+
+    test "handle/2 includes optional runRecord and introspection keys when requested" do
+      {:ok, result} =
+        RunGraphGet.handle(
+          %{
+            "runId" => "run-deep-keys",
+            "includeRunRecord" => true,
+            "includeIntrospection" => true
+          },
+          %{}
+        )
+
+      graph = result["graph"]
+      assert Map.has_key?(graph, "runRecord")
+      assert Map.has_key?(graph, "introspection")
+    end
   end
 end

@@ -195,6 +195,18 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 | `sessions.reset` | admin | Clear session history |
 | `sessions.delete` | admin | Delete a session |
 | `sessions.compact` | admin | Compact session storage |
+| `session.detail` | read | Deep session/run internals (tool calls, optional raw run events, run records) |
+
+### Monitoring / Introspection
+
+| Method | Scope | Description |
+|--------|-------|-------------|
+| `runs.active.list` | read | Active run list from `LemonRouter.RunRegistry` |
+| `runs.recent.list` | read | Recent completed/errored/aborted runs |
+| `run.graph.get` | read | Parent/child run graph with optional per-node run-store records/events and introspection |
+| `run.introspection.list` | read | Introspection timeline for one run (optional run-store internals) |
+| `tasks.active.list` | read | Active task/subagent records from `CodingAgent.TaskStore` |
+| `tasks.recent.list` | read | Recent terminal task records with status/error classification |
 
 ### Agent Management
 
@@ -249,8 +261,8 @@ Config keys are whitelisted in `ConfigGet` to prevent atom table exhaustion. Sec
 | `cron.update` | admin | Update a cron job |
 | `cron.remove` | admin | Remove a cron job |
 | `cron.run` | admin | Manually trigger a cron job |
-| `cron.runs` | read | List recent runs for a job |
-| `cron.status` | read | Cron system status |
+| `cron.runs` | read | List runs for a job (optional output/meta/run-store/introspection payloads) |
+| `cron.status` | read | Cron system status + active/recent run counters |
 
 ### Exec Approvals
 
@@ -467,6 +479,13 @@ State-versioned events include a `stateVersion` map for client reconciliation (`
 | `exec.approval.requested` | Approval needed |
 | `exec.approval.resolved` | Approval decided |
 | `cron` | Cron job started/completed |
+| `cron.job` | Cron job created/updated/deleted |
+| `task.started` | Subtask/subagent started |
+| `task.completed` | Subtask/subagent completed |
+| `task.error` | Subtask/subagent errored |
+| `task.timeout` | Subtask/subagent timed out |
+| `task.aborted` | Subtask/subagent aborted/interrupted |
+| `run.graph.changed` | Run graph/status changed |
 | `shutdown` | System shutting down |
 | `health` | Health status changed |
 | `talk.mode` | Talk mode changed |

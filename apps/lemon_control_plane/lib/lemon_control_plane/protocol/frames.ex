@@ -246,6 +246,14 @@ defmodule LemonControlPlane.Protocol.Frames do
       "heartbeat",
       # Cron events
       "cron",
+      "cron.job",
+      # Task / run-graph events
+      "task.started",
+      "task.completed",
+      "task.error",
+      "task.timeout",
+      "task.aborted",
+      "run.graph.changed",
       # Node events
       "node.pair.requested",
       "node.pair.resolved",

@@ -25,6 +25,12 @@ function formatUptime(ms: number | null): string {
 
 export function StatusStrip({ connectionState }: StatusStripProps) {
   const instance = useMonitoringStore((s) => s.instance);
+  const agentCount = useMonitoringStore((s) => Object.keys(s.agents).length);
+  const sessionCount = useMonitoringStore((s) => {
+    const activeCount = Object.keys(s.sessions.active).length;
+    const histCount = s.sessions.historical.length;
+    return Math.max(activeCount, histCount > 0 ? activeCount + histCount : activeCount);
+  });
 
   const dotColor = CONNECTION_COLORS[connectionState] ?? '#ff4444';
 
@@ -115,6 +121,20 @@ export function StatusStrip({ connectionState }: StatusStripProps) {
         <span style={{ color: '#888' }}>
           clients: <span data-testid="clients-count">{instance.connectedClients}</span>
         </span>
+
+        {/* Sessions */}
+        {sessionCount > 0 && (
+          <span style={{ color: '#888' }}>
+            sessions: <span data-testid="session-count">{sessionCount}</span>
+          </span>
+        )}
+
+        {/* Agents */}
+        {agentCount > 0 && (
+          <span style={{ color: '#888' }}>
+            agents: <span data-testid="agent-count">{agentCount}</span>
+          </span>
+        )}
 
         {/* Active runs */}
         <span style={{ color: instance.activeRuns > 0 ? '#00ff88' : '#888' }}>

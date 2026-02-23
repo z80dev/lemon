@@ -64,10 +64,12 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.SessionsCompact,
     LemonControlPlane.Methods.SessionsActive,
     LemonControlPlane.Methods.SessionsActiveList,
+    LemonControlPlane.Methods.SessionDetail,
     # Runs
     LemonControlPlane.Methods.RunsActiveList,
     LemonControlPlane.Methods.RunsRecentList,
     LemonControlPlane.Methods.RunGraphGet,
+    LemonControlPlane.Methods.RunIntrospectionList,
     # Tasks
     LemonControlPlane.Methods.TasksActiveList,
     LemonControlPlane.Methods.TasksRecentList,
@@ -116,6 +118,7 @@ defmodule LemonControlPlane.Methods.Registry do
     # System methods
     LemonControlPlane.Methods.SystemPresence,
     LemonControlPlane.Methods.SystemEvent,
+    LemonControlPlane.Methods.SystemReload,
     # Voicewake
     LemonControlPlane.Methods.VoicewakeGet,
     LemonControlPlane.Methods.VoicewakeSet,

@@ -139,6 +139,8 @@ Tools are divided into two sets. `coding_tools/2` is the default set passed to s
 | `CodingAgent.TaskStore` | ETS+DETS store for async task tool runs |
 | `CodingAgent.TaskStoreServer` | Owns the TaskStore ETS/DETS tables |
 
+`CodingAgent.Tools.Task` now emits lifecycle events (`:task_started`, `:task_completed`, `:task_error`, `:task_timeout`, `:task_aborted`) to both `LemonCore.Bus` (`run:*` topics) and `LemonCore.Introspection`, with run/parent/session/agent lineage metadata for monitoring UIs.
+
 ## Tool System Architecture
 
 ### Adding a New Tool

@@ -29,6 +29,7 @@ function makeInitialState(): MonitoringState {
       selectedSessionKey: null,
       loadedSessionKeys: new Set(),
     },
+    sessionDetails: {},
     runs: { active: {}, recent: [] },
     tasks: { active: {}, recent: [] },
     eventFeed: [],
@@ -45,6 +46,8 @@ function makeInitialState(): MonitoringState {
     applySessionsList: () => {},
     applyTasksActiveList: () => {},
     applyTasksRecentList: () => {},
+    applyAgentsList: () => {},
+    applySessionDetail: () => {},
     applySnapshot: () => {},
     setSelectedSession: () => {},
     setSelectedRun: () => {},
@@ -154,7 +157,7 @@ describe('applyHelloOk reducer', () => {
       server: { version: '2.0.0' },
       features: {},
       snapshot: {
-        sessions: [
+        activeSessions: [
           { session_key: 'sess-1', active: true },
         ],
       },
@@ -846,9 +849,9 @@ describe('applySnapshot store action', () => {
     useMonitoringStore.getState().resetMonitoring();
   });
 
-  it('applies session data from snapshot', () => {
+  it('applies active session data from activeSessions key in snapshot', () => {
     useMonitoringStore.getState().applySnapshot({
-      sessions: [
+      activeSessions: [
         { session_key: 'snap-sess-1', active: true },
         { session_key: 'snap-sess-2', active: false },
       ],
@@ -856,6 +859,17 @@ describe('applySnapshot store action', () => {
     const state = useMonitoringStore.getState();
     expect(state.sessions.active['snap-sess-1']).toBeDefined();
     expect(state.sessions.active['snap-sess-2']).toBeDefined();
+  });
+
+  it('applies historical session data from sessions key in snapshot', () => {
+    useMonitoringStore.getState().applySnapshot({
+      sessions: [
+        { session_key: 'hist-sess-1', active: false },
+      ],
+    });
+    const state = useMonitoringStore.getState();
+    expect(state.sessions.historical.find((s) => s.sessionKey === 'hist-sess-1')).toBeDefined();
+    expect(state.sessions.active['hist-sess-1']).toBeUndefined();
   });
 
   it('applies health data from snapshot', () => {

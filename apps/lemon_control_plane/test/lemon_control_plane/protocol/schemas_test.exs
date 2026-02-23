@@ -187,6 +187,34 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
       assert :ok = Schemas.validate("system-event", params)
     end
 
+    test "validates system.reload schema structure" do
+      schema = Schemas.get("system.reload")
+
+      assert is_map(schema)
+      assert schema["type"] == "object"
+      assert "scope" in schema["required"]
+      assert schema["additionalProperties"] == true
+
+      properties = schema["properties"]
+      assert is_map(properties)
+
+      assert properties["scope"]["type"] == "string"
+
+      assert properties["scope"]["enum"] == [
+               "module",
+               "app",
+               "extension",
+               "all"
+             ]
+
+      assert properties["module"]["type"] == "string"
+      assert properties["app"]["type"] == "string"
+      assert properties["path"]["type"] == "string"
+      assert properties["force"]["type"] == "boolean"
+      assert properties["apps"]["type"] == "array"
+      assert properties["extensions"]["type"] == "array"
+    end
+
     test "validates send method requires channelId and content" do
       assert {:error, _} = Schemas.validate("send", %{})
       assert {:error, _} = Schemas.validate("send", %{"channelId" => "test"})

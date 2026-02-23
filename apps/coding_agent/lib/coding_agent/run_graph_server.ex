@@ -197,10 +197,9 @@ defmodule CodingAgent.RunGraphServer do
 
         do_insert_record(run_id, updated)
 
-        # Broadcast if status changed
-        if Map.get(record, :status) != Map.get(updated, :status) do
-          broadcast_state_change(run_id)
-        end
+        status_changed? = Map.get(record, :status) != Map.get(updated, :status)
+        event = if(status_changed?, do: :status_changed, else: :updated)
+        broadcast_state_change(run_id, updated, event)
 
         {:reply, :ok, state}
 
@@ -223,7 +222,7 @@ defmodule CodingAgent.RunGraphServer do
             |> Map.put(:updated_at, System.system_time(:second))
 
           do_insert_record(run_id, updated)
-          broadcast_state_change(run_id)
+          broadcast_state_change(run_id, updated, :status_changed)
           {:reply, :ok, state}
         else
           {:reply, {:error, :invalid_transition}, state}
@@ -396,18 +395,56 @@ defmodule CodingAgent.RunGraphServer do
     :ok
   end
 
-  defp broadcast_state_change(run_id) do
+  defp broadcast_state_change(run_id, record, event) do
     try do
       LemonCore.Bus.broadcast(
         "run_graph:#{run_id}",
         {:run_graph, :state_changed, run_id}
       )
+
+      payload = %{
+        run_id: run_id,
+        parent_run_id: get_record_field(record, :parent),
+        session_key: get_record_field(record, :session_key),
+        status: get_record_field(record, :status),
+        event: event,
+        timestamp_ms: System.system_time(:millisecond)
+      }
+
+      meta = %{
+        run_id: run_id,
+        parent_run_id: get_record_field(record, :parent),
+        session_key: get_record_field(record, :session_key)
+      }
+
+      event_message = LemonCore.Event.new(:run_graph_changed, payload, meta)
+      LemonCore.Bus.broadcast("run:#{run_id}", event_message)
+
+      parent_run_id = get_record_field(record, :parent)
+
+      if is_binary(parent_run_id) and parent_run_id != run_id do
+        LemonCore.Bus.broadcast("run:#{parent_run_id}", event_message)
+      end
     rescue
       _ -> :ok
     catch
       _, _ -> :ok
     end
   end
+
+  defp get_record_field(nil, _key), do: nil
+
+  defp get_record_field(record, key) when is_map(record) do
+    cond do
+      Map.has_key?(record, key) -> Map.get(record, key)
+      is_atom(key) and Map.has_key?(record, Atom.to_string(key)) -> Map.get(record, Atom.to_string(key))
+      true -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp get_record_field(_record, _key), do: nil
 
   defp do_sync_dets_load do
     now = System.system_time(:second)

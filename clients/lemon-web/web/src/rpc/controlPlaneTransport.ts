@@ -302,7 +302,7 @@ export function createControlPlaneTransport(
 
   return {
     connect(url: string, token?: string): void {
-      if (destroyed) return;
+      destroyed = false;
       clearReconnectTimer();
       if (socket) {
         socket.onclose = null;

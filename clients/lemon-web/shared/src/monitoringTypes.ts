@@ -11,13 +11,18 @@ export interface InstanceHealth {
   lastUpdatedMs: number | null;
 }
 
-// Agent in directory
+// Agent in directory (rich format from AgentDirectoryList)
 export interface MonitoringAgent {
   agentId: string;
   name: string | null;
   status: 'active' | 'idle' | 'unknown';
   activeSessionCount: number;
-  lastActivityMs: number | null;
+  sessionCount: number;
+  routeCount: number;
+  latestSessionKey: string | null;
+  latestUpdatedAtMs: number | null;
+  description: string | null;
+  model: string | null;
 }
 
 // Session summary for monitoring
@@ -35,6 +40,57 @@ export interface MonitoringSession {
   createdAtMs: number | null;
   updatedAtMs: number | null;
   route: Record<string, string | null>;
+  origin: string | null;
+}
+
+// A single tool call within a run
+export interface RunToolCall {
+  name: string;
+  kind: string | null;
+  ok: boolean | null;
+  phase: string | null;
+  detail: string | null;
+  raw?: unknown;
+}
+
+// Token usage for a run
+export interface RunTokenUsage {
+  input: number;
+  output: number;
+  total: number;
+  costUsd: number;
+}
+
+// A run within a session (from session.detail)
+export interface SessionRunSummary {
+  runId?: string | null;
+  startedAtMs: number | null;
+  engine: string | null;
+  prompt: string | null;       // user message, truncated
+  answer: string | null;       // AI response, truncated
+  promptFull?: string | null;
+  answerFull?: string | null;
+  ok: boolean | null;
+  error: string | null;
+  durationMs: number | null;
+  toolCallCount: number;
+  toolCalls: RunToolCall[];
+  tokens: RunTokenUsage | null;
+  eventCount?: number;
+  eventDigest?: unknown[];
+  events?: unknown[];
+  summaryRaw?: unknown;
+  completedRaw?: unknown;
+  runRecord?: unknown;
+}
+
+// Full session detail (from session.detail method)
+export interface SessionDetail {
+  sessionKey: string;
+  session: Partial<MonitoringSession>;
+  runs: SessionRunSummary[];
+  runCount: number;
+  loadedAtMs: number;
 }
 
 // Run summary for monitoring
@@ -58,10 +114,70 @@ export interface MonitoringTask {
   runId: string | null;
   sessionKey: string | null;
   agentId: string | null;
+  description?: string | null;
+  engine?: string | null;
+  role?: string | null;
+  startedAtMs: number | null;
+  completedAtMs: number | null;
+  createdAtMs?: number | null;
+  updatedAtMs?: number | null;
+  durationMs: number | null;
+  status: 'queued' | 'active' | 'completed' | 'error' | 'timeout' | 'aborted';
+  error?: unknown;
+  result?: unknown;
+  eventCount?: number;
+  events?: unknown[];
+  record?: unknown;
+}
+
+export interface MonitoringCronJob {
+  id: string;
+  name: string;
+  schedule: string;
+  enabled: boolean;
+  agentId: string | null;
+  sessionKey: string | null;
+  prompt: string | null;
+  timezone: string;
+  jitterSec: number;
+  timeoutMs: number | null;
+  createdAtMs: number | null;
+  updatedAtMs: number | null;
+  lastRunAtMs: number | null;
+  nextRunAtMs: number | null;
+  lastRunStatus?: string | null;
+  activeRunCount?: number;
+  meta?: unknown;
+}
+
+export interface MonitoringCronRun {
+  id: string;
+  jobId: string;
+  routerRunId: string | null;
+  status: string;
+  triggeredBy: string;
   startedAtMs: number | null;
   completedAtMs: number | null;
   durationMs: number | null;
-  status: 'active' | 'completed' | 'error' | 'timeout' | 'aborted';
+  output: string | null;
+  outputPreview: string | null;
+  error: string | null;
+  suppressed: boolean;
+  sessionKey?: string | null;
+  agentId?: string | null;
+  meta?: unknown;
+  runRecord?: unknown;
+  introspection?: unknown[];
+}
+
+export interface MonitoringCronStatus {
+  enabled: boolean;
+  jobCount: number;
+  activeJobs: number;
+  nextRunAtMs: number | null;
+  activeRunCount?: number;
+  recentRunCount?: number;
+  lastRunAtMs?: number | null;
 }
 
 // Event feed entry (normalized from any WS event)
@@ -83,8 +199,8 @@ export interface MonitoringUIFilters {
   sessionKey: string | null;
   runId: string | null;
   status: string | null;
-  timeRangeMs: number | null;  // show events from last N ms
-  eventTypes: string[];         // empty = all
+  timeRangeMs: number | null;
+  eventTypes: string[];
 }
 
 export interface MonitoringUIState {

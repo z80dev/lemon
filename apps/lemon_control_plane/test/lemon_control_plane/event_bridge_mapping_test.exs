@@ -21,6 +21,15 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
 
       # Cron events
       assert "cron" in events
+      assert "cron.job" in events
+
+      # Task / run-graph events
+      assert "task.started" in events
+      assert "task.completed" in events
+      assert "task.error" in events
+      assert "task.timeout" in events
+      assert "task.aborted" in events
+      assert "run.graph.changed" in events
 
       # Node events
       assert "node.pair.requested" in events
@@ -247,6 +256,13 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
         "health",      # :health_changed
         "heartbeat",   # :heartbeat, :heartbeat_alert
         "cron",        # :cron_run_started, :cron_run_completed
+        "cron.job",    # :cron_job_created, :cron_job_updated, :cron_job_deleted
+        "task.started", # :task_started
+        "task.completed", # :task_completed
+        "task.error", # :task_error
+        "task.timeout", # :task_timeout
+        "task.aborted", # :task_aborted
+        "run.graph.changed", # :run_graph_changed
         "node.pair.requested",    # :node_pair_requested
         "node.pair.resolved",     # :node_pair_resolved
         "node.invoke.request",    # :node_invoke_request

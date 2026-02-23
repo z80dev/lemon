@@ -5,9 +5,13 @@ import type {
   MonitoringSession,
   MonitoringRun,
   MonitoringTask,
+  MonitoringCronJob,
+  MonitoringCronRun,
+  MonitoringCronStatus,
   FeedEvent,
   MonitoringUIState,
   MonitoringUIFilters,
+  SessionDetail,
 } from '../../../shared/src/monitoringTypes';
 import {
   applyHelloOk as reducerApplyHelloOk,
@@ -19,6 +23,10 @@ import {
   applyTasksActiveList as reducerApplyTasksActiveList,
   applyTasksRecentList as reducerApplyTasksRecentList,
   applySnapshot as reducerApplySnapshot,
+  applyAgentsList as reducerApplyAgentsList,
+  applyCronStatus as reducerApplyCronStatus,
+  applyCronList as reducerApplyCronList,
+  applyCronRuns as reducerApplyCronRuns,
 } from './monitoringReducers';
 
 export type { MonitoringUIFilters };
@@ -30,17 +38,25 @@ export interface MonitoringState {
     active: Record<string, MonitoringSession>;   // keyed by sessionKey
     historical: MonitoringSession[];             // sorted by updatedAtMs desc
     selectedSessionKey: string | null;
-    loadedSessionKeys: Set<string>;             // sessions with chat history loaded
+    loadedSessionKeys: Set<string>;
   };
+  sessionDetails: Record<string, SessionDetail>;  // keyed by sessionKey
   runs: {
-    active: Record<string, MonitoringRun>;  // keyed by runId
-    recent: MonitoringRun[];               // sorted by completedAtMs desc, max 200
+    active: Record<string, MonitoringRun>;
+    recent: MonitoringRun[];
   };
   tasks: {
-    active: Record<string, MonitoringTask>; // keyed by taskId
-    recent: MonitoringTask[];              // sorted by completedAtMs desc, max 200
+    active: Record<string, MonitoringTask>;
+    recent: MonitoringTask[];
   };
-  eventFeed: FeedEvent[];                   // capped at MAX_FEED_EVENTS
+  cron: {
+    status: MonitoringCronStatus | null;
+    jobs: MonitoringCronJob[];
+    runsByJob: Record<string, MonitoringCronRun[]>;
+    selectedJobId: string | null;
+  };
+  runIntrospection: Record<string, { events: unknown[]; runRecord?: unknown; loadedAtMs: number }>;
+  eventFeed: FeedEvent[];
   ui: MonitoringUIState;
 
   // Actions
@@ -52,6 +68,13 @@ export interface MonitoringState {
   applySessionsList: (sessions: unknown[]) => void;
   applyTasksActiveList: (tasks: unknown[]) => void;
   applyTasksRecentList: (tasks: unknown[]) => void;
+  applyCronStatus: (payload: unknown) => void;
+  applyCronList: (payload: unknown) => void;
+  applyCronRuns: (jobId: string, payload: unknown) => void;
+  setSelectedCronJob: (jobId: string | null) => void;
+  applyRunIntrospection: (runId: string, payload: { events: unknown[]; runRecord?: unknown }) => void;
+  applyAgentsList: (agents: unknown[]) => void;
+  applySessionDetail: (detail: SessionDetail) => void;
   applySnapshot: (snapshot: unknown) => void;
   setSelectedSession: (sessionKey: string | null) => void;
   setSelectedRun: (runId: string | null) => void;
@@ -98,6 +121,7 @@ const INITIAL_STATE = {
     selectedSessionKey: null,
     loadedSessionKeys: new Set<string>(),
   },
+  sessionDetails: {} as Record<string, SessionDetail>,
   runs: {
     active: {} as Record<string, MonitoringRun>,
     recent: [] as MonitoringRun[],
@@ -106,6 +130,13 @@ const INITIAL_STATE = {
     active: {} as Record<string, MonitoringTask>,
     recent: [] as MonitoringTask[],
   },
+  cron: {
+    status: null as MonitoringCronStatus | null,
+    jobs: [] as MonitoringCronJob[],
+    runsByJob: {} as Record<string, MonitoringCronRun[]>,
+    selectedJobId: null as string | null,
+  },
+  runIntrospection: {} as Record<string, { events: unknown[]; runRecord?: unknown; loadedAtMs: number }>,
   eventFeed: [] as FeedEvent[],
   ui: INITIAL_UI,
 };
@@ -153,6 +184,54 @@ export const useMonitoringStore = create<MonitoringState>((set) => ({
   applyTasksRecentList: (tasks) =>
     set((state) => reducerApplyTasksRecentList(state, tasks as MonitoringTask[])),
 
+  applyCronStatus: (payload) =>
+    set((state) => reducerApplyCronStatus(state, payload as MonitoringCronStatus)),
+
+  applyCronList: (payload) =>
+    set((state) => {
+      const p = (payload ?? {}) as Record<string, unknown>;
+      const jobs = Array.isArray(p['jobs']) ? (p['jobs'] as MonitoringCronJob[]) : [];
+      return reducerApplyCronList(state, jobs);
+    }),
+
+  applyCronRuns: (jobId, payload) =>
+    set((state) => {
+      const p = (payload ?? {}) as Record<string, unknown>;
+      const runs = Array.isArray(p['runs']) ? (p['runs'] as MonitoringCronRun[]) : [];
+      return reducerApplyCronRuns(state, jobId, runs);
+    }),
+
+  setSelectedCronJob: (jobId) =>
+    set((state) => ({
+      cron: {
+        ...state.cron,
+        selectedJobId: jobId,
+      },
+    })),
+
+  applyRunIntrospection: (runId, payload) =>
+    set((state) => ({
+      runIntrospection: {
+        ...state.runIntrospection,
+        [runId]: {
+          events: payload.events,
+          runRecord: payload.runRecord,
+          loadedAtMs: Date.now(),
+        },
+      },
+    })),
+
+  applyAgentsList: (agents) =>
+    set((state) => reducerApplyAgentsList(state, agents)),
+
+  applySessionDetail: (detail) =>
+    set((state) => ({
+      sessionDetails: {
+        ...state.sessionDetails,
+        [detail.sessionKey]: detail,
+      },
+    })),
+
   applySnapshot: (snapshot) =>
     set((state) =>
       reducerApplySnapshot(state, (snapshot ?? {}) as Record<string, unknown>)
@@ -199,12 +278,19 @@ export const useMonitoringStore = create<MonitoringState>((set) => ({
   resetMonitoring: () =>
     set({
       ...INITIAL_STATE,
-      // Re-create new Set and fresh objects to avoid reference sharing
       sessions: {
         active: {},
         historical: [],
         selectedSessionKey: null,
         loadedSessionKeys: new Set<string>(),
       },
+      sessionDetails: {},
+      cron: {
+        status: null,
+        jobs: [],
+        runsByJob: {},
+        selectedJobId: null,
+      },
+      runIntrospection: {},
     }),
 }));
