@@ -47,6 +47,17 @@ defmodule LemonChannels.Telegram.API do
     request(token, "getChatMember", params, @default_timeout)
   end
 
+  def create_forum_topic(token, chat_id, name) when is_binary(name) do
+    params = %{
+      "chat_id" => chat_id,
+      "name" => String.trim(name)
+    }
+
+    request(token, "createForumTopic", params, @default_timeout)
+  end
+
+  def create_forum_topic(_token, _chat_id, _name), do: {:error, :invalid_topic_name}
+
   def send_message(token, chat_id, text, reply_to_or_opts \\ nil, parse_mode \\ nil)
 
   def send_message(token, chat_id, text, reply_to_or_opts, parse_mode)

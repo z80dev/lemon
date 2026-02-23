@@ -424,3 +424,6 @@ In Telegram group chats, you can gate runs so Lemon only triggers when explicitl
 - `/trigger mentions`: only run on `@botname`, reply-to-bot, or slash commands.
 - `/trigger all`: run on all messages.
 - `/trigger clear`: clear a topic override (forum topics only).
+
+Forum topic management:
+- `/topic <name>`: create a new topic in the current Telegram forum supergroup.

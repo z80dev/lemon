@@ -609,6 +609,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       trigger_command?(original_text, state.bot_username) ->
         handle_trigger_command(state, inbound)
 
+      topic_command?(original_text, state.bot_username) ->
+        handle_topic_command(state, inbound)
+
       resume_command?(original_text, state.bot_username) ->
         handle_resume_command(state, inbound)
 
@@ -696,7 +699,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp submit_buffer(%{messages: messages, inbound: inbound_last}, state) do
-    {joined_text, last_id, last_reply_to_text, last_reply_to_id} = join_messages(Enum.reverse(messages))
+    {joined_text, last_id, last_reply_to_text, last_reply_to_id} =
+      join_messages(Enum.reverse(messages))
 
     inbound =
       inbound_last
@@ -872,6 +876,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp trigger_command?(text, bot_username) do
     telegram_command?(text, "trigger", bot_username)
+  end
+
+  defp topic_command?(text, bot_username) do
+    telegram_command?(text, "topic", bot_username)
   end
 
   defp file_command?(text, bot_username) do
@@ -3690,6 +3698,139 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp strip_engine_directive(_), do: {nil, ""}
+
+  defp handle_topic_command(state, inbound) do
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
+    topic_name = String.trim(telegram_command_args(inbound.message.text, "topic") || "")
+
+    cond do
+      not is_integer(chat_id) ->
+        state
+
+      topic_name == "" ->
+        _ = send_system_message(state, chat_id, thread_id, user_msg_id, topic_usage())
+        state
+
+      not function_exported?(state.api_mod, :create_forum_topic, 3) ->
+        _ =
+          send_system_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            "This Telegram API module does not support /topic."
+          )
+
+        state
+
+      true ->
+        case state.api_mod.create_forum_topic(state.token, chat_id, topic_name) do
+          {:ok, %{"ok" => true, "result" => result}} ->
+            _ =
+              send_system_message(
+                state,
+                chat_id,
+                thread_id,
+                user_msg_id,
+                topic_created_message(topic_name, result)
+              )
+
+            state
+
+          {:ok, %{"result" => result}} ->
+            _ =
+              send_system_message(
+                state,
+                chat_id,
+                thread_id,
+                user_msg_id,
+                topic_created_message(topic_name, result)
+              )
+
+            state
+
+          {:ok, %{"description" => description}}
+          when is_binary(description) and description != "" ->
+            _ =
+              send_system_message(
+                state,
+                chat_id,
+                thread_id,
+                user_msg_id,
+                "Failed to create topic: #{description}"
+              )
+
+            state
+
+          {:error, reason} ->
+            _ =
+              send_system_message(
+                state,
+                chat_id,
+                thread_id,
+                user_msg_id,
+                topic_error_message(reason)
+              )
+
+            state
+
+          _ ->
+            _ =
+              send_system_message(
+                state,
+                chat_id,
+                thread_id,
+                user_msg_id,
+                "Failed to create topic."
+              )
+
+            state
+        end
+    end
+  rescue
+    _ -> state
+  end
+
+  defp topic_usage, do: "Usage: /topic <name>"
+
+  defp topic_created_message(topic_name, result) when is_binary(topic_name) and is_map(result) do
+    topic_id = parse_int(result["message_thread_id"] || result[:message_thread_id])
+
+    if is_integer(topic_id) do
+      "Created topic \"#{topic_name}\" (id: #{topic_id})."
+    else
+      "Created topic \"#{topic_name}\"."
+    end
+  rescue
+    _ -> "Created topic \"#{topic_name}\"."
+  end
+
+  defp topic_created_message(topic_name, _result) do
+    "Created topic \"#{topic_name}\"."
+  end
+
+  defp topic_error_message(reason) do
+    case extract_topic_error_description(reason) do
+      desc when is_binary(desc) and desc != "" -> "Failed to create topic: #{desc}"
+      _ -> "Failed to create topic."
+    end
+  end
+
+  defp extract_topic_error_description(%{"description" => desc})
+       when is_binary(desc) and desc != "" do
+    desc
+  end
+
+  defp extract_topic_error_description({:http_error, _status, body}) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, %{"description" => desc}} when is_binary(desc) and desc != "" -> desc
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp extract_topic_error_description(_), do: nil
 
   defp maybe_transcribe_voice(state, inbound) do
     voice = inbound.meta && inbound.meta[:voice]

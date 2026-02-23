@@ -168,6 +168,7 @@ adapters/telegram/voice_transcriber.ex — OpenAI-compatible audio transcription
 - `chunk_limit`: 4096
 - `rate_limit`: 30 msg/sec
 - Supports: edit, delete, voice, images, files, reactions, threads
+- Transport-level Telegram commands: `/new`, `/resume`, `/trigger`, `/file`, `/topic`, `/cancel`
 
 ### Enable
 
@@ -440,6 +441,7 @@ mix test apps/lemon_channels/test/lemon_channels/outbox_test.exs
 | `telegram/delivery_test.exs` | Delivery helper |
 | `telegram/markdown_test.exs` | Markdown → entities |
 | `telegram/transport_*_test.exs` | Transport behaviors (cancel, offset, auth, dedupe, parallel) |
+| `telegram/transport_topic_test.exs` | `/topic` command behavior |
 | `telegram/file_transfer_test.exs` | File handling |
 | `x_api_test.exs` | X adapter |
 | `x_api_client_test.exs` | X API client |

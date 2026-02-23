@@ -227,6 +227,7 @@ Other launch modes:
 - Start a new session: `/new`
   - Optional: bind this chat to a repo for subsequent runs: `/new <project_id|path>`
 - Resume previous sessions: `/resume` (list), then `/resume <number>` or `/resume <engine token>`
+- Create a forum topic: `/topic <name>` (Telegram forum supergroups)
 - Cancel a running run: reply to the bot's `Running...` message with `/cancel` (or send `/cancel` in a DM)
 - Approvals: when a tool needs approval, Telegram will show inline buttons (Once / Session / Agent / Global / Deny).
 
@@ -1219,6 +1220,7 @@ LemonChannels.enqueue(%LemonChannels.OutboundPayload{
 - Edit/delete support for message updates
 - Peer kind detection (DM, group, supergroup, channel)
 - `/cancel` works by replying to the bot's `Running…` message
+- `/topic <name>` creates a Telegram forum topic in the current chat
 - **Voice transcription** with OpenAI-compatible providers
 - **File transfer** (`/file put`, `/file get`) with safety rails
 - **Auto-send generated images** after runs complete
@@ -2543,6 +2545,7 @@ From Telegram:
 - Queue mode override: `/steer`, `/followup`, `/interrupt`
 - Start a new session: `/new` (optional: `/new <project_id|path>` to bind the chat to a repo)
 - Resume previous sessions: `/resume` (list), then `/resume <number>` or `/resume <engine token>`
+- Create a forum topic: `/topic <name>` (Telegram forum supergroups)
 - Cancel a running run: reply to the bot's `Running...` message with `/cancel` (or send `/cancel` in a DM)
 - Approvals: when a tool needs approval, you'll get inline approval buttons
 
