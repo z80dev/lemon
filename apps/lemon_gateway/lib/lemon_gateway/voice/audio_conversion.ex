@@ -99,6 +99,12 @@ defmodule LemonGateway.Voice.AudioConversion do
   header check.
   """
   @spec mp3_data?(binary()) :: boolean()
+  def mp3_data?(audio_data) when not is_binary(audio_data) do
+    mp3_data?(:erlang.iolist_to_binary(audio_data))
+  end
+
+  def mp3_data?(<<"ID3", _rest::binary>>), do: true
+
   def mp3_data?(<<0xFF, second, _rest::binary>>) do
     # MP3 frame sync: first 11 bits are all 1s
     Bitwise.band(second, 0xE0) == 0xE0

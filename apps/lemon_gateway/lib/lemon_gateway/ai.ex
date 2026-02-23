@@ -40,8 +40,12 @@ defmodule LemonGateway.AI do
   end
 
   defp openai_chat_completion(model, messages, opts) do
-    api_key = System.get_env("OPENAI_API_KEY") ||
-              Application.get_env(:lemon_gateway, :openai_api_key)
+    api_key =
+      resolve_api_key(
+        :openai_api_key,
+        "OPENAI_API_KEY",
+        ["openai_api_key", "OPENAI_API_KEY"]
+      )
 
     if is_nil(api_key) or api_key == "" do
       {:error, :missing_api_key}
@@ -84,7 +88,12 @@ defmodule LemonGateway.AI do
   end
 
   defp anthropic_chat_completion(model, messages, opts) do
-    api_key = System.get_env("ANTHROPIC_API_KEY")
+    api_key =
+      resolve_api_key(
+        :anthropic_api_key,
+        "ANTHROPIC_API_KEY",
+        ["anthropic_api_key", "ANTHROPIC_API_KEY"]
+      )
 
     if is_nil(api_key) or api_key == "" do
       {:error, :missing_api_key}
@@ -148,4 +157,30 @@ defmodule LemonGateway.AI do
       {_, rest} -> {nil, rest}
     end
   end
+
+  defp resolve_api_key(app_key, env_var, secret_names) do
+    with nil <- present_or_nil(System.get_env(env_var)),
+         nil <- present_or_nil(Application.get_env(:lemon_gateway, app_key)),
+         nil <- resolve_from_secrets(secret_names) do
+      nil
+    else
+      api_key -> api_key
+    end
+  end
+
+  defp resolve_from_secrets(secret_names) when is_list(secret_names) do
+    Enum.find_value(secret_names, fn secret_name ->
+      case LemonCore.Secrets.resolve(secret_name) do
+        {:ok, value, _source} -> present_or_nil(value)
+        _ -> nil
+      end
+    end)
+  end
+
+  defp present_or_nil(value) when is_binary(value) do
+    trimmed = String.trim(value)
+    if trimmed == "", do: nil, else: trimmed
+  end
+
+  defp present_or_nil(_), do: nil
 end

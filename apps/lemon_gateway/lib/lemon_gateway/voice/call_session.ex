@@ -11,11 +11,11 @@ defmodule LemonGateway.Voice.CallSession do
   - Call state management
   """
 
-  use GenServer
+  use GenServer, restart: :temporary
 
   require Logger
 
-  alias LemonGateway.Voice.{AudioConversion, Config}
+  alias LemonGateway.Voice.{AudioConversion, Config, DeepgramClient}
 
   # Call states
   defstruct [
@@ -183,7 +183,7 @@ defmodule LemonGateway.Voice.CallSession do
   def handle_cast({:audio_from_twilio, audio_data}, state) do
     # Forward audio to Deepgram for transcription
     if state.deepgram_ws_pid do
-      send(state.deepgram_ws_pid, {:audio, audio_data})
+      DeepgramClient.send_audio(state.deepgram_ws_pid, audio_data)
     end
 
     {:noreply, %{state | last_activity_at: DateTime.utc_now()}}
@@ -284,10 +284,16 @@ defmodule LemonGateway.Voice.CallSession do
 
     if state.twilio_ws_pid do
       send(state.twilio_ws_pid, {:send_audio, mulaw_audio})
+    else
+      Logger.warning("No Twilio WebSocket registered for call #{state.call_sid}; audio dropped")
     end
 
     # Add assistant response to history (prepend for O(1), reverse when needed)
     history = [%{role: "assistant", content: text} | state.conversation_history]
+
+    # Always advance speech state; Twilio mark callbacks are best-effort and
+    # welcome audio can be synthesized before stream wiring is complete.
+    send(self(), :speech_complete)
 
     {:noreply, %{state | conversation_history: history, is_processing: false}}
   end
@@ -356,7 +362,20 @@ defmodule LemonGateway.Voice.CallSession do
       {:ok, %{"content" => content}} ->
         content
 
-      _ ->
+      {:error, :missing_api_key} ->
+        Logger.error("Voice LLM call failed for model #{Config.llm_model()}: missing API key")
+
+        "I'm not fully configured yet. My language model API key is missing."
+
+      {:error, reason} ->
+        Logger.error("Voice LLM call failed for model #{Config.llm_model()}: #{inspect(reason)}")
+        "I'm sorry, I'm having trouble thinking right now. Please try again."
+
+      other ->
+        Logger.error(
+          "Voice LLM call returned unexpected payload for model #{Config.llm_model()}: #{inspect(other)}"
+        )
+
         "I'm sorry, I didn't catch that. Could you say it again?"
     end
   end
@@ -364,8 +383,11 @@ defmodule LemonGateway.Voice.CallSession do
   defp synthesize_speech(text) do
     api_key = Config.elevenlabs_api_key()
     voice_id = Config.elevenlabs_voice_id()
+    output_format = Config.elevenlabs_output_format()
 
-    url = "https://api.elevenlabs.io/v1/text-to-speech/#{voice_id}/stream"
+    url =
+      "https://api.elevenlabs.io/v1/text-to-speech/#{voice_id}/stream" <>
+        "?output_format=#{URI.encode_www_form(output_format)}"
 
     # :httpc expects charlists for headers
     headers = [
@@ -405,20 +427,30 @@ defmodule LemonGateway.Voice.CallSession do
   defp convert_pcm_to_mulaw(audio_data) do
     # ElevenLabs may return MP3 or raw PCM depending on configuration.
     # Twilio expects 8-bit mu-law (G.711) at 8000 Hz, mono.
-    if AudioConversion.mp3_data?(audio_data) do
-      # MP3 data detected — mu-law encoding requires raw PCM input.
-      # Log a warning; MP3 decoding requires an external step (e.g. ffmpeg)
-      # that is out of scope for the pure-Elixir path. Pass through as-is
-      # so the caller can observe the issue via Twilio playback artifacts.
-      Logger.warning(
-        "Audio data appears to be MP3-encoded; mu-law conversion requires PCM input. " <>
-          "Configure ElevenLabs to return PCM format or add an MP3 decode step."
-      )
+    audio_binary = :erlang.iolist_to_binary(audio_data)
+    output_format = Config.elevenlabs_output_format()
 
-      audio_data
-    else
-      # Assume 16-bit signed little-endian PCM — encode to mu-law
-      AudioConversion.pcm16_to_mulaw(audio_data)
+    cond do
+      output_format == "ulaw_8000" ->
+        # Already Twilio-compatible G.711 mu-law at 8kHz.
+        audio_binary
+
+      AudioConversion.mp3_data?(audio_binary) ->
+        # MP3 data detected — mu-law encoding requires raw PCM input.
+        # Log a warning; MP3 decoding requires an external step (e.g. ffmpeg)
+        # that is out of scope for the pure-Elixir path. Pass through as-is
+        # so the caller can observe the issue via Twilio playback artifacts.
+        Logger.warning(
+          "Audio data appears to be MP3-encoded; mu-law conversion requires PCM input. " <>
+            "Set elevenlabs_output_format to ulaw_8000 for Twilio compatibility, " <>
+            "or add an MP3 decode step."
+        )
+
+        audio_binary
+
+      true ->
+        # Assume 16-bit signed little-endian PCM — encode to mu-law
+        AudioConversion.pcm16_to_mulaw(audio_binary)
     end
   end
 

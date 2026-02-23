@@ -27,11 +27,13 @@ defmodule LemonGateway.Voice.WebhookRouter do
   post "/webhooks/twilio/voice" do
     params = conn.params || %{}
 
-    Logger.info("Incoming Twilio voice call: #{inspect(Map.take(params, ["CallSid", "From", "To"]))}")
+    Logger.info(
+      "Incoming Twilio voice call: #{inspect(Map.take(params, ["CallSid", "From", "To"]))}"
+    )
 
     # Generate TwiML to connect to Media Stream
     # Use the host from the incoming request so Twilio connects back to the same URL
-    twiml = generate_twiml(conn)
+    twiml = generate_twiml(conn, params)
 
     conn
     |> Plug.Conn.put_resp_content_type("application/xml")
@@ -53,9 +55,16 @@ defmodule LemonGateway.Voice.WebhookRouter do
   # WebSocket upgrade for media stream
   get "/webhooks/twilio/voice/stream" do
     # Extract call info from query params or headers
-    call_sid = conn.params["callSid"] || generate_call_sid()
-    from_number = conn.params["from"] || "unknown"
-    to_number = conn.params["to"] || "unknown"
+    call_sid = conn.params["callSid"] || conn.params["CallSid"] || fallback_call_sid()
+    from_number = conn.params["from"] || conn.params["From"] || "unknown"
+    to_number = conn.params["to"] || conn.params["To"] || "unknown"
+
+    if call_sid == "unknown" or from_number == "unknown" do
+      Logger.warning(
+        "Voice stream connected without full metadata: " <>
+          "query=#{inspect(conn.query_string)}, params=#{inspect(conn.params)}"
+      )
+    end
 
     Logger.info("WebSocket connection request for call #{call_sid}")
 
@@ -75,10 +84,10 @@ defmodule LemonGateway.Voice.WebhookRouter do
 
   # Private Functions
 
-  defp generate_twiml(conn) do
+  defp generate_twiml(conn, params) do
     # Get the host from the incoming request
     # Check for X-Forwarded-Host header first (set by proxies/tunnels)
-    host = 
+    host =
       conn
       |> Plug.Conn.get_req_header("x-forwarded-host")
       |> List.first()
@@ -86,9 +95,9 @@ defmodule LemonGateway.Voice.WebhookRouter do
         nil -> conn.host || "localhost"
         forwarded -> forwarded
       end
-    
+
     # Check for X-Forwarded-Proto to determine if we're behind HTTPS
-    proto = 
+    proto =
       conn
       |> Plug.Conn.get_req_header("x-forwarded-proto")
       |> List.first()
@@ -96,23 +105,42 @@ defmodule LemonGateway.Voice.WebhookRouter do
         "https" -> "wss"
         _ -> if conn.scheme == :https, do: "wss", else: "ws"
       end
-    
-    stream_url = "#{proto}://#{host}/webhooks/twilio/voice/stream"
+
+    base_stream_url = "#{proto}://#{host}/webhooks/twilio/voice/stream"
+
+    query_params =
+      [{"callSid", params["CallSid"]}, {"from", params["From"]}, {"to", params["To"]}]
+      |> Enum.reject(fn {_k, v} -> is_nil(v) or v == "" end)
+
+    stream_url =
+      case query_params do
+        [] -> base_stream_url
+        _ -> base_stream_url <> "?" <> URI.encode_query(query_params)
+      end
 
     Logger.info("TwiML Stream URL: #{stream_url} (host=#{host}, proto=#{proto})")
+    escaped_stream_url = xml_escape_attr(stream_url)
 
     """
     <?xml version="1.0" encoding="UTF-8"?>
     <Response>
       <Connect>
-        <Stream url="#{stream_url}" />
+        <Stream url="#{escaped_stream_url}" />
       </Connect>
     </Response>
     """
     |> String.trim()
   end
 
-  defp generate_call_sid do
-    "CA" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+  defp xml_escape_attr(value) do
+    value
+    |> String.replace("&", "&amp;")
+    |> String.replace("\"", "&quot;")
+    |> String.replace("<", "&lt;")
+    |> String.replace(">", "&gt;")
+  end
+
+  defp fallback_call_sid do
+    "temp_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
   end
 end

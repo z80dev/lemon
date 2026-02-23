@@ -154,6 +154,16 @@ defmodule LemonGateway.Voice.AudioConversionTest do
       # 0xFF followed by byte without top 3 bits set
       refute AudioConversion.mp3_data?(<<0xFF, 0x00>>)
     end
+
+    test "detects ID3 tag header" do
+      assert AudioConversion.mp3_data?(<<"ID3", 0, 0, 0>>)
+    end
+
+    test "accepts iodata without crashing" do
+      # Simulate :httpc returning MP3 payload as iolist
+      chunks = [<<0xFF, 0xFB>>, <<0x90, 0x00>>]
+      assert AudioConversion.mp3_data?(chunks)
+    end
   end
 
   describe "round-trip properties" do

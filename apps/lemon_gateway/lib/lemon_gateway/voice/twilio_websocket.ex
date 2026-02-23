@@ -23,19 +23,8 @@ defmodule LemonGateway.Voice.TwilioWebSocket do
 
     Logger.info("Twilio WebSocket initializing for call #{call_sid}")
 
-    # Start the call session
-    {:ok, session_pid} =
-      DynamicSupervisor.start_child(
-        LemonGateway.Voice.CallSessionSupervisor,
-        {CallSession, call_sid: call_sid, from_number: from_number, to_number: to_number}
-      )
-
-    # Start Deepgram client
-    {:ok, deepgram_pid} =
-      DynamicSupervisor.start_child(
-        LemonGateway.Voice.DeepgramSupervisor,
-        {DeepgramClient, call_sid: call_sid, session_pid: session_pid}
-      )
+    session_pid = ensure_call_session(call_sid, from_number, to_number)
+    deepgram_pid = ensure_deepgram_client(call_sid, session_pid)
 
     state = %{
       call_sid: call_sid,
@@ -145,22 +134,29 @@ defmodule LemonGateway.Voice.TwilioWebSocket do
     stream_sid = dig_in(data, ["start", "streamSid"])
     call_sid = dig_in(data, ["start", "callSid"])
 
+    if is_binary(call_sid) and call_sid != state.call_sid and
+         not provisional_call_sid?(state.call_sid) do
+      Logger.warning(
+        "Twilio call SID mismatch for stream #{stream_sid}: websocket_sid=#{state.call_sid}, twilio_sid=#{call_sid}"
+      )
+    end
+
     Logger.info("Twilio stream started: stream_sid=#{stream_sid}, call_sid=#{call_sid}")
 
-    {:ok, %{state | stream_sid: stream_sid}}
+    {:ok, %{state | stream_sid: stream_sid, call_sid: call_sid || state.call_sid}}
   end
 
   defp handle_twilio_message(%{"event" => "media"} = data, state) do
     payload = dig_in(data, ["media", "payload"])
     track = dig_in(data, ["media", "track"])
 
-    # Only process inbound audio (from caller)
-    if track == "inbound" && payload do
+    # Process inbound caller audio. Some providers omit `track` on inbound frames.
+    if payload && (track == "inbound" || is_nil(track)) do
       # Decode base64 mulaw audio
       audio_data = Base.decode64!(payload)
 
-      # Forward to Deepgram for transcription
-      DeepgramClient.send_audio(state.deepgram_pid, audio_data)
+      # Route through CallSession so activity timestamps are updated.
+      CallSession.handle_audio(state.session_pid, audio_data)
 
       # Also buffer for potential processing
       {:ok, %{state | audio_buffer: state.audio_buffer <> audio_data}}
@@ -197,5 +193,45 @@ defmodule LemonGateway.Voice.TwilioWebSocket do
     Enum.reduce(keys, data, fn key, acc ->
       if is_map(acc), do: Map.get(acc, key), else: nil
     end)
+  end
+
+  defp provisional_call_sid?(call_sid) when is_binary(call_sid) do
+    String.starts_with?(call_sid, "temp_")
+  end
+
+  defp provisional_call_sid?(_), do: false
+
+  defp ensure_call_session(call_sid, from_number, to_number) do
+    case DynamicSupervisor.start_child(
+           LemonGateway.Voice.CallSessionSupervisor,
+           {CallSession, call_sid: call_sid, from_number: from_number, to_number: to_number}
+         ) do
+      {:ok, session_pid} ->
+        session_pid
+
+      {:error, {:already_started, session_pid}} ->
+        Logger.warning("Reusing existing call session for call #{call_sid}")
+        session_pid
+
+      {:error, reason} ->
+        raise "Failed to start call session for #{call_sid}: #{inspect(reason)}"
+    end
+  end
+
+  defp ensure_deepgram_client(call_sid, session_pid) do
+    case DynamicSupervisor.start_child(
+           LemonGateway.Voice.DeepgramSupervisor,
+           {DeepgramClient, call_sid: call_sid, session_pid: session_pid}
+         ) do
+      {:ok, deepgram_pid} ->
+        deepgram_pid
+
+      {:error, {:already_started, deepgram_pid}} ->
+        Logger.warning("Reusing existing Deepgram client for call #{call_sid}")
+        deepgram_pid
+
+      {:error, reason} ->
+        raise "Failed to start Deepgram client for #{call_sid}: #{inspect(reason)}"
+    end
   end
 end

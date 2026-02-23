@@ -61,6 +61,16 @@ defmodule LemonGateway.Voice.Config do
   end
 
   @doc """
+  Returns the ElevenLabs audio output format.
+
+  `ulaw_8000` is Twilio Media Streams compatible and avoids a conversion step.
+  """
+  @spec elevenlabs_output_format() :: String.t()
+  def elevenlabs_output_format do
+    Application.get_env(:lemon_gateway, :elevenlabs_output_format, "ulaw_8000")
+  end
+
+  @doc """
   Returns the WebSocket port for Twilio Media Streams.
   """
   @spec websocket_port() :: integer()

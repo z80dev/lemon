@@ -54,7 +54,8 @@ config :lemon_gateway,
   twilio_auth_token: "your_auth_token",
   twilio_phone_number: "+1234567890",
   deepgram_api_key: "your_deepgram_key",
-  elevenlabs_api_key: "your_elevenlabs_key"
+  elevenlabs_api_key: "your_elevenlabs_key",
+  elevenlabs_output_format: "ulaw_8000"
 ```
 
 ### 3. Configure Twilio Webhook
@@ -93,6 +94,7 @@ ngrok http 4047
 | `voice_websocket_port` | `4047` | Port for WebSocket server |
 | `voice_public_url` | `nil` | Public URL for Twilio webhooks |
 | `elevenlabs_voice_id` | `"21m00Tcm4TlvDq8ikWAM"` | ElevenLabs voice (Rachel) |
+| `elevenlabs_output_format` | `"ulaw_8000"` | ElevenLabs output format (Twilio-compatible) |
 | `voice_llm_model` | `"gpt-4o-mini"` | LLM for responses |
 | `voice_max_call_duration_seconds` | `600` | Max call length (10 min) |
 | `voice_silence_timeout_ms` | `5000` | End call after silence |

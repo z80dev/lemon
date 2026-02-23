@@ -529,8 +529,23 @@ Twilio ← audio ─────────── Synthesized speech
 enabled = true
 websocket_port = 4047
 twilio_phone_number = "+1234567890"
+elevenlabs_output_format = "ulaw_8000"
 # API keys from env: DEEPGRAM_API_KEY, ELEVENLABS_API_KEY
 ```
+
+### ElevenLabs response normalization
+
+`CallSession.convert_pcm_to_mulaw/1` now normalizes the ElevenLabs response to a binary before running `AudioConversion.mp3_data?/1` or `pcm16_to_mulaw/1`. This prevents `FunctionClauseError` when `:httpc` streams come back as iodata (lists) and the incoming MP3 payload starts with an `ID3` tag. Detection was also extended to recognize the `ID3` header so the warning log triggers earlier when non-PCM audio is returned. Refer to `apps/lemon_gateway/lib/lemon_gateway/voice/call_session.ex:403-428` and `apps/lemon_gateway/lib/lemon_gateway/voice/audio_conversion.ex` for the implementation.
+
+For production Twilio calls, keep `elevenlabs_output_format` set to `ulaw_8000` so audio is already G.711 mu-law and can be sent directly without PCM conversion.
+
+### Twilio stream metadata and session lifecycle
+
+`WebhookRouter` now includes `CallSid`, `From`, and `To` as query params on the `<Stream>` URL so `TwilioWebSocket.init/1` receives stable metadata instead of synthetic/unknown values. Inbound media frames are routed through `CallSession.handle_audio/2`, which updates `last_activity_at` and forwards audio to Deepgram via the registered WS process. `CallSession` is configured with `restart: :temporary` to avoid restart loops after normal call termination under `LemonGateway.Voice.CallSessionSupervisor`.
+
+If stream metadata is missing on websocket connect, `WebhookRouter` now generates a unique temporary call SID (`temp_*`) instead of using `"unknown"` so registry keys do not collide across calls. `TwilioWebSocket.init/1` also handles `{:error, {:already_started, pid}}` for both CallSession and Deepgram children by reusing the existing process rather than crashing the connection.
+
+`LemonGateway.AI` now resolves provider API keys from environment variables, app config, and Lemon secrets (both lowercase and uppercase key names such as `openai_api_key` and `OPENAI_API_KEY`) so voice LLM calls can succeed when credentials are stored in secrets.
 
 ## Common Tasks
 
