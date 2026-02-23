@@ -11,8 +11,12 @@ defmodule LemonCore.ConfigReloader.Watcher do
   - `<cwd>/.lemon/config.toml`
   - `.env` (from `LEMON_DOTENV_DIR` or cwd)
 
-  File-system events are debounced (250ms) to avoid redundant reloads from
-  editor save sequences.
+  Native watcher targets are optimized:
+  - watch exact file paths when they already exist
+  - watch parent directories when files do not exist yet
+
+  File-system events are still filtered to the exact watched file set and
+  debounced (250ms) to avoid redundant reloads from editor save sequences.
   """
 
   use GenServer
@@ -42,11 +46,15 @@ defmodule LemonCore.ConfigReloader.Watcher do
     cwd = Keyword.get(opts, :cwd)
     debounce_ms = Keyword.get(opts, :debounce_ms, @debounce_ms)
     poll_interval_ms = Keyword.get(opts, :poll_interval_ms, @poll_interval_ms)
+    watched_paths = watched_paths(cwd)
+    watch_targets = watch_targets(watched_paths)
 
     state = %{
       cwd: cwd,
       debounce_ms: debounce_ms,
       poll_interval_ms: poll_interval_ms,
+      watched_paths: watched_paths |> MapSet.new(),
+      watch_targets: watch_targets,
       watcher_pid: nil,
       debounce_ref: nil,
       mode: :polling
@@ -62,8 +70,12 @@ defmodule LemonCore.ConfigReloader.Watcher do
 
   @impl true
   def handle_info({:file_event, _watcher_pid, {path, events}}, state) do
-    Logger.debug("[ConfigReloader.Watcher] File event: #{path} #{inspect(events)}")
-    {:noreply, debounce_reload(state)}
+    if relevant_file_event?(path, state.watched_paths) do
+      Logger.debug("[ConfigReloader.Watcher] File event: #{path} #{inspect(events)}")
+      {:noreply, debounce_reload(state)}
+    else
+      {:noreply, state}
+    end
   end
 
   def handle_info({:file_event, _watcher_pid, :stop}, state) do
@@ -78,7 +90,6 @@ defmodule LemonCore.ConfigReloader.Watcher do
   end
 
   def handle_info(:poll, state) do
-    Logger.debug("[ConfigReloader.Watcher] Poll check")
     do_trigger_reload(:poll)
     schedule_poll(state)
     {:noreply, state}
@@ -103,7 +114,7 @@ defmodule LemonCore.ConfigReloader.Watcher do
 
   defp try_start_watcher(state) do
     if Code.ensure_loaded?(FileSystem) do
-      dirs = watch_directories(state.cwd)
+      dirs = state.watch_targets
 
       case FileSystem.start_link(dirs: dirs) do
         {:ok, pid} ->
@@ -124,23 +135,33 @@ defmodule LemonCore.ConfigReloader.Watcher do
     end
   end
 
-  defp watch_directories(cwd) do
-    global_dir = Path.expand("~/.lemon")
-    dotenv_dir = System.get_env("LEMON_DOTENV_DIR") || cwd || File.cwd!()
-
-    dirs = [global_dir, Path.expand(dotenv_dir)]
-
-    dirs =
-      if is_binary(cwd) and cwd != "" do
-        project_dir = Path.join(Path.expand(cwd), ".lemon")
-        [project_dir | dirs]
+  defp watch_targets(watched_paths) do
+    watched_paths
+    |> Enum.flat_map(fn path ->
+      if File.exists?(path) do
+        [path]
       else
-        dirs
+        [Path.dirname(path)]
+      end
+    end)
+    |> Enum.uniq()
+    |> Enum.filter(&File.exists?/1)
+  end
+
+  defp watched_paths(cwd) do
+    global_config = Path.expand("~/.lemon/config.toml")
+    dotenv_dir = System.get_env("LEMON_DOTENV_DIR") || cwd || File.cwd!()
+    dotenv_path = LemonCore.Dotenv.path_for(dotenv_dir) |> Path.expand()
+
+    project_config =
+      if is_binary(cwd) and cwd != "" do
+        [Path.join(Path.expand(cwd), ".lemon/config.toml")]
+      else
+        []
       end
 
-    dirs
+    [global_config, dotenv_path | project_config]
     |> Enum.uniq()
-    |> Enum.filter(&File.dir?/1)
   end
 
   defp debounce_reload(state) do

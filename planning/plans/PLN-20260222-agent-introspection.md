@@ -1,7 +1,7 @@
 ---
 id: PLN-20260222-agent-introspection
 title: End-to-end agent introspection (commands, tools, tasks, lineage)
-status: in_progress
+status: merged
 priority_bucket: now
 owner: codex
 reviewer: codex
@@ -111,13 +111,18 @@ Quality blockers are unrelated to introspection scope:
 | 2026-02-23 | `claude` | M3 external-engine adapter enrichment: instrumented Agent, JsonlRunner, and all 5 CLI runners with introspection events | `apps/agent_core/lib/agent_core/agent.ex`, `cli_runners/*.ex` |
 | 2026-02-23 | `claude` | M3 introspection test suite: 15 tests, 0 failures; full suite: 0 new failures vs main | `apps/agent_core/test/agent_core/cli_runners/introspection_test.exs` |
 | 2026-02-23 | `claude` | Fixed M3 doc review issues: corrected per-event provenance column in `AGENTS.md` (`:agent_turn_observed` is `:inferred`, JSONL runner events split); added full introspection event taxonomy table to `docs/telemetry.md` | `apps/agent_core/AGENTS.md`, `docs/telemetry.md` |
+| 2026-02-23 | `codex` | Staff review completed for M2/M3/M4 workspaces; blockers identified and review/merge artifacts updated | `planning/reviews/RVW-PLN-20260222-agent-introspection.md`, `planning/merges/MRG-PLN-20260222-agent-introspection.md` |
+| 2026-02-23 | `codex` | Final re-review passed after fixes (M2: 26 tests, M3: 15 tests, M4: 148 tests); plan set to ready_to_merge | `planning/reviews/RVW-PLN-20260222-agent-introspection.md` |
+| 2026-02-23 | `codex` | Final stack merge executed (`M2 -> M3 -> M4`), `main` advanced, and post-merge smoke tests passed | `bec7bfae0281c23e616148c191c287a79362b7e4`, `mix test apps/lemon_core/test/lemon_core/introspection_test.exs apps/lemon_core/test/lemon_core/store_test.exs` (18 tests, 0 failures) |
 
 ## Completion Checklist
 
 - [x] M1 scope delivered
 - [x] M3 scope delivered
 - [x] Tests recorded with pass/fail evidence
-- [ ] Review artifact completed
-- [ ] Merge artifact completed
+- [x] Review artifact completed
+- [x] Merge artifact completed
 - [x] Relevant docs updated (`AGENTS.md`, `docs/telemetry.md`, module docs)
-- [ ] Plan status set to `merged`
+- [x] Blocking review findings resolved
+- [x] Plan status set to `ready_to_merge`
+- [x] Plan status set to `merged`

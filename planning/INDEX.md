@@ -57,6 +57,11 @@ These entries were already completed before the `planning/` workflow was created
 
 | Plan ID | Title | Merge Commit | Notes | Updated |
 |---|---|---|---|---|
+| [PLN-20260222-agent-introspection](plans/PLN-20260222-agent-introspection.md) | End-to-end agent introspection | `bec7bfae` | Final stacked merge `M2 -> M3 -> M4`; post-merge smoke tests passed | 2026-02-23 |
+| PLN-20260223-diag-extend | Extend diag script with service/health/logs/config | `84e34b45` | Team test: Claude + Codex parallel work | 2026-02-23 |
+| [PLN-20260223-transport-registry-dedup](plans/PLN-20260223-transport-registry-dedup.md) | Deduplicate transport_enabled? functions in TransportRegistry | `92c8ca86` | Eliminated ~64 lines of duplication across 6 transport clauses | 2026-02-23 |
+| [PLN-20260223-poll-jobs-rename](plans/PLN-20260223-poll-jobs-rename.md) | Rename poll_jobs tool to await (Oh-My-Pi sync) | `26be7b4d` | Upstream naming parity; 14 tests pass | 2026-02-23 |
+| [PLN-20260223-code-smell-cleanup](plans/PLN-20260223-code-smell-cleanup.md) | Code Smell Cleanup - Header Utils and Content-Type Parsing | — | Extracted header_key_match?/2 and parse_content_type/1; 28 tests pass | 2026-02-23 |
 | [PLN-20260222-debt-phase-05-complexity-reduction](plans/PLN-20260222-debt-phase-05-complexity-reduction.md) | Debt Phase 5 - Complexity reduction (M1 inventory) | `117fc08b` | M1 baseline inventory complete; M2-M4 remaining | 2026-02-23 |
 | [PLN-20260222-debt-phase-06-ci-test-hardening](plans/PLN-20260222-debt-phase-06-ci-test-hardening.md) | Debt Phase 6 - CI and test signal hardening | `f98750e5` | All milestones complete; 17 skip tags removed | 2026-02-23 |
 | [PLN-20260222-debt-phase-07-run-state-concurrency](plans/PLN-20260222-debt-phase-07-run-state-concurrency.md) | Debt Phase 7 - Run-state correctness and concurrency safety | `ca47f7e9` | Atomic transitions, PubSub await, scheduler fix; 21 tests | 2026-02-23 |

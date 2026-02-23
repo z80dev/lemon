@@ -65,6 +65,20 @@ defmodule LemonCore.SecretsTest do
     System.delete_env("MISSING_SECRET")
   end
 
+  test "reading a secret updates usage metadata without changing updated_at" do
+    assert {:ok, initial} = Secrets.set("usage_meta_secret", "value-123")
+    assert initial.usage_count == 0
+    assert initial.last_used_at == nil
+
+    Process.sleep(5)
+    assert {:ok, "value-123"} = Secrets.get("usage_meta_secret")
+    assert {:ok, [after_read]} = Secrets.list()
+    assert after_read.name == "usage_meta_secret"
+    assert after_read.usage_count == 1
+    assert is_integer(after_read.last_used_at)
+    assert after_read.updated_at == initial.updated_at
+  end
+
   defp clear_secrets_table do
     Store.list(Secrets.table())
     |> Enum.each(fn {key, _value} ->

@@ -224,7 +224,6 @@ defmodule LemonCore.Secrets do
       entry
       |> put_field(:usage_count, (get_field(entry, :usage_count) || 0) + 1)
       |> put_field(:last_used_at, now)
-      |> put_field(:updated_at, now)
 
     :ok = Store.put(@table, {owner, name}, updated)
   end

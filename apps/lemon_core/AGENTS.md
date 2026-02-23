@@ -24,7 +24,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Config.Modular` | Alternative modular config loader with typed sub-structs per section |
 | `LemonCore.ConfigCache` | ETS-backed config cache with mtime-based invalidation |
 | `LemonCore.ConfigReloader` | Hot reload orchestrator with diff computation and Bus broadcast |
-| `LemonCore.ConfigReloader.Watcher` | FileSystem watcher that triggers config reload on TOML changes |
+| `LemonCore.ConfigReloader.Watcher` | FileSystem watcher that targets `config.toml`/`.env` paths (file-first, parent-dir fallback) and triggers reload only for those files |
 | `LemonCore.Secrets` | Encrypted secrets API (get/set/list/delete) |
 | `LemonCore.Secrets.Crypto` | AES-256-GCM encryption with HKDF key derivation |
 | `LemonCore.Secrets.Keychain` | macOS keychain integration for master key storage |
@@ -636,6 +636,7 @@ The `LemonCore.Application` supervisor starts (`:one_for_one`):
 - Keep module interfaces stable - other apps depend on them
 - `LemonCore.Config.load/2` uses the cache by default; `LemonCore.Config.reload/2` forces a disk read and updates the cache
 - Secrets values are never logged or returned by list/status APIs
+- Secret reads (`get/2`) update usage metadata (`usage_count`, `last_used_at`) but do not mutate `updated_at`
 - Store backends serialize with `:erlang.term_to_binary/1`; keys and values can be any Erlang term
 - Events use millisecond timestamps from `System.system_time(:millisecond)`
 - `LemonCore.RouterBridge` returns `{:error, :unavailable}` when `:lemon_router` has not registered itself; callers must handle this gracefully

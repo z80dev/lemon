@@ -183,16 +183,43 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
   end
 
   # ---------------------------------------------------------------------------
-  # watch_directories (tested indirectly through init behavior)
+  # watch target selection (tested indirectly through init behavior)
   # ---------------------------------------------------------------------------
 
-  describe "watch_directories" do
+  describe "watch target selection" do
     test "starts successfully with existing global ~/.lemon directory", %{
       global_lemon_dir: global_lemon_dir
     } do
       assert File.dir?(global_lemon_dir)
       pid = start_watcher!()
       assert Process.alive?(pid)
+    end
+
+    test "watches exact file path when a watched file exists", %{
+      project_dir: project_dir,
+      project_lemon_dir: project_lemon_dir
+    } do
+      project_config = Path.join(project_lemon_dir, "config.toml")
+      File.write!(project_config, "")
+
+      pid = start_watcher!(cwd: project_dir)
+      state = :sys.get_state(pid)
+
+      assert project_config in state.watch_targets
+    end
+
+    test "falls back to parent directory when a watched file is missing", %{
+      project_dir: project_dir,
+      project_lemon_dir: project_lemon_dir
+    } do
+      project_config = Path.join(project_lemon_dir, "config.toml")
+      File.rm(project_config)
+
+      pid = start_watcher!(cwd: project_dir)
+      state = :sys.get_state(pid)
+
+      refute project_config in state.watch_targets
+      assert project_lemon_dir in state.watch_targets
     end
 
     test "starts with cwd pointing to project directory", %{project_dir: project_dir} do
