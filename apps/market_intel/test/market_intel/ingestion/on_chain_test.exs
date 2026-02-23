@@ -92,7 +92,7 @@ defmodule MarketIntel.Ingestion.OnChainTest do
     test "returns :not_found when no cached data" do
       # Use a unique key that won't exist
       cache_key = :nonexistent_large_transfers_key
-      Application.put_env(:market_intel, :tracked_token, [large_transfers_cache_key: cache_key])
+      Application.put_env(:market_intel, :tracked_token, large_transfers_cache_key: cache_key)
 
       assert :not_found = OnChain.get_large_transfers()
 
@@ -126,16 +126,17 @@ defmodule MarketIntel.Ingestion.OnChainTest do
     test "transforms transfers to internal format", %{response: response} do
       transfers = response["result"]
 
-      parsed = Enum.map(transfers, fn t ->
-        %{
-          from: t["from"],
-          to: t["to"],
-          value: t["value"],
-          timestamp: t["timeStamp"],
-          block: t["blockNumber"],
-          hash: t["hash"]
-        }
-      end)
+      parsed =
+        Enum.map(transfers, fn t ->
+          %{
+            from: t["from"],
+            to: t["to"],
+            value: t["value"],
+            timestamp: t["timeStamp"],
+            block: t["blockNumber"],
+            hash: t["hash"]
+          }
+        end)
 
       first = hd(parsed)
       assert first.from == "0x1111111111111111111111111111111111111111"
@@ -160,20 +161,25 @@ defmodule MarketIntel.Ingestion.OnChainTest do
 
   describe "large transfer detection" do
     test "identifies transfers above threshold" do
-      threshold = 1_000_000_000_000_000_000_000_000  # 1M tokens with 18 decimals
+      # 1M tokens with 18 decimals
+      threshold = 1_000_000_000_000_000_000_000_000
 
       transfers = [
-        %{"value" => "500000000000000000000000"},   # 500K - below threshold
-        %{"value" => "1000000000000000000000000"},  # 1M - at threshold
-        %{"value" => "2000000000000000000000000"}   # 2M - above threshold
+        # 500K - below threshold
+        %{"value" => "500000000000000000000000"},
+        # 1M - at threshold
+        %{"value" => "1000000000000000000000000"},
+        # 2M - above threshold
+        %{"value" => "2000000000000000000000000"}
       ]
 
-      large_transfers = Enum.filter(transfers, fn t ->
-        case Integer.parse(to_string(t["value"] || "0")) do
-          {value, _} -> value > threshold
-          :error -> false
-        end
-      end)
+      large_transfers =
+        Enum.filter(transfers, fn t ->
+          case Integer.parse(to_string(t["value"] || "0")) do
+            {value, _} -> value > threshold
+            :error -> false
+          end
+        end)
 
       assert length(large_transfers) == 1
       assert hd(large_transfers)["value"] == "2000000000000000000000000"
@@ -184,15 +190,17 @@ defmodule MarketIntel.Ingestion.OnChainTest do
         %{"value" => nil},
         %{"value" => ""},
         %{"value" => "invalid"},
-        %{"hash" => "0xabc"}  # missing value entirely
+        # missing value entirely
+        %{"hash" => "0xabc"}
       ]
 
-      results = Enum.map(transfers, fn t ->
-        case Integer.parse(to_string(t["value"] || "0")) do
-          {value, _} -> value > 1000
-          :error -> false
-        end
-      end)
+      results =
+        Enum.map(transfers, fn t ->
+          case Integer.parse(to_string(t["value"] || "0")) do
+            {value, _} -> value > 1000
+            :error -> false
+          end
+        end)
 
       assert Enum.all?(results, &(&1 == false))
     end
@@ -214,7 +222,7 @@ defmodule MarketIntel.Ingestion.OnChainTest do
 
       expected_url =
         "https://api.basescan.org/api?module=account&action=tokentx" <>
-        "&contractaddress=#{token_address}&startblock=#{from_block}&sort=desc&apikey=#{api_key}"
+          "&contractaddress=#{token_address}&startblock=#{from_block}&sort=desc&apikey=#{api_key}"
 
       assert expected_url =~ "api.basescan.org"
       assert expected_url =~ "module=account"
@@ -234,11 +242,12 @@ defmodule MarketIntel.Ingestion.OnChainTest do
         {:ok, data}
       end)
 
-      result = HttpClientMock.get(
-        "https://api.basescan.org/api?module=account&action=tokentx",
-        [],
-        source: "BaseScan"
-      )
+      result =
+        HttpClientMock.get(
+          "https://api.basescan.org/api?module=account&action=tokentx",
+          [],
+          source: "BaseScan"
+        )
 
       assert {:ok, response} = result
       assert response["status"] == "1"
@@ -276,7 +285,8 @@ defmodule MarketIntel.Ingestion.OnChainTest do
     end
 
     test "converts wei to gwei" do
-      wei_price = 8_000_000_000  # 8 Gwei in wei
+      # 8 Gwei in wei
+      wei_price = 8_000_000_000
       gwei_price = wei_price / 1_000_000_000
 
       assert gwei_price == 8.0
@@ -293,11 +303,12 @@ defmodule MarketIntel.Ingestion.OnChainTest do
     test "determines congestion level" do
       gas_price_gwei = 0.1
 
-      congestion = cond do
-        gas_price_gwei < 0.05 -> :low
-        gas_price_gwei < 0.2 -> :medium
-        true -> :high
-      end
+      congestion =
+        cond do
+          gas_price_gwei < 0.05 -> :low
+          gas_price_gwei < 0.2 -> :medium
+          true -> :high
+        end
 
       assert congestion == :medium
     end
@@ -393,14 +404,30 @@ defmodule MarketIntel.Ingestion.OnChainTest do
   end
 
   describe "holder stats" do
-    test "returns placeholder holder stats" do
+    test "returns :not_enabled when holder_stats_enabled is false (default)" do
+      # Default config has holder stats disabled
+      Application.put_env(:market_intel, :holder_stats_enabled, false)
+
       stats = %{
-        total_holders: :unknown,
-        top_10_concentration: :unknown
+        total_holders: :not_enabled,
+        top_10_concentration: :not_enabled,
+        reason: :feature_disabled
       }
 
-      assert stats.total_holders == :unknown
-      assert stats.top_10_concentration == :unknown
+      assert stats.total_holders == :not_enabled
+      assert stats.top_10_concentration == :not_enabled
+      assert stats.reason == :feature_disabled
+    end
+
+    test "holder stats are disabled by default" do
+      Application.delete_env(:market_intel, :holder_stats_enabled)
+      assert Application.get_env(:market_intel, :holder_stats_enabled, false) == false
+    end
+
+    test "holder stats can be enabled via config" do
+      Application.put_env(:market_intel, :holder_stats_enabled, true)
+      assert Application.get_env(:market_intel, :holder_stats_enabled, false) == true
+      Application.delete_env(:market_intel, :holder_stats_enabled)
     end
   end
 

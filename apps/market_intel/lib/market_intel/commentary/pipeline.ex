@@ -176,22 +176,25 @@ defmodule MarketIntel.Commentary.Pipeline do
 
   @spec generate_tweet(String.t()) :: {:ok, String.t()}
   defp generate_tweet(prompt) do
-    # Try AI generation if configured
-    # Note: AI providers currently return {:error, :not_implemented} as placeholders
-    # When AI integration is implemented, replace this with case statement handling {:ok, tweet}
-    _result = generate_with_ai(prompt)
-    {:ok, generate_fallback_tweet()}
+    case generate_with_ai(prompt) do
+      {:ok, tweet} ->
+        Logger.info("[MarketIntel] AI-generated tweet (#{String.length(tweet)} chars)")
+        {:ok, tweet}
+
+      {:error, reason} ->
+        Logger.info("[MarketIntel] AI generation failed (#{inspect(reason)}), using fallback")
+        {:ok, generate_fallback_tweet()}
+    end
   end
 
-  @spec generate_with_ai(String.t()) :: {:ok, String.t()} | {:error, atom()}
+  @spec generate_with_ai(String.t()) :: {:ok, String.t()} | {:error, term()}
   defp generate_with_ai(prompt) do
-    # Try OpenAI first, then Anthropic
     cond do
       MarketIntel.Secrets.configured?(:openai_key) ->
-        generate_with_openai(prompt)
+        generate_with_provider(:openai, "gpt-4o-mini", prompt)
 
       MarketIntel.Secrets.configured?(:anthropic_key) ->
-        generate_with_anthropic(prompt)
+        generate_with_provider(:anthropic, "claude-3-5-haiku-20241022", prompt)
 
       true ->
         Logger.info("[MarketIntel] No AI provider configured, using fallback tweets")
@@ -199,32 +202,55 @@ defmodule MarketIntel.Commentary.Pipeline do
     end
   end
 
-  @spec generate_with_openai(String.t()) :: {:ok, String.t()} | {:error, atom()}
-  defp generate_with_openai(_prompt) do
-    # AI integration placeholder - implement when Lemon's AI module is available
-    # This should call the AI module with appropriate parameters for tweet generation
-    Logger.debug("[MarketIntel] Attempting OpenAI generation (not yet implemented)")
-    
-    # Placeholder: Return error to trigger fallback
-    # When implemented, this should:
-    # 1. Call Lemon's AI module with the prompt
-    # 2. Apply tweet-specific parameters (max_tokens for ~280 chars)
-    # 3. Return {:ok, generated_text} or {:error, reason}
-    {:error, :not_implemented}
+  @doc false
+  @spec generate_with_provider(atom(), String.t(), String.t()) ::
+          {:ok, String.t()} | {:error, term()}
+  def generate_with_provider(provider, model_id, prompt) do
+    case Ai.Models.get_model(provider, model_id) do
+      nil ->
+        Logger.warning("[MarketIntel] Model #{model_id} not found for provider #{provider}")
+        {:error, {:model_not_found, provider, model_id}}
+
+      model ->
+        context =
+          Ai.Types.Context.new(
+            system_prompt: "You are a tweet author. Reply with ONLY the tweet text, nothing else."
+          )
+          |> Ai.Types.Context.add_user_message(prompt)
+
+        case Ai.complete(model, context, %{max_tokens: 300, temperature: 0.9}) do
+          {:ok, message} ->
+            text =
+              message
+              |> Ai.get_text()
+              |> String.trim()
+              |> String.trim("\"")
+              |> truncate_to_tweet_length()
+
+            if text == "" do
+              {:error, :empty_response}
+            else
+              {:ok, text}
+            end
+
+          {:error, reason} ->
+            Logger.warning("[MarketIntel] AI completion failed: #{inspect(reason)}")
+            {:error, reason}
+        end
+    end
+  rescue
+    e ->
+      Logger.error("[MarketIntel] AI generation error: #{Exception.message(e)}")
+      {:error, {:ai_exception, Exception.message(e)}}
   end
 
-  @spec generate_with_anthropic(String.t()) :: {:ok, String.t()} | {:error, atom()}
-  defp generate_with_anthropic(_prompt) do
-    # AI integration placeholder - implement when Lemon's AI module is available
-    # This should call the AI module with appropriate parameters for tweet generation
-    Logger.debug("[MarketIntel] Attempting Anthropic generation (not yet implemented)")
-    
-    # Placeholder: Return error to trigger fallback
-    # When implemented, this should:
-    # 1. Call Lemon's AI module with the prompt
-    # 2. Apply tweet-specific parameters (max_tokens for ~280 chars)
-    # 3. Return {:ok, generated_text} or {:error, reason}
-    {:error, :not_implemented}
+  @spec truncate_to_tweet_length(String.t()) :: String.t()
+  defp truncate_to_tweet_length(text) when byte_size(text) <= 280, do: text
+
+  defp truncate_to_tweet_length(text) do
+    text
+    |> String.slice(0, 277)
+    |> Kernel.<>("...")
   end
 
   @spec generate_fallback_tweet() :: String.t()
@@ -333,16 +359,12 @@ defmodule MarketIntel.Commentary.Pipeline do
         {:ok, inserted}
 
       {:error, %Ecto.Changeset{} = changeset} ->
-        Logger.error(
-          "[MarketIntel] Failed to store commentary: #{inspect(changeset.errors)}"
-        )
+        Logger.error("[MarketIntel] Failed to store commentary: #{inspect(changeset.errors)}")
 
         {:error, changeset}
 
       {:error, reason} ->
-        Logger.warning(
-          "[MarketIntel] Commentary history storage unavailable: #{inspect(reason)}"
-        )
+        Logger.warning("[MarketIntel] Commentary history storage unavailable: #{inspect(reason)}")
 
         {:error, reason}
     end

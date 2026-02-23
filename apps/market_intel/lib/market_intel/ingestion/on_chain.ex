@@ -139,8 +139,8 @@ defmodule MarketIntel.Ingestion.OnChain do
 
   defp fetch_basescan_transfers(token_address, from_block, api_key) do
     url =
-      "#{@base_scan_api}?module=account&action=tokentx" <> 
-      "&contractaddress=#{token_address}&startblock=#{from_block}&sort=desc&apikey=#{api_key}"
+      "#{@base_scan_api}?module=account&action=tokentx" <>
+        "&contractaddress=#{token_address}&startblock=#{from_block}&sort=desc&apikey=#{api_key}"
 
     HttpClient.get(url, [], source: "BaseScan")
   end
@@ -156,14 +156,82 @@ defmodule MarketIntel.Ingestion.OnChain do
   end
 
   defp fetch_holder_stats do
-    # Could integrate with token holder APIs
-    # For now, placeholder
-    {:ok, :holder_stats,
-     %{
-       total_holders: :unknown,
-       top_10_concentration: :unknown
-     }}
+    if holder_stats_enabled?() do
+      fetch_holder_stats_from_provider()
+    else
+      Logger.debug(
+        "[OnChain] Holder stats disabled by config (market_intel.holder_stats_enabled)"
+      )
+
+      {:ok, :holder_stats,
+       %{
+         total_holders: :not_enabled,
+         top_10_concentration: :not_enabled,
+         reason: :feature_disabled
+       }}
+    end
   end
+
+  defp holder_stats_enabled? do
+    Application.get_env(:market_intel, :holder_stats_enabled, false) == true
+  end
+
+  defp fetch_holder_stats_from_provider do
+    token_address = MarketIntel.Config.tracked_token_address()
+
+    if missing_config?(token_address) do
+      Errors.config_error("missing tracked_token address for holder stats")
+    else
+      case get_basescan_key() do
+        {:ok, api_key} ->
+          fetch_holder_count_from_basescan(token_address, api_key)
+
+        {:error, _} = error ->
+          error
+      end
+    end
+  end
+
+  defp fetch_holder_count_from_basescan(token_address, api_key) do
+    url =
+      "#{@base_scan_api}?module=token&action=tokeninfo" <>
+        "&contractaddress=#{token_address}&apikey=#{api_key}"
+
+    case HttpClient.get(url, [], source: "BaseScan") do
+      {:ok, %{"result" => [info | _]}} ->
+        holders = parse_int_or_unknown(info["holdersCount"])
+
+        {:ok, :holder_stats,
+         %{
+           total_holders: holders,
+           top_10_concentration: :not_available,
+           fetched_at: DateTime.utc_now()
+         }}
+
+      {:ok, _} ->
+        {:ok, :holder_stats,
+         %{
+           total_holders: :not_available,
+           top_10_concentration: :not_available,
+           fetched_at: DateTime.utc_now()
+         }}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp parse_int_or_unknown(nil), do: :not_available
+
+  defp parse_int_or_unknown(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {n, _} -> n
+      :error -> :not_available
+    end
+  end
+
+  defp parse_int_or_unknown(value) when is_integer(value), do: value
+  defp parse_int_or_unknown(_), do: :not_available
 
   defp fetch_latest_block do
     # Get latest block number
