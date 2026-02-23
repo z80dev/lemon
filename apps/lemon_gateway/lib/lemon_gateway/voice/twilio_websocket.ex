@@ -10,6 +10,11 @@ defmodule LemonGateway.Voice.TwilioWebSocket do
 
   require Logger
 
+  # Close a connection after this many consecutive unauthorized post-handshake
+  # requests.  Protects against floods from clients that connect but do not
+  # speak the Twilio Media Streams protocol.
+  @unauthorized_flood_threshold 10
+
   alias LemonGateway.Voice.{CallSession, DeepgramClient}
 
   # WebSock Callbacks
@@ -31,7 +36,8 @@ defmodule LemonGateway.Voice.TwilioWebSocket do
       session_pid: session_pid,
       deepgram_pid: deepgram_pid,
       stream_sid: nil,
-      audio_buffer: <<>>
+      audio_buffer: <<>>,
+      unauthorized_count: 0
     }
 
     # Register with call session
@@ -48,14 +54,14 @@ defmodule LemonGateway.Voice.TwilioWebSocket do
 
       {:error, reason} ->
         Logger.warning("Failed to decode Twilio message: #{inspect(reason)}")
-        {:ok, state}
+        handle_unauthorized_request(state)
     end
   end
 
   def handle_in({data, [opcode: :binary]}, state) do
-    # Twilio shouldn't send binary frames, but handle just in case
-    Logger.debug("Received binary frame from Twilio: #{byte_size(data)} bytes")
-    {:ok, state}
+    # Twilio doesn't send binary frames; treat them as unauthorized.
+    Logger.debug("Received unexpected binary frame from Twilio: #{byte_size(data)} bytes")
+    handle_unauthorized_request(state)
   end
 
   @impl WebSock
@@ -185,14 +191,33 @@ defmodule LemonGateway.Voice.TwilioWebSocket do
   end
 
   defp handle_twilio_message(data, state) do
-    Logger.debug("Unhandled Twilio message: #{inspect(data)}")
-    {:ok, state}
+    Logger.debug("Unhandled Twilio message (unauthorized): #{inspect(data)}")
+    handle_unauthorized_request(state)
   end
 
   defp dig_in(data, keys) do
     Enum.reduce(keys, data, fn key, acc ->
       if is_map(acc), do: Map.get(acc, key), else: nil
     end)
+  end
+
+  # Flood guard: increment the unauthorized-request counter and close the
+  # connection once the threshold is reached.
+  defp handle_unauthorized_request(state) do
+    new_count = state.unauthorized_count + 1
+    new_state = %{state | unauthorized_count: new_count}
+
+    if new_count >= @unauthorized_flood_threshold do
+      Logger.warning(
+        "WebSocket flood guard triggered for call #{state.call_sid}: " <>
+          "#{new_count} unauthorized requests exceeded threshold of " <>
+          "#{@unauthorized_flood_threshold}, closing connection"
+      )
+
+      {:stop, :normal, new_state}
+    else
+      {:ok, new_state}
+    end
   end
 
   defp provisional_call_sid?(call_sid) when is_binary(call_sid) do

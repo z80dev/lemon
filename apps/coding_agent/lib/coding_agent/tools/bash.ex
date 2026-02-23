@@ -10,6 +10,7 @@ defmodule CodingAgent.Tools.Bash do
   alias AgentCore.AbortSignal
   alias Ai.Types.TextContent
   alias CodingAgent.BashExecutor
+  alias CodingAgent.Tools.ExecSecurity
 
   @default_timeout_ms 60_000
 
@@ -88,6 +89,20 @@ defmodule CodingAgent.Tools.Bash do
     command = Map.fetch!(params, "command")
     use_pty = Map.get(params, "pty", false)
 
+    # Reject obfuscated commands before execution
+    case ExecSecurity.check(command) do
+      {:obfuscated, technique} ->
+        %AgentToolResult{
+          content: [%TextContent{text: ExecSecurity.rejection_message(technique)}],
+          details: %{error: :obfuscated_command}
+        }
+
+      :ok ->
+        do_execute_checked(command, use_pty, signal, on_update, cwd, opts)
+    end
+  end
+
+  defp do_execute_checked(command, use_pty, signal, on_update, cwd, opts) do
     # Set up streaming callback if on_update is provided
     {accumulator_pid, streaming_callback} = build_streaming_callback(on_update)
 

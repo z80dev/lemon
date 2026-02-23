@@ -99,6 +99,39 @@ defmodule LemonChannels.Adapters.XAPI.Client do
   end
 
   @doc """
+  Post a tweet with media attachment.
+
+  ## Parameters
+
+    * `text` - Tweet text content (optional, can be empty string)
+    * `media_path` - Path to the media file to upload
+    * `opts` - Options including:
+      * `:reply_to` - Tweet ID to reply to
+      * `:mime_type` - MIME type of the media (auto-detected if not provided)
+
+  ## Returns
+
+    * `{:ok, %{tweet_id: id, media_id: media_id}}` on success
+    * `{:error, reason}` on failure
+  """
+  def post_with_media(text, media_path, opts \\ []) when is_binary(media_path) do
+    case LemonChannels.Adapters.XAPI.auth_method() do
+      :oauth1 ->
+        {:error, :media_upload_not_implemented}
+
+      :oauth2 ->
+        with {:ok, token} <- get_access_token(),
+             {:ok, media_data} <- read_media_file(media_path),
+             mime_type <- opts[:mime_type] || detect_mime_type(media_path),
+             {:ok, media_id} <- upload_media(%{data: media_data, mime_type: mime_type}, token),
+             {:ok, tweet} <- build_tweet_with_media_data(text, media_id, opts[:reply_to]),
+             {:ok, result} <- post_tweet(tweet, token) do
+          {:ok, %{tweet_id: result["data"]["id"], media_id: media_id}}
+        end
+    end
+  end
+
+  @doc """
   Reply to a specific tweet.
   """
   def reply(tweet_id, text) do
@@ -179,6 +212,41 @@ defmodule LemonChannels.Adapters.XAPI.Client do
       |> maybe_add_reply(payload.reply_to)
 
     {:ok, tweet}
+  end
+
+  defp build_tweet_with_media_data(text, media_id, reply_to) do
+    tweet =
+      %{
+        "text" => truncate_text(text || ""),
+        "media" => %{
+          "media_ids" => [media_id]
+        }
+      }
+      |> maybe_add_reply(reply_to)
+
+    {:ok, tweet}
+  end
+
+  defp read_media_file(path) do
+    case File.read(path) do
+      {:ok, data} -> {:ok, data}
+      {:error, reason} -> {:error, {:file_read_error, reason, path}}
+    end
+  end
+
+  defp detect_mime_type(path) do
+    ext = path |> Path.extname() |> String.downcase()
+
+    case ext do
+      ".jpg" -> "image/jpeg"
+      ".jpeg" -> "image/jpeg"
+      ".png" -> "image/png"
+      ".gif" -> "image/gif"
+      ".webp" -> "image/webp"
+      ".mp4" -> "video/mp4"
+      ".mov" -> "video/quicktime"
+      _ -> "application/octet-stream"
+    end
   end
 
   defp post_tweet(tweet, token, attempt \\ 1) do

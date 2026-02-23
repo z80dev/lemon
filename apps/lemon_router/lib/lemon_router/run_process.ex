@@ -40,7 +40,13 @@ defmodule LemonRouter.RunProcess do
     "string too long",
     "maximum length",
     "invalid 'input[",
-    "input["
+    "input[",
+    # Chinese context overflow patterns
+    "上下文长度超过限制",
+    "令牌数量超出",
+    "输入过长",
+    "超出最大长度",
+    "上下文窗口已满"
   ]
   @zero_answer_retry_prefix """
   Retry notice: the previous attempt failed before producing an answer.

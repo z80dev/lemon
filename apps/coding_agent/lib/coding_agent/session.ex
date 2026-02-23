@@ -2705,7 +2705,13 @@ defmodule CodingAgent.Session do
     String.contains?(text, "context_length_exceeded") or
       String.contains?(text, "context length exceeded") or
       String.contains?(text, "context window") or
-      String.contains?(text, "maximum context length")
+      String.contains?(text, "maximum context length") or
+      # Chinese context overflow patterns
+      String.contains?(text, "上下文长度超过限制") or
+      String.contains?(text, "令牌数量超出") or
+      String.contains?(text, "输入过长") or
+      String.contains?(text, "超出最大长度") or
+      String.contains?(text, "上下文窗口已满")
   rescue
     _ -> false
   end

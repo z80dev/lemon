@@ -462,6 +462,303 @@ defmodule CodingAgent.Tools.WebSearchTest do
     assert {:error, "Operation aborted"} = tool.execute.("id", %{"query" => "hello"}, signal, nil)
   end
 
+  test "returns setup payload when Gemini key is missing" do
+    original_gemini = System.get_env("GEMINI_API_KEY")
+    original_google = System.get_env("GOOGLE_API_KEY")
+    System.delete_env("GEMINI_API_KEY")
+    System.delete_env("GOOGLE_API_KEY")
+
+    on_exit(fn ->
+      if original_gemini,
+        do: System.put_env("GEMINI_API_KEY", original_gemini),
+        else: System.delete_env("GEMINI_API_KEY")
+
+      if original_google,
+        do: System.put_env("GOOGLE_API_KEY", original_google),
+        else: System.delete_env("GOOGLE_API_KEY")
+    end)
+
+    tool =
+      WebSearch.tool("/tmp",
+        settings_manager: %{
+          tools: %{
+            web: %{
+              search: %{
+                provider: "gemini",
+                gemini: %{api_key: nil},
+                failover: %{enabled: false}
+              }
+            }
+          }
+        }
+      )
+
+    payload = tool.execute.("id", %{"query" => "hello"}, nil, nil) |> decode_payload()
+
+    assert payload["error"] == "missing_gemini_api_key"
+    assert payload["docs"] =~ "/tools/web"
+  end
+
+  test "runs Gemini search with grounding citations" do
+    parent = self()
+
+    http_post = fn url, _opts ->
+      send(parent, {:http_post, url})
+
+      {:ok,
+       %Req.Response{
+         status: 200,
+         headers: [{"content-type", "application/json"}],
+         body: %{
+           "candidates" => [
+             %{
+               "content" => %{
+                 "parts" => [%{"text" => "Lemon is a citrus fruit."}],
+                 "role" => "model"
+               },
+               "groundingMetadata" => %{
+                 "groundingChunks" => [
+                   %{"web" => %{"uri" => "https://example.com/lemon", "title" => "Lemon"}}
+                 ]
+               }
+             }
+           ]
+         }
+       }}
+    end
+
+    http_head = fn url, _opts ->
+      send(parent, {:http_head, url})
+      {:ok, %Req.Response{status: 200, headers: %{}, body: ""}}
+    end
+
+    tool =
+      WebSearch.tool("/tmp",
+        http_post: http_post,
+        http_head: http_head,
+        settings_manager: %{
+          tools: %{
+            web: %{
+              search: %{
+                provider: "gemini",
+                gemini: %{api_key: "test-gemini-key", model: "gemini-2.5-flash"}
+              }
+            }
+          }
+        }
+      )
+
+    result = tool.execute.("id", %{"query" => "lemon"}, nil, nil)
+    assert result.trust == :untrusted
+    payload = decode_payload(result)
+
+    assert payload["provider"] == "gemini"
+    assert payload["model"] == "gemini-2.5-flash"
+    assert payload["content"] =~ "EXTERNAL_UNTRUSTED_CONTENT"
+    assert payload["content"] =~ "Lemon is a citrus fruit"
+    assert payload["citations"] == ["https://example.com/lemon"]
+    assert payload["trust_metadata"]["source"] == "web_search"
+    assert payload["trust_metadata"]["wrapped_fields"] == ["content"]
+
+    assert_received {:http_post, url}
+    assert url =~ "gemini-2.5-flash:generateContent"
+    assert url =~ "test-gemini-key"
+    assert_received {:http_head, "https://example.com/lemon"}
+  end
+
+  test "resolves Gemini grounding redirect URLs via HEAD requests" do
+    parent = self()
+
+    redirect_url = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc123"
+    resolved_url = "https://real-source.example.com/article"
+
+    http_post = fn _url, _opts ->
+      {:ok,
+       %Req.Response{
+         status: 200,
+         headers: [{"content-type", "application/json"}],
+         body: %{
+           "candidates" => [
+             %{
+               "content" => %{"parts" => [%{"text" => "Answer"}], "role" => "model"},
+               "groundingMetadata" => %{
+                 "groundingChunks" => [
+                   %{"web" => %{"uri" => redirect_url, "title" => "Source"}}
+                 ]
+               }
+             }
+           ]
+         }
+       }}
+    end
+
+    http_head = fn url, _opts ->
+      send(parent, {:http_head, url})
+      {:ok, %Req.Response{status: 302, headers: %{"location" => [resolved_url]}, body: ""}}
+    end
+
+    tool =
+      WebSearch.tool("/tmp",
+        http_post: http_post,
+        http_head: http_head,
+        settings_manager: %{
+          tools: %{
+            web: %{search: %{provider: "gemini", gemini: %{api_key: "test-key"}}}
+          }
+        }
+      )
+
+    payload = tool.execute.("id", %{"query" => "test"}, nil, nil) |> decode_payload()
+
+    assert payload["citations"] == [resolved_url]
+    assert_received {:http_head, ^redirect_url}
+  end
+
+  test "falls back to original URL when Gemini HEAD request fails" do
+    redirect_url = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc123"
+
+    http_post = fn _url, _opts ->
+      {:ok,
+       %Req.Response{
+         status: 200,
+         headers: [{"content-type", "application/json"}],
+         body: %{
+           "candidates" => [
+             %{
+               "content" => %{"parts" => [%{"text" => "Answer"}], "role" => "model"},
+               "groundingMetadata" => %{
+                 "groundingChunks" => [
+                   %{"web" => %{"uri" => redirect_url, "title" => "Source"}}
+                 ]
+               }
+             }
+           ]
+         }
+       }}
+    end
+
+    http_head = fn _url, _opts -> {:error, :timeout} end
+
+    tool =
+      WebSearch.tool("/tmp",
+        http_post: http_post,
+        http_head: http_head,
+        settings_manager: %{
+          tools: %{
+            web: %{search: %{provider: "gemini", gemini: %{api_key: "test-key"}}}
+          }
+        }
+      )
+
+    payload = tool.execute.("id", %{"query" => "test"}, nil, nil) |> decode_payload()
+
+    assert payload["citations"] == [redirect_url]
+  end
+
+  test "strips API key from Gemini error messages" do
+    secret_key = "AIzaSy-supersecretkey12345"
+
+    http_post = fn _url, _opts ->
+      {:ok,
+       %Req.Response{
+         status: 400,
+         headers: [{"content-type", "application/json"}],
+         body: "Error: invalid key #{secret_key} provided"
+       }}
+    end
+
+    tool =
+      WebSearch.tool("/tmp",
+        http_post: http_post,
+        http_head: fn _url, _opts -> {:error, :unused} end,
+        settings_manager: %{
+          tools: %{
+            web: %{
+              search: %{
+                provider: "gemini",
+                gemini: %{api_key: secret_key},
+                failover: %{enabled: false}
+              }
+            }
+          }
+        }
+      )
+
+    assert {:error, message} = tool.execute.("id", %{"query" => "test"}, nil, nil)
+    refute message =~ secret_key
+    assert message =~ "[REDACTED]"
+    assert message =~ "Gemini API error (400)"
+  end
+
+  test "fails over from Gemini to Brave when Gemini key is missing" do
+    original_gemini = System.get_env("GEMINI_API_KEY")
+    original_google = System.get_env("GOOGLE_API_KEY")
+    System.delete_env("GEMINI_API_KEY")
+    System.delete_env("GOOGLE_API_KEY")
+
+    on_exit(fn ->
+      if original_gemini,
+        do: System.put_env("GEMINI_API_KEY", original_gemini),
+        else: System.delete_env("GEMINI_API_KEY")
+
+      if original_google,
+        do: System.put_env("GOOGLE_API_KEY", original_google),
+        else: System.delete_env("GOOGLE_API_KEY")
+    end)
+
+    parent = self()
+
+    http_get = fn _url, _opts ->
+      send(parent, :brave_http_get)
+
+      {:ok,
+       %Req.Response{
+         status: 200,
+         headers: [{"content-type", "application/json"}],
+         body: %{
+           "web" => %{
+             "results" => [
+               %{
+                 "title" => "Fallback result",
+                 "url" => "https://example.com/fallback",
+                 "description" => "Brave fallback"
+               }
+             ]
+           }
+         }
+       }}
+    end
+
+    tool =
+      WebSearch.tool("/tmp",
+        http_get: http_get,
+        settings_manager: %{
+          tools: %{
+            web: %{
+              search: %{
+                provider: "gemini",
+                gemini: %{api_key: nil},
+                failover: %{enabled: true, provider: "brave"},
+                api_key: "brave-key"
+              }
+            }
+          }
+        }
+      )
+
+    payload = tool.execute.("id", %{"query" => "lemon failover"}, nil, nil) |> decode_payload()
+
+    assert payload["provider"] == "brave"
+    assert payload["provider_requested"] == "gemini"
+    assert payload["provider_used"] == "brave"
+    assert payload["failover"]["attempted"] == true
+    assert payload["failover"]["used"] == true
+    assert payload["failover"]["from"] == "gemini"
+    assert payload["failover"]["to"] == "brave"
+    assert payload["failover"]["reason"] =~ "missing_gemini_api_key"
+    assert_received :brave_http_get
+  end
+
   defp decode_payload(result) do
     [content] = result.content
     Jason.decode!(content.text)

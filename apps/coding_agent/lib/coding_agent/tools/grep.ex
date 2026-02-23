@@ -65,6 +65,14 @@ defmodule CodingAgent.Tools.Grep do
           "max_results" => %{
             "type" => "integer",
             "description" => "Maximum number of matches to return (default: 100)"
+          },
+          "grouped" => %{
+            "type" => "boolean",
+            "description" => "When true, return results grouped by file (default: false)"
+          },
+          "max_per_file" => %{
+            "type" => "integer",
+            "description" => "Maximum results per file when grouped=true"
           }
         },
         "required" => ["pattern"]
@@ -116,6 +124,9 @@ defmodule CodingAgent.Tools.Grep do
     max_results =
       Map.get(params, "max_results", Keyword.get(opts, :max_results, @default_max_results))
 
+    grouped = Map.get(params, "grouped", false)
+    max_per_file = Map.get(params, "max_per_file")
+
     with :ok <- validate_pattern(pattern),
          {:ok, resolved_path} <- resolve_path(path, cwd, opts),
          :ok <- check_path_access(resolved_path),
@@ -127,6 +138,8 @@ defmodule CodingAgent.Tools.Grep do
         case_sensitive: case_sensitive,
         context_lines: context_lines,
         max_results: max_results,
+        grouped: grouped,
+        max_per_file: max_per_file,
         signal: signal,
         timeout_ms: Keyword.get(opts, :ripgrep_timeout_ms, @ripgrep_timeout_ms),
         rg_cmd_fun: Keyword.get(opts, :rg_cmd_fun, &System.cmd/3)
@@ -284,7 +297,11 @@ defmodule CodingAgent.Tools.Grep do
 
     case run_ripgrep_command(args, opts) do
       {:ok, {output, 0}} ->
-        parse_ripgrep_output(output, opts)
+        if opts.grouped do
+          parse_ripgrep_output_grouped(output, opts)
+        else
+          parse_ripgrep_output(output, opts)
+        end
 
       {:ok, {output, 1}} ->
         # Exit code 1 means no matches found
@@ -368,9 +385,16 @@ defmodule CodingAgent.Tools.Grep do
         args
       end
 
+    rg_max_count =
+      if opts.grouped do
+        opts.max_per_file || opts.max_results
+      else
+        opts.max_results
+      end
+
     args =
-      if opts.max_results do
-        args ++ ["--max-count", to_string(opts.max_results)]
+      if rg_max_count do
+        args ++ ["--max-count", to_string(rg_max_count)]
       else
         args
       end
@@ -445,6 +469,14 @@ defmodule CodingAgent.Tools.Grep do
   defp do_elixir_search(regex, opts) do
     files = find_files(opts.path, opts.glob)
 
+    if opts.grouped do
+      do_grouped_elixir_search(regex, opts, files)
+    else
+      do_flat_elixir_search(regex, opts, files)
+    end
+  end
+
+  defp do_flat_elixir_search(regex, opts, files) do
     results =
       files
       |> Stream.flat_map(fn file ->
@@ -461,6 +493,36 @@ defmodule CodingAgent.Tools.Grep do
       {:error, "Operation aborted"}
     else
       format_elixir_results(results, opts.max_results)
+    end
+  end
+
+  defp do_grouped_elixir_search(regex, opts, files) do
+    results_by_file =
+      Enum.reduce_while(files, %{}, fn file, acc ->
+        if aborted?(opts.signal) do
+          {:halt, acc}
+        else
+          matches = search_file(file, regex, opts.context_lines)
+
+          if matches == [] do
+            {:cont, acc}
+          else
+            formatted =
+              Enum.map(matches, fn %{line_number: ln, content: content} ->
+                %{"line" => ln, "match" => content}
+              end)
+
+            {:cont, Map.put(acc, file, formatted)}
+          end
+        end
+      end)
+
+    if aborted?(opts.signal) do
+      {:error, "Operation aborted"}
+    else
+      limited = apply_grouped_limits(results_by_file, opts.max_results, opts.max_per_file)
+      total_matches = Enum.sum(Enum.map(limited, fn {_, v} -> length(v) end))
+      format_grouped_result(limited, total_matches, length(files), opts.max_results)
     end
   end
 
@@ -589,6 +651,134 @@ defmodule CodingAgent.Tools.Grep do
 
   defp format_match(%{file: file, line_number: _line_num, context: context}) do
     "#{file}:\n#{context}"
+  end
+
+  # ============================================================================
+  # Grouped Output
+  # ============================================================================
+
+  defp parse_ripgrep_output_grouped(output, opts) do
+    lines = String.split(output, "\n", trim: true)
+
+    results_by_file =
+      Enum.reduce(lines, %{}, fn line, acc ->
+        case parse_ripgrep_line(line) do
+          {:ok, file, line_num, content} ->
+            match = %{"line" => line_num, "match" => content}
+            Map.update(acc, file, [match], &(&1 ++ [match]))
+
+          :skip ->
+            acc
+        end
+      end)
+
+    files_searched = map_size(results_by_file)
+    limited = apply_grouped_limits(results_by_file, opts.max_results, opts.max_per_file)
+    total_matches = Enum.sum(Enum.map(limited, fn {_, v} -> length(v) end))
+    format_grouped_result(limited, total_matches, files_searched, opts.max_results)
+  end
+
+  defp parse_ripgrep_line(line) do
+    case Regex.run(~r/^(.+?):(\d+):(.*)$/, line, capture: :all_but_first) do
+      [file, line_num, content] ->
+        {:ok, file, String.to_integer(line_num), content}
+
+      _ ->
+        :skip
+    end
+  end
+
+  defp apply_grouped_limits(results_by_file, max_results, max_per_file) do
+    capped =
+      if max_per_file do
+        Map.new(results_by_file, fn {file, matches} ->
+          {file, Enum.take(matches, max_per_file)}
+        end)
+      else
+        results_by_file
+      end
+
+    total = Enum.sum(Enum.map(capped, fn {_, v} -> length(v) end))
+
+    if total <= max_results do
+      capped
+    else
+      round_robin_take(capped, max_results)
+    end
+  end
+
+  defp round_robin_take(results_by_file, max_results) do
+    files = Map.keys(results_by_file) |> Enum.sort()
+    taken = Map.new(files, fn f -> {f, []} end)
+    do_round_robin(files, results_by_file, taken, 0, max_results)
+  end
+
+  defp do_round_robin(_files, _queues, taken, count, max) when count >= max, do: taken
+
+  defp do_round_robin(files, queues, taken, count, max) do
+    {new_queues, new_taken, new_count} =
+      Enum.reduce_while(files, {queues, taken, count}, fn file, {qs, tk, cnt} ->
+        if cnt >= max do
+          {:halt, {qs, tk, cnt}}
+        else
+          case Map.get(qs, file, []) do
+            [] ->
+              {:cont, {qs, tk, cnt}}
+
+            [match | rest] ->
+              new_qs = Map.put(qs, file, rest)
+              new_tk = Map.update!(tk, file, &(&1 ++ [match]))
+              {:cont, {new_qs, new_tk, cnt + 1}}
+          end
+        end
+      end)
+
+    if new_count == count do
+      new_taken
+    else
+      do_round_robin(files, new_queues, new_taken, new_count, max)
+    end
+  end
+
+  defp format_grouped_result(results_by_file, total_matches, files_searched, max_results) do
+    truncated = total_matches >= max_results
+
+    text =
+      if total_matches == 0 do
+        "No matches found."
+      else
+        file_count = map_size(results_by_file)
+
+        header =
+          "Found #{total_matches} match#{if total_matches == 1, do: "", else: "es"} across #{file_count} file#{if file_count == 1, do: "", else: "s"}."
+
+        file_sections =
+          results_by_file
+          |> Enum.sort_by(fn {file, _} -> file end)
+          |> Enum.map(fn {file, matches} ->
+            match_lines =
+              Enum.map(matches, fn %{"line" => line_num, "match" => content} ->
+                "  #{line_num}: #{content}"
+              end)
+
+            "#{file}\n#{Enum.join(match_lines, "\n")}"
+          end)
+          |> Enum.join("\n\n")
+
+        suffix = if truncated, do: "\n\n[Results truncated at #{max_results} matches]", else: ""
+        "#{header}\n\n#{file_sections}#{suffix}"
+      end
+
+    %AgentToolResult{
+      content: [%TextContent{text: text}],
+      details: %{
+        results: results_by_file,
+        total_matches: total_matches,
+        files_searched: files_searched,
+        truncated: truncated,
+        match_count: total_matches
+      }
+    }
   end
 
   # ============================================================================

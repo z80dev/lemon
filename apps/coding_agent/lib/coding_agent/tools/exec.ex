@@ -15,6 +15,7 @@ defmodule CodingAgent.Tools.Exec do
   alias AgentCore.AbortSignal
   alias Ai.Types.TextContent
   alias CodingAgent.ProcessManager
+  alias CodingAgent.Tools.ExecSecurity
 
   @doc """
   Returns the exec tool definition.
@@ -102,6 +103,20 @@ defmodule CodingAgent.Tools.Exec do
     env = Map.get(params, "env", %{})
     max_log_lines = Map.get(params, "max_log_lines", 1000)
 
+    # Reject obfuscated commands before execution
+    case ExecSecurity.check(command) do
+      {:obfuscated, technique} ->
+        %AgentToolResult{
+          content: [%TextContent{text: ExecSecurity.rejection_message(technique)}],
+          details: %{error: :obfuscated_command}
+        }
+
+      :ok ->
+        do_execute_validated(command, cwd, yield_ms, background?, env, max_log_lines)
+    end
+  end
+
+  defp do_execute_validated(command, cwd, yield_ms, background?, env, max_log_lines) do
     # Validate parameters
     with :ok <- validate_command(command),
          :ok <- validate_yield_ms(yield_ms) do

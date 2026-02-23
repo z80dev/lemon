@@ -62,9 +62,9 @@ defmodule LemonSkills.Tools.PostToXTest do
     assert text =~ "X API not configured"
   end
 
-  test "validates missing text parameter" do
+  test "validates missing both text and media_path parameters" do
     assert %AgentToolResult{
-             details: %{error: "Missing required parameter: text"}
+             details: %{error: "Either 'text' or 'media_path' must be provided"}
            } = PostToX.execute("call-2", %{}, nil, nil)
   end
 
@@ -79,5 +79,20 @@ defmodule LemonSkills.Tools.PostToXTest do
              details: %{error: "Parameter 'reply_to' must be a string"}
            } =
              PostToX.execute("call-4", %{"text" => "hello", "reply_to" => 12345}, nil, nil)
+  end
+
+  test "validates media_path parameter type" do
+    assert %AgentToolResult{
+             details: %{error: "Parameter 'media_path' must be a string"}
+           } =
+             PostToX.execute("call-5", %{"text" => "hello", "media_path" => 12345}, nil, nil)
+  end
+
+  test "allows media_path without text" do
+    # When media_path is provided without text, it should pass validation
+    # but fail with not_configured since X API is not set up in test
+    assert %AgentToolResult{
+             details: %{error: :not_configured}
+           } = PostToX.execute("call-6", %{"media_path" => "/path/to/image.png"}, nil, nil)
   end
 end

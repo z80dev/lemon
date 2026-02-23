@@ -581,4 +581,185 @@ defmodule CodingAgent.Tools.GrepTest do
       assert is_boolean(result)
     end
   end
+
+  describe "tool/2 - grouped parameters" do
+    test "includes grouped and max_per_file parameters" do
+      tool = Grep.tool("/tmp")
+      props = tool.parameters["properties"]
+
+      assert Map.has_key?(props, "grouped")
+      assert props["grouped"]["type"] == "boolean"
+      assert Map.has_key?(props, "max_per_file")
+      assert props["max_per_file"]["type"] == "integer"
+    end
+  end
+
+  describe "execute/6 - grouped output" do
+    test "returns grouped results when grouped=true", %{tmp_dir: tmp_dir} do
+      File.write!(Path.join(tmp_dir, "file1.txt"), "hello world\nhello again")
+      File.write!(Path.join(tmp_dir, "file2.txt"), "hello there")
+
+      result =
+        Grep.execute(
+          "call_1",
+          %{"pattern" => "hello", "grouped" => true},
+          nil,
+          nil,
+          tmp_dir,
+          ripgrep_available?: false
+        )
+
+      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
+      assert details.total_matches == 3
+      assert map_size(details.results) == 2
+      assert text =~ "file1"
+      assert text =~ "file2"
+    end
+
+    test "grouped output details has expected keys", %{tmp_dir: tmp_dir} do
+      File.write!(Path.join(tmp_dir, "test.txt"), "hello world")
+
+      result =
+        Grep.execute(
+          "call_1",
+          %{"pattern" => "hello", "grouped" => true},
+          nil,
+          nil,
+          tmp_dir,
+          ripgrep_available?: false
+        )
+
+      assert %AgentToolResult{details: details} = result
+      assert Map.has_key?(details, :results)
+      assert Map.has_key?(details, :total_matches)
+      assert Map.has_key?(details, :files_searched)
+      assert Map.has_key?(details, :truncated)
+    end
+
+    test "each file result contains line and match keys", %{tmp_dir: tmp_dir} do
+      File.write!(Path.join(tmp_dir, "test.txt"), "hello world\nhello again")
+
+      result =
+        Grep.execute(
+          "call_1",
+          %{"pattern" => "hello", "grouped" => true},
+          nil,
+          nil,
+          tmp_dir,
+          ripgrep_available?: false
+        )
+
+      assert %AgentToolResult{details: %{results: results}} = result
+      [match | _] = results |> Map.values() |> List.first()
+      assert Map.has_key?(match, "line")
+      assert Map.has_key?(match, "match")
+    end
+
+    test "max_per_file limits results per file", %{tmp_dir: tmp_dir} do
+      File.write!(Path.join(tmp_dir, "file1.txt"), "match\nmatch\nmatch\nmatch\nmatch")
+      File.write!(Path.join(tmp_dir, "file2.txt"), "match\nmatch\nmatch")
+
+      result =
+        Grep.execute(
+          "call_1",
+          %{"pattern" => "match", "grouped" => true, "max_per_file" => 2},
+          nil,
+          nil,
+          tmp_dir,
+          ripgrep_available?: false
+        )
+
+      assert %AgentToolResult{details: %{results: results}} = result
+
+      Enum.each(results, fn {_file, matches} ->
+        assert length(matches) <= 2
+      end)
+    end
+
+    test "round-robin distributes results fairly across files", %{tmp_dir: tmp_dir} do
+      file1_content = Enum.map_join(1..10, "\n", fn i -> "match_#{i}" end)
+      File.write!(Path.join(tmp_dir, "afile.txt"), file1_content)
+      File.write!(Path.join(tmp_dir, "bfile.txt"), "match_a\nmatch_b")
+
+      result =
+        Grep.execute(
+          "call_1",
+          %{"pattern" => "match", "grouped" => true, "max_results" => 4},
+          nil,
+          nil,
+          tmp_dir,
+          ripgrep_available?: false
+        )
+
+      assert %AgentToolResult{details: details} = result
+      assert details.total_matches == 4
+      counts = details.results |> Map.values() |> Enum.map(&length/1)
+      # Round-robin: both files contribute equally (2 each)
+      assert Enum.max(counts) - Enum.min(counts) <= 1
+    end
+
+    test "no matches with grouped=true returns empty results", %{tmp_dir: tmp_dir} do
+      File.write!(Path.join(tmp_dir, "test.txt"), "no match here")
+
+      result =
+        Grep.execute(
+          "call_1",
+          %{"pattern" => "xyz999", "grouped" => true},
+          nil,
+          nil,
+          tmp_dir,
+          ripgrep_available?: false
+        )
+
+      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
+      assert text =~ "No matches"
+      assert details.total_matches == 0
+    end
+
+    test "grouped=false maintains backward compatibility", %{tmp_dir: tmp_dir} do
+      File.write!(Path.join(tmp_dir, "test.txt"), "hello world\nhello again")
+
+      result =
+        Grep.execute(
+          "call_1",
+          %{"pattern" => "hello", "grouped" => false},
+          nil,
+          nil,
+          tmp_dir,
+          ripgrep_available?: false
+        )
+
+      assert %AgentToolResult{details: details} = result
+      assert details.match_count == 2
+      refute Map.has_key?(details, :results)
+    end
+
+    test "grouped output with ripgrep backend", %{tmp_dir: tmp_dir} do
+      File.write!(Path.join(tmp_dir, "alpha.txt"), "hello world\nhello again")
+      File.write!(Path.join(tmp_dir, "beta.txt"), "hello there")
+
+      result =
+        Grep.execute(
+          "call_1",
+          %{"pattern" => "hello", "grouped" => true},
+          nil,
+          nil,
+          tmp_dir,
+          ripgrep_available?: true,
+          rg_cmd_fun: fn "rg", args, _opts ->
+            # Simulate ripgrep output: file:line:content
+            _ = args
+
+            output =
+              "#{tmp_dir}/alpha.txt:1:hello world\n#{tmp_dir}/alpha.txt:2:hello again\n#{tmp_dir}/beta.txt:1:hello there\n"
+
+            {output, 0}
+          end
+        )
+
+      assert %AgentToolResult{details: details} = result
+      assert details.total_matches == 3
+      assert map_size(details.results) == 2
+    end
+  end
 end

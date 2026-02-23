@@ -7,7 +7,7 @@ defmodule LemonControlPlane.EventBridge do
 
   ## Topics Subscribed
 
-  - `run:*` - Run lifecycle events (agent, chat events)
+  - `run:*` - Run lifecycle events (agent, chat events, task lifecycle)
   - `exec_approvals` - Approval request/resolution events
   - `cron` - Cron job events
   - `system` - System events (shutdown, health, tick, talk.mode)
@@ -44,6 +44,12 @@ defmodule LemonControlPlane.EventBridge do
   | :shutdown                | shutdown                  |
   | :health_changed          | health                    |
   | :custom_event            | custom                    |
+  | :task_started            | task.started              |
+  | :task_completed          | task.completed            |
+  | :task_error              | task.error                |
+  | :task_timeout            | task.timeout              |
+  | :task_aborted            | task.aborted              |
+  | :run_graph_changed       | run.graph.changed         |
   """
 
   use GenServer
@@ -241,7 +247,8 @@ defmodule LemonControlPlane.EventBridge do
        "type" => "started",
        "runId" => payload[:run_id] || meta[:run_id],
        "sessionKey" => payload[:session_key] || meta[:session_key],
-       "engine" => payload[:engine]
+       "engine" => payload[:engine],
+       "parentRunId" => payload[:parent_run_id] || meta[:parent_run_id]
      }}
   end
 
@@ -482,6 +489,77 @@ defmodule LemonControlPlane.EventBridge do
        "type" => custom_type,
        "payload" => payload,
        "timestampMs" => System.system_time(:millisecond)
+     }}
+  end
+
+  # Task lifecycle events
+  defp map_event_type(:task_started, payload, meta) do
+    {"task.started",
+     %{
+       "taskId" => payload[:task_id] || meta[:task_id],
+       "parentRunId" => payload[:parent_run_id] || meta[:parent_run_id],
+       "runId" => payload[:run_id] || meta[:run_id],
+       "sessionKey" => payload[:session_key] || meta[:session_key],
+       "agentId" => payload[:agent_id] || meta[:agent_id],
+       "startedAtMs" => payload[:started_at_ms] || System.system_time(:millisecond)
+     }}
+  end
+
+  defp map_event_type(:task_completed, payload, meta) do
+    {"task.completed",
+     %{
+       "taskId" => payload[:task_id] || meta[:task_id],
+       "parentRunId" => payload[:parent_run_id] || meta[:parent_run_id],
+       "runId" => payload[:run_id] || meta[:run_id],
+       "sessionKey" => payload[:session_key] || meta[:session_key],
+       "ok" => payload[:ok],
+       "durationMs" => payload[:duration_ms],
+       "completedAtMs" => payload[:completed_at_ms] || System.system_time(:millisecond)
+     }}
+  end
+
+  defp map_event_type(:task_error, payload, meta) do
+    {"task.error",
+     %{
+       "taskId" => payload[:task_id] || meta[:task_id],
+       "parentRunId" => payload[:parent_run_id] || meta[:parent_run_id],
+       "runId" => payload[:run_id] || meta[:run_id],
+       "sessionKey" => payload[:session_key] || meta[:session_key],
+       "error" => payload[:error],
+       "durationMs" => payload[:duration_ms]
+     }}
+  end
+
+  defp map_event_type(:task_timeout, payload, meta) do
+    {"task.timeout",
+     %{
+       "taskId" => payload[:task_id] || meta[:task_id],
+       "parentRunId" => payload[:parent_run_id] || meta[:parent_run_id],
+       "runId" => payload[:run_id] || meta[:run_id],
+       "sessionKey" => payload[:session_key] || meta[:session_key],
+       "timeoutMs" => payload[:timeout_ms]
+     }}
+  end
+
+  defp map_event_type(:task_aborted, payload, meta) do
+    {"task.aborted",
+     %{
+       "taskId" => payload[:task_id] || meta[:task_id],
+       "parentRunId" => payload[:parent_run_id] || meta[:parent_run_id],
+       "runId" => payload[:run_id] || meta[:run_id],
+       "sessionKey" => payload[:session_key] || meta[:session_key],
+       "reason" => payload[:reason]
+     }}
+  end
+
+  defp map_event_type(:run_graph_changed, payload, meta) do
+    {"run.graph.changed",
+     %{
+       "runId" => payload[:run_id] || meta[:run_id],
+       "parentRunId" => payload[:parent_run_id] || meta[:parent_run_id],
+       "sessionKey" => payload[:session_key] || meta[:session_key],
+       "event" => payload[:event],
+       "timestampMs" => payload[:timestamp_ms] || System.system_time(:millisecond)
      }}
   end
 

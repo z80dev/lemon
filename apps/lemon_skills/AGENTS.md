@@ -190,12 +190,20 @@ LemonSkills.Tools.ReadSkill.tool(cwd: "/project/path")
 
 ### `post_to_x`
 
-Post to X (Twitter). Returns a helpful error if credentials are missing.
+Post to X (Twitter). Supports text tweets, replies, and media attachments. Returns a helpful error if credentials are missing.
 
 ```elixir
 LemonSkills.Tools.PostToX.tool()
-# Parameters: %{"text" => "Hello", "reply_to" => "tweet_id"}
+# Parameters: %{"text" => "Hello", "reply_to" => "tweet_id", "media_path" => "image.png"}
 ```
+
+**Parameters:**
+- `text` (string, optional if `media_path` provided) - Tweet content, max 280 characters
+- `reply_to` (string, optional) - Tweet ID to reply to
+- `media_path` (string, optional) - Path to image file to attach (PNG, JPG, GIF, WebP)
+
+**Media Attachments:**
+When `media_path` is provided, the image is uploaded to X and attached to the tweet. The path can be absolute or relative to the workspace.
 
 Requires: `X_API_CLIENT_ID`, `X_API_CLIENT_SECRET`, `X_API_ACCESS_TOKEN`, `X_API_REFRESH_TOKEN`
 

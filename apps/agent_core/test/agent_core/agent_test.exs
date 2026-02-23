@@ -16,6 +16,7 @@ defmodule AgentCore.AgentTest do
         system_prompt: Keyword.get(opts, :system_prompt, "You are a test assistant."),
         model: Keyword.get(opts, :model, Mocks.mock_model()),
         thinking_level: Keyword.get(opts, :thinking_level, :off),
+        auto_reasoning: Keyword.get(opts, :auto_reasoning, false),
         tools: Keyword.get(opts, :tools, [])
       },
       convert_to_llm: Keyword.get(opts, :convert_to_llm, Mocks.simple_convert_to_llm())
@@ -155,6 +156,86 @@ defmodule AgentCore.AgentTest do
 
       assert :ok = Agent.wait_for_idle(agent, timeout: 1000)
     end
+
+    test "auto_reasoning enables :medium reasoning when model supports it and thinking_level is :off" do
+      parent = self()
+      response = Mocks.assistant_message("Ok")
+
+      stream_fn = fn model, context, options ->
+        send(parent, {:stream_opts, options})
+        Mocks.mock_stream_fn_single(response).(model, context, options)
+      end
+
+      reasoning_model = Mocks.mock_model(reasoning: true)
+
+      {:ok, agent} =
+        start_agent(
+          model: reasoning_model,
+          auto_reasoning: true,
+          stream_fn: stream_fn
+        )
+
+      :ok = Agent.prompt(agent, "Hi")
+
+      assert_receive {:stream_opts, opts}, 1000
+      assert opts.reasoning == :medium
+
+      assert :ok = Agent.wait_for_idle(agent, timeout: 1000)
+    end
+
+    test "auto_reasoning is gated when thinking_level is already active" do
+      parent = self()
+      response = Mocks.assistant_message("Ok")
+
+      stream_fn = fn model, context, options ->
+        send(parent, {:stream_opts, options})
+        Mocks.mock_stream_fn_single(response).(model, context, options)
+      end
+
+      reasoning_model = Mocks.mock_model(reasoning: true)
+
+      {:ok, agent} =
+        start_agent(
+          model: reasoning_model,
+          thinking_level: :high,
+          auto_reasoning: true,
+          stream_fn: stream_fn
+        )
+
+      :ok = Agent.prompt(agent, "Hi")
+
+      assert_receive {:stream_opts, opts}, 1000
+      # thinking_level :high takes precedence; auto_reasoning is suppressed
+      assert opts.reasoning == :high
+
+      assert :ok = Agent.wait_for_idle(agent, timeout: 1000)
+    end
+
+    test "auto_reasoning does nothing when model does not support reasoning" do
+      parent = self()
+      response = Mocks.assistant_message("Ok")
+
+      stream_fn = fn model, context, options ->
+        send(parent, {:stream_opts, options})
+        Mocks.mock_stream_fn_single(response).(model, context, options)
+      end
+
+      non_reasoning_model = Mocks.mock_model(reasoning: false)
+
+      {:ok, agent} =
+        start_agent(
+          model: non_reasoning_model,
+          auto_reasoning: true,
+          stream_fn: stream_fn
+        )
+
+      :ok = Agent.prompt(agent, "Hi")
+
+      assert_receive {:stream_opts, opts}, 1000
+      assert opts.reasoning == nil
+
+      assert :ok = Agent.wait_for_idle(agent, timeout: 1000)
+    end
   end
 
   # ============================================================================
@@ -258,6 +339,33 @@ defmodule AgentCore.AgentTest do
         state = Agent.get_state(agent)
         assert state.thinking_level == level
       end
+    end
+  end
+
+  describe "set_auto_reasoning/2" do
+    test "enables auto reasoning" do
+      {:ok, agent} = start_agent()
+
+      :ok = Agent.set_auto_reasoning(agent, true)
+
+      state = Agent.get_state(agent)
+      assert state.auto_reasoning == true
+    end
+
+    test "disables auto reasoning" do
+      {:ok, agent} = start_agent(auto_reasoning: true)
+
+      :ok = Agent.set_auto_reasoning(agent, false)
+
+      state = Agent.get_state(agent)
+      assert state.auto_reasoning == false
+    end
+
+    test "defaults to false" do
+      {:ok, agent} = start_agent()
+
+      state = Agent.get_state(agent)
+      assert state.auto_reasoning == false
     end
   end
 

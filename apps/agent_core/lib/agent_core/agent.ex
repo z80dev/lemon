@@ -312,6 +312,19 @@ defmodule AgentCore.Agent do
   end
 
   @doc """
+  Enables or disables auto reasoning.
+
+  When enabled, auto reasoning automatically activates reasoning (at `:medium` level)
+  for models that support it. This is gated by the effective thinking level: if thinking
+  is already active (`thinking_level != :off`), auto reasoning is suppressed to avoid
+  redundant reasoning layers.
+  """
+  @spec set_auto_reasoning(GenServer.server(), boolean()) :: :ok
+  def set_auto_reasoning(agent, enabled) when is_boolean(enabled) do
+    GenServer.call(agent, {:set_auto_reasoning, enabled})
+  end
+
+  @doc """
   Sets the available tools.
   """
   @spec set_tools(GenServer.server(), list(AgentCore.Types.AgentTool.t())) :: :ok
@@ -464,6 +477,7 @@ defmodule AgentCore.Agent do
       system_prompt: Map.get(initial_state_opts, :system_prompt, ""),
       model: Map.get(initial_state_opts, :model),
       thinking_level: Map.get(initial_state_opts, :thinking_level, :off),
+      auto_reasoning: Map.get(initial_state_opts, :auto_reasoning, false),
       tools: Map.get(initial_state_opts, :tools, []),
       messages: Map.get(initial_state_opts, :messages, []),
       is_streaming: false,
@@ -590,6 +604,11 @@ defmodule AgentCore.Agent do
 
   def handle_call({:set_thinking_level, level}, _from, state) do
     new_agent_state = %{state.agent_state | thinking_level: level}
+    {:reply, :ok, %{state | agent_state: new_agent_state}}
+  end
+
+  def handle_call({:set_auto_reasoning, enabled}, _from, state) do
+    new_agent_state = %{state.agent_state | auto_reasoning: enabled}
     {:reply, :ok, %{state | agent_state: new_agent_state}}
   end
 
@@ -906,7 +925,7 @@ defmodule AgentCore.Agent do
 
   @spec build_loop_config(state(), reference(), pid()) :: AgentLoopConfig.t()
   defp build_loop_config(state, abort_ref, agent_pid) do
-    reasoning = reasoning_from_thinking_level(state.agent_state.thinking_level)
+    reasoning = effective_reasoning(state.agent_state)
     stream_options = build_stream_options(state, reasoning)
 
     %AgentLoopConfig{
@@ -923,6 +942,18 @@ defmodule AgentCore.Agent do
       stream_options: stream_options,
       stream_fn: state.stream_fn
     }
+  end
+
+  # Gate: auto_reasoning is suppressed when thinking is already active (thinking_level != :off)
+  # to prevent redundant reasoning. Only activates when thinking_level is :off, the model
+  # supports reasoning, and auto_reasoning is enabled.
+  defp effective_reasoning(%AgentState{thinking_level: :off, auto_reasoning: true, model: model})
+       when is_struct(model) and model.reasoning == true do
+    :medium
+  end
+
+  defp effective_reasoning(%AgentState{thinking_level: level}) do
+    reasoning_from_thinking_level(level)
   end
 
   defp reasoning_from_thinking_level(:off), do: nil

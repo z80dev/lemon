@@ -36,7 +36,13 @@ defmodule LemonGateway.Run do
     "context_length_exceeded",
     "context length exceeded",
     "input exceeds the context window",
-    "context window"
+    "context window",
+    # Chinese context overflow patterns
+    "上下文长度超过限制",
+    "令牌数量超出",
+    "输入过长",
+    "超出最大长度",
+    "上下文窗口已满"
   ]
 
   def start_link(args) do

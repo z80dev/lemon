@@ -1,5 +1,5 @@
 defmodule LemonRouter.RunProcessTest do
-  alias Elixir.LemonRouter, as: LemonRouter
+  alias LemonRouter, as: LemonRouter
   @moduledoc """
   Tests for Elixir.LemonRouter.RunProcess.
 
@@ -10,7 +10,7 @@ defmodule LemonRouter.RunProcessTest do
 
   alias LemonCore.{RunRequest, SessionKey}
   alias LemonChannels.Types.ResumeToken
-  alias Elixir.LemonRouter.RunProcess
+  alias LemonRouter.RunProcess
 
   defmodule LemonRouter.RunProcessTest.TestOutboxAPI do
     @moduledoc false
@@ -396,7 +396,7 @@ defmodule LemonRouter.RunProcessTest do
       job =
         %{make_test_job(run_id, %{origin: :channel}) | prompt: "Collect the latest status report"}
 
-      {:ok, _} = start_supervised({Elixir.LemonRouter.RunProcessTest.TestRunOrchestrator, [notify_pid: self()]})
+      {:ok, _} = start_supervised({LemonRouter.RunProcessTest.TestRunOrchestrator, [notify_pid: self()]})
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
@@ -404,7 +404,7 @@ defmodule LemonRouter.RunProcessTest do
                  session_key: session_key,
                  job: job,
                  submit_to_gateway?: false,
-                 run_orchestrator: Elixir.LemonRouter.RunProcessTest.TestRunOrchestrator
+                 run_orchestrator: LemonRouter.RunProcessTest.TestRunOrchestrator
                })
 
       completed_event =
@@ -440,7 +440,7 @@ defmodule LemonRouter.RunProcessTest do
       session_key = SessionKey.main("test-agent")
       job = %{make_test_job(run_id, %{origin: :channel}) | prompt: "Do work"}
 
-      {:ok, _} = start_supervised({Elixir.LemonRouter.RunProcessTest.TestRunOrchestrator, [notify_pid: self()]})
+      {:ok, _} = start_supervised({LemonRouter.RunProcessTest.TestRunOrchestrator, [notify_pid: self()]})
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
@@ -448,7 +448,7 @@ defmodule LemonRouter.RunProcessTest do
                  session_key: session_key,
                  job: job,
                  submit_to_gateway?: false,
-                 run_orchestrator: Elixir.LemonRouter.RunProcessTest.TestRunOrchestrator
+                 run_orchestrator: LemonRouter.RunProcessTest.TestRunOrchestrator
                })
 
       completed_event =
@@ -480,7 +480,7 @@ defmodule LemonRouter.RunProcessTest do
           | prompt: "Do work"
         }
 
-      {:ok, _} = start_supervised({Elixir.LemonRouter.RunProcessTest.TestRunOrchestrator, [notify_pid: self()]})
+      {:ok, _} = start_supervised({LemonRouter.RunProcessTest.TestRunOrchestrator, [notify_pid: self()]})
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
@@ -488,7 +488,7 @@ defmodule LemonRouter.RunProcessTest do
                  session_key: session_key,
                  job: job,
                  submit_to_gateway?: false,
-                 run_orchestrator: Elixir.LemonRouter.RunProcessTest.TestRunOrchestrator
+                 run_orchestrator: LemonRouter.RunProcessTest.TestRunOrchestrator
                })
 
       completed_event =
@@ -515,7 +515,7 @@ defmodule LemonRouter.RunProcessTest do
       session_key = SessionKey.main("test-agent")
       job = %{make_test_job(run_id, %{origin: :channel}) | prompt: "Do work"}
 
-      {:ok, _} = start_supervised({Elixir.LemonRouter.RunProcessTest.TestRunOrchestrator, [notify_pid: self()]})
+      {:ok, _} = start_supervised({LemonRouter.RunProcessTest.TestRunOrchestrator, [notify_pid: self()]})
 
       assert {:ok, pid} =
                RunProcess.start_link(%{
@@ -523,7 +523,7 @@ defmodule LemonRouter.RunProcessTest do
                  session_key: session_key,
                  job: job,
                  submit_to_gateway?: false,
-                 run_orchestrator: Elixir.LemonRouter.RunProcessTest.TestRunOrchestrator
+                 run_orchestrator: LemonRouter.RunProcessTest.TestRunOrchestrator
                })
 
       completed_event =
@@ -607,13 +607,13 @@ defmodule LemonRouter.RunProcessTest do
         LemonChannels.Outbox.Dedupe.start_link([])
       end)
 
-      :persistent_term.put({Elixir.LemonRouter.RunProcessTest.TestTelegramPlugin, :notify_pid}, self())
+      :persistent_term.put({LemonRouter.RunProcessTest.TestTelegramPlugin, :notify_pid}, self())
       existing = LemonChannels.Registry.get_plugin("telegram")
       _ = LemonChannels.Registry.unregister("telegram")
-      :ok = LemonChannels.Registry.register(Elixir.LemonRouter.RunProcessTest.TestTelegramPlugin)
+      :ok = LemonChannels.Registry.register(LemonRouter.RunProcessTest.TestTelegramPlugin)
 
       on_exit(fn ->
-        _ = :persistent_term.erase({Elixir.LemonRouter.RunProcessTest.TestTelegramPlugin, :notify_pid})
+        _ = :persistent_term.erase({LemonRouter.RunProcessTest.TestTelegramPlugin, :notify_pid})
 
         if is_pid(Process.whereis(LemonChannels.Registry)) do
           _ = LemonChannels.Registry.unregister("telegram")
@@ -703,13 +703,13 @@ defmodule LemonRouter.RunProcessTest do
         LemonChannels.Outbox.Dedupe.start_link([])
       end)
 
-      :persistent_term.put({Elixir.LemonRouter.RunProcessTest.TestTelegramPlugin, :notify_pid}, self())
+      :persistent_term.put({LemonRouter.RunProcessTest.TestTelegramPlugin, :notify_pid}, self())
       existing = LemonChannels.Registry.get_plugin("telegram")
       _ = LemonChannels.Registry.unregister("telegram")
-      :ok = LemonChannels.Registry.register(Elixir.LemonRouter.RunProcessTest.TestTelegramPlugin)
+      :ok = LemonChannels.Registry.register(LemonRouter.RunProcessTest.TestTelegramPlugin)
 
       on_exit(fn ->
-        _ = :persistent_term.erase({Elixir.LemonRouter.RunProcessTest.TestTelegramPlugin, :notify_pid})
+        _ = :persistent_term.erase({LemonRouter.RunProcessTest.TestTelegramPlugin, :notify_pid})
 
         if is_pid(Process.whereis(LemonChannels.Registry)) do
           _ = LemonChannels.Registry.unregister("telegram")

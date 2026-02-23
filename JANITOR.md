@@ -1,3 +1,79 @@
+### 2026-02-24 - M4 Final Review and Landing: PLN-20260224-inspiration-ideas-implementation
+**Work Area**: Feature Landing / Review / Bug Fixes
+
+**Summary**:
+Completed M4 final review and landing for `PLN-20260224-inspiration-ideas-implementation`. All three features from upstream inspiration research are now landed:
+
+- **M1 — Chinese context overflow patterns**: 5 Chinese-language error patterns added to `session.ex`, `lemon_gateway/run.ex`, and `lemon_router/run_process.ex`.
+- **M2 — Grep grouped output + round-robin limiting**: New `grouped` and `max_per_file` parameters; `do_grouped_elixir_search/3`, `parse_ripgrep_output_grouped/2`, `apply_grouped_limits/3`, `round_robin_take/2`/`do_round_robin/5` functions added to `grep.ex`.
+- **M3 — Auto-reasoning gate**: `auto_reasoning: boolean()` field added to `AgentState`; `effective_reasoning/1` gate and `set_auto_reasoning/2` API added to `agent.ex`.
+
+**Bugs found and fixed during review**:
+1. `apps/coding_agent/lib/coding_agent/session.ex` — Dead code block (3 duplicate English pattern lines) after Chinese patterns due to missing `or` before `上下文窗口已满`. Removed the dead duplicates.
+2. `apps/coding_agent/lib/coding_agent/tools/exec_security.ex` — `~s(string concatenation (x""y))` sigil has unbalanced `)` from content. Fixed to `~s{...}`.
+3. `apps/coding_agent/lib/coding_agent/tools/websearch.ex` — `%Req.Response{url: final_url}` references a non-existent field on `Req.Response`. Fixed to read `Location` header for redirect resolution.
+
+**Test results**:
+- `agent_test.exs`: 79 tests, 0 failures (M3)
+- `grep_test.exs`: 37 tests, 0 failures (M2)
+- `lemon_gateway/run_test.exs`: 101 tests, 0 failures (M1)
+- Context overflow recovery tests (lemon_router): PASS
+
+**Pre-existing failures** (unrelated to M1-M3, not introduced by this work):
+- `CodexRunnerIntegrationTest`: 13 failures (MockCodexRunner module load issue)
+- `EventStreamConcurrencyTest`: 1 flaky timing failure
+- `RunProcessTest`: 6 failures (TestRunOrchestrator module not available via Code.ensure_loaded)
+
+**Artifacts**:
+- Review: `planning/reviews/RVW-PLN-20260224-inspiration-ideas.md`
+- Merge: `planning/merges/MRG-PLN-20260224-inspiration-ideas.md`
+- Plan status: `landed` (change_id: `svnuxqzrqyqzovnmywpzzvptztrqmyyv`)
+
+---
+
+### 2026-02-23 - Janitor Integration: Inspiration M4 + Gemini Grounding + WS Flood + Obfuscated Command Detection
+**Work Area**: Integration Review / Conflict Check / Validation / Planning
+
+**Summary**:
+- Reviewed and integrated four parallel tasks:
+  - Task 1: Complete inspiration ideas M4 landing (`a1ae7c75ca6641ac`)
+  - Task 2: Implement Gemini search grounding (`baa7afb545576d6f`)
+  - Task 3: Implement WebSocket flood protection (`9f1ef37b37bdcfec`)
+  - Task 4: Implement obfuscated command detection (just launched)
+- Local `task` poll command was not available in this shell; used workspace/bookmark state for integration confirmation.
+- Verified all four feature bookmarks point to the integrated revision with change id `svnuxqzr` (`31b2ba60`).
+
+**Diff Review**:
+- Task 1 (M4 inspiration landing): reviewed updates in `apps/agent_core/lib/agent_core/agent.ex`, `apps/agent_core/lib/agent_core/types.ex`, `apps/coding_agent/lib/coding_agent/session.ex`, `apps/coding_agent/lib/coding_agent/tools/grep.ex`, `apps/lemon_gateway/lib/lemon_gateway/run.ex`, and `apps/lemon_router/lib/lemon_router/run_process.ex`.
+- Task 2 (Gemini grounding): reviewed updates in `apps/coding_agent/lib/coding_agent/tools/websearch.ex` and corresponding tests.
+- Task 3 (WS flood protection): reviewed updates in `apps/lemon_gateway/lib/lemon_gateway/voice/twilio_websocket.ex` and tests.
+- Task 4 (obfuscated command detection): reviewed updates in `apps/coding_agent/lib/coding_agent/tools/bash.ex`, `apps/coding_agent/lib/coding_agent/tools/exec.ex`, plus new `apps/coding_agent/lib/coding_agent/tools/exec_security.ex` and tests.
+
+**Conflict Check**:
+- No cross-task merge conflicts found.
+- Changes are isolated by file scope; overlaps are limited to planning metadata and do not conflict with runtime behavior.
+
+**Validation**:
+- `mix compile --warnings-as-errors`: **fails** due pre-existing warnings outside this integration scope (duplicate model keys in AI provider maps; umbrella optional-dependency warning).
+- Targeted task tests: **pass**
+  - `apps/agent_core/test/agent_core/agent_test.exs` -> 79 tests, 0 failures
+  - `apps/coding_agent/test/coding_agent/tools/grep_test.exs` -> 37 tests, 0 failures
+  - `apps/coding_agent/test/coding_agent/tools/websearch_test.exs` + `apps/coding_agent/test/coding_agent/tools/exec_security_test.exs` -> 64 tests, 0 failures
+  - `apps/lemon_gateway/test/lemon_gateway/voice/twilio_websocket_test.exs` -> 11 tests, 0 failures
+  - `apps/lemon_router/test/lemon_router/run_process_test.exs:551` + `:779` -> 2 tests, 0 failures
+  - `apps/lemon_gateway/test/run_test.exs:2313` -> 1 test, 0 failures
+- `mix test` (full suite): **blocked in this environment**
+  - `lemon_ingestion` attempts to bind port `4048` and exits with `:eaddrinuse`, preventing complete suite startup.
+
+**Planning/Docs Updated**:
+- Updated `planning/INDEX.md` final status for monitored tasks:
+  - Marked Gemini grounding idea as `landed`
+  - Updated obfuscated command detection `change_id` to `svnuxqzr`
+  - Refreshed integration timestamp note
+- Added this integration summary to `JANITOR.md`.
+
+---
+
 ### 2026-02-23 - Janitor Final Integration: Debt Merge Closure + Planning + Validation
 **Work Area**: Final Integration / Planning Artifacts / Validation
 

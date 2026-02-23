@@ -151,6 +151,9 @@ defmodule AgentCore.Types do
     - `system_prompt` - The system prompt for the agent
     - `model` - The AI model being used
     - `thinking_level` - Level of extended reasoning
+    - `auto_reasoning` - When true, automatically enables reasoning for models that support it.
+      Gated by thinking_level: suppressed when thinking_level is already active (not :off)
+      to avoid redundant reasoning.
     - `tools` - Available tools for the agent
     - `messages` - Conversation history (can include custom message types)
     - `is_streaming` - Whether currently streaming a response
@@ -162,6 +165,7 @@ defmodule AgentCore.Types do
             system_prompt: String.t(),
             model: Ai.Types.Model.t(),
             thinking_level: AgentCore.Types.thinking_level(),
+            auto_reasoning: boolean(),
             tools: [AgentCore.Types.AgentTool.t()],
             messages: [AgentCore.Types.agent_message()],
             is_streaming: boolean(),
@@ -172,6 +176,7 @@ defmodule AgentCore.Types do
     defstruct system_prompt: "",
               model: nil,
               thinking_level: :off,
+              auto_reasoning: false,
               tools: [],
               messages: [],
               is_streaming: false,

@@ -36,8 +36,11 @@ defmodule CodingAgent.Tools.WebSearch do
   @perplexity_key_prefixes ["pplx-"]
   @openrouter_key_prefixes ["sk-or-"]
   @brave_freshness_shortcuts MapSet.new(["pd", "pw", "pm", "py"])
+  @default_gemini_model "gemini-2.5-flash"
+  @gemini_api_endpoint "https://generativelanguage.googleapis.com/v1beta/models"
+  @gemini_grounding_redirect_timeout_ms 5_000
 
-  @tool_description "Search the web using Brave Search API (default) or Perplexity Sonar. Returns structured JSON."
+  @tool_description "Search the web using Brave Search API (default), Perplexity Sonar, or Gemini (Google Search grounding). Returns structured JSON."
 
   @tool_parameters %{
     "type" => "object",
@@ -299,6 +302,12 @@ defmodule CodingAgent.Tools.WebSearch do
           {:ok, payload}
         end
 
+      "gemini" ->
+        with {:ok, payload} <-
+               run_gemini_search(provider, query, request, api_cfg, runtime, start_ms) do
+          {:ok, payload}
+        end
+
       _ ->
         with {:ok, payload} <-
                run_brave_search(provider, query, freshness, request, api_cfg, runtime, start_ms) do
@@ -373,6 +382,147 @@ defmodule CodingAgent.Tools.WebSearch do
         {:error, "Unexpected Perplexity result: #{inspect(other)}"}
     end
   end
+
+  defp run_gemini_search(provider, query, request, api_cfg, runtime, start_ms) do
+    endpoint =
+      "#{@gemini_api_endpoint}/#{api_cfg.model}:generateContent?key=#{api_cfg.api_key}"
+
+    request_body = %{
+      "contents" => [%{"parts" => [%{"text" => query}], "role" => "user"}],
+      "tools" => [%{"google_search" => %{}}]
+    }
+
+    request_opts = [
+      headers: [{"content-type", "application/json"}],
+      json: request_body,
+      connect_options: [timeout: runtime.timeout_ms],
+      receive_timeout: runtime.timeout_ms
+    ]
+
+    case runtime.http_post.(endpoint, request_opts) do
+      {:ok, %Req.Response{status: status} = response} when status in 200..299 ->
+        {:ok,
+         build_gemini_success_response(
+           response,
+           provider,
+           api_cfg.model,
+           query,
+           request,
+           runtime,
+           start_ms
+         )}
+
+      {:ok, %Req.Response{status: status} = response} ->
+        {:error, format_gemini_api_error(status, response.body, api_cfg.api_key)}
+
+      {:error, reason} ->
+        {:error, "Gemini request failed: #{format_reason(reason)}"}
+
+      other ->
+        {:error, "Unexpected Gemini result: #{inspect(other)}"}
+    end
+  end
+
+  defp build_gemini_success_response(response, provider, model, query, request, runtime, start_ms) do
+    body = decode_json_body(response.body)
+
+    raw_content =
+      get_in(body, ["candidates", Access.at(0), "content", "parts", Access.at(0), "text"]) ||
+        "No response"
+
+    content = truncate_text(to_string(raw_content), request.max_chars)
+
+    grounding_chunks =
+      get_in(body, ["candidates", Access.at(0), "groundingMetadata", "groundingChunks"]) || []
+
+    raw_urls =
+      grounding_chunks
+      |> ensure_list()
+      |> Enum.map(fn chunk -> get_in(chunk, ["web", "uri"]) end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.map(&to_string/1)
+      |> Enum.reject(&(&1 == ""))
+
+    resolved_urls =
+      resolve_grounding_urls(raw_urls, runtime.http_head, @gemini_grounding_redirect_timeout_ms)
+
+    citations =
+      resolved_urls
+      |> Enum.take(request.max_citations)
+      |> Enum.map(&truncate_text(&1, request.citation_max_chars))
+
+    %{
+      "query" => query,
+      "provider" => provider,
+      "model" => model,
+      "took_ms" => elapsed_ms(start_ms),
+      "content" => ExternalContent.wrap_web_content(content, :web_search),
+      "citations" => citations,
+      "trust_metadata" => web_search_trust_metadata(["content"])
+    }
+  end
+
+  defp resolve_grounding_urls([], _http_head, _timeout_ms), do: []
+
+  defp resolve_grounding_urls(urls, http_head, timeout_ms) do
+    tasks =
+      Enum.map(urls, fn url ->
+        Task.async(fn ->
+          try do
+            case http_head.(url,
+                   connect_options: [timeout: timeout_ms],
+                   receive_timeout: timeout_ms
+                 ) do
+              {:ok, %Req.Response{headers: headers}} ->
+                # Follow redirect via Location header if present
+                case Map.get(headers, "location", []) do
+                  [final_url | _] ->
+                    case normalize_optional_string(to_string(final_url)) do
+                      nil -> url
+                      resolved -> resolved
+                    end
+
+                  _ ->
+                    url
+                end
+
+              _ ->
+                url
+            end
+          rescue
+            _ -> url
+          catch
+            _, _ -> url
+          end
+        end)
+      end)
+
+    Enum.zip(urls, tasks)
+    |> Enum.map(fn {original, task} ->
+      case Task.yield(task, timeout_ms) do
+        {:ok, resolved} -> resolved
+        _ ->
+          Task.shutdown(task, :brutal_kill)
+          original
+      end
+    end)
+  end
+
+  defp format_gemini_api_error(status, body, api_key) do
+    detail =
+      body
+      |> to_string_safe()
+      |> String.trim()
+      |> strip_api_key(api_key)
+
+    "Gemini API error (#{status}): #{if(detail == "", do: "request failed", else: detail)}"
+  end
+
+  defp strip_api_key(text, api_key) when is_binary(api_key) and byte_size(api_key) > 8 do
+    String.replace(text, api_key, "[REDACTED]")
+  end
+
+  defp strip_api_key(text, _), do: text
 
   defp build_perplexity_endpoint(api_cfg) do
     String.trim_trailing(api_cfg.base_url, "/") <> "/chat/completions"
@@ -597,6 +747,26 @@ defmodule CodingAgent.Tools.WebSearch do
          base_url: base_url,
          model: model
        }}
+    end
+  end
+
+  defp resolve_api_config("gemini", runtime) do
+    api_key =
+      normalize_optional_string(runtime.gemini.api_key) ||
+        env_optional("GEMINI_API_KEY") ||
+        env_optional("GOOGLE_API_KEY")
+
+    if is_nil(api_key) do
+      {:error,
+       %{
+         "error" => "missing_gemini_api_key",
+         "message" =>
+           "websearch (gemini) needs an API key. Set GEMINI_API_KEY or GOOGLE_API_KEY, or configure agent.tools.web.search.gemini.api_key.",
+         "docs" => "docs/tools/web.md"
+       }}
+    else
+      model = runtime.gemini.model || @default_gemini_model
+      {:ok, %{api_key: api_key, model: model}}
     end
   end
 
@@ -975,6 +1145,7 @@ defmodule CodingAgent.Tools.WebSearch do
     case String.downcase(String.trim(value)) do
       "perplexity" -> "perplexity"
       "brave" -> "brave"
+      "gemini" -> "gemini"
       _ -> fallback
     end
   end
@@ -991,6 +1162,7 @@ defmodule CodingAgent.Tools.WebSearch do
     case String.downcase(String.trim(value)) do
       "perplexity" -> "perplexity"
       "brave" -> "brave"
+      "gemini" -> "gemini"
       _ -> nil
     end
   end
@@ -1002,7 +1174,7 @@ defmodule CodingAgent.Tools.WebSearch do
   defp resolve_secondary_provider(primary, true, configured) do
     candidate =
       cond do
-        configured in ["brave", "perplexity"] ->
+        configured in ["brave", "perplexity", "gemini"] ->
           configured
 
         primary == "brave" ->
@@ -1048,6 +1220,7 @@ defmodule CodingAgent.Tools.WebSearch do
     cache_cfg = extract_cache_config(settings_manager)
     failover_cfg = extract_failover_config(search_cfg)
     perplexity_cfg = extract_perplexity_config(search_cfg)
+    gemini_cfg = extract_gemini_config(search_cfg)
 
     provider = resolve_provider(search_cfg)
     secondary_provider = resolve_failover_provider(provider, failover_cfg)
@@ -1066,7 +1239,10 @@ defmodule CodingAgent.Tools.WebSearch do
         cache_max_entries: cache_settings.cache_max_entries,
         cache_opts: cache_settings.cache_opts
       },
-      Map.merge(build_char_limits(search_cfg), build_perplexity_config(perplexity_cfg))
+      Map.merge(
+        build_char_limits(search_cfg),
+        Map.merge(build_perplexity_config(perplexity_cfg), build_gemini_config(gemini_cfg))
+      )
     )
     |> Map.merge(http_functions)
   end
@@ -1098,6 +1274,10 @@ defmodule CodingAgent.Tools.WebSearch do
 
   defp extract_perplexity_config(search_cfg) do
     search_cfg |> get_map_value(:perplexity, %{}) |> ensure_map()
+  end
+
+  defp extract_gemini_config(search_cfg) do
+    search_cfg |> get_map_value(:gemini, %{}) |> ensure_map()
   end
 
   # Provider resolution
@@ -1204,11 +1384,25 @@ defmodule CodingAgent.Tools.WebSearch do
     }
   end
 
+  # Gemini configuration
+  defp build_gemini_config(gemini_cfg) do
+    %{
+      gemini: %{
+        api_key: normalize_optional_string(get_map_value(gemini_cfg, :api_key, nil)),
+        model:
+          normalize_optional_string(
+            get_map_value(gemini_cfg, :model, @default_gemini_model)
+          )
+      }
+    }
+  end
+
   # HTTP functions
   defp build_http_functions(opts) do
     %{
       http_get: Keyword.get(opts, :http_get, &Req.get/2),
-      http_post: Keyword.get(opts, :http_post, &Req.post/2)
+      http_post: Keyword.get(opts, :http_post, &Req.post/2),
+      http_head: Keyword.get(opts, :http_head, &Req.head/2)
     }
   end
 
