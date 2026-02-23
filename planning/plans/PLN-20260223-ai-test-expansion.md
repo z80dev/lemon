@@ -2,7 +2,7 @@
 
 ## Metadata
 - **Plan ID**: PLN-20260223-ai-test-expansion
-- **Status**: in_progress
+- **Status**: in_review
 - **Created**: 2026-02-23
 - **Author**: zeebot
 
@@ -35,6 +35,18 @@ Add comprehensive tests for untested modules in the `ai` app. The AI app has 11 
 |-----------|-----|------|--------|-------|
 | 2026-02-23 18:40 | zeebot | Created plan | - | - |
 | 2026-02-23 18:41 | zeebot | Scanned untested modules | Found 11 untested in ai app | - |
+| 2026-02-23 20:14 | zeebot | Added AI.Models tests | 35 tests, 0 failures | `apps/ai/test/ai/models_test.exs` |
+| 2026-02-23 20:15 | zeebot | Added AI.Providers.Anthropic tests | 55 tests, 0 failures | `apps/ai/test/ai/providers/anthropic_test.exs` |
+| 2026-02-23 20:17 | zeebot | Added AI.Providers.Google tests | 35 tests, 0 failures | `apps/ai/test/ai/providers/google_test.exs` |
+| 2026-02-23 20:17 | zeebot | Added AI.Providers.Bedrock tests | 30 tests, 0 failures | `apps/ai/test/ai/providers/bedrock_test.exs` |
+| 2026-02-23 20:18 | zeebot | Full test suite verification | 155 tests, 0 failures | All new test files |
+
+## Results
+- **Total new tests**: 155 tests added across 4 modules
+- **AI.Models**: 35 tests covering model retrieval, capabilities, token limits
+- **AI.Providers.Anthropic**: 55 tests covering requests, responses, authentication
+- **AI.Providers.Google**: 35 tests covering Gemini API integration
+- **AI.Providers.Bedrock**: 30 tests covering AWS SigV4 signing and responses
 
 ## Related
 - Parent: ROADMAP.md "Deterministic CI and test signal hardening"
