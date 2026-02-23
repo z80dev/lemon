@@ -3,20 +3,74 @@
 diag - Diagnostic utility for Lemon
 
 Usage:
-  diag ping <count>    Send ping messages via Codex CLI
-  diag status          Check system status
-  diag --help          Show this help
+  diag ping <count>             Send ping messages via Codex CLI
+  diag status                   Check system status
+  diag services                 List running BEAM nodes and ports
+  diag health                   Run comprehensive health check
+  diag logs <service>           Tail logs for a service
+  diag config                   Validate Lemon config files
+  diag --help                   Show this help
 
 Examples:
-  diag ping 3          Send 3 ping messages
+  diag ping 3                     Send 3 ping messages
+  diag services                   Show running BEAM nodes
+  diag health                     Full health check
+  diag logs gateway               Show last 50 gateway log lines
+  diag logs control-plane -f      Follow control plane logs
+  diag config                     Validate global and project config files
 """
 
 import argparse
 import asyncio
-import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+try:
+    import tomllib as toml_parser
+    TOML_PARSER_NAME = "tomllib"
+except ModuleNotFoundError:
+    try:
+        import tomli as toml_parser
+        TOML_PARSER_NAME = "tomli"
+    except ModuleNotFoundError:
+        toml_parser = None
+        TOML_PARSER_NAME = None
+
+
+LOG_FILE_CANDIDATES = {
+    "gateway": [
+        "lemon-gateway.log",
+        "gateway.log",
+        "lemon_gateway.log",
+    ],
+    "router": [
+        "lemon-router.log",
+        "router.log",
+        "lemon_router.log",
+    ],
+    "control-plane": [
+        "lemon-control-plane.log",
+        "control-plane.log",
+        "control_plane.log",
+        "lemon_control_plane.log",
+    ],
+}
+
+LOG_GLOB_PATTERNS = {
+    "gateway": ["*gateway*.log", "*lemon-gateway*.log"],
+    "router": ["*router*.log", "*lemon-router*.log"],
+    "control-plane": ["*control*plane*.log", "*lemon-control-plane*.log"],
+}
+
+REQUIRED_CONFIG_KEYS = [
+    "agent.default_provider",
+    "agent.default_model",
+    "gateway.default_engine",
+    "agents.default.default_engine",
+    "agents.default.model",
+]
 
 
 def get_repo_root() -> Path:
@@ -111,14 +165,453 @@ def check_status():
     print("-" * 40)
 
 
+
+# === SERVICES & HEALTH (Claude) ===
+
+def list_services() -> list[dict]:
+    """
+    Query epmd for running BEAM nodes.
+
+    Returns:
+        List of dicts with keys: name, port, status
+    """
+    try:
+        result = subprocess.run(
+            ["epmd", "-names"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except FileNotFoundError:
+        return []
+    except subprocess.TimeoutExpired:
+        return []
+
+    nodes = []
+    for line in result.stdout.splitlines():
+        # Lines look like: "name lemon_gateway at port 12345"
+        line = line.strip()
+        if line.startswith("name ") and " at port " in line:
+            parts = line.split()
+            # parts: ['name', '<node>', 'at', 'port', '<port>']
+            if len(parts) >= 5:
+                nodes.append({
+                    "name": parts[1],
+                    "port": parts[4],
+                    "status": "running",
+                })
+    return nodes
+
+
+def cmd_services() -> int:
+    """
+    List running BEAM nodes and their ports via epmd.
+
+    Runs 'epmd -names', parses the output, and prints each discovered node
+    with its distribution port and running status.
+
+    Returns:
+        Exit code 0 always (informational command).
+    """
+    print("BEAM Services (via epmd)")
+    print("-" * 40)
+
+    # Check if epmd is available at all
+    try:
+        probe = subprocess.run(
+            ["epmd", "-names"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        header_line = probe.stdout.splitlines()[0] if probe.stdout.strip() else ""
+    except FileNotFoundError:
+        print("  epmd not found - is Erlang/OTP installed?")
+        return 0
+    except subprocess.TimeoutExpired:
+        print("  epmd timed out")
+        return 0
+
+    if header_line:
+        print(f"  {header_line}")
+
+    nodes = list_services()
+
+    if not nodes:
+        print("  No BEAM nodes currently registered with epmd.")
+    else:
+        print(f"\n  {'Node':<30} {'Port':<8} {'Status'}")
+        print(f"  {'-'*30} {'-'*8} {'-'*10}")
+        for node in nodes:
+            print(f"  {node['name']:<30} {node['port']:<8} {node['status']}")
+
+    print("-" * 40)
+    return 0
+
+
+def cmd_health() -> int:
+    """
+    Comprehensive health check for the Lemon environment.
+
+    Checks:
+    - CLI tools (claude, codex, kimi)
+    - BEAM services reachable via epmd
+    - Config files exist and are non-empty
+
+    Returns:
+        0 if everything is healthy, 1 if any check failed.
+    """
+    print("Lemon Health Check")
+    print("=" * 40)
+
+    all_healthy = True
+    results: list[tuple[str, bool, str]] = []  # (label, ok, detail)
+
+    # --- CLI tools ---
+    print("\nCLI Tools:")
+    cli_tools = ["claude", "codex", "kimi"]
+    for tool in cli_tools:
+        try:
+            res = subprocess.run(
+                [tool, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            ok = res.returncode == 0
+            version = (res.stdout.strip() or res.stderr.strip())[:60]
+            detail = version if ok else f"exit {res.returncode}"
+        except FileNotFoundError:
+            ok = False
+            detail = "not installed"
+        except subprocess.TimeoutExpired:
+            ok = False
+            detail = "timed out"
+
+        mark = "✓" if ok else "✗"
+        print(f"  {mark} {tool:<10} {detail}")
+        results.append((f"CLI: {tool}", ok, detail))
+        if not ok:
+            all_healthy = False
+
+    # --- BEAM services ---
+    print("\nBEAM Services:")
+    try:
+        probe = subprocess.run(
+            ["epmd", "-names"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        epmd_ok = True
+        epmd_detail = "epmd reachable"
+    except FileNotFoundError:
+        epmd_ok = False
+        epmd_detail = "epmd not installed"
+    except subprocess.TimeoutExpired:
+        epmd_ok = False
+        epmd_detail = "epmd timed out"
+
+    mark = "✓" if epmd_ok else "✗"
+    print(f"  {mark} epmd        {epmd_detail}")
+    results.append(("BEAM: epmd", epmd_ok, epmd_detail))
+    if not epmd_ok:
+        all_healthy = False
+
+    nodes = list_services() if epmd_ok else []
+    known_nodes = ["lemon_gateway", "lemon_web", "lemon_core"]
+    for node_name in known_nodes:
+        found = any(n["name"] == node_name or n["name"].startswith(node_name + "@") for n in nodes)
+        mark = "✓" if found else "-"
+        detail = "running" if found else "not registered"
+        print(f"  {mark} {node_name:<20} {detail}")
+        # Not a hard failure - nodes may not all be started
+        results.append((f"BEAM: {node_name}", found, detail))
+
+    # --- Config files ---
+    print("\nConfig Files:")
+    root = get_repo_root()
+    config_files = [
+        root / "config" / "config.exs",
+        root / "config" / "dev.exs",
+        root / "config" / "runtime.exs",
+        root / "mix.exs",
+    ]
+    for cfg in config_files:
+        exists = cfg.exists() and cfg.stat().st_size > 0
+        mark = "✓" if exists else "✗"
+        rel = cfg.relative_to(root)
+        detail = "exists" if exists else "missing or empty"
+        print(f"  {mark} {str(rel):<30} {detail}")
+        results.append((f"Config: {rel}", exists, detail))
+        if not exists:
+            all_healthy = False
+
+    # --- Summary ---
+    print("\n" + "=" * 40)
+    healthy_count = sum(1 for _, ok, _ in results if ok)
+    total = len(results)
+    if all_healthy:
+        print(f"HEALTHY - all {total} checks passed")
+    else:
+        print(f"UNHEALTHY - {healthy_count}/{total} checks passed")
+        print("\nFailed checks:")
+        for label, ok, detail in results:
+            if not ok:
+                print(f"  ✗ {label}: {detail}")
+    print("=" * 40)
+
+    return 0 if all_healthy else 1
+
+
+
+# === LOGS & CONFIG (Codex) ===
+
+def get_log_dirs() -> List[Path]:
+    """Return directories to search for runtime log files."""
+    return [
+        get_repo_root() / "_build" / "dev" / "log",
+        Path.home() / ".lemon" / "logs",
+    ]
+
+
+def find_log_file(service: str) -> Optional[Path]:
+    """
+    Locate a log file for a service.
+
+    Args:
+        service: Logical service name (gateway, router, control-plane)
+
+    Returns:
+        A log file path if found, otherwise None
+    """
+    search_dirs = get_log_dirs()
+
+    for log_dir in search_dirs:
+        if not log_dir.exists():
+            continue
+        for candidate in LOG_FILE_CANDIDATES.get(service, []):
+            path = log_dir / candidate
+            if path.is_file():
+                return path
+
+    wildcard_matches = []
+    for log_dir in search_dirs:
+        if not log_dir.exists():
+            continue
+        for pattern in LOG_GLOB_PATTERNS.get(service, []):
+            wildcard_matches.extend(
+                path for path in log_dir.glob(pattern) if path.is_file()
+            )
+
+    if not wildcard_matches:
+        return None
+
+    wildcard_matches.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    return wildcard_matches[0]
+
+
+def tail_logs(service: str, lines: int = 50, follow: bool = False) -> bool:
+    """
+    Tail logs for a specific service.
+
+    Args:
+        service: Service name (gateway, router, control-plane)
+        lines: Number of log lines to show
+        follow: Whether to follow logs live
+
+    Returns:
+        True on success, False on failure
+    """
+    if lines <= 0:
+        print(f"Invalid line count: {lines}. Use a positive integer.")
+        return False
+
+    log_file = find_log_file(service)
+    if log_file is None:
+        print(f"No logs found for service '{service}'.")
+        print("Searched directories:")
+        for log_dir in get_log_dirs():
+            print(f"  - {log_dir}")
+        print("The service may not be running, or it has not written logs yet.")
+        return False
+
+    print(f"Service: {service}")
+    print(f"Log file: {log_file}")
+    print("-" * 40)
+
+    process = None
+    command = ["tail", "-n", str(lines)]
+    if follow:
+        command.append("-f")
+    command.append(str(log_file))
+
+    try:
+        if follow:
+            process = subprocess.Popen(command)
+            process.wait()
+            return process.returncode == 0
+
+        result = subprocess.run(command)
+        return result.returncode == 0
+    except KeyboardInterrupt:
+        if process and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        print("\nStopped log tail.")
+        return True
+    except FileNotFoundError:
+        print("The 'tail' command is not available on this system.")
+        return False
+    except Exception as e:
+        print(f"Failed to tail logs: {e}")
+        return False
+
+
+def deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Merge two nested dictionaries.
+
+    Values in override take precedence over values in base.
+    """
+    merged = dict(base)
+    for key, value in override.items():
+        if (
+            key in merged
+            and isinstance(merged[key], dict)
+            and isinstance(value, dict)
+        ):
+            merged[key] = deep_merge_dicts(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def get_nested_value(data: Dict[str, Any], key_path: str) -> Tuple[bool, Any]:
+    """Read a nested dictionary value using dotted key syntax."""
+    current = data
+    for key in key_path.split("."):
+        if not isinstance(current, dict) or key not in current:
+            return False, None
+        current = current[key]
+    return True, current
+
+
+def parse_toml_file(path: Path) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """
+    Parse a TOML file and return parsed data or a clear error message.
+
+    Args:
+        path: TOML file path
+
+    Returns:
+        (data, error) tuple where only one is non-None
+    """
+    if toml_parser is None:
+        return None, "No TOML parser available. Use Python 3.11+ or install tomli."
+
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError as e:
+        return None, f"Could not read file: {e}"
+
+    try:
+        return toml_parser.loads(content), None
+    except Exception as e:
+        decode_error_class = getattr(toml_parser, "TOMLDecodeError", ValueError)
+        if isinstance(e, decode_error_class):
+            return None, f"TOML parse error: {e}"
+        return None, f"Unexpected parse error: {e}"
+
+
+def validate_config() -> bool:
+    """
+    Validate global and project TOML config files.
+
+    Returns:
+        True if all checks pass, False otherwise
+    """
+    print("Lemon Config Validation")
+    print("-" * 40)
+
+    files = [
+        ("Global", Path.home() / ".lemon" / "config.toml"),
+        ("Project", get_repo_root() / ".lemon" / "config.toml"),
+    ]
+
+    parsed_data = {}
+    ok = True
+
+    for label, path in files:
+        print(f"{label}: {path}")
+
+        if not path.exists():
+            print("  ✗ Missing file")
+            ok = False
+            continue
+
+        data, error = parse_toml_file(path)
+        if error:
+            print(f"  ✗ {error}")
+            ok = False
+            continue
+
+        parser_label = TOML_PARSER_NAME or "unknown parser"
+        print(f"  ✓ Valid TOML ({parser_label})")
+        parsed_data[label.lower()] = data
+
+    effective = {}
+    if "global" in parsed_data:
+        effective = deep_merge_dicts(effective, parsed_data["global"])
+    if "project" in parsed_data:
+        effective = deep_merge_dicts(effective, parsed_data["project"])
+
+    dynamic_keys = list(REQUIRED_CONFIG_KEYS)
+    has_provider, provider_name = get_nested_value(effective, "agent.default_provider")
+    if has_provider and isinstance(provider_name, str) and provider_name:
+        dynamic_keys.append(f"providers.{provider_name}")
+
+    present = []
+    missing = []
+    for key in dynamic_keys:
+        key_exists, _ = get_nested_value(effective, key)
+        if key_exists:
+            present.append(key)
+        else:
+            missing.append(key)
+
+    print("\nRequired keys (effective merged config):")
+    for key in present:
+        print(f"  ✓ {key}")
+    for key in missing:
+        print(f"  ✗ {key}")
+
+    if missing:
+        ok = False
+
+    if not ok:
+        print("\nValidation failed.")
+    else:
+        print("\nValidation passed.")
+
+    return ok
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Diagnostic utility for Lemon",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  diag ping 3          Send 3 ping messages via Codex
-  diag status          Check system status
+  diag ping 3                     Send 3 ping messages via Codex
+  diag status                     Check system status
+  diag logs gateway               Show last 50 gateway log lines
+  diag logs control-plane -n 200  Show last 200 control-plane log lines
+  diag logs router -f             Follow router logs live
+  diag config                     Validate config files
         """
     )
     
@@ -131,6 +624,36 @@ Examples:
     
     # status command
     subparsers.add_parser("status", help="Check system status")
+
+    # services command
+    subparsers.add_parser("services", help="List running BEAM nodes and their ports")
+
+    # health command
+    subparsers.add_parser("health", help="Comprehensive health check (exit 0=healthy, 1=unhealthy)")
+
+    # logs command
+    logs_parser = subparsers.add_parser("logs", help="Tail logs for a service")
+    logs_parser.add_argument(
+        "service",
+        choices=["gateway", "router", "control-plane"],
+        help="Service to tail logs for",
+    )
+    logs_parser.add_argument(
+        "-n",
+        "--lines",
+        type=int,
+        default=50,
+        help="Number of log lines to show (default: 50)",
+    )
+    logs_parser.add_argument(
+        "-f",
+        "--follow",
+        action="store_true",
+        help="Follow log output live",
+    )
+
+    # config command
+    subparsers.add_parser("config", help="Validate global and project config files")
     
     args = parser.parse_args()
     
@@ -140,6 +663,16 @@ Examples:
     elif args.command == "status":
         check_status()
         return 0
+    elif args.command == "services":
+        return cmd_services()
+    elif args.command == "health":
+        return cmd_health()
+    elif args.command == "logs":
+        result = tail_logs(args.service, lines=args.lines, follow=args.follow)
+        return 0 if result else 1
+    elif args.command == "config":
+        result = validate_config()
+        return 0 if result else 1
     else:
         parser.print_help()
         return 0
