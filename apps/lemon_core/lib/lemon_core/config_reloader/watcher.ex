@@ -164,6 +164,33 @@ defmodule LemonCore.ConfigReloader.Watcher do
     |> Enum.uniq()
   end
 
+  defp relevant_file_event?(path, watched_paths) do
+    path
+    |> normalize_event_paths()
+    |> Enum.any?(&MapSet.member?(watched_paths, &1))
+  end
+
+  defp normalize_event_paths(path) when is_binary(path), do: [Path.expand(path)]
+
+  defp normalize_event_paths(path) when is_list(path) do
+    cond do
+      path == [] ->
+        []
+
+      Enum.all?(path, &is_integer/1) ->
+        [path |> to_string() |> Path.expand()]
+
+      true ->
+        Enum.flat_map(path, &normalize_event_paths/1)
+    end
+  end
+
+  defp normalize_event_paths({from, to}) do
+    normalize_event_paths([from, to])
+  end
+
+  defp normalize_event_paths(_), do: []
+
   defp debounce_reload(state) do
     if state.debounce_ref do
       Process.cancel_timer(state.debounce_ref)
