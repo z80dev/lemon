@@ -74,4 +74,31 @@ These entries were already completed before the `planning/` workflow was created
 
 ## Templates
 
+## Ideas to Investigate
+
+Research findings from upstream projects (oh-my-pi, pi, openclaw, ironclaw, nanoclaw) for potential adoption.
+
+| Idea ID | Title | Source | Status | Complexity | Value | Recommendation |
+|---|---|---|---|---|---|---|
+| [IDEA-20260223-pi-skill-discovery](ideas/IDEA-20260223-pi-skill-discovery.md) | Auto-Discover Skills in .agents Paths | pi | `completed` | M | H | **Already implemented** - Feature exists in Lemon |
+| [IDEA-20260223-openclaw-markup-sanitization](ideas/IDEA-20260223-openclaw-markup-sanitization.md) | Sanitize Untrusted Markup in Chat Payloads | openclaw | `proposed` | M | H | **Investigate** - Security audit needed |
+| [IDEA-20260223-openclaw-config-redaction](ideas/IDEA-20260223-openclaw-config-redaction.md) | Redact Sensitive Values in Config Get Output | openclaw | `completed` | S | H | **Already implemented** - Full parity with broader pattern coverage |
+| [IDEA-20260223-ironclaw-context-compaction](ideas/IDEA-20260223-ironclaw-context-compaction.md) | Auto-Compact and Retry on ContextLengthExceeded | ironclaw | `completed` | L | M | **Already implemented** - Full parity with comprehensive telemetry |
+| [IDEA-20260223-oh-my-pi-todo-phase-management](ideas/IDEA-20260223-oh-my-pi-todo-phase-management.md) | In-Memory Todo Phase Management for ToolSession | oh-my-pi | `proposed` | L | L | **Investigate** - Compare with ETS approach |
+| [IDEA-20260223-pi-model-resolver](ideas/IDEA-20260223-pi-model-resolver.md) | Provider/Model Split Resolution for Gateway Model IDs | pi | `proposed` | M | M | **Investigate** - Check model routing logic |
+| [IDEA-20260223-ironclaw-wasm-hot-activation](ideas/IDEA-20260223-ironclaw-wasm-hot-activation.md) | Hot-Activate WASM Channels with Channel-First Prompts | ironclaw | `proposed` | L | M | **Investigate** - Check WASM extension lifecycle |
+| [IDEA-20260223-oh-my-pi-strict-mode](ideas/IDEA-20260223-oh-my-pi-strict-mode.md) | Tool Schema Strict Mode for OpenAI Providers | oh-my-pi | `proposed` | M | M | **Defer** - Needs deeper audit |
+| [IDEA-20260223-pi-streaming-highlight](ideas/IDEA-20260223-pi-streaming-highlight.md) | Incremental Highlight for Streaming Write Tool Calls | pi | `proposed` | M | L | **Defer** - Nice-to-have UX |
+| [IDEA-20260223-ironclaw-shell-completion](ideas/IDEA-20260223-ironclaw-shell-completion.md) | Shell Completion Generation via clap_complete | ironclaw | `proposed` | M | L | **Defer** - Nice-to-have DX |
+| [IDEA-20260223-nanoclaw-voice-transcription](ideas/IDEA-20260223-nanoclaw-voice-transcription.md) | Voice Transcription as Nanorepo Skill | nanoclaw | `proposed` | M | M | **Defer** - Wait for voice priority |
+
+### Summary
+
+- **High Priority (Proceed/Verify)**: 4 ideas - Skill discovery, security sanitization, config redaction, context compaction
+- **Medium Priority (Investigate)**: 4 ideas - Todo management, model resolver, WASM activation, strict mode
+- **Low Priority (Defer)**: 3 ideas - Streaming highlight, shell completion, voice transcription
+
+## Templates
+
 - [PLAN_TEMPLATE.md](./templates/PLAN_TEMPLATE.md)
+- [IDEA_TEMPLATE.md](./templates/IDEA_TEMPLATE.md) (create when first idea promoted to plan)

@@ -114,8 +114,12 @@ function connectAndHandshake(): {
   transport.connect('ws://localhost/ws');
 
   const ws = MockWebSocket.instances[0];
-  ws.simulateOpen();
-  ws.simulateMessage(HELLO_OK_FRAME);
+  ws.simulateOpen();         // triggers ws.onopen → sends connect req frame
+  ws.simulateMessage(HELLO_OK_FRAME); // server responds → transport is connected
+
+  // Clear the connect req frame from sentMessages so tests only see
+  // messages sent after the handshake is complete.
+  ws.sentMessages = [];
 
   return { transport, ws, handlers };
 }
@@ -153,6 +157,20 @@ describe('createControlPlaneTransport', () => {
       expect(snapshot.protocol).toBe(1);
       expect(snapshot.server.version).toBe('1.0.0');
       expect(snapshot.features).toEqual({ monitoring: true });
+    });
+
+    it('sends connect req frame on open before waiting for hello-ok', () => {
+      const handlers = makeHandlers();
+      const transport = createControlPlaneTransport(handlers);
+      transport.connect('ws://localhost/ws');
+
+      const ws = MockWebSocket.instances[0];
+      ws.simulateOpen();
+
+      expect(ws.sentMessages).toHaveLength(1);
+      const frame = JSON.parse(ws.sentMessages[0]) as { type: string; method: string };
+      expect(frame.type).toBe('req');
+      expect(frame.method).toBe('connect');
     });
 
     it('does NOT become connected until hello-ok is received (open event alone is not enough)', () => {

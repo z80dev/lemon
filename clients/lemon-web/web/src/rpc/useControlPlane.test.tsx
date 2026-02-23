@@ -231,6 +231,9 @@ describe('useControlPlane', () => {
       ws.simulateMessage(HELLO_OK_FRAME);
     });
 
+    // Clear connect req frame so we only see post-handshake messages
+    ws.sentMessages = [];
+
     // Initiate request
     let responseValue: unknown;
     let requestPromise!: Promise<unknown>;

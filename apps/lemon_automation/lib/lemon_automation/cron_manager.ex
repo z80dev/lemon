@@ -43,6 +43,8 @@ defmodule LemonAutomation.CronManager do
 
   use GenServer
 
+  @vsn 1
+
   alias LemonAutomation.{CronJob, CronRun, CronStore, CronSchedule, Events, RunSubmitter}
 
   require Logger
@@ -162,7 +164,12 @@ defmodule LemonAutomation.CronManager do
 
     Logger.info("[CronManager] Started with #{length(jobs)} jobs")
 
-    {:ok, %{jobs: Map.new(jobs, &{&1.id, &1})}}
+    {:ok, %{jobs: Map.new(jobs, &{&1.id, &1}), state_vsn: @vsn}}
+  end
+
+  @impl true
+  def code_change(old_vsn, state, _extra) do
+    {:ok, migrate_state(old_vsn, state)}
   end
 
   @impl true
@@ -412,5 +419,15 @@ defmodule LemonAutomation.CronManager do
     end
   rescue
     _ -> :ok
+  end
+
+  defp migrate_state(_old_vsn, %{jobs: jobs} = state) when is_map(jobs) do
+    state
+    |> Map.put_new(:jobs, %{})
+    |> Map.put(:state_vsn, @vsn)
+  end
+
+  defp migrate_state(_old_vsn, _state) do
+    %{jobs: %{}, state_vsn: @vsn}
   end
 end

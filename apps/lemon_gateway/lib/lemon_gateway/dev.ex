@@ -6,6 +6,8 @@ defmodule LemonGateway.Dev do
   They are not expected to work in releases where Mix is unavailable.
   """
 
+  alias Lemon.Reload
+
   @apps_to_reload [
     :agent_core,
     :ai,
@@ -84,16 +86,22 @@ defmodule LemonGateway.Dev do
       |> Enum.uniq()
 
     {reloaded, skipped, errors} =
-      Enum.reduce(modules, {0, 0, []}, fn mod, {ok, skip, errs} ->
-        # Best-effort: if we already have two versions loaded, try to purge the old one.
-        _ = :code.soft_purge(mod)
+      Enum.reduce(apps, {0, 0, []}, fn app, {ok, skip, errs} ->
+        case Reload.reload_app(app) do
+          {:ok, result} ->
+            app_reloaded = length(result.reloaded)
+            app_skipped = length(result.skipped)
 
-        case :code.load_file(mod) do
-          {:module, _} ->
-            {ok + 1, skip, errs}
+            app_errors =
+              Enum.map(result.errors, fn
+                %{target: mod, reason: reason} -> {mod, reason}
+                other -> {app, other}
+              end)
+
+            {ok + app_reloaded, skip + app_skipped, app_errors ++ errs}
 
           {:error, reason} ->
-            {ok, skip + 1, [{mod, reason} | errs]}
+            {ok, skip + 1, [{app, reason} | errs]}
         end
       end)
 

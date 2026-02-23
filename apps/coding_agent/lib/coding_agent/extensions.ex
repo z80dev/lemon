@@ -42,6 +42,7 @@ defmodule CodingAgent.Extensions do
   """
 
   alias CodingAgent.Config
+  alias Lemon.Reload
   require Logger
 
   @type extension_module :: module()
@@ -973,10 +974,9 @@ defmodule CodingAgent.Extensions do
           |> Enum.map(fn {module, _path} -> module end)
       end
 
-    # Purge and delete each module from the code server
+    # Soft purge each module from the code server (safe for running processes)
     for module <- modules do
-      :code.purge(module)
-      :code.delete(module)
+      _ = Reload.soft_purge_module(module)
     end
 
     # Clear the source path table
@@ -1092,31 +1092,9 @@ defmodule CodingAgent.Extensions do
   # Load and compile an extension file, tracking source paths
   @spec load_extension_file(String.t()) :: [module()]
   defp load_extension_file(path) do
-    try do
-      previous_opts = Code.compiler_options()
-
-      modules =
-        try do
-          Code.compiler_options(ignore_module_conflict: true)
-
-          Code.compile_file(path)
-          |> Enum.map(fn {module, _binary} -> module end)
-        after
-          Code.compiler_options(previous_opts)
-        end
-
-      Enum.each(modules, &Code.ensure_loaded?/1)
-
-      extension_modules = Enum.filter(modules, &implements_extension?/1)
-
-      # Store the source path for each module
-      Enum.each(extension_modules, fn module ->
-        store_source_path(module, path)
-      end)
-
-      extension_modules
-    rescue
-      _ -> []
+    case load_extension_file_safe(path) do
+      {:ok, modules} -> modules
+      {:error, _error, _message} -> []
     end
   end
 
@@ -1125,40 +1103,24 @@ defmodule CodingAgent.Extensions do
   @spec load_extension_file_safe(String.t()) ::
           {:ok, [module()]} | {:error, term(), String.t()}
   defp load_extension_file_safe(path) do
-    previous_opts = Code.compiler_options()
+    case Reload.reload_extension(path) do
+      {:ok,
+       %{status: :error, metadata: %{error_message: message}, errors: [%{reason: reason} | _]}} ->
+        {:error, reason, message}
 
-    modules =
-      try do
-        Code.compiler_options(ignore_module_conflict: true)
+      {:ok, %{metadata: %{compiled_modules: modules}}} ->
+        extension_modules = Enum.filter(modules, &implements_extension?/1)
 
-        Code.compile_file(path)
-        |> Enum.map(fn {module, _binary} -> module end)
-      after
-        Code.compiler_options(previous_opts)
-      end
+        # Store the source path for each module
+        Enum.each(extension_modules, fn module ->
+          store_source_path(module, path)
+        end)
 
-    Enum.each(modules, &Code.ensure_loaded?/1)
+        {:ok, extension_modules}
 
-    extension_modules = Enum.filter(modules, &implements_extension?/1)
-
-    # Store the source path for each module
-    Enum.each(extension_modules, fn module ->
-      store_source_path(module, path)
-    end)
-
-    {:ok, extension_modules}
-  rescue
-    e in CompileError ->
-      {:error, e, "Compile error: #{e.description}"}
-
-    e in SyntaxError ->
-      {:error, e, "Syntax error at line #{e.line}: #{e.description}"}
-
-    e in TokenMissingError ->
-      {:error, e, "Token error at line #{e.line}: #{e.description}"}
-
-    e ->
-      {:error, e, Exception.message(e)}
+      {:error, reason} ->
+        {:error, reason, inspect(reason)}
+    end
   end
 
   # Check if a module implements the Extension behaviour
