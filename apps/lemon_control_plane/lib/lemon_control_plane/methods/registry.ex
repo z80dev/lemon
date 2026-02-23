@@ -64,6 +64,13 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.SessionsCompact,
     LemonControlPlane.Methods.SessionsActive,
     LemonControlPlane.Methods.SessionsActiveList,
+    # Runs
+    LemonControlPlane.Methods.RunsActiveList,
+    LemonControlPlane.Methods.RunsRecentList,
+    LemonControlPlane.Methods.RunGraphGet,
+    # Tasks
+    LemonControlPlane.Methods.TasksActiveList,
+    LemonControlPlane.Methods.TasksRecentList,
     # Cron
     LemonControlPlane.Methods.CronList,
     LemonControlPlane.Methods.CronAdd,
@@ -145,7 +152,12 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.ConnectChallenge,
     # Usage
     LemonControlPlane.Methods.UsageStatus,
-    LemonControlPlane.Methods.UsageCost
+    LemonControlPlane.Methods.UsageCost,
+    # Events / Ingestion
+    LemonControlPlane.Methods.EventsSubscribe,
+    LemonControlPlane.Methods.EventsUnsubscribe,
+    LemonControlPlane.Methods.EventsIngest,
+    LemonControlPlane.Methods.EventsSubscriptionsList
   ]
 
   @capability_methods %{
