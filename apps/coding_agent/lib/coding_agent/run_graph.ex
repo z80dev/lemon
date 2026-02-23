@@ -4,17 +4,48 @@ defmodule CodingAgent.RunGraph do
 
   The actual ETS table is owned by RunGraphServer to ensure proper
   lifecycle management and DETS persistence.
+
+  ## Concurrency Model
+
+  All state-mutating operations (`mark_running/1`, `finish/2`, `fail/2`,
+  `add_child/2`, `update/2`) are serialized through RunGraphServer to
+  guarantee atomic read-modify-write semantics. Reads (`get/1`) go directly
+  to ETS for maximum throughput.
+
+  ## State Machine
+
+  Run statuses follow a monotonic transition order:
+
+      queued -> running -> {completed | error | killed | cancelled | lost}
+
+  Backward transitions are rejected to prevent state corruption under
+  concurrent updates.
+
+  ## Await Model
+
+  `await/3` uses `LemonCore.Bus` (Phoenix PubSub) notifications for
+  instant wake-up on run state changes, replacing the previous polling
+  loop. Timeout guarantees are preserved via `receive` deadlines.
   """
 
   alias CodingAgent.RunGraphServer
 
   @table :coding_agent_run_graph
-  @dets_table :coding_agent_run_graph_dets
   @default_timeout_ms 30_000
-  @poll_interval_ms 50
   @default_ttl_seconds 86_400
 
   @type run_id :: String.t()
+
+  # Monotonic state ordering. Higher values can only transition forward.
+  @state_order %{
+    queued: 0,
+    running: 1,
+    completed: 2,
+    error: 2,
+    killed: 2,
+    cancelled: 2,
+    lost: 2
+  }
 
   @spec new_run(map()) :: run_id()
   def new_run(attrs \\ %{}) when is_map(attrs) do
@@ -43,26 +74,31 @@ defmodule CodingAgent.RunGraph do
   def add_child(parent_id, child_id) do
     ensure_table()
 
-    update(parent_id, fn record ->
-      Map.update(record, :children, [child_id], fn children -> [child_id | children] end)
-    end)
+    :ok =
+      RunGraphServer.atomic_update(parent_id, fn record ->
+        Map.update(record, :children, [child_id], fn children -> [child_id | children] end)
+      end)
 
-    update(child_id, fn record -> Map.put(record, :parent, parent_id) end)
+    :ok =
+      RunGraphServer.atomic_update(child_id, fn record ->
+        Map.put(record, :parent, parent_id)
+      end)
+
     :ok
   end
 
-  @spec mark_running(run_id()) :: :ok
+  @spec mark_running(run_id()) :: :ok | {:error, :invalid_transition}
   def mark_running(run_id) do
-    update(run_id, fn record ->
+    RunGraphServer.atomic_transition(run_id, :running, fn record ->
       record
       |> Map.put(:status, :running)
       |> Map.put(:started_at, System.system_time(:second))
     end)
   end
 
-  @spec finish(run_id(), term()) :: :ok
+  @spec finish(run_id(), term()) :: :ok | {:error, :invalid_transition}
   def finish(run_id, result) do
-    update(run_id, fn record ->
+    RunGraphServer.atomic_transition(run_id, :completed, fn record ->
       record
       |> Map.put(:status, :completed)
       |> Map.put(:result, result)
@@ -70,9 +106,9 @@ defmodule CodingAgent.RunGraph do
     end)
   end
 
-  @spec fail(run_id(), term()) :: :ok
+  @spec fail(run_id(), term()) :: :ok | {:error, :invalid_transition}
   def fail(run_id, error) do
-    update(run_id, fn record ->
+    RunGraphServer.atomic_transition(run_id, :error, fn record ->
       record
       |> Map.put(:status, :error)
       |> Map.put(:error, error)
@@ -101,22 +137,34 @@ defmodule CodingAgent.RunGraph do
   def await(run_ids, mode, timeout_ms) when is_list(run_ids) and is_atom(mode) do
     ensure_table()
 
-    case timeout_ms do
-      :infinity ->
-        do_await(run_ids, mode, :infinity)
+    # Subscribe to PubSub topics for all awaited runs
+    Enum.each(run_ids, fn run_id ->
+      safe_subscribe(run_id)
+    end)
 
-      nil ->
-        do_await(run_ids, mode, :infinity)
+    result =
+      case timeout_ms do
+        :infinity ->
+          do_await(run_ids, mode, :infinity)
 
-      ms when is_integer(ms) and ms >= 0 ->
-        deadline = System.monotonic_time(:millisecond) + ms
-        do_await(run_ids, mode, deadline)
+        nil ->
+          do_await(run_ids, mode, :infinity)
 
-      _ ->
-        # Be conservative: invalid values fall back to the default.
-        deadline = System.monotonic_time(:millisecond) + @default_timeout_ms
-        do_await(run_ids, mode, deadline)
-    end
+        ms when is_integer(ms) and ms >= 0 ->
+          deadline = System.monotonic_time(:millisecond) + ms
+          do_await(run_ids, mode, deadline)
+
+        _ ->
+          deadline = System.monotonic_time(:millisecond) + @default_timeout_ms
+          do_await(run_ids, mode, deadline)
+      end
+
+    # Unsubscribe after await completes
+    Enum.each(run_ids, fn run_id ->
+      safe_unsubscribe(run_id)
+    end)
+
+    result
   end
 
   @doc """
@@ -148,34 +196,18 @@ defmodule CodingAgent.RunGraph do
   """
   @spec insert_record(run_id(), map()) :: :ok
   def insert_record(run_id, record) do
-    :ets.insert(@table, {run_id, record})
-
-    if dets_open?() do
-      :dets.insert(@dets_table, {run_id, record})
-    end
-
-    :ok
+    RunGraphServer.insert_record(run_id, record)
   end
 
   @doc """
   Update a run record with a function.
 
   The function receives the current record and should return the updated record.
+  All updates are serialized through RunGraphServer to prevent race conditions.
   """
   @spec update(run_id(), (map() -> map())) :: :ok
   def update(run_id, update_fn) do
-    case get(run_id) do
-      {:ok, record} ->
-        updated =
-          record
-          |> update_fn.()
-          |> Map.put(:updated_at, System.system_time(:second))
-
-        insert_record(run_id, updated)
-
-      {:error, :not_found} ->
-        :ok
-    end
+    RunGraphServer.atomic_update(run_id, update_fn)
   end
 
   @doc """
@@ -183,13 +215,7 @@ defmodule CodingAgent.RunGraph do
   """
   @spec delete_run(run_id()) :: :ok
   def delete_run(run_id) do
-    :ets.delete(@table, run_id)
-
-    if dets_open?() do
-      :dets.delete(@dets_table, run_id)
-    end
-
-    :ok
+    RunGraphServer.delete_run(run_id)
   end
 
   @doc """
@@ -197,9 +223,19 @@ defmodule CodingAgent.RunGraph do
   """
   @spec dets_open?() :: boolean()
   def dets_open? do
-    :dets.info(@dets_table) != :undefined
-  rescue
-    _ -> false
+    RunGraphServer.dets_open?()
+  end
+
+  @doc """
+  Check whether a state transition is valid (monotonically forward).
+
+  Returns `true` if `from` -> `to` is a valid forward transition.
+  """
+  @spec valid_transition?(atom(), atom()) :: boolean()
+  def valid_transition?(from, to) do
+    from_order = Map.get(@state_order, normalize_status(from), -1)
+    to_order = Map.get(@state_order, normalize_status(to), -1)
+    to_order > from_order
   end
 
   # Private Functions
@@ -224,17 +260,31 @@ defmodule CodingAgent.RunGraph do
   end
 
   defp wait_or_timeout(run_ids, mode, :infinity, _snapshot) do
-    Process.sleep(@poll_interval_ms)
+    # Wait for PubSub notification (no deadline)
+    receive do
+      {:run_graph, :state_changed, _run_id} -> :ok
+    after
+      # Safety fallback: re-check every 5s in case a notification was missed
+      5_000 -> :ok
+    end
+
     do_await(run_ids, mode, :infinity)
   end
 
   defp wait_or_timeout(run_ids, mode, deadline, snapshot) do
     now = System.monotonic_time(:millisecond)
+    remaining = deadline - now
 
-    if now >= deadline do
+    if remaining <= 0 do
       {:error, :timeout, %{mode: mode, runs: snapshot}}
     else
-      Process.sleep(@poll_interval_ms)
+      # Wait for PubSub notification or timeout
+      receive do
+        {:run_graph, :state_changed, _run_id} -> :ok
+      after
+        min(remaining, 5_000) -> :ok
+      end
+
       do_await(run_ids, mode, deadline)
     end
   end
@@ -249,24 +299,47 @@ defmodule CodingAgent.RunGraph do
   end
 
   defp terminal_status?(record) do
-    status =
-      case Map.get(record, :status, :unknown) do
-        value when is_binary(value) ->
-          case value do
-            "completed" -> :completed
-            "error" -> :error
-            "lost" -> :lost
-            "killed" -> :killed
-            "cancelled" -> :cancelled
-            "unknown" -> :unknown
-            _ -> :unknown
-          end
-
-        value ->
-          value
-      end
-
+    status = normalize_status(Map.get(record, :status, :unknown))
     status in [:completed, :error, :lost, :killed, :cancelled, :unknown]
+  end
+
+  @doc false
+  def normalize_status(value) when is_atom(value), do: value
+
+  def normalize_status(value) when is_binary(value) do
+    case value do
+      "completed" -> :completed
+      "error" -> :error
+      "lost" -> :lost
+      "killed" -> :killed
+      "cancelled" -> :cancelled
+      "running" -> :running
+      "queued" -> :queued
+      "unknown" -> :unknown
+      _ -> :unknown
+    end
+  end
+
+  def normalize_status(_), do: :unknown
+
+  defp safe_subscribe(run_id) do
+    try do
+      LemonCore.Bus.subscribe("run_graph:#{run_id}")
+    rescue
+      _ -> :ok
+    catch
+      _, _ -> :ok
+    end
+  end
+
+  defp safe_unsubscribe(run_id) do
+    try do
+      LemonCore.Bus.unsubscribe("run_graph:#{run_id}")
+    rescue
+      _ -> :ok
+    catch
+      _, _ -> :ok
+    end
   end
 
   defp ensure_table do

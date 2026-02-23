@@ -62,7 +62,9 @@ defmodule LemonGateway.Scheduler do
   def init(_opts) do
     max =
       case LemonGateway.Config.get(:max_concurrent_runs) do
-        n when is_integer(n) and n > 0 -> n
+        n when is_integer(n) and n > 0 ->
+          n
+
         _ ->
           Logger.warning("Invalid max_concurrent_runs config, using default 10")
           10
@@ -165,7 +167,8 @@ defmodule LemonGateway.Scheduler do
         waitq: :queue.len(waitq)
       })
 
-      {:noreply, state |> Map.put(:waitq, waitq) |> Map.put(:slot_request_times, slot_request_times)}
+      {:noreply,
+       state |> Map.put(:waitq, waitq) |> Map.put(:slot_request_times, slot_request_times)}
     end
   end
 
@@ -216,14 +219,16 @@ defmodule LemonGateway.Scheduler do
     Process.send_after(self(), :slot_timeout_check, @slot_request_timeout_ms)
   end
 
-  # Remove slot requests that have been waiting too long
+  # Remove slot requests that have been waiting too long.
+  # IMPORTANT: We thread `state` through the reduce so that demonitor
+  # side-effects (monitor map + worker_counts cleanup) are persisted.
   defp cleanup_stale_slot_requests(state) do
     now = System.monotonic_time(:millisecond)
 
-    {fresh_waitq, stale_count, fresh_request_times} =
+    {fresh_waitq, stale_count, fresh_request_times, updated_state} =
       :queue.to_list(state.waitq)
-      |> Enum.reduce({:queue.new(), 0, %{}}, fn
-        %{queued_at_ms: queued_at, worker: worker} = entry, {q, stale_acc, times_acc}
+      |> Enum.reduce({:queue.new(), 0, %{}, state}, fn
+        %{queued_at_ms: queued_at, worker: worker} = entry, {q, stale_acc, times_acc, acc_state}
         when is_integer(queued_at) and is_pid(worker) ->
           if now - queued_at > @slot_request_timeout_ms do
             # Stale request - worker has been waiting too long
@@ -232,23 +237,23 @@ defmodule LemonGateway.Scheduler do
                 "queued #{div(now - queued_at, 1000)}s ago"
             )
 
-            # Clean up monitor for this stale request
-            maybe_demonitor_worker(state, entry)
-            {q, stale_acc + 1, times_acc}
+            # Clean up monitor for this stale request, threading state
+            acc_state = maybe_demonitor_worker(acc_state, entry)
+            {q, stale_acc + 1, times_acc, acc_state}
           else
-            {:queue.in(entry, q), stale_acc, Map.put(times_acc, worker, queued_at)}
+            {:queue.in(entry, q), stale_acc, Map.put(times_acc, worker, queued_at), acc_state}
           end
 
-        malformed, {q, stale_acc, times_acc} ->
+        malformed, {q, stale_acc, times_acc, acc_state} ->
           Logger.warning("Scheduler: dropping malformed waitq entry: #{inspect(malformed)}")
-          {q, stale_acc + 1, times_acc}
+          {q, stale_acc + 1, times_acc, acc_state}
       end)
 
     if stale_count > 0 do
       Logger.warning("Scheduler: cleaned up #{stale_count} stale slot requests")
     end
 
-    state
+    updated_state
     |> Map.put(:waitq, fresh_waitq)
     |> Map.put(:slot_request_times, fresh_request_times)
   end
@@ -430,13 +435,15 @@ defmodule LemonGateway.Scheduler do
     {kept, removed} =
       Enum.split_with(list, fn
         %{worker: w} when is_pid(w) -> w != pid
-        _ -> true  # Keep malformed entries for separate cleanup
+        # Keep malformed entries for separate cleanup
+        _ -> true
       end)
 
     {:queue.from_list(kept), length(removed)}
   end
 
-  defp wait_time_ms(%{queued_at_ms: queued_at_ms}) when is_integer(queued_at_ms) and queued_at_ms > 0 do
+  defp wait_time_ms(%{queued_at_ms: queued_at_ms})
+       when is_integer(queued_at_ms) and queued_at_ms > 0 do
     max(System.monotonic_time(:millisecond) - queued_at_ms, 0)
   end
 
@@ -638,9 +645,7 @@ defmodule LemonGateway.Scheduler do
         err
 
       nil ->
-        Logger.error(
-          "Scheduler: timeout starting worker for thread_key=#{inspect(thread_key)}"
-        )
+        Logger.error("Scheduler: timeout starting worker for thread_key=#{inspect(thread_key)}")
 
         {:error, :worker_startup_timeout}
 
