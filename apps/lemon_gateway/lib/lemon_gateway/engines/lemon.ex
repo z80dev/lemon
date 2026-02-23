@@ -58,12 +58,12 @@ defmodule LemonGateway.Engines.Lemon do
     # calling engine modules before the dependent OTP apps are started (e.g. when
     # only a subset of applications is booted). Ensure they're running so provider
     # registries and supervisors are available.
-    case Application.ensure_all_started(:coding_agent) do
-      {:ok, _apps} ->
+    case LemonGateway.DependencyManager.ensure_app(:coding_agent) do
+      :ok ->
         CliAdapter.start_run(CodingAgent.CliRunners.LemonRunner, id(), job, opts, sink_pid)
 
-      {:error, {app, reason}} ->
-        {:error, {:app_start_failed, app, reason}}
+      {:error, _reason} = error ->
+        error
     end
   end
 

@@ -14,6 +14,8 @@ defmodule LemonControlPlane.Application do
       LemonControlPlane.Methods.Registry,
       # Presence tracker for connected clients
       LemonControlPlane.Presence,
+      # Fanout task supervisor for EventBridge broadcast dispatch (supervised)
+      {Task.Supervisor, name: LemonControlPlane.EventBridge.FanoutSupervisor},
       # Event bridge for bus -> WebSocket fanout
       LemonControlPlane.EventBridge,
       # Connection supervisor for WebSocket connections
@@ -31,10 +33,7 @@ defmodule LemonControlPlane.Application do
   defp server_child_spec do
     port = Application.get_env(:lemon_control_plane, :port, default_port())
 
-    {Bandit,
-     plug: LemonControlPlane.HTTP.Router,
-     port: port,
-     scheme: :http}
+    {Bandit, plug: LemonControlPlane.HTTP.Router, port: port, scheme: :http}
   end
 
   defp default_port do

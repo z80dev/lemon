@@ -113,7 +113,16 @@ defmodule LemonGateway.Transports.Email.Inbound do
       message_id = normalize_message_id(parsed.message_id)
       in_reply_to = normalize_message_id(parsed.in_reply_to)
       references = normalize_reference_ids(parsed.references)
-      persisted_attachments = persist_attachments(parsed.attachments || [])
+
+      # Schedule attachment persistence asynchronously to keep the webhook
+      # response fast.  We generate deterministic target paths up front so
+      # the prompt and job metadata can reference them immediately.  The
+      # actual file I/O happens in a background task and completes before
+      # the engine run starts (queue/scheduler delay provides the buffer).
+      {attachment_metas, pending_writes} =
+        prepare_attachments(parsed.attachments || [])
+
+      schedule_attachment_writes(pending_writes)
 
       email = %{
         from: from,
@@ -124,7 +133,7 @@ defmodule LemonGateway.Transports.Email.Inbound do
         message_id: message_id,
         in_reply_to: in_reply_to,
         references: references,
-        attachments: persisted_attachments
+        attachments: attachment_metas
       }
 
       thread_id = resolve_thread_id(email)
@@ -170,7 +179,7 @@ defmodule LemonGateway.Transports.Email.Inbound do
           message_id: message_id,
           in_reply_to: in_reply_to,
           references: references,
-          attachments: persisted_attachments,
+          attachments: attachment_metas,
           thread_id: thread_id,
           session_key: session_key
         },
@@ -371,31 +380,74 @@ defmodule LemonGateway.Transports.Email.Inbound do
 
   defp normalize_structured_attachment(_), do: %{}
 
-  defp persist_attachments(attachments) when is_list(attachments) do
+  # ---------------------------------------------------------------------------
+  # Async attachment pipeline
+  #
+  # `prepare_attachments/1` runs synchronously on the request path and produces
+  # lightweight metadata (filename, content_type, pre-computed target path,
+  # estimated byte size).  The heavy file I/O (copying uploads, decoding &
+  # writing base64 data) is captured as a list of `pending_write` thunks which
+  # `schedule_attachment_writes/1` executes in a background Task.
+  # ---------------------------------------------------------------------------
+
+  @spec prepare_attachments(list()) :: {list(map()), list(fun())}
+  defp prepare_attachments(attachments) when is_list(attachments) do
     attachments
-    |> Enum.map(&persist_attachment/1)
+    |> Enum.map(&prepare_attachment/1)
     |> Enum.reject(&is_nil/1)
+    |> Enum.unzip()
+    |> case do
+      {metas, writes} -> {metas, Enum.reject(writes, &is_nil/1)}
+    end
   end
 
-  defp persist_attachments(_), do: []
+  defp prepare_attachments(_), do: {[], []}
 
-  defp persist_attachment(%{} = attachment) do
+  # Returns {metadata_map, write_thunk | nil} or nil when the attachment is invalid.
+  @spec prepare_attachment(map()) :: {map(), fun() | nil} | nil
+  defp prepare_attachment(%{} = attachment) do
     filename = sanitize_filename(attachment[:filename] || "attachment.bin")
     content_type = normalize_blank(attachment[:content_type])
     source = attachment[:source] || :structured
 
     cond do
       match?(%Plug.Upload{}, attachment[:upload]) ->
-        with {:ok, dir} <- ensure_attachment_dir(),
-             {:ok, path, bytes} <- copy_upload_file(dir, filename, attachment[:upload]) do
-          %{
+        upload = attachment[:upload]
+        upload_path = normalize_blank(upload.path)
+
+        with true <- is_binary(upload_path),
+             {:ok, stat} <- File.stat(upload_path),
+             true <- stat.size <= max_attachment_bytes() || {:error, :attachment_too_large} do
+          target = attachment_target_path(filename)
+
+          meta = %{
             filename: filename,
             content_type: content_type,
-            path: path,
+            path: target,
             url: normalize_blank(attachment[:url]),
-            bytes: bytes,
+            bytes: stat.size,
             source: source
           }
+
+          write_fn = fn ->
+            case ensure_attachment_dir() do
+              {:ok, _dir} ->
+                case File.cp(upload_path, target) do
+                  :ok ->
+                    maybe_restrict_file_permissions(target)
+
+                  {:error, reason} ->
+                    Logger.warning(
+                      "email inbound async attachment copy failed: #{inspect(reason)}"
+                    )
+                end
+
+              {:error, reason} ->
+                Logger.warning("email inbound attachment dir creation failed: #{inspect(reason)}")
+            end
+          end
+
+          {meta, write_fn}
         else
           {:error, :attachment_too_large} ->
             Logger.warning("email inbound attachment dropped: upload exceeds size cap")
@@ -406,27 +458,46 @@ defmodule LemonGateway.Transports.Email.Inbound do
         end
 
       is_binary(attachment[:data]) and attachment[:data] != "" ->
-        with {:ok, dir} <- ensure_attachment_dir(),
-             {:ok, path} <- write_attachment_file(dir, filename, attachment[:data]) do
-          %{
+        data = attachment[:data]
+
+        if byte_size(data) > max_attachment_bytes() do
+          Logger.warning("email inbound attachment dropped: decoded data exceeds size cap")
+          nil
+        else
+          target = attachment_target_path(filename)
+
+          meta = %{
             filename: filename,
             content_type: content_type,
-            path: path,
+            path: target,
             url: normalize_blank(attachment[:url]),
-            bytes: byte_size(attachment[:data]),
+            bytes: byte_size(data),
             source: source
           }
-        else
-          {:error, :attachment_too_large} ->
-            Logger.warning("email inbound attachment dropped: decoded data exceeds size cap")
-            nil
 
-          _ ->
-            nil
+          write_fn = fn ->
+            case ensure_attachment_dir() do
+              {:ok, _dir} ->
+                case File.write(target, data) do
+                  :ok ->
+                    maybe_restrict_file_permissions(target)
+
+                  {:error, reason} ->
+                    Logger.warning(
+                      "email inbound async attachment write failed: #{inspect(reason)}"
+                    )
+                end
+
+              {:error, reason} ->
+                Logger.warning("email inbound attachment dir creation failed: #{inspect(reason)}")
+            end
+          end
+
+          {meta, write_fn}
         end
 
       is_binary(attachment[:url]) and attachment[:url] != "" ->
-        %{
+        meta = %{
           filename: filename,
           content_type: content_type,
           path: nil,
@@ -435,52 +506,36 @@ defmodule LemonGateway.Transports.Email.Inbound do
           source: source
         }
 
+        {meta, nil}
+
       true ->
         nil
     end
   end
 
-  defp persist_attachment(_), do: nil
+  defp prepare_attachment(_), do: nil
 
-  defp write_attachment_file(dir, filename, data) when is_binary(data) do
-    if byte_size(data) > max_attachment_bytes() do
-      {:error, :attachment_too_large}
-    else
-      unique = "#{System.system_time(:millisecond)}_#{System.unique_integer([:positive])}"
-      target = Path.join(dir, "#{unique}_#{filename}")
-
-      case File.write(target, data) do
-        :ok ->
-          maybe_restrict_file_permissions(target)
-          {:ok, target}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end
+  defp attachment_target_path(filename) do
+    dir = Path.join(System.tmp_dir!(), @attachments_dir)
+    unique = "#{System.system_time(:millisecond)}_#{System.unique_integer([:positive])}"
+    Path.join(dir, "#{unique}_#{filename}")
   end
 
-  defp copy_upload_file(dir, filename, %Plug.Upload{} = upload) do
-    source = normalize_blank(upload.path)
+  defp schedule_attachment_writes([]), do: :ok
 
-    with true <- is_binary(source),
-         {:ok, stat} <- File.stat(source),
-         true <- stat.size <= max_attachment_bytes() || {:error, :attachment_too_large} do
-      unique = "#{System.system_time(:millisecond)}_#{System.unique_integer([:positive])}"
-      target = Path.join(dir, "#{unique}_#{filename}")
+  defp schedule_attachment_writes(writes) when is_list(writes) do
+    # Use the gateway TaskSupervisor if available, otherwise spawn a bare Task.
+    case Process.whereis(LemonGateway.TaskSupervisor) do
+      nil ->
+        Task.start(fn -> Enum.each(writes, fn write_fn -> write_fn.() end) end)
 
-      case File.cp(source, target) do
-        :ok ->
-          maybe_restrict_file_permissions(target)
-          {:ok, target, stat.size}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    else
-      false -> {:error, :invalid_upload_path}
-      {:error, _} = error -> error
+      _pid ->
+        Task.Supervisor.start_child(LemonGateway.TaskSupervisor, fn ->
+          Enum.each(writes, fn write_fn -> write_fn.() end)
+        end)
     end
+
+    :ok
   end
 
   defp ensure_attachment_dir do

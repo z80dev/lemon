@@ -311,10 +311,7 @@ defmodule LemonGateway.Transports.Discord do
   defp ensure_nostrum_started do
     case configure_nostrum_token() do
       token when is_binary(token) and token != "" ->
-        case Application.ensure_all_started(:nostrum) do
-          {:ok, _apps} -> :ok
-          {:error, reason} -> {:error, reason}
-        end
+        LemonGateway.DependencyManager.ensure_app(:nostrum)
 
       _ ->
         {:error, :missing_discord_bot_token}

@@ -86,7 +86,8 @@ defmodule LemonControlPlane.EventBridge do
 
   @impl true
   def init(_opts) do
-    _ = ensure_fanout_supervisor_started()
+    # FanoutSupervisor is started by LemonControlPlane.Application supervision tree.
+    # No ad hoc startup needed here.
 
     # Subscribe to static topics
     Enum.each(@bus_topics, &Bus.subscribe/1)
@@ -171,20 +172,16 @@ defmodule LemonControlPlane.EventBridge do
       payload_meta
     )
 
-    case ensure_fanout_supervisor_started() do
-      :ok ->
-        case Task.Supervisor.start_child(@fanout_supervisor, fn ->
-               Enum.each(clients, fn {_conn_id, %{pid: pid}} ->
-                 send(pid, {:event, event_name, payload, state_version})
-               end)
-             end) do
-          {:ok, _pid} ->
-            :ok
-
-          {:error, reason} ->
-            emit_dispatch_drop(event_name, reason, length(clients))
-            dispatch_inline(clients, event_name, payload, state_version)
-        end
+    # FanoutSupervisor is started by the application supervision tree, so it is
+    # guaranteed to be running. If it has crashed and is restarting, fall back to
+    # inline dispatch.
+    case Task.Supervisor.start_child(@fanout_supervisor, fn ->
+           Enum.each(clients, fn {_conn_id, %{pid: pid}} ->
+             send(pid, {:event, event_name, payload, state_version})
+           end)
+         end) do
+      {:ok, _pid} ->
+        :ok
 
       {:error, reason} ->
         emit_dispatch_drop(event_name, reason, length(clients))
@@ -204,20 +201,6 @@ defmodule LemonControlPlane.EventBridge do
     Enum.each(clients, fn {_conn_id, %{pid: pid}} ->
       send(pid, {:event, event_name, payload, state_version})
     end)
-  end
-
-  defp ensure_fanout_supervisor_started do
-    case Process.whereis(@fanout_supervisor) do
-      nil ->
-        case Task.Supervisor.start_link(name: @fanout_supervisor) do
-          {:ok, _pid} -> :ok
-          {:error, {:already_started, _pid}} -> :ok
-          {:error, reason} -> {:error, reason}
-        end
-
-      _pid ->
-        :ok
-    end
   end
 
   defp emit_dispatch_drop(event_name, reason, recipients) do

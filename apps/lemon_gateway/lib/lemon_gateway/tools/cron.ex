@@ -357,16 +357,16 @@ defmodule LemonGateway.Tools.Cron do
         :ok
 
       true ->
-        case Application.ensure_all_started(:lemon_automation) do
-          {:ok, _} ->
+        case LemonGateway.DependencyManager.ensure_app(:lemon_automation) do
+          :ok ->
             if is_pid(Process.whereis(manager)) do
               :ok
             else
               {:error, "Cron scheduler is unavailable (LemonAutomation.CronManager not started)."}
             end
 
-          {:error, {app, reason}} ->
-            {:error, "Failed to start #{app}: #{inspect(reason)}"}
+          {:error, reason} ->
+            {:error, "Failed to start lemon_automation: #{inspect(reason)}"}
         end
     end
   rescue
@@ -377,7 +377,7 @@ defmodule LemonGateway.Tools.Cron do
   defp cron_call(function, args) do
     manager = cron_manager()
 
-    if Code.ensure_loaded?(manager) and function_exported?(manager, function, length(args)) do
+    if LemonGateway.DependencyManager.exports?(manager, function, length(args)) do
       try do
         {:ok, apply(manager, function, args)}
       catch

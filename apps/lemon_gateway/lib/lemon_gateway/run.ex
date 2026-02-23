@@ -643,25 +643,14 @@ defmodule LemonGateway.Run do
     end
   end
 
-  # Emit events to the LemonCore.Bus
+  # Emit events to the LemonCore.Bus via DependencyManager
   defp emit_to_bus(run_id, event_type, payload, extra_meta) do
-    # Only emit if LemonCore.Bus is available
-    if Code.ensure_loaded?(LemonCore.Bus) do
-      topic = "run:#{run_id}"
-      # Include run_id in meta, plus any extra metadata
-      meta = Map.merge(%{run_id: run_id}, extra_meta)
+    alias LemonGateway.DependencyManager
 
-      event =
-        if Code.ensure_loaded?(LemonCore.Event) do
-          LemonCore.Event.new(event_type, payload, meta)
-        else
-          {event_type, payload}
-        end
-
-      LemonCore.Bus.broadcast(topic, event)
-    end
-  rescue
-    _ -> :ok
+    topic = "run:#{run_id}"
+    meta = Map.merge(%{run_id: run_id}, extra_meta)
+    event = DependencyManager.build_event(event_type, payload, meta)
+    DependencyManager.broadcast(topic, event)
   end
 
   # Helper to build standard meta from state
@@ -858,26 +847,22 @@ defmodule LemonGateway.Run do
   # Uses LemonCore.Telemetry for consistent event naming across the umbrella
 
   defp emit_telemetry_start(run_id, meta) do
-    if Code.ensure_loaded?(LemonCore.Telemetry) do
-      LemonCore.Telemetry.run_start(run_id, %{
+    LemonGateway.DependencyManager.emit_telemetry(:run_start, [
+      run_id,
+      %{
         session_key: meta[:session_key],
         engine: meta[:engine],
         origin: meta[:origin]
-      })
-    end
+      }
+    ])
   end
 
   defp emit_telemetry_first_token(run_id, _meta, latency_ms) do
-    if Code.ensure_loaded?(LemonCore.Telemetry) do
-      # Calculate start time from latency
-      start_ts_ms = System.system_time(:millisecond) - latency_ms
-      LemonCore.Telemetry.run_first_token(run_id, start_ts_ms)
-    end
+    start_ts_ms = System.system_time(:millisecond) - latency_ms
+    LemonGateway.DependencyManager.emit_telemetry(:run_first_token, [run_id, start_ts_ms])
   end
 
   defp emit_telemetry_stop(run_id, _meta, duration_ms, ok?) do
-    if Code.ensure_loaded?(LemonCore.Telemetry) do
-      LemonCore.Telemetry.run_stop(run_id, duration_ms, ok?)
-    end
+    LemonGateway.DependencyManager.emit_telemetry(:run_stop, [run_id, duration_ms, ok?])
   end
 end
