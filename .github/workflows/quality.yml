@@ -107,7 +107,9 @@ jobs:
           cache-dependency-path: |
             clients/lemon-web/package-lock.json
             clients/lemon-tui/package-lock.json
+            clients/lemon-browser-node/package-lock.json
 
+      # --- lemon-web ---
       - name: Install lemon-web deps
         working-directory: clients/lemon-web
         run: npm ci
@@ -120,14 +122,60 @@ jobs:
         working-directory: clients/lemon-web
         run: npm --workspace web run lint
 
+      - name: lemon-web build
+        working-directory: clients/lemon-web
+        run: npm run build
+
+      - name: lemon-web shared tests
+        working-directory: clients/lemon-web
+        run: npm --workspace shared run test
+
       - name: lemon-web tests
         working-directory: clients/lemon-web
         run: npm --workspace web run test
 
+      - name: lemon-web audit
+        working-directory: clients/lemon-web
+        run: npm audit --audit-level=high || true
+
+      # --- lemon-tui ---
       - name: Install lemon-tui deps
         working-directory: clients/lemon-tui
         run: npm ci
 
+      - name: lemon-tui typecheck
+        working-directory: clients/lemon-tui
+        run: npm run typecheck
+
+      - name: lemon-tui build
+        working-directory: clients/lemon-tui
+        run: npm run build
+
       - name: lemon-tui tests
         working-directory: clients/lemon-tui
         run: npm test
+
+      - name: lemon-tui audit
+        working-directory: clients/lemon-tui
+        run: npm audit --audit-level=high || true
+
+      # --- lemon-browser-node ---
+      - name: Install lemon-browser-node deps
+        working-directory: clients/lemon-browser-node
+        run: npm ci
+
+      - name: lemon-browser-node typecheck
+        working-directory: clients/lemon-browser-node
+        run: npm run typecheck
+
+      - name: lemon-browser-node build
+        working-directory: clients/lemon-browser-node
+        run: npm run build
+
+      - name: lemon-browser-node tests
+        working-directory: clients/lemon-browser-node
+        run: npm test
+
+      - name: lemon-browser-node audit
+        working-directory: clients/lemon-browser-node
+        run: npm audit --audit-level=high || true

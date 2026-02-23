@@ -72,6 +72,8 @@ const { MockWebSocket, mockWebSocketInstances } = vi.hoisted(() => {
   };
 });
 
+type MockWebSocket = InstanceType<typeof MockWebSocket>;
+
 // Mock child_process module
 vi.mock('node:child_process', () => ({
   spawn: vi.fn(),
