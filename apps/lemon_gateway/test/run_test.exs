@@ -1,5 +1,6 @@
 defmodule LemonGateway.RunTest do
   alias Elixir.LemonGateway, as: LemonGateway
+
   @moduledoc """
   Comprehensive tests for Elixir.LemonGateway.Run GenServer.
 
@@ -533,8 +534,7 @@ defmodule LemonGateway.RunTest do
                      2000
 
       # Process should stop after error
-      Process.sleep(100)
-      refute Process.alive?(pid)
+      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
     end
 
     test "sends notification to notify_pid on completion" do
@@ -592,9 +592,8 @@ defmodule LemonGateway.RunTest do
       action_event = %Event.ActionEvent{engine: "controllable", action: action, phase: :started}
       send(pid, {:engine_event, run_ref, action_event})
 
-      # Run should still be alive
-      Process.sleep(50)
-      assert Process.alive?(pid)
+      # Run should still be alive (check without timing race)
+      Elixir.LemonGateway.AsyncHelpers.assert_process_alive(pid)
     end
 
     test "processes Completed event and stops" do
@@ -606,9 +605,8 @@ defmodule LemonGateway.RunTest do
       # Should complete and stop
       assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
 
-      # Give it time to stop
-      Process.sleep(100)
-      refute Process.alive?(pid)
+      # Wait deterministically for the process to stop
+      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
     end
 
     test "ignores events with wrong run_ref" do
@@ -630,8 +628,7 @@ defmodule LemonGateway.RunTest do
       send(pid, {:engine_event, wrong_ref, completed})
 
       # Run should still be alive (event was ignored)
-      Process.sleep(50)
-      assert Process.alive?(pid)
+      Elixir.LemonGateway.AsyncHelpers.assert_process_alive(pid)
     end
   end
 
@@ -690,8 +687,7 @@ defmodule LemonGateway.RunTest do
       send(pid, {:unknown_message, "some data"})
 
       # Run should still be alive
-      Process.sleep(50)
-      assert Process.alive?(pid)
+      Elixir.LemonGateway.AsyncHelpers.assert_process_alive(pid)
     end
   end
 
@@ -815,8 +811,7 @@ defmodule LemonGateway.RunTest do
                      2000
 
       # Process should stop
-      Process.sleep(100)
-      refute Process.alive?(pid)
+      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
     end
 
     test "cancel is idempotent when already completed" do
@@ -914,8 +909,7 @@ defmodule LemonGateway.RunTest do
                       %Event.Completed{ok: false, error: :engine_error}},
                      2000
 
-      Process.sleep(100)
-      refute Process.alive?(pid)
+      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
     end
 
     test "handles unknown engine gracefully" do
@@ -928,8 +922,7 @@ defmodule LemonGateway.RunTest do
       assert is_binary(error)
       assert error =~ "unknown engine id"
 
-      Process.sleep(50)
-      refute Process.alive?(pid)
+      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
     end
 
     test "handles nil notify_pid gracefully" do
@@ -942,9 +935,8 @@ defmodule LemonGateway.RunTest do
       assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
 
       # Should NOT crash
-      Process.sleep(100)
       # Stopped normally
-      refute Process.alive?(pid)
+      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
     end
   end
 
@@ -1299,11 +1291,11 @@ defmodule LemonGateway.RunTest do
       # Wait for completion
       assert_receive {:run_complete, ^pid, _}, 2000
 
-      # Give time for unregistration
-      Process.sleep(50)
-
-      # Mapping should be removed
-      assert Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil
+      # Wait for unregistration to complete
+      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+        fn -> Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
+        message: "run progress mapping was not removed"
+      )
     end
 
     test "does not register mapping when progress_msg_id is nil" do
@@ -1328,11 +1320,11 @@ defmodule LemonGateway.RunTest do
       # Wait for completion
       assert_receive {:run_complete, ^pid, _}, 2000
 
-      # Give time for cleanup
-      Process.sleep(100)
-
-      # Mapping should be removed
-      assert Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil
+      # Wait for cleanup to complete
+      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+        fn -> Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
+        message: "run progress mapping was not removed on completion"
+      )
     end
 
     test "unregisters progress mapping on cancellation" do
@@ -1366,11 +1358,11 @@ defmodule LemonGateway.RunTest do
 
       assert_receive {:run_complete, ^pid, _}, 2000
 
-      # Give time for cleanup
-      Process.sleep(100)
-
-      # Mapping should be removed
-      assert Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil
+      # Wait for cleanup to complete
+      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+        fn -> Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
+        message: "run progress mapping was not removed on cancellation"
+      )
     end
   end
 
@@ -1458,8 +1450,7 @@ defmodule LemonGateway.RunTest do
       )
 
       # Process should still be running
-      Process.sleep(50)
-      assert Process.alive?(pid)
+      Elixir.LemonGateway.AsyncHelpers.assert_process_alive(pid)
 
       # Send completion
       completed = %Event.Completed{engine: "controllable", ok: true, answer: "done"}
@@ -1488,8 +1479,7 @@ defmodule LemonGateway.RunTest do
         send(pid, {:engine_event, run_ref, event})
       end
 
-      Process.sleep(100)
-      assert Process.alive?(pid)
+      Elixir.LemonGateway.AsyncHelpers.assert_process_alive(pid)
 
       # Complete
       completed = %Event.Completed{engine: "controllable", ok: true, answer: "all done"}
@@ -1585,6 +1575,7 @@ defmodule LemonGateway.RunTest do
       # process is still alive) or the process exits before handling it.
       if Process.alive?(pid) do
         GenServer.cast(pid, {:steer, steer_job, self()})
+
         receive do
           {:steer_rejected, ^steer_job} -> :ok
           {:DOWN, ^ref, :process, ^pid, _} -> :ok
@@ -1939,8 +1930,7 @@ defmodule LemonGateway.RunTest do
       send(pid, {:engine_event, run_ref, event})
 
       # Run should still be active
-      Process.sleep(50)
-      assert Process.alive?(pid)
+      Elixir.LemonGateway.AsyncHelpers.assert_process_alive(pid)
 
       # Send completed action
       completed_event = %Event.ActionEvent{
@@ -2039,8 +2029,11 @@ defmodule LemonGateway.RunTest do
 
       assert_receive {:run_complete, ^pid, _}, 2000
 
-      # Give time for store operations
-      Process.sleep(100)
+      # Wait for store operations to complete
+      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+        fn -> Elixir.LemonGateway.Store.get_run(run_ref) != nil end,
+        message: "run data was not stored"
+      )
 
       # Events should be stored
       run_data = Elixir.LemonGateway.Store.get_run(run_ref)
@@ -2237,11 +2230,11 @@ defmodule LemonGateway.RunTest do
       GenServer.cast(pid, {:cancel, :user_requested})
       assert_receive {:run_complete, ^pid, _}, 2000
 
-      # Give time for cleanup
-      Process.sleep(100)
-
-      # Mapping should be removed
-      assert Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil
+      # Wait for cleanup to complete
+      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+        fn -> Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
+        message: "run progress mapping was not removed"
+      )
     end
   end
 
@@ -2258,8 +2251,11 @@ defmodule LemonGateway.RunTest do
 
       assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
 
-      # Give time for store operations
-      Process.sleep(100)
+      # Wait for store operations to complete
+      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+        fn -> Elixir.LemonGateway.Store.get_chat_state(scope) != nil end,
+        message: "ChatState was not persisted"
+      )
 
       # ChatState should have the resume token
       chat_state = Elixir.LemonGateway.Store.get_chat_state(scope)
@@ -2298,8 +2294,14 @@ defmodule LemonGateway.RunTest do
 
       assert_receive {:run_complete, ^pid, _}, 2000
 
-      # Give time for store operations
-      Process.sleep(100)
+      # Wait for store operations to complete
+      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+        fn ->
+          state = Elixir.LemonGateway.Store.get_chat_state(scope)
+          state != nil and state.last_resume_token == resume.value
+        end,
+        message: "ChatState with resume token was not persisted"
+      )
 
       # ChatState should have the completed resume token
       chat_state = Elixir.LemonGateway.Store.get_chat_state(scope)
@@ -2337,14 +2339,18 @@ defmodule LemonGateway.RunTest do
          %Event.Completed{
            engine: "controllable",
            ok: false,
-           error: "Codex error: %{\\\"error\\\" => %{\\\"code\\\" => \\\"context_length_exceeded\\\"}}",
+           error:
+             "Codex error: %{\\\"error\\\" => %{\\\"code\\\" => \\\"context_length_exceeded\\\"}}",
            resume: resume
          }}
       )
 
       assert_receive {:run_complete, ^pid, %Event.Completed{ok: false}}, 2000
-      Process.sleep(100)
-      assert Elixir.LemonGateway.Store.get_chat_state(scope) == nil
+      # Wait to confirm no ChatState was written
+      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+        fn -> Elixir.LemonGateway.Store.get_chat_state(scope) == nil end,
+        message: "ChatState should remain nil after context overflow"
+      )
     end
 
     test "resume token does not override explicit engine selection" do
@@ -2424,10 +2430,7 @@ defmodule LemonGateway.RunTest do
 
       assert_receive {:engine_started, _run_ref}, 2000
 
-      # Give time for Started event to update ChatState
-      Process.sleep(100)
-
-      # ChatState should not be updated on Started to avoid concurrent resumes
+      # ChatState should not be updated on Started (no async wait needed)
       chat_state1 = Elixir.LemonGateway.Store.get_chat_state(scope)
       assert chat_state1 == nil
 
@@ -2441,8 +2444,12 @@ defmodule LemonGateway.RunTest do
       GenServer.cast(pid, {:cancel, :done})
       assert_receive {:run_complete, ^pid, _}, 2000
 
-      # The ChatState should have been updated
-      Process.sleep(100)
+      # Wait for ChatState to be updated
+      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+        fn -> Elixir.LemonGateway.Store.get_chat_state(scope) != nil end,
+        message: "ChatState was not updated after completion"
+      )
+
       chat_state2 = Elixir.LemonGateway.Store.get_chat_state(scope)
       assert chat_state2 != nil
 
@@ -2461,12 +2468,11 @@ defmodule LemonGateway.RunTest do
 
       assert_receive {:run_complete, ^pid, %Event.Completed{ok: false}}, 2000
 
-      Process.sleep(100)
-
-      # ChatState should still be nil or unchanged
-      chat_state = Elixir.LemonGateway.Store.get_chat_state(scope)
-      # Failing engine doesn't set resume, so no ChatState should be stored
-      assert chat_state == nil
+      # Confirm no ChatState was written by failing engine
+      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+        fn -> Elixir.LemonGateway.Store.get_chat_state(scope) == nil end,
+        message: "ChatState should remain nil when resume is absent"
+      )
     end
 
     test "resume token engine overrides scope binding default" do
@@ -2495,7 +2501,11 @@ defmodule LemonGateway.RunTest do
 
       assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
 
-      Process.sleep(100)
+      # Wait for run history to be stored
+      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+        fn -> length(Elixir.LemonGateway.Store.get_run_history(scope)) >= 1 end,
+        message: "run history was not stored"
+      )
 
       # Run history should include this run
       history = Elixir.LemonGateway.Store.get_run_history(scope)
@@ -2536,8 +2546,7 @@ defmodule LemonGateway.RunTest do
       assert_receive {:run_complete, ^pid, %Event.Completed{ok: false}}, 2000
 
       # Should complete without crashing
-      Process.sleep(100)
-      refute Process.alive?(pid)
+      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
     end
   end
 

@@ -210,7 +210,8 @@ defmodule LemonGateway.SchedulerTest do
 
     test "submit path does not block on worker enqueue" do
       if is_nil(Process.whereis(Elixir.LemonGateway.ThreadRegistry)) do
-        {:ok, _} = start_supervised({Registry, keys: :unique, name: Elixir.LemonGateway.ThreadRegistry})
+        {:ok, _} =
+          start_supervised({Registry, keys: :unique, name: Elixir.LemonGateway.ThreadRegistry})
       end
 
       session_key = "blocking_enqueue:#{System.unique_integer([:positive])}"
@@ -623,15 +624,12 @@ defmodule LemonGateway.SchedulerTest do
         end)
 
       assert :ok == Scheduler.cancel(pid, :test_reason)
-
-      # Give time for the cast to be received
-      Process.sleep(10)
     end
 
     test "cancel returns :ok for dead process" do
       pid = spawn(fn -> :ok end)
-      # Let it die
-      Process.sleep(10)
+      # Wait deterministically for the process to stop
+      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
 
       refute Process.alive?(pid)
       assert :ok == Scheduler.cancel(pid, :test_reason)
@@ -654,8 +652,8 @@ defmodule LemonGateway.SchedulerTest do
           end
         end)
 
-      # Give the spawned process time to start and wait on receive
-      Process.sleep(10)
+      # Wait until the spawned process is alive and receiving
+      Elixir.LemonGateway.AsyncHelpers.assert_process_alive(pid)
       Scheduler.cancel(pid)
 
       assert_receive {:got_cancel, :user_requested}, 500
@@ -782,8 +780,8 @@ defmodule LemonGateway.SchedulerTest do
     test "worker crash while in waitq is cleaned up" do
       # Create a worker that will die
       worker = spawn(fn -> :ok end)
-      # Let it die
-      Process.sleep(10)
+      # Wait deterministically for it to stop
+      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(worker)
 
       # Simulated mon_ref (real one would be invalid now)
       mon_ref = make_ref()
@@ -967,9 +965,9 @@ defmodule LemonGateway.SchedulerTest do
         worker_counts: %{dying_worker => 1, stable_worker => 1}
       }
 
-      # Kill the dying worker
+      # Kill the dying worker and wait for it to stop
       send(dying_worker, :die)
-      Process.sleep(10)
+      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(dying_worker)
 
       {:noreply, state} =
         Scheduler.handle_info({:DOWN, mon_ref_dying, :process, dying_worker, :normal}, state)

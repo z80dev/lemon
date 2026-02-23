@@ -1,5 +1,6 @@
 defmodule LemonGateway.ThreadWorkerTest do
   alias Elixir.LemonGateway, as: LemonGateway
+
   @moduledoc """
   Comprehensive tests for Elixir.LemonGateway.ThreadWorker queue modes and behavior.
   """
@@ -708,8 +709,8 @@ defmodule LemonGateway.ThreadWorkerTest do
       # Simulate a dead process as current_run
       # spawn a process and immediately kill it to get a dead PID
       dead_pid = spawn(fn -> :ok end)
-      # Ensure the process has exited
-      Process.sleep(10)
+      # Wait deterministically for the process to stop
+      Elixir.LemonGateway.AsyncHelpers.assert_process_dead(dead_pid)
 
       refute Process.alive?(dead_pid), "Test setup: PID should be dead"
 
@@ -1852,8 +1853,14 @@ defmodule LemonGateway.ThreadWorkerTest do
 
       assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true}}, 2000
 
-      # Worker should clean up and release slot
-      Process.sleep(100)
+      # Worker should clean up and release slot - wait for cleanup
+      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+        fn ->
+          key = {:session, scope}
+          Elixir.LemonGateway.ThreadRegistry.whereis(key) == nil
+        end,
+        message: "thread worker did not clean up after first job"
+      )
 
       # New job should be able to get a slot
       job2 = make_job(scope, prompt: "second", meta: %{notify_pid: self()})
@@ -2089,8 +2096,14 @@ defmodule LemonGateway.ThreadWorkerTest do
         job = make_job(scope, prompt: "job#{i}", meta: %{notify_pid: self()})
         Elixir.LemonGateway.submit(job)
         assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2000
-        # Allow cleanup
-        Process.sleep(50)
+        # Allow cleanup - wait deterministically for the worker to finish
+        Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+          fn ->
+            key = {:session, scope}
+            Elixir.LemonGateway.ThreadRegistry.whereis(key) == nil
+          end,
+          message: "thread worker did not release slot"
+        )
       end
 
       # If slots weren't released, this would hang
@@ -2159,7 +2172,7 @@ defmodule LemonGateway.ThreadWorkerTest do
 
       # Spawn and kill an unrelated process - worker should ignore its DOWN
       _pid = spawn(fn -> :ok end)
-      Process.sleep(10)
+      # No need to wait - the worker handles the DOWN asynchronously
       # The worker monitors its run, not random processes
 
       # Job should complete normally
