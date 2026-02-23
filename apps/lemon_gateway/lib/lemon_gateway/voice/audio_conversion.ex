@@ -19,7 +19,6 @@ defmodule LemonGateway.Voice.AudioConversion do
   arithmetic — no external C libraries or NIFs are required.
   """
 
-  @mu 255
   @bias 0x84
   @clip 0x7F7B
 

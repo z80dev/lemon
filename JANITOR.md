@@ -1,3 +1,50 @@
+### 2026-02-23 - Janitor Final Integration: Debt Merge Closure + Planning + Validation
+**Work Area**: Final Integration / Planning Artifacts / Validation
+
+**Summary**:
+- Completed final integration pass for merged debt phases and planning artifacts.
+- Confirmed merged debt phases and integration commits:
+  - Phase 6 (`PLN-20260222-debt-phase-06-ci-test-hardening`) — `f98750e5`
+  - Phase 7 (`PLN-20260222-debt-phase-07-run-state-concurrency`) — `ca47f7e9`
+  - Phase 8 (`PLN-20260222-debt-phase-08-store-persistence-scalability`) — `9c6c12af`
+  - Phase 11 (`PLN-20260222-debt-phase-11-placeholder-stub-burndown`) — `822cb2f6`
+  - Phase 12 (`PLN-20260222-debt-phase-12-deterministic-async-test-harness`) — `a8387a3d`
+- Verified and integrated planning artifacts:
+  - `planning/INDEX.md`
+  - `planning/plans/PLN-20260223-ai-test-expansion.md`
+  - `planning/plans/PLN-20260223-macos-keychain-secrets-audit.md`
+  - `planning/plans/PLN-20260223-pi-oh-my-pi-sync.md`
+  - `planning/templates/PLAN_TEMPLATE.md`
+  - `planning/reviews/RVW-PLN-20260223-ai-test-expansion.md`
+- Added/validated AI test expansion deliverables:
+  - `apps/ai/test/ai/models_test.exs`
+  - `apps/ai/test/ai/providers/anthropic_test.exs`
+  - `apps/ai/test/ai/providers/google_test.exs`
+  - `apps/ai/test/ai/providers/bedrock_test.exs`
+- Applied test stability and cleanup updates for janitor validation:
+  - Removed unused module attribute in `apps/lemon_gateway/lib/lemon_gateway/voice/audio_conversion.ex`
+  - Fixed nested module naming in gateway tests (`run_test`, `scheduler_test`, `thread_worker_test`)
+  - Made `LemonSkills.HttpClient.Mock.reset/0` idempotent for concurrent setup/teardown races
+  - Reworked two flaky `thread_worker_test` cleanup assertions to deterministic lifecycle waits
+
+**Validation**:
+- `mix compile --warnings-as-errors`: pass
+- `mix test` (key files): pass
+  - `apps/lemon_core/test/lemon_core/store_test.exs` — 12 tests, 0 failures
+  - `apps/ai/test/ai/models_test.exs`
+  - `apps/ai/test/ai/providers/google_test.exs`
+  - `apps/ai/test/ai/providers/anthropic_test.exs`
+  - `apps/ai/test/ai/providers/bedrock_test.exs` — AI subtotal: 155 tests, 0 failures
+  - `apps/lemon_skills/test/lemon_skills/discovery_test.exs` — 14 tests, 0 failures (2 excluded)
+  - `apps/lemon_gateway/test/store/store_test.exs`
+  - `apps/lemon_gateway/test/scheduler_test.exs`
+  - `apps/lemon_gateway/test/run_test.exs`
+  - `apps/lemon_gateway/test/thread_worker_test.exs:1848`
+  - `apps/lemon_gateway/test/thread_worker_test.exs:2090` — gateway subtotal: 183 tests, 0 failures (74 excluded)
+  - Total across command summaries: 364 tests, 0 failures
+
+---
+
 ### 2026-02-22 - Janitor Continuation: Pending Refactor Review + Final Validation
 **Work Area**: Integration Review / Final Validation / Documentation
 

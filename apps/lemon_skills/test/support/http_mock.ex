@@ -27,7 +27,13 @@ defmodule LemonSkills.HttpClient.Mock do
   def reset do
     case Process.whereis(@agent_key) do
       nil -> :ok
-      pid -> Agent.stop(pid)
+      pid ->
+        # Idempotent reset across concurrent test setup/teardown.
+        try do
+          Agent.stop(pid)
+        catch
+          :exit, _ -> :ok
+        end
     end
 
     {:ok, _pid} = Agent.start_link(fn -> %{} end, name: @agent_key)

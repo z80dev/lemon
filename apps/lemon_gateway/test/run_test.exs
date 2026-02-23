@@ -25,7 +25,7 @@ defmodule LemonGateway.RunTest do
   # ============================================================================
 
   # A basic engine for simple tests
-  defmodule LemonGateway.RunTest.TestEngine do
+  defmodule Elixir.LemonGateway.RunTest.TestEngine do
     @behaviour Elixir.LemonGateway.Engine
 
     alias Elixir.LemonGateway.Types.{Job, ResumeToken}
@@ -247,7 +247,7 @@ defmodule LemonGateway.RunTest do
   end
 
   # An engine that emits deltas for streaming tests
-  defmodule LemonGateway.RunTest.StreamingEngine do
+  defmodule Elixir.LemonGateway.RunTest.StreamingEngine do
     @behaviour Elixir.LemonGateway.Engine
 
     alias Elixir.LemonGateway.Types.{Job, ResumeToken}

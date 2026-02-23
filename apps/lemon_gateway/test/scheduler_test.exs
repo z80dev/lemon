@@ -5,7 +5,7 @@ defmodule LemonGateway.SchedulerTest do
   alias Elixir.LemonGateway.Scheduler
   alias Elixir.LemonGateway.Types.{ChatScope, Job, ResumeToken}
 
-  defmodule LemonGateway.SchedulerTest.SlowEngine do
+  defmodule Elixir.LemonGateway.SchedulerTest.SlowEngine do
     @behaviour Elixir.LemonGateway.Engine
 
     alias Elixir.LemonGateway.Event

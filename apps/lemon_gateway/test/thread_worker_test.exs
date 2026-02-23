@@ -10,7 +10,7 @@ defmodule LemonGateway.ThreadWorkerTest do
   alias Elixir.LemonGateway.Event.Completed
 
   # A slow engine that allows us to observe queueing behavior
-  defmodule LemonGateway.ThreadWorkerTest.SlowEngine do
+  defmodule Elixir.LemonGateway.ThreadWorkerTest.SlowEngine do
     @behaviour Elixir.LemonGateway.Engine
 
     alias Elixir.LemonGateway.Types.{Job, ResumeToken}
@@ -1847,20 +1847,15 @@ defmodule LemonGateway.ThreadWorkerTest do
 
     test "worker cleanup releases slot properly" do
       scope = make_scope()
+      thread_key = {:session, scope}
 
       job1 = make_job(scope, prompt: "first", meta: %{notify_pid: self()})
       Elixir.LemonGateway.submit(job1)
 
       assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true}}, 2000
 
-      # Worker should clean up and release slot - wait for cleanup
-      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn ->
-          key = {:session, scope}
-          Elixir.LemonGateway.ThreadRegistry.whereis(key) == nil
-        end,
-        message: "thread worker did not clean up after first job"
-      )
+      # Wait for lifecycle cleanup; worker may stop asynchronously.
+      wait_for_worker_stop(thread_key, 1_000)
 
       # New job should be able to get a slot
       job2 = make_job(scope, prompt: "second", meta: %{notify_pid: self()})
@@ -2096,14 +2091,8 @@ defmodule LemonGateway.ThreadWorkerTest do
         job = make_job(scope, prompt: "job#{i}", meta: %{notify_pid: self()})
         Elixir.LemonGateway.submit(job)
         assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2000
-        # Allow cleanup - wait deterministically for the worker to finish
-        Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-          fn ->
-            key = {:session, scope}
-            Elixir.LemonGateway.ThreadRegistry.whereis(key) == nil
-          end,
-          message: "thread worker did not release slot"
-        )
+        # Allow asynchronous lifecycle cleanup between iterations.
+        wait_for_worker_stop({:session, scope}, 1_000)
       end
 
       # If slots weren't released, this would hang
