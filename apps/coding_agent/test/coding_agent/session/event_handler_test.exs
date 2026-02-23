@@ -46,25 +46,22 @@ defmodule CodingAgent.Session.EventHandlerTest do
       assert result == state
     end
 
-    test "{:tool_start, tool_call} sends working message", %{
+    test "{:tool_execution_start, id, name, args} sends working message", %{
       state: state,
       callbacks: callbacks
     } do
-      tool_call = %{id: "tc_1", name: "read", arguments: %{}}
-
-      EventHandler.handle({:tool_start, tool_call}, state, callbacks)
+      EventHandler.handle({:tool_execution_start, "tc_1", "read", %{}}, state, callbacks)
 
       assert_receive {:working_msg, "Running read..."}
     end
 
-    test "{:tool_end, tool_call, result} clears working message", %{
+    test "{:tool_execution_end, id, name, result, is_error} clears working message", %{
       state: state,
       callbacks: callbacks
     } do
-      tool_call = %{id: "tc_1", name: "read", arguments: %{}}
-      result = %{content: "ok", is_error: false}
+      result = %{content: "ok"}
 
-      EventHandler.handle({:tool_end, tool_call, result}, state, callbacks)
+      EventHandler.handle({:tool_execution_end, "tc_1", "read", result, false}, state, callbacks)
 
       assert_receive {:working_msg, nil}
     end

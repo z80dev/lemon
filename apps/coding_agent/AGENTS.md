@@ -464,6 +464,24 @@ Settings controlling compaction (in `SettingsManager`/`config.toml`):
 - `reserve_tokens` (default: 16_384) — tokens reserved for model response
 - `keep_recent_tokens` (default: 20_000) — min recent context retained after compaction
 
+## Introspection Events
+
+Session and EventHandler emit introspection events via `LemonCore.Introspection.record/3` for lifecycle observability. All events use `engine: "lemon"`.
+
+### Session Events
+
+| Event Type | When Emitted | Key Payload Fields |
+|---|---|---|
+| `:session_started` | `init/1` after state is built | `session_id`, `cwd`, `model`, `session_scope` |
+| `:session_ended` | `terminate/2` | `session_id`, `turn_count` |
+| `:compaction_triggered` | `apply_compaction_result/3` on success | `tokens_before`, `first_kept_entry_id` |
+
+### EventHandler Events
+
+| Event Type | When Emitted | Key Payload Fields |
+|---|---|---|
+| `:tool_call_dispatched` | `handle({:tool_execution_start, id, name, args})` | `tool_name`, `tool_call_id` |
+
 ## Slash Commands and @Mentions
 
 ### Slash Commands

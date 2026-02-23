@@ -690,6 +690,25 @@ DynamicSupervisor.which_children(LemonGateway.ThreadWorkerSupervisor)
 - Run automatically clears `ChatState` on context-length errors
 - Next run will start fresh without a resume token
 
+## Introspection Events
+
+ThreadWorker and Scheduler emit introspection events via `LemonCore.Introspection.record/3` for lifecycle observability. All events use `engine: "lemon"` and pass `run_id:`, `session_key:` where available.
+
+### ThreadWorker Events
+
+| Event Type | When Emitted | Key Payload Fields |
+|---|---|---|
+| `:thread_started` | `init/1` | `thread_key` |
+| `:thread_message_dispatched` | `handle_cast({:enqueue, job})` | `thread_key`, `queue_mode`, `queue_len` |
+| `:thread_terminated` | `terminate/2` | `thread_key`, `queue_len` |
+
+### Scheduler Events
+
+| Event Type | When Emitted | Key Payload Fields |
+|---|---|---|
+| `:scheduled_job_triggered` | `handle_cast({:submit, job})` | `queue_mode`, `engine_id`, `thread_key` |
+| `:scheduled_job_completed` | `handle_cast({:release_slot, slot_ref})` | `in_flight`, `max` |
+
 ## Dependencies
 
 ### Umbrella Apps

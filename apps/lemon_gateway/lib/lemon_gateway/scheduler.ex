@@ -9,6 +9,7 @@ defmodule LemonGateway.Scheduler do
   use GenServer
   require Logger
 
+  alias LemonCore.Introspection
   alias LemonGateway.{ChatState, Config, Store}
   alias LemonGateway.Types.{Job, ResumeToken}
 
@@ -95,6 +96,12 @@ defmodule LemonGateway.Scheduler do
         "queue_mode=#{inspect(job.queue_mode)} thread_key=#{inspect(thread_key)}"
     )
 
+    Introspection.record(:scheduled_job_triggered, %{
+      queue_mode: job.queue_mode,
+      engine_id: job.engine_id,
+      thread_key: inspect(thread_key)
+    }, run_id: job.run_id, session_key: job.session_key, engine: "lemon", provenance: :direct)
+
     :ok = enqueue_job(thread_key, job)
 
     {:noreply, state}
@@ -179,6 +186,11 @@ defmodule LemonGateway.Scheduler do
     Logger.debug(
       "Scheduler released slot slot_ref=#{inspect(slot_ref)} in_flight=#{map_size(state.in_flight)}/#{state.max}"
     )
+
+    Introspection.record(:scheduled_job_completed, %{
+      in_flight: map_size(state.in_flight),
+      max: state.max
+    }, engine: "lemon", provenance: :direct)
 
     emit_scheduler_telemetry(:slot_released, %{
       in_flight: map_size(state.in_flight),

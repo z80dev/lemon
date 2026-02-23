@@ -2,6 +2,7 @@ defmodule CodingAgent.Session.EventHandler do
   @moduledoc false
 
   alias CodingAgent.Extensions
+  alias LemonCore.Introspection
 
   @type callbacks(state) :: %{
           required(:set_working_message) => (state, String.t() | nil -> :ok),
@@ -67,29 +68,23 @@ defmodule CodingAgent.Session.EventHandler do
     end
   end
 
-  def handle({:tool_start, tool_call}, state, callbacks) do
+  def handle({:tool_execution_start, id, name, args}, state, callbacks) do
     # Execute on_tool_execution_start hooks
-    Extensions.execute_hooks(state.hooks, :on_tool_execution_start, [
-      tool_call.id,
-      tool_call.name,
-      tool_call.arguments
-    ])
+    Extensions.execute_hooks(state.hooks, :on_tool_execution_start, [id, name, args])
 
-    tool_name = tool_call.name
-    callbacks.set_working_message.(state, "Running #{tool_name}...")
+    # Emit introspection event for tool call dispatch
+    Introspection.record(:tool_call_dispatched, %{
+      tool_name: name,
+      tool_call_id: id
+    }, engine: "lemon", provenance: :direct)
+
+    callbacks.set_working_message.(state, "Running #{name}...")
     state
   end
 
-  def handle({:tool_end, tool_call, result}, state, callbacks) do
+  def handle({:tool_execution_end, id, name, result, is_error}, state, callbacks) do
     # Execute on_tool_execution_end hooks
-    is_error = Map.get(result, :is_error, false)
-
-    Extensions.execute_hooks(state.hooks, :on_tool_execution_end, [
-      tool_call.id,
-      tool_call.name,
-      result,
-      is_error
-    ])
+    Extensions.execute_hooks(state.hooks, :on_tool_execution_end, [id, name, result, is_error])
 
     callbacks.set_working_message.(state, nil)
     state

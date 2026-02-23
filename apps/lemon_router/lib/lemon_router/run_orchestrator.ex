@@ -16,7 +16,7 @@ defmodule LemonRouter.RunOrchestrator do
   require Logger
 
   alias LemonRouter.{AgentProfiles, ModelSelection, Policy, RunProcess, StickyEngine}
-  alias LemonCore.{RunRequest, SessionKey}
+  alias LemonCore.{Introspection, RunRequest, SessionKey}
   alias LemonChannels.Types.ResumeToken
   alias LemonGateway.Cwd, as: GatewayCwd
   alias LemonChannels.EngineRegistry
@@ -142,6 +142,14 @@ defmodule LemonRouter.RunOrchestrator do
 
     # Generate run_id (honor caller-provided run_id for cron jobs to avoid race conditions)
     run_id = params.run_id || LemonCore.Id.run_id()
+
+    # Emit introspection event for orchestration start
+    Introspection.record(:orchestration_started, %{
+      origin: origin,
+      agent_id: agent_id,
+      queue_mode: queue_mode,
+      engine_id: engine_id
+    }, run_id: run_id, session_key: session_key, agent_id: agent_id, engine: "lemon", provenance: :direct)
 
     # Get session policies (includes model, thinkingLevel, and tool_policy)
     session_config = get_session_config(session_key)
@@ -274,11 +282,20 @@ defmodule LemonRouter.RunOrchestrator do
           # Subscribe control-plane EventBridge to run events for WS delivery
           subscribe_event_bridge(run_id)
 
+          Introspection.record(:orchestration_resolved, %{
+            engine_id: resolved_engine_id,
+            model: resolved_model
+          }, run_id: run_id, session_key: session_key, agent_id: agent_id, engine: "lemon", provenance: :direct)
+
           # Emit telemetry
           LemonCore.Telemetry.run_submit(session_key, origin, resolved_engine_id || "default")
           {:ok, run_id}
 
         {:error, reason} ->
+          Introspection.record(:orchestration_failed, %{
+            reason: safe_error_label(reason)
+          }, run_id: run_id, session_key: session_key, agent_id: agent_id, engine: "lemon", provenance: :direct)
+
           if reason == :run_capacity_reached do
             Logger.warning(
               "Run admission control rejected run_id=#{inspect(run_id)} session_key=#{inspect(session_key)}: #{inspect(reason)}"
@@ -489,4 +506,15 @@ defmodule LemonRouter.RunOrchestrator do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  # Produce a safe, bounded label for introspection error payloads.
+  defp safe_error_label(nil), do: nil
+  defp safe_error_label(err) when is_atom(err), do: Atom.to_string(err)
+  defp safe_error_label(err) when is_binary(err), do: String.slice(err, 0, 80)
+
+  defp safe_error_label(%{__exception__: true} = err),
+    do: err.__struct__ |> Module.split() |> Enum.join(".") |> String.slice(0, 80)
+
+  defp safe_error_label({tag, _detail}) when is_atom(tag), do: Atom.to_string(tag)
+  defp safe_error_label(_), do: "unknown_error"
 end

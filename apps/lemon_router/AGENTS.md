@@ -653,6 +653,26 @@ Beyond the basic lifecycle, RunProcess handles several edge cases:
 - **Preemptive compaction** - After successful runs, checks token usage against context window; if near the limit, marks `:pending_compaction` for proactive context management
 - **Auto file sending** - Tracks generated image paths and requested send files during a run; sends them to Telegram at run completion
 
+## Introspection Events
+
+RunProcess and RunOrchestrator emit introspection events via `LemonCore.Introspection.record/3` for lifecycle observability. All events use `engine: "lemon"` and pass `run_id:`, `session_key:`, `agent_id:` where available.
+
+### RunProcess Events
+
+| Event Type | When Emitted | Key Payload Fields |
+|---|---|---|
+| `:run_started` | `init/1` after state is built | `engine_id`, `queue_mode` |
+| `:run_completed` | `handle_info(:run_completed)` | `ok`, `error`, `duration_ms`, `saw_delta` |
+| `:run_failed` | `terminate/2` on abnormal exit | `reason` |
+
+### RunOrchestrator Events
+
+| Event Type | When Emitted | Key Payload Fields |
+|---|---|---|
+| `:orchestration_started` | `do_submit/2` after run_id generation | `origin`, `agent_id`, `queue_mode`, `engine_id` |
+| `:orchestration_resolved` | Successful `start_run_process` | `engine_id`, `model` |
+| `:orchestration_failed` | Failed `start_run_process` | `reason` |
+
 ## Dependencies
 
 **Umbrella deps:**

@@ -14,7 +14,7 @@ defmodule LemonRouter.RunProcess do
 
   require Logger
 
-  alias LemonCore.{Bus, RunRequest, SessionKey}
+  alias LemonCore.{Bus, Introspection, RunRequest, SessionKey}
   alias LemonChannels.OutboundPayload
   alias LemonChannels.Types.ResumeToken
   alias LemonRouter.{ChannelContext, ChannelsDelivery}
@@ -131,6 +131,12 @@ defmodule LemonRouter.RunProcess do
         "submit_to_gateway?=#{inspect(submit_to_gateway?)}"
     )
 
+    # Emit introspection event for run start
+    Introspection.record(:run_started, %{
+      engine_id: job && job.engine_id,
+      queue_mode: job && job.queue_mode
+    }, run_id: run_id, session_key: session_key, engine: "lemon", provenance: :direct)
+
     # Submit to gateway
     if submit_to_gateway? do
       send(self(), :submit_to_gateway)
@@ -225,6 +231,17 @@ defmodule LemonRouter.RunProcess do
     )
 
     Logger.debug("RunProcess #{state.run_id} completed")
+
+    # Emit introspection event for run completion
+    duration_ms =
+      if state.start_ts_ms, do: LemonCore.Clock.now_ms() - state.start_ts_ms, else: nil
+
+    Introspection.record(:run_completed, %{
+      ok: ok?,
+      error: safe_error_label(err),
+      duration_ms: duration_ms,
+      saw_delta: state.saw_delta
+    }, run_id: state.run_id, session_key: state.session_key, engine: "lemon", provenance: :direct)
 
     # Free the session key ASAP so the next queued run can become active without
     # tripping the SessionRegistry single-flight guard.
@@ -415,6 +432,11 @@ defmodule LemonRouter.RunProcess do
 
     # If not completed normally, emit failure event and attempt abort
     if reason != :normal and not state.completed do
+      # Emit introspection event for run failure
+      Introspection.record(:run_failed, %{
+        reason: safe_error_label(reason)
+      }, run_id: state.run_id, session_key: state.session_key, engine: "lemon", provenance: :direct)
+
       Bus.broadcast(Bus.run_topic(state.run_id), %{
         type: :run_failed,
         run_id: state.run_id,
@@ -760,6 +782,19 @@ defmodule LemonRouter.RunProcess do
       {true, nil}
     end
   end
+
+  # Produce a safe, bounded label for introspection error payloads.
+  # Avoids leaking raw term dumps, stacktraces, or secrets.
+  @spec safe_error_label(term()) :: String.t() | nil
+  defp safe_error_label(nil), do: nil
+  defp safe_error_label(err) when is_atom(err), do: Atom.to_string(err)
+  defp safe_error_label(err) when is_binary(err), do: String.slice(err, 0, 80)
+
+  defp safe_error_label(%{__exception__: true} = err),
+    do: err.__struct__ |> Module.split() |> Enum.join(".") |> String.slice(0, 80)
+
+  defp safe_error_label({tag, _detail}) when is_atom(tag), do: Atom.to_string(tag)
+  defp safe_error_label(_), do: "unknown_error"
 
   @spec extract_completed_usage(LemonCore.Event.t() | term()) :: map() | nil
   defp extract_completed_usage(event) do

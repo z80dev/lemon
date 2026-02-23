@@ -48,6 +48,7 @@ defmodule CodingAgent.Session do
 
   alias AgentCore.Types.AgentTool
   alias CodingAgent.Config
+  alias LemonCore.Introspection
   alias CodingAgent.ExtensionLifecycle
   alias CodingAgent.Extensions
   alias CodingAgent.ResourceLoader
@@ -732,6 +733,19 @@ defmodule CodingAgent.Session do
     }
 
     maybe_register_session(session_manager, cwd, register_session, session_registry)
+
+    # Emit introspection event for session start
+    Introspection.record(:session_started, %{
+      session_id: session_manager.header.id,
+      cwd: cwd,
+      model: model && model.id,
+      session_scope: session_scope
+    },
+      session_key: Keyword.get(opts, :session_key, session_manager.header.id),
+      agent_id: Keyword.get(opts, :agent_id, "default"),
+      engine: "lemon",
+      provenance: :direct
+    )
 
     # Schedule the extension status report event to be published after init completes.
     # This allows subscribers to receive the event after they subscribe.
@@ -1515,6 +1529,12 @@ defmodule CodingAgent.Session do
   @spec terminate(term(), t()) :: :ok
   @impl true
   def terminate(_reason, state) do
+    # Emit introspection event for session end
+    Introspection.record(:session_ended, %{
+      session_id: state.session_manager && state.session_manager.header.id,
+      turn_count: state.turn_index
+    }, engine: "lemon", provenance: :direct)
+
     # Stop the underlying agent when the session terminates
     if state.agent && Process.alive?(state.agent) do
       GenServer.stop(state.agent, :normal)
@@ -2745,6 +2765,12 @@ defmodule CodingAgent.Session do
     # Rebuild messages from the new position and update agent
     messages = restore_messages_from_session(session_manager)
     :ok = AgentCore.Agent.replace_messages(state.agent, messages)
+
+    # Emit introspection event for compaction
+    Introspection.record(:compaction_triggered, %{
+      tokens_before: result.tokens_before,
+      first_kept_entry_id: result.first_kept_entry_id
+    }, engine: "lemon", provenance: :direct)
 
     # Broadcast compaction event to listeners
     compaction_event =
