@@ -883,4 +883,36 @@ defmodule LemonRouter.RunOrchestratorTest do
       }
     }
   end
+
+  describe "counts/0 non-placeholder behavior" do
+    test "active reflects DynamicSupervisor children" do
+      counts = RunOrchestrator.counts()
+      assert is_integer(counts.active)
+      assert counts.active >= 0
+    end
+
+    test "queued is driven by telemetry, not hardcoded to 0" do
+      before = RunOrchestrator.counts().queued
+
+      :telemetry.execute([:lemon, :run, :submit], %{count: 1}, %{
+        session_key: "test:counts",
+        origin: :test,
+        engine: "echo"
+      })
+
+      after_submit = RunOrchestrator.counts().queued
+      assert after_submit == before + 1
+    end
+
+    test "completed_today is driven by telemetry, not hardcoded to 0" do
+      before = RunOrchestrator.counts().completed_today
+
+      :telemetry.execute([:lemon, :run, :stop], %{duration_ms: 50, ok: true}, %{
+        run_id: "run_counts_test"
+      })
+
+      after_stop = RunOrchestrator.counts().completed_today
+      assert after_stop == before + 1
+    end
+  end
 end

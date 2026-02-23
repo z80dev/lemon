@@ -15,7 +15,7 @@ defmodule LemonGateway.Voice.CallSession do
 
   require Logger
 
-  alias LemonGateway.Voice.Config
+  alias LemonGateway.Voice.{AudioConversion, Config}
 
   # Call states
   defstruct [
@@ -36,21 +36,21 @@ defmodule LemonGateway.Voice.CallSession do
   ]
 
   @type t :: %__MODULE__{
-    call_sid: String.t(),
-    from_number: String.t(),
-    to_number: String.t(),
-    twilio_ws_pid: pid() | nil,
-    deepgram_ws_pid: pid() | nil,
-    started_at: DateTime.t(),
-    last_activity_at: DateTime.t(),
-    current_utterance: String.t(),
-    is_speaking: boolean(),
-    is_processing: boolean(),
-    response_queue: list(),
-    session_key: String.t(),
-    conversation_history: list(),
-    interruption_detected: boolean()
-  }
+          call_sid: String.t(),
+          from_number: String.t(),
+          to_number: String.t(),
+          twilio_ws_pid: pid() | nil,
+          deepgram_ws_pid: pid() | nil,
+          started_at: DateTime.t(),
+          last_activity_at: DateTime.t(),
+          current_utterance: String.t(),
+          is_speaking: boolean(),
+          is_processing: boolean(),
+          response_queue: list(),
+          session_key: String.t(),
+          conversation_history: list(),
+          interruption_detected: boolean()
+        }
 
   # Client API
 
@@ -189,7 +189,10 @@ defmodule LemonGateway.Voice.CallSession do
     {:noreply, %{state | last_activity_at: DateTime.utc_now()}}
   end
 
-  def handle_cast({:transcript, %{"is_final" => true, "channel" => %{"alternatives" => alternatives}}}, state) do
+  def handle_cast(
+        {:transcript, %{"is_final" => true, "channel" => %{"alternatives" => alternatives}}},
+        state
+      ) do
     transcript = get_best_transcript(alternatives)
 
     if transcript != "" do
@@ -208,7 +211,10 @@ defmodule LemonGateway.Voice.CallSession do
     end
   end
 
-  def handle_cast({:transcript, %{"is_final" => false, "channel" => %{"alternatives" => alternatives}}}, state) do
+  def handle_cast(
+        {:transcript, %{"is_final" => false, "channel" => %{"alternatives" => alternatives}}},
+        state
+      ) do
     # Interim transcript - update current utterance for interruption detection
     transcript = get_best_transcript(alternatives)
     {:noreply, %{state | current_utterance: transcript}}
@@ -262,6 +268,7 @@ defmodule LemonGateway.Voice.CallSession do
       case synthesize_speech(text) do
         {:ok, audio_data} ->
           send(owner, {:audio_ready, audio_data, text})
+
         {:error, reason} ->
           Logger.error("TTS failed: #{inspect(reason)}")
           send(owner, :speech_complete)
@@ -337,15 +344,18 @@ defmodule LemonGateway.Voice.CallSession do
     # History is stored in reverse order (prepended), so reverse to get chronological order
     messages = [
       %{role: "system", content: Config.system_prompt()}
-      | history |> Enum.reverse() |> Enum.take(10) # Keep last 10 messages for context
+      # Keep last 10 messages for context
+      | history |> Enum.reverse() |> Enum.take(10)
     ]
 
     # Use the AI module to generate response
     case LemonGateway.AI.chat_completion(Config.llm_model(), messages, %{max_tokens: 150}) do
       {:ok, %{"choices" => [%{"message" => %{"content" => content}} | _]}} ->
         content
+
       {:ok, %{"content" => content}} ->
         content
+
       _ ->
         "I'm sorry, I didn't catch that. Could you say it again?"
     end
@@ -363,14 +373,15 @@ defmodule LemonGateway.Voice.CallSession do
       {~c"content-type", ~c"application/json"}
     ]
 
-    body = Jason.encode!(%{
-      text: text,
-      model_id: "eleven_turbo_v2_5",
-      voice_settings: %{
-        stability: 0.5,
-        similarity_boost: 0.75
-      }
-    })
+    body =
+      Jason.encode!(%{
+        text: text,
+        model_id: "eleven_turbo_v2_5",
+        voice_settings: %{
+          stability: 0.5,
+          similarity_boost: 0.75
+        }
+      })
 
     case :httpc.request(
            :post,
@@ -391,14 +402,24 @@ defmodule LemonGateway.Voice.CallSession do
     end
   end
 
-  defp convert_pcm_to_mulaw(pcm_data) do
-    # ElevenLabs returns MP3 or PCM, we need to convert to mulaw 8kHz for Twilio
-    # For now, assume we get PCM and do basic conversion
-    # In production, use FFmpeg or similar
+  defp convert_pcm_to_mulaw(audio_data) do
+    # ElevenLabs may return MP3 or raw PCM depending on configuration.
+    # Twilio expects 8-bit mu-law (G.711) at 8000 Hz, mono.
+    if AudioConversion.mp3_data?(audio_data) do
+      # MP3 data detected — mu-law encoding requires raw PCM input.
+      # Log a warning; MP3 decoding requires an external step (e.g. ffmpeg)
+      # that is out of scope for the pure-Elixir path. Pass through as-is
+      # so the caller can observe the issue via Twilio playback artifacts.
+      Logger.warning(
+        "Audio data appears to be MP3-encoded; mu-law conversion requires PCM input. " <>
+          "Configure ElevenLabs to return PCM format or add an MP3 decode step."
+      )
 
-    # This is a placeholder - real implementation needs proper audio conversion
-    # Twilio expects 8000Hz, mono, mulaw encoded audio
-    pcm_data
+      audio_data
+    else
+      # Assume 16-bit signed little-endian PCM — encode to mu-law
+      AudioConversion.pcm16_to_mulaw(audio_data)
+    end
   end
 
   defp schedule_call_timeout do

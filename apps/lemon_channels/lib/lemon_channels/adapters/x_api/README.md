@@ -191,13 +191,18 @@ The client automatically retries with exponential backoff. If consistently hitti
 
 Ensure your app has "Read and Write" permissions enabled in the X Developer Portal.
 
-## TODO
+## Backlog
 
-- [ ] Media upload (images) support
-- [ ] Poll creation
-- [ ] Thread posting helper
-- [ ] Webhook handling for mentions/DMs
-- [ ] Metrics/usage tracking integration
+Tracked items with owners and target phases. Each item should be
+linked to a GitHub issue when work begins.
+
+| Item | Owner | Target Phase | Status | Notes |
+|------|-------|-------------|--------|-------|
+| Media upload (images) support | @platform-team | Phase 13 | Planned | Requires X API v2 media upload endpoint; upload -> attach to tweet flow |
+| Poll creation | @platform-team | Phase 15 | Planned | Low priority; X API v2 polls require elevated access |
+| Thread posting helper | @platform-team | Phase 12 | Planned | Build on existing `Client.reply/2`; auto-split long text into threads |
+| Webhook handling for mentions/DMs | @platform-team | Phase 12 | Planned | Needed for real-time inbound; currently relies on polling via `get_mentions` |
+| Metrics/usage tracking integration | @platform-team | Phase 14 | Planned | Track API credit usage, rate limit headroom, post engagement |
 
 ## References
 

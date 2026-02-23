@@ -6,7 +6,7 @@ defmodule MarketIntel.Commentary.PipelineTest do
   - Trigger processing for all trigger types
   - Tweet generation with different vibes
   - Market snapshot integration
-  - AI provider fallback behavior
+  - AI provider integration and fallback behavior
   - Error handling
   - GenStage callbacks
   - Commentary storage
@@ -374,7 +374,7 @@ defmodule MarketIntel.Commentary.PipelineTest do
     end
   end
 
-  describe "AI provider fallback" do
+  describe "AI provider integration" do
     test "checks if OpenAI is configured" do
       # When not configured, should return false
       configured = MarketIntel.Secrets.configured?(:openai_key)
@@ -384,6 +384,23 @@ defmodule MarketIntel.Commentary.PipelineTest do
     test "checks if Anthropic is configured" do
       configured = MarketIntel.Secrets.configured?(:anthropic_key)
       assert is_boolean(configured)
+    end
+
+    test "generate_with_provider/3 returns error for unknown model" do
+      result = Pipeline.generate_with_provider(:anthropic, "nonexistent-model", "test prompt")
+      assert {:error, {:model_not_found, :anthropic, "nonexistent-model"}} = result
+    end
+
+    test "generate_with_provider/3 handles AI module errors gracefully" do
+      # Using a valid model but without API keys should return an error, not crash
+      result =
+        Pipeline.generate_with_provider(
+          :anthropic,
+          "claude-3-5-haiku-20241022",
+          "Write a test tweet"
+        )
+
+      assert match?({:error, _}, result) or match?({:ok, _}, result)
     end
 
     test "fallback templates exist" do

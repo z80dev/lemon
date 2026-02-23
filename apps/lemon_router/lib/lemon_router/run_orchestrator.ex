@@ -72,8 +72,9 @@ defmodule LemonRouter.RunOrchestrator do
   @doc """
   Lightweight run counts for status UIs.
 
-  `queued` and `completed_today` are placeholders (the router does not own a
-  durable queue); `active` reflects current supervised run processes.
+  `active` reflects current supervised run processes.
+  `queued` and `completed_today` are derived from telemetry counters
+  maintained by `LemonRouter.RunCountTracker`.
   """
   @spec counts() :: %{
           active: non_neg_integer(),
@@ -89,7 +90,14 @@ defmodule LemonRouter.RunOrchestrator do
         _ -> 0
       end
 
-    %{active: active, queued: 0, completed_today: 0}
+    {queued, completed_today} =
+      try do
+        {LemonRouter.RunCountTracker.queued(), LemonRouter.RunCountTracker.completed_today()}
+      rescue
+        _ -> {0, 0}
+      end
+
+    %{active: active, queued: queued, completed_today: completed_today}
   end
 
   @impl true
@@ -185,7 +193,10 @@ defmodule LemonRouter.RunOrchestrator do
 
       session_model = session_config[:model] || session_config["model"]
       session_thinking_level = session_config[:thinking_level] || session_config["thinking_level"]
-      session_preferred_engine = session_config[:preferred_engine] || session_config["preferred_engine"]
+
+      session_preferred_engine =
+        session_config[:preferred_engine] || session_config["preferred_engine"]
+
       profile_model = map_get(agent_profile, :model)
       profile_default_engine = map_get(agent_profile, :default_engine)
       profile_system_prompt = map_get(agent_profile, :system_prompt)
