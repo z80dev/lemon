@@ -46,6 +46,7 @@ defmodule Ai.Providers.OpenAIResponses do
   alias Ai.EventStream
   alias Ai.Providers.HttpTrace
   alias Ai.Providers.OpenAIResponsesShared
+  alias LemonCore.Secrets
 
   # Providers that use OpenAI-style tool call IDs
   @tool_call_providers MapSet.new([:openai, :"openai-codex", :opencode])
@@ -62,7 +63,7 @@ defmodule Ai.Providers.OpenAIResponses do
 
   @impl true
   def get_env_api_key do
-    System.get_env("OPENAI_API_KEY")
+    Secrets.fetch_value("OPENAI_API_KEY")
   end
 
   @impl true
@@ -187,7 +188,7 @@ defmodule Ai.Providers.OpenAIResponses do
         _ -> nil
       end
 
-    if env_var, do: System.get_env(env_var), else: nil
+    if env_var, do: Secrets.fetch_value(env_var), else: nil
   end
 
   defp missing_api_key_error(:opencode),

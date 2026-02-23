@@ -54,6 +54,7 @@ defmodule Ai.Providers.OpenAICompletions do
   }
 
   alias Ai.EventStream
+  alias LemonCore.Secrets
 
   require Logger
 
@@ -69,7 +70,7 @@ defmodule Ai.Providers.OpenAICompletions do
 
   @impl Ai.Provider
   def get_env_api_key do
-    System.get_env("OPENAI_API_KEY")
+    Secrets.fetch_value("OPENAI_API_KEY")
   end
 
   @impl Ai.Provider
@@ -182,7 +183,7 @@ defmodule Ai.Providers.OpenAICompletions do
         _ -> nil
       end
 
-    if env_var, do: System.get_env(env_var), else: nil
+    if env_var, do: Secrets.fetch_value(env_var), else: nil
   end
 
   defp build_url(model) do

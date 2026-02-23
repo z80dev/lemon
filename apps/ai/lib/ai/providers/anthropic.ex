@@ -23,6 +23,7 @@ defmodule Ai.Providers.Anthropic do
 
   alias Ai.EventStream
   alias Ai.Providers.HttpTrace
+  alias LemonCore.Secrets
 
   alias Ai.Types.{
     AssistantMessage,
@@ -56,7 +57,7 @@ defmodule Ai.Providers.Anthropic do
 
   @impl true
   def get_env_api_key do
-    System.get_env("ANTHROPIC_API_KEY")
+    Secrets.fetch_value("ANTHROPIC_API_KEY")
   end
 
   @impl true
@@ -246,7 +247,7 @@ defmodule Ai.Providers.Anthropic do
   defp provider_env_vars(_), do: ["ANTHROPIC_API_KEY"]
 
   defp env_value(name) when is_binary(name) do
-    case System.get_env(name) do
+    case Secrets.fetch_value(name) do
       value when is_binary(value) and value != "" -> value
       _ -> nil
     end

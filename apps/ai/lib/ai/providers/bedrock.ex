@@ -30,6 +30,7 @@ defmodule Ai.Providers.Bedrock do
   alias Ai.Types.{TextContent, ThinkingContent, ToolCall}
   alias Ai.Types.{UserMessage, ToolResultMessage}
   alias Ai.Providers.TextSanitizer
+  alias LemonCore.Secrets
 
   require Logger
 
@@ -200,15 +201,15 @@ defmodule Ai.Providers.Bedrock do
   defp get_credentials(opts) do
     access_key =
       Map.get(opts.headers, "aws_access_key_id") ||
-        System.get_env("AWS_ACCESS_KEY_ID")
+        Secrets.fetch_value("AWS_ACCESS_KEY_ID")
 
     secret_key =
       Map.get(opts.headers, "aws_secret_access_key") ||
-        System.get_env("AWS_SECRET_ACCESS_KEY")
+        Secrets.fetch_value("AWS_SECRET_ACCESS_KEY")
 
     session_token =
       Map.get(opts.headers, "aws_session_token") ||
-        System.get_env("AWS_SESSION_TOKEN")
+        Secrets.fetch_value("AWS_SESSION_TOKEN")
 
     cond do
       is_nil(access_key) ->

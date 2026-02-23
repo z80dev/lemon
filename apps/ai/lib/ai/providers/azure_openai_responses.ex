@@ -59,6 +59,7 @@ defmodule Ai.Providers.AzureOpenAIResponses do
 
   alias Ai.EventStream
   alias Ai.Providers.OpenAIResponsesShared
+  alias LemonCore.Secrets
 
   require Logger
 
@@ -88,7 +89,7 @@ defmodule Ai.Providers.AzureOpenAIResponses do
 
   @impl true
   def get_env_api_key do
-    System.get_env("AZURE_OPENAI_API_KEY")
+    Secrets.fetch_value("AZURE_OPENAI_API_KEY")
   end
 
   @impl true

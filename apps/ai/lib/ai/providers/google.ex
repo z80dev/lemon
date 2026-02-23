@@ -25,6 +25,7 @@ defmodule Ai.Providers.Google do
 
   alias Ai.EventStream
   alias Ai.Providers.GoogleShared
+  alias LemonCore.Secrets
 
   alias Ai.Types.{
     AssistantMessage,
@@ -52,9 +53,9 @@ defmodule Ai.Providers.Google do
 
   @impl true
   def get_env_api_key do
-    System.get_env("GOOGLE_GENERATIVE_AI_API_KEY") ||
-      System.get_env("GOOGLE_API_KEY") ||
-      System.get_env("GEMINI_API_KEY")
+    Secrets.fetch_value("GOOGLE_GENERATIVE_AI_API_KEY") ||
+      Secrets.fetch_value("GOOGLE_API_KEY") ||
+      Secrets.fetch_value("GEMINI_API_KEY")
   end
 
   @impl true
@@ -123,8 +124,8 @@ defmodule Ai.Providers.Google do
     end
   end
 
-  defp get_provider_env_key(:opencode), do: System.get_env("OPENCODE_API_KEY")
-  defp get_provider_env_key("opencode"), do: System.get_env("OPENCODE_API_KEY")
+  defp get_provider_env_key(:opencode), do: Secrets.fetch_value("OPENCODE_API_KEY")
+  defp get_provider_env_key("opencode"), do: Secrets.fetch_value("OPENCODE_API_KEY")
   defp get_provider_env_key(_), do: nil
 
   defp init_output(model) do

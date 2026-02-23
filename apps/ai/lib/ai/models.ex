@@ -26,6 +26,7 @@ defmodule Ai.Models do
   """
 
   alias Ai.Types.{Model, ModelCost}
+  alias LemonCore.Secrets
 
   @default_openai_base_url "https://api.openai.com/v1"
   @default_openai_discovery_timeout_ms 4_000
@@ -502,7 +503,7 @@ defmodule Ai.Models do
   end
 
   defp resolve_openai_api_key(opts) do
-    case Keyword.get(opts, :openai_api_key) || System.get_env("OPENAI_API_KEY") do
+    case Keyword.get(opts, :openai_api_key) || Secrets.fetch_value("OPENAI_API_KEY") do
       key when is_binary(key) and key != "" -> {:ok, key}
       _ -> {:error, :missing_api_key}
     end

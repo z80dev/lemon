@@ -52,6 +52,7 @@ defmodule Ai.Providers.OpenAICodexResponses do
 
   alias Ai.EventStream
   alias Ai.Providers.OpenAIResponsesShared
+  alias LemonCore.Secrets
 
   require Logger
 
@@ -88,8 +89,8 @@ defmodule Ai.Providers.OpenAICodexResponses do
 
   @impl true
   def get_env_api_key do
-    System.get_env("OPENAI_CODEX_API_KEY") ||
-      System.get_env("CHATGPT_TOKEN") ||
+    Secrets.fetch_value("OPENAI_CODEX_API_KEY") ||
+      Secrets.fetch_value("CHATGPT_TOKEN") ||
       Ai.Auth.OpenAICodexOAuth.resolve_access_token()
   end
 
