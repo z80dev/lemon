@@ -6,6 +6,30 @@ This document provides a comprehensive reference of all telemetry events emitted
 
 Lemon uses Erlang's `:telemetry` library for observability. Events are emitted at key points in the system to enable monitoring, debugging, and performance analysis.
 
+## Introspection Storage Contract (M1)
+
+Telemetry events can be normalized into a canonical introspection envelope via `LemonCore.Introspection` and persisted through `LemonCore.Store`.
+
+Canonical fields:
+
+- `event_id` - unique event identifier
+- `event_type` - taxonomy event name
+- `ts_ms` - timestamp in milliseconds
+- `run_id`, `session_key`, `agent_id`, `parent_run_id`, `engine`
+- `provenance` - `:direct | :inferred | :unavailable`
+- `payload` - redacted event payload
+
+APIs:
+
+- `LemonCore.Introspection.record/3` - build + persist canonical events
+- `LemonCore.Introspection.list/1` - list events with filters (`run_id`, `session_key`, `agent_id`, `event_type`, `since_ms`, `until_ms`, `limit`)
+- `LemonCore.Store.append_introspection_event/1` - low-level append
+- `LemonCore.Store.list_introspection_events/1` - low-level filtered query
+
+Retention:
+
+- `LemonCore.Store` applies periodic retention sweep for `:introspection_log` (default: 7 days).
+
 ## Attaching Handlers
 
 ```elixir

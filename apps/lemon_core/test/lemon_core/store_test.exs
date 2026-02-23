@@ -91,6 +91,24 @@ defmodule LemonCore.StoreTest do
   defp run_id(token, name), do: "run_#{token}_#{name}"
   defp session_key(token), do: "agent:store_test_#{token}:main"
 
+  defp introspection_event(token, name, ts_ms, attrs \\ %{}) do
+    Map.merge(
+      %{
+        event_id: "evt_#{token}_#{name}",
+        event_type: :tool_completed,
+        ts_ms: ts_ms,
+        run_id: run_id(token, :introspection),
+        session_key: session_key(token),
+        agent_id: "agent_#{token}",
+        parent_run_id: nil,
+        engine: "codex",
+        provenance: :direct,
+        payload: %{tool_name: "exec", is_error: false}
+      },
+      attrs
+    )
+  end
+
   defp swap_store_backend(backend, backend_state) do
     original_state = :sys.get_state(Store)
 
@@ -229,6 +247,8 @@ defmodule LemonCore.StoreTest do
       assert Store.get_run_by_progress(scope_b, progress_msg_id) == "run_b_v1"
 
       :ok = Store.put_progress_mapping(scope_a, progress_msg_id, "run_a_v2")
+      # Use a synchronous call as a mailbox barrier so async casts are applied in order.
+      assert Store.get(:progress, {scope_a, progress_msg_id}) == "run_a_v2"
       assert Store.get_run_by_progress(scope_a, progress_msg_id) == "run_a_v2"
 
       :ok = Store.delete_progress_mapping(scope_a, progress_msg_id)
@@ -303,6 +323,105 @@ defmodule LemonCore.StoreTest do
     end
   end
 
+  describe "introspection event storage contract" do
+    test "append/list stores canonical events newest-first with filters and limit" do
+      token = unique_token()
+      run_id = run_id(token, :introspection)
+      session_key = session_key(token)
+      base_ts = System.system_time(:millisecond)
+
+      older =
+        introspection_event(token, :older, base_ts - 2_000, %{
+          event_type: :run_started,
+          payload: %{phase: :start}
+        })
+
+      middle =
+        introspection_event(token, :middle, base_ts - 1_000, %{
+          event_type: :tool_started,
+          payload: %{tool_name: "bash"}
+        })
+
+      newest =
+        introspection_event(token, :newest, base_ts, %{
+          event_type: :tool_completed,
+          payload: %{tool_name: "bash", is_error: false}
+        })
+
+      assert :ok = Store.append_introspection_event(older)
+      assert :ok = Store.append_introspection_event(middle)
+      assert :ok = Store.append_introspection_event(newest)
+
+      all_events = Store.list_introspection_events(limit: 10)
+      matching = Enum.filter(all_events, &(&1.run_id == run_id))
+
+      assert Enum.map(matching, & &1.event_id) == [
+               newest.event_id,
+               middle.event_id,
+               older.event_id
+             ]
+
+      limited =
+        Store.list_introspection_events(
+          run_id: run_id,
+          session_key: session_key,
+          limit: 2
+        )
+
+      assert Enum.map(limited, & &1.event_id) == [newest.event_id, middle.event_id]
+      assert Enum.all?(limited, &(&1.session_key == session_key))
+
+      typed = Store.list_introspection_events(run_id: run_id, event_type: :tool_started)
+      assert Enum.map(typed, & &1.event_id) == [middle.event_id]
+
+      ranged =
+        Store.list_introspection_events(
+          run_id: run_id,
+          since_ms: base_ts - 1_500,
+          until_ms: base_ts - 500
+        )
+
+      assert Enum.map(ranged, & &1.event_id) == [middle.event_id]
+    end
+
+    test "append_introspection_event rejects invalid canonical events" do
+      token = unique_token()
+      event = introspection_event(token, :invalid, System.system_time(:millisecond))
+
+      assert {:error, :invalid_introspection_event} =
+               Store.append_introspection_event(Map.delete(event, :event_id))
+
+      assert {:error, :invalid_introspection_event} =
+               Store.append_introspection_event(%{event | provenance: :unknown})
+
+      assert {:error, :invalid_introspection_event} =
+               Store.append_introspection_event(%{event | payload: "not-a-map"})
+    end
+
+    test "sweep removes introspection events older than retention" do
+      token = unique_token()
+      now = System.system_time(:millisecond)
+      old_event = introspection_event(token, :old, now - 10_000)
+      live_event = introspection_event(token, :live, now)
+
+      assert :ok = Store.append_introspection_event(old_event)
+      assert :ok = Store.append_introspection_event(live_event)
+
+      :sys.replace_state(Store, fn state ->
+        %{state | introspection_retention_ms: 2_000}
+      end)
+
+      send(Store, :sweep_expired_chat_states)
+
+      filtered =
+        Store.list_introspection_events(run_id: old_event.run_id, limit: 10)
+        |> Enum.map(& &1.event_id)
+
+      assert live_event.event_id in filtered
+      refute old_event.event_id in filtered
+    end
+  end
+
   describe "backend error handling" do
     test "generic put returns error and store remains alive on sqlite busy" do
       original_state = swap_store_backend(BusyBackend, %{})
@@ -353,7 +472,9 @@ defmodule LemonCore.StoreTest do
       assert String.contains?(prompt, "[truncated")
 
       store_state = :sys.get_state(Store)
-      [{:run_history_put_count, 2}] = :ets.lookup(store_state.backend_state.tid, :run_history_put_count)
+
+      [{:run_history_put_count, 2}] =
+        :ets.lookup(store_state.backend_state.tid, :run_history_put_count)
     end
   end
 end

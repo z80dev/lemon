@@ -36,6 +36,10 @@ defmodule LemonCoreTest do
       assert Code.ensure_loaded?(LemonCore.Store)
     end
 
+    test "LemonCore.Introspection module exists" do
+      assert Code.ensure_loaded?(LemonCore.Introspection)
+    end
+
     test "LemonCore.Telemetry module exists" do
       assert Code.ensure_loaded?(LemonCore.Telemetry)
     end

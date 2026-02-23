@@ -44,6 +44,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Dedupe.Ets` | Low-level ETS-backed TTL deduplication (`:seen?`, `:check_and_mark`) |
 | `LemonCore.ExecApprovals` | Tool execution approval flow with scope-based persistence |
 | `LemonCore.Telemetry` | Telemetry event helpers |
+| `LemonCore.Introspection` | Canonical introspection envelope builder and persistence API |
 | `LemonCore.Httpc` | `:httpc` wrapper ensuring `:inets`/`:ssl` started |
 | `LemonCore.Clock` | Time utilities (monotonic timestamps) |
 | `LemonCore.Id` | UUID and unique ID generation |
@@ -212,6 +213,18 @@ policy = LemonCore.Store.get_runtime_policy()
 :ok = LemonCore.Store.put_progress_mapping(scope, progress_msg_id, run_id)
 run_id = LemonCore.Store.get_run_by_progress(scope, progress_msg_id)
 :ok = LemonCore.Store.delete_progress_mapping(scope, progress_msg_id)
+
+# Introspection events (canonical envelope + filtered queries)
+:ok =
+  LemonCore.Introspection.record(
+    :tool_completed,
+    %{tool_name: "exec", result_preview: "ok"},
+    run_id: run_id,
+    session_key: session_key,
+    engine: "codex"
+  )
+
+events = LemonCore.Introspection.list(run_id: run_id, limit: 50)
 ```
 
 ## Event Bus Usage Patterns

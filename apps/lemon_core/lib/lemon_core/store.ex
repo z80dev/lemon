@@ -32,6 +32,10 @@ defmodule LemonCore.Store do
   @runtime_policy_key :global
   @compact_history_answer_bytes 16_000
   @compact_history_prompt_bytes 8_000
+  @default_introspection_retention_days 7
+  @default_introspection_retention_ms @default_introspection_retention_days * 24 * 60 * 60 * 1000
+  @default_introspection_query_limit 100
+  @max_introspection_query_limit 1_000
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -276,6 +280,34 @@ defmodule LemonCore.Store do
     end
   end
 
+  # Introspection Event API
+
+  @doc """
+  Append a canonical introspection event.
+  """
+  @spec append_introspection_event(map()) :: :ok | {:error, term()}
+  def append_introspection_event(event) do
+    GenServer.call(__MODULE__, {:append_introspection_event, event})
+  end
+
+  @doc """
+  List introspection events.
+
+  ## Options
+
+    * `:run_id` - Filter by run id
+    * `:session_key` - Filter by session key
+    * `:agent_id` - Filter by agent id
+    * `:event_type` - Filter by event type
+    * `:since_ms` - Include events at or after this timestamp
+    * `:until_ms` - Include events at or before this timestamp
+    * `:limit` - Maximum number of events to return (default: #{@default_introspection_query_limit})
+  """
+  @spec list_introspection_events(keyword()) :: [map()]
+  def list_introspection_events(opts \\ []) do
+    GenServer.call(__MODULE__, {:list_introspection_events, opts})
+  end
+
   # GenServer Implementation
 
   @impl true
@@ -300,7 +332,8 @@ defmodule LemonCore.Store do
          %{
            backend: backend,
            backend_state: backend_state,
-           chat_state_ttl_ms: chat_state_ttl_ms
+           chat_state_ttl_ms: chat_state_ttl_ms,
+           introspection_retention_ms: @default_introspection_retention_ms
          }}
 
       {:error, reason} ->
@@ -443,6 +476,54 @@ defmodule LemonCore.Store do
 
       other ->
         log_backend_unexpected(:list, :run_history, session_key, other)
+        {:reply, [], state}
+    end
+  end
+
+  def handle_call({:append_introspection_event, event}, _from, state) do
+    case normalize_introspection_event(event) do
+      {:ok, event} ->
+        key = {event.ts_ms, event.event_id}
+
+        case state.backend.put(state.backend_state, :introspection_log, key, event) do
+          {:ok, backend_state} ->
+            {:reply, :ok, %{state | backend_state: backend_state}}
+
+          {:error, reason} ->
+            log_backend_error(:put, :introspection_log, key, reason)
+            {:reply, {:error, reason}, state}
+
+          other ->
+            log_backend_unexpected(:put, :introspection_log, key, other)
+            {:reply, {:error, {:unexpected_backend_response, other}}, state}
+        end
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:list_introspection_events, opts}, _from, state) do
+    limit =
+      normalize_introspection_limit(Keyword.get(opts, :limit, @default_introspection_query_limit))
+
+    case state.backend.list(state.backend_state, :introspection_log) do
+      {:ok, entries, backend_state} ->
+        events =
+          entries
+          |> Enum.map(fn {_key, event} -> event end)
+          |> Enum.filter(&introspection_event_matches?(&1, opts))
+          |> Enum.sort_by(&introspection_sort_key/1, :desc)
+          |> Enum.take(limit)
+
+        {:reply, events, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:list, :introspection_log, :all, reason)
+        {:reply, [], state}
+
+      other ->
+        log_backend_unexpected(:list, :introspection_log, :all, other)
         {:reply, [], state}
     end
   end
@@ -913,7 +994,10 @@ defmodule LemonCore.Store do
 
     summary
     |> map_put_any([:completed, "completed"], completed)
-    |> map_update_any([:prompt, "prompt"], &truncate_binary_field(&1, @compact_history_prompt_bytes))
+    |> map_update_any(
+      [:prompt, "prompt"],
+      &truncate_binary_field(&1, @compact_history_prompt_bytes)
+    )
     |> deep_truncate_text(@compact_history_answer_bytes)
   end
 
@@ -923,8 +1007,14 @@ defmodule LemonCore.Store do
 
   defp compact_completed(completed) when is_map(completed) do
     completed
-    |> map_update_any([:answer, "answer"], &truncate_binary_field(&1, @compact_history_answer_bytes))
-    |> map_update_any([:error, "error"], &truncate_binary_field(&1, @compact_history_prompt_bytes))
+    |> map_update_any(
+      [:answer, "answer"],
+      &truncate_binary_field(&1, @compact_history_answer_bytes)
+    )
+    |> map_update_any(
+      [:error, "error"],
+      &truncate_binary_field(&1, @compact_history_prompt_bytes)
+    )
   end
 
   defp compact_completed(other), do: other
@@ -951,7 +1041,8 @@ defmodule LemonCore.Store do
 
   defp map_put_any(map, _keys, _value), do: map
 
-  defp map_update_any(map, keys, fun) when is_map(map) and is_list(keys) and is_function(fun, 1) do
+  defp map_update_any(map, keys, fun)
+       when is_map(map) and is_list(keys) and is_function(fun, 1) do
     Enum.reduce(keys, map, fn key, acc ->
       if Map.has_key?(acc, key), do: Map.update!(acc, key, fun), else: acc
     end)
@@ -986,7 +1077,8 @@ defmodule LemonCore.Store do
 
   defp deep_truncate_text(term, _max_bytes), do: term
 
-  defp truncate_binary_field(value, max_bytes) when is_binary(value) and byte_size(value) > max_bytes do
+  defp truncate_binary_field(value, max_bytes)
+       when is_binary(value) and byte_size(value) > max_bytes do
     prefix = value |> binary_part(0, max_bytes) |> trim_to_valid_utf8()
     "#{prefix}...[truncated #{byte_size(value) - byte_size(prefix)} bytes]"
   end
@@ -1005,9 +1097,137 @@ defmodule LemonCore.Store do
     end
   end
 
+  defp normalize_introspection_event(event) when is_map(event) do
+    event_id = MapHelpers.get_key(event, :event_id)
+    ts_ms = MapHelpers.get_key(event, :ts_ms)
+    event_type = MapHelpers.get_key(event, :event_type)
+    payload = MapHelpers.get_key(event, :payload) || %{}
+    provenance = MapHelpers.get_key(event, :provenance) || :direct
+
+    with true <- is_binary(event_id) and event_id != "",
+         true <- is_integer(ts_ms) and ts_ms > 0,
+         true <- valid_introspection_event_type?(event_type),
+         true <- valid_introspection_provenance?(provenance),
+         true <- is_map(payload) do
+      {:ok,
+       %{
+         event_id: event_id,
+         event_type: event_type,
+         ts_ms: ts_ms,
+         run_id: normalize_optional_binary(MapHelpers.get_key(event, :run_id)),
+         session_key: normalize_optional_binary(MapHelpers.get_key(event, :session_key)),
+         agent_id: normalize_optional_binary(MapHelpers.get_key(event, :agent_id)),
+         parent_run_id: normalize_optional_binary(MapHelpers.get_key(event, :parent_run_id)),
+         engine: normalize_optional_binary(MapHelpers.get_key(event, :engine)),
+         provenance: provenance,
+         payload: payload
+       }}
+    else
+      _ -> {:error, :invalid_introspection_event}
+    end
+  end
+
+  defp normalize_introspection_event(_), do: {:error, :invalid_introspection_event}
+
+  defp valid_introspection_event_type?(value) when is_atom(value), do: not is_nil(value)
+  defp valid_introspection_event_type?(value) when is_binary(value), do: value != ""
+  defp valid_introspection_event_type?(_), do: false
+
+  defp valid_introspection_provenance?(value), do: value in [:direct, :inferred, :unavailable]
+
+  defp normalize_optional_binary(value) when is_binary(value) and value != "", do: value
+  defp normalize_optional_binary(_), do: nil
+
+  defp introspection_event_matches?(event, opts) do
+    run_id = Keyword.get(opts, :run_id)
+    session_key = Keyword.get(opts, :session_key)
+    agent_id = Keyword.get(opts, :agent_id)
+    event_type = Keyword.get(opts, :event_type)
+    since_ms = Keyword.get(opts, :since_ms)
+    until_ms = Keyword.get(opts, :until_ms)
+
+    event_run_id = MapHelpers.get_key(event, :run_id)
+    event_session_key = MapHelpers.get_key(event, :session_key)
+    event_agent_id = MapHelpers.get_key(event, :agent_id)
+    event_event_type = MapHelpers.get_key(event, :event_type)
+    event_ts_ms = MapHelpers.get_key(event, :ts_ms)
+
+    optional_binary_match?(run_id, event_run_id) and
+      optional_binary_match?(session_key, event_session_key) and
+      optional_binary_match?(agent_id, event_agent_id) and
+      optional_event_type_match?(event_type, event_event_type) and
+      timestamp_range_match?(event_ts_ms, since_ms, until_ms)
+  end
+
+  defp optional_binary_match?(nil, _actual), do: true
+  defp optional_binary_match?(expected, actual) when is_binary(expected), do: expected == actual
+  defp optional_binary_match?(_expected, _actual), do: false
+
+  defp optional_event_type_match?(nil, _actual), do: true
+
+  defp optional_event_type_match?(expected, actual) when is_list(expected) do
+    Enum.any?(expected, &event_type_equal?(&1, actual))
+  end
+
+  defp optional_event_type_match?(expected, actual), do: event_type_equal?(expected, actual)
+
+  defp event_type_equal?(expected, actual) when is_atom(expected) and is_atom(actual),
+    do: expected == actual
+
+  defp event_type_equal?(expected, actual) when is_binary(expected) and is_binary(actual),
+    do: expected == actual
+
+  defp event_type_equal?(expected, actual) when is_atom(expected) and is_binary(actual),
+    do: Atom.to_string(expected) == actual
+
+  defp event_type_equal?(expected, actual) when is_binary(expected) and is_atom(actual),
+    do: expected == Atom.to_string(actual)
+
+  defp event_type_equal?(_expected, _actual), do: false
+
+  defp timestamp_range_match?(ts_ms, since_ms, until_ms) when is_integer(ts_ms) do
+    lower_ok = is_nil(since_ms) or (is_integer(since_ms) and ts_ms >= since_ms)
+    upper_ok = is_nil(until_ms) or (is_integer(until_ms) and ts_ms <= until_ms)
+    lower_ok and upper_ok
+  end
+
+  defp timestamp_range_match?(_ts_ms, _since_ms, _until_ms), do: false
+
+  defp introspection_sort_key(event) do
+    ts_ms =
+      case MapHelpers.get_key(event, :ts_ms) do
+        ts when is_integer(ts) -> ts
+        _ -> 0
+      end
+
+    event_id =
+      case MapHelpers.get_key(event, :event_id) do
+        id when is_binary(id) -> id
+        _ -> ""
+      end
+
+    {ts_ms, event_id}
+  end
+
+  defp normalize_introspection_limit(limit) when is_integer(limit) do
+    limit
+    |> max(1)
+    |> min(@max_introspection_query_limit)
+  end
+
+  defp normalize_introspection_limit(_), do: @default_introspection_query_limit
+
   @impl true
   def handle_info(:sweep_expired_chat_states, state) do
     backend_state = sweep_expired_chat_states(state.backend, state.backend_state)
+
+    backend_state =
+      sweep_expired_introspection_events(
+        state.backend,
+        backend_state,
+        state.introspection_retention_ms
+      )
+
     schedule_sweep()
     {:noreply, %{state | backend_state: backend_state}}
   end
@@ -1048,6 +1268,58 @@ defmodule LemonCore.Store do
         backend_state
     end
   end
+
+  defp sweep_expired_introspection_events(_backend, backend_state, retention_ms)
+       when not is_integer(retention_ms) or retention_ms <= 0 do
+    backend_state
+  end
+
+  defp sweep_expired_introspection_events(backend, backend_state, retention_ms) do
+    case backend.list(backend_state, :introspection_log) do
+      {:ok, all_events, backend_state} ->
+        cutoff_ms = System.system_time(:millisecond) - retention_ms
+
+        Enum.reduce(all_events, backend_state, fn {key, event}, acc_state ->
+          event_ts_ms = introspection_event_timestamp(key, event)
+
+          if is_integer(event_ts_ms) and event_ts_ms < cutoff_ms do
+            case backend.delete(acc_state, :introspection_log, key) do
+              {:ok, next_state} ->
+                next_state
+
+              {:error, reason} ->
+                log_backend_error(:delete, :introspection_log, key, reason)
+                acc_state
+
+              other ->
+                log_backend_unexpected(:delete, :introspection_log, key, other)
+                acc_state
+            end
+          else
+            acc_state
+          end
+        end)
+
+      {:error, reason} ->
+        log_backend_error(:list, :introspection_log, :all, reason)
+        backend_state
+
+      other ->
+        log_backend_unexpected(:list, :introspection_log, :all, other)
+        backend_state
+    end
+  end
+
+  defp introspection_event_timestamp({ts_ms, _event_id}, _event) when is_integer(ts_ms), do: ts_ms
+
+  defp introspection_event_timestamp(_key, event) when is_map(event) do
+    case MapHelpers.get_key(event, :ts_ms) do
+      ts when is_integer(ts) -> ts
+      _ -> nil
+    end
+  end
+
+  defp introspection_event_timestamp(_key, _event), do: nil
 
   defp log_backend_error(op, table, key, reason) do
     Logger.warning(
