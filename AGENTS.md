@@ -27,38 +27,40 @@
 
 ---
 
-## Parallel Work & Git Worktrees
+## Parallel Work & jj Workspaces
 
-When working on multiple tasks in parallel (either as the same agent or multiple agents), **use Git worktrees to avoid file editing conflicts**.
+When working on multiple tasks in parallel (either as the same agent or multiple agents), **use jj workspaces to avoid file editing conflicts**.
 
 ### Workflow:
 
-1. **Create a worktree for each parallel task:**
+1. **Create a workspace for each parallel task:**
    ```bash
-   git worktree add ../lemon-task-name -b feature/task-name
+   jj workspace add --name=task-name ../lemon-task-name
    cd ../lemon-task-name
    ```
 
-2. **Work in isolation** — Each worktree is an independent checkout with its own branch, working directory, and Elixir build artifacts.
-
-3. **Merge when complete** — Once the work is done and tested, merge back to the main branch:
+2. **Work in isolation** — Each workspace is an independent working directory backed by the same repo. Create a new change for your work:
    ```bash
-   cd /path/to/main/lemon
-   git merge feature/task-name
-   git worktree remove ../lemon-task-name
-   git branch -d feature/task-name
+   jj new main -m "Description of task"
    ```
 
-### Why Worktrees?
+3. **Clean up when complete** — After the change is merged/closed, remove the workspace:
+   ```bash
+   cd /path/to/main/lemon
+   jj workspace forget task-name
+   rm -rf ../lemon-task-name
+   ```
+
+### Why jj Workspaces?
 
 - **No file lock conflicts** — Multiple agents can edit different files simultaneously without stepping on each other
-- **Clean build contexts** — Each worktree maintains separate `_build/` and `deps/` (symlinked or independent)
-- **Easy cleanup** — Remove worktrees when done without affecting the main repo
-- **Git-native** — No special tooling required, works with standard Git workflows
+- **Clean build contexts** — Each workspace maintains separate `_build/` and `deps/` (symlinked or independent)
+- **Easy cleanup** — Remove workspaces when done without affecting the main repo
+- **Native to this repo** — This repository uses Jujutsu (jj) for version control
 
 ### Golden Rule:
 
-> **Never have multiple agents editing the same working directory simultaneously.** Always use worktrees for parallel tasks.
+> **Never have multiple agents editing the same working directory simultaneously.** Always use jj workspaces for parallel tasks.
 
 ---
 
@@ -401,4 +403,4 @@ Each app has its own `AGENTS.md` with detailed context:
 
 ---
 
-*Last updated: 2026-02-22*
+*Last updated: 2026-02-22* (added jj workspaces section)
