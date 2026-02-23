@@ -59,6 +59,11 @@ This file is a **living roadmap** for improvement areas, experiments, and future
   - Next: Add a recurring checklist for changed modules/config/env vars.
   - Refs: `AGENTS.md`, `docs/README.md`
 
+- [ ] Encrypted secrets store as preferred secret access path [area:security] [status:planned] [impact:H] [effort:M] [updated:2026-02-23]
+  - Outcome: All API keys/tokens/credentials resolved through the encrypted store; env vars become fallback only.
+  - Next: Extract reusable store-first resolution from `MarketIntel.Secrets` into `LemonCore.Secrets.resolve/2`.
+  - Refs: `planning/plans/PLN-20260223-secrets-store-preferred.md`, `apps/lemon_core/lib/lemon_core/secrets.ex`, `apps/market_intel/lib/market_intel/secrets.ex`
+
 ## Next (Loose Priority)
 
 - [ ] Model routing policy with explicit fallback rules [area:ai] [status:idea] [impact:H] [effort:M] [updated:2026-02-22]

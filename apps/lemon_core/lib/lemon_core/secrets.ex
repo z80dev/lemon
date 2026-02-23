@@ -90,6 +90,26 @@ defmodule LemonCore.Secrets do
     end
   end
 
+  @doc """
+  Convenience wrapper around `resolve/2` that returns just the value or `nil`.
+
+  Drop-in replacement for `System.get_env/1` — tries the encrypted store first,
+  then falls back to the environment variable of the same name.
+
+      iex> LemonCore.Secrets.fetch_value("ANTHROPIC_API_KEY")
+      "sk-ant-..."
+
+      iex> LemonCore.Secrets.fetch_value("MISSING_KEY")
+      nil
+  """
+  @spec fetch_value(name(), keyword()) :: String.t() | nil
+  def fetch_value(name, opts \\ []) do
+    case resolve(name, opts) do
+      {:ok, value, _source} -> value
+      {:error, _reason} -> nil
+    end
+  end
+
   @spec resolve(name(), keyword()) :: {:ok, String.t(), :store | :env} | {:error, atom()}
   def resolve(name, opts \\ []) do
     prefer_env = Keyword.get(opts, :prefer_env, false)
