@@ -12,6 +12,7 @@ defmodule CodingAgent.Tools.WebDownload do
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias CodingAgent.Security.ExternalContent
   alias CodingAgent.Tools.WebGuard
+  alias CodingAgent.Utils.Http
 
   @default_timeout_seconds 60
   @default_max_redirects 3
@@ -388,7 +389,7 @@ defmodule CodingAgent.Tools.WebDownload do
 
   defp header_value(headers, key) do
     Enum.find_value(headers, fn {header_key, header_value} ->
-      if String.downcase(to_string(header_key)) == String.downcase(key),
+      if Http.header_key_match?(header_key, key),
         do: to_string(header_value)
     end)
   end

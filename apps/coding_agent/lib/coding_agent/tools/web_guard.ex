@@ -3,6 +3,8 @@ defmodule CodingAgent.Tools.WebGuard do
 
   import Bitwise
 
+  alias CodingAgent.Utils.Http
+
   @type fetch_error ::
           {:invalid_url, String.t()}
           | {:ssrf_blocked, String.t()}
@@ -544,7 +546,7 @@ defmodule CodingAgent.Tools.WebGuard do
 
   defp header_value(headers, key) do
     Enum.find_value(headers, fn {header_key, header_value} ->
-      if String.downcase(to_string(header_key)) == String.downcase(key),
+      if Http.header_key_match?(header_key, key),
         do: to_string(header_value)
     end)
   end
@@ -554,7 +556,7 @@ defmodule CodingAgent.Tools.WebGuard do
 
     headers
     |> Enum.reject(fn {header_key, _header_value} ->
-      String.downcase(to_string(header_key)) == downcased
+      Http.header_key_match?(header_key, downcased)
     end)
     |> Kernel.++([{key, value}])
   end

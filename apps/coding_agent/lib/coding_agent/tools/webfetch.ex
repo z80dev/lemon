@@ -11,6 +11,7 @@ defmodule CodingAgent.Tools.WebFetch do
   alias CodingAgent.Security.ExternalContent
   alias CodingAgent.Tools.WebCache
   alias CodingAgent.Tools.WebGuard
+  alias CodingAgent.Utils.Http
 
   @default_fetch_max_chars 20_000
   @default_fetch_max_redirects 3
@@ -719,7 +720,7 @@ defmodule CodingAgent.Tools.WebFetch do
 
   defp header_value(headers, key) do
     Enum.find_value(headers, fn {header_key, header_value} ->
-      if String.downcase(to_string(header_key)) == String.downcase(key),
+      if Http.header_key_match?(header_key, key),
         do: to_string(header_value)
     end)
   end
