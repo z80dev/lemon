@@ -3,6 +3,7 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
 
   alias AgentCore.Test.Mocks
   alias CodingAgent.Session
+  alias CodingAgent.SessionManager
 
   defp start_session(opts \\ []) do
     cwd =
@@ -27,7 +28,7 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
     {
       state.session_manager.header.id,
       state.session_manager.leaf_id,
-      length(state.session_manager.entries),
+      length(SessionManager.entries(state.session_manager)),
       state.turn_index,
       state.model.provider,
       state.model.id

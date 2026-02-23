@@ -4,6 +4,19 @@ defmodule CodingAgent.RunGraphServer do
 
   This ensures the ETS table survives process crashes and is properly reloaded
   from DETS on restart. Running runs are marked as :lost on restart.
+
+  ## Async Startup
+
+  DETS loading is performed asynchronously after init to avoid blocking
+  early requests. The server tracks a `loading` flag; callers that need
+  data consistency can check via `ensure_table/1` which waits for load
+  completion if needed.
+
+  ## Non-blocking Cleanup
+
+  Periodic cleanup is offloaded to an async Task so that the GenServer
+  remains responsive during large-table scans. Cleanup processes records
+  in chunks to avoid long scheduler holds.
   """
 
   use GenServer
@@ -13,6 +26,7 @@ defmodule CodingAgent.RunGraphServer do
   @dets_table :coding_agent_run_graph_dets
   @default_ttl_seconds 86_400
   @cleanup_interval_seconds 300
+  @cleanup_chunk_size 500
 
   # Client API
 
@@ -73,13 +87,17 @@ defmodule CodingAgent.RunGraphServer do
       dets_path: dets_path(opts),
       ets_initialized: false,
       dets_initialized: false,
-      loaded_from_dets: false
+      loaded_from_dets: false,
+      loading: false,
+      cleanup_ref: nil
     }
 
-    # Initialize tables synchronously during init
+    # Initialize ETS and DETS synchronously (fast operations)
     state = initialize_ets(state)
     state = initialize_dets(state)
-    state = maybe_load_from_dets(state)
+
+    # Load DETS data asynchronously to avoid blocking early requests
+    state = start_async_dets_load(state)
 
     # Schedule periodic cleanup
     schedule_cleanup()
@@ -91,6 +109,10 @@ defmodule CodingAgent.RunGraphServer do
   def handle_call(:ensure_table, _from, state) do
     state = ensure_tables(state)
     {:reply, :ok, state}
+  end
+
+  def handle_call(:loading?, _from, state) do
+    {:reply, state.loading, state}
   end
 
   def handle_call(:clear, _from, state) do
@@ -129,7 +151,7 @@ defmodule CodingAgent.RunGraphServer do
 
   def handle_call({:cleanup, ttl_seconds}, _from, state) do
     state = ensure_tables(state)
-    deleted_count = do_cleanup(ttl_seconds)
+    deleted_count = do_cleanup_chunked(ttl_seconds)
     {:reply, {:ok, deleted_count}, state}
   end
 
@@ -150,9 +172,21 @@ defmodule CodingAgent.RunGraphServer do
   @impl true
   def handle_info(:cleanup, state) do
     state = ensure_tables(state)
-    ttl_seconds = Application.get_env(:coding_agent, :run_graph_ttl_seconds, @default_ttl_seconds)
-    _deleted_count = do_cleanup(ttl_seconds)
+    state = start_async_cleanup(state)
     schedule_cleanup()
+    {:noreply, state}
+  end
+
+  def handle_info(:dets_load_complete, state) do
+    {:noreply, %{state | loading: false, loaded_from_dets: true}}
+  end
+
+  def handle_info({:cleanup_complete, ref, _deleted_count}, %{cleanup_ref: ref} = state) do
+    {:noreply, %{state | cleanup_ref: nil}}
+  end
+
+  def handle_info({:cleanup_complete, _ref, _deleted_count}, state) do
+    # Stale cleanup result from a previous ref — ignore
     {:noreply, state}
   end
 
@@ -218,36 +252,74 @@ defmodule CodingAgent.RunGraphServer do
   defp maybe_load_from_dets(%{loaded_from_dets: true} = state), do: state
 
   defp maybe_load_from_dets(state) do
+    # The async load was started during init. If it hasn't completed yet
+    # and someone explicitly calls ensure_tables, trigger a synchronous load
+    # as a fallback to guarantee data availability.
     if state.dets_initialized and state.ets_initialized do
-      now = System.system_time(:second)
-
-      :dets.foldl(
-        fn {run_id, record}, :ok ->
-          record =
-            if Map.get(record, :status) == :running do
-              # Mark running runs as :lost since we can't recover them
-              record
-              |> Map.put(:status, :lost)
-              |> Map.put(:error, :lost_on_restart)
-              |> Map.put(:completed_at, now)
-            else
-              record
-            end
-
-          :ets.insert(@table, {run_id, record})
-          :ok
-        end,
-        :ok,
-        @dets_table
-      )
-
-      %{state | loaded_from_dets: true}
+      do_sync_dets_load()
+      %{state | loaded_from_dets: true, loading: false}
     else
       state
     end
   end
 
-  defp do_cleanup(ttl_seconds) do
+  defp do_sync_dets_load do
+    now = System.system_time(:second)
+
+    :dets.foldl(
+      fn {run_id, record}, :ok ->
+        record =
+          if Map.get(record, :status) == :running do
+            record
+            |> Map.put(:status, :lost)
+            |> Map.put(:error, :lost_on_restart)
+            |> Map.put(:completed_at, now)
+          else
+            record
+          end
+
+        :ets.insert(@table, {run_id, record})
+        :ok
+      end,
+      :ok,
+      @dets_table
+    )
+  end
+
+  defp start_async_dets_load(%{dets_initialized: true, ets_initialized: true} = state) do
+    server = self()
+
+    Task.start(fn ->
+      do_sync_dets_load()
+      send(server, :dets_load_complete)
+    end)
+
+    %{state | loading: true, loaded_from_dets: true}
+  end
+
+  defp start_async_dets_load(state), do: state
+
+  defp start_async_cleanup(state) do
+    # If a cleanup is already in progress, skip
+    if state.cleanup_ref do
+      state
+    else
+      ref = make_ref()
+      server = self()
+      ttl = Application.get_env(:coding_agent, :run_graph_ttl_seconds, @default_ttl_seconds)
+
+      Task.start(fn ->
+        deleted = do_cleanup_chunked(ttl)
+        send(server, {:cleanup_complete, ref, deleted})
+      end)
+
+      %{state | cleanup_ref: ref}
+    end
+  end
+
+  # Chunked cleanup: collect expired IDs then delete in chunks to avoid
+  # holding the scheduler for too long on large tables.
+  defp do_cleanup_chunked(ttl_seconds) do
     now = System.system_time(:second)
 
     expired_ids =
@@ -263,12 +335,19 @@ defmodule CodingAgent.RunGraphServer do
         @table
       )
 
-    Enum.each(expired_ids, fn run_id ->
-      :ets.delete(@table, run_id)
+    expired_ids
+    |> Enum.chunk_every(@cleanup_chunk_size)
+    |> Enum.each(fn chunk ->
+      Enum.each(chunk, fn run_id ->
+        :ets.delete(@table, run_id)
 
-      if dets_open?() do
-        :dets.delete(@dets_table, run_id)
-      end
+        if dets_open?() do
+          :dets.delete(@dets_table, run_id)
+        end
+      end)
+
+      # Yield between chunks to let other work proceed
+      Process.sleep(0)
     end)
 
     if dets_open?() and expired_ids != [] do

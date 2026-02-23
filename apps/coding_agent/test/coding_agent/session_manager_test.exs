@@ -35,7 +35,7 @@ defmodule CodingAgent.SessionManagerTest do
 
     test "initializes empty entries and by_id" do
       session = SessionManager.new("/tmp")
-      assert session.entries == []
+      assert SessionManager.entries(session) == []
       assert session.by_id == %{}
     end
 
@@ -59,8 +59,8 @@ defmodule CodingAgent.SessionManagerTest do
       message = %{role: "user", content: "hello", timestamp: 123}
       session = SessionManager.append_message(session, message)
 
-      assert length(session.entries) == 1
-      entry = hd(session.entries)
+      assert SessionManager.entry_count(session) == 1
+      entry = hd(SessionManager.entries(session))
       assert entry.type == :message
       assert entry.message == message
       assert entry.id != nil
@@ -73,7 +73,7 @@ defmodule CodingAgent.SessionManagerTest do
         |> SessionManager.append_message(%{role: "user", content: "hi", timestamp: 1})
         |> SessionManager.append_message(%{role: "assistant", content: "hello", timestamp: 2})
 
-      [first, second] = session.entries
+      [first, second] = SessionManager.entries(session)
       assert second.parent_id == first.id
       assert session.leaf_id == second.id
     end
@@ -95,7 +95,7 @@ defmodule CodingAgent.SessionManagerTest do
         SessionManager.new("/tmp")
         |> SessionManager.append_message(%{role: "user", content: "test"})
 
-      entry = hd(session.entries)
+      entry = hd(SessionManager.entries(session))
       assert Map.get(session.by_id, entry.id) == entry
     end
   end
@@ -110,7 +110,7 @@ defmodule CodingAgent.SessionManagerTest do
       entry = SessionEntry.message(%{role: "user", content: "test"}, id: "explicit-id")
       session = SessionManager.append_entry(session, entry)
 
-      assert hd(session.entries).id == "explicit-id"
+      assert hd(SessionManager.entries(session)).id == "explicit-id"
     end
 
     test "preserves explicit parent_id if provided" do
@@ -118,7 +118,7 @@ defmodule CodingAgent.SessionManagerTest do
       entry = SessionEntry.message(%{role: "user", content: "test"}, parent_id: "explicit-parent")
       session = SessionManager.append_entry(session, entry)
 
-      assert hd(session.entries).parent_id == "explicit-parent"
+      assert hd(SessionManager.entries(session)).parent_id == "explicit-parent"
     end
 
     test "generates unique ids avoiding collisions" do
@@ -130,7 +130,7 @@ defmodule CodingAgent.SessionManagerTest do
           SessionManager.append_message(sess, %{role: "user", content: "msg #{i}"})
         end)
 
-      ids = Enum.map(session.entries, & &1.id)
+      ids = Enum.map(SessionManager.entries(session), & &1.id)
       assert length(Enum.uniq(ids)) == 100
     end
   end
@@ -145,12 +145,12 @@ defmodule CodingAgent.SessionManagerTest do
         SessionManager.new("/tmp")
         |> SessionManager.append_message(%{role: "user", content: "old msg"})
 
-      first_id = hd(session.entries).id
+      first_id = hd(SessionManager.entries(session)).id
 
       session =
         SessionManager.append_compaction(session, "Summary of conversation", first_id, 5000)
 
-      compaction = List.last(session.entries)
+      compaction = List.last(SessionManager.entries(session))
       assert compaction.type == :compaction
       assert compaction.summary == "Summary of conversation"
       assert compaction.first_kept_entry_id == first_id
@@ -162,7 +162,7 @@ defmodule CodingAgent.SessionManagerTest do
       details = %{model: "gpt-4", reason: "token limit"}
       session = SessionManager.append_compaction(session, "Summary", "entry-1", 1000, details)
 
-      compaction = List.last(session.entries)
+      compaction = List.last(SessionManager.entries(session))
       assert compaction.details == details
     end
   end
@@ -199,7 +199,7 @@ defmodule CodingAgent.SessionManagerTest do
 
       # Details should round-trip as a JSON map.
       {:ok, loaded} = SessionManager.load_from_file(session_file)
-      [entry] = loaded.entries
+      [entry] = SessionManager.entries(loaded)
       assert entry.type == :custom_message
       assert is_map(entry.details)
       assert entry.details["details"]["status"] == "running"
@@ -338,7 +338,7 @@ defmodule CodingAgent.SessionManagerTest do
         |> SessionManager.append_message(%{"role" => "user", "content" => "msg1"})
         |> SessionManager.append_message(%{"role" => "assistant", "content" => "msg2"})
 
-      second_id = List.last(session.entries).id
+      second_id = List.last(SessionManager.entries(session)).id
 
       session =
         session
@@ -387,7 +387,7 @@ defmodule CodingAgent.SessionManagerTest do
         |> SessionManager.append_message(%{role: "assistant", content: "2"})
         |> SessionManager.append_message(%{role: "user", content: "3"})
 
-      [first, second, _third] = session.entries
+      [first, second, _third] = SessionManager.entries(session)
 
       branch = SessionManager.get_branch(session, second.id)
       assert length(branch) == 2
@@ -423,7 +423,7 @@ defmodule CodingAgent.SessionManagerTest do
 
       leaf_id = SessionManager.get_leaf_id(session)
       assert leaf_id == session.leaf_id
-      assert leaf_id == hd(session.entries).id
+      assert leaf_id == hd(SessionManager.entries(session)).id
     end
   end
 
@@ -434,7 +434,7 @@ defmodule CodingAgent.SessionManagerTest do
         |> SessionManager.append_message(%{role: "user", content: "1"})
         |> SessionManager.append_message(%{role: "assistant", content: "2"})
 
-      [first, _second] = session.entries
+      [first, _second] = SessionManager.entries(session)
       session = SessionManager.set_leaf_id(session, first.id)
 
       assert session.leaf_id == first.id
@@ -456,7 +456,7 @@ defmodule CodingAgent.SessionManagerTest do
         SessionManager.new("/tmp")
         |> SessionManager.append_message(%{role: "user", content: "test"})
 
-      entry = hd(session.entries)
+      entry = hd(SessionManager.entries(session))
       found = SessionManager.get_entry(session, entry.id)
       assert found == entry
     end
@@ -475,7 +475,7 @@ defmodule CodingAgent.SessionManagerTest do
         |> SessionManager.append_message(%{role: "assistant", content: "2"})
         |> SessionManager.append_message(%{role: "user", content: "3"})
 
-      first_id = hd(session.entries).id
+      first_id = hd(SessionManager.entries(session)).id
       children = SessionManager.get_children(session, first_id)
 
       assert length(children) == 1
@@ -492,7 +492,8 @@ defmodule CodingAgent.SessionManagerTest do
 
       session = %{
         session
-        | entries: session.entries ++ [entry],
+        | entries: nil,
+          entries_rev: [entry | session.entries_rev],
           by_id: Map.put(session.by_id, entry.id || "temp", entry)
       }
 
@@ -532,7 +533,7 @@ defmodule CodingAgent.SessionManagerTest do
       {:ok, loaded} = SessionManager.load_from_file(path)
 
       assert loaded.header.id == session.header.id
-      assert length(loaded.entries) == length(session.entries)
+      assert SessionManager.entry_count(loaded) == SessionManager.entry_count(session)
       assert loaded.header.cwd == session.header.cwd
     end
 
@@ -554,7 +555,7 @@ defmodule CodingAgent.SessionManagerTest do
       :ok = SessionManager.save_to_file(path, session)
       {:ok, loaded} = SessionManager.load_from_file(path)
 
-      types = Enum.map(loaded.entries, & &1.type)
+      types = Enum.map(SessionManager.entries(loaded), & &1.type)
 
       assert :message in types
       assert :thinking_level_change in types
@@ -579,7 +580,7 @@ defmodule CodingAgent.SessionManagerTest do
       :ok = SessionManager.save_to_file(path, session)
       {:ok, loaded} = SessionManager.load_from_file(path)
 
-      [e1, e2, e3] = loaded.entries
+      [e1, e2, e3] = SessionManager.entries(loaded)
       assert e1.parent_id == nil
       assert e2.parent_id == e1.id
       assert e3.parent_id == e2.id
@@ -687,7 +688,7 @@ defmodule CodingAgent.SessionManagerTest do
       :ok = SessionManager.save_to_file(path, session)
       {:ok, loaded} = SessionManager.load_from_file(path)
 
-      loaded_entry = hd(loaded.entries)
+      loaded_entry = hd(SessionManager.entries(loaded))
       assert loaded_entry.display == false
     end
   end
@@ -859,6 +860,150 @@ defmodule CodingAgent.SessionManagerTest do
       assert second.id != nil
       assert first.parent_id == nil
       assert second.parent_id == first.id
+    end
+  end
+
+  # ============================================================================
+  # entries/1 and entry_count/1
+  # ============================================================================
+
+  describe "entries/1" do
+    test "returns empty list for new session" do
+      session = SessionManager.new("/tmp")
+      assert SessionManager.entries(session) == []
+    end
+
+    test "returns entries in chronological order after appends" do
+      session =
+        SessionManager.new("/tmp")
+        |> SessionManager.append_message(%{role: "user", content: "first"})
+        |> SessionManager.append_message(%{role: "assistant", content: "second"})
+        |> SessionManager.append_message(%{role: "user", content: "third"})
+
+      entries = SessionManager.entries(session)
+      assert length(entries) == 3
+      assert Enum.map(entries, & &1.message.content) == ["first", "second", "third"]
+    end
+
+    test "returns ordered entries from loaded session" do
+      session = SessionManager.new("/tmp")
+      # Loaded sessions have entries populated, not entries_rev only
+      assert SessionManager.entries(session) == []
+    end
+  end
+
+  describe "entry_count/1" do
+    test "returns 0 for new session" do
+      session = SessionManager.new("/tmp")
+      assert SessionManager.entry_count(session) == 0
+    end
+
+    test "returns correct count after appends" do
+      session =
+        SessionManager.new("/tmp")
+        |> SessionManager.append_message(%{role: "user", content: "a"})
+        |> SessionManager.append_message(%{role: "assistant", content: "b"})
+
+      assert SessionManager.entry_count(session) == 2
+    end
+
+    test "count matches entries length" do
+      session =
+        Enum.reduce(1..50, SessionManager.new("/tmp"), fn i, sess ->
+          SessionManager.append_message(sess, %{role: "user", content: "msg #{i}"})
+        end)
+
+      assert SessionManager.entry_count(session) == length(SessionManager.entries(session))
+    end
+  end
+
+  # ============================================================================
+  # append_to_file/2
+  # ============================================================================
+
+  describe "append_to_file/2" do
+    @tag :tmp_dir
+    test "appends entry to existing JSONL file", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "append_test.jsonl")
+
+      # Create initial session file
+      session =
+        SessionManager.new(tmp_dir)
+        |> SessionManager.append_message(%{"role" => "user", "content" => "original"})
+
+      :ok = SessionManager.save_to_file(path, session)
+
+      # Append a new entry
+      new_entry =
+        SessionEntry.message(%{"role" => "assistant", "content" => "appended"},
+          id: "appended01",
+          parent_id: hd(SessionManager.entries(session)).id
+        )
+
+      :ok = SessionManager.append_to_file(path, new_entry)
+
+      # Reload and verify
+      {:ok, loaded} = SessionManager.load_from_file(path)
+      entries = SessionManager.entries(loaded)
+      assert length(entries) == 2
+      assert List.last(entries).message["content"] == "appended"
+    end
+
+    @tag :tmp_dir
+    test "multiple appends produce valid JSONL", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "multi_append.jsonl")
+
+      session = SessionManager.new(tmp_dir)
+      :ok = SessionManager.save_to_file(path, session)
+
+      # Append multiple entries
+      for i <- 1..10 do
+        entry =
+          SessionEntry.message(%{"role" => "user", "content" => "msg #{i}"},
+            id: "entry_#{String.pad_leading(to_string(i), 4, "0")}",
+            parent_id: if(i > 1, do: "entry_#{String.pad_leading(to_string(i - 1), 4, "0")}")
+          )
+
+        :ok = SessionManager.append_to_file(path, entry)
+      end
+
+      {:ok, loaded} = SessionManager.load_from_file(path)
+      assert SessionManager.entry_count(loaded) == 10
+    end
+  end
+
+  # ============================================================================
+  # O(1) append performance (entries_rev)
+  # ============================================================================
+
+  describe "O(1) append via entries_rev" do
+    test "entries_rev stores newest first" do
+      session =
+        SessionManager.new("/tmp")
+        |> SessionManager.append_message(%{role: "user", content: "first"})
+        |> SessionManager.append_message(%{role: "assistant", content: "second"})
+
+      # entries_rev should have newest first
+      [newest, oldest] = session.entries_rev
+      assert newest.message.content == "second"
+      assert oldest.message.content == "first"
+    end
+
+    test "entries is nil after append (lazy materialization)" do
+      session =
+        SessionManager.new("/tmp")
+        |> SessionManager.append_message(%{role: "user", content: "test"})
+
+      # entries is nil after append; use entries/1 to get ordered
+      assert session.entries == nil
+      assert length(SessionManager.entries(session)) == 1
+    end
+
+    test "entries is populated after load_from_file" do
+      # new sessions with no appends still have entries == []
+      session = SessionManager.new("/tmp")
+      assert session.entries == []
+      assert session.entries_rev == []
     end
   end
 end

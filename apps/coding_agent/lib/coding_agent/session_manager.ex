@@ -251,15 +251,25 @@ defmodule CodingAgent.SessionManager do
   end
 
   defmodule Session do
-    @moduledoc "Session state containing entries and navigation state"
+    @moduledoc """
+    Session state containing entries and navigation state.
+
+    Entries are stored internally in reverse chronological order in `entries_rev`
+    (newest first) for O(1) append performance. Use `SessionManager.entries/1`
+    to obtain entries in chronological order. The `entries` field is kept in sync
+    for backward compatibility but may be `nil` when freshly appended; callers
+    should prefer `SessionManager.entries/1`.
+    """
     @type t :: %__MODULE__{
             header: SessionHeader.t(),
-            entries: [SessionEntry.t()],
+            entries: [SessionEntry.t()] | nil,
+            entries_rev: [SessionEntry.t()],
             by_id: %{String.t() => SessionEntry.t()},
             leaf_id: String.t() | nil
           }
     defstruct header: %SessionHeader{},
               entries: [],
+              entries_rev: [],
               by_id: %{},
               leaf_id: nil
   end
@@ -290,6 +300,7 @@ defmodule CodingAgent.SessionManager do
     %Session{
       header: header,
       entries: [],
+      entries_rev: [],
       by_id: %{},
       leaf_id: nil
     }
@@ -312,6 +323,7 @@ defmodule CodingAgent.SessionManager do
        %Session{
          header: %{header | version: @current_version},
          entries: migrated_entries,
+         entries_rev: Enum.reverse(migrated_entries),
          by_id: by_id,
          leaf_id: leaf_id
        }}
@@ -325,8 +337,10 @@ defmodule CodingAgent.SessionManager do
   def save_to_file(path, %Session{} = session) do
     dir = Path.dirname(path)
 
+    ordered = entries(session)
+
     lines =
-      [encode_header(session.header) | Enum.map(session.entries, &encode_entry/1)]
+      [encode_header(session.header) | Enum.map(ordered, &encode_entry/1)]
       |> Enum.join("\n")
 
     with :ok <- File.mkdir_p(dir) do
@@ -353,6 +367,39 @@ defmodule CodingAgent.SessionManager do
   end
 
   @doc """
+  Append a single entry to an existing JSONL session file without rewriting.
+
+  This is an O(1) persistence operation that appends a single line to the end
+  of the file, avoiding the O(n) full-rewrite cost of `save_to_file/2`.
+  Use this for incremental persistence during a session; use `save_to_file/2`
+  for full rewrites (e.g., after compaction or migration).
+  """
+  @spec append_to_file(String.t(), SessionEntry.t()) :: :ok | {:error, term()}
+  def append_to_file(path, %SessionEntry{} = entry) do
+    line = encode_entry(entry) <> "\n"
+    File.write(path, line, [:append, :binary])
+  end
+
+  @doc """
+  Return session entries in chronological order (oldest first).
+
+  This is the canonical way to access entries. The internal storage uses
+  reverse order for O(1) append; this function materializes the forward list.
+  """
+  @spec entries(Session.t()) :: [SessionEntry.t()]
+  def entries(%Session{entries: entries}) when is_list(entries), do: entries
+  def entries(%Session{entries_rev: rev}), do: Enum.reverse(rev)
+
+  @doc """
+  Return the number of entries in the session efficiently.
+
+  Works regardless of whether `entries` or `entries_rev` is the canonical store.
+  """
+  @spec entry_count(Session.t()) :: non_neg_integer()
+  def entry_count(%Session{entries: entries}) when is_list(entries), do: length(entries)
+  def entry_count(%Session{entries_rev: rev}), do: length(rev)
+
+  @doc """
   Add entry with auto-generated id, set parent_id to current leaf.
   """
   @spec append_entry(Session.t(), SessionEntry.t()) :: Session.t()
@@ -365,7 +412,8 @@ defmodule CodingAgent.SessionManager do
 
     %{
       session
-      | entries: session.entries ++ [entry],
+      | entries: nil,
+        entries_rev: [entry | session.entries_rev],
         by_id: Map.put(session.by_id, new_id, entry),
         leaf_id: new_id
     }
@@ -444,8 +492,10 @@ defmodule CodingAgent.SessionManager do
   Get all direct children of an entry.
   """
   @spec get_children(Session.t(), String.t() | nil) :: [SessionEntry.t()]
-  def get_children(%Session{entries: entries}, parent_id) do
-    Enum.filter(entries, fn entry -> entry.parent_id == parent_id end)
+  def get_children(%Session{} = session, parent_id) do
+    session
+    |> entries()
+    |> Enum.filter(fn entry -> entry.parent_id == parent_id end)
   end
 
   # ============================================================================

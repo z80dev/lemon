@@ -199,7 +199,7 @@ defmodule CodingAgent.IntegrationTest do
           state = Session.get_state(session)
           # Verify compaction entry was added
           compaction_entries =
-            Enum.filter(state.session_manager.entries, &(&1.type == :compaction))
+            Enum.filter(SessionManager.entries(state.session_manager), &(&1.type == :compaction))
 
           assert length(compaction_entries) >= 1
 
@@ -210,7 +210,7 @@ defmodule CodingAgent.IntegrationTest do
           {:ok, loaded_session} = SessionManager.load_from_file(session_file)
 
           loaded_compaction_entries =
-            Enum.filter(loaded_session.entries, &(&1.type == :compaction))
+            Enum.filter(SessionManager.entries(loaded_session), &(&1.type == :compaction))
 
           assert length(loaded_compaction_entries) >= 1
 
@@ -255,7 +255,7 @@ defmodule CodingAgent.IntegrationTest do
         })
 
       # Get the second entry's ID for compaction
-      second_entry = List.last(session_manager.entries)
+      second_entry = List.last(SessionManager.entries(session_manager))
 
       # Add a compaction entry
       session_manager =
@@ -325,17 +325,19 @@ defmodule CodingAgent.IntegrationTest do
       {:ok, loaded} = SessionManager.load_from_file(session_file)
 
       # Check all entry types are preserved
-      types = Enum.map(loaded.entries, & &1.type)
+      types = Enum.map(SessionManager.entries(loaded), & &1.type)
       assert :message in types
       assert :thinking_level_change in types
       assert :model_change in types
 
       # Verify thinking level change
-      thinking_entry = Enum.find(loaded.entries, &(&1.type == :thinking_level_change))
+      thinking_entry =
+        Enum.find(SessionManager.entries(loaded), &(&1.type == :thinking_level_change))
+
       assert thinking_entry.thinking_level == :high
 
       # Verify model change
-      model_entry = Enum.find(loaded.entries, &(&1.type == :model_change))
+      model_entry = Enum.find(SessionManager.entries(loaded), &(&1.type == :model_change))
       assert model_entry.provider == "anthropic"
       assert model_entry.model_id == "claude-3"
     end
@@ -365,7 +367,7 @@ defmodule CodingAgent.IntegrationTest do
         })
 
       # Get the fork point (first entry)
-      [first_entry, _second_entry] = session_manager.entries
+      [first_entry, _second_entry] = SessionManager.entries(session_manager)
 
       # Continue on the main branch
       session_manager =
@@ -424,7 +426,7 @@ defmodule CodingAgent.IntegrationTest do
           "timestamp" => 1
         })
 
-      root_entry_id = hd(session_manager.entries).id
+      root_entry_id = hd(SessionManager.entries(session_manager)).id
 
       # Add branch A
       session_manager =
@@ -442,7 +444,8 @@ defmodule CodingAgent.IntegrationTest do
 
       # Add branch B entry (manually create with explicit parent)
       branch_b_entry = %SessionEntry{
-        id: SessionManager.generate_id(Enum.map(session_manager.entries, & &1.id)),
+        id:
+          SessionManager.generate_id(Enum.map(SessionManager.entries(session_manager), & &1.id)),
         parent_id: root_entry_id,
         type: :message,
         message: %{
@@ -455,7 +458,8 @@ defmodule CodingAgent.IntegrationTest do
 
       session_manager = %{
         session_manager
-        | entries: session_manager.entries ++ [branch_b_entry],
+        | entries: nil,
+          entries_rev: [branch_b_entry | session_manager.entries_rev],
           by_id: Map.put(session_manager.by_id, branch_b_entry.id, branch_b_entry),
           leaf_id: branch_b_entry.id
       }
@@ -632,8 +636,8 @@ defmodule CodingAgent.IntegrationTest do
       # Reload and verify
       {:ok, loaded} = SessionManager.load_from_file(session_file)
 
-      assert length(loaded.entries) == 1
-      entry = hd(loaded.entries)
+      assert length(SessionManager.entries(loaded)) == 1
+      entry = hd(SessionManager.entries(loaded))
       assert entry.message["role"] == "tool_result"
       assert entry.message["tool_call_id"] == "call_123"
       assert entry.message["trust"] == "untrusted"
@@ -762,7 +766,7 @@ defmodule CodingAgent.IntegrationTest do
 
       # Verify model change was recorded
       model_changes =
-        Enum.filter(state.session_manager.entries, &(&1.type == :model_change))
+        Enum.filter(SessionManager.entries(state.session_manager), &(&1.type == :model_change))
 
       assert length(model_changes) == 1
       assert hd(model_changes).model_id == "new-model-id"
@@ -779,7 +783,10 @@ defmodule CodingAgent.IntegrationTest do
 
       # Verify thinking level change was recorded
       thinking_changes =
-        Enum.filter(state.session_manager.entries, &(&1.type == :thinking_level_change))
+        Enum.filter(
+          SessionManager.entries(state.session_manager),
+          &(&1.type == :thinking_level_change)
+        )
 
       assert length(thinking_changes) == 1
       assert hd(thinking_changes).thinking_level == :high
@@ -804,11 +811,13 @@ defmodule CodingAgent.IntegrationTest do
       {:ok, loaded} = SessionManager.load_from_file(session_file)
 
       # Find the model change entry
-      model_entry = Enum.find(loaded.entries, &(&1.type == :model_change))
+      model_entry = Enum.find(SessionManager.entries(loaded), &(&1.type == :model_change))
       assert model_entry.model_id == "persisted-model"
 
       # Find the thinking level change entry
-      thinking_entry = Enum.find(loaded.entries, &(&1.type == :thinking_level_change))
+      thinking_entry =
+        Enum.find(SessionManager.entries(loaded), &(&1.type == :thinking_level_change))
+
       assert thinking_entry.thinking_level == :medium
     end
   end

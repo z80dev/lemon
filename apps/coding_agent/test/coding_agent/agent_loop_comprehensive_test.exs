@@ -22,6 +22,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
   alias Ai.Types.{AssistantMessage, TextContent, ToolCall}
   alias CodingAgent.Session
   alias CodingAgent.SettingsManager
+  alias CodingAgent.SessionManager
 
   # ============================================================================
   # Test Helpers
@@ -335,7 +336,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
 
       # Get state and verify messages accumulated
       state = Session.get_state(session)
-      messages = state.session_manager.entries
+      messages = SessionManager.entries(state.session_manager)
 
       # Should have accumulated messages from both turns
       assert length(messages) >= 2

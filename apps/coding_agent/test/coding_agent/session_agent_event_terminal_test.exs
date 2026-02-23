@@ -5,6 +5,7 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
   alias AgentCore.Test.Mocks
   alias Ai.Types.AssistantMessage
   alias CodingAgent.Session
+  alias CodingAgent.SessionManager
 
   defp start_session(opts \\ []) do
     cwd =
@@ -77,7 +78,7 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     state = Session.get_state(session)
 
     message_entries =
-      Enum.filter(state.session_manager.entries, fn entry ->
+      Enum.filter(SessionManager.entries(state.session_manager), fn entry ->
         entry.type == :message
       end)
 
