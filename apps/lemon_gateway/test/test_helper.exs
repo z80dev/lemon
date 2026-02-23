@@ -12,5 +12,6 @@ _ = File.mkdir_p(lock_dir)
 System.put_env("LEMON_LOCK_DIR", lock_dir)
 
 Code.require_file("support/mock_telegram_api.ex", __DIR__)
+Code.require_file("support/async_helpers.ex", __DIR__)
 
 ExUnit.start()
