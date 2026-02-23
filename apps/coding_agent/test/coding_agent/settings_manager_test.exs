@@ -84,13 +84,13 @@ defmodule CodingAgent.SettingsManagerTest do
       settings = SettingsManager.from_config(config)
 
       assert settings.default_model == %{
-               provider: "anthropic",
+               provider: :anthropic,
                model_id: "claude-sonnet-4",
                base_url: nil
              }
     end
 
-    test "parses model spec with provider prefix" do
+    test "parses model spec with provider prefix (colon separator)" do
       config = %LemonConfig{
         providers: %{},
         agent: %{
@@ -106,10 +106,92 @@ defmodule CodingAgent.SettingsManagerTest do
       settings = SettingsManager.from_config(config)
 
       assert settings.default_model == %{
-               provider: "openai",
+               provider: :openai,
                model_id: "gpt-4",
                base_url: nil
              }
+    end
+
+    test "parses model spec with provider prefix (slash separator)" do
+      config = %LemonConfig{
+        providers: %{},
+        agent: %{
+          default_provider: nil,
+          default_model: "zai/glm-5"
+        },
+        tui: %{},
+        logging: %{},
+        gateway: %{},
+        agents: %{}
+      }
+
+      settings = SettingsManager.from_config(config)
+
+      assert settings.default_model == %{
+               provider: :zai,
+               model_id: "glm-5",
+               base_url: nil
+             }
+    end
+
+    test "parses OpenRouter-style model IDs with slash separator" do
+      config = %LemonConfig{
+        providers: %{},
+        agent: %{
+          default_provider: nil,
+          default_model: "openai/gpt-4o"
+        },
+        tui: %{},
+        logging: %{},
+        gateway: %{},
+        agents: %{}
+      }
+
+      settings = SettingsManager.from_config(config)
+
+      assert settings.default_model == %{
+               provider: :openai,
+               model_id: "gpt-4o",
+               base_url: nil
+             }
+    end
+
+    test "colon separator takes precedence over slash" do
+      config = %LemonConfig{
+        providers: %{},
+        agent: %{
+          default_provider: nil,
+          default_model: "anthropic:claude-3"
+        },
+        tui: %{},
+        logging: %{},
+        gateway: %{},
+        agents: %{}
+      }
+
+      settings = SettingsManager.from_config(config)
+
+      assert settings.default_model.provider == :anthropic
+      assert settings.default_model.model_id == "claude-3"
+    end
+
+    test "normalizes provider with dashes to underscores" do
+      config = %LemonConfig{
+        providers: %{},
+        agent: %{
+          default_provider: nil,
+          default_model: "openai-codex/gpt-4"
+        },
+        tui: %{},
+        logging: %{},
+        gateway: %{},
+        agents: %{}
+      }
+
+      settings = SettingsManager.from_config(config)
+
+      assert settings.default_model.provider == :openai_codex
+      assert settings.default_model.model_id == "gpt-4"
     end
 
     test "handles model without provider prefix" do
@@ -127,7 +209,7 @@ defmodule CodingAgent.SettingsManagerTest do
 
       settings = SettingsManager.from_config(config)
 
-      assert settings.default_model.provider == "anthropic"
+      assert settings.default_model.provider == :anthropic
       assert settings.default_model.model_id == "claude-3-opus"
     end
 
@@ -207,8 +289,8 @@ defmodule CodingAgent.SettingsManagerTest do
 
     test "copies providers from config" do
       providers = %{
-        "anthropic" => %{api_key: "test-key", base_url: "https://api.anthropic.com"},
-        "openai" => %{api_key: "openai-key"}
+        "anthropic" => %{api_key: "anthropic_fixture_key", base_url: "https://api.anthropic.com"},
+        "openai" => %{api_key: "openai_fixture_key"}
       }
 
       config = %LemonConfig{
@@ -416,7 +498,7 @@ defmodule CodingAgent.SettingsManagerTest do
       settings = SettingsManager.load(test_dir)
 
       assert %SettingsManager{} = settings
-      assert settings.default_model.provider == "openai"
+      assert settings.default_model.provider == :openai
       assert settings.default_model.model_id == "gpt-4"
       assert settings.default_thinking_level == :low
       assert settings.theme == "light"
@@ -588,7 +670,7 @@ defmodule CodingAgent.SettingsManagerTest do
     test "full round-trip from config to settings to component settings", %{test_dir: _test_dir} do
       config = %LemonConfig{
         providers: %{
-          "anthropic" => %{api_key: "test-key"}
+          "anthropic" => %{api_key: "anthropic_fixture_key"}
         },
         agent: %{
           default_provider: "anthropic",
@@ -619,7 +701,7 @@ defmodule CodingAgent.SettingsManagerTest do
 
       # Verify all component settings can be extracted
       model_settings = SettingsManager.get_model_settings(settings)
-      assert model_settings.default_model.provider == "anthropic"
+      assert model_settings.default_model.provider == :anthropic
       assert model_settings.default_thinking_level == :medium
 
       compaction_settings = SettingsManager.get_compaction_settings(settings)
@@ -649,16 +731,17 @@ defmodule CodingAgent.SettingsManagerTest do
 
       settings = SettingsManager.from_config(config)
 
-      assert settings.default_model.provider == "provider"
+      assert settings.default_model.provider == :provider
       assert settings.default_model.model_id == "model-name"
     end
 
     test "from_config uses default values for missing nested configs" do
       config = %LemonConfig{
         providers: %{},
-        agent: %{
-          # No compaction, retry, or shell config provided
-        },
+        agent:
+          %{
+            # No compaction, retry, or shell config provided
+          },
         tui: %{},
         logging: %{},
         gateway: %{},
@@ -698,7 +781,7 @@ defmodule CodingAgent.SettingsManagerTest do
       settings = SettingsManager.from_config(config)
 
       # Should split on first colon only
-      assert settings.default_model.provider == "azure"
+      assert settings.default_model.provider == :azure
       assert settings.default_model.model_id == "gpt-4:vision"
     end
 
@@ -783,20 +866,20 @@ defmodule CodingAgent.SettingsManagerTest do
       # with empty model_id depending on the parse_model_spec implementation
       assert settings.default_model == nil or
                (is_map(settings.default_model) and
-                  settings.default_model.provider == "anthropic")
+                  settings.default_model.provider == :anthropic)
     end
 
     test "handles complex provider configuration" do
       providers = %{
         "anthropic" => %{
-          api_key: "sk-ant-api03-test",
+          api_key: "anthropic_test_api_key",
           base_url: "https://api.anthropic.com",
           api_key_secret: nil
         },
         "openai" => %{
-          api_key: "sk-test",
+          api_key: "openai_fixture_key",
           base_url: "https://api.openai.com/v1",
-          api_key_secret: "secret-key"
+          api_key_secret: "openai_fixture_secret_ref"
         }
       }
 
@@ -811,9 +894,9 @@ defmodule CodingAgent.SettingsManagerTest do
 
       settings = SettingsManager.from_config(config)
 
-      assert settings.providers["anthropic"].api_key == "sk-ant-api03-test"
+      assert settings.providers["anthropic"].api_key == "anthropic_test_api_key"
       assert settings.providers["anthropic"].base_url == "https://api.anthropic.com"
-      assert settings.providers["openai"].api_key_secret == "secret-key"
+      assert settings.providers["openai"].api_key_secret == "openai_fixture_secret_ref"
     end
   end
 end

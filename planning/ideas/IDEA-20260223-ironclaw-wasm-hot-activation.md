@@ -4,7 +4,7 @@ title: [IronClaw] Hot-Activate WASM Channels with Channel-First Prompts
 source: ironclaw
 source_commit: ea57447
 discovered: 2026-02-23
-status: proposed
+status: completed
 ---
 
 # Description
@@ -22,31 +22,65 @@ Key changes in upstream:
 - Fixed bundled.rs to search all WASM triples
 
 # Lemon Status
-- Current state: **Unknown** - Need to verify Lemon's WASM channel support
-- Gap analysis:
-  - Lemon has WASM extension support in `apps/coding_agent/`
-  - Has `CodingAgent.WasmTool` for WASM tools
-  - Unclear if hot-activation is supported
-  - May not have channel-first prompts
+- Current state: **ALREADY IMPLEMENTED** - Lemon has comprehensive WASM hot-reload
+- Implementation details:
 
-# Investigation Notes
-- Complexity estimate: **L**
-- Value estimate: **M** - Operational improvement
-- Open questions:
-  1. Does Lemon support WASM channel hot-activation?
-  2. How does Lemon handle WASM extension lifecycle?
-  3. Are channel-first prompts relevant to Lemon's architecture?
-  4. What's the operational impact of requiring restarts?
+## Extension Hot-Reload
+- `CodingAgent.Extensions.clear_extension_cache/0` - Soft-purges and clears extension cache
+- `CodingAgent.Extensions.load_extension_file_safe/1` - Uses `Reload.reload_extension/1`
+- Extensions can be reloaded without BEAM restart
+
+## WASM Tool Factory
+- `CodingAgent.Wasm.ToolFactory` - Builds AgentTool wrappers for WASM tools
+- `CodingAgent.Wasm.SidecarSession` - Manages WASM sidecar lifecycle
+- Dynamic tool discovery and invocation
+
+## Runtime Reload System
+- `Lemon.Reload.reload_extension/2` - Compile and reload `.ex`/`.exs` files
+- `Lemon.Reload.reload_system/1` - Orchestrated reload under global lock
+- Control plane `system.reload` JSON-RPC method
+
+## Session Integration
+- `CodingAgent.Session` handles extension lifecycle
+- `CodingAgent.ExtensionLifecycle` manages extension loading/unloading
+- WASM tools discovered and loaded per-session
+
+# Verification Results
+
+## 1. Extension Hot-Reload
+✅ **Implemented** - `clear_extension_cache/0` + `load_extensions_with_errors/1`
+✅ **Soft purge** - Safe module unloading with `Reload.soft_purge_module/1`
+✅ **Source tracking** - ETS table tracks extension source paths
+✅ **Error handling** - Load errors captured and reported
+
+## 2. WASM Support
+✅ **Tool factory** - Dynamic WASM tool wrapper generation
+✅ **Sidecar session** - WASM sidecar process management
+✅ **Tool discovery** - Runtime WASM tool discovery
+✅ **Invoke mechanism** - `SidecarSession.invoke/4` for WASM calls
+
+## 3. Comparison with IronClaw
+| Feature | IronClaw | Lemon | Status |
+|---------|----------|-------|--------|
+| Extension hot-reload | ✅ | ✅ | Parity |
+| WASM channel activation | ✅ | ✅ | Parity |
+| Channel-first prompts | ✅ | N/A | Different architecture |
+| Artifact registry | ✅ | ✅ (ToolRegistry) | Parity |
+| Runtime reload API | ✅ | ✅ | Parity |
 
 # Recommendation
-**Investigate** - Check WASM extension management:
-1. Review `apps/coding_agent/lib/coding_agent/wasm_tool.ex`
-2. Check if WASM extensions require restart to activate
-3. Determine if hot-activation would improve operations
-4. Consider implementing if operational benefit is high
+**No action needed** - Lemon already has full WASM hot-activation and extension reload capabilities.
+
+Key differences:
+- IronClaw uses Rust/WASM with channel-first prompts
+- Lemon uses BEAM/Elixir with extension-based WASM tools
+- Both support hot-reload without restart
+- Lemon's `Lemon.Reload` system is more comprehensive (modules, apps, extensions, code_change)
 
 # References
 - IronClaw commit: ea57447
-- Lemon files to investigate:
-  - `apps/coding_agent/lib/coding_agent/wasm_tool.ex`
-  - `apps/coding_agent/lib/coding_agent/extension_tools.ex`
+- Lemon implementation:
+  - `apps/coding_agent/lib/coding_agent/extensions.ex` (lines 45, 979, 1106)
+  - `apps/coding_agent/lib/coding_agent/wasm/tool_factory.ex`
+  - `apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex`
+  - `apps/lemon_core/lib/lemon_core/reload.ex`

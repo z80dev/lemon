@@ -943,7 +943,7 @@ defmodule CodingAgent.Extensions do
   Clear all cached extension modules and data.
 
   This function:
-  1. Purges and deletes all extension modules from the code server
+  1. Soft-purges all extension modules from the code server
   2. Clears the source path ETS table
   3. Clears the load error ETS table
 

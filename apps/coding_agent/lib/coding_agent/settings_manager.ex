@@ -220,29 +220,42 @@ defmodule CodingAgent.SettingsManager do
   defp parse_model_spec(nil, nil), do: nil
 
   defp parse_model_spec(provider, model) when is_binary(model) do
+    # Try colon separator first (Lemon's current format)
     case String.split(model, ":", parts: 2) do
       [p, model_id] when provider in [nil, ""] and p != "" and model_id != "" ->
-        %{provider: p, model_id: model_id, base_url: nil}
-
-      [model_id] ->
-        if model_id != "" do
-          %{provider: provider, model_id: model_id, base_url: nil}
-        else
-          nil
-        end
+        %{provider: normalize_provider(p), model_id: model_id, base_url: nil}
 
       _ ->
-        if model != "" do
-          %{provider: provider, model_id: model, base_url: nil}
-        else
-          nil
+        # Try slash separator (OpenRouter/Pi format)
+        case String.split(model, "/", parts: 2) do
+          [p, model_id] when provider in [nil, ""] and p != "" and model_id != "" ->
+            %{provider: normalize_provider(p), model_id: model_id, base_url: nil}
+
+          _ ->
+            # Fall back to treating entire string as model_id
+            if model != "" do
+              %{provider: normalize_provider(provider), model_id: model, base_url: nil}
+            else
+              nil
+            end
         end
     end
   end
 
   defp parse_model_spec(provider, model) when is_binary(provider) and provider != "" do
-    %{provider: provider, model_id: to_string(model), base_url: nil}
+    %{provider: normalize_provider(provider), model_id: to_string(model), base_url: nil}
   end
 
   defp parse_model_spec(_provider, _model), do: nil
+
+  # Normalize provider string to atom (lowercase, replace dashes with underscores)
+  defp normalize_provider(p) when is_binary(p) do
+    p
+    |> String.downcase()
+    |> String.replace("-", "_")
+    |> String.to_atom()
+  end
+
+  defp normalize_provider(p) when is_atom(p), do: p
+  defp normalize_provider(_), do: nil
 end

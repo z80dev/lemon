@@ -962,4 +962,270 @@ defmodule CodingAgent.Tools.TodoStoreTest do
       end
     end
   end
+
+  # ============================================================================
+  # Enhanced Todo Features (M2 of Long-Running Agent Harnesses)
+  # ============================================================================
+
+  defp now do
+    DateTime.utc_now() |> DateTime.to_iso8601()
+  end
+
+  describe "get_actionable/1" do
+    test "returns todos with no dependencies", %{session_id: session_id} do
+      todos = [
+        %{id: "1", content: "Task 1", status: :pending, dependencies: [], priority: :high},
+        %{id: "2", content: "Task 2", status: :pending, dependencies: ["1"], priority: :medium}
+      ]
+
+      TodoStore.put(session_id, todos)
+      actionable = TodoStore.get_actionable(session_id)
+
+      assert length(actionable) == 1
+      assert hd(actionable).id == "1"
+    end
+
+    test "returns todos whose dependencies are completed", %{session_id: session_id} do
+      todos = [
+        %{id: "1", content: "Task 1", status: :completed, dependencies: [], priority: :high},
+        %{id: "2", content: "Task 2", status: :pending, dependencies: ["1"], priority: :medium}
+      ]
+
+      TodoStore.put(session_id, todos)
+      actionable = TodoStore.get_actionable(session_id)
+
+      assert length(actionable) == 1
+      assert hd(actionable).id == "2"
+    end
+
+    test "sorts by priority (high -> medium -> low)", %{session_id: session_id} do
+      todos = [
+        %{id: "1", content: "Low", status: :pending, dependencies: [], priority: :low},
+        %{id: "2", content: "High", status: :pending, dependencies: [], priority: :high},
+        %{id: "3", content: "Medium", status: :pending, dependencies: [], priority: :medium}
+      ]
+
+      TodoStore.put(session_id, todos)
+      actionable = TodoStore.get_actionable(session_id)
+
+      ids = Enum.map(actionable, & &1.id)
+      assert ids == ["2", "3", "1"]
+    end
+
+    test "excludes completed todos", %{session_id: session_id} do
+      todos = [
+        %{id: "1", content: "Completed", status: :completed, dependencies: [], priority: :high},
+        %{id: "2", content: "Pending", status: :pending, dependencies: [], priority: :low}
+      ]
+
+      TodoStore.put(session_id, todos)
+      actionable = TodoStore.get_actionable(session_id)
+
+      assert length(actionable) == 1
+      assert hd(actionable).id == "2"
+    end
+
+    test "handles multiple dependencies", %{session_id: session_id} do
+      todos = [
+        %{id: "1", content: "Dep 1", status: :completed, dependencies: [], priority: :high},
+        %{id: "2", content: "Dep 2", status: :completed, dependencies: [], priority: :high},
+        %{id: "3", content: "Task", status: :pending, dependencies: ["1", "2"], priority: :medium}
+      ]
+
+      TodoStore.put(session_id, todos)
+      actionable = TodoStore.get_actionable(session_id)
+
+      assert length(actionable) == 1
+      assert hd(actionable).id == "3"
+    end
+
+    test "excludes todos with incomplete dependencies", %{session_id: session_id} do
+      todos = [
+        %{id: "1", content: "Dep 1", status: :completed, dependencies: [], priority: :high},
+        %{id: "2", content: "Dep 2", status: :pending, dependencies: [], priority: :high},
+        %{id: "3", content: "Task", status: :pending, dependencies: ["1", "2"], priority: :medium}
+      ]
+
+      TodoStore.put(session_id, todos)
+      actionable = TodoStore.get_actionable(session_id)
+
+      # Only todo 2 is actionable (dep 1 is completed, but todo 3 needs both)
+      assert length(actionable) == 1
+      assert hd(actionable).id == "2"
+    end
+  end
+
+  describe "get_progress/1" do
+    test "calculates progress correctly", %{session_id: session_id} do
+      todos = [
+        %{id: "1", content: "Completed", status: :completed, dependencies: [], priority: :high},
+        %{id: "2", content: "In Progress", status: :in_progress, dependencies: [], priority: :medium},
+        %{id: "3", content: "Blocked", status: :blocked, dependencies: [], priority: :low},
+        %{id: "4", content: "Pending", status: :pending, dependencies: [], priority: :low}
+      ]
+
+      TodoStore.put(session_id, todos)
+      progress = TodoStore.get_progress(session_id)
+
+      assert progress.total == 4
+      assert progress.completed == 1
+      assert progress.in_progress == 1
+      assert progress.blocked == 1
+      assert progress.pending == 1
+      assert progress.percentage == 25
+    end
+
+    test "returns 100% when all completed", %{session_id: session_id} do
+      todos = [
+        %{id: "1", content: "Task 1", status: :completed, dependencies: [], priority: :high},
+        %{id: "2", content: "Task 2", status: :completed, dependencies: [], priority: :medium}
+      ]
+
+      TodoStore.put(session_id, todos)
+      progress = TodoStore.get_progress(session_id)
+
+      assert progress.percentage == 100
+    end
+
+    test "returns 0% when empty", %{session_id: session_id} do
+      progress = TodoStore.get_progress(session_id)
+
+      assert progress.total == 0
+      assert progress.percentage == 0
+    end
+  end
+
+  describe "update_status/3" do
+    test "updates status and timestamps", %{session_id: session_id} do
+      todos = [
+        %{id: "1", content: "Task", status: :pending, dependencies: [], priority: :high, created_at: now(), updated_at: nil, completed_at: nil, metadata: %{}}
+      ]
+
+      TodoStore.put(session_id, todos)
+      :ok = TodoStore.update_status(session_id, "1", :in_progress)
+
+      updated = TodoStore.get(session_id)
+      todo = hd(updated)
+
+      assert todo.status == :in_progress
+      assert todo.updated_at != nil
+    end
+
+    test "sets completed_at when status is completed", %{session_id: session_id} do
+      todos = [
+        %{id: "1", content: "Task", status: :in_progress, dependencies: [], priority: :high, created_at: now(), updated_at: nil, completed_at: nil, metadata: %{}}
+      ]
+
+      TodoStore.put(session_id, todos)
+      :ok = TodoStore.update_status(session_id, "1", :completed)
+
+      updated = TodoStore.get(session_id)
+      todo = hd(updated)
+
+      assert todo.status == :completed
+      assert todo.completed_at != nil
+    end
+
+    test "preserves other todos", %{session_id: session_id} do
+      todos = [
+        %{id: "1", content: "Task 1", status: :pending, dependencies: [], priority: :high, created_at: now(), updated_at: nil, completed_at: nil, metadata: %{}},
+        %{id: "2", content: "Task 2", status: :pending, dependencies: [], priority: :medium, created_at: now(), updated_at: nil, completed_at: nil, metadata: %{}}
+      ]
+
+      TodoStore.put(session_id, todos)
+      :ok = TodoStore.update_status(session_id, "1", :completed)
+
+      updated = TodoStore.get(session_id)
+      assert length(updated) == 2
+
+      todo2 = Enum.find(updated, & &1.id == "2")
+      assert todo2.status == :pending
+    end
+  end
+
+  describe "complete/2" do
+    test "marks todo as completed", %{session_id: session_id} do
+      todos = [
+        %{id: "1", content: "Task", status: :in_progress, dependencies: [], priority: :high, created_at: now(), updated_at: nil, completed_at: nil, metadata: %{}}
+      ]
+
+      TodoStore.put(session_id, todos)
+      :ok = TodoStore.complete(session_id, "1")
+
+      updated = TodoStore.get(session_id)
+      todo = hd(updated)
+
+      assert todo.status == :completed
+      assert todo.completed_at != nil
+    end
+  end
+
+  describe "all_completed?/1" do
+    test "returns true when all completed", %{session_id: session_id} do
+      todos = [
+        %{id: "1", content: "Task 1", status: :completed, dependencies: [], priority: :high},
+        %{id: "2", content: "Task 2", status: :completed, dependencies: [], priority: :medium}
+      ]
+
+      TodoStore.put(session_id, todos)
+      assert TodoStore.all_completed?(session_id) == true
+    end
+
+    test "returns false when some pending", %{session_id: session_id} do
+      todos = [
+        %{id: "1", content: "Task 1", status: :completed, dependencies: [], priority: :high},
+        %{id: "2", content: "Task 2", status: :pending, dependencies: [], priority: :medium}
+      ]
+
+      TodoStore.put(session_id, todos)
+      assert TodoStore.all_completed?(session_id) == false
+    end
+
+    test "returns true when empty", %{session_id: session_id} do
+      assert TodoStore.all_completed?(session_id) == true
+    end
+  end
+
+  describe "get_blocking/1" do
+    test "returns todos that block others", %{session_id: session_id} do
+      todos = [
+        %{id: "1", content: "Blocking", status: :in_progress, dependencies: [], priority: :high},
+        %{id: "2", content: "Blocked", status: :pending, dependencies: ["1"], priority: :medium}
+      ]
+
+      TodoStore.put(session_id, todos)
+      blocking = TodoStore.get_blocking(session_id)
+
+      assert length(blocking) == 1
+      assert hd(blocking).id == "1"
+    end
+
+    test "excludes completed todos even if referenced", %{session_id: session_id} do
+      todos = [
+        %{id: "1", content: "Completed", status: :completed, dependencies: [], priority: :high},
+        %{id: "2", content: "Blocked", status: :pending, dependencies: ["1"], priority: :medium}
+      ]
+
+      TodoStore.put(session_id, todos)
+      blocking = TodoStore.get_blocking(session_id)
+
+      assert blocking == []
+    end
+
+    test "handles multiple blockers", %{session_id: session_id} do
+      todos = [
+        %{id: "1", content: "Blocker 1", status: :pending, dependencies: [], priority: :high},
+        %{id: "2", content: "Blocker 2", status: :in_progress, dependencies: [], priority: :medium},
+        %{id: "3", content: "Blocked", status: :pending, dependencies: ["1", "2"], priority: :low}
+      ]
+
+      TodoStore.put(session_id, todos)
+      blocking = TodoStore.get_blocking(session_id)
+
+      assert length(blocking) == 2
+      ids = Enum.map(blocking, & &1.id)
+      assert "1" in ids
+      assert "2" in ids
+    end
+  end
 end

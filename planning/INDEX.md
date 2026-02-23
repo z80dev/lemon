@@ -37,6 +37,9 @@ These entries were already completed before the `planning/` workflow was created
 | [PLN-20260222-debt-phase-10-monolith-footprint-reduction](plans/PLN-20260222-debt-phase-10-monolith-footprint-reduction.md) | Debt Phase 10 - Monolith and release footprint reduction | `planned` | `unassigned` | `feature/pln-20260222-debt-phase-10-monolith-footprint-reduction` | `pending` | `debt_plan.md:123` | 2026-02-22 |
 | [PLN-20260222-debt-phase-13-client-ci-parity-governance](plans/PLN-20260222-debt-phase-13-client-ci-parity-governance.md) | Debt Phase 13 - Client CI parity and dependency governance | `planned` | `unassigned` | `feature/pln-20260222-debt-phase-13-client-ci-parity-governance` | `pending` | `debt_plan.md:200` | 2026-02-22 |
 | [PLN-20260224-inspiration-ideas-implementation](plans/PLN-20260224-inspiration-ideas-implementation.md) | Implement Inspiration Ideas from Upstream Research | `in_progress` | `janitor` | `feature/pln-20260224-inspiration-ideas` | `pending` | `ROADMAP.md` | 2026-02-24 |
+| [PLN-20260224-runtime-hot-reload](plans/PLN-20260224-runtime-hot-reload.md) | Runtime Hot-Reload System for BEAM Modules and Extensions | `in_progress` | `janitor` | `feature/pln-20260224-runtime-hot-reload` | `pending` | — | 2026-02-24 |
+
+| [PLN-20260224-long-running-agent-harnesses](plans/PLN-20260224-long-running-agent-harnesses.md) | Long-Running Agent Harnesses and Task Management | `in_progress` | `janitor` | `feature/pln-20260224-long-running-harnesses` | `pending` | — | 2026-02-24 |
 
 ## Ready for Review
 
@@ -57,6 +60,7 @@ These entries were already completed before the `planning/` workflow was created
 
 | Plan ID | Title | Landed Revision | Notes | Updated |
 |---|---|---|---|---|
+| [PLN-20260224-pi-model-resolver-slash-support](plans/PLN-20260224-pi-model-resolver-slash-support.md) | Add Slash Separator Support for Provider/Model Format | `5c7098c1` | Pi parity: slash separator support for provider/model format | 2026-02-24 |
 | [PLN-20260222-agent-introspection](plans/PLN-20260222-agent-introspection.md) | End-to-end agent introspection | `bec7bfae` | Final stacked landing `M2 -> M3 -> M4`; post-landing smoke tests passed | 2026-02-23 |
 | PLN-20260223-diag-extend | Extend diag script with service/health/logs/config | `84e34b45` | Team test: Claude + Codex parallel work | 2026-02-23 |
 | [PLN-20260223-transport-registry-dedup](plans/PLN-20260223-transport-registry-dedup.md) | Deduplicate transport_enabled? functions in TransportRegistry | `92c8ca86` | Eliminated ~64 lines of duplication across 6 transport clauses | 2026-02-23 |
@@ -81,22 +85,47 @@ Research findings from upstream projects (oh-my-pi, pi, openclaw, ironclaw, nano
 | Idea ID | Title | Source | Status | Complexity | Value | Recommendation |
 |---|---|---|---|---|---|---|
 | [IDEA-20260223-pi-skill-discovery](ideas/IDEA-20260223-pi-skill-discovery.md) | Auto-Discover Skills in .agents Paths | pi | `completed` | M | H | **Already implemented** - Feature exists in Lemon |
-| [IDEA-20260223-openclaw-markup-sanitization](ideas/IDEA-20260223-openclaw-markup-sanitization.md) | Sanitize Untrusted Markup in Chat Payloads | openclaw | `proposed` | M | H | **Investigate** - Security audit needed |
+| [IDEA-20260223-openclaw-markup-sanitization](ideas/IDEA-20260223-openclaw-markup-sanitization.md) | Sanitize Untrusted Markup in Chat Payloads | openclaw | `completed` | M | H | **Already implemented** - Full XSS protection at gateway + UI |
 | [IDEA-20260223-openclaw-config-redaction](ideas/IDEA-20260223-openclaw-config-redaction.md) | Redact Sensitive Values in Config Get Output | openclaw | `completed` | S | H | **Already implemented** - Full parity with broader pattern coverage |
 | [IDEA-20260223-ironclaw-context-compaction](ideas/IDEA-20260223-ironclaw-context-compaction.md) | Auto-Compact and Retry on ContextLengthExceeded | ironclaw | `completed` | L | M | **Already implemented** - Full parity with comprehensive telemetry |
-| [IDEA-20260223-oh-my-pi-todo-phase-management](ideas/IDEA-20260223-oh-my-pi-todo-phase-management.md) | In-Memory Todo Phase Management for ToolSession | oh-my-pi | `proposed` | L | L | **Investigate** - Compare with ETS approach |
-| [IDEA-20260223-pi-model-resolver](ideas/IDEA-20260223-pi-model-resolver.md) | Provider/Model Split Resolution for Gateway Model IDs | pi | `proposed` | M | M | **Investigate** - Check model routing logic |
-| [IDEA-20260223-ironclaw-wasm-hot-activation](ideas/IDEA-20260223-ironclaw-wasm-hot-activation.md) | Hot-Activate WASM Channels with Channel-First Prompts | ironclaw | `proposed` | L | M | **Investigate** - Check WASM extension lifecycle |
+| [IDEA-20260223-oh-my-pi-todo-phase-management](ideas/IDEA-20260223-oh-my-pi-todo-phase-management.md) | In-Memory Todo Phase Management for ToolSession | oh-my-pi | `completed` | L | L | **Already implemented** - ETS-based TodoStore is superior |
+| [IDEA-20260223-pi-model-resolver](ideas/IDEA-20260223-pi-model-resolver.md) | Provider/Model Split Resolution for Gateway Model IDs | pi | `proposed` | M | M | **Implement** - Add slash separator support for provider/model format |
+| [IDEA-20260223-ironclaw-wasm-hot-activation](ideas/IDEA-20260223-ironclaw-wasm-hot-activation.md) | Hot-Activate WASM Channels with Channel-First Prompts | ironclaw | `completed` | L | M | **Already implemented** - Full WASM hot-reload via Lemon.Reload |
 | [IDEA-20260223-oh-my-pi-strict-mode](ideas/IDEA-20260223-oh-my-pi-strict-mode.md) | Tool Schema Strict Mode for OpenAI Providers | oh-my-pi | `proposed` | M | M | **Defer** - Needs deeper audit |
 | [IDEA-20260223-pi-streaming-highlight](ideas/IDEA-20260223-pi-streaming-highlight.md) | Incremental Highlight for Streaming Write Tool Calls | pi | `proposed` | M | L | **Defer** - Nice-to-have UX |
 | [IDEA-20260223-ironclaw-shell-completion](ideas/IDEA-20260223-ironclaw-shell-completion.md) | Shell Completion Generation via clap_complete | ironclaw | `proposed` | M | L | **Defer** - Nice-to-have DX |
 | [IDEA-20260223-nanoclaw-voice-transcription](ideas/IDEA-20260223-nanoclaw-voice-transcription.md) | Voice Transcription as Nanorepo Skill | nanoclaw | `proposed` | M | M | **Defer** - Wait for voice priority |
+| [IDEA-20260224-community-mcp-tool-integration](ideas/IDEA-20260224-community-mcp-tool-integration.md) | MCP (Model Context Protocol) Tool Integration | community | `proposed` | M | H | **Proceed** - Industry standard, partial implementation exists |
+| [IDEA-20260224-community-multi-agent-orchestration](ideas/IDEA-20260224-community-multi-agent-orchestration.md) | Multi-Agent Orchestration and Routing | community | `proposed` | M | H | **Investigate** - High community demand, OpenClaw pattern |
+| [IDEA-20260224-community-wasm-sandbox-tools](ideas/IDEA-20260224-community-wasm-sandbox-tools.md) | WASM Sandbox for AI Tool Execution | community | `proposed` | M | H | **Proceed** - Industry trend, enhances existing WASM support |
+| [IDEA-20260224-community-channel-adapters](ideas/IDEA-20260224-community-channel-adapters.md) | Additional Channel Adapters (Discord, Slack, WhatsApp) | community | `proposed` | M | H | **Investigate** - High demand, OpenClaw's key differentiator |
+| [IDEA-20260224-community-long-running-agent-harnesses](ideas/IDEA-20260224-community-long-running-agent-harnesses.md) | Long-Running Agent Harnesses and Task Management | community | `proposed` | M | M | **Proceed** - Addresses common pain point, builds on todo system |
 
 ### Summary
 
 - **High Priority (Proceed/Verify)**: 4 ideas - Skill discovery, security sanitization, config redaction, context compaction
 - **Medium Priority (Investigate)**: 4 ideas - Todo management, model resolver, WASM activation, strict mode
 - **Low Priority (Defer)**: 3 ideas - Streaming highlight, shell completion, voice transcription
+
+### Community Research Summary (2026-02-24)
+
+New findings from community research:
+
+| Priority | Ideas | Key Themes |
+|----------|-------|------------|
+| **Proceed** | 3 | MCP integration, WASM sandboxing, Long-running harnesses |
+| **Investigate** | 2 | Multi-agent orchestration, Channel adapters |
+
+**Key Insights:**
+1. **MCP is becoming an industry standard** - Multiple frameworks competing on MCP support
+2. **Multi-channel is table stakes** - OpenClaw's success driven by Discord/Telegram/Slack support
+3. **WASM sandboxing is the future** - Microsoft, NVIDIA, and others investing heavily
+4. **Long-running agents need better harnesses** - Common pain point of agents "one-shotting" tasks
+
+**Strategic Opportunities:**
+- Discord adapter would capture OpenClaw-style community use cases
+- MCP support would enable ecosystem integration
+- Enhanced WASM would differentiate from sidecar-based approaches
 
 ## Templates
 
