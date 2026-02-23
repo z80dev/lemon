@@ -4,10 +4,27 @@ defmodule CodingAgent.RunGraphServer do
 
   This ensures the ETS table survives process crashes and is properly reloaded
   from DETS on restart. Running runs are marked as :lost on restart.
+
+  ## Serialized Writes
+
+  All state-mutating operations are serialized through this GenServer's
+  mailbox to guarantee atomic read-modify-write semantics. This prevents
+  race conditions when concurrent processes update the same run.
+
+  Read operations go directly to ETS (`:public` table with
+  `read_concurrency: true`) for maximum throughput.
+
+  ## State Change Notifications
+
+  On every status change, a `{:run_graph, :state_changed, run_id}` message
+  is broadcast via `LemonCore.Bus` to the topic `"run_graph:<run_id>"`.
+  This enables `RunGraph.await/3` to wake up immediately rather than polling.
   """
 
   use GenServer
   require Logger
+
+  alias CodingAgent.RunGraph
 
   @table :coding_agent_run_graph
   @dets_table :coding_agent_run_graph_dets
@@ -31,6 +48,53 @@ defmodule CodingAgent.RunGraphServer do
   """
   def ensure_table(server \\ __MODULE__) do
     GenServer.call(server, :ensure_table, 5_000)
+  end
+
+  @doc """
+  Atomically update a run record through the GenServer.
+
+  The update function receives the current record and returns the updated record.
+  The entire read-modify-write is serialized in the GenServer process.
+  """
+  @spec atomic_update(RunGraph.run_id(), (map() -> map())) :: :ok
+  def atomic_update(run_id, update_fn, server \\ __MODULE__) do
+    GenServer.call(server, {:atomic_update, run_id, update_fn}, 10_000)
+  end
+
+  @doc """
+  Atomically transition a run to a new status with monotonic enforcement.
+
+  Returns `:ok` if the transition was applied, or `:ok` if the run was not
+  found (consistent with previous behavior). Returns `{:error, :invalid_transition}`
+  if the transition would violate monotonic ordering.
+  """
+  @spec atomic_transition(RunGraph.run_id(), atom(), (map() -> map())) ::
+          :ok | {:error, :invalid_transition}
+  def atomic_transition(run_id, target_status, update_fn, server \\ __MODULE__) do
+    GenServer.call(server, {:atomic_transition, run_id, target_status, update_fn}, 10_000)
+  end
+
+  @doc """
+  Insert or update a record directly. Used for initial record creation
+  and server-side operations (DETS load, test setup).
+  """
+  @spec insert_record(RunGraph.run_id(), map()) :: :ok
+  def insert_record(run_id, record) do
+    do_insert_record(run_id, record)
+  end
+
+  @doc """
+  Delete a run from both ETS and DETS.
+  """
+  @spec delete_run(RunGraph.run_id()) :: :ok
+  def delete_run(run_id) do
+    :ets.delete(@table, run_id)
+
+    if dets_open?() do
+      :dets.delete(@dets_table, run_id)
+    end
+
+    :ok
   end
 
   @doc """
@@ -59,6 +123,16 @@ defmodule CodingAgent.RunGraphServer do
   """
   def dets_status(server \\ __MODULE__) do
     GenServer.call(server, :dets_status, 5_000)
+  end
+
+  @doc """
+  Check if DETS is available.
+  """
+  @spec dets_open?() :: boolean()
+  def dets_open? do
+    :dets.info(@dets_table) != :undefined
+  rescue
+    _ -> false
   end
 
   # Server Callbacks
@@ -91,6 +165,55 @@ defmodule CodingAgent.RunGraphServer do
   def handle_call(:ensure_table, _from, state) do
     state = ensure_tables(state)
     {:reply, :ok, state}
+  end
+
+  def handle_call({:atomic_update, run_id, update_fn}, _from, state) do
+    state = ensure_tables(state)
+
+    case :ets.lookup(@table, run_id) do
+      [{^run_id, record}] ->
+        updated =
+          record
+          |> update_fn.()
+          |> Map.put(:updated_at, System.system_time(:second))
+
+        do_insert_record(run_id, updated)
+
+        # Broadcast if status changed
+        if Map.get(record, :status) != Map.get(updated, :status) do
+          broadcast_state_change(run_id)
+        end
+
+        {:reply, :ok, state}
+
+      _ ->
+        {:reply, :ok, state}
+    end
+  end
+
+  def handle_call({:atomic_transition, run_id, target_status, update_fn}, _from, state) do
+    state = ensure_tables(state)
+
+    case :ets.lookup(@table, run_id) do
+      [{^run_id, record}] ->
+        current_status = Map.get(record, :status, :queued)
+
+        if RunGraph.valid_transition?(current_status, target_status) do
+          updated =
+            record
+            |> update_fn.()
+            |> Map.put(:updated_at, System.system_time(:second))
+
+          do_insert_record(run_id, updated)
+          broadcast_state_change(run_id)
+          {:reply, :ok, state}
+        else
+          {:reply, {:error, :invalid_transition}, state}
+        end
+
+      _ ->
+        {:reply, :ok, state}
+    end
   end
 
   def handle_call(:clear, _from, state) do
@@ -247,6 +370,29 @@ defmodule CodingAgent.RunGraphServer do
     end
   end
 
+  defp do_insert_record(run_id, record) do
+    :ets.insert(@table, {run_id, record})
+
+    if dets_open?() do
+      :dets.insert(@dets_table, {run_id, record})
+    end
+
+    :ok
+  end
+
+  defp broadcast_state_change(run_id) do
+    try do
+      LemonCore.Bus.broadcast(
+        "run_graph:#{run_id}",
+        {:run_graph, :state_changed, run_id}
+      )
+    rescue
+      _ -> :ok
+    catch
+      _, _ -> :ok
+    end
+  end
+
   defp do_cleanup(ttl_seconds) do
     now = System.system_time(:second)
 
@@ -290,12 +436,6 @@ defmodule CodingAgent.RunGraphServer do
     else
       false
     end
-  end
-
-  defp dets_open? do
-    :dets.info(@dets_table) != :undefined
-  rescue
-    _ -> false
   end
 
   defp schedule_cleanup do
