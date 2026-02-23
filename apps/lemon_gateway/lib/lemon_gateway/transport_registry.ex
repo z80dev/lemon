@@ -113,91 +113,27 @@ defmodule LemonGateway.TransportRegistry do
 
   defp maybe_warn_dual_gate(_), do: :ok
 
-  defp transport_enabled?("telegram") do
-    # Primary source of truth: LemonGateway.Config (TOML-backed GenServer).
-    # Fallback: application env override (used in tests).
+  # Primary source of truth: LemonGateway.Config (TOML-backed GenServer).
+  # Fallback: application env override (used in tests).
+  defp get_config_boolean(key) do
     if is_pid(Process.whereis(LemonGateway.Config)) do
-      LemonGateway.Config.get(:enable_telegram) == true
+      LemonGateway.Config.get(key) == true
     else
       cfg = Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
 
       if is_list(cfg) do
-        Keyword.get(cfg, :enable_telegram, false)
+        Keyword.get(cfg, key, false)
       else
-        Map.get(cfg, :enable_telegram, false)
+        Map.get(cfg, key, false)
       end
     end
   end
 
-  defp transport_enabled?("discord") do
-    if is_pid(Process.whereis(LemonGateway.Config)) do
-      LemonGateway.Config.get(:enable_discord) == true
-    else
-      cfg = Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
-
-      if is_list(cfg) do
-        Keyword.get(cfg, :enable_discord, false)
-      else
-        Map.get(cfg, :enable_discord, false)
-      end
-    end
-  end
-
-  defp transport_enabled?("farcaster") do
-    if is_pid(Process.whereis(LemonGateway.Config)) do
-      LemonGateway.Config.get(:enable_farcaster) == true
-    else
-      cfg = Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
-
-      if is_list(cfg) do
-        Keyword.get(cfg, :enable_farcaster, false)
-      else
-        Map.get(cfg, :enable_farcaster, false)
-      end
-    end
-  end
-
-  defp transport_enabled?("email") do
-    if is_pid(Process.whereis(LemonGateway.Config)) do
-      LemonGateway.Config.get(:enable_email) == true
-    else
-      cfg = Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
-
-      if is_list(cfg) do
-        Keyword.get(cfg, :enable_email, false)
-      else
-        Map.get(cfg, :enable_email, false)
-      end
-    end
-  end
-
-  defp transport_enabled?("xmtp") do
-    if is_pid(Process.whereis(LemonGateway.Config)) do
-      LemonGateway.Config.get(:enable_xmtp) == true
-    else
-      cfg = Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
-
-      if is_list(cfg) do
-        Keyword.get(cfg, :enable_xmtp, false)
-      else
-        Map.get(cfg, :enable_xmtp, false)
-      end
-    end
-  end
-
-  defp transport_enabled?("webhook") do
-    if is_pid(Process.whereis(LemonGateway.Config)) do
-      LemonGateway.Config.get(:enable_webhook) == true
-    else
-      cfg = Application.get_env(:lemon_gateway, LemonGateway.Config, %{})
-
-      if is_list(cfg) do
-        Keyword.get(cfg, :enable_webhook, false)
-      else
-        Map.get(cfg, :enable_webhook, false)
-      end
-    end
-  end
-
+  defp transport_enabled?("telegram"), do: get_config_boolean(:enable_telegram)
+  defp transport_enabled?("discord"), do: get_config_boolean(:enable_discord)
+  defp transport_enabled?("farcaster"), do: get_config_boolean(:enable_farcaster)
+  defp transport_enabled?("email"), do: get_config_boolean(:enable_email)
+  defp transport_enabled?("xmtp"), do: get_config_boolean(:enable_xmtp)
+  defp transport_enabled?("webhook"), do: get_config_boolean(:enable_webhook)
   defp transport_enabled?(_id), do: true
 end
