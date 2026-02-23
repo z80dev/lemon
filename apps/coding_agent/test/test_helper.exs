@@ -43,6 +43,7 @@ Application.ensure_all_started(:lemon_skills)
 # Compile test support files
 Code.require_file("support/mock_ui.ex", __DIR__)
 Code.require_file("support/permission_helpers.ex", __DIR__)
+Code.require_file("support/async_helpers.ex", __DIR__)
 
 # Load shared test support from agent_core app
 agent_core_support = Path.join([__DIR__, "..", "..", "agent_core", "test", "support", "mocks.ex"])
