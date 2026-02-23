@@ -2437,7 +2437,7 @@ defmodule CodingAgent.Session do
     {
       state.session_manager.header.id,
       state.session_manager.leaf_id,
-      length(state.session_manager.entries),
+      SessionManager.entry_count(state.session_manager),
       state.turn_index,
       state.model.provider,
       state.model.id

@@ -829,7 +829,7 @@ defmodule CodingAgent.SessionTest do
           "timestamp" => 2
         })
 
-      [first_entry, _second_entry] = session_manager.entries
+      [first_entry, _second_entry] = SessionManager.entries(session_manager)
 
       session_file = Path.join(tmp_dir, "nav_test.jsonl")
       :ok = SessionManager.save_to_file(session_file, session_manager)
@@ -863,7 +863,7 @@ defmodule CodingAgent.SessionTest do
           "timestamp" => 3
         })
 
-      [first_entry, _second_entry, _third_entry] = session_manager.entries
+      [first_entry, _second_entry, _third_entry] = SessionManager.entries(session_manager)
 
       session_file = Path.join(tmp_dir, "rebuild_test.jsonl")
       :ok = SessionManager.save_to_file(session_file, session_manager)
@@ -1120,7 +1120,7 @@ defmodule CodingAgent.SessionTest do
 
       # Should have a model_change entry
       model_changes =
-        Enum.filter(state.session_manager.entries, &(&1.type == :model_change))
+        Enum.filter(SessionManager.entries(state.session_manager), &(&1.type == :model_change))
 
       assert length(model_changes) == 1
     end
@@ -1144,7 +1144,10 @@ defmodule CodingAgent.SessionTest do
       state = Session.get_state(session)
 
       thinking_changes =
-        Enum.filter(state.session_manager.entries, &(&1.type == :thinking_level_change))
+        Enum.filter(
+          SessionManager.entries(state.session_manager),
+          &(&1.type == :thinking_level_change)
+        )
 
       assert length(thinking_changes) == 1
       assert hd(thinking_changes).thinking_level == :medium
@@ -1826,7 +1829,7 @@ defmodule CodingAgent.SessionTest do
       state = Session.get_state(session)
 
       tool_entries =
-        Enum.filter(state.session_manager.entries, fn entry ->
+        Enum.filter(SessionManager.entries(state.session_manager), fn entry ->
           entry.type == :message and entry.message["role"] == "tool_result"
         end)
 

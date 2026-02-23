@@ -180,7 +180,7 @@ defmodule CodingAgent.SessionBranchTest do
        ) do
     # Create initial linear chain
     sm = create_deep_session_manager(cwd, initial_depth)
-    entries = sm.entries
+    entries = SessionManager.entries(sm)
 
     # Find the branch point entry
     branch_entry = Enum.at(entries, branch_point - 1)
@@ -234,7 +234,7 @@ defmodule CodingAgent.SessionBranchTest do
       assert length(messages_before) == 4
 
       # Navigate to the first entry (which clears most messages)
-      first_entry = hd(sm.entries)
+      first_entry = hd(SessionManager.entries(sm))
       :ok = Session.navigate_tree(session, first_entry.id)
 
       messages_after = Session.get_messages(session)
@@ -272,7 +272,7 @@ defmodule CodingAgent.SessionBranchTest do
       session = start_session(session_file: session_file, cwd: tmp_dir)
 
       # Get the branch point
-      branch_entry = Enum.at(sm.entries, 1)
+      branch_entry = Enum.at(SessionManager.entries(sm), 1)
       children = SessionManager.get_children(sm, branch_entry.id)
 
       # Should have multiple children (branches)
@@ -329,7 +329,7 @@ defmodule CodingAgent.SessionBranchTest do
       sm = create_deep_session_manager(tmp_dir, 4)
 
       # Remember the last valid entry id before adding orphan
-      last_valid_id = List.last(sm.entries).id
+      last_valid_id = List.last(SessionManager.entries(sm)).id
 
       # Manually create an orphaned entry (parent_id doesn't exist)
       # This entry exists but its parent chain is broken
@@ -344,7 +344,7 @@ defmodule CodingAgent.SessionBranchTest do
       # Add orphan to entries
       sm = %{
         sm
-        | entries: sm.entries ++ [orphan],
+        | entries: SessionManager.entries(sm) ++ [orphan],
           by_id: Map.put(sm.by_id, orphan.id, orphan)
       }
 
@@ -355,7 +355,7 @@ defmodule CodingAgent.SessionBranchTest do
 
       # The orphan entry exists in entries
       state = Session.get_state(session)
-      assert length(state.session_manager.entries) == 5
+      assert length(SessionManager.entries(state.session_manager)) == 5
 
       # When starting, the session finds the orphan as "latest leaf" since it has no children
       # So initially we're on the orphan branch with only 1 message
@@ -427,7 +427,7 @@ defmodule CodingAgent.SessionBranchTest do
     @tag :tmp_dir
     test "branch navigation preserves entry IDs", %{tmp_dir: tmp_dir} do
       sm = create_deep_session_manager(tmp_dir, 6)
-      original_ids = Enum.map(sm.entries, & &1.id)
+      original_ids = Enum.map(SessionManager.entries(sm), & &1.id)
 
       session_file = Path.join(tmp_dir, "preserve_ids.jsonl")
       :ok = SessionManager.save_to_file(session_file, sm)
@@ -435,15 +435,15 @@ defmodule CodingAgent.SessionBranchTest do
       session = start_session(session_file: session_file, cwd: tmp_dir)
 
       # Navigate around
-      mid_entry = Enum.at(sm.entries, 2)
+      mid_entry = Enum.at(SessionManager.entries(sm), 2)
       :ok = Session.navigate_tree(session, mid_entry.id)
 
-      last_entry = List.last(sm.entries)
+      last_entry = List.last(SessionManager.entries(sm))
       :ok = Session.navigate_tree(session, last_entry.id)
 
       # Verify IDs are preserved
       state = Session.get_state(session)
-      current_ids = Enum.map(state.session_manager.entries, & &1.id)
+      current_ids = Enum.map(SessionManager.entries(state.session_manager), & &1.id)
       assert current_ids == original_ids
     end
   end
@@ -463,7 +463,7 @@ defmodule CodingAgent.SessionBranchTest do
       state = Session.get_state(session)
 
       # Get entry IDs
-      entries = state.session_manager.entries
+      entries = SessionManager.entries(state.session_manager)
 
       if length(entries) >= 2 do
         entry_ids = Enum.map(entries, & &1.id)
@@ -503,8 +503,8 @@ defmodule CodingAgent.SessionBranchTest do
       # Try to navigate while streaming
       state = Session.get_state(session)
 
-      if state.session_manager.entries != [] do
-        first_id = hd(state.session_manager.entries).id
+      if SessionManager.entries(state.session_manager) != [] do
+        first_id = hd(SessionManager.entries(state.session_manager)).id
         # This should still work (navigation doesn't require non-streaming)
         result = Session.navigate_tree(session, first_id)
         assert result == :ok
@@ -522,8 +522,8 @@ defmodule CodingAgent.SessionBranchTest do
 
       state = Session.get_state(session)
 
-      if length(state.session_manager.entries) >= 1 do
-        entry_id = hd(state.session_manager.entries).id
+      if length(SessionManager.entries(state.session_manager)) >= 1 do
+        entry_id = hd(SessionManager.entries(state.session_manager)).id
 
         # Concurrent operations
         tasks = [
@@ -568,8 +568,8 @@ defmodule CodingAgent.SessionBranchTest do
       # Concurrent navigation
       state = Session.get_state(session)
 
-      if state.session_manager.entries != [] do
-        entries = state.session_manager.entries
+      if SessionManager.entries(state.session_manager) != [] do
+        entries = SessionManager.entries(state.session_manager)
 
         for entry <- entries do
           Session.navigate_tree(session, entry.id)
@@ -596,7 +596,7 @@ defmodule CodingAgent.SessionBranchTest do
       wait_for_streaming_complete(session)
 
       state = Session.get_state(session)
-      entries = state.session_manager.entries
+      entries = SessionManager.entries(state.session_manager)
 
       if length(entries) >= 2 do
         # Concurrent message reads and navigation
@@ -638,7 +638,7 @@ defmodule CodingAgent.SessionBranchTest do
       assert length(messages) == 200
 
       # Navigation should work
-      mid_entry = Enum.at(sm.entries, 100)
+      mid_entry = Enum.at(SessionManager.entries(sm), 100)
       :ok = Session.navigate_tree(session, mid_entry.id)
 
       messages = Session.get_messages(session)
@@ -690,7 +690,7 @@ defmodule CodingAgent.SessionBranchTest do
           "timestamp" => 1
         })
 
-      root_id = hd(sm.entries).id
+      root_id = hd(SessionManager.entries(sm)).id
 
       # Create many sibling branches from root
       sm =
@@ -734,8 +734,8 @@ defmodule CodingAgent.SessionBranchTest do
 
         state = Session.get_state(session)
 
-        if state.session_manager.entries != [] do
-          first_id = hd(state.session_manager.entries).id
+        if SessionManager.entries(state.session_manager) != [] do
+          first_id = hd(SessionManager.entries(state.session_manager)).id
           Session.navigate_tree(session, first_id)
         end
 
@@ -823,12 +823,12 @@ defmodule CodingAgent.SessionBranchTest do
       sm = create_deep_session_manager(tmp_dir, 4)
 
       # Corrupt one entry's parent_id to create a gap
-      entry_to_corrupt = Enum.at(sm.entries, 2)
+      entry_to_corrupt = Enum.at(SessionManager.entries(sm), 2)
       corrupted_entry = %{entry_to_corrupt | parent_id: "broken-parent"}
 
       sm = %{
         sm
-        | entries: List.replace_at(sm.entries, 2, corrupted_entry),
+        | entries: List.replace_at(SessionManager.entries(sm), 2, corrupted_entry),
           by_id: Map.put(sm.by_id, corrupted_entry.id, corrupted_entry)
       }
 
@@ -897,14 +897,14 @@ defmodule CodingAgent.SessionBranchTest do
       assert length(messages) == 100
 
       # Navigation to early entries should work
-      entry_10 = Enum.at(sm.entries, 9)
+      entry_10 = Enum.at(SessionManager.entries(sm), 9)
       :ok = Session.navigate_tree(session, entry_10.id)
 
       messages = Session.get_messages(session)
       assert length(messages) == 10
 
       # Navigation back to end should work
-      last_entry = List.last(sm.entries)
+      last_entry = List.last(SessionManager.entries(sm))
       :ok = Session.navigate_tree(session, last_entry.id)
 
       messages = Session.get_messages(session)
@@ -925,7 +925,7 @@ defmodule CodingAgent.SessionBranchTest do
 
       # Jump around the tree
       for idx <- [1, 50, 100, 149, 75, 25] do
-        entry = Enum.at(sm.entries, idx)
+        entry = Enum.at(SessionManager.entries(sm), idx)
         :ok = Session.navigate_tree(session, entry.id)
 
         messages = Session.get_messages(session)
@@ -951,11 +951,11 @@ defmodule CodingAgent.SessionBranchTest do
 
       # Should be able to navigate to any point
       state = Session.get_state(session)
-      total_entries = length(state.session_manager.entries)
+      total_entries = length(SessionManager.entries(state.session_manager))
       assert total_entries >= 200
 
       # Navigate to original end
-      original_end = Enum.at(sm.entries, 199)
+      original_end = Enum.at(SessionManager.entries(sm), 199)
       :ok = Session.navigate_tree(session, original_end.id)
 
       messages = Session.get_messages(session)
@@ -971,7 +971,7 @@ defmodule CodingAgent.SessionBranchTest do
       session = start_session(session_file: session_file, cwd: tmp_dir)
 
       # Measure navigation time
-      entries = sm.entries
+      entries = SessionManager.entries(sm)
 
       timings =
         for entry <- Enum.take_every(entries, 10) do
@@ -1004,7 +1004,7 @@ defmodule CodingAgent.SessionBranchTest do
       wait_for_streaming_complete(session)
 
       state = Session.get_state(session)
-      first_entry_id = hd(state.session_manager.entries).id
+      first_entry_id = hd(SessionManager.entries(state.session_manager)).id
 
       # Start another prompt
       :ok = Session.prompt(session, "Second!")
@@ -1033,7 +1033,7 @@ defmodule CodingAgent.SessionBranchTest do
       assert :queue.len(state_before.steering_queue) == 2
 
       # Navigate to first entry
-      first_id = hd(state_before.session_manager.entries).id
+      first_id = hd(SessionManager.entries(state_before.session_manager)).id
       :ok = Session.navigate_tree(session, first_id)
 
       # Steering queue should remain (it's for the agent, not session state)
@@ -1050,7 +1050,7 @@ defmodule CodingAgent.SessionBranchTest do
       session = start_session(session_file: session_file, cwd: tmp_dir)
 
       # Get a branch point entry
-      branch_entry = Enum.at(sm.entries, 2)
+      branch_entry = Enum.at(SessionManager.entries(sm), 2)
       children = SessionManager.get_children(sm, branch_entry.id)
 
       if length(children) >= 2 do
@@ -1085,8 +1085,8 @@ defmodule CodingAgent.SessionBranchTest do
 
       state = Session.get_state(session)
 
-      if length(state.session_manager.entries) >= 2 do
-        first_id = hd(state.session_manager.entries).id
+      if length(SessionManager.entries(state.session_manager)) >= 2 do
+        first_id = hd(SessionManager.entries(state.session_manager)).id
 
         # Start prompt with steer
         :ok = Session.prompt(session, "Prompt with steer coming")
@@ -1113,7 +1113,7 @@ defmodule CodingAgent.SessionBranchTest do
       end
 
       state = Session.get_state(session)
-      entries = state.session_manager.entries
+      entries = SessionManager.entries(state.session_manager)
 
       # Rapid navigation through all entries
       for _ <- 1..3 do
@@ -1145,8 +1145,8 @@ defmodule CodingAgent.SessionBranchTest do
 
       state = Session.get_state(session)
 
-      if state.session_manager.entries != [] do
-        first_id = hd(state.session_manager.entries).id
+      if SessionManager.entries(state.session_manager) != [] do
+        first_id = hd(SessionManager.entries(state.session_manager)).id
         :ok = Session.navigate_tree(session, first_id)
       end
 
@@ -1166,10 +1166,10 @@ defmodule CodingAgent.SessionBranchTest do
 
       state = Session.get_state(session)
 
-      if length(state.session_manager.entries) >= 2 do
+      if length(SessionManager.entries(state.session_manager)) >= 2 do
         # Navigate to first entry while hooks may be registered
         # (Note: This test validates that branch switches don't interfere with hooks)
-        first_id = hd(state.session_manager.entries).id
+        first_id = hd(SessionManager.entries(state.session_manager)).id
         :ok = Session.navigate_tree(session, first_id)
 
         # Should complete without error
@@ -1218,7 +1218,7 @@ defmodule CodingAgent.SessionBranchTest do
       assert length(messages) == 3
 
       # Navigate to first entry
-      first_id = hd(sm.entries).id
+      first_id = hd(SessionManager.entries(sm)).id
       :ok = Session.navigate_tree(session, first_id)
 
       messages = Session.get_messages(session)
@@ -1234,7 +1234,7 @@ defmodule CodingAgent.SessionBranchTest do
         SessionManager.append_compaction(
           sm,
           "Summary of previous conversation",
-          Enum.at(sm.entries, 4).id,
+          Enum.at(SessionManager.entries(sm), 4).id,
           5000,
           %{method: "test"}
         )
@@ -1255,7 +1255,7 @@ defmodule CodingAgent.SessionBranchTest do
 
       # No entries yet
       state = Session.get_state(session)
-      assert state.session_manager.entries == []
+      assert SessionManager.entries(state.session_manager) == []
       assert state.session_manager.leaf_id == nil
 
       # Navigation to any ID should fail
@@ -1274,8 +1274,8 @@ defmodule CodingAgent.SessionBranchTest do
 
       state = Session.get_state(session)
 
-      if state.session_manager.entries != [] do
-        first_id = hd(state.session_manager.entries).id
+      if SessionManager.entries(state.session_manager) != [] do
+        first_id = hd(SessionManager.entries(state.session_manager)).id
         :ok = Session.navigate_tree(session, first_id)
 
         # Stream should still be valid

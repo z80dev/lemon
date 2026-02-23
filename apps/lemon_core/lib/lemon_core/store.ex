@@ -17,6 +17,7 @@ defmodule LemonCore.Store do
 
   alias LemonCore.MapHelpers
   alias LemonCore.Store.EtsBackend
+  alias LemonCore.Store.ReadCache
   require Logger
 
   @default_backend EtsBackend
@@ -39,39 +40,83 @@ defmodule LemonCore.Store do
   # Chat State API
 
   @spec put_chat_state(term(), map()) :: :ok
-  def put_chat_state(scope, state),
-    do: GenServer.cast(__MODULE__, {:put_chat_state, scope, state})
+  def put_chat_state(scope, state) do
+    # Eagerly update read cache before async GenServer cast for consistency
+    ReadCache.put(:chat, scope, state)
+    GenServer.cast(__MODULE__, {:put_chat_state, scope, state})
+  end
 
   @spec get_chat_state(term()) :: map() | nil
-  def get_chat_state(scope), do: GenServer.call(__MODULE__, {:get_chat_state, scope})
+  def get_chat_state(scope) do
+    # Fast path: read from ETS cache, bypassing GenServer mailbox
+    case ReadCache.get(:chat, scope) do
+      nil ->
+        # Cache miss — fall through to GenServer for backend lookup
+        GenServer.call(__MODULE__, {:get_chat_state, scope})
+
+      %{expires_at: expires_at} = value when is_integer(expires_at) ->
+        if System.system_time(:millisecond) > expires_at do
+          # Expired — trigger lazy cleanup through GenServer
+          GenServer.call(__MODULE__, {:get_chat_state, scope})
+        else
+          value
+        end
+
+      value ->
+        value
+    end
+  end
 
   @spec delete_chat_state(term()) :: :ok
-  def delete_chat_state(scope), do: GenServer.cast(__MODULE__, {:delete_chat_state, scope})
+  def delete_chat_state(scope) do
+    ReadCache.delete(:chat, scope)
+    GenServer.cast(__MODULE__, {:delete_chat_state, scope})
+  end
 
   # Run Events API
 
   @spec append_run_event(term(), term()) :: :ok
-  def append_run_event(run_id, event),
-    do: GenServer.cast(__MODULE__, {:append_run_event, run_id, event})
+  def append_run_event(run_id, event) do
+    # Eagerly update read cache: prepend event to cached record
+    case ReadCache.get(:runs, run_id) do
+      nil -> :ok
+      record -> ReadCache.put(:runs, run_id, %{record | events: [event | record.events]})
+    end
+
+    GenServer.cast(__MODULE__, {:append_run_event, run_id, event})
+  end
 
   @spec finalize_run(term(), map()) :: :ok
-  def finalize_run(run_id, summary),
-    do: GenServer.cast(__MODULE__, {:finalize_run, run_id, summary})
+  def finalize_run(run_id, summary) do
+    # Eagerly update read cache with summary
+    case ReadCache.get(:runs, run_id) do
+      nil -> :ok
+      record -> ReadCache.put(:runs, run_id, %{record | summary: summary})
+    end
+
+    GenServer.cast(__MODULE__, {:finalize_run, run_id, summary})
+  end
 
   # Progress Mapping API
 
   @spec put_progress_mapping(term(), integer(), term()) :: :ok
   def put_progress_mapping(scope, progress_msg_id, run_id) do
+    ReadCache.put(:progress, {scope, progress_msg_id}, run_id)
     GenServer.cast(__MODULE__, {:put_progress_mapping, scope, progress_msg_id, run_id})
   end
 
   @spec get_run_by_progress(term(), integer()) :: term() | nil
   def get_run_by_progress(scope, progress_msg_id) do
-    GenServer.call(__MODULE__, {:get_run_by_progress, scope, progress_msg_id})
+    # Fast path: direct ETS cache lookup
+    case ReadCache.get(:progress, {scope, progress_msg_id}) do
+      nil -> GenServer.call(__MODULE__, {:get_run_by_progress, scope, progress_msg_id})
+      value -> value
+    end
   end
 
   @spec delete_progress_mapping(term(), integer()) :: :ok
   def delete_progress_mapping(scope, progress_msg_id) do
+    ReadCache.delete(:progress, {scope, progress_msg_id})
     GenServer.cast(__MODULE__, {:delete_progress_mapping, scope, progress_msg_id})
   end
 
@@ -224,7 +269,11 @@ defmodule LemonCore.Store do
   """
   @spec get_run(term()) :: map() | nil
   def get_run(run_id) do
-    GenServer.call(__MODULE__, {:get_run, run_id})
+    # Fast path: direct ETS cache lookup
+    case ReadCache.get(:runs, run_id) do
+      nil -> GenServer.call(__MODULE__, {:get_run, run_id})
+      value -> value
+    end
   end
 
   # GenServer Implementation
@@ -241,6 +290,9 @@ defmodule LemonCore.Store do
 
     case backend.init(backend_opts) do
       {:ok, backend_state} ->
+        # Initialize read-through cache for high-traffic domains
+        ReadCache.init()
+
         # Schedule periodic sweep for expired chat states
         schedule_sweep()
 
@@ -294,6 +346,7 @@ defmodule LemonCore.Store do
                 # Expired - delete and return nil
                 case state.backend.delete(backend_state, :chat, scope) do
                   {:ok, next_state} ->
+                    ReadCache.delete(:chat, scope)
                     {nil, next_state}
 
                   {:error, reason} ->
@@ -471,6 +524,7 @@ defmodule LemonCore.Store do
 
     case state.backend.put(state.backend_state, :chat, scope, value_with_expiry) do
       {:ok, backend_state} ->
+        ReadCache.put(:chat, scope, value_with_expiry)
         {:noreply, %{state | backend_state: backend_state}}
 
       {:error, reason} ->
@@ -486,6 +540,7 @@ defmodule LemonCore.Store do
   def handle_cast({:delete_chat_state, scope}, state) do
     case state.backend.delete(state.backend_state, :chat, scope) do
       {:ok, backend_state} ->
+        ReadCache.delete(:chat, scope)
         {:noreply, %{state | backend_state: backend_state}}
 
       {:error, reason} ->
@@ -508,6 +563,7 @@ defmodule LemonCore.Store do
 
         case state.backend.put(backend_state, :runs, run_id, record) do
           {:ok, backend_state} ->
+            ReadCache.put(:runs, run_id, record)
             {:noreply, %{state | backend_state: backend_state}}
 
           {:error, reason} ->
@@ -539,6 +595,7 @@ defmodule LemonCore.Store do
 
         case state.backend.put(backend_state, :runs, run_id, record) do
           {:ok, backend_state} ->
+            ReadCache.put(:runs, run_id, record)
             session_key = Map.get(summary, :session_key)
             started_at = record.started_at
 
@@ -603,6 +660,7 @@ defmodule LemonCore.Store do
 
     case state.backend.put(state.backend_state, :progress, key, run_id) do
       {:ok, backend_state} ->
+        ReadCache.put(:progress, key, run_id)
         {:noreply, %{state | backend_state: backend_state}}
 
       {:error, reason} ->
@@ -620,6 +678,7 @@ defmodule LemonCore.Store do
 
     case state.backend.delete(state.backend_state, :progress, key) do
       {:ok, backend_state} ->
+        ReadCache.delete(:progress, key)
         {:noreply, %{state | backend_state: backend_state}}
 
       {:error, reason} ->

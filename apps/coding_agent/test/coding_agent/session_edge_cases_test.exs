@@ -522,7 +522,7 @@ defmodule CodingAgent.SessionEdgeCasesTest do
       state = Session.get_state(session)
 
       model_changes =
-        Enum.filter(state.session_manager.entries, &(&1.type == :model_change))
+        Enum.filter(SessionManager.entries(state.session_manager), &(&1.type == :model_change))
 
       assert length(model_changes) == 1
       assert hd(model_changes).model_id == "another-model"

@@ -3,6 +3,7 @@ defmodule CodingAgent.SessionAutoCompactionAsyncTest do
 
   alias AgentCore.Test.Mocks
   alias CodingAgent.Session
+  alias CodingAgent.SessionManager
 
   defp start_session(opts \\ []) do
     cwd =
@@ -43,7 +44,7 @@ defmodule CodingAgent.SessionAutoCompactionAsyncTest do
     {
       state.session_manager.header.id,
       state.session_manager.leaf_id,
-      length(state.session_manager.entries),
+      length(SessionManager.entries(state.session_manager)),
       state.turn_index,
       state.model.provider,
       state.model.id
@@ -69,7 +70,9 @@ defmodule CodingAgent.SessionAutoCompactionAsyncTest do
     trigger_auto_compaction_result(session, :stale_signature, stale_result)
     state = Session.get_state(session)
 
-    assert state.session_manager.entries == before.session_manager.entries
+    assert SessionManager.entries(state.session_manager) ==
+             SessionManager.entries(before.session_manager)
+
     assert auto_compaction_in_progress?(state)
   end
 
@@ -82,7 +85,7 @@ defmodule CodingAgent.SessionAutoCompactionAsyncTest do
     state_before = Session.get_state(session)
 
     initial_compaction_count =
-      Enum.count(state_before.session_manager.entries, &(&1.type == :compaction))
+      Enum.count(SessionManager.entries(state_before.session_manager), &(&1.type == :compaction))
 
     signature = current_signature(state_before)
     mark_auto_compaction_in_progress(session, signature)
@@ -98,7 +101,9 @@ defmodule CodingAgent.SessionAutoCompactionAsyncTest do
 
     state_after = Session.get_state(session)
 
-    compactions = Enum.filter(state_after.session_manager.entries, &(&1.type == :compaction))
+    compactions =
+      Enum.filter(SessionManager.entries(state_after.session_manager), &(&1.type == :compaction))
+
     assert length(compactions) == initial_compaction_count + 1
 
     last_compaction = List.last(compactions)
