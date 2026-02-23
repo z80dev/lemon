@@ -1,7 +1,8 @@
 # PLN-20260223: macOS Keychain Secrets Path Audit and Hardening
 
 **Status:** Planned  
-**Branch:** `feature/pln-20260223-macos-keychain-secrets-audit`  
+**Workspace:** `feature/pln-20260223-macos-keychain-secrets-audit`  
+**Change ID:** `pending`  
 **Created:** 2026-02-23  
 
 ## Goal

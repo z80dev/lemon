@@ -5,8 +5,9 @@ created: 2026-02-23
 updated: 2026-02-23
 owner: zeebot
 reviewer: codex
-branch: feature/pln-20260223-transport-registry-dedup
-status: merged
+workspace: feature/pln-20260223-transport-registry-dedup
+change_id: 92c8ca86
+status: landed
 roadmap_ref: ROADMAP.md:35
 depends_on: []
 ---
@@ -87,6 +88,6 @@ This pattern is repeated for: telegram, discord, farcaster, email, xmtp, webhook
 - [x] Scope delivered - eliminated ~64 lines of duplication
 - [x] Tests recorded with pass/fail evidence - 1586 tests run
 - [x] Review artifact completed - N/A (simple refactoring)
-- [x] Merge artifact completed - N/A (simple refactoring)
+- [x] Landing artifact completed - N/A (simple refactoring)
 - [x] Relevant docs updated - plan created
-- [x] Plan status set to `merged`
+- [x] Plan status set to `landed`

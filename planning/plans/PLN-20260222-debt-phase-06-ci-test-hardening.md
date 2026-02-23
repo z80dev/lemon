@@ -1,7 +1,8 @@
 # PLN-20260222: Debt Phase 6 — CI & Test Signal Hardening
 
 **Status:** Complete
-**Branch:** `feature/pln-20260222-debt-phase-06-ci-test-hardening`
+**Workspace:** `feature/pln-20260222-debt-phase-06-ci-test-hardening`
+**Change ID:** `f98750e5`
 **Created:** 2026-02-22
 
 ## Goal

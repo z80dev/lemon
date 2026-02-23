@@ -1,16 +1,17 @@
 ---
 id: PLN-20260223-lemon-quality-unblock
 title: Unblock `mix lemon.quality` (duplicate tests + architecture boundaries)
-status: merged
+status: landed
 priority_bucket: now
 owner: codex
 reviewer: codex
-branch: feature/pln-20260223-lemon-quality-unblock
+workspace: feature/pln-20260223-lemon-quality-unblock
+change_id: pending
 created: 2026-02-23
 updated: 2026-02-23
 roadmap_ref: ROADMAP.md:74
 review_doc: planning/reviews/RVW-PLN-20260223-lemon-quality-unblock.md
-merge_doc: planning/merges/MRG-PLN-20260223-lemon-quality-unblock.md
+landing_doc: planning/merges/MRG-PLN-20260223-lemon-quality-unblock.md
 decision_docs: []
 depends_on:
   - PLN-20260223-ai-test-expansion
@@ -54,7 +55,7 @@ From `mix lemon.quality` on 2026-02-23:
 - [x] M1 - Duplicate test module cleanup complete.
 - [x] M2 - Architecture-boundary violations in `market_intel` resolved.
 - [x] M3 - `mix lemon.quality` passes cleanly.
-- [x] M4 - Plan review and merge artifacts completed.
+- [x] M4 - Plan review and landing artifacts completed.
 
 ## Work Breakdown
 
@@ -63,7 +64,7 @@ From `mix lemon.quality` on 2026-02-23:
 - [x] Refactor `market_intel` commentary pipeline to compliant dependency boundaries.
 - [x] Run targeted tests for changed apps (`ai`, `market_intel`).
 - [x] Run full quality gate and capture evidence.
-- [x] Update planning review/merge artifacts and status transitions.
+- [x] Update planning review/landing artifacts and status transitions.
 
 ## Test Matrix
 
@@ -96,6 +97,6 @@ From `mix lemon.quality` on 2026-02-23:
 - [x] Scope delivered
 - [x] Tests recorded with pass/fail evidence
 - [x] Review artifact completed
-- [x] Merge artifact completed
+- [x] Landing artifact completed
 - [x] Relevant docs updated
-- [ ] Plan status set to `merged`
+- [ ] Plan status set to `landed`

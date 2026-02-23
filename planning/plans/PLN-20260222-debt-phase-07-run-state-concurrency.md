@@ -1,7 +1,8 @@
 # PLN-20260222: Debt Phase 7 — Run-State Correctness and Concurrency Safety
 
 **Status**: Complete  
-**Branch**: `feature/pln-20260222-debt-phase-07-run-state-concurrency`  
+**Workspace**: `feature/pln-20260222-debt-phase-07-run-state-concurrency`  
+**Change ID:** `ca47f7e9`  
 **Created**: 2026-02-22  
 
 ## Goal

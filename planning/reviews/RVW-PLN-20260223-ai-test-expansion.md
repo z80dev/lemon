@@ -36,4 +36,4 @@ Finished in 2.5 seconds
 - [x] Async test execution where possible
 
 ## Recommendation
-Approve for merge. All success criteria met.
+Approve for landing. All success criteria met.

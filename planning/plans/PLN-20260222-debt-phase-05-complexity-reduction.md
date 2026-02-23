@@ -2,7 +2,8 @@
 
 **Date:** 2026-02-22
 **Owner:** Platform Engineering
-**Branch:** `feature/pln-20260222-debt-phase-05-complexity-reduction`
+**Workspace:** `feature/pln-20260222-debt-phase-05-complexity-reduction`
+**Change ID:** `117fc08b`
 **Status:** M1 Complete
 
 ---
@@ -28,8 +29,8 @@ Create a ranked inventory of the largest and highest-complexity modules in the c
 
 - **Module sizes:** `find apps/*/lib/ -name '*.ex' | xargs wc -l | sort -rn`
 - **Test sizes:** `find apps/*/test/ -name '*.exs' | xargs wc -l | sort -rn`
-- **Churn (all-time):** `git log --format=format: --name-only -- 'apps/*/lib/**/*.ex' | sort | uniq -c | sort -rn | head -30`
-- **Churn (30d):** Same command with `--since="30 days ago"`
+- **Churn (all-time):** `jj log --no-graph -r :: --name-only -- 'glob:apps/*/lib/**/*.ex' | rg '^apps/' | sort | uniq -c | sort -rn | head -30`
+- **Churn (30d):** Same command with `-r ':: & committer_date(after:"2026-01-23")'`
 - **Analysis date:** 2026-02-22
 
 ---
@@ -94,7 +95,7 @@ Create a ranked inventory of the largest and highest-complexity modules in the c
 
 ### High-Churn Files (All-Time Commits)
 
-Measured via `git log --format=format: --name-only -- 'apps/*/lib/**/*.ex' | sort | uniq -c | sort -rn | head -30`:
+Measured via `jj log --no-graph -r :: --name-only -- 'glob:apps/*/lib/**/*.ex' | rg '^apps/' | sort | uniq -c | sort -rn | head -30`:
 
 | Commits | File |
 |---------|------|
@@ -246,9 +247,8 @@ Based on the inventory, the following 5 modules are recommended as M2 extraction
 
 - Ran `wc -l` across all `apps/*/lib/**/*.ex` files (total: ~154k lines across the codebase).
 - Ranked top 20 largest source modules and top 20 largest test files.
-- Ran `git log` churn analysis (all-time and 30-day windows — identical results since codebase history is within 30 days).
+- Ran `jj log` churn analysis (all-time and 30-day windows — identical results since codebase history is within 30 days).
 - Confirmed debt-plan candidates `ai/models.ex` (11,203 lines, 29 commits) and `coding_agent/session.ex` (3,261 lines, 31 commits) are both top-tier by both metrics.
 - Produced ranked inventory table with size, churn, and rationale.
 - Recommended 5 M2 extraction targets with justification.
 - M1 milestone marked complete.
-

@@ -1,6 +1,7 @@
 # PLN-20260222: Debt Phase 12 — Deterministic Async Test Harness
 
-**Branch:** `feature/pln-20260222-debt-phase-12-deterministic-async-test-harness`  
+**Workspace:** `feature/pln-20260222-debt-phase-12-deterministic-async-test-harness`  
+**Change ID:** `a8387a3d`  
 **Created:** 2026-02-22  
 **Status:** In Progress
 
@@ -20,7 +21,7 @@ Reduce flakiness in concurrency-heavy test suites by replacing timing randomness
 ### 2026-02-22
 
 **Setup**
-- Created branch `feature/pln-20260222-debt-phase-12-deterministic-async-test-harness`
+- Created workspace `feature/pln-20260222-debt-phase-12-deterministic-async-test-harness`
 - Created planning directory and this plan artifact
 - Surveyed timing patterns across test suite:
   - `patch_test.exs` line 835: `:timer.sleep(:rand.uniform(10))` in race condition test

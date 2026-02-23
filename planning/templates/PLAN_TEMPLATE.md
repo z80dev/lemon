@@ -2,9 +2,11 @@
 
 ## Metadata
 - **Plan ID**: PLN-YYYYMMDD-short-slug
-- **Status**: draft | in_progress | in_review | ready_to_merge | merged | cancelled
+- **Status**: proposed | planned | in_progress | in_review | ready_to_land | landed | blocked | abandoned
 - **Created**: YYYY-MM-DD
 - **Author**: agent-name
+- **Workspace**: jj-workspace-name
+- **Change ID**: jj-change-id (or `pending`)
 
 ## Summary
 Brief description of the work to be done.

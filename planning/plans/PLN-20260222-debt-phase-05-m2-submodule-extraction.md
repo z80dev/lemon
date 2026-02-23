@@ -5,8 +5,9 @@ created: 2026-02-22
 updated: 2026-02-22
 owner: codex
 reviewer: codex
-branch: debt-phase-05-m2
-status: in-progress
+workspace: debt-phase-05-m2
+change_id: pending
+status: in_progress
 roadmap_ref: ROADMAP.md
 depends_on: []
 ---

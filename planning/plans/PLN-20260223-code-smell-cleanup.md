@@ -5,8 +5,9 @@ created: 2026-02-23
 updated: 2026-02-23
 owner: zeebot
 reviewer: codex
-branch: feature/pln-20260223-code-smell-cleanup
-status: merged
+workspace: feature/pln-20260223-code-smell-cleanup
+change_id: pending
+status: landed
 roadmap_ref: ROADMAP.md:35
 depends_on: []
 ---
@@ -82,6 +83,6 @@ Extract duplicated header key comparison and content-type parsing logic into sha
 - [x] Scope delivered - extracted 4 duplicate header key comparisons
 - [x] Tests recorded with pass/fail evidence - 28 tests pass
 - [x] Review artifact completed - N/A (simple refactoring)
-- [x] Merge artifact completed - N/A (simple refactoring)
+- [x] Landing artifact completed - N/A (simple refactoring)
 - [x] Relevant docs updated - plan created
-- [x] Plan status set to `merged`
+- [x] Plan status set to `landed`

@@ -2,9 +2,11 @@
 
 ## Metadata
 - **Plan ID**: PLN-20260223-ai-test-expansion
-- **Status**: merged
+- **Status**: landed
 - **Created**: 2026-02-23
 - **Author**: zeebot
+- **Workspace**: `feature/pln-20260223-ai-test-expansion`
+- **Change ID**: `ce421ec8`
 
 ## Summary
 Add comprehensive tests for untested modules in the `ai` app. The AI app has 11 untested modules out of 28 total, representing the lowest test coverage in the core apps.

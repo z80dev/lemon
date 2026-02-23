@@ -5,8 +5,9 @@ created: 2026-02-23
 updated: 2026-02-23
 owner: zeebot
 reviewer: codex
-branch: feature/pln-20260223-poll-jobs-rename
-status: merged
+workspace: feature/pln-20260223-poll-jobs-rename
+change_id: 26be7b4d
+status: landed
 roadmap_ref: ROADMAP.md:35
 depends_on: []
 ---
@@ -69,7 +70,7 @@ chore: renamed job polling tool to await
 | Date (UTC) | Actor | Update | Evidence |
 |---|---|---|---|
 | 2026-02-23 20:30 | zeebot | Created plan | `planning/plans/PLN-20260223-poll-jobs-rename.md` |
-| 2026-02-23 20:30 | zeebot | Found Oh-My-Pi commit 1d9578dd renaming poll_jobs to await | `git show 1d9578dd` in oh-my-pi repo |
+| 2026-02-23 20:30 | zeebot | Found Oh-My-Pi commit 1d9578dd renaming poll_jobs to await | `jj show 1d9578dd` in oh-my-pi repo |
 | 2026-02-23 20:35 | zeebot | Renamed poll_jobs to await | Commit `26be7b4d` |
 | 2026-02-23 20:35 | zeebot | All 14 tests pass | `mix test` output |
 
@@ -78,6 +79,6 @@ chore: renamed job polling tool to await
 - [x] Scope delivered - renamed poll_jobs to await
 - [x] Tests recorded with pass/fail evidence - 14 tests pass
 - [x] Review artifact completed - N/A (simple rename)
-- [x] Merge artifact completed - N/A (simple rename)
+- [x] Landing artifact completed - N/A (simple rename)
 - [x] Relevant docs updated - AGENTS.md updated
-- [x] Plan status set to `merged`
+- [x] Plan status set to `landed`

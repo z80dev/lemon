@@ -1,7 +1,8 @@
 # PLN-20260222: Debt Phase 11 — Placeholder and Stub Burn-Down
 
 **Status:** Complete
-**Branch:** `feature/pln-20260222-debt-phase-11-placeholder-stub-burndown`
+**Workspace:** `feature/pln-20260222-debt-phase-11-placeholder-stub-burndown`
+**Change ID:** `822cb2f6`
 **Created:** 2026-02-22
 
 ## Goal
@@ -42,4 +43,3 @@ implementations or explicitly managed feature flags.
 | 2026-02-22T19:43 | M3 | Updated CallSession.convert_pcm_to_mulaw to use AudioConversion; detects MP3 input |
 | 2026-02-22T19:43 | M3 | Converted X API README TODO list into owned backlog table with phases and owners |
 | 2026-02-22T19:43 | M3 | Added comprehensive AudioConversion tests (monotonicity, edge cases, round-trip) |
-

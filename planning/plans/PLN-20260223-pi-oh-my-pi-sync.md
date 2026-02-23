@@ -1,16 +1,17 @@
 ---
 id: PLN-20260223-pi-oh-my-pi-sync
 title: Pi/Oh-My-Pi Upstream Sync - Models and Tools
-status: merged
+status: landed
 priority_bucket: now
 owner: zeebot
 reviewer: codex
-branch: feature/pln-20260223-pi-oh-my-pi-sync
+workspace: feature/pln-20260223-pi-oh-my-pi-sync
+change_id: bb34c752
 created: 2026-02-23
 updated: 2026-02-23
 roadmap_ref: ROADMAP.md:35
 review_doc: planning/reviews/RVW-PLN-20260223-pi-oh-my-pi-sync.md
-merge_doc: planning/merges/MRG-PLN-20260223-pi-oh-my-pi-sync.md
+landing_doc: planning/merges/MRG-PLN-20260223-pi-oh-my-pi-sync.md
 decision_docs: []
 depends_on: []
 ---
@@ -68,7 +69,7 @@ Sync new LLM models, providers, and tool features from Pi and Oh-My-Pi upstream 
 ## Rollback Plan
 
 If issues are discovered:
-1. Revert commits individually using `git revert <sha>`
+1. Revert revisions individually using `jj revert -r <rev> --onto @`
 2. Features are isolated to specific modules, so rollback is straightforward
 
 ## Progress Log
@@ -76,8 +77,8 @@ If issues are discovered:
 | Date (UTC) | Actor | Update | Evidence |
 |---|---|---|---|
 | 2026-02-23 18:45 | zeebot | Created plan | `planning/plans/PLN-20260223-pi-oh-my-pi-sync.md` |
-| 2026-02-23 18:50 | zeebot | Checked Pi upstream - models already up to date | `git log 421ad1a7` shows models previously ported |
-| 2026-02-23 18:55 | zeebot | Found Oh-My-Pi commit 6c52f8cf with hashline simplification | `git show 6c52f8cf` in oh-my-pi repo |
+| 2026-02-23 18:50 | zeebot | Checked Pi upstream - models already up to date | `jj log -r 421ad1a7` shows models previously ported |
+| 2026-02-23 18:55 | zeebot | Found Oh-My-Pi commit 6c52f8cf with hashline simplification | `jj show 6c52f8cf` in oh-my-pi repo |
 | 2026-02-23 20:05 | zeebot | Discovered hashline already ported (commits 1294e66d, bb34c752) | No new upstream changes to port |
 | 2026-02-23 20:05 | zeebot | Verified 101 hashline tests pass | `mix test` output |
 
@@ -86,6 +87,6 @@ If issues are discovered:
 - [x] Scope delivered - discovered work already completed
 - [x] Tests recorded with pass/fail evidence - 101 tests pass
 - [x] Review artifact completed - N/A (no new code to review)
-- [x] Merge artifact completed - N/A (no new code to merge)
+- [x] Landing artifact completed - N/A (no new code to land)
 - [x] Relevant docs updated (`AGENTS.md`, `README.md`, `docs/`, `ROADMAP.md`) - plan created
-- [x] Plan status set to `merged`
+- [x] Plan status set to `landed`
