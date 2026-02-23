@@ -1196,74 +1196,65 @@ defmodule CodingAgent.Tools.PatchTest do
   # =============================================================================
 
   describe "edge cases - file permission scenarios" do
-    @tag :skip_on_ci
     test "handles read-only file", %{tmp_dir: tmp_dir} do
+      import CodingAgent.TestHelpers.PermissionHelpers
+
       file = Path.join(tmp_dir, "readonly.txt")
       File.write!(file, "original")
-      File.chmod!(file, 0o444)
 
-      on_exit(fn ->
-        File.chmod(file, 0o644)
-        File.rm(file)
+      with_readonly_file(file, fn ->
+        patch_text = """
+        *** Update File: readonly.txt
+        @@ hunk
+        -original
+        +modified
+        """
+
+        result = Patch.execute("call_1", %{"patch_text" => patch_text}, nil, nil, tmp_dir, [])
+
+        assert {:error, msg} = result
+        assert msg =~ "Permission denied" or msg =~ "eacces"
       end)
-
-      patch_text = """
-      *** Update File: readonly.txt
-      @@ hunk
-      -original
-      +modified
-      """
-
-      result = Patch.execute("call_1", %{"patch_text" => patch_text}, nil, nil, tmp_dir, [])
-
-      assert {:error, msg} = result
-      assert msg =~ "Permission denied" or msg =~ "eacces"
     end
 
-    @tag :skip_on_ci
     test "handles read-only directory for new file", %{tmp_dir: tmp_dir} do
+      import CodingAgent.TestHelpers.PermissionHelpers
+
       readonly_dir = Path.join(tmp_dir, "readonly_dir")
       File.mkdir_p!(readonly_dir)
-      File.chmod!(readonly_dir, 0o555)
 
-      on_exit(fn ->
-        File.chmod(readonly_dir, 0o755)
-        File.rm_rf(readonly_dir)
+      with_unwritable_dir(readonly_dir, fn ->
+        patch_text = """
+        *** Add File: readonly_dir/new.txt
+        +content
+        """
+
+        result = Patch.execute("call_1", %{"patch_text" => patch_text}, nil, nil, tmp_dir, [])
+
+        assert {:error, msg} = result
+        assert msg =~ "Permission denied" or msg =~ "eacces"
       end)
-
-      patch_text = """
-      *** Add File: readonly_dir/new.txt
-      +content
-      """
-
-      result = Patch.execute("call_1", %{"patch_text" => patch_text}, nil, nil, tmp_dir, [])
-
-      assert {:error, msg} = result
-      assert msg =~ "Permission denied" or msg =~ "eacces"
     end
 
-    @tag :skip_on_ci
     test "handles unreadable file", %{tmp_dir: tmp_dir} do
+      import CodingAgent.TestHelpers.PermissionHelpers
+
       file = Path.join(tmp_dir, "unreadable.txt")
       File.write!(file, "secret")
-      File.chmod!(file, 0o000)
 
-      on_exit(fn ->
-        File.chmod(file, 0o644)
-        File.rm(file)
+      with_unreadable(file, fn ->
+        patch_text = """
+        *** Update File: unreadable.txt
+        @@ hunk
+        -secret
+        +exposed
+        """
+
+        result = Patch.execute("call_1", %{"patch_text" => patch_text}, nil, nil, tmp_dir, [])
+
+        assert {:error, msg} = result
+        assert msg =~ "Permission denied" or msg =~ "eacces"
       end)
-
-      patch_text = """
-      *** Update File: unreadable.txt
-      @@ hunk
-      -secret
-      +exposed
-      """
-
-      result = Patch.execute("call_1", %{"patch_text" => patch_text}, nil, nil, tmp_dir, [])
-
-      assert {:error, msg} = result
-      assert msg =~ "Permission denied" or msg =~ "eacces"
     end
 
     test "handles non-existent parent directory", %{tmp_dir: tmp_dir} do
