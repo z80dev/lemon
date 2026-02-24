@@ -296,41 +296,7 @@ defmodule Ai.Models.Anthropic do
       cost: %ModelCost{input: 3.0, output: 15.0, cache_read: 0.3, cache_write: 3.75},
       context_window: 200_000,
       max_tokens: 64_000
-    },
-"claude-opus-4-6" => %Model{
-                          id: "claude-opus-4-6",
-                          name: "Claude Opus 4.6",
-                          api: :anthropic_messages,
-                          provider: :anthropic,
-                          base_url: "https://api.anthropic.com",
-                          reasoning: true,
-                          input: [:text, :image],
-                          cost: %ModelCost{
-                            input: 5.0,
-                            output: 25.0,
-                            cache_read: 0.5,
-                            cache_write: 6.25
-                          },
-                          context_window: 200_000,
-                          max_tokens: 128_000
-                        },
-                        "claude-sonnet-4-6" => %Model{
-                          id: "claude-sonnet-4-6",
-                          name: "Claude Sonnet 4.6",
-                          api: :anthropic_messages,
-                          provider: :anthropic,
-                          base_url: "https://api.anthropic.com",
-                          reasoning: true,
-                          input: [:text, :image],
-                          cost: %ModelCost{
-                            input: 3.0,
-                            output: 15.0,
-                            cache_read: 0.3,
-                            cache_write: 3.75
-                          },
-                          context_window: 200_000,
-                          max_tokens: 64_000
-                        }
+    }
   }
 
   @doc "Returns all Anthropic model definitions as a map."
