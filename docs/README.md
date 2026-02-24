@@ -15,6 +15,7 @@ This folder is the canonical navigation map for Lemon runtime and harness behavi
 - [`docs/context.md`](context.md)
 - [`docs/telemetry.md`](telemetry.md)
 - [`docs/beam_agents.md`](beam_agents.md)
+- [`docs/runtime-hot-reload.md`](runtime-hot-reload.md)
 
 ## Product & Capability Docs
 
