@@ -20,55 +20,56 @@ api_key = "sk-..."
 api_key = "opencode-..."
 base_url = "https://opencode.ai/zen/v1"
 
-[agent]
-default_provider = "anthropic"
-default_model = "claude-sonnet-4-20250514"
-default_thinking_level = "medium"
+[defaults]
+provider = "anthropic"
+model = "anthropic:claude-sonnet-4-20250514"
+thinking_level = "medium"
+engine = "lemon"
 
-[agent.compaction]
+[runtime.compaction]
 enabled = true
 reserve_tokens = 16384
 keep_recent_tokens = 20000
 
-[agent.retry]
+[runtime.retry]
 enabled = true
 max_retries = 3
 base_delay_ms = 1000
 
-[agent.cli.codex]
+[runtime.cli.codex]
 extra_args = ["-c", "notify=[]"]
 auto_approve = false
 
-[agent.cli.opencode]
+[runtime.cli.opencode]
 # Optional model override passed to `opencode run --model`.
 model = "gpt-4.1"
 
-[agent.cli.pi]
+[runtime.cli.pi]
 # Optional extra flags prepended to the `pi` command.
 extra_args = []
 # Optional provider/model overrides passed to `pi --provider/--model`.
 provider = "openai"
 model = "gpt-4.1"
 
-[agent.cli.claude]
+[runtime.cli.claude]
 dangerously_skip_permissions = true
 
-[agent.tools.web.search]
+[runtime.tools.web.search]
 provider = "brave" # "brave" | "perplexity"
 cache_ttl_minutes = 15
 
-[agent.tools.web.search.perplexity]
+[runtime.tools.web.search.perplexity]
 model = "perplexity/sonar-pro"
 
-[agent.tools.web.fetch]
+[runtime.tools.web.fetch]
 cache_ttl_minutes = 15
 allow_private_network = false
 allowed_hostnames = []
 
-[agent.tools.web.fetch.firecrawl]
+[runtime.tools.web.fetch.firecrawl]
 enabled = true
 
-[agent.tools.wasm]
+[runtime.tools.wasm]
 enabled = false
 auto_build = true
 runtime_path = ""
@@ -87,7 +88,7 @@ debug = false
 [logging]
 # Optional: write logs to a file for later analysis.
 # If unset/empty, file logging is disabled and logs go to stdout/stderr only.
-file_path = "~/.lemon/log/lemon.log"
+file = "~/.lemon/log/lemon.log"
 # Optional: handler level for the file (defaults to "debug").
 level = "debug"
 
@@ -112,13 +113,11 @@ connect_timeout_ms = 15000
 require_live = true
 mock_mode = false
 
-[agents.default]
+[profiles.default]
 name = "Daily Assistant"
-default_engine = "lemon"
 system_prompt = "You are my daily assistant."
-model = "anthropic:claude-sonnet-4-20250514"
 
-[agents.default.tool_policy]
+[profiles.default.tool_policy]
 # Optional preset profile:
 # profile = "minimal_core"  # full_access | minimal_core | read_only | safe_mode | subagent_restricted | no_external | custom
 allow = "all"
@@ -145,6 +144,21 @@ Environment variables override file values. Common overrides:
 - `LEMON_LOG_FILE`, `LEMON_LOG_LEVEL`
 - `BRAVE_API_KEY`, `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, `FIRECRAWL_API_KEY`
 
+## Preferred vs Legacy Sections
+
+Preferred section names:
+
+- `defaults` for model/provider/thinking/engine defaults
+- `runtime` for runtime/tool/CLI behavior
+- `profiles.<agent_id>` for assistant profiles
+
+Legacy aliases are still supported for backward compatibility:
+
+- `agent` (legacy alias of `runtime`, and also source of `default_*` values)
+- `agents.<agent_id>` (legacy alias of `profiles.<agent_id>`)
+
+When both are present, preferred sections win for overlapping keys (`runtime` over `agent`, `profiles` over `agents`).
+
 ## Dotenv Autoload
 
 Lemon can auto-load a `.env` file at startup:
@@ -165,9 +179,9 @@ Recommended setup:
 2. Set your default provider/model:
 
 ```toml
-[agent]
-default_provider = "openai-codex"
-default_model = "gpt-5.2"
+[defaults]
+provider = "openai-codex"
+model = "openai-codex:gpt-5.2"
 ```
 
 Lemon will automatically read your access token from `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`) and refresh it as needed.
@@ -178,29 +192,29 @@ To force a token explicitly, set:
 
 ## Web Tools (`websearch` / `webfetch`)
 
-Lemon includes web tools under `agent.tools.web`. For full setup and troubleshooting, see:
+Lemon includes web tools under `runtime.tools.web`. For full setup and troubleshooting, see:
 - [`docs/tools/web.md`](tools/web.md)
 - [`docs/tools/firecrawl.md`](tools/firecrawl.md)
 
 ```toml
-[agent.tools.web.search]
+[runtime.tools.web.search]
 enabled = true
 provider = "brave"   # "brave" | "perplexity"
 max_results = 5
 timeout_seconds = 30
 cache_ttl_minutes = 15
 
-[agent.tools.web.search.failover]
+[runtime.tools.web.search.failover]
 enabled = true
 provider = "perplexity"
 
-[agent.tools.web.search.perplexity]
+[runtime.tools.web.search.perplexity]
 # Optional if PERPLEXITY_API_KEY / OPENROUTER_API_KEY is set.
 api_key = "pplx-..."
 base_url = "https://api.perplexity.ai"
 model = "perplexity/sonar-pro"
 
-[agent.tools.web.fetch]
+[runtime.tools.web.fetch]
 enabled = true
 max_chars = 50000
 timeout_seconds = 30
@@ -210,7 +224,7 @@ readability = true
 allow_private_network = false
 allowed_hostnames = []
 
-[agent.tools.web.fetch.firecrawl]
+[runtime.tools.web.fetch.firecrawl]
 # Optional if FIRECRAWL_API_KEY is set.
 enabled = true
 api_key = "fc-..."
@@ -219,7 +233,7 @@ only_main_content = true
 max_age_ms = 172800000
 timeout_seconds = 60
 
-[agent.tools.web.cache]
+[runtime.tools.web.cache]
 persistent = true
 path = "~/.lemon/cache/web_tools"
 max_entries = 100
@@ -231,7 +245,7 @@ WASM tools are disabled by default and run in a per-session Rust sidecar.
 See [`docs/tools/wasm.md`](tools/wasm.md) for runtime behavior and troubleshooting.
 
 ```toml
-[agent.tools.wasm]
+[runtime.tools.wasm]
 enabled = false
 auto_build = true
 runtime_path = ""
@@ -247,13 +261,14 @@ max_tool_invoke_depth = 4
 ## Sections
 
 - `providers.<name>`: API keys and base URLs per provider.
-- `agent`: default model/provider and agent behavior.
-- `agent.tools.web`: `websearch` / `webfetch` providers, guardrails, cache, and Firecrawl fallback.
-- `agent.tools.wasm`: WASM sidecar runtime controls and discovery paths.
-- `agents.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
-- `agent.compaction`: context compaction settings.
-- `agent.retry`: retry settings.
-- `agent.cli`: CLI runner settings (`codex`, `claude`, `kimi`, `opencode`, `pi`).
+- `defaults`: global default model/provider/thinking/engine.
+- `runtime`: runtime behavior and tool settings.
+- `runtime.tools.web`: `websearch` / `webfetch` providers, guardrails, cache, and Firecrawl fallback.
+- `runtime.tools.wasm`: WASM sidecar runtime controls and discovery paths.
+- `profiles.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
+- `runtime.compaction`: context compaction settings.
+- `runtime.retry`: retry settings.
+- `runtime.cli`: CLI runner settings (`codex`, `claude`, `kimi`, `opencode`, `pi`).
 - `tui`: terminal UI settings.
 - `gateway`: Lemon gateway settings, including `queue`, `telegram`, `xmtp`, `projects`, `bindings`, and `engines`.
 - `logging`: optional file logging configuration.
@@ -316,8 +331,11 @@ default_cwd = "~/"
 ```
 
 Tip:
-- In Telegram, you can switch the current chat's working directory at runtime with `/new <project_id|path>`. If you pass a
-  path, Lemon will register it as a project named after the last path segment (e.g. `~/dev/lemon` => project `lemon`).
+- In Telegram, you can set or inspect the current chat/topic working directory at runtime with
+  `/cwd [project_id|path|clear]`.
+- `/new <project_id|path>` still works, and setting `/cwd` makes future `/new` sessions in that chat/topic use the same directory.
+- `/new` confirmation replies include model, provider, cwd, and session context details.
+- If you pass a path, Lemon will register it as a project named after the last path segment (e.g. `~/dev/lemon` => project `lemon`).
 
 ## XMTP (Base App / Wallet Chats)
 
@@ -424,6 +442,7 @@ In Telegram group chats, you can gate runs so Lemon only triggers when explicitl
 - `/trigger mentions`: only run on `@botname`, reply-to-bot, or slash commands.
 - `/trigger all`: run on all messages.
 - `/trigger clear`: clear a topic override (forum topics only).
+- `/cwd [project_id|path|clear]`: show, set, or clear the chat/topic working directory override used by future `/new` sessions.
 
 Forum topic management:
 - `/topic <name>`: create a new topic in the current Telegram forum supergroup.

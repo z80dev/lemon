@@ -298,15 +298,49 @@ defmodule LemonCore.Config do
   @spec from_map(map()) :: t()
   defp from_map(map) when is_map(map) do
     map = stringify_keys(map)
+    defaults = parse_defaults(Map.get(map, "defaults", %{}))
+    agent_settings = normalize_agent_settings(map, defaults)
+    agents_settings = normalize_agents_settings(map)
 
     %__MODULE__{
       providers: parse_providers(Map.get(map, "providers", %{})),
-      agent: parse_agent(Map.get(map, "agent", %{})),
+      agent: parse_agent(agent_settings),
       tui: parse_tui(Map.get(map, "tui", %{})),
       logging: parse_logging(Map.get(map, "logging", %{})),
       gateway: parse_gateway(Map.get(map, "gateway", %{})),
-      agents: parse_agents(Map.get(map, "agents", %{}))
+      agents: parse_agents(agents_settings, defaults)
     }
+  end
+
+  defp parse_defaults(map) when is_map(map) do
+    map = stringify_keys(map)
+
+    %{
+      "provider" => normalize_optional_string(map["provider"]),
+      "model" => normalize_optional_string(map["model"]),
+      "thinking_level" => normalize_optional_string(map["thinking_level"]),
+      "engine" => normalize_optional_string(map["engine"])
+    }
+    |> reject_nil_values()
+  end
+
+  defp parse_defaults(_), do: %{}
+
+  defp normalize_agent_settings(map, defaults) when is_map(map) do
+    legacy_agent = ensure_map(Map.get(map, "agent", %{}))
+    runtime = ensure_map(Map.get(map, "runtime", %{}))
+
+    deep_merge(legacy_agent, runtime)
+    |> maybe_put_string("default_provider", defaults["provider"])
+    |> maybe_put_string("default_model", defaults["model"])
+    |> maybe_put_string("default_thinking_level", defaults["thinking_level"])
+  end
+
+  defp normalize_agents_settings(map) when is_map(map) do
+    legacy_agents = ensure_map(Map.get(map, "agents", %{}))
+    profiles = ensure_map(Map.get(map, "profiles", %{}))
+
+    deep_merge(legacy_agents, profiles)
   end
 
   defp parse_providers(map) do
@@ -526,32 +560,32 @@ defmodule LemonCore.Config do
 
   defp parse_gateway_engines(_), do: %{}
 
-  defp parse_agents(map) when is_map(map) do
+  defp parse_agents(map, defaults) when is_map(map) do
     map
     |> stringify_keys()
     |> Enum.reduce(%{}, fn {id, cfg}, acc ->
-      parsed = parse_agent_profile(to_string(id), cfg)
+      parsed = parse_agent_profile(to_string(id), cfg, defaults)
       Map.put(acc, to_string(id), parsed)
     end)
-    |> ensure_default_agent()
+    |> ensure_default_agent(defaults)
   end
 
-  defp parse_agents(_), do: ensure_default_agent(%{})
+  defp parse_agents(_, defaults), do: ensure_default_agent(%{}, defaults)
 
-  defp ensure_default_agent(agents) when is_map(agents) do
+  defp ensure_default_agent(agents, defaults) when is_map(agents) do
     if Map.has_key?(agents, "default") do
       agents
     else
-      Map.put(agents, "default", default_agent_profile("default", %{}))
+      Map.put(agents, "default", default_agent_profile("default", %{}, defaults))
     end
   end
 
-  defp parse_agent_profile(id, cfg) do
+  defp parse_agent_profile(id, cfg, defaults) do
     cfg = stringify_keys(cfg || %{})
 
-    base = default_agent_profile(id, cfg)
+    base = default_agent_profile(id, cfg, defaults)
 
-    default_engine = cfg["default_engine"]
+    default_engine = cfg["default_engine"] || cfg["engine"] || base.default_engine
 
     tool_policy = parse_tool_policy(cfg["tool_policy"])
 
@@ -560,14 +594,14 @@ defmodule LemonCore.Config do
     |> Map.put(:description, cfg["description"])
     |> Map.put(:avatar, cfg["avatar"])
     |> Map.put(:default_engine, default_engine)
-    |> Map.put(:model, cfg["model"])
+    |> Map.put(:model, cfg["model"] || base.model)
     |> Map.put(:system_prompt, cfg["system_prompt"])
     |> Map.put(:tool_policy, tool_policy)
     |> Map.put(:rate_limit, cfg["rate_limit"])
-    |> Map.put(:status, cfg["status"] || "active")
+    |> Map.put(:status, cfg["status"] || base.status || "active")
   end
 
-  defp default_agent_profile(id, _cfg) do
+  defp default_agent_profile(id, _cfg, defaults) do
     name =
       if id == "default" do
         "Default Agent"
@@ -575,13 +609,16 @@ defmodule LemonCore.Config do
         id
       end
 
+    default_model = if id == "default", do: defaults["model"], else: nil
+    default_engine = if id == "default", do: defaults["engine"], else: nil
+
     %{
       id: id,
       name: name,
       description: nil,
       avatar: nil,
-      default_engine: nil,
-      model: nil,
+      default_engine: default_engine,
+      model: default_model,
       system_prompt: nil,
       tool_policy: nil,
       rate_limit: nil,
@@ -1223,6 +1260,12 @@ defmodule LemonCore.Config do
     do: Map.put(map, String.to_atom(key), value)
 
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp maybe_put_string(map, _key, nil), do: map
+  defp maybe_put_string(map, key, value) when is_binary(key), do: Map.put(map, key, value)
+
+  defp ensure_map(map) when is_map(map), do: stringify_keys(map)
+  defp ensure_map(_), do: %{}
 
   defp put_provider_env_override(providers, name, api_key: api_key, base_url: base_url) do
     if api_key || base_url do

@@ -9,7 +9,12 @@ defmodule LemonCore.Config.ModularIntegrationTest do
 
   setup do
     # Create a temporary directory for test configs
-    tmp_dir = Path.join(System.tmp_dir!(), "modular_integration_test_#{System.unique_integer([:positive])}")
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "modular_integration_test_#{System.unique_integer([:positive])}"
+      )
+
     File.mkdir_p!(tmp_dir)
 
     # Create a mock HOME directory
@@ -86,6 +91,29 @@ defmodule LemonCore.Config.ModularIntegrationTest do
 
       assert is_struct(config, Modular)
       assert config.agent.default_model == "claude-sonnet-4"
+    end
+
+    test "loads defaults/runtime aliases", %{mock_home: mock_home} do
+      global_config = Path.join(mock_home, ".lemon")
+      File.mkdir_p!(global_config)
+
+      File.write!(Path.join(global_config, "config.toml"), """
+      [defaults]
+      provider = "openai"
+      model = "openai:gpt-5"
+      thinking_level = "high"
+
+      [runtime]
+      theme = "ocean"
+      """)
+
+      config = Modular.load(validate: true)
+
+      assert is_struct(config, Modular)
+      assert config.agent.default_provider == "openai"
+      assert config.agent.default_model == "openai:gpt-5"
+      assert config.agent.default_thinking_level == "high"
+      assert config.agent.theme == "ocean"
     end
   end
 
@@ -191,7 +219,10 @@ defmodule LemonCore.Config.ModularIntegrationTest do
   end
 
   describe "project directory option" do
-    test "loads config from specified project directory", %{tmp_dir: tmp_dir, mock_home: mock_home} do
+    test "loads config from specified project directory", %{
+      tmp_dir: tmp_dir,
+      mock_home: mock_home
+    } do
       # Create global config
       global_config = Path.join(mock_home, ".lemon")
       File.mkdir_p!(global_config)

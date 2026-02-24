@@ -8,26 +8,29 @@ defmodule LemonCore.Config.Agent do
 
   ## Configuration
 
-  Configuration is loaded from the TOML config file under the `[agent]` section:
+  Preferred configuration is loaded from `[defaults]` + `[runtime]`.
+  Legacy `[agent]` remains supported for backward compatibility.
 
-      [agent]
-      default_provider = "anthropic"
-      default_model = "claude-sonnet-4-20250514"
-      default_thinking_level = "medium"
+      [defaults]
+      provider = "anthropic"
+      model = "claude-sonnet-4-20250514"
+      thinking_level = "medium"
+
+      [runtime]
       extension_paths = ["./my-extensions"]
       theme = "lemon"
 
-      [agent.compaction]
+      [runtime.compaction]
       enabled = true
       reserve_tokens = 16384
       keep_recent_tokens = 20000
 
-      [agent.retry]
+      [runtime.retry]
       enabled = true
       max_retries = 3
       base_delay_ms = 1000
 
-      [agent.shell]
+      [runtime.shell]
       path = "/bin/zsh"
       command_prefix = ""
 
@@ -81,7 +84,7 @@ defmodule LemonCore.Config.Agent do
   """
   @spec resolve(map()) :: t()
   def resolve(settings) do
-    agent_settings = settings["agent"] || %{}
+    agent_settings = normalize_agent_settings(settings)
 
     %__MODULE__{
       default_provider: resolve_provider(agent_settings),
@@ -97,12 +100,28 @@ defmodule LemonCore.Config.Agent do
 
   # Private functions for resolving each config section
 
+  defp normalize_agent_settings(settings) when is_map(settings) do
+    legacy_agent = ensure_map(settings["agent"])
+    runtime = ensure_map(settings["runtime"])
+    defaults = ensure_map(settings["defaults"])
+
+    deep_merge(legacy_agent, runtime)
+    |> maybe_put("default_provider", defaults["provider"])
+    |> maybe_put("default_model", defaults["model"])
+    |> maybe_put("default_thinking_level", defaults["thinking_level"])
+  end
+
+  defp normalize_agent_settings(_), do: %{}
+
   defp resolve_provider(settings) do
     Helpers.get_env("LEMON_DEFAULT_PROVIDER", settings["default_provider"] || "anthropic")
   end
 
   defp resolve_model(settings) do
-    Helpers.get_env("LEMON_DEFAULT_MODEL", settings["default_model"] || "claude-sonnet-4-20250514")
+    Helpers.get_env(
+      "LEMON_DEFAULT_MODEL",
+      settings["default_model"] || "claude-sonnet-4-20250514"
+    )
   end
 
   defp resolve_thinking_level(settings) do
@@ -170,6 +189,24 @@ defmodule LemonCore.Config.Agent do
   defp resolve_theme(settings) do
     Helpers.get_env("LEMON_THEME", settings["theme"] || "lemon")
   end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp ensure_map(map) when is_map(map), do: map
+  defp ensure_map(_), do: %{}
+
+  defp deep_merge(base, override) when is_map(base) and is_map(override) do
+    Map.merge(base, override, fn _key, base_val, override_val ->
+      if is_map(base_val) and is_map(override_val) do
+        deep_merge(base_val, override_val)
+      else
+        override_val
+      end
+    end)
+  end
+
+  defp deep_merge(_base, override), do: override
 
   @doc """
   Returns the default agent configuration as a map.

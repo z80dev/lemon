@@ -222,6 +222,92 @@ defmodule LemonCore.ConfigTest do
     assert config.agents["default"].tool_policy.profile == :minimal_core
   end
 
+  test "supports defaults/runtime/profiles config aliases", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [defaults]
+    provider = "openai"
+    model = "openai:gpt-5"
+    thinking_level = "high"
+    engine = "codex"
+
+    [runtime]
+    theme = "default"
+
+    [runtime.tools.web.search]
+    provider = "perplexity"
+
+    [profiles.default]
+    name = "Default Profile"
+    system_prompt = "You are concise."
+    """)
+
+    config = Config.load()
+
+    assert config.agent.default_provider == "openai"
+    assert config.agent.default_model == "openai:gpt-5"
+    assert config.agent.default_thinking_level == :high
+    assert config.agent.theme == "default"
+    assert config.agent.tools.web.search.provider == "perplexity"
+
+    assert config.agents["default"].name == "Default Profile"
+    assert config.agents["default"].system_prompt == "You are concise."
+    assert config.agents["default"].model == "openai:gpt-5"
+    assert config.agents["default"].default_engine == "codex"
+  end
+
+  test "defaults model and engine are applied only to the default profile", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [defaults]
+    model = "openai:gpt-5"
+    engine = "codex"
+
+    [profiles.worker]
+    name = "Worker"
+    """)
+
+    config = Config.load()
+
+    assert config.agents["default"].model == "openai:gpt-5"
+    assert config.agents["default"].default_engine == "codex"
+    assert config.agents["worker"].model == nil
+    assert config.agents["worker"].default_engine == nil
+  end
+
+  test "runtime and profiles override legacy agent and agents sections", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [agent]
+    default_model = "anthropic:legacy-model"
+    theme = "legacy-theme"
+
+    [runtime]
+    theme = "runtime-theme"
+
+    [agents.default]
+    name = "Legacy Profile"
+    model = "anthropic:legacy-profile-model"
+
+    [profiles.default]
+    name = "Runtime Profile"
+    model = "openai:new-profile-model"
+    """)
+
+    config = Config.load()
+
+    assert config.agent.default_model == "anthropic:legacy-model"
+    assert config.agent.theme == "runtime-theme"
+    assert config.agents["default"].name == "Runtime Profile"
+    assert config.agents["default"].model == "openai:new-profile-model"
+  end
+
   test "parses gateway binding agent_id", %{home: home} do
     global_dir = Path.join(home, ".lemon")
     File.mkdir_p!(global_dir)

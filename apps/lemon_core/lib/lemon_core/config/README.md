@@ -82,11 +82,11 @@ Each module documents its environment variables. Common patterns:
 Example `~/.lemon/config.toml`:
 
 ```toml
-[agent]
-default_provider = "anthropic"
-default_model = "claude-sonnet-4-20250514"
+[defaults]
+provider = "anthropic"
+model = "anthropic:claude-sonnet-4-20250514"
 
-[agent.compaction]
+[runtime.compaction]
 enabled = true
 reserve_tokens = 16384
 
@@ -125,6 +125,11 @@ Environment variable parsing utilities:
 ### Config.Agent
 
 Agent behavior configuration:
+
+Preferred source sections:
+- `[defaults]` for model/provider/thinking defaults
+- `[runtime]` for compaction/retry/shell/tools/extensions/theme
+- Legacy `[agent]` remains supported as an alias
 
 - `default_provider` - Default LLM provider
 - `default_model` - Default model identifier

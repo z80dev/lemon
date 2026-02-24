@@ -68,6 +68,26 @@ defmodule LemonCore.Config.AgentTest do
       assert config.theme == "ocean"
     end
 
+    test "supports defaults and runtime aliases" do
+      settings = %{
+        "defaults" => %{
+          "provider" => "openai",
+          "model" => "openai:gpt-5",
+          "thinking_level" => "high"
+        },
+        "runtime" => %{
+          "theme" => "ocean"
+        }
+      }
+
+      config = Agent.resolve(settings)
+
+      assert config.default_provider == "openai"
+      assert config.default_model == "openai:gpt-5"
+      assert config.default_thinking_level == "high"
+      assert config.theme == "ocean"
+    end
+
     test "environment variables override settings" do
       System.put_env("LEMON_DEFAULT_PROVIDER", "ollama")
       System.put_env("LEMON_DEFAULT_MODEL", "llama3")

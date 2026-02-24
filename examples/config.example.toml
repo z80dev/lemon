@@ -15,31 +15,34 @@ base_url = "https://api.kimi.com/coding/"
 [providers.google]
 api_key = "your-google-api-key-here"
 
-[agent]
-default_provider = "anthropic"
-default_model = "claude-sonnet-4-20250514"
-default_thinking_level = "medium"
+[defaults]
+provider = "anthropic"
+model = "anthropic:claude-sonnet-4-20250514"
+thinking_level = "medium"
+engine = "lemon"
+
+[runtime]
 theme = "default"
 extension_paths = []
 
-[agent.compaction]
+[runtime.compaction]
 enabled = true
 reserve_tokens = 16384
 keep_recent_tokens = 20000
 
-[agent.retry]
+[runtime.retry]
 enabled = true
 max_retries = 3
 base_delay_ms = 1000
 
-[agent.cli.codex]
+[runtime.cli.codex]
 extra_args = ["-c", "notify=[]"]
 auto_approve = false
 
-[agent.cli.claude]
+[runtime.cli.claude]
 dangerously_skip_permissions = true
 
-[agent.cli.kimi]
+[runtime.cli.kimi]
 extra_args = []
 
 [tui]
@@ -110,3 +113,6 @@ queue_mode = "collect"
 [gateway.engines.lemon]
 cli_path = "lemon"
 enabled = true
+
+[profiles.default]
+name = "Default Agent"
