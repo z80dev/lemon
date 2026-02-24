@@ -5,7 +5,6 @@ import type { ControlPlaneEventHandler } from '../../rpc/controlPlaneTransport';
 import type { MonitoringSession, SessionDetail } from '../../../../shared/src/monitoringTypes';
 import { StatusStrip } from './StatusStrip';
 import { AgentSessionsSidebar } from './AgentSessionsSidebar';
-import { SessionsExplorer } from './SessionsExplorer';
 import { SessionDetailPanel } from './SessionDetailPanel';
 import { RunInspector } from './RunInspector';
 import { TaskInspector } from './TaskInspector';
@@ -705,19 +704,14 @@ export function MonitoringApp() {
           onSelectRun={handleSelectRun}
         />
 
-        {/* Sessions screen: split layout — table left, detail right */}
+        {/* Sessions screen: session workspace */}
         {activeScreen === 'sessions' ? (
-          <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-            <div style={{ flex: '0 0 55%', overflow: 'auto', padding: '16px', borderRight: '1px solid #222' }}>
-              <SessionsExplorer />
-            </div>
-            <div style={{ flex: '0 0 45%', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-              <SessionDetailPanel
-                sessionKey={selectedSessionKey}
-                loading={sessionDetailLoading}
-                onSelectRun={handleSelectRun}
-              />
-            </div>
+          <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            <SessionDetailPanel
+              sessionKey={selectedSessionKey}
+              loading={sessionDetailLoading}
+              onSelectRun={handleSelectRun}
+            />
           </div>
         ) : (
           <main style={{ flex: 1, overflow: 'auto', padding: '16px' }}>
@@ -731,8 +725,6 @@ export function MonitoringApp() {
             {activeScreen === 'events' && <EventFeed />}
           </main>
         )}
-
-        {activeScreen !== 'events' && <EventFeed collapsed />}
       </div>
     </div>
   );

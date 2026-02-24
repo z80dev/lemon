@@ -68,9 +68,9 @@ describe('MonitoringApp', () => {
     expect(screen.getAllByText('Tasks').length).toBeGreaterThanOrEqual(1);
   });
 
-  it('renders collapsed event feed in sidebar when not on events screen', () => {
+  it('does not render the collapsed event feed rail', () => {
     render(<MonitoringApp />);
-    expect(screen.getByTestId('event-feed-collapsed')).toBeInTheDocument();
+    expect(screen.queryByTestId('event-feed-collapsed')).not.toBeInTheDocument();
   });
 
   it('shows health card in overview', () => {

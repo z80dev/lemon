@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useMonitoringStore } from '../../store/monitoringStore';
-import type { SessionRunSummary } from '../../../../shared/src/monitoringTypes';
+import type { MonitoringTask, SessionRunSummary } from '../../../../shared/src/monitoringTypes';
 
 function formatRelativeTime(ms: number | null): string {
   if (ms == null) return '--';
@@ -20,7 +20,18 @@ function formatDuration(ms: number | null): string {
 
 function truncate(s: string | null | undefined, max: number): string {
   if (!s) return '';
-  return s.length <= max ? s : s.slice(0, max - 1) + '…';
+  return s.length <= max ? s : s.slice(0, max - 1) + '...';
+}
+
+function runStatus(run: SessionRunSummary): 'completed' | 'error' | 'unknown' {
+  if (run.ok === true) return 'completed';
+  if (run.ok === false || run.error) return 'error';
+  return 'unknown';
+}
+
+function runTaskMatch(task: MonitoringTask, runId: string | null): boolean {
+  if (!runId) return false;
+  return task.runId === runId || task.parentRunId === runId;
 }
 
 export interface SessionDetailPanelProps {
@@ -33,6 +44,9 @@ export function SessionDetailPanel({ sessionKey, loading, onSelectRun }: Session
   const sessionDetails = useMonitoringStore((s) => s.sessionDetails);
   const activeSessions = useMonitoringStore((s) => s.sessions.active);
   const historicalSessions = useMonitoringStore((s) => s.sessions.historical);
+  const activeRuns = useMonitoringStore((s) => s.runs.active);
+  const activeTasks = useMonitoringStore((s) => s.tasks.active);
+  const recentTasks = useMonitoringStore((s) => s.tasks.recent);
 
   const session = useMemo(() => {
     if (!sessionKey) return null;
@@ -40,25 +54,61 @@ export function SessionDetailPanel({ sessionKey, loading, onSelectRun }: Session
   }, [sessionKey, activeSessions, historicalSessions]);
 
   const sessionDetail = sessionKey ? sessionDetails[sessionKey] : undefined;
+  const [showAllRuns, setShowAllRuns] = useState(false);
+
+  const runs = useMemo(() => {
+    const allRuns = [...(sessionDetail?.runs ?? [])].sort(
+      (a, b) => (a.startedAtMs ?? 0) - (b.startedAtMs ?? 0)
+    );
+    if (showAllRuns) return allRuns;
+    return allRuns.slice(-60);
+  }, [sessionDetail?.runs, showAllRuns]);
+
+  const allSessionTasks = useMemo(() => {
+    if (!sessionKey) return [];
+    return [...Object.values(activeTasks), ...recentTasks]
+      .filter((task) => task.sessionKey === sessionKey)
+      .sort((a, b) => (b.startedAtMs ?? b.createdAtMs ?? 0) - (a.startedAtMs ?? a.createdAtMs ?? 0));
+  }, [sessionKey, activeTasks, recentTasks]);
+
+  const sessionSpawnedAgents = useMemo(() => {
+    const ids = new Set<string>();
+    for (const task of allSessionTasks) {
+      if (!task.agentId) continue;
+      if (session?.agentId && task.agentId === session.agentId) continue;
+      ids.add(task.agentId);
+    }
+    return Array.from(ids).sort();
+  }, [allSessionTasks, session?.agentId]);
+
+  const liveRuns = useMemo(() => {
+    if (!sessionKey) return [];
+    return Object.values(activeRuns)
+      .filter((run) => run.sessionKey === sessionKey)
+      .sort((a, b) => (b.startedAtMs ?? 0) - (a.startedAtMs ?? 0));
+  }, [sessionKey, activeRuns]);
+
+  const liveTasks = useMemo(() => {
+    return allSessionTasks.filter((task) => task.status === 'active' || task.status === 'queued');
+  }, [allSessionTasks]);
 
   if (!sessionKey) {
     return (
       <div
         data-testid="session-detail-panel"
         style={{
-          padding: '40px 24px',
+          padding: '48px 24px',
           color: '#555',
           fontFamily: 'monospace',
-          fontSize: '11px',
+          fontSize: '12px',
           textAlign: 'center',
         }}
       >
-        Select a session to view details
+        Select a session in the left sidebar to open the workspace view.
       </div>
     );
   }
 
-  const runs = sessionDetail?.runs ?? [];
   const runCount = sessionDetail?.runCount ?? session?.runCount ?? 0;
 
   return (
@@ -74,446 +124,290 @@ export function SessionDetailPanel({ sessionKey, loading, onSelectRun }: Session
         overflow: 'hidden',
       }}
     >
-      {/* Session header */}
       <div
         style={{
-          padding: '10px 12px',
+          padding: '12px 14px',
           borderBottom: '1px solid #333',
-          background: '#141414',
+          background: '#111',
           flexShrink: 0,
         }}
       >
         <div
           style={{
-            fontWeight: 'bold',
-            fontSize: '12px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            flexWrap: 'wrap',
             marginBottom: '8px',
-            color: '#00ff88',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
           }}
         >
-          {truncate(sessionKey, 48)}
+          <span style={{ color: '#00ff88', fontWeight: 'bold', fontSize: '13px' }}>
+            Session Workspace
+          </span>
+          <span style={{ color: '#666' }}>{truncate(sessionKey, 84)}</span>
+          {loading && <span style={{ color: '#888' }}>loading...</span>}
+          {!loading && !sessionDetail && <span style={{ color: '#666' }}>fetching...</span>}
         </div>
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            gap: '3px 16px',
-            color: '#888',
-          }}
-        >
-          {session?.agentId && (
-            <div>
-              <span style={{ color: '#555' }}>agent: </span>
-              {session.agentId}
+
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', color: '#888' }}>
+          {session?.agentId && <span>agent: <span style={{ color: '#aaa' }}>{session.agentId}</span></span>}
+          {session?.channelId && <span>channel: <span style={{ color: '#aaa' }}>{session.channelId}</span></span>}
+          {session?.peerId && <span>peer: <span style={{ color: '#aaa' }}>{truncate(session.peerId, 24)}</span></span>}
+          {session?.threadId && <span>thread: <span style={{ color: '#aaa' }}>{truncate(session.threadId, 20)}</span></span>}
+          <span>runs: <span style={{ color: '#5599ff' }}>{runCount}</span></span>
+          <span>live runs: <span style={{ color: liveRuns.length > 0 ? '#00ff88' : '#666' }}>{liveRuns.length}</span></span>
+          <span>live tasks: <span style={{ color: liveTasks.length > 0 ? '#ffaa00' : '#666' }}>{liveTasks.length}</span></span>
+          {session?.updatedAtMs && <span>updated: {formatRelativeTime(session.updatedAtMs)}</span>}
+        </div>
+
+        {(liveRuns.length > 0 || sessionSpawnedAgents.length > 0) && (
+          <div style={{ marginTop: '8px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+            <div style={{ border: '1px solid #272727', borderRadius: '4px', padding: '6px 8px', background: '#121212' }}>
+              <div style={{ color: '#777', textTransform: 'uppercase', fontSize: '10px', marginBottom: '4px' }}>Live Runs</div>
+              {liveRuns.length === 0 ? (
+                <div style={{ color: '#555' }}>None</div>
+              ) : (
+                liveRuns.map((run) => (
+                  <div key={run.runId} style={{ display: 'flex', gap: '8px', padding: '2px 0', alignItems: 'center' }}>
+                    <span style={{ color: '#00ff88', minWidth: '50px' }}>{run.status}</span>
+                    <span style={{ color: '#5599ff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {run.runId}
+                    </span>
+                    {run.engine && <span style={{ color: '#666', marginLeft: 'auto' }}>{run.engine}</span>}
+                  </div>
+                ))
+              )}
             </div>
-          )}
-          {session?.channelId && (
-            <div>
-              <span style={{ color: '#555' }}>channel: </span>
-              {session.channelId}
+
+            <div style={{ border: '1px solid #272727', borderRadius: '4px', padding: '6px 8px', background: '#121212' }}>
+              <div style={{ color: '#777', textTransform: 'uppercase', fontSize: '10px', marginBottom: '4px' }}>Spawned Agents</div>
+              {sessionSpawnedAgents.length === 0 ? (
+                <div style={{ color: '#555' }}>None observed in task history</div>
+              ) : (
+                sessionSpawnedAgents.map((agentId) => (
+                  <div key={agentId} style={{ display: 'flex', gap: '8px', padding: '2px 0' }}>
+                    <span style={{ color: '#ffaa00' }}>{agentId}</span>
+                    <span style={{ color: '#666' }}>
+                      {allSessionTasks.filter((task) => task.agentId === agentId).length} task(s)
+                    </span>
+                  </div>
+                ))
+              )}
             </div>
-          )}
-          {session?.accountId && (
-            <div>
-              <span style={{ color: '#555' }}>account: </span>
-              {session.accountId}
-            </div>
-          )}
-          {session?.kind && (
-            <div>
-              <span style={{ color: '#555' }}>kind: </span>
-              {session.kind}
-            </div>
-          )}
-          {session?.peerKind && (
-            <div>
-              <span style={{ color: '#555' }}>peer kind: </span>
-              {session.peerKind}
-            </div>
-          )}
-          {session?.peerId && (
-            <div>
-              <span style={{ color: '#555' }}>peer: </span>
-              {truncate(session.peerId, 22)}
-            </div>
-          )}
-          {session?.threadId && (
-            <div>
-              <span style={{ color: '#555' }}>thread: </span>
-              {truncate(session.threadId, 22)}
-            </div>
-          )}
-          {session?.target && (
-            <div style={{ gridColumn: '1 / -1' }}>
-              <span style={{ color: '#555' }}>target: </span>
-              {truncate(session.target, 64)}
-            </div>
-          )}
-          {session?.peerLabel && (
-            <div>
-              <span style={{ color: '#555' }}>label: </span>
-              {truncate(session.peerLabel, 22)}
-            </div>
-          )}
-          <div>
-            <span style={{ color: '#555' }}>runs: </span>
-            <span style={{ color: '#5599ff' }}>{runCount}</span>
           </div>
-          {session?.origin && session.origin !== 'unknown' && (
-            <div>
-              <span style={{ color: '#555' }}>origin: </span>
-              {session.origin}
-            </div>
-          )}
-          {session?.updatedAtMs && (
-            <div>
-              <span style={{ color: '#555' }}>active: </span>
-              {formatRelativeTime(session.updatedAtMs)}
-            </div>
-          )}
-          {session?.createdAtMs && (
-            <div>
-              <span style={{ color: '#555' }}>created: </span>
-              {formatRelativeTime(session.createdAtMs)}
-            </div>
-          )}
-          {session?.active && (
-            <div>
-              <span
-                style={{
-                  display: 'inline-block',
-                  width: '6px',
-                  height: '6px',
-                  borderRadius: '50%',
-                  background: '#00ff88',
-                  marginRight: '4px',
-                }}
-              />
-              <span style={{ color: '#00ff88' }}>active</span>
-            </div>
-          )}
-        </div>
+        )}
       </div>
 
-      {/* Runs list */}
-      <div style={{ flex: 1, overflowY: 'auto' }}>
-        <div
-          style={{
-            padding: '6px 12px',
-            color: '#666',
-            textTransform: 'uppercase',
-            fontSize: '10px',
-            letterSpacing: '0.5px',
-            borderBottom: '1px solid #1a1a1a',
-          }}
-        >
-          Runs ({runs.length}
-          {runCount > runs.length ? ` of ${runCount}` : ''})
-          {loading && <span style={{ color: '#444', marginLeft: '8px' }}>loading…</span>}
-          {!sessionDetail && !loading && sessionKey && (
-            <span style={{ color: '#444', marginLeft: '8px' }}>fetching…</span>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '14px', background: '#0d0d0d' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+          <span style={{ color: '#777', textTransform: 'uppercase', fontSize: '10px' }}>
+            Conversation + Run Timeline ({runs.length}{runCount > runs.length ? ` of ${runCount}` : ''})
+          </span>
+          {sessionDetail?.runs && sessionDetail.runs.length > 60 && (
+            <button
+              type="button"
+              onClick={() => setShowAllRuns((v) => !v)}
+              style={{
+                border: '1px solid #333',
+                borderRadius: '3px',
+                background: 'transparent',
+                color: '#5599ff',
+                fontFamily: 'monospace',
+                fontSize: '10px',
+                cursor: 'pointer',
+                padding: '2px 8px',
+              }}
+            >
+              {showAllRuns ? 'Show Recent Only' : 'Show Full History'}
+            </button>
           )}
         </div>
 
         {runs.length === 0 && sessionDetail ? (
-          <div style={{ padding: '16px 12px', color: '#555' }}>No run history available</div>
+          <div style={{ color: '#555', padding: '18px 8px' }}>No run history available.</div>
         ) : (
-          runs.map((run, idx) => <RunRow key={idx} run={run} index={idx} onSelectRun={onSelectRun} />)
-        )}
-      </div>
-    </div>
-  );
-}
+          runs.map((run, idx) => {
+            const runId = run.runId ?? null;
+            const status = runStatus(run);
+            const statusColor = status === 'completed' ? '#00ff88' : status === 'error' ? '#ff6666' : '#888';
+            const runTasks = allSessionTasks.filter((task) => runTaskMatch(task, runId));
+            const activeRunTasks = runTasks.filter((task) => task.status === 'active' || task.status === 'queued');
+            const spawnedForRun = Array.from(
+              new Set(
+                runTasks
+                  .map((task) => task.agentId)
+                  .filter((agentId): agentId is string => Boolean(agentId) && agentId !== session?.agentId)
+              )
+            );
 
-function RunRow({
-  run,
-  index,
-  onSelectRun,
-}: {
-  run: SessionRunSummary;
-  index: number;
-  onSelectRun?: (runId: string) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-
-  const okColor = run.ok === true ? '#00ff88' : run.ok === false ? '#ff4444' : '#666';
-  const totalTokens = run.tokens?.total ?? 0;
-  const cost = run.tokens?.costUsd ?? 0;
-
-  return (
-    <div
-      style={{
-        borderBottom: '1px solid #1a1a1a',
-        cursor: 'pointer',
-        background: expanded ? '#0f1a0f' : 'transparent',
-      }}
-      onClick={() => setExpanded((v) => !v)}
-    >
-      {/* Summary row */}
-      <div
-        style={{ display: 'flex', gap: '8px', padding: '6px 12px', alignItems: 'flex-start' }}
-      >
-        <span
-          style={{ color: '#444', width: '18px', textAlign: 'right', flexShrink: 0, marginTop: '1px' }}
-        >
-          {index + 1}.
-        </span>
-        <span
-          style={{
-            width: '8px',
-            height: '8px',
-            borderRadius: '50%',
-            background: okColor,
-            flexShrink: 0,
-            marginTop: '3px',
-          }}
-        />
-        <div style={{ flex: 1, overflow: 'hidden' }}>
-          {run.prompt ? (
-            <div
-              style={{
-                color: '#d0d0d0',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {run.prompt}
-            </div>
-          ) : (
-            <div style={{ color: '#444', fontStyle: 'italic' }}>no prompt</div>
-          )}
-          <div
-            style={{
-              display: 'flex',
-              gap: '8px',
-              marginTop: '2px',
-              color: '#666',
-              fontSize: '10px',
-              flexWrap: 'wrap',
-            }}
-          >
-            {run.engine && <span style={{ color: '#5599ff' }}>{run.engine}</span>}
-            {run.durationMs != null && <span>{formatDuration(run.durationMs)}</span>}
-            {run.toolCallCount > 0 && (
-              <span style={{ color: '#ffaa00' }}>{run.toolCallCount} tool{run.toolCallCount !== 1 ? 's' : ''}</span>
-            )}
-            {totalTokens > 0 && (
-              <span>
-                {totalTokens} tok{cost > 0 ? ` · $${cost.toFixed(4)}` : ''}
-              </span>
-            )}
-            {run.error && (
-              <span style={{ color: '#ff4444' }}>err: {truncate(run.error, 40)}</span>
-            )}
-            {run.runId && (
-              <span style={{ color: '#666' }}>run: {truncate(run.runId, 16)}</span>
-            )}
-            {run.runId && onSelectRun && (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSelectRun(run.runId!);
-                }}
-                style={{
-                  border: '1px solid #2a2a2a',
-                  background: '#151515',
-                  color: '#5599ff',
-                  borderRadius: '3px',
-                  fontSize: '10px',
-                  cursor: 'pointer',
-                  padding: '0 6px',
-                }}
-              >
-                inspect
-              </button>
-            )}
-            {run.eventCount != null && run.eventCount > 0 && (
-              <span style={{ color: '#888' }}>{run.eventCount} ev</span>
-            )}
-          </div>
-        </div>
-        <span style={{ color: '#444', fontSize: '10px', flexShrink: 0 }}>
-          {expanded ? '▼' : '▶'}
-        </span>
-      </div>
-
-      {/* Expanded detail */}
-      {expanded && (
-        <div style={{ padding: '0 12px 10px 40px' }}>
-          {run.answer && (
-            <div style={{ marginBottom: '8px' }}>
+            return (
               <div
+                key={`${runId ?? 'run'}-${idx}`}
                 style={{
-                  color: '#555',
-                  marginBottom: '3px',
-                  textTransform: 'uppercase',
-                  fontSize: '10px',
-                  letterSpacing: '0.5px',
-                }}
-              >
-                Answer
-              </div>
-              <div
-                style={{ color: '#aaa', whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: '1.4' }}
-              >
-                {run.answer}
-              </div>
-            </div>
-          )}
-          {run.promptFull && run.promptFull !== run.prompt && (
-            <div style={{ marginBottom: '8px' }}>
-              <div
-                style={{
-                  color: '#555',
-                  marginBottom: '3px',
-                  textTransform: 'uppercase',
-                  fontSize: '10px',
-                  letterSpacing: '0.5px',
-                }}
-              >
-                Prompt Full
-              </div>
-              <pre
-                style={{
-                  margin: 0,
-                  maxHeight: '180px',
-                  overflowY: 'auto',
+                  border: '1px solid #232323',
+                  borderRadius: '6px',
                   background: '#111',
-                  border: '1px solid #222',
-                  padding: '6px',
-                  color: '#aaa',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
+                  marginBottom: '12px',
+                  overflow: 'hidden',
                 }}
               >
-                {run.promptFull}
-              </pre>
-            </div>
-          )}
-          {run.answerFull && run.answerFull !== run.answer && (
-            <div style={{ marginBottom: '8px' }}>
-              <div
-                style={{
-                  color: '#555',
-                  marginBottom: '3px',
-                  textTransform: 'uppercase',
-                  fontSize: '10px',
-                  letterSpacing: '0.5px',
-                }}
-              >
-                Answer Full
-              </div>
-              <pre
-                style={{
-                  margin: 0,
-                  maxHeight: '220px',
-                  overflowY: 'auto',
-                  background: '#111',
-                  border: '1px solid #222',
-                  padding: '6px',
-                  color: '#aaa',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                }}
-              >
-                {run.answerFull}
-              </pre>
-            </div>
-          )}
-          {run.toolCalls.length > 0 && (
-            <div style={{ marginBottom: '8px' }}>
-              <div
-                style={{
-                  color: '#555',
-                  marginBottom: '4px',
-                  textTransform: 'uppercase',
-                  fontSize: '10px',
-                  letterSpacing: '0.5px',
-                }}
-              >
-                Tool Calls ({run.toolCalls.length})
-              </div>
-              {run.toolCalls.map((tc, i) => (
                 <div
-                  key={i}
                   style={{
                     display: 'flex',
-                    gap: '6px',
-                    padding: '2px 0',
-                    fontSize: '10px',
-                    borderBottom: '1px solid #111',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '6px 10px',
+                    borderBottom: '1px solid #1b1b1b',
+                    background: '#141414',
                   }}
                 >
-                  <span style={{ color: '#5599ff', minWidth: '80px', flexShrink: 0 }}>
-                    {tc.name ?? '?'}
-                  </span>
-                  {tc.kind && <span style={{ color: '#666' }}>{tc.kind}</span>}
-                  {tc.ok !== null && tc.ok !== undefined && (
-                    <span style={{ color: tc.ok ? '#00ff88' : '#ff4444' }}>
-                      {tc.ok ? 'ok' : 'err'}
-                    </span>
-                  )}
-                  {tc.detail && (
-                    <span
+                  <span style={{ color: '#555', minWidth: '32px' }}>#{idx + 1}</span>
+                  <span style={{ color: statusColor, minWidth: '70px' }}>{status}</span>
+                  {run.engine && <span style={{ color: '#5599ff' }}>{run.engine}</span>}
+                  <span style={{ color: '#777' }}>dur: {formatDuration(run.durationMs)}</span>
+                  <span style={{ color: '#777' }}>tools: {run.toolCallCount}</span>
+                  {run.eventCount != null && <span style={{ color: '#666' }}>ev: {run.eventCount}</span>}
+                  {run.startedAtMs && <span style={{ color: '#666', marginLeft: 'auto' }}>{formatRelativeTime(run.startedAtMs)}</span>}
+                  {runId && onSelectRun && (
+                    <button
+                      type="button"
+                      onClick={() => onSelectRun(runId)}
                       style={{
-                        color: '#555',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
+                        border: '1px solid #333',
+                        borderRadius: '3px',
+                        background: 'transparent',
+                        color: '#5599ff',
+                        fontFamily: 'monospace',
+                        fontSize: '10px',
+                        cursor: 'pointer',
+                        padding: '1px 8px',
                       }}
                     >
-                      {tc.detail}
-                    </span>
+                      inspect
+                    </button>
                   )}
                 </div>
-              ))}
-            </div>
-          )}
-          {run.tokens && run.tokens.total > 0 && (
-            <div style={{ color: '#555', fontSize: '10px' }}>
-              tokens: {run.tokens.input} in + {run.tokens.output} out ={' '}
-              {run.tokens.total} total
-              {run.tokens.costUsd > 0 && ` · $${run.tokens.costUsd.toFixed(6)} USD`}
-            </div>
-          )}
 
-          {Array.isArray(run.events) && run.events.length > 0 && (
-            <div style={{ marginTop: '8px' }}>
-              <div
-                style={{
-                  color: '#555',
-                  marginBottom: '3px',
-                  textTransform: 'uppercase',
-                  fontSize: '10px',
-                  letterSpacing: '0.5px',
-                }}
-              >
-                Raw Events ({run.events.length})
+                <div style={{ padding: '10px' }}>
+                  {run.prompt && (
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '8px' }}>
+                      <div
+                        style={{
+                          maxWidth: '88%',
+                          background: '#182334',
+                          border: '1px solid #24354d',
+                          borderRadius: '6px',
+                          padding: '8px 10px',
+                          color: '#d6e6ff',
+                          whiteSpace: 'pre-wrap',
+                        }}
+                      >
+                        {run.promptFull ?? run.prompt}
+                      </div>
+                    </div>
+                  )}
+
+                  {run.answer && (
+                    <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: '8px' }}>
+                      <div
+                        style={{
+                          maxWidth: '88%',
+                          background: '#142319',
+                          border: '1px solid #21412b',
+                          borderRadius: '6px',
+                          padding: '8px 10px',
+                          color: '#dbffe7',
+                          whiteSpace: 'pre-wrap',
+                        }}
+                      >
+                        {run.answerFull ?? run.answer}
+                      </div>
+                    </div>
+                  )}
+
+                  {!run.prompt && !run.answer && (
+                    <div style={{ color: '#666', marginBottom: '8px' }}>No transcript captured for this run.</div>
+                  )}
+
+                  {(run.toolCalls.length > 0 || runTasks.length > 0 || run.error || run.tokens) && (
+                    <div style={{ borderTop: '1px dashed #2a2a2a', paddingTop: '8px', marginTop: '4px' }}>
+                      {run.toolCalls.length > 0 && (
+                        <div style={{ marginBottom: '8px' }}>
+                          <div style={{ color: '#777', textTransform: 'uppercase', fontSize: '10px', marginBottom: '4px' }}>
+                            Tools
+                          </div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                            {run.toolCalls.slice(0, 24).map((tool, toolIdx) => (
+                              <span
+                                key={`${tool.name}-${toolIdx}`}
+                                style={{
+                                  border: '1px solid #2f2f2f',
+                                  borderRadius: '12px',
+                                  padding: '1px 8px',
+                                  color: tool.ok === false ? '#ff7777' : '#ffaa00',
+                                  background: '#171717',
+                                }}
+                                title={tool.detail ?? undefined}
+                              >
+                                {tool.name}
+                                {tool.phase ? `:${tool.phase}` : ''}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {runTasks.length > 0 && (
+                        <div style={{ marginBottom: '8px' }}>
+                          <div style={{ color: '#777', textTransform: 'uppercase', fontSize: '10px', marginBottom: '4px' }}>
+                            Task Activity
+                          </div>
+                          {activeRunTasks.length > 0 && (
+                            <div style={{ color: '#00ff88', marginBottom: '4px' }}>
+                              live: {activeRunTasks.length} task(s)
+                            </div>
+                          )}
+                          {spawnedForRun.length > 0 && (
+                            <div style={{ color: '#ffaa00', marginBottom: '4px' }}>
+                              spawned agents: {spawnedForRun.join(', ')}
+                            </div>
+                          )}
+                          <div style={{ maxHeight: '150px', overflowY: 'auto', border: '1px solid #242424', borderRadius: '4px' }}>
+                            {runTasks.slice(0, 40).map((task) => (
+                              <div
+                                key={task.taskId}
+                                style={{ display: 'flex', gap: '8px', padding: '3px 6px', borderBottom: '1px solid #1b1b1b' }}
+                              >
+                                <span style={{ color: task.status === 'error' ? '#ff6666' : task.status === 'active' ? '#00ff88' : '#aaa', minWidth: '64px' }}>
+                                  {task.status}
+                                </span>
+                                <span style={{ color: '#5599ff', minWidth: '88px' }}>
+                                  {task.engine ?? 'unknown'}
+                                </span>
+                                <span style={{ color: '#aaa' }}>{truncate(task.description ?? task.taskId, 80)}</span>
+                                {task.agentId && <span style={{ color: '#888', marginLeft: 'auto' }}>{task.agentId}</span>}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {run.tokens && (
+                        <div style={{ color: '#888', marginBottom: '4px' }}>
+                          tokens: {run.tokens.total} (in {run.tokens.input}, out {run.tokens.output})
+                          {run.tokens.costUsd > 0 ? ` | cost $${run.tokens.costUsd.toFixed(4)}` : ''}
+                        </div>
+                      )}
+
+                      {run.error && <div style={{ color: '#ff7777' }}>error: {run.error}</div>}
+                    </div>
+                  )}
+                </div>
               </div>
-              <pre
-                style={{
-                  margin: 0,
-                  maxHeight: '180px',
-                  overflowY: 'auto',
-                  background: '#111',
-                  border: '1px solid #222',
-                  padding: '6px',
-                  color: '#aaa',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                }}
-              >
-                {JSON.stringify(run.events, null, 2)}
-              </pre>
-            </div>
-          )}
-        </div>
-      )}
+            );
+          })
+        )}
+      </div>
     </div>
   );
 }

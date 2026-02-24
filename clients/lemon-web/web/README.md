@@ -30,12 +30,12 @@ Runner engine summaries include both run engines and task engines (when present)
 ## Monitoring screens
 
 - `Overview`: health, infra, engine/task/tool summaries
-- `Sessions`: session explorer + deep session detail + run history
+- `Sessions`: session workspace with live run/task state, spawned-agent visibility, and chat-style run transcript
 - `Runners`: runner lifecycle timelines, stuck-run alerts, engine load
 - `Run`: run graph, introspection timeline, tool/task internals
 - `Tasks`: task tree by run
 - `Cron`: cron jobs and run history
-- `Events`: live raw event stream
+- `Events`: live raw event stream (dedicated tab; no always-on side rail)
 
 ## Local development
 
