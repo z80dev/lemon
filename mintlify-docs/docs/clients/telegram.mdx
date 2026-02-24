@@ -82,6 +82,7 @@ The gateway starts the Telegram runtime (router + gateway + channels) without bo
 | `/resume` | List previous sessions |
 | `/resume <number>` | Resume a session by number |
 | `/resume <engine_token>` | Resume with a specific token |
+| `/model` | Open model picker (provider/model + scope) |
 | `/cancel` | Cancel a running run |
 
 ### Engine Override
@@ -95,6 +96,16 @@ Put these at the start of a message:
 | `/codex` | Codex CLI |
 | `/opencode` | OpenCode CLI |
 | `/pi` | Pi CLI |
+
+### Model Picker
+
+Run `/model` to open an inline button picker:
+
+- Pick a provider
+- Pick a model
+- Apply scope:
+  - `This session`
+  - `All future sessions` (for the current chat/topic)
 
 ### Queue Mode Override
 
