@@ -381,6 +381,8 @@ Engines send events to `sink_pid` (the `Run` process):
 {:engine_event, run_ref, %Event.Completed{ok: true, answer: "...", resume: token}}
 ```
 
+`Event.ActionEvent.ok` is optional for non-terminal phases; gateway debug logs treat missing values as `ok=unknown` instead of logging `ok=nil`.
+
 The `Run` process re-emits these to `LemonCore.Bus` as plain maps.
 
 ## Thread Worker and Scheduling

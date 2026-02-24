@@ -25,11 +25,12 @@ defmodule LemonCore.Store.ReadCacheTest do
       assert ReadCache.cached?(:chat)
       assert ReadCache.cached?(:runs)
       assert ReadCache.cached?(:progress)
+      assert ReadCache.cached?(:sessions_index)
+      assert ReadCache.cached?(:telegram_known_targets)
     end
 
     test "returns false for uncached domains" do
       refute ReadCache.cached?(:run_history)
-      refute ReadCache.cached?(:sessions_index)
       refute ReadCache.cached?(:policies)
     end
   end
@@ -59,6 +60,8 @@ defmodule LemonCore.Store.ReadCacheTest do
       assert ReadCache.get(:chat, :nonexistent) == nil
       assert ReadCache.get(:runs, "nonexistent") == nil
       assert ReadCache.get(:progress, {:scope, 0}) == nil
+      assert ReadCache.get(:sessions_index, "agent:missing") == nil
+      assert ReadCache.get(:telegram_known_targets, {"default", -1, nil}) == nil
     end
 
     test "overwrites existing values" do
@@ -77,6 +80,18 @@ defmodule LemonCore.Store.ReadCacheTest do
       assert ReadCache.put(:unknown, :key, :value) == :ok
       assert ReadCache.get(:unknown, :key) == nil
       assert ReadCache.delete(:unknown, :key) == :ok
+      assert ReadCache.list(:unknown) == []
+    end
+
+    test "lists cached entries for cached domains" do
+      ReadCache.put(:sessions_index, "agent:test:main", %{agent_id: "test"})
+      ReadCache.put(:telegram_known_targets, {"default", -1001, nil}, %{peer_kind: :group})
+
+      assert {"agent:test:main", %{agent_id: "test"}} in ReadCache.list(:sessions_index)
+
+      assert {{"default", -1001, nil}, %{peer_kind: :group}} in ReadCache.list(
+               :telegram_known_targets
+             )
     end
   end
 

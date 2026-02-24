@@ -4,7 +4,7 @@ defmodule LemonCore.Store.ReadCache do
 
   This module maintains a set of public ETS tables that mirror the backing
   store for domains that receive heavy read traffic (chat state, runs,
-  progress mappings). Reads are served directly from ETS without going
+  progress mappings, session index, Telegram target index). Reads are served directly from ETS without going
   through the Store GenServer, eliminating mailbox contention on the
   read path.
 
@@ -16,6 +16,8 @@ defmodule LemonCore.Store.ReadCache do
   - `:chat` — chat state by scope
   - `:runs` — run records by run_id
   - `:progress` — progress mappings by {scope, msg_id}
+  - `:sessions_index` — durable session metadata by session key
+  - `:telegram_known_targets` — known Telegram targets by {account_id, chat_id, topic_id}
 
   ## Usage
 
@@ -23,7 +25,7 @@ defmodule LemonCore.Store.ReadCache do
   `put/3` and `delete/2` to keep the cache in sync with the backend.
   """
 
-  @cached_domains [:chat, :runs, :progress]
+  @cached_domains [:chat, :runs, :progress, :sessions_index, :telegram_known_targets]
 
   @doc """
   Initialize the cache ETS tables. Called once during Store init.
@@ -110,6 +112,21 @@ defmodule LemonCore.Store.ReadCache do
   def table_for(:chat), do: :lemon_store_cache_chat
   def table_for(:runs), do: :lemon_store_cache_runs
   def table_for(:progress), do: :lemon_store_cache_progress
+  def table_for(:sessions_index), do: :lemon_store_cache_sessions_index
+  def table_for(:telegram_known_targets), do: :lemon_store_cache_telegram_known_targets
+
+  @doc """
+  List all cached entries for a domain as `{key, value}` tuples.
+  """
+  @spec list(atom()) :: [{term(), term()}]
+  def list(domain) when domain in @cached_domains do
+    table = table_for(domain)
+    :ets.tab2list(table)
+  rescue
+    ArgumentError -> []
+  end
+
+  def list(_domain), do: []
 
   @doc """
   List of domains that are cached.

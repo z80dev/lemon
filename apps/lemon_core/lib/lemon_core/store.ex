@@ -36,6 +36,8 @@ defmodule LemonCore.Store do
   @default_introspection_retention_ms @default_introspection_retention_days * 24 * 60 * 60 * 1000
   @default_introspection_query_limit 100
   @max_introspection_query_limit 1_000
+  @store_call_timeout_ms 5_000
+  @generic_cached_tables [:sessions_index, :telegram_known_targets]
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -56,12 +58,20 @@ defmodule LemonCore.Store do
     case ReadCache.get(:chat, scope) do
       nil ->
         # Cache miss — fall through to GenServer for backend lookup
-        GenServer.call(__MODULE__, {:get_chat_state, scope})
+        safe_store_call({:get_chat_state, scope}, nil,
+          op: :get_chat_state,
+          table: :chat,
+          key: scope
+        )
 
       %{expires_at: expires_at} = value when is_integer(expires_at) ->
         if System.system_time(:millisecond) > expires_at do
           # Expired — trigger lazy cleanup through GenServer
-          GenServer.call(__MODULE__, {:get_chat_state, scope})
+          safe_store_call({:get_chat_state, scope}, nil,
+            op: :get_chat_state,
+            table: :chat,
+            key: scope
+          )
         else
           value
         end
@@ -113,8 +123,15 @@ defmodule LemonCore.Store do
   def get_run_by_progress(scope, progress_msg_id) do
     # Fast path: direct ETS cache lookup
     case ReadCache.get(:progress, {scope, progress_msg_id}) do
-      nil -> GenServer.call(__MODULE__, {:get_run_by_progress, scope, progress_msg_id})
-      value -> value
+      nil ->
+        safe_store_call({:get_run_by_progress, scope, progress_msg_id}, nil,
+          op: :get_run_by_progress,
+          table: :progress,
+          key: {scope, progress_msg_id}
+        )
+
+      value ->
+        value
     end
   end
 
@@ -132,7 +149,13 @@ defmodule LemonCore.Store do
   This is a generic API for use by other apps (e.g., lemon_core, lemon_automation).
   """
   @spec put(table :: atom(), key :: term(), value :: term()) :: :ok | {:error, term()}
-  def put(table, key, value), do: GenServer.call(__MODULE__, {:generic_put, table, key, value})
+  def put(table, key, value) do
+    safe_store_call({:generic_put, table, key, value}, {:error, :store_unavailable},
+      op: :put,
+      table: table,
+      key: key
+    )
+  end
 
   @doc """
   Get a value from a named table.
@@ -140,19 +163,50 @@ defmodule LemonCore.Store do
   Returns `nil` if the key doesn't exist.
   """
   @spec get(table :: atom(), key :: term()) :: term() | nil
-  def get(table, key), do: GenServer.call(__MODULE__, {:generic_get, table, key})
+  def get(table, key) do
+    if table in @generic_cached_tables do
+      case ReadCache.get(table, key) do
+        nil ->
+          value =
+            safe_store_call({:generic_get, table, key}, nil, op: :get, table: table, key: key)
+
+          if not is_nil(value) do
+            ReadCache.put(table, key, value)
+          end
+
+          value
+
+        value ->
+          value
+      end
+    else
+      safe_store_call({:generic_get, table, key}, nil, op: :get, table: table, key: key)
+    end
+  end
 
   @doc """
   Delete a key from a named table.
   """
   @spec delete(table :: atom(), key :: term()) :: :ok | {:error, term()}
-  def delete(table, key), do: GenServer.call(__MODULE__, {:generic_delete, table, key})
+  def delete(table, key) do
+    safe_store_call({:generic_delete, table, key}, {:error, :store_unavailable},
+      op: :delete,
+      table: table,
+      key: key
+    )
+  end
 
   @doc """
   List all key-value pairs in a named table.
   """
   @spec list(table :: atom()) :: [{term(), term()}]
-  def list(table), do: GenServer.call(__MODULE__, {:generic_list, table})
+  def list(table) do
+    if table in @generic_cached_tables do
+      ReadCache.list(table)
+    else
+      safe_store_call({:generic_list, table}, [], op: :list, table: table, key: :all)
+    end
+  end
 
   # Policy Table API
 
@@ -265,7 +319,11 @@ defmodule LemonCore.Store do
   """
   @spec get_run_history(term(), keyword()) :: [{term(), map()}]
   def get_run_history(session_key, opts \\ []) do
-    GenServer.call(__MODULE__, {:get_run_history, session_key, opts})
+    safe_store_call({:get_run_history, session_key, opts}, [],
+      op: :get_run_history,
+      table: :run_history,
+      key: session_key
+    )
   end
 
   @doc """
@@ -275,7 +333,7 @@ defmodule LemonCore.Store do
   def get_run(run_id) do
     # Fast path: direct ETS cache lookup
     case ReadCache.get(:runs, run_id) do
-      nil -> GenServer.call(__MODULE__, {:get_run, run_id})
+      nil -> safe_store_call({:get_run, run_id}, nil, op: :get_run, table: :runs, key: run_id)
       value -> value
     end
   end
@@ -287,7 +345,11 @@ defmodule LemonCore.Store do
   """
   @spec append_introspection_event(map()) :: :ok | {:error, term()}
   def append_introspection_event(event) do
-    GenServer.call(__MODULE__, {:append_introspection_event, event})
+    safe_store_call({:append_introspection_event, event}, {:error, :store_unavailable},
+      op: :append_introspection_event,
+      table: :introspection_log,
+      key: Map.get(event, :event_id, :unknown)
+    )
   end
 
   @doc """
@@ -305,7 +367,55 @@ defmodule LemonCore.Store do
   """
   @spec list_introspection_events(keyword()) :: [map()]
   def list_introspection_events(opts \\ []) do
-    GenServer.call(__MODULE__, {:list_introspection_events, opts})
+    safe_store_call({:list_introspection_events, opts}, [],
+      op: :list_introspection_events,
+      table: :introspection_log,
+      key: :all
+    )
+  end
+
+  defp safe_store_call(request, fallback, context) do
+    GenServer.call(__MODULE__, request, @store_call_timeout_ms)
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "Store client call failed op=#{inspect(context[:op])} table=#{inspect(context[:table])} " <>
+          "key=#{inspect(context[:key])} reason=#{inspect(store_call_exit_reason(reason))}"
+      )
+
+      fallback
+  end
+
+  defp store_call_exit_reason({:timeout, {GenServer, :call, _}}), do: :timeout
+  defp store_call_exit_reason({:noproc, {GenServer, :call, _}}), do: :noproc
+  defp store_call_exit_reason({:shutdown, {GenServer, :call, _}}), do: :shutdown
+  defp store_call_exit_reason(_), do: :exit
+
+  defp warm_generic_table_caches(backend, backend_state) do
+    Enum.reduce(@generic_cached_tables, backend_state, fn table, acc_state ->
+      case backend.list(acc_state, table) do
+        {:ok, entries, next_state} ->
+          Enum.each(entries, fn {key, value} ->
+            ReadCache.put(table, key, value)
+          end)
+
+          next_state
+
+        {:error, reason} ->
+          Logger.warning(
+            "Store cache warm failed table=#{inspect(table)} reason=#{inspect(reason)}"
+          )
+
+          acc_state
+
+        other ->
+          Logger.warning(
+            "Store cache warm failed table=#{inspect(table)} reason=#{inspect(other)}"
+          )
+
+          acc_state
+      end
+    end)
   end
 
   # GenServer Implementation
@@ -324,6 +434,8 @@ defmodule LemonCore.Store do
       {:ok, backend_state} ->
         # Initialize read-through cache for high-traffic domains
         ReadCache.init()
+
+        backend_state = warm_generic_table_caches(backend, backend_state)
 
         # Schedule periodic sweep for expired chat states
         schedule_sweep()
@@ -533,6 +645,10 @@ defmodule LemonCore.Store do
   def handle_call({:generic_put, table, key, value}, _from, state) do
     case state.backend.put(state.backend_state, table, key, value) do
       {:ok, backend_state} ->
+        if table in @generic_cached_tables do
+          ReadCache.put(table, key, value)
+        end
+
         {:reply, :ok, %{state | backend_state: backend_state}}
 
       {:error, reason} ->
@@ -563,6 +679,10 @@ defmodule LemonCore.Store do
   def handle_call({:generic_delete, table, key}, _from, state) do
     case state.backend.delete(state.backend_state, table, key) do
       {:ok, backend_state} ->
+        if table in @generic_cached_tables do
+          ReadCache.delete(table, key)
+        end
+
         {:reply, :ok, %{state | backend_state: backend_state}}
 
       {:error, reason} ->

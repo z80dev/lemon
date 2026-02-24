@@ -30,6 +30,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Secrets.Keychain` | macOS keychain integration for master key storage |
 | `LemonCore.Secrets.MasterKey` | Master key resolution (keychain first, then env var) |
 | `LemonCore.Store` | Storage GenServer with pluggable backends |
+| `LemonCore.Store.ReadCache` | ETS read cache for hot domains (`:chat`, `:runs`, `:progress`, `:sessions_index`, `:telegram_known_targets`) |
 | `LemonCore.Store.EtsBackend` | In-memory ETS (ephemeral, default) |
 | `LemonCore.Store.SqliteBackend` | SQLite with WAL mode (persistent) |
 | `LemonCore.Store.JsonlBackend` | Append-only JSONL (portable, human-readable) |
@@ -95,29 +96,32 @@ config = LemonCore.Config.Modular.load!(project_dir: cwd)  # raises on invalid
 ### Config Sections
 
 - `providers` - LLM API keys and base URLs (anthropic, openai, openai-codex, opencode, kimi, google)
-- `agent` - Default model, thinking level, retry config, tool settings, CLI tool configs (claude, codex, kimi, opencode, pi)
+- `defaults` - Preferred home for default provider/model/thinking level/engine
+- `runtime` - Preferred home for runtime behavior (compaction, retry, shell, tools, cli, extensions, theme)
+- `profiles` - Preferred home for per-agent profiles with tool policies
+- `agent` - Legacy alias for runtime/default settings (still supported)
+- `agents` - Legacy alias for profile settings (still supported)
 - `tui` - Theme, debug mode
 - `logging` - File logging, level, rotation
 - `gateway` - Max concurrent runs, engine bindings, Telegram settings, SMS, queue, projects
-- `agents` - Per-agent profiles with tool policies
 
 ### Environment Variable Overrides
 
 | Env Var | Overrides |
 |---------|-----------|
-| `LEMON_DEFAULT_PROVIDER` | `agent.default_provider` |
-| `LEMON_DEFAULT_MODEL` | `agent.default_model` |
+| `LEMON_DEFAULT_PROVIDER` | `defaults.provider` (legacy: `agent.default_provider`) |
+| `LEMON_DEFAULT_MODEL` | `defaults.model` (legacy: `agent.default_model`) |
 | `LEMON_DEBUG` | `tui.debug` |
 | `LEMON_THEME` | `tui.theme` |
 | `LEMON_LOG_FILE` | `logging.file` |
 | `LEMON_LOG_LEVEL` | `logging.level` |
-| `LEMON_CODEX_EXTRA_ARGS` | `agent.cli.codex.extra_args` (space-separated) |
-| `LEMON_CODEX_AUTO_APPROVE` | `agent.cli.codex.auto_approve` |
-| `LEMON_CLAUDE_YOLO` | `agent.cli.claude.dangerously_skip_permissions` |
-| `LEMON_WASM_ENABLED` | `agent.tools.wasm.enabled` |
-| `LEMON_WASM_RUNTIME_PATH` | `agent.tools.wasm.runtime_path` |
-| `LEMON_WASM_TOOL_PATHS` | `agent.tools.wasm.tool_paths` |
-| `LEMON_WASM_AUTO_BUILD` | `agent.tools.wasm.auto_build` |
+| `LEMON_CODEX_EXTRA_ARGS` | `runtime.cli.codex.extra_args` (legacy: `agent.cli.codex.extra_args`) |
+| `LEMON_CODEX_AUTO_APPROVE` | `runtime.cli.codex.auto_approve` (legacy: `agent.cli.codex.auto_approve`) |
+| `LEMON_CLAUDE_YOLO` | `runtime.cli.claude.dangerously_skip_permissions` (legacy: `agent.cli.claude.dangerously_skip_permissions`) |
+| `LEMON_WASM_ENABLED` | `runtime.tools.wasm.enabled` (legacy: `agent.tools.wasm.enabled`) |
+| `LEMON_WASM_RUNTIME_PATH` | `runtime.tools.wasm.runtime_path` (legacy: `agent.tools.wasm.runtime_path`) |
+| `LEMON_WASM_TOOL_PATHS` | `runtime.tools.wasm.tool_paths` (legacy: `agent.tools.wasm.tool_paths`) |
+| `LEMON_WASM_AUTO_BUILD` | `runtime.tools.wasm.auto_build` (legacy: `agent.tools.wasm.auto_build`) |
 | `LEMON_BROWSER_DRIVER_PATH` | Path to local browser driver JS file |
 | `ANTHROPIC_API_KEY` | `providers.anthropic.api_key` |
 | `OPENAI_API_KEY` | `providers.openai.api_key` |
@@ -186,6 +190,8 @@ value = LemonCore.Store.get(:my_table, key)
 :ok = LemonCore.Store.delete(:my_table, key)
 items = LemonCore.Store.list(:my_table)
 ```
+
+Store client calls are fail-soft: if `LemonCore.Store` is overloaded/unavailable and a synchronous call exits (timeout/noproc/shutdown), write APIs return `{:error, :store_unavailable}` and read/list APIs return `nil`/`[]` so callers do not crash.
 
 ### Specialized APIs
 

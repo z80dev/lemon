@@ -423,6 +423,22 @@ defmodule LemonCore.StoreTest do
   end
 
   describe "backend error handling" do
+    test "sessions index reads are served from read cache even when backend becomes busy" do
+      token = unique_token()
+      key = session_key(token)
+      entry = %{agent_id: "agent_#{token}", updated_at_ms: System.system_time(:millisecond)}
+
+      assert :ok = Store.put(:sessions_index, key, entry)
+      assert Store.get(:sessions_index, key) == entry
+      assert {key, entry} in Store.list(:sessions_index)
+
+      original_state = swap_store_backend(BusyBackend, %{})
+      on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
+
+      assert Store.get(:sessions_index, key) == entry
+      assert {key, entry} in Store.list(:sessions_index)
+    end
+
     test "generic put returns error and store remains alive on sqlite busy" do
       original_state = swap_store_backend(BusyBackend, %{})
       on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)

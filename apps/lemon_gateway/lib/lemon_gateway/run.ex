@@ -312,7 +312,7 @@ defmodule LemonGateway.Run do
       %Event.ActionEvent{} = ev ->
         Logger.debug(
           "Gateway run action run_id=#{inspect(state.run_id)} phase=#{inspect(ev.phase)} kind=#{inspect(ev.action && ev.action.kind)} " <>
-            "ok=#{inspect(ev.ok)}"
+            action_event_ok_fragment(ev.ok)
         )
 
       _ ->
@@ -504,6 +504,9 @@ defmodule LemonGateway.Run do
         LemonGateway.Config.get(:default_engine) || "lemon"
     end
   end
+
+  defp action_event_ok_fragment(ok?) when is_boolean(ok?), do: "ok=#{inspect(ok?)}"
+  defp action_event_ok_fragment(_), do: "ok=unknown"
 
   defp finalize(state, %Event.Completed{} = completed) do
     state = %{state | completed: true}
