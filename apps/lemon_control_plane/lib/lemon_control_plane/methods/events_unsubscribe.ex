@@ -21,7 +21,7 @@ defmodule LemonControlPlane.Methods.EventsUnsubscribe do
 
   @behaviour LemonControlPlane.Method
 
-  alias LemonControlPlane.{EventBridge, Protocol.Errors}
+  alias LemonControlPlane.EventBridge
 
   @impl true
   def name, do: "events.unsubscribe"

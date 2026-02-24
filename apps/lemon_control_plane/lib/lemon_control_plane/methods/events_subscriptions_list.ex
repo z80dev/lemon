@@ -57,7 +57,7 @@ defmodule LemonControlPlane.Methods.EventsSubscriptionsList do
 
       registry ->
         case Registry.lookup(registry, conn_id) do
-          [{pid, _}] ->
+          [{_pid, _}] ->
             # Request subscriptions from the connection process
             # This is a simplified version - in production this might use a GenServer.call
             # For now, return empty list as subscriptions are tracked per-connection
