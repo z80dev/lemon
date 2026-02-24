@@ -45,6 +45,7 @@ export function SessionDetailPanel({ sessionKey, loading, onSelectRun }: Session
   const activeSessions = useMonitoringStore((s) => s.sessions.active);
   const historicalSessions = useMonitoringStore((s) => s.sessions.historical);
   const activeRuns = useMonitoringStore((s) => s.runs.active);
+  const recentRuns = useMonitoringStore((s) => s.runs.recent);
   const activeTasks = useMonitoringStore((s) => s.tasks.active);
   const recentTasks = useMonitoringStore((s) => s.tasks.recent);
 
@@ -57,12 +58,34 @@ export function SessionDetailPanel({ sessionKey, loading, onSelectRun }: Session
   const [showAllRuns, setShowAllRuns] = useState(false);
 
   const runs = useMemo(() => {
-    const allRuns = [...(sessionDetail?.runs ?? [])].sort(
+    const detailRuns = [...(sessionDetail?.runs ?? [])].sort(
       (a, b) => (a.startedAtMs ?? 0) - (b.startedAtMs ?? 0)
     );
+    const allRuns =
+      detailRuns.length > 0
+        ? detailRuns
+        : [...Object.values(activeRuns), ...recentRuns]
+            .filter((run) => run.sessionKey === sessionKey)
+            .sort((a, b) => (a.startedAtMs ?? 0) - (b.startedAtMs ?? 0))
+            .map<SessionRunSummary>((run) => ({
+              runId: run.runId,
+              startedAtMs: run.startedAtMs,
+              engine: run.engine,
+              prompt: null,
+              answer: null,
+              ok: run.ok,
+              error: run.status === 'error' ? 'run_error' : run.status === 'aborted' ? 'aborted' : null,
+              durationMs: run.durationMs,
+              toolCallCount: 0,
+              toolCalls: [],
+              tokens: null,
+              eventCount: undefined,
+              eventDigest: [],
+            }));
+
     if (showAllRuns) return allRuns;
     return allRuns.slice(-60);
-  }, [sessionDetail?.runs, showAllRuns]);
+  }, [sessionDetail?.runs, showAllRuns, activeRuns, recentRuns, sessionKey]);
 
   const allSessionTasks = useMemo(() => {
     if (!sessionKey) return [];

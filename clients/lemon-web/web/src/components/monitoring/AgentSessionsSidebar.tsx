@@ -8,6 +8,7 @@ export interface AgentSessionsSidebarProps {
 }
 
 type SidebarTab = 'sessions' | 'agents';
+type SessionScope = 'focus' | 'all';
 
 function truncate(str: string, max: number): string {
   if (str.length <= max) return str;
@@ -30,6 +31,8 @@ export function AgentSessionsSidebar({ onSelectSession, onSelectRun }: AgentSess
   const selectedSessionKey = useMonitoringStore((s) => s.ui.selectedSessionKey);
   const sidebarTab = useMonitoringStore((s) => s.ui.sidebarTab);
   const [tab, setTab] = useState<SidebarTab>(sidebarTab ?? 'sessions');
+  const [scope, setScope] = useState<SessionScope>('focus');
+  const [includeSystem, setIncludeSystem] = useState(false);
 
   // Merge active + historical, dedup, sort by updatedAt desc
   const allSessions = useMemo<MonitoringSession[]>(() => {
@@ -51,6 +54,33 @@ export function AgentSessionsSidebar({ onSelectSession, onSelectRun }: AgentSess
       }),
     [agents]
   );
+
+  const filteredSessions = useMemo(() => {
+    const now = Date.now();
+    const recentThreshold = now - 24 * 60 * 60 * 1000;
+
+    const isSystemLike = (session: MonitoringSession): boolean => {
+      const key = session.sessionKey;
+      return (
+        key.includes(':sub:cron_') ||
+        key.includes(':heartbeat') ||
+        key.includes(':delegate:') ||
+        session.channelId === 'delegate'
+      );
+    };
+
+    return allSessions.filter((session) => {
+      if (!includeSystem && isSystemLike(session)) return false;
+      if (scope === 'all') return true;
+
+      const updatedAt = session.updatedAtMs ?? 0;
+      const hasMeaningfulHistory = (session.runCount ?? 0) >= 3;
+      const isLive = session.active === true;
+      const recentlyActive = updatedAt >= recentThreshold;
+      const isChannelBound = Boolean(session.channelId);
+      return isLive || hasMeaningfulHistory || (recentlyActive && isChannelBound);
+    });
+  }, [allSessions, includeSystem, scope]);
 
   const activeTabStyle = (isActive: boolean): React.CSSProperties => ({
     flex: 1,
@@ -90,7 +120,7 @@ export function AgentSessionsSidebar({ onSelectSession, onSelectRun }: AgentSess
           style={activeTabStyle(tab === 'sessions')}
           onClick={() => setTab('sessions')}
         >
-          Sessions{allSessions.length > 0 && ` (${allSessions.length})`}
+          Sessions{filteredSessions.length > 0 && ` (${filteredSessions.length})`}
         </button>
         <button
           type="button"
@@ -106,10 +136,61 @@ export function AgentSessionsSidebar({ onSelectSession, onSelectRun }: AgentSess
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 0' }}>
         {tab === 'sessions' && (
           <>
-            {allSessions.length === 0 ? (
+            <div style={{ display: 'flex', gap: '6px', padding: '4px 8px 8px 8px', borderBottom: '1px solid #242424' }}>
+              <button
+                type="button"
+                style={{
+                  padding: '2px 8px',
+                  border: '1px solid #333',
+                  borderRadius: '3px',
+                  background: scope === 'focus' ? '#003322' : 'transparent',
+                  color: scope === 'focus' ? '#00ff88' : '#888',
+                  fontFamily: 'monospace',
+                  fontSize: '10px',
+                  cursor: 'pointer',
+                }}
+                onClick={() => setScope('focus')}
+              >
+                Focus
+              </button>
+              <button
+                type="button"
+                style={{
+                  padding: '2px 8px',
+                  border: '1px solid #333',
+                  borderRadius: '3px',
+                  background: scope === 'all' ? '#003322' : 'transparent',
+                  color: scope === 'all' ? '#00ff88' : '#888',
+                  fontFamily: 'monospace',
+                  fontSize: '10px',
+                  cursor: 'pointer',
+                }}
+                onClick={() => setScope('all')}
+              >
+                All
+              </button>
+              <button
+                type="button"
+                style={{
+                  marginLeft: 'auto',
+                  padding: '2px 8px',
+                  border: '1px solid #333',
+                  borderRadius: '3px',
+                  background: includeSystem ? '#332200' : 'transparent',
+                  color: includeSystem ? '#ffaa00' : '#888',
+                  fontFamily: 'monospace',
+                  fontSize: '10px',
+                  cursor: 'pointer',
+                }}
+                onClick={() => setIncludeSystem((v) => !v)}
+              >
+                {includeSystem ? 'System: ON' : 'System: OFF'}
+              </button>
+            </div>
+            {filteredSessions.length === 0 ? (
               <div style={{ padding: '12px 8px', color: '#666' }}>No sessions</div>
             ) : (
-              allSessions.map((session) => {
+              filteredSessions.map((session) => {
                 const isSelected = selectedSessionKey === session.sessionKey;
                 return (
                   <div

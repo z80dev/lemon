@@ -425,7 +425,7 @@ export function MonitoringApp() {
         request('status', {}),
         request('introspection.snapshot', { includeActiveSessions: true, sessionLimit: 250, activeLimit: 250 }),
         request('agent.directory.list', { includeSessions: true, limit: 250 }),
-        request('sessions.list', { limit: 250 }),
+        request('sessions.list', { limit: 150 }),
         request('sessions.active.list', { limit: 250 }),
         request('runs.active.list', { limit: 200 }),
         request('runs.recent.list', { limit: 200 }),

@@ -37,6 +37,11 @@ Runner engine summaries include both run engines and task engines (when present)
 - `Cron`: cron jobs and run history
 - `Events`: live raw event stream (dedicated tab; no always-on side rail)
 
+Session list behavior is opinionated by default:
+- `Focus` scope prioritizes active/recent/high-signal sessions.
+- `System: OFF` hides cron/heartbeat/delegate noise sessions unless explicitly enabled.
+- Session history preserves richer metadata from directory/snapshot sources even when `sessions.list` returns minimal records.
+
 ## Local development
 
 ```bash

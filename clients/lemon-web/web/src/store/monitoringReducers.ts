@@ -537,7 +537,11 @@ export function applySessionsActiveList(
   for (const raw of sessions) {
     const s = normalizeSession(raw);
     if (s) {
-      active[s.sessionKey] = s;
+      const existing =
+        state.sessions.active[s.sessionKey] ??
+        state.sessions.historical.find((h) => h.sessionKey === s.sessionKey) ??
+        null;
+      active[s.sessionKey] = mergeSession(existing, s);
     }
   }
   return {
@@ -553,9 +557,14 @@ export function applySessionsList(
   state: MonitoringState,
   sessions: unknown[]
 ): MonitoringState {
+  const previousByKey = new Map<string, MonitoringSession>();
+  for (const s of state.sessions.historical) previousByKey.set(s.sessionKey, s);
+  for (const s of Object.values(state.sessions.active)) previousByKey.set(s.sessionKey, s);
+
   const historical = sessions
     .map((raw) => normalizeSession(raw))
     .filter((s): s is MonitoringSession => s !== null)
+    .map((incoming) => mergeSession(previousByKey.get(incoming.sessionKey) ?? null, incoming))
     .sort((a, b) => (b.updatedAtMs ?? 0) - (a.updatedAtMs ?? 0));
   return {
     ...state,
@@ -972,5 +981,38 @@ function normalizeSession(raw: unknown): MonitoringSession | null {
                  typeof s['updatedAtMs'] === 'number' ? s['updatedAtMs'] : null,
     route: (s['route'] ?? {}) as Record<string, string | null>,
     origin: (s['origin'] ?? null) as string | null,
+  };
+}
+
+function mergeSession(existing: MonitoringSession | null, incoming: MonitoringSession): MonitoringSession {
+  if (!existing) return incoming;
+  const incomingRouteHasData = incoming.route && Object.keys(incoming.route).length > 0;
+  const existingRouteHasData = existing.route && Object.keys(existing.route).length > 0;
+
+  return {
+    ...existing,
+    ...incoming,
+    agentId: incoming.agentId ?? existing.agentId,
+    kind: incoming.kind ?? existing.kind,
+    channelId: incoming.channelId ?? existing.channelId,
+    accountId: incoming.accountId ?? existing.accountId,
+    peerKind: incoming.peerKind ?? existing.peerKind,
+    peerId: incoming.peerId ?? existing.peerId,
+    peerLabel: incoming.peerLabel ?? existing.peerLabel,
+    peerUsername: incoming.peerUsername ?? existing.peerUsername,
+    threadId: incoming.threadId ?? existing.threadId,
+    target: incoming.target ?? existing.target,
+    topicName: incoming.topicName ?? existing.topicName,
+    chatType: incoming.chatType ?? existing.chatType,
+    subId: incoming.subId ?? existing.subId,
+    runId: incoming.runId ?? existing.runId,
+    runCount: Math.max(incoming.runCount ?? 0, existing.runCount ?? 0),
+    createdAtMs: incoming.createdAtMs ?? existing.createdAtMs,
+    updatedAtMs: incoming.updatedAtMs ?? existing.updatedAtMs,
+    route: incomingRouteHasData ? incoming.route : existingRouteHasData ? existing.route : incoming.route,
+    origin:
+      incoming.origin && incoming.origin !== 'unknown'
+        ? incoming.origin
+        : existing.origin ?? incoming.origin,
   };
 }
