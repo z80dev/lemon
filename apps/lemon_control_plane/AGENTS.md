@@ -216,6 +216,7 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 |--------|-------|-------------|
 | `agent` | write | Submit an agent run (requires `prompt`) |
 | `agent.wait` | write | Submit and wait for completion |
+| `agent.progress` | read | Return long-running harness progress snapshot for a session and emit introspection event |
 | `agents.list` | read | List available agents |
 | `agent.identity.get` | read | Get agent capabilities/identity |
 | `agent.inbox.send` | write | Send message to agent inbox with routing |

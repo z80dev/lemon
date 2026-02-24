@@ -54,6 +54,18 @@
     max_age_days: 90
   },
   %{
+    path: "docs/runtime-hot-reload.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-02-24],
+    max_age_days: 60
+  },
+  %{
+    path: "docs/long-running-agent-harnesses.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-02-25],
+    max_age_days: 60
+  },
+  %{
     path: "docs/quality_harness.md",
     owner: "@z80",
     last_reviewed: ~D[2026-02-13],

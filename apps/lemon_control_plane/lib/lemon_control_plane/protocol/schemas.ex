@@ -107,6 +107,17 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "timeoutMs" => :integer
       }
     },
+    "agent.progress" => %{
+      required: %{
+        "sessionId" => :string
+      },
+      optional: %{
+        "cwd" => :string,
+        "runId" => :string,
+        "sessionKey" => :string,
+        "agentId" => :string
+      }
+    },
     "agent.inbox.send" => %{
       required: %{
         "prompt" => :string

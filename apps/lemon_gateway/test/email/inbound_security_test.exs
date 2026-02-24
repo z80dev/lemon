@@ -3,6 +3,7 @@ defmodule LemonGateway.EmailInboundSecurityTest do
 
   import ExUnit.CaptureLog
   import Bitwise
+  import LemonGateway.AsyncHelpers
 
   alias LemonGateway.Store
   alias LemonGateway.Transports.Email.Inbound
@@ -118,6 +119,12 @@ defmodule LemonGateway.EmailInboundSecurityTest do
     }
 
     assert {:ok, _} = Inbound.ingest(params, %{})
+    # Attachment writes are async; wait for the background task to complete.
+    assert_eventually(fn -> match?({:ok, [_]}, File.ls(@attachments_dir)) end,
+      message: "attachment file was never written by async pipeline",
+      timeout: 2_000
+    )
+
     assert {:ok, [copied]} = File.ls(@attachments_dir)
 
     copied_path = Path.join(@attachments_dir, copied)

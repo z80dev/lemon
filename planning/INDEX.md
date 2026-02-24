@@ -1,6 +1,6 @@
 # Planning Index
 
-Last updated: 2026-02-24
+Last updated: 2026-02-25 (phase-09/10 landed; phase-13 + runtime-hot-reload + long-running-harnesses ready_to_land)
 
 This file is the live board for tracked plans. Keep rows concise and link to canonical plan artifacts.
 
@@ -33,13 +33,7 @@ These entries were already completed before the `planning/` workflow was created
 | Plan ID | Title | Status | Owner | Workspace | Change ID | Roadmap Ref | Updated |
 |---|---|---|---|---|---|---|---|
 | [PLN-20260223-macos-keychain-secrets-audit](plans/PLN-20260223-macos-keychain-secrets-audit.md) | macOS Keychain secrets path audit and hardening | `planned` | `zeebot` | `feature/pln-20260223-macos-keychain-secrets-audit` | `pending` | `ROADMAP.md` | 2026-02-23 |
-| [PLN-20260222-debt-phase-09-gateway-reliability-decomposition](plans/PLN-20260222-debt-phase-09-gateway-reliability-decomposition.md) | Debt Phase 9 - Gateway runtime reliability decomposition | `planned` | `unassigned` | `feature/pln-20260222-debt-phase-09-gateway-reliability-decomposition` | `pending` | `debt_plan.md:99` | 2026-02-22 |
-| [PLN-20260222-debt-phase-10-monolith-footprint-reduction](plans/PLN-20260222-debt-phase-10-monolith-footprint-reduction.md) | Debt Phase 10 - Monolith and release footprint reduction | `planned` | `unassigned` | `feature/pln-20260222-debt-phase-10-monolith-footprint-reduction` | `pending` | `debt_plan.md:123` | 2026-02-22 |
-| [PLN-20260222-debt-phase-13-client-ci-parity-governance](plans/PLN-20260222-debt-phase-13-client-ci-parity-governance.md) | Debt Phase 13 - Client CI parity and dependency governance | `planned` | `unassigned` | `feature/pln-20260222-debt-phase-13-client-ci-parity-governance` | `pending` | `debt_plan.md:200` | 2026-02-22 |
 | [PLN-20260224-inspiration-ideas-implementation](plans/PLN-20260224-inspiration-ideas-implementation.md) | Implement Inspiration Ideas from Upstream Research | `in_progress` | `janitor` | `feature/pln-20260224-inspiration-ideas` | `pending` | `ROADMAP.md` | 2026-02-24 |
-| [PLN-20260224-runtime-hot-reload](plans/PLN-20260224-runtime-hot-reload.md) | Runtime Hot-Reload System for BEAM Modules and Extensions | `in_progress` | `janitor` | `feature/pln-20260224-runtime-hot-reload` | `pending` | — | 2026-02-24 |
-
-| [PLN-20260224-long-running-agent-harnesses](plans/PLN-20260224-long-running-agent-harnesses.md) | Long-Running Agent Harnesses and Task Management | `in_progress` | `janitor` | `feature/pln-20260224-long-running-harnesses` | `pending` | — | 2026-02-24 |
 
 ## Ready for Review
 
@@ -50,6 +44,9 @@ These entries were already completed before the `planning/` workflow was created
 
 | Plan ID | Title | Landing Doc | Owner | Updated |
 |---|---|---|---|---|
+| [PLN-20260222-debt-phase-13-client-ci-parity-governance](plans/PLN-20260222-debt-phase-13-client-ci-parity-governance.md) | Debt Phase 13 - Client CI parity and dependency governance | [MRG-PLN-20260222-debt-phase-13-client-ci-parity-governance](merges/MRG-PLN-20260222-debt-phase-13-client-ci-parity-governance.md) | `janitor` | 2026-02-24 |
+| [PLN-20260224-runtime-hot-reload](plans/PLN-20260224-runtime-hot-reload.md) | Runtime Hot-Reload System for BEAM Modules and Extensions | [MRG-PLN-20260224-runtime-hot-reload](merges/MRG-PLN-20260224-runtime-hot-reload.md) | `janitor` | 2026-02-24 |
+| [PLN-20260224-long-running-agent-harnesses](plans/PLN-20260224-long-running-agent-harnesses.md) | Long-Running Agent Harnesses and Task Management | [MRG-PLN-20260224-long-running-agent-harnesses](merges/MRG-PLN-20260224-long-running-agent-harnesses.md) | `janitor` | 2026-02-25 |
 
 ## Blocked
 
@@ -60,6 +57,8 @@ These entries were already completed before the `planning/` workflow was created
 
 | Plan ID | Title | Landed Revision | Notes | Updated |
 |---|---|---|---|---|
+| [PLN-20260222-debt-phase-09-gateway-reliability-decomposition](plans/PLN-20260222-debt-phase-09-gateway-reliability-decomposition.md) | Debt Phase 9 - Gateway runtime reliability decomposition | `2702f964` | FanoutSupervisor supervised, async email attachments, DependencyManager; test sync gap fixed | 2026-02-24 |
+| [PLN-20260222-debt-phase-10-monolith-footprint-reduction](plans/PLN-20260222-debt-phase-10-monolith-footprint-reduction.md) | Debt Phase 10 - Monolith and release footprint reduction | `3b102fdc` | M1 cleanup + M2-M4 analysis/blueprints complete; landed with review/merge artifacts | 2026-02-24 |
 | [PLN-20260224-pi-model-resolver-slash-support](plans/PLN-20260224-pi-model-resolver-slash-support.md) | Add Slash Separator Support for Provider/Model Format | `5c7098c1` | Pi parity: slash separator support for provider/model format | 2026-02-24 |
 | [PLN-20260222-agent-introspection](plans/PLN-20260222-agent-introspection.md) | End-to-end agent introspection | `bec7bfae` | Final stacked landing `M2 -> M3 -> M4`; post-landing smoke tests passed | 2026-02-23 |
 | PLN-20260223-diag-extend | Extend diag script with service/health/logs/config | `84e34b45` | Team test: Claude + Codex parallel work | 2026-02-23 |

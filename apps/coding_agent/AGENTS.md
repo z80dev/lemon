@@ -115,6 +115,15 @@ Tools are divided into two sets. `coding_tools/2` is the default set passed to s
 | `CodingAgent.PromptBuilder` | Higher-level prompt builder adding skills, commands, @mentions sections |
 | `CodingAgent.ResourceLoader` | Loads CLAUDE.md/AGENTS.md from cwd up to filesystem root, then home dir |
 
+### Long-Running Harnesses
+
+| Module | Purpose |
+|--------|---------|
+| `CodingAgent.Tools.FeatureRequirements` | Generates/persists feature requirement plans (`FEATURE_REQUIREMENTS.json`) and tracks feature completion |
+| `CodingAgent.Tools.TodoStore` | Session todo persistence with dependency-aware actionable filtering and progress stats |
+| `CodingAgent.Checkpoint` | Checkpoint/resume snapshots for session state, todos, and requirement context |
+| `CodingAgent.Progress` | Unified snapshot (`snapshot/2`) combining todos, requirements, checkpoints, and next actions |
+
 ### Extensions & WASM
 
 | Module | Purpose |

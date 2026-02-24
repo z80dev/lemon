@@ -3,11 +3,11 @@ id: PLN-20260224-long-running-agent-harnesses
 title: Long-Running Agent Harnesses and Task Management
 owner: janitor
 reviewer: codex
-status: in_progress
+status: ready_to_land
 workspace: feature/pln-20260224-long-running-harnesses
 change_id: pending
 created: 2026-02-24
-updated: 2026-02-24
+updated: 2026-02-25
 ---
 
 ## Goal
@@ -37,12 +37,12 @@ Missing:
 
 ## Milestones
 
-- [ ] M1 — Add feature requirements generation tool
-- [ ] M2 — Enhance todo system with dependencies and progress
-- [ ] M3 — Implement checkpoint/resume mechanism
-- [ ] M4 — Add progress reporting and visualization
-- [ ] M5 — Integrate with introspection system
-- [ ] M6 — Tests and documentation
+- [x] M1 — Add feature requirements generation tool
+- [x] M2 — Enhance todo system with dependencies and progress
+- [x] M3 — Implement checkpoint/resume mechanism
+- [x] M4 — Add progress reporting and visualization
+- [x] M5 — Integrate with introspection system
+- [x] M6 — Tests and documentation
 
 ## M1: Feature Requirements Generation Tool
 
@@ -478,13 +478,13 @@ end
 
 ## Exit Criteria
 
-- [ ] Feature requirements generation works with LLM
-- [ ] Requirements files save/load correctly
-- [ ] Todo dependencies are respected
-- [ ] Checkpoints can be created and resumed
-- [ ] Progress is visible in introspection
-- [ ] Tests cover all major functionality
-- [ ] Documentation updated
+- [x] Feature requirements generation works with LLM
+- [x] Requirements files save/load correctly
+- [x] Todo dependencies are respected
+- [x] Checkpoints can be created and resumed
+- [x] Progress is visible in introspection
+- [x] Tests cover all major functionality
+- [x] Documentation updated
 
 ## Progress Log
 
@@ -499,6 +499,9 @@ end
 | 2026-02-24 | M2 | Added 16 new tests, all 75 tests passing |
 | 2026-02-24 | M3 | Implemented Checkpoint module for save/resume |
 | 2026-02-24 | M3 | Added 17 tests for checkpoint functionality |
+| 2026-02-24 | M4 | Added `CodingAgent.Progress.snapshot/2` aggregation (todos + requirements + checkpoint stats + next actions) with dedicated tests |
+| 2026-02-24 | M5 | Added `agent.progress` control-plane method + schema/registry integration; emits `:agent_progress_snapshot` introspection events with run/session metadata |
+| 2026-02-25 | M6 | Added long-running harness operator docs + AGENTS references; produced review/merge artifacts and moved plan to `ready_to_land` |
 
 ## Implementation Summary
 
@@ -595,8 +598,34 @@ Created `CodingAgent.Checkpoint` module for save/resume functionality:
 
 **Tests:** 17 tests covering all functionality
 
-### Next Steps
+### M4: Progress Snapshot ✅
 
-- M4: Add introspection integration (progress reporting)
-- M5: Documentation and examples
-- M6: Integration with agent session lifecycle
+Added `CodingAgent.Progress.snapshot/2` to provide a unified view of long-running harness state:
+
+- Aggregates todo progress (`TodoStore.get_progress/1`)
+- Aggregates feature requirements progress when `FEATURE_REQUIREMENTS.json` exists
+- Aggregates checkpoint stats (`Checkpoint.stats/1`)
+- Returns prioritized next actions for both todos and feature requirements
+- Computes an overall completion percentage across todo + feature dimensions
+
+**Tests:** `apps/coding_agent/test/coding_agent/progress_test.exs` (2 tests)
+
+### M5: Introspection Integration ✅
+
+Added control-plane surface area for progress visibility:
+
+- New JSON-RPC method: `agent.progress`
+- Added method registration and schema validation
+- Records `:agent_progress_snapshot` introspection events with optional run/session/agent metadata
+
+**Tests:** Extended `apps/lemon_control_plane/test/lemon_control_plane/methods/introspection_methods_test.exs`
+
+### M6: Tests + Documentation + Artifacts ✅
+
+Completed close-out deliverables for long-running harnesses:
+
+- Added operator doc: `docs/long-running-agent-harnesses.md`
+- Updated `apps/coding_agent/AGENTS.md` and `apps/lemon_control_plane/AGENTS.md` with progress APIs and `agent.progress`
+- Added review artifact: `planning/reviews/RVW-PLN-20260224-long-running-agent-harnesses.md`
+- Added merge artifact: `planning/merges/MRG-PLN-20260224-long-running-agent-harnesses.md`
+- Moved plan status to `ready_to_land`

@@ -20,6 +20,8 @@ This folder is the canonical navigation map for Lemon runtime and harness behavi
 
 - [`docs/skills.md`](skills.md)
 - [`docs/benchmarks.md`](benchmarks.md)
+- [`docs/runtime-hot-reload.md`](runtime-hot-reload.md)
+- [`docs/long-running-agent-harnesses.md`](long-running-agent-harnesses.md)
 - [`docs/tools/web.md`](tools/web.md)
 - [`docs/tools/firecrawl.md`](tools/firecrawl.md)
 - [`docs/tools/wasm.md`](tools/wasm.md)
