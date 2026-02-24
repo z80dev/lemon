@@ -136,22 +136,23 @@ Create `~/.lemon/config.toml`:
 [providers.anthropic]
 api_key = "sk-ant-..."
 
-# Default model behavior (used by native Lemon engine and as a fallback)
-[agent]
-default_provider = "anthropic"
-default_model = "claude-sonnet-4-20250514"
+# Defaults used by runtime + default profile
+[defaults]
+provider = "anthropic"
+model = "anthropic:claude-sonnet-4-20250514"
+engine = "lemon"
 
 # Optional web tool config (`websearch` / `webfetch`)
-[agent.tools.web.search]
+[runtime.tools.web.search]
 provider = "brave" # "brave" or "perplexity"
 # api_key = "..." # Brave key when provider = "brave"
 
-[agent.tools.web.search.perplexity]
+[runtime.tools.web.search.perplexity]
 # model = "perplexity/sonar-pro"
 # api_key = "..." # optional if PERPLEXITY_API_KEY/OPENROUTER_API_KEY is set
 # base_url = "https://api.perplexity.ai"
 
-[agent.tools.web.fetch.firecrawl]
+[runtime.tools.web.fetch.firecrawl]
 # Optional fallback extractor for hard pages
 # enabled = true
 # api_key = "fc-..."
@@ -172,13 +173,11 @@ drop_pending_updates = true
 allow_queue_override = true
 
 # Assistant profile used for Telegram chats (when no binding overrides it)
-[agents.default]
+[profiles.default]
 name = "Lemon"
 system_prompt = "You are my general assistant. Be concise, practical, and ask clarifying questions when needed."
-model = "anthropic:claude-sonnet-4-20250514"
-default_engine = "lemon"
 
-[agents.default.tool_policy]
+[profiles.default.tool_policy]
 allow = "all"
 deny = []
 require_approval = ["bash", "write", "edit"]
@@ -188,6 +187,8 @@ transport = "telegram"
 chat_id = 123456789
 agent_id = "default"
 ```
+
+Legacy aliases are still accepted: `[agent]` for runtime/default settings and `[agents.<id>]` for profiles.
 
 Notes:
 - Restrict who can use the bot. Set `allowed_chat_ids` and consider enabling `deny_unbound_chats` (see `docs/config.md`).
@@ -226,6 +227,8 @@ Other launch modes:
 - Queue mode override: `/steer`, `/followup`, `/interrupt`
 - Start a new session: `/new`
   - Optional: bind this chat to a repo for subsequent runs: `/new <project_id|path>`
+  - The confirmation reply includes model, provider, cwd, and session context.
+- Set or inspect working directory for this chat/topic: `/cwd [project_id|path|clear]`
 - Resume previous sessions: `/resume` (list), then `/resume <number>` or `/resume <engine token>`
 - Create a forum topic: `/topic <name>` (Telegram forum supergroups)
 - Cancel a running run: reply to the bot's `Running...` message with `/cancel` (or send `/cancel` in a DM)
@@ -970,21 +973,21 @@ Parent Agent                    Task Tool                     Codex CLI
 Configure CLI runner behavior in `~/.lemon/config.toml`:
 
 ```toml
-[agent.cli.codex]
+[runtime.cli.codex]
 extra_args = ["-c", "notify=[]"]
 auto_approve = false
 
-[agent.cli.opencode]
+[runtime.cli.opencode]
 # Optional model override passed to `opencode run --model`
 model = "gpt-4.1"
 
-[agent.cli.pi]
+[runtime.cli.pi]
 extra_args = []
 # Optional provider/model overrides passed to `pi --provider/--model`
 provider = "openai"
 model = "gpt-4.1"
 
-[agent.cli.claude]
+[runtime.cli.claude]
 dangerously_skip_permissions = true
 ```
 
@@ -1225,6 +1228,7 @@ LemonChannels.enqueue(%LemonChannels.OutboundPayload{
 - Peer kind detection (DM, group, supergroup, channel)
 - `/cancel` works by replying to the bot's `Running…` message
 - `/topic <name>` creates a Telegram forum topic in the current chat
+- `/cwd [project_id|path|clear]` sets topic/chat working directory for subsequent `/new` sessions
 - **Voice transcription** with OpenAI-compatible providers
 - **File transfer** (`/file put`, `/file get`) with safety rails
 - **Auto-send generated images** after runs complete
@@ -1501,9 +1505,9 @@ base_url = "https://api.kimi.com/coding/"
 [providers.google]
 api_key = "your-google-api-key"
 
-[agent]
-default_provider = "anthropic"
-default_model = "claude-sonnet-4-20250514"
+[defaults]
+provider = "anthropic"
+model = "anthropic:claude-sonnet-4-20250514"
 
 [tui]
 theme = "lemon"
@@ -1954,9 +1958,9 @@ If not, it starts `./bin/lemon --daemon`, waits for readiness, then launches the
 Create a config file at `~/.lemon/config.toml`:
 
 ```toml
-[agent]
-default_provider = "anthropic"
-default_model = "claude-sonnet-4-20250514"
+[defaults]
+provider = "anthropic"
+model = "anthropic:claude-sonnet-4-20250514"
 
 [providers.anthropic]
 api_key = "sk-ant-..."
@@ -2013,7 +2017,7 @@ Lemon supports Ironclaw-compatible WASM tools through a per-session Rust sidecar
 WASM tools are opt-in and disabled by default.
 
 ```toml
-[agent.tools.wasm]
+[runtime.tools.wasm]
 enabled = true
 auto_build = true
 runtime_path = ""
@@ -2023,7 +2027,7 @@ tool_paths = []
 Tool discovery order:
 1. `<cwd>/.lemon/wasm-tools`
 2. `~/.lemon/agent/wasm-tools`
-3. Paths in `agent.tools.wasm.tool_paths`
+3. Paths in `runtime.tools.wasm.tool_paths`
 
 Each tool is discovered as `<name>.wasm` with an optional `<name>.capabilities.json`.
 
@@ -2165,26 +2169,27 @@ This is automatic and idempotent (already wrapped content is not double-wrapped)
 
 ### CLI Runner Configuration (Codex/Claude/Kimi/OpenCode/Pi)
 
-CLI runner behavior is configured in the canonical TOML config under `[agent.cli.*]`
+CLI runner behavior is configured in the preferred TOML config under `[runtime.cli.*]`
+(legacy `[agent.cli.*]` also works)
 (see `docs/config.md`):
 
 ```toml
-[agent.cli.codex]
+[runtime.cli.codex]
 extra_args = ["-c", "notify=[]"]
 auto_approve = false
 
-[agent.cli.kimi]
+[runtime.cli.kimi]
 extra_args = []
 
-[agent.cli.opencode]
+[runtime.cli.opencode]
 model = "gpt-4.1"
 
-[agent.cli.pi]
+[runtime.cli.pi]
 extra_args = []
 provider = "openai"
 model = "gpt-4.1"
 
-[agent.cli.claude]
+[runtime.cli.claude]
 dangerously_skip_permissions = true
 # yolo = true  # Can also be toggled via env (see docs/config.md)
 ```
@@ -2566,6 +2571,8 @@ From Telegram:
 - Engine override: `/lemon`, `/claude`, `/codex`, `/opencode`, `/pi` (at the start of a message)
 - Queue mode override: `/steer`, `/followup`, `/interrupt`
 - Start a new session: `/new` (optional: `/new <project_id|path>` to bind the chat to a repo)
+  - The confirmation reply includes model, provider, cwd, and session context.
+- Set or inspect working directory for this chat/topic: `/cwd [project_id|path|clear]`
 - Resume previous sessions: `/resume` (list), then `/resume <number>` or `/resume <engine token>`
 - Create a forum topic: `/topic <name>` (Telegram forum supergroups)
 - Cancel a running run: reply to the bot's `Running...` message with `/cancel` (or send `/cancel` in a DM)
@@ -2644,9 +2651,9 @@ Configuration is stored as TOML:
 Example:
 
 ```toml
-[agent]
-default_provider = "anthropic"
-default_model = "claude-sonnet-4-20250514"
+[defaults]
+provider = "anthropic"
+model = "anthropic:claude-sonnet-4-20250514"
 
 [providers.anthropic]
 api_key = "sk-ant-..."
