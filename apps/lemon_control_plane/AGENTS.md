@@ -208,6 +208,8 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 | `tasks.active.list` | read | Active task/subagent records from `CodingAgent.TaskStore` |
 | `tasks.recent.list` | read | Recent terminal task records with status/error classification |
 
+`tasks.active.list` / `tasks.recent.list` infer missing `engine` from task record metadata and task event payloads (for example `details.engine`) when the persisted task record has no explicit engine field.
+
 ### Agent Management
 
 | Method | Scope | Description |

@@ -7,6 +7,8 @@ import type {
   MonitoringCronJob,
   MonitoringCronRun,
   MonitoringCronStatus,
+  MonitoringChannel,
+  MonitoringTransport,
 } from '../../../shared/src/monitoringTypes';
 
 export const MAX_FEED_EVENTS = 5000;
@@ -52,6 +54,16 @@ export function applySnapshot(
   const historicalSessions = snapshot['sessions'];
   if (Array.isArray(historicalSessions)) {
     next = applySessionsList(next, historicalSessions);
+  }
+
+  const snapshotChannels = snapshot['channels'];
+  if (Array.isArray(snapshotChannels)) {
+    next = applyChannelsStatus(next, { channels: snapshotChannels });
+  }
+
+  const snapshotTransports = snapshot['transports'];
+  if (Array.isArray(snapshotTransports)) {
+    next = applyTransportsStatus(next, { transports: snapshotTransports });
   }
 
   // Run counts from introspection.snapshot "runs" field (it's {active:int, queued:int, completed_today:int})
@@ -471,6 +483,7 @@ export function applyAgentsList(
       latestUpdatedAtMs: typeof a['latestUpdatedAtMs'] === 'number' ? a['latestUpdatedAtMs'] : null,
       description: (a['description'] ?? null) as string | null,
       model: (a['model'] ?? null) as string | null,
+      engine: (a['engine'] ?? null) as string | null,
     };
   }
   return { ...state, agents: agentsMap };
@@ -636,6 +649,98 @@ export function applyCronRuns(
       runsByJob: {
         ...state.cron.runsByJob,
         [jobId]: runs,
+      },
+    },
+  };
+}
+
+export function applyChannelsStatus(
+  state: MonitoringState,
+  payload: unknown
+): MonitoringState {
+  const p = (payload ?? {}) as Record<string, unknown>;
+  const channelsRaw = Array.isArray(p['channels']) ? p['channels'] : Array.isArray(payload) ? payload : [];
+  const channels: MonitoringChannel[] = [];
+  for (const raw of channelsRaw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const c = raw as Record<string, unknown>;
+    channels.push({
+      channelId: (c['channelId'] ?? c['channel_id'] ?? null) as string | null,
+      type: (c['type'] ?? null) as string | null,
+      status: (c['status'] ?? null) as string | null,
+      accountId: (c['accountId'] ?? c['account_id'] ?? null) as string | null,
+      capabilities:
+        c['capabilities'] && typeof c['capabilities'] === 'object' && !Array.isArray(c['capabilities'])
+          ? (c['capabilities'] as Record<string, unknown>)
+          : undefined,
+    });
+  }
+
+  return {
+    ...state,
+    system: {
+      ...state.system,
+      channels,
+    },
+  };
+}
+
+export function applyTransportsStatus(
+  state: MonitoringState,
+  payload: unknown
+): MonitoringState {
+  const p = (payload ?? {}) as Record<string, unknown>;
+  const transportsRaw = Array.isArray(p['transports']) ? p['transports'] : Array.isArray(payload) ? payload : [];
+  const transports: MonitoringTransport[] = transportsRaw
+    .map((raw) => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+      const t = raw as Record<string, unknown>;
+      return {
+        transportId: (t['transportId'] ?? t['transport_id'] ?? null) as string | null,
+        module: (t['module'] ?? null) as string | null,
+        enabled: Boolean(t['enabled']),
+        status: (t['status'] ?? null) as string | null,
+      };
+    })
+    .filter((t): t is MonitoringTransport => t !== null);
+
+  return {
+    ...state,
+    system: {
+      ...state.system,
+      transports,
+    },
+  };
+}
+
+export function applySystemStatus(
+  state: MonitoringState,
+  payload: unknown
+): MonitoringState {
+  const p = (payload ?? {}) as Record<string, unknown>;
+  const server = ((p['server'] ?? {}) as Record<string, unknown>);
+  const connections = ((p['connections'] ?? {}) as Record<string, unknown>);
+  const runs = ((p['runs'] ?? {}) as Record<string, unknown>);
+  const skills = ((p['skills'] ?? {}) as Record<string, unknown>);
+
+  return {
+    ...state,
+    instance: {
+      ...state.instance,
+      activeRuns: typeof runs['active'] === 'number' ? runs['active'] : state.instance.activeRuns,
+      queuedRuns: typeof runs['queued'] === 'number' ? runs['queued'] : state.instance.queuedRuns,
+      completedToday: typeof runs['completed_today'] === 'number' ? runs['completed_today'] : state.instance.completedToday,
+      connectedClients: typeof connections['active'] === 'number' ? connections['active'] : state.instance.connectedClients,
+      version: typeof server['version'] === 'string' ? server['version'] : state.instance.version,
+      uptimeMs: typeof server['uptime_ms'] === 'number' ? server['uptime_ms'] : state.instance.uptimeMs,
+      status: 'healthy',
+      lastUpdatedMs: Date.now(),
+    },
+    system: {
+      ...state.system,
+      skills: {
+        installed: typeof skills['installed'] === 'number' ? skills['installed'] : state.system.skills.installed,
+        enabled: typeof skills['enabled'] === 'number' ? skills['enabled'] : state.system.skills.enabled,
       },
     },
   };
@@ -848,8 +953,15 @@ function normalizeSession(raw: unknown): MonitoringSession | null {
     kind: (s['kind'] ?? null) as string | null,
     channelId: (s['channel_id'] ?? s['channelId'] ?? null) as string | null,
     accountId: (s['account_id'] ?? s['accountId'] ?? null) as string | null,
+    peerKind: (s['peer_kind'] ?? s['peerKind'] ?? null) as string | null,
     peerId: (s['peer_id'] ?? s['peerId'] ?? null) as string | null,
     peerLabel: (s['peer_label'] ?? s['peerLabel'] ?? null) as string | null,
+    peerUsername: (s['peer_username'] ?? s['peerUsername'] ?? null) as string | null,
+    threadId: (s['thread_id'] ?? s['threadId'] ?? null) as string | null,
+    target: (s['target'] ?? null) as string | null,
+    topicName: (s['topic_name'] ?? s['topicName'] ?? null) as string | null,
+    chatType: (s['chat_type'] ?? s['chatType'] ?? null) as string | null,
+    subId: (s['sub_id'] ?? s['subId'] ?? null) as string | null,
     active: Boolean(s['active']),
     runId: (s['run_id'] ?? s['runId'] ?? null) as string | null,
     runCount: typeof s['run_count'] === 'number' ? s['run_count'] :

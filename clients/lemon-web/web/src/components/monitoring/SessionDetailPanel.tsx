@@ -26,9 +26,10 @@ function truncate(s: string | null | undefined, max: number): string {
 export interface SessionDetailPanelProps {
   sessionKey: string | null;
   loading?: boolean;
+  onSelectRun?: (runId: string) => void;
 }
 
-export function SessionDetailPanel({ sessionKey, loading }: SessionDetailPanelProps) {
+export function SessionDetailPanel({ sessionKey, loading, onSelectRun }: SessionDetailPanelProps) {
   const sessionDetails = useMonitoringStore((s) => s.sessionDetails);
   const activeSessions = useMonitoringStore((s) => s.sessions.active);
   const historicalSessions = useMonitoringStore((s) => s.sessions.historical);
@@ -115,10 +116,40 @@ export function SessionDetailPanel({ sessionKey, loading }: SessionDetailPanelPr
               {session.channelId}
             </div>
           )}
+          {session?.accountId && (
+            <div>
+              <span style={{ color: '#555' }}>account: </span>
+              {session.accountId}
+            </div>
+          )}
+          {session?.kind && (
+            <div>
+              <span style={{ color: '#555' }}>kind: </span>
+              {session.kind}
+            </div>
+          )}
+          {session?.peerKind && (
+            <div>
+              <span style={{ color: '#555' }}>peer kind: </span>
+              {session.peerKind}
+            </div>
+          )}
           {session?.peerId && (
             <div>
               <span style={{ color: '#555' }}>peer: </span>
               {truncate(session.peerId, 22)}
+            </div>
+          )}
+          {session?.threadId && (
+            <div>
+              <span style={{ color: '#555' }}>thread: </span>
+              {truncate(session.threadId, 22)}
+            </div>
+          )}
+          {session?.target && (
+            <div style={{ gridColumn: '1 / -1' }}>
+              <span style={{ color: '#555' }}>target: </span>
+              {truncate(session.target, 64)}
             </div>
           )}
           {session?.peerLabel && (
@@ -190,14 +221,22 @@ export function SessionDetailPanel({ sessionKey, loading }: SessionDetailPanelPr
         {runs.length === 0 && sessionDetail ? (
           <div style={{ padding: '16px 12px', color: '#555' }}>No run history available</div>
         ) : (
-          runs.map((run, idx) => <RunRow key={idx} run={run} index={idx} />)
+          runs.map((run, idx) => <RunRow key={idx} run={run} index={idx} onSelectRun={onSelectRun} />)
         )}
       </div>
     </div>
   );
 }
 
-function RunRow({ run, index }: { run: SessionRunSummary; index: number }) {
+function RunRow({
+  run,
+  index,
+  onSelectRun,
+}: {
+  run: SessionRunSummary;
+  index: number;
+  onSelectRun?: (runId: string) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
 
   const okColor = run.ok === true ? '#00ff88' : run.ok === false ? '#ff4444' : '#666';
@@ -272,6 +311,26 @@ function RunRow({ run, index }: { run: SessionRunSummary; index: number }) {
             )}
             {run.runId && (
               <span style={{ color: '#666' }}>run: {truncate(run.runId, 16)}</span>
+            )}
+            {run.runId && onSelectRun && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectRun(run.runId!);
+                }}
+                style={{
+                  border: '1px solid #2a2a2a',
+                  background: '#151515',
+                  color: '#5599ff',
+                  borderRadius: '3px',
+                  fontSize: '10px',
+                  cursor: 'pointer',
+                  padding: '0 6px',
+                }}
+              >
+                inspect
+              </button>
             )}
             {run.eventCount != null && run.eventCount > 0 && (
               <span style={{ color: '#888' }}>{run.eventCount} ev</span>

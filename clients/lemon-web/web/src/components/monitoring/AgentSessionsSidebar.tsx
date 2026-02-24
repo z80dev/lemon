@@ -244,6 +244,12 @@ export function AgentSessionsSidebar({ onSelectSession, onSelectRun }: AgentSess
                         <span style={{ color: '#888' }}>{truncate(agent.model, 16)}</span>
                       </span>
                     )}
+                    {agent.engine && (
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <span style={{ color: '#555' }}>engine: </span>
+                        <span style={{ color: '#888' }}>{truncate(agent.engine, 12)}</span>
+                      </span>
+                    )}
                     {agent.latestUpdatedAtMs && (
                       <span style={{ gridColumn: '1 / -1', color: '#555' }}>
                         last: {formatRelativeTime(agent.latestUpdatedAtMs)}

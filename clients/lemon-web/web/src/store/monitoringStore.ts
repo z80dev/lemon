@@ -12,6 +12,9 @@ import type {
   MonitoringUIState,
   MonitoringUIFilters,
   SessionDetail,
+  MonitoringChannel,
+  MonitoringTransport,
+  MonitoringSkillsSummary,
 } from '../../../shared/src/monitoringTypes';
 import {
   applyHelloOk as reducerApplyHelloOk,
@@ -27,6 +30,9 @@ import {
   applyCronStatus as reducerApplyCronStatus,
   applyCronList as reducerApplyCronList,
   applyCronRuns as reducerApplyCronRuns,
+  applyChannelsStatus as reducerApplyChannelsStatus,
+  applyTransportsStatus as reducerApplyTransportsStatus,
+  applySystemStatus as reducerApplySystemStatus,
 } from './monitoringReducers';
 
 export type { MonitoringUIFilters };
@@ -55,6 +61,11 @@ export interface MonitoringState {
     runsByJob: Record<string, MonitoringCronRun[]>;
     selectedJobId: string | null;
   };
+  system: {
+    channels: MonitoringChannel[];
+    transports: MonitoringTransport[];
+    skills: MonitoringSkillsSummary;
+  };
   runIntrospection: Record<string, { events: unknown[]; runRecord?: unknown; loadedAtMs: number }>;
   eventFeed: FeedEvent[];
   ui: MonitoringUIState;
@@ -71,6 +82,9 @@ export interface MonitoringState {
   applyCronStatus: (payload: unknown) => void;
   applyCronList: (payload: unknown) => void;
   applyCronRuns: (jobId: string, payload: unknown) => void;
+  applyChannelsStatus: (payload: unknown) => void;
+  applyTransportsStatus: (payload: unknown) => void;
+  applySystemStatus: (payload: unknown) => void;
   setSelectedCronJob: (jobId: string | null) => void;
   applyRunIntrospection: (runId: string, payload: { events: unknown[]; runRecord?: unknown }) => void;
   applyAgentsList: (agents: unknown[]) => void;
@@ -136,6 +150,11 @@ const INITIAL_STATE = {
     runsByJob: {} as Record<string, MonitoringCronRun[]>,
     selectedJobId: null as string | null,
   },
+  system: {
+    channels: [] as MonitoringChannel[],
+    transports: [] as MonitoringTransport[],
+    skills: { installed: 0, enabled: 0 } as MonitoringSkillsSummary,
+  },
   runIntrospection: {} as Record<string, { events: unknown[]; runRecord?: unknown; loadedAtMs: number }>,
   eventFeed: [] as FeedEvent[],
   ui: INITIAL_UI,
@@ -200,6 +219,15 @@ export const useMonitoringStore = create<MonitoringState>((set) => ({
       const runs = Array.isArray(p['runs']) ? (p['runs'] as MonitoringCronRun[]) : [];
       return reducerApplyCronRuns(state, jobId, runs);
     }),
+
+  applyChannelsStatus: (payload) =>
+    set((state) => reducerApplyChannelsStatus(state, payload)),
+
+  applyTransportsStatus: (payload) =>
+    set((state) => reducerApplyTransportsStatus(state, payload)),
+
+  applySystemStatus: (payload) =>
+    set((state) => reducerApplySystemStatus(state, payload)),
 
   setSelectedCronJob: (jobId) =>
     set((state) => ({

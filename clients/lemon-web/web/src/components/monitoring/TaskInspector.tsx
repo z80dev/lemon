@@ -78,7 +78,7 @@ function TaskNode({ task, childTasks, depth }: TaskNodeProps) {
           {task.sessionKey && <div>session: {task.sessionKey}</div>}
           {task.engine && <div>engine: {task.engine}</div>}
           {task.role && <div>role: {task.role}</div>}
-          {task.error && (
+          {Boolean(task.error) && (
             <div style={{ marginTop: '4px' }}>
               <div style={{ color: '#ff6666' }}>error</div>
               <pre style={{ margin: 0, whiteSpace: 'pre-wrap', color: '#ff9999' }}>
@@ -86,7 +86,7 @@ function TaskNode({ task, childTasks, depth }: TaskNodeProps) {
               </pre>
             </div>
           )}
-          {task.result && (
+          {Boolean(task.result) && (
             <div style={{ marginTop: '4px' }}>
               <div style={{ color: '#666' }}>result</div>
               <pre style={{ margin: 0, whiteSpace: 'pre-wrap', color: '#bbb', maxHeight: '180px', overflowY: 'auto' }}>

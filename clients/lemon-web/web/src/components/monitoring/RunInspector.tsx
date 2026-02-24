@@ -600,7 +600,7 @@ function RunGraphTree({ node, depth }: { node: RunGraphNode; depth: number }) {
             {node.parentRunId && <span>parent: {node.parentRunId}</span>}
           </div>
           <div style={{ marginTop: '4px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            {node.runRecord && (
+            {Boolean(node.runRecord) && (
               <button
                 type="button"
                 onClick={() => setShowRecord((v) => !v)}

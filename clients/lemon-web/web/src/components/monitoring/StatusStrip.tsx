@@ -14,6 +14,12 @@ const CONNECTION_COLORS: Record<ControlPlaneConnectionState, string> = {
   error: '#ff4444',
 };
 
+function isHealthyChannelStatus(status: string | null): boolean {
+  if (!status) return false;
+  const normalized = status.toLowerCase();
+  return normalized === 'connected' || normalized === 'running' || normalized === 'enabled' || normalized === 'active';
+}
+
 function formatUptime(ms: number | null): string {
   if (ms == null || ms <= 0) return '--';
   const totalSec = Math.floor(ms / 1000);
@@ -26,6 +32,7 @@ function formatUptime(ms: number | null): string {
 export function StatusStrip({ connectionState }: StatusStripProps) {
   const instance = useMonitoringStore((s) => s.instance);
   const agentCount = useMonitoringStore((s) => Object.keys(s.agents).length);
+  const system = useMonitoringStore((s) => s.system);
   const sessionCount = useMonitoringStore((s) => {
     const activeCount = Object.keys(s.sessions.active).length;
     const histCount = s.sessions.historical.length;
@@ -33,6 +40,8 @@ export function StatusStrip({ connectionState }: StatusStripProps) {
   });
 
   const dotColor = CONNECTION_COLORS[connectionState] ?? '#ff4444';
+  const connectedChannels = system.channels.filter((c) => isHealthyChannelStatus(c.status)).length;
+  const enabledTransports = system.transports.filter((t) => t.enabled).length;
 
   const heartbeatFresh = useMemo(() => {
     if (instance.lastUpdatedMs == null) return false;
@@ -133,6 +142,24 @@ export function StatusStrip({ connectionState }: StatusStripProps) {
         {agentCount > 0 && (
           <span style={{ color: '#888' }}>
             agents: <span data-testid="agent-count">{agentCount}</span>
+          </span>
+        )}
+
+        {system.channels.length > 0 && (
+          <span style={{ color: '#888' }}>
+            channels: <span>{connectedChannels}/{system.channels.length}</span>
+          </span>
+        )}
+
+        {system.transports.length > 0 && (
+          <span style={{ color: '#888' }}>
+            transports: <span>{enabledTransports}/{system.transports.length}</span>
+          </span>
+        )}
+
+        {(system.skills.installed > 0 || system.skills.enabled > 0) && (
+          <span style={{ color: '#888' }}>
+            skills: <span>{system.skills.enabled}/{system.skills.installed}</span>
           </span>
         )}
 

@@ -1,73 +1,52 @@
-# React + TypeScript + Vite
+# Lemon Web Client
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React/Vite frontend for Lemon chat and monitoring.
 
-Currently, two official plugins are available:
+## Modes
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- Chat mode (default): `/`
+- Monitoring mode: `/monitor` or `/?monitor`
 
-## React Compiler
+Monitoring mode subscribes to control-plane events and loads rich runtime state from:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- `status`
+- `introspection.snapshot`
+- `agent.directory.list`
+- `sessions.list` / `sessions.active.list`
+- `runs.active.list` / `runs.recent.list`
+- `tasks.active.list` / `tasks.recent.list`
+- `session.detail` (selected and hot active sessions)
+- `run.introspection.list` / `run.graph.get` (run inspector)
+- `channels.status`
+- `transports.status`
+- `skills.status`
+- `cron.status` / `cron.list`
 
-## Expanding the ESLint configuration
+It also refreshes monitoring data every 15 seconds while connected (5 seconds when active runs are present) so session/agent/runner/task/tool status stays current even when no new events are emitted.
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+Channel health treats `connected`, `running`, `enabled`, and `active` as live states in the UI.
+Runner engine summaries include both run engines and task engines (when present).
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## Monitoring screens
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+- `Overview`: health, infra, engine/task/tool summaries
+- `Sessions`: session explorer + deep session detail + run history
+- `Runners`: runner lifecycle timelines, stuck-run alerts, engine load
+- `Run`: run graph, introspection timeline, tool/task internals
+- `Tasks`: task tree by run
+- `Cron`: cron jobs and run history
+- `Events`: live raw event stream
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Local development
+
+```bash
+cd clients/lemon-web/web
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Build
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm run build
 ```

@@ -23,6 +23,7 @@ export interface MonitoringAgent {
   latestUpdatedAtMs: number | null;
   description: string | null;
   model: string | null;
+  engine: string | null;
 }
 
 // Session summary for monitoring
@@ -32,8 +33,15 @@ export interface MonitoringSession {
   kind: string | null;
   channelId: string | null;
   accountId: string | null;
+  peerKind?: string | null;
   peerId: string | null;
   peerLabel: string | null;
+  peerUsername?: string | null;
+  threadId?: string | null;
+  target?: string | null;
+  topicName?: string | null;
+  chatType?: string | null;
+  subId?: string | null;
   active: boolean;
   runId: string | null;
   runCount: number;
@@ -41,6 +49,26 @@ export interface MonitoringSession {
   updatedAtMs: number | null;
   route: Record<string, string | null>;
   origin: string | null;
+}
+
+export interface MonitoringChannel {
+  channelId: string | null;
+  type: string | null;
+  status: string | null;
+  accountId: string | null;
+  capabilities?: Record<string, unknown>;
+}
+
+export interface MonitoringTransport {
+  transportId: string | null;
+  module: string | null;
+  enabled: boolean;
+  status: string | null;
+}
+
+export interface MonitoringSkillsSummary {
+  installed: number;
+  enabled: number;
 }
 
 // A single tool call within a run

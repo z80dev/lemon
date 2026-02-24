@@ -27,9 +27,12 @@ defmodule LemonControlPlane.Methods.TasksActiveList do
     limit = normalize_limit(get_param(params, "limit"), @default_limit, @max_limit)
     include_events = truthy?(get_param(params, "includeEvents"), false)
     include_record = truthy?(get_param(params, "includeRecord"), false)
-    event_limit = normalize_limit(get_param(params, "eventLimit"), @default_event_limit, @max_event_limit)
 
-    tasks = fetch_active_tasks(run_id, agent_id, limit, include_events, include_record, event_limit)
+    event_limit =
+      normalize_limit(get_param(params, "eventLimit"), @default_event_limit, @max_event_limit)
+
+    tasks =
+      fetch_active_tasks(run_id, agent_id, limit, include_events, include_record, event_limit)
 
     {:ok,
      %{
@@ -64,7 +67,9 @@ defmodule LemonControlPlane.Methods.TasksActiveList do
   defp fetch_active_tasks(run_id, agent_id, limit, include_events, include_record, event_limit) do
     if Code.ensure_loaded?(CodingAgent.TaskStore) do
       CodingAgent.TaskStore.list(:all)
-      |> Enum.map(fn {task_id, _record} -> task_from_store(task_id, include_events, include_record, event_limit) end)
+      |> Enum.map(fn {task_id, _record} ->
+        task_from_store(task_id, include_events, include_record, event_limit)
+      end)
       |> Enum.reject(&is_nil/1)
       |> Enum.filter(&active_status?/1)
       |> Enum.filter(&filter_by_run(&1, run_id))
@@ -84,6 +89,7 @@ defmodule LemonControlPlane.Methods.TasksActiveList do
     case CodingAgent.TaskStore.get(task_id) do
       {:ok, record, events} ->
         status = derive_task_status(record)
+        engine = get_map(record, :engine) || infer_engine(record, events)
         started_at = to_ms(get_map(record, :started_at))
         completed_at = to_ms(get_map(record, :completed_at))
         inserted_at = to_ms(get_map(record, :inserted_at))
@@ -104,7 +110,7 @@ defmodule LemonControlPlane.Methods.TasksActiveList do
             "sessionKey" => get_map(record, :session_key),
             "agentId" => get_map(record, :agent_id),
             "description" => get_map(record, :description),
-            "engine" => get_map(record, :engine),
+            "engine" => engine,
             "role" => get_map(record, :role),
             "status" => status,
             "startedAtMs" => started_at,
@@ -116,7 +122,11 @@ defmodule LemonControlPlane.Methods.TasksActiveList do
             "result" => serialize_term(get_map(record, :result)),
             "eventCount" => length(events)
           }
-          |> maybe_put("events", events |> Enum.take(event_limit) |> Enum.map(&serialize_term/1), include_events)
+          |> maybe_put(
+            "events",
+            events |> Enum.take(event_limit) |> Enum.map(&serialize_term/1),
+            include_events
+          )
           |> maybe_put("record", serialize_term(record), include_record)
 
         task
@@ -159,6 +169,43 @@ defmodule LemonControlPlane.Methods.TasksActiveList do
     end
   end
 
+  defp infer_engine(record, events) do
+    get_map(record, :engine) ||
+      get_map(get_map(record, :details), :engine) ||
+      get_map(get_map(record, :meta), :engine) ||
+      Enum.find_value(Enum.reverse(events), &extract_engine_from_term/1)
+  end
+
+  defp extract_engine_from_term(nil), do: nil
+
+  defp extract_engine_from_term(%{__struct__: _} = struct) do
+    struct
+    |> Map.from_struct()
+    |> extract_engine_from_term()
+  end
+
+  defp extract_engine_from_term(map) when is_map(map) do
+    direct =
+      get_map(map, :engine) ||
+        get_map(get_map(map, :details), :engine) ||
+        get_map(get_map(map, :current_action), :engine)
+
+    cond do
+      is_binary(direct) and String.trim(direct) != "" ->
+        direct
+
+      true ->
+        map
+        |> Map.values()
+        |> Enum.find_value(&extract_engine_from_term/1)
+    end
+  end
+
+  defp extract_engine_from_term(list) when is_list(list),
+    do: Enum.find_value(list, &extract_engine_from_term/1)
+
+  defp extract_engine_from_term(_), do: nil
+
   defp timeout_error?(error) do
     cond do
       error in [:timeout, "timeout"] -> true
@@ -170,11 +217,25 @@ defmodule LemonControlPlane.Methods.TasksActiveList do
 
   defp aborted_error?(error) do
     cond do
-      error in [:aborted, :user_requested, :interrupted, "aborted", "user_requested", "interrupted"] ->
+      error in [
+        :aborted,
+        :user_requested,
+        :interrupted,
+        "aborted",
+        "user_requested",
+        "interrupted"
+      ] ->
         true
 
       is_map(error) and
-          get_map(error, :error) in [:aborted, :user_requested, :interrupted, "aborted", "user_requested", "interrupted"] ->
+          get_map(error, :error) in [
+            :aborted,
+            :user_requested,
+            :interrupted,
+            "aborted",
+            "user_requested",
+            "interrupted"
+          ] ->
         true
 
       is_binary(error) and String.contains?(String.downcase(error), "abort") ->

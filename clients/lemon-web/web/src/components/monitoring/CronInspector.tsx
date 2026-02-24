@@ -172,7 +172,7 @@ export function CronInspector({ request }: CronInspectorProps) {
                           </pre>
                         </div>
                       )}
-                      {run.meta && (
+                      {Boolean(run.meta) && (
                         <div style={{ marginTop: '6px' }}>
                           <div style={{ color: '#666', marginBottom: '2px' }}>meta</div>
                           <pre style={{ margin: 0, whiteSpace: 'pre-wrap', color: '#bbb', background: '#111', padding: '6px', border: '1px solid #222' }}>
@@ -180,7 +180,7 @@ export function CronInspector({ request }: CronInspectorProps) {
                           </pre>
                         </div>
                       )}
-                      {run.runRecord && (
+                      {Boolean(run.runRecord) && (
                         <div style={{ marginTop: '6px' }}>
                           <div style={{ color: '#666', marginBottom: '2px' }}>runRecord</div>
                           <pre style={{ margin: 0, whiteSpace: 'pre-wrap', color: '#bbb', background: '#111', padding: '6px', border: '1px solid #222', maxHeight: '240px', overflowY: 'auto' }}>
