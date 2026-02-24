@@ -26,6 +26,7 @@ defmodule LemonChannels.Adapters.Telegram.Supervisor do
     children =
       if is_binary(token) and token != "" do
         [
+          {Task.Supervisor, name: LemonChannels.Adapters.Telegram.AsyncSupervisor},
           # Start the inbound transport (polling)
           {LemonChannels.Adapters.Telegram.Transport, [config: config]}
         ]

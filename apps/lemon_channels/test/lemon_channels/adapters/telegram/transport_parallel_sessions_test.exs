@@ -86,7 +86,12 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
 
     :persistent_term.put({ParallelTestRouter, :pid}, self())
     ParallelMockAPI.register_test(self())
-    LemonCore.RouterBridge.configure(router: ParallelTestRouter, run_orchestrator: ParallelTestRouter)
+
+    LemonCore.RouterBridge.configure(
+      router: ParallelTestRouter,
+      run_orchestrator: ParallelTestRouter
+    )
+
     set_bindings([])
 
     on_exit(fn ->
@@ -193,7 +198,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
 
     # The user's message ID should be stored in telegram_msg_session for reply routing
     # (reactions are set on the user's message, not on a separate progress message)
-    stored_session = CoreStore.get(:telegram_msg_session, {"default", chat_id, nil, 0, user_msg_id1})
+    stored_session =
+      CoreStore.get(:telegram_msg_session, {"default", chat_id, nil, 0, user_msg_id1})
+
     assert stored_session == fork_session_key
 
     # Reply to the original user message should route to the forked session
@@ -364,7 +371,11 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
         peer_id: Integer.to_string(chat_id)
       })
 
-    scope = %Elixir.LemonChannels.Types.ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
+    scope = %Elixir.LemonChannels.Types.ChatScope{
+      transport: :telegram,
+      chat_id: chat_id,
+      topic_id: nil
+    }
 
     _ =
       CoreStore.put(
@@ -396,7 +407,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
         }
       )
 
-    ParallelMockAPI.set_updates([message_update(chat_id, user_msg_id, "continue and polish output")])
+    ParallelMockAPI.set_updates([
+      message_update(chat_id, user_msg_id, "continue and polish output")
+    ])
 
     assert {:ok, _pid} =
              start_transport(%{

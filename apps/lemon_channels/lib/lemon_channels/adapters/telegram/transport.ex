@@ -10,6 +10,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   alias LemonChannels.BindingResolver
   alias LemonChannels.Cwd
   alias LemonChannels.EngineRegistry
+  alias LemonChannels.Telegram.Delivery
   alias LemonChannels.Telegram.TriggerMode
   alias LemonChannels.Telegram.TransportShared
   alias LemonChannels.Types.ChatScope
@@ -196,7 +197,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   # Tool execution approval requests/resolutions are delivered on the `exec_approvals` bus topic.
   def handle_info(%LemonCore.Event{type: :approval_requested, payload: payload}, state) do
-    maybe_send_approval_request(state, payload)
+    _ =
+      start_async_task(state, fn ->
+        maybe_send_approval_request(state, payload)
+      end)
+
     {:noreply, state}
   end
 
@@ -209,7 +214,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       ) do
     _ = safe_delete_chat_state(session_key)
     _ = safe_delete_selected_resume(state, chat_id, thread_id)
-    _ = safe_clear_thread_message_indices(state, chat_id, thread_id)
+    _ = safe_sweep_thread_message_indices(state, chat_id, thread_id, :all)
     {:noreply, state}
   rescue
     _ -> {:noreply, state}
@@ -287,13 +292,15 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           reaction_emoji = if ok?, do: "✅", else: "❌"
 
           _ =
-            state.api_mod.set_message_reaction(
-              state.token,
-              chat_id,
-              user_msg_id,
-              reaction_emoji,
-              %{is_big: true}
-            )
+            start_async_task(state, fn ->
+              state.api_mod.set_message_reaction(
+                state.token,
+                chat_id,
+                user_msg_id,
+                reaction_emoji,
+                %{is_big: true}
+              )
+            end)
 
           # Unsubscribe from session topic and remove from tracking
           if Code.ensure_loaded?(LemonCore.Bus) and
@@ -783,6 +790,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       # Tool status messages are created lazily (only if tools/actions occur).
       |> Map.put(:status_msg_id, nil)
       |> Map.put(:topic_id, thread_id)
+      |> Map.put(:thread_generation, current_thread_generation(state, chat_id, thread_id))
 
     {session_key, forked?} = resolve_session_key(state, inbound, scope, meta0)
 
@@ -1915,9 +1923,22 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         end
 
       true ->
-        key = {state.account_id || "default", chat_id, thread_id, reply_to_id}
+        account_id = state.account_id || "default"
+        generation = current_thread_generation(state, chat_id, thread_id)
+        key = {account_id, chat_id, thread_id, generation, reply_to_id}
 
-        token = CoreStore.get(:telegram_msg_resume, key)
+        token =
+          case CoreStore.get(:telegram_msg_resume, key) do
+            %ResumeToken{} = tok ->
+              tok
+
+            _ when generation == 0 ->
+              legacy_key = {account_id, chat_id, thread_id, reply_to_id}
+              CoreStore.get(:telegram_msg_resume, legacy_key)
+
+            _ ->
+              nil
+          end
 
         case token do
           %ResumeToken{} = tok -> {tok, :msg_index}
@@ -2214,55 +2235,75 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     user_msg_id = ids[:user_msg_id]
     project = extract_project_info(project_result)
 
+    {previous_generation, _new_generation} = bump_thread_generation(state, chat_id, thread_id)
+
+    # Clear selected resume immediately so the next inbound after /new cannot
+    # inherit stale auto-resume state while cleanup runs in the background.
+    _ = safe_delete_selected_resume(state, chat_id, thread_id)
+
+    msg =
+      started_new_session_message(
+        state,
+        scope,
+        session_key,
+        project,
+        "Started a new session."
+      )
+
+    _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
+
+    _ =
+      start_async_task(state, fn ->
+        run_new_session_background_work(
+          state,
+          inbound,
+          scope,
+          session_key,
+          chat_id,
+          thread_id,
+          user_msg_id,
+          previous_generation
+        )
+      end)
+
+    state
+  end
+
+  defp run_new_session_background_work(
+         state,
+         inbound,
+         %ChatScope{} = scope,
+         session_key,
+         chat_id,
+         thread_id,
+         user_msg_id,
+         previous_generation
+       ) do
     _ = safe_abort_session(session_key, :new_session)
     _ = safe_delete_session_model(session_key)
+    _ = safe_delete_chat_state(session_key)
     _ = safe_delete_selected_resume(state, chat_id, thread_id)
-    _ = safe_clear_thread_message_indices(state, chat_id, thread_id)
+    _ = safe_sweep_thread_message_indices(state, chat_id, thread_id, previous_generation)
 
-    case submit_memory_reflection_before_new(
-           state,
-           inbound,
-           scope,
-           session_key,
-           chat_id,
-           thread_id,
-           user_msg_id
-         ) do
-      {:ok, run_id, state} when is_binary(run_id) ->
-        maybe_subscribe_to_run(run_id)
+    _ =
+      submit_memory_reflection_before_new(
+        state,
+        inbound,
+        scope,
+        session_key,
+        chat_id,
+        thread_id,
+        user_msg_id
+      )
 
-        msg =
-          new_session_message(project_result, "Recording memories, then starting a new session…")
-
-        _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
-
-        pending = %{
-          session_key: session_key,
-          chat_id: chat_id,
-          thread_id: thread_id,
-          user_msg_id: user_msg_id,
-          project: project
-        }
-
-        %{state | pending_new: Map.put(state.pending_new, run_id, pending)}
-
-      _ ->
-        safe_delete_chat_state(session_key)
-        safe_delete_selected_resume(state, chat_id, thread_id)
-        safe_clear_thread_message_indices(state, chat_id, thread_id)
-
-        msg =
-          started_new_session_message(
-            state,
-            scope,
-            session_key,
-            project,
-            "Started a new session."
-          )
-
-        _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
-        state
-    end
+    # Store writes are async in some flows; repeat the cleanup once to win races.
+    Process.sleep(50)
+    _ = safe_delete_chat_state(session_key)
+    _ = safe_delete_selected_resume(state, chat_id, thread_id)
+    _ = safe_sweep_thread_message_indices(state, chat_id, thread_id, previous_generation)
+    :ok
+  rescue
+    _ -> :ok
   end
 
   defp maybe_subscribe_to_session(session_key) when is_binary(session_key) do
@@ -2278,13 +2319,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
          function_exported?(LemonCore.Bus, :subscribe, 1) do
       topic = LemonCore.Bus.run_topic(run_id)
       _ = LemonCore.Bus.subscribe(topic)
-    end
-  end
-
-  defp new_session_message(project_result, base_msg) do
-    case project_result do
-      {:ok, %{id: id, root: root}} -> "#{base_msg}\nProject: #{id} (#{root})"
-      _ -> base_msg
     end
   end
 
@@ -2405,7 +2439,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
          inbound,
          %ChatScope{} = scope,
          session_key,
-         _chat_id,
+         chat_id,
          thread_id,
          user_msg_id
        )
@@ -2428,11 +2462,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       {thinking_hint, _thinking_scope} =
         resolve_thinking_hint(state, scope.chat_id, scope.topic_id)
 
+      thread_generation = current_thread_generation(state, chat_id, thread_id)
+
       meta =
         (inbound.meta || %{})
         |> Map.put(:progress_msg_id, progress_msg_id)
         |> Map.put(:status_msg_id, status_msg_id)
         |> Map.put(:topic_id, thread_id)
+        |> Map.put(:thread_generation, thread_generation)
         |> Map.put(:user_msg_id, user_msg_id)
         |> Map.put(:command, :new)
         |> Map.put(:record_memories, true)
@@ -2445,20 +2482,26 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           raw: inbound.raw
         })
 
+      reflection_session_key = reflection_session_key(session_key)
+
       request =
         LemonCore.RunRequest.new(%{
           origin: :channel,
-          session_key: session_key,
+          session_key: reflection_session_key,
           agent_id: agent_id,
           prompt: prompt,
-          queue_mode: :interrupt,
+          queue_mode: :collect,
           engine_id: engine_id,
           meta: meta
         })
 
       case LemonCore.RouterBridge.submit_run(request) do
-        {:ok, run_id} when is_binary(run_id) -> {:ok, run_id, state}
-        _ -> :skip
+        {:ok, run_id} when is_binary(run_id) ->
+          maybe_subscribe_to_run(run_id)
+          :ok
+
+        _ ->
+          :skip
       end
     end
   rescue
@@ -2475,6 +2518,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
          _user_msg_id
        ),
        do: :skip
+
+  defp reflection_session_key(session_key) when is_binary(session_key) do
+    session_key <> ":new_reflection"
+  end
+
+  defp reflection_session_key(_), do: "telegram:new_reflection"
 
   defp fetch_run_history_for_memory(session_key, _scope, opts) do
     limit = Keyword.get(opts, :limit, 8)
@@ -2610,11 +2659,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp safe_clear_thread_message_indices(state, chat_id, thread_id)
-       when is_integer(chat_id) and is_integer(thread_id) do
-    account_id = state.account_id || "default"
-
-    _ = clear_thread_index_table(:telegram_msg_session, account_id, chat_id, thread_id)
-    _ = clear_thread_index_table(:telegram_msg_resume, account_id, chat_id, thread_id)
+       when is_integer(chat_id) do
+    _ = safe_sweep_thread_message_indices(state, chat_id, thread_id, :all)
     :ok
   rescue
     _ -> :ok
@@ -2622,12 +2668,50 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp safe_clear_thread_message_indices(_state, _chat_id, _thread_id), do: :ok
 
-  defp clear_thread_index_table(table, account_id, chat_id, thread_id) when is_atom(table) do
+  defp safe_sweep_thread_message_indices(state, chat_id, thread_id, max_generation)
+       when is_integer(chat_id) do
+    account_id = state.account_id || "default"
+
+    _ =
+      clear_thread_index_table(
+        :telegram_msg_session,
+        account_id,
+        chat_id,
+        thread_id,
+        max_generation
+      )
+
+    _ =
+      clear_thread_index_table(
+        :telegram_msg_resume,
+        account_id,
+        chat_id,
+        thread_id,
+        max_generation
+      )
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp safe_sweep_thread_message_indices(_state, _chat_id, _thread_id, _max_generation), do: :ok
+
+  defp clear_thread_index_table(table, account_id, chat_id, thread_id, max_generation)
+       when is_atom(table) do
     list_store_table(table)
     |> Enum.each(fn
-      {{acc, cid, tid, _msg_id} = key, _value}
+      {{acc, cid, tid, generation, _msg_id} = key, _value}
       when acc == account_id and cid == chat_id and tid == thread_id ->
-        _ = delete_store_key(table, key)
+        if generation_match?(generation, max_generation) do
+          _ = delete_store_key(table, key)
+        end
+
+      {{acc, cid, tid, _msg_id} = legacy_key, _value}
+      when acc == account_id and cid == chat_id and tid == thread_id ->
+        if generation_match?(0, max_generation) do
+          _ = delete_store_key(table, legacy_key)
+        end
 
       _ ->
         :ok
@@ -2637,6 +2721,54 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   rescue
     _ -> :ok
   end
+
+  defp generation_match?(_generation, :all), do: true
+
+  defp generation_match?(generation, max_generation) when is_integer(max_generation) do
+    normalize_generation(generation) <= max_generation
+  end
+
+  defp generation_match?(_generation, _max_generation), do: false
+
+  defp current_thread_generation(state, chat_id, thread_id) when is_integer(chat_id) do
+    key = {state.account_id || "default", chat_id, thread_id}
+
+    case CoreStore.get(:telegram_thread_generation, key) do
+      generation -> normalize_generation(generation)
+    end
+  rescue
+    _ -> 0
+  end
+
+  defp current_thread_generation(_state, _chat_id, _thread_id), do: 0
+
+  defp bump_thread_generation(state, chat_id, thread_id) when is_integer(chat_id) do
+    account_id = state.account_id || "default"
+    key = {account_id, chat_id, thread_id}
+    previous = current_thread_generation(state, chat_id, thread_id)
+    next = previous + 1
+
+    _ = CoreStore.put(:telegram_thread_generation, key, next)
+    {previous, next}
+  rescue
+    _ -> {0, 0}
+  end
+
+  defp bump_thread_generation(_state, _chat_id, _thread_id), do: {0, 0}
+
+  defp normalize_generation(generation) when is_integer(generation) and generation >= 0,
+    do: generation
+
+  defp normalize_generation(generation) when is_binary(generation) do
+    case Integer.parse(generation) do
+      {value, _} when value >= 0 -> value
+      _ -> 0
+    end
+  end
+
+  defp normalize_generation(%{generation: generation}), do: normalize_generation(generation)
+  defp normalize_generation(%{"generation" => generation}), do: normalize_generation(generation)
+  defp normalize_generation(_generation), do: 0
 
   defp list_store_table(table) when is_atom(table) do
     CoreStore.list(table)
@@ -3228,11 +3360,24 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp lookup_session_key_for_reply(state, %ChatScope{} = scope, reply_to_id)
        when is_integer(reply_to_id) do
-    key = {state.account_id || "default", scope.chat_id, scope.topic_id, reply_to_id}
+    account_id = state.account_id || "default"
+    generation = current_thread_generation(state, scope.chat_id, scope.topic_id)
+    key = {account_id, scope.chat_id, scope.topic_id, generation, reply_to_id}
 
     case CoreStore.get(:telegram_msg_session, key) do
-      sk when is_binary(sk) and sk != "" -> sk
-      _ -> nil
+      sk when is_binary(sk) and sk != "" ->
+        sk
+
+      _ when generation == 0 ->
+        legacy_key = {account_id, scope.chat_id, scope.topic_id, reply_to_id}
+
+        case CoreStore.get(:telegram_msg_session, legacy_key) do
+          sk when is_binary(sk) and sk != "" -> sk
+          _ -> nil
+        end
+
+      _ ->
+        nil
     end
   rescue
     _ -> nil
@@ -3243,13 +3388,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp maybe_index_telegram_msg_session(state, %ChatScope{} = scope, session_key, msg_ids)
        when is_list(msg_ids) and is_binary(session_key) and session_key != "" do
     account_id = state.account_id || "default"
+    generation = current_thread_generation(state, scope.chat_id, scope.topic_id)
 
     msg_ids
     |> Enum.map(&normalize_msg_id/1)
     |> Enum.filter(&is_integer/1)
     |> Enum.uniq()
     |> Enum.each(fn msg_id ->
-      key = {account_id, scope.chat_id, scope.topic_id, msg_id}
+      key = {account_id, scope.chat_id, scope.topic_id, generation, msg_id}
       _ = CoreStore.put(:telegram_msg_session, key, session_key)
     end)
 
@@ -3262,12 +3408,25 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp send_system_message(state, chat_id, thread_id, reply_to_message_id, text)
        when is_integer(chat_id) and is_binary(text) do
-    opts =
-      %{}
-      |> maybe_put("reply_to_message_id", reply_to_message_id)
-      |> maybe_put("message_thread_id", thread_id)
+    delivery_opts =
+      []
+      |> maybe_put_kw(:account_id, state.account_id || "default")
+      |> maybe_put_kw(:thread_id, thread_id)
+      |> maybe_put_kw(:reply_to_message_id, reply_to_message_id)
 
-    state.api_mod.send_message(state.token, chat_id, text, opts, nil)
+    case Delivery.enqueue_send(chat_id, text, delivery_opts) do
+      :ok ->
+        :ok
+
+      {:error, _reason} ->
+        opts =
+          %{}
+          |> maybe_put("reply_to_message_id", reply_to_message_id)
+          |> maybe_put("message_thread_id", thread_id)
+
+        _ = state.api_mod.send_message(state.token, chat_id, text, opts, nil)
+        :ok
+    end
   rescue
     _ -> :ok
   end
@@ -5357,6 +5516,34 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       :error -> nil
     end
   end
+
+  defp maybe_put_kw(opts, _key, nil) when is_list(opts), do: opts
+  defp maybe_put_kw(opts, key, value) when is_list(opts), do: [{key, value} | opts]
+
+  defp start_async_task(_state, fun) when is_function(fun, 0) do
+    supervisor = async_supervisor_name()
+
+    if is_pid(Process.whereis(supervisor)) do
+      Task.Supervisor.start_child(supervisor, fn -> run_async_task(fun) end)
+    else
+      Task.start(fn -> run_async_task(fun) end)
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp start_async_task(_state, _fun), do: :ok
+
+  defp run_async_task(fun) when is_function(fun, 0) do
+    fun.()
+    :ok
+  rescue
+    _ -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
+
+  defp async_supervisor_name, do: LemonChannels.Adapters.Telegram.AsyncSupervisor
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
