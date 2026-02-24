@@ -255,7 +255,8 @@ defmodule LemonGateway.Telegram.ResumeByReplyMsgIndexIntegrationTest do
                fn ->
                  LemonCore.Store.list(:telegram_msg_resume)
                  |> Enum.any?(fn
-                   {{_acc, ^chat_id, _thread_id, _bot_msg_id}, %ResumeToken{engine: "lemon"}} ->
+                   {{_acc, ^chat_id, _thread_id, _generation, _bot_msg_id},
+                    %ResumeToken{engine: "lemon"}} ->
                      true
 
                    _ ->
@@ -265,11 +266,14 @@ defmodule LemonGateway.Telegram.ResumeByReplyMsgIndexIntegrationTest do
                5_000
              )
 
-    {{_acc, ^chat_id, thread_id, bot_msg_id}, %ResumeToken{} = indexed_tok} =
+    {{_acc, ^chat_id, thread_id, _generation, bot_msg_id}, %ResumeToken{} = indexed_tok} =
       LemonCore.Store.list(:telegram_msg_resume)
       |> Enum.find(fn
-        {{_acc, ^chat_id, _thread_id, _bot_msg_id}, %ResumeToken{engine: "lemon"}} -> true
-        _ -> false
+        {{_acc, ^chat_id, _thread_id, _generation, _bot_msg_id}, %ResumeToken{engine: "lemon"}} ->
+          true
+
+        _ ->
+          false
       end)
 
     assert is_integer(bot_msg_id)
