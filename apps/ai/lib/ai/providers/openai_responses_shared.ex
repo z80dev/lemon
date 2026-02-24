@@ -121,6 +121,30 @@ defmodule Ai.Providers.OpenAIResponsesShared do
     Enum.reverse(converted)
   end
 
+  @doc """
+  Clamp oversized `function_call_output` payload items in a prebuilt Responses API request.
+
+  This is a final safety net for request payloads and complements truncation during
+  message conversion. It prevents provider 400 errors when any `input[*].output`
+  field exceeds the Responses API maximum string size.
+  """
+  @spec clamp_function_call_outputs(map()) :: map()
+  def clamp_function_call_outputs(params) when is_map(params) do
+    if Map.has_key?(params, "input") do
+      Map.update(params, "input", [], fn
+        input when is_list(input) ->
+          Enum.map(input, &clamp_function_call_output_item/1)
+
+        other ->
+          other
+      end)
+    else
+      params
+    end
+  end
+
+  def clamp_function_call_outputs(other), do: other
+
   defp convert_message(%UserMessage{content: content}, _model, _idx, _providers)
        when is_binary(content) do
     %{
@@ -225,6 +249,22 @@ defmodule Ai.Providers.OpenAIResponsesShared do
   end
 
   defp convert_message(_msg, _model, _idx, _providers), do: nil
+
+  defp clamp_function_call_output_item(
+         %{"type" => "function_call_output", "output" => output} = item
+       )
+       when is_binary(output) do
+    truncated =
+      truncate_function_call_output(
+        output,
+        Map.get(item, "call_id"),
+        "request_payload"
+      )
+
+    Map.put(item, "output", truncated)
+  end
+
+  defp clamp_function_call_output_item(item), do: item
 
   defp truncate_function_call_output(text, _call_id, _tool_name)
        when byte_size(text) <= @max_function_call_output_bytes do

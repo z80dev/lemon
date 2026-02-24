@@ -210,7 +210,7 @@ defmodule Ai.Providers.OpenAICodexResponses do
         body
       end
 
-    body
+    OpenAIResponsesShared.clamp_function_call_outputs(body)
   end
 
   defp get_text_verbosity(opts) do

@@ -63,7 +63,7 @@ Ai (main API)
 ### Internal Provider Helpers
 
 - `Ai.Providers.GoogleShared` - Shared request/response logic for all Google providers
-- `Ai.Providers.OpenAIResponsesShared` - Shared logic for OpenAI Responses and Azure
+- `Ai.Providers.OpenAIResponsesShared` - Shared logic for OpenAI Responses and Azure, including `function_call_output` size guards
 - `Ai.Providers.HttpTrace` - HTTP request/response tracing (enabled via `LEMON_AI_HTTP_TRACE=1`)
 - `Ai.Providers.TextSanitizer` - UTF-8 sanitization for streamed text
 - `Ai.Auth.OpenAICodexOAuth` - Reads/refreshes ChatGPT JWT tokens from `~/.codex/auth.json`

@@ -347,6 +347,32 @@ defmodule Ai.Providers.OpenAIResponsesSharedTest do
     assert log =~ "function_call_output truncated"
   end
 
+  test "clamp_function_call_outputs truncates oversized payload items" do
+    oversized = String.duplicate("b", @max_function_call_output_bytes + 25)
+
+    params = %{
+      "model" => "gpt-5.3-codex",
+      "input" => [
+        %{"type" => "function_call_output", "call_id" => "call_big", "output" => oversized},
+        %{"role" => "user", "content" => [%{"type" => "input_text", "text" => "hello"}]}
+      ]
+    }
+
+    clamped = OpenAIResponsesShared.clamp_function_call_outputs(params)
+    [first, second] = clamped["input"]
+
+    assert first["type"] == "function_call_output"
+    assert first["call_id"] == "call_big"
+    assert byte_size(first["output"]) == @max_function_call_output_bytes
+    assert first["output"] == binary_part(oversized, 0, @max_function_call_output_bytes)
+    assert second == Enum.at(params["input"], 1)
+  end
+
+  test "clamp_function_call_outputs leaves payload unchanged without input list" do
+    params = %{"model" => "gpt-4o", "stream" => true}
+    assert OpenAIResponsesShared.clamp_function_call_outputs(params) == params
+  end
+
   test "insert_synthetic_tool_results when user interrupts tool flow" do
     model = %Model{
       id: "gpt-4o",

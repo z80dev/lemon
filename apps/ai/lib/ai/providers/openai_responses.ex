@@ -236,6 +236,7 @@ defmodule Ai.Providers.OpenAIResponses do
 
     # Add reasoning configuration
     params = add_reasoning_config(params, model, opts, messages)
+    params = OpenAIResponsesShared.clamp_function_call_outputs(params)
 
     # Build URL and headers
     url = "#{normalize_base_url(model.base_url)}/responses"

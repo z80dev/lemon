@@ -277,6 +277,7 @@ defmodule Ai.Providers.AzureOpenAIResponses do
 
     # Add reasoning configuration
     params = add_reasoning_config(params, model, opts, messages)
+    params = OpenAIResponsesShared.clamp_function_call_outputs(params)
 
     # Build URL with api-version query parameter
     base_uri = URI.parse("#{base_url}/responses")
