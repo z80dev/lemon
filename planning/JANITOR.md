@@ -186,3 +186,22 @@ Created Checkpoint module for save/resume functionality:
 1. **Continue** PLN-20260224-long-running-agent-harnesses (M4-M6: introspection, docs, integration)
 2. **Complete** PLN-20260224-runtime-hot-reload (documentation)
 3. **Investigate** community ideas (MCP, WASM, multi-agent, channels)
+
+---
+
+#### 7. Runtime Hot-Reload - M8 Documentation and Review Close-out
+**Plan:** PLN-20260224-runtime-hot-reload  
+**Status:** ready_to_land
+
+Completed M8 and moved the plan to `ready_to_land`.
+
+**Artifacts Added:**
+- `docs/runtime-hot-reload.md`
+- `planning/reviews/RVW-PLN-20260224-runtime-hot-reload.md`
+- `planning/merges/MRG-PLN-20260224-runtime-hot-reload.md`
+
+**Docs Updated:**
+- `docs/README.md`
+- `docs/catalog.exs`
+- `planning/plans/PLN-20260224-runtime-hot-reload.md`
+- `planning/INDEX.md`

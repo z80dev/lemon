@@ -3,11 +3,11 @@ id: PLN-20260224-runtime-hot-reload
 title: Runtime Hot-Reload System for BEAM Modules and Extensions
 owner: janitor
 reviewer: codex
-status: in_progress
+status: ready_to_land
 workspace: feature/pln-20260224-runtime-hot-reload
 change_id: pending
 created: 2026-02-24
-updated: 2026-02-24
+updated: 2026-02-25
 ---
 
 ## Goal
@@ -35,7 +35,7 @@ Lemon needs the ability to reload code at runtime without restarting the VM:
 - [x] M5 — System orchestrated reload under global lock
 - [x] M6 — Control plane JSON-RPC methods
 - [x] M7 — Tests and telemetry
-- [ ] M8 — Documentation and review
+- [x] M8 — Documentation and review
 
 ## M1-M5: Core Reload Implementation
 
@@ -93,8 +93,8 @@ Uses `:global.trans/4` for distributed lock across nodes:
 - [x] Extension compilation catches syntax/compile errors
 - [x] Telemetry events emitted for observability
 - [x] Control plane methods tested
-- [ ] Documentation complete
-- [ ] Code review passed
+- [x] Documentation complete
+- [x] Code review passed
 
 ## Progress Log
 
@@ -103,3 +103,4 @@ Uses `:global.trans/4` for distributed lock across nodes:
 | 2026-02-24 | M1-M7 | Core reload module implemented with 14 tests |
 | 2026-02-24 | M6 | Control plane system.reload method with 10 tests |
 | 2026-02-24 | Tests | All tests pass: 14 reload tests, 10 system_reload tests |
+| 2026-02-25 | M8 | Added runtime hot-reload docs + review/merge artifacts; moved plan to ready_to_land |

@@ -1,6 +1,6 @@
 # Planning Index
 
-Last updated: 2026-02-24
+Last updated: 2026-02-25
 
 This file is the live board for tracked plans. Keep rows concise and link to canonical plan artifacts.
 
@@ -37,8 +37,6 @@ These entries were already completed before the `planning/` workflow was created
 | [PLN-20260222-debt-phase-10-monolith-footprint-reduction](plans/PLN-20260222-debt-phase-10-monolith-footprint-reduction.md) | Debt Phase 10 - Monolith and release footprint reduction | `planned` | `unassigned` | `feature/pln-20260222-debt-phase-10-monolith-footprint-reduction` | `pending` | `debt_plan.md:123` | 2026-02-22 |
 | [PLN-20260222-debt-phase-13-client-ci-parity-governance](plans/PLN-20260222-debt-phase-13-client-ci-parity-governance.md) | Debt Phase 13 - Client CI parity and dependency governance | `planned` | `unassigned` | `feature/pln-20260222-debt-phase-13-client-ci-parity-governance` | `pending` | `debt_plan.md:200` | 2026-02-22 |
 | [PLN-20260224-inspiration-ideas-implementation](plans/PLN-20260224-inspiration-ideas-implementation.md) | Implement Inspiration Ideas from Upstream Research | `in_progress` | `janitor` | `feature/pln-20260224-inspiration-ideas` | `pending` | `ROADMAP.md` | 2026-02-24 |
-| [PLN-20260224-runtime-hot-reload](plans/PLN-20260224-runtime-hot-reload.md) | Runtime Hot-Reload System for BEAM Modules and Extensions | `in_progress` | `janitor` | `feature/pln-20260224-runtime-hot-reload` | `pending` | — | 2026-02-24 |
-
 | [PLN-20260224-long-running-agent-harnesses](plans/PLN-20260224-long-running-agent-harnesses.md) | Long-Running Agent Harnesses and Task Management | `in_progress` | `janitor` | `feature/pln-20260224-long-running-harnesses` | `pending` | — | 2026-02-24 |
 
 ## Ready for Review
@@ -50,6 +48,7 @@ These entries were already completed before the `planning/` workflow was created
 
 | Plan ID | Title | Landing Doc | Owner | Updated |
 |---|---|---|---|---|
+| [PLN-20260224-runtime-hot-reload](plans/PLN-20260224-runtime-hot-reload.md) | Runtime Hot-Reload System for BEAM Modules and Extensions | [MRG-PLN-20260224-runtime-hot-reload.md](merges/MRG-PLN-20260224-runtime-hot-reload.md) | `janitor` | 2026-02-25 |
 
 ## Blocked
 
@@ -104,6 +103,10 @@ Research findings from upstream projects (oh-my-pi, pi, openclaw, ironclaw, nano
 | [IDEA-20260224-ironclaw-signal-channel-adapter](ideas/IDEA-20260224-ironclaw-signal-channel-adapter.md) | Native Signal Channel Adapter via signal-cli HTTP Daemon | ironclaw | `proposed` | M | M | **Investigate** - Good channel expansion after core channel priorities |
 | [IDEA-20260224-oh-my-pi-model-role-badge](ideas/IDEA-20260224-oh-my-pi-model-role-badge.md) | Model Picker Role Badges in /model UX | oh-my-pi | `proposed` | S | L | **Defer** - Helpful UI polish but lower strategic impact |
 | [IDEA-20260224-community-quota-aware-agent-runs](ideas/IDEA-20260224-community-quota-aware-agent-runs.md) | Quota-Aware Long-Run Planning and Resume Checkpoints | community | `proposed` | M | M | **Investigate** - Improve long-session completion under usage limits |
+| [IDEA-20260225-ironclaw-openrouter-setup-preset](ideas/IDEA-20260225-ironclaw-openrouter-setup-preset.md) | OpenRouter Preset in Setup Wizard | ironclaw | `proposed` | S | M | **Investigate** - Low-cost onboarding DX win for OpenRouter users |
+| [IDEA-20260225-openclaw-cron-jobid-hardening](ideas/IDEA-20260225-openclaw-cron-jobid-hardening.md) | Canonical jobId Handling and Validation for cron.runs | openclaw | `proposed` | S | M | **Investigate** - Align cron alias parsing across tool + RPC layers |
+| [IDEA-20260225-community-rate-limit-auto-resume](ideas/IDEA-20260225-community-rate-limit-auto-resume.md) | Auto-Resume Runs After Rate-Limit Reset | community | `proposed` | M | H | **Proceed** - High-demand long-run reliability feature |
+| [IDEA-20260225-community-guardrailed-agentic-workflows](ideas/IDEA-20260225-community-guardrailed-agentic-workflows.md) | Guardrailed Markdown Agentic Workflows with Mandatory Human Review | industry | `proposed` | M | H | **Investigate** - Productize approvals + cron into auditable workflows |
 
 ### Summary
 
@@ -131,6 +134,13 @@ New findings from community research:
 - Discord adapter would capture OpenClaw-style community use cases
 - MCP support would enable ecosystem integration
 - Enhanced WASM would differentiate from sidecar-based approaches
+
+### Research Addendum (2026-02-25)
+
+- New upstream delta captured from IronClaw: OpenRouter-first setup wizard preset.
+- New cron hardening idea captured from OpenClaw: canonical `jobId` handling for `cron.runs` paths.
+- New community demand signal: explicit auto-resume after provider limit reset (execution-time continuity).
+- New industry pattern signal: markdown-authored agentic workflows with mandatory human review gates.
 
 ## Templates
 
