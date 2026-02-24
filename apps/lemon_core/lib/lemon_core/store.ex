@@ -967,6 +967,9 @@ defmodule LemonCore.Store do
       progress_msg_id = meta[:progress_msg_id] || meta["progress_msg_id"]
       user_msg_id = meta[:user_msg_id] || meta["user_msg_id"]
 
+      thread_generation =
+        normalize_thread_generation(meta[:thread_generation] || meta["thread_generation"])
+
       msg_ids =
         [progress_msg_id, user_msg_id]
         |> Enum.map(&normalize_msg_id/1)
@@ -974,7 +977,7 @@ defmodule LemonCore.Store do
         |> Enum.uniq()
 
       Enum.reduce(msg_ids, backend_state, fn msg_id, bs ->
-        key = {account_id || "default", chat_id, topic_id, msg_id}
+        key = {account_id || "default", chat_id, topic_id, thread_generation, msg_id}
 
         case backend.put(bs, :telegram_msg_resume, key, resume) do
           {:ok, bs2} -> bs2
@@ -1001,6 +1004,17 @@ defmodule LemonCore.Store do
   end
 
   defp normalize_msg_id(_), do: nil
+
+  defp normalize_thread_generation(value) when is_integer(value) and value >= 0, do: value
+
+  defp normalize_thread_generation(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {generation, _} when generation >= 0 -> generation
+      _ -> 0
+    end
+  end
+
+  defp normalize_thread_generation(_), do: 0
 
   # We persist resume tokens as-is (often a struct from another app). To avoid
   # compile-time coupling, detect by shape.
