@@ -171,6 +171,8 @@ defmodule LemonChannels.Registry do
   end
 
   defp adapter_running?(plugin_module) when is_atom(plugin_module) do
+    expected_child_module = plugin_child_module(plugin_module)
+
     children =
       try do
         DynamicSupervisor.which_children(LemonChannels.AdapterSupervisor)
@@ -179,8 +181,41 @@ defmodule LemonChannels.Registry do
       end
 
     Enum.any?(children, fn
-      {^plugin_module, pid, _type, _modules} when is_pid(pid) -> Process.alive?(pid)
-      _ -> false
-    end)
+      {_id, pid, _type, modules} when is_pid(pid) ->
+        Process.alive?(pid) and
+          child_matches_plugin?(modules, plugin_module, expected_child_module)
+
+      _ ->
+        false
+    end) or
+      named_process_running?(expected_child_module)
   end
+
+  defp plugin_child_module(plugin_module) when is_atom(plugin_module) do
+    case plugin_module.child_spec([]) do
+      %{start: {module, _func, _args}} when is_atom(module) -> module
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp child_matches_plugin?(modules, plugin_module, expected_child_module)
+       when is_list(modules) do
+    Enum.member?(modules, plugin_module) or
+      (is_atom(expected_child_module) and Enum.member?(modules, expected_child_module))
+  end
+
+  defp child_matches_plugin?(_, _plugin_module, _expected_child_module), do: false
+
+  defp named_process_running?(module) when is_atom(module) do
+    case Process.whereis(module) do
+      pid when is_pid(pid) -> Process.alive?(pid)
+      _ -> false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp named_process_running?(_), do: false
 end

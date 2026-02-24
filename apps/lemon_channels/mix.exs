@@ -28,7 +28,8 @@ defmodule LemonChannels.MixProject do
       {:lemon_core, in_umbrella: true},
       {:jason, "~> 1.4"},
       {:earmark_parser, "~> 1.4"},
-      {:req, "~> 0.5.0"}
+      {:req, "~> 0.5.0"},
+      {:nostrum, "~> 0.9", runtime: false}
     ]
   end
 end

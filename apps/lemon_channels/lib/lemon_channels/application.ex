@@ -71,7 +71,17 @@ defmodule LemonChannels.Application do
       end
     end
 
-    # Future: register other adapters here (Discord, Slack, etc.)
+    # Register Discord adapter if configured
+    if LemonChannels.GatewayConfig.get(:enable_discord, false) == true do
+      case register_and_start_adapter(LemonChannels.Adapters.Discord) do
+        :ok ->
+          Logger.info("Discord adapter registered and started")
+
+        {:error, reason} ->
+          Logger.warning("Failed to start Discord adapter: #{inspect(reason)}")
+      end
+    end
+
     :ok
   end
 
@@ -110,6 +120,8 @@ defmodule LemonChannels.Application do
       case adapter_id do
         "telegram" -> LemonChannels.GatewayConfig.get(:enable_telegram, false) == true
         :telegram -> LemonChannels.GatewayConfig.get(:enable_telegram, false) == true
+        "discord" -> LemonChannels.GatewayConfig.get(:enable_discord, false) == true
+        :discord -> LemonChannels.GatewayConfig.get(:enable_discord, false) == true
         "xmtp" -> LemonChannels.GatewayConfig.get(:enable_xmtp, false) == true
         :xmtp -> LemonChannels.GatewayConfig.get(:enable_xmtp, false) == true
         _ -> true
@@ -153,12 +165,23 @@ defmodule LemonChannels.Application do
   end
 
   defp find_adapter_pid(adapter_module) when is_atom(adapter_module) do
+    expected_child_module =
+      case adapter_module.child_spec([]) do
+        %{start: {module, _func, _args}} when is_atom(module) -> module
+        _ -> nil
+      end
+
     # Search for the adapter in the supervisor children
     children = DynamicSupervisor.which_children(LemonChannels.AdapterSupervisor)
 
     Enum.find_value(children, fn
-      {^adapter_module, pid, _type, _modules} when is_pid(pid) ->
-        pid
+      {_id, pid, _type, modules} when is_pid(pid) and is_list(modules) ->
+        if Enum.member?(modules, adapter_module) or
+             (is_atom(expected_child_module) and Enum.member?(modules, expected_child_module)) do
+          pid
+        else
+          nil
+        end
 
       _ ->
         nil

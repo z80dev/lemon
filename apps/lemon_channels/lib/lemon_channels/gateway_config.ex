@@ -16,6 +16,7 @@ defmodule LemonChannels.GatewayConfig do
     base_gateway_config()
     |> deep_merge(runtime_gateway_overrides())
     |> merge_telegram_overrides()
+    |> merge_discord_overrides()
     |> merge_xmtp_overrides()
   end
 
@@ -39,6 +40,10 @@ defmodule LemonChannels.GatewayConfig do
 
   defp merge_xmtp_overrides(gateway) when is_map(gateway) do
     merge_nested_runtime_overrides(gateway, :xmtp)
+  end
+
+  defp merge_discord_overrides(gateway) when is_map(gateway) do
+    merge_nested_runtime_overrides(gateway, :discord)
   end
 
   defp merge_nested_runtime_overrides(gateway, key) when is_map(gateway) and is_atom(key) do

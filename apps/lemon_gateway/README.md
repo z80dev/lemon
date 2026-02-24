@@ -1,13 +1,13 @@
 # LemonGateway
 
-A multi-engine AI gateway for Elixir. Routes user requests through transports (Telegram, etc.) to AI engines (Lemon/Codex/Claude, etc.) with concurrency control, thread isolation, and session resumption.
+A multi-engine AI gateway for Elixir. Routes user requests from channels/transports to AI engines (Lemon/Codex/Claude, etc.) with concurrency control, thread isolation, and session resumption.
 
 ## Architecture
 
 ```
                               +------------------+
                               |    Transport     |
-                              | (Telegram, etc.) |
+                              | (Channels, etc.) |
                               +--------+---------+
                                        |
                                        | Job
@@ -40,7 +40,7 @@ A multi-engine AI gateway for Elixir. Routes user requests through transports (T
 ```
 
 **Flow:**
-1. **Transport** receives user input (e.g., Telegram message), creates a `Job`, submits to Scheduler
+1. **Transport/Channel adapter** receives user input, creates a `Job`, submits to Scheduler
 2. **Scheduler** enforces concurrency limits via slot allocation
 3. **ThreadWorker** manages per-thread job queue, one active run at a time per thread
 4. **Run** selects the appropriate engine, starts the AI run, streams events back
@@ -104,7 +104,8 @@ cli_path = "/usr/local/bin/claude"
 |-----|---------|-------------|
 | `max_concurrent_runs` | `2` | Maximum concurrent AI runs across all threads |
 | `default_engine` | `"lemon"` | Engine to use when no engine hint or resume token present |
-| `enable_telegram` | `false` | Enable Telegram transport |
+| `enable_telegram` | `false` | Enable Telegram channel adapter (via `lemon_channels`) |
+| `enable_discord` | `false` | Enable Discord channel adapter (via `lemon_channels`) |
 
 ### Telegram Options
 
@@ -132,8 +133,8 @@ cli_path = "/usr/local/bin/claude"
 
 | Transport | Module | Description |
 |-----------|--------|-------------|
-| Telegram | `LemonGateway.Telegram.*` | Long-polling Telegram bot with threading and streaming |
-| Discord | `LemonGateway.Transports.Discord` | Discord bot via Nostrum with slash commands |
+| Telegram | `LemonChannels.Adapters.Telegram` | Telegram channel adapter (owned by `lemon_channels`) |
+| Discord | `LemonChannels.Adapters.Discord` | Discord channel adapter (owned by `lemon_channels`) |
 | Email | `LemonGateway.Transports.Email` | SMTP inbound/outbound email transport |
 | Farcaster | `LemonGateway.Transports.Farcaster` | Farcaster Frame-based interactions |
 | XMTP | `LemonGateway.Transports.Xmtp` | XMTP messaging via Node.js bridge |

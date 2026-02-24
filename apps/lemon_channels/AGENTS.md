@@ -1,6 +1,6 @@
 # LemonChannels AGENTS.md
 
-Channel adapter application for external messaging platforms (Telegram, X/Twitter, XMTP).
+Channel adapter application for external messaging platforms (Telegram, Discord, X/Twitter, XMTP).
 
 ## Purpose and Responsibilities
 
@@ -279,6 +279,30 @@ Web3 messaging adapter. Plugin id: `"xmtp"`.
 
 Enable via gateway config: `enable_xmtp: true`
 
+## Discord Adapter
+
+Discord adapter root: `LemonChannels.Adapters.Discord` (plugin id: `"discord"`).
+
+### Structure
+
+```
+adapters/discord.ex             — Plugin behaviour
+adapters/discord/supervisor.ex  — Supervisor
+adapters/discord/transport.ex   — Nostrum consumer + inbound routing + slash command handling
+adapters/discord/inbound.ex     — Normalize Discord events → InboundMessage
+adapters/discord/outbound.ex    — Deliver OutboundPayload via Discord API
+```
+
+### Capabilities
+
+- `chunk_limit`: 2000
+- Supports: edit, delete, images/files (thread support enabled)
+- Slash commands: `/lemon`, `/session new`, `/session info`
+
+### Enable
+
+Set in gateway config: `enable_discord: true`
+
 ## Binding Resolution
 
 `BindingResolver` maps chat scopes to projects, engines, agents, and working directories.
@@ -356,6 +380,10 @@ LemonChannels.Registry.list_plugins()  # [module()]
 LemonChannels.Registry.list()          # [{channel_id, info_map}]
 LemonChannels.Registry.status()        # %{configured: [...], connected: [...]}
 ```
+
+Adapter runtime status (`running`/`stopped`, and `connected`) is derived from live
+`LemonChannels.AdapterSupervisor` children by matching each plugin's child start module
+(not DynamicSupervisor child IDs, which are `:undefined` for dynamic children).
 
 ## Application Lifecycle
 

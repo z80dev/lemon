@@ -6,7 +6,7 @@ Gateway and transport layer for the Lemon AI system. Handles all external messag
 
 **LemonGateway** is the message gateway that:
 
-1. **Transports**: Receives messages from Telegram, Discord, Email, SMS, Voice, Webhook, Farcaster, and XMTP (XMTP delegated to `lemon_channels`)
+1. **Transports**: Receives messages from Email, SMS, Voice, Webhook, and Farcaster (Telegram/Discord/XMTP delegated to `lemon_channels`)
 2. **Engines**: Manages AI execution via native Lemon, Claude, Codex, OpenCode, Pi, and Echo engines
 3. **Scheduling**: Concurrent job execution with slot-based scheduling and per-session thread workers
 4. **State Management**: Chat state persistence, auto-resume, and conversation locking
@@ -21,10 +21,10 @@ Gateway and transport layer for the Lemon AI system. Handles all external messag
 │                        Transports                               │
 │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐   │
 │  │Telegram │ │Discord  │ │ Email   │ │  SMS    │ │  Voice  │   │
-│  │(lemon_  │ │(nostrum)│ │(SMTP/  │ │(Twilio) │ │(Twilio/ │   │
-│  │channels)│ │         │ │ webhook)│ │         │ │Deepgram)│   │
+│  │(lemon_  │ │(lemon_  │ │(SMTP/  │ │(Twilio) │ │(Twilio/ │   │
+│  │channels)│ │channels)│ │ webhook)│ │         │ │Deepgram)│   │
 │  └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘   │
-│       └─────────────┴─────────┴─────────┴─────────┘            │
+│       └─────────────┴─────────┴─────────┴─────────┘             │
 │                              │                                  │
 │                       Runtime.submit/1                          │
 │                              │                                  │
@@ -87,14 +87,13 @@ Bus event types: `:run_started`, `:run_completed`, `:delta`, `:engine_started`, 
 | `LemonGateway.Transport` | Behaviour for transport plugins (`id/0`, `start_link/1`, optional `child_spec/1`) |
 | `LemonGateway.TransportRegistry` | Transport registration and lookup |
 | `LemonGateway.TransportSupervisor` | Dynamic supervisor for transports |
-| `LemonGateway.Transports.Discord` | Discord bot via Nostrum |
 | `LemonGateway.Transports.Email` | Email inbound/outbound (inbound webhook + SMTP delivery) |
 | `LemonGateway.Transports.Voice` | Voice call transport |
 | `LemonGateway.Transports.Webhook` | Generic webhook receiver |
 | `LemonGateway.Transports.Farcaster` | Farcaster integration |
 | `LemonGateway.Transports.Xmtp` | XMTP stub - legacy removed; delegates status to `lemon_channels` adapter |
 
-**Note**: Telegram transport is implemented in the `lemon_channels` umbrella app, not here. The `LemonGateway.Telegram.*` namespace contains only Telegram-specific helpers (API client, formatter, startup notifier, poller lock, etc.) used by `lemon_channels`.
+**Note**: Telegram, Discord, and XMTP transports are implemented in the `lemon_channels` umbrella app. The `LemonGateway.Telegram.*` namespace contains Telegram-specific helpers used by `lemon_channels`.
 
 ### Engine Layer
 
@@ -733,7 +732,6 @@ ThreadWorker and Scheduler emit introspection events via `LemonCore.Introspectio
 - `lemon_core` - Shared primitives, storage (`LemonCore.Store`), bus (`LemonCore.Bus`), telemetry
 
 ### External Libraries
-- `nostrum` - Discord bot framework (runtime: false - loaded conditionally)
 - `gen_smtp` / `mail` - Email handling
 - `plug` / `bandit` - HTTP servers (SMS webhooks port 4045, Voice port 4047, Health port 4042)
 - `earmark_parser` - Markdown parsing for Telegram entity rendering
