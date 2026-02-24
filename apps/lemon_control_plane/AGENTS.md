@@ -246,6 +246,7 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 | `config.patch` | admin | Partial config update |
 | `config.schema` | read | Get config schema |
 | `config.reload` | admin | Reload configuration |
+| `system.reload` | admin | Runtime reload of module/app/extension/all scopes |
 | `secrets.list` | read | List secret metadata (no values) |
 | `secrets.set` | admin | Store secret |
 | `secrets.delete` | admin | Remove secret |

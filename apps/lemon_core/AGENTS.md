@@ -46,6 +46,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.ExecApprovals` | Tool execution approval flow with scope-based persistence |
 | `LemonCore.Telemetry` | Telemetry event helpers |
 | `LemonCore.Introspection` | Canonical introspection envelope builder and persistence API |
+| `Lemon.Reload` | Runtime BEAM/extension reload orchestration with global lock and telemetry |
 | `LemonCore.Httpc` | `:httpc` wrapper ensuring `:inets`/`:ssl` started |
 | `LemonCore.Clock` | Time utilities (monotonic timestamps) |
 | `LemonCore.Id` | UUID and unique ID generation |
@@ -232,6 +233,16 @@ run_id = LemonCore.Store.get_run_by_progress(scope, progress_msg_id)
 
 events = LemonCore.Introspection.list(run_id: run_id, limit: 50)
 ```
+
+### Telegram Resume Indexing
+
+When `LemonCore.Store.finalize_run/2` processes Telegram-origin summaries, it indexes
+resume tokens for reply-based session switching in `:telegram_msg_resume`.
+
+- Key shape: `{account_id, chat_id, thread_id, thread_generation, msg_id}`
+- `thread_generation` comes from run summary `meta.thread_generation` (defaults to `0`)
+- This generation field lets transports invalidate stale reply mappings by bumping
+  generation per chat/thread, without synchronously scanning and deleting all old rows.
 
 ## Event Bus Usage Patterns
 

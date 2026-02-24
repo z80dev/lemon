@@ -594,6 +594,7 @@ end
 | `smart_routing_test.exs` | Complexity classification, routing |
 | `sticky_engine_test.exs` | Engine extraction, affinity |
 | `router_test.exs` | Inbound message handling, control plane |
+| `router_pending_compaction_test.exs` | Generic pending-compaction consumer, marker lifecycle, auto_compacted guard |
 | `channel_context_test.exs` | Session key parsing, channel context |
 | `session_key_test.exs` | SessionKey construction and parsing |
 | `session_key_atom_exhaustion_test.exs` | Atom exhaustion safety |
@@ -655,7 +656,8 @@ Beyond the basic lifecycle, RunProcess handles several edge cases:
 - **Run watchdog timeout** - Starts a per-run inactivity watchdog on `:run_started` (default 2 hours, configurable via `:lemon_router, :run_process_idle_watchdog_timeout_ms`; legacy key `:run_process_watchdog_timeout_ms` still supported). Watchdog is reset by run activity (`:delta`, `:engine_action`, other run events). For Telegram channel sessions, idle timeout first sends an inline keepalive prompt (`Keep Waiting` / `Stop Run`) and waits a confirmation window (`:run_process_idle_watchdog_confirm_timeout_ms`, default 5 minutes) before forced cancellation.
 - **Zero-answer auto-retry** - If a run fails with an `assistant_error` and returns an empty answer, automatically retries once with a context-aware prompt prefix (not for context overflow, user abort, timeout, or interrupt errors)
 - **Context overflow handling** - On context-length errors, clears resume state, marks `:pending_compaction` in Store, resets Telegram-specific chat state
-- **Preemptive compaction** - After successful runs, checks token usage against context window; if near the limit, marks `:pending_compaction` for proactive context management
+- **Preemptive compaction** - After successful runs, checks token usage against context window; if near the limit, marks `:pending_compaction` for proactive context management. When usage data is missing, falls back to a conservative char-based estimate (~4 chars/token) from the job prompt.
+- **Generic pending-compaction consumer** - `Router.handle_inbound/1` checks the generic `:pending_compaction` marker before submitting to the orchestrator. If the marker is fresh (≤12h) and the inbound isn't already `auto_compacted`, it fetches run history, builds a compaction prompt, and sets `meta.auto_compacted = true`. If inbound is already `auto_compacted` (e.g., Telegram adapter compacted upstream), router clears the generic marker and skips re-injection to avoid double-compaction on later turns.
 - **Auto file sending** - Tracks generated image paths and requested send files during a run; sends them to Telegram at run completion
 
 ## Introspection Events

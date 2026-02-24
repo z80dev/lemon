@@ -149,6 +149,10 @@ adapters/telegram/outbound.ex    — Deliver via Bot API
 adapters/telegram/voice_transcriber.ex — OpenAI-compatible audio transcription
 ```
 
+The Telegram supervisor also starts `LemonChannels.Adapters.Telegram.AsyncSupervisor`
+(`Task.Supervisor`) so transport-side network and cleanup side effects can run off the
+main polling GenServer loop.
+
 ### Support Modules (lib/lemon_channels/telegram/)
 
 | Module | Purpose |
@@ -171,6 +175,17 @@ adapters/telegram/voice_transcriber.ex — OpenAI-compatible audio transcription
 - `rate_limit`: 30 msg/sec
 - Supports: edit, delete, voice, images, files, reactions, threads
 - Transport-level Telegram commands: `/new`, `/resume`, `/model`, `/thinking`, `/trigger`, `/cwd`, `/file`, `/topic`, `/cancel`
+
+### `/new` and Reply Index Behavior
+
+- `/new` acknowledges immediately with `"Started a new session."` (plus model/provider/cwd details).
+- Session abort, chat-state cleanup, and optional memory reflection are performed asynchronously in background tasks.
+- Memory reflection runs use a dedicated reflection session key suffix (`:new_reflection`) and `queue_mode: :collect` so the main chat session is not blocked.
+- `send_system_message/5` prefers `LemonChannels.Telegram.Delivery.enqueue_send/3` (Outbox path), with direct Bot API fallback if Outbox is unavailable.
+- Reply/session indices are generation-scoped:
+  - `:telegram_msg_session` keys: `{account_id, chat_id, thread_id, generation, msg_id}`
+  - `:telegram_msg_resume` keys: `{account_id, chat_id, thread_id, generation, msg_id}`
+- `/new` increments `:telegram_thread_generation` for `{account_id, chat_id, thread_id}` to invalidate stale reply mappings immediately without synchronous full-table scans.
 
 ### Enable
 
