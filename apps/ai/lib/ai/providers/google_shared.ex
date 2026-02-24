@@ -623,6 +623,49 @@ defmodule Ai.Providers.GoogleShared do
     end
   end
 
+  @doc """
+  Normalize error response bodies from Req into a plain string.
+
+  Handles plain binaries, maps, and `Req.Response.Async` bodies produced by
+  streaming requests (`into: :self`) so provider logs include the real upstream
+  error JSON instead of an async struct dump.
+  """
+  @spec normalize_http_error_body(term()) :: String.t()
+  def normalize_http_error_body(body), do: normalize_http_error_body(body, 1_000)
+
+  @spec normalize_http_error_body(term(), non_neg_integer()) :: String.t()
+  def normalize_http_error_body(body, _timeout_ms) when is_binary(body), do: body
+
+  def normalize_http_error_body(%Req.Response.Async{} = async, timeout_ms)
+      when is_integer(timeout_ms) and timeout_ms >= 0 do
+    case collect_async_error_body(async, "", timeout_ms) do
+      "" -> inspect(async)
+      text -> text
+    end
+  end
+
+  def normalize_http_error_body(body, _timeout_ms) when is_map(body), do: Jason.encode!(body)
+  def normalize_http_error_body(body, _timeout_ms), do: inspect(body)
+
+  defp collect_async_error_body(%Req.Response.Async{ref: ref, pid: pid} = async, acc, timeout_ms) do
+    receive do
+      {^ref, {:data, chunk}} when is_binary(chunk) ->
+        collect_async_error_body(async, acc <> chunk, timeout_ms)
+
+      {^ref, :done} ->
+        acc
+
+      {^ref, {:done, _}} ->
+        acc
+
+      {:DOWN, ^ref, :process, ^pid, _reason} ->
+        acc
+    after
+      timeout_ms ->
+        acc
+    end
+  end
+
   # ============================================================================
   # Cost Calculation
   # ============================================================================

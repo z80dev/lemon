@@ -277,7 +277,8 @@ defmodule Ai.Providers.Google do
         {:ok, :streaming}
 
       {:ok, %Req.Response{status: status, body: body}} ->
-        {:error, "HTTP #{status}: #{GoogleShared.extract_error_message(inspect(body))}"}
+        error_body = GoogleShared.normalize_http_error_body(body)
+        {:error, "HTTP #{status}: #{GoogleShared.extract_error_message(error_body)}"}
 
       {:error, %Req.TransportError{reason: reason}} ->
         {:error, "Transport error: #{inspect(reason)}"}

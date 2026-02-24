@@ -678,6 +678,36 @@ defmodule Ai.Providers.GoogleSharedComprehensiveTest do
     end
   end
 
+  describe "normalize_http_error_body/1" do
+    test "returns binary bodies unchanged" do
+      body = ~s({"error":{"message":"Not found"}})
+      assert GoogleShared.normalize_http_error_body(body) == body
+    end
+
+    test "encodes map bodies as JSON" do
+      body = %{"error" => %{"message" => "No access"}}
+      assert GoogleShared.normalize_http_error_body(body) == Jason.encode!(body)
+    end
+
+    test "collects Req.Response.Async chunks into a string body" do
+      ref = make_ref()
+      async = %Req.Response.Async{ref: ref, pid: self()}
+
+      send(self(), {ref, {:data, "{\"error\":{"}})
+      send(self(), {ref, {:data, "\"message\":\"No access\"}}"}})
+      send(self(), {ref, :done})
+
+      assert GoogleShared.normalize_http_error_body(async, 50) ==
+               ~s({"error":{"message":"No access"}})
+    end
+
+    test "falls back to async inspect when no chunks arrive before timeout" do
+      async = %Req.Response.Async{ref: make_ref(), pid: self()}
+      text = GoogleShared.normalize_http_error_body(async, 0)
+      assert String.contains?(text, "Req.Response.Async")
+    end
+  end
+
   # ============================================================================
   # Cost Calculation
   # ============================================================================
