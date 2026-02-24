@@ -5,7 +5,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
   alias LemonCore.Store, as: CoreStore
   alias LemonCore.SessionKey
 
-  defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest.TestRouter do
+  defmodule ParallelTestRouter do
     def handle_inbound(msg) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
         send(pid, {:inbound, msg})
@@ -23,7 +23,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     end
   end
 
-  defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest.MockAPI do
+  defmodule ParallelMockAPI do
     @updates_key {__MODULE__, :updates}
     @pid_key {__MODULE__, :pid}
 
@@ -84,16 +84,16 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
     old_gateway_config_env = Application.get_env(:lemon_channels, :gateway)
 
-    :persistent_term.put({Elixir.LemonChannels.Adapters.Telegram.TransportParallelSessionsTest.TestRouter, :pid}, self())
-    Elixir.LemonChannels.Adapters.Telegram.TransportParallelSessionsTest.MockAPI.register_test(self())
-    LemonCore.RouterBridge.configure(router: Elixir.LemonChannels.Adapters.Telegram.TransportParallelSessionsTest.TestRouter, run_orchestrator: Elixir.LemonChannels.Adapters.Telegram.TransportParallelSessionsTest.TestRouter)
+    :persistent_term.put({ParallelTestRouter, :pid}, self())
+    ParallelMockAPI.register_test(self())
+    LemonCore.RouterBridge.configure(router: ParallelTestRouter, run_orchestrator: ParallelTestRouter)
     set_bindings([])
 
     on_exit(fn ->
       stop_transport()
-      :persistent_term.erase({Elixir.LemonChannels.Adapters.Telegram.TransportParallelSessionsTest.MockAPI, :updates})
-      :persistent_term.erase({Elixir.LemonChannels.Adapters.Telegram.TransportParallelSessionsTest.MockAPI, :pid})
-      :persistent_term.erase({Elixir.LemonChannels.Adapters.Telegram.TransportParallelSessionsTest.TestRouter, :pid})
+      :persistent_term.erase({ParallelMockAPI, :updates})
+      :persistent_term.erase({ParallelMockAPI, :pid})
+      :persistent_term.erase({ParallelTestRouter, :pid})
       restore_router_bridge(old_router_bridge)
       restore_gateway_config_env(old_gateway_config_env)
     end)
@@ -117,7 +117,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     {:ok, _} = Registry.register(LemonRouter.SessionRegistry, base_session_key, %{run_id: "busy"})
     on_exit(fn -> safe_unregister_session(base_session_key) end)
 
-    Elixir.LemonChannels.Adapters.Telegram.TransportParallelSessionsTest.MockAPI.set_updates([message_update(chat_id, user_msg_id, "hello")])
+    ParallelMockAPI.set_updates([message_update(chat_id, user_msg_id, "hello")])
 
     assert {:ok, _pid} =
              start_transport(%{
@@ -149,7 +149,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     resume = %Elixir.LemonChannels.Types.ResumeToken{engine: "lemon", value: "tok"}
     _ = CoreStore.put(:telegram_selected_resume, {"default", chat_id, nil}, resume)
 
-    Elixir.LemonChannels.Adapters.Telegram.TransportParallelSessionsTest.MockAPI.set_updates([message_update(chat_id, user_msg_id, "hello")])
+    ParallelMockAPI.set_updates([message_update(chat_id, user_msg_id, "hello")])
 
     assert {:ok, _pid} =
              start_transport(%{
@@ -179,7 +179,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     {:ok, _} = Registry.register(LemonRouter.SessionRegistry, base_session_key, %{run_id: "busy"})
     on_exit(fn -> safe_unregister_session(base_session_key) end)
 
-    Elixir.LemonChannels.Adapters.Telegram.TransportParallelSessionsTest.MockAPI.set_updates([message_update(chat_id, user_msg_id1, "first")])
+    ParallelMockAPI.set_updates([message_update(chat_id, user_msg_id1, "first")])
 
     assert {:ok, _pid} =
              start_transport(%{
@@ -197,7 +197,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     assert stored_session == fork_session_key
 
     # Reply to the original user message should route to the forked session
-    Elixir.LemonChannels.Adapters.Telegram.TransportParallelSessionsTest.MockAPI.set_updates([reply_update(chat_id, user_msg_id2, "followup", user_msg_id1)])
+    ParallelMockAPI.set_updates([reply_update(chat_id, user_msg_id2, "followup", user_msg_id1)])
 
     assert_receive {:inbound, msg2}, 800
     assert msg2.meta[:session_key] == fork_session_key
@@ -248,7 +248,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
         stale_resume
       )
 
-    Elixir.LemonChannels.Adapters.Telegram.TransportParallelSessionsTest.MockAPI.set_updates([
+    ParallelMockAPI.set_updates([
       topic_message_update(chat_id, topic_id, new_msg_id, "/new"),
       topic_message_update(chat_id, topic_id, followup_msg_id, "after new", reply_to_id)
     ])
@@ -317,7 +317,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
 
     _ = CoreStore.put(:telegram_selected_resume, {"default", chat_id, topic_id}, stale_resume)
 
-    Elixir.LemonChannels.Adapters.Telegram.TransportParallelSessionsTest.MockAPI.set_updates([
+    ParallelMockAPI.set_updates([
       topic_message_update(chat_id, topic_id, new_msg_id, "/new"),
       topic_message_update(chat_id, topic_id, followup_msg_id, "after new")
     ])
@@ -393,7 +393,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
         }
       )
 
-    Elixir.LemonChannels.Adapters.Telegram.TransportParallelSessionsTest.MockAPI.set_updates([message_update(chat_id, user_msg_id, "continue and polish output")])
+    ParallelMockAPI.set_updates([message_update(chat_id, user_msg_id, "continue and polish output")])
 
     assert {:ok, _pid} =
              start_transport(%{
@@ -458,7 +458,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     first_msg_id = System.unique_integer([:positive])
     second_msg_id = System.unique_integer([:positive])
 
-    Elixir.LemonChannels.Adapters.Telegram.TransportParallelSessionsTest.MockAPI.set_updates([
+    ParallelMockAPI.set_updates([
       topic_created_update(chat_id, topic_id, first_msg_id),
       topic_message_update(chat_id, topic_id, second_msg_id, "hello after create")
     ])
@@ -481,7 +481,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     config =
       %{
         bot_token: token,
-        api_mod: Elixir.LemonChannels.Adapters.Telegram.TransportParallelSessionsTest.MockAPI,
+        api_mod: ParallelMockAPI,
         poll_interval_ms: 10,
         debounce_ms: 10
       }

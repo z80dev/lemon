@@ -100,6 +100,17 @@ defmodule LemonChannels.ApplicationTest do
 
   describe "stop_adapter/1" do
     test "returns error for non-running adapter" do
+      defmodule NonRunningAdapterWorker do
+        use GenServer
+
+        def start_link(_opts) do
+          GenServer.start_link(__MODULE__, :ok)
+        end
+
+        @impl true
+        def init(:ok), do: {:ok, %{}}
+      end
+
       defmodule NonRunningAdapter do
         @behaviour LemonChannels.Plugin
 
@@ -110,7 +121,8 @@ defmodule LemonChannels.ApplicationTest do
         def meta, do: %{label: "Non-Running", capabilities: %{}, docs: nil}
 
         @impl true
-        def child_spec(_opts), do: %{id: __MODULE__, start: {Agent, :start_link, [fn -> :ok end]}}
+        def child_spec(_opts),
+          do: %{id: __MODULE__, start: {NonRunningAdapterWorker, :start_link, [[]]}}
 
         @impl true
         def normalize_inbound(_raw), do: {:error, :not_implemented}

@@ -4,7 +4,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
   alias LemonCore.Store
 
-  defmodule LemonChannels.Adapters.Telegram.TransportCancelTest.TestRouter do
+  defmodule CancelTestRouter do
     def handle_inbound(msg) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
         send(pid, {:inbound, msg})
@@ -30,7 +30,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     end
   end
 
-  defmodule LemonChannels.Adapters.Telegram.TransportCancelTest.MockAPI do
+  defmodule CancelMockAPI do
     @updates_key {__MODULE__, :updates}
     @pid_key {__MODULE__, :pid}
 
@@ -90,16 +90,16 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
     old_gateway_config_env = Application.get_env(:lemon_channels, :gateway)
 
-    :persistent_term.put({Elixir.LemonChannels.Adapters.Telegram.TransportCancelTest.TestRouter, :pid}, self())
-    Elixir.LemonChannels.Adapters.Telegram.TransportCancelTest.MockAPI.register_test(self())
-    LemonCore.RouterBridge.configure(router: Elixir.LemonChannels.Adapters.Telegram.TransportCancelTest.TestRouter)
+    :persistent_term.put({CancelTestRouter, :pid}, self())
+    CancelMockAPI.register_test(self())
+    LemonCore.RouterBridge.configure(router: CancelTestRouter)
     set_bindings([])
 
     on_exit(fn ->
       stop_transport()
-      :persistent_term.erase({Elixir.LemonChannels.Adapters.Telegram.TransportCancelTest.MockAPI, :updates})
-      :persistent_term.erase({Elixir.LemonChannels.Adapters.Telegram.TransportCancelTest.MockAPI, :pid})
-      :persistent_term.erase({Elixir.LemonChannels.Adapters.Telegram.TransportCancelTest.TestRouter, :pid})
+      :persistent_term.erase({CancelMockAPI, :updates})
+      :persistent_term.erase({CancelMockAPI, :pid})
+      :persistent_term.erase({CancelTestRouter, :pid})
       restore_router_bridge(old_router_bridge)
       restore_gateway_config_env(old_gateway_config_env)
     end)
@@ -110,7 +110,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
   test "progress '👀' reaction is set on user message" do
     chat_id = 333_001
     user_msg_id = 1234
-    Elixir.LemonChannels.Adapters.Telegram.TransportCancelTest.MockAPI.set_updates([message_update(chat_id, user_msg_id, "hello")])
+    CancelMockAPI.set_updates([message_update(chat_id, user_msg_id, "hello")])
 
     assert {:ok, _pid} =
              start_transport(%{
@@ -138,7 +138,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
     _ = Store.put(:telegram_msg_session, {"default", chat_id, nil, progress_msg_id}, session_key)
 
-    Elixir.LemonChannels.Adapters.Telegram.TransportCancelTest.MockAPI.set_updates([cancel_callback_update(chat_id, cb_id, progress_msg_id, "lemon:cancel")])
+    CancelMockAPI.set_updates([cancel_callback_update(chat_id, cb_id, progress_msg_id, "lemon:cancel")])
 
     assert {:ok, _pid} =
              start_transport(%{
@@ -156,7 +156,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     cb_id = "cb-2"
     run_id = "run_#{System.unique_integer([:positive])}"
 
-    Elixir.LemonChannels.Adapters.Telegram.TransportCancelTest.MockAPI.set_updates([
+    CancelMockAPI.set_updates([
       cancel_callback_update(chat_id, cb_id, progress_msg_id, "lemon:cancel:" <> run_id)
     ])
 
@@ -176,7 +176,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     config =
       %{
         bot_token: token,
-        api_mod: Elixir.LemonChannels.Adapters.Telegram.TransportCancelTest.MockAPI,
+        api_mod: CancelMockAPI,
         poll_interval_ms: 10,
         debounce_ms: 10
       }

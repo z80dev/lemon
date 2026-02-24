@@ -78,6 +78,13 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
     pid
   end
 
+  defp watched_event_path(pid) do
+    pid
+    |> :sys.get_state()
+    |> Map.fetch!(:watched_paths)
+    |> Enum.at(0)
+  end
+
   # ---------------------------------------------------------------------------
   # start_link/1
   # ---------------------------------------------------------------------------
@@ -92,8 +99,17 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
       # Ensure no existing registered process
       if pid = Process.whereis(Watcher), do: GenServer.stop(pid)
 
-      {:ok, pid} =
+      result =
         Watcher.start_link(debounce_ms: @short_debounce_ms, poll_interval_ms: @short_poll_ms)
+
+      pid =
+        case result do
+          {:ok, pid} ->
+            pid
+
+          {:error, {:already_started, pid}} ->
+            pid
+        end
 
       on_exit(fn ->
         try do
@@ -264,7 +280,8 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
       state_before = :sys.get_state(pid)
       assert state_before.debounce_ref == nil
 
-      send(pid, {:file_event, self(), {"/some/path/config.toml", [:modified]}})
+      path = watched_event_path(pid)
+      send(pid, {:file_event, self(), {path, [:modified]}})
       Process.sleep(10)
 
       state_after = :sys.get_state(pid)
@@ -273,13 +290,14 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
 
     test "second file event cancels first debounce timer" do
       pid = start_watcher!(debounce_ms: 500)
+      path = watched_event_path(pid)
 
-      send(pid, {:file_event, self(), {"/some/path/config.toml", [:modified]}})
+      send(pid, {:file_event, self(), {path, [:modified]}})
       Process.sleep(10)
       state1 = :sys.get_state(pid)
       ref1 = state1.debounce_ref
 
-      send(pid, {:file_event, self(), {"/some/path/config.toml", [:modified]}})
+      send(pid, {:file_event, self(), {path, [:modified]}})
       Process.sleep(10)
       state2 = :sys.get_state(pid)
       ref2 = state2.debounce_ref
@@ -290,8 +308,9 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
 
     test "debounced_reload fires after debounce_ms elapses" do
       pid = start_watcher!(debounce_ms: 30)
+      path = watched_event_path(pid)
 
-      send(pid, {:file_event, self(), {"/some/path/config.toml", [:modified]}})
+      send(pid, {:file_event, self(), {path, [:modified]}})
       Process.sleep(10)
       state = :sys.get_state(pid)
       assert state.debounce_ref != nil
@@ -304,10 +323,11 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
 
     test "multiple rapid events coalesce via debounce" do
       pid = start_watcher!(debounce_ms: 100)
+      path = watched_event_path(pid)
 
       # Send multiple events in rapid succession
       for _i <- 1..5 do
-        send(pid, {:file_event, self(), {"/some/path/config.toml", [:modified]}})
+        send(pid, {:file_event, self(), {path, [:modified]}})
         Process.sleep(5)
       end
 
@@ -334,11 +354,12 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
 
     test "handles various file event types" do
       pid = start_watcher!(debounce_ms: 500)
+      path = watched_event_path(pid)
 
       events = [[:created], [:modified], [:deleted], [:renamed], [:modified, :created]]
 
       for event <- events do
-        send(pid, {:file_event, self(), {"/some/path", event}})
+        send(pid, {:file_event, self(), {path, event}})
         Process.sleep(5)
       end
 
@@ -355,9 +376,10 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
   describe "handle_info - :debounced_reload" do
     test "clears debounce_ref in state" do
       pid = start_watcher!(debounce_ms: 5_000)
+      path = watched_event_path(pid)
 
       # Set up a debounce_ref via file event
-      send(pid, {:file_event, self(), {"/path/file", [:modified]}})
+      send(pid, {:file_event, self(), {path, [:modified]}})
       Process.sleep(10)
       state = :sys.get_state(pid)
       assert state.debounce_ref != nil

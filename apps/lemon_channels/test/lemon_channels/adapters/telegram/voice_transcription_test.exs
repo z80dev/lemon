@@ -2,7 +2,7 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
   alias Elixir.LemonChannels, as: LemonChannels
   use ExUnit.Case, async: false
 
-  defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.TestRouter do
+  defmodule VoiceTestRouter do
     def handle_inbound(msg) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
         send(pid, {:inbound, msg})
@@ -12,7 +12,7 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
     end
   end
 
-  defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.MockAPI do
+  defmodule VoiceMockAPI do
     @updates_key {__MODULE__, :updates}
     @sent_key {__MODULE__, :sent}
 
@@ -67,10 +67,10 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
   end
 
   setup do
-    :persistent_term.put({Elixir.LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.TestRouter, :pid}, self())
+    :persistent_term.put({VoiceTestRouter, :pid}, self())
     :persistent_term.put({TestTranscriber, :pid}, self())
-    Elixir.LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.MockAPI.register_sent(self())
-    LemonCore.RouterBridge.configure(router: Elixir.LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.TestRouter)
+    VoiceMockAPI.register_sent(self())
+    LemonCore.RouterBridge.configure(router: VoiceTestRouter)
 
     on_exit(fn ->
       if pid = Process.whereis(Elixir.LemonChannels.Adapters.Telegram.Transport) do
@@ -79,10 +79,10 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
         end
       end
 
-      :persistent_term.erase({Elixir.LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.TestRouter, :pid})
+      :persistent_term.erase({VoiceTestRouter, :pid})
       :persistent_term.erase({TestTranscriber, :pid})
-      :persistent_term.erase({Elixir.LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.MockAPI, :sent})
-      :persistent_term.erase({Elixir.LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.MockAPI, :updates})
+      :persistent_term.erase({VoiceMockAPI, :sent})
+      :persistent_term.erase({VoiceMockAPI, :updates})
     end)
 
     :ok
@@ -107,13 +107,13 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
   end
 
   test "transcribes voice and routes transcript" do
-    Elixir.LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.MockAPI.set_updates([voice_update()])
+    VoiceMockAPI.set_updates([voice_update()])
 
     {:ok, _pid} =
       Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
           bot_token: "token",
-          api_mod: Elixir.LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.MockAPI,
+          api_mod: VoiceMockAPI,
           poll_interval_ms: 10,
           debounce_ms: 10,
           voice_transcription: true,
@@ -132,13 +132,13 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
   end
 
   test "voice disabled replies and skips routing" do
-    Elixir.LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.MockAPI.set_updates([voice_update()])
+    VoiceMockAPI.set_updates([voice_update()])
 
     {:ok, _pid} =
       Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
           bot_token: "token",
-          api_mod: Elixir.LemonChannels.Adapters.Telegram.VoiceTranscriptionTest.MockAPI,
+          api_mod: VoiceMockAPI,
           poll_interval_ms: 10,
           debounce_ms: 10,
           voice_transcription: false,
