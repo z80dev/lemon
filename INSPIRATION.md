@@ -18,3 +18,20 @@
 - `IDEA-20260224-ironclaw-signal-channel-adapter`
 - `IDEA-20260224-oh-my-pi-model-role-badge`
 - `IDEA-20260224-community-quota-aware-agent-runs`
+
+## 2026-02-25 Research Snapshot
+
+### Upstream repo deltas reviewed
+- **ironclaw**: setup wizard now includes an OpenRouter preset with provider-specific labeling and prefilled base URL (`62dc5d046e28`)
+- **openclaw**: cron path/schema hardening around `jobId` handling for `cron.runs` (`259d86335378`)
+- **oh-my-pi / pi**: no additional high-priority functional gaps in latest week window beyond already tracked ideas
+
+### Community/trend signals
+- Long-run coding users continue requesting **auto-resume after provider limit reset** rather than manual return/resume.
+- Industry automation guidance is converging on **workflow-as-markdown + mandatory human review** for high-impact actions.
+
+### New ideas added
+- `IDEA-20260225-ironclaw-openrouter-setup-preset`
+- `IDEA-20260225-openclaw-cron-jobid-hardening`
+- `IDEA-20260225-community-rate-limit-auto-resume`
+- `IDEA-20260225-community-guardrailed-agentic-workflows`
