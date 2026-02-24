@@ -397,9 +397,8 @@ defmodule CodingAgent.Tools.FeatureRequirements do
       max_tokens: 4000
     ]
 
-    case Ai.chat(model, context, opts) do
-      {:ok, %{content: content}} -> {:ok, content}
-      {:ok, content} when is_binary(content) -> {:ok, content}
+    case Ai.complete(model, context, opts) do
+      {:ok, message} -> {:ok, Ai.get_text(message)}
       {:error, reason} -> {:error, reason}
     end
   end

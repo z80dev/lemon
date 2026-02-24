@@ -381,7 +381,7 @@ defmodule CodingAgent.Checkpoint do
     end
   end
 
-  defp load_requirements(session_id) do
+  defp load_requirements(_session_id) do
     # Try to infer the project directory from session_id
     # This is a heuristic - in practice, the session would store its cwd
     case CodingAgent.Tools.FeatureRequirements.load_requirements(".") do
