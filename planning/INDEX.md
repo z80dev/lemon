@@ -100,12 +100,16 @@ Research findings from upstream projects (oh-my-pi, pi, openclaw, ironclaw, nano
 | [IDEA-20260224-community-wasm-sandbox-tools](ideas/IDEA-20260224-community-wasm-sandbox-tools.md) | WASM Sandbox for AI Tool Execution | community | `proposed` | M | H | **Proceed** - Industry trend, enhances existing WASM support |
 | [IDEA-20260224-community-channel-adapters](ideas/IDEA-20260224-community-channel-adapters.md) | Additional Channel Adapters (Discord, Slack, WhatsApp) | community | `proposed` | M | H | **Investigate** - High demand, OpenClaw's key differentiator |
 | [IDEA-20260224-community-long-running-agent-harnesses](ideas/IDEA-20260224-community-long-running-agent-harnesses.md) | Long-Running Agent Harnesses and Task Management | community | `proposed` | M | M | **Proceed** - Addresses common pain point, builds on todo system |
+| [IDEA-20260224-openclaw-env-backed-secret-refs](ideas/IDEA-20260224-openclaw-env-backed-secret-refs.md) | Env-Backed Secret References and Plaintext-Free Auth Persistence | openclaw | `proposed` | M | H | **Proceed** - Strong security value; closes secret-ref implementation gap |
+| [IDEA-20260224-ironclaw-signal-channel-adapter](ideas/IDEA-20260224-ironclaw-signal-channel-adapter.md) | Native Signal Channel Adapter via signal-cli HTTP Daemon | ironclaw | `proposed` | M | M | **Investigate** - Good channel expansion after core channel priorities |
+| [IDEA-20260224-oh-my-pi-model-role-badge](ideas/IDEA-20260224-oh-my-pi-model-role-badge.md) | Model Picker Role Badges in /model UX | oh-my-pi | `proposed` | S | L | **Defer** - Helpful UI polish but lower strategic impact |
+| [IDEA-20260224-community-quota-aware-agent-runs](ideas/IDEA-20260224-community-quota-aware-agent-runs.md) | Quota-Aware Long-Run Planning and Resume Checkpoints | community | `proposed` | M | M | **Investigate** - Improve long-session completion under usage limits |
 
 ### Summary
 
-- **High Priority (Proceed/Verify)**: 4 ideas - Skill discovery, security sanitization, config redaction, context compaction
-- **Medium Priority (Investigate)**: 4 ideas - Todo management, model resolver, WASM activation, strict mode
-- **Low Priority (Defer)**: 3 ideas - Streaming highlight, shell completion, voice transcription
+- **High Priority (Proceed/Verify)**: 5 ideas - Skill discovery, security sanitization, config redaction, context compaction, env-backed secret refs
+- **Medium Priority (Investigate)**: 5 ideas - Todo management, model resolver, WASM activation, strict mode, Signal/quota-aware workflows
+- **Low Priority (Defer)**: 4 ideas - Streaming highlight, shell completion, voice transcription, model-role badge UX
 
 ### Community Research Summary (2026-02-24)
 
@@ -114,13 +118,14 @@ New findings from community research:
 | Priority | Ideas | Key Themes |
 |----------|-------|------------|
 | **Proceed** | 3 | MCP integration, WASM sandboxing, Long-running harnesses |
-| **Investigate** | 2 | Multi-agent orchestration, Channel adapters |
+| **Investigate** | 3 | Multi-agent orchestration, Channel adapters, Quota-aware task planning |
 
 **Key Insights:**
 1. **MCP is becoming an industry standard** - Multiple frameworks competing on MCP support
 2. **Multi-channel is table stakes** - OpenClaw's success driven by Discord/Telegram/Slack support
 3. **WASM sandboxing is the future** - Microsoft, NVIDIA, and others investing heavily
 4. **Long-running agents need better harnesses** - Common pain point of agents "one-shotting" tasks
+5. **Quota friction hurts long sessions** - Users report limits interrupting multi-hour coding flows
 
 **Strategic Opportunities:**
 - Discord adapter would capture OpenClaw-style community use cases
