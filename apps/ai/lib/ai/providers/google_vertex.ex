@@ -223,41 +223,22 @@ defmodule Ai.Providers.GoogleVertex do
   end
 
   defp sign_and_exchange_jwt(claims, private_key, token_uri) do
-    # This is a simplified implementation
-    # In production, you'd use a proper JWT library like JOSE
-    # For now, we'll use a shell command with openssl if available
-
     header = %{"alg" => "RS256", "typ" => "JWT"}
 
     header_b64 = Base.url_encode64(Jason.encode!(header), padding: false)
     claims_b64 = Base.url_encode64(Jason.encode!(claims), padding: false)
     signing_input = "#{header_b64}.#{claims_b64}"
 
-    # Write private key to temp file for openssl
-    tmp_key_path = Path.join(System.tmp_dir!(), "gcp_key_#{:erlang.unique_integer([:positive])}.pem")
-    File.write!(tmp_key_path, private_key)
+    # Parse PEM and sign with Erlang's :public_key (no shell needed)
+    [pem_entry] = :public_key.pem_decode(private_key)
+    rsa_key = :public_key.pem_entry_decode(pem_entry)
+    signature = :public_key.sign(signing_input, :sha256, rsa_key)
 
-    try do
-      # Sign with openssl
-      signature =
-        case System.cmd(
-               "openssl",
-               ["dgst", "-sha256", "-sign", tmp_key_path],
-               stdin: signing_input,
-               stderr_to_stdout: true
-             ) do
-          {sig, 0} -> sig
-          {error, _} -> raise "OpenSSL signing failed: #{error}"
-        end
+    signature_b64 = Base.url_encode64(signature, padding: false)
+    jwt = "#{signing_input}.#{signature_b64}"
 
-      signature_b64 = Base.url_encode64(signature, padding: false)
-      jwt = "#{signing_input}.#{signature_b64}"
-
-      # Exchange JWT for access token
-      exchange_jwt_for_token(jwt, token_uri)
-    after
-      File.rm(tmp_key_path)
-    end
+    # Exchange JWT for access token
+    exchange_jwt_for_token(jwt, token_uri)
   end
 
   defp exchange_jwt_for_token(jwt, token_uri) do
