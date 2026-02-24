@@ -139,6 +139,7 @@ defmodule LemonCore.Config do
     "default_cwd" => nil,
     "auto_resume" => false,
     "enable_telegram" => false,
+    "enable_discord" => false,
     "require_engine_lock" => true,
     "engine_lock_timeout_ms" => 60_000,
     "projects" => %{},
@@ -150,6 +151,7 @@ defmodule LemonCore.Config do
       "drop" => nil
     },
     "telegram" => %{},
+    "discord" => %{},
     "engines" => %{}
   }
 
@@ -416,6 +418,7 @@ defmodule LemonCore.Config do
       default_cwd: parse_optional_string(map["default_cwd"]),
       auto_resume: parse_boolean(map["auto_resume"], false),
       enable_telegram: parse_boolean(map["enable_telegram"], false),
+      enable_discord: parse_boolean(map["enable_discord"], false),
       require_engine_lock: parse_boolean(map["require_engine_lock"], true),
       engine_lock_timeout_ms: map["engine_lock_timeout_ms"],
       projects: parse_gateway_projects(map["projects"] || %{}),
@@ -423,6 +426,7 @@ defmodule LemonCore.Config do
       sms: parse_gateway_sms(map["sms"] || %{}),
       queue: parse_gateway_queue(map["queue"] || %{}),
       telegram: parse_gateway_telegram(map["telegram"] || %{}),
+      discord: parse_gateway_discord(map["discord"] || %{}),
       engines: parse_gateway_engines(map["engines"] || %{})
     }
   end
@@ -544,6 +548,18 @@ defmodule LemonCore.Config do
   end
 
   defp parse_gateway_telegram_files(_), do: %{}
+
+  defp parse_gateway_discord(map) do
+    map = stringify_keys(map)
+
+    %{
+      bot_token: parse_optional_string(map["bot_token"]),
+      allowed_guild_ids: map["allowed_guild_ids"],
+      allowed_channel_ids: map["allowed_channel_ids"],
+      deny_unbound_channels: parse_boolean(map["deny_unbound_channels"], false)
+    }
+    |> reject_nil_values()
+  end
 
   defp parse_gateway_engines(map) when is_map(map) do
     map

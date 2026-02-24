@@ -539,4 +539,26 @@ defmodule LemonCore.ConfigTest do
     assert config.gateway.telegram.compaction.reserve_tokens == 16_384
     assert config.gateway.telegram.compaction.trigger_ratio == 0.9
   end
+
+  test "parses gateway discord settings", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [gateway]
+    enable_discord = true
+
+    [gateway.discord]
+    bot_token = "discord-token"
+    allowed_guild_ids = [1475727416549969980]
+    deny_unbound_channels = false
+    """)
+
+    config = Config.load()
+
+    assert config.gateway.enable_discord == true
+    assert config.gateway.discord.bot_token == "discord-token"
+    assert config.gateway.discord.allowed_guild_ids == [1475727416549969980]
+    assert config.gateway.discord.deny_unbound_channels == false
+  end
 end
