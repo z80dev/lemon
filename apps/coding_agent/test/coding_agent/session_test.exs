@@ -228,6 +228,14 @@ defmodule CodingAgent.SessionTest do
       assert state.model.id == "gemini-2.5-pro"
     end
 
+    test "accepts provider/model string model specs" do
+      session = start_session(model: "google_vertex/gemini-3.1-pro-preview")
+      state = Session.get_state(session)
+
+      assert state.model.provider == :google_vertex
+      assert state.model.id == "gemini-3.1-pro-preview"
+    end
+
     test "accepts bare model_id string specs" do
       session = start_session(model: "gpt-5.3-codex")
       state = Session.get_state(session)

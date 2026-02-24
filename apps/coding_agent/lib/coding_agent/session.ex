@@ -572,7 +572,8 @@ defmodule CodingAgent.Session do
         session_scope
       )
 
-    # Resolve explicit model overrides (including provider:model strings) or
+    # Resolve explicit model overrides (including provider:model and provider/model
+    # strings) or
     # fall back to settings_manager.default_model.
     model = resolve_session_model(Keyword.get(opts, :model), settings_manager)
 
@@ -1651,7 +1652,10 @@ defmodule CodingAgent.Session do
       true ->
         case String.split(trimmed, ":", parts: 2) do
           [model_id] ->
-            lookup_model(nil, non_empty_string(model_id))
+            # Prefer exact model-id lookup first so slash-style provider-scoped IDs
+            # (for example "google/gemini-3.1-pro-preview") continue to resolve as-is.
+            lookup_model(nil, non_empty_string(model_id)) ||
+              resolve_slash_model_spec(model_id)
 
           [provider, model_id] ->
             provider = non_empty_string(provider)
@@ -1680,6 +1684,24 @@ defmodule CodingAgent.Session do
   end
 
   defp resolve_explicit_model(_), do: nil
+
+  @spec resolve_slash_model_spec(String.t()) :: Ai.Types.Model.t() | nil
+  defp resolve_slash_model_spec(model_spec) when is_binary(model_spec) do
+    case String.split(model_spec, "/", parts: 2) do
+      [provider, model_id] ->
+        provider = non_empty_string(provider)
+        model_id = non_empty_string(model_id)
+
+        if provider && model_id do
+          lookup_model(provider, model_id)
+        else
+          nil
+        end
+
+      _ ->
+        nil
+    end
+  end
 
   @spec lookup_model(String.t() | nil, String.t() | nil) :: Ai.Types.Model.t() | nil
   defp lookup_model(_provider, nil), do: nil
