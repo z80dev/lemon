@@ -6,6 +6,7 @@ defmodule LemonRouter.Router do
   - Normalizing inbound messages from different channels
   - Routing to the appropriate session
   - Handling abort requests
+  - Applying pending compaction for all channels (generic path)
   """
 
   alias LemonCore.RunRequest
@@ -14,10 +15,15 @@ defmodule LemonRouter.Router do
 
   require Logger
 
+  # Pending compaction markers older than 12 hours are considered stale.
+  @pending_compaction_ttl_ms 12 * 60 * 60 * 1000
+
   @doc """
   Handle an inbound message from a channel.
 
   Normalizes the message and submits it to the orchestrator.
+  Before submission, applies any pending compaction marker for the session
+  (unless the channel adapter already handled it, indicated by meta.auto_compacted).
   """
   @spec handle_inbound(LemonCore.InboundMessage.t()) :: :ok
   def handle_inbound(%LemonCore.InboundMessage{} = msg) do
@@ -29,6 +35,11 @@ defmodule LemonRouter.Router do
 
     agent_id =
       meta[:agent_id] || meta["agent_id"] || SessionKey.agent_id(session_key) || "default"
+
+    # Apply generic pending-compaction before building the run request.
+    # Telegram transport sets auto_compacted=true before reaching here; the guard
+    # prevents double-injection.
+    {msg, meta} = maybe_apply_pending_compaction(msg, meta, session_key)
 
     request = build_inbound_run_request(msg, meta, session_key, agent_id)
 
@@ -204,5 +215,156 @@ defmodule LemonRouter.Router do
 
   defp run_orchestrator do
     Application.get_env(:lemon_router, :run_orchestrator, RunOrchestrator)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Generic pending-compaction consumer
+  # ---------------------------------------------------------------------------
+
+  @doc false
+  def maybe_apply_pending_compaction(msg, meta, session_key) do
+    cond do
+      # Already compacted by a channel adapter (e.g. Telegram) — skip.
+      meta[:auto_compacted] == true or meta["auto_compacted"] == true ->
+        # Clear generic marker to avoid a second compaction injection
+        # on a subsequent turn after adapter-level compaction.
+        if is_binary(session_key), do: LemonCore.Store.delete(:pending_compaction, session_key)
+
+        {msg, meta}
+
+      true ->
+        case LemonCore.Store.get(:pending_compaction, session_key) do
+          pending when is_map(pending) ->
+            if pending_compaction_fresh?(pending) do
+              apply_compaction(msg, meta, session_key, pending)
+            else
+              # Stale marker — delete and proceed without compaction.
+              _ = LemonCore.Store.delete(:pending_compaction, session_key)
+
+              Logger.debug(
+                "Router cleared stale pending compaction session_key=#{inspect(session_key)}"
+              )
+
+              {msg, meta}
+            end
+
+          _ ->
+            {msg, meta}
+        end
+    end
+  rescue
+    _ -> {msg, meta}
+  end
+
+  defp apply_compaction(msg, meta, session_key, _pending) do
+    transcript =
+      LemonCore.Store.get_run_history(session_key, limit: 8)
+      |> format_run_history_transcript(max_chars: 8_000)
+
+    if transcript != "" do
+      _ = LemonCore.Store.delete(:pending_compaction, session_key)
+      text = build_pending_compaction_prompt(transcript, msg.message.text || "")
+      meta = Map.put(meta, :auto_compacted, true)
+
+      Logger.warning(
+        "Router applying pending compaction session_key=#{inspect(session_key)} " <>
+          "transcript_chars=#{byte_size(transcript)}"
+      )
+
+      {%{msg | message: Map.put(msg.message, :text, text)}, meta}
+    else
+      # No transcript to compact with; clear marker so we don't keep
+      # re-attempting compaction on every inbound.
+      _ = LemonCore.Store.delete(:pending_compaction, session_key)
+      {msg, meta}
+    end
+  rescue
+    _ -> {msg, meta}
+  end
+
+  defp pending_compaction_fresh?(pending) when is_map(pending) do
+    set_at_ms = pending[:set_at_ms] || pending["set_at_ms"]
+
+    cond do
+      is_integer(set_at_ms) ->
+        System.system_time(:millisecond) - set_at_ms <= @pending_compaction_ttl_ms
+
+      true ->
+        true
+    end
+  rescue
+    _ -> false
+  end
+
+  defp pending_compaction_fresh?(_), do: false
+
+  @doc false
+  def build_pending_compaction_prompt(transcript, user_text)
+      when is_binary(transcript) and is_binary(user_text) do
+    user_text = String.trim(user_text)
+
+    base =
+      [
+        "The previous conversation reached the model context limit.",
+        "Use this compact transcript as prior context and continue.",
+        "",
+        "<previous_conversation>",
+        transcript,
+        "</previous_conversation>"
+      ]
+      |> Enum.join("\n")
+
+    if user_text == "" do
+      String.trim(base <> "\n\nContinue.")
+    else
+      String.trim(base <> "\n\nUser:\n" <> user_text)
+    end
+  end
+
+  def build_pending_compaction_prompt(_transcript, user_text), do: user_text
+
+  defp format_run_history_transcript(history, opts) when is_list(history) do
+    max_chars = Keyword.get(opts, :max_chars, 12_000)
+
+    text =
+      history
+      |> Enum.reverse()
+      |> Enum.map(&format_run_history_entry/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.join("\n\n")
+      |> String.trim()
+
+    if String.length(text) > max_chars do
+      String.slice(text, String.length(text) - max_chars, max_chars)
+    else
+      text
+    end
+  rescue
+    _ -> ""
+  end
+
+  defp format_run_history_transcript(_other, _opts), do: ""
+
+  defp format_run_history_entry({_run_id, data}) when is_map(data) do
+    summary = data[:summary] || data["summary"] || %{}
+    prompt = summary[:prompt] || summary["prompt"] || ""
+    answer = summary[:answer] || summary["answer"] || ""
+
+    parts =
+      []
+      |> maybe_append("User: " <> String.trim(prompt), prompt)
+      |> maybe_append("Assistant: " <> String.trim(answer), answer)
+
+    Enum.join(parts, "\n")
+  end
+
+  defp format_run_history_entry(_), do: ""
+
+  defp maybe_append(parts, text, raw) do
+    if is_binary(raw) and String.trim(raw) != "" do
+      parts ++ [text]
+    else
+      parts
+    end
   end
 end

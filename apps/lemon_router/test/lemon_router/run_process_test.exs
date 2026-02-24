@@ -1313,6 +1313,266 @@ defmodule LemonRouter.RunProcessTest do
     end
   end
 
+  describe "usage-missing fallback compaction marking" do
+    test "marks pending compaction via char-based estimate when usage is nil" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      session_key =
+        SessionKey.channel_peer(%{
+          agent_id: "test-agent",
+          channel_id: "telegram",
+          account_id: "botx",
+          peer_kind: :group,
+          peer_id: "12345",
+          thread_id: "777"
+        })
+
+      pending_compaction_key = {"botx", 12_345, 777}
+      old_telegram_env = Application.get_env(:lemon_channels, :telegram)
+
+      # context_window=100, reserve=10, trigger_ratio=0.9 → threshold=min(90,90)=90
+      # A prompt with 400 chars → 400/4 = 100 estimated tokens → 100 >= 90 → should mark
+      Application.put_env(:lemon_channels, :telegram, %{
+        compaction: %{
+          enabled: true,
+          context_window_tokens: 100,
+          reserve_tokens: 10,
+          trigger_ratio: 0.9
+        }
+      })
+
+      on_exit(fn ->
+        if is_nil(old_telegram_env) do
+          Application.delete_env(:lemon_channels, :telegram)
+        else
+          Application.put_env(:lemon_channels, :telegram, old_telegram_env)
+        end
+      end)
+
+      _ = LemonCore.Store.delete(:pending_compaction, session_key)
+      _ = LemonCore.Store.delete(:telegram_pending_compaction, pending_compaction_key)
+
+      # Create a job with a long prompt (400 chars → ~100 estimated tokens)
+      long_prompt = String.duplicate("a", 400)
+
+      job = %LemonGateway.Types.Job{
+        run_id: run_id,
+        session_key: session_key,
+        prompt: long_prompt,
+        queue_mode: :collect,
+        engine_id: "echo",
+        meta: %{progress_msg_id: 111, user_msg_id: 222}
+      }
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false
+               })
+
+      # Send completed event with NO usage data
+      completed_event =
+        LemonCore.Event.new(
+          :run_completed,
+          %{
+            completed: %{
+              ok: true,
+              answer: "done"
+              # no usage field
+            }
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+
+      assert eventually(fn -> not Process.alive?(pid) end)
+
+      # Should have set the generic pending_compaction marker via char estimate
+      assert eventually(fn ->
+               case LemonCore.Store.get(:pending_compaction, session_key) do
+                 %{
+                   reason: "near_limit",
+                   input_tokens: estimated,
+                   token_source: "char_estimate",
+                   session_key: ^session_key
+                 }
+                 when is_integer(estimated) and estimated >= 90 ->
+                   true
+
+                 _ ->
+                   false
+               end
+             end)
+
+      # Clean up
+      _ = LemonCore.Store.delete(:pending_compaction, session_key)
+      _ = LemonCore.Store.delete(:telegram_pending_compaction, pending_compaction_key)
+    end
+
+    test "does not mark when char estimate is below threshold" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      session_key =
+        SessionKey.channel_peer(%{
+          agent_id: "test-agent",
+          channel_id: "telegram",
+          account_id: "botx",
+          peer_kind: :group,
+          peer_id: "12345",
+          thread_id: "888"
+        })
+
+      old_telegram_env = Application.get_env(:lemon_channels, :telegram)
+
+      # context_window=1000, reserve=100, trigger_ratio=0.9 → threshold=min(900,900)=900
+      # A prompt with 20 chars → 20/4 = 5 estimated tokens → 5 < 900 → should NOT mark
+      Application.put_env(:lemon_channels, :telegram, %{
+        compaction: %{
+          enabled: true,
+          context_window_tokens: 1_000,
+          reserve_tokens: 100,
+          trigger_ratio: 0.9
+        }
+      })
+
+      on_exit(fn ->
+        if is_nil(old_telegram_env) do
+          Application.delete_env(:lemon_channels, :telegram)
+        else
+          Application.put_env(:lemon_channels, :telegram, old_telegram_env)
+        end
+      end)
+
+      _ = LemonCore.Store.delete(:pending_compaction, session_key)
+
+      job = %LemonGateway.Types.Job{
+        run_id: run_id,
+        session_key: session_key,
+        prompt: "short prompt",
+        queue_mode: :collect,
+        engine_id: "echo",
+        meta: %{progress_msg_id: 111, user_msg_id: 222}
+      }
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false
+               })
+
+      completed_event =
+        LemonCore.Event.new(
+          :run_completed,
+          %{
+            completed: %{
+              ok: true,
+              answer: "done"
+            }
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+
+      assert eventually(fn -> not Process.alive?(pid) end)
+
+      # Short prompt → below threshold → no marker
+      Process.sleep(100)
+      assert LemonCore.Store.get(:pending_compaction, session_key) == nil
+    end
+
+    test "does not mark when completion payload omits explicit ok=true" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      session_key =
+        SessionKey.channel_peer(%{
+          agent_id: "test-agent",
+          channel_id: "telegram",
+          account_id: "botx",
+          peer_kind: :group,
+          peer_id: "12345",
+          thread_id: "999"
+        })
+
+      old_telegram_env = Application.get_env(:lemon_channels, :telegram)
+
+      Application.put_env(:lemon_channels, :telegram, %{
+        compaction: %{
+          enabled: true,
+          context_window_tokens: 100,
+          reserve_tokens: 10,
+          trigger_ratio: 0.9
+        }
+      })
+
+      on_exit(fn ->
+        if is_nil(old_telegram_env) do
+          Application.delete_env(:lemon_channels, :telegram)
+        else
+          Application.put_env(:lemon_channels, :telegram, old_telegram_env)
+        end
+      end)
+
+      _ = LemonCore.Store.delete(:pending_compaction, session_key)
+
+      job = %LemonGateway.Types.Job{
+        run_id: run_id,
+        session_key: session_key,
+        prompt: String.duplicate("a", 400),
+        queue_mode: :collect,
+        engine_id: "echo",
+        meta: %{progress_msg_id: 111, user_msg_id: 222}
+      }
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false
+               })
+
+      completed_event =
+        LemonCore.Event.new(
+          :run_completed,
+          %{
+            completed: %{
+              answer: "done"
+            }
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), completed_event)
+
+      assert eventually(fn -> not Process.alive?(pid) end)
+      Process.sleep(100)
+      assert LemonCore.Store.get(:pending_compaction, session_key) == nil
+    end
+  end
+
+  describe "estimate_input_tokens_from_prompt/1" do
+    test "returns char-based estimate for valid prompt" do
+      state = %{job: %LemonGateway.Types.Job{prompt: String.duplicate("a", 400)}}
+      assert RunProcess.estimate_input_tokens_from_prompt(state) == 100
+    end
+
+    test "returns nil when prompt is nil" do
+      state = %{job: %LemonGateway.Types.Job{prompt: nil}}
+      assert RunProcess.estimate_input_tokens_from_prompt(state) == nil
+    end
+
+    test "returns nil when job is missing" do
+      state = %{job: nil}
+      assert RunProcess.estimate_input_tokens_from_prompt(state) == nil
+    end
+  end
+
   describe "generated image tracking" do
     test "tracks image file_change paths from completed engine actions" do
       run_id = "run_#{System.unique_integer([:positive])}"

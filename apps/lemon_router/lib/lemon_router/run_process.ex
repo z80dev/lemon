@@ -1167,11 +1167,11 @@ defmodule LemonRouter.RunProcess do
 
   defp maybe_reset_resume_on_context_overflow(_state, _event), do: :ok
 
+  # Conservative chars-per-token ratio for fallback estimation (4 chars ≈ 1 token).
+  @fallback_chars_per_token 4
+
   defp maybe_mark_pending_compaction_near_limit(state, %LemonCore.Event{} = event) do
-    with {true, _} <- extract_completed_ok_and_error(event),
-         usage when is_map(usage) <- extract_completed_usage(event),
-         input_tokens when is_integer(input_tokens) and input_tokens > 0 <-
-           usage_input_tokens(usage),
+    with true <- explicit_completed_ok_true?(event),
          cfg <- preemptive_compaction_config(state.session_key),
          true <- cfg.enabled,
          context_window when is_integer(context_window) and context_window > 0 <-
@@ -1181,36 +1181,55 @@ defmodule LemonRouter.RunProcess do
              context_window,
              cfg.reserve_tokens,
              cfg.trigger_ratio
-           ),
-         true <- input_tokens >= threshold do
-      Logger.warning(
-        "RunProcess pending compaction marker run_id=#{inspect(state.run_id)} " <>
-          "session_key=#{inspect(state.session_key)} input_tokens=#{input_tokens} " <>
-          "threshold=#{threshold} context_window=#{context_window}"
-      )
+           ) do
+      # Try precise usage first; fall back to char-based estimate.
+      usage = extract_completed_usage(event)
+      input_tokens = if is_map(usage), do: usage_input_tokens(usage), else: nil
 
-      compaction_details = %{
-        input_tokens: input_tokens,
-        threshold_tokens: threshold,
-        context_window_tokens: context_window
-      }
+      {effective_tokens, source} =
+        if is_integer(input_tokens) and input_tokens > 0 do
+          {input_tokens, :usage}
+        else
+          estimate = estimate_input_tokens_from_prompt(state)
 
-      # Generic compaction marker for all session types
-      LemonCore.Store.put(:pending_compaction, state.session_key, %{
-        reason: "near_limit",
-        session_key: state.session_key,
-        set_at_ms: System.system_time(:millisecond),
-        input_tokens: input_tokens,
-        threshold_tokens: threshold,
-        context_window_tokens: context_window
-      })
+          if is_integer(estimate) and estimate > 0 do
+            {estimate, :char_estimate}
+          else
+            {nil, :none}
+          end
+        end
 
-      # Telegram-specific compaction marker (preserves existing behavior)
-      mark_telegram_pending_compaction(
-        state.session_key,
-        :near_limit,
-        compaction_details
-      )
+      if is_integer(effective_tokens) and effective_tokens >= threshold do
+        Logger.warning(
+          "RunProcess pending compaction marker run_id=#{inspect(state.run_id)} " <>
+            "session_key=#{inspect(state.session_key)} input_tokens=#{effective_tokens} " <>
+            "threshold=#{threshold} context_window=#{context_window} source=#{source}"
+        )
+
+        compaction_details = %{
+          input_tokens: effective_tokens,
+          threshold_tokens: threshold,
+          context_window_tokens: context_window
+        }
+
+        # Generic compaction marker for all session types
+        LemonCore.Store.put(:pending_compaction, state.session_key, %{
+          reason: "near_limit",
+          session_key: state.session_key,
+          set_at_ms: System.system_time(:millisecond),
+          input_tokens: effective_tokens,
+          threshold_tokens: threshold,
+          context_window_tokens: context_window,
+          token_source: to_string(source)
+        })
+
+        # Telegram-specific compaction marker (preserves existing behavior)
+        mark_telegram_pending_compaction(
+          state.session_key,
+          :near_limit,
+          compaction_details
+        )
+      end
     else
       _ -> :ok
     end
@@ -1221,6 +1240,42 @@ defmodule LemonRouter.RunProcess do
   end
 
   defp maybe_mark_pending_compaction_near_limit(_state, _event), do: :ok
+
+  # For near-limit preemptive compaction we require an explicit success signal.
+  # This avoids marking compaction from malformed/legacy payloads where `ok`
+  # is missing and defaults could otherwise be interpreted as success.
+  defp explicit_completed_ok_true?(%LemonCore.Event{} = event) do
+    completed =
+      event.payload
+      |> fetch(:completed)
+      |> case do
+        %{} = c -> c
+        _ -> %{}
+      end
+
+    fetch(completed, :ok) === true
+  rescue
+    _ -> false
+  end
+
+  defp explicit_completed_ok_true?(_), do: false
+
+  @doc false
+  def estimate_input_tokens_from_prompt(state) do
+    prompt =
+      case Map.get(state, :job) do
+        %LemonGateway.Types.Job{prompt: p} when is_binary(p) -> p
+        _ -> nil
+      end
+
+    if is_binary(prompt) and byte_size(prompt) > 0 do
+      div(byte_size(prompt), @fallback_chars_per_token)
+    else
+      nil
+    end
+  rescue
+    _ -> nil
+  end
 
   @spec context_length_exceeded_error?(term()) :: boolean()
   defp context_length_exceeded_error?(err) do
