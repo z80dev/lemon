@@ -33,6 +33,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   @providers_per_page 8
   @models_per_page 8
   @model_default_engine "lemon"
+  @thinking_levels ~w(off minimal low medium high xhigh)
   @idle_keepalive_continue_callback_prefix "lemon:idle:c:"
   @idle_keepalive_stop_callback_prefix "lemon:idle:k:"
 
@@ -654,6 +655,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       model_command?(original_text, state.bot_username) ->
         handle_model_command(state, inbound)
 
+      thinking_command?(original_text, state.bot_username) ->
+        handle_thinking_command(state, inbound)
+
       new_command?(original_text, state.bot_username) ->
         args = telegram_command_args(original_text, "new")
         handle_new_session(state, inbound, args)
@@ -794,6 +798,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     end
 
     {model_hint, model_scope} = resolve_model_hint(state, session_key, chat_id, thread_id)
+    {thinking_hint, thinking_scope} = resolve_thinking_hint(state, chat_id, thread_id)
 
     meta =
       meta0
@@ -801,6 +806,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       |> Map.put(:forked_session, forked?)
       |> maybe_put(:model, model_hint)
       |> maybe_put(:model_scope, model_scope)
+      |> maybe_put(:thinking_level, thinking_hint)
+      |> maybe_put(:thinking_scope, thinking_scope)
 
     meta =
       if is_binary(model_hint) and model_hint != "" and not is_binary(meta[:engine_id]) do
@@ -926,6 +933,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp model_command?(text, bot_username) do
     telegram_command?(text, "model", bot_username)
+  end
+
+  defp thinking_command?(text, bot_username) do
+    telegram_command?(text, "thinking", bot_username)
   end
 
   defp trigger_command?(text, bot_username) do
@@ -2284,6 +2295,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     {provider_hint, model_id} = split_model_hint(model_hint)
     model_value = if(is_binary(model_id) and model_id != "", do: model_id, else: model_hint)
     model_line = format_model_line(model_value, model_scope)
+    {thinking_hint, thinking_scope} = resolve_thinking_hint(state, scope.chat_id, scope.topic_id)
+    thinking_line = format_thinking_line(thinking_hint, thinking_scope)
 
     provider_line =
       if(is_binary(provider_hint) and provider_hint != "", do: provider_hint, else: "(default)")
@@ -2298,6 +2311,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     [
       base_msg,
       "Model: #{model_line}",
+      "Thinking: #{thinking_line}",
       "Provider: #{provider_line}",
       "Engine: #{engine_line}",
       "CWD: #{cwd_line}",
@@ -2404,6 +2418,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       engine_id = last_engine_hint(session_key) || (inbound.meta || %{})[:engine_id]
       agent_id = (inbound.meta || %{})[:agent_id] || "default"
 
+      {thinking_hint, _thinking_scope} =
+        resolve_thinking_hint(state, scope.chat_id, scope.topic_id)
+
       meta =
         (inbound.meta || %{})
         |> Map.put(:progress_msg_id, progress_msg_id)
@@ -2412,6 +2429,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         |> Map.put(:user_msg_id, user_msg_id)
         |> Map.put(:command, :new)
         |> Map.put(:record_memories, true)
+        |> maybe_put(:thinking_level, thinking_hint)
         |> Map.merge(%{
           channel_id: inbound.channel_id,
           account_id: inbound.account_id,
@@ -2650,6 +2668,42 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp resolve_model_hint(_state, _session_key, _chat_id, _thread_id), do: {nil, nil}
 
+  defp resolve_thinking_hint(state, chat_id, thread_id) when is_integer(chat_id) do
+    account_id = state.account_id || "default"
+
+    topic_level =
+      if is_integer(thread_id),
+        do: default_thinking_preference(account_id, chat_id, thread_id),
+        else: nil
+
+    chat_level = default_thinking_preference(account_id, chat_id, nil)
+
+    cond do
+      is_binary(topic_level) and topic_level != "" ->
+        {topic_level, :topic}
+
+      is_binary(chat_level) and chat_level != "" ->
+        {chat_level, :chat}
+
+      true ->
+        {nil, nil}
+    end
+  rescue
+    _ -> {nil, nil}
+  end
+
+  defp resolve_thinking_hint(_state, _chat_id, _thread_id), do: {nil, nil}
+
+  defp format_thinking_line(level, source) when is_binary(level) and level != "" do
+    case source do
+      :topic -> "#{level} (topic default)"
+      :chat -> "#{level} (chat default)"
+      _ -> level
+    end
+  end
+
+  defp format_thinking_line(_level, _source), do: "(default)"
+
   defp session_model_override(session_key) when is_binary(session_key) do
     case CoreStore.get(:telegram_session_model, session_key) do
       model when is_binary(model) and model != "" -> model
@@ -2697,6 +2751,63 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp put_default_model_preference(_state, _chat_id, _thread_id, _model), do: :ok
+
+  defp default_thinking_preference(account_id, chat_id, thread_id)
+       when is_binary(account_id) and is_integer(chat_id) do
+    key = {account_id, chat_id, thread_id}
+
+    case CoreStore.get(:telegram_default_thinking, key) do
+      %{thinking_level: level} -> normalize_thinking_level(level)
+      %{"thinking_level" => level} -> normalize_thinking_level(level)
+      level -> normalize_thinking_level(level)
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp default_thinking_preference(_account_id, _chat_id, _thread_id), do: nil
+
+  defp put_default_thinking_preference(account_id, chat_id, thread_id, level)
+       when is_binary(account_id) and is_integer(chat_id) and is_binary(level) do
+    normalized = normalize_thinking_level(level)
+
+    if is_binary(normalized) and normalized != "" do
+      key = {account_id, chat_id, thread_id}
+      payload = %{thinking_level: normalized, updated_at_ms: System.system_time(:millisecond)}
+      CoreStore.put(:telegram_default_thinking, key, payload)
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp put_default_thinking_preference(_account_id, _chat_id, _thread_id, _level), do: :ok
+
+  defp clear_default_thinking_preference(account_id, chat_id, thread_id)
+       when is_binary(account_id) and is_integer(chat_id) do
+    key = {account_id, chat_id, thread_id}
+    had_override? = is_binary(default_thinking_preference(account_id, chat_id, thread_id))
+    _ = CoreStore.delete(:telegram_default_thinking, key)
+    had_override?
+  rescue
+    _ -> false
+  end
+
+  defp clear_default_thinking_preference(_account_id, _chat_id, _thread_id), do: false
+
+  defp normalize_thinking_level(level) when is_atom(level) do
+    level
+    |> Atom.to_string()
+    |> normalize_thinking_level()
+  end
+
+  defp normalize_thinking_level(level) when is_binary(level) do
+    normalized = String.downcase(String.trim(level))
+    if normalized in @thinking_levels, do: normalized, else: nil
+  end
+
+  defp normalize_thinking_level(_), do: nil
 
   # Update only last_engine in chat state, preserving last_resume_token and other fields.
   defp update_chat_state_last_engine(session_key, engine) when is_binary(session_key) do
@@ -3564,6 +3675,167 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp render_trigger_mode_set(mode, %ChatScope{topic_id: _}) do
     "Trigger mode set to #{mode} for this topic."
   end
+
+  defp handle_thinking_command(state, inbound) do
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
+    args = String.trim(telegram_command_args(inbound.message.text, "thinking") || "")
+
+    if not is_integer(chat_id) do
+      state
+    else
+      account_id = state.account_id || "default"
+      scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
+
+      case normalize_thinking_command_arg(args) do
+        :status ->
+          _ =
+            send_system_message(
+              state,
+              chat_id,
+              thread_id,
+              user_msg_id,
+              render_thinking_status(state, scope)
+            )
+
+          state
+
+        :clear ->
+          had_override? = clear_default_thinking_preference(account_id, chat_id, thread_id)
+
+          _ =
+            send_system_message(
+              state,
+              chat_id,
+              thread_id,
+              user_msg_id,
+              render_thinking_cleared(scope, had_override?)
+            )
+
+          state
+
+        {:set, level} ->
+          :ok = put_default_thinking_preference(account_id, chat_id, thread_id, level)
+
+          _ =
+            send_system_message(
+              state,
+              chat_id,
+              thread_id,
+              user_msg_id,
+              render_thinking_set(scope, level)
+            )
+
+          state
+
+        :invalid ->
+          _ = send_system_message(state, chat_id, thread_id, user_msg_id, thinking_usage())
+          state
+      end
+    end
+  rescue
+    _ -> state
+  end
+
+  defp normalize_thinking_command_arg(args) when is_binary(args) do
+    case String.downcase(String.trim(args)) do
+      "" -> :status
+      "clear" -> :clear
+      level when level in @thinking_levels -> {:set, level}
+      _ -> :invalid
+    end
+  end
+
+  defp normalize_thinking_command_arg(_), do: :invalid
+
+  defp render_thinking_status(state, %ChatScope{} = scope) do
+    account_id = state.account_id || "default"
+    chat_id = scope.chat_id
+    topic_id = scope.topic_id
+
+    topic_level =
+      if is_integer(topic_id),
+        do: default_thinking_preference(account_id, chat_id, topic_id),
+        else: nil
+
+    chat_level = default_thinking_preference(account_id, chat_id, nil)
+
+    {effective_level, source} =
+      cond do
+        is_binary(topic_level) and topic_level != "" -> {topic_level, :topic}
+        is_binary(chat_level) and chat_level != "" -> {chat_level, :chat}
+        true -> {nil, nil}
+      end
+
+    scope_label = thinking_scope_label(scope)
+
+    effective_line =
+      "Thinking level for #{scope_label}: #{format_thinking_line(effective_level, source)}"
+
+    chat_line =
+      case chat_level do
+        level when is_binary(level) and level != "" -> "Chat default: #{level}."
+        _ -> "Chat default: none."
+      end
+
+    topic_line =
+      case topic_level do
+        level when is_binary(level) and level != "" -> "Topic override: #{level}."
+        _ -> "Topic override: none."
+      end
+
+    [effective_line, chat_line, topic_line, thinking_usage()]
+    |> Enum.join("\n")
+  rescue
+    _ -> thinking_usage()
+  end
+
+  defp render_thinking_set(%ChatScope{topic_id: topic_id}, level)
+       when is_integer(topic_id) and is_binary(level) do
+    [
+      "Thinking level set to #{level} for this topic.",
+      "New runs in this topic will use this setting.",
+      thinking_usage()
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp render_thinking_set(%ChatScope{}, level) when is_binary(level) do
+    [
+      "Thinking level set to #{level} for this chat.",
+      "New runs in this chat will use this setting.",
+      thinking_usage()
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp render_thinking_set(_scope, level) when is_binary(level),
+    do: "Thinking level set to #{level}."
+
+  defp render_thinking_cleared(%ChatScope{topic_id: topic_id}, had_override?)
+       when is_integer(topic_id) do
+    if had_override? do
+      "Cleared thinking level override for this topic."
+    else
+      "No /thinking override was set for this topic."
+    end
+  end
+
+  defp render_thinking_cleared(%ChatScope{}, had_override?) do
+    if had_override? do
+      "Cleared thinking level override for this chat."
+    else
+      "No /thinking override was set for this chat."
+    end
+  end
+
+  defp render_thinking_cleared(_scope, _had_override?), do: "Thinking level override cleared."
+
+  defp thinking_scope_label(%ChatScope{topic_id: topic_id}) when is_integer(topic_id),
+    do: "this topic"
+
+  defp thinking_scope_label(_), do: "this chat"
+
+  defp thinking_usage, do: "Usage: /thinking [off|minimal|low|medium|high|xhigh|clear]"
 
   defp handle_cwd_command(state, inbound) do
     {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)

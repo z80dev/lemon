@@ -210,6 +210,69 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
     assert BindingResolver.resolve_cwd(scope) == nil
   end
 
+  test "/thinking sets topic thinking level and new sessions use it" do
+    chat_id = 444_005
+    topic_id = 103
+    msg_id = System.unique_integer([:positive])
+
+    MockAPI.set_updates([
+      topic_message_update(chat_id, topic_id, "/thinking high", msg_id + 1),
+      topic_message_update(chat_id, topic_id, "/new", msg_id + 2),
+      topic_message_update(chat_id, topic_id, "hello", msg_id + 3)
+    ])
+
+    assert {:ok, _pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               deny_unbound_chats: false
+             })
+
+    assert_receive {:send_message, ^chat_id, thinking_msg, _reply_to_or_opts, _parse_mode}, 800
+    assert thinking_msg =~ "Thinking level set to high for this topic."
+
+    assert_receive {:send_message, ^chat_id, new_session_msg, _reply_to_or_opts, _parse_mode},
+                   800
+
+    assert String.starts_with?(new_session_msg, "Started a new session.")
+    assert String.contains?(new_session_msg, "Thinking: high (topic default)")
+
+    assert_receive {:inbound, inbound}, 1_200
+    assert inbound.message.text == "hello"
+    assert inbound.meta[:thinking_level] == "high"
+    assert inbound.meta[:thinking_scope] == :topic
+    assert inbound.meta[:topic_id] == topic_id
+
+    stored = LemonCore.Store.get(:telegram_default_thinking, {"default", chat_id, topic_id})
+    assert stored[:thinking_level] == "high"
+  end
+
+  test "/thinking clear removes topic thinking override" do
+    chat_id = 444_006
+    topic_id = 104
+    msg_id = System.unique_integer([:positive])
+
+    _ =
+      LemonCore.Store.put(
+        :telegram_default_thinking,
+        {"default", chat_id, topic_id},
+        %{thinking_level: "medium"}
+      )
+
+    MockAPI.set_updates([
+      topic_message_update(chat_id, topic_id, "/thinking clear", msg_id + 1)
+    ])
+
+    assert {:ok, _pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               deny_unbound_chats: false
+             })
+
+    assert_receive {:send_message, ^chat_id, clear_msg, _reply_to_or_opts, _parse_mode}, 800
+    assert clear_msg == "Cleared thinking level override for this topic."
+    assert LemonCore.Store.get(:telegram_default_thinking, {"default", chat_id, topic_id}) == nil
+  end
+
   defp start_transport(overrides) when is_map(overrides) do
     token = "token-" <> Integer.to_string(System.unique_integer([:positive]))
 

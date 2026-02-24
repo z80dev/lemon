@@ -170,7 +170,7 @@ adapters/telegram/voice_transcriber.ex — OpenAI-compatible audio transcription
 - `chunk_limit`: 4096
 - `rate_limit`: 30 msg/sec
 - Supports: edit, delete, voice, images, files, reactions, threads
-- Transport-level Telegram commands: `/new`, `/resume`, `/model`, `/trigger`, `/cwd`, `/file`, `/topic`, `/cancel`
+- Transport-level Telegram commands: `/new`, `/resume`, `/model`, `/thinking`, `/trigger`, `/cwd`, `/file`, `/topic`, `/cancel`
 
 ### Enable
 
