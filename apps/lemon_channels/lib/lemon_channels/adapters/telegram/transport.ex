@@ -20,6 +20,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   alias LemonChannels.Adapters.Telegram.Inbound
   alias LemonChannels.Telegram.OffsetStore
   alias LemonChannels.Telegram.PollerLock
+  alias LemonCore.Config
 
   @default_poll_interval 1_000
   @default_dedupe_ttl 600_000
@@ -27,6 +28,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   @webhook_clear_retry_ms 5 * 60 * 1000
   @pending_compaction_ttl_ms 12 * 60 * 60 * 1000
   @cancel_callback_prefix "lemon:cancel"
+  @model_callback_prefix "lemon:model"
+  @providers_per_page 8
+  @models_per_page 8
+  @model_default_engine "lemon"
+  @idle_keepalive_continue_callback_prefix "lemon:idle:c:"
+  @idle_keepalive_stop_callback_prefix "lemon:idle:k:"
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -615,6 +622,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       resume_command?(original_text, state.bot_username) ->
         handle_resume_command(state, inbound)
 
+      model_command?(original_text, state.bot_username) ->
+        handle_model_command(state, inbound)
+
       new_command?(original_text, state.bot_username) ->
         args = telegram_command_args(original_text, "new")
         handle_new_session(state, inbound, args)
@@ -754,10 +764,21 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       update_chat_state_last_engine(session_key, directive_engine)
     end
 
+    {model_hint, model_scope} = resolve_model_hint(state, session_key, chat_id, thread_id)
+
     meta =
       meta0
       |> Map.put(:session_key, session_key)
       |> Map.put(:forked_session, forked?)
+      |> maybe_put(:model, model_hint)
+      |> maybe_put(:model_scope, model_scope)
+
+    meta =
+      if is_binary(model_hint) and model_hint != "" and not is_binary(meta[:engine_id]) do
+        Map.put(meta, :engine_id, @model_default_engine)
+      else
+        meta
+      end
 
     # Allow reply-to routing into the correct session even while a run is in-flight.
     _ =
@@ -872,6 +893,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp resume_command?(text, bot_username) do
     telegram_command?(text, "resume", bot_username)
+  end
+
+  defp model_command?(text, bot_username) do
+    telegram_command?(text, "model", bot_username)
   end
 
   defp trigger_command?(text, bot_username) do
@@ -2138,6 +2163,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     user_msg_id = ids[:user_msg_id]
 
     _ = safe_abort_session(session_key, :new_session)
+    _ = safe_delete_session_model(session_key)
     _ = safe_delete_selected_resume(state, chat_id, thread_id)
     _ = safe_clear_thread_message_indices(state, chat_id, thread_id)
 
@@ -2381,6 +2407,15 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     _ -> :ok
   end
 
+  defp safe_delete_session_model(session_key) when is_binary(session_key) do
+    _ = CoreStore.delete(:telegram_session_model, session_key)
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp safe_delete_session_model(_session_key), do: :ok
+
   defp safe_abort_session(session_key, reason)
        when is_binary(session_key) and byte_size(session_key) > 0 do
     _ = LemonCore.RouterBridge.abort_session(session_key, reason)
@@ -2447,6 +2482,72 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   rescue
     _ -> nil
   end
+
+  defp resolve_model_hint(state, session_key, chat_id, thread_id)
+       when is_binary(session_key) and is_integer(chat_id) do
+    case session_model_override(session_key) do
+      model when is_binary(model) and model != "" ->
+        {model, :session}
+
+      _ ->
+        case default_model_preference(state, chat_id, thread_id) do
+          model when is_binary(model) and model != "" -> {model, :future}
+          _ -> {nil, nil}
+        end
+    end
+  rescue
+    _ -> {nil, nil}
+  end
+
+  defp resolve_model_hint(_state, _session_key, _chat_id, _thread_id), do: {nil, nil}
+
+  defp session_model_override(session_key) when is_binary(session_key) do
+    case CoreStore.get(:telegram_session_model, session_key) do
+      model when is_binary(model) and model != "" -> model
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp session_model_override(_session_key), do: nil
+
+  defp put_session_model_override(session_key, model)
+       when is_binary(session_key) and is_binary(model) do
+    CoreStore.put(:telegram_session_model, session_key, model)
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp put_session_model_override(_session_key, _model), do: :ok
+
+  defp default_model_preference(state, chat_id, thread_id) when is_integer(chat_id) do
+    key = {state.account_id || "default", chat_id, thread_id}
+
+    case CoreStore.get(:telegram_default_model, key) do
+      %{model: model} when is_binary(model) and model != "" -> model
+      %{"model" => model} when is_binary(model) and model != "" -> model
+      model when is_binary(model) and model != "" -> model
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp default_model_preference(_state, _chat_id, _thread_id), do: nil
+
+  defp put_default_model_preference(state, chat_id, thread_id, model)
+       when is_integer(chat_id) and is_binary(model) do
+    key = {state.account_id || "default", chat_id, thread_id}
+    payload = %{model: model, updated_at_ms: System.system_time(:millisecond)}
+    CoreStore.put(:telegram_default_model, key, payload)
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp put_default_model_preference(_state, _chat_id, _thread_id, _model), do: :ok
 
   # Update only last_engine in chat state, preserving last_resume_token and other fields.
   defp update_chat_state_last_engine(session_key, engine) when is_binary(session_key) do
@@ -3075,6 +3176,53 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp message_entities(_), do: []
 
+  defp handle_model_command(state, inbound) do
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
+    state = drop_buffer_for(state, inbound)
+
+    if not is_integer(chat_id) do
+      state
+    else
+      providers = available_model_providers()
+
+      session_key =
+        build_session_key(state, inbound, %ChatScope{
+          transport: :telegram,
+          chat_id: chat_id,
+          topic_id: thread_id
+        })
+
+      current_session_model = session_model_override(session_key)
+      current_future_model = default_model_preference(state, chat_id, thread_id)
+
+      text = render_model_picker_text(current_session_model, current_future_model)
+
+      if providers == [] do
+        _ =
+          send_system_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            text <> "\n\nNo models available."
+          )
+      else
+        opts =
+          %{
+            "reply_to_message_id" => user_msg_id,
+            "reply_markup" => model_provider_markup(providers, 0)
+          }
+          |> maybe_put("message_thread_id", thread_id)
+
+        _ = state.api_mod.send_message(state.token, chat_id, text, opts, nil)
+      end
+
+      state
+    end
+  rescue
+    _ -> state
+  end
+
   defp handle_trigger_command(state, inbound) do
     {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
     args = telegram_command_args(inbound.message.text, "trigger") || ""
@@ -3535,6 +3683,34 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     data = cb["data"] || ""
 
     cond do
+      String.starts_with?(data, @idle_keepalive_continue_callback_prefix) ->
+        run_id = String.trim_leading(data, @idle_keepalive_continue_callback_prefix)
+
+        if is_binary(run_id) and run_id != "" and Code.ensure_loaded?(LemonChannels.Runtime) and
+             function_exported?(LemonChannels.Runtime, :keep_run_alive, 2) do
+          LemonChannels.Runtime.keep_run_alive(run_id, :continue)
+        end
+
+        _ = state.api_mod.answer_callback_query(state.token, cb_id, %{"text" => "continuing..."})
+        maybe_close_callback_buttons(state, cb, "Continuing run.")
+        :ok
+
+      String.starts_with?(data, @idle_keepalive_stop_callback_prefix) ->
+        run_id = String.trim_leading(data, @idle_keepalive_stop_callback_prefix)
+
+        if is_binary(run_id) and run_id != "" and Code.ensure_loaded?(LemonChannels.Runtime) and
+             function_exported?(LemonChannels.Runtime, :keep_run_alive, 2) do
+          LemonChannels.Runtime.keep_run_alive(run_id, :cancel)
+        end
+
+        _ = state.api_mod.answer_callback_query(state.token, cb_id, %{"text" => "stopping..."})
+        maybe_close_callback_buttons(state, cb, "Stopping run.")
+        :ok
+
+      String.starts_with?(data, @model_callback_prefix <> ":") ->
+        _ = handle_model_callback_query(state, cb_id, cb, data)
+        :ok
+
       data == @cancel_callback_prefix ->
         msg = cb["message"] || %{}
         chat_id = get_in(msg, ["chat", "id"])
@@ -3611,6 +3787,459 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp handle_callback_query(_state, _cb), do: :ok
 
+  defp handle_model_callback_query(state, cb_id, cb, data) do
+    msg = cb["message"] || %{}
+    chat_id = get_in(msg, ["chat", "id"])
+    message_id = msg["message_id"]
+    topic_id = parse_int(msg["message_thread_id"])
+
+    if not (is_integer(chat_id) and is_integer(message_id)) do
+      state.api_mod.answer_callback_query(state.token, cb_id, %{"text" => "Unknown"})
+    else
+      case parse_model_callback(data) do
+        {:providers, page} ->
+          providers = available_model_providers()
+
+          _ =
+            state.api_mod.edit_message_text(
+              state.token,
+              chat_id,
+              message_id,
+              render_model_picker_text(nil, default_model_preference(state, chat_id, topic_id)),
+              %{"reply_markup" => model_provider_markup(providers, page)}
+            )
+
+          _ = state.api_mod.answer_callback_query(state.token, cb_id, %{"text" => "Updated"})
+
+        {:provider, provider, page} ->
+          case models_for_provider(provider) do
+            [] ->
+              _ =
+                state.api_mod.answer_callback_query(state.token, cb_id, %{"text" => "No models"})
+
+            models ->
+              _ =
+                state.api_mod.edit_message_text(
+                  state.token,
+                  chat_id,
+                  message_id,
+                  render_provider_models_text(provider),
+                  %{"reply_markup" => model_list_markup(provider, models, page)}
+                )
+
+              _ = state.api_mod.answer_callback_query(state.token, cb_id, %{"text" => "Updated"})
+          end
+
+        {:choose, provider, index, page} ->
+          case model_at_index(provider, index) do
+            nil ->
+              _ =
+                state.api_mod.answer_callback_query(state.token, cb_id, %{
+                  "text" => "Unknown model"
+                })
+
+            model ->
+              _ =
+                state.api_mod.edit_message_text(
+                  state.token,
+                  chat_id,
+                  message_id,
+                  render_model_scope_text(model),
+                  %{"reply_markup" => model_scope_markup(provider, index, page)}
+                )
+
+              _ =
+                state.api_mod.answer_callback_query(state.token, cb_id, %{
+                  "text" => "Select scope"
+                })
+          end
+
+        {:set, scope, provider, index} ->
+          case model_at_index(provider, index) do
+            nil ->
+              _ =
+                state.api_mod.answer_callback_query(state.token, cb_id, %{
+                  "text" => "Unknown model"
+                })
+
+            model ->
+              model_spec = model_spec(model)
+              chat_scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: topic_id}
+
+              session_key =
+                SessionKey.channel_peer(%{
+                  agent_id: BindingResolver.resolve_agent_id(chat_scope) || "default",
+                  channel_id: "telegram",
+                  account_id: state.account_id || "default",
+                  peer_kind: peer_kind_from_chat_type(get_in(msg, ["chat", "type"])),
+                  peer_id: to_string(chat_id),
+                  thread_id: if(is_integer(topic_id), do: to_string(topic_id), else: nil)
+                })
+
+              _ = put_session_model_override(session_key, model_spec)
+
+              if scope == :future do
+                _ = put_default_model_preference(state, chat_id, topic_id, model_spec)
+              end
+
+              text =
+                if scope == :future do
+                  "Default model set to #{model_label(model)} for all future sessions in this chat."
+                else
+                  "Model set to #{model_label(model)} for this session."
+                end
+
+              _ =
+                state.api_mod.edit_message_text(
+                  state.token,
+                  chat_id,
+                  message_id,
+                  text,
+                  %{"reply_markup" => %{"inline_keyboard" => []}}
+                )
+
+              _ = state.api_mod.answer_callback_query(state.token, cb_id, %{"text" => "Saved"})
+          end
+
+        :close ->
+          _ =
+            state.api_mod.edit_message_text(
+              state.token,
+              chat_id,
+              message_id,
+              "Model picker closed.",
+              %{"reply_markup" => %{"inline_keyboard" => []}}
+            )
+
+          _ = state.api_mod.answer_callback_query(state.token, cb_id, %{"text" => "Closed"})
+
+        _ ->
+          _ = state.api_mod.answer_callback_query(state.token, cb_id, %{"text" => "Unknown"})
+      end
+    end
+
+    :ok
+  rescue
+    _ ->
+      _ = state.api_mod.answer_callback_query(state.token, cb_id, %{"text" => "Unknown"})
+      :ok
+  end
+
+  defp parse_model_callback(data) when is_binary(data) do
+    prefix = @model_callback_prefix <> ":"
+
+    if String.starts_with?(data, prefix) do
+      rest = String.replace_prefix(data, prefix, "")
+
+      case String.split(rest, ":") do
+        ["providers", page] ->
+          {:providers, max(parse_int(page) || 0, 0)}
+
+        ["provider", provider, page] ->
+          {:provider, provider, max(parse_int(page) || 0, 0)}
+
+        ["choose", provider, index, page] ->
+          {:choose, provider, parse_int(index), max(parse_int(page) || 0, 0)}
+
+        ["set", "s", provider, index] ->
+          {:set, :session, provider, parse_int(index)}
+
+        ["set", "f", provider, index] ->
+          {:set, :future, provider, parse_int(index)}
+
+        ["close"] ->
+          :close
+
+        _ ->
+          nil
+      end
+    else
+      nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp parse_model_callback(_), do: nil
+
+  defp render_model_picker_text(session_model, future_model) do
+    session_line = if is_binary(session_model), do: session_model, else: "(not set)"
+    future_line = if is_binary(future_model), do: future_model, else: "(not set)"
+
+    [
+      "Model picker",
+      "",
+      "Session model: #{session_line}",
+      "Future default: #{future_line}",
+      "",
+      "Choose a provider:"
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp render_provider_models_text(provider) when is_binary(provider) do
+    "Provider: #{provider}\nChoose a model:"
+  end
+
+  defp render_model_scope_text(model) do
+    "Selected model: #{model_label(model)}\nApply to:"
+  end
+
+  defp model_provider_markup(providers, page) when is_list(providers) do
+    {slice, has_prev, has_next} = paginate(providers, page, @providers_per_page)
+
+    rows =
+      slice
+      |> Enum.map(fn provider ->
+        [%{"text" => provider, "callback_data" => model_callback_data(:provider, provider, page)}]
+      end)
+      |> maybe_add_pagination_row(has_prev, has_next, page, :providers)
+      |> Kernel.++([[%{"text" => "Close", "callback_data" => model_callback_data(:close)}]])
+
+    %{"inline_keyboard" => rows}
+  end
+
+  defp model_list_markup(provider, models, page) when is_binary(provider) and is_list(models) do
+    indexed = Enum.with_index(models)
+    {slice, has_prev, has_next} = paginate(indexed, page, @models_per_page)
+
+    rows =
+      slice
+      |> Enum.map(fn {model, idx} ->
+        [
+          %{
+            "text" => model_label(model),
+            "callback_data" => model_callback_data(:choose, provider, idx, page)
+          }
+        ]
+      end)
+      |> maybe_add_pagination_row(has_prev, has_next, page, {:provider, provider})
+      |> Kernel.++([
+        [%{"text" => "Back", "callback_data" => model_callback_data(:providers, 0)}],
+        [%{"text" => "Close", "callback_data" => model_callback_data(:close)}]
+      ])
+
+    %{"inline_keyboard" => rows}
+  end
+
+  defp model_scope_markup(provider, index, page)
+       when is_binary(provider) and is_integer(index) and is_integer(page) do
+    %{
+      "inline_keyboard" => [
+        [
+          %{
+            "text" => "This session",
+            "callback_data" => model_callback_data(:set, :session, provider, index)
+          }
+        ],
+        [
+          %{
+            "text" => "All future sessions",
+            "callback_data" => model_callback_data(:set, :future, provider, index)
+          }
+        ],
+        [%{"text" => "Back", "callback_data" => model_callback_data(:provider, provider, page)}],
+        [%{"text" => "Close", "callback_data" => model_callback_data(:close)}]
+      ]
+    }
+  end
+
+  defp model_callback_data(:providers, page), do: "#{@model_callback_prefix}:providers:#{page}"
+
+  defp model_callback_data(:provider, provider, page),
+    do: "#{@model_callback_prefix}:provider:#{provider}:#{page}"
+
+  defp model_callback_data(:choose, provider, index, page),
+    do: "#{@model_callback_prefix}:choose:#{provider}:#{index}:#{page}"
+
+  defp model_callback_data(:set, :session, provider, index),
+    do: "#{@model_callback_prefix}:set:s:#{provider}:#{index}"
+
+  defp model_callback_data(:set, :future, provider, index),
+    do: "#{@model_callback_prefix}:set:f:#{provider}:#{index}"
+
+  defp model_callback_data(:close), do: "#{@model_callback_prefix}:close"
+
+  defp maybe_add_pagination_row(rows, has_prev, has_next, page, kind) do
+    nav =
+      []
+      |> maybe_add_prev_button(has_prev, page, kind)
+      |> maybe_add_next_button(has_next, page, kind)
+
+    if nav == [] do
+      rows
+    else
+      rows ++ [nav]
+    end
+  end
+
+  defp maybe_add_prev_button(buttons, true, page, :providers) do
+    buttons ++
+      [%{"text" => "Prev", "callback_data" => model_callback_data(:providers, max(page - 1, 0))}]
+  end
+
+  defp maybe_add_prev_button(buttons, true, page, {:provider, provider}) do
+    buttons ++
+      [
+        %{
+          "text" => "Prev",
+          "callback_data" => model_callback_data(:provider, provider, max(page - 1, 0))
+        }
+      ]
+  end
+
+  defp maybe_add_prev_button(buttons, _has_prev, _page, _kind), do: buttons
+
+  defp maybe_add_next_button(buttons, true, page, :providers) do
+    buttons ++ [%{"text" => "Next", "callback_data" => model_callback_data(:providers, page + 1)}]
+  end
+
+  defp maybe_add_next_button(buttons, true, page, {:provider, provider}) do
+    buttons ++
+      [%{"text" => "Next", "callback_data" => model_callback_data(:provider, provider, page + 1)}]
+  end
+
+  defp maybe_add_next_button(buttons, _has_next, _page, _kind), do: buttons
+
+  defp paginate(list, page, per_page)
+       when is_list(list) and is_integer(page) and is_integer(per_page) do
+    p = if page < 0, do: 0, else: page
+    start_index = p * per_page
+    total = length(list)
+    slice = list |> Enum.drop(start_index) |> Enum.take(per_page)
+    has_prev = p > 0
+    has_next = start_index + per_page < total
+    {slice, has_prev, has_next}
+  end
+
+  defp available_model_providers do
+    available_model_catalog()
+    |> Enum.map(& &1.provider)
+  end
+
+  defp models_for_provider(provider) when is_binary(provider) do
+    available_model_catalog()
+    |> Enum.find_value([], fn
+      %{provider: ^provider, models: models} -> models
+      _ -> nil
+    end)
+  end
+
+  defp model_at_index(provider, index)
+       when is_binary(provider) and is_integer(index) and index >= 0 do
+    models_for_provider(provider)
+    |> Enum.at(index)
+  end
+
+  defp model_at_index(_provider, _index), do: nil
+
+  defp model_spec(%{provider: provider, id: id}) when is_binary(provider) and is_binary(id) do
+    "#{provider}:#{id}"
+  end
+
+  defp model_spec(_), do: nil
+
+  defp model_label(%{name: name, id: id}) when is_binary(name) and name != "" and is_binary(id) do
+    "#{name} (#{id})"
+  end
+
+  defp model_label(%{id: id}) when is_binary(id), do: id
+  defp model_label(other), do: inspect(other)
+
+  defp available_model_catalog do
+    configured = configured_provider_names()
+    models_module = :"Elixir.Ai.Models"
+
+    models =
+      if Code.ensure_loaded?(models_module) and function_exported?(models_module, :list_models, 0) do
+        apply(models_module, :list_models, [])
+      else
+        fallback_model_entries()
+      end
+
+    model_maps =
+      models
+      |> Enum.map(&to_model_map/1)
+      |> Enum.filter(&is_map/1)
+
+    filtered =
+      if configured == [] do
+        model_maps
+      else
+        Enum.filter(model_maps, fn model ->
+          provider_matches_config?(model.provider, configured)
+        end)
+      end
+
+    filtered = if filtered == [], do: model_maps, else: filtered
+
+    filtered
+    |> Enum.group_by(& &1.provider)
+    |> Enum.map(fn {provider, provider_models} ->
+      %{
+        provider: provider,
+        models:
+          Enum.sort_by(provider_models, fn m ->
+            {String.downcase(m.name || m.id || ""), m.id || ""}
+          end)
+      }
+    end)
+    |> Enum.sort_by(& &1.provider)
+  rescue
+    _ -> fallback_catalog()
+  end
+
+  defp to_model_map(%{provider: provider, id: id} = model) when is_binary(id) do
+    provider_str = provider |> to_string() |> String.downcase()
+    name = Map.get(model, :name) || Map.get(model, "name") || id
+    %{provider: provider_str, id: id, name: name}
+  rescue
+    _ -> nil
+  end
+
+  defp to_model_map(_), do: nil
+
+  defp fallback_model_entries do
+    [
+      %{provider: "anthropic", id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4"},
+      %{provider: "openai", id: "gpt-4o", name: "GPT-4o"},
+      %{provider: "google", id: "gemini-2.5-pro", name: "Gemini 2.5 Pro"}
+    ]
+  end
+
+  defp fallback_catalog do
+    fallback_model_entries()
+    |> Enum.group_by(& &1.provider)
+    |> Enum.map(fn {provider, models} -> %{provider: provider, models: models} end)
+    |> Enum.sort_by(& &1.provider)
+  end
+
+  defp configured_provider_names do
+    cfg = Config.cached()
+    providers = cfg.providers || %{}
+    Map.keys(providers) |> Enum.map(&normalize_provider_name/1)
+  rescue
+    _ -> []
+  end
+
+  defp provider_matches_config?(provider, configured)
+       when is_binary(provider) and is_list(configured) do
+    normalized = normalize_provider_name(provider)
+    normalized in configured
+  end
+
+  defp provider_matches_config?(_provider, _configured), do: false
+
+  defp normalize_provider_name(name) do
+    name
+    |> to_string()
+    |> String.downcase()
+    |> String.replace("_", "-")
+    |> String.trim()
+  rescue
+    _ -> ""
+  end
+
   defp parse_approval_callback(data) when is_binary(data) do
     case String.split(data, "|", parts: 2) do
       [approval_id, "once"] -> {approval_id, :approve_once}
@@ -3628,6 +4257,27 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp decision_label(:approve_global), do: "approve global"
   defp decision_label(:deny), do: "deny"
   defp decision_label(other), do: inspect(other)
+
+  defp maybe_close_callback_buttons(state, cb, replacement_text) do
+    msg = cb["message"] || %{}
+    chat_id = get_in(msg, ["chat", "id"])
+    message_id = msg["message_id"]
+
+    if is_integer(chat_id) and is_integer(message_id) and is_binary(replacement_text) do
+      _ =
+        state.api_mod.edit_message_text(
+          state.token,
+          chat_id,
+          message_id,
+          replacement_text,
+          %{"reply_markup" => %{"inline_keyboard" => []}}
+        )
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
 
   defp peer_kind_from_chat_type("private"), do: :dm
   defp peer_kind_from_chat_type("group"), do: :group

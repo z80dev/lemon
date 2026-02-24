@@ -138,7 +138,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
     _ = Store.put(:telegram_msg_session, {"default", chat_id, nil, progress_msg_id}, session_key)
 
-    CancelMockAPI.set_updates([cancel_callback_update(chat_id, cb_id, progress_msg_id, "lemon:cancel")])
+    CancelMockAPI.set_updates([
+      cancel_callback_update(chat_id, cb_id, progress_msg_id, "lemon:cancel")
+    ])
 
     assert {:ok, _pid} =
              start_transport(%{
@@ -168,6 +170,97 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
     assert_receive {:answer_callback, ^cb_id, %{"text" => "cancelling..."}}, 400
     assert_receive {:abort_run, ^run_id, :user_requested}, 400
+  end
+
+  test "/model opens provider picker and does not route inbound" do
+    chat_id = 333_004
+    msg_id = 1_200
+
+    CancelMockAPI.set_updates([message_update(chat_id, msg_id, "/model")])
+
+    assert {:ok, _pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               deny_unbound_chats: false
+             })
+
+    assert_receive {:send_message, ^chat_id, text, opts, _parse_mode}, 500
+    assert text =~ "Model picker"
+    keyboard = get_in(opts, ["reply_markup", "inline_keyboard"])
+    assert is_list(keyboard)
+    refute_receive {:inbound, _msg}, 250
+  end
+
+  test "/model callback can set a session model override" do
+    chat_id = 333_005
+    user_msg_id = 1_300
+    callback_msg_id = 42
+    cb_provider = "cb-model-provider"
+    cb_set = "cb-model-set"
+
+    session_key =
+      LemonCore.SessionKey.channel_peer(%{
+        agent_id: "default",
+        channel_id: "telegram",
+        account_id: "default",
+        peer_kind: :dm,
+        peer_id: Integer.to_string(chat_id)
+      })
+
+    CancelMockAPI.set_updates([message_update(chat_id, user_msg_id, "/model")])
+
+    assert {:ok, _pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               deny_unbound_chats: false
+             })
+
+    assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}, 500
+
+    provider_callback_data =
+      opts
+      |> get_in(["reply_markup", "inline_keyboard"])
+      |> List.first()
+      |> List.first()
+      |> Map.get("callback_data")
+
+    assert is_binary(provider_callback_data)
+    assert provider_callback_data =~ "lemon:model:provider:"
+
+    CancelMockAPI.set_updates([
+      callback_update(chat_id, cb_provider, callback_msg_id, provider_callback_data)
+    ])
+
+    assert_receive {:edit_message_text, ^chat_id, ^callback_msg_id, _text, edit_opts}, 500
+
+    choose_callback_data =
+      edit_opts
+      |> get_in(["reply_markup", "inline_keyboard"])
+      |> List.first()
+      |> List.first()
+      |> Map.get("callback_data")
+
+    assert is_binary(choose_callback_data)
+    assert choose_callback_data =~ "lemon:model:choose:"
+
+    assert [_, provider, index | _] =
+             Regex.run(~r/lemon:model:choose:([^:]+):(\d+):\d+/, choose_callback_data)
+
+    set_callback_data = "lemon:model:set:s:#{provider}:#{index}"
+
+    CancelMockAPI.set_updates([
+      callback_update(chat_id, cb_set, callback_msg_id, set_callback_data)
+    ])
+
+    assert_receive {:answer_callback, ^cb_set, %{"text" => "Saved"}}, 500
+    assert_receive {:edit_message_text, ^chat_id, ^callback_msg_id, text, _opts}, 500
+    assert text =~ "Model set to"
+
+    stored = Store.get(:telegram_session_model, session_key)
+    assert is_binary(stored)
+    assert String.starts_with?(stored, provider <> ":")
+
+    refute_receive {:inbound, _msg}, 200
   end
 
   defp start_transport(overrides) when is_map(overrides) do
@@ -211,6 +304,10 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
         }
       }
     }
+  end
+
+  defp callback_update(chat_id, cb_id, message_id, data) do
+    cancel_callback_update(chat_id, cb_id, message_id, data)
   end
 
   defp set_bindings(bindings) do

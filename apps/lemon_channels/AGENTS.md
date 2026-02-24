@@ -168,7 +168,7 @@ adapters/telegram/voice_transcriber.ex — OpenAI-compatible audio transcription
 - `chunk_limit`: 4096
 - `rate_limit`: 30 msg/sec
 - Supports: edit, delete, voice, images, files, reactions, threads
-- Transport-level Telegram commands: `/new`, `/resume`, `/trigger`, `/file`, `/topic`, `/cancel`
+- Transport-level Telegram commands: `/new`, `/resume`, `/model`, `/trigger`, `/file`, `/topic`, `/cancel`
 
 ### Enable
 
@@ -359,6 +359,7 @@ without a hard dependency on `LemonRouter`:
 ```elixir
 LemonChannels.Runtime.cancel_by_run_id(run_id)
 LemonChannels.Runtime.cancel_by_progress_msg(session_key, progress_msg_id)
+LemonChannels.Runtime.keep_run_alive(run_id, :continue | :cancel)
 LemonChannels.Runtime.session_busy?(session_key)  # boolean
 ```
 

@@ -37,6 +37,29 @@ defmodule LemonChannels.Runtime do
 
   def cancel_by_run_id(_, _), do: :ok
 
+  @spec keep_run_alive(binary(), :continue | :cancel) :: :ok
+  def keep_run_alive(run_id, decision \\ :continue)
+
+  def keep_run_alive(run_id, decision)
+      when is_binary(run_id) and run_id != "" and decision in [:continue, :cancel] do
+    cond do
+      function_exported?(LemonCore.RouterBridge, :keep_run_alive, 2) ->
+        _ = LemonCore.RouterBridge.keep_run_alive(run_id, decision)
+        :ok
+
+      Code.ensure_loaded?(@router_mod) and function_exported?(@router_mod, :keep_run_alive, 2) ->
+        _ = apply(@router_mod, :keep_run_alive, [run_id, decision])
+        :ok
+
+      true ->
+        :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  def keep_run_alive(_, _), do: :ok
+
   @spec session_busy?(binary()) :: boolean()
   def session_busy?(session_key) when is_binary(session_key) and session_key != "" do
     with true <- Code.ensure_loaded?(Registry),
