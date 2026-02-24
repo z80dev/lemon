@@ -397,6 +397,41 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert match?({:ok, _}, result) or match?({:error, _}, result)
     end
 
+    test "meta thinking_level overrides session config thinking_level" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+
+      {:ok, orchestrator_pid} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: run_supervisor,
+          run_process_module: CapturingRunProcess,
+          run_process_opts: %{notify_pid: self()}
+        )
+
+      session_key = "test:session:thinking:override:#{System.unique_integer()}"
+
+      LemonCore.Store.put_session_policy(session_key, %{
+        thinking_level: "low"
+      })
+
+      on_exit(fn ->
+        if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
+        LemonCore.Store.delete_session_policy(session_key)
+      end)
+
+      params = %{
+        origin: :channel,
+        session_key: session_key,
+        agent_id: "test",
+        prompt: "Hello",
+        meta: %{thinking_level: "high"}
+      }
+
+      assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params))
+      assert_receive {:captured_job, job}, 500
+      assert job.meta[:thinking_level] == "high"
+    end
+
     test "explicit engine_id overrides session model" do
       session_key = "test:session:override:#{System.unique_integer()}"
 

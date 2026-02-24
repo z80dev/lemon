@@ -120,6 +120,7 @@ defmodule LemonGateway.Engines.CliAdapter do
       |> maybe_put(:session_key, job.session_key)
       |> maybe_put(:agent_id, get_in(job.meta || %{}, [:agent_id]))
       |> maybe_put(:model, get_in(job.meta || %{}, [:model]))
+      |> maybe_put(:thinking_level, get_in(job.meta || %{}, [:thinking_level]))
       |> maybe_put(:system_prompt, get_in(job.meta || %{}, [:system_prompt]))
       |> maybe_put(:run_id, job.run_id || Map.get(opts, :run_id))
       |> maybe_put(:extra_tools, gateway_extra_tools(engine_id, job, opts))

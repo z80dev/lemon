@@ -144,12 +144,20 @@ defmodule LemonRouter.RunOrchestrator do
     run_id = params.run_id || LemonCore.Id.run_id()
 
     # Emit introspection event for orchestration start
-    Introspection.record(:orchestration_started, %{
-      origin: origin,
+    Introspection.record(
+      :orchestration_started,
+      %{
+        origin: origin,
+        agent_id: agent_id,
+        queue_mode: queue_mode,
+        engine_id: engine_id
+      },
+      run_id: run_id,
+      session_key: session_key,
       agent_id: agent_id,
-      queue_mode: queue_mode,
-      engine_id: engine_id
-    }, run_id: run_id, session_key: session_key, agent_id: agent_id, engine: "lemon", provenance: :direct)
+      engine: "lemon",
+      provenance: :direct
+    )
 
     # Get session policies (includes model, thinkingLevel, and tool_policy)
     session_config = get_session_config(session_key)
@@ -201,6 +209,7 @@ defmodule LemonRouter.RunOrchestrator do
 
       session_model = session_config[:model] || session_config["model"]
       session_thinking_level = session_config[:thinking_level] || session_config["thinking_level"]
+      request_thinking_level = map_get(meta, :thinking_level)
 
       session_preferred_engine =
         session_config[:preferred_engine] || session_config["preferred_engine"]
@@ -240,7 +249,7 @@ defmodule LemonRouter.RunOrchestrator do
         })
 
       resolved_model = selection.model
-      resolved_thinking_level = session_thinking_level
+      resolved_thinking_level = request_thinking_level || session_thinking_level
       resolved_system_prompt = explicit_system_prompt || profile_system_prompt
 
       if is_binary(selection.warning) do
@@ -282,19 +291,35 @@ defmodule LemonRouter.RunOrchestrator do
           # Subscribe control-plane EventBridge to run events for WS delivery
           subscribe_event_bridge(run_id)
 
-          Introspection.record(:orchestration_resolved, %{
-            engine_id: resolved_engine_id,
-            model: resolved_model
-          }, run_id: run_id, session_key: session_key, agent_id: agent_id, engine: "lemon", provenance: :direct)
+          Introspection.record(
+            :orchestration_resolved,
+            %{
+              engine_id: resolved_engine_id,
+              model: resolved_model
+            },
+            run_id: run_id,
+            session_key: session_key,
+            agent_id: agent_id,
+            engine: "lemon",
+            provenance: :direct
+          )
 
           # Emit telemetry
           LemonCore.Telemetry.run_submit(session_key, origin, resolved_engine_id || "default")
           {:ok, run_id}
 
         {:error, reason} ->
-          Introspection.record(:orchestration_failed, %{
-            reason: safe_error_label(reason)
-          }, run_id: run_id, session_key: session_key, agent_id: agent_id, engine: "lemon", provenance: :direct)
+          Introspection.record(
+            :orchestration_failed,
+            %{
+              reason: safe_error_label(reason)
+            },
+            run_id: run_id,
+            session_key: session_key,
+            agent_id: agent_id,
+            engine: "lemon",
+            provenance: :direct
+          )
 
           if reason == :run_capacity_reached do
             Logger.warning(

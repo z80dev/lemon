@@ -76,6 +76,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
           resume: ResumeToken.t() | nil,
           timeout: non_neg_integer(),
           model: term(),
+          thinking_level: term(),
           system_prompt: String.t() | nil
         ]
 
@@ -114,6 +115,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
   - `:timeout` - Stream timeout in ms (default: `:infinity`)
   - `:approval_timeout_ms` - Approval wait timeout for tool calls that require approval (default: `:infinity`)
   - `:model` - Model to use (optional, uses session default)
+  - `:thinking_level` - Thinking level to use (optional, uses session default)
   - `:system_prompt` - Custom system prompt (optional)
 
   """
@@ -189,6 +191,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     # Tool calls should not time out by default; allow callers to opt in.
     timeout = Keyword.get(opts, :timeout, :infinity)
     model = Keyword.get(opts, :model)
+    thinking_level = Keyword.get(opts, :thinking_level)
     system_prompt = Keyword.get(opts, :system_prompt)
     approval_timeout_ms = Keyword.get(opts, :approval_timeout_ms, :infinity)
     extra_tools = Keyword.get(opts, :extra_tools)
@@ -255,6 +258,7 @@ defmodule CodingAgent.CliRunners.LemonRunner do
     session_opts =
       [cwd: cwd]
       |> maybe_add_opt(:model, model)
+      |> maybe_add_opt(:thinking_level, thinking_level)
       |> maybe_add_opt(:system_prompt, system_prompt)
       |> maybe_add_opt(:tool_policy, tool_policy)
       |> maybe_add_opt(:approval_context, approval_context)
