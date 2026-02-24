@@ -648,6 +648,9 @@ defmodule CodingAgent.Session do
     # Start the AgentCore.Agent
     get_api_key = Keyword.get(opts, :get_api_key) || build_get_api_key(settings_manager)
 
+    # Build stream options with provider-specific secrets
+    stream_options = build_stream_options(model, settings_manager, Keyword.get(opts, :stream_options))
+
     # Register main agent in AgentRegistry with key {session_id, :main, 0}
     agent_registry_key = {session_manager.header.id, :main, 0}
 
@@ -662,7 +665,7 @@ defmodule CodingAgent.Session do
         },
         convert_to_llm: convert_to_llm,
         stream_fn: Keyword.get(opts, :stream_fn),
-        stream_options: Keyword.get(opts, :stream_options),
+        stream_options: stream_options,
         transform_context: transform_context,
         get_api_key: get_api_key,
         session_id: session_manager.header.id,
@@ -1828,6 +1831,42 @@ defmodule CodingAgent.Session do
       end
     end
   end
+
+  # Build stream options with provider-specific secrets
+  defp build_stream_options(%{provider: :google_vertex} = _model, settings_manager, existing_opts) do
+    provider_cfg = provider_config(settings_manager.providers, "google_vertex")
+
+    # Resolve Vertex-specific secrets
+    project = resolve_vertex_secret(provider_cfg, :project_secret, "google_vertex_project")
+    location = resolve_vertex_secret(provider_cfg, :location_secret, "google_vertex_location")
+    service_account_json = resolve_vertex_secret(provider_cfg, :service_account_json_secret, "google_vertex_service_account_json")
+
+    base_opts = existing_opts || %{}
+
+    opts =
+      base_opts
+      |> maybe_put(:project, project)
+      |> maybe_put(:location, location)
+      |> maybe_put(:service_account_json, service_account_json)
+
+    opts
+  end
+
+  defp build_stream_options(_model, _settings_manager, existing_opts), do: existing_opts
+
+  defp resolve_vertex_secret(provider_cfg, config_key, default_secret_name) do
+    # Try to get secret name from config, fall back to default
+    secret_name = provider_config_value(provider_cfg, config_key) || default_secret_name
+
+    if is_binary(secret_name) and secret_name != "" do
+      resolve_secret_api_key(secret_name)
+    else
+      nil
+    end
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp provider_config(providers, provider_name) when is_binary(provider_name) do
     Map.get(providers, provider_name) ||

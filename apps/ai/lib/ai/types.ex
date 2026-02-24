@@ -291,7 +291,8 @@ defmodule Ai.Types do
             tool_choice: atom() | nil,
             project: String.t() | nil,
             location: String.t() | nil,
-            access_token: String.t() | nil
+            access_token: String.t() | nil,
+            service_account_json: String.t() | nil
           }
     defstruct temperature: nil,
               max_tokens: nil,
@@ -304,6 +305,7 @@ defmodule Ai.Types do
               tool_choice: nil,
               project: nil,
               location: nil,
-              access_token: nil
+              access_token: nil,
+              service_account_json: nil
   end
 end

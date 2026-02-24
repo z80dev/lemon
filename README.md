@@ -521,7 +521,9 @@ lemon/
 │   └── config.exs               # Application configuration
 │
 ├── bin/                         # Executable scripts
+│   ├── lemon                    # Unified runtime launcher (gateway + control plane + router + channels + web)
 │   ├── lemon-dev                # Development launcher script (builds + launches the TUI)
+│   ├── lemon-tui                # TUI launcher that attaches to ./bin/lemon runtime
 │   ├── lemon-gateway            # Starts the Telegram runtime (router + gateway + channels)
 │   ├── lemon-control-plane      # Starts the WebSocket/HTTP control server
 │   ├── lemon-telegram-send-test # Telegram delivery smoke test helper
@@ -604,7 +606,7 @@ lemon/
 │   │       ├── scheduler.ex     # Global concurrency control
 │   │       ├── thread_worker.ex # Per-thread job queues
 │   │       ├── store.ex         # Pluggable storage via LemonCore.Store backends
-│   │       ├── transports/      # Transport adapters (Discord, Email, Farcaster, Webhook, XMTP)
+│   │       ├── transports/      # Gateway-native transports (Email, Farcaster, Voice, Webhook, XMTP stub)
 │   │       ├── engines/         # Execution engines
 │   │       │   ├── lemon.ex     # Native CodingAgent engine
 │   │       │   ├── claude.ex    # Claude CLI engine
@@ -637,7 +639,9 @@ lemon/
 │   │       │   └── rate_limiter.ex   # Token bucket limiting
 │   │       └── adapters/
 │   │           ├── telegram/    # Telegram adapter (polling, voice, file transfer)
-│   │           └── x_api/       # X/Twitter API adapter (OAuth 1.0a/2.0)
+│   │           ├── discord/     # Discord adapter (Nostrum + slash commands)
+│   │           ├── x_api/       # X/Twitter API adapter (OAuth 1.0a/2.0)
+│   │           └── xmtp/        # XMTP adapter
 │   │
 │   ├── lemon_automation/        # Scheduling and automation
 │   │   └── lib/lemon_automation/
@@ -1926,6 +1930,24 @@ The `lemon-dev` script automatically:
 2. Compiles the Elixir project
 3. Installs and builds the TUI if needed
 4. Launches the TUI with your specified options
+
+### Unified Runtime (`bin/lemon`) + Attached TUI (`bin/lemon-tui`)
+
+Use these scripts when you want one long-running BEAM runtime that all clients attach to:
+
+```bash
+# Start unified runtime (gateway + router + channels + control plane + automation + web)
+./bin/lemon
+
+# Or start in background
+./bin/lemon --daemon
+
+# Launch TUI attached to the running runtime on ws://localhost:4040/ws
+./bin/lemon-tui
+```
+
+`./bin/lemon-tui` checks whether the control plane is already healthy on `:4040`.
+If not, it starts `./bin/lemon --daemon`, waits for readiness, then launches the TUI.
 
 ### Configuration
 

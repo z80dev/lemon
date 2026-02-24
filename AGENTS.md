@@ -11,7 +11,8 @@
 |-------------------|------------|
 | Add/modify AI provider support | `apps/ai/` |
 | Work on coding tools or session management | `apps/coding_agent/` |
-| Modify Telegram/SMS/Discord/voice transports | `apps/lemon_gateway/` |
+| Modify Telegram/Discord channel adapters | `apps/lemon_channels/` |
+| Modify SMS/voice transports | `apps/lemon_gateway/` |
 | Add new messaging channel adapters (X, XMTP, etc.) | `apps/lemon_channels/` |
 | Work on agent routing or message flow | `apps/lemon_router/` |
 | Build HTTP/WebSocket API features | `apps/lemon_control_plane/` |
@@ -103,10 +104,10 @@ apps/
 ├── coding_agent/        # Main coding agent with 35+ tools, session management, budget enforcement
 ├── coding_agent_ui/     # Thin wrapper that exposes coding_agent via RPC (mostly empty, used for tooling)
 ├── lemon_automation/    # Cron jobs, heartbeat manager, run submitter
-├── lemon_channels/      # Channel adapters for outbound delivery (Telegram, X API, XMTP)
+├── lemon_channels/      # Channel adapters for inbound/outbound delivery (Telegram, Discord, X API, XMTP)
 ├── lemon_control_plane/ # HTTP/WebSocket API server with 80+ JSON-RPC methods
 ├── lemon_core/          # Shared primitives: config, store (ETS/JSONL/SQLite), secrets, PubSub bus
-├── lemon_gateway/       # Gateway engines (claude, codex, pi, lemon, echo), Telegram/SMS/Discord transports
+├── lemon_gateway/       # Gateway engines (claude, codex, pi, lemon, echo), SMS/voice/email/webhook/farcaster transports
 ├── lemon_router/        # Message routing, agent directory, run orchestration
 ├── lemon_services/      # Long-running external process management (OTP-based, no umbrella deps)
 ├── lemon_skills/        # Skill registry, discovery, installation
@@ -184,6 +185,8 @@ npm run dev      # Watch mode
 
 ```bash
 ./bin/lemon-dev    # Installs deps, builds, launches TUI
+./bin/lemon        # Unified runtime (gateway + control plane + router + channels + web)
+./bin/lemon-tui    # TUI attached to unified runtime; auto-starts runtime if needed
 ```
 
 ---
@@ -270,9 +273,10 @@ Key env vars:
 2. Implement `Ai.Provider` behaviour
 3. Register in `Ai.ProviderRegistry`
 
-### Adding a Transport
+### Adding a Gateway Transport
 
-Transports live in `apps/lemon_gateway/`. Current transports: Telegram (`telegram/`), SMS/Twilio (`sms/`), Discord (`discord/`).
+External channel adapters live in `apps/lemon_channels/`. Current adapters include Telegram and Discord.
+Gateway-native transports remain in `apps/lemon_gateway/` (SMS/Twilio, voice, email/webhook/farcaster glue).
 
 1. Create transport module in `apps/lemon_gateway/lib/lemon_gateway/`
 2. Implement appropriate behaviour (see existing transports for patterns)
