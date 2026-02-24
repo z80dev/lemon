@@ -130,6 +130,10 @@ jobs:
         working-directory: clients/lemon-web
         run: npm --workspace shared run test
 
+      - name: lemon-web server tests
+        working-directory: clients/lemon-web
+        run: npm --workspace server run test
+
       - name: lemon-web tests
         working-directory: clients/lemon-web
         run: npm --workspace web run test
@@ -151,6 +155,10 @@ jobs:
         working-directory: clients/lemon-tui
         run: npm run build
 
+      - name: lemon-tui lint
+        working-directory: clients/lemon-tui
+        run: npm run lint
+
       - name: lemon-tui tests
         working-directory: clients/lemon-tui
         run: npm test
@@ -171,6 +179,10 @@ jobs:
       - name: lemon-browser-node build
         working-directory: clients/lemon-browser-node
         run: npm run build
+
+      - name: lemon-browser-node lint
+        working-directory: clients/lemon-browser-node
+        run: npm run lint
 
       - name: lemon-browser-node tests
         working-directory: clients/lemon-browser-node

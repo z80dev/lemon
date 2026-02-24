@@ -37,11 +37,11 @@ Missing:
 
 ## Milestones
 
-- [ ] M1 — Add feature requirements generation tool
-- [ ] M2 — Enhance todo system with dependencies and progress
-- [ ] M3 — Implement checkpoint/resume mechanism
-- [ ] M4 — Add progress reporting and visualization
-- [ ] M5 — Integrate with introspection system
+- [x] M1 — Add feature requirements generation tool
+- [x] M2 — Enhance todo system with dependencies and progress
+- [x] M3 — Implement checkpoint/resume mechanism
+- [x] M4 — Add progress reporting and visualization
+- [x] M5 — Integrate with introspection system
 - [ ] M6 — Tests and documentation
 
 ## M1: Feature Requirements Generation Tool
@@ -499,6 +499,8 @@ end
 | 2026-02-24 | M2 | Added 16 new tests, all 75 tests passing |
 | 2026-02-24 | M3 | Implemented Checkpoint module for save/resume |
 | 2026-02-24 | M3 | Added 17 tests for checkpoint functionality |
+| 2026-02-24 | M4 | Added `CodingAgent.Progress.snapshot/2` aggregation (todos + requirements + checkpoint stats + next actions) with dedicated tests |
+| 2026-02-24 | M5 | Added `agent.progress` control-plane method + schema/registry integration; emits `:agent_progress_snapshot` introspection events with run/session metadata |
 
 ## Implementation Summary
 

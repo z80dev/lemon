@@ -1,8 +1,9 @@
 # PLN-20260222: Debt Phase 9 — Gateway Runtime Reliability Decomposition
 
-## Status: Complete
+## Status: Landed
 **Owner:** codex
 **Reviewer:** codex
+**Landed Revision:** `2702f964` (core) + test sync fix in `lemon-phase9` workspace
 
 ## Goal
 Harden gateway runtime reliability by placing the EventBridge fanout supervisor under proper OTP supervision, moving email attachment parsing off the request handler critical path, and replacing scattered engine dependency bootstrapping with an explicit dependency manager.

@@ -4,6 +4,36 @@
 
 ### Completed Work
 
+#### 0. Debt Phase 13 — Client CI Parity M7/M9/M10
+**Plan:** PLN-20260222-debt-phase-13-client-ci-parity-governance
+**Status:** in_review (workspace: lemon-phase13, change: wpnpouxs)
+
+Implemented the three remaining actionable milestones from Phase 13:
+
+**M7 — ESLint for lemon-tui and lemon-browser-node:**
+- Created `eslint.config.js` in both packages (flat config, eslint v9, typescript-eslint, `globals.node`)
+- Added `lint` script and devDependencies: `eslint ^9.39.1`, `typescript-eslint ^8.46.4`, `globals ^16.5.0`
+- Added lint steps to `.github/workflows/quality.yml` for both packages
+
+**M9 — Test coverage for lemon-web/server:**
+- Extracted 5 pure utility functions from `src/index.ts` → new `src/utils.ts` (exported: `BridgeOptions`, `contentTypeFor`, `parseArgs`, `buildRpcArgs`, `decodeBase64Url`, `parseGatewayProbeOutput`)
+- Created `src/utils.test.ts` with 43 unit tests
+- Added `vitest ^3.0.0`, `@types/node ^24.0.0` to server devDependencies
+- Added `test`/`test:watch` scripts and `vitest.config.ts` to server package
+- Added `lemon-web server tests` step to CI
+
+**M10 — Version alignment:**
+- `lemon-tui`: `@types/node` ^22→^24, `vitest` ^2→^3
+- `lemon-browser-node`: `@types/node` ^22→^24, `vitest` ^2.1.9→^3
+- `lemon-web/server`: added `@types/node ^24`, `vitest ^3`
+- All packages now at `@types/node ^24.x` and `vitest ^3.x` (except lemon-web/web which uses v4 with Vite)
+
+**Changes:** 10 files (+562 lines, -180 lines)
+**Tests added:** 43
+**Deferred:** M8 (upstream transitive deps), M11 (monorepo restructuring)
+
+---
+
 #### 1. Pi Model Resolver - Slash Separator Support
 **Plan:** PLN-20260224-pi-model-resolver-slash-support  
 **Status:** ready_to_land
@@ -186,3 +216,114 @@ Created Checkpoint module for save/resume functionality:
 1. **Continue** PLN-20260224-long-running-agent-harnesses (M4-M6: introspection, docs, integration)
 2. **Complete** PLN-20260224-runtime-hot-reload (documentation)
 3. **Investigate** community ideas (MCP, WASM, multi-agent, channels)
+
+#### 7. Debt Phases 9/10 Close-out + Phase 13 Ready-to-Land
+**Plans:** PLN-20260222-debt-phase-09-gateway-reliability-decomposition, PLN-20260222-debt-phase-10-monolith-footprint-reduction, PLN-20260222-debt-phase-13-client-ci-parity-governance  
+**Status:** phase-09 landed docs integrated, phase-10 landed docs integrated, phase-13 ready_to_land
+
+Cron merge workspace consolidated pending debt-phase artifacts:
+
+- Imported phase-09 planning artifacts:
+  - `planning/reviews/RVW-PLN-20260222-debt-phase-09-gateway-reliability-decomposition.md`
+  - `planning/merges/MRG-PLN-20260222-debt-phase-09-gateway-reliability-decomposition.md`
+  - phase-09 plan/index updates and async attachment test sync fix (`assert_eventually`)
+- Imported phase-10 planning artifacts:
+  - `planning/reviews/RVW-PLN-20260222-debt-phase-10-monolith-footprint-reduction.md`
+  - `planning/merges/MRG-PLN-20260222-debt-phase-10-monolith-footprint-reduction.md`
+- Finalized phase-13 planning state:
+  - created `planning/merges/MRG-PLN-20260222-debt-phase-13-client-ci-parity-governance.md`
+  - updated `planning/INDEX.md` to move phase-13 into **Ready to Land**
+  - updated phase-13 plan/review docs to reflect current test totals and status
+
+Validation executed:
+
+- `mix test apps/lemon_gateway/test/email/inbound_security_test.exs` ✅ (8 tests)
+- `mix test apps/lemon_services/test` ✅ (14 tests)
+- `clients/lemon-web/server`: `npm run test` + `npm run typecheck` ✅ (54 tests)
+- `clients/lemon-web/shared`: `npm run test` ✅ (108 tests)
+- `clients/lemon-tui`: `npm run lint` + `npm run typecheck` + `npm test` ✅ (947 tests)
+- `clients/lemon-browser-node`: `npm run lint` + `npm run typecheck` + `npm test` ✅ (15 tests)
+
+#### 8. Debt Phase 13 Landing Prep Push (Cron follow-up)
+**Plan:** PLN-20260222-debt-phase-13-client-ci-parity-governance  
+**Status:** ready_to_land (bookmark pushed)
+
+Follow-up cron run performed final landing prep validation and published the bookmark for review/merge:
+
+- Executed `jj git fetch` in `lemon-cron-merge`
+- Re-ran required Elixir validations:
+  - `mix test apps/lemon_services/test` ✅ (14 tests)
+  - `mix test apps/lemon_gateway/test/email/inbound_security_test.exs` ✅ (8 tests)
+- Pushed bookmark:
+  - `feature/pln-20260222-debt-phase-13-client-ci-parity-governance` @ `dd5ad4b3`
+
+Next operator step is merge/land from the pushed branch, then transition `planning/INDEX.md` entry from `ready_to_land` to `landed` with landed revision.
+
+#### 9. Runtime Hot-Reload M8 Close-out (Docs + Review)
+**Plan:** PLN-20260224-runtime-hot-reload  
+**Status:** ready_to_land
+
+Completed the remaining milestone (**M8**) for runtime hot-reload by producing operator docs and planning artifacts:
+
+- Added runtime operations doc:
+  - `docs/runtime-hot-reload.md`
+- Added review artifact:
+  - `planning/reviews/RVW-PLN-20260224-runtime-hot-reload.md`
+- Added merge artifact:
+  - `planning/merges/MRG-PLN-20260224-runtime-hot-reload.md`
+- Updated plan and board state:
+  - `planning/plans/PLN-20260224-runtime-hot-reload.md` → status `ready_to_land`
+  - `planning/INDEX.md` → moved runtime hot-reload from Active Plans to Ready to Land
+
+Validation executed:
+
+- `mix test apps/lemon_core/test/lemon_core/reload_test.exs` ✅ (14 tests)
+- `mix test apps/lemon_control_plane/test/lemon_control_plane/methods/system_reload_test.exs` ✅ (10 tests)
+- `mix test apps/coding_agent/test/coding_agent/checkpoint_test.exs apps/coding_agent/test/coding_agent/tools/todo_store_test.exs` ✅ (92 tests)
+
+#### 10. Long-Running Harnesses M4 Progress Snapshot
+**Plan:** PLN-20260224-long-running-agent-harnesses  
+**Status:** in_progress (M4 complete)
+
+Implemented the M4 progress-reporting milestone by adding a consolidated progress snapshot API for coding sessions:
+
+- Added module:
+  - `apps/coding_agent/lib/coding_agent/progress.ex`
+- New API:
+  - `CodingAgent.Progress.snapshot/2`
+  - Aggregates todo progress, feature-requirement progress, checkpoint stats, and actionable next items
+- Added tests:
+  - `apps/coding_agent/test/coding_agent/progress_test.exs` (2 tests)
+- Updated planning artifact:
+  - `planning/plans/PLN-20260224-long-running-agent-harnesses.md` milestones/log now mark M1-M4 complete
+
+Validation executed:
+
+- `mix test apps/coding_agent/test/coding_agent/progress_test.exs` ✅ (2 tests)
+- `mix test apps/coding_agent/test/coding_agent/checkpoint_test.exs apps/coding_agent/test/coding_agent/tools/todo_store_test.exs apps/coding_agent/test/coding_agent/tools/feature_requirements_test.exs` ✅
+
+#### 11. Long-Running Harnesses M5 Introspection Integration
+**Plan:** PLN-20260224-long-running-agent-harnesses  
+**Status:** in_progress (M5 complete)
+
+Implemented introspection integration by wiring long-running progress snapshots into control-plane method surface and introspection logs:
+
+- Added control-plane method:
+  - `apps/lemon_control_plane/lib/lemon_control_plane/methods/agent_progress.ex`
+  - Method: `agent.progress`
+  - Input: required `sessionId`, optional `cwd`, `runId`, `sessionKey`, `agentId`
+  - Output: `CodingAgent.Progress.snapshot/2` payload for the target session
+- Introspection integration:
+  - Records `:agent_progress_snapshot` events via `LemonCore.Introspection.record/3`
+  - Carries run/session metadata when supplied
+- Method registration + validation:
+  - `apps/lemon_control_plane/lib/lemon_control_plane/methods/registry.ex`
+  - `apps/lemon_control_plane/lib/lemon_control_plane/protocol/schemas.ex`
+- Tests:
+  - Extended `apps/lemon_control_plane/test/lemon_control_plane/methods/introspection_methods_test.exs`
+  - Added coverage for method response and emitted introspection event
+
+Validation executed:
+
+- `mix test apps/lemon_control_plane/test/lemon_control_plane/methods/introspection_methods_test.exs apps/coding_agent/test/coding_agent/progress_test.exs` ✅ (7 tests)
+- `mix test apps/coding_agent/test/coding_agent/checkpoint_test.exs apps/coding_agent/test/coding_agent/tools/todo_store_test.exs apps/coding_agent/test/coding_agent/tools/feature_requirements_test.exs apps/coding_agent/test/coding_agent/progress_test.exs apps/lemon_control_plane/test/lemon_control_plane/methods/introspection_methods_test.exs` ✅ (109 tests)

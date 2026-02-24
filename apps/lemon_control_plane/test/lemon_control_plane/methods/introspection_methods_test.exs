@@ -2,6 +2,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
   use ExUnit.Case, async: false
 
   alias LemonControlPlane.Methods.{
+    AgentProgress,
     IntrospectionSnapshot,
     SessionsActiveList,
     TransportsStatus
@@ -165,6 +166,85 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       assert result["activeSessions"] == []
       assert result["channels"] == []
       assert result["transports"] == []
+    end
+  end
+
+  describe "agent.progress" do
+    test "returns coding-agent harness progress and records introspection event" do
+      token = System.unique_integer([:positive, :monotonic])
+      session_id = "progress_session_#{token}"
+      run_id = "run_progress_#{token}"
+      cwd = Path.join(System.tmp_dir!(), "agent_progress_#{token}")
+
+      File.mkdir_p!(cwd)
+
+      requirements = %{
+        project_name: "progress-test",
+        original_prompt: "build feature",
+        features: [
+          %{
+            id: "f1",
+            description: "done",
+            status: :completed,
+            dependencies: [],
+            priority: :high,
+            acceptance_criteria: ["works"],
+            created_at: DateTime.utc_now() |> DateTime.to_iso8601()
+          },
+          %{
+            id: "f2",
+            description: "next",
+            status: :pending,
+            dependencies: ["f1"],
+            priority: :medium,
+            acceptance_criteria: ["works"],
+            created_at: DateTime.utc_now() |> DateTime.to_iso8601()
+          }
+        ],
+        created_at: DateTime.utc_now() |> DateTime.to_iso8601(),
+        version: "1.0"
+      }
+
+      :ok = CodingAgent.Tools.FeatureRequirements.save_requirements(requirements, cwd)
+
+      :ok =
+        CodingAgent.Tools.TodoStore.put(session_id, [
+          %{id: "t1", content: "done", status: :completed, dependencies: [], priority: :high},
+          %{id: "t2", content: "next", status: :pending, dependencies: ["t1"], priority: :medium}
+        ])
+
+      assert AgentProgress.name() == "agent.progress"
+      assert AgentProgress.scopes() == [:read]
+
+      {:ok, result} =
+        AgentProgress.handle(
+          %{
+            "sessionId" => session_id,
+            "cwd" => cwd,
+            "runId" => run_id
+          },
+          %{}
+        )
+
+      assert result["sessionId"] == session_id
+      assert result["cwd"] == cwd
+      assert result["snapshot"][:todos][:total] == 2
+      assert result["snapshot"][:features][:total] == 2
+      assert result["snapshot"][:overall_percentage] == 50
+
+      events =
+        LemonCore.Introspection.list(
+          run_id: run_id,
+          event_type: :agent_progress_snapshot,
+          limit: 5
+        )
+
+      assert Enum.any?(events, &(Map.get(&1, :event_type) == :agent_progress_snapshot))
+
+      on_exit(fn ->
+        CodingAgent.Tools.TodoStore.put(session_id, [])
+        File.rm_rf(cwd)
+      end)
     end
   end
 end
