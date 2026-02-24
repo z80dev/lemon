@@ -27,6 +27,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   @default_debounce_ms 1_000
   @webhook_clear_retry_ms 5 * 60 * 1000
   @pending_compaction_ttl_ms 12 * 60 * 60 * 1000
+  @known_target_write_interval_ms 30_000
   @cancel_callback_prefix "lemon:cancel"
   @model_callback_prefix "lemon:model"
   @providers_per_page 8
@@ -255,14 +256,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
               "Started a new session (memory recording failed)."
             end
 
-          msg =
-            case pending[:project] do
-              %{id: id, root: root} when is_binary(id) and is_binary(root) ->
-                msg0 <> "\nProject: #{id} (#{root})"
-
-              _ ->
-                msg0
-            end
+          scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
+          msg = started_new_session_message(state, scope, sk, pending[:project], msg0)
 
           _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
 
@@ -540,7 +535,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           parse_int(message["message_id"]) || map_get(existing, :last_message_id)
         )
 
-      _ = CoreStore.put(:telegram_known_targets, key, entry)
+      if should_persist_known_target?(existing, entry, now) do
+        _ = CoreStore.put(:telegram_known_targets, key, entry)
+      end
+
       state
     else
       _ -> state
@@ -550,6 +548,34 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp maybe_index_known_target(state, _), do: state
+
+  defp should_persist_known_target?(existing, entry, now_ms) do
+    significant_change? = known_target_changed?(existing, entry)
+    existing_updated_at_ms = parse_int(map_get(existing, :updated_at_ms)) || 0
+
+    significant_change? or now_ms - existing_updated_at_ms >= @known_target_write_interval_ms
+  end
+
+  defp known_target_changed?(existing, entry) do
+    keys = [
+      :channel_id,
+      :account_id,
+      :peer_kind,
+      :peer_id,
+      :thread_id,
+      :chat_id,
+      :topic_id,
+      :chat_type,
+      :chat_title,
+      :chat_username,
+      :chat_display_name,
+      :topic_name
+    ]
+
+    Enum.any?(keys, fn key ->
+      map_get(existing, key) != map_get(entry, key)
+    end)
+  end
 
   defp extract_chat_message(update) when is_map(update) do
     update["message"] ||
@@ -615,6 +641,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
       trigger_command?(original_text, state.bot_username) ->
         handle_trigger_command(state, inbound)
+
+      cwd_command?(original_text, state.bot_username) ->
+        handle_cwd_command(state, inbound)
 
       topic_command?(original_text, state.bot_username) ->
         handle_topic_command(state, inbound)
@@ -901,6 +930,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp trigger_command?(text, bot_username) do
     telegram_command?(text, "trigger", bot_username)
+  end
+
+  defp cwd_command?(text, bot_username) do
+    telegram_command?(text, "cwd", bot_username)
   end
 
   defp topic_command?(text, bot_username) do
@@ -2161,6 +2194,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     chat_id = ids[:chat_id]
     thread_id = ids[:thread_id]
     user_msg_id = ids[:user_msg_id]
+    project = extract_project_info(project_result)
 
     _ = safe_abort_session(session_key, :new_session)
     _ = safe_delete_session_model(session_key)
@@ -2189,7 +2223,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           chat_id: chat_id,
           thread_id: thread_id,
           user_msg_id: user_msg_id,
-          project: extract_project_info(project_result)
+          project: project
         }
 
         %{state | pending_new: Map.put(state.pending_new, run_id, pending)}
@@ -2198,7 +2232,16 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         safe_delete_chat_state(session_key)
         safe_delete_selected_resume(state, chat_id, thread_id)
         safe_clear_thread_message_indices(state, chat_id, thread_id)
-        msg = new_session_message(project_result, "Started a new session.")
+
+        msg =
+          started_new_session_message(
+            state,
+            scope,
+            session_key,
+            project,
+            "Started a new session."
+          )
+
         _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
         state
     end
@@ -2226,6 +2269,112 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       _ -> base_msg
     end
   end
+
+  defp started_new_session_message(
+         state,
+         %ChatScope{} = scope,
+         session_key,
+         project,
+         base_msg
+       )
+       when is_binary(base_msg) do
+    {model_hint, model_scope} =
+      resolve_model_hint(state, session_key, scope.chat_id, scope.topic_id)
+
+    {provider_hint, model_id} = split_model_hint(model_hint)
+    model_value = if(is_binary(model_id) and model_id != "", do: model_id, else: model_hint)
+    model_line = format_model_line(model_value, model_scope)
+
+    provider_line =
+      if(is_binary(provider_hint) and provider_hint != "", do: provider_hint, else: "(default)")
+
+    engine_line = resolve_new_session_engine(session_key, model_hint)
+    cwd_line = resolve_new_session_cwd(scope)
+    account_line = state.account_id || "default"
+
+    session_line =
+      if(is_binary(session_key) and session_key != "", do: session_key, else: "(unavailable)")
+
+    [
+      base_msg,
+      "Model: #{model_line}",
+      "Provider: #{provider_line}",
+      "Engine: #{engine_line}",
+      "CWD: #{cwd_line}",
+      "Account: #{account_line}",
+      "Session key: #{session_line}"
+    ]
+    |> maybe_append_project_line(project)
+    |> Enum.join("\n")
+  rescue
+    _ -> base_msg
+  end
+
+  defp started_new_session_message(_state, _scope, _session_key, project, base_msg)
+       when is_binary(base_msg) do
+    [base_msg]
+    |> maybe_append_project_line(project)
+    |> Enum.join("\n")
+  end
+
+  defp split_model_hint(model_hint) when is_binary(model_hint) and model_hint != "" do
+    case String.split(model_hint, ":", parts: 2) do
+      [provider, model_id] when provider != "" and model_id != "" -> {provider, model_id}
+      _ -> {nil, model_hint}
+    end
+  end
+
+  defp split_model_hint(_), do: {nil, nil}
+
+  defp format_model_line(model_value, model_scope)
+       when is_binary(model_value) and model_value != "" do
+    case model_scope do
+      :session -> "#{model_value} (session override)"
+      :future -> "#{model_value} (chat/topic default)"
+      _ -> model_value
+    end
+  end
+
+  defp format_model_line(_model_value, _model_scope), do: "(default)"
+
+  defp resolve_new_session_engine(session_key, model_hint) do
+    cond do
+      is_binary(model_hint) and model_hint != "" ->
+        "#{@model_default_engine} (from model selection)"
+
+      true ->
+        case last_engine_hint(session_key) do
+          engine when is_binary(engine) and engine != "" -> engine
+          _ -> "(default)"
+        end
+    end
+  rescue
+    _ -> "(default)"
+  end
+
+  defp resolve_new_session_cwd(%ChatScope{} = scope) do
+    case BindingResolver.resolve_cwd(scope) do
+      cwd when is_binary(cwd) and cwd != "" ->
+        Path.expand(cwd)
+
+      _ ->
+        case Cwd.default_cwd() do
+          cwd when is_binary(cwd) and cwd != "" -> Path.expand(cwd)
+          _ -> "(not configured)"
+        end
+    end
+  rescue
+    _ -> "(not configured)"
+  end
+
+  defp resolve_new_session_cwd(_), do: "(not configured)"
+
+  defp maybe_append_project_line(lines, %{id: id, root: root})
+       when is_list(lines) and is_binary(id) and is_binary(root) do
+    lines ++ ["Project: #{id} (#{root})"]
+  end
+
+  defp maybe_append_project_line(lines, _project) when is_list(lines), do: lines
 
   defp extract_project_info({:ok, %{id: id, root: root}}), do: %{id: id, root: root}
   defp extract_project_info(_), do: nil
@@ -3415,6 +3564,154 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp render_trigger_mode_set(mode, %ChatScope{topic_id: _}) do
     "Trigger mode set to #{mode} for this topic."
   end
+
+  defp handle_cwd_command(state, inbound) do
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
+    args = String.trim(telegram_command_args(inbound.message.text, "cwd") || "")
+
+    if not is_integer(chat_id) do
+      state
+    else
+      scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
+
+      case String.downcase(args) do
+        "" ->
+          _ =
+            send_system_message(
+              state,
+              chat_id,
+              thread_id,
+              user_msg_id,
+              render_cwd_status(scope)
+            )
+
+          state
+
+        "clear" ->
+          had_override? = scope_has_cwd_override?(scope)
+          clear_cwd_override(scope)
+
+          _ =
+            send_system_message(
+              state,
+              chat_id,
+              thread_id,
+              user_msg_id,
+              render_cwd_cleared(scope, had_override?)
+            )
+
+          state
+
+        _ ->
+          case maybe_select_project_for_scope(scope, args) do
+            {:ok, %{root: root}} when is_binary(root) and root != "" ->
+              _ =
+                send_system_message(
+                  state,
+                  chat_id,
+                  thread_id,
+                  user_msg_id,
+                  render_cwd_set(scope, root)
+                )
+
+              state
+
+            {:error, msg} when is_binary(msg) ->
+              _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
+              state
+
+            _ ->
+              _ = send_system_message(state, chat_id, thread_id, user_msg_id, cwd_usage())
+              state
+          end
+      end
+    end
+  rescue
+    _ -> state
+  end
+
+  defp render_cwd_status(%ChatScope{} = scope) do
+    cwd = BindingResolver.resolve_cwd(scope)
+    scope_label = cwd_scope_label(scope)
+    override? = scope_has_cwd_override?(scope)
+
+    cond do
+      is_binary(cwd) and cwd != "" and override? ->
+        [
+          "Working directory for #{scope_label}: #{cwd}",
+          "Source: /cwd override.",
+          "New sessions started with /new in #{scope_label} will use this directory.",
+          cwd_usage()
+        ]
+        |> Enum.join("\n")
+
+      is_binary(cwd) and cwd != "" ->
+        [
+          "Working directory for #{scope_label}: #{cwd}",
+          "Source: binding/project configuration.",
+          cwd_usage()
+        ]
+        |> Enum.join("\n")
+
+      true ->
+        [
+          "No working directory configured for #{scope_label}.",
+          "Set one with /cwd <project_id|path>.",
+          cwd_usage()
+        ]
+        |> Enum.join("\n")
+    end
+  rescue
+    _ -> cwd_usage()
+  end
+
+  defp render_cwd_set(scope, root) do
+    scope_label = cwd_scope_label(scope)
+    root = Path.expand(root)
+
+    [
+      "Working directory set for #{scope_label}: #{root}",
+      "New sessions started with /new in #{scope_label} will use this directory.",
+      cwd_usage()
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp render_cwd_cleared(scope, had_override?) do
+    scope_label = cwd_scope_label(scope)
+
+    if had_override? do
+      "Cleared working directory override for #{scope_label}."
+    else
+      "No /cwd override was set for #{scope_label}."
+    end
+  end
+
+  defp cwd_scope_label(%ChatScope{topic_id: topic_id}) when is_integer(topic_id), do: "this topic"
+  defp cwd_scope_label(_), do: "this chat"
+
+  defp scope_has_cwd_override?(%ChatScope{} = scope) do
+    case BindingResolver.get_project_override(scope) do
+      override when is_binary(override) and override != "" -> true
+      _ -> false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp scope_has_cwd_override?(_), do: false
+
+  defp clear_cwd_override(%ChatScope{} = scope) do
+    _ = CoreStore.delete(:channels_project_overrides, scope)
+    _ = CoreStore.delete(:gateway_project_overrides, scope)
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp clear_cwd_override(_), do: :ok
+
+  defp cwd_usage, do: "Usage: /cwd [project_id|path|clear]"
 
   defp authorized_inbound_reason(state, inbound) do
     {chat_id, _thread_id} = extract_chat_ids(inbound)

@@ -2,6 +2,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
   alias Elixir.LemonChannels, as: LemonChannels
   use ExUnit.Case, async: false
 
+  alias LemonChannels.BindingResolver
+  alias LemonChannels.Types.ChatScope
+
   defmodule TestRouter do
     def handle_inbound(msg) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
@@ -125,6 +128,88 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
     refute_receive {:inbound, _msg}, 250
   end
 
+  test "/cwd sets topic working directory and new sessions use it" do
+    chat_id = 444_003
+    topic_id = 101
+    msg_id = System.unique_integer([:positive])
+    cwd = Path.join(System.tmp_dir!(), "lemon-topic-cwd-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(cwd)
+    on_exit(fn -> File.rm_rf(cwd) end)
+
+    MockAPI.set_updates([
+      topic_message_update(chat_id, topic_id, "/cwd #{cwd}", msg_id + 1),
+      topic_message_update(chat_id, topic_id, "/new", msg_id + 2),
+      topic_message_update(chat_id, topic_id, "hello", msg_id + 3)
+    ])
+
+    assert {:ok, _pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               deny_unbound_chats: false
+             })
+
+    assert_receive {:send_message, ^chat_id, cwd_msg, _reply_to_or_opts, _parse_mode}, 800
+    assert cwd_msg =~ "Working directory set for this topic"
+    assert cwd_msg =~ Path.expand(cwd)
+
+    assert_receive {:send_message, ^chat_id, new_session_msg, _reply_to_or_opts, _parse_mode},
+                   800
+
+    assert String.starts_with?(new_session_msg, "Started a new session.")
+    assert String.contains?(new_session_msg, "Model:")
+    assert String.contains?(new_session_msg, "Provider:")
+    assert String.contains?(new_session_msg, "CWD: #{Path.expand(cwd)}")
+
+    assert_receive {:inbound, inbound}, 1_200
+    assert inbound.message.text == "hello"
+    assert inbound.meta[:cwd] == Path.expand(cwd)
+    assert inbound.meta[:topic_id] == topic_id
+
+    scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: topic_id}
+    assert BindingResolver.resolve_cwd(scope) == Path.expand(cwd)
+  end
+
+  test "/cwd clear removes topic working directory override" do
+    chat_id = 444_004
+    topic_id = 102
+    msg_id = System.unique_integer([:positive])
+    cwd = Path.join(System.tmp_dir!(), "lemon-topic-cwd-#{System.unique_integer([:positive])}")
+    project_id = "tmp_#{System.unique_integer([:positive])}"
+    File.mkdir_p!(cwd)
+    on_exit(fn -> File.rm_rf(cwd) end)
+
+    scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: topic_id}
+
+    _ =
+      LemonCore.Store.put(:channels_projects_dynamic, project_id, %{
+        root: cwd,
+        default_engine: nil
+      })
+
+    _ = LemonCore.Store.put(:channels_project_overrides, scope, project_id)
+    _ = LemonCore.Store.put(:gateway_project_overrides, scope, project_id)
+
+    on_exit(fn ->
+      _ = LemonCore.Store.delete(:channels_projects_dynamic, project_id)
+      _ = LemonCore.Store.delete(:channels_project_overrides, scope)
+      _ = LemonCore.Store.delete(:gateway_project_overrides, scope)
+    end)
+
+    MockAPI.set_updates([
+      topic_message_update(chat_id, topic_id, "/cwd clear", msg_id + 1)
+    ])
+
+    assert {:ok, _pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               deny_unbound_chats: false
+             })
+
+    assert_receive {:send_message, ^chat_id, clear_msg, _reply_to_or_opts, _parse_mode}, 800
+    assert clear_msg == "Cleared working directory override for this topic."
+    assert BindingResolver.resolve_cwd(scope) == nil
+  end
+
   defp start_transport(overrides) when is_map(overrides) do
     token = "token-" <> Integer.to_string(System.unique_integer([:positive]))
 
@@ -167,6 +252,20 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
       "update_id" => System.unique_integer([:positive]),
       "message" => %{
         "message_id" => System.unique_integer([:positive]),
+        "date" => 1,
+        "chat" => %{"id" => chat_id, "type" => "supergroup"},
+        "from" => %{"id" => 99, "username" => "tester", "first_name" => "Test"},
+        "text" => text
+      }
+    }
+  end
+
+  defp topic_message_update(chat_id, topic_id, text, message_id) do
+    %{
+      "update_id" => System.unique_integer([:positive]),
+      "message" => %{
+        "message_id" => message_id,
+        "message_thread_id" => topic_id,
         "date" => 1,
         "chat" => %{"id" => chat_id, "type" => "supergroup"},
         "from" => %{"id" => 99, "username" => "tester", "first_name" => "Test"},

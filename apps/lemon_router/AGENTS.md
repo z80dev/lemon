@@ -87,6 +87,7 @@ LemonRouter.Router.handle_control_agent(params, ctx)
 ## Agent Directory System
 
 The directory merges active sessions from `SessionRegistry` with durable metadata from `LemonCore.Store`.
+Store-backed reads for `:sessions_index` and `:telegram_known_targets` are served from `LemonCore.Store.ReadCache` to avoid repeated full-table scans on directory/listing endpoints.
 
 ### Key Modules
 
@@ -387,6 +388,9 @@ Running…
 2. read [done]
 3. web_search [done]
 ```
+
+Tool status output is action-driven. If a run completes without any tool actions,
+`ToolStatusCoalescer.finalize_run/5` does not emit a synthetic `"Done"` message.
 
 ### Cancel Button
 

@@ -332,23 +332,15 @@ defmodule LemonRouter.ToolStatusCoalescer do
   defp do_flush(state) do
     cancel_timer(state.flush_timer)
 
-    progress_msg_id = (state.meta || %{})[:progress_msg_id]
-
     text =
-      cond do
-        state.order == [] and state.finalized == true and is_integer(progress_msg_id) ->
-          "Done"
-
-        true ->
-          state.channel_id
-          |> LemonRouter.ToolStatusRenderer.render(state.actions, state.order)
-          |> maybe_prefix_running(state)
-      end
+      state.channel_id
+      |> LemonRouter.ToolStatusRenderer.render(state.actions, state.order)
+      |> maybe_prefix_running(state)
 
     state =
       cond do
         # Only send a tool-status message when we actually have tool/actions to show.
-        state.order == [] and not (state.finalized == true and is_integer(progress_msg_id)) ->
+        state.order == [] ->
           state
 
         text == state.last_text ->

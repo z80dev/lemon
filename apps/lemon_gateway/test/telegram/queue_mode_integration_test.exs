@@ -1030,9 +1030,14 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
                      2000
 
       assert_receive {:telegram_api_call,
-                      {:send_message, ^chat_id, "Started a new session.",
+                      {:send_message, ^chat_id, new_session_msg,
                        %{"reply_to_message_id" => 500}, _parse_mode}},
                      2000
+
+      assert String.starts_with?(new_session_msg, "Started a new session.")
+      assert String.contains?(new_session_msg, "Model:")
+      assert String.contains?(new_session_msg, "Provider:")
+      assert String.contains?(new_session_msg, "CWD:")
 
       assert eventually(fn -> Elixir.LemonGateway.Store.get_chat_state(session_key) == nil end)
     end
@@ -1148,9 +1153,14 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       refute_receive {:job_captured, %Job{}}, 300
 
       assert_receive {:telegram_api_call,
-                      {:send_message, ^chat_id, "Started a new session.",
+                      {:send_message, ^chat_id, new_session_msg,
                        %{"reply_to_message_id" => 602}, _parse_mode}},
                      2000
+
+      assert String.starts_with?(new_session_msg, "Started a new session.")
+      assert String.contains?(new_session_msg, "Model:")
+      assert String.contains?(new_session_msg, "Provider:")
+      assert String.contains?(new_session_msg, "CWD:")
 
       Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "second", message_id: 603)
       assert_receive {:job_captured, %Job{} = _job2}, 2000
@@ -1226,9 +1236,14 @@ defmodule LemonGateway.Telegram.QueueModeIntegrationTest do
       refute_receive {:job_captured, %Job{}}, 300
 
       assert_receive {:telegram_api_call,
-                      {:send_message, ^chat_id, "Started a new session.",
+                      {:send_message, ^chat_id, new_session_msg,
                        %{"reply_to_message_id" => 702}, _parse_mode}},
                      2000
+
+      assert String.starts_with?(new_session_msg, "Started a new session.")
+      assert String.contains?(new_session_msg, "Model:")
+      assert String.contains?(new_session_msg, "Provider:")
+      assert String.contains?(new_session_msg, "CWD:")
 
       Elixir.LemonGateway.Telegram.QueueModeIntegrationTest.MockTelegramAPI.enqueue_message(chat_id, "second", message_id: 703)
       assert_receive {:job_captured, %Job{} = _job2}, 2000

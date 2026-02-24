@@ -163,12 +163,14 @@ adapters/telegram/voice_transcriber.ex — OpenAI-compatible audio transcription
 | `Telegram.PollerLock` | Prevents duplicate pollers for the same account/token |
 | `Telegram.TransportShared` | Shared dedupe helpers across transport modules |
 
+`adapters/telegram/transport.ex` also indexes `:telegram_known_targets` for routing discovery, but throttles writes (30s cadence per target unless metadata changes) to avoid overloading `LemonCore.Store` during high-traffic chats.
+
 ### Key Capabilities
 
 - `chunk_limit`: 4096
 - `rate_limit`: 30 msg/sec
 - Supports: edit, delete, voice, images, files, reactions, threads
-- Transport-level Telegram commands: `/new`, `/resume`, `/model`, `/trigger`, `/file`, `/topic`, `/cancel`
+- Transport-level Telegram commands: `/new`, `/resume`, `/model`, `/trigger`, `/cwd`, `/file`, `/topic`, `/cancel`
 
 ### Enable
 

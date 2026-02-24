@@ -55,13 +55,24 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
       {:ok, _} = LemonChannels.Outbox.Dedupe.start_link([])
     end
 
-    :persistent_term.put({Elixir.LemonRouter.ToolStatusCoalescerTest.TestTelegramPlugin, :test_pid}, self())
+    :persistent_term.put(
+      {Elixir.LemonRouter.ToolStatusCoalescerTest.TestTelegramPlugin, :test_pid},
+      self()
+    )
+
     existing = LemonChannels.Registry.get_plugin("telegram")
     _ = LemonChannels.Registry.unregister("telegram")
-    :ok = LemonChannels.Registry.register(Elixir.LemonRouter.ToolStatusCoalescerTest.TestTelegramPlugin)
+
+    :ok =
+      LemonChannels.Registry.register(
+        Elixir.LemonRouter.ToolStatusCoalescerTest.TestTelegramPlugin
+      )
 
     on_exit(fn ->
-      _ = :persistent_term.erase({Elixir.LemonRouter.ToolStatusCoalescerTest.TestTelegramPlugin, :test_pid})
+      _ =
+        :persistent_term.erase(
+          {Elixir.LemonRouter.ToolStatusCoalescerTest.TestTelegramPlugin, :test_pid}
+        )
 
       if is_pid(Process.whereis(LemonChannels.Registry)) do
         _ = LemonChannels.Registry.unregister("telegram")
@@ -248,32 +259,36 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
                       meta: %{run_id: ^run_id}
                     }},
                    1_000
+
     assert String.contains?(text, "Tool calls:")
   end
 
-  test "finalize_run creates a new status message when only progress_msg_id is present" do
+  test "finalize_run does not create status output when there are no tool actions" do
     session_key = "agent:tool-status:telegram:bot:group:12345:thread:777"
     channel_id = "telegram"
     run_id = "run_#{System.unique_integer([:positive])}"
     progress_msg_id = 9002
 
-    # When only progress_msg_id is provided (without status_msg_id),
-    # finalize_run should create a new status message instead of trying to edit the user's message
+    # finalize_run should be a no-op when no tool actions were ingested.
     assert :ok =
              ToolStatusCoalescer.finalize_run(session_key, channel_id, run_id, true,
                meta: %{user_msg_id: 9, progress_msg_id: progress_msg_id}
              )
 
-    # Should create a new text message (not edit) since status_msg_id is nil
-    assert_receive {:delivered,
-                    %LemonChannels.OutboundPayload{
-                      channel_id: "telegram",
-                      kind: :text,
-                      peer: %{id: "12345", thread_id: "777"},
-                      reply_to: 9,
-                      meta: %{reply_markup: %{"inline_keyboard" => []}, run_id: ^run_id}
-                    }},
-                   1_000
+    refute_receive {:delivered, %LemonChannels.OutboundPayload{channel_id: "telegram"}}, 300
+  end
+
+  test "finalize_run does not emit synthetic done on failed runs without tool actions" do
+    session_key = "agent:tool-status:telegram:bot:group:12345:thread:777"
+    channel_id = "telegram"
+    run_id = "run_#{System.unique_integer([:positive])}"
+
+    assert :ok =
+             ToolStatusCoalescer.finalize_run(session_key, channel_id, run_id, false,
+               meta: %{user_msg_id: 9, progress_msg_id: 9003}
+             )
+
+    refute_receive {:delivered, %LemonChannels.OutboundPayload{channel_id: "telegram"}}, 300
   end
 
   test "telegram tool status falls back to a dedicated status message when progress_msg_id is nil" do
