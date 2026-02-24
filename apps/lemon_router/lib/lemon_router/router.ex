@@ -162,6 +162,20 @@ defmodule LemonRouter.Router do
     end
   end
 
+  @doc """
+  Apply a watchdog keepalive decision to a specific run.
+  """
+  @spec keep_run_alive(run_id :: binary(), decision :: :continue | :cancel) :: :ok
+  def keep_run_alive(run_id, decision \\ :continue) when is_binary(run_id) do
+    case Registry.lookup(LemonRouter.RunRegistry, run_id) do
+      [{pid, _}] ->
+        LemonRouter.RunProcess.keep_alive(pid, decision)
+
+      _ ->
+        :ok
+    end
+  end
+
   defp build_inbound_run_request(msg, meta, session_key, agent_id) do
     RunRequest.new(%{
       origin: :channel,

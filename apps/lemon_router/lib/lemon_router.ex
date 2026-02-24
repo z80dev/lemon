@@ -56,6 +56,11 @@ defmodule LemonRouter do
   defdelegate abort_run(run_id, reason \\ :user_requested), to: LemonRouter.Router
 
   @doc """
+  Apply a watchdog keepalive decision to a specific run.
+  """
+  defdelegate keep_run_alive(run_id, decision \\ :continue), to: LemonRouter.Router
+
+  @doc """
   Send a message to an agent inbox.
 
   Supports `session: :latest | :new | <session_key>`.

@@ -129,6 +129,26 @@ defmodule LemonCore.RouterBridge do
     e -> {:error, e}
   end
 
+  @spec keep_run_alive(binary(), :continue | :cancel) ::
+          :ok | {:error, :unavailable} | {:error, term()}
+  def keep_run_alive(run_id, decision \\ :continue)
+      when is_binary(run_id) and decision in [:continue, :cancel] do
+    case impl(:router) do
+      nil ->
+        {:error, :unavailable}
+
+      mod ->
+        if Code.ensure_loaded?(mod) and function_exported?(mod, :keep_run_alive, 2) do
+          _ = apply(mod, :keep_run_alive, [run_id, decision])
+          :ok
+        else
+          {:error, :unavailable}
+        end
+    end
+  rescue
+    e -> {:error, e}
+  end
+
   defp impl(key) do
     config = current_config()
     Map.get(config, key)

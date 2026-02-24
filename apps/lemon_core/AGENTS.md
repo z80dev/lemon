@@ -539,6 +539,9 @@ Channel adapters and other producers forward runs to `:lemon_router` without a c
 # Abort a session or run
 :ok = LemonCore.RouterBridge.abort_session(session_key, :user_requested)
 :ok = LemonCore.RouterBridge.abort_run(run_id, :user_requested)
+
+# Watchdog keepalive decision for an active run
+:ok = LemonCore.RouterBridge.keep_run_alive(run_id, :continue)
 ```
 
 ### Dotenv

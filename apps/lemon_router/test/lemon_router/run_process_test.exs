@@ -388,6 +388,151 @@ defmodule LemonRouter.RunProcessTest do
     end
   end
 
+  describe "run watchdog timeout" do
+    test "synthesizes run_completed and exits when a started run never completes" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+      session_key = SessionKey.main("test-agent")
+      job = make_test_job(run_id)
+
+      LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false,
+                 run_watchdog_timeout_ms: 50
+               })
+
+      started_event =
+        LemonCore.Event.new(
+          :run_started,
+          %{run_id: run_id, session_key: session_key, engine: "echo"},
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), started_event)
+
+      assert_receive %LemonCore.Event{
+                       type: :run_completed,
+                       payload: %{completed: %{ok: false, error: {:run_idle_watchdog_timeout, 50}}},
+                       meta: %{run_id: ^run_id, session_key: ^session_key, synthetic: true}
+                     },
+                     1_500
+
+      assert eventually(fn -> not Process.alive?(pid) end)
+    end
+
+    test "activity extends watchdog timeout" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+      session_key = SessionKey.main("test-agent")
+      job = make_test_job(run_id)
+
+      LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false,
+                 run_watchdog_timeout_ms: 80
+               })
+
+      started_event =
+        LemonCore.Event.new(
+          :run_started,
+          %{run_id: run_id, session_key: session_key, engine: "echo"},
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), started_event)
+
+      Process.sleep(40)
+
+      delta_event =
+        LemonCore.Event.new(
+          :delta,
+          %{seq: 1, text: "still working"},
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), delta_event)
+
+      refute_receive %LemonCore.Event{type: :run_completed}, 50
+
+      assert_receive %LemonCore.Event{
+                       type: :run_completed,
+                       payload: %{completed: %{ok: false, error: {:run_idle_watchdog_timeout, 80}}},
+                       meta: %{run_id: ^run_id, session_key: ^session_key, synthetic: true}
+                     },
+                     1_500
+
+      assert eventually(fn -> not Process.alive?(pid) end)
+    end
+
+    test "telegram run enters keepalive confirmation window before timeout" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+
+      session_key =
+        SessionKey.channel_peer(%{
+          agent_id: "test-agent",
+          channel_id: "telegram",
+          account_id: "default",
+          peer_kind: :group,
+          peer_id: "12345",
+          thread_id: "777"
+        })
+
+      job = make_test_job(run_id)
+
+      LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 job: job,
+                 submit_to_gateway?: false,
+                 run_watchdog_timeout_ms: 40,
+                 run_watchdog_confirm_timeout_ms: 120
+               })
+
+      started_event =
+        LemonCore.Event.new(
+          :run_started,
+          %{run_id: run_id, session_key: session_key, engine: "echo"},
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), started_event)
+
+      assert eventually(fn ->
+               st = :sys.get_state(pid)
+               st.run_watchdog_awaiting_confirmation? == true
+             end, 1_000)
+
+      RunProcess.keep_alive(run_id, :continue)
+
+      assert eventually(fn ->
+               st = :sys.get_state(pid)
+               st.run_watchdog_awaiting_confirmation? == false
+             end, 1_000)
+
+      RunProcess.keep_alive(run_id, :cancel)
+
+      assert_receive %LemonCore.Event{
+                       type: :run_completed,
+                       payload: %{completed: %{ok: false, error: :user_requested}},
+                       meta: %{run_id: ^run_id, session_key: ^session_key, synthetic: true}
+                     },
+                     1_500
+
+      assert eventually(fn -> not Process.alive?(pid) end)
+    end
+  end
+
   describe "zero-answer assistant retries" do
     test "auto-retries once with retry context in prompt" do
       run_id = "run_#{System.unique_integer([:positive])}"
