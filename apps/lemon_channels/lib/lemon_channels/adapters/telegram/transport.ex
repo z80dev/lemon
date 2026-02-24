@@ -658,6 +658,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       thinking_command?(original_text, state.bot_username) ->
         handle_thinking_command(state, inbound)
 
+      reload_command?(original_text, state.bot_username) ->
+        handle_reload_command(state, inbound)
+
       new_command?(original_text, state.bot_username) ->
         args = telegram_command_args(original_text, "new")
         handle_new_session(state, inbound, args)
@@ -937,6 +940,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp thinking_command?(text, bot_username) do
     telegram_command?(text, "thinking", bot_username)
+  end
+
+  defp reload_command?(text, bot_username) do
+    telegram_command?(text, "reload", bot_username)
   end
 
   defp trigger_command?(text, bot_username) do
@@ -3731,6 +3738,52 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           _ = send_system_message(state, chat_id, thread_id, user_msg_id, thinking_usage())
           state
       end
+    end
+  rescue
+    _ -> state
+  end
+
+  defp handle_reload_command(state, inbound) do
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
+
+    if not is_integer(chat_id) do
+      state
+    else
+      _ = send_system_message(state, chat_id, thread_id, user_msg_id, "Recompiling...")
+
+      case IEx.Helpers.recompile() do
+        :ok ->
+          _ =
+            send_system_message(
+              state,
+              chat_id,
+              thread_id,
+              user_msg_id,
+              "Recompile complete."
+            )
+
+        :noop ->
+          _ =
+            send_system_message(
+              state,
+              chat_id,
+              thread_id,
+              user_msg_id,
+              "Nothing to recompile — code is up to date."
+            )
+
+        {:error, _} ->
+          _ =
+            send_system_message(
+              state,
+              chat_id,
+              thread_id,
+              user_msg_id,
+              "Recompile failed — check the build output on the server."
+            )
+      end
+
+      state
     end
   rescue
     _ -> state

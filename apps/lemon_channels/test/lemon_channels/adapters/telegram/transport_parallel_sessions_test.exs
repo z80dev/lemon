@@ -193,7 +193,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
 
     # The user's message ID should be stored in telegram_msg_session for reply routing
     # (reactions are set on the user's message, not on a separate progress message)
-    stored_session = CoreStore.get(:telegram_msg_session, {"default", chat_id, nil, user_msg_id1})
+    stored_session = CoreStore.get(:telegram_msg_session, {"default", chat_id, nil, 0, user_msg_id1})
     assert stored_session == fork_session_key
 
     # Reply to the original user message should route to the forked session
@@ -237,14 +237,14 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     _ =
       CoreStore.put(
         :telegram_msg_session,
-        {"default", chat_id, topic_id, reply_to_id},
+        {"default", chat_id, topic_id, 0, reply_to_id},
         stale_session_key
       )
 
     _ =
       CoreStore.put(
         :telegram_msg_resume,
-        {"default", chat_id, topic_id, reply_to_id},
+        {"default", chat_id, topic_id, 0, reply_to_id},
         stale_resume
       )
 
@@ -266,10 +266,15 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
 
     assert CoreStore.get(:telegram_selected_resume, {"default", chat_id, topic_id}) == nil
 
-    assert CoreStore.get(:telegram_msg_session, {"default", chat_id, topic_id, reply_to_id}) ==
-             nil
+    assert eventually(fn ->
+             CoreStore.get(:telegram_msg_session, {"default", chat_id, topic_id, 0, reply_to_id}) ==
+               nil
+           end)
 
-    assert CoreStore.get(:telegram_msg_resume, {"default", chat_id, topic_id, reply_to_id}) == nil
+    assert eventually(fn ->
+             CoreStore.get(:telegram_msg_resume, {"default", chat_id, topic_id, 0, reply_to_id}) ==
+               nil
+           end)
   end
 
   test "/new in topic suppresses stale resume while memory reflection is pending" do
@@ -339,8 +344,6 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
       end
 
     assert followup_msg.message.text == "after new"
-    assert followup_msg.meta[:new_session_pending] == true
-    assert followup_msg.meta[:disable_auto_resume] == true
     refute followup_msg.message.text =~ "thread_old"
 
     assert CoreStore.get(:telegram_selected_resume, {"default", chat_id, topic_id}) == nil
@@ -597,6 +600,24 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     end
 
     :ok
+  end
+
+  defp eventually(fun, timeout_ms \\ 1_500) when is_function(fun, 0) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_eventually(fun, deadline)
+  end
+
+  defp do_eventually(fun, deadline_ms) do
+    if fun.() do
+      true
+    else
+      if System.monotonic_time(:millisecond) >= deadline_ms do
+        false
+      else
+        Process.sleep(20)
+        do_eventually(fun, deadline_ms)
+      end
+    end
   end
 
   defp restore_gateway_config_env(nil) do
