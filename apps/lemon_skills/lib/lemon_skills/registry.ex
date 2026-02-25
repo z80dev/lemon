@@ -263,7 +263,16 @@ defmodule LemonSkills.Registry do
   @impl true
   def handle_call({:list, cwd}, _from, state) do
     {skills, state} = merge_skills(state, cwd)
-    {:reply, Map.values(skills), state}
+
+    # NOTE: Map iteration order is not guaranteed.
+    # We sort here to keep skill ordering deterministic across calls.
+    # This is important for stable system prompts (and prompt caching).
+    entries =
+      skills
+      |> Map.values()
+      |> Enum.sort_by(fn entry -> entry.key || "" end)
+
+    {:reply, entries, state}
   end
 
   @impl true

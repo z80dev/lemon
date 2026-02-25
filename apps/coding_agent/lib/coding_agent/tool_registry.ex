@@ -74,6 +74,10 @@ defmodule CodingAgent.ToolRegistry do
         |> Enum.map(fn {tool, ext_module} ->
           {tool.name, tool, {:extension, ext_module}}
         end)
+        # Keep tool ordering deterministic for stable prompts / prompt caching.
+        |> Enum.sort_by(fn {name, _tool, {:extension, ext_module}} ->
+          {name, Atom.to_string(ext_module)}
+        end)
       else
         []
       end
@@ -566,7 +570,8 @@ defmodule CodingAgent.ToolRegistry do
   defp normalize_wasm_tools(nil), do: []
 
   defp normalize_wasm_tools(tools) when is_list(tools) do
-    Enum.flat_map(tools, fn
+    tools
+    |> Enum.flat_map(fn
       {name, %AgentTool{} = tool, {:wasm, meta}} when is_binary(name) and is_map(meta) ->
         [{name, tool, {:wasm, meta}}]
 
@@ -576,6 +581,10 @@ defmodule CodingAgent.ToolRegistry do
 
       _ ->
         []
+    end)
+    # Keep tool ordering deterministic for stable prompts / prompt caching.
+    |> Enum.sort_by(fn {name, _tool, {:wasm, meta}} ->
+      {name, wasm_identity(meta)}
     end)
   end
 

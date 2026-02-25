@@ -103,7 +103,14 @@ defmodule Ai do
           {:ok, AssistantMessage.t()} | {:error, term()}
   def complete(%Model{} = model, %Context{} = context, opts \\ %{}) do
     with {:ok, stream} <- stream(model, context, opts) do
-      EventStream.result(stream)
+      case EventStream.result(stream) do
+        {:ok, %AssistantMessage{} = msg} = ok ->
+          _ = Ai.PromptDiagnostics.record_complete_call(model, context, opts, msg)
+          ok
+
+        other ->
+          other
+      end
     end
   end
 

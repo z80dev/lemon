@@ -1811,12 +1811,19 @@ defmodule CodingAgent.Session do
     end
   end
 
-  defp build_transform_context(nil), do: &UntrustedToolBoundary.transform/2
+  defp build_transform_context(nil) do
+    fn messages, signal ->
+      with {:ok, msgs} <- normalize_transform_result(CodingAgent.ContextGuardrails.transform(messages, signal)),
+           {:ok, wrapped} <- normalize_transform_result(UntrustedToolBoundary.transform(msgs, signal)) do
+        {:ok, wrapped}
+      end
+    end
+  end
 
   defp build_transform_context(transform_fn) when is_function(transform_fn, 2) do
     fn messages, signal ->
-      with {:ok, wrapped} <-
-             normalize_transform_result(UntrustedToolBoundary.transform(messages, signal)),
+      with {:ok, guarded} <- normalize_transform_result(CodingAgent.ContextGuardrails.transform(messages, signal)),
+           {:ok, wrapped} <- normalize_transform_result(UntrustedToolBoundary.transform(guarded, signal)),
            {:ok, transformed} <- normalize_transform_result(transform_fn.(wrapped, signal)) do
         {:ok, transformed}
       end
