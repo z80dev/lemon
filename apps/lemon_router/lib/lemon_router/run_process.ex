@@ -44,7 +44,12 @@ defmodule LemonRouter.RunProcess do
     "string too long",
     "maximum length",
     "invalid 'input[",
-    "input["
+    "input[",
+    "上下文长度超过限制",
+    "令牌数量超出",
+    "输入过长",
+    "超出最大长度",
+    "上下文窗口已满"
   ]
   @zero_answer_retry_prefix """
   Retry notice: the previous attempt failed before producing an answer.
@@ -162,10 +167,17 @@ defmodule LemonRouter.RunProcess do
     )
 
     # Emit introspection event for run start
-    Introspection.record(:run_started, %{
-      engine_id: job && job.engine_id,
-      queue_mode: job && job.queue_mode
-    }, run_id: run_id, session_key: session_key, engine: "lemon", provenance: :direct)
+    Introspection.record(
+      :run_started,
+      %{
+        engine_id: job && job.engine_id,
+        queue_mode: job && job.queue_mode
+      },
+      run_id: run_id,
+      session_key: session_key,
+      engine: "lemon",
+      provenance: :direct
+    )
 
     # Submit to gateway
     if submit_to_gateway? do
@@ -223,6 +235,7 @@ defmodule LemonRouter.RunProcess do
           )
 
           Bus.broadcast(Bus.session_topic(state.session_key), event)
+
           state =
             state
             |> Map.put(:session_registered?, true)
@@ -272,12 +285,19 @@ defmodule LemonRouter.RunProcess do
     duration_ms =
       if state.start_ts_ms, do: LemonCore.Clock.now_ms() - state.start_ts_ms, else: nil
 
-    Introspection.record(:run_completed, %{
-      ok: ok?,
-      error: safe_error_label(err),
-      duration_ms: duration_ms,
-      saw_delta: state.saw_delta
-    }, run_id: state.run_id, session_key: state.session_key, engine: "lemon", provenance: :direct)
+    Introspection.record(
+      :run_completed,
+      %{
+        ok: ok?,
+        error: safe_error_label(err),
+        duration_ms: duration_ms,
+        saw_delta: state.saw_delta
+      },
+      run_id: state.run_id,
+      session_key: state.session_key,
+      engine: "lemon",
+      provenance: :direct
+    )
 
     # Free the session key ASAP so the next queued run can become active without
     # tripping the SessionRegistry single-flight guard.
@@ -546,9 +566,16 @@ defmodule LemonRouter.RunProcess do
     # If not completed normally, emit failure event and attempt abort
     if reason != :normal and not state.completed do
       # Emit introspection event for run failure
-      Introspection.record(:run_failed, %{
-        reason: safe_error_label(reason)
-      }, run_id: state.run_id, session_key: state.session_key, engine: "lemon", provenance: :direct)
+      Introspection.record(
+        :run_failed,
+        %{
+          reason: safe_error_label(reason)
+        },
+        run_id: state.run_id,
+        session_key: state.session_key,
+        engine: "lemon",
+        provenance: :direct
+      )
 
       Bus.broadcast(Bus.run_topic(state.run_id), %{
         type: :run_failed,
@@ -650,7 +677,9 @@ defmodule LemonRouter.RunProcess do
     now_ms = LemonCore.Clock.now_ms()
     _ = cancel_run_watchdog_timer(state)
     ref = Process.send_after(self(), :run_watchdog_timeout, timeout_ms)
-    run_started_at_ms = if is_integer(state.run_started_at_ms), do: state.run_started_at_ms, else: now_ms
+
+    run_started_at_ms =
+      if is_integer(state.run_started_at_ms), do: state.run_started_at_ms, else: now_ms
 
     %{
       state
@@ -1388,7 +1417,11 @@ defmodule LemonRouter.RunProcess do
   defp usage_input_tokens(_), do: nil
 
   @primary_token_keys [:input_tokens, :input, :prompt_tokens]
-  @cached_token_keys [:cached_input_tokens, :cache_read_input_tokens, :cache_creation_input_tokens]
+  @cached_token_keys [
+    :cached_input_tokens,
+    :cache_read_input_tokens,
+    :cache_creation_input_tokens
+  ]
 
   @spec find_primary_token_count(map()) :: {atom() | nil, non_neg_integer() | nil}
   defp find_primary_token_count(usage) do
@@ -1412,8 +1445,9 @@ defmodule LemonRouter.RunProcess do
 
   @spec compute_total_input_tokens(atom() | nil, non_neg_integer() | nil, non_neg_integer()) ::
           non_neg_integer() | nil
-  defp compute_total_input_tokens(key, tokens, cached) when is_integer(tokens) and key in [:input_tokens, :input],
-    do: tokens + cached
+  defp compute_total_input_tokens(key, tokens, cached)
+       when is_integer(tokens) and key in [:input_tokens, :input],
+       do: tokens + cached
 
   defp compute_total_input_tokens(_key, tokens, _cached) when is_integer(tokens), do: tokens
   defp compute_total_input_tokens(_key, _tokens, cached) when cached > 0, do: cached
@@ -2007,6 +2041,7 @@ defmodule LemonRouter.RunProcess do
   defp merge_paths(existing, new_paths) do
     Enum.uniq(existing ++ new_paths)
   end
+
   defp extract_requested_send_files(action_ev) do
     action = fetch(action_ev, :action)
     phase = fetch(action_ev, :phase)
@@ -2127,7 +2162,8 @@ defmodule LemonRouter.RunProcess do
 
   @spec image_path?(term()) :: boolean()
   defp image_path?(path) when is_binary(path),
-    do: path |> Path.extname() |> String.downcase() |> then(&MapSet.member?(@image_extensions, &1))
+    do:
+      path |> Path.extname() |> String.downcase() |> then(&MapSet.member?(@image_extensions, &1))
 
   defp image_path?(_), do: false
 

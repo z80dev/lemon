@@ -106,6 +106,7 @@ Instructions:
 - If the chosen task is unclear, implement a small, safe scaffolding step toward a backend plugin system (behaviours/interfaces + minimal example).
 - Keep changes small (no big refactors).
 - Update docs/tests as appropriate.
+- Fix any failing tests if possible, reporting any serious issues in summary instead if needed.
 
 At the end, output markdown:
 ## Summary

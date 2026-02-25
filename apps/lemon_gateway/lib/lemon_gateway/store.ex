@@ -19,7 +19,7 @@ defmodule LemonGateway.Store do
   defdelegate append_run_event(run_id, event), to: LemonCore.Store
   defdelegate finalize_run(run_id, summary), to: LemonCore.Store
 
-  defdelegate put_progress_mapping(scope, progress_msg_id, run_pid), to: LemonCore.Store
+  defdelegate put_progress_mapping(scope, progress_msg_id, run_id), to: LemonCore.Store
   defdelegate get_run_by_progress(scope, progress_msg_id), to: LemonCore.Store
   defdelegate delete_progress_mapping(scope, progress_msg_id), to: LemonCore.Store
 

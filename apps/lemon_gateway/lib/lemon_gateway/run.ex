@@ -36,7 +36,12 @@ defmodule LemonGateway.Run do
     "context_length_exceeded",
     "context length exceeded",
     "input exceeds the context window",
-    "context window"
+    "context window",
+    "上下文长度超过限制",
+    "令牌数量超出",
+    "输入过长",
+    "超出最大长度",
+    "上下文窗口已满"
   ]
 
   def start_link(args) do
@@ -240,7 +245,7 @@ defmodule LemonGateway.Run do
               "engine=#{inspect(engine_id)}"
           )
 
-          register_progress_mapping(job, self())
+          register_progress_mapping(job, state.run_id)
 
           {:noreply,
            %{
@@ -810,7 +815,7 @@ defmodule LemonGateway.Run do
     Store.put_chat_state(key, chat_state)
   end
 
-  defp register_progress_mapping(%Job{} = job, run_pid) do
+  defp register_progress_mapping(%Job{} = job, run_id) do
     meta = job.meta
     keys = progress_mapping_keys(job)
     progress_msg_id = meta && meta[:progress_msg_id]
@@ -818,9 +823,9 @@ defmodule LemonGateway.Run do
 
     Enum.each(keys, fn key ->
       if progress_msg_id,
-        do: LemonGateway.Store.put_progress_mapping(key, progress_msg_id, run_pid)
+        do: LemonGateway.Store.put_progress_mapping(key, progress_msg_id, run_id)
 
-      if status_msg_id, do: LemonGateway.Store.put_progress_mapping(key, status_msg_id, run_pid)
+      if status_msg_id, do: LemonGateway.Store.put_progress_mapping(key, status_msg_id, run_id)
     end)
   end
 

@@ -274,6 +274,19 @@ defmodule LemonAutomation.CronManager do
   end
 
   @impl true
+  def handle_info({:execute_job, job_id, triggered_by}, state) do
+    case Map.get(state.jobs, job_id) do
+      %CronJob{enabled: true} = job ->
+        execute_job(job, triggered_by)
+
+      _ ->
+        Logger.debug("[CronManager] Skipping jittered execute_job for #{inspect(job_id)}: not found or disabled")
+    end
+
+    {:noreply, state}
+  end
+
+  @impl true
   def handle_info({:run_complete, run_id, result}, state) do
     case CronStore.get_run(run_id) do
       nil ->

@@ -294,7 +294,7 @@ defmodule LemonControlPlane.Methods.TasksRecentList do
 
   defp serialize_term(value, _depth) when is_boolean(value) or is_nil(value), do: value
   defp serialize_term(value, _depth) when is_atom(value), do: Atom.to_string(value)
-  defp serialize_term(value, _depth), do: value
+  defp serialize_term(value, _depth), do: inspect(value, limit: 200)
 
   defp key_to_string(key) when is_binary(key), do: key
   defp key_to_string(key) when is_atom(key), do: Atom.to_string(key)

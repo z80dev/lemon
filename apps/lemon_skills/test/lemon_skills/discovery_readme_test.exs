@@ -8,6 +8,15 @@ defmodule LemonSkills.DiscoveryReadmeTest do
   use ExUnit.Case, async: false
 
   alias LemonSkills.{Discovery, Registry}
+  alias LemonSkills.HttpClient.Mock, as: HttpMock
+
+  setup do
+    HttpMock.reset()
+    HttpMock.stub("https://api.github.com/search/repositories", {:ok, ~s({"items": []})})
+    HttpMock.stub("https://skills.lemon.agent/", {:error, :nxdomain})
+    HttpMock.stub("https://raw.githubusercontent.com/lemon-agent/skills/main/", {:error, :nxdomain})
+    :ok
+  end
 
   describe "README examples" do
     test "Registry.discover/2 exists and accepts query" do
@@ -34,10 +43,10 @@ defmodule LemonSkills.DiscoveryReadmeTest do
       assert is_list(results)
     end
 
-    @tag :skip
     test "Discovery.validate_skill/1 exists" do
-      # Skipped: requires HTTP client in test environment
       # Verify the function exists - will return nil for invalid URLs in test
+      HttpMock.stub("not-a-valid-url", {:error, :invalid_url})
+
       result = Discovery.validate_skill("not-a-valid-url")
       assert is_nil(result)
     end

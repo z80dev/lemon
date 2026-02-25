@@ -7,6 +7,8 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonCore.Introspection
+
   @impl true
   def name, do: "sessions.active.list"
 
@@ -46,29 +48,123 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
   end
 
   defp format_session(session) do
-    %{
-      "sessionKey" => session[:session_key],
-      "agentId" => session[:agent_id],
-      "kind" => to_string(session[:kind] || :unknown),
-      "channelId" => session[:channel_id],
-      "accountId" => session[:account_id],
-      "peerKind" => session[:peer_kind] && to_string(session[:peer_kind]),
-      "peerId" => session[:peer_id],
-      "threadId" => session[:thread_id],
-      "route" => format_route(session),
-      "target" => target_from_session(session),
-      "peerLabel" => session[:peer_label],
-      "peerUsername" => session[:peer_username],
-      "topicName" => session[:topic_name],
-      "chatType" => session[:chat_type],
-      "subId" => session[:sub_id],
-      "active" => session[:active?] == true,
-      "runId" => session[:run_id],
-      "runCount" => session[:run_count],
-      "createdAtMs" => session[:created_at_ms],
-      "updatedAtMs" => session[:updated_at_ms]
-    }
+    base =
+      %{
+        "sessionKey" => session[:session_key],
+        "agentId" => session[:agent_id],
+        "kind" => to_string(session[:kind] || :unknown),
+        "channelId" => session[:channel_id],
+        "accountId" => session[:account_id],
+        "peerKind" => session[:peer_kind] && to_string(session[:peer_kind]),
+        "peerId" => session[:peer_id],
+        "threadId" => session[:thread_id],
+        "route" => format_route(session),
+        "target" => target_from_session(session),
+        "peerLabel" => session[:peer_label],
+        "peerUsername" => session[:peer_username],
+        "topicName" => session[:topic_name],
+        "chatType" => session[:chat_type],
+        "subId" => session[:sub_id],
+        "active" => session[:active?] == true,
+        "runId" => session[:run_id],
+        "runCount" => session[:run_count],
+        "createdAtMs" => session[:created_at_ms],
+        "updatedAtMs" => session[:updated_at_ms]
+      }
+
+    case harness_snapshot(session[:session_key]) do
+      nil -> base
+      harness -> Map.put(base, "harness", harness)
+    end
   end
+
+  defp harness_snapshot(session_key) when is_binary(session_key) do
+    todos = todo_progress(session_key)
+    checkpoints = checkpoint_progress(session_key)
+    requirements = requirements_progress(session_key)
+
+    %{}
+    |> maybe_put("todos", todos)
+    |> maybe_put("checkpoints", checkpoints)
+    |> maybe_put("requirements", requirements)
+    |> case do
+      harness when map_size(harness) == 0 -> nil
+      harness -> harness
+    end
+  end
+
+  defp harness_snapshot(_), do: nil
+
+  defp todo_progress(session_key) do
+    if Code.ensure_loaded?(CodingAgent.Tools.TodoStore) do
+      progress = CodingAgent.Tools.TodoStore.get_progress(session_key)
+      actionable_count = session_key |> CodingAgent.Tools.TodoStore.get_actionable() |> length()
+
+      progress
+      |> stringify_map_keys()
+      |> Map.put("actionableCount", actionable_count)
+    end
+  rescue
+    _ -> nil
+  catch
+    :exit, _ -> nil
+  end
+
+  defp checkpoint_progress(session_key) do
+    if Code.ensure_loaded?(CodingAgent.Checkpoint) do
+      session_key
+      |> CodingAgent.Checkpoint.stats()
+      |> stringify_map_keys()
+    end
+  rescue
+    _ -> nil
+  catch
+    :exit, _ -> nil
+  end
+
+  defp requirements_progress(session_key) do
+    with true <- Code.ensure_loaded?(CodingAgent.Tools.FeatureRequirements),
+         {:ok, cwd} <- latest_session_cwd(session_key),
+         {:ok, progress} <- CodingAgent.Tools.FeatureRequirements.get_progress(cwd) do
+      progress
+      |> stringify_map_keys()
+      |> Map.put("cwd", cwd)
+    else
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  catch
+    :exit, _ -> nil
+  end
+
+  defp latest_session_cwd(session_key) when is_binary(session_key) do
+    case Introspection.list(session_key: session_key, event_type: :session_started, limit: 1) do
+      [event | _] ->
+        cwd = event |> map_get(:payload) |> map_get(:cwd) |> normalize_optional_binary()
+
+        if is_binary(cwd) and cwd != "" do
+          {:ok, cwd}
+        else
+          {:error, :not_found}
+        end
+
+      _ ->
+        {:error, :not_found}
+    end
+  rescue
+    _ -> {:error, :not_found}
+  catch
+    :exit, _ -> {:error, :not_found}
+  end
+
+  defp latest_session_cwd(_), do: {:error, :invalid_session_key}
+
+  defp stringify_map_keys(map) when is_map(map) do
+    Map.new(map, fn {key, value} -> {to_string(key), value} end)
+  end
+
+  defp stringify_map_keys(_), do: %{}
 
   defp target_from_session(session) do
     channel_id = session[:channel_id]

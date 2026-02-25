@@ -101,7 +101,7 @@ defmodule LemonGateway.StoreTest do
     test "put, get, and delete progress mapping" do
       scope = %ChatScope{transport: :test, chat_id: unique_chat_id(), topic_id: nil}
       progress_msg_id = unique_id()
-      run_id = make_ref()
+      run_id = "run_#{System.unique_integer([:positive])}"
 
       Store.put_progress_mapping(scope, progress_msg_id, run_id)
       Process.sleep(10)

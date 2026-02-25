@@ -1275,15 +1275,15 @@ defmodule LemonGateway.RunTest do
       # Wait for engine to start (which means registration should be done)
       assert_receive {:engine_started, _run_ref}, 2000
 
-      # Check mapping exists
-      run_pid =
+      # Check mapping exists (stores run_id string, not PID)
+      stored_run_id =
         wait_for(
           fn -> Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) end,
           500,
           10
         )
 
-      assert run_pid == pid
+      assert is_binary(stored_run_id) and stored_run_id != ""
 
       # Cancel to complete
       GenServer.cast(pid, {:cancel, :done})
@@ -1341,10 +1341,10 @@ defmodule LemonGateway.RunTest do
 
       assert_receive {:engine_started, _run_ref}, 2000
 
-      # Verify mapping exists
+      # Verify mapping exists (stores run_id string, not PID)
       assert Enum.any?(1..20, fn _attempt ->
                case Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) do
-                 ^pid ->
+                 run_id when is_binary(run_id) and run_id != "" ->
                    true
 
                  _ ->
@@ -2214,10 +2214,10 @@ defmodule LemonGateway.RunTest do
 
       assert_receive {:engine_started, _run_ref}, 2000
 
-      # Verify mapping exists
+      # Verify mapping exists (stores run_id string, not PID)
       assert Enum.any?(1..20, fn _attempt ->
                case Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) do
-                 ^pid ->
+                 run_id when is_binary(run_id) and run_id != "" ->
                    true
 
                  _ ->
@@ -2350,6 +2350,48 @@ defmodule LemonGateway.RunTest do
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
         fn -> Elixir.LemonGateway.Store.get_chat_state(scope) == nil end,
         message: "ChatState should remain nil after context overflow"
+      )
+    end
+
+    test "Chinese context overflow marker clears ChatState and does not persist failing resume" do
+      scope = make_scope()
+
+      Elixir.LemonGateway.Store.put_chat_state(scope, %Elixir.LemonGateway.ChatState{
+        last_engine: "controllable",
+        last_resume_token: "stale_token",
+        updated_at: System.system_time(:millisecond)
+      })
+
+      job =
+        make_job(scope,
+          engine_hint: "controllable",
+          meta: %{notify_pid: self(), controller_pid: self()}
+        )
+
+      {:ok, pid} = start_run_direct(job)
+      assert_receive {:engine_started, run_ref}, 2000
+
+      resume = %ResumeToken{
+        engine: "controllable",
+        value: "overflow_resume_#{System.unique_integer([:positive])}"
+      }
+
+      send(
+        pid,
+        {:engine_event, run_ref,
+         %Event.Completed{
+           engine: "controllable",
+           ok: false,
+           error: "模型输入过长：上下文长度超过限制",
+           resume: resume
+         }}
+      )
+
+      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false}}, 2000
+
+      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+        fn -> Elixir.LemonGateway.Store.get_chat_state(scope) == nil end,
+        message: "ChatState should remain nil after Chinese context overflow"
       )
     end
 

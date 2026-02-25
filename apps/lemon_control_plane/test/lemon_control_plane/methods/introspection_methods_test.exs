@@ -23,7 +23,47 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       })
 
     run_id = "run_cp_introspection_#{token}"
+    requirements_cwd = Path.join(System.tmp_dir!(), "cp_introspection_requirements_#{token}")
     registry_available? = is_pid(Process.whereis(LemonRouter.SessionRegistry))
+
+    File.mkdir_p!(requirements_cwd)
+
+    now = DateTime.utc_now() |> DateTime.to_iso8601()
+
+    :ok =
+      CodingAgent.Tools.FeatureRequirements.save_requirements(
+        %{
+          project_name: "Control Plane Harness Projection",
+          original_prompt: "Track long-running task progress",
+          created_at: now,
+          version: "1.0",
+          features: [
+            %{
+              id: "feature-001",
+              description: "Expose harness data",
+              status: :completed,
+              dependencies: [],
+              priority: :high,
+              acceptance_criteria: ["harness appears in sessions.active.list"],
+              notes: "",
+              created_at: now,
+              updated_at: now
+            },
+            %{
+              id: "feature-002",
+              description: "Validate requirements progress",
+              status: :pending,
+              dependencies: ["feature-001"],
+              priority: :medium,
+              acceptance_criteria: ["requirements section is included"],
+              notes: "",
+              created_at: now,
+              updated_at: nil
+            }
+          ]
+        },
+        requirements_cwd
+      )
 
     if registry_available? do
       {:ok, _} = Registry.register(LemonRouter.SessionRegistry, session_key, %{run_id: run_id})
@@ -31,12 +71,38 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
 
     LemonCore.Store.put(:runs, run_id, %{started_at: System.system_time(:millisecond)})
 
+    :ok =
+      LemonCore.Introspection.record(
+        :session_started,
+        %{cwd: requirements_cwd},
+        run_id: run_id,
+        session_key: session_key,
+        agent_id: agent_id
+      )
+
+    CodingAgent.Tools.TodoStore.put(session_key, [
+      %{
+        "id" => "todo-introspection-1",
+        "content" => "verify harness projection",
+        "status" => "pending"
+      }
+    ])
+
+    {:ok, checkpoint} =
+      CodingAgent.Checkpoint.create(session_key,
+        todos: [%{"id" => "todo-introspection-1", "content" => "verify harness projection"}],
+        metadata: %{source: "introspection-methods-test"}
+      )
+
     on_exit(fn ->
       if registry_available? do
         Registry.unregister(LemonRouter.SessionRegistry, session_key)
       end
 
       LemonCore.Store.delete(:runs, run_id)
+      CodingAgent.Tools.TodoStore.delete(session_key)
+      CodingAgent.Checkpoint.delete(checkpoint.id)
+      File.rm_rf(requirements_cwd)
     end)
 
     {:ok,
@@ -44,6 +110,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
        agent_id: agent_id,
        session_key: session_key,
        run_id: run_id,
+       requirements_cwd: requirements_cwd,
        registry_available?: registry_available?
      }}
   end
@@ -52,6 +119,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
     test "lists active sessions with filters", %{
       agent_id: agent_id,
       session_key: session_key,
+      requirements_cwd: requirements_cwd,
       registry_available?: registry_available?
     } do
       assert SessionsActiveList.name() == "sessions.active.list"
@@ -75,6 +143,14 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
 
       if registry_available? do
         assert Enum.any?(result["sessions"], &(&1["sessionKey"] == session_key))
+
+        assert session = Enum.find(result["sessions"], &(&1["sessionKey"] == session_key))
+        assert is_map(session["harness"])
+        assert session["harness"]["todos"]["total"] == 1
+        assert session["harness"]["checkpoints"]["count"] >= 1
+        assert session["harness"]["requirements"]["project_name"] == "Control Plane Harness Projection"
+        assert session["harness"]["requirements"]["percentage"] == 50
+        assert session["harness"]["requirements"]["cwd"] == requirements_cwd
       end
     end
   end
@@ -105,6 +181,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
     test "returns a consolidated introspection payload", %{
       agent_id: agent_id,
       session_key: session_key,
+      requirements_cwd: requirements_cwd,
       registry_available?: registry_available?
     } do
       assert IntrospectionSnapshot.name() == "introspection.snapshot"
@@ -144,6 +221,12 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
 
       if registry_available? do
         assert Enum.any?(result["activeSessions"], &(&1["sessionKey"] == session_key))
+
+        assert session = Enum.find(result["activeSessions"], &(&1["sessionKey"] == session_key))
+        assert is_map(session["harness"])
+        assert session["harness"]["todos"]["total"] == 1
+        assert session["harness"]["requirements"]["project_name"] == "Control Plane Harness Projection"
+        assert session["harness"]["requirements"]["cwd"] == requirements_cwd
       end
     end
 

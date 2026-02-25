@@ -174,7 +174,7 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 |--------|-------|-------------|
 | `health` | none | Basic health check |
 | `status` | read | System status (connections, runs, channels, skills) |
-| `introspection.snapshot` | read | Consolidated snapshot of agents, sessions, channels, transports |
+| `introspection.snapshot` | read | Consolidated snapshot of agents, sessions, channels, transports (includes `activeSessions` harness progress projection) |
 | `logs.tail` | read | Tail recent log lines |
 | `models.list` | read | List available AI models |
 | `usage.status` | read | Current usage summary |
@@ -189,7 +189,7 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 |--------|-------|-------------|
 | `sessions.list` | read | List all sessions with pagination |
 | `sessions.active` | read | Get currently active session |
-| `sessions.active.list` | read | List all active sessions |
+| `sessions.active.list` | read | List all active sessions; includes best-effort `harness` progress (todos/checkpoints/requirements) when coding-agent telemetry is available |
 | `sessions.preview` | read | Preview session messages |
 | `sessions.patch` | admin | Modify session (toolPolicy, model, thinkingLevel) |
 | `sessions.reset` | admin | Clear session history |

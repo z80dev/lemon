@@ -17,7 +17,8 @@ defmodule LemonGateway.Runtime do
   def cancel_by_progress_msg(scope, progress_msg_id) do
     case LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) do
       nil -> :ok
-      run_pid -> LemonGateway.Scheduler.cancel(run_pid, :user_requested)
+      run_id when is_binary(run_id) -> cancel_by_run_id(run_id, :user_requested)
+      _other -> :ok
     end
   end
 

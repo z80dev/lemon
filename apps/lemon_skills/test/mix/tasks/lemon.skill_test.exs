@@ -6,7 +6,19 @@ defmodule Mix.Tasks.Lemon.SkillTest do
 
   import ExUnit.CaptureIO
 
+  alias LemonSkills.HttpClient.Mock, as: HttpMock
   alias Mix.Tasks.Lemon.Skill
+
+  setup do
+    HttpMock.reset()
+
+    # Deterministic discovery stubs so discover/search tests do not depend on network.
+    HttpMock.stub("https://api.github.com/search/repositories", {:ok, ~s({"items": []})})
+    HttpMock.stub("https://skills.lemon.agent/", {:error, :nxdomain})
+    HttpMock.stub("https://raw.githubusercontent.com/lemon-agent/skills/main/", {:error, :nxdomain})
+
+    :ok
+  end
 
   describe "usage" do
     test "prints help on unknown command" do
@@ -45,7 +57,6 @@ defmodule Mix.Tasks.Lemon.SkillTest do
   end
 
   describe "search command" do
-    @tag :skip
     test "searches local skills" do
       output = capture_io(fn ->
         Skill.run(["search", "api", "--no-online"])
@@ -57,14 +68,13 @@ defmodule Mix.Tasks.Lemon.SkillTest do
   end
 
   describe "discover command" do
-    @tag :skip
     test "shows message when no skills found" do
       output = capture_io(fn ->
         Skill.run(["discover", "xyz123nonexistent"])
       end)
 
       assert output =~ "Discovering skills for 'xyz123nonexistent'"
-      assert output =~ "Discovered Skills"
+      assert output =~ "No skills found on GitHub"
     end
   end
 

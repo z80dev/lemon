@@ -480,7 +480,7 @@ defmodule LemonControlPlane.Methods.RunGraphGet do
 
   defp serialize_term(value, _depth) when is_boolean(value) or is_nil(value), do: value
   defp serialize_term(value, _depth) when is_atom(value), do: Atom.to_string(value)
-  defp serialize_term(value, _depth), do: value
+  defp serialize_term(value, _depth), do: inspect(value, limit: 200)
 
   defp normalize_list(value) when is_list(value), do: value
   defp normalize_list(_), do: []

@@ -55,6 +55,16 @@ defmodule LemonAutomation.RunCompletionWaiter do
 
       %{completed: %{ok: false, error: error}} ->
         {:error, inspect(error)}
+
+      # Handle run_failed events from abnormal RunProcess termination
+      %LemonCore.Event{type: :run_failed, payload: payload} ->
+        {:error, inspect(payload[:reason] || payload)}
+
+      %{type: :run_failed, reason: reason} ->
+        {:error, inspect(reason)}
+
+      %{type: :run_failed} = event ->
+        {:error, inspect(event[:reason] || event)}
     after
       timeout_ms ->
         :timeout
