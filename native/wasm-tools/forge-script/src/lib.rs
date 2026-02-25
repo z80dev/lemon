@@ -88,10 +88,7 @@ impl Guest for ForgeScriptTool {
 
 export!(ForgeScriptTool);
 
-fn execute_impl(params_raw: &str) -> Result<String, String> {
-    let params: Value =
-        serde_json::from_str(params_raw).map_err(|err| format!("invalid params JSON: {err}"))?;
-
+fn build_args(params: &Value) -> Result<Vec<String>, String> {
     let script = params["script"]
         .as_str()
         .ok_or("'script' is required and must be a string")?;
@@ -154,6 +151,15 @@ fn execute_impl(params_raw: &str) -> Result<String, String> {
         }
     }
 
+    Ok(args)
+}
+
+fn execute_impl(params_raw: &str) -> Result<String, String> {
+    let params: Value =
+        serde_json::from_str(params_raw).map_err(|err| format!("invalid params JSON: {err}"))?;
+
+    let args = build_args(&params)?;
+
     let args_json = serde_json::to_string(&args).map_err(|err| format!("args encode: {err}"))?;
 
     let result = host::exec_command("forge", &args_json, "{}", Some(120_000))
@@ -177,4 +183,98 @@ fn execute_impl(params_raw: &str) -> Result<String, String> {
         "exit_code": result.exit_code
     })
     .to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn build_args_minimal() {
+        let params = json!({
+            "script": "script/Deploy.s.sol",
+            "rpc_url": "https://eth.llamarpc.com"
+        });
+
+        let args = build_args(&params).unwrap();
+        assert_eq!(args[0], "script");
+        assert_eq!(args[1], "script/Deploy.s.sol");
+        assert!(args.contains(&"--rpc-url".to_string()));
+        assert!(args.contains(&"--private-key".to_string()));
+        assert!(args.contains(&"{{SECRET:ETH_PRIVATE_KEY}}".to_string()));
+        // No --broadcast by default
+        assert!(!args.contains(&"--broadcast".to_string()));
+    }
+
+    #[test]
+    fn build_args_with_broadcast_and_verify() {
+        let params = json!({
+            "script": "script/Deploy.s.sol",
+            "rpc_url": "https://rpc.example.com",
+            "broadcast": true,
+            "verify": true,
+            "etherscan_api_key_secret": "ETHERSCAN_KEY",
+            "chain": "sepolia"
+        });
+
+        let args = build_args(&params).unwrap();
+        assert!(args.contains(&"--broadcast".to_string()));
+        assert!(args.contains(&"--verify".to_string()));
+        assert!(args.contains(&"--etherscan-api-key".to_string()));
+        assert!(args.contains(&"{{SECRET:ETHERSCAN_KEY}}".to_string()));
+        assert!(args.contains(&"--chain".to_string()));
+        assert!(args.contains(&"sepolia".to_string()));
+    }
+
+    #[test]
+    fn build_args_with_sig_and_extra_args() {
+        let params = json!({
+            "script": "script/Deploy.s.sol",
+            "rpc_url": "https://rpc.example.com",
+            "sig": "deploy(uint256)",
+            "args": ["42"],
+            "extra_args": ["--via-ir", "--optimize"]
+        });
+
+        let args = build_args(&params).unwrap();
+        assert!(args.contains(&"--sig".to_string()));
+        assert!(args.contains(&"deploy(uint256)".to_string()));
+        assert!(args.contains(&"42".to_string()));
+        assert!(args.contains(&"--via-ir".to_string()));
+        assert!(args.contains(&"--optimize".to_string()));
+    }
+
+    #[test]
+    fn build_args_verify_without_etherscan_key() {
+        let params = json!({
+            "script": "script/Deploy.s.sol",
+            "rpc_url": "https://rpc.example.com",
+            "verify": true
+        });
+
+        let args = build_args(&params).unwrap();
+        assert!(args.contains(&"--verify".to_string()));
+        // No --etherscan-api-key when secret not provided
+        assert!(!args.contains(&"--etherscan-api-key".to_string()));
+    }
+
+    #[test]
+    fn build_args_rejects_missing_script() {
+        let params = json!({ "rpc_url": "https://rpc.example.com" });
+        assert!(build_args(&params).is_err());
+    }
+
+    #[test]
+    fn build_args_rejects_missing_rpc_url() {
+        let params = json!({ "script": "script/Deploy.s.sol" });
+        assert!(build_args(&params).is_err());
+    }
+
+    #[test]
+    fn schema_is_valid_json() {
+        let schema_str = ForgeScriptTool::schema();
+        let schema: serde_json::Value = serde_json::from_str(&schema_str).expect("valid JSON");
+        assert_eq!(schema["title"], "forge_script");
+    }
 }

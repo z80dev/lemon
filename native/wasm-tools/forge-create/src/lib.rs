@@ -84,10 +84,7 @@ impl Guest for ForgeCreateTool {
 
 export!(ForgeCreateTool);
 
-fn execute_impl(params_raw: &str) -> Result<String, String> {
-    let params: Value =
-        serde_json::from_str(params_raw).map_err(|err| format!("invalid params JSON: {err}"))?;
-
+fn build_args(params: &Value) -> Result<Vec<String>, String> {
     let contract = params["contract"]
         .as_str()
         .ok_or("'contract' is required and must be a string")?;
@@ -147,6 +144,15 @@ fn execute_impl(params_raw: &str) -> Result<String, String> {
         }
     }
 
+    Ok(args)
+}
+
+fn execute_impl(params_raw: &str) -> Result<String, String> {
+    let params: Value =
+        serde_json::from_str(params_raw).map_err(|err| format!("invalid params JSON: {err}"))?;
+
+    let args = build_args(&params)?;
+
     let args_json = serde_json::to_string(&args).map_err(|err| format!("args encode: {err}"))?;
 
     let result = host::exec_command("forge", &args_json, "{}", Some(120_000))
@@ -170,4 +176,101 @@ fn execute_impl(params_raw: &str) -> Result<String, String> {
         "exit_code": result.exit_code
     })
     .to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn build_args_minimal() {
+        let params = json!({
+            "contract": "src/Counter.sol:Counter",
+            "rpc_url": "https://eth.llamarpc.com"
+        });
+
+        let args = build_args(&params).unwrap();
+        assert_eq!(args[0], "create");
+        assert_eq!(args[1], "src/Counter.sol:Counter");
+        assert!(args.contains(&"--rpc-url".to_string()));
+        assert!(args.contains(&"--private-key".to_string()));
+        assert!(args.contains(&"{{SECRET:ETH_PRIVATE_KEY}}".to_string()));
+    }
+
+    #[test]
+    fn build_args_with_constructor_args() {
+        let params = json!({
+            "contract": "src/Token.sol:Token",
+            "constructor_args": ["MyToken", "MTK", "1000000"],
+            "rpc_url": "https://rpc.example.com"
+        });
+
+        let args = build_args(&params).unwrap();
+        assert!(args.contains(&"--constructor-args".to_string()));
+        assert!(args.contains(&"MyToken".to_string()));
+        assert!(args.contains(&"MTK".to_string()));
+        assert!(args.contains(&"1000000".to_string()));
+    }
+
+    #[test]
+    fn build_args_with_constructor_args_path() {
+        let params = json!({
+            "contract": "src/Token.sol:Token",
+            "constructor_args_path": "args.txt",
+            "rpc_url": "https://rpc.example.com"
+        });
+
+        let args = build_args(&params).unwrap();
+        assert!(args.contains(&"--constructor-args-path".to_string()));
+        assert!(args.contains(&"args.txt".to_string()));
+    }
+
+    #[test]
+    fn build_args_with_verify() {
+        let params = json!({
+            "contract": "src/Counter.sol:Counter",
+            "rpc_url": "https://rpc.example.com",
+            "verify": true,
+            "etherscan_api_key_secret": "MY_ETHERSCAN_KEY",
+            "chain": "mainnet"
+        });
+
+        let args = build_args(&params).unwrap();
+        assert!(args.contains(&"--verify".to_string()));
+        assert!(args.contains(&"--etherscan-api-key".to_string()));
+        assert!(args.contains(&"{{SECRET:MY_ETHERSCAN_KEY}}".to_string()));
+        assert!(args.contains(&"--chain".to_string()));
+    }
+
+    #[test]
+    fn build_args_with_extra_args() {
+        let params = json!({
+            "contract": "src/Counter.sol:Counter",
+            "rpc_url": "https://rpc.example.com",
+            "extra_args": ["--via-ir"]
+        });
+
+        let args = build_args(&params).unwrap();
+        assert!(args.contains(&"--via-ir".to_string()));
+    }
+
+    #[test]
+    fn build_args_rejects_missing_contract() {
+        let params = json!({ "rpc_url": "https://rpc.example.com" });
+        assert!(build_args(&params).is_err());
+    }
+
+    #[test]
+    fn build_args_rejects_missing_rpc_url() {
+        let params = json!({ "contract": "src/Counter.sol:Counter" });
+        assert!(build_args(&params).is_err());
+    }
+
+    #[test]
+    fn schema_is_valid_json() {
+        let schema_str = ForgeCreateTool::schema();
+        let schema: serde_json::Value = serde_json::from_str(&schema_str).expect("valid JSON");
+        assert_eq!(schema["title"], "forge_create");
+    }
 }

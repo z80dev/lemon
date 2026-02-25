@@ -760,40 +760,13 @@ impl StoreData {
         input: &str,
         resolved_secrets: &mut Vec<String>,
     ) -> Result<String, String> {
-        let mut result = input.to_string();
-        let mut search_from = 0;
-
-        while let Some(start) = result[search_from..].find("{{SECRET:") {
-            let abs_start = search_from + start;
-            let after_prefix = abs_start + "{{SECRET:".len();
-
-            let Some(end) = result[after_prefix..].find("}}") else {
-                break;
-            };
-
-            let abs_end = after_prefix + end;
-            let secret_name = &result[after_prefix..abs_end];
-
-            if !self.capabilities.secret_allowed(secret_name) {
-                return Err(format!(
-                    "secret '{}' not allowed by capabilities",
-                    secret_name
-                ));
+        resolve_secret_placeholders_with(input, resolved_secrets, |name| {
+            if !self.capabilities.secret_allowed(name) {
+                return Err(format!("secret '{}' not allowed by capabilities", name));
             }
-
-            let secret_value = self
-                .resolve_secret_for_host(secret_name)
-                .ok_or_else(|| format!("secret '{}' not found", secret_name))?;
-
-            resolved_secrets.push(secret_value.clone());
-
-            let placeholder_end = abs_end + "}}".len();
-            result.replace_range(abs_start..placeholder_end, &secret_value);
-
-            search_from = abs_start + secret_value.len();
-        }
-
-        Ok(result)
+            self.resolve_secret_for_host(name)
+                .ok_or_else(|| format!("secret '{}' not found", name))
+        })
     }
 
     fn env_secret(&self, name: &str) -> Option<String> {
@@ -1127,6 +1100,41 @@ impl near::agent::host::Host for StoreData {
     }
 }
 
+fn resolve_secret_placeholders_with<F>(
+    input: &str,
+    resolved_secrets: &mut Vec<String>,
+    resolve_fn: F,
+) -> Result<String, String>
+where
+    F: Fn(&str) -> Result<String, String>,
+{
+    let mut result = input.to_string();
+    let mut search_from = 0;
+
+    while let Some(start) = result[search_from..].find("{{SECRET:") {
+        let abs_start = search_from + start;
+        let after_prefix = abs_start + "{{SECRET:".len();
+
+        let Some(end) = result[after_prefix..].find("}}") else {
+            break;
+        };
+
+        let abs_end = after_prefix + end;
+        let secret_name = result[after_prefix..abs_end].to_string();
+
+        let secret_value = resolve_fn(&secret_name)?;
+
+        resolved_secrets.push(secret_value.clone());
+
+        let placeholder_end = abs_end + "}}".len();
+        result.replace_range(abs_start..placeholder_end, &secret_value);
+
+        search_from = abs_start + secret_value.len();
+    }
+
+    Ok(result)
+}
+
 fn sanitize_output(output: &str, secrets: &[String]) -> String {
     let mut result = output.to_string();
     for secret in secrets {
@@ -1139,11 +1147,13 @@ fn sanitize_output(output: &str, secrets: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use pretty_assertions::assert_eq;
 
     use super::{
         RuntimeDefaults, context_workspace_root, parse_host_secret_exists,
-        parse_host_secret_value, sanitize_output,
+        parse_host_secret_value, resolve_secret_placeholders_with, sanitize_output,
     };
 
     #[test]
@@ -1207,5 +1217,588 @@ mod tests {
             sanitize_output(output, &secrets),
             "key=[REDACTED] other=[REDACTED]"
         );
+    }
+
+    #[test]
+    fn sanitize_output_redacts_multiple_different_secrets() {
+        let output = "key1=secret_a key2=secret_b";
+        let secrets = vec!["secret_a".to_string(), "secret_b".to_string()];
+        assert_eq!(
+            sanitize_output(output, &secrets),
+            "key1=[REDACTED] key2=[REDACTED]"
+        );
+    }
+
+    #[test]
+    fn sanitize_output_skips_empty_strings_in_secret_list() {
+        let output = "hello world";
+        let secrets = vec!["".to_string(), "world".to_string()];
+        assert_eq!(sanitize_output(output, &secrets), "hello [REDACTED]");
+    }
+
+    // ==================== resolve_secret_placeholders_with tests ====================
+
+    fn mock_resolver(secrets: &HashMap<String, String>) -> impl Fn(&str) -> Result<String, String> + '_ {
+        move |name: &str| {
+            secrets
+                .get(name)
+                .cloned()
+                .ok_or_else(|| format!("secret '{}' not found", name))
+        }
+    }
+
+    #[test]
+    fn placeholder_resolves_single_secret() {
+        let secrets: HashMap<String, String> =
+            [("MY_KEY".to_string(), "resolved_value".to_string())]
+                .into_iter()
+                .collect();
+
+        let mut collected = Vec::new();
+        let result = resolve_secret_placeholders_with(
+            "--key={{SECRET:MY_KEY}}",
+            &mut collected,
+            mock_resolver(&secrets),
+        );
+
+        assert_eq!(result, Ok("--key=resolved_value".to_string()));
+        assert_eq!(collected, vec!["resolved_value"]);
+    }
+
+    #[test]
+    fn placeholder_resolves_multiple_secrets() {
+        let secrets: HashMap<String, String> = [
+            ("KEY_A".to_string(), "val_a".to_string()),
+            ("KEY_B".to_string(), "val_b".to_string()),
+        ]
+        .into_iter()
+        .collect();
+
+        let mut collected = Vec::new();
+        let result = resolve_secret_placeholders_with(
+            "{{SECRET:KEY_A}} and {{SECRET:KEY_B}}",
+            &mut collected,
+            mock_resolver(&secrets),
+        );
+
+        assert_eq!(result, Ok("val_a and val_b".to_string()));
+        assert_eq!(collected, vec!["val_a", "val_b"]);
+    }
+
+    #[test]
+    fn placeholder_with_no_placeholders_is_passthrough() {
+        let secrets: HashMap<String, String> = HashMap::new();
+        let mut collected = Vec::new();
+        let result = resolve_secret_placeholders_with(
+            "no placeholders here",
+            &mut collected,
+            mock_resolver(&secrets),
+        );
+
+        assert_eq!(result, Ok("no placeholders here".to_string()));
+        assert!(collected.is_empty());
+    }
+
+    #[test]
+    fn placeholder_entire_string_is_placeholder() {
+        let secrets: HashMap<String, String> =
+            [("ETH_PRIVATE_KEY".to_string(), "0xdeadbeef".to_string())]
+                .into_iter()
+                .collect();
+
+        let mut collected = Vec::new();
+        let result = resolve_secret_placeholders_with(
+            "{{SECRET:ETH_PRIVATE_KEY}}",
+            &mut collected,
+            mock_resolver(&secrets),
+        );
+
+        assert_eq!(result, Ok("0xdeadbeef".to_string()));
+        assert_eq!(collected, vec!["0xdeadbeef"]);
+    }
+
+    #[test]
+    fn placeholder_missing_secret_returns_error() {
+        let secrets: HashMap<String, String> = HashMap::new();
+        let mut collected = Vec::new();
+        let result = resolve_secret_placeholders_with(
+            "{{SECRET:MISSING}}",
+            &mut collected,
+            mock_resolver(&secrets),
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("MISSING"));
+    }
+
+    #[test]
+    fn placeholder_unclosed_placeholder_is_ignored() {
+        let secrets: HashMap<String, String> = HashMap::new();
+        let mut collected = Vec::new();
+        let result = resolve_secret_placeholders_with(
+            "{{SECRET:UNCLOSED",
+            &mut collected,
+            mock_resolver(&secrets),
+        );
+
+        assert_eq!(result, Ok("{{SECRET:UNCLOSED".to_string()));
+        assert!(collected.is_empty());
+    }
+
+    #[test]
+    fn placeholder_adjacent_placeholders() {
+        let secrets: HashMap<String, String> = [
+            ("A".to_string(), "x".to_string()),
+            ("B".to_string(), "y".to_string()),
+        ]
+        .into_iter()
+        .collect();
+
+        let mut collected = Vec::new();
+        let result = resolve_secret_placeholders_with(
+            "{{SECRET:A}}{{SECRET:B}}",
+            &mut collected,
+            mock_resolver(&secrets),
+        );
+
+        assert_eq!(result, Ok("xy".to_string()));
+        assert_eq!(collected, vec!["x", "y"]);
+    }
+
+    #[test]
+    fn placeholder_secret_value_containing_braces() {
+        let secrets: HashMap<String, String> =
+            [("KEY".to_string(), "val}}ue".to_string())]
+                .into_iter()
+                .collect();
+
+        let mut collected = Vec::new();
+        let result = resolve_secret_placeholders_with(
+            "before={{SECRET:KEY}}",
+            &mut collected,
+            mock_resolver(&secrets),
+        );
+
+        assert_eq!(result, Ok("before=val}}ue".to_string()));
+    }
+
+    #[test]
+    fn placeholder_resolver_error_propagates() {
+        let mut collected = Vec::new();
+        let result = resolve_secret_placeholders_with(
+            "{{SECRET:FORBIDDEN}}",
+            &mut collected,
+            |_name| Err("not allowed by capabilities".to_string()),
+        );
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            "not allowed by capabilities".to_string()
+        );
+    }
+
+    #[test]
+    fn placeholder_empty_name() {
+        let secrets: HashMap<String, String> =
+            [("".to_string(), "empty_key_val".to_string())]
+                .into_iter()
+                .collect();
+
+        let mut collected = Vec::new();
+        let result = resolve_secret_placeholders_with(
+            "{{SECRET:}}",
+            &mut collected,
+            mock_resolver(&secrets),
+        );
+
+        assert_eq!(result, Ok("empty_key_val".to_string()));
+    }
+
+    // ==================== exec_command integration tests ====================
+    // These test the full exec path using real programs (echo, cat, etc.)
+
+    use super::{
+        HostInvokeFn, RuntimeSnapshot, StoreData,
+    };
+    use crate::capabilities::{
+        CapabilitiesFile, ExecAllowlistEntry, ExecCapabilitySchema, RateLimitSchema,
+        SecretsCapabilitySchema,
+    };
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn make_store_data(capabilities: CapabilitiesFile) -> StoreData {
+        let host_invoke: HostInvokeFn = Arc::new(|target, params| {
+            // Mock secret resolution: return the secret name as value for testing
+            if target == "__lemon.secret.resolve" {
+                let parsed: serde_json::Value =
+                    serde_json::from_str(&params).unwrap_or_default();
+                let name = parsed["name"].as_str().unwrap_or("");
+                match name {
+                    "TEST_SECRET" => Ok(r#"{"value":"s3cret_val"}"#.to_string()),
+                    "ETH_PRIVATE_KEY" => Ok(r#"{"value":"0xdeadbeef1234567890"}"#.to_string()),
+                    _ => Err(format!("unknown secret: {}", name)),
+                }
+            } else if target == "__lemon.secret.exists" {
+                let parsed: serde_json::Value =
+                    serde_json::from_str(&params).unwrap_or_default();
+                let name = parsed["name"].as_str().unwrap_or("");
+                match name {
+                    "TEST_SECRET" | "ETH_PRIVATE_KEY" => Ok(r#"{"exists":true}"#.to_string()),
+                    _ => Ok(r#"{"exists":false}"#.to_string()),
+                }
+            } else {
+                Err(format!("unknown host target: {}", target))
+            }
+        });
+
+        let engine = wasmtime::Engine::default();
+        let runtime = RuntimeSnapshot {
+            engine,
+            tools: Arc::new(HashMap::new()),
+        };
+
+        StoreData::new(
+            runtime,
+            capabilities,
+            PathBuf::from("."),
+            0,
+            4,
+            host_invoke,
+        )
+    }
+
+    fn exec_caps_for_echo() -> CapabilitiesFile {
+        CapabilitiesFile {
+            exec: Some(ExecCapabilitySchema {
+                allowlist: vec![ExecAllowlistEntry {
+                    program: "echo".to_string(),
+                    allowed_subcommands: vec![],
+                    blocked_flags: vec!["--forbidden".to_string()],
+                }],
+                credentials: HashMap::new(),
+                rate_limit: Some(RateLimitSchema {
+                    requests_per_minute: 5,
+                    requests_per_hour: 100,
+                }),
+                timeout_secs: Some(10),
+            }),
+            secrets: Some(SecretsCapabilitySchema {
+                allowed_names: vec!["TEST_*".to_string(), "ETH_*".to_string()],
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn exec_command_runs_echo() {
+        use super::near::agent::host::Host;
+
+        let mut store = make_store_data(exec_caps_for_echo());
+        let result = store.exec_command(
+            "echo".to_string(),
+            r#"["hello","world"]"#.to_string(),
+            "{}".to_string(),
+            Some(5000),
+        );
+
+        let result = result.expect("exec should succeed");
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "hello world");
+    }
+
+    #[test]
+    fn exec_command_rejects_unlisted_program() {
+        use super::near::agent::host::Host;
+
+        let mut store = make_store_data(exec_caps_for_echo());
+        let result = store.exec_command(
+            "curl".to_string(),
+            r#"["https://example.com"]"#.to_string(),
+            "{}".to_string(),
+            None,
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not in exec allowlist"));
+    }
+
+    #[test]
+    fn exec_command_rejects_blocked_flag() {
+        use super::near::agent::host::Host;
+
+        let mut store = make_store_data(exec_caps_for_echo());
+        let result = store.exec_command(
+            "echo".to_string(),
+            r#"["--forbidden","test"]"#.to_string(),
+            "{}".to_string(),
+            None,
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("blocked flag"));
+    }
+
+    #[test]
+    fn exec_command_resolves_secret_placeholder() {
+        use super::near::agent::host::Host;
+
+        let mut store = make_store_data(exec_caps_for_echo());
+        let result = store.exec_command(
+            "echo".to_string(),
+            r#"["value={{SECRET:TEST_SECRET}}"]"#.to_string(),
+            "{}".to_string(),
+            Some(5000),
+        );
+
+        let result = result.expect("exec should succeed");
+        assert_eq!(result.exit_code, 0);
+        // The secret should be resolved in the actual command but sanitized in output
+        assert!(
+            !result.stdout.contains("s3cret_val"),
+            "stdout should not contain raw secret"
+        );
+        assert!(
+            result.stdout.contains("[REDACTED]"),
+            "stdout should contain [REDACTED]"
+        );
+    }
+
+    #[test]
+    fn exec_command_sanitizes_secret_in_output() {
+        use super::near::agent::host::Host;
+
+        let mut store = make_store_data(exec_caps_for_echo());
+        // echo will print the resolved secret, which should be redacted
+        let result = store.exec_command(
+            "echo".to_string(),
+            r#"["{{SECRET:TEST_SECRET}}"]"#.to_string(),
+            "{}".to_string(),
+            Some(5000),
+        );
+
+        let result = result.expect("exec should succeed");
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "[REDACTED]");
+        assert!(
+            !result.stdout.contains("s3cret_val"),
+            "raw secret must not appear in output"
+        );
+    }
+
+    #[test]
+    fn exec_command_rate_limits() {
+        use super::near::agent::host::Host;
+
+        let caps = CapabilitiesFile {
+            exec: Some(ExecCapabilitySchema {
+                allowlist: vec![ExecAllowlistEntry {
+                    program: "echo".to_string(),
+                    allowed_subcommands: vec![],
+                    blocked_flags: vec![],
+                }],
+                credentials: HashMap::new(),
+                rate_limit: Some(RateLimitSchema {
+                    requests_per_minute: 2,
+                    requests_per_hour: 100,
+                }),
+                timeout_secs: None,
+            }),
+            ..Default::default()
+        };
+
+        let mut store = make_store_data(caps);
+
+        // First two calls should succeed
+        assert!(store
+            .exec_command(
+                "echo".to_string(),
+                r#"["1"]"#.to_string(),
+                "{}".to_string(),
+                Some(5000),
+            )
+            .is_ok());
+        assert!(store
+            .exec_command(
+                "echo".to_string(),
+                r#"["2"]"#.to_string(),
+                "{}".to_string(),
+                Some(5000),
+            )
+            .is_ok());
+
+        // Third should hit rate limit
+        let result = store.exec_command(
+            "echo".to_string(),
+            r#"["3"]"#.to_string(),
+            "{}".to_string(),
+            Some(5000),
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("rate limit"));
+    }
+
+    #[test]
+    fn exec_command_rejects_invalid_args_json() {
+        use super::near::agent::host::Host;
+
+        let mut store = make_store_data(exec_caps_for_echo());
+        let result = store.exec_command(
+            "echo".to_string(),
+            "not json".to_string(),
+            "{}".to_string(),
+            None,
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid args JSON"));
+    }
+
+    #[test]
+    fn exec_command_rejects_invalid_env_json() {
+        use super::near::agent::host::Host;
+
+        let mut store = make_store_data(exec_caps_for_echo());
+        let result = store.exec_command(
+            "echo".to_string(),
+            r#"["hello"]"#.to_string(),
+            "not json".to_string(),
+            None,
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid env JSON"));
+    }
+
+    #[test]
+    fn exec_command_disallowed_secret_name_errors() {
+        use super::near::agent::host::Host;
+
+        let caps = CapabilitiesFile {
+            exec: Some(ExecCapabilitySchema {
+                allowlist: vec![ExecAllowlistEntry {
+                    program: "echo".to_string(),
+                    allowed_subcommands: vec![],
+                    blocked_flags: vec![],
+                }],
+                ..Default::default()
+            }),
+            // No secrets capability at all
+            secrets: None,
+            ..Default::default()
+        };
+
+        let mut store = make_store_data(caps);
+        let result = store.exec_command(
+            "echo".to_string(),
+            r#"["{{SECRET:FORBIDDEN_KEY}}"]"#.to_string(),
+            "{}".to_string(),
+            Some(5000),
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not allowed"));
+    }
+
+    #[test]
+    fn exec_command_nonexistent_program_errors() {
+        use super::near::agent::host::Host;
+
+        let caps = CapabilitiesFile {
+            exec: Some(ExecCapabilitySchema {
+                allowlist: vec![ExecAllowlistEntry {
+                    program: "nonexistent_binary_xyz_12345".to_string(),
+                    allowed_subcommands: vec![],
+                    blocked_flags: vec![],
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let mut store = make_store_data(caps);
+        let result = store.exec_command(
+            "nonexistent_binary_xyz_12345".to_string(),
+            r#"[]"#.to_string(),
+            "{}".to_string(),
+            Some(5000),
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("failed to execute"));
+    }
+
+    #[test]
+    fn exec_command_captures_nonzero_exit_code() {
+        use super::near::agent::host::Host;
+
+        let caps = CapabilitiesFile {
+            exec: Some(ExecCapabilitySchema {
+                allowlist: vec![ExecAllowlistEntry {
+                    program: "false".to_string(),
+                    allowed_subcommands: vec![],
+                    blocked_flags: vec![],
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let mut store = make_store_data(caps);
+        let result = store.exec_command(
+            "false".to_string(),
+            r#"[]"#.to_string(),
+            "{}".to_string(),
+            Some(5000),
+        );
+
+        let result = result.expect("exec should succeed even with nonzero exit");
+        assert_ne!(result.exit_code, 0);
+    }
+
+    #[test]
+    fn exec_command_no_exec_capability_errors() {
+        use super::near::agent::host::Host;
+
+        let mut store = make_store_data(CapabilitiesFile::default());
+        let result = store.exec_command(
+            "echo".to_string(),
+            r#"["hello"]"#.to_string(),
+            "{}".to_string(),
+            None,
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("exec capability not granted"));
+    }
+
+    #[test]
+    fn exec_command_with_env_vars() {
+        use super::near::agent::host::Host;
+
+        let caps = CapabilitiesFile {
+            exec: Some(ExecCapabilitySchema {
+                allowlist: vec![ExecAllowlistEntry {
+                    program: "sh".to_string(),
+                    allowed_subcommands: vec!["-c".to_string()],
+                    blocked_flags: vec![],
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let mut store = make_store_data(caps);
+        let result = store.exec_command(
+            "sh".to_string(),
+            r#"["-c","echo $MY_TEST_VAR"]"#.to_string(),
+            r#"{"MY_TEST_VAR":"hello_env"}"#.to_string(),
+            Some(5000),
+        );
+
+        let result = result.expect("exec should succeed");
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.stdout.trim(), "hello_env");
     }
 }
