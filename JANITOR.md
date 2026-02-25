@@ -5569,3 +5569,42 @@ Refactored the MarketIntel Commentary Pipeline module (`apps/market_intel/lib/ma
 - Task 2 Lemon Core test expansion validated in full-suite context.
 - Task 3 required no code merge.
 - Integration-level flake/race issues resolved; full suite now green.
+
+### 2026-02-25 - Plan Execution: PLN-20260223 macOS Keychain Secrets Audit
+**Work Area**: planning-system execution (secrets/keychain audit hardening)
+
+**Plan Selected**:
+- `PLN-20260223-macos-keychain-secrets-audit` (moved from `planned` to `ready_to_land` under janitor)
+
+**Completed This Run**:
+- Claimed and advanced planning metadata:
+  - `planning/INDEX.md` active row updated to `ready_to_land / janitor`
+  - Added row under `Ready to Land` table
+  - Plan metadata normalized in `planning/plans/PLN-20260223-macos-keychain-secrets-audit.md`
+- Added audit artifact:
+  - `docs/security/secrets-keychain-audit-matrix.md` (write/read/fallback contract mapping across keychain, master key env, encrypted store, coding_agent, market_intel)
+- Expanded test coverage for keychain/master-key fallback semantics:
+  - `apps/lemon_core/test/lemon_core/secrets/master_key_test.exs`
+    - keychain unavailable -> env fallback
+    - malformed keychain value + valid env -> env source
+    - status behavior when keychain unavailable and env configured
+  - `apps/lemon_core/test/lemon_core/secrets_test.exs`
+    - `prefer_env: true` precedence over store
+    - `env_fallback: false` behavior when store miss
+- Updated docs to point to audit matrix:
+  - `README.md`
+  - `apps/lemon_core/AGENTS.md`
+- Created planning close-out artifacts:
+  - `planning/reviews/RVW-PLN-20260223-macos-keychain-secrets-audit.md`
+  - `planning/merges/MRG-PLN-20260223-macos-keychain-secrets-audit.md`
+
+**Validation**:
+- `mix test apps/lemon_core/test/lemon_core/secrets/master_key_test.exs apps/lemon_core/test/lemon_core/secrets_test.exs` ✅
+- `mix test apps/lemon_core` ✅
+- Existing umbrella warning persists: `apps/lemon_ingestion` has no `mix.exs` (unrelated)
+
+**Source control**:
+- `jj status`
+- `jj git fetch`
+- `jj bookmark create feature/pln-20260223-macos-keychain-secrets-audit`
+- `jj describe` / push deferred (final commit message pending)

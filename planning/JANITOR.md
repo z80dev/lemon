@@ -418,3 +418,29 @@ Normalized Debt Phase 10 planning metadata/artifacts to current workflow semanti
 **Validation:**
 - `mix compile --no-optional-deps` ✅
 - `mix test apps/market_intel` ✅
+
+## 2026-02-25 (cron close-out)
+
+### Debt Phase 5 M2 planning-system alignment
+**Plan:** `PLN-20260222-debt-phase-05-m2-submodule-extraction`  
+**Status:** `ready_to_land`
+
+Completed a planning close-out pass for a historically implemented phase-5 milestone that was missing modern planning artifacts.
+
+**Changes:**
+- Normalized plan metadata/status in:
+  - `planning/plans/PLN-20260222-debt-phase-05-m2-submodule-extraction.md`
+    - owner/reviewer -> `janitor`
+    - workspace -> `feature/pln-20260222-debt-phase-05-m2-submodule-extraction`
+    - status -> `ready_to_land`
+    - added progress-log close-out entry
+- Added missing artifacts:
+  - `planning/reviews/RVW-PLN-20260222-debt-phase-05-m2-submodule-extraction.md`
+  - `planning/merges/MRG-PLN-20260222-debt-phase-05-m2-submodule-extraction.md`
+- Updated planning index:
+  - Added active-plan row (`ready_to_land`)
+  - Added `Ready to Land` row with merge-doc link
+
+**Validation:**
+- `mix compile --no-optional-deps`
+- `mix test apps/ai`

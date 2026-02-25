@@ -2062,6 +2062,8 @@ Master key resolution order is:
 1. Keychain
 2. `LEMON_SECRETS_MASTER_KEY`
 
+For detailed read/write path mapping and tested error/fallback semantics, see [`docs/security/secrets-keychain-audit-matrix.md`](docs/security/secrets-keychain-audit-matrix.md).
+
 #### 2) Store and manage secrets
 
 ```bash

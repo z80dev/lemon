@@ -2,12 +2,12 @@
 id: PLN-20260222-debt-phase-05-m2-submodule-extraction
 title: "Debt Phase 5 M2: Ai.Models submodule extraction"
 created: 2026-02-22
-updated: 2026-02-22
-owner: codex
-reviewer: codex
-workspace: debt-phase-05-m2
+updated: 2026-02-25
+owner: janitor
+reviewer: janitor
+workspace: feature/pln-20260222-debt-phase-05-m2-submodule-extraction
 change_id: pending
-status: in_progress
+status: ready_to_land
 roadmap_ref: ROADMAP.md
 depends_on: []
 ---
@@ -94,3 +94,11 @@ full model data, merged via `Map.merge/2` in some cases. The module was
 
 - `apps/ai/lib/ai/models.ex` — replaced inline data with submodule imports (11,203 -> 551 lines)
 - `apps/ai/lib/ai/models/google.ex` — added `antigravity_models/0` and 6 missing antigravity model entries
+
+## Progress Log
+
+| Timestamp | Milestone | Notes |
+|-----------|-----------|-------|
+| 2026-02-22 | Implementation | Extracted provider model catalogs into `Ai.Models.*` submodules and reduced `Ai.Models` orchestration surface |
+| 2026-02-22 | Validation | `mix compile --no-optional-deps` and `mix test apps/ai` green at implementation time |
+| 2026-02-25 | Close-out alignment | Normalized plan metadata/status to planning-system semantics and re-ran AI test suite |

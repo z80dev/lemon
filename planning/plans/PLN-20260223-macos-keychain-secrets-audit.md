@@ -1,6 +1,8 @@
 # PLN-20260223: macOS Keychain Secrets Path Audit and Hardening
 
-**Status:** Planned  
+**Status:** ready_to_land  
+**Owner:** janitor  
+**Reviewer:** janitor  
 **Workspace:** `feature/pln-20260223-macos-keychain-secrets-audit`  
 **Change ID:** `pending`  
 **Created:** 2026-02-23  
@@ -11,10 +13,10 @@ Audit all macOS Keychain and secret-resolution behavior end-to-end, document exa
 
 ## Milestones
 
-- [ ] **M1** — Secrets flow inventory and contract mapping
-- [ ] **M2** — Behavior verification (read/write/fallback/error) against current implementation
-- [ ] **M3** — Test hardening and edge-case expansion for keychain + master key + resolve paths
-- [ ] **M4** — Documentation updates and operational guidance
+- [x] **M1** — Secrets flow inventory and contract mapping
+- [x] **M2** — Behavior verification (read/write/fallback/error) against current implementation
+- [x] **M3** — Test hardening and edge-case expansion for keychain + master key + resolve paths
+- [x] **M4** — Documentation updates and operational guidance
 
 ## Scope
 
@@ -44,10 +46,10 @@ Audit all macOS Keychain and secret-resolution behavior end-to-end, document exa
 
 ## Exit Criteria Verification
 
-- [ ] A checked-in matrix documents where each secret path writes and reads.
-- [ ] Keychain unavailable/missing/denied/timeout/invalid-key cases are covered by tests.
-- [ ] Fallback precedence is explicitly tested and documented.
-- [ ] User/operator docs reflect validated behavior and known caveats.
+- [x] A checked-in matrix documents where each secret path writes and reads.
+- [x] Keychain unavailable/missing/denied/timeout/invalid-key cases are covered by tests.
+- [x] Fallback precedence is explicitly tested and documented.
+- [x] User/operator docs reflect validated behavior and known caveats.
 - [ ] `mix lemon.quality` passes after updates.
 
 ## Test Strategy
@@ -62,3 +64,5 @@ Audit all macOS Keychain and secret-resolution behavior end-to-end, document exa
 | Timestamp | Milestone | Note |
 |-----------|-----------|------|
 | 2026-02-23T00:00 | -- | Plan created from roadmap request for keychain/secrets audit and extensive testing |
+| 2026-02-25T16:00Z | M1, M3, M4 | Claimed by janitor; added checked-in secrets flow matrix documentation and expanded master key/secrets fallback precedence tests |
+| 2026-02-25T16:20Z | M2 | Re-ran targeted lemon_core suites (`secrets/master_key_test.exs`, `secrets_test.exs`) plus `mix test apps/lemon_core`; all green |
