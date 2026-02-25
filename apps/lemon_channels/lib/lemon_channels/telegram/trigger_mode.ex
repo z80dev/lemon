@@ -2,7 +2,7 @@ defmodule LemonChannels.Telegram.TriggerMode do
   @moduledoc false
 
   alias LemonCore.Store
-  alias LemonChannels.Types.ChatScope
+  alias LemonCore.ChatScope
 
   @chat_table :telegram_chat_trigger_mode
   @topic_table :telegram_topic_trigger_mode

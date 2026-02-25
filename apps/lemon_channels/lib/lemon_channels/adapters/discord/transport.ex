@@ -9,7 +9,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   alias LemonChannels.Adapters.Discord.Inbound
   alias LemonChannels.BindingResolver
-  alias LemonChannels.Types.ChatScope
+  alias LemonCore.ChatScope
   alias LemonCore.{InboundMessage, RouterBridge, SessionKey}
   alias Nostrum.Api.ApplicationCommand
   alias Nostrum.Api.Interaction

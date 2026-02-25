@@ -1,7 +1,7 @@
 defmodule LemonChannels.EngineRegistry do
   @moduledoc false
 
-  alias LemonChannels.Types.ResumeToken
+  alias LemonCore.ResumeToken
 
   @default_engines ~w(lemon echo codex claude opencode pi kimi)
 
