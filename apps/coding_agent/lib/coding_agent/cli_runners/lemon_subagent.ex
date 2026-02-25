@@ -70,7 +70,8 @@ defmodule CodingAgent.CliRunners.LemonSubagent do
   """
 
   alias CodingAgent.CliRunners.LemonRunner
-  alias AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
+  alias AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCore.ResumeToken
 
   require Logger
 

@@ -40,25 +40,21 @@ defmodule CodingAgent.Session do
   # its end-of-run checks (avoids a race in very fast mock runs).
   @prompt_defer_ms 10
   @reset_abort_wait_ms 5_000
-  @default_auto_compaction_task_timeout_ms 120_000
-  @default_overflow_recovery_task_timeout_ms 120_000
-  @task_supervisor CodingAgent.TaskSupervisor
-  @secret_exists_target "__lemon.secret.exists"
-  @secret_resolve_target "__lemon.secret.resolve"
 
   alias AgentCore.Types.AgentTool
   alias CodingAgent.Config
   alias LemonCore.Introspection
   alias CodingAgent.ExtensionLifecycle
   alias CodingAgent.Extensions
-  alias CodingAgent.ResourceLoader
   alias CodingAgent.Security.UntrustedToolBoundary
+  alias CodingAgent.Session.CompactionManager
   alias CodingAgent.Session.EventHandler
+  alias CodingAgent.Session.MessageSerialization
+  alias CodingAgent.Session.ModelResolver
+  alias CodingAgent.Session.PromptComposer
+  alias CodingAgent.Session.WasmBridge
   alias CodingAgent.Workspace
-  alias CodingAgent.Wasm.Config, as: WasmConfig
-  alias CodingAgent.Wasm.SidecarSession
   alias CodingAgent.Wasm.SidecarSupervisor
-  alias CodingAgent.Wasm.ToolFactory
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.{Session, SessionEntry}
   alias CodingAgent.UI.Context, as: UIContext
@@ -556,7 +552,7 @@ defmodule CodingAgent.Session do
     # Derive scope from session lineage. This ensures that sessions loaded from disk
     # keep their main/subagent scope even when start_link opts omit :parent_session.
     session_scope =
-      resolve_session_scope(opts, parent_session, session_manager.header.parent_session)
+      PromptComposer.resolve_session_scope(opts, parent_session, session_manager.header.parent_session)
 
     # Load settings FIRST so we can use defaults for model and thinking_level
     settings_manager =
@@ -564,7 +560,7 @@ defmodule CodingAgent.Session do
 
     # Compose system prompt from multiple sources
     system_prompt =
-      compose_system_prompt(
+      PromptComposer.compose_system_prompt(
         cwd,
         explicit_system_prompt,
         prompt_template,
@@ -575,7 +571,7 @@ defmodule CodingAgent.Session do
     # Resolve explicit model overrides (including provider:model and provider/model
     # strings) or
     # fall back to settings_manager.default_model.
-    model = resolve_session_model(Keyword.get(opts, :model), settings_manager)
+    model = ModelResolver.resolve_session_model(Keyword.get(opts, :model), settings_manager)
 
     # Get thinking_level from opts, or fall back to settings_manager.default_thinking_level
     thinking_level = Keyword.get(opts, :thinking_level) || settings_manager.default_thinking_level
@@ -599,7 +595,7 @@ defmodule CodingAgent.Session do
 
     # Build tool options for ToolRegistry
     wasm_boot =
-      maybe_start_wasm_sidecar(
+      WasmBridge.maybe_start_wasm_sidecar(
         cwd,
         settings_manager,
         session_manager.header.id,
@@ -647,11 +643,11 @@ defmodule CodingAgent.Session do
     transform_context = build_transform_context(Keyword.get(opts, :transform_context))
 
     # Start the AgentCore.Agent
-    get_api_key = Keyword.get(opts, :get_api_key) || build_get_api_key(settings_manager)
+    get_api_key = Keyword.get(opts, :get_api_key) || ModelResolver.build_get_api_key(settings_manager)
 
     # Build stream options with provider-specific secrets
     stream_options =
-      build_stream_options(model, settings_manager, Keyword.get(opts, :stream_options))
+      ModelResolver.build_stream_options(model, settings_manager, Keyword.get(opts, :stream_options))
 
     # Register main agent in AgentRegistry with key {session_id, :main, 0}
     agent_registry_key = {session_manager.header.id, :main, 0}
@@ -915,7 +911,7 @@ defmodule CodingAgent.Session do
 
   def handle_call({:wasm_host_tool_invoke, tool_name, params_json}, _from, state) do
     result =
-      case maybe_handle_reserved_host_target(tool_name, params_json) do
+      case WasmBridge.maybe_handle_reserved_host_target(tool_name, params_json) do
         {:ok, payload} ->
           {:ok, payload}
 
@@ -923,20 +919,20 @@ defmodule CodingAgent.Session do
           {:error, reason}
 
         :not_reserved ->
-          case find_host_tool(state, tool_name) do
+          case WasmBridge.find_host_tool(state, tool_name) do
             nil ->
               {:error, :tool_not_found}
 
             tool ->
-              params = decode_wasm_params(params_json)
+              params = WasmBridge.decode_wasm_params(params_json)
               call_id = "wasm_host_#{System.unique_integer([:positive, :monotonic])}"
 
               case tool.execute.(call_id, params, nil, nil) do
                 %AgentCore.Types.AgentToolResult{} = tool_result ->
-                  {:ok, encode_wasm_host_output(tool_result)}
+                  {:ok, WasmBridge.encode_wasm_host_output(tool_result)}
 
                 {:ok, %AgentCore.Types.AgentToolResult{} = tool_result} ->
-                  {:ok, encode_wasm_host_output(tool_result)}
+                  {:ok, WasmBridge.encode_wasm_host_output(tool_result)}
 
                 {:error, reason} ->
                   {:error, reason}
@@ -957,7 +953,7 @@ defmodule CodingAgent.Session do
       # Show working message
       ui_set_working_message(state, "Reloading extensions...")
 
-      wasm_reload = reload_wasm_tools(state)
+      wasm_reload = WasmBridge.reload_wasm_tools(state)
 
       # Build tool options
       tool_opts = [
@@ -1125,9 +1121,13 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call({:compact, opts}, _from, state) do
-    state = state |> clear_auto_compaction_state() |> clear_overflow_recovery_state()
+    state =
+      state
+      |> CompactionManager.clear_auto_compaction_state()
+      |> CompactionManager.clear_overflow_recovery_state()
+
     custom_summary = Keyword.get(opts, :summary)
-    compaction_opts = normalize_compaction_opts(state, opts)
+    compaction_opts = CompactionManager.normalize_compaction_opts(state, opts)
 
     # Show working message before compaction
     ui_set_working_message(state, "Compacting context...")
@@ -1275,7 +1275,7 @@ defmodule CodingAgent.Session do
 
   def handle_cast(:abort, state) do
     had_pending_prompt = not is_nil(state.pending_prompt_timer_ref)
-    state = state |> cancel_pending_prompt() |> clear_overflow_recovery_state()
+    state = state |> cancel_pending_prompt() |> CompactionManager.clear_overflow_recovery_state()
     AgentCore.Agent.abort(state.agent)
 
     if had_pending_prompt do
@@ -1316,7 +1316,7 @@ defmodule CodingAgent.Session do
 
         # Process the event and update state
         new_state = handle_agent_event(event, state)
-        {:noreply, clear_overflow_recovery_state_on_terminal(event, new_state)}
+        {:noreply, CompactionManager.clear_overflow_recovery_state_on_terminal(event, new_state)}
     end
   end
 
@@ -1327,13 +1327,13 @@ defmodule CodingAgent.Session do
     # Process the event and update state
     new_state = handle_agent_event(event, state)
 
-    {:noreply, clear_overflow_recovery_state_on_terminal(event, new_state)}
+    {:noreply, CompactionManager.clear_overflow_recovery_state_on_terminal(event, new_state)}
   end
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
     cond do
       state.auto_compaction_task_monitor_ref == ref ->
-        {:noreply, handle_auto_compaction_task_down(state)}
+        {:noreply, CompactionManager.handle_auto_compaction_task_down(state)}
 
       state.overflow_recovery_task_monitor_ref == ref ->
         {:noreply, handle_overflow_recovery_task_down(state)}
@@ -1368,7 +1368,7 @@ defmodule CodingAgent.Session do
       state
       |> Map.put(:is_streaming, false)
       |> cancel_pending_prompt()
-      |> clear_overflow_recovery_state()
+      |> CompactionManager.clear_overflow_recovery_state()
 
     {:noreply, state}
   end
@@ -1398,8 +1398,8 @@ defmodule CodingAgent.Session do
       state.auto_compaction_signature != signature ->
         {:noreply, state}
 
-      signature != session_signature(state) ->
-        state = clear_auto_compaction_state(state)
+      signature != CompactionManager.session_signature(state) ->
+        state = CompactionManager.clear_auto_compaction_state(state)
 
         if not state.is_streaming do
           ui_set_working_message(state, nil)
@@ -1408,7 +1408,7 @@ defmodule CodingAgent.Session do
         {:noreply, state}
 
       true ->
-        state = clear_auto_compaction_state(state)
+        state = CompactionManager.clear_auto_compaction_state(state)
 
         case apply_compaction_result(state, result, nil) do
           {:ok, new_state} ->
@@ -1428,18 +1428,18 @@ defmodule CodingAgent.Session do
       state.overflow_recovery_signature != signature ->
         {:noreply, state}
 
-      signature != session_signature(state) ->
-        {:noreply, clear_overflow_recovery_task_state(state)}
+      signature != CompactionManager.session_signature(state) ->
+        {:noreply, CompactionManager.clear_overflow_recovery_task_state(state)}
 
       true ->
-        state = clear_overflow_recovery_task_state(state)
+        state = CompactionManager.clear_overflow_recovery_task_state(state)
 
         case apply_compaction_result(state, result, nil) do
           {:ok, compacted_state} ->
             case continue_after_overflow_compaction(compacted_state) do
               {:ok, resumed_state} ->
-                emit_overflow_recovery_telemetry(:success, resumed_state, %{
-                  duration_ms: overflow_recovery_duration_ms(state)
+                CompactionManager.emit_overflow_recovery_telemetry(:success, resumed_state, %{
+                  duration_ms: CompactionManager.overflow_recovery_duration_ms(state)
                 })
 
                 {:noreply, resumed_state}
@@ -1451,9 +1451,9 @@ defmodule CodingAgent.Session do
                   :error
                 )
 
-                emit_overflow_recovery_telemetry(:failure, failed_state, %{
-                  duration_ms: overflow_recovery_duration_ms(state),
-                  reason: normalize_overflow_reason(reason)
+                CompactionManager.emit_overflow_recovery_telemetry(:failure, failed_state, %{
+                  duration_ms: CompactionManager.overflow_recovery_duration_ms(state),
+                  reason: CompactionManager.normalize_overflow_reason(reason)
                 })
 
                 {:noreply, finalize_overflow_recovery_failure(failed_state, reason)}
@@ -1466,9 +1466,9 @@ defmodule CodingAgent.Session do
               :error
             )
 
-            emit_overflow_recovery_telemetry(:failure, failed_state, %{
-              duration_ms: overflow_recovery_duration_ms(state),
-              reason: normalize_overflow_reason(reason)
+            CompactionManager.emit_overflow_recovery_telemetry(:failure, failed_state, %{
+              duration_ms: CompactionManager.overflow_recovery_duration_ms(state),
+              reason: CompactionManager.normalize_overflow_reason(reason)
             })
 
             {:noreply, finalize_overflow_recovery_failure(failed_state, reason)}
@@ -1480,8 +1480,8 @@ defmodule CodingAgent.Session do
     if state.auto_compaction_task_monitor_ref == monitor_ref do
       state =
         state
-        |> maybe_kill_background_task(state.auto_compaction_task_pid, :auto_compaction_timeout)
-        |> clear_auto_compaction_state()
+        |> CompactionManager.maybe_kill_background_task(state.auto_compaction_task_pid, :auto_compaction_timeout)
+        |> CompactionManager.clear_auto_compaction_state()
 
       if not state.is_streaming do
         ui_set_working_message(state, nil)
@@ -1499,17 +1499,17 @@ defmodule CodingAgent.Session do
 
       failed_state =
         state
-        |> maybe_kill_background_task(
+        |> CompactionManager.maybe_kill_background_task(
           state.overflow_recovery_task_pid,
           :overflow_recovery_timeout
         )
-        |> clear_overflow_recovery_task_state()
+        |> CompactionManager.clear_overflow_recovery_task_state()
 
       ui_notify(failed_state, "Overflow compaction timed out", :error)
 
-      emit_overflow_recovery_telemetry(:failure, failed_state, %{
-        duration_ms: overflow_recovery_duration_ms(state),
-        reason: normalize_overflow_reason(failure_reason)
+      CompactionManager.emit_overflow_recovery_telemetry(:failure, failed_state, %{
+        duration_ms: CompactionManager.overflow_recovery_duration_ms(state),
+        reason: CompactionManager.normalize_overflow_reason(failure_reason)
       })
 
       {:noreply, finalize_overflow_recovery_failure(failed_state, failure_reason)}
@@ -1630,187 +1630,6 @@ defmodule CodingAgent.Session do
 
   defp determine_health_status(true, _error_rate, _state), do: :healthy
 
-  @spec resolve_session_model(term(), CodingAgent.SettingsManager.t()) :: Ai.Types.Model.t()
-  defp resolve_session_model(nil, %CodingAgent.SettingsManager{} = settings) do
-    resolve_default_model(settings)
-  end
-
-  defp resolve_session_model(%Ai.Types.Model{} = model, %CodingAgent.SettingsManager{} = settings) do
-    apply_provider_base_url(model, settings)
-  end
-
-  defp resolve_session_model(model_spec, %CodingAgent.SettingsManager{} = settings) do
-    case resolve_explicit_model(model_spec) do
-      %Ai.Types.Model{} = model ->
-        apply_provider_base_url(model, settings)
-
-      _ ->
-        raise ArgumentError, "unknown model #{inspect(model_spec)}"
-    end
-  end
-
-  @spec resolve_explicit_model(term()) :: Ai.Types.Model.t() | nil
-  defp resolve_explicit_model(spec) when is_binary(spec) do
-    trimmed = String.trim(spec)
-
-    cond do
-      trimmed == "" ->
-        nil
-
-      true ->
-        case String.split(trimmed, ":", parts: 2) do
-          [model_id] ->
-            # Prefer exact model-id lookup first so slash-style provider-scoped IDs
-            # (for example "google/gemini-3.1-pro-preview") continue to resolve as-is.
-            lookup_model(nil, non_empty_string(model_id)) ||
-              resolve_slash_model_spec(model_id)
-
-          [provider, model_id] ->
-            provider = non_empty_string(provider)
-            model_id = non_empty_string(model_id)
-
-            if model_id do
-              lookup_model(provider, model_id)
-            else
-              nil
-            end
-
-          _ ->
-            nil
-        end
-    end
-  end
-
-  defp resolve_explicit_model(spec) when is_map(spec) do
-    provider = spec[:provider] || spec["provider"]
-
-    model_id =
-      spec[:model_id] || spec["model_id"] || spec[:id] || spec["id"] || spec[:model] ||
-        spec["model"]
-
-    lookup_model(non_empty_string(provider), non_empty_string(model_id))
-  end
-
-  defp resolve_explicit_model(_), do: nil
-
-  @spec resolve_slash_model_spec(String.t()) :: Ai.Types.Model.t() | nil
-  defp resolve_slash_model_spec(model_spec) when is_binary(model_spec) do
-    case String.split(model_spec, "/", parts: 2) do
-      [provider, model_id] ->
-        provider = non_empty_string(provider)
-        model_id = non_empty_string(model_id)
-
-        if provider && model_id do
-          lookup_model(provider, model_id)
-        else
-          nil
-        end
-
-      _ ->
-        nil
-    end
-  end
-
-  @spec lookup_model(String.t() | nil, String.t() | nil) :: Ai.Types.Model.t() | nil
-  defp lookup_model(_provider, nil), do: nil
-
-  defp lookup_model(nil, model_id) when is_binary(model_id) do
-    Ai.Models.find_by_id(model_id)
-  end
-
-  defp lookup_model(provider, model_id) when is_binary(provider) and is_binary(model_id) do
-    case provider_to_atom(provider) do
-      nil -> nil
-      provider_atom -> Ai.Models.get_model(provider_atom, model_id)
-    end
-  end
-
-  defp lookup_model(_provider, _model_id), do: nil
-
-  @spec provider_to_atom(String.t()) :: atom() | nil
-  defp provider_to_atom(provider) when is_binary(provider) do
-    normalized = String.downcase(String.trim(provider))
-
-    Enum.find(Ai.Models.get_providers(), fn known ->
-      known_str = Atom.to_string(known)
-      known_str == normalized or String.replace(known_str, "_", "-") == normalized
-    end)
-  end
-
-  defp provider_to_atom(_), do: nil
-
-  defp non_empty_string(value) when is_binary(value) do
-    trimmed = String.trim(value)
-    if trimmed == "", do: nil, else: trimmed
-  end
-
-  defp non_empty_string(_), do: nil
-
-  @spec resolve_default_model(CodingAgent.SettingsManager.t()) :: Ai.Types.Model.t()
-  defp resolve_default_model(%CodingAgent.SettingsManager{default_model: nil}) do
-    # No default model configured, raise an error
-    raise ArgumentError,
-          "model is required: either pass :model option or configure default_model in settings"
-  end
-
-  defp resolve_default_model(%CodingAgent.SettingsManager{default_model: config} = settings)
-       when is_map(config) do
-    provider = Map.get(config, :provider)
-    model_id = Map.get(config, :model_id)
-    base_url = Map.get(config, :base_url)
-
-    model =
-      case provider do
-        nil ->
-          Ai.Models.find_by_id(model_id)
-
-        provider_str when is_binary(provider_str) ->
-          provider_atom =
-            try do
-              String.to_existing_atom(provider_str)
-            rescue
-              ArgumentError -> String.to_atom(provider_str)
-            end
-
-          Ai.Models.get_model(provider_atom, model_id)
-      end
-
-    case model do
-      nil ->
-        raise ArgumentError,
-              "unknown model #{inspect(model_id)}" <>
-                if(provider, do: " for provider #{inspect(provider)}", else: "")
-
-      model ->
-        model =
-          if is_binary(base_url) and base_url != "" do
-            %{model | base_url: base_url}
-          else
-            model
-          end
-
-        apply_provider_base_url(model, settings)
-    end
-  end
-
-  defp apply_provider_base_url(model, %CodingAgent.SettingsManager{providers: providers}) do
-    provider_key =
-      case model.provider do
-        p when is_atom(p) -> Atom.to_string(p)
-        p when is_binary(p) -> p
-        _ -> nil
-      end
-
-    provider_cfg = provider_key && Map.get(providers, provider_key)
-    base_url = provider_cfg && Map.get(provider_cfg, :base_url)
-
-    if is_binary(base_url) and base_url != "" and base_url != model.base_url do
-      %{model | base_url: base_url}
-    else
-      model
-    end
-  end
-
   defp build_transform_context(nil), do: &UntrustedToolBoundary.transform/2
 
   defp build_transform_context(transform_fn) when is_function(transform_fn, 2) do
@@ -1830,236 +1649,22 @@ defmodule CodingAgent.Session do
   defp normalize_transform_result(transformed) when is_list(transformed), do: {:ok, transformed}
   defp normalize_transform_result(_), do: {:error, :invalid_transform_result}
 
-  defp build_get_api_key(%CodingAgent.SettingsManager{providers: providers}) do
-    fn provider ->
-      provider_name = normalize_provider_key(provider)
-      provider_cfg = provider_config(providers, provider_name)
-
-      env_key =
-        provider_name
-        |> provider_env_vars()
-        |> env_first()
-
-      cond do
-        is_binary(env_key) and env_key != "" ->
-          env_key
-
-        is_binary(plain_api_key = provider_config_value(provider_cfg, :api_key)) and
-            plain_api_key != "" ->
-          plain_api_key
-
-        is_binary(api_key_secret = provider_config_value(provider_cfg, :api_key_secret)) and
-            api_key_secret != "" ->
-          resolve_secret_api_key(api_key_secret)
-
-        is_binary(default_secret = provider_default_secret_name(provider_name)) and
-            default_secret != "" ->
-          resolve_secret_api_key(default_secret)
-
-        true ->
-          nil
-      end
-    end
-  end
-
-  # Build stream options with provider-specific secrets
-  defp build_stream_options(%{provider: :google_vertex} = _model, settings_manager, existing_opts) do
-    provider_cfg = provider_config(settings_manager.providers, "google_vertex")
-
-    # Resolve Vertex-specific secrets
-    project = resolve_vertex_secret(provider_cfg, :project_secret, "google_vertex_project")
-    location = resolve_vertex_secret(provider_cfg, :location_secret, "google_vertex_location")
-
-    service_account_json =
-      resolve_vertex_secret(
-        provider_cfg,
-        :service_account_json_secret,
-        "google_vertex_service_account_json"
-      )
-
-    base_opts = existing_opts || %{}
-
-    opts =
-      base_opts
-      |> maybe_put(:project, project)
-      |> maybe_put(:location, location)
-      |> maybe_put(:service_account_json, service_account_json)
-
-    opts
-  end
-
-  defp build_stream_options(_model, _settings_manager, existing_opts), do: existing_opts
-
-  defp resolve_vertex_secret(provider_cfg, config_key, default_secret_name) do
-    # Try to get secret name from config, fall back to default
-    secret_name = provider_config_value(provider_cfg, config_key) || default_secret_name
-
-    if is_binary(secret_name) and secret_name != "" do
-      resolve_secret_api_key(secret_name)
-    else
-      nil
-    end
-  end
-
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
-
-  defp provider_config(providers, provider_name) when is_binary(provider_name) do
-    Map.get(providers, provider_name) ||
-      Enum.find_value(providers, fn
-        {key, value} when is_atom(key) ->
-          if Atom.to_string(key) == provider_name, do: value, else: nil
-
-        _ ->
-          nil
-      end)
-  end
-
-  defp provider_config(_providers, _provider_name), do: nil
-
-  defp provider_config_value(nil, _key), do: nil
-
-  defp provider_config_value(cfg, key) when is_map(cfg) do
-    Map.get(cfg, key) || Map.get(cfg, Atom.to_string(key))
-  end
-
-  defp normalize_provider_key(provider) when is_atom(provider), do: Atom.to_string(provider)
-
-  defp normalize_provider_key(provider) when is_binary(provider) do
-    provider
-    |> String.trim()
-    |> case do
-      "" -> nil
-      value -> value
-    end
-  end
-
-  defp normalize_provider_key(_), do: nil
-
-  defp provider_env_vars("anthropic"), do: ["ANTHROPIC_API_KEY"]
-  defp provider_env_vars("openai"), do: ["OPENAI_API_KEY"]
-  defp provider_env_vars("openai-codex"), do: ["OPENAI_CODEX_API_KEY", "CHATGPT_TOKEN"]
-  defp provider_env_vars("opencode"), do: ["OPENCODE_API_KEY"]
-  defp provider_env_vars("kimi"), do: ["KIMI_API_KEY"]
-
-  defp provider_env_vars("google"),
-    do: ["GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"]
-
-  defp provider_env_vars(_), do: []
-
-  defp provider_default_secret_name(nil), do: nil
-
-  defp provider_default_secret_name(provider_name) when is_binary(provider_name) do
-    sanitized =
-      provider_name
-      |> String.downcase()
-      |> String.replace(~r/[^a-z0-9]+/, "_")
-      |> String.trim("_")
-
-    if sanitized == "", do: nil, else: "llm_#{sanitized}_api_key"
-  end
-
-  defp resolve_secret_api_key(secret_name) when is_binary(secret_name) do
-    case LemonCore.Secrets.resolve(secret_name, prefer_env: false, env_fallback: true) do
-      {:ok, value, _source} -> value
-      _ -> nil
-    end
-  end
-
-  defp resolve_secret_api_key(_), do: nil
-
-  defp env_first(names) when is_list(names) do
-    Enum.find_value(names, fn name ->
-      case System.get_env(name) do
-        value when is_binary(value) and value != "" -> value
-        _ -> nil
-      end
-    end)
-  end
-
-  # Compose system prompt from multiple sources:
-  # 1. Explicit system_prompt option (highest priority)
-  # 2. Prompt template content (if prompt_template option provided)
-  # 3. Lemon base prompt (skills + workspace context)
-  # 4. CLAUDE.md/AGENTS.md content from ResourceLoader
-  @spec compose_system_prompt(
-          String.t(),
-          String.t() | nil,
-          String.t() | nil,
-          String.t(),
-          :main | :subagent
-        ) :: String.t()
-  defp compose_system_prompt(cwd, explicit_prompt, prompt_template, workspace_dir, session_scope) do
-    # Load prompt template if specified
-    template_content =
-      case prompt_template do
-        nil ->
-          nil
-
-        name ->
-          case ResourceLoader.load_prompt(cwd, name) do
-            {:ok, content} -> content
-            {:error, :not_found} -> nil
-          end
-      end
-
-    # Build Lemon base prompt (skills + workspace context)
-    base_prompt =
-      CodingAgent.SystemPrompt.build(cwd, %{
-        workspace_dir: workspace_dir,
-        session_scope: session_scope
-      })
-
-    # Load instructions (CLAUDE.md, AGENTS.md) from cwd and parent directories
-    instructions = ResourceLoader.load_instructions(cwd)
-
-    # Compose in order: explicit > template > base > instructions
-    [explicit_prompt, template_content, base_prompt, instructions]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.join("\n\n")
-  end
-
-  @spec resolve_session_scope(keyword(), String.t() | nil, String.t() | nil) :: :main | :subagent
-  defp resolve_session_scope(opts, parent_session_opt, parent_session_from_file) do
-    case Keyword.get(opts, :session_scope) do
-      scope when scope in [:main, "main"] ->
-        :main
-
-      scope when scope in [:subagent, "subagent"] ->
-        :subagent
-
-      _ ->
-        parent = first_non_empty_binary([parent_session_opt, parent_session_from_file])
-
-        if is_binary(parent) do
-          :subagent
-        else
-          :main
-        end
-    end
-  end
-
-  defp first_non_empty_binary(list) when is_list(list) do
-    Enum.find(list, fn v -> is_binary(v) and String.trim(v) != "" end)
-  end
-
   @spec refresh_system_prompt(t()) :: t()
   defp refresh_system_prompt(state) do
-    next_prompt =
-      compose_system_prompt(
-        state.cwd,
-        state.explicit_system_prompt,
-        state.prompt_template,
-        state.workspace_dir,
-        state.session_scope
-      )
+    case PromptComposer.maybe_refresh_system_prompt(
+           state.cwd,
+           state.explicit_system_prompt,
+           state.prompt_template,
+           state.workspace_dir,
+           state.session_scope,
+           state.system_prompt
+         ) do
+      :unchanged ->
+        state
 
-    if next_prompt == state.system_prompt do
-      state
-    else
-      :ok = AgentCore.Agent.set_system_prompt(state.agent, next_prompt)
-      %{state | system_prompt: next_prompt}
+      {:changed, next_prompt} ->
+        :ok = AgentCore.Agent.set_system_prompt(state.agent, next_prompt)
+        %{state | system_prompt: next_prompt}
     end
   end
 
@@ -2165,15 +1770,15 @@ defmodule CodingAgent.Session do
       case message do
         %Ai.Types.UserMessage{} ->
           # Persist user messages (including steering/follow-up)
-          SessionManager.append_message(state.session_manager, serialize_message(message))
+          SessionManager.append_message(state.session_manager, MessageSerialization.serialize_message(message))
 
         %Ai.Types.AssistantMessage{} ->
           # Persist assistant messages
-          SessionManager.append_message(state.session_manager, serialize_message(message))
+          SessionManager.append_message(state.session_manager, MessageSerialization.serialize_message(message))
 
         %Ai.Types.ToolResultMessage{} ->
           # Persist tool results
-          SessionManager.append_message(state.session_manager, serialize_message(message))
+          SessionManager.append_message(state.session_manager, MessageSerialization.serialize_message(message))
 
         _ ->
           # Other message types, don't persist
@@ -2188,7 +1793,7 @@ defmodule CodingAgent.Session do
     context = SessionManager.build_session_context(session)
 
     context.messages
-    |> Enum.map(&deserialize_message/1)
+    |> Enum.map(&MessageSerialization.deserialize_message/1)
     |> Enum.reject(&is_nil/1)
   end
 
@@ -2235,218 +1840,6 @@ defmodule CodingAgent.Session do
         :ok
     end
   end
-
-  @spec serialize_message(map()) :: map()
-  defp serialize_message(%Ai.Types.UserMessage{} = msg) do
-    %{
-      "role" => "user",
-      "content" => serialize_content(msg.content),
-      "timestamp" => msg.timestamp
-    }
-  end
-
-  defp serialize_message(%Ai.Types.AssistantMessage{} = msg) do
-    %{
-      "role" => "assistant",
-      "content" => Enum.map(msg.content, &serialize_content_block/1),
-      "provider" => msg.provider,
-      "model" => msg.model,
-      "api" => msg.api,
-      "usage" => serialize_usage(msg.usage),
-      "stop_reason" => msg.stop_reason && Atom.to_string(msg.stop_reason),
-      "timestamp" => msg.timestamp
-    }
-  end
-
-  defp serialize_message(%Ai.Types.ToolResultMessage{} = msg) do
-    %{
-      "role" => "tool_result",
-      "tool_call_id" => msg.tool_call_id,
-      "tool_name" => msg.tool_name,
-      "content" => Enum.map(msg.content, &serialize_content_block/1),
-      "details" => msg.details,
-      "trust" => serialize_trust(msg.trust),
-      "is_error" => msg.is_error,
-      "timestamp" => msg.timestamp
-    }
-  end
-
-  defp serialize_message(msg) when is_map(msg) do
-    msg
-  end
-
-  @spec serialize_content(String.t() | list()) :: String.t() | list()
-  defp serialize_content(content) when is_binary(content), do: content
-
-  defp serialize_content(content) when is_list(content) do
-    Enum.map(content, &serialize_content_block/1)
-  end
-
-  @spec serialize_content_block(map()) :: map()
-  defp serialize_content_block(%Ai.Types.TextContent{text: text}) do
-    %{"type" => "text", "text" => text}
-  end
-
-  defp serialize_content_block(%Ai.Types.ImageContent{data: data, mime_type: mime_type}) do
-    %{"type" => "image", "data" => data, "mime_type" => mime_type}
-  end
-
-  defp serialize_content_block(%Ai.Types.ThinkingContent{thinking: thinking}) do
-    %{"type" => "thinking", "thinking" => thinking}
-  end
-
-  defp serialize_content_block(%Ai.Types.ToolCall{id: id, name: name, arguments: arguments}) do
-    %{"type" => "tool_call", "id" => id, "name" => name, "arguments" => arguments}
-  end
-
-  defp serialize_content_block(%{type: :text, text: text}) do
-    %{"type" => "text", "text" => text}
-  end
-
-  defp serialize_content_block(block) when is_map(block) do
-    block
-  end
-
-  @spec serialize_usage(map() | nil) :: map() | nil
-  defp serialize_usage(nil), do: nil
-
-  defp serialize_usage(%Ai.Types.Usage{} = usage) do
-    %{
-      "input" => usage.input,
-      "output" => usage.output,
-      "cache_read" => usage.cache_read,
-      "cache_write" => usage.cache_write,
-      "total_tokens" => usage.total_tokens
-    }
-  end
-
-  defp serialize_usage(usage) when is_map(usage), do: usage
-
-  @spec deserialize_message(map()) :: map() | nil
-  defp deserialize_message(%{"role" => "user"} = msg) do
-    %Ai.Types.UserMessage{
-      role: :user,
-      content: deserialize_content(msg["content"]),
-      timestamp: msg["timestamp"] || 0
-    }
-  end
-
-  defp deserialize_message(%{"role" => "assistant"} = msg) do
-    %Ai.Types.AssistantMessage{
-      role: :assistant,
-      content: deserialize_content_blocks(msg["content"]),
-      provider: msg["provider"] || "",
-      model: msg["model"] || "",
-      api: msg["api"] || "",
-      usage: deserialize_usage(msg["usage"]),
-      stop_reason: deserialize_stop_reason(msg["stop_reason"]),
-      timestamp: msg["timestamp"] || 0
-    }
-  end
-
-  defp deserialize_message(%{"role" => "tool_result"} = msg) do
-    %Ai.Types.ToolResultMessage{
-      role: :tool_result,
-      tool_call_id: msg["tool_call_id"] || msg["tool_use_id"] || "",
-      tool_name: msg["tool_name"] || "",
-      content: deserialize_content_blocks(msg["content"]),
-      details: msg["details"],
-      trust: deserialize_trust(msg["trust"]),
-      is_error: msg["is_error"] || false,
-      timestamp: msg["timestamp"] || 0
-    }
-  end
-
-  defp deserialize_message(%{"role" => "custom"} = msg) do
-    %CodingAgent.Messages.CustomMessage{
-      role: :custom,
-      custom_type: msg["custom_type"] || "",
-      content: deserialize_content(msg["content"]),
-      display: if(is_nil(msg["display"]), do: true, else: msg["display"]),
-      details: msg["details"],
-      timestamp: msg["timestamp"] || 0
-    }
-  end
-
-  defp deserialize_message(%{"role" => "branch_summary"} = msg) do
-    %CodingAgent.Messages.BranchSummaryMessage{
-      summary: msg["summary"],
-      timestamp: msg["timestamp"] || 0
-    }
-  end
-
-  defp deserialize_message(_msg), do: nil
-
-  @spec deserialize_content(String.t() | list() | nil) :: String.t() | list()
-  defp deserialize_content(nil), do: ""
-  defp deserialize_content(content) when is_binary(content), do: content
-  defp deserialize_content(content) when is_list(content), do: deserialize_content_blocks(content)
-
-  @spec deserialize_content_blocks(list() | nil) :: list()
-  defp deserialize_content_blocks(nil), do: []
-
-  defp deserialize_content_blocks(blocks) when is_list(blocks) do
-    Enum.map(blocks, &deserialize_content_block/1)
-  end
-
-  @spec deserialize_content_block(map()) :: map()
-  defp deserialize_content_block(%{"type" => "text", "text" => text}) do
-    %Ai.Types.TextContent{type: :text, text: text}
-  end
-
-  defp deserialize_content_block(%{"type" => "image", "data" => data, "mime_type" => mime_type}) do
-    %Ai.Types.ImageContent{type: :image, data: data, mime_type: mime_type}
-  end
-
-  defp deserialize_content_block(%{"type" => "thinking", "thinking" => thinking}) do
-    %Ai.Types.ThinkingContent{type: :thinking, thinking: thinking}
-  end
-
-  defp deserialize_content_block(%{
-         "type" => "tool_call",
-         "id" => id,
-         "name" => name,
-         "arguments" => arguments
-       }) do
-    %Ai.Types.ToolCall{type: :tool_call, id: id, name: name, arguments: arguments}
-  end
-
-  defp deserialize_content_block(block), do: block
-
-  @spec deserialize_usage(map() | nil) :: Ai.Types.Usage.t() | nil
-  defp deserialize_usage(nil), do: nil
-
-  defp deserialize_usage(usage) when is_map(usage) do
-    %Ai.Types.Usage{
-      input: usage["input"] || 0,
-      output: usage["output"] || 0,
-      cache_read: usage["cache_read"] || 0,
-      cache_write: usage["cache_write"] || 0,
-      total_tokens: usage["total_tokens"] || 0,
-      cost: %Ai.Types.Cost{}
-    }
-  end
-
-  @spec deserialize_stop_reason(String.t() | nil) :: atom() | nil
-  defp deserialize_stop_reason(nil), do: nil
-  defp deserialize_stop_reason("stop"), do: :stop
-  defp deserialize_stop_reason("length"), do: :length
-  defp deserialize_stop_reason("tool_use"), do: :tool_use
-  defp deserialize_stop_reason("error"), do: :error
-  defp deserialize_stop_reason("aborted"), do: :aborted
-  defp deserialize_stop_reason(_), do: nil
-
-  defp serialize_trust(:untrusted), do: "untrusted"
-  defp serialize_trust(:trusted), do: "trusted"
-  defp serialize_trust("untrusted"), do: "untrusted"
-  defp serialize_trust("trusted"), do: "trusted"
-  defp serialize_trust(_), do: "trusted"
-
-  defp deserialize_trust(:untrusted), do: :untrusted
-  defp deserialize_trust("untrusted"), do: :untrusted
-  defp deserialize_trust(:trusted), do: :trusted
-  defp deserialize_trust("trusted"), do: :trusted
-  defp deserialize_trust(_), do: :trusted
 
   # ============================================================================
   # Branch Summarization Helpers
@@ -2511,7 +1904,7 @@ defmodule CodingAgent.Session do
       model = state.model
 
       _ =
-        start_background_task(fn ->
+        CompactionManager.start_background_task(fn ->
           case CodingAgent.Compaction.generate_branch_summary(branch_entries, model, []) do
             {:ok, summary} ->
               # Send a message back to the session to store the summary
@@ -2527,88 +1920,9 @@ defmodule CodingAgent.Session do
     state
   end
 
-  @spec session_signature(t()) :: session_signature()
-  defp session_signature(state) do
-    {
-      state.session_manager.header.id,
-      state.session_manager.leaf_id,
-      SessionManager.entry_count(state.session_manager),
-      state.turn_index,
-      state.model.provider,
-      state.model.id
-    }
-  end
-
-  @spec clear_auto_compaction_state(t()) :: t()
-  defp clear_auto_compaction_state(state) do
-    state = clear_auto_compaction_task_tracking(state)
-    %{state | auto_compaction_in_progress: false, auto_compaction_signature: nil}
-  end
-
-  @spec clear_overflow_recovery_task_state(t()) :: t()
-  defp clear_overflow_recovery_task_state(state) do
-    state = clear_overflow_recovery_task_tracking(state)
-
-    %{
-      state
-      | overflow_recovery_in_progress: false,
-        overflow_recovery_signature: nil,
-        overflow_recovery_started_at_ms: nil
-    }
-  end
-
-  @spec clear_overflow_recovery_state(t()) :: t()
-  defp clear_overflow_recovery_state(state) do
-    %{
-      clear_overflow_recovery_task_state(state)
-      | overflow_recovery_attempted: false,
-        overflow_recovery_error_reason: nil,
-        overflow_recovery_partial_state: nil
-    }
-  end
-
-  @spec clear_auto_compaction_task_tracking(t()) :: t()
-  defp clear_auto_compaction_task_tracking(state) do
-    maybe_cancel_timer(state.auto_compaction_task_timeout_ref)
-    maybe_demonitor(state.auto_compaction_task_monitor_ref)
-
-    %{
-      state
-      | auto_compaction_task_pid: nil,
-        auto_compaction_task_monitor_ref: nil,
-        auto_compaction_task_timeout_ref: nil
-    }
-  end
-
-  @spec clear_overflow_recovery_task_tracking(t()) :: t()
-  defp clear_overflow_recovery_task_tracking(state) do
-    maybe_cancel_timer(state.overflow_recovery_task_timeout_ref)
-    maybe_demonitor(state.overflow_recovery_task_monitor_ref)
-
-    %{
-      state
-      | overflow_recovery_task_pid: nil,
-        overflow_recovery_task_monitor_ref: nil,
-        overflow_recovery_task_timeout_ref: nil
-    }
-  end
-
-  @spec handle_auto_compaction_task_down(t()) :: t()
-  defp handle_auto_compaction_task_down(state) do
-    state = clear_auto_compaction_task_tracking(state)
-
-    cond do
-      not state.auto_compaction_in_progress ->
-        state
-
-      true ->
-        clear_auto_compaction_state(state)
-    end
-  end
-
   @spec handle_overflow_recovery_task_down(t()) :: t()
   defp handle_overflow_recovery_task_down(state) do
-    state = clear_overflow_recovery_task_tracking(state)
+    state = CompactionManager.clear_overflow_recovery_task_tracking(state)
 
     cond do
       not state.overflow_recovery_in_progress ->
@@ -2616,26 +1930,16 @@ defmodule CodingAgent.Session do
 
       true ->
         failure_reason = :overflow_recovery_task_down
-        failed_state = clear_overflow_recovery_task_state(state)
+        failed_state = CompactionManager.clear_overflow_recovery_task_state(state)
 
         ui_notify(failed_state, "Overflow compaction worker stopped unexpectedly", :error)
 
-        emit_overflow_recovery_telemetry(:failure, failed_state, %{
-          duration_ms: overflow_recovery_duration_ms(state),
-          reason: normalize_overflow_reason(failure_reason)
+        CompactionManager.emit_overflow_recovery_telemetry(:failure, failed_state, %{
+          duration_ms: CompactionManager.overflow_recovery_duration_ms(state),
+          reason: CompactionManager.normalize_overflow_reason(failure_reason)
         })
 
         finalize_overflow_recovery_failure(failed_state, failure_reason)
-    end
-  end
-
-  @spec clear_overflow_recovery_state_on_terminal(AgentCore.Types.agent_event(), t()) :: t()
-  defp clear_overflow_recovery_state_on_terminal(event, state) do
-    case event do
-      {:agent_end, _messages} -> clear_overflow_recovery_state(state)
-      {:canceled, _reason} -> clear_overflow_recovery_state(state)
-      {:error, _reason, _partial_state} -> clear_overflow_recovery_state(state)
-      _ -> state
     end
   end
 
@@ -2651,28 +1955,28 @@ defmodule CodingAgent.Session do
       state.overflow_recovery_attempted ->
         :no_recovery
 
-      not context_length_exceeded_error?(reason) ->
+      not CompactionManager.context_length_exceeded_error?(reason) ->
         :no_recovery
 
       true ->
-        signature = session_signature(state)
+        signature = CompactionManager.session_signature(state)
         session_pid = self()
         session_manager = state.session_manager
         model = state.model
         started_at_ms = System.monotonic_time(:millisecond)
-        compaction_opts = overflow_recovery_compaction_opts(state)
+        compaction_opts = CompactionManager.overflow_recovery_compaction_opts(state)
 
         ui_notify(state, "Context window exceeded. Compacting and retrying...", :info)
         ui_set_working_message(state, "Context overflow detected. Compacting and retrying...")
 
-        emit_overflow_recovery_telemetry(:attempt, state, %{
-          reason: normalize_overflow_reason(reason)
+        CompactionManager.emit_overflow_recovery_telemetry(:attempt, state, %{
+          reason: CompactionManager.normalize_overflow_reason(reason)
         })
 
-        case start_tracked_background_task(
+        case CompactionManager.start_tracked_background_task(
                fn ->
                  result =
-                   overflow_recovery_compaction_task_result(
+                   CompactionManager.overflow_recovery_compaction_task_result(
                      session_manager,
                      model,
                      compaction_opts
@@ -2680,7 +1984,7 @@ defmodule CodingAgent.Session do
 
                  send(session_pid, {:overflow_recovery_result, signature, result})
                end,
-               overflow_recovery_task_timeout_ms(),
+               CompactionManager.overflow_recovery_task_timeout_ms(),
                :overflow_recovery_task_timeout
              ) do
           {:ok, task_meta} ->
@@ -2705,25 +2009,6 @@ defmodule CodingAgent.Session do
 
             :no_recovery
         end
-    end
-  end
-
-  @spec overflow_recovery_compaction_opts(t()) :: keyword()
-  defp overflow_recovery_compaction_opts(state) do
-    normalize_compaction_opts(state, force: true)
-  end
-
-  @spec overflow_recovery_compaction_task_result(Session.t(), Ai.Types.Model.t(), keyword()) ::
-          {:ok, map()} | {:error, term()}
-  defp overflow_recovery_compaction_task_result(session_manager, model, opts) do
-    try do
-      CodingAgent.Compaction.compact(session_manager, model, opts)
-    rescue
-      exception ->
-        {:error, {:exception, exception}}
-    catch
-      kind, reason ->
-        {:error, {kind, reason}}
     end
   end
 
@@ -2759,145 +2044,21 @@ defmodule CodingAgent.Session do
 
     broadcast_event(state, event)
     state = handle_agent_event(event, state)
-    clear_overflow_recovery_state_on_terminal(event, state)
+    CompactionManager.clear_overflow_recovery_state_on_terminal(event, state)
   end
-
-  @spec context_length_exceeded_error?(term()) :: boolean()
-  defp context_length_exceeded_error?(reason) do
-    text =
-      cond do
-        is_binary(reason) ->
-          reason
-
-        is_atom(reason) ->
-          Atom.to_string(reason)
-
-        true ->
-          inspect(reason, limit: 200, printable_limit: 8_000)
-      end
-      |> String.downcase()
-
-    String.contains?(text, "context_length_exceeded") or
-      String.contains?(text, "context length exceeded") or
-      String.contains?(text, "context window") or
-      String.contains?(text, "maximum context length") or
-      String.contains?(text, "上下文长度超过限制") or
-      String.contains?(text, "令牌数量超出") or
-      String.contains?(text, "输入过长") or
-      String.contains?(text, "超出最大长度") or
-      String.contains?(text, "上下文窗口已满")
-  rescue
-    _ -> false
-  end
-
-  @spec overflow_recovery_duration_ms(t()) :: non_neg_integer() | nil
-  defp overflow_recovery_duration_ms(state) do
-    case state.overflow_recovery_started_at_ms do
-      started when is_integer(started) and started > 0 ->
-        max(System.monotonic_time(:millisecond) - started, 0)
-
-      _ ->
-        nil
-    end
-  end
-
-  @spec emit_overflow_recovery_telemetry(:attempt | :success | :failure, t(), map()) :: :ok
-  defp emit_overflow_recovery_telemetry(stage, state, extra_meta)
-       when stage in [:attempt, :success, :failure] and is_map(extra_meta) do
-    metadata =
-      %{
-        session_id: state.session_manager.header.id,
-        provider: state.model.provider,
-        model: state.model.id
-      }
-      |> Map.merge(extra_meta)
-
-    LemonCore.Telemetry.emit(
-      [:coding_agent, :session, :overflow_recovery, stage],
-      %{count: 1},
-      metadata
-    )
-  rescue
-    _ -> :ok
-  end
-
-  @spec normalize_overflow_reason(term()) :: String.t()
-  defp normalize_overflow_reason(reason) when is_binary(reason), do: reason
-  defp normalize_overflow_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp normalize_overflow_reason(reason), do: inspect(reason)
 
   @spec apply_compaction_result(t(), {:ok, map()} | {:error, term()}, String.t() | nil) ::
           {:ok, t()} | {:error, term(), t()}
-  defp apply_compaction_result(state, {:ok, result}, custom_summary) do
-    # Use custom summary if provided, otherwise use generated one
-    summary = custom_summary || result.summary
-
-    # Append compaction entry to session manager
-    session_manager =
-      SessionManager.append_compaction(
-        state.session_manager,
-        summary,
-        result.first_kept_entry_id,
-        result.tokens_before,
-        result.details
-      )
-
-    # Rebuild messages from the new position and update agent
-    messages = restore_messages_from_session(session_manager)
-    :ok = AgentCore.Agent.replace_messages(state.agent, messages)
-
-    # Emit introspection event for compaction
-    Introspection.record(
-      :compaction_triggered,
-      %{
-        tokens_before: result.tokens_before,
-        first_kept_entry_id: result.first_kept_entry_id
-      },
-      engine: "lemon",
-      provenance: :direct
+  defp apply_compaction_result(state, result, custom_summary) do
+    CompactionManager.apply_compaction_result(
+      state,
+      result,
+      custom_summary,
+      &restore_messages_from_session/1,
+      &broadcast_event/2,
+      &ui_set_working_message/2,
+      &ui_notify/3
     )
-
-    # Broadcast compaction event to listeners
-    compaction_event =
-      {:compaction_complete,
-       %{
-         summary: summary,
-         first_kept_entry_id: result.first_kept_entry_id,
-         tokens_before: result.tokens_before
-       }}
-
-    broadcast_event(state, compaction_event)
-
-    # Clear working message and notify success
-    ui_set_working_message(state, nil)
-    ui_notify(state, "Context compacted", :info)
-
-    {:ok, %{state | session_manager: session_manager}}
-  end
-
-  defp apply_compaction_result(state, {:error, :cannot_compact}, _custom_summary) do
-    ui_set_working_message(state, nil)
-    {:error, :cannot_compact, state}
-  end
-
-  defp apply_compaction_result(state, {:error, reason}, _custom_summary) do
-    ui_set_working_message(state, nil)
-    ui_notify(state, "Compaction failed: #{inspect(reason)}", :error)
-    {:error, reason, state}
-  end
-
-  @spec auto_compaction_task_result(Session.t(), Ai.Types.Model.t(), keyword()) ::
-          {:ok, map()} | {:error, term()}
-  defp auto_compaction_task_result(session_manager, model, opts) do
-    try do
-      CodingAgent.Compaction.compact(session_manager, model, opts)
-    rescue
-      exception ->
-        {:error, {:exception, exception}}
-    catch
-      kind, reason ->
-        {:error, {kind, reason}}
-    end
   end
 
   defp maybe_trigger_compaction(%__MODULE__{auto_compaction_in_progress: true} = state), do: state
@@ -2914,7 +2075,7 @@ defmodule CodingAgent.Session do
     context_window = state.model.context_window
 
     # Get compaction settings from settings_manager (or use defaults)
-    compaction_settings = get_compaction_settings(state.settings_manager)
+    compaction_settings = CompactionManager.get_compaction_settings(state.settings_manager)
     message_budget = CodingAgent.Compaction.message_budget(state.model, compaction_settings)
 
     should_compact_by_tokens =
@@ -2929,20 +2090,20 @@ defmodule CodingAgent.Session do
 
     # Check if compaction should be triggered
     if should_compact_by_tokens or should_compact_by_message_limit do
-      signature = session_signature(state)
+      signature = CompactionManager.session_signature(state)
       session_pid = self()
       session_manager = state.session_manager
       model = state.model
-      compaction_opts = normalize_compaction_opts(state, [])
+      compaction_opts = CompactionManager.normalize_compaction_opts(state, [])
 
       ui_set_working_message(state, "Compacting context...")
 
-      case start_tracked_background_task(
+      case CompactionManager.start_tracked_background_task(
              fn ->
-               result = auto_compaction_task_result(session_manager, model, compaction_opts)
+               result = CompactionManager.auto_compaction_task_result(session_manager, model, compaction_opts)
                send(session_pid, {:auto_compaction_result, signature, result})
              end,
-             auto_compaction_task_timeout_ms(),
+             CompactionManager.auto_compaction_task_timeout_ms(),
              :auto_compaction_task_timeout
            ) do
         {:ok, task_meta} ->
@@ -2965,408 +2126,4 @@ defmodule CodingAgent.Session do
     end
   end
 
-  defp maybe_start_wasm_sidecar(cwd, settings_manager, session_id, tool_policy, approval_context) do
-    wasm_config = WasmConfig.load(cwd, settings_manager)
-
-    if wasm_config.enabled do
-      session_pid = self()
-
-      host_invoke_fun = fn tool_name, params_json ->
-        GenServer.call(session_pid, {:wasm_host_tool_invoke, tool_name, params_json}, :infinity)
-      end
-
-      sidecar_opts = [
-        cwd: cwd,
-        session_id: session_id,
-        settings_manager: settings_manager,
-        wasm_config: wasm_config,
-        host_invoke_fun: host_invoke_fun
-      ]
-
-      case start_wasm_sidecar_process(sidecar_opts) do
-        {:ok, sidecar_pid} ->
-          case SidecarSession.discover(sidecar_pid) do
-            {:ok, discover} ->
-              wasm_tools =
-                ToolFactory.build_inventory(sidecar_pid, discover.tools,
-                  cwd: cwd,
-                  session_id: session_id
-                )
-
-              wasm_tool_names = Enum.map(wasm_tools, &elem(&1, 0))
-
-              wasm_status =
-                SidecarSession.status(sidecar_pid)
-                |> Map.put(:discover_warnings, discover.warnings)
-                |> Map.put(:discover_errors, discover.errors)
-                |> Map.put(:tool_names, wasm_tool_names)
-                |> Map.put(:policy, summarize_wasm_policy(tool_policy, approval_context))
-
-              %{
-                sidecar_pid: sidecar_pid,
-                wasm_tools: wasm_tools,
-                wasm_tool_names: wasm_tool_names,
-                wasm_status: wasm_status
-              }
-
-            {:error, reason} ->
-              _ = SidecarSupervisor.stop_sidecar(sidecar_pid)
-
-              Logger.warning(
-                "WASM runtime unavailable for session #{session_id}: #{inspect(reason)}"
-              )
-
-              %{
-                sidecar_pid: nil,
-                wasm_tools: [],
-                wasm_tool_names: [],
-                wasm_status: wasm_disabled_status(reason)
-              }
-          end
-
-        {:error, reason} ->
-          Logger.warning("WASM runtime unavailable for session #{session_id}: #{inspect(reason)}")
-
-          %{
-            sidecar_pid: nil,
-            wasm_tools: [],
-            wasm_tool_names: [],
-            wasm_status: wasm_disabled_status(reason)
-          }
-      end
-    else
-      %{
-        sidecar_pid: nil,
-        wasm_tools: [],
-        wasm_tool_names: [],
-        wasm_status: wasm_disabled_status(:disabled_in_config)
-      }
-    end
-  end
-
-  defp reload_wasm_tools(state) do
-    cond do
-      is_pid(state.wasm_sidecar_pid) and Process.alive?(state.wasm_sidecar_pid) ->
-        case SidecarSession.discover(state.wasm_sidecar_pid) do
-          {:ok, discover} ->
-            wasm_tools =
-              ToolFactory.build_inventory(state.wasm_sidecar_pid, discover.tools,
-                cwd: state.cwd,
-                session_id: state.session_manager.header.id
-              )
-
-            wasm_tool_names = Enum.map(wasm_tools, &elem(&1, 0))
-
-            wasm_status =
-              SidecarSession.status(state.wasm_sidecar_pid)
-              |> Map.put(:discover_warnings, discover.warnings)
-              |> Map.put(:discover_errors, discover.errors)
-              |> Map.put(:tool_names, wasm_tool_names)
-              |> Map.put(
-                :policy,
-                summarize_wasm_policy(state.tool_policy, state.approval_context)
-              )
-
-            %{
-              sidecar_pid: state.wasm_sidecar_pid,
-              wasm_tools: wasm_tools,
-              wasm_tool_names: wasm_tool_names,
-              wasm_status: wasm_status
-            }
-
-          {:error, reason} ->
-            Logger.warning("WASM discover failed during reload: #{inspect(reason)}")
-
-            %{
-              sidecar_pid: state.wasm_sidecar_pid,
-              wasm_tools: [],
-              wasm_tool_names: [],
-              wasm_status:
-                (state.wasm_status || %{})
-                |> Map.put(:discover_errors, [to_string(reason)])
-                |> Map.put(:tool_names, [])
-            }
-        end
-
-      true ->
-        maybe_start_wasm_sidecar(
-          state.cwd,
-          state.settings_manager,
-          state.session_manager.header.id,
-          state.tool_policy,
-          state.approval_context
-        )
-    end
-  end
-
-  defp start_wasm_sidecar_process(opts) do
-    case SidecarSupervisor.start_sidecar(opts) do
-      {:ok, pid} -> {:ok, pid}
-      {:error, {:already_started, pid}} -> {:ok, pid}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp summarize_wasm_policy(nil, _approval_context), do: %{approval_wrapping: false}
-
-  defp summarize_wasm_policy(tool_policy, approval_context) do
-    %{
-      approval_wrapping: not is_nil(approval_context),
-      require_approval:
-        Map.get(tool_policy, :require_approval) || Map.get(tool_policy, "require_approval"),
-      approvals: Map.get(tool_policy, :approvals) || Map.get(tool_policy, "approvals")
-    }
-  end
-
-  defp wasm_disabled_status(reason) do
-    %{
-      enabled: false,
-      running: false,
-      hello_ok: false,
-      runtime_path: nil,
-      tool_count: 0,
-      tool_names: [],
-      discover_warnings: [],
-      discover_errors: [inspect(reason)],
-      reason: reason
-    }
-  end
-
-  defp maybe_handle_reserved_host_target(@secret_exists_target, params_json) do
-    params = decode_wasm_params(params_json)
-
-    case extract_secret_name(params) do
-      {:ok, secret_name} ->
-        exists? = LemonCore.Secrets.exists?(secret_name, prefer_env: false, env_fallback: true)
-        {:ok, Jason.encode!(%{"exists" => exists?})}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp maybe_handle_reserved_host_target(@secret_resolve_target, params_json) do
-    params = decode_wasm_params(params_json)
-
-    case extract_secret_name(params) do
-      {:ok, secret_name} ->
-        case LemonCore.Secrets.resolve(secret_name, prefer_env: false, env_fallback: true) do
-          {:ok, value, source} ->
-            {:ok, Jason.encode!(%{"value" => value, "source" => to_string(source)})}
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp maybe_handle_reserved_host_target(_tool_name, _params_json), do: :not_reserved
-
-  defp find_host_tool(state, tool_name) when is_binary(tool_name) do
-    Enum.find(state.tools, fn tool ->
-      tool.name == tool_name and tool.name not in state.wasm_tool_names
-    end)
-  end
-
-  defp find_host_tool(_state, _tool_name), do: nil
-
-  defp decode_wasm_params(params_json) when is_binary(params_json) do
-    case Jason.decode(params_json) do
-      {:ok, map} when is_map(map) -> map
-      _ -> %{}
-    end
-  end
-
-  defp decode_wasm_params(_), do: %{}
-
-  defp extract_secret_name(params) when is_map(params) do
-    value = params["name"] || params[:name]
-
-    if is_binary(value) and String.trim(value) != "" do
-      {:ok, String.trim(value)}
-    else
-      {:error, :invalid_secret_name}
-    end
-  end
-
-  defp extract_secret_name(_), do: {:error, :invalid_secret_name}
-
-  defp encode_wasm_host_output(%AgentCore.Types.AgentToolResult{} = tool_result) do
-    payload =
-      cond do
-        is_map(tool_result.details) and map_size(tool_result.details) > 0 ->
-          tool_result.details
-
-        true ->
-          %{"text" => extract_text_from_tool_result(tool_result.content)}
-      end
-
-    Jason.encode!(payload)
-  end
-
-  defp extract_text_from_tool_result(content) when is_list(content) do
-    content
-    |> Enum.map(fn
-      %{text: text} when is_binary(text) -> text
-      _ -> ""
-    end)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.join("\n")
-  end
-
-  defp extract_text_from_tool_result(_), do: ""
-
-  @spec normalize_compaction_opts(t(), keyword()) :: keyword()
-  defp normalize_compaction_opts(state, opts) do
-    compaction_settings = get_compaction_settings(state.settings_manager)
-    message_budget = CodingAgent.Compaction.message_budget(state.model, compaction_settings)
-
-    opts
-    |> maybe_put_keep_recent_tokens(compaction_settings)
-    |> maybe_put_keep_recent_messages(message_budget)
-  end
-
-  @spec maybe_put_keep_recent_tokens(keyword(), map()) :: keyword()
-  defp maybe_put_keep_recent_tokens(opts, compaction_settings) do
-    keep_recent_tokens = Map.get(compaction_settings, :keep_recent_tokens)
-
-    cond do
-      Keyword.has_key?(opts, :keep_recent_tokens) ->
-        opts
-
-      is_integer(keep_recent_tokens) and keep_recent_tokens > 0 ->
-        Keyword.put(opts, :keep_recent_tokens, keep_recent_tokens)
-
-      true ->
-        opts
-    end
-  end
-
-  @spec maybe_put_keep_recent_messages(keyword(), CodingAgent.Compaction.message_budget() | nil) ::
-          keyword()
-  defp maybe_put_keep_recent_messages(opts, nil), do: opts
-
-  defp maybe_put_keep_recent_messages(opts, %{keep_recent_messages: keep_recent_messages}) do
-    cond do
-      Keyword.has_key?(opts, :keep_recent_messages) ->
-        opts
-
-      is_integer(keep_recent_messages) and keep_recent_messages > 0 ->
-        Keyword.put(opts, :keep_recent_messages, keep_recent_messages)
-
-      true ->
-        opts
-    end
-  end
-
-  @spec get_compaction_settings(CodingAgent.SettingsManager.t() | nil) :: map()
-  defp get_compaction_settings(nil), do: %{}
-
-  defp get_compaction_settings(%CodingAgent.SettingsManager{} = settings) do
-    CodingAgent.SettingsManager.get_compaction_settings(settings)
-  end
-
-  defp start_background_task(fun) when is_function(fun, 0) do
-    case Task.Supervisor.start_child(@task_supervisor, fun) do
-      {:ok, pid} ->
-        {:ok, pid}
-
-      {:error, {:noproc, _}} ->
-        Task.start(fun)
-
-      {:error, :noproc} ->
-        Task.start(fun)
-
-      {:error, reason} ->
-        Logger.warning(
-          "Failed to start supervised session task: #{inspect(reason)}; falling back to Task.start/1"
-        )
-
-        Task.start(fun)
-    end
-  end
-
-  @spec start_tracked_background_task((-> any()), non_neg_integer(), atom()) ::
-          {:ok, %{pid: pid(), monitor_ref: reference(), timeout_ref: reference() | nil}}
-          | {:error, term()}
-  defp start_tracked_background_task(fun, timeout_ms, timeout_event)
-       when is_function(fun, 0) and is_atom(timeout_event) do
-    with {:ok, pid} <- start_background_task(fun) do
-      monitor_ref = Process.monitor(pid)
-      timeout_ref = schedule_background_task_timeout(timeout_event, monitor_ref, timeout_ms)
-      {:ok, %{pid: pid, monitor_ref: monitor_ref, timeout_ref: timeout_ref}}
-    end
-  end
-
-  @spec schedule_background_task_timeout(atom(), reference(), non_neg_integer()) ::
-          reference() | nil
-  defp schedule_background_task_timeout(timeout_event, monitor_ref, timeout_ms)
-       when is_atom(timeout_event) and is_reference(monitor_ref) do
-    if is_integer(timeout_ms) and timeout_ms > 0 do
-      Process.send_after(self(), {timeout_event, monitor_ref}, timeout_ms)
-    else
-      nil
-    end
-  end
-
-  @spec auto_compaction_task_timeout_ms() :: non_neg_integer()
-  defp auto_compaction_task_timeout_ms do
-    read_session_task_timeout(
-      :auto_compaction_task_timeout_ms,
-      @default_auto_compaction_task_timeout_ms
-    )
-  end
-
-  @spec overflow_recovery_task_timeout_ms() :: non_neg_integer()
-  defp overflow_recovery_task_timeout_ms do
-    read_session_task_timeout(
-      :overflow_recovery_task_timeout_ms,
-      @default_overflow_recovery_task_timeout_ms
-    )
-  end
-
-  @spec read_session_task_timeout(atom(), non_neg_integer()) :: non_neg_integer()
-  defp read_session_task_timeout(key, default_timeout_ms) do
-    case Application.get_env(:coding_agent, __MODULE__, [])
-         |> Keyword.get(key, default_timeout_ms) do
-      value when is_integer(value) and value > 0 -> value
-      _ -> default_timeout_ms
-    end
-  end
-
-  @spec maybe_cancel_timer(reference() | nil) :: :ok
-  defp maybe_cancel_timer(nil), do: :ok
-
-  defp maybe_cancel_timer(timer_ref) when is_reference(timer_ref) do
-    _ = Process.cancel_timer(timer_ref, async: false, info: false)
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  @spec maybe_demonitor(reference() | nil) :: :ok
-  defp maybe_demonitor(nil), do: :ok
-
-  defp maybe_demonitor(monitor_ref) when is_reference(monitor_ref) do
-    Process.demonitor(monitor_ref, [:flush])
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  @spec maybe_kill_background_task(t(), pid() | nil, term()) :: t()
-  defp maybe_kill_background_task(state, pid, reason) when is_pid(pid) do
-    if Process.alive?(pid) do
-      Process.exit(pid, {:shutdown, reason})
-    end
-
-    state
-  rescue
-    _ -> state
-  end
-
-  defp maybe_kill_background_task(state, _pid, _reason), do: state
 end

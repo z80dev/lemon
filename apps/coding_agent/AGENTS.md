@@ -53,6 +53,9 @@ The main coding agent implementation for the Lemon AI assistant platform. This a
 | `CodingAgent.SessionRegistry` | Registry for session lookup by ID |
 | `CodingAgent.SessionRootSupervisor` | Top-level supervisor for all session infra |
 
+Session lifecycle calls to `save/1` and auto-compaction state reads are treated as best-effort.
+When downstream store or agent processes time out, callers should log and continue instead of crashing the session/runner process.
+
 ### Tools
 
 Tools are divided into two sets. `coding_tools/2` is the default set passed to sessions; `all_tools/2` includes extras not in the default set.
