@@ -527,12 +527,20 @@ defmodule CodingAgent.Wasm.SidecarSession do
       http: truthy?(capabilities["http"] || capabilities[:http]),
       tool_invoke: truthy?(capabilities["tool_invoke"] || capabilities[:tool_invoke]),
       secrets: truthy?(capabilities["secrets"] || capabilities[:secrets]),
-      auth: truthy?(capabilities["auth"] || capabilities[:auth])
+      auth: truthy?(capabilities["auth"] || capabilities[:auth]),
+      exec: truthy?(capabilities["exec"] || capabilities[:exec])
     }
   end
 
   defp normalize_capabilities(_),
-    do: %{workspace_read: false, http: false, tool_invoke: false, secrets: false, auth: false}
+    do: %{
+      workspace_read: false,
+      http: false,
+      tool_invoke: false,
+      secrets: false,
+      auth: false,
+      exec: false
+    }
 
   defp normalize_auth_metadata(nil), do: nil
 

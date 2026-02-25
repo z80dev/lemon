@@ -1,0 +1,32 @@
+{
+  "exec": {
+    "allowlist": [
+      {
+        "program": "forge",
+        "allowed_subcommands": ["create"],
+        "blocked_flags": ["--interactive"]
+      }
+    ],
+    "credentials": {
+      "signing_key": {
+        "secret_name": "ETH_PRIVATE_KEY",
+        "injection": { "type": "arg", "flag": "--private-key" }
+      },
+      "etherscan_key": {
+        "secret_name": "ETHERSCAN_API_KEY",
+        "injection": { "type": "arg", "flag": "--etherscan-api-key" }
+      }
+    },
+    "rate_limit": { "requests_per_minute": 5, "requests_per_hour": 50 },
+    "timeout_secs": 120
+  },
+  "secrets": {
+    "allowed_names": ["ETH_PRIVATE_KEY", "ETH_*", "DEPLOYER_*", "ETHERSCAN_*"]
+  },
+  "auth": {
+    "secret_name": "ETH_PRIVATE_KEY",
+    "display_name": "Ethereum Private Key",
+    "instructions": "Provide your Ethereum private key (hex, with or without 0x prefix)",
+    "env_var": "ETH_PRIVATE_KEY"
+  }
+}

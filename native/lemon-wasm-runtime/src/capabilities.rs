@@ -19,6 +19,8 @@ pub struct CapabilitiesFile {
     pub workspace: Option<WorkspaceCapabilitySchema>,
     #[serde(default)]
     pub auth: Option<AuthCapabilitySchema>,
+    #[serde(default)]
+    pub exec: Option<ExecCapabilitySchema>,
 }
 
 impl CapabilitiesFile {
@@ -37,6 +39,7 @@ impl CapabilitiesFile {
             tool_invoke: self.tool_invoke.is_some(),
             secrets: self.secrets.is_some(),
             auth: self.auth.is_some(),
+            exec: self.exec.is_some(),
         }
     }
 
@@ -134,6 +137,54 @@ impl CapabilitiesFile {
     pub fn auth_config(&self) -> Option<&AuthCapabilitySchema> {
         self.auth.as_ref()
     }
+
+    pub fn exec_config(&self) -> Option<&ExecCapabilitySchema> {
+        self.exec.as_ref()
+    }
+
+    pub fn exec_allowed(&self, program: &str, args: &[String]) -> Result<(), String> {
+        let exec = self
+            .exec
+            .as_ref()
+            .ok_or_else(|| "exec capability not granted".to_string())?;
+
+        let subcommand = args.first().map(String::as_str).unwrap_or("");
+
+        let entry = exec
+            .allowlist
+            .iter()
+            .find(|entry| entry.program == program)
+            .ok_or_else(|| format!("program '{}' not in exec allowlist", program))?;
+
+        if !entry.allowed_subcommands.is_empty()
+            && !entry
+                .allowed_subcommands
+                .iter()
+                .any(|allowed| allowed == subcommand)
+        {
+            return Err(format!(
+                "subcommand '{}' not allowed for program '{}'",
+                subcommand, program
+            ));
+        }
+
+        for arg in args {
+            if entry.blocked_flags.iter().any(|blocked| arg == blocked) {
+                return Err(format!("blocked flag '{}' for program '{}'", arg, program));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn exec_limit(&self) -> u32 {
+        self.exec
+            .as_ref()
+            .and_then(|cap| cap.rate_limit.as_ref())
+            .map(|rate| rate.requests_per_minute)
+            .filter(|limit| *limit > 0)
+            .unwrap_or(10)
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -215,6 +266,41 @@ pub struct ToolInvokeCapabilitySchema {
 pub struct WorkspaceCapabilitySchema {
     #[serde(default)]
     pub allowed_prefixes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ExecCapabilitySchema {
+    #[serde(default)]
+    pub allowlist: Vec<ExecAllowlistEntry>,
+    #[serde(default)]
+    pub credentials: HashMap<String, ExecCredentialMapping>,
+    #[serde(default)]
+    pub rate_limit: Option<RateLimitSchema>,
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecAllowlistEntry {
+    pub program: String,
+    #[serde(default)]
+    pub allowed_subcommands: Vec<String>,
+    #[serde(default)]
+    pub blocked_flags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecCredentialMapping {
+    pub secret_name: String,
+    pub injection: ExecCredentialInjection,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ExecCredentialInjection {
+    Arg { flag: String },
+    Env { var: String },
+    File { path_template: String },
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -393,6 +479,7 @@ mod tests {
             tool_invoke: None,
             secrets: Some(Default::default()),
             auth: Some(Default::default()),
+            exec: None,
         };
 
         let summary = caps.summary();
@@ -401,6 +488,76 @@ mod tests {
         assert_eq!(summary.tool_invoke, false);
         assert_eq!(summary.secrets, true);
         assert_eq!(summary.auth, true);
+        assert_eq!(summary.exec, false);
+    }
+
+    #[test]
+    fn exec_allowlist_validates_program_and_subcommand() {
+        let caps = CapabilitiesFile {
+            exec: Some(super::ExecCapabilitySchema {
+                allowlist: vec![super::ExecAllowlistEntry {
+                    program: "cast".to_string(),
+                    allowed_subcommands: vec!["send".to_string(), "call".to_string()],
+                    blocked_flags: vec!["--interactive".to_string()],
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        assert!(caps
+            .exec_allowed("cast", &["send".to_string(), "--rpc-url".to_string()])
+            .is_ok());
+        assert!(caps
+            .exec_allowed("cast", &["call".to_string()])
+            .is_ok());
+        assert!(caps
+            .exec_allowed("cast", &["deploy".to_string()])
+            .is_err());
+        assert!(caps
+            .exec_allowed("forge", &["build".to_string()])
+            .is_err());
+        assert!(caps
+            .exec_allowed(
+                "cast",
+                &["send".to_string(), "--interactive".to_string()]
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn parses_exec_capability_schema() {
+        let parsed: CapabilitiesFile = serde_json::from_str(
+            r#"{
+                "exec": {
+                    "allowlist": [
+                        {
+                            "program": "cast",
+                            "allowed_subcommands": ["send", "call"],
+                            "blocked_flags": ["--interactive"]
+                        }
+                    ],
+                    "credentials": {
+                        "signing_key": {
+                            "secret_name": "ETH_PRIVATE_KEY",
+                            "injection": { "type": "arg", "flag": "--private-key" }
+                        }
+                    },
+                    "rate_limit": { "requests_per_minute": 10 }
+                }
+            }"#,
+        )
+        .expect("exec should parse");
+
+        let exec = parsed.exec.expect("exec section");
+        assert_eq!(exec.allowlist.len(), 1);
+        assert_eq!(exec.allowlist[0].program, "cast");
+        assert_eq!(exec.credentials.len(), 1);
+        assert_eq!(
+            exec.credentials["signing_key"].secret_name,
+            "ETH_PRIVATE_KEY"
+        );
+        assert_eq!(exec.rate_limit.unwrap().requests_per_minute, 10);
     }
 
     #[test]

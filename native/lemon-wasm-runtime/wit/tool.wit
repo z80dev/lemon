@@ -92,6 +92,42 @@ interface host {
     /// Returns the tool output as JSON string, or Err with error message.
     tool-invoke: func(alias: string, params-json: string) -> result<string, string>;
 
+    // ==================== Command Execution Capability ====================
+
+    /// Result from executing an external command.
+    record exec-result {
+        /// Process exit code.
+        exit-code: s32,
+        /// Captured stdout (sanitized: secrets redacted).
+        stdout: string,
+        /// Captured stderr (sanitized: secrets redacted).
+        stderr: string,
+    }
+
+    /// Execute an external command (if capability granted).
+    ///
+    /// Security:
+    /// - Only allowed programs/subcommands can be executed
+    /// - Secret placeholders ({{SECRET:name}}) in args and env are resolved by host
+    /// - WASM never sees actual secret values
+    /// - stdout/stderr scanned for leaked secrets before returning
+    /// - Rate-limited per tool
+    /// - Args passed as JSON array (no shell interpolation)
+    ///
+    /// Returns Err with error message if:
+    /// - Program not in allowlist
+    /// - Subcommand not in allowlist
+    /// - Blocked flag detected
+    /// - Rate limit exceeded
+    /// - Timeout
+    /// - Secret resolution failed
+    exec-command: func(
+        program: string,
+        args-json: string,
+        env-json: string,
+        timeout-ms: option<u32>,
+    ) -> result<exec-result, string>;
+
     // ==================== Secrets Capability ====================
 
     /// Check if a secret exists (if capability granted).

@@ -32,7 +32,8 @@ defmodule CodingAgent.Wasm.Policy do
 
   @spec capability_requires_approval?(map() | nil) :: boolean()
   def capability_requires_approval?(capabilities) when is_map(capabilities) do
-    get_cap(capabilities, :http) or get_cap(capabilities, :tool_invoke)
+    get_cap(capabilities, :http) or get_cap(capabilities, :tool_invoke) or
+      get_cap(capabilities, :exec)
   end
 
   def capability_requires_approval?(_), do: false

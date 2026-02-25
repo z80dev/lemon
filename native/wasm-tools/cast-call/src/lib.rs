@@ -1,0 +1,157 @@
+use serde_json::{Value, json};
+
+wit_bindgen::generate!({
+    path: "../../lemon-wasm-runtime/wit",
+    world: "sandboxed-tool",
+});
+
+use exports::near::agent::tool::{Guest, Request, Response};
+use near::agent::host;
+
+struct CastCallTool;
+
+impl Guest for CastCallTool {
+    fn execute(req: Request) -> Response {
+        match execute_impl(&req.params) {
+            Ok(output) => Response {
+                output: Some(output),
+                error: None,
+            },
+            Err(error) => Response {
+                output: None,
+                error: Some(error),
+            },
+        }
+    }
+
+    fn schema() -> String {
+        json!({
+            "title": "cast_call",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "to": {
+                    "type": "string",
+                    "description": "Contract address to call (0x-prefixed hex)"
+                },
+                "sig": {
+                    "type": "string",
+                    "description": "Function signature, e.g. \"balanceOf(address)\""
+                },
+                "args": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Arguments to the function call"
+                },
+                "rpc_url": {
+                    "type": "string",
+                    "description": "JSON-RPC endpoint URL"
+                },
+                "chain": {
+                    "type": "string",
+                    "description": "Chain name or ID (e.g. 'mainnet', '1', 'sepolia')"
+                },
+                "block": {
+                    "type": "string",
+                    "description": "Block number or tag (e.g. 'latest', 'pending', a number)"
+                },
+                "decode": {
+                    "type": "boolean",
+                    "description": "Attempt to ABI-decode the return value"
+                }
+            },
+            "required": ["to", "sig", "rpc_url"]
+        })
+        .to_string()
+    }
+
+    fn description() -> String {
+        "Read-only call to an Ethereum smart contract using `cast call`. \
+         No private key is needed. Returns the raw or ABI-decoded return value."
+            .to_string()
+    }
+}
+
+export!(CastCallTool);
+
+fn execute_impl(params_raw: &str) -> Result<String, String> {
+    let params: Value =
+        serde_json::from_str(params_raw).map_err(|err| format!("invalid params JSON: {err}"))?;
+
+    let to = params["to"]
+        .as_str()
+        .ok_or("'to' is required and must be a string")?;
+    let sig = params["sig"]
+        .as_str()
+        .ok_or("'sig' is required and must be a string")?;
+    let rpc_url = params["rpc_url"]
+        .as_str()
+        .ok_or("'rpc_url' is required and must be a string")?;
+
+    validate_address(to)?;
+
+    let mut args: Vec<String> = vec!["call".to_string(), to.to_string(), sig.to_string()];
+
+    if let Some(call_args) = params["args"].as_array() {
+        for arg in call_args {
+            args.push(
+                arg.as_str()
+                    .ok_or("each element in 'args' must be a string")?
+                    .to_string(),
+            );
+        }
+    }
+
+    args.push("--rpc-url".to_string());
+    args.push(rpc_url.to_string());
+
+    if let Some(chain) = params["chain"].as_str() {
+        args.push("--chain".to_string());
+        args.push(chain.to_string());
+    }
+
+    if let Some(block) = params["block"].as_str() {
+        args.push("--block".to_string());
+        args.push(block.to_string());
+    }
+
+    let args_json = serde_json::to_string(&args).map_err(|err| format!("args encode: {err}"))?;
+
+    let result = host::exec_command("cast", &args_json, "{}", Some(30_000))
+        .map_err(|err| format!("exec failed: {err}"))?;
+
+    if result.exit_code != 0 {
+        let stderr = result.stderr.trim();
+        return Err(format!(
+            "cast call failed (exit {}): {}",
+            result.exit_code,
+            if stderr.is_empty() {
+                &result.stdout
+            } else {
+                stderr
+            }
+        ));
+    }
+
+    Ok(json!({
+        "output": result.stdout.trim(),
+        "exit_code": result.exit_code
+    })
+    .to_string())
+}
+
+fn validate_address(addr: &str) -> Result<(), String> {
+    if !addr.starts_with("0x") || addr.len() != 42 {
+        return Err(format!(
+            "invalid Ethereum address '{}': must be 0x-prefixed 40-hex-char string",
+            addr
+        ));
+    }
+    if !addr[2..].chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!(
+            "invalid Ethereum address '{}': contains non-hex characters",
+            addr
+        ));
+    }
+    Ok(())
+}
