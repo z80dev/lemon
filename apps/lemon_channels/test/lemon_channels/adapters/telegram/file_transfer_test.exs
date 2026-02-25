@@ -84,7 +84,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
   end
 
   defp bind_project!(chat_id, root) do
-    scope = %Elixir.LemonChannels.Types.ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
+    scope = %LemonCore.ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
 
     LemonCore.Store.put(:channels_projects_dynamic, "testproj", %{
       root: root,

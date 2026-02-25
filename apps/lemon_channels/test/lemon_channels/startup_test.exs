@@ -119,9 +119,8 @@ defmodule LemonChannels.StartupTest do
     # Wait for channels transport to come up.
     assert is_pid(wait_for_pid(Elixir.LemonChannels.Adapters.Telegram.Transport, 2_000))
 
-    # Ensure we did not also start the legacy poller/outbox.
+    # Ensure we did not also start the legacy gateway transport supervisor.
     assert Process.whereis(LemonGateway.TransportSupervisor) == nil
-    assert Process.whereis(LemonGateway.Telegram.Outbox) == nil
   end
 
   defp wait_for_pid(name, timeout_ms) do

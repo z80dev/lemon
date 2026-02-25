@@ -3,7 +3,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
   use ExUnit.Case, async: false
 
   alias LemonChannels.BindingResolver
-  alias LemonChannels.Types.ChatScope
+  alias LemonCore.ChatScope
 
   defmodule TestRouter do
     def handle_inbound(msg) do

@@ -1,25 +1,11 @@
-defmodule LemonChannels.Binding do
-  @moduledoc false
-  defstruct [:transport, :chat_id, :topic_id, :project, :agent_id, :default_engine, :queue_mode]
-
-  @type t :: %__MODULE__{
-          transport: atom(),
-          chat_id: integer(),
-          topic_id: integer() | nil,
-          project: String.t() | nil,
-          agent_id: String.t() | nil,
-          default_engine: String.t() | nil,
-          queue_mode: atom() | nil
-        }
-end
-
 defmodule LemonChannels.BindingResolver do
   @moduledoc """
   Resolves bindings and settings for a Telegram chat scope.
   """
 
-  alias LemonChannels.{Binding, GatewayConfig}
-  alias LemonChannels.Types.ChatScope
+  alias LemonCore.Binding
+  alias LemonCore.ChatScope
+  alias LemonChannels.GatewayConfig
   alias LemonCore.Store
 
   @project_overrides_table :channels_project_overrides

@@ -8,7 +8,7 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
   alias LemonChannels.Adapters.Xmtp.{Bridge, PortServer}
   alias LemonChannels.{BindingResolver, GatewayConfig}
   alias LemonChannels.OutboundPayload
-  alias LemonChannels.Types.ChatScope
+  alias LemonCore.ChatScope
   alias LemonCore.{InboundMessage, RouterBridge, SessionKey}
 
   @default_poll_interval_ms 1_500

@@ -151,7 +151,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     {:ok, _} = Registry.register(LemonRouter.SessionRegistry, base_session_key, %{run_id: "busy"})
     on_exit(fn -> safe_unregister_session(base_session_key) end)
 
-    resume = %Elixir.LemonChannels.Types.ResumeToken{engine: "lemon", value: "tok"}
+    resume = %LemonCore.ResumeToken{engine: "lemon", value: "tok"}
     _ = CoreStore.put(:telegram_selected_resume, {"default", chat_id, nil}, resume)
 
     ParallelMockAPI.set_updates([message_update(chat_id, user_msg_id, "hello")])
@@ -232,7 +232,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
       })
 
     stale_session_key = base_session_key <> ":sub:legacy"
-    stale_resume = %Elixir.LemonChannels.Types.ResumeToken{engine: "codex", value: "thread_old"}
+    stale_resume = %LemonCore.ResumeToken{engine: "codex", value: "thread_old"}
 
     _ =
       CoreStore.put(
@@ -302,13 +302,13 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
         thread_id: Integer.to_string(topic_id)
       })
 
-    scope = %Elixir.LemonChannels.Types.ChatScope{
+    scope = %LemonCore.ChatScope{
       transport: :telegram,
       chat_id: chat_id,
       topic_id: topic_id
     }
 
-    stale_resume = %Elixir.LemonChannels.Types.ResumeToken{engine: "codex", value: "thread_old"}
+    stale_resume = %LemonCore.ResumeToken{engine: "codex", value: "thread_old"}
 
     _ =
       CoreStore.put(
@@ -371,7 +371,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
         peer_id: Integer.to_string(chat_id)
       })
 
-    scope = %Elixir.LemonChannels.Types.ChatScope{
+    scope = %LemonCore.ChatScope{
       transport: :telegram,
       chat_id: chat_id,
       topic_id: nil
