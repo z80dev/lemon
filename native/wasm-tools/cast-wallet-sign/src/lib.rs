@@ -61,10 +61,7 @@ impl Guest for CastWalletSignTool {
 
 export!(CastWalletSignTool);
 
-fn execute_impl(params_raw: &str) -> Result<String, String> {
-    let params: Value =
-        serde_json::from_str(params_raw).map_err(|err| format!("invalid params JSON: {err}"))?;
-
+fn build_args(params: &Value) -> Result<Vec<String>, String> {
     let message = params["message"]
         .as_str()
         .ok_or("'message' is required and must be a string")?;
@@ -87,6 +84,15 @@ fn execute_impl(params_raw: &str) -> Result<String, String> {
     args.push(format!("{{{{SECRET:{secret_name}}}}}"));
 
     args.push(message.to_string());
+
+    Ok(args)
+}
+
+fn execute_impl(params_raw: &str) -> Result<String, String> {
+    let params: Value =
+        serde_json::from_str(params_raw).map_err(|err| format!("invalid params JSON: {err}"))?;
+
+    let args = build_args(&params)?;
 
     let args_json = serde_json::to_string(&args).map_err(|err| format!("args encode: {err}"))?;
 
@@ -111,4 +117,62 @@ fn execute_impl(params_raw: &str) -> Result<String, String> {
         "exit_code": result.exit_code
     })
     .to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn build_args_simple_message() {
+        let params = json!({ "message": "Hello, world!" });
+        let args = build_args(&params).unwrap();
+        assert_eq!(
+            args,
+            vec![
+                "wallet",
+                "sign",
+                "--private-key",
+                "{{SECRET:ETH_PRIVATE_KEY}}",
+                "Hello, world!"
+            ]
+        );
+    }
+
+    #[test]
+    fn build_args_typed_data() {
+        let params = json!({ "message": "{\"types\":{}}", "typed_data": true });
+        let args = build_args(&params).unwrap();
+        assert!(args.contains(&"--data".to_string()));
+    }
+
+    #[test]
+    fn build_args_no_hash() {
+        let params = json!({ "message": "raw32bytes", "no_hash": true });
+        let args = build_args(&params).unwrap();
+        assert!(args.contains(&"--no-hash".to_string()));
+    }
+
+    #[test]
+    fn build_args_custom_secret() {
+        let params = json!({ "message": "test", "secret_name": "SIGNER_KEY" });
+        let args = build_args(&params).unwrap();
+        assert!(args.contains(&"{{SECRET:SIGNER_KEY}}".to_string()));
+        assert!(!args.iter().any(|a| a.contains("ETH_PRIVATE_KEY")));
+    }
+
+    #[test]
+    fn build_args_rejects_missing_message() {
+        let params = json!({});
+        assert!(build_args(&params).is_err());
+    }
+
+    #[test]
+    fn schema_is_valid_json() {
+        let schema_str = CastWalletSignTool::schema();
+        let schema: serde_json::Value = serde_json::from_str(&schema_str).expect("valid JSON");
+        assert_eq!(schema["title"], "cast_wallet_sign");
+        assert!(schema["required"].as_array().unwrap().contains(&json!("message")));
+    }
 }
