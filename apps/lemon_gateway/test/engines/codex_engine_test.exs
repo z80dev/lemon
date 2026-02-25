@@ -1,5 +1,6 @@
 defmodule LemonGateway.Engines.CodexEngineTest do
   alias Elixir.LemonGateway, as: LemonGateway
+
   @moduledoc """
   Comprehensive tests for the Codex engine implementation.
 
@@ -21,7 +22,8 @@ defmodule LemonGateway.Engines.CodexEngineTest do
 
   alias Elixir.LemonGateway.Engines.Codex
   alias Elixir.LemonGateway.Engines.CliAdapter
-  alias Elixir.LemonGateway.Types.{ChatScope, Job}
+  alias Elixir.LemonGateway.Types.Job
+  alias LemonCore.ChatScope
   alias Elixir.LemonGateway.Event
 
   alias AgentCore.CliRunners.Types.{
@@ -226,7 +228,12 @@ defmodule LemonGateway.Engines.CodexEngineTest do
         end
       end
 
-      ctx = %{runner_pid: pid, task_pid: nil, runner_module: Elixir.LemonGateway.Engines.CodexEngineTest.MockCodexRunner}
+      ctx = %{
+        runner_pid: pid,
+        task_pid: nil,
+        runner_module: Elixir.LemonGateway.Engines.CodexEngineTest.MockCodexRunner
+      }
+
       assert :ok = CliAdapter.cancel(ctx)
     end
 
@@ -563,12 +570,13 @@ defmodule LemonGateway.Engines.CodexEngineTest do
     test "allows optional title and meta fields" do
       resume = %LemonCore.ResumeToken{engine: "codex", value: "t1"}
 
-      started = Event.started(%{
-        engine: "codex",
-        resume: resume,
-        title: "Codex Session",
-        meta: %{model: "gpt-4o"})
-      }
+      started =
+        Event.started(%{
+          engine: "codex",
+          resume: resume,
+          title: "Codex Session",
+          meta: %{model: "gpt-4o"}
+        })
 
       assert started.title == "Codex Session"
       assert started.meta.model == "gpt-4o"
@@ -587,23 +595,25 @@ defmodule LemonGateway.Engines.CodexEngineTest do
     end
 
     test "includes answer and error fields" do
-      completed = Event.completed(%{
-        engine: "codex",
-        ok: false,
-        answer: "partial work done",
-        error: "rate limit"
-      })
+      completed =
+        Event.completed(%{
+          engine: "codex",
+          ok: false,
+          answer: "partial work done",
+          error: "rate limit"
+        })
 
       assert completed.answer == "partial work done"
       assert completed.error == "rate limit"
     end
 
     test "includes usage field with token counts" do
-      completed = Event.completed(%{
-        engine: "codex",
-        ok: true,
-        usage: %{input_tokens: 150, output_tokens: 75, cached_input_tokens: 50})
-      }
+      completed =
+        Event.completed(%{
+          engine: "codex",
+          ok: true,
+          usage: %{input_tokens: 150, output_tokens: 75, cached_input_tokens: 50}
+        })
 
       assert completed.usage.input_tokens == 150
       assert completed.usage.cached_input_tokens == 50
@@ -638,48 +648,52 @@ defmodule LemonGateway.Engines.CodexEngineTest do
 
   describe "Event action maps for Codex actions" do
     test "command action" do
-      action = Event.action(%{
-        id: "cmd_1",
-        kind: "command",
-        title: "npm install",
-        detail: %{command: "npm install", exit_code: 0})
-      }
+      action =
+        Event.action(%{
+          id: "cmd_1",
+          kind: "command",
+          title: "npm install",
+          detail: %{command: "npm install", exit_code: 0}
+        })
 
       assert action.kind == "command"
       assert action.detail.exit_code == 0
     end
 
     test "file_change action" do
-      action = Event.action(%{
-        id: "fc_1",
-        kind: "file_change",
-        title: "2 files changed",
-        detail: %{changes: [%{path: "a.ex", kind: :add}), %{path: "b.ex", kind: :update}]}
-      }
+      action =
+        Event.action(%{
+          id: "fc_1",
+          kind: "file_change",
+          title: "2 files changed",
+          detail: %{changes: [%{path: "a.ex", kind: :add}, %{path: "b.ex", kind: :update}]}
+        })
 
       assert action.kind == "file_change"
       assert length(action.detail.changes) == 2
     end
 
     test "tool action with MCP" do
-      action = Event.action(%{
-        id: "t_1",
-        kind: "tool",
-        title: "filesystem.read_file",
-        detail: %{server: "filesystem", tool: "read_file", arguments: %{path: "/test.ex"})}
-      }
+      action =
+        Event.action(%{
+          id: "t_1",
+          kind: "tool",
+          title: "filesystem.read_file",
+          detail: %{server: "filesystem", tool: "read_file", arguments: %{path: "/test.ex"}}
+        })
 
       assert action.kind == "tool"
       assert action.detail.server == "filesystem"
     end
 
     test "web_search action" do
-      action = Event.action(%{
-        id: "ws_1",
-        kind: "web_search",
-        title: "elixir genserver",
-        detail: %{query: "elixir genserver"})
-      }
+      action =
+        Event.action(%{
+          id: "ws_1",
+          kind: "web_search",
+          title: "elixir genserver",
+          detail: %{query: "elixir genserver"}
+        })
 
       assert action.kind == "web_search"
     end

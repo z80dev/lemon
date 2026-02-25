@@ -23,7 +23,8 @@ defmodule LemonGatewayTest do
   defmodule LemonGatewayTest.CrashEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Types.Job
+    alias LemonCore.ResumeToken
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -61,7 +62,8 @@ defmodule LemonGatewayTest do
   defmodule ErrorEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Types.Job
+    alias LemonCore.ResumeToken
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -91,7 +93,8 @@ defmodule LemonGatewayTest do
   defmodule ActionEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Types.Job
+    alias LemonCore.ResumeToken
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -141,7 +144,8 @@ defmodule LemonGatewayTest do
     @moduledoc "Test engine that emits multiple action events to test streaming edits"
     @behaviour Elixir.LemonGateway.Engine
 
-    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Types.Job
+    alias LemonCore.ResumeToken
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -537,7 +541,8 @@ defmodule LemonGatewayTest do
 
     Elixir.LemonGateway.submit(job)
 
-    assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: false}}, 1_000
+    assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: false}},
+                   1_000
   end
 
   test "telegram dedupe init is idempotent" do

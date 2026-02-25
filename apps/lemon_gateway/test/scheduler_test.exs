@@ -3,13 +3,16 @@ defmodule LemonGateway.SchedulerTest do
   use ExUnit.Case, async: false
 
   alias Elixir.LemonGateway.Scheduler
-  alias Elixir.LemonGateway.Types.{ChatScope, Job, ResumeToken}
+  alias Elixir.LemonGateway.Types.Job
+  alias LemonCore.ChatScope
+  alias LemonCore.ResumeToken
 
   defmodule Elixir.LemonGateway.SchedulerTest.SlowEngine do
     @behaviour Elixir.LemonGateway.Engine
 
     alias Elixir.LemonGateway.Event
-    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Types.Job
+    alias LemonCore.ResumeToken
 
     @impl true
     def id, do: "slow"

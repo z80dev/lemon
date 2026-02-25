@@ -25,7 +25,8 @@ defmodule LemonGateway.RunSupervisorTest do
   defmodule QuickEngine do
     @behaviour LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
+    alias LemonGateway.Types.Job
+    alias LemonCore.ResumeToken
     alias LemonGateway.Event
 
     @impl true
@@ -75,7 +76,8 @@ defmodule LemonGateway.RunSupervisorTest do
   defmodule SlowTestEngine do
     @behaviour LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
+    alias LemonGateway.Types.Job
+    alias LemonCore.ResumeToken
     alias LemonGateway.Event
 
     @impl true
@@ -127,7 +129,8 @@ defmodule LemonGateway.RunSupervisorTest do
   defmodule ControllableTestEngine do
     @behaviour LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
+    alias LemonGateway.Types.Job
+    alias LemonCore.ResumeToken
     alias LemonGateway.Event
 
     @impl true
@@ -168,7 +171,13 @@ defmodule LemonGateway.RunSupervisorTest do
               send(
                 sink_pid,
                 {:engine_event, run_ref,
-                 %{__event__: :completed, engine: id(), resume: resume, ok: false, error: :timeout}}
+                 %{
+                   __event__: :completed,
+                   engine: id(),
+                   resume: resume,
+                   ok: false,
+                   error: :timeout
+                 }}
               )
           end
         end)
@@ -951,7 +960,8 @@ defmodule LemonGateway.RunSupervisorTest do
 
       {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
 
-      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, answer: "Quick: "}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, answer: "Quick: "}},
+                     2000
     end
 
     test "handles job with long text" do
@@ -1017,7 +1027,8 @@ defmodule LemonGateway.RunSupervisorTest do
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
       # notify_pid receives lemon_gateway_run_completed
-      assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: true}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: true}},
+                     2000
     end
   end
 

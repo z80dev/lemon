@@ -2,7 +2,8 @@ defmodule LemonGateway.EngineLockTest do
   alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case, async: false
 
-  alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+  alias Elixir.LemonGateway.Types.Job
+  alias LemonCore.ResumeToken
 
   # ============================================================================
   # Unit Tests for EngineLock GenServer
@@ -894,7 +895,8 @@ defmodule LemonGateway.EngineLockTest do
   defmodule LemonGateway.EngineLockTest.SlowEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Types.Job
+    alias LemonCore.ResumeToken
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -924,7 +926,8 @@ defmodule LemonGateway.EngineLockTest do
 
         send(
           sink_pid,
-          {:engine_event, run_ref, Event.completed(%{engine: id(), ok: true, answer: "slow done"})}
+          {:engine_event, run_ref,
+           Event.completed(%{engine: id(), ok: true, answer: "slow done"})}
         )
       end)
 
@@ -938,7 +941,8 @@ defmodule LemonGateway.EngineLockTest do
   defmodule LemonGateway.EngineLockTest.CrashEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias Elixir.LemonGateway.Types.Job
+    alias LemonCore.ResumeToken
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -1021,7 +1025,9 @@ defmodule LemonGateway.EngineLockTest do
     }
 
     Elixir.LemonGateway.submit(job2)
-    assert_receive {:lemon_gateway_run_completed, ^job2, %{__event__: :completed, ok: true}}, 1_000
+
+    assert_receive {:lemon_gateway_run_completed, ^job2, %{__event__: :completed, ok: true}},
+                   1_000
   end
 
   test "concurrent runs for same scope are serialized by lock" do
@@ -1177,7 +1183,8 @@ defmodule LemonGateway.EngineLockTest do
 
     # The ok_job should complete even after crash_job's process dies
     # because EngineLock monitors the process and releases on :DOWN
-    assert_receive {:lemon_gateway_run_completed, ^ok_job, %{__event__: :completed, ok: true}}, 2_000
+    assert_receive {:lemon_gateway_run_completed, ^ok_job, %{__event__: :completed, ok: true}},
+                   2_000
   end
 
   test "lock can be disabled via config" do

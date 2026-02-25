@@ -10,14 +10,16 @@ defmodule LemonGateway.RunTransportAgnosticTest do
   use ExUnit.Case, async: false
 
   alias LemonGateway.Run
-  alias LemonGateway.Types.{Job, ResumeToken}
+  alias LemonGateway.Types.Job
+  alias LemonCore.ResumeToken
   alias LemonGateway.Event
 
   # Test engine that sends deltas
   defmodule DeltaEngine do
     @behaviour LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
+    alias LemonGateway.Types.Job
+    alias LemonCore.ResumeToken
     alias LemonGateway.Event
 
     @impl true
@@ -187,7 +189,8 @@ defmodule LemonGateway.RunTransportAgnosticTest do
       send(sink_pid, :complete)
 
       # Should receive completion with accumulated answer
-      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, answer: answer}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, answer: answer}},
+                     2000
 
       # Answer should contain the accumulated delta text
       assert answer == "Hello World"
