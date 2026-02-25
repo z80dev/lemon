@@ -116,7 +116,12 @@ defmodule LemonControlPlane.Methods.RunGraphGet do
 
       children =
         if depth < opts.max_depth do
-          collect_child_run_ids(run_id, graph_record, opts.child_limit)
+          collect_child_run_ids(
+            run_id,
+            graph_record,
+            opts.child_limit,
+            has_graph_record?(graph_record) or has_store_record?(store_record)
+          )
           |> Enum.reject(&MapSet.member?(visited, &1))
           |> Enum.map(&build_node(&1, opts, depth + 1, visited))
         else
@@ -177,11 +182,12 @@ defmodule LemonControlPlane.Methods.RunGraphGet do
   defp fetch_run_status(_run_id, _graph_record, _store_record), do: "unknown"
 
   defp run_active?(run_id) when is_binary(run_id) do
-    # Check if run is currently active in RunRegistry
-    if Code.ensure_loaded?(Registry) and Code.ensure_loaded?(LemonRouter.RunRegistry) do
-      match?([{_pid, _} | _], Registry.lookup(LemonRouter.RunRegistry, run_id))
-    else
-      false
+    case Process.whereis(LemonRouter.RunRegistry) do
+      pid when is_pid(pid) ->
+        match?([{_pid, _} | _], Registry.lookup(LemonRouter.RunRegistry, run_id))
+
+      _ ->
+        false
     end
   rescue
     _ -> false
@@ -195,32 +201,33 @@ defmodule LemonControlPlane.Methods.RunGraphGet do
     with status when is_binary(status) <- derive_status_from_store_record(store_record) do
       status
     else
-      _ -> fetch_completed_status_from_introspection(run_id)
+      _ ->
+        if has_store_record?(store_record) do
+          fetch_completed_status_from_introspection(run_id)
+        else
+          "unknown"
+        end
     end
   end
 
   defp fetch_completed_status_from_introspection(run_id) do
-    if Code.ensure_loaded?(LemonCore.Introspection) do
-      events = LemonCore.Introspection.list(run_id: run_id, event_type: :run_completed, limit: 1)
+    events = LemonCore.Introspection.list(run_id: run_id, event_type: :run_completed, limit: 1)
 
-      case events do
-        [event | _] ->
-          payload = event[:payload] || event["payload"] || %{}
-          ok = payload[:ok] || payload["ok"]
-          error = payload[:error] || payload["error"]
+    case events do
+      [event | _] ->
+        payload = event[:payload] || event["payload"] || %{}
+        ok = payload[:ok] || payload["ok"]
+        error = payload[:error] || payload["error"]
 
-          cond do
-            error in [:user_requested, :interrupted, :aborted] -> "aborted"
-            ok == true -> "completed"
-            true -> "error"
-          end
+        cond do
+          error in [:user_requested, :interrupted, :aborted] -> "aborted"
+          ok == true -> "completed"
+          true -> "error"
+        end
 
-        [] ->
-          "unknown"
+      [] ->
+        "unknown"
       end
-    else
-      "unknown"
-    end
   rescue
     _ -> "unknown"
   catch
@@ -261,14 +268,14 @@ defmodule LemonControlPlane.Methods.RunGraphGet do
 
   defp derive_status_from_store_record(_), do: nil
 
-  defp collect_child_run_ids(run_id, graph_record, child_limit) do
+  defp collect_child_run_ids(run_id, graph_record, child_limit, include_introspection_children?) do
     graph_children =
       graph_record
       |> get_graph_field(:children)
       |> normalize_run_id_list()
 
     introspection_children =
-      if Code.ensure_loaded?(LemonCore.Introspection) do
+      if include_introspection_children? and store_available?() do
         LemonCore.Introspection.list(
           parent_run_id: run_id,
           event_type: :run_started,
@@ -297,14 +304,18 @@ defmodule LemonControlPlane.Methods.RunGraphGet do
 
   defp normalize_run_id_list(_), do: []
 
+  defp has_graph_record?(record) when is_map(record), do: map_size(record) > 0
+  defp has_graph_record?(_), do: false
+
+  defp has_store_record?(record) when is_map(record), do: map_size(record) > 0
+  defp has_store_record?(_), do: false
+
+  defp store_available?, do: is_pid(Process.whereis(LemonCore.Store))
+
   defp fetch_graph_record(run_id) do
-    if Code.ensure_loaded?(CodingAgent.RunGraph) do
-      case CodingAgent.RunGraph.get(run_id) do
-        {:ok, record} when is_map(record) -> record
-        _ -> %{}
-      end
-    else
-      %{}
+    case CodingAgent.RunGraph.get(run_id) do
+      {:ok, record} when is_map(record) -> record
+      _ -> %{}
     end
   rescue
     _ -> %{}
@@ -324,25 +335,21 @@ defmodule LemonControlPlane.Methods.RunGraphGet do
   end
 
   defp fetch_introspection(run_id, limit) do
-    if Code.ensure_loaded?(LemonCore.Introspection) do
-      LemonCore.Introspection.list(run_id: run_id, limit: limit)
-      |> Enum.map(fn event ->
-        %{
-          "eventId" => get_map(event, :event_id),
-          "eventType" => normalize_string(get_map(event, :event_type)),
-          "tsMs" => get_map(event, :ts_ms),
-          "payload" => serialize_term(get_map(event, :payload, %{})),
-          "runId" => get_map(event, :run_id),
-          "sessionKey" => get_map(event, :session_key),
-          "agentId" => get_map(event, :agent_id),
-          "parentRunId" => get_map(event, :parent_run_id),
-          "engine" => get_map(event, :engine),
-          "provenance" => normalize_string(get_map(event, :provenance))
-        }
-      end)
-    else
-      []
-    end
+    LemonCore.Introspection.list(run_id: run_id, limit: limit)
+    |> Enum.map(fn event ->
+      %{
+        "eventId" => get_map(event, :event_id),
+        "eventType" => normalize_string(get_map(event, :event_type)),
+        "tsMs" => get_map(event, :ts_ms),
+        "payload" => serialize_term(get_map(event, :payload, %{})),
+        "runId" => get_map(event, :run_id),
+        "sessionKey" => get_map(event, :session_key),
+        "agentId" => get_map(event, :agent_id),
+        "parentRunId" => get_map(event, :parent_run_id),
+        "engine" => get_map(event, :engine),
+        "provenance" => normalize_string(get_map(event, :provenance))
+      }
+    end)
   rescue
     _ -> []
   catch
