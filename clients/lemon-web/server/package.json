@@ -8,7 +8,8 @@
     "dev": "tsx src/index.ts",
     "build": "tsup src/index.ts --format esm --clean",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@lemon-web/shared": "file:../shared",
@@ -16,8 +17,9 @@
   },
   "devDependencies": {
     "@types/ws": "^8.18.1",
-    "tsx": "^4.19.2",
     "tsup": "^8.0.0",
-    "typescript": "^5.0.0"
+    "tsx": "^4.19.2",
+    "typescript": "^5.0.0",
+    "vitest": "^4.0.18"
   }
 }

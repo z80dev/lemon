@@ -13,6 +13,7 @@
     "dev": "tsup src/cli.ts src/index.ts src/local-driver.ts --format esm --watch",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -21,10 +22,14 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.10.1",
     "@types/ws": "^8.18.0",
+    "eslint": "^10.0.2",
+    "globals": "^17.3.0",
     "tsup": "^8.0.0",
     "typescript": "^5.0.0",
+    "typescript-eslint": "^8.56.1",
     "vitest": "^2.1.9"
   },
   "engines": {
