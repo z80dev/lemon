@@ -737,6 +737,49 @@ defmodule CodingAgent.Tools.TodoStoreTest do
     end
   end
 
+  describe "enhanced helpers with mixed key formats" do
+    test "get_progress/1 counts string-based statuses", %{session_id: session_id} do
+      todos = [
+        %{"id" => "1", "content" => "Task 1", "status" => "pending", "priority" => "high"},
+        %{"id" => "2", "content" => "Task 2", "status" => "in_progress", "priority" => "medium"},
+        %{"id" => "3", "content" => "Task 3", "status" => "completed", "priority" => "low"}
+      ]
+
+      :ok = TodoStore.put(session_id, todos)
+
+      assert %{total: 3, completed: 1, in_progress: 1, pending: 1, blocked: 0, percentage: 33} =
+               TodoStore.get_progress(session_id)
+    end
+
+    test "get_actionable/1 works with string-key todos and dependencies", %{
+      session_id: session_id
+    } do
+      todos = [
+        %{"id" => "base", "content" => "Base", "status" => "completed", "priority" => "low"},
+        %{
+          "id" => "ready",
+          "content" => "Ready",
+          "status" => "pending",
+          "priority" => "high",
+          "dependencies" => ["base"]
+        },
+        %{
+          "id" => "blocked",
+          "content" => "Blocked",
+          "status" => "pending",
+          "priority" => "high",
+          "dependencies" => ["missing"]
+        }
+      ]
+
+      :ok = TodoStore.put(session_id, todos)
+
+      actionable = TodoStore.get_actionable(session_id)
+      assert length(actionable) == 1
+      assert hd(actionable)["id"] == "ready"
+    end
+  end
+
   # ============================================================================
   # Table Lifecycle
   # ============================================================================
@@ -1059,7 +1102,13 @@ defmodule CodingAgent.Tools.TodoStoreTest do
     test "calculates progress correctly", %{session_id: session_id} do
       todos = [
         %{id: "1", content: "Completed", status: :completed, dependencies: [], priority: :high},
-        %{id: "2", content: "In Progress", status: :in_progress, dependencies: [], priority: :medium},
+        %{
+          id: "2",
+          content: "In Progress",
+          status: :in_progress,
+          dependencies: [],
+          priority: :medium
+        },
         %{id: "3", content: "Blocked", status: :blocked, dependencies: [], priority: :low},
         %{id: "4", content: "Pending", status: :pending, dependencies: [], priority: :low}
       ]
@@ -1098,7 +1147,17 @@ defmodule CodingAgent.Tools.TodoStoreTest do
   describe "update_status/3" do
     test "updates status and timestamps", %{session_id: session_id} do
       todos = [
-        %{id: "1", content: "Task", status: :pending, dependencies: [], priority: :high, created_at: now(), updated_at: nil, completed_at: nil, metadata: %{}}
+        %{
+          id: "1",
+          content: "Task",
+          status: :pending,
+          dependencies: [],
+          priority: :high,
+          created_at: now(),
+          updated_at: nil,
+          completed_at: nil,
+          metadata: %{}
+        }
       ]
 
       TodoStore.put(session_id, todos)
@@ -1113,7 +1172,17 @@ defmodule CodingAgent.Tools.TodoStoreTest do
 
     test "sets completed_at when status is completed", %{session_id: session_id} do
       todos = [
-        %{id: "1", content: "Task", status: :in_progress, dependencies: [], priority: :high, created_at: now(), updated_at: nil, completed_at: nil, metadata: %{}}
+        %{
+          id: "1",
+          content: "Task",
+          status: :in_progress,
+          dependencies: [],
+          priority: :high,
+          created_at: now(),
+          updated_at: nil,
+          completed_at: nil,
+          metadata: %{}
+        }
       ]
 
       TodoStore.put(session_id, todos)
@@ -1128,8 +1197,28 @@ defmodule CodingAgent.Tools.TodoStoreTest do
 
     test "preserves other todos", %{session_id: session_id} do
       todos = [
-        %{id: "1", content: "Task 1", status: :pending, dependencies: [], priority: :high, created_at: now(), updated_at: nil, completed_at: nil, metadata: %{}},
-        %{id: "2", content: "Task 2", status: :pending, dependencies: [], priority: :medium, created_at: now(), updated_at: nil, completed_at: nil, metadata: %{}}
+        %{
+          id: "1",
+          content: "Task 1",
+          status: :pending,
+          dependencies: [],
+          priority: :high,
+          created_at: now(),
+          updated_at: nil,
+          completed_at: nil,
+          metadata: %{}
+        },
+        %{
+          id: "2",
+          content: "Task 2",
+          status: :pending,
+          dependencies: [],
+          priority: :medium,
+          created_at: now(),
+          updated_at: nil,
+          completed_at: nil,
+          metadata: %{}
+        }
       ]
 
       TodoStore.put(session_id, todos)
@@ -1138,7 +1227,7 @@ defmodule CodingAgent.Tools.TodoStoreTest do
       updated = TodoStore.get(session_id)
       assert length(updated) == 2
 
-      todo2 = Enum.find(updated, & &1.id == "2")
+      todo2 = Enum.find(updated, &(&1.id == "2"))
       assert todo2.status == :pending
     end
   end
@@ -1146,7 +1235,17 @@ defmodule CodingAgent.Tools.TodoStoreTest do
   describe "complete/2" do
     test "marks todo as completed", %{session_id: session_id} do
       todos = [
-        %{id: "1", content: "Task", status: :in_progress, dependencies: [], priority: :high, created_at: now(), updated_at: nil, completed_at: nil, metadata: %{}}
+        %{
+          id: "1",
+          content: "Task",
+          status: :in_progress,
+          dependencies: [],
+          priority: :high,
+          created_at: now(),
+          updated_at: nil,
+          completed_at: nil,
+          metadata: %{}
+        }
       ]
 
       TodoStore.put(session_id, todos)
@@ -1215,7 +1314,13 @@ defmodule CodingAgent.Tools.TodoStoreTest do
     test "handles multiple blockers", %{session_id: session_id} do
       todos = [
         %{id: "1", content: "Blocker 1", status: :pending, dependencies: [], priority: :high},
-        %{id: "2", content: "Blocker 2", status: :in_progress, dependencies: [], priority: :medium},
+        %{
+          id: "2",
+          content: "Blocker 2",
+          status: :in_progress,
+          dependencies: [],
+          priority: :medium
+        },
         %{id: "3", content: "Blocked", status: :pending, dependencies: ["1", "2"], priority: :low}
       ]
 

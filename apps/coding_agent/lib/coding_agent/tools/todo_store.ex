@@ -155,17 +155,17 @@ defmodule CodingAgent.Tools.TodoStore do
 
     completed_ids =
       todos
-      |> Enum.filter(&(&1.status == :completed))
-      |> Enum.map(& &1.id)
+      |> Enum.filter(&(todo_status(&1) == :completed))
+      |> Enum.map(&todo_id/1)
 
     priority_order = %{high: 0, medium: 1, low: 2}
 
     todos
     |> Enum.filter(fn todo ->
-      todo.status in [:pending, :in_progress] and
-        Enum.all?(todo.dependencies, &(&1 in completed_ids))
+      todo_status(todo) in [:pending, :in_progress] and
+        Enum.all?(todo_dependencies(todo), &(&1 in completed_ids))
     end)
-    |> Enum.sort_by(&priority_order[&1.priority])
+    |> Enum.sort_by(&(priority_order[todo_priority(&1)] || 999))
   end
 
   @doc """
@@ -190,10 +190,10 @@ defmodule CodingAgent.Tools.TodoStore do
     todos = get(session_id)
     total = length(todos)
 
-    completed = Enum.count(todos, &(&1.status == :completed))
-    in_progress = Enum.count(todos, &(&1.status == :in_progress))
-    blocked = Enum.count(todos, &(&1.status == :blocked))
-    pending = Enum.count(todos, &(&1.status == :pending))
+    completed = Enum.count(todos, &(todo_status(&1) == :completed))
+    in_progress = Enum.count(todos, &(todo_status(&1) == :in_progress))
+    blocked = Enum.count(todos, &(todo_status(&1) == :blocked))
+    pending = Enum.count(todos, &(todo_status(&1) == :pending))
 
     percentage = if total > 0, do: div(completed * 100, total), else: 0
 
@@ -218,20 +218,20 @@ defmodule CodingAgent.Tools.TodoStore do
       :ok
   """
   @spec update_status(String.t(), String.t(), todo_status()) :: :ok
-  def update_status(session_id, todo_id, status) when is_binary(session_id) and is_binary(todo_id) do
+  def update_status(session_id, todo_id, status)
+      when is_binary(session_id) and is_binary(todo_id) do
     todos = get(session_id)
     now = DateTime.utc_now() |> DateTime.to_iso8601()
 
     updated_todos =
       Enum.map(todos, fn todo ->
-        if todo.id == todo_id do
-          completed_at = if status == :completed, do: now, else: todo.completed_at
+        if todo_id(todo) == todo_id do
+          completed_at = if status == :completed, do: now, else: todo_completed_at(todo)
 
-          %{todo |
-            status: status,
-            updated_at: now,
-            completed_at: completed_at
-          }
+          todo
+          |> put_todo_value(:status, status, Atom.to_string(status))
+          |> put_todo_value(:updated_at, now, now)
+          |> put_todo_value(:completed_at, completed_at, completed_at)
         else
           todo
         end
@@ -271,7 +271,7 @@ defmodule CodingAgent.Tools.TodoStore do
 
     case todos do
       [] -> true
-      _ -> Enum.all?(todos, &(&1.status == :completed))
+      _ -> Enum.all?(todos, &(todo_status(&1) == :completed))
     end
   end
 
@@ -290,17 +290,62 @@ defmodule CodingAgent.Tools.TodoStore do
   @spec get_blocking(String.t()) :: [todo_item()]
   def get_blocking(session_id) when is_binary(session_id) do
     todos = get(session_id)
-    todo_ids = Enum.map(todos, & &1.id)
+    todo_ids = Enum.map(todos, &todo_id/1)
 
     # Find all dependencies that are referenced but not completed
     blocking_ids =
       todos
-      |> Enum.flat_map(& &1.dependencies)
+      |> Enum.flat_map(&todo_dependencies/1)
       |> Enum.uniq()
       |> Enum.filter(&(&1 in todo_ids))
 
     todos
-    |> Enum.filter(&(&1.id in blocking_ids and &1.status != :completed))
+    |> Enum.filter(&(todo_id(&1) in blocking_ids and todo_status(&1) != :completed))
+  end
+
+  defp todo_id(todo), do: Map.get(todo, :id) || Map.get(todo, "id")
+
+  defp todo_dependencies(todo) do
+    deps = Map.get(todo, :dependencies) || Map.get(todo, "dependencies") || []
+    if is_list(deps), do: deps, else: []
+  end
+
+  defp todo_priority(todo) do
+    case Map.get(todo, :priority) || Map.get(todo, "priority") do
+      :high -> :high
+      :medium -> :medium
+      :low -> :low
+      "high" -> :high
+      "medium" -> :medium
+      "low" -> :low
+      _ -> :low
+    end
+  end
+
+  defp todo_status(todo) do
+    case Map.get(todo, :status) || Map.get(todo, "status") do
+      :pending -> :pending
+      :in_progress -> :in_progress
+      :completed -> :completed
+      :blocked -> :blocked
+      "pending" -> :pending
+      "in_progress" -> :in_progress
+      "completed" -> :completed
+      "blocked" -> :blocked
+      _ -> :pending
+    end
+  end
+
+  defp todo_completed_at(todo), do: Map.get(todo, :completed_at) || Map.get(todo, "completed_at")
+
+  defp put_todo_value(todo, atom_key, atom_value, string_value) do
+    todo
+    |> maybe_put(atom_key, atom_value)
+    |> maybe_put(Atom.to_string(atom_key), string_value)
+  end
+
+  defp maybe_put(todo, key, value) do
+    if Map.has_key?(todo, key), do: Map.put(todo, key, value), else: todo
   end
 
   defp ensure_table do

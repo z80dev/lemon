@@ -85,6 +85,28 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
     refute state_after.is_streaming
   end
 
+  test "Chinese context overflow errors are handled normally after retry already attempted" do
+    session = start_session()
+
+    :sys.replace_state(session, fn state ->
+      %{
+        state
+        | is_streaming: true,
+          overflow_recovery_attempted: true
+      }
+    end)
+
+    send(
+      session,
+      {:agent_event, {:error, {:assistant_error, "输入过长，超出最大长度"}, %{from: :test}}}
+    )
+
+    state_after = Session.get_state(session)
+    refute state_after.overflow_recovery_in_progress
+    refute state_after.overflow_recovery_attempted
+    refute state_after.is_streaming
+  end
+
   test "overflow errors are handled normally after retry already attempted" do
     session = start_session()
 

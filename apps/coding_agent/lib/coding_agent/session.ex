@@ -650,7 +650,8 @@ defmodule CodingAgent.Session do
     get_api_key = Keyword.get(opts, :get_api_key) || build_get_api_key(settings_manager)
 
     # Build stream options with provider-specific secrets
-    stream_options = build_stream_options(model, settings_manager, Keyword.get(opts, :stream_options))
+    stream_options =
+      build_stream_options(model, settings_manager, Keyword.get(opts, :stream_options))
 
     # Register main agent in AgentRegistry with key {session_id, :main, 0}
     agent_registry_key = {session_manager.header.id, :main, 0}
@@ -739,12 +740,14 @@ defmodule CodingAgent.Session do
     maybe_register_session(session_manager, cwd, register_session, session_registry)
 
     # Emit introspection event for session start
-    Introspection.record(:session_started, %{
-      session_id: session_manager.header.id,
-      cwd: cwd,
-      model: model && model.id,
-      session_scope: session_scope
-    },
+    Introspection.record(
+      :session_started,
+      %{
+        session_id: session_manager.header.id,
+        cwd: cwd,
+        model: model && model.id,
+        session_scope: session_scope
+      },
       session_key: Keyword.get(opts, :session_key, session_manager.header.id),
       agent_id: Keyword.get(opts, :agent_id, "default"),
       engine: "lemon",
@@ -1534,10 +1537,15 @@ defmodule CodingAgent.Session do
   @impl true
   def terminate(_reason, state) do
     # Emit introspection event for session end
-    Introspection.record(:session_ended, %{
-      session_id: state.session_manager && state.session_manager.header.id,
-      turn_count: state.turn_index
-    }, engine: "lemon", provenance: :direct)
+    Introspection.record(
+      :session_ended,
+      %{
+        session_id: state.session_manager && state.session_manager.header.id,
+        turn_count: state.turn_index
+      },
+      engine: "lemon",
+      provenance: :direct
+    )
 
     # Stop the underlying agent when the session terminates
     if state.agent && Process.alive?(state.agent) do
@@ -1861,7 +1869,13 @@ defmodule CodingAgent.Session do
     # Resolve Vertex-specific secrets
     project = resolve_vertex_secret(provider_cfg, :project_secret, "google_vertex_project")
     location = resolve_vertex_secret(provider_cfg, :location_secret, "google_vertex_location")
-    service_account_json = resolve_vertex_secret(provider_cfg, :service_account_json_secret, "google_vertex_service_account_json")
+
+    service_account_json =
+      resolve_vertex_secret(
+        provider_cfg,
+        :service_account_json_secret,
+        "google_vertex_service_account_json"
+      )
 
     base_opts = existing_opts || %{}
 
@@ -2766,7 +2780,12 @@ defmodule CodingAgent.Session do
     String.contains?(text, "context_length_exceeded") or
       String.contains?(text, "context length exceeded") or
       String.contains?(text, "context window") or
-      String.contains?(text, "maximum context length")
+      String.contains?(text, "maximum context length") or
+      String.contains?(text, "上下文长度超过限制") or
+      String.contains?(text, "令牌数量超出") or
+      String.contains?(text, "输入过长") or
+      String.contains?(text, "超出最大长度") or
+      String.contains?(text, "上下文窗口已满")
   rescue
     _ -> false
   end
@@ -2828,10 +2847,15 @@ defmodule CodingAgent.Session do
     :ok = AgentCore.Agent.replace_messages(state.agent, messages)
 
     # Emit introspection event for compaction
-    Introspection.record(:compaction_triggered, %{
-      tokens_before: result.tokens_before,
-      first_kept_entry_id: result.first_kept_entry_id
-    }, engine: "lemon", provenance: :direct)
+    Introspection.record(
+      :compaction_triggered,
+      %{
+        tokens_before: result.tokens_before,
+        first_kept_entry_id: result.first_kept_entry_id
+      },
+      engine: "lemon",
+      provenance: :direct
+    )
 
     # Broadcast compaction event to listeners
     compaction_event =

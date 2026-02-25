@@ -6,9 +6,12 @@ defmodule CodingAgent.Tools.Todo do
   """
 
   alias AgentCore.Types.AgentTool
+  alias AgentCore.Types.AgentToolResult
+  alias Ai.Types.TextContent
   alias CodingAgent.Tools.{TodoRead, TodoWrite}
+  alias CodingAgent.Tools.TodoStore
 
-  @valid_actions ["read", "write"]
+  @valid_actions ["read", "write", "progress", "actionable"]
 
   @doc """
   Returns the unified todo tool definition.
@@ -27,7 +30,8 @@ defmodule CodingAgent.Tools.Todo do
           "action" => %{
             "type" => "string",
             "enum" => @valid_actions,
-            "description" => "Todo operation to run: 'read' or 'write'."
+            "description" =>
+              "Todo operation to run: 'read', 'write', 'progress', or 'actionable'."
           },
           "todos" => %{
             "type" => "array",
@@ -74,11 +78,53 @@ defmodule CodingAgent.Tools.Todo do
       "write" ->
         TodoWrite.execute(tool_call_id, params, signal, on_update, session_id)
 
+      "progress" ->
+        execute_progress(signal, session_id)
+
+      "actionable" ->
+        execute_actionable(signal, session_id)
+
       nil ->
-        {:error, "action is required and must be one of: read, write"}
+        {:error, "action is required and must be one of: read, write, progress, actionable"}
 
       _ ->
-        {:error, "action must be one of: read, write"}
+        {:error, "action must be one of: read, write, progress, actionable"}
+    end
+  end
+
+  defp execute_progress(signal, session_id) do
+    if AgentCore.AbortSignal.aborted?(signal) do
+      {:error, "Operation aborted"}
+    else
+      if session_id == "" do
+        {:error, "Session id not available"}
+      else
+        progress = TodoStore.get_progress(session_id)
+        output = Jason.encode!(progress, pretty: true)
+
+        %AgentToolResult{
+          content: [%TextContent{text: output}],
+          details: Map.put(progress, :title, "todo progress")
+        }
+      end
+    end
+  end
+
+  defp execute_actionable(signal, session_id) do
+    if AgentCore.AbortSignal.aborted?(signal) do
+      {:error, "Operation aborted"}
+    else
+      if session_id == "" do
+        {:error, "Session id not available"}
+      else
+        actionable = TodoStore.get_actionable(session_id)
+        output = Jason.encode!(actionable, pretty: true)
+
+        %AgentToolResult{
+          content: [%TextContent{text: output}],
+          details: %{title: "#{length(actionable)} actionable todos", todos: actionable}
+        }
+      end
     end
   end
 end

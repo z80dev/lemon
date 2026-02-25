@@ -315,20 +315,17 @@ defmodule CodingAgent.Tools.FuzzyTest do
       assert result.strategy == "substring"
     end
 
-    @tag :skip
     test "finds fuzzy match" do
-      # This test is skipped because the fuzzy matching threshold is high (0.92)
-      # and finding patterns that trigger fuzzy matching but not character fallback
-      # requires very specific similarity scores.
-      # The fuzzy matching functionality is tested via other tests.
-      lines = ["hello world", "foo bar"]
-      pattern = ["hallo wurld", "fooo bar"]
+      # Choose a pair that avoids exact/trim/prefix/substring passes while
+      # staying above the sequence fuzzy threshold (0.92).
+      lines = ["function_name_v2", "return ok"]
+      pattern = ["functoin_name_v2", "return ok"]
 
       result = Fuzzy.seek_sequence(lines, pattern)
 
-      # Should find a match via fuzzy matching or character fallback
       assert result.index == 0
-      assert result.confidence > 0.5
+      assert result.confidence >= 0.92
+      assert result.strategy == "fuzzy"
     end
 
     test "respects eof option" do
