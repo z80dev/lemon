@@ -46,11 +46,13 @@ defmodule LemonAutomation.CronManager do
   @vsn 1
 
   alias LemonAutomation.{CronJob, CronRun, CronStore, CronSchedule, Events, RunSubmitter}
+  alias LemonCore.{Bus, Event, SessionKey, Store}
 
   require Logger
 
   @tick_interval_ms 60_000
   @task_supervisor LemonAutomation.TaskSupervisor
+  @forwarded_summary_max_bytes 12_000
 
   # ============================================================================
   # Client API
@@ -280,7 +282,9 @@ defmodule LemonAutomation.CronManager do
         execute_job(job, triggered_by)
 
       _ ->
-        Logger.debug("[CronManager] Skipping jittered execute_job for #{inspect(job_id)}: not found or disabled")
+        Logger.debug(
+          "[CronManager] Skipping jittered execute_job for #{inspect(job_id)}: not found or disabled"
+        )
     end
 
     {:noreply, state}
@@ -302,6 +306,7 @@ defmodule LemonAutomation.CronManager do
 
         CronStore.put_run(updated_run)
         Events.emit_run_completed(updated_run)
+        maybe_forward_summary_to_base_session(updated_run)
         {:noreply, state}
     end
   end
@@ -359,7 +364,12 @@ defmodule LemonAutomation.CronManager do
 
     # Start the run
     router_run_id = LemonCore.Id.run_id()
-    run = %{run | meta: %{agent_id: job.agent_id, session_key: job.session_key, job_name: job.name}}
+
+    run = %{
+      run
+      | meta: %{agent_id: job.agent_id, session_key: job.session_key, job_name: job.name}
+    }
+
     run = CronRun.start(run, router_run_id)
     CronStore.put_run(run)
     Events.emit_run_started(run, job)
@@ -444,5 +454,167 @@ defmodule LemonAutomation.CronManager do
 
   defp migrate_state(_old_vsn, _state) do
     %{jobs: %{}, state_vsn: @vsn}
+  end
+
+  # Cron runs execute in isolated sub-sessions. To make outcomes visible in the
+  # originating main session chat, emit a synthetic run completion there with a
+  # concise summary answer and persist it into run history.
+  defp maybe_forward_summary_to_base_session(%CronRun{} = run) do
+    with {:ok, base_session_key} <- main_session_from_run(run),
+         forwarded_answer when is_binary(forwarded_answer) and forwarded_answer != "" <-
+           build_forwarded_answer(run) do
+      forwarded_run_id = "cron_notify_" <> run.id
+
+      completed = %{
+        ok: run.status == :completed,
+        answer: forwarded_answer,
+        error: forwarded_error(run)
+      }
+
+      summary = %{
+        completed: completed,
+        session_key: base_session_key,
+        run_id: forwarded_run_id,
+        prompt: forwarded_prompt(run),
+        duration_ms: run.duration_ms,
+        engine: "cron",
+        meta: %{
+          origin: :cron,
+          cron_forwarded_summary: true,
+          cron_job_id: run.job_id,
+          cron_run_id: run.id,
+          cron_router_run_id: run.run_id,
+          cron_source_session_key: meta_value(run.meta, :session_key)
+        }
+      }
+
+      Store.finalize_run(forwarded_run_id, summary)
+
+      event =
+        Event.new(
+          :run_completed,
+          %{
+            completed: completed,
+            duration_ms: run.duration_ms
+          },
+          %{
+            run_id: forwarded_run_id,
+            session_key: base_session_key,
+            origin: :cron,
+            cron_forwarded_summary: true,
+            cron_job_id: run.job_id,
+            cron_run_id: run.id,
+            cron_router_run_id: run.run_id
+          }
+        )
+
+      Bus.broadcast(Bus.session_topic(base_session_key), event)
+    else
+      _ -> :ok
+    end
+  rescue
+    e ->
+      Logger.warning("[CronManager] Failed to forward cron summary: #{Exception.message(e)}")
+      :ok
+  end
+
+  defp main_session_from_run(%CronRun{} = run) do
+    session_key = meta_value(run.meta, :session_key)
+
+    if is_binary(session_key) do
+      case SessionKey.parse(session_key) do
+        %{kind: :main} -> {:ok, session_key}
+        _ -> :skip
+      end
+    else
+      :skip
+    end
+  rescue
+    _ -> :skip
+  end
+
+  defp build_forwarded_answer(%CronRun{} = run) do
+    body = extract_summary_body(run.output, run.status, run.error)
+
+    if is_binary(body) and body != "" do
+      message =
+        [
+          "Cron summary: #{meta_value(run.meta, :job_name) || run.job_id}",
+          "triggered_by: #{run.triggered_by}",
+          "status: #{run.status}",
+          "cron_run_id: #{run.id}",
+          if(is_binary(run.run_id), do: "router_run_id: #{run.run_id}", else: nil),
+          "",
+          body
+        ]
+        |> Enum.reject(&is_nil/1)
+        |> Enum.join("\n")
+
+      truncate_to_bytes(message, @forwarded_summary_max_bytes)
+    else
+      ""
+    end
+  end
+
+  defp extract_summary_body(output, _status, _error) when is_binary(output) do
+    trimmed = String.trim(output)
+
+    cond do
+      trimmed == "" ->
+        nil
+
+      true ->
+        case Regex.run(~r/RUN SUMMARY[\s\S]*/u, trimmed) do
+          [summary] when is_binary(summary) and summary != "" -> String.trim(summary)
+          _ -> trimmed
+        end
+    end
+  end
+
+  defp extract_summary_body(_output, status, error) do
+    "Cron run completed with status=#{status}. #{format_forward_error(error)}"
+  end
+
+  defp forwarded_error(%CronRun{status: :completed}), do: nil
+  defp forwarded_error(%CronRun{error: error}) when is_binary(error) and error != "", do: error
+  defp forwarded_error(%CronRun{status: status}), do: to_string(status)
+
+  defp forwarded_prompt(%CronRun{} = run) do
+    "Forwarded cron summary for #{meta_value(run.meta, :job_name) || run.job_id}"
+  end
+
+  defp format_forward_error(error) when is_binary(error), do: error
+  defp format_forward_error(error) when is_atom(error), do: Atom.to_string(error)
+  defp format_forward_error(error), do: inspect(error)
+
+  defp meta_value(meta, key) when is_map(meta) do
+    Map.get(meta, key) || Map.get(meta, Atom.to_string(key))
+  rescue
+    _ -> nil
+  end
+
+  defp meta_value(_meta, _key), do: nil
+
+  defp truncate_to_bytes(text, max_bytes) when is_binary(text) and byte_size(text) <= max_bytes,
+    do: text
+
+  defp truncate_to_bytes(text, max_bytes) when is_binary(text) do
+    text
+    |> binary_part(0, max_bytes)
+    |> trim_to_valid_utf8()
+  end
+
+  defp truncate_to_bytes(_text, _max_bytes), do: ""
+
+  defp trim_to_valid_utf8(<<>>), do: ""
+
+  defp trim_to_valid_utf8(binary) when is_binary(binary) do
+    if String.valid?(binary) do
+      binary
+    else
+      binary
+      |> binary_part(0, byte_size(binary) - 1)
+      |> trim_to_valid_utf8()
+    end
   end
 end

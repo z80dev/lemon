@@ -121,6 +121,10 @@ Research findings from upstream projects (oh-my-pi, pi, openclaw, ironclaw, nano
 | [IDEA-20260225-ironclaw-kind-aware-extension-registry](ideas/IDEA-20260225-ironclaw-kind-aware-extension-registry.md) | Kind-Aware Extension Registry to Prevent Tool/Channel Name Collisions | ironclaw | `proposed` | S | M | **Investigate** - Add explicit (name, kind) collision hardening for extension ecosystems |
 | [IDEA-20260225-community-rate-limit-session-self-healing](ideas/IDEA-20260225-community-rate-limit-session-self-healing.md) | Self-Healing Sessions for Persistent Rate-Limit Wedges | community | `proposed` | M | H | **Proceed** - Add in-session recovery when one run remains wedged after reset |
 | [IDEA-20260225-community-trace-driven-agent-evaluation](ideas/IDEA-20260225-community-trace-driven-agent-evaluation.md) | Trace-Driven Agent Evaluation with Degradation Alerts and HITL Audits | industry | `proposed` | M | H | **Investigate** - Build scoring/drift/audit layer on top of run introspection |
+| [IDEA-20260225-openclaw-schema-first-config-ops](ideas/IDEA-20260225-openclaw-schema-first-config-ops.md) | Schema-First Config Operations Guidance in Agent Prompts | openclaw | `proposed` | S | M | **Investigate** - Encourage schema lookup before config edits/answers to reduce guesswork |
+| [IDEA-20260225-oh-my-pi-changelog-schema-hardening](ideas/IDEA-20260225-oh-my-pi-changelog-schema-hardening.md) | Changelog Schema Hardening for Agentic Commit Tooling | oh-my-pi | `proposed` | M | M | **Investigate** - Add schema-backed changelog categories/payload validation for automation reliability |
+| [IDEA-20260225-community-episodic-git-verified-handoffs](ideas/IDEA-20260225-community-episodic-git-verified-handoffs.md) | Episodic Runs with Git-Verified Handoffs and Termination Guards | community | `proposed` | M | H | **Proceed** - Layer anti-drift/anti-loop episode controls on top of harness checkpoints |
+| [IDEA-20260225-community-autonomous-agent-consent-scopes](ideas/IDEA-20260225-community-autonomous-agent-consent-scopes.md) | Consent Scopes and Exposure Guardrails for Always-On Agents | industry | `proposed` | M | H | **Investigate** - Productize unified consent profiles + exposure posture checks |
 
 ### Summary
 
@@ -155,6 +159,8 @@ New findings from community research:
 - New cron hardening idea captured from OpenClaw: canonical `jobId` handling for `cron.runs` paths.
 - New community demand signal: explicit auto-resume after provider limit reset (execution-time continuity).
 - New industry pattern signal: markdown-authored agentic workflows with mandatory human review gates.
+- Additional upstream deltas captured: OpenClaw schema-first config guidance and Oh-My-Pi changelog schema hardening.
+- Additional community/industry signals captured: episodic git-verified handoffs for overnight runs, plus consent-scope hardening for always-on autonomous agents.
 
 ## Templates
 

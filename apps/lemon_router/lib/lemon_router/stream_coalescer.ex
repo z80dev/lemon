@@ -20,7 +20,7 @@ defmodule LemonRouter.StreamCoalescer do
 
   require Logger
 
-  alias LemonChannels.Types.ResumeToken
+  alias LemonCore.ResumeToken
   alias LemonRouter.ChannelContext
   alias LemonRouter.ChannelsDelivery
 

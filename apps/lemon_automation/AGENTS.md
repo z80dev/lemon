@@ -41,7 +41,9 @@ CronManager (GenServer, ticks every 60s)
                                 │
                                 └─ sends {:run_complete, run_id, result} to CronManager
                                            │
-                                           └─ CronManager updates CronStore, emits :cron_run_completed
+                                           ├─ CronManager updates CronStore, emits :cron_run_completed
+                                           └─ For `agent:*:main` base sessions, CronManager forwards a synthetic
+                                              `:run_completed` summary into the base main session topic/history
 ```
 
 **Wake** is a separate module (not intermediary in the above flow). It creates runs with `triggered_by: :wake`, submits directly to `LemonRouter`, and sends `{:run_complete, ...}` back to `CronManager`.
@@ -52,9 +54,11 @@ CronManager (GenServer, ticks every 60s)
 
 - `RunSubmitter` pre-subscribes to `Bus.run_topic(run_id)` BEFORE submitting to `LemonRouter` (avoids race condition)
 - `RunSubmitter` passes `run_id` in params so the router uses the same ID it already subscribed to
+- `RunSubmitter` executes each cron run in a forked `:sub:<id>` session for isolation; the originating base session is preserved in run metadata
 - If the router returns a different `run_id`, `RunSubmitter` falls back to `RunCompletionWaiter.wait/3`
 - Output is truncated to 1000 chars before storage
 - Jobs execute in supervised tasks; fallback to `Task.start/1` if supervisor is unavailable
+- For cron jobs created from `agent:*:main`, completion summaries are mirrored back into the base main session as synthetic `run_completed` entries (`meta.cron_forwarded_summary = true`)
 
 ## Top-Level Facade
 
