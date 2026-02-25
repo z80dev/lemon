@@ -78,6 +78,12 @@
     max_age_days: 30
   },
   %{
+    path: "docs/testing/deterministic-test-patterns.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-02-25],
+    max_age_days: 45
+  },
+  %{
     path: "docs/tools/firecrawl.md",
     owner: "@z80",
     last_reviewed: ~D[2026-02-13],

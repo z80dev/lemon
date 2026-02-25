@@ -1,6 +1,6 @@
 # PLN-20260224: Deterministic CI and Test Signal Hardening
 
-**Status:** In Progress
+**Status:** ready_to_land
 **Created:** 2026-02-24
 **Owner:** janitor
 **Reviewer:** TBD
@@ -41,9 +41,9 @@ Common sources of flakiness:
 - [x] **M2** — Fix MockCodexRunner module load issue in CodexRunnerIntegrationTest
 - [x] **M3** — Fix TestRunOrchestrator availability in RunProcessTest
 - [x] **M4** — Fix EventStreamConcurrencyTest flaky timing
-- [ ] **M5** — Remove skip tags where deterministic mocks can be added
-- [ ] **M6** — Add CI gate to catch new flaky tests
-- [ ] **M7** — Document patterns for writing deterministic tests
+- [x] **M5** — Remove skip tags where deterministic mocks can be added
+- [x] **M6** — Add CI gate to catch new flaky tests
+- [x] **M7** — Document patterns for writing deterministic tests
 
 ## Workstreams
 
@@ -102,9 +102,9 @@ Need to investigate each skip and either:
 - [x] CodexRunnerIntegrationTest passes reliably
 - [x] RunProcessTest passes reliably  
 - [x] EventStreamConcurrencyTest passes reliably
-- [ ] Discovery test skips reduced or documented
-- [ ] CI passes consistently on repeated runs
-- [ ] Documentation updated with deterministic test patterns
+- [x] Discovery test skips reduced or documented
+- [x] CI passes consistently on repeated runs
+- [x] Documentation updated with deterministic test patterns
 
 ## Progress Log
 
@@ -115,3 +115,6 @@ Need to investigate each skip and either:
 | 2026-02-24 | M2 done | Fixed MockCodexRunner module reference issue - 92 tests now pass (was 13 failures) |
 | 2026-02-24 | M3 done | Verified RunProcessTest passes (22 tests, 0 failures) |
 | 2026-02-24 | M4 done | Verified EventStreamConcurrencyTest passes (37 tests, 0 failures) |
+| 2026-02-25 | M5 done | Removed remaining `@tag :skip` coverage gaps by adding deterministic HTTP mock setup/stubs in LemonSkills README + Mix task tests and replacing flaky fuzzy-sequence skip with deterministic threshold-safe fixture in `fuzzy_test.exs` |
+| 2026-02-25 | M6 done | Added CI skip-tag guard plus deterministic regression loop in `.github/workflows/quality.yml` to fail fast on new skipped tests and re-run historically flaky suites twice per run. |
+| 2026-02-25 | M7 done | Added `docs/testing/deterministic-test-patterns.md` and registered it in `docs/catalog.exs` with concrete patterns for synchronization, stubbing, fixture reset, and threshold-safe assertions. |

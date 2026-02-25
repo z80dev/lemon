@@ -3,11 +3,11 @@ id: PLN-20260224-inspiration-ideas-implementation
 title: Implement Inspiration Ideas from Upstream Research
 owner: janitor
 reviewer: codex
-status: in_progress
+status: ready_to_land
 workspace: feature/pln-20260224-inspiration-ideas-implementation
 change_id: pending
 created: 2026-02-24
-updated: 2026-02-24
+updated: 2026-02-25
 ---
 
 ## Goal
@@ -26,7 +26,7 @@ During inspiration research from Oh-My-Pi, OpenClaw, and Pi upstream projects, s
 - [x] M1 — Chinese context overflow pattern detection
 - [x] M2 — Grep grouped output with round-robin limiting
 - [x] M3 — Auto-reasoning gate implementation
-- [ ] M4 — Final review and landing
+- [x] M4 — Final review and landing
 
 ## M1: Chinese Context Overflow Pattern Detection
 
@@ -109,7 +109,7 @@ Gate auto-reasoning to prevent redundant reasoning when thinking is already acti
 - [x] All three features implemented
 - [x] Tests pass for all modified modules
 - [x] No regressions in existing functionality
-- [ ] Code review completed
+- [x] Code review completed
 - [ ] Merged to main
 
 ## Progress Log
@@ -120,3 +120,5 @@ Gate auto-reasoning to prevent redundant reasoning when thinking is already acti
 | 2026-02-24 | M2 | Implemented grouped output and round-robin limiting in grep tool |
 | 2026-02-24 | M3 | Implemented auto-reasoning gate in agent_core |
 | 2026-02-24 | Tests | All tests pass: 79 agent tests, 37 grep tests, 5 overflow recovery tests |
+| 2026-02-25 | M1 verification/backfill | Added missing Chinese overflow markers (`上下文长度超过限制`, `令牌数量超出`, `输入过长`, `超出最大长度`, `上下文窗口已满`) to `coding_agent/session`, `lemon_gateway/run`, and `lemon_router/run_process`; added regression tests in `session_overflow_recovery_test.exs` and `lemon_gateway/run_test.exs`. Router suite has unrelated pre-existing `TestRunOrchestrator` failures in this environment. |
+| 2026-02-25 | M4 | Completed review + merge artifacts and moved plan to `ready_to_land`; revalidated targeted suites (`session_overflow_recovery`, `run_test:2361`, `agent_test`, `grep_test`) and reconfirmed existing unrelated router harness failure at `run_process_test:697`. |

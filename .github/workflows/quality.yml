@@ -45,6 +45,24 @@ jobs:
       - name: Compile
         run: mix compile
 
+      - name: Guard against skipped ExUnit tests
+        run: |
+          if rg -n "@tag\\s+:skip|@tag\\s+skip:" apps --glob "*test*.exs"; then
+            echo "::error::Found skipped tests in repository. Remove skip tags or document and re-enable deterministically."
+            exit 1
+          fi
+
+      - name: Deterministic regression loop
+        run: |
+          for i in 1 2; do
+            echo "Deterministic regression pass #$i"
+            mix test \
+              apps/coding_agent/test/coding_agent/session_overflow_recovery_test.exs \
+              apps/coding_agent/test/coding_agent/tools/fuzzy_test.exs \
+              apps/lemon_skills/test/lemon_skills/discovery_readme_test.exs \
+              apps/lemon_skills/test/mix/tasks/lemon.skill_test.exs
+          done
+
       - name: Run WASM integration tests
         run: RUSTUP_HOME="$HOME/.rustup" CARGO_HOME="$HOME/.cargo" mix test apps/coding_agent/test/coding_agent/wasm_integration_test.exs --include integration
 
@@ -130,6 +148,10 @@ jobs:
         working-directory: clients/lemon-web
         run: npm --workspace shared run test
 
+      - name: lemon-web server tests
+        working-directory: clients/lemon-web
+        run: npm --workspace server run test
+
       - name: lemon-web tests
         working-directory: clients/lemon-web
         run: npm --workspace web run test
@@ -146,6 +168,10 @@ jobs:
       - name: lemon-tui typecheck
         working-directory: clients/lemon-tui
         run: npm run typecheck
+
+      - name: lemon-tui lint
+        working-directory: clients/lemon-tui
+        run: npm run lint
 
       - name: lemon-tui build
         working-directory: clients/lemon-tui
@@ -167,6 +193,10 @@ jobs:
       - name: lemon-browser-node typecheck
         working-directory: clients/lemon-browser-node
         run: npm run typecheck
+
+      - name: lemon-browser-node lint
+        working-directory: clients/lemon-browser-node
+        run: npm run lint
 
       - name: lemon-browser-node build
         working-directory: clients/lemon-browser-node

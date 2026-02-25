@@ -33,11 +33,12 @@ These entries were already completed before the `planning/` workflow was created
 | Plan ID | Title | Status | Owner | Workspace | Change ID | Roadmap Ref | Updated |
 |---|---|---|---|---|---|---|---|
 | [PLN-20260223-macos-keychain-secrets-audit](plans/PLN-20260223-macos-keychain-secrets-audit.md) | macOS Keychain secrets path audit and hardening | `planned` | `zeebot` | `feature/pln-20260223-macos-keychain-secrets-audit` | `pending` | `ROADMAP.md` | 2026-02-23 |
-| [PLN-20260222-debt-phase-09-gateway-reliability-decomposition](plans/PLN-20260222-debt-phase-09-gateway-reliability-decomposition.md) | Debt Phase 9 - Gateway runtime reliability decomposition | `planned` | `unassigned` | `feature/pln-20260222-debt-phase-09-gateway-reliability-decomposition` | `pending` | `debt_plan.md:99` | 2026-02-22 |
-| [PLN-20260222-debt-phase-10-monolith-footprint-reduction](plans/PLN-20260222-debt-phase-10-monolith-footprint-reduction.md) | Debt Phase 10 - Monolith and release footprint reduction | `planned` | `unassigned` | `feature/pln-20260222-debt-phase-10-monolith-footprint-reduction` | `pending` | `debt_plan.md:123` | 2026-02-22 |
-| [PLN-20260222-debt-phase-13-client-ci-parity-governance](plans/PLN-20260222-debt-phase-13-client-ci-parity-governance.md) | Debt Phase 13 - Client CI parity and dependency governance | `planned` | `unassigned` | `feature/pln-20260222-debt-phase-13-client-ci-parity-governance` | `pending` | `debt_plan.md:200` | 2026-02-22 |
-| [PLN-20260224-inspiration-ideas-implementation](plans/PLN-20260224-inspiration-ideas-implementation.md) | Implement Inspiration Ideas from Upstream Research | `in_progress` | `janitor` | `feature/pln-20260224-inspiration-ideas` | `pending` | `ROADMAP.md` | 2026-02-24 |
-| [PLN-20260224-long-running-agent-harnesses](plans/PLN-20260224-long-running-agent-harnesses.md) | Long-Running Agent Harnesses and Task Management | `in_progress` | `janitor` | `feature/pln-20260224-long-running-harnesses` | `pending` | — | 2026-02-24 |
+| [PLN-20260224-deterministic-ci-test-hardening](plans/PLN-20260224-deterministic-ci-test-hardening.md) | Deterministic CI and test signal hardening | `ready_to_land` | `janitor` | `feature/pln-20260224-deterministic-ci-test-hardening` | `pending` | `ROADMAP.md` | 2026-02-25 |
+| [PLN-20260222-debt-phase-09-gateway-reliability-decomposition](plans/PLN-20260222-debt-phase-09-gateway-reliability-decomposition.md) | Debt Phase 9 - Gateway runtime reliability decomposition | `ready_to_land` | `janitor` | `feature/pln-20260222-debt-phase-09-gateway-reliability-decomposition` | `pending` | `debt_plan.md:99` | 2026-02-25 |
+| [PLN-20260222-debt-phase-10-monolith-footprint-reduction](plans/PLN-20260222-debt-phase-10-monolith-footprint-reduction.md) | Debt Phase 10 - Monolith and release footprint reduction | `ready_to_land` | `janitor` | `feature/pln-20260222-debt-phase-10-monolith-footprint-reduction` | `pending` | `debt_plan.md:123` | 2026-02-25 |
+| [PLN-20260222-debt-phase-13-client-ci-parity-governance](plans/PLN-20260222-debt-phase-13-client-ci-parity-governance.md) | Debt Phase 13 - Client CI parity and dependency governance | `ready_to_land` | `janitor` | `feature/pln-20260222-debt-phase-13-m7-eslint-parity` | `pending` | `debt_plan.md:200` | 2026-02-26 |
+| [PLN-20260224-inspiration-ideas-implementation](plans/PLN-20260224-inspiration-ideas-implementation.md) | Implement Inspiration Ideas from Upstream Research | `ready_to_land` | `janitor` | `feature/pln-20260224-inspiration-ideas-implementation` | `pending` | `ROADMAP.md` | 2026-02-25 |
+| [PLN-20260224-long-running-agent-harnesses](plans/PLN-20260224-long-running-agent-harnesses.md) | Long-Running Agent Harnesses and Task Management | `ready_to_land` | `janitor` | `feature/pln-20260224-long-running-harnesses` | `pending` | — | 2026-02-25 |
 
 ## Ready for Review
 
@@ -48,7 +49,13 @@ These entries were already completed before the `planning/` workflow was created
 
 | Plan ID | Title | Landing Doc | Owner | Updated |
 |---|---|---|---|---|
+| [PLN-20260222-debt-phase-09-gateway-reliability-decomposition](plans/PLN-20260222-debt-phase-09-gateway-reliability-decomposition.md) | Debt Phase 9 - Gateway runtime reliability decomposition | [MRG-PLN-20260222-debt-phase-09-gateway-reliability-decomposition.md](merges/MRG-PLN-20260222-debt-phase-09-gateway-reliability-decomposition.md) | `janitor` | 2026-02-25 |
+| [PLN-20260222-debt-phase-10-monolith-footprint-reduction](plans/PLN-20260222-debt-phase-10-monolith-footprint-reduction.md) | Debt Phase 10 - Monolith and release footprint reduction | [MRG-PLN-20260222-debt-phase-10-monolith-footprint-reduction.md](merges/MRG-PLN-20260222-debt-phase-10-monolith-footprint-reduction.md) | `janitor` | 2026-02-25 |
+| [PLN-20260222-debt-phase-13-client-ci-parity-governance](plans/PLN-20260222-debt-phase-13-client-ci-parity-governance.md) | Debt Phase 13 - Client CI parity and dependency governance | [MRG-PLN-20260222-debt-phase-13-client-ci-parity-governance.md](merges/MRG-PLN-20260222-debt-phase-13-client-ci-parity-governance.md) | `janitor` | 2026-02-26 |
+| [PLN-20260224-deterministic-ci-test-hardening](plans/PLN-20260224-deterministic-ci-test-hardening.md) | Deterministic CI and test signal hardening | [MRG-PLN-20260224-deterministic-ci-test-hardening.md](merges/MRG-PLN-20260224-deterministic-ci-test-hardening.md) | `janitor` | 2026-02-25 |
 | [PLN-20260224-runtime-hot-reload](plans/PLN-20260224-runtime-hot-reload.md) | Runtime Hot-Reload System for BEAM Modules and Extensions | [MRG-PLN-20260224-runtime-hot-reload.md](merges/MRG-PLN-20260224-runtime-hot-reload.md) | `janitor` | 2026-02-25 |
+| [PLN-20260224-long-running-agent-harnesses](plans/PLN-20260224-long-running-agent-harnesses.md) | Long-Running Agent Harnesses and Task Management | [MRG-PLN-20260224-long-running-agent-harnesses.md](merges/MRG-PLN-20260224-long-running-agent-harnesses.md) | `janitor` | 2026-02-25 |
+| [PLN-20260224-inspiration-ideas-implementation](plans/PLN-20260224-inspiration-ideas-implementation.md) | Implement Inspiration Ideas from Upstream Research | [MRG-PLN-20260224-inspiration-ideas-implementation.md](merges/MRG-PLN-20260224-inspiration-ideas-implementation.md) | `janitor` | 2026-02-25 |
 
 ## Blocked
 
@@ -107,6 +114,10 @@ Research findings from upstream projects (oh-my-pi, pi, openclaw, ironclaw, nano
 | [IDEA-20260225-openclaw-cron-jobid-hardening](ideas/IDEA-20260225-openclaw-cron-jobid-hardening.md) | Canonical jobId Handling and Validation for cron.runs | openclaw | `proposed` | S | M | **Investigate** - Align cron alias parsing across tool + RPC layers |
 | [IDEA-20260225-community-rate-limit-auto-resume](ideas/IDEA-20260225-community-rate-limit-auto-resume.md) | Auto-Resume Runs After Rate-Limit Reset | community | `proposed` | M | H | **Proceed** - High-demand long-run reliability feature |
 | [IDEA-20260225-community-guardrailed-agentic-workflows](ideas/IDEA-20260225-community-guardrailed-agentic-workflows.md) | Guardrailed Markdown Agentic Workflows with Mandatory Human Review | industry | `proposed` | M | H | **Investigate** - Productize approvals + cron into auditable workflows |
+| [IDEA-20260225-openclaw-secrets-onboarding-parity](ideas/IDEA-20260225-openclaw-secrets-onboarding-parity.md) | Secret-Ref Onboarding Parity Across Built-In and Custom Providers | openclaw | `proposed` | M | H | **Proceed** - Close provider secret-ref consistency gaps across onboarding/runtime |
+| [IDEA-20260225-ironclaw-kind-aware-extension-registry](ideas/IDEA-20260225-ironclaw-kind-aware-extension-registry.md) | Kind-Aware Extension Registry to Prevent Tool/Channel Name Collisions | ironclaw | `proposed` | S | M | **Investigate** - Add explicit (name, kind) collision hardening for extension ecosystems |
+| [IDEA-20260225-community-rate-limit-session-self-healing](ideas/IDEA-20260225-community-rate-limit-session-self-healing.md) | Self-Healing Sessions for Persistent Rate-Limit Wedges | community | `proposed` | M | H | **Proceed** - Add in-session recovery when one run remains wedged after reset |
+| [IDEA-20260225-community-trace-driven-agent-evaluation](ideas/IDEA-20260225-community-trace-driven-agent-evaluation.md) | Trace-Driven Agent Evaluation with Degradation Alerts and HITL Audits | industry | `proposed` | M | H | **Investigate** - Build scoring/drift/audit layer on top of run introspection |
 
 ### Summary
 

@@ -1,8 +1,8 @@
 # PLN-20260222: Debt Phase 9 — Gateway Runtime Reliability Decomposition
 
-## Status: Complete
-**Owner:** codex
-**Reviewer:** codex
+## Status: ready_to_land
+**Owner:** janitor
+**Reviewer:** janitor
 
 ## Goal
 Harden gateway runtime reliability by placing the EventBridge fanout supervisor under proper OTP supervision, moving email attachment parsing off the request handler critical path, and replacing scattered engine dependency bootstrapping with an explicit dependency manager.
@@ -53,3 +53,4 @@ Harden gateway runtime reliability by placing the EventBridge fanout supervisor 
 | 2026-02-22T00:30 | M3 done | Email Inbound attachment persistence split into prepare_attachments (sync metadata) + schedule_attachment_writes (async Task via LemonGateway.TaskSupervisor); webhook returns 202 immediately |
 | 2026-02-22T00:40 | M4 done | LemonGateway.DependencyManager extracted with ensure_app/1, available?/1, exports?/3, broadcast/2, build_event/3, emit_telemetry/2; Engines.Lemon, Transports.Discord, Tools.Cron, Run all migrated |
 | 2026-02-22T00:50 | M5 done | mix compile --no-optional-deps clean; mix test apps/lemon_gateway apps/lemon_control_plane pass (exit 0); mix format --check-formatted clean on all modified files |
+| 2026-02-25T14:20 | Close-out docs | Reconciled plan metadata with planning workflow (`ready_to_land`), added review + merge artifacts, and updated planning index/JANITOR continuity notes. |

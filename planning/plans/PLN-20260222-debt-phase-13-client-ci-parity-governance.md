@@ -1,8 +1,8 @@
 # PLN-20260222: Debt Phase 13 — Client CI Parity & Dependency Governance
 
-**Status:** In Progress
+**Status:** Ready to Land
 **Created:** 2026-02-22
-**Owner:** codex
+**Owner:** janitor
 **Reviewer:** codex
 
 ## Goal
@@ -75,11 +75,11 @@ The existing `clients` job covers:
 - [x] **M4** — Add dependency audit steps to CI for all three client roots
 - [x] **M5** — Add vitest.config.ts to lemon-tui and lemon-browser-node
 - [x] **M6** — Align ws dependency version in lemon-web/server (^8.17.1 -> ^8.18.0)
-- [ ] **M7** — Add ESLint config to lemon-tui and lemon-browser-node (future: requires npm install of eslint + typescript-eslint)
-- [ ] **M8** — Resolve lemon-web security vulnerabilities (ajv fix, eslint upgrade for minimatch)
-- [ ] **M9** — Add test coverage for lemon-web/server
-- [ ] **M10** — Align @types/node and vitest versions across all packages
-- [ ] **M11** — Consider monorepo-level dependency tooling (npm workspaces at root, or Turborepo)
+- [x] **M7** — Add ESLint config to lemon-tui and lemon-browser-node
+- [x] **M8** — Resolve lemon-web security vulnerabilities (ajv fix, eslint upgrade for minimatch)
+- [x] **M9** — Add test coverage for lemon-web/server
+- [x] **M10** — Align @types/node and vitest versions across all packages
+- [x] **M11** — Consider monorepo-level dependency tooling (npm workspaces at root, or Turborepo)
 
 ## Success Criteria
 
@@ -88,9 +88,9 @@ The existing `clients` job covers:
 - [x] Dependency audit runs (non-blocking) in CI for all clients
 - [x] lemon-tui typecheck passes cleanly
 - [x] All existing tests continue to pass
-- [ ] No high-severity vulnerabilities in production dependencies
-- [ ] ESLint runs for all TypeScript client packages
-- [ ] Shared dependency versions are aligned across packages
+- [x] No high-severity vulnerabilities in production dependencies
+- [x] ESLint runs for all TypeScript client packages
+- [x] Shared dependency versions are aligned across packages
 
 ## Dependency Governance Recommendations
 
@@ -145,64 +145,79 @@ The TS2749 fix on line 75 uses the idiom `type MockWebSocket = InstanceType<type
 
 ### M7 — ESLint config for lemon-tui and lemon-browser-node
 
-**Status: Future — requires npm install**
+**Status: Complete (2026-02-25)**
 
-Neither package currently has eslint or typescript-eslint as a devDependency. Adding an eslint config without first running `npm install` to add the packages would produce a broken config that CI cannot execute. The `lemon-web/web` package uses the flat config format (eslint v9, `eslint.config.js`), which is the correct target format.
+Implemented ESLint for both standalone TS clients with flat config and CI parity.
 
-**Required work (out of scope for this workspace):**
-1. `npm install --save-dev eslint typescript-eslint` in both `clients/lemon-tui` and `clients/lemon-browser-node`
-2. Add `eslint.config.js` (flat config, matching `lemon-web/web` pattern)
-3. Add `"lint": "eslint ."` script to each `package.json`
-4. Add lint steps to the CI workflow after typecheck steps
+**Completed work:**
+1. Added dev dependencies in both packages: `eslint`, `@eslint/js`, `typescript-eslint`, `globals`
+2. Added `eslint.config.js` to:
+   - `clients/lemon-tui/`
+   - `clients/lemon-browser-node/`
+3. Added `"lint": "eslint ."` scripts to both `package.json` files
+4. Added CI lint steps in `.github/workflows/quality.yml` for both clients
+5. Validated locally for both clients: lint, typecheck, test, and build all pass
 
 ### M8 — Resolve lemon-web security vulnerabilities
 
-**Status: Partially actionable without npm install**
+**Status: Complete (2026-02-25)**
 
-From the prior audit summary:
-- **ajv (1 moderate ReDoS)**: `npm audit fix` would resolve this. Requires running npm in `clients/lemon-web`. Out of scope for this workspace (would modify package-lock.json).
-- **minimatch via eslint (10 high ReDoS)**: The `lemon-web/web` package uses `eslint@^9.39.1` and `typescript-eslint@^8.46.4`. The minimatch vulnerability is in the eslint dependency chain. Resolving it requires upgrading to eslint v10 when it becomes available with a fixed minimatch dependency, or waiting for typescript-eslint to release a version that pins a safe minimatch. This is a **transitive dependency issue** — there is no direct action available that does not risk breaking the eslint configuration.
-- **esbuild moderate (lemon-tui and lemon-browser-node)**: These are in the vitest→vite→esbuild dev chain. The audit level in CI is `--audit-level=high` so these moderate-severity dev-only issues do not block CI. No action needed until esbuild releases a fix.
+Executed `npm audit fix` in `clients/lemon-web`, which updated transitive lockfile entries and cleared both previously reported vulnerabilities:
+- `ajv` (moderate)
+- `minimatch` (high)
 
-**Recommendation**: The audit steps added in M4 will surface these in CI as informational. Track until upstream fixes are available. The `|| true` guard is intentional.
+Post-fix validation:
+- `cd clients/lemon-web && npm audit --audit-level=high` ✅ (`found 0 vulnerabilities`)
+- `cd clients/lemon-web && npm run typecheck` ✅
+- `cd clients/lemon-web && npm run build` ✅
 
 ### M9 — Add test coverage for lemon-web/server
 
-**Status: Future — requires careful design**
+**Status: Complete (2026-02-25)**
 
-`clients/lemon-web/server` has no tests and no vitest devDependency. The server package does have a `tsup` build and a `typecheck` script. Adding tests requires:
-1. Adding `vitest` as a devDependency (`npm install --save-dev vitest` in `clients/lemon-web/server`)
-2. Designing a test strategy (the server likely involves WebSocket/HTTP logic that requires careful mocking)
-3. Adding `"test": "vitest run"` script and a vitest.config.ts
-4. Writing the actual tests
+Added initial automated coverage for the `lemon-web/server` package by testing dotenv parsing/loading behavior.
 
-This is non-trivial and should be a dedicated work item. Marking as future.
+**Completed work:**
+1. Added `vitest` devDependency to `clients/lemon-web/server`
+2. Added server package test script: `"test": "vitest run"`
+3. Added `clients/lemon-web/server/vitest.config.ts`
+4. Added `clients/lemon-web/server/src/dotenv.test.ts` (4 tests)
+5. Extended CI clients workflow with `lemon-web server tests` step:
+   - `npm --workspace server run test`
+
+**Coverage included in this slice:**
+- `.env` parsing for plain, quoted, exported, and inline-comment values
+- invalid key filtering
+- no-override default behavior
+- explicit override behavior
+- missing `.env` no-op behavior
+
+This provides a foundation for future tests around WebSocket auth/session probing without coupling tests to process spawning.
 
 ### M10 — Align @types/node and vitest versions across all packages
 
-**Status: Partially documentable; changes require npm install**
+**Status: Complete (2026-02-25)**
 
-Current state (from package.json review):
+Aligned versions across client packages and refreshed lockfiles.
+
+Final state:
 
 | Package | vitest | @types/node |
 |---------|--------|-------------|
-| lemon-tui | ^2.0.0 | ^22.0.0 |
-| lemon-browser-node | ^2.1.9 | ^22.0.0 |
-| lemon-web/shared | ^3.0.0 | ^24.0.0 |
+| lemon-tui | ^4.0.18 | ^24.10.1 |
+| lemon-browser-node | ^4.0.18 | ^24.10.1 |
+| lemon-web/shared | ^4.0.18 | ^24.10.1 |
 | lemon-web/web | ^4.0.18 | ^24.10.1 |
-| lemon-web/server | — | — |
+| lemon-web/server | ^4.0.18 | — |
 
-The vitest major version drift (v2 vs v3 vs v4) is the most significant alignment gap. The `lemon-web/web` package drives the highest versions because it uses Vite and the `@vitest/ui` package. The pragmatic target is to align all packages to the minimum major version they can accept without breaking changes, or to upgrade all to v4 simultaneously.
-
-**Recommended alignment targets (to implement when npm install is permitted):**
-- `vitest`: upgrade lemon-tui and lemon-browser-node to `^3.0.0` (conservative) or `^4.0.18` (match lemon-web/web)
-- `@types/node`: upgrade lemon-tui and lemon-browser-node from `^22.0.0` to `^24.0.0` (match lemon-web/shared)
-
-No changes made in this workspace (npm install required).
+Validation after alignment:
+- `cd clients/lemon-tui && npm run lint && npm run typecheck && npm test && npm run build` ✅
+- `cd clients/lemon-browser-node && npm run lint && npm run typecheck && npm test && npm run build` ✅
+- `cd clients/lemon-web && npm --workspace shared run test && npm --workspace server run test && npm --workspace web run test` ✅
 
 ### M11 — Monorepo-level dependency tooling
 
-**Status: Future architectural decision**
+**Status: Complete (2026-02-25, recommendation: defer structural migration)**
 
 Three independent npm roots (`clients/lemon-tui`, `clients/lemon-browser-node`, `clients/lemon-web`) are currently managed separately. The `lemon-web` directory already uses npm workspaces for its sub-packages. Extending this pattern to the top level would mean:
 - A single `clients/package.json` with `"workspaces": ["lemon-tui", "lemon-browser-node", "lemon-web"]`
@@ -211,7 +226,7 @@ Three independent npm roots (`clients/lemon-tui`, `clients/lemon-browser-node`, 
 
 Turborepo is an alternative that adds task orchestration (parallel builds, caching) on top of workspaces. Given the current scale (3 packages), plain npm workspaces is sufficient.
 
-This is a significant structural change that would affect the CI workflow (single `npm ci` at `clients/` level), developer workflows, and lock file history. It should be evaluated as a dedicated architectural decision, not done incrementally.
+Decision for this plan: keep current multi-root layout for now. With M10 complete, we get version governance benefits without the migration blast radius (CI/cache rewiring, lockfile churn, and contributor workflow changes). Revisit a top-level workspace migration only if additional client packages are added or CI install time becomes a measurable bottleneck.
 
 ---
 
@@ -223,5 +238,9 @@ This is a significant structural change that would affect the CI workflow (singl
 | 2026-02-22T21:45 | M2-M4 | Updated quality.yml: added lemon-browser-node (install/typecheck/build/test), lemon-tui typecheck+build, lemon-web build+shared tests, audit steps for all |
 | 2026-02-22T21:45 | M5 | Added vitest.config.ts to lemon-tui and lemon-browser-node |
 | 2026-02-22T21:45 | M6 | Aligned ws version in lemon-web/server from ^8.17.1 to ^8.18.0 |
+| 2026-02-25T22:03 | M7 | Added ESLint deps/config/scripts for lemon-tui + lemon-browser-node; added CI lint steps; validated lint/typecheck/test/build for both clients |
+| 2026-02-25T23:03 | M9 | Added lemon-web/server Vitest harness + dotenv tests (4); added CI step for server tests; validated server test/typecheck/build |
 | 2026-02-22 | Validation | Agent validated all M1-M6 changes: quality.yml structure correct, vitest configs valid, TS2749 fix correct, ws version aligned, Elixir compile clean |
-| 2026-02-22 | M7-M11 | Assessed remaining milestones: M7/M9/M11 deferred (require npm install or architectural decisions); M8 documented (upstream transitive deps, non-blocking); M10 alignment targets documented |
+| 2026-02-25T23:58 | M8 | Ran `npm audit fix` in `clients/lemon-web`; cleared `ajv` + `minimatch`; `npm audit --audit-level=high` now reports 0 vulnerabilities |
+| 2026-02-25T23:59 | M10 | Aligned `vitest` to `^4.0.18` across all TS client packages and `@types/node` to `^24.10.1` in standalone/shared packages; lockfiles updated |
+| 2026-02-26T00:00 | M11 | Evaluated top-level workspace/Turborepo migration and decided to defer structural change; keep multi-root layout with aligned dependency governance |

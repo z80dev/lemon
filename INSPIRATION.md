@@ -35,3 +35,19 @@
 - `IDEA-20260225-openclaw-cron-jobid-hardening`
 - `IDEA-20260225-community-rate-limit-auto-resume`
 - `IDEA-20260225-community-guardrailed-agentic-workflows`
+
+## 2026-02-25 Follow-up Snapshot
+
+### Upstream repo deltas reviewed
+- **openclaw**: onboarding/auth flow expanded for secret-ref parity across built-in and custom providers (`66295a7a1489`)
+- **ironclaw**: fixed tool/channel name collisions with kind-aware extension lookup + stronger install validation (`e9f32eaebea2`)
+
+### Community/trend signals
+- Community reports now include a sharper failure mode than generic quota pauses: a **single session can remain permanently wedged** on rate-limit errors even after global reset windows.
+- Industry guidance is shifting toward **trace-level agent evaluation** with drift alerts and periodic HITL audits (not just final-output scoring).
+
+### New ideas added
+- `IDEA-20260225-openclaw-secrets-onboarding-parity`
+- `IDEA-20260225-ironclaw-kind-aware-extension-registry`
+- `IDEA-20260225-community-rate-limit-session-self-healing`
+- `IDEA-20260225-community-trace-driven-agent-evaluation`

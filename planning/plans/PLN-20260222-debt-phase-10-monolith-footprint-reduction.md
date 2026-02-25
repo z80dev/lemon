@@ -1,9 +1,9 @@
 # PLN-20260222: Debt Phase 10 — Monolith and Release Footprint Reduction
 
 **Date:** 2026-02-22
-**Owner:** codex
-**Reviewer:** codex
-**Status:** Complete
+**Owner:** janitor
+**Reviewer:** janitor
+**Status:** ready_to_land
 
 ---
 
@@ -264,3 +264,13 @@ Phase 5 M2 is working on the actual Session extraction. This analysis provides t
   - Removal of `maybe_backfill_legacy_x_account_id/1` once all environments confirmed migrated (M1 note)
   - Shell scripts in `lemon_gateway/priv/` could move to `scripts/` if not needed at runtime (M2 note)
 
+### 2026-02-25 — Planning-System Close-Out Alignment
+
+- Re-claimed plan ownership under `janitor` for planning-board consistency.
+- Normalized plan metadata status from legacy `Complete` to planning-system `ready_to_land`.
+- Added missing review artifact: `planning/reviews/RVW-PLN-20260222-debt-phase-10-monolith-footprint-reduction.md`.
+- Added missing merge artifact: `planning/merges/MRG-PLN-20260222-debt-phase-10-monolith-footprint-reduction.md`.
+- Updated `planning/INDEX.md` active row to `ready_to_land` and added Ready-to-Land table entry.
+- Re-ran canonical validation suite for this plan:
+  - `mix compile --no-optional-deps` ✅
+  - `mix test apps/market_intel` ✅

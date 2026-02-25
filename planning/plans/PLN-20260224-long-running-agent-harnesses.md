@@ -3,11 +3,11 @@ id: PLN-20260224-long-running-agent-harnesses
 title: Long-Running Agent Harnesses and Task Management
 owner: janitor
 reviewer: codex
-status: in_progress
+status: ready_to_land
 workspace: feature/pln-20260224-long-running-harnesses
 change_id: pending
 created: 2026-02-24
-updated: 2026-02-24
+updated: 2026-02-25
 ---
 
 ## Goal
@@ -37,12 +37,12 @@ Missing:
 
 ## Milestones
 
-- [ ] M1 — Add feature requirements generation tool
-- [ ] M2 — Enhance todo system with dependencies and progress
-- [ ] M3 — Implement checkpoint/resume mechanism
-- [ ] M4 — Add progress reporting and visualization
-- [ ] M5 — Integrate with introspection system
-- [ ] M6 — Tests and documentation
+- [x] M1 — Add feature requirements generation tool
+- [x] M2 — Enhance todo system with dependencies and progress
+- [x] M3 — Implement checkpoint/resume mechanism
+- [x] M4 — Add progress reporting and visualization
+- [x] M5 — Integrate with introspection system
+- [x] M6 — Tests and documentation
 
 ## M1: Feature Requirements Generation Tool
 
@@ -478,13 +478,13 @@ end
 
 ## Exit Criteria
 
-- [ ] Feature requirements generation works with LLM
-- [ ] Requirements files save/load correctly
-- [ ] Todo dependencies are respected
-- [ ] Checkpoints can be created and resumed
-- [ ] Progress is visible in introspection
-- [ ] Tests cover all major functionality
-- [ ] Documentation updated
+- [x] Feature requirements generation works with LLM
+- [x] Requirements files save/load correctly
+- [x] Todo dependencies are respected
+- [x] Checkpoints can be created and resumed
+- [x] Progress is visible in introspection
+- [x] Tests cover all major functionality
+- [x] Documentation updated
 
 ## Progress Log
 
@@ -499,6 +499,9 @@ end
 | 2026-02-24 | M2 | Added 16 new tests, all 75 tests passing |
 | 2026-02-24 | M3 | Implemented Checkpoint module for save/resume |
 | 2026-02-24 | M3 | Added 17 tests for checkpoint functionality |
+| 2026-02-25 | M4 | Added unified `todo` tool actions (`progress`, `actionable`) and hardened TodoStore helpers to support both atom-key and string-key todo shapes |
+| 2026-02-25 | M5 | Integrated harness projections into `sessions.active.list`/`introspection.snapshot` (todo/checkpoint/requirements progress) with control-plane coverage |
+| 2026-02-25 | M6 | Added requirements projection assertions in control-plane introspection tests and updated coding-agent/control-plane AGENTS docs for harness primitives |
 
 ## Implementation Summary
 
@@ -595,8 +598,66 @@ Created `CodingAgent.Checkpoint` module for save/resume functionality:
 
 **Tests:** 17 tests covering all functionality
 
+### M4: Progress Reporting ✅
+
+Implemented progress visibility in the existing session workflow via the unified `todo` tool and TodoStore normalization:
+
+**Tool surface enhancements (`CodingAgent.Tools.Todo`):**
+- Added `action: "progress"` to return structured completion stats
+- Added `action: "actionable"` to return dependency-ready next tasks
+- Extended schema enum and error messaging for new actions
+
+**Data-layer hardening (`CodingAgent.Tools.TodoStore`):**
+- `get_progress/1`, `get_actionable/1`, `get_blocking/1`, `all_completed?/1`, and `update_status/3` now support both:
+  - atom-key maps (`%{status: :completed}`)
+  - string-key maps (`%{"status" => "completed"}`)
+- This closes the gap between enhanced TodoStore internals and the JSON-shaped todo payloads produced by tool calls.
+
+**Validation:**
+- Added tests for new `todo` actions and mixed-key progress/actionable semantics
+- `mix test apps/coding_agent/test/coding_agent/tools/todo_unified_test.exs apps/coding_agent/test/coding_agent/tools/todo_store_test.exs` ✅ (85 tests)
+
+### M5: Introspection Integration ✅
+
+Integrated long-running harness status into control-plane introspection surfaces via active session snapshots.
+
+**Control-plane projection (`LemonControlPlane.Methods.SessionsActiveList`):**
+- Added per-session `harness` payload on active session rows when data is available.
+- `harness.todos`: todo completion stats + `actionableCount` from `TodoStore`.
+- `harness.checkpoints`: checkpoint stats (`count`, `oldest`, `newest`) from `CodingAgent.Checkpoint`.
+- `harness.requirements`: requirements progress + resolved `cwd` when a requirements file is discoverable from latest `:session_started` introspection event.
+- All projections are best-effort and safely degrade when coding-agent modules are unavailable or data is missing.
+
+**Surfaces impacted:**
+- `sessions.active.list`
+- `introspection.snapshot` (through its embedded `activeSessions` list)
+
+**Validation:**
+- `mix test apps/lemon_control_plane/test/lemon_control_plane/methods/introspection_methods_test.exs` ✅
+- Full `mix test` attempted; existing unrelated failures in `apps/lemon_channels` persist in this environment.
+
+### M6: Tests and Documentation ✅
+
+Completed final close-out for harness documentation and coverage.
+
+**Test coverage additions:**
+- Extended `apps/lemon_control_plane/test/lemon_control_plane/methods/introspection_methods_test.exs` to:
+  - seed a real `FEATURE_REQUIREMENTS.json` fixture,
+  - emit a `:session_started` introspection event with fixture `cwd`, and
+  - assert requirements progress projection (`project_name`, `percentage`, `cwd`) in both:
+    - `sessions.active.list`
+    - `introspection.snapshot` (via embedded `activeSessions`)
+
+**Documentation updates:**
+- `apps/coding_agent/AGENTS.md`
+  - documented long-running harness primitives (`FeatureRequirements`, `todo` progress/actionable actions, `TodoStore` normalization, `Checkpoint` stats).
+- `apps/lemon_control_plane/AGENTS.md`
+  - documented `sessions.active.list` harness projection behavior.
+  - documented `introspection.snapshot` includes harness projection through `activeSessions`.
+
+**Validation:**
+- `mix test apps/lemon_control_plane/test/lemon_control_plane/methods/introspection_methods_test.exs` ✅
+
 ### Next Steps
 
-- M4: Add introspection integration (progress reporting)
-- M5: Documentation and examples
-- M6: Integration with agent session lifecycle
+- Create review + merge artifacts and move plan to `ready_to_land`.
