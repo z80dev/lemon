@@ -140,6 +140,8 @@ Secrets are encrypted at rest with AES-256-GCM. The encryption key is derived vi
 2. `LEMON_SECRETS_MASTER_KEY` env var (fallback)
 3. Fail with `:missing_master_key`
 
+For a path-by-path audit matrix (including error and fallback semantics), see `docs/security/secrets-keychain-audit-matrix.md`.
+
 ### API Usage
 
 ```elixir

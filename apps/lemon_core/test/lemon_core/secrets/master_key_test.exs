@@ -44,11 +44,27 @@ defmodule LemonCore.Secrets.MasterKeyTest do
     def put_master_key(_value, _opts), do: :ok
   end
 
+  defmodule KeychainUnavailable do
+    def available?, do: false
+    def get_master_key(_opts), do: {:error, :keychain_unavailable}
+    def put_master_key(_value, _opts), do: {:error, :unavailable}
+  end
+
   test "resolves master key from keychain first" do
     env_getter = fn _ -> nil end
 
     assert {:ok, key, :keychain} =
              MasterKey.resolve(keychain_module: KeychainOk, env_getter: env_getter)
+
+    assert byte_size(key) >= 32
+  end
+
+  test "falls back to env key when keychain is unavailable" do
+    encoded = Base.encode64(:binary.copy(<<4>>, 32))
+    env_getter = fn "LEMON_SECRETS_MASTER_KEY" -> encoded end
+
+    assert {:ok, key, :env} =
+             MasterKey.resolve(keychain_module: KeychainUnavailable, env_getter: env_getter)
 
     assert byte_size(key) >= 32
   end
@@ -87,6 +103,16 @@ defmodule LemonCore.Secrets.MasterKeyTest do
              MasterKey.resolve(keychain_module: KeychainInvalid, env_getter: env_getter)
   end
 
+  test "uses env key when keychain key is malformed but env is valid" do
+    encoded = Base.encode64(:binary.copy(<<5>>, 32))
+    env_getter = fn "LEMON_SECRETS_MASTER_KEY" -> encoded end
+
+    assert {:ok, key, :env} =
+             MasterKey.resolve(keychain_module: KeychainInvalid, env_getter: env_getter)
+
+    assert byte_size(key) >= 32
+  end
+
   test "init generates and writes keychain master key" do
     assert {:ok, %{source: :keychain, configured: true}} =
              MasterKey.init(keychain_module: KeychainRecorder)
@@ -103,5 +129,17 @@ defmodule LemonCore.Secrets.MasterKeyTest do
     assert status.keychain_available
     assert status.source == nil
     assert status.keychain_error == {:command_failed, 36, "User interaction is not allowed"}
+  end
+
+  test "status reports env source without keychain error when keychain is unavailable" do
+    encoded = Base.encode64(:binary.copy(<<6>>, 32))
+    env_getter = fn "LEMON_SECRETS_MASTER_KEY" -> encoded end
+
+    status = MasterKey.status(keychain_module: KeychainUnavailable, env_getter: env_getter)
+
+    refute status.keychain_available
+    assert status.source == :env
+    assert status.configured
+    assert status.keychain_error == nil
   end
 end

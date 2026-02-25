@@ -65,6 +65,25 @@ defmodule LemonCore.SecretsTest do
     System.delete_env("MISSING_SECRET")
   end
 
+  test "resolve with prefer_env true uses env before store" do
+    System.put_env("PREFER_ENV_SECRET", "from-env")
+    assert {:ok, _} = Secrets.set("PREFER_ENV_SECRET", "from-store")
+
+    assert {:ok, "from-env", :env} =
+             Secrets.resolve("PREFER_ENV_SECRET", prefer_env: true, env_fallback: true)
+  after
+    System.delete_env("PREFER_ENV_SECRET")
+  end
+
+  test "resolve with env_fallback false returns store error when store is missing" do
+    System.put_env("NO_FALLBACK_SECRET", "from-env")
+
+    assert {:error, :not_found} =
+             Secrets.resolve("NO_FALLBACK_SECRET", prefer_env: false, env_fallback: false)
+  after
+    System.delete_env("NO_FALLBACK_SECRET")
+  end
+
   test "reading a secret updates usage metadata without changing updated_at" do
     assert {:ok, initial} = Secrets.set("usage_meta_secret", "value-123")
     assert initial.usage_count == 0
