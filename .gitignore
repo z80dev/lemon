@@ -31,10 +31,11 @@ docs/agent-loop/runs/
 
 # Local Rust sidecar build artifacts
 native/lemon-wasm-runtime/target/
-native/wasm-tools/json-transform/target/
+native/wasm-tools/*/target/
 
 
 .agent/
+.claude/worktrees/
 
 # Environment files with secrets
 .env*
