@@ -17,7 +17,8 @@ defmodule LemonGateway.RunTest do
   use ExUnit.Case, async: false
 
   alias Elixir.LemonGateway.Run
-  alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+  alias LemonCore.ResumeToken
+  alias LemonGateway.Types.Job
   alias Elixir.LemonGateway.Event
 
   # ============================================================================
@@ -28,7 +29,8 @@ defmodule LemonGateway.RunTest do
   defmodule Elixir.LemonGateway.RunTest.TestEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -79,7 +81,8 @@ defmodule LemonGateway.RunTest do
   defmodule ControllableEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -148,7 +151,8 @@ defmodule LemonGateway.RunTest do
   defmodule FailingEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
 
     @impl true
     def id, do: "failing"
@@ -179,7 +183,8 @@ defmodule LemonGateway.RunTest do
   defmodule SteerableTestEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -250,7 +255,8 @@ defmodule LemonGateway.RunTest do
   defmodule Elixir.LemonGateway.RunTest.StreamingEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -309,7 +315,8 @@ defmodule LemonGateway.RunTest do
   defmodule SteerFailEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -1278,7 +1285,7 @@ defmodule LemonGateway.RunTest do
       # Check mapping exists (stores run_id string, not PID)
       stored_run_id =
         wait_for(
-          fn -> Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) end,
+          fn -> LemonCore.Store.get_run_by_progress(scope, progress_msg_id) end,
           500,
           10
         )
@@ -1293,7 +1300,7 @@ defmodule LemonGateway.RunTest do
 
       # Wait for unregistration to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
+        fn -> LemonCore.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
         message: "run progress mapping was not removed"
       )
     end
@@ -1307,7 +1314,7 @@ defmodule LemonGateway.RunTest do
       assert_receive {:run_complete, ^pid, _}, 2000
 
       # No mapping should exist
-      assert Elixir.LemonGateway.Store.get_run_by_progress(scope, nil) == nil
+      assert LemonCore.Store.get_run_by_progress(scope, nil) == nil
     end
 
     test "unregisters progress mapping on completion" do
@@ -1322,7 +1329,7 @@ defmodule LemonGateway.RunTest do
 
       # Wait for cleanup to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
+        fn -> LemonCore.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
         message: "run progress mapping was not removed on completion"
       )
     end
@@ -1343,7 +1350,7 @@ defmodule LemonGateway.RunTest do
 
       # Verify mapping exists (stores run_id string, not PID)
       assert Enum.any?(1..20, fn _attempt ->
-               case Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) do
+               case LemonCore.Store.get_run_by_progress(scope, progress_msg_id) do
                  run_id when is_binary(run_id) and run_id != "" ->
                    true
 
@@ -1360,7 +1367,7 @@ defmodule LemonGateway.RunTest do
 
       # Wait for cleanup to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
+        fn -> LemonCore.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
         message: "run progress mapping was not removed on cancellation"
       )
     end
@@ -2031,12 +2038,12 @@ defmodule LemonGateway.RunTest do
 
       # Wait for store operations to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> Elixir.LemonGateway.Store.get_run(run_ref) != nil end,
+        fn -> LemonCore.Store.get_run(run_ref) != nil end,
         message: "run data was not stored"
       )
 
       # Events should be stored
-      run_data = Elixir.LemonGateway.Store.get_run(run_ref)
+      run_data = LemonCore.Store.get_run(run_ref)
       assert run_data != nil
       assert length(run_data.events) >= 2
     end
@@ -2216,7 +2223,7 @@ defmodule LemonGateway.RunTest do
 
       # Verify mapping exists (stores run_id string, not PID)
       assert Enum.any?(1..20, fn _attempt ->
-               case Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) do
+               case LemonCore.Store.get_run_by_progress(scope, progress_msg_id) do
                  run_id when is_binary(run_id) and run_id != "" ->
                    true
 
@@ -2232,7 +2239,7 @@ defmodule LemonGateway.RunTest do
 
       # Wait for cleanup to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
+        fn -> LemonCore.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
         message: "run progress mapping was not removed"
       )
     end
@@ -2253,12 +2260,12 @@ defmodule LemonGateway.RunTest do
 
       # Wait for store operations to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> Elixir.LemonGateway.Store.get_chat_state(scope) != nil end,
+        fn -> LemonCore.Store.get_chat_state(scope) != nil end,
         message: "ChatState was not persisted"
       )
 
       # ChatState should have the resume token
-      chat_state = Elixir.LemonGateway.Store.get_chat_state(scope)
+      chat_state = LemonCore.Store.get_chat_state(scope)
       assert chat_state != nil
       assert chat_state.last_engine == "test"
       assert is_binary(chat_state.last_resume_token)
@@ -2297,14 +2304,14 @@ defmodule LemonGateway.RunTest do
       # Wait for store operations to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
         fn ->
-          state = Elixir.LemonGateway.Store.get_chat_state(scope)
+          state = LemonCore.Store.get_chat_state(scope)
           state != nil and state.last_resume_token == resume.value
         end,
         message: "ChatState with resume token was not persisted"
       )
 
       # ChatState should have the completed resume token
-      chat_state = Elixir.LemonGateway.Store.get_chat_state(scope)
+      chat_state = LemonCore.Store.get_chat_state(scope)
       assert chat_state != nil
       assert chat_state.last_engine == "controllable"
       assert chat_state.last_resume_token == resume.value
@@ -2313,7 +2320,7 @@ defmodule LemonGateway.RunTest do
     test "context overflow clears ChatState and does not persist failing resume" do
       scope = make_scope()
 
-      Elixir.LemonGateway.Store.put_chat_state(scope, %Elixir.LemonGateway.ChatState{
+      LemonCore.Store.put_chat_state(scope, %Elixir.LemonGateway.ChatState{
         last_engine: "controllable",
         last_resume_token: "stale_token",
         updated_at: System.system_time(:millisecond)
@@ -2348,7 +2355,7 @@ defmodule LemonGateway.RunTest do
       assert_receive {:run_complete, ^pid, %Event.Completed{ok: false}}, 2000
       # Wait to confirm no ChatState was written
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> Elixir.LemonGateway.Store.get_chat_state(scope) == nil end,
+        fn -> LemonCore.Store.get_chat_state(scope) == nil end,
         message: "ChatState should remain nil after context overflow"
       )
     end
@@ -2356,7 +2363,7 @@ defmodule LemonGateway.RunTest do
     test "Chinese context overflow marker clears ChatState and does not persist failing resume" do
       scope = make_scope()
 
-      Elixir.LemonGateway.Store.put_chat_state(scope, %Elixir.LemonGateway.ChatState{
+      LemonCore.Store.put_chat_state(scope, %Elixir.LemonGateway.ChatState{
         last_engine: "controllable",
         last_resume_token: "stale_token",
         updated_at: System.system_time(:millisecond)
@@ -2390,7 +2397,7 @@ defmodule LemonGateway.RunTest do
       assert_receive {:run_complete, ^pid, %Event.Completed{ok: false}}, 2000
 
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> Elixir.LemonGateway.Store.get_chat_state(scope) == nil end,
+        fn -> LemonCore.Store.get_chat_state(scope) == nil end,
         message: "ChatState should remain nil after Chinese context overflow"
       )
     end
@@ -2473,7 +2480,7 @@ defmodule LemonGateway.RunTest do
       assert_receive {:engine_started, _run_ref}, 2000
 
       # ChatState should not be updated on Started (no async wait needed)
-      chat_state1 = Elixir.LemonGateway.Store.get_chat_state(scope)
+      chat_state1 = LemonCore.Store.get_chat_state(scope)
       assert chat_state1 == nil
 
       # Now complete with a different resume token
@@ -2488,11 +2495,11 @@ defmodule LemonGateway.RunTest do
 
       # Wait for ChatState to be updated
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> Elixir.LemonGateway.Store.get_chat_state(scope) != nil end,
+        fn -> LemonCore.Store.get_chat_state(scope) != nil end,
         message: "ChatState was not updated after completion"
       )
 
-      chat_state2 = Elixir.LemonGateway.Store.get_chat_state(scope)
+      chat_state2 = LemonCore.Store.get_chat_state(scope)
       assert chat_state2 != nil
 
       # Token should exist (may be same as first if cancellation doesn't provide new token)
@@ -2512,7 +2519,7 @@ defmodule LemonGateway.RunTest do
 
       # Confirm no ChatState was written by failing engine
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> Elixir.LemonGateway.Store.get_chat_state(scope) == nil end,
+        fn -> LemonCore.Store.get_chat_state(scope) == nil end,
         message: "ChatState should remain nil when resume is absent"
       )
     end
@@ -2545,12 +2552,12 @@ defmodule LemonGateway.RunTest do
 
       # Wait for run history to be stored
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> length(Elixir.LemonGateway.Store.get_run_history(scope)) >= 1 end,
+        fn -> length(LemonCore.Store.get_run_history(scope)) >= 1 end,
         message: "run history was not stored"
       )
 
       # Run history should include this run
-      history = Elixir.LemonGateway.Store.get_run_history(scope)
+      history = LemonCore.Store.get_run_history(scope)
       assert length(history) >= 1
     end
 

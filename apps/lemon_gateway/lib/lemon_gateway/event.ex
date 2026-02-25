@@ -17,7 +17,7 @@ defmodule LemonGateway.Event do
 
     @type t :: %__MODULE__{
             engine: String.t(),
-            resume: LemonGateway.Types.ResumeToken.t() | nil,
+            resume: LemonCore.ResumeToken.t() | nil,
             title: String.t() | nil,
             meta: map() | nil,
             run_id: String.t() | nil,
@@ -109,7 +109,7 @@ defmodule LemonGateway.Event do
 
     @type t :: %__MODULE__{
             engine: String.t(),
-            resume: LemonGateway.Types.ResumeToken.t() | nil,
+            resume: LemonCore.ResumeToken.t() | nil,
             ok: boolean(),
             answer: String.t() | nil,
             error: term() | nil,

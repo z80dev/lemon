@@ -2,7 +2,7 @@ defmodule LemonGateway.LemonEngineTest do
   use ExUnit.Case
 
   alias LemonGateway.Engines.Lemon
-  alias LemonGateway.Types.ResumeToken
+  alias LemonCore.ResumeToken
 
   describe "id/0" do
     test "returns lemon" do

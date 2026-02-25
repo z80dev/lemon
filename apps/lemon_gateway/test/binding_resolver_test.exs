@@ -1,8 +1,8 @@
 defmodule LemonGateway.BindingResolverTest do
   use ExUnit.Case, async: false
 
-  alias LemonGateway.{Binding, BindingResolver, Config}
-  alias LemonGateway.Types.{ChatScope, ResumeToken}
+  alias LemonCore.{Binding, ChatScope, ResumeToken}
+  alias LemonGateway.{BindingResolver, Config}
 
   setup do
     # Stop the app to reset state

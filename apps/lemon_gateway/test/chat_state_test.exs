@@ -2,7 +2,7 @@ defmodule LemonGateway.ChatStateTest do
   use ExUnit.Case, async: false
 
   alias LemonGateway.{ChatState, Store}
-  alias LemonGateway.Types.ChatScope
+  alias LemonCore.ChatScope
 
   setup do
     # Stop the app to reset state

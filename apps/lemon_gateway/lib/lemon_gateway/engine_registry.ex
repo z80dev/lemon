@@ -39,7 +39,7 @@ defmodule LemonGateway.EngineRegistry do
   Iterates all registered engines and calls extract_resume/1 on each until one returns
   a non-nil ResumeToken. Returns `{:ok, token}` if found, `:none` otherwise.
   """
-  @spec extract_resume(String.t()) :: {:ok, LemonGateway.Types.ResumeToken.t()} | :none
+  @spec extract_resume(String.t()) :: {:ok, LemonCore.ResumeToken.t()} | :none
   def extract_resume(text) do
     GenServer.call(__MODULE__, {:extract_resume, text})
   end
@@ -85,7 +85,7 @@ defmodule LemonGateway.EngineRegistry do
       state.order
       |> Enum.find_value(:none, fn mod ->
         case mod.extract_resume(text) do
-          %LemonGateway.Types.ResumeToken{} = token -> {:ok, token}
+          %LemonCore.ResumeToken{} = token -> {:ok, token}
           _ -> nil
         end
       end)

@@ -322,9 +322,9 @@ defmodule LemonGateway.ApplicationTest do
 
       # Store should be functional
       scope = {:test, 12345}
-      Elixir.LemonGateway.Store.put_chat_state(scope, %{test: true})
+      LemonCore.Store.put_chat_state(scope, %{test: true})
       Process.sleep(10)
-      state = Elixir.LemonGateway.Store.get_chat_state(scope)
+      state = LemonCore.Store.get_chat_state(scope)
       assert state.test == true
     end
 
@@ -694,7 +694,8 @@ defmodule LemonGateway.ApplicationTest do
       defmodule InvalidDefaultEngine do
         @behaviour Elixir.LemonGateway.Engine
 
-        alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+        alias LemonCore.ResumeToken
+        alias LemonGateway.Types.Job
 
         @impl true
         def id, do: "default"
@@ -729,7 +730,8 @@ defmodule LemonGateway.ApplicationTest do
       defmodule InvalidHelpEngine do
         @behaviour Elixir.LemonGateway.Engine
 
-        alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+        alias LemonCore.ResumeToken
+        alias LemonGateway.Types.Job
 
         @impl true
         def id, do: "help"
@@ -764,7 +766,8 @@ defmodule LemonGateway.ApplicationTest do
       defmodule UppercaseEngine do
         @behaviour Elixir.LemonGateway.Engine
 
-        alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+        alias LemonCore.ResumeToken
+        alias LemonGateway.Types.Job
 
         @impl true
         def id, do: "InvalidUppercase"
@@ -823,7 +826,8 @@ defmodule LemonGateway.ApplicationTest do
       defmodule BadEngine do
         @behaviour Elixir.LemonGateway.Engine
 
-        alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+        alias LemonCore.ResumeToken
+        alias LemonGateway.Types.Job
 
         @impl true
         def id, do: "default"
@@ -980,7 +984,7 @@ defmodule LemonGateway.ApplicationTest do
       assert is_pid(pid)
 
       # Should respond to calls
-      result = Elixir.LemonGateway.Store.get_chat_state({:test, 999})
+      result = LemonCore.Store.get_chat_state({:test, 999})
       assert result == nil
     end
 
@@ -1035,19 +1039,19 @@ defmodule LemonGateway.ApplicationTest do
       scope = {:integration_test, System.unique_integer()}
 
       # Write
-      Elixir.LemonGateway.Store.put_chat_state(scope, %{key: "value"})
+      LemonCore.Store.put_chat_state(scope, %{key: "value"})
       Process.sleep(10)
 
       # Read
-      state = Elixir.LemonGateway.Store.get_chat_state(scope)
+      state = LemonCore.Store.get_chat_state(scope)
       assert state.key == "value"
 
       # Delete
-      Elixir.LemonGateway.Store.delete_chat_state(scope)
+      LemonCore.Store.delete_chat_state(scope)
       Process.sleep(10)
 
       # Verify deleted
-      assert Elixir.LemonGateway.Store.get_chat_state(scope) == nil
+      assert LemonCore.Store.get_chat_state(scope) == nil
     end
 
     test "EngineLock provides mutual exclusion" do
@@ -1172,7 +1176,7 @@ defmodule LemonGateway.ApplicationTest do
       assert new_pid != original_pid
 
       # Should still be functional
-      result = Elixir.LemonGateway.Store.get_chat_state({:test, 1})
+      result = LemonCore.Store.get_chat_state({:test, 1})
       assert result == nil
     end
 

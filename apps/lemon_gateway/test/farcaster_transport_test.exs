@@ -4,7 +4,7 @@ defmodule LemonGateway.FarcasterTransportTest do
   import Plug.Conn
   import Plug.Test
 
-  alias LemonGateway.Store
+  alias LemonCore.Store
   alias LemonGateway.Transports.Farcaster.FrameServer
 
   @action_path "/frames/farcaster/actions"

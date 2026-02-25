@@ -9,9 +9,11 @@ defmodule LemonGateway.Transports.Email.Inbound do
 
   require Logger
 
-  alias LemonGateway.{BindingResolver, Runtime, Store}
+  alias LemonGateway.{BindingResolver, Runtime}
+  alias LemonCore.Store
   alias LemonGateway.Transports.Email
-  alias LemonGateway.Types.{ChatScope, Job}
+  alias LemonCore.ChatScope
+  alias LemonGateway.Types.Job
 
   @default_port 4045
   @default_path "/webhooks/email/inbound"

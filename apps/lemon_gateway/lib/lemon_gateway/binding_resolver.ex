@@ -1,23 +1,3 @@
-defmodule LemonGateway.Binding do
-  @moduledoc """
-  Struct representing a binding between a transport chat/topic and a project configuration.
-
-  Maps a transport, chat, and optional topic to a project, agent, default engine,
-  and queue mode used by `LemonGateway.BindingResolver` for scope resolution.
-  """
-  defstruct [:transport, :chat_id, :topic_id, :project, :agent_id, :default_engine, :queue_mode]
-
-  @type t :: %__MODULE__{
-          transport: atom(),
-          chat_id: integer(),
-          topic_id: integer() | nil,
-          project: String.t() | nil,
-          agent_id: String.t() | nil,
-          default_engine: String.t() | nil,
-          queue_mode: LemonGateway.Types.queue_mode() | nil
-        }
-end
-
 defmodule LemonGateway.BindingResolver do
   @moduledoc """
   Resolves bindings and settings for a given chat scope.
@@ -25,9 +5,8 @@ defmodule LemonGateway.BindingResolver do
   Bindings map transport/chat/topic combinations to projects, engines, and queue modes.
   """
 
-  alias LemonGateway.{Binding, Config, ConfigLoader}
-  alias LemonGateway.Store
-  alias LemonGateway.Types.ChatScope
+  alias LemonCore.{Binding, ChatScope, Store}
+  alias LemonGateway.{Config, ConfigLoader}
 
   @project_overrides_table :gateway_project_overrides
   @dynamic_projects_table :gateway_projects_dynamic

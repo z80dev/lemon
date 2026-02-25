@@ -21,7 +21,8 @@ defmodule LemonGateway.Engines.CodexEngineTest do
 
   alias Elixir.LemonGateway.Engines.Codex
   alias Elixir.LemonGateway.Engines.CliAdapter
-  alias Elixir.LemonGateway.Types.{ChatScope, Job}
+  alias LemonCore.ChatScope
+  alias LemonGateway.Types.Job
   alias Elixir.LemonGateway.Event
 
   alias AgentCore.CliRunners.Types.{
@@ -31,7 +32,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
     StartedEvent
   }
 
-  alias AgentCore.CliRunners.Types.ResumeToken, as: CoreResumeToken
+  alias LemonCore.ResumeToken, as: CoreResumeToken
 
   # ============================================================================
   # Engine Identity Tests
@@ -57,13 +58,13 @@ defmodule LemonGateway.Engines.CodexEngineTest do
 
   describe "format_resume/1" do
     test "formats resume token with codex resume syntax" do
-      token = %Elixir.LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_abc123"}
+      token = %LemonCore.ResumeToken{engine: "codex", value: "thread_abc123"}
       assert Codex.format_resume(token) == "codex resume thread_abc123"
     end
 
     test "formats token with various thread IDs" do
       for value <- ["thread_123", "thread-abc", "t_12345", "my_thread_id"] do
-        token = %Elixir.LemonGateway.Types.ResumeToken{engine: "codex", value: value}
+        token = %LemonCore.ResumeToken{engine: "codex", value: value}
         result = Codex.format_resume(token)
         assert String.contains?(result, value)
         assert String.contains?(result, "resume")
@@ -73,7 +74,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
     end
 
     test "preserves special characters in thread ID" do
-      token = %Elixir.LemonGateway.Types.ResumeToken{
+      token = %LemonCore.ResumeToken{
         engine: "codex",
         value: "thread_with-dashes_and_123"
       }
@@ -84,7 +85,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
 
     test "handles long thread IDs" do
       long_value = String.duplicate("x", 100)
-      token = %Elixir.LemonGateway.Types.ResumeToken{engine: "codex", value: long_value}
+      token = %LemonCore.ResumeToken{engine: "codex", value: long_value}
       result = Codex.format_resume(token)
       assert String.contains?(result, long_value)
     end
@@ -98,24 +99,24 @@ defmodule LemonGateway.Engines.CodexEngineTest do
     test "extracts token from plain text" do
       text = "codex resume thread_abc123"
 
-      assert %Elixir.LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_abc123"} =
+      assert %LemonCore.ResumeToken{engine: "codex", value: "thread_abc123"} =
                Codex.extract_resume(text)
     end
 
     test "extracts token from text with surrounding content" do
       text = "To continue, run codex resume thread_xyz789 in terminal"
-      assert %Elixir.LemonGateway.Types.ResumeToken{value: "thread_xyz789"} = Codex.extract_resume(text)
+      assert %LemonCore.ResumeToken{value: "thread_xyz789"} = Codex.extract_resume(text)
     end
 
     test "extracts token from backtick-wrapped text" do
       text = "`codex resume thread_abc`"
-      assert %Elixir.LemonGateway.Types.ResumeToken{value: "thread_abc"} = Codex.extract_resume(text)
+      assert %LemonCore.ResumeToken{value: "thread_abc"} = Codex.extract_resume(text)
     end
 
     test "extracts token case-insensitively" do
       text = "CODEX RESUME Thread123"
 
-      assert %Elixir.LemonGateway.Types.ResumeToken{engine: "codex", value: "Thread123"} =
+      assert %LemonCore.ResumeToken{engine: "codex", value: "Thread123"} =
                Codex.extract_resume(text)
     end
 
@@ -417,13 +418,13 @@ defmodule LemonGateway.Engines.CodexEngineTest do
 
   describe "CliAdapter.format_resume/2" do
     test "formats codex resume without --flag" do
-      token = %Elixir.LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_123"}
+      token = %LemonCore.ResumeToken{engine: "codex", value: "thread_123"}
       result = CliAdapter.format_resume("codex", token)
       assert result == "codex resume thread_123"
     end
 
     test "codex format differs from claude" do
-      token = %Elixir.LemonGateway.Types.ResumeToken{engine: "codex", value: "id_123"}
+      token = %LemonCore.ResumeToken{engine: "codex", value: "id_123"}
 
       codex_result = CliAdapter.format_resume("codex", token)
       refute String.contains?(codex_result, "--")
@@ -497,7 +498,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
 
     test "creates job with resume token" do
       session_key = "telegram:123"
-      resume = %Elixir.LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_abc"}
+      resume = %LemonCore.ResumeToken{engine: "codex", value: "thread_abc"}
 
       job = %Job{
         session_key: session_key,
@@ -553,7 +554,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
 
   describe "Event.Started struct for Codex" do
     test "requires engine and resume fields" do
-      resume = %Elixir.LemonGateway.Types.ResumeToken{engine: "codex", value: "t1"}
+      resume = %LemonCore.ResumeToken{engine: "codex", value: "t1"}
       started = %Event.Started{engine: "codex", resume: resume}
 
       assert started.engine == "codex"
@@ -561,7 +562,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
     end
 
     test "allows optional title and meta fields" do
-      resume = %Elixir.LemonGateway.Types.ResumeToken{engine: "codex", value: "t1"}
+      resume = %LemonCore.ResumeToken{engine: "codex", value: "t1"}
 
       started = %Event.Started{
         engine: "codex",
@@ -689,16 +690,16 @@ defmodule LemonGateway.Engines.CodexEngineTest do
   # ResumeToken Struct Tests (Gateway Types)
   # ============================================================================
 
-  describe "Elixir.LemonGateway.Types.ResumeToken struct" do
+  describe "LemonCore.ResumeToken struct" do
     test "creates token with engine and value" do
-      token = %Elixir.LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_123"}
+      token = %LemonCore.ResumeToken{engine: "codex", value: "thread_123"}
       assert token.engine == "codex"
       assert token.value == "thread_123"
     end
 
     test "enforces required keys" do
       assert_raise ArgumentError, fn ->
-        struct!(Elixir.LemonGateway.Types.ResumeToken, [])
+        struct!(LemonCore.ResumeToken, [])
       end
     end
   end
@@ -746,7 +747,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
 
   describe "integration patterns" do
     test "round-trip format and extract resume token" do
-      original = %Elixir.LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_roundtrip_123"}
+      original = %LemonCore.ResumeToken{engine: "codex", value: "thread_roundtrip_123"}
 
       formatted = Codex.format_resume(original)
       extracted = Codex.extract_resume(formatted)
@@ -756,7 +757,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
     end
 
     test "format_resume output is valid resume line" do
-      token = %Elixir.LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_test"}
+      token = %LemonCore.ResumeToken{engine: "codex", value: "thread_test"}
       formatted = Codex.format_resume(token)
 
       assert Codex.is_resume_line(formatted)
@@ -764,7 +765,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
 
     test "gateway event types are serializable" do
       # Test that event structs can be safely inspected (useful for logging)
-      resume = %Elixir.LemonGateway.Types.ResumeToken{engine: "codex", value: "t1"}
+      resume = %LemonCore.ResumeToken{engine: "codex", value: "t1"}
       started = %Event.Started{engine: "codex", resume: resume}
 
       # Should not raise
@@ -878,8 +879,8 @@ defmodule LemonGateway.Engines.CodexEngineTest do
     end
 
     test "codex and claude have different resume formats" do
-      codex_token = %Elixir.LemonGateway.Types.ResumeToken{engine: "codex", value: "id_123"}
-      claude_token = %Elixir.LemonGateway.Types.ResumeToken{engine: "claude", value: "id_123"}
+      codex_token = %LemonCore.ResumeToken{engine: "codex", value: "id_123"}
+      claude_token = %LemonCore.ResumeToken{engine: "claude", value: "id_123"}
 
       codex_format = Codex.format_resume(codex_token)
       claude_format = Elixir.LemonGateway.Engines.Claude.format_resume(claude_token)

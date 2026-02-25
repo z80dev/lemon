@@ -1,7 +1,8 @@
 defmodule LemonGateway.ConfigLoaderTest do
   use ExUnit.Case, async: false
 
-  alias LemonGateway.{Binding, ConfigLoader, Project}
+  alias LemonCore.Binding
+  alias LemonGateway.{ConfigLoader, Project}
   alias LemonGateway.Transports.Email.Outbound
 
   setup do

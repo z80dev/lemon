@@ -2,13 +2,14 @@ defmodule LemonGateway.EngineRegistryTest do
   use ExUnit.Case, async: false
 
   alias LemonGateway.EngineRegistry
-  alias LemonGateway.Types.ResumeToken
+  alias LemonCore.ResumeToken
 
   # Mock engine that matches "alpha resume XXX"
   defmodule AlphaEngine do
     @behaviour LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
 
     @impl true
     def id, do: "alpha"
@@ -41,7 +42,8 @@ defmodule LemonGateway.EngineRegistryTest do
   defmodule BetaEngine do
     @behaviour LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
 
     @impl true
     def id, do: "beta"
@@ -74,7 +76,8 @@ defmodule LemonGateway.EngineRegistryTest do
   defmodule GammaEngine do
     @behaviour LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
 
     @impl true
     def id, do: "gamma"
@@ -108,7 +111,8 @@ defmodule LemonGateway.EngineRegistryTest do
   defmodule DefaultEngine do
     @behaviour LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
 
     @impl true
     def id, do: "default"
@@ -136,7 +140,8 @@ defmodule LemonGateway.EngineRegistryTest do
   defmodule HelpEngine do
     @behaviour LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
 
     @impl true
     def id, do: "help"
@@ -164,7 +169,8 @@ defmodule LemonGateway.EngineRegistryTest do
   defmodule UppercaseIdEngine do
     @behaviour LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
 
     @impl true
     def id, do: "InvalidID"
@@ -192,7 +198,8 @@ defmodule LemonGateway.EngineRegistryTest do
   defmodule NumberStartIdEngine do
     @behaviour LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
 
     @impl true
     def id, do: "123engine"
@@ -220,7 +227,8 @@ defmodule LemonGateway.EngineRegistryTest do
   defmodule SpecialCharIdEngine do
     @behaviour LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
 
     @impl true
     def id, do: "engine@special"
@@ -248,7 +256,8 @@ defmodule LemonGateway.EngineRegistryTest do
   defmodule NoMatchEngine do
     @behaviour LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
 
     @impl true
     def id, do: "nomatch"
@@ -277,7 +286,8 @@ defmodule LemonGateway.EngineRegistryTest do
   defmodule DuplicateAlphaEngine do
     @behaviour LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
 
     @impl true
     def id, do: "alpha"

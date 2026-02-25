@@ -71,7 +71,7 @@ Bus event types: `:run_started`, `:run_completed`, `:delta`, `:engine_started`, 
 | `LemonGateway.Application` | OTP supervision tree startup |
 | `LemonGateway.Runtime` | Public API: `submit/1`, `cancel_by_run_id/2`, `cancel_by_progress_msg/2` |
 | `LemonGateway.Config` | TOML-backed runtime configuration (GenServer); default `max_concurrent_runs: 2` |
-| `LemonGateway.Store` | Gateway storage API (delegates to LemonCore.Store) |
+| `LemonCore.Store` | Storage API (ETS/JSONL/SQLite backends; chat state, runs, progress) |
 | `LemonGateway.ChatState` | Session state struct for auto-resume |
 | `LemonGateway.Binding` | Struct mapping transport/chat/topic to project, agent, engine, queue_mode |
 | `LemonGateway.BindingResolver` | Resolves engine, cwd, agent_id, queue_mode from a `ChatScope` |
@@ -91,7 +91,6 @@ Bus event types: `:run_started`, `:run_completed`, `:delta`, `:engine_started`, 
 | `LemonGateway.Transports.Voice` | Voice call transport |
 | `LemonGateway.Transports.Webhook` | Generic webhook receiver |
 | `LemonGateway.Transports.Farcaster` | Farcaster integration |
-| `LemonGateway.Transports.Xmtp` | XMTP stub - legacy removed; delegates status to `lemon_channels` adapter |
 
 **Note**: Telegram, Discord, and XMTP transports are implemented in the `lemon_channels` umbrella app. The `LemonGateway.Telegram.*` namespace contains Telegram-specific helpers used by `lemon_channels`.
 
@@ -606,7 +605,7 @@ iex --sname debug --cookie lemon_cookie --remsh lemon_gateway@hostname
 DynamicSupervisor.which_children(LemonGateway.ThreadWorkerSupervisor)
 
 # Get run history for session
-LemonGateway.Store.get_run_history("session_key", limit: 10)
+LemonCore.Store.get_run_history("session_key", limit: 10)
 
 # Check if a run is active
 Registry.lookup(LemonGateway.RunRegistry, "run_uuid")
@@ -700,7 +699,7 @@ DynamicSupervisor.which_children(LemonGateway.ThreadWorkerSupervisor)
 
 **XMTP health check failing**:
 - XMTP transport is handled by `lemon_channels`, not gateway
-- Check health via `LemonGateway.Transports.Xmtp.status()`
+- Check health via `LemonChannels.Adapters.Xmtp.Transport.status()`
 
 **Context overflow**:
 - Run automatically clears `ChatState` on context-length errors

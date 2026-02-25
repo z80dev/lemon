@@ -10,14 +10,16 @@ defmodule LemonGateway.RunTransportAgnosticTest do
   use ExUnit.Case, async: false
 
   alias LemonGateway.Run
-  alias LemonGateway.Types.{Job, ResumeToken}
+  alias LemonCore.ResumeToken
+  alias LemonGateway.Types.Job
   alias LemonGateway.Event
 
   # Test engine that sends deltas
   defmodule DeltaEngine do
     @behaviour LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
     alias LemonGateway.Event
 
     @impl true

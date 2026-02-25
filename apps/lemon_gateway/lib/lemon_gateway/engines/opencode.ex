@@ -8,7 +8,7 @@ defmodule LemonGateway.Engines.Opencode do
   @behaviour LemonGateway.Engine
 
   alias LemonGateway.Engines.CliAdapter
-  alias LemonGateway.Types.ResumeToken
+  alias LemonCore.ResumeToken
 
   @impl true
   def id, do: "opencode"

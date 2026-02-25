@@ -7,9 +7,11 @@ defmodule LemonGateway.Transports.Farcaster.CastHandler do
 
   require Logger
 
-  alias LemonGateway.{BindingResolver, Runtime, Store}
+  alias LemonGateway.{BindingResolver, Runtime}
+  alias LemonCore.Store
   alias LemonGateway.Transports.Farcaster.HubClient
-  alias LemonGateway.Types.{ChatScope, Job}
+  alias LemonCore.ChatScope
+  alias LemonGateway.Types.Job
   alias LemonCore.SessionKey
 
   @default_action_path "/frames/farcaster/actions"

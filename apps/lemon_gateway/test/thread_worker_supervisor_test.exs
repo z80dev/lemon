@@ -29,7 +29,8 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
   defmodule LemonGateway.ThreadWorkerSupervisorTest.TestEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
     alias Elixir.LemonGateway.Event
 
     @impl true

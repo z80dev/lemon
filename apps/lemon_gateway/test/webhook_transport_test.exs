@@ -1,7 +1,7 @@
 defmodule LemonGateway.WebhookTransportTest do
   use ExUnit.Case, async: false
 
-  alias LemonGateway.Store
+  alias LemonCore.Store
   alias LemonGateway.Transports.Webhook
   alias Plug.Conn
   alias Plug.Test

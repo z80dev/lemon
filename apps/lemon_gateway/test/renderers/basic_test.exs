@@ -4,7 +4,7 @@ defmodule LemonGateway.Renderers.BasicTest do
 
   alias Elixir.LemonGateway.Renderers.Basic
   alias Elixir.LemonGateway.Event.{Started, Completed}
-  alias Elixir.LemonGateway.Types.ResumeToken
+  alias LemonCore.ResumeToken
 
   defmodule LemonGateway.Renderers.BasicTest.TestEngine do
     def format_resume(%ResumeToken{value: value}), do: "test resume #{value}"

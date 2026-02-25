@@ -7,7 +7,7 @@ defmodule LemonGateway.Transports.Email.Outbound do
 
   require Logger
 
-  alias LemonGateway.Store
+  alias LemonCore.Store
   alias LemonGateway.Transports.Email
   alias LemonGateway.Types.Job
 

@@ -13,7 +13,8 @@ defmodule LemonGateway.ThreadWorkerTest do
   defmodule Elixir.LemonGateway.ThreadWorkerTest.SlowEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -66,7 +67,8 @@ defmodule LemonGateway.ThreadWorkerTest do
   defmodule CancellableEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -128,7 +130,8 @@ defmodule LemonGateway.ThreadWorkerTest do
   defmodule SteerableEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -1304,7 +1307,7 @@ defmodule LemonGateway.ThreadWorkerTest do
 
     test "preserves other job fields during merge" do
       scope = make_scope()
-      resume = %Elixir.LemonGateway.Types.ResumeToken{engine: "test", value: "123"}
+      resume = %LemonCore.ResumeToken{engine: "test", value: "123"}
 
       first_job = %Job{
         session_key: scope,

@@ -1,7 +1,7 @@
 defmodule LemonGateway.CancelFlowTest do
   use ExUnit.Case
 
-  alias LemonGateway.Types.ChatScope
+  alias LemonCore.ChatScope
 
   test "cancel by progress message stops run" do
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
@@ -25,7 +25,7 @@ defmodule LemonGateway.CancelFlowTest do
 
     assert_receive :registered, 1_000
 
-    LemonGateway.Store.put_progress_mapping(scope, 1001, run_id)
+    LemonCore.Store.put_progress_mapping(scope, 1001, run_id)
 
     :ok = LemonGateway.Runtime.cancel_by_progress_msg(scope, 1001)
 

@@ -13,7 +13,6 @@ defmodule LemonGateway.Application do
     children =
       [
         LemonGateway.Config,
-        LemonGateway.Telegram.StartupNotifier,
         LemonGateway.EngineRegistry,
         LemonGateway.TransportRegistry,
         LemonGateway.TransportSupervisor,

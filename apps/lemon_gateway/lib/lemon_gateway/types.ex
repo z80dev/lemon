@@ -2,35 +2,12 @@ defmodule LemonGateway.Types do
   @moduledoc """
   Core type definitions for the LemonGateway domain.
 
-  Defines the foundational structs and types used throughout the gateway:
-  `Job`, `ChatScope`, and `ResumeToken`.
+  Defines the foundational types used throughout the gateway.
+  `ChatScope`, `ResumeToken`, and `Binding` have been consolidated
+  into `LemonCore` as canonical types.
   """
 
   @type engine_id :: String.t()
-
-  defmodule ResumeToken do
-    @moduledoc """
-    Token for resuming a conversation session with an engine.
-
-    Contains the engine identifier and an opaque value that the engine
-    uses to restore conversation context.
-    """
-    @enforce_keys [:engine, :value]
-    defstruct [:engine, :value]
-
-    @type t :: %__MODULE__{engine: LemonGateway.Types.engine_id(), value: String.t()}
-  end
-
-  defmodule ChatScope do
-    @moduledoc """
-    Transport-specific chat identification.
-    """
-    @enforce_keys [:transport, :chat_id]
-    defstruct [:transport, :chat_id, :topic_id]
-
-    @type t :: %__MODULE__{transport: atom(), chat_id: integer(), topic_id: integer() | nil}
-  end
-
   @type queue_mode :: :collect | :followup | :steer | :steer_backlog | :interrupt
   @type lane :: :main | :subagent | :background_exec
 
@@ -71,7 +48,7 @@ defmodule LemonGateway.Types do
             prompt: String.t() | nil,
             engine_id: LemonGateway.Types.engine_id() | nil,
             cwd: String.t() | nil,
-            resume: LemonGateway.Types.ResumeToken.t() | nil,
+            resume: LemonCore.ResumeToken.t() | nil,
             queue_mode: LemonGateway.Types.queue_mode(),
             lane: LemonGateway.Types.lane() | nil,
             tool_policy: map() | nil,
