@@ -2,7 +2,7 @@
 
 **Status:** In Progress
 **Created:** 2026-02-22
-**Owner:** codex
+**Owner:** janitor
 **Reviewer:** codex
 
 ## Goal
@@ -75,7 +75,7 @@ The existing `clients` job covers:
 - [x] **M4** — Add dependency audit steps to CI for all three client roots
 - [x] **M5** — Add vitest.config.ts to lemon-tui and lemon-browser-node
 - [x] **M6** — Align ws dependency version in lemon-web/server (^8.17.1 -> ^8.18.0)
-- [ ] **M7** — Add ESLint config to lemon-tui and lemon-browser-node (future: requires npm install of eslint + typescript-eslint)
+- [x] **M7** — Add ESLint config to lemon-tui and lemon-browser-node
 - [ ] **M8** — Resolve lemon-web security vulnerabilities (ajv fix, eslint upgrade for minimatch)
 - [ ] **M9** — Add test coverage for lemon-web/server
 - [ ] **M10** — Align @types/node and vitest versions across all packages
@@ -89,7 +89,7 @@ The existing `clients` job covers:
 - [x] lemon-tui typecheck passes cleanly
 - [x] All existing tests continue to pass
 - [ ] No high-severity vulnerabilities in production dependencies
-- [ ] ESLint runs for all TypeScript client packages
+- [x] ESLint runs for all TypeScript client packages
 - [ ] Shared dependency versions are aligned across packages
 
 ## Dependency Governance Recommendations
@@ -141,19 +141,29 @@ The TS2749 fix on line 75 uses the idiom `type MockWebSocket = InstanceType<type
 
 ---
 
-## M7-M11 Assessment (2026-02-22)
+## M7-M11 Assessment (updated 2026-02-25)
 
 ### M7 — ESLint config for lemon-tui and lemon-browser-node
 
-**Status: Future — requires npm install**
+**Status: Complete (2026-02-25)**
 
-Neither package currently has eslint or typescript-eslint as a devDependency. Adding an eslint config without first running `npm install` to add the packages would produce a broken config that CI cannot execute. The `lemon-web/web` package uses the flat config format (eslint v9, `eslint.config.js`), which is the correct target format.
+Implemented flat-config ESLint in both TypeScript packages and wired lint into CI.
 
-**Required work (out of scope for this workspace):**
-1. `npm install --save-dev eslint typescript-eslint` in both `clients/lemon-tui` and `clients/lemon-browser-node`
-2. Add `eslint.config.js` (flat config, matching `lemon-web/web` pattern)
-3. Add `"lint": "eslint ."` script to each `package.json`
-4. Add lint steps to the CI workflow after typecheck steps
+**Changes completed:**
+1. Added devDependencies in both packages:
+   - `eslint`
+   - `@eslint/js`
+   - `typescript-eslint`
+   - `globals`
+2. Added `eslint.config.js` to:
+   - `clients/lemon-tui/`
+   - `clients/lemon-browser-node/`
+3. Added `"lint": "eslint ."` script to both `package.json` files
+4. Updated `.github/workflows/quality.yml` clients job:
+   - `lemon-tui lint` step after typecheck
+   - `lemon-browser-node lint` step after typecheck
+
+This closes the prior M7 blocker that required npm install + lockfile updates.
 
 ### M8 — Resolve lemon-web security vulnerabilities
 
@@ -224,4 +234,5 @@ This is a significant structural change that would affect the CI workflow (singl
 | 2026-02-22T21:45 | M5 | Added vitest.config.ts to lemon-tui and lemon-browser-node |
 | 2026-02-22T21:45 | M6 | Aligned ws version in lemon-web/server from ^8.17.1 to ^8.18.0 |
 | 2026-02-22 | Validation | Agent validated all M1-M6 changes: quality.yml structure correct, vitest configs valid, TS2749 fix correct, ws version aligned, Elixir compile clean |
-| 2026-02-22 | M7-M11 | Assessed remaining milestones: M7/M9/M11 deferred (require npm install or architectural decisions); M8 documented (upstream transitive deps, non-blocking); M10 alignment targets documented |
+| 2026-02-25 | M7 | Added ESLint flat-config + lint scripts for lemon-tui and lemon-browser-node; wired both lint steps into clients CI job |
+| 2026-02-25 | Validation | `npm run lint`, `npm run typecheck`, and `npm test` pass for both lemon-tui and lemon-browser-node; `mix test apps/lemon_services/test` passes |

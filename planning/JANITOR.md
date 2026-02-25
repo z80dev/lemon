@@ -205,3 +205,28 @@ Completed M8 and moved the plan to `ready_to_land`.
 - `docs/catalog.exs`
 - `planning/plans/PLN-20260224-runtime-hot-reload.md`
 - `planning/INDEX.md`
+
+#### 8. Debt Phase 13 - M7 ESLint Parity for TS Clients
+**Plan:** PLN-20260222-debt-phase-13-client-ci-parity-governance  
+**Status:** in_progress (M7 complete)
+
+Completed M7 by adding ESLint parity for `lemon-tui` and `lemon-browser-node`.
+
+**Changes:**
+- Added flat ESLint configs:
+  - `clients/lemon-tui/eslint.config.js`
+  - `clients/lemon-browser-node/eslint.config.js`
+- Added lint scripts to package manifests:
+  - `clients/lemon-tui/package.json` (`"lint": "eslint ."`)
+  - `clients/lemon-browser-node/package.json` (`"lint": "eslint ."`)
+- Installed and locked lint dependencies in both package lockfiles:
+  - `eslint`, `@eslint/js`, `typescript-eslint`, `globals`
+- Updated CI workflow (`.github/workflows/quality.yml`):
+  - Added `lemon-tui lint` step after typecheck
+  - Added `lemon-browser-node lint` step after typecheck
+
+**Validation:**
+- `cd clients/lemon-tui && npm run lint && npm run typecheck && npm run build && npm test` ✅
+- `cd clients/lemon-browser-node && npm run lint && npm run typecheck && npm run build && npm test` ✅
+- `mix test apps/lemon_services/test` ✅ (14 tests)
+- `mix test --max-failures 1` attempted; run was interrupted in this environment before completion.

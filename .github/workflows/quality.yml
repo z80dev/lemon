@@ -147,6 +147,10 @@ jobs:
         working-directory: clients/lemon-tui
         run: npm run typecheck
 
+      - name: lemon-tui lint
+        working-directory: clients/lemon-tui
+        run: npm run lint
+
       - name: lemon-tui build
         working-directory: clients/lemon-tui
         run: npm run build
@@ -167,6 +171,10 @@ jobs:
       - name: lemon-browser-node typecheck
         working-directory: clients/lemon-browser-node
         run: npm run typecheck
+
+      - name: lemon-browser-node lint
+        working-directory: clients/lemon-browser-node
+        run: npm run lint
 
       - name: lemon-browser-node build
         working-directory: clients/lemon-browser-node
