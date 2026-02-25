@@ -94,7 +94,8 @@ defmodule AgentCore.CliRunners.CodexSubagent do
   """
 
   alias AgentCore.CliRunners.CodexRunner
-  alias AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
+  alias AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCore.ResumeToken
 
   require Logger
 

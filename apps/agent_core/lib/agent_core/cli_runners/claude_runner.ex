@@ -68,7 +68,8 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
     ToolUseBlock
   }
 
-  alias AgentCore.CliRunners.Types.{EventFactory, ResumeToken}
+  alias AgentCore.CliRunners.Types.EventFactory
+  alias LemonCore.ResumeToken
   alias AgentCore.CliRunners.ToolActionHelpers
   alias LemonCore.Config, as: LemonConfig
   alias LemonCore.Introspection

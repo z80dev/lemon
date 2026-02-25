@@ -59,7 +59,8 @@ defmodule AgentCore.CliRunners.ClaudeSubagent do
   """
 
   alias AgentCore.CliRunners.ClaudeRunner
-  alias AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
+  alias AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCore.ResumeToken
 
   require Logger
 

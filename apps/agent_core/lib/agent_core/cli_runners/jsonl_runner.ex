@@ -59,7 +59,8 @@ defmodule AgentCore.CliRunners.JsonlRunner do
 
   require Logger
 
-  alias AgentCore.CliRunners.Types.{Action, ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
+  alias AgentCore.CliRunners.Types.{Action, ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCore.ResumeToken
   alias LemonCore.Introspection
 
   # `:exit_status` messages can arrive before trailing stdout `:data` chunks.
@@ -164,7 +165,7 @@ defmodule AgentCore.CliRunners.JsonlRunner do
       require Logger
 
       alias AgentCore.CliRunners.JsonlRunner
-      alias AgentCore.CliRunners.Types.ResumeToken
+      alias LemonCore.ResumeToken
 
       # Default implementations
 

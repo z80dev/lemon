@@ -2,7 +2,7 @@ defmodule AgentCore.CliRunners.CodexSubagentTest do
   use ExUnit.Case, async: true
 
   alias AgentCore.CliRunners.CodexSubagent
-  alias AgentCore.CliRunners.Types.ResumeToken
+  alias LemonCore.ResumeToken
 
   describe "start/1" do
     test "returns error without codex installed" do

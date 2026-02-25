@@ -4,7 +4,8 @@ defmodule AgentCore.CliRunners.PiSubagent do
   """
 
   alias AgentCore.CliRunners.PiRunner
-  alias AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
+  alias AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCore.ResumeToken
 
   @typedoc "A Pi subagent session"
   @type session :: %{

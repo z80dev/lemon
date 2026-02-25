@@ -12,7 +12,8 @@ defmodule AgentCore.CliRunners.OpencodeRunner do
   alias AgentCore.CliRunners.OpencodeSchema
   alias AgentCore.CliRunners.OpencodeSchema.{Error, StepFinish, StepStart, Text, ToolUse, Unknown}
   alias AgentCore.CliRunners.ToolActionHelpers
-  alias AgentCore.CliRunners.Types.{EventFactory, ResumeToken}
+  alias AgentCore.CliRunners.Types.EventFactory
+  alias LemonCore.ResumeToken
   alias LemonCore.Config, as: LemonConfig
   alias LemonCore.Introspection
 
