@@ -61,6 +61,7 @@ pub struct ToolCapabilitiesSummary {
     pub tool_invoke: bool,
     pub secrets: bool,
     pub auth: bool,
+    pub exec: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

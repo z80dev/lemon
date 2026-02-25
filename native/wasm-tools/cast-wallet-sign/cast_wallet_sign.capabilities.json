@@ -1,0 +1,27 @@
+{
+  "exec": {
+    "allowlist": [
+      {
+        "program": "cast",
+        "allowed_subcommands": ["wallet"],
+        "blocked_flags": ["--interactive"]
+      }
+    ],
+    "credentials": {
+      "signing_key": {
+        "secret_name": "ETH_PRIVATE_KEY",
+        "injection": { "type": "arg", "flag": "--private-key" }
+      }
+    },
+    "rate_limit": { "requests_per_minute": 20, "requests_per_hour": 200 }
+  },
+  "secrets": {
+    "allowed_names": ["ETH_PRIVATE_KEY", "ETH_*", "DEPLOYER_*"]
+  },
+  "auth": {
+    "secret_name": "ETH_PRIVATE_KEY",
+    "display_name": "Ethereum Private Key",
+    "instructions": "Provide your Ethereum private key (hex, with or without 0x prefix)",
+    "env_var": "ETH_PRIVATE_KEY"
+  }
+}

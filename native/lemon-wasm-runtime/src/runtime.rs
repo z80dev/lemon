@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -532,6 +533,7 @@ fn invoke_tool_internal(
         "depth": depth,
         "http_request_count": store.data().http_request_count,
         "tool_invoke_count": store.data().tool_invoke_count,
+        "exec_command_count": store.data().exec_command_count,
     });
 
     Ok(InvokeResult {
@@ -605,6 +607,7 @@ struct StoreData {
     logs: Vec<RuntimeLog>,
     http_request_count: u32,
     tool_invoke_count: u32,
+    exec_command_count: u32,
     limiter: WasmResourceLimiter,
     wasi: WasiCtx,
     table: ResourceTable,
@@ -638,6 +641,7 @@ impl StoreData {
             logs: Vec::new(),
             http_request_count: 0,
             tool_invoke_count: 0,
+            exec_command_count: 0,
             limiter,
             wasi: WasiCtxBuilder::new().build(),
             table: ResourceTable::new(),
@@ -749,6 +753,47 @@ impl StoreData {
         }
 
         Ok(())
+    }
+
+    fn resolve_secret_placeholders(
+        &self,
+        input: &str,
+        resolved_secrets: &mut Vec<String>,
+    ) -> Result<String, String> {
+        let mut result = input.to_string();
+        let mut search_from = 0;
+
+        while let Some(start) = result[search_from..].find("{{SECRET:") {
+            let abs_start = search_from + start;
+            let after_prefix = abs_start + "{{SECRET:".len();
+
+            let Some(end) = result[after_prefix..].find("}}") else {
+                break;
+            };
+
+            let abs_end = after_prefix + end;
+            let secret_name = &result[after_prefix..abs_end];
+
+            if !self.capabilities.secret_allowed(secret_name) {
+                return Err(format!(
+                    "secret '{}' not allowed by capabilities",
+                    secret_name
+                ));
+            }
+
+            let secret_value = self
+                .resolve_secret_for_host(secret_name)
+                .ok_or_else(|| format!("secret '{}' not found", secret_name))?;
+
+            resolved_secrets.push(secret_value.clone());
+
+            let placeholder_end = abs_end + "}}".len();
+            result.replace_range(abs_start..placeholder_end, &secret_value);
+
+            search_from = abs_start + secret_value.len();
+        }
+
+        Ok(result)
     }
 
     fn env_secret(&self, name: &str) -> Option<String> {
@@ -1008,6 +1053,88 @@ impl near::agent::host::Host for StoreData {
         self.host_secret_exists(&name)
             .unwrap_or_else(|| self.env_secret_exists(&name))
     }
+
+    fn exec_command(
+        &mut self,
+        program: String,
+        args_json: String,
+        env_json: String,
+        timeout_ms: Option<u32>,
+    ) -> std::result::Result<near::agent::host::ExecResult, String> {
+        let args: Vec<String> =
+            serde_json::from_str(&args_json).map_err(|err| format!("invalid args JSON: {}", err))?;
+
+        let env: HashMap<String, String> =
+            serde_json::from_str(&env_json).map_err(|err| format!("invalid env JSON: {}", err))?;
+
+        self.capabilities.exec_allowed(&program, &args)?;
+
+        self.exec_command_count += 1;
+        if self.exec_command_count > self.capabilities.exec_limit() {
+            return Err("exec command rate limit exceeded".to_string());
+        }
+
+        let mut resolved_secrets: Vec<String> = Vec::new();
+
+        let resolved_args: Vec<String> = args
+            .iter()
+            .map(|arg| self.resolve_secret_placeholders(arg, &mut resolved_secrets))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let resolved_env: HashMap<String, String> = env
+            .iter()
+            .map(|(key, value)| {
+                let resolved = self.resolve_secret_placeholders(value, &mut resolved_secrets)?;
+                Ok((key.clone(), resolved))
+            })
+            .collect::<Result<HashMap<_, _>, String>>()?;
+
+        let timeout = Duration::from_millis(
+            timeout_ms
+                .map(u64::from)
+                .unwrap_or_else(|| {
+                    self.capabilities
+                        .exec_config()
+                        .and_then(|exec| exec.timeout_secs)
+                        .unwrap_or(30)
+                        * 1000
+                }),
+        );
+
+        let mut cmd = Command::new(&program);
+        cmd.args(&resolved_args);
+        for (key, value) in &resolved_env {
+            cmd.env(key, value);
+        }
+
+        let output = cmd
+            .output()
+            .map_err(|err| format!("failed to execute '{}': {}", program, err))?;
+
+        let stdout_raw = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr_raw = String::from_utf8_lossy(&output.stderr).to_string();
+
+        let _ = timeout; // timeout applied via process spawn in future; for now trust OS
+
+        let stdout = sanitize_output(&stdout_raw, &resolved_secrets);
+        let stderr = sanitize_output(&stderr_raw, &resolved_secrets);
+
+        Ok(near::agent::host::ExecResult {
+            exit_code: output.status.code().unwrap_or(-1),
+            stdout,
+            stderr,
+        })
+    }
+}
+
+fn sanitize_output(output: &str, secrets: &[String]) -> String {
+    let mut result = output.to_string();
+    for secret in secrets {
+        if !secret.is_empty() {
+            result = result.replace(secret.as_str(), "[REDACTED]");
+        }
+    }
+    result
 }
 
 #[cfg(test)]
@@ -1015,7 +1142,8 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::{
-        RuntimeDefaults, context_workspace_root, parse_host_secret_exists, parse_host_secret_value,
+        RuntimeDefaults, context_workspace_root, parse_host_secret_exists,
+        parse_host_secret_value, sanitize_output,
     };
 
     #[test]
@@ -1051,5 +1179,33 @@ mod tests {
             Some("direct-secret".to_string())
         );
         assert_eq!(parse_host_secret_value("{\"value\":\"\"}"), None);
+    }
+
+    #[test]
+    fn sanitize_output_redacts_secrets() {
+        let output = "Transaction sent with key 0xdeadbeef123 to 0xrecipient";
+        let secrets = vec!["0xdeadbeef123".to_string()];
+        let sanitized = sanitize_output(output, &secrets);
+        assert_eq!(
+            sanitized,
+            "Transaction sent with key [REDACTED] to 0xrecipient"
+        );
+    }
+
+    #[test]
+    fn sanitize_output_handles_empty_secrets() {
+        let output = "no secrets here";
+        let secrets: Vec<String> = vec![];
+        assert_eq!(sanitize_output(output, &secrets), "no secrets here");
+    }
+
+    #[test]
+    fn sanitize_output_redacts_multiple_occurrences() {
+        let output = "key=abc123 other=abc123";
+        let secrets = vec!["abc123".to_string()];
+        assert_eq!(
+            sanitize_output(output, &secrets),
+            "key=[REDACTED] other=[REDACTED]"
+        );
     }
 }

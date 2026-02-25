@@ -1,0 +1,12 @@
+{
+  "exec": {
+    "allowlist": [
+      {
+        "program": "cast",
+        "allowed_subcommands": ["call"],
+        "blocked_flags": ["--interactive"]
+      }
+    ],
+    "rate_limit": { "requests_per_minute": 30, "requests_per_hour": 500 }
+  }
+}
