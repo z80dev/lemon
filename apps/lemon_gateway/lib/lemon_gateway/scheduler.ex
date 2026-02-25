@@ -10,8 +10,10 @@ defmodule LemonGateway.Scheduler do
   require Logger
 
   alias LemonCore.Introspection
-  alias LemonGateway.{ChatState, Config, Store}
-  alias LemonGateway.Types.{Job, ResumeToken}
+  alias LemonGateway.{ChatState, Config}
+  alias LemonCore.Store
+  alias LemonCore.ResumeToken
+  alias LemonGateway.Types.Job
 
   # Timeout for slot requests - workers should not wait forever
   @slot_request_timeout_ms 30_000

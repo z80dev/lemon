@@ -10,7 +10,8 @@ defmodule LemonGateway.Transports.Webhook do
 
   require Logger
 
-  alias LemonGateway.{Runtime, Store}
+  alias LemonGateway.Runtime
+  alias LemonCore.Store
   alias LemonGateway.Types.Job
   alias LemonCore.{Id, SessionKey}
 

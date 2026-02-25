@@ -30,7 +30,7 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
     StartedEvent
   }
 
-  alias AgentCore.CliRunners.Types.ResumeToken, as: CoreResumeToken
+  alias LemonCore.ResumeToken, as: CoreResumeToken
 
   # ============================================================================
   # Engine Identity Tests
@@ -56,13 +56,13 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
 
   describe "format_resume/1" do
     test "formats resume token with claude --resume syntax" do
-      token = %LemonGateway.Types.ResumeToken{engine: "claude", value: "sess_abc123"}
+      token = %LemonCore.ResumeToken{engine: "claude", value: "sess_abc123"}
       assert Claude.format_resume(token) == "claude --resume sess_abc123"
     end
 
     test "formats token with various session IDs" do
       for value <- ["sess_123", "session_abc", "s-12345", "my_session_id"] do
-        token = %LemonGateway.Types.ResumeToken{engine: "claude", value: value}
+        token = %LemonCore.ResumeToken{engine: "claude", value: value}
         result = Claude.format_resume(token)
         assert String.contains?(result, value)
         assert String.contains?(result, "--resume")
@@ -70,14 +70,14 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
     end
 
     test "preserves special characters in session ID" do
-      token = %LemonGateway.Types.ResumeToken{engine: "claude", value: "sess_with-dashes_and_123"}
+      token = %LemonCore.ResumeToken{engine: "claude", value: "sess_with-dashes_and_123"}
       result = Claude.format_resume(token)
       assert result == "claude --resume sess_with-dashes_and_123"
     end
 
     test "handles long session IDs" do
       long_value = String.duplicate("x", 100)
-      token = %LemonGateway.Types.ResumeToken{engine: "claude", value: long_value}
+      token = %LemonCore.ResumeToken{engine: "claude", value: long_value}
       result = Claude.format_resume(token)
       assert String.contains?(result, long_value)
     end
@@ -91,24 +91,24 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
     test "extracts token from plain text" do
       text = "claude --resume sess_abc123"
 
-      assert %LemonGateway.Types.ResumeToken{engine: "claude", value: "sess_abc123"} =
+      assert %LemonCore.ResumeToken{engine: "claude", value: "sess_abc123"} =
                Claude.extract_resume(text)
     end
 
     test "extracts token from text with surrounding content" do
       text = "To continue, run claude --resume sess_xyz789 in terminal"
-      assert %LemonGateway.Types.ResumeToken{value: "sess_xyz789"} = Claude.extract_resume(text)
+      assert %LemonCore.ResumeToken{value: "sess_xyz789"} = Claude.extract_resume(text)
     end
 
     test "extracts token from backtick-wrapped text" do
       text = "`claude --resume session_abc`"
-      assert %LemonGateway.Types.ResumeToken{value: "session_abc"} = Claude.extract_resume(text)
+      assert %LemonCore.ResumeToken{value: "session_abc"} = Claude.extract_resume(text)
     end
 
     test "extracts token case-insensitively" do
       text = "CLAUDE --RESUME Session123"
 
-      assert %LemonGateway.Types.ResumeToken{engine: "claude", value: "Session123"} =
+      assert %LemonCore.ResumeToken{engine: "claude", value: "Session123"} =
                Claude.extract_resume(text)
     end
 
@@ -388,19 +388,19 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
 
   describe "CliAdapter.format_resume/2" do
     test "formats claude resume with --resume flag" do
-      token = %LemonGateway.Types.ResumeToken{engine: "claude", value: "sess_123"}
+      token = %LemonCore.ResumeToken{engine: "claude", value: "sess_123"}
       result = CliAdapter.format_resume("claude", token)
       assert result == "claude --resume sess_123"
     end
 
     test "formats codex resume differently" do
-      token = %LemonGateway.Types.ResumeToken{engine: "codex", value: "thread_123"}
+      token = %LemonCore.ResumeToken{engine: "codex", value: "thread_123"}
       result = CliAdapter.format_resume("codex", token)
       assert result == "codex resume thread_123"
     end
 
     test "formats generic engine resume" do
-      token = %LemonGateway.Types.ResumeToken{engine: "other", value: "id_123"}
+      token = %LemonCore.ResumeToken{engine: "other", value: "id_123"}
       result = CliAdapter.format_resume("other", token)
       assert result == "other resume id_123"
     end
@@ -472,7 +472,7 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
 
     test "creates job with resume token" do
       session_key = "telegram:123"
-      resume = %LemonGateway.Types.ResumeToken{engine: "claude", value: "sess_abc"}
+      resume = %LemonCore.ResumeToken{engine: "claude", value: "sess_abc"}
 
       job = %Job{
         session_key: session_key,
@@ -530,7 +530,7 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
 
   describe "Event.Started struct" do
     test "requires engine and resume fields" do
-      resume = %LemonGateway.Types.ResumeToken{engine: "claude", value: "s1"}
+      resume = %LemonCore.ResumeToken{engine: "claude", value: "s1"}
       started = %Event.Started{engine: "claude", resume: resume}
 
       assert started.engine == "claude"
@@ -538,7 +538,7 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
     end
 
     test "allows optional title and meta fields" do
-      resume = %LemonGateway.Types.ResumeToken{engine: "claude", value: "s1"}
+      resume = %LemonCore.ResumeToken{engine: "claude", value: "s1"}
 
       started = %Event.Started{
         engine: "claude",
@@ -646,16 +646,16 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
   # ResumeToken Struct Tests (Gateway Types)
   # ============================================================================
 
-  describe "LemonGateway.Types.ResumeToken struct" do
+  describe "LemonCore.ResumeToken struct" do
     test "creates token with engine and value" do
-      token = %LemonGateway.Types.ResumeToken{engine: "claude", value: "sess_123"}
+      token = %LemonCore.ResumeToken{engine: "claude", value: "sess_123"}
       assert token.engine == "claude"
       assert token.value == "sess_123"
     end
 
     test "enforces required keys" do
       assert_raise ArgumentError, fn ->
-        struct!(LemonGateway.Types.ResumeToken, [])
+        struct!(LemonCore.ResumeToken, [])
       end
     end
   end
@@ -703,7 +703,7 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
 
   describe "integration patterns" do
     test "round-trip format and extract resume token" do
-      original = %LemonGateway.Types.ResumeToken{engine: "claude", value: "sess_roundtrip_123"}
+      original = %LemonCore.ResumeToken{engine: "claude", value: "sess_roundtrip_123"}
 
       formatted = Claude.format_resume(original)
       extracted = Claude.extract_resume(formatted)
@@ -713,7 +713,7 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
     end
 
     test "format_resume output is valid resume line" do
-      token = %LemonGateway.Types.ResumeToken{engine: "claude", value: "sess_test"}
+      token = %LemonCore.ResumeToken{engine: "claude", value: "sess_test"}
       formatted = Claude.format_resume(token)
 
       assert Claude.is_resume_line(formatted)
@@ -721,7 +721,7 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
 
     test "gateway event types are serializable" do
       # Test that event structs can be safely inspected (useful for logging)
-      resume = %LemonGateway.Types.ResumeToken{engine: "claude", value: "s1"}
+      resume = %LemonCore.ResumeToken{engine: "claude", value: "s1"}
       started = %Event.Started{engine: "claude", resume: resume}
 
       # Should not raise

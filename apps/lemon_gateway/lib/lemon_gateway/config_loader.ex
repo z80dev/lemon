@@ -3,7 +3,8 @@ defmodule LemonGateway.ConfigLoader do
   Loads gateway configuration from the canonical Lemon TOML config.
   """
 
-  alias LemonGateway.{Binding, Project}
+  alias LemonCore.Binding
+  alias LemonGateway.Project
   alias LemonCore.Config, as: LemonConfig
 
   @spec load() :: map()

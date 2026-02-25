@@ -11,7 +11,7 @@ defmodule LemonGateway.CliAdapterClaudeTest do
 
   alias LemonGateway.Engines.CliAdapter
   alias LemonGateway.Event
-  alias LemonGateway.Types.ResumeToken, as: GatewayToken
+  alias LemonCore.ResumeToken, as: GatewayToken
 
   test "maps claude started/completed events" do
     token = ResumeToken.new("claude", "sess_abc")

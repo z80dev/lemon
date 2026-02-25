@@ -7,7 +7,8 @@ defmodule LemonGateway.Engines.Echo do
   """
   @behaviour LemonGateway.Engine
 
-  alias LemonGateway.Types.{Job, ResumeToken}
+  alias LemonCore.ResumeToken
+  alias LemonGateway.Types.Job
   alias LemonGateway.Event
 
   @impl true

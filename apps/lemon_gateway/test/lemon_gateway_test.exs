@@ -23,7 +23,8 @@ defmodule LemonGatewayTest do
   defmodule LemonGatewayTest.CrashEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -61,7 +62,8 @@ defmodule LemonGatewayTest do
   defmodule ErrorEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -91,7 +93,8 @@ defmodule LemonGatewayTest do
   defmodule ActionEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -141,7 +144,8 @@ defmodule LemonGatewayTest do
     @moduledoc "Test engine that emits multiple action events to test streaming edits"
     @behaviour Elixir.LemonGateway.Engine
 
-    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -214,147 +218,6 @@ defmodule LemonGatewayTest do
 
     @impl true
     def cancel(_ctx), do: :ok
-  end
-
-  defmodule TestTelegramAPI do
-    @moduledoc false
-
-    def child_spec(opts) do
-      %{
-        id: __MODULE__,
-        start: {__MODULE__, :start_link, [opts]},
-        type: :worker,
-        restart: :temporary,
-        shutdown: 500
-      }
-    end
-
-    def start_link(opts \\ []) do
-      Agent.start_link(
-        fn ->
-          %{
-            updates_queue: Keyword.get(opts, :updates_queue, []),
-            notify_pid: Keyword.get(opts, :notify_pid),
-            calls: []
-          }
-        end,
-        name: __MODULE__
-      )
-    end
-
-    def set_updates_queue(queue) do
-      Agent.update(__MODULE__, &%{&1 | updates_queue: queue})
-    end
-
-    def set_notify_pid(pid) do
-      Agent.update(__MODULE__, &%{&1 | notify_pid: pid})
-    end
-
-    def calls do
-      Agent.get(__MODULE__, &Enum.reverse(&1.calls))
-    end
-
-    def get_updates(_token, _offset, _timeout_ms) do
-      {updates, notify_pid} =
-        Agent.get_and_update(__MODULE__, fn state ->
-          case state.updates_queue do
-            [head | rest] ->
-              {head, %{state | updates_queue: rest}}
-
-            [] ->
-              {[], state}
-          end
-          |> then(fn {batch, new_state} -> {{batch, new_state.notify_pid}, new_state} end)
-        end)
-
-      if is_pid(notify_pid) do
-        send(notify_pid, {:api_get_updates, updates, System.monotonic_time(:millisecond)})
-      end
-
-      {:ok, %{"ok" => true, "result" => updates}}
-    end
-
-    def send_message(_token, chat_id, text, reply_to_message_id \\ nil) do
-      now = System.monotonic_time(:millisecond)
-
-      Agent.update(__MODULE__, fn state ->
-        %{state | calls: [{:send, chat_id, text, reply_to_message_id, now} | state.calls]}
-      end)
-
-      notify_pid = Agent.get(__MODULE__, & &1.notify_pid)
-
-      if is_pid(notify_pid) do
-        send(notify_pid, {:api_send_message, chat_id, text, reply_to_message_id, now})
-      end
-
-      {:ok, %{"ok" => true, "result" => %{"message_id" => 123}}}
-    end
-
-    def edit_message_text(_token, chat_id, message_id, text, _parse_mode \\ nil) do
-      now = System.monotonic_time(:millisecond)
-
-      Agent.update(__MODULE__, fn state ->
-        %{state | calls: [{:edit, chat_id, message_id, text, now} | state.calls]}
-      end)
-
-      notify_pid = Agent.get(__MODULE__, & &1.notify_pid)
-
-      if is_pid(notify_pid) do
-        send(notify_pid, {:api_edit_message_text, chat_id, message_id, text, now})
-      end
-
-      {:ok, %{"ok" => true, "result" => %{"message_id" => message_id}}}
-    end
-  end
-
-  defmodule PollingFailureTelegramAPI do
-    @moduledoc false
-
-    def child_spec(opts) do
-      %{
-        id: __MODULE__,
-        start: {__MODULE__, :start_link, [opts]},
-        type: :worker,
-        restart: :temporary,
-        shutdown: 500
-      }
-    end
-
-    def start_link(opts \\ []) do
-      Agent.start_link(
-        fn ->
-          %{
-            responses: Keyword.get(opts, :responses, []),
-            notify_pid: Keyword.get(opts, :notify_pid)
-          }
-        end,
-        name: __MODULE__
-      )
-    end
-
-    def get_updates(_token, _offset, _timeout_ms) do
-      {response, notify_pid} =
-        Agent.get_and_update(__MODULE__, fn state ->
-          case state.responses do
-            [head | rest] ->
-              {head, %{state | responses: rest}}
-
-            [] ->
-              {{:ok, %{"ok" => true, "result" => []}}, state}
-          end
-          |> then(fn {resp, new_state} -> {{resp, new_state.notify_pid}, new_state} end)
-        end)
-
-      if is_pid(notify_pid) do
-        send(notify_pid, {:poll_response, response})
-      end
-
-      response
-    end
-
-    def send_message(_token, _chat_id, _text, _reply_to_or_opts \\ nil, _parse_mode \\ nil) do
-      {:ok, %{"ok" => true, "result" => %{"message_id" => 123}}}
-    end
   end
 
   setup do
@@ -540,8 +403,4 @@ defmodule LemonGatewayTest do
     assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: false}}, 1_000
   end
 
-  test "telegram dedupe init is idempotent" do
-    assert :ok = Elixir.LemonGateway.Telegram.Dedupe.init()
-    assert :ok = Elixir.LemonGateway.Telegram.Dedupe.init()
-  end
 end

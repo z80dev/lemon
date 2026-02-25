@@ -24,7 +24,7 @@ defmodule LemonGateway.Command do
       end
   """
 
-  alias LemonGateway.Types.ChatScope
+  alias LemonCore.ChatScope
 
   @type context :: %{
           optional(:message) => map(),

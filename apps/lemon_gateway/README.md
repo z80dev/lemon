@@ -137,7 +137,7 @@ cli_path = "/usr/local/bin/claude"
 | Discord | `LemonChannels.Adapters.Discord` | Discord channel adapter (owned by `lemon_channels`) |
 | Email | `LemonGateway.Transports.Email` | SMTP inbound/outbound email transport |
 | Farcaster | `LemonGateway.Transports.Farcaster` | Farcaster Frame-based interactions |
-| XMTP | `LemonGateway.Transports.Xmtp` | XMTP messaging via Node.js bridge |
+| XMTP | `LemonChannels.Adapters.Xmtp` | XMTP messaging via Node.js bridge (owned by `lemon_channels`) |
 | Webhook | `LemonGateway.Transports.Webhook` | HTTP webhook with sync/async modes |
 | SMS | `LemonGateway.Sms.*` | Twilio SMS webhooks with verification code tools |
 
@@ -243,7 +243,7 @@ Engines emit events to the Run process via `{:engine_event, run_ref, event}`:
 | `Event.Completed` | Run finished with `ok: true/false`, `answer`, optional `error` |
 
 The Run process:
-1. Stores events via `LemonGateway.Store`
+1. Stores events via `LemonCore.Store`
 2. Passes events through a Renderer for formatting
 3. Sends rendered output back through the transport
 
@@ -272,5 +272,5 @@ The gateway extracts the token, routes to the correct engine, and continues the 
 | `LemonGateway.Config` | Centralized TOML-backed configuration |
 | `LemonGateway.BindingResolver` | Maps chat scopes to projects, engines, and queue modes |
 | `LemonGateway.EngineLock` | Mutex lock preventing concurrent runs per session |
-| `LemonGateway.Store` | Gateway-facing storage API (delegates to `LemonCore.Store`) |
+| `LemonCore.Store` | Storage API (ETS/JSONL/SQLite backends; chat state, runs, progress) |
 | `LemonGateway.Health` | Health check system with `/healthz` endpoint |

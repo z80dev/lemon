@@ -2,7 +2,8 @@ defmodule LemonGateway.M6IntegrationTest do
   use ExUnit.Case, async: false
 
   alias LemonGateway.{BindingResolver, ChatState, Config, Store}
-  alias LemonGateway.Types.{ChatScope, ResumeToken}
+  alias LemonCore.ChatScope
+  alias LemonCore.ResumeToken
 
   setup do
     test_toml_dir =

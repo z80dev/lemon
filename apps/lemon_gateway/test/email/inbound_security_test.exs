@@ -5,7 +5,7 @@ defmodule LemonGateway.EmailInboundSecurityTest do
   import Bitwise
   import LemonGateway.AsyncHelpers
 
-  alias LemonGateway.Store
+  alias LemonCore.Store
   alias LemonGateway.Transports.Email.Inbound
 
   @attachments_dir Path.join(System.tmp_dir!(), "lemon_gateway_email_attachments")

@@ -3,7 +3,8 @@ defmodule LemonGateway.EngineLockTest do
   use ExUnit.Case, async: false
 
   alias Elixir.LemonGateway.Event.Completed
-  alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+  alias LemonCore.ResumeToken
+  alias LemonGateway.Types.Job
 
   # ============================================================================
   # Unit Tests for EngineLock GenServer
@@ -895,7 +896,8 @@ defmodule LemonGateway.EngineLockTest do
   defmodule LemonGateway.EngineLockTest.SlowEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -939,7 +941,8 @@ defmodule LemonGateway.EngineLockTest do
   defmodule LemonGateway.EngineLockTest.CrashEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
     alias Elixir.LemonGateway.Event
 
     @impl true

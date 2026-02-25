@@ -28,8 +28,10 @@ defmodule LemonGateway.Run do
   use GenServer
   require Logger
 
-  alias LemonGateway.{ChatState, Cwd, Event, Store}
-  alias LemonGateway.Types.{Job, ResumeToken}
+  alias LemonGateway.{ChatState, Cwd, Event}
+  alias LemonCore.Store
+  alias LemonCore.ResumeToken
+  alias LemonGateway.Types.Job
 
   @max_logged_error_bytes 4_096
   @context_overflow_error_markers [
@@ -300,7 +302,7 @@ defmodule LemonGateway.Run do
 
   @impl true
   def handle_info({:engine_event, run_ref, event}, %{run_ref: run_ref} = state) do
-    LemonGateway.Store.append_run_event(run_ref, event)
+    LemonCore.Store.append_run_event(run_ref, event)
 
     case event do
       %Event.Started{} ->
@@ -568,7 +570,7 @@ defmodule LemonGateway.Run do
     if state.run_ref do
       prompt = state.job.prompt
 
-      LemonGateway.Store.finalize_run(state.run_ref, %{
+      LemonCore.Store.finalize_run(state.run_ref, %{
         completed: completed,
         session_key: state.session_key,
         run_id: state.run_id,
@@ -823,9 +825,9 @@ defmodule LemonGateway.Run do
 
     Enum.each(keys, fn key ->
       if progress_msg_id,
-        do: LemonGateway.Store.put_progress_mapping(key, progress_msg_id, run_id)
+        do: LemonCore.Store.put_progress_mapping(key, progress_msg_id, run_id)
 
-      if status_msg_id, do: LemonGateway.Store.put_progress_mapping(key, status_msg_id, run_id)
+      if status_msg_id, do: LemonCore.Store.put_progress_mapping(key, status_msg_id, run_id)
     end)
   end
 
@@ -836,8 +838,8 @@ defmodule LemonGateway.Run do
     status_msg_id = meta && meta[:status_msg_id]
 
     Enum.each(keys, fn key ->
-      if progress_msg_id, do: LemonGateway.Store.delete_progress_mapping(key, progress_msg_id)
-      if status_msg_id, do: LemonGateway.Store.delete_progress_mapping(key, status_msg_id)
+      if progress_msg_id, do: LemonCore.Store.delete_progress_mapping(key, progress_msg_id)
+      if status_msg_id, do: LemonCore.Store.delete_progress_mapping(key, status_msg_id)
     end)
   end
 

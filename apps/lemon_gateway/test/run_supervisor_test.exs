@@ -25,7 +25,8 @@ defmodule LemonGateway.RunSupervisorTest do
   defmodule QuickEngine do
     @behaviour LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
     alias LemonGateway.Event
 
     @impl true
@@ -75,7 +76,8 @@ defmodule LemonGateway.RunSupervisorTest do
   defmodule SlowTestEngine do
     @behaviour LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
     alias LemonGateway.Event
 
     @impl true
@@ -127,7 +129,8 @@ defmodule LemonGateway.RunSupervisorTest do
   defmodule ControllableTestEngine do
     @behaviour LemonGateway.Engine
 
-    alias LemonGateway.Types.{Job, ResumeToken}
+    alias LemonCore.ResumeToken
+    alias LemonGateway.Types.Job
     alias LemonGateway.Event
 
     @impl true

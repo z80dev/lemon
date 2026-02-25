@@ -50,7 +50,7 @@ defmodule LemonGateway.Config do
   @doc """
   Returns all configured bindings as a list of Binding structs.
   """
-  @spec get_bindings() :: [LemonGateway.Binding.t()]
+  @spec get_bindings() :: [LemonCore.Binding.t()]
   def get_bindings, do: GenServer.call(__MODULE__, {:get, :bindings}) || []
 
   @doc """
