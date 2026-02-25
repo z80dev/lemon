@@ -8,7 +8,8 @@ defmodule AgentCore.CliRunners.KimiSubagent do
   """
 
   alias AgentCore.CliRunners.KimiRunner
-  alias AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
+  alias AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
+  alias LemonCore.ResumeToken
 
   @typedoc "A Kimi subagent session"
   @type session :: %{

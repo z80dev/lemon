@@ -82,7 +82,8 @@ defmodule AgentCore.CliRunners.CodexRunner do
     WebSearchItem
   }
 
-  alias AgentCore.CliRunners.Types.{EventFactory, ResumeToken}
+  alias AgentCore.CliRunners.Types.EventFactory
+  alias LemonCore.ResumeToken
   alias LemonCore.Config, as: LemonConfig
   alias LemonCore.Introspection
 

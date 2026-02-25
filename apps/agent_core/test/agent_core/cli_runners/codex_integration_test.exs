@@ -11,7 +11,7 @@ defmodule AgentCore.CliRunners.CodexIntegrationTest do
   use ExUnit.Case, async: false
 
   alias AgentCore.CliRunners.CodexSubagent
-  alias AgentCore.CliRunners.Types.ResumeToken
+  alias LemonCore.ResumeToken
 
   @moduletag :integration
   @moduletag timeout: 120_000

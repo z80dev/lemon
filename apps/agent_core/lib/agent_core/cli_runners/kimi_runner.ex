@@ -30,7 +30,8 @@ defmodule AgentCore.CliRunners.KimiRunner do
   alias AgentCore.CliRunners.KimiSchema
   alias AgentCore.CliRunners.KimiSchema.{ErrorMessage, Message, StreamMessage, ToolCall}
   alias AgentCore.CliRunners.ToolActionHelpers
-  alias AgentCore.CliRunners.Types.{EventFactory, ResumeToken}
+  alias AgentCore.CliRunners.Types.EventFactory
+  alias LemonCore.ResumeToken
   alias LemonCore.Introspection
 
   @engine "kimi"

@@ -22,7 +22,7 @@ defmodule AgentCore.CliRunners.IntrospectionTest do
   alias AgentCore.CliRunners.OpencodeSchema.{StepStart, StepFinish}
   alias AgentCore.CliRunners.PiSchema.{AgentEnd, SessionHeader}
 
-  alias AgentCore.CliRunners.Types.ResumeToken
+  alias LemonCore.ResumeToken
 
   setup do
     # Ensure introspection is enabled for all tests

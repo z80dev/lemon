@@ -21,7 +21,8 @@ defmodule AgentCore.CliRunners.PiRunner do
   }
 
   alias AgentCore.CliRunners.ToolActionHelpers
-  alias AgentCore.CliRunners.Types.{EventFactory, ResumeToken}
+  alias AgentCore.CliRunners.Types.EventFactory
+  alias LemonCore.ResumeToken
   alias LemonCore.Config, as: LemonConfig
   alias LemonCore.Introspection
 
