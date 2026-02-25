@@ -3,17 +3,14 @@ defmodule LemonGateway.Engines.CliAdapter do
   Shared CLI subprocess runner used by the Claude, Codex, Opencode, and Pi engines.
 
   Provides common logic for starting a CLI runner process, consuming its event
-  stream, translating `AgentCore` events into `LemonGateway.Event` structs,
-  and handling cancellation and resume token formatting.
+  stream, translating `AgentCore` events into plain tagged maps via
+  `LemonGateway.Event` constructors, and handling cancellation and resume token
+  formatting.
   """
 
-  alias AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, StartedEvent}
-  alias LemonCore.ResumeToken
+  alias AgentCore.CliRunners.Types.{ActionEvent, CompletedEvent, ResumeToken, StartedEvent}
   alias LemonGateway.Event
-
-  # AgentCore runners still emit %AgentCore.CliRunners.Types.ResumeToken{} structs
-  # (which is a compatibility wrapper). We need to match on that struct in event handlers.
-  alias AgentCore.CliRunners.Types.ResumeToken, as: CliResumeToken
+  alias LemonCore.ResumeToken, as: GatewayToken
 
   def start_run(runner_module, engine_id, job, opts, sink_pid) do
     run_ref = make_ref()
@@ -29,7 +26,7 @@ defmodule LemonGateway.Engines.CliAdapter do
          %{task_pid: task_pid, runner_pid: runner_pid, runner_module: runner_module}}
 
       {:error, reason} ->
-        completed = %Event.Completed{engine: engine_id, ok: false, error: reason, answer: ""}
+        completed = Event.completed(%{engine: engine_id, ok: false, error: reason, answer: ""})
         send(sink_pid, {:engine_event, run_ref, completed})
         {:ok, run_ref, %{task_pid: nil, runner_pid: nil, runner_module: runner_module}}
     end
@@ -55,7 +52,7 @@ defmodule LemonGateway.Engines.CliAdapter do
     :ok
   end
 
-  def format_resume(engine_id, %ResumeToken{value: value}) do
+  def format_resume(engine_id, %GatewayToken{value: value}) do
     case engine_id do
       "codex" -> "codex resume #{value}"
       "claude" -> "claude --resume #{value}"
@@ -83,7 +80,7 @@ defmodule LemonGateway.Engines.CliAdapter do
   def extract_resume(engine_id, text) do
     case ResumeToken.extract_resume(text, engine_id) do
       %ResumeToken{engine: ^engine_id, value: value} ->
-        %ResumeToken{engine: engine_id, value: value}
+        %GatewayToken{engine: engine_id, value: value}
 
       _ ->
         nil
@@ -97,11 +94,8 @@ defmodule LemonGateway.Engines.CliAdapter do
   defp start_runner(runner_module, engine_id, job, opts) do
     resume =
       case job.resume do
-        %ResumeToken{engine: ^engine_id, value: value} ->
-          LemonCore.ResumeToken.new(engine_id, value)
-
-        _ ->
-          nil
+        %GatewayToken{engine: ^engine_id, value: value} -> ResumeToken.new(engine_id, value)
+        _ -> nil
       end
 
     prompt = job.prompt
@@ -225,13 +219,13 @@ defmodule LemonGateway.Engines.CliAdapter do
   end
 
   defp handle_stream_event({:cli_event, %StartedEvent{} = ev}, _engine_id, sink_pid, run_ref, acc) do
-    started = to_gateway_event(ev)
+    started = to_event_map(ev)
     send(sink_pid, {:engine_event, run_ref, started})
     acc
   end
 
   defp handle_stream_event({:cli_event, %ActionEvent{} = ev}, _engine_id, sink_pid, run_ref, acc) do
-    action_event = to_gateway_event(ev)
+    action_event = to_event_map(ev)
     send(sink_pid, {:engine_event, run_ref, action_event})
     acc
   end
@@ -243,7 +237,7 @@ defmodule LemonGateway.Engines.CliAdapter do
          run_ref,
          acc
        ) do
-    completed = to_gateway_event(ev)
+    completed = to_event_map(ev)
     send(sink_pid, {:engine_event, run_ref, completed})
     %{acc | completed: true}
   end
@@ -252,7 +246,7 @@ defmodule LemonGateway.Engines.CliAdapter do
     if acc.completed do
       acc
     else
-      completed = %Event.Completed{engine: engine_id, ok: false, error: reason, answer: ""}
+      completed = Event.completed(%{engine: engine_id, ok: false, error: reason, answer: ""})
       send(sink_pid, {:engine_event, run_ref, completed})
       %{acc | completed: true}
     end
@@ -262,7 +256,7 @@ defmodule LemonGateway.Engines.CliAdapter do
     if acc.completed do
       acc
     else
-      completed = %Event.Completed{engine: engine_id, ok: false, error: reason, answer: ""}
+      completed = Event.completed(%{engine: engine_id, ok: false, error: reason, answer: ""})
       send(sink_pid, {:engine_event, run_ref, completed})
       %{acc | completed: true}
     end
@@ -270,26 +264,29 @@ defmodule LemonGateway.Engines.CliAdapter do
 
   defp handle_stream_event(_event, _engine_id, _sink_pid, _run_ref, acc), do: acc
 
-  def to_gateway_event(%StartedEvent{} = ev), do: to_gateway_started(ev)
-  def to_gateway_event(%ActionEvent{} = ev), do: to_gateway_action(ev)
-  def to_gateway_event(%CompletedEvent{} = ev), do: to_gateway_completed(ev)
-  def to_gateway_event(_), do: nil
+  @doc """
+  Translate an AgentCore CLI runner event into a plain tagged event map.
+  """
+  def to_event_map(%StartedEvent{} = ev), do: to_event_started(ev)
+  def to_event_map(%ActionEvent{} = ev), do: to_event_action(ev)
+  def to_event_map(%CompletedEvent{} = ev), do: to_event_completed(ev)
+  def to_event_map(_), do: nil
 
-  defp to_gateway_started(%StartedEvent{
+  defp to_event_started(%StartedEvent{
          engine: engine,
-         resume: %CliResumeToken{value: value},
+         resume: %ResumeToken{value: value},
          title: title,
          meta: meta
        }) do
-    %Event.Started{
+    Event.started(%{
       engine: engine,
-      resume: %ResumeToken{engine: engine, value: value},
+      resume: %GatewayToken{engine: engine, value: value},
       title: title,
       meta: meta
-    }
+    })
   end
 
-  defp to_gateway_action(%ActionEvent{
+  defp to_event_action(%ActionEvent{
          engine: engine,
          action: action,
          phase: phase,
@@ -297,38 +294,39 @@ defmodule LemonGateway.Engines.CliAdapter do
          message: message,
          level: level
        }) do
-    gw_action = %Event.Action{
-      id: action.id,
-      kind: to_string(action.kind),
-      title: action.title,
-      detail: action.detail
-    }
+    gw_action =
+      Event.action(%{
+        id: action.id,
+        kind: to_string(action.kind),
+        title: action.title,
+        detail: action.detail
+      })
 
-    %Event.ActionEvent{
+    Event.action_event(%{
       engine: engine,
       action: gw_action,
       phase: phase,
       ok: ok,
       message: message,
       level: level
-    }
+    })
   end
 
-  defp to_gateway_completed(%CompletedEvent{} = ev) do
+  defp to_event_completed(%CompletedEvent{} = ev) do
     resume =
       case ev.resume do
-        %CliResumeToken{engine: engine, value: value} -> %ResumeToken{engine: engine, value: value}
+        %ResumeToken{engine: engine, value: value} -> %GatewayToken{engine: engine, value: value}
         _ -> nil
       end
 
-    %Event.Completed{
+    Event.completed(%{
       engine: ev.engine,
       ok: ev.ok,
       answer: ev.answer,
       error: ev.error,
       usage: ev.usage,
       resume: resume
-    }
+    })
   end
 
   defp maybe_put(list, _key, nil), do: list

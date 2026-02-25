@@ -302,10 +302,7 @@ defmodule LemonControlPlane.Methods.SessionDetail do
   defp extract_tool_calls(_, _), do: []
 
   defp action_event?(ev) when is_map(ev) do
-    struct = Map.get(ev, :__struct__)
-    action = get_map(ev, :action)
-
-    struct == LemonGateway.Event.ActionEvent or is_map(action)
+    Map.get(ev, :__event__) == :action_event or is_map(get_map(ev, :action))
   rescue
     _ -> false
   end
@@ -370,6 +367,9 @@ defmodule LemonControlPlane.Methods.SessionDetail do
 
   defp event_type_name(event) when is_map(event) do
     cond do
+      is_atom(Map.get(event, :__event__)) ->
+        Atom.to_string(Map.get(event, :__event__))
+
       is_binary(get_map(event, :type)) ->
         get_map(event, :type)
 

@@ -2,9 +2,7 @@ defmodule LemonGateway.EngineLockTest do
   alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case, async: false
 
-  alias Elixir.LemonGateway.Event.Completed
-  alias LemonCore.ResumeToken
-  alias LemonGateway.Types.Job
+  alias Elixir.LemonGateway.Types.{Job, ResumeToken}
 
   # ============================================================================
   # Unit Tests for EngineLock GenServer
@@ -896,8 +894,7 @@ defmodule LemonGateway.EngineLockTest do
   defmodule LemonGateway.EngineLockTest.SlowEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonCore.ResumeToken
-    alias LemonGateway.Types.Job
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -922,12 +919,12 @@ defmodule LemonGateway.EngineLockTest do
       delay = job.meta[:delay_ms] || 100
 
       Task.start(fn ->
-        send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
+        send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
         Process.sleep(delay)
 
         send(
           sink_pid,
-          {:engine_event, run_ref, %Event.Completed{engine: id(), ok: true, answer: "slow done"}}
+          {:engine_event, run_ref, Event.completed(%{engine: id(), ok: true, answer: "slow done"})}
         )
       end)
 
@@ -941,8 +938,7 @@ defmodule LemonGateway.EngineLockTest do
   defmodule LemonGateway.EngineLockTest.CrashEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonCore.ResumeToken
-    alias LemonGateway.Types.Job
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -966,7 +962,7 @@ defmodule LemonGateway.EngineLockTest do
       resume = job.resume || %ResumeToken{engine: id(), value: "crash"}
 
       Task.start(fn ->
-        send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
+        send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
         # Kill the Run process to simulate a crash
         Process.exit(sink_pid, :kill)
       end)
@@ -1010,7 +1006,7 @@ defmodule LemonGateway.EngineLockTest do
     }
 
     Elixir.LemonGateway.submit(job)
-    assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 1_000
+    assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: true}}, 1_000
 
     # Wait a bit for lock release to propagate (cast is async)
     Process.sleep(50)
@@ -1025,7 +1021,7 @@ defmodule LemonGateway.EngineLockTest do
     }
 
     Elixir.LemonGateway.submit(job2)
-    assert_receive {:lemon_gateway_run_completed, ^job2, %Completed{ok: true}}, 1_000
+    assert_receive {:lemon_gateway_run_completed, ^job2, %{__event__: :completed, ok: true}}, 1_000
   end
 
   test "concurrent runs for same scope are serialized by lock" do
@@ -1181,7 +1177,7 @@ defmodule LemonGateway.EngineLockTest do
 
     # The ok_job should complete even after crash_job's process dies
     # because EngineLock monitors the process and releases on :DOWN
-    assert_receive {:lemon_gateway_run_completed, ^ok_job, %Completed{ok: true}}, 2_000
+    assert_receive {:lemon_gateway_run_completed, ^ok_job, %{__event__: :completed, ok: true}}, 2_000
   end
 
   test "lock can be disabled via config" do

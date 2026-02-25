@@ -181,18 +181,18 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
     scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: topic_id}
 
     _ =
-      LemonCore.Store.put(:channels_projects_dynamic, project_id, %{
+      LemonCore.Store.put(:projects_dynamic, project_id, %{
         root: cwd,
         default_engine: nil
       })
 
-    _ = LemonCore.Store.put(:channels_project_overrides, scope, project_id)
-    _ = LemonCore.Store.put(:gateway_project_overrides, scope, project_id)
+    _ = LemonCore.Store.put(:project_overrides, scope, project_id)
+    _ = LemonCore.Store.put(:project_overrides, scope, project_id)
 
     on_exit(fn ->
-      _ = LemonCore.Store.delete(:channels_projects_dynamic, project_id)
-      _ = LemonCore.Store.delete(:channels_project_overrides, scope)
-      _ = LemonCore.Store.delete(:gateway_project_overrides, scope)
+      _ = LemonCore.Store.delete(:projects_dynamic, project_id)
+      _ = LemonCore.Store.delete(:project_overrides, scope)
+      _ = LemonCore.Store.delete(:project_overrides, scope)
     end)
 
     MockAPI.set_updates([

@@ -27,9 +27,10 @@ defmodule LemonGateway.Run do
   """
   use GenServer
   require Logger
+  import LemonGateway.Event, only: [is_started: 1, is_action_event: 1, is_completed: 1]
 
-  alias LemonGateway.{ChatState, Cwd, Event}
   alias LemonCore.Store
+  alias LemonGateway.{ChatState, Cwd, Event}
   alias LemonCore.ResumeToken
   alias LemonGateway.Types.Job
 
@@ -112,23 +113,23 @@ defmodule LemonGateway.Run do
 
         run_id = job.run_id || generate_run_id()
 
-        completed = %Event.Completed{
+        completed = Event.completed(%{
           engine: engine_id_for(job),
           ok: false,
           error: :lock_timeout,
           answer: "",
           run_id: run_id,
           session_key: job.session_key
-        }
+        })
 
         # Emit completion event to bus (include session_key and origin in meta)
         meta = %{session_key: job.session_key, origin: job.meta && job.meta[:origin]}
 
-        # Bus payloads must be plain maps; do not leak LemonGateway.Event structs.
+        # Bus payloads must be plain maps; event constructors already produce them.
         emit_to_bus(
           run_id,
           :run_completed,
-          %{completed: completed_to_map(completed), duration_ms: nil},
+          %{completed: completed_to_bus_map(completed), duration_ms: nil},
           meta
         )
 
@@ -189,7 +190,7 @@ defmodule LemonGateway.Run do
     )
 
     if is_nil(engine) do
-      completed = %Event.Completed{
+      completed = Event.completed(%{
         engine: engine_id,
         ok: false,
         # Keep this stringy: the Basic renderer calls to_string/1 on error.
@@ -197,7 +198,7 @@ defmodule LemonGateway.Run do
         answer: "",
         run_id: state.run_id,
         session_key: state.session_key
-      }
+      })
 
       renderer_state = state.renderer.init(%{engine: nil})
       {renderer_state, render_action} = state.renderer.apply_event(renderer_state, completed)
@@ -264,14 +265,14 @@ defmodule LemonGateway.Run do
               "reason=#{inspect(reason)}"
           )
 
-          completed = %Event.Completed{
+          completed = Event.completed(%{
             engine: engine_id,
             ok: false,
             error: reason,
             answer: "",
             run_id: state.run_id,
             session_key: state.session_key
-          }
+          })
 
           {renderer_state, render_action} = state.renderer.apply_event(renderer_state, completed)
           maybe_update_progress(state, render_action)
@@ -304,25 +305,25 @@ defmodule LemonGateway.Run do
   def handle_info({:engine_event, run_ref, event}, %{run_ref: run_ref} = state) do
     LemonCore.Store.append_run_event(run_ref, event)
 
-    case event do
-      %Event.Started{} ->
+    cond do
+      is_started(event) ->
         Logger.debug(
           "Gateway run engine_event started run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)}"
         )
 
-      %Event.Completed{} = ev ->
+      is_completed(event) ->
         Logger.info(
           "Gateway run engine_event completed run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)} " <>
-            "ok=#{inspect(ev.ok)} error=#{inspect(ev.error)} answer_bytes=#{byte_size(ev.answer || "")}"
+            "ok=#{inspect(event.ok)} error=#{inspect(event.error)} answer_bytes=#{byte_size(event.answer || "")}"
         )
 
-      %Event.ActionEvent{} = ev ->
+      is_action_event(event) ->
         Logger.debug(
-          "Gateway run action run_id=#{inspect(state.run_id)} phase=#{inspect(ev.phase)} kind=#{inspect(ev.action && ev.action.kind)} " <>
-            action_event_ok_fragment(ev.ok)
+          "Gateway run action run_id=#{inspect(state.run_id)} phase=#{inspect(event.phase)} kind=#{inspect(event.action && event.action.kind)} " <>
+            action_event_ok_fragment(event.ok)
         )
 
-      _ ->
+      true ->
         :ok
     end
 
@@ -334,19 +335,21 @@ defmodule LemonGateway.Run do
     state = %{state | renderer_state: renderer_state}
     maybe_update_progress(state, render_action)
 
-    case event do
-      %Event.Started{resume: resume} ->
+    cond do
+      is_started(event) ->
+        resume = event.resume
         # Note: Do NOT store chat state here. Storing on Started allows new messages
         # to auto-resume to this token while the run is still active, creating
         # concurrent runs. Chat state is stored in finalize/2 after Completed.
         {:noreply, %{state | last_resume: resume || state.last_resume}}
 
-      %Event.Completed{resume: resume} = completed ->
+      is_completed(event) ->
+        resume = event.resume
         state = %{state | last_resume: resume || state.last_resume}
-        finalize(state, completed)
+        finalize(state, event)
         {:stop, :normal, state}
 
-      _ ->
+      true ->
         {:noreply, state}
     end
   end
@@ -484,7 +487,7 @@ defmodule LemonGateway.Run do
 
       resume = state.last_resume || state.job.resume
 
-      completed = %Event.Completed{
+      completed = Event.completed(%{
         engine: engine_id_for(state.job),
         resume: resume,
         ok: false,
@@ -492,7 +495,7 @@ defmodule LemonGateway.Run do
         answer: "",
         run_id: state.run_id,
         session_key: state.session_key
-      }
+      })
 
       finalize(state, completed)
       {:stop, :normal, %{state | completed: true}}
@@ -515,7 +518,7 @@ defmodule LemonGateway.Run do
   defp action_event_ok_fragment(ok?) when is_boolean(ok?), do: "ok=#{inspect(ok?)}"
   defp action_event_ok_fragment(_), do: "ok=unknown"
 
-  defp finalize(state, %Event.Completed{} = completed) do
+  defp finalize(state, %{__event__: :completed} = completed) do
     state = %{state | completed: true}
 
     # Release engine lock first (if acquired)
@@ -561,7 +564,7 @@ defmodule LemonGateway.Run do
       state.run_id,
       :run_completed,
       %{
-        completed: completed_to_map(completed),
+        completed: completed_to_bus_map(completed),
         duration_ms: duration_ms
       },
       build_event_meta(state)
@@ -595,7 +598,7 @@ defmodule LemonGateway.Run do
     unregister_progress_mapping(state.job)
   end
 
-  defp log_run_failure(state, %Event.Completed{} = completed) do
+  defp log_run_failure(state, %{__event__: :completed} = completed) do
     error_text = format_error_for_log(completed.error)
     engine_id = engine_id_for(state.job)
 
@@ -677,14 +680,14 @@ defmodule LemonGateway.Run do
   end
 
   defp emit_engine_event_to_bus(state, event) do
-    # Bus payloads must be plain maps; do not leak LemonGateway.Event structs.
+    # Event constructors already produce plain maps; convert to bus shape.
     {event_type, payload} =
-      case event do
-        %Event.Started{} = ev -> {:engine_started, started_to_map(ev)}
-        %Event.Completed{} = ev -> {:engine_completed, completed_to_map(ev)}
-        %Event.ActionEvent{} = ev -> {:engine_action, action_event_to_map(ev)}
-        ev when is_map(ev) -> {:engine_event, ev}
-        other -> {:engine_event, %{event: inspect(other)}}
+      cond do
+        is_started(event) -> {:engine_started, started_to_bus_map(event)}
+        is_completed(event) -> {:engine_completed, completed_to_bus_map(event)}
+        is_action_event(event) -> {:engine_action, action_event_to_bus_map(event)}
+        is_map(event) -> {:engine_event, event}
+        true -> {:engine_event, %{event: inspect(event)}}
       end
 
     emit_to_bus(state.run_id, event_type, payload, build_event_meta(state))
@@ -708,9 +711,9 @@ defmodule LemonGateway.Run do
 
   defp resume_to_map(_), do: nil
 
-  defp action_to_map(nil), do: nil
+  defp action_to_bus_map(nil), do: nil
 
-  defp action_to_map(action) when is_map(action) do
+  defp action_to_bus_map(action) when is_map(action) do
     %{
       id: Map.get(action, :id),
       kind: Map.get(action, :kind),
@@ -719,7 +722,7 @@ defmodule LemonGateway.Run do
     }
   end
 
-  defp started_to_map(%Event.Started{} = ev) do
+  defp started_to_bus_map(ev) when is_map(ev) do
     %{
       engine: ev.engine,
       resume: resume_to_map(ev.resume),
@@ -730,10 +733,10 @@ defmodule LemonGateway.Run do
     }
   end
 
-  defp action_event_to_map(%Event.ActionEvent{} = ev) do
+  defp action_event_to_bus_map(ev) when is_map(ev) do
     %{
       engine: ev.engine,
-      action: action_to_map(ev.action),
+      action: action_to_bus_map(ev.action),
       phase: ev.phase,
       ok: ev.ok,
       message: ev.message,
@@ -741,7 +744,7 @@ defmodule LemonGateway.Run do
     }
   end
 
-  defp completed_to_map(%Event.Completed{} = ev) do
+  defp completed_to_bus_map(ev) when is_map(ev) do
     %{
       engine: ev.engine,
       resume: resume_to_map(ev.resume),
@@ -757,7 +760,7 @@ defmodule LemonGateway.Run do
 
   defp maybe_store_chat_state(
          %Job{} = job,
-         %Event.Completed{resume: %ResumeToken{} = resume} = completed
+         %{__event__: :completed, resume: %ResumeToken{} = resume} = completed
        ) do
     if context_length_exceeded_error?(completed.error) do
       :ok
@@ -770,7 +773,7 @@ defmodule LemonGateway.Run do
 
   defp maybe_clear_chat_state_on_context_overflow(
          session_key,
-         %Event.Completed{ok: ok, error: error, run_id: run_id}
+         %{__event__: :completed, ok: ok, error: error, run_id: run_id}
        )
        when is_binary(session_key) do
     if ok != true and context_length_exceeded_error?(error) do

@@ -24,10 +24,10 @@ defmodule LemonGateway.Engines.Lemon do
       {:ok, run_ref, ctx} = Lemon.start_run(job, %{cwd: "/path/to/project"}, self())
 
       receive do
-        {:engine_event, ^run_ref, %Event.Started{engine: "lemon"}} ->
+        {:engine_event, ^run_ref, %{__event__: :started, engine: "lemon"}} ->
           IO.puts("Session started")
 
-        {:engine_event, ^run_ref, %Event.Completed{ok: true, answer: answer}} ->
+        {:engine_event, ^run_ref, %{__event__: :completed, ok: true, answer: answer}} ->
           IO.puts("Answer: \#{answer}")
       end
 

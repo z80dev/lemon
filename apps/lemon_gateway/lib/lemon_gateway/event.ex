@@ -2,48 +2,107 @@ defmodule LemonGateway.Event do
   @moduledoc """
   Event types for LemonGateway run lifecycle.
 
+  Events are plain tagged maps (not structs) identified by an `__event__` key.
+  Constructor functions normalise the shape; defguards let callers pattern-match.
+
   These events are emitted during run execution and can be subscribed to
   via the LemonCore.Bus on the "run:<run_id>" topic.
   """
 
   @type phase :: :started | :updated | :completed
 
-  defmodule Started do
-    @moduledoc """
-    Emitted when a run starts.
-    """
-    @enforce_keys [:engine, :resume]
-    defstruct [:engine, :resume, :title, :meta, :run_id, :session_key]
+  # ---------------------------------------------------------------------------
+  # Guards
+  # ---------------------------------------------------------------------------
 
-    @type t :: %__MODULE__{
-            engine: String.t(),
-            resume: LemonCore.ResumeToken.t() | nil,
-            title: String.t() | nil,
-            meta: map() | nil,
-            run_id: String.t() | nil,
-            session_key: String.t() | nil
-          }
+  defguard is_started(ev) when is_map(ev) and :erlang.map_get(:__event__, ev) == :started
+  defguard is_action_event(ev) when is_map(ev) and :erlang.map_get(:__event__, ev) == :action_event
+  defguard is_completed(ev) when is_map(ev) and :erlang.map_get(:__event__, ev) == :completed
+
+  # ---------------------------------------------------------------------------
+  # Constructors
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Build a `:started` event map.
+
+  Required keys: `:engine`, `:resume`.
+  Optional: `:title`, `:meta`, `:run_id`, `:session_key`.
+  """
+  @spec started(map()) :: map()
+  def started(fields) when is_map(fields) do
+    %{
+      __event__: :started,
+      engine: Map.fetch!(fields, :engine),
+      resume: Map.fetch!(fields, :resume),
+      title: Map.get(fields, :title),
+      meta: Map.get(fields, :meta),
+      run_id: Map.get(fields, :run_id),
+      session_key: Map.get(fields, :session_key)
+    }
   end
 
-  defmodule Action do
-    @moduledoc """
-    Describes a discrete action (tool use, file edit, etc.) performed during a run.
+  @doc """
+  Build an `:action` map (embedded inside action_event).
 
-    Used inside `ActionEvent` to identify the action by id, kind, and title.
-    """
-    @enforce_keys [:id, :kind, :title]
-    defstruct [:id, :kind, :title, :detail]
+  Required keys: `:id`, `:kind`, `:title`.
+  Optional: `:detail`.
+  """
+  @spec action(map()) :: map()
+  def action(fields) when is_map(fields) do
+    %{
+      __event__: :action,
+      id: Map.fetch!(fields, :id),
+      kind: Map.fetch!(fields, :kind),
+      title: Map.fetch!(fields, :title),
+      detail: Map.get(fields, :detail)
+    }
   end
 
-  defmodule ActionEvent do
-    @moduledoc """
-    Emitted when an action transitions between phases (e.g. started, completed, errored).
+  @doc """
+  Build an `:action_event` map.
 
-    Wraps an `Action` struct along with the current phase, success flag, and optional message.
-    """
-    @enforce_keys [:engine, :action, :phase]
-    defstruct [:engine, :action, :phase, :ok, :message, :level]
+  Required keys: `:engine`, `:action`, `:phase`.
+  Optional: `:ok`, `:message`, `:level`.
+  """
+  @spec action_event(map()) :: map()
+  def action_event(fields) when is_map(fields) do
+    %{
+      __event__: :action_event,
+      engine: Map.fetch!(fields, :engine),
+      action: Map.fetch!(fields, :action),
+      phase: Map.fetch!(fields, :phase),
+      ok: Map.get(fields, :ok),
+      message: Map.get(fields, :message),
+      level: Map.get(fields, :level)
+    }
   end
+
+  @doc """
+  Build a `:completed` event map.
+
+  Required keys: `:engine`, `:ok`.
+  Optional: `:resume`, `:answer`, `:error`, `:usage`, `:meta`, `:run_id`, `:session_key`.
+  """
+  @spec completed(map()) :: map()
+  def completed(fields) when is_map(fields) do
+    %{
+      __event__: :completed,
+      engine: Map.fetch!(fields, :engine),
+      ok: Map.fetch!(fields, :ok),
+      resume: Map.get(fields, :resume),
+      answer: Map.get(fields, :answer),
+      error: Map.get(fields, :error),
+      usage: Map.get(fields, :usage),
+      meta: Map.get(fields, :meta),
+      run_id: Map.get(fields, :run_id),
+      session_key: Map.get(fields, :session_key)
+    }
+  end
+
+  # ---------------------------------------------------------------------------
+  # Delta (kept as a struct – has ordering semantics)
+  # ---------------------------------------------------------------------------
 
   defmodule Delta do
     @moduledoc """
@@ -89,34 +148,5 @@ defmodule LemonGateway.Event do
         meta: meta
       }
     end
-  end
-
-  defmodule Completed do
-    @moduledoc """
-    Emitted when a run completes (success or failure).
-
-    ## Completion Payload Contract (minimum)
-
-    - `:ok` - boolean indicating success
-    - `:answer` - final answer text
-    - `:error` - error term if not ok
-    - `:engine` - engine identifier
-    - `:resume` - resume token for continuing the session
-    - `:usage` - usage statistics map
-    """
-    @enforce_keys [:engine, :ok]
-    defstruct [:engine, :resume, :ok, :answer, :error, :usage, :meta, :run_id, :session_key]
-
-    @type t :: %__MODULE__{
-            engine: String.t(),
-            resume: LemonCore.ResumeToken.t() | nil,
-            ok: boolean(),
-            answer: String.t() | nil,
-            error: term() | nil,
-            usage: map() | nil,
-            meta: map() | nil,
-            run_id: String.t() | nil,
-            session_key: String.t() | nil
-          }
   end
 end

@@ -21,8 +21,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
 
   alias Elixir.LemonGateway.Engines.Codex
   alias Elixir.LemonGateway.Engines.CliAdapter
-  alias LemonCore.ChatScope
-  alias LemonGateway.Types.Job
+  alias Elixir.LemonGateway.Types.{ChatScope, Job}
   alias Elixir.LemonGateway.Event
 
   alias AgentCore.CliRunners.Types.{
@@ -32,7 +31,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
     StartedEvent
   }
 
-  alias LemonCore.ResumeToken, as: CoreResumeToken
+  alias AgentCore.CliRunners.Types.ResumeToken, as: CoreResumeToken
 
   # ============================================================================
   # Engine Identity Tests
@@ -251,14 +250,14 @@ defmodule LemonGateway.Engines.CodexEngineTest do
   # CliAdapter Event Mapping Tests
   # ============================================================================
 
-  describe "CliAdapter.to_gateway_event/1 - StartedEvent" do
+  describe "CliAdapter.to_event_map/1 - StartedEvent" do
     test "maps codex StartedEvent to gateway Started" do
       token = CoreResumeToken.new("codex", "thread_abc")
       started = StartedEvent.new("codex", token, title: "Codex Session", meta: %{model: "gpt-4"})
 
-      result = CliAdapter.to_gateway_event(started)
+      result = CliAdapter.to_event_map(started)
 
-      assert %Event.Started{} = result
+      assert %{__event__: :started} = result
       assert result.engine == "codex"
       assert result.resume.engine == "codex"
       assert result.resume.value == "thread_abc"
@@ -270,7 +269,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
       token = CoreResumeToken.new("codex", "t1")
       started = StartedEvent.new("codex", token)
 
-      result = CliAdapter.to_gateway_event(started)
+      result = CliAdapter.to_event_map(started)
 
       assert result.engine == "codex"
       assert result.resume.value == "t1"
@@ -279,14 +278,14 @@ defmodule LemonGateway.Engines.CodexEngineTest do
     end
   end
 
-  describe "CliAdapter.to_gateway_event/1 - ActionEvent" do
+  describe "CliAdapter.to_event_map/1 - ActionEvent" do
     test "maps ActionEvent to gateway ActionEvent" do
       action = Action.new("t1", :command, "ls -la", %{command: "ls -la"})
       ev = ActionEvent.new("codex", action, :started, level: :info)
 
-      result = CliAdapter.to_gateway_event(ev)
+      result = CliAdapter.to_event_map(ev)
 
-      assert %Event.ActionEvent{} = result
+      assert %{__event__: :action_event} = result
       assert result.engine == "codex"
       assert result.action.id == "t1"
       assert result.action.kind == "command"
@@ -298,7 +297,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
       action = Action.new("cmd_1", :command, "npm install", %{})
       ev = ActionEvent.new("codex", action, :completed, ok: true, message: "Installed")
 
-      result = CliAdapter.to_gateway_event(ev)
+      result = CliAdapter.to_event_map(ev)
 
       assert result.phase == :completed
       assert result.ok == true
@@ -309,7 +308,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
       action = Action.new("cmd_1", :command, "false", %{})
       ev = ActionEvent.new("codex", action, :completed, ok: false, level: :error)
 
-      result = CliAdapter.to_gateway_event(ev)
+      result = CliAdapter.to_event_map(ev)
 
       assert result.ok == false
       assert result.level == :error
@@ -320,7 +319,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
         action = Action.new("a1", kind, "Title", %{})
         ev = ActionEvent.new("codex", action, :started)
 
-        result = CliAdapter.to_gateway_event(ev)
+        result = CliAdapter.to_event_map(ev)
 
         assert result.action.kind == to_string(kind)
       end
@@ -330,13 +329,13 @@ defmodule LemonGateway.Engines.CodexEngineTest do
       action = Action.new("cmd_1", :command, "long running", %{})
       ev = ActionEvent.new("codex", action, :updated)
 
-      result = CliAdapter.to_gateway_event(ev)
+      result = CliAdapter.to_event_map(ev)
 
       assert result.phase == :updated
     end
   end
 
-  describe "CliAdapter.to_gateway_event/1 - CompletedEvent" do
+  describe "CliAdapter.to_event_map/1 - CompletedEvent" do
     test "maps successful CompletedEvent" do
       token = CoreResumeToken.new("codex", "thread_abc")
 
@@ -346,9 +345,9 @@ defmodule LemonGateway.Engines.CodexEngineTest do
           usage: %{input_tokens: 200}
         )
 
-      result = CliAdapter.to_gateway_event(ev)
+      result = CliAdapter.to_event_map(ev)
 
-      assert %Event.Completed{} = result
+      assert %{__event__: :completed} = result
       assert result.engine == "codex"
       assert result.ok == true
       assert result.answer == "Task completed successfully"
@@ -362,7 +361,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
       ev =
         CompletedEvent.error("codex", "API error occurred", resume: token, answer: "partial work")
 
-      result = CliAdapter.to_gateway_event(ev)
+      result = CliAdapter.to_event_map(ev)
 
       assert result.ok == false
       assert result.error == "API error occurred"
@@ -373,7 +372,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
     test "maps CompletedEvent without resume token" do
       ev = CompletedEvent.ok("codex", "Done")
 
-      result = CliAdapter.to_gateway_event(ev)
+      result = CliAdapter.to_event_map(ev)
 
       assert result.ok == true
       assert result.resume == nil
@@ -392,7 +391,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
           }
         )
 
-      result = CliAdapter.to_gateway_event(ev)
+      result = CliAdapter.to_event_map(ev)
 
       assert result.usage.input_tokens == 100
       assert result.usage.output_tokens == 50
@@ -400,14 +399,14 @@ defmodule LemonGateway.Engines.CodexEngineTest do
     end
   end
 
-  describe "CliAdapter.to_gateway_event/1 - edge cases" do
+  describe "CliAdapter.to_event_map/1 - edge cases" do
     test "returns nil for unknown event type" do
-      result = CliAdapter.to_gateway_event(%{type: :unknown})
+      result = CliAdapter.to_event_map(%{type: :unknown})
       assert result == nil
     end
 
     test "returns nil for nil input" do
-      result = CliAdapter.to_gateway_event(nil)
+      result = CliAdapter.to_event_map(nil)
       assert result == nil
     end
   end
@@ -552,10 +551,10 @@ defmodule LemonGateway.Engines.CodexEngineTest do
   # Event.Started Struct Tests
   # ============================================================================
 
-  describe "Event.Started struct for Codex" do
+  describe "Event started maps for Codex" do
     test "requires engine and resume fields" do
       resume = %LemonCore.ResumeToken{engine: "codex", value: "t1"}
-      started = %Event.Started{engine: "codex", resume: resume}
+      started = Event.started(%{engine: "codex", resume: resume})
 
       assert started.engine == "codex"
       assert started.resume.value == "t1"
@@ -564,11 +563,11 @@ defmodule LemonGateway.Engines.CodexEngineTest do
     test "allows optional title and meta fields" do
       resume = %LemonCore.ResumeToken{engine: "codex", value: "t1"}
 
-      started = %Event.Started{
+      started = Event.started(%{
         engine: "codex",
         resume: resume,
         title: "Codex Session",
-        meta: %{model: "gpt-4o"}
+        meta: %{model: "gpt-4o"})
       }
 
       assert started.title == "Codex Session"
@@ -580,30 +579,30 @@ defmodule LemonGateway.Engines.CodexEngineTest do
   # Event.Completed Struct Tests
   # ============================================================================
 
-  describe "Event.Completed struct for Codex" do
+  describe "Event completed maps for Codex" do
     test "requires engine and ok fields" do
-      completed = %Event.Completed{engine: "codex", ok: true}
+      completed = Event.completed(%{engine: "codex", ok: true})
       assert completed.engine == "codex"
       assert completed.ok == true
     end
 
     test "includes answer and error fields" do
-      completed = %Event.Completed{
+      completed = Event.completed(%{
         engine: "codex",
         ok: false,
         answer: "partial work done",
         error: "rate limit"
-      }
+      })
 
       assert completed.answer == "partial work done"
       assert completed.error == "rate limit"
     end
 
     test "includes usage field with token counts" do
-      completed = %Event.Completed{
+      completed = Event.completed(%{
         engine: "codex",
         ok: true,
-        usage: %{input_tokens: 150, output_tokens: 75, cached_input_tokens: 50}
+        usage: %{input_tokens: 150, output_tokens: 75, cached_input_tokens: 50})
       }
 
       assert completed.usage.input_tokens == 150
@@ -615,10 +614,10 @@ defmodule LemonGateway.Engines.CodexEngineTest do
   # Event.ActionEvent Struct Tests
   # ============================================================================
 
-  describe "Event.ActionEvent struct for Codex" do
+  describe "Event action_event maps for Codex" do
     test "requires engine, action, and phase fields" do
-      action = %Event.Action{id: "a1", kind: "command", title: "ls"}
-      ev = %Event.ActionEvent{engine: "codex", action: action, phase: :started}
+      action = Event.action(%{id: "a1", kind: "command", title: "ls"})
+      ev = Event.action_event(%{engine: "codex", action: action, phase: :started})
 
       assert ev.engine == "codex"
       assert ev.action.id == "a1"
@@ -626,8 +625,8 @@ defmodule LemonGateway.Engines.CodexEngineTest do
     end
 
     test "handles turn action kind" do
-      action = %Event.Action{id: "turn_1", kind: "turn", title: "Turn 1"}
-      ev = %Event.ActionEvent{engine: "codex", action: action, phase: :started}
+      action = Event.action(%{id: "turn_1", kind: "turn", title: "Turn 1"})
+      ev = Event.action_event(%{engine: "codex", action: action, phase: :started})
 
       assert ev.action.kind == "turn"
     end
@@ -637,13 +636,13 @@ defmodule LemonGateway.Engines.CodexEngineTest do
   # Event.Action Struct Tests
   # ============================================================================
 
-  describe "Event.Action struct for Codex actions" do
+  describe "Event action maps for Codex actions" do
     test "command action" do
-      action = %Event.Action{
+      action = Event.action(%{
         id: "cmd_1",
         kind: "command",
         title: "npm install",
-        detail: %{command: "npm install", exit_code: 0}
+        detail: %{command: "npm install", exit_code: 0})
       }
 
       assert action.kind == "command"
@@ -651,11 +650,11 @@ defmodule LemonGateway.Engines.CodexEngineTest do
     end
 
     test "file_change action" do
-      action = %Event.Action{
+      action = Event.action(%{
         id: "fc_1",
         kind: "file_change",
         title: "2 files changed",
-        detail: %{changes: [%{path: "a.ex", kind: :add}, %{path: "b.ex", kind: :update}]}
+        detail: %{changes: [%{path: "a.ex", kind: :add}), %{path: "b.ex", kind: :update}]}
       }
 
       assert action.kind == "file_change"
@@ -663,11 +662,11 @@ defmodule LemonGateway.Engines.CodexEngineTest do
     end
 
     test "tool action with MCP" do
-      action = %Event.Action{
+      action = Event.action(%{
         id: "t_1",
         kind: "tool",
         title: "filesystem.read_file",
-        detail: %{server: "filesystem", tool: "read_file", arguments: %{path: "/test.ex"}}
+        detail: %{server: "filesystem", tool: "read_file", arguments: %{path: "/test.ex"})}
       }
 
       assert action.kind == "tool"
@@ -675,11 +674,11 @@ defmodule LemonGateway.Engines.CodexEngineTest do
     end
 
     test "web_search action" do
-      action = %Event.Action{
+      action = Event.action(%{
         id: "ws_1",
         kind: "web_search",
         title: "elixir genserver",
-        detail: %{query: "elixir genserver"}
+        detail: %{query: "elixir genserver"})
       }
 
       assert action.kind == "web_search"
@@ -766,7 +765,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
     test "gateway event types are serializable" do
       # Test that event structs can be safely inspected (useful for logging)
       resume = %LemonCore.ResumeToken{engine: "codex", value: "t1"}
-      started = %Event.Started{engine: "codex", resume: resume}
+      started = Event.started(%{engine: "codex", resume: resume})
 
       # Should not raise
       assert is_binary(inspect(started))
@@ -782,7 +781,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
       action = Action.new("turn_1", :turn, "Turn 1", %{turn_index: 1})
       ev = ActionEvent.new("codex", action, :started)
 
-      result = CliAdapter.to_gateway_event(ev)
+      result = CliAdapter.to_event_map(ev)
 
       assert result.action.kind == "turn"
       assert result.phase == :started
@@ -792,7 +791,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
       action = Action.new("reconnect_1", :note, "Reconnecting...1/3", %{attempt: 1, max: 3})
       ev = ActionEvent.new("codex", action, :started, level: :warning)
 
-      result = CliAdapter.to_gateway_event(ev)
+      result = CliAdapter.to_event_map(ev)
 
       assert result.action.kind == "note"
       assert result.level == :warning
@@ -810,7 +809,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
 
       ev = ActionEvent.new("codex", action, :completed, ok: true)
 
-      result = CliAdapter.to_gateway_event(ev)
+      result = CliAdapter.to_event_map(ev)
 
       assert result.action.kind == "file_change"
       assert result.ok == true
@@ -821,7 +820,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
       action = Action.new("todo_1", :note, "2/3 tasks", %{done: 2, total: 3})
       ev = ActionEvent.new("codex", action, :completed, ok: true)
 
-      result = CliAdapter.to_gateway_event(ev)
+      result = CliAdapter.to_event_map(ev)
 
       assert result.action.title == "2/3 tasks"
       assert result.action.detail.done == 2
@@ -831,7 +830,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
       action = Action.new("err_1", :warning, "Something went wrong", %{})
       ev = ActionEvent.new("codex", action, :completed, ok: false, level: :warning)
 
-      result = CliAdapter.to_gateway_event(ev)
+      result = CliAdapter.to_event_map(ev)
 
       assert result.action.kind == "warning"
       assert result.ok == false
@@ -842,7 +841,7 @@ defmodule LemonGateway.Engines.CodexEngineTest do
       action = Action.new("r_1", :note, "Let me think about this...", %{})
       ev = ActionEvent.new("codex", action, :started)
 
-      result = CliAdapter.to_gateway_event(ev)
+      result = CliAdapter.to_event_map(ev)
 
       assert result.action.kind == "note"
       assert result.phase == :started

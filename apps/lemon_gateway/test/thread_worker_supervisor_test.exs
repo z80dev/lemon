@@ -20,7 +20,6 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
   alias Elixir.LemonGateway.ThreadWorkerSupervisor
   alias Elixir.LemonGateway.ThreadWorker
   alias Elixir.LemonGateway.Types.Job
-  alias Elixir.LemonGateway.Event.Completed
 
   # ============================================================================
   # Test Engine
@@ -29,8 +28,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
   defmodule LemonGateway.ThreadWorkerSupervisorTest.TestEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonCore.ResumeToken
-    alias LemonGateway.Types.Job
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -56,14 +54,14 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
 
       {:ok, task_pid} =
         Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
+          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
           Process.sleep(delay_ms)
           answer = "Test: #{job.prompt}"
 
           send(
             sink_pid,
             {:engine_event, run_ref,
-             %Event.Completed{engine: id(), resume: resume, ok: true, answer: answer}}
+             Event.completed(%{engine: id(), resume: resume, ok: true, answer: answer})}
           )
         end)
 
@@ -161,8 +159,8 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       Elixir.LemonGateway.submit(job1)
       Elixir.LemonGateway.submit(job2)
 
-      assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true}}, 2000
-      assert_receive {:lemon_gateway_run_completed, ^job2, %Completed{ok: true}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^job1, %{__event__: :completed, ok: true}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^job2, %{__event__: :completed, ok: true}}, 2000
     end
   end
 
@@ -247,7 +245,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
         assert worker_pid in child_pids
       end
 
-      assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: true}}, 2000
     end
   end
 
@@ -526,7 +524,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
 
       # All jobs should complete
       for job <- jobs do
-        assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 5000
+        assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: true}}, 5000
       end
     end
 
@@ -559,7 +557,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       job = make_job(scope)
       Elixir.LemonGateway.submit(job)
 
-      assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: true}}, 2000
 
       # Wait for worker to stop - may take a bit longer
       wait_for_worker_stop(key, 500)
@@ -572,7 +570,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       job1 = make_job(scope, text: "first")
       Elixir.LemonGateway.submit(job1)
 
-      assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^job1, %{__event__: :completed, ok: true}}, 2000
 
       # Wait for worker to stop
       wait_for_worker_stop(key, 500)
@@ -581,7 +579,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       job2 = make_job(scope, text: "second")
       Elixir.LemonGateway.submit(job2)
 
-      assert_receive {:lemon_gateway_run_completed, ^job2, %Completed{ok: true}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^job2, %{__event__: :completed, ok: true}}, 2000
     end
 
     test "worker processes multiple jobs sequentially" do
@@ -590,14 +588,14 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       # Submit first job and wait for completion before next
       job1 = make_job(scope, text: "job 1")
       Elixir.LemonGateway.submit(job1)
-      assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^job1, %{__event__: :completed, ok: true}}, 2000
 
       # Wait a moment then submit next job
       Process.sleep(50)
 
       job2 = make_job(scope, text: "job 2")
       Elixir.LemonGateway.submit(job2)
-      assert_receive {:lemon_gateway_run_completed, ^job2, %Completed{ok: true}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^job2, %{__event__: :completed, ok: true}}, 2000
     end
   end
 
@@ -699,7 +697,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       job = make_job(scope)
       GenServer.cast(pid, {:enqueue, job})
 
-      assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: true}}, 2000
     end
 
     test "handles rapid sequential job submissions" do
@@ -713,7 +711,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
         end
 
       for job <- jobs do
-        assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 5000
+        assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: true}}, 5000
       end
     end
 
@@ -733,7 +731,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       job = make_job(scope)
       Elixir.LemonGateway.submit(job)
 
-      assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: true}}, 2000
     end
   end
 
@@ -859,7 +857,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
         assert worker_pid in child_pids
       end
 
-      assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: true}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: true}}, 2000
     end
 
     test "submit reuses existing worker for same scope" do
@@ -882,8 +880,8 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       worker_pid2 = Elixir.LemonGateway.ThreadRegistry.whereis(key)
       assert worker_pid1 == worker_pid2
 
-      assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true}}, 2000
-      assert_receive {:lemon_gateway_run_completed, ^job2, %Completed{ok: true}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^job1, %{__event__: :completed, ok: true}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^job2, %{__event__: :completed, ok: true}}, 2000
     end
 
     test "different scopes get different workers" do
@@ -908,8 +906,8 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
       assert is_pid(worker_pid2)
       assert worker_pid1 != worker_pid2
 
-      assert_receive {:lemon_gateway_run_completed, ^job1, %Completed{ok: true}}, 2000
-      assert_receive {:lemon_gateway_run_completed, ^job2, %Completed{ok: true}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^job1, %{__event__: :completed, ok: true}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^job2, %{__event__: :completed, ok: true}}, 2000
     end
   end
 

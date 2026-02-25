@@ -10,35 +10,36 @@ defmodule LemonGateway.CliAdapterTest do
   }
 
   alias LemonGateway.Engines.CliAdapter
-  alias LemonGateway.Event
   alias LemonCore.ResumeToken, as: GatewayToken
 
   test "maps started event" do
     token = ResumeToken.new("codex", "thread_123")
     ev = StartedEvent.new("codex", token, title: "Codex")
 
-    %Event.Started{engine: "codex", resume: %GatewayToken{value: "thread_123"}} =
-      CliAdapter.to_gateway_event(ev)
+    result = CliAdapter.to_event_map(ev)
+    assert %{__event__: :started, engine: "codex", resume: %GatewayToken{value: "thread_123"}} = result
   end
 
   test "maps action event" do
     action = Action.new("a1", :command, "ls -la", %{})
     ev = ActionEvent.new("codex", action, :started, level: :info)
 
-    %Event.ActionEvent{
-      engine: "codex",
-      action: %Event.Action{id: "a1", kind: "command"},
-      phase: :started
-    } =
-      CliAdapter.to_gateway_event(ev)
+    result = CliAdapter.to_event_map(ev)
+
+    assert %{
+             __event__: :action_event,
+             engine: "codex",
+             action: %{__event__: :action, id: "a1", kind: "command"},
+             phase: :started
+           } = result
   end
 
   test "maps completed event" do
     token = ResumeToken.new("codex", "thread_123")
     ev = CompletedEvent.ok("codex", "done", resume: token)
 
-    %Event.Completed{ok: true, answer: "done", resume: %GatewayToken{value: "thread_123"}} =
-      CliAdapter.to_gateway_event(ev)
+    result = CliAdapter.to_event_map(ev)
+    assert %{__event__: :completed, ok: true, answer: "done", resume: %GatewayToken{value: "thread_123"}} = result
   end
 
   test "cancel uses cancel/2 when runner exports it" do

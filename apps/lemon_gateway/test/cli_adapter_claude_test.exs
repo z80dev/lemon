@@ -10,7 +10,6 @@ defmodule LemonGateway.CliAdapterClaudeTest do
   }
 
   alias LemonGateway.Engines.CliAdapter
-  alias LemonGateway.Event
   alias LemonCore.ResumeToken, as: GatewayToken
 
   test "maps claude started/completed events" do
@@ -18,27 +17,31 @@ defmodule LemonGateway.CliAdapterClaudeTest do
     started = StartedEvent.new("claude", token)
     completed = CompletedEvent.ok("claude", "answer", resume: token)
 
-    %Event.Started{engine: "claude", resume: %GatewayToken{value: "sess_abc"}} =
-      CliAdapter.to_gateway_event(started)
+    started_result = CliAdapter.to_event_map(started)
+    assert %{__event__: :started, engine: "claude", resume: %GatewayToken{value: "sess_abc"}} = started_result
 
-    %Event.Completed{
-      engine: "claude",
-      ok: true,
-      answer: "answer",
-      resume: %GatewayToken{value: "sess_abc"}
-    } =
-      CliAdapter.to_gateway_event(completed)
+    completed_result = CliAdapter.to_event_map(completed)
+
+    assert %{
+             __event__: :completed,
+             engine: "claude",
+             ok: true,
+             answer: "answer",
+             resume: %GatewayToken{value: "sess_abc"}
+           } = completed_result
   end
 
   test "maps claude action events" do
     action = Action.new("t1", :tool, "Bash", %{})
     ev = ActionEvent.new("claude", action, :completed, ok: true)
 
-    %Event.ActionEvent{
-      engine: "claude",
-      action: %Event.Action{id: "t1", kind: "tool"},
-      phase: :completed
-    } =
-      CliAdapter.to_gateway_event(ev)
+    result = CliAdapter.to_event_map(ev)
+
+    assert %{
+             __event__: :action_event,
+             engine: "claude",
+             action: %{__event__: :action, id: "t1", kind: "tool"},
+             phase: :completed
+           } = result
   end
 end

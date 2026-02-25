@@ -17,8 +17,7 @@ defmodule LemonGateway.RunTest do
   use ExUnit.Case, async: false
 
   alias Elixir.LemonGateway.Run
-  alias LemonCore.ResumeToken
-  alias LemonGateway.Types.Job
+  alias Elixir.LemonGateway.Types.{Job, ResumeToken}
   alias Elixir.LemonGateway.Event
 
   # ============================================================================
@@ -29,8 +28,7 @@ defmodule LemonGateway.RunTest do
   defmodule Elixir.LemonGateway.RunTest.TestEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonCore.ResumeToken
-    alias LemonGateway.Types.Job
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -55,13 +53,13 @@ defmodule LemonGateway.RunTest do
 
       {:ok, task_pid} =
         Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
+          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
           answer = "Test: #{job.prompt}"
 
           send(
             sink_pid,
             {:engine_event, run_ref,
-             %Event.Completed{engine: id(), resume: resume, ok: true, answer: answer}}
+             Event.completed(%{engine: id(), resume: resume, ok: true, answer: answer})}
           )
         end)
 
@@ -81,8 +79,7 @@ defmodule LemonGateway.RunTest do
   defmodule ControllableEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonCore.ResumeToken
-    alias LemonGateway.Types.Job
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -108,7 +105,7 @@ defmodule LemonGateway.RunTest do
 
       {:ok, task_pid} =
         Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
+          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
           if controller_pid, do: send(controller_pid, {:engine_started, run_ref})
 
           receive do
@@ -116,21 +113,21 @@ defmodule LemonGateway.RunTest do
               send(
                 sink_pid,
                 {:engine_event, run_ref,
-                 %Event.Completed{engine: id(), resume: resume, ok: true, answer: answer}}
+                 Event.completed(%{engine: id(), resume: resume, ok: true, answer: answer})}
               )
 
             {:error, reason} ->
               send(
                 sink_pid,
                 {:engine_event, run_ref,
-                 %Event.Completed{engine: id(), resume: resume, ok: false, error: reason}}
+                 Event.completed(%{engine: id(), resume: resume, ok: false, error: reason})}
               )
           after
             30_000 ->
               send(
                 sink_pid,
                 {:engine_event, run_ref,
-                 %Event.Completed{engine: id(), resume: resume, ok: false, error: :timeout}}
+                 Event.completed(%{engine: id(), resume: resume, ok: false, error: :timeout})}
               )
           end
         end)
@@ -151,8 +148,7 @@ defmodule LemonGateway.RunTest do
   defmodule FailingEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonCore.ResumeToken
-    alias LemonGateway.Types.Job
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
 
     @impl true
     def id, do: "failing"
@@ -183,8 +179,7 @@ defmodule LemonGateway.RunTest do
   defmodule SteerableTestEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonCore.ResumeToken
-    alias LemonGateway.Types.Job
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -211,7 +206,7 @@ defmodule LemonGateway.RunTest do
 
       {:ok, task_pid} =
         Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
+          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
           if controller_pid, do: send(controller_pid, {:engine_started, run_ref})
 
           receive do
@@ -219,14 +214,14 @@ defmodule LemonGateway.RunTest do
               send(
                 sink_pid,
                 {:engine_event, run_ref,
-                 %Event.Completed{engine: id(), resume: resume, ok: true, answer: answer}}
+                 Event.completed(%{engine: id(), resume: resume, ok: true, answer: answer})}
               )
           after
             30_000 ->
               send(
                 sink_pid,
                 {:engine_event, run_ref,
-                 %Event.Completed{engine: id(), resume: resume, ok: false, error: :timeout}}
+                 Event.completed(%{engine: id(), resume: resume, ok: false, error: :timeout})}
               )
           end
         end)
@@ -255,8 +250,7 @@ defmodule LemonGateway.RunTest do
   defmodule Elixir.LemonGateway.RunTest.StreamingEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonCore.ResumeToken
-    alias LemonGateway.Types.Job
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -282,7 +276,7 @@ defmodule LemonGateway.RunTest do
 
       {:ok, task_pid} =
         Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
+          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
 
           # Emit some deltas with a small delay
           Process.sleep(delay_ms)
@@ -295,7 +289,7 @@ defmodule LemonGateway.RunTest do
           send(
             sink_pid,
             {:engine_event, run_ref,
-             %Event.Completed{engine: id(), resume: resume, ok: true, answer: ""}}
+             Event.completed(%{engine: id(), resume: resume, ok: true, answer: ""})}
           )
         end)
 
@@ -315,8 +309,7 @@ defmodule LemonGateway.RunTest do
   defmodule SteerFailEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonCore.ResumeToken
-    alias LemonGateway.Types.Job
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -342,7 +335,7 @@ defmodule LemonGateway.RunTest do
 
       {:ok, task_pid} =
         Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
+          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
           if controller_pid, do: send(controller_pid, {:engine_started, run_ref})
 
           receive do
@@ -350,14 +343,14 @@ defmodule LemonGateway.RunTest do
               send(
                 sink_pid,
                 {:engine_event, run_ref,
-                 %Event.Completed{engine: id(), resume: resume, ok: true, answer: answer}}
+                 Event.completed(%{engine: id(), resume: resume, ok: true, answer: answer})}
               )
           after
             30_000 ->
               send(
                 sink_pid,
                 {:engine_event, run_ref,
-                 %Event.Completed{engine: id(), resume: resume, ok: false, error: :timeout}}
+                 Event.completed(%{engine: id(), resume: resume, ok: false, error: :timeout})}
               )
           end
         end)
@@ -477,7 +470,7 @@ defmodule LemonGateway.RunTest do
       assert Process.alive?(pid)
 
       # Wait for completion
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
 
     test "initializes state with correct fields" do
@@ -515,7 +508,7 @@ defmodule LemonGateway.RunTest do
       {:ok, pid} = start_run_direct(job)
 
       # Should complete using default engine (test)
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true, engine: "test"}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, engine: "test"}}, 2000
     end
 
     test "explicit engine_id takes precedence over resume token engine" do
@@ -525,7 +518,7 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true, engine: "test"}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, engine: "test"}}, 2000
     end
 
     test "handles engine start_run failure" do
@@ -537,7 +530,7 @@ defmodule LemonGateway.RunTest do
       {:ok, pid} = start_run_direct(job)
 
       # Should receive completion with error
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false, error: :custom_error}},
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false, error: :custom_error}},
                      2000
 
       # Process should stop after error
@@ -551,8 +544,8 @@ defmodule LemonGateway.RunTest do
       {:ok, _pid} = start_run_direct(job)
 
       # Should receive both run_complete (to worker) and notification (to notify_pid)
-      assert_receive {:run_complete, _, %Event.Completed{ok: true}}, 2000
-      assert_receive {:lemon_gateway_run_completed, ^job, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, _, %{__event__: :completed, ok: true}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: true}}, 2000
     end
   end
 
@@ -595,8 +588,8 @@ defmodule LemonGateway.RunTest do
       assert_receive {:engine_started, run_ref}, 2000
 
       # Simulate an action event
-      action = %Event.Action{id: "action_1", kind: :test, title: "Test Action"}
-      action_event = %Event.ActionEvent{engine: "controllable", action: action, phase: :started}
+      action = Event.action(%{id: "action_1", kind: :test, title: "Test Action"})
+      action_event = Event.action_event(%{engine: "controllable", action: action, phase: :started})
       send(pid, {:engine_event, run_ref, action_event})
 
       # Run should still be alive (check without timing race)
@@ -610,7 +603,7 @@ defmodule LemonGateway.RunTest do
       {:ok, pid} = start_run_direct(job)
 
       # Should complete and stop
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
       # Wait deterministically for the process to stop
       Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
@@ -631,7 +624,7 @@ defmodule LemonGateway.RunTest do
 
       # Send event with wrong run_ref
       wrong_ref = make_ref()
-      completed = %Event.Completed{engine: "controllable", ok: true, answer: "wrong"}
+      completed = Event.completed(%{engine: "controllable", ok: true, answer: "wrong"})
       send(pid, {:engine_event, wrong_ref, completed})
 
       # Run should still be alive (event was ignored)
@@ -650,7 +643,7 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
       # Events should be stored (though we can't easily inspect without run_ref)
     end
@@ -662,7 +655,7 @@ defmodule LemonGateway.RunTest do
       {:ok, pid} = start_run_direct(job)
 
       assert_receive {:run_complete, ^pid,
-                      %Event.Completed{ok: true, answer: "Test: hello world"}},
+                      %{__event__: :completed, ok: true, answer: "Test: hello world"}},
                      2000
     end
 
@@ -674,7 +667,7 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false, error: :test_error}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false, error: :test_error}}, 2000
     end
 
     test "handles unknown messages gracefully" do
@@ -734,7 +727,7 @@ defmodule LemonGateway.RunTest do
       {:ok, pid} = start_run_direct(job)
 
       # Wait for completion
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
       # Try to steer after completion
       steer_job = make_job(scope, text: "late steer")
@@ -814,7 +807,7 @@ defmodule LemonGateway.RunTest do
       GenServer.cast(pid, {:cancel, :user_requested})
 
       # Should receive completion with error
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false, error: :user_requested}},
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false, error: :user_requested}},
                      2000
 
       # Process should stop
@@ -828,7 +821,7 @@ defmodule LemonGateway.RunTest do
       {:ok, pid} = start_run_direct(job)
 
       # Wait for natural completion
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
       # Try to cancel after completion (should be ignored)
       # Process may already be dead, which is fine
@@ -851,7 +844,7 @@ defmodule LemonGateway.RunTest do
 
       # Should receive notification
       assert_receive {:lemon_gateway_run_completed, ^job,
-                      %Event.Completed{ok: false, error: :test_reason}},
+                      %{__event__: :completed, ok: false, error: :test_reason}},
                      2000
     end
 
@@ -871,7 +864,7 @@ defmodule LemonGateway.RunTest do
 
       GenServer.cast(pid, {:cancel, :test_reason})
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed}}, 2000
 
       # Slot should be released (verified through Scheduler behavior)
     end
@@ -892,7 +885,7 @@ defmodule LemonGateway.RunTest do
       GenServer.cast(pid, {:cancel, :user_requested})
 
       # Engine task should be killed
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false}}, 2000
     end
   end
 
@@ -909,11 +902,11 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false, error: :engine_error}},
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false, error: :engine_error}},
                      2000
 
       assert_receive {:lemon_gateway_run_completed, ^job,
-                      %Event.Completed{ok: false, error: :engine_error}},
+                      %{__event__: :completed, ok: false, error: :engine_error}},
                      2000
 
       Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
@@ -925,7 +918,7 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false, error: error}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false, error: error}}, 2000
       assert is_binary(error)
       assert error =~ "unknown engine id"
 
@@ -939,7 +932,7 @@ defmodule LemonGateway.RunTest do
       {:ok, pid} = start_run_direct(job)
 
       # Should still complete (no notification sent)
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
       # Should NOT crash
       # Stopped normally
@@ -959,7 +952,7 @@ defmodule LemonGateway.RunTest do
       {:ok, pid} = start_run_direct(job)
       ref = Process.monitor(pid)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
       assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 2000
     end
 
@@ -970,7 +963,7 @@ defmodule LemonGateway.RunTest do
       {:ok, pid} = start_run_direct(job)
       ref = Process.monitor(pid)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false}}, 2000
       assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 2000
     end
 
@@ -1000,7 +993,7 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job, slot_ref)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
       # Slot release is verified through Scheduler internals
     end
@@ -1013,7 +1006,7 @@ defmodule LemonGateway.RunTest do
 
       # Worker (self) should receive completion
       assert_receive {:run_complete, ^pid,
-                      %Event.Completed{ok: true, answer: "Test: test message"}},
+                      %{__event__: :completed, ok: true, answer: "Test: test message"}},
                      2000
     end
   end
@@ -1056,7 +1049,7 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 5000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 5000
     end
 
     test "releases lock on successful completion" do
@@ -1065,13 +1058,13 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 5000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 5000
 
       # Start another run with same scope - should succeed if lock was released
       job2 = make_job(scope, text: "second run")
       {:ok, pid2} = start_run_direct(job2)
 
-      assert_receive {:run_complete, ^pid2, %Event.Completed{ok: true}}, 5000
+      assert_receive {:run_complete, ^pid2, %{__event__: :completed, ok: true}}, 5000
     end
 
     test "releases lock on error completion" do
@@ -1080,13 +1073,13 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false}}, 5000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false}}, 5000
 
       # Start another run with same scope
       job2 = make_job(scope, text: "after error")
       {:ok, pid2} = start_run_direct(job2)
 
-      assert_receive {:run_complete, ^pid2, %Event.Completed{ok: true}}, 5000
+      assert_receive {:run_complete, ^pid2, %{__event__: :completed, ok: true}}, 5000
     end
 
     test "releases lock on cancellation" do
@@ -1104,13 +1097,13 @@ defmodule LemonGateway.RunTest do
 
       GenServer.cast(pid, {:cancel, :test_reason})
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false}}, 5000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false}}, 5000
 
       # Start another run with same scope
       job2 = make_job(scope, text: "after cancel")
       {:ok, pid2} = start_run_direct(job2)
 
-      assert_receive {:run_complete, ^pid2, %Event.Completed{ok: true}}, 5000
+      assert_receive {:run_complete, ^pid2, %{__event__: :completed, ok: true}}, 5000
     end
 
     test "uses resume token value for lock key when present" do
@@ -1145,7 +1138,7 @@ defmodule LemonGateway.RunTest do
       # Now second should succeed - use test engine for quick completion
       job2 = make_job(scope2, resume: %ResumeToken{engine: "test", value: resume.value})
       {:ok, pid2} = start_run_direct(job2)
-      assert_receive {:run_complete, ^pid2, %Event.Completed{}}, 5000
+      assert_receive {:run_complete, ^pid2, %{__event__: :completed}}, 5000
     end
   end
 
@@ -1227,7 +1220,7 @@ defmodule LemonGateway.RunTest do
 
       # Should receive lock timeout completion notification for job2
       assert_receive {:lemon_gateway_run_completed, ^job2,
-                      %Event.Completed{ok: false, error: :lock_timeout}},
+                      %{__event__: :completed, ok: false, error: :lock_timeout}},
                      5000
     end
 
@@ -1257,7 +1250,7 @@ defmodule LemonGateway.RunTest do
 
       # Should receive lock timeout notification
       assert_receive {:lemon_gateway_run_completed, ^job2,
-                      %Event.Completed{ok: false, error: :lock_timeout}},
+                      %{__event__: :completed, ok: false, error: :lock_timeout}},
                      5000
     end
   end
@@ -1285,7 +1278,7 @@ defmodule LemonGateway.RunTest do
       # Check mapping exists (stores run_id string, not PID)
       stored_run_id =
         wait_for(
-          fn -> LemonCore.Store.get_run_by_progress(scope, progress_msg_id) end,
+          fn -> Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) end,
           500,
           10
         )
@@ -1300,7 +1293,7 @@ defmodule LemonGateway.RunTest do
 
       # Wait for unregistration to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
+        fn -> Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
         message: "run progress mapping was not removed"
       )
     end
@@ -1314,7 +1307,7 @@ defmodule LemonGateway.RunTest do
       assert_receive {:run_complete, ^pid, _}, 2000
 
       # No mapping should exist
-      assert LemonCore.Store.get_run_by_progress(scope, nil) == nil
+      assert Elixir.LemonGateway.Store.get_run_by_progress(scope, nil) == nil
     end
 
     test "unregisters progress mapping on completion" do
@@ -1329,7 +1322,7 @@ defmodule LemonGateway.RunTest do
 
       # Wait for cleanup to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
+        fn -> Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
         message: "run progress mapping was not removed on completion"
       )
     end
@@ -1350,7 +1343,7 @@ defmodule LemonGateway.RunTest do
 
       # Verify mapping exists (stores run_id string, not PID)
       assert Enum.any?(1..20, fn _attempt ->
-               case LemonCore.Store.get_run_by_progress(scope, progress_msg_id) do
+               case Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) do
                  run_id when is_binary(run_id) and run_id != "" ->
                    true
 
@@ -1367,7 +1360,7 @@ defmodule LemonGateway.RunTest do
 
       # Wait for cleanup to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
+        fn -> Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
         message: "run progress mapping was not removed on cancellation"
       )
     end
@@ -1384,7 +1377,7 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
 
     test "applies events through renderer" do
@@ -1411,7 +1404,7 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
   end
 
@@ -1434,36 +1427,36 @@ defmodule LemonGateway.RunTest do
       assert_receive {:engine_started, run_ref}, 2000
 
       # Send action events
-      action1 = %Event.Action{id: "a1", kind: :tool, title: "Tool 1"}
+      action1 = Event.action(%{id: "a1", kind: :tool, title: "Tool 1"})
 
       send(
         pid,
         {:engine_event, run_ref,
-         %Event.ActionEvent{engine: "controllable", action: action1, phase: :started}}
+         Event.action_event(%{engine: "controllable", action: action1, phase: :started})}
       )
 
-      action2 = %Event.Action{id: "a2", kind: :tool, title: "Tool 2"}
+      action2 = Event.action(%{id: "a2", kind: :tool, title: "Tool 2"})
 
       send(
         pid,
         {:engine_event, run_ref,
-         %Event.ActionEvent{engine: "controllable", action: action2, phase: :started}}
+         Event.action_event(%{engine: "controllable", action: action2, phase: :started})}
       )
 
       send(
         pid,
         {:engine_event, run_ref,
-         %Event.ActionEvent{engine: "controllable", action: action1, phase: :completed}}
+         Event.action_event(%{engine: "controllable", action: action1, phase: :completed})}
       )
 
       # Process should still be running
       Elixir.LemonGateway.AsyncHelpers.assert_process_alive(pid)
 
       # Send completion
-      completed = %Event.Completed{engine: "controllable", ok: true, answer: "done"}
+      completed = Event.completed(%{engine: "controllable", ok: true, answer: "done"})
       send(pid, {:engine_event, run_ref, completed})
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true, answer: "done"}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, answer: "done"}}, 2000
     end
 
     test "processes many events without issues" do
@@ -1481,18 +1474,18 @@ defmodule LemonGateway.RunTest do
 
       # Send many action events
       for i <- 1..100 do
-        action = %Event.Action{id: "action_#{i}", kind: :tool, title: "Action #{i}"}
-        event = %Event.ActionEvent{engine: "controllable", action: action, phase: :started}
+        action = Event.action(%{id: "action_#{i}", kind: :tool, title: "Action #{i}"})
+        event = Event.action_event(%{engine: "controllable", action: action, phase: :started})
         send(pid, {:engine_event, run_ref, event})
       end
 
       Elixir.LemonGateway.AsyncHelpers.assert_process_alive(pid)
 
       # Complete
-      completed = %Event.Completed{engine: "controllable", ok: true, answer: "all done"}
+      completed = Event.completed(%{engine: "controllable", ok: true, answer: "all done"})
       send(pid, {:engine_event, run_ref, completed})
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
   end
 
@@ -1572,7 +1565,7 @@ defmodule LemonGateway.RunTest do
       {:ok, pid} = start_run_direct(job)
 
       # Wait for completion
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
       # Process should be stopping/stopped, but if we can still message it...
       steer_job = make_job(scope, text: "late steer")
@@ -1758,7 +1751,7 @@ defmodule LemonGateway.RunTest do
       assert_receive {:lemon_gateway_run_completed, ^job2, _completed}, 5000
 
       # Worker should receive run_complete message
-      assert_receive {:run_complete, _pid, %Event.Completed{error: :lock_timeout}}, 5000
+      assert_receive {:run_complete, _pid, %{__event__: :completed, error: :lock_timeout}}, 5000
     end
 
     test "lock timeout uses correct engine_id in completed event" do
@@ -1805,7 +1798,7 @@ defmodule LemonGateway.RunTest do
 
       # notify_pid should receive the notification
       assert_receive {:lemon_gateway_run_completed, ^job2,
-                      %Event.Completed{error: :lock_timeout}},
+                      %{__event__: :completed, error: :lock_timeout}},
                      5000
     end
 
@@ -1828,7 +1821,7 @@ defmodule LemonGateway.RunTest do
       _result = start_run_direct(job2)
 
       # Should still receive run_complete to worker
-      assert_receive {:run_complete, _pid, %Event.Completed{error: :lock_timeout}}, 5000
+      assert_receive {:run_complete, _pid, %{__event__: :completed, error: :lock_timeout}}, 5000
 
       # But should NOT receive lemon_gateway_run_completed (no notify_pid)
       refute_receive {:lemon_gateway_run_completed, _, _}, 100
@@ -1882,7 +1875,7 @@ defmodule LemonGateway.RunTest do
       {:ok, pid} = start_run_direct(job)
 
       # Should complete with ok: true
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
       # The renderer would have rendered :done status
     end
@@ -1906,7 +1899,7 @@ defmodule LemonGateway.RunTest do
       {:ok, pid} = start_run_direct(job)
 
       # Should complete with error
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false, error: :test_error}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false, error: :test_error}}, 2000
 
       # The renderer would have rendered :error status
     end
@@ -1932,19 +1925,19 @@ defmodule LemonGateway.RunTest do
       assert_receive {:engine_started, run_ref}, 2000
 
       # Send action event
-      action = %Event.Action{id: "tool_1", kind: :tool, title: "Read file"}
-      event = %Event.ActionEvent{engine: "controllable", action: action, phase: :started}
+      action = Event.action(%{id: "tool_1", kind: :tool, title: "Read file"})
+      event = Event.action_event(%{engine: "controllable", action: action, phase: :started})
       send(pid, {:engine_event, run_ref, event})
 
       # Run should still be active
       Elixir.LemonGateway.AsyncHelpers.assert_process_alive(pid)
 
       # Send completed action
-      completed_event = %Event.ActionEvent{
+      completed_event = Event.action_event(%{
         engine: "controllable",
         action: action,
         phase: :completed
-      }
+      })
 
       send(pid, {:engine_event, run_ref, completed_event})
 
@@ -1960,7 +1953,7 @@ defmodule LemonGateway.RunTest do
       {:ok, pid} = start_run_direct(job)
 
       # Engine fails immediately, renderer may not have been fully initialized
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false}}, 2000
     end
   end
 
@@ -1977,7 +1970,7 @@ defmodule LemonGateway.RunTest do
       {:ok, pid} = start_run_direct(job)
 
       # Test engine echoes back the text
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true, answer: "Test: " <> ^text}},
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, answer: "Test: " <> ^text}},
                      2000
     end
 
@@ -1988,7 +1981,7 @@ defmodule LemonGateway.RunTest do
       job = make_job(scope, meta: %{notify_pid: self()})
 
       {:ok, pid} = start_run_direct(job)
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
 
     test "engine cancel is called with correct cancel_ctx" do
@@ -2008,7 +2001,7 @@ defmodule LemonGateway.RunTest do
       GenServer.cast(pid, {:cancel, :user_requested})
 
       # Engine should be cancelled (task killed)
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false, error: :user_requested}},
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false, error: :user_requested}},
                      2000
     end
 
@@ -2026,24 +2019,24 @@ defmodule LemonGateway.RunTest do
       assert_receive {:engine_started, run_ref}, 2000
 
       # Send some events
-      action = %Event.Action{id: "test_action", kind: :tool, title: "Test Tool"}
-      event = %Event.ActionEvent{engine: "controllable", action: action, phase: :started}
+      action = Event.action(%{id: "test_action", kind: :tool, title: "Test Tool"})
+      event = Event.action_event(%{engine: "controllable", action: action, phase: :started})
       send(pid, {:engine_event, run_ref, event})
 
       # Complete
-      completed = %Event.Completed{engine: "controllable", ok: true, answer: "done"}
+      completed = Event.completed(%{engine: "controllable", ok: true, answer: "done"})
       send(pid, {:engine_event, run_ref, completed})
 
       assert_receive {:run_complete, ^pid, _}, 2000
 
       # Wait for store operations to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_run(run_ref) != nil end,
+        fn -> Elixir.LemonGateway.Store.get_run(run_ref) != nil end,
         message: "run data was not stored"
       )
 
       # Events should be stored
-      run_data = LemonCore.Store.get_run(run_ref)
+      run_data = Elixir.LemonGateway.Store.get_run(run_ref)
       assert run_data != nil
       assert length(run_data.events) >= 2
     end
@@ -2056,7 +2049,7 @@ defmodule LemonGateway.RunTest do
       ref = Process.monitor(pid)
 
       # Should complete quickly with error
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false}}, 2000
 
       # Process should stop
       assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 2000
@@ -2083,7 +2076,7 @@ defmodule LemonGateway.RunTest do
 
       GenServer.cast(pid, {:cancel, :user_requested})
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false, error: :user_requested}},
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false, error: :user_requested}},
                      2000
     end
 
@@ -2102,7 +2095,7 @@ defmodule LemonGateway.RunTest do
 
       GenServer.cast(pid, {:cancel, :timeout})
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false, error: :timeout}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false, error: :timeout}}, 2000
     end
 
     test "cancel with custom reason" do
@@ -2121,7 +2114,7 @@ defmodule LemonGateway.RunTest do
       GenServer.cast(pid, {:cancel, {:custom, "reason"}})
 
       assert_receive {:run_complete, ^pid,
-                      %Event.Completed{ok: false, error: {:custom, "reason"}}},
+                      %{__event__: :completed, ok: false, error: {:custom, "reason"}}},
                      2000
     end
 
@@ -2142,7 +2135,7 @@ defmodule LemonGateway.RunTest do
       GenServer.cast(pid, {:cancel, :first_reason})
 
       # Receive the completion
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false, error: :first_reason}},
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false, error: :first_reason}},
                      2000
 
       # Process might still be alive briefly
@@ -2151,7 +2144,7 @@ defmodule LemonGateway.RunTest do
         GenServer.cast(pid, {:cancel, :second_reason})
 
         # Should NOT receive another run_complete with second reason
-        refute_receive {:run_complete, ^pid, %Event.Completed{error: :second_reason}}, 500
+        refute_receive {:run_complete, ^pid, %{__event__: :completed, error: :second_reason}}, 500
       end
     end
 
@@ -2204,7 +2197,7 @@ defmodule LemonGateway.RunTest do
       job2 = make_job(scope, text: "after cancel")
       {:ok, pid2} = start_run_direct(job2)
 
-      assert_receive {:run_complete, ^pid2, %Event.Completed{ok: true}}, 5000
+      assert_receive {:run_complete, ^pid2, %{__event__: :completed, ok: true}}, 5000
     end
 
     test "cancel calls unregister_progress_mapping" do
@@ -2223,7 +2216,7 @@ defmodule LemonGateway.RunTest do
 
       # Verify mapping exists (stores run_id string, not PID)
       assert Enum.any?(1..20, fn _attempt ->
-               case LemonCore.Store.get_run_by_progress(scope, progress_msg_id) do
+               case Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) do
                  run_id when is_binary(run_id) and run_id != "" ->
                    true
 
@@ -2239,7 +2232,7 @@ defmodule LemonGateway.RunTest do
 
       # Wait for cleanup to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
+        fn -> Elixir.LemonGateway.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
         message: "run progress mapping was not removed"
       )
     end
@@ -2256,16 +2249,16 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
       # Wait for store operations to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_chat_state(scope) != nil end,
+        fn -> Elixir.LemonGateway.Store.get_chat_state(scope) != nil end,
         message: "ChatState was not persisted"
       )
 
       # ChatState should have the resume token
-      chat_state = LemonCore.Store.get_chat_state(scope)
+      chat_state = Elixir.LemonGateway.Store.get_chat_state(scope)
       assert chat_state != nil
       assert chat_state.last_engine == "test"
       assert is_binary(chat_state.last_resume_token)
@@ -2290,12 +2283,12 @@ defmodule LemonGateway.RunTest do
         value: "final_token_#{System.unique_integer([:positive])}"
       }
 
-      completed = %Event.Completed{
+      completed = Event.completed(%{
         engine: "controllable",
         ok: true,
         answer: "done",
         resume: resume
-      }
+      })
 
       send(pid, {:engine_event, run_ref, completed})
 
@@ -2304,14 +2297,14 @@ defmodule LemonGateway.RunTest do
       # Wait for store operations to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
         fn ->
-          state = LemonCore.Store.get_chat_state(scope)
+          state = Elixir.LemonGateway.Store.get_chat_state(scope)
           state != nil and state.last_resume_token == resume.value
         end,
         message: "ChatState with resume token was not persisted"
       )
 
       # ChatState should have the completed resume token
-      chat_state = LemonCore.Store.get_chat_state(scope)
+      chat_state = Elixir.LemonGateway.Store.get_chat_state(scope)
       assert chat_state != nil
       assert chat_state.last_engine == "controllable"
       assert chat_state.last_resume_token == resume.value
@@ -2320,7 +2313,7 @@ defmodule LemonGateway.RunTest do
     test "context overflow clears ChatState and does not persist failing resume" do
       scope = make_scope()
 
-      LemonCore.Store.put_chat_state(scope, %Elixir.LemonGateway.ChatState{
+      Elixir.LemonGateway.Store.put_chat_state(scope, %Elixir.LemonGateway.ChatState{
         last_engine: "controllable",
         last_resume_token: "stale_token",
         updated_at: System.system_time(:millisecond)
@@ -2343,19 +2336,19 @@ defmodule LemonGateway.RunTest do
       send(
         pid,
         {:engine_event, run_ref,
-         %Event.Completed{
+         Event.completed(%{
            engine: "controllable",
            ok: false,
            error:
-             "Codex error: %{\\\"error\\\" => %{\\\"code\\\" => \\\"context_length_exceeded\\\"}}",
+             "Codex error: %{\\\"error\\\" => %{\\\"code\\\" => \\\"context_length_exceeded\\\"})}",
            resume: resume
          }}
       )
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false}}, 2000
       # Wait to confirm no ChatState was written
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_chat_state(scope) == nil end,
+        fn -> Elixir.LemonGateway.Store.get_chat_state(scope) == nil end,
         message: "ChatState should remain nil after context overflow"
       )
     end
@@ -2363,7 +2356,7 @@ defmodule LemonGateway.RunTest do
     test "Chinese context overflow marker clears ChatState and does not persist failing resume" do
       scope = make_scope()
 
-      LemonCore.Store.put_chat_state(scope, %Elixir.LemonGateway.ChatState{
+      Elixir.LemonGateway.Store.put_chat_state(scope, %Elixir.LemonGateway.ChatState{
         last_engine: "controllable",
         last_resume_token: "stale_token",
         updated_at: System.system_time(:millisecond)
@@ -2386,18 +2379,18 @@ defmodule LemonGateway.RunTest do
       send(
         pid,
         {:engine_event, run_ref,
-         %Event.Completed{
+         Event.completed(%{
            engine: "controllable",
            ok: false,
            error: "模型输入过长：上下文长度超过限制",
            resume: resume
-         }}
+         })}
       )
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false}}, 2000
 
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_chat_state(scope) == nil end,
+        fn -> Elixir.LemonGateway.Store.get_chat_state(scope) == nil end,
         message: "ChatState should remain nil after Chinese context overflow"
       )
     end
@@ -2409,7 +2402,7 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true, engine: "test"}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, engine: "test"}}, 2000
     end
 
     test "resume token value is used for lock key" do
@@ -2462,7 +2455,7 @@ defmodule LemonGateway.RunTest do
 
       # Should get lock timeout because first job holds the lock
       assert_receive {:lemon_gateway_run_completed, ^job2,
-                      %Event.Completed{error: :lock_timeout}},
+                      %{__event__: :completed, error: :lock_timeout}},
                      5000
     end
 
@@ -2480,7 +2473,7 @@ defmodule LemonGateway.RunTest do
       assert_receive {:engine_started, _run_ref}, 2000
 
       # ChatState should not be updated on Started (no async wait needed)
-      chat_state1 = LemonCore.Store.get_chat_state(scope)
+      chat_state1 = Elixir.LemonGateway.Store.get_chat_state(scope)
       assert chat_state1 == nil
 
       # Now complete with a different resume token
@@ -2495,11 +2488,11 @@ defmodule LemonGateway.RunTest do
 
       # Wait for ChatState to be updated
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_chat_state(scope) != nil end,
+        fn -> Elixir.LemonGateway.Store.get_chat_state(scope) != nil end,
         message: "ChatState was not updated after completion"
       )
 
-      chat_state2 = LemonCore.Store.get_chat_state(scope)
+      chat_state2 = Elixir.LemonGateway.Store.get_chat_state(scope)
       assert chat_state2 != nil
 
       # Token should exist (may be same as first if cancellation doesn't provide new token)
@@ -2515,11 +2508,11 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false}}, 2000
 
       # Confirm no ChatState was written by failing engine
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_chat_state(scope) == nil end,
+        fn -> Elixir.LemonGateway.Store.get_chat_state(scope) == nil end,
         message: "ChatState should remain nil when resume is absent"
       )
     end
@@ -2533,7 +2526,7 @@ defmodule LemonGateway.RunTest do
       {:ok, pid} = start_run_direct(job)
 
       # Should use echo engine from resume
-      assert_receive {:run_complete, ^pid, %Event.Completed{engine: "echo"}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, engine: "echo"}}, 2000
     end
   end
 
@@ -2548,16 +2541,16 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
       # Wait for run history to be stored
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> length(LemonCore.Store.get_run_history(scope)) >= 1 end,
+        fn -> length(Elixir.LemonGateway.Store.get_run_history(scope)) >= 1 end,
         message: "run history was not stored"
       )
 
       # Run history should include this run
-      history = LemonCore.Store.get_run_history(scope)
+      history = Elixir.LemonGateway.Store.get_run_history(scope)
       assert length(history) >= 1
     end
 
@@ -2575,11 +2568,11 @@ defmodule LemonGateway.RunTest do
       assert_receive {:engine_started, run_ref}, 2000
 
       # Send two completed events (shouldn't happen normally, but tests guard)
-      completed1 = %Event.Completed{engine: "controllable", ok: true, answer: "first"}
+      completed1 = Event.completed(%{engine: "controllable", ok: true, answer: "first"})
       send(pid, {:engine_event, run_ref, completed1})
 
       # Only first should be processed
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true, answer: "first"}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, answer: "first"}}, 2000
 
       # Second completion is ignored because process stops
       refute_receive {:run_complete, ^pid, _}, 500
@@ -2592,7 +2585,7 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false}}, 2000
 
       # Should complete without crashing
       Elixir.LemonGateway.AsyncHelpers.assert_process_dead(pid)
@@ -2630,7 +2623,7 @@ defmodule LemonGateway.RunTest do
       assert is_binary(metadata.run_id)
 
       # Wait for completion
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
       :telemetry.detach("test-run-start-#{inspect(ref)}")
     end
@@ -2654,7 +2647,7 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
       # Should receive telemetry event
       assert_receive {:telemetry_stop, measurements, metadata}, 2000
@@ -2687,7 +2680,7 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: false}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: false}}, 2000
 
       # Should receive telemetry event with ok: false
       assert_receive {:telemetry_stop, measurements, _metadata}, 2000
@@ -2725,7 +2718,7 @@ defmodule LemonGateway.RunTest do
       # Wait a bit before completing
       Process.sleep(100)
 
-      completed = %Event.Completed{engine: "controllable", ok: true, answer: "done"}
+      completed = Event.completed(%{engine: "controllable", ok: true, answer: "done"})
       send(pid, {:engine_event, run_ref, completed})
 
       assert_receive {:run_complete, ^pid, _}, 2000
@@ -2758,7 +2751,7 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 5000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 5000
 
       # Should have received first_token telemetry
       assert_receive {:telemetry_first_token, measurements, metadata}, 2000
@@ -2790,7 +2783,7 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 5000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 5000
 
       # Should only receive one first_token event despite multiple deltas
       assert_receive :first_token_emitted, 1000
@@ -2807,7 +2800,7 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true, answer: answer}}, 5000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, answer: answer}}, 5000
 
       # Answer should contain accumulated delta text
       assert answer == "Hello World"
@@ -2825,7 +2818,7 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true, answer: "Test: "}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, answer: "Test: "}}, 2000
     end
 
     test "handles job with very long text" do
@@ -2835,7 +2828,7 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
 
     test "handles rapid successive events" do
@@ -2853,8 +2846,8 @@ defmodule LemonGateway.RunTest do
 
       # Send many events rapidly
       for i <- 1..1000 do
-        action = %Event.Action{id: "action_#{i}", kind: :tool, title: "Action #{i}"}
-        event = %Event.ActionEvent{engine: "controllable", action: action, phase: :started}
+        action = Event.action(%{id: "action_#{i}", kind: :tool, title: "Action #{i}"})
+        event = Event.action_event(%{engine: "controllable", action: action, phase: :started})
         send(pid, {:engine_event, run_ref, event})
       end
 
@@ -2862,10 +2855,10 @@ defmodule LemonGateway.RunTest do
       assert Process.alive?(pid)
 
       # Complete
-      completed = %Event.Completed{engine: "controllable", ok: true, answer: "done"}
+      completed = Event.completed(%{engine: "controllable", ok: true, answer: "done"})
       send(pid, {:engine_event, run_ref, completed})
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 5000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 5000
     end
 
     test "handles meta with extra keys" do
@@ -2883,7 +2876,7 @@ defmodule LemonGateway.RunTest do
 
       {:ok, pid} = start_run_direct(job)
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
 
     test "handles concurrent runs with different scopes" do
@@ -2898,7 +2891,7 @@ defmodule LemonGateway.RunTest do
 
       # All should complete successfully
       for {_i, pid} <- runs do
-        assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 5000
+        assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 5000
       end
     end
 
@@ -2917,19 +2910,19 @@ defmodule LemonGateway.RunTest do
       assert_receive {:engine_started, run_ref}, 2000
 
       # Send event
-      action = %Event.Action{id: "a1", kind: :tool, title: "Test"}
+      action = Event.action(%{id: "a1", kind: :tool, title: "Test"})
 
       send(
         pid,
         {:engine_event, run_ref,
-         %Event.ActionEvent{engine: "controllable", action: action, phase: :started}}
+         Event.action_event(%{engine: "controllable", action: action, phase: :started})}
       )
 
       # Complete
-      completed = %Event.Completed{engine: "controllable", ok: true, answer: "done"}
+      completed = Event.completed(%{engine: "controllable", ok: true, answer: "done"})
       send(pid, {:engine_event, run_ref, completed})
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
       assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 2000
     end
   end

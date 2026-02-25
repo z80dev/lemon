@@ -7,8 +7,6 @@ defmodule LemonGateway.Renderers.Basic do
   """
   @behaviour LemonGateway.Renderer
 
-  alias LemonGateway.Event
-
   @impl true
   def init(meta) do
     %{
@@ -23,29 +21,29 @@ defmodule LemonGateway.Renderers.Basic do
   end
 
   @impl true
-  def apply_event(state, %Event.Started{resume: resume}) do
+  def apply_event(state, %{__event__: :started, resume: resume}) do
     resume_line = format_resume(state.engine, resume)
     state = %{state | resume_line: resume_line}
     render(state, :running, nil)
   end
 
-  def apply_event(state, %Event.ActionEvent{action: action, phase: phase} = ev) do
+  def apply_event(state, %{__event__: :action_event, action: action, phase: phase} = ev) do
     state = track_action(state, action, phase, ev)
     render(state, :running, nil)
   end
 
-  def apply_event(state, %Event.Completed{ok: true, answer: answer} = completed) do
+  def apply_event(state, %{__event__: :completed, ok: true, answer: answer} = completed) do
     state = maybe_apply_resume_from_completed(state, completed)
     render(state, :done, answer || "")
   end
 
-  def apply_event(state, %Event.Completed{ok: false, error: error} = completed)
+  def apply_event(state, %{__event__: :completed, ok: false, error: error} = completed)
       when error in [:user_requested, :interrupted] do
     state = maybe_apply_resume_from_completed(state, completed)
     render(state, :cancelled, nil)
   end
 
-  def apply_event(state, %Event.Completed{ok: false, error: error} = completed) do
+  def apply_event(state, %{__event__: :completed, ok: false, error: error} = completed) do
     state = maybe_apply_resume_from_completed(state, completed)
     render(state, :error, to_string(error || ""))
   end
@@ -129,7 +127,10 @@ defmodule LemonGateway.Renderers.Basic do
     "- #{title}: #{phase}"
   end
 
-  defp track_action(state, %Event.Action{id: id, title: title}, phase, _ev) do
+  defp track_action(state, action, phase, _ev) do
+    id = Map.get(action, :id)
+    title = Map.get(action, :title)
+
     {actions, order} =
       case Map.has_key?(state.actions, id) do
         true ->
@@ -146,7 +147,9 @@ defmodule LemonGateway.Renderers.Basic do
   defp format_resume(nil, _resume), do: nil
   defp format_resume(engine, resume), do: engine.format_resume(resume)
 
-  defp maybe_apply_resume_from_completed(state, %Event.Completed{resume: resume}) do
+  defp maybe_apply_resume_from_completed(state, completed) do
+    resume = Map.get(completed, :resume)
+
     cond do
       state.resume_line != nil ->
         state

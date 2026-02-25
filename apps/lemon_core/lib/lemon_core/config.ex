@@ -140,6 +140,10 @@ defmodule LemonCore.Config do
     "auto_resume" => false,
     "enable_telegram" => false,
     "enable_discord" => false,
+    "enable_farcaster" => false,
+    "enable_email" => false,
+    "enable_xmtp" => false,
+    "enable_webhook" => false,
     "require_engine_lock" => true,
     "engine_lock_timeout_ms" => 60_000,
     "projects" => %{},
@@ -152,6 +156,10 @@ defmodule LemonCore.Config do
     },
     "telegram" => %{},
     "discord" => %{},
+    "farcaster" => %{},
+    "email" => %{},
+    "xmtp" => %{},
+    "webhook" => %{},
     "engines" => %{}
   }
 
@@ -419,6 +427,10 @@ defmodule LemonCore.Config do
       auto_resume: parse_boolean(map["auto_resume"], false),
       enable_telegram: parse_boolean(map["enable_telegram"], false),
       enable_discord: parse_boolean(map["enable_discord"], false),
+      enable_farcaster: parse_boolean(map["enable_farcaster"], false),
+      enable_email: parse_boolean(map["enable_email"], false),
+      enable_xmtp: parse_boolean(map["enable_xmtp"], false),
+      enable_webhook: parse_boolean(map["enable_webhook"], false),
       require_engine_lock: parse_boolean(map["require_engine_lock"], true),
       engine_lock_timeout_ms: map["engine_lock_timeout_ms"],
       projects: parse_gateway_projects(map["projects"] || %{}),
@@ -427,9 +439,33 @@ defmodule LemonCore.Config do
       queue: parse_gateway_queue(map["queue"] || %{}),
       telegram: parse_gateway_telegram(map["telegram"] || %{}),
       discord: parse_gateway_discord(map["discord"] || %{}),
+      farcaster: parse_gateway_passthrough(map["farcaster"] || %{}),
+      email: parse_gateway_passthrough(map["email"] || %{}),
+      xmtp: parse_gateway_passthrough(map["xmtp"] || %{}),
+      webhook: parse_gateway_passthrough(map["webhook"] || %{}),
       engines: parse_gateway_engines(map["engines"] || %{})
     }
   end
+
+  # Passthrough parser: atomize top-level keys of a sub-section without
+  # imposing a fixed schema. Used for transport sections (farcaster, email,
+  # xmtp, webhook) whose fields are validated downstream by ConfigLoader.
+  defp parse_gateway_passthrough(map) when is_map(map) do
+    map
+    |> stringify_keys()
+    |> Enum.reduce(%{}, fn {k, v}, acc ->
+      atom_key =
+        try do
+          String.to_existing_atom(k)
+        rescue
+          ArgumentError -> String.to_atom(k)
+        end
+
+      Map.put(acc, atom_key, v)
+    end)
+  end
+
+  defp parse_gateway_passthrough(_), do: %{}
 
   defp parse_gateway_projects(map) when is_map(map) do
     map

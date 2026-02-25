@@ -1,86 +1,20 @@
 defmodule LemonGateway.ConfigLoader do
   @moduledoc """
-  Loads gateway configuration from the canonical Lemon TOML config.
+  Loads gateway configuration and converts raw maps into typed structs
+  (Project, Binding, etc.) for use by the LemonGateway.Config GenServer.
+
+  Base config loading and override merging is delegated to
+  `LemonCore.GatewayConfig.load/0`.
   """
 
   alias LemonCore.Binding
   alias LemonGateway.Project
-  alias LemonCore.Config, as: LemonConfig
 
   @spec load() :: map()
   def load do
-    case override_config() do
-      {:ok, config} ->
-        parse_gateway(config)
-
-      :error ->
-        gateway = load_from_path() || load_gateway_from_canonical_toml()
-        parse_gateway(gateway)
-    end
+    LemonCore.GatewayConfig.load()
+    |> parse_gateway()
   end
-
-  defp override_config do
-    case Application.get_env(:lemon_gateway, LemonGateway.Config) do
-      nil ->
-        :error
-
-      config when is_map(config) ->
-        {:ok, config}
-
-      config when is_list(config) ->
-        if Keyword.keyword?(config) do
-          {:ok, Enum.into(config, %{})}
-        else
-          {:ok, %{bindings: config}}
-        end
-
-      _ ->
-        :error
-    end
-  end
-
-  defp load_from_path do
-    case Application.get_env(:lemon_gateway, :config_path) do
-      path when is_binary(path) and path != "" ->
-        if File.exists?(path) do
-          LemonConfig.load_file(path) |> Map.get("gateway")
-        else
-          nil
-        end
-
-      _ ->
-        nil
-    end
-  end
-
-  defp load_gateway_from_canonical_toml do
-    global =
-      LemonConfig.global_path()
-      |> LemonConfig.load_file()
-
-    project =
-      case File.cwd() do
-        {:ok, cwd} ->
-          cwd
-          |> LemonConfig.project_path()
-          |> LemonConfig.load_file()
-
-        _ ->
-          %{}
-      end
-
-    global
-    |> deep_merge_maps(project)
-    |> Map.get("gateway", %{})
-  end
-
-  defp deep_merge_maps(left, right) when is_map(left) and is_map(right) do
-    Map.merge(left, right, fn _key, left_value, right_value ->
-      deep_merge_maps(left_value, right_value)
-    end)
-  end
-
-  defp deep_merge_maps(_left, right), do: right
 
   defp parse_gateway(gateway) when is_map(gateway) do
     projects = parse_projects(fetch(gateway, :projects) || %{})

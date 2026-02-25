@@ -4,9 +4,12 @@ defmodule LemonRouter.ToolStatusRenderer do
 
   This is used by `LemonRouter.ToolStatusCoalescer` to build the editable status
   message shown in transports like Telegram.
+
+  Channel-specific formatting (action limits, extra metadata) is delegated to
+  `LemonRouter.ChannelAdapter`.
   """
 
-  @telegram_recent_action_limit 5
+  alias LemonRouter.ChannelAdapter
 
   @spec render(String.t() | nil, map(), [String.t()]) :: String.t()
   def render(_channel_id, _actions, []) do
@@ -14,13 +17,14 @@ defmodule LemonRouter.ToolStatusRenderer do
   end
 
   def render(channel_id, actions, order) when is_map(actions) and is_list(order) do
-    {display_order, omitted_count} = limit_order_for_channel(channel_id, order)
+    adapter = ChannelAdapter.for(channel_id)
+    {display_order, omitted_count} = adapter.limit_order(order)
 
     lines =
       Enum.map(display_order, fn id ->
         case Map.get(actions, id) do
           nil -> nil
-          action -> format_action_line(channel_id, action)
+          action -> format_action_line(adapter, action)
         end
       end)
       |> Enum.reject(&is_nil/1)
@@ -37,37 +41,12 @@ defmodule LemonRouter.ToolStatusRenderer do
     Enum.join(["Tool calls:" | lines], "\n")
   end
 
-  defp limit_order_for_channel("telegram", order) when is_list(order) do
-    if length(order) > @telegram_recent_action_limit do
-      display_order = Enum.take(order, -@telegram_recent_action_limit)
-      omitted_count = length(order) - length(display_order)
-      {display_order, omitted_count}
-    else
-      {order, 0}
-    end
-  end
-
-  defp limit_order_for_channel(_channel_id, order), do: {order, 0}
-
   defp tool_word(1), do: "tool"
   defp tool_word(_n), do: "tools"
 
-  defp format_telegram_extra(action, rendered_title) do
-    [
-      format_task_extra(action, rendered_title),
-      format_command_extra(action, rendered_title)
-    ]
-    |> Enum.reject(&(&1 in [nil, ""]))
-    |> Enum.join("")
-    |> case do
-      "" -> nil
-      text -> text
-    end
-  end
-
-  defp format_action_line(channel_id, action) when is_map(action) do
+  defp format_action_line(adapter, action) when is_map(action) do
     title = truncate_one_line(action[:title] || action["title"] || "", 80)
-    extra = if channel_id == "telegram", do: format_telegram_extra(action, title), else: nil
+    extra = adapter.format_action_extra(action, title)
 
     case action[:phase] || action["phase"] do
       :started ->
@@ -94,225 +73,6 @@ defmodule LemonRouter.ToolStatusRenderer do
     end
   end
 
-  # Telegram users otherwise see just "task". Provide context for Task/subagent tool calls.
-  defp format_task_extra(action, rendered_title) do
-    kind = normalize_kind(action[:kind] || action["kind"])
-    detail = action[:detail] || action["detail"] || %{}
-    args = extract_args(detail)
-    tool_name = normalize_optional_string(map_get_any(detail, [:name, "name"]))
-
-    task_like? =
-      kind == "subagent" or
-        String.downcase(tool_name || "") == "task" or
-        generic_task_title?(rendered_title)
-
-    if not task_like? do
-      nil
-    else
-      # We show:
-      # - selected task engine (default: internal) if args are present
-      # - role if present
-      # - caller engine (from gateway event) if present and differs
-      # - prompt/description snippet when title is generic (task/Task)
-      task_engine =
-        cond do
-          is_map(args) and map_size(args) > 0 ->
-            normalize_optional_string(map_get_any(args, [:engine, "engine"])) || "internal"
-
-          kind == "subagent" ->
-            # Task tool defaults to internal if not explicitly overridden.
-            "internal"
-
-          true ->
-            nil
-        end
-
-      role = normalize_optional_string(map_get_any(args, [:role, "role"]))
-      desc = normalize_optional_string(map_get_any(args, [:description, "description"]))
-      prompt = normalize_optional_string(map_get_any(args, [:prompt, "prompt"]))
-      async = map_get_any(args, [:async, "async"])
-      task_id = normalize_optional_string(map_get_any(args, [:task_id, "task_id"]))
-
-      caller_engine = normalize_optional_string(action[:caller_engine] || action["caller_engine"])
-
-      meta =
-        []
-        |> maybe_add_kv("engine", task_engine)
-        |> maybe_add_kv("role", role)
-        |> maybe_add_flag("async", async == true)
-        |> maybe_add_kv("task_id", task_id)
-        |> maybe_add_via(caller_engine, task_engine)
-        |> Enum.join(" ")
-
-      snippet =
-        if generic_task_title?(rendered_title) do
-          cond do
-            is_binary(desc) and desc != "" ->
-              " desc: " <> quote_snip(desc, 120)
-
-            is_binary(prompt) and prompt != "" ->
-              " prompt: " <> quote_snip(prompt, 120)
-
-            true ->
-              ""
-          end
-        else
-          ""
-        end
-
-      if meta == "" and snippet == "" do
-        nil
-      else
-        " (" <> meta <> ")" <> snippet
-      end
-    end
-  rescue
-    _ -> nil
-  end
-
-  defp format_command_extra(action, rendered_title) do
-    kind = normalize_kind(action[:kind] || action["kind"])
-    phase = action[:phase] || action["phase"]
-    detail = action[:detail] || action["detail"] || %{}
-
-    tool_name =
-      normalize_optional_string(map_get_any(detail, [:name, "name"]))
-      |> case do
-        s when is_binary(s) -> String.downcase(s)
-        _ -> ""
-      end
-
-    command_like? =
-      kind == "command" or
-        tool_name in ["bash", "shell", "killshell", "command", "exec"]
-
-    if not command_like? do
-      nil
-    else
-      cmd = extract_command_text(detail)
-      status = normalize_optional_string(map_get_any(detail, [:status, "status"]))
-      exit_code = map_get_any(detail, [:exit_code, "exit_code"])
-
-      status_meta =
-        []
-        |> maybe_add_kv("status", status)
-        |> maybe_add_kv("exit", normalize_exit_code(exit_code))
-        |> Enum.join(" ")
-
-      status_part =
-        if status_meta == "" or phase not in [:completed, "completed"],
-          do: "",
-          else: " (#{status_meta})"
-
-      cmd_part =
-        cond do
-          not is_binary(cmd) or String.trim(cmd) == "" ->
-            ""
-
-          title_already_shows_command?(rendered_title, cmd) ->
-            ""
-
-          true ->
-            " cmd: " <> quote_snip(cmd, 120)
-        end
-
-      out = status_part <> cmd_part
-      if out == "", do: nil, else: out
-    end
-  rescue
-    _ -> nil
-  end
-
-  defp extract_command_text(detail) when is_map(detail) do
-    args = map_get_any(detail, [:args, "args"])
-    input = map_get_any(detail, [:input, "input"])
-    arguments = map_get_any(detail, [:arguments, "arguments"])
-
-    command =
-      map_get_any(detail, [:command, "command"]) ||
-        map_get_any(detail, [:cmd, "cmd"]) ||
-        (is_map(args) &&
-           (map_get_any(args, [:command, "command"]) || map_get_any(args, [:cmd, "cmd"]))) ||
-        (is_map(input) &&
-           (map_get_any(input, [:command, "command"]) || map_get_any(input, [:cmd, "cmd"]))) ||
-        (is_map(arguments) &&
-           (map_get_any(arguments, [:command, "command"]) || map_get_any(arguments, [:cmd, "cmd"])))
-
-    normalize_optional_string(command)
-  end
-
-  defp extract_command_text(_), do: nil
-
-  defp normalize_exit_code(code) when is_integer(code), do: Integer.to_string(code)
-
-  defp normalize_exit_code(code) when is_binary(code) do
-    code = String.trim(code)
-    if code == "", do: nil, else: code
-  end
-
-  defp normalize_exit_code(_), do: nil
-
-  defp title_already_shows_command?(title, cmd) when is_binary(title) and is_binary(cmd) do
-    normalized_title = String.downcase(String.trim_leading(title, "$ ") |> String.trim())
-    normalized_cmd = String.downcase(cmd |> truncate_one_line(120))
-
-    normalized_title != "" and normalized_cmd != "" and
-      (String.contains?(normalized_title, normalized_cmd) or
-         String.starts_with?(normalized_title, String.slice(normalized_cmd, 0, 30)))
-  rescue
-    _ -> false
-  end
-
-  defp title_already_shows_command?(_, _), do: false
-
-  defp maybe_add_kv(parts, _k, v) when v in [nil, ""], do: parts
-  defp maybe_add_kv(parts, k, v), do: parts ++ ["#{k}=#{v}"]
-
-  defp maybe_add_flag(parts, _flag, false), do: parts
-  defp maybe_add_flag(parts, flag, true), do: parts ++ [flag]
-
-  defp maybe_add_via(parts, nil, _task_engine), do: parts
-
-  defp maybe_add_via(parts, caller_engine, nil) do
-    if caller_engine != "" do
-      parts ++ ["via=#{caller_engine}"]
-    else
-      parts
-    end
-  end
-
-  defp maybe_add_via(parts, caller_engine, task_engine) do
-    if caller_engine != "" and caller_engine != task_engine do
-      parts ++ ["via=#{caller_engine}"]
-    else
-      parts
-    end
-  end
-
-  defp extract_args(detail) when is_map(detail) do
-    args = map_get_any(detail, [:args, "args"])
-    if is_map(args), do: args, else: %{}
-  end
-
-  defp extract_args(_), do: %{}
-
-  defp generic_task_title?(title) when is_binary(title) do
-    t = title |> String.trim()
-    down = String.downcase(t)
-    down == "task" or down == "task:" or down == "task tool" or down == "run task"
-  end
-
-  defp generic_task_title?(_), do: false
-
-  defp quote_snip(text, max_len) when is_binary(text) do
-    snip = truncate_one_line(text, max_len)
-    "\"" <> snip <> "\""
-  end
-
-  defp normalize_kind(kind) when is_atom(kind), do: Atom.to_string(kind)
-  defp normalize_kind(kind) when is_binary(kind), do: kind
-  defp normalize_kind(_), do: ""
-
   defp extract_result_preview(detail) when is_map(detail) do
     preview =
       detail[:result_preview] ||
@@ -320,9 +80,6 @@ defmodule LemonRouter.ToolStatusRenderer do
         detail[:result] ||
         detail["result"]
 
-    # The action detail may contain rich structs (AgentToolResult/TextContent) or
-    # `inspect/1` output of those structs. For user-facing transports (Telegram),
-    # render only the underlying text.
     LemonRouter.ToolPreview.to_text(preview)
   rescue
     _ -> nil
@@ -342,20 +99,4 @@ defmodule LemonRouter.ToolStatusRenderer do
   rescue
     _ -> inspect(other)
   end
-
-  defp normalize_optional_string(nil), do: nil
-  defp normalize_optional_string(s) when is_binary(s), do: String.trim(s)
-
-  defp normalize_optional_string(other) do
-    (LemonRouter.ToolPreview.to_text(other) || inspect(other))
-    |> String.trim()
-  rescue
-    _ -> inspect(other) |> String.trim()
-  end
-
-  defp map_get_any(map, [k1, k2]) when is_map(map) do
-    Map.get(map, k1) || Map.get(map, k2)
-  end
-
-  defp map_get_any(_map, _keys), do: nil
 end

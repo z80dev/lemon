@@ -1,90 +1,47 @@
+defmodule LemonChannels.Binding do
+  @moduledoc false
+  defstruct [:transport, :chat_id, :topic_id, :project, :agent_id, :default_engine, :queue_mode]
+
+  @type t :: %__MODULE__{
+          transport: atom(),
+          chat_id: integer(),
+          topic_id: integer() | nil,
+          project: String.t() | nil,
+          agent_id: String.t() | nil,
+          default_engine: String.t() | nil,
+          queue_mode: atom() | nil
+        }
+end
+
 defmodule LemonChannels.BindingResolver do
   @moduledoc """
   Resolves bindings and settings for a Telegram chat scope.
+
+  Thin delegation layer that converts channels-local structs to
+  `LemonCore` types and delegates to `LemonCore.BindingResolver`.
   """
 
-  alias LemonCore.Binding
+  alias LemonChannels.{Binding, GatewayConfig}
   alias LemonCore.ChatScope
-  alias LemonChannels.GatewayConfig
-  alias LemonCore.Store
+  alias LemonCore.BindingResolver, as: CoreResolver
 
-  @project_overrides_table :channels_project_overrides
-  @dynamic_projects_table :channels_projects_dynamic
+  # ---------------------------------------------------------------------------
+  # Public API — same signatures as before
+  # ---------------------------------------------------------------------------
 
   @spec resolve_binding(ChatScope.t()) :: Binding.t() | nil
   def resolve_binding(%ChatScope{} = scope) do
-    bindings = bindings()
-
-    topic_binding =
-      if scope.topic_id do
-        Enum.find(bindings, fn b ->
-          get_field(b, :transport) == scope.transport and
-            get_field(b, :chat_id) == scope.chat_id and
-            get_field(b, :topic_id) == scope.topic_id
-        end)
-      else
-        nil
-      end
-
-    chat_binding =
-      Enum.find(bindings, fn b ->
-        get_field(b, :transport) == scope.transport and
-          get_field(b, :chat_id) == scope.chat_id and
-          is_nil(get_field(b, :topic_id))
-      end)
-
-    normalize_binding(topic_binding || chat_binding)
+    scope
+    |> to_core_scope()
+    |> CoreResolver.resolve_binding(resolver_opts())
+    |> from_core_binding()
   end
-
-  defp bindings do
-    GatewayConfig.get(:bindings, []) |> List.wrap()
-  rescue
-    _ -> []
-  end
-
-  defp get_field(%Binding{} = b, key), do: Map.get(b, key)
-  defp get_field(b, key) when is_map(b), do: b[key] || Map.get(b, key)
-  defp get_field(_, _), do: nil
-
-  defp normalize_binding(nil), do: nil
-
-  defp normalize_binding(%Binding{} = b) do
-    %Binding{b | queue_mode: parse_queue_mode(b.queue_mode)}
-  end
-
-  defp normalize_binding(b) when is_map(b) do
-    %Binding{
-      transport: get_field(b, :transport),
-      chat_id: get_field(b, :chat_id),
-      topic_id: get_field(b, :topic_id),
-      project: get_field(b, :project),
-      agent_id: get_field(b, :agent_id),
-      default_engine: get_field(b, :default_engine),
-      queue_mode: parse_queue_mode(get_field(b, :queue_mode))
-    }
-  end
-
-  defp parse_queue_mode(nil), do: nil
-  defp parse_queue_mode("collect"), do: :collect
-  defp parse_queue_mode("followup"), do: :followup
-  defp parse_queue_mode("steer"), do: :steer
-  defp parse_queue_mode("steer_backlog"), do: :steer_backlog
-  defp parse_queue_mode("interrupt"), do: :interrupt
-  defp parse_queue_mode(mode) when is_atom(mode), do: mode
-  defp parse_queue_mode(_), do: nil
 
   @spec resolve_engine(ChatScope.t(), String.t() | nil, map() | nil) :: String.t() | nil
   def resolve_engine(%ChatScope{} = scope, engine_hint, resume) do
-    cond do
-      is_map(resume) and is_binary(resume[:engine] || resume["engine"]) ->
-        resume[:engine] || resume["engine"]
-
-      is_binary(engine_hint) and String.trim(engine_hint) != "" ->
-        engine_hint
-
-      true ->
-        resolve_engine_from_binding(scope)
-    end
+    scope
+    |> to_core_scope()
+    |> CoreResolver.resolve_engine(engine_hint, resume, resolver_opts())
   end
 
   def resolve_engine(_scope, engine_hint, resume) do
@@ -100,148 +57,82 @@ defmodule LemonChannels.BindingResolver do
     end
   end
 
-  defp resolve_engine_from_binding(scope) do
-    binding = resolve_binding(scope)
-
-    cond do
-      binding && binding.default_engine ->
-        binding.default_engine
-
-      true ->
-        project_id = project_id_for(scope, binding)
-
-        project_engine =
-          if present?(project_id) do
-            resolve_project_engine(project_id)
-          else
-            nil
-          end
-
-        project_engine || agent_default_engine(binding, scope) || GatewayConfig.get(:default_engine)
-    end
-  end
-
-  defp agent_default_engine(%Binding{agent_id: agent_id}, scope) when is_binary(agent_id) do
-    cwd = resolve_cwd(scope)
-    cfg = LemonCore.Config.cached(cwd)
-    profile = Map.get(cfg.agents || %{}, agent_id) || Map.get(cfg.agents || %{}, "default") || %{}
-
-    engine =
-      profile[:default_engine] || profile["default_engine"] ||
-        profile[:engine] || profile["engine"]
-
-    if present?(engine), do: engine, else: nil
-  rescue
-    _ -> nil
-  end
-
-  defp agent_default_engine(_, _), do: nil
-
   @spec resolve_agent_id(ChatScope.t()) :: String.t()
   def resolve_agent_id(%ChatScope{} = scope) do
-    case resolve_binding(scope) do
-      %Binding{agent_id: id} when is_binary(id) and byte_size(id) > 0 -> id
-      _ -> "default"
-    end
-  rescue
-    _ -> "default"
-  end
-
-  defp resolve_project_engine(project_name) do
-    case lookup_project(project_name) do
-      %{default_engine: engine} when is_binary(engine) and byte_size(engine) > 0 -> engine
-      _ -> nil
-    end
+    scope
+    |> to_core_scope()
+    |> CoreResolver.resolve_agent_id(resolver_opts())
   end
 
   @spec resolve_cwd(ChatScope.t()) :: String.t() | nil
   def resolve_cwd(%ChatScope{} = scope) do
-    binding = resolve_binding(scope)
-    override_id = get_project_override(scope)
-
-    cond do
-      present?(override_id) ->
-        case lookup_project(override_id) do
-          %{root: root} when is_binary(root) and byte_size(root) > 0 -> Path.expand(root)
-          _ -> nil
-        end
-
-      binding && present?(binding.project) ->
-        case lookup_project(binding.project) do
-          %{root: root} when is_binary(root) and byte_size(root) > 0 -> Path.expand(root)
-          _ -> nil
-        end
-
-      true ->
-        nil
-    end
+    scope
+    |> to_core_scope()
+    |> CoreResolver.resolve_cwd(resolver_opts())
   end
 
   def resolve_cwd(_), do: nil
 
   @spec resolve_queue_mode(ChatScope.t()) :: atom() | nil
   def resolve_queue_mode(%ChatScope{} = scope) do
-    case resolve_binding(scope) do
-      %Binding{} = binding -> binding.queue_mode
-      _ -> nil
-    end
-  end
-
-  defp project_id_for(%ChatScope{} = scope, %Binding{} = binding) do
-    override = get_project_override(scope)
-
-    cond do
-      present?(override) -> override
-      present?(binding.project) -> binding.project
-      true -> nil
-    end
-  end
-
-  defp project_id_for(%ChatScope{} = scope, _binding) do
-    override = get_project_override(scope)
-    if present?(override), do: override, else: nil
+    scope
+    |> to_core_scope()
+    |> CoreResolver.resolve_queue_mode(resolver_opts())
   end
 
   @doc false
   def get_project_override(%ChatScope{} = scope) do
-    Store.get(@project_overrides_table, scope)
-  rescue
-    _ -> nil
+    scope
+    |> to_core_scope()
+    |> CoreResolver.get_project_override()
   end
 
   @doc false
   def lookup_project(project_id) when is_binary(project_id) do
-    dynamic = Store.get(@dynamic_projects_table, project_id)
-
-    cond do
-      is_map(dynamic) and is_binary(dynamic[:root] || dynamic["root"]) ->
-        %{
-          root: dynamic[:root] || dynamic["root"],
-          default_engine: dynamic[:default_engine] || dynamic["default_engine"]
-        }
-
-      true ->
-        projects = GatewayConfig.get(:projects, %{}) || %{}
-
-        case Map.get(projects, project_id) do
-          %{root: root} = proj when is_binary(root) ->
-            %{
-              root: root,
-              default_engine: Map.get(proj, :default_engine) || Map.get(proj, "default_engine")
-            }
-
-          _ ->
-            nil
-        end
-    end
-  rescue
-    _ -> nil
+    CoreResolver.lookup_project(project_id, &config_projects/0)
   end
 
   def lookup_project(_), do: nil
 
-  defp present?(nil), do: false
-  defp present?(""), do: false
-  defp present?(val) when is_binary(val), do: byte_size(val) > 0
-  defp present?(_), do: false
+  # ---------------------------------------------------------------------------
+  # Private helpers
+  # ---------------------------------------------------------------------------
+
+  defp resolver_opts do
+    [
+      bindings: bindings(),
+      config_provider: &config_projects/0,
+      default_engine: GatewayConfig.get(:default_engine) || "lemon"
+    ]
+  end
+
+  defp to_core_scope(%ChatScope{} = s) do
+    %LemonCore.ChatScope{transport: s.transport, chat_id: s.chat_id, topic_id: s.topic_id}
+  end
+
+  defp from_core_binding(nil), do: nil
+
+  defp from_core_binding(%LemonCore.Binding{} = b) do
+    %Binding{
+      transport: b.transport,
+      chat_id: b.chat_id,
+      topic_id: b.topic_id,
+      project: b.project,
+      agent_id: b.agent_id,
+      default_engine: b.default_engine,
+      queue_mode: b.queue_mode
+    }
+  end
+
+  defp bindings do
+    GatewayConfig.get(:bindings, []) |> List.wrap()
+  rescue
+    _ -> []
+  end
+
+  defp config_projects do
+    GatewayConfig.get(:projects, %{}) || %{}
+  rescue
+    _ -> %{}
+  end
 end

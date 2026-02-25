@@ -93,7 +93,7 @@
 - **Log:** Created `LemonCore.BindingResolver` with full public API (resolve_binding, resolve_engine, resolve_agent_id, resolve_cwd, resolve_queue_mode, get_project_override, lookup_project, table name accessors). Unified store tables from 4 (`:gateway_project_overrides`, `:gateway_projects_dynamic`, `:channels_project_overrides`, `:channels_projects_dynamic`) to 2 (`:project_overrides`, `:projects_dynamic`). Reduced `LemonGateway.BindingResolver` from ~330 to ~115 lines (thin delegation + type conversion). Reduced `LemonChannels.BindingResolver` from ~260 to ~95 lines (same pattern). Removed 3 dual-write locations in `telegram/transport.ex` (path-based project selection, named project override, CWD override clearing). `mix compile --force --warnings-as-errors` passes clean.
 
 ### 2c. Unify GatewayConfig
-- **Status:** IN PROGRESS
+- **Status:** DONE
 - **Assigned:** Opus senior dev
 - **Scope:**
   - Create `LemonCore.GatewayConfig` as single config accessor
@@ -102,14 +102,14 @@
   - Delete per-app config wrappers
 - **Depends on:** 2a (needs canonical types)
 - **Risk:** Medium - config is load-bearing; careful testing needed
-- **Log:**
+- **Log:** Created `LemonCore.GatewayConfig` (~171 lines) as single source of truth for gateway config. API: `load/0`, `load/1`, `get/1`, `get/2`. Override precedence: per-transport app env → channels gateway override → full-replacement app env → TOML base. Added missing gateway fields to `LemonCore.Config`: enable_farcaster, enable_email, enable_xmtp, enable_webhook, farcaster, email, xmtp, webhook. Added `parse_gateway_passthrough/1` helper. Simplified `LemonGateway.ConfigLoader` to delegate base config loading to `LemonCore.GatewayConfig.load/0` and only handle struct conversion (Binding, Project). Simplified `LemonChannels.GatewayConfig` to delegate to core. Fixed stale `LemonGateway.Binding` ref to `LemonCore.Binding`. `mix compile --force --warnings-as-errors` passes clean.
 
 ---
 
 ## Phase 3: Reduce Glue Layers (Higher Risk)
 
 ### 3a. Standardize engine event types
-- **Status:** IN PROGRESS
+- **Status:** DONE
 - **Assigned:** Opus senior dev
 - **Scope:**
   - Eliminate `LemonGateway.Event.*` translation layer
@@ -117,7 +117,7 @@
   - Simplify CliAdapter to remove struct-to-struct-to-map chain
 - **Depends on:** Phase 1 complete, Phase 2a complete
 - **Risk:** Medium-high - events are the nervous system
-- **Log:**
+- **Log:** Replaced 4 Event struct modules (Started, Action, ActionEvent, Completed) with plain-map constructor functions + defguards using `__event__` tag in `event.ex`. Kept Delta struct unchanged. Renamed `to_gateway_event` → `to_event_map` in `cli_adapter.ex` to produce plain maps directly. Updated `run.ex` to use `%{__event__: :started}` map patterns with defguards instead of struct patterns. Renamed `*_to_map` → `*_to_bus_map`. Updated `engine.ex`, `echo.ex`, `lemon.ex`, `basic.ex` renderers, `session_detail.ex`, and 13 test files. Fixed stale `LemonGateway.Types.ResumeToken` → `LemonCore.ResumeToken` across all source and test files. Fixed stale `LemonGateway.Store` → `LemonCore.Store` in run.ex. `mix compile --force --warnings-as-errors` passes clean.
 
 ### 3b. Decouple router from channel formatting
 - **Status:** NOT STARTED

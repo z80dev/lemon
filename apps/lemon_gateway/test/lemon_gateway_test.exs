@@ -2,7 +2,7 @@ defmodule LemonGatewayTest do
   alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case
 
-  alias Elixir.LemonGateway.Event.Completed
+  alias Elixir.LemonGateway.Event
   alias Elixir.LemonGateway.Types.Job
 
   setup do
@@ -23,8 +23,7 @@ defmodule LemonGatewayTest do
   defmodule LemonGatewayTest.CrashEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonCore.ResumeToken
-    alias LemonGateway.Types.Job
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -48,7 +47,7 @@ defmodule LemonGatewayTest do
       resume = job.resume || %ResumeToken{engine: id(), value: "crash"}
 
       Task.start(fn ->
-        send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
+        send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
         Process.exit(sink_pid, :kill)
       end)
 
@@ -62,8 +61,7 @@ defmodule LemonGatewayTest do
   defmodule ErrorEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonCore.ResumeToken
-    alias LemonGateway.Types.Job
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -93,8 +91,7 @@ defmodule LemonGatewayTest do
   defmodule ActionEngine do
     @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonCore.ResumeToken
-    alias LemonGateway.Types.Job
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -116,20 +113,20 @@ defmodule LemonGatewayTest do
     def start_run(%Job{} = job, _opts, sink_pid) do
       run_ref = make_ref()
       resume = job.resume || %ResumeToken{engine: id(), value: "action"}
-      action = %Event.Action{id: "step-1", kind: "work", title: "Step 1"}
+      action = Event.action(%{id: "step-1", kind: "work", title: "Step 1"})
 
       Task.start(fn ->
-        send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
+        send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
 
         send(
           sink_pid,
           {:engine_event, run_ref,
-           %Event.ActionEvent{engine: id(), action: action, phase: :started}}
+           Event.action_event(%{engine: id(), action: action, phase: :started})}
         )
 
         send(
           sink_pid,
-          {:engine_event, run_ref, %Event.Completed{engine: id(), ok: true, answer: "result"}}
+          {:engine_event, run_ref, Event.completed(%{engine: id(), ok: true, answer: "result"})}
         )
       end)
 
@@ -144,8 +141,7 @@ defmodule LemonGatewayTest do
     @moduledoc "Test engine that emits multiple action events to test streaming edits"
     @behaviour Elixir.LemonGateway.Engine
 
-    alias LemonCore.ResumeToken
-    alias LemonGateway.Types.Job
+    alias Elixir.LemonGateway.Types.{Job, ResumeToken}
     alias Elixir.LemonGateway.Event
 
     @impl true
@@ -167,17 +163,17 @@ defmodule LemonGatewayTest do
     def start_run(%Job{} = job, _opts, sink_pid) do
       run_ref = make_ref()
       resume = job.resume || %ResumeToken{engine: id(), value: "streaming"}
-      action1 = %Event.Action{id: "step-1", kind: "work", title: "Step 1"}
-      action2 = %Event.Action{id: "step-2", kind: "work", title: "Step 2"}
+      action1 = Event.action(%{id: "step-1", kind: "work", title: "Step 1"})
+      action2 = Event.action(%{id: "step-2", kind: "work", title: "Step 2"})
 
       Task.start(fn ->
-        send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
+        send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
         Process.sleep(10)
 
         send(
           sink_pid,
           {:engine_event, run_ref,
-           %Event.ActionEvent{engine: id(), action: action1, phase: :started}}
+           Event.action_event(%{engine: id(), action: action1, phase: :started})}
         )
 
         Process.sleep(10)
@@ -185,7 +181,7 @@ defmodule LemonGatewayTest do
         send(
           sink_pid,
           {:engine_event, run_ref,
-           %Event.ActionEvent{engine: id(), action: action1, phase: :completed}}
+           Event.action_event(%{engine: id(), action: action1, phase: :completed})}
         )
 
         Process.sleep(10)
@@ -193,7 +189,7 @@ defmodule LemonGatewayTest do
         send(
           sink_pid,
           {:engine_event, run_ref,
-           %Event.ActionEvent{engine: id(), action: action2, phase: :started}}
+           Event.action_event(%{engine: id(), action: action2, phase: :started})}
         )
 
         Process.sleep(10)
@@ -201,7 +197,7 @@ defmodule LemonGatewayTest do
         send(
           sink_pid,
           {:engine_event, run_ref,
-           %Event.ActionEvent{engine: id(), action: action2, phase: :completed}}
+           Event.action_event(%{engine: id(), action: action2, phase: :completed})}
         )
 
         Process.sleep(10)
@@ -209,7 +205,7 @@ defmodule LemonGatewayTest do
         send(
           sink_pid,
           {:engine_event, run_ref,
-           %Event.Completed{engine: id(), ok: true, answer: "done streaming"}}
+           Event.completed(%{engine: id(), ok: true, answer: "done streaming"})}
         )
       end)
 
@@ -218,6 +214,147 @@ defmodule LemonGatewayTest do
 
     @impl true
     def cancel(_ctx), do: :ok
+  end
+
+  defmodule TestTelegramAPI do
+    @moduledoc false
+
+    def child_spec(opts) do
+      %{
+        id: __MODULE__,
+        start: {__MODULE__, :start_link, [opts]},
+        type: :worker,
+        restart: :temporary,
+        shutdown: 500
+      }
+    end
+
+    def start_link(opts \\ []) do
+      Agent.start_link(
+        fn ->
+          %{
+            updates_queue: Keyword.get(opts, :updates_queue, []),
+            notify_pid: Keyword.get(opts, :notify_pid),
+            calls: []
+          }
+        end,
+        name: __MODULE__
+      )
+    end
+
+    def set_updates_queue(queue) do
+      Agent.update(__MODULE__, &%{&1 | updates_queue: queue})
+    end
+
+    def set_notify_pid(pid) do
+      Agent.update(__MODULE__, &%{&1 | notify_pid: pid})
+    end
+
+    def calls do
+      Agent.get(__MODULE__, &Enum.reverse(&1.calls))
+    end
+
+    def get_updates(_token, _offset, _timeout_ms) do
+      {updates, notify_pid} =
+        Agent.get_and_update(__MODULE__, fn state ->
+          case state.updates_queue do
+            [head | rest] ->
+              {head, %{state | updates_queue: rest}}
+
+            [] ->
+              {[], state}
+          end
+          |> then(fn {batch, new_state} -> {{batch, new_state.notify_pid}, new_state} end)
+        end)
+
+      if is_pid(notify_pid) do
+        send(notify_pid, {:api_get_updates, updates, System.monotonic_time(:millisecond)})
+      end
+
+      {:ok, %{"ok" => true, "result" => updates}}
+    end
+
+    def send_message(_token, chat_id, text, reply_to_message_id \\ nil) do
+      now = System.monotonic_time(:millisecond)
+
+      Agent.update(__MODULE__, fn state ->
+        %{state | calls: [{:send, chat_id, text, reply_to_message_id, now} | state.calls]}
+      end)
+
+      notify_pid = Agent.get(__MODULE__, & &1.notify_pid)
+
+      if is_pid(notify_pid) do
+        send(notify_pid, {:api_send_message, chat_id, text, reply_to_message_id, now})
+      end
+
+      {:ok, %{"ok" => true, "result" => %{"message_id" => 123}}}
+    end
+
+    def edit_message_text(_token, chat_id, message_id, text, _parse_mode \\ nil) do
+      now = System.monotonic_time(:millisecond)
+
+      Agent.update(__MODULE__, fn state ->
+        %{state | calls: [{:edit, chat_id, message_id, text, now} | state.calls]}
+      end)
+
+      notify_pid = Agent.get(__MODULE__, & &1.notify_pid)
+
+      if is_pid(notify_pid) do
+        send(notify_pid, {:api_edit_message_text, chat_id, message_id, text, now})
+      end
+
+      {:ok, %{"ok" => true, "result" => %{"message_id" => message_id}}}
+    end
+  end
+
+  defmodule PollingFailureTelegramAPI do
+    @moduledoc false
+
+    def child_spec(opts) do
+      %{
+        id: __MODULE__,
+        start: {__MODULE__, :start_link, [opts]},
+        type: :worker,
+        restart: :temporary,
+        shutdown: 500
+      }
+    end
+
+    def start_link(opts \\ []) do
+      Agent.start_link(
+        fn ->
+          %{
+            responses: Keyword.get(opts, :responses, []),
+            notify_pid: Keyword.get(opts, :notify_pid)
+          }
+        end,
+        name: __MODULE__
+      )
+    end
+
+    def get_updates(_token, _offset, _timeout_ms) do
+      {response, notify_pid} =
+        Agent.get_and_update(__MODULE__, fn state ->
+          case state.responses do
+            [head | rest] ->
+              {head, %{state | responses: rest}}
+
+            [] ->
+              {{:ok, %{"ok" => true, "result" => []}}, state}
+          end
+          |> then(fn {resp, new_state} -> {{resp, new_state.notify_pid}, new_state} end)
+        end)
+
+      if is_pid(notify_pid) do
+        send(notify_pid, {:poll_response, response})
+      end
+
+      response
+    end
+
+    def send_message(_token, _chat_id, _text, _reply_to_or_opts \\ nil, _parse_mode \\ nil) do
+      {:ok, %{"ok" => true, "result" => %{"message_id" => 123}}}
+    end
   end
 
   setup do
@@ -260,7 +397,7 @@ defmodule LemonGatewayTest do
     Elixir.LemonGateway.submit(job)
 
     assert_receive {:lemon_gateway_run_completed, ^job,
-                    %Completed{ok: true, answer: "Echo: hello"}},
+                    %{__event__: :completed, ok: true, answer: "Echo: hello"}},
                    1_000
   end
 
@@ -317,7 +454,7 @@ defmodule LemonGatewayTest do
     Elixir.LemonGateway.submit(ok_job)
 
     assert_receive {:lemon_gateway_run_completed, ^ok_job,
-                    %Completed{ok: true, answer: "Echo: ok"}},
+                    %{__event__: :completed, ok: true, answer: "Echo: ok"}},
                    2_000
   end
 
@@ -344,11 +481,11 @@ defmodule LemonGatewayTest do
     Task.async(fn -> Elixir.LemonGateway.submit(job2) end)
 
     assert_receive {:lemon_gateway_run_completed, ^job1,
-                    %Completed{ok: true, answer: "Echo: first"}},
+                    %{__event__: :completed, ok: true, answer: "Echo: first"}},
                    2_000
 
     assert_receive {:lemon_gateway_run_completed, ^job2,
-                    %Completed{ok: true, answer: "Echo: second"}},
+                    %{__event__: :completed, ok: true, answer: "Echo: second"}},
                    2_000
   end
 
@@ -374,7 +511,7 @@ defmodule LemonGatewayTest do
     Elixir.LemonGateway.submit(job1)
 
     assert_receive {:lemon_gateway_run_completed, ^job1,
-                    %Completed{ok: true, answer: "Echo: one"}},
+                    %{__event__: :completed, ok: true, answer: "Echo: one"}},
                    2_000
 
     # Allow worker to stop when idle.
@@ -383,7 +520,7 @@ defmodule LemonGatewayTest do
     Elixir.LemonGateway.submit(job2)
 
     assert_receive {:lemon_gateway_run_completed, ^job2,
-                    %Completed{ok: true, answer: "Echo: two"}},
+                    %{__event__: :completed, ok: true, answer: "Echo: two"}},
                    2_000
   end
 
@@ -400,7 +537,11 @@ defmodule LemonGatewayTest do
 
     Elixir.LemonGateway.submit(job)
 
-    assert_receive {:lemon_gateway_run_completed, ^job, %Completed{ok: false}}, 1_000
+    assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: false}}, 1_000
   end
 
+  test "telegram dedupe init is idempotent" do
+    assert :ok = Elixir.LemonGateway.Telegram.Dedupe.init()
+    assert :ok = Elixir.LemonGateway.Telegram.Dedupe.init()
+  end
 end

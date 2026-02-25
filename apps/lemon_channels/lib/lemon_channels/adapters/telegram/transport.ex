@@ -814,13 +814,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           id = Path.basename(expanded)
           root = expanded
 
-          # Channels-native project state (source of truth for channels resolver).
-          CoreStore.put(:channels_projects_dynamic, id, %{root: root, default_engine: nil})
-          CoreStore.put(:channels_project_overrides, scope, id)
-
-          # Back-compat for gateway-side readers still checking legacy tables.
-          CoreStore.put(:gateway_projects_dynamic, id, %{root: root, default_engine: nil})
-          CoreStore.put(:gateway_project_overrides, scope, id)
+          CoreStore.put(:projects_dynamic, id, %{root: root, default_engine: nil})
+          CoreStore.put(:project_overrides, scope, id)
 
           {:ok, %{id: id, root: root}}
         else
@@ -835,8 +830,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             root = Path.expand(root)
 
             if File.dir?(root) do
-              CoreStore.put(:channels_project_overrides, scope, id)
-              CoreStore.put(:gateway_project_overrides, scope, id)
+              CoreStore.put(:project_overrides, scope, id)
 
               {:ok, %{id: id, root: root}}
             else
@@ -3179,8 +3173,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp scope_has_cwd_override?(_), do: false
 
   defp clear_cwd_override(%ChatScope{} = scope) do
-    _ = CoreStore.delete(:channels_project_overrides, scope)
-    _ = CoreStore.delete(:gateway_project_overrides, scope)
+    _ = CoreStore.delete(:project_overrides, scope)
     :ok
   rescue
     _ -> :ok

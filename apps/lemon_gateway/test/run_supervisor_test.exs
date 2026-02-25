@@ -25,8 +25,7 @@ defmodule LemonGateway.RunSupervisorTest do
   defmodule QuickEngine do
     @behaviour LemonGateway.Engine
 
-    alias LemonCore.ResumeToken
-    alias LemonGateway.Types.Job
+    alias LemonGateway.Types.{Job, ResumeToken}
     alias LemonGateway.Event
 
     @impl true
@@ -51,13 +50,13 @@ defmodule LemonGateway.RunSupervisorTest do
 
       {:ok, task_pid} =
         Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
+          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
           answer = "Quick: #{job.prompt}"
 
           send(
             sink_pid,
             {:engine_event, run_ref,
-             %Event.Completed{engine: id(), resume: resume, ok: true, answer: answer}}
+             Event.completed(%{engine: id(), resume: resume, ok: true, answer: answer})}
           )
         end)
 
@@ -76,8 +75,7 @@ defmodule LemonGateway.RunSupervisorTest do
   defmodule SlowTestEngine do
     @behaviour LemonGateway.Engine
 
-    alias LemonCore.ResumeToken
-    alias LemonGateway.Types.Job
+    alias LemonGateway.Types.{Job, ResumeToken}
     alias LemonGateway.Event
 
     @impl true
@@ -103,14 +101,14 @@ defmodule LemonGateway.RunSupervisorTest do
 
       {:ok, task_pid} =
         Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
+          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
           Process.sleep(delay_ms)
           answer = "Slow: #{job.prompt}"
 
           send(
             sink_pid,
             {:engine_event, run_ref,
-             %Event.Completed{engine: id(), resume: resume, ok: true, answer: answer}}
+             Event.completed(%{engine: id(), resume: resume, ok: true, answer: answer})}
           )
         end)
 
@@ -129,8 +127,7 @@ defmodule LemonGateway.RunSupervisorTest do
   defmodule ControllableTestEngine do
     @behaviour LemonGateway.Engine
 
-    alias LemonCore.ResumeToken
-    alias LemonGateway.Types.Job
+    alias LemonGateway.Types.{Job, ResumeToken}
     alias LemonGateway.Event
 
     @impl true
@@ -156,7 +153,7 @@ defmodule LemonGateway.RunSupervisorTest do
 
       {:ok, task_pid} =
         Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
+          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
           if controller_pid, do: send(controller_pid, {:engine_started, run_ref, self()})
 
           receive do
@@ -164,14 +161,14 @@ defmodule LemonGateway.RunSupervisorTest do
               send(
                 sink_pid,
                 {:engine_event, run_ref,
-                 %Event.Completed{engine: id(), resume: resume, ok: true, answer: answer}}
+                 %{__event__: :completed, engine: id(), resume: resume, ok: true, answer: answer}}
               )
           after
             30_000 ->
               send(
                 sink_pid,
                 {:engine_event, run_ref,
-                 %Event.Completed{engine: id(), resume: resume, ok: false, error: :timeout}}
+                 %{__event__: :completed, engine: id(), resume: resume, ok: false, error: :timeout}}
               )
           end
         end)
@@ -306,8 +303,8 @@ defmodule LemonGateway.RunSupervisorTest do
       send(task_pid1, {:complete, "done1"})
       send(task_pid2, {:complete, "done2"})
 
-      assert_receive {:run_complete, _, %Event.Completed{ok: true}}, 2000
-      assert_receive {:run_complete, _, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, _, %{__event__: :completed, ok: true}}, 2000
+      assert_receive {:run_complete, _, %{__event__: :completed, ok: true}}, 2000
     end
   end
 
@@ -326,7 +323,7 @@ defmodule LemonGateway.RunSupervisorTest do
       assert Process.alive?(pid)
 
       # Wait for completion
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
 
     test "start_run returns {:ok, pid}" do
@@ -371,7 +368,7 @@ defmodule LemonGateway.RunSupervisorTest do
       assert length(runs) == 5
 
       for {_i, pid} <- runs do
-        assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+        assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
       end
     end
 
@@ -382,7 +379,7 @@ defmodule LemonGateway.RunSupervisorTest do
       {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
 
       assert_receive {:run_complete, ^pid,
-                      %Event.Completed{ok: true, answer: "Quick: " <> answer_text}},
+                      %{__event__: :completed, ok: true, answer: "Quick: " <> answer_text}},
                      2000
 
       assert String.contains?(answer_text, "unique test text")
@@ -400,7 +397,7 @@ defmodule LemonGateway.RunSupervisorTest do
 
       {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
       # Wait for process to stop
       Process.sleep(100)
@@ -527,7 +524,7 @@ defmodule LemonGateway.RunSupervisorTest do
 
       # Complete the second one
       send(task_pid2, {:complete, "done"})
-      assert_receive {:run_complete, ^pid2, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid2, %{__event__: :completed, ok: true}}, 2000
     end
 
     test "multiple children can complete independently" do
@@ -550,7 +547,7 @@ defmodule LemonGateway.RunSupervisorTest do
 
       # All should complete (in order of delay)
       for {_i, pid} <- runs do
-        assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+        assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
       end
     end
 
@@ -582,7 +579,7 @@ defmodule LemonGateway.RunSupervisorTest do
       {:ok, pid2} =
         RunSupervisor.start_run(%{job: job2, slot_ref: make_ref(), worker_pid: self()})
 
-      assert_receive {:run_complete, ^pid2, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid2, %{__event__: :completed, ok: true}}, 2000
     end
   end
 
@@ -695,7 +692,7 @@ defmodule LemonGateway.RunSupervisorTest do
         end
       end)
 
-      assert_receive {:run_complete, ^pid2, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid2, %{__event__: :completed, ok: true}}, 2000
     end
   end
 
@@ -719,7 +716,7 @@ defmodule LemonGateway.RunSupervisorTest do
         end
 
       for {_i, pid} <- runs do
-        assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 3000
+        assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 3000
       end
 
       end_time = System.monotonic_time(:millisecond)
@@ -748,7 +745,7 @@ defmodule LemonGateway.RunSupervisorTest do
 
       # All should complete
       for pid <- pids do
-        assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 5000
+        assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 5000
       end
     end
 
@@ -760,7 +757,7 @@ defmodule LemonGateway.RunSupervisorTest do
         {:ok, pid} =
           RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
 
-        assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+        assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
       end
 
       # Supervisor should still be functioning
@@ -795,7 +792,7 @@ defmodule LemonGateway.RunSupervisorTest do
         end
 
       for {_type, pid} <- runs do
-        assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+        assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
       end
     end
   end
@@ -811,7 +808,7 @@ defmodule LemonGateway.RunSupervisorTest do
 
       {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
 
     test "worker_pid receives notification with correct completed event" do
@@ -821,7 +818,7 @@ defmodule LemonGateway.RunSupervisorTest do
       {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
 
       assert_receive {:run_complete, ^pid,
-                      %Event.Completed{ok: true, answer: "Quick: notification test"}},
+                      %{__event__: :completed, ok: true, answer: "Quick: notification test"}},
                      2000
     end
 
@@ -845,7 +842,7 @@ defmodule LemonGateway.RunSupervisorTest do
       completions =
         for _ <- 1..2 do
           receive do
-            {:run_complete, pid, %Event.Completed{} = completed} -> {pid, completed}
+            {:run_complete, pid, %{__event__: :completed} = completed} -> {pid, completed}
           after
             2000 -> nil
           end
@@ -872,7 +869,7 @@ defmodule LemonGateway.RunSupervisorTest do
 
       {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: slot_ref, worker_pid: self()})
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
 
     test "each run can have unique slot_ref" do
@@ -889,7 +886,7 @@ defmodule LemonGateway.RunSupervisorTest do
         end
 
       for {_slot_ref, pid} <- runs do
-        assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+        assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
       end
     end
   end
@@ -954,7 +951,7 @@ defmodule LemonGateway.RunSupervisorTest do
 
       {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true, answer: "Quick: "}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, answer: "Quick: "}}, 2000
     end
 
     test "handles job with long text" do
@@ -964,7 +961,7 @@ defmodule LemonGateway.RunSupervisorTest do
 
       {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
 
     test "handles job with special characters" do
@@ -973,7 +970,7 @@ defmodule LemonGateway.RunSupervisorTest do
 
       {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
 
     test "handles rapid sequential starts for same scope" do
@@ -991,7 +988,7 @@ defmodule LemonGateway.RunSupervisorTest do
 
       # All should complete
       for pid <- pids do
-        assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+        assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
       end
     end
 
@@ -1001,7 +998,7 @@ defmodule LemonGateway.RunSupervisorTest do
 
       {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
 
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
   end
 
@@ -1017,10 +1014,10 @@ defmodule LemonGateway.RunSupervisorTest do
       {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
 
       # Worker receives run_complete
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
       # notify_pid receives lemon_gateway_run_completed
-      assert_receive {:lemon_gateway_run_completed, ^job, %Event.Completed{ok: true}}, 2000
+      assert_receive {:lemon_gateway_run_completed, ^job, %{__event__: :completed, ok: true}}, 2000
     end
   end
 
@@ -1118,7 +1115,7 @@ defmodule LemonGateway.RunSupervisorTest do
 
       # The process responds to GenServer messages
       # We verify this by successfully receiving the completion
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
   end
 
@@ -1141,7 +1138,7 @@ defmodule LemonGateway.RunSupervisorTest do
 
       # All should complete
       for pid <- pids do
-        assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 5000
+        assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 5000
       end
 
       # Supervisor should still be healthy
@@ -1158,7 +1155,7 @@ defmodule LemonGateway.RunSupervisorTest do
           {:ok, pid} =
             RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
 
-          assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+          assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
         end
       end
 
@@ -1169,7 +1166,7 @@ defmodule LemonGateway.RunSupervisorTest do
       scope = make_scope()
       job = make_job(scope, text: "final test")
       {:ok, pid} = RunSupervisor.start_run(%{job: job, slot_ref: make_ref(), worker_pid: self()})
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
   end
 

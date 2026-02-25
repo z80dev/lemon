@@ -10,16 +10,14 @@ defmodule LemonGateway.RunTransportAgnosticTest do
   use ExUnit.Case, async: false
 
   alias LemonGateway.Run
-  alias LemonCore.ResumeToken
-  alias LemonGateway.Types.Job
+  alias LemonGateway.Types.{Job, ResumeToken}
   alias LemonGateway.Event
 
   # Test engine that sends deltas
   defmodule DeltaEngine do
     @behaviour LemonGateway.Engine
 
-    alias LemonCore.ResumeToken
-    alias LemonGateway.Types.Job
+    alias LemonGateway.Types.{Job, ResumeToken}
     alias LemonGateway.Event
 
     @impl true
@@ -45,7 +43,7 @@ defmodule LemonGateway.RunTransportAgnosticTest do
 
       {:ok, task_pid} =
         Task.start(fn ->
-          send(sink_pid, {:engine_event, run_ref, %Event.Started{engine: id(), resume: resume}})
+          send(sink_pid, {:engine_event, run_ref, Event.started(%{engine: id(), resume: resume})})
           # Send the task's own pid so the test can send commands to it
           if controller_pid, do: send(controller_pid, {:engine_started, run_ref, self()})
 
@@ -61,7 +59,7 @@ defmodule LemonGateway.RunTransportAgnosticTest do
                   send(
                     sink_pid,
                     {:engine_event, run_ref,
-                     %Event.Completed{engine: id(), resume: resume, ok: true, answer: ""}}
+                     Event.completed(%{engine: id(), resume: resume, ok: true, answer: ""})}
                   )
               after
                 5000 -> :ok
@@ -71,7 +69,7 @@ defmodule LemonGateway.RunTransportAgnosticTest do
               send(
                 sink_pid,
                 {:engine_event, run_ref,
-                 %Event.Completed{engine: id(), resume: resume, ok: false, error: :timeout}}
+                 Event.completed(%{engine: id(), resume: resume, ok: false, error: :timeout})}
               )
           end
         end)
@@ -189,7 +187,7 @@ defmodule LemonGateway.RunTransportAgnosticTest do
       send(sink_pid, :complete)
 
       # Should receive completion with accumulated answer
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true, answer: answer}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true, answer: answer}}, 2000
 
       # Answer should contain the accumulated delta text
       assert answer == "Hello World"
@@ -223,7 +221,7 @@ defmodule LemonGateway.RunTransportAgnosticTest do
 
       # Should complete successfully without crashing
       # (Old code would try to call Telegram.Outbox)
-      assert_receive {:run_complete, ^pid, %Event.Completed{ok: true}}, 2000
+      assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
     end
 
     test "emits run_started event to bus" do

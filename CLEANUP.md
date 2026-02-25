@@ -763,25 +763,22 @@ That end-state removes the biggest sources of accidental complexity:
 
 ## Current Status (Manager Updates)
 
-**Last updated:** 2026-02-25 (Phases 1+2a+4a+4b COMPLETE, dispatching 2b+2c+3a+4c — context resumed)
+**Last updated:** 2026-02-25 (Phases 1+2+4 COMPLETE, 3a COMPLETE, 3b NOT STARTED)
 
 ### Overall Progress
 
 | Phase | Description | Status | Progress |
 |-------|-------------|--------|----------|
 | **Phase 1** | Delete dead duplication | COMPLETE | 3/3 tasks |
-| **Phase 2** | Unify shared primitives | IN PROGRESS | 1/3 tasks done, 2b+2c dispatched |
-| **Phase 3** | Reduce glue layers | IN PROGRESS | 3a dispatched, 3b blocked on 3a |
-| **Phase 4** | Monolith decomposition | IN PROGRESS | 2/3 done, 4c dispatched |
+| **Phase 2** | Unify shared primitives | COMPLETE | 3/3 tasks |
+| **Phase 3** | Reduce glue layers | PARTIAL | 3a done, 3b not started |
+| **Phase 4** | Monolith decomposition | COMPLETE | 3/3 tasks |
 
 ### Active Tasks
 
 | Task | Assignee | Status | Notes |
 |------|----------|--------|-------|
-| 2b: Unify BindingResolver | Opus senior dev | DONE | Unified 4 tables → 2, thin delegation layers |
-| 2c: Unify GatewayConfig | Opus senior dev | IN PROGRESS | 2a complete, unblocked |
-| 3a: Standardize engine events | Opus senior dev | IN PROGRESS | Phase 2a complete, unblocked |
-| 4c: Decompose run_process.ex | Opus senior dev | DONE | 2,438 → 689 LOC, extracted 4 modules |
+| 3b: Decouple router from channels | Opus senior dev | NOT STARTED | Unblocked by 3a completion |
 
 ### Completed Tasks
 
@@ -791,12 +788,15 @@ That end-state removes the biggest sources of accidental complexity:
 | 1b: Gateway XMTP transport | Sonnet dev | Deleted 3 stub files, copied xmtp_bridge.mjs to channels priv |
 | 1c: Gateway telegram stack | Sonnet dev | Deleted 11 lib + 22 test files, cleaned supervisor tree |
 | 2a: Canonical types | Opus dev | Created LemonCore.{ChatScope,ResumeToken,Binding}, updated 89 files |
+| 2b: Unify BindingResolver | Opus dev | Created LemonCore.BindingResolver, unified 4 tables → 2, thin delegation wrappers |
+| 2c: Unify GatewayConfig | Opus dev | Created LemonCore.GatewayConfig, simplified config_loader + channels gateway_config |
+| 3a: Standardize engine events | Opus dev | Replaced 4 Event structs with plain map constructors + defguards |
 | 4a: Decompose telegram transport | Opus dev | 5,550 -> 4,372 LOC, extracted 5 modules |
 | 4b: Decompose session.ex | Opus dev | 3,398 -> 2,129 LOC, extracted 5 modules |
+| 4c: Decompose run_process.ex | Opus dev | 2,438 -> 689 LOC, extracted 4 modules (Watchdog, CompactionTrigger, RetryHandler, OutputTracker) |
 
-### Blockers / Risks
+### Remaining Work
 
-- Phase 3b depends on 3a
-- 4c worklog from previous context was written before code was committed (discrepancy fixed)
+- **3b: Decouple router from channel formatting** — Move telegram-specific logic out of StreamCoalescer and ChannelsDelivery. Router produces generic output intents; channels owns formatting.
 
 See [CLEANUP_WORKLOG.md](CLEANUP_WORKLOG.md) for detailed per-task logs.

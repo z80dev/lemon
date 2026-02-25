@@ -3,7 +3,7 @@ defmodule LemonGateway.Renderers.BasicTest do
   use ExUnit.Case, async: true
 
   alias Elixir.LemonGateway.Renderers.Basic
-  alias Elixir.LemonGateway.Event.{Started, Completed}
+  alias Elixir.LemonGateway.Event
   alias LemonCore.ResumeToken
 
   defmodule LemonGateway.Renderers.BasicTest.TestEngine do
@@ -20,7 +20,7 @@ defmodule LemonGateway.Renderers.BasicTest do
     token = %ResumeToken{engine: "test", value: "abc"}
     state = Basic.init(%{engine: Elixir.LemonGateway.Renderers.BasicTest.TestEngine})
 
-    {state, result} = Basic.apply_event(state, %Started{engine: "test", resume: token})
+    {state, result} = Basic.apply_event(state, Event.started(%{engine: "test", resume: token}))
 
     assert {:render, %{text: text, status: :running}} = result
     assert String.contains?(text, "test resume abc")
@@ -32,7 +32,7 @@ defmodule LemonGateway.Renderers.BasicTest do
     state = Basic.init(%{engine: Elixir.LemonGateway.Renderers.BasicTest.TestEngine})
 
     {state, result} =
-      Basic.apply_event(state, %Completed{engine: "test", ok: true, answer: "ok", resume: token})
+      Basic.apply_event(state, Event.completed(%{engine: "test", ok: true, answer: "ok", resume: token}))
 
     assert {:render, %{text: text, status: :done}} = result
     assert String.contains?(text, "test resume xyz")

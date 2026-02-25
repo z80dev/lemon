@@ -30,7 +30,7 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
     StartedEvent
   }
 
-  alias LemonCore.ResumeToken, as: CoreResumeToken
+  alias AgentCore.CliRunners.Types.ResumeToken, as: CoreResumeToken
 
   # ============================================================================
   # Engine Identity Tests
@@ -247,7 +247,7 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
   # CliAdapter Event Mapping Tests
   # ============================================================================
 
-  describe "CliAdapter.to_gateway_event/1 - StartedEvent" do
+  describe "CliAdapter.to_event_map/1 - StartedEvent" do
     test "maps claude StartedEvent to gateway Started" do
       token = CoreResumeToken.new("claude", "sess_abc")
 
@@ -257,9 +257,9 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
           meta: %{model: "claude-opus-4"}
         )
 
-      result = CliAdapter.to_gateway_event(started)
+      result = CliAdapter.to_event_map(started)
 
-      assert %Event.Started{} = result
+      assert %{__event__: :started} = result
       assert result.engine == "claude"
       assert result.resume.engine == "claude"
       assert result.resume.value == "sess_abc"
@@ -271,7 +271,7 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
       token = CoreResumeToken.new("claude", "s1")
       started = StartedEvent.new("claude", token)
 
-      result = CliAdapter.to_gateway_event(started)
+      result = CliAdapter.to_event_map(started)
 
       assert result.engine == "claude"
       assert result.resume.value == "s1"
@@ -280,14 +280,14 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
     end
   end
 
-  describe "CliAdapter.to_gateway_event/1 - ActionEvent" do
+  describe "CliAdapter.to_event_map/1 - ActionEvent" do
     test "maps ActionEvent to gateway ActionEvent" do
       action = Action.new("t1", :tool, "Bash", %{command: "ls"})
       ev = ActionEvent.new("claude", action, :started, level: :info)
 
-      result = CliAdapter.to_gateway_event(ev)
+      result = CliAdapter.to_event_map(ev)
 
-      assert %Event.ActionEvent{} = result
+      assert %{__event__: :action_event} = result
       assert result.engine == "claude"
       assert result.action.id == "t1"
       assert result.action.kind == "tool"
@@ -299,7 +299,7 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
       action = Action.new("cmd_1", :command, "ls -la", %{})
       ev = ActionEvent.new("claude", action, :completed, ok: true, message: "Success")
 
-      result = CliAdapter.to_gateway_event(ev)
+      result = CliAdapter.to_event_map(ev)
 
       assert result.phase == :completed
       assert result.ok == true
@@ -310,7 +310,7 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
       action = Action.new("cmd_1", :command, "bad_cmd", %{})
       ev = ActionEvent.new("claude", action, :completed, ok: false, level: :error)
 
-      result = CliAdapter.to_gateway_event(ev)
+      result = CliAdapter.to_event_map(ev)
 
       assert result.ok == false
       assert result.level == :error
@@ -321,14 +321,14 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
         action = Action.new("a1", kind, "Title", %{})
         ev = ActionEvent.new("claude", action, :started)
 
-        result = CliAdapter.to_gateway_event(ev)
+        result = CliAdapter.to_event_map(ev)
 
         assert result.action.kind == to_string(kind)
       end
     end
   end
 
-  describe "CliAdapter.to_gateway_event/1 - CompletedEvent" do
+  describe "CliAdapter.to_event_map/1 - CompletedEvent" do
     test "maps successful CompletedEvent" do
       token = CoreResumeToken.new("claude", "sess_abc")
 
@@ -338,9 +338,9 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
           usage: %{input_tokens: 100}
         )
 
-      result = CliAdapter.to_gateway_event(ev)
+      result = CliAdapter.to_event_map(ev)
 
-      assert %Event.Completed{} = result
+      assert %{__event__: :completed} = result
       assert result.engine == "claude"
       assert result.ok == true
       assert result.answer == "The answer is 42"
@@ -352,7 +352,7 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
       token = CoreResumeToken.new("claude", "sess_fail")
       ev = CompletedEvent.error("claude", "Rate limit exceeded", resume: token, answer: "partial")
 
-      result = CliAdapter.to_gateway_event(ev)
+      result = CliAdapter.to_event_map(ev)
 
       assert result.ok == false
       assert result.error == "Rate limit exceeded"
@@ -363,21 +363,21 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
     test "maps CompletedEvent without resume token" do
       ev = CompletedEvent.ok("claude", "Done")
 
-      result = CliAdapter.to_gateway_event(ev)
+      result = CliAdapter.to_event_map(ev)
 
       assert result.ok == true
       assert result.resume == nil
     end
   end
 
-  describe "CliAdapter.to_gateway_event/1 - edge cases" do
+  describe "CliAdapter.to_event_map/1 - edge cases" do
     test "returns nil for unknown event type" do
-      result = CliAdapter.to_gateway_event(%{type: :unknown})
+      result = CliAdapter.to_event_map(%{type: :unknown})
       assert result == nil
     end
 
     test "returns nil for nil input" do
-      result = CliAdapter.to_gateway_event(nil)
+      result = CliAdapter.to_event_map(nil)
       assert result == nil
     end
   end
@@ -528,10 +528,10 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
   # Event.Started Struct Tests
   # ============================================================================
 
-  describe "Event.Started struct" do
+  describe "Event started maps" do
     test "requires engine and resume fields" do
       resume = %LemonCore.ResumeToken{engine: "claude", value: "s1"}
-      started = %Event.Started{engine: "claude", resume: resume}
+      started = Event.started(%{engine: "claude", resume: resume})
 
       assert started.engine == "claude"
       assert started.resume.value == "s1"
@@ -540,11 +540,11 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
     test "allows optional title and meta fields" do
       resume = %LemonCore.ResumeToken{engine: "claude", value: "s1"}
 
-      started = %Event.Started{
+      started = Event.started(%{
         engine: "claude",
         resume: resume,
         title: "Claude Session",
-        meta: %{model: "opus"}
+        meta: %{model: "opus"})
       }
 
       assert started.title == "Claude Session"
@@ -556,30 +556,30 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
   # Event.Completed Struct Tests
   # ============================================================================
 
-  describe "Event.Completed struct" do
+  describe "Event completed maps" do
     test "requires engine and ok fields" do
-      completed = %Event.Completed{engine: "claude", ok: true}
+      completed = Event.completed(%{engine: "claude", ok: true})
       assert completed.engine == "claude"
       assert completed.ok == true
     end
 
     test "includes answer and error fields" do
-      completed = %Event.Completed{
+      completed = Event.completed(%{
         engine: "claude",
         ok: false,
         answer: "partial",
         error: "timeout"
-      }
+      })
 
       assert completed.answer == "partial"
       assert completed.error == "timeout"
     end
 
     test "includes usage field" do
-      completed = %Event.Completed{
+      completed = Event.completed(%{
         engine: "claude",
         ok: true,
-        usage: %{input_tokens: 100, output_tokens: 50}
+        usage: %{input_tokens: 100, output_tokens: 50})
       }
 
       assert completed.usage.input_tokens == 100
@@ -590,10 +590,10 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
   # Event.ActionEvent Struct Tests
   # ============================================================================
 
-  describe "Event.ActionEvent struct" do
+  describe "Event action_event maps" do
     test "requires engine, action, and phase fields" do
-      action = %Event.Action{id: "a1", kind: "tool", title: "Test"}
-      ev = %Event.ActionEvent{engine: "claude", action: action, phase: :started}
+      action = Event.action(%{id: "a1", kind: "tool", title: "Test"})
+      ev = Event.action_event(%{engine: "claude", action: action, phase: :started})
 
       assert ev.engine == "claude"
       assert ev.action.id == "a1"
@@ -601,16 +601,16 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
     end
 
     test "allows optional ok, message, and level fields" do
-      action = %Event.Action{id: "a1", kind: "tool", title: "Test"}
+      action = Event.action(%{id: "a1", kind: "tool", title: "Test"})
 
-      ev = %Event.ActionEvent{
+      ev = Event.action_event(%{
         engine: "claude",
         action: action,
         phase: :completed,
         ok: true,
         message: "Done",
         level: :info
-      }
+      })
 
       assert ev.ok == true
       assert ev.message == "Done"
@@ -622,20 +622,20 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
   # Event.Action Struct Tests
   # ============================================================================
 
-  describe "Event.Action struct" do
+  describe "Event action maps" do
     test "requires id, kind, and title fields" do
-      action = %Event.Action{id: "a1", kind: "command", title: "ls -la"}
+      action = Event.action(%{id: "a1", kind: "command", title: "ls -la"})
       assert action.id == "a1"
       assert action.kind == "command"
       assert action.title == "ls -la"
     end
 
     test "allows optional detail field" do
-      action = %Event.Action{
+      action = Event.action(%{
         id: "a1",
         kind: "tool",
         title: "Read",
-        detail: %{file_path: "/test.ex"}
+        detail: %{file_path: "/test.ex"})
       }
 
       assert action.detail.file_path == "/test.ex"
@@ -722,7 +722,7 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
     test "gateway event types are serializable" do
       # Test that event structs can be safely inspected (useful for logging)
       resume = %LemonCore.ResumeToken{engine: "claude", value: "s1"}
-      started = %Event.Started{engine: "claude", resume: resume}
+      started = Event.started(%{engine: "claude", resume: resume})
 
       # Should not raise
       assert is_binary(inspect(started))

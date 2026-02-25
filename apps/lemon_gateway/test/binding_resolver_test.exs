@@ -17,12 +17,12 @@ defmodule LemonGateway.BindingResolverTest do
     try do
       _ = Application.ensure_all_started(:lemon_core)
 
-      for {key, _} <- LemonCore.Store.list(:gateway_projects_dynamic) do
-        :ok = LemonCore.Store.delete(:gateway_projects_dynamic, key)
+      for {key, _} <- LemonCore.Store.list(:projects_dynamic) do
+        :ok = LemonCore.Store.delete(:projects_dynamic, key)
       end
 
-      for {key, _} <- LemonCore.Store.list(:gateway_project_overrides) do
-        :ok = LemonCore.Store.delete(:gateway_project_overrides, key)
+      for {key, _} <- LemonCore.Store.list(:project_overrides) do
+        :ok = LemonCore.Store.delete(:project_overrides, key)
       end
     rescue
       _ -> :ok

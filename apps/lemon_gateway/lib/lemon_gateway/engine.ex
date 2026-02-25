@@ -26,12 +26,11 @@ defmodule LemonGateway.Engine do
   ## Event Protocol
 
   Engines send events to `sink_pid` as `{:engine_event, run_ref, event}` messages
-  where event is one of `Event.Started`, `Event.ActionEvent`, or `Event.Completed`.
-  Streaming text is sent as `{:engine_delta, run_ref, text}`.
+  where event is a plain tagged map built via `Event.started/1`, `Event.action_event/1`,
+  or `Event.completed/1`. Streaming text is sent as `{:engine_delta, run_ref, text}`.
   """
 
-  alias LemonCore.ResumeToken
-  alias LemonGateway.Types.Job
+  alias LemonGateway.Types.{Job, ResumeToken}
 
   @type run_opts :: %{
           optional(:cwd) => String.t(),
