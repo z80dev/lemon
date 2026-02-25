@@ -652,21 +652,47 @@ defmodule CodingAgent.CliRunners.LemonRunner do
 
     if is_pid(session) and Process.alive?(session) do
       # Best-effort save so resume tokens remain usable across runs.
-      try do
-        _ = CodingAgent.Session.save(session)
-      rescue
-        _ -> :ok
+      case safe_save_session(session) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("LemonRunner finalize_session save failed: #{inspect(reason)}")
       end
 
       # Stop the session to avoid "already_started" conflicts on resume.
-      try do
-        GenServer.stop(session, :normal)
-      rescue
-        _ -> :ok
-      end
+      :ok = safe_stop_session(session)
     end
 
     state
+  end
+
+  @spec safe_save_session(pid()) :: :ok | {:error, term()}
+  defp safe_save_session(session) do
+    try do
+      _ = CodingAgent.Session.save(session)
+      :ok
+    rescue
+      exception ->
+        {:error, {:exception, exception}}
+    catch
+      :exit, reason ->
+        {:error, {:exit, reason}}
+    end
+  end
+
+  @spec safe_stop_session(pid()) :: :ok
+  defp safe_stop_session(session) do
+    try do
+      GenServer.stop(session, :normal)
+      :ok
+    rescue
+      _ ->
+        :ok
+    catch
+      :exit, _reason ->
+        :ok
+    end
   end
 
   # ============================================================================

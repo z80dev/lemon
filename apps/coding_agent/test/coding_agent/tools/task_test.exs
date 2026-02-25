@@ -3,7 +3,7 @@ defmodule CodingAgent.Tools.TaskTest do
 
   alias CodingAgent.Tools.Task
   alias AgentCore.AbortSignal
-  alias AgentCore.CliRunners.Types.ResumeToken
+  alias LemonCore.ResumeToken
 
   describe "tool/2" do
     test "returns an AgentTool struct with correct properties" do

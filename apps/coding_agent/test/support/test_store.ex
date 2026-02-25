@@ -2,7 +2,7 @@ defmodule CodingAgent.TestStore do
   @moduledoc false
 
   # Minimal ETS-backed store implementation for tests. This avoids requiring
-  # LemonGateway.Store (which is not a dependency of :coding_agent).
+  # LemonCore.Store (which is not a dependency of :coding_agent).
 
   @table :coding_agent_test_store
 
