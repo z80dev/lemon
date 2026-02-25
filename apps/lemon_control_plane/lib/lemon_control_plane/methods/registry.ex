@@ -29,6 +29,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.Status,
     LemonControlPlane.Methods.IntrospectionSnapshot,
     LemonControlPlane.Methods.Agent,
+    LemonControlPlane.Methods.AgentProgress,
     LemonControlPlane.Methods.AgentWait,
     LemonControlPlane.Methods.AgentIdentityGet,
     LemonControlPlane.Methods.AgentInboxSend,
