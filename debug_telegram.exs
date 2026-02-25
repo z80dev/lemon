@@ -86,13 +86,13 @@ end
 
 # 8. Check LemonGateway Store for agent config
 IO.puts("\n8. Checking LemonGateway Store...")
-case Process.whereis(LemonGateway.Store) do
-  nil -> IO.puts("   ❌ LemonGateway.Store NOT RUNNING")
+case Process.whereis(LemonCore.Store) do
+  nil -> IO.puts("   ❌ LemonCore.Store NOT RUNNING")
   pid ->
-    IO.puts("   ✅ LemonGateway.Store running: #{inspect(pid)}")
+    IO.puts("   ✅ LemonCore.Store running: #{inspect(pid)}")
     # Try to list stored items
     try do
-      agents = LemonGateway.Store.list(:agents)
+      agents = LemonCore.Store.list(:agents)
       IO.puts("   Stored agents: #{inspect(Map.keys(agents))}")
     rescue
       e -> IO.puts("   Could not list agents: #{inspect(e)}")

@@ -4,7 +4,7 @@ defmodule LemonRouter.StreamCoalescerTest do
 
   import ExUnit.CaptureLog
 
-  alias LemonChannels.Types.ResumeToken
+  alias LemonCore.ResumeToken
   alias Elixir.LemonRouter.StreamCoalescer
 
   defmodule LemonRouter.StreamCoalescerTest.TestTelegramPlugin do
@@ -106,11 +106,6 @@ defmodule LemonRouter.StreamCoalescerTest do
 
     if is_nil(Process.whereis(LemonChannels.Outbox.Dedupe)) do
       {:ok, _} = LemonChannels.Outbox.Dedupe.start_link([])
-    end
-
-    # Ensure baseline tests cover the LemonChannels.Outbox path deterministically.
-    if pid = Process.whereis(LemonGateway.Telegram.Outbox) do
-      GenServer.stop(pid)
     end
 
     :persistent_term.put({Elixir.LemonRouter.StreamCoalescerTest.TestTelegramPlugin, :test_pid}, self())

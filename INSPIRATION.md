@@ -51,3 +51,19 @@
 - `IDEA-20260225-ironclaw-kind-aware-extension-registry`
 - `IDEA-20260225-community-rate-limit-session-self-healing`
 - `IDEA-20260225-community-trace-driven-agent-evaluation`
+
+## 2026-02-25 Late Snapshot
+
+### Upstream repo deltas reviewed
+- **openclaw**: system prompt now explicitly directs schema-first config behavior (`config.schema` before config edits/questions) (`975c9f4b5457`)
+- **oh-my-pi**: changelog tooling hardening with shared categories + schema validation for entry/delete payloads (`80580edd5994`)
+
+### Community/trend signals
+- Long-running autonomous coding loops are converging on **episodic execution with git-verified handoffs** to avoid false progress and drift loops.
+- Security operators are increasingly treating always-on local agents as **high-privilege automation surfaces** that need explicit consent scopes and exposure guardrails.
+
+### New ideas added
+- `IDEA-20260225-openclaw-schema-first-config-ops`
+- `IDEA-20260225-oh-my-pi-changelog-schema-hardening`
+- `IDEA-20260225-community-episodic-git-verified-handoffs`
+- `IDEA-20260225-community-autonomous-agent-consent-scopes`

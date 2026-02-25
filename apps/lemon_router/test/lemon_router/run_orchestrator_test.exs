@@ -2,7 +2,7 @@ defmodule LemonRouter.RunOrchestratorTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.RunRequest
-  alias LemonChannels.Types.ResumeToken
+  alias LemonCore.ResumeToken
   alias LemonRouter.RunOrchestrator
 
   @moduledoc """

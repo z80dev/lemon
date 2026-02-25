@@ -20,7 +20,7 @@ defmodule LemonControlPlane.Methods.SessionsPreview do
     if is_nil(session_key) do
       {:error, {:invalid_request, "sessionKey is required", nil}}
     else
-      # Get recent history for this session via LemonGateway.Store
+      # Get recent history for this session via LemonCore.Store
       limit = params["limit"] || 10
       history = get_session_history(session_key, limit)
 

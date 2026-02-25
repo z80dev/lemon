@@ -10,7 +10,7 @@ defmodule LemonRouter.RunProcessTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.{RunRequest, SessionKey}
-  alias LemonChannels.Types.ResumeToken
+  alias LemonCore.ResumeToken
   alias Elixir.LemonRouter.RunProcess
 
   defmodule LemonRouter.RunProcessTest.TestOutboxAPI do

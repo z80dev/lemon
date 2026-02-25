@@ -19,7 +19,7 @@ defmodule LemonControlPlane.Methods.SessionsList do
     offset = params["offset"] || 0
     agent_id = params["agentId"]
 
-    # Get sessions from LemonGateway.Store which maintains sessions_index
+    # Get sessions from LemonCore.Store which maintains sessions_index
     sessions =
       get_sessions_index()
       |> Enum.map(fn {_key, session} -> session end)

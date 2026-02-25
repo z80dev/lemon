@@ -8,10 +8,10 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
   alias LemonControlPlane.Methods.ExecApprovalResolve
 
   setup do
-    # Ensure LemonGateway.Store is running
+    # Ensure LemonCore.Store is running
     case Process.whereis(LemonCore.Store) do
       nil ->
-        {:ok, _} = LemonGateway.Store.start_link([])
+        {:ok, _} = LemonCore.Store.start_link([])
 
       _pid ->
         :ok

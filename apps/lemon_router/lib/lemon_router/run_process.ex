@@ -16,7 +16,7 @@ defmodule LemonRouter.RunProcess do
 
   alias LemonCore.{Bus, Introspection, RunRequest, SessionKey}
   alias LemonChannels.OutboundPayload
-  alias LemonChannels.Types.ResumeToken
+  alias LemonCore.ResumeToken
   alias LemonRouter.{ChannelContext, ChannelsDelivery}
 
   @default_auto_send_generated_max_files 3

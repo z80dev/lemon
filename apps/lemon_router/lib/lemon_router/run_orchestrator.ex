@@ -17,10 +17,9 @@ defmodule LemonRouter.RunOrchestrator do
 
   alias LemonRouter.{AgentProfiles, ModelSelection, Policy, RunProcess, StickyEngine}
   alias LemonCore.{Introspection, RunRequest, SessionKey}
-  alias LemonChannels.Types.ResumeToken
+  alias LemonCore.ResumeToken
   alias LemonGateway.Cwd, as: GatewayCwd
   alias LemonChannels.EngineRegistry
-  alias AgentCore.CliRunners.Types.ResumeToken, as: CliResume
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -512,7 +511,7 @@ defmodule LemonRouter.RunOrchestrator do
   defp strip_strict_resume_lines(text) when is_binary(text) do
     text
     |> String.split("\n")
-    |> Enum.reject(fn line -> CliResume.is_resume_line(line) end)
+    |> Enum.reject(fn line -> ResumeToken.is_resume_line(line) end)
     |> Enum.join("\n")
     |> String.trim()
   end
