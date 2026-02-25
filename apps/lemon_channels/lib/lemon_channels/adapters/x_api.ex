@@ -60,6 +60,8 @@ defmodule LemonChannels.Adapters.XAPI do
     access_token_secret: "X_API_ACCESS_TOKEN_SECRET"
   ]
 
+  @token_config_keys [:access_token, :refresh_token, :token_expires_at]
+
   # API base URLs
   # @api_base "https://api.x.com/2"
   # @oauth_base "https://api.x.com/2/oauth2"
@@ -138,8 +140,12 @@ defmodule LemonChannels.Adapters.XAPI do
       |> Application.get_env(__MODULE__, [])
       |> normalize_app_config()
 
-    Keyword.merge(runtime_config(), app_config, fn _key, runtime_value, app_value ->
-      if present?(app_value), do: app_value, else: runtime_value
+    Keyword.merge(runtime_config(), app_config, fn key, runtime_value, app_value ->
+      if key in @token_config_keys do
+        if present?(runtime_value), do: runtime_value, else: app_value
+      else
+        if present?(app_value), do: app_value, else: runtime_value
+      end
     end)
   end
 
@@ -236,7 +242,7 @@ defmodule LemonChannels.Adapters.XAPI do
   defp normalize_optional_string(value) when is_binary(value) do
     case String.trim(value) do
       "" -> nil
-      _ -> value
+      trimmed -> trimmed
     end
   end
 

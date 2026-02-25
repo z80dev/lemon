@@ -25,8 +25,21 @@ defmodule LemonChannels.Adapters.XAPI.OAuthCallbackHandler do
   @doc """
   Handle OAuth callback from X.
   """
-  def handle_callback(%{"code" => code, "state" => _state}) do
+  def handle_callback(%{"code" => code, "state" => state_param}) do
     config = LemonChannels.Adapters.XAPI.config()
+
+    # Look up PKCE verifier by state param
+    verifier =
+      case LemonChannels.Adapters.XAPI.TokenManager.consume_pkce_state(state_param) do
+        {:ok, v} -> v
+        {:error, :not_found} ->
+          Logger.warning("[XAPI] No PKCE state found for OAuth callback; token exchange may fail")
+          nil
+      end
+
+    unless verifier do
+      Logger.error("[XAPI] Cannot complete OAuth callback: no PKCE verifier for state #{state_param}")
+    end
 
     # Exchange code for tokens
     body =
@@ -35,8 +48,7 @@ defmodule LemonChannels.Adapters.XAPI.OAuthCallbackHandler do
         "code" => code,
         "redirect_uri" => get_callback_url(config),
         "client_id" => config[:client_id],
-        # PKCE verifier (we used 'challenge' as our code_challenge)
-        "code_verifier" => "challenge"
+        "code_verifier" => verifier || "challenge"
       })
 
     headers = [
@@ -101,6 +113,8 @@ defmodule LemonChannels.Adapters.XAPI.OAuthCallbackHandler do
 
     callback_url = get_callback_url(config)
     state = generate_state()
+    pkce = LemonChannels.Adapters.XAPI.OAuth.generate_pkce()
+    :ok = LemonChannels.Adapters.XAPI.TokenManager.register_pkce_state(state, pkce.verifier)
 
     params = %{
       "response_type" => "code",
@@ -108,8 +122,8 @@ defmodule LemonChannels.Adapters.XAPI.OAuthCallbackHandler do
       "redirect_uri" => callback_url,
       "scope" => "tweet.read tweet.write users.read offline.access",
       "state" => state,
-      "code_challenge" => "challenge",
-      "code_challenge_method" => "plain"
+      "code_challenge" => pkce.challenge,
+      "code_challenge_method" => "S256"
     }
 
     query = URI.encode_query(params)

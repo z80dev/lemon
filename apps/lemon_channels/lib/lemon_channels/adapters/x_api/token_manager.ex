@@ -35,7 +35,9 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
     :expires_at,
     :token_type,
     :secrets_module,
-    :persist_secrets?
+    :persist_secrets?,
+    :timer_ref,
+    pkce_states: %{}
   ]
 
   @type t :: %__MODULE__{
@@ -44,7 +46,9 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
           expires_at: DateTime.t() | nil,
           token_type: binary(),
           secrets_module: module(),
-          persist_secrets?: boolean()
+          persist_secrets?: boolean(),
+          timer_ref: reference() | nil,
+          pkce_states: map()
         }
 
   ## Client API
@@ -89,6 +93,23 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
   end
 
   @doc """
+  Register a PKCE verifier for a given OAuth state parameter.
+  Used during OAuth authorization flow to store the verifier
+  between authorization URL generation and callback handling.
+  """
+  def register_pkce_state(state_param, verifier) do
+    GenServer.call(@name, {:register_pkce_state, state_param, verifier})
+  end
+
+  @doc """
+  Consume (retrieve and remove) a PKCE verifier for a given state parameter.
+  Returns {:ok, verifier} or {:error, :not_found}.
+  """
+  def consume_pkce_state(state_param) do
+    GenServer.call(@name, {:consume_pkce_state, state_param})
+  end
+
+  @doc """
   Persist OAuth token attributes without requiring a running TokenManager process.
 
   This is useful immediately after OAuth callback exchange when the GenServer
@@ -96,7 +117,13 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
   """
   def persist_tokens(attrs, opts \\ []) do
     state = build_state_from_attrs(attrs, opts)
-    persist_runtime_tokens(state)
+
+    case persist_runtime_tokens(state) do
+      :ok -> :ok
+      {:error, :secrets_persist_failed} ->
+        Logger.warning("[XAPI] persist_tokens secrets persist failed (no retry available)")
+        :ok
+    end
   end
 
   ## Server Callbacks
@@ -116,9 +143,7 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
     }
 
     # Schedule refresh if we have tokens
-    if state.access_token do
-      schedule_refresh(state)
-    end
+    state = if state.access_token, do: schedule_refresh(state), else: state
 
     {:ok, state}
   end
@@ -142,9 +167,37 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
   @impl true
   def handle_call({:update_tokens, attrs}, _from, state) do
     new_state = build_state_from_attrs(attrs, state)
-    persist_runtime_tokens(new_state)
-    schedule_refresh(new_state)
+    new_state = schedule_refresh(new_state)
+
+    case persist_runtime_tokens(new_state) do
+      :ok -> :ok
+      {:error, :secrets_persist_failed} ->
+        Logger.warning("[XAPI] update_tokens secrets persist failed; scheduling retry")
+        Process.send_after(self(), :retry_persist_secrets, 30_000)
+    end
+
     {:reply, {:ok, new_state}, new_state}
+  end
+
+  @impl true
+  def handle_call({:register_pkce_state, state_param, verifier}, _from, state) do
+    now = System.monotonic_time(:millisecond)
+    # Prune states older than 10 minutes to prevent unbounded growth
+    cutoff = now - 10 * 60 * 1_000
+    pruned = Map.filter(state.pkce_states, fn {_k, {_v, ts}} -> ts > cutoff end)
+    new_states = Map.put(pruned, state_param, {verifier, now})
+    {:reply, :ok, %{state | pkce_states: new_states}}
+  end
+
+  @impl true
+  def handle_call({:consume_pkce_state, state_param}, _from, state) do
+    case Map.pop(state.pkce_states, state_param) do
+      {{verifier, _ts}, remaining} ->
+        {:reply, {:ok, verifier}, %{state | pkce_states: remaining}}
+
+      {nil, _} ->
+        {:reply, {:error, :not_found}, state}
+    end
   end
 
   @impl true
@@ -166,9 +219,24 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
           Logger.error("[XAPI] Token refresh failed: #{inspect(reason)}")
         end
 
-        Process.send_after(self(), :refresh_token, retry_ms)
-        {:noreply, state}
+        # Cancel existing timer before scheduling retry (Bug #1 fix)
+        if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
+        ref = Process.send_after(self(), :refresh_token, retry_ms)
+        {:noreply, %{state | timer_ref: ref}}
     end
+  end
+
+  @impl true
+  def handle_info(:retry_persist_secrets, state) do
+    case persist_secrets(state) do
+      :ok ->
+        Logger.info("[XAPI] Secrets persisted on retry")
+
+      {:error, reason} ->
+        Logger.warning("[XAPI] Secrets persist retry failed: #{inspect(reason)}")
+    end
+
+    {:noreply, state}
   end
 
   ## Private Functions
@@ -190,7 +258,7 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
     end
   end
 
-  defp needs_refresh?(%__MODULE__{expires_at: nil}), do: true
+  defp needs_refresh?(%__MODULE__{expires_at: nil}), do: false
 
   defp needs_refresh?(%__MODULE__{expires_at: expires_at}) do
     now = DateTime.utc_now()
@@ -224,8 +292,20 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
            ) do
         {:ok, %{status: 200, body: response}} ->
           new_state = parse_token_response(response, state)
-          persist_runtime_tokens(new_state)
-          schedule_refresh(new_state)
+          new_state = schedule_refresh(new_state)
+
+          case persist_runtime_tokens(new_state) do
+            :ok ->
+              :ok
+
+            {:error, :secrets_persist_failed} ->
+              Logger.warning(
+                "[XAPI] Token refresh succeeded but secrets persist failed; scheduling retry"
+              )
+
+              Process.send_after(self(), :retry_persist_secrets, 30_000)
+          end
+
           {:ok, new_state}
 
         {:ok, %{status: status, body: body}} ->
@@ -251,21 +331,29 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
     }
   end
 
-  defp schedule_refresh(%__MODULE__{expires_at: nil}), do: :ok
+  defp schedule_refresh(%__MODULE__{} = state) do
+    # Cancel any existing timer
+    if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
 
-  defp schedule_refresh(%__MODULE__{expires_at: expires_at}) do
-    now = DateTime.utc_now()
-    refresh_at = DateTime.add(expires_at, -@refresh_buffer_seconds, :second)
+    delay =
+      case state.expires_at do
+        nil ->
+          # No expiry known — refresh soon in background
+          5_000
 
-    case DateTime.diff(refresh_at, now, :millisecond) do
-      delay when delay > 0 ->
-        Logger.info("[XAPI] Scheduling token refresh in #{div(delay, 1000)}s")
-        Process.send_after(self(), :refresh_token, delay)
+        expires_at ->
+          now = DateTime.utc_now()
+          refresh_at = DateTime.add(expires_at, -@refresh_buffer_seconds, :second)
 
-      _ ->
-        # Already expired or close to it, refresh soon
-        Process.send_after(self(), :refresh_token, 5000)
-    end
+          case DateTime.diff(refresh_at, now, :millisecond) do
+            d when d > 0 -> d
+            _ -> 5_000
+          end
+      end
+
+    Logger.info("[XAPI] Scheduling token refresh in #{div(delay, 1000)}s")
+    ref = Process.send_after(self(), :refresh_token, delay)
+    %{state | timer_ref: ref}
   end
 
   defp encode_credentials(config) do
@@ -321,8 +409,11 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
   defp persist_runtime_tokens(%__MODULE__{} = state) do
     persist_app_config(state)
     persist_process_env(state)
-    persist_secrets(state)
-    :ok
+
+    case persist_secrets(state) do
+      :ok -> :ok
+      {:error, _reason} -> {:error, :secrets_persist_failed}
+    end
   end
 
   defp persist_app_config(%__MODULE__{} = state) do
@@ -360,23 +451,27 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
     module = state.secrets_module
 
     if is_atom(module) and Code.ensure_loaded?(module) do
-      persist_secret_value(module, @x_api_token_keys[:access_token], state.access_token)
-      persist_secret_value(module, @x_api_token_keys[:refresh_token], state.refresh_token)
-
-      persist_secret_value(
-        module,
-        @x_api_token_keys[:token_expires_at],
-        format_expires_at(state.expires_at)
-      )
+      with :ok <- persist_secret_value(module, @x_api_token_keys[:access_token], state.access_token),
+           :ok <- persist_secret_value(module, @x_api_token_keys[:refresh_token], state.refresh_token),
+           :ok <-
+             persist_secret_value(
+               module,
+               @x_api_token_keys[:token_expires_at],
+               format_expires_at(state.expires_at)
+             ) do
+        :ok
+      end
+    else
+      :ok
     end
   rescue
     reason ->
       Logger.warning("[XAPI] Failed to persist tokens to secrets store: #{inspect(reason)}")
-      :ok
+      {:error, reason}
   catch
     :exit, reason ->
       Logger.warning("[XAPI] Failed to persist tokens to secrets store: #{inspect(reason)}")
-      :ok
+      {:error, reason}
   end
 
   defp persist_secret_value(_module, _name, nil), do: :ok
@@ -401,14 +496,14 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
 
         {:error, reason} ->
           Logger.warning("[XAPI] Failed to persist #{name} in secrets store: #{inspect(reason)}")
-          :ok
+          {:error, reason}
 
         other ->
           Logger.warning(
             "[XAPI] Unexpected secrets persistence result for #{name}: #{inspect(other)}"
           )
 
-          :ok
+          {:error, other}
       end
     else
       :ok
@@ -494,7 +589,7 @@ defmodule LemonChannels.Adapters.XAPI.TokenManager do
   defp normalize_optional_string(value) when is_binary(value) do
     case String.trim(value) do
       "" -> nil
-      _ -> value
+      trimmed -> trimmed
     end
   end
 
