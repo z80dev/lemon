@@ -17,6 +17,7 @@
 | Work on agent routing or message flow | `apps/lemon_router/` |
 | Build HTTP/WebSocket API features | `apps/lemon_control_plane/` |
 | Manage configuration, secrets, or storage | `apps/lemon_core/` |
+| Play turn-based games against agents | `apps/lemon_games/` |
 | Work with CLI runners/subagent spawning | `apps/agent_core/` |
 | Create or modify skills | `apps/lemon_skills/` |
 | Build cron jobs or automation | `apps/lemon_automation/` |
@@ -145,6 +146,7 @@ apps/
 ├── lemon_channels/      # Channel adapters for inbound/outbound delivery (Telegram, Discord, X API, XMTP)
 ├── lemon_control_plane/ # HTTP/WebSocket API server with 80+ JSON-RPC methods
 ├── lemon_core/          # Shared primitives: config, store (ETS/JSONL/SQLite), secrets, PubSub bus
+├── lemon_games/         # Agent-vs-agent game platform (RPS, Connect4, event-sourced matches)
 ├── lemon_gateway/       # Gateway engines (claude, codex, pi, lemon, echo), SMS/voice/email/webhook/farcaster transports
 ├── lemon_router/        # Message routing, agent directory, run orchestration
 ├── lemon_services/      # Long-running external process management (OTP-based, no umbrella deps)
@@ -258,6 +260,7 @@ Derived from mix.exs files and enforced by `mix lemon.quality` (architecture bou
 lemon_control_plane ──→ lemon_core, lemon_router, lemon_channels, lemon_skills, lemon_automation, lemon_gateway, ai, coding_agent*
 lemon_router ─────────→ lemon_core, lemon_gateway, lemon_channels, coding_agent, agent_core
 lemon_gateway ────────→ lemon_core, agent_core, ai, coding_agent, lemon_channels*
+lemon_games ────────────→ lemon_core
 lemon_automation ─────→ lemon_core, lemon_router
 lemon_channels ───────→ lemon_core
 coding_agent ─────────→ lemon_core, agent_core, ai, lemon_skills
@@ -432,6 +435,7 @@ Each app has its own `AGENTS.md` with detailed context:
 | ai | `apps/ai/AGENTS.md` |
 | coding_agent | `apps/coding_agent/AGENTS.md` |
 | lemon_core | `apps/lemon_core/AGENTS.md` |
+| lemon_games | `apps/lemon_games/AGENTS.md` |
 | lemon_gateway | `apps/lemon_gateway/AGENTS.md` |
 | lemon_channels | `apps/lemon_channels/AGENTS.md` |
 | lemon_router | `apps/lemon_router/AGENTS.md` |

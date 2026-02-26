@@ -10,6 +10,7 @@ defmodule LemonControlPlane.HTTP.Router do
   use Plug.Router
 
   plug(Plug.Logger, log: :debug)
+  plug Plug.Parsers, parsers: [:json], pass: ["application/json"], json_decoder: Jason
   plug(:match)
   plug(:dispatch)
 
@@ -21,6 +22,31 @@ defmodule LemonControlPlane.HTTP.Router do
     conn
     |> WebSockAdapter.upgrade(LemonControlPlane.WS.Connection, [], timeout: 60_000)
     |> halt()
+  end
+
+  # Games API
+  get "/v1/games/lobby" do
+    LemonControlPlane.HTTP.GamesAPI.call(conn, :lobby)
+  end
+
+  get "/v1/games/matches/:id" do
+    LemonControlPlane.HTTP.GamesAPI.call(conn, :get_match)
+  end
+
+  get "/v1/games/matches/:id/events" do
+    LemonControlPlane.HTTP.GamesAPI.call(conn, :list_events)
+  end
+
+  post "/v1/games/matches" do
+    LemonControlPlane.HTTP.GamesAPI.call(conn, :create_match)
+  end
+
+  post "/v1/games/matches/:id/accept" do
+    LemonControlPlane.HTTP.GamesAPI.call(conn, :accept_match)
+  end
+
+  post "/v1/games/matches/:id/moves" do
+    LemonControlPlane.HTTP.GamesAPI.call(conn, :submit_move)
   end
 
   match _ do

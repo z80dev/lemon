@@ -33,6 +33,8 @@ defmodule LemonControlPlane.MixProject do
       {:lemon_automation, in_umbrella: true},
       {:coding_agent, in_umbrella: true, runtime: false},
       {:ai, in_umbrella: true},
+      # Games platform
+      {:lemon_games, in_umbrella: true},
       # HTTP server
       {:bandit, "~> 1.5"},
       {:plug, "~> 1.16"},
