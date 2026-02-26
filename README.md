@@ -1,8 +1,8 @@
 # lemon 🍋
 
-Lemon is an AI assistant and coding agent system (named after a very good cat) that you run on your own machine.
+lemon is an AI assistant and coding agent system (named after a very good cat) that you run on your own machine.
 
-The easiest way to use Lemon day-to-day is through **Telegram**: you talk to a bot from your phone/desktop, while Lemon runs locally. Inbound/outbound messaging is handled by `lemon_channels` (Telegram adapter + outbox), runs are orchestrated by `lemon_router`, and execution is handled by `lemon_gateway` using one of the configured engines (native Lemon, Claude CLI, Codex CLI, OpenCode CLI, Pi CLI). Kimi, OpenCode, and Pi are also available as CodingAgent `task` subagent engines.
+The easiest way to use lemon day-to-day is through **Telegram**: you talk to a bot from your phone/desktop, while Lemon runs locally. Inbound/outbound messaging is handled by `lemon_channels` (Telegram adapter + outbox), runs are orchestrated by `lemon_router`, and execution is handled by `lemon_gateway` using one of the configured engines (native Lemon, Claude CLI, Codex CLI, OpenCode CLI, Pi CLI). Kimi, OpenCode, and Pi are also available as CodingAgent `task` subagent engines.
 
 If you're here for the architecture deep-dive, jump to [What is Lemon?](#what-is-lemon).
 
