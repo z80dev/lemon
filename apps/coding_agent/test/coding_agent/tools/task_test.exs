@@ -31,6 +31,12 @@ defmodule CodingAgent.Tools.TaskTest do
       assert Map.has_key?(props, "role")
       assert Map.has_key?(props, "async")
       assert Map.has_key?(props, "auto_followup")
+      assert Map.has_key?(props, "cwd")
+      assert Map.has_key?(props, "tool_policy")
+      assert Map.has_key?(props, "meta")
+      assert Map.has_key?(props, "session_key")
+      assert Map.has_key?(props, "agent_id")
+      assert Map.has_key?(props, "queue_mode")
       assert props["description"]["description"] =~ "3-5 words"
     end
   end
@@ -265,6 +271,116 @@ defmodule CodingAgent.Tools.TaskTest do
         )
 
       assert {:error, "auto_followup must be a boolean"} = result
+    end
+
+    test "returns error when cwd is not a string" do
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Test task",
+            "prompt" => "do something",
+            "cwd" => 42
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
+
+      assert {:error, "cwd must be a string"} = result
+    end
+
+    test "returns error when tool_policy is not an object" do
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Test task",
+            "prompt" => "do something",
+            "tool_policy" => "deny_all"
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
+
+      assert {:error, "tool_policy must be an object"} = result
+    end
+
+    test "returns error when meta is not an object" do
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Test task",
+            "prompt" => "do something",
+            "meta" => "not_a_map"
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
+
+      assert {:error, "meta must be an object"} = result
+    end
+
+    test "returns error when session_key is invalid" do
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Test task",
+            "prompt" => "do something",
+            "session_key" => "invalid"
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
+
+      assert {:error, "session_key must be a valid Lemon session key"} = result
+    end
+
+    test "returns error when agent_id is not a string" do
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Test task",
+            "prompt" => "do something",
+            "agent_id" => 123
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
+
+      assert {:error, "agent_id must be a string"} = result
+    end
+
+    test "returns error when queue_mode is invalid" do
+      result =
+        Task.execute(
+          "call_1",
+          %{
+            "description" => "Test task",
+            "prompt" => "do something",
+            "queue_mode" => "invalid_mode"
+          },
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
+
+      assert {:error,
+              "queue_mode must be one of: collect, followup, steer, steer_backlog, interrupt"} =
+               result
     end
   end
 

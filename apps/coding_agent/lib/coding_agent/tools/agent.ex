@@ -15,10 +15,10 @@ defmodule CodingAgent.Tools.Agent do
   alias AgentCore.AbortSignal
   alias AgentCore.Types.{AgentTool, AgentToolResult}
   alias Ai.Types.TextContent
-  alias CodingAgent.TaskStore
+  alias CodingAgent.{RunGraph, Subagents, TaskStore}
   alias LemonCore.{Bus, RouterBridge, RunRequest, SessionKey, Store}
 
-  @valid_actions ["run", "poll"]
+  @valid_actions ["run", "poll", "join"]
   @valid_queue_modes ["collect", "followup", "steer", "steer_backlog", "interrupt"]
   @default_sync_timeout_ms 120_000
   @default_watcher_timeout_ms 30 * 60 * 1000
@@ -31,6 +31,7 @@ defmodule CodingAgent.Tools.Agent do
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
     agent_id_property = build_agent_id_property(cwd, opts)
+    role_property = build_role_property(cwd)
 
     %AgentTool{
       name: "agent",
@@ -42,13 +43,14 @@ defmodule CodingAgent.Tools.Agent do
           "action" => %{
             "type" => "string",
             "enum" => @valid_actions,
-            "description" => "Action to perform: run (default) or poll"
+            "description" => "Action to perform: run (default), poll, or join"
           },
           "agent_id" => agent_id_property,
           "prompt" => %{
             "type" => "string",
             "description" => "Prompt to send to the delegated agent"
           },
+          "role" => role_property,
           "description" => %{
             "type" => "string",
             "description" => "Optional short description for tracking"
@@ -105,7 +107,17 @@ defmodule CodingAgent.Tools.Agent do
           },
           "task_id" => %{
             "type" => "string",
-            "description" => "Task id to poll (action=poll)"
+            "description" => "Task id to poll (action=poll) or join (single id shortcut)"
+          },
+          "task_ids" => %{
+            "type" => "array",
+            "items" => %{"type" => "string"},
+            "description" => "Task ids to join (action=join)"
+          },
+          "mode" => %{
+            "type" => "string",
+            "enum" => ["wait_all", "wait_any"],
+            "description" => "Join mode for action=join (default: wait_all)"
           }
         },
         "required" => []
@@ -131,6 +143,7 @@ defmodule CodingAgent.Tools.Agent do
     else
       case normalize_action(Map.get(params, "action")) do
         "poll" -> do_poll(params)
+        "join" -> do_join(params)
         "run" -> do_run(params, cwd, opts)
         other -> {:error, "Unsupported action: #{inspect(other)}"}
       end
@@ -138,7 +151,7 @@ defmodule CodingAgent.Tools.Agent do
   end
 
   defp do_run(params, cwd, opts) do
-    with {:ok, validated} <- validate_run_params(params),
+    with {:ok, validated} <- validate_run_params(params, cwd),
          {:ok, delegated_session_key} <- resolve_delegated_session_key(validated, opts),
          {:ok, request} <- build_run_request(validated, delegated_session_key, cwd, opts),
          {:ok, run_id} <- submit_run(request, opts) do
@@ -162,6 +175,92 @@ defmodule CodingAgent.Tools.Agent do
     else
       {:error, "task_id is required for action=poll"}
     end
+  end
+
+  defp do_join(params) do
+    with {:ok, task_ids} <- validate_join_task_ids(params),
+         {:ok, mode} <- validate_join_mode(params),
+         {:ok, run_ids} <- resolve_run_ids(task_ids),
+         {:ok, join_result} <- RunGraph.await(run_ids, mode, :infinity) do
+      build_join_result(task_ids, join_result)
+    else
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp validate_join_task_ids(params) do
+    task_ids = Map.get(params, "task_ids") || Map.get(params, "task_id")
+
+    task_ids =
+      cond do
+        is_binary(task_ids) -> [task_ids]
+        is_list(task_ids) -> task_ids
+        true -> []
+      end
+
+    cond do
+      task_ids == [] ->
+        {:error, "task_ids is required for action=join"}
+
+      not Enum.all?(task_ids, &is_binary/1) ->
+        {:error, "task_ids must be a list of strings"}
+
+      true ->
+        {:ok, task_ids}
+    end
+  end
+
+  defp validate_join_mode(params) do
+    mode = Map.get(params, "mode") |> normalize_join_mode()
+    {:ok, mode}
+  end
+
+  defp resolve_run_ids(task_ids) do
+    run_ids =
+      Enum.reduce_while(task_ids, [], fn task_id, acc ->
+        case TaskStore.get(task_id) do
+          {:ok, record, _events} ->
+            run_id = Map.get(record, :run_id)
+
+            if is_binary(run_id) do
+              {:cont, [run_id | acc]}
+            else
+              {:halt, {:error, "Task #{task_id} is missing a run_id"}}
+            end
+
+          {:error, :not_found} ->
+            {:halt, {:error, "Unknown task_id: #{task_id}"}}
+        end
+      end)
+
+    case run_ids do
+      {:error, _} = err -> err
+      ids -> {:ok, Enum.reverse(ids)}
+    end
+  end
+
+  defp build_join_result(task_ids, %{mode: :wait_all, runs: runs}) do
+    %AgentToolResult{
+      content: [%TextContent{text: "Joined #{length(task_ids)} delegated task(s)."}],
+      details: %{
+        status: "completed",
+        mode: "wait_all",
+        task_ids: task_ids,
+        runs: runs
+      }
+    }
+  end
+
+  defp build_join_result(task_ids, %{mode: :wait_any, run: run}) do
+    %AgentToolResult{
+      content: [%TextContent{text: "One delegated task completed."}],
+      details: %{
+        status: "completed",
+        mode: "wait_any",
+        task_ids: task_ids,
+        run: run
+      }
+    }
   end
 
   defp ensure_latest_task_state(task_id) do
@@ -193,7 +292,8 @@ defmodule CodingAgent.Tools.Agent do
             if completion do
               finalize_task_from_completion(task_id, completion, %{
                 agent_id: Map.get(record, :agent_id),
-                delegated_session_key: Map.get(record, :delegated_session_key)
+                delegated_session_key: Map.get(record, :delegated_session_key),
+                role: Map.get(record, :role)
               })
             end
 
@@ -215,7 +315,8 @@ defmodule CodingAgent.Tools.Agent do
         kind: :agent,
         run_id: run_id,
         agent_id: validated.agent_id,
-        delegated_session_key: delegated_session_key
+        delegated_session_key: delegated_session_key,
+        role: validated.role_id
       })
 
     start_completion_watcher(task_id, run_id, validated, delegated_session_key, request, opts)
@@ -233,7 +334,8 @@ defmodule CodingAgent.Tools.Agent do
         run_id: run_id,
         agent_id: validated.agent_id,
         session_key: delegated_session_key,
-        auto_followup: validated.auto_followup
+        auto_followup: validated.auto_followup,
+        role: validated.role_id
       }
     }
   end
@@ -251,7 +353,8 @@ defmodule CodingAgent.Tools.Agent do
               run_id: run_id,
               agent_id: validated.agent_id,
               session_key: delegated_session_key,
-              duration_ms: completion.duration_ms
+              duration_ms: completion.duration_ms,
+              role: validated.role_id
             }
           }
         else
@@ -271,40 +374,45 @@ defmodule CodingAgent.Tools.Agent do
     parent_session_id = Keyword.get(opts, :session_id)
     parent_agent_id = Keyword.get(opts, :agent_id)
 
-    base_meta =
-      %{
-        delegated_by: %{
-          session_key: parent_session_key,
-          session_id: parent_session_id,
-          agent_id: parent_agent_id
-        },
-        delegated: %{
-          target_agent_id: validated.agent_id,
-          auto_followup: validated.auto_followup
+    role_cwd = validated.cwd || cwd
+
+    with {:ok, prompt} <- maybe_apply_role_prompt(validated.prompt, validated.role_id, role_cwd) do
+      base_meta =
+        %{
+          delegated_by: %{
+            session_key: parent_session_key,
+            session_id: parent_session_id,
+            agent_id: parent_agent_id
+          },
+          delegated: %{
+            target_agent_id: validated.agent_id,
+            auto_followup: validated.auto_followup,
+            role: validated.role_id
+          }
         }
-      }
-      |> compact_map()
+        |> compact_map()
 
-    meta =
-      base_meta
-      |> Map.merge(validated.meta)
-      |> compact_map()
+      meta =
+        base_meta
+        |> Map.merge(validated.meta)
+        |> compact_map()
 
-    request =
-      RunRequest.new(%{
-        origin: :node,
-        session_key: delegated_session_key,
-        agent_id: validated.agent_id,
-        prompt: validated.prompt,
-        queue_mode: validated.queue_mode,
-        engine_id: validated.engine_id,
-        model: validated.model,
-        cwd: validated.cwd || cwd,
-        tool_policy: validated.tool_policy,
-        meta: meta
-      })
+      request =
+        RunRequest.new(%{
+          origin: :node,
+          session_key: delegated_session_key,
+          agent_id: validated.agent_id,
+          prompt: prompt,
+          queue_mode: validated.queue_mode,
+          engine_id: validated.engine_id,
+          model: validated.model,
+          cwd: validated.cwd || cwd,
+          tool_policy: validated.tool_policy,
+          meta: meta
+        })
 
-    {:ok, request}
+      {:ok, request}
+    end
   end
 
   defp submit_run(request, opts) do
@@ -386,7 +494,8 @@ defmodule CodingAgent.Tools.Agent do
         finalize_task_from_completion(task_id, completion, %{
           run_id: run_id,
           agent_id: validated.agent_id,
-          delegated_session_key: delegated_session_key
+          delegated_session_key: delegated_session_key,
+          role: validated.role_id
         })
 
         if validated.auto_followup do
@@ -684,10 +793,11 @@ defmodule CodingAgent.Tools.Agent do
     end
   end
 
-  defp validate_run_params(params) when is_map(params) do
+  defp validate_run_params(params, cwd) when is_map(params) do
     agent_id = Map.get(params, "agent_id") |> normalize_optional_string()
     prompt = Map.get(params, "prompt")
     description = Map.get(params, "description") |> normalize_optional_string()
+    role_id = Map.get(params, "role") |> normalize_optional_string()
     async? = Map.get(params, "async", true)
     auto_followup = Map.get(params, "auto_followup", true)
     continue_session = Map.get(params, "continue_session", true)
@@ -696,9 +806,10 @@ defmodule CodingAgent.Tools.Agent do
     timeout_ms = Map.get(params, "timeout_ms", @default_sync_timeout_ms)
     tool_policy = Map.get(params, "tool_policy")
     meta = Map.get(params, "meta")
-    cwd = Map.get(params, "cwd")
+    delegated_cwd = Map.get(params, "cwd")
     engine_id = Map.get(params, "engine_id")
     model = Map.get(params, "model")
+    role_cwd = delegated_cwd || cwd
 
     cond do
       not is_binary(agent_id) ->
@@ -706,6 +817,9 @@ defmodule CodingAgent.Tools.Agent do
 
       not is_binary(prompt) or String.trim(prompt) == "" ->
         {:error, "prompt is required and must be a non-empty string"}
+
+      not is_nil(role_id) and Subagents.get(role_cwd, role_id) == nil ->
+        {:error, "Unknown role: #{role_id}"}
 
       not is_boolean(async?) ->
         {:error, "async must be a boolean"}
@@ -731,7 +845,7 @@ defmodule CodingAgent.Tools.Agent do
       not is_nil(meta) and not is_map(meta) ->
         {:error, "meta must be an object"}
 
-      not is_nil(cwd) and not is_binary(cwd) ->
+      not is_nil(delegated_cwd) and not is_binary(delegated_cwd) ->
         {:error, "cwd must be a string"}
 
       not is_nil(engine_id) and not is_binary(engine_id) ->
@@ -746,6 +860,7 @@ defmodule CodingAgent.Tools.Agent do
            agent_id: agent_id,
            prompt: prompt,
            description: description || "Delegated run for #{agent_id}",
+           role_id: role_id,
            async: async?,
            auto_followup: auto_followup,
            continue_session: continue_session,
@@ -754,14 +869,31 @@ defmodule CodingAgent.Tools.Agent do
            timeout_ms: timeout_ms,
            tool_policy: tool_policy,
            meta: meta || %{},
-           cwd: cwd,
+           cwd: delegated_cwd,
            engine_id: engine_id,
            model: normalize_optional_string(model)
          }}
     end
   end
 
-  defp validate_run_params(_), do: {:error, "params must be an object"}
+  defp validate_run_params(_, _cwd), do: {:error, "params must be an object"}
+
+  defp maybe_apply_role_prompt(prompt, nil, _cwd), do: {:ok, prompt}
+  defp maybe_apply_role_prompt(prompt, "", _cwd), do: {:ok, prompt}
+
+  defp maybe_apply_role_prompt(prompt, role_id, cwd) do
+    case Subagents.get(cwd, role_id) do
+      nil -> {:error, "Unknown role: #{role_id}"}
+      role -> {:ok, role.prompt <> "\n\n" <> prompt}
+    end
+  end
+
+  defp normalize_join_mode(nil), do: :wait_all
+  defp normalize_join_mode("wait_all"), do: :wait_all
+  defp normalize_join_mode("wait_any"), do: :wait_any
+  defp normalize_join_mode(:wait_all), do: :wait_all
+  defp normalize_join_mode(:wait_any), do: :wait_any
+  defp normalize_join_mode(_), do: :wait_all
 
   defp resolve_delegated_session_key(%{explicit_session_key: key}, _opts) when is_binary(key),
     do: {:ok, key}
@@ -931,9 +1063,13 @@ defmodule CodingAgent.Tools.Agent do
 
   defp build_description do
     """
-    Delegate work to another Lemon agent. **PREFERRED for most work** - use this instead of doing tasks yourself.
+    Delegate work to another Lemon agent profile via the router/orchestrator.
 
-    **Default behavior (recommended):** async=true means the task runs in background and notifies you when done. This keeps the user conversation flowing smoothly without blocking.
+    **When to use `agent` vs `task`:**
+    - `agent`: Route work through Lemon's run pipeline using agent profiles, queue modes, and delegated session continuity.
+    - `task`: Run local/internal or CLI-engine subtasks directly from the current coding session.
+
+    **Default behavior (recommended):** async=true means the delegated run executes in background and notifies you when done. This keeps the user conversation flowing smoothly without blocking.
 
     **Agent selection:**
     - Default: use the same agent_id as the current session (matches your profile/capabilities)
@@ -943,15 +1079,16 @@ defmodule CodingAgent.Tools.Agent do
     **Usage patterns:**
     - Fire-and-forget: async=true, auto_followup=true (you'll get notified when done)
     - Check later: async=true, then poll with action=poll and task_id
+    - Wait on many tasks: action=join with task_ids (mode=wait_all or wait_any)
     - Wait for result: async=false (blocks until completion - use sparingly for simple/quick tasks only)
 
     **Key parameters:**
+    - action: run (default), poll, or join
+    - role: optional subagent prompt preset applied to the delegated prompt
     - async: true (default) = non-blocking, false = blocking/wait
     - auto_followup: true (default) = completion forwards back to this session
     - queue_mode: collect (default), followup, steer, steer_backlog, interrupt
     - model: optional model override (e.g., "gemini-2.5-pro" for complex tasks)
-
-    Use this tool liberally to parallelize work and keep user interactions responsive.
     """
     |> String.trim()
   end
@@ -974,6 +1111,22 @@ defmodule CodingAgent.Tools.Agent do
         "description",
         "Target agent id for action=run. Available: #{Enum.join(ids, ", ")}"
       )
+    end
+  end
+
+  defp build_role_property(cwd) do
+    ids = Subagents.list(cwd) |> Enum.map(& &1.id)
+
+    base = %{
+      "type" => "string",
+      "description" =>
+        "Optional role prompt preset (from Subagents) to prepend to the delegated prompt."
+    }
+
+    if ids == [] do
+      base
+    else
+      Map.put(base, "enum", ids)
     end
   end
 

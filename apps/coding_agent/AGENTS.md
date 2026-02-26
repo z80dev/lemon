@@ -525,7 +525,8 @@ CodingAgent.Mentions.parse("@research find auth endpoints", cwd)
 # => {:ok, %{agent: "research", prompt: "find auth endpoints", ...}}
 ```
 
-The `Task` tool uses `Subagents` to prepend the subagent's prompt when spawning sessions.
+The `Task` and `Agent` tools can use `Subagents` to prepend a role prompt before execution.
+`Task` also supports per-run routing controls for async followups (`session_key`, `agent_id`, `queue_mode`, `meta`) while keeping execution local/CLI-oriented.
 
 ## Common Tasks
 
@@ -550,7 +551,7 @@ mix test --include integration apps/coding_agent
 Add an entry to `.lemon/subagents.json` or `~/.lemon/agent/subagents.json`:
 
 ```json
-[{"id": "my-agent", "description": "Short description", "prompt": "System prompt prepended to task."}]
+[{"id": "my-agent", "description": "Short description", "prompt": "Role prompt prepended to task/agent runs."}]
 ```
 
 ### Debugging a Session

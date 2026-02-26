@@ -32,6 +32,7 @@ defmodule CodingAgent.Tools.Task do
   alias LemonCore.{Introspection, RunRequest, SessionKey}
 
   @default_run_orchestrator_parts ["LemonRouter", "RunOrchestrator"]
+  @valid_queue_modes ["collect", "followup", "steer", "steer_backlog", "interrupt"]
 
   @doc """
   Returns the Task tool definition.
@@ -109,6 +110,35 @@ defmodule CodingAgent.Tools.Task do
             "type" => "boolean",
             "description" =>
               "When true (default), async task completion is automatically posted back into this session."
+          },
+          "cwd" => %{
+            "type" => "string",
+            "description" => "Optional working directory override for this task run"
+          },
+          "tool_policy" => %{
+            "type" => "object",
+            "description" => "Optional tool policy override for the task session"
+          },
+          "meta" => %{
+            "type" => "object",
+            "description" =>
+              "Optional metadata map attached to task lifecycle and async followup routing"
+          },
+          "session_key" => %{
+            "type" => "string",
+            "description" =>
+              "Optional parent session key override used for async followup routing and lifecycle metadata"
+          },
+          "agent_id" => %{
+            "type" => "string",
+            "description" =>
+              "Optional parent agent id override used for async followup routing and lifecycle metadata"
+          },
+          "queue_mode" => %{
+            "type" => "string",
+            "enum" => @valid_queue_modes,
+            "description" =>
+              "Queue mode for async followup routing via router fallback (default: followup)"
           }
         },
         "required" => []
@@ -158,6 +188,9 @@ defmodule CodingAgent.Tools.Task do
       engine = validated.engine
       async? = validated.async
       auto_followup = validated.auto_followup
+      effective_cwd = validated.cwd || cwd
+      parent_session_key = validated.session_key || Keyword.get(opts, :session_key)
+      parent_agent_id = validated.agent_id || Keyword.get(opts, :agent_id)
       coordinator = Keyword.get(opts, :coordinator)
       parent_run_id = Keyword.get(opts, :parent_run_id)
 
@@ -176,10 +209,12 @@ defmodule CodingAgent.Tools.Task do
             prompt: prompt,
             run_id: run_id,
             parent_run_id: parent_run_id,
-            session_key: Keyword.get(opts, :session_key),
-            agent_id: Keyword.get(opts, :agent_id),
+            session_key: parent_session_key,
+            agent_id: parent_agent_id,
             engine: validated.engine || "internal",
-            role: role_id
+            role: role_id,
+            queue_mode: validated.queue_mode,
+            meta: validated.meta
           })
         else
           nil
@@ -189,11 +224,13 @@ defmodule CodingAgent.Tools.Task do
         task_id: task_id,
         run_id: run_id,
         parent_run_id: parent_run_id,
-        session_key: Keyword.get(opts, :session_key),
-        agent_id: Keyword.get(opts, :agent_id),
+        session_key: parent_session_key,
+        agent_id: parent_agent_id,
         description: description,
         engine: validated.engine || "internal",
-        role: role_id
+        role: role_id,
+        queue_mode: validated.queue_mode,
+        meta: validated.meta
       }
 
       # Set up budget tracking for this run
@@ -221,7 +258,7 @@ defmodule CodingAgent.Tools.Task do
             execute_via_cli_engine(
               engine,
               prompt,
-              cwd,
+              effective_cwd,
               description,
               role_id,
               validated.model,
@@ -233,9 +270,9 @@ defmodule CodingAgent.Tools.Task do
             execute_via_coordinator(coordinator, prompt, description, role_id)
 
           true ->
-            start_opts = build_session_opts(cwd, opts, validated)
+            start_opts = build_session_opts(effective_cwd, opts, validated)
 
-            case maybe_apply_role_prompt(prompt, role_id, cwd) do
+            case maybe_apply_role_prompt(prompt, role_id, effective_cwd) do
               {:error, _} = err ->
                 err
 
@@ -261,8 +298,10 @@ defmodule CodingAgent.Tools.Task do
         followup_context = %{
           auto_followup: auto_followup,
           description: description,
-          parent_session_key: Keyword.get(opts, :session_key),
-          parent_agent_id: Keyword.get(opts, :agent_id),
+          parent_session_key: parent_session_key,
+          parent_agent_id: parent_agent_id,
+          queue_mode: validated.queue_mode,
+          meta: validated.meta,
           session_module: Keyword.get(opts, :session_module, CodingAgent.Session),
           session_pid: Keyword.get(opts, :session_pid),
           run_orchestrator: run_orchestrator(opts)
@@ -340,6 +379,13 @@ defmodule CodingAgent.Tools.Task do
     thinking_level = normalize_optional_string(Map.get(params, "thinking_level"))
     async? = Map.get(params, "async", false)
     auto_followup = Map.get(params, "auto_followup", true)
+    delegated_cwd = normalize_optional_string(Map.get(params, "cwd"))
+    tool_policy = Map.get(params, "tool_policy")
+    meta = Map.get(params, "meta")
+    session_key = normalize_optional_string(Map.get(params, "session_key"))
+    agent_id = normalize_optional_string(Map.get(params, "agent_id"))
+    queue_mode = Map.get(params, "queue_mode", "followup")
+    role_cwd = delegated_cwd || cwd
 
     cond do
       not Map.has_key?(params, "description") ->
@@ -373,7 +419,28 @@ defmodule CodingAgent.Tools.Task do
       not is_nil(thinking_level) and not is_binary(thinking_level) ->
         {:error, "thinking_level must be a string"}
 
-      not is_nil(role_id) and Subagents.get(cwd, role_id) == nil ->
+      not is_nil(delegated_cwd) and not is_binary(delegated_cwd) ->
+        {:error, "cwd must be a string"}
+
+      not is_nil(tool_policy) and not is_map(tool_policy) ->
+        {:error, "tool_policy must be an object"}
+
+      not is_nil(meta) and not is_map(meta) ->
+        {:error, "meta must be an object"}
+
+      not is_nil(session_key) and not SessionKey.valid?(session_key) ->
+        {:error, "session_key must be a valid Lemon session key"}
+
+      not is_nil(agent_id) and not is_binary(agent_id) ->
+        {:error, "agent_id must be a string"}
+
+      not is_binary(queue_mode) ->
+        {:error, "queue_mode must be one of: #{Enum.join(@valid_queue_modes, ", ")}"}
+
+      not valid_queue_mode?(queue_mode) ->
+        {:error, "queue_mode must be one of: #{Enum.join(@valid_queue_modes, ", ")}"}
+
+      not is_nil(role_id) and Subagents.get(role_cwd, role_id) == nil ->
         {:error, "Unknown role: #{role_id}"}
 
       not is_boolean(async?) ->
@@ -394,7 +461,13 @@ defmodule CodingAgent.Tools.Task do
            model: model,
            thinking_level: thinking_level,
            async: async?,
-           auto_followup: auto_followup
+           auto_followup: auto_followup,
+           cwd: delegated_cwd,
+           tool_policy: tool_policy,
+           meta: meta || %{},
+           session_key: session_key,
+           agent_id: agent_id,
+           queue_mode: normalize_queue_mode(queue_mode)
          }}
     end
   end
@@ -416,14 +489,18 @@ defmodule CodingAgent.Tools.Task do
 
   defp normalize_action(_), do: "run"
 
+  defp valid_queue_mode?(mode) when is_binary(mode), do: mode in @valid_queue_modes
+  defp valid_queue_mode?(_), do: false
+
   defp check_budget_and_policy(validated, opts) do
     parent_run_id = Keyword.get(opts, :parent_run_id)
     engine = validated.engine || "internal"
+    effective_opts = maybe_put_kw(opts, :tool_policy, validated.tool_policy)
 
     # Check budget if parent exists
     budget_check =
       if parent_run_id do
-        BudgetEnforcer.check_subagent_spawn(parent_run_id, opts)
+        BudgetEnforcer.check_subagent_spawn(parent_run_id, effective_opts)
       else
         :ok
       end
@@ -437,7 +514,7 @@ defmodule CodingAgent.Tools.Task do
 
       _ ->
         # Check tool policy for engine
-        policy = ToolPolicy.subagent_policy(String.to_atom(engine), opts)
+        policy = ToolPolicy.subagent_policy(String.to_atom(engine), effective_opts)
 
         if ToolPolicy.no_reply?(policy) do
           # Mark as NO_REPLY if policy requires
@@ -624,6 +701,8 @@ defmodule CodingAgent.Tools.Task do
 
   defp submit_async_followup_via_router(followup_context, task_id, run_id, text) do
     parent_session_key = Map.get(followup_context, :parent_session_key)
+    queue_mode = Map.get(followup_context, :queue_mode, :followup)
+    extra_meta = Map.get(followup_context, :meta, %{})
 
     if is_binary(parent_session_key) and parent_session_key != "" do
       parent_agent_id =
@@ -639,12 +718,13 @@ defmodule CodingAgent.Tools.Task do
           session_key: parent_session_key,
           agent_id: parent_agent_id,
           prompt: text,
-          queue_mode: :followup,
-          meta: %{
-            task_auto_followup: true,
-            task_id: task_id,
-            run_id: run_id
-          }
+          queue_mode: queue_mode,
+          meta:
+            Map.merge(extra_meta, %{
+              task_auto_followup: true,
+              task_id: task_id,
+              run_id: run_id
+            })
         })
 
       case run_orchestrator.submit(followup) do
@@ -909,6 +989,18 @@ defmodule CodingAgent.Tools.Task do
   defp normalize_join_mode(:wait_any), do: :wait_any
   defp normalize_join_mode(_), do: :wait_all
 
+  defp normalize_queue_mode("collect"), do: :collect
+  defp normalize_queue_mode("followup"), do: :followup
+  defp normalize_queue_mode("steer"), do: :steer
+  defp normalize_queue_mode("steer_backlog"), do: :steer_backlog
+  defp normalize_queue_mode("interrupt"), do: :interrupt
+  defp normalize_queue_mode(:collect), do: :collect
+  defp normalize_queue_mode(:followup), do: :followup
+  defp normalize_queue_mode(:steer), do: :steer
+  defp normalize_queue_mode(:steer_backlog), do: :steer_backlog
+  defp normalize_queue_mode(:interrupt), do: :interrupt
+  defp normalize_queue_mode(_), do: :followup
+
   defp resolve_run_ids(task_ids) do
     run_ids =
       Enum.reduce_while(task_ids, [], fn task_id, acc ->
@@ -965,7 +1057,11 @@ defmodule CodingAgent.Tools.Task do
 
   defp maybe_mark_running(task_id, run_id, lifecycle_context) do
     TaskStore.mark_running(task_id)
-    TaskStore.append_event(task_id, %{type: :task_started, ts_ms: System.system_time(:millisecond)})
+
+    TaskStore.append_event(task_id, %{
+      type: :task_started,
+      ts_ms: System.system_time(:millisecond)
+    })
 
     if run_id do
       RunGraph.mark_running(run_id)
@@ -1007,7 +1103,12 @@ defmodule CodingAgent.Tools.Task do
       |> Map.put(:completed_at_ms, System.system_time(:millisecond))
       |> Map.put(:duration_ms, task_duration_ms(task_id))
 
-    TaskStore.append_event(task_id, %{type: event_type, ts_ms: System.system_time(:millisecond), payload: payload})
+    TaskStore.append_event(task_id, %{
+      type: event_type,
+      ts_ms: System.system_time(:millisecond),
+      payload: payload
+    })
+
     emit_task_lifecycle(event_type, payload, lifecycle_context)
   end
 
@@ -1048,7 +1149,9 @@ defmodule CodingAgent.Tools.Task do
       agent_id: lifecycle_context[:agent_id],
       description: lifecycle_context[:description],
       engine: lifecycle_context[:engine],
-      role: lifecycle_context[:role]
+      role: lifecycle_context[:role],
+      queue_mode: lifecycle_context[:queue_mode],
+      meta: lifecycle_context[:meta]
     }
   end
 
@@ -1081,13 +1184,15 @@ defmodule CodingAgent.Tools.Task do
     parent_run_id = payload[:parent_run_id] || lifecycle_context[:parent_run_id]
     session_key = payload[:session_key] || lifecycle_context[:session_key]
     agent_id = payload[:agent_id] || lifecycle_context[:agent_id]
+    task_meta = payload[:meta] || lifecycle_context[:meta]
 
     meta = %{
       run_id: run_id,
       parent_run_id: parent_run_id,
       session_key: session_key,
       agent_id: agent_id,
-      task_id: payload[:task_id]
+      task_id: payload[:task_id],
+      task_meta: task_meta
     }
 
     event = LemonCore.Event.new(event_type, payload, meta)
@@ -1492,7 +1597,15 @@ defmodule CodingAgent.Tools.Task do
         "  - \"pi\": Pi (pi-coding-agent) CLI\n" <>
         "- model: Optional model override (e.g., \"gemini-2.5-pro\" for complex tasks)\n" <>
         "- thinking_level: Optional thinking level override for internal engine\n" <>
-        "- role: Optional specialization that applies to ANY engine\n\n" <>
+        "- role: Optional specialization that applies to ANY engine\n" <>
+        "- cwd: Optional working directory override\n" <>
+        "- tool_policy: Optional task-specific tool policy override\n" <>
+        "- session_key/agent_id: Optional async followup routing overrides\n" <>
+        "- queue_mode: Optional async followup router queue mode (default: followup)\n" <>
+        "- meta: Optional metadata attached to task lifecycle/followups\n\n" <>
+        "**Boundary with agent tool:**\n" <>
+        "- task supports local/CLI execution controls plus followup routing overrides\n" <>
+        "- agent remains the tool for router-level delegation continuity semantics\n\n" <>
         "The role prepends a system prompt to focus the executor on a specific type of work. " <>
         "You can combine any engine with any role."
 
@@ -1535,7 +1648,10 @@ defmodule CodingAgent.Tools.Task do
         :stream_options,
         :settings_manager,
         :ui_context,
-        :parent_session
+        :parent_session,
+        :tool_policy,
+        :session_key,
+        :agent_id
       ])
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)
 
@@ -1543,6 +1659,9 @@ defmodule CodingAgent.Tools.Task do
       []
       |> maybe_put_kw(:model, validated[:model])
       |> maybe_put_kw(:thinking_level, validated[:thinking_level])
+      |> maybe_put_kw(:tool_policy, validated[:tool_policy])
+      |> maybe_put_kw(:session_key, validated[:session_key])
+      |> maybe_put_kw(:agent_id, validated[:agent_id])
 
     [{:cwd, cwd}, {:register, true} | Keyword.merge(base_opts, override_opts)]
   end

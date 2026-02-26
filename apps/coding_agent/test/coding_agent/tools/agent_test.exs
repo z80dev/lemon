@@ -2,7 +2,7 @@ defmodule CodingAgent.Tools.AgentTest do
   alias Elixir.CodingAgent, as: CodingAgent
   use ExUnit.Case, async: false
 
-  alias Elixir.CodingAgent.TaskStore
+  alias Elixir.CodingAgent.{RunGraph, Subagents, TaskStore}
   alias Elixir.CodingAgent.Tools.Agent, as: AgentTool
   alias LemonCore.{Bus, Event, RunRequest, Store}
 
@@ -55,13 +55,16 @@ defmodule CodingAgent.Tools.AgentTest do
     :ok
   end
 
-  test "tool/2 returns definition with run and poll actions" do
+  test "tool/2 returns definition with run, poll, and join actions" do
     tool = AgentTool.tool("/tmp", available_agent_ids: ["oracle", "coder"])
     assert tool.name == "agent"
     assert tool.label == "Delegate To Agent"
     assert is_function(tool.execute, 4)
-    assert tool.parameters["properties"]["action"]["enum"] == ["run", "poll"]
+    assert tool.parameters["properties"]["action"]["enum"] == ["run", "poll", "join"]
     assert Map.has_key?(tool.parameters["properties"], "model")
+    assert Map.has_key?(tool.parameters["properties"], "role")
+    assert Map.has_key?(tool.parameters["properties"], "task_ids")
+    assert Map.has_key?(tool.parameters["properties"], "mode")
     assert tool.parameters["properties"]["agent_id"]["enum"] == ["coder", "default", "oracle"]
   end
 
@@ -107,6 +110,33 @@ defmodule CodingAgent.Tools.AgentTest do
     poll = wait_for_completed(result.details.task_id)
     assert poll.details.status == "completed"
     assert AgentCore.get_text(poll) == "hello from oracle"
+  end
+
+  test "run with role prepends subagent prompt to delegated request prompt" do
+    role_prompt = Subagents.get("/tmp", "research").prompt
+
+    _result =
+      AgentTool.execute(
+        "call_1",
+        %{
+          "agent_id" => "oracle",
+          "prompt" => "find open auth issues",
+          "role" => "research",
+          "async" => true,
+          "auto_followup" => false
+        },
+        nil,
+        nil,
+        "/tmp",
+        run_orchestrator: __MODULE__.StubRunOrchestrator,
+        session_key: "agent:main:main",
+        session_id: "sess_main",
+        agent_id: "main"
+      )
+
+    assert_receive {:router_submit, %RunRequest{} = req, 1}
+    assert req.prompt == role_prompt <> "\n\n" <> "find open auth issues"
+    assert req.meta[:delegated][:role] == "research"
   end
 
   test "delegated session key is stable across runs with continue_session" do
@@ -279,6 +309,43 @@ defmodule CodingAgent.Tools.AgentTest do
                nil,
                "/tmp",
                run_orchestrator: UnknownAgentRunOrchestrator
+             )
+  end
+
+  test "join waits for all delegated task run_ids" do
+    run_a = RunGraph.new_run(%{type: :agent, description: "join-a"})
+    run_b = RunGraph.new_run(%{type: :agent, description: "join-b"})
+    :ok = RunGraph.finish(run_a, %{ok: true, answer: "a"})
+    :ok = RunGraph.finish(run_b, %{ok: true, answer: "b"})
+
+    task_a = TaskStore.new_task(%{run_id: run_a, status: :completed})
+    task_b = TaskStore.new_task(%{run_id: run_b, status: :completed})
+
+    result =
+      AgentTool.execute(
+        "call_join",
+        %{"action" => "join", "task_ids" => [task_a, task_b], "mode" => "wait_all"},
+        nil,
+        nil,
+        "/tmp",
+        []
+      )
+
+    assert %AgentCore.Types.AgentToolResult{} = result
+    assert result.details.status == "completed"
+    assert result.details.mode == "wait_all"
+    assert Enum.sort(result.details.task_ids) == Enum.sort([task_a, task_b])
+  end
+
+  test "join returns error for unknown task id" do
+    assert {:error, "Unknown task_id: missing_task"} =
+             AgentTool.execute(
+               "call_join",
+               %{"action" => "join", "task_ids" => ["missing_task"]},
+               nil,
+               nil,
+               "/tmp",
+               []
              )
   end
 

@@ -135,6 +135,53 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert followup.prompt =~ "router output"
     end
 
+    test "uses task-level routing overrides for async followup fallback" do
+      dead_pid = spawn(fn -> :ok end)
+      ref = Process.monitor(dead_pid)
+      assert_receive {:DOWN, ^ref, :process, ^dead_pid, _}
+
+      result =
+        Task.execute(
+          "call_router_override",
+          %{
+            "description" => "Routing override task",
+            "prompt" => "Return completion",
+            "async" => true,
+            "auto_followup" => true,
+            "session_key" => "agent:review:main",
+            "agent_id" => "review",
+            "queue_mode" => "interrupt",
+            "meta" => %{"origin" => "task_async_test"}
+          },
+          nil,
+          nil,
+          "/tmp",
+          run_override: fn _on_update, _signal ->
+            %AgentCore.Types.AgentToolResult{
+              content: [%Ai.Types.TextContent{text: "override output"}],
+              details: %{status: "completed"}
+            }
+          end,
+          session_module: __MODULE__.SessionSpy,
+          session_pid: dead_pid,
+          session_key: "agent:main:main",
+          agent_id: "main",
+          run_orchestrator: __MODULE__.StubRunOrchestrator
+        )
+
+      assert %AgentCore.Types.AgentToolResult{} = result
+      assert result.details.status == "queued"
+
+      assert_receive {:router_submit, %RunRequest{} = followup, 1}, 1_000
+      assert followup.session_key == "agent:review:main"
+      assert followup.agent_id == "review"
+      assert followup.queue_mode == :interrupt
+      assert followup.meta["origin"] == "task_async_test"
+      assert followup.meta.task_id == result.details.task_id
+      assert followup.meta.run_id == result.details.run_id
+      assert followup.meta.task_auto_followup == true
+    end
+
     test "does not send followup when auto_followup is false" do
       _result =
         Task.execute(
