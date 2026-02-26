@@ -892,7 +892,7 @@ defmodule LemonGateway.EngineLockTest do
   # Integration Tests (existing tests using full application)
   # ============================================================================
 
-  defmodule LemonGateway.EngineLockTest.SlowEngine do
+  defmodule SlowEngine do
     @behaviour Elixir.LemonGateway.Engine
 
     alias Elixir.LemonGateway.Types.Job
@@ -938,7 +938,7 @@ defmodule LemonGateway.EngineLockTest do
     def cancel(_ctx), do: :ok
   end
 
-  defmodule LemonGateway.EngineLockTest.CrashEngine do
+  defmodule CrashEngine do
     @behaviour Elixir.LemonGateway.Engine
 
     alias Elixir.LemonGateway.Types.Job
@@ -991,7 +991,7 @@ defmodule LemonGateway.EngineLockTest do
 
     Application.put_env(:lemon_gateway, :engines, [
       Elixir.LemonGateway.Engines.Echo,
-      Elixir.LemonGateway.EngineLockTest.SlowEngine
+      __MODULE__.SlowEngine
     ])
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
@@ -1152,8 +1152,8 @@ defmodule LemonGateway.EngineLockTest do
 
     Application.put_env(:lemon_gateway, :engines, [
       Elixir.LemonGateway.Engines.Echo,
-      Elixir.LemonGateway.EngineLockTest.SlowEngine,
-      Elixir.LemonGateway.EngineLockTest.CrashEngine
+      __MODULE__.SlowEngine,
+      __MODULE__.CrashEngine
     ])
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
@@ -1199,7 +1199,7 @@ defmodule LemonGateway.EngineLockTest do
 
     Application.put_env(:lemon_gateway, :engines, [
       Elixir.LemonGateway.Engines.Echo,
-      Elixir.LemonGateway.EngineLockTest.SlowEngine
+      __MODULE__.SlowEngine
     ])
 
     {:ok, _} = Application.ensure_all_started(:lemon_gateway)
