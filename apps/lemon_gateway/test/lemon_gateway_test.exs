@@ -546,7 +546,8 @@ defmodule LemonGatewayTest do
   end
 
   test "telegram dedupe init is idempotent" do
-    assert :ok = Elixir.LemonGateway.Telegram.Dedupe.init()
-    assert :ok = Elixir.LemonGateway.Telegram.Dedupe.init()
+    table = :lemon_gateway_test_dedupe
+    assert :ok = LemonCore.Dedupe.Ets.init(table)
+    assert :ok = LemonCore.Dedupe.Ets.init(table)
   end
 end

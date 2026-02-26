@@ -3,11 +3,16 @@ defmodule LemonCore.ExecApprovalsTest do
   Tests for the ExecApprovals module.
   """
   use LemonCore.Testing.Case, async: false
+  @moduletag with_store: true
 
   alias LemonCore.ExecApprovals
   alias LemonCore.Store
 
   setup do
+    if Process.whereis(LemonCore.PubSub) == nil do
+      start_supervised!({Phoenix.PubSub, name: LemonCore.PubSub})
+    end
+
     # Clear approval-related tables before each test
     clear_approval_tables()
 

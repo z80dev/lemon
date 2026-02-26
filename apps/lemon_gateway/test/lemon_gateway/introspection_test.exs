@@ -7,16 +7,45 @@ defmodule LemonGateway.IntrospectionTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.Introspection
+  alias LemonGateway.Scheduler
   alias LemonGateway.Types.Job
+
+  @run_timeout 60_000
+  @poll_interval 200
 
   setup do
     original = Application.get_env(:lemon_core, :introspection, [])
     Application.put_env(:lemon_core, :introspection, Keyword.put(original, :enabled, true))
     on_exit(fn -> Application.put_env(:lemon_core, :introspection, original) end)
+
+    # Some gateway tests stop/restart application components; ensure scheduler exists
+    # so Scheduler.submit/1 actually routes jobs during this test.
+    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+    assert Process.whereis(Scheduler) != nil
+
     :ok
   end
 
   defp unique_token, do: System.unique_integer([:positive, :monotonic])
+
+  defp wait_for(fun, timeout_ms \\ @run_timeout) when is_function(fun, 0) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_for(fun, deadline)
+  end
+
+  defp do_wait_for(fun, deadline) do
+    cond do
+      fun.() ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("timed out waiting for introspection condition")
+
+      true ->
+        Process.sleep(@poll_interval)
+        do_wait_for(fun, deadline)
+    end
+  end
 
   # ============================================================================
   # ThreadWorker introspection tests
@@ -25,10 +54,11 @@ defmodule LemonGateway.IntrospectionTest do
   describe "ThreadWorker introspection events" do
     test "thread_started and thread_message_dispatched events are emitted on job submission" do
       token = unique_token()
+      run_id = "introspect_tw_#{token}"
       session_key = "agent:gw_introspection_tw:#{token}:main"
 
       job = %Job{
-        run_id: "introspect_tw_#{token}",
+        run_id: run_id,
         session_key: session_key,
         prompt: "introspection thread worker test",
         engine_id: "echo",
@@ -40,11 +70,11 @@ defmodule LemonGateway.IntrospectionTest do
       # enqueues the job. The Echo engine will complete quickly.
       LemonGateway.Scheduler.submit(job)
 
-      # Wait for the run to complete (echo engine is fast)
-      assert_receive {:lemon_gateway_run_completed, ^job, _completed}, 5000
-
-      # Allow introspection events to settle
-      Process.sleep(200)
+      # Wait until the dispatcher event for this run is persisted.
+      wait_for(fn ->
+        Introspection.list(run_id: run_id, limit: 20)
+        |> Enum.any?(&(&1.event_type == :thread_message_dispatched))
+      end)
 
       # Verify thread_started was emitted when the ThreadWorker was created
       # We search broadly since the ThreadWorker doesn't get run_id/session_key in init
@@ -63,7 +93,7 @@ defmodule LemonGateway.IntrospectionTest do
 
       # Verify thread_message_dispatched was emitted when the job was enqueued
       dispatched_events =
-        Introspection.list(run_id: "introspect_tw_#{token}", limit: 20)
+        Introspection.list(run_id: run_id, limit: 20)
         |> Enum.filter(&(&1.event_type == :thread_message_dispatched))
 
       assert length(dispatched_events) >= 1
@@ -89,11 +119,15 @@ defmodule LemonGateway.IntrospectionTest do
 
       LemonGateway.Scheduler.submit(job)
 
-      # Wait for run to complete — the ThreadWorker exits when idle
-      assert_receive {:lemon_gateway_run_completed, ^job, _completed}, 5000
-
-      # ThreadWorker exits after queue drains; give it time to terminate
-      Process.sleep(500)
+      # Wait for thread termination event for this worker key.
+      wait_for(fn ->
+        Introspection.list(limit: 200)
+        |> Enum.any?(fn evt ->
+          evt.event_type == :thread_terminated and
+            is_binary(evt.payload.thread_key) and
+            String.contains?(evt.payload.thread_key, session_key)
+        end)
+      end)
 
       all_events = Introspection.list(limit: 200)
 
@@ -132,10 +166,10 @@ defmodule LemonGateway.IntrospectionTest do
 
       LemonGateway.Scheduler.submit(job)
 
-      # Wait for run to complete
-      assert_receive {:lemon_gateway_run_completed, ^job, _completed}, 5000
-
-      Process.sleep(100)
+      wait_for(fn ->
+        Introspection.list(run_id: run_id, limit: 20)
+        |> Enum.any?(&(&1.event_type == :scheduled_job_triggered))
+      end)
 
       events = Introspection.list(run_id: run_id, limit: 20)
       triggered = Enum.filter(events, &(&1.event_type == :scheduled_job_triggered))
@@ -152,6 +186,7 @@ defmodule LemonGateway.IntrospectionTest do
       token = unique_token()
       run_id = "introspect_sched_done_#{token}"
       session_key = "agent:gw_introspection_done:#{token}:main"
+      submitted_at = System.system_time(:millisecond)
 
       job = %Job{
         run_id: run_id,
@@ -164,11 +199,16 @@ defmodule LemonGateway.IntrospectionTest do
 
       LemonGateway.Scheduler.submit(job)
 
-      # Wait for run to complete so the slot gets released
-      assert_receive {:lemon_gateway_run_completed, ^job, _completed}, 5000
-
-      # Allow slot release to propagate
-      Process.sleep(200)
+      # Wait for a scheduler completion event after this submission timestamp.
+      wait_for(fn ->
+        Introspection.list(limit: 200)
+        |> Enum.any?(fn evt ->
+          evt.event_type == :scheduled_job_completed and
+            evt.ts_ms >= submitted_at and
+            is_integer(evt.payload.in_flight) and
+            is_integer(evt.payload.max)
+        end)
+      end)
 
       # scheduled_job_completed doesn't carry run_id (it's a scheduler-level event),
       # so search broadly and look for recent events
@@ -177,6 +217,7 @@ defmodule LemonGateway.IntrospectionTest do
       completed =
         Enum.filter(all_events, fn evt ->
           evt.event_type == :scheduled_job_completed and
+            evt.ts_ms >= submitted_at and
             is_integer(evt.payload.in_flight) and
             is_integer(evt.payload.max)
         end)

@@ -4,7 +4,7 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
 
   alias Elixir.LemonRouter.ToolStatusCoalescer
 
-  defmodule LemonRouter.ToolStatusCoalescerTest.TestTelegramPlugin do
+  defmodule TestTelegramPlugin do
     @moduledoc false
 
     def id, do: "telegram"
@@ -55,24 +55,17 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
       {:ok, _} = LemonChannels.Outbox.Dedupe.start_link([])
     end
 
-    :persistent_term.put(
-      {Elixir.LemonRouter.ToolStatusCoalescerTest.TestTelegramPlugin, :test_pid},
-      self()
-    )
+    :persistent_term.put({__MODULE__.TestTelegramPlugin, :test_pid}, self())
 
     existing = LemonChannels.Registry.get_plugin("telegram")
     _ = LemonChannels.Registry.unregister("telegram")
 
     :ok =
-      LemonChannels.Registry.register(
-        Elixir.LemonRouter.ToolStatusCoalescerTest.TestTelegramPlugin
-      )
+      LemonChannels.Registry.register(__MODULE__.TestTelegramPlugin)
 
     on_exit(fn ->
       _ =
-        :persistent_term.erase(
-          {Elixir.LemonRouter.ToolStatusCoalescerTest.TestTelegramPlugin, :test_pid}
-        )
+        :persistent_term.erase({__MODULE__.TestTelegramPlugin, :test_pid})
 
       if is_pid(Process.whereis(LemonChannels.Registry)) do
         _ = LemonChannels.Registry.unregister("telegram")
@@ -275,7 +268,12 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
                meta: %{user_msg_id: 9, progress_msg_id: progress_msg_id}
              )
 
-    refute_receive {:delivered, %LemonChannels.OutboundPayload{channel_id: "telegram"}}, 300
+    refute_receive {:delivered,
+                    %LemonChannels.OutboundPayload{
+                      channel_id: "telegram",
+                      meta: %{run_id: ^run_id}
+                    }},
+                   300
   end
 
   test "finalize_run does not emit synthetic done on failed runs without tool actions" do
@@ -288,7 +286,12 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
                meta: %{user_msg_id: 9, progress_msg_id: 9003}
              )
 
-    refute_receive {:delivered, %LemonChannels.OutboundPayload{channel_id: "telegram"}}, 300
+    refute_receive {:delivered,
+                    %LemonChannels.OutboundPayload{
+                      channel_id: "telegram",
+                      meta: %{run_id: ^run_id}
+                    }},
+                   300
   end
 
   test "telegram tool status falls back to a dedicated status message when progress_msg_id is nil" do

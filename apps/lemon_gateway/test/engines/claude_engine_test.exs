@@ -544,8 +544,8 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
         engine: "claude",
         resume: resume,
         title: "Claude Session",
-        meta: %{model: "opus"})
-      }
+        meta: %{model: "opus"}
+      })
 
       assert started.title == "Claude Session"
       assert started.meta.model == "opus"
@@ -579,8 +579,8 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
       completed = Event.completed(%{
         engine: "claude",
         ok: true,
-        usage: %{input_tokens: 100, output_tokens: 50})
-      }
+        usage: %{input_tokens: 100, output_tokens: 50}
+      })
 
       assert completed.usage.input_tokens == 100
     end
@@ -635,8 +635,8 @@ defmodule LemonGateway.Engines.ClaudeEngineTest do
         id: "a1",
         kind: "tool",
         title: "Read",
-        detail: %{file_path: "/test.ex"})
-      }
+        detail: %{file_path: "/test.ex"}
+      })
 
       assert action.detail.file_path == "/test.ex"
     end

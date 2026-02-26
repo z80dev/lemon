@@ -6,6 +6,11 @@ defmodule LemonCore.SecretsTest do
   alias LemonCore.Store
 
   setup do
+    case Store.start_link([]) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+    end
+
     clear_secrets_table()
 
     master_key = :crypto.strong_rand_bytes(32) |> Base.encode64()

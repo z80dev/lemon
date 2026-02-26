@@ -4,6 +4,11 @@ defmodule LemonCore.IdempotencyTest do
   alias LemonCore.{Idempotency, Store}
 
   setup do
+    case Store.start_link([]) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+    end
+
     # Clear idempotency table to avoid cross-run collisions with persisted data.
     Store.list(:idempotency)
     |> Enum.each(fn {key, _value} -> Store.delete(:idempotency, key) end)

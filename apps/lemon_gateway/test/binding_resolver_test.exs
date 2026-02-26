@@ -1,8 +1,8 @@
 defmodule LemonGateway.BindingResolverTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.{Binding, ChatScope, ResumeToken}
-  alias LemonGateway.{BindingResolver, Config}
+  alias LemonCore.{ChatScope, ResumeToken}
+  alias LemonGateway.{Binding, BindingResolver, Config}
 
   setup do
     # Stop the app to reset state
@@ -477,7 +477,7 @@ defmodule LemonGateway.BindingResolverTest do
       assert BindingResolver.resolve_engine(scope, nil, nil) == "proj_engine"
     end
 
-    test "empty hint string is truthy and used" do
+    test "empty hint string falls back to binding/global resolution" do
       setup_config(
         default_engine: "global_default",
         bindings: [
@@ -487,8 +487,8 @@ defmodule LemonGateway.BindingResolverTest do
 
       scope = %ChatScope{transport: :telegram, chat_id: 12345}
 
-      # Empty string is truthy in Elixir, so it's used as the hint
-      assert BindingResolver.resolve_engine(scope, "", nil) == ""
+      # Empty hint is treated as absent and falls through to binding/global resolution.
+      assert BindingResolver.resolve_engine(scope, "", nil) == "binding_engine"
     end
 
     test "projects config being empty is handled" do

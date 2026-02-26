@@ -15,7 +15,14 @@ defmodule LemonGateway.SchedulerMonitorLifecycleTest do
   # These tests exercise the monitor lifecycle through the public API.
 
   setup do
-    # Wait for scheduler to be ready
+    # Ensure scheduler is running even if a prior test/app shutdown stopped it.
+    if is_nil(Process.whereis(Scheduler)) do
+      case start_supervised({Scheduler, []}) do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+      end
+    end
+
     assert Process.whereis(Scheduler) != nil
     :ok
   end

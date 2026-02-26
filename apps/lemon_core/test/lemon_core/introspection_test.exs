@@ -2,12 +2,18 @@ defmodule LemonCore.IntrospectionTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.Introspection
+  alias LemonCore.Store
 
   defp unique_token do
     System.unique_integer([:positive, :monotonic])
   end
 
   setup do
+    case Store.start_link([]) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+    end
+
     original = Application.get_env(:lemon_core, :introspection, [])
     Application.put_env(:lemon_core, :introspection, Keyword.put(original, :enabled, true))
     on_exit(fn -> Application.put_env(:lemon_core, :introspection, original) end)

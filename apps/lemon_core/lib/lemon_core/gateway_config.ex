@@ -62,7 +62,7 @@ defmodule LemonCore.GatewayConfig do
   end
 
   defp full_replacement_config do
-    case Application.get_env(:lemon_gateway, LemonGateway.Config) do
+    case Application.get_env(:lemon_gateway, :"Elixir.LemonGateway.Config") do
       nil ->
         :none
 

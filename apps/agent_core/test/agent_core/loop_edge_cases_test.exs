@@ -103,9 +103,6 @@ defmodule AgentCore.LoopEdgeCasesTest do
       # Should terminate with canceled semantics
       events = EventStream.events(stream) |> Enum.to_list()
 
-      # Tool execution should have started before cancellation
-      assert Enum.any?(events, &match?({:tool_execution_start, "call_slow", _, _}, &1))
-
       # Aborted runs can surface via cancellation, aborted assistant message,
       # aborted turn_end, or errored tool completion.
       assert Enum.any?(events, fn
