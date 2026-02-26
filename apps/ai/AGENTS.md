@@ -69,6 +69,7 @@ Ai (main API)
 - `Ai.Providers.HttpTrace` - HTTP request/response tracing (enabled via `LEMON_AI_HTTP_TRACE=1`)
 - `Ai.Providers.TextSanitizer` - UTF-8 sanitization for streamed text
 - `Ai.Auth.OpenAICodexOAuth` - Reads/refreshes ChatGPT JWT tokens from `~/.codex/auth.json`
+- `Ai.Auth.GitHubCopilotOAuth` - GitHub Copilot OAuth device login + token refresh helpers for encrypted secret payloads
 
 ## Key Types (all defined in `Ai.Types`)
 

@@ -293,6 +293,7 @@ defmodule CodingAgent.Session.ModelResolver do
   defp provider_env_vars("openai-codex"), do: ["OPENAI_CODEX_API_KEY", "CHATGPT_TOKEN"]
   defp provider_env_vars("opencode"), do: ["OPENCODE_API_KEY"]
   defp provider_env_vars("kimi"), do: ["KIMI_API_KEY"]
+  defp provider_env_vars("github_copilot"), do: ["GITHUB_COPILOT_API_KEY"]
 
   defp provider_env_vars("google"),
     do: ["GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"]
@@ -313,8 +314,24 @@ defmodule CodingAgent.Session.ModelResolver do
 
   defp resolve_secret_api_key(secret_name) when is_binary(secret_name) do
     case LemonCore.Secrets.resolve(secret_name, prefer_env: false, env_fallback: true) do
-      {:ok, value, _source} -> value
-      _ -> nil
+      {:ok, value, _source} ->
+        case Ai.Auth.GitHubCopilotOAuth.resolve_api_key_from_secret(secret_name, value) do
+          {:ok, resolved_api_key} ->
+            resolved_api_key
+
+          :ignore ->
+            value
+
+          {:error, reason} ->
+            Logger.debug(
+              "Failed to resolve GitHub Copilot OAuth secret #{secret_name}: #{inspect(reason)}"
+            )
+
+            value
+        end
+
+      _ ->
+        nil
     end
   end
 

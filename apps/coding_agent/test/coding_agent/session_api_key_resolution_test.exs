@@ -12,12 +12,14 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     System.put_env("LEMON_SECRETS_MASTER_KEY", master_key)
     System.delete_env("OPENAI_API_KEY")
     System.delete_env("OPENCODE_API_KEY")
+    System.delete_env("GITHUB_COPILOT_API_KEY")
 
     on_exit(fn ->
       clear_secrets_table()
       System.delete_env("LEMON_SECRETS_MASTER_KEY")
       System.delete_env("OPENAI_API_KEY")
       System.delete_env("OPENCODE_API_KEY")
+      System.delete_env("GITHUB_COPILOT_API_KEY")
     end)
 
     :ok
@@ -97,6 +99,56 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     assert :ok = Session.prompt(session, "hello")
 
     assert_receive {:stream_api_key, "from-default-secret"}, 1_000
+    GenServer.stop(session)
+  end
+
+  test "github copilot oauth secret resolves to access token" do
+    oauth_secret =
+      Jason.encode!(%{
+        "type" => "github_copilot_oauth",
+        "refresh_token" => "github-refresh-token",
+        "access_token" => "copilot-access-token",
+        "expires_at_ms" => System.system_time(:millisecond) + 3_600_000,
+        "enterprise_domain" => nil,
+        "base_url" => "https://api.individual.githubcopilot.com",
+        "updated_at_ms" => System.system_time(:millisecond)
+      })
+
+    assert {:ok, _} = Secrets.set("llm_github_copilot_api_key", oauth_secret)
+
+    settings =
+      settings(%{
+        "github_copilot" => %{api_key_secret: "llm_github_copilot_api_key"}
+      })
+
+    session = start_session(self(), settings, mock_model(:github_copilot))
+    assert :ok = Session.prompt(session, "hello")
+
+    assert_receive {:stream_api_key, "copilot-access-token"}, 1_000
+    GenServer.stop(session)
+  end
+
+  test "github copilot env key overrides oauth secret" do
+    oauth_secret =
+      Jason.encode!(%{
+        "type" => "github_copilot_oauth",
+        "refresh_token" => "github-refresh-token",
+        "access_token" => "copilot-access-token",
+        "expires_at_ms" => System.system_time(:millisecond) + 3_600_000
+      })
+
+    assert {:ok, _} = Secrets.set("llm_github_copilot_api_key", oauth_secret)
+    System.put_env("GITHUB_COPILOT_API_KEY", "copilot-from-env")
+
+    settings =
+      settings(%{
+        "github_copilot" => %{api_key_secret: "llm_github_copilot_api_key"}
+      })
+
+    session = start_session(self(), settings, mock_model(:github_copilot))
+    assert :ok = Session.prompt(session, "hello")
+
+    assert_receive {:stream_api_key, "copilot-from-env"}, 1_000
     GenServer.stop(session)
   end
 

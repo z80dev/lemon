@@ -190,6 +190,40 @@ To force a token explicitly, set:
 - `OPENAI_CODEX_API_KEY` (preferred)
 - `CHATGPT_TOKEN` (fallback)
 
+## GitHub Copilot Onboarding (CLI)
+
+Lemon includes a guided CLI flow for Copilot credentials:
+
+```bash
+mix lemon.onboard.copilot
+```
+
+What it does:
+- Starts GitHub OAuth device flow (shows browser URL + code), then stores credentials in encrypted secrets
+- Asks whether to open the URL in your browser automatically
+- Writes `providers.github_copilot.api_key_secret` in your config
+- Optionally asks to set Copilot as default provider, then lets you choose a Copilot model
+- Persists selected defaults in `[defaults]` (`provider` + `model`)
+
+Common non-interactive usage:
+
+```bash
+# Use OAuth device flow but target GitHub Enterprise domain
+mix lemon.onboard.copilot --enterprise-domain company.ghe.com
+
+# Skip model-policy enabling calls during onboarding
+mix lemon.onboard.copilot --skip-enable-models
+
+# Store a raw Copilot token directly (bypasses OAuth device flow)
+mix lemon.onboard.copilot --token <token>
+
+# Also set defaults with explicit model
+mix lemon.onboard.copilot --token <token> --set-default --model gpt-5
+
+# Write a different config file
+mix lemon.onboard.copilot --token <token> --config-path /path/to/config.toml
+```
+
 ## Web Tools (`websearch` / `webfetch`)
 
 Lemon includes web tools under `runtime.tools.web`. For full setup and troubleshooting, see:

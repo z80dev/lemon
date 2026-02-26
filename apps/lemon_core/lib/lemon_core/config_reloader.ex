@@ -197,8 +197,6 @@ defmodule LemonCore.ConfigReloader do
       changed_sources = Enum.filter(changed_sources, &(&1 in sources))
 
       if changed_sources == [] and not force do
-        Logger.debug("[ConfigReloader] No changes detected (reason=#{reason})")
-
         result = %{
           reload_id: reload_id,
           changed_sources: [],
@@ -248,13 +246,14 @@ defmodule LemonCore.ConfigReloader do
         }
 
         # 7. Broadcast event
-        event = LemonCore.Event.new(:config_reloaded, %{
-          reload_id: reload_id,
-          reason: reason,
-          changed_sources: changed_sources,
-          changed_paths: changed_paths,
-          diff: diff
-        })
+        event =
+          LemonCore.Event.new(:config_reloaded, %{
+            reload_id: reload_id,
+            reason: reason,
+            changed_sources: changed_sources,
+            changed_paths: changed_paths,
+            diff: diff
+          })
 
         LemonCore.Bus.broadcast("system", event)
 
@@ -305,11 +304,12 @@ defmodule LemonCore.ConfigReloader do
         )
 
         # Broadcast failure event
-        fail_event = LemonCore.Event.new(:config_reload_failed, %{
-          reload_id: reload_id,
-          reason: reason,
-          error: Exception.message(e)
-        })
+        fail_event =
+          LemonCore.Event.new(:config_reload_failed, %{
+            reload_id: reload_id,
+            reason: reason,
+            error: Exception.message(e)
+          })
 
         LemonCore.Bus.broadcast("system", fail_event)
 
@@ -374,7 +374,11 @@ defmodule LemonCore.ConfigReloader do
           [{key, %{action: :removed, value: redact_value(key, old_val)}} | acc]
 
         true ->
-          [{key, %{action: :changed, from: redact_value(key, old_val), to: redact_value(key, new_val)}} | acc]
+          [
+            {key,
+             %{action: :changed, from: redact_value(key, old_val), to: redact_value(key, new_val)}}
+            | acc
+          ]
       end
     end)
     |> Enum.sort_by(&elem(&1, 0))
