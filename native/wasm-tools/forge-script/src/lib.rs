@@ -70,15 +70,11 @@ impl Guest for ForgeScriptTool {
                 },
                 "secret_name": {
                     "type": "string",
-                    "description": "Secret name for the signing private key (default: ETH_PRIVATE_KEY). Ignored when account_name is set."
+                    "description": "Secret name for the signing private key (default: ETH_PRIVATE_KEY). Used only when use_keystore is false."
                 },
-                "account_name": {
-                    "type": "string",
-                    "description": "Foundry keystore account name (e.g. 'zeebot-hot'). When set, uses --account/--password instead of --private-key."
-                },
-                "password_secret": {
-                    "type": "string",
-                    "description": "Secret name for the keystore password (default: KEYSTORE_PASSWORD). Only used when account_name is set."
+                "use_keystore": {
+                    "type": "boolean",
+                    "description": "Use Foundry keystore signing with KEYSTORE_NAME and KEYSTORE_PASSWORD secrets (default: true)."
                 }
             },
             "required": ["script", "rpc_url"]
@@ -142,14 +138,11 @@ fn build_args(params: &Value) -> Result<Vec<String>, String> {
         }
     }
 
-    if let Some(account_name) = params["account_name"].as_str() {
-        let password_secret = params["password_secret"]
-            .as_str()
-            .unwrap_or("KEYSTORE_PASSWORD");
+    if params["use_keystore"].as_bool().unwrap_or(true) {
         args.push("--account".to_string());
-        args.push(account_name.to_string());
+        args.push("{{SECRET:KEYSTORE_NAME}}".to_string());
         args.push("--password".to_string());
-        args.push(format!("{{{{SECRET:{password_secret}}}}}"));
+        args.push("{{SECRET:KEYSTORE_PASSWORD}}".to_string());
     } else {
         let secret_name = params["secret_name"]
             .as_str()
@@ -218,8 +211,10 @@ mod tests {
         assert_eq!(args[0], "script");
         assert_eq!(args[1], "script/Deploy.s.sol");
         assert!(args.contains(&"--rpc-url".to_string()));
-        assert!(args.contains(&"--private-key".to_string()));
-        assert!(args.contains(&"{{SECRET:ETH_PRIVATE_KEY}}".to_string()));
+        assert!(args.contains(&"--account".to_string()));
+        assert!(args.contains(&"{{SECRET:KEYSTORE_NAME}}".to_string()));
+        assert!(args.contains(&"--password".to_string()));
+        assert!(args.contains(&"{{SECRET:KEYSTORE_PASSWORD}}".to_string()));
         // No --broadcast by default
         assert!(!args.contains(&"--broadcast".to_string()));
     }
@@ -277,32 +272,33 @@ mod tests {
     }
 
     #[test]
-    fn build_args_with_keystore_account() {
+    fn build_args_uses_keystore_by_default() {
         let params = json!({
             "script": "script/Deploy.s.sol",
-            "rpc_url": "https://rpc.example.com",
-            "account_name": "zeebot-hot",
-            "password_secret": "ZEEBOT_HOT_PASSWORD"
+            "rpc_url": "https://rpc.example.com"
         });
 
         let args = build_args(&params).unwrap();
         assert!(args.contains(&"--account".to_string()));
-        assert!(args.contains(&"zeebot-hot".to_string()));
+        assert!(args.contains(&"{{SECRET:KEYSTORE_NAME}}".to_string()));
         assert!(args.contains(&"--password".to_string()));
-        assert!(args.contains(&"{{SECRET:ZEEBOT_HOT_PASSWORD}}".to_string()));
+        assert!(args.contains(&"{{SECRET:KEYSTORE_PASSWORD}}".to_string()));
         assert!(!args.contains(&"--private-key".to_string()));
     }
 
     #[test]
-    fn build_args_keystore_defaults_password_secret() {
+    fn build_args_can_use_private_key_mode() {
         let params = json!({
             "script": "script/Deploy.s.sol",
             "rpc_url": "https://rpc.example.com",
-            "account_name": "zeebot-hot"
+            "use_keystore": false,
+            "secret_name": "DEPLOYER_KEY"
         });
 
         let args = build_args(&params).unwrap();
-        assert!(args.contains(&"{{SECRET:KEYSTORE_PASSWORD}}".to_string()));
+        assert!(args.contains(&"--private-key".to_string()));
+        assert!(args.contains(&"{{SECRET:DEPLOYER_KEY}}".to_string()));
+        assert!(!args.contains(&"--account".to_string()));
     }
 
     #[test]

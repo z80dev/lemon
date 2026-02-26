@@ -8,7 +8,7 @@ just shipped WASM-sandboxed Foundry tools for Lemon
 
 I tried lots of great agent-wallet integrations but wanted something better for devs
 
-Your agent can call `cast send`, `cast call`, `forge create`, and `forge script` -- and the private key never enters WASM memory.
+Your agent can call `cast send`, `cast call`, `cast wallet address`, `cast wallet sign`, `forge create`, and `forge script` -- and the private key never enters WASM memory.
 
 how it works:
 
@@ -77,10 +77,11 @@ HTTP credential injection -> CLI secret injection. Same idea, new surface.
 
 **8/**
 
-The five tools we shipped:
+The six tools we shipped:
 
 - `cast_call` -- read-only contract calls (no key needed)
 - `cast_send` -- sign and broadcast transactions
+- `cast_wallet_address` -- derive wallet address from private key or keystore
 - `cast_wallet_sign` -- sign messages and EIP-712 typed data
 - `forge_script` -- run deployment scripts
 - `forge_create` -- deploy contracts

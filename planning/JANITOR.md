@@ -503,3 +503,29 @@ Completed a focused Slice H polish pass plus a deterministic test hardening foll
 
 **Validation:**
 - `mix test apps/lemon_games/test apps/lemon_control_plane/test/lemon_control_plane/http/games_api_test.exs apps/lemon_control_plane/test/lemon_control_plane/methods/games_token_methods_test.exs apps/lemon_web/test/lemon_web/live/games_live_test.exs` ✅
+
+## 2026-02-26
+
+### Games Platform - Idempotency Replay Hardening
+**Plan:** PLN-20260226-agent-games-platform  
+**Status:** in_progress
+
+Implemented a focused hardening slice to align move idempotency behavior with the MVP API contract.
+
+**Changes:**
+- `apps/lemon_games/lib/lemon_games/matches/service.ex`
+  - Added `submit_move_with_meta/4` to explicitly return replay metadata (`idempotent_replay?`).
+  - Kept `submit_move/4` backward-compatible by delegating and preserving the prior 3-tuple response.
+- `apps/lemon_control_plane/lib/lemon_control_plane/http/games_api.ex`
+  - Updated move submission endpoint to use metadata-aware service call.
+  - `POST /v1/games/matches/:id/moves` now correctly returns `"idempotent_replay": true` on duplicate idempotency-key replay.
+- `apps/lemon_control_plane/test/lemon_control_plane/http/games_api_test.exs`
+  - Added regression test verifying first move returns `idempotent_replay=false` and duplicate returns `true` with identical accepted event sequence.
+- `apps/lemon_games/test/lemon_games/matches/service_test.exs`
+  - Added service-level test for replay metadata semantics.
+- `docs/games-platform.md`
+  - Documented `idempotent_replay` field on move responses.
+
+**Validation:**
+- `mix test apps/lemon_games/test/lemon_games/matches/service_test.exs apps/lemon_control_plane/test/lemon_control_plane/http/games_api_test.exs` ✅
+
