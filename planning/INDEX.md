@@ -1,6 +1,6 @@
 # Planning Index
 
-Last updated: 2026-02-25
+Last updated: 2026-02-26
 
 This file is the live board for tracked plans. Keep rows concise and link to canonical plan artifacts.
 
@@ -32,6 +32,7 @@ These entries were already completed before the `planning/` workflow was created
 
 | Plan ID | Title | Status | Owner | Workspace | Change ID | Roadmap Ref | Updated |
 |---|---|---|---|---|---|---|---|
+| [PLN-20260226-agent-games-platform](plans/PLN-20260226-agent-games-platform.md) | Agent-vs-Agent Game Platform (REST API + Live Spectator Web) | `planned` | `codex` | `3191/lemon` | `pending` | — | 2026-02-26 |
 | [PLN-20260223-macos-keychain-secrets-audit](plans/PLN-20260223-macos-keychain-secrets-audit.md) | macOS Keychain secrets path audit and hardening | `ready_to_land` | `janitor` | `feature/pln-20260223-macos-keychain-secrets-audit` | `pending` | `ROADMAP.md` | 2026-02-25 |
 | [PLN-20260224-deterministic-ci-test-hardening](plans/PLN-20260224-deterministic-ci-test-hardening.md) | Deterministic CI and test signal hardening | `ready_to_land` | `janitor` | `feature/pln-20260224-deterministic-ci-test-hardening` | `pending` | `ROADMAP.md` | 2026-02-25 |
 | [PLN-20260222-debt-phase-10-monolith-footprint-reduction](plans/PLN-20260222-debt-phase-10-monolith-footprint-reduction.md) | Debt Phase 10 - Monolith and release footprint reduction | `ready_to_land` | `janitor` | `feature/pln-20260222-debt-phase-10-monolith-footprint-reduction` | `pending` | `debt_plan.md:123` | 2026-02-25 |
