@@ -52,7 +52,6 @@ defmodule Ai.Providers.OpenAICodexResponses do
 
   alias Ai.EventStream
   alias Ai.Providers.OpenAIResponsesShared
-  alias LemonCore.Secrets
 
   require Logger
 
@@ -89,9 +88,7 @@ defmodule Ai.Providers.OpenAICodexResponses do
 
   @impl true
   def get_env_api_key do
-    Secrets.fetch_value("OPENAI_CODEX_API_KEY") ||
-      Secrets.fetch_value("CHATGPT_TOKEN") ||
-      Ai.Auth.OpenAICodexOAuth.resolve_access_token()
+    Ai.Auth.OpenAICodexOAuth.resolve_access_token()
   end
 
   @impl true
@@ -114,7 +111,7 @@ defmodule Ai.Providers.OpenAICodexResponses do
           api_key = opts.api_key || get_env_api_key()
 
           if !api_key || api_key == "" do
-            raise "ChatGPT token is required. Set OPENAI_CODEX_API_KEY or CHATGPT_TOKEN environment variable."
+            raise "ChatGPT token is required. Set OPENAI_CODEX_API_KEY / CHATGPT_TOKEN, or configure an OAuth api_key_secret."
           end
 
           # Extract account ID from JWT

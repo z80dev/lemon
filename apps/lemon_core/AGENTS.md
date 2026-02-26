@@ -372,15 +372,23 @@ mix lemon.secrets.delete API_KEY
 ### Onboarding Tasks
 
 ```bash
-# Guided GitHub Copilot setup:
-# - runs OAuth device flow (browser URL + code)
-# - optionally opens the URL in browser
+# Guided provider OAuth setup:
+# - runs provider OAuth flow by default (or accepts --token)
 # - stores OAuth credentials in encrypted secrets
-# - writes providers.github_copilot.api_key_secret
+# - writes providers.<provider>.api_key_secret
 # - optionally updates defaults.provider/defaults.model
+mix lemon.onboard.anthropic
+mix lemon.onboard.antigravity
+mix lemon.onboard.codex
 mix lemon.onboard.copilot
 
 # Non-interactive examples
+mix lemon.onboard.anthropic --token <token> --set-default --model claude-sonnet-4-20250514
+mix lemon.onboard.antigravity --token <token> --set-default --model gemini-3-pro-high
+mix lemon.onboard.codex --token <token> --set-default --model gpt-5.2
+mix lemon.onboard.codex --token <token> --config-path /path/to/config.toml
+
+# Copilot-specific options
 mix lemon.onboard.copilot --enterprise-domain company.ghe.com
 mix lemon.onboard.copilot --skip-enable-models
 mix lemon.onboard.copilot --token <token>  # bypass OAuth and store raw token

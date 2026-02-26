@@ -315,7 +315,7 @@ defmodule CodingAgent.Session.ModelResolver do
   defp resolve_secret_api_key(secret_name) when is_binary(secret_name) do
     case LemonCore.Secrets.resolve(secret_name, prefer_env: false, env_fallback: true) do
       {:ok, value, _source} ->
-        case Ai.Auth.GitHubCopilotOAuth.resolve_api_key_from_secret(secret_name, value) do
+        case Ai.Auth.OAuthSecretResolver.resolve_api_key_from_secret(secret_name, value) do
           {:ok, resolved_api_key} ->
             resolved_api_key
 
@@ -323,9 +323,7 @@ defmodule CodingAgent.Session.ModelResolver do
             value
 
           {:error, reason} ->
-            Logger.debug(
-              "Failed to resolve GitHub Copilot OAuth secret #{secret_name}: #{inspect(reason)}"
-            )
+            Logger.debug("Failed to resolve OAuth secret #{secret_name}: #{inspect(reason)}")
 
             value
         end

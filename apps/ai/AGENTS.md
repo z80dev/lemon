@@ -68,8 +68,11 @@ Ai (main API)
 - `Ai.Providers.OpenAIResponsesShared` - Shared logic for OpenAI Responses and Azure, including `function_call_output` size guards
 - `Ai.Providers.HttpTrace` - HTTP request/response tracing (enabled via `LEMON_AI_HTTP_TRACE=1`)
 - `Ai.Providers.TextSanitizer` - UTF-8 sanitization for streamed text
-- `Ai.Auth.OpenAICodexOAuth` - Reads/refreshes ChatGPT JWT tokens from `~/.codex/auth.json`
+- `Ai.Auth.AnthropicOAuth` - Anthropic PKCE OAuth URL helpers, token exchange/refresh, encrypted OAuth secret resolver
+- `Ai.Auth.GoogleAntigravityOAuth` - Antigravity PKCE OAuth URL helpers, token exchange/refresh, encrypted OAuth secret resolver (`{\"token\",\"projectId\"}` API key shape)
 - `Ai.Auth.GitHubCopilotOAuth` - GitHub Copilot OAuth device login + token refresh helpers for encrypted secret payloads
+- `Ai.Auth.OpenAICodexOAuth` - OpenAI Codex PKCE OAuth helpers + Lemon secret-store OAuth token refresh/resolution
+- `Ai.Auth.OAuthSecretResolver` - Central dispatcher for provider-specific OAuth secret payloads
 
 ## Key Types (all defined in `Ai.Types`)
 
@@ -569,7 +572,8 @@ Run with: `mix test --include integration`
 |----------|---------|---------|
 | `ANTHROPIC_API_KEY` | Anthropic provider | API authentication |
 | `OPENAI_API_KEY` | OpenAI providers | API authentication |
-| `OPENAI_CODEX_API_KEY` | OpenAI Codex provider | JWT token (fallback; prefer `~/.codex/auth.json`) |
+| `OPENAI_CODEX_API_KEY` | OpenAI Codex provider | JWT token (env-first; also supports OAuth secret payload values) |
+| `CHATGPT_TOKEN` | OpenAI Codex provider | Fallback token env var (env-first; also supports OAuth secret payload values) |
 | `AZURE_OPENAI_API_KEY` | Azure OpenAI provider | API authentication |
 | `AZURE_OPENAI_BASE_URL` | Azure OpenAI provider | Full base URL (optional) |
 | `AZURE_OPENAI_RESOURCE_NAME` | Azure OpenAI provider | Resource name (if no base URL) |
@@ -580,7 +584,9 @@ Run with: `mix test --include integration`
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Google AI Studio provider | API key (also checks `GOOGLE_API_KEY`, `GEMINI_API_KEY`) |
 | `GOOGLE_CLOUD_PROJECT` | Google Vertex provider | GCP project ID (also checks `GCLOUD_PROJECT`) |
 | `GOOGLE_CLOUD_LOCATION` | Google Vertex provider | GCP region |
-| `CODEX_HOME` | `Ai.Auth.OpenAICodexOAuth` | Override Codex CLI home dir (default: `~/.codex`) |
+| `ANTHROPIC_OAUTH_CLIENT_ID` | `Ai.Auth.AnthropicOAuth` | Optional override for Anthropic OAuth client id |
+| `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_ID` / `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_SECRET` | `Ai.Auth.GoogleAntigravityOAuth` | Optional env fallback for Antigravity OAuth client credentials (secret store is primary) |
+| `OPENAI_CODEX_OAUTH_CLIENT_ID` | `Ai.Auth.OpenAICodexOAuth` | Optional override for Codex OAuth client id |
 | `LEMON_AI_HTTP_TRACE` | `Ai.Providers.HttpTrace` | Set to `"1"` to enable HTTP request/response logging |
 | `LEMON_AI_DEBUG` | Anthropic provider | Set to `"1"` to log raw SSE to a file |
 | `LEMON_AI_DEBUG_FILE` | Anthropic provider | SSE log file path (default: `/tmp/lemon_anthropic_sse.log`) |

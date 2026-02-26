@@ -13,6 +13,9 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     System.delete_env("OPENAI_API_KEY")
     System.delete_env("OPENCODE_API_KEY")
     System.delete_env("GITHUB_COPILOT_API_KEY")
+    System.delete_env("ANTHROPIC_API_KEY")
+    System.delete_env("OPENAI_CODEX_API_KEY")
+    System.delete_env("CHATGPT_TOKEN")
 
     on_exit(fn ->
       clear_secrets_table()
@@ -20,6 +23,9 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
       System.delete_env("OPENAI_API_KEY")
       System.delete_env("OPENCODE_API_KEY")
       System.delete_env("GITHUB_COPILOT_API_KEY")
+      System.delete_env("ANTHROPIC_API_KEY")
+      System.delete_env("OPENAI_CODEX_API_KEY")
+      System.delete_env("CHATGPT_TOKEN")
     end)
 
     :ok
@@ -149,6 +155,114 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     assert :ok = Session.prompt(session, "hello")
 
     assert_receive {:stream_api_key, "copilot-from-env"}, 1_000
+    GenServer.stop(session)
+  end
+
+  test "anthropic oauth secret resolves to access token" do
+    oauth_secret =
+      Jason.encode!(%{
+        "type" => "anthropic_oauth",
+        "refresh_token" => "anthropic-refresh-token",
+        "access_token" => "anthropic-access-token",
+        "expires_at_ms" => System.system_time(:millisecond) + 3_600_000,
+        "created_at_ms" => System.system_time(:millisecond),
+        "updated_at_ms" => System.system_time(:millisecond)
+      })
+
+    assert {:ok, _} = Secrets.set("llm_anthropic_api_key", oauth_secret)
+
+    settings =
+      settings(%{
+        "anthropic" => %{api_key_secret: "llm_anthropic_api_key"}
+      })
+
+    session = start_session(self(), settings, mock_model(:anthropic))
+    assert :ok = Session.prompt(session, "hello")
+
+    assert_receive {:stream_api_key, "anthropic-access-token"}, 1_000
+    GenServer.stop(session)
+  end
+
+  test "google antigravity oauth secret resolves to json token+projectId" do
+    oauth_secret =
+      Jason.encode!(%{
+        "type" => "google_antigravity_oauth",
+        "refresh_token" => "google-refresh-token",
+        "access_token" => "google-access-token",
+        "expires_at_ms" => System.system_time(:millisecond) + 3_600_000,
+        "project_id" => "proj-123",
+        "created_at_ms" => System.system_time(:millisecond),
+        "updated_at_ms" => System.system_time(:millisecond)
+      })
+
+    assert {:ok, _} = Secrets.set("llm_google_antigravity_api_key", oauth_secret)
+
+    settings =
+      settings(%{
+        "google_antigravity" => %{api_key_secret: "llm_google_antigravity_api_key"}
+      })
+
+    session = start_session(self(), settings, mock_model(:google_antigravity))
+    assert :ok = Session.prompt(session, "hello")
+
+    assert_receive {:stream_api_key, resolved_key}, 1_000
+    assert {:ok, decoded} = Jason.decode(resolved_key)
+    assert decoded["token"] == "google-access-token"
+    assert decoded["projectId"] == "proj-123"
+
+    GenServer.stop(session)
+  end
+
+  test "openai codex oauth secret resolves to access token" do
+    oauth_secret =
+      Jason.encode!(%{
+        "type" => "openai_codex_oauth",
+        "refresh_token" => "codex-refresh-token",
+        "access_token" => "codex-access-token",
+        "expires_at_ms" => System.system_time(:millisecond) + 3_600_000,
+        "account_id" => "acc-123",
+        "created_at_ms" => System.system_time(:millisecond),
+        "updated_at_ms" => System.system_time(:millisecond)
+      })
+
+    assert {:ok, _} = Secrets.set("llm_openai_codex_api_key", oauth_secret)
+
+    settings =
+      settings(%{
+        "openai-codex" => %{api_key_secret: "llm_openai_codex_api_key"}
+      })
+
+    session = start_session(self(), settings, mock_model(:"openai-codex"))
+    assert :ok = Session.prompt(session, "hello")
+
+    assert_receive {:stream_api_key, "codex-access-token"}, 1_000
+    GenServer.stop(session)
+  end
+
+  test "openai codex env key overrides oauth secret" do
+    oauth_secret =
+      Jason.encode!(%{
+        "type" => "openai_codex_oauth",
+        "refresh_token" => "codex-refresh-token",
+        "access_token" => "codex-access-token",
+        "expires_at_ms" => System.system_time(:millisecond) + 3_600_000,
+        "account_id" => "acc-123",
+        "created_at_ms" => System.system_time(:millisecond),
+        "updated_at_ms" => System.system_time(:millisecond)
+      })
+
+    assert {:ok, _} = Secrets.set("llm_openai_codex_api_key", oauth_secret)
+    System.put_env("OPENAI_CODEX_API_KEY", "codex-from-env")
+
+    settings =
+      settings(%{
+        "openai-codex" => %{api_key_secret: "llm_openai_codex_api_key"}
+      })
+
+    session = start_session(self(), settings, mock_model(:"openai-codex"))
+    assert :ok = Session.prompt(session, "hello")
+
+    assert_receive {:stream_api_key, "codex-from-env"}, 1_000
     GenServer.stop(session)
   end
 

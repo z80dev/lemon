@@ -2086,7 +2086,28 @@ Optional metadata on set:
 mix lemon.secrets.set github_api_token "ghp_..." --provider github --expires-at 1735689600000
 ```
 
-#### 3) Use secrets for LLM providers
+#### 3) Provider OAuth onboarding (recommended)
+
+Use onboarding tasks to run provider OAuth, store credentials in encrypted secrets, and write `api_key_secret` in config:
+
+```bash
+mix lemon.onboard.anthropic
+mix lemon.onboard.antigravity
+mix lemon.onboard.codex
+mix lemon.onboard.copilot
+```
+
+For Antigravity OAuth, store client credentials in Lemon secrets:
+- `google_antigravity_oauth_client_id`
+- `google_antigravity_oauth_client_secret`
+
+Environment fallback is also supported:
+- `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_ID`
+- `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_SECRET`
+
+For OpenAI Codex specifically, `mix lemon.onboard.codex` is the primary path. It resolves/stores Codex OAuth credentials in Lemon's secret store and wires `providers.openai-codex.api_key_secret` automatically.
+
+#### 4) Use secrets for LLM providers
 
 Use `api_key_secret` in `~/.lemon/config.toml`:
 
@@ -2106,7 +2127,7 @@ Example fallback names:
 - Anthropic: `llm_anthropic_api_key`
 - OpenAI Codex: `llm_openai_codex_api_key`
 
-#### 4) Use secrets for WASM HTTP credentials
+#### 5) Use secrets for WASM HTTP credentials
 
 WASM tools are discovered from `.lemon/wasm-tools`. For `github_fetch.wasm`, create:
 
@@ -2153,7 +2174,7 @@ At runtime, the host injects credentials during `http-request` based on capabili
 The secret value is resolved at the host boundary and is not exposed in WASM `execute` params/context.
 If the store lookup fails, Lemon keeps env fallback behavior.
 
-#### 5) Control-plane management methods
+#### 6) Control-plane management methods
 
 Lemon control plane exposes:
 - `secrets.status` (read)
@@ -2164,7 +2185,7 @@ Lemon control plane exposes:
 
 `secrets.list`/`secrets.status` return metadata only; plaintext values are never returned.
 
-#### 6) Prompt-boundary hardening for untrusted tool output
+#### 7) Prompt-boundary hardening for untrusted tool output
 
 Lemon wraps all untrusted tool result text blocks at the pre-LLM boundary.
 This is automatic and idempotent (already wrapped content is not double-wrapped).

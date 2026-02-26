@@ -1,9 +1,9 @@
-defmodule Ai.Auth.OpenAICodexOAuth do
+defmodule Ai.Auth.GoogleAntigravityOAuth do
   @moduledoc """
-  OpenAI Codex OAuth helpers.
+  Google Antigravity OAuth helpers.
 
-  Supports PKCE authorization URL generation, manual code parsing,
-  code/token exchange, refresh, and encrypted secret resolution.
+  Supports PKCE authorization URL generation, localhost callback/manual paste parsing,
+  token exchange + refresh, encrypted secret payloads, and API-key resolution.
   """
 
   require Logger
@@ -11,42 +11,68 @@ defmodule Ai.Auth.OpenAICodexOAuth do
   alias Ai.Auth.OAuthPKCE
   alias LemonCore.Secrets
 
-  @client_id "app_EMoamEEZ73f0CkXaXp7hrann"
-  @authorize_url "https://auth.openai.com/oauth/authorize"
-  @token_url "https://auth.openai.com/oauth/token"
-  @default_redirect_uri "http://localhost:1455/auth/callback"
-  @scope "openid profile email offline_access"
-  @jwt_claim_path "https://api.openai.com/auth"
-  @secret_type "openai_codex_oauth"
-  @near_expiry_ms 10 * 60 * 1000
-  @default_secret_names ["llm_openai_codex_api_key"]
+  @authorize_url "https://accounts.google.com/o/oauth2/v2/auth"
+  @token_url "https://oauth2.googleapis.com/token"
+  @default_redirect_uri "http://localhost:51121/oauth-callback"
+  @default_project_id "rising-fact-p41fc"
+  @client_id_secret_names [
+    "google_antigravity_oauth_client_id",
+    "GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_ID"
+  ]
+  @client_secret_secret_names [
+    "google_antigravity_oauth_client_secret",
+    "GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_SECRET"
+  ]
+  @scopes [
+    "https://www.googleapis.com/auth/cloud-platform",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+    "https://www.googleapis.com/auth/cclog",
+    "https://www.googleapis.com/auth/experimentsandconfigs"
+  ]
+  @secret_type "google_antigravity_oauth"
+  @near_expiry_ms 5 * 60 * 1000
 
   @type oauth_secret :: %{required(String.t()) => String.t() | integer() | nil}
   @type login_opt ::
           {:on_auth, (String.t(), String.t() | nil -> any())}
           | {:on_progress, (String.t() -> any())}
           | {:on_prompt, (map() -> String.t() | charlist())}
-          | {:originator, String.t()}
           | {:redirect_uri, String.t()}
           | {:state, String.t()}
+          | {:project_id, String.t()}
+          | {:email, String.t()}
 
   @doc false
   @spec oauth_client_id() :: String.t()
   def oauth_client_id do
-    case System.get_env("OPENAI_CODEX_OAUTH_CLIENT_ID") do
-      value when is_binary(value) and value != "" -> value
-      _ -> @client_id
-    end
+    resolve_client_credential!(
+      @client_id_secret_names,
+      "GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_ID",
+      "client id"
+    )
+  end
+
+  @doc false
+  @spec oauth_client_secret() :: String.t()
+  def oauth_client_secret do
+    resolve_client_credential!(
+      @client_secret_secret_names,
+      "GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_SECRET",
+      "client secret"
+    )
   end
 
   @doc """
-  Build an OAuth authorization URL + PKCE verifier/state.
+  Build an OAuth authorization URL + PKCE verifier.
+
+  Defaults to a localhost callback URI (`http://localhost:51121/oauth-callback`).
   """
   @spec authorize_url(keyword()) :: {:ok, map()}
   def authorize_url(opts \\ []), do: build_authorize_url(opts)
 
   @doc """
-  Run OpenAI Codex OAuth flow (open URL + paste code/callback URL).
+  Run Google Antigravity OAuth flow (open URL + paste code/callback URL).
   """
   @spec login_device_flow([login_opt()]) :: {:ok, oauth_secret()} | {:error, term()}
   def login_device_flow(opts \\ []) when is_list(opts) do
@@ -55,39 +81,43 @@ defmodule Ai.Auth.OpenAICodexOAuth do
            notify_auth(
              opts,
              auth.authorize_url,
-             "Paste the callback URL (or code#state) after browser sign-in."
+             "Paste the callback URL (or authorization code) after browser sign-in."
            ),
          {:ok, %{code: code, state: state}} <- prompt_code(opts),
          :ok <- ensure_state_matches(auth.state, state),
          :ok <- notify_progress(opts, "Exchanging authorization code for tokens..."),
          {:ok, secret} <-
-           exchange_code_for_secret(code, auth.code_verifier, redirect_uri: auth.redirect_uri) do
+           exchange_code_for_secret(code, auth.code_verifier,
+             redirect_uri: auth.redirect_uri,
+             project_id: Keyword.get(opts, :project_id, @default_project_id),
+             email: Keyword.get(opts, :email)
+           ) do
       {:ok, secret}
     end
   end
 
   @doc """
-  Build an OAuth authorization URL + PKCE verifier/state.
+  Build an OAuth authorization URL + PKCE verifier.
+
+  Defaults to a localhost callback URI (`http://localhost:51121/oauth-callback`).
   """
   @spec build_authorize_url(keyword()) :: {:ok, map()}
   def build_authorize_url(opts \\ []) do
     redirect_uri = Keyword.get(opts, :redirect_uri, @default_redirect_uri)
-    originator = Keyword.get(opts, :originator, "lemon")
     %{verifier: verifier, challenge: challenge} = OAuthPKCE.generate()
-    state = Keyword.get(opts, :state, OAuthPKCE.random_state())
+    state = Keyword.get(opts, :state, verifier)
 
     params =
       URI.encode_query(%{
-        "response_type" => "code",
         "client_id" => oauth_client_id(),
+        "response_type" => "code",
         "redirect_uri" => redirect_uri,
-        "scope" => @scope,
+        "scope" => Enum.join(@scopes, " "),
         "code_challenge" => challenge,
         "code_challenge_method" => "S256",
         "state" => state,
-        "id_token_add_organizations" => "true",
-        "codex_cli_simplified_flow" => "true",
-        "originator" => originator
+        "access_type" => "offline",
+        "prompt" => "consent"
       })
 
     {:ok,
@@ -101,10 +131,9 @@ defmodule Ai.Auth.OpenAICodexOAuth do
   end
 
   @doc """
-  Parse manual pasted OAuth input. Accepts:
+  Parse callback/manual pasted OAuth input. Accepts:
   - full callback URL
   - query string containing `code=`
-  - `code#state`
   - plain code
   """
   @spec parse_authorization_input(String.t()) ::
@@ -119,12 +148,6 @@ defmodule Ai.Auth.OpenAICodexOAuth do
 
         String.contains?(value, "://") ->
           parse_authorization_url(value)
-
-        String.contains?(value, "#") ->
-          case String.split(value, "#", parts: 2) do
-            [code, state] -> %{code: non_empty_binary(code), state: non_empty_binary(state)}
-            _ -> %{code: nil, state: nil}
-          end
 
         String.contains?(value, "code=") ->
           params = URI.decode_query(value)
@@ -144,6 +167,8 @@ defmodule Ai.Auth.OpenAICodexOAuth do
 
   @doc """
   Exchange authorization code + PKCE verifier for an OAuth secret payload.
+
+  `project_id` may be passed in options; defaults to a fallback project.
   """
   @spec exchange_code_for_secret(String.t(), String.t(), keyword()) ::
           {:ok, oauth_secret()} | {:error, term()}
@@ -151,36 +176,23 @@ defmodule Ai.Auth.OpenAICodexOAuth do
 
   def exchange_code_for_secret(code, code_verifier, opts)
       when is_binary(code) and is_binary(code_verifier) do
+    project_id = Keyword.get(opts, :project_id, @default_project_id)
     redirect_uri = Keyword.get(opts, :redirect_uri, @default_redirect_uri)
 
     body = %{
-      "grant_type" => "authorization_code",
       "client_id" => oauth_client_id(),
+      "client_secret" => oauth_client_secret(),
       "code" => code,
-      "code_verifier" => code_verifier,
-      "redirect_uri" => redirect_uri
+      "grant_type" => "authorization_code",
+      "redirect_uri" => redirect_uri,
+      "code_verifier" => code_verifier
     }
 
     with {:ok, data} <- post_form(@token_url, body),
          {:ok, token_data} <- parse_token_response(data),
-         account_id when is_binary(account_id) and account_id != "" <-
-           extract_account_id(token_data.access_token) do
-      now = System.system_time(:millisecond)
-
-      {:ok,
-       %{
-         "type" => @secret_type,
-         "access_token" => token_data.access_token,
-         "refresh_token" => token_data.refresh_token,
-         "expires_at_ms" => token_data.expires_at_ms,
-         "account_id" => account_id,
-         "redirect_uri" => redirect_uri,
-         "created_at_ms" => now,
-         "updated_at_ms" => now
-       }}
-    else
-      nil -> {:error, :missing_account_id}
-      {:error, reason} -> {:error, reason}
+         {:ok, secret} <-
+           build_oauth_secret(token_data, project_id, Keyword.get(opts, :email), redirect_uri) do
+      {:ok, secret}
     end
   end
 
@@ -205,7 +217,10 @@ defmodule Ai.Auth.OpenAICodexOAuth do
           :not_oauth
         end
 
-      _ ->
+      {:ok, _decoded} ->
+        :not_oauth
+
+      {:error, _reason} ->
         :not_oauth
     end
   end
@@ -213,9 +228,10 @@ defmodule Ai.Auth.OpenAICodexOAuth do
   def decode_secret(_), do: :not_oauth
 
   @doc """
-  Resolve a usable Codex access token from an OAuth secret.
+  Resolve a usable Google Antigravity API key JSON string (`{"token","projectId"}`)
+  from a secret value.
 
-  Returns `:ignore` for non-Codex-OAuth payloads.
+  Returns `:ignore` for non-Antigravity-OAuth payloads.
   """
   @spec resolve_api_key_from_secret(String.t(), String.t()) ::
           {:ok, String.t()} | :ignore | {:error, term()}
@@ -224,83 +240,48 @@ defmodule Ai.Auth.OpenAICodexOAuth do
     with {:ok, secret} <- decode_secret(secret_value),
          {:ok, refreshed_secret, changed?} <- ensure_fresh_secret(secret),
          access_token when is_binary(access_token) and access_token != "" <-
-           non_empty_binary(refreshed_secret["access_token"]) do
+           non_empty_binary(refreshed_secret["access_token"]),
+         project_id when is_binary(project_id) and project_id != "" <-
+           project_id_from_secret(refreshed_secret) do
       if changed? do
         persist_secret(secret_name, refreshed_secret)
       end
 
-      {:ok, access_token}
+      {:ok, Jason.encode!(%{"token" => access_token, "projectId" => project_id})}
     else
       :not_oauth -> :ignore
-      nil -> {:error, :missing_access_token}
+      nil -> {:error, :invalid_antigravity_secret}
       {:error, reason} -> {:error, reason}
     end
   end
 
   def resolve_api_key_from_secret(_, _), do: {:error, :invalid_secret_value}
 
-  @doc """
-  Resolve a Codex access token using env-first resolution and Lemon secret-store OAuth.
-
-  Resolution order:
-  1. `OPENAI_CODEX_API_KEY` (env first, then same-name Lemon secret)
-  2. `CHATGPT_TOKEN` (env first, then same-name Lemon secret)
-  3. Default Lemon OAuth secret names (for example `llm_openai_codex_api_key`)
-  """
-  @spec resolve_access_token() :: String.t() | nil
-  def resolve_access_token do
-    resolve_named_secret("OPENAI_CODEX_API_KEY", prefer_env: true, env_fallback: true) ||
-      resolve_named_secret("CHATGPT_TOKEN", prefer_env: true, env_fallback: true) ||
-      Enum.find_value(@default_secret_names, fn secret_name ->
-        resolve_named_secret(secret_name, prefer_env: false, env_fallback: false)
-      end)
-  end
-
-  defp resolve_named_secret(secret_name, opts) when is_binary(secret_name) do
-    with {:ok, value, _source} <- Secrets.resolve(secret_name, opts) do
-      case resolve_api_key_from_secret(secret_name, value) do
-        {:ok, api_key} ->
-          api_key
-
-        :ignore ->
-          non_empty_binary(value)
-
-        {:error, reason} ->
-          Logger.debug(
-            "Failed to resolve OpenAI Codex OAuth secret #{secret_name}: #{inspect(reason)}"
-          )
-
-          non_empty_binary(value)
-      end
-    else
-      _ -> nil
-    end
-  end
-
   defp ensure_fresh_secret(secret) when is_map(secret) do
     access_token = non_empty_binary(secret["access_token"])
     refresh_token = non_empty_binary(secret["refresh_token"])
     expires_at_ms = parse_integer(secret["expires_at_ms"])
+    project_id = project_id_from_secret(secret)
 
     should_refresh? =
       cond do
         is_nil(refresh_token) -> false
+        is_nil(project_id) -> false
         is_nil(access_token) -> true
         is_nil(expires_at_ms) -> false
         true -> near_expiry?(expires_at_ms)
       end
 
     if should_refresh? do
-      case refresh_access_token(refresh_token, refresh_token) do
+      case refresh_access_token(refresh_token, project_id) do
         {:ok, refreshed} ->
-          account_id = extract_account_id(refreshed.access_token)
-
           updated =
             secret
             |> Map.put("access_token", refreshed.access_token)
             |> Map.put("refresh_token", refreshed.refresh_token)
             |> Map.put("expires_at_ms", refreshed.expires_at_ms)
-            |> maybe_put("account_id", account_id)
+            |> Map.put("project_id", refreshed.project_id)
+            |> Map.put("projectId", refreshed.project_id)
             |> Map.put("updated_at_ms", System.system_time(:millisecond))
 
           {:ok, updated, true}
@@ -308,7 +289,7 @@ defmodule Ai.Auth.OpenAICodexOAuth do
         {:error, reason} ->
           if is_binary(access_token) and access_token != "" do
             Logger.debug(
-              "OpenAI Codex OAuth refresh failed; using existing token: #{inspect(reason)}"
+              "Google Antigravity OAuth refresh failed; using existing token: #{inspect(reason)}"
             )
 
             {:ok, secret, false}
@@ -321,12 +302,14 @@ defmodule Ai.Auth.OpenAICodexOAuth do
     end
   end
 
-  defp refresh_access_token(refresh_token, fallback_refresh_token)
-       when is_binary(refresh_token) and refresh_token != "" do
+  defp refresh_access_token(refresh_token, project_id)
+       when is_binary(refresh_token) and refresh_token != "" and is_binary(project_id) and
+              project_id != "" do
     body = %{
-      "grant_type" => "refresh_token",
+      "client_id" => oauth_client_id(),
+      "client_secret" => oauth_client_secret(),
       "refresh_token" => refresh_token,
-      "client_id" => oauth_client_id()
+      "grant_type" => "refresh_token"
     }
 
     with {:ok, data} <- post_form(@token_url, body),
@@ -334,8 +317,9 @@ defmodule Ai.Auth.OpenAICodexOAuth do
       {:ok,
        %{
          access_token: token_data.access_token,
-         refresh_token: token_data.refresh_token || fallback_refresh_token,
-         expires_at_ms: token_data.expires_at_ms
+         refresh_token: token_data.refresh_token || refresh_token,
+         expires_at_ms: token_data.expires_at_ms,
+         project_id: project_id
        }}
     end
   end
@@ -373,14 +357,38 @@ defmodule Ai.Auth.OpenAICodexOAuth do
 
   defp parse_token_response(other), do: {:error, {:invalid_token_response, other}}
 
+  defp build_oauth_secret(token_data, project_id, email, redirect_uri) do
+    project_id = non_empty_binary(project_id) || @default_project_id
+
+    if project_id == "" do
+      {:error, :missing_project_id}
+    else
+      now = System.system_time(:millisecond)
+
+      {:ok,
+       %{
+         "type" => @secret_type,
+         "access_token" => token_data.access_token,
+         "refresh_token" => token_data.refresh_token,
+         "expires_at_ms" => token_data.expires_at_ms,
+         "project_id" => project_id,
+         "projectId" => project_id,
+         "email" => non_empty_binary(email),
+         "redirect_uri" => non_empty_binary(redirect_uri),
+         "created_at_ms" => now,
+         "updated_at_ms" => now
+       }}
+    end
+  end
+
   defp persist_secret(secret_name, secret) do
-    case Secrets.set(secret_name, encode_secret(secret), provider: "openai_codex_oauth") do
+    case Secrets.set(secret_name, encode_secret(secret), provider: "google_antigravity_oauth") do
       {:ok, _} ->
         :ok
 
       {:error, reason} ->
         Logger.debug(
-          "Failed to persist refreshed OpenAI Codex OAuth secret #{secret_name}: #{inspect(reason)}"
+          "Failed to persist refreshed Google Antigravity OAuth secret #{secret_name}: #{inspect(reason)}"
         )
 
         :ok
@@ -402,37 +410,6 @@ defmodule Ai.Auth.OpenAICodexOAuth do
     end
   end
 
-  defp extract_account_id(token) when is_binary(token) do
-    with [_header, payload, _signature] <- String.split(token, ".", parts: 3),
-         {:ok, decoded} <- decode_base64url(payload),
-         {:ok, claims} <- Jason.decode(decoded),
-         account_id when is_binary(account_id) and account_id != "" <-
-           get_in(claims, [@jwt_claim_path, "chatgpt_account_id"]) do
-      account_id
-    else
-      _ -> nil
-    end
-  end
-
-  defp extract_account_id(_), do: nil
-
-  defp decode_base64url(str) when is_binary(str) do
-    str
-    |> String.replace("-", "+")
-    |> String.replace("_", "/")
-    |> pad_base64()
-    |> Base.decode64()
-  end
-
-  defp pad_base64(str) do
-    case rem(String.length(str), 4) do
-      0 -> str
-      2 -> str <> "=="
-      3 -> str <> "="
-      _ -> str
-    end
-  end
-
   defp parse_authorization_url(value) do
     case URI.parse(value) do
       %URI{query: query} when is_binary(query) and query != "" ->
@@ -442,6 +419,10 @@ defmodule Ai.Auth.OpenAICodexOAuth do
       _ ->
         %{code: nil, state: nil}
     end
+  end
+
+  defp project_id_from_secret(secret) when is_map(secret) do
+    non_empty_binary(secret["project_id"]) || non_empty_binary(secret["projectId"])
   end
 
   defp near_expiry?(expires_at_ms) when is_integer(expires_at_ms) do
@@ -463,15 +444,29 @@ defmodule Ai.Auth.OpenAICodexOAuth do
 
   defp parse_integer(_), do: nil
 
-  defp non_empty_binary(value) when is_binary(value) do
-    trimmed = String.trim(value)
-    if trimmed == "", do: nil, else: trimmed
+  defp resolve_client_credential!(secret_names, env_name, label) when is_list(secret_names) do
+    value =
+      Enum.find_value(secret_names, fn secret_name ->
+        case Secrets.resolve(secret_name, prefer_env: false, env_fallback: false) do
+          {:ok, secret_value, _source} ->
+            non_empty_binary(secret_value)
+
+          _ ->
+            nil
+        end
+      end) || non_empty_binary(System.get_env(env_name))
+
+    case value do
+      v when is_binary(v) and v != "" ->
+        v
+
+      _ ->
+        names = Enum.join(secret_names, ", ")
+
+        raise ArgumentError,
+              "Missing Google Antigravity OAuth #{label}. Store it in Lemon secrets (#{names}) or set #{env_name}."
+    end
   end
-
-  defp non_empty_binary(_), do: nil
-
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp prompt_code(opts) do
     prompt_callback = Keyword.get(opts, :on_prompt)
@@ -480,8 +475,8 @@ defmodule Ai.Auth.OpenAICodexOAuth do
       cond do
         is_function(prompt_callback, 1) ->
           prompt_callback.(%{
-            message: "Paste callback URL (or code#state):",
-            placeholder: "http://localhost:1455/auth/callback?code=..."
+            message: "Paste callback URL (or authorization code):",
+            placeholder: "http://localhost:51121/oauth-callback?code=..."
           })
 
         is_function(prompt_callback, 0) ->
@@ -542,6 +537,13 @@ defmodule Ai.Auth.OpenAICodexOAuth do
   end
 
   defp ensure_state_matches(_, _), do: :ok
+
+  defp non_empty_binary(value) when is_binary(value) do
+    trimmed = String.trim(value)
+    if trimmed == "", do: nil, else: trimmed
+  end
+
+  defp non_empty_binary(_), do: nil
 
   defp normalize_prompt_input(value) when is_binary(value), do: String.trim(value)
 
