@@ -9,28 +9,15 @@ defmodule LemonCore.IntrospectionTest do
   end
 
   setup do
-    ensure_lemon_core_available()
+    case Store.start_link([]) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+    end
 
     original = Application.get_env(:lemon_core, :introspection, [])
     Application.put_env(:lemon_core, :introspection, Keyword.put(original, :enabled, true))
     on_exit(fn -> Application.put_env(:lemon_core, :introspection, original) end)
     :ok
-  end
-
-  defp ensure_lemon_core_available do
-    case Application.ensure_all_started(:lemon_core) do
-      {:ok, _} ->
-        :ok
-
-      {:error,
-       {:lemon_core,
-        {{:shutdown, {:failed_to_start_child, LemonCore.Store, {:already_started, _pid}}},
-         {LemonCore.Application, :start, [:normal, []]}}}} ->
-        :ok
-
-      {:error, reason} ->
-        raise "failed to start :lemon_core for introspection tests: #{inspect(reason)}"
-    end
   end
 
   test "build_event applies canonical envelope and redaction defaults" do

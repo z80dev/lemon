@@ -33,7 +33,7 @@ defmodule LemonGateway.TransportSupervisorTest do
   # Mock Transports for Testing
   # ============================================================================
 
-  defmodule TransportSupervisorTestMockTelegramTransport do
+  defmodule MockTelegramTransport do
     use Elixir.LemonGateway.Transport
     use GenServer
 
@@ -281,10 +281,10 @@ defmodule LemonGateway.TransportSupervisorTest do
     end
 
     test "does not start telegram transport when enable_telegram is false" do
-      setup_app([__MODULE__.TransportSupervisorTestMockTelegramTransport], %{enable_telegram: false})
+      setup_app([__MODULE__.MockTelegramTransport], %{enable_telegram: false})
 
       # Telegram transport should not be started
-      assert Process.whereis(__MODULE__.TransportSupervisorTestMockTelegramTransport) == nil
+      assert Process.whereis(__MODULE__.MockTelegramTransport) == nil
     end
 
     test "non-telegram transports are enabled by default" do
@@ -569,7 +569,7 @@ defmodule LemonGateway.TransportSupervisorTest do
 
     test "handles empty enabled transports list" do
       # All transports disabled
-      setup_app([__MODULE__.TransportSupervisorTestMockTelegramTransport], %{enable_telegram: false})
+      setup_app([__MODULE__.MockTelegramTransport], %{enable_telegram: false})
 
       # Supervisor should still be running but have fewer children
       assert Process.alive?(Process.whereis(TransportSupervisor))
@@ -578,7 +578,7 @@ defmodule LemonGateway.TransportSupervisorTest do
       # No telegram children since it's disabled
       transport_children =
         Enum.filter(children, fn {id, _, _, _} ->
-          id == __MODULE__.TransportSupervisorTestMockTelegramTransport
+          id == __MODULE__.MockTelegramTransport
         end)
 
       assert length(transport_children) == 0

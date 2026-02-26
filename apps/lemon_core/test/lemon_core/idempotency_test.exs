@@ -4,29 +4,16 @@ defmodule LemonCore.IdempotencyTest do
   alias LemonCore.{Idempotency, Store}
 
   setup do
-    ensure_lemon_core_available()
+    case Store.start_link([]) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+    end
 
     # Clear idempotency table to avoid cross-run collisions with persisted data.
     Store.list(:idempotency)
     |> Enum.each(fn {key, _value} -> Store.delete(:idempotency, key) end)
 
     :ok
-  end
-
-  defp ensure_lemon_core_available do
-    case Application.ensure_all_started(:lemon_core) do
-      {:ok, _} ->
-        :ok
-
-      {:error,
-       {:lemon_core,
-        {{:shutdown, {:failed_to_start_child, LemonCore.Store, {:already_started, _pid}}},
-         {LemonCore.Application, :start, [:normal, []]}}}} ->
-        :ok
-
-      {:error, reason} ->
-        raise "failed to start :lemon_core for idempotency tests: #{inspect(reason)}"
-    end
   end
 
   describe "get/2 and put/3" do

@@ -7,22 +7,15 @@ defmodule LemonGateway.IntrospectionTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.Introspection
-  alias LemonGateway.Scheduler
   alias LemonGateway.Types.Job
 
-  @run_timeout 60_000
-  @poll_interval 200
+  @run_timeout 20_000
+  @poll_interval 100
 
   setup do
     original = Application.get_env(:lemon_core, :introspection, [])
     Application.put_env(:lemon_core, :introspection, Keyword.put(original, :enabled, true))
     on_exit(fn -> Application.put_env(:lemon_core, :introspection, original) end)
-
-    # Some gateway tests stop/restart application components; ensure scheduler exists
-    # so Scheduler.submit/1 actually routes jobs during this test.
-    {:ok, _} = Application.ensure_all_started(:lemon_gateway)
-    assert Process.whereis(Scheduler) != nil
-
     :ok
   end
 
