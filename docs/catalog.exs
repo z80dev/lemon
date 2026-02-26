@@ -48,6 +48,24 @@
     max_age_days: 60
   },
   %{
+    path: "docs/foundry-tools-presentation.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-02-25],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/foundry-tools-tweets.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-02-25],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/long-running-agent-harnesses.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-02-25],
+    max_age_days: 90
+  },
+  %{
     path: "docs/model-selection-decoupling.md",
     owner: "@z80",
     last_reviewed: ~D[2026-02-20],
@@ -105,6 +123,12 @@
     path: "docs/telemetry.md",
     owner: "@z80",
     last_reviewed: ~D[2026-02-13],
+    max_age_days: 90
+  },
+  %{
+    path: "docs/security/secrets-keychain-audit-matrix.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-02-25],
     max_age_days: 90
   },
   %{
