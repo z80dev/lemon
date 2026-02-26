@@ -15,6 +15,13 @@ defmodule LemonChannels.Adapters.XAPITest.SecretResolverStub do
       value -> {:ok, value, :store}
     end
   end
+
+  def fetch_value(name, opts \\ []) do
+    case resolve(name, opts) do
+      {:ok, value, _source} -> value
+      {:error, _reason} -> nil
+    end
+  end
 end
 
 defmodule LemonChannels.Adapters.XAPITest do
@@ -134,7 +141,7 @@ defmodule LemonChannels.Adapters.XAPITest do
     assert config[:access_token] == "env-access-token"
   end
 
-  test "present app config values override environment fallback" do
+  test "present app config values override environment fallback for static fields" do
     System.put_env("X_API_CLIENT_ID", "env-client-id")
     System.put_env("X_API_CLIENT_SECRET", "env-client-secret")
     System.put_env("X_API_ACCESS_TOKEN", "env-access-token")
@@ -149,7 +156,8 @@ defmodule LemonChannels.Adapters.XAPITest do
 
     assert config[:client_id] == "app-client-id"
     assert config[:client_secret] == "app-client-secret"
-    assert config[:access_token] == "app-access-token"
+    # Token fields prefer runtime values (secrets/env) to preserve live refresh state.
+    assert config[:access_token] == "env-access-token"
     assert XAPI.configured?()
   end
 end

@@ -71,12 +71,31 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
     :persistent_term.put({TestTranscriber, :pid}, self())
     VoiceMockAPI.register_sent(self())
     LemonCore.RouterBridge.configure(router: VoiceTestRouter)
+    previous_telegram_env = Application.get_env(:lemon_channels, :telegram)
+
+    Application.put_env(:lemon_channels, :telegram, %{
+      bot_token: "token",
+      api_mod: VoiceMockAPI
+    })
+
+    case LemonChannels.Registry.register(LemonChannels.Adapters.Telegram) do
+      :ok -> :ok
+      {:error, :already_registered} -> :ok
+    end
 
     on_exit(fn ->
       if pid = Process.whereis(Elixir.LemonChannels.Adapters.Telegram.Transport) do
         if Process.alive?(pid) do
           GenServer.stop(pid, :normal)
         end
+      end
+
+      _ = LemonChannels.Registry.unregister("telegram")
+
+      if previous_telegram_env == nil do
+        Application.delete_env(:lemon_channels, :telegram)
+      else
+        Application.put_env(:lemon_channels, :telegram, previous_telegram_env)
       end
 
       :persistent_term.erase({VoiceTestRouter, :pid})
@@ -107,8 +126,6 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
   end
 
   test "transcribes voice and routes transcript" do
-    VoiceMockAPI.set_updates([voice_update()])
-
     {:ok, _pid} =
       Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
@@ -123,6 +140,8 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
         }
       )
 
+    VoiceMockAPI.set_updates([voice_update()])
+
     assert_receive {:transcribe, opts}, 200
     assert opts[:audio_bytes] == "AUDIO"
 
@@ -132,8 +151,6 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
   end
 
   test "voice disabled replies and skips routing" do
-    VoiceMockAPI.set_updates([voice_update()])
-
     {:ok, _pid} =
       Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{
@@ -145,6 +162,8 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
           voice_transcription_api_key: "key"
         }
       )
+
+    VoiceMockAPI.set_updates([voice_update()])
 
     assert_receive {:sent, text}, 200
     assert String.contains?(text, "Voice transcription is disabled")

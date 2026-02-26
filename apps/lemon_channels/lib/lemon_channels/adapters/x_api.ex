@@ -205,10 +205,33 @@ defmodule LemonChannels.Adapters.XAPI do
 
   defp resolve_runtime_value(env_var) do
     if use_secrets_resolution?() do
-      normalize_optional_string(Secrets.fetch_value(env_var))
+      normalize_optional_string(fetch_secret_value(env_var))
     else
       normalize_optional_string(System.get_env(env_var))
     end
+  end
+
+  defp fetch_secret_value(env_var) when is_binary(env_var) do
+    secrets_module = Application.get_env(:lemon_channels, :x_api_secrets_module, Secrets)
+
+    cond do
+      function_exported?(secrets_module, :fetch_value, 2) ->
+        secrets_module.fetch_value(env_var, [])
+
+      function_exported?(secrets_module, :fetch_value, 1) ->
+        secrets_module.fetch_value(env_var)
+
+      function_exported?(secrets_module, :resolve, 2) ->
+        case secrets_module.resolve(env_var, []) do
+          {:ok, value, _source} -> value
+          {:error, _reason} -> nil
+        end
+
+      true ->
+        nil
+    end
+  rescue
+    _ -> nil
   end
 
   defp use_secrets_resolution? do

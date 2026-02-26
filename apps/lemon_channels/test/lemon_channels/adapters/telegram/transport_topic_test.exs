@@ -64,10 +64,16 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
 
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
     old_gateway_config_env = Application.get_env(:lemon_channels, :gateway)
+    old_telegram_env = Application.get_env(:lemon_channels, :telegram)
 
     :persistent_term.put({TestRouter, :pid}, self())
 
     MockAPI.register_test(self())
+
+    case LemonChannels.Registry.register(LemonChannels.Adapters.Telegram) do
+      :ok -> :ok
+      {:error, :already_registered} -> :ok
+    end
 
     LemonCore.RouterBridge.configure(router: TestRouter)
 
@@ -82,8 +88,10 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
 
       :persistent_term.erase({TestRouter, :pid})
 
+      _ = LemonChannels.Registry.unregister("telegram")
       restore_router_bridge(old_router_bridge)
       restore_gateway_config_env(old_gateway_config_env)
+      restore_telegram_env(old_telegram_env)
     end)
 
     :ok
@@ -285,6 +293,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
       }
       |> Map.merge(overrides)
 
+    Application.put_env(:lemon_channels, :telegram, %{bot_token: token, api_mod: MockAPI})
+
     Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(config: config)
   end
 
@@ -306,6 +316,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
   defp restore_gateway_config_env(env) do
     Application.put_env(:lemon_channels, :gateway, env)
   end
+
+  defp restore_telegram_env(nil), do: Application.delete_env(:lemon_channels, :telegram)
+  defp restore_telegram_env(env), do: Application.put_env(:lemon_channels, :telegram, env)
 
   defp restore_router_bridge(nil), do: Application.delete_env(:lemon_core, :router_bridge)
   defp restore_router_bridge(config), do: Application.put_env(:lemon_core, :router_bridge, config)

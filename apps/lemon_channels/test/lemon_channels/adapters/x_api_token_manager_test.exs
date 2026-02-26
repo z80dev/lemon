@@ -21,17 +21,20 @@ defmodule LemonChannels.Adapters.XAPI.TokenManagerTest do
   alias LemonChannels.Adapters.XAPI
   alias LemonChannels.Adapters.XAPI.TokenManager
   alias LemonChannels.Adapters.XAPI.TokenManagerTest.SecretSink
+  @x_token_env_vars ~w(X_API_ACCESS_TOKEN X_API_REFRESH_TOKEN X_API_TOKEN_EXPIRES_AT)
 
   setup do
     previous_req_defaults = Req.default_options()
     previous_config = Application.get_env(:lemon_channels, XAPI)
     previous_use_secrets = Application.get_env(:lemon_channels, :x_api_use_secrets)
     previous_secrets_module = Application.get_env(:lemon_channels, :x_api_secrets_module)
+    previous_env = Map.new(@x_token_env_vars, fn key -> {key, System.get_env(key)} end)
 
     Req.default_options(plug: {Req.Test, __MODULE__})
     Req.Test.set_req_test_to_shared(%{})
     Application.put_env(:lemon_channels, :x_api_use_secrets, false)
     Application.delete_env(:lemon_channels, :x_api_secrets_module)
+    Enum.each(@x_token_env_vars, &System.delete_env/1)
 
     start_supervised!(SecretSink)
 
@@ -53,6 +56,14 @@ defmodule LemonChannels.Adapters.XAPI.TokenManagerTest do
       else
         Application.put_env(:lemon_channels, :x_api_secrets_module, previous_secrets_module)
       end
+
+      Enum.each(previous_env, fn {key, value} ->
+        if is_nil(value) do
+          System.delete_env(key)
+        else
+          System.put_env(key, value)
+        end
+      end)
 
       Req.default_options(previous_req_defaults)
       Req.Test.set_req_test_to_private(%{})
