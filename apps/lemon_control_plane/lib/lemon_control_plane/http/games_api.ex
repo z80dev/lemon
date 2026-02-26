@@ -107,13 +107,13 @@ defmodule LemonControlPlane.HTTP.GamesAPI do
       unless idempotency_key do
         error(conn, 400, "missing_param", "idempotency_key is required")
       else
-        case LemonGames.Matches.Service.submit_move(match_id, actor, move, idempotency_key) do
-          {:ok, match, seq} ->
+        case LemonGames.Matches.Service.submit_move_with_meta(match_id, actor, move, idempotency_key) do
+          {:ok, match, seq, idempotent_replay?} ->
             json(conn, 200, %{
               "match" =>
                 LemonGames.Matches.Projection.project_public_view(match, actor_slot(match, actor)),
               "accepted_event_seq" => seq,
-              "idempotent_replay" => false
+              "idempotent_replay" => idempotent_replay?
             })
 
           {:error, :not_found, msg} ->

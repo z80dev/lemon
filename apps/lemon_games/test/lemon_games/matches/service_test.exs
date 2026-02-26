@@ -105,6 +105,19 @@ defmodule LemonGames.Matches.ServiceTest do
     assert seq1 == seq2
   end
 
+  test "submit_move_with_meta marks idempotent replay" do
+    {:ok, match} = create_bot_match("connect4")
+    move = %{"kind" => "drop", "column" => 3}
+
+    assert {:ok, _m1, seq1, false} =
+             Service.submit_move_with_meta(match["id"], @actor, move, "idem-meta-1")
+
+    assert {:ok, _m2, seq2, true} =
+             Service.submit_move_with_meta(match["id"], @actor, move, "idem-meta-1")
+
+    assert seq1 == seq2
+  end
+
   test "submit_move idempotency keys are scoped per actor" do
     params = %{"game_type" => "connect4", "visibility" => "public"}
     {:ok, match} = Service.create_match(params, @actor)

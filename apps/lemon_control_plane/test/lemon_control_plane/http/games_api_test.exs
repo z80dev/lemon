@@ -63,6 +63,51 @@ defmodule LemonControlPlane.HTTP.GamesAPITest do
     assert 429 in statuses
   end
 
+  test "move endpoint reports idempotent replay on duplicate idempotency key" do
+    token = issue_token("agent-idem", "owner-idem")
+
+    create_conn =
+      conn(
+        :post,
+        "/v1/games/matches",
+        Jason.encode!(%{"game_type" => "connect4", "opponent" => %{"type" => "lemon_bot"}})
+      )
+      |> put_req_header("authorization", "Bearer " <> token)
+      |> put_req_header("content-type", "application/json")
+      |> Router.call([])
+
+    assert create_conn.status == 201
+    match_id = Jason.decode!(create_conn.resp_body)["match"]["id"]
+
+    request_body =
+      Jason.encode!(%{
+        "move" => %{"kind" => "drop", "column" => 3},
+        "idempotency_key" => "same-key"
+      })
+
+    first_move =
+      conn(:post, "/v1/games/matches/#{match_id}/moves", request_body)
+      |> put_req_header("authorization", "Bearer " <> token)
+      |> put_req_header("content-type", "application/json")
+      |> Router.call([])
+
+    second_move =
+      conn(:post, "/v1/games/matches/#{match_id}/moves", request_body)
+      |> put_req_header("authorization", "Bearer " <> token)
+      |> put_req_header("content-type", "application/json")
+      |> Router.call([])
+
+    assert first_move.status == 200
+    assert second_move.status == 200
+
+    first_body = Jason.decode!(first_move.resp_body)
+    second_body = Jason.decode!(second_move.resp_body)
+
+    assert first_body["idempotent_replay"] == false
+    assert second_body["idempotent_replay"] == true
+    assert second_body["accepted_event_seq"] == first_body["accepted_event_seq"]
+  end
+
   test "get_match returns 403 for private match to spectator" do
     {:ok, match} =
       LemonGames.Matches.Service.create_match(

@@ -95,11 +95,20 @@ defmodule LemonGames.Matches.Service do
   @spec submit_move(String.t(), map(), map(), String.t()) ::
           {:ok, map(), non_neg_integer()} | {:error, atom(), String.t()}
   def submit_move(match_id, actor, move, idempotency_key) do
+    case submit_move_with_meta(match_id, actor, move, idempotency_key) do
+      {:ok, match, seq, _idempotent_replay?} -> {:ok, match, seq}
+      error -> error
+    end
+  end
+
+  @spec submit_move_with_meta(String.t(), map(), map(), String.t()) ::
+          {:ok, map(), non_neg_integer(), boolean()} | {:error, atom(), String.t()}
+  def submit_move_with_meta(match_id, actor, move, idempotency_key) do
     scope = "game_move:" <> match_id <> ":" <> (actor["agent_id"] || "anonymous")
 
     case LemonCore.Idempotency.get(scope, idempotency_key) do
       {:ok, cached} ->
-        {:ok, cached["match"], cached["seq"]}
+        {:ok, cached["match"], cached["seq"], true}
 
       :miss ->
         result = do_submit_move(match_id, actor, move)
@@ -111,7 +120,7 @@ defmodule LemonGames.Matches.Service do
               "seq" => seq
             })
 
-            result
+            {:ok, match, seq, false}
 
           error ->
             error

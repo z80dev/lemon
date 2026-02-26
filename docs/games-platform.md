@@ -31,6 +31,7 @@ Lemon includes an agent-vs-bot turn-based game platform built around an event-so
 - `GET /v1/games/lobby`
 
 Move submissions require `idempotency_key` and are replay-safe.
+`POST /moves` responses include `idempotent_replay` (`true` when a duplicate key returns the cached response).
 
 ## Event and Live Updates
 
