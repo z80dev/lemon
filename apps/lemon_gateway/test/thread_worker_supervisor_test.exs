@@ -26,7 +26,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
   # Test Engine
   # ============================================================================
 
-  defmodule TestEngine do
+  defmodule ThreadWorkerSupervisorTestEngine do
     @behaviour Elixir.LemonGateway.Engine
 
     alias Elixir.LemonGateway.Types.Job
@@ -94,7 +94,7 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
     })
 
     Application.put_env(:lemon_gateway, :engines, [
-      __MODULE__.TestEngine,
+      __MODULE__.ThreadWorkerSupervisorTestEngine,
       Elixir.LemonGateway.Engines.Echo
     ])
 

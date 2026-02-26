@@ -30,7 +30,7 @@ defmodule LemonGateway.ApplicationTest do
     Elixir.LemonGateway.Scheduler
   ]
 
-  defmodule MockTelegramTransport do
+  defmodule ApplicationTestMockTelegramTransport do
     use Elixir.LemonGateway.Transport
 
     @impl true
@@ -492,7 +492,7 @@ defmodule LemonGateway.ApplicationTest do
       })
 
       Application.put_env(:lemon_gateway, :engines, [Elixir.LemonGateway.Engines.Echo])
-      Application.put_env(:lemon_gateway, :transports, [__MODULE__.MockTelegramTransport])
+      Application.put_env(:lemon_gateway, :transports, [__MODULE__.ApplicationTestMockTelegramTransport])
 
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 

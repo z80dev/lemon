@@ -4,7 +4,7 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
 
   alias Elixir.LemonRouter.ToolStatusCoalescer
 
-  defmodule TestTelegramPlugin do
+  defmodule ToolStatusCoalescerTestTelegramPlugin do
     @moduledoc false
 
     def id, do: "telegram"
@@ -55,17 +55,17 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
       {:ok, _} = LemonChannels.Outbox.Dedupe.start_link([])
     end
 
-    :persistent_term.put({__MODULE__.TestTelegramPlugin, :test_pid}, self())
+    :persistent_term.put({__MODULE__.ToolStatusCoalescerTestTelegramPlugin, :test_pid}, self())
 
     existing = LemonChannels.Registry.get_plugin("telegram")
     _ = LemonChannels.Registry.unregister("telegram")
 
     :ok =
-      LemonChannels.Registry.register(__MODULE__.TestTelegramPlugin)
+      LemonChannels.Registry.register(__MODULE__.ToolStatusCoalescerTestTelegramPlugin)
 
     on_exit(fn ->
       _ =
-        :persistent_term.erase({__MODULE__.TestTelegramPlugin, :test_pid})
+        :persistent_term.erase({__MODULE__.ToolStatusCoalescerTestTelegramPlugin, :test_pid})
 
       if is_pid(Process.whereis(LemonChannels.Registry)) do
         _ = LemonChannels.Registry.unregister("telegram")

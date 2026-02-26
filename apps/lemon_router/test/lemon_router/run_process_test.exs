@@ -13,7 +13,7 @@ defmodule LemonRouter.RunProcessTest do
   alias LemonCore.ResumeToken
   alias Elixir.LemonRouter.RunProcess
 
-  defmodule TestOutboxAPI do
+  defmodule RunProcessTestOutboxAPI do
     @moduledoc false
     use Agent
 
@@ -47,7 +47,7 @@ defmodule LemonRouter.RunProcessTest do
     end
   end
 
-  defmodule TestTelegramPlugin do
+  defmodule RunProcessTestTelegramPlugin do
     @moduledoc false
 
     def id, do: "telegram"
@@ -781,15 +781,15 @@ defmodule LemonRouter.RunProcessTest do
         LemonChannels.Outbox.Dedupe.start_link([])
       end)
 
-      :persistent_term.put({__MODULE__.TestTelegramPlugin, :notify_pid}, self())
+      :persistent_term.put({__MODULE__.RunProcessTestTelegramPlugin, :notify_pid}, self())
 
       existing = LemonChannels.Registry.get_plugin("telegram")
       _ = LemonChannels.Registry.unregister("telegram")
-      :ok = LemonChannels.Registry.register(__MODULE__.TestTelegramPlugin)
+      :ok = LemonChannels.Registry.register(__MODULE__.RunProcessTestTelegramPlugin)
 
       on_exit(fn ->
         _ =
-          :persistent_term.erase({__MODULE__.TestTelegramPlugin, :notify_pid})
+          :persistent_term.erase({__MODULE__.RunProcessTestTelegramPlugin, :notify_pid})
 
         if is_pid(Process.whereis(LemonChannels.Registry)) do
           _ = LemonChannels.Registry.unregister("telegram")
@@ -879,15 +879,15 @@ defmodule LemonRouter.RunProcessTest do
         LemonChannels.Outbox.Dedupe.start_link([])
       end)
 
-      :persistent_term.put({__MODULE__.TestTelegramPlugin, :notify_pid}, self())
+      :persistent_term.put({__MODULE__.RunProcessTestTelegramPlugin, :notify_pid}, self())
 
       existing = LemonChannels.Registry.get_plugin("telegram")
       _ = LemonChannels.Registry.unregister("telegram")
-      :ok = LemonChannels.Registry.register(__MODULE__.TestTelegramPlugin)
+      :ok = LemonChannels.Registry.register(__MODULE__.RunProcessTestTelegramPlugin)
 
       on_exit(fn ->
         _ =
-          :persistent_term.erase({__MODULE__.TestTelegramPlugin, :notify_pid})
+          :persistent_term.erase({__MODULE__.RunProcessTestTelegramPlugin, :notify_pid})
 
         if is_pid(Process.whereis(LemonChannels.Registry)) do
           _ = LemonChannels.Registry.unregister("telegram")

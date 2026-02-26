@@ -7,7 +7,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
   alias Elixir.CodingAgent.RunGraph
   alias LemonCore.RunRequest
 
-  defmodule StubRunOrchestrator do
+  defmodule TaskAsyncStubRunOrchestrator do
     use Agent
 
     def start_link(_opts) do
@@ -31,7 +31,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
     end
   end
 
-  defmodule SessionSpy do
+  defmodule TaskAsyncSessionSpy do
     def follow_up(pid, text) do
       send(pid, {:session_follow_up, text})
       :ok
@@ -39,8 +39,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
   end
 
   setup do
-    start_supervised!(__MODULE__.StubRunOrchestrator)
-    __MODULE__.StubRunOrchestrator.configure(self())
+    start_supervised!(__MODULE__.TaskAsyncStubRunOrchestrator)
+    __MODULE__.TaskAsyncStubRunOrchestrator.configure(self())
 
     # Clear stores before each test
     try do
@@ -78,11 +78,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "completed"}
             }
           end,
-          session_module: __MODULE__.SessionSpy,
+          session_module: __MODULE__.TaskAsyncSessionSpy,
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: __MODULE__.StubRunOrchestrator
+          run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
       assert %AgentCore.Types.AgentToolResult{} = result
@@ -118,11 +118,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "completed"}
             }
           end,
-          session_module: __MODULE__.SessionSpy,
+          session_module: __MODULE__.TaskAsyncSessionSpy,
           session_pid: dead_pid,
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: __MODULE__.StubRunOrchestrator
+          run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
       assert %AgentCore.Types.AgentToolResult{} = result
@@ -154,11 +154,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "completed"}
             }
           end,
-          session_module: __MODULE__.SessionSpy,
+          session_module: __MODULE__.TaskAsyncSessionSpy,
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: __MODULE__.StubRunOrchestrator
+          run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
       refute_receive {:session_follow_up, _text}, 200
@@ -734,11 +734,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "completed"}
             }
           end,
-          session_module: __MODULE__.SessionSpy,
+          session_module: __MODULE__.TaskAsyncSessionSpy,
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: __MODULE__.StubRunOrchestrator
+          run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
       task_id = result.details.task_id
@@ -768,11 +768,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           run_override: fn _on_update, _signal ->
             {:error, "connection refused"}
           end,
-          session_module: __MODULE__.SessionSpy,
+          session_module: __MODULE__.TaskAsyncSessionSpy,
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: __MODULE__.StubRunOrchestrator
+          run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
       task_id = result.details.task_id
@@ -803,11 +803,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "completed"}
             }
           end,
-          session_module: __MODULE__.SessionSpy,
+          session_module: __MODULE__.TaskAsyncSessionSpy,
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: __MODULE__.StubRunOrchestrator
+          run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
       task_id = result.details.task_id
@@ -838,11 +838,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "error", error: "timeout"}
             }
           end,
-          session_module: __MODULE__.SessionSpy,
+          session_module: __MODULE__.TaskAsyncSessionSpy,
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: __MODULE__.StubRunOrchestrator
+          run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
       task_id = result.details.task_id
@@ -894,7 +894,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: __MODULE__.StubRunOrchestrator
+          run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
       assert %AgentCore.Types.AgentToolResult{} = result
@@ -927,7 +927,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: __MODULE__.StubRunOrchestrator
+          run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
       assert %AgentCore.Types.AgentToolResult{} = result
@@ -956,11 +956,11 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "completed"}
             }
           end,
-          session_module: __MODULE__.SessionSpy,
+          session_module: __MODULE__.TaskAsyncSessionSpy,
           session_pid: nil,
           session_key: "agent:main:main",
           agent_id: "main",
-          run_orchestrator: __MODULE__.StubRunOrchestrator
+          run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
       assert %AgentCore.Types.AgentToolResult{} = result
@@ -1049,7 +1049,7 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
               details: %{status: "completed"}
             }
           end,
-          session_module: __MODULE__.SessionSpy,
+          session_module: __MODULE__.TaskAsyncSessionSpy,
           session_pid: dead_pid,
           session_key: "agent:unknown_agent:main",
           agent_id: "unknown_agent",
