@@ -6,10 +6,7 @@ defmodule LemonCore.SecretsTest do
   alias LemonCore.Store
 
   setup do
-    case Store.start_link([]) do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-    end
+    ensure_lemon_core_available()
 
     clear_secrets_table()
 
@@ -22,6 +19,22 @@ defmodule LemonCore.SecretsTest do
     end)
 
     :ok
+  end
+
+  defp ensure_lemon_core_available do
+    case Application.ensure_all_started(:lemon_core) do
+      {:ok, _} ->
+        :ok
+
+      {:error,
+       {:lemon_core,
+        {{:shutdown, {:failed_to_start_child, LemonCore.Store, {:already_started, _pid}}},
+         {LemonCore.Application, :start, [:normal, []]}}}} ->
+        :ok
+
+      {:error, reason} ->
+        raise "failed to start :lemon_core for secrets tests: #{inspect(reason)}"
+    end
   end
 
   test "set/get round-trip works" do
