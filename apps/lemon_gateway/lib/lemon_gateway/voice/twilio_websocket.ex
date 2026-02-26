@@ -10,7 +10,7 @@ defmodule LemonGateway.Voice.TwilioWebSocket do
 
   require Logger
 
-  alias LemonGateway.Voice.{CallSession, DeepgramClient}
+  alias LemonGateway.Voice.{CallSession, Config, DeepgramClient, RecordingManager}
 
   # WebSock Callbacks
 
@@ -143,7 +143,11 @@ defmodule LemonGateway.Voice.TwilioWebSocket do
 
     Logger.info("Twilio stream started: stream_sid=#{stream_sid}, call_sid=#{call_sid}")
 
-    {:ok, %{state | stream_sid: stream_sid, call_sid: call_sid || state.call_sid}}
+    # Start recording via Twilio REST API (dual-channel)
+    actual_call_sid = call_sid || state.call_sid
+    start_call_recording(actual_call_sid)
+
+    {:ok, %{state | stream_sid: stream_sid, call_sid: actual_call_sid}}
   end
 
   defp handle_twilio_message(%{"event" => "media"} = data, state) do
@@ -233,5 +237,30 @@ defmodule LemonGateway.Voice.TwilioWebSocket do
       {:error, reason} ->
         raise "Failed to start Deepgram client for #{call_sid}: #{inspect(reason)}"
     end
+  end
+
+  defp start_call_recording(call_sid) do
+    # Build the recording status callback URL from the public URL config
+    callback_opts =
+      case Config.public_url() do
+        nil ->
+          Logger.warning("No VOICE_PUBLIC_URL configured — recording callback won't fire")
+          []
+
+        public_url ->
+          base = String.trim_trailing(public_url, "/")
+          [recording_callback_url: "#{base}/webhooks/twilio/voice/recording"]
+      end
+
+    # Start recording in a background task so we don't block the WebSocket
+    Task.start(fn ->
+      case RecordingManager.start_recording(call_sid, callback_opts) do
+        {:ok, recording_sid} ->
+          Logger.info("Recording #{recording_sid} started for call #{call_sid}")
+
+        {:error, reason} ->
+          Logger.error("Failed to start recording for #{call_sid}: #{inspect(reason)}")
+      end
+    end)
   end
 end

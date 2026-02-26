@@ -786,6 +786,19 @@ defmodule LemonControlPlane.Protocol.Schemas do
       required: %{
         "wizardId" => :string
       }
+    },
+
+    # Games token methods
+    "games.token.issue" => %{
+      required: %{"agentId" => :string, "ownerId" => :string},
+      optional: %{"scopes" => :list, "ttlHours" => :integer}
+    },
+    "games.token.revoke" => %{
+      required: %{"tokenHash" => :string},
+      optional: %{}
+    },
+    "games.tokens.list" => %{
+      optional: %{}
     }
   }
 

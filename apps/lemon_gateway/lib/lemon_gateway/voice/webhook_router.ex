@@ -5,12 +5,15 @@ defmodule LemonGateway.Voice.WebhookRouter do
   Exposes:
   - POST /webhooks/twilio/voice - Incoming call webhook
   - POST /webhooks/twilio/voice/status - Call status callbacks
+  - POST /webhooks/twilio/voice/recording - Recording status callback (auto-downloads)
   - WebSocket /webhooks/twilio/voice/stream - Media stream
   """
 
   use Plug.Router
 
   require Logger
+
+  alias LemonGateway.Voice.RecordingDownloader
 
   plug(Plug.Logger, log: :debug)
 
@@ -48,6 +51,36 @@ defmodule LemonGateway.Voice.WebhookRouter do
     status = params["CallStatus"]
 
     Logger.info("Call #{call_sid} status: #{status}")
+
+    send_resp(conn, 200, "OK")
+  end
+
+  # Recording status callback - triggered when a recording is ready
+  post "/webhooks/twilio/voice/recording" do
+    params = conn.params || %{}
+
+    recording_sid = params["RecordingSid"]
+    call_sid = params["CallSid"]
+    status = params["RecordingStatus"]
+    duration = params["RecordingDuration"]
+
+    Logger.info(
+      "Recording #{recording_sid} for call #{call_sid}: " <>
+        "status=#{status}, duration=#{duration}s"
+    )
+
+    if status == "completed" do
+      # Download the recording in a background task so we don't block the webhook response
+      Task.start(fn ->
+        case RecordingDownloader.download(params) do
+          {:ok, path} ->
+            Logger.info("Recording downloaded: #{path}")
+
+          {:error, reason} ->
+            Logger.error("Recording download failed: #{inspect(reason)}")
+        end
+      end)
+    end
 
     send_resp(conn, 200, "OK")
   end

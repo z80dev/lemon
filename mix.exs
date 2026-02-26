@@ -6,7 +6,8 @@ defmodule Lemon.MixProject do
       apps_path: "apps",
       version: "0.1.0",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      releases: releases()
     ]
   end
 
@@ -17,5 +18,19 @@ defmodule Lemon.MixProject do
   # Run "mix help deps" for examples and options.
   defp deps do
     []
+  end
+
+  defp releases do
+    [
+      games_platform: [
+        applications: [
+          lemon_core: :permanent,
+          lemon_games: :permanent,
+          lemon_web: :permanent
+        ],
+        include_executables_for: [:unix],
+        cookie: "games_platform_cookie"
+      ]
+    ]
   end
 end

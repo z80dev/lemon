@@ -161,7 +161,11 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.EventsSubscribe,
     LemonControlPlane.Methods.EventsUnsubscribe,
     LemonControlPlane.Methods.EventsIngest,
-    LemonControlPlane.Methods.EventsSubscriptionsList
+    LemonControlPlane.Methods.EventsSubscriptionsList,
+    # Games tokens
+    LemonControlPlane.Methods.GamesTokenIssue,
+    LemonControlPlane.Methods.GamesTokenRevoke,
+    LemonControlPlane.Methods.GamesTokensList
   ]
 
   @capability_methods %{

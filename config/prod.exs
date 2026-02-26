@@ -16,3 +16,13 @@ config :lemon_core, LemonCore.Store,
 config :lemon_control_plane, :browser_local_fallback, true
 
 config :lemon_web, LemonWeb.Endpoint, cache_static_manifest: "priv/static/cache_manifest.json"
+
+# Enable autoplay for games platform - bots will automatically create and play matches
+config :lemon_games, :autoplay,
+  enabled: true,
+  # Check every 30 seconds if we need more matches
+  interval_ms: 30_000,
+  # Target number of active matches to maintain
+  target_active_matches: 5,
+  # Max concurrent matches to prevent overload
+  max_concurrent_matches: 10

@@ -444,3 +444,42 @@ Completed a planning close-out pass for a historically implemented phase-5 miles
 **Validation:**
 - `mix compile --no-optional-deps`
 - `mix test apps/ai`
+
+### Agent games platform bearer parser simplification + mixed-case coverage
+**Plan:** `PLN-20260226-agent-games-platform`  
+**Status:** `in_progress`
+
+Refined bearer-auth parsing internals while keeping all malformed-header protections intact.
+
+**Changes:**
+- `apps/lemon_control_plane/lib/lemon_control_plane/http/games_api.ex`
+  - Replaced layered trim/comma/whitespace checks with a strict single-regex token contract:
+    - `~r/^(?i:bearer) ([^\s,]+)$/u`
+  - Preserves deterministic `:invalid` handling for malformed values (duplicate headers, comma-delimited payloads, internal/padded whitespace, blank token).
+- `apps/lemon_control_plane/test/lemon_control_plane/http/games_api_test.exs`
+  - Added regression: mixed-case scheme (`BeArEr`) succeeds on `POST /v1/games/matches`.
+  - Added regression: mixed-case scheme (`bEaReR`) succeeds on `GET /v1/games/matches/:id/events`.
+
+**Validation:**
+- `mix test apps/lemon_control_plane/test/lemon_control_plane/http/games_api_test.exs apps/lemon_games/test/lemon_games/matches/service_test.exs apps/lemon_web/test/lemon_web/live/games_live_test.exs` ✅
+
+### Agent games platform bearer spacing compatibility hardening
+**Plan:** `PLN-20260226-agent-games-platform`  
+**Status:** `in_progress`
+
+Expanded bearer-auth compatibility to accept multiple ASCII spaces between scheme and token while preserving strict malformed-header rejection semantics.
+
+**Changes:**
+- `apps/lemon_control_plane/lib/lemon_control_plane/http/games_api.ex`
+  - Updated strict auth regex from:
+    - `~r/^(?i:bearer) ([^\s,]+)$/u`
+    to:
+    - `~r/^(?i:bearer) +([^\s,]+)$/u`
+  - Compatibility gain: accepts headers like `Bearer   <token>`.
+  - Safety invariants preserved: still rejects comma-delimited credentials, blank tokens, and whitespace within token payloads.
+- `apps/lemon_control_plane/test/lemon_control_plane/http/games_api_test.exs`
+  - Added regression: `POST /v1/games/matches` succeeds with multi-space bearer separator.
+  - Added regression: `GET /v1/games/matches/:id` succeeds with multi-space bearer separator.
+
+**Validation:**
+- `mix test apps/lemon_control_plane/test/lemon_control_plane/http/games_api_test.exs apps/lemon_games/test/lemon_games/matches/service_test.exs apps/lemon_web/test/lemon_web/live/games_live_test.exs` ✅

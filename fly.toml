@@ -1,0 +1,45 @@
+# Fly.io configuration for games.zeebot.xyz
+
+app = 'games-zeebot-xyz'
+primary_region = 'iad'
+
+[build]
+  dockerfile = "Dockerfile"
+  context = ".."
+
+[env]
+  MIX_ENV = "prod"
+  LEMON_STORE_PATH = "/data/store"
+  LEMON_WEB_HOST = "games.zeebot.xyz"
+  LEMON_WEB_PORT = "8080"
+  PHX_HOST = "games.zeebot.xyz"
+  PHX_SERVER = "true"
+  PORT = "8080"
+
+# Secrets to set via `fly secrets set`:
+# - LEMON_WEB_SECRET_KEY_BASE (generate with: openssl rand -base64 48)
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+[[http_service.checks]]
+  interval = '30s'
+  timeout = '5s'
+  grace_period = '10s'
+  method = 'GET'
+  path = '/healthz'
+  protocol = 'http'
+
+[[vm]]
+  memory = '512mb'
+  cpu_kind = 'shared'
+  cpus = 1
+
+[mounts]
+  source = "games_data"
+  destination = "/data"
