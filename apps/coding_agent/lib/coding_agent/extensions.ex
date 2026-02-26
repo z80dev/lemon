@@ -943,7 +943,7 @@ defmodule CodingAgent.Extensions do
   Clear all cached extension modules and data.
 
   This function:
-  1. Soft-purges all extension modules from the code server
+  1. Soft-purges all extension modules and deletes purged modules from the code server
   2. Clears the source path ETS table
   3. Clears the load error ETS table
 
@@ -974,9 +974,15 @@ defmodule CodingAgent.Extensions do
           |> Enum.map(fn {module, _path} -> module end)
       end
 
-    # Soft purge each module from the code server (safe for running processes)
+    # Soft purge each module, then delete if it was purged successfully.
     for module <- modules do
-      _ = Reload.soft_purge_module(module)
+      case Reload.soft_purge_module(module) do
+        {:ok, %{status: :ok}} ->
+          _ = :code.delete(module)
+
+        _ ->
+          :ok
+      end
     end
 
     # Clear the source path table
