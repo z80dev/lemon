@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+#
+# Send a one-off test message via the Telegram Bot API, without printing the bot token.
+#
+# Usage:
+#   ./bin/lemon-telegram-send-test --chat-id 123456789 "hello"
+#   ./bin/lemon-telegram-send-test "hello"            # uses first allowed_chat_ids entry
+#
+set -euo pipefail
+
+CHAT_ID=""
+TEXT=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --chat-id)
+      CHAT_ID="$2"
+      shift 2
+      ;;
+    --help|-h)
+      echo "Usage: ./bin/lemon-telegram-send-test [--chat-id <id>] <text>" >&2
+      exit 0
+      ;;
+    *)
+      TEXT="$1"
+      shift
+      ;;
+  esac
+done
+
+if [[ -z "${TEXT}" ]]; then
+  echo "Missing <text>." >&2
+  echo "Usage: ./bin/lemon-telegram-send-test [--chat-id <id>] <text>" >&2
+  exit 1
+fi
+
+export LEMON_TG_TEST_CHAT_ID="${CHAT_ID}"
+export LEMON_TG_TEST_TEXT="${TEXT}"
+
+python3 - <<'PY'
+import json
+import os
+import pathlib
+import tomllib
+import urllib.request
+
+cfg_path = pathlib.Path(os.path.expanduser("~/.lemon/config.toml"))
+cfg = tomllib.loads(cfg_path.read_text("utf-8"))
+tg = ((cfg.get("gateway") or {}).get("telegram") or {})
+token = (tg.get("bot_token") or "").strip()
+if not token:
+    raise SystemExit("gateway.telegram.bot_token is missing in ~/.lemon/config.toml")
+
+chat_id = (os.environ.get("LEMON_TG_TEST_CHAT_ID") or "").strip()
+text = (os.environ.get("LEMON_TG_TEST_TEXT") or "").strip()
+if not text:
+    raise SystemExit("Missing text")
+
+if not chat_id:
+    allowed = tg.get("allowed_chat_ids") or []
+    if isinstance(allowed, list) and allowed:
+        chat_id = str(allowed[0])
+    else:
+        raise SystemExit("Missing --chat-id and gateway.telegram.allowed_chat_ids is empty")
+
+url = f"https://api.telegram.org/bot{token}/sendMessage"
+params = {"chat_id": int(chat_id), "text": text}
+data = json.dumps(params).encode("utf-8")
+req = urllib.request.Request(url, data=data, headers={"content-type": "application/json"})
+with urllib.request.urlopen(req, timeout=15) as r:
+    body = r.read().decode("utf-8", "replace")
+print(body)
+PY
+

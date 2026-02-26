@@ -1,0 +1,24 @@
+flowchart TB
+    Agent["Agent requests tool"]
+    Registry["ToolRegistry"]
+    Policy["ToolPolicy check"]
+    Executor["ToolExecutor"]
+    Approval{"Needs<br/>approval?"}
+    ApprovalBridge["ApprovalsBridge"]
+    User["User decision"]
+    Execute["Execute tool"]
+    Result["Return result"]
+
+    Agent --> Registry
+    Registry --> Policy
+    Policy --> Executor
+    Executor --> Approval
+
+    Approval -->|No| Execute
+    Approval -->|Yes| ApprovalBridge
+    ApprovalBridge --> User
+    User -->|Approved| Execute
+    User -->|Denied| Result
+
+    Execute --> Result
+    Result --> Agent

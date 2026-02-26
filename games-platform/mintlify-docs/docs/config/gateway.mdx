@@ -1,0 +1,166 @@
+---
+title: Gateway Configuration
+description: 'Configuring LemonGateway for Telegram and multi-engine execution'
+---
+
+## Gateway Settings
+
+```toml
+[gateway]
+enable_telegram = true
+auto_resume = true
+default_engine = "lemon"
+default_cwd = "~/"
+max_concurrent_runs = 10
+```
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `enable_telegram` | Enable Telegram bot | `false` |
+| `auto_resume` | Auto-resume previous sessions | `true` |
+| `default_engine` | Default execution engine | `"lemon"` |
+| `default_cwd` | Fallback working directory | `"~/"` |
+| `max_concurrent_runs` | Global concurrency limit | `10` |
+
+## Telegram Configuration
+
+```toml
+[gateway.telegram]
+bot_token = "123456:your-bot-token"
+allowed_chat_ids = [123456789, -1001234567890]
+deny_unbound_chats = true
+drop_pending_updates = true
+allow_queue_override = true
+```
+
+| Option | Description |
+|--------|-------------|
+| `bot_token` | Bot token from @BotFather |
+| `allowed_chat_ids` | List of allowed chat IDs |
+| `deny_unbound_chats` | Reject chats not in bindings |
+| `drop_pending_updates` | Skip messages sent while offline |
+| `allow_queue_override` | Allow users to override queue mode |
+
+## Agent Definitions
+
+```toml
+[agents.default]
+name = "Lemon"
+system_prompt = "You are my general assistant. Be concise, practical, and ask clarifying questions when needed."
+model = "anthropic:claude-sonnet-4-20250514"
+default_engine = "lemon"
+
+[agents.default.tool_policy]
+allow = "all"
+deny = []
+require_approval = ["bash", "write", "edit"]
+```
+
+## Project Bindings
+
+Define projects and bind chats to them:
+
+```toml
+[gateway.projects.myrepo]
+root = "/path/to/myrepo"
+default_engine = "lemon"
+
+[[gateway.bindings]]
+transport = "telegram"
+chat_id = 123456789
+project = "myrepo"
+agent_id = "default"
+```
+
+Multiple bindings:
+
+```toml
+[[gateway.bindings]]
+transport = "telegram"
+chat_id = 123456789
+agent_id = "default"
+
+[[gateway.bindings]]
+transport = "telegram"
+chat_id = -1001234567890  # Group
+project = "myrepo"
+agent_id = "project-agent"
+```
+
+## CLI Runner Configuration
+
+Configure external CLI engines:
+
+```toml
+[agent.cli.codex]
+extra_args = ["-c", "notify=[]"]
+auto_approve = false
+
+[agent.cli.claude]
+dangerously_skip_permissions = true
+
+[agent.cli.opencode]
+model = "gpt-4.1"
+
+[agent.cli.pi]
+provider = "openai"
+model = "gpt-4.1"
+extra_args = []
+
+[agent.cli.kimi]
+extra_args = []
+```
+
+## Cron Jobs
+
+```toml
+[cron]
+enabled = true
+
+[[cron.jobs]]
+name = "Daily Report"
+schedule = "0 9 * * *"
+agent_id = "analyst_bot"
+session_key = "agent:analyst_bot:main"
+prompt = "Generate today's status report"
+timezone = "America/New_York"
+enabled = true
+jitter_sec = 60
+```
+
+## Complete Example
+
+```toml
+# ~/.lemon/config.toml
+
+[providers.anthropic]
+api_key = "sk-ant-..."
+
+[agent]
+default_provider = "anthropic"
+default_model = "claude-sonnet-4-20250514"
+
+[gateway]
+enable_telegram = true
+auto_resume = true
+default_engine = "lemon"
+
+[gateway.telegram]
+bot_token = "123456:token"
+allowed_chat_ids = [123456789]
+deny_unbound_chats = true
+
+[agents.default]
+name = "Lemon"
+system_prompt = "You are my general assistant."
+model = "anthropic:claude-sonnet-4-20250514"
+
+[agents.default.tool_policy]
+allow = "all"
+require_approval = ["bash", "write", "edit"]
+
+[[gateway.bindings]]
+transport = "telegram"
+chat_id = 123456789
+agent_id = "default"
+```

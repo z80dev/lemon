@@ -1,0 +1,118 @@
+[providers.anthropic]
+api_key = "sk-ant-your-api-key-here"
+
+[providers.openai]
+api_key = "sk-your-openai-key-here"
+
+[providers.opencode]
+api_key = "opencode-your-api-key-here"
+base_url = "https://opencode.ai/zen/v1"
+
+[providers.kimi]
+api_key = "sk-kimi-your-kimi-key-here"
+base_url = "https://api.kimi.com/coding/"
+
+[providers.google]
+api_key = "your-google-api-key-here"
+
+[defaults]
+provider = "anthropic"
+model = "anthropic:claude-sonnet-4-20250514"
+thinking_level = "medium"
+engine = "lemon"
+
+[runtime]
+theme = "default"
+extension_paths = []
+
+[runtime.compaction]
+enabled = true
+reserve_tokens = 16384
+keep_recent_tokens = 20000
+
+[runtime.retry]
+enabled = true
+max_retries = 3
+base_delay_ms = 1000
+
+[runtime.cli.codex]
+extra_args = ["-c", "notify=[]"]
+auto_approve = false
+
+[runtime.cli.claude]
+dangerously_skip_permissions = true
+
+[runtime.cli.kimi]
+extra_args = []
+
+[tui]
+theme = "lemon"
+debug = false
+
+[gateway]
+max_concurrent_runs = 2
+default_engine = "lemon"
+# Optional fallback working directory for unbound chats/sessions.
+# If omitted, Lemon defaults to your home directory.
+default_cwd = "~/"
+auto_resume = false
+enable_telegram = false
+enable_xmtp = false
+require_engine_lock = true
+engine_lock_timeout_ms = 60000
+
+[gateway.queue]
+mode = "collect"
+cap = 50
+drop = "oldest"
+
+[gateway.telegram]
+bot_token = "123456:token"
+allowed_chat_ids = [12345678]
+poll_interval_ms = 1000
+edit_throttle_ms = 1000
+debounce_ms = 1000
+allow_queue_override = false
+account_id = "default"
+offset = 0
+drop_pending_updates = false
+
+[gateway.xmtp]
+# XMTP network: production | dev | local
+env = "production"
+# Optional custom API URL (leave unset for SDK defaults)
+# api_url = "https://api.xmtp.network"
+# Bot wallet credentials (prefer env vars)
+wallet_address = "${XMTP_WALLET_ADDRESS}"
+wallet_key = "${XMTP_WALLET_KEY}"
+# Optional explicit inbox id (typically discovered by SDK)
+# inbox_id = ""
+# Local SDK storage path
+db_path = "~/.lemon/xmtp-db"
+# Poll cadence for inbound messages
+poll_interval_ms = 1500
+# Fail readiness if live mode is unavailable
+require_live = true
+# Max time to wait for bridge connect before marking unavailable
+connect_timeout_ms = 15000
+# Set true only for local development without live XMTP
+mock_mode = false
+
+[gateway.projects.example]
+root = "/path/to/project"
+default_engine = "lemon"
+
+[[gateway.bindings]]
+transport = "telegram"
+chat_id = 12345678
+topic_id = 0
+project = "example"
+default_engine = "lemon"
+queue_mode = "collect"
+
+[gateway.engines.lemon]
+cli_path = "lemon"
+enabled = true
+
+[profiles.default]
+name = "Default Agent"

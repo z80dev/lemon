@@ -1,0 +1,121 @@
+---
+title: Why BEAM?
+description: 'Why Lemon is built on the Erlang Virtual Machine'
+---
+
+The BEAM (Bogdan/Björn's Erlang Abstract Machine) provides capabilities that are particularly well-suited for building agentic AI systems.
+
+## 1. Lightweight Concurrency
+
+The BEAM can run millions of lightweight processes concurrently. In Lemon:
+
+- Each **agent** is a GenServer process
+- Each **LLM stream** runs in its own process
+- Each **tool execution** can spawn worker processes
+- **Event streams** are process-based with backpressure
+
+This means an agent can be executing multiple tools concurrently, streaming responses to multiple UIs, and handling steering messages—all without blocking.
+
+## 2. Message Passing Architecture
+
+Agents communicate via asynchronous message passing:
+
+```elixir
+# Send a prompt to an agent (non-blocking)
+:ok = AgentCore.prompt(agent, "Refactor this module")
+
+# The agent process handles the LLM stream in the background
+# Events are streamed back to subscribers
+receive do
+  {:agent_event, {:message_update, msg, delta}} ->
+    IO.write(delta)  # Stream to UI in real-time
+
+  {:agent_event, {:tool_execution_start, id, name, args}} ->
+    IO.puts("Executing: #{name}")  # Show tool execution
+end
+```
+
+This enables **live steering**: users can send messages to an agent while it's running, and the agent will incorporate them at the appropriate point in its execution loop.
+
+## 3. Fault Isolation and Supervision
+
+OTP supervision trees ensure that:
+
+- A crashing tool doesn't kill the agent
+- A network error during streaming is recoverable
+- The UI remains responsive even during long-running operations
+- Sessions can be restarted without losing state
+
+## 4. Hot Code Upgrades
+
+The BEAM supports hot code reloading, meaning:
+
+- Tools can be updated without restarting sessions
+- Extensions can be loaded dynamically
+- The system can be patched without downtime
+
+## 5. Distribution Ready
+
+The BEAM was designed for distributed systems. Lemon is built to eventually support:
+
+- Distributed agent clusters
+- Remote tool execution
+- Multi-node session persistence
+- Load balancing across agent pools
+
+## Comparison with Traditional Approaches
+
+| Feature | Python/Node.js Agents | Lemon (BEAM) |
+|---------|----------------------|--------------|
+| Concurrency | Threads/asyncio | Millions of lightweight processes |
+| State Management | External (Redis, DB) | In-process (ETS, GenServer state) |
+| Streaming | Callbacks/generators | Event streams with backpressure |
+| Fault Tolerance | Try/catch, restarts | OTP supervision trees |
+| Live Steering | Complex state machines | Message passing to mailbox |
+| Distribution | HTTP APIs, message queues | Native Erlang distribution |
+| Hot Code Reload | Restart required | Hot code upgrades |
+| Process Isolation | Shared memory risks | Complete process isolation |
+| Scheduling | OS scheduler | Preemptive, fair BEAM scheduler |
+| Background Tasks | Celery, Bull, etc. | Native process spawning |
+
+## How BEAM is Leveraged in Lemon
+
+### Process-per-Agent Architecture
+
+Each agent session runs as an independent GenServer process (`AgentCore.Agent`), providing:
+
+- **Isolated State**: Each agent maintains its own conversation context, tool registry, and configuration
+- **Mailbox Queue**: The GenServer message box naturally queues incoming prompts, steering messages, and follow-ups
+- **Synchronous & Async Operations**: `GenServer.call/3` for operations needing confirmation, `GenServer.cast/2` for fire-and-forget
+
+```elixir
+# Each session is a separate process with isolated state
+{:ok, pid1} = CodingAgent.start_session(session_id: "session-1")
+{:ok, pid2} = CodingAgent.start_session(session_id: "session-2")
+
+# Crash one session, the other continues unaffected
+Process.exit(pid1, :kill)
+# pid2 still operational
+```
+
+### ETS for High-Performance State
+
+Lemon uses ETS (Erlang Term Storage) tables for shared, read-heavy data:
+
+- **Provider Registry** (`Ai.ProviderRegistry`): Stores provider configurations in `:persistent_term` for O(1) lookups
+- **Abort Signals** (`AgentCore.AbortSignal`): Signal storage with `read_concurrency: true`
+- **Todo Store** (`CodingAgent.Tools.TodoStore`): Per-session todo lists with fast lookups
+
+### Links and Monitors for Lifecycle Management
+
+- **SessionRegistry**: Uses `Registry` (built on ETS) for process discovery
+- **SubagentSupervisor**: `DynamicSupervisor` with `:temporary` restart for subagent processes
+- **EventStream Owner Monitoring**: Streams auto-cancel when owner process dies
+
+### Preemptive Scheduling for Responsive UI
+
+The BEAM's preemptive scheduler ensures:
+
+- **Non-blocking UI**: Long-running tool execution doesn't freeze the TUI
+- **Concurrent Streaming**: Multiple LLM streams can run simultaneously without blocking
+- **Responsive Steering**: Users can send abort/steering messages even during heavy computation

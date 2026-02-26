@@ -1,0 +1,57 @@
+flowchart TB
+    Root["Umbrella Supervisor"]
+
+    Root --> Ai["Ai.Application"]
+    Root --> AC["AgentCore.Application"]
+    Root --> CA["CodingAgent.Application"]
+    Root --> LC["LemonCore.Application"]
+    Root --> LG["LemonGateway.Application"]
+    Root --> LR["LemonRouter.Application"]
+    Root --> LCH["LemonChannels.Application"]
+    Root --> LA["LemonAutomation.Application"]
+    Root --> LCP["LemonControlPlane.Application"]
+    Root --> LS["LemonSkills.Application"]
+
+    Ai --> Providers["Provider Processes"]
+
+    AC --> Agent["Agent GenServer"]
+    AC --> SubSup["SubagentSupervisor"]
+    AC --> CLI["CLI Runners"]
+
+    CA --> SessionSup["SessionSupervisor"]
+    CA --> SessionReg["SessionRegistry"]
+    CA --> LaneQ["LaneQueue"]
+    CA --> TaskStore["TaskStoreServer"]
+    CA --> RunGraph["RunGraphServer"]
+    CA --> ProcStore["ProcessStoreServer"]
+    CA --> ProcMgr["ProcessManager"]
+
+    LC --> PubSub["Phoenix.PubSub"]
+
+    LG --> Config["Config"]
+    LG --> EngReg["EngineRegistry"]
+    LG --> Scheduler["Scheduler"]
+    LG --> ThreadSup["ThreadWorkerSupervisor"]
+    LG --> RunSup["RunSupervisor"]
+    LG --> Store["Store"]
+
+    LR --> RunOrch["RunOrchestrator"]
+    LR --> AgentProf["AgentProfiles"]
+    LR --> RunReg["RunRegistry"]
+    LR --> CoalSup["CoalescerSupervisor"]
+
+    LCH --> ChReg["Registry"]
+    LCH --> Outbox["Outbox"]
+    LCH --> RateLim["RateLimiter"]
+    LCH --> AdapSup["AdapterSupervisor"]
+
+    LA --> CronMgr["CronManager"]
+    LA --> HBMgr["HeartbeatManager"]
+
+    LCP --> MethodsReg["Methods.Registry"]
+    LCP --> Presence["Presence"]
+    LCP --> EventBridge["EventBridge"]
+    LCP --> ConnSup["ConnectionSupervisor"]
+    LCP --> Bandit["Bandit HTTP"]
+
+    LS --> SkillReg["Skill Registry"]

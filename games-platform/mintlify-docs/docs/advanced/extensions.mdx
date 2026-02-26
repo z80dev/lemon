@@ -1,0 +1,97 @@
+---
+title: Extension System
+description: 'Dynamic tool loading and plugin architecture'
+---
+
+Lemon's extension system allows you to load custom tools dynamically.
+
+## Extension Discovery
+
+Extensions are discovered from:
+
+1. `<cwd>/.lemon/extensions/` (project-specific)
+2. `~/.lemon/agent/extensions/` (global)
+
+## Extension Structure
+
+An extension is a directory containing:
+
+```
+my-extension/
+├── manifest.json       # Extension metadata
+├── my_tool.wasm        # WASM tool (optional)
+└── my_tool.capabilities.json  # Tool capabilities
+```
+
+## Manifest Format
+
+```json
+{
+  "name": "my-extension",
+  "version": "1.0.0",
+  "description": "My custom extension",
+  "tools": ["my_tool"],
+  "capabilities": {
+    "http": true,
+    "filesystem": false
+  }
+}
+```
+
+## Checking Extension Status
+
+```elixir
+# Check loaded extensions
+CodingAgent.Extensions.status()
+
+# Returns list of loaded extensions with their tools
+```
+
+## Tool Conflicts
+
+When multiple extensions provide tools with the same name:
+
+- Project extensions take precedence over global
+- Last loaded wins (with warning)
+- Use `extensions_status` tool to check for conflicts
+
+## Capabilities
+
+Extensions declare capabilities for security:
+
+| Capability | Description |
+|------------|-------------|
+| `http` | Make HTTP requests |
+| `filesystem` | Read/write files |
+| `bash` | Execute shell commands |
+| `browser` | Browser automation |
+
+## WASM Tools
+
+Extensions can include Ironclaw-compatible WASM tools:
+
+```toml
+[agent.tools.wasm]
+enabled = true
+auto_build = true
+runtime_path = ""
+tool_paths = []
+```
+
+See [WASM Tools](/docs/advanced/wasm-tools) for details.
+
+## Extension Hooks
+
+Extensions can register hooks:
+
+- `on_load` - Called when extension is loaded
+- `on_unload` - Called when extension is unloaded
+- `before_tool_call` - Intercept tool calls
+- `after_tool_result` - Process tool results
+
+## Security
+
+- Extensions run in isolated WASM sandbox (when using WASM tools)
+- Capabilities must be explicitly declared
+- Host-side credential injection for secrets
+- Prompt-boundary hardening for untrusted output

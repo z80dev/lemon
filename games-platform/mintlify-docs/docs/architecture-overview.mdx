@@ -1,0 +1,168 @@
+---
+title: Architecture Overview
+description: 'High-level view of the Lemon system architecture'
+---
+
+## System Architecture
+
+Lemon is built as a distributed system of concurrent processes running on the BEAM. The architecture consists of 11 OTP applications organized into layers.
+
+## Layer Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Client Layer                             │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+│  │  TUI        │  │  Web UI     │  │  Telegram           │  │
+│  │  (TypeScript)│  │  (React)    │  │  (Bot API)          │  │
+│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+                              │
+┌─────────────────────────────────────────────────────────────┐
+│                   Control Plane                              │
+│              LemonControlPlane (HTTP/WebSocket)              │
+│                    81+ RPC Methods                           │
+└─────────────────────────────────────────────────────────────┘
+                              │
+┌─────────────────────────────────────────────────────────────┐
+│                   Routing Layer                              │
+│              LemonRouter (Run Orchestration)                 │
+│         Policy, Approvals, Stream Coalescing                 │
+└─────────────────────────────────────────────────────────────┘
+                              │
+┌─────────────────────────────────────────────────────────────┐
+│                   Infrastructure                             │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+│  │ LemonGateway│  │LemonChannels│  │LemonAutomation      │  │
+│  │ (Execution) │  │ (Adapters)  │  │ (Cron/Scheduling)   │  │
+│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+                              │
+┌─────────────────────────────────────────────────────────────┐
+│                   Core Runtime                               │
+│              CodingAgent.Session                             │
+│    Tools, Extensions, Compaction, Orchestration              │
+└─────────────────────────────────────────────────────────────┘
+                              │
+┌─────────────────────────────────────────────────────────────┐
+│                   Foundation                                 │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+│  │     Ai      │  │  AgentCore  │  │     LemonCore       │  │
+│  │ (Providers) │  │  (Framework)│  │  (Primitives)       │  │
+│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Data Flow
+
+The system supports four main data paths:
+
+### 1. Direct Path (TUI/Web)
+```
+JSON-RPC → debug_agent_rpc → coding_agent_ui → Session → AgentCore → Tools/Ai
+```
+
+### 2. Control Plane Path
+```
+WebSocket → ControlPlane → Router → Orchestrator → Gateway → Engine
+```
+
+### 3. Channel Path (Telegram)
+```
+Telegram → LemonChannels → Router → StreamCoalescer → Outbox
+```
+
+### 4. Automation Path
+```
+CronManager tick → Due Jobs → Router → HeartbeatManager → Events on Bus
+```
+
+## Core Applications
+
+### Foundation Layer
+
+| Application | Purpose |
+|-------------|---------|
+| **Ai** | LLM provider abstraction (Anthropic, OpenAI, Google, Azure, Bedrock) |
+| **AgentCore** | Generic agent framework with event streaming |
+| **LemonCore** | Shared primitives (Bus, Event, Store, Telemetry, Id) |
+
+### Runtime Layer
+
+| Application | Purpose |
+|-------------|---------|
+| **CodingAgent** | Complete coding agent with tools, persistence, orchestration |
+| **CodingAgentUI** | UI abstractions (RPC, Debug RPC, Headless) |
+
+### Infrastructure Layer
+
+| Application | Purpose |
+|-------------|---------|
+| **LemonGateway** | Multi-engine execution gateway |
+| **LemonRouter** | Run orchestration and session routing |
+| **LemonChannels** | Pluggable channel adapters (Telegram, extensible) |
+| **LemonAutomation** | Cron scheduling and automation |
+| **LemonControlPlane** | HTTP/WebSocket control server |
+| **LemonSkills** | Skill registry and management |
+
+## Key Design Patterns
+
+### Event-Driven Architecture
+
+All components communicate via events on the `LemonCore.Bus`:
+
+```elixir
+# Subscribe to events
+LemonCore.Bus.subscribe("run:abc123")
+
+# Broadcast events
+LemonCore.Bus.broadcast("run:abc123", event)
+```
+
+Standard topics:
+- `run:<run_id>` - Events for a specific run
+- `session:<session_key>` - Events for a specific session
+- `channels` - Channel-related events
+- `cron` - Automation events
+- `exec_approvals` - Execution approval events
+
+### GenServer-Based Agents
+
+Each agent is an independent process:
+
+```elixir
+{:ok, agent} = AgentCore.new_agent(
+  model: model,
+  system_prompt: "You are a coding assistant.",
+  tools: [read_tool, write_tool]
+)
+
+# Subscribe to events
+AgentCore.subscribe(agent, self())
+
+# Send prompts
+:ok = AgentCore.prompt(agent, "Read the README.md file")
+```
+
+### Multi-Engine Support
+
+LemonGateway supports multiple execution engines:
+
+| Engine | ID | Description |
+|--------|-----|-------------|
+| Lemon | `lemon` | Native CodingAgent.Session |
+| Claude | `claude` | Claude CLI via subprocess |
+| Codex | `codex` | Codex CLI via subprocess |
+| OpenCode | `opencode` | OpenCode CLI via subprocess |
+| Pi | `pi` | Pi CLI via subprocess |
+
+## Supervision Tree
+
+The supervision tree shows all 11 OTP applications and their supervised processes:
+
+- Each application has its own supervision subtree for fault isolation
+- DynamicSupervisors manage runtime-spawned processes
+- Registries provide fast process lookup by ID
+- GenServers maintain stateful components
+
+See [Architecture Deep Dive](/architecture/supervision) for the complete supervision tree.

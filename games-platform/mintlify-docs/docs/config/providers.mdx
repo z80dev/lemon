@@ -1,0 +1,151 @@
+---
+title: Provider Configuration
+description: 'Configuring LLM providers'
+---
+
+Lemon supports multiple LLM providers through a unified interface.
+
+## Supported Providers
+
+| Provider | Key | Models |
+|----------|-----|--------|
+| Anthropic | `anthropic` | Claude 3.5 Sonnet, Claude 3 Opus, etc. |
+| OpenAI | `openai` | GPT-4, GPT-4 Turbo, GPT-3.5 |
+| Google | `google` | Gemini Pro, Gemini Ultra |
+| Azure OpenAI | `azure-openai` | GPT-4, GPT-3.5 |
+| AWS Bedrock | `bedrock` | Claude, Llama, etc. |
+
+## Anthropic
+
+```toml
+[providers.anthropic]
+api_key = "sk-ant-..."
+
+# Optional
+base_url = "https://api.anthropic.com"
+```
+
+Environment: `ANTHROPIC_API_KEY`
+
+## OpenAI
+
+```toml
+[providers.openai]
+api_key = "sk-..."
+
+# Optional
+base_url = "https://api.openai.com/v1"
+```
+
+Environment: `OPENAI_API_KEY`, `OPENAI_BASE_URL`
+
+## Google
+
+```toml
+[providers.google]
+api_key = "your-google-api-key"
+```
+
+Environment: `GOOGLE_GENERATIVE_AI_API_KEY`, `GOOGLE_API_KEY`, `GEMINI_API_KEY`
+
+## Azure OpenAI
+
+```toml
+[providers.azure-openai-responses]
+api_key = "your-azure-key"
+base_url = "https://myresource.openai.azure.com/openai/v1"
+resource_name = "myresource"
+api_version = "2024-12-01-preview"
+```
+
+Environment:
+- `AZURE_OPENAI_API_KEY`
+- `AZURE_OPENAI_BASE_URL`
+- `AZURE_OPENAI_RESOURCE_NAME`
+- `AZURE_OPENAI_API_VERSION`
+
+## AWS Bedrock
+
+```toml
+[providers.bedrock]
+region = "us-east-1"
+# Credentials from environment or IAM
+```
+
+Environment:
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `AWS_REGION`
+
+## Default Provider
+
+Set the default provider and model:
+
+```toml
+[agent]
+default_provider = "anthropic"
+default_model = "claude-sonnet-4-20250514"
+```
+
+## Multiple Providers
+
+You can configure multiple providers and switch between them:
+
+```toml
+[providers.anthropic]
+api_key = "sk-ant-..."
+
+[providers.openai]
+api_key = "sk-..."
+
+[providers.google]
+api_key = "..."
+```
+
+Switch at runtime:
+- TUI: `--model openai:gpt-4-turbo`
+- Telegram: Start message with `/openai`
+
+## Provider-Specific Options
+
+### Anthropic Prompt Caching
+
+Anthropic supports prompt caching for large contexts:
+
+```elixir
+# Messages with cache_control are automatically cached
+message = %{
+  role: :user,
+  content: [Ai.text_content(large_context)],
+  cache_control: %{type: "ephemeral"}
+}
+```
+
+### OpenAI Codex
+
+For the Codex CLI engine:
+
+```toml
+[providers.openai-codex]
+api_key = "..."
+# or use CHATGPT_TOKEN
+```
+
+Environment: `OPENAI_CODEX_API_KEY`, `CHATGPT_TOKEN`
+
+## Using Encrypted Secrets
+
+Instead of plaintext API keys, use the encrypted secrets store:
+
+```toml
+[providers.anthropic]
+api_key_secret = "llm_anthropic_api_key"
+```
+
+Then store the secret:
+
+```bash
+mix lemon.secrets.set llm_anthropic_api_key "sk-ant-..."
+```
+
+See [Secrets](/docs/config/secrets) for more details.

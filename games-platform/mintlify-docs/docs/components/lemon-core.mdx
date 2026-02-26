@@ -1,0 +1,112 @@
+---
+title: LemonCore
+description: 'Shared primitives and utilities for all Lemon applications'
+---
+
+`LemonCore` provides shared primitives and utilities that all Lemon applications depend on.
+
+## Key Modules
+
+| Module | Purpose |
+|--------|---------|
+| `LemonCore.Bus` | Phoenix.PubSub wrapper for cross-app event distribution |
+| `LemonCore.Event` | Timestamped event envelope with type, payload, metadata |
+| `LemonCore.Store` | Thin wrapper over persistent key-value storage |
+| `LemonCore.Id` | Prefixed UUID generation (run_, sess_, appr_, cron_, skill_) |
+| `LemonCore.Idempotency` | At-most-once execution with 24-hour TTL |
+| `LemonCore.Telemetry` | Standardized telemetry event emission |
+| `LemonCore.Clock` | Consistent time handling (ms, sec, DateTime) |
+| `LemonCore.Config` | Runtime configuration access |
+
+## Event Bus
+
+The event bus enables publish/subscribe messaging across all components:
+
+```elixir
+# Subscribe to events
+LemonCore.Bus.subscribe("run:abc123")
+
+# Broadcast events
+LemonCore.Bus.broadcast("run:abc123", event)
+
+# Unsubscribe
+LemonCore.Bus.unsubscribe("run:abc123")
+```
+
+### Standard Topics
+
+| Topic | Purpose |
+|-------|---------|
+| `run:<run_id>` | Events for a specific run |
+| `session:<session_key>` | Events for a specific session |
+| `channels` | Channel-related events |
+| `cron` | Automation events |
+| `exec_approvals` | Execution approval events |
+| `nodes` | Node pairing/invoke events |
+| `system` | System-wide events |
+
+## Event Envelope
+
+Canonical event structure:
+
+```elixir
+event = LemonCore.Event.new(:delta, %{text: "Hello"}, %{run_id: "run_123"})
+# => %LemonCore.Event{
+#   type: :delta,
+#   payload: %{text: "Hello"},
+#   metadata: %{run_id: "run_123"},
+#   timestamp: ~U[2024-01-15 10:30:00Z]
+# }
+```
+
+## ID Generation
+
+Prefixed UUIDs for different entity types:
+
+```elixir
+LemonCore.Id.run_id()      # "run_<uuid>"
+LemonCore.Id.session_id()  # "sess_<uuid>"
+LemonCore.Id.approval_id() # "appr_<uuid>"
+LemonCore.Id.cron_id()     # "cron_<uuid>"
+LemonCore.Id.skill_id()    # "skill_<uuid>"
+```
+
+## Idempotent Operations
+
+At-most-once execution:
+
+```elixir
+LemonCore.Idempotency.execute("messages", "msg_123", fn ->
+  send_message()  # Only executes once
+end)
+```
+
+## Storage
+
+Pluggable key-value storage:
+
+```elixir
+# Store data
+LemonCore.Store.put(:my_store, "key", value)
+
+# Retrieve data
+{:ok, value} = LemonCore.Store.get(:my_store, "key")
+
+# Delete
+:ok = LemonCore.Store.delete(:my_store, "key")
+```
+
+Backends: ETS (in-memory), JSONL (file), SQLite (database)
+
+## Telemetry
+
+Standardized observability:
+
+```elixir
+# Emit telemetry event
+:LemonCore.Telemetry.emit(:run_started, %{
+  run_id: run_id,
+  engine: "lemon",
+  model: "claude-sonnet-4-20250514"
+})
+```

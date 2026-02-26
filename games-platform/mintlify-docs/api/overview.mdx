@@ -1,0 +1,133 @@
+---
+title: API Overview
+description: 'LemonControlPlane WebSocket API overview'
+---
+
+The LemonControlPlane provides a WebSocket/HTTP API for controlling all aspects of Lemon.
+
+## Base URL
+
+```
+ws://localhost:4040/ws    # WebSocket
+http://localhost:4040     # HTTP
+```
+
+## Authentication
+
+Connect with a token:
+
+```json
+{
+  "type": "auth",
+  "token": "your-token-here"
+}
+```
+
+Or use the pairing flow:
+
+```json
+// 1. Request pairing
+{
+  "type": "req",
+  "id": "1",
+  "method": "system.pair.request",
+  "params": {"client_id": "my-client"}
+}
+
+// 2. Approve from existing client
+{
+  "type": "req",
+  "id": "2",
+  "method": "system.pair.approve",
+  "params": {"request_id": "..."}
+}
+```
+
+## Request Format
+
+```json
+{
+  "type": "req",
+  "id": "unique-request-id",
+  "method": "method.name",
+  "params": {
+    "key": "value"
+  }
+}
+```
+
+## Response Format
+
+```json
+{
+  "type": "resp",
+  "id": "unique-request-id",
+  "result": {
+    "key": "value"
+  }
+}
+```
+
+## Error Format
+
+```json
+{
+  "type": "resp",
+  "id": "unique-request-id",
+  "error": {
+    "code": "error_code",
+    "message": "Human-readable error message"
+  }
+}
+```
+
+## Event Subscription
+
+Subscribe to events:
+
+```json
+{
+  "type": "sub",
+  "topics": ["run:abc123", "session:agent:default:main"]
+}
+```
+
+Receive events:
+
+```json
+{
+  "type": "event",
+  "topic": "run:abc123",
+  "payload": {
+    "type": "delta",
+    "text": "Hello"
+  }
+}
+```
+
+## Roles
+
+| Role | Description |
+|------|-------------|
+| `operator` | Full control (default) |
+| `node` | Node operations |
+| `device` | Limited device operations |
+
+## HTTP Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/healthz` | GET | Health check |
+| `/ws` | WebSocket | Main API endpoint |
+
+## Rate Limiting
+
+API requests are subject to rate limiting:
+
+- 100 requests per minute per connection
+- Burst allowance: 10 requests
+
+## See Also
+
+- [Methods Reference](/api/methods) - Complete list of RPC methods
+- [Events Reference](/api/events) - Event types and payloads

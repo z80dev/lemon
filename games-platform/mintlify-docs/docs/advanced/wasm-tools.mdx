@@ -1,0 +1,196 @@
+---
+title: WASM Tools
+description: 'Ironclaw-compatible WASM tool support'
+---
+
+Lemon supports Ironclaw-compatible WASM tools through a per-session Rust sidecar runtime.
+
+## Enabling WASM
+
+```toml
+[agent.tools.wasm]
+enabled = true
+auto_build = true
+runtime_path = ""
+tool_paths = []
+```
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `enabled` | Enable WASM tools | `false` |
+| `auto_build` | Build runtime automatically | `true` |
+| `runtime_path` | Path to runtime binary | `""` |
+| `tool_paths` | Additional tool directories | `[]` |
+
+## Tool Discovery
+
+WASM tools are discovered from:
+
+1. `<cwd>/.lemon/wasm-tools`
+2. `~/.lemon/agent/wasm-tools`
+3. Paths in `agent.tools.wasm.tool_paths`
+
+Each tool is a `.wasm` file with an optional `.capabilities.json` file.
+
+## Tool Structure
+
+```
+.wasm-tools/
+├── github_fetch.wasm
+└── github_fetch.capabilities.json
+```
+
+## Capabilities File
+
+```json
+{
+  "name": "github_fetch",
+  "description": "Fetch data from GitHub API",
+  "version": "1.0.0",
+  "secrets": {
+    "allowed_names": ["github_api_token"]
+  },
+  "http": {
+    "allowlist": [
+      {
+        "host": "api.github.com",
+        "path_prefix": "/",
+        "methods": ["GET"]
+      }
+    ],
+    "credentials": {
+      "github_auth": {
+        "secret_name": "github_api_token",
+        "host_patterns": ["api.github.com"],
+        "location": {
+          "type": "header",
+          "name": "Authorization",
+          "prefix": "Bearer "
+        }
+      }
+    }
+  }
+}
+```
+
+## Security Model
+
+### Capability-Based
+
+- Tools declare capabilities in manifest
+- Host enforces capabilities at runtime
+- No implicit access to system resources
+
+### Secret Injection
+
+- Secrets resolved at host boundary
+- Not exposed in WASM `execute` params
+- Host injects credentials based on capabilities
+
+### HTTP Allowlist
+
+- Tools can only access declared hosts/paths
+- Methods restricted per endpoint
+- Credentials scoped to specific hosts
+
+## Building the Runtime
+
+If `auto_build = true` and `runtime_path` is empty, Lemon attempts to build the runtime via Cargo.
+
+Requires:
+- Rust toolchain (`cargo`)
+- Compatible with Ironclaw runtime
+
+## Troubleshooting
+
+### Runtime not found
+
+```
+[error] WASM runtime not found and auto_build disabled
+```
+
+**Solution**: Enable `auto_build` or set `runtime_path` to a prebuilt binary.
+
+### Tool not loading
+
+```
+[warn] Failed to load WASM tool: github_fetch
+```
+
+**Solution**: Check that the `.wasm` file exists and the capabilities file is valid JSON.
+
+### HTTP request blocked
+
+```
+[error] HTTP request blocked: host not in allowlist
+```
+
+**Solution**: Update the capabilities file to include the required host/path/method.
+
+### Secret not found
+
+```
+[error] Secret not found: github_api_token
+```
+
+**Solution**: Store the secret using `mix lemon.secrets.set`.
+
+## Example: GitHub Fetch Tool
+
+### capabilities.json
+
+```json
+{
+  "name": "github_fetch",
+  "description": "Fetch GitHub repository data",
+  "version": "1.0.0",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "owner": {"type": "string"},
+      "repo": {"type": "string"},
+      "endpoint": {"type": "string", "enum": ["repo", "issues", "pulls"]}
+    },
+    "required": ["owner", "repo"]
+  },
+  "secrets": {
+    "allowed_names": ["github_api_token"]
+  },
+  "http": {
+    "allowlist": [
+      {
+        "host": "api.github.com",
+        "path_prefix": "/repos/",
+        "methods": ["GET"]
+      }
+    ],
+    "credentials": {
+      "github_auth": {
+        "secret_name": "github_api_token",
+        "host_patterns": ["api.github.com"],
+        "location": {
+          "type": "header",
+          "name": "Authorization",
+          "prefix": "Bearer "
+        }
+      }
+    }
+  }
+}
+```
+
+### Usage
+
+```elixir
+# Agent calls the tool
+%{"owner" => "elixir-lang", "repo" => "elixir", "endpoint" => "repo"}
+
+# Tool receives injected credentials
+# Makes HTTP request to api.github.com
+# Returns JSON response
+```
+
+## Further Reading
+
+- [Ironclaw Documentation](https://github.com/ironclad/wasm-tools)
+- [WASM Security Model](https://webassembly.org/docs/security/)

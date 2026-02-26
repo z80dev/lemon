@@ -1,0 +1,211 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27.2"
+          elixir-version: "1.19.0"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Mix deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-quality-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-quality-
+
+      - name: Install WASM target
+        run: rustup target add wasm32-wasip2
+
+      - name: Run WASM runtime tests
+        run: cargo test --manifest-path native/lemon-wasm-runtime/Cargo.toml
+
+      - name: Install deps
+        run: mix deps.get
+
+      - name: Compile
+        run: mix compile
+
+      - name: Guard against skipped ExUnit tests
+        run: |
+          if rg -n "@tag\\s+:skip|@tag\\s+skip:" apps --glob "*test*.exs"; then
+            echo "::error::Found skipped tests in repository. Remove skip tags or document and re-enable deterministically."
+            exit 1
+          fi
+
+      - name: Deterministic regression loop
+        run: |
+          for i in 1 2; do
+            echo "Deterministic regression pass #$i"
+            mix test \
+              apps/coding_agent/test/coding_agent/session_overflow_recovery_test.exs \
+              apps/coding_agent/test/coding_agent/tools/fuzzy_test.exs \
+              apps/lemon_skills/test/lemon_skills/discovery_readme_test.exs \
+              apps/lemon_skills/test/mix/tasks/lemon.skill_test.exs
+          done
+
+      - name: Run WASM integration tests
+        run: RUSTUP_HOME="$HOME/.rustup" CARGO_HOME="$HOME/.cargo" mix test apps/coding_agent/test/coding_agent/wasm_integration_test.exs --include integration
+
+      - name: Run quality checks
+        run: mix lemon.quality
+
+      - name: Check for duplicate test modules
+        run: mix lemon.check_duplicate_tests
+
+      - name: Run eval harness
+        run: mix lemon.eval --iterations 20
+
+      - name: Run quality test suite
+        run: mix test apps/lemon_core/test/lemon_core/quality apps/coding_agent/test/coding_agent/evals/harness_test.exs
+
+  elixir-test-suite:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "27.2"
+          elixir-version: "1.19.0"
+
+      - name: Cache Mix deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-test-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-test-
+
+      - name: Install deps
+        run: mix deps.get
+
+      - name: Compile
+        run: mix compile
+
+      - name: Run umbrella tests
+        run: mix test --exclude integration
+
+  clients:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: |
+            clients/lemon-web/package-lock.json
+            clients/lemon-tui/package-lock.json
+            clients/lemon-browser-node/package-lock.json
+
+      # --- lemon-web ---
+      - name: Install lemon-web deps
+        working-directory: clients/lemon-web
+        run: npm ci
+
+      - name: lemon-web typecheck
+        working-directory: clients/lemon-web
+        run: npm run typecheck
+
+      - name: lemon-web lint
+        working-directory: clients/lemon-web
+        run: npm --workspace web run lint
+
+      - name: lemon-web build
+        working-directory: clients/lemon-web
+        run: npm run build
+
+      - name: lemon-web shared tests
+        working-directory: clients/lemon-web
+        run: npm --workspace shared run test
+
+      - name: lemon-web server tests
+        working-directory: clients/lemon-web
+        run: npm --workspace server run test
+
+      - name: lemon-web tests
+        working-directory: clients/lemon-web
+        run: npm --workspace web run test
+
+      - name: lemon-web audit
+        working-directory: clients/lemon-web
+        run: npm audit --audit-level=high || true
+
+      # --- lemon-tui ---
+      - name: Install lemon-tui deps
+        working-directory: clients/lemon-tui
+        run: npm ci
+
+      - name: lemon-tui typecheck
+        working-directory: clients/lemon-tui
+        run: npm run typecheck
+
+      - name: lemon-tui lint
+        working-directory: clients/lemon-tui
+        run: npm run lint
+
+      - name: lemon-tui build
+        working-directory: clients/lemon-tui
+        run: npm run build
+
+      - name: lemon-tui tests
+        working-directory: clients/lemon-tui
+        run: npm test
+
+      - name: lemon-tui audit
+        working-directory: clients/lemon-tui
+        run: npm audit --audit-level=high || true
+
+      # --- lemon-browser-node ---
+      - name: Install lemon-browser-node deps
+        working-directory: clients/lemon-browser-node
+        run: npm ci
+
+      - name: lemon-browser-node typecheck
+        working-directory: clients/lemon-browser-node
+        run: npm run typecheck
+
+      - name: lemon-browser-node lint
+        working-directory: clients/lemon-browser-node
+        run: npm run lint
+
+      - name: lemon-browser-node build
+        working-directory: clients/lemon-browser-node
+        run: npm run build
+
+      - name: lemon-browser-node tests
+        working-directory: clients/lemon-browser-node
+        run: npm test
+
+      - name: lemon-browser-node audit
+        working-directory: clients/lemon-browser-node
+        run: npm audit --audit-level=high || true

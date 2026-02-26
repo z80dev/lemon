@@ -1,0 +1,167 @@
+---
+title: Event Bus
+description: 'Pub/sub event distribution across Lemon'
+---
+
+The event bus enables publish/subscribe messaging across all Lemon components.
+
+## LemonCore.Bus
+
+A Phoenix.PubSub wrapper providing:
+
+- Cross-application event distribution
+- Topic-based subscription
+- Fan-out broadcasting
+
+## Basic Usage
+
+### Subscribe
+
+```elixir
+# Subscribe to a topic
+LemonCore.Bus.subscribe("run:abc123")
+
+# Subscribe to multiple topics
+LemonCore.Bus.subscribe("session:agent:default:main")
+```
+
+### Broadcast
+
+```elixir
+# Broadcast to all subscribers
+event = LemonCore.Event.new(:delta, %{text: "Hello"}, %{run_id: "run_123"})
+LemonCore.Bus.broadcast("run:abc123", event)
+```
+
+### Unsubscribe
+
+```elixir
+LemonCore.Bus.unsubscribe("run:abc123")
+```
+
+## Standard Topics
+
+| Topic | Purpose |
+|-------|---------|
+| `run:<run_id>` | Events for a specific run |
+| `session:<session_key>` | Events for a specific session |
+| `channels` | Channel-related events |
+| `cron` | Automation events |
+| `exec_approvals` | Execution approval events |
+| `nodes` | Node pairing/invoke events |
+| `system` | System-wide events |
+
+## Event Structure
+
+```elixir
+event = LemonCore.Event.new(
+  :delta,                              # type
+  %{text: "Hello"},                    # payload
+  %{run_id: "run_123"}                 # metadata
+)
+
+# Result:
+%LemonCore.Event{
+  type: :delta,
+  payload: %{text: "Hello"},
+  metadata: %{run_id: "run_123"},
+  timestamp: ~U[2024-01-15 10:30:00Z]
+}
+```
+
+## Event Flow Example
+
+```
+Agent (produces events)
+  │
+  ▼
+LemonCore.Bus.broadcast("run:abc123", event)
+  │
+  ├──► LemonRouter (orchestration)
+  ├──► LemonChannels (Telegram delivery)
+  ├──► LemonControlPlane (WebSocket events)
+  └──► Telemetry (metrics)
+```
+
+## Receiving Events
+
+```elixir
+# In a GenServer
+receive do
+  {:event, %LemonCore.Event{type: :delta, payload: payload}} ->
+    handle_delta(payload)
+    
+  {:event, %LemonCore.Event{type: :tool_call, payload: payload}} ->
+    handle_tool_call(payload)
+end
+```
+
+## Event Types
+
+### Run Events
+
+- `:run_started` - Run has started
+- `:delta` - Text delta from LLM
+- `:tool_call` - Tool is being called
+- `:tool_result` - Tool returned result
+- `:message_complete` - Message finished
+- `:run_completed` - Run finished
+
+### Session Events
+
+- `:session_created` - New session created
+- `:session_reset` - Session was reset
+- `:compaction_started` - Context compaction began
+- `:compaction_completed` - Context compaction finished
+
+### System Events
+
+- `:presence_update` - Client presence changed
+- `:error` - Error occurred
+
+## Event Bridge
+
+LemonControlPlane bridges bus events to WebSocket:
+
+```elixir
+# Bus event
+{:event, %LemonCore.Event{type: :delta, ...}}
+
+# Becomes WebSocket frame
+{
+  "type": "event",
+  "topic": "run:abc123",
+  "payload": {"type": "delta", "text": "..."}
+}
+```
+
+## Backpressure
+
+The event bus handles backpressure:
+
+- Slow consumers don't block producers
+- Events are dropped if consumer can't keep up (configurable)
+- Bounded mailboxes prevent memory exhaustion
+
+## Testing with Events
+
+```elixir
+test "agent produces events" do
+  :ok = LemonCore.Bus.subscribe("run:test123")
+  
+  # Trigger agent
+  AgentCore.prompt(agent, "Hello")
+  
+  # Assert on events
+  assert_receive {:event, %LemonCore.Event{type: :run_started}}
+  assert_receive {:event, %LemonCore.Event{type: :delta}}
+  assert_receive {:event, %LemonCore.Event{type: :run_completed}}
+end
+```
+
+## Performance
+
+- ETS-backed subscription table
+- O(1) topic lookup
+- Efficient fan-out to subscribers
+- Minimal copying (immutable events)

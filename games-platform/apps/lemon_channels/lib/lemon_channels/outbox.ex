@@ -1,0 +1,711 @@
+defmodule LemonChannels.Outbox do
+  @moduledoc """
+  Outbox for queuing and delivering outbound messages.
+
+  The outbox provides:
+  - Queued delivery with retry
+  - Idempotency checking
+  - Rate limiting
+  - Automatic chunking for long messages
+  - Telemetry emission
+  """
+
+  use GenServer
+
+  require Logger
+
+  alias LemonChannels.{OutboundPayload, Registry}
+  alias LemonChannels.Outbox.{Chunker, Dedupe, RateLimiter}
+
+  @worker_supervisor LemonChannels.Outbox.WorkerSupervisor
+  @default_max_attempts 3
+  @default_max_queue_size 5_000
+
+  def start_link(opts \\ []) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  end
+
+  @doc """
+  Enqueue a payload for delivery.
+
+  If the content exceeds the channel's chunk limit, it will be automatically
+  split into multiple messages.
+
+  Returns `{:ok, ref}` or `{:error, reason}`.
+  """
+  @spec enqueue(OutboundPayload.t()) :: {:ok, reference()} | {:error, term()}
+  def enqueue(%OutboundPayload{} = payload) do
+    GenServer.call(__MODULE__, {:enqueue, payload})
+  end
+
+  @doc """
+  Returns current outbox statistics.
+  """
+  @spec stats() :: map()
+  def stats do
+    GenServer.call(__MODULE__, :stats)
+  end
+
+  @impl true
+  def init(_opts) do
+    # The Outbox is sometimes started standalone in tests. Ensure the task supervisor
+    # exists so we can safely run supervised delivery tasks.
+    _ = ensure_worker_supervisor_started()
+
+    {:ok,
+     %{
+       queue: :queue.new(),
+       processing: %{},
+       processing_groups: %{},
+       enqueued_total: 0,
+       max_queue_size: max_queue_size()
+     }}
+  end
+
+  @impl true
+  def handle_call({:enqueue, payload}, _from, state) do
+    # Check idempotency
+    case check_idempotency(payload) do
+      :duplicate ->
+        {:reply, {:error, :duplicate}, state}
+
+      :ok ->
+        ref = make_ref()
+
+        # Apply chunking if needed
+        payloads = maybe_chunk_payload(payload)
+        chunk_count = length(payloads)
+
+        if queue_full?(state, chunk_count) do
+          queue_depth = queue_depth(state)
+
+          LemonCore.Telemetry.emit(
+            [:lemon, :channels, :outbox, :rejected],
+            %{count: 1, queue_depth: queue_depth, max_queue_size: state.max_queue_size},
+            %{
+              reason: :queue_full,
+              channel_id: payload.channel_id,
+              account_id: payload.account_id,
+              chunk_count: chunk_count
+            }
+          )
+
+          {:reply, {:error, :queue_full}, state}
+        else
+          # Check rate limit
+          case RateLimiter.check(payload.channel_id, payload.account_id) do
+            :ok ->
+              # Enqueue all chunks for processing
+              state = enqueue_payloads(state, ref, payloads)
+              emit_queue_depth_telemetry(state, :enqueued, %{chunk_count: chunk_count})
+
+              # Trigger processing
+              send(self(), :process_queue)
+
+              {:reply, {:ok, ref}, state}
+
+            {:rate_limited, wait_ms} ->
+              # Still enqueue but will be delayed
+              state = enqueue_payloads(state, ref, payloads)
+
+              emit_queue_depth_telemetry(state, :enqueued_rate_limited, %{
+                chunk_count: chunk_count,
+                wait_ms: wait_ms
+              })
+
+              # Schedule processing after rate limit delay
+              Process.send_after(self(), :process_queue, wait_ms)
+
+              {:reply, {:ok, ref}, state}
+          end
+        end
+    end
+  end
+
+  @impl true
+  def handle_call(:stats, _from, state) do
+    stats = %{
+      queue_length: :queue.len(state.queue),
+      processing_count: map_size(state.processing),
+      queue_depth: queue_depth(state),
+      max_queue_size: state.max_queue_size,
+      enqueued_total: state.enqueued_total
+    }
+
+    {:reply, stats, state}
+  end
+
+  @impl true
+  def handle_info(:process_queue, state) do
+    # Preserve delivery ordering per "delivery group" (channel/account/peer/thread),
+    # while still allowing concurrency across independent groups.
+    #
+    # Chunked messages share the same delivery group and must not be delivered
+    # concurrently, otherwise chunks can reorder on the wire.
+    {:noreply, process_available(state)}
+  end
+
+  # Task.Supervisor.async_nolink/2 sends `{ref, result}` on success, and `{:DOWN, ref, ...}`
+  # on failure. We key `processing` by the task monitor ref for correct per-chunk bookkeeping.
+  def handle_info({task_ref, result}, state) when is_reference(task_ref) do
+    case Map.pop(state.processing, task_ref) do
+      {nil, _} ->
+        {:noreply, state}
+
+      {entry, processing} ->
+        # Flush a pending DOWN for this task ref if it already arrived.
+        Process.demonitor(task_ref, [:flush])
+        state = %{state | processing: processing}
+        state = release_processing_group(state, entry, task_ref)
+
+        case result do
+          {:ok, _delivery_ref} ->
+            # Mark as delivered for idempotency
+            mark_delivered(entry.payload)
+            maybe_notify_delivery(entry.payload, result)
+
+            # Continue processing queue
+            send(self(), :process_queue)
+            {:noreply, state}
+
+          {:error, reason} ->
+            # Retry only for retryable failures.
+            #
+            # `:unknown_channel` is a configuration/programming error and will never succeed by retrying.
+            if retryable_reason?(reason) and entry.attempts < max_attempts() do
+              {entry, delay_ms} = schedule_retry(entry, reason)
+              queue = :queue.in(entry, state.queue)
+              state = %{state | queue: queue}
+
+              emit_queue_depth_telemetry(state, :retry_scheduled, %{
+                delay_ms: delay_ms,
+                attempts: entry.attempts,
+                reason: inspect(reason, limit: 50)
+              })
+
+              Process.send_after(self(), :process_queue, delay_ms)
+              {:noreply, state}
+            else
+              reason = finalize_failure_reason(reason)
+              failure_meta = outbox_failure_meta(entry)
+
+              Logger.warning(
+                "Delivery failed after #{entry.attempts} attempts: #{inspect(reason)} " <>
+                  "meta=#{inspect(failure_meta)}"
+              )
+
+              maybe_notify_delivery(entry.payload, {:error, reason})
+
+              # Continue processing queue even after failure
+              send(self(), :process_queue)
+              {:noreply, state}
+            end
+        end
+    end
+  end
+
+  def handle_info({:DOWN, task_ref, :process, _worker_pid, reason}, state)
+      when is_reference(task_ref) do
+    case Map.pop(state.processing, task_ref) do
+      {nil, _processing} ->
+        {:noreply, state}
+
+      {entry, processing} ->
+        state = %{state | processing: processing}
+        state = release_processing_group(state, entry, task_ref)
+
+        # Treat unexpected worker exits as delivery failures. This is the critical difference
+        # from raw spawn/1: we always clean up bookkeeping and keep the queue moving.
+        reason = {:worker_exit, reason}
+
+        if retryable_reason?(reason) and entry.attempts < max_attempts() do
+          {entry, delay_ms} = schedule_retry(entry, reason)
+          queue = :queue.in(entry, state.queue)
+          state = %{state | queue: queue}
+
+          emit_queue_depth_telemetry(state, :retry_scheduled, %{
+            delay_ms: delay_ms,
+            attempts: entry.attempts,
+            reason: inspect(reason, limit: 50)
+          })
+
+          Process.send_after(self(), :process_queue, delay_ms)
+          {:noreply, state}
+        else
+          reason = finalize_failure_reason(reason)
+          failure_meta = outbox_failure_meta(entry)
+
+          Logger.warning(
+            "Delivery worker exited after #{entry.attempts} attempts: #{inspect(reason)} " <>
+              "meta=#{inspect(failure_meta)}"
+          )
+
+          maybe_notify_delivery(entry.payload, {:error, reason})
+
+          send(self(), :process_queue)
+          {:noreply, state}
+        end
+    end
+  end
+
+  def handle_info(_msg, state) do
+    {:noreply, state}
+  end
+
+  defp maybe_notify_delivery(%OutboundPayload{notify_pid: pid, notify_ref: ref} = payload, result)
+       when is_pid(pid) and is_reference(ref) do
+    tag = get_in(payload.meta || %{}, [:notify_tag]) || :outbox_delivered
+
+    try do
+      send(pid, {tag, ref, result})
+    rescue
+      _ -> :ok
+    end
+
+    :ok
+  end
+
+  defp maybe_notify_delivery(_payload, _result), do: :ok
+
+  defp outbox_failure_meta(entry) do
+    payload = entry.payload
+    meta = payload.meta || %{}
+
+    %{
+      channel_id: payload.channel_id,
+      account_id: payload.account_id,
+      kind: payload.kind,
+      peer: payload.peer,
+      run_id: meta[:run_id] || meta["run_id"],
+      session_key: meta[:session_key] || meta["session_key"]
+    }
+  end
+
+  # Chunk a payload if its content exceeds the channel's chunk limit
+  defp maybe_chunk_payload(%OutboundPayload{content: content, channel_id: channel_id} = payload)
+       when is_binary(content) do
+    chunk_size = Chunker.chunk_size_for(channel_id)
+
+    if String.length(content) <= chunk_size do
+      [payload]
+    else
+      # Split into chunks
+      chunks = Chunker.chunk(content, chunk_size: chunk_size)
+
+      # Create a payload for each chunk
+      chunks
+      |> Enum.with_index()
+      |> Enum.map(fn {chunk_content, index} ->
+        chunk_payload = %OutboundPayload{
+          payload
+          | content: chunk_content,
+            # Only use idempotency key for first chunk
+            idempotency_key: if(index == 0, do: payload.idempotency_key, else: nil),
+            # Add chunk metadata
+            meta:
+              Map.merge(payload.meta || %{}, %{
+                chunk_index: index,
+                chunk_count: length(chunks),
+                is_continuation: index > 0
+              })
+        }
+
+        # For continuation chunks, remove reply_to to avoid threading issues
+        if index > 0 do
+          %{chunk_payload | reply_to: nil}
+        else
+          chunk_payload
+        end
+      end)
+    end
+  end
+
+  defp maybe_chunk_payload(payload) do
+    # Non-text content or already processed
+    [payload]
+  end
+
+  defp enqueue_payloads(state, ref, payloads) do
+    state =
+      Enum.reduce(payloads, state, fn payload, acc ->
+        entry = %{
+          ref: ref,
+          payload: payload,
+          attempts: 0,
+          available_at_ms: nil,
+          chunk_index: get_in(payload.meta || %{}, [:chunk_index]) || 0,
+          group_key: delivery_group_key(payload)
+        }
+
+        queue = :queue.in(entry, acc.queue)
+        %{acc | queue: queue}
+      end)
+
+    %{state | enqueued_total: state.enqueued_total + length(payloads)}
+  end
+
+  defp process_available(state) do
+    {state, min_wait_ms} = do_process_available(state, nil)
+
+    if is_integer(min_wait_ms) do
+      Process.send_after(self(), :process_queue, min_wait_ms)
+    end
+
+    state
+  end
+
+  defp do_process_available(state, min_wait_ms) do
+    case dequeue_next_available(state.queue, state.processing_groups) do
+      {:none, queue, wait_ms} ->
+        {%{state | queue: queue}, min_wait(min_wait_ms, wait_ms)}
+
+      {:ready, entry, queue, wait_ms} ->
+        min_wait_ms = min_wait(min_wait_ms, wait_ms)
+
+        case RateLimiter.consume(entry.payload.channel_id, entry.payload.account_id) do
+          :ok ->
+            case start_delivery_task(entry) do
+              {:ok, %Task{} = task} ->
+                processing = Map.put(state.processing, task.ref, entry)
+                processing_groups = Map.put(state.processing_groups, entry.group_key, task.ref)
+
+                state = %{
+                  state
+                  | queue: queue,
+                    processing: processing,
+                    processing_groups: processing_groups
+                }
+
+                do_process_available(state, min_wait_ms)
+
+              {:error, reason} ->
+                Logger.warning("Failed to start outbox delivery worker: #{inspect(reason)}")
+                requeued = :queue.in(entry, queue)
+                {%{state | queue: requeued}, min_wait(min_wait_ms, 50)}
+            end
+
+          {:rate_limited, wait_ms} ->
+            requeued = :queue.in(entry, queue)
+            min_wait_ms = min_wait(min_wait_ms, wait_ms)
+            do_process_available(%{state | queue: requeued}, min_wait_ms)
+        end
+    end
+  end
+
+  defp dequeue_next_available(queue, processing_groups) do
+    len = :queue.len(queue)
+
+    do_dequeue_next_available(
+      queue,
+      processing_groups,
+      len,
+      System.monotonic_time(:millisecond),
+      nil
+    )
+  end
+
+  defp do_dequeue_next_available(queue, _processing_groups, 0, _now_ms, wait_ms),
+    do: {:none, queue, wait_ms}
+
+  defp do_dequeue_next_available(queue, processing_groups, remaining, now_ms, min_wait_ms) do
+    case :queue.out(queue) do
+      {:empty, _} ->
+        {:none, queue, min_wait_ms}
+
+      {{:value, entry}, rest} ->
+        entry_wait_ms = entry_wait_ms(entry, now_ms)
+
+        cond do
+          entry_wait_ms > 0 ->
+            # Entry is waiting for its retry window; rotate and continue scanning.
+            min_wait_ms = min_wait(min_wait_ms, entry_wait_ms)
+
+            do_dequeue_next_available(
+              :queue.in(entry, rest),
+              processing_groups,
+              remaining - 1,
+              now_ms,
+              min_wait_ms
+            )
+
+          Map.has_key?(processing_groups, entry.group_key) ->
+            # Group is currently in-flight; rotate to preserve per-group ordering.
+            do_dequeue_next_available(
+              :queue.in(entry, rest),
+              processing_groups,
+              remaining - 1,
+              now_ms,
+              min_wait_ms
+            )
+
+          true ->
+            {:ready, entry, rest, min_wait_ms}
+        end
+    end
+  end
+
+  defp release_processing_group(state, entry, task_ref) do
+    group_key = entry.group_key
+
+    processing_groups =
+      case Map.get(state.processing_groups, group_key) do
+        ^task_ref -> Map.delete(state.processing_groups, group_key)
+        _ -> state.processing_groups
+      end
+
+    %{state | processing_groups: processing_groups}
+  end
+
+  defp delivery_group_key(%OutboundPayload{} = payload) do
+    peer = payload.peer || %{}
+
+    {payload.channel_id, payload.account_id, Map.get(peer, :kind), Map.get(peer, :id),
+     Map.get(peer, :thread_id)}
+  end
+
+  defp start_delivery_task(entry) do
+    _ = ensure_worker_supervisor_started()
+
+    payload = entry.payload
+
+    try do
+      {:ok, Task.Supervisor.async_nolink(@worker_supervisor, fn -> do_deliver(payload) end)}
+    catch
+      :exit, reason -> {:error, reason}
+    end
+  end
+
+  defp ensure_worker_supervisor_started do
+    case Process.whereis(@worker_supervisor) do
+      nil ->
+        case Task.Supervisor.start_link(name: @worker_supervisor) do
+          {:ok, _pid} -> :ok
+          {:error, {:already_started, _pid}} -> :ok
+          {:error, _} = err -> err
+        end
+
+      _pid ->
+        :ok
+    end
+  end
+
+  defp do_deliver(payload) do
+    start_time = System.monotonic_time()
+
+    meta = %{
+      channel_id: payload.channel_id,
+      account_id: payload.account_id,
+      chunk_index: get_in(payload.meta || %{}, [:chunk_index])
+    }
+
+    # Emit telemetry start
+    LemonCore.Telemetry.emit(
+      [:lemon, :channels, :deliver, :start],
+      %{system_time: System.system_time()},
+      meta
+    )
+
+    result =
+      case Registry.get_plugin(payload.channel_id) do
+        nil ->
+          {:error, :unknown_channel}
+
+        plugin ->
+          try do
+            plugin.deliver(payload)
+          rescue
+            e ->
+              # Emit telemetry exception
+              LemonCore.Telemetry.emit(
+                [:lemon, :channels, :deliver, :exception],
+                %{duration: System.monotonic_time() - start_time},
+                Map.merge(meta, %{
+                  kind: :exception,
+                  reason: Exception.message(e),
+                  stacktrace: __STACKTRACE__
+                })
+              )
+
+              {:error, {:exception, e}}
+          end
+      end
+
+    # Emit telemetry stop
+    duration = System.monotonic_time() - start_time
+
+    LemonCore.Telemetry.emit(
+      [:lemon, :channels, :deliver, :stop],
+      %{duration: duration},
+      Map.merge(meta, %{ok: match?({:ok, _}, result)})
+    )
+
+    result
+  end
+
+  defp check_idempotency(%{idempotency_key: nil}), do: :ok
+
+  defp check_idempotency(%{idempotency_key: key, channel_id: channel_id}) do
+    case Dedupe.check(channel_id, key) do
+      :new -> :ok
+      :duplicate -> :duplicate
+    end
+  end
+
+  defp mark_delivered(%{idempotency_key: nil}), do: :ok
+
+  defp mark_delivered(%{idempotency_key: key, channel_id: channel_id}) do
+    Dedupe.mark(channel_id, key)
+  end
+
+  defp max_attempts do
+    case Application.get_env(:lemon_channels, __MODULE__, []) do
+      opts when is_list(opts) ->
+        case Keyword.get(opts, :max_attempts, @default_max_attempts) do
+          value when is_integer(value) and value >= 0 -> value
+          _ -> @default_max_attempts
+        end
+
+      _ ->
+        @default_max_attempts
+    end
+  end
+
+  defp max_queue_size do
+    case Application.get_env(:lemon_channels, __MODULE__, []) do
+      opts when is_list(opts) ->
+        case Keyword.get(opts, :max_queue_size, @default_max_queue_size) do
+          :infinity -> :infinity
+          value when is_integer(value) and value > 0 -> value
+          _ -> @default_max_queue_size
+        end
+
+      _ ->
+        @default_max_queue_size
+    end
+  end
+
+  defp schedule_retry(entry, reason) do
+    attempt = entry.attempts + 1
+    delay_ms = retry_delay(attempt, reason)
+    available_at_ms = System.monotonic_time(:millisecond) + delay_ms
+    {%{entry | attempts: attempt, available_at_ms: available_at_ms}, delay_ms}
+  end
+
+  defp retry_delay(attempt, reason) do
+    max(exponential_retry_delay(attempt), retry_after_ms(reason))
+  end
+
+  defp exponential_retry_delay(attempt) do
+    # Exponential backoff: 1s, 2s, 4s
+    :math.pow(2, attempt - 1) |> round() |> Kernel.*(1000)
+  end
+
+  defp retry_after_ms({:http_error, 429, body}) do
+    parse_retry_after_ms(body)
+  end
+
+  defp retry_after_ms({:worker_exit, reason}) do
+    retry_after_ms(reason)
+  end
+
+  defp retry_after_ms(_reason), do: 0
+
+  defp parse_retry_after_ms(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, decoded} ->
+        parse_retry_after_ms(decoded)
+
+      _ ->
+        parse_retry_after_ms_from_text(body)
+    end
+  end
+
+  defp parse_retry_after_ms(body) when is_map(body) do
+    with params when is_map(params) <- body["parameters"] || body[:parameters],
+         seconds when is_number(seconds) <- params["retry_after"] || params[:retry_after],
+         true <- seconds > 0 do
+      trunc(seconds * 1000)
+    else
+      _ -> 0
+    end
+  end
+
+  defp parse_retry_after_ms(_body), do: 0
+
+  defp parse_retry_after_ms_from_text(body) do
+    case Regex.run(~r/retry after (\d+(?:\.\d+)?)/i, body, capture: :all_but_first) do
+      [seconds] ->
+        case Float.parse(seconds) do
+          {value, _} when value > 0 -> trunc(value * 1000)
+          _ -> 0
+        end
+
+      _ ->
+        0
+    end
+  end
+
+  defp finalize_failure_reason(reason) do
+    case retry_after_ms(reason) do
+      ms when is_integer(ms) and ms > 0 ->
+        {:rate_limited, %{reason: reason, retry_after_ms: ms}}
+
+      _ ->
+        reason
+    end
+  end
+
+  defp entry_wait_ms(%{available_at_ms: nil}, _now_ms), do: 0
+
+  defp entry_wait_ms(%{available_at_ms: available_at_ms}, now_ms)
+       when is_integer(available_at_ms) do
+    max(available_at_ms - now_ms, 0)
+  end
+
+  defp entry_wait_ms(_entry, _now_ms), do: 0
+
+  defp min_wait(nil, nil), do: nil
+  defp min_wait(nil, wait_ms), do: wait_ms
+  defp min_wait(wait_ms, nil), do: wait_ms
+  defp min_wait(wait_a, wait_b), do: min(wait_a, wait_b)
+
+  defp retryable_reason?(:unknown_channel), do: false
+
+  defp retryable_reason?({:http_error, status, _reason})
+       when status >= 400 and status < 500 and status != 429, do: false
+
+  defp retryable_reason?({:worker_exit, _reason}), do: false
+  defp retryable_reason?(:normal), do: true
+  defp retryable_reason?(:shutdown), do: true
+  defp retryable_reason?(_reason), do: true
+
+  defp queue_full?(state, incoming_count)
+       when is_integer(incoming_count) and incoming_count > 0 do
+    case state.max_queue_size do
+      :infinity ->
+        false
+
+      max when is_integer(max) and max > 0 ->
+        queue_depth(state) + incoming_count > max
+
+      _ ->
+        false
+    end
+  end
+
+  defp queue_full?(_state, _incoming_count), do: false
+
+  defp queue_depth(state) do
+    :queue.len(state.queue) + map_size(state.processing)
+  end
+
+  defp emit_queue_depth_telemetry(state, event, metadata) do
+    LemonCore.Telemetry.emit(
+      [:lemon, :channels, :outbox, :queue],
+      %{depth: queue_depth(state), max_queue_size: state.max_queue_size, count: 1},
+      Map.put(metadata, :event, event)
+    )
+  rescue
+    _ -> :ok
+  end
+end

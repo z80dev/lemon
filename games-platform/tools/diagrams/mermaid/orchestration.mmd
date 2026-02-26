@@ -1,0 +1,45 @@
+flowchart TB
+    subgraph Scheduling["Lane-Aware Scheduling"]
+        LQ["LaneQueue"]
+        Main["main lane<br/>(cap: 4)"]
+        Sub["subagent lane<br/>(cap: 8)"]
+        BG["background_exec<br/>(cap: 2)"]
+        LQ --> Main
+        LQ --> Sub
+        LQ --> BG
+    end
+
+    subgraph TaskMgmt["Async Task Management"]
+        TaskTool["Task Tool"]
+        Spawn["spawn (async)"]
+        Poll["poll (status)"]
+        Join["join (wait)"]
+        TaskTool --> Spawn
+        TaskTool --> Poll
+        TaskTool --> Join
+    end
+
+    subgraph Stores["Durable State"]
+        TaskStore["TaskStore<br/>(ETS + DETS)"]
+        RunGraph["RunGraph<br/>(DAG)"]
+        ProcessStore["ProcessStore<br/>(Background)"]
+    end
+
+    subgraph Budget["Budget Enforcement"]
+        Tracker["BudgetTracker"]
+        Enforcer["BudgetEnforcer"]
+        Tracker --> Enforcer
+    end
+
+    subgraph Policy["Tool Policy"]
+        ToolPolicy["ToolPolicy"]
+        Profiles["Profiles:<br/>full_access<br/>read_only<br/>safe_mode<br/>subagent_restricted"]
+        ToolPolicy --> Profiles
+    end
+
+    Spawn --> LQ
+    LQ --> TaskStore
+    LQ --> RunGraph
+    Sub --> ProcessStore
+    BG --> ProcessStore
+    Enforcer --> LQ

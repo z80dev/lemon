@@ -1,0 +1,16 @@
+{
+  "name": "Lemon Make.com Webhook",
+  "endpoint_url": "https://<your-host>/webhooks/<integration_id>",
+  "method": "POST",
+  "headers": {
+    "x-webhook-token": "<token>"
+  },
+  "payload": {
+    "message": "{{1.text}}",
+    "metadata": {
+      "source": "makecom",
+      "scenario_id": "{{scenario.id}}"
+    },
+    "attachments": []
+  }
+}

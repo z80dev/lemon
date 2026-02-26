@@ -1,0 +1,43 @@
+# Example service definitions for LemonServices
+# Place your service definitions here or in services.d/*.yml
+
+services:
+  # Example: Development server
+  # dev_server:
+  #   name: "Next.js Dev Server"
+  #   description: "Local development server for the web app"
+  #   command:
+  #     type: shell
+  #     args: ["npm", "run", "dev"]
+  #   working_dir: "~/dev/my-app"
+  #   env:
+  #     NODE_ENV: development
+  #     PORT: "3000"
+  #   auto_start: false
+  #   restart_policy: transient
+  #   health_check:
+  #     type: http
+  #     url: "http://localhost:3000/api/health"
+  #     interval_ms: 5000
+  #   tags: [dev, frontend]
+  #   persistent: true
+
+  # Example: Local PostgreSQL
+  # postgres:
+  #   name: "PostgreSQL"
+  #   description: "Local database"
+  #   command:
+  #     type: shell
+  #     args: ["postgres", "-D", "~/data/postgres"]
+  #   working_dir: "~/data/postgres"
+  #   env:
+  #     PGDATA: "~/data/postgres"
+  #   auto_start: true
+  #   restart_policy: permanent
+  #   health_check:
+  #     type: tcp
+  #     host: "localhost"
+  #     port: 5432
+  #     interval_ms: 10000
+  #   tags: [infra, database]
+  #   max_memory_mb: 512

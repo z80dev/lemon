@@ -1,0 +1,145 @@
+---
+title: LemonRouter
+description: 'Run orchestration, session routing, and policy enforcement'
+---
+
+`LemonRouter` provides run orchestration, session routing, and policy-driven execution gating.
+
+## Quick Start
+
+```elixir
+# Submit a run through the router
+LemonRouter.submit(%{
+  origin: :channel,
+  session_key: "agent:my-agent:main",
+  prompt: "Help me refactor this code",
+  agent_id: "my-agent"
+})
+
+# Abort an active run
+LemonRouter.abort("session:my-agent:main")
+```
+
+## Key Features
+
+### Session Management
+
+Canonical session keys:
+
+```elixir
+# Format: agent:<id>:main or full channel format
+"agent:default:main"
+"telegram:123456:main"
+```
+
+### Run Orchestration
+
+Complete run lifecycle management:
+
+```elixir
+# 1. Agent config resolution
+# 2. Policy merging
+# 3. Engine selection
+# 4. Approval gating
+# 5. Execution
+# 6. Event streaming
+```
+
+### Hierarchical Policies
+
+Policy merging order (highest priority last):
+
+1. Agent policy (from config)
+2. Channel policy
+3. Session policy
+4. Runtime policy
+
+```elixir
+%{
+  approvals: %{"bash" => :always, "write" => :dangerous},
+  blocked_tools: ["process_kill"],
+  allowed_commands: ["git", "npm"],
+  blocked_commands: ["rm -rf /"],
+  max_file_size: 1_048_576,
+  sandbox: true
+}
+```
+
+### Approval Workflow
+
+Four approval scopes:
+
+| Scope | Description |
+|-------|-------------|
+| `once` | Approve this execution only |
+| `session` | Approve for this session |
+| `agent` | Approve for this agent |
+| `global` | Approve for all future executions |
+
+```elixir
+# Request approval
+LemonRouter.ApprovalsBridge.request(
+  run_id: run_id,
+  tool: "bash",
+  command: "rm -rf node_modules",
+  timeout_ms: 300_000
+)
+
+# Resolve approval
+LemonRouter.ApprovalsBridge.resolve(approval_id, :approved, scope: :session)
+```
+
+### Stream Coalescing
+
+Buffered output delivery:
+
+```elixir
+# Configurable thresholds
+%{
+  char_threshold: 48,      # Flush after 48 chars
+  idle_timeout_ms: 400,    # Flush after 400ms idle
+  max_delay_ms: 1200       # Flush after 1.2s max
+}
+```
+
+## Key Modules
+
+| Module | Purpose |
+|--------|---------|
+| `LemonRouter.Router` | Inbound message handling and normalization |
+| `LemonRouter.RunOrchestrator` | Run submission with lifecycle management |
+| `LemonRouter.RunProcess` | Individual run state and event forwarding |
+| `LemonRouter.SessionKey` | Session key generation and parsing |
+| `LemonRouter.Policy` | Hierarchical policy merging |
+| `LemonRouter.ApprovalsBridge` | Approval request/resolution with timeouts |
+| `LemonRouter.StreamCoalescer` | Output buffering |
+
+## Agent Profiles
+
+Configure agents in `~/.lemon/config.toml`:
+
+```toml
+[agents.default]
+name = "Lemon"
+system_prompt = "You are my general assistant. Be concise, practical, and ask clarifying questions when needed."
+model = "anthropic:claude-sonnet-4-20250514"
+default_engine = "lemon"
+
+[agents.default.tool_policy]
+allow = "all"
+deny = []
+require_approval = ["bash", "write", "edit"]
+```
+
+## Bindings
+
+Bind chats to specific agents and projects:
+
+```toml
+[[gateway.bindings]]
+transport = "telegram"
+chat_id = 123456789
+agent_id = "default"
+project = "myrepo"
+default_engine = "lemon"
+```

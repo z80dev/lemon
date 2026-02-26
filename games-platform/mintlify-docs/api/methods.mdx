@@ -1,0 +1,565 @@
+---
+title: RPC Methods
+description: 'Complete list of LemonControlPlane RPC methods'
+---
+
+## Agent Methods
+
+### `agent`
+
+Invoke an agent directly.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "1",
+  "method": "agent",
+  "params": {
+    "agent_id": "default",
+    "prompt": "Hello!",
+    "session_key": "agent:default:main"
+  }
+}
+```
+
+### `agent.wait`
+
+Wait for an agent run to complete.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "2",
+  "method": "agent.wait",
+  "params": {
+    "run_id": "run_abc123",
+    "timeout_ms": 30000
+  }
+}
+```
+
+### `agents.list`
+
+List configured agents.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "3",
+  "method": "agents.list"
+}
+```
+
+## Session Methods
+
+### `sessions.list`
+
+List active sessions.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "4",
+  "method": "sessions.list",
+  "params": {
+    "agent_id": "default"
+  }
+}
+```
+
+### `sessions.patch`
+
+Update session configuration.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "5",
+  "method": "sessions.patch",
+  "params": {
+    "session_key": "agent:default:main",
+    "patch": {
+      "model": "anthropic:claude-opus-4-20250514"
+    }
+  }
+}
+```
+
+### `sessions.reset`
+
+Reset a session (clear history).
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "6",
+  "method": "sessions.reset",
+  "params": {
+    "session_key": "agent:default:main"
+  }
+}
+```
+
+## Chat Methods
+
+### `chat.send`
+
+Send a message to a session.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "7",
+  "method": "chat.send",
+  "params": {
+    "session_key": "agent:default:main",
+    "prompt": "Hello!",
+    "queue_mode": "collect"
+  }
+}
+```
+
+### `chat.abort`
+
+Abort the current run in a session.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "8",
+  "method": "chat.abort",
+  "params": {
+    "session_key": "agent:default:main"
+  }
+}
+```
+
+### `chat.history`
+
+Get conversation history.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "9",
+  "method": "chat.history",
+  "params": {
+    "session_key": "agent:default:main",
+    "limit": 50
+  }
+}
+```
+
+## Cron Methods
+
+### `cron.add`
+
+Add a scheduled job.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "10",
+  "method": "cron.add",
+  "params": {
+    "name": "Daily Report",
+    "schedule": "0 9 * * *",
+    "agent_id": "analyst",
+    "prompt": "Generate report"
+  }
+}
+```
+
+### `cron.list`
+
+List cron jobs.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "11",
+  "method": "cron.list"
+}
+```
+
+### `cron.run`
+
+Trigger a job immediately.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "12",
+  "method": "cron.run",
+  "params": {
+    "job_id": "cron_abc123"
+  }
+}
+```
+
+### `cron.delete`
+
+Delete a cron job.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "13",
+  "method": "cron.delete",
+  "params": {
+    "job_id": "cron_abc123"
+  }
+}
+```
+
+## Skills Methods
+
+### `skills.status`
+
+Check skill readiness.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "14",
+  "method": "skills.status",
+  "params": {
+    "skill_id": "git-workflow"
+  }
+}
+```
+
+### `skills.list`
+
+List available skills.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "15",
+  "method": "skills.list",
+  "params": {
+    "cwd": "/path/to/project"
+  }
+}
+```
+
+### `skills.install`
+
+Install a skill from Git.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "16",
+  "method": "skills.install",
+  "params": {
+    "url": "https://github.com/user/skill-repo"
+  }
+}
+```
+
+### `skills.update`
+
+Update an installed skill.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "17",
+  "method": "skills.update",
+  "params": {
+    "skill_id": "git-workflow"
+  }
+}
+```
+
+### `skills.uninstall`
+
+Uninstall a skill.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "18",
+  "method": "skills.uninstall",
+  "params": {
+    "skill_id": "git-workflow"
+  }
+}
+```
+
+## Execution Approval Methods
+
+### `exec.approval.request`
+
+Request approval for a tool execution.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "19",
+  "method": "exec.approval.request",
+  "params": {
+    "run_id": "run_abc123",
+    "tool": "bash",
+    "command": "rm -rf node_modules",
+    "timeout_ms": 300000
+  }
+}
+```
+
+### `exec.approval.resolve`
+
+Resolve an approval request.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "20",
+  "method": "exec.approval.resolve",
+  "params": {
+    "approval_id": "appr_abc123",
+    "resolution": "approved",
+    "scope": "session"
+  }
+}
+```
+
+## Node Methods
+
+### `node.pair.request`
+
+Request to pair a new node.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "21",
+  "method": "node.pair.request",
+  "params": {
+    "client_id": "my-client",
+    "public_key": "..."
+  }
+}
+```
+
+### `node.pair.approve`
+
+Approve a pairing request.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "22",
+  "method": "node.pair.approve",
+  "params": {
+    "request_id": "req_abc123"
+  }
+}
+```
+
+### `node.list`
+
+List paired nodes.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "23",
+  "method": "node.list"
+}
+```
+
+### `node.invoke`
+
+Invoke a method on a paired node.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "24",
+  "method": "node.invoke",
+  "params": {
+    "node_id": "node_abc123",
+    "method": "agent",
+    "params": {...}
+  }
+}
+```
+
+## Channel Methods
+
+### `channels.status`
+
+Get channel adapter status.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "25",
+  "method": "channels.status"
+}
+```
+
+### `channels.logout`
+
+Logout from a channel.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "26",
+  "method": "channels.logout",
+  "params": {
+    "channel_id": "telegram",
+    "account_id": "bot_123"
+  }
+}
+```
+
+## System Methods
+
+### `health`
+
+Health check.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "27",
+  "method": "health"
+}
+```
+
+### `status`
+
+Get system status.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "28",
+  "method": "status"
+}
+```
+
+### `system.presence`
+
+Get presence information.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "29",
+  "method": "system.presence"
+}
+```
+
+## Secrets Methods (Admin)
+
+### `secrets.status`
+
+Get secrets store status.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "30",
+  "method": "secrets.status"
+}
+```
+
+### `secrets.list`
+
+List secrets (metadata only).
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "31",
+  "method": "secrets.list"
+}
+```
+
+### `secrets.exists`
+
+Check if a secret exists.
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "32",
+  "method": "secrets.exists",
+  "params": {
+    "name": "llm_openai_api_key"
+  }
+}
+```
+
+### `secrets.set`
+
+Set a secret (admin only).
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "33",
+  "method": "secrets.set",
+  "params": {
+    "name": "my_secret",
+    "value": "secret_value",
+    "provider": "my_provider",
+    "expires_at": 1735689600000
+  }
+}
+```
+
+### `secrets.delete`
+
+Delete a secret (admin only).
+
+**Request:**
+```json
+{
+  "type": "req",
+  "id": "34",
+  "method": "secrets.delete",
+  "params": {
+    "name": "my_secret"
+  }
+}
+```

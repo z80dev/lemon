@@ -1,0 +1,164 @@
+---
+title: LemonSkills
+description: 'Skill registry and management for reusable knowledge modules'
+---
+
+`LemonSkills` provides a centralized skill registry for reusable knowledge modules.
+
+## Quick Start
+
+```elixir
+# List available skills
+skills = LemonSkills.list()
+skills = LemonSkills.list(cwd: "/path/to/project")
+
+# Get a specific skill
+{:ok, skill} = LemonSkills.get("git-workflow")
+
+# Check skill readiness (dependency verification)
+status = LemonSkills.status("kubectl-operations")
+# => %{ready: false, missing_bins: ["kubectl"], missing_config: ["KUBECONFIG"]}
+
+# Install a skill from Git
+{:ok, entry} = LemonSkills.install("https://github.com/user/skill-repo")
+```
+
+## Skill File Format
+
+Skills are defined in `SKILL.md` files with YAML/TOML frontmatter:
+
+```markdown
+---
+name: git-workflow
+description: Git best practices and commands
+version: 1.0.0
+requires:
+  bins:
+    - git
+  config:
+    - GITHUB_TOKEN
+---
+
+# Git Workflow
+
+Instructions for the agent...
+```
+
+## Key Features
+
+### Dual Scope
+
+Skills can be global or project-specific:
+
+```bash
+# Global skill
+mkdir -p ~/.lemon/agent/skill/my-skill
+
+# Project skill
+mkdir -p .lemon/skill/my-skill
+```
+
+### Bundled Skills
+
+Lemon seeds built-in skills on first run:
+
+| Skill | Description |
+|-------|-------------|
+| `github` | GitHub CLI operations |
+| `peekaboo` | macOS UI automation |
+| `pinata` | IPFS pinning via Pinata |
+| `runtime-remsh` | BEAM remote shell |
+| `session-logs` | Session log analysis |
+| `skill-creator` | Creating new skills |
+| `summarize` | Text/video summarization |
+| `tmux` | Tmux session control |
+
+### Manifest Parsing
+
+YAML or TOML frontmatter with metadata:
+
+```yaml
+---
+name: my-skill
+description: What this skill does
+version: 1.0.0
+requires:
+  bins:
+    - required-binary
+  config:
+    - REQUIRED_ENV_VAR
+  files:
+    - /path/to/required/file
+---
+```
+
+### Dependency Verification
+
+Check if a skill's requirements are met:
+
+```elixir
+LemonSkills.status("my-skill")
+# => %{ready: true, missing_bins: [], missing_config: [], missing_files: []}
+```
+
+### Approval Gating
+
+Install/update/uninstall operations require approval:
+
+```elixir
+# These operations trigger approval flow
+LemonSkills.install("https://github.com/user/skill")
+LemonSkills.update("my-skill")
+LemonSkills.uninstall("my-skill")
+```
+
+### Agent Integration
+
+Agents can access skills via the `read_skill` tool:
+
+```elixir
+# In agent conversation
+> read_skill("git-workflow")
+
+# Returns skill content for the agent to use
+```
+
+## Key Modules
+
+| Module | Purpose |
+|--------|---------|
+| `LemonSkills.Registry` | In-memory skill cache |
+| `LemonSkills.Entry` | Skill data structure |
+| `LemonSkills.Manifest` | YAML/TOML frontmatter parsing |
+| `LemonSkills.Status` | Binary and config availability checking |
+| `LemonSkills.Config` | Enable/disable, paths |
+| `LemonSkills.Installer` | Git clone or local copy |
+| `LemonSkills.Tools.ReadSkill` | Agent tool for skill access |
+
+## Creating a Skill
+
+1. Create a directory for your skill
+2. Add a `SKILL.md` file with frontmatter
+3. Write instructions for the agent
+4. Place in `~/.lemon/agent/skill/` or `.lemon/skill/`
+
+Example:
+
+```markdown
+---
+name: docker-helpers
+description: Common Docker operations
+version: 1.0.0
+requires:
+  bins:
+    - docker
+---
+
+# Docker Helpers
+
+When working with Docker:
+
+1. Use `docker compose` instead of `docker-compose`
+2. Always check if containers are running before operations
+3. Use `--build` flag when code changes affect the image
+```

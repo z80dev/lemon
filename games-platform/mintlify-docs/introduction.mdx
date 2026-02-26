@@ -1,0 +1,135 @@
+---
+title: Introduction
+description: 'Lemon is a local-first AI assistant and coding agent system built on the BEAM'
+---
+
+<img
+  className="block dark:hidden"
+  src="/images/hero-light.svg"
+  alt="Hero Light"
+/>
+<img
+  className="hidden dark:block"
+  src="/images/hero-dark.svg"
+  alt="Hero Dark"
+/>
+
+## What is Lemon?
+
+Lemon is a local-first AI assistant and coding agent system that you run on your own machine. Named after a cat, it brings the power of AI coding assistance directly to your development environment with complete privacy and control.
+
+The easiest way to use Lemon day-to-day is through **Telegram**: you talk to a bot from your phone or desktop while Lemon runs locally on your machine. Messages flow through `lemon_channels`, runs are orchestrated by `lemon_router`, and execution is handled by `lemon_gateway` using one of the configured engines.
+
+<CardGroup cols={2}>
+  <Card
+    title="Quick Start"
+    icon="bolt"
+    href="/quickstart"
+  >
+    Get up and running with Lemon in minutes
+  </Card>
+  <Card
+    title="Architecture"
+    icon="diagram-project"
+    href="/docs/architecture-overview"
+  >
+    Understand how Lemon works under the hood
+  </Card>
+  <Card
+    title="Components"
+    icon="cubes"
+    href="/docs/components/ai-library"
+  >
+    Explore the 11 OTP applications that power Lemon
+  </Card>
+  <Card
+    title="Configuration"
+    icon="gear"
+    href="/docs/config/overview"
+  >
+    Configure providers, gateways, and secrets
+  </Card>
+</CardGroup>
+
+## Why Lemon?
+
+### Local-First
+
+Your code never leaves your machine unless you want it to. Lemon runs entirely locally, giving you complete control over your data and privacy.
+
+### Multi-Engine Support
+
+Lemon isn't tied to a single AI provider. Use Anthropic, OpenAI, Google, Azure, AWS Bedrock, or even local models—all through a unified interface.
+
+### Built on the BEAM
+
+Leveraging Erlang/OTP's legendary fault tolerance and concurrency, Lemon treats each agent as an independent process with isolated state and message-passing communication.
+
+### Multi-Modal Interface
+
+Chat via Telegram, use the Terminal UI for focused coding sessions, or run the Web UI for browser-based interaction.
+
+## Core Philosophy
+
+1. **Agents as Processes**: Each AI agent runs as an independent GenServer process with its own state, mailbox, and lifecycle
+2. **Streaming as Events**: LLM streaming responses are modeled as event streams for reactive UI updates
+3. **Fault Tolerance**: OTP supervision trees ensure agent failures are isolated and recoverable
+4. **Live Steering**: Users can inject messages mid-execution to steer the agent
+5. **Multi-Provider Abstraction**: Unified interface across all major LLM providers
+
+## Key Features
+
+<AccordionGroup>
+  <Accordion title="15+ Built-in Tools">
+    Read, write, edit, patch, bash, grep, find, ls, browser automation, web search, web fetch, todo management, task delegation, and more.
+  </Accordion>
+  <Accordion title="Real-time Streaming">
+    Watch LLM responses appear character-by-character with fine-grained event notifications.
+  </Accordion>
+  <Accordion title="Session Persistence">
+    Full conversation history with tree-structured branching and context compaction.
+  </Accordion>
+  <Accordion title="Extension System">
+    Load custom tools and skills dynamically to extend Lemon's capabilities.
+  </Accordion>
+  <Accordion title="Multi-Engine Architecture">
+    Native Lemon, Codex CLI, Claude CLI, OpenCode CLI, and Pi CLI backends.
+  </Accordion>
+  <Accordion title="Orchestration Runtime">
+    Lane-aware scheduling, async subagents, durable background processes, and budget enforcement.
+  </Accordion>
+</AccordionGroup>
+
+## Quick Example
+
+```bash
+# Start a coding session
+./bin/lemon-dev /path/to/your/project
+
+# Or use Telegram
+./bin/lemon-gateway
+```
+
+```elixir
+# Programmatic usage
+{:ok, session} = CodingAgent.start_session(
+  cwd: "/path/to/project",
+  model: Ai.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+)
+
+:CodingAgent.Session.prompt(session, "Refactor the User module")
+```
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="Install Lemon" icon="download" href="/installation">
+    Set up Elixir, Node.js, and Lemon
+  </Card>
+  <Card title="Quick Start" icon="play" href="/quickstart">
+    Get your first agent running
+  </Card>
+  <Card title="Read the Docs" icon="book" href="/docs/why-beam">
+    Understand the architecture
+  </Card>
+</CardGroup>

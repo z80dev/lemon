@@ -1,0 +1,214 @@
+---
+title: AgentCore
+description: 'Core agent framework with event-driven architecture'
+---
+
+`AgentCore` builds on `Ai` to provide a complete, provider-agnostic agent framework.
+
+## Quick Start
+
+```elixir
+# Create tools
+read_tool = AgentCore.new_tool(
+  name: "read_file",
+  description: "Read a file",
+  parameters: %{
+    "type" => "object",
+    "properties" => %{
+      "path" => %{"type" => "string"}
+    },
+    "required" => ["path"]
+  },
+  execute: fn _id, %{"path" => path}, _signal, _on_update ->
+    case File.read(path) do
+      {:ok, content} -> 
+        AgentCore.new_tool_result(content: [AgentCore.text_content(content)])
+      {:error, reason} -> 
+        {:error, reason}
+    end
+  end
+)
+
+# Start an agent
+{:ok, agent} = AgentCore.new_agent(
+  model: model,
+  system_prompt: "You are a coding assistant.",
+  tools: [read_tool]
+)
+
+# Subscribe to events
+AgentCore.subscribe(agent, self())
+
+# Send a prompt
+:ok = AgentCore.prompt(agent, "Read the README.md file")
+
+# Receive events
+receive do
+  {:agent_event, event} -> handle_event(event)
+end
+```
+
+## Key Features
+
+### GenServer-Based Stateful Agents
+
+Each agent is an independent process with isolated state:
+
+```elixir
+{:ok, agent1} = AgentCore.new_agent(model: model, system_prompt: "...")
+{:ok, agent2} = AgentCore.new_agent(model: model, system_prompt: "...")
+
+# Each has independent conversation context
+# Crash one, the other continues
+```
+
+### Event-Driven Architecture
+
+All agent activity produces events:
+
+```elixir
+receive do
+  {:agent_event, {:message_start, id}} ->
+    IO.puts("Message started")
+    
+  {:agent_event, {:message_delta, id, delta}} ->
+    IO.write(delta)  # Stream to UI
+    
+  {:agent_event, {:tool_execution_start, id, name, args}} ->
+    IO.puts("Tool: #{name}")
+    
+  {:agent_event, {:tool_execution_result, id, result}} ->
+    IO.puts("Result: #{result}")
+    
+  {:agent_event, {:message_complete, id, message}} ->
+    IO.puts("\nDone!")
+end
+```
+
+### Steering and Follow-ups
+
+Send messages to an agent while it's running:
+
+```elixir
+# Agent is processing...
+:ok = AgentCore.steer(agent, "Actually, use a different approach")
+
+# Or queue a follow-up
+:ok = AgentCore.followup(agent, "After this, also check tests")
+```
+
+### Abort Signaling
+
+Cancel agent execution:
+
+```elixir
+# Signal abort
+AgentCore.AbortSignal.signal(session_id)
+
+# Check in tool execution
+execute: fn id, args, signal, on_update ->
+  if AgentCore.AbortSignal.aborted?(signal) do
+    {:error, :aborted}
+  else
+    # Continue execution
+  end
+end
+```
+
+## CLI Runner Infrastructure
+
+AgentCore includes comprehensive CLI runner infrastructure for integrating external AI tools.
+
+### Supported Integrations
+
+| Runner | Subagent | CLI Command |
+|--------|----------|-------------|
+| `CodexRunner` | `CodexSubagent` | `codex exec` |
+| `ClaudeRunner` | `ClaudeSubagent` | `claude -p --output-format stream-json` |
+| `KimiRunner` | `KimiSubagent` | `kimi --print --output-format stream-json` |
+| `OpencodeRunner` | `OpencodeSubagent` | `opencode run --format json` |
+| `PiRunner` | `PiSubagent` | `pi --print --mode json` |
+| `LemonRunner` | `LemonSubagent` | Native CodingAgent.Session |
+
+### Using Subagents
+
+```elixir
+# Start a subagent session
+{:ok, session} = AgentCore.CliRunners.CodexSubagent.start(
+  prompt: "Refactor this module",
+  cwd: "/path/to/project"
+)
+
+# Stream events
+for event <- AgentCore.CliRunners.CodexSubagent.events(session) do
+  case event do
+    {:started, resume_token} -> 
+      IO.puts("Session: #{resume_token.value}")
+    {:action, action, :started, _opts} -> 
+      IO.puts("Starting: #{action.title}")
+    {:action, action, :completed, _opts} -> 
+      IO.puts("Completed: #{action.title}")
+    {:completed, answer, _opts} -> 
+      IO.puts("Answer: #{answer}")
+  end
+end
+
+# Resume later
+{:ok, session} = AgentCore.CliRunners.CodexSubagent.resume(
+  resume_token,
+  prompt: "Continue with the next step"
+)
+```
+
+### Runner vs Subagent
+
+- **Runner** (`*Runner` modules): Low-level engine adapters that own execution and emit unified events
+- **Subagent** (`*Subagent` modules): High-level caller API with ergonomic interface
+
+## Tool Definition
+
+Tools are defined with JSON Schema parameters:
+
+```elixir
+tool = AgentCore.new_tool(
+  name: "search_files",
+  description: "Search for files matching a pattern",
+  parameters: %{
+    "type" => "object",
+    "properties" => %{
+      "pattern" => %{
+        "type" => "string",
+        "description" => "Glob pattern to match"
+      },
+      "path" => %{
+        "type" => "string",
+        "description" => "Directory to search"
+      }
+    },
+    "required" => ["pattern"]
+  },
+  execute: fn id, args, signal, on_update ->
+    # Tool implementation
+  end
+)
+```
+
+### Tool Result Types
+
+```elixir
+# Text content
+AgentCore.new_tool_result(
+  content: [AgentCore.text_content("Result text")]
+)
+
+# With images
+AgentCore.new_tool_result(
+  content: [
+    AgentCore.text_content("Screenshot:"),
+    AgentCore.image_content(image_data, mime_type: "image/png")
+  ]
+)
+
+# Error
+{:error, "Something went wrong"}
+```
