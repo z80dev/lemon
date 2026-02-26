@@ -1,0 +1,135 @@
+---
+title: LemonChannels
+description: 'Pluggable channel adapters with intelligent message delivery'
+---
+
+`LemonChannels` provides pluggable channel adapters with intelligent message delivery.
+
+## Quick Start
+
+```elixir
+# Enqueue a message for delivery
+LemonChannels.enqueue(%LemonChannels.OutboundPayload{
+  channel_id: "telegram",
+  account_id: "bot_123",
+  peer: %{kind: :dm, id: "user_456"},
+  kind: :text,
+  content: "Hello from Lemon!"
+})
+```
+
+## Key Features
+
+### Pluggable Adapters
+
+Standardized `Plugin` behaviour for any channel:
+
+```elixir
+defmodule MyApp.Adapters.Discord do
+  @behaviour LemonChannels.Plugin
+
+  def id, do: "discord"
+  def meta, do: %{capabilities: [...]}
+  def deliver(payload), do: # send to Discord
+  def normalize_inbound(raw), do: # convert to InboundMessage
+end
+```
+
+### Smart Chunking
+
+Automatic message splitting at word/sentence boundaries:
+
+```elixir
+# Large messages are automatically split
+# Respects platform limits
+# Preserves markdown formatting
+```
+
+### Rate Limiting
+
+Token bucket algorithm:
+
+```elixir
+# Default limits
+%{
+  rate: 30,      # 30 messages per second
+  burst: 5       # 5 message burst
+}
+```
+
+### Deduplication
+
+Outbound idempotency:
+
+```elixir
+# 1-hour TTL for outbound messages
+# Telegram inbound update dedupe: 10 minutes
+```
+
+### Retry Logic
+
+Exponential backoff:
+
+```elixir
+# 3 attempts: 1s, 2s, 4s
+# Configurable per adapter
+```
+
+## Telegram Adapter
+
+The built-in Telegram adapter:
+
+```elixir
+# Long-polling transport for inbound messages
+# Normalized InboundMessage format
+# Edit/delete support for message updates
+# Peer kind detection (DM, group, supergroup, channel)
+```
+
+### Configuration
+
+```toml
+[gateway.telegram]
+bot_token = "123456:token"
+allowed_chat_ids = [123456789]
+deny_unbound_chats = true
+drop_pending_updates = true
+allow_queue_override = true
+```
+
+### Commands
+
+From Telegram:
+
+| Command | Description |
+|---------|-------------|
+| `/new` | Start new session |
+| `/new <project>` | Start session bound to project |
+| `/resume` | List sessions |
+| `/resume <number>` | Resume session |
+| `/cancel` | Cancel running run |
+| `/lemon`, `/claude`, `/codex` | Engine override |
+| `/steer`, `/followup`, `/interrupt` | Queue mode override |
+
+### Cancel via Reply
+
+Reply to the bot's "Running..." message with `/cancel` to abort.
+
+## Adding Custom Adapters
+
+1. Create a module implementing `LemonChannels.Plugin`
+2. Define `child_spec/1` for OTP supervision
+3. Implement `normalize_inbound/1` for message conversion
+4. Implement `deliver/1` for outbound messages
+5. Register in `LemonChannels.Application`
+
+## Key Modules
+
+| Module | Purpose |
+|--------|---------|
+| `LemonChannels.Plugin` | Channel adapter behaviour |
+| `LemonChannels.Registry` | Adapter registration |
+| `LemonChannels.Outbox` | Message delivery queue |
+| `LemonChannels.Outbox.Chunker` | Smart message splitting |
+| `LemonChannels.Outbox.Dedupe` | Idempotency tracking |
+| `LemonChannels.Outbox.RateLimiter` | Token bucket limiting |

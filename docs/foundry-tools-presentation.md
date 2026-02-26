@@ -15,12 +15,13 @@
 
 ## What We Built
 
-Five WASM-sandboxed tools wrapping Foundry's `cast` and `forge` CLI:
+Six WASM-sandboxed tools wrapping Foundry's `cast` and `forge` CLI:
 
 | Tool | Operation | Needs Key? |
 |------|-----------|------------|
 | `cast_call` | Read-only contract call | No |
 | `cast_send` | Sign & broadcast transaction | Yes |
+| `cast_wallet_address` | Get wallet address from signer | Yes |
 | `cast_wallet_sign` | Sign message / EIP-712 data | Yes |
 | `forge_script` | Run deployment script | Yes |
 | `forge_create` | Deploy a contract | Yes |
@@ -31,13 +32,13 @@ Five WASM-sandboxed tools wrapping Foundry's `cast` and `forge` CLI:
 
 The WASM tool **never sees the private key**.
 
-It builds a command with a placeholder:
+It builds a command with placeholders:
 
 ```
-cast send 0xAbC... --private-key {{SECRET:ETH_PRIVATE_KEY}}
+cast send 0xAbC... --account {{SECRET:KEYSTORE_NAME}} --password {{SECRET:KEYSTORE_PASSWORD}}
 ```
 
-The string `{{SECRET:ETH_PRIVATE_KEY}}` is all the tool knows.
+The strings `{{SECRET:KEYSTORE_NAME}}` and `{{SECRET:KEYSTORE_PASSWORD}}` are all the tool knows.
 
 The host runtime resolves it **outside the sandbox**.
 
@@ -61,7 +62,7 @@ Host Runtime (trusted, outside sandbox)
     |  Validates program against allowlist
     |  Validates subcommand ("send") is permitted
     |  Checks for blocked flags ("--interactive")
-    |  Resolves {{SECRET:ETH_PRIVATE_KEY}} from secrets store
+    |  Resolves {{SECRET:KEYSTORE_NAME}} and {{SECRET:KEYSTORE_PASSWORD}} from secrets store
     |  Executes cast via direct process spawn (no shell)
     |  Captures stdout/stderr
     |  Scans output for leaked secret values -> [REDACTED]
@@ -175,19 +176,22 @@ Same trust model. Same security boundaries. New capability surface.
 
 ---
 
-## Dynamic Key Selection
+## Signing Modes
 
-Users can store multiple keys and select at invocation time:
+By default, signing tools use Foundry keystore secrets:
 
 ```json
 {
   "to": "0xAbC...",
-  "rpc_url": "https://eth.llamarpc.com",
-  "secret_name": "DEPLOYER_KEY"
+  "rpc_url": "https://eth.llamarpc.com"
 }
 ```
 
-The tool uses `{{SECRET:DEPLOYER_KEY}}` instead of the default `{{SECRET:ETH_PRIVATE_KEY}}`.
+This resolves to:
+- `{{SECRET:KEYSTORE_NAME}}` for `--account`
+- `{{SECRET:KEYSTORE_PASSWORD}}` for `--password`
+
+Private-key mode is still available when explicitly requested with `"use_keystore": false`.
 
 Capabilities files support wildcard patterns:
 
@@ -224,8 +228,10 @@ Args are a JSON array of strings. No shell. No interpolation. Direct process exe
 
 ```rust
 // Build args with secret placeholder
-args.push("--private-key".to_string());
-args.push(format!("{{{{SECRET:{secret_name}}}}}"));
+args.push("--account".to_string());
+args.push("{{SECRET:KEYSTORE_NAME}}".to_string());
+args.push("--password".to_string());
+args.push("{{SECRET:KEYSTORE_PASSWORD}}".to_string());
 
 // Call host to execute
 let result = host::exec_command(

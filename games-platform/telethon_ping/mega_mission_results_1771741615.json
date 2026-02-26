@@ -1,0 +1,114 @@
+[
+  {
+    "mission_id": "M01",
+    "name": "Write market_intel tests",
+    "category": "codebase",
+    "status": "TIMEOUT",
+    "topic_id": 3245,
+    "sent_ids": [
+      3249
+    ],
+    "recv_ids": [],
+    "recv_texts": [],
+    "duration": 600.6210649013519,
+    "notes": "No substantive reply within timeout"
+  },
+  {
+    "mission_id": "M02",
+    "name": "Add typespecs to agent_core",
+    "category": "codebase",
+    "status": "TIMEOUT",
+    "topic_id": 3248,
+    "sent_ids": [
+      3250
+    ],
+    "recv_ids": [],
+    "recv_texts": [],
+    "duration": 600.6204478740692,
+    "notes": "No substantive reply within timeout"
+  },
+  {
+    "mission_id": "M03",
+    "name": "Document tool system",
+    "category": "codebase",
+    "status": "TIMEOUT",
+    "topic_id": 3244,
+    "sent_ids": [
+      3253
+    ],
+    "recv_ids": [],
+    "recv_texts": [],
+    "duration": 600.6282181739807,
+    "notes": "No substantive reply within timeout"
+  },
+  {
+    "mission_id": "M04",
+    "name": "Improve scheduler error handling",
+    "category": "codebase",
+    "status": "TIMEOUT",
+    "topic_id": 3246,
+    "sent_ids": [
+      3256
+    ],
+    "recv_ids": [],
+    "recv_texts": [],
+    "duration": 600.6314790248871,
+    "notes": "No substantive reply within timeout"
+  },
+  {
+    "mission_id": "M05",
+    "name": "Blog: What is Lemon?",
+    "category": "creative",
+    "status": "TIMEOUT",
+    "topic_id": 3247,
+    "sent_ids": [
+      3252
+    ],
+    "recv_ids": [],
+    "recv_texts": [],
+    "duration": 600.6217911243439,
+    "notes": "No substantive reply within timeout"
+  },
+  {
+    "mission_id": "M06",
+    "name": "Blog: Building in public",
+    "category": "creative",
+    "status": "TIMEOUT",
+    "topic_id": 3241,
+    "sent_ids": [
+      3251
+    ],
+    "recv_ids": [],
+    "recv_texts": [],
+    "duration": 600.6229500770569,
+    "notes": "No substantive reply within timeout"
+  },
+  {
+    "mission_id": "M07",
+    "name": "Lore: Origin story",
+    "category": "creative",
+    "status": "TIMEOUT",
+    "topic_id": 3243,
+    "sent_ids": [
+      3254
+    ],
+    "recv_ids": [],
+    "recv_texts": [],
+    "duration": 600.6233651638031,
+    "notes": "No substantive reply within timeout"
+  },
+  {
+    "mission_id": "M08",
+    "name": "Lore: The Lemonade Stand",
+    "category": "creative",
+    "status": "TIMEOUT",
+    "topic_id": 3242,
+    "sent_ids": [
+      3255
+    ],
+    "recv_ids": [],
+    "recv_texts": [],
+    "duration": 600.6239328384399,
+    "notes": "No substantive reply within timeout"
+  }
+]

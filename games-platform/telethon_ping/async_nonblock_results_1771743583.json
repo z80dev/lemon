@@ -1,0 +1,121 @@
+[
+  {
+    "test_name": "async_task_nonblock",
+    "status": "FAIL",
+    "spawn_ack_time": 10.170212268829346,
+    "followup_reply_time": 0.0,
+    "async_result_time": 77.93074584007263,
+    "spawn_ack_text": "Done! I've spawned an async subtask to research the BEAM virtual machine history. The task ID is 37e37306e6cd9795.\n\nI'm still here and available to help you with anything else while that runs in the b",
+    "followup_reply_text": "",
+    "async_result_text": "The async task has completed! Here's the comprehensive 500-word summary on the BEAM virtual machine:\n\nThe BEAM Virtual Machine: A Comprehensive History\n\nOrigins at Ericsson\n\nThe BEAM (Bogdan/Bj\u00f6rn's E",
+    "timeline": [
+      {
+        "event": "spawn_sent",
+        "t": 1.120798110961914
+      },
+      {
+        "event": "bot_msg",
+        "t": 10.170207023620605,
+        "msg_id": 3293,
+        "chars": 242,
+        "preview": "Done! I've spawned an async subtask to research the BEAM virtual machine history"
+      },
+      {
+        "event": "followup_sent",
+        "t": 12.214205026626587
+      },
+      {
+        "event": "bot_msg",
+        "t": 77.93069505691528,
+        "msg_id": 3296,
+        "chars": 4053,
+        "preview": "The async task has completed! Here's the comprehensive 500-word summary on the B"
+      },
+      {
+        "event": "bot_msg",
+        "t": 78.24798917770386,
+        "msg_id": 3297,
+        "chars": 820,
+        "preview": "and improves readability\n\n- First-class metaprogramming through hygienic macros "
+      }
+    ],
+    "notes": "Async result received but follow-up was never answered \u2014 BLOCKED"
+  },
+  {
+    "test_name": "async_agent_nonblock",
+    "status": "PARTIAL",
+    "spawn_ack_time": 13.65835428237915,
+    "followup_reply_time": 19.933428049087524,
+    "async_result_time": 0.0,
+    "spawn_ack_text": "I'm still here and available! \u2705\n\nI've delegated the task to the coder agent asynchronously. The task ID is 849b2c2d81b136a9 and the run ID is run_b50b7bf6-0ca1-4c7a-8f4e-b4417815848f.\n\nThe coder agent",
+    "followup_reply_text": "7 times 8 is 56.",
+    "async_result_text": "",
+    "timeline": [
+      {
+        "event": "spawn_sent",
+        "t": 1.0852580070495605
+      },
+      {
+        "event": "bot_msg",
+        "t": 13.658345937728882,
+        "msg_id": 3300,
+        "chars": 383,
+        "preview": "I'm still here and available! \u2705\n\nI've delegated the task to the coder agent asyn"
+      },
+      {
+        "event": "followup_sent",
+        "t": 15.771773099899292
+      },
+      {
+        "event": "bot_msg",
+        "t": 19.93342614173889,
+        "msg_id": 3302,
+        "chars": 16,
+        "preview": "7 times 8 is 56."
+      }
+    ],
+    "notes": "Follow-up answered at 19.9s but async result never received within timeout"
+  },
+  {
+    "test_name": "multi_async_nonblock",
+    "status": "PASS",
+    "spawn_ack_time": 12.543803930282593,
+    "followup_reply_time": 20.657859802246094,
+    "async_result_time": 25.621747970581055,
+    "spawn_ack_text": "Both tasks are now running in the background:\n\n1. Task 1 (29407a123e2ccfa2): Listing and counting files in ~/dev/lemon/apps/\n2. Task 2 (5fbba2a6cfcb6bde): Searching for Bitcoin price\nI'm still availab",
+    "followup_reply_text": "When you mix red and blue, you get purple (or violet).\n\n- Equal parts red + blue = purple\n- More red than blue = magenta or reddish-purple\n- More blue than red = violet or bluish-purple\n\ud83c\udfa8",
+    "async_result_text": "Bitcoin is sitting around $68,000 \u2014 pretty flat on the day, down a bit from last week.\n\nStill waiting on the file count task. Anything else while we wait?",
+    "timeline": [
+      {
+        "event": "spawn_sent",
+        "t": 1.090052843093872
+      },
+      {
+        "event": "bot_msg",
+        "t": 12.54347276687622,
+        "msg_id": 3305,
+        "chars": 229,
+        "preview": "Both tasks are now running in the background:\n\n1. Task 1 (29407a123e2ccfa2): Lis"
+      },
+      {
+        "event": "followup_sent",
+        "t": 14.594539642333984
+      },
+      {
+        "event": "bot_msg",
+        "t": 20.657851934432983,
+        "msg_id": 3307,
+        "chars": 187,
+        "preview": "When you mix red and blue, you get purple (or violet).\n\n- Equal parts red + blue"
+      },
+      {
+        "event": "bot_msg",
+        "t": 25.62173581123352,
+        "msg_id": 3308,
+        "chars": 154,
+        "preview": "Bitcoin is sitting around $68,000 \u2014 pretty flat on the day, down a bit from last"
+      }
+    ],
+    "notes": "Follow-up answered at 20.7s, async result at 25.6s \u2014 non-blocking confirmed!"
+  }
+]

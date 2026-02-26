@@ -147,6 +147,38 @@ defmodule CodingAgent.CompactionTest do
     end
   end
 
+  describe "estimate_text_tokens/1" do
+    test "uses 4 chars/token heuristic" do
+      assert Compaction.estimate_text_tokens(String.duplicate("a", 400)) == 100
+    end
+
+    test "returns 0 for nil" do
+      assert Compaction.estimate_text_tokens(nil) == 0
+    end
+  end
+
+  describe "estimate_request_context_tokens/3" do
+    test "includes system prompt tokens in total estimate" do
+      messages = [%Messages.UserMessage{content: String.duplicate("a", 400), timestamp: 0}]
+      system_prompt = String.duplicate("b", 400)
+
+      assert Compaction.estimate_request_context_tokens(messages, system_prompt, []) == 200
+    end
+
+    test "includes tool schema payload tokens in total estimate" do
+      tools = [
+        %{
+          "type" => "function",
+          "name" => "read",
+          "description" => String.duplicate("d", 400),
+          "parameters" => %{"type" => "object", "properties" => %{}}
+        }
+      ]
+
+      assert Compaction.estimate_request_context_tokens([], nil, tools) > 0
+    end
+  end
+
   describe "find_cut_point/2" do
     test "returns error when branch is empty" do
       branch = []

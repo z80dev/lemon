@@ -113,10 +113,13 @@ Tools are divided into two sets. `coding_tools/2` is the default set passed to s
 |--------|---------|
 | `CodingAgent.Compaction` | Context compaction when conversations grow large |
 | `CodingAgent.CompactionHooks` | Hooks for compaction events |
+| `CodingAgent.ContextGuardrails` | Pre-LLM hard caps for large tool outputs/args with optional spill-to-disk references |
 | `CodingAgent.Workspace` | Bootstrap file loading (AGENTS.md, SOUL.md, etc.) from `~/.lemon/agent/workspace/` |
 | `CodingAgent.SystemPrompt` | Builds the Lemon base system prompt (workspace files + skills) |
 | `CodingAgent.PromptBuilder` | Higher-level prompt builder adding skills, commands, @mentions sections |
 | `CodingAgent.ResourceLoader` | Loads CLAUDE.md/AGENTS.md from cwd up to filesystem root, then home dir |
+
+`CodingAgent.Session` now composes `ContextGuardrails -> UntrustedToolBoundary -> custom transform_context` at the pre-LLM boundary. Oversized tool results are truncated with stable spill references under `~/.lemon/agent/sessions/<encoded-cwd>/spill/<session-id>/...` so the model can fetch full payloads via file tools when needed.
 
 ### Extensions & WASM
 
@@ -471,6 +474,7 @@ Compaction:
 - Finds valid cut points (not mid-tool-call — only cuts at user/assistant/custom/bash_execution boundaries)
 - Generates an LLM summary of compacted messages
 - Preserves file operation context
+- Estimates request size from conversation messages plus system prompt and tool schema payloads
 - Overflow recovery is also attempted if context window is exhausted mid-run
 
 Settings controlling compaction (in `SettingsManager`/`config.toml`):

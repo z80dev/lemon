@@ -272,6 +272,10 @@ defmodule Ai.Providers.OpenAIResponses do
         is_agent_call = last_message && last_message.role != :user
 
         copilot_headers = %{
+          "Editor-Version" => "vscode/1.107.0",
+          "Editor-Plugin-Version" => "copilot-chat/0.35.0",
+          "User-Agent" => "GitHubCopilotChat/0.35.0",
+          "Copilot-Integration-Id" => "vscode-chat",
           "X-Initiator" => if(is_agent_call, do: "agent", else: "user"),
           "Openai-Intent" => "conversation-edits"
         }

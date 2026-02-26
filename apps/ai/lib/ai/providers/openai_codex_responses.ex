@@ -556,8 +556,10 @@ defmodule Ai.Providers.OpenAICodexResponses do
 
       cond do
         type == "error" ->
-          code = event["code"]
-          message = event["message"]
+          code =
+            event["code"] || get_in(event, ["error", "code"]) || get_in(event, ["error", "type"])
+
+          message = event["message"] || get_in(event, ["error", "message"])
 
           detail =
             cond do

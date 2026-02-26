@@ -199,6 +199,10 @@ defmodule Ai.Providers.OpenAIResponsesTest do
     assert_receive {:request_headers, headers}, 1000
     headers_map = Map.new(headers)
 
+    assert headers_map["editor-version"] == "vscode/1.107.0"
+    assert headers_map["editor-plugin-version"] == "copilot-chat/0.35.0"
+    assert headers_map["user-agent"] == "GitHubCopilotChat/0.35.0"
+    assert headers_map["copilot-integration-id"] == "vscode-chat"
     assert headers_map["x-initiator"] == "user"
     assert headers_map["openai-intent"] == "conversation-edits"
     assert headers_map["copilot-vision-request"] == "true"

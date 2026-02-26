@@ -27,6 +27,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   alias LemonChannels.Telegram.OffsetStore
   alias LemonChannels.Telegram.PollerLock
   alias LemonCore.Config
+  alias LemonCore.Secrets
 
   @default_poll_interval 1_000
   @default_dedupe_ttl 600_000
@@ -38,6 +39,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   @providers_per_page 8
   @models_per_page 8
   @model_default_engine "lemon"
+  @model_picker_prev "<< Prev"
+  @model_picker_next "Next >>"
+  @model_picker_back "< Back"
+  @model_picker_close "Close"
+  @model_picker_scope_session "This session"
+  @model_picker_scope_future "All future sessions"
   @thinking_levels ~w(off minimal low medium high xhigh)
   @idle_keepalive_continue_callback_prefix "lemon:idle:c:"
   @idle_keepalive_stop_callback_prefix "lemon:idle:k:"
@@ -127,6 +134,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             bot_id: bot_id,
             bot_username: bot_username,
             files: cfg_get(config, :files, %{}),
+            # {chat_id, thread_id, sender_id} => model picker state
+            model_pickers: %{},
             last_poll_error: nil,
             last_poll_error_log_ts: nil,
             last_webhook_clear_ts: nil
@@ -492,74 +501,83 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     text = inbound.message.text || ""
     original_text = text
 
-    cond do
-      MediaGroups.media_group_member?(inbound) and MediaGroups.media_group_exists?(state, inbound) ->
-        MediaGroups.enqueue_media_group(state, inbound)
+    {state, handled_model_picker?} =
+      maybe_handle_model_picker_input(state, inbound, original_text)
 
-      Commands.file_command?(original_text, state.bot_username) and MediaGroups.media_group_member?(inbound) ->
-        # If this is a /file put command attached to a media group document, batch the whole group.
-        MediaGroups.enqueue_media_group(state, inbound)
-
-      Commands.file_command?(original_text, state.bot_username) ->
-        FileOperations.handle_file_command(state, inbound)
-
-      FileOperations.should_auto_put_document?(state, inbound) ->
-        if MediaGroups.media_group_member?(inbound) do
+    if handled_model_picker? do
+      state
+    else
+      cond do
+        MediaGroups.media_group_member?(inbound) and
+            MediaGroups.media_group_exists?(state, inbound) ->
           MediaGroups.enqueue_media_group(state, inbound)
-        else
-          handle_document_auto_put(state, inbound)
-        end
 
-      Commands.trigger_command?(original_text, state.bot_username) ->
-        handle_trigger_command(state, inbound)
+        Commands.file_command?(original_text, state.bot_username) and
+            MediaGroups.media_group_member?(inbound) ->
+          # If this is a /file put command attached to a media group document, batch the whole group.
+          MediaGroups.enqueue_media_group(state, inbound)
 
-      Commands.cwd_command?(original_text, state.bot_username) ->
-        handle_cwd_command(state, inbound)
+        Commands.file_command?(original_text, state.bot_username) ->
+          FileOperations.handle_file_command(state, inbound)
 
-      Commands.topic_command?(original_text, state.bot_username) ->
-        handle_topic_command(state, inbound)
+        FileOperations.should_auto_put_document?(state, inbound) ->
+          if MediaGroups.media_group_member?(inbound) do
+            MediaGroups.enqueue_media_group(state, inbound)
+          else
+            handle_document_auto_put(state, inbound)
+          end
 
-      Commands.resume_command?(original_text, state.bot_username) ->
-        handle_resume_command(state, inbound)
+        Commands.trigger_command?(original_text, state.bot_username) ->
+          handle_trigger_command(state, inbound)
 
-      Commands.model_command?(original_text, state.bot_username) ->
-        handle_model_command(state, inbound)
+        Commands.cwd_command?(original_text, state.bot_username) ->
+          handle_cwd_command(state, inbound)
 
-      Commands.thinking_command?(original_text, state.bot_username) ->
-        handle_thinking_command(state, inbound)
+        Commands.topic_command?(original_text, state.bot_username) ->
+          handle_topic_command(state, inbound)
 
-      Commands.reload_command?(original_text, state.bot_username) ->
-        handle_reload_command(state, inbound)
+        Commands.resume_command?(original_text, state.bot_username) ->
+          handle_resume_command(state, inbound)
 
-      Commands.new_command?(original_text, state.bot_username) ->
-        args = Commands.telegram_command_args(original_text, "new")
-        handle_new_session(state, inbound, args)
+        Commands.model_command?(original_text, state.bot_username) ->
+          handle_model_command(state, inbound)
 
-      Commands.cancel_command?(original_text, state.bot_username) ->
-        maybe_cancel_by_reply(state, inbound)
-        state
+        Commands.thinking_command?(original_text, state.bot_username) ->
+          handle_thinking_command(state, inbound)
 
-      true ->
-        cond do
-          should_ignore_for_trigger?(state, inbound, original_text) ->
-            maybe_log_drop(state, inbound, :trigger_mentions)
-            state
+        Commands.reload_command?(original_text, state.bot_username) ->
+          handle_reload_command(state, inbound)
 
-          true ->
-            inbound = maybe_mark_new_session_pending(state, inbound)
-            inbound = maybe_mark_fork_when_busy(state, inbound)
-            {state, inbound} = maybe_switch_session_from_reply(state, inbound)
-            inbound = maybe_apply_pending_compaction(state, inbound, original_text)
-            inbound = maybe_apply_selected_resume(state, inbound, original_text)
+        Commands.new_command?(original_text, state.bot_username) ->
+          args = Commands.telegram_command_args(original_text, "new")
+          handle_new_session(state, inbound, args)
 
-            cond do
-              Commands.command_message_for_bot?(original_text, state.bot_username) ->
-                submit_inbound_now(state, inbound)
+        Commands.cancel_command?(original_text, state.bot_username) ->
+          maybe_cancel_by_reply(state, inbound)
+          state
 
-              true ->
-                MessageBuffer.enqueue_buffer(state, inbound)
-            end
-        end
+        true ->
+          cond do
+            should_ignore_for_trigger?(state, inbound, original_text) ->
+              maybe_log_drop(state, inbound, :trigger_mentions)
+              state
+
+            true ->
+              inbound = maybe_mark_new_session_pending(state, inbound)
+              inbound = maybe_mark_fork_when_busy(state, inbound)
+              {state, inbound} = maybe_switch_session_from_reply(state, inbound)
+              inbound = maybe_apply_pending_compaction(state, inbound, original_text)
+              inbound = maybe_apply_selected_resume(state, inbound, original_text)
+
+              cond do
+                Commands.command_message_for_bot?(original_text, state.bot_username) ->
+                  submit_inbound_now(state, inbound)
+
+                true ->
+                  MessageBuffer.enqueue_buffer(state, inbound)
+              end
+          end
+      end
     end
   rescue
     e ->
@@ -740,11 +758,21 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
           Commands.file_command?(txt, state.bot_username) and
             String.starts_with?(String.trim_leading(txt), "/file") and
-            String.starts_with?(String.trim(Commands.telegram_command_args(txt, "file") || ""), "put")
+            String.starts_with?(
+              String.trim(Commands.telegram_command_args(txt, "file") || ""),
+              "put"
+            )
         end)
 
       if file_put do
-        FileOperations.handle_file_put_media_group(state, file_put, items, chat_id, thread_id, user_msg_id)
+        FileOperations.handle_file_put_media_group(
+          state,
+          file_put,
+          items,
+          chat_id,
+          thread_id,
+          user_msg_id
+        )
       else
         FileOperations.handle_auto_put_media_group(state, items, chat_id, thread_id, user_msg_id)
       end
@@ -787,7 +815,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   rescue
     _ -> state
   end
-
 
   defp maybe_select_project_for_scope(%ChatScope{} = scope, selector) when is_binary(selector) do
     sel = String.trim(selector || "")
@@ -849,7 +876,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     String.starts_with?(s, "/") or String.starts_with?(s, "~") or String.starts_with?(s, ".") or
       String.contains?(s, "/")
   end
-
 
   defp maybe_switch_session_from_reply(state, inbound) do
     meta = inbound.meta || %{}
@@ -1608,7 +1634,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp last_engine_hint(_), do: nil
-
 
   defp safe_delete_chat_state(key) do
     CoreStore.delete_chat_state(key)
@@ -2589,6 +2614,548 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp message_entities(_), do: []
 
+  defp maybe_handle_model_picker_input(state, inbound, text) do
+    trimmed = String.trim(text || "")
+
+    cond do
+      trimmed == "" ->
+        {state, false}
+
+      Commands.command_message?(trimmed) ->
+        {state, false}
+
+      true ->
+        case model_picker_key(inbound) do
+          nil ->
+            {state, false}
+
+          key ->
+            pickers = state.model_pickers || %{}
+
+            case Map.get(pickers, key) do
+              nil ->
+                {state, false}
+
+              picker ->
+                handle_model_picker_input(state, inbound, key, picker, trimmed)
+            end
+        end
+    end
+  rescue
+    _ -> {state, false}
+  end
+
+  defp handle_model_picker_input(state, inbound, key, picker, input) do
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
+    providers = available_model_providers()
+
+    case picker[:step] do
+      :provider ->
+        handle_model_picker_provider_step(
+          state,
+          key,
+          picker,
+          providers,
+          chat_id,
+          thread_id,
+          user_msg_id,
+          input
+        )
+
+      :model ->
+        handle_model_picker_model_step(state, key, picker, chat_id, thread_id, user_msg_id, input)
+
+      :scope ->
+        handle_model_picker_scope_step(state, key, picker, chat_id, thread_id, user_msg_id, input)
+
+      _ ->
+        {drop_model_picker(state, key), false}
+    end
+  end
+
+  defp handle_model_picker_provider_step(
+         state,
+         key,
+         picker,
+         providers,
+         chat_id,
+         thread_id,
+         user_msg_id,
+         input
+       ) do
+    page = picker[:provider_page] || 0
+
+    cond do
+      model_picker_close?(input) ->
+        state = drop_model_picker(state, key)
+
+        _ =
+          send_model_picker_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            "Model picker closed.",
+            model_picker_remove_markup()
+          )
+
+        {state, true}
+
+      model_picker_prev?(input) ->
+        new_page = max(page - 1, 0)
+        picker = Map.put(picker, :provider_page, new_page)
+        state = put_model_picker(state, key, picker)
+        text = model_picker_overview_text(state, picker, chat_id, thread_id)
+
+        _ =
+          send_model_picker_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            text,
+            model_provider_reply_markup(providers, new_page)
+          )
+
+        {state, true}
+
+      model_picker_next?(input) ->
+        new_page = min(page + 1, max_page_for(providers, @providers_per_page))
+        picker = Map.put(picker, :provider_page, new_page)
+        state = put_model_picker(state, key, picker)
+        text = model_picker_overview_text(state, picker, chat_id, thread_id)
+
+        _ =
+          send_model_picker_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            text,
+            model_provider_reply_markup(providers, new_page)
+          )
+
+        {state, true}
+
+      input in providers ->
+        models = models_for_provider(input)
+
+        if models == [] do
+          _ =
+            send_model_picker_message(
+              state,
+              chat_id,
+              thread_id,
+              user_msg_id,
+              "Provider: #{input}\nNo models are currently available.",
+              model_provider_reply_markup(providers, page)
+            )
+
+          {state, true}
+        else
+          picker =
+            picker
+            |> Map.put(:step, :model)
+            |> Map.put(:provider, input)
+            |> Map.put(:model_page, 0)
+
+          state = put_model_picker(state, key, picker)
+
+          _ =
+            send_model_picker_message(
+              state,
+              chat_id,
+              thread_id,
+              user_msg_id,
+              render_provider_models_text(input),
+              model_list_reply_markup(input, models, 0)
+            )
+
+          {state, true}
+        end
+
+      true ->
+        {drop_model_picker(state, key), false}
+    end
+  end
+
+  defp handle_model_picker_model_step(state, key, picker, chat_id, thread_id, user_msg_id, input) do
+    provider = picker[:provider]
+    page = picker[:model_page] || 0
+    models = models_for_provider(provider)
+
+    cond do
+      model_picker_close?(input) ->
+        state = drop_model_picker(state, key)
+
+        _ =
+          send_model_picker_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            "Model picker closed.",
+            model_picker_remove_markup()
+          )
+
+        {state, true}
+
+      model_picker_back?(input) ->
+        provider_page = picker[:provider_page] || 0
+        providers = available_model_providers()
+
+        picker =
+          picker
+          |> Map.put(:step, :provider)
+          |> Map.put(:provider, nil)
+          |> Map.put(:provider_page, provider_page)
+
+        state = put_model_picker(state, key, picker)
+        text = model_picker_overview_text(state, picker, chat_id, thread_id)
+
+        _ =
+          send_model_picker_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            text,
+            model_provider_reply_markup(providers, provider_page)
+          )
+
+        {state, true}
+
+      model_picker_prev?(input) ->
+        new_page = max(page - 1, 0)
+        picker = Map.put(picker, :model_page, new_page)
+        state = put_model_picker(state, key, picker)
+
+        _ =
+          send_model_picker_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            render_provider_models_text(provider),
+            model_list_reply_markup(provider, models, new_page)
+          )
+
+        {state, true}
+
+      model_picker_next?(input) ->
+        new_page = min(page + 1, max_page_for(models, @models_per_page))
+        picker = Map.put(picker, :model_page, new_page)
+        state = put_model_picker(state, key, picker)
+
+        _ =
+          send_model_picker_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            render_provider_models_text(provider),
+            model_list_reply_markup(provider, models, new_page)
+          )
+
+        {state, true}
+
+      true ->
+        case model_index_by_label(models, input) do
+          nil ->
+            {drop_model_picker(state, key), false}
+
+          index ->
+            case model_at_index(provider, index) do
+              nil ->
+                {drop_model_picker(state, key), false}
+
+              model ->
+                picker =
+                  picker
+                  |> Map.put(:step, :scope)
+                  |> Map.put(:model_index, index)
+                  |> Map.put(:model_page, div(index, @models_per_page))
+
+                state = put_model_picker(state, key, picker)
+
+                _ =
+                  send_model_picker_message(
+                    state,
+                    chat_id,
+                    thread_id,
+                    user_msg_id,
+                    render_model_scope_text(model),
+                    model_scope_reply_markup()
+                  )
+
+                {state, true}
+            end
+        end
+    end
+  end
+
+  defp handle_model_picker_scope_step(state, key, picker, chat_id, thread_id, user_msg_id, input) do
+    provider = picker[:provider]
+    model_page = picker[:model_page] || 0
+
+    cond do
+      model_picker_close?(input) ->
+        state = drop_model_picker(state, key)
+
+        _ =
+          send_model_picker_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            "Model picker closed.",
+            model_picker_remove_markup()
+          )
+
+        {state, true}
+
+      model_picker_back?(input) ->
+        models = models_for_provider(provider)
+
+        picker =
+          picker
+          |> Map.put(:step, :model)
+          |> Map.put(:model_page, model_page)
+
+        state = put_model_picker(state, key, picker)
+
+        _ =
+          send_model_picker_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            render_provider_models_text(provider),
+            model_list_reply_markup(provider, models, model_page)
+          )
+
+        {state, true}
+
+      model_picker_scope_session?(input) ->
+        apply_model_picker_selection(
+          state,
+          key,
+          picker,
+          :session,
+          chat_id,
+          thread_id,
+          user_msg_id
+        )
+
+      model_picker_scope_future?(input) ->
+        apply_model_picker_selection(
+          state,
+          key,
+          picker,
+          :future,
+          chat_id,
+          thread_id,
+          user_msg_id
+        )
+
+      true ->
+        {drop_model_picker(state, key), false}
+    end
+  end
+
+  defp apply_model_picker_selection(state, key, picker, scope, chat_id, thread_id, user_msg_id) do
+    provider = picker[:provider]
+    index = picker[:model_index]
+
+    case model_at_index(provider, index) do
+      nil ->
+        {drop_model_picker(state, key), false}
+
+      model ->
+        model_value = model_spec(model)
+        session_key = picker[:session_key]
+
+        _ = put_session_model_override(session_key, model_value)
+
+        if scope == :future do
+          _ = put_default_model_preference(state, chat_id, thread_id, model_value)
+        end
+
+        text =
+          if scope == :future do
+            "Default model set to #{model_label(model)} for all future sessions in this chat."
+          else
+            "Model set to #{model_label(model)} for this session."
+          end
+
+        state = drop_model_picker(state, key)
+
+        _ =
+          send_model_picker_message(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            text,
+            model_picker_remove_markup()
+          )
+
+        {state, true}
+    end
+  end
+
+  defp model_picker_overview_text(state, picker, chat_id, thread_id) do
+    session_key = picker[:session_key]
+    current_session_model = session_model_override(session_key)
+    current_future_model = default_model_preference(state, chat_id, thread_id)
+    render_model_picker_text(current_session_model, current_future_model)
+  end
+
+  defp model_picker_key(inbound) do
+    chat_id = inbound.meta[:chat_id] || parse_int(inbound.peer.id)
+    thread_id = parse_int(inbound.peer.thread_id)
+    sender_id = inbound.sender && inbound.sender.id
+
+    if is_integer(chat_id) and is_binary(sender_id) and sender_id != "" do
+      {chat_id, thread_id, sender_id}
+    else
+      nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp put_model_picker(state, key, picker) when is_map(picker) do
+    put_in(state, [:model_pickers], Map.put(state.model_pickers || %{}, key, picker))
+  end
+
+  defp drop_model_picker(state, key) do
+    put_in(state, [:model_pickers], Map.delete(state.model_pickers || %{}, key))
+  end
+
+  defp send_model_picker_message(
+         state,
+         chat_id,
+         thread_id,
+         reply_to_message_id,
+         text,
+         reply_markup
+       )
+       when is_integer(chat_id) and is_binary(text) and is_map(reply_markup) do
+    opts =
+      %{}
+      |> maybe_put("reply_to_message_id", reply_to_message_id)
+      |> maybe_put("message_thread_id", thread_id)
+      |> maybe_put("reply_markup", reply_markup)
+
+    _ = state.api_mod.send_message(state.token, chat_id, text, opts, nil)
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp model_provider_reply_markup(providers, page) when is_list(providers) do
+    {slice, has_prev, has_next} = paginate(providers, page, @providers_per_page)
+
+    rows =
+      slice
+      |> Enum.chunk_every(2)
+      |> Enum.map(fn chunk ->
+        Enum.map(chunk, &%{"text" => &1})
+      end)
+      |> maybe_add_reply_pagination_row(has_prev, has_next)
+      |> Kernel.++([[%{"text" => @model_picker_close}]])
+
+    %{
+      "keyboard" => rows,
+      "resize_keyboard" => true,
+      "one_time_keyboard" => true
+    }
+  end
+
+  defp model_list_reply_markup(_provider, models, page) when is_list(models) do
+    indexed = Enum.with_index(models)
+    {slice, has_prev, has_next} = paginate(indexed, page, @models_per_page)
+
+    rows =
+      slice
+      |> Enum.map(fn {model, _idx} -> [%{"text" => model_label(model)}] end)
+      |> maybe_add_reply_pagination_row(has_prev, has_next)
+      |> Kernel.++([[%{"text" => @model_picker_back}, %{"text" => @model_picker_close}]])
+
+    %{
+      "keyboard" => rows,
+      "resize_keyboard" => true,
+      "one_time_keyboard" => true
+    }
+  end
+
+  defp model_scope_reply_markup do
+    %{
+      "keyboard" => [
+        [%{"text" => @model_picker_scope_session}],
+        [%{"text" => @model_picker_scope_future}],
+        [%{"text" => @model_picker_back}, %{"text" => @model_picker_close}]
+      ],
+      "resize_keyboard" => true,
+      "one_time_keyboard" => true
+    }
+  end
+
+  defp model_picker_remove_markup do
+    %{"remove_keyboard" => true}
+  end
+
+  defp maybe_add_reply_pagination_row(rows, has_prev, has_next) do
+    nav =
+      []
+      |> maybe_add_reply_prev(has_prev)
+      |> maybe_add_reply_next(has_next)
+
+    if nav == [] do
+      rows
+    else
+      rows ++ [nav]
+    end
+  end
+
+  defp maybe_add_reply_prev(buttons, true), do: buttons ++ [%{"text" => @model_picker_prev}]
+  defp maybe_add_reply_prev(buttons, _), do: buttons
+
+  defp maybe_add_reply_next(buttons, true), do: buttons ++ [%{"text" => @model_picker_next}]
+  defp maybe_add_reply_next(buttons, _), do: buttons
+
+  defp model_picker_prev?(text), do: picker_text_eq?(text, @model_picker_prev)
+  defp model_picker_next?(text), do: picker_text_eq?(text, @model_picker_next)
+  defp model_picker_back?(text), do: picker_text_eq?(text, @model_picker_back)
+  defp model_picker_close?(text), do: picker_text_eq?(text, @model_picker_close)
+
+  defp model_picker_scope_session?(text), do: picker_text_eq?(text, @model_picker_scope_session)
+  defp model_picker_scope_future?(text), do: picker_text_eq?(text, @model_picker_scope_future)
+
+  defp picker_text_eq?(left, right)
+       when is_binary(left) and is_binary(right) do
+    String.downcase(String.trim(left)) == String.downcase(String.trim(right))
+  end
+
+  defp picker_text_eq?(_left, _right), do: false
+
+  defp model_index_by_label(models, label) when is_list(models) and is_binary(label) do
+    Enum.find_index(models, fn model ->
+      model_label(model) == label
+    end)
+  end
+
+  defp model_index_by_label(_models, _label), do: nil
+
+  defp max_page_for(list, per_page)
+       when is_list(list) and is_integer(per_page) and per_page > 0 do
+    case length(list) do
+      0 -> 0
+      n -> div(n - 1, per_page)
+    end
+  end
+
   defp handle_model_command(state, inbound) do
     {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
     state = MessageBuffer.drop_buffer_for(state, inbound)
@@ -2609,6 +3176,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       current_future_model = default_model_preference(state, chat_id, thread_id)
 
       text = render_model_picker_text(current_session_model, current_future_model)
+      picker_key = model_picker_key(inbound)
 
       if providers == [] do
         _ =
@@ -2619,18 +3187,46 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             user_msg_id,
             text <> "\n\nNo models available."
           )
+
+        if picker_key, do: drop_model_picker(state, picker_key), else: state
       else
-        opts =
-          %{
-            "reply_to_message_id" => user_msg_id,
-            "reply_markup" => model_provider_markup(providers, 0)
-          }
-          |> maybe_put("message_thread_id", thread_id)
+        cond do
+          picker_key ->
+            picker = %{
+              step: :provider,
+              provider_page: 0,
+              provider: nil,
+              model_page: 0,
+              model_index: nil,
+              session_key: session_key
+            }
 
-        _ = state.api_mod.send_message(state.token, chat_id, text, opts, nil)
+            state = put_model_picker(state, picker_key, picker)
+
+            _ =
+              send_model_picker_message(
+                state,
+                chat_id,
+                thread_id,
+                user_msg_id,
+                text,
+                model_provider_reply_markup(providers, 0)
+              )
+
+            state
+
+          true ->
+            opts =
+              %{
+                "reply_to_message_id" => user_msg_id,
+                "reply_markup" => model_provider_markup(providers, 0)
+              }
+              |> maybe_put("message_thread_id", thread_id)
+
+            _ = state.api_mod.send_message(state.token, chat_id, text, opts, nil)
+            state
+        end
       end
-
-      state
     end
   rescue
     _ -> state
@@ -3232,7 +3828,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp parse_allowed_chat_ids(_), do: nil
-
 
   defp initial_offset(config_offset, stored_offset) do
     cond do
@@ -3857,7 +4452,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp model_label(other), do: inspect(other)
 
   defp available_model_catalog do
-    configured = configured_provider_names()
     models_module = :"Elixir.Ai.Models"
 
     models =
@@ -3873,15 +4467,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       |> Enum.filter(&is_map/1)
 
     filtered =
-      if configured == [] do
-        model_maps
-      else
-        Enum.filter(model_maps, fn model ->
-          provider_matches_config?(model.provider, configured)
-        end)
-      end
-
-    filtered = if filtered == [], do: model_maps, else: filtered
+      model_maps
+      |> filter_enabled_model_maps()
+      |> maybe_fallback_to_default_providers(model_maps)
 
     filtered
     |> Enum.group_by(& &1.provider)
@@ -3924,21 +4512,225 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     |> Enum.sort_by(& &1.provider)
   end
 
-  defp configured_provider_names do
+  defp filter_enabled_model_maps(model_maps) when is_list(model_maps) do
+    enabled = enabled_model_provider_names(model_maps)
+
+    Enum.filter(model_maps, fn model ->
+      normalize_provider_name(model.provider) in enabled
+    end)
+  end
+
+  defp maybe_fallback_to_default_providers([], model_maps) when is_list(model_maps) do
     cfg = Config.cached()
-    providers = cfg.providers || %{}
-    Map.keys(providers) |> Enum.map(&normalize_provider_name/1)
+    defaults = default_provider_hints(cfg)
+
+    Enum.filter(model_maps, fn model ->
+      normalize_provider_name(model.provider) in defaults
+    end)
   rescue
     _ -> []
   end
 
-  defp provider_matches_config?(provider, configured)
-       when is_binary(provider) and is_list(configured) do
-    normalized = normalize_provider_name(provider)
-    normalized in configured
+  defp maybe_fallback_to_default_providers(filtered, _model_maps), do: filtered
+
+  defp enabled_model_provider_names(model_maps) when is_list(model_maps) do
+    cfg = Config.cached()
+    configured = configured_provider_index(cfg)
+    defaults = default_provider_hints(cfg)
+
+    model_maps
+    |> Enum.map(&normalize_provider_name(&1.provider))
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+    |> Enum.filter(fn provider ->
+      provider_enabled?(provider, configured, defaults)
+    end)
+  rescue
+    _ -> []
   end
 
-  defp provider_matches_config?(_provider, _configured), do: false
+  defp configured_provider_index(cfg) do
+    providers = cfg.providers || %{}
+
+    Enum.reduce(providers, %{}, fn {name, provider_cfg}, acc ->
+      Map.put(acc, normalize_provider_name(name), provider_cfg || %{})
+    end)
+  rescue
+    _ -> %{}
+  end
+
+  defp default_provider_hints(cfg) do
+    agent = map_get(cfg, :agent) || %{}
+    provider = map_get(agent, :default_provider)
+    model = map_get(agent, :default_model)
+    {model_provider, _model_id} = split_model_hint(model)
+
+    [provider, model_provider]
+    |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
+    |> Enum.map(&normalize_provider_name/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  rescue
+    _ -> []
+  end
+
+  defp provider_enabled?(provider, configured, defaults)
+       when is_binary(provider) and is_map(configured) and is_list(defaults) do
+    aliases = provider_aliases(provider)
+
+    Enum.any?(aliases, &Map.has_key?(configured, &1)) or
+      provider_has_credentials?(provider, aliases, configured) or
+      Enum.any?(aliases, &(&1 in defaults)) or
+      provider_special_enabled?(provider)
+  end
+
+  defp provider_enabled?(_provider, _configured, _defaults), do: false
+
+  defp provider_has_credentials?(provider, aliases, configured) do
+    configured_has_value? =
+      Enum.any?(aliases, fn alias_name ->
+        provider_cfg = Map.get(configured, alias_name, %{})
+
+        present_value?(map_get(provider_cfg, :api_key)) or
+          secret_present?(map_get(provider_cfg, :api_key_secret)) or
+          present_value?(map_get(provider_cfg, :base_url))
+      end)
+
+    env_or_store_has_key? =
+      provider_secret_candidates(provider, aliases)
+      |> Enum.any?(&secret_present?/1)
+
+    configured_has_value? or env_or_store_has_key?
+  end
+
+  defp provider_secret_candidates(provider, aliases) do
+    generated =
+      aliases
+      |> Enum.map(&provider_to_env_prefix/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.flat_map(fn prefix ->
+        ["#{prefix}_API_KEY", "#{prefix}_TOKEN"]
+      end)
+
+    explicit =
+      case provider do
+        "anthropic" ->
+          ["ANTHROPIC_API_KEY"]
+
+        "openai" ->
+          ["OPENAI_API_KEY"]
+
+        "openai-codex" ->
+          ["OPENAI_CODEX_API_KEY", "CHATGPT_TOKEN"]
+
+        "opencode" ->
+          ["OPENCODE_API_KEY"]
+
+        "google" ->
+          ["GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"]
+
+        "google-antigravity" ->
+          ["GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"]
+
+        "google-gemini-cli" ->
+          ["GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"]
+
+        "google-vertex" ->
+          ["GOOGLE_APPLICATION_CREDENTIALS"]
+
+        "amazon-bedrock" ->
+          ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_PROFILE"]
+
+        "kimi" ->
+          ["KIMI_API_KEY", "MOONSHOT_API_KEY"]
+
+        "kimi-coding" ->
+          ["KIMI_API_KEY", "MOONSHOT_API_KEY"]
+
+        "azure-openai-responses" ->
+          ["AZURE_OPENAI_API_KEY"]
+
+        _ ->
+          []
+      end
+
+    (generated ++ explicit)
+    |> Enum.flat_map(fn name -> [name, String.downcase(name)] end)
+    |> Enum.uniq()
+  end
+
+  defp provider_special_enabled?("openai-codex"), do: openai_codex_auth_available?()
+
+  defp provider_special_enabled?("amazon-bedrock") do
+    (secret_present?("AWS_ACCESS_KEY_ID") and secret_present?("AWS_SECRET_ACCESS_KEY")) or
+      secret_present?("AWS_PROFILE")
+  end
+
+  defp provider_special_enabled?(_provider), do: false
+
+  defp provider_aliases(provider) when is_binary(provider) do
+    aliases =
+      case normalize_provider_name(provider) do
+        "google-antigravity" -> [provider, "google"]
+        "google-gemini-cli" -> [provider, "google"]
+        "google-vertex" -> [provider, "google"]
+        "kimi-coding" -> [provider, "kimi"]
+        "amazon-bedrock" -> [provider, "bedrock", "aws"]
+        "azure-openai-responses" -> [provider, "azure-openai", "azure-openai-responses"]
+        "minimax-cn" -> [provider, "minimax"]
+        other -> [other]
+      end
+
+    aliases
+    |> Enum.map(&normalize_provider_name/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp provider_aliases(_provider), do: []
+
+  defp provider_to_env_prefix(provider) when is_binary(provider) do
+    provider
+    |> String.upcase()
+    |> String.replace("-", "_")
+    |> String.replace(~r/[^A-Z0-9_]/, "_")
+    |> String.trim("_")
+  rescue
+    _ -> ""
+  end
+
+  defp provider_to_env_prefix(_provider), do: ""
+
+  defp secret_present?(name) when is_binary(name) and name != "" do
+    present_value?(System.get_env(name)) or
+      present_value?(System.get_env(String.downcase(name))) or
+      Secrets.exists?(name) or
+      Secrets.exists?(String.downcase(name))
+  rescue
+    _ ->
+      present_value?(System.get_env(name)) or
+        present_value?(System.get_env(String.downcase(name)))
+  end
+
+  defp secret_present?(_), do: false
+
+  defp present_value?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present_value?(_), do: false
+
+  defp openai_codex_auth_available? do
+    mod = :"Elixir.Ai.Auth.OpenAICodexOAuth"
+
+    if Code.ensure_loaded?(mod) and function_exported?(mod, :get_api_key, 0) do
+      case apply(mod, :get_api_key, []) do
+        value when is_binary(value) -> String.trim(value) != ""
+        _ -> false
+      end
+    else
+      false
+    end
+  rescue
+    _ -> false
+  end
 
   defp normalize_provider_name(name) do
     name
@@ -3994,7 +4786,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp peer_kind_from_chat_type("supergroup"), do: :group
   defp peer_kind_from_chat_type("channel"), do: :channel
   defp peer_kind_from_chat_type(_), do: :unknown
-
 
   defp handle_topic_command(state, inbound) do
     {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
@@ -4256,7 +5047,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     _ = Application.ensure_all_started(:ssl)
     :ok
   end
-
 
   defp resolve_openai_provider do
     provider =

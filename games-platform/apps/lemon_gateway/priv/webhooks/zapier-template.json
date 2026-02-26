@@ -1,0 +1,16 @@
+{
+  "name": "Lemon Webhook Action",
+  "endpoint_url": "https://<your-host>/webhooks/<integration_id>",
+  "method": "POST",
+  "headers": {
+    "x-webhook-token": "<token>"
+  },
+  "payload": {
+    "input": "{{inputData.prompt}}",
+    "metadata": {
+      "source": "zapier",
+      "zap_id": "{{bundle.meta.zap.id}}"
+    },
+    "files": []
+  }
+}

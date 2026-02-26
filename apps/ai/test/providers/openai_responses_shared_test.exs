@@ -18,7 +18,7 @@ defmodule Ai.Providers.OpenAIResponsesSharedTest do
     UserMessage
   }
 
-  @max_function_call_output_bytes 10_485_760
+  @soft_function_call_output_bytes 65_536
 
   test "process_stream catches thrown stream errors" do
     {:ok, stream} = EventStream.start_link()
@@ -321,7 +321,7 @@ defmodule Ai.Providers.OpenAIResponsesSharedTest do
       cost: %ModelCost{}
     }
 
-    oversized = String.duplicate("a", @max_function_call_output_bytes + 1)
+    oversized = String.duplicate("a", @soft_function_call_output_bytes + 1)
 
     tool_result = %ToolResultMessage{
       role: :tool_result,
@@ -340,15 +340,15 @@ defmodule Ai.Providers.OpenAIResponsesSharedTest do
 
         [output] = Enum.filter(messages, &(&1["type"] == "function_call_output"))
         assert output["call_id"] == "call_big"
-        assert byte_size(output["output"]) == @max_function_call_output_bytes
-        assert output["output"] == binary_part(oversized, 0, @max_function_call_output_bytes)
+        assert byte_size(output["output"]) == @soft_function_call_output_bytes
+        assert output["output"] == binary_part(oversized, 0, @soft_function_call_output_bytes)
       end)
 
     assert log =~ "function_call_output truncated"
   end
 
   test "clamp_function_call_outputs truncates oversized payload items" do
-    oversized = String.duplicate("b", @max_function_call_output_bytes + 25)
+    oversized = String.duplicate("b", @soft_function_call_output_bytes + 25)
 
     params = %{
       "model" => "gpt-5.3-codex",
@@ -363,8 +363,8 @@ defmodule Ai.Providers.OpenAIResponsesSharedTest do
 
     assert first["type"] == "function_call_output"
     assert first["call_id"] == "call_big"
-    assert byte_size(first["output"]) == @max_function_call_output_bytes
-    assert first["output"] == binary_part(oversized, 0, @max_function_call_output_bytes)
+    assert byte_size(first["output"]) == @soft_function_call_output_bytes
+    assert first["output"] == binary_part(oversized, 0, @soft_function_call_output_bytes)
     assert second == Enum.at(params["input"], 1)
   end
 

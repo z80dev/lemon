@@ -8,7 +8,7 @@ defmodule Ai.Integration.OpenAICodexOAuthLiveTest do
                if(@live,
                  do: false,
                  else:
-                   "Set LEMON_CODEX_LIVE_TEST=1 to run (requires local `codex login` credentials)."
+                   "Set LEMON_CODEX_LIVE_TEST=1 to run (requires llm_openai_codex_api_key OAuth secret)."
                )
   @moduletag timeout: 180_000
 
@@ -24,7 +24,7 @@ defmodule Ai.Integration.OpenAICodexOAuthLiveTest do
     :ok
   end
 
-  test "can resolve Codex OAuth token from local Codex CLI login" do
+  test "can resolve Codex OAuth token from encrypted secret store" do
     token = OpenAICodexOAuth.resolve_access_token()
     assert is_binary(token)
     assert token != ""
@@ -32,7 +32,7 @@ defmodule Ai.Integration.OpenAICodexOAuthLiveTest do
     assert length(String.split(token, ".")) == 3
   end
 
-  test "can make a minimal Codex Responses request using local Codex OAuth token" do
+  test "can make a minimal Codex Responses request using secret-store OAuth token" do
     token = OpenAICodexOAuth.resolve_access_token()
     assert is_binary(token)
     assert token != ""

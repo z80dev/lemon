@@ -134,7 +134,7 @@ Create `~/.lemon/config.toml`:
 ```toml
 # Provider keys (pick one)
 [providers.anthropic]
-api_key = "sk-ant-..."
+api_key_secret = "llm_anthropic_api_key"
 
 # Defaults used by runtime + default profile
 [defaults]
@@ -533,7 +533,7 @@ lemon/
 │   ├── lemon-telegram-webhook   # Telegram webhook helper
 │   └── diag                     # Small diagnostic helper (Python)
 │
-├── apps/                        # Umbrella applications (13 apps)
+├── apps/                        # Umbrella applications (14 apps)
 │   │
 │   │  # ─── Core Foundation ───────────────────────────────────
 │   │
@@ -671,6 +671,12 @@ lemon/
 │   │           ├── node.ex, device.ex, exec.ex, secrets.ex
 │   │           ├── browser.ex, tts.ex
 │   │           └── ... (organized by domain)
+│   │
+│   ├── lemon_games/             # Turn-based game domain + match lifecycle
+│   │   └── lib/lemon_games/
+│   │       ├── games/           # Game behaviour + engine implementations
+│   │       ├── matches/         # Match service, event log, projections
+│   │       └── application.ex   # Supervision tree for game services
 │   │
 │   ├── lemon_skills/            # Skill registry and management
 │   │   └── lib/lemon_skills/
@@ -1968,6 +1974,11 @@ api_key = "sk-ant-..."
 [providers.openai]
 api_key = "sk-..."
 
+[providers.openai-codex]
+auth_source = "oauth"
+# Optional override; defaults to llm_openai_codex_api_key
+# oauth_secret = "llm_openai_codex_api_key"
+
 [providers.google]
 api_key = "your-google-api-key"
 
@@ -1984,9 +1995,9 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 # OpenAI
 export OPENAI_API_KEY="sk-..."
 
-# OpenAI Codex (chatgpt.com backend)
+# OpenAI Codex static key mode (when providers.openai-codex.auth_source = "api_key")
 export OPENAI_CODEX_API_KEY="..."
-# or
+# fallback
 export CHATGPT_TOKEN="..."
 
 # Kimi
@@ -2121,6 +2132,17 @@ Runtime key resolution order is:
 2. Plain `api_key` in config
 3. `api_key_secret` from encrypted store
 4. Default secret name fallback: `llm_<provider>_api_key`
+
+`openai-codex` is explicit-source:
+- Set `[providers.openai-codex].auth_source = "oauth"` to use OAuth secret payloads from encrypted store (default secret `llm_openai_codex_api_key`).
+- Set `[providers.openai-codex].auth_source = "api_key"` to use static key/token resolution (`OPENAI_CODEX_API_KEY`/`CHATGPT_TOKEN`, `api_key`, `api_key_secret`).
+- `auth_source` is required for `openai-codex`.
+
+`anthropic` uses static API key resolution:
+- `ANTHROPIC_API_KEY`
+- `api_key`
+- `api_key_secret`
+- default secret fallback `llm_anthropic_api_key`
 
 Example fallback names:
 - OpenAI: `llm_openai_api_key`
@@ -2261,6 +2283,7 @@ mix test apps/lemon_router
 mix test apps/lemon_channels
 mix test apps/lemon_automation
 mix test apps/lemon_control_plane
+mix test apps/lemon_games
 mix test apps/lemon_skills
 mix test apps/market_intel
 
@@ -2709,6 +2732,7 @@ The umbrella structure separates concerns while maintaining tight integration:
 - **`lemon_channels`**: Pluggable channel adapters with smart delivery
 - **`lemon_automation`**: Cron scheduling, heartbeats, wake triggers
 - **`lemon_control_plane`**: HTTP/WebSocket server with 98+ RPC methods
+- **`lemon_games`**: Turn-based game engines, match lifecycle, and replay projections
 - **`lemon_skills`**: Skill registry and lifecycle management
 - **`lemon_web`**: Phoenix web interface
 - **`market_intel`**: Market intelligence and commentary

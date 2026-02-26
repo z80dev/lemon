@@ -1,0 +1,82 @@
+[
+  {
+    "id": "1234567890",
+    "text": "Just bought some $TEST token! 🚀 To the moon!",
+    "author_id": "987654321",
+    "created_at": "2024-01-01T12:00:00Z",
+    "public_metrics": {
+      "retweet_count": 15,
+      "reply_count": 5,
+      "like_count": 50,
+      "quote_count": 3
+    },
+    "author": {
+      "username": "cryptotrader123",
+      "name": "Crypto Trader"
+    }
+  },
+  {
+    "id": "1234567891",
+    "text": "What do you think about the market today? Looking bearish 📉",
+    "author_id": "987654322",
+    "created_at": "2024-01-01T11:30:00Z",
+    "public_metrics": {
+      "retweet_count": 3,
+      "reply_count": 12,
+      "like_count": 8,
+      "quote_count": 1
+    },
+    "author": {
+      "username": "marketwatcher",
+      "name": "Market Watcher"
+    }
+  },
+  {
+    "id": "1234567892",
+    "text": "This project is awesome! Great work team! Love the updates",
+    "author_id": "987654323",
+    "created_at": "2024-01-01T11:00:00Z",
+    "public_metrics": {
+      "retweet_count": 25,
+      "reply_count": 8,
+      "like_count": 100,
+      "quote_count": 5
+    },
+    "author": {
+      "username": "defienthusiast",
+      "name": "DeFi Enthusiast"
+    }
+  },
+  {
+    "id": "1234567893",
+    "text": "Is this a scam? Looks suspicious to me...",
+    "author_id": "987654324",
+    "created_at": "2024-01-01T10:45:00Z",
+    "public_metrics": {
+      "retweet_count": 1,
+      "reply_count": 20,
+      "like_count": 5,
+      "quote_count": 2
+    },
+    "author": {
+      "username": "skepticaluser",
+      "name": "Skeptical User"
+    }
+  },
+  {
+    "id": "1234567894",
+    "text": "When is the next update coming? Can't wait! 🚀",
+    "author_id": "987654325",
+    "created_at": "2024-01-01T10:00:00Z",
+    "public_metrics": {
+      "retweet_count": 8,
+      "reply_count": 15,
+      "like_count": 45,
+      "quote_count": 2
+    },
+    "author": {
+      "username": "excitedinvestor",
+      "name": "Excited Investor"
+    }
+  }
+]

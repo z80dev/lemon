@@ -89,11 +89,15 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
     old_gateway_config_env = Application.get_env(:lemon_channels, :gateway)
+    old_openai_api_key = System.get_env("OPENAI_API_KEY")
+    old_default_provider = System.get_env("LEMON_DEFAULT_PROVIDER")
 
     :persistent_term.put({CancelTestRouter, :pid}, self())
     CancelMockAPI.register_test(self())
     LemonCore.RouterBridge.configure(router: CancelTestRouter)
     set_bindings([])
+    System.put_env("OPENAI_API_KEY", "test-openai-key")
+    System.put_env("LEMON_DEFAULT_PROVIDER", "openai")
 
     on_exit(fn ->
       stop_transport()
@@ -102,6 +106,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       :persistent_term.erase({CancelTestRouter, :pid})
       restore_router_bridge(old_router_bridge)
       restore_gateway_config_env(old_gateway_config_env)
+      restore_env_var("OPENAI_API_KEY", old_openai_api_key)
+      restore_env_var("LEMON_DEFAULT_PROVIDER", old_default_provider)
     end)
 
     :ok
@@ -186,17 +192,16 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
     assert_receive {:send_message, ^chat_id, text, opts, _parse_mode}, 500
     assert text =~ "Model picker"
-    keyboard = get_in(opts, ["reply_markup", "inline_keyboard"])
+    keyboard = get_in(opts, ["reply_markup", "keyboard"])
     assert is_list(keyboard)
+    assert keyboard != []
+    assert get_in(opts, ["reply_markup", "inline_keyboard"]) == nil
     refute_receive {:inbound, _msg}, 250
   end
 
-  test "/model callback can set a session model override" do
+  test "/model reply-keyboard flow can set a session model override" do
     chat_id = 333_005
     user_msg_id = 1_300
-    callback_msg_id = 42
-    cb_provider = "cb-model-provider"
-    cb_set = "cb-model-set"
 
     session_key =
       LemonCore.SessionKey.channel_peer(%{
@@ -217,48 +222,52 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
     assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}, 500
 
-    provider_callback_data =
+    provider_choice =
       opts
-      |> get_in(["reply_markup", "inline_keyboard"])
+      |> get_in(["reply_markup", "keyboard"])
       |> List.first()
       |> List.first()
-      |> Map.get("callback_data")
+      |> Map.get("text")
 
-    assert is_binary(provider_callback_data)
-    assert provider_callback_data =~ "lemon:model:provider:"
+    assert is_binary(provider_choice)
+    refute provider_choice in ["Close", "<< Prev", "Next >>"]
 
     CancelMockAPI.set_updates([
-      callback_update(chat_id, cb_provider, callback_msg_id, provider_callback_data)
+      message_update(chat_id, user_msg_id + 1, provider_choice)
     ])
 
-    assert_receive {:edit_message_text, ^chat_id, ^callback_msg_id, _text, edit_opts}, 500
+    assert_receive {:send_message, ^chat_id, provider_text, model_opts, _parse_mode}, 500
+    assert provider_text =~ "Provider: #{provider_choice}"
 
-    choose_callback_data =
-      edit_opts
-      |> get_in(["reply_markup", "inline_keyboard"])
+    model_choice =
+      model_opts
+      |> get_in(["reply_markup", "keyboard"])
       |> List.first()
       |> List.first()
-      |> Map.get("callback_data")
+      |> Map.get("text")
 
-    assert is_binary(choose_callback_data)
-    assert choose_callback_data =~ "lemon:model:choose:"
-
-    assert [_, provider, index | _] =
-             Regex.run(~r/lemon:model:choose:([^:]+):(\d+):\d+/, choose_callback_data)
-
-    set_callback_data = "lemon:model:set:s:#{provider}:#{index}"
+    assert is_binary(model_choice)
+    refute model_choice in ["< Back", "Close", "<< Prev", "Next >>"]
 
     CancelMockAPI.set_updates([
-      callback_update(chat_id, cb_set, callback_msg_id, set_callback_data)
+      message_update(chat_id, user_msg_id + 2, model_choice)
     ])
 
-    assert_receive {:answer_callback, ^cb_set, %{"text" => "Saved"}}, 500
-    assert_receive {:edit_message_text, ^chat_id, ^callback_msg_id, text, _opts}, 500
+    assert_receive {:send_message, ^chat_id, scope_text, _scope_opts, _parse_mode}, 500
+    assert scope_text =~ "Selected model:"
+    assert scope_text =~ "Apply to:"
+
+    CancelMockAPI.set_updates([
+      message_update(chat_id, user_msg_id + 3, "This session")
+    ])
+
+    assert_receive {:send_message, ^chat_id, text, finish_opts, _parse_mode}, 500
     assert text =~ "Model set to"
+    assert get_in(finish_opts, ["reply_markup", "remove_keyboard"]) == true
 
     stored = Store.get(:telegram_session_model, session_key)
     assert is_binary(stored)
-    assert String.starts_with?(stored, provider <> ":")
+    assert String.starts_with?(stored, provider_choice <> ":")
 
     refute_receive {:inbound, _msg}, 200
   end
@@ -306,10 +315,6 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     }
   end
 
-  defp callback_update(chat_id, cb_id, message_id, data) do
-    cancel_callback_update(chat_id, cb_id, message_id, data)
-  end
-
   defp set_bindings(bindings) do
     cfg =
       case Application.get_env(:lemon_channels, :gateway) do
@@ -331,6 +336,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
   defp restore_router_bridge(nil), do: Application.delete_env(:lemon_core, :router_bridge)
   defp restore_router_bridge(config), do: Application.put_env(:lemon_core, :router_bridge, config)
+
+  defp restore_env_var(name, nil), do: System.delete_env(name)
+  defp restore_env_var(name, value), do: System.put_env(name, value)
 
   defp stop_transport do
     if pid = Process.whereis(Elixir.LemonChannels.Adapters.Telegram.Transport) do

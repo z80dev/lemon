@@ -1,0 +1,190 @@
+defmodule LemonChannels.Application do
+  @moduledoc false
+
+  use Application
+
+  require Logger
+
+  @impl true
+  def start(_type, _args) do
+    children = [
+      # Plugin registry
+      LemonChannels.Registry,
+      # Rate limiter
+      LemonChannels.Outbox.RateLimiter,
+      # Dedupe
+      LemonChannels.Outbox.Dedupe,
+      # Outbox worker supervisor (tasks)
+      {Task.Supervisor, name: LemonChannels.Outbox.WorkerSupervisor},
+      # Outbox
+      LemonChannels.Outbox,
+      # Adapter supervisor for channel adapters
+      {DynamicSupervisor, strategy: :one_for_one, name: LemonChannels.AdapterSupervisor}
+    ]
+
+    opts = [strategy: :one_for_one, name: LemonChannels.Supervisor]
+
+    case Supervisor.start_link(children, opts) do
+      {:ok, pid} ->
+        # Register and start built-in adapters after startup
+        register_and_start_adapters()
+        {:ok, pid}
+
+      error ->
+        error
+    end
+  end
+
+  defp register_and_start_adapters do
+    # Register Telegram adapter if configured
+    if LemonChannels.GatewayConfig.get(:enable_telegram, false) == true do
+      case register_and_start_adapter(LemonChannels.Adapters.Telegram) do
+        :ok ->
+          Logger.info("Telegram adapter registered and started")
+
+        {:error, reason} ->
+          Logger.warning("Failed to start Telegram adapter: #{inspect(reason)}")
+      end
+    end
+
+    # Register X API adapter if configured
+    if LemonChannels.Adapters.XAPI.configured?() do
+      case register_and_start_adapter(LemonChannels.Adapters.XAPI) do
+        :ok ->
+          Logger.info("X API adapter registered and started")
+
+        {:error, reason} ->
+          Logger.warning("Failed to start X API adapter: #{inspect(reason)}")
+      end
+    else
+      Logger.info("X API adapter not configured, skipping")
+    end
+
+    # Register XMTP adapter if configured
+    if LemonChannels.GatewayConfig.get(:enable_xmtp, false) == true do
+      case register_and_start_adapter(LemonChannels.Adapters.Xmtp) do
+        :ok ->
+          Logger.info("XMTP adapter registered and started")
+
+        {:error, reason} ->
+          Logger.warning("Failed to start XMTP adapter: #{inspect(reason)}")
+      end
+    end
+
+    # Register Discord adapter if configured
+    if LemonChannels.GatewayConfig.get(:enable_discord, false) == true do
+      case register_and_start_adapter(LemonChannels.Adapters.Discord) do
+        :ok ->
+          Logger.info("Discord adapter registered and started")
+
+        {:error, reason} ->
+          Logger.warning("Failed to start Discord adapter: #{inspect(reason)}")
+      end
+    end
+
+    :ok
+  end
+
+  @doc """
+  Register and start a channel adapter.
+
+  This function:
+  1. Registers the adapter plugin with the Registry
+  2. Starts the adapter's child_spec under the AdapterSupervisor
+  """
+  @spec register_and_start_adapter(module(), keyword()) :: :ok | {:error, term()}
+  def register_and_start_adapter(adapter_module, opts \\ []) do
+    # Register the plugin
+    case LemonChannels.Registry.register(adapter_module) do
+      :ok ->
+        start_adapter(adapter_module, opts)
+
+      {:error, :already_registered} ->
+        # Already registered, just try to start
+        start_adapter(adapter_module, opts)
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
+  Start an adapter under the AdapterSupervisor.
+  """
+  @spec start_adapter(module(), keyword()) :: :ok | {:error, term()}
+  def start_adapter(adapter_module, opts \\ []) do
+    # Check if adapter is enabled
+    adapter_id = adapter_module.id()
+
+    enabled? =
+      case adapter_id do
+        "telegram" -> LemonChannels.GatewayConfig.get(:enable_telegram, false) == true
+        :telegram -> LemonChannels.GatewayConfig.get(:enable_telegram, false) == true
+        "discord" -> LemonChannels.GatewayConfig.get(:enable_discord, false) == true
+        :discord -> LemonChannels.GatewayConfig.get(:enable_discord, false) == true
+        "xmtp" -> LemonChannels.GatewayConfig.get(:enable_xmtp, false) == true
+        :xmtp -> LemonChannels.GatewayConfig.get(:enable_xmtp, false) == true
+        _ -> true
+      end
+
+    if enabled? do
+      merged_opts = opts
+
+      # Get the child spec from the adapter
+      child_spec = adapter_module.child_spec(merged_opts)
+
+      # Start under the adapter supervisor
+      case DynamicSupervisor.start_child(LemonChannels.AdapterSupervisor, child_spec) do
+        {:ok, _pid} ->
+          :ok
+
+        {:error, {:already_started, _pid}} ->
+          :ok
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    else
+      Logger.debug("Adapter #{adapter_id} is disabled, not starting")
+      :ok
+    end
+  end
+
+  @doc """
+  Stop an adapter.
+  """
+  @spec stop_adapter(module()) :: :ok | {:error, term()}
+  def stop_adapter(adapter_module) do
+    case find_adapter_pid(adapter_module) do
+      nil ->
+        {:error, :not_running}
+
+      pid ->
+        DynamicSupervisor.terminate_child(LemonChannels.AdapterSupervisor, pid)
+    end
+  end
+
+  defp find_adapter_pid(adapter_module) when is_atom(adapter_module) do
+    expected_child_module =
+      case adapter_module.child_spec([]) do
+        %{start: {module, _func, _args}} when is_atom(module) -> module
+        _ -> nil
+      end
+
+    # Search for the adapter in the supervisor children
+    children = DynamicSupervisor.which_children(LemonChannels.AdapterSupervisor)
+
+    Enum.find_value(children, fn
+      {_id, pid, _type, modules} when is_pid(pid) and is_list(modules) ->
+        if Enum.member?(modules, adapter_module) or
+             (is_atom(expected_child_module) and Enum.member?(modules, expected_child_module)) do
+          pid
+        else
+          nil
+        end
+
+      _ ->
+        nil
+    end)
+  end
+end

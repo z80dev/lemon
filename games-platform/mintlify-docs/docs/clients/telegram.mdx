@@ -1,0 +1,169 @@
+---
+title: Telegram Integration
+description: 'Chat with Lemon from your phone or desktop via Telegram'
+---
+
+The easiest way to use Lemon day-to-day is through Telegram. You talk to a bot from your phone or desktop while Lemon runs locally on your machine.
+
+## Setup
+
+### 1. Create a Bot
+
+1. In Telegram, message [@BotFather](https://t.me/botfather)
+2. Run `/newbot`
+3. Follow the prompts to name your bot
+4. Copy the bot token it gives you (looks like `123456:ABC-DEF...`)
+
+If you plan to use Lemon in a group chat, also set bot privacy appropriately:
+- Message @BotFather
+- Run `/setprivacy`
+- Choose your bot
+- Select `Disable` so the bot can see all messages
+
+### 2. Get Your Chat ID
+
+**Using the Telegram Bot API (no third-party bots):**
+
+Send any message to your new bot, then fetch updates:
+
+```bash
+export LEMON_TELEGRAM_BOT_TOKEN="123456:token"
+curl -s "https://api.telegram.org/bot${LEMON_TELEGRAM_BOT_TOKEN}/getUpdates" | python3 -m json.tool
+```
+
+Look for `message.chat.id`. For groups/supergroups this is usually a negative number.
+
+**Using a bot (fastest):**
+
+1. Search for `@RawDataBot` or `@userinfobot` in Telegram
+2. Start the chat and it will return your numerical ID
+3. For group IDs, add the bot to the group and it will display the chat ID
+
+### 3. Configure Lemon
+
+Add to `~/.lemon/config.toml`:
+
+```toml
+[gateway]
+enable_telegram = true
+auto_resume = true
+default_engine = "lemon"
+default_cwd = "~/"
+
+[gateway.telegram]
+bot_token = "123456:your-bot-token"
+allowed_chat_ids = [123456789]
+deny_unbound_chats = true
+drop_pending_updates = true
+allow_queue_override = true
+```
+
+**Important:**
+- Restrict who can use the bot by setting `allowed_chat_ids`
+- Enable `deny_unbound_chats` to prevent unauthorized access
+- `drop_pending_updates` prevents replies to old messages
+
+### 4. Run the Gateway
+
+```bash
+./bin/lemon-gateway
+```
+
+The gateway starts the Telegram runtime (router + gateway + channels) without booting every umbrella app.
+
+## Commands
+
+### Session Management
+
+| Command | Description |
+|---------|-------------|
+| `/new` | Start a new session |
+| `/new <project_id\|path>` | Start session bound to a project |
+| `/resume` | List previous sessions |
+| `/resume <number>` | Resume a session by number |
+| `/resume <engine_token>` | Resume with a specific token |
+| `/model` | Open model picker (provider/model + scope) |
+| `/cancel` | Cancel a running run |
+
+### Engine Override
+
+Put these at the start of a message:
+
+| Command | Engine |
+|---------|--------|
+| `/lemon` | Native Lemon engine |
+| `/claude` | Claude CLI |
+| `/codex` | Codex CLI |
+| `/opencode` | OpenCode CLI |
+| `/pi` | Pi CLI |
+
+### Model Picker
+
+Run `/model` to open an inline button picker:
+
+- Pick a provider
+- Pick a model
+- Apply scope:
+  - `This session`
+  - `All future sessions` (for the current chat/topic)
+
+### Queue Mode Override
+
+| Command | Mode |
+|---------|------|
+| `/steer` | Steering mode |
+| `/followup` | Follow-up mode |
+| `/interrupt` | Interrupt mode |
+
+### Canceling Runs
+
+Reply to the bot's "Running..." message with `/cancel` to abort the operation.
+
+In a DM, you can also just send `/cancel`.
+
+## Project Binding
+
+Bind a chat to a specific project:
+
+```toml
+[gateway.projects.myrepo]
+root = "/path/to/myrepo"
+default_engine = "lemon"
+
+[[gateway.bindings]]
+transport = "telegram"
+chat_id = 123456789
+project = "myrepo"
+agent_id = "default"
+```
+
+Now when you chat, Lemon will operate in that project directory.
+
+## Approvals
+
+When a tool needs approval, Telegram shows inline buttons:
+
+- **Once** — Approve this execution only
+- **Session** — Approve for this session
+- **Agent** — Approve for this agent
+- **Global** — Approve for all future executions
+- **Deny** — Reject this execution
+
+## Troubleshooting
+
+### Bot not responding
+
+1. Check that `allowed_chat_ids` includes your chat ID
+2. Verify the bot token is correct
+3. Check gateway logs for errors
+
+### Messages not being received
+
+1. If in a group, ensure bot privacy is disabled via @BotFather
+2. Check that `deny_unbound_chats` isn't blocking you
+
+### Can't find chat ID
+
+1. Send a message to your bot
+2. Run the curl command to get updates
+3. Look for `message.chat.id` in the response

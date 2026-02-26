@@ -1,0 +1,4371 @@
+{
+  "generated_at": "2026-02-22T06:10:26.945139+00:00",
+  "date": "2026-02-22",
+  "summary": {
+    "total_articles": 113,
+    "sources": {
+      "coindesk": 25,
+      "theblock": 20,
+      "decrypt": 38,
+      "cointelegraph": 30
+    },
+    "unique_tokens": 24,
+    "unique_projects": 19,
+    "unique_people": 0
+  },
+  "top_tokens": [
+    [
+      "BITCOIN",
+      38
+    ],
+    [
+      "ETHEREUM",
+      10
+    ],
+    [
+      "ETH",
+      5
+    ],
+    [
+      "AAVE",
+      4
+    ],
+    [
+      "XRP",
+      3
+    ],
+    [
+      "BASE",
+      3
+    ],
+    [
+      "OPTIMISM",
+      3
+    ],
+    [
+      "BTC",
+      3
+    ],
+    [
+      "COINBASE",
+      2
+    ],
+    [
+      "RIPPLE",
+      1
+    ],
+    [
+      "LIDO",
+      1
+    ],
+    [
+      "UNI",
+      1
+    ],
+    [
+      "NEAR",
+      1
+    ],
+    [
+      "OP",
+      1
+    ],
+    [
+      "PUMP",
+      1
+    ],
+    [
+      "UNISWAP",
+      1
+    ],
+    [
+      "ADA",
+      1
+    ],
+    [
+      "BNB",
+      1
+    ],
+    [
+      "DOGE",
+      1
+    ],
+    [
+      "HYPE",
+      1
+    ]
+  ],
+  "top_projects": [
+    [
+      "Ethereum",
+      10
+    ],
+    [
+      "DeFi",
+      5
+    ],
+    [
+      "Aave",
+      4
+    ],
+    [
+      "Base",
+      3
+    ],
+    [
+      "Optimism",
+      3
+    ],
+    [
+      "CryptoQuant",
+      2
+    ],
+    [
+      "Coinbase",
+      2
+    ],
+    [
+      "OpenClaw",
+      1
+    ],
+    [
+      "CoinDesk",
+      1
+    ],
+    [
+      "Coindesk",
+      1
+    ],
+    [
+      "ProShares",
+      1
+    ],
+    [
+      "Ripple",
+      1
+    ],
+    [
+      "BlackRock",
+      1
+    ],
+    [
+      "Lido",
+      1
+    ],
+    [
+      "AdGazer",
+      1
+    ],
+    [
+      "MicroStrategy",
+      1
+    ],
+    [
+      "Uniswap",
+      1
+    ],
+    [
+      "Ftx",
+      1
+    ],
+    [
+      "Tether",
+      1
+    ]
+  ],
+  "entities": {
+    "tokens": [
+      "AAVE",
+      "ADA",
+      "BASE",
+      "BITCOIN",
+      "BNB",
+      "BTC",
+      "COINBASE",
+      "DOGE",
+      "ETH",
+      "ETHEREUM",
+      "FTX",
+      "HYPE",
+      "LIDO",
+      "NEAR",
+      "OP",
+      "OPTIMISM",
+      "PUMP",
+      "RIPPLE",
+      "SOL",
+      "TETHER",
+      "UNI",
+      "UNISWAP",
+      "USDT",
+      "XRP"
+    ],
+    "projects": [
+      "Aave",
+      "AdGazer",
+      "Base",
+      "BlackRock",
+      "CoinDesk",
+      "Coinbase",
+      "Coindesk",
+      "CryptoQuant",
+      "DeFi",
+      "Ethereum",
+      "Ftx",
+      "Lido",
+      "MicroStrategy",
+      "OpenClaw",
+      "Optimism",
+      "ProShares",
+      "Ripple",
+      "Tether",
+      "Uniswap"
+    ],
+    "people": []
+  },
+  "articles_by_source": {
+    "coindesk": [
+      {
+        "title": "Mentioning 'bitcoin' or crypto on AI agent OpenClaw's Discord will get you banned",
+        "link": "https://www.coindesk.com/tech/2026/02/22/mentioning-bitcoin-or-crypto-on-ai-agent-openclaw-s-discord-will-get-you-banned",
+        "published": "2026-02-22T05:37:18+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [
+            "OpenClaw"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "‘Bitcoin to zero’ searches spike in the U.S., but the bottom signal is mixed",
+        "link": "https://www.coindesk.com/markets/2026/02/22/bitcoin-to-zero-searches-spike-in-the-u-s-but-the-bottom-signal-is-mixed",
+        "published": "2026-02-21T19:30:00+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Ethereum's Vitalik Buterin proposes AI 'stewards' to help reinvent DAO governance",
+        "link": "https://www.coindesk.com/web3/2026/02/21/ethereum-s-vitalik-buterin-proposes-ai-stewards-to-help-reinvent-dao-governance",
+        "published": "2026-02-21T19:21:46+00:00",
+        "entities": {
+          "tokens": [
+            "ETHEREUM"
+          ],
+          "projects": [
+            "Ethereum"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "Japan's SBI to issue 10 billion yen onchain bond with XRP rewards for retail investors",
+        "link": "https://www.coindesk.com/business/2026/02/21/japan-s-sbi-to-issue-10-billion-yen-onchain-bond-with-xrp-rewards-for-retail-investors",
+        "published": "2026-02-21T18:21:25+00:00",
+        "entities": {
+          "tokens": [
+            "XRP"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Iran’s rial collapse mirrors Lebanon’s crisis, driving citizens to bitcoin",
+        "link": "https://www.coindesk.com/opinion/2026/02/21/iran-s-rial-collapse-mirrors-lebanon-s-crisis-driving-citizens-to-bitcoin",
+        "published": "2026-02-21T18:01:00+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Bitcoin echoes 'late 2022' bear market bottom, K33 says",
+        "link": "https://www.coindesk.com/markets/2026/02/21/bitcoin-echoes-late-2022-bear-market-bottom-k33-says",
+        "published": "2026-02-21T18:00:00+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Inside France’s strict rules for selling majority stake of its state energy cloud to U.S. bitcoin miner",
+        "link": "https://www.coindesk.com/business/2026/02/21/inside-france-s-strict-rules-for-selling-majority-stake-of-its-state-energy-cloud-to-u-s-bitcoin-miner",
+        "published": "2026-02-21T17:23:52+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Bitcoin price slips after Trump hikes worldwide tariff to 15% from 10% despite Supreme Court decision",
+        "link": "https://www.coindesk.com/markets/2026/02/21/bitcoin-price-slips-after-trump-hikes-worldwide-tariff-to-15-from-10-despite-supreme-court-decision",
+        "published": "2026-02-21T16:43:00+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "How AI is helping retail traders exploit prediction market 'glitches' to make easy money",
+        "link": "https://www.coindesk.com/markets/2026/02/21/how-ai-is-helping-retail-traders-exploit-prediction-market-glitches-to-make-easy-money",
+        "published": "2026-02-21T15:00:00+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Blue Owl liquidity crisis has investors bracing for 2008-style fallout — it could mean bitcoin's next bull run",
+        "link": "https://www.coindesk.com/markets/2026/02/20/how-this-week-s-sign-of-private-credit-stress-could-set-stage-for-next-bitcoin-bull-run",
+        "published": "2026-02-21T14:00:00+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Small investors are buying bitcoin. For a rally to succeed, the whales need to join in.",
+        "link": "https://www.coindesk.com/markets/2026/02/21/small-investors-are-buying-bitcoin-it-now-needs-bigger-players-to-show-up",
+        "published": "2026-02-21T07:30:00+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "SEC makes quiet shift to brokers' stablecoin holdings that may pack big results",
+        "link": "https://www.coindesk.com/policy/2026/02/20/sec-makes-quiet-shift-to-brokers-stablecoin-holdings-that-may-pack-big-results",
+        "published": "2026-02-20T22:15:40+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Bitcoin shrugs off Trump's new tariffs, nears $68,000 as altcoins lead modest bounce",
+        "link": "https://www.coindesk.com/markets/2026/02/20/bitcoin-shrugs-off-trump-s-new-tariffs-nears-usd68-000-as-altcoins-lead-modest-bounce",
+        "published": "2026-02-20T21:20:51+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Specialized AI detects 92% of real-world DeFi exploits",
+        "link": "https://www.coindesk.com/business/2026/02/20/specialized-ai-detects-92-of-real-world-defi-exploits",
+        "published": "2026-02-20T19:06:15+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [
+            "DeFi"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "U.S. Supreme Court's decision on Trump's tariffs may not rock crypto — yet",
+        "link": "https://www.coindesk.com/news-analysis/2026/02/20/u-s-supreme-court-s-decision-on-trump-s-tariffs-may-not-rock-crypto-yet",
+        "published": "2026-02-20T18:42:06+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Dubai takes next step to make real estate flips instant in $16 billion tokenization plan",
+        "link": "https://www.coindesk.com/business/2026/02/20/dubai-unveils-secondary-market-for-usd5-million-tokenized-real-estate-via-xrp-ledger",
+        "published": "2026-02-20T17:09:59+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "RWA issuers prioritize capital formation over liquidity, according to Brickken survey",
+        "link": "https://www.coindesk.com/business/2026/02/20/rwa-issuers-prioritize-capital-formation-over-liquidity-according-to-brickken-survey",
+        "published": "2026-02-20T15:55:33+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Bitcoin pops then drops as Supreme Court strikes down Trump tariffs",
+        "link": "https://www.coindesk.com/markets/2026/02/20/bitcoin-pops-then-drops-as-supreme-court-strikes-down-trump-tariffs",
+        "published": "2026-02-20T15:20:45+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Goldman Sachs, Franklin Templeton, and Nicki Minaj: Inside Trump’s surreal Mar-a-Lago crypto summit",
+        "link": "https://www.coindesk.com/business/2026/02/20/goldman-sachs-franklin-templeton-and-nicki-minaj-inside-trump-s-surreal-mar-a-lago-crypto-summit",
+        "published": "2026-02-20T14:59:37+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "CoinDesk 20 performance update: AAVE falls 3.3%, leading index lower",
+        "link": "https://www.coindesk.com/coindesk-indices/2026/02/20/coindesk-20-performance-update-aave-falls-3-3-leading-index-lower",
+        "published": "2026-02-20T14:11:46+00:00",
+        "entities": {
+          "tokens": [
+            "AAVE"
+          ],
+          "projects": [
+            "Aave",
+            "CoinDesk",
+            "Coindesk"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "What next for XRP as volatility sinks to 2024 lows",
+        "link": "https://www.coindesk.com/markets/2026/02/20/what-next-for-xrp-as-volatility-sinks-to-2024-lows",
+        "published": "2026-02-20T13:08:41+00:00",
+        "entities": {
+          "tokens": [
+            "XRP"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Bitcoin's weekend selloff may be over with CME's 24/7 crypto trading move",
+        "link": "https://www.coindesk.com/markets/2026/02/21/bitcoin-s-weekend-selloff-may-be-over-with-cme-s-24-7-crypto-trading-move",
+        "published": "2026-02-20T13:00:00+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Bitcoin gains, is still 'signficantly undervalued,' Bitwise says. 'Extreme fear' dominates.",
+        "link": "https://www.coindesk.com/daybook-us/2026/02/20/bitcoin-gains-is-still-signficantly-undervalued-bitwise-says-extreme-fear-dominates",
+        "published": "2026-02-20T12:15:00+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Dual South Korean listings send Ethereum layer-2 token AZTEC surging 82%",
+        "link": "https://www.coindesk.com/markets/2026/02/20/dual-s-korea-listings-send-ethereum-layer-2-token-aztec-surging-82",
+        "published": "2026-02-20T11:42:25+00:00",
+        "entities": {
+          "tokens": [
+            "ETHEREUM"
+          ],
+          "projects": [
+            "Ethereum"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "Panic premium lingers in options even as bitcoin recovers from lows",
+        "link": "https://www.coindesk.com/markets/2026/02/20/panic-premium-lingers-in-options-even-as-bitcoin-recovers-from-lows",
+        "published": "2026-02-20T11:35:03+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      }
+    ],
+    "theblock": [
+      {
+        "title": "CryptoQuant says bitcoin whale deposit activity grows amid ongoing bear phase",
+        "link": "https://www.theblock.co/post/390712/cryptoquant-bitcoin-whale-deposit-ongoing-bear-phase?utm_source=rss&utm_medium=rss",
+        "published": "2026-02-21T22:20:09+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [
+            "CryptoQuant"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "Five crypto exchanges are helping Russia evade sanctions, filling Garantex’s void: Elliptic",
+        "link": "https://www.theblock.co/post/390709/five-crypto-exchanges-are-helping-russia-evade-sanctions-filling-garantexs-void-elliptic?utm_source=rss&utm_medium=rss",
+        "published": "2026-02-21T21:40:39+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Spot bitcoin ETFs notch five straight weeks of outflows for first time since March 2025",
+        "link": "https://www.theblock.co/post/390706/spot-bitcoin-etfs-notch-five-straight-weeks-of-outflows-for-first-time-since-march-2025?utm_source=rss&utm_medium=rss",
+        "published": "2026-02-21T19:21:56+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "IoTeX hit by private key exploit draining around $2 million from bridge contracts, per co-founder",
+        "link": "https://www.theblock.co/post/390698/iotex-hit-by-private-key-exploit-draining-up-to-8-8-million-from-bridge-contracts?utm_source=rss&utm_medium=rss",
+        "published": "2026-02-21T17:17:22+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "BNP Paribas taps Ethereum for new money market fund tokenization pilot",
+        "link": "https://www.theblock.co/post/390686/bnp-paribas-taps-ethereum-new-money-market-fund-tokenization-pilot?utm_source=rss&utm_medium=rss",
+        "published": "2026-02-20T20:49:53+00:00",
+        "entities": {
+          "tokens": [
+            "ETHEREUM"
+          ],
+          "projects": [
+            "Ethereum"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "Vitalik Buterin is building a ‘cypherpunk principled non-ugly Ethereum’ as devs officially add FOCIL to upgrade roadmap",
+        "link": "https://www.theblock.co/post/390682/vitalik-buterin-is-building-a-cypherpunk-principled-non-ugly-ethereum-as-devs-officially-add-focil-to-upgrade-roadmap?utm_source=rss&utm_medium=rss",
+        "published": "2026-02-20T20:41:03+00:00",
+        "entities": {
+          "tokens": [
+            "ETHEREUM"
+          ],
+          "projects": [
+            "Ethereum"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "Opening the door: SEC issues guidance on brokers’ capital stablecoin requirements",
+        "link": "https://www.theblock.co/post/390675/opening-the-door-sec-issues-guidance-on-brokers-capital-stablecoin-requirements?utm_source=rss&utm_medium=rss",
+        "published": "2026-02-20T19:44:59+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "ProShares’ stablecoin-ready ETF generates record $17 billion in day-one trading volume",
+        "link": "https://www.theblock.co/post/390674/proshares-stablecoin-ready-etf-generates-record-17-billion-in-day-one-trading-volume?utm_source=rss&utm_medium=rss",
+        "published": "2026-02-20T19:43:20+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [
+            "ProShares"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "MARA completes purchase of majority stake in French data center unit",
+        "link": "https://www.theblock.co/post/390668/mara-completes-purchase-of-majority-stake-in-french-data-center-unit?utm_source=rss&utm_medium=rss",
+        "published": "2026-02-20T18:24:45+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "The Daily: Ripple CEO sees 90% chance of crypto bill passing by end of April, BGD Labs to stop contributing to Aave, and more",
+        "link": "https://www.theblock.co/post/390662/the-daily-ripple-ceo-sees-90-chance-of-crypto-bill-passing-by-end-of-april-bgd-labs-to-stop-contributing-to-aave-and-more?utm_source=rss&utm_medium=rss",
+        "published": "2026-02-20T17:14:13+00:00",
+        "entities": {
+          "tokens": [
+            "AAVE",
+            "RIPPLE"
+          ],
+          "projects": [
+            "Aave",
+            "Ripple"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "Crypto prices rally as Supreme Court strikes down Trump’s broad tariff regime",
+        "link": "https://www.theblock.co/post/390653/crypto-prices-rally-as-supreme-court-strikes-down-trumps-broad-tariff-regime?utm_source=rss&utm_medium=rss",
+        "published": "2026-02-20T15:41:15+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "House Democrats press Treasury Sec. Bessent over OCC review of Trump-linked World Liberty Financial’s trust bank charter",
+        "link": "https://www.theblock.co/post/390625/house-democrats-press-treasury-sec-bessent-over-occ-review-of-trump-linked-world-liberty-financials-trust-bank-charter?utm_source=rss&utm_medium=rss",
+        "published": "2026-02-20T13:32:30+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "BGD Labs to cease Aave contributions after four years as governance tensions grow",
+        "link": "https://www.theblock.co/post/390629/bgd-labs-to-cease-aave-contributions-after-four-years-as-governance-tensions-grow?utm_source=rss&utm_medium=rss",
+        "published": "2026-02-20T13:26:09+00:00",
+        "entities": {
+          "tokens": [
+            "AAVE"
+          ],
+          "projects": [
+            "Aave"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "Malaysian authorities arrest 12 police officers over alleged crypto extortion: report",
+        "link": "https://www.theblock.co/post/390619/malaysian-authorities-arrest-12-police-officers-over-alleged-crypto-extortion?utm_source=rss&utm_medium=rss",
+        "published": "2026-02-20T12:26:08+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Bitcoin remains below key onchain level as ETF outflows persist, liquidity stays tight: analysts",
+        "link": "https://www.theblock.co/post/390602/bitcoin-remains-below-key-onchain-level-as-etf-outflows-persist-liquidity-stays-tight-analysts?utm_source=rss&utm_medium=rss",
+        "published": "2026-02-20T11:48:05+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "BlackRock’s UNI purchase and other DeFi developments, with Lido and Chaos Labs",
+        "link": "https://www.theblock.co/post/390603/blackrocks-uni-purchase-and-other-defi-developments-with-lido-and-chaos-labs?utm_source=rss&utm_medium=rss",
+        "published": "2026-02-20T11:01:00+00:00",
+        "entities": {
+          "tokens": [
+            "LIDO",
+            "UNI"
+          ],
+          "projects": [
+            "BlackRock",
+            "DeFi",
+            "Lido"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "Bitcoin mining difficulty jumps 15%, posting record absolute increase as hashrate rebounds after US winter storm",
+        "link": "https://www.theblock.co/post/390599/bitcoin-mining-difficulty-jumps-15-posting-record-absolute-increase-as-hashrate-rebounds-after-us-winter-storm?utm_source=rss&utm_medium=rss",
+        "published": "2026-02-20T10:53:22+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Tennessee judge grants preliminary injunction blocking state enforcement against Kalshi",
+        "link": "https://www.theblock.co/post/390591/tennessee-judge-grants-preliminary-injunction-blocking-state-enforcement-against-kalshi?utm_source=rss&utm_medium=rss",
+        "published": "2026-02-20T08:42:05+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "‘We have not underperformed’: Metaplanet CEO pushes back against online criticism",
+        "link": "https://www.theblock.co/post/390588/metaplanet-ceo-hits-back-online-criticism?utm_source=rss&utm_medium=rss",
+        "published": "2026-02-20T08:23:36+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "‘More to come,’ crypto leaders say after third White House stablecoin meeting",
+        "link": "https://www.theblock.co/post/390572/more-come-crypto-leaders-say-third-white-house-stablecoin-meeting?utm_source=rss&utm_medium=rss",
+        "published": "2026-02-19T19:44:25+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      }
+    ],
+    "decrypt": [
+      {
+        "title": "'Ethereum Is Going Hard': Vitalik Buterin Backs Censorship Resistance Upgrade",
+        "link": "https://decrypt.co/358792/ethereum-going-hard-vitalik-buterin-backs-censorship-resistance-upgrade",
+        "published": "2026-02-21T20:21:03+00:00",
+        "entities": {
+          "tokens": [
+            "ETHEREUM"
+          ],
+          "projects": [
+            "Ethereum"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "Marketers Could Use AI to Make Sure You See Their Ads—Here's How",
+        "link": "https://decrypt.co/358789/marketers-use-ai-make-sure-you-see-ads",
+        "published": "2026-02-21T17:01:03+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [
+            "AdGazer"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "Bitcoin Quantum Threat Takes Center Stage at Ethereum Conference",
+        "link": "https://decrypt.co/358784/bitcoin-quantum-threat-center-stage-ethereum-conference",
+        "published": "2026-02-21T14:01:03+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN",
+            "ETH",
+            "ETHEREUM"
+          ],
+          "projects": [
+            "Ethereum"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "Bitcoin Sell Pressure Is Easing, But Whales Keep Dumping on Exchanges: CryptoQuant",
+        "link": "https://decrypt.co/358782/bitcoin-sell-pressure-easing-whales-dumping-exchanges",
+        "published": "2026-02-20T20:41:31+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [
+            "CryptoQuant"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "Trump-Backed World Liberty Plots 'Exit Mechanism' for Maldives Hotel Tokenization Project",
+        "link": "https://decrypt.co/358781/trump-backed-world-liberty-exit-mechanism-maldives-hotel-tokenization",
+        "published": "2026-02-20T20:24:52+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "After State Lawsuit Losing Streak, Kalshi Nabs Victory in Tennessee—This Could Be Why",
+        "link": "https://decrypt.co/358765/after-state-lawsuit-losing-streak-kalshi-victory-tennessee-why",
+        "published": "2026-02-20T17:40:44+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "What Is Strategy (MSTR)? The Bitcoin Treasury Company",
+        "link": "https://decrypt.co/resources/what-is-strategy-microstrategy-mstr-the-bitcoin-treasury-company",
+        "published": "2026-02-20T17:40:02+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [
+            "MicroStrategy"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "Bitcoin Rises After Supreme Court Rules Against Trump Tariffs",
+        "link": "https://decrypt.co/358761/bitcoin-rises-supreme-court-rules-against-trump-tariffs",
+        "published": "2026-02-20T17:20:49+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "AMC Theatres Blocks AI Short Film From Screening in Pre-Show Advertising",
+        "link": "https://decrypt.co/358750/amc-theatres-blocks-ai-short-film-from-screening-in-pre-show-advertising",
+        "published": "2026-02-20T16:51:47+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "South Korean Lawmakers Slam Regulators Over Bithumb's $43 Billion Bitcoin Blunder",
+        "link": "https://decrypt.co/358744/south-korean-lawmakers-slam-regulators-bithumb-43-billion-bitcoin-blunder",
+        "published": "2026-02-20T16:27:42+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "House Dems Raise National Security Alarms Over Trump Family’s Crypto Bank Charter Request",
+        "link": "https://decrypt.co/358742/house-dems-national-security-alarms-trump-family-crypto-bank-charter",
+        "published": "2026-02-20T16:13:49+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Netherlands Bans Polymarket Over ‘Illegal Gambling Services’",
+        "link": "https://decrypt.co/358725/netherlands-bans-polymarket-over-illegal-gambling-services",
+        "published": "2026-02-20T15:14:59+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Morning Minute: Base Breaks Up With Optimism",
+        "link": "https://decrypt.co/358722/morning-minute-base-breaks-up-with-optimism",
+        "published": "2026-02-20T13:32:47+00:00",
+        "entities": {
+          "tokens": [
+            "BASE",
+            "OPTIMISM"
+          ],
+          "projects": [
+            "Base",
+            "Optimism"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "Bitcoin ETFs Lose Another $166M as Five-Week Withdrawals Near $4B",
+        "link": "https://decrypt.co/358713/bitcoin-etfs-lose-another-166m-as-five-week-withdrawals-near-4b",
+        "published": "2026-02-20T11:16:02+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN",
+            "NEAR"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Silicon Valley Engineers Charged With Theft of Google, Tech Trade Secrets",
+        "link": "https://decrypt.co/358710/silicon-valley-engineers-charged-with-theft-of-google-tech-trade-secrets",
+        "published": "2026-02-20T10:20:25+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Custodia CEO Says Trump Family Crypto Ties Are Part of Clarity Act Problem",
+        "link": "https://decrypt.co/358695/custodia-ceo-trump-family-crypto-ties-clarity-act-problem",
+        "published": "2026-02-20T04:36:25+00:00",
+        "entities": {
+          "tokens": [
+            "ETH"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Risk-Off Capital Shifts Toward Tokenized Assets as DeFi Pulls Back",
+        "link": "https://decrypt.co/358693/risk-off-capital-shifts-toward-tokenized-assets-defi-pulls-back",
+        "published": "2026-02-20T04:16:22+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [
+            "DeFi"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "Australian Executive Accused of Selling Cyber Secrets to Russia for Crypto",
+        "link": "https://decrypt.co/358690/australian-executive-cyber-secrets-russia-crypto",
+        "published": "2026-02-20T02:52:25+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "White House, Banks and Crypto Groups Resume Talks on Stablecoin Rewards",
+        "link": "https://decrypt.co/358688/white-house-banks-crypto-groups-resume-talks-stablecoin",
+        "published": "2026-02-20T01:01:28+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "'Warhammer' Veteran Jervis Johnson Warns AI Could Become the 'Asbestos of the Internet'",
+        "link": "https://decrypt.co/358680/warhammer-veteran-jervis-johnson-warns-ai-asbestos-internet",
+        "published": "2026-02-19T21:56:11+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "AI in Hollywood? 'Silicon Valley' Star T.J. Miller Isn't Worried",
+        "link": "https://decrypt.co/358660/ai-hollywood-silicon-valley-star-tj-miller-isnt-worried",
+        "published": "2026-02-19T21:36:47+00:00",
+        "entities": {
+          "tokens": [
+            "ETH"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Google Brings AI Music Generation to Gemini—We Tried It, and It's Too Little Too Late",
+        "link": "https://decrypt.co/358654/google-ai-music-gemini-lyria-3-review-suno-udio",
+        "published": "2026-02-19T21:13:13+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Ethereum Treasury Sharplink Reports Growing ETH Holdings, Institutional Investment",
+        "link": "https://decrypt.co/358652/ethereum-treasury-sharplink-growing-eth-holdings-institutional-investment",
+        "published": "2026-02-19T20:02:50+00:00",
+        "entities": {
+          "tokens": [
+            "ETH",
+            "ETHEREUM"
+          ],
+          "projects": [
+            "Ethereum"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "'The Sandbox' Adds Web-Based Games in Season 7 Accessibility Push",
+        "link": "https://decrypt.co/358594/sandbox-web-based-games-season-7-rollout-accessibility-push",
+        "published": "2026-02-19T19:01:02+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Accenture Is Tracking Whether Employees Use AI—And Promotions Are on the Line",
+        "link": "https://decrypt.co/358616/accenture-tracking-employees-use-ai-promotions",
+        "published": "2026-02-19T18:48:04+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "'Bitcoin Going to Zero' Google Searches Rise With Crypto Sentiment in the Dumps",
+        "link": "https://decrypt.co/358619/bitcoin-going-zero-searches-rise-crypto-sentiment-dumps",
+        "published": "2026-02-19T18:36:33+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Warren Presses Treasury, Fed to Rule Out Bitcoin Bailout As Prices Tumble: Report",
+        "link": "https://decrypt.co/358593/warren-presses-treasury-fed-to-rule-out-bitcoin-bailout-as-prices-tumble-report",
+        "published": "2026-02-19T17:19:12+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "CME Will Make Crypto Derivatives Trading 24/7 in May as Wall Street Eyes Similar Goal",
+        "link": "https://decrypt.co/358595/cme-crypto-derivatives-trading-24-7-may-wall-street-similar-goal",
+        "published": "2026-02-19T17:19:10+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Why Verifiable Data Is the Missing Layer in AI: Walrus",
+        "link": "https://decrypt.co/358431/why-verifiable-data-is-the-missing-layer-in-ai-walrus",
+        "published": "2026-02-19T17:01:03+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "What Is Base? The Ethereum Layer-2 Network Launched by Coinbase",
+        "link": "https://decrypt.co/resources/what-is-base-coinbases-layer-2-chain",
+        "published": "2026-02-19T16:54:03+00:00",
+        "entities": {
+          "tokens": [
+            "BASE",
+            "COINBASE",
+            "ETHEREUM"
+          ],
+          "projects": [
+            "Base",
+            "Coinbase",
+            "Ethereum"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "What's the Best AI Model to Run Your Business? The One That Lies Best, Apparently",
+        "link": "https://decrypt.co/358575/best-ai-model-run-business",
+        "published": "2026-02-19T16:05:15+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Morning Minute: OpenAI and Paradigm Turn Focus to Smart Contracts",
+        "link": "https://decrypt.co/358569/morning-minute-openai-and-paradigm-turn-focus-to-smart-contracts",
+        "published": "2026-02-19T13:31:02+00:00",
+        "entities": {
+          "tokens": [
+            "ETHEREUM"
+          ],
+          "projects": [
+            "Ethereum"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "Bundesbank President Wants Euro-Pegged Stablecoins to Prevent Dollarization",
+        "link": "https://decrypt.co/358563/bundesbank-president-wants-euro-pegged-stablecoins-to-prevent-dollarization",
+        "published": "2026-02-19T12:57:53+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Coinbase CEO Says Quantum Computing 'Solvable Issue' for Crypto",
+        "link": "https://decrypt.co/358559/coinbase-ceo-says-quantum-computing-solvable-issue-for-crypto",
+        "published": "2026-02-19T11:56:23+00:00",
+        "entities": {
+          "tokens": [
+            "COINBASE"
+          ],
+          "projects": [
+            "Coinbase"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "Optimism Plunges Double Digits Amid Base's Tech Stack Overhaul",
+        "link": "https://decrypt.co/358549/optimism-plunges-double-digits-amid-bases-tech-stack-overhaul",
+        "published": "2026-02-19T10:44:10+00:00",
+        "entities": {
+          "tokens": [
+            "BASE",
+            "OP",
+            "OPTIMISM"
+          ],
+          "projects": [
+            "Base",
+            "Optimism"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "AI Disruption Could Cut Creator Earnings by Nearly 25% by 2028, UNESCO Warns",
+        "link": "https://decrypt.co/358535/ai-disruption-creator-earnings-unesco",
+        "published": "2026-02-19T05:33:39+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Altcoin Selling Pressure Hits Five-Year High as Confidence Wanes",
+        "link": "https://decrypt.co/358532/altcoin-selling-pressure-five-year-high-confidence-wanes",
+        "published": "2026-02-19T04:08:06+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Fed Economists Praise Prediction Markets as States Step Up Enforcement",
+        "link": "https://decrypt.co/358529/fed-economists-prediction-markets-states-step-up-enforcement",
+        "published": "2026-02-19T03:18:34+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      }
+    ],
+    "cointelegraph": [
+      {
+        "title": "Crypto investors' interest moves ‘pretty wide’ beyond majors as dip drags: Exec",
+        "link": "https://cointelegraph.com/news/crypto-investors-explore-assets-bitcoin-ethereum-market-uncertainty-robinhood?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-22T05:54:15+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "50% of Bitcoin's past 24 months ended in gains: Economist",
+        "link": "https://cointelegraph.com/news/bitcoin-price-uptrend-economist-forecast-december?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-22T03:24:40+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Here’s what happened in crypto today",
+        "link": "https://cointelegraph.com/news/what-happened-in-crypto-today?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-21T21:58:48+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [
+            "DeFi"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "Trump raises global tariff rate to 15%, but crypto markets are unfazed",
+        "link": "https://cointelegraph.com/news/trump-raises-tariff-15-crypto-unfazed?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-21T21:45:05+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Crypto market retraces almost all 2024-2025 US election pump gains",
+        "link": "https://cointelegraph.com/news/crypto-retraces-gains-2024-2025-pump?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-21T20:40:01+00:00",
+        "entities": {
+          "tokens": [
+            "PUMP"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "US lawmakers critical of Trump tariffs, say it will derail economy",
+        "link": "https://cointelegraph.com/news/us-lawmakers-critical-tariffs-derail-economy?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-21T18:22:41+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "IoTeX confirms ‘suspicious activity’ involving token safe, says losses contained",
+        "link": "https://cointelegraph.com/news/iotex-investigates-token-safe-suspicious-activity-4-3m-loss?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-21T13:11:52+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "What’s next for crypto in Europe after Christine Lagarde steps down?",
+        "link": "https://cointelegraph.com/news/what-next-crypto-europe-ecb-christine-lagarde?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-21T13:00:00+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Spot Bitcoin ETFs record five weeks of net withdrawals, totaling $3.8B",
+        "link": "https://cointelegraph.com/news/spot-bitcoin-etfs-five-weeks-net-outflows-3-8b?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-21T09:39:40+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Bitcoin $150K price calls are ‘drying up,’ which is healthy: Santiment",
+        "link": "https://cointelegraph.com/news/bitcoin-price-prediction-retail-user-healthy-crypto-indicator-santiment?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-21T08:09:56+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN",
+            "OPTIMISM"
+          ],
+          "projects": [
+            "Optimism"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "Bitcoin miner MARA buys majority stake in AI data center firm Exaion",
+        "link": "https://cointelegraph.com/news/mara-majority-stake-exaion-ai-data-centers-bitcoin-miner?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-21T06:55:45+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Uniswap founder slams scam crypto ads after victim 'lost everything'",
+        "link": "https://cointelegraph.com/news/uniswap-fake-ads-drain-user-wallets-hayden-adams?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-21T05:58:48+00:00",
+        "entities": {
+          "tokens": [
+            "UNISWAP"
+          ],
+          "projects": [
+            "Uniswap"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "Bitcoin's bull catalyst could be AI stocks turning 'silly big': Lyn Alden",
+        "link": "https://cointelegraph.com/news/bitcoin-price-catalyst-ai-stocks-peak-economist-lyn-alden?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-21T02:21:04+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Tokenized real estate projects advance in Dubai and Maldives",
+        "link": "https://cointelegraph.com/news/tokenized-real-estate-advance-dubai-maldives?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-20T21:31:17+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Bitcoin whales participate in V-shaped accumulation, offsetting 230K BTC sell-off",
+        "link": "https://cointelegraph.com/news/bitcoin-whales-participate-in-v-shaped-accumulation-offsetting-230k-btc-sell-off?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-20T21:00:00+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN",
+            "BTC"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Bitcoin bears at risk of $600M liquidation, raising chance for rally to $70K",
+        "link": "https://cointelegraph.com/news/bitcoin-bears-at-risk-of-600m-liquidation-raising-chance-for-rally-to-70k?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-20T20:15:00+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Dutch authorities call on Polymarket arm to cease activities",
+        "link": "https://cointelegraph.com/news/dutch-authorities-call-on-polymarket-arm-to-cease-activities?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-20T20:14:25+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Crypto slides, but tokenized RWAs and VC push ahead",
+        "link": "https://cointelegraph.com/news/crypto-biz-crypto-slides-tokenized-rwa-vc-push-ahead?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-20T20:00:00+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Trump announces 10% global tariff following SCOTUS ruling",
+        "link": "https://cointelegraph.com/news/trump-10-global-tariff-scotus-ruling?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-20T19:55:07+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "SCOTUS strikes down Trump tariffs, but 'alternative' plans brewing",
+        "link": "https://cointelegraph.com/news/scotus-strikes-trump-tariffs-alternative-plan?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-20T19:27:39+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Wall Street boosts Bitmine stakes as DeFi lenders buckle on liquidity: Finance Redefined",
+        "link": "https://cointelegraph.com/news/wall-street-boosts-bitmine-stakes-defi-lenders-buckle-liquidity-finance-redefined?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-20T19:00:00+00:00",
+        "entities": {
+          "tokens": [
+            "ETHEREUM"
+          ],
+          "projects": [
+            "DeFi",
+            "Ethereum"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "Price predictions 2/20: BTC, ETH, XRP, BNB, SOL, DOGE, BCH, ADA, HYPE, XMR",
+        "link": "https://cointelegraph.com/news/price-predictions-2-20-btc-eth-xrp-bnb-sol-doge-bch-ada-hype-xmr?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-20T18:20:00+00:00",
+        "entities": {
+          "tokens": [
+            "ADA",
+            "BITCOIN",
+            "BNB",
+            "BTC",
+            "DOGE",
+            "ETH",
+            "HYPE",
+            "SOL",
+            "XRP"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Bitcoin mining difficulty rebounds 15% as US miners recover from winter outages",
+        "link": "https://cointelegraph.com/news/bitcoin-difficulty-rebounds-15-as-us-miners-recover-from-winter-outages?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-20T18:02:33+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Core technical contributor to cease involvement with Aave DAO",
+        "link": "https://cointelegraph.com/news/aave-core-contributor-bgd-cease?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-20T17:17:56+00:00",
+        "entities": {
+          "tokens": [
+            "AAVE"
+          ],
+          "projects": [
+            "Aave"
+          ],
+          "people": []
+        }
+      },
+      {
+        "title": "Bitcoin ignores US Supreme Court Trump tariff strike amid talk of $150B refund",
+        "link": "https://cointelegraph.com/news/bitcoin-ignores-us-supreme-court-trump-tariff-strike-amid-talk-of-150b-refund?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-20T17:15:55+00:00",
+        "entities": {
+          "tokens": [
+            "BITCOIN"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "BTC treasury executives call for reform of 1,250% risk weight in Basel III",
+        "link": "https://cointelegraph.com/news/btc-treasury-reform-1250-percent-risk-basel?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-20T17:03:46+00:00",
+        "entities": {
+          "tokens": [
+            "BTC"
+          ],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Tennessee judge issues injunction blocking state move against Kalshi",
+        "link": "https://cointelegraph.com/news/tennessee-judge-blocks-state-crackdown-on-kalshi?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-20T14:03:44+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Stablecoin A7A5 grows parallel system for sanctioned companies",
+        "link": "https://cointelegraph.com/news/stablecoin-a7a5-parallel-network-sanctioned-companies?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-20T13:32:33+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "House Democrats press Treasury on World Liberty bank charter and UAE stake",
+        "link": "https://cointelegraph.com/news/democrats-press-treasury-on-trump-world-liberty-financial?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-20T12:46:02+00:00",
+        "entities": {
+          "tokens": [],
+          "projects": [],
+          "people": []
+        }
+      },
+      {
+        "title": "Tether USDT supply set for biggest monthly decline since 2022 FTX collapse",
+        "link": "https://cointelegraph.com/news/tether-usdt-biggest-monthly-decline-ftx-collapse?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+        "published": "2026-02-20T12:33:45+00:00",
+        "entities": {
+          "tokens": [
+            "FTX",
+            "TETHER",
+            "USDT"
+          ],
+          "projects": [
+            "Ftx",
+            "Tether"
+          ],
+          "people": []
+        }
+      }
+    ]
+  },
+  "all_articles": [
+    {
+      "id": "f8a63c3596478cd4",
+      "title": "Mentioning 'bitcoin' or crypto on AI agent OpenClaw's Discord will get you banned",
+      "link": "https://www.coindesk.com/tech/2026/02/22/mentioning-bitcoin-or-crypto-on-ai-agent-openclaw-s-discord-will-get-you-banned",
+      "source": "coindesk",
+      "published": "2026-02-22T05:37:18+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "Shaurya Malwa"
+      ],
+      "tags": [
+        "News",
+        "Tech"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [
+          "OpenClaw"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.090020+00:00"
+    },
+    {
+      "id": "e428738c166a9ee6",
+      "title": "‘Bitcoin to zero’ searches spike in the U.S., but the bottom signal is mixed",
+      "link": "https://www.coindesk.com/markets/2026/02/22/bitcoin-to-zero-searches-spike-in-the-u-s-but-the-bottom-signal-is-mixed",
+      "source": "coindesk",
+      "published": "2026-02-21T19:30:00+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "Shaurya Malwa"
+      ],
+      "tags": [
+        "News",
+        "Markets",
+        "Bitcoin News",
+        "google searches",
+        "Bitcoin Searches"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.090103+00:00"
+    },
+    {
+      "id": "de99d9bbfb50ca06",
+      "title": "Ethereum's Vitalik Buterin proposes AI 'stewards' to help reinvent DAO governance",
+      "link": "https://www.coindesk.com/web3/2026/02/21/ethereum-s-vitalik-buterin-proposes-ai-stewards-to-help-reinvent-dao-governance",
+      "source": "coindesk",
+      "published": "2026-02-21T19:21:46+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "AI Boost",
+        "Francisco Rodrigues"
+      ],
+      "tags": [
+        "Dao governance",
+        "News",
+        "Vitalik Buterin",
+        "Web3"
+      ],
+      "entities": {
+        "tokens": [
+          "ETHEREUM"
+        ],
+        "projects": [
+          "Ethereum"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.090164+00:00"
+    },
+    {
+      "id": "0111be2ce1eec00b",
+      "title": "Japan's SBI to issue 10 billion yen onchain bond with XRP rewards for retail investors",
+      "link": "https://www.coindesk.com/business/2026/02/21/japan-s-sbi-to-issue-10-billion-yen-onchain-bond-with-xrp-rewards-for-retail-investors",
+      "source": "coindesk",
+      "published": "2026-02-21T18:21:25+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "AI Boost",
+        "Francisco Rodrigues"
+      ],
+      "tags": [
+        "News",
+        "Ripple Labs",
+        "XRP News",
+        "Finance",
+        "SBI Holdings",
+        "Bond"
+      ],
+      "entities": {
+        "tokens": [
+          "XRP"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.090228+00:00"
+    },
+    {
+      "id": "7216598f5c036fe7",
+      "title": "Iran’s rial collapse mirrors Lebanon’s crisis, driving citizens to bitcoin",
+      "link": "https://www.coindesk.com/opinion/2026/02/21/iran-s-rial-collapse-mirrors-lebanon-s-crisis-driving-citizens-to-bitcoin",
+      "source": "coindesk",
+      "published": "2026-02-21T18:01:00+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "Tony Yazbeck"
+      ],
+      "tags": [
+        "Opinion",
+        "Bitcoin"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.090284+00:00"
+    },
+    {
+      "id": "4f827d02ef0bc27e",
+      "title": "Bitcoin echoes 'late 2022' bear market bottom, K33 says",
+      "link": "https://www.coindesk.com/markets/2026/02/21/bitcoin-echoes-late-2022-bear-market-bottom-k33-says",
+      "source": "coindesk",
+      "published": "2026-02-21T18:00:00+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "Krisztian Sandor"
+      ],
+      "tags": [
+        "Markets",
+        "Bitcoin News",
+        "Feature",
+        "market analysis"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.090329+00:00"
+    },
+    {
+      "id": "169b2f6ee9c909f3",
+      "title": "Inside France’s strict rules for selling majority stake of its state energy cloud to U.S. bitcoin miner",
+      "link": "https://www.coindesk.com/business/2026/02/21/inside-france-s-strict-rules-for-selling-majority-stake-of-its-state-energy-cloud-to-u-s-bitcoin-miner",
+      "source": "coindesk",
+      "published": "2026-02-21T17:23:52+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "AI Boost",
+        "Francisco Rodrigues"
+      ],
+      "tags": [
+        "Marathon Digital",
+        "News",
+        "Finance",
+        "Data Centers",
+        "France"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.090432+00:00"
+    },
+    {
+      "id": "34f687f79e32216c",
+      "title": "Bitcoin price slips after Trump hikes worldwide tariff to 15% from 10% despite Supreme Court decision",
+      "link": "https://www.coindesk.com/markets/2026/02/21/bitcoin-price-slips-after-trump-hikes-worldwide-tariff-to-15-from-10-despite-supreme-court-decision",
+      "source": "coindesk",
+      "published": "2026-02-21T16:43:00+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "Francisco Rodrigues"
+      ],
+      "tags": [
+        "Donald Trump",
+        "Markets",
+        "Bitcoin News",
+        "News"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.090495+00:00"
+    },
+    {
+      "id": "5b73d4bf902ce4c8",
+      "title": "How AI is helping retail traders exploit prediction market 'glitches' to make easy money",
+      "link": "https://www.coindesk.com/markets/2026/02/21/how-ai-is-helping-retail-traders-exploit-prediction-market-glitches-to-make-easy-money",
+      "source": "coindesk",
+      "published": "2026-02-21T15:00:00+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "Oliver Knight",
+        "Shaurya Malwa"
+      ],
+      "tags": [
+        "News",
+        "Markets",
+        "Trading Bots",
+        "Artificial Intelligence"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.090552+00:00"
+    },
+    {
+      "id": "f3f92eae8b3d26f7",
+      "title": "Blue Owl liquidity crisis has investors bracing for 2008-style fallout — it could mean bitcoin's next bull run",
+      "link": "https://www.coindesk.com/markets/2026/02/20/how-this-week-s-sign-of-private-credit-stress-could-set-stage-for-next-bitcoin-bull-run",
+      "source": "coindesk",
+      "published": "2026-02-21T14:00:00+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "Stephen Alpher"
+      ],
+      "tags": [
+        "News",
+        "Markets",
+        "Bitcoin News"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.090626+00:00"
+    },
+    {
+      "id": "c6002b4a10bf4482",
+      "title": "Small investors are buying bitcoin. For a rally to succeed, the whales need to join in.",
+      "link": "https://www.coindesk.com/markets/2026/02/21/small-investors-are-buying-bitcoin-it-now-needs-bigger-players-to-show-up",
+      "source": "coindesk",
+      "published": "2026-02-21T07:30:00+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "Shaurya Malwa"
+      ],
+      "tags": [
+        "News",
+        "Markets",
+        "Bitcoin News"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.090687+00:00"
+    },
+    {
+      "id": "47e7e70c8e4ac220",
+      "title": "SEC makes quiet shift to brokers' stablecoin holdings that may pack big results",
+      "link": "https://www.coindesk.com/policy/2026/02/20/sec-makes-quiet-shift-to-brokers-stablecoin-holdings-that-may-pack-big-results",
+      "source": "coindesk",
+      "published": "2026-02-20T22:15:40+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "Jesse Hamilton"
+      ],
+      "tags": [
+        "News",
+        "U.S. Securities and Exchange Commission",
+        "Regulations",
+        "Stablecoins",
+        "Policy",
+        "Broker-Dealers"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.090741+00:00"
+    },
+    {
+      "id": "ba008a34caa895d8",
+      "title": "Bitcoin shrugs off Trump's new tariffs, nears $68,000 as altcoins lead modest bounce",
+      "link": "https://www.coindesk.com/markets/2026/02/20/bitcoin-shrugs-off-trump-s-new-tariffs-nears-usd68-000-as-altcoins-lead-modest-bounce",
+      "source": "coindesk",
+      "published": "2026-02-20T21:20:51+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "Krisztian Sandor"
+      ],
+      "tags": [
+        "Market Wrap",
+        "Markets",
+        "News",
+        "Bitcoin News",
+        "Donald Trump"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.090800+00:00"
+    },
+    {
+      "id": "7dfa8bf91cb4cf99",
+      "title": "Specialized AI detects 92% of real-world DeFi exploits",
+      "link": "https://www.coindesk.com/business/2026/02/20/specialized-ai-detects-92-of-real-world-defi-exploits",
+      "source": "coindesk",
+      "published": "2026-02-20T19:06:15+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "AI Boost",
+        "Oliver Knight"
+      ],
+      "tags": [
+        "News",
+        "Artificial Intelligence",
+        "AI",
+        "Exploits",
+        "Finance",
+        "DeFi"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [
+          "DeFi"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.090843+00:00"
+    },
+    {
+      "id": "16fcd575e7706f7a",
+      "title": "U.S. Supreme Court's decision on Trump's tariffs may not rock crypto — yet",
+      "link": "https://www.coindesk.com/news-analysis/2026/02/20/u-s-supreme-court-s-decision-on-trump-s-tariffs-may-not-rock-crypto-yet",
+      "source": "coindesk",
+      "published": "2026-02-20T18:42:06+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "Jesse Hamilton"
+      ],
+      "tags": [
+        "News",
+        "Market Structure Legislation",
+        "News Analysis",
+        "U.S. Supreme Court",
+        "Donald Trump",
+        "tariff"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.090905+00:00"
+    },
+    {
+      "id": "a5ff136048cefcc1",
+      "title": "Dubai takes next step to make real estate flips instant in $16 billion tokenization plan",
+      "link": "https://www.coindesk.com/business/2026/02/20/dubai-unveils-secondary-market-for-usd5-million-tokenized-real-estate-via-xrp-ledger",
+      "source": "coindesk",
+      "published": "2026-02-20T17:09:59+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "Krisztian Sandor"
+      ],
+      "tags": [
+        "News",
+        "XRP Ledger",
+        "Tokenization",
+        "Dubai",
+        "Finance",
+        "Real World Assets",
+        "Tokenized Assets"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.090963+00:00"
+    },
+    {
+      "id": "c3576b6e72353b2e",
+      "title": "RWA issuers prioritize capital formation over liquidity, according to Brickken survey",
+      "link": "https://www.coindesk.com/business/2026/02/20/rwa-issuers-prioritize-capital-formation-over-liquidity-according-to-brickken-survey",
+      "source": "coindesk",
+      "published": "2026-02-20T15:55:33+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "Olivier Acuna"
+      ],
+      "tags": [
+        "News",
+        "Tokenization",
+        "Crypto Derivatives",
+        "Tokenized Equity",
+        "Finance"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.091011+00:00"
+    },
+    {
+      "id": "8ff4afab90c167af",
+      "title": "Bitcoin pops then drops as Supreme Court strikes down Trump tariffs",
+      "link": "https://www.coindesk.com/markets/2026/02/20/bitcoin-pops-then-drops-as-supreme-court-strikes-down-trump-tariffs",
+      "source": "coindesk",
+      "published": "2026-02-20T15:20:45+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "Helene Braun",
+        "Krisztian Sandor"
+      ],
+      "tags": [
+        "Market Wrap",
+        "Markets",
+        "News",
+        "Bitcoin News",
+        "U.S. Economy",
+        "Donald Trump",
+        "Breaking News",
+        "tariff"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.091059+00:00"
+    },
+    {
+      "id": "b1df2b37318ea49d",
+      "title": "Goldman Sachs, Franklin Templeton, and Nicki Minaj: Inside Trump’s surreal Mar-a-Lago crypto summit",
+      "link": "https://www.coindesk.com/business/2026/02/20/goldman-sachs-franklin-templeton-and-nicki-minaj-inside-trump-s-surreal-mar-a-lago-crypto-summit",
+      "source": "coindesk",
+      "published": "2026-02-20T14:59:37+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "Nikhilesh De",
+        "Helene Braun"
+      ],
+      "tags": [
+        "News",
+        "Top Stories",
+        "Finance",
+        "World Liberty Financial",
+        "Exclusive"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.091128+00:00"
+    },
+    {
+      "id": "ab864e6f92da75d2",
+      "title": "CoinDesk 20 performance update: AAVE falls 3.3%, leading index lower",
+      "link": "https://www.coindesk.com/coindesk-indices/2026/02/20/coindesk-20-performance-update-aave-falls-3-3-leading-index-lower",
+      "source": "coindesk",
+      "published": "2026-02-20T14:11:46+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "CoinDesk Indices"
+      ],
+      "tags": [
+        "News",
+        "Prices",
+        "charts",
+        "CoinDesk Indices",
+        "CoinDesk 20"
+      ],
+      "entities": {
+        "tokens": [
+          "AAVE"
+        ],
+        "projects": [
+          "Aave",
+          "CoinDesk",
+          "Coindesk"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.091177+00:00"
+    },
+    {
+      "id": "b1ebf3ab7c223b44",
+      "title": "What next for XRP as volatility sinks to 2024 lows",
+      "link": "https://www.coindesk.com/markets/2026/02/20/what-next-for-xrp-as-volatility-sinks-to-2024-lows",
+      "source": "coindesk",
+      "published": "2026-02-20T13:08:41+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "Shaurya Malwa"
+      ],
+      "tags": [
+        "News",
+        "Markets",
+        "Why is XRP down"
+      ],
+      "entities": {
+        "tokens": [
+          "XRP"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.091219+00:00"
+    },
+    {
+      "id": "66cb5e06ba12c75d",
+      "title": "Bitcoin's weekend selloff may be over with CME's 24/7 crypto trading move",
+      "link": "https://www.coindesk.com/markets/2026/02/21/bitcoin-s-weekend-selloff-may-be-over-with-cme-s-24-7-crypto-trading-move",
+      "source": "coindesk",
+      "published": "2026-02-20T13:00:00+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "Krisztian Sandor"
+      ],
+      "tags": [
+        "Markets",
+        "market analysis",
+        "CME Group",
+        "Bitcoin Options",
+        "Feature"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.091277+00:00"
+    },
+    {
+      "id": "cd410f0ebd3a0955",
+      "title": "Bitcoin gains, is still 'signficantly undervalued,' Bitwise says. 'Extreme fear' dominates.",
+      "link": "https://www.coindesk.com/daybook-us/2026/02/20/bitcoin-gains-is-still-signficantly-undervalued-bitwise-says-extreme-fear-dominates",
+      "source": "coindesk",
+      "published": "2026-02-20T12:15:00+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "Francisco Rodrigues"
+      ],
+      "tags": [
+        "Crypto Daybook Americas",
+        "News"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.091326+00:00"
+    },
+    {
+      "id": "b90ba7bc9cef583a",
+      "title": "Dual South Korean listings send Ethereum layer-2 token AZTEC surging 82%",
+      "link": "https://www.coindesk.com/markets/2026/02/20/dual-s-korea-listings-send-ethereum-layer-2-token-aztec-surging-82",
+      "source": "coindesk",
+      "published": "2026-02-20T11:42:25+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "Shaurya Malwa"
+      ],
+      "tags": [
+        "Upbit",
+        "Korea",
+        "Markets",
+        "News",
+        "Bithumb"
+      ],
+      "entities": {
+        "tokens": [
+          "ETHEREUM"
+        ],
+        "projects": [
+          "Ethereum"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.091378+00:00"
+    },
+    {
+      "id": "f4263775c9fa4888",
+      "title": "Panic premium lingers in options even as bitcoin recovers from lows",
+      "link": "https://www.coindesk.com/markets/2026/02/20/panic-premium-lingers-in-options-even-as-bitcoin-recovers-from-lows",
+      "source": "coindesk",
+      "published": "2026-02-20T11:35:03+00:00",
+      "summary": "",
+      "content": "",
+      "authors": [
+        "Oliver Knight",
+        "Saksham Diwan"
+      ],
+      "tags": [
+        "News",
+        "Markets",
+        "Crypto Markets Today",
+        "Altcoins",
+        "Derivatives"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.091423+00:00"
+    },
+    {
+      "id": "c0b5f605744843a5",
+      "title": "CryptoQuant says bitcoin whale deposit activity grows amid ongoing bear phase",
+      "link": "https://www.theblock.co/post/390712/cryptoquant-bitcoin-whale-deposit-ongoing-bear-phase?utm_source=rss&utm_medium=rss",
+      "source": "theblock",
+      "published": "2026-02-21T22:20:09+00:00",
+      "summary": "CryptoQuant said the exchange whale ratio has risen to 0.64, the highest level since 2015, suggesting whales are leading selling activity.",
+      "content": "CryptoQuant said the exchange whale ratio has risen to 0.64, the highest level since 2015, suggesting whales are leading selling activity.",
+      "authors": [
+        "Yogita Khatri"
+      ],
+      "tags": [
+        "Markets",
+        "Tether",
+        "Analyst Reports",
+        "Tokens",
+        "Market Recap",
+        "Stablecoins",
+        "Bitcoin",
+        "Equities",
+        "Token Projects",
+        "Market Updates",
+        "Crypto Ecosystems",
+        "Crypto Movers"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [
+          "CryptoQuant"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.380680+00:00"
+    },
+    {
+      "id": "b6f3f63840420089",
+      "title": "Five crypto exchanges are helping Russia evade sanctions, filling Garantex’s void: Elliptic",
+      "link": "https://www.theblock.co/post/390709/five-crypto-exchanges-are-helping-russia-evade-sanctions-filling-garantexs-void-elliptic?utm_source=rss&utm_medium=rss",
+      "source": "theblock",
+      "published": "2026-02-21T21:40:39+00:00",
+      "summary": "One exchange has processed at least $11 billion in crypto from an office in the same building previously occupied by sanctioned exchange Garantex.",
+      "content": "One exchange has processed at least $11 billion in crypto from an office in the same building previously occupied by sanctioned exchange Garantex.",
+      "authors": [
+        "Zack Abrams"
+      ],
+      "tags": [
+        "elliptic",
+        "Anti-Money Laundering",
+        "russia",
+        "Legal",
+        "sanction",
+        "Policy",
+        "Sanctions"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.380823+00:00"
+    },
+    {
+      "id": "b2d77764e4d469e5",
+      "title": "Spot bitcoin ETFs notch five straight weeks of outflows for first time since March 2025",
+      "link": "https://www.theblock.co/post/390706/spot-bitcoin-etfs-notch-five-straight-weeks-of-outflows-for-first-time-since-march-2025?utm_source=rss&utm_medium=rss",
+      "source": "theblock",
+      "published": "2026-02-21T19:21:56+00:00",
+      "summary": "U.S. spot bitcoin ETFs recorded about $316 million in net outflows during the holiday-shortened Presidents' Day trading week.",
+      "content": "U.S. spot bitcoin ETFs recorded about $316 million in net outflows during the holiday-shortened Presidents' Day trading week.",
+      "authors": [
+        "Zack Abrams"
+      ],
+      "tags": [
+        "Ethereum ETF",
+        "Markets",
+        "Bitcoin ETF",
+        "Funds",
+        "Solana ETF",
+        "XRP ETF"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.380949+00:00"
+    },
+    {
+      "id": "37827854b9eec251",
+      "title": "IoTeX hit by private key exploit draining around $2 million from bridge contracts, per co-founder",
+      "link": "https://www.theblock.co/post/390698/iotex-hit-by-private-key-exploit-draining-up-to-8-8-million-from-bridge-contracts?utm_source=rss&utm_medium=rss",
+      "source": "theblock",
+      "published": "2026-02-21T17:17:22+00:00",
+      "summary": "IoTeX co-founder Raullen Chai said losses are \"significantly lower\" than circulating estimates, but has not provided a specific figure.",
+      "content": "IoTeX co-founder Raullen Chai said losses are \"significantly lower\" than circulating estimates, but has not provided a specific figure.",
+      "authors": [
+        "Zack Abrams"
+      ],
+      "tags": [
+        "Exploits",
+        "Hacks",
+        "Security",
+        "Crypto Ecosystems",
+        "IoTeX"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.381095+00:00"
+    },
+    {
+      "id": "1448e544aed68a19",
+      "title": "BNP Paribas taps Ethereum for new money market fund tokenization pilot",
+      "link": "https://www.theblock.co/post/390686/bnp-paribas-taps-ethereum-new-money-market-fund-tokenization-pilot?utm_source=rss&utm_medium=rss",
+      "source": "theblock",
+      "published": "2026-02-20T20:49:53+00:00",
+      "summary": "The tokenized shares were issued by the BNP Paribas’ AssetFoundryTM platform using a \"permissioned access model on Ethereum.\"",
+      "content": "The tokenized shares were issued by the BNP Paribas’ AssetFoundryTM platform using a \"permissioned access model on Ethereum.\"",
+      "authors": [
+        "Daniel Kuhn"
+      ],
+      "tags": [
+        "Companies",
+        "Layer 1s",
+        "TradFi banks",
+        "Tokenization",
+        "Web3",
+        "The Block",
+        "Ethereum",
+        "Crypto Ecosystems",
+        "Finance firms"
+      ],
+      "entities": {
+        "tokens": [
+          "ETHEREUM"
+        ],
+        "projects": [
+          "Ethereum"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.381209+00:00"
+    },
+    {
+      "id": "3f821f246fea8af8",
+      "title": "Vitalik Buterin is building a ‘cypherpunk principled non-ugly Ethereum’ as devs officially add FOCIL to upgrade roadmap",
+      "link": "https://www.theblock.co/post/390682/vitalik-buterin-is-building-a-cypherpunk-principled-non-ugly-ethereum-as-devs-officially-add-focil-to-upgrade-roadmap?utm_source=rss&utm_medium=rss",
+      "source": "theblock",
+      "published": "2026-02-20T20:41:03+00:00",
+      "summary": "FOCIL was officially “scheduled for inclusion” as the consensus-layer (CL) headliner for the upcoming Hegota upgrade, targeted for late 2026.",
+      "content": "FOCIL was officially “scheduled for inclusion” as the consensus-layer (CL) headliner for the upcoming Hegota upgrade, targeted for late 2026.",
+      "authors": [
+        "Daniel Kuhn"
+      ],
+      "tags": [
+        "Companies",
+        "Validators",
+        "Layer 1s",
+        "Security",
+        "Vitalik Buterin",
+        "Ethereum",
+        "People",
+        "Modular",
+        "Crypto Ecosystems",
+        "Developer tools",
+        "Infrastructure"
+      ],
+      "entities": {
+        "tokens": [
+          "ETHEREUM"
+        ],
+        "projects": [
+          "Ethereum"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.381359+00:00"
+    },
+    {
+      "id": "800c67ee2c892cca",
+      "title": "Opening the door: SEC issues guidance on brokers’ capital stablecoin requirements",
+      "link": "https://www.theblock.co/post/390675/opening-the-door-sec-issues-guidance-on-brokers-capital-stablecoin-requirements?utm_source=rss&utm_medium=rss",
+      "source": "theblock",
+      "published": "2026-02-20T19:44:59+00:00",
+      "summary": "The SEC introduced new guidance allowing broker-dealers to apply a “2% haircut” to proprietary positions in certain stablecoins.",
+      "content": "The SEC introduced new guidance allowing broker-dealers to apply a “2% haircut” to proprietary positions in certain stablecoins.",
+      "authors": [
+        "Sarah Wynn"
+      ],
+      "tags": [
+        "Regulation",
+        "SEC",
+        "Legal",
+        "Stablecoins",
+        "Policy",
+        "Crypto Ecosystems"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.381473+00:00"
+    },
+    {
+      "id": "ea144ea7454af3e6",
+      "title": "ProShares’ stablecoin-ready ETF generates record $17 billion in day-one trading volume",
+      "link": "https://www.theblock.co/post/390674/proshares-stablecoin-ready-etf-generates-record-17-billion-in-day-one-trading-volume?utm_source=rss&utm_medium=rss",
+      "source": "theblock",
+      "published": "2026-02-20T19:43:20+00:00",
+      "summary": "ProShares on Thursday launched a money market ETF designed to hold assets that qualify as reserves for dollar-backed stablecoins.",
+      "content": "ProShares on Thursday launched a money market ETF designed to hold assets that qualify as reserves for dollar-backed stablecoins.",
+      "authors": [
+        "Jason Shubnell"
+      ],
+      "tags": [
+        "Markets",
+        "Funds",
+        "proshares",
+        "Stablecoins",
+        "Public Equities",
+        "Crypto Ecosystems"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [
+          "ProShares"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.381596+00:00"
+    },
+    {
+      "id": "01e885dc73f7442e",
+      "title": "MARA completes purchase of majority stake in French data center unit",
+      "link": "https://www.theblock.co/post/390668/mara-completes-purchase-of-majority-stake-in-french-data-center-unit?utm_source=rss&utm_medium=rss",
+      "source": "theblock",
+      "published": "2026-02-20T18:24:45+00:00",
+      "summary": "Last August, Bloomberg reported MARA would pay $168 million in cash to secure a 64% stake in Exaion from EDF Pulse Ventures.",
+      "content": "Last August, Bloomberg reported MARA would pay $168 million in cash to secure a 64% stake in Exaion from EDF Pulse Ventures.",
+      "authors": [
+        "Jason Shubnell"
+      ],
+      "tags": [
+        "Public Company Mergers and Acquisitions",
+        "Mining",
+        "Deals",
+        "Mergers & Acquisitions",
+        "Crypto Ecosystems",
+        "Infrastructure"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.381718+00:00"
+    },
+    {
+      "id": "a2a8e10134584b0b",
+      "title": "The Daily: Ripple CEO sees 90% chance of crypto bill passing by end of April, BGD Labs to stop contributing to Aave, and more",
+      "link": "https://www.theblock.co/post/390662/the-daily-ripple-ceo-sees-90-chance-of-crypto-bill-passing-by-end-of-april-bgd-labs-to-stop-contributing-to-aave-and-more?utm_source=rss&utm_medium=rss",
+      "source": "theblock",
+      "published": "2026-02-20T17:14:13+00:00",
+      "summary": "The following article is adapted from The Block’s newsletter, The Daily, which comes out on weekday afternoons.",
+      "content": "The following article is adapted from The Block’s newsletter, The Daily, which comes out on weekday afternoons.",
+      "authors": [
+        "James Hunt"
+      ],
+      "tags": [
+        "Companies",
+        "Governance Votes",
+        "DAOs",
+        "Lending",
+        "Bitcoin",
+        "People",
+        "Policy",
+        "Treasury Department",
+        "Markets",
+        "Regulation",
+        "DeFi",
+        "Governance",
+        "Congress",
+        "Legal",
+        "U.S. Policymaking",
+        "Token Projects",
+        "Crime",
+        "Protocols",
+        "Crypto Ecosystems",
+        "Macro"
+      ],
+      "entities": {
+        "tokens": [
+          "AAVE",
+          "RIPPLE"
+        ],
+        "projects": [
+          "Aave",
+          "Ripple"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.381871+00:00"
+    },
+    {
+      "id": "8eada6bc22f5e3e5",
+      "title": "Crypto prices rally as Supreme Court strikes down Trump’s broad tariff regime",
+      "link": "https://www.theblock.co/post/390653/crypto-prices-rally-as-supreme-court-strikes-down-trumps-broad-tariff-regime?utm_source=rss&utm_medium=rss",
+      "source": "theblock",
+      "published": "2026-02-20T15:41:15+00:00",
+      "summary": "21shares said “a negative ruling on tariffs could potentially hurt Treasuries and the dollar, while favoring stocks and crypto.”",
+      "content": "21shares said “a negative ruling on tariffs could potentially hurt Treasuries and the dollar, while favoring stocks and crypto.”",
+      "authors": [
+        "Daniel Kuhn"
+      ],
+      "tags": [
+        "Markets",
+        "Legal",
+        "U.S. Policymaking",
+        "Equities",
+        "Policy",
+        "Equity Movers",
+        "Market Updates",
+        "Crypto Movers",
+        "Macro",
+        "US Supreme Court",
+        "Economic Indicators",
+        "Central Banks"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.381992+00:00"
+    },
+    {
+      "id": "8410ae449ddb5562",
+      "title": "House Democrats press Treasury Sec. Bessent over OCC review of Trump-linked World Liberty Financial’s trust bank charter",
+      "link": "https://www.theblock.co/post/390625/house-democrats-press-treasury-sec-bessent-over-occ-review-of-trump-linked-world-liberty-financials-trust-bank-charter?utm_source=rss&utm_medium=rss",
+      "source": "theblock",
+      "published": "2026-02-20T13:32:30+00:00",
+      "summary": "The latest inquiry lands amid broader Democratic pressure over Trump-linked crypto activity and World Liberty Financial.",
+      "content": "The latest inquiry lands amid broader Democratic pressure over Trump-linked crypto activity and World Liberty Financial.",
+      "authors": [
+        "Naga Avan-Nomayo"
+      ],
+      "tags": [
+        "Regulation",
+        "Congress",
+        "democrats",
+        "OCC",
+        "Donald Trump",
+        "U.S. Policymaking",
+        "People",
+        "Policy",
+        "Treasury Department",
+        "World Liberty Financial"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.382124+00:00"
+    },
+    {
+      "id": "aa004ac3254b8a85",
+      "title": "BGD Labs to cease Aave contributions after four years as governance tensions grow",
+      "link": "https://www.theblock.co/post/390629/bgd-labs-to-cease-aave-contributions-after-four-years-as-governance-tensions-grow?utm_source=rss&utm_medium=rss",
+      "source": "theblock",
+      "published": "2026-02-20T13:26:09+00:00",
+      "summary": "BGD Labs said it will cease contributions to Aave after April 1, ending a four-year role as a core protocol contributor.",
+      "content": "BGD Labs said it will cease contributions to Aave after April 1, ending a four-year role as a core protocol contributor.",
+      "authors": [
+        "James Hunt"
+      ],
+      "tags": [
+        "governance-war",
+        "Companies",
+        "Markets",
+        "BGD Labs",
+        "defi",
+        "Token Projects",
+        "Crypto Ecosystems",
+        "DeFi",
+        "Governance"
+      ],
+      "entities": {
+        "tokens": [
+          "AAVE"
+        ],
+        "projects": [
+          "Aave"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.382244+00:00"
+    },
+    {
+      "id": "1cc3f0f4c9093722",
+      "title": "Malaysian authorities arrest 12 police officers over alleged crypto extortion: report",
+      "link": "https://www.theblock.co/post/390619/malaysian-authorities-arrest-12-police-officers-over-alleged-crypto-extortion?utm_source=rss&utm_medium=rss",
+      "source": "theblock",
+      "published": "2026-02-20T12:26:08+00:00",
+      "summary": "Malaysian authorities arrested 12 police officers accused of forcing a Chinese national to transfer their cryptocurrency during a raid.",
+      "content": "Malaysian authorities arrested 12 police officers accused of forcing a Chinese national to transfer their cryptocurrency during a raid.",
+      "authors": [
+        "James Hunt"
+      ],
+      "tags": [
+        "Markets",
+        "Legal",
+        "Token Projects",
+        "Policy",
+        "Crime",
+        "International Policymaking"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.382352+00:00"
+    },
+    {
+      "id": "5afa3ed280cdb290",
+      "title": "Bitcoin remains below key onchain level as ETF outflows persist, liquidity stays tight: analysts",
+      "link": "https://www.theblock.co/post/390602/bitcoin-remains-below-key-onchain-level-as-etf-outflows-persist-liquidity-stays-tight-analysts?utm_source=rss&utm_medium=rss",
+      "source": "theblock",
+      "published": "2026-02-20T11:48:05+00:00",
+      "summary": "Analysts warned that weak ETF flows, constrained liquidity, and fragile accumulation are keeping bitcoin's price rangebound and indecisive.",
+      "content": "Analysts warned that weak ETF flows, constrained liquidity, and fragile accumulation are keeping bitcoin's price rangebound and indecisive.",
+      "authors": [
+        "Naga Avan-Nomayo"
+      ],
+      "tags": [
+        "crypto market",
+        "Markets",
+        "Analyst Reports",
+        "Equities"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.382478+00:00"
+    },
+    {
+      "id": "13395d277c3c990f",
+      "title": "BlackRock’s UNI purchase and other DeFi developments, with Lido and Chaos Labs",
+      "link": "https://www.theblock.co/post/390603/blackrocks-uni-purchase-and-other-defi-developments-with-lido-and-chaos-labs?utm_source=rss&utm_medium=rss",
+      "source": "theblock",
+      "published": "2026-02-20T11:01:00+00:00",
+      "summary": "Chaos Labs' Craig La Riche and Lido's Will Shannon said BlackRock's purchase of UNI marks a turning point for institutional DeFi adoption.",
+      "content": "Chaos Labs' Craig La Riche and Lido's Will Shannon said BlackRock's purchase of UNI marks a turning point for institutional DeFi adoption.",
+      "authors": [
+        "Jordan Leech"
+      ],
+      "tags": [
+        "The Block"
+      ],
+      "entities": {
+        "tokens": [
+          "LIDO",
+          "UNI"
+        ],
+        "projects": [
+          "BlackRock",
+          "DeFi",
+          "Lido"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.382612+00:00"
+    },
+    {
+      "id": "4218e192a9d219bc",
+      "title": "Bitcoin mining difficulty jumps 15%, posting record absolute increase as hashrate rebounds after US winter storm",
+      "link": "https://www.theblock.co/post/390599/bitcoin-mining-difficulty-jumps-15-posting-record-absolute-increase-as-hashrate-rebounds-after-us-winter-storm?utm_source=rss&utm_medium=rss",
+      "source": "theblock",
+      "published": "2026-02-20T10:53:22+00:00",
+      "summary": "Bitcoin mining difficulty jumped 14.7% to 144.4T in a record absolute increase as hashrate rebounded after U.S. winter storm curtailments.",
+      "content": "Bitcoin mining difficulty jumped 14.7% to 144.4T in a record absolute increase as hashrate rebounded after U.S. winter storm curtailments.",
+      "authors": [
+        "James Hunt"
+      ],
+      "tags": [
+        "Companies",
+        "Markets",
+        "Layer 1s",
+        "Bitcoin",
+        "Token Projects",
+        "Crypto Infrastructure",
+        "Crypto Ecosystems",
+        "Mining Companies"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.382747+00:00"
+    },
+    {
+      "id": "c6f44d5901de2f0a",
+      "title": "Tennessee judge grants preliminary injunction blocking state enforcement against Kalshi",
+      "link": "https://www.theblock.co/post/390591/tennessee-judge-grants-preliminary-injunction-blocking-state-enforcement-against-kalshi?utm_source=rss&utm_medium=rss",
+      "source": "theblock",
+      "published": "2026-02-20T08:42:05+00:00",
+      "summary": "The judge found Kalshi is likely to succeed in arguing that sports event contracts qualify as swaps under federal commodities law, potentially preempting state regulation.",
+      "content": "The judge found Kalshi is likely to succeed in arguing that sports event contracts qualify as swaps under federal commodities law, potentially preempting state regulation.",
+      "authors": [
+        "Danny Park"
+      ],
+      "tags": [
+        "Court Hearings",
+        "Legal",
+        "Policy",
+        "Kalshi",
+        "prediction-markets"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.382869+00:00"
+    },
+    {
+      "id": "d6d44e10e509f8d8",
+      "title": "‘We have not underperformed’: Metaplanet CEO pushes back against online criticism",
+      "link": "https://www.theblock.co/post/390588/metaplanet-ceo-hits-back-online-criticism?utm_source=rss&utm_medium=rss",
+      "source": "theblock",
+      "published": "2026-02-20T08:23:36+00:00",
+      "summary": "Metaplanet CEO Simon Gerovich pushed back against online criticism of the company's transparency and bitcoin strategy.",
+      "content": "Metaplanet CEO Simon Gerovich pushed back against online criticism of the company's transparency and bitcoin strategy.",
+      "authors": [
+        "Danny Park"
+      ],
+      "tags": [
+        "Companies",
+        "Markets",
+        "metaplanet",
+        "Bitcoin",
+        "Token Projects",
+        "Asia",
+        "simon gerovich"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.382976+00:00"
+    },
+    {
+      "id": "570fe79bd5ac5845",
+      "title": "‘More to come,’ crypto leaders say after third White House stablecoin meeting",
+      "link": "https://www.theblock.co/post/390572/more-come-crypto-leaders-say-third-white-house-stablecoin-meeting?utm_source=rss&utm_medium=rss",
+      "source": "theblock",
+      "published": "2026-02-19T19:44:25+00:00",
+      "summary": "\"More to come,\" was the main message coming out of the third meeting between crypto and banking groups at the White House.",
+      "content": "\"More to come,\" was the main message coming out of the third meeting between crypto and banking groups at the White House.",
+      "authors": [
+        "Sarah Wynn"
+      ],
+      "tags": [
+        "Regulation",
+        "Congress",
+        "SEC",
+        "Legal",
+        "U.S. Policymaking",
+        "2024 Elections",
+        "Policy",
+        "CFTC"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.383098+00:00"
+    },
+    {
+      "id": "8b8e226b4439aa87",
+      "title": "'Ethereum Is Going Hard': Vitalik Buterin Backs Censorship Resistance Upgrade",
+      "link": "https://decrypt.co/358792/ethereum-going-hard-vitalik-buterin-backs-censorship-resistance-upgrade",
+      "source": "decrypt",
+      "published": "2026-02-21T20:21:03+00:00",
+      "summary": "Ethereum developers scheduled a controversial upgrade for later this year. Buterin said it reinforces the network’s cypherpunk principles.",
+      "content": "Ethereum developers scheduled a controversial upgrade for later this year. Buterin said it reinforces the network’s cypherpunk principles.",
+      "authors": [
+        "Jason Nelson"
+      ],
+      "tags": [
+        "Technology"
+      ],
+      "entities": {
+        "tokens": [
+          "ETHEREUM"
+        ],
+        "projects": [
+          "Ethereum"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.713351+00:00"
+    },
+    {
+      "id": "4d8753c88e759072",
+      "title": "Marketers Could Use AI to Make Sure You See Their Ads—Here's How",
+      "link": "https://decrypt.co/358789/marketers-use-ai-make-sure-you-see-ads",
+      "source": "decrypt",
+      "published": "2026-02-21T17:01:03+00:00",
+      "summary": "Researchers built AdGazer, a machine learning tool that predicts whether you'll actually look at a digital ad—before it's ever shown to you.",
+      "content": "Researchers built AdGazer, a machine learning tool that predicts whether you'll actually look at a digital ad—before it's ever shown to you.",
+      "authors": [
+        "Jose Antonio Lanz"
+      ],
+      "tags": [
+        "Artificial Intelligence"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [
+          "AdGazer"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.713507+00:00"
+    },
+    {
+      "id": "97bc25ed0bc7d463",
+      "title": "Bitcoin Quantum Threat Takes Center Stage at Ethereum Conference",
+      "link": "https://decrypt.co/358784/bitcoin-quantum-threat-center-stage-ethereum-conference",
+      "source": "decrypt",
+      "published": "2026-02-21T14:01:03+00:00",
+      "summary": "At ETH Denver, developers warned that advances in quantum computing could threaten Bitcoin’s digital signatures as the industry continues to debate how to prepare.",
+      "content": "At ETH Denver, developers warned that advances in quantum computing could threaten Bitcoin’s digital signatures as the industry continues to debate how to prepare.",
+      "authors": [
+        "Jason Nelson"
+      ],
+      "tags": [
+        "Technology"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN",
+          "ETH",
+          "ETHEREUM"
+        ],
+        "projects": [
+          "Ethereum"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.713640+00:00"
+    },
+    {
+      "id": "fdb69105862bb42f",
+      "title": "Bitcoin Sell Pressure Is Easing, But Whales Keep Dumping on Exchanges: CryptoQuant",
+      "link": "https://decrypt.co/358782/bitcoin-sell-pressure-easing-whales-dumping-exchanges",
+      "source": "decrypt",
+      "published": "2026-02-20T20:41:31+00:00",
+      "summary": "Bitcoin is down 46% from its October peak—and the largest holders keep depositing to exchanges, presumably to sell, says CryptoQuant.",
+      "content": "Bitcoin is down 46% from its October peak—and the largest holders keep depositing to exchanges, presumably to sell, says CryptoQuant.",
+      "authors": [
+        "Logan Hitchcock"
+      ],
+      "tags": [
+        "Markets"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [
+          "CryptoQuant"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.713769+00:00"
+    },
+    {
+      "id": "d9489efc0f3d3cf8",
+      "title": "Trump-Backed World Liberty Plots 'Exit Mechanism' for Maldives Hotel Tokenization Project",
+      "link": "https://decrypt.co/358781/trump-backed-world-liberty-exit-mechanism-maldives-hotel-tokenization",
+      "source": "decrypt",
+      "published": "2026-02-20T20:24:52+00:00",
+      "summary": "Eric Trump called the offering a balance against meme coins, as the tokenization project has a lengthy timeline.",
+      "content": "Eric Trump called the offering a balance against meme coins, as the tokenization project has a lengthy timeline.",
+      "authors": [
+        "André Beganski"
+      ],
+      "tags": [
+        "DeFi"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.713892+00:00"
+    },
+    {
+      "id": "d7c0a42635d8cf5f",
+      "title": "After State Lawsuit Losing Streak, Kalshi Nabs Victory in Tennessee—This Could Be Why",
+      "link": "https://decrypt.co/358765/after-state-lawsuit-losing-streak-kalshi-victory-tennessee-why",
+      "source": "decrypt",
+      "published": "2026-02-20T17:40:44+00:00",
+      "summary": "States are scoring victories against prediction markets when they invoke congressional intent, said a legal expert—and losing when they focus on narrower legal definitions.",
+      "content": "States are scoring victories against prediction markets when they invoke congressional intent, said a legal expert—and losing when they focus on narrower legal definitions.",
+      "authors": [
+        "Sander Lutz"
+      ],
+      "tags": [
+        "Law and Order"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.714039+00:00"
+    },
+    {
+      "id": "bc0ed0c2fc2ed2c8",
+      "title": "What Is Strategy (MSTR)? The Bitcoin Treasury Company",
+      "link": "https://decrypt.co/resources/what-is-strategy-microstrategy-mstr-the-bitcoin-treasury-company",
+      "source": "decrypt",
+      "published": "2026-02-20T17:40:02+00:00",
+      "summary": "Software firm Strategy (formerly MicroStrategy) and its co-founder Michael Saylor have become synonymous with Bitcoin. Here’s what you need to know.",
+      "content": "Software firm Strategy (formerly MicroStrategy) and its co-founder Michael Saylor have become synonymous with Bitcoin. Here’s what you need to know.",
+      "authors": [
+        "Logan Hitchcock"
+      ],
+      "tags": [
+        "The Landscape"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [
+          "MicroStrategy"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.714160+00:00"
+    },
+    {
+      "id": "4eeb8ebee6725bbd",
+      "title": "Bitcoin Rises After Supreme Court Rules Against Trump Tariffs",
+      "link": "https://decrypt.co/358761/bitcoin-rises-supreme-court-rules-against-trump-tariffs",
+      "source": "decrypt",
+      "published": "2026-02-20T17:20:49+00:00",
+      "summary": "Bitcoin ticked up after the Supreme Court ruled that President Trump exceeded his authority in imposing most tariffs on foreign goods.",
+      "content": "Bitcoin ticked up after the Supreme Court ruled that President Trump exceeded his authority in imposing most tariffs on foreign goods.",
+      "authors": [
+        "André Beganski"
+      ],
+      "tags": [
+        "Markets"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.714274+00:00"
+    },
+    {
+      "id": "0688678682ed2902",
+      "title": "AMC Theatres Blocks AI Short Film From Screening in Pre-Show Advertising",
+      "link": "https://decrypt.co/358750/amc-theatres-blocks-ai-short-film-from-screening-in-pre-show-advertising",
+      "source": "decrypt",
+      "published": "2026-02-20T16:51:47+00:00",
+      "summary": "The cinema chain has stepped back from screening an award-winning AI short while Hollywood battles over the technology’s creative role.",
+      "content": "The cinema chain has stepped back from screening an award-winning AI short while Hollywood battles over the technology’s creative role.",
+      "authors": [
+        "Vismaya V"
+      ],
+      "tags": [
+        "Artificial Intelligence"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.714404+00:00"
+    },
+    {
+      "id": "f6fded6aa7d64676",
+      "title": "South Korean Lawmakers Slam Regulators Over Bithumb's $43 Billion Bitcoin Blunder",
+      "link": "https://decrypt.co/358744/south-korean-lawmakers-slam-regulators-bithumb-43-billion-bitcoin-blunder",
+      "source": "decrypt",
+      "published": "2026-02-20T16:27:42+00:00",
+      "summary": "Lawmakers in South Korea are intensifying scrutiny over the role of regulators after Bithumb accidentally gave out $43 billion in Bitcoin.",
+      "content": "Lawmakers in South Korea are intensifying scrutiny over the role of regulators after Bithumb accidentally gave out $43 billion in Bitcoin.",
+      "authors": [
+        "Logan Hitchcock"
+      ],
+      "tags": [
+        "Law and Order"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.714527+00:00"
+    },
+    {
+      "id": "e5fa8a8443274a06",
+      "title": "House Dems Raise National Security Alarms Over Trump Family’s Crypto Bank Charter Request",
+      "link": "https://decrypt.co/358742/house-dems-national-security-alarms-trump-family-crypto-bank-charter",
+      "source": "decrypt",
+      "published": "2026-02-20T16:13:49+00:00",
+      "summary": "Lawmakers warned that approving World Liberty Financial's bank charter application could jeopardize the legitimacy of the U.S. banking system.",
+      "content": "Lawmakers warned that approving World Liberty Financial's bank charter application could jeopardize the legitimacy of the U.S. banking system.",
+      "authors": [
+        "Sander Lutz"
+      ],
+      "tags": [
+        "Law and Order"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.714659+00:00"
+    },
+    {
+      "id": "39ebc11d62307dd1",
+      "title": "Netherlands Bans Polymarket Over ‘Illegal Gambling Services’",
+      "link": "https://decrypt.co/358725/netherlands-bans-polymarket-over-illegal-gambling-services",
+      "source": "decrypt",
+      "published": "2026-02-20T15:14:59+00:00",
+      "summary": "Dutch regulator the Netherlands Gambling Authority this week ordered the prediction market to halt operations immediately.",
+      "content": "Dutch regulator the Netherlands Gambling Authority this week ordered the prediction market to halt operations immediately.",
+      "authors": [
+        "Callan Quinn"
+      ],
+      "tags": [
+        "polygon",
+        "Business"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.714757+00:00"
+    },
+    {
+      "id": "885fc9ee8b742b7d",
+      "title": "Morning Minute: Base Breaks Up With Optimism",
+      "link": "https://decrypt.co/358722/morning-minute-base-breaks-up-with-optimism",
+      "source": "decrypt",
+      "published": "2026-02-20T13:32:47+00:00",
+      "summary": "Base is taking their ball (onchain revenue) and going home (to their own chain).",
+      "content": "Base is taking their ball (onchain revenue) and going home (to their own chain).",
+      "authors": [
+        "Tyler Warner"
+      ],
+      "tags": [
+        "Opinion"
+      ],
+      "entities": {
+        "tokens": [
+          "BASE",
+          "OPTIMISM"
+        ],
+        "projects": [
+          "Base",
+          "Optimism"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.714842+00:00"
+    },
+    {
+      "id": "fdff28d566f02ada",
+      "title": "Bitcoin ETFs Lose Another $166M as Five-Week Withdrawals Near $4B",
+      "link": "https://decrypt.co/358713/bitcoin-etfs-lose-another-166m-as-five-week-withdrawals-near-4b",
+      "source": "decrypt",
+      "published": "2026-02-20T11:16:02+00:00",
+      "summary": "Bitcoin ETF outflows near $4 billion over the past five weeks, as experts debate whether the streak signals a reset or structural weakness.",
+      "content": "Bitcoin ETF outflows near $4 billion over the past five weeks, as experts debate whether the streak signals a reset or structural weakness.",
+      "authors": [
+        "Akash Girimath"
+      ],
+      "tags": [
+        "Coins"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN",
+          "NEAR"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.714966+00:00"
+    },
+    {
+      "id": "c430dc0ca4eb86ac",
+      "title": "Silicon Valley Engineers Charged With Theft of Google, Tech Trade Secrets",
+      "link": "https://decrypt.co/358710/silicon-valley-engineers-charged-with-theft-of-google-tech-trade-secrets",
+      "source": "decrypt",
+      "published": "2026-02-20T10:20:25+00:00",
+      "summary": "Three engineers are accused of stealing sensitive mobile processor and cryptography files from Google and two other companies.",
+      "content": "Three engineers are accused of stealing sensitive mobile processor and cryptography files from Google and two other companies.",
+      "authors": [
+        "Vince Dioquino"
+      ],
+      "tags": [
+        "Law and Order"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.715074+00:00"
+    },
+    {
+      "id": "94da15958c0186ff",
+      "title": "Custodia CEO Says Trump Family Crypto Ties Are Part of Clarity Act Problem",
+      "link": "https://decrypt.co/358695/custodia-ceo-trump-family-crypto-ties-clarity-act-problem",
+      "source": "decrypt",
+      "published": "2026-02-20T04:36:25+00:00",
+      "summary": "At ETH Denver, Caitlin Long said the ethics controversy around Trump-linked crypto projects has complicated Senate support.",
+      "content": "At ETH Denver, Caitlin Long said the ethics controversy around Trump-linked crypto projects has complicated Senate support.",
+      "authors": [
+        "Jason Nelson"
+      ],
+      "tags": [
+        "Law and Order"
+      ],
+      "entities": {
+        "tokens": [
+          "ETH"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.715189+00:00"
+    },
+    {
+      "id": "eb3e2cef99db669c",
+      "title": "Risk-Off Capital Shifts Toward Tokenized Assets as DeFi Pulls Back",
+      "link": "https://decrypt.co/358693/risk-off-capital-shifts-toward-tokenized-assets-defi-pulls-back",
+      "source": "decrypt",
+      "published": "2026-02-20T04:16:22+00:00",
+      "summary": "Capital is rotating out of DeFi into tokenized assets as experts say the shift reflects maturing markets, not capitulation.",
+      "content": "Capital is rotating out of DeFi into tokenized assets as experts say the shift reflects maturing markets, not capitulation.",
+      "authors": [
+        "Akash Girimath"
+      ],
+      "tags": [
+        "Markets"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [
+          "DeFi"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.715301+00:00"
+    },
+    {
+      "id": "93ac42fe8ad34eff",
+      "title": "Australian Executive Accused of Selling Cyber Secrets to Russia for Crypto",
+      "link": "https://decrypt.co/358690/australian-executive-cyber-secrets-russia-crypto",
+      "source": "decrypt",
+      "published": "2026-02-20T02:52:25+00:00",
+      "summary": "U.S. prosecutors say the former defense contractor executive took about $1.26 million in crypto to transfer sensitive exploit tools tied to Five Eyes intelligence work.",
+      "content": "U.S. prosecutors say the former defense contractor executive took about $1.26 million in crypto to transfer sensitive exploit tools tied to Five Eyes intelligence work.",
+      "authors": [
+        "Vince Dioquino"
+      ],
+      "tags": [
+        "Law and Order"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.715434+00:00"
+    },
+    {
+      "id": "d1b4bb8cc26c0322",
+      "title": "White House, Banks and Crypto Groups Resume Talks on Stablecoin Rewards",
+      "link": "https://decrypt.co/358688/white-house-banks-crypto-groups-resume-talks-stablecoin",
+      "source": "decrypt",
+      "published": "2026-02-20T01:01:28+00:00",
+      "summary": "Stablecoin incentives remain a key unresolved issue as lawmakers seek to advance digital-asset market-structure legislation.",
+      "content": "Stablecoin incentives remain a key unresolved issue as lawmakers seek to advance digital-asset market-structure legislation.",
+      "authors": [
+        "Sebastian Sinclair"
+      ],
+      "tags": [
+        "Law and Order"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.715539+00:00"
+    },
+    {
+      "id": "f4f014a657508b6f",
+      "title": "'Warhammer' Veteran Jervis Johnson Warns AI Could Become the 'Asbestos of the Internet'",
+      "link": "https://decrypt.co/358680/warhammer-veteran-jervis-johnson-warns-ai-asbestos-internet",
+      "source": "decrypt",
+      "published": "2026-02-19T21:56:11+00:00",
+      "summary": "The longtime Warhammer designer backed Games Workshop’s generative AI ban, arguing the technology undermines creative work.",
+      "content": "The longtime Warhammer designer backed Games Workshop’s generative AI ban, arguing the technology undermines creative work.",
+      "authors": [
+        "Jason Nelson"
+      ],
+      "tags": [
+        "Gaming"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.715655+00:00"
+    },
+    {
+      "id": "5fd7b9ecd1557942",
+      "title": "AI in Hollywood? 'Silicon Valley' Star T.J. Miller Isn't Worried",
+      "link": "https://decrypt.co/358660/ai-hollywood-silicon-valley-star-tj-miller-isnt-worried",
+      "source": "decrypt",
+      "published": "2026-02-19T21:36:47+00:00",
+      "summary": "“Silicon Valley” actor T.J. Miller joked that an AI bot “replaced” him as this week’s ETH Denver host, amid actual growing job fears.",
+      "content": "“Silicon Valley” actor T.J. Miller joked that an AI bot “replaced” him as this week’s ETH Denver host, amid actual growing job fears.",
+      "authors": [
+        "Jason Nelson"
+      ],
+      "tags": [
+        "Artificial Intelligence"
+      ],
+      "entities": {
+        "tokens": [
+          "ETH"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.715794+00:00"
+    },
+    {
+      "id": "9817fc70ede8f48c",
+      "title": "Google Brings AI Music Generation to Gemini—We Tried It, and It's Too Little Too Late",
+      "link": "https://decrypt.co/358654/google-ai-music-gemini-lyria-3-review-suno-udio",
+      "source": "decrypt",
+      "published": "2026-02-19T21:13:13+00:00",
+      "summary": "Google AI music generator Lyria 3 is now available on the Gemini app. It works—mostly—but the competition has a big head start.",
+      "content": "Google AI music generator Lyria 3 is now available on the Gemini app. It works—mostly—but the competition has a big head start.",
+      "authors": [
+        "Jose Antonio Lanz"
+      ],
+      "tags": [
+        "Artificial Intelligence"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.715940+00:00"
+    },
+    {
+      "id": "80fd4a8cda5724d5",
+      "title": "Ethereum Treasury Sharplink Reports Growing ETH Holdings, Institutional Investment",
+      "link": "https://decrypt.co/358652/ethereum-treasury-sharplink-growing-eth-holdings-institutional-investment",
+      "source": "decrypt",
+      "published": "2026-02-19T20:02:50+00:00",
+      "summary": "Sharplink is shaking up its branding as it reports additional Ethereum holdings and a rising number of institutional investors.",
+      "content": "Sharplink is shaking up its branding as it reports additional Ethereum holdings and a rising number of institutional investors.",
+      "authors": [
+        "Andrew Hayward"
+      ],
+      "tags": [
+        "Business"
+      ],
+      "entities": {
+        "tokens": [
+          "ETH",
+          "ETHEREUM"
+        ],
+        "projects": [
+          "Ethereum"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.716045+00:00"
+    },
+    {
+      "id": "dd3109009c3145ad",
+      "title": "'The Sandbox' Adds Web-Based Games in Season 7 Accessibility Push",
+      "link": "https://decrypt.co/358594/sandbox-web-based-games-season-7-rollout-accessibility-push",
+      "source": "decrypt",
+      "published": "2026-02-19T19:01:02+00:00",
+      "summary": "Crypto gaming metaverse platform The Sandbox is rolling out its Season 7 content push, making it easier than ever for players to jump in.",
+      "content": "Crypto gaming metaverse platform The Sandbox is rolling out its Season 7 content push, making it easier than ever for players to jump in.",
+      "authors": [
+        "Logan Hitchcock"
+      ],
+      "tags": [
+        "Gaming",
+        "the-sandbox"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.716170+00:00"
+    },
+    {
+      "id": "df5dde5d4eaa97bb",
+      "title": "Accenture Is Tracking Whether Employees Use AI—And Promotions Are on the Line",
+      "link": "https://decrypt.co/358616/accenture-tracking-employees-use-ai-promotions",
+      "source": "decrypt",
+      "published": "2026-02-19T18:48:04+00:00",
+      "summary": "Consulting giant Accenture is monitoring senior staff logins to AI tools and tying career advancement to adoption rates—all while AI threatens to eliminate jobs.",
+      "content": "Consulting giant Accenture is monitoring senior staff logins to AI tools and tying career advancement to adoption rates—all while AI threatens to eliminate jobs.",
+      "authors": [
+        "Jose Antonio Lanz"
+      ],
+      "tags": [
+        "Artificial Intelligence"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.716310+00:00"
+    },
+    {
+      "id": "8476b4806edd4ffc",
+      "title": "'Bitcoin Going to Zero' Google Searches Rise With Crypto Sentiment in the Dumps",
+      "link": "https://decrypt.co/358619/bitcoin-going-zero-searches-rise-crypto-sentiment-dumps",
+      "source": "decrypt",
+      "published": "2026-02-19T18:36:33+00:00",
+      "summary": "Bitcoin's recent plunge has prompted a wave of investors and observers seeking answers about why the top cryptocurrency is cratering.",
+      "content": "Bitcoin's recent plunge has prompted a wave of investors and observers seeking answers about why the top cryptocurrency is cratering.",
+      "authors": [
+        "Logan Hitchcock"
+      ],
+      "tags": [
+        "Markets"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.716434+00:00"
+    },
+    {
+      "id": "2e450803fbebca46",
+      "title": "Warren Presses Treasury, Fed to Rule Out Bitcoin Bailout As Prices Tumble: Report",
+      "link": "https://decrypt.co/358593/warren-presses-treasury-fed-to-rule-out-bitcoin-bailout-as-prices-tumble-report",
+      "source": "decrypt",
+      "published": "2026-02-19T17:19:12+00:00",
+      "summary": "The longtime crypto critic warned against using taxpayer dollars to rescue investors and firms amid the current market slide.",
+      "content": "The longtime crypto critic warned against using taxpayer dollars to rescue investors and firms amid the current market slide.",
+      "authors": [
+        "Callan Quinn"
+      ],
+      "tags": [
+        "Coins"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.716549+00:00"
+    },
+    {
+      "id": "ed239d717de5160a",
+      "title": "CME Will Make Crypto Derivatives Trading 24/7 in May as Wall Street Eyes Similar Goal",
+      "link": "https://decrypt.co/358595/cme-crypto-derivatives-trading-24-7-may-wall-street-similar-goal",
+      "source": "decrypt",
+      "published": "2026-02-19T17:19:10+00:00",
+      "summary": "Top derivatives marketplace CME will adopt 24/7 crypto trading on May 29, pending regulatory approval. The CFTC has indicated it supports such moves.",
+      "content": "Top derivatives marketplace CME will adopt 24/7 crypto trading on May 29, pending regulatory approval. The CFTC has indicated it supports such moves.",
+      "authors": [
+        "Sander Lutz"
+      ],
+      "tags": [
+        "Markets"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.716686+00:00"
+    },
+    {
+      "id": "621038bdbc2f5870",
+      "title": "Why Verifiable Data Is the Missing Layer in AI: Walrus",
+      "link": "https://decrypt.co/358431/why-verifiable-data-is-the-missing-layer-in-ai-walrus",
+      "source": "decrypt",
+      "published": "2026-02-19T17:01:03+00:00",
+      "summary": "As AI systems grow more autonomous, Walrus argues that verifiable data infrastructure will determine which systems earn trust.",
+      "content": "As AI systems grow more autonomous, Walrus argues that verifiable data infrastructure will determine which systems earn trust.",
+      "authors": [
+        "Decrypt Staff"
+      ],
+      "tags": [
+        "Long Reads"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.716787+00:00"
+    },
+    {
+      "id": "1eb870f47d692210",
+      "title": "What Is Base? The Ethereum Layer-2 Network Launched by Coinbase",
+      "link": "https://decrypt.co/resources/what-is-base-coinbases-layer-2-chain",
+      "source": "decrypt",
+      "published": "2026-02-19T16:54:03+00:00",
+      "summary": "Base is designed to house Coinbase’s on-chain products and provide an open ecosystem for dapps, onboarding “billions of users.”",
+      "content": "Base is designed to house Coinbase’s on-chain products and provide an open ecosystem for dapps, onboarding “billions of users.”",
+      "authors": [
+        "Logan Hitchcock"
+      ],
+      "tags": [
+        "Technology Guides"
+      ],
+      "entities": {
+        "tokens": [
+          "BASE",
+          "COINBASE",
+          "ETHEREUM"
+        ],
+        "projects": [
+          "Base",
+          "Coinbase",
+          "Ethereum"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.716910+00:00"
+    },
+    {
+      "id": "040f03d07008f2c8",
+      "title": "What's the Best AI Model to Run Your Business? The One That Lies Best, Apparently",
+      "link": "https://decrypt.co/358575/best-ai-model-run-business",
+      "source": "decrypt",
+      "published": "2026-02-19T16:05:15+00:00",
+      "summary": "GLM-5 beat Claude in business simulation by pretending to be American. Claude fell for it, shared strategies with competitors, and lost. Wall Street's AI deployment just got more complicated.",
+      "content": "GLM-5 beat Claude in business simulation by pretending to be American. Claude fell for it, shared strategies with competitors, and lost. Wall Street's AI deployment just got more complicated.",
+      "authors": [
+        "Jose Antonio Lanz"
+      ],
+      "tags": [
+        "Artificial Intelligence"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.717075+00:00"
+    },
+    {
+      "id": "cf96d6362e1a735b",
+      "title": "Morning Minute: OpenAI and Paradigm Turn Focus to Smart Contracts",
+      "link": "https://decrypt.co/358569/morning-minute-openai-and-paradigm-turn-focus-to-smart-contracts",
+      "source": "decrypt",
+      "published": "2026-02-19T13:31:02+00:00",
+      "summary": "OpenAI and Paradigm have released EVMbench—a framework for evaluating AI agents' ability to find vulnerabilities in Ethereum smart contracts.",
+      "content": "OpenAI and Paradigm have released EVMbench—a framework for evaluating AI agents' ability to find vulnerabilities in Ethereum smart contracts.",
+      "authors": [
+        "Tyler Warner"
+      ],
+      "tags": [
+        "Opinion"
+      ],
+      "entities": {
+        "tokens": [
+          "ETHEREUM"
+        ],
+        "projects": [
+          "Ethereum"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.717192+00:00"
+    },
+    {
+      "id": "e2ddce776e8bb952",
+      "title": "Bundesbank President Wants Euro-Pegged Stablecoins to Prevent Dollarization",
+      "link": "https://decrypt.co/358563/bundesbank-president-wants-euro-pegged-stablecoins-to-prevent-dollarization",
+      "source": "decrypt",
+      "published": "2026-02-19T12:57:53+00:00",
+      "summary": "ECB Governing Council member Joachim Nagel argued a wholesale CBDC and euro-pegged stablecoins could boost the euro’s international role.",
+      "content": "ECB Governing Council member Joachim Nagel argued a wholesale CBDC and euro-pegged stablecoins could boost the euro’s international role.",
+      "authors": [
+        "Simon Chandler"
+      ],
+      "tags": [
+        "Business"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.717309+00:00"
+    },
+    {
+      "id": "f511f5c249899c2f",
+      "title": "Coinbase CEO Says Quantum Computing 'Solvable Issue' for Crypto",
+      "link": "https://decrypt.co/358559/coinbase-ceo-says-quantum-computing-solvable-issue-for-crypto",
+      "source": "decrypt",
+      "published": "2026-02-19T11:56:23+00:00",
+      "summary": "Brian Armstrong downplayed fears that quantum computing will break blockchain encryption, pointing to Coinbase’s new advisory council.",
+      "content": "Brian Armstrong downplayed fears that quantum computing will break blockchain encryption, pointing to Coinbase’s new advisory council.",
+      "authors": [
+        "Vismaya V"
+      ],
+      "tags": [
+        "Technology"
+      ],
+      "entities": {
+        "tokens": [
+          "COINBASE"
+        ],
+        "projects": [
+          "Coinbase"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.717416+00:00"
+    },
+    {
+      "id": "ab79d883040743ac",
+      "title": "Optimism Plunges Double Digits Amid Base's Tech Stack Overhaul",
+      "link": "https://decrypt.co/358549/optimism-plunges-double-digits-amid-bases-tech-stack-overhaul",
+      "source": "decrypt",
+      "published": "2026-02-19T10:44:10+00:00",
+      "summary": "Optimism's OP token sank after Base announced it's moving away from the OP Stack to a unified, self-operated tech stack.",
+      "content": "Optimism's OP token sank after Base announced it's moving away from the OP Stack to a unified, self-operated tech stack.",
+      "authors": [
+        "Akash Girimath"
+      ],
+      "tags": [
+        "Markets"
+      ],
+      "entities": {
+        "tokens": [
+          "BASE",
+          "OP",
+          "OPTIMISM"
+        ],
+        "projects": [
+          "Base",
+          "Optimism"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.717536+00:00"
+    },
+    {
+      "id": "1a25f004593cf8c5",
+      "title": "AI Disruption Could Cut Creator Earnings by Nearly 25% by 2028, UNESCO Warns",
+      "link": "https://decrypt.co/358535/ai-disruption-creator-earnings-unesco",
+      "source": "decrypt",
+      "published": "2026-02-19T05:33:39+00:00",
+      "summary": "A new UNESCO report projects steep revenue losses for music and screen creators as lawyers say the fair use doctrine is buckling under AI’s scale.",
+      "content": "A new UNESCO report projects steep revenue losses for music and screen creators as lawyers say the fair use doctrine is buckling under AI’s scale.",
+      "authors": [
+        "Vismaya V"
+      ],
+      "tags": [
+        "Artificial Intelligence"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.717677+00:00"
+    },
+    {
+      "id": "2de205b6eca75f44",
+      "title": "Altcoin Selling Pressure Hits Five-Year High as Confidence Wanes",
+      "link": "https://decrypt.co/358532/altcoin-selling-pressure-five-year-high-confidence-wanes",
+      "source": "decrypt",
+      "published": "2026-02-19T04:08:06+00:00",
+      "summary": "Selling pressure across altcoins has continued to build, with net outflows now matching levels last seen in 2021",
+      "content": "Selling pressure across altcoins has continued to build, with net outflows now matching levels last seen in 2021",
+      "authors": [
+        "Akash Girimath"
+      ],
+      "tags": [
+        "Markets"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.717779+00:00"
+    },
+    {
+      "id": "f14fea8e2f7a109b",
+      "title": "Fed Economists Praise Prediction Markets as States Step Up Enforcement",
+      "link": "https://decrypt.co/358529/fed-economists-prediction-markets-states-step-up-enforcement",
+      "source": "decrypt",
+      "published": "2026-02-19T03:18:34+00:00",
+      "summary": "Research is casting prediction markets as policy-relevant forecasting tools just as state regulators escalate efforts to curtail their use.",
+      "content": "Research is casting prediction markets as policy-relevant forecasting tools just as state regulators escalate efforts to curtail their use.",
+      "authors": [
+        "Vince Dioquino"
+      ],
+      "tags": [
+        "Markets"
+      ],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.717889+00:00"
+    },
+    {
+      "id": "2d24a800a942424c",
+      "title": "Crypto investors' interest moves ‘pretty wide’ beyond majors as dip drags: Exec",
+      "link": "https://cointelegraph.com/news/crypto-investors-explore-assets-bitcoin-ethereum-market-uncertainty-robinhood?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-22T05:54:15+00:00",
+      "summary": "Robinhood’s head of crypto, Johann Kerbrat, pointed out that crypto investors are looking for more ways to explore crypto beyond just holding tokens amid market uncertainty.",
+      "content": "Robinhood’s head of crypto, Johann Kerbrat, pointed out that crypto investors are looking for more ways to explore crypto beyond just holding tokens amid market uncertainty.",
+      "authors": [
+        "Cointelegraph by Ciaran Lyons"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.940810+00:00"
+    },
+    {
+      "id": "3015a2702325ea6b",
+      "title": "50% of Bitcoin's past 24 months ended in gains: Economist",
+      "link": "https://cointelegraph.com/news/bitcoin-price-uptrend-economist-forecast-december?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-22T03:24:40+00:00",
+      "summary": "Economist Timothy Peterson expects Bitcoin to trade above its current level by December, though some analysts are pushing back on that view.",
+      "content": "Economist Timothy Peterson expects Bitcoin to trade above its current level by December, though some analysts are pushing back on that view.",
+      "authors": [
+        "Cointelegraph by Ciaran Lyons"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.941404+00:00"
+    },
+    {
+      "id": "7945538ca81290da",
+      "title": "Here’s what happened in crypto today",
+      "link": "https://cointelegraph.com/news/what-happened-in-crypto-today?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-21T21:58:48+00:00",
+      "summary": "Need to know what happened in crypto today? Here is the latest news on daily trends and events impacting Bitcoin price, blockchain, DeFi, NFTs, Web3 and crypto regulation.",
+      "content": "Need to know what happened in crypto today? Here is the latest news on daily trends and events impacting Bitcoin price, blockchain, DeFi, NFTs, Web3 and crypto regulation.",
+      "authors": [
+        "Cointelegraph by Cointelegraph"
+      ],
+      "tags": [
+        "Crypto regulation",
+        "Solana",
+        "SOL",
+        "TRUMP rally",
+        "SEC",
+        "Trump memecoin",
+        "Bitcoin",
+        "Solana memecoin",
+        "Securities and Exchange Commission",
+        "Nova Labs",
+        "TRUMP token"
+      ],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [
+          "DeFi"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.941550+00:00"
+    },
+    {
+      "id": "e1002977607892f6",
+      "title": "Trump raises global tariff rate to 15%, but crypto markets are unfazed",
+      "link": "https://cointelegraph.com/news/trump-raises-tariff-15-crypto-unfazed?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-21T21:45:05+00:00",
+      "summary": "US President Donald Trump is now using alternative legal routes to levy tariffs, but critics say his authority to impose them is still limited.",
+      "content": "US President Donald Trump is now using alternative legal routes to levy tariffs, but critics say his authority to impose them is still limited.",
+      "authors": [
+        "Cointelegraph by Vince Quill"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.941682+00:00"
+    },
+    {
+      "id": "db39dd29e37d121c",
+      "title": "Crypto market retraces almost all 2024-2025 US election pump gains",
+      "link": "https://cointelegraph.com/news/crypto-retraces-gains-2024-2025-pump?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-21T20:40:01+00:00",
+      "summary": "The crypto market experienced a historic market crash in October that derailed the uptrend and caused investor sentiment to plummet.",
+      "content": "The crypto market experienced a historic market crash in October that derailed the uptrend and caused investor sentiment to plummet.",
+      "authors": [
+        "Cointelegraph by Vince Quill"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [
+          "PUMP"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.941797+00:00"
+    },
+    {
+      "id": "cb3061d1fed10189",
+      "title": "US lawmakers critical of Trump tariffs, say it will derail economy",
+      "link": "https://cointelegraph.com/news/us-lawmakers-critical-tariffs-derail-economy?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-21T18:22:41+00:00",
+      "summary": "The tariffs are just taxes on American businesses and consumers, while providing no benefit to the economy, critics of Trump's policies say.",
+      "content": "The tariffs are just taxes on American businesses and consumers, while providing no benefit to the economy, critics of Trump's policies say.",
+      "authors": [
+        "Cointelegraph by Vince Quill"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.941921+00:00"
+    },
+    {
+      "id": "fee6de976059fdd6",
+      "title": "IoTeX confirms ‘suspicious activity’ involving token safe, says losses contained",
+      "link": "https://cointelegraph.com/news/iotex-investigates-token-safe-suspicious-activity-4-3m-loss?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-21T13:11:52+00:00",
+      "summary": "IoTeX said it is assessing suspicious activity tied to a token safe, coordinating with exchanges to trace funds after analysts linked the incident to a possible private key compromise.",
+      "content": "IoTeX said it is assessing suspicious activity tied to a token safe, coordinating with exchanges to trace funds after analysts linked the incident to a possible private key compromise.",
+      "authors": [
+        "Cointelegraph by Amin Haqshanas"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.942070+00:00"
+    },
+    {
+      "id": "f2068ab417366c32",
+      "title": "What’s next for crypto in Europe after Christine Lagarde steps down?",
+      "link": "https://cointelegraph.com/news/what-next-crypto-europe-ecb-christine-lagarde?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-21T13:00:00+00:00",
+      "summary": "ECB president Christine Lagarde is a crypto skeptic, but her likely successors are no more enthusiastic about cryptocurrencies.",
+      "content": "ECB president Christine Lagarde is a crypto skeptic, but her likely successors are no more enthusiastic about cryptocurrencies.",
+      "authors": [
+        "Cointelegraph by Aaron Wood"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.942191+00:00"
+    },
+    {
+      "id": "2d75e3b2a0938cb0",
+      "title": "Spot Bitcoin ETFs record five weeks of net withdrawals, totaling $3.8B",
+      "link": "https://cointelegraph.com/news/spot-bitcoin-etfs-five-weeks-net-outflows-3-8b?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-21T09:39:40+00:00",
+      "summary": "US spot Bitcoin ETFs logged five straight weeks of outflows, with $315.9 million leaving last week as institutional investors de-risk amid macro uncertainty.",
+      "content": "US spot Bitcoin ETFs logged five straight weeks of outflows, with $315.9 million leaving last week as institutional investors de-risk amid macro uncertainty.",
+      "authors": [
+        "Cointelegraph by Amin Haqshanas"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.942344+00:00"
+    },
+    {
+      "id": "cc2823830cdd9f2e",
+      "title": "Bitcoin $150K price calls are ‘drying up,’ which is healthy: Santiment",
+      "link": "https://cointelegraph.com/news/bitcoin-price-prediction-retail-user-healthy-crypto-indicator-santiment?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-21T08:09:56+00:00",
+      "summary": "Bitcoin “retail optimism is fading,” which may be a healthy indicator as sentiment returns to neutral territory, according to Santiment.",
+      "content": "Bitcoin “retail optimism is fading,” which may be a healthy indicator as sentiment returns to neutral territory, according to Santiment.",
+      "authors": [
+        "Cointelegraph by Ciaran Lyons"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [
+          "BITCOIN",
+          "OPTIMISM"
+        ],
+        "projects": [
+          "Optimism"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.942469+00:00"
+    },
+    {
+      "id": "2e2f66dd06496265",
+      "title": "Bitcoin miner MARA buys majority stake in AI data center firm Exaion",
+      "link": "https://cointelegraph.com/news/mara-majority-stake-exaion-ai-data-centers-bitcoin-miner?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-21T06:55:45+00:00",
+      "summary": "MARA acquires a 64% stake in French computing infrastructure operator Exaion, expanding into AI and cloud services as Bitcoin miners pivot toward data center revenue.",
+      "content": "MARA acquires a 64% stake in French computing infrastructure operator Exaion, expanding into AI and cloud services as Bitcoin miners pivot toward data center revenue.",
+      "authors": [
+        "Cointelegraph by Amin Haqshanas"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.942601+00:00"
+    },
+    {
+      "id": "ffae5931f80d58ac",
+      "title": "Uniswap founder slams scam crypto ads after victim 'lost everything'",
+      "link": "https://cointelegraph.com/news/uniswap-fake-ads-drain-user-wallets-hayden-adams?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-21T05:58:48+00:00",
+      "summary": "Uniswap founder Hayden Adams highlighted a case where a victim lost a “mid-six-figure” portfolio to a fake top search result posing as Uniswap.",
+      "content": "Uniswap founder Hayden Adams highlighted a case where a victim lost a “mid-six-figure” portfolio to a fake top search result posing as Uniswap.",
+      "authors": [
+        "Cointelegraph by Ciaran Lyons"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [
+          "UNISWAP"
+        ],
+        "projects": [
+          "Uniswap"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.942748+00:00"
+    },
+    {
+      "id": "dc237014a7ee8608",
+      "title": "Bitcoin's bull catalyst could be AI stocks turning 'silly big': Lyn Alden",
+      "link": "https://cointelegraph.com/news/bitcoin-price-catalyst-ai-stocks-peak-economist-lyn-alden?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-21T02:21:04+00:00",
+      "summary": "Bitcoin only needs a “marginal amount of new demand” to push higher, according to macroeconomist Lyn Alden, who is watching for a potential peak in AI stocks as a signal.",
+      "content": "Bitcoin only needs a “marginal amount of new demand” to push higher, according to macroeconomist Lyn Alden, who is watching for a potential peak in AI stocks as a signal.",
+      "authors": [
+        "Cointelegraph by Ciaran Lyons"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.942908+00:00"
+    },
+    {
+      "id": "124de0a22ff90091",
+      "title": "Tokenized real estate projects advance in Dubai and Maldives",
+      "link": "https://cointelegraph.com/news/tokenized-real-estate-advance-dubai-maldives?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-20T21:31:17+00:00",
+      "summary": "A Trump-tied hotel development in the Maldives and the Dubai Land Department announced details on tokenizing their real estate projects this week.",
+      "content": "A Trump-tied hotel development in the Maldives and the Dubai Land Department announced details on tokenizing their real estate projects this week.",
+      "authors": [
+        "Cointelegraph by Turner Wright"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.943024+00:00"
+    },
+    {
+      "id": "61cbe8fe2a2d3ac4",
+      "title": "Bitcoin whales participate in V-shaped accumulation, offsetting 230K BTC sell-off",
+      "link": "https://cointelegraph.com/news/bitcoin-whales-participate-in-v-shaped-accumulation-offsetting-230k-btc-sell-off?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-20T21:00:00+00:00",
+      "summary": "Despite the sharp multi-month market downtrend, Bitcoin whales added 236,000 BTC since December 2025, with order size data showing large players building new positions.",
+      "content": "Despite the sharp multi-month market downtrend, Bitcoin whales added 236,000 BTC since December 2025, with order size data showing large players building new positions.",
+      "authors": [
+        "Cointelegraph by Biraajmaan Tamuly"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [
+          "BITCOIN",
+          "BTC"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.943173+00:00"
+    },
+    {
+      "id": "2fd7216f8cc7dd47",
+      "title": "Bitcoin bears at risk of $600M liquidation, raising chance for rally to $70K",
+      "link": "https://cointelegraph.com/news/bitcoin-bears-at-risk-of-600m-liquidation-raising-chance-for-rally-to-70k?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-20T20:15:00+00:00",
+      "summary": "Despite bearish pressure and weak US economic data, Bitcoin's recovering hashrate and new onchain security protocols raise the chance for a surge to $70,000.",
+      "content": "Despite bearish pressure and weak US economic data, Bitcoin's recovering hashrate and new onchain security protocols raise the chance for a surge to $70,000.",
+      "authors": [
+        "Cointelegraph by Marcel Pechman"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.943312+00:00"
+    },
+    {
+      "id": "54fdb35f52cf43d3",
+      "title": "Dutch authorities call on Polymarket arm to cease activities",
+      "link": "https://cointelegraph.com/news/dutch-authorities-call-on-polymarket-arm-to-cease-activities?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-20T20:14:25+00:00",
+      "summary": "The prediction market's Dutch arm, Adventure One, allegedly offered illegal bets, including on elections in the Netherlands.",
+      "content": "The prediction market's Dutch arm, Adventure One, allegedly offered illegal bets, including on elections in the Netherlands.",
+      "authors": [
+        "Cointelegraph by Turner Wright"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.943414+00:00"
+    },
+    {
+      "id": "d3248b404da3f3f2",
+      "title": "Crypto slides, but tokenized RWAs and VC push ahead",
+      "link": "https://cointelegraph.com/news/crypto-biz-crypto-slides-tokenized-rwa-vc-push-ahead?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-20T20:00:00+00:00",
+      "summary": "As Bitcoin and altcoins continue to sell off, venture capital is raising millions for blockchain-based financial infrastructure, while real-world assets continue to draw capital.",
+      "content": "As Bitcoin and altcoins continue to sell off, venture capital is raising millions for blockchain-based financial infrastructure, while real-world assets continue to draw capital.",
+      "authors": [
+        "Cointelegraph by Sam Bourgi"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.943541+00:00"
+    },
+    {
+      "id": "2404ac85b4421ba3",
+      "title": "Trump announces 10% global tariff following SCOTUS ruling",
+      "link": "https://cointelegraph.com/news/trump-10-global-tariff-scotus-ruling?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-20T19:55:07+00:00",
+      "summary": "The United States Supreme Court ruled on Friday that President Donald Trump could not use national emergency powers to levy tariffs during peacetime.",
+      "content": "The United States Supreme Court ruled on Friday that President Donald Trump could not use national emergency powers to levy tariffs during peacetime.",
+      "authors": [
+        "Cointelegraph by Vince Quill"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.943655+00:00"
+    },
+    {
+      "id": "f8e4a37dc85025c9",
+      "title": "SCOTUS strikes down Trump tariffs, but 'alternative' plans brewing",
+      "link": "https://cointelegraph.com/news/scotus-strikes-trump-tariffs-alternative-plan?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-20T19:27:39+00:00",
+      "summary": "US President Donald Trump has repeatedly said that tariffs could help pay down the $38 trillion, and growing, US national debt.",
+      "content": "US President Donald Trump has repeatedly said that tariffs could help pay down the $38 trillion, and growing, US national debt.",
+      "authors": [
+        "Cointelegraph by Vince Quill"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.943770+00:00"
+    },
+    {
+      "id": "61fc88e3afc1e526",
+      "title": "Wall Street boosts Bitmine stakes as DeFi lenders buckle on liquidity: Finance Redefined",
+      "link": "https://cointelegraph.com/news/wall-street-boosts-bitmine-stakes-defi-lenders-buckle-liquidity-finance-redefined?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-20T19:00:00+00:00",
+      "summary": "Crypto illiquidity is pressuring DeFi lending companies, but Wall Street giants continue to increase their exposure to the world’s largest Ethereum treasury company.",
+      "content": "Crypto illiquidity is pressuring DeFi lending companies, but Wall Street giants continue to increase their exposure to the world’s largest Ethereum treasury company.",
+      "authors": [
+        "Cointelegraph by Zoltan Vardai"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [
+          "ETHEREUM"
+        ],
+        "projects": [
+          "DeFi",
+          "Ethereum"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.943912+00:00"
+    },
+    {
+      "id": "cbd5d17d2cf04fda",
+      "title": "Price predictions 2/20: BTC, ETH, XRP, BNB, SOL, DOGE, BCH, ADA, HYPE, XMR",
+      "link": "https://cointelegraph.com/news/price-predictions-2-20-btc-eth-xrp-bnb-sol-doge-bch-ada-hype-xmr?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-20T18:20:00+00:00",
+      "summary": "The failure of the bulls to start a strong recovery in Bitcoin and the major altcoins suggests that the bears intend to remain active at higher levels.",
+      "content": "The failure of the bulls to start a strong recovery in Bitcoin and the major altcoins suggests that the bears intend to remain active at higher levels.",
+      "authors": [
+        "Cointelegraph by Rakesh Upadhyay"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [
+          "ADA",
+          "BITCOIN",
+          "BNB",
+          "BTC",
+          "DOGE",
+          "ETH",
+          "HYPE",
+          "SOL",
+          "XRP"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.944058+00:00"
+    },
+    {
+      "id": "ce0a8735e82a1ccb",
+      "title": "Bitcoin mining difficulty rebounds 15% as US miners recover from winter outages",
+      "link": "https://cointelegraph.com/news/bitcoin-difficulty-rebounds-15-as-us-miners-recover-from-winter-outages?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-20T18:02:33+00:00",
+      "summary": "Bitcoin’s mining difficulty climbed to 144.4 trillion after January storms briefly slashed hash rate, while some US miners offset downtime by selling electricity back to the grid.",
+      "content": "Bitcoin’s mining difficulty climbed to 144.4 trillion after January storms briefly slashed hash rate, while some US miners offset downtime by selling electricity back to the grid.",
+      "authors": [
+        "Cointelegraph by Nate Kostar"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.944210+00:00"
+    },
+    {
+      "id": "5addf54e7ad1d0ca",
+      "title": "Core technical contributor to cease involvement with Aave DAO",
+      "link": "https://cointelegraph.com/news/aave-core-contributor-bgd-cease?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-20T17:17:56+00:00",
+      "summary": "After four years contributing, BGD Labs said it would be leaving the DAO, citing changes to the organization and taking an “adversarial position“ to its liquidity protocol.",
+      "content": "After four years contributing, BGD Labs said it would be leaving the DAO, citing changes to the organization and taking an “adversarial position“ to its liquidity protocol.",
+      "authors": [
+        "Cointelegraph by Turner Wright"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [
+          "AAVE"
+        ],
+        "projects": [
+          "Aave"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.944346+00:00"
+    },
+    {
+      "id": "806580d2e6332338",
+      "title": "Bitcoin ignores US Supreme Court Trump tariff strike amid talk of $150B refund",
+      "link": "https://cointelegraph.com/news/bitcoin-ignores-us-supreme-court-trump-tariff-strike-amid-talk-of-150b-refund?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-20T17:15:55+00:00",
+      "summary": "Bitcoin stayed rangebound within a \"downward trajectory\" as the Supreme Court concluded that some US trade tariffs were illegal and liable for a refund.",
+      "content": "Bitcoin stayed rangebound within a \"downward trajectory\" as the Supreme Court concluded that some US trade tariffs were illegal and liable for a refund.",
+      "authors": [
+        "Cointelegraph by William Suberg"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [
+          "BITCOIN"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.944477+00:00"
+    },
+    {
+      "id": "34f086d6567debad",
+      "title": "BTC treasury executives call for reform of 1,250% risk weight in Basel III",
+      "link": "https://cointelegraph.com/news/btc-treasury-reform-1250-percent-risk-basel?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-20T17:03:46+00:00",
+      "summary": "Private equity, which has the second-highest risk weighting, carries a 400% weight under the current Basel III banking framework.",
+      "content": "Private equity, which has the second-highest risk weighting, carries a 400% weight under the current Basel III banking framework.",
+      "authors": [
+        "Cointelegraph by Vince Quill"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [
+          "BTC"
+        ],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.944600+00:00"
+    },
+    {
+      "id": "db2e0d89cf9d6ba1",
+      "title": "Tennessee judge issues injunction blocking state move against Kalshi",
+      "link": "https://cointelegraph.com/news/tennessee-judge-blocks-state-crackdown-on-kalshi?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-20T14:03:44+00:00",
+      "summary": "US Federal Judge Aleta Trauger granted Kalshi a preliminary injunction against Tennessee, finding its sports event contracts fall under CFTC jurisdiction.",
+      "content": "US Federal Judge Aleta Trauger granted Kalshi a preliminary injunction against Tennessee, finding its sports event contracts fall under CFTC jurisdiction.",
+      "authors": [
+        "Cointelegraph by Christina Comben"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.944711+00:00"
+    },
+    {
+      "id": "49391ba576c3bca5",
+      "title": "Stablecoin A7A5 grows parallel system for sanctioned companies",
+      "link": "https://cointelegraph.com/news/stablecoin-a7a5-parallel-network-sanctioned-companies?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-20T13:32:33+00:00",
+      "summary": "Stablecoin ecosystem A7A5 has faced accusations of sanctions evasion and, according to some analysts, is creating an alternative, sanctions-free financial network.",
+      "content": "Stablecoin ecosystem A7A5 has faced accusations of sanctions evasion and, according to some analysts, is creating an alternative, sanctions-free financial network.",
+      "authors": [
+        "Cointelegraph by Aaron Wood"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.944822+00:00"
+    },
+    {
+      "id": "edc8cf3aa0179227",
+      "title": "House Democrats press Treasury on World Liberty bank charter and UAE stake",
+      "link": "https://cointelegraph.com/news/democrats-press-treasury-on-trump-world-liberty-financial?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-20T12:46:02+00:00",
+      "summary": "House Democrats are pressing Treasury Secretary Scott Bessent over World Liberty Financial’s push for a national trust bank charter, citing systemic risk.",
+      "content": "House Democrats are pressing Treasury Secretary Scott Bessent over World Liberty Financial’s push for a national trust bank charter, citing systemic risk.",
+      "authors": [
+        "Cointelegraph by Christina Comben"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [],
+        "projects": [],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.944954+00:00"
+    },
+    {
+      "id": "a09acab789d80694",
+      "title": "Tether USDT supply set for biggest monthly decline since 2022 FTX collapse",
+      "link": "https://cointelegraph.com/news/tether-usdt-biggest-monthly-decline-ftx-collapse?utm_source=rss_feed&utm_medium=rss&utm_campaign=rss_partner_inbound",
+      "source": "cointelegraph",
+      "published": "2026-02-20T12:33:45+00:00",
+      "summary": "Tether’s USDT is nearing its largest monthly supply drop since the collapse of FTX, with whales and smart money traders continuing to reduce their USDT holdings.",
+      "content": "Tether’s USDT is nearing its largest monthly supply drop since the collapse of FTX, with whales and smart money traders continuing to reduce their USDT holdings.",
+      "authors": [
+        "Cointelegraph by Zoltan Vardai"
+      ],
+      "tags": [],
+      "entities": {
+        "tokens": [
+          "FTX",
+          "TETHER",
+          "USDT"
+        ],
+        "projects": [
+          "Ftx",
+          "Tether"
+        ],
+        "people": []
+      },
+      "fetched_at": "2026-02-22T06:10:26.945094+00:00"
+    }
+  ]
+}

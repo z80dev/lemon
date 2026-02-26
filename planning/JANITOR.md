@@ -444,3 +444,88 @@ Completed a planning close-out pass for a historically implemented phase-5 miles
 **Validation:**
 - `mix compile --no-optional-deps`
 - `mix test apps/ai`
+
+## 2026-02-26 (cron run)
+
+### Agent Games Platform - Slice G hardening
+**Plan:** `PLN-20260226-agent-games-platform`  
+**Status:** `in_progress`
+
+Implemented a focused Slice G hardening pass for bot/deadline behavior and test coverage.
+
+**Changes:**
+- `apps/lemon_games/lib/lemon_games/bot/turn_worker.ex`
+  - Downgraded benign async race (`:invalid_state`) logging from warning to debug to reduce noisy false-positive warnings.
+- Added new tests:
+  - `apps/lemon_games/test/lemon_games/bot/connect4_bot_test.exs`
+    - validates win-taking, opponent-blocking, and center preference heuristics.
+  - `apps/lemon_games/test/lemon_games/bot/rock_paper_scissors_bot_test.exs`
+    - validates bot output contract (`throw` + allowed value set).
+  - `apps/lemon_games/test/lemon_games/matches/deadline_sweeper_test.exs`
+    - validates `pending_accept` expiry (`accept_timeout`) and `active` turn expiry (`turn_timeout`).
+- Minor test cleanup:
+  - `apps/lemon_games/test/lemon_games/matches/service_test.exs`
+    - removed unused variable warnings in idempotency/RPS assertions.
+
+**Planning updates:**
+- `planning/plans/PLN-20260226-agent-games-platform.md`
+  - appended progress-log entry for Slice G hardening work.
+
+**Validation:**
+- `mix test apps/lemon_games/test/lemon_games/bot/connect4_bot_test.exs apps/lemon_games/test/lemon_games/bot/rock_paper_scissors_bot_test.exs apps/lemon_games/test/lemon_games/matches/deadline_sweeper_test.exs apps/lemon_games/test/lemon_games/matches/service_test.exs` ✅
+- `mix test` ⚠️ ran and reported existing unrelated suite failures in `apps/lemon_core/test/lemon_core/application_test.exs` (application lifecycle assumptions), plus existing duplicate test module check noise; no new failures introduced in touched `lemon_games` scope.
+
+### Agent Games Platform - Slice H docs/skill polish + deterministic test fix
+**Plan:** `PLN-20260226-agent-games-platform`  
+**Status:** `in_progress`
+
+Completed a focused Slice H polish pass plus a deterministic test hardening follow-up discovered during validation.
+
+**Changes:**
+- Documentation/skill updates:
+  - `apps/lemon_control_plane/AGENTS.md`
+    - added Games API section with `/v1/games/*` endpoints and `games.token.*` RPC method reference.
+  - `apps/lemon_skills/AGENTS.md`
+    - added `agent-games` to builtin skills table and filesystem layout examples.
+  - `docs/games-platform.md` (new)
+    - added platform overview, component map, API summary, bus topics, and operational notes.
+  - `docs/README.md`
+    - added games platform doc to product/capability index.
+  - `docs/catalog.exs`
+    - registered `docs/games-platform.md` for docs freshness governance.
+- Deterministic test hardening:
+  - `apps/lemon_games/test/lemon_games/matches/service_test.exs`
+    - rewrote `"rps full game reaches terminal state"` to use two explicit external actors instead of racing the bot worker, removing a nondeterministic `:invalid_state` terminal race.
+
+**Planning updates:**
+- `planning/plans/PLN-20260226-agent-games-platform.md`
+  - appended progress-log entry for Slice H docs/skill polish.
+
+**Validation:**
+- `mix test apps/lemon_games/test apps/lemon_control_plane/test/lemon_control_plane/http/games_api_test.exs apps/lemon_control_plane/test/lemon_control_plane/methods/games_token_methods_test.exs apps/lemon_web/test/lemon_web/live/games_live_test.exs` ✅
+
+## 2026-02-26
+
+### Games Platform - Idempotency Replay Hardening
+**Plan:** PLN-20260226-agent-games-platform  
+**Status:** in_progress
+
+Implemented a focused hardening slice to align move idempotency behavior with the MVP API contract.
+
+**Changes:**
+- `apps/lemon_games/lib/lemon_games/matches/service.ex`
+  - Added `submit_move_with_meta/4` to explicitly return replay metadata (`idempotent_replay?`).
+  - Kept `submit_move/4` backward-compatible by delegating and preserving the prior 3-tuple response.
+- `apps/lemon_control_plane/lib/lemon_control_plane/http/games_api.ex`
+  - Updated move submission endpoint to use metadata-aware service call.
+  - `POST /v1/games/matches/:id/moves` now correctly returns `"idempotent_replay": true` on duplicate idempotency-key replay.
+- `apps/lemon_control_plane/test/lemon_control_plane/http/games_api_test.exs`
+  - Added regression test verifying first move returns `idempotent_replay=false` and duplicate returns `true` with identical accepted event sequence.
+- `apps/lemon_games/test/lemon_games/matches/service_test.exs`
+  - Added service-level test for replay metadata semantics.
+- `docs/games-platform.md`
+  - Documented `idempotent_replay` field on move responses.
+
+**Validation:**
+- `mix test apps/lemon_games/test/lemon_games/matches/service_test.exs apps/lemon_control_plane/test/lemon_control_plane/http/games_api_test.exs` ✅
+

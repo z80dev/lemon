@@ -1,0 +1,226 @@
+---
+title: Installation
+description: 'Complete installation guide for Lemon'
+---
+
+## Prerequisites
+
+- **Elixir 1.19+** and **Erlang/OTP 27+**
+- **Node.js 20+** (for TUI/Web clients)
+- **Python 3.10+** (optional, for debug CLI)
+- **Rust/Cargo** (optional, for WASM runtime auto-build)
+
+## Installing Elixir
+
+### macOS
+
+```bash
+brew install elixir
+elixir -v
+```
+
+### Linux
+
+#### Option A: asdf (Recommended)
+
+For consistent versions across distributions:
+
+```bash
+# Install asdf (see asdf docs for your distro)
+asdf plugin add erlang
+asdf plugin add elixir
+
+asdf install erlang 27.2
+asdf install elixir 1.19.0-otp-27
+
+asdf global erlang 27.2
+asdf global elixir 1.19.0-otp-27
+```
+
+#### Option B: Distribution Packages
+
+<Tabs>
+  <Tab title="Arch Linux">
+```bash
+sudo pacman -Syu
+sudo pacman -S elixir erlang
+```
+  </Tab>
+  <Tab title="Ubuntu/Debian">
+```bash
+sudo apt-get update
+sudo apt-get install -y elixir erlang
+```
+  </Tab>
+  <Tab title="Fedora">
+```bash
+sudo dnf install -y elixir erlang
+```
+  </Tab>
+</Tabs>
+
+### Build Dependencies (for asdf)
+
+If `asdf install erlang` fails, install build dependencies:
+
+<Tabs>
+  <Tab title="Arch">
+```bash
+sudo pacman -S --needed base-devel git ncurses openssl wxwidgets-gtk3
+```
+  </Tab>
+  <Tab title="Ubuntu/Debian">
+```bash
+sudo apt-get install -y build-essential git autoconf m4 libncurses5-dev \
+  libssl-dev libwxgtk3.2-dev libgl1-mesa-dev libglu1-mesa-dev \
+  libpng-dev libssh-dev unixodbc-dev
+```
+  </Tab>
+  <Tab title="Fedora">
+```bash
+sudo dnf install -y @development-tools git autoconf m4 ncurses-devel \
+  openssl-devel wxGTK-devel mesa-libGL-devel mesa-libGLU-devel \
+  libpng-devel libssh-devel unixODBC-devel
+```
+  </Tab>
+</Tabs>
+
+## Installing Node.js
+
+Node.js is only required for the TUI and Web clients:
+
+```bash
+# macOS
+brew install node@20
+
+# Or use nvm
+nvm install 20
+nvm use 20
+```
+
+## Clone and Build Lemon
+
+```bash
+git clone https://github.com/z80dev/lemon.git
+cd lemon
+
+# Install Elixir dependencies
+mix deps.get
+
+# Build the project
+mix compile
+
+# Install TUI dependencies
+cd clients/lemon-tui
+npm install
+npm run build
+cd ../..
+```
+
+## Configuration
+
+### Basic Config
+
+Create `~/.lemon/config.toml`:
+
+```toml
+[agent]
+default_provider = "anthropic"
+default_model = "claude-sonnet-4-20250514"
+
+[providers.anthropic]
+api_key = "sk-ant-..."
+```
+
+### Environment Variables
+
+Alternatively, use environment variables:
+
+```bash
+# Anthropic
+export ANTHROPIC_API_KEY="sk-ant-..."
+
+# OpenAI
+export OPENAI_API_KEY="sk-..."
+
+# Google
+export GOOGLE_GENERATIVE_AI_API_KEY="..."
+
+# AWS Bedrock
+export AWS_ACCESS_KEY_ID="..."
+export AWS_SECRET_ACCESS_KEY="..."
+export AWS_REGION="us-east-1"
+```
+
+## Encrypted Secrets Store (Optional)
+
+Lemon includes an encrypted local secrets store for API keys.
+
+### Initialize
+
+```bash
+# macOS (uses Keychain)
+mix lemon.secrets.init
+
+# Or set master key manually
+export LEMON_SECRETS_MASTER_KEY="$(openssl rand -base64 32)"
+```
+
+### Store Secrets
+
+```bash
+mix lemon.secrets.set llm_openai_api_key "sk-..."
+mix lemon.secrets.set llm_anthropic_api_key "sk-ant-..."
+```
+
+### Use in Config
+
+```toml
+[providers.openai]
+api_key_secret = "llm_openai_api_key"
+```
+
+## WASM Tool Support (Optional)
+
+Enable Ironclaw-compatible WASM tools:
+
+```toml
+[agent.tools.wasm]
+enabled = true
+auto_build = true
+```
+
+Requires Rust/Cargo if `auto_build = true`.
+
+## Verify Installation
+
+```bash
+# Check Elixir
+elixir -v
+
+# Check Node
+node -v
+
+# Run tests
+mix test
+
+# Start TUI
+./bin/lemon-dev
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Elixir version too old">
+Use `asdf` to install the correct version, or check your package manager for newer packages.
+  </Accordion>
+  <Accordion title="Node modules not found">
+Run `npm install` in the appropriate client directory (`clients/lemon-tui` or `clients/lemon-web`).
+  </Accordion>
+  <Accordion title="Permission denied on scripts">
+Run `chmod +x bin/*` to make scripts executable.
+  </Accordion>
+  <Accordion title="API key not found">
+Check that your config file is at `~/.lemon/config.toml` and the provider section is correct.
+  </Accordion>
+</AccordionGroup>

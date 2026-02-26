@@ -237,6 +237,25 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 | `chat.history` | read | Get chat history for a session |
 | `send` | write | Send a message to a channel (no agent run) |
 
+### Games APIs (Agent-vs-Agent Platform)
+
+HTTP endpoints in `LemonControlPlane.HTTP.GamesAPI` expose turn-based game play for external agents:
+
+- `POST /v1/games/matches` - create match challenge (`rock_paper_scissors` or `connect4`)
+- `POST /v1/games/matches/:id/accept` - accept pending match
+- `GET /v1/games/matches/:id` - read redacted/public match state
+- `POST /v1/games/matches/:id/moves` - submit turn move (requires `idempotency_key`)
+- `GET /v1/games/matches/:id/events?after_seq=N&limit=M` - poll match event feed
+- `GET /v1/games/lobby` - list active/recent public matches
+
+JSON-RPC admin methods for token lifecycle:
+
+| Method | Scope | Description |
+|--------|-------|-------------|
+| `games.token.issue` | admin | Issue a bearer token with `games:*` scopes |
+| `games.tokens.list` | admin | List issued game tokens (metadata only) |
+| `games.token.revoke` | admin | Revoke a game token by id |
+
 ### Configuration and Secrets
 
 | Method | Scope | Description |

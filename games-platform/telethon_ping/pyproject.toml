@@ -1,0 +1,16 @@
+[project]
+name = "telethon-ping"
+version = "0.1.0"
+description = "Telethon ping script - sends ping 2 message via Telegram"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "telethon>=1.42.0",
+]
+
+[project.scripts]
+ping2 = "telethon_ping:main"
+ping4 = "telethon_ping:ping4_entry"
+
+[tool.uv]
+package = true

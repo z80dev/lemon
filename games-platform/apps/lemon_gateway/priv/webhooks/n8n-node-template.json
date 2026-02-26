@@ -1,0 +1,16 @@
+{
+  "name": "Lemon Webhook Trigger",
+  "endpoint_url": "https://<your-host>/webhooks/<integration_id>",
+  "method": "POST",
+  "headers": {
+    "Authorization": "Bearer <token>"
+  },
+  "payload": {
+    "text": "={{$json.message}}",
+    "metadata": {
+      "source": "n8n",
+      "workflow_id": "={{$workflow.id}}"
+    },
+    "urls": []
+  }
+}

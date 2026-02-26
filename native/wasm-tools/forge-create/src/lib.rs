@@ -66,7 +66,11 @@ impl Guest for ForgeCreateTool {
                 },
                 "secret_name": {
                     "type": "string",
-                    "description": "Secret name for the signing private key (default: ETH_PRIVATE_KEY)"
+                    "description": "Secret name for the signing private key (default: ETH_PRIVATE_KEY). Used only when use_keystore is false."
+                },
+                "use_keystore": {
+                    "type": "boolean",
+                    "description": "Use Foundry keystore signing with KEYSTORE_NAME and KEYSTORE_PASSWORD secrets (default: true)."
                 }
             },
             "required": ["contract", "rpc_url"]
@@ -77,7 +81,8 @@ impl Guest for ForgeCreateTool {
     fn description() -> String {
         "Deploy a smart contract using `forge create`. \
          Supports constructor arguments and Etherscan verification. \
-         Private keys and API keys are injected securely and never exposed to the tool."
+         Signing via raw private key secret or Foundry keystore account. \
+         Credentials are injected securely and never exposed to the tool."
             .to_string()
     }
 }
@@ -127,12 +132,18 @@ fn build_args(params: &Value) -> Result<Vec<String>, String> {
         }
     }
 
-    let secret_name = params["secret_name"]
-        .as_str()
-        .unwrap_or("ETH_PRIVATE_KEY");
-
-    args.push("--private-key".to_string());
-    args.push(format!("{{{{SECRET:{secret_name}}}}}"));
+    if params["use_keystore"].as_bool().unwrap_or(true) {
+        args.push("--account".to_string());
+        args.push("{{SECRET:KEYSTORE_NAME}}".to_string());
+        args.push("--password".to_string());
+        args.push("{{SECRET:KEYSTORE_PASSWORD}}".to_string());
+    } else {
+        let secret_name = params["secret_name"]
+            .as_str()
+            .unwrap_or("ETH_PRIVATE_KEY");
+        args.push("--private-key".to_string());
+        args.push(format!("{{{{SECRET:{secret_name}}}}}"));
+    }
 
     if let Some(extra) = params["extra_args"].as_array() {
         for arg in extra {
@@ -194,8 +205,10 @@ mod tests {
         assert_eq!(args[0], "create");
         assert_eq!(args[1], "src/Counter.sol:Counter");
         assert!(args.contains(&"--rpc-url".to_string()));
-        assert!(args.contains(&"--private-key".to_string()));
-        assert!(args.contains(&"{{SECRET:ETH_PRIVATE_KEY}}".to_string()));
+        assert!(args.contains(&"--account".to_string()));
+        assert!(args.contains(&"{{SECRET:KEYSTORE_NAME}}".to_string()));
+        assert!(args.contains(&"--password".to_string()));
+        assert!(args.contains(&"{{SECRET:KEYSTORE_PASSWORD}}".to_string()));
     }
 
     #[test]
@@ -253,6 +266,36 @@ mod tests {
 
         let args = build_args(&params).unwrap();
         assert!(args.contains(&"--via-ir".to_string()));
+    }
+
+    #[test]
+    fn build_args_uses_keystore_by_default() {
+        let params = json!({
+            "contract": "src/Counter.sol:Counter",
+            "rpc_url": "https://rpc.example.com"
+        });
+
+        let args = build_args(&params).unwrap();
+        assert!(args.contains(&"--account".to_string()));
+        assert!(args.contains(&"{{SECRET:KEYSTORE_NAME}}".to_string()));
+        assert!(args.contains(&"--password".to_string()));
+        assert!(args.contains(&"{{SECRET:KEYSTORE_PASSWORD}}".to_string()));
+        assert!(!args.contains(&"--private-key".to_string()));
+    }
+
+    #[test]
+    fn build_args_can_use_private_key_mode() {
+        let params = json!({
+            "contract": "src/Counter.sol:Counter",
+            "rpc_url": "https://rpc.example.com",
+            "use_keystore": false,
+            "secret_name": "DEPLOYER_KEY"
+        });
+
+        let args = build_args(&params).unwrap();
+        assert!(args.contains(&"--private-key".to_string()));
+        assert!(args.contains(&"{{SECRET:DEPLOYER_KEY}}".to_string()));
+        assert!(!args.contains(&"--account".to_string()));
     }
 
     #[test]

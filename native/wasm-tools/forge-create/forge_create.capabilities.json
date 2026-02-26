@@ -12,6 +12,14 @@
         "secret_name": "ETH_PRIVATE_KEY",
         "injection": { "type": "arg", "flag": "--private-key" }
       },
+      "keystore_name": {
+        "secret_name": "KEYSTORE_NAME",
+        "injection": { "type": "arg", "flag": "--account" }
+      },
+      "keystore_password": {
+        "secret_name": "KEYSTORE_PASSWORD",
+        "injection": { "type": "arg", "flag": "--password" }
+      },
       "etherscan_key": {
         "secret_name": "ETHERSCAN_API_KEY",
         "injection": { "type": "arg", "flag": "--etherscan-api-key" }
@@ -21,7 +29,7 @@
     "timeout_secs": 120
   },
   "secrets": {
-    "allowed_names": ["ETH_PRIVATE_KEY", "ETH_*", "DEPLOYER_*", "ETHERSCAN_*"]
+    "allowed_names": ["ETH_PRIVATE_KEY", "ETH_*", "DEPLOYER_*", "ETHERSCAN_*", "KEYSTORE_NAME", "KEYSTORE_PASSWORD"]
   },
   "auth": {
     "secret_name": "ETH_PRIVATE_KEY",

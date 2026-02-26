@@ -26,6 +26,7 @@ defmodule LemonWeb.MixProject do
   defp deps do
     [
       {:lemon_core, in_umbrella: true},
+      {:lemon_games, in_umbrella: true},
       {:lemon_router, in_umbrella: true},
       {:phoenix, "~> 1.7.14"},
       {:phoenix_html, "~> 4.1"},
@@ -33,7 +34,8 @@ defmodule LemonWeb.MixProject do
       {:phoenix_live_reload, "~> 1.5", only: :dev},
       {:gettext, "~> 0.26"},
       {:jason, "~> 1.4"},
-      {:bandit, "~> 1.5"}
+      {:bandit, "~> 1.5"},
+      {:lazy_html, ">= 0.1.0", only: :test}
     ]
   end
 end

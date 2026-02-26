@@ -1,0 +1,205 @@
+#!/bin/bash
+#
+# lemon-dev - Development launcher for Lemon
+#
+# This script runs Lemon from source, always using the latest code.
+# It handles building dependencies and launching the TUI.
+#
+# Usage:
+#   lemon-dev [options] [directory]
+#
+# Options:
+#   --model <provider:model>   Override model (e.g., anthropic:claude-sonnet-4-20250514)
+#   --provider <provider>      Override provider (e.g., kimi, openai)
+#   --debug                    Enable debug mode
+#   --help                     Show this help
+#
+# Configuration:
+#   Reads from ~/.lemon/config.toml
+#   Environment variables override config file values
+#
+
+set -e
+
+# Find the lemon project root (resolve symlinks first)
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+    SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+    SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+    # Handle relative symlinks
+    [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+LEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Export for the TUI to find the backend
+export LEMON_PATH="$LEMON_ROOT"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
+info() {
+    echo -e "${GREEN}[lemon-dev]${NC} $1"
+}
+
+warn() {
+    echo -e "${YELLOW}[lemon-dev]${NC} $1"
+}
+
+error() {
+    echo -e "${RED}[lemon-dev]${NC} $1" >&2
+}
+
+show_help() {
+    cat << 'EOF'
+lemon-dev - Development launcher for Lemon
+
+Usage:
+  lemon-dev [options] [directory]
+
+Options:
+  --model <provider:model>   Override model (e.g., anthropic:claude-sonnet-4-20250514)
+  --provider <provider>      Override provider (e.g., kimi, openai)
+  --base-url <url>           Override API base URL
+  --debug                    Enable debug mode
+  --rebuild                  Force rebuild of TUI
+  --help                     Show this help
+
+Arguments:
+  directory                  Working directory for the agent (default: current directory)
+
+Configuration:
+  Config file: ~/.lemon/config.toml
+  Environment variables override config file values.
+
+Examples:
+  lemon-dev                           # Use defaults from config
+  lemon-dev --model kimi:kimi-for-coding
+  lemon-dev ~/projects/myapp          # Start in specific directory
+EOF
+}
+
+# Parse arguments
+MODEL=""
+PROVIDER=""
+BASE_URL=""
+DEBUG=""
+REBUILD=""
+CWD=""
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --model)
+            MODEL="$2"
+            shift 2
+            ;;
+        --provider)
+            PROVIDER="$2"
+            shift 2
+            ;;
+        --base-url)
+            BASE_URL="$2"
+            shift 2
+            ;;
+        --debug)
+            DEBUG="1"
+            shift
+            ;;
+        --rebuild)
+            REBUILD="1"
+            shift
+            ;;
+        --help|-h)
+            show_help
+            exit 0
+            ;;
+        -*)
+            error "Unknown option: $1"
+            show_help
+            exit 1
+            ;;
+        *)
+            # Positional argument - treat as working directory
+            CWD="$1"
+            shift
+            ;;
+    esac
+done
+
+# Default working directory to current directory
+CWD="${CWD:-$(pwd)}"
+
+# Resolve to absolute path
+CWD="$(cd "$CWD" 2>/dev/null && pwd)" || {
+    error "Directory not found: $CWD"
+    exit 1
+}
+
+# Check that we're in the lemon project
+if [[ ! -f "$LEMON_ROOT/mix.exs" ]] || [[ ! -d "$LEMON_ROOT/apps" ]]; then
+    error "Cannot find lemon project at $LEMON_ROOT"
+    exit 1
+fi
+
+TUI_DIR="$LEMON_ROOT/clients/lemon-tui"
+
+# Check if TUI exists
+if [[ ! -d "$TUI_DIR" ]]; then
+    error "TUI not found at $TUI_DIR"
+    exit 1
+fi
+
+# Ensure Elixir dependencies are compiled
+info "Checking Elixir dependencies..."
+cd "$LEMON_ROOT"
+if [[ ! -d "_build" ]] || [[ ! -d "deps" ]]; then
+    info "Installing Elixir dependencies..."
+    mix deps.get
+fi
+
+# Quick compile check (will be fast if already compiled)
+mix compile --no-warnings 2>/dev/null || {
+    warn "Compiling Elixir project..."
+    mix compile
+}
+
+# Ensure TUI is built
+cd "$TUI_DIR"
+
+if [[ ! -d "node_modules" ]]; then
+    info "Installing TUI dependencies..."
+    npm install
+fi
+
+if [[ ! -f "dist/index.js" ]] || [[ "$REBUILD" == "1" ]]; then
+    info "Building TUI..."
+    npm run build
+fi
+
+# Build TUI arguments
+TUI_ARGS=()
+
+if [[ -n "$MODEL" ]]; then
+    TUI_ARGS+=("--model" "$MODEL")
+elif [[ -n "$PROVIDER" ]]; then
+    # If only provider specified, let the TUI resolve the model from config
+    TUI_ARGS+=("--provider" "$PROVIDER")
+fi
+
+if [[ -n "$BASE_URL" ]]; then
+    TUI_ARGS+=("--base-url" "$BASE_URL")
+fi
+
+if [[ "$DEBUG" == "1" ]]; then
+    TUI_ARGS+=("--debug")
+fi
+
+TUI_ARGS+=("--cwd" "$CWD")
+
+# Run the TUI
+info "Starting Lemon TUI..."
+info "Working directory: $CWD"
+exec node dist/cli.js "${TUI_ARGS[@]}"

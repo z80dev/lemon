@@ -1,0 +1,61 @@
+# The directory Mix will write compiled artifacts to.
+/_build/
+/_build
+
+# If you run "mix test --cover", coverage assets end up here.
+/cover/
+
+# The directory Mix downloads your dependencies sources to.
+/deps/
+/deps
+
+# Where third-party dependencies like ExDoc output generated docs.
+/doc/
+
+# Temporary files, for example, from tests.
+/tmp/
+apps/lemon_skills/tmp/
+.lemon/skill/
+
+# If the VM crashes, it generates a dump, let's ignore it too.
+erl_crash.dump
+
+# Scratch artifacts accidentally created by automation
+'+CLAUDE_OUT+'
+
+# Agent loop run artifacts (timestamped logs/diffs)
+docs/agent-loop/runs/
+
+# Also ignore archive artifacts (built via "mix archive.build").
+*.ez
+
+# Local Rust sidecar build artifacts
+native/lemon-wasm-runtime/target/
+native/wasm-tools/*/target/
+
+
+.agent/
+.claude/worktrees/
+
+# Environment files with secrets
+.env*
+!.env.example
+lemon.zip
+
+# Python generated artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# JavaScript/node artifacts
+node_modules/
+
+# Local generated SQLite/SQLite WAL artifacts
+*.db3
+*.db3-shm
+*.db3-wal
+apps/lemon_gateway/priv/.env
+telethon_ping/test_session.session
+
+# Stress test results
+telethon_ping/stress_test_results_*.json

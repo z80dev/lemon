@@ -1,0 +1,32 @@
+flowchart LR
+    subgraph Direct["Direct Path (TUI/Web)"]
+        D1["TUI/Web"] -->|JSON-RPC| D2["debug_agent_rpc"]
+        D2 --> D3["coding_agent_ui"]
+        D3 --> D4["CodingAgent.Session"]
+        D4 --> D5["AgentCore"]
+        D5 --> D6["Ai Providers"]
+        D5 --> D7["Tools"]
+    end
+
+    subgraph Control["Control Plane Path"]
+        C1["External Client"] -->|WebSocket| C2["ControlPlane"]
+        C2 --> C3["LemonRouter"]
+        C3 --> C4["RunOrchestrator"]
+        C4 --> C5["LemonGateway"]
+        C5 --> C6["Engine"]
+    end
+
+    subgraph Channel["Channel Path"]
+        CH1["Telegram/etc"] --> CH2["LemonChannels"]
+        CH2 --> CH3["InboundMessage"]
+        CH3 --> CH4["LemonRouter"]
+        CH4 --> CH5["StreamCoalescer"]
+        CH5 --> CH6["Outbox"]
+    end
+
+    subgraph Cron["Automation Path"]
+        CR1["CronManager"] -->|tick| CR2["Due Jobs"]
+        CR2 --> CR3["LemonRouter"]
+        CR3 --> CR4["HeartbeatManager"]
+        CR4 --> CR5["Events on Bus"]
+    end

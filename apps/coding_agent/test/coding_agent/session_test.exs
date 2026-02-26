@@ -1,6 +1,7 @@
 defmodule CodingAgent.SessionTest do
   use ExUnit.Case, async: true
 
+  alias CodingAgent.Config
   alias CodingAgent.Session
   alias CodingAgent.SessionManager
   alias CodingAgent.SettingsManager
@@ -242,6 +243,45 @@ defmodule CodingAgent.SessionTest do
 
       assert state.model.provider == :openai
       assert state.model.id == "gpt-5.3-codex"
+    end
+
+    test "spills oversized tool results to disk in transform_context" do
+      cwd =
+        Path.join(System.tmp_dir!(), "session_spill_test_#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(cwd)
+      session = start_session(cwd: cwd)
+      state = Session.get_state(session)
+
+      original = String.duplicate("line\n", 30_000)
+
+      tool_result = %ToolResultMessage{
+        tool_call_id: "call_1",
+        tool_name: "bash",
+        content: [%TextContent{type: :text, text: original}]
+      }
+
+      assert {:ok, [transformed]} = state.transform_context.([tool_result], nil)
+
+      rendered =
+        transformed
+        |> Map.get(:content, [])
+        |> Enum.filter(&match?(%TextContent{}, &1))
+        |> Enum.map(& &1.text)
+        |> Enum.join("\n")
+
+      assert rendered =~ "[tool_result truncated]"
+      assert rendered =~ "spill_path="
+
+      [spill_path] =
+        Regex.run(~r/spill_path=([^\s]+)/, rendered, capture: :all_but_first)
+
+      assert String.starts_with?(
+               spill_path,
+               Config.spill_dir(cwd, state.session_manager.header.id)
+             )
+
+      assert File.read!(spill_path) == original
     end
 
     test "fails without cwd" do

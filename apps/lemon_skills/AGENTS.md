@@ -168,6 +168,7 @@ Located in `priv/builtin_skills/`, seeded on app start (via `LemonSkills.Applica
 | `tmux` | Terminal multiplexer control |
 | `pinata` | IPFS pinning service |
 | `summarize` | Text summarization patterns |
+| `agent-games` | Turn-based Games API integration (RPS + Connect4) |
 | `skill-creator` | Guidelines for creating skills |
 | `runtime-remsh` | BEAM remote shell debugging |
 | `session-logs` | Session logging patterns |
@@ -535,6 +536,7 @@ apps/lemon_skills/
 │       └── lemon.skill.ex           # Mix task CLI
 ├── priv/
 │   └── builtin_skills/              # Bundled skills (seeded to ~/.lemon/agent/skill/)
+│       ├── agent-games/
 │       ├── github/
 │       ├── tmux/
 │       └── ...

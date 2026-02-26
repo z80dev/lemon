@@ -1,0 +1,102 @@
+[
+  {
+    "test_name": "knowledge_question",
+    "status": "PASS",
+    "latency": 6.9861979484558105,
+    "notes": "Answered in 7.0s",
+    "timeline": [
+      {
+        "t": 6.9861979484558105,
+        "preview": "The speed of light in a vacuum is 299,792,458 meters per sec"
+      }
+    ]
+  },
+  {
+    "test_name": "multi_turn_conversation",
+    "status": "PASS",
+    "latency": 5.054845094680786,
+    "notes": "Recalled 'penguin' correctly",
+    "timeline": [
+      {
+        "t": 10.100008010864258,
+        "turn": 1,
+        "preview": "Locked in! \ud83d\udc27 Penguins are officially your favorite animal. I"
+      },
+      {
+        "t": 5.054845094680786,
+        "turn": 2,
+        "preview": "Your favorite animal is a penguin \ud83d\udc27."
+      }
+    ]
+  },
+  {
+    "test_name": "sync_task",
+    "status": "PASS",
+    "latency": 13.075330018997192,
+    "notes": "Fibonacci answered in 13.1s (sync)",
+    "timeline": [
+      {
+        "t": 13.075330018997192,
+        "preview": "The first 5 Fibonacci numbers are:\n\n0, 1, 1, 2, 3"
+      }
+    ]
+  },
+  {
+    "test_name": "async_task_followup",
+    "status": "PASS",
+    "latency": 0.0,
+    "notes": "Ack + result received (1 messages)",
+    "timeline": [
+      {
+        "t": 12.595338821411133,
+        "preview": "The task completed! Here's the haiku it generated:\n\nFunction"
+      }
+    ]
+  },
+  {
+    "test_name": "async_agent_delegation",
+    "status": "PASS",
+    "latency": 0.0,
+    "notes": "Delegation + completion received (2 messages)",
+    "timeline": [
+      {
+        "t": 7.603623867034912,
+        "preview": "Delegated! The coder agent is working on writing the is_pali"
+      },
+      {
+        "t": 27.313111782073975,
+        "preview": "The coder agent has completed the task. The is_palindrome fu"
+      }
+    ]
+  },
+  {
+    "test_name": "nonblocking_check",
+    "status": "PARTIAL",
+    "latency": 0.0,
+    "notes": "Follow-up answered at 5.9s but async result missing",
+    "timeline": [
+      {
+        "t": 43.91706895828247,
+        "phase": 1,
+        "preview": "The task has been spawned with ID a825e8f1f6d9fc3e. I'm stil"
+      },
+      {
+        "t": 5.895698070526123,
+        "phase": 2,
+        "preview": "12 * 12 = 144"
+      }
+    ]
+  },
+  {
+    "test_name": "parallel_async_tasks",
+    "status": "PARTIAL",
+    "latency": 0.0,
+    "notes": "Spawned but only 1 results",
+    "timeline": [
+      {
+        "t": 75.49055194854736,
+        "preview": "All three tasks completed! Here's a summary:\n\nQuestionAnswer"
+      }
+    ]
+  }
+]

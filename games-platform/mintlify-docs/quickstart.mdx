@@ -1,0 +1,187 @@
+---
+title: Quickstart
+description: 'Get up and running with Lemon in minutes'
+---
+
+## Prerequisites
+
+Before you start, you'll need:
+
+- **Elixir 1.19+** and **Erlang/OTP 27+**
+- A model provider API key (Anthropic, OpenAI, etc.)
+- **Node.js 20+** (for TUI/Web clients)
+
+### Installing Elixir
+
+<Tabs>
+  <Tab title="macOS (Homebrew)">
+```bash
+brew install elixir
+elixir -v
+```
+  </Tab>
+  <Tab title="asdf (Recommended)">
+```bash
+asdf plugin add erlang
+asdf plugin add elixir
+
+asdf install erlang 27.2
+asdf install elixir 1.19.0-otp-27
+
+asdf global erlang 27.2
+asdf global elixir 1.19.0-otp-27
+```
+  </Tab>
+  <Tab title="Arch Linux">
+```bash
+sudo pacman -Syu
+sudo pacman -S elixir erlang
+```
+  </Tab>
+  <Tab title="Ubuntu/Debian">
+```bash
+sudo apt-get update
+sudo apt-get install -y elixir erlang
+```
+  </Tab>
+</Tabs>
+
+## 1. Clone and Build
+
+```bash
+git clone https://github.com/z80dev/lemon.git
+cd lemon
+
+# Install Elixir dependencies
+mix deps.get
+
+# Build the project
+mix compile
+```
+
+## 2. Configure
+
+Create `~/.lemon/config.toml`:
+
+```toml
+[providers.anthropic]
+api_key = "sk-ant-..."
+
+[agent]
+default_provider = "anthropic"
+default_model = "claude-sonnet-4-20250514"
+```
+
+Or use environment variables:
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+```
+
+## 3. Run the TUI
+
+```bash
+# Make executable and run
+chmod +x bin/lemon-dev
+./bin/lemon-dev
+
+# Run in a specific project
+./bin/lemon-dev /path/to/your/project
+
+# Use a specific model
+./bin/lemon-dev --model anthropic:claude-sonnet-4-20250514
+```
+
+The `lemon-dev` script automatically:
+1. Installs Elixir dependencies if needed
+2. Compiles the Elixir project
+3. Installs and builds the TUI if needed
+4. Launches the TUI with your specified options
+
+## 4. Telegram Setup (Optional)
+
+Want to chat with Lemon from your phone?
+
+### Create a Bot
+
+1. In Telegram, message [@BotFather](https://t.me/botfather)
+2. Run `/newbot`
+3. Copy the bot token
+
+### Get Your Chat ID
+
+```bash
+export LEMON_TELEGRAM_BOT_TOKEN="123456:token"
+curl -s "https://api.telegram.org/bot${LEMON_TELEGRAM_BOT_TOKEN}/getUpdates" | python3 -m json.tool
+```
+
+Look for `message.chat.id`.
+
+### Configure Gateway
+
+Add to `~/.lemon/config.toml`:
+
+```toml
+[gateway]
+enable_telegram = true
+auto_resume = true
+default_engine = "lemon"
+
+[gateway.telegram]
+bot_token = "123456:token"
+allowed_chat_ids = [123456789]
+deny_unbound_chats = true
+```
+
+### Run the Gateway
+
+```bash
+./bin/lemon-gateway
+```
+
+Now message your bot in Telegram!
+
+## Using Lemon
+
+### TUI Commands
+
+Type `/help` in the TUI to see all commands:
+
+| Command | Description |
+|---------|-------------|
+| `/new-session` | Create a new session |
+| `/switch` | Switch between sessions |
+| `/reset` | Clear conversation history |
+| `/save` | Save session to file |
+| `/resume [name]` | Resume a saved session |
+| `/abort` | Stop current operation |
+| `/quit` | Exit the application |
+
+### Telegram Commands
+
+| Command | Description |
+|---------|-------------|
+| `/new` | Start new session |
+| `/resume` | List/continue sessions |
+| `/cancel` | Cancel running run |
+| `/lemon`, `/claude`, `/codex` | Engine override |
+
+### Keyboard Shortcuts
+
+- **Enter** — Send message
+- **Shift+Enter** — Insert newline
+- **Ctrl+N** — New session
+- **Ctrl+Tab** — Switch sessions
+- **Ctrl+C** (twice) — Exit
+- **Esc** (twice) — Abort operation
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configuration Guide" icon="gear" href="/docs/config/overview">
+    Learn about all configuration options
+  </Card>
+  <Card title="Architecture" icon="diagram-project" href="/docs/architecture-overview">
+    Understand how Lemon works
+  </Card>
+</CardGroup>

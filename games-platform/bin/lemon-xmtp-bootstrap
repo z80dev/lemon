@@ -1,0 +1,34 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+LEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+BRIDGE_DIR="$LEMON_ROOT/apps/lemon_gateway/priv"
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "node is required for XMTP bridge" >&2
+  exit 1
+fi
+
+if ! command -v npm >/dev/null 2>&1; then
+  echo "npm is required for XMTP bridge dependencies" >&2
+  exit 1
+fi
+
+cd "$BRIDGE_DIR"
+
+if [ -f package-lock.json ]; then
+  npm ci --omit=dev
+else
+  npm install --omit=dev
+fi
+
+echo "XMTP bridge dependencies installed in $BRIDGE_DIR/node_modules"
+node -e 'import("@xmtp/node-sdk").then(() => console.log("XMTP node-sdk import OK"))'

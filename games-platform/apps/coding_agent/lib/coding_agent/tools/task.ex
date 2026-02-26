@@ -1,0 +1,1886 @@
+defmodule CodingAgent.Tools.Task do
+  @moduledoc """
+  Task tool for the coding agent.
+
+  Spawns a new CodingAgent session to run a focused subtask and returns the
+  final assistant response.
+  """
+
+  require Logger
+
+  alias AgentCore.Types.{AgentTool, AgentToolResult}
+
+  alias AgentCore.CliRunners.{
+    ClaudeSubagent,
+    CodexSubagent,
+    KimiSubagent,
+    OpencodeSubagent,
+    PiSubagent
+  }
+
+  alias AgentCore.AbortSignal
+  alias Ai.Types.TextContent
+  alias CodingAgent.BudgetEnforcer
+  alias CodingAgent.Coordinator
+  alias CodingAgent.LaneQueue
+  alias CodingAgent.Parallel
+  alias CodingAgent.RunGraph
+  alias CodingAgent.Session
+  alias CodingAgent.Subagents
+  alias CodingAgent.TaskStore
+  alias CodingAgent.ToolPolicy
+  alias LemonCore.{Introspection, RunRequest, SessionKey}
+
+  @default_run_orchestrator_parts ["LemonRouter", "RunOrchestrator"]
+  @valid_queue_modes ["collect", "followup", "steer", "steer_backlog", "interrupt"]
+
+  @doc """
+  Returns the Task tool definition.
+
+  ## Options
+
+  - `:model` - Model to use for the subtask session
+  - `:thinking_level` - Thinking level for the subtask session
+  - `:parent_session` - Parent session ID for lineage tracking
+  - `:coordinator` - Optional Coordinator pid/name to use for subagent execution
+  """
+  @spec tool(cwd :: String.t(), opts :: keyword()) :: AgentTool.t()
+  def tool(cwd, opts \\ []) do
+    description = build_description(cwd)
+    role_enum = build_role_enum(cwd)
+
+    %AgentTool{
+      name: "task",
+      description: description,
+      label: "Run Task",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "action" => %{
+            "type" => "string",
+            "description" => "Action to perform: run (default), poll, or join",
+            "enum" => ["run", "poll", "join"]
+          },
+          "description" => %{
+            "type" => "string",
+            "description" => "Short (3-5 words) description of the task"
+          },
+          "prompt" => %{
+            "type" => "string",
+            "description" => "The task for the agent to perform"
+          },
+          "task_id" => %{
+            "type" => "string",
+            "description" => "Task id to poll (when action=poll)"
+          },
+          "task_ids" => %{
+            "type" => "array",
+            "items" => %{"type" => "string"},
+            "description" => "Task ids to join (when action=join)"
+          },
+          "mode" => %{
+            "type" => "string",
+            "enum" => ["wait_all", "wait_any"],
+            "description" => "Join mode for action=join (default: wait_all)"
+          },
+          "engine" => %{
+            "type" => "string",
+            "description" =>
+              "Execution engine: internal (default), codex, claude, kimi, opencode, or pi"
+          },
+          "model" => %{
+            "type" => "string",
+            "description" => "Optional model override (especially for internal engine)"
+          },
+          "thinking_level" => %{
+            "type" => "string",
+            "description" => "Optional thinking level override for internal engine"
+          },
+          "role" => %{
+            "type" => "string",
+            "description" =>
+              "Optional role to specialize the task (e.g., research, implement, review, test)"
+          },
+          "async" => %{
+            "type" => "boolean",
+            "description" =>
+              "When true (recommended), run in background and return task_id immediately. Use async=true by default to keep user conversations responsive. Only use async=false for simple tasks that complete instantly."
+          },
+          "auto_followup" => %{
+            "type" => "boolean",
+            "description" =>
+              "When true (default), async task completion is automatically posted back into this session."
+          },
+          "cwd" => %{
+            "type" => "string",
+            "description" => "Optional working directory override for this task run"
+          },
+          "tool_policy" => %{
+            "type" => "object",
+            "description" => "Optional tool policy override for the task session"
+          },
+          "meta" => %{
+            "type" => "object",
+            "description" =>
+              "Optional metadata map attached to task lifecycle and async followup routing"
+          },
+          "session_key" => %{
+            "type" => "string",
+            "description" =>
+              "Optional parent session key override used for async followup routing and lifecycle metadata"
+          },
+          "agent_id" => %{
+            "type" => "string",
+            "description" =>
+              "Optional parent agent id override used for async followup routing and lifecycle metadata"
+          },
+          "queue_mode" => %{
+            "type" => "string",
+            "enum" => @valid_queue_modes,
+            "description" =>
+              "Queue mode for async followup routing via router fallback (default: followup)"
+          }
+        },
+        "required" => []
+      },
+      execute: &execute(&1, &2, &3, &4, cwd, opts)
+    }
+    |> maybe_add_enum(role_enum)
+  end
+
+  @doc """
+  Execute the task tool.
+
+  Spawns a new session, forwards the prompt, streams partial assistant text via
+  `on_update`, and returns the final assistant output.
+  """
+  @spec execute(
+          tool_call_id :: String.t(),
+          params :: map(),
+          signal :: reference() | nil,
+          on_update :: (AgentToolResult.t() -> :ok) | nil,
+          cwd :: String.t(),
+          opts :: keyword()
+        ) :: AgentToolResult.t() | {:error, term()}
+  def execute(_tool_call_id, params, signal, on_update, cwd, opts) do
+    if AbortSignal.aborted?(signal) do
+      {:error, "Operation aborted"}
+    else
+      case normalize_action(Map.get(params, "action")) do
+        "poll" ->
+          do_poll(params)
+
+        "join" ->
+          do_join(params)
+
+        _ ->
+          do_execute(params, signal, on_update, cwd, opts)
+      end
+    end
+  end
+
+  defp do_execute(params, signal, on_update, cwd, opts) do
+    with {:ok, validated} <- validate_run_params(params, cwd),
+         :ok <- check_budget_and_policy(validated, opts) do
+      description = validated.description
+      prompt = validated.prompt
+      role_id = validated.role_id
+      engine = validated.engine
+      async? = validated.async
+      auto_followup = validated.auto_followup
+      effective_cwd = validated.cwd || cwd
+      parent_session_key = validated.session_key || Keyword.get(opts, :session_key)
+      parent_agent_id = validated.agent_id || Keyword.get(opts, :agent_id)
+      coordinator = Keyword.get(opts, :coordinator)
+      parent_run_id = Keyword.get(opts, :parent_run_id)
+
+      # Create run and check budget
+      run_id =
+        if async? do
+          RunGraph.new_run(%{type: :task, description: description, parent: parent_run_id})
+        else
+          nil
+        end
+
+      task_id =
+        if async? do
+          TaskStore.new_task(%{
+            description: description,
+            prompt: prompt,
+            run_id: run_id,
+            parent_run_id: parent_run_id,
+            session_key: parent_session_key,
+            agent_id: parent_agent_id,
+            engine: validated.engine || "internal",
+            role: role_id,
+            queue_mode: validated.queue_mode,
+            meta: validated.meta
+          })
+        else
+          nil
+        end
+
+      lifecycle_context = %{
+        task_id: task_id,
+        run_id: run_id,
+        parent_run_id: parent_run_id,
+        session_key: parent_session_key,
+        agent_id: parent_agent_id,
+        description: description,
+        engine: validated.engine || "internal",
+        role: role_id,
+        queue_mode: validated.queue_mode,
+        meta: validated.meta
+      }
+
+      # Set up budget tracking for this run
+      if run_id do
+        BudgetEnforcer.on_run_start(run_id, opts)
+      end
+
+      # Track parent-child relationship
+      if run_id && parent_run_id do
+        RunGraph.add_child(parent_run_id, run_id)
+
+        # Track budget for child
+        BudgetEnforcer.on_subagent_spawn(parent_run_id, run_id, opts)
+      end
+
+      run_fun = fn ->
+        on_update_safe = wrap_on_update(task_id, on_update)
+        run_override = Keyword.get(opts, :run_override)
+
+        cond do
+          is_function(run_override, 2) ->
+            run_override.(on_update_safe, signal)
+
+          engine in ["codex", "claude", "kimi", "opencode", "pi"] ->
+            execute_via_cli_engine(
+              engine,
+              prompt,
+              effective_cwd,
+              description,
+              role_id,
+              validated.model,
+              on_update_safe,
+              signal
+            )
+
+          coordinator && coordinator_alive?(coordinator) && role_id ->
+            execute_via_coordinator(coordinator, prompt, description, role_id)
+
+          true ->
+            start_opts = build_session_opts(effective_cwd, opts, validated)
+
+            case maybe_apply_role_prompt(prompt, role_id, effective_cwd) do
+              {:error, _} = err ->
+                err
+
+              prompt ->
+                start_session_with_prompt(
+                  start_opts,
+                  prompt,
+                  description,
+                  signal,
+                  on_update_safe,
+                  role_id
+                )
+            end
+        end
+      end
+
+      if async? do
+        Logger.info(
+          "Task tool queue async description=#{inspect(description)} engine=#{inspect(engine || "internal")} " <>
+            "task_id=#{inspect(task_id)} run_id=#{inspect(run_id)} parent_run_id=#{inspect(parent_run_id)}"
+        )
+
+        followup_context = %{
+          auto_followup: auto_followup,
+          description: description,
+          parent_session_key: parent_session_key,
+          parent_agent_id: parent_agent_id,
+          queue_mode: validated.queue_mode,
+          meta: validated.meta,
+          session_module: Keyword.get(opts, :session_module, CodingAgent.Session),
+          session_pid: Keyword.get(opts, :session_pid),
+          run_orchestrator: run_orchestrator(opts)
+        }
+
+        run_async(task_id, run_id, run_fun, followup_context, lifecycle_context)
+        build_async_result(task_id, description, run_id)
+      else
+        run_sync(run_fun)
+      end
+    end
+  end
+
+  defp do_poll(params) do
+    task_id = Map.get(params, "task_id") |> normalize_optional_string()
+
+    if is_binary(task_id) do
+      case TaskStore.get(task_id) do
+        {:ok, record, events} ->
+          build_poll_result(task_id, record, events)
+
+        {:error, :not_found} ->
+          {:error, "Unknown task_id: #{task_id}"}
+      end
+    else
+      {:error, "task_id is required for action=poll"}
+    end
+  end
+
+  defp do_join(params) do
+    with {:ok, task_ids} <- validate_join_task_ids(params),
+         {:ok, mode} <- validate_join_mode(params) do
+      with {:ok, run_ids} <- resolve_run_ids(task_ids),
+           {:ok, join_result} <- RunGraph.await(run_ids, mode, :infinity) do
+        build_join_result(task_ids, join_result)
+      else
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp validate_join_task_ids(params) do
+    task_ids = Map.get(params, "task_ids") || Map.get(params, "task_id")
+
+    task_ids =
+      cond do
+        is_binary(task_ids) -> [task_ids]
+        is_list(task_ids) -> task_ids
+        true -> []
+      end
+
+    cond do
+      task_ids == [] ->
+        {:error, "task_ids is required for action=join"}
+
+      not Enum.all?(task_ids, &is_binary/1) ->
+        {:error, "task_ids must be a list of strings"}
+
+      true ->
+        {:ok, task_ids}
+    end
+  end
+
+  defp validate_join_mode(params) do
+    mode = Map.get(params, "mode") |> normalize_join_mode()
+    {:ok, mode}
+  end
+
+  defp validate_run_params(params, cwd) do
+    description = Map.get(params, "description")
+    prompt = Map.get(params, "prompt")
+    role_id = normalize_optional_string(Map.get(params, "role"))
+    engine = Map.get(params, "engine")
+    model = normalize_optional_string(Map.get(params, "model"))
+    thinking_level = normalize_optional_string(Map.get(params, "thinking_level"))
+    async? = Map.get(params, "async", false)
+    auto_followup = Map.get(params, "auto_followup", true)
+    delegated_cwd = normalize_optional_string(Map.get(params, "cwd"))
+    tool_policy = Map.get(params, "tool_policy")
+    meta = Map.get(params, "meta")
+    session_key = normalize_optional_string(Map.get(params, "session_key"))
+    agent_id = normalize_optional_string(Map.get(params, "agent_id"))
+    queue_mode = Map.get(params, "queue_mode", "followup")
+    role_cwd = delegated_cwd || cwd
+
+    cond do
+      not Map.has_key?(params, "description") ->
+        {:error, "Description is required"}
+
+      not is_binary(description) or String.trim(description) == "" ->
+        {:error, "Description must be a non-empty string"}
+
+      not Map.has_key?(params, "prompt") ->
+        {:error, "Prompt is required"}
+
+      is_nil(prompt) ->
+        {:error, "Prompt must be a non-empty string"}
+
+      not is_binary(prompt) or String.trim(prompt) == "" ->
+        {:error, "Prompt must be a non-empty string"}
+
+      not is_nil(role_id) and not is_binary(role_id) ->
+        {:error, "Role must be a string"}
+
+      not is_nil(engine) and not is_binary(engine) ->
+        {:error, "Engine must be a string"}
+
+      not is_nil(engine) and
+          engine not in ["internal", "codex", "claude", "kimi", "opencode", "pi"] ->
+        {:error, "Engine must be one of: internal, codex, claude, kimi, opencode, pi"}
+
+      not is_nil(model) and not is_binary(model) ->
+        {:error, "Model must be a string"}
+
+      not is_nil(thinking_level) and not is_binary(thinking_level) ->
+        {:error, "thinking_level must be a string"}
+
+      not is_nil(delegated_cwd) and not is_binary(delegated_cwd) ->
+        {:error, "cwd must be a string"}
+
+      not is_nil(tool_policy) and not is_map(tool_policy) ->
+        {:error, "tool_policy must be an object"}
+
+      not is_nil(meta) and not is_map(meta) ->
+        {:error, "meta must be an object"}
+
+      not is_nil(session_key) and not SessionKey.valid?(session_key) ->
+        {:error, "session_key must be a valid Lemon session key"}
+
+      not is_nil(agent_id) and not is_binary(agent_id) ->
+        {:error, "agent_id must be a string"}
+
+      not is_binary(queue_mode) ->
+        {:error, "queue_mode must be one of: #{Enum.join(@valid_queue_modes, ", ")}"}
+
+      not valid_queue_mode?(queue_mode) ->
+        {:error, "queue_mode must be one of: #{Enum.join(@valid_queue_modes, ", ")}"}
+
+      not is_nil(role_id) and Subagents.get(role_cwd, role_id) == nil ->
+        {:error, "Unknown role: #{role_id}"}
+
+      not is_boolean(async?) ->
+        {:error, "Async must be a boolean"}
+
+      not is_boolean(auto_followup) ->
+        {:error, "auto_followup must be a boolean"}
+
+      true ->
+        normalized_engine = if engine == "internal", do: nil, else: engine
+
+        {:ok,
+         %{
+           description: description,
+           prompt: prompt,
+           role_id: role_id,
+           engine: normalized_engine,
+           model: model,
+           thinking_level: thinking_level,
+           async: async?,
+           auto_followup: auto_followup,
+           cwd: delegated_cwd,
+           tool_policy: tool_policy,
+           meta: meta || %{},
+           session_key: session_key,
+           agent_id: agent_id,
+           queue_mode: normalize_queue_mode(queue_mode)
+         }}
+    end
+  end
+
+  defp normalize_optional_string(nil), do: nil
+
+  defp normalize_optional_string(value) when is_binary(value) do
+    trimmed = String.trim(value)
+    if trimmed == "", do: nil, else: trimmed
+  end
+
+  defp normalize_optional_string(value), do: value
+
+  defp normalize_action(nil), do: "run"
+
+  defp normalize_action(action) when is_binary(action) do
+    action |> String.trim() |> String.downcase()
+  end
+
+  defp normalize_action(_), do: "run"
+
+  defp valid_queue_mode?(mode) when is_binary(mode), do: mode in @valid_queue_modes
+  defp valid_queue_mode?(_), do: false
+
+  defp check_budget_and_policy(validated, opts) do
+    parent_run_id = Keyword.get(opts, :parent_run_id)
+    engine = validated.engine || "internal"
+    effective_opts = maybe_put_kw(opts, :tool_policy, validated.tool_policy)
+
+    # Check budget if parent exists
+    budget_check =
+      if parent_run_id do
+        BudgetEnforcer.check_subagent_spawn(parent_run_id, effective_opts)
+      else
+        :ok
+      end
+
+    case budget_check do
+      {:error, :budget_exceeded, details} ->
+        {_action, message} =
+          BudgetEnforcer.handle_budget_exceeded(parent_run_id || "unknown", details)
+
+        {:error, message}
+
+      _ ->
+        # Check tool policy for engine
+        policy = ToolPolicy.subagent_policy(String.to_atom(engine), effective_opts)
+
+        if ToolPolicy.no_reply?(policy) do
+          # Mark as NO_REPLY if policy requires
+          Logger.debug("Subagent #{engine} running in NO_REPLY mode")
+        end
+
+        :ok
+    end
+  end
+
+  defp coordinator_alive?(coordinator) when is_pid(coordinator), do: Process.alive?(coordinator)
+
+  defp coordinator_alive?(coordinator) when is_atom(coordinator) do
+    case Process.whereis(coordinator) do
+      nil -> false
+      pid -> Process.alive?(pid)
+    end
+  end
+
+  defp coordinator_alive?({:via, _, _} = name) do
+    case GenServer.whereis(name) do
+      nil -> false
+      pid -> Process.alive?(pid)
+    end
+  end
+
+  defp coordinator_alive?(_), do: false
+
+  defp run_orchestrator(opts) do
+    Keyword.get(opts, :run_orchestrator, default_run_orchestrator())
+  end
+
+  defp execute_via_coordinator(coordinator, prompt, description, role_id) do
+    # Generate a unique ID for tracking this task run
+    task_run_id = generate_task_run_id()
+
+    case Coordinator.run_subagent(coordinator,
+           prompt: prompt,
+           subagent: role_id,
+           description: description
+         ) do
+      {:ok, result_text} ->
+        %AgentToolResult{
+          content: [%TextContent{text: result_text}],
+          details: %{
+            task_run_id: task_run_id,
+            description: description,
+            status: "completed",
+            role: role_id,
+            via_coordinator: true
+          }
+        }
+
+      {:error, {status, error}} ->
+        {:error, "Task #{status}: #{inspect(error)}"}
+
+      {:error, reason} ->
+        {:error, "Coordinator error: #{inspect(reason)}"}
+    end
+  end
+
+  defp run_async(task_id, run_id, run_fun, followup_context, lifecycle_context) do
+    Task.Supervisor.start_child(CodingAgent.TaskSupervisor, fn ->
+      Logger.debug("Task tool async start task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}")
+      result = safe_run(task_id, run_id, run_fun, lifecycle_context)
+      finalize_async(task_id, run_id, result, followup_context, lifecycle_context)
+    end)
+
+    :ok
+  end
+
+  defp safe_run(task_id, run_id, run_fun, lifecycle_context) do
+    wrapped = fn ->
+      maybe_mark_running(task_id, run_id, lifecycle_context)
+      run_fun.()
+    end
+
+    try do
+      maybe_acquire_task_semaphore()
+
+      result =
+        if lane_queue_available?() do
+          LaneQueue.run(CodingAgent.LaneQueue, :subagent, wrapped, %{
+            task_id: task_id,
+            run_id: run_id
+          })
+        else
+          {:ok, wrapped.()}
+        end
+
+      result
+    rescue
+      e -> {:error, {e, __STACKTRACE__}}
+    catch
+      kind, reason -> {:error, {kind, reason}}
+    after
+      maybe_release_task_semaphore()
+    end
+  end
+
+  defp finalize_async(task_id, run_id, result, followup_context, lifecycle_context) do
+    Logger.info(
+      "Task tool async finalize task_id=#{inspect(task_id)} run_id=#{inspect(run_id)} " <>
+        "result_type=#{inspect(async_result_type(result))}"
+    )
+
+    case result do
+      {:ok, %AgentToolResult{} = tool_result} ->
+        TaskStore.finish(task_id, tool_result)
+        maybe_finish_run(run_id, tool_result)
+        emit_task_terminal_event(task_id, run_id, {:ok, tool_result}, lifecycle_context)
+        maybe_record_budget_completion(run_id, tool_result)
+        maybe_send_async_followup(followup_context, task_id, run_id, {:ok, tool_result})
+
+      {:ok, {:error, reason}} ->
+        TaskStore.fail(task_id, reason)
+        maybe_fail_run(run_id, reason)
+        emit_task_terminal_event(task_id, run_id, {:error, reason}, lifecycle_context)
+        maybe_record_budget_completion(run_id, %{error: reason})
+        maybe_send_async_followup(followup_context, task_id, run_id, {:error, reason})
+
+      {:error, reason} ->
+        TaskStore.fail(task_id, reason)
+        maybe_fail_run(run_id, reason)
+        emit_task_terminal_event(task_id, run_id, {:error, reason}, lifecycle_context)
+        maybe_record_budget_completion(run_id, %{error: reason})
+        maybe_send_async_followup(followup_context, task_id, run_id, {:error, reason})
+
+      {:ok, other} ->
+        TaskStore.finish(task_id, other)
+        maybe_finish_run(run_id, other)
+        emit_task_terminal_event(task_id, run_id, {:ok, other}, lifecycle_context)
+        maybe_record_budget_completion(run_id, other)
+        maybe_send_async_followup(followup_context, task_id, run_id, {:ok, other})
+
+      other ->
+        TaskStore.fail(task_id, other)
+        maybe_fail_run(run_id, other)
+        emit_task_terminal_event(task_id, run_id, {:error, other}, lifecycle_context)
+        maybe_record_budget_completion(run_id, %{error: other})
+        maybe_send_async_followup(followup_context, task_id, run_id, {:error, other})
+    end
+  end
+
+  defp maybe_send_async_followup(%{auto_followup: false}, _task_id, _run_id, _outcome), do: :ok
+
+  defp maybe_send_async_followup(followup_context, task_id, run_id, outcome)
+       when is_map(followup_context) do
+    text = task_auto_followup_text(followup_context, task_id, run_id, outcome)
+
+    if send_async_followup_to_live_session(followup_context, text) do
+      :ok
+    else
+      submit_async_followup_via_router(followup_context, task_id, run_id, text)
+    end
+  rescue
+    error ->
+      Logger.warning(
+        "Task tool failed to auto-followup task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}: #{inspect(error)}"
+      )
+
+      :ok
+  end
+
+  defp maybe_send_async_followup(_followup_context, _task_id, _run_id, _outcome), do: :ok
+
+  defp send_async_followup_to_live_session(followup_context, text) do
+    session_module = Map.get(followup_context, :session_module, CodingAgent.Session)
+    session_pid = Map.get(followup_context, :session_pid)
+
+    if is_pid(session_pid) and Process.alive?(session_pid) and
+         function_exported?(session_module, :follow_up, 2) do
+      case session_module.follow_up(session_pid, text) do
+        :ok -> true
+        {:error, _reason} -> false
+        _other -> true
+      end
+    else
+      false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp submit_async_followup_via_router(followup_context, task_id, run_id, text) do
+    parent_session_key = Map.get(followup_context, :parent_session_key)
+    queue_mode = Map.get(followup_context, :queue_mode, :followup)
+    extra_meta = Map.get(followup_context, :meta, %{})
+
+    if is_binary(parent_session_key) and parent_session_key != "" do
+      parent_agent_id =
+        Map.get(followup_context, :parent_agent_id) ||
+          SessionKey.agent_id(parent_session_key) ||
+          "default"
+
+      run_orchestrator = Map.get(followup_context, :run_orchestrator, default_run_orchestrator())
+
+      followup =
+        RunRequest.new(%{
+          origin: :node,
+          session_key: parent_session_key,
+          agent_id: parent_agent_id,
+          prompt: text,
+          queue_mode: queue_mode,
+          meta:
+            Map.merge(extra_meta, %{
+              task_auto_followup: true,
+              task_id: task_id,
+              run_id: run_id
+            })
+        })
+
+      case run_orchestrator.submit(followup) do
+        {:ok, _run_id} ->
+          :ok
+
+        {:error, {:unknown_agent_id, _}} when parent_agent_id != "default" ->
+          fallback = %{followup | agent_id: "default"}
+
+          case run_orchestrator.submit(fallback) do
+            {:ok, _fallback_run_id} ->
+              :ok
+
+            {:error, reason} ->
+              Logger.warning(
+                "Task tool followup submit failed for task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}: #{inspect(reason)}"
+              )
+          end
+
+        {:error, reason} ->
+          Logger.warning(
+            "Task tool followup submit failed for task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}: #{inspect(reason)}"
+          )
+      end
+    else
+      Logger.debug(
+        "Task tool skipping auto-followup task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}: parent session key unavailable"
+      )
+    end
+  end
+
+  defp task_auto_followup_text(followup_context, task_id, run_id, outcome) do
+    description =
+      followup_context
+      |> Map.get(:description)
+      |> normalize_optional_string()
+
+    summary =
+      cond do
+        is_binary(description) and description != "" -> description
+        true -> "background task"
+      end
+
+    base =
+      "[task #{task_id}] #{summary}" <>
+        if(is_binary(run_id) and run_id != "", do: " (run #{run_id})", else: "")
+
+    case normalize_followup_outcome(outcome) do
+      %{ok: true, answer: answer} when is_binary(answer) ->
+        trimmed = String.trim(answer)
+
+        if trimmed == "" do
+          "#{base} completed."
+        else
+          "#{base} completed.\n\n#{answer}"
+        end
+
+      %{ok: false, error: error, answer: answer} ->
+        trimmed = if is_binary(answer), do: String.trim(answer), else: ""
+
+        if trimmed == "" do
+          "#{base} failed: #{format_cli_error(error)}"
+        else
+          "#{base} failed: #{format_cli_error(error)}\n\nPartial output:\n#{answer}"
+        end
+    end
+  end
+
+  defp normalize_followup_outcome({:ok, %AgentToolResult{} = result}) do
+    answer = AgentCore.get_text(result)
+    details = result.details || %{}
+    status = details[:status] || details["status"]
+    error = details[:error] || details["error"]
+
+    if status == "error" or not is_nil(error) do
+      %{ok: false, error: error || "task failed", answer: answer || ""}
+    else
+      %{ok: true, answer: answer || ""}
+    end
+  end
+
+  defp normalize_followup_outcome({:ok, {:error, reason}}) do
+    %{ok: false, error: reason, answer: ""}
+  end
+
+  defp normalize_followup_outcome({:error, reason}) do
+    %{ok: false, error: reason, answer: ""}
+  end
+
+  defp normalize_followup_outcome({:ok, other}) do
+    %{ok: true, answer: normalize_followup_answer(other)}
+  end
+
+  defp normalize_followup_outcome(other) do
+    %{ok: false, error: other, answer: ""}
+  end
+
+  defp default_run_orchestrator do
+    Module.concat(@default_run_orchestrator_parts)
+  end
+
+  defp normalize_followup_answer(answer) when is_binary(answer), do: answer
+
+  defp normalize_followup_answer(%AgentToolResult{} = result) do
+    AgentCore.get_text(result) || ""
+  end
+
+  defp normalize_followup_answer(%{answer: answer}) when is_binary(answer), do: answer
+  defp normalize_followup_answer(%{"answer" => answer}) when is_binary(answer), do: answer
+  defp normalize_followup_answer(other), do: inspect(other)
+
+  defp async_result_type({:ok, %AgentToolResult{details: %{status: "completed"}}}), do: :completed
+  defp async_result_type({:ok, %AgentToolResult{details: %{status: "error"}}}), do: :error
+  defp async_result_type({:ok, %AgentToolResult{}}), do: :ok_tool_result
+  defp async_result_type({:ok, {:error, _}}), do: :error_tuple
+  defp async_result_type({:error, _}), do: :error
+  defp async_result_type(_), do: :other
+
+  defp maybe_record_budget_completion(nil, _result), do: :ok
+
+  defp maybe_record_budget_completion(run_id, result) do
+    BudgetEnforcer.on_run_complete(run_id, result)
+  rescue
+    _ -> :ok
+  end
+
+  defp run_sync(run_fun) do
+    result =
+      if lane_queue_available?() do
+        LaneQueue.run(CodingAgent.LaneQueue, :subagent, run_fun, %{})
+      else
+        {:ok, run_fun.()}
+      end
+
+    case result do
+      {:ok, %AgentToolResult{} = tool_result} -> tool_result
+      {:ok, {:error, reason}} -> {:error, reason}
+      {:error, reason} -> {:error, reason}
+      {:ok, other} -> other
+    end
+  end
+
+  defp wrap_on_update(nil, on_update), do: on_update
+
+  defp wrap_on_update(task_id, nil) do
+    fn result ->
+      TaskStore.append_event(task_id, result)
+      :ok
+    end
+  end
+
+  defp wrap_on_update(task_id, on_update) do
+    fn result ->
+      TaskStore.append_event(task_id, result)
+      on_update.(result)
+    end
+  end
+
+  defp lane_queue_available? do
+    case Process.whereis(CodingAgent.LaneQueue) do
+      nil -> false
+      _pid -> true
+    end
+  end
+
+  defp build_async_result(task_id, description, run_id) do
+    %AgentToolResult{
+      content: [%TextContent{text: "Task queued: #{description} (#{task_id})"}],
+      details: %{
+        task_id: task_id,
+        status: "queued",
+        description: description,
+        run_id: run_id
+      }
+    }
+  end
+
+  defp build_poll_result(task_id, record, events) do
+    status = Map.get(record, :status, :unknown)
+
+    {content, details} =
+      case status do
+        :completed ->
+          case Map.get(record, :result) do
+            %AgentToolResult{} = result ->
+              {result.content,
+               %{
+                 task_id: task_id,
+                 status: "completed",
+                 result: result,
+                 events: Enum.take(events, -5)
+               }}
+
+            other ->
+              {[%TextContent{text: "Task completed."}],
+               %{
+                 task_id: task_id,
+                 status: "completed",
+                 result: other,
+                 events: Enum.take(events, -5)
+               }}
+          end
+
+        :error ->
+          error = Map.get(record, :error)
+
+          {[%TextContent{text: "Task error: #{inspect(error)}"}],
+           %{
+             task_id: task_id,
+             status: "error",
+             error: error,
+             events: Enum.take(events, -5)
+           }}
+
+        _ ->
+          text = latest_event_text(events) || "Task status: #{status}"
+
+          {[%TextContent{text: text}],
+           %{
+             task_id: task_id,
+             status: to_string(status),
+             events: Enum.take(events, -5)
+           }}
+      end
+
+    details =
+      case Map.get(record, :run_id) do
+        nil -> details
+        run_id -> Map.put(details, :run_id, run_id)
+      end
+
+    %AgentToolResult{content: content, details: details}
+  end
+
+  defp latest_event_text(events) do
+    events
+    |> Enum.reverse()
+    |> Enum.find_value(fn
+      %AgentToolResult{content: content} -> extract_text(content)
+      %{content: content} -> extract_text(content)
+      _ -> nil
+    end)
+  end
+
+  defp extract_text(content) when is_list(content) do
+    content
+    |> Enum.filter(&match?(%TextContent{}, &1))
+    |> Enum.map(& &1.text)
+    |> Enum.join("")
+    |> case do
+      "" -> nil
+      text -> text
+    end
+  end
+
+  defp extract_text(_), do: nil
+
+  defp normalize_join_mode(nil), do: :wait_all
+  defp normalize_join_mode("wait_all"), do: :wait_all
+  defp normalize_join_mode("wait_any"), do: :wait_any
+  defp normalize_join_mode(:wait_all), do: :wait_all
+  defp normalize_join_mode(:wait_any), do: :wait_any
+  defp normalize_join_mode(_), do: :wait_all
+
+  defp normalize_queue_mode("collect"), do: :collect
+  defp normalize_queue_mode("followup"), do: :followup
+  defp normalize_queue_mode("steer"), do: :steer
+  defp normalize_queue_mode("steer_backlog"), do: :steer_backlog
+  defp normalize_queue_mode("interrupt"), do: :interrupt
+  defp normalize_queue_mode(:collect), do: :collect
+  defp normalize_queue_mode(:followup), do: :followup
+  defp normalize_queue_mode(:steer), do: :steer
+  defp normalize_queue_mode(:steer_backlog), do: :steer_backlog
+  defp normalize_queue_mode(:interrupt), do: :interrupt
+  defp normalize_queue_mode(_), do: :followup
+
+  defp resolve_run_ids(task_ids) do
+    run_ids =
+      Enum.reduce_while(task_ids, [], fn task_id, acc ->
+        case TaskStore.get(task_id) do
+          {:ok, record, _events} ->
+            run_id = Map.get(record, :run_id)
+
+            if is_binary(run_id) do
+              {:cont, [run_id | acc]}
+            else
+              {:halt, {:error, "Task #{task_id} is missing a run_id"}}
+            end
+
+          {:error, :not_found} ->
+            {:halt, {:error, "Unknown task_id: #{task_id}"}}
+        end
+      end)
+
+    case run_ids do
+      {:error, _} = err -> err
+      ids -> {:ok, Enum.reverse(ids)}
+    end
+  end
+
+  defp build_join_result(task_ids, %{mode: :wait_all, runs: runs}) do
+    details = %{
+      status: "completed",
+      mode: "wait_all",
+      task_ids: task_ids,
+      runs: runs
+    }
+
+    %AgentToolResult{
+      content: [%TextContent{text: "Joined #{length(task_ids)} task(s)."}],
+      details: details
+    }
+  end
+
+  defp build_join_result(task_ids, %{mode: :wait_any, run: run}) do
+    details = %{
+      status: "completed",
+      mode: "wait_any",
+      task_ids: task_ids,
+      run: run
+    }
+
+    %AgentToolResult{
+      content: [%TextContent{text: "One task completed."}],
+      details: details
+    }
+  end
+
+  defp maybe_mark_running(nil, _run_id, _lifecycle_context), do: :ok
+
+  defp maybe_mark_running(task_id, run_id, lifecycle_context) do
+    TaskStore.mark_running(task_id)
+
+    TaskStore.append_event(task_id, %{
+      type: :task_started,
+      ts_ms: System.system_time(:millisecond)
+    })
+
+    if run_id do
+      RunGraph.mark_running(run_id)
+    end
+
+    emit_task_started_event(task_id, run_id, lifecycle_context)
+    :ok
+  end
+
+  defp maybe_finish_run(nil, _result), do: :ok
+
+  defp maybe_finish_run(run_id, result) do
+    RunGraph.finish(run_id, result)
+  end
+
+  defp maybe_fail_run(nil, _reason), do: :ok
+
+  defp maybe_fail_run(run_id, reason) do
+    RunGraph.fail(run_id, reason)
+  end
+
+  defp emit_task_started_event(task_id, run_id, lifecycle_context) do
+    payload =
+      task_event_payload_base(task_id, run_id, lifecycle_context)
+      |> Map.put(:started_at_ms, System.system_time(:millisecond))
+      |> Map.put(:status, :running)
+
+    emit_task_lifecycle(:task_started, payload, lifecycle_context)
+  end
+
+  defp emit_task_terminal_event(nil, _run_id, _outcome, _lifecycle_context), do: :ok
+
+  defp emit_task_terminal_event(task_id, run_id, outcome, lifecycle_context) do
+    {event_type, extra_payload} = classify_task_terminal_event(outcome)
+
+    payload =
+      task_event_payload_base(task_id, run_id, lifecycle_context)
+      |> Map.merge(extra_payload)
+      |> Map.put(:completed_at_ms, System.system_time(:millisecond))
+      |> Map.put(:duration_ms, task_duration_ms(task_id))
+
+    TaskStore.append_event(task_id, %{
+      type: event_type,
+      ts_ms: System.system_time(:millisecond),
+      payload: payload
+    })
+
+    emit_task_lifecycle(event_type, payload, lifecycle_context)
+  end
+
+  defp classify_task_terminal_event({:ok, result}) do
+    {:task_completed, %{ok: true, result_preview: build_result_preview(result)}}
+  end
+
+  defp classify_task_terminal_event({:error, reason}) do
+    normalized = normalize_task_reason(reason)
+
+    cond do
+      timeout_reason?(normalized) ->
+        {:task_timeout, %{error: normalized, timeout_ms: nil}}
+
+      aborted_reason?(normalized) ->
+        {:task_aborted, %{reason: normalized}}
+
+      true ->
+        {:task_error, %{error: normalized}}
+    end
+  end
+
+  defp classify_task_terminal_event(_other) do
+    {:task_error, %{error: "unknown"}}
+  end
+
+  defp build_result_preview(%AgentToolResult{content: content}), do: extract_text(content)
+
+  defp build_result_preview(result) when is_binary(result), do: result
+  defp build_result_preview(result), do: inspect(result, limit: 100)
+
+  defp task_event_payload_base(task_id, run_id, lifecycle_context) do
+    %{
+      task_id: task_id,
+      run_id: run_id || lifecycle_context[:run_id],
+      parent_run_id: lifecycle_context[:parent_run_id],
+      session_key: lifecycle_context[:session_key],
+      agent_id: lifecycle_context[:agent_id],
+      description: lifecycle_context[:description],
+      engine: lifecycle_context[:engine],
+      role: lifecycle_context[:role],
+      queue_mode: lifecycle_context[:queue_mode],
+      meta: lifecycle_context[:meta]
+    }
+  end
+
+  defp task_duration_ms(task_id) do
+    case TaskStore.get(task_id) do
+      {:ok, record, _events} ->
+        started_at = Map.get(record, :started_at)
+        completed_at = Map.get(record, :completed_at)
+
+        cond do
+          is_integer(started_at) and is_integer(completed_at) ->
+            max((completed_at - started_at) * 1000, 0)
+
+          is_integer(started_at) ->
+            max((System.system_time(:second) - started_at) * 1000, 0)
+
+          true ->
+            nil
+        end
+
+      _ ->
+        nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp emit_task_lifecycle(event_type, payload, lifecycle_context) do
+    run_id = payload[:run_id] || lifecycle_context[:run_id]
+    parent_run_id = payload[:parent_run_id] || lifecycle_context[:parent_run_id]
+    session_key = payload[:session_key] || lifecycle_context[:session_key]
+    agent_id = payload[:agent_id] || lifecycle_context[:agent_id]
+    task_meta = payload[:meta] || lifecycle_context[:meta]
+
+    meta = %{
+      run_id: run_id,
+      parent_run_id: parent_run_id,
+      session_key: session_key,
+      agent_id: agent_id,
+      task_id: payload[:task_id],
+      task_meta: task_meta
+    }
+
+    event = LemonCore.Event.new(event_type, payload, meta)
+
+    if is_binary(run_id) do
+      LemonCore.Bus.broadcast("run:#{run_id}", event)
+    end
+
+    if is_binary(parent_run_id) and parent_run_id != run_id do
+      LemonCore.Bus.broadcast("run:#{parent_run_id}", event)
+    end
+
+    Introspection.record(
+      event_type,
+      payload,
+      run_id: run_id,
+      parent_run_id: parent_run_id,
+      session_key: session_key,
+      agent_id: agent_id,
+      engine: lifecycle_context[:engine],
+      provenance: :direct
+    )
+
+    :ok
+  rescue
+    _ -> :ok
+  catch
+    :exit, _ -> :ok
+  end
+
+  defp normalize_task_reason(nil), do: nil
+  defp normalize_task_reason(reason) when is_binary(reason), do: reason
+  defp normalize_task_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp normalize_task_reason(reason), do: inspect(reason, limit: 80)
+
+  defp timeout_reason?(reason) when is_binary(reason) do
+    String.contains?(String.downcase(reason), "timeout")
+  end
+
+  defp timeout_reason?(_), do: false
+
+  defp aborted_reason?(reason) when is_binary(reason) do
+    downcased = String.downcase(reason)
+    String.contains?(downcased, "abort") or String.contains?(downcased, "interrupt")
+  end
+
+  defp aborted_reason?(_), do: false
+
+  defp execute_via_cli_engine(engine, prompt, cwd, description, role_id, model, on_update, signal) do
+    {module, engine_label} =
+      case engine do
+        "codex" -> {CodexSubagent, "codex"}
+        "claude" -> {ClaudeSubagent, "claude"}
+        "kimi" -> {KimiSubagent, "kimi"}
+        "opencode" -> {OpencodeSubagent, "opencode"}
+        "pi" -> {PiSubagent, "pi"}
+      end
+
+    # Get role prompt if role_id is specified
+    role_prompt = if role_id, do: get_role_prompt(cwd, role_id), else: nil
+
+    Logger.info(
+      "Task tool cli engine start engine=#{engine_label} description=#{inspect(description)} role=#{inspect(role_id)} model=#{inspect(model)} cwd=#{inspect(cwd)}"
+    )
+
+    with {:ok, session} <-
+           module.start(prompt: prompt, cwd: cwd, role_prompt: role_prompt, model: model) do
+      abort_monitor = maybe_start_abort_monitor(signal, session.pid)
+
+      result =
+        reduce_cli_events(module.events(session), description, engine_label, on_update, signal)
+
+      maybe_stop_abort_monitor(abort_monitor)
+
+      details = %{
+        description: description,
+        status: if(result.error, do: "error", else: "completed"),
+        engine: engine_label,
+        role: role_id,
+        model: model,
+        resume_token: result.resume_token,
+        error: result.error,
+        stderr: result[:stderr]
+      }
+
+      tool_result = %AgentToolResult{
+        content: [%TextContent{text: result.answer || ""}],
+        details: details
+      }
+
+      if result.error do
+        Logger.warning(
+          "Task tool cli engine error engine=#{engine_label} description=#{inspect(description)} " <>
+            "error=#{inspect(result.error)}"
+        )
+
+        # Include stderr in error message if available and different from error
+        error_msg = format_cli_error(result.error)
+
+        error_msg =
+          if result[:stderr] && result[:stderr] != "" && result[:stderr] != result.error do
+            "#{error_msg}\nstderr: #{result[:stderr]}"
+          else
+            error_msg
+          end
+
+        {:error, %{message: error_msg, details: details, answer: result.answer || ""}}
+      else
+        Logger.info(
+          "Task tool cli engine completed engine=#{engine_label} description=#{inspect(description)} " <>
+            "answer_bytes=#{byte_size(result.answer || "")}"
+        )
+
+        tool_result
+      end
+    end
+  end
+
+  defp maybe_start_abort_monitor(nil, _pid), do: nil
+
+  defp maybe_start_abort_monitor(signal, pid) when is_reference(signal) and is_pid(pid) do
+    spawn(fn -> abort_monitor_loop(signal, pid) end)
+  end
+
+  defp maybe_start_abort_monitor(_signal, _pid), do: nil
+
+  defp maybe_stop_abort_monitor(nil), do: :ok
+
+  defp maybe_stop_abort_monitor(pid) when is_pid(pid) do
+    send(pid, :stop)
+    :ok
+  end
+
+  defp maybe_emit_cli_update(on_update, description, engine, status, text, extra_details \\ %{})
+
+  defp maybe_emit_cli_update(nil, _description, _engine, _status, _text, _extra_details), do: :ok
+
+  defp maybe_emit_cli_update(on_update, description, engine, status, text, extra_details) do
+    details =
+      %{
+        description: description,
+        status: status,
+        engine: engine
+      }
+      |> Map.merge(extra_details)
+
+    on_update.(%AgentToolResult{
+      content: [%TextContent{text: text}],
+      details: details
+    })
+  end
+
+  @doc false
+  def reduce_cli_events(events, description, engine_label, on_update) do
+    reduce_cli_events(events, description, engine_label, on_update, nil)
+  end
+
+  @doc false
+  def reduce_cli_events(events, description, engine_label, on_update, signal) do
+    Enum.reduce_while(events, %{answer: nil, resume_token: nil, error: nil, stderr: nil}, fn
+      {:started, token}, acc ->
+        maybe_emit_cli_update(on_update, description, engine_label, "started", token.value)
+        {:cont, %{acc | resume_token: token}}
+
+      {:action, %{title: title, kind: kind} = _action, :started, _opts}, acc ->
+        # Emit update for action started phase with rich details
+        maybe_emit_cli_update(
+          on_update,
+          description,
+          engine_label,
+          "running",
+          title,
+          %{
+            current_action: %{title: title, kind: to_string(kind), phase: "started"}
+          }
+        )
+
+        {:cont, acc}
+
+      {:action, %{title: title, detail: detail, kind: kind} = _action, :updated, _opts}, acc ->
+        # Emit update for action progress with any available detail text
+        text = extract_action_detail_text(detail) || title
+
+        extra_details =
+          %{
+            current_action: %{title: title, kind: to_string(kind), phase: "updated"}
+          }
+          |> maybe_add_action_detail(detail)
+
+        maybe_emit_cli_update(
+          on_update,
+          description,
+          engine_label,
+          "running",
+          text,
+          extra_details
+        )
+
+        {:cont, acc}
+
+      {:action, %{title: title, detail: detail, kind: kind}, :completed, _opts}, acc ->
+        maybe_emit_cli_update(
+          on_update,
+          description,
+          engine_label,
+          "running",
+          "Completed: #{title}",
+          %{
+            current_action: %{title: title, kind: to_string(kind), phase: "completed"}
+          }
+        )
+
+        acc =
+          if kind == :warning and is_map(detail) do
+            cond do
+              Map.has_key?(detail, :stderr) ->
+                stderr = detail[:stderr] || detail.stderr
+                # Capture stderr for debugging even if we already have an error
+                acc = %{acc | stderr: stderr}
+                if acc.error == nil, do: %{acc | error: stderr}, else: acc
+
+              Map.has_key?(detail, :decode_error) ->
+                if acc.error == nil, do: %{acc | error: detail.decode_error}, else: acc
+
+              true ->
+                acc
+            end
+          else
+            acc
+          end
+
+        {:cont, acc}
+
+      {:completed, answer, opts}, acc ->
+        resume = opts[:resume] || acc.resume_token
+        error = acc.error || opts[:error]
+        {:cont, %{acc | answer: answer, resume_token: resume, error: error}}
+
+      {:error, reason}, acc ->
+        maybe_emit_cli_update(
+          on_update,
+          description,
+          engine_label,
+          "error",
+          format_cli_error(reason)
+        )
+
+        {:cont, %{acc | error: acc.error || reason}}
+
+      _, acc ->
+        {:cont, acc}
+    end)
+    |> maybe_apply_abort(signal)
+  end
+
+  defp maybe_apply_abort(result, signal) do
+    if AbortSignal.aborted?(signal) do
+      %{result | error: result.error || "Task aborted"}
+    else
+      result
+    end
+  end
+
+  defp extract_action_detail_text(detail) when is_map(detail) do
+    cond do
+      is_binary(Map.get(detail, :message)) -> Map.get(detail, :message)
+      is_binary(Map.get(detail, "message")) -> Map.get(detail, "message")
+      is_binary(Map.get(detail, :output)) -> Map.get(detail, :output)
+      is_binary(Map.get(detail, "output")) -> Map.get(detail, "output")
+      is_binary(Map.get(detail, :stdout)) -> Map.get(detail, :stdout)
+      is_binary(Map.get(detail, "stdout")) -> Map.get(detail, "stdout")
+      is_binary(Map.get(detail, :stderr)) -> Map.get(detail, :stderr)
+      is_binary(Map.get(detail, "stderr")) -> Map.get(detail, "stderr")
+      is_binary(Map.get(detail, :result)) -> Map.get(detail, :result)
+      is_binary(Map.get(detail, "result")) -> Map.get(detail, "result")
+      true -> nil
+    end
+  end
+
+  defp extract_action_detail_text(_detail), do: nil
+
+  defp maybe_add_action_detail(details, detail) when is_map(detail) and map_size(detail) > 0 do
+    Map.put(details, :action_detail, detail)
+  end
+
+  defp maybe_add_action_detail(details, _detail), do: details
+
+  defp abort_monitor_loop(signal, pid) do
+    receive do
+      :stop ->
+        :ok
+    after
+      200 ->
+        if AbortSignal.aborted?(signal) do
+          Process.exit(pid, :kill)
+          :ok
+        else
+          abort_monitor_loop(signal, pid)
+        end
+    end
+  end
+
+  defp format_cli_error(reason) when is_binary(reason), do: reason
+  defp format_cli_error(reason), do: inspect(reason)
+
+  defp generate_task_run_id do
+    :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
+  end
+
+  defp start_session_with_prompt(start_opts, prompt, description, signal, on_update, role_id) do
+    with {:ok, session} <- CodingAgent.start_session(start_opts) do
+      session_id = Session.get_stats(session).session_id
+      unsubscribe = Session.subscribe(session)
+
+      try do
+        case Session.prompt(session, prompt) do
+          :ok ->
+            case await_result(
+                   session,
+                   session_id,
+                   signal,
+                   on_update,
+                   description,
+                   "",
+                   "",
+                   role_id
+                 ) do
+              {:ok, %{text: text, thinking: thinking}} ->
+                %AgentToolResult{
+                  content: build_update_content(text, thinking),
+                  details: %{
+                    session_id: session_id,
+                    description: description,
+                    status: "completed",
+                    role: role_id
+                  }
+                }
+
+              {:error, reason} ->
+                {:error, reason}
+            end
+
+          {:error, :already_streaming} ->
+            {:error, "Task session is already running"}
+        end
+      after
+        if is_function(unsubscribe, 0) do
+          unsubscribe.()
+        end
+
+        stop_session(session)
+      end
+    else
+      {:error, reason} ->
+        {:error, "Failed to start task session: #{inspect(reason)}"}
+    end
+  end
+
+  defp maybe_apply_role_prompt(prompt, nil, _cwd), do: prompt
+  defp maybe_apply_role_prompt(prompt, "", _cwd), do: prompt
+
+  defp maybe_apply_role_prompt(prompt, role_id, cwd) do
+    case Subagents.get(cwd, role_id) do
+      nil ->
+        {:error, "Unknown role: #{role_id}"}
+
+      role ->
+        role.prompt <> "\n\n" <> prompt
+    end
+  end
+
+  defp get_role_prompt(cwd, role_id) do
+    case Subagents.get(cwd, role_id) do
+      nil -> nil
+      role -> role.prompt
+    end
+  end
+
+  defp build_description(cwd) do
+    base =
+      "Run a focused subtask. **Use async=true by default** to avoid blocking the user conversation.\n\n" <>
+        "**When to use task vs agent tool:**\n" <>
+        "- task: For coding work within this session's context (same project, files, tools)\n" <>
+        "- agent: For delegating to a different agent profile or for cross-agent workflows\n\n" <>
+        "**Async-first pattern (recommended):**\n" <>
+        "1. Launch with async=true → get task_id immediately\n" <>
+        "2. Continue the user conversation without waiting\n" <>
+        "3. Poll with action=poll and task_id to check status, OR\n" <>
+        "4. Use action=join with multiple task_ids to wait for completion\n\n" <>
+        "**Parameters:**\n" <>
+        "- action: run (default), poll, or join\n" <>
+        "- async: true (recommended) = non-blocking, false = wait for completion\n" <>
+        "- task_id: required when action=poll\n" <>
+        "- task_ids: required when action=join\n" <>
+        "- mode: join mode for action=join (wait_all or wait_any)\n" <>
+        "- engine: Which executor runs the task\n" <>
+        "  - \"internal\" (default): Lemon's built-in agent\n" <>
+        "  - \"codex\": OpenAI Codex CLI\n" <>
+        "  - \"claude\": Claude Code CLI\n" <>
+        "  - \"kimi\": Kimi CLI\n" <>
+        "  - \"opencode\": Opencode CLI\n" <>
+        "  - \"pi\": Pi (pi-coding-agent) CLI\n" <>
+        "- model: Optional model override (e.g., \"gemini-2.5-pro\" for complex tasks)\n" <>
+        "- thinking_level: Optional thinking level override for internal engine\n" <>
+        "- role: Optional specialization that applies to ANY engine\n" <>
+        "- cwd: Optional working directory override\n" <>
+        "- tool_policy: Optional task-specific tool policy override\n" <>
+        "- session_key/agent_id: Optional async followup routing overrides\n" <>
+        "- queue_mode: Optional async followup router queue mode (default: followup)\n" <>
+        "- meta: Optional metadata attached to task lifecycle/followups\n\n" <>
+        "**Boundary with agent tool:**\n" <>
+        "- task supports local/CLI execution controls plus followup routing overrides\n" <>
+        "- agent remains the tool for router-level delegation continuity semantics\n\n" <>
+        "The role prepends a system prompt to focus the executor on a specific type of work. " <>
+        "You can combine any engine with any role."
+
+    roles = Subagents.format_for_description(cwd)
+
+    if roles == "" do
+      base
+    else
+      base <> "\n\nAvailable roles:\n" <> roles
+    end
+  end
+
+  defp build_role_enum(cwd) do
+    ids = Subagents.list(cwd) |> Enum.map(& &1.id)
+    if ids == [], do: nil, else: ids
+  end
+
+  defp maybe_add_enum(%AgentTool{} = tool, nil), do: tool
+
+  defp maybe_add_enum(%AgentTool{} = tool, enum) do
+    params = tool.parameters
+    props = params["properties"] || %{}
+    role = Map.get(props, "role", %{})
+    role = Map.put(role, "enum", enum)
+    props = Map.put(props, "role", role)
+    %{tool | parameters: Map.put(params, "properties", props)}
+  end
+
+  defp build_session_opts(cwd, opts, validated) do
+    base_opts =
+      opts
+      |> Keyword.take([
+        :model,
+        :thinking_level,
+        :system_prompt,
+        :prompt_template,
+        :workspace_dir,
+        :get_api_key,
+        :stream_fn,
+        :stream_options,
+        :settings_manager,
+        :ui_context,
+        :parent_session,
+        :tool_policy,
+        :session_key,
+        :agent_id
+      ])
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+
+    override_opts =
+      []
+      |> maybe_put_kw(:model, validated[:model])
+      |> maybe_put_kw(:thinking_level, validated[:thinking_level])
+      |> maybe_put_kw(:tool_policy, validated[:tool_policy])
+      |> maybe_put_kw(:session_key, validated[:session_key])
+      |> maybe_put_kw(:agent_id, validated[:agent_id])
+
+    [{:cwd, cwd}, {:register, true} | Keyword.merge(base_opts, override_opts)]
+  end
+
+  defp maybe_put_kw(list, _key, nil), do: list
+  defp maybe_put_kw(list, key, value), do: Keyword.put(list, key, value)
+
+  defp await_result(
+         session,
+         session_id,
+         signal,
+         on_update,
+         description,
+         last_text,
+         last_thinking,
+         role_id
+       ) do
+    receive do
+      {:session_event, ^session_id, {:message_update, %Ai.Types.AssistantMessage{} = msg, _event}} ->
+        text = Ai.get_text(msg)
+        thinking = Ai.get_thinking(msg)
+
+        {last_text, last_thinking} =
+          maybe_emit_update(
+            on_update,
+            text,
+            thinking,
+            last_text,
+            last_thinking,
+            description,
+            session_id,
+            role_id
+          )
+
+        await_result(
+          session,
+          session_id,
+          signal,
+          on_update,
+          description,
+          last_text,
+          last_thinking,
+          role_id
+        )
+
+      {:session_event, ^session_id, {:message_end, %Ai.Types.AssistantMessage{} = msg}} ->
+        text = Ai.get_text(msg)
+        thinking = Ai.get_thinking(msg)
+
+        {last_text, last_thinking} =
+          maybe_emit_update(
+            on_update,
+            text,
+            thinking,
+            last_text,
+            last_thinking,
+            description,
+            session_id,
+            role_id
+          )
+
+        await_result(
+          session,
+          session_id,
+          signal,
+          on_update,
+          description,
+          last_text,
+          last_thinking,
+          role_id
+        )
+
+      {:session_event, ^session_id, {:agent_end, messages}} ->
+        {:ok, extract_final_payload(messages, last_text, last_thinking)}
+
+      {:session_event, ^session_id, {:error, reason, _partial_state}} ->
+        {:error, reason}
+
+      {:session_event, ^session_id, _event} ->
+        await_result(
+          session,
+          session_id,
+          signal,
+          on_update,
+          description,
+          last_text,
+          last_thinking,
+          role_id
+        )
+    after
+      200 ->
+        if AbortSignal.aborted?(signal) do
+          Session.abort(session)
+          {:error, "Task aborted"}
+        else
+          await_result(
+            session,
+            session_id,
+            signal,
+            on_update,
+            description,
+            last_text,
+            last_thinking,
+            role_id
+          )
+        end
+    end
+  end
+
+  defp extract_final_payload(messages, fallback_text, fallback_thinking) do
+    messages
+    |> Enum.filter(&match?(%Ai.Types.AssistantMessage{}, &1))
+    |> List.last()
+    |> case do
+      nil ->
+        %{text: fallback_text || "", thinking: fallback_thinking || ""}
+
+      msg ->
+        %{text: Ai.get_text(msg), thinking: Ai.get_thinking(msg)}
+    end
+  end
+
+  defp maybe_emit_update(
+         nil,
+         _text,
+         _thinking,
+         last_text,
+         last_thinking,
+         _description,
+         _session_id,
+         _role_id
+       ) do
+    {last_text, last_thinking}
+  end
+
+  defp maybe_emit_update(
+         on_update,
+         text,
+         thinking,
+         last_text,
+         last_thinking,
+         description,
+         session_id,
+         role_id
+       ) do
+    if (text != "" or thinking != "") and (text != last_text or thinking != last_thinking) do
+      on_update.(%AgentToolResult{
+        content: build_update_content(text, thinking),
+        details: %{
+          session_id: session_id,
+          description: description,
+          status: "running",
+          role: role_id
+        }
+      })
+    end
+
+    {text, thinking}
+  end
+
+  defp build_update_content(text, thinking) do
+    text = text || ""
+    thinking = truncate_thinking(thinking || "")
+
+    base =
+      if text != "" do
+        [%TextContent{text: text}]
+      else
+        []
+      end
+
+    if thinking != "" do
+      prefix = if text != "", do: "\n[thinking] ", else: "[thinking] "
+      base ++ [%TextContent{text: prefix <> thinking}]
+    else
+      base
+    end
+  end
+
+  defp truncate_thinking(thinking) do
+    max_len = 240
+    trimmed = String.trim(thinking)
+
+    if trimmed == "" do
+      ""
+    else
+      if String.length(trimmed) > max_len do
+        "..." <> String.slice(trimmed, -max_len, max_len)
+      else
+        trimmed
+      end
+    end
+  end
+
+  defp stop_session(session) when is_pid(session) do
+    try do
+      if Process.whereis(CodingAgent.SessionSupervisor) do
+        _ = CodingAgent.SessionSupervisor.stop_session(session)
+      else
+        GenServer.stop(session, :normal, 5_000)
+      end
+    rescue
+      _ -> :ok
+    end
+
+    :ok
+  end
+
+  defp maybe_acquire_task_semaphore do
+    case Process.whereis(CodingAgent.TaskSemaphore) do
+      nil -> :ok
+      _pid -> Parallel.Semaphore.acquire(CodingAgent.TaskSemaphore)
+    end
+  end
+
+  defp maybe_release_task_semaphore do
+    case Process.whereis(CodingAgent.TaskSemaphore) do
+      nil -> :ok
+      _pid -> Parallel.Semaphore.release(CodingAgent.TaskSemaphore)
+    end
+  end
+end

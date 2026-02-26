@@ -17,6 +17,7 @@
 | Work on agent routing or message flow | `apps/lemon_router/` |
 | Build HTTP/WebSocket API features | `apps/lemon_control_plane/` |
 | Manage configuration, secrets, or storage | `apps/lemon_core/` |
+| Build game engines/match lifecycle services | `apps/lemon_games/` |
 | Work with CLI runners/subagent spawning | `apps/agent_core/` |
 | Create or modify skills | `apps/lemon_skills/` |
 | Build cron jobs or automation | `apps/lemon_automation/` |
@@ -145,6 +146,7 @@ apps/
 ├── lemon_channels/      # Channel adapters for inbound/outbound delivery (Telegram, Discord, X API, XMTP)
 ├── lemon_control_plane/ # HTTP/WebSocket API server with 80+ JSON-RPC methods
 ├── lemon_core/          # Shared primitives: config, store (ETS/JSONL/SQLite), secrets, PubSub bus
+├── lemon_games/         # Turn-based game domain engine, match lifecycle, event projections
 ├── lemon_gateway/       # Gateway engines (claude, codex, pi, lemon, echo), SMS/voice/email/webhook/farcaster transports
 ├── lemon_router/        # Message routing, agent directory, run orchestration
 ├── lemon_services/      # Long-running external process management (OTP-based, no umbrella deps)

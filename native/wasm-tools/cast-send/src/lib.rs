@@ -73,7 +73,11 @@ impl Guest for CastSendTool {
                 },
                 "secret_name": {
                     "type": "string",
-                    "description": "Secret name for the signing private key (default: ETH_PRIVATE_KEY)"
+                    "description": "Secret name for the signing private key (default: ETH_PRIVATE_KEY). Used only when use_keystore is false."
+                },
+                "use_keystore": {
+                    "type": "boolean",
+                    "description": "Use Foundry keystore signing with KEYSTORE_NAME and KEYSTORE_PASSWORD secrets (default: true)."
                 }
             },
             "required": ["to", "rpc_url"]
@@ -84,7 +88,8 @@ impl Guest for CastSendTool {
     fn description() -> String {
         "Sign and broadcast an Ethereum transaction using `cast send`. \
          Supports contract calls with function signatures and ETH transfers. \
-         The private key is injected securely and never exposed to the tool."
+         Signing via raw private key secret or Foundry keystore account. \
+         Credentials are injected securely and never exposed to the tool."
             .to_string()
     }
 }
@@ -196,12 +201,18 @@ fn build_args(params: &Value) -> Result<Vec<String>, String> {
         args.push("--legacy".to_string());
     }
 
-    let secret_name = params["secret_name"]
-        .as_str()
-        .unwrap_or("ETH_PRIVATE_KEY");
-
-    args.push("--private-key".to_string());
-    args.push(format!("{{{{SECRET:{secret_name}}}}}"));
+    if params["use_keystore"].as_bool().unwrap_or(true) {
+        args.push("--account".to_string());
+        args.push("{{SECRET:KEYSTORE_NAME}}".to_string());
+        args.push("--password".to_string());
+        args.push("{{SECRET:KEYSTORE_PASSWORD}}".to_string());
+    } else {
+        let secret_name = params["secret_name"]
+            .as_str()
+            .unwrap_or("ETH_PRIVATE_KEY");
+        args.push("--private-key".to_string());
+        args.push(format!("{{{{SECRET:{secret_name}}}}}"));
+    }
 
     Ok(args)
 }
@@ -248,8 +259,10 @@ mod tests {
                 "0x1234567890abcdef1234567890abcdef12345678",
                 "--rpc-url",
                 "https://eth.llamarpc.com",
-                "--private-key",
-                "{{SECRET:ETH_PRIVATE_KEY}}"
+                "--account",
+                "{{SECRET:KEYSTORE_NAME}}",
+                "--password",
+                "{{SECRET:KEYSTORE_PASSWORD}}"
             ]
         );
     }
@@ -283,6 +296,7 @@ mod tests {
             "gas_price": "20gwei",
             "nonce": "42",
             "legacy": true,
+            "use_keystore": false,
             "secret_name": "DEPLOYER_KEY"
         });
 
@@ -297,6 +311,36 @@ mod tests {
         assert!(args.contains(&"42".to_string()));
         assert!(args.contains(&"--legacy".to_string()));
         assert!(args.contains(&"{{SECRET:DEPLOYER_KEY}}".to_string()));
+    }
+
+    #[test]
+    fn build_args_uses_keystore_by_default() {
+        let params = json!({
+            "to": "0x1234567890abcdef1234567890abcdef12345678",
+            "rpc_url": "https://rpc.example.com"
+        });
+
+        let args = build_args(&params).unwrap();
+        assert!(args.contains(&"--account".to_string()));
+        assert!(args.contains(&"{{SECRET:KEYSTORE_NAME}}".to_string()));
+        assert!(args.contains(&"--password".to_string()));
+        assert!(args.contains(&"{{SECRET:KEYSTORE_PASSWORD}}".to_string()));
+        assert!(!args.contains(&"--private-key".to_string()));
+    }
+
+    #[test]
+    fn build_args_can_use_private_key_mode() {
+        let params = json!({
+            "to": "0x1234567890abcdef1234567890abcdef12345678",
+            "rpc_url": "https://rpc.example.com",
+            "use_keystore": false,
+            "secret_name": "DEPLOYER_KEY"
+        });
+
+        let args = build_args(&params).unwrap();
+        assert!(args.contains(&"--private-key".to_string()));
+        assert!(args.contains(&"{{SECRET:DEPLOYER_KEY}}".to_string()));
+        assert!(!args.contains(&"--account".to_string()));
     }
 
     #[test]

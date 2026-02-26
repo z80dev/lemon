@@ -161,6 +161,7 @@ defmodule LemonCore.Config.ValidatorTest do
 
       for level <- valid_levels do
         errors = Validator.validate_logging(%{level: level}, [])
+
         refute Enum.any?(errors, &String.contains?(&1, "logging.level")),
                "Level #{level} should be valid"
       end
@@ -201,23 +202,35 @@ defmodule LemonCore.Config.ValidatorTest do
 
   describe "validate_providers/2" do
     test "validates provider API key" do
-      errors = Validator.validate_providers(%{
-        providers: %{anthropic: %{api_key: ""}}
-      }, [])
+      errors =
+        Validator.validate_providers(
+          %{
+            providers: %{anthropic: %{api_key: ""}}
+          },
+          []
+        )
 
       assert Enum.any?(errors, &String.contains?(&1, "api_key"))
     end
 
     test "validates provider base_url" do
-      errors = Validator.validate_providers(%{
-        providers: %{anthropic: %{base_url: "not-a-url"}}
-      }, [])
+      errors =
+        Validator.validate_providers(
+          %{
+            providers: %{anthropic: %{base_url: "not-a-url"}}
+          },
+          []
+        )
 
       assert Enum.any?(errors, &String.contains?(&1, "base_url"))
 
-      errors = Validator.validate_providers(%{
-        providers: %{anthropic: %{base_url: "https://api.anthropic.com"}}
-      }, [])
+      errors =
+        Validator.validate_providers(
+          %{
+            providers: %{anthropic: %{base_url: "https://api.anthropic.com"}}
+          },
+          []
+        )
 
       refute Enum.any?(errors, &String.contains?(&1, "base_url"))
     end
@@ -225,6 +238,73 @@ defmodule LemonCore.Config.ValidatorTest do
     test "accepts nil provider config" do
       errors = Validator.validate_providers(%{providers: nil}, [])
       assert errors == []
+    end
+
+    test "requires auth_source for openai-codex" do
+      errors = Validator.validate_providers(%{providers: %{"openai-codex" => %{}}}, [])
+      assert Enum.any?(errors, &String.contains?(&1, "openai-codex.auth_source"))
+    end
+
+    test "accepts valid openai-codex auth_source values" do
+      oauth_errors =
+        Validator.validate_providers(
+          %{providers: %{"openai-codex" => %{auth_source: "oauth"}}},
+          []
+        )
+
+      api_key_errors =
+        Validator.validate_providers(
+          %{providers: %{"openai-codex" => %{auth_source: "api_key"}}},
+          []
+        )
+
+      refute Enum.any?(oauth_errors, &String.contains?(&1, "openai-codex.auth_source"))
+      refute Enum.any?(api_key_errors, &String.contains?(&1, "openai-codex.auth_source"))
+    end
+
+    test "rejects invalid openai-codex auth_source value" do
+      errors =
+        Validator.validate_providers(
+          %{providers: %{"openai-codex" => %{auth_source: "something_else"}}},
+          []
+        )
+
+      assert Enum.any?(errors, &String.contains?(&1, "openai-codex.auth_source"))
+    end
+
+    test "anthropic auth_source is optional" do
+      errors = Validator.validate_providers(%{providers: %{"anthropic" => %{}}}, [])
+      refute Enum.any?(errors, &String.contains?(&1, "anthropic.auth_source"))
+    end
+
+    test "accepts api_key as anthropic auth_source value" do
+      errors =
+        Validator.validate_providers(
+          %{providers: %{"anthropic" => %{auth_source: "api_key"}}},
+          []
+        )
+
+      refute Enum.any?(errors, &String.contains?(&1, "anthropic.auth_source"))
+    end
+
+    test "rejects oauth anthropic auth_source value" do
+      errors =
+        Validator.validate_providers(
+          %{providers: %{"anthropic" => %{auth_source: "oauth"}}},
+          []
+        )
+
+      assert Enum.any?(errors, &String.contains?(&1, "anthropic.auth_source"))
+    end
+
+    test "rejects invalid anthropic auth_source value" do
+      errors =
+        Validator.validate_providers(
+          %{providers: %{"anthropic" => %{auth_source: "bad_value"}}},
+          []
+        )
+
+      assert Enum.any?(errors, &String.contains?(&1, "anthropic.auth_source"))
     end
   end
 
@@ -249,6 +329,7 @@ defmodule LemonCore.Config.ValidatorTest do
 
       for theme <- valid_themes do
         errors = Validator.validate_tui(%{theme: theme}, [])
+
         refute Enum.any?(errors, &String.contains?(&1, "tui.theme")),
                "Theme #{theme} should be valid"
       end
@@ -304,41 +385,51 @@ defmodule LemonCore.Config.ValidatorTest do
 
   describe "validate_telegram_config/2" do
     test "validates telegram token format" do
-      errors = Validator.validate_telegram_config([], %{
-        token: "123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
-      })
+      errors =
+        Validator.validate_telegram_config([], %{
+          token: "123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
+        })
+
       assert errors == []
 
-      errors = Validator.validate_telegram_config([], %{
-        token: "invalid-token"
-      })
+      errors =
+        Validator.validate_telegram_config([], %{
+          token: "invalid-token"
+        })
+
       assert Enum.any?(errors, &String.contains?(&1, "token"))
     end
 
     test "accepts env var references in token" do
-      errors = Validator.validate_telegram_config([], %{
-        token: "${TELEGRAM_BOT_TOKEN}"
-      })
+      errors =
+        Validator.validate_telegram_config([], %{
+          token: "${TELEGRAM_BOT_TOKEN}"
+        })
+
       assert errors == []
     end
 
     test "validates telegram compaction settings" do
-      errors = Validator.validate_telegram_config([], %{
-        compaction: %{
-          enabled: true,
-          context_window_tokens: 400_000,
-          reserve_tokens: 16_384,
-          trigger_ratio: 0.9
-        }
-      })
+      errors =
+        Validator.validate_telegram_config([], %{
+          compaction: %{
+            enabled: true,
+            context_window_tokens: 400_000,
+            reserve_tokens: 16_384,
+            trigger_ratio: 0.9
+          }
+        })
+
       assert errors == []
 
-      errors = Validator.validate_telegram_config([], %{
-        compaction: %{
-          enabled: "yes",
-          trigger_ratio: 1.5
-        }
-      })
+      errors =
+        Validator.validate_telegram_config([], %{
+          compaction: %{
+            enabled: "yes",
+            trigger_ratio: 1.5
+          }
+        })
+
       assert Enum.any?(errors, &String.contains?(&1, "enabled"))
       assert Enum.any?(errors, &String.contains?(&1, "trigger_ratio"))
     end
@@ -398,58 +489,76 @@ defmodule LemonCore.Config.ValidatorTest do
   describe "validate_discord_config/2" do
     test "validates discord bot token format" do
       # Valid Discord token format (3 parts separated by dots)
-      errors = Validator.validate_discord_config([], %{
-        bot_token: "MTA5ODc2NTQzMjEwOTg3NjU0MzIx.ABC123.XYZ789abc123def456"
-      })
+      errors =
+        Validator.validate_discord_config([], %{
+          bot_token: "MTA5ODc2NTQzMjEwOTg3NjU0MzIx.ABC123.XYZ789abc123def456"
+        })
+
       assert errors == []
 
       # Invalid token format
-      errors = Validator.validate_discord_config([], %{
-        bot_token: "invalid-token"
-      })
+      errors =
+        Validator.validate_discord_config([], %{
+          bot_token: "invalid-token"
+        })
+
       assert Enum.any?(errors, &String.contains?(&1, "bot_token"))
     end
 
     test "accepts env var references in discord token" do
-      errors = Validator.validate_discord_config([], %{
-        bot_token: "${DISCORD_BOT_TOKEN}"
-      })
+      errors =
+        Validator.validate_discord_config([], %{
+          bot_token: "${DISCORD_BOT_TOKEN}"
+        })
+
       assert errors == []
     end
 
     test "validates discord allowed_guild_ids" do
-      errors = Validator.validate_discord_config([], %{
-        allowed_guild_ids: [123_456_789, 987_654_321]
-      })
+      errors =
+        Validator.validate_discord_config([], %{
+          allowed_guild_ids: [123_456_789, 987_654_321]
+        })
+
       assert errors == []
 
-      errors = Validator.validate_discord_config([], %{
-        allowed_guild_ids: ["123", "456"]
-      })
+      errors =
+        Validator.validate_discord_config([], %{
+          allowed_guild_ids: ["123", "456"]
+        })
+
       assert Enum.any?(errors, &String.contains?(&1, "allowed_guild_ids"))
     end
 
     test "validates discord allowed_channel_ids" do
-      errors = Validator.validate_discord_config([], %{
-        allowed_channel_ids: [123_456_789]
-      })
+      errors =
+        Validator.validate_discord_config([], %{
+          allowed_channel_ids: [123_456_789]
+        })
+
       assert errors == []
 
-      errors = Validator.validate_discord_config([], %{
-        allowed_channel_ids: "not-a-list"
-      })
+      errors =
+        Validator.validate_discord_config([], %{
+          allowed_channel_ids: "not-a-list"
+        })
+
       assert Enum.any?(errors, &String.contains?(&1, "allowed_channel_ids"))
     end
 
     test "validates discord deny_unbound_channels" do
-      errors = Validator.validate_discord_config([], %{
-        deny_unbound_channels: true
-      })
+      errors =
+        Validator.validate_discord_config([], %{
+          deny_unbound_channels: true
+        })
+
       assert errors == []
 
-      errors = Validator.validate_discord_config([], %{
-        deny_unbound_channels: "yes"
-      })
+      errors =
+        Validator.validate_discord_config([], %{
+          deny_unbound_channels: "yes"
+        })
+
       assert Enum.any?(errors, &String.contains?(&1, "deny_unbound_channels"))
     end
 
@@ -459,12 +568,14 @@ defmodule LemonCore.Config.ValidatorTest do
     end
 
     test "validates complete discord config" do
-      errors = Validator.validate_discord_config([], %{
-        bot_token: "MTA5ODc2NTQzMjEwOTg3NjU0MzIx.ABC123.XYZ789abc123def456",
-        allowed_guild_ids: [123_456_789],
-        allowed_channel_ids: [987_654_321],
-        deny_unbound_channels: true
-      })
+      errors =
+        Validator.validate_discord_config([], %{
+          bot_token: "MTA5ODc2NTQzMjEwOTg3NjU0MzIx.ABC123.XYZ789abc123def456",
+          allowed_guild_ids: [123_456_789],
+          allowed_channel_ids: [987_654_321],
+          deny_unbound_channels: true
+        })
+
       assert errors == []
     end
   end
@@ -507,7 +618,11 @@ defmodule LemonCore.Config.ValidatorTest do
       assert Enum.any?(errors, &String.contains?(&1, "secret_key_base"))
 
       # Env var reference is valid
-      errors = Validator.validate_web_dashboard_config([], %{secret_key_base: "${LEMON_WEB_SECRET_KEY_BASE}"})
+      errors =
+        Validator.validate_web_dashboard_config([], %{
+          secret_key_base: "${LEMON_WEB_SECRET_KEY_BASE}"
+        })
+
       assert errors == []
     end
 
@@ -523,7 +638,9 @@ defmodule LemonCore.Config.ValidatorTest do
       assert Enum.any?(errors, &String.contains?(&1, "access_token"))
 
       # Env var reference is valid
-      errors = Validator.validate_web_dashboard_config([], %{access_token: "${LEMON_WEB_ACCESS_TOKEN}"})
+      errors =
+        Validator.validate_web_dashboard_config([], %{access_token: "${LEMON_WEB_ACCESS_TOKEN}"})
+
       assert errors == []
     end
 
@@ -533,12 +650,14 @@ defmodule LemonCore.Config.ValidatorTest do
     end
 
     test "validates complete web dashboard config" do
-      errors = Validator.validate_web_dashboard_config([], %{
-        port: 4080,
-        host: "localhost",
-        secret_key_base: String.duplicate("a", 64),
-        access_token: String.duplicate("b", 16)
-      })
+      errors =
+        Validator.validate_web_dashboard_config([], %{
+          port: 4080,
+          host: "localhost",
+          secret_key_base: String.duplicate("a", 64),
+          access_token: String.duplicate("b", 16)
+        })
+
       assert errors == []
     end
 
@@ -605,7 +724,9 @@ defmodule LemonCore.Config.ValidatorTest do
       errors = Validator.validate_farcaster_config([], %{frame_url: "https://frames.example.com"})
       assert errors == []
 
-      errors = Validator.validate_farcaster_config([], %{frame_url: "http://localhost:3000/frame"})
+      errors =
+        Validator.validate_farcaster_config([], %{frame_url: "http://localhost:3000/frame"})
+
       assert errors == []
 
       errors = Validator.validate_farcaster_config([], %{frame_url: "invalid-url"})
@@ -635,7 +756,9 @@ defmodule LemonCore.Config.ValidatorTest do
       assert Enum.any?(errors, &String.contains?(&1, "state_secret"))
 
       # Env var reference is valid
-      errors = Validator.validate_farcaster_config([], %{state_secret: "${FARCASTER_STATE_SECRET}"})
+      errors =
+        Validator.validate_farcaster_config([], %{state_secret: "${FARCASTER_STATE_SECRET}"})
+
       assert errors == []
     end
 
@@ -645,14 +768,16 @@ defmodule LemonCore.Config.ValidatorTest do
     end
 
     test "validates complete farcaster config" do
-      errors = Validator.validate_farcaster_config([], %{
-        hub_url: "https://hub.farcaster.xyz",
-        signer_key: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2",
-        app_key: "my-farcaster-app",
-        frame_url: "https://frames.example.com",
-        verify_trusted_data: true,
-        state_secret: String.duplicate("s", 32)
-      })
+      errors =
+        Validator.validate_farcaster_config([], %{
+          hub_url: "https://hub.farcaster.xyz",
+          signer_key: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2",
+          app_key: "my-farcaster-app",
+          frame_url: "https://frames.example.com",
+          verify_trusted_data: true,
+          state_secret: String.duplicate("s", 32)
+        })
+
       assert errors == []
     end
 
@@ -796,18 +921,20 @@ defmodule LemonCore.Config.ValidatorTest do
     end
 
     test "validates complete xmtp config" do
-      errors = Validator.validate_xmtp_config([], %{
-        wallet_key: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2",
-        wallet_address: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
-        env: "production",
-        api_url: "https://api.xmtp.network",
-        poll_interval_ms: 1000,
-        connect_timeout_ms: 5000,
-        mock_mode: false,
-        require_live: true,
-        max_connections: 10,
-        enable_relay: false
-      })
+      errors =
+        Validator.validate_xmtp_config([], %{
+          wallet_key: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2",
+          wallet_address: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+          env: "production",
+          api_url: "https://api.xmtp.network",
+          poll_interval_ms: 1000,
+          connect_timeout_ms: 5000,
+          mock_mode: false,
+          require_live: true,
+          max_connections: 10,
+          enable_relay: false
+        })
+
       assert errors == []
     end
 
@@ -822,54 +949,66 @@ defmodule LemonCore.Config.ValidatorTest do
 
   describe "validate_email_config/2" do
     test "validates email inbound config" do
-      errors = Validator.validate_email_config([], %{
-        inbound: %{
-          bind_host: "0.0.0.0",
-          bind_port: 8080,
-          token: "webhook-secret-token",
-          max_body_bytes: 10_000_000
-        }
-      })
+      errors =
+        Validator.validate_email_config([], %{
+          inbound: %{
+            bind_host: "0.0.0.0",
+            bind_port: 8080,
+            token: "webhook-secret-token",
+            max_body_bytes: 10_000_000
+          }
+        })
+
       assert errors == []
 
       # Invalid port
-      errors = Validator.validate_email_config([], %{
-        inbound: %{bind_port: 70_000}
-      })
+      errors =
+        Validator.validate_email_config([], %{
+          inbound: %{bind_port: 70_000}
+        })
+
       assert Enum.any?(errors, &String.contains?(&1, "bind_port"))
 
       # Empty host
-      errors = Validator.validate_email_config([], %{
-        inbound: %{bind_host: ""}
-      })
+      errors =
+        Validator.validate_email_config([], %{
+          inbound: %{bind_host: ""}
+        })
+
       assert Enum.any?(errors, &String.contains?(&1, "bind_host"))
     end
 
     test "validates email outbound config" do
-      errors = Validator.validate_email_config([], %{
-        outbound: %{
-          relay: "smtp.gmail.com",
-          port: 587,
-          username: "user@example.com",
-          password: "secret",
-          tls: true,
-          auth: true,
-          hostname: "example.com",
-          from_address: "bot@example.com"
-        }
-      })
+      errors =
+        Validator.validate_email_config([], %{
+          outbound: %{
+            relay: "smtp.gmail.com",
+            port: 587,
+            username: "user@example.com",
+            password: "secret",
+            tls: true,
+            auth: true,
+            hostname: "example.com",
+            from_address: "bot@example.com"
+          }
+        })
+
       assert errors == []
 
       # Invalid port
-      errors = Validator.validate_email_config([], %{
-        outbound: %{port: 0}
-      })
+      errors =
+        Validator.validate_email_config([], %{
+          outbound: %{port: 0}
+        })
+
       assert Enum.any?(errors, &String.contains?(&1, "port"))
 
       # Empty relay
-      errors = Validator.validate_email_config([], %{
-        outbound: %{relay: ""}
-      })
+      errors =
+        Validator.validate_email_config([], %{
+          outbound: %{relay: ""}
+        })
+
       assert Enum.any?(errors, &String.contains?(&1, "relay"))
     end
 
@@ -949,27 +1088,29 @@ defmodule LemonCore.Config.ValidatorTest do
     end
 
     test "validates complete email config" do
-      errors = Validator.validate_email_config([], %{
-        inbound: %{
-          bind_host: "0.0.0.0",
-          bind_port: 8080,
-          token: "webhook-secret",
-          max_body_bytes: 10_000_000
-        },
-        outbound: %{
-          relay: "smtp.gmail.com",
-          port: 587,
-          username: "user@example.com",
-          password: "secret",
-          tls: true,
-          auth: true,
-          hostname: "example.com",
-          from_address: "bot@example.com"
-        },
-        attachment_max_bytes: 10_000_000,
-        inbound_enabled: true,
-        webhook_enabled: true
-      })
+      errors =
+        Validator.validate_email_config([], %{
+          inbound: %{
+            bind_host: "0.0.0.0",
+            bind_port: 8080,
+            token: "webhook-secret",
+            max_body_bytes: 10_000_000
+          },
+          outbound: %{
+            relay: "smtp.gmail.com",
+            port: 587,
+            username: "user@example.com",
+            password: "secret",
+            tls: true,
+            auth: true,
+            hostname: "example.com",
+            from_address: "bot@example.com"
+          },
+          attachment_max_bytes: 10_000_000,
+          inbound_enabled: true,
+          webhook_enabled: true
+        })
+
       assert errors == []
     end
 

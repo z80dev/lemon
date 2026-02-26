@@ -20,6 +20,7 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
 
   alias Ai.EventStream
   alias Ai.Providers.OpenAICodexResponses
+  alias LemonCore.{Secrets, Store}
 
   alias Ai.Types.{
     AssistantMessage,
@@ -168,11 +169,10 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       assert OpenAICodexResponses.get_env_api_key() == nil
     end
 
-    test "get_env_api_key reads Codex CLI auth.json when env vars are missing" do
+    test "get_env_api_key reads OAuth secret from store when env vars are missing" do
       prev_codex = System.get_env("OPENAI_CODEX_API_KEY")
       prev_chatgpt = System.get_env("CHATGPT_TOKEN")
-      prev_home = System.get_env("HOME")
-      prev_codex_home = System.get_env("CODEX_HOME")
+      prev_master_key = System.get_env("LEMON_SECRETS_MASTER_KEY")
 
       on_exit(fn ->
         if prev_codex,
@@ -183,48 +183,43 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
           do: System.put_env("CHATGPT_TOKEN", prev_chatgpt),
           else: System.delete_env("CHATGPT_TOKEN")
 
-        if prev_home,
-          do: System.put_env("HOME", prev_home),
-          else: System.delete_env("HOME")
+        if prev_master_key,
+          do: System.put_env("LEMON_SECRETS_MASTER_KEY", prev_master_key),
+          else: System.delete_env("LEMON_SECRETS_MASTER_KEY")
 
-        if prev_codex_home,
-          do: System.put_env("CODEX_HOME", prev_codex_home),
-          else: System.delete_env("CODEX_HOME")
+        clear_secrets_table()
       end)
 
       System.delete_env("OPENAI_CODEX_API_KEY")
       System.delete_env("CHATGPT_TOKEN")
+      clear_secrets_table()
 
-      temp =
-        Path.join([
-          System.tmp_dir!(),
-          "lemon-ai-test-codex-#{System.unique_integer([:positive])}"
-        ])
-
-      codex_home = Path.join(temp, ".codex")
-      File.mkdir_p!(codex_home)
-      System.put_env("HOME", temp)
-      System.put_env("CODEX_HOME", codex_home)
+      System.put_env("LEMON_SECRETS_MASTER_KEY", Base.encode64(:crypto.strong_rand_bytes(32)))
 
       payload =
         Jason.encode!(%{"https://api.openai.com/auth" => %{"chatgpt_account_id" => "acc_test"}})
 
       token = "x." <> Base.encode64(payload) <> ".y"
 
-      File.write!(
-        Path.join(codex_home, "auth.json"),
+      oauth_secret =
         Jason.encode!(%{
-          "tokens" => %{
-            "access_token" => token,
-            "refresh_token" => "rt_test",
-            "account_id" => "acc_test"
-          },
-          "last_refresh" => System.system_time(:millisecond)
+          "type" => "onboarding_openai_codex_oauth",
+          "access_token" => token,
+          "refresh_token" => "rt_test",
+          "expires_at_ms" => System.system_time(:millisecond) + 3_600_000
         })
-      )
+
+      assert {:ok, _} = Secrets.set("llm_openai_codex_api_key", oauth_secret)
 
       assert OpenAICodexResponses.get_env_api_key() == token
     end
+  end
+
+  defp clear_secrets_table do
+    Store.list(Secrets.table())
+    |> Enum.each(fn {key, _value} ->
+      Store.delete(Secrets.table(), key)
+    end)
   end
 
   # ============================================================================
@@ -299,7 +294,7 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       assert {:error, %AssistantMessage{stop_reason: :error, error_message: msg}} =
                EventStream.result(stream, 1000)
 
-      assert msg =~ "token is required"
+      assert msg =~ "required"
     end
 
     test "errors on empty API key" do
@@ -315,7 +310,7 @@ defmodule Ai.Providers.OpenAICodexComprehensiveTest do
       assert {:error, %AssistantMessage{stop_reason: :error, error_message: msg}} =
                EventStream.result(stream, 1000)
 
-      assert msg =~ "token is required"
+      assert msg =~ "required"
     end
 
     test "errors on invalid JWT format (wrong number of parts)" do

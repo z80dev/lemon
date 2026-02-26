@@ -35,10 +35,12 @@ defmodule LemonCore.Quality.ArchitectureCheck do
       :lemon_automation,
       :lemon_channels,
       :lemon_core,
+      :lemon_games,
       :lemon_gateway,
       :lemon_router,
       :lemon_skills
     ],
+    lemon_games: [:lemon_core],
     lemon_core: [],
     lemon_gateway: [
       :agent_core,
@@ -51,7 +53,7 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     lemon_router: [:agent_core, :ai, :coding_agent, :lemon_channels, :lemon_core, :lemon_gateway],
     lemon_services: [],
     lemon_skills: [:agent_core, :ai, :lemon_channels, :lemon_core],
-    lemon_web: [:lemon_core, :lemon_router],
+    lemon_web: [:lemon_core, :lemon_games, :lemon_router],
     market_intel: [:agent_core, :lemon_channels, :lemon_core]
   }
 
@@ -65,6 +67,7 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     lemon_control_plane: ["LemonControlPlane"],
     lemon_core: ["LemonCore"],
     lemon_gateway: ["LemonGateway"],
+    lemon_games: ["LemonGames"],
     lemon_router: ["LemonRouter"],
     lemon_services: ["LemonServices"],
     lemon_skills: ["LemonSkills"],

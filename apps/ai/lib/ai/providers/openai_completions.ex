@@ -252,6 +252,10 @@ defmodule Ai.Providers.OpenAICompletions do
       end)
 
     headers = [
+      {"editor-version", "vscode/1.107.0"},
+      {"editor-plugin-version", "copilot-chat/0.35.0"},
+      {"user-agent", "GitHubCopilotChat/0.35.0"},
+      {"copilot-integration-id", "vscode-chat"},
       {"x-initiator", if(is_agent_call, do: "agent", else: "user")},
       {"openai-intent", "conversation-edits"}
     ]
@@ -790,8 +794,13 @@ defmodule Ai.Providers.OpenAICompletions do
 
     is_zai = provider in [:zai, "zai"] || String.contains?(base_url, "api.z.ai")
 
+    is_copilot =
+      provider in [:github_copilot, "github-copilot"] ||
+        String.contains?(base_url, "githubcopilot.com")
+
     is_non_standard =
-      provider in [:cerebras, "cerebras"] || String.contains?(base_url, "cerebras.ai") ||
+      is_copilot ||
+        provider in [:cerebras, "cerebras"] || String.contains?(base_url, "cerebras.ai") ||
         provider in [:xai, "xai"] || String.contains?(base_url, "api.x.ai") ||
         provider in [:mistral, "mistral"] || String.contains?(base_url, "mistral.ai") ||
         String.contains?(base_url, "chutes.ai") ||
@@ -800,7 +809,8 @@ defmodule Ai.Providers.OpenAICompletions do
         is_zai
 
     use_max_tokens =
-      provider in [:mistral, "mistral"] || String.contains?(base_url, "mistral.ai") ||
+      is_copilot ||
+        provider in [:mistral, "mistral"] || String.contains?(base_url, "mistral.ai") ||
         String.contains?(base_url, "chutes.ai")
 
     is_grok = provider in [:xai, "xai"] || String.contains?(base_url, "api.x.ai")
@@ -809,7 +819,7 @@ defmodule Ai.Providers.OpenAICompletions do
     %{
       supports_store: !is_non_standard,
       supports_developer_role: !is_non_standard,
-      supports_reasoning_effort: !is_grok && !is_zai,
+      supports_reasoning_effort: !is_grok && !is_zai && !is_copilot,
       supports_usage_in_streaming: true,
       max_tokens_field: if(use_max_tokens, do: "max_tokens", else: "max_completion_tokens"),
       requires_tool_result_name: is_mistral,

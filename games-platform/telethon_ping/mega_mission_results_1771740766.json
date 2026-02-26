@@ -1,0 +1,112 @@
+[
+  {
+    "mission_id": "M05",
+    "name": "Blog: What is Lemon?",
+    "category": "creative",
+    "status": "TIMEOUT",
+    "topic_id": 3179,
+    "sent_ids": [
+      3180
+    ],
+    "recv_ids": [],
+    "recv_texts": [],
+    "duration": 600.6135611534119,
+    "notes": "No substantive reply within timeout"
+  },
+  {
+    "mission_id": "M06",
+    "name": "Blog: Building in public",
+    "category": "creative",
+    "status": "TIMEOUT",
+    "topic_id": 3178,
+    "sent_ids": [
+      3183
+    ],
+    "recv_ids": [],
+    "recv_texts": [],
+    "duration": 600.6170840263367,
+    "notes": "No substantive reply within timeout"
+  },
+  {
+    "mission_id": "M07",
+    "name": "Lore: Origin story",
+    "category": "creative",
+    "status": "TIMEOUT",
+    "topic_id": 3177,
+    "sent_ids": [
+      3181
+    ],
+    "recv_ids": [],
+    "recv_texts": [],
+    "duration": 600.61452293396,
+    "notes": "No substantive reply within timeout"
+  },
+  {
+    "mission_id": "M08",
+    "name": "Lore: The Lemonade Stand",
+    "category": "creative",
+    "status": "TIMEOUT",
+    "topic_id": 3176,
+    "sent_ids": [
+      3182
+    ],
+    "recv_ids": [],
+    "recv_texts": [],
+    "duration": 600.6157681941986,
+    "notes": "No substantive reply within timeout"
+  },
+  {
+    "mission_id": "M09",
+    "name": "Build snake game",
+    "category": "games",
+    "status": "PASS",
+    "topic_id": 3220,
+    "sent_ids": [
+      3223
+    ],
+    "recv_ids": [
+      3234
+    ],
+    "recv_texts": [
+      "Done! Created a complete, playable Snake game at ~/dev/lemon/content/games/snake.html.\n\nFeatures\n\nCore Gameplay:\n\n- Canvas-based rendering with smooth animations\n- Arrow key controls for desktop\n- Swipe gesture controls for mobile\n- Score counter with persistent high score (saved to localStorage)\n- Game over detection + restart functionality\nLemon Theme:- Light yellow gradient background (#FFFACD, #FFF8DC, #F0E68C)\n- Snake eats \ud83c\udf4b lemons (golden ovals with texture dots and highlights)\n- Green sna"
+    ],
+    "duration": 298.9147720336914,
+    "notes": "Got 1 replies, 848 total chars"
+  },
+  {
+    "mission_id": "M10",
+    "name": "Build trivia game",
+    "category": "games",
+    "status": "PASS",
+    "topic_id": 3219,
+    "sent_ids": [
+      3224
+    ],
+    "recv_ids": [
+      3236
+    ],
+    "recv_texts": [
+      "The trivia game is ready! Here's what I built:\n\n\ud83c\udfae zeebot Trivia\n\nLocation: ~/dev/lemon/content/games/trivia.py\n\nFeatures:\n\n- 32 questions across 3 categories:- \ud83d\udcb0 Crypto (11 questions) - Bitcoin, Ethereum, consensus, DeFi, MEV\n- \ud83e\udd16 AI (11 questions) - LLMs, transformers, RLHF, neural networks\n- \u26a1 Elixir/BEAM (10 questions) - OTP, GenServer, processes, fault tolerance\n\n- 3 Difficulty levels:- Easy: Basic concepts only\n- Medium: Easy + Medium questions\n- Hard: All questions (including the spicy ones"
+    ],
+    "duration": 298.9148380756378,
+    "notes": "Got 1 replies, 935 total chars"
+  },
+  {
+    "mission_id": "M11",
+    "name": "Build text adventure",
+    "category": "games",
+    "status": "PASS",
+    "topic_id": 3221,
+    "sent_ids": [
+      3222
+    ],
+    "recv_ids": [
+      3238
+    ],
+    "recv_texts": [
+      "I've created The Lemon Grove Adventure - a text adventure game where you play as zeebot exploring a mysterious lemon grove! Here's what's included:\n\nGame Features\n\n\ud83d\uddfa\ufe0f 11 Rooms to Explore\n\n1. Grove Entrance - Your starting point with paths to all major areas\n2. The Scheduler Tree - Threading puzzles and the frozen cron daemon\n3. Transport Meadow - Channel challenges with a binary-speaking guardian\n4. Engine Forge - Where agents are forged and delegated\n5. BEAM Cathedral - OTP wisdom and the seale"
+    ],
+    "duration": 298.91486406326294,
+    "notes": "Got 1 replies, 1852 total chars"
+  }
+]

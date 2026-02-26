@@ -1,0 +1,188 @@
+{
+  "timestamp": "2026-02-22 06:19 UTC",
+  "market_sentiment": "Extreme Fear",
+  "fear_greed_index": 9,
+  "summary": "Market is showing **Extreme Fear** sentiment with a Fear & Greed Index of 9/100. Average token sentiment score is 41.4/100. Analysis generated 0 BUY signals, 0 SELL signals, and 10 HOLD recommendations among the top 10 cryptocurrencies by market cap.",
+  "tokens": [
+    {
+      "symbol": "btc",
+      "name": "Bitcoin",
+      "price_usd": 68026,
+      "market_cap": 1359669985924,
+      "volume_24h": 19676963146,
+      "price_change_24h": 0.20347,
+      "sentiment_score": 38.22,
+      "signal": "HOLD",
+      "confidence": 0.63,
+      "notes": [
+        "Neutral sentiment (38.22/100)",
+        "Stable price action: +0.20%",
+        "Low volume - exercise caution",
+        "Large-cap stability",
+        "\u26a0\ufe0f Extreme fear in market - potential bottom"
+      ]
+    },
+    {
+      "symbol": "eth",
+      "name": "Ethereum",
+      "price_usd": 1975.02,
+      "market_cap": 238301372135,
+      "volume_24h": 11096351906,
+      "price_change_24h": 0.49644,
+      "sentiment_score": 51.91,
+      "signal": "HOLD",
+      "confidence": 0.7,
+      "notes": [
+        "Neutral sentiment (51.91/100)",
+        "Stable price action: +0.50%",
+        "Healthy trading volume",
+        "Large-cap stability",
+        "\u26a0\ufe0f Extreme fear in market - potential bottom"
+      ]
+    },
+    {
+      "symbol": "usdt",
+      "name": "Tether",
+      "price_usd": 0.999701,
+      "market_cap": 183590116903,
+      "volume_24h": 35975560446,
+      "price_change_24h": -0.00222,
+      "sentiment_score": 51.73,
+      "signal": "HOLD",
+      "confidence": 0.77,
+      "notes": [
+        "Neutral sentiment (51.73/100)",
+        "Stable price action: -0.00%",
+        "High trading volume indicates strong interest",
+        "Large-cap stability",
+        "\u26a0\ufe0f Extreme fear in market - potential bottom"
+      ]
+    },
+    {
+      "symbol": "xrp",
+      "name": "XRP",
+      "price_usd": 1.42,
+      "market_cap": 86668184151,
+      "volume_24h": 1369915879,
+      "price_change_24h": -0.9511,
+      "sentiment_score": 35.45,
+      "signal": "HOLD",
+      "confidence": 0.6,
+      "notes": [
+        "Neutral sentiment (35.45/100)",
+        "Stable price action: -0.95%",
+        "Low volume - exercise caution",
+        "Mid-cap with growth potential",
+        "\u26a0\ufe0f Extreme fear in market - potential bottom"
+      ]
+    },
+    {
+      "symbol": "bnb",
+      "name": "BNB",
+      "price_usd": 620.68,
+      "market_cap": 84636155357,
+      "volume_24h": 586756634,
+      "price_change_24h": -1.02389,
+      "sentiment_score": 31.55,
+      "signal": "HOLD",
+      "confidence": 0.6,
+      "notes": [
+        "Neutral sentiment (31.55/100)",
+        "Stable price action: -1.02%",
+        "Low volume - exercise caution",
+        "Mid-cap with growth potential",
+        "\u26a0\ufe0f Extreme fear in market - potential bottom"
+      ]
+    },
+    {
+      "symbol": "usdc",
+      "name": "USDC",
+      "price_usd": 0.999998,
+      "market_cap": 74452341011,
+      "volume_24h": 1758854963,
+      "price_change_24h": 0.01588,
+      "sentiment_score": 41.23,
+      "signal": "HOLD",
+      "confidence": 0.67,
+      "notes": [
+        "Neutral sentiment (41.23/100)",
+        "Stable price action: +0.02%",
+        "Healthy trading volume",
+        "Mid-cap with growth potential",
+        "\u26a0\ufe0f Extreme fear in market - potential bottom"
+      ]
+    },
+    {
+      "symbol": "sol",
+      "name": "Solana",
+      "price_usd": 85.02,
+      "market_cap": 48343841676,
+      "volume_24h": 2160019471,
+      "price_change_24h": 0.4244,
+      "sentiment_score": 51.07,
+      "signal": "HOLD",
+      "confidence": 0.67,
+      "notes": [
+        "Neutral sentiment (51.07/100)",
+        "Stable price action: +0.42%",
+        "Healthy trading volume",
+        "Mid-cap with growth potential",
+        "\u26a0\ufe0f Extreme fear in market - potential bottom"
+      ]
+    },
+    {
+      "symbol": "trx",
+      "name": "TRON",
+      "price_usd": 0.28795,
+      "market_cap": 27276557936,
+      "volume_24h": 460924514,
+      "price_change_24h": 1.21791,
+      "sentiment_score": 42.22,
+      "signal": "HOLD",
+      "confidence": 0.6,
+      "notes": [
+        "Neutral sentiment (42.22/100)",
+        "Stable price action: +1.22%",
+        "Low volume - exercise caution",
+        "Mid-cap with growth potential",
+        "\u26a0\ufe0f Extreme fear in market - potential bottom"
+      ]
+    },
+    {
+      "symbol": "doge",
+      "name": "Dogecoin",
+      "price_usd": 0.097015,
+      "market_cap": 16379332779,
+      "volume_24h": 514330051,
+      "price_change_24h": -2.95975,
+      "sentiment_score": 35.6,
+      "signal": "HOLD",
+      "confidence": 0.63,
+      "notes": [
+        "Neutral sentiment (35.6/100)",
+        "Negative 24h momentum: -2.96%",
+        "Healthy trading volume",
+        "Mid-cap with growth potential",
+        "\u26a0\ufe0f Extreme fear in market - potential bottom"
+      ]
+    },
+    {
+      "symbol": "figr_heloc",
+      "name": "Figure Heloc",
+      "price_usd": 1.046,
+      "market_cap": 15925734315,
+      "volume_24h": 1194271,
+      "price_change_24h": 1.02227,
+      "sentiment_score": 34.9,
+      "signal": "HOLD",
+      "confidence": 0.6,
+      "notes": [
+        "Neutral sentiment (34.9/100)",
+        "Stable price action: +1.02%",
+        "Low volume - exercise caution",
+        "Mid-cap with growth potential",
+        "\u26a0\ufe0f Extreme fear in market - potential bottom"
+      ]
+    }
+  ]
+}

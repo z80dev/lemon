@@ -1,0 +1,224 @@
+---
+title: Skills System
+description: 'Reusable knowledge modules for agents'
+---
+
+Skills are reusable knowledge modules that provide instructions and context to agents.
+
+## What are Skills?
+
+Skills are markdown files with YAML/TOML frontmatter that contain:
+- Instructions for the agent
+- Required binaries and configuration
+- Version and metadata
+
+## Skill Locations
+
+Skills can be global or project-specific:
+
+```bash
+# Global skill (available everywhere)
+~/.lemon/agent/skill/my-skill/SKILL.md
+
+# Project skill (only in this project)
+/path/to/project/.lemon/skill/my-skill/SKILL.md
+```
+
+## Skill File Format
+
+```markdown
+---
+name: git-workflow
+description: Git best practices and commands
+version: 1.0.0
+requires:
+  bins:
+    - git
+    - gh
+  config:
+    - GITHUB_TOKEN
+  files:
+    - ~/.gitconfig
+---
+
+# Git Workflow
+
+When working with Git:
+
+1. Always create feature branches from main
+2. Use conventional commits
+3. Push branches and create PRs for review
+
+## Common Commands
+
+```bash
+# Create and switch to new branch
+git checkout -b feature/my-feature
+
+# Stage and commit
+git add .
+git commit -m "feat: add new feature"
+
+# Push and create PR
+git push -u origin feature/my-feature
+gh pr create
+```
+```
+
+## Using Skills
+
+### Listing Skills
+
+```elixir
+# List all available skills
+LemonSkills.list()
+
+# List skills for a specific project
+LemonSkills.list(cwd: "/path/to/project")
+```
+
+### Getting a Skill
+
+```elixir
+{:ok, skill} = LemonSkills.get("git-workflow")
+
+# skill contains:
+# - name
+# - description
+# - version
+# - content (the markdown body)
+# - requirements
+```
+
+### Checking Readiness
+
+```elixir
+status = LemonSkills.status("kubectl-operations")
+# => %{ready: false, missing_bins: ["kubectl"], missing_config: ["KUBECONFIG"]}
+```
+
+### Agent Access
+
+Agents can read skills via the `read_skill` tool:
+
+```
+> read_skill("git-workflow")
+
+The agent receives the skill content and can use it to guide its actions.
+```
+
+## Installing Skills
+
+### From Git
+
+```elixir
+LemonSkills.install("https://github.com/user/skill-repo")
+```
+
+### Manual Installation
+
+1. Create directory: `~/.lemon/agent/skill/my-skill/`
+2. Add `SKILL.md` file
+3. Lemon automatically discovers it
+
+## Bundled Skills
+
+Lemon includes these built-in skills:
+
+| Skill | Description |
+|-------|-------------|
+| `github` | GitHub CLI operations |
+| `peekaboo` | macOS UI automation |
+| `pinata` | IPFS pinning via Pinata |
+| `runtime-remsh` | BEAM remote shell |
+| `session-logs` | Session log analysis |
+| `skill-creator` | Creating new skills |
+| `summarize` | Text/video summarization |
+| `tmux` | Tmux session control |
+
+## Creating Skills
+
+### Best Practices
+
+1. **Be specific**: Give concrete examples and commands
+2. **Include context**: Explain when and why to use the skill
+3. **List requirements**: Declare all binaries and env vars needed
+4. **Version your skill**: Use semantic versioning
+5. **Test it**: Try the skill with an agent
+
+### Example: Docker Skill
+
+```markdown
+---
+name: docker-helpers
+description: Common Docker and Docker Compose operations
+version: 1.0.0
+requires:
+  bins:
+    - docker
+---
+
+# Docker Helpers
+
+## Best Practices
+
+- Use `docker compose` (v2) instead of `docker-compose` (v1)
+- Always check if containers are running before operations
+- Use `--build` when code changes affect the image
+- Prefer bind mounts for development, volumes for production
+
+## Common Commands
+
+### Development
+
+```bash
+# Start services
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Rebuild after changes
+docker compose up -d --build
+
+# Run commands in container
+docker compose exec app npm test
+```
+
+### Cleanup
+
+```bash
+# Remove stopped containers
+docker container prune
+
+# Remove unused images
+docker image prune
+
+# Full cleanup (use with caution)
+docker system prune
+```
+```
+
+## Skill Registry
+
+The skill registry:
+- Loads skills on startup
+- Watches for changes
+- Validates requirements
+- Caches for performance
+
+## Dependencies
+
+Skills can declare dependencies:
+
+```yaml
+requires:
+  bins:
+    - required-binary
+  config:
+    - REQUIRED_ENV_VAR
+  files:
+    - /path/to/required/file
+```
+
+The status check reports missing dependencies so agents know what's needed.

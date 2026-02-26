@@ -1,0 +1,128 @@
+[
+  {
+    "test_name": "async_task_nonblock",
+    "status": "PASS",
+    "spawn_ack_time": 13.97010326385498,
+    "followup_reply_time": 22.068169116973877,
+    "async_result_time": 75.32372403144836,
+    "spawn_ack_text": "Done! I've spawned an async subtask (ID: 229b4f22fb962f33) to research the BEAM VM history. It's running in the background now.\n\nI'm still here and available for anything else you need! \ud83c\udf4b",
+    "followup_reply_text": "The capital of France is Paris. \ud83c\uddeb\ud83c\uddf7",
+    "async_result_text": "The research task has completed! Here's the comprehensive summary on the BEAM virtual machine:\n\nThe History of the BEAM Virtual Machine\n\nThe BEAM (Bogdan/Bj\u00f6rn's Erlang Abstract Machine) virtual machi",
+    "timeline": [
+      {
+        "event": "spawn_sent",
+        "t": 1.1036670207977295
+      },
+      {
+        "event": "bot_msg",
+        "t": 13.970072269439697,
+        "msg_id": 3408,
+        "chars": 187,
+        "preview": "Done! I've spawned an async subtask (ID: 229b4f22fb962f33) to research the BEAM "
+      },
+      {
+        "event": "followup_sent",
+        "t": 16.067771196365356
+      },
+      {
+        "event": "bot_msg",
+        "t": 22.06815528869629,
+        "msg_id": 3410,
+        "chars": 34,
+        "preview": "The capital of France is Paris. \ud83c\uddeb\ud83c\uddf7"
+      },
+      {
+        "event": "bot_msg",
+        "t": 75.32368898391724,
+        "msg_id": 3411,
+        "chars": 4044,
+        "preview": "The research task has completed! Here's the comprehensive summary on the BEAM vi"
+      }
+    ],
+    "notes": "Follow-up answered at 22.1s, async result at 75.3s \u2014 non-blocking confirmed!"
+  },
+  {
+    "test_name": "async_agent_nonblock",
+    "status": "PASS",
+    "spawn_ack_time": 13.027156114578247,
+    "followup_reply_time": 21.015197038650513,
+    "async_result_time": 31.393229007720947,
+    "spawn_ack_text": "Done! I've delegated the Sieve of Eratosthenes implementation to the coder agent (task ID: 033e88ec7e2faeb6).\n\nI'm still here and available! The task is running in the background, so I can continue he",
+    "followup_reply_text": "7 times 8 is 56.",
+    "async_result_text": "The coder agent finished the task! The Sieve of Eratosthenes implementation is now saved at ~/dev/lemon/content/sieve.py with:\n\n- Full type hints (sieve_of_eratosthenes(n: int) -> list[int])\n- Compreh",
+    "timeline": [
+      {
+        "event": "spawn_sent",
+        "t": 1.0783171653747559
+      },
+      {
+        "event": "bot_msg",
+        "t": 13.027150869369507,
+        "msg_id": 3415,
+        "chars": 286,
+        "preview": "Done! I've delegated the Sieve of Eratosthenes implementation to the coder agent"
+      },
+      {
+        "event": "followup_sent",
+        "t": 15.068435907363892
+      },
+      {
+        "event": "bot_msg",
+        "t": 21.0151948928833,
+        "msg_id": 3417,
+        "chars": 16,
+        "preview": "7 times 8 is 56."
+      },
+      {
+        "event": "bot_msg",
+        "t": 31.393220901489258,
+        "msg_id": 3418,
+        "chars": 432,
+        "preview": "The coder agent finished the task! The Sieve of Eratosthenes implementation is n"
+      }
+    ],
+    "notes": "Follow-up answered at 21.0s, async result at 31.4s \u2014 non-blocking confirmed!"
+  },
+  {
+    "test_name": "multi_async_nonblock",
+    "status": "PARTIAL",
+    "spawn_ack_time": 13.552286863327026,
+    "followup_reply_time": 31.9286048412323,
+    "async_result_time": 26.593641996383667,
+    "spawn_ack_text": "Both tasks are now running in the background:\n\n1. File listing task (bd9ba82c9908f44f) - scanning ~/dev/lemon/apps/\n2. Bitcoin price search (72409becd2776075) - searching the web\nI'm still available a",
+    "followup_reply_text": "When you mix red and blue, you get purple (or violet)! \ud83d\udfe3\n\nMore specifically:\n\n- Equal parts red + blue = purple\n- More red than blue = magenta or reddish-purple\n- More blue than red = violet or bluish",
+    "async_result_text": "And the file listing task is complete too! \ud83d\udcca\n\nSummary for ~/dev/lemon/apps/:\n\n- 13,260 files\n- 3,363 directories\n- 16,634 total entries\nThe directory contains 7 main Elixir applications: coding_agent,",
+    "timeline": [
+      {
+        "event": "spawn_sent",
+        "t": 1.0891327857971191
+      },
+      {
+        "event": "bot_msg",
+        "t": 13.552264928817749,
+        "msg_id": 3421,
+        "chars": 245,
+        "preview": "Both tasks are now running in the background:\n\n1. File listing task (bd9ba82c990"
+      },
+      {
+        "event": "followup_sent",
+        "t": 15.592907905578613
+      },
+      {
+        "event": "bot_msg",
+        "t": 26.593608856201172,
+        "msg_id": 3423,
+        "chars": 392,
+        "preview": "And the file listing task is complete too! \ud83d\udcca\n\nSummary for ~/dev/lemon/apps/:\n\n- "
+      },
+      {
+        "event": "bot_msg",
+        "t": 31.92859697341919,
+        "msg_id": 3424,
+        "chars": 335,
+        "preview": "When you mix red and blue, you get purple (or violet)! \ud83d\udfe3\n\nMore specifically:\n\n- "
+      }
+    ],
+    "notes": "Both received but follow-up at 31.9s, async at 26.6s \u2014 follow-up arrived after async (may have been blocked)"
+  }
+]

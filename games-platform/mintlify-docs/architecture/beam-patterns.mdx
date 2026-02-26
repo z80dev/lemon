@@ -1,0 +1,211 @@
+---
+title: BEAM Patterns
+description: 'How Lemon leverages BEAM/OTP patterns'
+---
+
+Lemon is built on BEAM/OTP patterns that provide fault tolerance, concurrency, and distribution capabilities.
+
+## Process-per-Agent
+
+Each agent runs as an independent GenServer process.
+
+### Benefits
+
+- **Isolated State**: Each agent maintains its own conversation context
+- **Mailbox Queue**: Natural message queuing for prompts and steering
+- **Crash Isolation**: One agent crashing doesn't affect others
+- **Synchronous & Async**: `call` for confirmation, `cast` for fire-and-forget
+
+### Example
+
+```elixir
+# Each session is a separate process
+{:ok, pid1} = CodingAgent.start_session(session_id: "session-1")
+{:ok, pid2} = CodingAgent.start_session(session_id: "session-2")
+
+# Crash one, the other continues
+Process.exit(pid1, :kill)
+# pid2 still operational
+```
+
+## GenServer State Management
+
+Agents use GenServer state for:
+
+- Conversation context
+- Tool registry
+- Configuration
+- Pending operations
+
+```elixir
+defmodule AgentCore.Agent do
+  use GenServer
+
+  defstruct [
+    :model,
+    :system_prompt,
+    :tools,
+    :context,
+    :pending_steering,
+    :abort_signal
+  ]
+
+  # State is isolated to this process
+end
+```
+
+## Message Passing
+
+Agents communicate via asynchronous messages:
+
+```elixir
+# Send prompt (non-blocking)
+:ok = AgentCore.prompt(agent, "Refactor this module")
+
+# Agent handles in background
+# Events streamed back to subscribers
+receive do
+  {:agent_event, event} -> handle_event(event)
+end
+```
+
+### Live Steering
+
+Users can send messages mid-execution:
+
+```elixir
+# Agent is processing...
+:ok = AgentCore.steer(agent, "Use a different approach")
+
+# Agent incorporates at appropriate point
+```
+
+## ETS for Shared State
+
+ETS (Erlang Term Storage) for read-heavy shared data:
+
+| Table | Purpose |
+|-------|---------|
+| `ProviderRegistry` | Provider configs in `:persistent_term` |
+| `AbortSignal` | Signal storage with `read_concurrency: true` |
+| `TodoStore` | Per-session todo lists |
+
+```elixir
+def aborted?(ref) do
+  case :ets.lookup(@table, ref) do
+    [{^ref, true}] -> true
+    _ -> false
+  end
+end
+```
+
+## Registry and Discovery
+
+`Registry` for process discovery:
+
+```elixir
+# Register a session
+Registry.register(SessionRegistry, session_id, pid)
+
+# Look up a session
+[{pid, _}] = Registry.lookup(SessionRegistry, session_id)
+```
+
+## Dynamic Supervisors
+
+Runtime-spawned processes under supervision:
+
+```elixir
+# Start a subagent
+DynamicSupervisor.start_child(
+  SubagentSupervisor,
+  {CodingAgent.Session, opts}
+)
+
+# Temporary restart strategy - don't restart on crash
+```
+
+## Links and Monitors
+
+Lifecycle management:
+
+```elixir
+# Stream monitors owner process
+{:ok, stream} = EventStream.start_link(owner: self())
+
+# If owner dies, stream auto-cancels
+```
+
+## Preemptive Scheduling
+
+The BEAM scheduler ensures responsiveness:
+
+```elixir
+# Tool execution in separate Task
+Task.async(fn ->
+  BashExecutor.execute(command, cwd, opts)
+end)
+
+# Main agent process remains responsive
+```
+
+## Supervision Trees
+
+Hierarchical fault tolerance:
+
+```
+LemonSupervisor
+├── Ai.Supervisor
+├── AgentCore.Supervisor
+├── CodingAgent.Supervisor
+│   └── SessionSupervisor
+│       └── Session processes
+├── LemonCore.Supervisor
+├── LemonGateway.Supervisor
+├── LemonRouter.Supervisor
+├── LemonChannels.Supervisor
+├── LemonAutomation.Supervisor
+├── LemonControlPlane.Supervisor
+└── LemonSkills.Supervisor
+```
+
+Each supervisor:
+- Defines restart strategies
+- Isolates failures
+- Enables graceful degradation
+
+## Hot Code Reloading
+
+Update code without restarting:
+
+```elixir
+# In IEx
+recompile()
+
+# Or remote attach
+iex --remsh lemon_gateway@host
+recompile()
+```
+
+Benefits:
+- Update tools dynamically
+- Load extensions without restart
+- Patch running systems
+
+## Distribution
+
+BEAM's native distribution capabilities:
+
+```elixir
+# Connect nodes
+Node.connect(:"lemon_gateway@other-host")
+
+# RPC to remote node
+:rpc.call(:"lemon_gateway@other-host", Module, :function, [args])
+```
+
+Future possibilities:
+- Distributed agent clusters
+- Remote tool execution
+- Multi-node session persistence
+- Load balancing across pools

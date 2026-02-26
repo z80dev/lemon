@@ -1,0 +1,129 @@
+#!/bin/bash
+#
+# lemon-tui - Launch Lemon TUI against a shared runtime.
+#
+# If a control-plane runtime is already up, this attaches over WebSocket.
+# If not, it boots ./bin/lemon in daemon mode, waits for readiness, then starts TUI.
+#
+# Usage:
+#   ./bin/lemon-tui [all lemon-tui CLI args]
+#
+
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+LEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+export LEMON_PATH="$LEMON_ROOT"
+
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+info() {
+  echo -e "${GREEN}[lemon-tui]${NC} $1"
+}
+
+warn() {
+  echo -e "${YELLOW}[lemon-tui]${NC} $1"
+}
+
+error() {
+  echo -e "${RED}[lemon-tui]${NC} $1" >&2
+}
+
+CP_PORT="${LEMON_CONTROL_PLANE_PORT:-4040}"
+DEFAULT_WS_URL="ws://localhost:${CP_PORT}/ws"
+WS_URL="${LEMON_WS_URL:-$DEFAULT_WS_URL}"
+
+has_ws_url_arg=0
+show_help=0
+pass_args=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --ws-url)
+      has_ws_url_arg=1
+      pass_args+=("$1")
+      if [[ -n "${2:-}" ]]; then
+        WS_URL="$2"
+        pass_args+=("$2")
+        shift 2
+      else
+        error "Missing value for --ws-url"
+        exit 1
+      fi
+      ;;
+    *)
+      if [[ "$1" == "--help" || "$1" == "-h" ]]; then
+        show_help=1
+      fi
+      pass_args+=("$1")
+      shift
+      ;;
+  esac
+done
+
+runtime_healthy() {
+  curl -sS -m 2 "http://localhost:${CP_PORT}/healthz" >/dev/null 2>&1
+}
+
+if [[ "$show_help" == "0" ]] && ! runtime_healthy; then
+  warn "No control-plane runtime detected on :${CP_PORT}; starting ./bin/lemon --daemon"
+  "$LEMON_ROOT/bin/lemon" --daemon --port "$CP_PORT"
+
+  ready=0
+  for _ in $(seq 1 40); do
+    if runtime_healthy; then
+      ready=1
+      break
+    fi
+    sleep 0.5
+  done
+
+  if [[ "$ready" != "1" ]]; then
+    error "Runtime did not become healthy on :${CP_PORT}"
+    error "Check logs: /tmp/lemon-runtime.log"
+    exit 1
+  fi
+
+  info "Runtime is healthy."
+else
+  if [[ "$show_help" == "0" ]]; then
+    info "Using existing runtime on :${CP_PORT}"
+  fi
+fi
+
+TUI_DIR="$LEMON_ROOT/clients/lemon-tui"
+if [[ ! -d "$TUI_DIR" ]]; then
+  error "TUI directory not found: $TUI_DIR"
+  exit 1
+fi
+
+cd "$TUI_DIR"
+
+if [[ ! -d "node_modules" ]]; then
+  info "Installing TUI dependencies..."
+  npm install
+fi
+
+if [[ ! -f "dist/cli.js" ]]; then
+  info "Building TUI..."
+  npm run build
+fi
+
+if [[ "$show_help" == "0" ]] && [[ "$has_ws_url_arg" == "0" ]] && [[ -z "${LEMON_WS_URL:-}" ]]; then
+  pass_args+=(--ws-url "$WS_URL")
+fi
+
+if [[ "$show_help" == "0" ]]; then
+  info "Launching TUI (ws: ${WS_URL})"
+fi
+exec node dist/cli.js "${pass_args[@]}"

@@ -1,0 +1,58 @@
+[
+  {
+    "mission_id": "M01",
+    "name": "Write market_intel tests",
+    "category": "codebase",
+    "status": "TIMEOUT",
+    "topic_id": 3187,
+    "sent_ids": [
+      3191
+    ],
+    "recv_ids": [],
+    "recv_texts": [],
+    "duration": 600.6346180438995,
+    "notes": "No substantive reply within timeout"
+  },
+  {
+    "mission_id": "M02",
+    "name": "Add typespecs to agent_core",
+    "category": "codebase",
+    "status": "TIMEOUT",
+    "topic_id": 3184,
+    "sent_ids": [
+      3190
+    ],
+    "recv_ids": [],
+    "recv_texts": [],
+    "duration": 600.6245622634888,
+    "notes": "No substantive reply within timeout"
+  },
+  {
+    "mission_id": "M03",
+    "name": "Document tool system",
+    "category": "codebase",
+    "status": "TIMEOUT",
+    "topic_id": 3185,
+    "sent_ids": [
+      3188
+    ],
+    "recv_ids": [],
+    "recv_texts": [],
+    "duration": 600.6228318214417,
+    "notes": "No substantive reply within timeout"
+  },
+  {
+    "mission_id": "M04",
+    "name": "Improve scheduler error handling",
+    "category": "codebase",
+    "status": "TIMEOUT",
+    "topic_id": 3186,
+    "sent_ids": [
+      3189
+    ],
+    "recv_ids": [],
+    "recv_texts": [],
+    "duration": 600.623762845993,
+    "notes": "No substantive reply within timeout"
+  }
+]

@@ -1,0 +1,248 @@
+---
+title: Tool Execution Flow
+description: 'How tools are executed in Lemon'
+---
+
+## Overview
+
+Tools in Lemon follow a structured execution flow with approval gating, policy enforcement, and result handling.
+
+## Execution Flow
+
+```
+┌─────────────────┐
+│   LLM Response  │
+│  (tool_call)    │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  Tool Policy    │
+│  Check          │
+└────────┬────────┘
+         │
+    ┌────┴────┐
+    │         │
+Allowed   Blocked
+    │         │
+    ▼         ▼
+┌────────┐ ┌────────┐
+│Approval│ │ Return │
+│ Gate   │ │ Error  │
+└───┬────┘ └────────┘
+    │
+    ▼
+┌─────────────────┐
+│  Tool Execution │
+│  (with signal)  │
+└────────┬────────┘
+         │
+    ┌────┴────┐
+    │         │
+ Success   Failure
+    │         │
+    ▼         ▼
+┌────────┐ ┌────────┐
+│ Return │ │ Return │
+│ Result │ │ Error  │
+└────────┘ └────────┘
+```
+
+## Step-by-Step
+
+### 1. Tool Call Request
+
+The LLM requests a tool call:
+
+```json
+{
+  "tool_call_id": "call_abc123",
+  "tool_name": "read",
+  "arguments": {"path": "/path/to/file"}
+}
+```
+
+### 2. Policy Check
+
+The tool policy is checked:
+
+```elixir
+# Check if tool is allowed
+case CodingAgent.ToolPolicy.check(policy, tool_name) do
+  :ok -> proceed()
+  {:error, :blocked} -> return_error(:tool_blocked)
+end
+```
+
+### 3. Approval Gate
+
+If the tool requires approval:
+
+```elixir
+# Request approval
+{:ok, approval_id} = LemonRouter.ApprovalsBridge.request(
+  run_id: run_id,
+  tool: tool_name,
+  command: command,
+  timeout_ms: 300_000
+)
+
+# Wait for resolution
+receive do
+  {:approval_resolved, ^approval_id, :approved} -> proceed()
+  {:approval_resolved, ^approval_id, :denied} -> return_error(:denied)
+end
+```
+
+### 4. Tool Execution
+
+The tool is executed with abort signaling:
+
+```elixir
+# Create abort signal
+signal = AgentCore.AbortSignal.new(run_id)
+
+# Execute with monitoring
+execute: fn id, args, signal, on_update ->
+  # Check abort before starting
+  if AgentCore.AbortSignal.aborted?(signal) do
+    {:error, :aborted}
+  else
+    # Execute tool
+    result = do_execution(args)
+    
+    # Check abort during execution
+    if AgentCore.AbortSignal.aborted?(signal) do
+      {:error, :aborted}
+    else
+      AgentCore.new_tool_result(content: [AgentCore.text_content(result)])
+    end
+  end
+end
+```
+
+### 5. Result Handling
+
+The result is processed and returned to the LLM:
+
+```elixir
+# Success
+AgentCore.new_tool_result(
+  content: [AgentCore.text_content("File contents...")],
+  details: %{path: "/path/to/file", size: 1234}
+)
+
+# Error
+{:error, "File not found"}
+```
+
+## Tool Types
+
+### Built-in Tools
+
+Default tools available in all sessions:
+
+- `read`, `write`, `edit`, `patch`
+- `bash`, `grep`, `find`, `ls`
+- `browser`, `webfetch`, `websearch`
+- `todo`, `task`, `memory_topic`
+- `extensions_status`
+
+### Extension Tools
+
+Dynamically loaded from extensions:
+
+```elixir
+# Loaded from ~/.lemon/agent/extensions/
+# or <cwd>/.lemon/extensions/
+```
+
+### WASM Tools
+
+Ironclaw-compatible WASM modules:
+
+```elixir
+# Loaded from .wasm files
+# Sandboxed execution
+# Capability-based security
+```
+
+## Tool Policy Profiles
+
+| Profile | Allowed Tools |
+|---------|--------------|
+| `:full_access` | All tools |
+| `:minimal_core` | Core file/shell tools |
+| `:read_only` | Read operations only |
+| `:safe_mode` | No write/exec/process |
+| `:subagent_restricted` | Limited for subagents |
+| `:no_external` | No browser/web tools |
+
+## Approval Scopes
+
+When approval is required, users can choose:
+
+| Scope | Duration |
+|-------|----------|
+| `once` | This execution only |
+| `session` | Until session ends |
+| `agent` | Until agent restarts |
+| `global` | Permanent |
+
+## Error Handling
+
+Tool errors are handled gracefully:
+
+```elixir
+case execute_tool(tool, args) do
+  {:ok, result} -> 
+    # Return result to LLM
+    
+  {:error, reason} -> 
+    # Return error to LLM
+    # LLM can retry or ask user
+    
+  {:error, :aborted} -> 
+    # Execution was cancelled
+    # Stop processing
+end
+```
+
+## Streaming Results
+
+Some tools support streaming results:
+
+```elixir
+execute: fn id, args, signal, on_update ->
+  # Stream partial results
+  on_update.({:partial, "Processing..."})
+  
+  # Continue execution
+  result = long_running_operation()
+  
+  on_update.({:complete, result})
+end
+```
+
+## Tool Timeouts
+
+Tools have configurable timeouts:
+
+```elixir
+# Default: 60 seconds
+# Configurable per tool
+execute: fn id, args, signal, on_update ->
+  Task.async(fn -> 
+    do_work()
+  end)
+  |> Task.await(60_000)  # 60 second timeout
+end
+```
+
+## Security
+
+- Tools run in isolated processes
+- WASM tools are sandboxed
+- Capabilities must be declared
+- Secrets are injected by host
+- Prompt-boundary hardening for untrusted output

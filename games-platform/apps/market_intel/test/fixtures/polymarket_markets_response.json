@@ -1,0 +1,84 @@
+{
+  "data": {
+    "markets": [
+      {
+        "id": "market-1",
+        "question": "Will Bitcoin hit $100k by end of 2024?",
+        "slug": "bitcoin-100k-2024",
+        "volume": 2500000,
+        "liquidity": 500000,
+        "outcomePrices": ["0.65", "0.35"],
+        "outcomes": ["Yes", "No"],
+        "endDate": "2024-12-31T23:59:59Z",
+        "category": "Crypto",
+        "description": "Prediction market for Bitcoin price target",
+        "createdAt": "2024-01-01T00:00:00Z"
+      },
+      {
+        "id": "market-2",
+        "question": "Will Ethereum ETF be approved in 2024?",
+        "slug": "eth-etf-2024",
+        "volume": 1800000,
+        "liquidity": 400000,
+        "outcomePrices": ["0.80", "0.20"],
+        "outcomes": ["Yes", "No"],
+        "endDate": "2024-12-31T23:59:59Z",
+        "category": "Crypto",
+        "description": "Ethereum ETF approval prediction",
+        "createdAt": "2024-01-15T00:00:00Z"
+      },
+      {
+        "id": "market-3",
+        "question": "Will AI surpass human intelligence by 2030?",
+        "slug": "agi-2030",
+        "volume": 3200000,
+        "liquidity": 800000,
+        "outcomePrices": ["0.45", "0.55"],
+        "outcomes": ["Yes", "No"],
+        "endDate": "2030-12-31T23:59:59Z",
+        "category": "Technology",
+        "description": "AGI timeline prediction",
+        "createdAt": "2024-02-01T00:00:00Z"
+      },
+      {
+        "id": "market-4",
+        "question": "Will aliens make contact in 2024?",
+        "slug": "alien-contact-2024",
+        "volume": 500000,
+        "liquidity": 100000,
+        "outcomePrices": ["0.05", "0.95"],
+        "outcomes": ["Yes", "No"],
+        "endDate": "2024-12-31T23:59:59Z",
+        "category": "Weird",
+        "description": "Alien contact prediction",
+        "createdAt": "2024-03-01T00:00:00Z"
+      },
+      {
+        "id": "market-5",
+        "question": "Will ChatGPT-5 be released in 2024?",
+        "slug": "gpt5-2024",
+        "volume": 1200000,
+        "liquidity": 300000,
+        "outcomePrices": ["0.30", "0.70"],
+        "outcomes": ["Yes", "No"],
+        "endDate": "2024-12-31T23:59:59Z",
+        "category": "AI",
+        "description": "OpenAI GPT-5 release prediction",
+        "createdAt": "2024-02-15T00:00:00Z"
+      },
+      {
+        "id": "market-6",
+        "question": "Will there be a Jesus sighting in 2024?",
+        "slug": "jesus-sighting-2024",
+        "volume": 250000,
+        "liquidity": 50000,
+        "outcomePrices": ["0.02", "0.98"],
+        "outcomes": ["Yes", "No"],
+        "endDate": "2024-12-31T23:59:59Z",
+        "category": "Weird",
+        "description": "Religious prediction market",
+        "createdAt": "2024-04-01T00:00:00Z"
+      }
+    ]
+  }
+}

@@ -1,0 +1,259 @@
+#!/bin/bash
+#
+# lemon - Launch a unified Lemon runtime from source.
+#
+# Starts a single BEAM node with the gateway + control plane + router + channels
+# and other core apps so web/TUI clients can attach to one runtime.
+#
+# Usage:
+#   ./bin/lemon [--daemon] [--debug] [--port <control_plane_port>] [--web-port <lemon_web_port>]
+#               [--name <name@host> | --sname <name>] [--cookie <cookie>] [--no-distribution]
+#
+
+set -euo pipefail
+
+LAUNCH_CWD="$(pwd)"
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+LEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+export LEMON_PATH="$LEMON_ROOT"
+
+show_help() {
+  cat << 'EOF'
+Usage: ./bin/lemon [options]
+
+Options:
+  --daemon                Run in background and print PID
+  --debug                 Enable debug logging
+  --port <port>           Control plane port (default: 4040)
+  --web-port <port>       lemon_web HTTP port (default: 4080)
+  --name <name@host>      Start as distributed long-name node
+  --sname <name>          Start as distributed short-name node (default: lemon)
+  --cookie <cookie>       Erlang cookie (default: $LEMON_GATEWAY_NODE_COOKIE or lemon_gateway_dev_cookie)
+  --no-distribution       Disable distributed node startup
+  --help, -h              Show this help
+
+Environment fallbacks:
+  LEMON_CONTROL_PLANE_PORT
+  LEMON_WEB_PORT
+  LEMON_GATEWAY_NODE_NAME
+  LEMON_GATEWAY_NODE_COOKIE
+  LEMON_GATEWAY_COOKIE
+  LEMON_DOTENV_DIR
+EOF
+}
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
+
+info() {
+  echo -e "${GREEN}[lemon]${NC} $1"
+}
+
+warn() {
+  echo -e "${YELLOW}[lemon]${NC} $1"
+}
+
+error() {
+  echo -e "${RED}[lemon]${NC} $1" >&2
+}
+
+DEBUG=""
+DAEMON=0
+PORT="${LEMON_CONTROL_PLANE_PORT:-4040}"
+WEB_PORT="${LEMON_WEB_PORT:-4080}"
+NODE_MODE=""
+NODE_NAME="${LEMON_GATEWAY_NODE_NAME:-lemon}"
+NODE_COOKIE="${LEMON_GATEWAY_NODE_COOKIE:-${LEMON_GATEWAY_COOKIE:-lemon_gateway_dev_cookie}}"
+DISTRIBUTED=1
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --daemon)
+      DAEMON=1
+      shift
+      ;;
+    --debug)
+      DEBUG="1"
+      shift
+      ;;
+    --port)
+      [[ -n "${2:-}" ]] || { error "Missing value for --port"; exit 1; }
+      PORT="$2"
+      shift 2
+      ;;
+    --web-port)
+      [[ -n "${2:-}" ]] || { error "Missing value for --web-port"; exit 1; }
+      WEB_PORT="$2"
+      shift 2
+      ;;
+    --name)
+      [[ -n "${2:-}" ]] || { error "Missing value for --name"; exit 1; }
+      NODE_MODE="name"
+      NODE_NAME="$2"
+      shift 2
+      ;;
+    --sname)
+      [[ -n "${2:-}" ]] || { error "Missing value for --sname"; exit 1; }
+      NODE_MODE="sname"
+      NODE_NAME="$2"
+      shift 2
+      ;;
+    --cookie)
+      [[ -n "${2:-}" ]] || { error "Missing value for --cookie"; exit 1; }
+      NODE_COOKIE="$2"
+      shift 2
+      ;;
+    --no-distribution)
+      DISTRIBUTED=0
+      shift
+      ;;
+    --help|-h)
+      show_help
+      exit 0
+      ;;
+    *)
+      error "Unknown option: $1"
+      show_help
+      exit 1
+      ;;
+  esac
+done
+
+if ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
+  error "Invalid --port value: $PORT"
+  exit 1
+fi
+
+if ! [[ "$WEB_PORT" =~ ^[0-9]+$ ]]; then
+  error "Invalid --web-port value: $WEB_PORT"
+  exit 1
+fi
+
+if [[ -z "$NODE_MODE" ]]; then
+  if [[ "$NODE_NAME" == *"@"* ]]; then
+    NODE_MODE="name"
+  else
+    NODE_MODE="sname"
+  fi
+fi
+
+if [[ "$DISTRIBUTED" == "1" ]] && [[ -z "$NODE_COOKIE" ]]; then
+  error "Distributed mode requires a non-empty cookie. Pass --cookie or set LEMON_GATEWAY_NODE_COOKIE."
+  exit 1
+fi
+
+export LEMON_DOTENV_DIR="${LEMON_DOTENV_DIR:-$LAUNCH_CWD}"
+export LEMON_CONTROL_PLANE_PORT="$PORT"
+export LEMON_WEB_PORT="$WEB_PORT"
+
+if [[ -n "$DEBUG" ]]; then
+  export LEMON_DEBUG=1
+  export LEMON_LOG_LEVEL=debug
+fi
+
+if curl -sS -m 2 "http://localhost:$PORT/healthz" >/dev/null 2>&1; then
+  warn "Control plane already healthy on :$PORT. Another runtime may already be running."
+  info "Leaving existing runtime in place."
+  exit 0
+fi
+
+cd "$LEMON_ROOT"
+mix deps.get
+mix compile
+
+info "Starting unified Lemon runtime"
+info "Control plane: ws://localhost:$LEMON_CONTROL_PLANE_PORT/ws"
+info "Web UI:        http://localhost:$LEMON_WEB_PORT/"
+info "Dotenv dir:    $LEMON_DOTENV_DIR"
+
+EVAL='
+LemonCore.Dotenv.load_and_log(System.get_env("LEMON_DOTENV_DIR"))
+
+case System.get_env("LEMON_CONTROL_PLANE_PORT") do
+  raw when is_binary(raw) and raw != "" ->
+    case Integer.parse(raw) do
+      {port, ""} -> Application.put_env(:lemon_control_plane, :port, port)
+      _ -> :ok
+    end
+  _ -> :ok
+end
+
+case System.get_env("LEMON_WEB_PORT") do
+  raw when is_binary(raw) and raw != "" ->
+    case Integer.parse(raw) do
+      {port, ""} ->
+        Application.put_env(:lemon_web, LemonWeb.Endpoint,
+          Keyword.merge(
+            Application.get_env(:lemon_web, LemonWeb.Endpoint, []),
+            http: [ip: {127, 0, 0, 1}, port: port]
+          )
+        )
+      _ -> :ok
+    end
+  _ -> :ok
+end
+
+apps = [
+  :lemon_gateway,
+  :lemon_router,
+  :lemon_channels,
+  :lemon_control_plane,
+  :lemon_automation,
+  :lemon_skills,
+  :lemon_web
+]
+
+Enum.each(apps, fn app ->
+  case Application.ensure_all_started(app) do
+    {:ok, _} -> :ok
+    {:error, reason} ->
+      IO.puts("[lemon] failed to start #{app}: #{inspect(reason)}")
+      System.halt(1)
+  end
+end)
+'
+
+if [[ "$DAEMON" == "1" ]]; then
+  if [[ "$DISTRIBUTED" == "1" ]]; then
+    nohup elixir "--$NODE_MODE" "$NODE_NAME" --cookie "$NODE_COOKIE" -S mix run --no-start --no-halt -e "$EVAL" > /tmp/lemon-runtime.log 2>&1 &
+  else
+    nohup mix run --no-start --no-halt -e "$EVAL" > /tmp/lemon-runtime.log 2>&1 &
+  fi
+
+  PID=$!
+  sleep 2
+  if kill -0 "$PID" 2>/dev/null; then
+    info "Runtime started in background (pid: $PID)"
+    info "Logs: /tmp/lemon-runtime.log"
+    exit 0
+  fi
+
+  error "Runtime failed to start. See /tmp/lemon-runtime.log"
+  exit 1
+fi
+
+if [[ "$DISTRIBUTED" == "1" ]]; then
+  if [[ "$NODE_MODE" == "name" ]]; then
+    REMSH_TARGET="$NODE_NAME"
+  else
+    SHORT_HOST="$(hostname -s 2>/dev/null || hostname)"
+    REMSH_TARGET="${NODE_NAME}@${SHORT_HOST}"
+  fi
+
+  info "Distributed node: --$NODE_MODE $NODE_NAME"
+  info "Attach example: iex --sname <attach_name> --cookie <same-cookie> --remsh $REMSH_TARGET"
+  exec elixir "--$NODE_MODE" "$NODE_NAME" --cookie "$NODE_COOKIE" -S mix run --no-start --no-halt -e "$EVAL"
+else
+  warn "Distribution disabled (--no-distribution); remote attach is unavailable."
+  exec mix run --no-start --no-halt -e "$EVAL"
+fi

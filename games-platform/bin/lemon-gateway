@@ -1,0 +1,200 @@
+#!/bin/bash
+#
+# lemon-gateway - Launch Lemon's Telegram runtime from source.
+#
+# Usage:
+#   ./bin/lemon-gateway [--debug] [--name <name@host> | --sname <name>] [--cookie <cookie>] [--no-distribution]
+#
+# Reads configuration from:
+#   ~/.lemon/config.toml
+#   <project>/.lemon/config.toml (if you run from a project directory)
+# Also loads:
+#   <launch_dir>/.env (can be overridden by setting LEMON_DOTENV_DIR)
+#
+set -e
+
+LAUNCH_CWD="$(pwd)"
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+LEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+export LEMON_PATH="$LEMON_ROOT"
+
+show_help() {
+  cat << 'EOF'
+Usage: ./bin/lemon-gateway [options]
+
+Options:
+  --debug                 Enable debug logging
+  --name <name@host>      Start as a distributed long-name node
+  --sname <name>          Start as a distributed short-name node (default: lemon_gateway)
+  --cookie <cookie>       Distributed Erlang cookie (default: $LEMON_GATEWAY_NODE_COOKIE or lemon_gateway_dev_cookie)
+  --no-distribution       Disable distributed node startup
+  --help, -h              Show this help
+
+Environment overrides:
+  LEMON_GATEWAY_NODE_NAME      Default node name when using distribution (default: lemon_gateway)
+  LEMON_GATEWAY_NODE_COOKIE    Default cookie (default: lemon_gateway_dev_cookie)
+  LEMON_GATEWAY_COOKIE         Legacy fallback cookie env var
+  LEMON_DOTENV_DIR             Directory whose .env file should be loaded
+EOF
+}
+
+DEBUG=""
+NODE_MODE=""
+NODE_NAME="${LEMON_GATEWAY_NODE_NAME:-lemon_gateway}"
+NODE_COOKIE="${LEMON_GATEWAY_NODE_COOKIE:-${LEMON_GATEWAY_COOKIE:-lemon_gateway_dev_cookie}}"
+DISTRIBUTED=1
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --debug)
+      DEBUG="1"
+      shift
+      ;;
+    --name)
+      if [[ -z "${2:-}" ]]; then
+        echo "Missing value for --name" >&2
+        exit 1
+      fi
+
+      NODE_MODE="name"
+      NODE_NAME="$2"
+      shift 2
+      ;;
+    --sname)
+      if [[ -z "${2:-}" ]]; then
+        echo "Missing value for --sname" >&2
+        exit 1
+      fi
+
+      NODE_MODE="sname"
+      NODE_NAME="$2"
+      shift 2
+      ;;
+    --cookie)
+      if [[ -z "${2:-}" ]]; then
+        echo "Missing value for --cookie" >&2
+        exit 1
+      fi
+
+      NODE_COOKIE="$2"
+      shift 2
+      ;;
+    --no-distribution)
+      DISTRIBUTED=0
+      shift
+      ;;
+    --help|-h)
+      show_help
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      show_help >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ -z "$NODE_MODE" ]]; then
+  if [[ "$NODE_NAME" == *"@"* ]]; then
+    NODE_MODE="name"
+  else
+    NODE_MODE="sname"
+  fi
+fi
+
+if [[ "$DISTRIBUTED" == "1" ]] && [[ -z "$NODE_COOKIE" ]]; then
+  echo "Distributed mode requires a non-empty cookie. Pass --cookie or set LEMON_GATEWAY_NODE_COOKIE." >&2
+  exit 1
+fi
+
+cd "$LEMON_ROOT"
+
+if [[ -n "$DEBUG" ]]; then
+  export LEMON_DEBUG=1
+fi
+
+export LEMON_DOTENV_DIR="${LEMON_DOTENV_DIR:-$LAUNCH_CWD}"
+
+# Some macOS environments deny keychain reads from long-lived BEAM processes
+# (security error code 36: user interaction not allowed). Preloading the
+# master key into env before boot makes secrets resolution deterministic.
+if [[ -z "${LEMON_SECRETS_MASTER_KEY:-}" ]] && command -v security >/dev/null 2>&1; then
+  KEYCHAIN_CANDIDATES=()
+
+  append_keychain_candidate() {
+    local candidate="$1"
+    local existing=""
+
+    candidate="${candidate#"${candidate%%[![:space:]]*}"}"
+    candidate="${candidate%\"}"
+    candidate="${candidate#\"}"
+
+    if [[ -z "$candidate" || ! -f "$candidate" ]]; then
+      return
+    fi
+
+    for existing in "${KEYCHAIN_CANDIDATES[@]}"; do
+      if [[ "$existing" == "$candidate" ]]; then
+        return
+      fi
+    done
+
+    KEYCHAIN_CANDIDATES+=("$candidate")
+  }
+
+  append_keychain_candidate "$(security default-keychain -d user 2>/dev/null | head -n 1 || true)"
+
+  while IFS= read -r keychain_line; do
+    append_keychain_candidate "$keychain_line"
+  done < <(security list-keychains -d user 2>/dev/null || true)
+
+  append_keychain_candidate "$HOME/Library/Keychains/login.keychain-db"
+
+  for keychain_path in "${KEYCHAIN_CANDIDATES[@]}"; do
+    if MASTER_KEY_FROM_KEYCHAIN="$(security find-generic-password -s "Lemon Secrets" -a default -w "$keychain_path" 2>/dev/null)"; then
+      if [[ -n "$MASTER_KEY_FROM_KEYCHAIN" ]]; then
+        export LEMON_SECRETS_MASTER_KEY="$MASTER_KEY_FROM_KEYCHAIN"
+        echo "[lemon-gateway] Loaded secrets master key from keychain."
+        break
+      fi
+    fi
+  done
+fi
+
+mix deps.get
+mix compile
+
+echo "[lemon-gateway] Starting Telegram runtime (Ctrl-C to stop)..."
+# Telegram polling and delivery are owned by lemon_channels (Telegram adapter + outbox),
+# while run orchestration lives in lemon_router and execution lives in lemon_gateway.
+# `--no-start` is important in umbrella projects: it prevents Mix from starting every
+# OTP application in the umbrella (e.g. the control plane on :4040) implicitly.
+if [[ "$DISTRIBUTED" == "1" ]]; then
+  if [[ "$NODE_MODE" == "name" ]]; then
+    REMSH_TARGET="$NODE_NAME"
+  else
+    SHORT_HOST="$(hostname -s 2>/dev/null || hostname)"
+    REMSH_TARGET="${NODE_NAME}@${SHORT_HOST}"
+  fi
+
+  echo "[lemon-gateway] Distributed node: --$NODE_MODE $NODE_NAME"
+  echo "[lemon-gateway] Remote shell target: $REMSH_TARGET"
+  if [[ "$NODE_MODE" == "name" ]]; then
+    echo "[lemon-gateway] Attach example: iex --name <attach@host> --cookie <same-cookie> --remsh $REMSH_TARGET"
+  else
+    echo "[lemon-gateway] Attach example: iex --sname <attach_name> --cookie <same-cookie> --remsh $REMSH_TARGET"
+  fi
+  exec elixir "--$NODE_MODE" "$NODE_NAME" --cookie "$NODE_COOKIE" -S mix run --no-start --no-halt -e 'LemonCore.Dotenv.load_and_log(System.get_env("LEMON_DOTENV_DIR")); Application.ensure_all_started(:lemon_gateway); Application.ensure_all_started(:lemon_router); Application.ensure_all_started(:lemon_channels)'
+else
+  echo "[lemon-gateway] Distribution disabled (--no-distribution); remote attach is unavailable."
+  exec mix run --no-start --no-halt -e 'LemonCore.Dotenv.load_and_log(System.get_env("LEMON_DOTENV_DIR")); Application.ensure_all_started(:lemon_gateway); Application.ensure_all_started(:lemon_router); Application.ensure_all_started(:lemon_channels)'
+fi

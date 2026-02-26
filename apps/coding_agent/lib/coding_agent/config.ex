@@ -79,6 +79,27 @@ defmodule CodingAgent.Config do
   end
 
   @doc """
+  Get the directory used to spill oversized tool/context payloads for a session.
+
+  Files in this directory are safe to reference back to the model as absolute
+  paths (for example via the `read` tool) when inline payloads would exceed
+  model context limits.
+  """
+  @spec spill_dir(String.t(), String.t()) :: String.t()
+  def spill_dir(cwd, session_id) when is_binary(cwd) and is_binary(session_id) do
+    safe_session_id =
+      session_id
+      |> String.trim()
+      |> String.replace(~r/[^a-zA-Z0-9_-]+/, "_")
+      |> case do
+        "" -> "session"
+        value -> value
+      end
+
+    Path.join([sessions_dir(cwd), "spill", safe_session_id])
+  end
+
+  @doc """
   Get the global extensions directory.
 
   Extensions in this directory are available to all projects.

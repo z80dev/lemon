@@ -1,0 +1,36 @@
+[
+  {
+    "test_id": "T41",
+    "name": "task engine=codex async",
+    "status": "PASS",
+    "topic_id": 3169,
+    "sent_ids": [
+      3172
+    ],
+    "recv_ids": [
+      3174
+    ],
+    "recv_texts": [
+      "The Codex subtask completed successfully. It returned **56** \u2014 which is correct (7 * 8 = 56)."
+    ],
+    "duration": 300.0500722079996,
+    "notes": "Codex task returned '56'"
+  },
+  {
+    "test_id": "T43",
+    "name": "task engine=codex sync",
+    "status": "PASS",
+    "topic_id": 3170,
+    "sent_ids": [
+      3171
+    ],
+    "recv_ids": [
+      3173
+    ],
+    "recv_texts": [
+      "The result is **144**."
+    ],
+    "duration": 192.26009075000002,
+    "notes": "Sync codex task returned '144'"
+  }
+]

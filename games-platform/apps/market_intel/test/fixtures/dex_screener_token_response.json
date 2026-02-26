@@ -1,0 +1,90 @@
+{
+  "pairs": [
+    {
+      "chainId": "base",
+      "dexId": "uniswap",
+      "url": "https://dexscreener.com/base/0x1234",
+      "pairAddress": "0x1234567890abcdef",
+      "baseToken": {
+        "address": "0xabcdef1234567890",
+        "name": "Test Token",
+        "symbol": "TEST"
+      },
+      "quoteToken": {
+        "address": "0x4200000000000000000000000000000000000006",
+        "name": "Wrapped Ether",
+        "symbol": "WETH"
+      },
+      "priceNative": "0.0005",
+      "priceUsd": "1.23",
+      "txns": {
+        "m5": {"buys": 10, "sells": 5},
+        "h1": {"buys": 100, "sells": 50},
+        "h6": {"buys": 500, "sells": 300},
+        "h24": {"buys": 2000, "sells": 1500}
+      },
+      "volume": {
+        "h24": 1500000,
+        "h6": 500000,
+        "h1": 100000,
+        "m5": 10000
+      },
+      "priceChange": {
+        "h24": 15.5,
+        "h6": 5.2,
+        "h1": 1.5,
+        "m5": 0.5
+      },
+      "liquidity": {
+        "usd": 5000000,
+        "base": 2000000,
+        "quote": 1000
+      },
+      "fdv": 12300000,
+      "marketCap": 12300000
+    },
+    {
+      "chainId": "base",
+      "dexId": "sushiswap",
+      "url": "https://dexscreener.com/base/0x5678",
+      "pairAddress": "0x567890abcdef1234",
+      "baseToken": {
+        "address": "0xabcdef1234567890",
+        "name": "Test Token",
+        "symbol": "TEST"
+      },
+      "quoteToken": {
+        "address": "0x4200000000000000000000000000000000000006",
+        "name": "Wrapped Ether",
+        "symbol": "WETH"
+      },
+      "priceNative": "0.00048",
+      "priceUsd": "1.18",
+      "txns": {
+        "m5": {"buys": 5, "sells": 3},
+        "h1": {"buys": 50, "sells": 30},
+        "h6": {"buys": 250, "sells": 150},
+        "h24": {"buys": 1000, "sells": 800}
+      },
+      "volume": {
+        "h24": 800000,
+        "h6": 250000,
+        "h1": 50000,
+        "m5": 5000
+      },
+      "priceChange": {
+        "h24": 14.2,
+        "h6": 4.8,
+        "h1": 1.2,
+        "m5": 0.3
+      },
+      "liquidity": {
+        "usd": 2500000,
+        "base": 1000000,
+        "quote": 500
+      },
+      "fdv": 11800000,
+      "marketCap": 11800000
+    }
+  ]
+}

@@ -1,10 +1,10 @@
 ---
 id: PLN-20260226-agent-games-platform
 title: Agent-vs-Agent Game Platform (REST API + Live Spectator Web)
-owner: codex
-reviewer: codex
-status: planned
-workspace: 3191/lemon
+owner: janitor
+reviewer: janitor
+status: in_progress
+workspace: feature/pln-20260226-agent-games-platform
 change_id: pending
 created: 2026-02-26
 updated: 2026-02-26
@@ -379,3 +379,9 @@ For implementation-level instructions (file-by-file, function signatures, API pa
 |-----------|-----|------|--------|-------|
 | 2026-02-26 00:00 | codex | Drafted platform implementation plan | Planned | `planning/plans/PLN-20260226-agent-games-platform.md` |
 | 2026-02-26 00:10 | codex | Added implementation-grade handoff guide for Opus 4.6 | Planned | `planning/plans/PLN-20260226-agent-games-platform-implementation-guide.md` |
+| 2026-02-26 21:40 | janitor | Claimed plan and completed Slice A scaffold: new `lemon_games` app, dependency/boundary wiring, and docs updates | In Progress | `apps/lemon_games/`, `docs/architecture_boundaries.md`, `apps/lemon_core/lib/lemon_core/quality/architecture_check.ex`, `README.md`, `AGENTS.md` |
+| 2026-02-26 09:05 | janitor | Added control-plane games token method tests, HTTP games API tests, and fixed `submit_move` rate-limit handling to return structured `429` responses | In Progress | `apps/lemon_control_plane/lib/lemon_control_plane/http/games_api.ex`, `apps/lemon_control_plane/test/lemon_control_plane/http/games_api_test.exs`, `apps/lemon_control_plane/test/lemon_control_plane/methods/games_token_methods_test.exs` |
+| 2026-02-26 15:05 | janitor | Implemented Slice F spectator web MVP: public `/games` lobby + `/games/:id` LiveViews with `LemonGames.Bus` subscriptions, router public pipeline, and LiveView tests | In Progress | `apps/lemon_web/lib/lemon_web/live/games_lobby_live.ex`, `apps/lemon_web/lib/lemon_web/live/game_match_live.ex`, `apps/lemon_web/lib/lemon_web/router.ex`, `apps/lemon_web/test/lemon_web/live/games_live_test.exs` |
+| 2026-02-26 16:05 | janitor | Implemented Slice G hardening pass: added bot strategy tests + deadline sweeper integration tests and reduced benign bot turn race logging noise | In Progress | `apps/lemon_games/test/lemon_games/bot/connect4_bot_test.exs`, `apps/lemon_games/test/lemon_games/bot/rock_paper_scissors_bot_test.exs`, `apps/lemon_games/test/lemon_games/matches/deadline_sweeper_test.exs`, `apps/lemon_games/lib/lemon_games/bot/turn_worker.ex` |
+| 2026-02-26 17:10 | janitor | Implemented Slice H docs/skill polish: documented games REST + token RPCs in control-plane AGENTS, added builtin skill references in lemon_skills AGENTS, and added `docs/games-platform.md` + docs catalog/README entries | In Progress | `apps/lemon_control_plane/AGENTS.md`, `apps/lemon_skills/AGENTS.md`, `docs/games-platform.md`, `docs/README.md`, `docs/catalog.exs` |
+| 2026-02-26 18:20 | janitor | Hardened move-idempotency contract: surfaced `idempotent_replay` correctly for duplicate move submissions and added API/service regression coverage | In Progress | `apps/lemon_games/lib/lemon_games/matches/service.ex`, `apps/lemon_control_plane/lib/lemon_control_plane/http/games_api.ex`, `apps/lemon_control_plane/test/lemon_control_plane/http/games_api_test.exs`, `apps/lemon_games/test/lemon_games/matches/service_test.exs`, `docs/games-platform.md` |

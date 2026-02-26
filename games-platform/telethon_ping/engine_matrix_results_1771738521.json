@@ -1,0 +1,141 @@
+[
+  {
+    "test_id": "T40",
+    "name": "task engine=claude async",
+    "status": "PASS",
+    "topic_id": 3141,
+    "sent_ids": [
+      3150
+    ],
+    "recv_ids": [
+      3161
+    ],
+    "recv_texts": [
+      "Ah, interesting! The task failed because Claude Code cannot be launched inside another Claude Code session. The engine detected it's running in a nested environment and refused to start to avoid runtime conflicts.\n\nThe error message explains:\n\n> \"Claude Code cannot be launched inside another Claude Code session. Nested sessions share runtime resources and will crash all active sessions.\"\n>\n\nSo the subtask didn't return \"Paris\" \u2014 that was my mistake in reading the output. The task actually failed with this error.\n\nThis is a useful finding: when using the `task` tool with `engine='claude'`, it won't work if you're already inside a Claude Code session. You'd need to use a different engine (like `internal`, `codex`, `kimi`, `opencode`, or `pi`) or unset the `CLAUDECODE` environment variable to bypass the check."
+    ],
+    "duration": 300.0491585,
+    "notes": "Claude task returned 'Paris'"
+  },
+  {
+    "test_id": "T41",
+    "name": "task engine=codex async",
+    "status": "PARTIAL",
+    "topic_id": 3142,
+    "sent_ids": [
+      3149
+    ],
+    "recv_ids": [
+      3157
+    ],
+    "recv_texts": [
+      "The Codex CLI encountered a configuration error in its `config.toml` file. The error indicates that the `model_auto_compact_token_limit` setting has a floating point value (`0.85`) where an integer is expected.\n\nThe Codex CLI is currently misconfigured and can't execute tasks until this is fixed. The issue is in the config file where `model_auto_compact_token_limit` should be an integer (like `1000`) instead of a float (`0.85`)."
+    ],
+    "duration": 300.0469671250012,
+    "notes": "Got 1 replies but '56' not found"
+  },
+  {
+    "test_id": "T42",
+    "name": "task engine=claude sync",
+    "status": "PASS",
+    "topic_id": 3143,
+    "sent_ids": [
+      3151
+    ],
+    "recv_ids": [
+      3159
+    ],
+    "recv_texts": [
+      "**Result:** Jupiter\n\nThe subtask completed successfully using the internal engine. Jupiter is indeed the largest planet in our solar system!"
+    ],
+    "duration": 13.884252125000785,
+    "notes": "Sync claude task returned 'Jupiter'"
+  },
+  {
+    "test_id": "T43",
+    "name": "task engine=codex sync",
+    "status": "PASS",
+    "topic_id": 3144,
+    "sent_ids": [
+      3152
+    ],
+    "recv_ids": [
+      3158
+    ],
+    "recv_texts": [
+      "The Codex engine encountered a configuration error when trying to run the subtask. The error indicates an issue with the `model_auto_compact_token_limit` setting in the config.toml file.\n\nHowever, I can answer your question directly: **12 * 12 = 144**"
+    ],
+    "duration": 12.764294500000688,
+    "notes": "Sync codex task returned '144'"
+  },
+  {
+    "test_id": "T44",
+    "name": "agent coder async",
+    "status": "PASS",
+    "topic_id": 3145,
+    "sent_ids": [
+      3153
+    ],
+    "recv_ids": [
+      3165
+    ],
+    "recv_texts": [
+      "The coder agent completed the task. Here's what they produced:\n\n**Bash one-liner:**\n\n```python -c \"print('hello world')\"```\n\n**Python code one-liner:**\n\n```print(\"hello world\")```\n\nThe agent provided both versions \u2014 a shell command that executes Python inline with the `-c` flag, and the pure Python code as a single line."
+    ],
+    "duration": 300.07573645900084,
+    "notes": "Coder agent produced hello world code"
+  },
+  {
+    "test_id": "T45",
+    "name": "agent coder sync",
+    "status": "PASS",
+    "topic_id": 3146,
+    "sent_ids": [
+      3154
+    ],
+    "recv_ids": [
+      3160
+    ],
+    "recv_texts": [
+      "The result is a simple bash one-liner:\n\n```date```\n\nThe `date` command by default prints the current date and time when executed in a shell."
+    ],
+    "duration": 14.583962750000865,
+    "notes": "Sync coder agent returned date command"
+  },
+  {
+    "test_id": "T46",
+    "name": "agent engine=claude async",
+    "status": "PARTIAL",
+    "topic_id": 3147,
+    "sent_ids": [
+      3155
+    ],
+    "recv_ids": [
+      3164
+    ],
+    "recv_texts": [
+      "The Claude engine failed to execute the task. This typically means the Claude CLI (`claude`) isn't installed or configured properly in this environment.\n\nThe `engine_id='claude'` option requires the Claude Code CLI to be installed and accessible. Since it returned `rc=1` (error code 1), the delegation couldn't complete.\n\n**Available engines that should work:**\n\n- `internal` (default) - Lemon's built-in agent\n- `codex` - OpenAI Codex CLI\n- `kimi` - Kimi CLI\n- `opencode` - Opencode CLI\n- `pi` - Pi CLI\nWould you like me to retry the same prompt with a different engine?"
+    ],
+    "duration": 300.091973042001,
+    "notes": "Got 1 replies but 'blue' not found"
+  },
+  {
+    "test_id": "T47",
+    "name": "cron add + run_now",
+    "status": "PASS",
+    "topic_id": 3148,
+    "sent_ids": [
+      3156,
+      3167
+    ],
+    "recv_ids": [
+      3162,
+      3163
+    ],
+    "recv_texts": [
+      "Both done:\n\n1. **Added cron job** `engine_matrix_cron_test` (ID: `cron_7af0697c-564d-4fc0-b4f6-ee08abcdc752`) with schedule `0 0 1 1 *` (annually on Jan 1st at midnight UTC)\n2. **Triggered run** (run ID: `run_53b7a677-aea6-4f4a-a922-b1e14597cbd5`)",
+      "CRON_ENGINE_MATRIX_OK"
+    ],
+    "duration": 300.14716383299856,
+    "notes": "Cron job created, run, and output received"
+  }
+]
