@@ -12,7 +12,7 @@ defmodule Ai.Auth.GitHubCopilotOAuth do
 
   alias LemonCore.Secrets
 
-  @client_id "Iv1.b507a08c87ecfe98"
+  @default_client_id_b64 "SXYxLmI1MDdhMDhjODdlY2ZlOTg="
   @default_domain "github.com"
   @default_copilot_base_url "https://api.individual.githubcopilot.com"
   @secret_type "github_copilot_oauth"
@@ -67,6 +67,19 @@ defmodule Ai.Auth.GitHubCopilotOAuth do
            ) do
       maybe_enable_models(secret, opts)
       {:ok, secret}
+    end
+  end
+
+  @doc false
+  @spec oauth_client_id() :: String.t()
+  def oauth_client_id do
+    case System.get_env("GITHUB_COPILOT_CLIENT_ID") do
+      value when is_binary(value) and value != "" ->
+        value
+
+      _ ->
+        @default_client_id_b64
+        |> Base.decode64!()
     end
   end
 
@@ -135,7 +148,7 @@ defmodule Ai.Auth.GitHubCopilotOAuth do
     urls = github_urls(domain)
 
     body = %{
-      "client_id" => @client_id,
+      "client_id" => oauth_client_id(),
       "scope" => "read:user"
     }
 
@@ -165,7 +178,7 @@ defmodule Ai.Auth.GitHubCopilotOAuth do
       {:error, :device_flow_timed_out}
     else
       body = %{
-        "client_id" => @client_id,
+        "client_id" => oauth_client_id(),
         "device_code" => device_code,
         "grant_type" => "urn:ietf:params:oauth:grant-type:device_code"
       }
