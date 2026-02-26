@@ -19,7 +19,10 @@ Phoenix web interface for Lemon with LiveView.
 │  ├── Socket "/live" → Phoenix.LiveView.Socket                 │
 │  ├── Static assets                                            │
 │  └── Router (LemonWeb.Router)                                 │
+│       ├── Pipeline :public_browser (no token gate)            │
+│       │    └── /games, /games/:id                             │
 │       └── Pipeline :browser → RequireAccessToken              │
+│            └── /, /sessions/:session_key                      │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -27,20 +30,25 @@ Phoenix web interface for Lemon with LiveView.
 
 - `LemonWeb.Application` - Supervisor with `Telemetry` and `Endpoint` (`:one_for_one`)
 - `LemonWeb.Endpoint` - HTTP/WebSocket endpoint (uses Bandit); session stored in signed cookie `_lemon_web_key`
-- `LemonWeb.Router` - Routes: `/` (index), `/sessions/:session_key` (show)
+- `LemonWeb.Router` - Routes: public games (`/games`, `/games/:id`) and dashboard (`/`, `/sessions/:session_key`)
 - `LemonWeb.Telemetry` - Phoenix telemetry metrics
 
 ## LiveView Structure
 
 ### Main LiveView
 
-**`LemonWeb.SessionLive`** - Single LiveView handling both index and show actions:
+**`LemonWeb.SessionLive`** - Dashboard LiveView handling both index and show actions:
 
 ```elixir
 # Routes
 live "/", SessionLive, :index        # Generates a new isolated session key per tab
 live "/sessions/:session_key", SessionLive, :show  # Uses the provided session key
 ```
+
+### Games LiveViews
+
+- `LemonWeb.GamesLobbyLive` (`/games`) shows public matches and live lobby refreshes via `LemonGames.Bus`.
+- `LemonWeb.GameMatchLive` (`/games/:id`) renders match state + event timeline and subscribes to per-match events.
 
 **Query params supported on `/`:**
 - `?agent_id=<id>` - Sets the agent for the isolated session (default: `"default"`)

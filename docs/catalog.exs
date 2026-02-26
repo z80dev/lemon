@@ -60,6 +60,12 @@
     max_age_days: 90
   },
   %{
+    path: "docs/games-platform.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-02-26],
+    max_age_days: 90
+  },
+  %{
     path: "docs/long-running-agent-harnesses.md",
     owner: "@z80",
     last_reviewed: ~D[2026-02-25],

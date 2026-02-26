@@ -29,6 +29,7 @@ defmodule LemonControlPlane.MixProject do
       {:lemon_core, in_umbrella: true},
       {:lemon_router, in_umbrella: true},
       {:lemon_channels, in_umbrella: true},
+      {:lemon_games, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},
       {:lemon_automation, in_umbrella: true},
       {:coding_agent, in_umbrella: true, runtime: false},

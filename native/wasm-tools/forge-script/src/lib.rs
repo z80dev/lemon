@@ -70,7 +70,15 @@ impl Guest for ForgeScriptTool {
                 },
                 "secret_name": {
                     "type": "string",
-                    "description": "Secret name for the signing private key (default: ETH_PRIVATE_KEY)"
+                    "description": "Secret name for the signing private key (default: ETH_PRIVATE_KEY). Ignored when account_name is set."
+                },
+                "account_name": {
+                    "type": "string",
+                    "description": "Foundry keystore account name (e.g. 'zeebot-hot'). When set, uses --account/--password instead of --private-key."
+                },
+                "password_secret": {
+                    "type": "string",
+                    "description": "Secret name for the keystore password (default: KEYSTORE_PASSWORD). Only used when account_name is set."
                 }
             },
             "required": ["script", "rpc_url"]
@@ -80,8 +88,8 @@ impl Guest for ForgeScriptTool {
 
     fn description() -> String {
         "Run a Forge deployment/interaction script using `forge script`. \
-         Supports dry-run and broadcast modes. Private keys and API keys are \
-         injected securely and never exposed to the tool."
+         Supports dry-run and broadcast modes. Signing via raw private key secret or \
+         Foundry keystore account. Credentials are injected securely and never exposed to the tool."
             .to_string()
     }
 }
@@ -134,12 +142,21 @@ fn build_args(params: &Value) -> Result<Vec<String>, String> {
         }
     }
 
-    let secret_name = params["secret_name"]
-        .as_str()
-        .unwrap_or("ETH_PRIVATE_KEY");
-
-    args.push("--private-key".to_string());
-    args.push(format!("{{{{SECRET:{secret_name}}}}}"));
+    if let Some(account_name) = params["account_name"].as_str() {
+        let password_secret = params["password_secret"]
+            .as_str()
+            .unwrap_or("KEYSTORE_PASSWORD");
+        args.push("--account".to_string());
+        args.push(account_name.to_string());
+        args.push("--password".to_string());
+        args.push(format!("{{{{SECRET:{password_secret}}}}}"));
+    } else {
+        let secret_name = params["secret_name"]
+            .as_str()
+            .unwrap_or("ETH_PRIVATE_KEY");
+        args.push("--private-key".to_string());
+        args.push(format!("{{{{SECRET:{secret_name}}}}}"));
+    }
 
     if let Some(extra) = params["extra_args"].as_array() {
         for arg in extra {
@@ -257,6 +274,35 @@ mod tests {
         assert!(args.contains(&"--verify".to_string()));
         // No --etherscan-api-key when secret not provided
         assert!(!args.contains(&"--etherscan-api-key".to_string()));
+    }
+
+    #[test]
+    fn build_args_with_keystore_account() {
+        let params = json!({
+            "script": "script/Deploy.s.sol",
+            "rpc_url": "https://rpc.example.com",
+            "account_name": "zeebot-hot",
+            "password_secret": "ZEEBOT_HOT_PASSWORD"
+        });
+
+        let args = build_args(&params).unwrap();
+        assert!(args.contains(&"--account".to_string()));
+        assert!(args.contains(&"zeebot-hot".to_string()));
+        assert!(args.contains(&"--password".to_string()));
+        assert!(args.contains(&"{{SECRET:ZEEBOT_HOT_PASSWORD}}".to_string()));
+        assert!(!args.contains(&"--private-key".to_string()));
+    }
+
+    #[test]
+    fn build_args_keystore_defaults_password_secret() {
+        let params = json!({
+            "script": "script/Deploy.s.sol",
+            "rpc_url": "https://rpc.example.com",
+            "account_name": "zeebot-hot"
+        });
+
+        let args = build_args(&params).unwrap();
+        assert!(args.contains(&"{{SECRET:KEYSTORE_PASSWORD}}".to_string()));
     }
 
     #[test]

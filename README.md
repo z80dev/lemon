@@ -533,7 +533,7 @@ lemon/
 │   ├── lemon-telegram-webhook   # Telegram webhook helper
 │   └── diag                     # Small diagnostic helper (Python)
 │
-├── apps/                        # Umbrella applications (13 apps)
+├── apps/                        # Umbrella applications (14 apps)
 │   │
 │   │  # ─── Core Foundation ───────────────────────────────────
 │   │
@@ -671,6 +671,12 @@ lemon/
 │   │           ├── node.ex, device.ex, exec.ex, secrets.ex
 │   │           ├── browser.ex, tts.ex
 │   │           └── ... (organized by domain)
+│   │
+│   ├── lemon_games/             # Turn-based game domain + match lifecycle
+│   │   └── lib/lemon_games/
+│   │       ├── games/           # Game behaviour + engine implementations
+│   │       ├── matches/         # Match service, event log, projections
+│   │       └── application.ex   # Supervision tree for game services
 │   │
 │   ├── lemon_skills/            # Skill registry and management
 │   │   └── lib/lemon_skills/
@@ -2240,6 +2246,7 @@ mix test apps/lemon_router
 mix test apps/lemon_channels
 mix test apps/lemon_automation
 mix test apps/lemon_control_plane
+mix test apps/lemon_games
 mix test apps/lemon_skills
 mix test apps/market_intel
 
@@ -2688,6 +2695,7 @@ The umbrella structure separates concerns while maintaining tight integration:
 - **`lemon_channels`**: Pluggable channel adapters with smart delivery
 - **`lemon_automation`**: Cron scheduling, heartbeats, wake triggers
 - **`lemon_control_plane`**: HTTP/WebSocket server with 98+ RPC methods
+- **`lemon_games`**: Turn-based game engines, match lifecycle, and replay projections
 - **`lemon_skills`**: Skill registry and lifecycle management
 - **`lemon_web`**: Phoenix web interface
 - **`market_intel`**: Market intelligence and commentary

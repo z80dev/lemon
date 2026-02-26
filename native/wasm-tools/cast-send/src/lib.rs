@@ -73,7 +73,15 @@ impl Guest for CastSendTool {
                 },
                 "secret_name": {
                     "type": "string",
-                    "description": "Secret name for the signing private key (default: ETH_PRIVATE_KEY)"
+                    "description": "Secret name for the signing private key (default: ETH_PRIVATE_KEY). Ignored when account_name is set."
+                },
+                "account_name": {
+                    "type": "string",
+                    "description": "Foundry keystore account name (e.g. 'zeebot-hot'). When set, uses --account/--password instead of --private-key."
+                },
+                "password_secret": {
+                    "type": "string",
+                    "description": "Secret name for the keystore password (default: KEYSTORE_PASSWORD). Only used when account_name is set."
                 }
             },
             "required": ["to", "rpc_url"]
@@ -84,7 +92,8 @@ impl Guest for CastSendTool {
     fn description() -> String {
         "Sign and broadcast an Ethereum transaction using `cast send`. \
          Supports contract calls with function signatures and ETH transfers. \
-         The private key is injected securely and never exposed to the tool."
+         Signing via raw private key secret or Foundry keystore account. \
+         Credentials are injected securely and never exposed to the tool."
             .to_string()
     }
 }
@@ -196,12 +205,21 @@ fn build_args(params: &Value) -> Result<Vec<String>, String> {
         args.push("--legacy".to_string());
     }
 
-    let secret_name = params["secret_name"]
-        .as_str()
-        .unwrap_or("ETH_PRIVATE_KEY");
-
-    args.push("--private-key".to_string());
-    args.push(format!("{{{{SECRET:{secret_name}}}}}"));
+    if let Some(account_name) = params["account_name"].as_str() {
+        let password_secret = params["password_secret"]
+            .as_str()
+            .unwrap_or("KEYSTORE_PASSWORD");
+        args.push("--account".to_string());
+        args.push(account_name.to_string());
+        args.push("--password".to_string());
+        args.push(format!("{{{{SECRET:{password_secret}}}}}"));
+    } else {
+        let secret_name = params["secret_name"]
+            .as_str()
+            .unwrap_or("ETH_PRIVATE_KEY");
+        args.push("--private-key".to_string());
+        args.push(format!("{{{{SECRET:{secret_name}}}}}"));
+    }
 
     Ok(args)
 }
@@ -297,6 +315,35 @@ mod tests {
         assert!(args.contains(&"42".to_string()));
         assert!(args.contains(&"--legacy".to_string()));
         assert!(args.contains(&"{{SECRET:DEPLOYER_KEY}}".to_string()));
+    }
+
+    #[test]
+    fn build_args_with_keystore_account() {
+        let params = json!({
+            "to": "0x1234567890abcdef1234567890abcdef12345678",
+            "rpc_url": "https://rpc.example.com",
+            "account_name": "zeebot-hot",
+            "password_secret": "ZEEBOT_HOT_PASSWORD"
+        });
+
+        let args = build_args(&params).unwrap();
+        assert!(args.contains(&"--account".to_string()));
+        assert!(args.contains(&"zeebot-hot".to_string()));
+        assert!(args.contains(&"--password".to_string()));
+        assert!(args.contains(&"{{SECRET:ZEEBOT_HOT_PASSWORD}}".to_string()));
+        assert!(!args.contains(&"--private-key".to_string()));
+    }
+
+    #[test]
+    fn build_args_keystore_defaults_password_secret() {
+        let params = json!({
+            "to": "0x1234567890abcdef1234567890abcdef12345678",
+            "rpc_url": "https://rpc.example.com",
+            "account_name": "zeebot-hot"
+        });
+
+        let args = build_args(&params).unwrap();
+        assert!(args.contains(&"{{SECRET:KEYSTORE_PASSWORD}}".to_string()));
     }
 
     #[test]

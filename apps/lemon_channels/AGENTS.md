@@ -187,6 +187,13 @@ main polling GenServer loop.
   - `:telegram_msg_resume` keys: `{account_id, chat_id, thread_id, generation, msg_id}`
 - `/new` increments `:telegram_thread_generation` for `{account_id, chat_id, thread_id}` to invalidate stale reply mappings immediately without synchronous full-table scans.
 
+### `/model` Picker Behavior
+
+- `/model` uses a reply keyboard (bottom keyboard) flow for per-user selection in a chat/topic: provider -> model -> scope (`This session` or `All future sessions`).
+- Selection messages are intercepted by transport state and are not routed as normal inbound prompts.
+- Provider/model lists are paginated in-keyboard with `<< Prev` / `Next >>`, plus `< Back` / `Close`.
+- Provider visibility is auto-detected from runtime config + secrets/env credentials (and default provider hints), while still allowing explicit provider entries in `[providers.*]`.
+
 ### Enable
 
 Set in gateway config: `enable_telegram: true`
