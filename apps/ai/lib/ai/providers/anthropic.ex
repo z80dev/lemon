@@ -109,7 +109,7 @@ defmodule Ai.Providers.Anthropic do
 
       url = "#{base_url}/v1/messages"
 
-      headers = build_headers(api_key, model.headers, opts.headers)
+      headers = build_headers(api_key, model.headers, opts.headers, model.provider)
       {body, history_info} = build_request_body(model, context, opts)
       trace_id = HttpTrace.new_trace_id("anthropic")
       messages = Map.get(body, "messages", [])
@@ -907,23 +907,46 @@ defmodule Ai.Providers.Anthropic do
   # Request Building
   # ============================================================================
 
-  defp build_headers(api_key, model_headers, opts_headers) do
+  @copilot_providers [:github_copilot, :"github-copilot"]
+
+  defp build_headers(api_key, model_headers, opts_headers, provider) do
     beta_features = ["fine-grained-tool-streaming-2025-05-14"]
+
+    is_copilot = provider in @copilot_providers
+
+    auth_header =
+      if is_copilot do
+        {"authorization", "Bearer #{api_key}"}
+      else
+        {"x-api-key", api_key}
+      end
 
     base_headers = [
       {"content-type", "application/json"},
       {"accept", "text/event-stream"},
-      {"x-api-key", api_key},
+      auth_header,
       {"anthropic-version", @api_version},
       {"anthropic-beta", Enum.join(beta_features, ",")}
     ]
+
+    copilot_headers =
+      if is_copilot do
+        [
+          {"editor-version", "vscode/1.107.0"},
+          {"editor-plugin-version", "copilot-chat/0.35.0"},
+          {"user-agent", "GitHubCopilotChat/0.35.0"},
+          {"copilot-integration-id", "vscode-chat"}
+        ]
+      else
+        []
+      end
 
     # Merge model and options headers
     extra_headers =
       Map.merge(model_headers || %{}, opts_headers || %{})
       |> Enum.map(fn {k, v} -> {to_string(k), to_string(v)} end)
 
-    base_headers ++ extra_headers
+    base_headers ++ copilot_headers ++ extra_headers
   end
 
   defp build_request_body(model, context, opts) do
