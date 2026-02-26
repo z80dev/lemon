@@ -55,9 +55,10 @@ defmodule CodingAgent.CliRunners.LemonRunner do
 
   alias AgentCore.CliRunners.Types.{
     Action,
-    EventFactory,
-    ResumeToken
+    EventFactory
   }
+
+  alias LemonCore.ResumeToken
 
   alias AgentCore.EventStream
   alias Ai.Types.StreamOptions

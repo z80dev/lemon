@@ -248,7 +248,8 @@ defmodule LemonRouter.RunOrchestrator do
         })
 
       resolved_model = selection.model
-      resolved_thinking_level = request_thinking_level || session_thinking_level
+      resolved_thinking_level =
+        normalize_thinking_level(request_thinking_level || session_thinking_level)
       resolved_system_prompt = explicit_system_prompt || profile_system_prompt
 
       if is_binary(selection.warning) do
@@ -530,6 +531,20 @@ defmodule LemonRouter.RunOrchestrator do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  @thinking_levels %{
+    "off" => :off,
+    "minimal" => :minimal,
+    "low" => :low,
+    "medium" => :medium,
+    "high" => :high,
+    "xhigh" => :xhigh
+  }
+
+  defp normalize_thinking_level(nil), do: nil
+  defp normalize_thinking_level(level) when is_atom(level), do: level
+  defp normalize_thinking_level(level) when is_binary(level), do: Map.get(@thinking_levels, level)
+  defp normalize_thinking_level(_), do: nil
 
   # Produce a safe, bounded label for introspection error payloads.
   defp safe_error_label(nil), do: nil
