@@ -429,7 +429,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       assert {:ok, _run_id} = RunOrchestrator.submit(orchestrator_pid, request(params))
       assert_receive {:captured_job, job}, 500
-      assert job.meta[:thinking_level] == "high"
+      assert job.meta[:thinking_level] == :high
     end
 
     test "explicit engine_id overrides session model" do
