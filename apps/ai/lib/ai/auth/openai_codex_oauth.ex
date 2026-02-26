@@ -1,38 +1,48 @@
 defmodule Ai.Auth.OpenAICodexOAuth do
   @moduledoc """
-  Helpers for using OpenAI Codex (ChatGPT OAuth) credentials.
+  Helpers for resolving OpenAI Codex (ChatGPT OAuth) credentials from Lemon's
+  encrypted secret store.
 
-  Lemon's `Ai.Providers.OpenAICodexResponses` provider needs a **ChatGPT JWT**
-  (the OAuth `access_token`) plus a `refresh_token` to keep it fresh.
+  The canonical secret is `llm_openai_codex_api_key`, stored as an OAuth payload:
+
+      %{
+        "type" => "onboarding_openai_codex_oauth",
+        "access_token" => "...",
+        "refresh_token" => "...",
+        "expires_at_ms" => 1_234_567_890_000,
+        "account_id" => "...",
+        ...
+      }
 
   This module can:
-  - Read tokens from the Codex CLI store (`$CODEX_HOME/auth.json`, usually `~/.codex/auth.json`)
-  - Optionally refresh them via `https://auth.openai.com/oauth/token`
-  - Cache refreshed tokens in `~/.lemon/credentials/openai-codex.json`
+  - Decode OAuth payloads from secret values
+  - Refresh near-expiry access tokens via `https://auth.openai.com/oauth/token`
+  - Persist refreshed payloads back to the same secret name
 
-  It intentionally does not try to run an interactive login flow. Use `codex login`
-  (Codex CLI) to authenticate, then Lemon will pick up credentials automatically.
+  It does not load credentials from Codex CLI files/keychain or environment variables.
   """
 
   require Logger
+
+  alias LemonCore.Secrets
 
   @token_url "https://auth.openai.com/oauth/token"
 
   # OpenAI Codex OAuth client id used by Codex CLI (see pi-ai / Codex CLI sources)
   @client_id "app_EMoamEEZ73f0CkXaXp7hrann"
-
-  @lemon_rel_path [".lemon", "credentials", "openai-codex.json"]
-  @codex_auth_filename "auth.json"
+  @default_secret_name "llm_openai_codex_api_key"
+  @secret_type "onboarding_openai_codex_oauth"
 
   # Try to refresh if the token is within 10 minutes of expiry.
   @near_expiry_ms 10 * 60 * 1000
 
-  @type creds :: %{
-          access: String.t(),
-          refresh: String.t() | nil,
-          expires_at_ms: non_neg_integer() | nil,
-          source: :lemon_store | :codex_file | :codex_keychain
-        }
+  @type oauth_secret :: %{optional(String.t()) => term()}
+
+  @doc """
+  Backward-compatible alias used by some callers.
+  """
+  @spec get_api_key() :: String.t() | nil
+  def get_api_key, do: resolve_access_token()
 
   @doc """
   Resolve a fresh ChatGPT JWT access token to use for the Codex API.
@@ -41,192 +51,112 @@ defmodule Ai.Auth.OpenAICodexOAuth do
   """
   @spec resolve_access_token() :: String.t() | nil
   def resolve_access_token do
-    with {:ok, creds} <- load_best_credentials(),
-         {:ok, access} <- ensure_fresh_access_token(creds) do
-      access
-    else
-      _ -> nil
+    case Secrets.get(@default_secret_name) do
+      {:ok, value} when is_binary(value) ->
+        case resolve_api_key_from_secret(@default_secret_name, value) do
+          {:ok, access_token} ->
+            access_token
+
+          :ignore ->
+            non_empty_binary(value)
+
+          {:error, reason} ->
+            Logger.debug(
+              "OpenAI Codex OAuth secret #{@default_secret_name} could not be resolved: #{inspect(reason)}"
+            )
+
+            nil
+        end
+
+      _ ->
+        nil
     end
   end
 
-  # ============================================================================
-  # Loading
-  # ============================================================================
+  @doc """
+  Resolve a usable API key from an encrypted secret value.
 
-  defp load_best_credentials do
-    # Prefer Lemon cache if present, then Codex CLI file store, then Keychain (best-effort).
-    load_lemon_store() || load_codex_auth_file() || load_codex_keychain()
-  end
-
-  defp load_lemon_store do
-    path = lemon_cred_path()
-
-    if File.exists?(path) do
-      case File.read(path) do
-        {:ok, raw} ->
-          case Jason.decode(raw) do
-            {:ok, data} when is_map(data) ->
-              access =
-                data["access_token"] || data["access"] || data["token"] || data["accessToken"]
-
-              refresh =
-                data["refresh_token"] || data["refresh"] || data["refreshToken"]
-
-              expires_at =
-                data["expires_at_ms"] || data["expires_at"] || data["expires"] ||
-                  data["expiresAt"]
-
-              cond do
-                is_binary(access) and access != "" ->
-                  {:ok,
-                   %{
-                     access: access,
-                     refresh: if(is_binary(refresh) and refresh != "", do: refresh, else: nil),
-                     expires_at_ms: normalize_expires_ms(expires_at, access),
-                     source: :lemon_store
-                   }}
-
-                true ->
-                  nil
-              end
-
-            _ ->
-              nil
-          end
-
-        _ ->
-          nil
+  - Returns `:ignore` for non-Codex-OAuth payloads.
+  - Returns `{:ok, access_token}` for valid payloads (refreshing/persisting when needed).
+  - Returns `{:error, reason}` when payload is Codex OAuth but unusable.
+  """
+  @spec resolve_api_key_from_secret(String.t(), String.t()) ::
+          {:ok, String.t()} | :ignore | {:error, term()}
+  def resolve_api_key_from_secret(secret_name, secret_value)
+      when is_binary(secret_name) and is_binary(secret_value) do
+    with {:ok, secret} <- decode_secret(secret_value),
+         {:ok, refreshed_secret, changed?} <- ensure_fresh_secret(secret),
+         access_token when is_binary(access_token) and access_token != "" <-
+           non_empty_binary(refreshed_secret["access_token"]) do
+      if changed? do
+        persist_secret(secret_name, refreshed_secret)
       end
+
+      {:ok, access_token}
     else
-      nil
+      :not_oauth -> :ignore
+      nil -> {:error, :missing_access_token}
+      {:error, reason} -> {:error, reason}
     end
-  end
-
-  defp load_codex_auth_file do
-    home = resolve_codex_home()
-    path = Path.join(home, @codex_auth_filename)
-
-    if File.exists?(path) do
-      case File.read(path) do
-        {:ok, raw} ->
-          with {:ok, data} <- Jason.decode(raw),
-               %{"tokens" => tokens} <- data,
-               %{"access_token" => access, "refresh_token" => refresh} <- tokens,
-               true <- is_binary(access) and access != "",
-               true <- is_binary(refresh) and refresh != "" do
-            {:ok,
-             %{
-               access: access,
-               refresh: refresh,
-               expires_at_ms: normalize_expires_ms(data["last_refresh"], access),
-               source: :codex_file
-             }}
-          else
-            _ -> nil
-          end
-
-        _ ->
-          nil
-      end
-    else
-      nil
-    end
-  end
-
-  defp load_codex_keychain do
-    # Avoid blocking/hanging on keychain prompts: best-effort, short timeout.
-    if :os.type() == {:unix, :darwin} do
-      case read_codex_keychain_secret(timeout_ms: 5_000) do
-        {:ok, secret} ->
-          with {:ok, data} <- Jason.decode(secret),
-               %{"tokens" => tokens} <- data,
-               %{"access_token" => access, "refresh_token" => refresh} <- tokens,
-               true <- is_binary(access) and access != "",
-               true <- is_binary(refresh) and refresh != "" do
-            {:ok,
-             %{
-               access: access,
-               refresh: refresh,
-               expires_at_ms: normalize_expires_ms(data["last_refresh"], access),
-               source: :codex_keychain
-             }}
-          else
-            _ -> nil
-          end
-
-        _ ->
-          nil
-      end
-    else
-      nil
-    end
-  end
-
-  defp resolve_codex_home do
-    System.get_env("CODEX_HOME")
-    |> case do
-      v when is_binary(v) and v != "" -> Path.expand(v)
-      _ -> Path.expand("~/.codex")
-    end
-  end
-
-  defp lemon_cred_path do
-    Path.join([System.user_home!() | @lemon_rel_path])
   end
 
   # ============================================================================
   # Freshness / Refresh
   # ============================================================================
 
-  defp ensure_fresh_access_token(%{access: access, refresh: nil, expires_at_ms: expires_at})
-       when is_integer(expires_at) do
-    if near_expiry?(expires_at) do
-      {:error, :expired_no_refresh}
+  @spec ensure_fresh_secret(oauth_secret()) ::
+          {:ok, oauth_secret(), boolean()} | {:error, term()}
+  defp ensure_fresh_secret(secret) when is_map(secret) do
+    access = non_empty_binary(secret["access_token"])
+
+    if is_nil(access) do
+      {:error, :missing_access_token}
     else
-      {:ok, access}
-    end
-  end
+      refresh = non_empty_binary(secret["refresh_token"])
 
-  defp ensure_fresh_access_token(%{access: access, expires_at_ms: expires_at})
-       when is_integer(expires_at) do
-    if near_expiry?(expires_at) do
-      refresh_and_cache(access)
-    else
-      {:ok, access}
-    end
-  end
+      expires_at_ms =
+        normalize_expires_ms(
+          secret["expires_at_ms"] || secret["expires_at"] || secret["expires"],
+          access
+        )
 
-  defp ensure_fresh_access_token(%{access: access}) do
-    # No expiry info available: just return what we have.
-    {:ok, access}
-  end
+      normalized_secret =
+        secret
+        |> Map.put_new("type", @secret_type)
+        |> maybe_put("expires_at_ms", expires_at_ms)
 
-  defp refresh_and_cache(_access) do
-    # Re-load (in case Codex CLI refreshed it recently) then refresh if still near-expiry.
-    with {:ok, creds} <- load_codex_auth_file() || load_codex_keychain() || {:error, :no_creds},
-         {:ok, access} <- refresh_if_needed(creds) do
-      {:ok, access}
-    end
-  end
+      changed? = normalized_secret != secret
 
-  defp refresh_if_needed(%{access: access, refresh: refresh, expires_at_ms: expires_at})
-       when is_binary(refresh) and refresh != "" and is_integer(expires_at) do
-    if near_expiry?(expires_at) do
-      case refresh_access_token(refresh) do
-        {:ok, refreshed} ->
-          _ = write_lemon_store(refreshed)
-          {:ok, refreshed.access}
+      cond do
+        is_integer(expires_at_ms) and near_expiry?(expires_at_ms) and is_binary(refresh) ->
+          case refresh_access_token(refresh) do
+            {:ok, refreshed} ->
+              now = System.system_time(:millisecond)
 
-        {:error, reason} ->
-          Logger.warning("OpenAI Codex token refresh failed: #{inspect(reason)}")
-          {:error, :refresh_failed}
+              refreshed_secret =
+                normalized_secret
+                |> Map.put("access_token", refreshed.access)
+                |> Map.put("refresh_token", refreshed.refresh || refresh)
+                |> Map.put("expires_at_ms", refreshed.expires_at_ms)
+                |> Map.put("updated_at_ms", now)
+                |> Map.put_new("created_at_ms", now)
+                |> Map.put_new("type", @secret_type)
+
+              {:ok, refreshed_secret, true}
+
+            {:error, reason} ->
+              Logger.warning("OpenAI Codex token refresh failed: #{inspect(reason)}")
+              {:error, :refresh_failed}
+          end
+
+        is_integer(expires_at_ms) and near_expiry?(expires_at_ms) ->
+          {:error, :expired_no_refresh}
+
+        true ->
+          {:ok, normalized_secret, changed?}
       end
-    else
-      {:ok, access}
     end
   end
-
-  defp refresh_if_needed(%{access: access}), do: {:ok, access}
 
   defp near_expiry?(expires_at_ms) do
     now = System.system_time(:millisecond)
@@ -254,21 +184,15 @@ defmodule Ai.Auth.OpenAICodexOAuth do
     case LemonCore.Httpc.request(:post, request, http_opts, req_opts) do
       {:ok, {{_http, status, _reason}, _resp_headers, resp_body}} when status in 200..299 ->
         case Jason.decode(resp_body) do
-          {:ok,
-           %{
-             "access_token" => access,
-             "refresh_token" => refresh,
-             "expires_in" => expires_in
-           }}
-          when is_binary(access) and is_binary(refresh) and is_number(expires_in) ->
-            now = System.system_time(:millisecond)
+          {:ok, %{"access_token" => access} = payload}
+          when is_binary(access) and access != "" ->
+            expires_at_ms = expires_at_from_refresh_payload(payload, access)
 
             {:ok,
              %{
                access: access,
-               refresh: refresh,
-               expires_at_ms: now + trunc(expires_in * 1000),
-               source: :lemon_store
+               refresh: non_empty_binary(payload["refresh_token"]),
+               expires_at_ms: expires_at_ms
              }}
 
           {:ok, other} ->
@@ -286,22 +210,15 @@ defmodule Ai.Auth.OpenAICodexOAuth do
     end
   end
 
-  defp write_lemon_store(%{access: access, refresh: refresh, expires_at_ms: expires_at_ms})
-       when is_binary(access) and is_binary(refresh) and is_integer(expires_at_ms) do
-    path = lemon_cred_path()
-    dir = Path.dirname(path)
-    File.mkdir_p!(dir)
+  defp expires_at_from_refresh_payload(payload, access_token) do
+    case payload["expires_in"] do
+      expires_in when is_number(expires_in) and expires_in > 0 ->
+        now = System.system_time(:millisecond)
+        now + trunc(expires_in * 1000)
 
-    payload =
-      Jason.encode!(%{
-        "access_token" => access,
-        "refresh_token" => refresh,
-        "expires_at_ms" => expires_at_ms,
-        "updated_at_ms" => System.system_time(:millisecond)
-      })
-
-    # Best-effort; ignore write errors.
-    File.write(path, payload)
+      _ ->
+        normalize_expires_ms(nil, access_token)
+    end
   end
 
   # ============================================================================
@@ -309,16 +226,18 @@ defmodule Ai.Auth.OpenAICodexOAuth do
   # ============================================================================
 
   defp normalize_expires_ms(expires_raw, access_token) do
-    # Prefer JWT exp if present; otherwise fall back to "last_refresh + 1h" like openclaw.
     jwt_exp_ms = jwt_exp_ms(access_token)
+    parsed_exp = parse_exp_ms(expires_raw)
 
     cond do
       is_integer(jwt_exp_ms) and jwt_exp_ms > 0 ->
         jwt_exp_ms
 
+      is_integer(parsed_exp) and parsed_exp > 0 ->
+        parsed_exp
+
       true ->
-        last_refresh_ms = parse_last_refresh_ms(expires_raw) || System.system_time(:millisecond)
-        last_refresh_ms + 60 * 60 * 1000
+        nil
     end
   end
 
@@ -351,10 +270,9 @@ defmodule Ai.Auth.OpenAICodexOAuth do
     Base.decode64(padded)
   end
 
-  defp parse_last_refresh_ms(nil), do: nil
+  defp parse_exp_ms(nil), do: nil
 
-  defp parse_last_refresh_ms(value) when is_integer(value) do
-    # Sometimes stored as seconds; treat values < year 2000 ms as seconds.
+  defp parse_exp_ms(value) when is_integer(value) do
     if value < 946_684_800_000 do
       value * 1000
     else
@@ -362,48 +280,76 @@ defmodule Ai.Auth.OpenAICodexOAuth do
     end
   end
 
-  defp parse_last_refresh_ms(value) when is_binary(value) do
-    case DateTime.from_iso8601(value) do
-      {:ok, dt, _} -> DateTime.to_unix(dt, :millisecond)
-      _ -> nil
-    end
-  end
+  defp parse_exp_ms(value) when is_binary(value) do
+    trimmed = String.trim(value)
 
-  defp parse_last_refresh_ms(_), do: nil
+    case Integer.parse(trimmed) do
+      {parsed, ""} ->
+        parse_exp_ms(parsed)
 
-  # ============================================================================
-  # Keychain (macOS) helpers
-  # ============================================================================
-
-  defp read_codex_keychain_secret(opts) do
-    codex_home = resolve_codex_home()
-    account = codex_keychain_account(codex_home)
-
-    args = ["find-generic-password", "-s", "Codex Auth", "-a", account, "-w"]
-    cmd_with_timeout("security", args, opts[:timeout_ms] || 5_000)
-  end
-
-  defp codex_keychain_account(codex_home) do
-    hash = :crypto.hash(:sha256, codex_home) |> Base.encode16(case: :lower)
-    "cli|" <> String.slice(hash, 0, 16)
-  end
-
-  defp cmd_with_timeout(cmd, args, timeout_ms) do
-    task =
-      Task.async(fn ->
-        try do
-          System.cmd(cmd, args, stderr_to_stdout: true)
-        rescue
-          e -> {:error, Exception.message(e)}
+      _ ->
+        case DateTime.from_iso8601(trimmed) do
+          {:ok, dt, _} -> DateTime.to_unix(dt, :millisecond)
+          _ -> nil
         end
-      end)
-
-    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
-      {out, 0} when is_binary(out) -> {:ok, String.trim(out)}
-      {out, code} when is_binary(out) -> {:error, {:exit, code, out}}
-      {:error, msg} -> {:error, msg}
-      nil -> {:error, :timeout}
-      other -> {:error, other}
     end
   end
+
+  defp parse_exp_ms(_), do: nil
+
+  # ============================================================================
+  # Secret decoding / persistence
+  # ============================================================================
+
+  defp decode_secret(secret_value) when is_binary(secret_value) do
+    case Jason.decode(secret_value) do
+      {:ok, %{} = decoded} ->
+        access_token = non_empty_binary(decoded["access_token"])
+        type = non_empty_binary(decoded["type"])
+
+        cond do
+          is_nil(access_token) ->
+            :not_oauth
+
+          is_binary(type) and type != @secret_type ->
+            :not_oauth
+
+          true ->
+            {:ok,
+             decoded
+             |> Map.put("access_token", access_token)
+             |> maybe_put("refresh_token", non_empty_binary(decoded["refresh_token"]))
+             |> Map.put_new("type", @secret_type)}
+        end
+
+      _ ->
+        :not_oauth
+    end
+  end
+
+  defp persist_secret(secret_name, secret) when is_binary(secret_name) and is_map(secret) do
+    encoded = Jason.encode!(secret)
+
+    case Secrets.set(secret_name, encoded, provider: @secret_type) do
+      {:ok, _} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "Failed to persist refreshed OpenAI Codex OAuth secret #{secret_name}: #{inspect(reason)}"
+        )
+
+        :error
+    end
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp non_empty_binary(value) when is_binary(value) do
+    trimmed = String.trim(value)
+    if trimmed == "", do: nil, else: trimmed
+  end
+
+  defp non_empty_binary(_), do: nil
 end

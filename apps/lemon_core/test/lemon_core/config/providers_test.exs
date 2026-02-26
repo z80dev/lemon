@@ -77,6 +77,22 @@ defmodule LemonCore.Config.ProvidersTest do
       assert config.providers["openai"][:api_key] == nil
     end
 
+    test "parses openai-codex auth_source and oauth_secret fields" do
+      settings = %{
+        "providers" => %{
+          "openai-codex" => %{
+            "auth_source" => "oauth",
+            "oauth_secret" => "llm_openai_codex_api_key"
+          }
+        }
+      }
+
+      config = Providers.resolve(settings)
+
+      assert config.providers["openai-codex"][:auth_source] == "oauth"
+      assert config.providers["openai-codex"][:oauth_secret] == "llm_openai_codex_api_key"
+    end
+
     test "filters out nil values" do
       settings = %{
         "providers" => %{

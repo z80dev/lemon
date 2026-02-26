@@ -43,6 +43,7 @@ defmodule CodingAgent.Session do
 
   alias AgentCore.Types.AgentTool
   alias CodingAgent.Config
+  alias CodingAgent.ContextGuardrails
   alias LemonCore.Introspection
   alias CodingAgent.ExtensionLifecycle
   alias CodingAgent.Extensions
@@ -211,6 +212,10 @@ defmodule CodingAgent.Session do
       `default_thinking_level` from SettingsManager.
     * `:register` - When true, register the session under its ID in `CodingAgent.SessionRegistry`
     * `:registry` - Registry module to use when registering (default: `CodingAgent.SessionRegistry`)
+    * `:transform_context` - Optional custom context transform `(messages, signal) -> messages`
+      composed after built-in guardrails and untrusted-output wrapping
+    * `:context_guardrails` - Optional map/list overrides for built-in context guardrails
+      (for example `max_tool_result_bytes`, `max_tool_result_images`, `spill_dir`)
     * `:name` - GenServer name for registration
 
   ## System Prompt Composition
@@ -552,7 +557,11 @@ defmodule CodingAgent.Session do
     # Derive scope from session lineage. This ensures that sessions loaded from disk
     # keep their main/subagent scope even when start_link opts omit :parent_session.
     session_scope =
-      PromptComposer.resolve_session_scope(opts, parent_session, session_manager.header.parent_session)
+      PromptComposer.resolve_session_scope(
+        opts,
+        parent_session,
+        session_manager.header.parent_session
+      )
 
     # Load settings FIRST so we can use defaults for model and thinking_level
     settings_manager =
@@ -640,14 +649,28 @@ defmodule CodingAgent.Session do
 
     # Create the convert_to_llm function
     convert_to_llm = &CodingAgent.Messages.to_llm/1
-    transform_context = build_transform_context(Keyword.get(opts, :transform_context))
+
+    context_guardrail_opts =
+      build_context_guardrail_opts(
+        cwd,
+        session_manager.header.id,
+        Keyword.get(opts, :context_guardrails)
+      )
+
+    transform_context =
+      build_transform_context(Keyword.get(opts, :transform_context), context_guardrail_opts)
 
     # Start the AgentCore.Agent
-    get_api_key = Keyword.get(opts, :get_api_key) || ModelResolver.build_get_api_key(settings_manager)
+    get_api_key =
+      Keyword.get(opts, :get_api_key) || ModelResolver.build_get_api_key(settings_manager)
 
     # Build stream options with provider-specific secrets
     stream_options =
-      ModelResolver.build_stream_options(model, settings_manager, Keyword.get(opts, :stream_options))
+      ModelResolver.build_stream_options(
+        model,
+        settings_manager,
+        Keyword.get(opts, :stream_options)
+      )
 
     # Register main agent in AgentRegistry with key {session_id, :main, 0}
     agent_registry_key = {session_manager.header.id, :main, 0}
@@ -1480,7 +1503,10 @@ defmodule CodingAgent.Session do
     if state.auto_compaction_task_monitor_ref == monitor_ref do
       state =
         state
-        |> CompactionManager.maybe_kill_background_task(state.auto_compaction_task_pid, :auto_compaction_timeout)
+        |> CompactionManager.maybe_kill_background_task(
+          state.auto_compaction_task_pid,
+          :auto_compaction_timeout
+        )
         |> CompactionManager.clear_auto_compaction_state()
 
       if not state.is_streaming do
@@ -1630,16 +1656,58 @@ defmodule CodingAgent.Session do
 
   defp determine_health_status(true, _error_rate, _state), do: :healthy
 
-  defp build_transform_context(nil), do: &UntrustedToolBoundary.transform/2
-
-  defp build_transform_context(transform_fn) when is_function(transform_fn, 2) do
+  defp build_transform_context(nil, context_guardrail_opts) do
     fn messages, signal ->
-      with {:ok, wrapped} <-
-             normalize_transform_result(UntrustedToolBoundary.transform(messages, signal)),
+      with {:ok, guarded} <-
+             normalize_transform_result(
+               ContextGuardrails.transform(messages, signal, context_guardrail_opts)
+             ),
+           {:ok, wrapped} <-
+             normalize_transform_result(UntrustedToolBoundary.transform(guarded, signal)) do
+        {:ok, wrapped}
+      end
+    end
+  end
+
+  defp build_transform_context(transform_fn, context_guardrail_opts)
+       when is_function(transform_fn, 2) do
+    fn messages, signal ->
+      with {:ok, guarded} <-
+             normalize_transform_result(
+               ContextGuardrails.transform(messages, signal, context_guardrail_opts)
+             ),
+           {:ok, wrapped} <-
+             normalize_transform_result(UntrustedToolBoundary.transform(guarded, signal)),
            {:ok, transformed} <- normalize_transform_result(transform_fn.(wrapped, signal)) do
         {:ok, transformed}
       end
     end
+  end
+
+  defp build_context_guardrail_opts(cwd, session_id, nil) do
+    default_context_guardrail_opts(cwd, session_id)
+  end
+
+  defp build_context_guardrail_opts(cwd, session_id, opts) when is_list(opts) do
+    build_context_guardrail_opts(cwd, session_id, Enum.into(opts, %{}))
+  end
+
+  defp build_context_guardrail_opts(cwd, session_id, opts) when is_map(opts) do
+    Map.merge(default_context_guardrail_opts(cwd, session_id), opts)
+  end
+
+  defp build_context_guardrail_opts(cwd, session_id, _other) do
+    default_context_guardrail_opts(cwd, session_id)
+  end
+
+  defp default_context_guardrail_opts(cwd, session_id) do
+    %{
+      # Keep these blocks by default and only clamp when they become very large.
+      max_thinking_bytes: 65_536,
+      # Spill all tool result images to disk and pass references in text.
+      max_tool_result_images: 0,
+      spill_dir: Config.spill_dir(cwd, session_id)
+    }
   end
 
   defp normalize_transform_result({:ok, transformed}) when is_list(transformed),
@@ -1770,15 +1838,24 @@ defmodule CodingAgent.Session do
       case message do
         %Ai.Types.UserMessage{} ->
           # Persist user messages (including steering/follow-up)
-          SessionManager.append_message(state.session_manager, MessageSerialization.serialize_message(message))
+          SessionManager.append_message(
+            state.session_manager,
+            MessageSerialization.serialize_message(message)
+          )
 
         %Ai.Types.AssistantMessage{} ->
           # Persist assistant messages
-          SessionManager.append_message(state.session_manager, MessageSerialization.serialize_message(message))
+          SessionManager.append_message(
+            state.session_manager,
+            MessageSerialization.serialize_message(message)
+          )
 
         %Ai.Types.ToolResultMessage{} ->
           # Persist tool results
-          SessionManager.append_message(state.session_manager, MessageSerialization.serialize_message(message))
+          SessionManager.append_message(
+            state.session_manager,
+            MessageSerialization.serialize_message(message)
+          )
 
         _ ->
           # Other message types, don't persist
@@ -2068,7 +2145,14 @@ defmodule CodingAgent.Session do
     # Get context usage from agent state
     agent_state = AgentCore.Agent.get_state(state.agent)
     context_messages = agent_state.messages || []
-    context_tokens = CodingAgent.Compaction.estimate_context_tokens(context_messages)
+
+    context_tokens =
+      CodingAgent.Compaction.estimate_request_context_tokens(
+        context_messages,
+        Map.get(agent_state, :system_prompt),
+        Map.get(agent_state, :tools, [])
+      )
+
     context_message_count = length(context_messages)
 
     # Get model's context_window
@@ -2100,7 +2184,13 @@ defmodule CodingAgent.Session do
 
       case CompactionManager.start_tracked_background_task(
              fn ->
-               result = CompactionManager.auto_compaction_task_result(session_manager, model, compaction_opts)
+               result =
+                 CompactionManager.auto_compaction_task_result(
+                   session_manager,
+                   model,
+                   compaction_opts
+                 )
+
                send(session_pid, {:auto_compaction_result, signature, result})
              end,
              CompactionManager.auto_compaction_task_timeout_ms(),
@@ -2125,5 +2215,4 @@ defmodule CodingAgent.Session do
       state
     end
   end
-
 end

@@ -26,7 +26,9 @@ defmodule CodingAgent.SettingsManager do
             optional(String.t()) => %{
               optional(:api_key) => String.t() | nil,
               optional(:base_url) => String.t() | nil,
-              optional(:api_key_secret) => String.t() | nil
+              optional(:api_key_secret) => String.t() | nil,
+              optional(:auth_source) => String.t() | nil,
+              optional(:oauth_secret) => String.t() | nil
             }
           },
 

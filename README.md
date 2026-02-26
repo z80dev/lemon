@@ -134,7 +134,7 @@ Create `~/.lemon/config.toml`:
 ```toml
 # Provider keys (pick one)
 [providers.anthropic]
-api_key = "sk-ant-..."
+api_key_secret = "llm_anthropic_api_key"
 
 # Defaults used by runtime + default profile
 [defaults]
@@ -1974,6 +1974,11 @@ api_key = "sk-ant-..."
 [providers.openai]
 api_key = "sk-..."
 
+[providers.openai-codex]
+auth_source = "oauth"
+# Optional override; defaults to llm_openai_codex_api_key
+# oauth_secret = "llm_openai_codex_api_key"
+
 [providers.google]
 api_key = "your-google-api-key"
 
@@ -1990,9 +1995,9 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 # OpenAI
 export OPENAI_API_KEY="sk-..."
 
-# OpenAI Codex (chatgpt.com backend)
+# OpenAI Codex static key mode (when providers.openai-codex.auth_source = "api_key")
 export OPENAI_CODEX_API_KEY="..."
-# or
+# fallback
 export CHATGPT_TOKEN="..."
 
 # Kimi
@@ -2106,6 +2111,17 @@ Runtime key resolution order is:
 2. Plain `api_key` in config
 3. `api_key_secret` from encrypted store
 4. Default secret name fallback: `llm_<provider>_api_key`
+
+`openai-codex` is explicit-source:
+- Set `[providers.openai-codex].auth_source = "oauth"` to use OAuth secret payloads from encrypted store (default secret `llm_openai_codex_api_key`).
+- Set `[providers.openai-codex].auth_source = "api_key"` to use static key/token resolution (`OPENAI_CODEX_API_KEY`/`CHATGPT_TOKEN`, `api_key`, `api_key_secret`).
+- `auth_source` is required for `openai-codex`.
+
+`anthropic` uses static API key resolution:
+- `ANTHROPIC_API_KEY`
+- `api_key`
+- `api_key_secret`
+- default secret fallback `llm_anthropic_api_key`
 
 Example fallback names:
 - OpenAI: `llm_openai_api_key`

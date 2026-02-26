@@ -99,7 +99,8 @@ defmodule CodingAgent.ContextGuardrails do
     if byte_size(thinking) <= maxb do
       [block]
     else
-      {tr, meta} = truncate_with_meta(thinking, maxb, spill_label: "assistant_thinking", opts: opts)
+      {tr, meta} =
+        truncate_with_meta(thinking, maxb, spill_label: "assistant_thinking", opts: opts)
 
       Logger.warning("Thinking block truncated: #{inspect(meta)}")
       [%{block | thinking: tr}]
@@ -176,7 +177,7 @@ defmodule CodingAgent.ContextGuardrails do
       spill_or_keep_images(images, opts, tool_name(msg))
 
     # Then clamp text
-    {clamped_text, _meta} =
+    {clamped_text, meta} =
       if text == "" do
         {"", nil}
       else
@@ -193,8 +194,8 @@ defmodule CodingAgent.ContextGuardrails do
     header =
       if clamped_text != text do
         # Important: deterministic header (no timestamps).
-        sha = sha256_hex(text)
-        spill_path = stable_spill_path(opts[:spill_dir], "tool_result", sha, "txt")
+        sha = if(meta, do: meta.sha256, else: sha256_hex(text))
+        spill_path = if(meta, do: meta.spill_path, else: nil)
 
         [
           "[tool_result truncated]",

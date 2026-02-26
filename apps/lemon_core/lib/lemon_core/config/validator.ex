@@ -90,7 +90,10 @@ defmodule LemonCore.Config.Validator do
     errors
     |> validate_non_empty_string(Map.get(agent, :default_model), "agent.default_model")
     |> validate_non_empty_string(Map.get(agent, :default_provider), "agent.default_provider")
-    |> validate_non_empty_string(Map.get(agent, :default_thinking_level), "agent.default_thinking_level")
+    |> validate_non_empty_string(
+      Map.get(agent, :default_thinking_level),
+      "agent.default_thinking_level"
+    )
   end
 
   @doc """
@@ -99,7 +102,10 @@ defmodule LemonCore.Config.Validator do
   @spec validate_gateway(map(), [String.t()]) :: [String.t()]
   def validate_gateway(gateway, errors) do
     errors
-    |> validate_positive_integer(Map.get(gateway, :max_concurrent_runs), "gateway.max_concurrent_runs")
+    |> validate_positive_integer(
+      Map.get(gateway, :max_concurrent_runs),
+      "gateway.max_concurrent_runs"
+    )
     |> validate_boolean(Map.get(gateway, :auto_resume), "gateway.auto_resume")
     |> validate_boolean(Map.get(gateway, :enable_telegram), "gateway.enable_telegram")
     |> validate_boolean(Map.get(gateway, :enable_discord), "gateway.enable_discord")
@@ -108,7 +114,10 @@ defmodule LemonCore.Config.Validator do
     |> validate_boolean(Map.get(gateway, :enable_xmtp), "gateway.enable_xmtp")
     |> validate_boolean(Map.get(gateway, :enable_email), "gateway.enable_email")
     |> validate_boolean(Map.get(gateway, :require_engine_lock), "gateway.require_engine_lock")
-    |> validate_non_negative_integer(Map.get(gateway, :engine_lock_timeout_ms), "gateway.engine_lock_timeout_ms")
+    |> validate_non_negative_integer(
+      Map.get(gateway, :engine_lock_timeout_ms),
+      "gateway.engine_lock_timeout_ms"
+    )
     |> validate_telegram_config(Map.get(gateway, :telegram))
     |> validate_discord_config(Map.get(gateway, :discord))
     |> validate_web_dashboard_config(Map.get(gateway, :web_dashboard))
@@ -143,16 +152,26 @@ defmodule LemonCore.Config.Validator do
     end
   end
 
-  defp validate_telegram_token(errors, _), do: ["gateway.telegram.token: must be a string" | errors]
+  defp validate_telegram_token(errors, _),
+    do: ["gateway.telegram.token: must be a string" | errors]
 
   defp validate_telegram_compaction(errors, nil), do: errors
 
   defp validate_telegram_compaction(errors, compaction) when is_map(compaction) do
     errors
     |> validate_boolean(Map.get(compaction, :enabled), "gateway.telegram.compaction.enabled")
-    |> validate_positive_integer(Map.get(compaction, :context_window_tokens), "gateway.telegram.compaction.context_window_tokens")
-    |> validate_positive_integer(Map.get(compaction, :reserve_tokens), "gateway.telegram.compaction.reserve_tokens")
-    |> validate_ratio(Map.get(compaction, :trigger_ratio), "gateway.telegram.compaction.trigger_ratio")
+    |> validate_positive_integer(
+      Map.get(compaction, :context_window_tokens),
+      "gateway.telegram.compaction.context_window_tokens"
+    )
+    |> validate_positive_integer(
+      Map.get(compaction, :reserve_tokens),
+      "gateway.telegram.compaction.reserve_tokens"
+    )
+    |> validate_ratio(
+      Map.get(compaction, :trigger_ratio),
+      "gateway.telegram.compaction.trigger_ratio"
+    )
   end
 
   defp validate_telegram_compaction(errors, _),
@@ -167,9 +186,18 @@ defmodule LemonCore.Config.Validator do
   def validate_discord_config(errors, discord) when is_map(discord) do
     errors
     |> validate_discord_token(Map.get(discord, :bot_token))
-    |> validate_discord_id_list(Map.get(discord, :allowed_guild_ids), "gateway.discord.allowed_guild_ids")
-    |> validate_discord_id_list(Map.get(discord, :allowed_channel_ids), "gateway.discord.allowed_channel_ids")
-    |> validate_boolean(Map.get(discord, :deny_unbound_channels), "gateway.discord.deny_unbound_channels")
+    |> validate_discord_id_list(
+      Map.get(discord, :allowed_guild_ids),
+      "gateway.discord.allowed_guild_ids"
+    )
+    |> validate_discord_id_list(
+      Map.get(discord, :allowed_channel_ids),
+      "gateway.discord.allowed_channel_ids"
+    )
+    |> validate_boolean(
+      Map.get(discord, :deny_unbound_channels),
+      "gateway.discord.deny_unbound_channels"
+    )
   end
 
   def validate_discord_config(errors, _),
@@ -190,7 +218,8 @@ defmodule LemonCore.Config.Validator do
     end
   end
 
-  defp validate_discord_token(errors, _), do: ["gateway.discord.bot_token: must be a string" | errors]
+  defp validate_discord_token(errors, _),
+    do: ["gateway.discord.bot_token: must be a string" | errors]
 
   defp valid_discord_token_format?(token) do
     case String.split(token, ".") do
@@ -245,7 +274,8 @@ defmodule LemonCore.Config.Validator do
     end
   end
 
-  defp validate_web_dashboard_port(errors, _), do: ["gateway.web_dashboard.port: must be an integer" | errors]
+  defp validate_web_dashboard_port(errors, _),
+    do: ["gateway.web_dashboard.port: must be an integer" | errors]
 
   defp validate_web_dashboard_host(errors, nil), do: errors
 
@@ -257,31 +287,50 @@ defmodule LemonCore.Config.Validator do
     end
   end
 
-  defp validate_web_dashboard_host(errors, _), do: ["gateway.web_dashboard.host: must be a string" | errors]
+  defp validate_web_dashboard_host(errors, _),
+    do: ["gateway.web_dashboard.host: must be a string" | errors]
 
   defp validate_web_dashboard_secret_key_base(errors, nil), do: errors
 
   defp validate_web_dashboard_secret_key_base(errors, key) when is_binary(key) do
     cond do
-      env_var_reference?(key) -> errors
-      String.length(key) >= 64 -> errors
-      true -> ["gateway.web_dashboard.secret_key_base: must be at least 64 characters (use LEMON_WEB_SECRET_KEY_BASE env var)" | errors]
+      env_var_reference?(key) ->
+        errors
+
+      String.length(key) >= 64 ->
+        errors
+
+      true ->
+        [
+          "gateway.web_dashboard.secret_key_base: must be at least 64 characters (use LEMON_WEB_SECRET_KEY_BASE env var)"
+          | errors
+        ]
     end
   end
 
-  defp validate_web_dashboard_secret_key_base(errors, _), do: ["gateway.web_dashboard.secret_key_base: must be a string" | errors]
+  defp validate_web_dashboard_secret_key_base(errors, _),
+    do: ["gateway.web_dashboard.secret_key_base: must be a string" | errors]
 
   defp validate_web_dashboard_access_token(errors, nil), do: errors
 
   defp validate_web_dashboard_access_token(errors, token) when is_binary(token) do
     cond do
-      env_var_reference?(token) -> errors
-      String.length(token) >= 16 -> errors
-      true -> ["gateway.web_dashboard.access_token: should be at least 16 characters for security" | errors]
+      env_var_reference?(token) ->
+        errors
+
+      String.length(token) >= 16 ->
+        errors
+
+      true ->
+        [
+          "gateway.web_dashboard.access_token: should be at least 16 characters for security"
+          | errors
+        ]
     end
   end
 
-  defp validate_web_dashboard_access_token(errors, _), do: ["gateway.web_dashboard.access_token: must be a string" | errors]
+  defp validate_web_dashboard_access_token(errors, _),
+    do: ["gateway.web_dashboard.access_token: must be a string" | errors]
 
   @doc """
   Validates Farcaster configuration.
@@ -295,7 +344,10 @@ defmodule LemonCore.Config.Validator do
     |> validate_farcaster_signer_key(Map.get(farcaster, :signer_key))
     |> validate_farcaster_app_key(Map.get(farcaster, :app_key))
     |> validate_farcaster_frame_url(Map.get(farcaster, :frame_url))
-    |> validate_boolean(Map.get(farcaster, :verify_trusted_data), "gateway.farcaster.verify_trusted_data")
+    |> validate_boolean(
+      Map.get(farcaster, :verify_trusted_data),
+      "gateway.farcaster.verify_trusted_data"
+    )
     |> validate_farcaster_state_secret(Map.get(farcaster, :state_secret))
   end
 
@@ -312,19 +364,29 @@ defmodule LemonCore.Config.Validator do
     end
   end
 
-  defp validate_farcaster_hub_url(errors, _), do: ["gateway.farcaster.hub_url: must be a string" | errors]
+  defp validate_farcaster_hub_url(errors, _),
+    do: ["gateway.farcaster.hub_url: must be a string" | errors]
 
   defp validate_farcaster_signer_key(errors, nil), do: errors
 
   defp validate_farcaster_signer_key(errors, key) when is_binary(key) do
     cond do
-      env_var_reference?(key) -> errors
-      Regex.match?(~r/^[0-9a-fA-F]{64}$/, key) -> errors
-      true -> ["gateway.farcaster.signer_key: invalid format (expected 64-character hex string)" | errors]
+      env_var_reference?(key) ->
+        errors
+
+      Regex.match?(~r/^[0-9a-fA-F]{64}$/, key) ->
+        errors
+
+      true ->
+        [
+          "gateway.farcaster.signer_key: invalid format (expected 64-character hex string)"
+          | errors
+        ]
     end
   end
 
-  defp validate_farcaster_signer_key(errors, _), do: ["gateway.farcaster.signer_key: must be a string" | errors]
+  defp validate_farcaster_signer_key(errors, _),
+    do: ["gateway.farcaster.signer_key: must be a string" | errors]
 
   defp validate_farcaster_app_key(errors, nil), do: errors
 
@@ -336,7 +398,8 @@ defmodule LemonCore.Config.Validator do
     end
   end
 
-  defp validate_farcaster_app_key(errors, _), do: ["gateway.farcaster.app_key: must be a string" | errors]
+  defp validate_farcaster_app_key(errors, _),
+    do: ["gateway.farcaster.app_key: must be a string" | errors]
 
   defp validate_farcaster_frame_url(errors, nil), do: errors
 
@@ -348,19 +411,26 @@ defmodule LemonCore.Config.Validator do
     end
   end
 
-  defp validate_farcaster_frame_url(errors, _), do: ["gateway.farcaster.frame_url: must be a string" | errors]
+  defp validate_farcaster_frame_url(errors, _),
+    do: ["gateway.farcaster.frame_url: must be a string" | errors]
 
   defp validate_farcaster_state_secret(errors, nil), do: errors
 
   defp validate_farcaster_state_secret(errors, secret) when is_binary(secret) do
     cond do
-      env_var_reference?(secret) -> errors
-      String.length(secret) >= 32 -> errors
-      true -> ["gateway.farcaster.state_secret: must be at least 32 characters for security" | errors]
+      env_var_reference?(secret) ->
+        errors
+
+      String.length(secret) >= 32 ->
+        errors
+
+      true ->
+        ["gateway.farcaster.state_secret: must be at least 32 characters for security" | errors]
     end
   end
 
-  defp validate_farcaster_state_secret(errors, _), do: ["gateway.farcaster.state_secret: must be a string" | errors]
+  defp validate_farcaster_state_secret(errors, _),
+    do: ["gateway.farcaster.state_secret: must be a string" | errors]
 
   @doc """
   Validates XMTP configuration.
@@ -376,8 +446,14 @@ defmodule LemonCore.Config.Validator do
     |> validate_xmtp_wallet_address(Map.get(xmtp, :wallet_address))
     |> validate_xmtp_environment(environment)
     |> validate_xmtp_api_url(Map.get(xmtp, :api_url))
-    |> validate_positive_integer(Map.get(xmtp, :poll_interval_ms), "gateway.xmtp.poll_interval_ms")
-    |> validate_positive_integer(Map.get(xmtp, :connect_timeout_ms), "gateway.xmtp.connect_timeout_ms")
+    |> validate_positive_integer(
+      Map.get(xmtp, :poll_interval_ms),
+      "gateway.xmtp.poll_interval_ms"
+    )
+    |> validate_positive_integer(
+      Map.get(xmtp, :connect_timeout_ms),
+      "gateway.xmtp.connect_timeout_ms"
+    )
     |> validate_boolean(Map.get(xmtp, :mock_mode), "gateway.xmtp.mock_mode")
     |> validate_boolean(Map.get(xmtp, :require_live), "gateway.xmtp.require_live")
     |> validate_positive_integer(Map.get(xmtp, :max_connections), "gateway.xmtp.max_connections")
@@ -398,11 +474,15 @@ defmodule LemonCore.Config.Validator do
         errors
 
       true ->
-        ["gateway.xmtp.wallet_key: invalid format (expected 64-character hex string, optionally with 0x prefix)" | errors]
+        [
+          "gateway.xmtp.wallet_key: invalid format (expected 64-character hex string, optionally with 0x prefix)"
+          | errors
+        ]
     end
   end
 
-  defp validate_xmtp_wallet_key(errors, _), do: ["gateway.xmtp.wallet_key: must be a string" | errors]
+  defp validate_xmtp_wallet_key(errors, _),
+    do: ["gateway.xmtp.wallet_key: must be a string" | errors]
 
   defp validate_xmtp_wallet_address(errors, nil), do: errors
 
@@ -411,16 +491,23 @@ defmodule LemonCore.Config.Validator do
       env_var_reference?(address) ->
         errors
 
-      address |> String.trim() |> String.downcase() |> String.trim_leading("0x")
+      address
+      |> String.trim()
+      |> String.downcase()
+      |> String.trim_leading("0x")
       |> then(&Regex.match?(~r/^[0-9a-f]{40}$/, &1)) ->
         errors
 
       true ->
-        ["gateway.xmtp.wallet_address: invalid format (expected 40-character hex Ethereum address)" | errors]
+        [
+          "gateway.xmtp.wallet_address: invalid format (expected 40-character hex Ethereum address)"
+          | errors
+        ]
     end
   end
 
-  defp validate_xmtp_wallet_address(errors, _), do: ["gateway.xmtp.wallet_address: must be a string" | errors]
+  defp validate_xmtp_wallet_address(errors, _),
+    do: ["gateway.xmtp.wallet_address: must be a string" | errors]
 
   defp validate_xmtp_environment(errors, nil), do: errors
 
@@ -430,11 +517,15 @@ defmodule LemonCore.Config.Validator do
     if env in valid_envs do
       errors
     else
-      ["gateway.xmtp.environment: invalid environment '#{env}'. Valid: #{Enum.join(valid_envs, ", ")}" | errors]
+      [
+        "gateway.xmtp.environment: invalid environment '#{env}'. Valid: #{Enum.join(valid_envs, ", ")}"
+        | errors
+      ]
     end
   end
 
-  defp validate_xmtp_environment(errors, _), do: ["gateway.xmtp.environment: must be a string" | errors]
+  defp validate_xmtp_environment(errors, _),
+    do: ["gateway.xmtp.environment: must be a string" | errors]
 
   defp validate_xmtp_api_url(errors, nil), do: errors
 
@@ -458,7 +549,10 @@ defmodule LemonCore.Config.Validator do
     errors
     |> validate_email_inbound_config(Map.get(email, :inbound))
     |> validate_email_outbound_config(Map.get(email, :outbound))
-    |> validate_positive_integer(Map.get(email, :attachment_max_bytes), "gateway.email.attachment_max_bytes")
+    |> validate_positive_integer(
+      Map.get(email, :attachment_max_bytes),
+      "gateway.email.attachment_max_bytes"
+    )
     |> validate_boolean(Map.get(email, :inbound_enabled), "gateway.email.inbound_enabled")
     |> validate_boolean(Map.get(email, :webhook_enabled), "gateway.email.webhook_enabled")
   end
@@ -473,10 +567,14 @@ defmodule LemonCore.Config.Validator do
     |> validate_non_empty_string(Map.get(inbound, :bind_host), "gateway.email.inbound.bind_host")
     |> validate_port(Map.get(inbound, :bind_port), "gateway.email.inbound.bind_port")
     |> validate_non_empty_string(Map.get(inbound, :token), "gateway.email.inbound.token")
-    |> validate_positive_integer(Map.get(inbound, :max_body_bytes), "gateway.email.inbound.max_body_bytes")
+    |> validate_positive_integer(
+      Map.get(inbound, :max_body_bytes),
+      "gateway.email.inbound.max_body_bytes"
+    )
   end
 
-  defp validate_email_inbound_config(errors, _), do: ["gateway.email.inbound: must be a map" | errors]
+  defp validate_email_inbound_config(errors, _),
+    do: ["gateway.email.inbound: must be a map" | errors]
 
   defp validate_email_outbound_config(errors, nil), do: errors
 
@@ -489,10 +587,14 @@ defmodule LemonCore.Config.Validator do
     |> validate_email_tls_config(Map.get(outbound, :tls))
     |> validate_email_auth_config(Map.get(outbound, :auth))
     |> validate_non_empty_string(Map.get(outbound, :hostname), "gateway.email.outbound.hostname")
-    |> validate_non_empty_string(Map.get(outbound, :from_address), "gateway.email.outbound.from_address")
+    |> validate_non_empty_string(
+      Map.get(outbound, :from_address),
+      "gateway.email.outbound.from_address"
+    )
   end
 
-  defp validate_email_outbound_config(errors, _), do: ["gateway.email.outbound: must be a map" | errors]
+  defp validate_email_outbound_config(errors, _),
+    do: ["gateway.email.outbound: must be a map" | errors]
 
   defp validate_email_tls_config(errors, nil), do: errors
 
@@ -502,11 +604,15 @@ defmodule LemonCore.Config.Validator do
     if tls in ["true", "false", "always", "never", "if_available"] do
       errors
     else
-      ["gateway.email.outbound.tls: invalid value '#{tls}'. Valid: true, false, always, never, if_available" | errors]
+      [
+        "gateway.email.outbound.tls: invalid value '#{tls}'. Valid: true, false, always, never, if_available"
+        | errors
+      ]
     end
   end
 
-  defp validate_email_tls_config(errors, _), do: ["gateway.email.outbound.tls: must be a boolean or string" | errors]
+  defp validate_email_tls_config(errors, _),
+    do: ["gateway.email.outbound.tls: must be a boolean or string" | errors]
 
   defp validate_email_auth_config(errors, nil), do: errors
 
@@ -516,11 +622,15 @@ defmodule LemonCore.Config.Validator do
     if auth in ["true", "false", "always", "if_available"] do
       errors
     else
-      ["gateway.email.outbound.auth: invalid value '#{auth}'. Valid: true, false, always, if_available" | errors]
+      [
+        "gateway.email.outbound.auth: invalid value '#{auth}'. Valid: true, false, always, if_available"
+        | errors
+      ]
     end
   end
 
-  defp validate_email_auth_config(errors, _), do: ["gateway.email.outbound.auth: must be a boolean or string" | errors]
+  defp validate_email_auth_config(errors, _),
+    do: ["gateway.email.outbound.auth: must be a boolean or string" | errors]
 
   defp validate_port(errors, nil, _path), do: errors
 
@@ -559,7 +669,10 @@ defmodule LemonCore.Config.Validator do
     if mode in valid_modes do
       errors
     else
-      ["gateway.queue.mode: invalid mode '#{mode}'. Valid: #{Enum.join(valid_modes, ", ")}" | errors]
+      [
+        "gateway.queue.mode: invalid mode '#{mode}'. Valid: #{Enum.join(valid_modes, ", ")}"
+        | errors
+      ]
     end
   end
 
@@ -573,7 +686,10 @@ defmodule LemonCore.Config.Validator do
     if drop in valid_drops do
       errors
     else
-      ["gateway.queue.drop: invalid drop policy '#{drop}'. Valid: #{Enum.join(valid_drops, ", ")}" | errors]
+      [
+        "gateway.queue.drop: invalid drop policy '#{drop}'. Valid: #{Enum.join(valid_drops, ", ")}"
+        | errors
+      ]
     end
   end
 
@@ -801,18 +917,26 @@ defmodule LemonCore.Config.Validator do
     # Validate base URL if present
     errors =
       case Map.get(config, :base_url) do
-        nil -> errors
-        "" -> ["providers.#{name}.base_url: cannot be empty" | errors]
+        nil ->
+          errors
+
+        "" ->
+          ["providers.#{name}.base_url: cannot be empty" | errors]
+
         url when is_binary(url) ->
           if String.starts_with?(url, ["http://", "https://"]) do
             errors
           else
             ["providers.#{name}.base_url: must start with http:// or https://" | errors]
           end
-        _ -> ["providers.#{name}.base_url: must be a string" | errors]
+
+        _ ->
+          ["providers.#{name}.base_url: must be a string" | errors]
       end
 
     errors
+    |> validate_openai_codex_auth_source(name, config, "providers")
+    |> validate_anthropic_auth_source(name, config, "providers")
   end
 
   defp validate_legacy_provider_config(errors, name, _config) do
@@ -831,18 +955,26 @@ defmodule LemonCore.Config.Validator do
     # Validate base URL if present
     errors =
       case Map.get(config, :base_url) do
-        nil -> errors
-        "" -> ["providers.providers.#{name}.base_url: cannot be empty" | errors]
+        nil ->
+          errors
+
+        "" ->
+          ["providers.providers.#{name}.base_url: cannot be empty" | errors]
+
         url when is_binary(url) ->
           if String.starts_with?(url, ["http://", "https://"]) do
             errors
           else
             ["providers.providers.#{name}.base_url: must start with http:// or https://" | errors]
           end
-        _ -> ["providers.providers.#{name}.base_url: must be a string" | errors]
+
+        _ ->
+          ["providers.providers.#{name}.base_url: must be a string" | errors]
       end
 
     errors
+    |> validate_openai_codex_auth_source(name, config, "providers.providers")
+    |> validate_anthropic_auth_source(name, config, "providers.providers")
   end
 
   defp validate_provider_config(errors, name, _config) do
@@ -855,4 +987,62 @@ defmodule LemonCore.Config.Validator do
   end
 
   defp env_var_reference?(_), do: false
+
+  defp validate_openai_codex_auth_source(errors, name, config, path_prefix) do
+    if to_string(name) == "openai-codex" do
+      case Map.get(config, :auth_source) || Map.get(config, "auth_source") do
+        nil ->
+          ["#{path_prefix}.openai-codex.auth_source: is required (oauth | api_key)" | errors]
+
+        source when is_binary(source) ->
+          normalized = source |> String.trim() |> String.downcase()
+
+          if normalized in ["oauth", "api_key"] do
+            errors
+          else
+            [
+              "#{path_prefix}.openai-codex.auth_source: invalid value '#{source}' (expected oauth | api_key)"
+              | errors
+            ]
+          end
+
+        other ->
+          [
+            "#{path_prefix}.openai-codex.auth_source: must be a string (got #{inspect(other)})"
+            | errors
+          ]
+      end
+    else
+      errors
+    end
+  end
+
+  defp validate_anthropic_auth_source(errors, name, config, path_prefix) do
+    if to_string(name) == "anthropic" do
+      case Map.get(config, :auth_source) || Map.get(config, "auth_source") do
+        nil ->
+          errors
+
+        source when is_binary(source) ->
+          normalized = source |> String.trim() |> String.downcase()
+
+          if normalized in ["api_key"] do
+            errors
+          else
+            [
+              "#{path_prefix}.anthropic.auth_source: invalid value '#{source}' (expected api_key)"
+              | errors
+            ]
+          end
+
+        other ->
+          [
+            "#{path_prefix}.anthropic.auth_source: must be a string (got #{inspect(other)})"
+            | errors
+          ]
+      end
+    else
+      errors
+    end
+  end
 end

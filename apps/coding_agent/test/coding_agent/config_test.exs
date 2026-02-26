@@ -109,6 +109,25 @@ defmodule CodingAgent.ConfigTest do
     end
   end
 
+  describe "spill_dir/2" do
+    test "returns path under sessions directory with spill segment" do
+      cwd = "/home/user/project"
+      session_id = "sess_123"
+      result = Config.spill_dir(cwd, session_id)
+
+      assert String.starts_with?(result, Config.sessions_dir(cwd))
+      assert String.contains?(result, "/spill/")
+      assert String.ends_with?(result, "/sess_123")
+    end
+
+    test "sanitizes unsafe session ids" do
+      cwd = "/home/user/project"
+      result = Config.spill_dir(cwd, "../weird id/..")
+
+      assert String.ends_with?(result, "/_weird_id_")
+    end
+  end
+
   describe "extensions_dir/0" do
     test "returns path under agent directory" do
       result = Config.extensions_dir()

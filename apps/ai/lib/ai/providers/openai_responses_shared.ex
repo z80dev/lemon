@@ -29,6 +29,9 @@ defmodule Ai.Providers.OpenAIResponsesShared do
   require Logger
 
   @max_function_call_output_bytes 10_485_760
+  @default_soft_function_call_output_bytes 65_536
+  @min_soft_function_call_output_bytes 8_192
+  @soft_function_call_output_context_ratio 0.10
 
   # ============================================================================
   # Types
@@ -130,10 +133,12 @@ defmodule Ai.Providers.OpenAIResponsesShared do
   """
   @spec clamp_function_call_outputs(map()) :: map()
   def clamp_function_call_outputs(params) when is_map(params) do
+    limit_bytes = function_call_output_limit_bytes(Map.get(params, "model"))
+
     if Map.has_key?(params, "input") do
       Map.update(params, "input", [], fn
         input when is_list(input) ->
-          Enum.map(input, &clamp_function_call_output_item/1)
+          Enum.map(input, &clamp_function_call_output_item(&1, limit_bytes))
 
         other ->
           other
@@ -214,7 +219,7 @@ defmodule Ai.Providers.OpenAIResponsesShared do
     output_text =
       output_text
       |> sanitize_surrogates()
-      |> truncate_function_call_output(call_id, msg.tool_name)
+      |> truncate_function_call_output(call_id, msg.tool_name, model)
 
     result = [
       %{
@@ -251,41 +256,95 @@ defmodule Ai.Providers.OpenAIResponsesShared do
   defp convert_message(_msg, _model, _idx, _providers), do: nil
 
   defp clamp_function_call_output_item(
-         %{"type" => "function_call_output", "output" => output} = item
+         %{"type" => "function_call_output", "output" => output} = item,
+         limit_bytes
        )
-       when is_binary(output) do
+       when is_binary(output) and is_integer(limit_bytes) and limit_bytes > 0 do
     truncated =
       truncate_function_call_output(
         output,
         Map.get(item, "call_id"),
-        "request_payload"
+        "request_payload",
+        limit_bytes
       )
 
     Map.put(item, "output", truncated)
   end
 
-  defp clamp_function_call_output_item(item), do: item
+  defp clamp_function_call_output_item(item, _limit_bytes), do: item
 
-  defp truncate_function_call_output(text, _call_id, _tool_name)
-       when byte_size(text) <= @max_function_call_output_bytes do
+  defp truncate_function_call_output(text, _call_id, _tool_name, model_or_limit)
+
+  defp truncate_function_call_output(text, _call_id, _tool_name, model_or_limit)
+       when is_binary(text) and
+              byte_size(text) <=
+                @max_function_call_output_bytes do
+    limit_bytes = function_call_output_limit_bytes(model_or_limit)
+
+    if byte_size(text) <= limit_bytes do
+      text
+    else
+      truncate_function_call_output_impl(text, nil, nil, limit_bytes)
+    end
+  end
+
+  defp truncate_function_call_output(text, call_id, tool_name, model_or_limit)
+       when is_binary(text) do
+    limit_bytes = function_call_output_limit_bytes(model_or_limit)
+    truncate_function_call_output_impl(text, call_id, tool_name, limit_bytes)
+  end
+
+  defp truncate_function_call_output_impl(text, _call_id, _tool_name, limit_bytes)
+       when byte_size(text) <= limit_bytes do
     text
   end
 
-  defp truncate_function_call_output(text, call_id, tool_name) do
+  defp truncate_function_call_output_impl(text, call_id, tool_name, limit_bytes) do
     truncated =
       text
-      |> binary_part(0, @max_function_call_output_bytes)
+      |> binary_part(0, limit_bytes)
       |> trim_to_valid_utf8()
 
     Logger.warning(
       "OpenAI function_call_output truncated " <>
         "call_id=#{inspect(call_id)} tool_name=#{inspect(tool_name)} " <>
         "original_bytes=#{byte_size(text)} truncated_bytes=#{byte_size(truncated)} " <>
-        "limit_bytes=#{@max_function_call_output_bytes}"
+        "limit_bytes=#{limit_bytes}"
     )
 
     truncated
   end
+
+  defp function_call_output_limit_bytes(model_or_limit) when is_integer(model_or_limit) do
+    model_or_limit
+    |> min(@max_function_call_output_bytes)
+    |> max(@min_soft_function_call_output_bytes)
+  end
+
+  defp function_call_output_limit_bytes(%Model{context_window: cw})
+       when is_integer(cw) and cw > 0 do
+    soft_limit =
+      trunc(cw * 4 * @soft_function_call_output_context_ratio)
+      |> max(@min_soft_function_call_output_bytes)
+      |> min(@default_soft_function_call_output_bytes)
+
+    min(@max_function_call_output_bytes, soft_limit)
+  end
+
+  defp function_call_output_limit_bytes(model_id) when is_binary(model_id) do
+    model =
+      if Code.ensure_loaded?(Ai.Models) and function_exported?(Ai.Models, :find_by_id, 1) do
+        Ai.Models.find_by_id(model_id)
+      else
+        nil
+      end
+
+    function_call_output_limit_bytes(model)
+  rescue
+    _ -> @default_soft_function_call_output_bytes
+  end
+
+  defp function_call_output_limit_bytes(_), do: @default_soft_function_call_output_bytes
 
   defp trim_to_valid_utf8(<<>>), do: ""
 

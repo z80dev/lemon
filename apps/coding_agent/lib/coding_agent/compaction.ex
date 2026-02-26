@@ -438,7 +438,7 @@ defmodule CodingAgent.Compaction do
   @spec estimate_message_tokens(Messages.message()) :: non_neg_integer()
   def estimate_message_tokens(message) do
     text = Messages.get_text(message)
-    div(String.length(text || ""), 4)
+    estimate_text_tokens(text)
   end
 
   @doc """
@@ -449,6 +449,30 @@ defmodule CodingAgent.Compaction do
     Enum.reduce(messages, 0, fn msg, acc ->
       acc + estimate_message_tokens(msg)
     end)
+  end
+
+  @doc """
+  Estimate tokens for plain text using a rough 4-chars/token heuristic.
+  """
+  @spec estimate_text_tokens(String.t() | nil) :: non_neg_integer()
+  def estimate_text_tokens(text) when is_binary(text), do: div(String.length(text), 4)
+  def estimate_text_tokens(_), do: 0
+
+  @doc """
+  Estimate total request context tokens (messages + system prompt + tool schema).
+  """
+  @spec estimate_request_context_tokens([Messages.message()], String.t() | nil, list()) ::
+          non_neg_integer()
+  def estimate_request_context_tokens(messages, system_prompt \\ nil, tools \\ [])
+
+  def estimate_request_context_tokens(messages, system_prompt, tools) when is_list(messages) do
+    estimate_context_tokens(messages) +
+      estimate_text_tokens(system_prompt) +
+      estimate_tool_definitions_tokens(tools)
+  end
+
+  def estimate_request_context_tokens(_messages, system_prompt, tools) do
+    estimate_text_tokens(system_prompt) + estimate_tool_definitions_tokens(tools)
   end
 
   defp estimate_entry_tokens(%SessionEntry{message: nil, type: type})
@@ -464,7 +488,7 @@ defmodule CodingAgent.Compaction do
         _ -> inspect(content)
       end
 
-    div(String.length(text || ""), 4)
+    estimate_text_tokens(text)
   end
 
   defp estimate_entry_tokens(%SessionEntry{message: msg}) when is_map(msg) do
@@ -478,7 +502,7 @@ defmodule CodingAgent.Compaction do
         _ -> Jason.encode!(msg)
       end
 
-    div(String.length(text || ""), 4)
+    estimate_text_tokens(text)
   end
 
   defp extract_text_from_content(content) when is_list(content) do
@@ -1019,9 +1043,23 @@ defmodule CodingAgent.Compaction do
           _ -> Jason.encode!(msg)
         end
 
-      acc + div(String.length(text || ""), 4)
+      acc + estimate_text_tokens(text)
     end)
   end
+
+  defp estimate_tool_definitions_tokens(tools) when is_list(tools) do
+    Enum.reduce(tools, 0, fn tool, acc ->
+      text =
+        case Jason.encode(tool) do
+          {:ok, encoded} -> encoded
+          _ -> inspect(tool)
+        end
+
+      acc + estimate_text_tokens(text)
+    end)
+  end
+
+  defp estimate_tool_definitions_tokens(_), do: 0
 
   defp provider_request_message_limit(model) do
     if function_exported?(Ai.Providers.Anthropic, :request_history_limit, 1) do

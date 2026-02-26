@@ -53,7 +53,7 @@ Ai (main API)
 | `Ai.Providers.Anthropic` | `:anthropic_messages` | Anthropic (also Kimi, OpenCode via same API) |
 | `Ai.Providers.OpenAICompletions` | `:openai_completions` | OpenAI Chat Completions (and compatible: Groq, Mistral, xAI, Cerebras, OpenRouter, etc.) |
 | `Ai.Providers.OpenAIResponses` | `:openai_responses` | OpenAI Responses API |
-| `Ai.Providers.OpenAICodexResponses` | `:openai_codex_responses` | OpenAI Codex (ChatGPT JWT auth) |
+| `Ai.Providers.OpenAICodexResponses` | `:openai_codex_responses` | OpenAI Codex (ChatGPT JWT auth; source selected by `providers.openai-codex.auth_source`) |
 | `Ai.Providers.AzureOpenAIResponses` | `:azure_openai_responses` | Azure OpenAI |
 | `Ai.Providers.Google` | `:google_generative_ai` | Google AI Studio (Gemini) |
 | `Ai.Providers.GoogleVertex` | `:google_vertex` | Google Vertex AI |
@@ -68,7 +68,7 @@ Ai (main API)
 - `Ai.Providers.OpenAIResponsesShared` - Shared logic for OpenAI Responses and Azure, including `function_call_output` size guards
 - `Ai.Providers.HttpTrace` - HTTP request/response tracing (enabled via `LEMON_AI_HTTP_TRACE=1`)
 - `Ai.Providers.TextSanitizer` - UTF-8 sanitization for streamed text
-- `Ai.Auth.OpenAICodexOAuth` - Reads/refreshes ChatGPT JWT tokens from `~/.codex/auth.json`
+- `Ai.Auth.OpenAICodexOAuth` - Resolves/refreshes ChatGPT JWT tokens from encrypted OAuth secret payloads (default: `llm_openai_codex_api_key`)
 - `Ai.Auth.GitHubCopilotOAuth` - GitHub Copilot OAuth device login + token refresh helpers for encrypted secret payloads
 
 ## Key Types (all defined in `Ai.Types`)
@@ -569,7 +569,7 @@ Run with: `mix test --include integration`
 |----------|---------|---------|
 | `ANTHROPIC_API_KEY` | Anthropic provider | API authentication |
 | `OPENAI_API_KEY` | OpenAI providers | API authentication |
-| `OPENAI_CODEX_API_KEY` | OpenAI Codex provider | JWT token (fallback; prefer `~/.codex/auth.json`) |
+| `OPENAI_CODEX_API_KEY` | OpenAI Codex provider | Static key/token when `providers.openai-codex.auth_source = "api_key"` |
 | `AZURE_OPENAI_API_KEY` | Azure OpenAI provider | API authentication |
 | `AZURE_OPENAI_BASE_URL` | Azure OpenAI provider | Full base URL (optional) |
 | `AZURE_OPENAI_RESOURCE_NAME` | Azure OpenAI provider | Resource name (if no base URL) |
@@ -580,7 +580,6 @@ Run with: `mix test --include integration`
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Google AI Studio provider | API key (also checks `GOOGLE_API_KEY`, `GEMINI_API_KEY`) |
 | `GOOGLE_CLOUD_PROJECT` | Google Vertex provider | GCP project ID (also checks `GCLOUD_PROJECT`) |
 | `GOOGLE_CLOUD_LOCATION` | Google Vertex provider | GCP region |
-| `CODEX_HOME` | `Ai.Auth.OpenAICodexOAuth` | Override Codex CLI home dir (default: `~/.codex`) |
 | `LEMON_AI_HTTP_TRACE` | `Ai.Providers.HttpTrace` | Set to `"1"` to enable HTTP request/response logging |
 | `LEMON_AI_DEBUG` | Anthropic provider | Set to `"1"` to log raw SSE to a file |
 | `LEMON_AI_DEBUG_FILE` | Anthropic provider | SSE log file path (default: `/tmp/lemon_anthropic_sse.log`) |

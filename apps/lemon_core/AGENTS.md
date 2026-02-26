@@ -96,7 +96,7 @@ config = LemonCore.Config.Modular.load!(project_dir: cwd)  # raises on invalid
 
 ### Config Sections
 
-- `providers` - LLM API keys and base URLs (anthropic, openai, openai-codex, opencode, kimi, google)
+- `providers` - LLM API keys and base URLs (anthropic, openai, openai-codex, opencode, kimi, google). `openai-codex` requires `auth_source` (`oauth` or `api_key`); `anthropic` uses API key inputs (`api_key` / `api_key_secret` / `ANTHROPIC_API_KEY`).
 - `defaults` - Preferred home for default provider/model/thinking level/engine
 - `runtime` - Preferred home for runtime behavior (compaction, retry, shell, tools, cli, extensions, theme)
 - `profiles` - Preferred home for per-agent profiles with tool policies
@@ -126,6 +126,7 @@ config = LemonCore.Config.Modular.load!(project_dir: cwd)  # raises on invalid
 | `LEMON_BROWSER_DRIVER_PATH` | Path to local browser driver JS file |
 | `ANTHROPIC_API_KEY` | `providers.anthropic.api_key` |
 | `OPENAI_API_KEY` | `providers.openai.api_key` |
+| `OPENAI_CODEX_API_KEY` | `providers.openai-codex.api_key` (used when `providers.openai-codex.auth_source = "api_key"`) |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | `providers.google.api_key` |
 
 ## Secrets Management Flow

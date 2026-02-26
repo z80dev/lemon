@@ -153,29 +153,15 @@ defmodule CodingAgent.Session.ModelResolver do
       provider_name = normalize_provider_key(provider)
       provider_cfg = provider_config(providers, provider_name)
 
-      env_key =
-        provider_name
-        |> provider_env_vars()
-        |> env_first()
-
       cond do
-        is_binary(env_key) and env_key != "" ->
-          env_key
+        provider_name == "openai-codex" ->
+          resolve_openai_codex_api_key(provider_cfg)
 
-        is_binary(plain_api_key = provider_config_value(provider_cfg, :api_key)) and
-            plain_api_key != "" ->
-          plain_api_key
-
-        is_binary(api_key_secret = provider_config_value(provider_cfg, :api_key_secret)) and
-            api_key_secret != "" ->
-          resolve_secret_api_key(api_key_secret)
-
-        is_binary(default_secret = provider_default_secret_name(provider_name)) and
-            default_secret != "" ->
-          resolve_secret_api_key(default_secret)
+        provider_name == "anthropic" ->
+          resolve_anthropic_api_key(provider_cfg)
 
         true ->
-          nil
+          resolve_generic_api_key(provider_name, provider_cfg)
       end
     end
   end
@@ -312,15 +298,175 @@ defmodule CodingAgent.Session.ModelResolver do
     if sanitized == "", do: nil, else: "llm_#{sanitized}_api_key"
   end
 
-  defp resolve_secret_api_key(secret_name) when is_binary(secret_name) do
-    case LemonCore.Secrets.resolve(secret_name, prefer_env: false, env_fallback: true) do
+  defp resolve_openai_codex_api_key(provider_cfg) do
+    resolved =
+      case normalize_openai_codex_auth_source(provider_cfg) do
+        :oauth ->
+          resolve_openai_codex_oauth_key(provider_cfg)
+
+        :api_key ->
+          resolve_openai_codex_raw_api_key(provider_cfg)
+
+        :missing ->
+          Logger.warning(
+            "providers.openai-codex.auth_source is required and must be one of: oauth, api_key"
+          )
+
+          nil
+
+        {:invalid, value} ->
+          Logger.warning(
+            "providers.openai-codex.auth_source=#{inspect(value)} is invalid; expected oauth or api_key"
+          )
+
+          nil
+      end
+
+    # Return explicit empty string so downstream provider logic does not silently
+    # fall back to unrelated credential sources.
+    resolved || ""
+  end
+
+  defp resolve_anthropic_api_key(provider_cfg) do
+    case normalize_auth_source(provider_cfg) do
+      :oauth ->
+        Logger.warning(
+          "providers.anthropic.auth_source=\"oauth\" is no longer supported; falling back to API key resolution"
+        )
+
+      {:invalid, value} ->
+        Logger.warning(
+          "providers.anthropic.auth_source=#{inspect(value)} is invalid; expected api_key when set"
+        )
+
+      _ ->
+        :ok
+    end
+
+    resolve_anthropic_raw_api_key(provider_cfg) ||
+      resolve_raw_secret_api_key("llm_anthropic_api_key") ||
+      ""
+  end
+
+  defp resolve_openai_codex_oauth_key(provider_cfg) do
+    secret_name =
+      first_non_empty_binary([
+        provider_config_value(provider_cfg, :oauth_secret),
+        provider_config_value(provider_cfg, :api_key_secret),
+        "llm_openai_codex_api_key"
+      ])
+
+    if is_binary(secret_name) and secret_name != "" do
+      resolve_openai_codex_oauth_secret(secret_name)
+    else
+      nil
+    end
+  end
+
+  defp resolve_openai_codex_oauth_secret(secret_name) do
+    case LemonCore.Secrets.resolve(secret_name, prefer_env: false, env_fallback: false) do
+      {:ok, value, _source} ->
+        case Ai.Auth.OpenAICodexOAuth.resolve_api_key_from_secret(secret_name, value) do
+          {:ok, resolved_api_key} ->
+            resolved_api_key
+
+          :ignore ->
+            Logger.warning(
+              "OpenAI Codex OAuth secret #{secret_name} is not an OAuth payload (expected type onboarding_openai_codex_oauth)"
+            )
+
+            nil
+
+          {:error, reason} ->
+            Logger.warning(
+              "Failed to resolve OpenAI Codex OAuth secret #{secret_name}: #{inspect(reason)}"
+            )
+
+            nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp resolve_openai_codex_raw_api_key(provider_cfg) do
+    env_key =
+      provider_env_vars("openai-codex")
+      |> env_first()
+
+    cond do
+      is_binary(env_key) and env_key != "" ->
+        env_key
+
+      is_binary(plain_api_key = provider_config_value(provider_cfg, :api_key)) and
+          plain_api_key != "" ->
+        plain_api_key
+
+      is_binary(api_key_secret = provider_config_value(provider_cfg, :api_key_secret)) and
+          api_key_secret != "" ->
+        resolve_raw_secret_api_key(api_key_secret)
+
+      true ->
+        nil
+    end
+  end
+
+  defp resolve_anthropic_raw_api_key(provider_cfg) do
+    env_key =
+      provider_env_vars("anthropic")
+      |> env_first()
+
+    cond do
+      is_binary(env_key) and env_key != "" ->
+        env_key
+
+      is_binary(plain_api_key = provider_config_value(provider_cfg, :api_key)) and
+          plain_api_key != "" ->
+        plain_api_key
+
+      is_binary(api_key_secret = provider_config_value(provider_cfg, :api_key_secret)) and
+          api_key_secret != "" ->
+        resolve_raw_secret_api_key(api_key_secret)
+
+      true ->
+        nil
+    end
+  end
+
+  defp resolve_raw_secret_api_key(secret_name) when is_binary(secret_name) do
+    case LemonCore.Secrets.resolve(secret_name, prefer_env: false, env_fallback: false) do
+      {:ok, value, _source} when is_binary(value) and value != "" -> value
+      _ -> nil
+    end
+  end
+
+  defp resolve_secret_api_key(secret_name, opts \\ [])
+
+  defp resolve_secret_api_key(secret_name, opts) when is_binary(secret_name) do
+    env_fallback = Keyword.get(opts, :env_fallback, true)
+
+    case LemonCore.Secrets.resolve(secret_name, prefer_env: false, env_fallback: env_fallback) do
       {:ok, value, _source} ->
         case Ai.Auth.GitHubCopilotOAuth.resolve_api_key_from_secret(secret_name, value) do
           {:ok, resolved_api_key} ->
             resolved_api_key
 
           :ignore ->
-            value
+            case Ai.Auth.OpenAICodexOAuth.resolve_api_key_from_secret(secret_name, value) do
+              {:ok, resolved_api_key} ->
+                resolved_api_key
+
+              :ignore ->
+                value
+
+              {:error, reason} ->
+                Logger.debug(
+                  "Failed to resolve OpenAI Codex OAuth secret #{secret_name}: #{inspect(reason)}"
+                )
+
+                value
+            end
 
           {:error, reason} ->
             Logger.debug(
@@ -335,7 +481,55 @@ defmodule CodingAgent.Session.ModelResolver do
     end
   end
 
-  defp resolve_secret_api_key(_), do: nil
+  defp resolve_secret_api_key(_, _), do: nil
+
+  defp resolve_generic_api_key(provider_name, provider_cfg) do
+    env_key =
+      provider_name
+      |> provider_env_vars()
+      |> env_first()
+
+    cond do
+      is_binary(env_key) and env_key != "" ->
+        env_key
+
+      is_binary(plain_api_key = provider_config_value(provider_cfg, :api_key)) and
+          plain_api_key != "" ->
+        plain_api_key
+
+      is_binary(api_key_secret = provider_config_value(provider_cfg, :api_key_secret)) and
+          api_key_secret != "" ->
+        resolve_secret_api_key(api_key_secret)
+
+      is_binary(default_secret = provider_default_secret_name(provider_name)) and
+          default_secret != "" ->
+        resolve_secret_api_key(default_secret)
+
+      true ->
+        nil
+    end
+  end
+
+  defp normalize_openai_codex_auth_source(provider_cfg) do
+    normalize_auth_source(provider_cfg)
+  end
+
+  defp normalize_auth_source(provider_cfg) do
+    source =
+      provider_cfg
+      |> provider_config_value(:auth_source)
+      |> case do
+        value when is_binary(value) -> String.trim(value)
+        _ -> nil
+      end
+
+    cond do
+      source in [nil, ""] -> :missing
+      String.downcase(source) == "oauth" -> :oauth
+      String.downcase(source) == "api_key" -> :api_key
+      true -> {:invalid, source}
+    end
+  end
 
   defp env_first(names) when is_list(names) do
     Enum.find_value(names, fn name ->

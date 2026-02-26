@@ -11,12 +11,16 @@ defmodule LemonCore.Config.Providers do
   Configuration is loaded from the TOML config file under `[providers]`:
 
       [providers.anthropic]
-      api_key = "sk-ant-..."
+      api_key_secret = "llm_anthropic_api_key"
       base_url = "https://api.anthropic.com"
 
       [providers.openai]
       api_key = "sk-..."
       api_key_secret = "openai_api_key"  # Reference to secret store
+
+      [providers.openai-codex]
+      auth_source = "oauth"              # Required: "oauth" or "api_key"
+      oauth_secret = "llm_openai_codex_api_key"
 
   Environment variables override file configuration:
   - `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`
@@ -26,6 +30,9 @@ defmodule LemonCore.Config.Providers do
 
   The `api_key_secret` field allows referencing secrets from the secret store
   instead of hardcoding API keys in config files.
+
+  For providers that support OAuth payloads (`openai-codex`), set
+  `auth_source = "oauth"` to resolve access tokens from `oauth_secret`.
   """
 
   alias LemonCore.Config.Helpers
@@ -37,7 +44,9 @@ defmodule LemonCore.Config.Providers do
   @type provider_config :: %{
           api_key: String.t() | nil,
           base_url: String.t() | nil,
-          api_key_secret: String.t() | nil
+          api_key_secret: String.t() | nil,
+          auth_source: String.t() | nil,
+          oauth_secret: String.t() | nil
         }
 
   @type t :: %__MODULE__{
@@ -81,7 +90,9 @@ defmodule LemonCore.Config.Providers do
     %{
       api_key: config["api_key"],
       base_url: config["base_url"],
-      api_key_secret: normalize_optional_string(config["api_key_secret"])
+      api_key_secret: normalize_optional_string(config["api_key_secret"]),
+      auth_source: normalize_optional_string(config["auth_source"]),
+      oauth_secret: normalize_optional_string(config["oauth_secret"])
     }
     |> reject_nil_values()
   end

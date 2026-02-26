@@ -11,7 +11,7 @@ Lemon uses a single canonical configuration file in TOML format. Configuration i
 
 ```toml
 [providers.anthropic]
-api_key = "sk-ant-..."
+api_key_secret = "llm_anthropic_api_key"
 
 [providers.openai]
 api_key = "sk-..."
@@ -169,24 +169,58 @@ Lemon can auto-load a `.env` file at startup:
 
 By default, existing environment variables are preserved. `.env` values only fill missing variables.
 
+## Anthropic (API Key)
+
+Anthropic uses static API key resolution only:
+
+1. `ANTHROPIC_API_KEY`
+2. `api_key` in config
+3. `api_key_secret` from encrypted store
+4. Default secret fallback: `llm_anthropic_api_key`
+
+Example:
+
+```toml
+[providers.anthropic]
+api_key_secret = "llm_anthropic_api_key"
+```
+
 ## OpenAI Codex (ChatGPT OAuth)
 
-Lemon supports the **Codex subscription** provider as `openai-codex` (it uses the ChatGPT OAuth JWT, not `OPENAI_API_KEY`).
+Lemon supports the `openai-codex` provider with an explicit credential source.
+Set `providers.openai-codex.auth_source` to either:
+
+- `oauth` - use the encrypted OAuth payload secret (recommended)
+- `api_key` - use a static token/API key from env/config/secret
 
 Recommended setup:
 
-1. Authenticate with Codex CLI once: `codex login` (ChatGPT)
+1. Onboard Codex OAuth (stores `llm_openai_codex_api_key` in encrypted secrets)
 2. Set your default provider/model:
 
 ```toml
 [defaults]
 provider = "openai-codex"
 model = "openai-codex:gpt-5.2"
+
+[providers.openai-codex]
+auth_source = "oauth"
+# Optional override; defaults to llm_openai_codex_api_key
+# oauth_secret = "llm_openai_codex_api_key"
 ```
 
-Lemon will automatically read your access token from `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`) and refresh it as needed.
+In OAuth mode, Lemon resolves and refreshes tokens from the configured secret only.
+It does not fall back to `~/.codex/auth.json` or keychain.
 
-To force a token explicitly, set:
+For static API key/token mode:
+
+```toml
+[providers.openai-codex]
+auth_source = "api_key"
+api_key_secret = "llm_openai_codex_api_key_raw"
+```
+
+API key mode can also use:
 - `OPENAI_CODEX_API_KEY` (preferred)
 - `CHATGPT_TOKEN` (fallback)
 

@@ -11,6 +11,9 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     master_key = :crypto.strong_rand_bytes(32) |> Base.encode64()
     System.put_env("LEMON_SECRETS_MASTER_KEY", master_key)
     System.delete_env("OPENAI_API_KEY")
+    System.delete_env("OPENAI_CODEX_API_KEY")
+    System.delete_env("CHATGPT_TOKEN")
+    System.delete_env("ANTHROPIC_API_KEY")
     System.delete_env("OPENCODE_API_KEY")
     System.delete_env("GITHUB_COPILOT_API_KEY")
 
@@ -18,6 +21,9 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
       clear_secrets_table()
       System.delete_env("LEMON_SECRETS_MASTER_KEY")
       System.delete_env("OPENAI_API_KEY")
+      System.delete_env("OPENAI_CODEX_API_KEY")
+      System.delete_env("CHATGPT_TOKEN")
+      System.delete_env("ANTHROPIC_API_KEY")
       System.delete_env("OPENCODE_API_KEY")
       System.delete_env("GITHUB_COPILOT_API_KEY")
     end)
@@ -99,6 +105,122 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     assert :ok = Session.prompt(session, "hello")
 
     assert_receive {:stream_api_key, "from-default-secret"}, 1_000
+    GenServer.stop(session)
+  end
+
+  test "openai-codex oauth source resolves OAuth secret payload and ignores env/plain api key" do
+    oauth_secret =
+      Jason.encode!(%{
+        "type" => "onboarding_openai_codex_oauth",
+        "access_token" => "codex-access-token",
+        "refresh_token" => "codex-refresh-token",
+        "expires_at_ms" => System.system_time(:millisecond) + 3_600_000
+      })
+
+    assert {:ok, _} = Secrets.set("llm_openai_codex_api_key", oauth_secret)
+    System.put_env("OPENAI_CODEX_API_KEY", "codex-from-env")
+    System.put_env("CHATGPT_TOKEN", "chatgpt-from-env")
+
+    settings =
+      settings(%{
+        "openai-codex" => %{
+          auth_source: "oauth",
+          api_key: "codex-from-plain",
+          api_key_secret: "llm_openai_codex_api_key"
+        }
+      })
+
+    session = start_session(self(), settings, mock_model(:"openai-codex"))
+    assert :ok = Session.prompt(session, "hello")
+
+    assert_receive {:stream_api_key, "codex-access-token"}, 1_000
+    GenServer.stop(session)
+  end
+
+  test "openai-codex api_key source resolves env/plain key and does not use oauth payload secret by default" do
+    oauth_secret =
+      Jason.encode!(%{
+        "type" => "onboarding_openai_codex_oauth",
+        "access_token" => "codex-oauth-token",
+        "refresh_token" => "codex-refresh-token",
+        "expires_at_ms" => System.system_time(:millisecond) + 3_600_000
+      })
+
+    assert {:ok, _} = Secrets.set("llm_openai_codex_api_key", oauth_secret)
+    System.put_env("OPENAI_CODEX_API_KEY", "codex-from-env")
+
+    settings =
+      settings(%{
+        "openai-codex" => %{auth_source: "api_key", api_key: "codex-from-plain"}
+      })
+
+    session = start_session(self(), settings, mock_model(:"openai-codex"))
+    assert :ok = Session.prompt(session, "hello")
+
+    assert_receive {:stream_api_key, "codex-from-env"}, 1_000
+    GenServer.stop(session)
+  end
+
+  test "openai-codex requires auth_source" do
+    settings =
+      settings(%{
+        "openai-codex" => %{api_key: "codex-from-plain"}
+      })
+
+    session = start_session(self(), settings, mock_model(:"openai-codex"))
+    assert :ok = Session.prompt(session, "hello")
+
+    assert_receive {:stream_api_key, ""}, 1_000
+    GenServer.stop(session)
+  end
+
+  test "anthropic uses env key even when auth_source is set to oauth" do
+    assert {:ok, _} = Secrets.set("llm_anthropic_api_key", "anthropic-from-secret")
+    System.put_env("ANTHROPIC_API_KEY", "anthropic-from-env")
+
+    settings =
+      settings(%{
+        "anthropic" => %{
+          auth_source: "oauth",
+          api_key: "anthropic-from-plain",
+          api_key_secret: "llm_anthropic_api_key"
+        }
+      })
+
+    session = start_session(self(), settings, mock_model(:anthropic))
+    assert :ok = Session.prompt(session, "hello")
+
+    assert_receive {:stream_api_key, "anthropic-from-env"}, 1_000
+    GenServer.stop(session)
+  end
+
+  test "anthropic api_key_secret is used when env and plain key are missing" do
+    assert {:ok, _} = Secrets.set("llm_anthropic_api_key_raw", "anthropic-from-secret")
+
+    settings =
+      settings(%{
+        "anthropic" => %{api_key_secret: "llm_anthropic_api_key_raw"}
+      })
+
+    session = start_session(self(), settings, mock_model(:anthropic))
+    assert :ok = Session.prompt(session, "hello")
+
+    assert_receive {:stream_api_key, "anthropic-from-secret"}, 1_000
+    GenServer.stop(session)
+  end
+
+  test "anthropic falls back to llm_anthropic_api_key when api_key_secret is absent" do
+    assert {:ok, _} = Secrets.set("llm_anthropic_api_key", "anthropic-from-default-secret")
+
+    settings =
+      settings(%{
+        "anthropic" => %{}
+      })
+
+    session = start_session(self(), settings, mock_model(:anthropic))
+    assert :ok = Session.prompt(session, "hello")
+
+    assert_receive {:stream_api_key, "anthropic-from-default-secret"}, 1_000
     GenServer.stop(session)
   end
 
