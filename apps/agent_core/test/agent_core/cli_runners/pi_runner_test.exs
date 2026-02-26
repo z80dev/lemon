@@ -60,7 +60,7 @@ defmodule AgentCore.CliRunners.PiRunnerTest do
       {[started], _state, _opts} =
         PiRunner.translate_event(%SessionHeader{id: "abcd-1234"}, state)
 
-      assert %StartedEvent{resume: %ResumeToken{engine: "pi"}} = started
+      assert %StartedEvent{resume: %{engine: "pi"}} = started
     end
 
     test "translates tool execution lifecycle" do

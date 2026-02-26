@@ -314,7 +314,7 @@ defmodule LemonGateway.Run do
       is_completed(event) ->
         Logger.info(
           "Gateway run engine_event completed run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)} " <>
-            "ok=#{inspect(event.ok)} error=#{inspect(event.error)} answer_bytes=#{byte_size(event.answer || "")}"
+            "ok=#{inspect(event.ok)} error=#{inspect(Map.get(event, :error))} answer_bytes=#{byte_size(event.answer || "")}"
         )
 
       is_action_event(event) ->
@@ -527,20 +527,21 @@ defmodule LemonGateway.Run do
     end
 
     # Add run_id, session_key, and accumulated answer to completed event
-    completed = %{
+    answer = Map.get(completed, :answer)
+
+    completed =
       completed
-      | run_id: state.run_id,
-        session_key: state.session_key,
-        answer: if(completed.answer == "", do: state.accumulated_text, else: completed.answer)
-    }
+      |> Map.put(:run_id, state.run_id)
+      |> Map.put(:session_key, state.session_key)
+      |> Map.put(:answer, if(answer == "", do: state.accumulated_text, else: answer))
 
     Logger.info(
       "Gateway run finalize run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)} " <>
-        "engine=#{inspect(engine_id_for(state.job))} ok=#{inspect(completed.ok)} " <>
-        "error=#{inspect(completed.error)} answer_bytes=#{byte_size(completed.answer || "")}"
+        "engine=#{inspect(engine_id_for(state.job))} ok=#{inspect(Map.get(completed, :ok))} " <>
+        "error=#{inspect(Map.get(completed, :error))} answer_bytes=#{byte_size(Map.get(completed, :answer) || "")}"
     )
 
-    if completed.ok != true do
+    if Map.get(completed, :ok) != true do
       log_run_failure(state, completed)
     end
 
@@ -557,7 +558,7 @@ defmodule LemonGateway.Run do
         engine: engine_id_for(state.job)
       },
       duration_ms,
-      completed.ok
+      Map.get(completed, :ok)
     )
 
     emit_to_bus(
@@ -599,21 +600,21 @@ defmodule LemonGateway.Run do
   end
 
   defp log_run_failure(state, %{__event__: :completed} = completed) do
-    error_text = format_error_for_log(completed.error)
+    error_text = format_error_for_log(Map.get(completed, :error))
     engine_id = engine_id_for(state.job)
 
     level =
-      if completed.error in [:user_requested, :interrupted, :new_session],
+      if Map.get(completed, :error) in [:user_requested, :interrupted, :new_session],
         do: :warning,
         else: :error
 
     message =
       "Gateway run failed " <>
-        "run_id=#{inspect(completed.run_id)} " <>
-        "session_key=#{inspect(completed.session_key)} " <>
+        "run_id=#{inspect(Map.get(completed, :run_id))} " <>
+        "session_key=#{inspect(Map.get(completed, :session_key))} " <>
         "engine=#{inspect(engine_id)} " <>
         "error=#{error_text} " <>
-        "answer_bytes=#{byte_size(completed.answer || "")}"
+        "answer_bytes=#{byte_size(Map.get(completed, :answer) || "")}"
 
     case level do
       :warning -> Logger.warning(message)
@@ -724,58 +725,62 @@ defmodule LemonGateway.Run do
 
   defp started_to_bus_map(ev) when is_map(ev) do
     %{
-      engine: ev.engine,
-      resume: resume_to_map(ev.resume),
-      title: ev.title,
-      meta: ev.meta,
-      run_id: ev.run_id,
-      session_key: ev.session_key
+      engine: Map.get(ev, :engine),
+      resume: resume_to_map(Map.get(ev, :resume)),
+      title: Map.get(ev, :title),
+      meta: Map.get(ev, :meta),
+      run_id: Map.get(ev, :run_id),
+      session_key: Map.get(ev, :session_key)
     }
   end
 
   defp action_event_to_bus_map(ev) when is_map(ev) do
     %{
-      engine: ev.engine,
-      action: action_to_bus_map(ev.action),
-      phase: ev.phase,
-      ok: ev.ok,
-      message: ev.message,
-      level: ev.level
+      engine: Map.get(ev, :engine),
+      action: action_to_bus_map(Map.get(ev, :action)),
+      phase: Map.get(ev, :phase),
+      ok: Map.get(ev, :ok),
+      message: Map.get(ev, :message),
+      level: Map.get(ev, :level)
     }
   end
 
   defp completed_to_bus_map(ev) when is_map(ev) do
     %{
-      engine: ev.engine,
-      resume: resume_to_map(ev.resume),
-      ok: ev.ok,
-      answer: ev.answer,
-      error: ev.error,
-      usage: ev.usage,
-      meta: ev.meta,
-      run_id: ev.run_id,
-      session_key: ev.session_key
+      engine: Map.get(ev, :engine),
+      resume: resume_to_map(Map.get(ev, :resume)),
+      ok: Map.get(ev, :ok),
+      answer: Map.get(ev, :answer),
+      error: Map.get(ev, :error),
+      usage: Map.get(ev, :usage),
+      meta: Map.get(ev, :meta),
+      run_id: Map.get(ev, :run_id),
+      session_key: Map.get(ev, :session_key)
     }
   end
 
-  defp maybe_store_chat_state(
-         %Job{} = job,
-         %{__event__: :completed, resume: %ResumeToken{} = resume} = completed
-       ) do
-    if context_length_exceeded_error?(completed.error) do
-      :ok
-    else
-      store_chat_state(job.session_key, resume)
+  defp maybe_store_chat_state(%Job{} = job, %{__event__: :completed} = completed) do
+    case Map.get(completed, :resume) do
+      %ResumeToken{} = resume ->
+        if context_length_exceeded_error?(Map.get(completed, :error)) do
+          :ok
+        else
+          store_chat_state(job.session_key, resume)
+        end
+
+      _ ->
+        :ok
     end
   end
 
   defp maybe_store_chat_state(_job, _completed), do: :ok
 
-  defp maybe_clear_chat_state_on_context_overflow(
-         session_key,
-         %{__event__: :completed, ok: ok, error: error, run_id: run_id}
-       )
+  defp maybe_clear_chat_state_on_context_overflow(session_key, %{__event__: :completed} = completed)
        when is_binary(session_key) do
+    ok = Map.get(completed, :ok)
+    error = Map.get(completed, :error)
+    run_id = Map.get(completed, :run_id)
+
     if ok != true and context_length_exceeded_error?(error) do
       Store.delete_chat_state(session_key)
 

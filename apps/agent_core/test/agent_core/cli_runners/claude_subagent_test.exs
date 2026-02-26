@@ -1472,7 +1472,9 @@ defmodule AgentCore.CliRunners.ClaudeSubagentTest do
 
       assert is_pid(session.pid) or is_nil(session.pid)
       assert is_pid(session.stream) or is_nil(session.stream)
-      assert is_struct(session.resume_token, ResumeToken) or is_nil(session.resume_token)
+      assert is_struct(session.resume_token, ResumeToken) or
+               is_struct(session.resume_token, LemonCore.ResumeToken) or
+               is_nil(session.resume_token)
       assert is_pid(session.token_agent) or is_nil(session.token_agent)
       assert is_binary(session.cwd)
     end
@@ -1482,7 +1484,7 @@ defmodule AgentCore.CliRunners.ClaudeSubagentTest do
 
       # Test {:started, ResumeToken.t()}
       started_event = {:started, token}
-      assert match?({:started, %ResumeToken{}}, started_event)
+      assert match?({:started, %{engine: _, value: _}}, started_event)
 
       # Test {:action, action, phase, opts}
       action_event =

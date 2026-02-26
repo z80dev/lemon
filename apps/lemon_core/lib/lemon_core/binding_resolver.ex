@@ -267,12 +267,12 @@ defmodule LemonCore.BindingResolver do
     if present?(override), do: override, else: nil
   end
 
+  defp resume_engine(%{engine: e}) when is_binary(e) and e != "", do: e
   defp resume_engine(resume) when is_map(resume) do
-    e = resume[:engine] || resume["engine"]
+    e = Map.get(resume, :engine) || Map.get(resume, "engine")
     if is_binary(e) and e != "", do: e, else: nil
   end
 
-  defp resume_engine(%{engine: e}) when is_binary(e) and e != "", do: e
   defp resume_engine(_), do: nil
 
   # Binding field access — handles both structs and plain maps

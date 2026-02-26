@@ -46,7 +46,7 @@ defmodule AgentCore.CliRunners.JsonlRunnerSafetyTest do
     def engine, do: "session"
 
     @impl true
-    def build_command(_prompt, %ResumeToken{value: value}, _state) do
+    def build_command(_prompt, %{value: value}, _state) when is_binary(value) do
       {"bash", ["-c", "echo '{\"session\":\"#{value}\"}'"]}
     end
 
@@ -123,7 +123,7 @@ defmodule AgentCore.CliRunners.JsonlRunnerSafetyTest do
       JsonlRunner.run(ResumeRunner, prompt: "resume", resume: resume, timeout: 5_000)
 
     assert Enum.any?(events, fn
-             {:cli_event, %StartedEvent{resume: %ResumeToken{value: ^stale_value}}} -> true
+             {:cli_event, %StartedEvent{resume: %{value: ^stale_value}}} -> true
              _ -> false
            end)
   end

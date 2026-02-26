@@ -906,10 +906,9 @@ defmodule CodingAgent.CliRunners.LemonRunnerTest do
     # Helper to mirror the session resume validation logic
     defp validate_resume_engine(nil, _expected), do: :ok
 
-    defp validate_resume_engine(%ResumeToken{engine: engine}, expected) when engine == expected,
-      do: :ok
+    defp validate_resume_engine(%{engine: engine}, expected) when engine == expected, do: :ok
 
-    defp validate_resume_engine(%ResumeToken{engine: other}, expected),
+    defp validate_resume_engine(%{engine: other}, expected),
       do: {:error, {:wrong_engine, other, expected}}
   end
 

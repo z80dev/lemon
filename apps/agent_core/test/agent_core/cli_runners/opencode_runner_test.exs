@@ -50,7 +50,7 @@ defmodule AgentCore.CliRunners.OpencodeRunnerTest do
       {[started], state, _opts} =
         OpencodeRunner.translate_event(%StepStart{sessionID: "ses_abc"}, state)
 
-      assert %StartedEvent{resume: %ResumeToken{engine: "opencode", value: "ses_abc"}} = started
+      assert %StartedEvent{resume: %{engine: "opencode", value: "ses_abc"}} = started
       assert state.started_emitted == true
     end
 

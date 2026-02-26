@@ -60,46 +60,46 @@ defmodule AgentCore.CliRunners.TypesTest do
   describe "ResumeToken.extract_resume/1" do
     test "extracts codex token from plain text" do
       token = ResumeToken.extract_resume("codex resume thread_abc123")
-      assert token == %ResumeToken{engine: "codex", value: "thread_abc123"}
+      assert %{engine: "codex", value: "thread_abc123"} = token
     end
 
     test "extracts codex token with backticks" do
       token = ResumeToken.extract_resume("Please run `codex resume thread_abc123`")
-      assert token == %ResumeToken{engine: "codex", value: "thread_abc123"}
+      assert %{engine: "codex", value: "thread_abc123"} = token
     end
 
     test "extracts claude token from plain text" do
       token = ResumeToken.extract_resume("claude --resume session_xyz")
-      assert token == %ResumeToken{engine: "claude", value: "session_xyz"}
+      assert %{engine: "claude", value: "session_xyz"} = token
     end
 
     test "extracts claude token with backticks" do
       token = ResumeToken.extract_resume("Run `claude --resume session_xyz` to continue")
-      assert token == %ResumeToken{engine: "claude", value: "session_xyz"}
+      assert %{engine: "claude", value: "session_xyz"} = token
     end
 
     test "extracts lemon token from plain text" do
       token = ResumeToken.extract_resume("lemon resume abc12345")
-      assert token == %ResumeToken{engine: "lemon", value: "abc12345"}
+      assert %{engine: "lemon", value: "abc12345"} = token
     end
 
     test "extracts lemon token with backticks" do
       token = ResumeToken.extract_resume("Continue with `lemon resume abc12345`")
-      assert token == %ResumeToken{engine: "lemon", value: "abc12345"}
+      assert %{engine: "lemon", value: "abc12345"} = token
     end
 
     test "extracts opencode token" do
       token = ResumeToken.extract_resume("opencode --session ses_494719016ffe85dkDMj0FPRbHK")
-      assert %ResumeToken{engine: "opencode", value: value} = token
+      assert %{engine: "opencode", value: value} = token
       assert String.starts_with?(value, "ses_")
     end
 
     test "extracts pi token (including quoted tokens)" do
       token = ResumeToken.extract_resume("pi --session s1")
-      assert token == %ResumeToken{engine: "pi", value: "s1"}
+      assert %{engine: "pi", value: "s1"} = token
 
       token = ResumeToken.extract_resume("pi --session \"~/pi sessions/s1.jsonl\"")
-      assert token == %ResumeToken{engine: "pi", value: "~/pi sessions/s1.jsonl"}
+      assert %{engine: "pi", value: "~/pi sessions/s1.jsonl"} = token
     end
 
     test "returns nil when no token found" do
