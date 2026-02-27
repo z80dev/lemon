@@ -7,6 +7,10 @@ defmodule LemonChannels.Registry do
 
   use GenServer
 
+  require Logger
+
+  @call_timeout_ms 5_000
+
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
@@ -16,7 +20,7 @@ defmodule LemonChannels.Registry do
   """
   @spec register(module()) :: :ok | {:error, term()}
   def register(plugin_module) do
-    GenServer.call(__MODULE__, {:register, plugin_module})
+    GenServer.call(__MODULE__, {:register, plugin_module}, @call_timeout_ms)
   end
 
   @doc """
@@ -24,7 +28,7 @@ defmodule LemonChannels.Registry do
   """
   @spec unregister(binary()) :: :ok
   def unregister(plugin_id) do
-    GenServer.call(__MODULE__, {:unregister, plugin_id})
+    GenServer.call(__MODULE__, {:unregister, plugin_id}, @call_timeout_ms)
   end
 
   @doc """
@@ -32,7 +36,11 @@ defmodule LemonChannels.Registry do
   """
   @spec get_plugin(binary()) :: module() | nil
   def get_plugin(plugin_id) do
-    GenServer.call(__MODULE__, {:get, plugin_id})
+    GenServer.call(__MODULE__, {:get, plugin_id}, @call_timeout_ms)
+  catch
+    :exit, reason ->
+      Logger.warning("[Channels.Registry] get_plugin(#{inspect(plugin_id)}) failed: #{inspect(reason)}")
+      nil
   end
 
   @doc """
@@ -40,7 +48,7 @@ defmodule LemonChannels.Registry do
   """
   @spec list_plugins() :: [module()]
   def list_plugins do
-    GenServer.call(__MODULE__, :list)
+    GenServer.call(__MODULE__, :list, @call_timeout_ms)
   end
 
   @doc """
@@ -50,7 +58,7 @@ defmodule LemonChannels.Registry do
   """
   @spec list() :: [{binary(), map()}]
   def list do
-    GenServer.call(__MODULE__, :list_info)
+    GenServer.call(__MODULE__, :list_info, @call_timeout_ms)
   end
 
   @doc """
@@ -58,7 +66,7 @@ defmodule LemonChannels.Registry do
   """
   @spec status() :: %{configured: [binary()], connected: [binary()]}
   def status do
-    GenServer.call(__MODULE__, :status)
+    GenServer.call(__MODULE__, :status, @call_timeout_ms)
   end
 
   @doc """
@@ -66,7 +74,7 @@ defmodule LemonChannels.Registry do
   """
   @spec logout(binary()) :: :ok | {:error, :not_found} | {:error, term()}
   def logout(channel_id) when is_binary(channel_id) do
-    GenServer.call(__MODULE__, {:logout, channel_id})
+    GenServer.call(__MODULE__, {:logout, channel_id}, @call_timeout_ms)
   end
 
   @doc """

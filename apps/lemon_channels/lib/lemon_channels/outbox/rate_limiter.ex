@@ -7,8 +7,11 @@ defmodule LemonChannels.Outbox.RateLimiter do
 
   use GenServer
 
+  require Logger
+
   @default_rate 30  # messages per second
   @default_burst 5  # burst allowance
+  @call_timeout_ms 2_000
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -22,7 +25,11 @@ defmodule LemonChannels.Outbox.RateLimiter do
   """
   @spec check(channel_id :: binary(), account_id :: binary()) :: :ok | {:rate_limited, non_neg_integer()}
   def check(channel_id, account_id) do
-    GenServer.call(__MODULE__, {:check, channel_id, account_id})
+    GenServer.call(__MODULE__, {:check, channel_id, account_id}, @call_timeout_ms)
+  catch
+    :exit, _reason ->
+      Logger.warning("RateLimiter.check timed out channel=#{channel_id} account=#{account_id}")
+      :ok
   end
 
   @doc """
@@ -33,7 +40,11 @@ defmodule LemonChannels.Outbox.RateLimiter do
   """
   @spec consume(channel_id :: binary(), account_id :: binary()) :: :ok | {:rate_limited, non_neg_integer()}
   def consume(channel_id, account_id) do
-    GenServer.call(__MODULE__, {:consume, channel_id, account_id})
+    GenServer.call(__MODULE__, {:consume, channel_id, account_id}, @call_timeout_ms)
+  catch
+    :exit, _reason ->
+      Logger.warning("RateLimiter.consume timed out channel=#{channel_id} account=#{account_id}")
+      :ok
   end
 
   @doc """

@@ -31,9 +31,11 @@ defmodule LemonCore.Store.BackendTest do
 
     test "all callbacks have correct arities" do
       callbacks = Backend.behaviour_info(:callbacks)
-      
-      # init/1, put/4, get/3, delete/3, list/2
-      assert length(callbacks) == 5
+      optional = Backend.behaviour_info(:optional_callbacks)
+
+      # init/1, put/4, get/3, delete/3, list/2 (required) + list_recent/3 (optional)
+      assert length(callbacks) == 6
+      assert {:list_recent, 3} in optional
     end
   end
 
@@ -93,10 +95,13 @@ defmodule LemonCore.Store.BackendTest do
       end
     end
 
-    test "mock backend implements all callbacks" do
+    test "mock backend implements all required callbacks" do
       callbacks = Backend.behaviour_info(:callbacks)
-      
-      for {name, arity} <- callbacks do
+      optional = Backend.behaviour_info(:optional_callbacks)
+
+      required = callbacks -- optional
+
+      for {name, arity} <- required do
         assert function_exported?(MemoryBackend, name, arity),
                "Expected #{name}/#{arity} to be implemented"
       end

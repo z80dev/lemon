@@ -344,13 +344,35 @@ defmodule LemonCore.Store do
   Append a canonical introspection event.
   """
   @spec append_introspection_event(map()) :: :ok | {:error, term()}
-  def append_introspection_event(event) do
-    safe_store_call({:append_introspection_event, event}, {:error, :store_unavailable},
-      op: :append_introspection_event,
-      table: :introspection_log,
-      key: Map.get(event, :event_id, :unknown)
-    )
+  def append_introspection_event(event) when is_map(event) do
+    # Validate required fields client-side so callers get immediate feedback
+    # on malformed events without blocking on the GenServer.
+    event_id = MapHelpers.get_key(event, :event_id)
+    ts_ms = MapHelpers.get_key(event, :ts_ms)
+    event_type = MapHelpers.get_key(event, :event_type)
+
+    provenance = MapHelpers.get_key(event, :provenance) || :direct
+    payload = MapHelpers.get_key(event, :payload) || %{}
+
+    valid_id? = is_binary(event_id) and event_id != ""
+    valid_ts? = is_integer(ts_ms) and ts_ms > 0
+
+    valid_type? =
+      (is_atom(event_type) and not is_nil(event_type)) or
+        (is_binary(event_type) and event_type != "")
+
+    valid_provenance? = provenance in [:direct, :inferred, :unavailable]
+    valid_payload? = is_map(payload)
+
+    if valid_id? and valid_ts? and valid_type? and valid_provenance? and valid_payload? do
+      GenServer.cast(__MODULE__, {:append_introspection_event, event})
+      :ok
+    else
+      {:error, :invalid_introspection_event}
+    end
   end
+
+  def append_introspection_event(_), do: {:error, :invalid_introspection_event}
 
   @doc """
   List introspection events.
@@ -557,28 +579,39 @@ defmodule LemonCore.Store do
   def handle_call({:get_run_history, session_key, opts}, _from, state) do
     limit = Keyword.get(opts, :limit, 10)
 
-    case state.backend.list(state.backend_state, :run_history) do
-      {:ok, all_history, backend_state} ->
-        # Canonical run history key format: {session_key, started_at_ms, run_id}
-        history =
-          all_history
-          |> Enum.filter(fn
-            {{key, _ts, _run_id}, _data} ->
-              key == session_key
+    # Try the optimized path first: fetch a limited number of recent rows
+    # from SQL (avoids loading the entire table). If the backend doesn't
+    # support list_recent/3, fall back to a full table scan.
+    result =
+      if function_exported?(state.backend, :list_recent, 3) do
+        # Fetch more rows than needed because other sessions' entries
+        # may be interleaved. If we still don't get enough matches
+        # after filtering, we fall back to a full scan below.
+        prefetch_limit = limit * 20
+        state.backend.list_recent(state.backend_state, :run_history, prefetch_limit)
+      else
+        state.backend.list(state.backend_state, :run_history)
+      end
 
-            _ ->
-              false
-          end)
-          |> Enum.sort_by(
-            fn
-              {{_s, ts, _run_id}, _data} -> ts
-            end,
-            :desc
-          )
-          |> Enum.take(limit)
-          |> Enum.map(fn
-            {{_scope, _ts, run_id}, data} -> {run_id, data}
-          end)
+    case result do
+      {:ok, entries, backend_state} ->
+        history = filter_run_history(entries, session_key, limit)
+
+        # If we used list_recent and didn't find enough matching entries,
+        # the session's history may be buried deeper — fall back to full scan.
+        {history, backend_state} =
+          if function_exported?(state.backend, :list_recent, 3) and
+               length(history) < limit do
+            case state.backend.list(state.backend_state, :run_history) do
+              {:ok, all_entries, bs} ->
+                {filter_run_history(all_entries, session_key, limit), bs}
+
+              _ ->
+                {history, backend_state}
+            end
+          else
+            {history, backend_state}
+          end
 
         {:reply, history, %{state | backend_state: backend_state}}
 
@@ -592,26 +625,26 @@ defmodule LemonCore.Store do
     end
   end
 
-  def handle_call({:append_introspection_event, event}, _from, state) do
+  def handle_cast({:append_introspection_event, event}, state) do
     case normalize_introspection_event(event) do
       {:ok, event} ->
         key = {event.ts_ms, event.event_id}
 
         case state.backend.put(state.backend_state, :introspection_log, key, event) do
           {:ok, backend_state} ->
-            {:reply, :ok, %{state | backend_state: backend_state}}
+            {:noreply, %{state | backend_state: backend_state}}
 
           {:error, reason} ->
             log_backend_error(:put, :introspection_log, key, reason)
-            {:reply, {:error, reason}, state}
+            {:noreply, state}
 
           other ->
             log_backend_unexpected(:put, :introspection_log, key, other)
-            {:reply, {:error, {:unexpected_backend_response, other}}, state}
+            {:noreply, state}
         end
 
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+      {:error, _reason} ->
+        {:noreply, state}
     end
   end
 
@@ -619,14 +652,37 @@ defmodule LemonCore.Store do
     limit =
       normalize_introspection_limit(Keyword.get(opts, :limit, @default_introspection_query_limit))
 
-    case state.backend.list(state.backend_state, :introspection_log) do
+    has_field_filters = introspection_opts_have_field_filters?(opts)
+
+    backend_supports_list_recent =
+      function_exported?(state.backend, :list_recent, 3)
+
+    # Optimization: when no field-level filters are active AND the backend
+    # supports list_recent/3, push ORDER BY + LIMIT into SQL so we don't
+    # load all rows into memory.
+    result =
+      if backend_supports_list_recent and not has_field_filters do
+        state.backend.list_recent(state.backend_state, :introspection_log, limit)
+      else
+        state.backend.list(state.backend_state, :introspection_log)
+      end
+
+    case result do
       {:ok, entries, backend_state} ->
         events =
-          entries
-          |> Enum.map(fn {_key, event} -> event end)
-          |> Enum.filter(&introspection_event_matches?(&1, opts))
-          |> Enum.sort_by(&introspection_sort_key/1, :desc)
-          |> Enum.take(limit)
+          if backend_supports_list_recent and not has_field_filters do
+            # Already limited and ordered by recency from SQL; just extract
+            # values and sort by the canonical sort key for stable ordering.
+            entries
+            |> Enum.map(fn {_key, event} -> event end)
+            |> Enum.sort_by(&introspection_sort_key/1, :desc)
+          else
+            entries
+            |> Enum.map(fn {_key, event} -> event end)
+            |> Enum.filter(&introspection_event_matches?(&1, opts))
+            |> Enum.sort_by(&introspection_sort_key/1, :desc)
+            |> Enum.take(limit)
+          end
 
         {:reply, events, %{state | backend_state: backend_state}}
 
@@ -1272,6 +1328,18 @@ defmodule LemonCore.Store do
   defp normalize_optional_binary(value) when is_binary(value) and value != "", do: value
   defp normalize_optional_binary(_), do: nil
 
+  # Returns true when the opts contain any field-level filter beyond :limit.
+  # When no field filters are present, we can skip the Elixir-side filter pass
+  # and rely on SQL ORDER BY + LIMIT alone.
+  defp introspection_opts_have_field_filters?(opts) do
+    Keyword.get(opts, :run_id) != nil or
+      Keyword.get(opts, :session_key) != nil or
+      Keyword.get(opts, :agent_id) != nil or
+      Keyword.get(opts, :event_type) != nil or
+      Keyword.get(opts, :since_ms) != nil or
+      Keyword.get(opts, :until_ms) != nil
+  end
+
   defp introspection_event_matches?(event, opts) do
     run_id = Keyword.get(opts, :run_id)
     session_key = Keyword.get(opts, :session_key)
@@ -1454,6 +1522,22 @@ defmodule LemonCore.Store do
   end
 
   defp introspection_event_timestamp(_key, _event), do: nil
+
+  # Shared filter/sort/limit logic for run history entries.
+  # Canonical run history key format: {session_key, started_at_ms, run_id}
+  defp filter_run_history(entries, session_key, limit) do
+    entries
+    |> Enum.filter(fn
+      {{key, _ts, _run_id}, _data} -> key == session_key
+      _ -> false
+    end)
+    |> Enum.sort_by(
+      fn {{_s, ts, _run_id}, _data} -> ts end,
+      :desc
+    )
+    |> Enum.take(limit)
+    |> Enum.map(fn {{_scope, _ts, run_id}, data} -> {run_id, data} end)
+  end
 
   defp log_backend_error(op, table, key, reason) do
     Logger.warning(

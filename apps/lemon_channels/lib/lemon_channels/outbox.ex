@@ -20,6 +20,7 @@ defmodule LemonChannels.Outbox do
   @worker_supervisor LemonChannels.Outbox.WorkerSupervisor
   @default_max_attempts 3
   @default_max_queue_size 5_000
+  @call_timeout_ms 5_000
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -35,7 +36,14 @@ defmodule LemonChannels.Outbox do
   """
   @spec enqueue(OutboundPayload.t()) :: {:ok, reference()} | {:error, term()}
   def enqueue(%OutboundPayload{} = payload) do
-    GenServer.call(__MODULE__, {:enqueue, payload})
+    GenServer.call(__MODULE__, {:enqueue, payload}, @call_timeout_ms)
+  catch
+    :exit, _reason ->
+      Logger.warning(
+        "Outbox.enqueue timed out channel=#{payload.channel_id} account=#{payload.account_id}"
+      )
+
+      {:error, :timeout}
   end
 
   @doc """

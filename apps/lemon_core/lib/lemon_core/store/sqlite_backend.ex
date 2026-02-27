@@ -56,6 +56,14 @@ defmodule LemonCore.Store.SqliteBackend do
   WHERE table_name = ?1
   """
 
+  @list_recent_sql """
+  SELECT key_blob, value_blob
+  FROM lemon_store_kv
+  WHERE table_name = ?1
+  ORDER BY updated_at_ms DESC
+  LIMIT ?2
+  """
+
   @list_tables_sql "SELECT DISTINCT table_name FROM lemon_store_kv"
 
   @impl true
@@ -204,6 +212,49 @@ defmodule LemonCore.Store.SqliteBackend do
   end
 
   @doc """
+  Lists the most recent `limit` entries from `table`, ordered by `updated_at_ms DESC`.
+
+  This pushes the ORDER BY + LIMIT into SQLite so the GenServer does not need to
+  load every row into memory. Ephemeral (ETS-backed) tables fall back to loading
+  all rows and sorting in Elixir.
+
+  Returns `{:ok, [{key, value}], state}`.
+  """
+  @impl true
+  @spec list_recent(map(), atom(), pos_integer()) :: {:ok, [{term(), term()}], map()} | {:error, term()}
+  def list_recent(state, table, limit) when is_integer(limit) and limit > 0 do
+    if ephemeral_table?(state, table) do
+      # Ephemeral tables are in ETS — no SQL available, fall back to full scan + sort + take
+      {table_ets, state} = ensure_ephemeral_table(state, table)
+      items = :ets.tab2list(table_ets)
+      # We cannot sort by updated_at_ms for ETS, just take the first `limit` entries
+      {:ok, Enum.take(items, limit), state}
+    else
+      table_name = normalize_table_name(table)
+
+      with :ok <- bind_statement(state.statements.list_recent, [table_name, limit]),
+           {:ok, rows} <- Sqlite3.fetch_all(state.conn, state.statements.list_recent) do
+        items =
+          Enum.flat_map(rows, fn [key_blob, value_blob] ->
+            key = decode(key_blob)
+            value = decode(value_blob)
+
+            if key != nil and value != nil do
+              [{key, value}]
+            else
+              []
+            end
+          end)
+
+        {:ok, items, state}
+      else
+        {:error, reason} -> {:error, reason}
+        other -> {:error, {:sqlite_list_recent_failed, other}}
+      end
+    end
+  end
+
+  @doc """
   Returns all table names currently present.
   """
   @spec list_tables(map()) :: [atom()]
@@ -252,6 +303,7 @@ defmodule LemonCore.Store.SqliteBackend do
          {:ok, get_stmt} <- Sqlite3.prepare(conn, @get_sql),
          {:ok, delete_stmt} <- Sqlite3.prepare(conn, @delete_sql),
          {:ok, list_stmt} <- Sqlite3.prepare(conn, @list_sql),
+         {:ok, list_recent_stmt} <- Sqlite3.prepare(conn, @list_recent_sql),
          {:ok, list_tables_stmt} <- Sqlite3.prepare(conn, @list_tables_sql) do
       {:ok,
        %{
@@ -259,6 +311,7 @@ defmodule LemonCore.Store.SqliteBackend do
          get: get_stmt,
          delete: delete_stmt,
          list: list_stmt,
+         list_recent: list_recent_stmt,
          list_tables: list_tables_stmt
        }}
     else

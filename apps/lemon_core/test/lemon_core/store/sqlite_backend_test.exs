@@ -666,4 +666,52 @@ defmodule LemonCore.Store.SqliteBackendTest do
       assert is_map(state_after_list)
     end
   end
+
+  describe "list_recent/3" do
+    setup %{tmp_dir: tmp_dir} do
+      {:ok, state} = SqliteBackend.init(path: tmp_dir)
+      on_exit(fn -> SqliteBackend.close(state) end)
+      {:ok, state: state}
+    end
+
+    test "list_recent returns limited results ordered by recency", %{state: state} do
+      # Put 5 entries with sequential puts so updated_at_ms increases naturally
+      {:ok, state} = SqliteBackend.put(state, :recent_table, "a", %{order: 1})
+      Process.sleep(5)
+      {:ok, state} = SqliteBackend.put(state, :recent_table, "b", %{order: 2})
+      Process.sleep(5)
+      {:ok, state} = SqliteBackend.put(state, :recent_table, "c", %{order: 3})
+      Process.sleep(5)
+      {:ok, state} = SqliteBackend.put(state, :recent_table, "d", %{order: 4})
+      Process.sleep(5)
+      {:ok, state} = SqliteBackend.put(state, :recent_table, "e", %{order: 5})
+
+      assert {:ok, items, _state} = SqliteBackend.list_recent(state, :recent_table, 2)
+      assert length(items) == 2
+
+      # The two most recent entries should be returned (e and d), newest first
+      keys = Enum.map(items, fn {key, _val} -> key end)
+      assert keys == ["e", "d"]
+    end
+
+    test "list_recent with limit larger than entries returns all", %{state: state} do
+      {:ok, state} = SqliteBackend.put(state, :small_table, "x", %{val: 1})
+      Process.sleep(5)
+      {:ok, state} = SqliteBackend.put(state, :small_table, "y", %{val: 2})
+
+      assert {:ok, items, _state} = SqliteBackend.list_recent(state, :small_table, 100)
+      assert length(items) == 2
+    end
+
+    test "list_recent with ephemeral table falls back to take", %{state: state} do
+      # :runs is ephemeral by default
+      {:ok, state} = SqliteBackend.put(state, :runs, "run_1", %{status: :done})
+      {:ok, state} = SqliteBackend.put(state, :runs, "run_2", %{status: :active})
+      {:ok, state} = SqliteBackend.put(state, :runs, "run_3", %{status: :pending})
+
+      assert {:ok, items, _state} = SqliteBackend.list_recent(state, :runs, 2)
+      # Ephemeral tables fall back to Enum.take, so we just verify the count
+      assert length(items) == 2
+    end
+  end
 end

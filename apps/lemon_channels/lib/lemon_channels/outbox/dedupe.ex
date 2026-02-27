@@ -7,7 +7,10 @@ defmodule LemonChannels.Outbox.Dedupe do
 
   use GenServer
 
+  require Logger
+
   @default_ttl_ms 60 * 60 * 1000  # 1 hour
+  @call_timeout_ms 2_000
   @cleanup_interval_ms 60_000
   @table :lemon_channels_outbox_dedupe
 
@@ -22,7 +25,11 @@ defmodule LemonChannels.Outbox.Dedupe do
   """
   @spec check(channel_id :: binary(), key :: binary()) :: :new | :duplicate
   def check(channel_id, key) do
-    GenServer.call(__MODULE__, {:check, channel_id, key})
+    GenServer.call(__MODULE__, {:check, channel_id, key}, @call_timeout_ms)
+  catch
+    :exit, _reason ->
+      Logger.warning("Dedupe.check timed out channel=#{channel_id} key=#{inspect(key)}")
+      :new
   end
 
   @doc """

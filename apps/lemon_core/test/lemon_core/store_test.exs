@@ -493,4 +493,75 @@ defmodule LemonCore.StoreTest do
         :ets.lookup(store_state.backend_state.tid, :run_history_put_count)
     end
   end
+
+  describe "GenServer bottleneck fixes: append_introspection_event" do
+    test "append_introspection_event is asynchronous (cast)" do
+      token = unique_token()
+      event = introspection_event(token, :async, System.system_time(:millisecond))
+
+      # cast returns :ok immediately without blocking
+      assert :ok = Store.append_introspection_event(event)
+
+      # Poll until the event is persisted (proves it was async, not a call)
+      Enum.reduce_while(1..20, nil, fn _, _ ->
+        Process.sleep(50)
+        events = Store.list_introspection_events(run_id: event.run_id, limit: 10)
+
+        if Enum.any?(events, &(&1.event_id == event.event_id)) do
+          {:halt, :found}
+        else
+          {:cont, nil}
+        end
+      end)
+
+      events = Store.list_introspection_events(run_id: event.run_id, limit: 10)
+      assert Enum.any?(events, &(&1.event_id == event.event_id))
+    end
+
+    test "append_introspection_event validates event_id client-side" do
+      token = unique_token()
+      event = introspection_event(token, :no_id, System.system_time(:millisecond))
+      bad_event = Map.delete(event, :event_id)
+
+      assert {:error, :invalid_introspection_event} =
+               Store.append_introspection_event(bad_event)
+    end
+
+    test "append_introspection_event validates ts_ms client-side" do
+      token = unique_token()
+      event = introspection_event(token, :bad_ts, System.system_time(:millisecond))
+
+      assert {:error, :invalid_introspection_event} =
+               Store.append_introspection_event(%{event | ts_ms: -1})
+    end
+
+    test "append_introspection_event validates event_type client-side" do
+      token = unique_token()
+      event = introspection_event(token, :bad_type, System.system_time(:millisecond))
+
+      assert {:error, :invalid_introspection_event} =
+               Store.append_introspection_event(%{event | event_type: nil})
+    end
+
+    test "append_introspection_event validates provenance client-side" do
+      token = unique_token()
+      event = introspection_event(token, :bad_prov, System.system_time(:millisecond))
+
+      assert {:error, :invalid_introspection_event} =
+               Store.append_introspection_event(%{event | provenance: :unknown})
+    end
+
+    test "append_introspection_event validates payload client-side" do
+      token = unique_token()
+      event = introspection_event(token, :bad_payload, System.system_time(:millisecond))
+
+      assert {:error, :invalid_introspection_event} =
+               Store.append_introspection_event(%{event | payload: "not-a-map"})
+    end
+
+    test "append_introspection_event rejects non-map input" do
+      assert {:error, :invalid_introspection_event} =
+               Store.append_introspection_event("not a map")
+    end
+  end
 end

@@ -38,4 +38,17 @@ defmodule LemonCore.Store.Backend do
   Returns `{:ok, [{key, value}], state}`.
   """
   @callback list(state(), table()) :: {:ok, [{key(), value()}], state()}
+
+  @doc """
+  List the most recent `limit` entries from a table, ordered by recency.
+
+  This is an optional callback. Backends that support it can push ORDER BY + LIMIT
+  into the storage engine (e.g. SQL) to avoid loading all rows into memory.
+
+  Returns `{:ok, [{key, value}], state}`.
+  """
+  @callback list_recent(state(), table(), pos_integer()) ::
+              {:ok, [{key(), value()}], state()} | {:error, term()}
+
+  @optional_callbacks [list_recent: 3]
 end
