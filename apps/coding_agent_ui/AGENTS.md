@@ -1,317 +1,152 @@
-# CodingAgentUi
+# CodingAgentUi -- Agent Context
 
-UI adapters and RPC interfaces for the `coding_agent` core. This app provides UI implementations that communicate with external clients via JSON protocols, while keeping `coding_agent` UI-agnostic.
+UI adapter implementations for `CodingAgent.UI` behaviour. Three adapters: `RPC` (full JSON-RPC over stdin/stdout), `DebugRPC` (typed JSON protocol for debug scripts), `Headless` (no-ops for CI/batch). The OTP app starts an empty supervisor; adapter instances are started on-demand.
 
-## Purpose and Responsibilities
+## Key Files
 
-This app hosts three UI implementations of the `CodingAgent.UI` behaviour:
+| File | Purpose |
+|---|---|
+| `lib/coding_agent/ui/rpc.ex` | GenServer. Full JSON-RPC adapter with internal stdin reader Task. Manages pending requests, timeouts, connection lifecycle. |
+| `lib/coding_agent/ui/debug_rpc.ex` | GenServer. Debug-script adapter. No stdin reader -- responses pushed via `handle_response/2`. Uses typed message envelopes (`ui_request`, `ui_response`, etc.). |
+| `lib/coding_agent/ui/headless.ex` | Plain module (not GenServer). No-op returns for all dialogs, Logger output for `notify/2` and `set_working_message/1`. |
+| `lib/coding_agent_ui/application.ex` | OTP Application. Empty supervisor, no children. |
+| `test/coding_agent/ui/rpc_test.exs` | Tests for RPC with `MockIO` (implements Erlang IO protocol). Async. |
+| `test/coding_agent/ui/debug_rpc_test.exs` | Tests for DebugRPC with `MockOutput` (output-only). Async. Each test gets unique server name. |
+| `test/coding_agent/ui/headless_test.exs` | Tests for Headless. Synchronous (uses `capture_log`). |
 
-1. **CodingAgent.UI.RPC** - Full JSON-RPC interface over stdin/stdout for TUI/web clients
-2. **CodingAgent.UI.DebugRPC** - Debug-specific RPC adapter for `debug_agent_rpc.exs` integration
-3. **CodingAgent.UI.Headless** - No-op implementation for headless/CI environments
+## Behaviour Contract
 
-The OTP application (`CodingAgentUi.Application`) starts with no children - UI instances are started on-demand by clients.
+All adapters implement `CodingAgent.UI` (defined in `apps/coding_agent/lib/coding_agent/ui.ex`). The callbacks:
 
-**Dependencies:**
-- `coding_agent` (umbrella) - provides the `CodingAgent.UI` behaviour
-- `jason` - JSON encoding/decoding
-- `uuid` - Request ID generation
+**Dialog methods** (blocking, return `{:ok, value} | {:error, reason}`):
+- `select/3` -- selection from options list
+- `confirm/3` -- boolean confirmation
+- `input/3` -- text entry
+- `editor/3` -- multi-line text editor
 
-## RPC Interface Usage
+**Notification methods** (fire-and-forget, return `:ok`):
+- `notify/2` -- user notification with type
+- `set_status/2` -- key-value status indicator
+- `set_widget/3` -- keyed content widget
+- `set_working_message/1` -- progress message
+- `set_title/1` -- UI title
 
-`CodingAgent.UI.RPC` is a GenServer that implements a JSON-RPC protocol over stdin/stdout. It spawns a reader Task internally to poll stdin line-by-line.
+**Editor state**:
+- `set_editor_text/1` -- set and broadcast editor content
+- `get_editor_text/0` -- read cached editor content
 
-### Starting the RPC
+**Capability**:
+- `has_ui?/0` -- `true` for RPC/DebugRPC, `false` for Headless
 
-```elixir
-# Start with a registered name (required for module-level API calls)
-{:ok, pid} = CodingAgent.UI.RPC.start_link(name: MyUI)
+Callers typically interact through `CodingAgent.UI.Context` (in `coding_agent` app), which wraps a module reference and delegates all calls.
 
-# Start with custom devices for testing
-{:ok, pid} = CodingAgent.UI.RPC.start_link(
-  input_device: my_input,
-  output_device: my_output,
-  timeout: 30_000
-)
-```
+## Dependencies
 
-The `:name` option registers the process. Module-level functions like `notify/2`, `set_status/2`, etc. (those without an `opts` arg) default to `__MODULE__` as the server, so the process must be registered under `CodingAgent.UI.RPC` for them to work without a `server:` opt.
+- `coding_agent` (umbrella) -- provides `CodingAgent.UI` behaviour and `CodingAgent.UI.Context`
+- `jason` (~> 1.4) -- JSON codec
+- `uuid` (~> 1.1) -- request ID generation
 
-Interactive methods (`select/3`, `confirm/3`, `input/3`, `editor/3`) accept a `server:` keyword opt to target a specific pid or name. The `server:` and `timeout:` opts are stripped from params before being sent over the wire.
+## Connections to Other Apps
 
-### Protocol
+- **coding_agent**: Defines the `CodingAgent.UI` behaviour that this app implements. Also defines `CodingAgent.UI.Context` which wraps any UI module for convenient delegation.
+- **Consuming apps** (e.g., CLI entrypoints, debug scripts): Start an adapter instance and pass it as a `CodingAgent.UI.Context` to the coding agent session.
 
-**Requests** (RPC → Client via stdout):
-```json
-{"id": "uuid", "method": "select", "params": {"title": "Choose", "options": [...], "opts": {}}}
-{"id": "uuid", "method": "confirm", "params": {"title": "Confirm?", "message": "...", "opts": {}}}
-{"id": "uuid", "method": "input", "params": {"title": "Enter", "placeholder": "...", "opts": {}}}
-{"id": "uuid", "method": "editor", "params": {"title": "Edit", "prefill": "...", "opts": {}}}
-```
+## Modification Patterns
 
-The `options` array for `select` has the shape `[%{label: "...", value: "...", description: "..."}]`.
+### Adding a New UI Callback
 
-**Responses** (Client → RPC via stdin):
-```json
-{"id": "uuid", "result": "selected_value"}
-{"id": "uuid", "error": "error_message"}
-```
+1. Add the `@callback` to `apps/coding_agent/lib/coding_agent/ui.ex`.
+2. Add a delegation function to `apps/coding_agent/lib/coding_agent/ui/context.ex`.
+3. Implement in all three adapters:
+   - `headless.ex` -- add a no-op that returns a sensible default.
+   - `rpc.ex` -- add either a `GenServer.call` (dialog) or `GenServer.cast` (notification) handler. Dialog methods send a JSON request object and await a response keyed by UUID. Notification methods send a JSON notification object.
+   - `debug_rpc.ex` -- same as RPC but wrap in typed envelope. For dialogs use `{:request, method, params}` call. For notifications use `{:signal, type, params}` cast.
+4. Add tests in all three test files.
 
-**Notifications** (RPC → Client, no response expected):
-```json
-{"method": "notify", "params": {"message": "Hello", "type": "info"}}
-{"method": "set_status", "params": {"key": "mode", "text": "Running"}}
-{"method": "set_widget", "params": {"key": "files", "content": ["a.ex"], "opts": {}}}
-{"method": "set_working_message", "params": {"message": "Processing..."}}
-{"method": "set_title", "params": {"title": "My App"}}
-{"method": "set_editor_text", "params": {"text": "code here"}}
-```
+### Adding a New Adapter
 
-### Configuration Options
+1. Create a module in `lib/coding_agent/ui/` that declares `@behaviour CodingAgent.UI`.
+2. Implement all callbacks from the behaviour.
+3. If stateful, use GenServer and follow the patterns in `rpc.ex` or `debug_rpc.ex`.
+4. Create a corresponding test file in `test/coding_agent/ui/`.
 
-- `:timeout` - Response timeout in milliseconds (default: 30_000)
-- `:input_device` - IO device for reading input (default: :stdio)
-- `:output_device` - IO device for writing output (default: :stdio)
+### Modifying the JSON Protocol
 
-### Reader Task Lifecycle
+The RPC and DebugRPC protocols differ:
 
-The RPC server starts a `Task.async` reader on init that loops over `IO.gets/2`. On error it sends `{:reader_error, reason}` and the server restarts it. On EOF it sends `{:reader_closed}` and the server fails all pending requests with `{:error, :connection_closed}` and sets `input_closed: true`. Subsequent requests while closed return `{:error, :connection_closed}` immediately. The reader is killed on `terminate/2`.
+- **RPC**: Bare objects. Requests have `id`, `method`, `params`. Notifications have `method`, `params` (no `id`). Responses have `id` and either `result` or `error`.
+- **DebugRPC**: Typed envelopes. All messages have a `type` field (`ui_request`, `ui_response`, `ui_notify`, `ui_status`, etc.). Requests also have `id`, `method`, `params`. Responses have `id`, `result`, `error`.
 
-### editor_text Tracking
+When modifying the protocol, update the `send_json/2` calls and corresponding `handle_info/handle_cast` handlers, then update any external clients that speak the protocol.
 
-`set_editor_text/1` sends the notification over the wire AND caches the value in GenServer state. `get_editor_text/0` returns the cached value without a round-trip.
+### Internal Options Handling
 
-## Debug RPC Capabilities
+Dialog methods in both RPC and DebugRPC accept keyword `opts` that may include internal keys (`:server`, `:timeout`). The `clean_opts/1` function strips these before sending over the wire. `set_widget/3` in DebugRPC uses `extract_server/1` to separate `:server` from widget-specific opts.
 
-`CodingAgent.UI.DebugRPC` is designed for integration with `debug_agent_rpc.exs`. It shares the same JSON line protocol but uses typed messages to coexist with debug protocol messages. Unlike RPC, it has no stdin reader - responses are routed externally via `handle_response/2`.
-
-**Default registered name**: `CodingAgent.UI.DebugRPC` (unlike RPC which has no default).
-
-### Key Differences from RPC
-
-- Uses typed messages (`ui_request`, `ui_response`, `ui_notify`, etc.)
-- No input reader Task - responses are pushed in via `handle_response/2`
-- No `input_closed` state - connections cannot be "closed" from this adapter's perspective
-- `notify/3` has a 3-arity form accepting opts (including `server:`)
-- `cancel_timeout/2` flushes any already-delivered timeout message from mailbox after cancelling
-- Error takes precedence over result in `parse_response/1` (if both fields present, error wins)
-- `{result: nil, error: nil}` is treated as `{:ok, nil}` (user cancellation)
-
-### Protocol
-
-**Requests** (DebugRPC → Client):
-```json
-{"type": "ui_request", "id": "uuid", "method": "select", "params": {...}}
-```
-
-**Responses** (Client → DebugRPC via handle_response/2):
-```json
-{"type": "ui_response", "id": "uuid", "result": "...", "error": null}
-```
-
-`handle_response/2` is a cast (async), so it returns immediately.
-
-**Notifications** (DebugRPC → Client):
-```json
-{"type": "ui_notify", "params": {"message": "...", "notify_type": "info"}}
-{"type": "ui_status", "params": {"key": "...", "text": "..."}}
-{"type": "ui_widget", "params": {"key": "...", "content": "...", "opts": {}}}
-{"type": "ui_working", "params": {"message": "..."}}
-{"type": "ui_set_title", "params": {"title": "..."}}
-{"type": "ui_set_editor_text", "params": {"text": "..."}}
-```
-
-Note: `notify_type` in `ui_notify` (not `type`) to avoid collision with the top-level `"type"` field.
-
-### opts Handling in set_widget/3
-
-`set_widget/3` accepts extra keyword opts (e.g., `position: :above`). The `:server` key is stripped and remaining opts are normalized from a keyword list to a map before being sent on the wire.
-
-```elixir
-DebugRPC.set_widget("files", ["a.txt"], server: rpc, position: :above)
-# Sends: {"type": "ui_widget", "params": {"key": "files", "content": [...], "opts": {"position": "above"}}}
-```
-
-### Usage in Debug Scripts
-
-```elixir
-# Start the adapter
-{:ok, ui_pid} = CodingAgent.UI.DebugRPC.start_link(name: CodingAgent.UI.DebugRPC)
-
-# Route incoming ui_response messages from stdin
-CodingAgent.UI.DebugRPC.handle_response(ui_pid, %{
-  "type" => "ui_response",
-  "id" => request_id,
-  "result" => result,
-  "error" => nil
-})
-```
-
-## Headless Mode
-
-`CodingAgent.UI.Headless` is a plain module (not a GenServer) with no-op implementations for non-interactive environments.
-
-### Behavior
-
-| Method | Return Value | Side Effect |
-|--------|--------------|-------------|
-| `select/3` | `{:ok, nil}` | None |
-| `confirm/3` | `{:ok, false}` | None |
-| `input/3` | `{:ok, nil}` | None |
-| `editor/3` | `{:ok, nil}` | None |
-| `notify/2` | `:ok` | Logs via Logger (`:info`/`:warning`/`:error` map directly; `:success` logs as info with `[SUCCESS]` prefix) |
-| `set_status/2` | `:ok` | None |
-| `set_widget/3` | `:ok` | None |
-| `set_working_message/1` | `:ok` | Logs `[WORKING] message` at debug level (nil is a silent no-op) |
-| `set_title/1` | `:ok` | None |
-| `set_editor_text/1` | `:ok` | None |
-| `get_editor_text/0` | `""` | None |
-| `has_ui?/0` | `false` | None |
-
-Use this when running in CI, automated tests, or any non-interactive context.
-
-## Integration with coding_agent
-
-The `coding_agent` app defines the `CodingAgent.UI` behaviour. This app provides the implementations.
-
-### Creating a UI Context
-
-```elixir
-# Interactive mode with RPC
-ui_context = CodingAgent.UI.Context.new(CodingAgent.UI.RPC)
-
-# Debug mode with DebugRPC
-ui_context = CodingAgent.UI.Context.new(CodingAgent.UI.DebugRPC)
-
-# Headless mode
-ui_context = CodingAgent.UI.Context.new(CodingAgent.UI.Headless)
-```
-
-### Runtime UI Detection
-
-```elixir
-if CodingAgent.UI.has_ui?() do
-  # Show interactive dialog
-else
-  # Use defaults or skip
-end
-```
-
-## Common Tasks and Examples
-
-### Testing with Mock IO
-
-See `test/coding_agent/ui/rpc_test.exs` for the full `MockIO` implementation. Key functions:
-
-```elixir
-{:ok, input} = MockIO.start_link()
-{:ok, output} = MockIO.start_link()
-{:ok, rpc} = CodingAgent.UI.RPC.start_link(
-  input_device: input,
-  output_device: output,
-  timeout: 1_000
-)
-
-# Simulate client response (queued, delivered when RPC reads)
-MockIO.put_input(input, ~s({"id": "...", "result": "value"}))
-
-# Read output lines written by RPC
-lines = MockIO.get_output(output)         # all lines (oldest first)
-json  = MockIO.get_last_json(output)      # decoded last line
-MockIO.close(input)                        # simulate EOF / disconnect
-```
-
-For DebugRPC tests, `MockOutput` (output-only) is used - it has `get_output/1`, `get_last_json/1`, `get_all_json/1`, and `clear/1`.
-
-### Handling Concurrent Requests
-
-Both RPC and DebugRPC handle concurrent requests via UUID-keyed pending_requests map:
-
-```elixir
-task1 = Task.async(fn -> CodingAgent.UI.RPC.select("First", options, server: rpc) end)
-task2 = Task.async(fn -> CodingAgent.UI.RPC.confirm("Second", "Sure?", server: rpc) end)
-results = Task.await_many([task1, task2])
-```
-
-Responses can arrive out of order - each is matched by ID.
-
-### Timeout Handling
-
-The `timeout` opt on individual calls sets the `GenServer.call` timeout (default: `state.timeout + 5000`). The `state.timeout` value controls the internal `Process.send_after` timer that sends `{:timeout, request_id}` to the server. When the timer fires, the server replies `{:error, :timeout}` and removes the pending request.
-
-```elixir
-# Per-call server-side timeout (controls internal timer)
-{:ok, rpc} = CodingAgent.UI.RPC.start_link(timeout: 60_000)
-
-# Per-call GenServer.call timeout via opts (should exceed server timeout)
-result = CodingAgent.UI.RPC.select("Choose", options, server: rpc, timeout: 65_000)
-```
-
-### Error Handling
-
-```elixir
-case CodingAgent.UI.RPC.select("Choose", options, server: rpc) do
-  {:ok, nil}                        -> :cancelled
-  {:ok, value}                      -> value
-  {:error, :timeout}                -> :timed_out
-  {:error, :connection_closed}      -> :connection_lost
-  {:error, :server_shutdown}        -> :server_died
-  {:error, :invalid_response}       -> :bad_response
-  {:error, message} when is_binary(message) -> {:user_error, message}
-end
-```
+When adding new internal-only keys, add them to the `Keyword.drop` list in `clean_opts/1`.
 
 ## Testing Guidance
 
 ### Running Tests
 
 ```bash
-# Run all coding_agent_ui tests
 mix test apps/coding_agent_ui
-
-# Run specific test file
 mix test apps/coding_agent_ui/test/coding_agent/ui/rpc_test.exs
 mix test apps/coding_agent_ui/test/coding_agent/ui/debug_rpc_test.exs
 mix test apps/coding_agent_ui/test/coding_agent/ui/headless_test.exs
 ```
 
-### Test Structure
+### Test Helpers
 
-- **rpc_test.exs** (`async: true`) - Tests for `CodingAgent.UI.RPC` with `MockIO`; uses `wait_for_output/2` and `wait_for_output_count/3` polling helpers
-- **debug_rpc_test.exs** (`async: true`) - Tests for `CodingAgent.UI.DebugRPC` with `MockOutput`; each test gets a uniquely named server via `:erlang.unique_integer/1`
-- **headless_test.exs** (`async: false`) - Tests for `CodingAgent.UI.Headless`; must be synchronous due to `capture_log/1` being global
+**`MockIO`** (in `rpc_test.exs`): A GenServer that implements the Erlang IO protocol. Supports both input (stdin simulation via `put_input/2`) and output (stdout capture via `get_output/1`, `get_last_json/1`). Also supports `close/1` to simulate EOF and `closed?/1` to check state.
+
+**`MockOutput`** (in `debug_rpc_test.exs`): Output-only GenServer for capturing JSON written to the output device. Provides `get_output/1`, `get_last_json/1`, `get_all_json/1`, and `clear/1`.
 
 ### Key Testing Patterns
 
-1. **Mock IO Devices**: GenServer processes that implement the Erlang IO protocol (`{:io_request, from, reply_as, request}` / `{:io_reply, reply_as, data}`). For RPC: separate `input` and `output` devices. For DebugRPC: output-only `MockOutput`.
+1. **Async response delivery**: For RPC tests, spawn a process that waits for the request to appear in output, then calls `MockIO.put_input/2`. For DebugRPC tests, call `DebugRPC.handle_response/2` directly after a short sleep.
 
-2. **Async responses**: RPC tests respond to requests in a `spawn`'d process that waits for the request to appear in output, then calls `MockIO.put_input/2`. DebugRPC tests call `DebugRPC.handle_response/2` directly.
+2. **Polling for output**: Use `wait_for_output/2` (polls every 10ms with a timeout) instead of `Process.sleep` to avoid flakiness.
 
-3. **Unique server names**: DebugRPC tests use `:"debug_rpc_test_#{:erlang.unique_integer([:positive])}"` to prevent name collisions between async tests.
+3. **Unique server names**: DebugRPC tests use `:"debug_rpc_test_#{:erlang.unique_integer([:positive])}"` for async isolation.
 
-4. **Timeout Testing**: Tests use short timeouts (50-500ms). The RPC server's internal timeout and the GenServer.call timeout are separate - set both appropriately.
+4. **Headless tests are synchronous**: `headless_test.exs` uses `async: false` because `capture_log/1` is a global operation.
 
-5. **Edge Cases Covered**:
-   - Invalid/truncated/missing-id JSON responses (gracefully logged, request remains pending)
-   - Connection closed mid-request (`{:error, :connection_closed}`)
-   - Out-of-order responses (matched by UUID)
-   - Duplicate response IDs (second is logged as warning and ignored)
-   - Reader task restart after transient IO errors
-   - Server shutdown with pending requests (`{:error, :server_shutdown}`)
-   - Large payloads and many concurrent requests
+5. **Cleanup**: Both RPC and DebugRPC tests use `on_exit` callbacks that guard with `Process.alive?/1` before stopping servers and mock devices.
 
-### Adding New Tests
+### Writing New Tests
 
-1. Add tests to the appropriate `*_test.exs` file
-2. Use the existing `MockIO` or `MockOutput` helpers
-3. Test both success and error paths
-4. For RPC tests, always send responses asynchronously (use `spawn` or `Task.async`) since the `select/confirm/input/editor` calls block
-5. Use `wait_for_output/2` instead of `Process.sleep` to avoid flakiness
+- **Dialog methods**: Start a request in `Task.async`, wait for it to appear in output, send a response, then `Task.await` for the result.
+- **Notification methods**: Call the method, sleep briefly (or use `wait_for_output`), then inspect the mock output device.
+- **Timeout tests**: Use short server-level timeouts (50-500ms) in test setup. The internal timer and `GenServer.call` timeout are separate -- set both appropriately.
+- **Edge cases**: Test invalid JSON, missing IDs, duplicate response IDs, out-of-order responses, connection close mid-request, and server shutdown with pending requests.
 
-### Debugging Test Failures
+### Common Failure Modes
 
-If tests are flaky:
-- Use `wait_for_output/2` instead of `Process.sleep` before reading output
-- Ensure proper cleanup in `on_exit` callbacks (stop RPC before closing MockIO)
-- Check for mailbox leakage (unhandled messages) with `:sys.get_state/1`
-- Verify `on_exit` guards with `Process.alive?/1` before stopping processes
+- **Flaky timing**: Replace `Process.sleep` with `wait_for_output/2` or `wait_for_output_count/3`.
+- **Name collisions**: Use unique atom names via `:erlang.unique_integer([:positive])`.
+- **Mailbox leaks**: Unhandled messages can cause unexpected behavior. Use `:sys.get_state/1` to inspect GenServer state during debugging.
+- **Cleanup order**: Stop the RPC server before closing the MockIO device to avoid reader task errors during shutdown.
+
+## Architecture Notes
+
+### Request Lifecycle (RPC)
+
+1. Caller invokes `select/3` (or similar) which calls `GenServer.call`.
+2. Server generates UUID, sends JSON request to output device, starts timeout timer, stores `{from, timer_ref}` in `pending_requests` map, returns `{:noreply, ...}`.
+3. Reader task reads response line from input device, sends `{:response, json_line}` to server.
+4. Server decodes JSON, looks up request ID in `pending_requests`, cancels timer, calls `GenServer.reply` with parsed result.
+5. On timeout: server sends `{:error, :timeout}` reply and removes from pending map.
+6. On EOF: server fails all pending requests with `{:error, :connection_closed}`, sets `input_closed: true`.
+
+### Request Lifecycle (DebugRPC)
+
+Same as RPC steps 1-2 and 4-5, but step 3 is replaced by external code calling `DebugRPC.handle_response/2` (a cast). There is no reader task and no EOF handling.
+
+### editor_text Caching
+
+Both RPC and DebugRPC cache the last `set_editor_text` value in GenServer state. The `get_editor_text/0` call reads from this cache (a synchronous `GenServer.call`), avoiding a round-trip to the client. Headless always returns `""`.
+
+### opts Wire Format
+
+Internal keyword opts (`:server`, `:timeout`) are stripped by `clean_opts/1` before serialization. Remaining opts are converted from a keyword list to a map for JSON encoding. In `set_widget/3` of DebugRPC, `extract_server/1` is used to separate `:server` from widget opts before cleaning.

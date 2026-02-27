@@ -191,14 +191,11 @@ To force a token explicitly, set:
 - `OPENAI_CODEX_API_KEY` (preferred)
 - `CHATGPT_TOKEN` (fallback)
 
-## Provider OAuth Onboarding (CLI)
+## Provider Onboarding (CLI)
 
-Lemon includes guided onboarding flows for provider credentials:
+Lemon includes guided onboarding flows for provider credentials where OAuth is supported:
 
 ```bash
-# Anthropic OAuth onboarding
-mix lemon.onboard.anthropic
-
 # Google Antigravity OAuth onboarding
 mix lemon.onboard.antigravity
 
@@ -227,9 +224,6 @@ Environment variables are supported as fallback:
 Common non-interactive usage:
 
 ```bash
-# Anthropic
-mix lemon.onboard.anthropic --token <token> --set-default --model claude-sonnet-4-20250514
-
 # Google Antigravity
 mix lemon.onboard.antigravity --token <token> --set-default --model gemini-3-pro-high
 
@@ -241,6 +235,12 @@ mix lemon.onboard.copilot --enterprise-domain company.ghe.com
 mix lemon.onboard.copilot --skip-enable-models
 mix lemon.onboard.copilot --token <token> --set-default --model gpt-5
 mix lemon.onboard.copilot --token <token> --config-path /path/to/config.toml
+```
+
+Anthropic provider auth is API key based. Store your raw key in secrets:
+
+```bash
+mix lemon.secrets.set llm_anthropic_api_key_raw <token>
 ```
 
 ## Web Tools (`websearch` / `webfetch`)

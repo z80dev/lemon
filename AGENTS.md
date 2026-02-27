@@ -257,15 +257,16 @@ The control plane (`lemon_control_plane`) provides the JSON-RPC API used by TUI/
 Derived from mix.exs files and enforced by `mix lemon.quality` (architecture boundary check):
 
 ```
-lemon_control_plane ──→ lemon_core, lemon_router, lemon_channels, lemon_skills, lemon_automation, lemon_gateway, ai, coding_agent*
-lemon_router ─────────→ lemon_core, lemon_gateway, lemon_channels, coding_agent, agent_core
-lemon_gateway ────────→ lemon_core, agent_core, ai, coding_agent, lemon_channels*
+lemon_control_plane ──→ lemon_core, lemon_router, lemon_channels, lemon_skills, lemon_automation, lemon_gateway, lemon_games, ai, coding_agent*
+lemon_router ─────────→ lemon_core, lemon_gateway, lemon_channels, coding_agent, agent_core, ai
+lemon_gateway ────────→ lemon_core, agent_core, ai, coding_agent, lemon_automation, lemon_channels*
 lemon_automation ─────→ lemon_core, lemon_router
 lemon_channels ───────→ lemon_core
 coding_agent ─────────→ lemon_core, agent_core, ai, lemon_skills
 agent_core ───────────→ lemon_core, ai
 lemon_skills ─────────→ lemon_core, agent_core, ai, lemon_channels
-lemon_web ────────────→ lemon_core, lemon_router
+lemon_games ──────────→ lemon_core
+lemon_web ────────────→ lemon_core, lemon_games, lemon_router
 market_intel ─────────→ lemon_core, agent_core, lemon_channels*
 lemon_services ───────→ (no umbrella deps - standalone OTP service manager)
 coding_agent_ui ──────→ coding_agent
@@ -447,4 +448,4 @@ Each app has its own `AGENTS.md` with detailed context:
 
 ---
 
-*Last updated: 2026-02-22* (added jj workspaces section)
+*Last updated: 2026-02-27* (full documentation refresh — all app README.md and AGENTS.md files rewritten)

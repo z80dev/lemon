@@ -16,16 +16,16 @@ The `ai` app provides a unified LLM API abstraction layer for the Lemon platform
 
 ```
 Ai (main API)
-  │
-  ├── Ai.stream/3 ──→ Ai.CallDispatcher.dispatch/2
-  │                       │
-  │                       ├── Ai.CircuitBreaker (per-provider, lazy-started)
-  │                       ├── Ai.RateLimiter (per-provider, lazy-started)
-  │                       └── Provider Module
-  │                               │
-  │                               └── Ai.EventStream (async GenServer)
-  │
-  └── Ai.complete/3 (blocking wrapper around stream)
+  |
+  +-- Ai.stream/3 --> Ai.CallDispatcher.dispatch/2
+  |                       |
+  |                       +-- Ai.CircuitBreaker (per-provider, lazy-started)
+  |                       +-- Ai.RateLimiter (per-provider, lazy-started)
+  |                       +-- Provider Module
+  |                               |
+  |                               +-- Ai.EventStream (async GenServer)
+  |
+  +-- Ai.complete/3 (blocking wrapper around stream)
 ```
 
 ### Core Modules
@@ -41,10 +41,11 @@ Ai (main API)
 | `Ai.RateLimiter` | Token bucket rate limiting per provider, lazy-started |
 | `Ai.ModelCache` | ETS-backed model availability cache (5-minute default TTL) |
 | `Ai.EventStream` | Async GenServer for streaming events with lifecycle management |
-| `Ai.Models` | All model definitions and metadata (large file: ~11k lines) |
+| `Ai.Models` | All model definitions and metadata (large file: many thousands of lines) |
 | `Ai.Types` | All type/struct definitions (inline in module) |
 | `Ai.Error` | HTTP error parsing, classification, and formatting utilities |
 | `Ai.HttpInspector` | Captures and saves request dumps for 4xx errors |
+| `Ai.PromptDiagnostics` | Opt-in prompt size + token usage diagnostics |
 
 ### Provider Implementation Modules
 
@@ -68,11 +69,11 @@ Ai (main API)
 - `Ai.Providers.OpenAIResponsesShared` - Shared logic for OpenAI Responses and Azure, including `function_call_output` size guards
 - `Ai.Providers.HttpTrace` - HTTP request/response tracing (enabled via `LEMON_AI_HTTP_TRACE=1`)
 - `Ai.Providers.TextSanitizer` - UTF-8 sanitization for streamed text
-- `Ai.Auth.AnthropicOAuth` - Anthropic PKCE OAuth URL helpers, token exchange/refresh, encrypted OAuth secret resolver
-- `Ai.Auth.GoogleAntigravityOAuth` - Antigravity PKCE OAuth URL helpers, token exchange/refresh, encrypted OAuth secret resolver (`{\"token\",\"projectId\"}` API key shape)
+- `Ai.Auth.GoogleAntigravityOAuth` - Antigravity PKCE OAuth URL helpers, token exchange/refresh, encrypted OAuth secret resolver (`{"token","projectId"}` API key shape)
 - `Ai.Auth.GitHubCopilotOAuth` - GitHub Copilot OAuth device login + token refresh helpers for encrypted secret payloads
 - `Ai.Auth.OpenAICodexOAuth` - OpenAI Codex PKCE OAuth helpers + Lemon secret-store OAuth token refresh/resolution
 - `Ai.Auth.OAuthSecretResolver` - Central dispatcher for provider-specific OAuth secret payloads
+- `Ai.Auth.OAuthPKCE` - PKCE verifier/challenge generation utility
 
 ## Key Types (all defined in `Ai.Types`)
 
@@ -106,7 +107,8 @@ Ai (main API)
   tool_choice: atom() | nil,
   project: String.t() | nil,   # GCP project for Vertex
   location: String.t() | nil,  # GCP location for Vertex
-  access_token: String.t() | nil  # OAuth token for Vertex/GeminiCli
+  access_token: String.t() | nil,  # OAuth token for Vertex/GeminiCli
+  service_account_json: String.t() | nil
 }
 
 # Context - messages stored in REVERSE order internally (newest first)
@@ -433,7 +435,7 @@ end)
 result = %Ai.Types.ToolResultMessage{
   tool_call_id: tool_call.id,
   tool_name: tool_call.name,
-  content: [%Ai.Types.TextContent{text: "Sunny, 22°C"}],
+  content: [%Ai.Types.TextContent{text: "Sunny, 22C"}],
   is_error: false
 }
 
@@ -488,10 +490,11 @@ mix test --include integration --only provider:anthropic
 
 | Directory | Purpose |
 |-----------|---------|
-| `test/ai/` | Core module tests (circuit breaker, event stream, models, etc.) |
-| `test/providers/` | Provider implementation tests |
-| `test/integration/` | Live API tests (requires keys, excluded by default) |
-| `test/support/` | `IntegrationConfig` helper for integration test setup |
+| `test/ai/` | Core module tests (circuit breaker, event stream, models, error, types, etc.) |
+| `test/ai/auth/` | OAuth module tests (GitHub Copilot, Google Antigravity, OpenAI Codex, secret resolver) |
+| `test/ai/providers/` | Provider-specific unit tests |
+| `test/providers/` | Additional provider tests (streaming, parsing, comprehensive edge cases) |
+| `test/integration/` | Live API tests (requires keys, excluded by default with `@moduletag :integration`) |
 
 ### Mocking HTTP Requests
 
@@ -584,12 +587,14 @@ Run with: `mix test --include integration`
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Google AI Studio provider | API key (also checks `GOOGLE_API_KEY`, `GEMINI_API_KEY`) |
 | `GOOGLE_CLOUD_PROJECT` | Google Vertex provider | GCP project ID (also checks `GCLOUD_PROJECT`) |
 | `GOOGLE_CLOUD_LOCATION` | Google Vertex provider | GCP region |
-| `ANTHROPIC_OAUTH_CLIENT_ID` | `Ai.Auth.AnthropicOAuth` | Optional override for Anthropic OAuth client id |
 | `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_ID` / `GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_SECRET` | `Ai.Auth.GoogleAntigravityOAuth` | Optional env fallback for Antigravity OAuth client credentials (secret store is primary) |
 | `OPENAI_CODEX_OAUTH_CLIENT_ID` | `Ai.Auth.OpenAICodexOAuth` | Optional override for Codex OAuth client id |
 | `LEMON_AI_HTTP_TRACE` | `Ai.Providers.HttpTrace` | Set to `"1"` to enable HTTP request/response logging |
 | `LEMON_AI_DEBUG` | Anthropic provider | Set to `"1"` to log raw SSE to a file |
 | `LEMON_AI_DEBUG_FILE` | Anthropic provider | SSE log file path (default: `/tmp/lemon_anthropic_sse.log`) |
+| `LEMON_AI_PROMPT_DIAGNOSTICS` | `Ai.PromptDiagnostics` | Set to `"1"` to enable prompt size/usage logging |
+| `LEMON_AI_PROMPT_DIAGNOSTICS_LOG_LEVEL` | `Ai.PromptDiagnostics` | Log level for diagnostics (default: `info`) |
+| `LEMON_AI_PROMPT_DIAGNOSTICS_TOP_N` | `Ai.PromptDiagnostics` | Number of largest messages to report (default: 5) |
 | `LEMON_KIMI_MAX_REQUEST_MESSAGES` | Anthropic provider (Kimi) | Max history messages for Kimi models (default: 200) |
 | `PI_CACHE_RETENTION` | OpenAI Responses provider | Set to `"long"` for 24h prompt cache retention |
 
@@ -605,12 +610,70 @@ Run with: `mix test --include integration`
 
 ```
 Ai.Supervisor (one_for_one)
-  ├── Task.Supervisor (name: Ai.StreamTaskSupervisor)
-  ├── Registry (name: Ai.RateLimiterRegistry)
-  ├── Registry (name: Ai.CircuitBreakerRegistry)
-  ├── Ai.ProviderSupervisor (DynamicSupervisor for per-provider services)
-  ├── Ai.CallDispatcher
-  └── Ai.ModelCache
+  +-- Task.Supervisor (name: Ai.StreamTaskSupervisor)
+  +-- Registry (name: Ai.RateLimiterRegistry)
+  +-- Registry (name: Ai.CircuitBreakerRegistry)
+  +-- Ai.ProviderSupervisor (DynamicSupervisor for per-provider services)
+  +-- Ai.CallDispatcher
+  +-- Ai.ModelCache
 ```
 
 `Ai.ProviderRegistry` is NOT in the supervision tree - it uses `:persistent_term` directly.
+
+## Common Modification Patterns
+
+### Adding a New Provider
+
+1. Create `lib/ai/providers/my_provider.ex` implementing `@behaviour Ai.Provider`
+2. Create `lib/ai/models/my_provider.ex` with a `models/0` function returning `%{String.t() => Model.t()}`
+3. Add the provider to `@models` and `@providers` in `Ai.Models`
+4. Register in `Ai.Application.register_providers/0`
+5. Add tests in `test/providers/my_provider_test.exs`
+
+### Adding a New Model to an Existing Provider
+
+1. Open the relevant `lib/ai/models/<provider>.ex` file
+2. Add a new entry to the models map with a `%Ai.Types.Model{}` struct
+3. Ensure `api`, `provider`, and `base_url` match the existing provider convention
+
+### Adding OAuth Support for a New Provider
+
+1. Create `lib/ai/auth/my_provider_oauth.ex` implementing `resolve_api_key_from_secret/2`
+2. Add the module to the `@resolvers` list in `Ai.Auth.OAuthSecretResolver`
+3. Add tests in `test/ai/auth/my_provider_oauth_test.exs`
+
+### Changing Auth Behaviour
+
+- API key resolution: each provider's `get_api_key/2` private function checks `opts.api_key`, then provider-specific env vars, then `get_env_api_key/0`
+- OAuth secret payloads: `Ai.Auth.OAuthSecretResolver.resolve_api_key_from_secret/2` dispatches to provider-specific resolvers
+- Adding new env var fallbacks: modify the provider's `get_api_key/2` function
+
+### Modifying the Streaming Pipeline
+
+- Request building: each provider has a `build_request/4` private function
+- SSE parsing: handled per-provider (Anthropic has its own parser; OpenAI family shares `OpenAIResponsesShared.process_stream/5`)
+- Event emission: all providers push events via `EventStream.push_async/2` or `EventStream.push/2`
+- Completion: providers call `EventStream.complete/2` on success, `EventStream.error/2` on failure
+
+### Modifying Error Handling
+
+- Error classification: `Ai.Error.classify_status/1` (private) and `Ai.Error.parse_http_error/3`
+- Retry logic: `Ai.Error.retryable?/1` and `Ai.Error.suggested_retry_delay/1`
+- Provider-specific error messages: `Ai.Error.extract_provider_message/1` handles Anthropic, OpenAI, Google, AWS formats
+
+## How This App Connects to Other Umbrella Apps
+
+- **`lemon_core`** (dependency): Provides `LemonCore.Telemetry.emit/3` for telemetry events, `LemonCore.Secrets` for secret/credential resolution, and `LemonCore.Introspection` for diagnostics recording
+- **`coding_agent`** (consumer): Uses `Ai.stream/3` and `Ai.complete/3` for LLM calls during coding sessions; resolves models via `Ai.Models`
+- **`agent_core`** (consumer): Orchestrates multi-turn LLM conversations using `Ai.Types.Context`, `Ai.stream/3`, and tool-call handling
+- **`lemon_automation`** (consumer): Uses `Ai` for automated LLM calls in cron jobs and routines
+
+## Debugging Tips
+
+- Set `LEMON_AI_HTTP_TRACE=1` to see all HTTP requests/responses in logs
+- Set `LEMON_AI_DEBUG=1` to dump raw SSE events from Anthropic to `/tmp/lemon_anthropic_sse.log`
+- Set `LEMON_AI_PROMPT_DIAGNOSTICS=1` to log prompt sizes and token usage for every call
+- Check `~/.lemon/logs/http-errors/` for saved 4xx error dumps from `Ai.HttpInspector`
+- Use `Ai.CircuitBreaker.get_state(:provider)` to inspect circuit breaker status
+- Use `Ai.CallDispatcher.get_state()` to see concurrency caps and active request counts
+- Use `Ai.ModelCache.stats()` to inspect cache entries

@@ -15,34 +15,36 @@ LemonAutomation provides scheduled and triggered automation for agents:
 
 ```
 LemonAutomation.Supervisor (one_for_one)
-├── LemonAutomation.TaskSupervisor  (Task.Supervisor)
-├── LemonAutomation.CronManager     (GenServer)
-└── LemonAutomation.HeartbeatManager (GenServer)
++-- LemonAutomation.TaskSupervisor  (Task.Supervisor)
++-- LemonAutomation.CronManager     (GenServer)
++-- LemonAutomation.HeartbeatManager (GenServer)
 ```
 
 ## Cron System Architecture
 
 ```
 CronManager (GenServer, ticks every 60s)
-    │
-    ├─ on tick: finds due jobs, calls execute_job/2
-    │
-    └─ execute_job/2
-           │
-           ├─ creates CronRun, persists to CronStore
-           ├─ emits :cron_run_started on "cron" bus
-           └─ spawns Task via TaskSupervisor
-                  │
-                  └─ RunSubmitter.submit/2
-                         │
-                         ├─ pre-subscribes to Bus.run_topic(run_id)
-                         ├─ calls LemonRouter.submit(params)
-                         └─ RunCompletionWaiter.wait_already_subscribed/3
-                                │
-                                └─ sends {:run_complete, run_id, result} to CronManager
-                                           │
-                                           ├─ CronManager updates CronStore, emits :cron_run_completed
-                                           └─ For `agent:*:main` base sessions, CronManager forwards a synthetic
+    |
+    +- on tick: finds due jobs, calls execute_job/2
+    |
+    +- execute_job/2
+           |
+           +- creates CronRun, persists to CronStore
+           +- emits :cron_run_started on "cron" bus
+           +- spawns Task via TaskSupervisor
+                  |
+                  +- RunSubmitter.submit/2
+                         |
+                         +- reads CronMemory, injects into prompt
+                         +- pre-subscribes to Bus.run_topic(run_id)
+                         +- forks session_key into sub-session
+                         +- calls LemonRouter.submit(params)
+                         +- RunCompletionWaiter.wait_already_subscribed/3
+                                |
+                                +- sends {:run_complete, run_id, result} to CronManager
+                                           |
+                                           +- CronManager updates CronStore, emits :cron_run_completed
+                                           +- For `agent:*:main` base sessions, CronManager forwards a synthetic
                                               `:run_completed` summary into the base main session topic/history
 ```
 
@@ -55,6 +57,7 @@ CronManager (GenServer, ticks every 60s)
 - `RunSubmitter` pre-subscribes to `Bus.run_topic(run_id)` BEFORE submitting to `LemonRouter` (avoids race condition)
 - `RunSubmitter` passes `run_id` in params so the router uses the same ID it already subscribed to
 - `RunSubmitter` executes each cron run in a forked `:sub:<id>` session for isolation; the originating base session is preserved in run metadata
+- `RunSubmitter` reads `CronMemory` for the job and injects memory context into the prompt, then appends run results back to the memory file
 - If the router returns a different `run_id`, `RunSubmitter` falls back to `RunCompletionWaiter.wait/3`
 - Output is truncated to 1000 chars before storage
 - Jobs execute in supervised tasks; fallback to `Task.start/1` if supervisor is unavailable
@@ -102,6 +105,19 @@ LemonAutomation.wake(job_id)          # delegates to Wake.trigger/1
 })
 ```
 
+### With Persistent Memory
+
+```elixir
+{:ok, job} = LemonAutomation.CronManager.add(%{
+  name: "Weekly Summary",
+  schedule: "0 9 * * 1",
+  agent_id: "agent_abc",
+  session_key: "agent:agent_abc:main",
+  prompt: "Generate weekly summary using notes from previous runs",
+  memory_file: "/path/to/custom/memory.md"  # Optional; auto-generated if omitted
+})
+```
+
 ### Required Fields
 
 | Field | Description |
@@ -120,17 +136,18 @@ LemonAutomation.wake(job_id)          # delegates to Wake.trigger/1
 | `timezone` | `"UTC"` | Timezone for schedule interpretation |
 | `jitter_sec` | `0` | Random delay spread in seconds |
 | `timeout_ms` | `300_000` | Max execution time (5 minutes) |
+| `memory_file` | auto | Path to persistent cross-run memory file |
 | `meta` | `nil` | Arbitrary metadata map |
 
 ### Cron Expression Format
 
 ```
 * * * * *
-│ │ │ │ └── Day of week (0-7, 0/7 = Sunday)
-│ │ │ └──── Month (1-12)
-│ │ └────── Day of month (1-31)
-│ └──────── Hour (0-23)
-└────────── Minute (0-59)
+| | | | +-- Day of week (0-7, 0/7 = Sunday)
+| | | +---- Month (1-12)
+| | +------ Day of month (1-31)
+| +-------- Hour (0-23)
++---------- Minute (0-59)
 ```
 
 Supported syntax: `*`, `N`, `N-M` (range), `*/N` (step), `N,M,O` (list).
@@ -146,7 +163,7 @@ Examples:
 # List all jobs (sorted by created_at_ms desc)
 LemonAutomation.CronManager.list()
 
-# Update a job (agent_id and session_key cannot be changed via update)
+# Update a job (agent_id and session_key are immutable; attempts return {:error, {:immutable_fields, [...]}})
 LemonAutomation.CronManager.update(job.id, %{enabled: false})
 
 # Remove a job (also clears heartbeat config if job has meta.heartbeat: true)
@@ -174,6 +191,7 @@ LemonAutomation.CronManager.tick()  # cast, returns :ok immediately
   agent_id: "agent_abc",
   session_key: "agent:agent_abc:main",
   prompt: "Generate daily status report",
+  memory_file: nil,            # auto-generated path if nil
   timezone: "UTC",
   jitter_sec: 0,
   timeout_ms: 300_000,
@@ -217,6 +235,17 @@ CronRun.suppress(run)                => suppressed: true (can combine with any t
 ```
 
 Helper predicates: `CronRun.active?/1` (pending or running), `CronRun.finished?/1`.
+
+## CronMemory (Persistent Cross-Run Memory)
+
+Each cron job can have a persistent markdown memory file that accumulates context across runs:
+
+- Default location: `~/.lemon/cron_memory/{job_id}.md`
+- Configurable via `memory_file` field on the job or `meta.memory_file`/`meta.memoryFile`
+- On each run, `RunSubmitter` reads the memory file and injects it into the prompt
+- After each run, the result is appended to the memory file
+- Auto-compaction kicks in at 24,000 chars: older content is summarized, recent 14,000 chars retained
+- Prompt injection limited to 8,000 chars (tail of file)
 
 ## Heartbeat Management
 
@@ -437,17 +466,19 @@ LemonAutomation.CronStore.cleanup_old_runs(50)
 
 ```
 test/lemon_automation/
-├── cron_job_test.exs              # CronJob struct lifecycle
-├── cron_run_test.exs              # CronRun state transitions
-├── cron_schedule_test.exs         # Cron parsing, next_run computation
-├── cron_store_test.exs            # Persistence operations
-├── events_test.exs                # Event emission
-├── heartbeat_manager_test.exs     # Suppression logic
-├── heartbeat_scheduling_test.exs  # Cron-based heartbeats
-├── heartbeat_timer_test.exs       # Timer-based heartbeats
-├── run_completion_waiter_test.exs # Wait logic
-├── run_submitter_test.exs         # Router submission
-└── wake_test.exs                  # Wake triggering
++-- cron_job_test.exs              # CronJob struct lifecycle
++-- cron_run_test.exs              # CronRun state transitions
++-- cron_schedule_test.exs         # Cron parsing, next_run computation
++-- cron_store_test.exs            # Persistence operations
++-- cron_manager_update_test.exs   # Immutable field rejection
++-- cron_manager_forwarding_test.exs # Summary forwarding to base sessions
++-- events_test.exs                # Event emission
++-- heartbeat_manager_test.exs     # Suppression logic
++-- heartbeat_scheduling_test.exs  # Cron-based heartbeats
++-- heartbeat_timer_test.exs       # Timer-based heartbeats
++-- run_completion_waiter_test.exs # Wait logic
++-- run_submitter_test.exs         # Router submission
++-- wake_test.exs                  # Wake triggering
 ```
 
 ### Running Tests
@@ -549,8 +580,9 @@ LemonAutomation.CronManager.tick()
 | `LemonAutomation.CronRun` | Run struct, state machine transitions |
 | `LemonAutomation.CronSchedule` | Cron parsing, next-run computation, `valid?/1`, `matches?/2` |
 | `LemonAutomation.CronStore` | Persistence via LemonCore.Store (tables: `:cron_jobs`, `:cron_runs`) |
+| `LemonAutomation.CronMemory` | Persistent markdown-based cross-run memory; auto-compaction |
 | `LemonAutomation.HeartbeatManager` | Heartbeat suppression GenServer; manages timer and cron heartbeats |
 | `LemonAutomation.Wake` | Manual immediate triggering (fire-and-forget, enabled jobs only) |
 | `LemonAutomation.RunCompletionWaiter` | Waits on Bus for `:run_completed` event; handles multiple payload formats |
-| `LemonAutomation.RunSubmitter` | Builds params, pre-subscribes to bus, submits to LemonRouter |
+| `LemonAutomation.RunSubmitter` | Builds params, pre-subscribes to bus, submits to LemonRouter, manages CronMemory |
 | `LemonAutomation.Events` | Event emission helpers for all automation events |

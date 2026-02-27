@@ -2,92 +2,68 @@
 
 Market data ingestion and AI commentary generation for the Lemon platform.
 
-## Purpose and Responsibilities
+## Quick Orientation
 
-MarketIntel is a data pipeline that:
+MarketIntel is an OTP application in the Lemon umbrella that:
 
-1. **Ingests market data** from multiple sources (DEX Screener, Polymarket, BaseScan, Twitter/X)
-2. **Caches hot data** in ETS for fast access
-3. **Persists time-series data** in SQLite for historical analysis
-4. **Generates AI commentary** based on market conditions and triggers
-5. **Posts to X/Twitter** via LemonChannels integration (runtime-optional)
+1. **Ingests market data** from DEX Screener, Polymarket, BaseScan, and Twitter/X using supervised GenServer workers on fixed polling intervals
+2. **Caches hot data** in an ETS table with per-entry TTL (5 min default)
+3. **Persists time-series data** in SQLite via Ecto (partially stubbed)
+4. **Detects market signals** via threshold checks (price spikes, large transfers, unusual markets)
+5. **Generates AI commentary** tweets through a GenStage pipeline using OpenAI or Anthropic
+6. **Posts to X/Twitter** via `LemonChannels` (dynamic module loading, `runtime: false` dep)
 
-The app runs as an OTP application with supervised GenServer workers for each data source.
+The app runs under a `one_for_one` supervisor. Core infrastructure (Cache, Repo) always starts. Ingestion workers, commentary pipeline, and scheduler are gated by feature flags in `:market_intel, :ingestion` config.
 
-## Data Ingestion Architecture
+## Key Files and Purposes
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    MarketIntel.Application                   │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │   Cache     │  │    Repo     │  │     Scheduler       │  │
-│  │   (ETS)     │  │  (SQLite)   │  │   (GenServer)       │  │
-│  └──────┬──────┘  └──────┬──────┘  └──────────┬──────────┘  │
-│         │                │                     │             │
-│  ┌──────┴────────────────┴─────────────────────┴──────────┐  │
-│  │              Ingestion Workers (GenServers)            │  │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐   │  │
-│  │  │DexScreener│ │Polymarket│ │OnChain   │ │Twitter   │   │  │
-│  │  │(2min)    │ │(5min)    │ │(3min)    │ │Mentions  │   │  │
-│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘   │  │
-│  └─────────────────────────────────────────────────────────┘  │
-│                          │                                    │
-│  ┌───────────────────────┴───────────────────────────────┐    │
-│  │              Commentary.Pipeline (GenStage)            │    │
-│  │  ┌─────────────┐    ┌─────────────┐    ┌───────────┐  │    │
-│  │  │PromptBuilder│ -> │  AI Gen     │ -> │  X Post   │  │    │
-│  │  └─────────────┘    └─────────────┘    └───────────┘  │    │
-│  └─────────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────┘
-```
+### Entry Points
 
-### Ingestion Flow
+- `lib/market_intel/application.ex` -- Supervision tree. `core_children/0` (always) + `optional_ingestors/0` (feature-gated). Start here to understand what runs.
+- `lib/market_intel/config.ex` -- All configuration with sensible defaults. Tracked token settings, X account, commentary persona. Uses `Application.get_env/3` with keyword normalization and legacy backfill.
 
-1. Each ingestion worker fetches data on its interval via `Process.send_after/3`
-2. Data is parsed and stored in `MarketIntel.Cache` (ETS with TTL)
-3. Important data is persisted to `MarketIntel.Repo` (SQLite) — persistence stubs exist but are not yet fully implemented
-4. Significant events trigger the commentary pipeline
+### Ingestion Layer
 
-### Key Modules
+- `lib/market_intel/ingestion/dex_screener.ex` -- GenServer polling DEX Screener REST API every 2 min. Fetches tracked token + ETH + Base ecosystem. Triggers `:price_spike` when change exceeds threshold.
+- `lib/market_intel/ingestion/polymarket.ex` -- GenServer polling Polymarket GraphQL every 5 min. Categorizes markets (crypto, AI, weird, high-volume). Triggers `:weird_market`.
+- `lib/market_intel/ingestion/twitter_mentions.ex` -- GenServer for X mentions every 2 min. **Fetch is a stub** (returns `[]`). Sentiment analysis and engagement scoring are implemented.
+- `lib/market_intel/ingestion/on_chain.ex` -- GenServer for Base network data every 3 min. Gas prices via Base RPC, transfers via BaseScan API. Large transfer detection with configurable threshold.
+- `lib/market_intel/ingestion/http_client.ex` -- Shared HTTP helper. GET/POST with JSON parsing, error wrapping, auth header injection. Injectable via `:http_client_module` app env for testing.
 
-| Module | Purpose | Interval |
-|--------|---------|----------|
-| `Ingestion.DexScreener` | Token prices, volume, mcap from DEX Screener API | 2 min |
-| `Ingestion.Polymarket` | Prediction markets via GraphQL | 5 min |
-| `Ingestion.OnChain` | Base transfers via BaseScan, gas via Base RPC | 3 min |
-| `Ingestion.TwitterMentions` | Mentions, sentiment (fetch is a stub — returns `[]`) | 2 min |
+### Commentary Layer
 
-## Implementation Status
+- `lib/market_intel/commentary/pipeline.ex` -- GenStage `producer_consumer`. Entry point: `trigger/2` or `generate_now/0`. Builds prompt via PromptBuilder, generates text via `AgentCore.TextGeneration.complete_text/4`, posts via `LemonChannels.Adapters.XAPI.Client.post_text/1` (dynamic), stores in SQLite.
+- `lib/market_intel/commentary/prompt_builder.ex` -- Struct-based prompt builder. Assembles: base prompt (persona/voice) + market context (formatted data) + vibe instructions (style) + trigger context (event-specific) + rules (280 char limit, etc).
 
-Several features are stubs awaiting full implementation.  These are tracked as
-known debt in `planning/plans/PLN-20260222-debt-phase-10-monolith-footprint-reduction.md` (M1).
+### Infrastructure
 
-- **AI generation**: `Commentary.Pipeline.generate_with_provider/3` delegates completion calls through `AgentCore.TextGeneration.complete_text/4` to stay within architecture boundaries.
-- **Twitter fetch** (stub): `TwitterMentions.fetch_mentions/1` returns `[]`. X API integration is not implemented.
-- **DB persistence** (stub): `insert_commentary_history/1` is a public stub that only logs. `DexScreener.persist_to_db/2` is also a no-op stub.
-- **X posting**: `lemon_channels` is a `runtime: false` compile-time dep. Posting calls `LemonChannels.Adapters.XAPI.Client.post_text/1` dynamically with `Code.ensure_loaded?`.
-- **Holder stats** (stub): OnChain holder stats always return `:unknown`.
-- **Deep analysis** (stub): Scheduler `handle_info(:deep_analysis, ...)` is a no-op.
+- `lib/market_intel/cache.ex` -- GenServer owning ETS table `:market_intel_cache`. TTL-based expiry. `get_snapshot/0` aggregates all market data for commentary.
+- `lib/market_intel/repo.ex` -- Ecto Repo with SQLite3 adapter.
+- `lib/market_intel/schema.ex` -- Four schemas in one file: `PriceSnapshot`, `MentionEvent`, `CommentaryHistory` (has changeset with upsert support), `MarketSignal`. All use `:binary_id` PKs and `utc_datetime_usec` timestamps.
+- `lib/market_intel/secrets.ex` -- Resolves secrets from `LemonCore.Secrets` store first, then env vars. Maps atom keys to env var names. Supports `get/1`, `get!/1`, `configured?/1`, `put/2`, `all_configured/0`.
+- `lib/market_intel/errors.ex` -- Four error types: `:api_error`, `:config_error`, `:parse_error`, `:network_error`. Each returns `{:error, %{type: atom, ...}}`. Includes `format_for_log/1`, `type?/2`, `unwrap/1`.
+- `lib/market_intel/scheduler.ex` -- Triggers `:scheduled` commentary every 30 min and `:deep_analysis` every 2 hours (deep analysis is a no-op stub).
+
+## Architecture Boundary
+
+`market_intel` depends on `agent_core` for AI text generation but must NOT depend on the `ai` app directly. All LLM completion calls go through `AgentCore.TextGeneration.complete_text/4`. The `lemon_channels` dependency is `runtime: false` (compile-time only); X API posting uses `Code.ensure_loaded?` + `apply/3` for dynamic dispatch.
 
 ## How to Add a New Data Source
 
-1. **Create the worker module** in `lib/market_intel/ingestion/`:
+1. **Create the worker module** in `lib/market_intel/ingestion/new_source.ex`:
 
 ```elixir
 defmodule MarketIntel.Ingestion.NewSource do
   use GenServer
   require Logger
+
   alias MarketIntel.Ingestion.HttpClient
   alias MarketIntel.Errors
 
   @source_name "NewSource"
   @fetch_interval :timer.minutes(5)
 
-  def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
-  end
-
-  # Public API: cast-based for manual trigger
+  def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   def fetch, do: GenServer.cast(__MODULE__, :fetch)
 
   @impl true
@@ -96,7 +72,6 @@ defmodule MarketIntel.Ingestion.NewSource do
     {:ok, %{last_fetch: nil}}
   end
 
-  # Scheduled fetch via Process.send_after
   @impl true
   def handle_info(:fetch, state) do
     do_fetch()
@@ -104,7 +79,6 @@ defmodule MarketIntel.Ingestion.NewSource do
     {:noreply, %{state | last_fetch: DateTime.utc_now()}}
   end
 
-  # Manual fetch via cast
   @impl true
   def handle_cast(:fetch, state) do
     do_fetch()
@@ -113,8 +87,20 @@ defmodule MarketIntel.Ingestion.NewSource do
 
   defp do_fetch do
     HttpClient.log_info(@source_name, "fetching...")
-    # Fetch, parse, cache logic here
+
+    case HttpClient.get("https://api.example.com/data", [], source: @source_name) do
+      {:ok, data} ->
+        parsed = parse_data(data)
+        MarketIntel.Cache.put(:new_source_data, parsed)
+        check_signals(parsed)
+
+      {:error, _} = error ->
+        HttpClient.log_error(@source_name, Errors.format_for_log(error))
+    end
   end
+
+  defp parse_data(data), do: data
+  defp check_signals(_data), do: :ok
 
   defp schedule_next do
     HttpClient.schedule_next_fetch(self(), :fetch, @fetch_interval)
@@ -122,400 +108,43 @@ defmodule MarketIntel.Ingestion.NewSource do
 end
 ```
 
-2. **Add to supervision tree** in `MarketIntel.Application`:
+2. **Add feature flag** to `config/config.exs`:
 
 ```elixir
-children = [
+config :market_intel, :ingestion, %{
+  # ... existing flags
+  enable_new_source: true
+}
+```
+
+3. **Register in supervision tree** in `lib/market_intel/application.ex`:
+
+```elixir
+defp optional_ingestors do
+  config = Application.get_env(:market_intel, :ingestion, %{})
+
+  []
   # ... existing workers
-  MarketIntel.Ingestion.NewSource
-]
+  |> maybe_add(config[:enable_new_source], MarketIntel.Ingestion.NewSource)
+  # ...
+end
 ```
 
-3. **Add tests** in `test/market_intel/ingestion/new_source_test.exs`
-
-4. **Add fixtures** for API responses in `test/fixtures/`
-
-## Commentary Pipeline
-
-`Commentary.Pipeline` is a GenStage `:producer_consumer` that generates market commentary tweets. It has no upstream producers — all events enter via `GenStage.cast/2`.
-
-### Architecture Boundary
-
-`market_intel` may depend on `agent_core`, but not on `ai` directly. Keep LLM
-provider/model completion calls behind `AgentCore` helpers (currently
-`AgentCore.TextGeneration.complete_text/4`) so architecture checks remain green.
-
-### Triggers
-
-| Trigger | When | Context keys |
-|---------|------|--------------|
-| `:scheduled` | Every 30 min via Scheduler | `%{time_of_day: "morning"}` |
-| `:price_spike` | Price change > threshold (default 10%) | `%{token: key, change: float}` |
-| `:price_drop` | Significant drop (same threshold check, negative) | `%{token: key, change: float}` |
-| `:mention_reply` | High-engagement mention (score > 10) or question | `%{mentions: list}` |
-| `:weird_market` | Unusual Polymarket content | `%{markets: list}` |
-| `:volume_surge` | Unusual trading volume | any |
-| `:manual` | Manual request | `%{immediate: true}` |
-
-When `context[:immediate]` is true, the event is processed synchronously before returning. Otherwise it is queued in `state.pending`.
-
-### Vibes
-
-The `PromptBuilder` supports multiple commentary styles (selected randomly):
-
-- `:crypto_commentary` - Market analysis, roast ETH gas, Base commentary
-- `:gaming_joke` - Retro gaming references, speedrun metaphors
-- `:agent_self_aware` - BEAM runtime, memory files, Python comparisons
-- `:lemon_persona` - Uses `commentary_lemon_persona_instructions` and `developer_alias` from config
-
-### Usage
+4. **Add secrets** if needed in `lib/market_intel/secrets.ex`:
 
 ```elixir
-# Trigger commentary manually (immediate)
-MarketIntel.Commentary.Pipeline.trigger(:manual, %{immediate: true})
-
-# Convenience wrapper for the above
-MarketIntel.Commentary.Pipeline.generate_now()
-
-# Trigger with context (queued)
-MarketIntel.Commentary.Pipeline.trigger(:price_spike, %{token: :tracked_token, change: 15.0})
-
-# Check pipeline state
-:sys.get_state(MarketIntel.Commentary.Pipeline)
-```
-
-### PromptBuilder
-
-`MarketIntel.Commentary.PromptBuilder` is a struct-based module. Build a prompt like this:
-
-```elixir
-builder = %MarketIntel.Commentary.PromptBuilder{
-  vibe: :crypto_commentary,
-  market_data: %{
-    token: {:ok, %{price_usd: "1.23", price_change_24h: 5.5}},
-    eth: {:ok, %{price_usd: 3500.0}},
-    polymarket: {:ok, %{trending: ["event1"]}}
-  },
-  token_name: "ZEEBOT",
-  token_ticker: "$ZEEBOT",
-  trigger_type: :scheduled,
-  trigger_context: %{}
-}
-
-prompt = MarketIntel.Commentary.PromptBuilder.build(builder)
-```
-
-## Caching Strategy
-
-**Two-tier approach:**
-
-### Hot Cache (ETS)
-
-- Module: `MarketIntel.Cache`
-- TTL: 5 minutes default; pass explicit TTL as third arg to `put/3`
-- ETS table: `:market_intel_cache` (public, named, concurrent reads/writes)
-- Cleanup: runs every 1 minute to delete expired entries
-
-Cache keys used in practice:
-
-| Key | Set by | Content |
-|-----|--------|---------|
-| `:tracked_token_price` | DexScreener | Token price map |
-| `:eth_price` (via config signal key) | DexScreener | ETH price map |
-| `:base_activity` | Cache.get_snapshot | Alias for base ecosystem data |
-| `:base_ecosystem` | DexScreener | Top 10 Base tokens by volume |
-| `:base_network_stats` | OnChain | Gas price, congestion |
-| `:tracked_token_transfers` | OnChain | Recent + large transfers |
-| `:tracked_token_large_transfers` | OnChain | Large transfers only |
-| `:polymarket_trending` | Polymarket | Categorized markets |
-| `:recent_mentions` | TwitterMentions | Analyzed mentions list |
-| `:mention_sentiment` | TwitterMentions | Sentiment summary |
-| `:holder_stats` | OnChain | Holder stats (stub, always unknown) |
-
-Note: The cache keys for tracked token data are configurable via `MarketIntel.Config` (e.g. `tracked_token_price_cache_key/0`). Do not hardcode them.
-
-### Persistent Storage (SQLite)
-
-- Module: `MarketIntel.Repo` (Ecto SQLite3)
-- DB path: `../../data/market_intel.db` relative to config dir
-- Tables: `price_snapshots`, `mention_events`, `commentary_history`, `market_signals`
-- All tables use `:binary_id` primary key and `utc_datetime_usec` timestamps
-
-### Cache Operations
-
-```elixir
-# Store with TTL (default 5 min)
-MarketIntel.Cache.put(:key, value)
-MarketIntel.Cache.put(:key, value, :timer.minutes(10))
-
-# Retrieve — returns {:ok, value}, :expired, or :not_found
-{:ok, value} = MarketIntel.Cache.get(:key)
-
-# Get full snapshot for commentary generation
-# Returns %{token: ..., eth: ..., base: ..., polymarket: ..., mentions: ..., timestamp: ...}
-snapshot = MarketIntel.Cache.get_snapshot()
-```
-
-## Scheduling
-
-The `MarketIntel.Scheduler` GenServer handles periodic commentary triggers:
-
-| Task | Interval | Action |
-|------|----------|--------|
-| Regular commentary | 30 min | `Pipeline.trigger(:scheduled, %{time_of_day: "morning"})` |
-| Deep analysis | 2 hours | `handle_info(:deep_analysis, ...)` — currently a no-op stub |
-
-Data sources schedule themselves via `HttpClient.schedule_next_fetch/3` which wraps `Process.send_after/3`.
-
-## HttpClient
-
-All ingestion modules use `MarketIntel.Ingestion.HttpClient` for HTTP requests:
-
-```elixir
-# GET request
-{:ok, parsed_map} = HttpClient.get(url, headers, source: "MySource")
-
-# POST request (e.g. GraphQL)
-{:ok, parsed_map} = HttpClient.post(url, json_body, headers, source: "MySource")
-
-# Add auth header only if secret is configured
-headers = HttpClient.maybe_add_auth_header([], :dexscreener_key, "Bearer")
-
-# Schedule next fetch
-HttpClient.schedule_next_fetch(self(), :fetch, :timer.minutes(5))
-```
-
-The underlying HTTP module is injectable for tests:
-
-```elixir
-# config/test.exs
-config :market_intel, http_client_module: HTTPoison.Mock
-config :market_intel, http_client_secrets_module: MarketIntel.Secrets.Mock
-```
-
-## Database Schema
-
-SQLite via Ecto with the following tables:
-
-### price_snapshots
-```elixir
-%{
-  token_symbol: :string,
-  token_address: :string,
-  price_usd: :decimal,
-  price_eth: :decimal,
-  market_cap: :decimal,
-  liquidity_usd: :decimal,
-  volume_24h: :decimal,
-  price_change_24h: :decimal,
-  source: :string
+@secret_names %{
+  # ... existing secrets
+  new_source_key: "MARKET_INTEL_NEW_SOURCE_KEY"
 }
 ```
 
-### mention_events
-```elixir
-%{
-  platform: :string,           # "twitter", "telegram", etc.
-  author_handle: :string,
-  content: :text,
-  sentiment: :string,          # "positive", "negative", "neutral"
-  engagement_score: :integer,
-  mentioned_tokens: {:array, :string},
-  raw_metadata: :map
-}
-```
+5. **Add to cache snapshot** if the data should be available for commentary (in `cache.ex` `get_snapshot/0`).
 
-### commentary_history
-```elixir
-%{
-  tweet_id: :string,
-  content: :text,
-  trigger_event: :string,
-  market_context: :map,
-  engagement_metrics: :map
-}
-```
-
-### market_signals
-```elixir
-%{
-  signal_type: :string,        # "price_spike", "large_transfer", etc.
-  severity: :string,           # "low", "medium", "high"
-  description: :text,
-  data: :map,
-  acknowledged: :boolean
-}
-```
-
-## Common Tasks and Examples
-
-### Manual Data Fetch
+6. **Write tests** in `test/market_intel/ingestion/new_source_test.exs`. Use Mox for HTTP mocking:
 
 ```elixir
-# Fetch all sources immediately (cast-based, async)
-MarketIntel.Ingestion.DexScreener.fetch()
-MarketIntel.Ingestion.Polymarket.fetch()
-MarketIntel.Ingestion.OnChain.fetch()
-# TwitterMentions has no public fetch/0 — it only schedules internally
-```
-
-### Check Current Data
-
-```elixir
-# Get cached tracked token price
-MarketIntel.Ingestion.DexScreener.get_tracked_token_data()
-# => {:ok, %{price_usd: "1.23", price_change_24h: 5.5, ...}} | :not_found | :expired
-
-# Get Polymarket data
-MarketIntel.Ingestion.Polymarket.get_trending()
-# => {:ok, %{trending: [...], crypto_related: [...], ai_agent: [...], weird_niche: [...], high_volume: [...]}}
-
-# Get on-chain stats
-MarketIntel.Ingestion.OnChain.get_network_stats()
-MarketIntel.Ingestion.OnChain.get_large_transfers()
-
-# Get Twitter mention data
-MarketIntel.Ingestion.TwitterMentions.get_recent_mentions()
-MarketIntel.Ingestion.TwitterMentions.get_sentiment_summary()
-```
-
-### Configuration
-
-```elixir
-# Tracked token config (set in config.exs under :tracked_token key)
-MarketIntel.Config.tracked_token_name()       # "ZEEBOT"
-MarketIntel.Config.tracked_token_symbol()     # "ZEEBOT"
-MarketIntel.Config.tracked_token_ticker()     # "$ZEEBOT"
-MarketIntel.Config.tracked_token_address()    # "0x14d2..."
-MarketIntel.Config.tracked_token_price_cache_key()          # :tracked_token_price
-MarketIntel.Config.tracked_token_signal_key()               # :tracked_token
-MarketIntel.Config.tracked_token_transfers_cache_key()      # :tracked_token_transfers
-MarketIntel.Config.tracked_token_large_transfers_cache_key() # :tracked_token_large_transfers
-MarketIntel.Config.tracked_token_price_change_signal_threshold_pct() # 10
-MarketIntel.Config.tracked_token_large_transfer_threshold_base_units() # 1_000_000_000_000_000_000_000_000
-
-# Commentary persona config
-MarketIntel.Config.commentary_handle()    # "@realzeebot"
-MarketIntel.Config.commentary_voice()     # "witty, technical, ..."
-MarketIntel.Config.commentary_developer_alias()  # "z80"
-
-# X account
-MarketIntel.Config.x_account_id()
-MarketIntel.Config.x_account_handle()
-```
-
-### Secrets Management
-
-Secrets resolve from `LemonCore.Secrets` store first, then fall back to environment variables.
-
-Known secret atoms and their env var names:
-
-| Atom | Env Var |
-|------|---------|
-| `:basescan_key` | `MARKET_INTEL_BASESCAN_KEY` |
-| `:dexscreener_key` | `MARKET_INTEL_DEXSCREENER_KEY` |
-| `:openai_key` | `MARKET_INTEL_OPENAI_KEY` |
-| `:anthropic_key` | `MARKET_INTEL_ANTHROPIC_KEY` |
-| `:x_client_id` | `X_API_CLIENT_ID` |
-| `:x_client_secret` | `X_API_CLIENT_SECRET` |
-| `:x_access_token` | `X_API_ACCESS_TOKEN` |
-| `:x_refresh_token` | `X_API_REFRESH_TOKEN` |
-
-```elixir
-# Check if secret is configured
-MarketIntel.Secrets.configured?(:basescan_key)  # => true | false
-
-# Get secret value
-{:ok, key} = MarketIntel.Secrets.get(:basescan_key)
-key = MarketIntel.Secrets.get!(:basescan_key)  # raises on missing
-
-# Store a secret
-:ok = MarketIntel.Secrets.put(:basescan_key, "abc123")
-
-# View all configured (masked)
-MarketIntel.Secrets.all_configured()
-```
-
-### Error Handling
-
-All ingestion modules return structured errors. Error types: `:api_error`, `:parse_error`, `:network_error`, `:config_error`.
-
-```elixir
-alias MarketIntel.Errors
-
-# Create standardized errors
-Errors.api_error("Source", "reason")     # {:error, %{type: :api_error, source: "Source", reason: "reason"}}
-Errors.network_error(:timeout)           # {:error, %{type: :network_error, reason: "timeout"}}
-Errors.parse_error("invalid JSON")       # {:error, %{type: :parse_error, reason: "invalid JSON"}}
-Errors.config_error("missing key")       # {:error, %{type: :config_error, reason: "missing key"}}
-
-# Format for logging
-Errors.format_for_log({:error, %{type: :api_error, source: "API", reason: "fail"}})
-# => "API error from API: fail"
-
-# Check error type
-Errors.type?(error, :api_error)  # => true | false
-
-# Unwrap reason from error tuple
-Errors.unwrap({:error, %{type: :api_error, reason: "fail"}})  # => "fail"
-```
-
-## Testing Guidance
-
-### Test Structure
-
-```
-test/market_intel/
-├── ingestion/
-│   ├── dex_screener_test.exs
-│   ├── polymarket_test.exs
-│   ├── on_chain_test.exs
-│   ├── twitter_mentions_test.exs
-│   └── http_client_test.exs
-├── commentary/
-│   ├── pipeline_test.exs
-│   └── prompt_builder_test.exs
-├── cache_test.exs
-├── config_test.exs
-├── errors_test.exs
-├── scheduler_test.exs
-├── schema_test.exs
-├── secrets_test.exs
-└── trigger_system_test.exs
-```
-
-### Running Tests
-
-```bash
-# All market_intel tests
-mix test apps/market_intel
-
-# Specific module
-mix test apps/market_intel/test/market_intel/ingestion/dex_screener_test.exs
-
-# With coverage
-mix test apps/market_intel --cover
-```
-
-### Mocking HTTP
-
-Tests define mocks in `test/test_helper.exs`. There are two mock modules:
-
-- `MarketIntel.Ingestion.HttpClientMock` — for `HttpClient.get/post` calls (used by most ingestion tests)
-- `HTTPoison.Mock` — for direct `HTTPoison` calls (used by `OnChain` gas fetching)
-- `MarketIntel.Secrets.Mock` — for secrets resolution
-
-Configure via application env in tests:
-
-```elixir
-Application.put_env(:market_intel, :http_client_module, MarketIntel.Ingestion.HttpClientMock)
-Application.put_env(:market_intel, :http_client_secrets_module, MarketIntel.Secrets.Mock)
-```
-
-Example test setup:
-
-```elixir
-defmodule MarketIntel.Ingestion.DexScreenerTest do
+defmodule MarketIntel.Ingestion.NewSourceTest do
   use ExUnit.Case, async: false
   import Mox
 
@@ -528,54 +157,254 @@ defmodule MarketIntel.Ingestion.DexScreenerTest do
     :ok
   end
 
-  test "handles API timeout" do
+  test "fetches and caches data" do
     expect(MarketIntel.Ingestion.HttpClientMock, :get, fn _url, _headers, _opts ->
-      {:error, %{type: :network_error, reason: :timeout}}
+      {:ok, %{"data" => "test"}}
     end)
-
-    result = MarketIntel.Ingestion.HttpClientMock.get("https://api.dexscreener.com/test", [], [])
-    assert {:error, %{type: :network_error}} = result
+    # ...
   end
 end
 ```
 
-### Test Fixtures
+7. **Add test fixtures** in `test/fixtures/new_source_response.json`.
 
-Store API response samples in `test/fixtures/`:
-- `dex_screener_token_response.json`
-- `dex_screener_ecosystem_response.json`
-- `dex_screener_empty_response.json`
-- `polymarket_markets_response.json`
-- `basescan_transfers_response.json`
-- `twitter_mentions_response.json`
+## Commentary Pipeline Details
 
-### Ecto Testing
+### Trigger Flow
+
+```
+DexScreener.check_price_signals/1  --->  Pipeline.trigger(:price_spike, ctx)
+Polymarket.check_market_events/1   --->  Pipeline.trigger(:weird_market, ctx)
+TwitterMentions.check_reply_opps/1 --->  Pipeline.trigger(:mention_reply, ctx)
+Scheduler (30 min)                 --->  Pipeline.trigger(:scheduled, ctx)
+Manual                             --->  Pipeline.generate_now()
+```
+
+### Processing
+
+1. `handle_cast({:trigger, type, context}, state)` -- queues event or processes immediately if `context[:immediate]`
+2. `process_commentary/1` -- gets cache snapshot, builds prompt, calls AI, posts tweet, stores history
+3. AI provider selection: OpenAI (if key configured) > Anthropic (if key configured) > fallback templates
+4. Tweet truncation: 280 char max, adds "..." if truncated
+5. X posting: dynamic `apply(LemonChannels.Adapters.XAPI.Client, :post_text, [text])`
+6. Storage: `CommentaryHistory` schema with upsert on `tweet_id`
+
+### PromptBuilder Structure
+
+The `PromptBuilder` is a struct with fields: `vibe`, `market_data`, `token_name`, `token_ticker`, `trigger_type`, `trigger_context`. The `build/1` function assembles five sections:
+
+1. **Base prompt**: Persona handle and voice from config
+2. **Market context**: Formatted token/ETH/Polymarket data (handles `:error`, `:expired`, `:not_found`)
+3. **Vibe instructions**: Style-specific directions (4 vibes: `:crypto_commentary`, `:gaming_joke`, `:agent_self_aware`, `:lemon_persona`)
+4. **Trigger context**: Event-specific instructions (e.g. "pumped 15.5%", "weird Polymarket trending")
+5. **Rules**: Output constraints (280 chars, no @mentions, be witty)
+
+## Configuration Reference
+
+All configuration lives under the `:market_intel` OTP app key. `MarketIntel.Config` provides accessor functions with defaults.
+
+### Key Config Namespaces
+
+| Config Key | Accessor Module | Purpose |
+|-----------|-----------------|---------|
+| `:ingestion` | `Application` (direct) | Feature flags for workers |
+| `:tracked_token` | `Config.tracked_token*` | Token to track (name, symbol, address, thresholds, cache keys) |
+| `:x` | `Config.x*` | X/Twitter account (ID, handle) |
+| `:commentary_persona` | `Config.commentary_*` | Commentary voice, handle, persona instructions |
+| `:eth_address` | `Config.eth_address/0` | ETH contract address on Base |
+| `:holder_stats_enabled` | Direct `Application.get_env` | Gate for on-chain holder stats |
+| `:http_client_module` | Used by `HttpClient` | Injectable HTTP module (default: `HTTPoison`) |
+| `:http_client_secrets_module` | Used by `HttpClient` | Injectable secrets module |
+| `:use_secrets` | Used by `Secrets` | Toggle LemonCore.Secrets store |
+| `:secrets_module` | Used by `Secrets` | Secrets store module (default: `LemonCore.Secrets`) |
+
+### Config Defaults
+
+Tracked token defaults: name `"Tracked Token"`, symbol `"TOKEN"`, address `nil`, signal threshold `10%`, large transfer threshold `1e24` base units.
+
+Commentary persona defaults: handle `"@marketintel"`, voice `"witty, technical, crypto-native, occasionally self-deprecating"`, developer alias `nil`.
+
+ETH address default: `"0x4200000000000000000000000000000000000006"` (Base WETH).
+
+## Testing Guidance
+
+### Running Tests
+
+```bash
+# All market_intel tests
+mix test apps/market_intel
+
+# Specific file
+mix test apps/market_intel/test/market_intel/ingestion/dex_screener_test.exs
+
+# With coverage
+mix test apps/market_intel --cover
+```
+
+### Test Infrastructure
+
+**Mox definitions** in `test/test_helper.exs`:
+
+- `MarketIntel.Ingestion.HttpClientMock` -- mock for `HttpClient.get/post` calls
+- `HTTPoison.Mock` -- mock for direct `HTTPoison` calls (used by `OnChain` gas fetching)
+- `MarketIntel.Secrets.Mock` -- mock for secrets resolution
+
+**Behaviours** defined in `test/test_helper.exs`:
+
+- `MarketIntel.Ingestion.HttpClientBehaviour` -- `get/3`, `post/4`
+- `MarketIntel.Ingestion.SecretsBehaviour` -- `get/1`
+
+**Test configuration** (set in individual tests or `test.exs`):
+
+```elixir
+Application.put_env(:market_intel, :http_client_module, MarketIntel.Ingestion.HttpClientMock)
+Application.put_env(:market_intel, :http_client_secrets_module, MarketIntel.Secrets.Mock)
+```
+
+### Common Test Patterns
+
+**Cache setup** (most tests need this):
 
 ```elixir
 setup do
-  :ok = Ecto.Adapters.SQL.Sandbox.checkout(MarketIntel.Repo)
-end
-
-test "price snapshot changeset" do
-  attrs = %{token_symbol: "LEM", price_usd: "1.50", source: "dexscreener"}
-  changeset = MarketIntel.Schema.PriceSnapshot.changeset(%MarketIntel.Schema.PriceSnapshot{}, attrs)
-  assert changeset.valid?
+  unless Process.whereis(MarketIntel.Cache) do
+    start_supervised!(MarketIntel.Cache)
+  end
+  :ok
 end
 ```
 
-Schema modules live in `MarketIntel.Schema`:
-- `MarketIntel.Schema.PriceSnapshot`
-- `MarketIntel.Schema.MentionEvent`
-- `MarketIntel.Schema.CommentaryHistory`
-- `MarketIntel.Schema.MarketSignal`
+**ETS cleanup between tests**:
 
-### Environment Variables for Testing
-
-```bash
-export MARKET_INTEL_BASESCAN_KEY=test_key
-export MARKET_INTEL_DEXSCREENER_KEY=test_key
+```elixir
+setup do
+  :ets.delete_all_objects(:market_intel_cache)
+  :ok
+end
 ```
 
----
+**Config isolation** (for config tests):
 
-**Dependencies:** `lemon_core`, `agent_core`, `httpoison`, `jason`, `ecto_sql`, `ecto_sqlite3`, `gen_stage`, `mox` (test only), `lemon_channels` (compile-time only, `runtime: false`)
+```elixir
+setup do
+  original = Application.get_all_env(:market_intel)
+  on_exit(fn ->
+    for {key, _} <- Application.get_all_env(:market_intel),
+        do: Application.delete_env(:market_intel, key)
+    for {key, val} <- original,
+        do: Application.put_env(:market_intel, key, val)
+  end)
+  :ok
+end
+```
+
+**Secrets testing** (disable store, test env fallback):
+
+```elixir
+setup do
+  Application.put_env(:market_intel, :use_secrets, false)
+  # Set/delete env vars as needed
+  on_exit(fn -> System.delete_env("MARKET_INTEL_BASESCAN_KEY") end)
+  :ok
+end
+```
+
+### Test Files
+
+| Test File | Covers | Notes |
+|-----------|--------|-------|
+| `cache_test.exs` | Cache put/get, TTL, expiry, cleanup, snapshot | Needs Cache GenServer |
+| `config_test.exs` | All Config accessors, defaults, normalization | Saves/restores app env |
+| `errors_test.exs` | All error constructors, formatting, type checking | Pure functions, `async: true` safe |
+| `secrets_test.exs` | Secret resolution, env fallback, masking | Disables secrets store, manages env vars |
+| `scheduler_test.exs` | Scheduler intervals | May need Pipeline running |
+| `schema_test.exs` | Ecto schema changesets | May need Repo for insert tests |
+| `trigger_system_test.exs` | Threshold logic, volume surge, market events, mention detection, cooldowns | Pure logic, `async: true` safe |
+| `ingestion/dex_screener_test.exs` | DexScreener GenServer, parsing, price signals, cache integration | Uses fixtures, Mox |
+| `ingestion/polymarket_test.exs` | Polymarket market categorization | Uses fixtures, Mox |
+| `ingestion/on_chain_test.exs` | OnChain transfers, holder stats | Uses Mox |
+| `ingestion/twitter_mentions_test.exs` | Mention analysis, sentiment, engagement | Stub fetch |
+| `ingestion/http_client_test.exs` | HTTP request handling, JSON parsing, error wrapping | Uses Mox |
+| `commentary/pipeline_test.exs` | Pipeline triggers, vibes, AI integration, snapshot formatting, history storage | Needs Cache + Pipeline GenServers |
+| `commentary/prompt_builder_test.exs` | Prompt construction for all vibes/triggers/data states | Pure functions, `async: true` safe |
+| `commentary/commentary_history_db_test.exs` | Commentary history DB operations | May need Repo |
+
+### Test Fixtures
+
+Located in `test/fixtures/`:
+
+- `dex_screener_token_response.json` -- Multi-pair token response with liquidity data
+- `dex_screener_ecosystem_response.json` -- Base ecosystem search response
+- `dex_screener_empty_response.json` -- Empty pairs response
+- `polymarket_markets_response.json` -- GraphQL markets response
+- `basescan_transfers_response.json` -- Token transfer history
+- `twitter_mentions_response.json` -- Mention data with engagement metrics
+
+## Implementation Status (Stubs)
+
+These are known stubs tracked in `planning/plans/PLN-20260222-debt-phase-10-monolith-footprint-reduction.md` (M1):
+
+| Stub | Location | Current Behavior |
+|------|----------|-----------------|
+| Twitter fetch | `TwitterMentions.fetch_mentions/1` | Returns `[]` |
+| DB persistence (DexScreener) | `DexScreener.persist_to_db/2` | Returns `:ok` (no-op) |
+| Deep analysis | `Scheduler.handle_info(:deep_analysis, ...)` | Logs and reschedules (no-op) |
+| Gas price parsing | `OnChain.parse_gas_price/1` | Returns hardcoded `0.1` |
+| Block tracking | `OnChain.fetch_latest_block/0` | Returns `0` |
+| Holder stats | `OnChain.fetch_holder_stats/0` | Returns `:not_enabled` when gated off |
+
+## Connections to Other Apps
+
+| App | Relationship | Details |
+|-----|-------------|---------|
+| `lemon_core` | Runtime dependency | `LemonCore.Secrets` for secret storage and resolution |
+| `agent_core` | Runtime dependency | `AgentCore.TextGeneration.complete_text/4` for AI-generated commentary |
+| `lemon_channels` | Compile-time only (`runtime: false`) | `LemonChannels.Adapters.XAPI.Client.post_text/1` for posting tweets; loaded dynamically via `Code.ensure_loaded?` |
+
+## Common Tasks
+
+### Disable all ingestion (e.g. for dev/test)
+
+Set all feature flags to `false` in config. Core infrastructure still starts.
+
+### Change tracked token
+
+Update `:market_intel, :tracked_token` config with new `name`, `symbol`, `address`. Optionally customize `signal_key`, `price_cache_key`, and thresholds.
+
+### Change commentary voice
+
+Update `:market_intel, :commentary_persona` with new `voice` string and/or `lemon_persona_instructions`.
+
+### Add a new commentary vibe
+
+1. Add atom to `@vibes` list in `Commentary.Pipeline`
+2. Add corresponding `case` clause in `PromptBuilder.build_vibe_instructions/1`
+3. Add type to `@type vibe` in both `Pipeline` and `PromptBuilder`
+
+### Add a new trigger type
+
+1. Add atom to `@triggers` map in `Commentary.Pipeline`
+2. Add `case` clause in `PromptBuilder.build_trigger_context/1`
+3. Add type to `@type trigger_type` in both `Pipeline` and `PromptBuilder`
+4. Fire it from the appropriate ingestion worker using `Commentary.Pipeline.trigger/2`
+
+### Debug cache state
+
+```elixir
+# List all ETS entries
+:ets.tab2list(:market_intel_cache)
+
+# Check specific key
+MarketIntel.Cache.get(:tracked_token_price)
+
+# Get full snapshot
+MarketIntel.Cache.get_snapshot()
+```
+
+### Debug worker state
+
+```elixir
+:sys.get_state(MarketIntel.Ingestion.DexScreener)
+:sys.get_state(MarketIntel.Commentary.Pipeline)
+:sys.get_state(MarketIntel.Scheduler)
+```

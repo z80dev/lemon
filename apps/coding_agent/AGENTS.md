@@ -12,33 +12,33 @@ The main coding agent implementation for the Lemon AI assistant platform. This a
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           CodingAgent.Session                                │
-│  (Main GenServer - orchestrates agent loop, events, steering, follow-ups)   │
-└────────────────────┬────────────────────────────────────────────────────────┘
-                     │
-    ┌────────────────┼────────────────┬───────────────┬────────────────┐
-    │                │                │               │                │
-    ▼                ▼                ▼               ▼                ▼
-┌─────────┐   ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌──────────────┐
-│ Session │   │  Settings  │  │   Tools    │  │ Workspace  │  │   Prompt     │
-│ Manager │   │   Manager  │  │  (30+)     │  │  (bootstrap│  │   Builder    │
-│(JSONL)  │   │  (TOML)    │  │            │  │   files)   │  │              │
-└─────────┘   └────────────┘  └────────────┘  └────────────┘  └──────────────┘
++-----------------------------------------------------------------------------+
+|                           CodingAgent.Session                                |
+|  (Main GenServer - orchestrates agent loop, events, steering, follow-ups)   |
++--------------------+--------------------------------------------------------+
+                     |
+    +----------------+----------------+---------------+----------------+
+    |                |                |               |                |
+    v                v                v               v                v
++---------+   +------------+  +------------+  +------------+  +--------------+
+| Session |   |  Settings  |  |   Tools    |  | Workspace  |  |   Prompt     |
+| Manager |   |   Manager  |  |  (30+)     |  |  (bootstrap|  |   Builder    |
+| (JSONL) |   |  (TOML)    |  |            |  |   files)   |  |              |
++---------+   +------------+  +------------+  +------------+  +--------------+
 
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        Session Supervision Tree                              │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  CodingAgent.SessionRootSupervisor (permanent)                               │
-│  ├── CodingAgent.SessionSupervisor (dynamic, one_for_one)                   │
-│  │   └── CodingAgent.Session processes (temporary restart)                  │
-│  ├── CodingAgent.SessionRegistry (via Registry)                             │
-│  ├── CodingAgent.RunGraphServer (ETS + DETS persistence)                    │
-│  ├── CodingAgent.TaskSupervisor (for async operations)                      │
-│  ├── CodingAgent.ProcessStoreServer (background process tracking)           │
-│  ├── CodingAgent.TaskStoreServer (async task tracking with DETS)            │
-│  └── CodingAgent.LaneQueue (concurrency-capped subagent/background lanes)  │
-└─────────────────────────────────────────────────────────────────────────────┘
++-----------------------------------------------------------------------------+
+|                        Session Supervision Tree                              |
++-----------------------------------------------------------------------------+
+|  CodingAgent.SessionRootSupervisor (permanent)                               |
+|  +-- CodingAgent.SessionSupervisor (dynamic, one_for_one)                   |
+|  |   +-- CodingAgent.Session processes (temporary restart)                  |
+|  +-- CodingAgent.SessionRegistry (via Registry)                             |
+|  +-- CodingAgent.RunGraphServer (ETS + DETS persistence)                    |
+|  +-- CodingAgent.TaskSupervisor (for async operations)                      |
+|  +-- CodingAgent.ProcessStoreServer (background process tracking)           |
+|  +-- CodingAgent.TaskStoreServer (async task tracking with DETS)            |
+|  +-- CodingAgent.LaneQueue (concurrency-capped subagent/background lanes)  |
++-----------------------------------------------------------------------------+
 ```
 
 ## Key Modules
@@ -72,7 +72,7 @@ Tools are divided into two sets. `coding_tools/2` is the default set passed to s
 | **Social** | `post_to_x`, `get_x_mentions` |
 | **System** | `tool_auth`, `extensions_status`, `memory_topic` |
 
-**Additional tools** (exist as modules but NOT in default set — must be registered explicitly or accessed via `all_tools/2`):
+**Additional tools** (exist as modules but NOT in default set -- must be registered explicitly or accessed via `all_tools/2`):
 
 | Tool | Module | Notes |
 |------|--------|-------|
@@ -93,8 +93,8 @@ Tools are divided into two sets. `coding_tools/2` is the default set passed to s
 
 | Module | Purpose |
 |--------|---------|
-| `CodingAgent.Tools` | Tool factory — `coding_tools/2`, `read_only_tools/2`, `all_tools/2`, `get_tool/3` |
-| `CodingAgent.ToolRegistry` | Dynamic tool resolution (builtin → WASM → extension); ETS extension cache |
+| `CodingAgent.Tools` | Tool factory -- `coding_tools/2`, `read_only_tools/2`, `all_tools/2`, `get_tool/3` |
+| `CodingAgent.ToolRegistry` | Dynamic tool resolution (builtin > WASM > extension); ETS extension cache |
 | `CodingAgent.ToolExecutor` | Approval-gated tool execution wrapper |
 | `CodingAgent.ToolPolicy` | Tool allow/deny/approval policies; predefined profiles (`:full_access`, `:read_only`, `:safe_mode`, `:subagent_restricted`, `:no_external`, `:minimal_core`) |
 
@@ -226,21 +226,21 @@ Tools are resolved in this order (later shadows earlier):
 
 ```
 LLM requests tool
-       │
-       ▼
-┌──────────────┐
-│ ToolRegistry │ ──► Resolves tool by name (builtin/WASM/extension)
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┐
-│ ToolExecutor │ ──► Checks ToolPolicy for approval requirement
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┐
-│  Tool Module │ ──► Executes tool logic with abort signal support
-└──────────────┘
+       |
+       v
++--------------+
+| ToolRegistry | --> Resolves tool by name (builtin/WASM/extension)
++------+-------+
+       |
+       v
++--------------+
+| ToolExecutor | --> Checks ToolPolicy for approval requirement
++------+-------+
+       |
+       v
++--------------+
+|  Tool Module | --> Executes tool logic with abort signal support
++--------------+
 ```
 
 ## Session Lifecycle
@@ -248,7 +248,7 @@ LLM requests tool
 ### Starting a Session
 
 ```elixir
-# Under supervision (preferred — falls back to start_link if supervisor not running)
+# Under supervision (preferred -- falls back to start_link if supervisor not running)
 {:ok, session} = CodingAgent.start_session(
   cwd: "/path/to/project",
   model: Ai.Models.get_model(:anthropic, "claude-sonnet-4-20250514"),
@@ -355,10 +355,10 @@ CodingAgent.Workspace.ensure_workspace()
 
 The final system prompt is built in this order (later parts are appended):
 
-1. `CodingAgent.SystemPrompt.build/2` — base Lemon prompt (workspace bootstrap + skills list)
-2. Prompt template content (if `:prompt_template` option given — loaded from `.lemon/prompts/`, `.claude/prompts/`, `~/.lemon/agent/prompts/`)
+1. `CodingAgent.SystemPrompt.build/2` -- base Lemon prompt (workspace bootstrap + skills list)
+2. Prompt template content (if `:prompt_template` option given -- loaded from `.lemon/prompts/`, `.claude/prompts/`, `~/.lemon/agent/prompts/`)
 3. Explicit `:system_prompt` option
-4. `CodingAgent.ResourceLoader.load_instructions/1` — CLAUDE.md/AGENTS.md from cwd hierarchy
+4. `CodingAgent.ResourceLoader.load_instructions/1` -- CLAUDE.md/AGENTS.md from cwd hierarchy
 
 The composed prompt is refreshed before each user prompt to pick up edits to workspace/memory files.
 
@@ -471,7 +471,7 @@ CodingAgent.Compaction.should_compact?(
 ```
 
 Compaction:
-- Finds valid cut points (not mid-tool-call — only cuts at user/assistant/custom/bash_execution boundaries)
+- Finds valid cut points (not mid-tool-call -- only cuts at user/assistant/custom/bash_execution boundaries)
 - Generates an LLM summary of compacted messages
 - Preserves file operation context
 - Estimates request size from conversation messages plus system prompt and tool schema payloads
@@ -479,8 +479,8 @@ Compaction:
 
 Settings controlling compaction (in `SettingsManager`/`config.toml`):
 - `compaction_enabled` (default: true)
-- `reserve_tokens` (default: 16_384) — tokens reserved for model response
-- `keep_recent_tokens` (default: 20_000) — min recent context retained after compaction
+- `reserve_tokens` (default: 16_384) -- tokens reserved for model response
+- `keep_recent_tokens` (default: 20_000) -- min recent context retained after compaction
 
 ## Introspection Events
 
@@ -606,78 +606,89 @@ CodingAgent.start_session(
 
 ```
 apps/coding_agent/
-├── lib/
-│   ├── coding_agent.ex                      # Main public API
-│   ├── coding_agent/
-│   │   ├── session.ex                       # Main GenServer orchestrator
-│   │   ├── session/event_handler.ex         # Agent event → session state handler
-│   │   ├── session_manager.ex               # JSONL persistence
-│   │   ├── session_supervisor.ex            # DynamicSupervisor
-│   │   ├── session_registry.ex              # Process registry
-│   │   ├── session_root_supervisor.ex       # Top-level supervisor
-│   │   ├── tool_executor.ex                 # Approval gating
-│   │   ├── tool_registry.ex                 # Dynamic resolution + ETS extension cache
-│   │   ├── tool_policy.ex                   # Policy profiles and checks
-│   │   ├── tools.ex                         # Tool factory (coding_tools, read_only_tools, all_tools)
-│   │   ├── tools/                           # Individual tool modules
-│   │   │   ├── read.ex, write.ex, edit.ex, multiedit.ex
-│   │   │   ├── patch.ex, hashline_edit.ex, hashline.ex
-│   │   │   ├── bash.ex, exec.ex, process.ex, await.ex
-│   │   │   ├── grep.ex, find.ex, ls.ex, fuzzy.ex
-│   │   │   ├── browser.ex, webfetch.ex, websearch.ex, webdownload.ex
-│   │   │   ├── web_cache.ex, web_guard.ex
-│   │   │   ├── todo.ex, todoread.ex, todowrite.ex
-│   │   │   ├── todo_store.ex, todo_store_owner.ex
-│   │   │   ├── task.ex, agent.ex
-│   │   │   ├── tool_auth.ex, extensions_status.ex
-│   │   │   ├── memory_topic.ex, truncate.ex
-│   │   │   ├── post_to_x.ex, get_x_mentions.ex
-│   │   │   ├── lsp_formatter.ex, restart.ex
-│   │   ├── budget_tracker.ex, budget_enforcer.ex
-│   │   ├── run_graph.ex, run_graph_server.ex
-│   │   ├── compaction.ex, compaction_hooks.ex
-│   │   ├── extensions.ex
-│   │   ├── extensions/extension.ex           # Behaviour
-│   │   ├── extension_lifecycle.ex
-│   │   ├── wasm/                             # WASM tool runtime
-│   │   │   ├── builder.ex, config.ex, policy.ex
-│   │   │   ├── protocol.ex, tool_factory.ex
-│   │   │   ├── sidecar_session.ex, sidecar_supervisor.ex
-│   │   ├── security/
-│   │   │   ├── external_content.ex
-│   │   │   └── untrusted_tool_boundary.ex
-│   │   ├── workspace.ex                      # Bootstrap file loading
-│   │   ├── system_prompt.ex                  # Lemon base system prompt builder
-│   │   ├── prompt_builder.ex                 # Higher-level prompt builder
-│   │   ├── resource_loader.ex                # CLAUDE.md/AGENTS.md hierarchy loader
-│   │   ├── settings_manager.ex               # TOML config adapter
-│   │   ├── config.ex                         # Path/env configuration
-│   │   ├── subagents.ex, mentions.ex         # Subagent definitions and @mention parsing
-│   │   ├── commands.ex                       # Slash command loading
-│   │   ├── coordinator.ex                    # Concurrent subagent orchestration
-│   │   ├── lane_queue.ex                     # Concurrency-capped lane queue
-│   │   ├── process_manager.ex                # DynamicSupervisor for background processes
-│   │   ├── process_session.ex, process_store.ex, process_store_server.ex
-│   │   ├── task_store.ex, task_store_server.ex
-│   │   ├── bash_executor.ex                  # Streaming shell execution
-│   │   ├── messages.ex                       # Message types and LLM conversion
-│   │   ├── ui.ex                             # Pluggable UI abstraction
-│   │   ├── ui/                               # UI context helpers
-│   │   ├── cli_runners/                      # CLI runner integrations
-│   │   └── evals/harness.ex                  # Eval harness
-│   └── mix/tasks/                            # Mix tasks
-├── test/
-│   ├── coding_agent/
-│   │   ├── *_test.exs
-│   │   └── tools/*_test.exs
-│   └── support/
-└── priv/templates/workspace/                 # Default workspace bootstrap templates
++-- lib/
+|   +-- coding_agent.ex                      # Main public API
+|   +-- coding_agent/
+|   |   +-- application.ex                   # OTP application (supervision tree)
+|   |   +-- session.ex                       # Main GenServer orchestrator
+|   |   +-- session/
+|   |   |   +-- compaction_manager.ex        # Auto-compaction state machine
+|   |   |   +-- event_handler.ex             # Agent event -> session state
+|   |   |   +-- message_serialization.ex     # Message format conversion
+|   |   |   +-- model_resolver.ex            # Model + API key resolution
+|   |   |   +-- prompt_composer.ex           # System prompt layering
+|   |   |   +-- wasm_bridge.ex              # WASM tool bridging
+|   |   +-- session_manager.ex               # JSONL persistence
+|   |   +-- session_supervisor.ex            # DynamicSupervisor
+|   |   +-- session_registry.ex              # Process registry
+|   |   +-- session_root_supervisor.ex       # Top-level supervisor
+|   |   +-- tool_executor.ex                 # Approval gating
+|   |   +-- tool_registry.ex                 # Dynamic resolution + ETS extension cache
+|   |   +-- tool_policy.ex                   # Policy profiles and checks
+|   |   +-- tools.ex                         # Tool factory (coding_tools, read_only_tools, all_tools)
+|   |   +-- tools/                           # Individual tool modules
+|   |   |   +-- read.ex, write.ex, edit.ex, multiedit.ex
+|   |   |   +-- patch.ex, hashline_edit.ex, hashline.ex
+|   |   |   +-- bash.ex, exec.ex, process.ex, await.ex
+|   |   |   +-- grep.ex, find.ex, ls.ex, fuzzy.ex
+|   |   |   +-- browser.ex, webfetch.ex, websearch.ex, webdownload.ex
+|   |   |   +-- web_cache.ex, web_guard.ex
+|   |   |   +-- todo.ex, todoread.ex, todowrite.ex
+|   |   |   +-- todo_store.ex, todo_store_owner.ex
+|   |   |   +-- task.ex, agent.ex
+|   |   |   +-- tool_auth.ex, extensions_status.ex
+|   |   |   +-- memory_topic.ex, truncate.ex
+|   |   |   +-- post_to_x.ex, get_x_mentions.ex
+|   |   |   +-- lsp_formatter.ex, restart.ex
+|   |   |   +-- feature_requirements.ex
+|   |   +-- budget_tracker.ex, budget_enforcer.ex
+|   |   +-- run_graph.ex, run_graph_server.ex
+|   |   +-- compaction.ex, compaction_hooks.ex
+|   |   +-- extensions.ex
+|   |   +-- extensions/extension.ex           # Behaviour
+|   |   +-- extension_lifecycle.ex
+|   |   +-- wasm/                             # WASM tool runtime
+|   |   |   +-- builder.ex, config.ex, policy.ex
+|   |   |   +-- protocol.ex, tool_factory.ex
+|   |   |   +-- sidecar_session.ex, sidecar_supervisor.ex
+|   |   +-- security/
+|   |   |   +-- external_content.ex
+|   |   |   +-- untrusted_tool_boundary.ex
+|   |   +-- workspace.ex                      # Bootstrap file loading
+|   |   +-- system_prompt.ex                  # Lemon base system prompt builder
+|   |   +-- prompt_builder.ex                 # Higher-level prompt builder
+|   |   +-- resource_loader.ex                # CLAUDE.md/AGENTS.md hierarchy loader
+|   |   +-- settings_manager.ex               # TOML config adapter
+|   |   +-- config.ex                         # Path/env configuration
+|   |   +-- subagents.ex, mentions.ex         # Subagent definitions and @mention parsing
+|   |   +-- commands.ex                       # Slash command loading
+|   |   +-- coordinator.ex                    # Concurrent subagent orchestration
+|   |   +-- lane_queue.ex                     # Concurrency-capped lane queue
+|   |   +-- parallel.ex                       # Semaphore and bounded parallelism
+|   |   +-- process_manager.ex                # DynamicSupervisor for background processes
+|   |   +-- process_session.ex, process_store.ex, process_store_server.ex
+|   |   +-- task_store.ex, task_store_server.ex
+|   |   +-- bash_executor.ex                  # Streaming shell execution
+|   |   +-- messages.ex                       # Message types and LLM conversion
+|   |   +-- checkpoint.ex                     # Snapshot/restore for long sessions
+|   |   +-- progress.ex                       # Progress reporting
+|   |   +-- ui.ex                             # Pluggable UI abstraction
+|   |   +-- ui/context.ex                     # UI context helpers
+|   |   +-- cli_runners/                      # CLI runner integrations
+|   |   +-- evals/harness.ex                  # Eval harness
+|   +-- mix/tasks/                            # Mix tasks
++-- test/
+|   +-- coding_agent/
+|   |   +-- *_test.exs                        # 90+ test files
+|   |   +-- tools/*_test.exs
+|   +-- support/
++-- priv/templates/workspace/                 # Default workspace bootstrap templates
 ```
 
 ## Key Types
 
 ```elixir
-# AgentTool from AgentCore — the core tool contract
+# AgentTool from AgentCore -- the core tool contract
 %AgentCore.Types.AgentTool{
   name: "tool_name",          # used in LLM tool call
   description: "What it does",
@@ -686,13 +697,13 @@ apps/coding_agent/
   execute: fn tool_call_id, params, signal, on_update -> result end
 }
 
-# AgentToolResult — returned by execute/4
+# AgentToolResult -- returned by execute/4
 %AgentCore.Types.AgentToolResult{
   content: [%Ai.Types.TextContent{text: "result"}],
   details: %{}   # structured metadata shown in UI (optional)
 }
 
-# SessionEntry — one node in the JSONL session tree
+# SessionEntry -- one node in the JSONL session tree
 %CodingAgent.SessionManager.SessionEntry{
   id: "entry_id",
   parent_id: "parent_id" | nil,
@@ -700,7 +711,7 @@ apps/coding_agent/
   # ... type-specific fields
 }
 
-# SettingsManager — loaded from ~/.lemon/config.toml and <cwd>/.lemon/config.toml
+# SettingsManager -- loaded from ~/.lemon/config.toml and <cwd>/.lemon/config.toml
 %CodingAgent.SettingsManager{
   default_model: %{provider: "anthropic", model_id: "...", base_url: nil},
   default_thinking_level: :medium,
@@ -715,7 +726,7 @@ apps/coding_agent/
 
 ## Settings and Configuration
 
-Settings are loaded from TOML via `LemonCore.Config` and merged (global → project):
+Settings are loaded from TOML via `LemonCore.Config` and merged (global -> project):
 
 - Global: `~/.lemon/config.toml`
 - Project: `<cwd>/.lemon/config.toml`
@@ -743,6 +754,7 @@ Provider API key resolution is handled by `CodingAgent.Session.ModelResolver` wi
 4. Default secret name `llm_<provider>_api_key`
 
 When a secret value is an OAuth payload, `Ai.Auth.OAuthSecretResolver` dispatches to provider-specific OAuth decoders (Copilot, Anthropic, Google Antigravity, OpenAI Codex), refreshes near expiry, and best-effort persists refreshed tokens back to `LemonCore.Secrets`.
+If the central resolver module is unavailable at runtime (mixed-version or partial deploy), `ModelResolver` falls back to calling provider-specific resolver modules directly so secret resolution does not crash.
 
 ## Testing Guidelines
 

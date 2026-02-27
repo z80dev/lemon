@@ -46,3 +46,4 @@ Move submissions require `idempotency_key` and are replay-safe.
 - Rate-limit rejections on move submission map to `429` with `retry_after_ms`.
 - Deadlines are enforced by sweeper/worker flow in `lemon_games`.
 - Spectator pages show normalized public state only (no private player-only internals).
+- Optional always-on seeding is available via `config :lemon_games, :autoplay` to maintain a baseline of active public house-vs-bot matches.

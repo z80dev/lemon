@@ -2,6 +2,14 @@
 
 HTTP/WebSocket API server for controlling the Lemon agent system.
 
+## Quick Orientation
+
+- **What**: The external API surface for the entire Lemon agent system. Clients (TUI, web, mobile, browser extensions) communicate through this app via WebSocket JSON-RPC and REST HTTP endpoints.
+- **Where**: `apps/lemon_control_plane/` in the umbrella.
+- **Stack**: Bandit HTTP server, Plug router, WebSock for WebSocket, ETS-backed method registry.
+- **Port**: 4040 in production, 0 (OS-assigned) in test.
+- **Entry point**: `LemonControlPlane.Application` starts the supervision tree.
+
 ## Purpose and Responsibilities
 
 The control plane provides the external interface for clients (TUI, web, mobile, browser extensions) to:
@@ -14,73 +22,74 @@ The control plane provides the external interface for clients (TUI, web, mobile,
 - **Install skills** - Manage agent capabilities
 - **Pair nodes/devices** - Connect browser extensions and mobile devices
 - **Stream real-time events** - WebSocket events for runs, chat deltas, approvals
+- **Games platform** - REST API for turn-based agent-vs-agent games
 
 ## Architecture Overview
 
 ```
-┌─────────────────┐     HTTP/WebSocket      ┌──────────────────┐
-│  Clients (TUI)  │◄───────────────────────►│  Bandit Server   │
-│  Web, Mobile    │      Port 4040          │  (Router plug)   │
-└─────────────────┘                         └────────┬─────────┘
-                                                    │
-                           ┌────────────────────────┼────────────────────────┐
-                           │                        │                        │
-                    ┌──────▼──────┐        ┌────────▼────────┐      ┌───────▼────────┐
-                    │   /healthz  │        │      /ws        │      │  (404 fallback)│
-                    │  (health)   │        │  (WebSocket)    │      │                │
-                    └─────────────┘        └────────┬────────┘      └────────────────┘
-                                                    │
-                       ┌────────────────────────────┼────────────────────────────┐
-                       │                            │                            │
-                ┌──────▼──────┐            ┌────────▼────────┐          ┌────────▼────────┐
-                │   Connect   │            │  Request Frame  │          │  Event Bridge   │
-                │  Handshake  │            │   Dispatch      │          │  (Bus → WS)     │
-                └─────────────┘            └────────┬────────┘          └─────────────────┘
-                                                    │
-                                            ┌───────▼────────┐
-                                            │ Schema Validate│
-                                            │(Schemas module)│
-                                            └───────┬────────┘
-                                                    │
-                                            ┌───────▼────────┐
-                                            │ Method Registry│
-                                            │  (ETS lookup)  │
-                                            └───────┬────────┘
-                                                    │
-                                            ┌───────▼────────┐
-                                            │  Auth Check    │
-                                            │  (scopes)      │
-                                            └───────┬────────┘
-                                                    │
-                                            ┌───────▼────────┐
-                                            │ Method Handler │
-                                            │  (100+ methods)│
-                                            └────────────────┘
++-----------------+     HTTP/WebSocket      +------------------+
+|  Clients (TUI)  |<----------------------->|  Bandit Server   |
+|  Web, Mobile    |      Port 4040          |  (Router plug)   |
++-----------------+                         +--------+---------+
+                                                     |
+                    +--------------------------------+--------------------------+
+                    |                 |               |                         |
+             +------v------+  +------v------+  +-----v----------+  +----------v--------+
+             |  /healthz   |  | /v1/games/* |  |     /ws        |  |  (404 fallback)   |
+             |  (health)   |  | (REST API)  |  |  (WebSocket)   |  |                   |
+             +-------------+  +-------------+  +------+---------+  +-------------------+
+                                                      |
+                      +-------------------------------+-------------------------------+
+                      |                               |                               |
+               +------v------+              +---------v---------+           +---------v---------+
+               |   Connect   |              |  Request Frame    |           |   Event Bridge    |
+               |  Handshake  |              |   Dispatch        |           |  (Bus -> WS)      |
+               +-------------+              +--------+----------+           +-------------------+
+                                                     |
+                                             +-------v--------+
+                                             | Schema Validate|
+                                             | (Schemas mod)  |
+                                             +-------+--------+
+                                                     |
+                                             +-------v--------+
+                                             | Method Registry|
+                                             | (ETS lookup)   |
+                                             +-------+--------+
+                                                     |
+                                             +-------v--------+
+                                             |  Auth Check    |
+                                             |  (scopes)      |
+                                             +-------+--------+
+                                                     |
+                                             +-------v--------+
+                                             | Method Handler |
+                                             | (100+ methods) |
+                                             +----------------+
 ```
 
 ## Key Modules
 
-| Module | Purpose |
-|--------|---------|
-| `LemonControlPlane` | Main module, protocol/server version |
-| `LemonControlPlane.Application` | OTP supervision tree |
-| `LemonControlPlane.HTTP.Router` | HTTP routing (Bandit/Plug): `/ws` and `/healthz` |
-| `LemonControlPlane.WS.Connection` | WebSocket connection handler (`WebSock` behaviour) |
-| `LemonControlPlane.Presence` | Connected client tracking (ETS-backed GenServer) |
-| `LemonControlPlane.EventBridge` | Bus events → WebSocket fanout (GenServer + Task.Supervisor) |
-| `LemonControlPlane.Auth.Authorize` | Role-based access control; `from_params/1`, `authorize/3`, `default_operator/0` |
-| `LemonControlPlane.Auth.TokenStore` | Token storage/validation for node/device auth (backed by `LemonCore.Store`) |
-| `LemonControlPlane.Methods.Registry` | Method dispatch registry (ETS); `dispatch/3`, `register/1`, `unregister/1` |
-| `LemonControlPlane.Protocol.Frames` | Protocol frame encoding/decoding; `parse/1`, `encode_response/2`, `encode_event/4`, `encode_hello_ok/1` |
-| `LemonControlPlane.Protocol.Errors` | Standard error constructors; `invalid_request/1`, `not_found/1`, `forbidden/1`, etc. |
-| `LemonControlPlane.Protocol.Schemas` | Param schema validation before dispatch; `validate/2` |
-| `LemonControlPlane.Method` | Behaviour for method handlers; also provides `require_param/2` helper |
+| Module | File | Purpose |
+|--------|------|---------|
+| `LemonControlPlane` | `lib/lemon_control_plane.ex` | Main module, protocol/server version |
+| `LemonControlPlane.Application` | `lib/lemon_control_plane/application.ex` | OTP supervision tree |
+| `LemonControlPlane.HTTP.Router` | `lib/lemon_control_plane/http/router.ex` | HTTP routing (Bandit/Plug): `/ws`, `/healthz`, `/v1/games/*` |
+| `LemonControlPlane.HTTP.GamesAPI` | `lib/lemon_control_plane/http/games_api.ex` | REST handler for games platform endpoints |
+| `LemonControlPlane.WS.Connection` | `lib/lemon_control_plane/ws/connection.ex` | WebSocket connection handler (`WebSock` behaviour) |
+| `LemonControlPlane.Presence` | `lib/lemon_control_plane/presence.ex` | Connected client tracking (ETS-backed GenServer) |
+| `LemonControlPlane.EventBridge` | `lib/lemon_control_plane/event_bridge.ex` | Bus events -> WebSocket fanout (GenServer + Task.Supervisor) |
+| `LemonControlPlane.Auth.Authorize` | `lib/lemon_control_plane/auth/authorize.ex` | Role-based access control; `from_params/1`, `authorize/3`, `default_operator/0` |
+| `LemonControlPlane.Auth.TokenStore` | `lib/lemon_control_plane/auth/token_store.ex` | Token storage/validation for node/device auth (backed by `LemonCore.Store`) |
+| `LemonControlPlane.Methods.Registry` | `lib/lemon_control_plane/methods/registry.ex` | Method dispatch registry (ETS); `dispatch/3`, `register/1`, `unregister/1`. Also defines `LemonControlPlane.Method` behaviour. |
+| `LemonControlPlane.Protocol.Frames` | `lib/lemon_control_plane/protocol/frames.ex` | Protocol frame encoding/decoding; `parse/1`, `encode_response/2`, `encode_event/4`, `encode_hello_ok/1` |
+| `LemonControlPlane.Protocol.Errors` | `lib/lemon_control_plane/protocol/errors.ex` | Standard error constructors; `invalid_request/1`, `not_found/1`, `forbidden/1`, etc. |
+| `LemonControlPlane.Protocol.Schemas` | `lib/lemon_control_plane/protocol/schemas.ex` | Param schema validation before dispatch; `validate/2` |
 
 ## JSON-RPC Method Structure
 
 ### Adding a New Method
 
-Create a new file in `lib/lemon_control_plane/methods/`:
+**Step 1: Create the method module** in `lib/lemon_control_plane/methods/`:
 
 ```elixir
 defmodule LemonControlPlane.Methods.MyMethod do
@@ -127,9 +136,7 @@ alias LemonControlPlane.Protocol.Errors
 {:error, Errors.internal_error("Something went wrong", details)}
 ```
 
-### Register the Method
-
-Add to the `@builtin_methods` list in `LemonControlPlane.Methods.Registry`:
+**Step 2: Register the method** in the `@builtin_methods` list in `LemonControlPlane.Methods.Registry`:
 
 ```elixir
 @builtin_methods [
@@ -140,9 +147,7 @@ Add to the `@builtin_methods` list in `LemonControlPlane.Methods.Registry`:
 
 If the method belongs to a capability group (tts, voicewake, updates, device_pairing, wizard), add it to `@capability_methods` instead. Capability-gated methods can be disabled via the `:lemon_control_plane, :capabilities` application env.
 
-### Add a Schema
-
-Add an entry to `LemonControlPlane.Protocol.Schemas` (`@schemas` map). Schemas are validated before dispatch; methods without schemas accept any params.
+**Step 3: Add a schema** entry to `LemonControlPlane.Protocol.Schemas` (`@schemas` map). Schemas are validated before dispatch; methods without schemas accept any params.
 
 ```elixir
 "my.method" => %{
@@ -152,6 +157,8 @@ Add an entry to `LemonControlPlane.Protocol.Schemas` (`@schemas` map). Schemas a
 ```
 
 Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
+
+**Step 4: Write tests** in `test/lemon_control_plane/methods/`.
 
 ### Scope Guidelines
 
@@ -181,6 +188,7 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 | `usage.cost` | read | Cost breakdown for a date range |
 | `system-presence` | read | Current presence data |
 | `system-event` | write | Emit a system event |
+| `system.reload` | admin | Runtime reload of module/app/extension/all scopes |
 | `update.run` | admin | Trigger a system update |
 
 ### Session Management
@@ -216,6 +224,7 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 |--------|-------|-------------|
 | `agent` | write | Submit an agent run (requires `prompt`) |
 | `agent.wait` | write | Submit and wait for completion |
+| `agent.progress` | read | Get progress for active session |
 | `agents.list` | read | List available agents |
 | `agent.identity.get` | read | Get agent capabilities/identity |
 | `agent.inbox.send` | write | Send message to agent inbox with routing |
@@ -285,6 +294,8 @@ Config keys are whitelisted in `ConfigGet` to prevent atom table exhaustion. Sec
 | `cron.run` | admin | Manually trigger a cron job |
 | `cron.runs` | read | List runs for a job (optional output/meta/run-store/introspection payloads) |
 | `cron.status` | read | Cron system status + active/recent run counters |
+
+`cron.update` only supports mutable fields (`name`, `schedule`, `enabled`, `prompt`, `timezone`, `jitterSec`, `timeoutMs`). Attempts to update immutable routing fields (`agentId`, `sessionKey`) return `invalid_request`.
 
 ### Exec Approvals
 
@@ -370,6 +381,15 @@ Config keys are whitelisted in `ConfigGet` to prevent atom table exhaustion. Sec
 | `wizard.step` | admin | Advance wizard step |
 | `wizard.cancel` | admin | Cancel a wizard |
 
+### Events and Subscriptions
+
+| Method | Scope | Description |
+|--------|-------|-------------|
+| `events.subscribe` | read | Subscribe to event topics (run, system, cron, etc.) |
+| `events.unsubscribe` | read | Unsubscribe from event topics |
+| `events.subscriptions.list` | read | List current subscriptions |
+| `events.ingest` | write | Ingest external events |
+
 ## Authentication and Authorization
 
 ### Roles and Scopes
@@ -405,9 +425,9 @@ Without a token, operators receive the scopes listed in `connect` params (or all
 
 ### Token-Based Auth (Nodes/Devices)
 
-1. Node calls `node.pair.request` → operator approves via `node.pair.approve`
-2. Node calls `node.pair.verify` with the pairing code → gets a challenge
-3. Node calls `connect.challenge` with the challenge → receives a session token (TTL: 7 days)
+1. Node calls `node.pair.request` -> operator approves via `node.pair.approve`
+2. Node calls `node.pair.verify` with the pairing code -> gets a challenge
+3. Node calls `connect.challenge` with the challenge -> receives a session token (TTL: 24 hours)
 4. Node uses `{"auth": {"token": "..."}}` in future `connect` calls
 
 Token validation is handled by `LemonControlPlane.Auth.TokenStore` (backed by `LemonCore.Store` under `:session_tokens` namespace).
@@ -440,18 +460,18 @@ Presence changes emit a `presence_changed` bus event, which EventBridge forwards
 
 ### Frame Types
 
-**Request (client → server):**
+**Request (client -> server):**
 ```json
 {"type": "req", "id": "uuid", "method": "health", "params": {}}
 ```
 
-**Response (server → client):**
+**Response (server -> client):**
 ```json
 {"type": "res", "id": "uuid", "ok": true, "payload": {}}
 {"type": "res", "id": "uuid", "ok": false, "error": {"code": "...", "message": "..."}}
 ```
 
-**Event (server → client):**
+**Event (server -> client):**
 ```json
 {"type": "event", "event": "chat", "seq": 1, "payload": {...}, "stateVersion": {...}}
 ```
@@ -548,6 +568,34 @@ config :lemon_control_plane, capabilities: %{tts: true, wizard: false}
 
 `LemonControlPlane.EventBridge` subscribes to `LemonCore.Bus` topics (`exec_approvals`, `cron`, `system`, `nodes`, `presence`) plus dynamic `run:*` topics. It maps bus event types to WS event names and fans out to all connected clients via a `Task.Supervisor`. Subscribe to run events with `EventBridge.subscribe_run(run_id)`.
 
+Key bus-event-to-WS-event mappings:
+
+| Bus Event Type | WS Event Name |
+|----------------|---------------|
+| `:run_started` | `agent` (type: started) |
+| `:run_completed` | `agent` (type: completed) |
+| `:delta` | `chat` |
+| `:engine_action` | `agent` (type: tool_use) |
+| `:approval_requested` | `exec.approval.requested` |
+| `:approval_resolved` | `exec.approval.resolved` |
+| `:cron_run_started` | `cron` (type: started) |
+| `:cron_run_completed` | `cron` (type: completed) |
+| `:cron_job_created` | `cron.job` (type: created) |
+| `:cron_job_updated` | `cron.job` (type: updated) |
+| `:cron_job_deleted` | `cron.job` (type: deleted) |
+| `:tick` / `:cron_tick` | `tick` |
+| `:presence_changed` | `presence` |
+| `:task_started` | `task.started` |
+| `:task_completed` | `task.completed` |
+| `:task_error` | `task.error` |
+| `:task_timeout` | `task.timeout` |
+| `:task_aborted` | `task.aborted` |
+| `:run_graph_changed` | `run.graph.changed` |
+| `:shutdown` | `shutdown` |
+| `:health_changed` | `health` |
+
+The fanout uses `Task.Supervisor` for resilience. If the supervisor is temporarily unavailable (crash/restart), it falls back to inline dispatch. Telemetry events are emitted on `[:lemon, :control_plane, :event_bridge, :broadcast]` and `[:lemon, :control_plane, :event_bridge, :dropped]`.
+
 ## Common Tasks
 
 ### Run Tests
@@ -570,6 +618,23 @@ mix test --grep "name/0 returns correct method name"
 3. Add schema entry to `LemonControlPlane.Protocol.Schemas` `@schemas` map
 4. Add to `@builtin_methods` in `Registry` (or `@capability_methods` if gated)
 5. Add tests in `test/lemon_control_plane/methods/`
+
+### Add a New REST Endpoint (Games API Pattern)
+
+1. Add the route in `lib/lemon_control_plane/http/router.ex`:
+   ```elixir
+   get "/v1/my/path" do
+     LemonControlPlane.HTTP.MyHandler.call(conn, :my_action)
+   end
+   ```
+2. Create the handler module with action functions that take a `conn` and return via `json/3` or `error/4` helpers.
+3. Use Bearer token authentication via the `authenticate/2` pattern if auth is needed.
+
+### Add a New WebSocket Event
+
+1. Add the bus event type mapping in `EventBridge.map_event_type/3`.
+2. Add the event name to `Protocol.Frames.supported_events/0`.
+3. Optionally add state version tracking in `EventBridge.state_version_key_for/1` if the event affects reconciliation state.
 
 ### Test a Method Directly
 
@@ -611,15 +676,55 @@ LemonControlPlane.EventBridge.subscribe_run("some-run-id")
 - Mock external dependencies; test method logic in isolation
 - Test error cases: missing params, invalid auth, not found scenarios
 - For WebSocket tests, use `test/lemon_control_plane/ws/connection_test.exs` as the reference pattern
+- Method tests typically verify: `name/0` returns the correct string, `scopes/0` returns expected scopes, `handle/2` succeeds with valid params, `handle/2` fails correctly with invalid/missing params
+- The test suite at `test/lemon_control_plane/methods/control_plane_methods_test.exs` covers many methods in a single file using `describe` blocks per method
+
+### Test File Organization
+
+| Test File | Covers |
+|-----------|--------|
+| `methods/control_plane_methods_test.exs` | Broad coverage of many individual method modules |
+| `methods/agent_routing_methods_test.exs` | Agent inbox, directory, targets, endpoints |
+| `methods/agents_files_test.exs` | Agent file management methods |
+| `methods/node_methods_test.exs` | Node management and invocation |
+| `methods/secrets_methods_test.exs` | Secrets CRUD |
+| `methods/skills_methods_test.exs` | Skills status, install, update |
+| `methods/system_methods_test.exs` | System event, presence |
+| `methods/system_reload_test.exs` | System reload scopes |
+| `methods/heartbeat_methods_test.exs` | Heartbeat/wake methods |
+| `methods/sessions_patch_test.exs` | Session patching |
+| `methods/send_test.exs` / `send_idempotency_test.exs` | Channel send with idempotency |
+| `methods/connect_challenge_test.exs` | Token exchange flow |
+| `methods/exec_approvals_test.exs` | Approval policy methods |
+| `methods/cron_methods_test.exs` | Cron management methods |
+| `methods/monitoring_methods_test.exs` | Runs and tasks methods |
+| `methods/introspection_methods_test.exs` | Introspection/snapshot methods |
+| `methods/registry_test.exs` | ETS registry dispatch |
+| `methods/event_type_validation_test.exs` / `event_type_atom_leak_test.exs` | Event type safety |
+| `auth/authorize_test.exs` / `authorize_expiration_test.exs` | Authorization logic |
+| `auth/token_store_persistence_test.exs` | Token storage |
+| `ws/connection_test.exs` | WebSocket connection lifecycle |
+| `protocol/errors_test.exs` / `frames_test.exs` / `schemas_test.exs` | Protocol layer |
+| `presence_test.exs` | Presence tracking |
+| `event_bridge_test.exs` / `event_bridge_tick_test.exs` / `event_bridge_monitoring_test.exs` / `event_bridge_mapping_test.exs` | EventBridge fanout |
+
+## Connections to Other Apps
+
+| Dependency | How Used |
+|------------|----------|
+| `lemon_core` | `LemonCore.Store` (token persistence, idempotency), `LemonCore.Bus` (event pub/sub), `LemonCore.Secrets`, `LemonCore.Event`, `LemonCore.Telemetry` |
+| `lemon_router` | `LemonRouter.submit/1` and `LemonRouter.RunOrchestrator.submit/1` for agent run submission; `LemonRouter.RunRegistry` for active run queries |
+| `lemon_channels` | `LemonChannels.Outbox` for `send` method; channel status queries |
+| `lemon_games` | `LemonGames.Matches.Service` for match CRUD; `LemonGames.Auth` for bearer token validation; `LemonGames.RateLimit` for move rate limiting |
+| `lemon_skills` | Skill status, installation, and binary path queries |
+| `lemon_automation` | `LemonAutomation.CronManager` for cron CRUD; heartbeat management |
+| `coding_agent` | Compile-time only (not started at runtime); `CodingAgent.TaskStore` for task queries |
+| `ai` | AI model listing and configuration |
+| `agent_core` | Agent profile and identity queries |
 
 ## Key Dependencies
 
 - `bandit` - HTTP/WebSocket server
 - `websock_adapter` - WebSocket adapter for Plug
-- `lemon_router` - Submit agent runs (`LemonRouter.submit/1`)
-- `lemon_core` - Store, secrets, event bus, idempotency
-- `lemon_channels` - Channel backends (Outbox for `send` method)
-- `lemon_skills` - Skill management
-- `lemon_automation` - Automation/heartbeat features
-- `coding_agent` - Compile-time only (not started at runtime)
-- `ai` - AI/model integration
+- `plug` - HTTP routing and middleware
+- `jason` - JSON encoding/decoding

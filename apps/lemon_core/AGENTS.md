@@ -52,6 +52,10 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Id` | UUID and unique ID generation |
 | `LemonCore.Dotenv` | `.env` file loader; preserves existing env vars by default |
 | `LemonCore.Logging` | Runtime log-to-file handler setup from `[logging]` config |
+| `LemonCore.GatewayConfig` | Unified gateway config access merging TOML, app env, and per-transport overrides |
+| `LemonCore.Config.TomlPatch` | Textual TOML editing for targeted key upserts without a TOML encoder |
+| `LemonCore.Binding` | Struct mapping transport/chat/topic to project/agent/engine |
+| `LemonCore.BindingResolver` | Resolves bindings for inbound messages |
 | `LemonCore.Browser.LocalServer` | Local browser automation via Node/Playwright (line-delimited JSON protocol) |
 | `LemonCore.Testing` | Test harness builder (`Harness`, `Case`, `Helpers`) for lemon_core tests |
 
@@ -289,6 +293,51 @@ event = LemonCore.Event.new(:run_started, %{engine: "lemon"}, %{run_id: run_id})
 LemonCore.Bus.broadcast("session:" <> session_key, event)
 ```
 
+## Common Modification Patterns
+
+### Adding a New Config Key
+
+1. Add the default value to the appropriate `@default_*` map in `lib/lemon_core/config.ex`
+2. Add parsing in the corresponding `parse_*` function (e.g., `parse_agent/1`, `parse_gateway/1`)
+3. If the key needs an env override, add it to `apply_env_*_overrides/1`
+4. If using the Modular interface, update the relevant sub-module in `lib/lemon_core/config/`
+5. Add validation in `lib/lemon_core/config/validator.ex` if the key has constraints
+6. Update the env var table in AGENTS.md if adding an env override
+7. Add tests in `test/lemon_core/config_test.exs`
+
+### Adding a New Storage Backend
+
+1. Create `lib/lemon_core/store/my_backend.ex` implementing `LemonCore.Store.Backend`
+2. Implement all 5 callbacks: `init/1`, `put/4`, `get/3`, `delete/3`, `list/2`
+3. Add tests in `test/lemon_core/store/my_backend_test.exs`
+4. Configure via `config :lemon_core, LemonCore.Store, backend: MyBackend, backend_opts: [...]`
+
+### Adding a New Bus Topic
+
+1. Document the topic in `LemonCore.Bus` moduledoc
+2. Add a topic helper function if the topic follows a pattern (like `run_topic/1`)
+3. Update the Standard Topics table in AGENTS.md
+
+### Adding a New Secret Provider
+
+1. Secrets are provider-agnostic -- the `provider` field is metadata only
+2. To add a new master key source, extend `LemonCore.Secrets.MasterKey.resolve/1`
+3. To add a new keychain backend, implement the same interface as `LemonCore.Secrets.Keychain`
+
+### Adding a New Onboarding Task
+
+1. Create `lib/mix/tasks/lemon.onboard.<provider>.ex`
+2. The task should handle OAuth flow or token input
+3. Store credentials via `LemonCore.Secrets.set/3`
+4. Update config via `LemonCore.Config.TomlPatch.upsert_string/4`
+5. Add tests in `test/mix/tasks/lemon.onboard.<provider>_test.exs`
+
+### Adding a New Quality Check
+
+1. Create `lib/lemon_core/quality/my_check.ex` with `run/1` returning `{:ok, report} | {:error, report}`
+2. Register in `lib/mix/tasks/lemon.quality.ex` checks list
+3. Add tests in `test/lemon_core/quality/my_check_test.exs`
+
 ## How to Add Quality Checks
 
 Quality checks live in `lib/lemon_core/quality/`. Add new checks to the `mix lemon.quality` task.
@@ -302,21 +351,21 @@ defmodule LemonCore.Quality.MyCheck do
   @spec run(keyword()) :: {:ok, report()} | {:error, report()}
   def run(opts \\ []) do
     root = Keyword.get(opts, :root, File.cwd!())
-    
+
     issues = detect_issues(root)
-    
+
     report = %{
       issue_count: length(issues),
       issues: issues
     }
-    
+
     if issues == [] do
       {:ok, report}
     else
       {:error, report}
     end
   end
-  
+
   defp detect_issues(root) do
     # Return list of %{path: String.t(), code: String.t(), message: String.t()}
     []
@@ -373,18 +422,16 @@ mix lemon.secrets.delete API_KEY
 ### Onboarding Tasks
 
 ```bash
-# Guided provider OAuth setup:
+# Guided provider setup:
 # - runs provider OAuth flow by default (or accepts --token)
 # - stores OAuth credentials in encrypted secrets
 # - writes providers.<provider>.api_key_secret
 # - optionally updates defaults.provider/defaults.model
-mix lemon.onboard.anthropic
 mix lemon.onboard.antigravity
 mix lemon.onboard.codex
 mix lemon.onboard.copilot
 
 # Non-interactive examples
-mix lemon.onboard.anthropic --token <token> --set-default --model claude-sonnet-4-20250514
 mix lemon.onboard.antigravity --token <token> --set-default --model gemini-3-pro-high
 mix lemon.onboard.codex --token <token> --set-default --model gpt-5.2
 mix lemon.onboard.codex --token <token> --config-path /path/to/config.toml
@@ -396,6 +443,8 @@ mix lemon.onboard.copilot --token <token>  # bypass OAuth and store raw token
 mix lemon.onboard.copilot --token <token> --set-default --model gpt-5
 mix lemon.onboard.copilot --token <token> --config-path /path/to/config.toml
 ```
+
+Anthropic provider auth is API-key based; use `mix lemon.secrets.set llm_anthropic_api_key_raw <token>` and set `providers.anthropic.api_key_secret` accordingly.
 
 ### Quality Tasks
 
@@ -486,7 +535,7 @@ key = LemonCore.SessionKey.channel_peer(%{
 ```elixir
 # Simple check/put pattern
 case LemonCore.Idempotency.get("messages", msg_id) do
-  {:ok, result} -> 
+  {:ok, result} ->
     result  # Return cached
   :miss ->
     result = perform_operation()
@@ -621,7 +670,9 @@ count = LemonCore.Dedupe.Ets.cleanup_expired(:my_dedup_table, ttl_ms)
 LemonCore.Httpc.request(:get, {"https://api.example.com/data", []}, [], [])
 ```
 
-## Test Utilities
+## Testing Guidance
+
+### Test Harness
 
 `LemonCore.Testing` provides a test harness for writing isolated tests.
 
@@ -648,6 +699,8 @@ mock_home!(harness)                  # redirect HOME to tmp subdir
 random_master_key()                  # 32-byte base64 key for secrets tests
 ```
 
+### Running Tests
+
 ```bash
 # Run all tests for lemon_core
 mix test apps/lemon_core
@@ -658,6 +711,25 @@ mix test apps/lemon_core/test/lemon_core/config_test.exs
 # Run with coverage
 mix test --cover apps/lemon_core
 ```
+
+### Test Patterns
+
+- **Config tests**: Use `mock_home!/1` to redirect HOME; create TOML files in tmp dirs; run as `async: false` since they modify env vars
+- **Secrets tests**: Use `random_master_key/0` and set `LEMON_SECRETS_MASTER_KEY` env; clear `:secrets_v1` table in setup
+- **Store tests**: Start Store with `Store.start_link([])` in setup; implement custom backends for error testing
+- **Bus tests**: Subscribe in test process, broadcast, assert receive within timeout
+
+## Connections to Other Apps
+
+This is the foundational app. All other umbrella apps depend on it:
+
+- **lemon_router** -- Registers via `RouterBridge.configure/1` at startup; uses `SessionKey`, `Store`, `Bus`, `Config`
+- **lemon_gateway** -- Uses `GatewayConfig`, `Config`, `Bus`, `Store` for gateway lifecycle
+- **lemon_channels** -- Uses `InboundMessage`, `RouterBridge`, `Bus`, `Binding`, `SessionKey`
+- **coding_agent** -- Uses `Config` (provider/model resolution), `Secrets` (API key resolution), `Store`, `Bus`
+- **lemon_automation** -- Uses `Store` (cron jobs), `Bus` (cron events), `Config`
+- **lemon_control_plane** -- Uses `Config.reload`, `Store`, `Secrets`, `ExecApprovals`
+- **ai** -- Uses `Secrets` and `Config.Providers` for API key resolution
 
 ## External Dependencies
 
