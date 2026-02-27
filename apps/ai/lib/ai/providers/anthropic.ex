@@ -400,7 +400,9 @@ defmodule Ai.Providers.Anthropic do
   defp content_size(_), do: 0
 
   defp retry_delay_ms(attempt) when is_integer(attempt) and attempt >= 0 do
-    (@base_retry_delay_ms * :math.pow(2, attempt)) |> trunc()
+    base = (@base_retry_delay_ms * :math.pow(2, attempt)) |> trunc()
+    half = max(div(base, 2), 1)
+    half + :rand.uniform(half)
   end
 
   defp retryable_http_status?(status) when is_integer(status) do

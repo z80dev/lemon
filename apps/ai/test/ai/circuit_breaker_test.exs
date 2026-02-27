@@ -586,6 +586,178 @@ defmodule Ai.CircuitBreakerTest do
     end
   end
 
+  describe "time_until_recovery/1" do
+    test "returns 0 when circuit is closed", %{provider: provider} do
+      start_supervised!({CircuitBreaker, provider: provider})
+
+      assert CircuitBreaker.time_until_recovery(provider) == 0
+    end
+
+    test "returns positive value when circuit is open", %{provider: provider} do
+      start_supervised!(
+        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 5_000}
+      )
+
+      CircuitBreaker.record_failure(provider)
+      Process.sleep(20)
+
+      remaining = CircuitBreaker.time_until_recovery(provider)
+      assert remaining > 0
+      assert remaining <= 5_000
+    end
+
+    test "decreases over time", %{provider: provider} do
+      start_supervised!(
+        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 5_000}
+      )
+
+      CircuitBreaker.record_failure(provider)
+      Process.sleep(20)
+
+      remaining1 = CircuitBreaker.time_until_recovery(provider)
+      Process.sleep(100)
+      remaining2 = CircuitBreaker.time_until_recovery(provider)
+
+      assert remaining2 < remaining1
+    end
+
+    test "returns 0 when circuit is half-open", %{provider: provider} do
+      start_supervised!(
+        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 30}
+      )
+
+      CircuitBreaker.record_failure(provider)
+      Process.sleep(50)
+
+      {:ok, state} = CircuitBreaker.get_state(provider)
+      assert state.circuit_state == :half_open
+
+      assert CircuitBreaker.time_until_recovery(provider) == 0
+    end
+  end
+
+  describe "telemetry events" do
+    test "emits :opened event when circuit opens", %{provider: provider} do
+      start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 2})
+
+      ref = make_ref()
+      parent = self()
+
+      :telemetry.attach(
+        "test-opened-#{inspect(ref)}",
+        [:ai, :circuit_breaker, :opened],
+        fn _event, _measurements, metadata, _config ->
+          send(parent, {:telemetry_opened, metadata})
+        end,
+        nil
+      )
+
+      CircuitBreaker.record_failure(provider)
+      CircuitBreaker.record_failure(provider)
+
+      assert_receive {:telemetry_opened, metadata}, 1000
+      assert metadata.provider == provider
+      assert metadata.failure_count == 2
+      assert metadata.failure_threshold == 2
+
+      :telemetry.detach("test-opened-#{inspect(ref)}")
+    end
+
+    test "emits :half_opened event when transitioning to half-open", %{provider: provider} do
+      start_supervised!(
+        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 30}
+      )
+
+      ref = make_ref()
+      parent = self()
+
+      :telemetry.attach(
+        "test-half-opened-#{inspect(ref)}",
+        [:ai, :circuit_breaker, :half_opened],
+        fn _event, _measurements, metadata, _config ->
+          send(parent, {:telemetry_half_opened, metadata})
+        end,
+        nil
+      )
+
+      CircuitBreaker.record_failure(provider)
+      Process.sleep(50)
+
+      # Trigger the transition by querying state
+      {:ok, state} = CircuitBreaker.get_state(provider)
+      assert state.circuit_state == :half_open
+
+      assert_receive {:telemetry_half_opened, metadata}, 1000
+      assert metadata.provider == provider
+      assert metadata.recovery_timeout == 30
+
+      :telemetry.detach("test-half-opened-#{inspect(ref)}")
+    end
+
+    test "emits :closed event when circuit closes after recovery", %{provider: provider} do
+      start_supervised!(
+        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 30}
+      )
+
+      ref = make_ref()
+      parent = self()
+
+      :telemetry.attach(
+        "test-closed-#{inspect(ref)}",
+        [:ai, :circuit_breaker, :closed],
+        fn _event, _measurements, metadata, _config ->
+          send(parent, {:telemetry_closed, metadata})
+        end,
+        nil
+      )
+
+      # Open -> half-open
+      CircuitBreaker.record_failure(provider)
+      Process.sleep(50)
+      {:ok, _} = CircuitBreaker.get_state(provider)
+
+      # Close via 2 successes
+      CircuitBreaker.record_success(provider)
+      CircuitBreaker.record_success(provider)
+
+      assert_receive {:telemetry_closed, metadata}, 1000
+      assert metadata.provider == provider
+
+      :telemetry.detach("test-closed-#{inspect(ref)}")
+    end
+
+    test "emits :reopened event when half-open circuit reopens", %{provider: provider} do
+      start_supervised!(
+        {CircuitBreaker, provider: provider, failure_threshold: 1, recovery_timeout: 30}
+      )
+
+      ref = make_ref()
+      parent = self()
+
+      :telemetry.attach(
+        "test-reopened-#{inspect(ref)}",
+        [:ai, :circuit_breaker, :reopened],
+        fn _event, _measurements, metadata, _config ->
+          send(parent, {:telemetry_reopened, metadata})
+        end,
+        nil
+      )
+
+      # Open -> half-open
+      CircuitBreaker.record_failure(provider)
+      Process.sleep(50)
+      {:ok, _} = CircuitBreaker.get_state(provider)
+
+      # Failure in half-open reopens
+      CircuitBreaker.record_failure(provider)
+
+      assert_receive {:telemetry_reopened, metadata}, 1000
+      assert metadata.provider == provider
+
+      :telemetry.detach("test-reopened-#{inspect(ref)}")
+    end
+  end
+
   describe "edge cases" do
     test "success in open state is ignored", %{provider: provider} do
       start_supervised!(

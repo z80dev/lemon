@@ -141,6 +141,19 @@ defmodule Ai.CircuitBreaker do
   end
 
   @doc """
+  Returns milliseconds until the circuit breaker transitions to half-open.
+
+  Returns `0` when the circuit is closed or already half-open.
+  """
+  @spec time_until_recovery(provider()) :: non_neg_integer()
+  def time_until_recovery(provider) do
+    _ = ensure_started(provider)
+    GenServer.call(via_tuple(provider), :time_until_recovery)
+  catch
+    :exit, {:noproc, _} -> 0
+  end
+
+  @doc """
   Get current circuit state for debugging/monitoring.
   """
   @spec get_state(provider()) :: {:ok, map()} | {:error, :not_found}
@@ -197,6 +210,18 @@ defmodule Ai.CircuitBreaker do
   end
 
   @impl true
+  def handle_call(:time_until_recovery, _from, %{circuit_state: :open} = state) do
+    now = System.monotonic_time(:millisecond)
+    elapsed = now - (state.last_failure_time || now)
+    remaining = max(0, state.recovery_timeout - elapsed)
+    {:reply, remaining, state}
+  end
+
+  def handle_call(:time_until_recovery, _from, state) do
+    {:reply, 0, state}
+  end
+
+  @impl true
   def handle_call(:get_state, _from, state) do
     state = maybe_transition_to_half_open(state)
 
@@ -226,6 +251,13 @@ defmodule Ai.CircuitBreaker do
 
           if new_count >= @half_open_success_threshold do
             Logger.info("CircuitBreaker for #{state.provider} closed after recovery")
+
+            LemonCore.Telemetry.emit(
+              [:ai, :circuit_breaker, :closed],
+              %{system_time: System.system_time()},
+              %{provider: state.provider}
+            )
+
             %{state | circuit_state: :closed, failure_count: 0, success_count_in_half_open: 0}
           else
             %{state | success_count_in_half_open: new_count}
@@ -253,6 +285,16 @@ defmodule Ai.CircuitBreaker do
               "CircuitBreaker for #{state.provider} opened after #{new_count} failures"
             )
 
+            LemonCore.Telemetry.emit(
+              [:ai, :circuit_breaker, :opened],
+              %{system_time: System.system_time()},
+              %{
+                provider: state.provider,
+                failure_count: new_count,
+                failure_threshold: state.failure_threshold
+              }
+            )
+
             %{
               state
               | circuit_state: :open,
@@ -266,6 +308,12 @@ defmodule Ai.CircuitBreaker do
         :half_open ->
           # Any failure in half-open reopens the circuit
           Logger.warning("CircuitBreaker for #{state.provider} reopened (failure in half-open)")
+
+          LemonCore.Telemetry.emit(
+            [:ai, :circuit_breaker, :reopened],
+            %{system_time: System.system_time()},
+            %{provider: state.provider}
+          )
 
           %{
             state
@@ -307,6 +355,13 @@ defmodule Ai.CircuitBreaker do
 
     if elapsed >= state.recovery_timeout do
       Logger.info("CircuitBreaker for #{state.provider} entering half-open state")
+
+      LemonCore.Telemetry.emit(
+        [:ai, :circuit_breaker, :half_opened],
+        %{system_time: System.system_time()},
+        %{provider: state.provider, recovery_timeout: state.recovery_timeout}
+      )
+
       %{state | circuit_state: :half_open, success_count_in_half_open: 0}
     else
       state

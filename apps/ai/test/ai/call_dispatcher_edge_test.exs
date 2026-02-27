@@ -75,6 +75,8 @@ defmodule Ai.CallDispatcherEdgeTest do
       assert is_integer(measurements.system_time)
       assert metadata.provider == provider
       assert metadata.reason == :circuit_open
+      assert is_integer(metadata.retry_after_ms)
+      assert metadata.retry_after_ms >= 0
 
       :telemetry.detach("test-rejected-circuit-#{inspect(ref)}")
     end

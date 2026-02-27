@@ -361,7 +361,7 @@ defmodule Ai.Providers.OpenAICodexResponses do
         error_text = normalize_error_body(error_body)
 
         if retryable_error?(status, error_text) do
-          delay = (@base_delay_ms * :math.pow(2, @max_retries - retries_left)) |> round()
+          delay = retry_delay_with_jitter(@base_delay_ms, @max_retries - retries_left)
           Process.sleep(delay)
           stream_with_retries(body, headers, retries_left - 1)
         else
@@ -376,7 +376,7 @@ defmodule Ai.Providers.OpenAICodexResponses do
         error_msg = inspect(reason)
 
         if not String.contains?(error_msg, "usage limit") do
-          delay = (@base_delay_ms * :math.pow(2, @max_retries - retries_left)) |> round()
+          delay = retry_delay_with_jitter(@base_delay_ms, @max_retries - retries_left)
           Process.sleep(delay)
           stream_with_retries(body, headers, retries_left - 1)
         else
@@ -386,6 +386,12 @@ defmodule Ai.Providers.OpenAICodexResponses do
       {:error, reason} ->
         {:error, "Request failed: #{inspect(reason)}"}
     end
+  end
+
+  defp retry_delay_with_jitter(base_ms, attempt) do
+    base = (base_ms * :math.pow(2, attempt)) |> trunc()
+    half = max(div(base, 2), 1)
+    half + :rand.uniform(half)
   end
 
   defp retryable_error?(status, error_text) do

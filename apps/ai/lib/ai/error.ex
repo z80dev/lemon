@@ -141,7 +141,7 @@ defmodule Ai.Error do
   def retryable?(:closed), do: true
   def retryable?(:econnrefused), do: true
   def retryable?(:econnreset), do: true
-  def retryable?(:circuit_open), do: false
+  def retryable?(:circuit_open), do: true
   def retryable?(:max_concurrency), do: true
   def retryable?({:unknown_api, _}), do: false
 
@@ -173,6 +173,7 @@ defmodule Ai.Error do
   def suggested_retry_delay(:rate_limited), do: 60_000
   def suggested_retry_delay(:timeout), do: 5_000
   def suggested_retry_delay(:econnrefused), do: 10_000
+  def suggested_retry_delay(:circuit_open), do: 30_000
   def suggested_retry_delay(_), do: nil
 
   @doc """

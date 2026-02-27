@@ -89,11 +89,12 @@ defmodule Ai.CallDispatcher do
     # Check circuit breaker first (fast fail)
     if Ai.CircuitBreaker.is_open?(provider) do
       duration = System.monotonic_time() - start_time
+      retry_after_ms = Ai.CircuitBreaker.time_until_recovery(provider)
 
       LemonCore.Telemetry.emit(
         [:ai, :dispatcher, :rejected],
         %{duration: duration, system_time: System.system_time()},
-        %{provider: provider, reason: :circuit_open}
+        %{provider: provider, reason: :circuit_open, retry_after_ms: retry_after_ms}
       )
 
       {:error, :circuit_open}

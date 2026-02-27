@@ -425,7 +425,7 @@ defmodule Ai.Providers.GoogleGeminiCli do
         if attempt < @max_retries and GoogleShared.retryable_error?(status, error_text) do
           delay =
             case GoogleShared.extract_retry_delay(error_text) do
-              nil -> (@base_delay_ms * :math.pow(2, attempt)) |> trunc()
+              nil -> retry_delay_with_jitter(@base_delay_ms, attempt)
               ms -> ms
             end
 
@@ -438,7 +438,7 @@ defmodule Ai.Providers.GoogleGeminiCli do
 
       {:error, %Req.TransportError{reason: reason}} ->
         if attempt < @max_retries do
-          delay = (@base_delay_ms * :math.pow(2, attempt)) |> trunc()
+          delay = retry_delay_with_jitter(@base_delay_ms, attempt)
           Process.sleep(delay)
           make_request_with_retry(endpoints, headers, body, opts, attempt + 1)
         else
@@ -447,7 +447,7 @@ defmodule Ai.Providers.GoogleGeminiCli do
 
       {:error, reason} ->
         if attempt < @max_retries do
-          delay = (@base_delay_ms * :math.pow(2, attempt)) |> trunc()
+          delay = retry_delay_with_jitter(@base_delay_ms, attempt)
           Process.sleep(delay)
           make_request_with_retry(endpoints, headers, body, opts, attempt + 1)
         else
@@ -504,7 +504,7 @@ defmodule Ai.Providers.GoogleGeminiCli do
 
     if not final_state.has_content and empty_attempt < @max_empty_stream_retries do
       # Retry on empty response
-      delay = (@empty_stream_base_delay_ms * :math.pow(2, empty_attempt)) |> trunc()
+      delay = retry_delay_with_jitter(@empty_stream_base_delay_ms, empty_attempt)
       Process.sleep(delay)
 
       headers_list = Enum.map(headers, fn {k, v} -> {k, v} end)
@@ -860,6 +860,12 @@ defmodule Ai.Providers.GoogleGeminiCli do
       type: :worker,
       restart: :transient
     }
+  end
+
+  defp retry_delay_with_jitter(base_ms, attempt) do
+    base = (base_ms * :math.pow(2, attempt)) |> trunc()
+    half = max(div(base, 2), 1)
+    half + :rand.uniform(half)
   end
 
   @doc "Register this provider with the registry"

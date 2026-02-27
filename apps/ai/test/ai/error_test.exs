@@ -193,8 +193,8 @@ defmodule Ai.ErrorTest do
       assert Error.retryable?(:econnreset)
     end
 
-    test "circuit_open is not retryable" do
-      refute Error.retryable?(:circuit_open)
+    test "circuit_open is retryable" do
+      assert Error.retryable?(:circuit_open)
     end
 
     test "max_concurrency is retryable" do
@@ -247,9 +247,12 @@ defmodule Ai.ErrorTest do
       assert Error.suggested_retry_delay(:econnrefused) == 10_000
     end
 
+    test "suggests 30 seconds for circuit_open" do
+      assert Error.suggested_retry_delay(:circuit_open) == 30_000
+    end
+
     test "returns nil for non-retryable errors" do
       assert Error.suggested_retry_delay({:http_error, 400, "bad request"}) == nil
-      assert Error.suggested_retry_delay(:circuit_open) == nil
     end
   end
 end
