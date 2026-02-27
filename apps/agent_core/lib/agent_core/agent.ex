@@ -51,6 +51,7 @@ defmodule AgentCore.Agent do
   alias LemonCore.Introspection
 
   @follow_up_poll_timeout_ms 50
+  @default_queue_call_timeout_ms :timer.minutes(30)
 
   # ============================================================================
   # Types
@@ -90,6 +91,7 @@ defmodule AgentCore.Agent do
           get_api_key: get_api_key_fn() | nil,
           thinking_budgets: map(),
           stream_options: StreamOptions.t(),
+          queue_call_timeout: timeout(),
           waiters: list(waiter())
         }
 
@@ -104,6 +106,7 @@ defmodule AgentCore.Agent do
           get_api_key: get_api_key_fn(),
           thinking_budgets: map(),
           stream_options: StreamOptions.t(),
+          queue_call_timeout: timeout(),
           name: GenServer.name()
         ]
 
@@ -126,6 +129,7 @@ defmodule AgentCore.Agent do
   - `:get_api_key` - Function to dynamically resolve API keys
   - `:thinking_budgets` - Map of thinking level budgets for token-based providers
   - `:stream_options` - StreamOptions for provider requests (temperature, max_tokens, etc.)
+  - `:queue_call_timeout` - Timeout for loop queue polling GenServer calls (`:infinity` or ms, default: 30 minutes)
   - `:name` - Optional GenServer name
 
   ## Examples
@@ -476,6 +480,7 @@ defmodule AgentCore.Agent do
     transform_context = Keyword.get(opts, :transform_context)
     stream_fn = Keyword.get(opts, :stream_fn)
     stream_options = Keyword.get(opts, :stream_options, %StreamOptions{})
+    queue_call_timeout = resolve_queue_call_timeout(opts)
 
     state = %{
       agent_state: agent_state,
@@ -494,6 +499,7 @@ defmodule AgentCore.Agent do
       get_api_key: Keyword.get(opts, :get_api_key),
       thinking_budgets: Keyword.get(opts, :thinking_budgets, %{}),
       stream_options: stream_options,
+      queue_call_timeout: queue_call_timeout,
       waiters: []
     }
 
@@ -880,12 +886,14 @@ defmodule AgentCore.Agent do
         _ -> ""
       end
 
-    Introspection.record(:agent_loop_started, %{
-      model: model_id,
-      tool_count: length(new_agent_state.tools),
-      message_count: length(new_agent_state.messages),
-      is_continue: messages == nil
-    },
+    Introspection.record(
+      :agent_loop_started,
+      %{
+        model: model_id,
+        tool_count: length(new_agent_state.tools),
+        message_count: length(new_agent_state.messages),
+        is_continue: messages == nil
+      },
       session_key: state.session_id,
       provenance: :direct
     )
@@ -908,6 +916,7 @@ defmodule AgentCore.Agent do
   defp build_loop_config(state, abort_ref, agent_pid) do
     reasoning = reasoning_from_thinking_level(state.agent_state.thinking_level)
     stream_options = build_stream_options(state, reasoning)
+    queue_call_timeout = state.queue_call_timeout
 
     %AgentLoopConfig{
       model: state.agent_state.model,
@@ -915,14 +924,34 @@ defmodule AgentCore.Agent do
       transform_context: state.transform_context,
       get_api_key: state.get_api_key,
       get_steering_messages: fn ->
-        GenServer.call(agent_pid, {:get_steering_messages, abort_ref})
+        GenServer.call(agent_pid, {:get_steering_messages, abort_ref}, queue_call_timeout)
       end,
       get_follow_up_messages: fn ->
-        GenServer.call(agent_pid, {:get_follow_up_messages, abort_ref})
+        GenServer.call(agent_pid, {:get_follow_up_messages, abort_ref}, queue_call_timeout)
       end,
       stream_options: stream_options,
       stream_fn: state.stream_fn
     }
+  end
+
+  defp resolve_queue_call_timeout(opts) do
+    opts
+    |> Keyword.get(
+      :queue_call_timeout,
+      Application.get_env(:agent_core, :queue_call_timeout_ms, @default_queue_call_timeout_ms)
+    )
+    |> normalize_queue_call_timeout()
+  end
+
+  defp normalize_queue_call_timeout(:infinity), do: :infinity
+  defp normalize_queue_call_timeout(timeout) when is_integer(timeout) and timeout > 0, do: timeout
+
+  defp normalize_queue_call_timeout(timeout) do
+    Logger.warning(
+      "Invalid AgentCore.Agent queue_call_timeout=#{inspect(timeout)}; defaulting to #{@default_queue_call_timeout_ms}ms"
+    )
+
+    @default_queue_call_timeout_ms
   end
 
   defp reasoning_from_thinking_level(:off), do: nil
@@ -1077,9 +1106,11 @@ defmodule AgentCore.Agent do
 
   defp handle_agent_event({:turn_end, message, _tool_results}, state) do
     # Emit introspection event for turn observation
-    Introspection.record(:agent_turn_observed, %{
-      has_error: match?(%{error_message: err} when is_binary(err) and err != "", message)
-    },
+    Introspection.record(
+      :agent_turn_observed,
+      %{
+        has_error: match?(%{error_message: err} when is_binary(err) and err != "", message)
+      },
       session_key: state.session_id,
       provenance: :inferred
     )
@@ -1127,11 +1158,13 @@ defmodule AgentCore.Agent do
     AbortSignal.clear(abort_ref)
 
     # Emit introspection event for loop end
-    Introspection.record(:agent_loop_ended, %{
-      message_count: length(state.agent_state.messages),
-      had_error: state.agent_state.error != nil,
-      was_aborted: match?({:aborted, _}, state.abort_ref)
-    },
+    Introspection.record(
+      :agent_loop_ended,
+      %{
+        message_count: length(state.agent_state.messages),
+        had_error: state.agent_state.error != nil,
+        was_aborted: match?({:aborted, _}, state.abort_ref)
+      },
       session_key: state.session_id,
       provenance: :direct
     )

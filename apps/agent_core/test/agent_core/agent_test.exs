@@ -1,5 +1,6 @@
 defmodule AgentCore.AgentTest do
   use ExUnit.Case, async: true
+  import ExUnit.CaptureLog
 
   alias AgentCore.Agent
   alias AgentCore.Types.AgentState
@@ -95,6 +96,31 @@ defmodule AgentCore.AgentTest do
       {:ok, agent} = start_agent(session_id: "session-abc-123")
 
       assert Agent.get_session_id(agent) == "session-abc-123"
+    end
+
+    test "starts with raised default queue_call_timeout" do
+      {:ok, agent} = start_agent()
+      state = :sys.get_state(agent)
+
+      assert state.queue_call_timeout == :timer.minutes(30)
+    end
+
+    test "starts with custom queue_call_timeout" do
+      {:ok, agent} = start_agent(queue_call_timeout: 600_000)
+      state = :sys.get_state(agent)
+
+      assert state.queue_call_timeout == 600_000
+    end
+
+    test "falls back to default queue_call_timeout for invalid values" do
+      log =
+        capture_log(fn ->
+          {:ok, agent} = start_agent(queue_call_timeout: 0)
+          state = :sys.get_state(agent)
+          assert state.queue_call_timeout == :timer.minutes(30)
+        end)
+
+      assert log =~ "Invalid AgentCore.Agent queue_call_timeout=0"
     end
   end
 
