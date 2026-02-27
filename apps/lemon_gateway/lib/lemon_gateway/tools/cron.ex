@@ -428,9 +428,18 @@ defmodule LemonGateway.Tools.Cron do
   end
 
   defp resolve_session_key(source, session_key, agent_id) do
-    normalize_string(fetch_param(source, "sessionKey") || fetch_param(source, "session_key")) ||
-      session_key ||
-      LemonCore.SessionKey.main(agent_id)
+    # Prefer the opts session_key (from the current running session) over the
+    # AI-provided one. The running session key always carries the correct
+    # channel/thread routing info, while an AI-supplied sessionKey may omit
+    # the thread_id component, causing cron runs to route output to the wrong
+    # Telegram chat/topic.
+    explicit = normalize_string(fetch_param(source, "sessionKey") || fetch_param(source, "session_key"))
+
+    cond do
+      is_binary(session_key) -> session_key
+      is_binary(explicit) -> explicit
+      true -> LemonCore.SessionKey.main(agent_id)
+    end
   end
 
   defp default_name(prompt) do

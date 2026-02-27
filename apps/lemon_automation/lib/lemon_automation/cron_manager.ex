@@ -51,6 +51,7 @@ defmodule LemonAutomation.CronManager do
   require Logger
 
   @tick_interval_ms 60_000
+  @call_timeout_ms 10_000
   @task_supervisor LemonAutomation.TaskSupervisor
   @forwarded_summary_max_bytes 12_000
 
@@ -70,7 +71,7 @@ defmodule LemonAutomation.CronManager do
   """
   @spec list() :: [CronJob.t()]
   def list do
-    GenServer.call(__MODULE__, :list)
+    GenServer.call(__MODULE__, :list, @call_timeout_ms)
   end
 
   @doc """
@@ -94,15 +95,16 @@ defmodule LemonAutomation.CronManager do
   """
   @spec add(map()) :: {:ok, CronJob.t()} | {:error, term()}
   def add(params) do
-    GenServer.call(__MODULE__, {:add, params})
+    GenServer.call(__MODULE__, {:add, params}, @call_timeout_ms)
   end
 
   @doc """
   Update an existing cron job.
   """
-  @spec update(binary(), map()) :: {:ok, CronJob.t()} | {:error, :not_found}
+  @spec update(binary(), map()) ::
+          {:ok, CronJob.t()} | {:error, :not_found} | {:error, {:immutable_fields, [atom()]}}
   def update(job_id, params) do
-    GenServer.call(__MODULE__, {:update, job_id, params})
+    GenServer.call(__MODULE__, {:update, job_id, params}, @call_timeout_ms)
   end
 
   @doc """
@@ -110,7 +112,7 @@ defmodule LemonAutomation.CronManager do
   """
   @spec remove(binary()) :: :ok | {:error, :not_found}
   def remove(job_id) do
-    GenServer.call(__MODULE__, {:remove, job_id})
+    GenServer.call(__MODULE__, {:remove, job_id}, @call_timeout_ms)
   end
 
   @doc """
@@ -118,7 +120,7 @@ defmodule LemonAutomation.CronManager do
   """
   @spec run_now(binary()) :: {:ok, CronRun.t()} | {:error, :not_found}
   def run_now(job_id) do
-    GenServer.call(__MODULE__, {:run_now, job_id})
+    GenServer.call(__MODULE__, {:run_now, job_id}, @call_timeout_ms)
   end
 
   @doc """
@@ -132,7 +134,7 @@ defmodule LemonAutomation.CronManager do
   """
   @spec runs(binary(), keyword()) :: [CronRun.t()]
   def runs(job_id, opts \\ []) do
-    GenServer.call(__MODULE__, {:runs, job_id, opts})
+    GenServer.call(__MODULE__, {:runs, job_id, opts}, @call_timeout_ms)
   end
 
   @doc """
@@ -203,22 +205,28 @@ defmodule LemonAutomation.CronManager do
   def handle_call({:update, job_id, params}, _from, state) do
     case Map.fetch(state.jobs, job_id) do
       {:ok, job} ->
-        updated = CronJob.update(job, params)
+        case immutable_patch_fields(params) do
+          [] ->
+            updated = CronJob.update(job, params)
 
-        # Recompute next run if schedule changed
-        updated =
-          if params[:schedule] || params["schedule"] do
-            next_run = CronSchedule.next_run_ms(updated.schedule, updated.timezone)
-            CronJob.set_next_run(updated, next_run)
-          else
-            updated
-          end
+            # Recompute next run if schedule changed
+            updated =
+              if params[:schedule] || params["schedule"] do
+                next_run = CronSchedule.next_run_ms(updated.schedule, updated.timezone)
+                CronJob.set_next_run(updated, next_run)
+              else
+                updated
+              end
 
-        CronStore.put_job(updated)
-        Events.emit_job_updated(updated)
+            CronStore.put_job(updated)
+            Events.emit_job_updated(updated)
 
-        Logger.info("[CronManager] Updated job: #{job_id}")
-        {:reply, {:ok, updated}, put_in(state.jobs[job_id], updated)}
+            Logger.info("[CronManager] Updated job: #{job_id}")
+            {:reply, {:ok, updated}, put_in(state.jobs[job_id], updated)}
+
+          fields ->
+            {:reply, {:error, {:immutable_fields, fields}}, state}
+        end
 
       :error ->
         {:reply, {:error, :not_found}, state}
@@ -426,6 +434,26 @@ defmodule LemonAutomation.CronManager do
     end
   end
 
+  defp immutable_patch_fields(params) when is_map(params) do
+    []
+    |> maybe_add_immutable(:agent_id, [:agent_id, "agent_id", :agentId, "agentId"], params)
+    |> maybe_add_immutable(
+      :session_key,
+      [:session_key, "session_key", :sessionKey, "sessionKey"],
+      params
+    )
+  end
+
+  defp immutable_patch_fields(_), do: []
+
+  defp maybe_add_immutable(fields, field, keys, params) do
+    if Enum.any?(keys, &Map.has_key?(params, &1)) do
+      fields ++ [field]
+    else
+      fields
+    end
+  end
+
   # If removing a heartbeat job, also clear the heartbeat config
   # to prevent it from being recreated on restart
   defp maybe_clear_heartbeat_config(%CronJob{} = job) do
@@ -509,6 +537,12 @@ defmodule LemonAutomation.CronManager do
         )
 
       Bus.broadcast(Bus.session_topic(base_session_key), event)
+
+      # For channel_peer sessions (e.g. Telegram topics), also deliver the
+      # forwarded answer directly to the channel.  The Bus broadcast above is
+      # only received by processes currently subscribed to the session topic,
+      # which is typically empty at cron execution time.
+      maybe_deliver_summary_to_channel(base_session_key, forwarded_answer, run)
     else
       _ -> :ok
     end
@@ -519,18 +553,82 @@ defmodule LemonAutomation.CronManager do
   end
 
   defp main_session_from_run(%CronRun{} = run) do
+    base_session_from_run(run)
+  end
+
+  defp base_session_from_run(%CronRun{} = run) do
     session_key = meta_value(run.meta, :session_key)
 
     if is_binary(session_key) do
       case SessionKey.parse(session_key) do
-        %{kind: :main} -> {:ok, session_key}
-        _ -> :skip
+        %{kind: :main} ->
+          {:ok, session_key}
+
+        %{kind: :channel_peer} = parsed ->
+          base =
+            SessionKey.channel_peer(%{
+              agent_id: parsed.agent_id,
+              channel_id: parsed.channel_id,
+              account_id: parsed.account_id,
+              peer_kind: parsed.peer_kind,
+              peer_id: parsed.peer_id,
+              thread_id: parsed.thread_id
+            })
+
+          {:ok, base}
+
+        _ ->
+          :skip
       end
     else
       :skip
     end
   rescue
     _ -> :skip
+  end
+
+  defp maybe_deliver_summary_to_channel(session_key, text, %CronRun{} = run) do
+    case SessionKey.parse(session_key) do
+      %{kind: :channel_peer} = parsed ->
+        payload_mod = Module.concat(LemonChannels, OutboundPayload)
+        delivery_mod = Module.concat(LemonRouter, ChannelsDelivery)
+
+        if Code.ensure_loaded?(payload_mod) and Code.ensure_loaded?(delivery_mod) and
+             function_exported?(delivery_mod, :enqueue, 2) do
+          payload =
+            struct!(payload_mod,
+              channel_id: parsed.channel_id,
+              account_id: parsed.account_id || "default",
+              peer: %{
+                kind: parsed.peer_kind,
+                id: parsed.peer_id,
+                thread_id: parsed.thread_id
+              },
+              kind: :text,
+              content: text,
+              idempotency_key: "cron_notify_#{run.id}",
+              meta: %{
+                origin: :cron,
+                cron_forwarded_summary: true,
+                cron_run_id: run.id,
+                cron_job_id: run.job_id
+              }
+            )
+
+          case delivery_mod.enqueue(payload,
+                 context: %{component: :cron_manager, phase: :forwarded_summary}
+               ) do
+            {:ok, _ref} -> :ok
+            {:error, reason} ->
+              Logger.warning("[CronManager] Failed to enqueue forwarded summary: #{inspect(reason)}")
+          end
+        end
+
+      _ ->
+        :ok
+    end
+  rescue
+    _ -> :ok
   end
 
   defp build_forwarded_answer(%CronRun{} = run) do

@@ -65,7 +65,7 @@ defmodule LemonAutomation.CronManagerForwardingTest do
     assert forwarded_completed[:answer] =~ "RUN SUMMARY"
   end
 
-  test "does not forward into non-main sessions", %{token: token} do
+  test "forwards completed cron summary into originating channel_peer session", %{token: token} do
     channel_session_key =
       "agent:cron_forward_#{token}:telegram:default:group:-100#{abs(token)}:thread:#{abs(token)}"
 
@@ -80,19 +80,45 @@ defmodule LemonAutomation.CronManagerForwardingTest do
       Bus.unsubscribe(topic)
     end)
 
-    send(CronManager, {:run_complete, run.id, {:ok, "RUN SUMMARY\n- should not forward"}})
+    send(CronManager, {:run_complete, run.id, {:ok, "RUN SUMMARY\n- shipped from topic"}})
 
-    refute_receive %Event{
+    assert_receive %Event{
                      type: :run_completed,
-                     meta: %{cron_forwarded_summary: true}
+                     payload: %{completed: %{ok: true, answer: answer}},
+                     meta: meta
                    },
-                   500
+                   2_000
+
+    assert is_binary(answer)
+    assert answer =~ "RUN SUMMARY"
+    assert answer =~ "cron_run_id: #{run.id}"
+    assert meta[:session_key] == channel_session_key
+    assert meta[:cron_forwarded_summary] == true
+    assert meta[:cron_run_id] == run.id
 
     assert await(fn ->
              match?(%CronRun{status: :completed}, CronStore.get_run(run.id))
            end)
 
-    assert Store.get_run_history(channel_session_key, limit: 5) == []
+    {forwarded_run_id, forwarded_data} =
+      await_value(fn ->
+        Store.get_run_history(channel_session_key, limit: 20)
+        |> Enum.find(fn {run_id, data} ->
+          summary = data[:summary] || %{}
+          summary_meta = summary[:meta] || %{}
+
+          String.starts_with?(to_string(run_id), "cron_notify_") and
+            summary_meta[:cron_forwarded_summary] == true
+        end)
+      end)
+
+    assert forwarded_run_id == "cron_notify_" <> run.id
+    forwarded_summary = forwarded_data[:summary] || %{}
+    forwarded_completed = forwarded_summary[:completed] || %{}
+    assert forwarded_summary[:session_key] == channel_session_key
+    assert forwarded_completed[:ok] == true
+    assert is_binary(forwarded_completed[:answer])
+    assert forwarded_completed[:answer] =~ "RUN SUMMARY"
   end
 
   defp build_running_run(token, suffix, session_key) do
