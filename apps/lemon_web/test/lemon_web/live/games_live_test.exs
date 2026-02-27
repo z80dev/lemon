@@ -25,6 +25,7 @@ defmodule LemonWeb.Live.GamesLiveTest do
 
     assert html =~ "Live Lobby"
     assert html =~ match["id"]
+    assert html =~ "Web Tester vs Lemon Bot"
   end
 
   test "match page renders not found state" do
@@ -48,5 +49,8 @@ defmodule LemonWeb.Live.GamesLiveTest do
     assert html =~ "Game State"
     assert html =~ "Connect4"
     assert html =~ match["id"]
+    assert html =~ "Players"
+    assert html =~ "Lemon Bot"
+    assert html =~ "Move History"
   end
 end

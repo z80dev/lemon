@@ -45,10 +45,16 @@ defmodule LemonWeb.GamesLobbyLive do
             <ul class="divide-y divide-slate-200">
               <%= for match <- @matches do %>
                 <li class="flex items-center justify-between gap-3 px-4 py-3 sm:px-6">
-                  <div>
+                  <div class="min-w-0">
                     <p class="text-sm font-semibold text-slate-900">{label_game(match["game_type"])}</p>
                     <p class="text-xs text-slate-600">
                       <code class="rounded bg-slate-100 px-1 py-0.5">{match["id"]}</code>
+                    </p>
+                    <p class="mt-1 truncate text-xs text-slate-600">
+                      {player_name(match, "p1")} vs {player_name(match, "p2")}
+                    </p>
+                    <p :if={match["status"] == "active"} class="mt-1 text-xs text-emerald-700">
+                      Turn {match["turn_number"]} · Up next: {player_name(match, match["next_player"])}
                     </p>
                   </div>
 
@@ -74,6 +80,16 @@ defmodule LemonWeb.GamesLobbyLive do
   defp label_game("connect4"), do: "Connect4"
   defp label_game("rock_paper_scissors"), do: "Rock Paper Scissors"
   defp label_game(other), do: other
+
+  defp player_name(match, slot) when is_binary(slot) do
+    get_in(match, ["players", slot, "display_name"]) || fallback_slot_name(slot)
+  end
+
+  defp player_name(_match, _slot), do: "Waiting"
+
+  defp fallback_slot_name("p1"), do: "Player 1"
+  defp fallback_slot_name("p2"), do: "Waiting"
+  defp fallback_slot_name(_), do: "Waiting"
 
   defp status_class(status) do
     base = "rounded-full px-2.5 py-1 text-xs font-medium "

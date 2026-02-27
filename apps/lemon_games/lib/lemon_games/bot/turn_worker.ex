@@ -22,7 +22,7 @@ defmodule LemonGames.Bot.TurnWorker do
     game_type = match["game_type"]
     state = match["snapshot_state"]
 
-    move = choose_move(game_type, state, slot)
+    move = choose_move_for(game_type, state, slot)
     idem_key = "bot_#{match["id"]}_#{match["turn_number"]}_#{slot}"
 
     case Service.submit_move(match["id"], actor, move, idem_key) do
@@ -42,15 +42,16 @@ defmodule LemonGames.Bot.TurnWorker do
     end
   end
 
-  defp choose_move("rock_paper_scissors", state, slot) do
+  @spec choose_move_for(String.t(), map(), String.t()) :: map()
+  def choose_move_for("rock_paper_scissors", state, slot) do
     LemonGames.Bot.RockPaperScissorsBot.choose_move(state, slot)
   end
 
-  defp choose_move("connect4", state, slot) do
+  def choose_move_for("connect4", state, slot) do
     LemonGames.Bot.Connect4Bot.choose_move(state, slot)
   end
 
-  defp choose_move(_game_type, _state, _slot) do
+  def choose_move_for(_game_type, _state, _slot) do
     raise "No bot strategy for game type"
   end
 

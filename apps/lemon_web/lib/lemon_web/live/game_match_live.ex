@@ -65,6 +65,31 @@ defmodule LemonWeb.GameMatchLive do
             Match not found.
           </section>
         <% else %>
+          <section class="mt-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <h2 class="text-sm font-semibold text-slate-900">Players</h2>
+              <span class={status_class(@match["status"])}>{status_label(@match)}</span>
+            </div>
+
+            <div class="mt-3 grid gap-3 sm:grid-cols-2">
+              <%= for slot <- ["p1", "p2"] do %>
+                <div class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                  <p class="text-xs uppercase tracking-wide text-slate-500">{slot_label(slot)}</p>
+                  <p class="mt-1 flex items-center gap-2 text-sm font-semibold text-slate-900">
+                    <span>{slot_avatar(slot)}</span>
+                    <span>{player_name(@match, slot)}</span>
+                  </p>
+                  <p class="mt-1 text-xs text-slate-500">{player_agent_id(@match, slot)}</p>
+                </div>
+              <% end %>
+            </div>
+
+            <p :if={@match["status"] == "active"} class="mt-3 text-xs text-slate-600">
+              Turn {@match["turn_number"]} · Up next:
+              <span class="font-semibold text-slate-800">{player_name(@match, @match["next_player"])}</span>
+            </p>
+          </section>
+
           <section class="mt-4 grid gap-4 lg:grid-cols-3">
             <article class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:col-span-2">
               <h2 class="text-sm font-semibold text-slate-900">Game State</h2>
@@ -80,7 +105,7 @@ defmodule LemonWeb.GameMatchLive do
             </article>
 
             <article class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-              <h2 class="text-sm font-semibold text-slate-900">Timeline</h2>
+              <h2 class="text-sm font-semibold text-slate-900">Move History</h2>
 
               <%= if @events == [] do %>
                 <p class="mt-3 text-xs text-slate-500">No events yet.</p>
@@ -89,7 +114,7 @@ defmodule LemonWeb.GameMatchLive do
                   <%= for event <- @events do %>
                     <li class="rounded-lg bg-slate-50 px-2 py-1.5 text-slate-700">
                       <span class="font-semibold">#{event["seq"]}</span>
-                      <span class="ml-1">{event["event_type"]}</span>
+                      <span class="ml-1">{event_line(@match, event)}</span>
                     </li>
                   <% end %>
                 </ol>
@@ -146,6 +171,78 @@ defmodule LemonWeb.GameMatchLive do
   defp connect4_chip(1), do: "🟡"
   defp connect4_chip(2), do: "🔴"
   defp connect4_chip(_), do: "·"
+
+  defp slot_label("p1"), do: "Player 1"
+  defp slot_label("p2"), do: "Player 2"
+  defp slot_label(_), do: "Player"
+
+  defp slot_avatar("p1"), do: "🍋"
+  defp slot_avatar("p2"), do: "🤖"
+  defp slot_avatar(_), do: "🎮"
+
+  defp player_name(match, slot) do
+    get_in(match, ["players", slot, "display_name"]) || fallback_slot_name(slot)
+  end
+
+  defp player_agent_id(match, slot) do
+    get_in(match, ["players", slot, "agent_id"]) || "waiting for player"
+  end
+
+  defp fallback_slot_name("p1"), do: "Player 1"
+  defp fallback_slot_name("p2"), do: "Player 2"
+  defp fallback_slot_name(_), do: "Player"
+
+  defp status_label(%{"status" => "finished", "result" => %{"winner" => winner}} = match) do
+    "Final · Winner: " <> player_name(match, winner)
+  end
+
+  defp status_label(%{"status" => "active"} = match) do
+    "Live · Turn " <> to_string(match["turn_number"] || 0)
+  end
+
+  defp status_label(%{"status" => status}), do: String.capitalize(status)
+
+  defp status_class(status) when is_binary(status) do
+    base = "rounded-full px-2.5 py-1 text-xs font-medium "
+
+    case status do
+      "active" -> base <> "bg-emerald-100 text-emerald-700"
+      "finished" -> base <> "bg-slate-200 text-slate-700"
+      "expired" -> base <> "bg-amber-100 text-amber-700"
+      _ -> base <> "bg-blue-100 text-blue-700"
+    end
+  end
+
+  defp status_class(%{"status" => status}), do: status_class(status)
+
+  defp event_line(match, %{"event_type" => "move_submitted"} = event) do
+    slot = get_in(event, ["actor", "slot"])
+    player = player_name(match, slot)
+    move = format_move(match["game_type"], get_in(event, ["payload", "move"]))
+    "#{player} played #{move}"
+  end
+
+  defp event_line(match, %{"event_type" => "move_rejected"} = event) do
+    slot = get_in(event, ["actor", "slot"])
+    player = player_name(match, slot)
+    reason = get_in(event, ["payload", "reason"]) || "invalid move"
+    "#{player} attempted an invalid move (#{reason})"
+  end
+
+  defp event_line(match, %{"event_type" => "accepted"} = event) do
+    agent_id = get_in(event, ["actor", "agent_id"]) || "player"
+    "#{agent_id} joined as #{player_name(match, "p2")}"
+  end
+
+  defp event_line(_match, %{"event_type" => "match_created"}), do: "Match created"
+  defp event_line(_match, %{"event_type" => "finished"}), do: "Match finished"
+  defp event_line(_match, %{"event_type" => "expired"}), do: "Match expired"
+  defp event_line(_match, %{"event_type" => type}), do: type
+
+  defp format_move("connect4", %{"column" => col}), do: "column #{col}"
+  defp format_move("rock_paper_scissors", %{"value" => value}), do: value
+  defp format_move(_game, move) when is_map(move), do: inspect(move)
+  defp format_move(_game, _), do: "a move"
 
   defp label_game("connect4"), do: "Connect4"
   defp label_game("rock_paper_scissors"), do: "Rock Paper Scissors"
