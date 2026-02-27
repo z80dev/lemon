@@ -134,7 +134,7 @@ Create `~/.lemon/config.toml`:
 ```toml
 # Provider keys (pick one)
 [providers.anthropic]
-api_key_secret = "llm_anthropic_api_key"
+api_key_secret = "llm_anthropic_api_key_raw"
 
 # Defaults used by runtime + default profile
 [defaults]
@@ -2097,15 +2097,20 @@ Optional metadata on set:
 mix lemon.secrets.set github_api_token "ghp_..." --provider github --expires-at 1735689600000
 ```
 
-#### 3) Provider OAuth onboarding (recommended)
+#### 3) Provider onboarding
 
-Use onboarding tasks to run provider OAuth, store credentials in encrypted secrets, and write `api_key_secret` in config:
+Use onboarding tasks for providers that support OAuth, store credentials in encrypted secrets, and write `api_key_secret` in config:
 
 ```bash
-mix lemon.onboard.anthropic
 mix lemon.onboard.antigravity
 mix lemon.onboard.codex
 mix lemon.onboard.copilot
+```
+
+Anthropic provider auth is API-key based. Store your raw key in secrets (for example):
+
+```bash
+mix lemon.secrets.set llm_anthropic_api_key_raw <token>
 ```
 
 For Antigravity OAuth, store client credentials in Lemon secrets:
@@ -2142,11 +2147,11 @@ Runtime key resolution order is:
 - `ANTHROPIC_API_KEY`
 - `api_key`
 - `api_key_secret`
-- default secret fallback `llm_anthropic_api_key`
+- default secret fallback `llm_anthropic_api_key_raw`
 
 Example fallback names:
 - OpenAI: `llm_openai_api_key`
-- Anthropic: `llm_anthropic_api_key`
+- Anthropic: `llm_anthropic_api_key_raw`
 - OpenAI Codex: `llm_openai_codex_api_key`
 
 #### 5) Use secrets for WASM HTTP credentials
