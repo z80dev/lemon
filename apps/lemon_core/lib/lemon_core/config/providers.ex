@@ -11,7 +11,7 @@ defmodule LemonCore.Config.Providers do
   Configuration is loaded from the TOML config file under `[providers]`:
 
       [providers.anthropic]
-      api_key_secret = "llm_anthropic_api_key"
+      api_key_secret = "llm_anthropic_api_key_raw"
       base_url = "https://api.anthropic.com"
 
       [providers.openai]

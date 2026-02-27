@@ -13,9 +13,9 @@ config :phoenix, :json_library, Jason
 
 # Lane concurrency caps for CodingAgent.LaneQueue
 config :coding_agent, :lane_caps,
-  main: 4,
-  subagent: 8,
-  background_exec: 2
+  main: 8,
+  subagent: 16,
+  background_exec: 8
 
 # Default to an in-memory store. Dev/prod override to disk-backed persistence.
 config :lemon_core, LemonCore.Store,
