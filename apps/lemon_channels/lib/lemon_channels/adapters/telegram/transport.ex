@@ -136,6 +136,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             files: cfg_get(config, :files, %{}),
             # {chat_id, thread_id, sender_id} => model picker state
             model_pickers: %{},
+            progress_reactions: bool_cfg_get(config, :progress_reactions, true),
             last_poll_error: nil,
             last_poll_error_log_ts: nil,
             last_webhook_clear_ts: nil
@@ -171,8 +172,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     state =
       cond do
         buffer && buffer.debounce_ref == debounce_ref ->
-          submit_buffer(buffer, state)
-          %{state | buffers: buffers}
+          flushed_state = submit_buffer(buffer, state)
+          %{flushed_state | buffers: buffers}
 
         buffer ->
           # Stale timer; keep latest buffer.
@@ -601,7 +602,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
 
     progress_msg_id =
-      if is_integer(chat_id) and is_integer(user_msg_id) do
+      if is_integer(chat_id) and is_integer(user_msg_id) and state.progress_reactions do
         send_progress(state, chat_id, thread_id, user_msg_id)
       else
         nil
@@ -5067,6 +5068,19 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   defp cfg_get(cfg, key, default \\ nil) when is_atom(key) do
     cfg[key] || cfg[Atom.to_string(key)] || default
+  end
+
+  # cfg_get uses || which treats false as falsy and falls through to the default.
+  # Use this variant for boolean config options that can legitimately be false.
+  defp bool_cfg_get(cfg, key, default) when is_atom(key) do
+    case Map.fetch(cfg, key) do
+      {:ok, val} when is_boolean(val) -> val
+      _ ->
+        case Map.fetch(cfg, Atom.to_string(key)) do
+          {:ok, val} when is_boolean(val) -> val
+          _ -> default
+        end
+    end
   end
 
   defp resolve_api_mod(config) do
