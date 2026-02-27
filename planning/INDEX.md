@@ -1,6 +1,6 @@
 # Planning Index
 
-Last updated: 2026-02-26
+Last updated: 2026-02-27
 
 This file is the live board for tracked plans. Keep rows concise and link to canonical plan artifacts.
 
@@ -125,6 +125,22 @@ Research findings from upstream projects (oh-my-pi, pi, openclaw, ironclaw, nano
 | [IDEA-20260225-oh-my-pi-changelog-schema-hardening](ideas/IDEA-20260225-oh-my-pi-changelog-schema-hardening.md) | Changelog Schema Hardening for Agentic Commit Tooling | oh-my-pi | `proposed` | M | M | **Investigate** - Add schema-backed changelog categories/payload validation for automation reliability |
 | [IDEA-20260225-community-episodic-git-verified-handoffs](ideas/IDEA-20260225-community-episodic-git-verified-handoffs.md) | Episodic Runs with Git-Verified Handoffs and Termination Guards | community | `proposed` | M | H | **Proceed** - Layer anti-drift/anti-loop episode controls on top of harness checkpoints |
 | [IDEA-20260225-community-autonomous-agent-consent-scopes](ideas/IDEA-20260225-community-autonomous-agent-consent-scopes.md) | Consent Scopes and Exposure Guardrails for Always-On Agents | industry | `proposed` | M | H | **Investigate** - Productize unified consent profiles + exposure posture checks |
+| [IDEA-20260227-ironclaw-approval-state-thread-resume](ideas/IDEA-20260227-ironclaw-approval-state-thread-resume.md) | Persist Tool Calls and Restore Approval State on Thread Switch | ironclaw | `proposed` | M | H | **Proceed** - Improve long-run approval continuity across client thread switches |
+| [IDEA-20260227-openclaw-provider-model-alias-normalization](ideas/IDEA-20260227-openclaw-provider-model-alias-normalization.md) | Provider/Model Alias Normalization for Gemini Backends | openclaw | `proposed` | S | M | **Investigate** - Add shared alias normalization contract + compatibility tests |
+| [IDEA-20260227-community-reverse-permission-hierarchy](ideas/IDEA-20260227-community-reverse-permission-hierarchy.md) | Reverse Permission Hierarchy with Explicit Command Allowlists | community | `proposed` | M | H | **Investigate** - Harden command-level trust boundaries beyond tool-level approvals |
+| [IDEA-20260227-community-channel-capability-negotiation](ideas/IDEA-20260227-community-channel-capability-negotiation.md) | Channel Capability Negotiation (Attachments, Rich Blocks, Streaming) | community | `proposed` | M | H | **Proceed** - Unify rich-output adaptation across channels and future adapters |
+| [IDEA-20260227-ironclaw-routine-multichannel-broadcast](ideas/IDEA-20260227-ironclaw-routine-multichannel-broadcast.md) | Routine Notifications Fanout to All Installed Channels | ironclaw | `proposed` | M | M | **Investigate** - Productize policy-driven multi-channel routine broadcast + delivery reporting |
+| [IDEA-20260227-openclaw-device-auth-migration-diagnostics](ideas/IDEA-20260227-openclaw-device-auth-migration-diagnostics.md) | Device Auth Migration Diagnostics and Guided Recovery | openclaw | `proposed` | S | M | **Proceed** - Add unified auth diagnostics + remediation guidance for migration failures |
+| [IDEA-20260227-community-per-channel-model-overrides](ideas/IDEA-20260227-community-per-channel-model-overrides.md) | Persistent Per-Channel Model Overrides | community | `proposed` | M | H | **Proceed** - Promote Telegram-only defaults into cross-channel route-level model policy |
+| [IDEA-20260227-community-session-thread-decoupling](ideas/IDEA-20260227-community-session-thread-decoupling.md) | Decouple Session Persistence from Thread Binding | community | `proposed` | M | H | **Investigate** - Formalize/test non-thread durable-session contract across adapters |
+| [IDEA-20260227-openclaw-tool-call-name-normalization](ideas/IDEA-20260227-openclaw-tool-call-name-normalization.md) | Normalize Whitespace-Padded Tool Call Names Before Dispatch | openclaw | `proposed` | S | M | **Proceed** - Low-cost dispatch hardening against provider formatting drift |
+| [IDEA-20260227-openclaw-telegram-reply-media-context](ideas/IDEA-20260227-openclaw-telegram-reply-media-context.md) | Include Replied Media Metadata in Telegram Reply Context | openclaw | `proposed` | M | M | **Investigate** - Improve media-thread continuity for Telegram reply workflows |
+| [IDEA-20260227-community-channel-lifecycle-ops](ideas/IDEA-20260227-community-channel-lifecycle-ops.md) | Programmatic Channel Lifecycle Operations (Create/Archive/Configure) | community | `proposed` | M | M | **Investigate** - Add capability-gated channel admin primitives beyond message send/receive |
+| [IDEA-20260227-community-topology-adaptive-orchestration](ideas/IDEA-20260227-community-topology-adaptive-orchestration.md) | Topology-Adaptive Multi-Agent Orchestration Policies | industry | `proposed` | L | H | **Investigate** - Layer topology policy on existing task/agent orchestration primitives |
+| [IDEA-20260227-oh-my-pi-lenient-schema-validation-fallback](ideas/IDEA-20260227-oh-my-pi-lenient-schema-validation-fallback.md) | Lenient Tool-Schema Validation Fallback for Provider Drift | oh-my-pi | `proposed` | M | M | **Investigate** - Add safe coercion/recovery path with explicit telemetry |
+| [IDEA-20260227-pi-offline-startup-network-timeouts](ideas/IDEA-20260227-pi-offline-startup-network-timeouts.md) | Offline-First Startup Mode with Explicit Network Timeout Budget | pi | `proposed` | M | H | **Proceed** - Improve degraded-mode startup reliability for self-hosted operators |
+| [IDEA-20260227-community-channel-onboarding-plugin-diagnostics](ideas/IDEA-20260227-community-channel-onboarding-plugin-diagnostics.md) | Channel Onboarding Plugin Diagnostics and Guided Recovery | community | `proposed` | M | H | **Proceed** - Reduce first-run setup failures with actionable remediation |
+| [IDEA-20260227-industry-airgapped-agent-profile](ideas/IDEA-20260227-industry-airgapped-agent-profile.md) | Air-Gapped/Offline Deployment Profile for Self-Hosted Agents | industry | `proposed` | L | H | **Investigate** - Package offline profile and readiness diagnostics for enterprise/self-hosted use |
 
 ### Summary
 
@@ -161,6 +177,34 @@ New findings from community research:
 - New industry pattern signal: markdown-authored agentic workflows with mandatory human review gates.
 - Additional upstream deltas captured: OpenClaw schema-first config guidance and Oh-My-Pi changelog schema hardening.
 - Additional community/industry signals captured: episodic git-verified handoffs for overnight runs, plus consent-scope hardening for always-on autonomous agents.
+
+### Research Addendum (2026-02-27)
+
+- New upstream delta captured from IronClaw: UI persistence/restoration of tool-call + approval context across thread switches.
+- New upstream hardening signal from OpenClaw: provider/model alias normalization for Gemini backends to avoid routing drift.
+- New community demand signal: reverse permission hierarchy with explicit command/path allowlists for safer autonomous execution.
+- New channel-UX demand signal (OpenClaw issue cluster): capability negotiation for attachments, rich blocks, and native streaming instead of plain-text-only fallbacks.
+
+### Research Addendum (2026-02-27, late pass #2)
+
+- New upstream feature signal from IronClaw: routines can broadcast notifications to all installed channels from one run (`e4f2fba762f0`).
+- New upstream reliability signal from OpenClaw: stronger device-auth migration diagnostics and guided recovery paths (`cb9374a2a10a`).
+- New community demand signal (OpenClaw issue #12246): durable per-channel model overrides, not just ephemeral session overrides.
+- New community reliability signal (OpenClaw issue #23414): decouple durable session mode from channel thread binding requirements.
+
+### Research Addendum (2026-02-27, late pass #3)
+
+- New upstream hardening signal from OpenClaw: trim/normalize whitespace-padded tool call names before dispatch to reduce false "tool not found" errors (`6b317b1f174d`).
+- New upstream Telegram-context signal from OpenClaw: include replied media metadata/files in reply context, not only text/caption (`aae90cb0364e`).
+- New community automation demand signal: programmatic channel lifecycle operations (create/configure/archive channels) instead of message-only adapters (OpenClaw issue #7661).
+- New industry orchestration signal: topology-adaptive multi-agent routing (parallel/sequential/hierarchical/hybrid) can outperform static orchestration choices (AdaptOrch + AWS evaluation framing).
+
+### Research Addendum (2026-02-27, late pass #4)
+
+- New upstream reliability signal from Oh-My-Pi: lenient schema/argument validation fallback for malformed provider payloads with circular-reference-safe handling (`d78321b5fda9`, `cde857a5b6be`).
+- New upstream startup-resilience signal from Pi: explicit offline startup mode + bounded network timeout handling to avoid boot hangs in degraded environments (`757d36a41b96`).
+- New community onboarding friction signal (OpenClaw issue #24781): users can complete channel credential entry yet still fail at generic "plugin not available" errors without guided remediation.
+- New industry deployment signal: self-hosted agent adoption is increasingly tied to offline/air-gapped operational posture and deterministic bootstrap expectations (Cloudflare Moltworker narrative + adjacent ecosystem guidance).
 
 ## Templates
 
