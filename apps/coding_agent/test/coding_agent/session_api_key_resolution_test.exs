@@ -180,7 +180,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     GenServer.stop(session)
   end
 
-  test "anthropic uses env key even when auth_source is set to oauth" do
+  test "anthropic rejects oauth auth_source even when env key exists" do
     assert {:ok, _} = Secrets.set("llm_anthropic_api_key", "anthropic-from-secret")
     System.put_env("ANTHROPIC_API_KEY", "anthropic-from-env")
 
@@ -196,7 +196,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     session = start_session(self(), settings, mock_model(:anthropic))
     assert :ok = Session.prompt(session, "hello")
 
-    assert_receive {:stream_api_key, "anthropic-from-env"}, 1_000
+    assert_receive {:stream_api_key, ""}, 1_000
     GenServer.stop(session)
   end
 
@@ -215,8 +215,8 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     GenServer.stop(session)
   end
 
-  test "anthropic falls back to llm_anthropic_api_key when api_key_secret is absent" do
-    assert {:ok, _} = Secrets.set("llm_anthropic_api_key", "anthropic-from-default-secret")
+  test "anthropic falls back to llm_anthropic_api_key_raw when api_key_secret is absent" do
+    assert {:ok, _} = Secrets.set("llm_anthropic_api_key_raw", "anthropic-from-default-secret")
 
     settings =
       settings(%{
@@ -280,7 +280,43 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     GenServer.stop(session)
   end
 
-  test "anthropic oauth secret resolves to access token" do
+  test "falls back to provider-specific oauth resolvers when oauth dispatcher module is unavailable" do
+    Application.put_env(
+      :coding_agent,
+      :oauth_secret_resolver_module,
+      Ai.Auth.MissingOAuthSecretResolver
+    )
+
+    on_exit(fn ->
+      Application.delete_env(:coding_agent, :oauth_secret_resolver_module)
+    end)
+
+    oauth_secret =
+      Jason.encode!(%{
+        "type" => "github_copilot_oauth",
+        "refresh_token" => "github-refresh-token",
+        "access_token" => "copilot-access-token",
+        "expires_at_ms" => System.system_time(:millisecond) + 3_600_000,
+        "enterprise_domain" => nil,
+        "base_url" => "https://api.individual.githubcopilot.com",
+        "updated_at_ms" => System.system_time(:millisecond)
+      })
+
+    assert {:ok, _} = Secrets.set("llm_github_copilot_api_key", oauth_secret)
+
+    settings =
+      settings(%{
+        "github_copilot" => %{api_key_secret: "llm_github_copilot_api_key"}
+      })
+
+    session = start_session(self(), settings, mock_model(:github_copilot))
+    assert :ok = Session.prompt(session, "hello")
+
+    assert_receive {:stream_api_key, "copilot-access-token"}, 1_000
+    GenServer.stop(session)
+  end
+
+  test "anthropic oauth payload secret is rejected for provider api-key resolution" do
     oauth_secret =
       Jason.encode!(%{
         "type" => "anthropic_oauth",
@@ -301,7 +337,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     session = start_session(self(), settings, mock_model(:anthropic))
     assert :ok = Session.prompt(session, "hello")
 
-    assert_receive {:stream_api_key, "anthropic-access-token"}, 1_000
+    assert_receive {:stream_api_key, ""}, 1_000
     GenServer.stop(session)
   end
 
@@ -351,7 +387,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
 
     settings =
       settings(%{
-        "openai-codex" => %{api_key_secret: "llm_openai_codex_api_key"}
+        "openai-codex" => %{auth_source: "oauth", api_key_secret: "llm_openai_codex_api_key"}
       })
 
     session = start_session(self(), settings, mock_model(:"openai-codex"))
@@ -361,7 +397,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     GenServer.stop(session)
   end
 
-  test "openai codex env key overrides oauth secret" do
+  test "openai codex env key overrides api_key_secret when auth_source is api_key" do
     oauth_secret =
       Jason.encode!(%{
         "type" => "openai_codex_oauth",
@@ -378,7 +414,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
 
     settings =
       settings(%{
-        "openai-codex" => %{api_key_secret: "llm_openai_codex_api_key"}
+        "openai-codex" => %{auth_source: "api_key", api_key_secret: "llm_openai_codex_api_key"}
       })
 
     session = start_session(self(), settings, mock_model(:"openai-codex"))

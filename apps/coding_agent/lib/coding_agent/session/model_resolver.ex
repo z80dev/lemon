@@ -329,23 +329,30 @@ defmodule CodingAgent.Session.ModelResolver do
 
   defp resolve_anthropic_api_key(provider_cfg) do
     case normalize_auth_source(provider_cfg) do
+      :api_key ->
+        resolve_anthropic_raw_api_key(provider_cfg) ||
+          resolve_raw_secret_api_key("llm_anthropic_api_key_raw") ||
+          ""
+
+      :missing ->
+        resolve_anthropic_raw_api_key(provider_cfg) ||
+          resolve_raw_secret_api_key("llm_anthropic_api_key_raw") ||
+          ""
+
       :oauth ->
         Logger.warning(
-          "providers.anthropic.auth_source=\"oauth\" is no longer supported; falling back to API key resolution"
+          "providers.anthropic.auth_source=\"oauth\" is not supported; use API key auth for provider \"anthropic\" or the \"claude\" CLI runner for OAuth-backed usage"
         )
+
+        ""
 
       {:invalid, value} ->
         Logger.warning(
           "providers.anthropic.auth_source=#{inspect(value)} is invalid; expected api_key when set"
         )
 
-      _ ->
-        :ok
+        ""
     end
-
-    resolve_anthropic_raw_api_key(provider_cfg) ||
-      resolve_raw_secret_api_key("llm_anthropic_api_key") ||
-      ""
   end
 
   defp resolve_openai_codex_oauth_key(provider_cfg) do
@@ -371,11 +378,7 @@ defmodule CodingAgent.Session.ModelResolver do
             resolved_api_key
 
           :ignore ->
-            Logger.warning(
-              "OpenAI Codex OAuth secret #{secret_name} is not an OAuth payload (expected type onboarding_openai_codex_oauth)"
-            )
-
-            nil
+            resolve_openai_codex_onboarding_access_token(secret_name, value)
 
           {:error, reason} ->
             Logger.warning(
@@ -427,7 +430,7 @@ defmodule CodingAgent.Session.ModelResolver do
 
       is_binary(api_key_secret = provider_config_value(provider_cfg, :api_key_secret)) and
           api_key_secret != "" ->
-        resolve_raw_secret_api_key(api_key_secret)
+        resolve_anthropic_raw_secret_api_key(api_key_secret)
 
       true ->
         nil
@@ -441,6 +444,47 @@ defmodule CodingAgent.Session.ModelResolver do
     end
   end
 
+  defp resolve_anthropic_raw_secret_api_key(secret_name) when is_binary(secret_name) do
+    case LemonCore.Secrets.resolve(secret_name, prefer_env: false, env_fallback: false) do
+      {:ok, value, _source} when is_binary(value) and value != "" ->
+        case Jason.decode(value) do
+          {:ok, %{} = decoded} ->
+            if decoded["type"] in ["anthropic_oauth", "onboarding_anthropic_oauth"] and
+                 is_binary(decoded["access_token"]) do
+              Logger.warning(
+                "Anthropic OAuth payload secret #{secret_name} cannot be used as a raw API key; configure an Anthropic API key instead"
+              )
+
+              nil
+            else
+              value
+            end
+
+          _ ->
+            value
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp resolve_openai_codex_onboarding_access_token(secret_name, secret_value)
+       when is_binary(secret_name) and is_binary(secret_value) do
+    case Jason.decode(secret_value) do
+      {:ok, %{"type" => "onboarding_openai_codex_oauth", "access_token" => access_token}}
+      when is_binary(access_token) and access_token != "" ->
+        access_token
+
+      _ ->
+        Logger.warning(
+          "OpenAI Codex OAuth secret #{secret_name} is not a recognized Codex OAuth payload"
+        )
+
+        nil
+    end
+  end
+
   defp resolve_secret_api_key(secret_name, opts \\ [])
 
   defp resolve_secret_api_key(secret_name, opts) when is_binary(secret_name) do
@@ -448,25 +492,12 @@ defmodule CodingAgent.Session.ModelResolver do
 
     case LemonCore.Secrets.resolve(secret_name, prefer_env: false, env_fallback: env_fallback) do
       {:ok, value, _source} ->
-        case Ai.Auth.OAuthSecretResolver.resolve_api_key_from_secret(secret_name, value) do
+        case resolve_oauth_secret_api_key(secret_name, value) do
           {:ok, resolved_api_key} ->
             resolved_api_key
 
           :ignore ->
-            case Ai.Auth.OpenAICodexOAuth.resolve_api_key_from_secret(secret_name, value) do
-              {:ok, resolved_api_key} ->
-                resolved_api_key
-
-              :ignore ->
-                value
-
-              {:error, reason} ->
-                Logger.debug(
-                  "Failed to resolve OpenAI Codex OAuth secret #{secret_name}: #{inspect(reason)}"
-                )
-
-                value
-            end
+            value
 
           {:error, reason} ->
             Logger.debug("Failed to resolve OAuth secret #{secret_name}: #{inspect(reason)}")
@@ -480,6 +511,62 @@ defmodule CodingAgent.Session.ModelResolver do
   end
 
   defp resolve_secret_api_key(_, _), do: nil
+
+  @oauth_secret_fallback_resolvers [
+    Ai.Auth.GitHubCopilotOAuth,
+    Ai.Auth.GoogleAntigravityOAuth,
+    Ai.Auth.OpenAICodexOAuth
+  ]
+
+  defp resolve_oauth_secret_api_key(secret_name, secret_value)
+       when is_binary(secret_name) and is_binary(secret_value) do
+    resolver = oauth_secret_resolver_module()
+
+    if oauth_resolver_available?(resolver) do
+      call_oauth_resolver(resolver, secret_name, secret_value)
+    else
+      Logger.debug(
+        "OAuth secret resolver #{inspect(resolver)} is unavailable; falling back to provider-specific OAuth resolvers"
+      )
+
+      Enum.reduce_while(@oauth_secret_fallback_resolvers, :ignore, fn fallback_resolver, _acc ->
+        if oauth_resolver_available?(fallback_resolver) do
+          case call_oauth_resolver(fallback_resolver, secret_name, secret_value) do
+            :ignore ->
+              {:cont, :ignore}
+
+            {:ok, _resolved_api_key} = ok ->
+              {:halt, ok}
+
+            {:error, _reason} = error ->
+              {:halt, error}
+          end
+        else
+          {:cont, :ignore}
+        end
+      end)
+    end
+  end
+
+  defp resolve_oauth_secret_api_key(_, _), do: {:error, :invalid_secret_value}
+
+  defp oauth_secret_resolver_module do
+    Application.get_env(:coding_agent, :oauth_secret_resolver_module, Ai.Auth.OAuthSecretResolver)
+  end
+
+  defp oauth_resolver_available?(resolver) when is_atom(resolver) do
+    Code.ensure_loaded?(resolver) and
+      function_exported?(resolver, :resolve_api_key_from_secret, 2)
+  end
+
+  defp oauth_resolver_available?(_), do: false
+
+  defp call_oauth_resolver(resolver, secret_name, secret_value) do
+    resolver.resolve_api_key_from_secret(secret_name, secret_value)
+  rescue
+    UndefinedFunctionError ->
+      :ignore
+  end
 
   defp resolve_generic_api_key(provider_name, provider_cfg) do
     env_key =
