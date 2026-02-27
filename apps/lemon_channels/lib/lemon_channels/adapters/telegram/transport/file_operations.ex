@@ -12,6 +12,105 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
   alias LemonCore.ChatScope
   alias LemonChannels.Adapters.Telegram.Transport.Commands
 
+  @media_types [:document, :photo, :video, :animation, :video_note]
+
+  @mime_to_ext %{
+    "image/jpeg" => ".jpg",
+    "image/png" => ".png",
+    "image/gif" => ".gif",
+    "image/webp" => ".webp",
+    "video/mp4" => ".mp4",
+    "video/quicktime" => ".mov",
+    "video/webm" => ".webm",
+    "video/x-matroska" => ".mkv"
+  }
+
+  @default_ext %{
+    photo: ".jpg",
+    video: ".mp4",
+    animation: ".mp4",
+    video_note: ".mp4"
+  }
+
+  # ---------------------------------------------------------------------------
+  # Generic media extraction helpers
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Extract the first present media attachment from the inbound message.
+  Returns `{media_type, media_map}` or `nil`.
+  """
+  def extract_media(inbound) do
+    meta = inbound.meta || %{}
+
+    Enum.find_value(@media_types, fn type ->
+      media = meta[type] || meta[Atom.to_string(type)]
+
+      if is_map(media) and map_size(media) > 0 do
+        {type, media}
+      end
+    end)
+  rescue
+    _ -> nil
+  end
+
+  @doc """
+  Returns true when the inbound message has any downloadable media attachment.
+  """
+  def has_media?(inbound) do
+    extract_media(inbound) != nil
+  rescue
+    _ -> false
+  end
+
+  @doc """
+  Extract the file_id from whichever media type is present.
+  """
+  def extract_file_id(inbound) do
+    case extract_media(inbound) do
+      {_type, media} -> media[:file_id] || media["file_id"]
+      nil -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  @doc """
+  Generate a filename for the media. Uses the Telegram-provided filename when
+  available, otherwise generates `{type}_{YYYYMMDD_HHMMSS}{ext}`.
+  """
+  def media_filename(media_type, media) do
+    telegram_name = media[:file_name] || media["file_name"]
+
+    if is_binary(telegram_name) and telegram_name != "" do
+      telegram_name
+    else
+      ext = ext_from_mime(media_type, media[:mime_type] || media["mime_type"])
+      type_prefix = type_to_prefix(media_type)
+      timestamp = format_timestamp()
+      "#{type_prefix}_#{timestamp}#{ext}"
+    end
+  rescue
+    _ -> "upload_#{System.system_time(:second)}.bin"
+  end
+
+  defp ext_from_mime(_type, mime) when is_binary(mime) and mime != "" do
+    Map.get(@mime_to_ext, mime, Map.get(@default_ext, :video, ".bin"))
+  end
+
+  defp ext_from_mime(type, _mime), do: Map.get(@default_ext, type, ".bin")
+
+  defp type_to_prefix(:video_note), do: "videonote"
+  defp type_to_prefix(type), do: Atom.to_string(type)
+
+  defp format_timestamp do
+    {{y, mo, d}, {h, mi, s}} = :calendar.universal_time()
+    uniq = rem(System.unique_integer([:positive, :monotonic]), 10000)
+
+    :io_lib.format("~4..0B~2..0B~2..0B_~2..0B~2..0B~2..0B_~4..0B", [y, mo, d, h, mi, s, uniq])
+    |> IO.iodata_to_binary()
+  end
+
   # ---------------------------------------------------------------------------
   # Auto-put / media-group file operations
   # ---------------------------------------------------------------------------
@@ -32,13 +131,18 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
 
       results =
         Enum.map(items, fn inbound ->
-          doc = (inbound.meta && (inbound.meta[:document] || inbound.meta["document"])) || %{}
-          filename = doc[:file_name] || doc["file_name"] || "upload.bin"
+          {media_type, media} =
+            case extract_media(inbound) do
+              {t, m} -> {t, m}
+              nil -> {:document, %{}}
+            end
+
+          filename = media_filename(media_type, media)
           rel = Path.join(uploads_dir, filename)
 
           with {:ok, abs} <- resolve_dest_abs(root, rel),
                :ok <- ensure_not_denied(root, rel, cfg),
-               {:ok, bytes} <- download_document_bytes(state, inbound),
+               {:ok, bytes} <- download_media_bytes(state, inbound),
                :ok <- enforce_bytes_limit(bytes, cfg, :max_upload_bytes, 20 * 1024 * 1024),
                {:ok, final_rel, _} <- write_document(rel, abs, bytes, force: false) do
             {:ok, final_rel}
@@ -155,8 +259,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
 
   def upload_media_group_items(state, items, root, dest_rel, cfg, force) do
     Enum.map(items, fn inbound ->
-      doc = (inbound.meta && (inbound.meta[:document] || inbound.meta["document"])) || %{}
-      filename = doc[:file_name] || doc["file_name"] || "upload.bin"
+      {media_type, media} =
+        case extract_media(inbound) do
+          {t, m} -> {t, m}
+          nil -> {:document, %{}}
+        end
+
+      filename = media_filename(media_type, media)
 
       rel =
         if String.ends_with?(dest_rel, "/") do
@@ -167,7 +276,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
 
       with {:ok, abs} <- resolve_dest_abs(root, rel),
            :ok <- ensure_not_denied(root, rel, cfg),
-           {:ok, bytes} <- download_document_bytes(state, inbound),
+           {:ok, bytes} <- download_media_bytes(state, inbound),
            :ok <- enforce_bytes_limit(bytes, cfg, :max_upload_bytes, 20 * 1024 * 1024),
            {:ok, final_rel, _} <- write_document(rel, abs, bytes, force: force) do
         {:ok, final_rel}
@@ -200,29 +309,31 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Returns true when the inbound is a bare document upload that should be
+  Returns true when the inbound has any media attachment that should be
   auto-saved according to the files configuration.
   """
-  def should_auto_put_document?(state, inbound) do
+  def should_auto_put_media?(state, inbound) do
     cfg = files_cfg(state)
 
     enabled? = truthy(cfg_get(cfg, :enabled))
     auto_put? = truthy(cfg_get(cfg, :auto_put))
 
-    doc = inbound.meta && (inbound.meta[:document] || inbound.meta["document"])
-
-    enabled? and auto_put? and is_map(doc) and map_size(doc) > 0 and
+    enabled? and auto_put? and has_media?(inbound) and
       not Commands.command_message_for_bot?(inbound.message.text || "", state.bot_username)
   rescue
     _ -> false
   end
 
-  @doc """
-  Handle a single bare document upload via auto-put.
+  @doc false
+  def should_auto_put_document?(state, inbound),
+    do: should_auto_put_media?(state, inbound)
 
-  Returns the (potentially updated) state.
+  @doc """
+  Handle a single bare media upload via auto-put.
+
+  Returns `{:ok, final_rel}` or `{:error, reason}`.
   """
-  def handle_document_auto_put(state, inbound) do
+  def handle_media_auto_put(state, inbound) do
     cfg = files_cfg(state)
     {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
 
@@ -233,7 +344,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
          {:ok, dest_rel} <- auto_put_destination(cfg, inbound),
          {:ok, dest_abs} <- resolve_dest_abs(root, dest_rel),
          :ok <- ensure_not_denied(root, dest_rel, cfg),
-         {:ok, bytes} <- download_document_bytes(state, inbound),
+         {:ok, bytes} <- download_media_bytes(state, inbound),
          :ok <- enforce_bytes_limit(bytes, cfg, :max_upload_bytes, 20 * 1024 * 1024),
          {:ok, final_rel, _final_abs} <- write_document(dest_rel, dest_abs, bytes, force: false) do
       _ = send_system_message(state, chat_id, thread_id, user_msg_id, "Uploaded: #{final_rel}")
@@ -265,6 +376,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
   rescue
     _ -> {:error, :crash}
   end
+
+  @doc false
+  def handle_document_auto_put(state, inbound),
+    do: handle_media_auto_put(state, inbound)
 
   # ---------------------------------------------------------------------------
   # /file command handlers
@@ -315,7 +430,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
          {:ok, force, dest_rel} <- parse_file_put_args(cfg, inbound, rest),
          {:ok, dest_abs} <- resolve_dest_abs(root, dest_rel),
          :ok <- ensure_not_denied(root, dest_rel, cfg),
-         {:ok, bytes} <- download_document_bytes(state, inbound),
+         {:ok, bytes} <- download_media_bytes(state, inbound),
          :ok <- enforce_bytes_limit(bytes, cfg, :max_upload_bytes, 20 * 1024 * 1024),
          {:ok, final_rel, _final_abs} <- write_document(dest_rel, dest_abs, bytes, force: force) do
       _ = send_system_message(state, chat_id, thread_id, user_msg_id, "Saved: #{final_rel}")
@@ -444,8 +559,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
 
   def auto_put_destination(cfg, inbound) do
     uploads_dir = cfg_get(cfg, :uploads_dir, "incoming")
-    doc = (inbound.meta && (inbound.meta[:document] || inbound.meta["document"])) || %{}
-    filename = doc[:file_name] || doc["file_name"] || "upload.bin"
+
+    {media_type, media} =
+      case extract_media(inbound) do
+        {t, m} -> {t, m}
+        nil -> {:document, %{}}
+      end
+
+    filename = media_filename(media_type, media)
     {:ok, Path.join(uploads_dir, filename)}
   end
 
@@ -465,8 +586,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
 
         _ ->
           uploads_dir = cfg_get(cfg, :uploads_dir, "incoming")
-          doc = (inbound.meta && (inbound.meta[:document] || inbound.meta["document"])) || %{}
-          filename = doc[:file_name] || doc["file_name"] || "upload.bin"
+
+          {media_type, media} =
+            case extract_media(inbound) do
+              {t, m} -> {t, m}
+              nil -> {:document, %{}}
+            end
+
+          filename = media_filename(media_type, media)
           Path.join(uploads_dir, filename)
       end
 
@@ -530,13 +657,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
     _ -> :ok
   end
 
-  def download_document_bytes(state, inbound) do
-    doc = (inbound.meta && (inbound.meta[:document] || inbound.meta["document"])) || %{}
-    file_id = doc[:file_id] || doc["file_id"]
+  def download_media_bytes(state, inbound) do
+    file_id = extract_file_id(inbound)
 
     cond do
       not is_binary(file_id) or file_id == "" ->
-        {:error, "Attach a Telegram document and use:\n/file put [--force] <path>"}
+        {:error, "Attach a Telegram file and use:\n/file put [--force] <path>"}
 
       true ->
         with {:ok, %{"ok" => true, "result" => %{"file_path" => file_path}}} <-
@@ -550,6 +676,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
   rescue
     _ -> {:error, "Failed to download the file from Telegram."}
   end
+
+  @doc false
+  def download_document_bytes(state, inbound),
+    do: download_media_bytes(state, inbound)
 
   def enforce_bytes_limit(bytes, cfg, key, default_max) when is_binary(bytes) do
     max = parse_int(cfg[key] || cfg[to_string(key)]) || default_max

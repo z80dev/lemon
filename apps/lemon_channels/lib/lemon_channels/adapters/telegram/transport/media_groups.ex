@@ -12,14 +12,15 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MediaGroups do
   # Public API
   # ---------------------------------------------------------------------------
 
+  alias LemonChannels.Adapters.Telegram.Transport.FileOperations
+
   @doc """
   Returns true when the inbound message belongs to a Telegram media group
-  (i.e. has both a `media_group_id` and a `document` in its meta).
+  (i.e. has both a `media_group_id` and any media attachment in its meta).
   """
   def media_group_member?(inbound) do
     mg = inbound.meta && (inbound.meta[:media_group_id] || inbound.meta["media_group_id"])
-    doc = inbound.meta && (inbound.meta[:document] || inbound.meta["document"])
-    is_binary(mg) and mg != "" and is_map(doc) and map_size(doc) > 0
+    is_binary(mg) and mg != "" and FileOperations.has_media?(inbound)
   rescue
     _ -> false
   end

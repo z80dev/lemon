@@ -364,6 +364,292 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
     assert File.read!(Path.join(root, "incoming/b.txt")) == "FILE_BYTES"
   end
 
+  # ---------------------------------------------------------------------------
+  # Helpers for new media types
+  # ---------------------------------------------------------------------------
+
+  defp photo_update(chat_id, caption \\ nil) do
+    base = %{
+      "update_id" => System.unique_integer([:positive]),
+      "message" => %{
+        "message_id" => System.unique_integer([:positive]),
+        "date" => 1,
+        "chat" => %{"id" => chat_id, "type" => "private"},
+        "from" => %{"id" => 999, "username" => "tester", "first_name" => "Test"},
+        "photo" => [
+          %{"file_id" => "photo-sm", "width" => 90, "height" => 90, "file_size" => 1000},
+          %{"file_id" => "photo-lg", "width" => 800, "height" => 600, "file_size" => 50_000}
+        ]
+      }
+    }
+
+    if is_binary(caption), do: put_in(base, ["message", "caption"], caption), else: base
+  end
+
+  defp video_update(chat_id, caption \\ nil) do
+    base = %{
+      "update_id" => System.unique_integer([:positive]),
+      "message" => %{
+        "message_id" => System.unique_integer([:positive]),
+        "date" => 1,
+        "chat" => %{"id" => chat_id, "type" => "private"},
+        "from" => %{"id" => 999, "username" => "tester", "first_name" => "Test"},
+        "video" => %{
+          "file_id" => "vid-1",
+          "file_name" => "clip.mp4",
+          "mime_type" => "video/mp4",
+          "file_size" => 50_000,
+          "duration" => 10,
+          "width" => 1920,
+          "height" => 1080
+        }
+      }
+    }
+
+    if is_binary(caption), do: put_in(base, ["message", "caption"], caption), else: base
+  end
+
+  defp animation_update(chat_id, caption \\ nil) do
+    base = %{
+      "update_id" => System.unique_integer([:positive]),
+      "message" => %{
+        "message_id" => System.unique_integer([:positive]),
+        "date" => 1,
+        "chat" => %{"id" => chat_id, "type" => "private"},
+        "from" => %{"id" => 999, "username" => "tester", "first_name" => "Test"},
+        "animation" => %{
+          "file_id" => "anim-1",
+          "mime_type" => "video/mp4",
+          "file_size" => 20_000,
+          "duration" => 3,
+          "width" => 320,
+          "height" => 240
+        }
+      }
+    }
+
+    if is_binary(caption), do: put_in(base, ["message", "caption"], caption), else: base
+  end
+
+  defp video_note_update(chat_id, caption \\ nil) do
+    base = %{
+      "update_id" => System.unique_integer([:positive]),
+      "message" => %{
+        "message_id" => System.unique_integer([:positive]),
+        "date" => 1,
+        "chat" => %{"id" => chat_id, "type" => "private"},
+        "from" => %{"id" => 999, "username" => "tester", "first_name" => "Test"},
+        "video_note" => %{
+          "file_id" => "vnote-1",
+          "file_size" => 15_000,
+          "duration" => 5,
+          "length" => 240
+        }
+      }
+    }
+
+    if is_binary(caption), do: put_in(base, ["message", "caption"], caption), else: base
+  end
+
+  defp photo_update_media_group(chat_id, media_group_id, caption \\ nil) do
+    base = %{
+      "update_id" => System.unique_integer([:positive]),
+      "message" => %{
+        "message_id" => System.unique_integer([:positive]),
+        "date" => 1,
+        "chat" => %{"id" => chat_id, "type" => "private"},
+        "from" => %{"id" => 999, "username" => "tester", "first_name" => "Test"},
+        "media_group_id" => media_group_id,
+        "photo" => [
+          %{"file_id" => "photo-mg-#{System.unique_integer([:positive])}", "width" => 800, "height" => 600, "file_size" => 50_000}
+        ]
+      }
+    }
+
+    if is_binary(caption), do: put_in(base, ["message", "caption"], caption), else: base
+  end
+
+  # ---------------------------------------------------------------------------
+  # Photo / video / animation / video_note auto-put tests
+  # ---------------------------------------------------------------------------
+
+  test "auto-put stores photo with generated filename into uploads_dir" do
+    chat_id = 60_001
+    root = fresh_root!("lemon-auto-put-photo")
+    bind_project!(chat_id, root)
+
+    {:ok, _pid} =
+      Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
+        config: %{
+          bot_token: "token",
+          api_mod: FileTransferMockAPI,
+          poll_interval_ms: 10,
+          files: %{enabled: true, auto_put: true, uploads_dir: "incoming"}
+        }
+      )
+
+    FileTransferMockAPI.set_updates([photo_update(chat_id)])
+
+    assert_receive {:sent, text}, 300
+    assert String.contains?(text, "Uploaded: incoming/photo_")
+    assert String.contains?(text, ".jpg")
+
+    files = Path.wildcard(Path.join(root, "incoming/photo_*.jpg"))
+    assert length(files) == 1
+    assert File.read!(hd(files)) == "FILE_BYTES"
+  end
+
+  test "auto-put stores video preserving Telegram filename" do
+    chat_id = 60_002
+    root = fresh_root!("lemon-auto-put-video")
+    bind_project!(chat_id, root)
+
+    {:ok, _pid} =
+      Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
+        config: %{
+          bot_token: "token",
+          api_mod: FileTransferMockAPI,
+          poll_interval_ms: 10,
+          files: %{enabled: true, auto_put: true, uploads_dir: "incoming"}
+        }
+      )
+
+    FileTransferMockAPI.set_updates([video_update(chat_id)])
+
+    assert_receive {:sent, text}, 300
+    assert String.contains?(text, "Uploaded: incoming/clip.mp4")
+    assert File.read!(Path.join(root, "incoming/clip.mp4")) == "FILE_BYTES"
+  end
+
+  test "auto-put stores animation with generated filename" do
+    chat_id = 60_003
+    root = fresh_root!("lemon-auto-put-anim")
+    bind_project!(chat_id, root)
+
+    {:ok, _pid} =
+      Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
+        config: %{
+          bot_token: "token",
+          api_mod: FileTransferMockAPI,
+          poll_interval_ms: 10,
+          files: %{enabled: true, auto_put: true, uploads_dir: "incoming"}
+        }
+      )
+
+    FileTransferMockAPI.set_updates([animation_update(chat_id)])
+
+    assert_receive {:sent, text}, 300
+    assert String.contains?(text, "Uploaded: incoming/animation_")
+    assert String.contains?(text, ".mp4")
+
+    files = Path.wildcard(Path.join(root, "incoming/animation_*.mp4"))
+    assert length(files) == 1
+    assert File.read!(hd(files)) == "FILE_BYTES"
+  end
+
+  test "auto-put stores video_note with generated filename" do
+    chat_id = 60_004
+    root = fresh_root!("lemon-auto-put-vnote")
+    bind_project!(chat_id, root)
+
+    {:ok, _pid} =
+      Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
+        config: %{
+          bot_token: "token",
+          api_mod: FileTransferMockAPI,
+          poll_interval_ms: 10,
+          files: %{enabled: true, auto_put: true, uploads_dir: "incoming"}
+        }
+      )
+
+    FileTransferMockAPI.set_updates([video_note_update(chat_id)])
+
+    assert_receive {:sent, text}, 300
+    assert String.contains?(text, "Uploaded: incoming/videonote_")
+    assert String.contains?(text, ".mp4")
+
+    files = Path.wildcard(Path.join(root, "incoming/videonote_*.mp4"))
+    assert length(files) == 1
+    assert File.read!(hd(files)) == "FILE_BYTES"
+  end
+
+  test "auto-put batches photo album (media group) into uploads_dir" do
+    chat_id = 60_005
+    root = fresh_root!("lemon-auto-put-photo-mg")
+    bind_project!(chat_id, root)
+
+    mg = "mg-photo-1"
+
+    {:ok, _pid} =
+      Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(
+        config: %{
+          bot_token: "token",
+          api_mod: FileTransferMockAPI,
+          poll_interval_ms: 10,
+          files: %{
+            enabled: true,
+            auto_put: true,
+            uploads_dir: "incoming",
+            media_group_debounce_ms: 50
+          }
+        }
+      )
+
+    FileTransferMockAPI.set_updates([
+      photo_update_media_group(chat_id, mg),
+      photo_update_media_group(chat_id, mg)
+    ])
+
+    assert_receive {:sent, text}, 800
+    assert String.contains?(text, "Uploaded 2 files")
+
+    files = Path.wildcard(Path.join(root, "incoming/photo_*.jpg"))
+    assert length(files) == 2
+    Enum.each(files, fn f -> assert File.read!(f) == "FILE_BYTES" end)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Inbound normalization tests for new media types
+  # ---------------------------------------------------------------------------
+
+  test "inbound normalizes video into meta" do
+    update = video_update(70_001)
+
+    {:ok, inbound} =
+      LemonChannels.Adapters.Telegram.Inbound.normalize(update)
+
+    assert inbound.meta[:video] != nil
+    assert inbound.meta[:video][:file_id] == "vid-1"
+    assert inbound.meta[:video][:file_name] == "clip.mp4"
+    assert inbound.meta[:video][:mime_type] == "video/mp4"
+    assert inbound.meta[:video][:duration] == 10
+    assert inbound.meta[:video][:width] == 1920
+  end
+
+  test "inbound normalizes animation into meta" do
+    update = animation_update(70_002)
+
+    {:ok, inbound} =
+      LemonChannels.Adapters.Telegram.Inbound.normalize(update)
+
+    assert inbound.meta[:animation] != nil
+    assert inbound.meta[:animation][:file_id] == "anim-1"
+    assert inbound.meta[:animation][:mime_type] == "video/mp4"
+    assert inbound.meta[:animation][:duration] == 3
+  end
+
+  test "inbound normalizes video_note into meta" do
+    update = video_note_update(70_003)
+
+    {:ok, inbound} =
+      LemonChannels.Adapters.Telegram.Inbound.normalize(update)
+
+    assert inbound.meta[:video_note] != nil
+    assert inbound.meta[:video_note][:file_id] == "vnote-1"
+    assert inbound.meta[:video_note][:duration] == 5
+    assert inbound.meta[:video_note][:length] == 240
+  end
+
   test "/file put batches media_group_id documents into a directory path" do
     chat_id = 55_555
     root = fresh_root!("lemon-file-put-mg")

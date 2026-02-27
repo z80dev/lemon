@@ -520,11 +520,11 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         Commands.file_command?(original_text, state.bot_username) ->
           FileOperations.handle_file_command(state, inbound)
 
-        FileOperations.should_auto_put_document?(state, inbound) ->
+        FileOperations.should_auto_put_media?(state, inbound) ->
           if MediaGroups.media_group_member?(inbound) do
             MediaGroups.enqueue_media_group(state, inbound)
           else
-            handle_document_auto_put(state, inbound)
+            handle_media_auto_put(state, inbound)
           end
 
         Commands.trigger_command?(original_text, state.bot_username) ->
@@ -781,13 +781,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     _ -> :ok
   end
 
-  # handle_document_auto_put wraps FileOperations but needs access to
+  # handle_media_auto_put wraps FileOperations but needs access to
   # GenServer-level helpers (should_ignore_for_trigger?, submit_inbound_now, etc.)
-  defp handle_document_auto_put(state, inbound) do
+  defp handle_media_auto_put(state, inbound) do
     cfg = FileOperations.files_cfg(state)
     {_chat_id, _thread_id, _user_msg_id} = extract_message_ids(inbound)
 
-    case FileOperations.handle_document_auto_put(state, inbound) do
+    case FileOperations.handle_media_auto_put(state, inbound) do
       {:ok, final_rel} ->
         mode = cfg_get(cfg, :auto_put_mode, "upload")
         caption = String.trim(inbound.message.text || "")

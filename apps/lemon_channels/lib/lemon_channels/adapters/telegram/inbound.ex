@@ -81,6 +81,9 @@ defmodule LemonChannels.Adapters.Telegram.Inbound do
       voice = message["voice"] || %{}
       document = message["document"] || %{}
       photo = select_photo(message["photo"])
+      video = message["video"] || %{}
+      animation = message["animation"] || %{}
+      video_note = message["video_note"] || %{}
 
       routing_hint = "telegram:default:#{peer_kind}:#{chat["id"]}"
 
@@ -139,6 +142,46 @@ defmodule LemonChannels.Adapters.Telegram.Inbound do
               }
             else
               nil
+            end,
+          video:
+            if is_map(video) and map_size(video) > 0 do
+              %{
+                file_id: video["file_id"],
+                file_name: video["file_name"],
+                mime_type: video["mime_type"],
+                file_size: video["file_size"],
+                duration: video["duration"],
+                width: video["width"],
+                height: video["height"]
+              }
+            else
+              nil
+            end,
+          animation:
+            if is_map(animation) and map_size(animation) > 0 do
+              %{
+                file_id: animation["file_id"],
+                file_name: animation["file_name"],
+                mime_type: animation["mime_type"],
+                file_size: animation["file_size"],
+                duration: animation["duration"],
+                width: animation["width"],
+                height: animation["height"]
+              }
+            else
+              nil
+            end,
+          video_note:
+            if is_map(video_note) and map_size(video_note) > 0 do
+              %{
+                file_id: video_note["file_id"],
+                mime_type: video_note["mime_type"],
+                file_size: video_note["file_size"],
+                duration: video_note["duration"],
+                length: video_note["length"]
+              }
+            else
+              nil
             end
         }
       }
@@ -146,7 +189,10 @@ defmodule LemonChannels.Adapters.Telegram.Inbound do
       Logger.debug(
         "Telegram inbound normalized successfully: message_id=#{message_id} " <>
           "text_length=#{String.length(text || "")} has_voice=#{voice != %{}} " <>
-          "has_document=#{is_map(document) and map_size(document) > 0}"
+          "has_document=#{is_map(document) and map_size(document) > 0} " <>
+          "has_video=#{is_map(video) and map_size(video) > 0} " <>
+          "has_animation=#{is_map(animation) and map_size(animation) > 0} " <>
+          "has_video_note=#{is_map(video_note) and map_size(video_note) > 0}"
       )
 
       {:ok, inbound}
