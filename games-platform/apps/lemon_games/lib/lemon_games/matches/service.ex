@@ -16,7 +16,8 @@ defmodule LemonGames.Matches.Service do
 
   @spec create_match(map(), map()) :: {:ok, map()} | {:error, atom(), String.t()}
   def create_match(params, actor) do
-    with {:ok, _engine} <- Registry.fetch(params["game_type"]) |> wrap_registry_error() do
+    with {:ok, _engine} <- Registry.fetch(params["game_type"]) |> wrap_registry_error(),
+         :ok <- validate_visibility(params["visibility"]) do
       match =
         params
         |> Map.put("created_by", actor["agent_id"])
@@ -93,13 +94,18 @@ defmodule LemonGames.Matches.Service do
   end
 
   @spec submit_move(String.t(), map(), map(), String.t()) ::
-          {:ok, map(), non_neg_integer()} | {:error, atom(), String.t()}
+          {:ok, map(), non_neg_integer(), boolean()} | {:error, atom(), String.t()}
   def submit_move(match_id, actor, move, idempotency_key) do
     scope = "game_move:" <> match_id
 
     case LemonCore.Idempotency.get(scope, idempotency_key) do
       {:ok, cached} ->
-        {:ok, cached["match"], cached["seq"]}
+        if cached["actor_id"] == actor["agent_id"] and cached["move"] == move do
+          {:ok, cached["match"], cached["seq"], true}
+        else
+          {:error, :idempotency_conflict,
+           "idempotency key already used for different actor or move"}
+        end
 
       :miss ->
         result = do_submit_move(match_id, actor, move)
@@ -108,10 +114,12 @@ defmodule LemonGames.Matches.Service do
           {:ok, match, seq} ->
             LemonCore.Idempotency.put(scope, idempotency_key, %{
               "match" => match,
-              "seq" => seq
+              "seq" => seq,
+              "actor_id" => actor["agent_id"],
+              "move" => move
             })
 
-            result
+            {:ok, match, seq, false}
 
           error ->
             error
@@ -119,12 +127,18 @@ defmodule LemonGames.Matches.Service do
     end
   end
 
-  @spec get_match(String.t(), String.t()) :: {:ok, map()} | {:error, atom(), String.t()}
+  @spec get_match(String.t(), String.t() | map()) :: {:ok, map()} | {:error, atom(), String.t()}
   def get_match(match_id, viewer) do
     case fetch_match(match_id) do
       {:ok, match} ->
-        public = Projection.project_public_view(match, viewer)
-        {:ok, public}
+        viewer_id = viewer_identity(viewer)
+
+        if visible_to_viewer?(match, viewer_id) do
+          public = Projection.project_public_view(match, viewer_slot(match, viewer_id))
+          {:ok, public}
+        else
+          {:error, :not_found, "match not found"}
+        end
 
       error ->
         error
@@ -141,20 +155,27 @@ defmodule LemonGames.Matches.Service do
     |> Enum.map(fn m -> Projection.project_public_view(m, "spectator") end)
   end
 
-  @spec list_events(String.t(), non_neg_integer(), non_neg_integer(), String.t()) ::
+  @spec list_events(String.t(), non_neg_integer(), non_neg_integer(), String.t() | map()) ::
           {:ok, [map()], non_neg_integer(), boolean()}
-  def list_events(match_id, after_seq, limit, _viewer) do
-    events = EventLog.list(match_id, after_seq, limit + 1)
-    has_more = length(events) > limit
-    events = Enum.take(events, limit)
+  def list_events(match_id, after_seq, limit, viewer) do
+    with {:ok, match} <- fetch_match(match_id),
+         viewer_id <- viewer_identity(viewer),
+         true <- visible_to_viewer?(match, viewer_id) do
+      events = EventLog.list(match_id, after_seq, limit + 1)
+      has_more = length(events) > limit
+      events = Enum.take(events, limit)
 
-    next_after_seq =
-      case List.last(events) do
-        nil -> after_seq
-        e -> e["seq"]
-      end
+      next_after_seq =
+        case List.last(events) do
+          nil -> after_seq
+          e -> e["seq"]
+        end
 
-    {:ok, events, next_after_seq, has_more}
+      {:ok, events, next_after_seq, has_more}
+    else
+      false -> {:error, :not_found, "match not found"}
+      {:error, :not_found, _} = error -> error
+    end
   end
 
   @spec forfeit_match(String.t(), map(), String.t()) ::
@@ -404,6 +425,33 @@ defmodule LemonGames.Matches.Service do
     :global.trans({:lemon_games_match_lock, match_id}, fun)
   end
 
+  defp viewer_identity(%{"agent_id" => agent_id}) when is_binary(agent_id), do: agent_id
+  defp viewer_identity(viewer) when is_binary(viewer), do: viewer
+  defp viewer_identity(_), do: "spectator"
+
+  defp viewer_slot(match, viewer_id) do
+    case find_player_slot(match, viewer_id) do
+      {:ok, slot} -> slot
+      _ -> "spectator"
+    end
+  end
+
+  defp visible_to_viewer?(%{"visibility" => "private"} = match, viewer_id) do
+    viewer_id != "spectator" and
+      (viewer_id == match["created_by"] or
+         Enum.any?(match["players"] || %{}, fn {_slot, p} -> p["agent_id"] == viewer_id end))
+  end
+
+  defp visible_to_viewer?(_match, _viewer_id), do: true
+
   defp wrap_registry_error({:ok, mod}), do: {:ok, mod}
   defp wrap_registry_error(:error), do: {:error, :unknown_game_type, "unsupported game type"}
+
+  defp validate_visibility(nil), do: :ok
+
+  defp validate_visibility(visibility) when visibility in ["public", "private", "unlisted"],
+    do: :ok
+
+  defp validate_visibility(_),
+    do: {:error, :invalid_visibility, "visibility must be one of: public, private, unlisted"}
 end

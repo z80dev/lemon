@@ -16,6 +16,9 @@ defmodule LemonGames.Bot.TurnWorker do
     end
   end
 
+  @spec choose_move_for(String.t(), map(), String.t()) :: map()
+  def choose_move_for(game_type, state, slot), do: choose_move(game_type, state, slot)
+
   defp play_turn(match, slot) do
     bot_info = get_in(match, ["players", slot])
     actor = %{"agent_id" => bot_info["agent_id"]}
@@ -26,7 +29,7 @@ defmodule LemonGames.Bot.TurnWorker do
     idem_key = "bot_#{match["id"]}_#{match["turn_number"]}_#{slot}"
 
     case Service.submit_move(match["id"], actor, move, idem_key) do
-      {:ok, updated, _seq} ->
+      {:ok, updated, _seq, _replay?} ->
         Logger.debug("[BotTurnWorker] Bot #{slot} played in match #{match["id"]}")
         # Recursively check if it's still a bot's turn (e.g., after RPS p1, check p2)
         maybe_play_bot_turn(updated)
