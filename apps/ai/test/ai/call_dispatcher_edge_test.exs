@@ -213,7 +213,7 @@ defmodule Ai.CallDispatcherEdgeTest do
       tasks =
         for _ <- 1..5 do
           Task.async(fn ->
-            CallDispatcher.dispatch(provider, fn -> {:error, :simulated_failure} end)
+            CallDispatcher.dispatch(provider, fn -> {:error, :timeout} end)
           end)
         end
 
@@ -300,7 +300,7 @@ defmodule Ai.CallDispatcherEdgeTest do
       start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 3})
 
       # Interleave successes and failures
-      CallDispatcher.dispatch(provider, fn -> {:error, :fail1} end)
+      CallDispatcher.dispatch(provider, fn -> {:error, :timeout} end)
       Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
@@ -314,15 +314,15 @@ defmodule Ai.CallDispatcherEdgeTest do
       assert state.failure_count == 0
 
       # Need 3 consecutive failures now
-      CallDispatcher.dispatch(provider, fn -> {:error, :fail2} end)
-      CallDispatcher.dispatch(provider, fn -> {:error, :fail3} end)
+      CallDispatcher.dispatch(provider, fn -> {:error, :econnrefused} end)
+      CallDispatcher.dispatch(provider, fn -> {:error, :econnreset} end)
       Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.failure_count == 2
       refute CircuitBreaker.is_open?(provider)
 
-      CallDispatcher.dispatch(provider, fn -> {:error, :fail4} end)
+      CallDispatcher.dispatch(provider, fn -> {:error, :nxdomain} end)
       Process.sleep(10)
 
       assert CircuitBreaker.is_open?(provider)
@@ -392,8 +392,8 @@ defmodule Ai.CallDispatcherEdgeTest do
       assert rl_state.available_tokens > 10
 
       # Open circuit through failures
-      CallDispatcher.dispatch(provider, fn -> {:error, :fail1} end)
-      CallDispatcher.dispatch(provider, fn -> {:error, :fail2} end)
+      CallDispatcher.dispatch(provider, fn -> {:error, :timeout} end)
+      CallDispatcher.dispatch(provider, fn -> {:error, :econnrefused} end)
       Process.sleep(20)
 
       # Rate limiter should still have capacity, but circuit is open
@@ -844,7 +844,7 @@ defmodule Ai.CallDispatcherEdgeTest do
           Task.async(fn ->
             CallDispatcher.dispatch(provider, fn ->
               Process.sleep(:rand.uniform(10))
-              {:error, {:simulated_failure, i}}
+              {:error, {:http_error, 500, "simulated server error #{i}"}}
             end)
           end)
         end

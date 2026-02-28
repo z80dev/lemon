@@ -352,6 +352,9 @@ defmodule Ai.CallDispatcher do
   end
 
   defp record_stream_terminal_result(provider, {:error, _reason}) do
+    # Stream-level errors are always service failures — the connection broke,
+    # the stream timed out, or the provider returned an error mid-stream.
+    # Unlike request-level errors, these can't be client errors (400/429/etc).
     Ai.CircuitBreaker.record_failure(provider)
   end
 
@@ -383,10 +386,40 @@ defmodule Ai.CallDispatcher do
 
   defp record_result(provider, result) do
     case result do
-      {:ok, _} -> Ai.CircuitBreaker.record_success(provider)
-      {:error, _} -> Ai.CircuitBreaker.record_failure(provider)
+      {:ok, _} ->
+        Ai.CircuitBreaker.record_success(provider)
+
+      {:error, reason} ->
+        if circuit_breaker_failure?(reason) do
+          Ai.CircuitBreaker.record_failure(provider)
+        else
+          # Client errors (400, 413), rate limits (429), and auth errors (401/403)
+          # are not service-level failures — don't trip the circuit breaker.
+          :ok
+        end
+
       # For non-tuple results, assume success
-      _ -> Ai.CircuitBreaker.record_success(provider)
+      _ ->
+        Ai.CircuitBreaker.record_success(provider)
     end
   end
+
+  # Only count errors that indicate the SERVICE is unhealthy,
+  # not errors caused by the request itself (client errors, rate limits, auth).
+  defp circuit_breaker_failure?({:http_error, status, _body}) do
+    status >= 500
+  end
+
+  defp circuit_breaker_failure?(:timeout), do: true
+  defp circuit_breaker_failure?(:closed), do: true
+  defp circuit_breaker_failure?(:econnrefused), do: true
+  defp circuit_breaker_failure?(:econnreset), do: true
+  defp circuit_breaker_failure?(:nxdomain), do: true
+
+  defp circuit_breaker_failure?(reason) when is_binary(reason) do
+    downcased = String.downcase(reason)
+    String.contains?(downcased, "timeout") or String.contains?(downcased, "econnrefused")
+  end
+
+  defp circuit_breaker_failure?(_), do: false
 end
