@@ -39,11 +39,18 @@ defmodule LemonChannels.Outbox do
     GenServer.call(__MODULE__, {:enqueue, payload}, @call_timeout_ms)
   catch
     :exit, _reason ->
+      # IMPORTANT: The GenServer may still process this enqueue even though the
+      # call timed out on our side. The message sits in the GenServer mailbox and
+      # will be delivered eventually, but we have no way to get the ref back.
+      # Return {:error, :enqueue_timeout} so callers know the delivery status is
+      # ambiguous — the message is likely in-flight, not lost.
       Logger.warning(
-        "Outbox.enqueue timed out channel=#{payload.channel_id} account=#{payload.account_id}"
+        "Outbox.enqueue timed out (message may still be delivered) " <>
+          "channel=#{payload.channel_id} account=#{payload.account_id} " <>
+          "idempotency_key=#{inspect(payload.idempotency_key)}"
       )
 
-      {:error, :timeout}
+      {:error, :enqueue_timeout}
   end
 
   @doc """

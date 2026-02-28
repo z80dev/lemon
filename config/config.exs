@@ -12,10 +12,13 @@ import Config
 config :phoenix, :json_library, Jason
 
 # Lane concurrency caps for CodingAgent.LaneQueue
+# Keep main cap at 4 to stay within Telegram's per-chat rate limits.
+# Subagent and background_exec can be higher since they don't all
+# route through the same Telegram chat.
 config :coding_agent, :lane_caps,
-  main: 8,
-  subagent: 16,
-  background_exec: 8
+  main: 4,
+  subagent: 8,
+  background_exec: 4
 
 # Default to an in-memory store. Dev/prod override to disk-backed persistence.
 config :lemon_core, LemonCore.Store,

@@ -21,7 +21,7 @@ defmodule LemonRouter.ChannelAdapter.Telegram do
   @telegram_media_group_max_items 10
   @telegram_recent_action_limit 5
   @image_extensions MapSet.new(~w(.png .jpg .jpeg .gif .webp .bmp .svg .tif .tiff .heic .heif))
-  @pending_resume_cleanup_base_ms 2_000
+  @pending_resume_cleanup_base_ms 5_000
   @pending_resume_cleanup_max_attempts 4
   @pending_resume_cleanup_max_backoff_ms 30_000
   @default_auto_send_generated_max_files 3

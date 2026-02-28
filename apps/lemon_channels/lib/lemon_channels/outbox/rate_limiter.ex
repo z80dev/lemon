@@ -29,7 +29,7 @@ defmodule LemonChannels.Outbox.RateLimiter do
   catch
     :exit, _reason ->
       Logger.warning("RateLimiter.check timed out channel=#{channel_id} account=#{account_id}")
-      :ok
+      {:rate_limited, 1_000}
   end
 
   @doc """
@@ -44,7 +44,7 @@ defmodule LemonChannels.Outbox.RateLimiter do
   catch
     :exit, _reason ->
       Logger.warning("RateLimiter.consume timed out channel=#{channel_id} account=#{account_id}")
-      :ok
+      {:rate_limited, 1_000}
   end
 
   @doc """
