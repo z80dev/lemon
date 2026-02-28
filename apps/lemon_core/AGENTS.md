@@ -52,7 +52,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Id` | UUID and unique ID generation |
 | `LemonCore.Dotenv` | `.env` file loader; preserves existing env vars by default |
 | `LemonCore.Logging` | Runtime log-to-file handler setup from `[logging]` config |
-| `LemonCore.GatewayConfig` | Unified gateway config access merging TOML, app env, and per-transport overrides |
+| `LemonCore.GatewayConfig` | Unified gateway config access merging TOML, app env, and per-transport overrides. `get/2` for top-level keys; `get_telegram/2` for bool-safe Telegram sub-config lookup (distinguishes `false` from absent). |
 | `LemonCore.Config.TomlPatch` | Textual TOML editing for targeted key upserts without a TOML encoder |
 | `LemonCore.Binding` | Struct mapping transport/chat/topic to project/agent/engine |
 | `LemonCore.BindingResolver` | Resolves bindings for inbound messages |

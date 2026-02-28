@@ -180,8 +180,12 @@ defmodule LemonGateway.ConfigLoader do
       voice_transcription_api_key: fetch(telegram, :voice_transcription_api_key),
       voice_max_bytes: fetch(telegram, :voice_max_bytes),
       compaction: parse_telegram_compaction(fetch(telegram, :compaction)),
-      files: parse_telegram_files(fetch(telegram, :files))
+      files: parse_telegram_files(fetch(telegram, :files)),
+      progress_reactions: fetch_bool(telegram, :progress_reactions),
+      reply_to_user_message: fetch_bool(telegram, :reply_to_user_message),
+      show_tool_status: fetch_bool(telegram, :show_tool_status)
     }
+    |> reject_nil_values()
   end
 
   defp parse_telegram(_), do: %{}
@@ -471,6 +475,27 @@ defmodule LemonGateway.ConfigLoader do
 
   defp fetch(list, key) when is_list(list) do
     Keyword.get(list, key) || Keyword.get(list, to_string(key))
+  end
+
+  # fetch_bool: like fetch/2 but treats `false` as a valid value rather than
+  # falling through to nil, so `option = false` in TOML is preserved correctly.
+  defp fetch_bool(map, key) when is_map(map) do
+    case Map.fetch(map, key) do
+      {:ok, val} when is_boolean(val) -> val
+      _ ->
+        case Map.fetch(map, to_string(key)) do
+          {:ok, val} when is_boolean(val) -> val
+          _ -> nil
+        end
+    end
+  end
+
+  defp fetch_bool(_, _), do: nil
+
+  defp reject_nil_values(map) do
+    map
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+    |> Map.new()
   end
 
   defp resolve_env_ref(value) when is_binary(value) do

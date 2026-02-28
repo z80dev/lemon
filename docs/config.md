@@ -499,3 +499,19 @@ In Telegram group chats, you can gate runs so Lemon only triggers when explicitl
 
 Forum topic management:
 - `/topic <name>`: create a new topic in the current Telegram forum supergroup.
+
+## Telegram Behavior Toggles
+
+Optional flags to suppress default Telegram behaviors. All default to `true` (enabled).
+
+```toml
+[gateway.telegram]
+# Set 👀/✅/❌ reactions on the user's message to indicate processing status.
+progress_reactions = true
+
+# Send answers as a threaded reply to the user's message rather than a new message.
+reply_to_user_message = true
+
+# Show a "Tool calls:" status message during runs with tool activity.
+show_tool_status = true
+```
