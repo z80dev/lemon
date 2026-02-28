@@ -75,7 +75,7 @@ share a group and are never delivered concurrently to prevent reordering.
 |------|-------------|
 | `adapters/telegram.ex` | Plugin impl. id: `"telegram"`, chunk_limit: 4096, rate_limit: 30, full capability set. |
 | `adapters/telegram/supervisor.ex` | Starts AsyncSupervisor (Task.Supervisor) + Transport. |
-| `adapters/telegram/transport.ex` | **Largest file (~1200 lines)**. Long-polling GenServer via getUpdates. Command handling, inbound routing, session management. State includes message indices, active runs, picker state. |
+| `adapters/telegram/transport.ex` | **Largest file (~1200 lines)**. Long-polling GenServer via getUpdates. Command handling, inbound routing, session management. State includes message indices, active runs, picker state, typing heartbeat timers. |
 | `adapters/telegram/transport/commands.ex` | Pure command detection functions. `scope_key/3`, `join_messages/1`. No side effects. |
 | `adapters/telegram/transport/file_operations.ex` | `/file put`/`get`, auto-put for document uploads, media group file handling. |
 | `adapters/telegram/transport/media_groups.ex` | Coalescence of media group messages with debounce timer. |
@@ -89,7 +89,7 @@ share a group and are never delivered concurrently to prevent reordering.
 
 | File | What It Does |
 |------|-------------|
-| `telegram/api.ex` | Raw Bot API calls: send_message, edit_message_text, get_updates, send_document, send_photo, send_media_group, etc. |
+| `telegram/api.ex` | Raw Bot API calls: send_message, edit_message_text, get_updates, send_document, send_photo, send_media_group, send_chat_action, etc. |
 | `telegram/delivery.ex` | High-level enqueue helpers (`enqueue_send/3`, `enqueue_edit/3`) backed by Outbox. |
 | `telegram/formatter.ex` | Markdown to plain text + Telegram entities. Avoids MarkdownV2 escaping entirely. |
 | `telegram/markdown.ex` | EarmarkParser AST renderer. Produces `{text, [entity]}` with correct UTF-16 offsets. |

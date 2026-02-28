@@ -134,6 +134,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             bot_id: bot_id,
             bot_username: bot_username,
             files: cfg_get(config, :files, %{}),
+            # session_key => timer_ref for repeating typing heartbeat
+            typing_timers: %{},
             # {chat_id, thread_id, sender_id} => model picker state
             model_pickers: %{},
             last_poll_error: nil,
@@ -171,8 +173,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     state =
       cond do
         buffer && buffer.debounce_ref == debounce_ref ->
-          submit_buffer(buffer, state)
-          %{state | buffers: buffers}
+          flushed_state = submit_buffer(buffer, state)
+          %{flushed_state | buffers: buffers}
 
         buffer ->
           # Stale timer; keep latest buffer.
@@ -326,6 +328,25 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
         _ ->
           state
+      end
+
+    state = if is_binary(session_key), do: cancel_typing_timer(state, session_key), else: state
+
+    {:noreply, state}
+  rescue
+    _ -> {:noreply, state}
+  end
+
+  def handle_info({:typing_tick, session_key, chat_id, thread_id}, state) do
+    state =
+      case Map.get(state.typing_timers, session_key) do
+        nil ->
+          state
+
+        _ref ->
+          send_typing_action(state, chat_id, thread_id)
+          timer_ref = Process.send_after(self(), {:typing_tick, session_key, chat_id, thread_id}, 4_000)
+          %{state | typing_timers: Map.put(state.typing_timers, session_key, timer_ref)}
       end
 
     {:noreply, state}
@@ -680,6 +701,17 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         state
       end
 
+    # Start typing indicator heartbeat for this session
+    state =
+      if is_integer(chat_id) and is_binary(session_key) do
+        state = cancel_typing_timer(state, session_key)
+        send_typing_action(state, chat_id, thread_id)
+        timer_ref = Process.send_after(self(), {:typing_tick, session_key, chat_id, thread_id}, 4_000)
+        %{state | typing_timers: Map.put(state.typing_timers, session_key, timer_ref)}
+      else
+        state
+      end
+
     inbound = %{inbound | meta: meta}
     route_to_router(inbound)
     state
@@ -704,6 +736,22 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     end
   rescue
     _ -> nil
+  end
+
+  defp send_typing_action(state, chat_id, thread_id) do
+    opts = if is_integer(thread_id), do: %{message_thread_id: thread_id}, else: %{}
+    state.api_mod.send_chat_action(state.token, chat_id, "typing", opts)
+  rescue
+    _ -> :ok
+  end
+
+  defp cancel_typing_timer(state, session_key) do
+    case Map.pop(state.typing_timers, session_key) do
+      {nil, _} -> state
+      {ref, timers} ->
+        Process.cancel_timer(ref)
+        %{state | typing_timers: timers}
+    end
   end
 
   defp maybe_cancel_by_reply(state, inbound) do

@@ -499,3 +499,7 @@ In Telegram group chats, you can gate runs so Lemon only triggers when explicitl
 
 Forum topic management:
 - `/topic <name>`: create a new topic in the current Telegram forum supergroup.
+
+## Telegram Typing Indicator
+
+Lemon sends a "typing…" chat action while a run is in progress, refreshing every 4 seconds (Telegram actions expire after ~5 seconds). The indicator is cancelled automatically when the run completes.
