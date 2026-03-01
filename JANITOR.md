@@ -1,3 +1,37 @@
+### 2026-03-01 - MCP Tool Integration Implementation
+**Work Area**: MCP Protocol / Tool Registry / Skills Integration
+
+**Summary**:
+- Implemented Model Context Protocol (MCP) support for Lemon
+- Created new `apps/lemon_mcp/` application with:
+  - MCP Client (stdio transport) for consuming external MCP servers
+  - MCP Server (HTTP transport) for exposing Lemon tools
+  - Protocol types and JSON-RPC message handling
+  - Tool adapter for Lemon/MCP format conversion
+- Extended `apps/lemon_skills/` with MCP source integration:
+  - `LemonSkills.McpSource` for tool discovery and caching
+  - Configuration support for MCP servers
+- Extended `apps/coding_agent/` tool registry to include MCP-discovered tools
+- Added comprehensive documentation and tests
+
+**Commits**:
+- `756be69a` - Add lemon_mcp app structure with Protocol, Transport, and Client modules
+- `f20936a4` - Add tests and README for lemon_mcp
+- `d395c59e` - Update lemon_mcp protocol and tests for client foundation  
+- `477113d0` - Fix unused variable warning in stdio transport
+- `15b968fd` - Add MCP Server Foundation implementation
+- `7cd6af04` - feat(mcp): Add MCP Tool Registry Integration
+- `554564bc` - fix(mcp): adjust test for mcp_enabled? to handle dynamic Client availability
+- `688b89f4` - docs(mcp): Update plan status to ready_to_land, add review and merge artifacts
+- `d29fd4b7` - feat(mcp): Add Model Context Protocol support (merge commit)
+
+**Validation**:
+- `apps/lemon_mcp`: 54 tests, 0 failures
+- `apps/lemon_skills`: 123 tests, 0 failures (2 excluded)
+- All MCP milestones completed successfully
+
+---
+
 ### 2026-02-23 - Janitor Final Integration: Debt Merge Closure + Planning + Validation
 **Work Area**: Final Integration / Planning Artifacts / Validation
 
