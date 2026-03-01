@@ -483,3 +483,34 @@ Expanded bearer-auth compatibility to accept multiple ASCII spaces between schem
 
 **Validation:**
 - `mix test apps/lemon_control_plane/test/lemon_control_plane/http/games_api_test.exs apps/lemon_games/test/lemon_games/matches/service_test.exs apps/lemon_web/test/lemon_web/live/games_live_test.exs` ✅
+
+---
+
+## 2026-03-01
+
+### Agent Games Platform - Documentation Completion
+**Plan:** `PLN-20260226-agent-games-platform`  
+**Status:** `in_progress`
+
+Completed missing documentation for the games platform feature.
+
+**Changes:**
+- Created `docs/games-platform.md`
+  - Architecture overview with component diagram
+  - REST API endpoint reference
+  - JSON-RPC admin methods
+  - Authentication and rate limiting details
+  - Match lifecycle and event sourcing explanation
+  - Guide for adding new games
+- Updated `docs/catalog.exs`
+  - Added entry for games-platform.md with review metadata
+- Updated `docs/README.md`
+  - Added games-platform.md to Product & Capability Docs section
+- Updated `planning/plans/PLN-20260226-agent-games-platform.md`
+  - Added progress log entry for documentation completion
+
+**Validation:**
+- `mix test apps/lemon_games` ✅ (86 tests)
+- `mix test apps/lemon_control_plane/test/lemon_control_plane/http/games_api_test.exs` ✅ (40 tests)
+- `mix test apps/lemon_web/test/lemon_web/live/games_live_test.exs` ✅ (5 tests)
+- All documentation renders correctly
