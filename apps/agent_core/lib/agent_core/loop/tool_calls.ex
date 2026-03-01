@@ -430,7 +430,17 @@ defmodule AgentCore.Loop.ToolCalls do
   end
 
   defp find_tool(tools, name) do
-    Enum.find(tools, fn tool -> tool.name == name end)
+    normalized_name = String.trim(name)
+
+    if normalized_name != name do
+      LemonCore.Telemetry.emit(
+        [:agent_core, :tool_call, :name_normalized],
+        %{},
+        %{original: name, normalized: normalized_name}
+      )
+    end
+
+    Enum.find(tools, fn tool -> tool.name == normalized_name end)
   end
 
   defp error_to_result(reason) when is_binary(reason) do

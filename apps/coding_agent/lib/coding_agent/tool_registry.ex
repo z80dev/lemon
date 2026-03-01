@@ -106,8 +106,17 @@ defmodule CodingAgent.ToolRegistry do
           {:ok, AgentTool.t()} | {:error, :not_found}
   def get_tool(cwd, name, opts \\ []) when is_binary(name) do
     tools = get_tools(cwd, opts)
+    normalized_name = String.trim(name)
 
-    case Enum.find(tools, fn tool -> tool.name == name end) do
+    if normalized_name != name do
+      LemonCore.Telemetry.emit(
+        [:coding_agent, :tool_call, :name_normalized],
+        %{},
+        %{original: name, normalized: normalized_name}
+      )
+    end
+
+    case Enum.find(tools, fn tool -> tool.name == normalized_name end) do
       nil -> {:error, :not_found}
       tool -> {:ok, tool}
     end

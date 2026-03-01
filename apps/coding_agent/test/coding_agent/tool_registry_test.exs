@@ -149,6 +149,49 @@ defmodule CodingAgent.ToolRegistryTest do
       assert {:error, :not_found} =
                ToolRegistry.get_tool(tmp_dir, "bash", disabled: ["bash"])
     end
+
+    test "normalizes whitespace-padded tool names", %{tmp_dir: tmp_dir} do
+      assert {:ok, tool} = ToolRegistry.get_tool(tmp_dir, "  read  ")
+      assert tool.name == "read"
+
+      assert {:ok, tool} = ToolRegistry.get_tool(tmp_dir, "\tread\n")
+      assert tool.name == "read"
+
+      assert {:ok, tool} = ToolRegistry.get_tool(tmp_dir, " read")
+      assert tool.name == "read"
+    end
+
+    test "emits telemetry when normalizing tool names", %{tmp_dir: tmp_dir} do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:coding_agent, :tool_call, :name_normalized]])
+
+      # Whitespace-padded name should trigger normalization telemetry
+      assert {:ok, _tool} = ToolRegistry.get_tool(tmp_dir, "  read  ")
+
+      assert_received {
+        [:coding_agent, :tool_call, :name_normalized],
+        ^ref,
+        %{},
+        %{original: "  read  ", normalized: "read"}
+      }
+
+      :telemetry.detach(ref)
+    end
+
+    test "does not emit telemetry for already-normal names", %{tmp_dir: tmp_dir} do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:coding_agent, :tool_call, :name_normalized]])
+
+      # Normal name should not trigger telemetry
+      assert {:ok, _tool} = ToolRegistry.get_tool(tmp_dir, "read")
+
+      refute_received {
+        [:coding_agent, :tool_call, :name_normalized],
+        ^ref,
+        _,
+        _
+      }
+
+      :telemetry.detach(ref)
+    end
   end
 
   describe "has_tool?/2" do
