@@ -1,7 +1,8 @@
 ---
 plan_id: PLN-20260224-inspiration-ideas-implementation
-landed_at: pending
+landed_at: 2026-02-28
 landed_by: janitor
+landed_revision: c7d2c70c
 ---
 
 # Merge Record: Implement Inspiration Ideas from Upstream Research

@@ -1,7 +1,8 @@
 ---
 plan_id: PLN-20260222-debt-phase-05-m2-submodule-extraction
-landed_at: pending
+landed_at: 2026-02-28
 landed_by: janitor
+landed_revision: 7c7de1c5
 ---
 
 # Merge Record: Debt Phase 5 M2 — Ai.Models submodule extraction

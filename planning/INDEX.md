@@ -32,13 +32,7 @@ These entries were already completed before the `planning/` workflow was created
 
 | Plan ID | Title | Status | Owner | Workspace | Change ID | Roadmap Ref | Updated |
 |---|---|---|---|---|---|---|---|
-| [PLN-20260223-macos-keychain-secrets-audit](plans/PLN-20260223-macos-keychain-secrets-audit.md) | macOS Keychain secrets path audit and hardening | `ready_to_land` | `janitor` | `feature/pln-20260223-macos-keychain-secrets-audit` | `pending` | `ROADMAP.md` | 2026-02-25 |
-| [PLN-20260224-deterministic-ci-test-hardening](plans/PLN-20260224-deterministic-ci-test-hardening.md) | Deterministic CI and test signal hardening | `ready_to_land` | `janitor` | `feature/pln-20260224-deterministic-ci-test-hardening` | `pending` | `ROADMAP.md` | 2026-02-25 |
-| [PLN-20260222-debt-phase-10-monolith-footprint-reduction](plans/PLN-20260222-debt-phase-10-monolith-footprint-reduction.md) | Debt Phase 10 - Monolith and release footprint reduction | `ready_to_land` | `janitor` | `feature/pln-20260222-debt-phase-10-monolith-footprint-reduction` | `pending` | `debt_plan.md:123` | 2026-02-25 |
-| [PLN-20260222-debt-phase-05-m2-submodule-extraction](plans/PLN-20260222-debt-phase-05-m2-submodule-extraction.md) | Debt Phase 5 M2: Ai.Models submodule extraction | `ready_to_land` | `janitor` | `feature/pln-20260222-debt-phase-05-m2-submodule-extraction` | `pending` | `debt_plan.md:40` | 2026-02-25 |
-| [PLN-20260222-debt-phase-13-client-ci-parity-governance](plans/PLN-20260222-debt-phase-13-client-ci-parity-governance.md) | Debt Phase 13 - Client CI parity and dependency governance | `ready_to_land` | `janitor` | `feature/pln-20260222-debt-phase-13-m7-eslint-parity` | `pending` | `debt_plan.md:200` | 2026-02-26 |
-| [PLN-20260224-inspiration-ideas-implementation](plans/PLN-20260224-inspiration-ideas-implementation.md) | Implement Inspiration Ideas from Upstream Research | `ready_to_land` | `janitor` | `feature/pln-20260224-inspiration-ideas-implementation` | `pending` | `ROADMAP.md` | 2026-02-25 |
-| [PLN-20260224-long-running-agent-harnesses](plans/PLN-20260224-long-running-agent-harnesses.md) | Long-Running Agent Harnesses and Task Management | `ready_to_land` | `janitor` | `feature/pln-20260224-long-running-harnesses` | `pending` | — | 2026-02-25 |
+| — | — | — | — | — | — | — | — |
 
 ## Ready for Review
 
@@ -49,14 +43,7 @@ These entries were already completed before the `planning/` workflow was created
 
 | Plan ID | Title | Landing Doc | Owner | Updated |
 |---|---|---|---|---|
-| [PLN-20260223-macos-keychain-secrets-audit](plans/PLN-20260223-macos-keychain-secrets-audit.md) | macOS Keychain secrets path audit and hardening | [MRG-PLN-20260223-macos-keychain-secrets-audit.md](merges/MRG-PLN-20260223-macos-keychain-secrets-audit.md) | `janitor` | 2026-02-25 |
-| [PLN-20260222-debt-phase-10-monolith-footprint-reduction](plans/PLN-20260222-debt-phase-10-monolith-footprint-reduction.md) | Debt Phase 10 - Monolith and release footprint reduction | [MRG-PLN-20260222-debt-phase-10-monolith-footprint-reduction.md](merges/MRG-PLN-20260222-debt-phase-10-monolith-footprint-reduction.md) | `janitor` | 2026-02-25 |
-| [PLN-20260222-debt-phase-05-m2-submodule-extraction](plans/PLN-20260222-debt-phase-05-m2-submodule-extraction.md) | Debt Phase 5 M2: Ai.Models submodule extraction | [MRG-PLN-20260222-debt-phase-05-m2-submodule-extraction.md](merges/MRG-PLN-20260222-debt-phase-05-m2-submodule-extraction.md) | `janitor` | 2026-02-25 |
-| [PLN-20260222-debt-phase-13-client-ci-parity-governance](plans/PLN-20260222-debt-phase-13-client-ci-parity-governance.md) | Debt Phase 13 - Client CI parity and dependency governance | [MRG-PLN-20260222-debt-phase-13-client-ci-parity-governance.md](merges/MRG-PLN-20260222-debt-phase-13-client-ci-parity-governance.md) | `janitor` | 2026-02-26 |
-| [PLN-20260224-deterministic-ci-test-hardening](plans/PLN-20260224-deterministic-ci-test-hardening.md) | Deterministic CI and test signal hardening | [MRG-PLN-20260224-deterministic-ci-test-hardening.md](merges/MRG-PLN-20260224-deterministic-ci-test-hardening.md) | `janitor` | 2026-02-25 |
-| [PLN-20260224-runtime-hot-reload](plans/PLN-20260224-runtime-hot-reload.md) | Runtime Hot-Reload System for BEAM Modules and Extensions | [MRG-PLN-20260224-runtime-hot-reload.md](merges/MRG-PLN-20260224-runtime-hot-reload.md) | `janitor` | 2026-02-25 |
-| [PLN-20260224-long-running-agent-harnesses](plans/PLN-20260224-long-running-agent-harnesses.md) | Long-Running Agent Harnesses and Task Management | [MRG-PLN-20260224-long-running-agent-harnesses.md](merges/MRG-PLN-20260224-long-running-agent-harnesses.md) | `janitor` | 2026-02-25 |
-| [PLN-20260224-inspiration-ideas-implementation](plans/PLN-20260224-inspiration-ideas-implementation.md) | Implement Inspiration Ideas from Upstream Research | [MRG-PLN-20260224-inspiration-ideas-implementation.md](merges/MRG-PLN-20260224-inspiration-ideas-implementation.md) | `janitor` | 2026-02-25 |
+| — | — | — | — | — |
 
 
 ## Blocked
@@ -69,6 +56,14 @@ These entries were already completed before the `planning/` workflow was created
 | Plan ID | Title | Landed Revision | Notes | Updated |
 |---|---|---|---|---|
 | [PLN-20260226-agent-games-platform](plans/PLN-20260226-agent-games-platform.md) | Agent-vs-Agent Game Platform (REST API + Live Spectator Web) | `61e6c71e` | Merged with TicTacToe addition; 71 tests pass | 2026-03-01 |
+| [PLN-20260224-long-running-agent-harnesses](plans/PLN-20260224-long-running-agent-harnesses.md) | Long-Running Agent Harnesses and Task Management | `75f434c7` | Idle watchdog, keepalive, checkpointing, progress tracking | 2026-02-28 |
+| [PLN-20260224-inspiration-ideas-implementation](plans/PLN-20260224-inspiration-ideas-implementation.md) | Implement Inspiration Ideas from Upstream Research | `c7d2c70c` | Chinese overflow patterns, grep grouped output, auto-reasoning gate | 2026-02-28 |
+| [PLN-20260224-runtime-hot-reload](plans/PLN-20260224-runtime-hot-reload.md) | Runtime Hot-Reload System for BEAM Modules and Extensions | `6bb85309` | Lemon.Reload, /reload command, extension lifecycle | 2026-02-28 |
+| [PLN-20260224-deterministic-ci-test-hardening](plans/PLN-20260224-deterministic-ci-test-hardening.md) | Deterministic CI and test signal hardening | `99d95b28` | AsyncHelpers, flake-detection CI job, 33 sleep sites removed | 2026-02-28 |
+| [PLN-20260223-macos-keychain-secrets-audit](plans/PLN-20260223-macos-keychain-secrets-audit.md) | macOS Keychain secrets path audit and hardening | `93fd362d` | Secrets flow matrix, fallback precedence tests, auth helper hardening | 2026-02-28 |
+| [PLN-20260222-debt-phase-13-client-ci-parity-governance](plans/PLN-20260222-debt-phase-13-client-ci-parity-governance.md) | Debt Phase 13 - Client CI parity and dependency governance | `e548cedd` | Client vitest configs, dependency governance, ESLint parity | 2026-02-28 |
+| [PLN-20260222-debt-phase-10-monolith-footprint-reduction](plans/PLN-20260222-debt-phase-10-monolith-footprint-reduction.md) | Debt Phase 10 - Monolith and release footprint reduction | `3b102fdc` | Config/doc drift cleanup, Ai.Models decomposition blueprint | 2026-02-28 |
+| [PLN-20260222-debt-phase-05-m2-submodule-extraction](plans/PLN-20260222-debt-phase-05-m2-submodule-extraction.md) | Debt Phase 5 M2: Ai.Models submodule extraction | `7c7de1c5` | Extracted 15 provider modules from 11K line models.ex | 2026-02-28 |
 | [PLN-20260222-debt-phase-09-gateway-reliability-decomposition](plans/PLN-20260222-debt-phase-09-gateway-reliability-decomposition.md) | Debt Phase 9 - Gateway runtime reliability decomposition | `034fc111` | Close-out: async email test fix landed | 2026-02-25 |
 | [PLN-20260224-pi-model-resolver-slash-support](plans/PLN-20260224-pi-model-resolver-slash-support.md) | Add Slash Separator Support for Provider/Model Format | `5c7098c1` | Pi parity: slash separator support for provider/model format | 2026-02-24 |
 | [PLN-20260222-agent-introspection](plans/PLN-20260222-agent-introspection.md) | End-to-end agent introspection | `bec7bfae` | Final stacked landing `M2 -> M3 -> M4`; post-landing smoke tests passed | 2026-02-23 |

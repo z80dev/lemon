@@ -1,7 +1,8 @@
 ---
 plan_id: PLN-20260224-deterministic-ci-test-hardening
-landed_at: pending
+landed_at: 2026-02-28
 landed_by: janitor
+landed_revision: 99d95b28
 ---
 
 # Merge Record: Deterministic CI and Test Signal Hardening

@@ -486,6 +486,39 @@ Expanded bearer-auth compatibility to accept multiple ASCII spaces between schem
 
 ---
 
+## 2026-03-01 (cron run - batch landing)
+
+### Planning System Batch Close-out
+**Plans:** 8 plans moved from `ready_to_land` to `landed`
+
+Closed out planning bookkeeping for plans that were historically implemented but still showed `ready_to_land` status.
+
+**Plans Updated:**
+| Plan | Landed Revision | Key Deliverables |
+|---|---|---|
+| PLN-20260223-macos-keychain-secrets-audit | `93fd362d` | Secrets flow matrix, fallback precedence tests, auth helper hardening |
+| PLN-20260224-deterministic-ci-test-hardening | `99d95b28` | AsyncHelpers, flake-detection CI job, 33 sleep sites removed |
+| PLN-20260222-debt-phase-10-monolith-footprint-reduction | `3b102fdc` | Config/doc drift cleanup, Ai.Models decomposition blueprint |
+| PLN-20260222-debt-phase-05-m2-submodule-extraction | `7c7de1c5` | Extracted 15 provider modules from 11K line models.ex |
+| PLN-20260222-debt-phase-13-client-ci-parity-governance | `e548cedd` | Client vitest configs, dependency governance, ESLint parity |
+| PLN-20260224-inspiration-ideas-implementation | `c7d2c70c` | Chinese overflow patterns, grep grouped output, auto-reasoning gate |
+| PLN-20260224-long-running-agent-harnesses | `75f434c7` | Idle watchdog, keepalive, checkpointing, progress tracking |
+| PLN-20260224-runtime-hot-reload | `6bb85309` | Lemon.Reload, /reload command, extension lifecycle |
+
+**Changes:**
+- `planning/INDEX.md`
+  - Cleared Active Plans table (was showing stale `ready_to_land` entries)
+  - Cleared Ready to Land table (all plans now landed)
+  - Added 8 new entries to Recently Landed table with revisions and notes
+- `planning/merges/*.md` (8 files)
+  - Updated frontmatter: `landed_at: 2026-02-28`, added `landed_revision`
+
+**Validation:**
+- All referenced commits exist on main ✅
+- `git log --oneline main | grep <commit>` verified for each plan ✅
+
+---
+
 ## 2026-03-01 (cron run)
 
 ### Agent Games Platform - Landed to Main

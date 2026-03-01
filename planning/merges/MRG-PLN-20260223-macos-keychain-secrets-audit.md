@@ -1,7 +1,8 @@
 ---
 plan_id: PLN-20260223-macos-keychain-secrets-audit
-landed_at: pending
+landed_at: 2026-02-28
 landed_by: janitor
+landed_revision: 93fd362d
 ---
 
 # Merge Record: macOS Keychain Secrets Path Audit and Hardening

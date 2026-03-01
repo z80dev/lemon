@@ -1,7 +1,8 @@
 ---
 plan_id: PLN-20260222-debt-phase-13-client-ci-parity-governance
-landed_at: pending
+landed_at: 2026-02-28
 landed_by: janitor
+landed_revision: e548cedd
 ---
 
 # Merge Record: Debt Phase 13 Client CI Parity and Dependency Governance

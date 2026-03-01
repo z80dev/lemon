@@ -1,7 +1,8 @@
 ---
 plan_id: PLN-20260224-runtime-hot-reload
-landed_at: pending
+landed_at: 2026-02-28
 landed_by: janitor
+landed_revision: 6bb85309
 ---
 
 # Merge Record: Runtime Hot-Reload System

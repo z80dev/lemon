@@ -1,7 +1,8 @@
 ---
 plan_id: PLN-20260224-long-running-agent-harnesses
-landed_at: pending
+landed_at: 2026-02-28
 landed_by: janitor
+landed_revision: 75f434c7
 ---
 
 # Merge Record: Long-Running Agent Harnesses and Task Management

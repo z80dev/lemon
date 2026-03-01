@@ -1,7 +1,8 @@
 ---
 plan_id: PLN-20260222-debt-phase-10-monolith-footprint-reduction
-landed_at: pending
+landed_at: 2026-02-28
 landed_by: janitor
+landed_revision: 3b102fdc
 ---
 
 # Merge Record: Debt Phase 10 — Monolith and Release Footprint Reduction
