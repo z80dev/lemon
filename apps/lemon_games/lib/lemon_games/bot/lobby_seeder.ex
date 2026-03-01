@@ -20,7 +20,7 @@ defmodule LemonGames.Bot.LobbySeeder do
   @default_interval_ms 10_000
   @default_max_active_matches 3
   @default_house_agent_id "lemon_house"
-  @default_game_types ["rock_paper_scissors", "connect4"]
+  @default_game_types ["rock_paper_scissors", "connect4", "tic_tac_toe"]
 
   @type run_opts :: [
           interval_ms: pos_integer(),

@@ -48,6 +48,10 @@ defmodule LemonGames.Bot.TurnWorker do
     LemonGames.Bot.Connect4Bot.choose_move(state, slot)
   end
 
+  defp choose_move("tic_tac_toe", state, slot) do
+    LemonGames.Bot.TicTacToeBot.choose_move(state, slot)
+  end
+
   defp choose_move(_game_type, _state, _slot) do
     raise "No bot strategy for game type"
   end

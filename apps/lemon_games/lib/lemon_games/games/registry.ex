@@ -5,7 +5,8 @@ defmodule LemonGames.Games.Registry do
 
   @engines %{
     "rock_paper_scissors" => LemonGames.Games.RockPaperScissors,
-    "connect4" => LemonGames.Games.Connect4
+    "connect4" => LemonGames.Games.Connect4,
+    "tic_tac_toe" => LemonGames.Games.TicTacToe
   }
 
   @spec fetch(String.t()) :: {:ok, module()} | :error
