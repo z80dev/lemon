@@ -134,7 +134,7 @@ defmodule LemonMCP.Transport.Stdio do
   end
 
   @impl true
-  def handle_call({:send, message}, _from, %{port: nil} = state) do
+  def handle_call({:send, _message}, _from, %{port: nil} = state) do
     {:reply, {:error, :not_connected}, state}
   end
 
