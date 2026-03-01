@@ -26,7 +26,13 @@ defmodule Ai.Providers.GoogleSharedTest do
       id: Keyword.get(opts, :id, "gemini-2.5-pro"),
       provider: Keyword.get(opts, :provider, :google_generative_ai),
       input: Keyword.get(opts, :input, [:text]),
-      cost: Keyword.get(opts, :cost, %ModelCost{input: 1.25, output: 5.0, cache_read: 0.3125, cache_write: 0.0})
+      cost:
+        Keyword.get(opts, :cost, %ModelCost{
+          input: 1.25,
+          output: 5.0,
+          cache_read: 0.3125,
+          cache_write: 0.0
+        })
     }
   end
 
@@ -159,15 +165,29 @@ defmodule Ai.Providers.GoogleSharedTest do
 
     test "converts multipart user message with image when model supports images" do
       m = model(input: [:text, :image])
-      messages = [%UserMessage{content: [%ImageContent{data: "base64data", mime_type: "image/png"}]}]
+
+      messages = [
+        %UserMessage{content: [%ImageContent{data: "base64data", mime_type: "image/png"}]}
+      ]
+
       result = GoogleShared.convert_messages(m, context(messages))
 
-      assert [%{"role" => "user", "parts" => [%{"inlineData" => %{"mimeType" => "image/png", "data" => "base64data"}}]}] =
+      assert [
+               %{
+                 "role" => "user",
+                 "parts" => [
+                   %{"inlineData" => %{"mimeType" => "image/png", "data" => "base64data"}}
+                 ]
+               }
+             ] =
                result
     end
 
     test "filters out images when model doesn't support them" do
-      messages = [%UserMessage{content: [%ImageContent{data: "base64data", mime_type: "image/png"}]}]
+      messages = [
+        %UserMessage{content: [%ImageContent{data: "base64data", mime_type: "image/png"}]}
+      ]
+
       result = GoogleShared.convert_messages(model(input: [:text]), context(messages))
       assert result == []
     end
@@ -223,7 +243,14 @@ defmodule Ai.Providers.GoogleSharedTest do
 
       result = GoogleShared.convert_messages(model(), context(messages))
 
-      assert [%{"role" => "model", "parts" => [%{"thought" => true, "text" => "Let me think...", "thoughtSignature" => "YWJj"}]}] =
+      assert [
+               %{
+                 "role" => "model",
+                 "parts" => [
+                   %{"thought" => true, "text" => "Let me think...", "thoughtSignature" => "YWJj"}
+                 ]
+               }
+             ] =
                result
     end
 
@@ -309,7 +336,11 @@ defmodule Ai.Providers.GoogleSharedTest do
                  "role" => "model",
                  "parts" => [
                    %{
-                     "functionCall" => %{"name" => "get_weather", "args" => %{"city" => "NYC"}, "id" => "call_1"},
+                     "functionCall" => %{
+                       "name" => "get_weather",
+                       "args" => %{"city" => "NYC"},
+                       "id" => "call_1"
+                     },
                      "thoughtSignature" => "YWJj"
                    }
                  ]
@@ -466,10 +497,23 @@ defmodule Ai.Providers.GoogleSharedTest do
     end
 
     test "converts single tool" do
-      tools = [%Tool{name: "get_weather", description: "Get weather", parameters: %{"type" => "object"}}]
+      tools = [
+        %Tool{name: "get_weather", description: "Get weather", parameters: %{"type" => "object"}}
+      ]
+
       result = GoogleShared.convert_tools(tools)
 
-      assert [%{"functionDeclarations" => [%{"name" => "get_weather", "description" => "Get weather", "parameters" => %{"type" => "object"}}]}] =
+      assert [
+               %{
+                 "functionDeclarations" => [
+                   %{
+                     "name" => "get_weather",
+                     "description" => "Get weather",
+                     "parameters" => %{"type" => "object"}
+                   }
+                 ]
+               }
+             ] =
                result
     end
 
@@ -570,7 +614,8 @@ defmodule Ai.Providers.GoogleSharedTest do
     end
 
     test "returns :down for DOWN message" do
-      assert GoogleShared.normalize_sse_message({:DOWN, make_ref(), :process, self(), :normal}) == :down
+      assert GoogleShared.normalize_sse_message({:DOWN, make_ref(), :process, self(), :normal}) ==
+               :down
     end
 
     test "returns :ignore for unknown messages" do
@@ -602,7 +647,8 @@ defmodule Ai.Providers.GoogleSharedTest do
     end
 
     test "flash high budget differs from pro" do
-      assert GoogleShared.default_budgets_2_5_flash()[:high] < GoogleShared.default_budgets_2_5_pro()[:high]
+      assert GoogleShared.default_budgets_2_5_flash()[:high] <
+               GoogleShared.default_budgets_2_5_pro()[:high]
     end
   end
 
@@ -737,7 +783,9 @@ defmodule Ai.Providers.GoogleSharedTest do
     end
 
     test "extracts from x-ratelimit-reset-after header" do
-      delay = GoogleShared.extract_retry_delay("some error", %{"x-ratelimit-reset-after" => "10.0"})
+      delay =
+        GoogleShared.extract_retry_delay("some error", %{"x-ratelimit-reset-after" => "10.0"})
+
       assert delay == 11000
     end
 

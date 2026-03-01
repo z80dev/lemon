@@ -56,7 +56,9 @@ defmodule CodingAgent.Tools.ProcessTest do
     test "action enum lists all valid actions" do
       action_prop = ProcessTool.tool().parameters["properties"]["action"]
       assert action_prop["type"] == "string"
-      assert Enum.sort(action_prop["enum"]) == Enum.sort(["list", "poll", "log", "write", "kill", "clear"])
+
+      assert Enum.sort(action_prop["enum"]) ==
+               Enum.sort(["list", "poll", "log", "write", "kill", "clear"])
     end
 
     test "signal enum lists sigterm and sigkill" do

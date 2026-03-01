@@ -186,10 +186,11 @@ defmodule CodingAgent.ParallelTest do
     end
 
     test "all items are processed even with concurrency limit" do
-      results = Parallel.map_with_concurrency_limit(1..20, 4, fn item ->
-        Process.sleep(10)
-        item
-      end)
+      results =
+        Parallel.map_with_concurrency_limit(1..20, 4, fn item ->
+          Process.sleep(10)
+          item
+        end)
 
       assert results == Enum.to_list(1..20)
     end

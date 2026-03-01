@@ -16,25 +16,23 @@ defmodule LemonGames.Bot.TurnWorker do
     end
   end
 
+  @spec choose_move_for(String.t(), map(), String.t()) :: map()
+  def choose_move_for(game_type, state, slot), do: choose_move(game_type, state, slot)
+
   defp play_turn(match, slot) do
     bot_info = get_in(match, ["players", slot])
     actor = %{"agent_id" => bot_info["agent_id"]}
     game_type = match["game_type"]
     state = match["snapshot_state"]
 
-    move = choose_move_for(game_type, state, slot)
+    move = choose_move(game_type, state, slot)
     idem_key = "bot_#{match["id"]}_#{match["turn_number"]}_#{slot}"
 
     case Service.submit_move(match["id"], actor, move, idem_key) do
-      {:ok, updated, _seq} ->
+      {:ok, updated, _seq, _replay?} ->
         Logger.debug("[BotTurnWorker] Bot #{slot} played in match #{match["id"]}")
         # Recursively check if it's still a bot's turn (e.g., after RPS p1, check p2)
         maybe_play_bot_turn(updated)
-
-      {:error, :invalid_state, msg} ->
-        # Benign race: another async turn worker may have already advanced/finished this match.
-        Logger.debug("[BotTurnWorker] Skipping bot move due to state transition: #{msg}")
-        :ok
 
       {:error, code, msg} ->
         Logger.warning("[BotTurnWorker] Bot move failed: #{code} - #{msg}")
@@ -42,16 +40,19 @@ defmodule LemonGames.Bot.TurnWorker do
     end
   end
 
-  @spec choose_move_for(String.t(), map(), String.t()) :: map()
-  def choose_move_for("rock_paper_scissors", state, slot) do
+  defp choose_move("rock_paper_scissors", state, slot) do
     LemonGames.Bot.RockPaperScissorsBot.choose_move(state, slot)
   end
 
-  def choose_move_for("connect4", state, slot) do
+  defp choose_move("connect4", state, slot) do
     LemonGames.Bot.Connect4Bot.choose_move(state, slot)
   end
 
-  def choose_move_for(_game_type, _state, _slot) do
+  defp choose_move("tic_tac_toe", state, slot) do
+    LemonGames.Bot.TicTacToeBot.choose_move(state, slot)
+  end
+
+  defp choose_move(_game_type, _state, _slot) do
     raise "No bot strategy for game type"
   end
 

@@ -201,78 +201,78 @@ defmodule Ai.Models.XAI do
       context_window: 2_000_000,
       max_tokens: 30_000
     },
-"grok-2-1212" => %Model{
-                    id: "grok-2-1212",
-                    name: "Grok 2 (1212)",
-                    api: :openai_completions,
-                    provider: :xai,
-                    base_url: "https://api.x.ai/v1",
-                    reasoning: false,
-                    input: [:text],
-                    cost: %ModelCost{input: 2.0, output: 10.0, cache_read: 2.0, cache_write: 0.0},
-                    context_window: 131_072,
-                    max_tokens: 8_192
-                  },
-                  "grok-2-vision-1212" => %Model{
-                    id: "grok-2-vision-1212",
-                    name: "Grok 2 Vision (1212)",
-                    api: :openai_completions,
-                    provider: :xai,
-                    base_url: "https://api.x.ai/v1",
-                    reasoning: false,
-                    input: [:text, :image],
-                    cost: %ModelCost{input: 2.0, output: 10.0, cache_read: 2.0, cache_write: 0.0},
-                    context_window: 8_192,
-                    max_tokens: 4_096
-                  },
-                  "grok-3-latest" => %Model{
-                    id: "grok-3-latest",
-                    name: "Grok 3 Latest",
-                    api: :openai_completions,
-                    provider: :xai,
-                    base_url: "https://api.x.ai/v1",
-                    reasoning: false,
-                    input: [:text],
-                    cost: %ModelCost{input: 3.0, output: 15.0, cache_read: 0.75, cache_write: 0.0},
-                    context_window: 131_072,
-                    max_tokens: 8_192
-                  },
-                  "grok-beta" => %Model{
-                    id: "grok-beta",
-                    name: "Grok Beta",
-                    api: :openai_completions,
-                    provider: :xai,
-                    base_url: "https://api.x.ai/v1",
-                    reasoning: false,
-                    input: [:text],
-                    cost: %ModelCost{input: 5.0, output: 15.0, cache_read: 5.0, cache_write: 0.0},
-                    context_window: 131_072,
-                    max_tokens: 4_096
-                  },
-                  "grok-code-fast-1" => %Model{
-                    id: "grok-code-fast-1",
-                    name: "Grok Code Fast 1",
-                    api: :openai_completions,
-                    provider: :xai,
-                    base_url: "https://api.x.ai/v1",
-                    reasoning: true,
-                    input: [:text],
-                    cost: %ModelCost{input: 0.2, output: 1.5, cache_read: 0.02, cache_write: 0.0},
-                    context_window: 256_000,
-                    max_tokens: 10_000
-                  },
-                  "grok-vision-beta" => %Model{
-                    id: "grok-vision-beta",
-                    name: "Grok Vision Beta",
-                    api: :openai_completions,
-                    provider: :xai,
-                    base_url: "https://api.x.ai/v1",
-                    reasoning: false,
-                    input: [:text, :image],
-                    cost: %ModelCost{input: 5.0, output: 15.0, cache_read: 5.0, cache_write: 0.0},
-                    context_window: 8_192,
-                    max_tokens: 4_096
-                  }
+    "grok-2-1212" => %Model{
+      id: "grok-2-1212",
+      name: "Grok 2 (1212)",
+      api: :openai_completions,
+      provider: :xai,
+      base_url: "https://api.x.ai/v1",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 2.0, output: 10.0, cache_read: 2.0, cache_write: 0.0},
+      context_window: 131_072,
+      max_tokens: 8_192
+    },
+    "grok-2-vision-1212" => %Model{
+      id: "grok-2-vision-1212",
+      name: "Grok 2 Vision (1212)",
+      api: :openai_completions,
+      provider: :xai,
+      base_url: "https://api.x.ai/v1",
+      reasoning: false,
+      input: [:text, :image],
+      cost: %ModelCost{input: 2.0, output: 10.0, cache_read: 2.0, cache_write: 0.0},
+      context_window: 8_192,
+      max_tokens: 4_096
+    },
+    "grok-3-latest" => %Model{
+      id: "grok-3-latest",
+      name: "Grok 3 Latest",
+      api: :openai_completions,
+      provider: :xai,
+      base_url: "https://api.x.ai/v1",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 3.0, output: 15.0, cache_read: 0.75, cache_write: 0.0},
+      context_window: 131_072,
+      max_tokens: 8_192
+    },
+    "grok-beta" => %Model{
+      id: "grok-beta",
+      name: "Grok Beta",
+      api: :openai_completions,
+      provider: :xai,
+      base_url: "https://api.x.ai/v1",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{input: 5.0, output: 15.0, cache_read: 5.0, cache_write: 0.0},
+      context_window: 131_072,
+      max_tokens: 4_096
+    },
+    "grok-code-fast-1" => %Model{
+      id: "grok-code-fast-1",
+      name: "Grok Code Fast 1",
+      api: :openai_completions,
+      provider: :xai,
+      base_url: "https://api.x.ai/v1",
+      reasoning: true,
+      input: [:text],
+      cost: %ModelCost{input: 0.2, output: 1.5, cache_read: 0.02, cache_write: 0.0},
+      context_window: 256_000,
+      max_tokens: 10_000
+    },
+    "grok-vision-beta" => %Model{
+      id: "grok-vision-beta",
+      name: "Grok Vision Beta",
+      api: :openai_completions,
+      provider: :xai,
+      base_url: "https://api.x.ai/v1",
+      reasoning: false,
+      input: [:text, :image],
+      cost: %ModelCost{input: 5.0, output: 15.0, cache_read: 5.0, cache_write: 0.0},
+      context_window: 8_192,
+      max_tokens: 4_096
+    }
   }
 
   @doc "Returns all XAI model definitions as a map."

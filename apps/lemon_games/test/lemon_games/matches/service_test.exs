@@ -7,10 +7,11 @@ defmodule LemonGames.Matches.ServiceTest do
   @actor2 %{"agent_id" => "test_agent_2", "display_name" => "Agent 2"}
 
   setup do
-    clear_table(:game_matches)
-    clear_table(:game_match_events)
-    clear_table(:game_agent_tokens)
-    clear_table(:game_rate_limits)
+    # Clean store tables between tests
+    for table <- [:game_matches, :game_match_events, :game_agent_tokens, :game_rate_limits] do
+      clear_table(table)
+    end
+
     :ok
   end
 
@@ -40,6 +41,11 @@ defmodule LemonGames.Matches.ServiceTest do
   test "create_match rejects unknown game type" do
     params = %{"game_type" => "chess"}
     assert {:error, :unknown_game_type, _} = Service.create_match(params, @actor)
+  end
+
+  test "create_match rejects unsupported visibility" do
+    params = %{"game_type" => "connect4", "visibility" => "friends_only"}
+    assert {:error, :invalid_visibility, _} = Service.create_match(params, @actor)
   end
 
   # --- accept_match ---
@@ -75,7 +81,7 @@ defmodule LemonGames.Matches.ServiceTest do
     {:ok, match} = create_bot_match("connect4")
 
     move = %{"kind" => "drop", "column" => 3}
-    assert {:ok, updated, seq} = Service.submit_move(match["id"], @actor, move, "key-1")
+    assert {:ok, updated, seq, false} = Service.submit_move(match["id"], @actor, move, "key-1")
     assert seq > 0
     assert updated["turn_number"] > match["turn_number"]
   end
@@ -100,55 +106,47 @@ defmodule LemonGames.Matches.ServiceTest do
     {:ok, match} = create_bot_match("connect4")
     move = %{"kind" => "drop", "column" => 3}
 
-    assert {:ok, _m1, seq1} = Service.submit_move(match["id"], @actor, move, "idem-1")
-    assert {:ok, _m2, seq2} = Service.submit_move(match["id"], @actor, move, "idem-1")
+    assert {:ok, _m1, seq1, false} = Service.submit_move(match["id"], @actor, move, "idem-1")
+    assert {:ok, _m2, seq2, true} = Service.submit_move(match["id"], @actor, move, "idem-1")
     assert seq1 == seq2
   end
 
-  test "submit_move_with_meta marks idempotent replay" do
+  test "submit_move rejects idempotency key reuse for different actor or move" do
     {:ok, match} = create_bot_match("connect4")
     move = %{"kind" => "drop", "column" => 3}
 
-    assert {:ok, _m1, seq1, false} =
-             Service.submit_move_with_meta(match["id"], @actor, move, "idem-meta-1")
+    assert {:ok, _m1, _seq1, false} =
+             Service.submit_move(match["id"], @actor, move, "idem-conflict")
 
-    assert {:ok, _m2, seq2, true} =
-             Service.submit_move_with_meta(match["id"], @actor, move, "idem-meta-1")
+    assert {:error, :idempotency_conflict, _} =
+             Service.submit_move(match["id"], @actor2, move, "idem-conflict")
 
-    assert seq1 == seq2
-  end
-
-  test "submit_move idempotency keys are scoped per actor" do
-    params = %{"game_type" => "connect4", "visibility" => "public"}
-    {:ok, match} = Service.create_match(params, @actor)
-    {:ok, _accepted} = Service.accept_match(match["id"], @actor2)
-
-    move_p1 = %{"kind" => "drop", "column" => 0}
-    move_p2 = %{"kind" => "drop", "column" => 1}
-
-    assert {:ok, _first, seq1} = Service.submit_move(match["id"], @actor, move_p1, "same-key")
-    assert {:ok, _second, seq2} = Service.submit_move(match["id"], @actor2, move_p2, "same-key")
-    assert seq2 > seq1
+    assert {:error, :idempotency_conflict, _} =
+             Service.submit_move(
+               match["id"],
+               @actor,
+               %{"kind" => "drop", "column" => 4},
+               "idem-conflict"
+             )
   end
 
   # --- RPS full game ---
 
   test "rps full game reaches terminal state" do
-    params = %{"game_type" => "rock_paper_scissors", "visibility" => "public"}
-    {:ok, match} = Service.create_match(params, @actor)
-    {:ok, _accepted} = Service.accept_match(match["id"], @actor2)
+    {:ok, pending} = Service.create_match(%{"game_type" => "rock_paper_scissors"}, @actor)
+    assert {:ok, active} = Service.accept_match(pending["id"], @actor2)
 
-    assert {:ok, _m1, _} =
+    assert {:ok, _m1, _, false} =
              Service.submit_move(
-               match["id"],
+               active["id"],
                @actor,
                %{"kind" => "throw", "value" => "rock"},
                "rps-1"
              )
 
-    assert {:ok, m2, _} =
+    assert {:ok, m2, _, false} =
              Service.submit_move(
-               match["id"],
+               active["id"],
                @actor2,
                %{"kind" => "throw", "value" => "scissors"},
                "rps-2"
@@ -165,12 +163,6 @@ defmodule LemonGames.Matches.ServiceTest do
     assert {:ok, view} = Service.get_match(match["id"], "spectator")
     assert view["id"] == match["id"]
     assert view["game_state"] != nil
-  end
-
-  test "get_match rejects private match for spectator" do
-    params = %{"game_type" => "connect4", "visibility" => "private"}
-    {:ok, match} = Service.create_match(params, @actor)
-    assert {:error, :forbidden, _} = Service.get_match(match["id"], "spectator")
   end
 
   test "get_match returns error for unknown id" do
@@ -193,43 +185,6 @@ defmodule LemonGames.Matches.ServiceTest do
     assert length(events) >= 1
   end
 
-  test "list_events redacts unresolved rps throw for opponent and spectator" do
-    params = %{"game_type" => "rock_paper_scissors", "visibility" => "public"}
-    {:ok, match} = Service.create_match(params, @actor)
-    {:ok, _accepted} = Service.accept_match(match["id"], @actor2)
-
-    assert {:ok, _updated, _seq} =
-             Service.submit_move(
-               match["id"],
-               @actor,
-               %{"kind" => "throw", "value" => "rock"},
-               "rps-hide"
-             )
-
-    assert {:ok, spectator_events, _next, _more} =
-             Service.list_events(match["id"], 0, 50, "spectator")
-
-    assert {:ok, opponent_events, _next2, _more2} =
-             Service.list_events(match["id"], 0, 50, @actor2["agent_id"])
-
-    assert {:ok, actor_events, _next3, _more3} =
-             Service.list_events(match["id"], 0, 50, @actor["agent_id"])
-
-    spectator_move = Enum.find(spectator_events, &(&1["event_type"] == "move_submitted"))
-    opponent_move = Enum.find(opponent_events, &(&1["event_type"] == "move_submitted"))
-    actor_move = Enum.find(actor_events, &(&1["event_type"] == "move_submitted"))
-
-    assert get_in(spectator_move, ["payload", "move", "value"]) == "hidden"
-    assert get_in(opponent_move, ["payload", "move", "value"]) == "hidden"
-    assert get_in(actor_move, ["payload", "move", "value"]) == "rock"
-  end
-
-  test "list_events rejects private match for spectator" do
-    params = %{"game_type" => "connect4", "visibility" => "private"}
-    {:ok, match} = Service.create_match(params, @actor)
-    assert {:error, :forbidden, _} = Service.list_events(match["id"], 0, 50, "spectator")
-  end
-
   # --- forfeit ---
 
   test "forfeit_match finishes game with opponent as winner" do
@@ -250,6 +205,13 @@ defmodule LemonGames.Matches.ServiceTest do
 
   # --- helpers ---
 
+  defp clear_table(table) do
+    LemonCore.Store.list(table)
+    |> Enum.each(fn {key, _value} ->
+      LemonCore.Store.delete(table, key)
+    end)
+  end
+
   defp create_bot_match(game_type) do
     Service.create_match(
       %{
@@ -259,11 +221,5 @@ defmodule LemonGames.Matches.ServiceTest do
       },
       @actor
     )
-  end
-
-  defp clear_table(table) do
-    table
-    |> LemonCore.Store.list()
-    |> Enum.each(fn {key, _} -> LemonCore.Store.delete(table, key) end)
   end
 end

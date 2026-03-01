@@ -27,7 +27,10 @@ defmodule CodingAgent.Tools.Write do
       name: "write",
       description:
         "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Creates parent directories as needed." <>
-          if(format_default, do: " Can optionally format supported files after writing.", else: ""),
+          if(format_default,
+            do: " Can optionally format supported files after writing.",
+            else: ""
+          ),
       label: "Write File",
       parameters: %{
         "type" => "object",

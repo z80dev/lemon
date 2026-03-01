@@ -643,7 +643,11 @@ defmodule Ai.Providers.GoogleTest do
         |> Plug.Conn.send_resp(200, body)
       end)
 
-      model = build_model(%{cost: %ModelCost{input: 1.0, output: 2.0, cache_read: 0.5, cache_write: 0.0}})
+      model =
+        build_model(%{
+          cost: %ModelCost{input: 1.0, output: 2.0, cache_read: 0.5, cache_write: 0.0}
+        })
+
       context = build_context()
       opts = build_opts()
 

@@ -88,9 +88,7 @@ defmodule CodingAgent.Session.WasmBridge do
           end
 
         {:error, reason} ->
-          Logger.warning(
-            "WASM runtime unavailable for session #{session_id}: #{inspect(reason)}"
-          )
+          Logger.warning("WASM runtime unavailable for session #{session_id}: #{inspect(reason)}")
 
           %{
             sidecar_pid: nil,

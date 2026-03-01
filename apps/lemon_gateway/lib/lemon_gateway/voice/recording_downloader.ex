@@ -55,16 +55,12 @@ defmodule LemonGateway.Voice.RecordingDownloader do
         {:ok, audio_data} ->
           File.write!(local_path, audio_data)
 
-          Logger.info(
-            "Recording saved: #{local_path} (#{byte_size(audio_data)} bytes)"
-          )
+          Logger.info("Recording saved: #{local_path} (#{byte_size(audio_data)} bytes)")
 
           {:ok, local_path}
 
         {:error, reason} = err ->
-          Logger.error(
-            "Failed to download recording #{recording_sid}: #{inspect(reason)}"
-          )
+          Logger.error("Failed to download recording #{recording_sid}: #{inspect(reason)}")
 
           err
       end

@@ -51,7 +51,13 @@ defmodule CodingAgent.Tools.FeatureRequirementsTest do
       requirements = sample_requirements()
       :ok = FeatureRequirements.save_requirements(requirements, test_dir)
 
-      assert :ok = FeatureRequirements.update_feature_status(test_dir, "feature-001", :in_progress, "Working on it")
+      assert :ok =
+               FeatureRequirements.update_feature_status(
+                 test_dir,
+                 "feature-001",
+                 :in_progress,
+                 "Working on it"
+               )
 
       {:ok, loaded} = FeatureRequirements.load_requirements(test_dir)
       feature = Enum.find(loaded.features, &(&1.id == "feature-001"))
@@ -134,9 +140,39 @@ defmodule CodingAgent.Tools.FeatureRequirementsTest do
         project_name: "Priority Test",
         original_prompt: "Test",
         features: [
-          %{id: "f-1", description: "Low", status: :pending, dependencies: [], priority: :low, acceptance_criteria: [], notes: "", created_at: now(), updated_at: nil},
-          %{id: "f-2", description: "High", status: :pending, dependencies: [], priority: :high, acceptance_criteria: [], notes: "", created_at: now(), updated_at: nil},
-          %{id: "f-3", description: "Medium", status: :pending, dependencies: [], priority: :medium, acceptance_criteria: [], notes: "", created_at: now(), updated_at: nil}
+          %{
+            id: "f-1",
+            description: "Low",
+            status: :pending,
+            dependencies: [],
+            priority: :low,
+            acceptance_criteria: [],
+            notes: "",
+            created_at: now(),
+            updated_at: nil
+          },
+          %{
+            id: "f-2",
+            description: "High",
+            status: :pending,
+            dependencies: [],
+            priority: :high,
+            acceptance_criteria: [],
+            notes: "",
+            created_at: now(),
+            updated_at: nil
+          },
+          %{
+            id: "f-3",
+            description: "Medium",
+            status: :pending,
+            dependencies: [],
+            priority: :medium,
+            acceptance_criteria: [],
+            notes: "",
+            created_at: now(),
+            updated_at: nil
+          }
         ],
         created_at: now(),
         version: "1.0"
@@ -172,7 +208,17 @@ defmodule CodingAgent.Tools.FeatureRequirementsTest do
           project_name: "Todo App",
           original_prompt: "Build a simple todo app",
           features: [
-            %{id: "f-1", description: "Setup project", status: :pending, dependencies: [], priority: :high, acceptance_criteria: [], notes: "", created_at: now(), updated_at: nil}
+            %{
+              id: "f-1",
+              description: "Setup project",
+              status: :pending,
+              dependencies: [],
+              priority: :high,
+              acceptance_criteria: [],
+              notes: "",
+              created_at: now(),
+              updated_at: nil
+            }
           ],
           created_at: now(),
           version: "1.0"

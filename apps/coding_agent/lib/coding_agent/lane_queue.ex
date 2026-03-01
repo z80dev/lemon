@@ -61,7 +61,9 @@ defmodule CodingAgent.LaneQueue do
     ls = lane_state(st, lane)
     queue_len = :queue.len(ls.q)
 
-    Logger.debug("LaneQueue enqueue lane=#{inspect(lane)} job_id=#{inspect(job_id)} cap=#{cap} queued=#{queue_len} running=#{ls.running}")
+    Logger.debug(
+      "LaneQueue enqueue lane=#{inspect(lane)} job_id=#{inspect(job_id)} cap=#{cap} queued=#{queue_len} running=#{ls.running}"
+    )
 
     st = put_in(st.jobs[job_id], %{from: from, lane: lane, fun: fun, meta: meta, task_ref: nil})
 
@@ -136,7 +138,9 @@ defmodule CodingAgent.LaneQueue do
         {{:value, job_id}, q2} = :queue.out(ls.q)
         job = st.jobs[job_id]
 
-        Logger.debug("LaneQueue starting job lane=#{inspect(lane)} job_id=#{inspect(job_id)} running=#{ls.running + 1}/#{cap}")
+        Logger.debug(
+          "LaneQueue starting job lane=#{inspect(lane)} job_id=#{inspect(job_id)} running=#{ls.running + 1}/#{cap}"
+        )
 
         task =
           Task.Supervisor.async_nolink(st.task_sup, fn ->
@@ -146,11 +150,17 @@ defmodule CodingAgent.LaneQueue do
               {:ok, result}
             rescue
               e ->
-                Logger.error("LaneQueue job function exception job_id=#{inspect(job_id)} error=#{inspect(e)}")
+                Logger.error(
+                  "LaneQueue job function exception job_id=#{inspect(job_id)} error=#{inspect(e)}"
+                )
+
                 {:error, {e, __STACKTRACE__}}
             catch
               kind, err ->
-                Logger.error("LaneQueue job function caught error job_id=#{inspect(job_id)} kind=#{inspect(kind)} error=#{inspect(err)}")
+                Logger.error(
+                  "LaneQueue job function caught error job_id=#{inspect(job_id)} kind=#{inspect(kind)} error=#{inspect(err)}"
+                )
+
                 {:error, {kind, err}}
             end
           end)
@@ -181,7 +191,10 @@ defmodule CodingAgent.LaneQueue do
         job = st.jobs[job_id]
 
         if job do
-          Logger.debug("LaneQueue completing job job_id=#{inspect(job_id)} lane=#{inspect(job.lane)} reply=#{elem(reply, 0)}")
+          Logger.debug(
+            "LaneQueue completing job job_id=#{inspect(job_id)} lane=#{inspect(job.lane)} reply=#{elem(reply, 0)}"
+          )
+
           GenServer.reply(job.from, reply)
 
           lane = job.lane

@@ -9,6 +9,7 @@ defmodule CodingAgent.Wasm.BuilderTest do
       path = Builder.default_runtime_path()
 
       assert is_binary(path)
+
       assert String.ends_with?(path, "lemon-wasm-runtime") or
                String.ends_with?(path, "lemon-wasm-runtime.exe")
     end

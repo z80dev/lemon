@@ -7,7 +7,8 @@ defmodule CodingAgent.Tools.HashlineEditTest do
   alias CodingAgent.Tools.HashlineEdit
   alias CodingAgent.Tools.Hashline
 
-  @test_dir System.tmp_dir!() |> Path.join("hashline_edit_test_#{:erlang.unique_integer([:positive])}")
+  @test_dir System.tmp_dir!()
+            |> Path.join("hashline_edit_test_#{:erlang.unique_integer([:positive])}")
 
   setup do
     File.mkdir_p!(@test_dir)
@@ -60,7 +61,9 @@ defmodule CodingAgent.Tools.HashlineEditTest do
 
   describe "parameter validation" do
     test "rejects missing path", %{cwd: cwd} do
-      result = HashlineEdit.execute("call-1", %{"edits" => [%{"op" => "replace"}]}, nil, nil, cwd, [])
+      result =
+        HashlineEdit.execute("call-1", %{"edits" => [%{"op" => "replace"}]}, nil, nil, cwd, [])
+
       assert {:error, "Missing required parameter: path"} = result
     end
 
@@ -71,7 +74,10 @@ defmodule CodingAgent.Tools.HashlineEditTest do
 
     test "rejects empty edits array", %{cwd: cwd} do
       write_test_file(cwd, "test.txt", "hello")
-      result = HashlineEdit.execute("call-1", %{"path" => "test.txt", "edits" => []}, nil, nil, cwd, [])
+
+      result =
+        HashlineEdit.execute("call-1", %{"path" => "test.txt", "edits" => []}, nil, nil, cwd, [])
+
       assert {:error, "Edits array cannot be empty"} = result
     end
   end
@@ -311,7 +317,10 @@ defmodule CodingAgent.Tools.HashlineEditTest do
   describe "parse_edits/1" do
     test "parses single-line replace edit" do
       pos = make_tag(1, "hello")
-      {:ok, [edit]} = HashlineEdit.parse_edits([%{"op" => "replace", "pos" => pos, "lines" => ["world"]}])
+
+      {:ok, [edit]} =
+        HashlineEdit.parse_edits([%{"op" => "replace", "pos" => pos, "lines" => ["world"]}])
+
       assert edit.op == :replace
       assert edit.pos.line == 1
       assert edit.lines == ["world"]
@@ -321,7 +330,12 @@ defmodule CodingAgent.Tools.HashlineEditTest do
     test "parses range replace edit" do
       pos = make_tag(1, "a")
       end_tag = make_tag(3, "c")
-      {:ok, [edit]} = HashlineEdit.parse_edits([%{"op" => "replace", "pos" => pos, "end" => end_tag, "lines" => ["x"]}])
+
+      {:ok, [edit]} =
+        HashlineEdit.parse_edits([
+          %{"op" => "replace", "pos" => pos, "end" => end_tag, "lines" => ["x"]}
+        ])
+
       assert edit.op == :replace
       assert edit.pos.line == 1
       assert edit.end.line == 3
@@ -335,7 +349,10 @@ defmodule CodingAgent.Tools.HashlineEditTest do
 
     test "parses append with anchor" do
       pos = make_tag(1, "hello")
-      {:ok, [edit]} = HashlineEdit.parse_edits([%{"op" => "append", "pos" => pos, "lines" => ["new"]}])
+
+      {:ok, [edit]} =
+        HashlineEdit.parse_edits([%{"op" => "append", "pos" => pos, "lines" => ["new"]}])
+
       assert edit.op == :append
       assert edit.pos.line == 1
     end
@@ -348,7 +365,10 @@ defmodule CodingAgent.Tools.HashlineEditTest do
 
     test "parses prepend with anchor" do
       pos = make_tag(2, "world")
-      {:ok, [edit]} = HashlineEdit.parse_edits([%{"op" => "prepend", "pos" => pos, "lines" => ["new"]}])
+
+      {:ok, [edit]} =
+        HashlineEdit.parse_edits([%{"op" => "prepend", "pos" => pos, "lines" => ["new"]}])
+
       assert edit.op == :prepend
       assert edit.pos.line == 2
     end

@@ -105,9 +105,7 @@ defmodule LemonGateway.Transports.Voice do
     children = [
       {
         Bandit,
-        plug: LemonGateway.Voice.WebhookRouter,
-        port: port,
-        scheme: :http
+        plug: LemonGateway.Voice.WebhookRouter, port: port, scheme: :http
       }
     ]
 

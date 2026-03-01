@@ -255,7 +255,15 @@ defmodule LemonGateway.Transports.Webhook do
              callback_retry: callback_retry
            }) do
       job =
-        build_submit_job(conn, integration_id, integration, normalized, run_id, session_key, queue_mode)
+        build_submit_job(
+          conn,
+          integration_id,
+          integration,
+          normalized,
+          run_id,
+          session_key,
+          queue_mode
+        )
 
       run_ctx = %{
         integration_id: integration_id,
@@ -275,7 +283,15 @@ defmodule LemonGateway.Transports.Webhook do
     end
   end
 
-  defp build_submit_job(conn, integration_id, integration, normalized, run_id, session_key, queue_mode) do
+  defp build_submit_job(
+         conn,
+         integration_id,
+         integration,
+         normalized,
+         run_id,
+         session_key,
+         queue_mode
+       ) do
     %Job{
       run_id: run_id,
       session_key: session_key,
@@ -299,7 +315,14 @@ defmodule LemonGateway.Transports.Webhook do
   defp perform_submit(job, run_ctx, wait_setup, idempotency_ctx) do
     try do
       :ok = Runtime.submit(job)
-      maybe_store_idempotency_submission(idempotency_ctx, run_ctx.run_id, run_ctx.session_key, run_ctx.mode)
+
+      maybe_store_idempotency_submission(
+        idempotency_ctx,
+        run_ctx.run_id,
+        run_ctx.session_key,
+        run_ctx.mode
+      )
+
       {:ok, Map.merge(run_ctx, wait_setup)}
     rescue
       error ->
@@ -917,9 +940,7 @@ defmodule LemonGateway.Transports.Webhook do
         Logger.warning("webhook callback wait timed out for run_id=#{run_ctx.run_id}")
 
       {:error, reason} ->
-        Logger.warning(
-          "webhook callback failed for run_id=#{run_ctx.run_id}: #{inspect(reason)}"
-        )
+        Logger.warning("webhook callback failed for run_id=#{run_ctx.run_id}: #{inspect(reason)}")
     end
   end
 

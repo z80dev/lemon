@@ -436,9 +436,14 @@ defmodule CodingAgent.RunGraphServer do
 
   defp get_record_field(record, key) when is_map(record) do
     cond do
-      Map.has_key?(record, key) -> Map.get(record, key)
-      is_atom(key) and Map.has_key?(record, Atom.to_string(key)) -> Map.get(record, Atom.to_string(key))
-      true -> nil
+      Map.has_key?(record, key) ->
+        Map.get(record, key)
+
+      is_atom(key) and Map.has_key?(record, Atom.to_string(key)) ->
+        Map.get(record, Atom.to_string(key))
+
+      true ->
+        nil
     end
   rescue
     _ -> nil

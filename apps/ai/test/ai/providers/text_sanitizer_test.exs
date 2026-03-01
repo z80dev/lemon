@@ -158,7 +158,9 @@ defmodule Ai.Providers.TextSanitizerTest do
 
       for input <- inputs do
         result = TextSanitizer.sanitize(input)
-        assert is_binary(result), "Expected binary for input #{inspect(input)}, got #{inspect(result)}"
+
+        assert is_binary(result),
+               "Expected binary for input #{inspect(input)}, got #{inspect(result)}"
       end
     end
   end

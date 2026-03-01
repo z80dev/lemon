@@ -18,7 +18,15 @@ defmodule Ai.HttpInspector do
           timestamp: String.t()
         }
 
-  @spec capture_request(String.t(), String.t(), String.t(), String.t(), String.t(), list(), term()) ::
+  @spec capture_request(
+          String.t(),
+          String.t(),
+          String.t(),
+          String.t(),
+          String.t(),
+          list(),
+          term()
+        ) ::
           dump()
   def capture_request(provider, api, model, method, url, headers, body) do
     %{

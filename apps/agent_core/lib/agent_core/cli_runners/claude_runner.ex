@@ -216,11 +216,13 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
 
           state = %{state | factory: factory, found_session: token}
 
-          Introspection.record(:engine_subprocess_started, %{
-            engine: @engine,
-            session_id: session_id,
-            model: event.model
-          },
+          Introspection.record(
+            :engine_subprocess_started,
+            %{
+              engine: @engine,
+              session_id: session_id,
+              model: event.model
+            },
             engine: @engine,
             provenance: :inferred
           )
@@ -277,12 +279,14 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
             state.found_session
           end
 
-        Introspection.record(:engine_output_observed, %{
-          engine: @engine,
-          event_kind: :result,
-          ok: ok,
-          num_turns: event.num_turns
-        },
+        Introspection.record(
+          :engine_output_observed,
+          %{
+            engine: @engine,
+            event_kind: :result,
+            ok: ok,
+            num_turns: event.num_turns
+          },
           engine: @engine,
           provenance: :inferred
         )
@@ -320,11 +324,13 @@ defmodule AgentCore.CliRunners.ClaudeRunner do
 
   @impl true
   def handle_exit_error(exit_code, state) do
-    Introspection.record(:engine_subprocess_exited, %{
-      engine: @engine,
-      exit_code: exit_code,
-      ok: false
-    },
+    Introspection.record(
+      :engine_subprocess_exited,
+      %{
+        engine: @engine,
+        exit_code: exit_code,
+        ok: false
+      },
       engine: @engine,
       provenance: :inferred
     )

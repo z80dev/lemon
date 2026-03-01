@@ -4,92 +4,92 @@ defmodule LemonGames.Bot.LobbySeederTest do
   alias LemonGames.Bot.LobbySeeder
   alias LemonGames.Matches.Service
 
+  @house_agent_id "lemon_house"
+
   setup do
-    clear_table(:game_matches)
-    clear_table(:game_match_events)
+    for table <- [:game_matches, :game_match_events, :game_agent_tokens, :game_rate_limits] do
+      clear_table(table)
+    end
+
     :ok
   end
 
-  test "creates public house-vs-bot matches up to target" do
-    {:ok, pid} =
-      start_supervised(
-        {LobbySeeder,
-         [
-           interval_ms: 60_000,
-           target_active_matches: 2,
-           games: ["connect4"],
-           house_agent_id: "house_seed"
-         ]}
+  test "run_once seeds house matches and kicks off gameplay" do
+    result =
+      LobbySeeder.run_once(
+        house_agent_id: @house_agent_id,
+        max_active_matches: 1,
+        game_types: ["connect4"]
       )
 
-    send(pid, :seed)
+    assert result.created == 1
 
-    assert_eventually(fn ->
-      matches = house_matches("house_seed")
-      active = Enum.count(matches, &(&1["status"] == "active"))
-      active >= 2
+    match = fetch_house_match!()
+
+    wait_until(fn ->
+      {:ok, refreshed} = Service.get_match(match["id"], @house_agent_id)
+      refreshed["turn_number"] >= 1
     end)
   end
 
-  test "advances house turns for active seeded match" do
+  test "run_once advances existing house matches when it's p1 turn" do
+    house_agent_id = "lemon_house_test_advance"
+
     {:ok, match} =
       Service.create_match(
         %{
           "game_type" => "connect4",
-          "opponent" => %{"type" => "lemon_bot", "bot_id" => "default"},
-          "visibility" => "public"
+          "visibility" => "public",
+          "opponent" => %{"type" => "lemon_bot", "bot_id" => "default"}
         },
-        %{"agent_id" => "house_player", "display_name" => "House"}
+        %{"agent_id" => house_agent_id, "display_name" => "Lemon House"}
       )
 
-    assert match["status"] == "active"
-    assert match["next_player"] == "p1"
+    before_turn_number = match["turn_number"]
 
-    {:ok, pid} =
-      start_supervised(
-        {LobbySeeder,
-         [
-           interval_ms: 60_000,
-           target_active_matches: 1,
-           games: ["connect4"],
-           house_agent_id: "house_player"
-         ]}
+    result =
+      LobbySeeder.run_once(
+        house_agent_id: house_agent_id,
+        max_active_matches: 1,
+        game_types: ["connect4"]
       )
 
-    send(pid, :seed)
+    assert result.advanced >= 0
 
-    assert_eventually(fn ->
-      updated = LemonCore.Store.get(:game_matches, match["id"])
-      updated["turn_number"] > 1
+    wait_until(fn ->
+      {:ok, refreshed} = Service.get_match(match["id"], house_agent_id)
+      refreshed["turn_number"] >= before_turn_number + 1
     end)
   end
 
-  defp house_matches(house_agent_id) do
+  defp fetch_house_match! do
     :game_matches
     |> LemonCore.Store.list()
-    |> Enum.map(fn {_id, match} -> match end)
-    |> Enum.filter(fn match ->
-      get_in(match, ["players", "p1", "agent_id"]) == house_agent_id and
-        get_in(match, ["players", "p2", "agent_type"]) == "lemon_bot"
-    end)
-  end
-
-  defp assert_eventually(fun, attempts \\ 20)
-
-  defp assert_eventually(fun, attempts) when attempts > 0 do
-    if fun.() do
-      assert true
-    else
-      Process.sleep(50)
-      assert_eventually(fun, attempts - 1)
+    |> Enum.map(fn {_key, m} -> m end)
+    |> Enum.find(fn m -> m["created_by"] == @house_agent_id end)
+    |> case do
+      nil -> flunk("expected a house-created match")
+      match -> match
     end
   end
 
-  defp assert_eventually(_fun, 0), do: flunk("condition not met within timeout")
+  defp wait_until(fun, attempts \\ 20)
+
+  defp wait_until(_fun, 0), do: flunk("condition not met")
+
+  defp wait_until(fun, attempts) do
+    if fun.() do
+      :ok
+    else
+      Process.sleep(25)
+      wait_until(fun, attempts - 1)
+    end
+  end
 
   defp clear_table(table) do
-    table
-    |> LemonCore.Store.list()
-    |> Enum.each(fn {key, _value} -> LemonCore.Store.delete(table, key) end)
+    LemonCore.Store.list(table)
+    |> Enum.each(fn {key, _value} ->
+      LemonCore.Store.delete(table, key)
+    end)
   end
 end

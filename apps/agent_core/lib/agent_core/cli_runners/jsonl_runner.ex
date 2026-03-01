@@ -623,11 +623,13 @@ defmodule AgentCore.CliRunners.JsonlRunner do
       # Emit introspection event for stream start
       engine_name = module.engine()
 
-      Introspection.record(:jsonl_stream_started, %{
-        engine: engine_name,
-        command: cmd,
-        has_resume: state.resume != nil
-      },
+      Introspection.record(
+        :jsonl_stream_started,
+        %{
+          engine: engine_name,
+          command: cmd,
+          has_resume: state.resume != nil
+        },
         engine: engine_name,
         provenance: :direct
       )
@@ -723,11 +725,13 @@ defmodule AgentCore.CliRunners.JsonlRunner do
     # Emit introspection event for stream end
     engine_name = state.module.engine()
 
-    Introspection.record(:jsonl_stream_ended, %{
-      engine: engine_name,
-      exit_code: exit_code,
-      ok: exit_code == 0
-    },
+    Introspection.record(
+      :jsonl_stream_ended,
+      %{
+        engine: engine_name,
+        exit_code: exit_code,
+        ok: exit_code == 0
+      },
       engine: engine_name,
       provenance: :direct
     )
@@ -964,11 +968,13 @@ defmodule AgentCore.CliRunners.JsonlRunner do
   defp introspect_cli_event(%ActionEvent{action: action, phase: :completed} = event, engine) do
     case action.kind do
       kind when kind in [:tool, :command, :file_change, :web_search] ->
-        Introspection.record(:tool_use_observed, %{
-          tool_name: action.title,
-          tool_kind: kind,
-          ok: event.ok
-        },
+        Introspection.record(
+          :tool_use_observed,
+          %{
+            tool_name: action.title,
+            tool_kind: kind,
+            ok: event.ok
+          },
           engine: engine,
           provenance: :inferred
         )
@@ -979,10 +985,12 @@ defmodule AgentCore.CliRunners.JsonlRunner do
   end
 
   defp introspect_cli_event(%CompletedEvent{} = event, engine) do
-    Introspection.record(:assistant_turn_observed, %{
-      ok: event.ok,
-      has_answer: event.answer != nil and event.answer != ""
-    },
+    Introspection.record(
+      :assistant_turn_observed,
+      %{
+        ok: event.ok,
+        has_answer: event.answer != nil and event.answer != ""
+      },
       engine: engine,
       provenance: :inferred
     )

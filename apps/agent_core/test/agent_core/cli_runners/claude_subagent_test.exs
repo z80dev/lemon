@@ -1472,9 +1472,11 @@ defmodule AgentCore.CliRunners.ClaudeSubagentTest do
 
       assert is_pid(session.pid) or is_nil(session.pid)
       assert is_pid(session.stream) or is_nil(session.stream)
+
       assert is_struct(session.resume_token, ResumeToken) or
                is_struct(session.resume_token, LemonCore.ResumeToken) or
                is_nil(session.resume_token)
+
       assert is_pid(session.token_agent) or is_nil(session.token_agent)
       assert is_binary(session.cwd)
     end

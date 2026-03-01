@@ -73,10 +73,12 @@ defmodule CodingAgent.Session.EventHandler do
     Extensions.execute_hooks(state.hooks, :on_tool_execution_start, [id, name, args])
 
     # Emit introspection event for tool call dispatch
-    Introspection.record(:tool_call_dispatched, %{
-      tool_name: name,
-      tool_call_id: id
-    }, engine: "lemon", provenance: :direct)
+    Introspection.record(
+      :tool_call_dispatched,
+      %{
+        tool_name: name,
+        tool_call_id: id
+      }, engine: "lemon", provenance: :direct)
 
     callbacks.set_working_message.(state, "Running #{name}...")
     state

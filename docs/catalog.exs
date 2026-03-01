@@ -84,6 +84,12 @@
     max_age_days: 90
   },
   %{
+    path: "docs/games-platform.md",
+    owner: "@z80",
+    last_reviewed: ~D[2026-03-01],
+    max_age_days: 90
+  },
+  %{
     path: "docs/quality_harness.md",
     owner: "@z80",
     last_reviewed: ~D[2026-02-27],

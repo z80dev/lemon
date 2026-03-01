@@ -18,7 +18,9 @@ defmodule LemonGateway.CliAdapterClaudeTest do
     completed = CompletedEvent.ok("claude", "answer", resume: token)
 
     started_result = CliAdapter.to_event_map(started)
-    assert %{__event__: :started, engine: "claude", resume: %GatewayToken{value: "sess_abc"}} = started_result
+
+    assert %{__event__: :started, engine: "claude", resume: %GatewayToken{value: "sess_abc"}} =
+             started_result
 
     completed_result = CliAdapter.to_event_map(completed)
 

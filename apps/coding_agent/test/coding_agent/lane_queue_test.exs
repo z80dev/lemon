@@ -237,7 +237,10 @@ defmodule CodingAgent.LaneQueueTest do
     assert_receive {:fifo_results, results}, 10_000
 
     # All jobs complete successfully.
-    assert Enum.all?(results, fn {:ok, _} -> true; _ -> false end)
+    assert Enum.all?(results, fn
+             {:ok, _} -> true
+             _ -> false
+           end)
 
     # With cap 1 and a single caller, the execution order must be FIFO.
     execution_order = Agent.get(agent, & &1)
@@ -322,7 +325,11 @@ defmodule CodingAgent.LaneQueueTest do
 
     # All 10 jobs should succeed.
     assert length(results) == 10
-    assert Enum.all?(results, fn {:ok, val} -> is_integer(val); _ -> false end)
+
+    assert Enum.all?(results, fn
+             {:ok, val} -> is_integer(val)
+             _ -> false
+           end)
 
     # Verify we got all expected values (order of completion may vary with
     # concurrency, but all values should be present).

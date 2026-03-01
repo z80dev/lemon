@@ -57,11 +57,28 @@ defmodule CodingAgent.Tools.TodoWriteToolTest do
       assert hd(parsed)["content"] == "Test task"
     end
 
-    test "stores multiple valid todos with mixed statuses and priorities", %{session_id: session_id} do
+    test "stores multiple valid todos with mixed statuses and priorities", %{
+      session_id: session_id
+    } do
       todos = [
-        valid_todo(%{"id" => "1", "content" => "First", "status" => "pending", "priority" => "high"}),
-        valid_todo(%{"id" => "2", "content" => "Second", "status" => "in_progress", "priority" => "medium"}),
-        valid_todo(%{"id" => "3", "content" => "Third", "status" => "completed", "priority" => "low"})
+        valid_todo(%{
+          "id" => "1",
+          "content" => "First",
+          "status" => "pending",
+          "priority" => "high"
+        }),
+        valid_todo(%{
+          "id" => "2",
+          "content" => "Second",
+          "status" => "in_progress",
+          "priority" => "medium"
+        }),
+        valid_todo(%{
+          "id" => "3",
+          "content" => "Third",
+          "status" => "completed",
+          "priority" => "low"
+        })
       ]
 
       result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
@@ -201,7 +218,6 @@ defmodule CodingAgent.Tools.TodoWriteToolTest do
       result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
       assert {:error, "todo ids must be unique"} = result
     end
-
   end
 
   describe "execute/5 - empty and whitespace content" do
@@ -293,7 +309,6 @@ defmodule CodingAgent.Tools.TodoWriteToolTest do
       result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, "")
       assert {:error, "Session id not available"} = result
     end
-
   end
 
   describe "execute/5 - validation order and indexing" do
@@ -312,9 +327,24 @@ defmodule CodingAgent.Tools.TodoWriteToolTest do
   describe "integration - write then read" do
     test "todos written can be read back", %{session_id: session_id} do
       todos = [
-        valid_todo(%{"id" => "1", "content" => "Alpha", "status" => "pending", "priority" => "high"}),
-        valid_todo(%{"id" => "2", "content" => "Beta", "status" => "in_progress", "priority" => "medium"}),
-        valid_todo(%{"id" => "3", "content" => "Gamma", "status" => "completed", "priority" => "low"})
+        valid_todo(%{
+          "id" => "1",
+          "content" => "Alpha",
+          "status" => "pending",
+          "priority" => "high"
+        }),
+        valid_todo(%{
+          "id" => "2",
+          "content" => "Beta",
+          "status" => "in_progress",
+          "priority" => "medium"
+        }),
+        valid_todo(%{
+          "id" => "3",
+          "content" => "Gamma",
+          "status" => "completed",
+          "priority" => "low"
+        })
       ]
 
       write_result = TodoWrite.execute("call_w", %{"todos" => todos}, nil, nil, session_id)
@@ -340,6 +370,5 @@ defmodule CodingAgent.Tools.TodoWriteToolTest do
       assert length(read_back) == 1
       assert hd(read_back)["content"] == "Replacement"
     end
-
   end
 end

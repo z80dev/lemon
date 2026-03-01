@@ -327,7 +327,8 @@ defmodule CodingAgent.Checkpoint do
 
   """
   @spec prune(String.t(), non_neg_integer()) :: {:ok, non_neg_integer()}
-  def prune(session_id, keep \\ 10) when is_binary(session_id) and is_integer(keep) and keep >= 0 do
+  def prune(session_id, keep \\ 10)
+      when is_binary(session_id) and is_integer(keep) and keep >= 0 do
     checkpoints = list(session_id)
 
     to_delete = Enum.drop(checkpoints, keep)

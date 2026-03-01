@@ -42,6 +42,7 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     ],
     lemon_games: [:lemon_core],
     lemon_core: [],
+    lemon_games: [:lemon_core],
     lemon_gateway: [
       :agent_core,
       :ai,
@@ -66,6 +67,7 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     lemon_channels: ["LemonChannels"],
     lemon_control_plane: ["LemonControlPlane"],
     lemon_core: ["LemonCore"],
+    lemon_games: ["LemonGames"],
     lemon_gateway: ["LemonGateway"],
     lemon_games: ["LemonGames"],
     lemon_router: ["LemonRouter"],

@@ -1,0 +1,71 @@
+name: Games Platform CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/lemon_games/**'
+      - 'apps/lemon_web/**'
+      - 'apps/lemon_core/**'
+      - 'config/**'
+      - 'games-platform/**'
+  pull_request:
+    paths:
+      - 'apps/lemon_games/**'
+      - 'apps/lemon_web/**'
+      - 'apps/lemon_core/**'
+      - 'config/**'
+      - 'games-platform/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.19.0'
+          otp-version: '27.2'
+
+      - name: Cache deps
+        uses: actions/cache@v4
+        with:
+          path: deps
+          key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-
+
+      - name: Cache build
+        uses: actions/cache@v4
+        with:
+          path: _build
+          key: ${{ runner.os }}-build-${{ hashFiles('**/mix.lock') }}
+          restore-keys: ${{ runner.os }}-build-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Compile
+        run: mix compile --warnings-as-errors
+
+      - name: Run lemon_games tests
+        run: mix test apps/lemon_games
+
+      - name: Run lemon_web tests
+        run: mix test apps/lemon_web
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Fly.io
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to Fly.io
+        run: flyctl deploy --app games-zeebot-xyz --config games-platform/fly.toml --dockerfile games-platform/Dockerfile --context . --ha=false
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

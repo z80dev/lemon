@@ -42,9 +42,11 @@ defmodule LemonGateway.ThreadWorker do
     schedule_slot_timeout_check()
 
     # Emit introspection event for thread start
-    Introspection.record(:thread_started, %{
-      thread_key: inspect(state.thread_key)
-    }, engine: "lemon", provenance: :direct)
+    Introspection.record(
+      :thread_started,
+      %{
+        thread_key: inspect(state.thread_key)
+      }, engine: "lemon", provenance: :direct)
 
     {:ok,
      Map.merge(state, %{
@@ -68,11 +70,13 @@ defmodule LemonGateway.ThreadWorker do
         "mode=#{inspect(job.queue_mode)} queue_len_before=#{queue_len_safe(state.jobs)}"
     )
 
-    Introspection.record(:thread_message_dispatched, %{
-      thread_key: inspect(state.thread_key),
-      queue_mode: job.queue_mode,
-      queue_len: queue_len_safe(state.jobs)
-    }, run_id: job.run_id, session_key: job.session_key, engine: "lemon", provenance: :direct)
+    Introspection.record(
+      :thread_message_dispatched,
+      %{
+        thread_key: inspect(state.thread_key),
+        queue_mode: job.queue_mode,
+        queue_len: queue_len_safe(state.jobs)
+      }, run_id: job.run_id, session_key: job.session_key, engine: "lemon", provenance: :direct)
 
     job = maybe_promote_auto_followup(job, state)
     state = enqueue_by_mode(job, state)
@@ -270,10 +274,12 @@ defmodule LemonGateway.ThreadWorker do
 
   @impl true
   def terminate(_reason, state) do
-    Introspection.record(:thread_terminated, %{
-      thread_key: inspect(state.thread_key),
-      queue_len: queue_len_safe(state.jobs)
-    }, engine: "lemon", provenance: :direct)
+    Introspection.record(
+      :thread_terminated,
+      %{
+        thread_key: inspect(state.thread_key),
+        queue_len: queue_len_safe(state.jobs)
+      }, engine: "lemon", provenance: :direct)
 
     :ok
   end
@@ -288,8 +294,9 @@ defmodule LemonGateway.ThreadWorker do
          %{current_run: pid}
        )
        when is_pid(pid) and is_map(meta) do
-    is_auto = Map.get(meta, :task_auto_followup, false) or
-              Map.get(meta, :delegated_auto_followup, false)
+    is_auto =
+      Map.get(meta, :task_auto_followup, false) or
+        Map.get(meta, :delegated_auto_followup, false)
 
     if is_auto do
       Logger.info(
@@ -563,7 +570,8 @@ defmodule LemonGateway.ThreadWorker do
       Map.new(state.pending_steers, fn {pid, jobs} ->
         {pid, Enum.reject(jobs, fn {j, _mode} -> j.run_id == job.run_id end)}
       end)
-      |> Map.filter(fn {_pid, jobs} -> jobs != [] end)  # Remove empty lists
+      # Remove empty lists
+      |> Map.filter(fn {_pid, jobs} -> jobs != [] end)
 
     %{state | pending_steers: new_pending}
   end

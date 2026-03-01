@@ -66,11 +66,12 @@ defmodule CodingAgent.Tools.AwaitTest do
   describe "execute/6 with completed jobs" do
     test "returns immediately when job is already completed" do
       # Create a completed process
-      process_id = ProcessStore.new_process(%{
-        command: "echo test",
-        status: :completed,
-        exit_code: 0
-      })
+      process_id =
+        ProcessStore.new_process(%{
+          command: "echo test",
+          status: :completed,
+          exit_code: 0
+        })
 
       result = Await.execute("call_1", %{"job_ids" => [process_id]}, nil, nil, "/tmp", [])
 
@@ -82,11 +83,12 @@ defmodule CodingAgent.Tools.AwaitTest do
     end
 
     test "returns immediately when job has error status" do
-      process_id = ProcessStore.new_process(%{
-        command: "false",
-        status: :error,
-        error: "Command failed"
-      })
+      process_id =
+        ProcessStore.new_process(%{
+          command: "false",
+          status: :error,
+          error: "Command failed"
+        })
 
       result = Await.execute("call_1", %{"job_ids" => [process_id]}, nil, nil, "/tmp", [])
 
@@ -96,10 +98,11 @@ defmodule CodingAgent.Tools.AwaitTest do
     end
 
     test "returns immediately when job is killed" do
-      process_id = ProcessStore.new_process(%{
-        command: "sleep 100",
-        status: :killed
-      })
+      process_id =
+        ProcessStore.new_process(%{
+          command: "sleep 100",
+          status: :killed
+        })
 
       result = Await.execute("call_1", %{"job_ids" => [process_id]}, nil, nil, "/tmp", [])
 
@@ -124,20 +127,22 @@ defmodule CodingAgent.Tools.AwaitTest do
   describe "execute/6 with timeout" do
     test "returns timeout when no jobs complete within timeout" do
       # Create a running process that won't complete
-      process_id = ProcessStore.new_process(%{
-        command: "sleep 1000",
-        status: :running
-      })
+      process_id =
+        ProcessStore.new_process(%{
+          command: "sleep 1000",
+          status: :running
+        })
 
       # Poll with 0 second timeout
-      result = Await.execute(
-        "call_1",
-        %{"job_ids" => [process_id], "timeout" => 0},
-        nil,
-        nil,
-        "/tmp",
-        []
-      )
+      result =
+        Await.execute(
+          "call_1",
+          %{"job_ids" => [process_id], "timeout" => 0},
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
 
       assert %AgentToolResult{content: [%{text: text}]} = result
       assert text =~ "Timeout"
@@ -149,10 +154,11 @@ defmodule CodingAgent.Tools.AwaitTest do
 
   describe "execute/6 with abort signal" do
     test "returns aborted when signal is aborted" do
-      process_id = ProcessStore.new_process(%{
-        command: "sleep 100",
-        status: :running
-      })
+      process_id =
+        ProcessStore.new_process(%{
+          command: "sleep 100",
+          status: :running
+        })
 
       signal = AbortSignal.new()
       AbortSignal.abort(signal)
@@ -182,11 +188,12 @@ defmodule CodingAgent.Tools.AwaitTest do
 
   describe "result details" do
     test "includes job details in result" do
-      process_id = ProcessStore.new_process(%{
-        command: "echo test",
-        status: :completed,
-        exit_code: 0
-      })
+      process_id =
+        ProcessStore.new_process(%{
+          command: "echo test",
+          status: :completed,
+          exit_code: 0
+        })
 
       result = Await.execute("call_1", %{"job_ids" => [process_id]}, nil, nil, "/tmp", [])
 
@@ -205,10 +212,11 @@ defmodule CodingAgent.Tools.AwaitTest do
     test "truncates long commands in output" do
       long_command = String.duplicate("a", 100)
 
-      process_id = ProcessStore.new_process(%{
-        command: long_command,
-        status: :completed
-      })
+      process_id =
+        ProcessStore.new_process(%{
+          command: long_command,
+          status: :completed
+        })
 
       result = Await.execute("call_1", %{"job_ids" => [process_id]}, nil, nil, "/tmp", [])
 

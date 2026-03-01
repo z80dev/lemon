@@ -277,10 +277,12 @@ defmodule CodingAgent.Tools.Hashline do
       edits = [%{op: :replace, pos: %{line: 2, hash: "XX"}, lines: ["new line2"]}]
       {:ok, result} = apply_edits(content, edits)
   """
-  @spec apply_edits(String.t(), [edit()]) :: {:ok, apply_result()} | {:error, HashlineMismatchError.t()}
+  @spec apply_edits(String.t(), [edit()]) ::
+          {:ok, apply_result()} | {:error, HashlineMismatchError.t()}
   def apply_edits(content, edits) when is_list(edits) do
     if Enum.empty?(edits) do
-      {:ok, %{content: content, first_changed_line: nil, noop_edits: nil, deduplicated_edits: nil}}
+      {:ok,
+       %{content: content, first_changed_line: nil, noop_edits: nil, deduplicated_edits: nil}}
     else
       file_lines = String.split(content, "\n")
       original_file_lines = file_lines
@@ -374,7 +376,8 @@ defmodule CodingAgent.Tools.Hashline do
 
   defp validate_edit_ref(tag, file_lines) do
     if tag.line < 1 or tag.line > length(file_lines) do
-      raise ArgumentError, "Line #{tag.line} does not exist (file has #{length(file_lines)} lines)"
+      raise ArgumentError,
+            "Line #{tag.line} does not exist (file has #{length(file_lines)} lines)"
     end
 
     actual_line = Enum.at(file_lines, tag.line - 1)
@@ -481,7 +484,13 @@ defmodule CodingAgent.Tools.Hashline do
   end
 
   # Replace single line
-  defp apply_single_edit(%{op: :replace, pos: pos, lines: lines} = edit, file_lines, original_lines, first_changed, noop_edits)
+  defp apply_single_edit(
+         %{op: :replace, pos: pos, lines: lines} = edit,
+         file_lines,
+         original_lines,
+         first_changed,
+         noop_edits
+       )
        when not is_map_key(edit, :end) do
     orig_lines = [Enum.at(original_lines, pos.line - 1)]
 
@@ -515,7 +524,13 @@ defmodule CodingAgent.Tools.Hashline do
   end
 
   # Replace range
-  defp apply_single_edit(%{op: :replace, pos: pos, end: end_tag, lines: lines}, file_lines, original_lines, first_changed, noop_edits) do
+  defp apply_single_edit(
+         %{op: :replace, pos: pos, end: end_tag, lines: lines},
+         file_lines,
+         original_lines,
+         first_changed,
+         noop_edits
+       ) do
     count = end_tag.line - pos.line + 1
     orig_lines = Enum.slice(original_lines, pos.line - 1, count)
 
@@ -536,7 +551,13 @@ defmodule CodingAgent.Tools.Hashline do
   end
 
   # Append at EOF
-  defp apply_single_edit(%{op: :append, pos: nil, lines: lines}, file_lines, _original_lines, first_changed, noop_edits) do
+  defp apply_single_edit(
+         %{op: :append, pos: nil, lines: lines},
+         file_lines,
+         _original_lines,
+         first_changed,
+         noop_edits
+       ) do
     if length(file_lines) == 1 and hd(file_lines) == "" do
       # Empty file case
       {lines, min_line(first_changed, 1), noop_edits}
@@ -548,14 +569,26 @@ defmodule CodingAgent.Tools.Hashline do
   end
 
   # Append after a line
-  defp apply_single_edit(%{op: :append, pos: pos, lines: lines}, file_lines, _original_lines, first_changed, noop_edits) do
+  defp apply_single_edit(
+         %{op: :append, pos: pos, lines: lines},
+         file_lines,
+         _original_lines,
+         first_changed,
+         noop_edits
+       ) do
     {before, rest} = Enum.split(file_lines, pos.line)
     new_lines = before ++ lines ++ rest
     {new_lines, min_line(first_changed, pos.line + 1), noop_edits}
   end
 
   # Prepend at BOF
-  defp apply_single_edit(%{op: :prepend, pos: nil, lines: lines}, file_lines, _original_lines, first_changed, noop_edits) do
+  defp apply_single_edit(
+         %{op: :prepend, pos: nil, lines: lines},
+         file_lines,
+         _original_lines,
+         first_changed,
+         noop_edits
+       ) do
     if length(file_lines) == 1 and hd(file_lines) == "" do
       {lines, min_line(first_changed, 1), noop_edits}
     else
@@ -565,7 +598,13 @@ defmodule CodingAgent.Tools.Hashline do
   end
 
   # Prepend before a line
-  defp apply_single_edit(%{op: :prepend, pos: pos, lines: lines}, file_lines, _original_lines, first_changed, noop_edits) do
+  defp apply_single_edit(
+         %{op: :prepend, pos: pos, lines: lines},
+         file_lines,
+         _original_lines,
+         first_changed,
+         noop_edits
+       ) do
     {before, rest} = Enum.split(file_lines, pos.line - 1)
     new_lines = before ++ lines ++ rest
     {new_lines, min_line(first_changed, pos.line), noop_edits}
@@ -644,7 +683,9 @@ defmodule CodingAgent.Tools.Hashline do
         end
       end,
       fn
-        {[], _, _} -> {:cont, {[], 0, 0}}
+        {[], _, _} ->
+          {:cont, {[], 0, 0}}
+
         {acc, _, _} ->
           chunk = Enum.reverse(acc) |> Enum.join("\n")
           {:cont, chunk, {[], 0, 0}}
@@ -694,10 +735,21 @@ defmodule CodingAgent.Tools.Hashline do
       fn chunk, {pending, line_num, out_acc, out_lines, out_bytes, _saw_any, _ended_nl} ->
         text = pending <> IO.iodata_to_binary(chunk)
 
-        {emitted, new_pending, new_line_num, new_out_acc, new_out_lines, new_out_bytes, new_ended_nl} =
-          consume_text(text, line_num, out_acc, out_lines, out_bytes, max_chunk_lines, max_chunk_bytes)
+        {emitted, new_pending, new_line_num, new_out_acc, new_out_lines, new_out_bytes,
+         new_ended_nl} =
+          consume_text(
+            text,
+            line_num,
+            out_acc,
+            out_lines,
+            out_bytes,
+            max_chunk_lines,
+            max_chunk_bytes
+          )
 
-        {emitted, {new_pending, new_line_num, new_out_acc, new_out_lines, new_out_bytes, true, new_ended_nl}}
+        {emitted,
+         {new_pending, new_line_num, new_out_acc, new_out_lines, new_out_bytes, true,
+          new_ended_nl}}
       end,
       fn {pending, line_num, out_acc, out_lines, out_bytes, saw_any, ended_nl} ->
         # Flush remaining content
@@ -711,7 +763,15 @@ defmodule CodingAgent.Tools.Hashline do
             byte_size(pending) > 0 or ended_nl ->
               # Emit the final line (may be empty if file ended with newline)
               {extra_emitted, _pending, _ln, final_acc, _ol, _ob, _enl} =
-                consume_text(pending <> "\n", line_num, out_acc, out_lines, out_bytes, max_chunk_lines, max_chunk_bytes)
+                consume_text(
+                  pending <> "\n",
+                  line_num,
+                  out_acc,
+                  out_lines,
+                  out_bytes,
+                  max_chunk_lines,
+                  max_chunk_bytes
+                )
 
               last = flush_acc(final_acc)
               if last, do: extra_emitted ++ [last], else: extra_emitted
@@ -729,7 +789,15 @@ defmodule CodingAgent.Tools.Hashline do
 
   # Consume text, splitting on newlines, accumulating formatted lines into chunks.
   # Returns {emitted_chunks, remaining_pending, line_num, out_acc, out_lines, out_bytes, ended_with_newline}
-  defp consume_text(text, line_num, out_acc, out_lines, out_bytes, max_chunk_lines, max_chunk_bytes) do
+  defp consume_text(
+         text,
+         line_num,
+         out_acc,
+         out_lines,
+         out_bytes,
+         max_chunk_lines,
+         max_chunk_bytes
+       ) do
     case :binary.split(text, "\n") do
       [^text] ->
         # No newline found - entire text is pending
@@ -743,7 +811,8 @@ defmodule CodingAgent.Tools.Hashline do
         # Check if we need to flush before adding this line
         {pre_emitted, out_acc, out_lines, out_bytes} =
           if out_lines > 0 and
-               (out_lines >= max_chunk_lines or out_bytes + sep_bytes + line_bytes > max_chunk_bytes) do
+               (out_lines >= max_chunk_lines or
+                  out_bytes + sep_bytes + line_bytes > max_chunk_bytes) do
             {[flush_acc(out_acc)], [], 0, 0}
           else
             {[], out_acc, out_lines, out_bytes}
@@ -764,11 +833,20 @@ defmodule CodingAgent.Tools.Hashline do
 
         # Recurse to consume the rest
         {rest_emitted, final_pending, final_ln, final_acc, final_ol, final_ob, final_enl} =
-          consume_text(rest, line_num + 1, new_out_acc, new_out_lines, new_out_bytes, max_chunk_lines, max_chunk_bytes)
+          consume_text(
+            rest,
+            line_num + 1,
+            new_out_acc,
+            new_out_lines,
+            new_out_bytes,
+            max_chunk_lines,
+            max_chunk_bytes
+          )
 
         ended_nl = if byte_size(rest) == 0, do: true, else: final_enl
 
-        {pre_emitted ++ post_emitted ++ rest_emitted, final_pending, final_ln, final_acc, final_ol, final_ob, ended_nl}
+        {pre_emitted ++ post_emitted ++ rest_emitted, final_pending, final_ln, final_acc,
+         final_ol, final_ob, ended_nl}
     end
   end
 

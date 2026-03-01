@@ -17,7 +17,9 @@ defmodule LemonGateway.CliAdapterTest do
     ev = StartedEvent.new("codex", token, title: "Codex")
 
     result = CliAdapter.to_event_map(ev)
-    assert %{__event__: :started, engine: "codex", resume: %GatewayToken{value: "thread_123"}} = result
+
+    assert %{__event__: :started, engine: "codex", resume: %GatewayToken{value: "thread_123"}} =
+             result
   end
 
   test "maps action event" do
@@ -39,7 +41,13 @@ defmodule LemonGateway.CliAdapterTest do
     ev = CompletedEvent.ok("codex", "done", resume: token)
 
     result = CliAdapter.to_event_map(ev)
-    assert %{__event__: :completed, ok: true, answer: "done", resume: %GatewayToken{value: "thread_123"}} = result
+
+    assert %{
+             __event__: :completed,
+             ok: true,
+             answer: "done",
+             resume: %GatewayToken{value: "thread_123"}
+           } = result
   end
 
   test "cancel uses cancel/2 when runner exports it" do

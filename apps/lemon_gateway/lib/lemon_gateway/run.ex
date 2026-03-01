@@ -113,14 +113,15 @@ defmodule LemonGateway.Run do
 
         run_id = job.run_id || generate_run_id()
 
-        completed = Event.completed(%{
-          engine: engine_id_for(job),
-          ok: false,
-          error: :lock_timeout,
-          answer: "",
-          run_id: run_id,
-          session_key: job.session_key
-        })
+        completed =
+          Event.completed(%{
+            engine: engine_id_for(job),
+            ok: false,
+            error: :lock_timeout,
+            answer: "",
+            run_id: run_id,
+            session_key: job.session_key
+          })
 
         # Emit completion event to bus (include session_key and origin in meta)
         meta = %{session_key: job.session_key, origin: job.meta && job.meta[:origin]}
@@ -190,15 +191,16 @@ defmodule LemonGateway.Run do
     )
 
     if is_nil(engine) do
-      completed = Event.completed(%{
-        engine: engine_id,
-        ok: false,
-        # Keep this stringy: the Basic renderer calls to_string/1 on error.
-        error: "unknown engine id: #{engine_id}",
-        answer: "",
-        run_id: state.run_id,
-        session_key: state.session_key
-      })
+      completed =
+        Event.completed(%{
+          engine: engine_id,
+          ok: false,
+          # Keep this stringy: the Basic renderer calls to_string/1 on error.
+          error: "unknown engine id: #{engine_id}",
+          answer: "",
+          run_id: state.run_id,
+          session_key: state.session_key
+        })
 
       renderer_state = state.renderer.init(%{engine: nil})
       {renderer_state, render_action} = state.renderer.apply_event(renderer_state, completed)
@@ -265,14 +267,15 @@ defmodule LemonGateway.Run do
               "reason=#{inspect(reason)}"
           )
 
-          completed = Event.completed(%{
-            engine: engine_id,
-            ok: false,
-            error: reason,
-            answer: "",
-            run_id: state.run_id,
-            session_key: state.session_key
-          })
+          completed =
+            Event.completed(%{
+              engine: engine_id,
+              ok: false,
+              error: reason,
+              answer: "",
+              run_id: state.run_id,
+              session_key: state.session_key
+            })
 
           {renderer_state, render_action} = state.renderer.apply_event(renderer_state, completed)
           maybe_update_progress(state, render_action)
@@ -487,15 +490,16 @@ defmodule LemonGateway.Run do
 
       resume = state.last_resume || state.job.resume
 
-      completed = Event.completed(%{
-        engine: engine_id_for(state.job),
-        resume: resume,
-        ok: false,
-        error: reason,
-        answer: "",
-        run_id: state.run_id,
-        session_key: state.session_key
-      })
+      completed =
+        Event.completed(%{
+          engine: engine_id_for(state.job),
+          resume: resume,
+          ok: false,
+          error: reason,
+          answer: "",
+          run_id: state.run_id,
+          session_key: state.session_key
+        })
 
       finalize(state, completed)
       {:stop, :normal, %{state | completed: true}}
@@ -775,7 +779,10 @@ defmodule LemonGateway.Run do
 
   defp maybe_store_chat_state(_job, _completed), do: :ok
 
-  defp maybe_clear_chat_state_on_context_overflow(session_key, %{__event__: :completed} = completed)
+  defp maybe_clear_chat_state_on_context_overflow(
+         session_key,
+         %{__event__: :completed} = completed
+       )
        when is_binary(session_key) do
     ok = Map.get(completed, :ok)
     error = Map.get(completed, :error)

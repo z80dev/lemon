@@ -302,9 +302,11 @@ defmodule Ai.Models do
     cond do
       String.contains?(id, "gpt-5.2") or String.contains?(id, "gpt-5.3") ->
         true
+
       api == :anthropic_messages and
           (String.contains?(id, "opus-4-6") or String.contains?(id, "opus-4.6")) ->
         true
+
       true ->
         false
     end
@@ -356,18 +358,24 @@ defmodule Ai.Models do
           atom(),
           map()
         ) :: {non_neg_integer(), non_neg_integer()}
-  def adjust_max_tokens_for_thinking(base_max_tokens, model_max_tokens, reasoning_level, custom_budgets \\ %{}) do
+  def adjust_max_tokens_for_thinking(
+        base_max_tokens,
+        model_max_tokens,
+        reasoning_level,
+        custom_budgets \\ %{}
+      ) do
     min_output_tokens = 1024
     level = clamp_reasoning(reasoning_level)
     budgets = Map.merge(@default_thinking_budgets, custom_budgets)
     thinking_budget = Map.get(budgets, level, 0)
     max_tokens = min(base_max_tokens + thinking_budget, model_max_tokens)
 
-    thinking_budget = if max_tokens <= thinking_budget do
-      max(0, max_tokens - min_output_tokens)
-    else
-      thinking_budget
-    end
+    thinking_budget =
+      if max_tokens <= thinking_budget do
+        max(0, max_tokens - min_output_tokens)
+      else
+        thinking_budget
+      end
 
     {max_tokens, thinking_budget}
   end
@@ -440,6 +448,7 @@ defmodule Ai.Models do
   @spec models_equal?(Model.t() | nil, Model.t() | nil) :: boolean()
   def models_equal?(nil, _b), do: false
   def models_equal?(_a, nil), do: false
+
   def models_equal?(%Model{id: id_a, provider: provider_a}, %Model{id: id_b, provider: provider_b}) do
     id_a == id_b and provider_a == provider_b
   end

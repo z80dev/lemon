@@ -27,47 +27,22 @@ Key entry points:
 ## Phoenix Architecture Overview
 
 ```
-Endpoint (LemonWeb.Endpoint)
-  |-- Socket "/live" -> Phoenix.LiveView.Socket
-  |-- Static assets
-  |-- Router (LemonWeb.Router)
-       |-- Pipeline :public_browser (no token gate)
-       |    |-- /games -> GamesLobbyLive :index
-       |    |-- /games/:id -> GameMatchLive :show
-       |-- Pipeline :browser -> RequireAccessToken
-            |-- / -> SessionLive :index
-            |-- /sessions/:session_key -> SessionLive :show
+┌─────────────────────────────────────────────────────────────┐
+│  Endpoint (LemonWeb.Endpoint)                                 │
+│  ├── Socket "/live" → Phoenix.LiveView.Socket                 │
+│  ├── Static assets                                            │
+│  └── Router (LemonWeb.Router)                                 │
+│       ├── Pipeline :browser → RequireAccessToken              │
+│       └── Pipeline :public_browser (for public /games pages)  │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ### OTP Application Structure
 
 - `LemonWeb.Application` - Supervisor with `Telemetry` and `Endpoint` (`:one_for_one`)
 - `LemonWeb.Endpoint` - HTTP/WebSocket endpoint (uses Bandit); session stored in signed cookie `_lemon_web_key`
-- `LemonWeb.Router` - Routes: public games (`/games`, `/games/:id`) and dashboard (`/`, `/sessions/:session_key`)
-- `LemonWeb.Telemetry` - Telemetry supervisor (currently empty, placeholder for metrics)
-
-## Key Files and Purposes
-
-| File | Purpose |
-|------|---------|
-| `lib/lemon_web.ex` | Module macros: `use LemonWeb, :live_view`, `:router`, `:html`, etc. |
-| `lib/lemon_web/application.ex` | OTP app: supervises Telemetry and Endpoint |
-| `lib/lemon_web/endpoint.ex` | Plug pipeline, static serving, LiveView socket mount |
-| `lib/lemon_web/router.ex` | Route definitions and pipeline plugs |
-| `lib/lemon_web/plugs/require_access_token.ex` | Optional auth plug (Bearer/query/session) |
-| `lib/lemon_web/live/session_live.ex` | Dashboard LiveView: chat, file upload, PubSub events |
-| `lib/lemon_web/live/games_lobby_live.ex` | Games lobby: lists public matches, subscribes to lobby events |
-| `lib/lemon_web/live/game_match_live.ex` | Match spectator: board state, event timeline, per-match PubSub |
-| `lib/lemon_web/live/components/message_component.ex` | Chat bubble rendering (user, assistant, system, tool call) |
-| `lib/lemon_web/live/components/file_upload_component.ex` | File upload UI with progress bars |
-| `lib/lemon_web/live/components/tool_call_component.ex` | Collapsible tool call details |
-| `lib/lemon_web/components/core_components.ex` | Shared `<.button>`, `<.input>`, `<.flash_group>` |
-| `lib/lemon_web/components/layouts.ex` | Layout module (embeds `layouts/` templates) |
-| `lib/lemon_web/components/layouts/root.html.heex` | HTML shell: head, Tailwind CDN, app.js |
-| `lib/lemon_web/components/layouts/app.html.heex` | App layout (passthrough) |
-| `lib/lemon_web/controllers/error_html.ex` | HTML error pages (embeds `error_html/` templates) |
-| `lib/lemon_web/controllers/error_json.ex` | JSON error responses |
-| `priv/static/assets/app.js` | Client JS: LiveSocket init, per-tab session key, URL cleanup |
+- `LemonWeb.Router` - Routes: `/` (index), `/sessions/:session_key` (show), `/games` (lobby), `/games/:match_id` (spectator)
+- `LemonWeb.Telemetry` - Phoenix telemetry metrics
 
 ## LiveView Structure
 
@@ -80,6 +55,11 @@ Endpoint (LemonWeb.Endpoint)
 live "/", SessionLive, :index        # Generates a new isolated session key per tab
 live "/sessions/:session_key", SessionLive, :show  # Uses the provided session key
 ```
+
+### Games LiveViews
+
+- `LemonWeb.Games.LobbyLive` (`/games`) - Public spectator lobby powered by `LemonGames.Matches.Service.list_lobby/1`, subscribes to `LemonGames.Bus.lobby_topic/0`.
+- `LemonWeb.Games.MatchLive` (`/games/:match_id`) - Public match spectator page; renders board/timeline via `LemonGames.Matches.Service.get_match/2` and `list_events/4`, subscribes to `LemonGames.Bus.match_topic/1`.
 
 **Query params supported on `/`:**
 - `?agent_id=<id>` - Sets the agent for the isolated session (default: `"default"`)

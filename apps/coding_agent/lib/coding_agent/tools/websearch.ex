@@ -362,7 +362,15 @@ defmodule CodingAgent.Tools.WebSearch do
 
     case runtime.http_post.(endpoint, request_opts) do
       {:ok, %Req.Response{status: status} = response} when status in 200..299 ->
-        {:ok, build_perplexity_success_response(response, provider, api_cfg.model, query, request, start_ms)}
+        {:ok,
+         build_perplexity_success_response(
+           response,
+           provider,
+           api_cfg.model,
+           query,
+           request,
+           start_ms
+         )}
 
       {:ok, %Req.Response{status: status} = response} ->
         {:error, format_perplexity_api_error(status, response.body)}

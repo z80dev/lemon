@@ -16,3 +16,10 @@ config :lemon_core, LemonCore.Store,
 config :lemon_control_plane, :browser_local_fallback, true
 
 config :lemon_web, LemonWeb.Endpoint, cache_static_manifest: "priv/static/cache_manifest.json"
+
+# Games platform autoplay configuration
+config :lemon_games, :autoplay,
+  enabled: true,
+  interval_ms: 15_000,
+  max_active_matches: 5,
+  game_types: ["rock_paper_scissors", "connect4"]

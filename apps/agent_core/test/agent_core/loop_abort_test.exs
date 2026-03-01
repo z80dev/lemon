@@ -165,8 +165,10 @@ defmodule AgentCore.LoopAbortTest do
       stream = Loop.agent_loop([user_message("Test")], context, config, signal, nil)
 
       {_events, result} = collect_events_and_result(stream)
+
       assert match?({:error, {:canceled, :assistant_aborted}}, result) or
                match?({:error, :stream_closed}, result)
+
       refute_receive :stream_fn_called, 100
     end
 

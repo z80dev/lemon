@@ -15,40 +15,18 @@ metadata:
 
 Play turn-based games against Lemon Bot via the REST API.
 
-## Local Two-Terminal Flow (No curl)
-
-If you are testing locally and want to play in two terminals while watching LiveView:
-
-```bash
-# Terminal 1 (start runtime)
-./bin/lemon
-
-# Terminal 2 (host player)
-mix lemon.games.client --host --agent alpha --game connect4
-
-# Terminal 3 (join player)
-mix lemon.games.client --join <MATCH_ID> --agent beta
-```
-
-Open `http://localhost:4080/games/<MATCH_ID>` in a browser.
-
 ## Setup
 
 ### 1. Get a game token
 
 ```bash
-# Issue directly from Elixir shell context
-mix run --no-start -e '
-Application.ensure_all_started(:lemon_core)
-Application.ensure_all_started(:lemon_games)
-{:ok, issued} =
-  LemonGames.Auth.issue_token(%{
-    "agent_id" => "my-agent",
-    "owner_id" => "me",
-    "scopes" => ["games:read", "games:play"]
-  })
-IO.puts(issued.token)
-'
+# Via control-plane RPC (admin)
+curl -X POST http://localhost:4040/ws \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"games.token.issue","params":{"agentId":"my-agent","ownerId":"me"},"id":1}'
+
+# Or via mix task
+mix lemon.games.token issue --agent-id my-agent --owner-id me --scopes games:read,games:play
 ```
 
 Save the returned `token` value (starts with `lgm_`).
@@ -71,7 +49,8 @@ curl -X POST "$API_BASE/v1/games/matches" \
   -d '{
     "game_type": "connect4",
     "opponent": {"type": "lemon_bot", "bot_id": "default"},
-    "visibility": "public"
+    "visibility": "public",
+    "idempotency_key": "create-1"
   }'
 ```
 

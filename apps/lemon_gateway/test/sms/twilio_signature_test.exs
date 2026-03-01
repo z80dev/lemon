@@ -155,7 +155,9 @@ defmodule LemonGateway.Sms.TwilioSignatureTest do
     test "returns false when URL is wrong" do
       params = %{"Body" => "hello"}
       sig = TwilioSignature.signature(@token, @url, params)
-      assert TwilioSignature.valid?(@token, "https://wrong.example.com/hook", params, sig) == false
+
+      assert TwilioSignature.valid?(@token, "https://wrong.example.com/hook", params, sig) ==
+               false
     end
 
     test "returns false when provided signature is wrong" do

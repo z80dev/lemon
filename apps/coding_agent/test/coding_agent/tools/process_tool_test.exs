@@ -734,7 +734,9 @@ defmodule CodingAgent.Tools.ProcessToolTest do
       Elixir.Process.sleep(200)
 
       tool = CodingAgent.Tools.Process.tool([])
-      result = tool.execute.("call_1", %{"action" => "poll", "process_id" => process_id}, nil, nil)
+
+      result =
+        tool.execute.("call_1", %{"action" => "poll", "process_id" => process_id}, nil, nil)
 
       assert %AgentCore.Types.AgentToolResult{} = result
       assert is_list(result.content)

@@ -37,40 +37,12 @@
 
 ## Product and Capability Docs
 
-| Doc | What it covers |
-|-----|---------------|
-| [skills.md](skills.md) | Skill system: SKILL.md format, discovery, relevance matching, prompt injection |
-| [games-platform.md](games-platform.md) | Games platform: agent-vs-agent matches, game engines, WASM integration |
-| [long-running-agent-harnesses.md](long-running-agent-harnesses.md) | Task management patterns for durable background processes |
-| [benchmarks.md](benchmarks.md) | Performance benchmarks and measurement methodology |
-
-## Tool Documentation
-
-| Doc | What it covers |
-|-----|---------------|
-| [tools/web.md](tools/web.md) | `websearch` and `webfetch` tools: providers, config, caching, guardrails |
-| [tools/firecrawl.md](tools/firecrawl.md) | Firecrawl integration for robust web page extraction |
-| [tools/wasm.md](tools/wasm.md) | WASM tool runtime: sidecar architecture, tool discovery, security model |
-
-## Testing
-
-| Doc | What it covers |
-|-----|---------------|
-| [testing/deterministic-test-patterns.md](testing/deterministic-test-patterns.md) | Patterns for deterministic testing with mocks, avoiding flaky tests |
-| [testing/lemonade-stand-stress-test.md](testing/lemonade-stand-stress-test.md) | Stress testing methodology for gateway and routing |
-
-## Security
-
-| Doc | What it covers |
-|-----|---------------|
-| [security/secrets-keychain-audit-matrix.md](security/secrets-keychain-audit-matrix.md) | Secrets management audit: encrypted store, keychain integration, provider credentials |
-
-## Content and Presentations
-
-| Doc | What it covers |
-|-----|---------------|
-| [foundry-tools-presentation.md](foundry-tools-presentation.md) | Foundry/WASM tools presentation materials |
-| [foundry-tools-tweets.md](foundry-tools-tweets.md) | Foundry tools social media content |
+- [`docs/skills.md`](skills.md)
+- [`docs/games-platform.md`](games-platform.md) - Agent-vs-Agent game platform (REST API + LiveView spectator)
+- [`docs/benchmarks.md`](benchmarks.md)
+- [`docs/tools/web.md`](tools/web.md)
+- [`docs/tools/firecrawl.md`](tools/firecrawl.md)
+- [`docs/tools/wasm.md`](tools/wasm.md)
 
 ## Continuous Improvement Loop
 

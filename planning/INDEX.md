@@ -1,6 +1,6 @@
 # Planning Index
 
-Last updated: 2026-02-27
+Last updated: 2026-02-28
 
 This file is the live board for tracked plans. Keep rows concise and link to canonical plan artifacts.
 
@@ -32,7 +32,7 @@ These entries were already completed before the `planning/` workflow was created
 
 | Plan ID | Title | Status | Owner | Workspace | Change ID | Roadmap Ref | Updated |
 |---|---|---|---|---|---|---|---|
-| [PLN-20260226-agent-games-platform](plans/PLN-20260226-agent-games-platform.md) | Agent-vs-Agent Game Platform (REST API + Live Spectator Web) | `in_progress` | `janitor` | `feature/pln-20260226-agent-games-platform` | `pending` | — | 2026-02-26 |
+| [PLN-20260226-agent-games-platform](plans/PLN-20260226-agent-games-platform.md) | Agent-vs-Agent Game Platform (REST API + Live Spectator Web) | `ready_to_land` | `janitor` | `feature/pln-20260226-agent-games-platform` | `pending` | — | 2026-03-01 |
 | [PLN-20260223-macos-keychain-secrets-audit](plans/PLN-20260223-macos-keychain-secrets-audit.md) | macOS Keychain secrets path audit and hardening | `ready_to_land` | `janitor` | `feature/pln-20260223-macos-keychain-secrets-audit` | `pending` | `ROADMAP.md` | 2026-02-25 |
 | [PLN-20260224-deterministic-ci-test-hardening](plans/PLN-20260224-deterministic-ci-test-hardening.md) | Deterministic CI and test signal hardening | `ready_to_land` | `janitor` | `feature/pln-20260224-deterministic-ci-test-hardening` | `pending` | `ROADMAP.md` | 2026-02-25 |
 | [PLN-20260222-debt-phase-10-monolith-footprint-reduction](plans/PLN-20260222-debt-phase-10-monolith-footprint-reduction.md) | Debt Phase 10 - Monolith and release footprint reduction | `ready_to_land` | `janitor` | `feature/pln-20260222-debt-phase-10-monolith-footprint-reduction` | `pending` | `debt_plan.md:123` | 2026-02-25 |
@@ -58,6 +58,7 @@ These entries were already completed before the `planning/` workflow was created
 | [PLN-20260224-runtime-hot-reload](plans/PLN-20260224-runtime-hot-reload.md) | Runtime Hot-Reload System for BEAM Modules and Extensions | [MRG-PLN-20260224-runtime-hot-reload.md](merges/MRG-PLN-20260224-runtime-hot-reload.md) | `janitor` | 2026-02-25 |
 | [PLN-20260224-long-running-agent-harnesses](plans/PLN-20260224-long-running-agent-harnesses.md) | Long-Running Agent Harnesses and Task Management | [MRG-PLN-20260224-long-running-agent-harnesses.md](merges/MRG-PLN-20260224-long-running-agent-harnesses.md) | `janitor` | 2026-02-25 |
 | [PLN-20260224-inspiration-ideas-implementation](plans/PLN-20260224-inspiration-ideas-implementation.md) | Implement Inspiration Ideas from Upstream Research | [MRG-PLN-20260224-inspiration-ideas-implementation.md](merges/MRG-PLN-20260224-inspiration-ideas-implementation.md) | `janitor` | 2026-02-25 |
+| [PLN-20260226-agent-games-platform](plans/PLN-20260226-agent-games-platform.md) | Agent-vs-Agent Game Platform (REST API + Live Spectator Web) | [MRG-PLN-20260226-agent-games-platform.md](merges/MRG-PLN-20260226-agent-games-platform.md) | `janitor` | 2026-03-01 |
 
 ## Blocked
 

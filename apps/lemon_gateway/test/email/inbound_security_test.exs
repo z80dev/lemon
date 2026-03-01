@@ -124,6 +124,7 @@ defmodule LemonGateway.EmailInboundSecurityTest do
       message: "attachment file was never written by async pipeline",
       timeout: 2_000
     )
+
     assert {:ok, [copied]} = File.ls(@attachments_dir)
 
     copied_path = Path.join(@attachments_dir, copied)

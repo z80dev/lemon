@@ -782,363 +782,363 @@ defmodule Ai.Models.AmazonBedrock do
       context_window: 200_000,
       max_tokens: 131_072
     },
-"amazon.titan-text-express-v1:0:8k" => %Model{
-                               id: "amazon.titan-text-express-v1:0:8k",
-                               name: "Titan Text G1 - Express",
-                               api: :bedrock_converse_stream,
-                               provider: :amazon_bedrock,
-                               base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                               reasoning: false,
-                               input: [:text],
-                               cost: %ModelCost{
-                                 input: 0.2,
-                                 output: 0.6,
-                                 cache_read: 0.0,
-                                 cache_write: 0.0
-                               },
-                               context_window: 128_000,
-                               max_tokens: 4_096
-                             },
-                             "eu.anthropic.claude-haiku-4-5-20251001-v1:0" => %Model{
-                               id: "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
-                               name: "Claude Haiku 4.5 (EU)",
-                               api: :bedrock_converse_stream,
-                               provider: :amazon_bedrock,
-                               base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                               reasoning: true,
-                               input: [:text, :image],
-                               cost: %ModelCost{
-                                 input: 1.0,
-                                 output: 5.0,
-                                 cache_read: 0.1,
-                                 cache_write: 1.25
-                               },
-                               context_window: 200_000,
-                               max_tokens: 64_000
-                             },
-                             "eu.anthropic.claude-opus-4-5-20251101-v1:0" => %Model{
-                               id: "eu.anthropic.claude-opus-4-5-20251101-v1:0",
-                               name: "Claude Opus 4.5 (EU)",
-                               api: :bedrock_converse_stream,
-                               provider: :amazon_bedrock,
-                               base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                               reasoning: true,
-                               input: [:text, :image],
-                               cost: %ModelCost{
-                                 input: 5.0,
-                                 output: 25.0,
-                                 cache_read: 0.5,
-                                 cache_write: 6.25
-                               },
-                               context_window: 200_000,
-                               max_tokens: 64_000
-                             },
-                             "eu.anthropic.claude-opus-4-6-v1" => %Model{
-                               id: "eu.anthropic.claude-opus-4-6-v1",
-                               name: "Claude Opus 4.6 (EU)",
-                               api: :bedrock_converse_stream,
-                               provider: :amazon_bedrock,
-                               base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                               reasoning: true,
-                               input: [:text, :image],
-                               cost: %ModelCost{
-                                 input: 5.0,
-                                 output: 25.0,
-                                 cache_read: 0.5,
-                                 cache_write: 6.25
-                               },
-                               context_window: 200_000,
-                               max_tokens: 128_000
-                             },
-                             "eu.anthropic.claude-sonnet-4-20250514-v1:0" => %Model{
-                               id: "eu.anthropic.claude-sonnet-4-20250514-v1:0",
-                               name: "Claude Sonnet 4 (EU)",
-                               api: :bedrock_converse_stream,
-                               provider: :amazon_bedrock,
-                               base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                               reasoning: true,
-                               input: [:text, :image],
-                               cost: %ModelCost{
-                                 input: 3.0,
-                                 output: 15.0,
-                                 cache_read: 0.3,
-                                 cache_write: 3.75
-                               },
-                               context_window: 200_000,
-                               max_tokens: 64_000
-                             },
-                             "eu.anthropic.claude-sonnet-4-5-20250929-v1:0" => %Model{
-                               id: "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
-                               name: "Claude Sonnet 4.5 (EU)",
-                               api: :bedrock_converse_stream,
-                               provider: :amazon_bedrock,
-                               base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                               reasoning: true,
-                               input: [:text, :image],
-                               cost: %ModelCost{
-                                 input: 3.0,
-                                 output: 15.0,
-                                 cache_read: 0.3,
-                                 cache_write: 3.75
-                               },
-                               context_window: 200_000,
-                               max_tokens: 64_000
-                             },
-                             "eu.anthropic.claude-sonnet-4-6" => %Model{
-                               id: "eu.anthropic.claude-sonnet-4-6",
-                               name: "Claude Sonnet 4.6 (EU)",
-                               api: :bedrock_converse_stream,
-                               provider: :amazon_bedrock,
-                               base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                               reasoning: true,
-                               input: [:text, :image],
-                               cost: %ModelCost{
-                                 input: 3.0,
-                                 output: 15.0,
-                                 cache_read: 0.3,
-                                 cache_write: 3.75
-                               },
-                               context_window: 200_000,
-                               max_tokens: 64_000
-                             },
-                             "global.anthropic.claude-haiku-4-5-20251001-v1:0" => %Model{
-                               id: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-                               name: "Claude Haiku 4.5 (Global)",
-                               api: :bedrock_converse_stream,
-                               provider: :amazon_bedrock,
-                               base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                               reasoning: true,
-                               input: [:text, :image],
-                               cost: %ModelCost{
-                                 input: 1.0,
-                                 output: 5.0,
-                                 cache_read: 0.1,
-                                 cache_write: 1.25
-                               },
-                               context_window: 200_000,
-                               max_tokens: 64_000
-                             },
-                             "global.anthropic.claude-opus-4-5-20251101-v1:0" => %Model{
-                               id: "global.anthropic.claude-opus-4-5-20251101-v1:0",
-                               name: "Claude Opus 4.5 (Global)",
-                               api: :bedrock_converse_stream,
-                               provider: :amazon_bedrock,
-                               base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                               reasoning: true,
-                               input: [:text, :image],
-                               cost: %ModelCost{
-                                 input: 5.0,
-                                 output: 25.0,
-                                 cache_read: 0.5,
-                                 cache_write: 6.25
-                               },
-                               context_window: 200_000,
-                               max_tokens: 64_000
-                             },
-                             "global.anthropic.claude-opus-4-6-v1" => %Model{
-                               id: "global.anthropic.claude-opus-4-6-v1",
-                               name: "Claude Opus 4.6 (Global)",
-                               api: :bedrock_converse_stream,
-                               provider: :amazon_bedrock,
-                               base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                               reasoning: true,
-                               input: [:text, :image],
-                               cost: %ModelCost{
-                                 input: 5.0,
-                                 output: 25.0,
-                                 cache_read: 0.5,
-                                 cache_write: 6.25
-                               },
-                               context_window: 200_000,
-                               max_tokens: 128_000
-                             },
-                             "global.anthropic.claude-sonnet-4-20250514-v1:0" => %Model{
-                               id: "global.anthropic.claude-sonnet-4-20250514-v1:0",
-                               name: "Claude Sonnet 4 (Global)",
-                               api: :bedrock_converse_stream,
-                               provider: :amazon_bedrock,
-                               base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                               reasoning: true,
-                               input: [:text, :image],
-                               cost: %ModelCost{
-                                 input: 3.0,
-                                 output: 15.0,
-                                 cache_read: 0.3,
-                                 cache_write: 3.75
-                               },
-                               context_window: 200_000,
-                               max_tokens: 64_000
-                             },
-                             "global.anthropic.claude-sonnet-4-5-20250929-v1:0" => %Model{
-                               id: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-                               name: "Claude Sonnet 4.5 (Global)",
-                               api: :bedrock_converse_stream,
-                               provider: :amazon_bedrock,
-                               base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                               reasoning: true,
-                               input: [:text, :image],
-                               cost: %ModelCost{
-                                 input: 3.0,
-                                 output: 15.0,
-                                 cache_read: 0.3,
-                                 cache_write: 3.75
-                               },
-                               context_window: 200_000,
-                               max_tokens: 64_000
-                             },
-                             "global.anthropic.claude-sonnet-4-6" => %Model{
-                               id: "global.anthropic.claude-sonnet-4-6",
-                               name: "Claude Sonnet 4.6 (Global)",
-                               api: :bedrock_converse_stream,
-                               provider: :amazon_bedrock,
-                               base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                               reasoning: true,
-                               input: [:text, :image],
-                               cost: %ModelCost{
-                                 input: 3.0,
-                                 output: 15.0,
-                                 cache_read: 0.3,
-                                 cache_write: 3.75
-                               },
-                               context_window: 200_000,
-                               max_tokens: 64_000
-                             },
-                             "us.anthropic.claude-haiku-4-5-20251001-v1:0" => %Model{
-                               id: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-                               name: "Claude Haiku 4.5 (US)",
-                               api: :bedrock_converse_stream,
-                               provider: :amazon_bedrock,
-                               base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                               reasoning: true,
-                               input: [:text, :image],
-                               cost: %ModelCost{
-                                 input: 1.0,
-                                 output: 5.0,
-                                 cache_read: 0.1,
-                                 cache_write: 1.25
-                               },
-                               context_window: 200_000,
-                               max_tokens: 64_000
-                             },
-                             "us.anthropic.claude-opus-4-1-20250805-v1:0" => %Model{
-                               id: "us.anthropic.claude-opus-4-1-20250805-v1:0",
-                               name: "Claude Opus 4.1 (US)",
-                               api: :bedrock_converse_stream,
-                               provider: :amazon_bedrock,
-                               base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                               reasoning: true,
-                               input: [:text, :image],
-                               cost: %ModelCost{
-                                 input: 15.0,
-                                 output: 75.0,
-                                 cache_read: 1.5,
-                                 cache_write: 18.75
-                               },
-                               context_window: 200_000,
-                               max_tokens: 32_000
-                             },
-                             "us.anthropic.claude-opus-4-20250514-v1:0" => %Model{
-                               id: "us.anthropic.claude-opus-4-20250514-v1:0",
-                               name: "Claude Opus 4 (US)",
-                               api: :bedrock_converse_stream,
-                               provider: :amazon_bedrock,
-                               base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                               reasoning: true,
-                               input: [:text, :image],
-                               cost: %ModelCost{
-                                 input: 15.0,
-                                 output: 75.0,
-                                 cache_read: 1.5,
-                                 cache_write: 18.75
-                               },
-                               context_window: 200_000,
-                               max_tokens: 32_000
-                             },
-                             "us.anthropic.claude-opus-4-5-20251101-v1:0" => %Model{
-                               id: "us.anthropic.claude-opus-4-5-20251101-v1:0",
-                               name: "Claude Opus 4.5 (US)",
-                               api: :bedrock_converse_stream,
-                               provider: :amazon_bedrock,
-                               base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                               reasoning: true,
-                               input: [:text, :image],
-                               cost: %ModelCost{
-                                 input: 5.0,
-                                 output: 25.0,
-                                 cache_read: 0.5,
-                                 cache_write: 6.25
-                               },
-                               context_window: 200_000,
-                               max_tokens: 64_000
-                             },
-                             "us.anthropic.claude-opus-4-6-v1" => %Model{
-                               id: "us.anthropic.claude-opus-4-6-v1",
-                               name: "Claude Opus 4.6 (US)",
-                               api: :bedrock_converse_stream,
-                               provider: :amazon_bedrock,
-                               base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                               reasoning: true,
-                               input: [:text, :image],
-                               cost: %ModelCost{
-                                 input: 5.0,
-                                 output: 25.0,
-                                 cache_read: 0.5,
-                                 cache_write: 6.25
-                               },
-                               context_window: 200_000,
-                               max_tokens: 128_000
-                             },
-                             "us.anthropic.claude-sonnet-4-20250514-v1:0" => %Model{
-                               id: "us.anthropic.claude-sonnet-4-20250514-v1:0",
-                               name: "Claude Sonnet 4 (US)",
-                               api: :bedrock_converse_stream,
-                               provider: :amazon_bedrock,
-                               base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                               reasoning: true,
-                               input: [:text, :image],
-                               cost: %ModelCost{
-                                 input: 3.0,
-                                 output: 15.0,
-                                 cache_read: 0.3,
-                                 cache_write: 3.75
-                               },
-                               context_window: 200_000,
-                               max_tokens: 64_000
-                             },
-                             "us.anthropic.claude-sonnet-4-5-20250929-v1:0" => %Model{
-                               id: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-                               name: "Claude Sonnet 4.5 (US)",
-                               api: :bedrock_converse_stream,
-                               provider: :amazon_bedrock,
-                               base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                               reasoning: true,
-                               input: [:text, :image],
-                               cost: %ModelCost{
-                                 input: 3.0,
-                                 output: 15.0,
-                                 cache_read: 0.3,
-                                 cache_write: 3.75
-                               },
-                               context_window: 200_000,
-                               max_tokens: 64_000
-                             },
-                             "us.anthropic.claude-sonnet-4-6" => %Model{
-                               id: "us.anthropic.claude-sonnet-4-6",
-                               name: "Claude Sonnet 4.6 (US)",
-                               api: :bedrock_converse_stream,
-                               provider: :amazon_bedrock,
-                               base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                               reasoning: true,
-                               input: [:text, :image],
-                               cost: %ModelCost{
-                                 input: 3.0,
-                                 output: 15.0,
-                                 cache_read: 0.3,
-                                 cache_write: 3.75
-                               },
-                               context_window: 200_000,
-                               max_tokens: 64_000
-                             },
+    "amazon.titan-text-express-v1:0:8k" => %Model{
+      id: "amazon.titan-text-express-v1:0:8k",
+      name: "Titan Text G1 - Express",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{
+        input: 0.2,
+        output: 0.6,
+        cache_read: 0.0,
+        cache_write: 0.0
+      },
+      context_window: 128_000,
+      max_tokens: 4_096
+    },
+    "eu.anthropic.claude-haiku-4-5-20251001-v1:0" => %Model{
+      id: "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+      name: "Claude Haiku 4.5 (EU)",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{
+        input: 1.0,
+        output: 5.0,
+        cache_read: 0.1,
+        cache_write: 1.25
+      },
+      context_window: 200_000,
+      max_tokens: 64_000
+    },
+    "eu.anthropic.claude-opus-4-5-20251101-v1:0" => %Model{
+      id: "eu.anthropic.claude-opus-4-5-20251101-v1:0",
+      name: "Claude Opus 4.5 (EU)",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{
+        input: 5.0,
+        output: 25.0,
+        cache_read: 0.5,
+        cache_write: 6.25
+      },
+      context_window: 200_000,
+      max_tokens: 64_000
+    },
+    "eu.anthropic.claude-opus-4-6-v1" => %Model{
+      id: "eu.anthropic.claude-opus-4-6-v1",
+      name: "Claude Opus 4.6 (EU)",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{
+        input: 5.0,
+        output: 25.0,
+        cache_read: 0.5,
+        cache_write: 6.25
+      },
+      context_window: 200_000,
+      max_tokens: 128_000
+    },
+    "eu.anthropic.claude-sonnet-4-20250514-v1:0" => %Model{
+      id: "eu.anthropic.claude-sonnet-4-20250514-v1:0",
+      name: "Claude Sonnet 4 (EU)",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{
+        input: 3.0,
+        output: 15.0,
+        cache_read: 0.3,
+        cache_write: 3.75
+      },
+      context_window: 200_000,
+      max_tokens: 64_000
+    },
+    "eu.anthropic.claude-sonnet-4-5-20250929-v1:0" => %Model{
+      id: "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      name: "Claude Sonnet 4.5 (EU)",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{
+        input: 3.0,
+        output: 15.0,
+        cache_read: 0.3,
+        cache_write: 3.75
+      },
+      context_window: 200_000,
+      max_tokens: 64_000
+    },
+    "eu.anthropic.claude-sonnet-4-6" => %Model{
+      id: "eu.anthropic.claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6 (EU)",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{
+        input: 3.0,
+        output: 15.0,
+        cache_read: 0.3,
+        cache_write: 3.75
+      },
+      context_window: 200_000,
+      max_tokens: 64_000
+    },
+    "global.anthropic.claude-haiku-4-5-20251001-v1:0" => %Model{
+      id: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+      name: "Claude Haiku 4.5 (Global)",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{
+        input: 1.0,
+        output: 5.0,
+        cache_read: 0.1,
+        cache_write: 1.25
+      },
+      context_window: 200_000,
+      max_tokens: 64_000
+    },
+    "global.anthropic.claude-opus-4-5-20251101-v1:0" => %Model{
+      id: "global.anthropic.claude-opus-4-5-20251101-v1:0",
+      name: "Claude Opus 4.5 (Global)",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{
+        input: 5.0,
+        output: 25.0,
+        cache_read: 0.5,
+        cache_write: 6.25
+      },
+      context_window: 200_000,
+      max_tokens: 64_000
+    },
+    "global.anthropic.claude-opus-4-6-v1" => %Model{
+      id: "global.anthropic.claude-opus-4-6-v1",
+      name: "Claude Opus 4.6 (Global)",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{
+        input: 5.0,
+        output: 25.0,
+        cache_read: 0.5,
+        cache_write: 6.25
+      },
+      context_window: 200_000,
+      max_tokens: 128_000
+    },
+    "global.anthropic.claude-sonnet-4-20250514-v1:0" => %Model{
+      id: "global.anthropic.claude-sonnet-4-20250514-v1:0",
+      name: "Claude Sonnet 4 (Global)",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{
+        input: 3.0,
+        output: 15.0,
+        cache_read: 0.3,
+        cache_write: 3.75
+      },
+      context_window: 200_000,
+      max_tokens: 64_000
+    },
+    "global.anthropic.claude-sonnet-4-5-20250929-v1:0" => %Model{
+      id: "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      name: "Claude Sonnet 4.5 (Global)",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{
+        input: 3.0,
+        output: 15.0,
+        cache_read: 0.3,
+        cache_write: 3.75
+      },
+      context_window: 200_000,
+      max_tokens: 64_000
+    },
+    "global.anthropic.claude-sonnet-4-6" => %Model{
+      id: "global.anthropic.claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6 (Global)",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{
+        input: 3.0,
+        output: 15.0,
+        cache_read: 0.3,
+        cache_write: 3.75
+      },
+      context_window: 200_000,
+      max_tokens: 64_000
+    },
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0" => %Model{
+      id: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      name: "Claude Haiku 4.5 (US)",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{
+        input: 1.0,
+        output: 5.0,
+        cache_read: 0.1,
+        cache_write: 1.25
+      },
+      context_window: 200_000,
+      max_tokens: 64_000
+    },
+    "us.anthropic.claude-opus-4-1-20250805-v1:0" => %Model{
+      id: "us.anthropic.claude-opus-4-1-20250805-v1:0",
+      name: "Claude Opus 4.1 (US)",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{
+        input: 15.0,
+        output: 75.0,
+        cache_read: 1.5,
+        cache_write: 18.75
+      },
+      context_window: 200_000,
+      max_tokens: 32_000
+    },
+    "us.anthropic.claude-opus-4-20250514-v1:0" => %Model{
+      id: "us.anthropic.claude-opus-4-20250514-v1:0",
+      name: "Claude Opus 4 (US)",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{
+        input: 15.0,
+        output: 75.0,
+        cache_read: 1.5,
+        cache_write: 18.75
+      },
+      context_window: 200_000,
+      max_tokens: 32_000
+    },
+    "us.anthropic.claude-opus-4-5-20251101-v1:0" => %Model{
+      id: "us.anthropic.claude-opus-4-5-20251101-v1:0",
+      name: "Claude Opus 4.5 (US)",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{
+        input: 5.0,
+        output: 25.0,
+        cache_read: 0.5,
+        cache_write: 6.25
+      },
+      context_window: 200_000,
+      max_tokens: 64_000
+    },
+    "us.anthropic.claude-opus-4-6-v1" => %Model{
+      id: "us.anthropic.claude-opus-4-6-v1",
+      name: "Claude Opus 4.6 (US)",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{
+        input: 5.0,
+        output: 25.0,
+        cache_read: 0.5,
+        cache_write: 6.25
+      },
+      context_window: 200_000,
+      max_tokens: 128_000
+    },
+    "us.anthropic.claude-sonnet-4-20250514-v1:0" => %Model{
+      id: "us.anthropic.claude-sonnet-4-20250514-v1:0",
+      name: "Claude Sonnet 4 (US)",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{
+        input: 3.0,
+        output: 15.0,
+        cache_read: 0.3,
+        cache_write: 3.75
+      },
+      context_window: 200_000,
+      max_tokens: 64_000
+    },
+    "us.anthropic.claude-sonnet-4-5-20250929-v1:0" => %Model{
+      id: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      name: "Claude Sonnet 4.5 (US)",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{
+        input: 3.0,
+        output: 15.0,
+        cache_read: 0.3,
+        cache_write: 3.75
+      },
+      context_window: 200_000,
+      max_tokens: 64_000
+    },
+    "us.anthropic.claude-sonnet-4-6" => %Model{
+      id: "us.anthropic.claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6 (US)",
+      api: :bedrock_converse_stream,
+      provider: :amazon_bedrock,
+      base_url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: true,
+      input: [:text, :image],
+      cost: %ModelCost{
+        input: 3.0,
+        output: 15.0,
+        cache_read: 0.3,
+        cache_write: 3.75
+      },
+      context_window: 200_000,
+      max_tokens: 64_000
+    }
   }
 
   @doc "Returns all AmazonBedrock model definitions as a map."
