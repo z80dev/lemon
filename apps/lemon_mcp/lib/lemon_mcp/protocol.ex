@@ -35,6 +35,12 @@ defmodule LemonMCP.Protocol do
   @typedoc "MCP protocol version string"
   @type protocol_version :: String.t()
 
+  @doc """
+  Returns the supported MCP protocol version.
+  """
+  @spec protocol_version() :: String.t()
+  def protocol_version, do: "2024-11-05"
+
   @typedoc "Client or server capabilities map"
   @type capabilities :: map()
 
