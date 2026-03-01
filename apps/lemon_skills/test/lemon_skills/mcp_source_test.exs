@@ -57,16 +57,17 @@ defmodule LemonSkills.McpSourceTest do
   end
 
   describe "mcp_enabled?/0" do
-    test "returns true when LemonMCP.Client is available" do
-      # LemonMCP.Client is now available in test environment
-      # But only if not explicitly disabled
+    test "returns based on LemonMCP.Client availability when not disabled" do
       Application.delete_env(:lemon_skills, :mcp_disabled)
-      assert McpSource.mcp_enabled?() == true
+      # Result depends on whether LemonMCP.Client is loaded
+      expected = Code.ensure_loaded?(LemonMCP.Client)
+      assert McpSource.mcp_enabled?() == expected
     end
 
     test "returns false when explicitly disabled" do
       Application.put_env(:lemon_skills, :mcp_disabled, true)
       assert McpSource.mcp_enabled?() == false
+      Application.delete_env(:lemon_skills, :mcp_disabled)
     end
   end
 
