@@ -332,3 +332,199 @@ Follow the patterns and practices described in the skills above.
 | Use case | Project-specific patterns | General knowledge |
 
 When a skill exists in both locations, the project version takes precedence.
+
+---
+
+## MCP (Model Context Protocol) Server Integration
+
+Lemon supports discovering and invoking tools from external MCP servers. This allows agents to use tools provided by external services that implement the Model Context Protocol.
+
+### Configuration
+
+MCP servers can be configured in several ways:
+
+#### 1. Application Configuration
+
+Add MCP server configurations to your `config/config.exs`:
+
+```elixir
+config :lemon_skills, :mcp_servers, [
+  # Stdio transport (command-based)
+  {:stdio, "npx", ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/files"]},
+  
+  # Stdio with uvx
+  {:stdio, "uvx", ["mcp-server-git", "--repository", "/path/to/repo"]},
+  
+  # HTTP transport
+  {:http, "http://localhost:3000/mcp"},
+  
+  # HTTP with authentication headers
+  {:http, "https://api.example.com/mcp", [headers: [{"Authorization", "Bearer token"}]]}
+]
+```
+
+#### 2. Environment Variable
+
+Set the `LEMON_MCP_SERVERS` environment variable with a JSON array:
+
+```bash
+export LEMON_MCP_SERVERS='[
+  {"type": "stdio", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/files"]},
+  {"type": "http", "url": "http://localhost:3000/mcp"}
+]'
+```
+
+#### 3. JSON Configuration Files
+
+Create MCP configuration files:
+
+**Global configuration**: `~/.lemon/agent/mcp.json`
+```json
+{
+  "enabled": true,
+  "servers": [
+    {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/files"]
+    }
+  ]
+}
+```
+
+**Project configuration**: `.lemon/mcp.json`
+```json
+{
+  "enabled": true,
+  "servers": [
+    {
+      "type": "stdio", 
+      "command": "uvx",
+      "args": ["mcp-server-git", "--repository", "."]
+    }
+  ]
+}
+```
+
+Project configuration takes precedence over global configuration.
+
+### MCP Server Configuration Schema
+
+#### Stdio Transport
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | string | Yes | Must be `"stdio"` |
+| `command` | string | Yes | The command to execute |
+| `args` | array | No | Command arguments (default: `[]`) |
+
+#### HTTP Transport
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `type` | string | Yes | Must be `"http"` |
+| `url` | string | Yes | The MCP server URL |
+| `headers` | object | No | Additional HTTP headers |
+
+### Tool Discovery and Caching
+
+MCP tools are discovered automatically when the application starts and are cached for performance:
+
+- **Cache TTL**: 5 minutes (configurable via `:cache_ttl_ms`)
+- **Refresh Interval**: 1 minute (configurable via `:refresh_interval_ms`)
+- **Graceful Degradation**: If an MCP server is unavailable, tools from that server are skipped
+
+### Disabling MCP
+
+To disable MCP integration:
+
+```elixir
+config :lemon_skills, :mcp_disabled, true
+```
+
+Or via environment variable:
+
+```bash
+export LEMON_MCP_DISABLED=1
+```
+
+### Tool Precedence
+
+When tool names conflict, the precedence order is:
+
+1. Built-in tools (highest priority)
+2. WASM tools
+3. Extension tools
+4. MCP tools (lowest priority)
+
+MCP tools with conflicting names will be shadowed by tools from other sources.
+
+### Example: Using MCP Tools
+
+Once configured, MCP tools appear alongside native tools:
+
+```elixir
+# List all available tools including MCP tools
+tools = CodingAgent.ToolRegistry.get_tools("/path/to/project")
+
+# MCP tools are tagged with label "MCP: <tool_name>"
+Enum.each(tools, fn tool ->
+  IO.puts("#{tool.name}: #{tool.label}")
+end)
+```
+
+### Status and Debugging
+
+Check MCP server status:
+
+```elixir
+# Get status of all MCP servers
+LemonSkills.McpSource.status()
+# => %{
+#   disabled: false,
+#   servers: %{
+#     :abc123 => %{connected: true, tool_count: 5, last_error: nil},
+#     :def456 => %{connected: false, tool_count: 0, last_error: {:connection_failed, :econnrefused}}
+#   },
+#   cached_tools: 5,
+#   cache_ttl_ms: 300000
+# }
+```
+
+Force a cache refresh:
+
+```elixir
+LemonSkills.McpSource.refresh()
+```
+
+### Validation
+
+Validate MCP server configurations before applying them:
+
+```elixir
+configs = [
+  {:stdio, "npx", ["-y", "server"]},
+  {:http, "http://localhost:3000/mcp"}
+]
+
+case LemonSkills.Config.validate_mcp_servers(configs) do
+  {:ok, valid_configs} ->
+    IO.puts("All #{length(valid_configs)} configurations are valid")
+  
+  {:error, errors} ->
+    Enum.each(errors, fn {:invalid, config, reason} ->
+      IO.puts("Invalid config #{inspect(config)}: #{reason}")
+    end)
+end
+```
+
+### Supported MCP Servers
+
+Popular MCP servers you can integrate:
+
+- **Filesystem**: `@modelcontextprotocol/server-filesystem` - File operations
+- **Git**: `mcp-server-git` - Git repository operations
+- **SQLite**: `@modelcontextprotocol/server-sqlite` - Database operations
+- **Brave Search**: `@modelcontextprotocol/server-brave-search` - Web search
+
+For a comprehensive list, see the [MCP Server Registry](https://modelcontextprotocol.io/servers).

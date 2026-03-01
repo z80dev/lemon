@@ -11,7 +11,9 @@ defmodule LemonSkills.Application do
     LemonSkills.BuiltinSeeder.seed!()
 
     children = [
-      LemonSkills.Registry
+      LemonSkills.Registry,
+      # MCP source for external tool discovery
+      {LemonSkills.McpSource, []}
     ]
 
     opts = [strategy: :one_for_one, name: LemonSkills.Supervisor]

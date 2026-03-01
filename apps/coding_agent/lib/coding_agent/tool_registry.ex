@@ -7,6 +7,7 @@ defmodule CodingAgent.ToolRegistry do
   1. Built-in tools
   2. WASM tools
   3. Extension tools
+  4. MCP (Model Context Protocol) tools
   """
 
   require Logger
@@ -26,6 +27,7 @@ defmodule CodingAgent.ToolRegistry do
           :builtin
           | {:wasm, source_meta()}
           | {:extension, module()}
+          | {:mcp, server_name :: atom()}
 
   @type tool_tuple :: {String.t(), AgentTool.t(), tool_source()}
 
@@ -593,5 +595,31 @@ defmodule CodingAgent.ToolRegistry do
 
   defp sort_extensions(extensions) do
     Enum.sort_by(extensions, fn module -> Atom.to_string(module) end)
+  end
+
+  # ============================================================================
+  # MCP Tool Support
+  # ============================================================================
+
+  defp get_mcp_tool_tuples do
+    # Check if LemonSkills.McpSource is available and enabled
+    if Code.ensure_loaded?(LemonSkills.McpSource) and
+         LemonSkills.McpSource.mcp_enabled?() do
+      try do
+        LemonSkills.McpSource.discover_tools()
+        |> Enum.map(fn %AgentTool{name: name} = tool ->
+          {name, tool, {:mcp, :mcp_server}}
+        end)
+        |> Enum.sort_by(fn {name, _tool, {:mcp, server}} ->
+          {name, Atom.to_string(server)}
+        end)
+      rescue
+        _ -> []
+      catch
+        _, _ -> []
+      end
+    else
+      []
+    end
   end
 end
