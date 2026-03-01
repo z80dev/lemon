@@ -486,6 +486,42 @@ Expanded bearer-auth compatibility to accept multiple ASCII spaces between schem
 
 ---
 
+## 2026-03-01 (cron run)
+
+### Agent Games Platform - Landed to Main
+**Plan:** `PLN-20260226-agent-games-platform`  
+**Status:** `landed`
+
+Merged the agent games platform to main with additional TicTacToe game.
+
+**Landing Summary:**
+- Merged feature branch `feature/pln-20260226-agent-games-platform` to `main`
+- Added TicTacToe game engine and bot (bonus feature beyond original plan)
+- Resolved merge conflicts from duplicate routes in control plane and web routers
+- Fixed duplicate `lemon_games` entries in architecture_check.ex
+- All 71 lemon_games tests pass
+
+**Post-Landing Fixes:**
+- `apps/lemon_control_plane/lib/lemon_control_plane/http/router.ex`
+  - Removed duplicate Games API routes (were defined twice)
+- `apps/lemon_web/lib/lemon_web/router.ex`
+  - Removed duplicate `public_browser` pipeline
+  - Removed duplicate games routes using wrong LiveView modules
+- `apps/lemon_core/lib/lemon_core/quality/architecture_check.ex`
+  - Removed duplicate `:lemon_games` entries in `@allowed_direct_deps` and `@app_namespaces`
+
+**Planning Updates:**
+- `planning/INDEX.md`
+  - Moved from `Ready to Land` to `Recently Landed`
+  - Updated timestamp to 2026-03-01
+
+**Validation:**
+- `mix test apps/lemon_games/test/lemon_games/games/tic_tac_toe_test.exs` ✅ (23 tests)
+- `mix test apps/lemon_games/test/lemon_games/games/` ✅ (71 tests)
+- `git push origin main` ✅ (11 commits, 127 files changed)
+
+---
+
 ## 2026-03-01
 
 ### Agent Games Platform - Documentation Completion
